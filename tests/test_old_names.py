@@ -44,7 +44,6 @@ HISTORY = (
 #: Not yet scanned by any rule: the prose that explains the library to a reader
 #: (rewritten in its own commit), and the changelog's past sections.
 DEFERRED = (
-    "README.md",
     "llms.txt",
     "CONTRIBUTING.md",
     "CHANGELOG.md",
@@ -85,6 +84,51 @@ ENV_FALLBACK = (
     "scripts/rheon_import.py",  # picks the old name for a benchmark run on a release before 2.0
 )
 
+#: The files that name a release before 2.0 on purpose: it is the project
+#: `polars-online` and the package `polars_online`, and the scripts and tests
+#: that compare with one, or read one's state, import it by that name.
+RELEASE_BEFORE_2 = (
+    "scripts/compare_release.py",
+    "scripts/release_probe.py",
+    "scripts/rheon_import.py",
+    "scripts/bench_header.py",
+    "scripts/release_version.py",  # reads either name in the docs' pins
+    "tests/data.py",
+    "tests/test_released_state.py",
+    "tests/test_release_workflow.py",
+    "tests/test_old_names.py",
+)
+
+#: The file formats keep the magic bytes 1.x wrote, so every 1.x state loads
+#: under 2.0 with no loader: these files write, read or corrupt them.
+MAGIC = (
+    "crates/rheon-polars/src/bank.rs",
+    "crates/rheon-polars/src/refresh.rs",
+    "crates/rheon-polars/src/windows_frame.rs",
+    "crates/rheon-polars/tests/state_portability.rs",
+    "tests/test_production_hardening.py",
+    "tests/test_windows.py",
+)
+
+#: Not renamed yet: each still names the old project or links its old home.
+#: The doc-reading tests and `scripts/outputs_doc.py` move with the guides
+#: whose links they read; the rest belong to other owners.
+NOT_YET = (
+    ".github/ISSUE_TEMPLATE/config.yml",
+    ".github/workflows/ci.yml",
+    ".github/workflows/polars-canary.yml",
+    "examples/bank.toml",
+    "examples/pathway_integration.py",
+    "scripts/clustering_proto.py",
+    "scripts/ogbt_proto.py",
+    "scripts/doc_review.py",
+    "scripts/validate.py",
+    "scripts/outputs_doc.py",
+    "tests/test_api_links.py",
+    "tests/test_llms_txt.py",
+    "tests/test_reference_pages.py",
+)
+
 CODE = (
     "python/*",
     "crates/*",
@@ -99,7 +143,41 @@ CODE = (
     "writing_ratchet.toml",
 )
 
+#: The reader-facing files rewritten under the new name, held to the rules
+#: of the package's and the project's names beside the code.
+PROSE = ("README.md",)
+
 RULES = (
+    Rule(
+        "the package is imported as `rheon`; `polars_online` names only a release before 2.0",
+        re.compile(r"polars_online"),
+        CODE + PROSE,
+        allowed=RELEASE_BEFORE_2,
+    ),
+    Rule(
+        "the project is `rheon`; `polars-online` names only a release before 2.0",
+        re.compile(r"polars-online"),
+        CODE + PROSE,
+        allowed=(
+            *RELEASE_BEFORE_2,
+            *MAGIC,
+            *NOT_YET,
+            # The note under the title says what the package was called.
+            "README.md",
+        ),
+    ),
+    Rule(
+        "the crates are `rheon-core`, `rheon-polars`, `rheon-cli`, `rheon-py` and `rheon-bench`",
+        re.compile(r"(?<![A-Za-z0-9_-])online-(?:core|polars|py|cli|bench)(?![A-Za-z0-9_])"),
+        CODE + PROSE,
+        allowed=("tests/test_old_names.py",),
+    ),
+    Rule(
+        "the project's home is github.com/rheon-dev/rheon and rheon-dev.github.io/rheon",
+        re.compile(r"hgilde"),
+        CODE + PROSE,
+        allowed=("tests/test_old_names.py", *NOT_YET),
+    ),
     Rule(
         "the warning classes were renamed RheonWarning and RheonDeprecationWarning",
         re.compile(r"PolarsOnline(?:Deprecation)?Warning|__polars_online_renamed__"),
@@ -214,6 +292,10 @@ def test_the_scan_sees_what_it_is_meant_to():
     rule's pattern matches a spelling it is meant to catch, and each allowed
     file exists, so a renamed file does not leave an exemption behind."""
     samples = (
+        "import polars_online as po",
+        "pip install polars-online",
+        "crates/online-polars/src",
+        "https://github.com/hgilde/polars-online",
         "PolarsOnlineWarning",
         "__polars_online_renamed__",
         "LazyFrameOnlineNamespace",
@@ -225,7 +307,15 @@ def test_the_scan_sees_what_it_is_meant_to():
     )
     caught = [s for s in samples if any(r.pattern.search(s) for r in RULES)]
     assert caught == list(samples)
-    for s in ("repo.spec", "rheon.polars", "self.online_mode", "x.online-prefetch1"):
+    for s in (
+        "repo.spec",
+        "rheon.polars",
+        "self.online_mode",
+        "x.online-prefetch1",
+        "rheon-polars",
+        "the online-learning kernel",
+        "github.com/rheon-dev/rheon",
+    ):
         assert not any(r.pattern.search(s) for r in RULES), s
     files = set(tracked_and_new())
     for rule in RULES:
