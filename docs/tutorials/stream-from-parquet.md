@@ -35,7 +35,7 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # Eight files of 250,000 rows each, made and written one at a time.
 Path("stream").mkdir(exist_ok=True)
@@ -57,15 +57,15 @@ print(sorted(p.name for p in Path("stream").glob("*.parquet")))
 ## 2. Build the query
 
 Build a query that reads the files and runs a bank over them.
-`po.spec.ewridge` builds the spec of a ridge regression whose rows can be
+`rheon.spec.ewridge` builds the spec of a ridge regression whose rows can be
 weighted by their age, and `half_life=float("inf")` weighs every row the
 same, however old. `pl.scan_parquet` reads the files as a query,
-`.online.fit_predict` adds the bank to it, and `.online.unnest` turns the
+`.rheon.fit_predict` adds the bank to it, and `.rheon.unnest` turns the
 bank's output into plain columns. Building the query reads no rows, but
 its schema already names the columns it will write:
 
 ```python
-spec = po.spec.ewridge(
+spec = rp.spec.ewridge(
     "ridge",                                  # the spec's name
     targets=["y"], features=["x0", "x1"],
     half_life=float("inf"),                   # every row counts the same
@@ -85,7 +85,7 @@ print(query.collect_schema().names())
 The query keeps the stream's three columns. The bank adds one [output
 column](../GLOSSARY.md#what-a-bank-writes), `ridge`, which holds a
 [field](../GLOSSARY.md#what-a-bank-writes) for each named value the spec
-writes, and `.online.unnest` turns each field into a column of its own.
+writes, and `.rheon.unnest` turns each field into a column of its own.
 The fields `coef` and `support_coef` hold lists, so each becomes a column
 for each coefficient. `pred_y` is each row's prediction of `y`, made from
 the rows before it, and `resid_y` is `y` less `pred_y`. `weight_sum` is

@@ -17,9 +17,9 @@ These steps need the library:
   on some rows. A null target leaves the row predicted and the clock
   moving, but the model learns nothing about that target from the row.
 - The parameters of
-  [`po.spec.rls`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.rls)
+  [`rheon.spec.rls`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.rls)
   and
-  [`po.spec.ewridge`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.ewridge),
+  [`rheon.spec.ewridge`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ewridge),
   which their docstrings define.
 
 ## Give each target its own `rls` spec
@@ -73,7 +73,7 @@ from an `rls` spec of `a`'s own, and from one `ewridge` spec under each
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # Two targets on x: a's slope steps from 2 to 3 at row 3,000, where b goes missing.
 rng = np.random.default_rng(3)
@@ -87,13 +87,13 @@ pl.DataFrame({"t": np.arange(n, dtype=float), "x": x, "a": a, "b": b}).write_par
 # One rls over both targets, one per target, and one ewridge under each target_gaps.
 common = dict(features=["x"], clock="t", gap_cap=10.0, half_life=500.0)
 specs = [
-    po.spec.rls("rls_both", targets=["a", "b"], **common),
-    po.spec.rls("rls_a", targets=["a"], **common),
-    po.spec.rls("rls_b", targets=["b"], **common),
-    po.spec.ewridge("ridge_own_rows", targets=["a", "b"], **common),                          # the default
-    po.spec.ewridge("ridge_pairwise", targets=["a", "b"], target_gaps="pairwise", **common),
+    rp.spec.rls("rls_both", targets=["a", "b"], **common),
+    rp.spec.rls("rls_a", targets=["a"], **common),
+    rp.spec.rls("rls_b", targets=["b"], **common),
+    rp.spec.ewridge("ridge_own_rows", targets=["a", "b"], **common),                          # the default
+    rp.spec.ewridge("ridge_pairwise", targets=["a", "b"], target_gaps="pairwise", **common),
 ]
-bank = po.ModelBank(specs)
+bank = rp.ModelBank(specs)
 bank.fit(pl.scan_parquet("two_targets.parquet"))
 
 # a's slope on x at the last row, beside the planted 3.

@@ -48,7 +48,7 @@ that moved the fit most, beside the clean rows for scale:
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # 10,000 rows of y = 1.0 x0 + 0.5 x1 + noise, and three bad prints.
 rng = np.random.default_rng(7)
@@ -63,7 +63,7 @@ pl.DataFrame({"x0": x0, "x1": x1, "y": y}).write_parquet("prints.parquet")
 prints = pl.scan_parquet("prints.parquet").with_row_index("row")
 
 # 1. A ridge that reports each row's influence, with its coefficients on every row.
-model = po.spec.ewridge(
+model = rp.spec.ewridge(
     "m", targets=["y"], features=["x0", "x1"], half_life=200.0,
     emit_influence=True,  # influence_y: how far the row moved the fit
     coef_every=0, max_rows_between_solves=1,  # solve and write the coefficients on every row

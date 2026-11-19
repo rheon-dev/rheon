@@ -3,7 +3,7 @@
 
 This how-to is for anyone who fits `ewridge` and wants to choose its
 `ridge`, alone or together with its `half_life`, from the stream's own
-out-of-sample errors with `po.eval.grid_search`.
+out-of-sample errors with `rp.eval.grid_search`.
 
 ## Prerequisites
 
@@ -16,7 +16,7 @@ These steps need the library, a stream in a file and a spec:
 - An `ewridge` [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads),
   and the values to try: a [grid](../GLOSSARY.md#grids).
   [Choose a model's settings from the stream's own
-  errors](../CALIBRATION.md#choose-a-half-life-with-poevalgrid_search)
+  errors](../CALIBRATION.md#choose-a-half-life-with-rpevalgrid_search)
   gives the steps of the search and why the choice is scored on rows it
   had not seen.
 
@@ -32,7 +32,7 @@ MODELS.md](../MODELS.md#ewridge--exponentially-weighted-ridge-regression).
 2. **If you will carry the ridge to features of another scale, set
    `standardize=True`.** Otherwise a ridge chosen on one set of features does
    not shrink as hard on features ten times as large.
-3. **Pass the query and the spec to `po.eval.grid_search`, one spec a
+3. **Pass the query and the spec to `rp.eval.grid_search`, one spec a
    call.** It returns a row for each ridge, with a `ridge` column, and a
    row for the choice. It ranks and chooses across every spec it is given,
    so specs passed together compete as one grid.
@@ -46,7 +46,7 @@ they are and ten times as large:
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # 40 features, each with a small effect, and the same features ten times as large.
 rng = np.random.default_rng(5)
@@ -59,13 +59,13 @@ pl.DataFrame({**dict(zip(unit, x.T)), **dict(zip(big, 10 * x.T)), "y": y}).write
 # 1 and 2. One spec per scaling, each a grid of ridges solved from one Gram.
 common = dict(targets=["y"], half_life=200.0, ridge=[0.01, 0.03, 0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0, 300.0])
 specs = [
-    po.spec.ewridge("unit", features=unit, **common),
-    po.spec.ewridge("tenfold", features=big, **common),
-    po.spec.ewridge("standardized", features=big, standardize=True, **common),
+    rp.spec.ewridge("unit", features=unit, **common),
+    rp.spec.ewridge("tenfold", features=big, **common),
+    rp.spec.ewridge("standardized", features=big, standardize=True, **common),
 ]
 # 3 to 5. Each spec in a call of its own: its best ridge, the error of the choice, and its least ridge's error.
 for spec in specs:
-    table = po.eval.grid_search(pl.scan_parquet("wide.parquet"), spec)
+    table = rp.eval.grid_search(pl.scan_parquet("wide.parquet"), spec)
     best = table.filter(rank=1).row(0, named=True)
     choice = table.filter(kind="choice")["mse"].item()
     least = table.filter(ridge=0.01)["mse"].item()
@@ -94,7 +94,7 @@ shrinkage: choose the two together.**
 
 1. **Give one spec both lists, `half_life` and `ridge`.** It keeps a Gram
    per half-life, and solves each ridge from each Gram.
-2. **Pass the query and the spec to `po.eval.grid_search`.** It returns a
+2. **Pass the query and the spec to `rp.eval.grid_search`.** It returns a
    row for each pair, with a `half_life` and a `ridge` column.
 3. **Run the pair ranked 1 on the rows to come.**
 4. **Report the error of the choice.**
@@ -105,7 +105,7 @@ This code plants forty coefficients that wander about 0:
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # 40 coefficients, each wandering about 0 with a spread of 0.1 (an AR(1) at 0.999 a row).
 rng = np.random.default_rng(6)
@@ -123,12 +123,12 @@ y = (x * beta).sum(axis=1) + rng.standard_normal(n)
 pl.DataFrame({"t": np.arange(n, dtype=float), **dict(zip(names, x.T)), "y": y}).write_parquet("walk.parquet")
 
 # 1. Three half-lives by seven ridges: 21 fits from three Grams.
-spec = po.spec.ewridge(
+spec = rp.spec.ewridge(
     "grid", targets=["y"], features=names, clock="t", gap_cap=5.0,
     half_life=[50.0, 200.0, 800.0], ridge=[0.003, 0.01, 0.03, 0.1, 0.3, 1.0, 3.0],
 )
 # 2. Every pair, scored in one pass.
-table = po.eval.grid_search(pl.scan_parquet("walk.parquet"), spec)
+table = rp.eval.grid_search(pl.scan_parquet("walk.parquet"), spec)
 
 # 3 and 4. The best ridge at each half-life, then the pair chosen and what choosing it earned.
 settings = table.filter(kind="candidate")

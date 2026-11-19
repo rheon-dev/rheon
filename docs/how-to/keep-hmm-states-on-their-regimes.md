@@ -44,15 +44,15 @@ each row against those before it.
 This code makes the stream of [Detect changes and
 regimes](choose-a-model.md#detect-changes-and-regimes): two series whose
 returns take turns, 500 rows at a time, between a calm regime and one 2.7
-times as wide, made with `po.sim.regimes`. It fits the filter under the
+times as wide, made with `rp.sim.regimes`. It fits the filter under the
 default prior and under a sticky one, and scores the rows after seeding:
 
 ```python
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # Two series whose returns take turns, 500 rows a regime, and the regime each row was drawn in.
-sim = po.sim.regimes(
+sim = rp.sim.regimes(
     2, states=[0.3, 0.3], transition=[[0.0, 1.0], [1.0, 0.0]],
     n_blocks=6, rows_per_block=500,
     scale_state=[0.0, 1.0],                                   # regime 1's returns are e = 2.7 times as wide
@@ -65,8 +65,8 @@ returns = pl.scan_parquet("regimes.parquet").with_columns(pl.col("x_1", "x_2").d
 # 1 and 2. The same filter under the default prior and under a sticky one.
 common = dict(features=["x_1", "x_2"], n_components=2, half_life=float("inf"), precision_prior=1e-2, warm_rows=500)
 specs = [
-    po.spec.hmm("default", **common),
-    po.spec.hmm("sticky", **common, transition=[0.998, 0.002, 0.002, 0.998], transition_prior=500.0),
+    rp.spec.hmm("default", **common),
+    rp.spec.hmm("sticky", **common, transition=[0.998, 0.002, 0.002, 0.998], transition_prior=500.0),
 ]
 # 3 to 5. Add both specs, run, and read the share of the rows after seeding each puts in its true regime.
 out = returns.rheon.fit_predict(specs).collect().filter(pl.col("t") >= 500)
@@ -107,7 +107,7 @@ and fits the filter on the raw rows and on rows clipped to ±5:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # A sticky two-state chain, two overlapping blobs it switches between, and one extreme row.
 rng = np.random.default_rng(12)
@@ -120,7 +120,7 @@ xy[2_000] = [1_000.0, 1_000.0]                                # the extreme row
 pl.DataFrame({"x": xy[:, 0], "y": xy[:, 1], "truth": state}).write_parquet("states.parquet")
 
 # 1. The same filter on the raw rows and on rows clipped before the bank.
-hidden = po.spec.hmm("hidden", features=["x", "y"], n_components=2, precision_prior=1e-2,
+hidden = rp.spec.hmm("hidden", features=["x", "y"], n_components=2, precision_prior=1e-2,
                      warm_rows=500, half_life=float("inf"))
 raw = pl.scan_parquet("states.parquet")
 clipped = raw.with_columns(pl.col("x", "y").clip(-5.0, 5.0))
@@ -155,7 +155,7 @@ regime you know, the share in their true state, as the recipes do.
 
 The fields are defined in [OUTPUTS.md](../OUTPUTS.md#hmm), and every
 parameter in `hmm`'s
-[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.hmm),
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.hmm),
 whose Notes, under *Limits* and *The transition prior*, give the rules.
 [Seeding: a model that places its starting
 values](../explanation/warm-up-and-readiness.md#seeding-a-model-that-places-its-starting-values)

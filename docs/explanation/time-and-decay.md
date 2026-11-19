@@ -212,18 +212,18 @@ data](../EXAMPLE-DATA.md):
 
 ```python
 # Plain least squares in three orders, then numpy's.
-batch = po.spec.ewridge("batch", targets=["y"], features=["x0", "x1", "x2"],
+batch = rp.spec.ewridge("batch", targets=["y"], features=["x0", "x1", "x2"],
                         half_life=float("inf"),   # no clock, no decay
                         ridge=0.0)                 # plain least squares, in place of the default ridge of 1e-6
 for order, rows in [("in order", df), ("reversed", df.reverse()), ("shuffled", df.sample(fraction=1.0, shuffle=True, seed=1))]:
-    coef = po.ModelBank([batch]).fit_predict(rows)["batch"].struct.field("coef")[-1]   # the fit after the last row
+    coef = rp.ModelBank([batch]).fit_predict(rows)["batch"].struct.field("coef")[-1]   # the fit after the last row
     print(f"{order:<9}", " ".join(f"{c:9.6f}" for c in coef))
 design = np.column_stack([np.ones(df.height), df["x0"], df["x1"], df["x2"]])
 print(f"{'numpy':<9}", " ".join(f"{c:9.6f}" for c in np.linalg.lstsq(design, df["y"], rcond=None)[0]))
 
 # A huge finite half-life, which is not inf.
-huge = po.spec.ewridge("huge", targets=["y"], features=["x0"], clock="t", half_life=1e12, gap_cap=300.0)
-print(f"settled_frac after 399 units of t under half_life=1e12: {po.ModelBank([huge]).fit_predict(df)['huge'].struct.field('settled_frac')[-1]:.1e}")
+huge = rp.spec.ewridge("huge", targets=["y"], features=["x0"], clock="t", half_life=1e12, gap_cap=300.0)
+print(f"settled_frac after 399 units of t under half_life=1e12: {rp.ModelBank([huge]).fit_predict(df)['huge'].struct.field('settled_frac')[-1]:.1e}")
 ```
 
 ```text
@@ -261,9 +261,9 @@ from [Example data](../EXAMPLE-DATA.md):
 
 ```python
 common = dict(targets=["ret"], features=["signal_a"], clock="t", gap_cap=300.0, coef_every=0)   # the coefficients on every row
-decayed = po.spec.ewridge("decayed", half_life=100.0, **common)                              # a half-life of 100 rows
-windowed = po.spec.ewridge("windowed", half_life=float("inf"), window_size=100.0, **common)  # the last 100 rows, equally weighted
-fitted = po.ModelBank([decayed, windowed]).fit_predict(df)
+decayed = rp.spec.ewridge("decayed", half_life=100.0, **common)                              # a half-life of 100 rows
+windowed = rp.spec.ewridge("windowed", half_life=float("inf"), window_size=100.0, **common)  # the last 100 rows, equally weighted
+fitted = rp.ModelBank([decayed, windowed]).fit_predict(df)
 print("row  decayed  windowed")
 for row in [199, 250, 300, 399]:
     beta = [fitted[name].struct.field("coef")[row][1] for name in ("decayed", "windowed")]   # [intercept, signal_a]
@@ -302,15 +302,15 @@ data](../EXAMPLE-DATA.md):
 
 ```python
 # The same model with a hard window and without.
-cut = po.spec.ew_cov(
+cut = rp.spec.ew_cov(
     "cut", features=["x0", "x1"], clock="t", gap_cap=300.0, half_life=50.0,
     window_size=150.0,             # a row this many clock units old or older contributes exactly nothing
     snapshot_every=10,             # a snapshot every 10 units of t
     window_budget={"refuse": 64},  # at most 64 MiB of snapshots per ring
 )
-whole = po.spec.ew_cov("whole", features=["x0", "x1"], clock="t", gap_cap=300.0, half_life=50.0)
+whole = rp.spec.ew_cov("whole", features=["x0", "x1"], clock="t", gap_cap=300.0, half_life=50.0)
 # Each weight_sum on the last row, against the ceiling and the hard window's share of it.
-last = po.ModelBank([cut, whole]).fit_predict(df).tail(1)
+last = rp.ModelBank([cut, whole]).fit_predict(df).tail(1)
 ceiling = 1 / (1 - 0.5 ** (1 / 50))
 print(f"no hard window: weight_sum {last['whole'].struct.field('weight_sum')[0]:.2f}, the ceiling {ceiling:.2f}")
 print(f"inside the hard window: weight_sum {last['cut'].struct.field('weight_sum')[0]:.2f}, "

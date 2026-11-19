@@ -43,7 +43,7 @@ ridge on their residuals.
    `resid_d0`.
 3. **Make the second ridge's target with a
    [window operator](../GLOSSARY.md#fitting-a-model) that looks
-   ahead,** as `po.ewm_mean("y", half_life=5.0, window_size=10.0,
+   ahead,** as `rp.ewm_mean("y", half_life=5.0, window_size=10.0,
    reverse=True) - pl.col("y")`: the forward mean of `y` over the next ten
    clock units, less `y`. Under the default `closed="right"`, the window
    holds the rows after the row, up to `window_size` later, and not the row
@@ -67,7 +67,7 @@ ridge on their residuals.
    `horizon_rows` is 0 unless you give it, since `embargo` is in clock
    units there.
 7. **Chain the two `fit_predict` calls in one query, and unnest the output
-   with `separator="."`.** `.online.unnest` turns each spec's output column
+   with `separator="."`.** `.rheon.unnest` turns each spec's output column
    into one column per field. The specs share field names such as
    `weight_sum`, so `separator="."` names each column after its spec too,
    as `stage2.coef_fwd_resid_d0`.
@@ -85,7 +85,7 @@ rows:
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # The stream: per instrument g, a row each unit of the clock t.
 rng = np.random.default_rng(3)
@@ -105,12 +105,12 @@ pl.concat(parts).sort("t", maintain_order=True).write_parquet("factors.parquet")
 
 # 1. One ridge per factor, and 2. each one's residual as a column.
 clock = dict(clock="t", gap_cap=10.0, group="g")
-factors = [po.spec.ewridge(f"fac{f}", targets=[f"d{f}"], features=[f"x{f}_{j}" for j in range(3)],
+factors = [rp.spec.ewridge(f"fac{f}", targets=[f"d{f}"], features=[f"x{f}_{j}" for j in range(3)],
                            half_life=500.0, **clock) for f in range(2)]
 residuals = [pl.col(f"fac{f}").struct.field(f"resid_d{f}") for f in range(2)]
 # 3-6. The second ridge: a target that looks ahead, under a hard window, learned once it is known.
-forward = po.ewm_mean("y", half_life=5.0, window_size=10.0, reverse=True) - pl.col("y")
-stage2 = po.spec.ewridge(
+forward = rp.ewm_mean("y", half_life=5.0, window_size=10.0, reverse=True) - pl.col("y")
+stage2 = rp.spec.ewridge(
     "stage2", targets=[forward.alias("fwd")], features=["resid_d0", "resid_d1"],
     window_size=1_000.0, half_life=float("inf"),   # 4. every row of the last 1,000 clock units alike
     embargo=10.0,                                  # 5. the target's window_size
@@ -163,7 +163,7 @@ fit](check-a-two-stage-fit.md).
 
 ## If `online.unnest` refuses the output
 
-**`.online.unnest` raises Polars' `DuplicateError` while the query is built
+**`.rheon.unnest` raises Polars' `DuplicateError` while the query is built
 when two columns would get the same name.** That happens where specs write
 a field of the same name, as almost any two do, or where a field is named
 like a column of the frame. The message names each shared field and the
@@ -214,7 +214,7 @@ and the two files from [Build the pipeline](#build-the-pipeline):
 
 ```python
 # The same two stages in a loop over the file's chunks.
-factor_bank, second = po.ModelBank(factors), po.ModelBank([stage2])
+factor_bank, second = rp.ModelBank(factors), rp.ModelBank([stage2])
 outs = []
 for chunk in pl.scan_parquet("factors.parquet").collect_batches(chunk_size=1_000):
     outs.append(second.fit_predict(factor_bank.fit_predict(chunk).with_columns(residuals)))

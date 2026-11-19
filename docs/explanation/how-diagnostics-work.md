@@ -13,7 +13,7 @@ and the model may not be ready yet. Each question has its own
 [diagnostic](../GLOSSARY.md#fitting-a-model): a
 [switch](../GLOSSARY.md#fitting-a-model) in the
 [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads) that adds fields
-to the model's output on every row, or a call in `po.eval` that scores an
+to the model's output on every row, or a call in `rp.eval` that scores an
 output after the run. [DIAGNOSTICS.md](../DIAGNOSTICS.md) lists each
 question, its diagnostic and its fields.
 

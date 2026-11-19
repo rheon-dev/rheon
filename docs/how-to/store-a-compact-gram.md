@@ -29,7 +29,7 @@ explains how far each form can move a fit, and why.
 ## Choose a form
 
 Each form shapes only what `gram()` returns: the state itself stays
-float64 and whole, and `po.gram` reads every form in float64. float32 and
+float64 and whole, and `rheon.gram` reads every form in float64. float32 and
 the upper triangle each take about half the bytes of `comoments`, and
 both together a quarter. `lag_comoments` is never packed, since a lagged
 matrix is not symmetric, so with both options together it takes half its bytes, from float32 alone.
@@ -39,18 +39,18 @@ matrix is not symmetric, so with both options together it takes half its bytes, 
 | `dtype="float32"` | each entry is rounded to nearest, within a relative `2⁻²⁴`, about 6e-8, of its float64 value. An entry past float32's largest number, about 3.4e38, or nonzero below its smallest normal number, about 1.2e-38, is refused with a `ValueError` naming its column. A column spread 1e20 wide, or 1e-20, gets there, since its variance squares the spread | every other array, in float64: the means, from which `merge` forms its spread term, and each target's moments |
 | `layout="packed"` | nothing: the model keeps the matrix symmetric, so the lower triangle is the upper one mirrored, bit for bit | every entry, bit for bit |
 
-1. **Pool the blocks and fit in float64,** with `po.gram.merge` and
-   `po.gram.solve`, as the reference.
+1. **Pool the blocks and fit in float64,** with `rheon.gram.merge` and
+   `rheon.gram.solve`, as the reference.
 2. **Compute the condition number `κ` of the features' correlation
    matrix,** with
-   `np.linalg.cond(po.gram.correlation(g)[1:, 1:])`. Row and column 0 are
+   `np.linalg.cond(rheon.gram.correlation(g)[1:, 1:])`. Row and column 0 are
    the intercept's, which are `nan`.
 3. **Give `dtype="float32"` when `κ` times 6e-8 is below the precision the
    fit needs.** Rounding moves a fit by about that much at the worst, and
    usually by far less.
 4. **Give `layout="packed"` in either dtype.** It halves the bytes and
    loses nothing.
-5. **Read the compact Grams with `po.gram` as any other Grams.**
+5. **Read the compact Grams with `rheon.gram` as any other Grams.**
 
 This code builds 40 weeks of 200 features, solves the forty weeks from
 each form, and then asks for a float32 Gram of a column spread 1e20 wide:
@@ -61,7 +61,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # 40 weeks, a row every 20 minutes. 200 features in 40 families of five that share a factor, so
 # two features of one family correlate at 0.5. y depends on six of them, and x25's coefficient is
@@ -81,35 +81,35 @@ pl.DataFrame({"ts": ts, **dict(zip(features, x.T)), "y": y}).write_parquet("week
 
 # One pass over the file leaves a Gram per week. The week is a column made in the query.
 lf = pl.scan_parquet("weeks.parquet").with_columns(week=pl.col("ts").dt.truncate("1w"))
-spec = po.spec.ewridge(
+spec = rp.spec.ewridge(
     "blocks", targets=["y"], features=features, group="week",
     half_life=float("inf"), solve_every=float("inf"), target_gaps="pairwise", gram_block_rows=256,
 )
-bank = po.ModelBank([spec])
+bank = rp.ModelBank([spec])
 bank.fit(lf)  # learns from every row, and keeps only the state
 blocks = bank.gram("blocks")  # one dict per week, oldest first
 
 # 1 and 2. The float64 fit as the reference, and the condition number that bounds the loss.
-pooled = po.gram.merge(blocks)
-reference = po.gram.solve(pooled)
-r = po.gram.correlation(pooled)  # row and column 0, the constant intercept's, are nan
+pooled = rp.gram.merge(blocks)
+reference = rp.gram.solve(pooled)
+r = rp.gram.correlation(pooled)  # row and column 0, the constant intercept's, are nan
 kappa = np.linalg.cond(r[1:, 1:])  # of the features' correlation matrix
 print(f"condition number {kappa:.1f}; float32's rounding times it, {kappa * 2**-24:.1e}")
 # 3 to 5. Each dtype and layout: its bytes a week, and how far the fit moves.
 for dtype in ("float64", "float32"):
     for layout in ("full", "packed"):
         parts = bank.gram("blocks", dtype=dtype, layout=layout)
-        coef = po.gram.solve(po.gram.merge(parts))  # merged and solved in float64
+        coef = rp.gram.solve(rp.gram.merge(parts))  # merged and solved in float64
         moved = np.abs(coef - reference).max() / np.abs(reference).max()
         size = parts[0]["comoments"].nbytes
         print(f"{dtype} {layout:>6}: {size:>7,} bytes a week; the fit moved by {moved:.0e} of its largest coefficient")
 
 # A column spread 1e20 wide has a variance that float32 cannot hold.
 pl.DataFrame({"a": 1e20 * rng.standard_normal(1_000), "y": rng.standard_normal(1_000)}).write_parquet("huge.parquet")
-huge = po.spec.ewridge(
+huge = rp.spec.ewridge(
     "huge", targets=["y"], features=["a"], half_life=float("inf"), solve_every=float("inf")
 )
-bank = po.ModelBank([huge])
+bank = rp.ModelBank([huge])
 bank.fit(pl.scan_parquet("huge.parquet"))
 # Asking for it in float32 is refused, with the column named.
 try:

@@ -17,7 +17,7 @@ These steps need the library and a stream with a clock:
 - A [clock](../GLOSSARY.md#time) column, and the `gap_cap` a clock
   requires. The recipes' clock `t` steps by 1 a row.
 - The parameters of
-  [`po.spec.kalman`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.kalman),
+  [`rheon.spec.kalman`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.kalman),
   which its docstring defines, and its entry in
   [MODELS.md](../MODELS.md#kalman--random-walk-β-dynamic-linear-model).
 
@@ -52,11 +52,11 @@ yet seen ranks the settings fairly, in one pass over the stream.
 1. **Build one spec per value to try.** A list given to `coef_half_life`
    is one value per coefficient, not a [grid](../GLOSSARY.md#grids), so
    each speed takes a spec of its own.
-2. **Score every spec with `po.eval.grid_search`.** It runs one bank of
+2. **Score every spec with `rp.eval.grid_search`.** It runs one bank of
    every spec over the query, scores each spec on the same rows, and
    chooses from earlier rows before each span it reports on. [Choose a
    half-life with
-   `po.eval.grid_search`](../CALIBRATION.md#choose-a-half-life-with-poevalgrid_search)
+   `rp.eval.grid_search`](../CALIBRATION.md#choose-a-half-life-with-rpevalgrid_search)
    reads the frame it returns.
 3. **Run the spec ranked 1 on the rows to come.** Read its name with
    `table.filter(kind="candidate", rank=1)["spec"]`. The `choice` row's
@@ -72,7 +72,7 @@ data:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # y = 2 + b·x0 + 0.5·x1 + noise of variance 1, where b wanders as a random walk.
 rng = np.random.default_rng(5)
@@ -85,9 +85,9 @@ pl.DataFrame({"t": np.arange(n, dtype=float), "x0": x0, "x1": x1, "y": y}).write
 # One spec per drift speed for every coefficient, and two that let x0's slope alone drift.
 common = dict(targets=["y"], features=["x0", "x1"], clock="t", gap_cap=5.0, half_life=500.0)
 inf = float("inf")
-specs = [po.spec.kalman(f"all_{h:g}", coef_half_life=h, **common) for h in (10.0, 30.0, 100.0, 300.0)]
-specs += [po.spec.kalman(f"x0_only_{h:g}", coef_half_life=[inf, h, inf], **common) for h in (30.0, 100.0)]
-table = po.eval.grid_search(pl.scan_parquet("drift.parquet"), specs)
+specs = [rp.spec.kalman(f"all_{h:g}", coef_half_life=h, **common) for h in (10.0, 30.0, 100.0, 300.0)]
+specs += [rp.spec.kalman(f"x0_only_{h:g}", coef_half_life=[inf, h, inf], **common) for h in (30.0, 100.0)]
+table = rp.eval.grid_search(pl.scan_parquet("drift.parquet"), specs)
 
 # Each spec's error on rows it had not seen, beside the noise's variance.
 for spec, mse, rank in table.filter(kind="candidate").select("spec", "mse", "rank").iter_rows():
@@ -131,7 +131,7 @@ the intercept's entry at `inf`, as in `[float("inf"), 50.0, 50.0]`.
    intercept's entry at `inf`, and give the occasional feature's slope a
    reversion half-life in clock units, such as `[float("inf"), 200.0]`.
 2. **Run the specs in a query,** as
-   `pl.scan_parquet(...).online.fit_predict(specs)` does in the recipe.
+   `pl.scan_parquet(...).rheon.fit_predict(specs)` does in the recipe.
    Between bursts the slope decays toward zero, so the next burst starts
    from no effect, not from the last burst's slope.
 
@@ -156,8 +156,8 @@ pl.DataFrame({"t": t.astype(float), "x": x, "y": y}).write_parquet("bursts.parqu
 common = dict(targets=["y"], features=["x"], clock="t", gap_cap=10.0, half_life=500.0,
               coef_half_life=[inf, 20.0], coef_every=0)
 specs = [
-    po.spec.kalman("walk", **common),
-    po.spec.kalman("revert", revert_half_life=[inf, 200.0], **common),   # the intercept's entry stays inf
+    rp.spec.kalman("walk", **common),
+    rp.spec.kalman("revert", revert_half_life=[inf, 200.0], **common),   # the intercept's entry stays inf
 ]
 out = pl.scan_parquet("bursts.parquet").rheon.fit_predict(specs).collect()
 
@@ -218,9 +218,9 @@ wrote:
 # The reverting spec under a short and a long gap_cap, fitted on the same rows.
 banks = {}
 for cap in (10.0, 1_000.0):
-    spec = po.spec.kalman("k", targets=["y"], features=["x"], clock="t", gap_cap=cap, half_life=500.0,
+    spec = rp.spec.kalman("k", targets=["y"], features=["x"], clock="t", gap_cap=cap, half_life=500.0,
                           coef_half_life=[inf, 20.0], revert_half_life=[inf, 200.0])
-    banks[cap] = po.ModelBank([spec])
+    banks[cap] = rp.ModelBank([spec])
     banks[cap].fit(pl.scan_parquet("bursts.parquet"))
 
 # Two rows 1,000 clock units past the last learned row, at x = 0 and x = 1.
@@ -267,8 +267,8 @@ reads `drift.parquet`, which the first recipe wrote:
 ```python
 # x0's slope drifts and the rest holds still; one spec per value of x0's q.
 common = dict(targets=["y"], features=["x0", "x1"], clock="t", gap_cap=5.0, half_life=500.0)
-specs = [po.spec.kalman(f"q_{q:g}", q=[0.0, q, 0.0], **common) for q in (4e-5, 4e-4, 4e-3)]
-table = po.eval.grid_search(pl.scan_parquet("drift.parquet"), specs)
+specs = [rp.spec.kalman(f"q_{q:g}", q=[0.0, q, 0.0], **common) for q in (4e-5, 4e-4, 4e-3)]
+table = rp.eval.grid_search(pl.scan_parquet("drift.parquet"), specs)
 for spec, mse, rank in table.filter(kind="candidate").select("spec", "mse", "rank").iter_rows():
     print(f"{spec:>8}: mse {mse:.4f}, rank {rank}")
 ```
@@ -292,7 +292,7 @@ hold still should not wander, and one you expect to move should follow
 its moves.
 
 **Compare the chosen spec's error with the others' on the same rows.**
-`po.eval.grid_search` scores every spec on the rows where each has a
+`rp.eval.grid_search` scores every spec on the rows where each has a
 prediction. A spec ranked 1 by a wide margin is a clear choice. Specs that
 nearly tie, as `x0_only_30` and `x0_only_100` do, predict about as well,
 and the `choice` row says what choosing between them earned. [Why the best

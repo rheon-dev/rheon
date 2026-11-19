@@ -2,7 +2,7 @@
 # Resume a window run
 
 This how-to is for anyone who adds window columns with
-`po.stream.with_windows` to a stream that arrives in parts, such as a file
+`rp.stream.with_windows` to a stream that arrives in parts, such as a file
 a day, and wants the parts to give what one run over the whole stream
 gives. You save the run's state at the end of one part, and load it at the
 start of the next.
@@ -54,9 +54,9 @@ data](../EXAMPLE-DATA.md):
 ```python
 # The forward VWAP in one run over the whole stream, for comparison.
 next_minute = dict(half_life="10s", window_size="1m", reverse=True)
-vwap = dict(fwd_vwap=po.ewm_sum(pl.col("price") * pl.col("quantity"), **next_minute) / po.ewm_sum("quantity", **next_minute))
+vwap = dict(fwd_vwap=rp.ewm_sum(pl.col("price") * pl.col("quantity"), **next_minute) / rp.ewm_sum("quantity", **next_minute))
 clock = dict(clock="ts", gap_cap="5m", group="symbol")
-one_run = po.stream.with_windows(trades, **vwap, **clock)
+one_run = rp.stream.with_windows(trades, **vwap, **clock)
 
 # The same stream as two files.
 trades.head(2000).write_parquet("day1.parquet")

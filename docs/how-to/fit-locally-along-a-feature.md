@@ -55,7 +55,7 @@ root-mean-square distance from the curve, beside the best straight line's:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # 1,200 noisy points on sin(x), saved.
 rng = np.random.default_rng(1)
@@ -64,7 +64,7 @@ pl.DataFrame({"x": x, "y": np.sin(x) + 0.1 * rng.standard_normal(1200)}).write_p
 
 # A straight line fitted locally at a given bandwidth, over the points sorted by x.
 def local(bandwidth):
-    kernel = po.spec.ewridge(
+    kernel = rp.spec.ewridge(
         "kernel", targets=["y"], features=["x"],
         clock="x",                  # 2. the clock is a feature: the decay is a kernel in it
         half_life=bandwidth,        # 3. the bandwidth, in x's own units

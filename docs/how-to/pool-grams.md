@@ -22,7 +22,7 @@ These steps need the library and a Gram per block:
   features](fit-weekly-grams-in-one-pass.md#keep-weekly-grams-of-hundreds-of-features)
   shows what each block holds.
 - The blocks' rows must be disjoint. A row in two blocks counts twice, and
-  `po.gram.merge` cannot tell.
+  `rheon.gram.merge` cannot tell.
 
 [Pooling blocks](../GRAM.md#pooling-blocks) explains how a pooled Gram is
 formed, and what pooling within blocks leaves out.
@@ -33,9 +33,9 @@ Use this to fit on some blocks and score the fit on others, without
 reading their rows again. Blocks run under `half_life=float("inf")` pool
 as they are.
 
-1. **Pool the blocks to fit on with `po.gram.merge(blocks[:30])`.** It
+1. **Pool the blocks to fit on with `rheon.gram.merge(blocks[:30])`.** It
    returns the Gram of all their rows.
-2. **Fit with `po.gram.solve`.** It returns the intercept first, then a
+2. **Fit with `rheon.gram.solve`.** It returns the intercept first, then a
    coefficient per feature.
 3. **Pool the blocks held out the same way.**
 4. **Score the fit on the held-out Gram with a function of the Gram's
@@ -53,7 +53,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # 40 weeks, a row every 20 minutes. 200 features in 40 families of five that share a factor, so
 # two features of one family correlate at 0.5. y depends on six of them, and x25's coefficient is
@@ -73,12 +73,12 @@ pl.DataFrame({"ts": ts, **dict(zip(features, x.T)), "y": y}).write_parquet("week
 
 # One pass over the file leaves a Gram per week. The week is a column made in the query.
 lf = pl.scan_parquet("weeks.parquet").with_columns(week=pl.col("ts").dt.truncate("1w"))
-spec = po.spec.ewridge(
+spec = rp.spec.ewridge(
     "blocks", targets=["y"], features=features, group="week",
     half_life=float("inf"), solve_every=float("inf"),
     gram_block_rows=256,      # rows added to the Gram 256 at a time, for a fit over hundreds of features
 )
-bank = po.ModelBank([spec])
+bank = rp.ModelBank([spec])
 bank.fit(lf)  # learns from every row, and keeps only the state
 blocks = bank.gram("blocks")  # one dict per week, oldest first
 
@@ -93,9 +93,9 @@ def mean_squared_error(g, coef):
 
 
 # 1 to 3. Pool the early weeks and fit; pool the weeks held out.
-train = po.gram.merge(blocks[:30])  # weeks 1 to 30
-held_out = po.gram.merge(blocks[30:])  # weeks 31 to 40
-coef = po.gram.solve(train)
+train = rp.gram.merge(blocks[:30])  # weeks 1 to 30
+held_out = rp.gram.merge(blocks[30:])  # weeks 31 to 40
+coef = rp.gram.solve(train)
 print(f"weeks 1-30: {train['weight_sum']:,.0f} rows, error {mean_squared_error(train, coef):.4f} in sample")
 print(f"weeks 31-40: {held_out['weight_sum']:,.0f} rows, error {mean_squared_error(held_out, coef):.4f} held out")
 
@@ -137,7 +137,7 @@ decay between its last row and the stream's.
    decay.** Leave the means and co-moments as they are, since they are
    weighted means. Leave `n_kish` too, since it does not change when every
    weight is scaled by one factor.
-4. **Pool the aged blocks with `po.gram.merge`.**
+4. **Pool the aged blocks with `rheon.gram.merge`.**
 
 This code runs two specs over the same stream in one pass: a Gram per
 week at a half-life of four weeks, and one Gram of the whole stream at
@@ -152,7 +152,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # 40 weeks, a row every 20 minutes. 200 features in 40 families of five that share a factor, so
 # two features of one family correlate at 0.5. y depends on six of them, and x25's coefficient is
@@ -176,8 +176,8 @@ decayed = dict(
     targets=["y"], features=features, clock="ts", gap_cap="1h", half_life="4w",
     solve_every=float("inf"),
 )
-bank = po.ModelBank(
-    [po.spec.ewridge("by_week", group="week", **decayed), po.spec.ewridge("whole", **decayed)]
+bank = rp.ModelBank(
+    [rp.spec.ewridge("by_week", group="week", **decayed), rp.spec.ewridge("whole", **decayed)]
 )
 bank.fit(lf)
 blocks, whole = bank.gram("by_week"), bank.gram("whole")[0]
@@ -193,7 +193,7 @@ for block, end in zip(blocks, last):
 
 # 4. Pool the weeks as they are and aged, each against the whole stream's fit.
 for how, parts in [("as they are", blocks), ("aged", aged)]:
-    gap = np.abs(po.gram.solve(po.gram.merge(parts)) - po.gram.solve(whole)).max()
+    gap = np.abs(rp.gram.solve(rp.gram.merge(parts)) - rp.gram.solve(whole)).max()
     shown = "below 1e-12" if gap < 1e-12 else f"{gap:.3f}"
     print(f"40 weeks pooled {how}: the largest gap from the whole stream's coefficients is {shown}")
 ```
@@ -216,18 +216,18 @@ the rows, and its standard errors divide by every row, as if each row had
 confirmed it. The second question has forty observations, one a week: regress each
 week's mean target (`target_means`) on its features' means (`means`).
 
-1. **Pool with `po.gram.merge(blocks, within=True)`.** The pooled Gram is
+1. **Pool with `rheon.gram.merge(blocks, within=True)`.** The pooled Gram is
    that of the rows less their week's means, so a fit on it has an
    intercept for each week: the within, or fixed-effects, estimator.
-2. **Fit with `po.gram.solve`.** It returns `nan` for the intercept, since
+2. **Fit with `rheon.gram.solve`.** It returns `nan` for the intercept, since
    each week had one and the pooled Gram holds none of them. So does every other
-   `po.gram` fit on a Gram pooled within blocks.
-3. **Read the standard errors with `po.gram.coef_stats`.** It divides by
+   `rheon.gram` fit on a Gram pooled within blocks.
+3. **Read the standard errors with `rheon.gram.coef_stats`.** It divides by
    `n − p − B`, with `p` the features and `B` the weeks the target has rows
    in, counted in the pooled Gram's `within_parts` and, per target, in
    `target_within_parts`.
 4. **To fit several sets of blocks, pass `within=True` to
-   `po.gram.solve_subsets`,** which pools each subset the same way.
+   `rheon.gram.solve_subsets`,** which pools each subset the same way.
 
 This code makes `slow`, whose weekly level wanders, and `quick`, which
 moves `y` inside each week. `y`'s weekly level wanders too, apart from
@@ -239,7 +239,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # 40 weeks, a row every 20 minutes. slow is an exponentially weighted mean of noise at a half-life
 # of a week, so its weekly level wanders. y's weekly level wanders apart from it, drawn for each
@@ -259,11 +259,11 @@ pl.DataFrame({"ts": ts, "slow": slow, "quick": quick, "y": y}).write_parquet("le
 
 # One pass over the file leaves a Gram per week.
 lf = pl.scan_parquet("levels.parquet").with_columns(week=pl.col("ts").dt.truncate("1w"))
-spec = po.spec.ewridge(
+spec = rp.spec.ewridge(
     "blocks", targets=["y"], features=["slow", "quick"], group="week",
     half_life=float("inf"), solve_every=float("inf"),
 )
-bank = po.ModelBank([spec])
+bank = rp.ModelBank([spec])
 bank.fit(lf)
 blocks = bank.gram("blocks")
 
@@ -272,13 +272,13 @@ weekly = np.array([[g["means"][1], g["target_means"][0]] for g in blocks])  # ea
 print(f"the weekly means of slow and y correlate at {np.corrcoef(weekly.T)[0, 1]:.2f} over {n_weeks} weeks")
 # 1 to 3. Slow and quick, pooled as one union and pooled within weeks.
 print(f"{'pooled':>12} {'slow':>7} {'t':>5} {'quick':>7} {'t':>5}")
-for how, pooled in [("as a union", po.gram.merge(blocks)), ("within weeks", po.gram.merge(blocks, within=True))]:
-    coef = po.gram.solve(pooled)  # within weeks, coef[0], the intercept, is nan
-    t = po.gram.coef_stats(pooled, coef)["t"]
+for how, pooled in [("as a union", rp.gram.merge(blocks)), ("within weeks", rp.gram.merge(blocks, within=True))]:
+    coef = rp.gram.solve(pooled)  # within weeks, coef[0], the intercept, is nan
+    t = rp.gram.coef_stats(pooled, coef)["t"]
     print(f"{how:>12} {coef[1]:>7.3f} {t[1]:>5.1f} {coef[2]:>7.3f} {t[2]:>5.1f}")
 
 # Each week alone, and a t from the spread of the weekly coefficients.
-each = po.gram.solve_subsets(blocks, [[i] for i in range(n_weeks)])  # each week alone
+each = rp.gram.solve_subsets(blocks, [[i] for i in range(n_weeks)])  # each week alone
 weekly_slow = np.array([fits[0]["coef"][1] for fits in each])
 t_weeks = weekly_slow.mean() / (weekly_slow.std(ddof=1) / np.sqrt(n_weeks))  # Fama and MacBeth's t
 print(f"each week alone: slow's mean coefficient {weekly_slow.mean():.3f}, its t from the weeks {t_weeks:.1f}")
@@ -308,7 +308,7 @@ see, and what to do:
 | what you see | what it means | what to do |
 |---|---|---|
 | pooled decayed blocks give coefficients apart from one Gram of the whole stream | the blocks were pooled with weights relative to their own last rows | age each block before you pool it ([Age decayed blocks before you pool them](#age-decayed-blocks-before-you-pool-them)) |
-| `po.gram.solve_subsets` refuses a subset | the subset names one Gram twice, so its rows would count twice | name each block once |
+| `rheon.gram.solve_subsets` refuses a subset | the subset names one Gram twice, so its rows would count twice | name each block once |
 | a union of parts refuses a Gram | one part was pooled with `within=True`: its means are 0, and the union would add the gap from 0 to the others' means | pool the blocks themselves as a union, not a Gram already pooled within |
 | the intercept is `nan` | the Gram was pooled within blocks, which holds no intercept | read the slopes, or pool as a union for an intercept |
 | a coefficient's t falls far when you pool within blocks | it rested on a correlation of the blocks' levels | ask the levels' question with one observation a block: regress the blocks' `target_means` on their `means` |

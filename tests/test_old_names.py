@@ -32,6 +32,21 @@ REPO = Path(__file__).resolve().parent.parent
 #: what is not text.
 HISTORY = (
     "docs/records/*",
+    # The records filed beside the guides (docs/README.md, *Records*), kept as
+    # they were written.
+    "docs/ARROW-SOURCES.md",
+    "docs/BOOSTED-TREES.md",
+    "docs/CLUSTERING.md",
+    "docs/ENHANCEMENTS.md",
+    "docs/GBDT-ADAPTER.md",
+    "docs/HUBER.md",
+    "docs/IMPROVEMENTS.md",
+    "docs/MARGINAL-LAGS-AND-BINS.md",
+    "docs/PLAN.md",
+    "docs/README-ITERATIONS.md",
+    "docs/REVIEW-*.md",
+    "docs/SIMPLIFICATION.md",
+    "docs/WARMUP-AND-CONVERGENCE.md",
     ".claude/*",
     "uv.lock",
     "Cargo.lock",
@@ -46,11 +61,25 @@ HISTORY = (
 DEFERRED = (
     "CHANGELOG.md",
     "CLAUDE.md",
+)
+
+#: The guides. Their links, namespace, variables and warnings are renamed and
+#: held; the prose that names the project `polars-online` is not yet, so the
+#: two rules of the package's and the project's names do not read them.
+GUIDES = (
     "docs/*.md",
     "docs/how-to/*",
     "docs/tutorials/*",
     "docs/explanation/*",
     "docs/contributing/*",
+)
+
+#: The guide that lists the old names beside the new ones, and the pages of
+#: the trees' helper, whose place under 2.0 is still to be decided.
+NAMES_THE_OLD = (
+    "docs/VERSIONS.md",
+    "docs/GBDT.md",
+    "docs/explanation/how-po-gbdt-builds-training-data.md",
 )
 
 
@@ -107,8 +136,6 @@ MAGIC = (
 )
 
 #: Not renamed yet: each still names the old project or links its old home.
-#: The doc-reading tests and `scripts/outputs_doc.py` move with the guides
-#: whose links they read; the rest belong to other owners.
 NOT_YET = (
     ".github/ISSUE_TEMPLATE/config.yml",
     ".github/workflows/ci.yml",
@@ -119,9 +146,6 @@ NOT_YET = (
     "scripts/ogbt_proto.py",
     "scripts/doc_review.py",
     "scripts/validate.py",
-    "scripts/outputs_doc.py",
-    "tests/test_api_links.py",
-    "tests/test_llms_txt.py",
     "tests/test_reference_pages.py",
 )
 
@@ -166,20 +190,20 @@ RULES = (
     Rule(
         "the crates are `rheon-core`, `rheon-polars`, `rheon-cli`, `rheon-py` and `rheon-bench`",
         re.compile(r"(?<![A-Za-z0-9_-])online-(?:core|polars|py|cli|bench)(?![A-Za-z0-9_])"),
-        CODE + PROSE,
-        allowed=("tests/test_old_names.py",),
+        CODE + PROSE + GUIDES,
+        allowed=("tests/test_old_names.py", *NAMES_THE_OLD),
     ),
     Rule(
         "the project's home is github.com/rheon-dev/rheon and rheon-dev.github.io/rheon",
         re.compile(r"hgilde"),
-        CODE + PROSE,
-        allowed=("tests/test_old_names.py", *NOT_YET),
+        CODE + PROSE + GUIDES,
+        allowed=("tests/test_old_names.py", *NOT_YET, *NAMES_THE_OLD),
     ),
     Rule(
         "the warning classes were renamed RheonWarning and RheonDeprecationWarning",
         re.compile(r"PolarsOnline(?:Deprecation)?Warning|__polars_online_renamed__"),
-        CODE + PROSE,
-        allowed=("tests/test_old_names.py",),
+        CODE + PROSE + GUIDES,
+        allowed=("tests/test_old_names.py", *NAMES_THE_OLD),
     ),
     Rule(
         "the frame namespaces are LazyFrameRheonNamespace and DataFrameRheonNamespace",
@@ -192,11 +216,10 @@ RULES = (
         # An accessor: `.online` after a name, a call or a subscript, as
         # `lf.online.fit_predict`, `df.online[...]`, `scan(...).online.`.
         re.compile(r"""(?<=[A-Za-z0-9_)\]"'])\\?\.online(?![A-Za-z0-9_-])"""),
-        CODE + PROSE,
+        CODE + PROSE + GUIDES,
         allowed=(
             "tests/test_old_names.py",
-            # Reads docs/FEATURES.md, whose index still names `lf.online`.
-            "tests/test_feature_index.py",
+            *NAMES_THE_OLD,
             # Lets a benchmark run under a release before 2.0, whose namespace is `.online`.
             "scripts/rheon_import.py",
         ),
@@ -204,8 +227,8 @@ RULES = (
     Rule(
         "the environment variables are RHEON_*; only the fallback reads the old names",
         re.compile(r"POLARS_ONLINE_"),
-        CODE + PROSE,
-        allowed=ENV_FALLBACK,
+        CODE + PROSE + GUIDES,
+        allowed=(*ENV_FALLBACK, *NAMES_THE_OLD),
     ),
     Rule(
         "a message names the path a user calls, `rp.` or `rheon.`, not `po.`",

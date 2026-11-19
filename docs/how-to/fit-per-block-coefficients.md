@@ -31,21 +31,21 @@ you mean to read.
 
 1. **Keep a Gram per week in one pass,** with an `ewridge` spec whose
    `group` is the week and whose `half_life` is `float("inf")`.
-2. **Fit each week alone with `po.gram.solve_subsets(blocks, [[0], [1],
+2. **Fit each week alone with `rheon.gram.solve_subsets(blocks, [[0], [1],
    ...], features=chosen)`.** It returns one list per subset, a fit per
    target, each with its own coefficients, standard errors and t.
-3. **Fit the pooled weeks on the same columns,** with `po.gram.merge`,
-   `po.gram.solve(..., features=chosen)` and `po.gram.coef_stats`.
+3. **Fit the pooled weeks on the same columns,** with `rheon.gram.merge`,
+   `rheon.gram.solve(..., features=chosen)` and `rheon.gram.coef_stats`.
 4. **For each column, compute Fama and MacBeth's t,** the mean of its
    weekly coefficients over `sd / √B`, with `sd` their standard deviation
    and `B` the number of weeks, and set it beside the pooled t.
 5. **Count the weeks whose sign matches the pooled fit's.**
 
-`po.gram.solve_subsets` reads the Grams once and fits every subset in one
+`rheon.gram.solve_subsets` reads the Grams once and fits every subset in one
 call. It was measured on an M4 Pro on 2026-11-08 under a load near 10,
 for 38 Grams and 100 subsets of 19, each fit on every column. It took
 0.015 s at 200 columns and 3.3 s at 2,000, where a loop of
-`po.gram.merge`, `po.gram.solve` and `po.gram.coef_stats` took 0.51 s and
+`rheon.gram.merge`, `rheon.gram.solve` and `rheon.gram.coef_stats` took 0.51 s and
 80 s. Each is the best of three runs.
 
 This code makes the stream and runs step 1:
@@ -56,7 +56,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # 40 weeks, a row every 20 minutes. 200 features in 40 families of five that share a factor, so
 # two features of one family correlate at 0.5. y depends on six of them, and x25's coefficient is
@@ -76,11 +76,11 @@ pl.DataFrame({"ts": ts, **dict(zip(features, x.T)), "y": y}).write_parquet("week
 
 # 1. One pass over the file leaves a Gram per week. The week is a column made in the query.
 lf = pl.scan_parquet("weeks.parquet").with_columns(week=pl.col("ts").dt.truncate("1w"))
-spec = po.spec.ewridge(
+spec = rp.spec.ewridge(
     "blocks", targets=["y"], features=features, group="week",
     half_life=float("inf"), solve_every=float("inf"), target_gaps="pairwise", gram_block_rows=256,
 )
-bank = po.ModelBank([spec])
+bank = rp.ModelBank([spec])
 bank.fit(lf)  # learns from every row, and keeps only the state
 blocks = bank.gram("blocks")  # one dict per week, oldest first
 ```
@@ -91,10 +91,10 @@ over all forty, and sets the two t side by side:
 ```python
 # 2 and 3. The six chosen columns, fit each week alone and pooled over all forty.
 chosen = ["x0", "x5", "x10", "x15", "x20", "x25"]
-each = po.gram.solve_subsets(blocks, [[i] for i in range(n_weeks)], features=chosen)  # each week alone
-pooled = po.gram.merge(blocks)
-coef = po.gram.solve(pooled, features=chosen)
-t = po.gram.coef_stats(pooled, coef, features=chosen)["t"]
+each = rp.gram.solve_subsets(blocks, [[i] for i in range(n_weeks)], features=chosen)  # each week alone
+pooled = rp.gram.merge(blocks)
+coef = rp.gram.solve(pooled, features=chosen)
+t = rp.gram.coef_stats(pooled, coef, features=chosen)["t"]
 
 # 4 and 5. The pooled fit beside the weekly ones, column by column.
 columns = pooled["columns"]

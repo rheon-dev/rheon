@@ -2,7 +2,7 @@
 # How a window operator weighs the rows near each row
 
 This page explains, for anyone who makes features or targets with the
-window operators of [`po.ops`](https://hgilde.github.io/polars-online/ops.html),
+window operators of [`rp.ops`](https://rheon-dev.github.io/rheon/ops.html),
 which rows each operator's window holds and how it weighs them on a clock
 whose steps are uneven.
 
@@ -16,20 +16,20 @@ for a quantile a sketch, as each row arrives, where Polars' `rolling`
 gathers the window's rows again for every row ([What a window operator
 costs](PERFORMANCE.md#what-a-window-operator-costs) has the timings).
 
-**Given a `window_size`, `po.ewm_mean` gives a *bounded EWMA*:** an
+**Given a `window_size`, `rp.ewm_mean` gives a *bounded EWMA*:** an
 exponentially weighted moving average whose history has a maximum age. Its
 weights decay along the clock as any EWMA's do, but rows farther than
 `window_size` from the row drop out instead of fading forever.
 
 [Make features that look back over the
 stream](how-to/make-window-features.md) adds windows as columns before the
-bank with `po.stream.with_windows`, and [Make a target that looks
+bank with `rp.stream.with_windows`, and [Make a target that looks
 ahead](how-to/make-a-target-that-looks-ahead.md) gives a model one as its
 target. [Scale a feature by its spread](how-to/scale-a-feature-by-its-spread.md)
-fits a model on a feature's z-score, made with `po.ewm_mean` and
-`po.ewm_std`. Each operator's parameters, their defaults and what each refuses
+fits a model on a feature's z-score, made with `rp.ewm_mean` and
+`rp.ewm_std`. Each operator's parameters, their defaults and what each refuses
 are in its docstring under
-[`po.ops`](https://hgilde.github.io/polars-online/ops.html).
+[`rp.ops`](https://rheon-dev.github.io/rheon/ops.html).
 
 ## A row's weight on an uneven clock
 
@@ -42,20 +42,20 @@ temporal one. Each operator then reads the weighted rows its own way:
 
 | operator | how it weighs the window's rows | what it is held to |
 |---|---|---|
-| `po.ewm_mean` | each value is held over the interval ending at its row and weighed by that interval's decayed time, so a burst of rows does not outweigh a quiet period, and a row at a repeated clock value moves no mean. Looking ahead, each value is held until the next row | `ewm_mean_by` |
-| `po.ewm_sum` | `Σ 0.5 ** (age / half_life) · x`, each row counted once at its own time. Every row at a repeated clock value carries that value's total. A window with no row with a value sums to 0.0 under the default `min_samples=0`, and is null under 1 or more | `ewm_sum_by` on distinct clock values, whose sum at a repeated one runs row by row; `rolling_sum_by`, empty windows included |
-| `po.ewm_rate` | the sum divided by the decayed time the window covers: a quantity per unit of clock | the sum and the decayed time, each as above |
-| `po.ewm_quantile` | each row weighed as `po.ewm_sum` weighs it ([Quantiles and a robust scale](#quantiles-and-a-robust-scale)) | numpy's weighted quantile (`inverted_cdf`), within 0.78% |
-| `po.ewm_var`, `po.ewm_std` | about `po.ewm_mean`, each value weighed as the mean weighs it, and looking back only. With `bias=False`, the default, the variance is corrected for the weights' number and inequality, so a window that one row's weight fills is null. A window that holds one value gives 0 exactly | `ewm_var` and `ewm_std` with `adjust=False`, on a clock that steps by 1 a row with `half_life` in rows and an input with no nulls: a null row moves nothing here and the last value is held across the longer step to the next value, which no `ignore_nulls` setting of Polars' does. Polars before 1.44 gave the first row 0.0 under `bias=False`, where it now gives null, as these do |
+| `rp.ewm_mean` | each value is held over the interval ending at its row and weighed by that interval's decayed time, so a burst of rows does not outweigh a quiet period, and a row at a repeated clock value moves no mean. Looking ahead, each value is held until the next row | `ewm_mean_by` |
+| `rp.ewm_sum` | `Σ 0.5 ** (age / half_life) · x`, each row counted once at its own time. Every row at a repeated clock value carries that value's total. A window with no row with a value sums to 0.0 under the default `min_samples=0`, and is null under 1 or more | `ewm_sum_by` on distinct clock values, whose sum at a repeated one runs row by row; `rolling_sum_by`, empty windows included |
+| `rp.ewm_rate` | the sum divided by the decayed time the window covers: a quantity per unit of clock | the sum and the decayed time, each as above |
+| `rp.ewm_quantile` | each row weighed as `rp.ewm_sum` weighs it ([Quantiles and a robust scale](#quantiles-and-a-robust-scale)) | numpy's weighted quantile (`inverted_cdf`), within 0.78% |
+| `rp.ewm_var`, `rp.ewm_std` | about `rp.ewm_mean`, each value weighed as the mean weighs it, and looking back only. With `bias=False`, the default, the variance is corrected for the weights' number and inequality, so a window that one row's weight fills is null. A window that holds one value gives 0 exactly | `ewm_var` and `ewm_std` with `adjust=False`, on a clock that steps by 1 a row with `half_life` in rows and an input with no nulls: a null row moves nothing here and the last value is held across the longer step to the next value, which no `ignore_nulls` setting of Polars' does. Polars before 1.44 gave the first row 0.0 under `bias=False`, where it now gives null, as these do |
 
-`po.increment`, which is not a window operator, gives an operator an
+`rp.increment`, which is not a window operator, gives an operator an
 input: `x_t − x_{t−1}`, back to the last row with a value in the group and
 session. It is null on the first row of each group and of each session, on a row
 whose input is null, and after a reset, and in seconds when `x` is a
 temporal column.
 
 [Check the result](how-to/make-window-features.md#check-the-result)
-compares `po.ewm_mean` and `po.ewm_sum` with Polars' `ewm_mean_by` and
+compares `rp.ewm_mean` and `rp.ewm_sum` with Polars' `ewm_mean_by` and
 `rolling_sum_by`, on one symbol's rows.
 
 **A row whose value is missing adds nothing, and gets the window's value
@@ -66,7 +66,7 @@ give a null row null.
 **A time-weighted mean weighs each value by how long it held.** Here `x`
 is 1 for ten clock units, and then 0 on ten rows in the next unit. A mean
 that counts each row once reads the burst of zeros as most of the window.
-`po.ewm_mean` reads the time each value held, and the first value of a
+`rp.ewm_mean` reads the time each value held, and the first value of a
 [stretch](#which-rows-a-window-holds) is held from before the stretch
 begins. This code builds its own rows:
 
@@ -76,11 +76,11 @@ burst = [10.1 + 0.1 * i for i in range(10)]
 rows = pl.DataFrame({"t": [0.0, 10.0, *burst], "x": [0.0, 1.0, *[0.0] * 10], "one": 1.0})
 # The last ten clock units, every row weighed evenly, by its count and by its time.
 even = dict(half_life=float("inf"), window_size=10.0)
-out = po.stream.with_windows(
+out = rp.stream.with_windows(
     rows,
-    rows_in=po.ewm_sum("one", **even),                                  # how many rows the window holds
-    by_count=po.ewm_sum("x", **even) / po.ewm_sum("one", **even),       # each row counted once
-    by_time=po.ewm_mean("x", **even),                                   # each value weighed by the time it held
+    rows_in=rp.ewm_sum("one", **even),                                  # how many rows the window holds
+    by_count=rp.ewm_sum("x", **even) / rp.ewm_sum("one", **even),       # each row counted once
+    by_time=rp.ewm_mean("x", **even),                                   # each value weighed by the time it held
     clock="t", gap_cap=20.0,
 )
 last = out.row(-1, named=True)
@@ -120,10 +120,10 @@ numeric clock, two of them at the stamp 1.0, with a window of 2:
 ```python
 stamps = pl.DataFrame({"t": [0.0, 1.0, 1.0, 2.0, 3.5], "one": 1.0})
 # Count the rows in each window, back and ahead, under both closed rules.
-counts = po.stream.with_windows(
+counts = rp.stream.with_windows(
     stamps,
-    **{f"back_{c}": po.ewm_sum("one", half_life=float("inf"), window_size=2.0, closed=c) for c in ["right", "left"]},
-    **{f"ahead_{c}": po.ewm_sum("one", half_life=float("inf"), window_size=2.0, closed=c, reverse=True) for c in ["right", "left"]},
+    **{f"back_{c}": rp.ewm_sum("one", half_life=float("inf"), window_size=2.0, closed=c) for c in ["right", "left"]},
+    **{f"ahead_{c}": rp.ewm_sum("one", half_life=float("inf"), window_size=2.0, closed=c, reverse=True) for c in ["right", "left"]},
     clock="t", gap_cap=10.0,
 )
 # The counts as a table, a line per row.
@@ -198,11 +198,11 @@ are null on a quote. It uses `trades` from [Example data](EXAMPLE-DATA.md):
 
 ```python
 clock = dict(clock="ts", gap_cap="5m", group="symbol")
-lagged = po.ewm_mean("mid", half_life="5s").shift(1)       # reads the row before: a chunk's first row has none
+lagged = rp.ewm_mean("mid", half_life="5s").shift(1)       # reads the row before: a chunk's first row has none
 spread = pl.col("price") - pl.col("mid")                    # reads the row alone, and no operator
 for formula in [lagged, spread]:
     try:
-        po.stream.with_windows(trades, out=formula, **clock)
+        rp.stream.with_windows(trades, out=formula, **clock)
     except ValueError as e:
         print(str(e).split(". ")[0])
 ```
@@ -212,7 +212,7 @@ with_windows: a formula over window operators reads each row alone, but its expr
 with_windows: 'out' holds no window operator, so it reads only its own row
 ```
 
-**An operator's input can be a formula of the same kind, `po.increment`
+**An operator's input can be a formula of the same kind, `rp.increment`
 included, but not another operator.** To window an operator's output, make
 it a column in one `with_windows` call, and window that column in a second
 ([Window an operator's
@@ -253,9 +253,9 @@ This code uses `trades` from [Example data](EXAMPLE-DATA.md):
 
 ```python
 for partial in ["keep", "null", "drop"]:
-    out = po.stream.with_windows(
+    out = rp.stream.with_windows(
         trades,
-        mid_mean=po.ewm_mean("mid", half_life="5s", window_size="1m", partial=partial),
+        mid_mean=rp.ewm_mean("mid", half_life="5s", window_size="1m", partial=partial),
         clock="ts", gap_cap="5m", group="symbol",
     )
     print(f'partial="{partial}": {out.height} rows, {out["mid_mean"].null_count()} null')
@@ -275,8 +275,8 @@ over and drops every row waiting to be learned, a whole one with the rest.
 
 ## Quantiles and a robust scale
 
-**`po.ewm_quantile` is the quantile of the window's values, each weighed as
-`po.ewm_sum` weighs it.** Row *j* weighs `0.5 ** (age / half_life)`, its age
+**`rp.ewm_quantile` is the quantile of the window's values, each weighed as
+`rp.ewm_sum` weighs it.** Row *j* weighs `0.5 ** (age / half_life)`, its age
 taken from the row the window is read at. The quantile at `quantile=q` is
 the smallest value whose share of the weight, counting it and every value
 below it, reaches `q`. That is numpy's weighted quantile,
@@ -292,7 +292,7 @@ next) holds 64 buckets. A bucket spans a ratio of at most `e^(1/64)`, and the
 value reported for it is within `tanh(1/128)`, about 0.0078, of every value
 in it, at any scale and either sign. A magnitude below the smallest normal
 double, about 2.2e-308, reads as 0. These are DDSketch's buckets (Masson,
-Rim and Lee, 2019), the ones `po.spec.huber`'s MAD scale reads too.
+Rim and Lee, 2019), the ones `rheon.spec.huber`'s MAD scale reads too.
 
 **A row leaves a window that `window_size` cuts off without a subtraction.** The windowed
 operators keep a window's rows in two stacks: new rows join the newer one,
@@ -309,18 +309,18 @@ A read walks the buckets an octave at a time, then the one octave's 64
 buckets, so a quantile costs about as much as its window's values span
 octaves.
 
-| the window | what it keeps | its sketches, on standard normal values | time a row, against the same window's `po.ewm_mean` |
+| the window | what it keeps | its sketches, on standard normal values | time a row, against the same window's `rp.ewm_mean` |
 |---|---|---|---|
 | no `window_size` | one sketch of every row since the stretch began, decayed, folding the decay in every 64 half-lives and then dropping an end octave that holds at most 1e-12 of the weight | 1,985 buckets, about 16 KB, at a half-life of 500 rows | 1.9 times |
 | a `window_size` | the window's rows, as every windowed operator keeps them, three numbers a row, and two sketches | 1,345 buckets for a window of 1,000 rows | 1.7 times |
-| `reverse=True` | as under a `window_size` | as under a `window_size` | 1.9 times `po.ewm_sum`'s |
+| `reverse=True` | as under a `window_size` | as under a `window_size` | 1.9 times `rp.ewm_sum`'s |
 
 The times are the best of five runs over 2,000,000 rows of one group,
-interleaved, through `po.stream.with_windows`, measured on 2026-10-24 on a
+interleaved, through `rp.stream.with_windows`, measured on 2026-10-24 on a
 shared laptop at a load average of 8 to 12.
 
 [Weight rows by a robust scale of the target](how-to/weight-rows-by-a-robust-scale.md)
-shows how to make a MAD scale with `po.ewm_quantile`, and weight each row
+shows how to make a MAD scale with `rp.ewm_quantile`, and weight each row
 by it without reading targets not yet known.
 
 ## Saving and resuming a window run

@@ -5,7 +5,7 @@ This reference page lists, for anyone who reads a model's output and
 wants to know whether its predictions can be trusted, each question, the
 diagnostic that answers it and its fields. Each diagnostic is a switch in
 the spec that adds fields to the model's output on every row, or a call in
-`po.eval` that scores an output after the run.
+`rp.eval` that scores an output after the run.
 
 [Data quality](DATA-QUALITY.md) asks whether the data can be
 learned from at all. This page asks whether the model learned from it well.
@@ -18,7 +18,7 @@ flips from 0.5 to −0.5 at row 3,000. A ridge regression with a half-life of
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # y = 1.0 x0 + b x1 + noise, where b flips from 0.5 to -0.5 at row 3,000 of 6,000.
 rng = np.random.default_rng(0)
@@ -29,7 +29,7 @@ pl.DataFrame({"t": np.arange(n, dtype=float), "x0": x0, "x1": x1, "y": y}).write
 lf = pl.scan_parquet("flip.parquet")
 
 # A ridge with one diagnostic for each of the three questions.
-model = po.spec.ewridge(
+model = rp.spec.ewridge(
     "ridge", targets=["y"], features=["x0", "x1"], clock="t", gap_cap=5.0, half_life=200.0,
     emit_metrics=True,  # how good is it: ic_y, r2_y, hit_rate_y
     emit_calibration=True,  # is it scaled right: calibration_slope_y, _intercept_y, _wald_y
@@ -98,8 +98,8 @@ These are the words of the library that the page uses:
 
 | word | what it means here |
 |---|---|
-| spec | one model's description: the model, the columns it reads, and how it treats time. `po.spec.ewridge(...)` makes one, and [MODELS.md's model table](MODELS.md#the-models-at-a-glance) lists every kind |
-| bank | `po.ModelBank`, a model bank: a set of models, one for each spec and group, fitted together over the same rows |
+| spec | one model's description: the model, the columns it reads, and how it treats time. `rheon.spec.ewridge(...)` makes one, and [MODELS.md's model table](MODELS.md#the-models-at-a-glance) lists every kind |
+| bank | `rp.ModelBank`, a model bank: a set of models, one for each spec and group, fitted together over the same rows |
 | EW | exponentially weighted: each row's weight halves every half-life of the memory given |
 | slot | one prediction of one target, at one point of a grid such as a list of ridge values. A diagnostic writes one field per slot, suffixed with the target, as `cusum_y` |
 | out-of-sample | a row's prediction is made before the model learns from the row, so its residual `resid = y − pred` is one the model has not seen |
@@ -119,7 +119,7 @@ Each question, the diagnostic that answers it, and its fields:
 | are its tails heavy? | `emit_tails` | `skew_<t>`, `kurtosis_<t>`, `jarque_bera_<t>` | [Are its tails heavy?](#are-its-tails-heavy) |
 | which row moved it? | `emit_influence` | `influence_<t>` | [Which row moved it?](#which-row-moved-it) |
 | are its features healthy? | `emit_feature_health` | `spread_ratio_<feature>`, `mean_shift_<feature>` | [Are its features healthy?](#are-its-features-healthy) |
-| is another model better? | `emit_metrics`, `emit_selected`, `emit_averaged`; `po.eval` | `ic_<t>`, `r2_<t>`, `hit_rate_<t>`, `selected_<t>`, `pred_<t>__selected`, `pred_<t>__averaged` | [Is another model better?](#is-another-model-better) |
+| is another model better? | `emit_metrics`, `emit_selected`, `emit_averaged`; `rp.eval` | `ic_<t>`, `r2_<t>`, `hit_rate_<t>`, `selected_<t>`, `pred_<t>__selected`, `pred_<t>__averaged` | [Is another model better?](#is-another-model-better) |
 | is it ready? | `min_weight`, `min_settled_frac`, `max_error_inflation`, `emit_error_inflation` | `weight_sum`, `settled_frac`, `withheld_reason`, `error_inflation_<t>` | [Is it ready?](#is-it-ready) |
 | how wide is its error? | `emit_sigma`, `emit_zscore`, `resid_quantiles`, `conformal` | `sigma_<t>`, `zscore_<t>`, `abs_resid_q<p>_<t>`, `lo_<t>`, `hi_<t>`, `coverage_<t>` | [How wide is its error?](#how-wide-is-its-error) |
 
@@ -246,7 +246,7 @@ default if it has one:
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # Two thousand rows of y = x0 + 0.5 x1 + noise.
 rng = np.random.default_rng(16)
@@ -258,7 +258,7 @@ pl.DataFrame(
 lf = pl.scan_parquet("every.parquet")
 
 # One spec with every switch on.
-every = po.spec.ewridge(
+every = rp.spec.ewridge(
     "every", targets=["y"], features=["x0", "x1"], clock="t", gap_cap=5.0, half_life=200.0,
     emit_sigma=True,              # sigma_y: EW standard deviation of the out-of-sample residuals
     emit_zscore=True,             # zscore_y: resid / sigma, how surprising the row was
@@ -786,8 +786,8 @@ default.
 compares the three standard errors on 100 streams whose true slope is 0,
 and chooses the one to read.
 
-**`po.gram.coef_stats` and `marginal`'s `t_stat` read Kish's size too, and are
-silent about the overlap the same way.** `po.gram.coef_stats` computes each
+**`rheon.gram.coef_stats` and `marginal`'s `t_stat` read Kish's size too, and are
+silent about the overlap the same way.** `rheon.gram.coef_stats` computes each
 coefficient's standard error and t from a Gram, such as one loaded from a
 state, at `n = target_n_kish` ([A ridge and its
 t](GRAM.md#a-ridge-and-its-t)). Read its t as a scale for
@@ -1001,12 +1001,12 @@ after the run.
 |---|---|---|---|
 | running accuracy | `emit_metrics` | `ic_<t>`, the EW correlation of prediction with target; `r2_<t>`, the out-of-sample R² against the running mean; `hit_rate_<t>`, the share of rows whose sign the prediction got right | |
 | a choice as the stream runs | `emit_selected`, `emit_averaged` | the grid point with the lowest EW error so far, and every slot's prediction weighted by its error | [Choose among a grid's settings as the stream runs](how-to/choose-among-a-grid-online.md) |
-| a test of two models | `po.eval.diebold_mariano`, `po.eval.clark_west`, `po.eval.seqtest`, the `seqtest` model | a t statistic, or evidence that can be read at any row | [Compare two models](how-to/compare-two-models.md) |
-| metrics after the run | `po.eval.metrics`, `window_metrics`, `compare_specs`, over the output or a query of it for an output too large to hold; `po.eval.sums` for scores that add up across runs | R², IC, hit rate and MSE, per group or per window | [Evaluate an output frame](how-to/evaluate-an-output-frame.md) |
+| a test of two models | `rp.eval.diebold_mariano`, `rp.eval.clark_west`, `rp.eval.seqtest`, the `seqtest` model | a t statistic, or evidence that can be read at any row | [Compare two models](how-to/compare-two-models.md) |
+| metrics after the run | `rp.eval.metrics`, `window_metrics`, `compare_specs`, over the output or a query of it for an output too large to hold; `rp.eval.sums` for scores that add up across runs | R², IC, hit rate and MSE, per group or per window | [Evaluate an output frame](how-to/evaluate-an-output-frame.md) |
 
 **`hit_rate` asks whether prediction and target fall on the same side of
 zero.** A row where either is exactly zero is on neither side, and both
-`emit_metrics` and `po.eval.metrics` leave it out. So on a target that is
+`emit_metrics` and `rp.eval.metrics` leave it out. So on a target that is
 always positive, such as a plain ratio, every row whose prediction is
 positive too counts as a hit, and `hit_rate` sits near 1 and says
 nothing. Write a
@@ -1024,7 +1024,7 @@ same names:
 | `hit_rate` | the accuracy at a 0.5 threshold |
 | `r2` | the Brier skill score against the running base rate |
 | `ic` | the point-biserial correlation between the probability and the target |
-| a log loss | not kept as the stream runs: `po.eval.metrics(..., binary=True)` computes one after the run, over the output or a query of it |
+| a log loss | not kept as the stream runs: `rp.eval.metrics(..., binary=True)` computes one after the run, over the output or a query of it |
 
 ### Choosing among a grid's settings
 
@@ -1048,7 +1048,7 @@ half-life.
 [Choose among a grid's settings as the stream
 runs](how-to/choose-among-a-grid-online.md) turns both switches on, reads
 them against the grid's own slots, and says when to fix one setting with
-`po.eval.grid_search` instead.
+`rp.eval.grid_search` instead.
 
 ### Comparing two models
 
@@ -1056,7 +1056,7 @@ them against the grid's own slots, and says when to fix one setting with
 errors differ on average.** Its statistic is the mean of the loss
 differential `d = resid_b² − resid_a²` over Newey and West's standard
 error, about `N(0, 1)` when the two predict equally well.
-`po.eval.diebold_mariano(out, a=, b=)` computes it. Its `lags` are 0 by
+`rp.eval.diebold_mariano(out, a=, b=)` computes it. Its `lags` are 0 by
 default, which is right only where the differentials are uncorrelated from
 row to row: where neither model's one-step errors can be predicted from
 its past errors. Two models that each leave out something persistent make
@@ -1091,7 +1091,7 @@ Here `n` is the number of rows where both models have a residual, `f̄` the
 mean of `f` over them, and `S` Newey and West's long-run sum of squares of
 `f` about `f̄`, at the call's `lags`: its long-run variance times `n`.
 
-`po.eval.clark_west(out, big=, small=)` computes it. With `half_life`,
+`rp.eval.clark_west(out, big=, small=)` computes it. With `half_life`,
 each call gives its statistic on every row instead, exponentially
 weighted, from a key's `min_samples`-th row. Each row's value rests on
 about `2.9 · half_life` rows however long the stream. So it is near
@@ -1099,7 +1099,7 @@ about `2.9 · half_life` rows however long the stream. So it is near
 `half_life=5` and `lags=4` it passed 1.96 on 17% of rows. It is also one
 test per row, so acting the first time it passes 1.96 is not a test at 5%.
 
-`po.eval.seqtest` and the `seqtest` model give evidence that one model
+`rp.eval.seqtest` and the `seqtest` model give evidence that one model
 predicts closer on more rows, by betting on the sign of
 `|resid_b| − |resid_a|`. That is a different question from the two tests
 above, which compare mean squared errors: a model with rare large errors
@@ -1122,7 +1122,7 @@ runs.
 
 ### Evaluating an output frame
 
-`po.eval`'s calls score a finished run's output frame: `metrics` per spec
+`rp.eval`'s calls score a finished run's output frame: `metrics` per spec
 and group, `window_metrics` per window of the clock, `compare_specs` over
 several specs, and `unpack` to long form. For an output too large to hold,
 each takes a query of it in place of the frame, as the tests of two specs
@@ -1344,9 +1344,9 @@ Each claim on this page that is not measured here rests on one of these.
 | Brown, R. L., Durbin, J. and Evans, J. M. (1975). Techniques for testing the constancy of regression relationships over time. *Journal of the Royal Statistical Society, Series B* 37(2), 149–192. | recursive residuals, the CUSUM and the CUSUM of squares, and their boundaries |
 | Chu, C.-S. J., Hornik, K. and Kuan, C.-M. (1995). MOSUM tests for parameter constancy. *Biometrika* 82(3), 603–617. | the moving-sum form of the CUSUM |
 | Clark, T. E. and McCracken, M. W. (2001). Tests of equal forecast accuracy and encompassing for nested models. *Journal of Econometrics* 105(1), 85–110. | why equal-accuracy tests lean toward the smaller of two nested models |
-| Clark, T. E. and West, K. D. (2007). Approximately normal tests for equal predictive accuracy in nested models. *Journal of Econometrics* 138(1), 291–311. | `po.eval.clark_west` |
+| Clark, T. E. and West, K. D. (2007). Approximately normal tests for equal predictive accuracy in nested models. *Journal of Econometrics* 138(1), 291–311. | `rp.eval.clark_west` |
 | Dawid, A. P. (1984). Statistical theory: the prequential approach. *Journal of the Royal Statistical Society, Series A* 147(2), 278–292. | judging predictions made before each row is learned |
-| Diebold, F. X. and Mariano, R. S. (1995). Comparing predictive accuracy. *Journal of Business and Economic Statistics* 13(3), 253–263. | `po.eval.diebold_mariano` |
+| Diebold, F. X. and Mariano, R. S. (1995). Comparing predictive accuracy. *Journal of Business and Economic Statistics* 13(3), 253–263. | `rp.eval.diebold_mariano` |
 | Hinkley, D. V. (1971). Inference about the change-point from cumulative sum tests. *Biometrika* 58(3), 509–523. | the Page-Hinkley detector behind `drift` |
 | Jarque, C. M. and Bera, A. K. (1980). Efficient tests for normality, homoscedasticity and serial independence of regression residuals. *Economics Letters* 6(3), 255–259. | `jarque_bera` |
 | Kish, L. (1965). *Survey Sampling*. Wiley. | the effective sample size of unequal weights |

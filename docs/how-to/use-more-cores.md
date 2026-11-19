@@ -59,7 +59,7 @@ import time
 
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # A file of 20 features, and eight specs that differ only in half-life.
 rng = np.random.default_rng(2)
@@ -68,7 +68,7 @@ features = [f"x{j}" for j in range(20)]
 pl.DataFrame(
     {"y": rng.standard_normal(n)} | {f: rng.standard_normal(n) for f in features}
 ).write_parquet("specs.parquet")
-specs = [po.spec.ewridge(f"h{h}", targets=["y"], features=features, half_life=float(h))
+specs = [rp.spec.ewridge(f"h{h}", targets=["y"], features=features, half_life=float(h))
          for h in (100, 200, 400, 800, 1600, 3200, 6400, 12800)]   # eight specs, one piece each
 
 # The eight in one bank, then one at a time.
@@ -95,8 +95,8 @@ the same output either way: True
 
 **Set the bank's thread count with `threads=`, on the bank or the call
 that makes one.** `ModelBank(specs, threads=8)`, `ModelBank.load(path,
-threads=8)`, `po.fit_predict(..., threads=8)`, `po.predict`, and the frame
-namespaces' `fit_predict` and `predict` all take it. So do `po.gram`'s
+threads=8)`, `rp.fit_predict(..., threads=8)`, `rp.predict`, and the frame
+namespaces' `fit_predict` and `predict` all take it. So do `rheon.gram`'s
 `lars_path`, `lars_paths` and `solve_subsets`, and the command line, as
 `--threads 8` or a `threads` key in the TOML.
 
@@ -105,7 +105,7 @@ namespaces' `fit_predict` and `predict` all take it. So do `po.gram`'s
    them, and asking for the size the process's default set already has
    uses that set.
 2. **Or leave `threads` as `None`, the default,** for the process's
-   default set, one thread per core unless `POLARS_ONLINE_MAX_THREADS`
+   default set, one thread per core unless `RHEON_MAX_THREADS`
    sizes it.
 
 The count is not saved with a state, and the output and the saved state
@@ -118,15 +118,15 @@ each:**
 
 | variable | sizes | unset or `0` | read at | what took effect |
 |---|---|---|---|---|
-| `POLARS_ONLINE_MAX_THREADS` | the bank's default threads, for a bank or call given no `threads` | one thread per core | the first chunk a bank without `threads` fits or scores, or the first `po.thread_pool_size()` | [`po.thread_pool_size()`](https://hgilde.github.io/polars-online/rheon.html#rheon.thread_pool_size) |
+| `RHEON_MAX_THREADS` | the bank's default threads, for a bank or call given no `threads` | one thread per core | the first chunk a bank without `threads` fits or scores, or the first `rheon.thread_pool_size()` | [`rheon.thread_pool_size()`](https://rheon-dev.github.io/rheon/rheon.html#rheon.thread_pool_size) |
 | `POLARS_MAX_THREADS` | Polars' readers and writers, and their read-ahead ([Bound a run's memory](bound-memory.md#give-polars-fewer-threads-and-the-bank-every-core)) | one thread per core | `import polars`, which `import rheon` runs | `pl.thread_pool_size()` |
 
 Polars has no per-call thread count, so its threads are set by its
 variable alone, before `import polars`: in the shell, as
 `POLARS_MAX_THREADS=8 python fit.py`, or with `os.environ` at the top of the
-script. `POLARS_ONLINE_MAX_THREADS` is read once, when the default threads
+script. `RHEON_MAX_THREADS` is read once, when the default threads
 are first used, and ignored after. `threads=` never reads it. A
-`POLARS_ONLINE_MAX_THREADS` that is not a whole number, or is past the
+`RHEON_MAX_THREADS` that is not a whole number, or is past the
 same bound as `threads`, makes the first call that uses the default
 threads raise `ValueError`, naming the variable.
 Giving both sets every core slows neither: the models run on the bank's
@@ -166,14 +166,14 @@ threads](../GRAM.md#one-wide-gram-on-several-threads) measures
 ## Search over factor sets in one pass
 
 **To search over factor sets, build one spec per set and pass the whole
-list to one `lf.online.fit_predict` call.** Each spec runs as its own
+list to one `lf.rheon.fit_predict` call.** Each spec runs as its own
 piece of work on each group, and the query reads the file once.
 
 1. **Build one spec per factor set,** each named after its set.
-2. **Pass the list to one `lf.online.fit_predict` call,** with
+2. **Pass the list to one `lf.rheon.fit_predict` call,** with
    `save_state=` if you want the fits kept. Its output has one column per
    spec, and one state file, `grid.state`, holds them all.
-3. **Score the specs with `po.eval.compare_specs`,** choosing each spec's
+3. **Score the specs with `rp.eval.compare_specs`,** choosing each spec's
    [grid point](../GLOSSARY.md#grids) on the first half of the rows and
    scoring it on the second.
 
@@ -186,14 +186,14 @@ import os
 os.environ["POLARS_MAX_THREADS"] = "8"          # Polars' readers and writers: read at import polars
 
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 from itertools import product
 
 # Three factor sets, each with and without standardizing: six specs.
 factors = {"mkt": ["x0"], "mkt-sz": ["x0", "x1"], "mkt-sz-val": ["x0", "x1", "x2"]}
 
 def factor_spec(name, features, standardize):
-    return po.spec.ewridge(f"{name}-std{standardize:d}",                  # "mkt-std0", "mkt-std1", ...
+    return rp.spec.ewridge(f"{name}-std{standardize:d}",                  # "mkt-std0", "mkt-std1", ...
                            targets=["y"], features=features, clock="t", gap_cap=300.0,
                            group="stock_id", session="session", session_gap=60.0,
                            half_life=[100.0, 1000.0], ridge=[1e-3, 0.1],   # gridded inside the spec
@@ -209,8 +209,8 @@ specs = [factor_spec(n, f, s) for (n, f), s in product(factors.items(), [False, 
 # Each spec's grid point chosen on the first half of the rows, then scored on the second.
 out = pl.read_parquet("grid.parquet")
 half = out.height // 2
-first = po.eval.compare_specs(out.head(half), specs)                 # one row per spec and grid point
-second = po.eval.compare_specs(out.tail(out.height - half), specs)
+first = rp.eval.compare_specs(out.head(half), specs)                 # one row per spec and grid point
+second = rp.eval.compare_specs(out.tail(out.height - half), specs)
 picks = first.sort("r2", descending=True).group_by("spec", maintain_order=True).first()
 best = picks.join(second, on=["spec", "slot", "target"], suffix="_after").sort(pl.col("r2_after").round(3), "spec", descending=[True, False])
 for spec_name, r2, after in best.select("spec", "r2", "r2_after").iter_rows():
@@ -240,9 +240,9 @@ fourteen, measured on 2026-09-29 by `scripts/parallel_bench.py`.
 
 ## Check the result
 
-**Check how many threads the bank runs on with `po.thread_pool_size`, and
-that the output is the same at every count.** `po.thread_pool_size()`
-gives the default threads' number, and `po.thread_pool_size(threads=n)`
+**Check how many threads the bank runs on with `rheon.thread_pool_size`, and
+that the output is the same at every count.** `rheon.thread_pool_size()`
+gives the default threads' number, and `rheon.thread_pool_size(threads=n)`
 the number a bank given `threads=n` runs on, without starting them. This
 code fits one spec on one thread and on four, and checks the two agree. It
 uses the file `ticks.parquet` from [Example
@@ -250,14 +250,14 @@ data](../EXAMPLE-DATA.md):
 
 ```python
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
-spec = po.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], clock="t",
+spec = rp.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], clock="t",
                        half_life=600.0, gap_cap=300.0, group="stock_id")
 one = pl.scan_parquet("ticks.parquet").rheon.fit_predict([spec], threads=1).collect()
 four = pl.scan_parquet("ticks.parquet").rheon.fit_predict([spec], threads=4).collect()
 print("the same output on 1 and 4 threads:", one.equals(four))
-print("threads=4 runs on", po.thread_pool_size(threads=4), "threads")   # reports, starts nothing
+print("threads=4 runs on", rp.thread_pool_size(threads=4), "threads")   # reports, starts nothing
 ```
 
 ```text

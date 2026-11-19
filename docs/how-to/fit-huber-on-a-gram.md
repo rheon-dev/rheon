@@ -34,7 +34,7 @@ weighted least squares would need a Gram for each pass and each target.
    and read it with `bank.gram(name)[0]`.
 2. **Factor its features' co-moments once,** with
    `np.linalg.cholesky(g["comoments"][1:, 1:])`. No pass changes them.
-3. **Start from least squares, `po.gram.solve(g)`,** or from the target's
+3. **Start from least squares, `rheon.gram.solve(g)`,** or from the target's
    median alone, an intercept and no slopes. Do not start from all zeros:
    from there every residual is the target's level, and the first pass is
    lost.
@@ -61,7 +61,7 @@ to a tenth of the rows with `x` above 0, and leaves their Gram:
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # y = 1000 + 2x plus noise, and 50 added to a tenth of the rows with x above 0: 5% of all rows.
 rng = np.random.default_rng(3)
@@ -73,10 +73,10 @@ pl.DataFrame({"x": x, "y": y}).write_parquet("level.parquet")
 
 # 1. One pass leaves the Gram.
 features = ["x"]
-spec = po.spec.ewridge(
+spec = rp.spec.ewridge(
     "g", targets=["y"], features=features, half_life=float("inf"), solve_every=float("inf")
 )
-bank = po.ModelBank([spec])
+bank = rp.ModelBank([spec])
 bank.fit(pl.scan_parquet("level.parquet"))
 g = bank.gram("g")[0]
 # 2. Its matrix is the same in every pass below, so it is factored once.
@@ -119,7 +119,7 @@ continues from the code before:
 
 ```python
 # 3. Least squares from the Gram, and the target's median alone, as the two starts.
-least_squares = po.gram.solve(g)
+least_squares = rp.gram.solve(g)
 median = pl.scan_parquet("level.parquet").select(pl.col("y").median()).collect().item()
 print(f"least squares: slope {least_squares[1]:.4f}, where the planted slope is 2")
 # 8. Ten passes of algorithm H from each start.

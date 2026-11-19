@@ -31,11 +31,11 @@ models](../DIAGNOSTICS.md#comparing-two-models) defines both statistics.
 1. **Fit both specs in one bank.**
 2. **Run the query.**
 3. **For two models that are not nested, call
-   `po.eval.diebold_mariano(out, a=, b=)`.** It returns `dm`, positive
+   `rp.eval.diebold_mariano(out, a=, b=)`.** It returns `dm`, positive
    when `a` predicts closer, and its two-sided `p_value`. For a one-sided
    test at 5% that `a` predicts closer, read `dm > 0` with
    `p_value < 0.10`.
-4. **For two nested models, call `po.eval.clark_west(out, big=, small=)`.**
+4. **For two nested models, call `rp.eval.clark_west(out, big=, small=)`.**
    It returns a one-sided `p_value`: below 0.05, the larger model predicts
    better at the 5% level.
 5. **Give either call `lags=`, the lags of its Newey-West variance.** The
@@ -61,7 +61,7 @@ finds the larger model better:
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # 200 streams of 2,000 rows: y = x0 + c x1 + noise, with c = 0.05 on half of them and 0 on the rest.
 # "small" fits x0 alone; "big" fits x0 and x1, so it nests "small".
@@ -82,13 +82,13 @@ nested = pl.scan_parquet("nested.parquet")
 
 # 1 and 2. The two nested fits in one bank, one group per stream, every row weighed alike.
 common = dict(targets=["y"], half_life=float("inf"), group="stream", min_weight=20.0)
-small = po.spec.ewridge("small", features=["x0"], **common)
-big = po.spec.ewridge("big", features=["x0", "x1"], **common)
+small = rp.spec.ewridge("small", features=["x0"], **common)
+big = rp.spec.ewridge("big", features=["x0", "x1"], **common)
 out = nested.rheon.fit_predict([small, big]).collect()
 
 # 3 to 6. One test of each kind per stream: does big predict better than small?
-dm = po.eval.diebold_mariano(out, a="big", b="small", group="stream")
-cw = po.eval.clark_west(out, big="big", small="small", group="stream")
+dm = rp.eval.diebold_mariano(out, a="big", b="small", group="stream")
+cw = rp.eval.clark_west(out, big="big", small="small", group="stream")
 tests = (
     out.group_by("stream").agg(pl.col("c").first())
     .join(dm.select("stream", "dm", dm_p="p_value"), on="stream")
@@ -184,9 +184,9 @@ drift = pl.scan_parquet("drift.parquet")
 
 # 1 and 2. A ridge, a Kalman filter whose coefficients drift, and a seqtest of the two, one model each per stock.
 common = dict(targets=["y"], features=["x0", "x1"], clock="t", gap_cap=5.0, group="stock", min_weight=50.0)
-ridge = po.spec.ewridge("ridge", half_life=500.0, **common)
-kalman = po.spec.kalman("kalman", half_life=500.0, coef_half_life=100.0, **common)
-closer = po.spec.seqtest("closer", targets=["y"], a="kalman", b="ridge", group="stock")  # does kalman predict closer?
+ridge = rp.spec.ewridge("ridge", half_life=500.0, **common)
+kalman = rp.spec.kalman("kalman", half_life=500.0, coef_half_life=100.0, **common)
+closer = rp.spec.seqtest("closer", targets=["y"], a="kalman", b="ridge", group="stock")  # does kalman predict closer?
 out = drift.rheon.fit_predict([ridge, kalman, closer]).collect()
 
 # 4. The first row on which each side's evidence reaches ln 20, the 5% level, on each stock.
@@ -200,8 +200,8 @@ for stock in ("moves", "still"):
 # The same test with each model's default min_weight: on "still", the ridge's evidence early on.
 ungated = {k: v for k, v in common.items() if k != "min_weight"}
 early = (
-    drift.rheon.fit_predict([po.spec.ewridge("ridge", half_life=500.0, **ungated),
-                              po.spec.kalman("kalman", half_life=500.0, coef_half_life=100.0, **ungated), closer])
+    drift.rheon.fit_predict([rp.spec.ewridge("ridge", half_life=500.0, **ungated),
+                              rp.spec.kalman("kalman", half_life=500.0, coef_half_life=100.0, **ungated), closer])
     .collect().select("t", "stock", pl.col("closer").struct.unnest()).filter(stock="still")
 )
 first = early.filter(pl.col("log_e_b_y") >= math.log(20))["t"].min()
@@ -223,7 +223,7 @@ level for the ridge at `t = 25`, in the first rows the two models
 predict. By `t = 100` its evidence has fallen back to
 0.28, far below `ln 20`.
 
-For two specs' output already in a frame, `po.eval.seqtest(out, a=, b=)`
+For two specs' output already in a frame, `rp.eval.seqtest(out, a=, b=)`
 computes the same evidence in Polars expressions.
 
 [`seqtest`](../MODELS.md#seqtest--a-sequential-test-of-a-sign-by-betting)
@@ -235,9 +235,9 @@ A test of two models is only as good as the rows it reads:
 
 | what you see | what it means | what to do |
 |---|---|---|
-| Diebold and Mariano's test never finds a larger, nested model better | the test leans toward the smaller model | use `po.eval.clark_west` for nested models |
+| Diebold and Mariano's test never finds a larger, nested model better | the test leans toward the smaller model | use `rp.eval.clark_west` for nested models |
 | a significant `dm`, or a small Clark and West `p_value`, which goes away at a larger `lags` | the differentials correlate from row to row, through a target that looks ahead or errors that persist, and too few lags understate the standard error | set `lags` to about `2 h` for a target `h` rows ahead, and above 0 wherever the differentials correlate |
-| a test that finds a difference on every one of many streams, or on none | the difference is large against the noise, or the streams are too short to see it | read the size of the difference too, as the two models' `mse` from `po.eval.compare_specs` |
+| a test that finds a difference on every one of many streams, or on none | the difference is large against the noise, or the streams are too short to see it | read the size of the difference too, as the two models' `mse` from `rp.eval.compare_specs` |
 | a `seqtest` that passes the 5% level in the first rows and falls back | one model is still in its warm-up, and its first predictions are far off; or the signs run | set `min_weight` on both specs, so the test reads only rows both models are ready on |
-| both `log_e_a_<t>` and `log_e_b_<t>` past `ln 20` on one stream | the signs run: the two models' errors persist from row to row, which breaks the test's null | test one row in each block of rows longer than the errors' memory, with `po.eval.seqtest` over the output filtered to those rows |
+| both `log_e_a_<t>` and `log_e_b_<t>` past `ln 20` on one stream | the signs run: the two models' errors persist from row to row, which breaks the test's null | test one row in each block of rows longer than the errors' memory, with `rp.eval.seqtest` over the output filtered to those rows |
 | `log_e_a_<t>` stays null or flat | one side's residual is null on the rows, as in a warm-up | check that both specs predict the rows |

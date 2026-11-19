@@ -89,12 +89,12 @@ in size at noon on 2024-01-03.
    and a `bocpd` spec, which tracks how long the factors' current regime
    has lasted.
 4. **Run one query over every file,** `pl.scan_parquet("days/*.parquet")`
-   into `.online.fit_predict`, and write the bank's output, with the
+   into `.rheon.fit_predict`, and write the bank's output, with the
    readings to count, to a file with `sink_parquet`, which runs the query
    and writes the result without holding it all in memory.
 5. **Count the choices, the break flags and the new regimes by day,** with
    queries over that file.
-6. **Score every slot of both specs** with `po.eval.compare_specs` over a
+6. **Score every slot of both specs** with `rp.eval.compare_specs` over a
    query of that file. It runs the query once and reads its result a chunk
    at a time, adding up a few sums per slot, so it holds one chunk of the
    file and the sums. Polars holds what it reads of the file ahead of them,
@@ -107,7 +107,7 @@ from pathlib import Path
 
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # 1. Four days of trades, one file per day, with the answers planted.
 rng = np.random.default_rng(1)
@@ -136,16 +136,16 @@ sets = {"f0": ["f0"], "f0+f1": ["f0", "f1"], "f3+f4": ["f3", "f4"], "f0-f4": fac
 grid = dict(targets=["ret_a", "ret_b"], features=factors, feature_sets=sets, emit_selected=True)
 # The time clock: rows age by the time between trades, a step capped at five minutes, and a new day ages them one minute.
 on_time = dict(clock="ts", gap_cap="5m", session="day", session_gap="1m")   # a new day ages a fit by one minute
-by_time = po.spec.ewridge("by_time", half_life=["30m", "2h"], **on_time, **grid)   # 5 sets x 2 half-lives = 10 points
+by_time = rp.spec.ewridge("by_time", half_life=["30m", "2h"], **on_time, **grid)   # 5 sets x 2 half-lives = 10 points
 # The volume clock: rows age by the shares traded between them, so the half-lives and caps are in shares.
-by_volume = po.spec.ewridge("by_volume", clock="cum_volume", half_life=[200_000.0, 800_000.0],   # in shares
+by_volume = rp.spec.ewridge("by_volume", clock="cum_volume", half_life=[200_000.0, 800_000.0],   # in shares
                             gap_cap=20_000.0, session="day", session_gap=1_000.0, **grid)
 
 # 3. The watchers: a test for a break in the coefficients, and the age of the factors' regime.
 # A plain ridge on the four planted factors whose break_wald_<target> field tests for moved coefficients.
-breaks = po.spec.ewridge("breaks", targets=["ret_a", "ret_b"], features=["f0", "f1", "f3", "f4"],
+breaks = rp.spec.ewridge("breaks", targets=["ret_a", "ret_b"], features=["f0", "f1", "f3", "f4"],
                          half_life="30m", emit_breaks=True, **on_time)
-regime = po.spec.bocpd("regime", features=factors[:5], hazard=20_000.0)   # a prior of one change in 20,000 rows
+regime = rp.spec.bocpd("regime", features=factors[:5], hazard=20_000.0)   # a prior of one change in 20,000 rows
 
 # 4. One streaming query over every file: the bank's output, with the readings to count, written to a file.
 field = lambda spec, name: pl.col(spec).struct.field(name)   # each spec writes one column of fields, named after it
@@ -180,7 +180,7 @@ print("a new regime from " + ", ".join(f"{t:%Y-%m-%d %H:%M:%S}" for t in starts[
 
 # 6. Every slot's score in both specs, read from the file's query in one pass, a chunk at a time.
 # One row per spec, slot and target with its mse and other scores; sorted so each group's best slot comes first.
-scores = po.eval.compare_specs(fitted, ["by_time", "by_volume"]).sort("spec", "target", "mse")
+scores = rp.eval.compare_specs(fitted, ["by_time", "by_volume"]).sort("spec", "target", "mse")
 # Each spec's best grid point for each target, beside the selection made as it ran.
 for (spec, target), rows in scores.group_by("spec", "target", maintain_order=True):
     # The lowest mse over the grid (known only after the fact), and the slot that followed each row's choice.
@@ -282,11 +282,11 @@ thousand is followed by a jump of 50.
 
 1. **Make up three days of trades, one parquet file per day.**
 2. **Add the feature and the target as columns with
-   `.online.with_windows`.** `po.ewm_mean("mid", half_life="1m",
+   `.rheon.with_windows`.** `rp.ewm_mean("mid", half_life="1m",
    window_size="5m")` is the bounded EWMA of the last five minutes, and
    `reverse=True` makes it look at the next five.
 3. **Fit the first-stage ridge of the factor on its inputs,** with
-   `.online.fit_predict` chained after `.online.with_windows` in the query
+   `.rheon.fit_predict` chained after `.rheon.with_windows` in the query
    of step 2.
 4. **Take its residual as a column,** `resid_d`, with
    `pl.col("factor").struct.field("resid_d")`, which reads the field
@@ -317,7 +317,7 @@ from pathlib import Path
 
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # 1. Three days of trades, one file per day, with the answer planted.
 rng = np.random.default_rng(2)
@@ -343,12 +343,12 @@ for k in range(3):
 recent = dict(half_life="1m", window_size="5m")                    # weights halve each minute; rows past 5 minutes drop out
 # with_windows adds each expression as a column, computed as the rows stream past.
 windows = pl.scan_parquet("trades/*.parquet").rheon.with_windows(
-    stretch=pl.col("mid") - po.ewm_mean("mid", **recent),                 # the mid against its last five minutes
-    fwd=po.ewm_mean("mid", **recent, reverse=True) - pl.col("mid"),       # the next five minutes against the mid
+    stretch=pl.col("mid") - rp.ewm_mean("mid", **recent),                 # the mid against its last five minutes
+    fwd=rp.ewm_mean("mid", **recent, reverse=True) - pl.col("mid"),       # the next five minutes against the mid
     clock="ts", gap_cap="5m",                                             # the windows' clock, and its longest step
 )
 # 3. The first stage: a ridge of the factor on its inputs, in the same query.
-factor = po.spec.ewridge("factor", targets=["d"], features=["x0", "x1", "x2"], clock="ts", gap_cap="5m", half_life="1h")
+factor = rp.spec.ewridge("factor", targets=["d"], features=["x0", "x1", "x2"], clock="ts", gap_cap="5m", half_life="1h")
 staged = windows.rheon.fit_predict([factor])                    # still a query: nothing has run yet
 # 4 and 5. Its out-of-sample residual as a column, and the columns written to a file, a chunk at a time.
 # resid_d is d minus the ridge's prediction made before learning that row, so it is out-of-sample.
@@ -358,7 +358,7 @@ staged.with_columns(pl.col("factor").struct.field("resid_d")).drop("factor").sin
 common = dict(targets=["fwd"], features=["flow", "stretch", "resid_d"], clock="ts", half_life="2h", gap_cap="5m",
               embargo="5m",       # a row is learned once its five minutes are known
               coef_every=0)       # each fit's coefficients on every row
-bank = po.ModelBank([po.spec.huber("robust", **common), po.spec.ewridge("ridge", **common)])   # same settings, two losses
+bank = rp.ModelBank([rp.spec.huber("robust", **common), rp.spec.ewridge("ridge", **common)])   # same settings, two losses
 # 7 and 8. Fit up to noon on the second day, and save the state.
 bank.fit(pl.scan_parquet("features.parquet").filter(pl.col("ts") < datetime(2024, 1, 3, 12)))   # learns, writes nothing
 bank.save("signal.state")                                        # the fits, and the rows still waiting out their embargo
@@ -371,10 +371,10 @@ machine that has the state file and the input:
 from pathlib import Path
 
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # 9. Load the state, and keep only the rows it has not read.
-bank = po.ModelBank.load("signal.state")
+bank = rp.ModelBank.load("signal.state")
 kept = bank.skip_learned(pl.scan_parquet("features.parquet"))   # still a query
 # 10. The rest of the rows through the state, which is saved again at the end.
 kept.rheon.fit_predict(load_state="signal.state", save_state="signal.state").sink_parquet("served.parquet")
@@ -460,7 +460,7 @@ changes planted at known rows:
   regression's coefficients have moved (`emit_breaks`).
 - **A detector of the features' correlation:** `corrchange`, which flags
   a change in how the features move together.
-- **Detectors tested against known truth:** `po.sim.regimes` simulates
+- **Detectors tested against known truth:** `rp.sim.regimes` simulates
   features whose correlation changes by regime, and reports where each
   regime begins.
 
@@ -470,7 +470,7 @@ between 0 and 0.7 every 5,000 rows, and a slope on `x_2` that flips from
 each row's target becomes known 25 to 35 seconds after the trade, and its
 noise has heavy tails.
 
-1. **Simulate the features' levels with `po.sim.regimes`,** which also
+1. **Simulate the features' levels with `rp.sim.regimes`,** which also
    returns the block of rows (one regime) each row is in.
 2. **Take the levels' changes with `diff()`,** since a correlation
    detector reads changes, not levels.
@@ -497,10 +497,10 @@ from datetime import datetime
 
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # 1. The features' levels, and the regime of each row.
-sim = po.sim.regimes(2, states=[0.0, 0.7], transition=[[0.0, 1.0], [1.0, 0.0]],
+sim = rp.sim.regimes(2, states=[0.0, 0.7], transition=[[0.0, 1.0], [1.0, 0.0]],
                      n_blocks=4, rows_per_block=5_000, seed=4)   # the correlation takes turns every 5,000 rows
 rng = np.random.default_rng(4)
 n = sim["rows"].height                                             # 20,000 rows: four blocks of 5,000
@@ -518,11 +518,11 @@ slope = pl.when(pl.col("t") < 10_000).then(0.5).otherwise(-0.5)   # x_2's slope 
 live = dict(targets=["y"], features=["x_1", "x_2"], clock="ts", gap_cap="1s", half_life="200s",
             label_clock="known",                  # each row is learned when its target is known, 25 to 35 s later
             conformal=0.9)                        # an interval meant to cover 90% of the targets
-model = po.spec.ewridge("model", **live, conformal_rate="auto",   # a step that shrinks as more targets wait
+model = rp.spec.ewridge("model", **live, conformal_rate="auto",   # a step that shrinks as more targets wait
                         emit_breaks=True)                         # a per-row test of whether the coefficients moved
-fixed = po.spec.ewridge("fixed", **live)          # the default step, 0.05
+fixed = rp.spec.ewridge("fixed", **live)          # the default step, 0.05
 # 6. A watcher of the features' correlation.
-watch = po.spec.corrchange("watch", features=["x_1", "x_2"], kind="sequential",
+watch = rp.spec.corrchange("watch", features=["x_1", "x_2"], kind="sequential",
                            window_rows=300,       # the history the rows after it are monitored against
                            monitor_rows=2_000)    # the rows monitored after each history
 # 7. The query, run a chunk at a time, with the readings to count written to a file.
@@ -600,7 +600,7 @@ timestamps. Sampling is corrected automatically, so you don't have to fix
 a sampling frequency grid that might accidentally wash out the real
 correlation effect:
 
-- **Correlations from asynchronous ticks:** `po.stream.refresh_time` puts
+- **Correlations from asynchronous ticks:** `rp.stream.refresh_time` puts
   series that tick at their own times on *refresh times*, the times by
   which every series has ticked again, and a model tracks their moves'
   correlation there.
@@ -610,7 +610,7 @@ its own as large, so the moves of any two correlate at 0.5.
 
 1. **Make up the three series' trades, each at times of its own, in one
    parquet file in clock order.**
-2. **Put the series on refresh times with `po.stream.refresh_time`.**
+2. **Put the series on refresh times with `rp.stream.refresh_time`.**
 3. **Take each series' change from one refresh time to the next.**
 4. **Track the changes' correlations with an `ew_cov` spec.**
 5. **Read each series' last price every 0.1 clock units, for
@@ -619,7 +619,7 @@ its own as large, so the moves of any two correlate at 0.5.
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # 1. Three prices that share one move, each traded at times of its own, about once a clock unit.
 rng = np.random.default_rng(1)
@@ -637,11 +637,11 @@ pl.concat(frames).sort("t").write_parquet("ticks.parquet")      # one stream: ev
 
 # 2 to 4. The series on refresh times, their changes, and the changes' correlations.
 # One row per refresh time, with each series' last price by then in <symbol>_value.
-refresh = po.stream.refresh_time(pl.scan_parquet("ticks.parquet"), series="symbol", names=names, clock="t", value="px")
+refresh = rp.stream.refresh_time(pl.scan_parquet("ticks.parquet"), series="symbol", names=names, clock="t", value="px")
 # Each series' change since the previous refresh time.
 moves = refresh.select("time_refresh", *(pl.col(f"{s}_value").diff().alias(s) for s in names))
 # The changes' correlations over the whole stream: an infinite half-life weighs every row alike.
-comove = po.spec.ew_cov("comove", features=names, stats=["corr"], clock="time_refresh", gap_cap=10.0, half_life=float("inf"))
+comove = rp.spec.ew_cov("comove", features=names, stats=["corr"], clock="time_refresh", gap_cap=10.0, half_life=float("inf"))
 last = moves.rheon.fit_predict([comove]).select(pl.col("comove").last()).collect().item()   # the last row's struct
 pairs = [("AAA", "BBB"), ("AAA", "CCC"), ("BBB", "CCC")]
 print("planted 0.5; on the refresh times: " + ", ".join(f"{last[f'corr_{a}_{b}']:.2f}" for a, b in pairs))

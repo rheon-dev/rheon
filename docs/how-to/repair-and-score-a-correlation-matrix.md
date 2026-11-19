@@ -6,8 +6,8 @@ bank or pieced together pair by pair, who wants to make it a valid
 correlation matrix, shrink it, tell its signal from noise, or score a
 predicted correlation matrix.
 
-`po.corr` repairs, shrinks, summarizes and scores a correlation matrix.
-Each function needs only numpy, and follows the paper it names. `po.corr`
+`rheon.corr` repairs, shrinks, summarizes and scores a correlation matrix.
+Each function needs only numpy, and follows the paper it names. `rheon.corr`
 is unstable: its form may change in a minor release ([What is
 stable](../VERSIONS.md#what-is-stable)).
 
@@ -21,7 +21,7 @@ These steps need the library, numpy and a matrix:
 - A correlation matrix, given as a numpy array, a dict that
   `bank.gram()` returns, or a [closed
   group](../GLOSSARY.md#saving-and-serving)'s row ([Close groups and read
-  each one's row](close-groups.md)). `po.gram.correlation` turns a
+  each one's row](close-groups.md)). `rheon.gram.correlation` turns a
   [Gram](../GLOSSARY.md#fitting-a-model) into one.
 
 ## Repair a matrix, then shrink it and tell it from noise
@@ -31,13 +31,13 @@ be a correlation matrix at all. Its smallest eigenvalue can be negative,
 which no single set of rows gives.
 
 1. **Check the smallest eigenvalue** with numpy's `np.linalg.eigvalsh`.
-2. **Repair the matrix with `po.corr.nearest`,** which returns the nearest
+2. **Repair the matrix with `rheon.corr.nearest`,** which returns the nearest
    correlation matrix, how far it moved, and the iterations it took.
-3. **Shrink it with `po.corr.shrink`,** toward a constant-correlation
+3. **Shrink it with `rheon.corr.shrink`,** toward a constant-correlation
    target.
-4. **Find the noise edges with `po.corr.mp_edge`,** for your matrix's
+4. **Find the noise edges with `rheon.corr.mp_edge`,** for your matrix's
    rows and series; the code shows 50 series over 2,000 rows. An eigenvalue outside them is more than pure noise gives.
-5. **Read a correlation's standard error with `po.corr.fisher_se`,** for
+5. **Read a correlation's standard error with `rheon.corr.fisher_se`,** for
    the rows it was estimated on.
 
 This code repairs a matrix of three correlations whose smallest
@@ -51,16 +51,16 @@ r = np.array([[1.0, 0.9, 0.7],          # three correlations estimated pair by p
               [0.7, 0.1, 1.0]])         # which no single set of rows can give
 print(f"smallest eigenvalue {np.linalg.eigvalsh(r).min():+.3f}")   # 1. below zero: not a correlation matrix
 # 2. The repair, and how far it moved the matrix.
-fixed, dist, iters = po.corr.nearest(r)    # Higham (2002): the nearest correlation matrix, by alternating projections
+fixed, dist, iters = rp.corr.nearest(r)    # Higham (2002): the nearest correlation matrix, by alternating projections
 print(f"repaired: smallest eigenvalue within 1e-8 of 0: {abs(np.linalg.eigvalsh(fixed).min()) < 1e-8}, moved by {dist:.3f}")
 print(np.round(fixed, 3).tolist())
 # 3. Shrinkage.
-shrunk, alpha = po.corr.shrink(fixed, alpha=0.2)   # Ledoit-Wolf shrinkage toward a constant-correlation target
+shrunk, alpha = rp.corr.shrink(fixed, alpha=0.2)   # Ledoit-Wolf shrinkage toward a constant-correlation target
 print(np.round(shrunk, 3).tolist())
 # 4 and 5. The noise edges, and a correlation's standard error.
-lo, hi = po.corr.mp_edge(n=2000, m=50)     # the Marchenko-Pastur edges: eigenvalues inside them are what pure noise gives
+lo, hi = rp.corr.mp_edge(n=2000, m=50)     # the Marchenko-Pastur edges: eigenvalues inside them are what pure noise gives
 print(f"noise edges for 50 series over 2,000 rows: {lo:.3f} to {hi:.3f}")
-print(f"standard error of a correlation of 0.3 over 2,000 rows: {po.corr.fisher_se(n=2000, rho=0.3):.4f}")
+print(f"standard error of a correlation of 0.3 over 2,000 rows: {rp.corr.fisher_se(n=2000, rho=0.3):.4f}")
 ```
 
 ```text
@@ -78,7 +78,7 @@ Use this to compare predictions of a correlation matrix, such as two specs'
 `ew_cov` matrices, with the matrix the next period realized.
 
 1. **Score each predicted matrix against the realized matrix with
-   `po.corr.loss`.** Its default, `kind="qlike"`, is 0 for a prediction
+   `rheon.corr.loss`.** Its default, `kind="qlike"`, is 0 for a prediction
    equal to the realized matrix and above 0 elsewhere, so the lower loss
    is the better prediction.
 
@@ -91,7 +91,7 @@ import numpy as np
 real = np.array([[1.0, 0.5], [0.5, 1.0]])    # the matrix the period realized
 good = np.array([[1.0, 0.4], [0.4, 1.0]])    # a prediction near it
 flat = np.eye(2)                              # a prediction of no correlation
-print(round(po.corr.loss(good, real), 4), round(po.corr.loss(flat, real), 4))   # the lower, the better
+print(round(rp.corr.loss(good, real), 4), round(rp.corr.loss(flat, real), 4))   # the lower, the better
 ```
 
 ```text
@@ -105,14 +105,14 @@ tolerance,** as the example prints. The repair lands on the edge of the
 valid matrices, so it is not above 0. It moves each correlation a little,
 0.120 in all as a Frobenius distance.
 
-**`po.corr.loss(real, real)` is 0,** since a prediction equal to the
+**`rheon.corr.loss(real, real)` is 0,** since a prediction equal to the
 realized matrix scores 0. A loss above 0 on your own prediction is
 expected, and of two predictions, the one with the lower loss is better.
 
 ## Choose another function
 
 The rest, by kind, each with its arguments in the [API
-reference](https://hgilde.github.io/polars-online/corr.html):
+reference](https://rheon-dev.github.io/rheon/corr.html):
 
 | kind | function | what it gives |
 |---|---|---|

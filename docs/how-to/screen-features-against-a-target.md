@@ -33,14 +33,14 @@ noise alone pushes past a threshold set for one test.
 1. **Build a `marginal` spec with the targets and every feature to
    screen.**
 2. **Make a [model bank](../GLOSSARY.md#the-model-bank-and-what-it-reads)
-   of the spec with `po.ModelBank([screen])`.**
+   of the spec with `rp.ModelBank([screen])`.**
 3. **Fit it with `bank.fit`.** Each row writes only `weight_sum`, so
    `fit` learns the stream and keeps only the state, where the pairs live.
 4. **Read the pairs with `bank.marginal(name)`, and sort them by
    `|t_stat|`.** The table has one row per (feature, target) pair, with
    its moments, `corr`, `beta`, `t_stat` and `n_kish`, the effective number
    of rows behind them. [Its
-   docstring](https://hgilde.github.io/polars-online/rheon.html#rheon.ModelBank.marginal)
+   docstring](https://rheon-dev.github.io/rheon/rheon.html#rheon.ModelBank.marginal)
    defines each column.
 
 This code makes 200 features, of which three move the target, screens
@@ -49,7 +49,7 @@ every pair, and prints the five with the largest `|t_stat|`:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # 200 features, of which three move the target, and one (f150) moves it in a V.
 rng = np.random.default_rng(2)
@@ -60,8 +60,8 @@ features = [f"f{j}" for j in range(p)]
 pl.DataFrame(x, schema=features).with_columns(y=y).write_parquet("screen.parquet")
 
 # Screen every pair, and rank them by |t_stat|.
-screen = po.spec.marginal("screen", targets=["y"], features=features, half_life=float("inf"))   # 1. every pair
-bank = po.ModelBank([screen])                                                # 2. the bank
+screen = rp.spec.marginal("screen", targets=["y"], features=features, half_life=float("inf"))   # 1. every pair
+bank = rp.ModelBank([screen])                                                # 2. the bank
 bank.fit(pl.scan_parquet("screen.parquet"))                                  # 3. learn, and keep only the state
 table = bank.marginal("screen").sort(pl.col("t_stat").abs(), descending=True)   # 4. rank the pairs
 for r in table.head(5).iter_rows(named=True):
@@ -101,7 +101,7 @@ Over 1,000 pairs of *independent* AR(1) series with `φ = 0.9` and `0.8`,
    the statistic against it. `"geometric"` fits each series'
    autocorrelations as `ρ(l) = φˡ`, so the lags need not be dense, and
    reports the fitted `phi_x` and `phi_y`. The
-   [docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.marginal)
+   [docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.marginal)
    gives the other two rules, `"truncated"` and `"bartlett"`, for dense
    lags.
 3. **Rank by `|t_stat_serial|` in place of `|t_stat|`.**
@@ -113,7 +113,7 @@ pairs where each statistic passes 1.96:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # 500 smooth features and a smooth target, all independent: no pair is related.
 rng = np.random.default_rng(5)
@@ -135,12 +135,12 @@ columns = [f"f{j}" for j in range(p)]
 pl.DataFrame(ar1(0.8, (n, p)), schema=columns).with_columns(y=ar1(0.9, (n,))).write_parquet("smooth.parquet")
 
 # Screen every pair with the serial count.
-spec = po.spec.marginal(
+spec = rp.spec.marginal(
     "smooth", targets=["y"], features=columns, half_life=float("inf"),
     lags=[1, 2, 3, 5, 10],               # 1. the moments at five lags
     serial_rule="geometric",             # 2. n_serial and t_stat_serial
 )
-bank = po.ModelBank([spec])
+bank = rp.ModelBank([spec])
 bank.fit(pl.scan_parquet("smooth.parquet"))
 table = bank.marginal("smooth")
 # 3. The share of these unrelated pairs each statistic calls significant at 1.96.
@@ -185,9 +185,9 @@ their `corr`. This code bins the 200 features of `screen.parquet`, from
 surplus:
 
 ```python
-binned = po.spec.marginal("binned", targets=["y"], features=features, half_life=float("inf"),
+binned = rp.spec.marginal("binned", targets=["y"], features=features, half_life=float("inf"),
                           bins=8)                                  # 1. a response curve per pair
-bank = po.ModelBank([binned])
+bank = rp.ModelBank([binned])
 bank.fit(pl.scan_parquet("screen.parquet"))
 table = bank.marginal("binned").with_columns(surplus=pl.col("split_gain") - pl.col("corr") ** 2)   # 2. each pair's surplus over corr²
 for r in table.sort("surplus", descending=True).head(3).iter_rows(named=True):              # 3. rank by the surplus
@@ -231,7 +231,7 @@ This code puts one row of 1,000 into a bin of twenty rows near 0:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # Twenty rows near 0 in the middle bin, among rows whose target is -5 or +5, then a spike there.
 rng = np.random.default_rng(3)
@@ -242,9 +242,9 @@ pl.DataFrame({"x": np.append(x, 0.0), "y": np.append(y, 1000.0)}).write_parquet(
 
 # The same bins under each statistic; print the middle bin.
 for stat in ["mean", "huber"]:
-    spec = po.spec.marginal("m", targets=["y"], features=["x"], half_life=float("inf"),
+    spec = rp.spec.marginal("m", targets=["y"], features=["x"], half_life=float("inf"),
                             bin_edges=[[-0.5, 0.5]], bin_stat=stat)
-    bank = po.ModelBank([spec])
+    bank = rp.ModelBank([spec])
     bank.fit(pl.scan_parquet("thin.parquet"))
     r = bank.marginal("m").row(0, named=True)
     print(f"{stat}: middle bin {r['bin_mean_y'][1]:.2f} over {r['bin_n'][1]:.0f} rows")
@@ -276,6 +276,6 @@ build from the target with noise, and read where it ranks.
 | a `ValueError` naming `bins` and `window_size` | each of a [hard window](../GLOSSARY.md#fitting-a-model)'s snapshots would hold the whole histogram | bin the features in a second spec without `window_size` |
 
 Every parameter is in `marginal`'s
-[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.marginal),
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.marginal),
 and the model's reference entry is
 [`marginal`](../MODELS.md#marginal--every-pairs-moments-kept-in-the-state).

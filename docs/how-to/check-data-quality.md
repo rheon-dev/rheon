@@ -43,7 +43,7 @@ counts what no model keeps, such as sentinel values, frozen feeds, heavy
 tails and the clock's spacing, in about 14 KiB of state a column.
 
 1. **Put an `audit` spec in the bank beside the models,** with
-   `po.spec.audit(name, columns=[...])`. Give it every feature and the
+   `rheon.spec.audit(name, columns=[...])`. Give it every feature and the
    target, and the models' [clock](../GLOSSARY.md#time) keywords. An audit
    fits nothing and predicts nothing.
 2. **Fit the bank over the stream,** with `bank.fit(query)` to learn from
@@ -67,7 +67,7 @@ code builds its own data:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # Quotes, a row a second, with the three faults planted.
 rng = np.random.default_rng(1)
@@ -88,11 +88,11 @@ quotes = pl.scan_parquet("quotes.parquet")
 
 # 1. An audit beside a ridge regression, both fitted over the stream.
 features = ["x0", "x1", "x2", "x3"]
-audit = po.spec.audit("audit", columns=[*features, "y"], clock="t", gap_cap=5.0)
-model = po.spec.ewridge(
+audit = rp.spec.audit("audit", columns=[*features, "y"], clock="t", gap_cap=5.0)
+model = rp.spec.ewridge(
     "ridge", targets=["y"], features=features, clock="t", gap_cap=5.0, half_life=600.0
 )
-bank = po.ModelBank([audit, model])
+bank = rp.ModelBank([audit, model])
 bank.fit(quotes)  # 2. learn from every row; keep only the state
 
 # 3. The findings, and the advice the worst one gives.
@@ -122,7 +122,7 @@ knowing, and often fine). Its `code` names the check, such as `missing`,
 where it was found, the measured `value` sits beside its `threshold`, and
 the `message` says what is wrong and, for most codes, what to do. The guide
 [docs/DATA-QUALITY.md](../DATA-QUALITY.md) lists every code under the problem it belongs to, and the docstring of
-[`ModelBank.check`](https://hgilde.github.io/polars-online/rheon.html#rheon.ModelBank.check)
+[`ModelBank.check`](https://rheon-dev.github.io/rheon/rheon.html#rheon.ModelBank.check)
 lists every check with its threshold.
 
 **A finding's `value` gives the number measured,** here the share
@@ -165,16 +165,16 @@ the rows on which the two are equal. `bank.check()` reads them for its
 This code adds to
 `df` a copy of `x0` in cents, recorded with a little noise of its own,
 audits it per stock, and prints what `check()` finds. It uses `df` from
-[Example data](../EXAMPLE-DATA.md), and `np` and `po` from the
+[Example data](../EXAMPLE-DATA.md), and `np` and `rp` from the
 code in [Run the check after a pass](#run-the-check-after-a-pass):
 
 ```python
 # x0 again, in cents and with a little noise: a duplicate planted in each of the four stocks.
 rng = np.random.default_rng(2)
 copied = df.with_columns(x0_cents=pl.col("x0") * 100 + pl.Series(rng.normal(0.0, 0.01, df.height)))
-audit = po.spec.audit("audit", columns=["x0", "x1", "x0_cents", "y"], clock="t", gap_cap=300.0,
+audit = rp.spec.audit("audit", columns=["x0", "x1", "x0_cents", "y"], clock="t", gap_cap=300.0,
                       pairs=True, group="stock_id")
-bank = po.ModelBank([audit])
+bank = rp.ModelBank([audit])
 bank.fit_predict(copied)                          # the output record holds weight_sum alone
 problems = bank.check()                           # sentinel, frozen, few_values, random_walk, heavy_tails, duplicate, ...
 for row in problems.select("severity", "code", "group", "column").iter_rows():
@@ -191,7 +191,7 @@ warning duplicate b3 x0_cents
 ## Read every group as one stream
 
 `bank.audit()` reads the audit's counts as a table, and its
-[docstring](https://hgilde.github.io/polars-online/rheon.html#rheon.ModelBank.audit)
+[docstring](https://rheon-dev.github.io/rheon/rheon.html#rheon.ModelBank.audit)
 defines each column.
 
 1. **Call `bank.audit()`.** It returns one row per
@@ -202,7 +202,7 @@ defines each column.
    Groups merge into one audit: the counts exactly, the moments to rounding,
    and the repeats past `distinct_cap` and the median within the bounds the
    docstring of
-   [`po.spec.audit`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.audit)
+   [`rheon.spec.audit`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.audit)
    gives.
 
 This code reads the audit of [Find a
@@ -238,9 +238,9 @@ pass](#run-the-check-after-a-pass):
 ```python
 fixed = quotes.with_columns(x1=pl.when(pl.col("x1") == -999.0).then(None).otherwise(pl.col("x1")))   # the sentinel made null
 kept = ["x0", "x1", "x3"]                                                                         # the constant x2 left out
-bank = po.ModelBank([
-    po.spec.audit("audit", columns=[*kept, "y"], clock="t", gap_cap=5.0),
-    po.spec.ewridge("ridge", targets=["y"], features=kept, clock="t", gap_cap=5.0, half_life=600.0),
+bank = rp.ModelBank([
+    rp.spec.audit("audit", columns=[*kept, "y"], clock="t", gap_cap=5.0),
+    rp.spec.ewridge("ridge", targets=["y"], features=kept, clock="t", gap_cap=5.0, half_life=600.0),
 ])
 bank.fit(fixed)
 for row in bank.check().select("severity", "code", "spec", "column", pl.col("value").round_sig_figs(3)).iter_rows():

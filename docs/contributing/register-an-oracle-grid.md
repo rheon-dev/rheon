@@ -69,7 +69,7 @@ in `tests/ledger.py`'s `PENDING`. Its guard fails when the group's hash is
 missing, on the development Mac where the hashes were written; elsewhere
 it reports.
 
-**`record` writes only when asked.** With `POLARS_ONLINE_ORACLES_OUT` naming a
+**`record` writes only when asked.** With `RHEON_ORACLES_OUT` naming a
 directory, `record` appends what it measured there as JSON lines, one file
 a process, so pytest-xdist's workers do not share one. Without it, `record`
 checks its arguments and writes nothing.

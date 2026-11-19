@@ -36,31 +36,31 @@ to start with for which question.
 | model | learns by | what it is |
 |---|---|---|
 | **[Linear models](#linear-models)** | | predict a numeric target, from features or from its own past |
-| [`ewridge`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.ewridge) · [entry](#ewridge--exponentially-weighted-ridge-regression) | solve | exponentially weighted ridge regression; several ridge values and feature sets are solved from the same running sums at almost no extra work |
-| [`rls`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.rls) · [entry](#rls--recursive-least-squares) | solve | recursive least squares, in the numerically safe square-root form |
-| [`lasso`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.lasso) · [entry](#lasso--lasso-path-its-penalty-chosen-as-it-runs) | solve | lasso and elastic-net path, with the penalty chosen as the stream runs |
-| [`kalman`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.kalman) · [entry](#kalman--random-walk-β-dynamic-linear-model) | filter | a Kalman filter whose coefficients drift as random walks |
-| [`huber`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.huber) · [entry](#huber--robust-regression) | reweight | Huber regression, which down-weights the rows a prediction misses by far |
-| [`quantile`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.quantile) · [entry](#quantile--robust-regression) | reweight | quantile regression, the fit that a share `tau` of the targets fall below |
-| [`sgd`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.sgd) · [entry](#sgd--stochastic-gradient-descent) | step | stochastic gradient descent with squared, Huber, quantile, ε-insensitive, Poisson and logistic losses |
-| [`pa`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.pa) · [entry](#pa--passive-aggressive-regression) | step | passive-aggressive regression, with no learning rate to tune |
-| [`ftrl`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.ftrl) · [entry](#ftrl--online-logistic-regression) | step | FTRL-proximal regression, logistic by default, with an L1 penalty that zeroes coefficients |
-| [`holt`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.holt) · [entry](#holt--holts-linear-trend) | step | Holt's linear trend, the baseline that uses no features |
+| [`ewridge`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ewridge) · [entry](#ewridge--exponentially-weighted-ridge-regression) | solve | exponentially weighted ridge regression; several ridge values and feature sets are solved from the same running sums at almost no extra work |
+| [`rls`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.rls) · [entry](#rls--recursive-least-squares) | solve | recursive least squares, in the numerically safe square-root form |
+| [`lasso`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.lasso) · [entry](#lasso--lasso-path-its-penalty-chosen-as-it-runs) | solve | lasso and elastic-net path, with the penalty chosen as the stream runs |
+| [`kalman`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.kalman) · [entry](#kalman--random-walk-β-dynamic-linear-model) | filter | a Kalman filter whose coefficients drift as random walks |
+| [`huber`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.huber) · [entry](#huber--robust-regression) | reweight | Huber regression, which down-weights the rows a prediction misses by far |
+| [`quantile`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.quantile) · [entry](#quantile--robust-regression) | reweight | quantile regression, the fit that a share `tau` of the targets fall below |
+| [`sgd`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.sgd) · [entry](#sgd--stochastic-gradient-descent) | step | stochastic gradient descent with squared, Huber, quantile, ε-insensitive, Poisson and logistic losses |
+| [`pa`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.pa) · [entry](#pa--passive-aggressive-regression) | step | passive-aggressive regression, with no learning rate to tune |
+| [`ftrl`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ftrl) · [entry](#ftrl--online-logistic-regression) | step | FTRL-proximal regression, logistic by default, with an L1 penalty that zeroes coefficients |
+| [`holt`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.holt) · [entry](#holt--holts-linear-trend) | step | Holt's linear trend, the baseline that uses no features |
 | **[Moments and correlation](#moments-and-correlation)** | | track the running moments and correlations of the columns you name |
-| [`ew_cov`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.ew_cov) · [entry](#ew_cov--exponentially-weighted-moments) | accumulate | running mean, variance, covariance, correlation, partial correlation, Mahalanobis distance and principal components |
-| [`marginal`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.marginal) · [entry](#marginal--every-pairs-moments-kept-in-the-state) | accumulate | every (feature, target) pair's running mean, variance, covariance, correlation, slope and t, for a wide set of columns, kept in the state and read back as a table; optionally at a set of lags, and with binned target moments for the relations a correlation cannot see |
-| [`deco`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.deco) · [entry](#deco--one-correlation-for-the-whole-matrix) | accumulate | one correlation for the whole matrix: Engle & Kelly's equicorrelation, or one per block and per pair of blocks |
-| [`rcov`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.rcov) · [entry](#rcov--a-blocks-realized-covariance-robust-to-noise) | accumulate | a block's realized covariance, robust to microstructure noise: the Barndorff-Nielsen–Hansen–Lunde–Shephard kernel or Christensen–Kinnebrock–Podolskij pre-averaging, reported when a group closes |
-| [`audit`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.audit) · [entry](#audit--what-a-streams-columns-hold) | accumulate | what each column holds, counted in one pass: nulls, NaNs and infinities apart, repeated values, runs, persistence, tails and duplicated columns, and the clock's duplicate stamps and gaps, read back as a table and by `bank.check()` |
+| [`ew_cov`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ew_cov) · [entry](#ew_cov--exponentially-weighted-moments) | accumulate | running mean, variance, covariance, correlation, partial correlation, Mahalanobis distance and principal components |
+| [`marginal`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.marginal) · [entry](#marginal--every-pairs-moments-kept-in-the-state) | accumulate | every (feature, target) pair's running mean, variance, covariance, correlation, slope and t, for a wide set of columns, kept in the state and read back as a table; optionally at a set of lags, and with binned target moments for the relations a correlation cannot see |
+| [`deco`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.deco) · [entry](#deco--one-correlation-for-the-whole-matrix) | accumulate | one correlation for the whole matrix: Engle & Kelly's equicorrelation, or one per block and per pair of blocks |
+| [`rcov`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.rcov) · [entry](#rcov--a-blocks-realized-covariance-robust-to-noise) | accumulate | a block's realized covariance, robust to microstructure noise: the Barndorff-Nielsen–Hansen–Lunde–Shephard kernel or Christensen–Kinnebrock–Podolskij pre-averaging, reported when a group closes |
+| [`audit`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.audit) · [entry](#audit--what-a-streams-columns-hold) | accumulate | what each column holds, counted in one pass: nulls, NaNs and infinities apart, repeated values, runs, persistence, tails and duplicated columns, and the clock's duplicate stamps and gaps, read back as a table and by `bank.check()` |
 | **[Clustering and classification](#clustering-and-classification)** | | put labels on rows |
-| [`kmeans`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.kmeans) · [entry](#kmeans--exponentially-weighted-k-means) | step | exponentially weighted k-means: cluster labels assigned before the row is learned from, with a split–merge move that finds a cluster born after seeding |
-| [`micro`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.micro) · [entry](#micro--density-based-clustering-any-shape) | step | density-based clustering: DenStream micro-clusters linked into clusters of any shape and number, flagging the rows that belong to none |
-| [`ew_class`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.ew_class) · [entry](#ew_class--gaussian-classification-on-ew_cov-moments) | accumulate | Gaussian classification, QDA, LDA or naive Bayes, with one set of running moments per class: a label column in, class probabilities out |
+| [`kmeans`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.kmeans) · [entry](#kmeans--exponentially-weighted-k-means) | step | exponentially weighted k-means: cluster labels assigned before the row is learned from, with a split–merge move that finds a cluster born after seeding |
+| [`micro`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.micro) · [entry](#micro--density-based-clustering-any-shape) | step | density-based clustering: DenStream micro-clusters linked into clusters of any shape and number, flagging the rows that belong to none |
+| [`ew_class`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ew_class) · [entry](#ew_class--gaussian-classification-on-ew_cov-moments) | accumulate | Gaussian classification, QDA, LDA or naive Bayes, with one set of running moments per class: a label column in, class probabilities out |
 | **[Sequential tests and regimes](#sequential-tests-and-regimes)** | | give evidence that something holds or has changed, and which regime the stream is in |
-| [`seqtest`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.seqtest) · [entry](#seqtest--a-sequential-test-of-a-sign-by-betting) | test | a sequential test of a sign by betting, giving evidence you can read at any row: on its own, of a column's sign; with `a` and `b`, of whether one spec of the bank predicts closer than another |
-| [`corrchange`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.corrchange) · [entry](#corrchange--has-the-correlation-structure-changed) | test | has the correlation structure changed: the Wied–Krämer–Dehling constancy test span by span, the Wied–Galeano detector row by row against a stable history, or the size of a change between two windows against a permutation null |
-| [`bocpd`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.bocpd) · [entry](#bocpd--how-long-has-this-regime-lasted) | filter | how long this regime has lasted: Adams & MacKay's run-length posterior, so the answer is the regime's age and not a flag |
-| [`hmm`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.hmm) · [entry](#hmm--which-regime-are-we-in) | filter | a Gaussian hidden Markov model, filtered as the stream runs: `ew_class` without the labels, with a transition matrix that can be learned |
+| [`seqtest`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.seqtest) · [entry](#seqtest--a-sequential-test-of-a-sign-by-betting) | test | a sequential test of a sign by betting, giving evidence you can read at any row: on its own, of a column's sign; with `a` and `b`, of whether one spec of the bank predicts closer than another |
+| [`corrchange`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.corrchange) · [entry](#corrchange--has-the-correlation-structure-changed) | test | has the correlation structure changed: the Wied–Krämer–Dehling constancy test span by span, the Wied–Galeano detector row by row against a stable history, or the size of a change between two windows against a permutation null |
+| [`bocpd`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.bocpd) · [entry](#bocpd--how-long-has-this-regime-lasted) | filter | how long this regime has lasted: Adams & MacKay's run-length posterior, so the answer is the regime's age and not a flag |
+| [`hmm`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.hmm) · [entry](#hmm--which-regime-are-we-in) | filter | a Gaussian hidden Markov model, filtered as the stream runs: `ew_class` without the labels, with a transition matrix that can be learned |
 
 **How a model learns from a row decides whether, with decay off, its
 answer depends on the row order:**
@@ -80,7 +80,7 @@ Every spec, whichever model it names, takes the parameters that say how
 its model reads the stream, one chunk at a time. Most models take
 all of them, and a model that refuses one says so when the spec is built.
 With a `group`, every parameter applies within each group, the clock
-included. The [`rheon.spec`](https://hgilde.github.io/polars-online/spec.html)
+included. The [`rheon.spec`](https://rheon-dev.github.io/rheon/spec.html)
 reference gives each one's units and default.
 
 ### Parameters
@@ -105,20 +105,20 @@ reference gives each one's units and default.
 
 A spec describes one model: which model it is, the columns it reads, and
 how it treats time. The name of the spec (the first parameter) is used to
-name the output column: `po.spec.ewridge("ridge", ...)` adds a column named
+name the output column: `rheon.spec.ewridge("ridge", ...)` adds a column named
 `ridge`. Each row of that column is a record of the model's fields for the
 row, and the input's columns pass through untouched.
 This code uses `df` from [Example data](EXAMPLE-DATA.md):
 
 ```python
-ridge_spec = po.spec.ewridge(
+ridge_spec = rp.spec.ewridge(
     "ridge",
     targets=["y"],                 # at least one; the targets of one spec share the features' running sums
     features=["x0", "x1", "x2"],   # numeric columns of any width, Decimal and Boolean included; read as 64-bit floats
     fit_intercept=True,            # the default: the fit has a level of its own
     clock="t", half_life=600.0, gap_cap=300.0,   # how it treats time: see The clock and its units
 )
-fitted = po.ModelBank([ridge_spec]).fit_predict(df)
+fitted = rp.ModelBank([ridge_spec]).fit_predict(df)
 print(len(df.columns), "columns in, then", fitted.columns[len(df.columns):])
 print("each row of ridge holds", fitted["ridge"].struct.fields)
 ```
@@ -314,11 +314,11 @@ where a clock parameter takes them.
 
 **Catch a refusal by the kind of problem: `TypeError` for a value of the
 wrong type, `ValueError` for a value out of range or a column the input
-lacks.** A column the input lacks raises `po.ColumnNotFoundError`, a
+lacks.** A column the input lacks raises `rheon.ColumnNotFoundError`, a
 subclass of Polars' own `ColumnNotFoundError` and of `ValueError`. A column
 or value of the wrong type, such as a text feature, raises
-`po.WrongTypeError`, a `TypeError`. A refused value raises `ValueError`, or
-`po.RefusedValueError`, a `ValueError`.
+`rheon.WrongTypeError`, a `TypeError`. A refused value raises `ValueError`, or
+`rheon.RefusedValueError`, a `ValueError`.
 
 **A clock column the bank cannot read exactly is refused, by row or by
 name.** A `UInt64` value past the largest `Int64` is refused by row. An
@@ -344,16 +344,16 @@ It reads `df` and `lf` from [Example data](EXAMPLE-DATA.md):
 ```python
 # Two specs the bank refuses, each refusal printed.
 for refused in [
-    po.spec.ewridge("x0", targets=["y"], features=["x1"], half_life=600.0),          # named like a column
-    po.spec.ewridge("by_venue", targets=["y"], features=["venue"], half_life=600.0),  # a text feature
+    rp.spec.ewridge("x0", targets=["y"], features=["x1"], half_life=600.0),          # named like a column
+    rp.spec.ewridge("by_venue", targets=["y"], features=["venue"], half_life=600.0),  # a text feature
 ]:
     try:
-        po.ModelBank([refused]).fit_predict(df)
+        rp.ModelBank([refused]).fit_predict(df)
     except (TypeError, ValueError) as err:   # a text feature is a TypeError
         print(err)
 
 # The venue fitted as a comparison.
-by_venue = po.spec.ewridge("by_venue", targets=["y"], features=["x0", "x1", "is_x"], half_life=float("inf"))
+by_venue = rp.spec.ewridge("by_venue", targets=["y"], features=["x0", "x1", "is_x"], half_life=float("inf"))
 coded = lf.with_columns(is_x=pl.col("venue") == "X").rheon.fit_predict([by_venue]).collect()
 print("intercept, x0, x1, venue X:", [round(c, 2) for c in coded["by_venue"].struct.field("coef")[-1]])
 ```
@@ -377,16 +377,16 @@ It reads `df` from [Example data](EXAMPLE-DATA.md):
 import textwrap
 
 # The same model on each clock, read on the last row.
-on_t = po.spec.holt("on_t", targets=["t"], clock="t", half_life=100.0, gap_cap=300.0)       # numbers: t counts minutes
-on_ts = po.spec.holt("on_ts", targets=["t"], clock="ts", half_life="100m", gap_cap="300m")  # durations: ts is a Datetime
-last = po.ModelBank([on_t, on_ts]).fit_predict(df).tail(1)
+on_t = rp.spec.holt("on_t", targets=["t"], clock="t", half_life=100.0, gap_cap=300.0)       # numbers: t counts minutes
+on_ts = rp.spec.holt("on_ts", targets=["t"], clock="ts", half_life="100m", gap_cap="300m")  # durations: ts is a Datetime
+last = rp.ModelBank([on_t, on_ts]).fit_predict(df).tail(1)
 for name, unit in [("on_t", "per unit of t, a minute"), ("on_ts", "per second")]:
     fields = last[name].struct
     print(f"{name}: weight_sum {fields.field('weight_sum')[0]:.2f}, trend {fields.field('coef')[0][1]:.6f} {unit}")
 
 # The same spec on ts with plain numbers: refused.
 try:
-    po.ModelBank([po.spec.holt("wrong", targets=["t"], clock="ts", half_life=100.0, gap_cap=300.0)]).fit_predict(df)
+    rp.ModelBank([rp.spec.holt("wrong", targets=["t"], clock="ts", half_life=100.0, gap_cap=300.0)]).fit_predict(df)
 except ValueError as err:   # a plain number on a Datetime clock
     print(textwrap.fill(str(err), 100))
 ```
@@ -408,14 +408,14 @@ each withholds.
 It reads `df` from [Example data](EXAMPLE-DATA.md):
 
 ```python
-warm = po.spec.ewridge(
+warm = rp.spec.ewridge(
     "warm", targets=["y"], features=["x0", "x1"], clock="t", half_life=100.0, gap_cap=300.0,
     min_settled_frac=0.02,      # withhold until 2% of the way to the steady state under decay
     min_weight=8.0,             # and until the weight behind the fit reaches 8
     max_error_inflation=1.05,   # and while estimation error would add more than 5% over the noise floor
 )
 # How many rows each gate withheld, and the first row predicted.
-rows = po.ModelBank([warm]).fit_predict(df).unnest("warm")
+rows = rp.ModelBank([warm]).fit_predict(df).unnest("warm")
 counts = rows.group_by("withheld_reason").len().sort("withheld_reason", nulls_last=True)
 for reason, n in counts.iter_rows():
     print(f"{reason or 'predicted'}: {n} rows")
@@ -440,7 +440,7 @@ Ten models predict a numeric target. Nine regress it on features, and
 |---|---|---|
 | `ridge` | `ewridge`, where a list fits a grid; `huber` and `quantile`, as one number. `rls` refuses it and takes `delta` | [`ewridge`](#ewridge--exponentially-weighted-ridge-regression) and [`rls`](#rls--recursive-least-squares) |
 | `solve_every`, `max_rows_between_solves` | `ewridge`, `lasso`, `huber`, `quantile` | [`ewridge`](#ewridge--exponentially-weighted-ridge-regression) |
-| `target_gaps` | `ewridge`, `lasso` | [`ewridge`'s docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.ewridge) |
+| `target_gaps` | `ewridge`, `lasso` | [`ewridge`'s docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ewridge) |
 | `window_size` | `ewridge`, `lasso` | [Forget rows past a window](how-to/forget-rows-past-a-window.md) |
 | `standardize` | `ewridge`, `huber` and `quantile`, off by default; `kalman`, `sgd` and `pa`, on by default. `lasso` always standardizes, and `ftrl` never does | [`ewridge`](#ewridge--exponentially-weighted-ridge-regression), [`kalman`](#kalman--random-walk-β-dynamic-linear-model) and [`ftrl`](#ftrl--online-logistic-regression) |
 | `coef_min`, `coef_max`, `coef_sum` | `sgd`, `pa` | [`sgd`](#sgd--stochastic-gradient-descent) |
@@ -462,7 +462,7 @@ What `half_life` decays differs by model:
 
 ### `ewridge` — exponentially weighted ridge regression
 
-*API:* [`po.spec.ewridge`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.ewridge) — *Rust:* [`ewridge.rs`](../crates/rheon-core/src/ewridge.rs) — *Outputs:* [fields](OUTPUTS.md#ewridge)
+*API:* [`rheon.spec.ewridge`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ewridge) — *Rust:* [`ewridge.rs`](../crates/rheon-core/src/ewridge.rs) — *Outputs:* [fields](OUTPUTS.md#ewridge)
 
 Exponentially weighted ridge regression on running sums.
 
@@ -480,7 +480,7 @@ fit. Use [`sgd`](#sgd--stochastic-gradient-descent) or
 `k` features: this model takes O(k²) time.
 
 Its parameters, their defaults and what each refuses are in its
-[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.ewridge),
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ewridge),
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md#ewridge). The
 parameters every spec takes are in [What every spec
 takes](#what-every-spec-takes).
@@ -515,7 +515,7 @@ four fits read it at the last row:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # A slope on x that drifts from 1 to 3 over 20,000 rows, one row a clock unit.
 rng = np.random.default_rng(1)
@@ -526,12 +526,12 @@ y = slope * x + 0.5 * rng.standard_normal(n)
 pl.DataFrame({"t": np.arange(n, dtype=float), "x": x, "y": y}).write_parquet("drift.parquet")
 
 # One spec holds the whole grid, fitted in one pass.
-drift = po.spec.ewridge(
+drift = rp.spec.ewridge(
     "drift", targets=["y"], features=["x"], clock="t", gap_cap=10.0,
     half_life=[200.0, 20_000.0],   # a grid of two half-lives, one set of running sums each ...
     ridge=[1e-6, 0.1],             # ... by two ridges, solved from each set: four fits
 )
-bank = po.ModelBank([drift])
+bank = rp.ModelBank([drift])
 bank.fit(pl.scan_parquet("drift.parquet"))   # learn every row, keep no output
 # The truth at the last row, beside each fit's slope.
 print(f"the true slope at the last row: {slope[-1]:.2f}")
@@ -599,7 +599,7 @@ checked against it.
 
 ### `rls` — recursive least squares
 
-*API:* [`po.spec.rls`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.rls) — *Rust:* [`rls.rs`](../crates/rheon-core/src/rls.rs) — *Outputs:* [fields](OUTPUTS.md#rls)
+*API:* [`rheon.spec.rls`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.rls) — *Rust:* [`rls.rs`](../crates/rheon-core/src/rls.rs) — *Outputs:* [fields](OUTPUTS.md#rls)
 
 Recursive least squares, which solves the ridge fit exactly on every row.
 
@@ -613,7 +613,7 @@ fit up, and [`huber`](#huber--robust-regression) with
 `ridge_scale="sum"` for this fit under a Huber loss, solved on a schedule.
 
 Its parameters, their defaults and what each refuses are in its
-[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.rls),
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.rls),
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md#rls). The parameters
 every spec takes are in [What every spec takes](#what-every-spec-takes).
 
@@ -640,7 +640,7 @@ a stream whose slope drifts:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # y = 0.5 + slope·x0 − x1 plus noise, with x0's slope drifting from 1 to 2.
 rng = np.random.default_rng(2)
@@ -652,8 +652,8 @@ pl.DataFrame({"t": np.arange(n, dtype=float), "x0": x0, "x1": x1, "y": y}).write
 # rls beside the ewridge it equals, on the same rows.
 common = dict(targets=["y"], features=["x0", "x1"], clock="t", gap_cap=10.0, half_life=300.0)
 specs = [
-    po.spec.rls("rls", delta=2.0, **common),                      # A starts at 2·I, a prior that fades
-    po.spec.ewridge("sum", ridge=2.0, ridge_scale="sum",          # the same prior on ewridge's sum scale ...
+    rp.spec.rls("rls", delta=2.0, **common),                      # A starts at 2·I, a prior that fades
+    rp.spec.ewridge("sum", ridge=2.0, ridge_scale="sum",          # the same prior on ewridge's sum scale ...
                     max_rows_between_solves=1, **common),         # ... solved on every row
 ]
 out = pl.scan_parquet("rls.parquet").rheon.fit_predict(specs).collect()
@@ -701,7 +701,7 @@ squaring the design loses.
 
 ### `lasso` — lasso path, its penalty chosen as it runs
 
-*API:* [`po.spec.lasso`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.lasso) — *Rust:* [`lasso.rs`](../crates/rheon-core/src/lasso.rs) — *Outputs:* [fields](OUTPUTS.md#lasso)
+*API:* [`rheon.spec.lasso`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.lasso) — *Rust:* [`lasso.rs`](../crates/rheon-core/src/lasso.rs) — *Outputs:* [fields](OUTPUTS.md#lasso)
 
 A lasso or elastic-net path on running sums, with the penalty chosen as
 the stream runs.
@@ -715,7 +715,7 @@ fit, and [`ftrl`](#ftrl--online-logistic-regression) for a sparse logistic
 fit of a 0/1 target.
 
 Its parameters, their defaults and what each refuses are in its
-[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.lasso),
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.lasso),
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md#lasso). The parameters
 every spec takes are in [What every spec takes](#what-every-spec-takes).
 
@@ -751,7 +751,7 @@ last row keeps exactly those three:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # 20 features, of which only x0, x1 and x2 carry weight in the target.
 rng = np.random.default_rng(3)
@@ -762,12 +762,12 @@ names = [f"x{i}" for i in range(k)]
 pl.DataFrame(x, schema=names).with_columns(y=y).write_parquet("wide.parquet")
 
 # A path of penalties, the best so far chosen as the stream runs.
-las = po.spec.lasso(
+las = rp.spec.lasso(
     "las", targets=["y"], features=names,
     half_life=float("inf"),                  # every row counts the same
     penalties=[0.3, 0.1, 0.03, 0.01],        # the penalties, decreasing
 )
-bank = po.ModelBank([las])
+bank = rp.ModelBank([las])
 out = pl.concat(bank.fit_predict_batches(pl.scan_parquet("wide.parquet")))   # the output, chunk by chunk
 # The penalty chosen at the last row, and the features it keeps.
 chosen = out["las"].struct.field("penalty_selected_y")[-1]
@@ -792,7 +792,7 @@ bank:
 
 - [`ewridge`](#ewridge--exponentially-weighted-ridge-regression), the
   running sums this model solves, under a ridge.
-- [GRAM.md](GRAM.md), whose `po.gram.lasso_path` runs the same descent
+- [GRAM.md](GRAM.md), whose `rheon.gram.lasso_path` runs the same descent
   offline on a Gram.
 - [`ftrl`](#ftrl--online-logistic-regression), a sparse fit of a 0/1
   target.
@@ -817,12 +817,12 @@ the same rows.** At a penalty of 0.1, with a third feature that is noise,
 the coefficients agree within 1e-7 and both zero the noise feature. At a
 penalty of 0 the predictions are least squares from numpy, within 1e-6.
 Its solves are also held to the lasso's optimality conditions
-(Karush-Kuhn-Tucker), and `po.gram.lasso_path` to scikit-learn's
+(Karush-Kuhn-Tucker), and `rheon.gram.lasso_path` to scikit-learn's
 `enet_path`.
 
 ### `kalman` — random-walk-β dynamic linear model
 
-*API:* [`po.spec.kalman`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.kalman) — *Rust:* [`kalman.rs`](../crates/rheon-core/src/kalman.rs) — *Outputs:* [fields](OUTPUTS.md#kalman)
+*API:* [`rheon.spec.kalman`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.kalman) — *Rust:* [`kalman.rs`](../crates/rheon-core/src/kalman.rs) — *Outputs:* [fields](OUTPUTS.md#kalman)
 
 A regression whose coefficients drift, tracked by a Kalman filter.
 
@@ -834,7 +834,7 @@ coefficients that hold still over a half-life, and
 [`rls`](#rls--recursive-least-squares) for an exact fit whose prior fades.
 
 Its parameters, their defaults and what each refuses are in its
-[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.kalman),
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.kalman),
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md#kalman). The parameters
 every spec takes are in [What every spec takes](#what-every-spec-takes).
 Here `half_life` decays the noise estimate and the features'
@@ -881,7 +881,7 @@ forget at the spec's half-life of 200:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # A slope on x that jumps from 1 to 3 at row 2,000, one row a clock unit.
 rng = np.random.default_rng(4)
@@ -894,8 +894,8 @@ pl.DataFrame({"t": np.arange(n, dtype=float), "x": x, "y": y}).write_parquet("ju
 # kalman, whose slope may drift, beside ewridge's running sums.
 common = dict(targets=["y"], features=["x"], clock="t", gap_cap=10.0, half_life=200.0, coef_every=0)
 specs = [
-    po.spec.kalman("kalman", coef_half_life=20.0, **common),            # a coefficient may drift
-    po.spec.ewridge("ewridge", max_rows_between_solves=1, **common),    # solved on every row
+    rp.spec.kalman("kalman", coef_half_life=20.0, **common),            # a coefficient may drift
+    rp.spec.ewridge("ewridge", max_rows_between_solves=1, **common),    # solved on every row
 ]
 out = pl.scan_parquet("jump.parquet").rheon.fit_predict(specs).collect()
 # Each model's slope just before the jump and after it.
@@ -925,7 +925,7 @@ When `kalman`'s fit is not the one you need, or to use it past the data:
 - [`rls`](#rls--recursive-least-squares), the fit this filter gives with
   no drift, a fixed noise, `standardize=False`, no `revert_half_life` and
   `half_life=inf`, at `delta = 1/p0`.
-- [`bank.predict()`](https://hgilde.github.io/polars-online/rheon.html#rheon.polars.ModelBank.predict),
+- [`bank.predict()`](https://rheon-dev.github.io/rheon/rheon.html#rheon.polars.ModelBank.predict),
   which moves the coefficients by `Φ` over the clock since the last
   learned row.
 - [Choose a Kalman filter's drift speed](how-to/choose-a-kalman-drift-speed.md),
@@ -979,7 +979,7 @@ the bit.
 
 ### `huber` — robust regression
 
-*API:* [`po.spec.huber`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.huber) — *Rust:* [`robust.rs`](../crates/rheon-core/src/robust.rs) — *Outputs:* [fields](OUTPUTS.md#huber)
+*API:* [`rheon.spec.huber`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.huber) — *Rust:* [`robust.rs`](../crates/rheon-core/src/robust.rs) — *Outputs:* [fields](OUTPUTS.md#huber)
 
 Huber regression on running sums, which down-weights the rows a prediction
 misses by far.
@@ -993,7 +993,7 @@ with `loss="huber"` where learning a row must take O(k) time for `k`
 features: this model takes O(k²) time.
 
 Its parameters, their defaults and what each refuses are in its
-[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.huber),
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.huber),
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md#huber). It takes
 `ewridge`'s `ridge=` as a single number, and refuses a list. The
 parameters every spec takes are in [What every spec
@@ -1040,7 +1040,7 @@ above 0, so they tilt the line:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # y = 1 + 2x plus noise, and about 2% of the rows wild: 50 too high, on rows where x is above 0.
 rng = np.random.default_rng(5)
@@ -1054,12 +1054,12 @@ pl.DataFrame({"x": x, "y": y}).write_parquet("wild.parquet")
 # Least squares beside the two robust models, every row weighed the same.
 common = dict(targets=["y"], features=["x"], half_life=float("inf"))
 specs = [
-    po.spec.ewridge("ewridge", **common),
-    po.spec.huber("huber", **common),                         # huber_delta=1.345 and huber_scale="mad", the defaults
-    po.spec.huber("huber_rms", huber_scale="rms", **common),  # the cut drawn in the residuals' root mean square
-    po.spec.quantile("median", quantile=0.5, **common),
+    rp.spec.ewridge("ewridge", **common),
+    rp.spec.huber("huber", **common),                         # huber_delta=1.345 and huber_scale="mad", the defaults
+    rp.spec.huber("huber_rms", huber_scale="rms", **common),  # the cut drawn in the residuals' root mean square
+    rp.spec.quantile("median", quantile=0.5, **common),
 ]
-bank = po.ModelBank(specs)
+bank = rp.ModelBank(specs)
 bank.fit(pl.scan_parquet("wild.parquet"))
 # Each model's slope, beside the truth.
 print(f"wild rows: {wild.sum()} of {n}; the true slope: 2")
@@ -1142,7 +1142,7 @@ close but not equal, for two reasons:
 
 ### `quantile` — robust regression
 
-*API:* [`po.spec.quantile`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.quantile) — *Rust:* [`robust.rs`](../crates/rheon-core/src/robust.rs) — *Outputs:* [fields](OUTPUTS.md#quantile)
+*API:* [`rheon.spec.quantile`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.quantile) — *Rust:* [`robust.rs`](../crates/rheon-core/src/robust.rs) — *Outputs:* [fields](OUTPUTS.md#quantile)
 
 Quantile regression on running sums, the fit that a share `quantile` of the
 targets fall below.
@@ -1155,7 +1155,7 @@ should not pull, and [`sgd`](#sgd--stochastic-gradient-descent) with
 features: this model takes O(k²) time.
 
 Its parameters, their defaults and what each refuses are in its
-[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.quantile),
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.quantile),
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md#quantile). It takes
 `ewridge`'s `ridge=` as a single number, and refuses a list. It takes no
 `feature_sets`, since its rows outside the band step the fit through one
@@ -1200,7 +1200,7 @@ is normal with a spread of 1, so the 0.9 quantile of `y` is the line
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # A line with normal noise of spread 1: its 0.9 quantile is 2.28 + 2x.
 rng = np.random.default_rng(4)
@@ -1208,11 +1208,11 @@ x = rng.standard_normal(20_000)
 y = 1.0 + 2.0 * x + rng.standard_normal(20_000)
 pl.DataFrame({"x": x, "y": y}).write_parquet("tail.parquet")
 
-q90 = po.spec.quantile(
+q90 = rp.spec.quantile(
     "q90", targets=["y"], features=["x"], half_life=float("inf"),
     quantile=0.9,                                  # the level to fit
 )
-bank = po.ModelBank([q90])
+bank = rp.ModelBank([q90])
 bank.fit(pl.scan_parquet("tail.parquet"))          # learn every row, keep no output
 # The line found, beside the true one.
 print("the true line: intercept 2.28, slope 2.00")
@@ -1267,7 +1267,7 @@ against a root mean square.
 
 ### `sgd` — stochastic gradient descent
 
-*API:* [`po.spec.sgd`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.sgd) — *Rust:* [`sgd.rs`](../crates/rheon-core/src/sgd.rs) — *Outputs:* [fields](OUTPUTS.md#sgd)
+*API:* [`rheon.spec.sgd`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.sgd) — *Rust:* [`sgd.rs`](../crates/rheon-core/src/sgd.rs) — *Outputs:* [fields](OUTPUTS.md#sgd)
 
 Stochastic gradient descent under a choice of losses, with one gradient
 step a row.
@@ -1283,7 +1283,7 @@ solved on running sums, and [`pa`](#pa--passive-aggressive-regression) for
 steps with no learning rate to tune.
 
 Its parameters, their defaults and what each refuses are in its
-[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.sgd),
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.sgd),
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md#sgd). The parameters
 every spec takes are in [What every spec takes](#what-every-spec-takes).
 
@@ -1367,7 +1367,7 @@ adapts each coefficient's rate to its own gradients:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # A count target: y is Poisson with log-rate 0.5 + 0.3·x0 − 0.2·x1.
 rng = np.random.default_rng(6)
@@ -1377,12 +1377,12 @@ y = rng.poisson(np.exp(0.5 + 0.3 * x0 - 0.2 * x1)).astype(float)
 pl.DataFrame({"x0": x0, "x1": x1, "y": y}).write_parquet("counts.parquet")
 
 # The Poisson loss, fitted one gradient step per row.
-counts = po.spec.sgd(
+counts = rp.spec.sgd(
     "counts", targets=["y"], features=["x0", "x1"], half_life=float("inf"),
     loss="poisson",                          # a chunk with a negative target is refused, naming the row
     schedule="adagrad", learning_rate=0.05,  # a rate per coefficient, adapted to its gradients
 )
-bank = po.ModelBank([counts])
+bank = rp.ModelBank([counts])
 bank.fit(pl.scan_parquet("counts.parquet"))
 print("truth:  {'intercept': 0.5, 'x0': 0.3, 'x1': -0.2}")
 print("fitted:", {r["term"]: round(r["coef"], 2) for r in bank.coef().iter_rows(named=True)})
@@ -1485,7 +1485,7 @@ coefficients it reports reproduce each prediction to 1e-13 of its size.
 
 ### `pa` — passive-aggressive regression
 
-*API:* [`po.spec.pa`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.pa) — *Rust:* [`pa.rs`](../crates/rheon-core/src/pa.rs) — *Outputs:* [fields](OUTPUTS.md#pa)
+*API:* [`rheon.spec.pa`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.pa) — *Rust:* [`pa.rs`](../crates/rheon-core/src/pa.rs) — *Outputs:* [fields](OUTPUTS.md#pa)
 
 Passive-aggressive regression, which moves the fit by the smallest step
 that brings each row within a margin of its target.
@@ -1497,7 +1497,7 @@ other losses or a learning rate, and
 fit on running sums.
 
 Its parameters, their defaults and what each refuses are in its
-[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.pa),
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.pa),
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md#pa). The parameters
 every spec takes are in [What every spec takes](#what-every-spec-takes).
 
@@ -1541,7 +1541,7 @@ to make up for it:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # y = 1 + 2·x0 − x1 plus noise.
 rng = np.random.default_rng(7)
@@ -1553,10 +1553,10 @@ pl.DataFrame({"x0": x0, "x1": x1, "y": y}).write_parquet("pa.parquet")
 # The same pa twice, the second with its slopes capped.
 common = dict(targets=["y"], features=["x0", "x1"], half_life=float("inf"), c=0.1)
 specs = [
-    po.spec.pa("free", **common),
-    po.spec.pa("capped", coef_max=1.5, **common),   # no slope above 1.5, so x0's cannot reach 2
+    rp.spec.pa("free", **common),
+    rp.spec.pa("capped", coef_max=1.5, **common),   # no slope above 1.5, so x0's cannot reach 2
 ]
-bank = po.ModelBank(specs)
+bank = rp.ModelBank(specs)
 bank.fit(pl.scan_parquet("pa.parquet"))
 # What each fit found.
 for name in ("free", "capped"):
@@ -1600,7 +1600,7 @@ this model's is in units of `s_y`.
 
 ### `ftrl` — online logistic regression
 
-*API:* [`po.spec.ftrl`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.ftrl) — *Rust:* [`ftrl.rs`](../crates/rheon-core/src/ftrl.rs) — *Outputs:* [fields](OUTPUTS.md#ftrl)
+*API:* [`rheon.spec.ftrl`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ftrl) — *Rust:* [`ftrl.rs`](../crates/rheon-core/src/ftrl.rs) — *Outputs:* [fields](OUTPUTS.md#ftrl)
 
 Logistic regression for a 0/1 target, or a sparse linear regression, one
 gradient step per row.
@@ -1614,7 +1614,7 @@ an L1 penalty on the mean scale, which more rows or heavier ones do not
 outweigh, and [`sgd`](#sgd--stochastic-gradient-descent) for other losses.
 
 Its parameters, their defaults and what each refuses are in its
-[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.ftrl),
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ftrl),
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md#ftrl). The parameters
 every spec takes are in [What every spec takes](#what-every-spec-takes).
 
@@ -1646,7 +1646,7 @@ probabilities class the rows of the second half, each before it is learned:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # A 0/1 target from 50 features, of which only x0 to x4 move its probability.
 rng = np.random.default_rng(8)
@@ -1658,12 +1658,12 @@ names = [f"x{i}" for i in range(k)]
 pl.DataFrame(x, schema=names).with_columns(up=up).write_parquet("clicks.parquet")
 
 # One ftrl over all 50 features, each row predicted before it is learned.
-sparse = po.spec.ftrl(
+sparse = rp.spec.ftrl(
     "sparse", targets=["up"], features=names, half_life=float("inf"),
     l1=300.0,                      # zero a coefficient whose summed evidence stays under 300
     strict_binary=True,            # refuse a target that is not 0 or 1
 )
-bank = po.ModelBank([sparse])
+bank = rp.ModelBank([sparse])
 out = pl.concat(bank.fit_predict_batches(pl.scan_parquet("clicks.parquet")))
 # The features the L1 penalty kept.
 slopes = bank.coef().filter(pl.col("term") != "intercept")
@@ -1705,7 +1705,7 @@ row, and Vowpal Wabbit's `--ftrl` agrees to its single precision.
 
 ### `holt` — Holt's linear trend
 
-*API:* [`po.spec.holt`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.holt) — *Rust:* [`holt.rs`](../crates/rheon-core/src/holt.rs) — *Outputs:* [fields](OUTPUTS.md#holt)
+*API:* [`rheon.spec.holt`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.holt) — *Rust:* [`holt.rs`](../crates/rheon-core/src/holt.rs) — *Outputs:* [fields](OUTPUTS.md#holt)
 
 Holt's linear trend, which extrapolates the target's own level and slope.
 
@@ -1718,7 +1718,7 @@ error?](DIAGNOSTICS.md#how-wide-is-its-error)), or let a
 `b` say which predicts closer.
 
 Its parameters, their defaults and what each refuses are in its
-[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.holt),
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.holt),
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md#holt). The parameters
 every spec takes are in [What every spec takes](#what-every-spec-takes),
 apart from `features`, which `holt` does not take.
@@ -1765,7 +1765,7 @@ import math
 
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # A level that wanders and trends, plus 2·x and noise, one row a clock unit.
 rng = np.random.default_rng(9)
@@ -1779,9 +1779,9 @@ pl.DataFrame({"t": t, "x": x, "y": y}).write_parquet("trend.parquet")
 # A regression on x, holt alone, and a test of which predicts closer.
 common = dict(targets=["y"], clock="t", gap_cap=10.0, half_life=20.0, emit_sigma=True)   # sigma_y: the error's spread
 specs = [
-    po.spec.ewridge("with_x", features=["x"], **common),    # the feature, and an intercept that follows the level
-    po.spec.holt("naive", **common),                         # the target's own level and trend alone
-    po.spec.seqtest("gain", targets=["y"], a="with_x", b="naive"),   # evidence that with_x predicts closer
+    rp.spec.ewridge("with_x", features=["x"], **common),    # the feature, and an intercept that follows the level
+    rp.spec.holt("naive", **common),                         # the target's own level and trend alone
+    rp.spec.seqtest("gain", targets=["y"], a="with_x", b="naive"),   # evidence that with_x predicts closer
 ]
 out = pl.scan_parquet("trend.parquet").rheon.fit_predict(specs).collect()
 # Each model's error spread, then when the evidence for with_x is enough.
@@ -1849,7 +1849,7 @@ block closes.
 
 ### `ew_cov` — exponentially weighted moments
 
-*API:* [`po.spec.ew_cov`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.ew_cov) — *Rust:* [`ewcov.rs`](../crates/rheon-core/src/ewcov.rs) — *Outputs:* [fields](OUTPUTS.md#ew_cov)
+*API:* [`rheon.spec.ew_cov`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ew_cov) — *Rust:* [`ewcov.rs`](../crates/rheon-core/src/ewcov.rs) — *Outputs:* [fields](OUTPUTS.md#ew_cov)
 
 Exponentially weighted moments of the feature columns, and the statistics
 read off them.
@@ -1867,7 +1867,7 @@ moves with the whole correlation matrix, and
 covariance under microstructure noise.
 
 Its parameters, their defaults and what each refuses are in its
-[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.ew_cov),
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ew_cov),
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md#ew_cov). The
 parameters every spec takes are in [What every spec
 takes](#what-every-spec-takes).
@@ -1909,7 +1909,7 @@ This code makes two columns whose correlation jumps from 0.2 to 0.8 at row
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # Two columns whose correlation jumps partway through.
 rng = np.random.default_rng(1)
@@ -1919,7 +1919,7 @@ a, e = rng.standard_normal((2, n))
 pl.DataFrame({"a": a, "b": rho * a + np.sqrt(1 - rho**2) * e}).write_parquet("pair.parquet")
 
 # Fit, and read corr_a_b around the jump.
-mv = po.spec.ew_cov("mv", features=["a", "b"], half_life=200.0, stats=["corr"])   # no clock: a half-life of 200 rows
+mv = rp.spec.ew_cov("mv", features=["a", "b"], half_life=200.0, stats=["corr"])   # no clock: a half-life of 200 rows
 out = pl.scan_parquet("pair.parquet").rheon.fit_predict([mv]).collect()
 corr = out["mv"].struct.field("corr_a_b")
 for row in (1999, 2200, 2400, 3999):                         # before the jump, one and two half-lives after, the end
@@ -1958,7 +1958,7 @@ To fit, classify or screen on the same moments:
   on these moments.
 - [`marginal`](#marginal--every-pairs-moments-kept-in-the-state), the same
   arithmetic one (feature, target) pair at a time.
-- [`bank.gram()`](https://hgilde.github.io/polars-online/rheon.html#rheon.polars.ModelBank.gram),
+- [`bank.gram()`](https://rheon-dev.github.io/rheon/rheon.html#rheon.polars.ModelBank.gram),
   to read the moments back from the state.
 
 #### Notes
@@ -1983,7 +1983,7 @@ give how to weight the rows.
 
 ### `marginal` — every pair's moments, kept in the state
 
-*API:* [`po.spec.marginal`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.marginal) — *Rust:* [`marginal.rs`](../crates/rheon-core/src/marginal.rs) — *Outputs:* [fields](OUTPUTS.md#marginal)
+*API:* [`rheon.spec.marginal`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.marginal) — *Rust:* [`marginal.rs`](../crates/rheon-core/src/marginal.rs) — *Outputs:* [fields](OUTPUTS.md#marginal)
 
 Each feature's exponentially weighted moments with each target, read back
 as a table.
@@ -1999,11 +1999,11 @@ few columns, and
 of the target on every feature.
 
 Its parameters, their defaults and what each refuses are in its
-[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.marginal).
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.marginal).
 Each row writes only `weight_sum` ([OUTPUTS.md](OUTPUTS.md#marginal)), and
 `bank.marginal()` reads the pairs from the state as a table after the run.
 [Its
-docstring](https://hgilde.github.io/polars-online/rheon.html#rheon.polars.ModelBank.marginal)
+docstring](https://rheon-dev.github.io/rheon/rheon.html#rheon.polars.ModelBank.marginal)
 defines each column. The parameters every spec takes are in [What every spec
 takes](#what-every-spec-takes).
 
@@ -2067,7 +2067,7 @@ and prints the six with the largest `|t_stat|`:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # Many features, of which only a few move the target.
 rng = np.random.default_rng(2)
@@ -2078,8 +2078,8 @@ features = [f"f{j}" for j in range(p)]
 pl.DataFrame(x, schema=features).with_columns(y=y).write_parquet("screen.parquet")
 
 # Screen every pair in one pass, then rank by |t_stat|.
-screen = po.spec.marginal("screen", targets=["y"], features=features, half_life=float("inf"))   # every row weighs the same
-bank = po.ModelBank([screen])
+screen = rp.spec.marginal("screen", targets=["y"], features=features, half_life=float("inf"))   # every row weighs the same
+bank = rp.ModelBank([screen])
 bank.fit(pl.scan_parquet("screen.parquet"))                  # learn, and keep only the state
 table = bank.marginal("screen").sort(pl.col("t_stat").abs(), descending=True)
 for r in table.head(6).iter_rows(named=True):
@@ -2115,7 +2115,7 @@ The guides to its settings:
 
 To read the pairs, or to fit the features jointly:
 
-- [`bank.marginal()`](https://hgilde.github.io/polars-online/rheon.html#rheon.polars.ModelBank.marginal),
+- [`bank.marginal()`](https://rheon-dev.github.io/rheon/rheon.html#rheon.polars.ModelBank.marginal),
   the table of pairs and every column it holds.
 - [`ew_cov`](#ew_cov--exponentially-weighted-moments), the joint
   covariance whose arithmetic each pair uses.
@@ -2214,7 +2214,7 @@ statsmodels' `acf`.
 
 ### `deco` — one correlation for the whole matrix
 
-*API:* [`po.spec.deco`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.deco) — *Rust:* [`deco.rs`](../crates/rheon-core/src/deco.rs) — *Outputs:* [fields](OUTPUTS.md#deco)
+*API:* [`rheon.spec.deco`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.deco) — *Rust:* [`deco.rs`](../crates/rheon-core/src/deco.rs) — *Outputs:* [fields](OUTPUTS.md#deco)
 
 Engle and Kelly's dynamic equicorrelation, one number for the whole
 correlation matrix of the features.
@@ -2229,7 +2229,7 @@ correlation, and `deco`'s own `blocks` for one number per block of features
 and one per pair of blocks.
 
 Its parameters, their defaults and what each refuses are in its
-[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.deco),
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.deco),
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md#deco). The parameters
 every spec takes are in [What every spec takes](#what-every-spec-takes).
 
@@ -2267,7 +2267,7 @@ prints `rho` beside the mean of the 45 pairwise correlations:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # Ten series whose common correlation rises partway through.
 rng = np.random.default_rng(3)
@@ -2278,8 +2278,8 @@ names = [f"s{i}" for i in range(m)]
 pl.DataFrame(dict(zip(names, np.sqrt(rho) * common + np.sqrt(1 - rho) * own))).write_parquet("ten.parquet")
 
 # deco beside an ew_cov over the same columns.
-eq = po.spec.deco("eq", features=names, half_life=100.0)
-pairs = po.spec.ew_cov("pairs", features=names, half_life=100.0, stats=["corr"])
+eq = rp.spec.deco("eq", features=names, half_life=100.0)
+pairs = rp.spec.ew_cov("pairs", features=names, half_life=100.0, stats=["corr"])
 out = pl.scan_parquet("ten.parquet").rheon.fit_predict([eq, pairs]).collect()
 # rho beside the mean pairwise correlation, before and after the rise.
 level = out["eq"].struct.field("rho")
@@ -2328,7 +2328,7 @@ the paper's alternative estimate, which this model does not compute.
 
 ### `rcov` — a block's realized covariance, robust to noise
 
-*API:* [`po.spec.rcov`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.rcov) — *Rust:* [`rcov.rs`](../crates/rheon-core/src/rcov.rs) — *Outputs:* [fields](OUTPUTS.md#rcov)
+*API:* [`rheon.spec.rcov`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.rcov) — *Rust:* [`rcov.rs`](../crates/rheon-core/src/rcov.rs) — *Outputs:* [fields](OUTPUTS.md#rcov)
 
 A block's realized covariance of the features, robust to microstructure
 noise.
@@ -2339,7 +2339,7 @@ covariance. For series not observed together, use its `"preavg"` kind. Use [`ew_
 for running moments that decay and are read on every row.
 
 Its parameters, their defaults and what each refuses are in its
-[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.rcov).
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.rcov).
 It requires `group`, naming the block column, and `group_close`, and
 refuses a `half_life` or `lam`, since a block's close ends its memory. Each
 row writes only `weight_sum` ([OUTPUTS.md](OUTPUTS.md#rcov)), and each
@@ -2383,7 +2383,7 @@ the blocks:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # Blocks of two noisy prices whose underlying returns correlate.
 rng = np.random.default_rng(4)
@@ -2399,10 +2399,10 @@ pl.DataFrame({
 # Each price's returns within its block, fed to both estimators.
 returns = pl.scan_parquet("blocks.parquet").with_columns(pl.col("p1", "p2").diff().over("block"))   # within each block
 specs = [
-    po.spec.rcov(kind, features=["p1", "p2"], group="block", group_close="monotone", kind=kind, block_rows=rows)
+    rp.spec.rcov(kind, features=["p1", "p2"], group="block", group_close="monotone", kind=kind, block_rows=rows)
     for kind in ("plain", "kernel")
 ]
-bank = po.ModelBank(specs)
+bank = rp.ModelBank(specs)
 bank.fit(returns)
 # Each estimator's mean correlation over the blocks that closed.
 for kind in ("plain", "kernel"):
@@ -2433,9 +2433,9 @@ To put the prices on one grid before taking returns, or to read each block's est
   decay, read before each row.
 - [Align series that tick at their own
   times](how-to/align-series-that-tick-at-their-own-times.md), to put the
-  prices of several series on one grid with `po.stream.refresh_time` before
+  prices of several series on one grid with `rp.stream.refresh_time` before
   taking returns.
-- [`bank.closed_groups()`](https://hgilde.github.io/polars-online/rheon.html#rheon.polars.ModelBank.closed_groups),
+- [`bank.closed_groups()`](https://rheon-dev.github.io/rheon/rheon.html#rheon.polars.ModelBank.closed_groups),
   which returns each block's estimate when the block closes.
 
 #### Notes
@@ -2458,7 +2458,7 @@ each kind against each block's truth.
 
 ### `audit` — what a stream's columns hold
 
-*API:* [`po.spec.audit`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.audit) — *Rust:* [`audit.rs`](../crates/rheon-core/src/audit.rs) — *Outputs:* [fields](OUTPUTS.md#audit)
+*API:* [`rheon.spec.audit`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.audit) — *Rust:* [`audit.rs`](../crates/rheon-core/src/audit.rs) — *Outputs:* [fields](OUTPUTS.md#audit)
 
 A count of what a stream's columns hold, read in one pass by a spec that
 fits nothing and predicts nothing.
@@ -2466,16 +2466,16 @@ fits nothing and predicts nothing.
 Use `audit` before choosing a model, to find out what is wrong with the
 data, such as a sentinel value, a frozen feed or a heavy tail. Run it alone,
 or beside the models in the same pass, and
-[`bank.check()`](https://hgilde.github.io/polars-online/rheon.html#rheon.polars.ModelBank.check)
+[`bank.check()`](https://rheon-dev.github.io/rheon/rheon.html#rheon.polars.ModelBank.check)
 reads its counts and says what they mean. Use `bank.describe()` for a few
 statistics of the columns a model has already been fed.
 
 Its parameters, their defaults and what each refuses are in its
-[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.audit).
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.audit).
 Each row writes only `weight_sum` ([OUTPUTS.md](OUTPUTS.md#audit)), and
 `bank.audit()` reads the counts from the state as a table after the run.
 [Its
-docstring](https://hgilde.github.io/polars-online/rheon.html#rheon.polars.ModelBank.audit)
+docstring](https://rheon-dev.github.io/rheon/rheon.html#rheon.polars.ModelBank.audit)
 defines each column. The parameters every spec takes are in [What every spec
 takes](#what-every-spec-takes).
 
@@ -2507,7 +2507,7 @@ one row in 40. It prints what `bank.audit()` measured, and what
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # A feed with two faults planted: a frozen price and a sentinel size.
 rng = np.random.default_rng(5)
@@ -2519,7 +2519,7 @@ size[::40] = -999.0                                           # a sentinel stand
 pl.DataFrame({"price": price, "size": size, "flow": rng.standard_normal(n)}).write_parquet("feed.parquet")
 
 # Audit the three columns, then print the counts and what they mean.
-bank = po.ModelBank([po.spec.audit("audit", columns=["price", "size", "flow"])])
+bank = rp.ModelBank([rp.spec.audit("audit", columns=["price", "size", "flow"])])
 bank.fit(pl.scan_parquet("feed.parquet"))
 for r in bank.audit().iter_rows(named=True):                  # what each column holds
     print(f"{r['column']:>5}: longest run of one value {r['longest_run']}, smallest value {r['min']:g}")
@@ -2545,7 +2545,7 @@ each model and how to fix it with Polars.
 
 To judge the counts, and to fix what they find:
 
-- [`bank.check()`](https://hgilde.github.io/polars-online/rheon.html#rheon.polars.ModelBank.check),
+- [`bank.check()`](https://rheon-dev.github.io/rheon/rheon.html#rheon.polars.ModelBank.check),
   what the counts say is wrong.
 - [DATA-QUALITY.md](DATA-QUALITY.md), each finding, what it does to each
   model and how to fix it with Polars.
@@ -2577,7 +2577,7 @@ prediction here.
 
 ### `kmeans` — exponentially weighted k-means
 
-*API:* [`po.spec.kmeans`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.kmeans) — *Rust:* [`cluster/kmeans.rs`](../crates/rheon-core/src/cluster/kmeans.rs) — *Outputs:* [fields](OUTPUTS.md#kmeans)
+*API:* [`rheon.spec.kmeans`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.kmeans) — *Rust:* [`cluster/kmeans.rs`](../crates/rheon-core/src/cluster/kmeans.rs) — *Outputs:* [fields](OUTPUTS.md#kmeans)
 
 Exponentially weighted k-means over the feature columns.
 
@@ -2589,7 +2589,7 @@ clusters of any shape or of a number you do not know, and
 one before it.
 
 Its parameters, their defaults and what each refuses are in its
-[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.kmeans),
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.kmeans),
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md#kmeans). The
 parameters every spec takes are in [What every spec
 takes](#what-every-spec-takes).
@@ -2622,7 +2622,7 @@ appears and at the end:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # Three round clusters, and a fourth that appears halfway through.
 rng = np.random.default_rng(6)
@@ -2635,7 +2635,7 @@ xy = centers[blob] + rng.standard_normal((n, 2))
 pl.DataFrame({"x": xy[:, 0], "y": xy[:, 1]}).write_parquet("blobs.parquet")
 
 # Label every row, then count each label's rows before the birth and at the end.
-km = po.spec.kmeans("km", features=["x", "y"], half_life=1000.0, n_clusters=4, warm_rows=500)
+km = rp.spec.kmeans("km", features=["x", "y"], half_life=1000.0, n_clusters=4, warm_rows=500)
 label = pl.scan_parquet("blobs.parquet").rheon.fit_predict([km]).collect()["km"].struct.field("cluster")
 for lo, hi in ((3000, 4000), (7000, 8000)):
     counts = label[lo:hi].value_counts().sort("cluster")
@@ -2684,7 +2684,7 @@ labels are held to the clusters that generated them and to scikit-learn's
 
 ### `micro` — density-based clustering, any shape
 
-*API:* [`po.spec.micro`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.micro) — *Rust:* [`cluster/micro.rs`](../crates/rheon-core/src/cluster/micro.rs) — *Outputs:* [fields](OUTPUTS.md#micro)
+*API:* [`rheon.spec.micro`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.micro) — *Rust:* [`cluster/micro.rs`](../crates/rheon-core/src/cluster/micro.rs) — *Outputs:* [fields](OUTPUTS.md#micro)
 
 Density-based clustering over the feature columns, by small decayed
 summaries linked into clusters.
@@ -2696,7 +2696,7 @@ and follows clusters that appear and vanish. Use
 round clusters.
 
 Its parameters, their defaults and what each refuses are in its
-[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.micro),
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.micro),
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md#micro). [Choose
 `micro`'s `eps`](how-to/choose-micro-eps.md) says how to choose `eps`, and
 how a wrong value shows in the output. The parameters every spec takes are
@@ -2738,7 +2738,7 @@ one row in twenty scattered over the square around them, and reads the last
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # Two rings, an inner and an outer, as points in the plane.
 rng = np.random.default_rng(7)
@@ -2753,7 +2753,7 @@ xy[noise] = rng.uniform(-4.0, 4.0, (noise.sum(), 2))
 pl.DataFrame({"x": xy[:, 0], "y": xy[:, 1], "ring": ring, "noise": noise}).write_parquet("rings.parquet")
 
 # Fit, and score only the last rows.
-mc = po.spec.micro("mc", features=["x", "y"], half_life=3000.0, eps=0.07)
+mc = rp.spec.micro("mc", features=["x", "y"], half_life=3000.0, eps=0.07)
 out = pl.scan_parquet("rings.parquet").rheon.fit_predict([mc]).collect().unnest("mc")
 late = out.tail(4000)                                         # once the summaries have formed
 # How many clusters, and how each ring and the noise are labeled.
@@ -2807,7 +2807,7 @@ half-life of 1,000), the new cluster had a label 31 rows in.
 
 ### `ew_class` — Gaussian classification on `ew_cov` moments
 
-*API:* [`po.spec.ew_class`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.ew_class) — *Rust:* [`ewclass.rs`](../crates/rheon-core/src/ewclass.rs) — *Outputs:* [fields](OUTPUTS.md#ew_class)
+*API:* [`rheon.spec.ew_class`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ew_class) — *Rust:* [`ewclass.rs`](../crates/rheon-core/src/ewclass.rs) — *Outputs:* [fields](OUTPUTS.md#ew_class)
 
 A Gaussian classifier on exponentially weighted moments, one set per class.
 
@@ -2820,7 +2820,7 @@ the model must infer a hidden regime, and
 classes at all.
 
 Its parameters, their defaults and what each refuses are in its
-[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.ew_class),
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ew_class),
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md#ew_class). It takes
 `label` in place of `targets`. The parameters every spec takes are in
 [What every spec takes](#what-every-spec-takes).
@@ -2854,7 +2854,7 @@ before its own class is learned:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # Three Gaussian classes, each with its own spread.
 rng = np.random.default_rng(8)
@@ -2866,7 +2866,7 @@ xy = means[label] + rng.standard_normal((n, 2)) * spread[label]
 pl.DataFrame({"x": xy[:, 0], "y": xy[:, 1], "kind": np.array(["a", "b", "c"])[label]}).write_parquet("classes.parquet")
 
 # Class the last rows, each before its own class is learned.
-cl = po.spec.ew_class("cl", features=["x", "y"], label="kind", classes=["a", "b", "c"],
+cl = rp.spec.ew_class("cl", features=["x", "y"], label="kind", classes=["a", "b", "c"],
                       precision_prior=0.1, half_life=float("inf"))
 scored = pl.scan_parquet("classes.parquet").rheon.fit_predict([cl]).collect().unnest("cl").tail(5000)
 print(f"classed right, out-of-sample: {(scored['class'] == scored['kind']).mean():.3f}")
@@ -2918,7 +2918,7 @@ something holds, whether and when it changed, or which regime it is in now.
 
 ### `seqtest` — a sequential test of a sign, by betting
 
-*API:* [`po.spec.seqtest`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.seqtest) — *Rust:* [`seqtest.rs`](../crates/rheon-core/src/seqtest.rs) — *Outputs:* [fields](OUTPUTS.md#seqtest)
+*API:* [`rheon.spec.seqtest`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.seqtest) — *Rust:* [`seqtest.rs`](../crates/rheon-core/src/seqtest.rs) — *Outputs:* [fields](OUTPUTS.md#seqtest)
 
 A sequential test of a target's sign by betting, whose evidence can be read
 at any row.
@@ -2928,13 +2928,13 @@ is enough: whether a column tends to be positive, or whether one spec
 predicts closer than another. A p-value cannot be read that way, because
 checking it repeatedly inflates its error rate, but the *e-process* this
 model keeps can be read at any row. Use
-[`po.eval.seqtest`](https://hgilde.github.io/polars-online/eval.html#rheon.polars.eval.seqtest)
+[`rp.eval.seqtest`](https://rheon-dev.github.io/rheon/eval.html#rheon.polars.eval.seqtest)
 for the same test over a frame in memory, and
-[`po.eval.compare_specs`](https://hgilde.github.io/polars-online/eval.html#rheon.polars.eval.compare_specs)
+[`rp.eval.compare_specs`](https://rheon-dev.github.io/rheon/eval.html#rheon.polars.eval.compare_specs)
 for several specs' scores in one table.
 
 Its parameters, their defaults and what each refuses are in its
-[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.seqtest),
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.seqtest),
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md#seqtest). The
 parameters every spec takes are in [What every spec
 takes](#what-every-spec-takes), apart from `weight`, `half_life`
@@ -2967,7 +2967,7 @@ import math
 
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # One column with a slight positive edge, and one with none.
 rng = np.random.default_rng(9)
@@ -2978,7 +2978,7 @@ pl.DataFrame({
 }).write_parquet("signs.parquet")
 
 # Test both signs, and find the first row each passes the 5% level.
-sign = po.spec.seqtest("sign", targets=["edge", "none"])
+sign = rp.spec.seqtest("sign", targets=["edge", "none"])
 out = pl.scan_parquet("signs.parquet").rheon.fit_predict([sign]).collect().unnest("sign")
 for col in ("edge", "none"):
     passed = out.with_row_index("row").filter(pl.col(f"log_e_pos_{col}") >= math.log(20))
@@ -3003,21 +3003,21 @@ The guides to its settings:
 
 For the same test outside a bank, or a comparison of many specs at once:
 
-- [`po.eval.seqtest`](https://hgilde.github.io/polars-online/eval.html#rheon.polars.eval.seqtest),
+- [`rp.eval.seqtest`](https://rheon-dev.github.io/rheon/eval.html#rheon.polars.eval.seqtest),
   the same computation in Polars expressions over a frame in memory.
-- [`po.eval.compare_specs`](https://hgilde.github.io/polars-online/eval.html#rheon.polars.eval.compare_specs),
+- [`rp.eval.compare_specs`](https://rheon-dev.github.io/rheon/eval.html#rheon.polars.eval.compare_specs),
   several specs' scores in one table.
 
 #### Notes
 
 **Where the `max(0, …)` in a stake never binds, the wealth has the closed
 form `2ⁿ B(n⁺+½, n⁻+½) / π`**, the Beta(½, ½) mixture, and a test holds the
-bank to it. `po.eval.seqtest`, the same computation in Polars expressions,
+bank to it. `rp.eval.seqtest`, the same computation in Polars expressions,
 is held to the bank to the bit.
 
 ### `corrchange` — has the correlation structure changed?
 
-*API:* [`po.spec.corrchange`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.corrchange) — *Rust:* [`corrchange.rs`](../crates/rheon-core/src/corrchange.rs) — *Outputs:* [fields](OUTPUTS.md#corrchange)
+*API:* [`rheon.spec.corrchange`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.corrchange) — *Rust:* [`corrchange.rs`](../crates/rheon-core/src/corrchange.rs) — *Outputs:* [fields](OUTPUTS.md#corrchange)
 
 Tests of whether the correlations between the feature columns have changed,
 by three kinds of test.
@@ -3030,7 +3030,7 @@ current regime of the features' levels and spreads, and
 equicorrelation that moves.
 
 Its parameters, their defaults and what each refuses are in its
-[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.corrchange),
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.corrchange),
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md#corrchange). The
 parameters every spec takes are in [What every spec
 takes](#what-every-spec-takes), apart from `half_life` and `lam`,
@@ -3093,7 +3093,7 @@ correlate at 0.7 after it, and prints each flag:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # Two columns that start to correlate partway through.
 rng = np.random.default_rng(10)
@@ -3103,7 +3103,7 @@ a, e = rng.standard_normal((2, n))
 pl.DataFrame({"a": a, "b": rho * a + np.sqrt(1 - rho**2) * e}).write_parquet("break.parquet")
 
 # The sequential test, then each row it flags.
-watch = po.spec.corrchange(
+watch = rp.spec.corrchange(
     "watch", features=["a", "b"],
     kind="sequential",           # each row tested against a stable history as it arrives
     window_rows=500,             # 500 rows of history ...
@@ -3177,7 +3177,7 @@ rows, the window kind flagged 4.8% to 5.2% of non-overlapping spans at
 
 ### `bocpd` — how long has this regime lasted?
 
-*API:* [`po.spec.bocpd`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.bocpd) — *Rust:* [`bocpd.rs`](../crates/rheon-core/src/bocpd.rs) — *Outputs:* [fields](OUTPUTS.md#bocpd)
+*API:* [`rheon.spec.bocpd`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.bocpd) — *Rust:* [`bocpd.rs`](../crates/rheon-core/src/bocpd.rs) — *Outputs:* [fields](OUTPUTS.md#bocpd)
 
 Bayesian online changepoint detection, a posterior over how long the current
 regime has lasted.
@@ -3191,7 +3191,7 @@ test of a change in correlation, and a regression's `emit_breaks` for a
 break in its coefficients.
 
 Its parameters, their defaults and what each refuses are in its
-[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.bocpd),
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.bocpd),
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md#bocpd). The parameters
 every spec takes are in [What every spec takes](#what-every-spec-takes),
 apart from `half_life` and `lam`, which it refuses: the run-length posterior
@@ -3224,7 +3224,7 @@ row's current run began on, `row - run_mode`:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # A column whose spread quadruples partway through.
 rng = np.random.default_rng(11)
@@ -3233,7 +3233,7 @@ scale = np.where(np.arange(n) < 1000, 1.0, 4.0)               # the truth: the s
 pl.DataFrame({"x": rng.standard_normal(n) * scale}).write_parquet("spread.parquet")
 
 # Fit, and date each row's current run from run_mode.
-runs = po.spec.bocpd("runs", features=["x"], hazard=500.0)    # a break expected every 500 rows
+runs = rp.spec.bocpd("runs", features=["x"], hazard=500.0)    # a break expected every 500 rows
 out = pl.scan_parquet("spread.parquet").rheon.fit_predict([runs]).collect().unnest("runs")
 out = out.with_row_index("row").with_columns(began=pl.col("row") - pl.col("run_mode"))   # the row the current run began on
 # The dating of the break, and how little p_change moved.
@@ -3306,7 +3306,7 @@ to its row. The step back down is dated within one row.
 
 ### `hmm` — which regime are we in
 
-*API:* [`po.spec.hmm`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.hmm) — *Rust:* [`hmm.rs`](../crates/rheon-core/src/hmm.rs) — *Outputs:* [fields](OUTPUTS.md#hmm)
+*API:* [`rheon.spec.hmm`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.hmm) — *Rust:* [`hmm.rs`](../crates/rheon-core/src/hmm.rs) — *Outputs:* [fields](OUTPUTS.md#hmm)
 
 A Gaussian hidden Markov model of the features, filtered one row at a time.
 
@@ -3319,7 +3319,7 @@ each row's class. An `hmm` does the same arithmetic without labels, and its
 regime is a *hidden state*.
 
 Its parameters, their defaults and what each refuses are in its
-[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.hmm),
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.hmm),
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md#hmm). The parameters
 every spec takes are in [What every spec takes](#what-every-spec-takes).
 
@@ -3364,7 +3364,7 @@ row:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # A sticky two-state chain, and two overlapping blobs it switches between.
 rng = np.random.default_rng(12)
@@ -3377,7 +3377,7 @@ xy = centers[state] + rng.standard_normal((n, 2))
 pl.DataFrame({"x": xy[:, 0], "y": xy[:, 1], "truth": state}).write_parquet("states.parquet")
 
 # Filter the states, then score the last rows against the nearest true center.
-hidden = po.spec.hmm("hidden", features=["x", "y"], n_components=2, precision_prior=1e-2,
+hidden = rp.spec.hmm("hidden", features=["x", "y"], n_components=2, precision_prior=1e-2,
                      warm_rows=500, half_life=float("inf"))
 rows = pl.scan_parquet("states.parquet").rheon.fit_predict([hidden]).collect().unnest("hidden").tail(5000)
 right = (rows["state"] == rows["truth"]).mean()               # the states are numbered as seeded, so read either way

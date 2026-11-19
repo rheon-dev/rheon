@@ -17,7 +17,7 @@ These steps need the library:
   clock requires. Without one, each row is one clock unit. The recipes'
   clock `t` steps by 1 a row, the same as no clock.
 - The parameters of
-  [`po.spec.holt`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.holt),
+  [`rheon.spec.holt`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.holt),
   which its docstring defines. Its entry in
   [MODELS.md](../MODELS.md#holt--holts-linear-trend) gives its update
   equation.
@@ -66,7 +66,7 @@ weighted mean. This code builds its own data:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # A line of slope 0.05 in noise, one row a clock unit.
 rng = np.random.default_rng(2)
@@ -79,11 +79,11 @@ pl.DataFrame({"t": t, "y": y}).write_parquet("line.parquet")
 common = dict(targets=["y"], clock="t", gap_cap=10.0)
 inf = float("inf")
 specs = [
-    po.spec.holt("line_fit", half_life=inf, trend_half_life=inf, **common),
-    po.spec.holt("drift", half_life=5.0, trend_half_life=inf, **common),
-    po.spec.holt("flat", half_life=20.0, trend=False, **common),
+    rp.spec.holt("line_fit", half_life=inf, trend_half_life=inf, **common),
+    rp.spec.holt("drift", half_life=5.0, trend_half_life=inf, **common),
+    rp.spec.holt("flat", half_life=20.0, trend=False, **common),
 ]
-bank = po.ModelBank(specs)
+bank = rp.ModelBank(specs)
 bank.fit(pl.scan_parquet("line.parquet"))
 fitted = {(s, term): c for s, term, c in bank.coef().select("spec", "term", "coef").iter_rows()}
 
@@ -113,8 +113,8 @@ a spec of its own, each with a list of level half-lives.
 
 1. **Make a builder of the spec with `functools.partial`,** giving
    `half_life` the list of level half-lives:
-   `functools.partial(po.spec.holt, targets=["y"], half_life=[5.0, 20.0, 80.0])`.
-2. **Score every pair with `po.eval.grid_search`,** giving it the builder
+   `functools.partial(rheon.spec.holt, targets=["y"], half_life=[5.0, 20.0, 80.0])`.
+2. **Score every pair with `rp.eval.grid_search`,** giving it the builder
    and `{"trend_half_life": [...]}`. It calls the builder once per trend
    half-life, and scores every pair on the rows each had not yet seen.
 3. **Run the pair ranked 1 on the rows to come.** Read it with
@@ -130,8 +130,8 @@ the line of the first recipe, whose noise has variance 1. This code reads
 import functools
 
 # One spec per trend half-life, each with a grid of three level half-lives: 9 fits.
-holt = functools.partial(po.spec.holt, targets=["y"], clock="t", gap_cap=10.0, half_life=[5.0, 20.0, 80.0])
-table = po.eval.grid_search(pl.scan_parquet("line.parquet"), holt, {"trend_half_life": [100.0, 1_000.0, inf]})
+holt = functools.partial(rp.spec.holt, targets=["y"], clock="t", gap_cap=10.0, half_life=[5.0, 20.0, 80.0])
+table = rp.eval.grid_search(pl.scan_parquet("line.parquet"), holt, {"trend_half_life": [100.0, 1_000.0, inf]})
 
 # The three best pairs, and what choosing from earlier rows earned.
 for trend, level, mse in table.filter(kind="candidate").sort("rank").head(3).select("trend_half_life", "half_life", "mse").iter_rows():
@@ -159,7 +159,7 @@ import functools
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # A local linear trend: the slope wanders, and the level follows it with steps of its own.
 rng = np.random.default_rng(12)
@@ -169,8 +169,8 @@ level = np.cumsum(slope + rng.normal(0, 0.1, n))
 pl.DataFrame({"t": np.arange(n, dtype=float), "y": level + rng.standard_normal(n)}).write_parquet("trend.parquet")
 
 # One spec per trend half-life, each a grid of five level half-lives: 25 fits.
-holt = functools.partial(po.spec.holt, targets=["y"], clock="t", gap_cap=5.0, half_life=[2.0, 4.0, 8.0, 16.0, 32.0])
-table = po.eval.grid_search(pl.scan_parquet("trend.parquet"), holt, {"trend_half_life": [25.0, 100.0, 400.0, 1_600.0, float("inf")]})
+holt = functools.partial(rp.spec.holt, targets=["y"], clock="t", gap_cap=5.0, half_life=[2.0, 4.0, 8.0, 16.0, 32.0])
+table = rp.eval.grid_search(pl.scan_parquet("trend.parquet"), holt, {"trend_half_life": [25.0, 100.0, 400.0, 1_600.0, float("inf")]})
 
 # The three best pairs, and what choosing from earlier rows earned.
 for trend, level, mse in table.filter(kind="candidate").sort("rank").head(3).select("trend_half_life", "half_life", "mse").iter_rows():

@@ -10,49 +10,49 @@ weight of the rows, the columns' means and co-moments, and each target's
 mean, variance and cross-moments with the columns. Together they are the
 fit's *Gram*. `ewridge`, `lasso` and `ew_cov` keep one in their state, and
 `bank.gram()` returns it as numpy arrays, in a dict typed
-`po.gram.Gram` for a type checker. A Gram's size depends on its
+`rheon.gram.Gram` for a type checker. A Gram's size depends on its
 number of columns alone, so one pass over a stream too large to hold can
 leave a Gram for each week. Every fit after the pass reads those Grams and
 never the rows. It can pool any set of weeks, fit a ridge with its t, walk
 a lasso path, or count how often each column is chosen on halves of the
-weeks. The module `po.gram` does each of these.
+weeks. The module `rheon.gram` does each of these.
 
-`bank.gram()` and `po.gram` need numpy, an optional extra, which
+`bank.gram()` and `rheon.gram` need numpy, an optional extra, which
 `pip install "polars-online[numpy]"` adds. The reference of
-[`ModelBank.gram`](https://hgilde.github.io/polars-online/rheon.html#rheon.ModelBank.gram)
+[`ModelBank.gram`](https://rheon-dev.github.io/rheon/rheon.html#rheon.ModelBank.gram)
 states each array and the identities between them.
 
-Each task on a set of Grams has a call in `po.gram` or the bank, and a
+Each task on a set of Grams has a call in `rheon.gram` or the bank, and a
 how-to that runs it:
 
 | to | call | how-to |
 |---|---|---|
-| keep a Gram per week in one pass | `po.spec.ewridge(..., group="week")`, `bank.gram()` | [Keep a Gram per block in one pass](how-to/fit-weekly-grams-in-one-pass.md) |
-| pool any weeks, and score a fit on others | `po.gram.merge` | [Pool Grams](how-to/pool-grams.md#pool-blocks-and-score-a-fit-on-blocks-held-out) |
-| pool decayed weeks, each aged first | `po.gram.merge`, `bank.groups()` | [Pool Grams](how-to/pool-grams.md#age-decayed-blocks-before-you-pool-them) |
-| pool weeks and leave their levels out | `po.gram.merge(..., within=True)` | [Pool Grams](how-to/pool-grams.md#pool-within-blocks-to-leave-their-levels-out) |
-| fit a ridge and read its t | `po.gram.solve`, `po.gram.coef_stats` | [Fit a ridge from a Gram](how-to/fit-a-ridge-from-a-gram.md) |
-| know whether a fit is determined, and fit on some of the columns | `po.gram.condition`, `po.gram.vif`, `po.gram.correlation`, `po.gram.subset` | [Check that a fit is determined](how-to/check-a-fit-is-determined.md) |
-| choose columns | `po.gram.lars_path`, `po.gram.lasso_path` | [Choose columns on a Gram's lasso path](how-to/choose-columns-on-the-lasso-path.md#choose-columns-on-a-grams-lasso-path) |
-| choose columns that hold across the weeks | `po.gram.lars_paths`, `po.gram.solve_subsets(..., path=...)` | [Select columns that hold across the weeks](how-to/select-columns-stably-over-weeks.md) |
-| know how often a selection chooses a column with no effect of one sign | `po.gram.solve_subsets(..., within=True, target_signs=...)` | [Set the threshold from null runs, by sign flips](how-to/select-columns-stably-over-weeks.md#set-the-threshold-from-null-runs-by-sign-flips) |
-| screen the columns again for each half, target and null run | `po.gram.solve_subsets(..., jobs=...)` | [Screen the columns again for each half and each null run](how-to/select-columns-stably-over-weeks.md#screen-the-columns-again-for-each-half-and-each-null-run) |
-| see whether a coefficient holds from week to week | `po.gram.solve_subsets` | [Fit per-block coefficients](how-to/fit-per-block-coefficients.md) |
-| read Grams back from files | `po.gram.from_row`, `po.ModelBank.load`, or numpy alone | [Read Grams from saved files](how-to/read-grams-from-saved-files.md) |
+| keep a Gram per week in one pass | `rheon.spec.ewridge(..., group="week")`, `bank.gram()` | [Keep a Gram per block in one pass](how-to/fit-weekly-grams-in-one-pass.md) |
+| pool any weeks, and score a fit on others | `rheon.gram.merge` | [Pool Grams](how-to/pool-grams.md#pool-blocks-and-score-a-fit-on-blocks-held-out) |
+| pool decayed weeks, each aged first | `rheon.gram.merge`, `bank.groups()` | [Pool Grams](how-to/pool-grams.md#age-decayed-blocks-before-you-pool-them) |
+| pool weeks and leave their levels out | `rheon.gram.merge(..., within=True)` | [Pool Grams](how-to/pool-grams.md#pool-within-blocks-to-leave-their-levels-out) |
+| fit a ridge and read its t | `rheon.gram.solve`, `rheon.gram.coef_stats` | [Fit a ridge from a Gram](how-to/fit-a-ridge-from-a-gram.md) |
+| know whether a fit is determined, and fit on some of the columns | `rheon.gram.condition`, `rheon.gram.vif`, `rheon.gram.correlation`, `rheon.gram.subset` | [Check that a fit is determined](how-to/check-a-fit-is-determined.md) |
+| choose columns | `rheon.gram.lars_path`, `rheon.gram.lasso_path` | [Choose columns on a Gram's lasso path](how-to/choose-columns-on-the-lasso-path.md#choose-columns-on-a-grams-lasso-path) |
+| choose columns that hold across the weeks | `rheon.gram.lars_paths`, `rheon.gram.solve_subsets(..., path=...)` | [Select columns that hold across the weeks](how-to/select-columns-stably-over-weeks.md) |
+| know how often a selection chooses a column with no effect of one sign | `rheon.gram.solve_subsets(..., within=True, target_signs=...)` | [Set the threshold from null runs, by sign flips](how-to/select-columns-stably-over-weeks.md#set-the-threshold-from-null-runs-by-sign-flips) |
+| screen the columns again for each half, target and null run | `rheon.gram.solve_subsets(..., jobs=...)` | [Screen the columns again for each half and each null run](how-to/select-columns-stably-over-weeks.md#screen-the-columns-again-for-each-half-and-each-null-run) |
+| see whether a coefficient holds from week to week | `rheon.gram.solve_subsets` | [Fit per-block coefficients](how-to/fit-per-block-coefficients.md) |
+| read Grams back from files | `rheon.gram.from_row`, `rp.ModelBank.load`, or numpy alone | [Read Grams from saved files](how-to/read-grams-from-saved-files.md) |
 | halve or quarter a Gram's bytes | `bank.gram(dtype="float32", layout="packed")` | [Store a compact Gram](how-to/store-a-compact-gram.md) |
 | keep a Gram of hundreds of features fast, in blocks of rows and on several cores | `gram_block_rows`, `gram_threads` | [Fit hundreds of features](how-to/fit-hundreds-of-features.md) |
-| fit Huber's loss, reading the rows twice a pass and the Gram once | `po.gram.solve`, two Polars queries a pass | [Fit a Huber regression on a Gram](how-to/fit-huber-on-a-gram.md) |
+| fit Huber's loss, reading the rows twice a pass and the Gram once | `rheon.gram.solve`, two Polars queries a pass | [Fit a Huber regression on a Gram](how-to/fit-huber-on-a-gram.md) |
 
 The library's words, as they are used for Grams:
 
 | word | what it means here |
 |---|---|
-| spec, bank | a spec is one model's description: the model, the columns it reads, and how it treats time. `po.ModelBank` fits a set of specs together over the same rows |
+| spec, bank | a spec is one model's description: the model, the columns it reads, and how it treats time. `rp.ModelBank` fits a set of specs together over the same rows |
 | `ewridge`, `lasso`, `ew_cov` | the three models whose state holds a Gram: a ridge regression, a lasso, and the moments of columns with no target. [MODELS.md's model table](MODELS.md#the-models-at-a-glance) lists every model |
 | Gram | the sums a least-squares fit reads, as `bank.gram(spec)` returns them: one dict per group, whose keys the reference of `ModelBank.gram` lists |
 | column | one axis of a Gram: `"intercept"` first when the spec fits one, then the spec's features |
 | block | the rows of one value of a spec's `group` column, and the Gram the bank keeps for them. The examples here make a week a block |
-| pool | merge the Grams of disjoint rows into the Gram of all of them, with `po.gram.merge` |
+| pool | merge the Grams of disjoint rows into the Gram of all of them, with `rheon.gram.merge` |
 | clock, `gap_cap` | the column a spec's `half_life`, `gap_cap` and `solve_every` are measured on, as `clock="ts"`, or the row count for a spec without one. `gap_cap` is the longest step between two rows that the bank ages a Gram by, and a spec with a clock needs one |
 | `half_life` | each row's weight halves every `half_life` of the clock. `float("inf")` weighs every row alike, so a Gram holds plain least squares' sums |
 | `weight_sum`, `n_kish` | the weight behind a Gram, and `weight_sum² / Σw²`, the number of equally weighted rows that weight is worth. Both are the row count when every row weighs 1 and `half_life=float("inf")` |
@@ -65,8 +65,8 @@ weighted means `m`, and `comoments` the columns' centered co-moments `C`,
 a `k × k` matrix. For each target, `cross_centered` holds the centered
 cross-moments `c` a fit is solved from, and `target_vars` its variance
 `V`. The reference of
-[`ModelBank.gram`](https://hgilde.github.io/polars-online/rheon.html#rheon.ModelBank.gram)
-lists every key. `po.gram.merge(..., within=True)` adds two,
+[`ModelBank.gram`](https://rheon-dev.github.io/rheon/rheon.html#rheon.ModelBank.gram)
+lists every key. `rheon.gram.merge(..., within=True)` adds two,
 `within_parts` and `target_within_parts`: the number of parts with weight,
 and per target the number with weight for it.
 
@@ -101,14 +101,14 @@ sufficiency: the Gram is a sufficient statistic for the coefficients and
 the noise variance.
 
 **To fit on some of the columns, take their sub-block of the Gram.**
-`po.gram.subset(g, ["intercept", "x0", "x5"])` selects those columns'
+`rheon.gram.subset(g, ["intercept", "x0", "x5"])` selects those columns'
 rows and columns of `C` and their entries of each target's moments. A fit
 on the subset is the fit a pass over those columns alone would give on
 the same rows. Keep `"intercept"` among the columns, since a subset
 without it is fitted through the origin.
 [Check that a fit is determined](how-to/check-a-fit-is-determined.md)
 fits a subset. Every fit
-in `po.gram` also takes `features=`, which fits the same columns with the
+in `rheon.gram` also takes `features=`, which fits the same columns with the
 intercept kept, and returns a coefficient for every column of the full
 Gram, 0 for each column left out.
 
@@ -146,13 +146,13 @@ weigh less, and a gap between two rows ages every row before it, by no
 more than `gap_cap`.
 
 **Under a `window_size`, a Gram holds only the hard window.** Every array
-is the hard window's, the target moments included, so `po.gram.solve` on
+is the hard window's, the target moments included, so `rheon.gram.solve` on
 it fits the hard window as it stood after the last row.
 
 **`bank.gram()` is as of the last row, and `bank.coef()` as of the last
 solve.** A model solves on the schedule its `solve_every` sets, so between
 two solves its coefficients lag the Gram. Solve the Gram with
-`po.gram.solve` for the fit as of the last row.
+`rheon.gram.solve` for the fit as of the last row.
 
 ### What a Gram cannot answer
 
@@ -165,14 +165,14 @@ hold, needs the rows, or a model that ran over them:
 | the residuals' tails, autocorrelation and spread, and which row moved the fit | each reads a row's own residual | the diagnostics a spec switches on, which judge each row's residual as the bank runs ([Is the model working?](DIAGNOSTICS.md)) |
 | standard errors robust to heteroskedasticity or autocorrelation | their middle term sums each row's `x x' e²`, or products of residuals rows apart | the spec's `emit_robust_se` on the stream ([Can its t be trusted?](DIAGNOSTICS.md#can-its-t-be-trusted)), or the spread of [per-block coefficients](how-to/fit-per-block-coefficients.md) |
 | a column the Gram does not hold: a square, a product or a lag | its moments with the other columns are sums the pass never took | make the column with Polars' `with_columns` in the query before the bank, and run the pass again |
-| a lagged co-moment across two pooled parts | a part holds only the pairs of its own rows | `ew_cov(lags=...)` over the whole stream. `po.gram.merge` returns `lags` as `None` |
+| a lagged co-moment across two pooled parts | a part holds only the pairs of its own rows | `ew_cov(lags=...)` over the whole stream. `rheon.gram.merge` returns `lags` as `None` |
 
 ## Pooling blocks
 
-`po.gram.merge` pools the Grams of disjoint rows into the Gram of all of
+`rheon.gram.merge` pools the Grams of disjoint rows into the Gram of all of
 them, so one pass serves every choice of weeks a fit makes. The parts'
 rows must be disjoint: a row in two parts counts twice, and
-`po.gram.merge` cannot tell.
+`rheon.gram.merge` cannot tell.
 
 To pool blocks' Grams into one, aged to a common row, with or without their levels, see [Pool Grams](how-to/pool-grams.md).
 
@@ -204,7 +204,7 @@ last row before it is pooled ([Age decayed blocks before you pool
 them](how-to/pool-grams.md#age-decayed-blocks-before-you-pool-them)).
 Blocks run under `half_life=float("inf")` pool as they are.
 
-**`po.gram.merge(blocks, within=True)` pools each block's moments about
+**`rheon.gram.merge(blocks, within=True)` pools each block's moments about
 its own means, and leaves out the spread between the blocks' means.** The
 union's update adds `(W_a · W_b / W²) · Δ Δ'`, the co-moment of the gaps
 between the parts' means. The within form drops that term, so the pooled
@@ -241,7 +241,7 @@ alone, and a target present on every row gets that regression exactly.
 for each week.** The pooled Gram's `means` are 0, beside the intercept's
 1, and the pooled Gram holds none of the weeks' intercepts. It counts its
 weeks with weight in `within_parts`, and each target's in
-`target_within_parts`. `po.gram.coef_stats` reads a target's
+`target_within_parts`. `rheon.gram.coef_stats` reads a target's
 `target_within_parts` as `B` in `n − p − B`, with `n` the target's Kish
 count (`target_n_kish`) and `p` the features that have variance.
 
@@ -259,8 +259,8 @@ measures it).
 
 ## A ridge and its t
 
-`po.gram.solve` fits a ridge on a Gram, for a grid of penalties in one
-call, and `po.gram.coef_stats` gives any fit its residual variance,
+`rheon.gram.solve` fits a ridge on a Gram, for a grid of penalties in one
+call, and `rheon.gram.coef_stats` gives any fit its residual variance,
 standard errors and t. The ridge solves the same system the `ewridge`
 model solves. The t is least squares', with least squares' assumptions.
 [Fit a ridge from a Gram](how-to/fit-a-ridge-from-a-gram.md) chooses a
@@ -315,8 +315,8 @@ uncentered, as statsmodels reports an OLS fit with no constant.
 
 When columns are nearly dependent, the rows fix only their combined
 effect, and the split among them moves with the noise. The fit then
-predicts well, and its coefficients mean nothing. `po.gram.vif` and
-`po.gram.condition` read this from a Gram, and `po.gram.correlation`
+predicts well, and its coefficients mean nothing. `rheon.gram.vif` and
+`rheon.gram.condition` read this from a Gram, and `rheon.gram.correlation`
 gives the matrix behind them. [Check that a fit is
 determined](how-to/check-a-fit-is-determined.md) reads both on a Gram
 with a planted dependency, and refits without it.
@@ -328,11 +328,11 @@ diagonal of the inverse correlation matrix. A coefficient's standard
 error is `√VIF_j` times what it would be if its column were uncorrelated
 with the rest, so a VIF of 10 makes it 3.2 times as wide. Read a VIF past
 1e10 as an exact dependency: rounding can leave it finite, as
-[`vif`'s reference](https://hgilde.github.io/polars-online/gram.html#rheon.gram.vif)
+[`vif`'s reference](https://rheon-dev.github.io/rheon/gram.html#rheon.gram.vif)
 explains.
 
 **Belsley's condition indexes say which columns are involved.**
-`po.gram.condition` scales the design to unit column length, without
+`rheon.gram.condition` scales the design to unit column length, without
 centering it, and takes its singular values `s`. Each index is
 `s_max / s_j`. The variance-decomposition proportions give each column's
 share of its coefficient's variance in each component. Belsley, Kuh and
@@ -345,7 +345,7 @@ such as a column whose level is far above its spread.
 
 The lasso adds `λ Σ_j |b_j|` to the squared loss (Tibshirani 1996). At a
 large enough `λ` every slope is 0, and as `λ` falls, columns enter the
-fit. `po.gram` follows that path two ways. `lars_path` walks it knot by
+fit. `rheon.gram` follows that path two ways. `lars_path` walks it knot by
 knot from its start, by least angle regression. `lasso_path` solves it at
 the penalties given, by coordinate descent.
 
@@ -385,7 +385,7 @@ two, with the penalties, gives the same path scaled, to the bit. On a poorly
 conditioned Gram the rule says little about the distance from the
 solution: at a condition number of 1e8, a descent at `tol=1e-14` stopped
 with its intercept 0.48 from the knot's ([`lars_path`'s
-reference](https://hgilde.github.io/polars-online/gram.html#rheon.gram.lars_path)). The
+reference](https://rheon-dev.github.io/rheon/gram.html#rheon.gram.lars_path)). The
 descent follows Friedman, Hastie and Tibshirani (2010).
 
 **A penalty whose descent runs out of sweeps is named in a warning.** Its
@@ -469,7 +469,7 @@ so a null run needs no new merge of the co-moments.** Negating a week's
 target negates its centered cross-moments `c_i`. Its co-moments, its target
 weight and its variance stay as they were. So a draw of signs `s_i` gives
 `c = Σ T_i · s_i · c_i / T`, and nothing else in the pooled Gram moves.
-`po.gram.solve_subsets(..., within=True, target_signs=signs)` takes the
+`rheon.gram.solve_subsets(..., within=True, target_signs=signs)` takes the
 signs as an array of weeks by draws, and returns one run of every subset
 per draw. Pooled as a union, a negated week's target mean would also move
 the gaps between the weeks' means, so `target_signs` is refused without
@@ -497,7 +497,7 @@ carry the target's signs into the run that is meant to have none.
 for every half and draw merges no matrix.** A column's correlation with
 the target, pooled within a half's weeks, needs only each week's weight,
 its cross-moments under the draw's signs and its columns' variances. So
-`po.gram.solve_subsets(..., jobs=...)` takes each path's own columns, and
+`rheon.gram.solve_subsets(..., jobs=...)` takes each path's own columns, and
 still merges each half once, on every column its jobs read, and re-pools
 its cross-moments once a draw. [Screen the columns again for each half
 and each null
@@ -546,7 +546,7 @@ a solution whose relative error is of the order of `κδ` (Higham 2002).
 Here `κ` is the condition number of the matrix solved, its largest
 eigenvalue over its smallest. For a Gram that matrix is the features'
 correlation matrix, which a standardized solve works on:
-`np.linalg.cond(po.gram.correlation(g)[1:, 1:])`. Rounding moves a
+`np.linalg.cond(rheon.gram.correlation(g)[1:, 1:])`. Rounding moves a
 solve by about `κδ` at the worst, and usually by far less, since the
 errors of many entries offset one another. On the stream of [Store a
 compact Gram](how-to/store-a-compact-gram.md), a float32 Gram moved the
@@ -580,7 +580,7 @@ and each solve in sets of 1, 3, 8 and 14 threads.
 
 **`gram_threads` takes its threads from the bank's own, the threads it
 runs its groups on.** The bank's `threads` sizes them, or, without it,
-`POLARS_ONLINE_MAX_THREADS`, one thread per core by default. A count caps
+`RHEON_MAX_THREADS`, one thread per core by default. A count caps
 how many of them one spec's update may use. A bank whose groups already
 keep every core busy gains nothing from a split, and loses the cost of
 handing each row's pieces out. So `"auto"` splits only where the bank has

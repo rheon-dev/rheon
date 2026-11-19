@@ -35,8 +35,8 @@ The noise ceiling is the R² of the generating signal itself:
 | noise ceiling | 0.9831 | 0.9923 | | |
 | `SGDRegressor`, row by row | 0.9829 | 0.9899 | 3,400 | every row before it |
 | `SGDRegressor`, batches of 1,000 | 0.9830 | 0.9820 | 2,200,000 | every row before its *batch* |
-| `po.spec.sgd` | 0.9826 | 0.9906 | 6,000,000 | every row before it |
-| `po.spec.ewridge` | **0.9831** | **0.9907** | 480,000 | every row before it |
+| `rheon.spec.sgd` | 0.9826 | 0.9906 | 6,000,000 | every row before it |
+| `rheon.spec.ewridge` | **0.9831** | **0.9907** | 480,000 | every row before it |
 
 scikit-learn's fast form updates once per 1,000-row batch, so a prediction can
 come up to 999 rows before its update, and on the drifting stream it

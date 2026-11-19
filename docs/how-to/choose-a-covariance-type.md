@@ -48,7 +48,7 @@ three shapes on the last 5,000 rows of each:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 rng = np.random.default_rng(8)
 n = 6_000
@@ -63,7 +63,7 @@ xy = np.array([[0.0, 0.0], [1.5, 1.0]])[label] + z @ np.linalg.cholesky([[1.0, 0
 pl.DataFrame({"x": xy[:, 0], "y": xy[:, 1], "kind": kind}).write_parquet("shifted.parquet")
 
 # 1 and 2. The three shapes, one spec each, in one bank.
-shapes = [po.spec.ew_class(shape, features=["x", "y"], label="kind", classes=["a", "b"],
+shapes = [rp.spec.ew_class(shape, features=["x", "y"], label="kind", classes=["a", "b"],
                            covariance_type=shape, precision_prior=0.1, half_life=float("inf"))
           for shape in ("full", "tied", "diag")]
 # 3. The share of the last rows each shape classifies right.
@@ -102,7 +102,7 @@ spec that weighs every row against one that keeps the last 500:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # Two classes on either side of 0 in x, which trade places at row 3,000.
 rng = np.random.default_rng(8)
@@ -114,7 +114,7 @@ pl.DataFrame({"x": xy[:, 0], "y": xy[:, 1], "kind": np.array(["a", "b"])[label]}
 
 # 1. One spec over every row, and one over the last 500.
 common = dict(features=["x", "y"], label="kind", classes=["a", "b"], precision_prior=0.1, half_life=float("inf"))
-specs = [po.spec.ew_class("whole", **common), po.spec.ew_class("window", **common, window_size=500.0)]
+specs = [rp.spec.ew_class("whole", **common), rp.spec.ew_class("window", **common, window_size=500.0)]
 # 2 and 3. Add both specs, and run.
 out = pl.scan_parquet("swapped.parquet").rheon.fit_predict(specs).collect()
 # 4. The share of rows each classifies right, before the move, just after it, and from then on.
@@ -154,7 +154,7 @@ that recipe's imports, and learns each row's class 50 rows after the row:
 
 ```python
 # 1. Each class learned 50 rows after its row.
-late = po.spec.ew_class("late", features=["x", "y"], label="kind", classes=["a", "b"],
+late = rp.spec.ew_class("late", features=["x", "y"], label="kind", classes=["a", "b"],
                         precision_prior=0.1, half_life=float("inf"), embargo=50)
 # 2 and 3. Add the spec, run, and find the first row with a class.
 out = pl.scan_parquet("swapped.parquet").rheon.fit_predict([late]).collect().unnest("late").with_row_index("row")
@@ -185,4 +185,4 @@ probability, `p_<class>`.
 
 The fields are defined in [OUTPUTS.md](../OUTPUTS.md#ew_class), and every
 parameter, with the work each shape takes a row, in `ew_class`'s
-[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.ew_class).
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ew_class).

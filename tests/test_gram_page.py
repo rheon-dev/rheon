@@ -4,7 +4,7 @@ the code.
 The page is an explanation (task 338 stage 9b): how a Gram stands in for the
 rows, with a table from each task to its how-to. Its recipes moved to those
 how-tos, whose blocks ``tests/test_kind_pages.py`` runs and holds to what
-they print, so here the page is held to naming every function of ``po.gram``
+they print, so here the page is held to naming every function of ``rheon.gram``
 (with the how-tos), to having no recipe left that no test would run, and to
 the links that lead to it.
 """
@@ -48,8 +48,8 @@ def test_the_task_table_links_a_how_to_for_each_task():
         assert (HOW_TO / f"{page}.md").exists(), page
 
 
-def test_every_po_gram_function_is_on_the_page():
-    """A function added to ``po.gram`` and not to the page fails here, so the
+def test_every_gram_function_is_on_the_page():
+    """A function added to ``rheon.gram`` and not to the page fails here, so the
     page, with the how-tos its tasks moved to, stays the guide to all of them."""
     text = "\n".join(
         p.read_text(encoding="utf-8")
@@ -57,8 +57,13 @@ def test_every_po_gram_function_is_on_the_page():
     )
     functions = [name for name in rp.gram.__all__ if callable(getattr(rp.gram, name))]
     assert len(functions) >= 12, functions
-    missing = sorted(name for name in functions if f"po.gram.{name}" not in text)
-    assert not missing, f"po.gram functions the page does not name: {missing}"
+    # Prose names a function `rheon.gram.<name>`, and code `rp.gram.<name>`.
+    missing = sorted(
+        name
+        for name in functions
+        if f"rheon.gram.{name}" not in text and f"rp.gram.{name}" not in text
+    )
+    assert not missing, f"rheon.gram functions the page does not name: {missing}"
 
 
 def test_the_readme_the_how_to_the_map_and_llms_txt_link_the_page():

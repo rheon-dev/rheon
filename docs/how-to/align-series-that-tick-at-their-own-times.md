@@ -4,7 +4,7 @@
 This how-to is for anyone with series observed at instants of their own,
 such as the trades of several stocks, who wants to fit a correlation, a
 covariance or a regression across them. It puts the series on one refresh grid
-with `po.stream.refresh_time`, then fits the models on the refresh grid's
+with `rp.stream.refresh_time`, then fits the models on the refresh grid's
 changes. [Series that tick at their own
 times](../explanation/asynchronous-series.md) explains why a fine common
 grid fails and what the refresh grid recovers.
@@ -28,7 +28,7 @@ The refresh grid has a row at each *refresh time*: the first instant by which
 **every** series has ticked at least once since the previous refresh time.
 Nothing is interpolated.
 
-1. **Call `po.stream.refresh_time` with the ticks, naming the `series`
+1. **Call `rp.stream.refresh_time` with the ticks, naming the `series`
    column, every series in `names`, the `clock` and the `value`.** `names`
    sets the order of the output columns, and a tick of a series not in it
    is refused by name. Give `group`, such as a trading day, for a refresh grid of
@@ -45,14 +45,14 @@ refresh grid they make:
 
 ```python
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 ticks = pl.DataFrame({
     "symbol": ["AAA", "BBB", "AAA", "CCC", "BBB", "AAA", "AAA", "CCC"],  # which series ticked
     "t": [0.4, 0.9, 1.3, 1.6, 2.2, 2.5, 2.8, 3.1],                      # when, in clock order
     "px": [100.0, 20.0, 100.2, 50.0, 20.1, 100.1, 100.4, 49.9],         # what it observed
 })
-grid = po.stream.refresh_time(ticks, series="symbol", names=["AAA", "BBB", "CCC"],   # 1.
+grid = rp.stream.refresh_time(ticks, series="symbol", names=["AAA", "BBB", "CCC"],   # 1.
                               clock="t", value="px")
 print(grid.columns)                                                                  # 2.
 for row in grid.rows():                                                              # 2. and 3.: one row per refresh time
@@ -111,13 +111,13 @@ for s in names:
 pl.concat(frames).sort("t").write_parquet("own_times.parquet")   # one stream, in clock order
 
 # The refresh grid and the models on it, in one query.
-grid = po.stream.refresh_time(pl.scan_parquet("own_times.parquet"), series="symbol", names=names,
+grid = rp.stream.refresh_time(pl.scan_parquet("own_times.parquet"), series="symbol", names=names,
                               clock="t", value="px")    # a query, since it was given one
 returns = grid.select("time_refresh", *(pl.col(f"{s}_value").diff().alias(s) for s in names))  # 1. each series' change
 specs = [
-    po.spec.ew_cov("comove", features=names, stats=["corr"],
+    rp.spec.ew_cov("comove", features=names, stats=["corr"],
                    clock="time_refresh", gap_cap=10.0, half_life=float("inf")),          # 2. the refresh grid's clock
-    po.spec.ewridge("fit", targets=["AAA"], features=["BBB", "CCC"],
+    rp.spec.ewridge("fit", targets=["AAA"], features=["BBB", "CCC"],
                     clock="time_refresh", gap_cap=10.0, half_life=float("inf")),
 ]
 out = returns.rheon.fit_predict(specs).collect()         # 3. the refresh grid and the models, one pass
@@ -161,7 +161,7 @@ series holding the refresh grid up, whose tick completes each refresh time, keep
 | an error naming a series not in `names` | a tick names a series `names` does not list, such as a misspelling | add it to `names`, or filter it out before the call |
 
 Every parameter is in `refresh_time`'s
-[docstring](https://hgilde.github.io/polars-online/stream.html#rheon.stream.refresh_time).
+[docstring](https://rheon-dev.github.io/rheon/stream.html#rheon.stream.refresh_time).
 For a block's covariance on the refresh grid's changes, robust to noise, see
 [Estimate a block's covariance from
 ticks](estimate-a-blocks-covariance-from-ticks.md).

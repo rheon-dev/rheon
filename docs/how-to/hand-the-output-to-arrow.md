@@ -42,12 +42,12 @@ data](../EXAMPLE-DATA.md):
 
 ```python
 # One spec's output as Arrow, read once as a Series.
-spec = po.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], clock="t", half_life=600.0, gap_cap=300.0)
-bank = po.ModelBank([spec])
+spec = rp.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], clock="t", half_life=600.0, gap_cap=300.0)
+bank = rp.ModelBank([spec])
 structs = bank.fit_predict_arrow(df)                    # 1. one per spec, as Arrow
 ridge = pl.Series(structs[0])                           # 2. Polars as the reader here: any reader of __arrow_c_array__ takes it
 print(f"{len(structs)} {type(structs[0]).__name__}; read as a Series: {ridge.name}, {ridge.len()} rows")
-print(f"the same as fit_predict's column: {ridge.equals(po.ModelBank([spec]).fit_predict(df)['ridge'])}")
+print(f"the same as fit_predict's column: {ridge.equals(rp.ModelBank([spec]).fit_predict(df)['ridge'])}")
 # A second read of the same struct is refused.
 try:
     pl.Series(structs[0])                               # the second read

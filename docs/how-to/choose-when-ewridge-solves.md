@@ -21,8 +21,8 @@ These steps need the library and an `ewridge` spec:
   solve,** so a coarser schedule is faster and its coefficients older.
 
 `solve_every` and `max_rows_between_solves` are defined in
-[`po.spec.ewridge`'s
-docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.ewridge),
+[`rheon.spec.ewridge`'s
+docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ewridge),
 whose Notes, under *The solve schedule*, give the rules at the schedule's
 edges.
 
@@ -86,7 +86,7 @@ the recipe counts a solve where the slope changes:
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # y = slope * x0 - x1 + 0.5 x2 plus noise, one row a clock unit; the slope on x0 jumps from 1 to 3 at row 10,000.
 rng = np.random.default_rng(7)
@@ -99,10 +99,10 @@ pl.DataFrame({"t": np.arange(n, dtype=float), "x0": x[0], "x1": x[1], "x2": x[2]
 # One spec per schedule, each writing its coefficients on every row.
 common = dict(targets=["y"], features=["x0", "x1", "x2"], clock="t", gap_cap=10.0, half_life=200.0, coef_every=0)
 schedules = {
-    "max_rows_between_solves=1": po.spec.ewridge("every_row", max_rows_between_solves=1, **common),
-    "the default, by weight": po.spec.ewridge("by_weight", **common),
-    "solve_every=100": po.spec.ewridge("on_clock", solve_every=100.0, **common),
-    "solve_every=inf, a row cap of 2,000": po.spec.ewridge("capped", solve_every=float("inf"), max_rows_between_solves=2000, **common),
+    "max_rows_between_solves=1": rp.spec.ewridge("every_row", max_rows_between_solves=1, **common),
+    "the default, by weight": rp.spec.ewridge("by_weight", **common),
+    "solve_every=100": rp.spec.ewridge("on_clock", solve_every=100.0, **common),
+    "solve_every=inf, a row cap of 2,000": rp.spec.ewridge("capped", solve_every=float("inf"), max_rows_between_solves=2000, **common),
 }
 out = pl.scan_parquet("jump.parquet").rheon.fit_predict(list(schedules.values())).collect()
 
@@ -161,8 +161,8 @@ frame.write_parquet("flat.parquet")
 features = [f"x{j}" for j in range(k)]
 # The same fit, solved on every row and every 1,000 rows.
 for label, extra in [("every row (the default under half_life=inf)", {}), ("solve_every=1000", {"solve_every": 1000.0})]:
-    spec = po.spec.ewridge("flat", targets=["y"], features=features, half_life=float("inf"), **extra)
-    bank = po.ModelBank([spec], threads=1)
+    spec = rp.spec.ewridge("flat", targets=["y"], features=features, half_life=float("inf"), **extra)
+    bank = rp.ModelBank([spec], threads=1)
     # Time the pass, then read the fit's slopes beside the planted ones.
     start = time.perf_counter()
     bank.fit(pl.scan_parquet("flat.parquet"))

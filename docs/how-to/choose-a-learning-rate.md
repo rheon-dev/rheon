@@ -14,9 +14,9 @@ These steps need the library:
 - polars-online installed, with numpy for the recipes. Each recipe builds
   its own data and saves it to a parquet file.
 - The parameters of
-  [`po.spec.sgd`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.sgd),
-  [`po.spec.ftrl`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.ftrl)
-  and [`po.spec.pa`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.pa),
+  [`rheon.spec.sgd`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.sgd),
+  [`rheon.spec.ftrl`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ftrl)
+  and [`rheon.spec.pa`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.pa),
   which their docstrings define. Each model's entry in MODELS.md gives its
   update equation: [`sgd`](../MODELS.md#sgd--stochastic-gradient-descent),
   [`ftrl`](../MODELS.md#ftrl--online-logistic-regression) and
@@ -52,7 +52,7 @@ import math
 
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # y = slope·x plus noise, where the slope jumps from 1 to 3 at row 3,000.
 rng = np.random.default_rng(3)
@@ -63,7 +63,7 @@ pl.DataFrame({"x": x, "y": slope * x + 0.3 * e}).write_parquet("jump.parquet")
 
 # One sgd spec per learning rate, each writing its coefficients on every row.
 rates = [0.003, 0.01, 0.03]
-specs = [po.spec.sgd(f"lr_{r:g}", targets=["y"], features=["x"], half_life=float("inf"),
+specs = [rp.spec.sgd(f"lr_{r:g}", targets=["y"], features=["x"], half_life=float("inf"),
                      learning_rate=r, coef_every=0) for r in rates]
 out = pl.scan_parquet("jump.parquet").rheon.fit_predict(specs).collect()
 
@@ -91,7 +91,7 @@ error on the rows it had not yet seen ranks the rates fairly.
 
 1. **Build a spec builder with `functools.partial`,** giving it the
    keywords every rate's spec shares.
-2. **Give `po.eval.grid_search` the builder, and a `param_grid` of the
+2. **Give `rp.eval.grid_search` the builder, and a `param_grid` of the
    rates to try.** It builds one spec per rate and fits them all in one
    bank, which reads the file once.
 3. **Run the rate ranked 1 on the rows to come.** Read it with
@@ -108,7 +108,7 @@ import functools
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # y = b x0 + 0.5 x1 + noise, where b wanders as a slow random walk.
 rng = np.random.default_rng(10)
@@ -118,8 +118,8 @@ b = 1.0 + np.cumsum(rng.normal(0, 0.01, n))
 pl.DataFrame({"x0": x0, "x1": x1, "y": b * x0 + 0.5 * x1 + e}).write_parquet("slow.parquet")
 
 # One sgd spec per learning rate.
-sgd = functools.partial(po.spec.sgd, targets=["y"], features=["x0", "x1"], half_life=1_000.0)
-table = po.eval.grid_search(pl.scan_parquet("slow.parquet"), sgd, {"learning_rate": [0.0003, 0.001, 0.003, 0.01, 0.03, 0.1]})
+sgd = functools.partial(rp.spec.sgd, targets=["y"], features=["x0", "x1"], half_life=1_000.0)
+table = rp.eval.grid_search(pl.scan_parquet("slow.parquet"), sgd, {"learning_rate": [0.0003, 0.001, 0.003, 0.01, 0.03, 0.1]})
 
 for rate, mse, rank in table.filter(kind="candidate").select("learning_rate", "mse", "rank").iter_rows():
     print(f"learning_rate {rate:<6g} (about {1 / rate:>4.0f} rows): mse {mse:.4f}, rank {rank}")
@@ -138,7 +138,7 @@ chosen from earlier rows: mse 1.0262
 
 A memory of about 100 rows predicts best here, close to the half-life of
 100 (about 144 rows of weight) that [Choose a model's
-settings](../CALIBRATION.md#choose-a-half-life-with-poevalgrid_search)
+settings](../CALIBRATION.md#choose-a-half-life-with-rpevalgrid_search)
 chooses on a coefficient wandering at the same speed.
 With a shorter memory each step chases the noise, and with a longer one
 the coefficient has moved on before the fit catches up.
@@ -157,7 +157,7 @@ row, however large the error. Here `f` is the decay factor over one row's
 clock, `0.5 ** (1 / half_life)` at one row a clock unit. Just after the
 break, before the sums have grown, a coefficient moves faster, by up to
 about `alpha` in one row. The
-[`ftrl` docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.ftrl)'s
+[`ftrl` docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ftrl)'s
 Notes, under *Breaks*, measure how far each `alpha` stays from the
 decayed least-squares fit after a break.
 
@@ -193,7 +193,7 @@ pl.DataFrame({"t": np.arange(n, dtype=float), "x": x, "y": level + x + 0.3 * e})
 
 # One ftrl spec per alpha, under the squared loss and a half-life of 200 rows.
 alphas = [0.1, 0.3, 1.0]
-specs = [po.spec.ftrl(f"alpha_{a:g}", targets=["y"], features=["x"], loss="squared", clock="t", gap_cap=10.0,
+specs = [rp.spec.ftrl(f"alpha_{a:g}", targets=["y"], features=["x"], loss="squared", clock="t", gap_cap=10.0,
                       half_life=200.0, alpha=a, coef_every=0) for a in alphas]
 out = pl.scan_parquet("level.parquet").rheon.fit_predict(specs).collect()
 
@@ -263,10 +263,10 @@ pl.DataFrame({"x0": x0, "x1": x1, "y": y}).write_parquet("spike.parquet")
 # The same pa under each mode.
 common = dict(targets=["y"], features=["x0", "x1"], half_life=float("inf"), coef_every=0)
 specs = [
-    po.spec.pa("pa", mode="pa", **common),             # no cap
-    po.spec.pa("pa1", **common),                       # the default: capped at c=1
-    po.spec.pa("pa2", mode="pa2", **common),           # damped by 1/(2c) at c=1
-    po.spec.pa("pa2_small", mode="pa2", c=0.01, **common),
+    rp.spec.pa("pa", mode="pa", **common),             # no cap
+    rp.spec.pa("pa1", **common),                       # the default: capped at c=1
+    rp.spec.pa("pa2", mode="pa2", **common),           # damped by 1/(2c) at c=1
+    rp.spec.pa("pa2_small", mode="pa2", c=0.01, **common),
 ]
 out = pl.scan_parquet("spike.parquet").rheon.fit_predict(specs).collect()
 
@@ -300,7 +300,7 @@ behind a change for many rows, and a step too large makes it wander at
 its steady state or jump at one bad row.
 
 **Compare the settings' out-of-sample errors on the same rows.** Run one
-spec per value in one bank, and score them with `po.eval.grid_search`, as
+spec per value in one bank, and score them with `rp.eval.grid_search`, as
 [Search the rate from the stream's own
 errors](#search-the-rate-from-the-streams-own-errors) does for `sgd`'s
 `learning_rate`, and the same way for `pa`'s `c` and `ftrl`'s `alpha`.

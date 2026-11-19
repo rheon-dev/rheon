@@ -68,7 +68,7 @@ predicts, what held it back, and the error of its predictions before row
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # Ten features, a row a second, y on all of them.
 rng = np.random.default_rng(14)
@@ -82,10 +82,10 @@ ready = pl.scan_parquet("ready.parquet")
 # 1. The same ridge under each readiness gate.
 common = dict(targets=["y"], features=features, clock="t", gap_cap=5.0, half_life=300.0)
 specs = [
-    po.spec.ewridge("default", **common),  # max_error_inflation=sqrt(2), the one gate on by default
-    po.spec.ewridge("strict", max_error_inflation=1.05, **common),  # 5% over the noise floor
-    po.spec.ewridge("settled", min_settled_frac=0.5, **common),  # one half-life of history
-    po.spec.ewridge("weighted", min_weight=100.0, **common),  # 100 of weight_sum
+    rp.spec.ewridge("default", **common),  # max_error_inflation=sqrt(2), the one gate on by default
+    rp.spec.ewridge("strict", max_error_inflation=1.05, **common),  # 5% over the noise floor
+    rp.spec.ewridge("settled", min_settled_frac=0.5, **common),  # one half-life of history
+    rp.spec.ewridge("weighted", min_weight=100.0, **common),  # 100 of weight_sum
 ]
 out = ready.rheon.fit_predict(specs).collect()
 
@@ -150,18 +150,18 @@ sparse = pl.scan_parquet("sparse.parquet")
 common = dict(targets=["y"], features=["x"], clock="t", gap_cap=10.0)
 with warnings.catch_warnings(record=True) as caught:
     warnings.simplefilter("always")
-    sparse.rheon.fit_predict([po.spec.ewridge("weighted", half_life=50.0, min_weight=30.0, **common)]).collect()
+    sparse.rheon.fit_predict([rp.spec.ewridge("weighted", half_life=50.0, min_weight=30.0, **common)]).collect()
 for w in caught:
-    if issubclass(w.category, po.ReadinessWarning):
+    if issubclass(w.category, rp.ReadinessWarning):
         print("warning: " + str(w.message).split(". ")[-1])
 
 # 2 and 3. Each remedy: the first row predicted, the weight behind it, and the warnings left.
 for name, gates in (("lower", dict(half_life=50.0, min_weight=14.0)), ("longer", dict(half_life=110.0, min_weight=30.0))):
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        out = sparse.rheon.fit_predict([po.spec.ewridge(name, **gates, **common)]).collect()
+        out = sparse.rheon.fit_predict([rp.spec.ewridge(name, **gates, **common)]).collect()
     first = out.select("t", pl.col(name).struct.unnest()).filter(pl.col("pred_y").is_not_null()).row(0, named=True)
-    left = sum(issubclass(w.category, po.ReadinessWarning) for w in caught)
+    left = sum(issubclass(w.category, rp.ReadinessWarning) for w in caught)
     print(f"{name}: first predicts at t = {first['t']:g}, weight_sum {first['weight_sum']:.1f}, {left} warnings")
 ```
 

@@ -58,7 +58,7 @@ directions at each lag, read before the last row:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # follow repeats lead three rows later, with noise: the truth is 0.8 at a lag of 3.
 rng = np.random.default_rng(9)
@@ -68,7 +68,7 @@ follow = 0.8 * lead[:-3] + 0.6 * rng.standard_normal(n)
 pl.DataFrame({"lead": lead[3:], "follow": follow}).write_parquet("leadlag.parquet")
 
 # The correlations at each lag, read before the last row.
-mv = po.spec.ew_cov(
+mv = rp.spec.ew_cov(
     "mv", features=["lead", "follow"], half_life=float("inf"),
     lags=[1, 2, 3, 4, 5],              # 1. the lags to try, in rows
     stats=["corr", "lag_corr"],        # 2. the correlation on the same row, and at each lag
@@ -109,4 +109,4 @@ other direction. Each column's correlation with its own past is in the
 | a `ValueError` naming `lags` and `window_size` | lagged moments run over a history a [hard window](../GLOSSARY.md#fitting-a-model) does not cut | drop `window_size` |
 
 The fields, under `lags`, and every parameter are defined in `ew_cov`'s
-[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.ew_cov).
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ew_cov).

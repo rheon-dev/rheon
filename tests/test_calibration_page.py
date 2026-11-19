@@ -52,7 +52,7 @@ def test_the_readme_the_map_and_llms_txt_link_the_page():
     # index links it from `grid_search`'s line (task 338 stage 8).
     assert "](docs/CALIBRATION.md)" in where
     features = (REPO / "docs" / "FEATURES.md").read_text(encoding="utf-8")
-    line = next(r for r in features.splitlines() if "`po.eval.grid_search`" in r)
+    line = next(r for r in features.splitlines() if "`rp.eval.grid_search`" in r)
     assert "](CALIBRATION.md)" in line
     assert "](CALIBRATION.md)" in (REPO / "docs" / "README.md").read_text(encoding="utf-8")
     assert "docs/CALIBRATION.md" in (REPO / "llms.txt").read_text(encoding="utf-8")

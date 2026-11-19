@@ -49,7 +49,7 @@ Each way to serve needs a saved state and the rows to predict:
 Use a bank object for rows your own code holds in a frame, and a query for
 rows in a file or a stream too large to hold. To serve a frame:
 
-1. **Load the state with `po.ModelBank.load`.** To check that the file
+1. **Load the state with `rp.ModelBank.load`.** To check that the file
    holds the specs you expect, pass them as `specs=`, and the load refuses
    a file that holds other specs.
 2. **Predict the frame with `bank.predict(frame)`.** It returns the frame
@@ -70,13 +70,13 @@ rows after `df`'s three ways. It uses `df`, `today` and `later` from
 [Example data](../EXAMPLE-DATA.md):
 
 ```python
-spec = po.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], clock="t", half_life=600.0, gap_cap=300.0)
-bank = po.ModelBank([spec])
+spec = rp.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], clock="t", half_life=600.0, gap_cap=300.0)
+bank = rp.ModelBank([spec])
 bank.fit_predict(df)
 bank.save("bank.state")
 
 # Load the state, checking that it holds this spec.
-loaded = po.ModelBank.load("bank.state", specs=[spec])
+loaded = rp.ModelBank.load("bank.state", specs=[spec])
 # Three ways to serve the rows after df's: a frame, then a query given the bank or the path.
 served = loaded.predict(today)                             # every row predicted from the same state: nothing moves
 in_query = later.rheon.predict(loaded).collect()          # a bank, as it stands when the query runs
@@ -145,7 +145,7 @@ data](../EXAMPLE-DATA.md), and `served` from [Serve in
 Python](#serve-in-python):
 
 ```python
-one_run = po.ModelBank([spec]).fit_predict(pl.concat([df, today]))   # df and today as one stream
+one_run = rp.ModelBank([spec]).fit_predict(pl.concat([df, today]))   # df and today as one stream
 first = served["ridge"].struct.field("pred_y")[0]
 print(f"today's first row, served: {first:.6f}; one run: {one_run['ridge'].struct.field('pred_y')[400]:.6f}")
 ```

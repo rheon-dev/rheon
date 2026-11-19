@@ -50,7 +50,7 @@ needs.
 
    [[specs]]                    # one table per spec
    name = "ridge"               # the name of the spec's output column
-   targets = ["y"]              # or a table: { column = "p", name = "price" }, as po.target
+   targets = ["y"]              # or a table: { column = "p", name = "price" }, as rp.target
    features = ["x0"]
    clock = "t"                  # the clock: how far apart two rows are, which half_life and gap_cap are measured in
    half_life = 500.0            # in units of t
@@ -117,7 +117,7 @@ refuses a formula target's embargo shorter than its window.
 when the run ends.** The state is saved last, after the output is
 committed, so a run that fails leaves the previous output in place and the
 state unwritten. The file is the one a query's `load_state` and
-`save_state` read and write on `lf.online.fit_predict`, and the one
+`save_state` read and write on `lf.rheon.fit_predict`, and the one
 `ModelBank.save` writes. The bytes are the same whichever wrote them
 ([One state file, however the bank is
 run](../explanation/state-and-resuming.md#one-state-file-however-the-bank-is-run)).
@@ -192,19 +192,19 @@ reword.
 
 **To check the spec, build the same bank in Python from the TOML file.**
 `tomllib` reads each `[[specs]]` table as the dict a spec builder returns,
-and `po.ModelBank` takes the list as it comes. This code builds the bank
-from `job.toml` and compares its spec with the one `po.spec.ewridge` makes
+and `rp.ModelBank` takes the list as it comes. This code builds the bank
+from `job.toml` and compares its spec with the one `rheon.spec.ewridge` makes
 from the same keywords. It uses `job.toml` from [Run a bank over a
 file](#run-a-bank-over-a-file):
 
 ```python
 import tomllib
 
-from rheon import polars as po
+from rheon import polars as rp
 
 with open("job.toml", "rb") as f:                      # tomllib reads a file opened in binary mode
-    bank = po.ModelBank(tomllib.load(f)["specs"])
-spec = po.spec.ewridge("ridge", targets=["y"], features=["x0"], clock="t",
+    bank = rp.ModelBank(tomllib.load(f)["specs"])
+spec = rp.spec.ewridge("ridge", targets=["y"], features=["x0"], clock="t",
                        half_life=500.0, gap_cap=300.0, min_weight=5.0)
 print(f"the same spec: {bank.specs[0] == spec}")
 ```

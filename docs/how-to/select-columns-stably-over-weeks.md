@@ -38,10 +38,10 @@ sample can choose one set of columns and on another sample another set.
 2. **Draw 50 random splits of the weeks into two halves of 20,** each half
    beside its complement: 100 halves.
 3. **Walk each half's lasso path to the first knot with eight columns
-   active, with `po.gram.solve_subsets(blocks, halves, path={"max_active":
+   active, with `rheon.gram.solve_subsets(blocks, halves, path={"max_active":
    8})`.** It reads the Grams once, then merges each half and walks its
    path on the process's threads (`threads=` caps them), with no Python copy of a matrix per
-   half. A loop of `po.gram.merge` and `po.gram.lars_paths` gives the same
+   half. A loop of `rheon.gram.merge` and `rheon.gram.lars_paths` gives the same
    paths.
 4. **Count, for each column, the share of the halves that chose it:**
    active at any knot of the half's path.
@@ -61,7 +61,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # 40 weeks, a row every 20 minutes. 200 features in 40 families of five that share a factor, so
 # two features of one family correlate at 0.5. y depends on six of them, and x25's coefficient is
@@ -81,17 +81,17 @@ pl.DataFrame({"ts": ts, **dict(zip(features, x.T)), "y": y}).write_parquet("week
 
 # 1. One pass over the file leaves a Gram per week. The week is a column made in the query.
 lf = pl.scan_parquet("weeks.parquet").with_columns(week=pl.col("ts").dt.truncate("1w"))
-spec = po.spec.ewridge(
+spec = rp.spec.ewridge(
     "blocks", targets=["y"], features=features, group="week",
     half_life=float("inf"), solve_every=float("inf"), target_gaps="pairwise", gram_block_rows=256,
 )
-bank = po.ModelBank([spec])
+bank = rp.ModelBank([spec])
 bank.fit(lf)  # learns from every row, and keeps only the state
 blocks = bank.gram("blocks")  # one dict per week, oldest first
 ```
 
 The next code runs steps 2 to 5 by a loop of merges and `lars_paths`, then
-gets the same paths from `po.gram.solve_subsets` in one call, timed beside
+gets the same paths from `rheon.gram.solve_subsets` in one call, timed beside
 the loop:
 
 ```python
@@ -104,8 +104,8 @@ for _ in range(50):
 
 # 3. Merge each half and walk its lasso path, timed.
 t0 = time.perf_counter()
-merged = [po.gram.merge([blocks[i] for i in half]) for half in halves]
-paths = po.gram.lars_paths(merged, max_active=8)  # a list per half, a path per target
+merged = [rp.gram.merge([blocks[i] for i in half]) for half in halves]
+paths = rp.gram.lars_paths(merged, max_active=8)  # a list per half, a path per target
 seconds = time.perf_counter() - t0
 
 # 4. Count how often the halves chose each column.
@@ -127,7 +127,7 @@ print(f"{q:.1f} columns a half, so at most {q**2 / ((2 * threshold - 1) * k):.2f
 
 # 3 again: the same paths from solve_subsets in one call, timed beside the loop.
 t0 = time.perf_counter()
-same = po.gram.solve_subsets(blocks, halves, path={"max_active": 8})  # the same paths, in one call
+same = rp.gram.solve_subsets(blocks, halves, path={"max_active": 8})  # the same paths, in one call
 agree = all(a[0]["active"] == b[0]["active"] for a, b in zip(same, paths))
 print(f"solve_subsets chooses the same: {agree}")
 print(f"time: {seconds:.2f} s by merge and lars_paths, {time.perf_counter() - t0:.2f} s by solve_subsets")
@@ -169,7 +169,7 @@ its sign across the weeks, and runs every half again.
 1. **Draw a sign for each week, for each of 100 null runs,** as an array
    of weeks by draws.
 2. **Run the real selection and the null runs pooled within the weeks,**
-   with `po.gram.solve_subsets(..., within=True)` and, for the null runs,
+   with `rheon.gram.solve_subsets(..., within=True)` and, for the null runs,
    `target_signs=signs`. It returns one run of every half per draw.
    `target_signs` is refused without `within=True`, since pooled as a
    union a negated week's target mean would move the gaps between the
@@ -196,8 +196,8 @@ def frequencies(run):
 
 # 1 and 2. The selection on the real target, and on 100 draws of a sign for each week.
 signs = np.random.default_rng(2).choice([-1.0, 1.0], size=(n_weeks, 100))  # a sign per week, 100 draws
-real = po.gram.solve_subsets(blocks, halves, path={"max_active": 8}, within=True)
-null = po.gram.solve_subsets(blocks, halves, path={"max_active": 8}, within=True, target_signs=signs)
+real = rp.gram.solve_subsets(blocks, halves, path={"max_active": 8}, within=True)
+null = rp.gram.solve_subsets(blocks, halves, path={"max_active": 8}, within=True, target_signs=signs)
 
 # 3. Each column's frequency, and a threshold from the null runs' most chosen column.
 freq = dict(zip(features, frequencies(real)))
@@ -251,11 +251,11 @@ signs.
    merges no matrix.
 2. **Make a job for each half and draw:** a mapping of `"subset"`,
    `"target"`, `"draw"` and `"features"`, the screen's columns.
-3. **Run every job in one call, with `po.gram.solve_subsets(...,
+3. **Run every job in one call, with `rheon.gram.solve_subsets(...,
    jobs=jobs)`.** It returns a path per job, in order. Each half is merged
    once, on every column its jobs read, and each draw re-pools that
-   half's cross-moments once. A job's path is the one `po.gram.lars_path`
-   gives on `po.gram.subset(po.gram.merge(half_grams, within=True),
+   half's cross-moments once. A job's path is the one `rheon.gram.lars_path`
+   gives on `rheon.gram.subset(rheon.gram.merge(half_grams, within=True),
    ["intercept", *features])`, with each week's cross-moments times its
    sign in the draw, to the bit.
 4. **Set the threshold from the null draws, as in [Set the threshold from
@@ -288,7 +288,7 @@ for s, half in enumerate(halves):
         jobs.append({"subset": s, "draw": d, "target": "y", "features": [features[j] for j in screen]})
 
 # 3. Every half's path under every draw on its own screen, in one call: a path per job, in order.
-runs = po.gram.solve_subsets(
+runs = rp.gram.solve_subsets(
     blocks, halves, path={"max_active": 8}, within=True, target_signs=signs, jobs=jobs
 )
 

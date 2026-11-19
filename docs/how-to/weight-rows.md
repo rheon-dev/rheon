@@ -49,14 +49,14 @@ finds the weight unchanged. It reads `df` from [Example
 data](../EXAMPLE-DATA.md):
 
 ```python
-weighted = po.spec.ewridge(
+weighted = rp.spec.ewridge(
     "weighted", targets=["y"], features=["x0", "x1"], half_life=float("inf"),
     weight="w",                # 1. a column of row weights
 )
 # Row 100 weighs nothing; then every weight times 10.
 ones = df.with_columns(w=pl.when(pl.int_range(pl.len()) == 100).then(0.0).otherwise(1.0))
 tens = ones.with_columns(pl.col("w") * 10)
-fields = [po.ModelBank([weighted]).fit_predict(frame)["weighted"].struct for frame in (ones, tens)]   # 3. fit each
+fields = [rp.ModelBank([weighted]).fit_predict(frame)["weighted"].struct for frame in (ones, tens)]   # 3. fit each
 # The rows around row 100, and what the scaling moved.
 for row in [99, 100, 101, 102]:
     print(f"row {row}: pred_y {fields[0].field('pred_y')[row]:.4f}, weight_sum {fields[0].field('weight_sum')[row]:g}")

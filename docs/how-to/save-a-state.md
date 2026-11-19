@@ -31,7 +31,7 @@ at all, and the same to the byte whichever way wrote it:
 
 | run by | saves with | loads with |
 |---|---|---|
-| a bank object | `bank.save(path)`, or `bank.save_bytes()` for a store that is not a file | `po.ModelBank.load(path)`, or `po.ModelBank.load_bytes(blob)` |
+| a bank object | `bank.save(path)`, or `bank.save_bytes()` for a store that is not a file | `rp.ModelBank.load(path)`, or `rp.ModelBank.load_bytes(blob)` |
 | a [query](../GLOSSARY.md#the-model-bank-and-what-it-reads) (a Polars `LazyFrame`, which runs only when you ask for its result) | `save_state=` on `online.fit_predict` | `load_state=` on `online.fit_predict`, or the path given to `online.predict` |
 | the command line | `--save-state` | `--load-state` |
 
@@ -52,19 +52,19 @@ state is read when the query is built and written whole or not at all.
 3. **Serve from the file with `online.predict(path)`.**
 4. **Continue from the file with `load_state=`,** naming the same file in
    `save_state=` to save again.
-5. **Load the file into a bank object with `po.ModelBank.load`,** or its
-   bytes with `po.ModelBank.load_bytes`, which reads them as it reads a
+5. **Load the file into a bank object with `rp.ModelBank.load`,** or its
+   bytes with `rp.ModelBank.load_bytes`, which reads them as it reads a
    file.
 
 This code saves a state from a query and uses it in each of those ways. It
 uses `lf` and `later` from [Example data](../EXAMPLE-DATA.md):
 
 ```python
-spec = po.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], clock="t", half_life=600.0, gap_cap=300.0)
+spec = rp.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], clock="t", half_life=600.0, gap_cap=300.0)
 lf.rheon.fit_predict([spec], save_state="bank.state").sink_parquet("fitted.parquet")             # 1 and 2: fit, then save at the last row
 served = later.rheon.predict("bank.state").collect()                                             # 3: serve from the file
 later.rheon.fit_predict(load_state="bank.state", save_state="bank.state").sink_parquet("more.parquet")  # 4: the next rows: continue, save again
-bank = po.ModelBank.load_bytes(po.ModelBank.load("bank.state").save_bytes(), specs=[spec])         # 5: bytes load as a file does
+bank = rp.ModelBank.load_bytes(rp.ModelBank.load("bank.state").save_bytes(), specs=[spec])         # 5: bytes load as a file does
 ```
 
 To load a saved state and go on learning, from Python or the command line,
@@ -96,7 +96,7 @@ This code runs two days, each with its own state file. It uses `lf` and
 `later` from [Example data](../EXAMPLE-DATA.md):
 
 ```python
-spec = po.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], clock="t", half_life=600.0, gap_cap=300.0)
+spec = rp.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], clock="t", half_life=600.0, gap_cap=300.0)
 (lf.rheon.fit_predict([spec], save_state="bank-2024-01-02.state")   # the first day, and a state file of its own
    .sink_parquet("fitted-2024-01-02.parquet"))
 (later.rheon.fit_predict(load_state="bank-2024-01-02.state",        # the next day loads the one before ...
@@ -133,7 +133,7 @@ shows how.
 
 ## Check that it worked
 
-**Load the file with `po.ModelBank.load`, and read what the bank says it
+**Load the file with `rp.ModelBank.load`, and read what the bank says it
 holds.** The file alone is enough, since it carries its specs. This code
 reads `bank-2024-01-02.state` and `bank-2024-01-03.state`, which [Give
 each day's input its own state
@@ -142,7 +142,7 @@ file](#give-each-days-input-its-own-state-file) saved from `lf` and
 
 ```python
 for day in ["2024-01-02", "2024-01-03"]:
-    print(day, po.ModelBank.load(f"bank-{day}.state"))   # the specs, the groups, and the rows fed so far
+    print(day, rp.ModelBank.load(f"bank-{day}.state"))   # the specs, the groups, and the rows fed so far
 ```
 
 ```text

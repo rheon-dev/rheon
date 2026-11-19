@@ -19,7 +19,7 @@ These steps need the library and a bank's output:
 
 ## Score the output by spec, group and window
 
-`po.eval` reads each [slot](../GLOSSARY.md#grids)'s
+`rp.eval` reads each [slot](../GLOSSARY.md#grids)'s
 [out-of-sample](../explanation/out-of-sample.md) predictions beside its
 target, and gives R², IC (the correlation of prediction with target), hit
 rate (the share of rows whose sign the prediction got right) and MSE.
@@ -31,18 +31,18 @@ defines each, and what they mean on a logistic fit.
    this one take either, and read a query a chunk at a time ([Score an
    output too large to hold](#score-an-output-too-large-to-hold)).
 2. **Compare several specs in one table with
-   `po.eval.compare_specs(out, [...])`.** It gives one row per spec and
+   `rp.eval.compare_specs(out, [...])`.** It gives one row per spec and
    slot.
-3. **Score one spec per group with `po.eval.metrics(out, spec,
+3. **Score one spec per group with `rp.eval.metrics(out, spec,
    group=...)`.**
 4. **Score one spec over windows of the clock with
-   `po.eval.window_metrics(out, spec, clock=..., every=...)`.** Each window
+   `rp.eval.window_metrics(out, spec, clock=..., every=...)`.** Each window
    is a tumbling span of `every` clock units, from `window_start`.
 5. **Test whether the difference between two specs is more than noise,**
-   with `po.eval.diebold_mariano` or `po.eval.seqtest` ([Compare two
+   with `rp.eval.diebold_mariano` or `rp.eval.seqtest` ([Compare two
    models](compare-two-models.md)).
 
-For a `group_by` of your own, `po.eval.unpack(out, "ridge")` gives one row
+For a `group_by` of your own, `rp.eval.unpack(out, "ridge")` gives one row
 per row and slot, with its target, `pred` and `y`. This code fits a ridge
 and a Kalman filter over three stocks whose coefficients wander, and
 scores them each way:
@@ -51,7 +51,7 @@ scores them each way:
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # Three stocks, a row a second each, y = b x0 + 0.5 x1 + noise, where each stock's b wanders.
 rng = np.random.default_rng(13)
@@ -71,21 +71,21 @@ stocks = pl.scan_parquet("stocks.parquet")
 
 # 1. A ridge and a Kalman filter over the same three stocks.
 common = dict(targets=["y"], features=["x0", "x1"], clock="t", gap_cap=5.0, group="stock")
-ridge = po.spec.ewridge("ridge", half_life=500.0, **common)
-kalman = po.spec.kalman("kalman", half_life=500.0, coef_half_life=100.0, **common)  # coefficients that drift
+ridge = rp.spec.ewridge("ridge", half_life=500.0, **common)
+kalman = rp.spec.kalman("kalman", half_life=500.0, coef_half_life=100.0, **common)  # coefficients that drift
 out = stocks.rheon.fit_predict([ridge, kalman]).collect()
 
 # 2. One table, many specs: which had the lower error?
-for spec, n_, r2, ic, hit, mse in po.eval.compare_specs(out, [ridge, kalman]).select("spec", "n", "r2", "ic", "hit_rate", "mse").iter_rows():
+for spec, n_, r2, ic, hit, mse in rp.eval.compare_specs(out, [ridge, kalman]).select("spec", "n", "r2", "ic", "hit_rate", "mse").iter_rows():
     print(f"{spec:7} {n_} rows: R² {r2:.4f}, IC {ic:.4f}, hit rate {hit:.4f}, mse {mse:.4f}")
 # 3 and 4. The same metrics per group, and per tumbling window of the clock.
-for stock, r2 in po.eval.metrics(out, "ridge", group="stock").select("stock", "r2").iter_rows():
+for stock, r2 in rp.eval.metrics(out, "ridge", group="stock").select("stock", "r2").iter_rows():
     print(f"ridge on {stock}: R² {r2:.4f}")
-for start, r2 in po.eval.window_metrics(out, "ridge", clock="t", every=5_000.0).select("window_start", "r2").iter_rows():
+for start, r2 in rp.eval.window_metrics(out, "ridge", clock="t", every=5_000.0).select("window_start", "r2").iter_rows():
     print(f"ridge from t = {start:>6.0f}: R² {r2:.4f}")
 # 5. Is kalman closer? Diebold and Mariano's t, and the evidence by betting at the last row.
-dm, p = po.eval.diebold_mariano(out, a="kalman", b="ridge").select("dm", "p_value").row(0)
-log_e = po.eval.seqtest(out, a="kalman", b="ridge").select(pl.col("seqtest").struct.field("log_e_a_y")).max().item()
+dm, p = rp.eval.diebold_mariano(out, a="kalman", b="ridge").select("dm", "p_value").row(0)
+log_e = rp.eval.seqtest(out, a="kalman", b="ridge").select(pl.col("seqtest").struct.field("log_e_a_y")).max().item()
 print(f"kalman against ridge: dm {dm:.2f}; the betting evidence peaked at log_e_a {log_e:.2f} (ln 20 = 3.00)")
 ```
 
@@ -114,7 +114,7 @@ holds the fit's warm-up.
 ## Score an output too large to hold
 
 When the output is too large to hold, say fifty slots over a billion rows,
-give `po.eval.metrics` the query in place of its result. A query runs only
+give `rp.eval.metrics` the query in place of its result. A query runs only
 when its result is asked for, and `metrics` runs it once and reads the
 result a chunk at a time, keeping ten numbers per slot and group.
 
@@ -127,17 +127,17 @@ to one block, it held 205 and 208 MiB:
 [Cut what Polars reads ahead](bound-memory.md#cut-what-polars-reads-ahead)
 says how.
 
-1. **Write the bank's query, `query.online.fit_predict([spec])`,** or
+1. **Write the bank's query, `query.rheon.fit_predict([spec])`,** or
    scan a file a run wrote its output to, with `pl.scan_parquet`.
-2. **Pass the query to `po.eval.metrics(query, spec, group=...)`.** It
+2. **Pass the query to `rp.eval.metrics(query, spec, group=...)`.** It
    returns the same table as for the output held in memory, within the
-   rounding of adding the chunks' sums. Every other `po.eval` call that
+   rounding of adding the chunks' sums. Every other `rp.eval` call that
    reads a bank's output takes a query the same way: `window_metrics`,
    `compare_specs`, `diebold_mariano`, `clark_west`, `seqtest`, `unpack`,
    and `sums`, which takes `weight=` to weight the rows by a column.
 3. **To add up the scores of several runs, such as one output file a day,
-   reduce each with `po.eval.sums`, add them with `po.eval.merge_sums`,
-   and read the metrics with `po.eval.from_sums`.** The total is the same,
+   reduce each with `rp.eval.sums`, add them with `rp.eval.merge_sums`,
+   and read the metrics with `rp.eval.from_sums`.** The total is the same,
    to rounding, however the rows were split.
 
 The sums are centered, so a target far from zero keeps its variance,
@@ -155,13 +155,13 @@ pl.DataFrame(
 ).write_parquet("far.parquet")
 far = pl.scan_parquet("far.parquet")
 
-ridge = po.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], half_life=500.0, group="stock")
+ridge = rp.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], half_life=500.0, group="stock")
 
 # 1 and 2. The bank's query, scored a chunk at a time: one chunk and a few sums per stock are held.
-streamed = po.eval.metrics(far.rheon.fit_predict([ridge]), ridge, group="stock")
+streamed = rp.eval.metrics(far.rheon.fit_predict([ridge]), ridge, group="stock")
 
 # The same metrics from the whole output held in memory, for comparison.
-held = po.eval.metrics(far.rheon.fit_predict([ridge]).collect(), "ridge", group="stock")
+held = rp.eval.metrics(far.rheon.fit_predict([ridge]).collect(), "ridge", group="stock")
 for (stock, n_, r2, mse), (r2_held, mse_held) in zip(
     streamed.select("stock", "n", "r2", "mse").iter_rows(), held.select("r2", "mse").iter_rows()
 ):
@@ -170,8 +170,8 @@ for (stock, n_, r2, mse), (r2_held, mse_held) in zip(
 # 3. The output written to a file, its two halves reduced apart, as two runs' files would be, and added up.
 far.rheon.fit_predict([ridge]).sink_parquet("far_out.parquet")
 written = pl.scan_parquet("far_out.parquet")
-halves = [po.eval.sums(written.head(n // 2), ridge, group="stock"), po.eval.sums(written.tail(n // 2), ridge, group="stock")]
-added = po.eval.from_sums(po.eval.merge_sums(*halves))
+halves = [rp.eval.sums(written.head(n // 2), ridge, group="stock"), rp.eval.sums(written.tail(n // 2), ridge, group="stock")]
+added = rp.eval.from_sums(rp.eval.merge_sums(*halves))
 print(", ".join(f"{stock} R² {r2:.6f}" for stock, r2 in added.select("stock", "r2").iter_rows()), "from the two halves")
 ```
 
@@ -191,7 +191,7 @@ reads ahead of it.
 
 The output frame does not record how a target was formed, so a call
 given a spec's name scores each slot against the column named after the
-slot's target. A target renamed with `po.target(column, name=...)` names
+slot's target. A target renamed with `rheon.target(column, name=...)` names
 no column, so give the call the spec itself.
 
 1. **Pass the spec dict in place of its name** to `metrics`,
@@ -200,7 +200,7 @@ no column, so give the call the spec itself.
    reads.
 2. **For a target that looks ahead, a
    [formula target](../GLOSSARY.md#fitting-a-model), add its column with
-   `po.stream.with_windows(out, expr, like=spec)` before scoring.** Here
+   `rp.stream.with_windows(out, expr, like=spec)` before scoring.** Here
    `expr` is the expression you gave in `targets=`, aliased to the
    target's name (the slot `pred_<name>` less its `pred_`). The bank computes the target
    as it learns and does not write it out, so the call scores the slot
@@ -213,18 +213,18 @@ uses `stocks` from the code in [Score the output by spec, group and
 window](#score-the-output-by-spec-group-and-window):
 
 ```python
-# 1. A target renamed with po.target: its fields say "ret", but its column is y.
-renamed = po.spec.ewridge(
-    "renamed", targets=[po.target("y", name="ret")], features=["x0", "x1"], clock="t", gap_cap=5.0, half_life=500.0,
+# 1. A target renamed with rp.target: its fields say "ret", but its column is y.
+renamed = rp.spec.ewridge(
+    "renamed", targets=[rp.target("y", name="ret")], features=["x0", "x1"], clock="t", gap_cap=5.0, half_life=500.0,
     group="stock",
 )
 out = stocks.rheon.fit_predict([renamed]).collect()
 try:
-    po.eval.metrics(out, "renamed")  # by name: no column is named ret
+    rp.eval.metrics(out, "renamed")  # by name: no column is named ret
 except ValueError as e:
     print(f"{type(e).__name__}: {e}")
 # The spec itself: each slot scored against the column its target reads.
-slot, n_, r2 = po.eval.metrics(out, renamed).select("slot", "n", "r2").row(0)
+slot, n_, r2 = rp.eval.metrics(out, renamed).select("slot", "n", "r2").row(0)
 print(f"{slot}: {n_} rows, R² {r2:.4f}")
 ```
 
@@ -243,7 +243,7 @@ Check the scores against what the run should give:
 
 | what you see | what it means | what to do |
 |---|---|---|
-| a call says no column of the frame is named after a slot, or that the frame has no column for a formula target | a target was renamed with `po.target(..., name=)`, or the target is a formula target, which looks ahead, so the bank does not write it out | for a renamed target, pass the spec dict in place of its name, or a list of spec dicts to `compare_specs`; for a formula target, add its column with `po.stream.with_windows` before scoring, as step 2 of [Score a target that is renamed or looks ahead](#score-a-target-that-is-renamed-or-looks-ahead) does |
-| two specs scored on different numbers of rows | each spec is scored on its own rows, and their warm-ups differ in length | compare them with `po.eval.diebold_mariano`, which reads only the rows where both have a residual |
+| a call says no column of the frame is named after a slot, or that the frame has no column for a formula target | a target was renamed with `rheon.target(..., name=)`, or the target is a formula target, which looks ahead, so the bank does not write it out | for a renamed target, pass the spec dict in place of its name, or a list of spec dicts to `compare_specs`; for a formula target, add its column with `rp.stream.with_windows` before scoring, as step 2 of [Score a target that is renamed or looks ahead](#score-a-target-that-is-renamed-or-looks-ahead) does |
+| two specs scored on different numbers of rows | each spec is scored on its own rows, and their warm-ups differ in length | compare them with `rp.eval.diebold_mariano`, which reads only the rows where both have a residual |
 | the first window's R² well below the rest | the window holds the fit's warm-up | read the windows after it, or set a gate ([Decide when a model is ready](decide-when-a-model-is-ready.md)) |
 | a `hit_rate` of 1.0 whatever the fit | the target sits about 1, as a plain ratio does, where two positive numbers always agree | write the target to sit about zero, as the ratio less 1 or its `.log()` |

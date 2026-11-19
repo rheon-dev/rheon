@@ -49,7 +49,7 @@ scaled to the same standard deviation:
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # The same relation twice, once with Gaussian noise and once with Student's t at 3 degrees of
 # freedom scaled to the same standard deviation.
@@ -62,7 +62,7 @@ streams = pl.scan_parquet("width.parquet")
 
 # 1. One ridge per stream, with each of the three intervals.
 specs = [
-    po.spec.ewridge(
+    rp.spec.ewridge(
         k, targets=[f"y_{k}"], features=["x0", "x1"], half_life=500.0,
         emit_sigma=True,  # sigma: for the Gaussian interval pred ± 1.645 sigma
         resid_quantiles=[0.9],  # abs_resid_q0.9: the exponentially weighted 90% quantile of |resid|
@@ -157,7 +157,7 @@ print(f"{'targets':16} {'rate':>5} {'covered':>8} {'half-width':>11}")
 for delay, embargo in (("at once", {}), ("300 units later", {"embargo": 300.0})):
     for rate in (0.05, "auto"):
         # 1 and 2. The same ridge, with the targets at once or 300 units later, at each rate.
-        spec = po.spec.ewridge("late", conformal_rate=rate, **embargo, **common)
+        spec = rp.spec.ewridge("late", conformal_rate=rate, **embargo, **common)
         rows = late.rheon.fit_predict([spec]).slice(10_000).collect().select("y", pl.col("late").struct.unnest())
         # 3. The share of rows covered, and the mean half-width.
         covered, width = rows.select(

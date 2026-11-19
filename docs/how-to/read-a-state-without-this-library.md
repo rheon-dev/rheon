@@ -20,7 +20,7 @@ These steps need the library, to export the state, and a JSON reader:
   `df`, a frame of 400 rows with the features `x0` and `x1` and the target
   `y`.
 - A bank that has learned from rows, or a state file loaded with
-  `po.ModelBank.load` ([Save a state](save-a-state.md)).
+  `rp.ModelBank.load` ([Save a state](save-a-state.md)).
 - A JSON reader in the program that reads the export. The example uses
   Python's `json` module.
 
@@ -32,7 +32,7 @@ Export the state from Python, and read the JSON in the other program.
    or write it to a file with `bank.write_json(path)`. Every export is read
    back and checked against the state before you get it, and one that does
    not match raises `ValueError`.
-2. **Keep the binary file too, for resuming,** since `po.ModelBank.load`
+2. **Keep the binary file too, for resuming,** since `rp.ModelBank.load`
    reads only that form.
 3. **Parse the JSON with any reader.**
 4. **Turn the strings `"nan"`, `"inf"` and `"-inf"` back into numbers.**
@@ -47,7 +47,7 @@ data](../EXAMPLE-DATA.md):
 ```python
 import json
 
-bank = po.ModelBank([po.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], half_life=float("inf"))])
+bank = rp.ModelBank([rp.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], half_life=float("inf"))])
 bank.fit_predict(df)
 text = bank.write_json()                  # 1. everything save() writes, as JSON
 bank.write_json("bank.json")              # 1. the same, to a file

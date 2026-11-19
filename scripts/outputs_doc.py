@@ -402,18 +402,18 @@ OPTIONAL: list[tuple[str, str]] = [
         "`ew_cov`'s extra `stats`, its `lags` (`lag_corr_l<l>_<a>_<b>`), `pca` (`pc<j>_*`) and "
         "`mahal_quantiles` (`mahal_q<p>`)",
         "its own [section](MODELS.md#ew_cov--exponentially-weighted-moments) and its "
-        "[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.ew_cov)",
+        "[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ew_cov)",
     ),
     (
         "`seqtest`'s `a` and `b`, which replace its four fields with `log_e_a_<t>`, "
         "`log_e_b_<t>`, `wins_a_<t>` and `wins_b_<t>`",
         "its own [section](MODELS.md#seqtest--a-sequential-test-of-a-sign-by-betting) and its "
-        "[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.seqtest)",
+        "[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.seqtest)",
     ),
     (
         "`deco`'s named blocks, which turn `u` and `rho` into one field per block and pair of "
         "blocks",
-        "its [docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.deco)",
+        "its [docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.deco)",
     ),
 ]
 CLOCK_FIELDS: list[tuple[str, str, str]] = [

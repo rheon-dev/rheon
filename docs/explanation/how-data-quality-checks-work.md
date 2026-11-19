@@ -31,7 +31,7 @@ so `check()` sees only the groups still open, and an audit refuses
 
 **An audit counts what a model does not keep.** A model skips a row whose
 feature is missing, so it never sees the row. An audit, the spec
-`po.spec.audit`, learns nothing: it reads every row of its columns and
+`rheon.spec.audit`, learns nothing: it reads every row of its columns and
 counts nulls, NaNs and infinities apart. It also counts repeated values,
 runs of one value, persistence like a random walk's, heavy tails,
 duplicated columns and the clock's stamps. Its memory does not grow with

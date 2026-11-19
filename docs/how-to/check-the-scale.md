@@ -68,7 +68,7 @@ rescaling:
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # Twenty features, of which two matter: y = 1.0 x0 + 0.5 x1 + noise.
 rng = np.random.default_rng(1)
@@ -82,9 +82,9 @@ wide = pl.scan_parquet("wide.parquet")
 # 1. The three fits, each with its calibration: too much ridge, too short a memory, and neither fault.
 common = dict(targets=["y"], features=features, clock="t", gap_cap=5.0, emit_calibration=True)
 specs = [
-    po.spec.ewridge("shrunk", half_life=2_000.0, ridge=1.0, **common),  # a ridge the size of each feature's variance
-    po.spec.ewridge("overfit", half_life=30.0, **common),  # 21 coefficients on about 87 rows' worth
-    po.spec.ewridge("steady", half_life=2_000.0, **common),
+    rp.spec.ewridge("shrunk", half_life=2_000.0, ridge=1.0, **common),  # a ridge the size of each feature's variance
+    rp.spec.ewridge("overfit", half_life=30.0, **common),  # 21 coefficients on about 87 rows' worth
+    rp.spec.ewridge("steady", half_life=2_000.0, **common),
 ]
 # 2. Run the query, from row 9,000: every calibration has started there.
 out = wide.rheon.fit_predict(specs).slice(9_000).collect()

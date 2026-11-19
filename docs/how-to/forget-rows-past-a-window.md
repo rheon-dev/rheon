@@ -92,9 +92,9 @@ coefficient on `signal_a` is −0.8 over the last 200 rows:
 # The same screen over every row, and over a hard window of the last 100 units of t.
 common = dict(targets=["ret"], features=["signal_a", "signal_b"], clock="t", gap_cap=300.0,
               half_life=float("inf"))                      # equal weights
-whole = po.spec.marginal("whole", **common)
-recent = po.spec.marginal("recent", window_size=100.0, **common)
-bank = po.ModelBank([whole, recent])
+whole = rp.spec.marginal("whole", **common)
+recent = rp.spec.marginal("recent", window_size=100.0, **common)
+bank = rp.ModelBank([whole, recent])
 bank.fit(pl.scan_parquet("ticks.parquet"))                  # learn, and keep only the state
 # Each screen's beta and t_stat on signal_a, beside the planted -0.8.
 for name in ("whole", "recent"):
@@ -156,7 +156,7 @@ the rows between snapshots.
    grows within the chunk, as an `ewridge`'s or a `lasso`'s does when its
    targets first go missing on different rows. After either, the bank
    refuses every call that follows, so rebuild it from its last save with
-   `po.ModelBank.load`.
+   `rp.ModelBank.load`.
 
 ## Check the result
 
@@ -174,8 +174,8 @@ data](../EXAMPLE-DATA.md):
 # A flat hard window of the last 100 units of t, and the same spec on those rows alone.
 common = dict(targets=["ret"], features=["signal_a"], clock="t", gap_cap=300.0,
               half_life=float("inf"), coef_every=0)          # the coefficients on every row
-windowed = po.spec.ewridge("windowed", window_size=100.0, **common)
-alone = po.spec.ewridge("alone", **common)
+windowed = rp.spec.ewridge("windowed", window_size=100.0, **common)
+alone = rp.spec.ewridge("alone", **common)
 in_window = pl.scan_parquet("ticks.parquet").rheon.fit_predict([windowed]).collect()
 last_t = pl.scan_parquet("ticks.parquet").select(pl.col("t").max()).collect().item()
 # A filter before the bank costs memory on a large file; here it chooses the rows to fit, on a small one.

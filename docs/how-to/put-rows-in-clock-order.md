@@ -95,14 +95,14 @@ one, so every chunk the bank takes is in order.
 
    # A fee per venue, and a spec that reads it.
    pl.DataFrame({"venue": ["X", "Y"], "fee": [0.1, 0.2]}).write_parquet("fees.parquet")
-   priced = po.spec.ewridge("priced", targets=["y"], features=["x0", "fee"], half_life=100.0)
+   priced = rp.spec.ewridge("priced", targets=["y"], features=["x0", "fee"], half_life=100.0)
    # Join both ways, and print the bank's warning, if any.
    for order in [None, "left"]:
        joined = lf.join(pl.scan_parquet("fees.parquet"), on="venue", **({"maintain_order": order} if order else {}))
        with warnings.catch_warnings(record=True) as caught:
            warnings.simplefilter("always")
            joined.rheon.fit_predict([priced]).collect()
-       said = [str(w.message) for w in caught if issubclass(w.category, po.OrderNotGuaranteedWarning)]
+       said = [str(w.message) for w in caught if issubclass(w.category, rp.OrderNotGuaranteedWarning)]
        print(f"maintain_order={order!r}:", textwrap.fill(said[0], 100) if said else "no warning")
    ```
 
@@ -119,7 +119,7 @@ one, so every chunk the bank takes is in order.
    The warning never stops a run. It can miss a step: a query that Polars
    cannot write out for the check to read passes in silence. For a query
    whose order you know, silence the warning with
-   `warnings.simplefilter("ignore", po.OrderNotGuaranteedWarning)`.
+   `warnings.simplefilter("ignore", rp.OrderNotGuaranteedWarning)`.
 
 ## Check the result
 
@@ -161,7 +161,7 @@ bank. Under `fit_predict_batches`, `fit`, a query or the command line, the
 chunks before the refused one have been learned, so correct the input and
 run it again from the start. If the bank was loaded from a [saved
 state](../GLOSSARY.md#saving-and-serving), start again from that state:
-load it with `po.ModelBank.load` and pass the corrected input through
+load it with `rp.ModelBank.load` and pass the corrected input through
 `bank.skip_learned` (for a query, then run it with `load_state=`), or, on
 the command line, give `--load-state` and `--skip-learned`. Otherwise, run
 it on a bank that starts with nothing learned. Choose the fix by what caused the step back:
@@ -182,23 +182,23 @@ then the same rows sorted, then a day replayed from its start under a
 import textwrap
 
 late = df.head(10)[[0, 1, 2, 3, 4, 5, 7, 8, 6, 9]]           # t runs 0 ... 5, 7, 8, 6, 9
-strict = po.spec.ewridge("strict", targets=["y"], features=["x0"], clock="t", half_life=100.0, gap_cap=300.0)
+strict = rp.spec.ewridge("strict", targets=["y"], features=["x0"], clock="t", half_life=100.0, gap_cap=300.0)
 # Rows not in clock order: refused.
 try:
-    po.ModelBank([strict]).fit_predict(late)
+    rp.ModelBank([strict]).fit_predict(late)
 except ValueError as err:
     print(textwrap.fill(str(err), 100, break_long_words=False, break_on_hyphens=False))   # the link kept whole
 
 # The same rows sorted: learned.
-bank = po.ModelBank([strict])
+bank = rp.ModelBank([strict])
 bank.fit_predict(late.sort("t"))
 print(f"sorted: {bank.summary()['rows_learned'][0]} rows learned")
 
 # A day replayed from its start: the model resets at the step back, and summary() counts both.
 replayed = pl.concat([df.head(6), df.head(4)])               # t runs 0 ... 5, then 0 ... 3 again
-lenient = po.spec.ewridge("lenient", targets=["y"], features=["x0"], clock="t", half_life=100.0, gap_cap=300.0,
+lenient = rp.spec.ewridge("lenient", targets=["y"], features=["x0"], clock="t", half_life=100.0, gap_cap=300.0,
                           restart_after_step_back=1.0)       # a step back larger than 1 resets the model
-bank = po.ModelBank([lenient])
+bank = rp.ModelBank([lenient])
 bank.fit_predict(replayed)
 counts = bank.summary().row(0, named=True)
 print(f"replayed: clock_backwards {counts['clock_backwards']}, resets {counts['resets']}")

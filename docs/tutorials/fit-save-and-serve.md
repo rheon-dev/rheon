@@ -32,7 +32,7 @@ only, since their target is not known yet. Save each to a parquet file:
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 rng = np.random.default_rng(3)
 # The past rows: the planted answer is an intercept of 0.5, 1.5 on x0 and -2 on x1.
@@ -61,7 +61,7 @@ query is what saves the state, and `sink_parquet` runs it without holding
 the predictions in memory, so it writes them to a file:
 
 ```python
-spec = po.spec.ewridge(
+spec = rp.spec.ewridge(
     "ridge",                                     # the spec's name
     targets=["y"], features=["x0", "x1"],
     half_life=float("inf"),                      # every row counts the same
@@ -71,7 +71,7 @@ spec = po.spec.ewridge(
     .rheon.fit_predict([spec], save_state="ridge.state")   # the bank, which saves its state after the last row
     .sink_parquet("past_fitted.parquet")         # runs the query, writing the predictions to a file
 )
-print(f"the state is saved: {po.ModelBank.load('ridge.state')}")
+print(f"the state is saved: {rp.ModelBank.load('ridge.state')}")
 ```
 
 ```text
@@ -93,9 +93,9 @@ coefficients it holds:
 ```python
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
-bank = po.ModelBank.load("ridge.state")         # the bank, with everything it learned
+bank = rp.ModelBank.load("ridge.state")         # the bank, with everything it learned
 for term, coef in bank.coef().select("term", "coef").iter_rows():
     print(f"{term:>9} {coef:6.3f}")
 ```
@@ -111,7 +111,7 @@ place, read from the file alone.
 
 ## 4. Predict the new rows
 
-Serve the new rows from the state with the query's `.online.predict`. The
+Serve the new rows from the state with the query's `.rheon.predict`. The
 bank adds one [output column](../GLOSSARY.md#what-a-bank-writes) named
 after the spec, `ridge`, whose value in each row is a record of named
 [fields](../GLOSSARY.md#what-a-bank-writes). `pred_y` is the prediction of

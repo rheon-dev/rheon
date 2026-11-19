@@ -39,11 +39,11 @@ sit far from every center.
    weight, `log2(1/dead_frac)` half-lives after its cluster vanished: 4.3
    half-lives at the default, 0.05, and 2 at 0.25. Increase it when
    regimes change faster than that. It must stay below 0.5.
-3. **Build the spec with `po.spec.kmeans`,** giving `n_clusters`,
+3. **Build the spec with `rheon.spec.kmeans`,** giving `n_clusters`,
    `half_life` and `dead_frac`. Give `coef_every=0` too, to write every
    center on every row, as it stands after learning that row.
-4. **Run it with `pl.scan_parquet(...).online.fit_predict([km])`.**
-5. **Unnest the output with `.online.unnest([km])`.** Each row then has
+4. **Run it with `pl.scan_parquet(...).rheon.fit_predict([km])`.**
+5. **Unnest the output with `.rheon.unnest([km])`.** Each row then has
    `cluster`, the index of the nearest center, read before the row is
    learned, and every center as `coef_cluster<j>_<feature>`.
 
@@ -56,7 +56,7 @@ the vanished cluster reaches the new one, under three values of
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # Three clusters; at row 4,000 the one at (0, 6) stops and one at (6, 6) starts.
 rng = np.random.default_rng(6)
@@ -75,7 +75,7 @@ def distance(j, x, y):
 
 for dead_frac in (0.0, 0.05, 0.25):                           # 0 turns the rule off; 0.05 is the default
     # 2 and 3. The rule, and every center on every row.
-    km = po.spec.kmeans("km", features=["x", "y"], n_clusters=3, half_life=500.0,
+    km = rp.spec.kmeans("km", features=["x", "y"], n_clusters=3, half_life=500.0,
                         dead_frac=dead_frac, coef_every=0)
     # 4 and 5. Run, and unnest the centers into columns.
     out = pl.scan_parquet("swap.parquet").rheon.fit_predict([km]).rheon.unnest([km]).collect()
@@ -101,7 +101,7 @@ before the default's 4.3 half-lives have passed. The new rows sit far
 from every center at first, but each check counts them in their nearest
 center's radius as if they sat at the cut. So that radius widens until
 the center learns them and moves toward them. The Notes of `kmeans`'s
-[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.kmeans)
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.kmeans)
 give the rule, under *Far rows, split and merge*.
 
 ## Check that it worked
@@ -119,7 +119,7 @@ come to sit on a cluster that still has rows.
 
 The fields are defined in [OUTPUTS.md](../OUTPUTS.md#kmeans), and every
 parameter in `kmeans`'s
-[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.kmeans),
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.kmeans),
 whose Notes give the measurements behind `dead_frac`'s limit under *Dead
 centers*. [`kmeans` in
 MODELS.md](../MODELS.md#kmeans--exponentially-weighted-k-means) shows the

@@ -41,7 +41,7 @@ grows noisier as it grows less biased.
 ## The two ways out
 
 **A refresh grid samples the series only once each has ticked.**
-`po.stream.refresh_time` puts a refresh time at the first instant by which
+`rp.stream.refresh_time` puts a refresh time at the first instant by which
 every series has ticked since the previous refresh time, the refresh-time rule of
 Barndorff-Nielsen, Hansen, Lunde and Shephard (2011). No interval between
 two refresh times is one in which a series recorded nothing, so most shared moves
@@ -57,7 +57,7 @@ refresh grid and fits models on it.
 **The lag inversion reads every return, and sums the covariance the lags
 hold back.** The covariance the effect moves away from lag 0 is in the
 lagged cross-covariances, and `ew_cov(lags=...)` keeps those co-moments
-as it runs. `po.corr.epps_invert` sums them over lags up to `L − 1`, for a scale of
+as it runs. `rheon.corr.epps_invert` sums them over lags up to `L − 1`, for a scale of
 `L` rows, with
 the triangular weights of Tóth and Kertész (2009). Those weights make the
 sum the covariance of returns over `L` rows, taken from every window of
@@ -66,21 +66,21 @@ So it reads the correlation at a scale of `L` rows from every one-row
 return. `L` makes the same trade-off as the sampling interval: too small,
 and a shared move recorded more than `L − 1` rows apart is left out; too
 large, and the sum takes in the noise of many lags. Its formula is in the
-[docstring](https://hgilde.github.io/polars-online/corr.html#rheon.corr.epps_invert).
+[docstring](https://rheon-dev.github.io/rheon/corr.html#rheon.corr.epps_invert).
 
 ## The effect and both ways out on one stream
 
 This code plants a correlation of 0.8 between two series, each observed
-on about a quarter of the rows at random, with `po.sim.regimes`. It reads
+on about a quarter of the rows at random, with `rp.sim.regimes`. It reads
 the correlation by previous-tick sampling at three intervals, on the
 refresh grid, and by the lag inversion at `L = 64`:
 
 ```python
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # Two series whose returns correlate at 0.8, each observed on about a quarter of the rows.
-sim = po.sim.regimes(2, states=[0.8], transition=[[1.0]], n_blocks=1, rows_per_block=40_000,
+sim = rp.sim.regimes(2, states=[0.8], transition=[[1.0]], n_blocks=1, rows_per_block=40_000,
                      async_rates=[0.25, 0.25], seed=7)
 sim["rows"].select("t", "x_1", "x_2").write_parquet("own_ticks.parquet")
 own_ticks = pl.read_parquet("own_ticks.parquet")
@@ -91,16 +91,16 @@ for step in (1, 10, 100):
     print(f"previous tick, every {step:>3} rows: corr {moves.corr()['x_1'][1]:.3f} from {moves.height} returns")
 # The refresh grid: a refresh time once both series have ticked.
 long = own_ticks.unpivot(index="t", variable_name="series", value_name="px").drop_nulls().sort("t")
-grid = po.stream.refresh_time(long, series="series", names=["x_1", "x_2"], clock="t", value="px")
+grid = rp.stream.refresh_time(long, series="series", names=["x_1", "x_2"], clock="t", value="px")
 moves = grid.select(pl.col("x_1_value", "x_2_value").diff()).drop_nulls()
 print(f"refresh grid:              corr {moves.corr()['x_1_value'][1]:.3f} from {moves.height} returns")
 # The lag inversion: every one-row return, with the lagged co-moments summed over L rows.
 ones = last.select(pl.all().diff()).drop_nulls()
 L = 64
-lagged = po.spec.ew_cov("c", features=["x_1", "x_2"], half_life=float("inf"), stats=[], lags=list(range(1, L)))
-bank = po.ModelBank([lagged])
+lagged = rp.spec.ew_cov("c", features=["x_1", "x_2"], half_life=float("inf"), stats=[], lags=list(range(1, L)))
+bank = rp.ModelBank([lagged])
 bank.fit_predict(ones)
-print(f"lag inversion, L = {L}:      corr {po.corr.epps_invert(bank.gram('c')[0], L=L)[0, 1]:.3f} from {ones.height} returns")
+print(f"lag inversion, L = {L}:      corr {rp.corr.epps_invert(bank.gram('c')[0], L=L)[0, 1]:.3f} from {ones.height} returns")
 ```
 
 ```text

@@ -258,7 +258,7 @@ README's map, *Where to go next*, links the index before anything else,
 and then gives a row for each reader task, linking that task's pages of
 each kind. `tests/test_feature_index.py` holds the index to the public
 API, read from the API snapshot (`tests/api_surface.txt`) and from
-`po.spec`'s builders. A public name added without a line in the index
+`rheon.spec`'s builders. A public name added without a line in the index
 fails it, and so does a line with no link. Every new page also joins
 `docs/README.md`'s index of documents, under its kind. This rule replaced
 the user's rule of 2026-10-10 that every guide has a README section with a
@@ -274,7 +274,7 @@ explained that `repr(bank)` shows its specs and groups, that
 `bank.groups()` lists every group with its row count, and that
 `bank.drop_groups(...)` forgets the quiet ones. It is now a code block
 with comments.
-So is a paragraph that walks through a call's forms: *`po.target("price_5m",
+So is a paragraph that walks through a call's forms: *`rheon.target("price_5m",
 relative_to="mid")` is the target `price_5m − mid` … In the CLI's TOML it
 is a table* became three targets in one spec, a comment on each scale.
 `relative_to` was later removed, and the example became the same targets
@@ -364,9 +364,9 @@ setting has its value, so the code reads without the prose beside it.
 **An example builds a thing in Polars' own terms when the library takes
 them.** Where a spec takes a Polars expression, the example writes one, and
 a helper that does the same job comes second, if at all. The user found the
-expressions clearer than `po.target("price_5m", relative_to="mid")`, and
+expressions clearer than `rheon.target("price_5m", relative_to="mid")`, and
 that helper was removed for the `with_columns` expression that does its
-job. An expression such as `(po.ewm_mean("price", ..., reverse=True) -
+job. An expression such as `(rp.ewm_mean("price", ..., reverse=True) -
 pl.col("mid")).alias("fwd_move")` shows what is computed and over which
 rows, in a language the reader already knows.
 
@@ -607,7 +607,7 @@ user's own wording is the model, beside the draft it replaced:
 
 | the draft | the user's wording |
 |---|---|
-| *its first argument is the spec's own name, which its output column takes* | *the name of the spec (the first parameter) is used to name the output column, for example* `po.spec.ewridge("ridge", ...)` *adds a column named* `ridge` |
+| *its first argument is the spec's own name, which its output column takes* | *the name of the spec (the first parameter) is used to name the output column, for example* `rheon.spec.ewridge("ridge", ...)` *adds a column named* `ridge` |
 
 The draft's last clause is turned around, so the reader rebuilds the
 sentence before reading it.
@@ -693,7 +693,7 @@ FILE.md` lists every hit of the eleven numbered ones, in this order:
 | 7. bold leads of the form *An X … is a Z* | a definition where a procedure belongs (§5) |
 | 8. nouns defined by what they lack (*that needs no*, *with no*) | a definition by negation, where the thing itself belongs (§5) |
 | 9. *first*, *later*, *earlier*, *upstream*, *downstream* with no reference, and *from here on*, *below* or *above* pointing into the document | a step, or a place, the reader must find for themselves (§5) |
-| 10. prose that names three or more of the library's own names (a parameter, a call, an output field or a quoted value) that no code block under the same heading shows, a parameter as `name=`, a call as `name(`, a value verbatim | a parameter, a structure or a call described where an example with comments belongs (§3). It ranked the `po.target` paragraph third of 25 on one README draft; about a third of what it lists should be code, and the rest are rules and lists of names |
+| 10. prose that names three or more of the library's own names (a parameter, a call, an output field or a quoted value) that no code block under the same heading shows, a parameter as `name=`, a call as `name(`, a value verbatim | a parameter, a structure or a call described where an example with comments belongs (§3). It ranked the `rheon.target` paragraph third of 25 on one README draft; about a third of what it lists should be code, and the rest are rules and lists of names |
 | 11. *exception* outside an error, *raise* meaning *increase*, table cells included | a word whose Python meaning the reader will hear first (§5) |
 
 The cost words, as one pattern for `grep -E`, are

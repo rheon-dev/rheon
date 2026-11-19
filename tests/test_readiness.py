@@ -1075,10 +1075,10 @@ class TestSettledWeight:
         # `df`'s sorted `x0` that this regression was found on is kept here.
         kernel = (
             'curve = df.sort("x0")\n'
-            'kernel = po.spec.ewridge("kernel", targets=["y"], features=["x0"], clock="x0",\n'
+            'kernel = rp.spec.ewridge("kernel", targets=["y"], features=["x0"], clock="x0",\n'
             "    half_life=0.5, gap_cap=1.0, max_rows_between_solves=1, coef_every=0,\n"
             "    min_weight=10.0)\n"
-            'fitted = po.ModelBank([kernel]).fit_predict(curve).unnest("kernel")\n'
+            'fitted = rp.ModelBank([kernel]).fit_predict(curve).unnest("kernel")\n'
         )
         local = block(
             "docs/how-to/fit-locally-along-a-feature.md", "## Fit a model locally along a feature"

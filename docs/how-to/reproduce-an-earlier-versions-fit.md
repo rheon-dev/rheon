@@ -92,7 +92,7 @@ writes its output to `huber-now.parquet`:
 
 ```python
 # huber as 1.2.0 fitted it: the residuals' root mean square as its scale, and no refit.
-as_in_1_2_0 = po.spec.huber("robust", targets=["y"], features=["x0", "x1"], clock="t", half_life=600.0, gap_cap=300.0,
+as_in_1_2_0 = rp.spec.huber("robust", targets=["y"], features=["x0", "x1"], clock="t", half_life=600.0, gap_cap=300.0,
                         huber_scale="rms",          # the scale before huber_scale existed
                         huber_refit_rows=0)         # no refit of the first rows
 pl.scan_parquet("ticks.parquet").rheon.fit_predict([as_in_1_2_0]).sink_parquet("huber-now.parquet")
@@ -119,9 +119,9 @@ same input.**
 
    ```python
    import polars as pl
-   from rheon import polars as po
+   from rheon import polars as rp
 
-   then_spec = po.spec.huber("robust", targets=["y"], features=["x0", "x1"], clock="t", half_life=600.0, gap_cap=300.0)
+   then_spec = rp.spec.huber("robust", targets=["y"], features=["x0", "x1"], clock="t", half_life=600.0, gap_cap=300.0)
    pl.scan_parquet("ticks.parquet").rheon.fit_predict([then_spec]).sink_parquet("huber-1.2.0.parquet")
    ```
 
