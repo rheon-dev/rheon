@@ -487,7 +487,7 @@ advance (E57's `"auto"` bandwidth, `k_n`) cannot have it — the spec takes
 
 Deliberately **not** asked for, and recorded so they are not added by
 accident: a live or real-time path; anything that looks ahead; a dependence
-measure other than Pearson; DCC/GARCH likelihood estimation (reversed by the user on 2026-11-19: now PLAN tasks 492-493); Hayashi–Yoshida
+measure other than Pearson (reversed by the user on 2026-11-19: now PLAN task 510); DCC/GARCH likelihood estimation (reversed by the user on 2026-11-19: now PLAN tasks 492-493); Hayashi–Yoshida
 as a model; a GAS model; and anything that would make `online-core` depend on
 Polars or numpy.
 
