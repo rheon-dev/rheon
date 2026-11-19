@@ -1,8 +1,8 @@
-"""Two PyPI projects from one source: ``polars-online`` and ``polars-online-compat``.
+"""Two PyPI projects from one source: ``rheon`` and ``rheon-compat``.
 
-The x86-64 wheels of ``polars-online`` are built for CPUs with AVX2, FMA and
+The x86-64 wheels of ``rheon`` are built for CPUs with AVX2, FMA and
 the rest of the feature set Polars builds its own default runtime for, and
-check the CPU when the package is imported. ``polars-online-compat`` is the
+check the CPU when the package is imported. ``rheon-compat`` is the
 same source, version and import name, built for every x86-64 CPU, and ships
 for the ARM platforms too, as Polars' ``polars-runtime-compat`` does. These
 tests hold what makes that so: the script that renames a checkout, and the
@@ -64,7 +64,7 @@ def test_the_rename_changes_the_distribution_and_nothing_that_names_the_code(tmp
     before = _project(REPO / "pyproject.toml")
     after = _project(tmp_path / "pyproject.toml")
     assert before["project"]["name"] == "rheon"
-    assert after["project"]["name"] == "polars-online-compat"
+    assert after["project"]["name"] == "rheon-compat"
     assert after["project"]["description"] == compat_package.COMPAT_DESCRIPTION
     # Everything else is the same: version, dependencies, the module the
     # wheel installs. The import name stays `rheon`.
@@ -80,8 +80,8 @@ def test_the_readme_of_the_compat_package_opens_with_a_notice_after_its_title(tm
     new = compat_package.prepend_notice(readme)
     lines = new.splitlines()
     title = next(i for i, line in enumerate(lines) if line.startswith("# "))
-    assert lines[title] == "# polars-online"
-    assert "polars-online-compat" in "\n".join(lines[title : title + 12])
+    assert lines[title] == next(line for line in readme.splitlines() if line.startswith("# "))
+    assert "rheon-compat" in "\n".join(lines[title : title + 12])
     # Nothing is lost: the original text follows the notice.
     assert new.endswith(readme.split("\n", title + 1)[title + 1].lstrip("\n"))
     with pytest.raises(ValueError, match="no `# ` title"):
@@ -102,13 +102,12 @@ def test_a_pyproject_whose_name_line_moved_is_refused():
 
 
 def test_the_compat_names_are_the_ones_the_workflow_uploads_and_verifies():
-    assert compat_package.COMPAT_NAME == "polars-online-compat"
-    assert wheel_smoke.DISTRIBUTIONS == ("polars-online", "polars-online-compat")
+    assert compat_package.COMPAT_NAME == "rheon-compat"
+    assert wheel_smoke.DISTRIBUTIONS == ("rheon", "rheon-compat")
     verify = _script("verify_release")
     assert verify.DISTRIBUTIONS == wheel_smoke.DISTRIBUTIONS
     from rheon import _cpu_check
 
-    # scripts/compat_package.py still names the old project; the packaging task renames it.
     assert _cpu_check.COMPAT_PACKAGE == "rheon-compat"
 
 
@@ -199,7 +198,7 @@ def test_the_compat_project_is_renamed_after_the_readme_and_before_the_build():
     steps = BUILD["steps"]
     names = [s.get("name", "") for s in steps]
     readme = names.index("the README's links point at GitHub, at this ref")
-    rename = names.index("the project is polars-online-compat")
+    rename = names.index("the project is rheon-compat")
     build = names.index("build the wheel")
     assert readme < rename < build
     step = steps[rename]
@@ -225,7 +224,7 @@ def test_each_wheel_is_smoke_tested_as_its_project_with_its_features():
     ):
         step = _step(BUILD, name)
         assert step["env"]["DISTRIBUTION"] == (
-            "${{ matrix.variant == 'compat' && 'polars-online-compat' || 'polars-online' }}"
+            "${{ matrix.variant == 'compat' && 'rheon-compat' || 'rheon' }}"
         )
         assert step["env"]["FEATURES"] == (
             "${{ matrix.x86 && matrix.variant == 'default' && env.X86_FEATURES || '' }}"
@@ -256,8 +255,8 @@ def test_both_projects_are_uploaded_from_their_own_folders_compat_first():
     job = JOBS["publish"]
     uploads = [s for s in job["steps"] if "gh-action-pypi-publish" in s.get("uses", "")]
     assert [(s["name"], s["with"]["packages-dir"]) for s in uploads] == [
-        ("upload polars-online-compat", "dist-compat"),
-        ("upload polars-online", "dist"),
+        ("upload rheon-compat", "dist-compat"),
+        ("upload rheon", "dist"),
     ]
     # The job can be run again after a failure between the two.
     assert all(s["with"]["skip-existing"] is True for s in uploads)
@@ -300,46 +299,46 @@ def _cpu(monkeypatch, flags: str, missing: list[str]) -> None:
 def test_the_smoke_test_passes_the_right_distribution_with_the_right_features(
     installed, monkeypatch
 ):
-    installed.add("polars-online")
+    installed.add("rheon")
     _cpu(monkeypatch, POLARS_FEATURES, [])
-    wheel_smoke.check_build("polars-online", POLARS_FEATURES)
+    wheel_smoke.check_build("rheon", POLARS_FEATURES)
     installed.clear()
-    installed.add("polars-online-compat")
+    installed.add("rheon-compat")
     _cpu(monkeypatch, "", [])
-    wheel_smoke.check_build("polars-online-compat", "")
+    wheel_smoke.check_build("rheon-compat", "")
 
 
 def test_the_smoke_test_refuses_the_other_project_or_both_or_neither(installed, monkeypatch):
     _cpu(monkeypatch, "", [])
-    with pytest.raises(SystemExit, match="polars-online-compat is not installed"):
-        wheel_smoke.check_build("polars-online-compat", "")
-    installed.add("polars-online")
-    with pytest.raises(SystemExit, match="polars-online is installed"):
-        wheel_smoke.check_build("polars-online-compat", "")
-    installed.add("polars-online-compat")
-    with pytest.raises(SystemExit, match="polars-online is installed"):
-        wheel_smoke.check_build("polars-online-compat", "")
-    installed.discard("polars-online")
-    wheel_smoke.check_build("polars-online-compat", "")
+    with pytest.raises(SystemExit, match="rheon-compat is not installed"):
+        wheel_smoke.check_build("rheon-compat", "")
+    installed.add("rheon")
+    with pytest.raises(SystemExit, match="rheon is installed"):
+        wheel_smoke.check_build("rheon-compat", "")
+    installed.add("rheon-compat")
+    with pytest.raises(SystemExit, match="rheon is installed"):
+        wheel_smoke.check_build("rheon-compat", "")
+    installed.discard("rheon")
+    wheel_smoke.check_build("rheon-compat", "")
     with pytest.raises(SystemExit, match="unknown distribution"):
         wheel_smoke.check_build("polars", "")
 
 
 def test_the_smoke_test_refuses_a_build_that_recorded_other_features(installed, monkeypatch):
-    installed.add("polars-online")
+    installed.add("rheon")
     _cpu(monkeypatch, "", [])  # the record is missing: a default x86-64 wheel with no check
     with pytest.raises(SystemExit, match="recorded the CPU features ''"):
-        wheel_smoke.check_build("polars-online", POLARS_FEATURES)
+        wheel_smoke.check_build("rheon", POLARS_FEATURES)
     _cpu(monkeypatch, POLARS_FEATURES, [])  # the compat wheel built with the flags
     with pytest.raises(SystemExit, match="not the expected ''"):
-        wheel_smoke.check_build("polars-online", "")
+        wheel_smoke.check_build("rheon", "")
 
 
 def test_the_smoke_test_refuses_a_runner_without_a_feature_the_wheel_needs(installed, monkeypatch):
-    installed.add("polars-online")
+    installed.add("rheon")
     _cpu(monkeypatch, POLARS_FEATURES, ["avx2"])
     with pytest.raises(SystemExit, match="lacks avx2"):
-        wheel_smoke.check_build("polars-online", POLARS_FEATURES)
+        wheel_smoke.check_build("rheon", POLARS_FEATURES)
 
 
 def test_a_checkout_is_smoke_tested_without_a_distribution():
@@ -356,13 +355,13 @@ def test_the_wheel_size_check_reads_the_compat_wheels_like_any_other(tmp_path):
 
     size = _script("wheel_size")
     paths = []
-    for name in ("rheon-1-x.whl", "polars_online_compat-1-x.whl"):
+    for name in ("rheon-1-x.whl", "rheon_compat-1-x.whl"):
         path = tmp_path / name
         with zipfile.ZipFile(path, "w") as z:
             z.writestr("a.bin", b"0" * 100)
         paths.append(path)
     table = size.notes([size.measure(p) for p in paths])
-    assert "`rheon-1-x.whl`" in table and "`polars_online_compat-1-x.whl`" in table
+    assert "`rheon-1-x.whl`" in table and "`rheon_compat-1-x.whl`" in table
 
 
 # --- the import path -------------------------------------------------------------------------
@@ -406,3 +405,56 @@ def test_the_build_record_is_not_committed():
         check=False,
     )
     assert ignored.returncode == 0
+
+
+# --- the bare install ----------------------------------------------------------------
+
+_BLOCK = """
+import sys
+class _NoPolars:
+    @staticmethod
+    def find_spec(name, path=None, target=None):
+        if name.split(".")[0] == "polars":
+            raise ModuleNotFoundError(name, name=name)
+sys.meta_path.insert(0, _NoPolars)
+"""
+
+
+def _bare_verify(version: str, schema: str) -> subprocess.CompletedProcess[str]:
+    script = str(REPO / "scripts" / "verify_release.py")
+    code = _BLOCK + (
+        "import importlib.util\n"
+        f"s = importlib.util.spec_from_file_location('v', {script!r})\n"
+        "v = importlib.util.module_from_spec(s); s.loader.exec_module(v)\n"
+        f"print(v.check_bare({version!r}, {schema}, installed=False))\n"
+    )
+    return subprocess.run(
+        [sys.executable, "-I", "-c", code],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+        timeout=120,
+        cwd=REPO,
+    )
+
+
+def test_the_release_check_has_a_bare_leg_that_needs_no_polars():
+    """`verify_release.py --bare`, the check of `pip install rheon` alone:
+    run on this checkout with Polars unimportable, and failing when the
+    version or the schema it is told is not the package's."""
+    from rheon import native_version, schema_version
+
+    ok = _bare_verify(native_version(), str(schema_version()))
+    assert ok.returncode == 0, ok.stderr
+    assert "without Polars: ok" in ok.stdout
+    bad = _bare_verify("0.0.0", str(schema_version()))
+    assert bad.returncode != 0 and "not 0.0.0" in bad.stderr
+    bad = _bare_verify(native_version(), str(schema_version() + 1))
+    assert bad.returncode != 0 and "schema_version()" in bad.stderr
+
+
+def test_both_release_scripts_offer_the_bare_leg():
+    for name in ("wheel_smoke", "verify_release"):
+        text = (REPO / "scripts" / f"{name}.py").read_text("utf-8")
+        assert '"--bare"' in text, name

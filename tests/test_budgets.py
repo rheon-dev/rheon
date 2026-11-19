@@ -597,7 +597,7 @@ def test_the_baseline_is_read_from_a_file_a_directory_or_the_variable(tmp_path, 
     reason = budgets.baseline_or_reason(tmp_path / "nowhere")
     assert isinstance(reason, str) and "could not read the last release's baseline" in reason
     assert budgets.BASELINE_URL == (
-        "https://github.com/hgilde/polars-online/releases/latest/download/budgets-baseline.json"
+        "https://github.com/rheon-dev/rheon/releases/latest/download/budgets-baseline.json"
     )
 
 

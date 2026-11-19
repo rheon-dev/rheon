@@ -75,10 +75,10 @@ polars = ["polars>=1.37.0,<3"]
 numpy = ["numpy>=1.26"]
 
 [project.urls]
-Repository = "https://github.com/hgilde/polars-online"
-Documentation = "https://hgilde.github.io/polars-online/"
-Changelog = "https://github.com/hgilde/polars-online/blob/main/CHANGELOG.md"
-Issues = "https://github.com/hgilde/polars-online/issues"
+Repository = "https://github.com/rheon-dev/rheon"
+Documentation = "https://rheon-dev.github.io/rheon/"
+Changelog = "https://github.com/rheon-dev/rheon/blob/main/CHANGELOG.md"
+Issues = "https://github.com/rheon-dev/rheon/issues"
 
 [tool.maturin]
 manifest-path = "crates/rheon-py/Cargo.toml"

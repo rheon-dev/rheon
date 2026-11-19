@@ -105,7 +105,7 @@ RAISES_MARK = "# --- raises and sign-offs"
 BASELINE_ASSET = "budgets-baseline.json"
 #: The newest release's copy: GitHub redirects ``latest`` to the newest
 #: release that is not a draft or a prerelease.
-BASELINE_URL = f"https://github.com/hgilde/polars-online/releases/latest/download/{BASELINE_ASSET}"
+BASELINE_URL = f"https://github.com/rheon-dev/rheon/releases/latest/download/{BASELINE_ASSET}"
 BASELINE_VARIABLE = "RHEON_BUDGETS_BASELINE"
 #: The platforms whose resident memory a baseline must hold.
 BASELINE_PLATFORMS = PLATFORMS
