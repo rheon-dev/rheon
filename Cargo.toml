@@ -10,15 +10,15 @@ members = [
 ]
 
 [workspace.package]
-version = "1.6.0"
+version = "2.0.0"
 edition = "2024"
 rust-version = "1.95"
 license = "Apache-2.0"
 repository = "https://github.com/rheon-dev/rheon"
 
 [workspace.dependencies]
-rheon-core = { path = "crates/rheon-core", version = "1.6.0" }
-rheon-polars = { path = "crates/rheon-polars", version = "1.6.0" }
+rheon-core = { path = "crates/rheon-core", version = "2.0.0" }
+rheon-polars = { path = "crates/rheon-polars", version = "2.0.0" }
 
 # Rust polars is hard-pinned and linked statically into the wheel, so it is
 # fixed at build time; py-polars is a runtime range in pyproject.toml
