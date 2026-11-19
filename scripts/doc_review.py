@@ -501,7 +501,7 @@ def run(path: Path) -> list[tuple[int, str | None]]:
 
 # --- render -------------------------------------------------------------------
 
-REPO_URL = "https://github.com/hgilde/polars-online/blob/main/"
+REPO_URL = "https://github.com/rheon-dev/rheon/blob/main/"
 _DARK = """
     --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --border-muted: #3d444db3;
     --code-bg: #151b23; --inline-code-bg: #656c7633; --link: #4493f8; --row-alt: #151b23;
@@ -585,7 +585,7 @@ def fix_links(body: str) -> str:
 def render(path: Path, title: str, label: str) -> str:
     """The file as GitHub renders it, in a standalone page."""
     body = subprocess.run(
-        ["gh", "api", "markdown", "-f", "mode=markdown", "-f", "context=hgilde/polars-online",
+        ["gh", "api", "markdown", "-f", "mode=markdown", "-f", "context=rheon-dev/rheon",
          "-F", f"text=@{path}"],
         check=True, capture_output=True, text=True, encoding="utf-8",
     ).stdout  # fmt: skip

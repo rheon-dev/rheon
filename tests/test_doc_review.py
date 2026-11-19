@@ -124,7 +124,7 @@ def test_render_points_relative_links_at_github_and_drops_the_id_prefix():
     )
     out = review.fix_links(body)
     assert '<h2 id="time">' in out
-    assert 'href="https://github.com/hgilde/polars-online/blob/main/docs/RUNNER.md"' in out
+    assert 'href="https://github.com/rheon-dev/rheon/blob/main/docs/RUNNER.md"' in out
     assert 'href="#time"' in out
     assert 'href="https://pola.rs"' in out
 
