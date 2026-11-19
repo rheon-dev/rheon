@@ -22,9 +22,14 @@ from __future__ import annotations
 import os
 import platform
 import subprocess
+import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from rheon_import import PACKAGE, rp  # noqa: E402
 
 
 def _git(*args: str) -> str:
@@ -45,7 +50,6 @@ def load() -> str:
 
 def header() -> str:
     import polars as pl
-    from rheon_import import PACKAGE, rp
 
     commit = _git("rev-parse", "--short=12", "HEAD") or "unknown"
     if _git("status", "--porcelain", "--untracked-files=no"):
