@@ -1,11 +1,13 @@
 <!-- kind: landing -->
-# polars-online
+# rheon
 
-> **GitHub project:** [github.com/hgilde/polars-online](https://github.com/hgilde/polars-online)
+> **GitHub project:** [github.com/rheon-dev/rheon](https://github.com/rheon-dev/rheon)
+>
+> **Formerly polars-online:** from 2.0.0 the package is called rheon, and its Polars interface is the module `rheon.polars`. The models, their numbers and their saved states are unchanged, and [The 2.0 rename](docs/VERSIONS.md#the-20-rename) lists the names a 1.x program changes.
 >
 > **Every feature, one line each:** [FEATURES.md](docs/FEATURES.md) · **Four complete use cases on model selection, stability, factors, asynchronous streams:** [HIGHLIGHTS.md](docs/HIGHLIGHTS.md)
 
-polars-online fits models online, one row at a time, to
+rheon fits models online, one row at a time, to
 [Polars](https://pola.rs) data, for anyone whose data are too large to
 hold in memory at once: linear models, streaming moments, clustering and
 regime detection. Each row is predicted before the model learns from it.
@@ -20,7 +22,7 @@ or from a command line of their own.
 | [What you can do with it](#what-you-can-do-with-it) | four use cases run end to end in [HIGHLIGHTS.md](docs/HIGHLIGHTS.md), and the capabilities they show |
 | [Where to go next](#where-to-go-next) | [the feature index](docs/FEATURES.md), every feature with a line and a link · the pages for each task, by kind |
 | [Models](#models) | the four families, each linking its models' entries in [MODELS.md](docs/MODELS.md) |
-| [What this is not](#what-this-is-not) | what polars-online leaves to Polars and to other tools |
+| [What this is not](#what-this-is-not) | what rheon leaves to Polars and to other tools |
 | [Contributing and license](#contributing-and-license) | building from a checkout, and the license |
 
 ## Introduction
@@ -33,14 +35,14 @@ In this first fit you regress each stock's return on two features over a
 made-up trading day. You know the day's true betas (the coefficients of
 the return on each feature), and you read back the betas the model found. It takes
 five steps, each with its result. To run it, install the library and numpy
-with `pip install "polars-online[numpy]"` ([Install](#install) has the
+with `pip install "rheon[polars,numpy]"` ([Install](#install) has the
 requirements).
 
 A *spec* describes one model. A *model bank*
-([`ModelBank`](https://hgilde.github.io/polars-online/rheon.html#rheon.polars.ModelBank))
+([`ModelBank`](https://rheon-dev.github.io/rheon/rheon.html#rheon.polars.ModelBank))
 fits a set of models together in one pass over the rows, one for each spec
 and each group (the rows that share one value of the column `group=` names,
-here each stock). `.online.fit_predict`, chained on a query (a chain of Polars
+here each stock). `.rheon.fit_predict`, chained on a query (a chain of Polars
 steps that runs only when you ask for its result), runs a bank over the
 query's rows and adds the specs' output to them.
 
@@ -49,7 +51,7 @@ from datetime import datetime
 
 import numpy as np                              # only to make up the rows
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # 1. Make up the input: a trading day, 9:30 to 16:00, a row a second for stocks A, B and C in turn.
 rng = np.random.default_rng(0)
@@ -68,7 +70,7 @@ prices = pl.DataFrame({
 prices.write_parquet("prices.parquet")          # on disk: every fit in this block reads it back as a query
 
 # 2. A fit with every row weighted the same: fit the rows before 15:30, and save the state.
-whole = po.spec.ewridge(
+whole = rp.spec.ewridge(
     "whole",                                    # the spec's name: it names the output column
     targets=["ret"], features=["signal_a", "signal_b"],
     half_life=float("inf"),                     # no forgetting: every row counts the same
@@ -82,7 +84,7 @@ flat = (
 )
 # 3. Read the fit back from the saved state, and serve the last half hour from it.
 saved = (
-    po.ModelBank.load("bank.state").coef()      # the fit in the file, a row per coefficient
+    rp.ModelBank.load("bank.state").coef()      # the fit in the file, a row per coefficient
     .pivot("term", index="group", values="coef")   # a row per stock, a column per term
 )
 served = (
@@ -93,7 +95,7 @@ served = (
 )
 
 # 4. A fit that follows the recent rows, and its betas on every row.
-local = po.spec.ewridge(
+local = rp.spec.ewridge(
     "local", targets=["ret"], features=["signal_a", "signal_b"], group="stock_id",
     clock="ts", half_life="10m",                # a row's weight halves every ten minutes of ts
     gap_cap="5m",                               # and a gap longer than five minutes decays as five
@@ -102,8 +104,8 @@ local = po.spec.ewridge(
 betas = pl.scan_parquet("prices.parquet").rheon.fit_predict([local]).rheon.unnest([local]).collect()   # a row of betas per input row
 
 # 5. A target that looks ahead: each row's mean return over the next ten minutes.
-fwd_ret = po.ewm_mean("ret", half_life=float("inf"), window_size="10m", reverse=True).alias("fwd_ret")
-ahead = po.spec.ewridge(
+fwd_ret = rp.ewm_mean("ret", half_life=float("inf"), window_size="10m", reverse=True).alias("fwd_ret")
+ahead = rp.spec.ewridge(
     "ahead", targets=[fwd_ret], features=["signal_a", "signal_b"], group="stock_id",
     clock="ts", half_life="10m", gap_cap="5m",
     embargo="10m",                              # learn each row once its ten minutes have passed
@@ -129,9 +131,9 @@ regression solved from running sums (the decayed sums a model keeps in
 place of its rows), and `half_life=float("inf")` forgets nothing. So at
 every row its fit is the batch fit over the rows it has learned, and its
 state is a complete summary of those rows, worth saving and serving.
-`.online.fit_predict` adds one column per spec, named after the spec,
+`.rheon.fit_predict` adds one column per spec, named after the spec,
 whose value in each row is a record of named fields (its type is Polars'
-`Struct`). `.online.unnest`, chained after it, spreads the fields into
+`Struct`). `.rheon.unnest`, chained after it, spreads the fields into
 columns. For stock A, `flat` begins:
 
 | ts | ret | pred_ret | resid_ret | weight_sum | withheld_reason |
@@ -194,7 +196,7 @@ from 10:30, stock A's beta on `signal_a` climbs with the true one, which is
 
 **Step 5 predicts a target that looks ahead.** `fwd_ret`, a Polars
 expression (a column computation, such as `pl.col("x") + 1`) written with
-`po.ewm_mean(..., reverse=True)`, is the mean of the stock's returns over
+`rp.ewm_mean(..., reverse=True)`, is the mean of the stock's returns over
 the next ten minutes, weighted by time. Its value at a row is known only
 ten minutes later. With `embargo="10m"`, the bank predicts each row where
 it sits and learns from it ten minutes later. So `ahead` learns nothing
@@ -215,7 +217,7 @@ every five minutes:
 
 ### The idea
 
-Here are a few points to remember about fitting models with polars-online.
+Here are a few points to remember about fitting models with rheon.
 
 **Every prediction and diagnostic is out-of-sample.** The bank predicts each
 row and computes its diagnostics from what the models learned before it, and
@@ -225,7 +227,7 @@ says what each diagnostic measures).
 **The stream can be far larger than memory.** A bank keeps only what its
 models have learned, and the rows an `embargo` or a window still holds. To fit
 parquet files larger than memory, start the query with
-`pl.scan_parquet("ticks/*.parquet")` before `.online.fit_predict`, and end it
+`pl.scan_parquet("ticks/*.parquet")` before `.rheon.fit_predict`, and end it
 with `.sink_parquet("fitted.parquet")`, which writes the result to a file, in
 place of `.collect()`. A `sort`, a `collect()` before the bank or a
 `rolling` over groups holds its whole input ([What streams, and what does
@@ -250,23 +252,23 @@ Windows always need the rows in time order ([Make features that look
 back over the stream](docs/how-to/make-window-features.md)).
 
 **A model bank runs three ways, with the same numbers from each.** It runs
-inside a Polars query with `.online.fit_predict`, in your own Python loop
+inside a Polars query with `.rheon.fit_predict`, in your own Python loop
 calling `ModelBank.fit_predict` on each chunk, or from the standalone
-`polars-online` command line, without Python. Three how-tos show each:
+`rheon` command line, without Python. Three how-tos show each:
 run a bank [in a query](docs/how-to/run-a-bank-in-a-query.md), [in a Python
 loop](docs/how-to/run-a-bank-in-a-python-loop.md) or [from the command
 line](docs/how-to/run-a-bank-from-the-command-line.md).
 
 ### Terminology
 
-polars-online uses these words in a sense of its own. The
+rheon uses these words in a sense of its own. The
 [glossary](docs/GLOSSARY.md) defines every other word the docs use for
 the library:
 
 | term | meaning |
 |---|---|
-| **spec** | the description of one model: which model, which columns it reads, and how it treats time. `po.spec.ewridge(...)` builds one |
-| **model bank**, or *the bank* | a set of models, one for each spec and each group, fitted together over the same rows, and the Python object that holds them, [`ModelBank`](https://hgilde.github.io/polars-online/rheon.html#rheon.polars.ModelBank). *The bank* always means a model bank |
+| **spec** | the description of one model: which model, which columns it reads, and how it treats time. `rp.spec.ewridge(...)` builds one |
+| **model bank**, or *the bank* | a set of models, one for each spec and each group, fitted together over the same rows, and the Python object that holds them, [`ModelBank`](https://rheon-dev.github.io/rheon/rheon.html#rheon.polars.ModelBank). *The bank* always means a model bank |
 | **stream** | the rows in the order the bank reads them |
 | **chunk** | one of the pieces the bank takes the stream in, one at a time: `chunk_size` rows in a query, 100,000 by default, or each frame passed to `ModelBank.fit_predict` |
 | **state** | everything a bank has learned |
@@ -282,7 +284,7 @@ These hold for every spec, however a bank is run:
 | **out-of-sample predictions** | every row is predicted before its own target is learned ([Why every prediction is out-of-sample](docs/explanation/out-of-sample.md)), and a target that looks ahead is learned only once its window has closed ([Make a target that looks ahead](docs/how-to/make-a-target-that-looks-ahead.md)) |
 | **bounded memory** | memory grows with the models' state and the rows a delay or a window holds, and never with the number of rows that have passed ([Where the time and memory go](docs/explanation/where-the-time-and-memory-go.md)) |
 | **any chunking** | one chunk or a thousand, with or without a save and resume in the middle, gives the same numbers, to the last bit. Only which rows carry the coefficients can change: `coef`, and `support_coef` and the standard errors beside it ([Chunk invariance and streaming](docs/explanation/chunk-invariance-and-streaming.md)) |
-| **any thread count** | the thread count, set with a bank's `threads=` (or `POLARS_ONLINE_MAX_THREADS` for every bank that does not set it), changes only the speed. The bank's threads share the work by spec and group: with 64 groups, 14 threads process 7.3× the rows per second of one ([Use more cores](docs/how-to/use-more-cores.md)) |
+| **any thread count** | the thread count, set with a bank's `threads=` (or `RHEON_MAX_THREADS` for every bank that does not set it), changes only the speed. The bank's threads share the work by spec and group: with 64 groups, 14 threads process 7.3× the rows per second of one ([Use more cores](docs/how-to/use-more-cores.md)) |
 | **unusable values** | in a feature, target or weight, NaN, ±inf and any magnitude above `1e100` count as null, so a sentinel such as `1e300` never reaches a model. A sentinel inside that range, such as `-999`, does, and [`bank.check()`](docs/how-to/check-data-quality.md) flags one that recurs. A null target leaves the row predicted and the clock moving, and a null feature or weight skips the row: no prediction, and nothing learned ([Hold a row back](docs/how-to/hold-a-row-back.md)) |
 | **zero weights** | a row of weight 0 is predicted and moves the clock, but the model learns nothing from it ([Weight rows](docs/how-to/weight-rows.md)) |
 | **one `weight_sum`** | `weight_sum` means the same in every model, so one `min_weight` means the same for every spec in a bank ([`weight_sum`: the weight behind a prediction](docs/explanation/warm-up-and-readiness.md#weight_sum-the-weight-behind-a-prediction)) |
@@ -296,29 +298,29 @@ These hold for every spec, however a bank is run:
 Install the wheel from PyPI with pip or uv:
 
 ```sh
-pip install polars-online      # or: uv add polars-online
+pip install "rheon[polars]"      # or: uv add "rheon[polars]"
 ```
 
 | need | detail |
 |---|---|
 | Python | 3.12 or newer: one wheel per platform covers every CPython from 3.12 on ([How the library is tested](docs/explanation/how-the-library-is-tested.md) lists the versions CI runs) |
-| Polars | `polars>=1.37.0,<3`: the range the test suite has measured, which is not a guarantee. A weekly job and every release run the test suite on the newest Polars ([Versions and the Polars pin](docs/VERSIONS.md#the-polars-range)) |
-| depends on | nothing beyond `polars` at run time: the wheel carries its own copy of Polars' Rust code, so it needs no other native library |
-| numpy | needed only by `ModelBank.gram()`, the `po.gram`, `po.corr`, `po.sim` and `po.gbdt` helpers, and `bank.check()`'s collinearity and leakage checks: to use them, install it with the package, as `pip install "polars-online[numpy]"`. Without it, those calls raise `ModuleNotFoundError`, and `bank.check()` reports one `not_checked` finding for the two checks |
+| Polars | `polars>=1.37.0,<3`, installed by the `polars` extra: the range the test suite has measured, which is not a guarantee. A weekly job and every release run the test suite on the newest Polars ([Versions and the Polars pin](docs/VERSIONS.md#the-polars-range)) |
+| depends on | nothing beyond `polars` at run time, and nothing at all for `import rheon` alone, which holds the spec builders and the helpers that need no Polars: the wheel carries its own copy of Polars' Rust code, so it needs no other native library |
+| numpy | needed only by `ModelBank.gram()`, the `rheon.gram`, `rheon.corr` and `rp.sim` helpers, and `bank.check()`'s collinearity and leakage checks: to use them, install it with the package, as `pip install "rheon[polars,numpy]"`. Without it, those calls raise `ModuleNotFoundError`, and `bank.check()` reports one `not_checked` finding for the two checks |
 | wheels | macOS (arm64, x86_64), Windows x64, and Linux (x64 glibc and musl, aarch64 glibc), on PyPI and on each GitHub release beside the command-line binaries. On any other platform, the install builds the package from its source distribution, which needs a stable Rust toolchain ([rustup](https://rustup.rs)) |
-| x86-64 CPUs | the x86-64 wheels are built for CPUs with AVX2 and FMA, which most Intel and AMD processors since about 2013 have (Intel Haswell, AMD Excavator and Zen), as Polars' own default wheels do; some low-end Intel Celeron, Pentium and Atom parts of later years lack them. On an older CPU, or in a virtual machine that hides those features, importing the package warns which feature is missing, and the first model that runs would crash with an illegal instruction. Install `polars-online-compat` there instead (next paragraph). Apple silicon and ARM Linux are not affected; a Python running under Rosetta on an Apple silicon Mac is x86-64, and the warning says so |
+| x86-64 CPUs | the x86-64 wheels are built for CPUs with AVX2 and FMA, which most Intel and AMD processors since about 2013 have (Intel Haswell, AMD Excavator and Zen), as Polars' own default wheels do; some low-end Intel Celeron, Pentium and Atom parts of later years lack them. On an older CPU, or in a virtual machine that hides those features, importing the package warns which feature is missing, and the first model that runs would crash with an illegal instruction. Install `rheon-compat` there instead (next paragraph). Apple silicon and ARM Linux are not affected; a Python running under Rosetta on an Apple silicon Mac is x86-64, and the warning says so |
 | size | 25 to 32 MB to download and 71 to 105 MB installed, by platform |
 
-**On a CPU without AVX2, install `polars-online-compat` instead of `polars-online`.**
+**On a CPU without AVX2, install `rheon-compat` instead of `rheon`.**
 It is the same source and the same version, built for every x86-64 CPU, and
 it is imported as `rheon` too, so code does not change. The two
 packages conflict: install one or the other, and uninstall one before
-installing the other (`pip uninstall polars-online`, then `pip install
-polars-online-compat`). Several models run faster on `polars-online`, so use
+installing the other (`pip uninstall rheon`, then `pip install
+"rheon-compat[polars]"`). Several models run faster on `rheon`, so use
 it wherever the CPU allows ([What the x86-64 wheels need](docs/VERSIONS.md#what-the-x86-64-wheels-need)).
-`polars-online-compat` has wheels for the ARM platforms too, built as the
+`rheon-compat` has wheels for the ARM platforms too, built as the
 others are. To skip the check, as a deployment that knows its CPU might, set
-`POLARS_ONLINE_SKIP_CPU_CHECK=1`.
+`RHEON_SKIP_CPU_CHECK=1`.
 
 To build from a checkout, install uv and a stable Rust toolchain
 ([CONTRIBUTING.md](CONTRIBUTING.md)), then run from its root:
@@ -372,7 +374,7 @@ thing completely, and an explanation gives the reasons.
 | you want to | tutorial | how-to | reference | explanation |
 |---|---|---|---|---|
 | run a bank over a stream, in a query, a loop or a job | [Fit a model bank over parquet files in a query](docs/tutorials/stream-from-parquet.md) | [in a query](docs/how-to/run-a-bank-in-a-query.md) · [in a Python loop](docs/how-to/run-a-bank-in-a-python-loop.md) · [from the command line](docs/how-to/run-a-bank-from-the-command-line.md) · [hand the output to Arrow](docs/how-to/hand-the-output-to-arrow.md) · [feed it from a database](docs/how-to/feed-a-bank-from-a-database.md) · [run it in Pathway](docs/how-to/run-a-bank-in-pathway.md) | [RUNNER.md](docs/RUNNER.md), the command line | [Chunk invariance and streaming](docs/explanation/chunk-invariance-and-streaming.md) · [Polars interfaces](docs/explanation/polars-interfaces.md) |
-| choose a model and say what it reads | [A first fit](#a-first-fit) | [choose a model](docs/how-to/choose-a-model.md) · [one model per group](docs/how-to/fit-one-model-per-group.md) · [weight rows](docs/how-to/weight-rows.md) · [hold a row back](docs/how-to/hold-a-row-back.md) · [targets that go missing on different rows](docs/how-to/fit-targets-that-go-missing-on-different-rows.md) · [a count target](docs/how-to/fit-a-count-target.md) · [bound the coefficients](docs/how-to/bound-the-coefficients.md) | [MODELS.md](docs/MODELS.md): [the models at a glance](docs/MODELS.md#the-models-at-a-glance), [what every spec takes](docs/MODELS.md#what-every-spec-takes) and each model's entry · [OUTPUTS.md](docs/OUTPUTS.md), what each model writes | [Why every prediction is out-of-sample](docs/explanation/out-of-sample.md) · [polars-online against scikit-learn](docs/explanation/against-scikit-learn.md) |
+| choose a model and say what it reads | [A first fit](#a-first-fit) | [choose a model](docs/how-to/choose-a-model.md) · [one model per group](docs/how-to/fit-one-model-per-group.md) · [weight rows](docs/how-to/weight-rows.md) · [hold a row back](docs/how-to/hold-a-row-back.md) · [targets that go missing on different rows](docs/how-to/fit-targets-that-go-missing-on-different-rows.md) · [a count target](docs/how-to/fit-a-count-target.md) · [bound the coefficients](docs/how-to/bound-the-coefficients.md) | [MODELS.md](docs/MODELS.md): [the models at a glance](docs/MODELS.md#the-models-at-a-glance), [what every spec takes](docs/MODELS.md#what-every-spec-takes) and each model's entry · [OUTPUTS.md](docs/OUTPUTS.md), what each model writes | [Why every prediction is out-of-sample](docs/explanation/out-of-sample.md) · [rheon against scikit-learn](docs/explanation/against-scikit-learn.md) |
 | follow time: a clock, a half-life, sessions and late targets | [Follow a local fit through a day](docs/tutorials/local-fit-with-a-clock.md) | [handle sessions, gaps and steps back](docs/how-to/handle-sessions-gaps-and-steps-back.md) · [put rows in clock order](docs/how-to/put-rows-in-clock-order.md) · [forget rows past a window](docs/how-to/forget-rows-past-a-window.md) · [fit locally along a feature](docs/how-to/fit-locally-along-a-feature.md) · [learn targets known late](docs/how-to/learn-targets-known-late.md) · [follow a level that moves](docs/how-to/follow-a-level-that-moves.md) | [What every spec takes: the clock](docs/MODELS.md#the-clock-and-its-units) | [Time and decay](docs/explanation/time-and-decay.md) |
 | make features and targets from the stream | | [features that look back](docs/how-to/make-window-features.md) · [a target that looks ahead](docs/how-to/make-a-target-that-looks-ahead.md) · [scale a feature by its spread](docs/how-to/scale-a-feature-by-its-spread.md) · [weight rows by a robust scale](docs/how-to/weight-rows-by-a-robust-scale.md) · [align series that tick at their own times](docs/how-to/align-series-that-tick-at-their-own-times.md) · [fit on factor residuals](docs/how-to/fit-on-factor-residuals.md) | | [WINDOWS.md](docs/WINDOWS.md), the window operators |
 | save a bank, resume it and serve from it | [Fit, save and serve a model bank](docs/tutorials/fit-save-and-serve.md) | [save a state](docs/how-to/save-a-state.md) · [resume from it](docs/how-to/resume-from-a-saved-state.md) · [resume a window run](docs/how-to/resume-a-window-run.md) · [serve from it](docs/how-to/serve-from-a-saved-state.md) · [read it without this library](docs/how-to/read-a-state-without-this-library.md) | [STATE-WORKFLOW.md](docs/STATE-WORKFLOW.md) | [A bank's state and resuming it](docs/explanation/state-and-resuming.md) |
@@ -381,11 +383,10 @@ thing completely, and an explanation gives the reasons.
 | check the data and the model | | [check data quality](docs/how-to/check-data-quality.md) · [decide when a model is ready](docs/how-to/decide-when-a-model-is-ready.md) · [check the scale](docs/how-to/check-the-scale.md) · [detect a break](docs/how-to/detect-a-break.md) · [check standard errors](docs/how-to/check-standard-errors.md) · [find what a model misses](docs/how-to/find-what-the-model-misses.md) · [measure heavy tails](docs/how-to/measure-heavy-tails.md) · [find an influential row](docs/how-to/find-an-influential-row.md) · [check feature health](docs/how-to/check-feature-health.md) · [compare two models](docs/how-to/compare-two-models.md) · [evaluate an output frame](docs/how-to/evaluate-an-output-frame.md) · [put an interval on a prediction](docs/how-to/put-an-interval-on-a-prediction.md) · [check a two-stage fit](docs/how-to/check-a-two-stage-fit.md) · [test a detector on known truth](docs/how-to/test-a-detector-on-known-truth.md) | [DATA-QUALITY.md](docs/DATA-QUALITY.md), each finding · [DIAGNOSTICS.md](docs/DIAGNOSTICS.md), each diagnostic | [Warm-up and readiness](docs/explanation/warm-up-and-readiness.md) · [How the diagnostics work](docs/explanation/how-diagnostics-work.md) · [How the data quality checks work](docs/explanation/how-data-quality-checks-work.md) |
 | choose a model's settings | | [with `grid_search`](docs/CALIBRATION.md) · [a ridge and a half-life](docs/how-to/choose-a-ridge-and-half-life.md) · [a Kalman filter's drift speed](docs/how-to/choose-a-kalman-drift-speed.md) · [a learning rate](docs/how-to/choose-a-learning-rate.md) · [`ftrl`'s penalties](docs/how-to/choose-ftrl-penalties.md) · [Holt's smoothing](docs/how-to/choose-holts-smoothing.md) · [columns on the lasso path](docs/how-to/choose-columns-on-the-lasso-path.md) · [a changepoint hazard](docs/how-to/choose-a-changepoint-hazard.md) · [among a grid, as the stream runs](docs/how-to/choose-among-a-grid-online.md) · [by hand](docs/how-to/choose-settings-by-hand.md) · [when `ewridge` solves](docs/how-to/choose-when-ewridge-solves.md) · [start from a prior fit](docs/how-to/start-from-a-prior-fit.md) · [blend each session with the long run](docs/how-to/blend-each-session-with-the-long-run.md) | [VALIDATION.md](docs/VALIDATION.md), where the defaults came from | [Grids, instances and slots](docs/explanation/grids-and-instances.md) · [The robust scale](docs/explanation/robust-scale.md) |
 | make a run faster or smaller | | [set the chunk size](docs/how-to/set-the-chunk-size.md) · [use more cores](docs/how-to/use-more-cores.md) · [bound a run's memory](docs/how-to/bound-memory.md) · [fit hundreds of features](docs/how-to/fit-hundreds-of-features.md) | [PERFORMANCE.md](docs/PERFORMANCE.md), the measured costs | [Where the time and memory go](docs/explanation/where-the-time-and-memory-go.md) |
-| train XGBoost or LightGBM on files larger than memory | | [GBDT.md](docs/GBDT.md) | | [How `po.gbdt` builds training data](docs/explanation/how-po-gbdt-builds-training-data.md) |
 | upgrade, or trust the numbers | | [reproduce an earlier version's fit](docs/how-to/reproduce-an-earlier-versions-fit.md) | [VERSIONS.md](docs/VERSIONS.md), what each release may change | [How the library is tested](docs/explanation/how-the-library-is-tested.md) |
 
 The API reference, built from the docstrings, is at
-<https://hgilde.github.io/polars-online/>. [docs/README.md](docs/README.md)
+<https://rheon-dev.github.io/rheon/>. [docs/README.md](docs/README.md)
 lists every document by kind, [CHANGELOG.md](CHANGELOG.md) says what each
 release changed, and [llms.txt](llms.txt) is the map a coding agent reads
 ([llmstxt.org](https://llmstxt.org)). [GLOSSARY.md](docs/GLOSSARY.md)
@@ -393,7 +394,7 @@ defines every word the documents use for the library.
 
 ## Models
 
-polars-online has twenty-two models in four families, and each family
+rheon has twenty-two models in four families, and each family
 answers one kind of question about a stream. A spec's clock, grouping and
 warm-up mean the same whichever model it names ([What every spec
 takes](docs/MODELS.md#what-every-spec-takes)), and [Choose a
@@ -408,17 +409,15 @@ model](docs/how-to/choose-a-model.md) says which to start with:
 
 ## What this is not
 
-**polars-online fits models to rows that are already read and in clock
+**rheon fits models to rows that are already read and in clock
 order, so reading, joining and ordering the rows is the job of Polars or of
 another tool before the bank.** A bank can take its rows from a database
 through Polars, or run as an operator inside a stream processor. [Chunk
 invariance](docs/explanation/chunk-invariance-and-streaming.md) means the
-chunks another engine hands the bank cannot change the numbers. For a model this library does not fit,
-such as gradient-boosted trees, `po.gbdt` builds XGBoost's and LightGBM's
-training objects from files too large to hold ([GBDT.md](docs/GBDT.md)).
+chunks another engine hands the bank cannot change the numbers.
 
 **When a spec names a `clock`, sort the rows by it before the bank, because
-polars-online neither buffers nor reorders rows that arrive late.** A row
+rheon neither buffers nor reorders rows that arrive late.** A row
 that steps back on the clock is refused, unless its step back is larger
 than `restart_after_step_back`, which resets the model. When a new input
 overlaps the rows a saved state has learned, `ModelBank.skip_learned`
@@ -428,16 +427,16 @@ arrives late can be held back with [`embargo`](docs/how-to/learn-targets-known-l
 `clock`, `gap_cap`, `restart_after_step_back` and `session` describe time
 *within* a stream, and none of them waits for a late row.
 
-Three functions of `po.stream` prepare a stream before the bank.
-`po.stream.refresh_time` puts series that tick at their own times on one refresh
+Three functions of `rp.stream` prepare a stream before the bank.
+`rp.stream.refresh_time` puts series that tick at their own times on one refresh
 grid ([Align series that tick at their own
 times](docs/how-to/align-series-that-tick-at-their-own-times.md)).
-`po.stream.with_windows` computes exponentially weighted means, variances,
+`rp.stream.with_windows` computes exponentially weighted means, variances,
 sums, rates and quantiles over a window of the clock ([Make features that
 look back over the stream](docs/how-to/make-window-features.md)).
-`po.stream.embargo` doubles a stream so that each row's target is learned
+`rp.stream.embargo` doubles a stream so that each row's target is learned
 a set delay after its row ([Learn targets known
-late](docs/how-to/learn-targets-known-late.md)). polars-online
+late](docs/how-to/learn-targets-known-late.md)). rheon
 deliberately does **not** provide the rest:
 
 | not provided | use instead |
@@ -456,5 +455,5 @@ what the tests prove ([TESTING.md](docs/TESTING.md)), how to cut a release
 ([cut-a-release.md](docs/contributing/cut-a-release.md)) and the rules this
 documentation is written to ([WRITING.md](docs/WRITING.md)).
 
-polars-online is licensed under Apache-2.0. See [SECURITY.md](SECURITY.md)
+rheon is licensed under Apache-2.0. See [SECURITY.md](SECURITY.md)
 to report a vulnerability.
