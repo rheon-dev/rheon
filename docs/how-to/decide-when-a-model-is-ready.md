@@ -166,7 +166,7 @@ for name, gates in (("lower", dict(half_life=50.0, min_weight=14.0)), ("longer",
 ```
 
 ```text
-warning: Lower min_weight below 14.9, or increase half_life above 103, as https://github.com/hgilde/polars-online/blob/main/docs/DIAGNOSTICS.md#is-it-ready explains.
+warning: Lower min_weight below 14.9, or increase half_life above 103, as https://github.com/rheon-dev/rheon/blob/main/docs/DIAGNOSTICS.md#is-it-ready explains.
 lower: first predicts at t = 205, weight_sum 14.1, 0 warnings
 longer: first predicts at t = 425, weight_sum 30.0, 0 warnings
 ```

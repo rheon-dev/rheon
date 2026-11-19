@@ -110,7 +110,7 @@ warning constant ridge x2 0.0
 warning missing ridge x3 0.3
 info heavy_tails audit x1 951.0
 info missing audit x3 0.3
-column 'x2' took one value (1) on every usable row of the stream: as a feature it is collinear with the intercept, and as a target there is nothing to learn. See https://github.com/hgilde/polars-online/blob/main/docs/DATA-QUALITY.md#constant
+column 'x2' took one value (1) on every usable row of the stream: as a feature it is collinear with the intercept, and as a target there is nothing to learn. See https://github.com/rheon-dev/rheon/blob/main/docs/DATA-QUALITY.md#constant
 ```
 
 ## Read the findings

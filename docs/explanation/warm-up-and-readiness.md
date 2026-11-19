@@ -172,7 +172,7 @@ a row every 1, halfway: first predicts at t = 51, weight_sum 36.8
 a row every 1, weighted: first predicts at t = 39, weight_sum 30.3
 a row every 5, halfway: first predicts at t = 55, weight_sum 8.0
 a row every 5, weighted: never predicts
-  warning: Lower min_weight below 14.9, or increase half_life above 103, as https://github.com/hgilde/polars-online/blob/main/docs/DIAGNOSTICS.md#is-it-ready explains.
+  warning: Lower min_weight below 14.9, or increase half_life above 103, as https://github.com/rheon-dev/rheon/blob/main/docs/DIAGNOSTICS.md#is-it-ready explains.
 ```
 
 At a row every five clock units, `weight_sum` tops out near 14.9, so a

@@ -94,7 +94,7 @@ def _fit_noting(bank: rp.ModelBank, df: pl.DataFrame) -> _Fitted:
 
 
 #: The reference a readiness warning links: the gates' section, which stays.
-READY = "https://github.com/hgilde/polars-online/blob/main/docs/DIAGNOSTICS.md#is-it-ready"
+READY = "https://github.com/rheon-dev/rheon/blob/main/docs/DIAGNOSTICS.md#is-it-ready"
 
 
 def _says_not_met_at_the_rate_so_far(msg: str) -> None:

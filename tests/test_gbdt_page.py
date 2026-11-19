@@ -54,8 +54,10 @@ def test_every_po_gbdt_function_is_on_the_page():
     assert not missing, f"po.gbdt functions the page does not name: {missing}"
 
 
-def test_the_readme_section_links_the_page():
+def test_the_readme_does_not_advertise_the_helper():
+    # From 2.0 the trees' helper is kept out of the public names (task 470),
+    # so the README, a landing page, neither links its page nor names it;
+    # docs/README.md's index still lists the page.
     readme = (REPO / "README.md").read_text(encoding="utf-8")
-    where = readme.split("\n## Where to go next\n", 1)[1].split("\n## ", 1)[0]
-    # The README is a landing page, whose map links the page (task 338 stage 8).
-    assert "](docs/GBDT.md)" in where
+    assert "](docs/GBDT.md)" not in readme
+    assert "gbdt" not in readme

@@ -210,7 +210,7 @@ restart_after_step_back is not set, so the bank refused the chunk and learned no
 rows by the clock, skip the rows a saved state has learned with ModelBank.skip_learned (or
 --skip-learned), or set restart_after_step_back below 2 to reset the model at such a step back (0
 resets it at every one). See
-https://github.com/hgilde/polars-online/blob/main/docs/how-to/put-rows-in-clock-order.md#fix-a-chunk-the-bank-refused
+https://github.com/rheon-dev/rheon/blob/main/docs/how-to/put-rows-in-clock-order.md#fix-a-chunk-the-bank-refused
 for which to choose.
 sorted: 10 rows learned
 replayed: clock_backwards 1, resets 1

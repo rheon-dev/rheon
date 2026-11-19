@@ -312,5 +312,5 @@ for path, specs in [("nowhere.state", [spec]), ("bank.state", [other]), ("ticks.
 ```text
 FileNotFoundError: [Errno 2] No such file or directory: 'nowhere.state'
 ValueError: state file: its specs do not match the bank's specs: spec "ridge" (1 of 1) differs at features: ["x0","x1"] in the file, ["x0"] in the bank. Load the state with the specs it was saved with.
-ValueError: state file: these bytes are not a polars-online bank state file, or the file is cut short. Load a whole file that ModelBank.save or the command line's save_state wrote.
+ValueError: state file: these bytes are not a rheon bank state file, or the file is cut short. Load a whole file that ModelBank.save or the command line's save_state wrote.
 ```
