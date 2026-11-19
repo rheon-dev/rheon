@@ -6,7 +6,7 @@ six was tested as the file that ships (task 160, CI3). The build job now
 installs the wheel it built into a fresh environment, with its dependencies
 from PyPI as ``pip install`` gives them to a user, and runs this:
 
-    python scripts/wheel_smoke.py --version 0.14.0 [--distribution polars-online-compat]
+    python scripts/wheel_smoke.py --version 0.14.0 [--distribution rheon-compat]
                                   [--features +avx2,+fma,...]
     python scripts/wheel_smoke.py --bare [--version 0.14.0]
 
@@ -14,16 +14,17 @@ It checks that the package comes from that environment rather than a
 checkout, that it is the version being released, and that the native module
 works: one spec through ``ModelBank.fit_predict`` against the line it was fed,
 a state saved and resumed against the unbroken run, and the same spec as a
-streaming ``LazyFrame`` plan. The package's own dependencies only: polars,
-and not even the optional NumPy, which a fresh install leaves out.
+streaming ``LazyFrame`` plan. The wheel is installed with its ``polars``
+extra (``<wheel>[polars]``) and nothing more, not even the optional NumPy,
+which a fresh install leaves out.
 
-The package is one of two distributions of the one source, ``polars-online``
-and ``polars-online-compat``, imported alike, and the x86-64 wheels of the
+The package is one of two distributions of the one source, ``rheon``
+and ``rheon-compat``, imported alike, and the x86-64 wheels of the
 first are built for AVX2, FMA and more. So the check also holds the wheel to
 its name (``--distribution``: installed under it, and not under the other),
 to the CPU features it was built to need (``--features``: the list the build
 recorded for the import-time CPU check, empty for the compat build, the ARM
-wheels and the sdist, and the release's list for an x86-64 ``polars-online``
+wheels and the sdist, and the release's list for an x86-64 ``rheon``
 wheel) and, where it needs any, to the machine it runs on having them.
 
 ``--bare`` checks the install without the ``polars`` extra instead: with
@@ -44,7 +45,7 @@ REPO = Path(__file__).resolve().parents[1]
 
 
 #: The two PyPI projects built from this source: one import name.
-DISTRIBUTIONS = ("polars-online", "polars-online-compat")
+DISTRIBUTIONS = ("rheon", "rheon-compat")
 
 
 def check_build(distribution: str, features: str) -> None:
@@ -93,7 +94,7 @@ def check(
     if installed and where.is_relative_to(REPO / "python"):
         raise SystemExit(f"rheon came from the checkout ({where}), not the wheel")
     if version is not None and rp.__version__ != version:
-        raise SystemExit(f"the wheel is polars-online {rp.__version__}, not {version}")
+        raise SystemExit(f"the wheel is rheon {rp.__version__}, not {version}")
 
     if installed and distribution is not None:
         check_build(distribution, features)
@@ -123,7 +124,7 @@ def check(
     if not streamed.equals(whole):
         raise SystemExit("the streaming plan parts from ModelBank.fit_predict")
 
-    return f"polars-online {rp.__version__} on polars {pl.__version__}, from {where.parent}: ok"
+    return f"rheon {rp.__version__} on polars {pl.__version__}, from {where.parent}: ok"
 
 
 class _WithoutPolars:
@@ -183,7 +184,7 @@ def main() -> None:
         "--distribution",
         choices=DISTRIBUTIONS,
         default=DISTRIBUTIONS[0],
-        help="the project the wheel belongs to (default: polars-online)",
+        help="the project the wheel belongs to (default: rheon)",
     )
     parser.add_argument(
         "--features",

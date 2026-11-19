@@ -403,17 +403,31 @@ def test_every_wheel_is_installed_and_run_where_it_belongs():
     the runner, or in Alpine for the musl wheel, which the runner's glibc
     cannot load."""
     steps = JOBS["build"]["steps"]
-    smoke = [s for s in steps if "scripts/wheel_smoke.py" in str(s.get("run", ""))]
+    runs = [s for s in steps if "scripts/wheel_smoke.py" in str(s.get("run", ""))]
+    smoke = [s for s in runs if "--bare" not in s["run"]]
+    bare = [s for s in runs if "--bare" in s["run"]]
     assert [s["if"] for s in smoke] == [
         "matrix.manylinux != 'musllinux_1_2'",
         "matrix.manylinux == 'musllinux_1_2'",
     ]
+    # The wheel alone, as `pip install rheon` leaves it, on the same two paths.
+    assert [s["if"] for s in bare] == [s["if"] for s in smoke]
+    for step in bare:
+        assert step["env"]["VERSION"] == "${{ needs.version.outputs.version }}"
+        assert '--bare --version "$VERSION"' in step["run"]
+        assert "[polars]" not in step["run"] and "polars" not in step["run"].replace(
+            "wheel_smoke", ""
+        )
+    assert "uv pip install --python bare dist/*.whl" in bare[0]["run"]
+    assert "/bare/bin/pip install" in bare[1]["run"] and "python:3.12-alpine" in bare[1]["run"]
     for leg in JOBS["build"]["strategy"]["matrix"]["include"]:
         assert leg["target"].endswith("-musl") == (leg.get("manylinux") == "musllinux_1_2"), leg
     native, alpine = smoke
     assert "uv venv" in native["run"]
-    assert "uv pip install --python smoke dist/*.whl" in native["run"]
-    assert "python:3.12-alpine" in alpine["run"] and "pip install" in alpine["run"]
+    # The wheel with its `polars` extra, as `pip install "rheon[polars]"` gives it.
+    assert 'uv pip install --python smoke "$wheel[polars]"' in native["run"]
+    assert "python:3.12-alpine" in alpine["run"]
+    assert '--root-user-action=ignore "$wheel[polars]"' in alpine["run"]
     for step in smoke:
         assert step["env"]["VERSION"] == "${{ needs.version.outputs.version }}"
         assert '--version "$VERSION"' in step["run"]
@@ -465,7 +479,7 @@ def test_the_sdist_is_installed_and_run():
     assert len(smoke) == 1, smoke
     (step,) = smoke
     assert "uv venv" in step["run"]
-    assert "uv pip install --python smoke dist/*.tar.gz" in step["run"]
+    assert 'uv pip install --python smoke "$sdist[polars]"' in step["run"]
     assert step["env"]["VERSION"] == "${{ needs.version.outputs.version }}"
     assert '--version "$VERSION"' in step["run"]
     assert steps.index(step) > max(
@@ -521,7 +535,7 @@ def test_the_tags_annotation_keeps_the_changelogs_headings(tmp_path):
     call("init", "-q")
     call("commit", "-q", "--allow-empty", "-m", "a release")
     sha = call("rev-parse", "HEAD").strip()
-    notes = "polars-online 9.9.9\n\n### Added\n\n- **a thing.** text\n"
+    notes = "rheon 9.9.9\n\n### Added\n\n- **a thing.** text\n"
     (tmp_path / "notes.md").write_text(notes, encoding="utf-8")
     words = {"$TAG": "v9.9.9", "$GITHUB_SHA": sha}
     command = [words.get(w, w) for w in shlex.split(line)]
@@ -707,13 +721,14 @@ def test_the_versions_pages_pin_names_the_current_minor(copy):
     page = copy / "docs" / "VERSIONS.md"
     v = release_version.versions(copy)["pyproject.toml"]
     major, minor, _ = v.split(".", 2)
-    pin = f"polars-online~={major}.{minor}.0"
     text = page.read_text(encoding="utf-8")
+    (name,) = set(re.findall(rf"(rheon|polars-online)~={major}\.{minor}\.0", text))
+    pin = f"{name}~={major}.{minor}.0"
     assert pin in text
-    page.write_text(text.replace(pin, "polars-online~=0.1.0"), encoding="utf-8")
+    page.write_text(text.replace(pin, f"{name}~=0.1.0"), encoding="utf-8")
     (bad,) = release_version.problems(copy)
     assert "VERSIONS.md" in bad and "~=0.1.0" in bad and f"~={major}.{minor}.0" in bad, bad
-    page.write_text(text.replace(pin, "polars-online"), encoding="utf-8")
+    page.write_text(text.replace(pin, name), encoding="utf-8")
     (bad,) = release_version.problems(copy)
     assert "VERSIONS.md" in bad and f"~={major}.{minor}.0" in bad, bad
 
@@ -859,15 +874,23 @@ def test_the_tag_and_the_release_are_each_tried_three_times():
 
 
 def test_the_release_is_installed_from_pypi_and_run_on_every_os():
-    """After the upload, ``verify`` installs ``polars-online==<version>``
+    """After the upload, ``verify`` installs ``rheon[polars]==<version>``
     from PyPI into a fresh environment on each OS, retrying for up to ten
     minutes while the index catches up, and runs
-    ``scripts/verify_release.py`` with the run's version and schema. It
-    gates nothing: the upload is done."""
+    ``scripts/verify_release.py`` with the run's version and schema; then
+    ``rheon==<version>`` alone into a second one and runs it with
+    ``--bare``. It gates nothing: the upload is done."""
     job = JOBS["verify"]
     assert job["strategy"]["matrix"]["os"] == ["ubuntu-latest", "macos-latest", "windows-latest"]
     assert job["strategy"]["fail-fast"] is False
-    (step,) = [s for s in job["steps"] if "verify_release.py" in str(s.get("run", ""))]
+    runs = [s for s in job["steps"] if "verify_release.py" in str(s.get("run", ""))]
+    (step,) = [s for s in runs if "--bare" not in s["run"]]
+    (bare,) = [s for s in runs if "--bare" in s["run"]]
+    assert bare["env"] == step["env"] and bare["shell"] == "bash"
+    assert "uv venv --python 3.12 bare" in bare["run"]
+    assert 'uv pip install --python bare --no-cache "$DISTRIBUTION==$VERSION"' in bare["run"]
+    assert '--distribution "$DISTRIBUTION" --bare' in bare["run"]
+    assert runs.index(bare) > runs.index(step), "the bare leg follows the full one"
     assert step["shell"] == "bash"
     assert step["env"] == {
         "VERSION": "${{ needs.version.outputs.version }}",
@@ -875,10 +898,10 @@ def test_the_release_is_installed_from_pypi_and_run_on_every_os():
         "DISTRIBUTION": "${{ matrix.distribution }}",
     }
     # Both PyPI projects, on every OS.
-    assert job["strategy"]["matrix"]["distribution"] == ["polars-online", "polars-online-compat"]
+    assert job["strategy"]["matrix"]["distribution"] == ["rheon", "rheon-compat"]
     run = step["run"]
     assert "uv venv --python 3.12 fresh" in run
-    assert 'uv pip install --python fresh --no-cache "$DISTRIBUTION==$VERSION"' in run
+    assert 'uv pip install --python fresh --no-cache "$DISTRIBUTION[polars]==$VERSION"' in run
     assert "deadline=$((SECONDS + 600))" in run and "sleep 30" in run
     assert (
         'python -I scripts/verify_release.py --version "$VERSION" --schema "$SCHEMA" '

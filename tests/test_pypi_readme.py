@@ -64,7 +64,7 @@ def test_the_readme_leaves_no_relative_link_and_links_no_missing_file():
         if not t.startswith(("http://", "https://", "mailto:", "#"))
     ]
     assert left == [], left
-    assert base == "https://github.com/hgilde/polars-online"
+    assert base == "https://github.com/rheon-dev/rheon"
 
 
 def test_every_release_build_rewrites_the_readme_before_maturin_reads_it():

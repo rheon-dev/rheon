@@ -1,16 +1,16 @@
-"""Turn this checkout into the source of ``polars-online-compat``, in place.
+"""Turn this checkout into the source of ``rheon-compat``, in place.
 
 Usage: python3 scripts/compat_package.py [--root DIR]
 
-``polars-online`` and ``polars-online-compat`` are two PyPI projects built
+``rheon`` and ``rheon-compat`` are two PyPI projects built
 from one source tree and one version. They are imported as ``rheon``
 alike; they differ in the CPU they need. The x86-64 wheels of
-``polars-online`` are built for CPUs with AVX2 and FMA, and
-``polars-online-compat`` is built for every x86-64 CPU, with the same
+``rheon`` are built for CPUs with AVX2 and FMA, and
+``rheon-compat`` is built for every x86-64 CPU, with the same
 instructions the package had before the split. It ships for the ARM
 platforms too, where it is the same build, so that
-``pip install polars-online-compat`` works wherever ``pip install
-polars-online`` does, as Polars' own ``polars-runtime-compat`` does.
+``pip install rheon-compat`` works wherever ``pip install
+rheon`` does, as Polars' own ``polars-runtime-compat`` does.
 
 The release workflow runs this on a runner's checkout before it builds the
 compat wheels and sdist: it renames the project in ``pyproject.toml`` (the
@@ -31,13 +31,13 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 
-NAME = "polars-online"
-COMPAT_NAME = "polars-online-compat"
+NAME = "rheon"
+COMPAT_NAME = "rheon-compat"
 
 #: What PyPI shows beside the project's name.
 COMPAT_DESCRIPTION = (
     "Streaming / online regression models for Polars: the build for x86-64 CPUs "
-    "without AVX2, with the same import name as polars-online"
+    "without AVX2, with the same import name as rheon"
 )
 
 #: The notice at the head of the compat package's PyPI page. After the README's title.
@@ -46,8 +46,10 @@ NOTICE = f"""> **This is `{COMPAT_NAME}`, the compatibility build of
 > same version, built for every x86-64 CPU, including those from before about
 > 2013 without AVX2 and FMA, and some virtual machines. It is imported as
 > `rheon`, like `{NAME}`, so install one or the other: run
-> `pip uninstall {NAME}` before `pip install {COMPAT_NAME}`. Where your CPU has
-> AVX2 and FMA, `{NAME}` is the better choice: several models run faster on it.
+> `pip uninstall {NAME}` before `pip install {COMPAT_NAME}`. The Polars
+> integration is its extra, `pip install {COMPAT_NAME}[polars]`, as it is
+> `{NAME}`'s. Where your CPU has AVX2 and FMA, `{NAME}` is the better choice:
+> several models run faster on it.
 
 """
 
@@ -56,7 +58,7 @@ _DESCRIPTION_LINE = re.compile(r'^description = "[^"\n]*"$', re.M)
 
 
 def rename_pyproject(text: str) -> str:
-    """``pyproject.toml`` with its project named ``polars-online-compat``."""
+    """``pyproject.toml`` with its project named ``rheon-compat``."""
     if len(_NAME_LINE.findall(text)) != 1:
         raise ValueError(
             'pyproject.toml has no single `name = "rheon"` line: '

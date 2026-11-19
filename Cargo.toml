@@ -14,7 +14,7 @@ version = "1.6.0"
 edition = "2024"
 rust-version = "1.95"
 license = "Apache-2.0"
-repository = "https://github.com/hgilde/polars-online"
+repository = "https://github.com/rheon-dev/rheon"
 
 [workspace.dependencies]
 rheon-core = { path = "crates/rheon-core", version = "1.6.0" }

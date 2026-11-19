@@ -1,8 +1,8 @@
 """T-W5: the release workflow's artifact-collection step, run for real.
 
-`release.yml` renames each CLI binary to `polars-online-<target>` and has to keep the
+`release.yml` renames each CLI binary to `rheon-<target>` and has to keep the
 `.exe` suffix on the Windows one. That step is bash, it runs only on the ubuntu
-job, and it has never processed a real `polars-online.exe` -- the Windows build has
+job, and it has never processed a real `rheon.exe` -- the Windows build has
 never run, because nothing has ever been pushed.
 
 The shell is extracted from the workflow rather than copied here, so editing
@@ -44,9 +44,9 @@ TARGETS = {
 }
 WHEEL = "rheon-0.1.0-cp312-abi3-macosx_11_0_arm64.whl"
 #: The same platform's wheel of the other PyPI project, and its sdist.
-COMPAT_WHEEL = "polars_online_compat-0.1.0-cp312-abi3-macosx_11_0_arm64.whl"
+COMPAT_WHEEL = "rheon_compat-0.1.0-cp312-abi3-macosx_11_0_arm64.whl"
 SDIST = "rheon-0.1.0.tar.gz"
-COMPAT_SDIST = "polars_online_compat-0.1.0.tar.gz"
+COMPAT_SDIST = "rheon_compat-0.1.0.tar.gz"
 
 
 def _step_script(name: str) -> str:
@@ -153,12 +153,12 @@ def test_the_publish_job_collects_only_wheels_and_sdists_each_project_in_its_own
     assert res.returncode == 0, res.stderr
     assert sorted(p.name for p in (staged / "dist").iterdir()) == [WHEEL, SDIST], (
         "the PyPI job must upload wheels and sdists only -- a CLI binary in dist/ would "
-        "be rejected by the index -- and polars-online's folder holds none of the compat package's"
+        "be rejected by the index -- and rheon's folder holds none of the compat package's"
     )
     assert sorted(p.name for p in (staged / "dist-compat").iterdir()) == [
         COMPAT_WHEEL,
         COMPAT_SDIST,
-    ], "polars-online-compat's files go to the project of their own name"
+    ], "rheon-compat's files go to the project of their own name"
 
 
 # --- the tag and the release, retried (task 317) ---------------------------------
@@ -192,7 +192,7 @@ def remote(tmp_path):
     for message in ("the release", "after it"):
         _git(work, "commit", "-q", "--allow-empty", "-m", message)
     _git(work, "push", "-q", "origin", "HEAD:refs/heads/main")
-    (work / "notes.md").write_text("polars-online 9.9.9\n\n### Added\n", encoding="utf-8")
+    (work / "notes.md").write_text("rheon 9.9.9\n\n### Added\n", encoding="utf-8")
     return bare, work, _git(work, "rev-parse", "HEAD~1"), _git(work, "rev-parse", "HEAD")
 
 
@@ -232,7 +232,7 @@ def test_a_tag_that_landed_already_on_this_sha_is_success(remote):
     _git(work, "tag", "-d", "v9.9.9")
     # The re-run's annotation is another object (another time, here other
     # text), so the remote refuses the push rather than finding it equal.
-    (work / "notes.md").write_text("polars-online 9.9.9, again\n", encoding="utf-8")
+    (work / "notes.md").write_text("rheon 9.9.9, again\n", encoding="utf-8")
     res = _push_tag(work, sha)
     assert res.returncode == 0, res.stderr
     assert f"on the remote at {sha} already" in res.stdout
@@ -337,7 +337,7 @@ def test_a_re_run_finds_the_release_and_finishes_it(tmp_path):
 def test_the_release_notes_are_the_changelogs_section_then_the_wheel_sizes(staged):
     (staged / "artifacts" / "notes").mkdir()
     (staged / "artifacts" / "notes" / "notes.md").write_text(
-        "polars-online 9.9.9\n\n### Added\n", encoding="utf-8"
+        "rheon 9.9.9\n\n### Added\n", encoding="utf-8"
     )
     res = subprocess.run(
         ["bash", "-euo", "pipefail", "-c", _run("release", "the notes")],
@@ -349,4 +349,4 @@ def test_the_release_notes_are_the_changelogs_section_then_the_wheel_sizes(stage
     )
     assert res.returncode == 0, res.stderr
     notes = (staged / "release-notes.md").read_text(encoding="utf-8")
-    assert notes == "polars-online 9.9.9\n\n### Added\n\n### Wheel sizes\n"
+    assert notes == "rheon 9.9.9\n\n### Added\n\n### Wheel sizes\n"

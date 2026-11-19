@@ -6,7 +6,7 @@ The version lives in six places (docs/contributing/cut-a-release.md, step
 5): pyproject.toml, the workspace Cargo.toml's version and its two
 path-dependency pins, python/rheon/__init__.py and the generated
 docs/VALIDATION.md. They must agree, and CHANGELOG.md must have a section for
-it. The example pin in docs/VERSIONS.md, ``polars-online~=X.Y.0`` under *This
+it. The example pin in docs/VERSIONS.md, ``rheon~=X.Y.0`` under *This
 package's own versioning*, must name the version's minor, so a minor release
 cannot leave it telling readers to stay on the last one.
 
@@ -62,7 +62,7 @@ def versions(root: Path = REPO) -> dict[str, str | None]:
         "Cargo.toml rheon-core pin": deps.get("rheon-core", {}).get("version"),
         "Cargo.toml rheon-polars pin": deps.get("rheon-polars", {}).get("version"),
         "python/rheon/__init__.py": match(r'^__version__ = "([^"]+)"', init),
-        "docs/VALIDATION.md": match(r"polars-online (\d+\.\d+\.\d+\S*)", validation),
+        "docs/VALIDATION.md": match(r"(?:rheon|polars-online) (\d+\.\d+\.\d+\S*)", validation),
     }
 
 
@@ -73,9 +73,11 @@ def schema(root: Path = REPO) -> int:
     return int(found)
 
 
-#: docs/VERSIONS.md's example pin: ``polars-online~=0.13.0`` names the 0.13 series.
+#: docs/VERSIONS.md's example pin: ``rheon~=0.13.0`` names the 0.13 series. The
+#: pattern and the VALIDATION.md one also read the old project name, until the
+#: docs are rewritten under the new one.
 VERSIONS = "docs/VERSIONS.md"
-PIN = re.compile(r"polars-online~=(\d+\.\d+\.\d+)")
+PIN = re.compile(r"(?:rheon|polars-online)~=(\d+\.\d+\.\d+)")
 
 
 def unreleased(changelog: str) -> str:
@@ -148,7 +150,7 @@ def problems(root: Path = REPO, *, publish: bool = False, tag_exists=None) -> li
     wrong = sorted({p for p in pins if p != want})
     if not pins or wrong:
         out.append(
-            f"{VERSIONS}'s example pin must be `polars-online~={want}`, the minor of "
+            f"{VERSIONS}'s example pin must be `rheon~={want}`, the minor of "
             f"{version}; it names {', '.join(f'`~={p}`' for p in wrong) or 'none'} "
             "(update the example under *This package's own versioning*)"
         )

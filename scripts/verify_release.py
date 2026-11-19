@@ -1,11 +1,11 @@
 """Check a release as a user gets it: installed from PyPI, then run.
 
 Usage: python -I scripts/verify_release.py --version X.Y.Z --schema N
-           [--distribution polars-online-compat]
+           [--distribution rheon-compat] [--bare]
 
 The release workflow's ``verify`` job runs this once the upload is done, on
 Linux, macOS and Windows, in a fresh environment into which it installed
-``polars-online==X.Y.Z`` from PyPI, or ``polars-online-compat==X.Y.Z``, the
+``rheon[polars]==X.Y.Z`` from PyPI, or ``rheon-compat[polars]==X.Y.Z``, the
 same source built for every x86-64 CPU, which the same job checks in a leg
 of its own (``--distribution``). It checks that the package came from
 that environment and not a checkout, that the three versions it reports
@@ -14,7 +14,12 @@ agree with the release -- ``__version__``, the native module's
 the schema the release was built with -- and that one fit runs through the
 streaming plan: an ``ewridge`` over a parquet file written here, read back
 with ``pl.scan_parquet``, whose last coefficient must be the line's slope.
-The package's own dependencies only, as a fresh ``pip install`` gives them.
+The package and its ``polars`` extra only, as a fresh ``pip install`` gives them.
+
+With ``--bare`` the environment holds the wheel alone, as ``pip install
+rheon==X.Y.Z`` leaves it: ``import rheon`` works with no Polars, the three
+versions agree with the release, and ``from rheon import polars`` raises an
+``ImportError`` that names ``rheon[polars]``.
 """
 
 from __future__ import annotations
@@ -33,7 +38,22 @@ SLOPE = 2.5
 
 
 #: The two PyPI projects built from this source: one import name.
-DISTRIBUTIONS = ("polars-online", "polars-online-compat")
+DISTRIBUTIONS = ("rheon", "rheon-compat")
+
+
+def _check_distribution(distribution: str) -> None:
+    """Raise unless ``distribution`` is the one project installed."""
+    for name in DISTRIBUTIONS:
+        try:
+            importlib.metadata.version(name)
+            found = True
+        except importlib.metadata.PackageNotFoundError:
+            found = False
+        if found != (name == distribution):
+            raise SystemExit(
+                f"{name} is {'installed' if found else 'not installed'}: "
+                f"the package under test is {distribution} alone"
+            )
 
 
 def check(
@@ -54,17 +74,7 @@ def check(
     if installed and where.is_relative_to(REPO / "python"):
         raise SystemExit(f"rheon came from the checkout ({where}), not from PyPI")
     if installed and distribution is not None:
-        for name in DISTRIBUTIONS:
-            try:
-                importlib.metadata.version(name)
-                found = True
-            except importlib.metadata.PackageNotFoundError:
-                found = False
-            if found != (name == distribution):
-                raise SystemExit(
-                    f"{name} is {'installed' if found else 'not installed'}: "
-                    f"the package under test is {distribution} alone"
-                )
+        _check_distribution(distribution)
         missing = _cpu_check.missing_features()
         if missing:
             raise SystemExit(f"this CPU lacks {', '.join(missing)}, which the wheel needs")
@@ -94,10 +104,43 @@ def check(
     if abs(slope - SLOPE) > 1e-3:
         raise SystemExit(f"the fit's slope is {slope}, not {SLOPE}")
     return (
-        f"polars-online {rp.__version__} (native {rp.native_version()}, schema "
+        f"rheon {rp.__version__} (native {rp.native_version()}, schema "
         f"{rp.schema_version()}) on polars {pl.__version__}, from {where.parent}: "
         f"slope {slope:.6f}: ok"
     )
+
+
+def check_bare(
+    version: str, schema: int, installed: bool = True, distribution: str | None = None
+) -> str:
+    """Raise ``SystemExit`` on the first failed check of ``import rheon`` in an
+    environment without Polars; return what ran. The environment is the test:
+    Polars is simply not installed, so a process that can import it fails."""
+    import rheon
+
+    where = Path(rheon.__file__).resolve()
+    if installed and where.is_relative_to(REPO / "python"):
+        raise SystemExit(f"rheon came from the checkout ({where}), not from PyPI")
+    if installed and distribution is not None:
+        _check_distribution(distribution)
+    for name, got in (
+        ("__version__", rheon.__version__),
+        ("native_version()", rheon.native_version()),
+    ):
+        if got != version:
+            raise SystemExit(f"rheon.{name} is {got}, not {version}")
+    if rheon.schema_version() != schema:
+        raise SystemExit(f"rheon.schema_version() is {rheon.schema_version()}, not {schema}")
+    try:
+        from rheon import polars  # noqa: F401
+    except ImportError as e:
+        if "rheon[polars]" not in str(e):
+            raise SystemExit(f"rheon.polars refused without naming the extra: {e}") from None
+    else:
+        raise SystemExit("rheon.polars imported without the polars extra installed")
+    if "polars" in sys.modules:
+        raise SystemExit("polars is in sys.modules: the environment is not bare")
+    return f"rheon {rheon.__version__} (native {rheon.native_version()}) without Polars: ok"
 
 
 def main() -> None:
@@ -108,9 +151,17 @@ def main() -> None:
         "--distribution",
         choices=DISTRIBUTIONS,
         default=DISTRIBUTIONS[0],
-        help="the project installed (default: polars-online)",
+        help="the project installed (default: rheon)",
+    )
+    parser.add_argument(
+        "--bare",
+        action="store_true",
+        help="the environment holds the wheel without the polars extra",
     )
     args = parser.parse_args()
+    if args.bare:
+        print(check_bare(args.version, args.schema, True, args.distribution), flush=True)
+        return
     print(check(args.version, args.schema, True, args.distribution), flush=True)
 
 
