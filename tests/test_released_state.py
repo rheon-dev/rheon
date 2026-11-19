@@ -473,7 +473,7 @@ def test_a_pre_1_0_state_is_refused_by_its_version(refused):
         with pytest.raises(ValueError) as e:
             rp.ModelBank.load(states / f"{name}.state", specs=specs)
         message = str(e.value)
-        assert "written by a version of polars-online older than this one reads" in message, message
+        assert "written by a version of rheon older than this one reads" in message, message
         assert "fit it on its input" in message, message
 
 
