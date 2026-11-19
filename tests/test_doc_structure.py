@@ -72,15 +72,17 @@ def test_the_pages_the_readme_moved_out_are_guides_to_using_it():
     to pages of their own (README-ITERATIONS, I8: C1 to C3). Each is a guide
     a user reads, so `docs/README.md` lists it among the guides, where a
     record's row would mislead, and the README's map links it. From 2.0 the
-    trees' helper is kept out of the public names (rheon's `_gbdt`), so the
-    README no longer points to its page; the index still lists it."""
+    trees' helper is kept out of the public names (rheon's `_gbdt`), so its
+    page is a record, filed under docs/records/ and listed among them."""
     index = (REPO / "docs" / "README.md").read_text(encoding="utf-8")
     guides = index.split("\n## Guides\n", 1)[1].split("\n## Records\n", 1)[0]
+    records = index.split("\n## Records\n", 1)[1]
     readme = (REPO / "README.md").read_text(encoding="utf-8")
-    for page in ("MODELS.md", "WINDOWS.md", "GBDT.md"):
-        assert f"| [{page}]({page}) |" in guides, page
     for page in ("MODELS.md", "WINDOWS.md"):
+        assert f"| [{page}]({page}) |" in guides, page
         assert f"](docs/{page}" in readme, page
+    assert "| [GBDT.md](records/GBDT.md) |" in records
+    assert "GBDT.md" not in guides
 
 
 def test_anchors_are_githubs():

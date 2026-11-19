@@ -153,8 +153,7 @@ Windows alike.
 [serve](https://github.com/rheon-dev/rheon/blob/main/docs/how-to/serve-from-a-saved-state.md) from a state;
 [a target that looks ahead](https://github.com/rheon-dev/rheon/blob/main/docs/how-to/make-a-target-that-looks-ahead.md);
 [readiness](https://github.com/rheon-dev/rheon/blob/main/docs/how-to/decide-when-a-model-is-ready.md);
-[settings from the stream's own errors](https://github.com/rheon-dev/rheon/blob/main/docs/CALIBRATION.md);
-[trees on files larger than memory](https://github.com/rheon-dev/rheon/blob/main/docs/GBDT.md).
+[settings from the stream's own errors](https://github.com/rheon-dev/rheon/blob/main/docs/CALIBRATION.md).
 
 ## Reference
 

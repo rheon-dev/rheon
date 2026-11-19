@@ -74,13 +74,8 @@ GUIDES = (
     "docs/contributing/*",
 )
 
-#: The guide that lists the old names beside the new ones, and the pages of
-#: the trees' helper, whose place under 2.0 is still to be decided.
-NAMES_THE_OLD = (
-    "docs/VERSIONS.md",
-    "docs/GBDT.md",
-    "docs/explanation/how-po-gbdt-builds-training-data.md",
-)
+#: The guide that lists the old names beside the new ones.
+NAMES_THE_OLD = ("docs/VERSIONS.md",)
 
 
 @dataclass(frozen=True)

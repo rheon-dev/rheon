@@ -1,4 +1,5 @@
-"""``docs/GBDT.md``: ``po.gbdt``'s guide, its recipes held to the code.
+"""``docs/records/GBDT.md``: the private trees' helper's former guide, its
+recipes held to the code.
 
 Every recipe on the page writes its own files, runs here in a directory of
 its own, and prints what the page shows under it, so a recipe and the prose
@@ -6,7 +7,7 @@ that reads its output cannot drift from the library or from the two
 libraries it builds for (docs/WRITING.md §3, "Every code block runs"). The
 comparison is ``tests/doc_recipes.py``'s: the same lines and words, and each
 number within two units of its last printed digit. Both public functions of
-``po.gbdt`` are on the page, and the README's section on it links it.
+``po.gbdt`` are on the page, and the README does not name the helper.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from rheon.polars import _gbdt
 TIER = "mixed"
 
 REPO = Path(__file__).resolve().parents[1]
-PAGE = REPO / "docs" / "GBDT.md"
+PAGE = REPO / "docs" / "records" / "GBDT.md"
 
 RECIPES = recipes(PAGE)
 
