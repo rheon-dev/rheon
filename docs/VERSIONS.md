@@ -10,6 +10,146 @@ when to expect a breaking change. The range of Polars it accepts,
 `polars>=1.37.0,<3`, is measured by this project, and Polars does not
 promise it.
 
+## The 2.0 rename
+
+**From 2.0.0 the package is called rheon, and its Polars interface is the
+module `rheon.polars`.** The models keep the parameters, defaults, output
+fields and state files they had in 1.6.0, and a fit under the current names
+gives the same numbers to the bit. To move a program to 2.0, change its
+install line, its imports and the names in [Names the rename
+changed](#names-the-rename-changed). Then replace any name that 1.6.0 still
+read with a deprecation warning, since 2.0 refuses each of them.
+
+### Names the rename changed
+
+**Every name that carried the old package's name now carries rheon's.** The
+spec builders, their keywords, the output fields, the TOML keys and the
+command line's flags keep their names. Each changed name, by its 1.x
+spelling:
+
+| in 1.x | in 2.0 |
+|---|---|
+| `pip install polars-online` | `pip install "rheon[polars]"`. Polars is an extra, so `pip install rheon` alone installs no Polars |
+| `pip install polars-online-compat`, the build for every x86-64 CPU | `pip install "rheon-compat[polars]"` ([What the x86-64 wheels need](#what-the-x86-64-wheels-need)) |
+| the `numpy` extra, `polars-online[numpy]` | `rheon[numpy]`, as in `pip install "rheon[polars,numpy]"` |
+| `import polars_online as po` | `from rheon import polars as rp`, which holds every public name |
+| `po.ModelBank`, `po.fit_predict`, `po.ewm_mean`, `po.stream` and every other name | `rp.ModelBank`, `rp.fit_predict`, `rp.ewm_mean`, `rp.stream` and the rest |
+| the frame namespace `.online`, as `lf.online.fit_predict` | `.rheon`, as `lf.rheon.fit_predict`. Importing `rheon.polars` registers it |
+| `PolarsOnlineWarning` and `PolarsOnlineDeprecationWarning` | `rheon.RheonWarning` and `rheon.RheonDeprecationWarning` |
+| `POLARS_ONLINE_MAX_THREADS`, `POLARS_ONLINE_TIMING`, `POLARS_ONLINE_WARN_UNSTABLE` and `POLARS_ONLINE_SKIP_CPU_CHECK` | `RHEON_MAX_THREADS`, `RHEON_TIMING`, `RHEON_WARN_UNSTABLE` and `RHEON_SKIP_CPU_CHECK` ([Environment variables across the rename](#environment-variables-across-the-rename)) |
+| the command `polars-online` | the command `rheon` |
+| `po.gbdt`, the unstable training inputs for XGBoost and LightGBM | no public module |
+
+The repository is at
+[github.com/rheon-dev/rheon](https://github.com/rheon-dev/rheon), and the
+API reference at
+[rheon-dev.github.io/rheon](https://rheon-dev.github.io/rheon/).
+
+**The names that need no Polars are in `rheon` itself, and `import rheon`
+runs without Polars installed.** They are the module `rheon.spec` and the
+function `rheon.target`, the error classes, the warnings `RheonWarning`,
+`RheonDeprecationWarning`, `ReadinessWarning` and `UnstableWarning`, the
+modules `rheon.gram` and `rheon.corr`, and the functions
+`rheon.schema_version()`, `rheon.native_version()` and
+`rheon.thread_pool_size()`. `rheon.polars` re-exports each of them, so `rp.spec` and `rheon.spec` are the same module.
+Without Polars, `from rheon import polars` raises an `ImportError` that says
+to install `rheon[polars]`.
+
+**`rp.ColumnNotFoundError`, `rp.OutputColumnNotFoundError` and
+`rp.UnstableWarning` keep Polars' classes as parents, as in 1.x.** Each is a
+subclass of the `rheon` class of the same name, which has no Polars parent.
+So `except rheon.ColumnNotFoundError` catches both. Once `rheon.polars` is
+imported, the library raises the `rp.` classes, so `except
+pl.exceptions.ColumnNotFoundError` goes on catching what it caught in 1.x.
+
+### What 2.0 removes
+
+**2.0 refuses every name that the 1.x series read under an old spelling.**
+In 1.x, a parameter, keyword, word, function or call form renamed from
+2026-10-11 on was still read, with a `PolarsOnlineDeprecationWarning`. In 2.0
+each is refused, and the error names the current spelling ([How an old
+name is refused](#how-an-old-name-is-refused)). A program that runs on
+1.6.0 with no such warning needs none of these changes. To find the names a
+program still uses, run its tests under 1.6.0 with that warning made an
+error: `warnings.simplefilter("error", po.PolarsOnlineDeprecationWarning)`.
+
+| what 1.x still read | what 2.0 takes |
+|---|---|
+| the model keywords and words renamed on 2026-10-11, such as `kmeans`' `k` and `"kmeanspp"` | the names in [Names that changed](#names-that-changed), such as `n_clusters` and `"k-means++"` |
+| `po.rewm_mean`, `po.rewm_sum` and `po.rewm_rate` | `rp.ewm_mean(..., reverse=True)` and the rest |
+| `ModelBank.to_json` and `save_json`; `save(path=)` and `load(path=)` | `write_json(file=None)`; `save(file=)` and `load(source=)` |
+| the calls `bank.rows_fed()` and `bank.output_fields()` | the properties `bank.rows_fed` and `bank.output_fields` |
+| `closed_groups` and `chunk_size` given by position to `fit` and `fit_predict_batches` | the same arguments by keyword |
+| `po.eval`'s `spec_name` and `spec_names`; `po.corr.matrix` | `spec` and `specs`; `rheon.gram.correlation` |
+| `po.gram.subset(cols=)`, `max_steps` in `lars_path` and `lars_paths`, and `cross_centred` in `po.gram.from_row` | `rheon.gram.subset(columns=)`, `max_iter` and `cross_centered` |
+
+**Two arguments that 1.x accepted and ignored are refused.** A number or a
+duration given as `with_windows`' `session_gap` is refused, since every
+window ends at a session change and none spans the gap. `theta` beside
+`preavg_rows` in `rp.spec.rcov` is refused, from the builder, a spec dict
+and a TOML file.
+A window run's state saved with a numeric `session_gap` still loads under a
+call without one.
+
+**`rheon.WrongTypeError`, `rheon.RefusedValueError` and
+`rheon.OutputColumnNotFoundError` each have one standard parent.** They are
+a `TypeError`, a `ValueError` and a `ColumnNotFoundError`, and no longer
+also a `ValueError`, a `TypeError` and a `KeyError`. Catch the class the
+problem names.
+
+### Code that still imports polars_online
+
+**polars-online 2.0.0 is a thin package that runs a 1.x program on rheon.**
+It holds no models of its own and installs rheon with Polars.
+`import polars_online` and the `.online` frame namespace still work, each
+with one deprecation warning that names the new spelling. Every call goes
+to rheon, so a name that 2.0 removes is refused through the thin package
+as well. Install it to keep a program running while you change its
+imports, then move the program to `rheon` and uninstall it. A requirement pinned as `polars-online~=1.0`
+stays on the 1.x series and never installs it.
+
+### States and pickles across the rename
+
+**A state file that 1.x saved loads in 2.0, and goes on as it would in
+1.6.0.** The rename kept the file's format and its schema version, so
+`rp.ModelBank.load` reads a bank that 1.6.0 saved and continues it to the
+bit. A window run's state from `with_windows(save_state=...)` loads into
+`lf.rheon.with_windows(load_state=...)` the same way. Some states that
+1.x releases before 1.6.0 saved go on within a stated tolerance instead,
+each named in [State files across
+releases](#state-files-across-releases).
+
+**A pickle made by 1.x loads only where the module it names,
+`polars_online._bank`, can be imported.** A pickle names the class of each
+object by its import path, and 1.x's bank is
+`polars_online._bank.ModelBank`. Without that module, unpickling raises
+`ModuleNotFoundError`. So before you upgrade, load each pickled bank under
+1.x and save it with `bank.save(...)`. Then read the file under 2.0 with
+`rp.ModelBank.load`. A pickle made by 2.0 holds the same state, behind
+rheon's import path.
+
+### Environment variables across the rename
+
+**Each environment variable is read by its `RHEON_` name, and by its old
+`POLARS_ONLINE_` name while the new one is unset.** An empty value counts
+as set. When both are set, the new name is used and nothing is printed.
+2.x reads the old names, and the next major release stops reading them.
+
+**In Python, each old name that is read gives one
+`rheon.RheonDeprecationWarning` a process, at `import rheon`.** For
+`POLARS_ONLINE_MAX_THREADS` it reads:
+
+```text
+rheon: the environment variable POLARS_ONLINE_MAX_THREADS was renamed RHEON_MAX_THREADS. The old name is read for now, and will not be read from the next major release. Set RHEON_MAX_THREADS instead.
+```
+
+**The command line prints one notice for each old name when it starts,** to
+standard error. For `POLARS_ONLINE_TIMING` it reads:
+
+```text
+rheon: warning: POLARS_ONLINE_TIMING was renamed RHEON_TIMING, and the old name is read for now. Set RHEON_TIMING instead.
+```
+
 ## This package's own versioning
 
 **Version 1.0 starts this package's promise of a stable API.** A minor
