@@ -1,23 +1,27 @@
-# polars-online
+# rheon
 
 > Streaming / online regression, clustering and regime models for Polars. A Rust core,
 > reachable three ways with identical numerics: a chunk-fed `ModelBank` (its `fit`
-> chunks a `LazyFrame`), a `LazyFrame` query that streams, and the `polars-online`
+> chunks a `LazyFrame`), a `LazyFrame` query that streams, and the `rheon`
 > command line over files. Memory grows with the models' state and the rows a delay or
 > window holds, never with the rows passed, so a model fits a stream larger than RAM.
 
-Python 3.12+, `polars>=1.37.0,<3`. `pip install polars-online`. `numpy` is an optional
-extra, needed only by `ModelBank.gram()`, by `po.gram`, `po.corr`, `po.sim` and
-`po.gbdt`, and by `bank.check()`'s collinearity and leakage checks, which report
+Python 3.12+. `pip install "rheon[polars]"`, which brings `polars>=1.37.0,<3`;
+`import rheon` alone needs no Polars. Formerly polars-online: 2.0 renamed the package,
+the import (`from rheon import polars as rp`), the `.rheon` namespace and the `RHEON_*`
+variables, and 1.x states load unchanged
+([The 2.0 rename](https://github.com/rheon-dev/rheon/blob/main/docs/VERSIONS.md#the-20-rename)).
+`numpy` is an optional extra, `rheon[numpy]`, needed only by `ModelBank.gram()`, by
+`rheon.gram`, `rheon.corr` and `rp.sim`, and by `bank.check()`'s collinearity and leakage checks, which report
 `not_checked` without it. No pandas.
 
 The two Python surfaces, in full:
 
 ```python
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
-spec = po.spec.ewridge(
+spec = rp.spec.ewridge(
     "ridge",
     targets=["ret"], features=["signal_a", "signal_b"],
     clock="ts",                    # a Datetime column, so the clock parameters are durations
@@ -26,7 +30,7 @@ spec = po.spec.ewridge(
 )
 
 # As a loop: feed chunks of any size; the state is yours to save
-bank = po.ModelBank([spec])
+bank = rp.ModelBank([spec])
 for chunk in chunks:
     out = bank.fit_predict(chunk)     # a column of records per spec
 bank.save("bank.state")
@@ -40,7 +44,7 @@ bank.save("bank.state")
 **Rules that are easy to get wrong.**
 
 - **A model is spelled the same way in both places**: the Python builder
-  `po.spec.ewridge(...)` is `type = "ewridge"` in a spec dict or a TOML file, and so
+  `rheon.spec.ewridge(...)` is `type = "ewridge"` in a spec dict or a TOML file, and so
   for every model. The old spelling, `ew_ridge`, is refused, naming `ewridge`.
 - **Predictions are out-of-sample by construction.** A row's `pred` is computed from the
   state as it stands *before* the model learns that row's target. Never fit a row
@@ -74,14 +78,14 @@ bank.save("bank.state")
   as the first row of a stream.
 - **Make a target from its row's columns as a column** before the bank,
   `lf.with_columns(ret=(pl.col("p") / pl.col("mid")).log())`, and name it in
-  `targets`: a log ratio sits about zero, where `hit_rate` takes its sign. `po.target`
+  `targets`: a log ratio sits about zero, where `hit_rate` takes its sign. `rheon.target`
   only names a target's output fields.
 - **Every spec adds one column**, named after the spec, each row a record of
   named fields. `weight_sum` is in every one.
   The linear models add `pred_<target>`, `resid_<target>` and `coef`, and diagnostics
   add theirs when switched on.
-  [OUTPUTS.md](https://github.com/hgilde/polars-online/blob/main/docs/OUTPUTS.md) lists
-  every model's fields, and `frame.online.unnest(specs)` flattens the column into plain
+  [OUTPUTS.md](https://github.com/rheon-dev/rheon/blob/main/docs/OUTPUTS.md) lists
+  every model's fields, and `frame.rheon.unnest(specs)` flattens the column into plain
   columns.
 
 **Every surface streams.** There is no in-memory-only form, and no expression
@@ -89,92 +93,92 @@ namespace: Polars hands a stateful user expression its whole column, so it canno
 
 | surface | run it | load a state | save a state |
 |---|---|---|---|
-| `ModelBank`, fed chunks or handed a `LazyFrame` | `bank.fit_predict(chunk)` | `po.ModelBank.load(path)` | `bank.save(path)` |
-| a query | `lf.online.fit_predict(...)` | `load_state=` | `save_state=` |
-| the `polars-online` command line | `polars-online --config bank.toml` | `--load-state`, or `load_state` in the TOML | `--save-state`, or `save_state` in the TOML |
+| `ModelBank`, fed chunks or handed a `LazyFrame` | `bank.fit_predict(chunk)` | `rp.ModelBank.load(path)` | `bank.save(path)` |
+| a query | `lf.rheon.fit_predict(...)` | `load_state=` | `save_state=` |
+| the `rheon` command line | `rheon --config bank.toml` | `--load-state`, or `load_state` in the TOML | `--save-state`, or `save_state` in the TOML |
 
 A state file is versioned msgpack, written atomically, and loads on macOS, Linux and
 Windows alike.
 
 ## Start here
 
-- [Every feature](https://github.com/hgilde/polars-online/blob/main/docs/FEATURES.md): each model, function, method, shared
+- [Every feature](https://github.com/rheon-dev/rheon/blob/main/docs/FEATURES.md): each model, function, method, shared
   parameter, flag and environment variable, a line each, linked
-- [README](https://github.com/hgilde/polars-online#readme): the landing page -- what the
-  library is, install, [a first fit](https://github.com/hgilde/polars-online#a-first-fit),
-  and [a map](https://github.com/hgilde/polars-online#where-to-go-next)
+- [README](https://github.com/rheon-dev/rheon#readme): the landing page -- what the
+  library is, install, [a first fit](https://github.com/rheon-dev/rheon#a-first-fit),
+  and [a map](https://github.com/rheon-dev/rheon#where-to-go-next)
   from each task to its pages
-- [Four use cases](https://github.com/hgilde/polars-online/blob/main/docs/HIGHLIGHTS.md): model
+- [Four use cases](https://github.com/rheon-dev/rheon/blob/main/docs/HIGHLIGHTS.md): model
   selection, stability, factors, asynchronous streams
-- [What every spec takes](https://github.com/hgilde/polars-online/blob/main/docs/MODELS.md#what-every-spec-takes): the parameters every
+- [What every spec takes](https://github.com/rheon-dev/rheon/blob/main/docs/MODELS.md#what-every-spec-takes): the parameters every
   model shares -- columns, clock and units, the clock's policy, a hard window, the warm-up
   gates -- and what the bank refuses
-- [Models](https://github.com/hgilde/polars-online/blob/main/docs/MODELS.md): all 22, each with its recursion, its builder and its Rust
-  source. [Choose a model](https://github.com/hgilde/polars-online/blob/main/docs/how-to/choose-a-model.md) says which for what
-- [Every document](https://github.com/hgilde/polars-online/blob/main/docs/README.md): every guide, grouped by kind and task
+- [Models](https://github.com/rheon-dev/rheon/blob/main/docs/MODELS.md): all 22, each with its recursion, its builder and its Rust
+  source. [Choose a model](https://github.com/rheon-dev/rheon/blob/main/docs/how-to/choose-a-model.md) says which for what
+- [Every document](https://github.com/rheon-dev/rheon/blob/main/docs/README.md): every guide, grouped by kind and task
 
 ## API reference
 
-- [Spec builders](https://hgilde.github.io/polars-online/spec.html): every keyword
+- [Spec builders](https://rheon-dev.github.io/rheon/spec.html): every keyword
   and its default
-- [ModelBank, fit_predict, predict](https://hgilde.github.io/polars-online/rheon.html):
+- [ModelBank, fit_predict, predict](https://rheon-dev.github.io/rheon/rheon.html):
   the objects and functions the package exports
-- [Frame namespaces](https://hgilde.github.io/polars-online/namespaces.html):
-  `lf.online.*`, `df.online.*`
-- [Evaluation](https://hgilde.github.io/polars-online/eval.html)
-- [Gram accessors](https://hgilde.github.io/polars-online/gram.html)
-- [Correlation toolkit](https://hgilde.github.io/polars-online/corr.html)
-- [Stream transforms](https://hgilde.github.io/polars-online/stream.html)
-- [Window operators](https://hgilde.github.io/polars-online/ops.html): `po.ewm_mean`,
-  `po.ewm_sum`, `po.ewm_rate`, `po.ewm_quantile` (each looking ahead under `reverse=True`),
-  `po.ewm_var`, `po.ewm_std` -- Polars expressions over a stream's clock -- and
-  `po.increment`, a column's step from its last value, all run by
-  `lf.online.with_windows(*exprs, **named, clock=...)` in one pass. A look-ahead one
+- [Frame namespaces](https://rheon-dev.github.io/rheon/namespaces.html):
+  `lf.rheon.*`, `df.rheon.*`
+- [Evaluation](https://rheon-dev.github.io/rheon/eval.html)
+- [Gram accessors](https://rheon-dev.github.io/rheon/gram.html)
+- [Correlation toolkit](https://rheon-dev.github.io/rheon/corr.html)
+- [Stream transforms](https://rheon-dev.github.io/rheon/stream.html)
+- [Window operators](https://rheon-dev.github.io/rheon/ops.html): `rp.ewm_mean`,
+  `rp.ewm_sum`, `rp.ewm_rate`, `rp.ewm_quantile` (each looking ahead under `reverse=True`),
+  `rp.ewm_var`, `rp.ewm_std` -- Polars expressions over a stream's clock -- and
+  `rp.increment`, a column's step from its last value, all run by
+  `lf.rheon.with_windows(*exprs, **named, clock=...)` in one pass. A look-ahead one
   is also a spec's target, learned once its window has passed: `fit_predict`
   refuses an `embargo` shorter than its `window_size`
-- [Simulation](https://hgilde.github.io/polars-online/sim.html)
+- [Simulation](https://rheon-dev.github.io/rheon/sim.html)
 
 ## Tutorials
 
-- [Fit over parquet files in a query](https://github.com/hgilde/polars-online/blob/main/docs/tutorials/stream-from-parquet.md)
-- [Follow a local fit through a day](https://github.com/hgilde/polars-online/blob/main/docs/tutorials/local-fit-with-a-clock.md)
-- [Fit, save and serve](https://github.com/hgilde/polars-online/blob/main/docs/tutorials/fit-save-and-serve.md)
+- [Fit over parquet files in a query](https://github.com/rheon-dev/rheon/blob/main/docs/tutorials/stream-from-parquet.md)
+- [Follow a local fit through a day](https://github.com/rheon-dev/rheon/blob/main/docs/tutorials/local-fit-with-a-clock.md)
+- [Fit, save and serve](https://github.com/rheon-dev/rheon/blob/main/docs/tutorials/fit-save-and-serve.md)
 
 ## How-tos
 
-[Every document](https://github.com/hgilde/polars-online/blob/main/docs/README.md) lists every how-to and explanation by task. The most used how-tos: run a bank
-[in a query](https://github.com/hgilde/polars-online/blob/main/docs/how-to/run-a-bank-in-a-query.md) or
-[from the command line](https://github.com/hgilde/polars-online/blob/main/docs/how-to/run-a-bank-from-the-command-line.md);
-[resume](https://github.com/hgilde/polars-online/blob/main/docs/how-to/resume-from-a-saved-state.md) or
-[serve](https://github.com/hgilde/polars-online/blob/main/docs/how-to/serve-from-a-saved-state.md) from a state;
-[a target that looks ahead](https://github.com/hgilde/polars-online/blob/main/docs/how-to/make-a-target-that-looks-ahead.md);
-[readiness](https://github.com/hgilde/polars-online/blob/main/docs/how-to/decide-when-a-model-is-ready.md);
-[settings from the stream's own errors](https://github.com/hgilde/polars-online/blob/main/docs/CALIBRATION.md);
-[trees on files larger than memory](https://github.com/hgilde/polars-online/blob/main/docs/GBDT.md).
+[Every document](https://github.com/rheon-dev/rheon/blob/main/docs/README.md) lists every how-to and explanation by task. The most used how-tos: run a bank
+[in a query](https://github.com/rheon-dev/rheon/blob/main/docs/how-to/run-a-bank-in-a-query.md) or
+[from the command line](https://github.com/rheon-dev/rheon/blob/main/docs/how-to/run-a-bank-from-the-command-line.md);
+[resume](https://github.com/rheon-dev/rheon/blob/main/docs/how-to/resume-from-a-saved-state.md) or
+[serve](https://github.com/rheon-dev/rheon/blob/main/docs/how-to/serve-from-a-saved-state.md) from a state;
+[a target that looks ahead](https://github.com/rheon-dev/rheon/blob/main/docs/how-to/make-a-target-that-looks-ahead.md);
+[readiness](https://github.com/rheon-dev/rheon/blob/main/docs/how-to/decide-when-a-model-is-ready.md);
+[settings from the stream's own errors](https://github.com/rheon-dev/rheon/blob/main/docs/CALIBRATION.md);
+[trees on files larger than memory](https://github.com/rheon-dev/rheon/blob/main/docs/GBDT.md).
 
 ## Reference
 
-[OUTPUTS.md](https://github.com/hgilde/polars-online/blob/main/docs/OUTPUTS.md) (every model's output fields),
-[RUNNER.md](https://github.com/hgilde/polars-online/blob/main/docs/RUNNER.md) (every TOML key and flag),
-[STATE-WORKFLOW.md](https://github.com/hgilde/polars-online/blob/main/docs/STATE-WORKFLOW.md), [DIAGNOSTICS.md](https://github.com/hgilde/polars-online/blob/main/docs/DIAGNOSTICS.md),
-[DATA-QUALITY.md](https://github.com/hgilde/polars-online/blob/main/docs/DATA-QUALITY.md),
-[PERFORMANCE.md](https://github.com/hgilde/polars-online/blob/main/docs/PERFORMANCE.md),
-[VERSIONS.md](https://github.com/hgilde/polars-online/blob/main/docs/VERSIONS.md),
-[EXAMPLE-DATA.md](https://github.com/hgilde/polars-online/blob/main/docs/EXAMPLE-DATA.md)
+[OUTPUTS.md](https://github.com/rheon-dev/rheon/blob/main/docs/OUTPUTS.md) (every model's output fields),
+[RUNNER.md](https://github.com/rheon-dev/rheon/blob/main/docs/RUNNER.md) (every TOML key and flag),
+[STATE-WORKFLOW.md](https://github.com/rheon-dev/rheon/blob/main/docs/STATE-WORKFLOW.md), [DIAGNOSTICS.md](https://github.com/rheon-dev/rheon/blob/main/docs/DIAGNOSTICS.md),
+[DATA-QUALITY.md](https://github.com/rheon-dev/rheon/blob/main/docs/DATA-QUALITY.md),
+[PERFORMANCE.md](https://github.com/rheon-dev/rheon/blob/main/docs/PERFORMANCE.md),
+[VERSIONS.md](https://github.com/rheon-dev/rheon/blob/main/docs/VERSIONS.md),
+[EXAMPLE-DATA.md](https://github.com/rheon-dev/rheon/blob/main/docs/EXAMPLE-DATA.md)
 
 ## Explanations
 
-- [Why every prediction is out-of-sample](https://github.com/hgilde/polars-online/blob/main/docs/explanation/out-of-sample.md)
-- [Chunk invariance and streaming](https://github.com/hgilde/polars-online/blob/main/docs/explanation/chunk-invariance-and-streaming.md)
-- [Time and decay](https://github.com/hgilde/polars-online/blob/main/docs/explanation/time-and-decay.md)
-- [Warm-up and readiness](https://github.com/hgilde/polars-online/blob/main/docs/explanation/warm-up-and-readiness.md)
-- [A bank's state and resuming it](https://github.com/hgilde/polars-online/blob/main/docs/explanation/state-and-resuming.md)
-- [How a window weighs its rows](https://github.com/hgilde/polars-online/blob/main/docs/WINDOWS.md)
-- [How a Gram stands in for the rows](https://github.com/hgilde/polars-online/blob/main/docs/GRAM.md)
-- [Against scikit-learn](https://github.com/hgilde/polars-online/blob/main/docs/explanation/against-scikit-learn.md)
+- [Why every prediction is out-of-sample](https://github.com/rheon-dev/rheon/blob/main/docs/explanation/out-of-sample.md)
+- [Chunk invariance and streaming](https://github.com/rheon-dev/rheon/blob/main/docs/explanation/chunk-invariance-and-streaming.md)
+- [Time and decay](https://github.com/rheon-dev/rheon/blob/main/docs/explanation/time-and-decay.md)
+- [Warm-up and readiness](https://github.com/rheon-dev/rheon/blob/main/docs/explanation/warm-up-and-readiness.md)
+- [A bank's state and resuming it](https://github.com/rheon-dev/rheon/blob/main/docs/explanation/state-and-resuming.md)
+- [How a window weighs its rows](https://github.com/rheon-dev/rheon/blob/main/docs/WINDOWS.md)
+- [How a Gram stands in for the rows](https://github.com/rheon-dev/rheon/blob/main/docs/GRAM.md)
+- [Against scikit-learn](https://github.com/rheon-dev/rheon/blob/main/docs/explanation/against-scikit-learn.md)
 
 ## Optional
 
-- [Changelog](https://github.com/hgilde/polars-online/blob/main/CHANGELOG.md)
-- [Extending](https://github.com/hgilde/polars-online/blob/main/docs/EXTENDING.md): adding a model
-- [Testing](https://github.com/hgilde/polars-online/blob/main/docs/TESTING.md): what the suite proves
+- [Changelog](https://github.com/rheon-dev/rheon/blob/main/CHANGELOG.md)
+- [Extending](https://github.com/rheon-dev/rheon/blob/main/docs/EXTENDING.md): adding a model
+- [Testing](https://github.com/rheon-dev/rheon/blob/main/docs/TESTING.md): what the suite proves

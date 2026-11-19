@@ -1,7 +1,7 @@
 <!-- kind: how-to -->
 # Contributing
 
-This how-to is for anyone who wants to change polars-online: it sets up a
+This how-to is for anyone who wants to change rheon: it sets up a
 checkout, runs the tests, and makes a change that matches the conventions
 the library already has. This is a small, opinionated library, and the
 fastest way to get a change merged is to match those conventions.
@@ -126,7 +126,7 @@ with the same results. [Iterate on a
 change](docs/contributing/iterate-on-a-change.md) has the measurements.
 
 By default, at most two test gates run on one machine at once
-(`POLARS_ONLINE_GATES`). A third waits, and its
+(`RHEON_GATES`). A third waits, and its
 first line is then `gate: waiting for a gate token`. A running test gate's
 first line names the tier, and its last line is `gate: PASS` or `gate:
 FAIL` with the tier beside it. The essentials' verdict says it is not the
@@ -189,7 +189,7 @@ know nothing about Polars, Python, or clocks-as-columns. Plumbing lives in
 - an entry in `crates/rheon-core/tests/model_contract.rs`, which checks the
   shared contract (`weight_sum` semantics, slot counts, state round-tripping) for
   every model at once;
-- wiring in `crates/rheon-polars/src/spec.rs` and a `po.spec.<name>()`
+- wiring in `crates/rheon-polars/src/spec.rs` and a `rheon.spec.<name>()`
   constructor.
 
 That is the shape of it. [`docs/EXTENDING.md`](docs/EXTENDING.md) is the full
@@ -223,7 +223,7 @@ says which of two things happened:
 
 The instruction counts come from the `Budgets` workflow on Linux, whose
 artifact holds them as `measured.json`. The memory measurements come from
-pytest on every CI leg, written where `POLARS_ONLINE_BUDGETS_OUT` points.
+pytest on every CI leg, written where `RHEON_BUDGETS_OUT` points.
 The peak resident memory (`rss-<platform>.json`) comes only from each
 OS's leg at the oldest supported Python, the one that holds its budget.
 
@@ -261,7 +261,7 @@ Polars range. [WRITING.md](docs/WRITING.md) gives the rules this
 documentation is written to. [CHANGELOG.md](CHANGELOG.md) says what each
 release changed, [llms.txt](llms.txt) is the map for coding agents, and
 the API reference, built from the docstrings, is published from every
-green push to `main` at <https://hgilde.github.io/polars-online/>.
+green push to `main` at <https://rheon-dev.github.io/rheon/>.
 
 ## Licensing of contributions
 

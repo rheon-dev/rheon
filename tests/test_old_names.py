@@ -44,12 +44,8 @@ HISTORY = (
 #: Not yet scanned by any rule: the prose that explains the library to a reader
 #: (rewritten in its own commit), and the changelog's past sections.
 DEFERRED = (
-    "llms.txt",
-    "CONTRIBUTING.md",
     "CHANGELOG.md",
     "CLAUDE.md",
-    "CITATION.cff",
-    "SECURITY.md",
     "docs/*.md",
     "docs/how-to/*",
     "docs/tutorials/*",
@@ -145,7 +141,7 @@ CODE = (
 
 #: The reader-facing files rewritten under the new name, held to the rules
 #: of the package's and the project's names beside the code.
-PROSE = ("README.md",)
+PROSE = ("README.md", "llms.txt", "CONTRIBUTING.md", "SECURITY.md", "CITATION.cff")
 
 RULES = (
     Rule(
@@ -164,6 +160,7 @@ RULES = (
             *NOT_YET,
             # The note under the title says what the package was called.
             "README.md",
+            "llms.txt",
         ),
     ),
     Rule(
@@ -181,7 +178,7 @@ RULES = (
     Rule(
         "the warning classes were renamed RheonWarning and RheonDeprecationWarning",
         re.compile(r"PolarsOnline(?:Deprecation)?Warning|__polars_online_renamed__"),
-        CODE,
+        CODE + PROSE,
         allowed=("tests/test_old_names.py",),
     ),
     Rule(
@@ -195,7 +192,7 @@ RULES = (
         # An accessor: `.online` after a name, a call or a subscript, as
         # `lf.online.fit_predict`, `df.online[...]`, `scan(...).online.`.
         re.compile(r"""(?<=[A-Za-z0-9_)\]"'])\\?\.online(?![A-Za-z0-9_-])"""),
-        CODE,
+        CODE + PROSE,
         allowed=(
             "tests/test_old_names.py",
             # Reads docs/FEATURES.md, whose index still names `lf.online`.
@@ -207,7 +204,7 @@ RULES = (
     Rule(
         "the environment variables are RHEON_*; only the fallback reads the old names",
         re.compile(r"POLARS_ONLINE_"),
-        CODE,
+        CODE + PROSE,
         allowed=ENV_FALLBACK,
     ),
     Rule(
