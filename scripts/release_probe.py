@@ -27,6 +27,8 @@ own files, which ``tests/test_released_state.py`` holds this build's to:
 
 from __future__ import annotations
 
+import importlib
+import importlib.util
 import inspect
 import json
 import sys
@@ -35,10 +37,12 @@ import warnings
 import numpy as np
 import polars as pl
 
-try:  # this build is `rheon.polars`; a release before 2.0 is `polars_online`
-    from rheon import polars as po
-except ImportError:
-    import polars_online as po
+# This build is `rheon.polars`; a release before 2.0 is `polars_online`. Chosen
+# by which is installed, so an import error inside `rheon` is shown, not hidden
+# behind a missing `polars_online`.
+po = importlib.import_module(
+    "rheon.polars" if importlib.util.find_spec("rheon") is not None else "polars_online"
+)
 
 INF = float("inf")
 

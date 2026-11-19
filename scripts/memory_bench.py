@@ -115,7 +115,7 @@ def repeat(d: Path, size: str) -> None:
 
 
 def _spec():
-    from rheon import polars as rp
+    from rheon_import import rp
 
     return rp.spec.ewridge(
         "m",
@@ -133,8 +133,7 @@ def _spec():
 def run(d: Path, case: str, size: str) -> None:
     """One case, in this process."""
     import polars as pl
-
-    from rheon import polars as rp
+    from rheon_import import namespace, rp
 
     spec = _spec()
     keep = pl.col("w") > 0  # every row
@@ -146,10 +145,10 @@ def run(d: Path, case: str, size: str) -> None:
             bank.fit_predict(chunk)
         return
     q = {
-        "query": lambda: lf.rheon.fit_predict([spec]),
-        "released": lambda: lf.rheon.fit_predict([spec]),
-        "after": lambda: lf.rheon.fit_predict([spec]).filter(keep),
-        "before": lambda: lf.filter(keep).rheon.fit_predict([spec]),
+        "query": lambda: namespace(lf).fit_predict([spec]),
+        "released": lambda: namespace(lf).fit_predict([spec]),
+        "after": lambda: namespace(lf).fit_predict([spec]).filter(keep),
+        "before": lambda: namespace(lf.filter(keep)).fit_predict([spec]),
     }[case]()
     q.sink_parquet(out)
 

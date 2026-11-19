@@ -46,7 +46,7 @@ def test_the_header_names_the_build_and_the_machine():
     576 ms where the machine's load had gone to 524, with nothing in the
     output to say so."""
     text = _load("bench_header").header()
-    for field in ("commit ", "polars-online ", "polars ", "Python ", "cpus", "load "):
+    for field in ("commit ", "rheon ", "polars ", "Python ", "cpus", "load "):
         assert field in text, (field, text)
 
 

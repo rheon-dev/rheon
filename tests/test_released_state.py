@@ -1059,7 +1059,9 @@ BEFORE_REFIT = "1.3.0"
 _REFIT_SCRIPT = """
 import json, sys
 import polars as pl
-import polars_online as po
+import importlib, importlib.util
+name = 'rheon.polars' if importlib.util.find_spec('rheon') else 'polars_online'
+po = importlib.import_module(name)
 specs, data, out = json.loads(sys.argv[1]), sys.argv[2], sys.argv[3]
 frames = [po.ModelBank([s]).fit_predict(pl.read_parquet(data)).select(s["name"]) for s in specs]
 pl.concat(frames, how="horizontal").write_parquet(out)
@@ -1179,7 +1181,9 @@ def test_no_refit_is_the_release_before_it_to_the_bit(tmp_path):
 _SAVE_SCRIPT = """
 import json, sys
 import polars as pl
-import polars_online as po
+import importlib, importlib.util
+name = 'rheon.polars' if importlib.util.find_spec('rheon') else 'polars_online'
+po = importlib.import_module(name)
 specs, data, out = json.loads(sys.argv[1]), sys.argv[2], sys.argv[3]
 bank = po.ModelBank(specs)
 bank.fit_predict(pl.read_parquet(data))

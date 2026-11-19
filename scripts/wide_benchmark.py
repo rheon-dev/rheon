@@ -22,7 +22,9 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
-from rheon import polars as rp
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from rheon_import import rp  # noqa: E402
 
 
 def make(rows: int, k: int, m: int, seed: int = 0) -> pl.DataFrame:

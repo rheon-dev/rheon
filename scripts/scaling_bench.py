@@ -3,7 +3,9 @@
 Throughput alone hides the thing most likely to regress: a change that
 serializes the fan-out looks fine on one thread and costs 4x on ten. This
 re-runs one grouped workload at several `RHEON_MAX_THREADS` in subprocesses --
-the pool size is fixed at first use, so it cannot be varied in-process.
+the pool size is fixed at first use, so it cannot be varied in-process. A
+release before 2.0 is run by the same script, with its own name for the
+variable (`scripts/rheon_import.py`).
 """
 
 from __future__ import annotations
@@ -14,8 +16,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from rheon_import import PRELUDE, THREADS_VAR  # noqa: E402
+
 WORKLOAD = """
-import os, time, numpy as np, polars as pl, rheon.polars as po
+import os, time, numpy as np, polars as pl
 rows, k, groups = {rows}, 20, 64
 rng = np.random.default_rng(0)
 d = {{"t": np.arange(float(rows))}}
@@ -35,9 +41,9 @@ print(rows / dt)
 
 
 def run(rows: int, threads: int) -> float:
-    env = {**os.environ, "RHEON_MAX_THREADS": str(threads)}
+    env = {**os.environ, THREADS_VAR: str(threads)}
     out = subprocess.run(
-        [sys.executable, "-c", WORKLOAD.format(rows=rows)],
+        [sys.executable, "-c", PRELUDE + WORKLOAD.format(rows=rows)],
         capture_output=True,
         text=True,
         encoding="utf-8",
