@@ -515,7 +515,7 @@ def main(argv: list[str] | None = None) -> int:
     w.add_argument("--out", type=Path, default=Path("dist"), help="where built wheels go")
     w.add_argument("--fetched", type=Path, default=Path("fetched"), help="where reused ones go")
     w.add_argument("--manifest", type=Path, default=Path("wheels.json"))
-    w.add_argument("--repository", default="hgilde/polars-online")
+    w.add_argument("--repository", default="rheon-dev/rheon")
     w.set_defaults(fn=_cmd_wheels)
     d = sub.add_parser("digests", help="compare_outputs on the two default wheels")
     d.add_argument("--manifest", type=Path, default=Path("wheels.json"))

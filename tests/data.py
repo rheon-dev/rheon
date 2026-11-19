@@ -191,8 +191,28 @@ def _download(
     raise AssertionError("unreachable")
 
 
-#: PyPI's JSON description of this package: every version and its files.
+#: PyPI's JSON description of this package's releases before 2.0, which are
+#: published as `polars-online`: every version and its files.
 PYPI_JSON = "https://pypi.org/pypi/polars-online/json"
+
+#: The same for `rheon`, the name from 2.0 on. (`rheon` also holds a 1.x
+#: forwarder to the old name, which is no build of this code: only its 2.0
+#: and later releases count.)
+RHEON_PYPI_JSON = "https://pypi.org/pypi/rheon/json"
+
+#: The first release published as `rheon`.
+FIRST_RHEON_RELEASE = (2, 0, 0)
+
+
+def release_project(version: str) -> str:
+    """The PyPI project a release is published under: `polars-online` before
+    2.0, `rheon` from 2.0 on. Its module is `polars_online` before 2.0 and
+    `rheon` from 2.0 on."""
+    return "rheon" if _version_key(version) >= FIRST_RHEON_RELEASE else "polars-online"
+
+
+def _version_key(version: str) -> tuple[int, ...]:
+    return tuple(int(p) for p in version.split("."))
 
 
 def pypi_releases(text: str | None = None) -> list[str]:
@@ -200,14 +220,30 @@ def pypi_releases(text: str | None = None) -> list[str]:
     oldest first: a version counts once it has a file and not every file
     is yanked, as ``pip`` reads it. Read fresh each time, never cached, so
     a release is listed the moment it is uploaded; raises :class:`Offline`
-    as the downloads do. ``text`` is the JSON itself, for a test."""
-    doc = json.loads(_download(PYPI_JSON, attempts=2) if text is None else text)
-    out = [
+    as the downloads do. The releases before 2.0 are read from
+    `polars-online`'s page and those from 2.0 from `rheon`'s, each only
+    under its own name (`release_project`). ``text`` is `polars-online`'s
+    JSON itself, for a test, and then only it is read."""
+    out = _final_versions(json.loads(_download(PYPI_JSON, attempts=2) if text is None else text))
+    out = [v for v in out if release_project(v) == "polars-online"]
+    if text is None:
+        try:
+            doc = json.loads(_download(RHEON_PYPI_JSON, attempts=2))
+        except urllib.error.HTTPError as e:
+            if e.code != 404:  # no `rheon` project yet: no release from 2.0
+                raise
+        else:
+            out += [v for v in _final_versions(doc) if release_project(v) == "rheon"]
+    return sorted(out, key=_version_key)
+
+
+def _final_versions(doc: dict) -> list[str]:
+    """The final, not wholly yanked versions of a PyPI JSON document."""
+    return [
         v
         for v, files in doc["releases"].items()
         if re.fullmatch(r"\d+\.\d+\.\d+", v) and files and not all(f["yanked"] for f in files)
     ]
-    return sorted(out, key=lambda v: tuple(int(p) for p in v.split(".")))
 
 
 def write_atomically(path: Path, write) -> None:
@@ -420,7 +456,7 @@ def nist_strd_linear(name: str) -> dict[str, object]:
     out_dir.mkdir(parents=True, exist_ok=True)
     cached = out_dir / f"{name}.dat"
     if not cached.exists():
-        body = _download(_STRD_URL.format(name=name), headers={"User-Agent": "polars-online-tests"})
+        body = _download(_STRD_URL.format(name=name), headers={"User-Agent": "rheon-tests"})
         write_atomically(cached, lambda tmp: tmp.write_bytes(body))
     text = cached.read_text(encoding="utf-8")
     lines = text.splitlines()

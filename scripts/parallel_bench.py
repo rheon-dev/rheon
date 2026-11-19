@@ -31,8 +31,12 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from rheon_import import PRELUDE, THREADS_VAR  # noqa: E402
+
 GRID = """
-import time, polars as pl, rheon.polars as po
+import time, polars as pl
 from itertools import product
 factors = {{"mkt": ["x0"], "mkt-sz": ["x0", "x1"], "mkt-sz-val": ["x0", "x1", "x2"]}}
 def spec(name, features, standardize):
@@ -42,13 +46,13 @@ def spec(name, features, standardize):
                            standardize=standardize)
 specs = [spec(n, f, s) for (n, f), s in product(factors.items(), [False, True])]
 t0 = time.perf_counter()
-(pl.scan_parquet("{src}").rheon.fit_predict(specs, chunk_size=200_000, save_state="{state}")
+(getattr(pl.scan_parquet("{src}"), ns).fit_predict(specs, chunk_size=200_000, save_state="{state}")
    .sink_parquet("{dst}"))
 print(time.perf_counter() - t0)
 """
 
 EIGHT = """
-import time, numpy as np, polars as pl, rheon.polars as po
+import time, numpy as np, polars as pl
 rng = np.random.default_rng(0)
 rows, k = 300_000, 20
 d = {"t": np.arange(float(rows))}
@@ -71,11 +75,11 @@ print(best_one, best_each)
 """
 
 KNOBS = """
-import time, polars as pl, rheon.polars as po
+import time, polars as pl
 spec = po.spec.ewridge("m", targets=["y"], features=["x0", "x1", "x2", "x3"], clock="t",
                        gap_cap=10.0, half_life=[1000.0, 5000.0], group="stock_id")
 t0 = time.perf_counter()
-pl.scan_parquet("{src}").rheon.fit_predict([spec], chunk_size=200_000).sink_parquet("{dst}")
+getattr(pl.scan_parquet("{src}"), ns).fit_predict([spec], chunk_size=200_000).sink_parquet("{dst}")
 print(time.perf_counter() - t0)
 """
 
@@ -115,7 +119,7 @@ def timed(code: str, env: dict[str, str]) -> tuple[str, float]:
     else:
         prefix, pattern, unit = [], "", 0.0
     r = subprocess.run(
-        [*prefix, sys.executable, "-c", code],
+        [*prefix, sys.executable, "-c", PRELUDE + code],
         env={**os.environ, **env},
         capture_output=True,
         text=True,
@@ -143,7 +147,7 @@ def main() -> None:
             float(
                 timed(
                     GRID.format(src=ticks, state=out / "grid.state", dst=out / "grid.parquet"),
-                    {"RHEON_MAX_THREADS": str(threads)},
+                    {THREADS_VAR: str(threads)},
                 )[0]
             )
             for _ in range(3)
@@ -159,7 +163,7 @@ def main() -> None:
     for polars_threads, bank_threads in ((14, 14), (4, 14)):
         env = {
             "POLARS_MAX_THREADS": str(polars_threads),
-            "RHEON_MAX_THREADS": str(bank_threads),
+            THREADS_VAR: str(bank_threads),
         }
         runs = []
         for _ in range(2):

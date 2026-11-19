@@ -21,7 +21,7 @@ import polars as pl
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tests"))
 
-from rheon import polars as rp  # noqa: E402
+from rheon_import import rp  # noqa: E402
 
 
 def make(rows: int, k: int, m: int, seed: int = 0) -> pl.DataFrame:

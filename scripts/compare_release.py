@@ -13,7 +13,10 @@ declares, or a regression, whose cause then gets a test.
 
 The released version is installed from PyPI into a cached venv under
 `.cache/release-compare/`, beside the Polars this environment has, and
-`scripts/release_probe.py` runs under both builds. Each run reports which
+`scripts/release_probe.py` runs under both builds. A release before 2.0 is
+the project `polars-online` and imports as `polars_online`; from 2.0 it is
+`rheon` (`tests/data.py`, `release_project`), and the probe imports whichever
+the venv has. Each run reports which
 package it imported, so the comparison cannot quietly compare a
 build with itself. A spec the released version refuses is listed as not
 comparable, not as a difference.
@@ -27,11 +30,16 @@ import os
 import shutil
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 from pathlib import Path
 
 import numpy as np
 import polars as pl
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
+
+from data import release_project  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 PROBE = REPO / "scripts" / "release_probe.py"
@@ -39,8 +47,21 @@ CACHE = REPO / ".cache" / "release-compare"
 
 
 def newest_release() -> str:
-    with urllib.request.urlopen("https://pypi.org/pypi/polars-online/json", timeout=30) as r:
-        return json.load(r)["info"]["version"]
+    """The newest release: `rheon`'s newest from 2.0 on if it has one, else
+    `polars-online`'s newest (`rheon` also holds a 1.x forwarder, which is no
+    build of this code)."""
+    for project in ("rheon", "polars-online"):
+        try:
+            with urllib.request.urlopen(f"https://pypi.org/pypi/{project}/json", timeout=30) as r:
+                doc = json.load(r)
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                continue
+            raise
+        version = doc["info"]["version"]
+        if release_project(version) == project:
+            return version
+    raise SystemExit("no release found on PyPI under `rheon` or `polars-online`")
 
 
 def _python_in(venv: Path) -> Path:
@@ -48,7 +69,8 @@ def _python_in(venv: Path) -> Path:
 
 
 def released_python(version: str) -> Path:
-    """A venv holding `polars-online==version` and this environment's Polars.
+    """A venv holding the release `version` (`polars-online`, or `rheon` from
+    2.0) and this environment's Polars.
 
     Built under a name of this process's own and renamed into place once
     installed, so a venv at the cached path is always a whole one: the test
@@ -67,7 +89,7 @@ def released_python(version: str) -> Path:
         subprocess.run(
             [
                 "uv", "pip", "install", "-q", "--python", str(_python_in(building)),
-                f"polars-online=={version}", f"polars=={pl.__version__}", "numpy",
+                f"{release_project(version)}=={version}", f"polars=={pl.__version__}", "numpy",
             ],
             check=True,
         )  # fmt: skip
@@ -170,7 +192,8 @@ def main() -> int:
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as fh:
-            fh.write(f"## Against polars-online {version}, bit for bit\n\n```text\n{text}\n```\n")
+            title = f"## Against {release_project(version)} {version}, bit for bit"
+            fh.write(f"{title}\n\n```text\n{text}\n```\n")
     return 0 if args.report and code == 1 else code
 
 
@@ -184,8 +207,9 @@ def compare(
 ) -> int:
     """Write the comparison into `out`: 0 identical, 1 different, 2 nothing compared."""
     print = out.append  # noqa: A001 -- every line goes to the report
-    print(f"released: polars-online {old_meta['version']} from {old_meta['file']}")
-    print(f"this:     polars-online {new_meta['version']} from {new_meta['file']}")
+    old_name = release_project(old_meta["version"])
+    print(f"released: {old_name} {old_meta['version']} from {old_meta['file']}")
+    print(f"this:     rheon {new_meta['version']} from {new_meta['file']}")
     if old_meta["file"] == new_meta["file"]:
         print("both runs imported the same package; nothing was compared")
         return 2

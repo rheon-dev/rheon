@@ -13,7 +13,8 @@ load, before its first number:
 
     print(header(), flush=True)
 
-Standard library only, besides the two packages it names.
+Standard library only, besides the two packages it names. It names this build
+as `rheon` and a release before 2.0 as `polars-online` (`scripts/rheon_import.py`).
 """
 
 from __future__ import annotations
@@ -44,14 +45,13 @@ def load() -> str:
 
 def header() -> str:
     import polars as pl
-
-    from rheon import polars as rp
+    from rheon_import import PACKAGE, rp
 
     commit = _git("rev-parse", "--short=12", "HEAD") or "unknown"
     if _git("status", "--porcelain", "--untracked-files=no"):
         commit += " (modified)"
     return (
-        f"ran on: commit {commit}; polars-online {rp.__version__}; polars {pl.__version__}; "
+        f"ran on: commit {commit}; {PACKAGE} {rp.__version__}; polars {pl.__version__}; "
         f"Python {platform.python_version()}; {platform.system()} {platform.machine()}; "
         f"{os.cpu_count()} cpus; load {load()}"
     )
