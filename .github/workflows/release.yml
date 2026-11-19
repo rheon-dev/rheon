@@ -33,10 +33,10 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # The CPU features the x86-64 wheels of `polars-online` are built to need:
+  # The CPU features the x86-64 wheels of `rheon` are built to need:
   # the set Polars builds its own default runtime for (`BUILD_FEATURE_FLAGS`
   # of `polars-runtime-32`, the same in its 2.0.0 and 2.1.0 wheels), which is x86-64-v3
-  # less F16C and XSAVE and plus PCLMULQDQ. `polars-online-compat` is built
+  # less F16C and XSAVE and plus PCLMULQDQ. `rheon-compat` is built
   # without them. The import-time CPU check reads every one of these
   # (python/rheon/_cpu_check.py); a test holds the two lists equal.
   X86_FEATURES: "+sse3,+ssse3,+sse4.1,+sse4.2,+popcnt,+cmpxchg16b,+avx,+avx2,+fma,+bmi1,+bmi2,+lzcnt,+pclmulqdq,+movbe"
@@ -143,7 +143,7 @@ jobs:
           path: dist/*.tar.gz
 
       # The same source under the other name, for a platform with no wheel
-      # that asks for `polars-online-compat`: the checkout renamed in place
+      # that asks for `rheon-compat`: the checkout renamed in place
       # (scripts/compat_package.py), then the second sdist into a folder of
       # its own, so the install below finds one file in `dist`. It is built
       # and not installed: the first sdist's install above compiles the same
@@ -172,7 +172,8 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
           uv venv --python 3.12 smoke
-          uv pip install --python smoke dist/*.tar.gz
+          sdist=$(ls dist/*.tar.gz)
+          uv pip install --python smoke "$sdist[polars]"
           uv run --no-project --python smoke python scripts/wheel_smoke.py --version "$VERSION"
 
   # Wheels + the CLI binary (docs/PLAN.md §10).
@@ -198,9 +199,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Every target is built twice: `default` is `polars-online`, whose
+        # Every target is built twice: `default` is `rheon`, whose
         # x86-64 wheels need AVX2 and FMA (`X86_FEATURES`), and `compat` is
-        # `polars-online-compat`, the same source under that name, built for
+        # `rheon-compat`, the same source under that name, built for
         # every x86-64 CPU. The ARM targets build alike under both names
         # (RUSTFLAGS is empty for them), as Polars' own
         # `polars-runtime-compat` ships ARM wheels too, so that either
@@ -284,11 +285,11 @@ jobs:
       - name: the README's links point at GitHub, at this ref
         run: uv run --no-project --python 3.12 python scripts/pypi_readme.py --ref "${{ needs.version.outputs.readme_ref }}"
 
-      # The compat package: this checkout renamed to `polars-online-compat`
+      # The compat package: this checkout renamed to `rheon-compat`
       # in place, before maturin reads the name, the description and the
       # README into the wheel's metadata (scripts/compat_package.py). The
       # import name, `rheon`, does not change.
-      - name: the project is polars-online-compat
+      - name: the project is rheon-compat
         if: matrix.variant == 'compat'
         run: uv run --no-project --python 3.12 python scripts/compat_package.py
 
@@ -299,7 +300,7 @@ jobs:
       # refused, not re-resolved into crates nobody committed (review
       # 2026-10-06, CI12).
       #
-      # `polars-online`'s x86-64 wheels are built for AVX2, FMA and the rest of
+      # `rheon`'s x86-64 wheels are built for AVX2, FMA and the rest of
       # `X86_FEATURES`, through RUSTFLAGS, which maturin-action hands on to
       # the manylinux and musllinux containers (it forwards every variable
       # that starts with RUST). Nothing else sets rustflags for this build.
@@ -411,7 +412,7 @@ jobs:
       # needs this job either way.
       #
       # Each wheel is also held to its package and its build: the
-      # distribution installed is `polars-online` or `polars-online-compat`,
+      # distribution installed is `rheon` or `rheon-compat`,
       # the features the build recorded are `X86_FEATURES` for the default
       # x86-64 wheels and none for the rest, and the runner's CPU (GitHub's
       # have AVX2 and FMA) has every one of them, which also runs the CPU
@@ -421,22 +422,45 @@ jobs:
         shell: bash
         env:
           VERSION: ${{ needs.version.outputs.version }}
-          DISTRIBUTION: ${{ matrix.variant == 'compat' && 'polars-online-compat' || 'polars-online' }}
+          DISTRIBUTION: ${{ matrix.variant == 'compat' && 'rheon-compat' || 'rheon' }}
           FEATURES: ${{ matrix.x86 && matrix.variant == 'default' && env.X86_FEATURES || '' }}
         run: |
           uv venv --python 3.12 smoke
-          uv pip install --python smoke dist/*.whl
+          wheel=$(ls dist/*.whl)
+          uv pip install --python smoke "$wheel[polars]"
           uv run --no-project --python smoke python scripts/wheel_smoke.py --version "$VERSION" --distribution "$DISTRIBUTION" --features "$FEATURES"
+      # The wheel alone, as `pip install rheon` leaves it: no Polars in the
+      # environment, and `import rheon` works (scripts/wheel_smoke.py --bare).
+      - name: install the bare wheel and run it
+        if: matrix.manylinux != 'musllinux_1_2'
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          uv venv --python 3.12 bare
+          uv pip install --python bare dist/*.whl
+          uv run --no-project --python bare python scripts/wheel_smoke.py --bare --version "$VERSION"
       - name: install the wheel and run it (musl, in Alpine)
         if: matrix.manylinux == 'musllinux_1_2'
         env:
           VERSION: ${{ needs.version.outputs.version }}
-          DISTRIBUTION: ${{ matrix.variant == 'compat' && 'polars-online-compat' || 'polars-online' }}
+          DISTRIBUTION: ${{ matrix.variant == 'compat' && 'rheon-compat' || 'rheon' }}
           FEATURES: ${{ matrix.x86 && matrix.variant == 'default' && env.X86_FEATURES || '' }}
         run: |
           docker run --rm -e VERSION -e DISTRIBUTION -e FEATURES -v "$PWD":/io -w /io python:3.12-alpine sh -euxc '
-            pip install --no-cache-dir --root-user-action=ignore dist/*.whl
+            wheel=$(ls dist/*.whl)
+            pip install --no-cache-dir --root-user-action=ignore "$wheel[polars]"
             python scripts/wheel_smoke.py --version "$VERSION" --distribution "$DISTRIBUTION" --features "$FEATURES"
+          '
+      - name: install the bare wheel and run it (musl, in Alpine)
+        if: matrix.manylinux == 'musllinux_1_2'
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          docker run --rm -e VERSION -v "$PWD":/io -w /io python:3.12-alpine sh -euxc '
+            python -m venv /bare
+            /bare/bin/pip install --no-cache-dir dist/*.whl
+            /bare/bin/python scripts/wheel_smoke.py --bare --version "$VERSION"
           '
 
   # docs/PLAN.md §9 class 7: a state written on macOS must load on Windows.
@@ -655,7 +679,7 @@ jobs:
             prerelease: --prerelease=allow
             blocking: false
     continue-on-error: ${{ !matrix.blocking }}
-    # NumPy is this package's one optional dependency (`polars-online[numpy]`,
+    # NumPy is this package's one optional dependency (`rheon[numpy]`,
     # which `po.sim`, `po.corr`, `po.gram` and `ModelBank.gram` import).
     # Every other job runs on the locked NumPy, so, as with Polars
     # above, a release could otherwise ship untested on the NumPy a user's
@@ -752,9 +776,9 @@ jobs:
   #
   # Trusted publishing (OIDC), so there is no API token to store or rotate.
   # Registered on PyPI on 2026-09-03 as a pending trusted publisher for
-  # `polars-online` (owner hgilde, repository polars-online, workflow
+  # `rheon` (owner rheon-dev, repository rheon, workflow
   # release.yml, environment pypi); the first publish claimed the name.
-  # `polars-online-compat` is a second PyPI project, uploaded from this job
+  # `rheon-compat` is a second PyPI project, uploaded from this job
   # as well, and needs the same trusted publisher registered on it (a
   # pending one, before its first upload: docs/contributing/cut-a-release.md,
   # Prerequisites).
@@ -784,8 +808,8 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: artifacts
-      # Two projects, so two folders: the files of `polars-online-compat`
-      # are `polars_online_compat-*` and the others `rheon-*`, and
+      # Two projects, so two folders: the files of `rheon-compat`
+      # are `rheon_compat-*` and the others `rheon-*`, and
       # each upload step names the one folder, so a file goes to the project
       # its name says. The compat package goes first: it is the one whose
       # PyPI setup is newest, and a refusal there should leave nothing of
@@ -795,15 +819,15 @@ jobs:
       - name: collect the wheels
         run: |
           mkdir -p dist dist-compat
-          find artifacts \( -name 'polars_online_compat-*.whl' -o -name 'polars_online_compat-*.tar.gz' \) -exec cp {} dist-compat/ \;
-          find artifacts \( -name '*.whl' -o -name '*.tar.gz' \) ! -name 'polars_online_compat-*' -exec cp {} dist/ \;
+          find artifacts \( -name 'rheon_compat-*.whl' -o -name 'rheon_compat-*.tar.gz' \) -exec cp {} dist-compat/ \;
+          find artifacts \( -name '*.whl' -o -name '*.tar.gz' \) ! -name 'rheon_compat-*' -exec cp {} dist/ \;
           ls -la dist dist-compat
-      - name: upload polars-online-compat
+      - name: upload rheon-compat
         uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # release/v1
         with:
           packages-dir: dist-compat
           skip-existing: true
-      - name: upload polars-online
+      - name: upload rheon
         uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # release/v1
         with:
           packages-dir: dist
@@ -839,7 +863,7 @@ jobs:
           text = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
           m = re.search(rf"^## \[{re.escape(v)}\] .*?$(.*?)(?=^## \[|\Z)", text, re.M | re.S)
           assert m, f"no CHANGELOG section for {v}"
-          print(f"polars-online {v}\n{m.group(1).rstrip()}")
+          print(f"rheon {v}\n{m.group(1).rstrip()}")
           PY
           head -5 notes.md
       - name: create and push the tag
@@ -929,7 +953,7 @@ jobs:
           echo "::error::the release $TAG could not be made in three attempts"
           exit 1
 
-  # The release as a user gets it, on each OS: `polars-online==<version>`
+  # The release as a user gets it, on each OS: `rheon==<version>`
   # installed from PyPI into a fresh environment, its three versions held
   # to the run's, and one fit through the streaming plan
   # (scripts/verify_release.py). PyPI's index can take minutes to show a new
@@ -948,7 +972,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        distribution: [polars-online, polars-online-compat]
+        distribution: [rheon, rheon-compat]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # First, so a failure names its machine (ci.yml's test job says why).
@@ -964,7 +988,7 @@ jobs:
         run: |
           uv venv --python 3.12 fresh
           deadline=$((SECONDS + 600))
-          until uv pip install --python fresh --no-cache "$DISTRIBUTION==$VERSION"; do
+          until uv pip install --python fresh --no-cache "$DISTRIBUTION[polars]==$VERSION"; do
             if [ "$SECONDS" -ge "$deadline" ]; then
               echo "::error::$DISTRIBUTION $VERSION did not install from PyPI in ten minutes"
               exit 1
@@ -972,3 +996,16 @@ jobs:
             sleep 30
           done
           uv run --no-project --python fresh python -I scripts/verify_release.py --version "$VERSION" --schema "$SCHEMA" --distribution "$DISTRIBUTION"
+      # The package alone, as `pip install rheon` leaves it, in a second
+      # environment: no Polars, and `import rheon` works. The first is
+      # installed already, so this one finds the version on the index at once.
+      - name: install from PyPI without the polars extra and run it
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          SCHEMA: ${{ needs.version.outputs.schema }}
+          DISTRIBUTION: ${{ matrix.distribution }}
+        run: |
+          uv venv --python 3.12 bare
+          uv pip install --python bare --no-cache "$DISTRIBUTION==$VERSION"
+          uv run --no-project --python bare python -I scripts/verify_release.py --version "$VERSION" --schema "$SCHEMA" --distribution "$DISTRIBUTION" --bare
