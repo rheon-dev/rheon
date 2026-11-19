@@ -82,6 +82,7 @@ ENV_FALLBACK = (
     "tests/test_api_surface.py",  # reads the pairs out of the two tables
     "tests/api_surface.txt",  # and lists them
     "tests/test_old_names.py",
+    "scripts/rheon_import.py",  # picks the old name for a benchmark run on a release before 2.0
 )
 
 CODE = (
@@ -121,6 +122,8 @@ RULES = (
             "tests/test_old_names.py",
             # Reads docs/FEATURES.md, whose index still names `lf.online`.
             "tests/test_feature_index.py",
+            # Lets a benchmark run under a release before 2.0, whose namespace is `.online`.
+            "scripts/rheon_import.py",
         ),
     ),
     Rule(
