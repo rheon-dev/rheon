@@ -1,6 +1,5 @@
-//! Task 479 (lasso split prototype): a sweep of the `lasso` model's
-//! coordinate descent with no dependent chain of subtractions, behind the
-//! `lasso-split` build feature, for the user to decide on. Not the default.
+//! A sweep of the `lasso` model's coordinate descent with no dependent
+//! chain of subtractions, run from [`SPLIT_MIN_K`] features (task 479).
 //!
 //! [`super::cd_sweep`] takes `rho_i`'s terms off `d_i` in the order
 //! `j = 0, 1, ..., i-1, i+1, ..., k-1`: the coefficients this sweep has set,
@@ -32,9 +31,10 @@
 //! `c * 0` is.
 
 /// The fewest features the split sweep runs at. Measured (task 479, ABBA
-/// on arm64 in both layouts, ns a row split / chained): 1.07 to 1.15 at 8
-/// features, 1.00 to 1.03 at 20, 0.85 to 0.95 at 32, 0.67 to 0.72 from 48
-/// with three penalties. Below it the chained sweep runs, and its bits stay.
+/// in both function layouts, ns a row split / chained, on arm64): 1.07 to
+/// 1.15 at 8 features, 1.00 to 1.03 at 20, 0.85 to 0.95 at 32, 0.67 to
+/// 0.72 from 48 with three penalties, 0.43 at 500. Below it the chained
+/// sweep runs, and its bits are the ones before the split sweep.
 pub(super) const SPLIT_MIN_K: usize = 32;
 
 /// One sweep of the descent with the two runs swapped (the module's
@@ -155,43 +155,46 @@ fn take_off(a: &mut [f64], rows: &[&[f64]], bs: &[f64]) {
     }
 }
 
+/// The split sweep one term at a time, in the module's order, every zero
+/// column taken off: the definition the blocked one must equal to the bit
+/// (and `descend`'s tests in `lasso.rs` hold it to).
+#[cfg(test)]
+pub(super) fn cd_sweep_split_plain(
+    c: &[f64],
+    k: usize,
+    d: &[f64],
+    s: &[f64],
+    (l1, l2): (f64, f64),
+    b: &mut [f64],
+) -> f64 {
+    let mut a = d.to_vec();
+    for j in 0..k {
+        for m in 0..j {
+            a[m] -= c[j * k + m] * b[j];
+        }
+    }
+    let mut delta: f64 = 0.0;
+    for i in 0..k {
+        let newb = if s[i] <= 0.0 {
+            0.0
+        } else {
+            super::soft_over(a[i], l1, c[i * k + i] + l2)
+        };
+        if s[i] > 0.0 {
+            delta = delta.max((newb - b[i]).abs());
+        }
+        b[i] = newb;
+        for m in i + 1..k {
+            a[m] -= c[i * k + m] * newb;
+        }
+    }
+    delta
+}
+
 #[cfg(test)]
 mod tests {
     use super::cd_sweep_split;
-
-    /// The split sweep one term at a time, in the module's order: the
-    /// definition the blocked one must equal to the bit.
-    fn plain(
-        c: &[f64],
-        k: usize,
-        d: &[f64],
-        s: &[f64],
-        (l1, l2): (f64, f64),
-        b: &mut [f64],
-    ) -> f64 {
-        let mut a = d.to_vec();
-        for j in 0..k {
-            for m in 0..j {
-                a[m] -= c[j * k + m] * b[j];
-            }
-        }
-        let mut delta: f64 = 0.0;
-        for i in 0..k {
-            let newb = if s[i] <= 0.0 {
-                0.0
-            } else {
-                super::super::soft_over(a[i], l1, c[i * k + i] + l2)
-            };
-            if s[i] > 0.0 {
-                delta = delta.max((newb - b[i]).abs());
-            }
-            b[i] = newb;
-            for m in i + 1..k {
-                a[m] -= c[i * k + m] * newb;
-            }
-        }
-        delta
-    }
+    use super::cd_sweep_split_plain as plain;
 
     fn lcg(state: &mut u64) -> f64 {
         *state = state
@@ -269,6 +272,49 @@ mod tests {
             acc.iter().any(|v| v.is_nan()),
             "the infinity reached nothing"
         );
+    }
+
+    /// Signed zeros in `c`, `d` and the start, with zero columns left out
+    /// (`finite`): the coefficients and the move are the plain
+    /// definition's bits. Leaving out `c * 0` can only change the sign of
+    /// a partial sum that is itself zero, and a zero `rho` soft-thresholds
+    /// to `0.0` either way.
+    #[test]
+    fn signed_zeros_do_not_separate_the_skip_from_the_plain_sweep() {
+        for k in [9, 40, 80] {
+            let (mut c, mut d, s, _) = problem(k, 21 + k as u64);
+            for i in 0..k {
+                for j in 0..i {
+                    if (i + 2 * j) % 5 == 0 {
+                        let v = if (i + j) % 2 == 0 { -0.0 } else { 0.0 };
+                        c[i * k + j] = v;
+                        c[j * k + i] = v;
+                    }
+                }
+                if i % 3 == 0 {
+                    d[i] = -0.0;
+                }
+            }
+            let start: Vec<f64> = (0..k)
+                .map(|i| match i % 9 {
+                    0 => 0.3,
+                    1 | 5 => -0.0,
+                    _ => 0.0,
+                })
+                .collect();
+            for (l1, l2) in [(0.2, 0.0), (0.0, 0.0), (0.05, 0.02)] {
+                let (mut b, mut want) = (start.clone(), start.clone());
+                let mut acc = Vec::new();
+                for sweep in 0..12 {
+                    let got = cd_sweep_split(&c, k, &d, &s, l1, l2, &mut b, &mut acc, true);
+                    let exp = plain(&c, k, &d, &s, (l1, l2), &mut want);
+                    assert_eq!(got.to_bits(), exp.to_bits(), "k={k} sweep {sweep}");
+                    for (x, y) in b.iter().zip(&want) {
+                        assert_eq!(x.to_bits(), y.to_bits(), "k={k} sweep {sweep}");
+                    }
+                }
+            }
+        }
     }
 
     /// The split sweep is the chained one but for the order of each

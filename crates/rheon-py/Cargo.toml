@@ -20,11 +20,6 @@ publish = false
 name = "_rheon"
 crate-type = ["cdylib", "rlib"]
 
-[features]
-# Task 479 (lasso split prototype): a wheel with `lasso`'s split sweep, for
-# measurement only (`maturin develop --features lasso-split`). Off by default.
-lasso-split = ["rheon-core/lasso-split"]
-
 [dependencies]
 rheon-core.workspace = true
 rheon-polars.workspace = true

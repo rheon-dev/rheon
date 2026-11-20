@@ -13,6 +13,32 @@ returns.
 
 ### Performance
 
+- **`lasso`'s coordinate descent sweeps without a chain of dependent
+  subtractions from 32 features.** Each coordinate's update subtracted the
+  terms of the coefficients after it one at a time, each waiting for the
+  one before, and that chain was most of a row at wide widths (73% at 500
+  features). Now every partial sum takes the sweep's starting coefficients
+  off before the sweep begins, and each new coefficient's column comes off
+  the coordinates after it as soon as it is set: the same descent, each
+  update's terms in another order, all of it vector arithmetic. Against the
+  previous build, a row takes 0.43 of the time at 500 features with three
+  penalties and 0.75 to 0.79 with one, 0.48 and 0.70 to 0.74 at 200, 0.67
+  to 0.72 from 48 to 128 features with three penalties, and 0.85 to 0.95
+  at 32 (arm64, Apple M4 Pro, both function layouts; x86-64: VERIFY). Below
+  32 features nothing changes, to the bit. From 32 the order of each sum
+  moves predictions by at most about 61,000 ulps (8e-12 relative; 1,500 to
+  8,300 ulps at the 99.9th percentile) and coefficients by 1e-12 relative at
+  the 99.9th percentile, more where a fit in its warm-up stops at
+  `max_iter` before it settles (to 1e-6 relative at 500 features); every
+  descent tested stopped on the same sweep as before, and against
+  scikit-learn's coordinate descent on the same problem the fits are as
+  close to the optimum as they were. The penalty selected did not change
+  in any case measured, but a choice between two penalties that predict
+  alike to the last bits can. Moves: `lasso.pred_*`, `lasso.resid_*`,
+  `lasso.abs_resid_*`, `lasso.coef`, `lasso.sigma_*`, `lasso.zscore_*`,
+  `lasso.lo_*`, `lasso.hi_*`, `lasso.coverage_*`, `lasso.hit_rate_*`,
+  `lasso.ic_*`, `lasso.r2_*`, `lasso.autocorr_*`, `lasso.drift*`,
+  `lasso.selected_*`, `lasso.penalty_selected_*`, `lasso.withheld_reason`.
 - `lasso` writes each solve's correlation matrix over the one its thread's
   last solve left, where every solve made and zeroed a new one (2 MB at 500
   features): 0.97 of the time a row at 500 features on arm64 (Apple M4 Pro,
