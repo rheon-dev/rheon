@@ -164,6 +164,11 @@ const REGENERATE: &str = "PRINT_STATE_FIXTURES=1 cargo test -p rheon-polars --te
 /// `marginal`'s mark `before_65` is cleared once its histogram is built,
 /// which no bank file holds (the core's fixtures hold that conversion).
 ///
+/// 67 kept since 68 let `kalman` hold its covariance as the square root's
+/// factor (docs/PLAN.md task 281 (3)), written only where it is not the
+/// covariance form; no bank file holds a `kalman`, and a 67 file loads as
+/// it was, so every kept kind converts to the current bytes exactly.
+///
 /// The kept schemas, each a `v<N>/` directory found beside the current set.
 fn previous() -> Vec<u32> {
     frozen::PREVIOUS_SETS.iter().map(|(s, _)| *s).collect()

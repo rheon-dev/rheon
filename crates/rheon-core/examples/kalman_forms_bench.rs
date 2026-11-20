@@ -1,6 +1,6 @@
 //! `Kalman::step` alone, no Polars, in each covariance form (task 281
 //! (3)): the default covariance form, the same form again as an
-//! identical-code control, the Joseph form and the factor. Rounds in ABBA
+//! identical-code control, and the square root. Rounds in ABBA
 //! order, each from a clone of one warmed filter over the same rows, so
 //! every form times the same work; the bank's setting (standardized, `P`
 //! in units of the noise), with and without drift.
@@ -28,10 +28,9 @@ fn main() {
         .and_then(|a| a.parse().ok())
         .unwrap_or(8);
     let forms = [
-        ("covariance", CovForm::Covariance),
-        ("control", CovForm::Covariance),
-        ("joseph", CovForm::Joseph),
-        ("factor", CovForm::Factor),
+        ("covariance", CovarianceForm::Covariance),
+        ("control", CovarianceForm::Covariance),
+        ("square_root", CovarianceForm::SquareRoot),
     ];
     for h in [2000.0, f64::INFINITY] {
         for k in [5usize, 20, 50] {
@@ -62,7 +61,7 @@ fn main() {
                         noise_units: true,
                     })
                     .unwrap()
-                    .with_cov_form(*f)
+                    .with_covariance_form(*f)
                     .unwrap();
                     for i in 0..warm {
                         m.step(&x[i * k..(i + 1) * k], &[Some(y[i])], 1.0, 1.0);
@@ -74,11 +73,11 @@ fn main() {
             let mut control = Vec::new();
             for r in 0..rounds {
                 let order: Vec<usize> = if r % 2 == 0 {
-                    vec![0, 1, 2, 3]
+                    vec![0, 1, 2]
                 } else {
-                    vec![3, 2, 1, 0]
+                    vec![2, 1, 0]
                 };
-                let mut this = [0.0; 4];
+                let mut this = [0.0; 3];
                 for v in order {
                     let mut m = warmed[v].clone();
                     let t0 = Instant::now();

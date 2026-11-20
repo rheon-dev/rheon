@@ -1,27 +1,29 @@
-//! The covariance's update in three forms (task 281 (3)), and the square
-//! root's side of every place the filter writes or reads `P`. A file of its
-//! own because `kalman.rs` stands near the source-size cap
-//! (`tests/test_repo_hygiene.py`).
+//! The covariance's update in two forms (task 281 (3), the user's decision
+//! of 2026-11-20: the square root opt-in, the covariance form the
+//! default), and the square root's side of every place the filter writes or
+//! reads `P`. A file of its own because `kalman.rs` stands near the
+//! source-size cap (`tests/test_repo_hygiene.py`).
 //!
 //! Each form takes the same row, `pz = P z`, `s = z' P z + r` with `r = R /
 //! w`, the gain `g = pz / s`:
 //!
 //! ```text
-//! covariance  P <- P - g pzᵀ                               (O(k²), the default)
-//! Joseph      M  = (I - g zᵀ) P = P - g pzᵀ
-//!             P <- M (I - g zᵀ)ᵀ + r g gᵀ = M - (M z) gᵀ + r g gᵀ      (O(k²))
-//! factor      P = C Cᵀ, C upper triangular, held in place of P:
-//!             f = Cᵀ z, α_0 = r, α_j = α_{j-1} + f_j²,
-//!             C_·j <- sqrt(α_{j-1} / α_j) C_·j − f_j / sqrt(α_{j-1} α_j) Σ_{i<j} C_·i f_i
-//!                                                         (Carlson 1973, O(k²))
+//! covariance   P <- P - g pzᵀ                                (O(k²), the default)
+//! square root  P = C Cᵀ, C upper triangular, held in place of P:
+//!              f = Cᵀ z, α_0 = r, α_j = α_{j-1} + f_j²,
+//!              C_·j <- sqrt(α_{j-1} / α_j) C_·j − f_j / sqrt(α_{j-1} α_j) Σ_{i<j} C_·i f_i
+//!                                                          (Carlson 1973, O(k²))
 //! ```
 //!
 //! The covariance form subtracts two numbers of `P`'s size to leave one of
 //! the posterior's, so at a prior `p0` a row's update rounds at `u p0` where
 //! the posterior is of order 1: at `p0 = 1e12`, digits lost to the fourth
-//! place. The Joseph form is a sum of positive semi-definite terms, but `P`
-//! is still held, and rounds as it does. The factor holds `sqrt(P)`, whose
-//! entries are of size `sqrt(p0)`, so it rounds at `u sqrt(p0)`.
+//! place. The square root holds `C`, whose entries are of size `sqrt(p0)`,
+//! so it rounds at `u sqrt(p0)`. A Joseph form, `P <- (I − g zᵀ) P (I − g
+//! zᵀ)ᵀ + r g gᵀ`, was built and measured beside it and dropped: it still
+//! holds `P`, so it rounds as the covariance form does, and measured 7 to
+//! 10 times further off the posterior at a huge prior, 1.2 to 2.0 times as
+//! slow.
 //!
 //! The factor is stored as `L = Cᵀ`, lower triangular and row-major, so
 //! that `C`'s columns, which every update walks, are `L`'s rows, contiguous.
@@ -37,55 +39,23 @@ use serde::{Deserialize, Serialize};
 
 use super::Kalman;
 
-/// Which form the covariance is held and updated in (the module doc of
-/// `kalman/forms.rs`).
+/// Which form `kalman`'s covariance is held and updated in (the module
+/// doc of `kalman/forms.rs`): a spec's `covariance_form`, written in a
+/// state only where it is not the default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum CovForm {
+#[serde(rename_all = "snake_case")]
+pub enum CovarianceForm {
     /// `P` itself, `P <- P − g (P z)ᵀ`: the default.
     #[default]
     Covariance,
-    /// `P` itself, by the Joseph form.
-    Joseph,
     /// An upper-triangular `C` with `P = C Cᵀ`, by Carlson's update.
-    Factor,
+    SquareRoot,
 }
 
-impl CovForm {
-    pub(super) fn is_default(&self) -> bool {
-        *self == CovForm::Covariance
-    }
-}
-
-/// `P <- M − (M z) gᵀ + r g gᵀ`, `M = P − g pzᵀ`, formed in `m` and read
-/// back into `P`'s upper triangle and mirrored; `w` a scratch of `k`.
-pub(super) fn joseph(
-    p: &mut [f64],
-    m: &mut [f64],
-    w: &mut [f64],
-    g: &[f64],
-    pz: &[f64],
-    z: &[f64],
-    r: f64,
-) {
-    let k = g.len();
-    for i in 0..k {
-        for j in 0..k {
-            m[i * k + j] = p[i * k + j] - g[i] * pz[j];
-        }
-    }
-    for i in 0..k {
-        w[i] = m[i * k..(i + 1) * k]
-            .iter()
-            .zip(z)
-            .map(|(a, b)| a * b)
-            .sum();
-    }
-    for i in 0..k {
-        for j in i..k {
-            let v = m[i * k + j] - w[i] * g[j] + r * g[i] * g[j];
-            p[i * k + j] = v;
-            p[j * k + i] = v;
-        }
+impl CovarianceForm {
+    /// The default, which a state or a spec does not write.
+    pub fn is_covariance(&self) -> bool {
+        *self == CovarianceForm::Covariance
     }
 }
 
@@ -172,14 +142,14 @@ pub(super) fn factor_product(l: &[f64], k: usize) -> Vec<f64> {
 
 impl Kalman {
     /// The form the covariance is held in.
-    pub fn cov_form(&self) -> CovForm {
+    pub fn covariance_form(&self) -> CovarianceForm {
         self.form
     }
 
     /// This filter, its covariance held and updated in `form` (the module
     /// doc of `kalman/forms.rs`). Only before its first row: a covariance
     /// that has taken a row is not converted.
-    pub fn with_cov_form(mut self, form: CovForm) -> Result<Self, String> {
+    pub fn with_covariance_form(mut self, form: CovarianceForm) -> Result<Self, String> {
         let k = self.cfg.k_total();
         if self.p.iter().any(|p| {
             (0..k * k).any(|ij| ij / k != ij % k && p[ij] != 0.0)
@@ -187,7 +157,7 @@ impl Kalman {
         }) {
             return Err("kalman: the covariance's form is set before its first row".into());
         }
-        if form == CovForm::Factor && self.form != CovForm::Factor {
+        if form == CovarianceForm::SquareRoot && self.form != CovarianceForm::SquareRoot {
             for p in &mut self.p {
                 for i in 0..k {
                     p[i * k + i] = p[i * k + i].sqrt();
@@ -195,14 +165,11 @@ impl Kalman {
             }
         }
         self.form = form;
-        if form == CovForm::Joseph && self.mbuf.len() != k * k {
-            self.mbuf = vec![0.0; k * k];
-        }
         Ok(self)
     }
 
     fn factor(&self) -> bool {
-        self.form == CovForm::Factor
+        self.form == CovarianceForm::SquareRoot
     }
 
     /// Whether `P_ii` of covariance `pi` is not 0: the entry, or on the
@@ -244,7 +211,7 @@ impl Kalman {
     pub(super) fn take(&mut self, pi: usize, open: bool, s: f64, r: f64) {
         let k = self.cfg.k_total();
         match (self.form, open) {
-            (CovForm::Factor, true) => {
+            (CovarianceForm::SquareRoot, true) => {
                 // `C`'s row 0, `L`'s column 0.
                 let l = &mut self.p[pi];
                 l[0] = r.sqrt();
@@ -253,26 +220,19 @@ impl Kalman {
                 }
             }
             (_, true) => super::diffuse_step(&mut self.p[pi], &self.pz, s),
-            (CovForm::Covariance, false) => {
+            (CovarianceForm::Covariance, false) => {
                 super::take_the_row(&mut self.p[pi], &self.gain, &self.pz)
             }
-            (CovForm::Joseph, false) => joseph(
-                &mut self.p[pi],
-                &mut self.mbuf,
-                &mut self.vbuf,
-                &self.gain,
-                &self.pz,
-                &self.zs,
-                r,
-            ),
-            (CovForm::Factor, false) => carlson(&mut self.p[pi], &self.fbuf, r, &mut self.vbuf),
+            (CovarianceForm::SquareRoot, false) => {
+                carlson(&mut self.p[pi], &self.fbuf, r, &mut self.vbuf)
+            }
         }
     }
 
     /// `P += v x xᵀ`-style writes of one slot `i`: `P_ii += d`, and with the
     /// intercept's coupling `cc`, `P_00 += cc² v` and `P_0i += −cc v / a`
     /// (`d = v / a²`), entry by entry; on the factor, the rank-one update
-    /// by `x = sqrt(v) (e_i / a − (cc / a) e_0)`.
+    /// by `x = sqrt(v) (e_i / a − cc e_0)`.
     pub(super) fn add_slot(&mut self, pi: usize, i: usize, v: f64, a: f64, cc: Option<f64>) {
         let k = self.cfg.k_total();
         if self.factor() {

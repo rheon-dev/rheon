@@ -21,12 +21,12 @@
 //! with `P_j` and `Q` in units of `R_j`, `R_j` read as 1 in `s`, wherever the
 //! noise is learned (below).
 //!
-//! The last line is the covariance form, the default ([`CovForm`]). `P_j`
-//! may instead be updated by the Joseph form, `P_j <- (I − k z') P_j (I −
-//! k z')' + (R_j / w_row) k k'`, or held as a triangular factor `C`, `P_j =
-//! C C'`, by Carlson's update (`kalman/forms.rs` states each): the factor
-//! rounds at `u sqrt(p0)` where `P_j` rounds at `u p0`, so a huge prior
-//! costs it no digits, at O(k³) a row under process noise for O(k²).
+//! The last line is the covariance form, the default ([`CovarianceForm`],
+//! a spec's `covariance_form`). `P_j` may instead be held as its square
+//! root, a triangular `C` with `P_j = C C'`, updated by Carlson's step
+//! (`kalman/forms.rs` states it): it rounds at `u sqrt(p0)` where `P_j`
+//! rounds at `u p0`, so a huge prior costs it no digits, at O(k³) a row
+//! under process noise for O(k²).
 //!
 //! **The noise is a scale, not a weight (docs/PLAN.md task 278).** The
 //! model's noise `R_j` is one constant per target, and the prior `p0 R_j` and
@@ -499,7 +499,7 @@ use crate::model::{ModelState, OnlineModel, State, StateError, Step, check_schem
 use crate::{Decay, EwDiag};
 
 mod forms;
-pub use forms::CovForm;
+pub use forms::CovarianceForm;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct KalmanCfg {
@@ -968,14 +968,17 @@ pub struct Kalman {
     #[serde(skip)]
     gap_factors: GapFactors,
     /// The form `p` is held and updated in (`kalman/forms.rs`): `P`, or
-    /// its upper-triangular factor. Written only when not the default.
-    #[serde(default, skip_serializing_if = "CovForm::is_default")]
-    form: CovForm,
-    /// The factor's `f = Cᵀ z`, the Joseph form's `M` and a slot's `x`.
+    /// its square root's factor. Written only where it is not the default,
+    /// so no state of the covariance form moves (schema 68).
+    #[serde(
+        rename = "covariance_form",
+        default,
+        skip_serializing_if = "CovarianceForm::is_covariance"
+    )]
+    form: CovarianceForm,
+    /// The factor's `f = Cᵀ z` and a slot's `x`.
     #[serde(skip)]
     fbuf: Vec<f64>,
-    #[serde(skip)]
-    mbuf: Vec<f64>,
     #[serde(skip)]
     xbuf: Vec<f64>,
 }
@@ -999,8 +1002,9 @@ struct KalmanV4 {
     sig2: Vec<f64>,
     wsig: Vec<f64>,
     wj: Vec<f64>,
-    #[serde(default)]
-    form: CovForm,
+    /// A state of schema 67 or earlier has none: the covariance form.
+    #[serde(rename = "covariance_form", default)]
+    form: CovarianceForm,
 }
 
 impl TryFrom<KalmanV4> for Kalman {
@@ -1106,7 +1110,6 @@ impl TryFrom<KalmanV4> for Kalman {
             gap_factors: GapFactors::default(),
             form: v.form,
             fbuf: vec![],
-            mbuf: vec![],
             xbuf: vec![],
         })
     }
@@ -1166,9 +1169,8 @@ impl Kalman {
             ubuf: vec![],
             vbuf: vec![],
             gap_factors: GapFactors::default(),
-            form: CovForm::Covariance,
+            form: CovarianceForm::Covariance,
             fbuf: vec![],
-            mbuf: vec![],
             xbuf: vec![],
             cfg,
         };
@@ -1594,9 +1596,6 @@ impl Kalman {
             self.vbuf = vec![0.0; k];
             self.fbuf = vec![0.0; k];
             self.xbuf = vec![0.0; k];
-            if self.form == CovForm::Joseph {
-                self.mbuf = vec![0.0; k * k];
-            }
         }
     }
 
@@ -1657,7 +1656,7 @@ impl Kalman {
             }
             finite &= off == 0 || b0.is_finite();
         }
-        let factor = self.form == CovForm::Factor;
+        let factor = self.form == CovarianceForm::SquareRoot;
         for (p, u) in self.p.iter_mut().zip(self.ubuf.iter_mut()) {
             if factor {
                 // `C <- A C`: row 0 `C_0· + Σ c_l C_l·`, row `i` `a_i C_i·`.
@@ -1819,7 +1818,7 @@ impl Kalman {
             transit(b, &self.phi, coupled.then_some(&g[..]));
         }
         for p in &mut self.p {
-            if self.form == CovForm::Factor {
+            if self.form == CovarianceForm::SquareRoot {
                 // `C <- Phi_a C`: `Phi_a` is upper triangular, and so is `C`.
                 forms::factor_transit(p, &self.phi, coupled.then_some(&g[..]));
                 continue;
@@ -1863,7 +1862,7 @@ impl Kalman {
         if d == 0.0 {
             return;
         }
-        if self.form == CovForm::Factor {
+        if self.form == CovarianceForm::SquareRoot {
             return self.factor_noise(pi, sigma2, d);
         }
         let k = self.cfg.k_total();
@@ -1999,7 +1998,7 @@ impl Kalman {
     fn lost_definiteness(&self, pi: usize) -> bool {
         let k = self.cfg.k_total();
         let p = &self.p[pi];
-        if self.form == CovForm::Factor {
+        if self.form == CovarianceForm::SquareRoot {
             // A factor's `C Cᵀ` is positive semi-definite while it is a
             // set of numbers.
             return !p.iter().all(|v| v.is_finite());
@@ -2047,7 +2046,7 @@ impl Kalman {
     fn size_whole(&mut self, pi: usize, v: f64) {
         let k = self.cfg.k_total();
         if v > 0.0 && v.is_finite() {
-            let v = if self.form == CovForm::Factor {
+            let v = if self.form == CovarianceForm::SquareRoot {
                 v.sqrt()
             } else {
                 v

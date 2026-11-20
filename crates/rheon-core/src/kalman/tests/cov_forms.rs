@@ -120,10 +120,15 @@ fn posterior(data: &[([f64; 3], f64, f64)], p0: f64, h: f64) -> (Vec<f64>, Vec<f
 }
 
 /// The filter's last coefficients and covariance on `data`.
-fn filtered(data: &[([f64; 3], f64, f64)], p0: f64, h: f64, form: CovForm) -> (Vec<f64>, Vec<f64>) {
+fn filtered(
+    data: &[([f64; 3], f64, f64)],
+    p0: f64,
+    h: f64,
+    form: CovarianceForm,
+) -> (Vec<f64>, Vec<f64>) {
     let mut m = Kalman::new(units_cfg(p0, h))
         .unwrap()
-        .with_cov_form(form)
+        .with_covariance_form(form)
         .unwrap();
     let mut t_prev = None;
     for (t, (x, y, w)) in data.iter().enumerate() {
@@ -151,13 +156,13 @@ fn apart(got: &[f64], want: &[f64], whole: bool) -> f64 {
 
 /// One line of the table: each form's distance from the posterior in a
 /// coefficient and in the covariance, at the drift `h` and prior `p0`.
-fn table_line(data: &[([f64; 3], f64, f64)], p0: f64, h: f64) -> (String, [(f64, f64); 3], f64) {
+fn table_line(data: &[([f64; 3], f64, f64)], p0: f64, h: f64) -> (String, [(f64, f64); 2], f64) {
     let (want_b, want_p, own) = posterior(data, p0, h);
     let mut line = format!("h={h:>6} p0={p0:>6.0e} (oracle {own:.1e}):");
-    let mut out = [(0.0, 0.0); 3];
+    let mut out = [(0.0, 0.0); 2];
     for (o, form) in out
         .iter_mut()
-        .zip([CovForm::Covariance, CovForm::Joseph, CovForm::Factor])
+        .zip([CovarianceForm::Covariance, CovarianceForm::SquareRoot])
     {
         let (got_b, got_p) = filtered(data, p0, h, form);
         *o = (apart(&got_b, &want_b, false), apart(&got_p, &want_p, true));
@@ -170,8 +175,8 @@ fn table_line(data: &[([f64; 3], f64, f64)], p0: f64, h: f64) -> (String, [(f64,
 /// Bayesian regression, whose posterior is one `k x k` solve. Measured
 /// 2026-11-20, 300 rows: the covariance form 3.8e-11 off in a coefficient
 /// at `p0 = 1e6`, 6.7e-5 at 1e12 and 1.3e-2 at 1e15 (its covariance
-/// 1.6e-5 and 1.8e-2 of its largest entry); the Joseph form 8.8e-10,
-/// 4.7e-4 and 0.11, worse; the factor 1.1e-13 or less at every prior, the
+/// 1.6e-5 and 1.8e-2 of its largest entry); a Joseph form, measured and
+/// dropped, 8.8e-10, 4.7e-4 and 0.11; the factor 1.1e-13 or less at every prior, the
 /// oracle's own error 5e-14 to 1e-13. The factor is held to the oracle's
 /// error plus the recursion's rounding, `κ γ_n` with `κ` the posterior's
 /// condition and `n` the rows, 3.0e-11 here: 270 times what it made.
@@ -180,7 +185,7 @@ fn a_huge_prior_costs_the_covariance_form_digits_and_not_the_factor() {
     let data = rows(300, 281);
     let mut table = String::new();
     for p0 in [1.0, 1e6, 1e12, 1e15] {
-        let (line, [cov, joseph, factor], own) = table_line(&data, p0, f64::INFINITY);
+        let (line, [cov, factor], own) = table_line(&data, p0, f64::INFINITY);
         table += &line;
         table += "\n";
         let (_, want_p, _) = posterior(&data, p0, f64::INFINITY);
@@ -191,7 +196,7 @@ fn a_huge_prior_costs_the_covariance_form_digits_and_not_the_factor() {
             "the factor at p0 = {p0:e}: {factor:?}, bound {bound:.1e}"
         );
         if p0 >= 1e12 {
-            assert!(cov.0 > 1e-6 && joseph.0 > 1e-6, "{table}");
+            assert!(cov.0 > 1e-6, "{table}");
         }
     }
     eprintln!("{table}");
@@ -200,7 +205,7 @@ fn a_huge_prior_costs_the_covariance_form_digits_and_not_the_factor() {
 /// The same under drift, where the posterior is the batch of every row's
 /// state, solved whole: short (`h = 20`) and long (`h = 2000`). Measured
 /// 2026-11-20, 150 rows: at `h = 20` the covariance form 5.1e-5 off at
-/// `p0 = 1e12` and 4.4e-2 at 1e15, the Joseph form 7.5e-4 and 0.11, the
+/// `p0 = 1e12` and 4.4e-2 at 1e15, a Joseph form 7.5e-4 and 0.11, the
 /// factor 3.2e-12 and 1.8e-12 against the oracle's own 1.9e-11; at `h =
 /// 2000` the covariance form 1.2e-4 and 2.3e-2, the factor 8.5e-10, inside
 /// the oracle's own error of 1.1e-7 (the batch is ill-conditioned there: a
@@ -214,7 +219,7 @@ fn under_drift_a_huge_prior_costs_the_covariance_form_digits_and_not_the_factor(
     let mut table = String::new();
     for h in [20.0, 2000.0] {
         for p0 in [1.0, 1e12, 1e15] {
-            let (line, [cov, _, factor], own) = table_line(&data, p0, h);
+            let (line, [cov, factor], own) = table_line(&data, p0, h);
             table += &line;
             table += "\n";
             let bound = own + 1e-11;
@@ -313,10 +318,10 @@ fn every_form_is_the_same_filter_at_a_modest_prior() {
     ];
     for (name, cfg) in cases {
         let k = cfg.k_total();
-        let run = |form: CovForm| {
+        let run = |form: CovarianceForm| {
             let mut m = Kalman::new(cfg.clone())
                 .unwrap()
-                .with_cov_form(form)
+                .with_covariance_form(form)
                 .unwrap();
             let mut s = 2814u64;
             let mut preds = Vec::new();
@@ -347,12 +352,13 @@ fn every_form_is_the_same_filter_at_a_modest_prior() {
             let tail = m.pred_var(&[0.3, 2.5, -1.0]);
             (preds, m.coefficients().concat(), tail, m)
         };
-        let (want, want_c, want_v, _) = run(CovForm::Covariance);
+        let (want, want_c, want_v, _) = run(CovarianceForm::Covariance);
         assert!(
             want.iter().filter(|v| v.is_finite()).count() > 2500,
             "{name}"
         );
-        for form in [CovForm::Joseph, CovForm::Factor] {
+        {
+            let form = CovarianceForm::SquareRoot;
             let (got, got_c, got_v, m) = run(form);
             for (what, g, w) in [
                 ("pred", &got, &want),
@@ -369,7 +375,7 @@ fn every_form_is_the_same_filter_at_a_modest_prior() {
                     }
                 }
             }
-            if form == CovForm::Factor {
+            if form == CovarianceForm::SquareRoot {
                 for l in &m.p {
                     assert!(
                         (0..k * k).all(|ij| ij / k >= ij % k || l[ij] == 0.0),
@@ -390,14 +396,14 @@ fn a_saved_factor_continues_to_the_bit_and_the_default_writes_no_form() {
     let data = rows(200, 7);
     let mut a = Kalman::new(cfg.clone())
         .unwrap()
-        .with_cov_form(CovForm::Factor)
+        .with_covariance_form(CovarianceForm::SquareRoot)
         .unwrap();
     for (x, y, w) in &data[..100] {
         a.step(x, &[Some(*y)], 1.0, *w);
     }
     let bytes = rmp_serde::to_vec(&a.state()).unwrap();
     let mut b = Kalman::restore(&rmp_serde::from_slice(&bytes).unwrap()).unwrap();
-    assert_eq!(b.cov_form(), CovForm::Factor);
+    assert_eq!(b.covariance_form(), CovarianceForm::SquareRoot);
     for (x, y, w) in &data[100..] {
         let (pa, pb) = (
             a.step(x, &[Some(*y)], 1.0, *w).pred,
@@ -406,8 +412,14 @@ fn a_saved_factor_continues_to_the_bit_and_the_default_writes_no_form() {
         assert_eq!(pa[0].to_bits(), pb[0].to_bits());
     }
     let plain = Kalman::new(cfg).unwrap();
-    let with = plain.clone().with_cov_form(CovForm::Covariance).unwrap();
-    let factor = plain.clone().with_cov_form(CovForm::Factor).unwrap();
+    let with = plain
+        .clone()
+        .with_covariance_form(CovarianceForm::Covariance)
+        .unwrap();
+    let factor = plain
+        .clone()
+        .with_covariance_form(CovarianceForm::SquareRoot)
+        .unwrap();
     let size = |m: &Kalman| rmp_serde::to_vec(&m.state()).unwrap().len();
     assert_eq!(
         rmp_serde::to_vec(&plain.state()).unwrap(),
@@ -419,7 +431,11 @@ fn a_saved_factor_continues_to_the_bit_and_the_default_writes_no_form() {
     for (x, y, w) in &data[..3] {
         moved.step(x, &[Some(*y)], 1.0, *w);
     }
-    assert!(moved.with_cov_form(CovForm::Factor).is_err());
+    assert!(
+        moved
+            .with_covariance_form(CovarianceForm::SquareRoot)
+            .is_err()
+    );
 }
 
 /// `A B` for row-major `k x k` matrices.
@@ -459,8 +475,8 @@ fn assert_close(got: &[f64], want: &[f64], tol: f64, what: &str) {
     }
 }
 
-/// Each kernel is its definition, by matrix products written out: the
-/// Joseph form `(I − g zᵀ) P (I − g zᵀ)ᵀ + r g gᵀ`, Carlson's factor of `P
+/// Each kernel is its definition, by matrix products written out:
+/// Carlson's factor of `P
 /// − pz pzᵀ / s`, a rank-one update's of `P + x xᵀ` (on `x` with zeros
 /// above and below its entries), the transition's `Phi_a P Phi_aᵀ` and the
 /// re-map's `A P Aᵀ`; every factor `L = Cᵀ` stays lower triangular, to the bit.
@@ -477,29 +493,10 @@ fn each_form_kernel_is_its_definition() {
                 .map(|i| (0..k).map(|j| p[i * k + j] * z[j]).sum())
                 .collect();
             let sv = z.iter().zip(&pz).map(|(a, b)| a * b).sum::<f64>() + r;
-            let g: Vec<f64> = pz.iter().map(|v| v / sv).collect();
             let post: Vec<f64> = (0..k * k)
                 .map(|ij| p[ij] - pz[ij / k] * pz[ij % k] / sv)
                 .collect();
             let upper_zero = |c: &[f64]| (0..k * k).all(|ij| ij / k >= ij % k || c[ij] == 0.0);
-
-            // Joseph.
-            let mut a = vec![0.0; k * k];
-            for i in 0..k {
-                a[i * k + i] = 1.0;
-                for j in 0..k {
-                    a[i * k + j] -= g[i] * z[j];
-                }
-            }
-            let mut want = mul(&mul(&a, &p, k), &transpose(&a, k), k);
-            for ij in 0..k * k {
-                want[ij] += r * g[ij / k] * g[ij % k];
-            }
-            let mut got = p.clone();
-            let (mut m, mut w) = (vec![0.0; k * k], vec![0.0; k]);
-            forms::joseph(&mut got, &mut m, &mut w, &g, &pz, &z, r);
-            assert_close(&got, &want, 1e-13, "joseph");
-            assert_close(&got, &post, 1e-13, "joseph's posterior");
 
             // Carlson.
             let mut f = vec![0.0; k];
@@ -508,7 +505,7 @@ fn each_form_kernel_is_its_definition() {
             forms::factor_cf(&c, &f, &mut cz);
             assert_close(&cz, &pz, 1e-14, "C Cᵀ z");
             let mut cc = c.clone();
-            forms::carlson(&mut cc, &f, r, &mut w);
+            forms::carlson(&mut cc, &f, r, &mut vec![0.0; k]);
             assert!(upper_zero(&cc), "carlson's factor {cc:?}");
             assert_close(&forms::factor_product(&cc, k), &post, 1e-13, "carlson");
 
