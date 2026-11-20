@@ -1640,6 +1640,29 @@ is 0, and the mutant hands the shared basis `0 / 0`, NaN, which \
 `NoiseBasis::add` keeps out as it keeps out every square not above 0"""
 
 [[equivalent]]
+file = "crates/rheon-core/src/kalman.rs"
+function = "Kalman::is_live"
+mutation = "replace Kalman::is_live -> bool with true"
+line_has = """fn is_live(&self, i: usize) -> bool {
+        if self.factor() {"""
+why = """`step` reads its slots through `mark_live`, not this wrapper; the \
+readouts (`predict`, `pred_var`, the error inflations, `coef_variance`) \
+call it only to choose a dead slot's coordinate, the anchor's or the \
+moments', and to let `coupling` give it a `g_i`. A dead slot is one whose \
+`b_i` is 0 in every target and whose `P` row is 0 (the factor's `C` row \
+all 0, or a covariance-form diagonal 0, whose row the end-of-row \
+definiteness repair has emptied), and `b_i` is never -0, as it starts at \
++0 and moves only by sums and positive factors. So its coordinate, finite \
+either way (an input within 1e100 over a scale of at least \
+`sqrt(2^-1074)` or 1), and `g_i` (finite) only multiply zeros into sums \
+that start at +0 or hold the intercept's `1 * b_0`, never -0; `map_into`'s \
+`a` and `c` do not read `live`, only its drift does, which these callers \
+drop. A probe of 64 standardized settings (both forms, intercept or none, \
+units, share_p, per-slot reversion, obs_var) over 120 rows with features \
+constant and then not, 8,184 dead-slot reads, gave every readout and \
+prediction the same bits with the mutant (2026-11-20)"""
+
+[[equivalent]]
 file = "crates/rheon-core/src/sandwich.rs"
 function = "Sandwich::update"
 mutation = "replace > with >="
