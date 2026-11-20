@@ -1758,13 +1758,7 @@ impl Kalman {
 
     /// [`Kalman::is_unsized`] in the form `FACTOR` names (`Kalman::sized`).
     fn is_unsized_as<const FACTOR: bool>(&self, pi: usize) -> bool {
-        let k = self.cfg.k_total();
-        if FACTOR {
-            (0..k).all(|i| !self.sized::<true>(pi, i))
-        } else {
-            let p = &self.p[pi];
-            (0..k).all(|i| p[i * k + i] == 0.0)
-        }
+        forms::unsized_of::<FACTOR>(&self.p[pi], self.cfg.k_total())
     }
 
     /// Whether target `j` is predicted, `min_weight` aside: it has weight,
@@ -1847,7 +1841,6 @@ impl Kalman {
         if !self.cfg.reverts() {
             return;
         }
-        let k = self.cfg.k_total();
         if self.cfg.revert_half_life.len() == 1 {
             // One half-life for every slot: one exponential, not `k`.
             self.phi.fill(self.cfg.phi(0, d_clock));
@@ -1862,38 +1855,7 @@ impl Kalman {
             transit(b, &self.phi, coupled.then_some(&g[..]));
         }
         for p in &mut self.p {
-            if FACTOR {
-                // `C <- Phi_a C`: `Phi_a` is upper triangular, and so is `C`.
-                forms::factor_transit(p, &self.phi, coupled.then_some(&g[..]));
-                continue;
-            }
-            if coupled {
-                // v = P g, before P moves; then P' = Phi P Phi + the coupling's
-                // terms in the intercept's row and column (the module doc).
-                for (i, v) in self.vbuf.iter_mut().enumerate() {
-                    *v = p[i * k..(i + 1) * k]
-                        .iter()
-                        .zip(&g)
-                        .map(|(pij, gj)| pij * gj)
-                        .sum();
-                }
-            }
-            for i in 0..k {
-                let pi = self.phi[i];
-                for (pij, pj) in p[i * k..(i + 1) * k].iter_mut().zip(&self.phi) {
-                    *pij *= pi * pj;
-                }
-            }
-            if coupled {
-                let v = &self.vbuf;
-                let gv: f64 = g.iter().zip(v).map(|(gi, vi)| gi * vi).sum();
-                p[0] += 2.0 * self.phi[0] * v[0] + gv;
-                for j in 1..k {
-                    let add = self.phi[j] * v[j];
-                    p[j] += add;
-                    p[j * k] += add;
-                }
-            }
+            forms::transit_cov::<FACTOR>(p, &self.phi, coupled.then_some(&g[..]), &mut self.vbuf);
         }
         self.gbuf = g;
     }
@@ -2617,8 +2579,35 @@ impl OnlineModel for Kalman {
             } else {
                 (vec![], vec![], false)
             };
+            // Whether each covariance is sized as the step will read it:
+            // after the transition, which across a long enough reversion gap
+            // takes every entry to 0 (review fable2, C6). Before it, `predict`
+            // gave `z·b` at a `b` shrunk to nothing where the step withheld.
+            let sized_after: Vec<bool> = if reverts {
+                let g = coupled.then_some(&g[..]);
+                let mut v = vec![0.0; k];
+                (0..self.p.len())
+                    .map(|pi| {
+                        let mut p = self.p[pi].clone();
+                        if self.factor() {
+                            forms::transit_cov::<true>(&mut p, &phi, g, &mut v);
+                            !forms::unsized_of::<true>(&p, k)
+                        } else {
+                            forms::transit_cov::<false>(&mut p, &phi, g, &mut v);
+                            !forms::unsized_of::<false>(&p, k)
+                        }
+                    })
+                    .collect()
+            } else {
+                vec![]
+            };
             for (j, p) in pred.iter_mut().enumerate() {
-                if self.predicts(j) {
+                let sized = if reverts {
+                    self.wj[j] > 0.0 && sized_after[if self.cfg.share_p { 0 } else { j }]
+                } else {
+                    self.predicts(j)
+                };
+                if sized {
                     let v = if reverts {
                         let mut b = self.beta[j].clone();
                         transit(&mut b, &phi, coupled.then_some(&g[..]));

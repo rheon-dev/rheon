@@ -3346,6 +3346,34 @@ fn kalman_predict_is_the_step() {
     }
 }
 
+/// The same where a reversion gap takes the covariance to exactly 0 (review
+/// fable2, C6): reversion half-lives of 0.02 to 0.04 against the stream's
+/// gaps of 25 are 625 to 1,250 half-lives, past the underflow of `P·phi²`
+/// (about 540) and of the factor's `C·phi` (about 1,075); its gaps of 3
+/// and 1 fall short of it. The step withholds on such a row, the
+/// covariance unsized, where `predict` read it before the transition and
+/// gave a number. In both forms, one half-life for every slot and one each,
+/// which couples the intercept to the slopes.
+#[test]
+fn kalman_predict_is_the_step_where_reversion_underflows() {
+    for form in [CovarianceForm::Covariance, CovarianceForm::SquareRoot] {
+        for revert in [vec![0.04], vec![0.04, 0.03, 0.02], vec![0.02, 0.04, 0.03]] {
+            let mut cfg = kalman_cfg();
+            cfg.revert_half_life = revert;
+            predict_is_the_step_without_the_step(
+                move || {
+                    Kalman::new(cfg.clone())
+                        .unwrap()
+                        .with_covariance_form(form)
+                        .unwrap()
+                },
+                2,
+                false,
+            );
+        }
+    }
+}
+
 #[test]
 fn robust_predict_is_the_step() {
     for loss in ROBUST_LOSSES {

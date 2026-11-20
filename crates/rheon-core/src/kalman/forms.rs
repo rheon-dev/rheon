@@ -347,6 +347,62 @@ pub(super) fn factor_transit(l: &mut [f64], phi: &[f64], g: Option<&[f64]>) {
     }
 }
 
+/// Whether a covariance of order `k` is unsized: every variance 0, or on
+/// the factor every entry ([`Kalman::is_unsized`]).
+pub(super) fn unsized_of<const FACTOR: bool>(p: &[f64], k: usize) -> bool {
+    if FACTOR {
+        // `Kalman::sized` of every slot: `L`'s column `i` from row `i`.
+        (0..k).all(|i| (i..k).all(|r| p[r * k + i] == 0.0))
+    } else {
+        (0..k).all(|i| p[i * k + i] == 0.0)
+    }
+}
+
+/// `P <- Phi_a P Phi_aᵀ` for one covariance, `Phi_a` the transition in the
+/// anchor's coordinates with its coupling `g` (the module doc); on the
+/// factor `C <- Phi_a C` (`Phi_a` is upper triangular, and so is `C`).
+/// [`Kalman::transition`] runs it on every covariance, and `predict` on a
+/// copy, to read whether the step will find the covariance sized: one
+/// arithmetic, so the two agree to the bit. `v` a scratch of `k`.
+pub(super) fn transit_cov<const FACTOR: bool>(
+    p: &mut [f64],
+    phi: &[f64],
+    g: Option<&[f64]>,
+    v: &mut [f64],
+) {
+    if FACTOR {
+        factor_transit(p, phi, g);
+        return;
+    }
+    let k = phi.len();
+    if let Some(g) = g {
+        // v = P g, before P moves; then P' = Phi P Phi + the coupling's
+        // terms in the intercept's row and column (the module doc).
+        for (i, vi) in v.iter_mut().enumerate() {
+            *vi = p[i * k..(i + 1) * k]
+                .iter()
+                .zip(g)
+                .map(|(pij, gj)| pij * gj)
+                .sum();
+        }
+    }
+    for i in 0..k {
+        let pi = phi[i];
+        for (pij, pj) in p[i * k..(i + 1) * k].iter_mut().zip(phi) {
+            *pij *= pi * pj;
+        }
+    }
+    if let Some(g) = g {
+        let gv: f64 = g.iter().zip(&*v).map(|(gi, vi)| gi * vi).sum();
+        p[0] += 2.0 * phi[0] * v[0] + gv;
+        for j in 1..k {
+            let add = phi[j] * v[j];
+            p[j] += add;
+            p[j * k] += add;
+        }
+    }
+}
+
 /// The re-map `C <- A C` (`A_00 = 1`, `A_0i = c_i`, `A_ii = a_i`, upper
 /// triangular): `C`'s row 0 `C_0· + Σ_l c_l C_l·` into `u` (`L`'s column
 /// 0), and whether it and every `a_i C_i·` are numbers; with `apply`,

@@ -80,6 +80,12 @@ model that only the new build has is listed as an addition and passes.
   standardization to 1e-12; above it the arithmetic is as it was, so only
   rows after a gap of about 14 half-lives or more move (by up to 1.1e-12
   after one of 15, measured). Moves: `sgd.*`, `pa.*`.
+- `kalman` with `revert_half_life`: `predict` withholds the prediction
+  where the step does, across a clock gap long enough to take the
+  covariance to exactly 0 (about 540 reversion half-lives, 1,075 in the
+  square root). It read the covariance before the transition and gave
+  `z·b` at a `b` shrunk to nothing, where the step, which reads it after,
+  withheld. Moves: `kalman.pred_*`.
 
 ### Tests and documents
 

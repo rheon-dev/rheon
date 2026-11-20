@@ -690,3 +690,52 @@ fn every_form_is_the_posterior_at_any_scale_of_the_target() {
         }
     }
 }
+
+/// `predict` withholds where the step withholds, across a reversion gap
+/// long enough to take the covariance to exactly 0 (review fable2, C6).
+/// The step runs the transition, `P <- Phi P Phi` (`C <- Phi C` in the
+/// square root), before it reads whether the covariance is sized; past
+/// about 540 reversion half-lives (1,075 in the square root) every entry
+/// underflows, the step finds it unsized and withholds, and `predict`,
+/// which read the covariance as it stood before the transition, reported
+/// `z·b` at a `b` shrunk to nothing. A gap short of the underflow
+/// predicts in both. One half-life for every slot, and one each, which
+/// couples the intercept to the slopes.
+#[test]
+fn predict_withholds_where_the_step_does_across_a_long_reversion_gap() {
+    for form in [CovarianceForm::Covariance, CovarianceForm::SquareRoot] {
+        for revert in [vec![1.0], vec![1.0, 0.8, 1.3]] {
+            for gap in [20.0, 600.0, 1100.0, 2000.0] {
+                let mut cfg = units_cfg(1.0, 100.0);
+                cfg.n_features = 2;
+                cfg.standardize = true;
+                cfg.revert_half_life = revert.clone();
+                let mut m = Kalman::new(cfg)
+                    .unwrap()
+                    .with_covariance_form(form)
+                    .unwrap();
+                let mut s = 3u64;
+                for _ in 0..60 {
+                    let x = [lcg(&mut s), 0.5 + lcg(&mut s)];
+                    let y = 2.0 * x[0] - x[1] + 0.1 * lcg(&mut s) + 5.0;
+                    m.step(&x, &[Some(y)], 1.0, 1.0);
+                }
+                for x in [[0.3, 0.4], [-0.6, 1.2]] {
+                    let mut stepped = m.clone();
+                    let p = m.predict(&x, gap);
+                    let st = stepped.step(&x, &[Some(1.0)], gap, 1.0);
+                    assert_eq!(
+                        p.pred[0].to_bits(),
+                        st.pred[0].to_bits(),
+                        "{form:?}, reverting at {revert:?}, gap {gap}: predict {:?}, step {:?}",
+                        p.pred,
+                        st.pred
+                    );
+                    if gap <= 20.0 {
+                        assert!(st.pred[0].is_finite(), "a short gap predicts");
+                    }
+                }
+            }
+        }
+    }
+}
