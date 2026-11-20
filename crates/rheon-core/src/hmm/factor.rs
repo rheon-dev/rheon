@@ -152,7 +152,7 @@ impl EwFactor {
             m_lo: cov.means_lo().to_vec(),
             precision_scale: cov.precision_scale(),
             sigma: 1.0,
-            l: l.as_state(),
+            l: l.into_state(),
         }
     }
 
@@ -285,7 +285,7 @@ impl EwFactor {
             true
         } else {
             let mut sigma = self.sigma * a;
-            if !(sigma >= f64::MIN_POSITIVE) {
+            if sigma.is_nan() || sigma < f64::MIN_POSITIVE {
                 // `a` past the normal range (a gap of over a thousand
                 // half-lives): what it keeps of `M` beyond the ridge is under
                 // `2⁻¹⁰²⁰` of it, so `M` starts at the ridge it has reached,

@@ -1257,7 +1257,7 @@ impl SpdFactor {
     /// This factor as a state holds it: `L` alone, with no jitter rung or
     /// count of moves, which say how a factorization was reached and mean
     /// nothing once the factor is the state ([`Self::add_outer_in_place`]).
-    pub(crate) fn as_state(mut self) -> Self {
+    pub(crate) fn into_state(mut self) -> Self {
         self.attempts = 0;
         self.jitter = 0.0;
         self.moves = 0;
@@ -1278,7 +1278,7 @@ impl SpdFactor {
     }
 
     /// The factor whose lower triangle is `lower`, column by column
-    /// ([`Self::lower_columns`]), as a state holds it ([`Self::as_state`]):
+    /// ([`Self::lower_columns`]), as a state holds it ([`Self::into_state`]):
     /// `None` unless `lower` is a triangle of order `k` and a Cholesky
     /// factor, every pivot a positive finite number and every entry finite.
     pub(crate) fn of_lower_columns(k: usize, lower: &[f64]) -> Option<Self> {

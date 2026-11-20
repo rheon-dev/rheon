@@ -279,12 +279,11 @@ fn a_factor_stands_on_a_row_of_no_weight_and_restarts_after_a_total_decay() {
     }
     m.step(&rows[1].0, &[], 5e5, 1.0);
     let fresh = SpdFactor::scaled_identity(d, 1.0).unwrap();
-    for s in 0..2 {
-        let f = &m.factor_states[s];
+    for (s, (f, h)) in m.factor_states.iter().zip(&held).enumerate() {
         if m.p[s] > 0.0 {
             assert_eq!((f.factor(), f.sigma()), (&fresh, 1.0), "{s}");
         } else {
-            assert_eq!(f.factor(), held[s].factor(), "{s}");
+            assert_eq!(f.factor(), h.factor(), "{s}");
         }
     }
     assert!(m.p.iter().any(|p| *p > 0.0));
@@ -561,11 +560,12 @@ fn max(v: &[f64]) -> f64 {
 fn the_factor_holds_the_exact_recursion() {
     for decay in [Decay::Halflife(20.0), Decay::Halflife(f64::INFINITY)] {
         let t = track(13, decay, 500, 7, 21);
-        // Measured over this grid (4,000 rows a case, 13 to 32 features):
-        // the factor's matrix within 723 units of rounding, the co-moments'
-        // within 99; the near log densities within 4.7e-12 and 3.7e-12, the
-        // posteriors within 2.2e-13 and 3.8e-13, the scores 1.0e-12 and
-        // 9.0e-12.
+        // Measured 2026-11-20 over the extended grid (13, 20 and 32
+        // features, 4,000 rows a case, two seeds, arm64): the factor's
+        // matrix within 680 units of rounding, the co-moments' within 95;
+        // the near log densities within 4.6e-12 and 3.1e-12, the posteriors
+        // within 2.9e-13 and 4.2e-13, the scores within 8.5e-13 and
+        // 8.7e-12, the factor's and the co-moments' in turn.
         assert!(
             max(&t.factor_off) < 2048.0,
             "{decay:?}: {:?}",
@@ -674,7 +674,7 @@ fn converted(widths: &[usize], n: usize) -> (f64, f64) {
                 if wide_enough {
                     for s in 0..2 {
                         let fresh = SpdFactor::of(&was.state_matrix(s), d).unwrap();
-                        assert_eq!(back.factor_states[s].factor(), &fresh.as_state());
+                        assert_eq!(back.factor_states[s].factor(), &fresh.into_state());
                         assert_eq!(back.factor_states[s].sigma(), 1.0);
                     }
                 }
