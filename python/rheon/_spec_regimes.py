@@ -236,8 +236,9 @@ def hmm(
         M_l'    = s' L' L''  = a M_l + a b delta delta'
 
     The two forms are the same matrix in exact arithmetic, and their
-    densities part in the last digits: a posterior by about ``1e-13``.
-    Below 13 features the factorization is the faster, and is kept.
+    outputs part in the last digits: a posterior by at most about ``6e-12``
+    over 20,000 rows at 13 to 32 features. Below 13 features the
+    factorization is the faster, and is kept.
 
     .. rubric:: Example
 

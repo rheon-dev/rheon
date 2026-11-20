@@ -80,6 +80,36 @@ model that only the new build has is listed as an addition and passes.
 
 ### Performance
 
+- **`hmm` with a full covariance and 13 features or more keeps each state's
+  Cholesky factor as the state**, `M = s·L·Lᵀ` with the scalar `s` held
+  between 1/4 and 1, and a learned row moves it by plane rotations in time
+  `d²`, where the state kept co-moments and factorized them after every
+  learned row in time `d³`. A row of 2 states takes, against the build with
+  the column loop below (both function layouts, each beside an
+  identical-binary control within ±6.5%): on arm64 (Apple M4 Pro) 0.93 of
+  the time at 13 features, 0.75 to 0.76 at 20 and 0.48 at 32, and against
+  the build before that loop 0.84 to 0.85, 0.73 to 0.74 and 0.52 to 0.54; on
+  x86-64 (AMD EPYC, the same arithmetic timed before landing) 0.91 at 13,
+  0.79 at 20 and 0.535 at 32. Below 13 features the rotations
+  are the slower (1.05 to 1.07 at 4 and 8 features on both platforms), so a
+  narrower state, and every `tied` and `diag` one, keeps its co-moments and
+  every output bit. The saved state is smaller: 2,621 bytes for 2 states of
+  13 features against 4,180, 5,023 against 8,598 at 20, 11,179 against
+  20,262 at 32. The two forms hold the same matrix in exact arithmetic and
+  round differently: against 2.0.0 over 20,000 rows at 13, 20 and 32
+  features (grouped, chunked, saved and loaded, with nulls, with no decay),
+  a filtered or predicted state probability moved by at most 5.7e-12
+  (99.9th percentile 2.8e-13), `loglik` by at most 9.0e-11 relative (99.9th
+  percentile of its absolute movement 5.0e-11), a state mean in `coef` by
+  at most 1.4e-11; no `state` and no argmax of the probabilities changed.
+  Against the same recursion carried in 512 bits, the factor form's
+  densities, probabilities and scores are as close as the co-moments' (its
+  matrix within 680 units of rounding, theirs within 95, on 13 to 32
+  features). A state saved by an earlier build at that width loads as the
+  factor of its co-moments and goes on in the factor form within rounding
+  of the earlier build; the schema is 69. Moves:
+  `hmm.filtered_state*`, `hmm.predicted_state*`, `hmm.loglik`, `hmm.state`,
+  `hmm.coef`.
 - `lasso` writes each solve's correlation matrix over the one its thread's
   last solve left, where every solve made and zeroed a new one (2 MB at 500
   features): 0.97 of the time a row at 500 features on arm64 (Apple M4 Pro,
