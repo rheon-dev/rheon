@@ -296,11 +296,13 @@ mod tests {
         // `e^{−n²a}/n` summing to 1.68 in magnitude, each `k + ½` ulps off
         // through `exp` and its division, 33 additions of partial sums
         // under 1 (each ¼ ulp of 1), and `4/π` with its product: at most
-        // `1.27·((k + ½)·1.68 + 8.25) + 1` ulps of 1, 17 for a libm 2 ulps
-        // off. Apple's reads 1 exactly, and at most 1 − 2⁻⁵² moved by up to
-        // 2 ulps, where `== 1.0` failed.
+        // `1.27·((k + ½)·1.68 + 8.25) + 1` ulps of 1: 17 for a libm 2 ulps
+        // off, 18.95 for Windows' `ucrtbase`, whose `expm1` was measured up
+        // to 3 ulps off (the `k` of `oracle::LIBM`), so held at 19. Apple's
+        // reads 1 exactly, and at most 1 − 2⁻⁵² moved by up to 2 ulps, where
+        // `== 1.0` failed.
         let tail = 1.0 - sup_abs_bm_cdf(12.0);
-        assert!((0.0..=18.0 * f64::EPSILON).contains(&tail), "{tail:e}");
+        assert!((0.0..=19.0 * f64::EPSILON).contains(&tail), "{tail:e}");
         for x in [0.5, 1.0, 1.5, 2.0, 3.0] {
             assert!(sup_abs_bm_cdf(x) < sup_abs_bm_cdf(x + 0.05), "{x}");
         }
