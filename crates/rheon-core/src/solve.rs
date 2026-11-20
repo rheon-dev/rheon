@@ -1177,6 +1177,116 @@ impl SpdFactor {
         self.moved()
     }
 
+    /// PROTOTYPE (task 479, feature `hmm-factor-state`): [`Self::updated`]'s
+    /// rotations, `L L'ᵀ = c·L Lᵀ + v vᵀ`, in place, on a factor that *is*
+    /// its owner's state: there are no co-moments to factorize afresh from,
+    /// so the moves are neither capped nor counted, and a factor that needed
+    /// jitter is moved too (it is the matrix the state holds). The loop is
+    /// `updated`'s, entry for entry. `false` refuses `c` or `v` before
+    /// anything moves, or reports a factor the rotations left with a pivot
+    /// or an entry that is not a positive finite number, which then holds
+    /// no meaning and its owner resets.
+    #[cfg(all(feature = "hmm-factor-state", not(feature = "hmm-factor-scaled")))]
+    pub(crate) fn rotate_in_place(&mut self, c: f64, v: &mut [f64]) -> bool {
+        let k = self.l.nrows();
+        if !(c > 0.0 && c.is_finite()) || v.len() != k || !v.iter().all(|x| x.is_finite()) {
+            return false;
+        }
+        let root = c.sqrt();
+        for j in 0..k {
+            let Some(col) = self.l.col_mut(j).try_as_col_major_mut() else {
+                return false;
+            };
+            let col = &mut col.as_slice_mut()[j..];
+            let (d, p) = (root * col[0], v[j]);
+            let big = d.abs().max(p.abs());
+            let (dd, pp) = (d / big, p / big);
+            let r = big * (dd * dd + pp * pp).sqrt();
+            let (cos, sin) = (d / r, p / r);
+            col[0] = r;
+            for (li, xi) in col[1..].iter_mut().zip(&mut v[j + 1..]) {
+                let l = root * *li;
+                *li = cos * l + sin * *xi;
+                *xi = cos * *xi - sin * l;
+            }
+        }
+        self.log_det = OnceLock::new();
+        self.is_a_factor()
+    }
+
+    /// PROTOTYPE (task 479, feature `hmm-factor-scaled`):
+    /// [`Self::rotate_in_place`] at `c = 1`, `L L'ᵀ = L Lᵀ + v vᵀ`, with the
+    /// scaling by `√c` left out (it is 1, and every product by it exact):
+    /// the same bits, `k²/2` fewer multiplications.
+    #[cfg(feature = "hmm-factor-scaled")]
+    pub(crate) fn rotate_unit_in_place(&mut self, v: &mut [f64]) -> bool {
+        let k = self.l.nrows();
+        if v.len() != k || !v.iter().all(|x| x.is_finite()) {
+            return false;
+        }
+        for j in 0..k {
+            let Some(col) = self.l.col_mut(j).try_as_col_major_mut() else {
+                return false;
+            };
+            let col = &mut col.as_slice_mut()[j..];
+            let (d, p) = (col[0], v[j]);
+            let big = d.abs().max(p.abs());
+            let (dd, pp) = (d / big, p / big);
+            let r = big * (dd * dd + pp * pp).sqrt();
+            let (cos, sin) = (d / r, p / r);
+            col[0] = r;
+            for (li, xi) in col[1..].iter_mut().zip(&mut v[j + 1..]) {
+                let l = *li;
+                *li = cos * l + sin * *xi;
+                *xi = cos * *xi - sin * l;
+            }
+        }
+        self.log_det = OnceLock::new();
+        self.is_a_factor()
+    }
+
+    /// PROTOTYPE (task 479): every entry of `L` multiplied by `by`, a power
+    /// of two, so exactly (short of a subnormal): `L Lᵀ` scaled by `by²`.
+    #[cfg(feature = "hmm-factor-scaled")]
+    pub(crate) fn scale_exact(&mut self, by: f64) {
+        let k = self.l.nrows();
+        for j in 0..k {
+            for i in j..k {
+                self.l[(i, j)] *= by;
+            }
+        }
+        self.log_det = OnceLock::new();
+    }
+
+    /// PROTOTYPE (task 479): the factor of `r·I`, `√r` on the diagonal: the
+    /// bits a fresh factorization of `r·I` gives (each pivot is `√(r − 0)`),
+    /// with no factorization run. `None` unless `r` is positive and finite.
+    #[cfg(feature = "hmm-factor-state")]
+    pub(crate) fn scaled_identity(k: usize, r: f64) -> Option<Self> {
+        if !(r > 0.0 && r.is_finite()) {
+            return None;
+        }
+        let mut l = Mat::zeros(k, k);
+        let s = r.sqrt();
+        for i in 0..k {
+            l[(i, i)] = s;
+        }
+        Some(Self {
+            l,
+            log_det: OnceLock::new(),
+            attempts: 0,
+            jitter: 0.0,
+            moves: 0,
+        })
+    }
+
+    /// `L` row-major, `k*k`, zeros above the diagonal: for a test's oracle.
+    #[cfg(all(test, feature = "hmm-factor-state"))]
+    pub(crate) fn lower_rows(&self) -> Vec<f64> {
+        let k = self.l.nrows();
+        (0..k * k).map(|ij| self.l[(ij / k, ij % k)]).collect()
+    }
+
     /// The factor of `E·A·E` with `E = diag(e)`, every `e_i` finite and
     /// `> 0` -- `A`'s rows and columns rescaled, as a correlation matrix
     /// moves when the scales it is taken in do -- made from this one in

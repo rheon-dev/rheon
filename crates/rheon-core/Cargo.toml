@@ -19,6 +19,16 @@ publish = false
 [lints.rust]
 unsafe_code = "forbid"
 
+[features]
+# A study prototype (task 479), off by default and in no shipped build:
+# `hmm` with full covariance keeps each state's Cholesky factor as its state,
+# in place of the co-moments, and moves it by a rank-one rotation a learned
+# row. Compiled out unless asked for, so the default build is the same code.
+hmm-factor-state = []
+# The same, with each state's matrix held as `σ·L Lᵀ`: the decay's scale `a`
+# goes into the scalar `σ` and the rotations add `v vᵀ` to `L Lᵀ` unscaled.
+hmm-factor-scaled = ["hmm-factor-state"]
+
 
 [dependencies]
 faer.workspace = true

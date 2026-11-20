@@ -181,6 +181,30 @@ impl CoStep for EachRow {
     }
 }
 
+/// PROTOTYPE (task 479): the co-moments' step not taken at all, for an
+/// owner that keeps `M`'s factor in their place ([`EwCov::factor_step`]).
+#[cfg(feature = "hmm-factor-state")]
+struct NoCoStep;
+
+#[cfg(feature = "hmm-factor-state")]
+impl CoStep for NoCoStep {
+    #[inline(always)]
+    fn rank_one(&mut self, _: &mut [f64], _: usize, _: &[f64], _: f64, _: f64, _: Threads) {}
+}
+
+/// PROTOTYPE (task 479): what a row does to `M = C + s·prior·I`
+/// ([`EwCov::factor_step`]).
+#[cfg(feature = "hmm-factor-state")]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum FactorStep {
+    /// `M` stands.
+    Same,
+    /// `M = prior·I`: the history is gone and the prior's scale is 1.
+    Reset,
+    /// `M' = a·M + ab·δδᵀ`.
+    Move { a: f64, ab: f64 },
+}
+
 /// A reusable row buffer that is not state: two accumulators with the same
 /// moments are the same accumulator whatever is left in their scratch, and a
 /// state file carries none of it.
@@ -1287,6 +1311,56 @@ impl EwCov {
             }
         }
         self.commit_scalars(lam, w, a, w_new);
+    }
+
+    /// PROTOTYPE (task 479, feature `hmm-factor-state`): what
+    /// [`Self::update`]`(x, lam, w)` does to `M = C + s·prior·I`, read before
+    /// it runs, for an owner that keeps `M`'s Cholesky factor in place of `C`.
+    /// The update is `C' = a·C + a·b·δδᵀ` and `s' = a·s` (`s' = 1` where
+    /// `a = 0`), so `M' = a·M + a·b·δδᵀ`: [`FactorStep::Move`] carries `a`
+    /// and `a·b`, the factor's step is `v = √(a·b)·δ`, `δ` the row's
+    /// deviation from the means as they stand ([`Self::deviation`]).
+    #[cfg(feature = "hmm-factor-state")]
+    pub(crate) fn factor_step(&self, lam: f64, w: f64) -> FactorStep {
+        debug_assert_eq!(self.pending.block_rows, 0, "a blocked accumulator");
+        if w == 0.0 && lam * self.w_sum == 0.0 {
+            // `decay` alone: `C` and `s` stand.
+            return FactorStep::Same;
+        }
+        let Some((a, b, _)) = self.step_factors(lam, w) else {
+            return FactorStep::Same;
+        };
+        if a <= 0.0 {
+            // The first row with weight: `C' = 0`, `s' = 1`.
+            return FactorStep::Reset;
+        }
+        let ab = a * b;
+        if a == 1.0 && ab == 0.0 {
+            return FactorStep::Same;
+        }
+        FactorStep::Move { a, ab }
+    }
+
+    /// PROTOTYPE (task 479): [`Self::update`] with every number moved but
+    /// the co-moments, which an owner keeping `M`'s factor does not hold
+    /// ([`Self::drop_comoments`]).
+    #[cfg(feature = "hmm-factor-state")]
+    pub(crate) fn update_beside_factor(&mut self, x: &[f64], lam: f64, w: f64) {
+        self.update_by(x, lam, w, &mut NoRider, &mut NoCoStep);
+    }
+
+    /// PROTOTYPE (task 479): the co-moments dropped, for an owner whose
+    /// factor of `M` is the state from here on.
+    #[cfg(feature = "hmm-factor-state")]
+    pub(crate) fn drop_comoments(&mut self) {
+        self.c = LowerTriangle::zeros(0);
+    }
+
+    /// PROTOTYPE (task 479): [`Self::has_shape`] for an accumulator whose
+    /// co-moments its owner's factor holds: none kept.
+    #[cfg(feature = "hmm-factor-state")]
+    pub(crate) fn has_shape_beside_factor(&self, k: usize) -> bool {
+        self.k == k && self.m.len() == k && self.c.is_empty() && self.m_lo.len() == k
     }
 
     /// Overwrite the moments directly. Used when two accumulators are mixed

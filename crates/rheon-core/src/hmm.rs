@@ -415,6 +415,30 @@ impl Factors {
     }
 }
 
+/// PROTOTYPE (task 479): a restored scaled state's `σ`s, one a factor, each
+/// positive and finite.
+#[cfg(feature = "hmm-factor-scaled")]
+fn scales_damaged(m: &Hmm) -> bool {
+    m.lscale.len() != m.lstate.len() || !m.lscale.iter().all(|s| *s > 0.0 && s.is_finite())
+}
+
+#[cfg(all(feature = "hmm-factor-state", not(feature = "hmm-factor-scaled")))]
+fn scales_damaged(_: &Hmm) -> bool {
+    false
+}
+
+/// PROTOTYPE (task 479): a restored state's accumulator, beside its factor.
+#[cfg(feature = "hmm-factor-state")]
+fn state_has_shape_beside_factor(s: &EwCov, d: usize) -> bool {
+    s.has_shape_beside_factor(d)
+}
+
+/// Never reached: no factor is held without the prototype.
+#[cfg(not(feature = "hmm-factor-state"))]
+fn state_has_shape_beside_factor(_: &EwCov, _: usize) -> bool {
+    false
+}
+
 /// A Gaussian hidden Markov model; see the module docs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Hmm {
@@ -444,6 +468,23 @@ pub struct Hmm {
     /// The `full` shape's per-state factors between rows; see [`Factors`].
     #[serde(skip)]
     factors: Factors,
+    /// PROTOTYPE (task 479, feature `hmm-factor-state`): under `full`, once
+    /// the states are seeded, each state's Cholesky factor of
+    /// `M = C + r·I` *is* the state, in place of its co-moments (which are
+    /// dropped): a learned row moves it by a rank-one rotation
+    /// ([`SpdFactor::rotate_in_place`]), and no row factorizes. Empty
+    /// before the seeding and in every other shape, and then not written.
+    #[cfg(feature = "hmm-factor-state")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    lstate: Vec<SpdFactor>,
+    /// PROTOTYPE (task 479, feature `hmm-factor-scaled`): each state's
+    /// `σ`, its matrix being `σ·L Lᵀ` with `L` its [`Self::lstate`]: the
+    /// decay's scale `a` multiplies `σ` (one rounding a row, the ridge's
+    /// scale's kind), not every entry of `L` by `√a`. Kept in
+    /// `[2⁻¹²⁸, 1]` by exact rescalings of `L` by powers of two.
+    #[cfg(feature = "hmm-factor-scaled")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    lscale: Vec<f64>,
 }
 
 impl Hmm {
@@ -512,6 +553,10 @@ impl Hmm {
             states,
             diag_states,
             cfg,
+            #[cfg(feature = "hmm-factor-state")]
+            lstate: Vec::new(),
+            #[cfg(feature = "hmm-factor-scaled")]
+            lscale: Vec::new(),
         })
     }
 
@@ -521,6 +566,10 @@ impl Hmm {
     /// paths `clear` the cache, so under `learn = false` it is built once.
     fn ensure_factors(&mut self) {
         if !self.seeded || !matches!(self.cfg.covariance, Covariance::Full) {
+            return;
+        }
+        #[cfg(feature = "hmm-factor-state")]
+        if self.take_up_factor_state() {
             return;
         }
         let (k, d) = (self.cfg.k, self.cfg.n_features);
@@ -539,6 +588,197 @@ impl Hmm {
                 let r = cfg.precision_prior * cov.precision_scale();
                 let f = factors.work.factor_ridged(cov.comoments().packed(), r, d);
                 factors.set(s, k, f);
+            }
+        }
+    }
+
+    /// State `s`'s factor between rows: the cache's, or under the
+    /// prototype's factor state ([`Self::lstate`]) the state's own.
+    fn held_factor(&self, s: usize) -> Option<&SpdFactor> {
+        #[cfg(feature = "hmm-factor-state")]
+        if let Some(f) = self.lstate.get(s) {
+            return Some(f);
+        }
+        self.factors.peek(s)
+    }
+
+    /// PROTOTYPE (task 479): once seeded, under `full`, each state's
+    /// factor of `C + r·I` made from its co-moments -- the factor the cache
+    /// would build, to the bit -- becomes the state, and the co-moments are
+    /// dropped. Whether the states are held as factors (now or before); a
+    /// factorization that fails leaves them as co-moments, and the row
+    /// fails as it does today.
+    #[cfg(feature = "hmm-factor-state")]
+    fn take_up_factor_state(&mut self) -> bool {
+        if !self.lstate.is_empty() {
+            return true;
+        }
+        let (k, d) = (self.cfg.k, self.cfg.n_features);
+        let mut held = Vec::with_capacity(k);
+        for cov in &self.states {
+            let r = self.cfg.precision_prior * cov.precision_scale();
+            match self
+                .factors
+                .work
+                .factor_ridged(cov.comoments().packed(), r, d)
+            {
+                Some(f) => held.push(f),
+                None => return false,
+            }
+        }
+        for cov in self.states.iter_mut() {
+            cov.drop_comoments();
+        }
+        self.factors.clear();
+        self.lstate = held;
+        #[cfg(feature = "hmm-factor-scaled")]
+        {
+            self.lscale = vec![1.0; k];
+        }
+        true
+    }
+
+    /// State `s`'s `(ln det M, dᵀM⁻¹d)` from the factor `f` it reads: the
+    /// factor's own, or under the scaled prototype `M = σ·L Lᵀ`'s.
+    fn held_parts(
+        &self,
+        s: usize,
+        f: &SpdFactor,
+        delta: &[f64],
+        quad: &mut QuadWork,
+    ) -> (f64, f64) {
+        #[cfg(feature = "hmm-factor-scaled")]
+        if let Some(&sig) = self.lscale.get(s) {
+            let d = delta.len() as f64;
+            return (f.log_det() + d * sig.ln(), f.quad_form(delta, quad) / sig);
+        }
+        let _ = s;
+        (f.log_det(), f.quad_form(delta, quad))
+    }
+
+    /// PROTOTYPE (task 479): a learned row on the factor states. Each state
+    /// takes the row at weight `w·pₗ`; its `M = C + r·I` moves as
+    /// `M' = a·M + a·b·δδᵀ` ([`crate::ewcov::FactorStep`]), so its factor is
+    /// rotated by `v = √(ab)·δ` with `δ` the row's deviation from the means
+    /// before the row, and then every other number of the accumulator moves
+    /// as [`EwCov::update`] moves it. A rotation that leaves no factor (a
+    /// pivot that is not a positive finite number) resets that state's `M`
+    /// to its ridge and counts a solve failure.
+    #[cfg(feature = "hmm-factor-state")]
+    fn learn_factor_states(
+        &mut self,
+        x: &[f64],
+        lam: f64,
+        weight: f64,
+        post: &[f64],
+        v: &mut Vec<f64>,
+    ) {
+        #[cfg(feature = "hmm-factor-scaled")]
+        self.learn_scaled_states(x, lam, weight, post, v);
+        #[cfg(not(feature = "hmm-factor-scaled"))]
+        self.learn_plain_states(x, lam, weight, post, v);
+    }
+
+    /// PROTOTYPE (task 479): [`Self::learn_factor_states`], each state's
+    /// matrix `L Lᵀ` itself, scaled by `√a` entry by entry in the rotation.
+    #[cfg(all(feature = "hmm-factor-state", not(feature = "hmm-factor-scaled")))]
+    fn learn_plain_states(
+        &mut self,
+        x: &[f64],
+        lam: f64,
+        weight: f64,
+        post: &[f64],
+        v: &mut Vec<f64>,
+    ) {
+        use crate::ewcov::FactorStep;
+        let d = self.cfg.n_features;
+        let prior = self.cfg.precision_prior;
+        for (s, (cov, f)) in self.states.iter_mut().zip(&mut self.lstate).enumerate() {
+            let w = weight * post[s];
+            let lost = match cov.factor_step(lam, w) {
+                FactorStep::Same => false,
+                FactorStep::Reset => true,
+                FactorStep::Move { a, ab } => {
+                    let root = ab.sqrt();
+                    v.clear();
+                    v.extend(
+                        x.iter()
+                            .enumerate()
+                            .map(|(i, &xi)| root * cov.deviation(i, xi)),
+                    );
+                    if f.rotate_in_place(a, v) {
+                        false
+                    } else {
+                        self.solve_failures += 1;
+                        true
+                    }
+                }
+            };
+            cov.update_beside_factor(x, lam, w);
+            if lost {
+                let r = prior * cov.precision_scale();
+                if let Some(fresh) = SpdFactor::scaled_identity(d, r) {
+                    *f = fresh;
+                }
+            }
+        }
+    }
+
+    /// PROTOTYPE (task 479, feature `hmm-factor-scaled`): a learned row on
+    /// states held as `M = σ·L Lᵀ`. `M' = a·M + a·b·δδᵀ` is
+    /// `σ'·(L Lᵀ + v vᵀ)` with `σ' = a·σ` and `v = √(ab/σ')·δ`: `σ` takes the
+    /// scale and the rotations add `v vᵀ` unscaled. Below `2⁻¹²⁸`, `σ` is
+    /// multiplied by `2¹²⁸` and `L` by `2⁻⁶⁴`, which changes no bit of `M`.
+    #[cfg(feature = "hmm-factor-scaled")]
+    fn learn_scaled_states(
+        &mut self,
+        x: &[f64],
+        lam: f64,
+        weight: f64,
+        post: &[f64],
+        v: &mut Vec<f64>,
+    ) {
+        use crate::ewcov::FactorStep;
+        const FLOOR: f64 = 1.0 / (1u128 << 127) as f64 / 2.0;
+        let d = self.cfg.n_features;
+        let prior = self.cfg.precision_prior;
+        let states = self
+            .states
+            .iter_mut()
+            .zip(&mut self.lstate)
+            .zip(&mut self.lscale);
+        for (s, ((cov, f), sig)) in states.enumerate() {
+            let w = weight * post[s];
+            let lost = match cov.factor_step(lam, w) {
+                FactorStep::Same => false,
+                FactorStep::Reset => true,
+                FactorStep::Move { a, ab } => {
+                    *sig *= a;
+                    let root = (ab / *sig).sqrt();
+                    v.clear();
+                    v.extend(
+                        x.iter()
+                            .enumerate()
+                            .map(|(i, &xi)| root * cov.deviation(i, xi)),
+                    );
+                    let kept = f.rotate_unit_in_place(v);
+                    if kept && *sig < FLOOR {
+                        f.scale_exact(1.0 / (1u64 << 63) as f64 / 2.0);
+                        *sig *= (1u128 << 127) as f64 * 2.0;
+                    }
+                    if !kept {
+                        self.solve_failures += 1;
+                    }
+                    !kept
+                }
+            };
+            cov.update_beside_factor(x, lam, w);
+            if lost {
+                let r = prior * cov.precision_scale();
+                if let Some(fresh) = SpdFactor::scaled_identity(d, r) {
+                    *f = fresh;
+                    *sig = 1.0;
+                }
             }
         }
     }
@@ -822,7 +1062,7 @@ impl Hmm {
                     // result is bit-identical); otherwise built here, which is
                     // the `&self` predict path and the failure case.
                     let built;
-                    let f = match self.factors.peek(s) {
+                    let f = match self.held_factor(s) {
                         Some(f) => f,
                         None => {
                             let Some(f) = SpdFactor::of(&self.state_matrix(s), d) else {
@@ -833,7 +1073,8 @@ impl Hmm {
                         }
                     };
                     // `quad_forms(delta, d, 1)[0]` to the bit, in a kept column.
-                    *o = base - 0.5 * f.log_det() - 0.5 * f.quad_form(delta, quad);
+                    let (log_det, q) = self.held_parts(s, f, delta, quad);
+                    *o = base - 0.5 * log_det - 0.5 * q;
                 }
             }
         }
@@ -1002,6 +1243,14 @@ impl Hmm {
     /// state (task 181), is refused before it gets here (`OnlineModel`,
     /// task 183).
     fn age_states(&mut self, x: &[f64], lam: f64) {
+        #[cfg(feature = "hmm-factor-state")]
+        if !self.lstate.is_empty() {
+            // A row of no weight moves no `M`: the factors stand.
+            for s in self.states.iter_mut() {
+                s.update_beside_factor(x, lam, 0.0);
+            }
+            return;
+        }
         for s in self.states.iter_mut() {
             s.update(x, lam, 0.0);
         }
@@ -1126,8 +1375,17 @@ impl Hmm {
                     *a += if z > 0.0 { weight * j / z } else { 0.0 };
                 }
             }
-            for (s, cov) in self.states.iter_mut().enumerate() {
-                cov.update(x, lam, weight * work.post[s]);
+            #[cfg(feature = "hmm-factor-state")]
+            let factored = !self.lstate.is_empty();
+            #[cfg(not(feature = "hmm-factor-state"))]
+            let factored = false;
+            if factored {
+                #[cfg(feature = "hmm-factor-state")]
+                self.learn_factor_states(x, lam, weight, &work.post, &mut work.delta);
+            } else {
+                for (s, cov) in self.states.iter_mut().enumerate() {
+                    cov.update(x, lam, weight * work.post[s]);
+                }
             }
             for (s, cov) in self.diag_states.iter_mut().enumerate() {
                 cov.update(x, lam, weight * work.post[s]);
@@ -1222,9 +1480,32 @@ impl crate::OnlineModel for Hmm {
                 } else {
                     (m.states.len(), m.diag_states.len())
                 };
+                #[cfg(feature = "hmm-factor-state")]
+                let beside = !m.lstate.is_empty();
+                #[cfg(not(feature = "hmm-factor-state"))]
+                let beside = false;
+                #[cfg(feature = "hmm-factor-state")]
+                if beside
+                    && (diagonal
+                        || !matches!(m.cfg.covariance, Covariance::Full)
+                        || m.lstate.len() != k
+                        || m.lstate.iter().any(|f| f.order() != d)
+                        || scales_damaged(&m))
+                {
+                    return Err(crate::model::damaged(
+                        "hmm",
+                        "its saved factors have the wrong shape",
+                    ));
+                }
                 if kept != k
                     || other != 0
-                    || m.states.iter().any(|s| !s.has_shape(d))
+                    || m.states.iter().any(|s| {
+                        if beside {
+                            !state_has_shape_beside_factor(s, d)
+                        } else {
+                            !s.has_shape(d)
+                        }
+                    })
                     || m.diag_states.iter().any(|s| !s.has_shape(d))
                     || m.p.len() != k
                     || m.a.len() != k * k
@@ -3236,5 +3517,458 @@ mod tests {
                 }
             }
         }
+    }
+
+    // PROTOTYPE (task 479, feature `hmm-factor-state`): each `full` state's
+    // Cholesky factor is its state. The cache tests above reach into the
+    // co-moments and the cache, which the prototype does not keep; these
+    // hold what it does keep.
+
+    /// Rows of `d` features around one of three centres six apart, in runs
+    /// of 40 rows, with clock steps of 0.5 to 2 (factor_bench's blobs).
+    #[cfg(feature = "hmm-factor-state")]
+    fn blobs(d: usize, n: usize, seed: u64) -> Vec<(Vec<f64>, f64)> {
+        let mut s = seed;
+        (0..n)
+            .map(|i| {
+                let label = (i / 40) % 3;
+                let x = (0..d)
+                    .map(|j| lcg(&mut s) + if j % 3 == label { 6.0 } else { 0.0 })
+                    .collect();
+                let dt = 0.5 * (1.0 + (2.0 * (lcg(&mut s) + 1.0)).floor().min(3.0));
+                (x, dt)
+            })
+            .collect()
+    }
+
+    #[cfg(feature = "hmm-factor-state")]
+    fn proto_cfg(d: usize, decay: Decay) -> HmmCfg {
+        HmmCfg {
+            decay,
+            precision_prior: 1.0,
+            warm_rows: 100,
+            ..cfg(d, 2)
+        }
+    }
+
+    /// The factor a state takes up is the one the cache builds of its
+    /// co-moments, to the bit, so the rows up to the first learned one
+    /// after the seeding read what they read today; the co-moments are then
+    /// dropped and the factors move with each learned row.
+    #[cfg(feature = "hmm-factor-state")]
+    #[test]
+    fn a_factor_state_starts_as_the_fresh_factor_and_moves_alone() {
+        let d = 5;
+        let mut m = Hmm::new(proto_cfg(d, Decay::Halflife(50.0))).unwrap();
+        let rows = blobs(d, 300, 3);
+        for (x, dt) in &rows[..100] {
+            m.step(x, &[], *dt, 1.0);
+        }
+        assert!(m.seeded && m.lstate.is_empty());
+        let want: Vec<SpdFactor> = (0..2)
+            .map(|s| SpdFactor::of(&m.state_matrix(s), d).unwrap())
+            .collect();
+        let mut taken = m.clone();
+        taken.ensure_factors();
+        assert_eq!(taken.lstate, want);
+        assert!(taken.states.iter().all(|s| s.has_shape_beside_factor(d)));
+        for (x, dt) in &rows[100..] {
+            m.step(x, &[], *dt, 1.0);
+        }
+        assert_eq!(m.lstate.len(), 2);
+        assert!(m.lstate.iter().zip(&want).all(|(a, b)| a != b));
+        assert_eq!(m.solve_failures, 0);
+    }
+
+    /// A state saved mid-stream loads, continues to the bit of the run that
+    /// was never saved, and saves again byte for byte: the factor is what
+    /// is saved, so nothing is factorized again on the load.
+    #[cfg(feature = "hmm-factor-state")]
+    #[test]
+    fn a_factor_state_saved_and_loaded_continues_to_the_bit() {
+        use crate::OnlineModel;
+        for decay in [Decay::Halflife(80.0), Decay::Halflife(f64::INFINITY)] {
+            let d = 6;
+            let rows = blobs(d, 900, 9);
+            let mut whole = Hmm::new(proto_cfg(d, decay)).unwrap();
+            for (x, dt) in &rows[..450] {
+                whole.step(x, &[], *dt, 1.0);
+            }
+            assert_eq!(whole.lstate.len(), 2);
+            let bytes = rmp_serde::to_vec_named(&whole.state()).unwrap();
+            let state: crate::State = rmp_serde::from_slice(&bytes).unwrap();
+            let mut back = Hmm::restore(&state).unwrap();
+            assert_eq!(back, whole);
+            for (x, dt) in &rows[450..] {
+                let (a, b) = (whole.step(x, &[], *dt, 1.0), back.step(x, &[], *dt, 1.0));
+                let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+                assert_eq!(bits(&a.pred), bits(&b.pred));
+                assert_eq!(a.n_eff.to_bits(), b.n_eff.to_bits());
+            }
+            assert_eq!(
+                rmp_serde::to_vec_named(&whole.state()).unwrap(),
+                rmp_serde::to_vec_named(&back.state()).unwrap()
+            );
+            // A factor of the wrong order is refused by name.
+            let mut s = whole.state();
+            let crate::ModelState::Hmm(inner) = &mut s.model else {
+                unreachable!()
+            };
+            inner.lstate[1] = SpdFactor::scaled_identity(d - 1, 1.0).unwrap();
+            match Hmm::restore(&s) {
+                Err(crate::StateError::Invalid(e)) => assert!(e.contains("wrong shape"), "{e}"),
+                other => panic!("{other:?}"),
+            }
+        }
+    }
+
+    /// A row of no weight moves no factor; a gap that takes every state's
+    /// whole history resets each to its ridge, `√prior` on the diagonal.
+    #[cfg(feature = "hmm-factor-state")]
+    #[test]
+    #[allow(clippy::needless_range_loop)]
+    fn a_factor_state_stands_on_a_row_of_no_weight_and_resets_after_a_total_decay() {
+        let d = 3;
+        let mut m = Hmm::new(proto_cfg(d, Decay::Halflife(5.0))).unwrap();
+        let rows = blobs(d, 200, 4);
+        for (x, dt) in &rows {
+            m.step(x, &[], *dt, 1.0);
+        }
+        let held = m.lstate.clone();
+        m.step(&rows[0].0, &[], 3.0, 0.0);
+        assert_eq!(m.lstate, held);
+        // 1e5 half-lives: every weight to 0, so the next row is a first row
+        // for each state it gives a weight to (its posterior there); a
+        // state it gives none keeps its matrix, as the co-moments would.
+        m.step(&rows[1].0, &[], 5e5, 1.0);
+        let fresh = SpdFactor::scaled_identity(d, 1.0).unwrap();
+        for s in 0..2 {
+            if m.p[s] > 0.0 {
+                assert_eq!(m.lstate[s], fresh, "{s}");
+            } else {
+                assert_eq!(m.lstate[s], held[s], "{s}");
+            }
+        }
+        assert!(m.p.iter().any(|p| *p > 0.0));
+        assert_eq!(m.solve_failures, 0);
+    }
+
+    /// One run's checks, at the weights the prototype's own filter gave
+    /// each state, of three forms of each state's matrix: today's
+    /// co-moments with their ridge (read through a fresh factor, as today's
+    /// read does), the prototype's factor, and the recursion they both
+    /// round, carried in 512 bits ([`crate::oracle::exact::Recursion`]).
+    /// Each check reads a row as the model does, before learning it: per
+    /// state, each form's matrix off the exact one (units of rounding in its
+    /// largest diagonal entry) and its log density's error,
+    /// `|Δ(ln det M + dᵀM⁻¹d)|/2`; per row, the filtered posterior's and
+    /// the score's error, each form's densities put through the same
+    /// predicted state probabilities the model read.
+    #[cfg(feature = "hmm-factor-state")]
+    #[derive(Default)]
+    struct Track {
+        today_off: Vec<f64>,
+        proto_off: Vec<f64>,
+        today_logf: Vec<f64>,
+        proto_logf: Vec<f64>,
+        /// Whether the row is one the state could have given: its exact
+        /// `dᵀM⁻¹d` under `3k`. A state the row is far from has a posterior
+        /// of `e^(-q/2)`, nothing, whatever its density's last digits.
+        near: Vec<bool>,
+        /// Per checked row: the largest of `|Δp_s|` over the states, and
+        /// `|Δ loglik|`.
+        today_post: Vec<f64>,
+        proto_post: Vec<f64>,
+        today_score: Vec<f64>,
+        proto_score: Vec<f64>,
+    }
+
+    /// `ln Σ p̃ₗ e^(fₗ)` and the posterior it normalizes, as `read_into`
+    /// forms them (about the largest term).
+    #[cfg(feature = "hmm-factor-state")]
+    fn filtered(pred: &[f64], logf: &[f64]) -> (f64, Vec<f64>) {
+        let terms: Vec<f64> = pred
+            .iter()
+            .zip(logf)
+            .map(|(p, f)| {
+                if *p > 0.0 {
+                    p.ln() + f
+                } else {
+                    f64::NEG_INFINITY
+                }
+            })
+            .collect();
+        let top = terms.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let exps: Vec<f64> = terms.iter().map(|v| (v - top).exp()).collect();
+        let z: f64 = exps.iter().sum();
+        (top + z.ln(), exps.iter().map(|e| e / z).collect())
+    }
+
+    /// [`Track`] over `rows` of `(x, d_clock, weight)`, checking every
+    /// `every`-th learned row after the states are taken up.
+    #[cfg(feature = "hmm-factor-state")]
+    fn track_rows(cfg: HmmCfg, rows: &[(Vec<f64>, f64, f64)], every: usize) -> Track {
+        use crate::ewcov::FactorStep;
+        use crate::oracle::exact::Recursion;
+        use crate::solve::{FactorWork, QuadWork};
+        let (k, d, prior) = (cfg.k, cfg.n_features, cfg.precision_prior);
+        let base = -0.5 * d as f64 * std::f64::consts::TAU.ln();
+        let mut m = Hmm::new(cfg).unwrap();
+        let (mut work, mut quad) = (FactorWork::default(), QuadWork::default());
+        let mut out = Track::default();
+        let mut shadow: Vec<EwCov> = Vec::new();
+        let mut exact: Vec<Recursion> = Vec::new();
+        let (mut sq, mut learned) = (Vec::new(), 0usize);
+        for (x, dt, w) in rows {
+            let before = m.clone();
+            let lam = before.cfg.decay.factor(*dt);
+            let step = m.step(x, &[], *dt, *w);
+            if m.lstate.is_empty() {
+                continue;
+            }
+            if before.lstate.is_empty() {
+                // The row the states were taken up on: every form starts
+                // from the co-moments as they stood.
+                shadow = before.states.clone();
+                exact = (0..k)
+                    .map(|s| Recursion::of(&before.state_matrix(s)))
+                    .collect();
+            } else if *w > 0.0 && learned % every == every - 1 && step.pred[2 * k].is_finite() {
+                let pred = &step.pred[k..2 * k];
+                let (mut lt, mut lp, mut le) = (vec![0.0; k], vec![0.0; k], vec![0.0; k]);
+                for s in 0..k {
+                    let delta: Vec<f64> = x
+                        .iter()
+                        .enumerate()
+                        .map(|(j, &v)| before.states[s].deviation(j, v))
+                        .collect();
+                    let (q, ld) = exact[s].quad_log_det(&delta);
+                    let truth = ld + q;
+                    le[s] = base - 0.5 * ld - 0.5 * q;
+                    out.near.push(q < 3.0 * d as f64);
+                    let r = prior * shadow[s].precision_scale();
+                    shadow[s].comoments().ridged_lower_into(&mut sq, r);
+                    out.today_off.push(exact[s].off(&sq));
+                    let f = work
+                        .factor_ridged(shadow[s].comoments().packed(), r, d)
+                        .unwrap();
+                    let (ld_t, q_t) = (f.log_det(), f.quad_form(&delta, &mut quad));
+                    let today = ld_t + q_t;
+                    work.give(f);
+                    lt[s] = base - 0.5 * ld_t - 0.5 * q_t;
+                    out.today_logf.push(0.5 * (today - truth).abs());
+                    let f = &before.lstate[s];
+                    #[cfg(feature = "hmm-factor-scaled")]
+                    let sigma = before.lscale[s];
+                    #[cfg(not(feature = "hmm-factor-scaled"))]
+                    let sigma = 1.0;
+                    out.proto_off
+                        .push(exact[s].off_factor(&f.lower_rows(), sigma));
+                    let (ld_p, q_p) = before.held_parts(s, f, &delta, &mut quad);
+                    lp[s] = base - 0.5 * ld_p - 0.5 * q_p;
+                    out.proto_logf.push(0.5 * (ld_p + q_p - truth).abs());
+                }
+                // The model's own score is the prototype's, to the bit.
+                let (score_p, post_p) = filtered(pred, &lp);
+                assert_eq!(score_p.to_bits(), step.pred[2 * k + 1].to_bits());
+                let (score_t, post_t) = filtered(pred, &lt);
+                let (score_e, post_e) = filtered(pred, &le);
+                let dev = |p: &[f64]| {
+                    p.iter()
+                        .zip(&post_e)
+                        .map(|(a, b)| (a - b).abs())
+                        .fold(0f64, f64::max)
+                };
+                out.today_post.push(dev(&post_t));
+                out.proto_post.push(dev(&post_p));
+                out.today_score.push((score_t - score_e).abs());
+                out.proto_score.push((score_p - score_e).abs());
+            }
+            if *w > 0.0 {
+                learned += 1;
+            }
+            for s in 0..k {
+                let ws = w * m.p[s];
+                let cov = &before.states[s];
+                let delta: Vec<f64> = x
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &v)| cov.deviation(i, v))
+                    .collect();
+                match cov.factor_step(lam, ws) {
+                    FactorStep::Same => {}
+                    FactorStep::Reset => exact[s].reset(prior),
+                    FactorStep::Move { a, ab } => exact[s].step(a, ab, &delta),
+                }
+                shadow[s].update(x, lam, ws);
+                assert_eq!(
+                    shadow[s].means(),
+                    m.states[s].means(),
+                    "the means are one code"
+                );
+            }
+        }
+        out
+    }
+
+    #[cfg(feature = "hmm-factor-state")]
+    fn track(d: usize, decay: Decay, n: usize, every: usize, seed: u64) -> Track {
+        let rows: Vec<(Vec<f64>, f64, f64)> = blobs(d, n, seed)
+            .into_iter()
+            .map(|(x, dt)| (x, dt, 1.0))
+            .collect();
+        let t = track_rows(proto_cfg(d, decay), &rows, every);
+        assert!(!t.proto_off.is_empty());
+        t
+    }
+
+    /// The prototype's factor holds the recursion's matrix about as well as
+    /// today's co-moments do, under decay and without it: a small grid, the
+    /// study's full one is `factor_state_study`.
+    #[cfg(feature = "hmm-factor-state")]
+    #[test]
+    fn a_factor_state_holds_the_exact_recursion_as_well_as_the_comoments() {
+        for decay in [Decay::Halflife(100.0), Decay::Halflife(f64::INFINITY)] {
+            let t = track(4, decay, 800, 50, 21);
+            let max = |v: &[f64]| v.iter().cloned().fold(0f64, f64::max);
+            assert!(!t.proto_off.is_empty());
+            // Measured (k = 4, 700 learned rows): today's matrix within 70
+            // units of rounding, the moved factor's within 120 without decay
+            // (its rotations round three or four times an entry a row where
+            // the co-moments' step rounds twice, and nothing contracts them);
+            // the log densities within 1e-11 either way.
+            assert!(max(&t.proto_off) < 512.0, "{decay:?}: {:?}", t.proto_off);
+            assert!(max(&t.today_off) < 128.0, "{decay:?}: {:?}", t.today_off);
+            assert!(max(&t.proto_logf) < 1e-11, "{decay:?}: {:?}", t.proto_logf);
+            assert!(max(&t.today_logf) < 1e-11, "{decay:?}: {:?}", t.today_logf);
+        }
+    }
+
+    /// `(max, p99.9, median)`.
+    #[cfg(feature = "hmm-factor-state")]
+    fn spread(v: &[f64]) -> (f64, f64, f64) {
+        let mut v = v.to_vec();
+        v.sort_by(f64::total_cmp);
+        let at = |q: f64| v[((v.len() - 1) as f64 * q).round() as usize];
+        (v[v.len() - 1], at(0.999), at(0.5))
+    }
+
+    /// One study row: the matrices, the near states' log densities, the
+    /// posteriors and the score, today's form against the prototype's.
+    #[cfg(feature = "hmm-factor-state")]
+    fn study_row(label: &str, t: &Track) -> String {
+        let near = |v: &[f64]| -> Vec<f64> {
+            v.iter()
+                .zip(&t.near)
+                .filter(|(_, n)| **n)
+                .map(|(e, _)| *e)
+                .collect()
+        };
+        let (to, po) = (spread(&t.today_off), spread(&t.proto_off));
+        let (tn, pn) = (spread(&near(&t.today_logf)), spread(&near(&t.proto_logf)));
+        let (tp, pp) = (spread(&t.today_post), spread(&t.proto_post));
+        let (ts, ps) = (spread(&t.today_score), spread(&t.proto_score));
+        format!(
+            "| {label} | {} | {:.0} / {:.0} | {:.0} / {:.0} | {:.1e} / {:.1e} | {:.1e} / {:.1e} \
+             | {:.1e} / {:.1e} / {:.1e} | {:.1e} / {:.1e} / {:.1e} | {:.1e} / {:.1e} | {:.1e} / {:.1e} |",
+            t.today_post.len(),
+            to.0,
+            to.2,
+            po.0,
+            po.2,
+            tn.0,
+            tn.2,
+            pn.0,
+            pn.2,
+            tp.0,
+            tp.1,
+            tp.2,
+            pp.0,
+            pp.1,
+            pp.2,
+            ts.0,
+            ts.2,
+            ps.0,
+            ps.2
+        )
+    }
+
+    #[cfg(feature = "hmm-factor-state")]
+    const STUDY_HEAD: &str = "| case | rows checked | M off (u) today max / med | proto max / med \
+        | near logf err today max / med | proto max / med \
+        | posterior err today max / p99.9 / med | proto max / p99.9 / med \
+        | score err today max / med | proto max / med |\n|---|---|---|---|---|---|---|---|---|---|";
+
+    /// The study's grid, printed: `cargo test -p rheon-core --release
+    /// --features hmm-factor-state --lib factor_state_study -- --ignored
+    /// --nocapture` (or `hmm-factor-scaled`). Every row is checked, every
+    /// fourth from 20 features.
+    #[cfg(feature = "hmm-factor-state")]
+    #[test]
+    #[ignore = "study: task 479's factor-as-state accuracy grid, printed"]
+    fn factor_state_study() {
+        println!("{STUDY_HEAD}");
+        for d in [4, 8, 13, 20, 32] {
+            for (name, decay) in [
+                ("hl 1000 rows", Decay::Halflife(1000.0)),
+                ("hl 20 rows", Decay::Halflife(20.0)),
+                ("none", Decay::Halflife(f64::INFINITY)),
+            ] {
+                let mut all = Track::default();
+                for seed in [1, 2] {
+                    let t = track(d, decay, 4000, if d >= 20 { 4 } else { 1 }, seed);
+                    all.today_off.extend(t.today_off);
+                    all.proto_off.extend(t.proto_off);
+                    all.today_logf.extend(t.today_logf);
+                    all.proto_logf.extend(t.proto_logf);
+                    all.near.extend(t.near);
+                    all.today_post.extend(t.today_post);
+                    all.proto_post.extend(t.proto_post);
+                    all.today_score.extend(t.today_score);
+                    all.proto_score.extend(t.proto_score);
+                }
+                println!("{}", study_row(&format!("blobs k={d}, {name}"), &all));
+            }
+        }
+    }
+
+    /// The study on a stream from a file: `RHEON_HMM_ROWS` names a text file
+    /// of one row a line, `d_clock weight x0 x1 ...`, and
+    /// `RHEON_HMM_HALF_LIFE` the half-life in clock units (the bank's
+    /// `half_life`); 2 states, `precision_prior = 1`, the bank's
+    /// `warm_rows` of 1000 and k-means++ seeding. compare_outputs' inputs
+    /// are such streams.
+    #[cfg(feature = "hmm-factor-state")]
+    #[test]
+    #[ignore = "study: task 479's factor-as-state accuracy on a given stream"]
+    fn factor_state_study_on_a_file() {
+        let Ok(path) = std::env::var("RHEON_HMM_ROWS") else {
+            return;
+        };
+        let hl: f64 = std::env::var("RHEON_HMM_HALF_LIFE")
+            .unwrap()
+            .parse()
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let rows: Vec<(Vec<f64>, f64, f64)> = text
+            .lines()
+            .map(|l| {
+                let v: Vec<f64> = l.split_whitespace().map(|t| t.parse().unwrap()).collect();
+                (v[2..].to_vec(), v[0], v[1])
+            })
+            .collect();
+        let d = rows[0].0.len();
+        let cfg = HmmCfg {
+            decay: Decay::Halflife(hl),
+            precision_prior: 1.0,
+            warm_rows: 1000,
+            seed_rule: SeedRule::Kmeanspp,
+            seed: 0,
+            ..cfg(d, 2)
+        };
+        let every = std::env::var("RHEON_HMM_EVERY").map_or(1, |v| v.parse().unwrap());
+        let t = track_rows(cfg, &rows, every);
+        println!("{STUDY_HEAD}");
+        println!("{}", study_row(&format!("{path} k={d}, hl {hl}"), &t));
     }
 }
