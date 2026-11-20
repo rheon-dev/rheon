@@ -730,6 +730,32 @@ fn the_column_loop_is_faers_to_the_bit_at_every_order() {
     }
 }
 
+/// The order from which the column loop runs in vector lanes: every order
+/// it takes on an x86-64 CPU with AVX2 (none without), from
+/// `NEON_LANES_FROM` (16) on arm64; each side of the switch.
+#[test]
+fn the_lanes_are_taken_from_their_order() {
+    #[cfg(target_arch = "aarch64")]
+    let from = Some(NEON_LANES_FROM);
+    #[cfg(target_arch = "x86_64")]
+    let from = crate::sgd::x86_v3().map(|_| SMALL + 1);
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    let from: Option<usize> = None;
+    let mut s = 37u64;
+    for n in SMALL + 1..=COLS {
+        let a = spd(n, 10.0, &mut s);
+        let mut l = Mat::from_fn(n, n, |i, j| if i >= j { a[(i, j)] } else { 0.0 });
+        let before = LANES_TAKEN.with(|t| t.get());
+        cholesky_seq(l.as_mut(), None).expect("positive definite");
+        let taken = LANES_TAKEN.with(|t| t.get()) - before;
+        assert_eq!(
+            taken,
+            usize::from(from.is_some_and(|f| n >= f)),
+            "order {n}"
+        );
+    }
+}
+
 /// Which orders take the column loop: 13 to 64, and none up to 12 (the
 /// small factor's, or faer's from 9 on an x86-64 CPU with AVX2) nor past
 /// 64 (faer's). A matrix whose columns are not contiguous -- a transposed

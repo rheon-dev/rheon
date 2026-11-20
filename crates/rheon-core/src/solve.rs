@@ -772,10 +772,31 @@ fn lanes_block<S: pulp::Simd, const N: usize, const TAIL: bool>(
     }
 }
 
+/// The smallest order [`llt_lanes`] takes where the vector unit is NEON
+/// (arm64); [`llt_cols`] below it. An Apple core runs `llt_cols`'s
+/// leftover rows, each a chain of its own, side by side out of order, so
+/// up to 15 its batch of eight and the rows past it are as fast as the
+/// lanes, whose passes cost more to set up a column: on an Apple M4 Pro,
+/// the factorization alone at 13 took 1.05 to 1.08 of `llt_cols`' time in
+/// lanes, level at 16, 0.91 at 20 and 0.81 at 32 (`factor_crossover`); in
+/// `hmm` (two states, full) 1.02 at 13, level at 16, 0.96 at 20 and 0.86
+/// at 32 (task 479, the x86 regression). On x86-64 with AVX2 the lanes
+/// take every order from 13: `llt_cols` compiled there to scalar sums, a
+/// chain a lane, and a core with a smaller window ran its leftover rows'
+/// chains largely one after another.
+#[cfg(target_arch = "aarch64")]
+const NEON_LANES_FROM: usize = 16;
+
+// How many times this thread has taken `llt_lanes`.
+#[cfg(test)]
+thread_local! {
+    static LANES_TAKEN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// [`llt_cols`] with the fusing faer's instruction set has on this CPU, in a
 /// vector unit's feature context where that is AVX2 and FMA, as
 /// [`llt_dispatched`] picks it; in that unit's lanes ([`llt_lanes`]) where
-/// it is AVX2 or NEON.
+/// it is AVX2, or NEON from [`NEON_LANES_FROM`].
 #[inline(never)]
 fn cols_dispatched(
     a: MatMut<'_, f64, usize, usize, faer::ContiguousFwd>,
@@ -789,6 +810,8 @@ fn cols_dispatched(
         type Output = Result<(), usize>;
         #[inline(always)]
         fn with_simd<S: pulp::Simd>(self, simd: S) -> Self::Output {
+            #[cfg(test)]
+            LANES_TAKEN.with(|t| t.set(t.get() + 1));
             llt_lanes(simd, self.0)
         }
     }
@@ -799,8 +822,8 @@ fn cols_dispatched(
     };
     #[cfg(target_arch = "aarch64")]
     let out = match pulp::aarch64::Neon::try_new() {
-        Some(simd) => pulp::Simd::vectorize(simd, Lanes(a)),
-        None => llt_cols::<true>(a),
+        Some(simd) if a.nrows() >= NEON_LANES_FROM => pulp::Simd::vectorize(simd, Lanes(a)),
+        _ => llt_cols::<true>(a),
     };
     #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     let out = llt_cols::<false>(a);
