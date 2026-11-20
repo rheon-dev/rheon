@@ -767,7 +767,7 @@ Each task ends with green `cargo test` + `pytest`, a commit, and a tick here.
 - [x] 249. **Step comments in the examples (before 1.0)** -- [part 3](records/PLAN-ARCHIVE-3.md#task-249)
 - [x] 250. **Performance before 1.0** -- [part 3](records/PLAN-ARCHIVE-3.md#task-250)
 - [x] 251. **Performance and memory budgets that only tighten** -- [part 4](records/PLAN-ARCHIVE-4.md#task-251)
-- [ ] 252. **No number changes without a test noticing** -- the user,
+- [ ] 252. **No number changes without a test noticing** -- the user, **Order (the user, 2026-11-20): (a) is built before the Fable code review, in the simpler form**: CI runs `scripts/compare_release.py`'s bit-level comparison on every push, on each OS, against the last release's wheel from PyPI (both sides on one OS, so libm cannot differ), over a workload extended to reach the risky paths (the fold, a compensation with a non-zero low part, a clock crossing a session, a temporal clock at a decade's age, a state saved and loaded mid-stream, zero-weight and null first rows); the job fails when a field moves without a CHANGELOG entry declaring it. (c) is task 527.
       2026-10-11: "If we know of areas where numbers can change without a
       test noticing we should add to the plan to improve that", then "Add
       these as tentative items to the plan as there may be a reason that we
@@ -1357,7 +1357,7 @@ wheels (24.5-29.8 MB, 70.9-98.4 MB installed).
   them into fewer targets would cut the 21 GB again, at the cost of the
   per-file link parallelism).
 - [x] 280. **An oracle ledger: no drift from the oracles and datasets, no longer gate** -- [part 5](records/PLAN-ARCHIVE-5.md#task-280)
-- [ ] 281. **Task 278's follow-ups, after 1.4.0** -- recorded 2026-10-26.
+- [ ] 281. **Task 278's follow-ups, after 1.4.0** -- recorded 2026-10-26. **Order (the user, 2026-11-20): item (3), `kalman`'s square-root or Joseph form, is done before the Fable code review**; the case registries (item 4's remainder) are dropped: branches conflict there only when two append at one spot.
       (1) The stream's own anchored MAD sketch is anchored at its first
       residual, so with the refit off a tiny first residual carries the
       level's rounding into the scale (none of 50 streams hit it; the refit,
@@ -2021,4 +2021,5 @@ Each task: a new option defaults off, so no existing output moves (if one would,
 - [ ] 524. **Regression variants**: evidence-maximized ridge at solve time with `pred_std` (scikit-learn `BayesianRidge`, exact at `half_life=inf`); averaged `sgd` and `pa` weighted by the decay (task 118's idea); `positive=True` and per-feature penalty weights on the streaming `lasso`; redescending norms (Tukey bisquare and others) and Huber's proposal-2 scale for `huber` (statsmodels `RLM`); several quantiles in one spec; `sgd`'s elastic-net penalty and scikit-learn's `optimal` schedule; Vowpal Wabbit's importance-invariant step.
 - [ ] 525. **Smaller options**: `kmeans` with given centers, distances to every center and an exponentially weighted inertia (scikit-learn `init=array`, `transform`); `ew_class` fixed class priors and a regularizer that does not fade (`priors`, `reg_param`, `var_smoothing`); `holt` `forecast(h)` and a known initial level and trend (statsmodels exact from row 1); `deco`'s less biased alternative to `u`; Holm beside `corrchange`'s Bonferroni; window-based two-sample tests for feature health (river's KSWIN reference; within a window, decision 1).
 - [ ] 526. **`lasso`'s warm-up under a `window_size`** (found by task 459's worker, 2026-11-20): task 475 fixed the decay case (a capped descent is excused only while the fit still grows toward the size it needs), but a windowed `lasso` is still excused by its row count alone, so a window holding fewer rows than the bound never counts its cap hits. Test first (a window shorter than the bound, k=50), then the same reading for windows; only `solve_failures` should move.
+- [ ] 527. **Mutation testing over `rheon-polars`** (task 252 (c); the user, 2026-11-20: approved, to start after the Fable code review): add `crates/rheon-polars/src/**` to CI's changed-lines pass on push (today only `span.rs`) and to the weekly pass. Each survivor gets a Rust test, or a written reason where only pytest exercises the line (cargo-mutants cannot run pytest). The 2026-10-13 pilot found 3 real survivors in a 36th of `bank.rs`; the whole crate is about 48 CPU-hours over 96 shards. `rheon-py` stays out.
 
