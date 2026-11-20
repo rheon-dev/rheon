@@ -36,8 +36,10 @@ COMPAT_NAME = "rheon-compat"
 
 #: What PyPI shows beside the project's name.
 COMPAT_DESCRIPTION = (
-    "Streaming / online regression models for Polars: the build for x86-64 CPUs "
-    "without AVX2, with the same import name as rheon"
+    "Streaming online models with a Rust core, the build for x86-64 CPUs "
+    "without AVX2, with the same import name as rheon. Highly optimized, bounded "
+    "memory over unlimited data, deep integration with Polars, rolling/decaying "
+    "models over real data with complexities like breaks between days."
 )
 
 #: The notice at the head of the compat package's PyPI page. After the README's title.
