@@ -78,3 +78,127 @@ Versions seen: scikit-learn 1.9.1 docs, SciPy 1.18.0 docs, river 0.26.1 source a
   before the first update).
   https://raw.githubusercontent.com/rlabbe/filterpy/master/filterpy/kalman/kalman_filter.py
   https://pypi.org/pypi/filterpy/json
+
+## Task 512. Standard-error types (HC1-3, `huber`, `quantile`, cluster)
+
+All statsmodels pages are the 0.15.0 docs (https://www.statsmodels.org/stable/).
+
+- `RegressionResults.get_robustcov_results(cov_type='HC1', use_t=None, **kwargs)` and
+  `OLS.fit(method='pinv', cov_type='nonrobust', cov_kwds=None, use_t=None)`: CONFIRMED.
+  `cov_type` accepts `'HC0'`..`'HC3'`, `'HAC'` (kernels `'bartlett'` default, `'uniform'`;
+  `maxlags` required), `'cluster'` (CRV1), `'cluster-crv3'`, `'cluster-jk'`,
+  `'hac-groupsum'` (Driscoll-Kraay), `'hac-panel'`, `'fixed scale'`.
+  Definitions from source (`regression/linear_model.py`): HC0 `e^2`; HC1 `n/df_resid * e^2`
+  (`df_resid = n - rank`, not literally `n - k`); HC2 `e^2/(1-h)`; HC3 `(e/(1-h))^2`, with
+  `h` the leverage `x_i' (X'X)^-1 x_i` from the FINAL fit. Exact for the comparison only
+  against final-fit residuals and leverages; rheon's per-row sandwich uses out-of-sample
+  residuals at each row's fit, so the comparison is statistical (a ratio band), as the HC0
+  test is today. The task's "HC2/HC3 from `error_inflation`" is a rheon identity, not
+  something statsmodels offers. CORRECTED (scan): `'nw-panel'` is not a `cov_type`; the name is
+  `'hac-panel'`.
+- `RLM.fit(maxiter=50, tol=1e-08, scale_est='mad', cov='H1', update_scale=True, conv='dev',
+  start_params=None, start_scale=None)`: CONFIRMED (the `cov` parameter and `'H1'` default
+  exist). CORRECTED on what "the M-estimator sandwich" is: per `RLMResults.bcov_scaled`
+  (source `robust/robust_linear_model.py`, docstring quoted), `H1` is NOT a sandwich: it is
+  `k^2 * (sum(psi^2) * scale^2 / df_resid) / (mean(psi'))^2 * (X'X)^-1`; `H2` is
+  `k * (sum(psi^2) scale^2/df_resid) / mean(psi') * W^-1`; only `H3` is a sandwich:
+  `(1/k) * (sum(psi^2) scale^2/df_resid) * W^-1 (X'X) W^-1`, with
+  `W = sum psi'(r_i) x_i x_i'`, `k = 1 + (p/n) var(psi')/mean(psi')^2` (`p = df_model + 1`).
+  None of the three equals the per-row-weighted Huber-White form `A^-1 [sum psi^2 z z'] A^-1`
+  that the task describes (EW sums of `psi' z z'` and `psi^2 z z'`); `H3` is the closest, and
+  its middle term is `X'X` times a scalar, not `sum psi^2 z z'`. Oracle verdict: statistical
+  only (ratio band), and the test should name `cov="H3"` for the sandwich shape and may
+  also compare `H1`. Source: https://raw.githubusercontent.com/statsmodels/statsmodels/main/statsmodels/robust/robust_linear_model.py
+- `QuantReg.fit(q=0.5, vcov='robust', kernel='epa', bandwidth='hsheather', max_iter=1000,
+  p_tol=1e-06, **kwargs)`: CONFIRMED. `vcov` in `'robust'` (default), `'iid'`; `kernel` in
+  `'biw'`, `'cos'`, `'epa'` (default), `'gau'`, `'par'`; `bandwidth` in `'hsheather'`
+  (Hall-Sheather 1988, default), `'bofinger'`, `'chamberlain'`. Exact for the comparison only
+  at no decay and the final fit; with an EW kernel density it is statistical.
+
+## Task 516. Linear equality constraints
+
+- statsmodels `RecursiveLS(endog, exog, constraints=None, **kwargs)`: CONFIRMED (0.15.0,
+  https://www.statsmodels.org/stable/generated/statsmodels.regression.recursive_ls.RecursiveLS.html).
+  `constraints` takes a 2-D `r x k` array (each row `= 0`), a string, or a tuple `(R, q)` with
+  `q` a scalar or length-p vector. The string form is parsed by `FormulaManager().get_linear_constraints`
+  with names from the data (`x1`, `x2`, ... for bare arrays), per the source
+  (`regression/recursive_ls.py`); "x1 + x2 = 1" is the same grammar as `t_test`.
+  Per-row outputs: `res = RecursiveLS(y, X, constraints=...).fit(); res.recursive_coefficients.filtered`
+  (k by nobs, the estimate AFTER row t's update) and `.filtered_cov`. Exact for the comparison
+  with caveats the task must state: (1) it is expanding-window OLS, so the oracle matches
+  `ridge=0`, `half_life=inf`, no window; (2) the filter is diffusely initialized, so
+  coefficients are not identified until `k - n_constraints` rows (compare from there on);
+  (3) constraints are imposed as "fake" zero-variance observations (source comment: "Linear
+  constraints are technically imposed by adding fake endog variables") through the
+  Kalman filter, so equality holds to filter precision, not by a closed form; the tolerance
+  should be set accordingly (1e-8 is plausible, 1e-12 is not); (4) `filtered` at row t uses row t,
+  while rheon's `pred` at row t uses the fit through t-1, so align by one row.
+- The scan's second citation `OLS.fit_regularized` for equality restrictions: CORRECTED.
+  `fit_regularized` does not impose equalities. `GLM.fit_constrained(constraints,
+  start_params=None, **fit_kwds)` does (formula/string or `(R, q)`; it transforms the design
+  matrix, so with `sm.families.Gaussian()` it is the closed-form restricted OLS: a better
+  oracle for `gram.solve(constraints=)`, final fit, exact to solver tolerance).
+  https://www.statsmodels.org/stable/generated/statsmodels.genmod.generalized_linear_model.GLM.fit_constrained.html
+
+## Task 524. Regression variants
+
+- scikit-learn `BayesianRidge`: CONFIRMED (1.9.1, https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.BayesianRidge.html).
+  Signature `(*, max_iter=300, tol=1e-3, alpha_1=1e-6, alpha_2=1e-6, lambda_1=1e-6,
+  lambda_2=1e-6, alpha_init=None, lambda_init=None, compute_score=False, fit_intercept=True,
+  copy_X=True, verbose=False)`; `fit(X, y, sample_weight=None)` (weights since 0.20);
+  `predict(X, return_std=False)`; attributes `coef_`, `intercept_`, `alpha_`, `lambda_`,
+  `sigma_`, `scores_` (with `compute_score=True`), `n_iter_`. CORRECTED on exactness: the
+  default is NOT exact evidence maximization. (a) `compute_score` defaults to False (the scan
+  wrote True); (b) the four Gamma hyperpriors default to `1e-6`, so the update is MAP over
+  the hyperparameters, not pure ML-II: pass all four as `0.0` (allowed by the parameter
+  constraint) or give rheon the same pseudo-counts; (c) the loop stops when the change in `coef_`
+  is below `tol=1e-3`, so an exact comparison needs a tiny `tol` and large `max_iter`;
+  (d) the algorithm is Tipping (2001) Appendix A with MacKay (1992) updates, and the docs
+  say these rules "do not guarantee that the marginal likelihood is increasing"; (e) the
+  intercept is unpenalized and handled by centering. `sample_weight` rescales rows by
+  `sqrt(w)`, so n in the fixed point is the row count, not a Kish n: "decayed weights scaled to
+  Kish n" is a rheon choice, which sklearn matches only when it is given the same scaled
+  weights.
+- scikit-learn `SGDRegressor(learning_rate="optimal")` with `eta = 1/(alpha*(t + t0))`, `t0` from
+  "a heuristic proposed by Leon Bottou": CONFIRMED as a setting; CORRECTED on the scan's remark
+  "`optimal` is sklearn's default schedule": for `SGDRegressor` the default is
+  `learning_rate='invscaling'` (`eta0=0.01`, `power_t=0.25`); `'optimal'` is `SGDClassifier`'s
+  default. `t0` is not a user parameter, so a row-by-row oracle needs sklearn's heuristic (read
+  `_sgd_fast`/`sag` source or inspect `t_` after `partial_fit`). Also `average=True|int`
+  (average begins after that many samples), `penalty in {'l2','l1','elasticnet',None}`,
+  `l1_ratio=0.15`, `loss in {'squared_error','huber','epsilon_insensitive',
+  'squared_epsilon_insensitive'}`; `learning_rate` also has `'pa1'`, `'pa2'` (added 1.8, only with
+  `epsilon_insensitive`). https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.SGDRegressor.html
+  The task says "averaged `sgd` and `pa`" with scikit-learn: `PassiveAggressiveRegressor(*, C=1.0,
+  ..., average=False)` exists with `average` (added 0.19) but is DEPRECATED since 1.8 and
+  removed in 1.10; the replacement is `SGDRegressor(loss="epsilon_insensitive", penalty=None,
+  learning_rate="pa1" or "pa2", eta0=C)`. Pin the oracle to the SGD spelling.
+  https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.PassiveAggressiveRegressor.html
+  Averaging is a uniform average over all iterates (or after the cutoff); the decay-weighted
+  version is rheon's, so the oracle is exact only at `half_life=inf`.
+- statsmodels `RLM` norms: CONFIRMED names in `statsmodels.robust.norms` (0.15.0, https://www.statsmodels.org/stable/rlm.html):
+  `HuberT(t)`, `Hampel(a, b, c)`, `TukeyBiweight(c)`, `TukeyQuartic(c, k)`, `AndrewWave(a)`,
+  `RamsayE(a)`, `TrimmedMean(c)`, `StudentT(c, df)`, `LeastSquares()`. Use `TukeyBiweight`
+  (not "TukeyBisquare"). Tukey is redescending (non-convex), so IRLS from a different start
+  can reach another local minimum: an oracle comparison must start RLM from the same fit.
+- Huber's proposal-2 scale: statsmodels `statsmodels.robust.scale.HuberScale(d=2.5, tol=1e-08,
+  maxiter=30)` is CONFIRMED to exist and is what `RLM(scale_est=HuberScale())` takes, but its
+  docs call it "Huber's scaling for fitting robust linear models" and say it "differs slightly"
+  from `scale.Huber`; it includes an `h` (degrees-of-freedom) constant depending on `n, p, d`.
+  The class the docs label "Huber's proposal 2 for joint location and scale" is
+  `statsmodels.robust.scale.Huber(c=1.5, tol=1e-08, maxiter=30, norm=None)` (location/scale
+  only). For a regression scale comparison use `HuberScale`, and state that it is not
+  identical to the textbook proposal 2. https://www.statsmodels.org/stable/generated/statsmodels.robust.scale.HuberScale.html
+- statsmodels `QuantReg` for "several quantiles in one spec": CONFIRMED (one fit per `q`).
+- scikit-learn `Lasso/ElasticNet(positive=True)` (from the scan; the task text names no
+  oracle): not re-fetched beyond the scan's claim; per-feature penalty weights: scikit-learn
+  has no `penalty_factor` option (glmnet's name); the scan's workaround (divide columns by w)
+  is the standard equivalence. Not verified against docs here (MISSING as a library option).
+- Vowpal Wabbit "importance-invariant step": CONFIRMED. `--invariant` is a real option
+  (`make_option("invariant", invariant)` in `vowpalwabbit/core/src/reductions/gd.cc` on master; the
+  wiki lists it as "use safe/importance aware updates", on by default and switched off by
+  `--sgd`). Theory: Karampatziakis and Langford, "Online Importance Weight Aware Updates"
+  (arXiv 1011.1576). The wiki page is flagged out of date by its own banner. Per
+  scan/wiki: `--initial_t` (0), `--power_t` (0.5), `--decay_learning_rate` (1), `--l1`, `--l2`,
+  `--ftrl --ftrl_alpha (0.005) --ftrl_beta (0.1)`.
+  https://github.com/VowpalWabbit/vowpal_wabbit/wiki/Command-Line-Arguments
