@@ -615,7 +615,18 @@ impl RunConfig {
                 .map_err(|e| polars_err!(ComputeError: "{}", e))?;
             learned.unlearned(&empty)?;
         }
-        augment(&mut bank, empty, self.predict, self.no_output(), 0).map(|_| ())
+        let out = augment(&mut bank, empty, self.predict, self.no_output(), 0)?;
+        // And the output laid out as its writer lays it out: a flattened
+        // name that is already a column passed the dry run, and the run then
+        // failed on it (review P13).
+        if !self.no_output() {
+            let format = self
+                .output_format()
+                .map_err(|e| polars_err!(ComputeError: "{}", e))?;
+            let who = format!("config: output \"{}\"", self.output.display());
+            lay_out(out, format, self.output_layout, &who)?;
+        }
+        Ok(())
     }
 
     /// The bank this config starts from: loaded from `load_state`, or fresh.
@@ -1195,12 +1206,13 @@ impl LastReasons {
             };
             let reasons = field.cast(&DataType::String)?;
             let reasons = reasons.str()?;
+            // The key's text as the bank reads it: a zoned Datetime's is its
+            // instant in UTC, which a plain cast to String could not write
+            // in this build (review P3).
             let keys = match &spec.group {
-                Some(g) => Some(
-                    out.column(g)?
-                        .as_materialized_series()
-                        .cast(&DataType::String)?,
-                ),
+                Some(g) => Some(crate::arrow::key_text(
+                    out.column(g)?.as_materialized_series(),
+                )?),
                 None => None,
             };
             let keys = keys.as_ref().map(|k| k.str()).transpose()?;
@@ -1482,12 +1494,9 @@ fn write_frames(
     rx: Receiver<Write_>,
     who: &str,
 ) -> PolarsResult<Duration> {
-    // Each frame as the layout has it, before the writer sees it; a CSV
-    // flattens its own (`csv_flat`).
-    let laid_out = |df: DataFrame| match layout {
-        OutputLayout::Flat if format != Format::Csv => unnest_structs(&df),
-        _ => Ok(df),
-    };
+    // Each frame as the layout and the format have it, before the writer
+    // sees it.
+    let laid_out = |df: DataFrame| lay_out(df, format, layout, who);
     let (file, pending) = AtomicFile::create(path)?;
     let mut buf = BufWriter::new(file);
     let mut busy = Duration::ZERO;
@@ -1502,7 +1511,7 @@ fn write_frames(
         Err(_) => return Ok(busy),
     };
     let t = Instant::now();
-    let mut writer = FormatWriter::open(format, &mut buf, &first, who)?;
+    let mut writer = FormatWriter::open(format, &mut buf, &first)?;
     writer.write(&first)?;
     busy += t.elapsed();
     let mut complete = false;
@@ -1538,15 +1547,16 @@ type Sink<'a> = &'a mut BufWriter<File>;
 enum FormatWriter<'a> {
     Parquet(Box<ParquetSink<'a>>),
     Ipc(polars::io::ipc::BatchedWriter<Sink<'a>>),
-    /// With the `who` its refusals name ([`csv_flat`]).
-    Csv(polars::io::csv::write::BatchedWriter<Sink<'a>>, String),
+    /// Over frames [`csv_flat`] has laid out ([`lay_out`]).
+    Csv(polars::io::csv::write::BatchedWriter<Sink<'a>>),
     /// The file itself: NDJSON has no header or footer (`ndjson_write`).
     Ndjson(Sink<'a>),
 }
 
 impl<'a> FormatWriter<'a> {
-    /// Open a writer for frames shaped like `first`.
-    fn open(format: Format, sink: Sink<'a>, first: &DataFrame, who: &str) -> PolarsResult<Self> {
+    /// Open a writer for frames shaped like `first`, which [`lay_out`] has
+    /// laid out for `format`.
+    fn open(format: Format, sink: Sink<'a>, first: &DataFrame) -> PolarsResult<Self> {
         Ok(match format {
             Format::Parquet => FormatWriter::Parquet(Box::new(ParquetSink::open(sink, first)?)),
             Format::Ipc => {
@@ -1555,13 +1565,7 @@ impl<'a> FormatWriter<'a> {
                 let fields = polars_arrow::io::ipc::write::default_ipc_fields(arrow.iter_values());
                 FormatWriter::Ipc(IpcWriter::new(sink).batched(schema, fields)?)
             }
-            Format::Csv => {
-                let flat = csv_flat(first, who)?;
-                FormatWriter::Csv(
-                    CsvWriter::new(sink).batched(flat.schema())?,
-                    who.to_string(),
-                )
-            }
+            Format::Csv => FormatWriter::Csv(CsvWriter::new(sink).batched(first.schema())?),
             Format::Ndjson => FormatWriter::Ndjson(sink),
         })
     }
@@ -1574,7 +1578,7 @@ impl<'a> FormatWriter<'a> {
         match self {
             FormatWriter::Parquet(w) => w.write(df),
             FormatWriter::Ipc(w) => w.write_batch(df),
-            FormatWriter::Csv(w, who) => w.write_batch(&csv_flat(df, who)?),
+            FormatWriter::Csv(w) => w.write_batch(df),
             FormatWriter::Ndjson(sink) => ndjson_write(sink, df),
         }
     }
@@ -1583,7 +1587,7 @@ impl<'a> FormatWriter<'a> {
         match self {
             FormatWriter::Parquet(w) => w.writer.finish().map(|_| ()),
             FormatWriter::Ipc(mut w) => w.finish(),
-            FormatWriter::Csv(mut w, _) => w.finish(),
+            FormatWriter::Csv(mut w) => w.finish(),
             FormatWriter::Ndjson(_) => Ok(()),
         }
     }
@@ -1707,6 +1711,10 @@ pub fn csv_flat(df: &DataFrame, who: &str) -> PolarsResult<DataFrame> {
     let mut flat = unnest_structs(df)?;
     for i in 0..flat.width() {
         let c = &flat.columns()[i];
+        if let Some(text) = temporal_text(c.as_materialized_series(), TextFormat::Csv)? {
+            flat.replace_column(i, text.into_column())?;
+            continue;
+        }
         match c.dtype() {
             DataType::List(inner) if inner.is_primitive_numeric() => {
                 let text = list_as_json(c)?;
@@ -1734,6 +1742,147 @@ pub fn csv_flat(df: &DataFrame, who: &str) -> PolarsResult<DataFrame> {
         }
     }
     Ok(flat)
+}
+
+/// `df` as the writer of `format` takes it under `layout`: a CSV flat with
+/// its lists and instants as text ([`csv_flat`]); any other format's
+/// structs taken apart under [`OutputLayout::Flat`]; an IPC file's
+/// Categorical columns as String, since Arrow's IPC file holds one
+/// dictionary a column for all its batches, and a category first seen in a
+/// later chunk would end the run there -- so the file would depend on the
+/// chunk size (review P2); and NDJSON's zoned instants as text in UTC
+/// ([`temporal_text`]). What the writer does to each frame and the dry run
+/// to its frame of no rows, so a layout the writer would refuse -- a
+/// flattened name that is already a column -- is refused by both alike.
+///
+/// # Errors
+///
+/// [`csv_flat`]'s, polars' refusal of a duplicate name, or a cast's.
+fn lay_out(
+    df: DataFrame,
+    format: Format,
+    layout: OutputLayout,
+    who: &str,
+) -> PolarsResult<DataFrame> {
+    if format == Format::Csv {
+        return csv_flat(&df, who);
+    }
+    let df = match layout {
+        OutputLayout::Flat => unnest_structs(&df)?,
+        OutputLayout::Struct => df,
+    };
+    let convert = |s: &Series| -> PolarsResult<Option<Series>> {
+        match format {
+            Format::Ipc => {
+                let want = without_categorical(s.dtype());
+                Ok((&want != s.dtype()).then(|| s.cast(&want)).transpose()?)
+            }
+            Format::Ndjson => temporal_text(s, TextFormat::Ndjson),
+            Format::Parquet | Format::Csv => Ok(None),
+        }
+    };
+    if format == Format::Parquet {
+        return Ok(df);
+    }
+    let height = df.height();
+    let mut columns = df.into_columns();
+    for c in columns.iter_mut() {
+        if let Some(s) = convert(c.as_materialized_series())? {
+            *c = s.into_column();
+        }
+    }
+    DataFrame::new(height, columns)
+}
+
+/// `dtype` with every Categorical in it, nested ones too, as String.
+fn without_categorical(dtype: &DataType) -> DataType {
+    match dtype {
+        DataType::Categorical(..) => DataType::String,
+        DataType::List(inner) => DataType::List(Box::new(without_categorical(inner))),
+        DataType::Array(inner, n) => DataType::Array(Box::new(without_categorical(inner)), *n),
+        DataType::Struct(fields) => DataType::Struct(
+            fields
+                .iter()
+                .map(|f| Field::new(f.name().clone(), without_categorical(f.dtype())))
+                .collect(),
+        ),
+        d => d.clone(),
+    }
+}
+
+/// Which text format [`temporal_text`] writes for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TextFormat {
+    Csv,
+    Ndjson,
+}
+
+/// A temporal column as text, the way Polars' writers write it, for the
+/// columns this build's writers cannot: a CSV's `Date`, `Time` and
+/// `Datetime`, and a zoned `Datetime` in either text format. `None` for a
+/// column the writer takes as it is; a struct's fields are each looked at.
+///
+/// The text is Polars' own, `2024-01-01`, `01:02:03.000004000`, and for a
+/// `Datetime` `2024-01-01T00:00:00.000` in a CSV, its unit's digits, and
+/// `2024-01-01T00:00:00+00:00` in NDJSON. An instant with a zone is written
+/// in UTC, with the offset that says so (`+0000` in a CSV, `+00:00` in
+/// NDJSON), where Polars writes the zone's own wall time and offset: the
+/// same instant, which every reader of the format reads back as one. Naming
+/// the zone's rules would link a time zone database into the command line,
+/// which it does not carry (review P3).
+///
+/// # Errors
+///
+/// A cast's or a format's, which the formats here do not give.
+fn temporal_text(s: &Series, format: TextFormat) -> PolarsResult<Option<Series>> {
+    let csv = format == TextFormat::Csv;
+    let text = match s.dtype() {
+        DataType::Datetime(unit, tz) if csv || tz.is_some() => {
+            let fraction = match (format, unit) {
+                (TextFormat::Ndjson, _) => "%.f",
+                (TextFormat::Csv, TimeUnit::Milliseconds) => "%.3f",
+                (TextFormat::Csv, TimeUnit::Microseconds) => "%.6f",
+                (TextFormat::Csv, TimeUnit::Nanoseconds) => "%.9f",
+            };
+            let offset = match (tz.is_some(), format) {
+                (false, _) => "",
+                (true, TextFormat::Csv) => "+0000",
+                (true, TextFormat::Ndjson) => "+00:00",
+            };
+            // A zoned column's values are UTC instants, which a cast to a
+            // naive one keeps as they are (`crate::arrow::key_text`).
+            let naive = s.cast(&DataType::Datetime(*unit, None))?;
+            naive
+                .datetime()?
+                .to_string(&format!("%Y-%m-%dT%H:%M:%S{fraction}{offset}"))?
+                .into_series()
+        }
+        DataType::Date if csv => s.date()?.to_string("%Y-%m-%d")?.into_series(),
+        DataType::Time if csv => s.time()?.to_string("%T%.9f").into_series(),
+        DataType::Struct(_) => {
+            let ca = s.struct_()?;
+            let fields = ca.fields_as_series();
+            let mut changed = false;
+            let mut out = Vec::with_capacity(fields.len());
+            for f in &fields {
+                match temporal_text(f, format)? {
+                    Some(t) => {
+                        changed = true;
+                        out.push(t);
+                    }
+                    None => out.push(f.clone()),
+                }
+            }
+            if !changed {
+                return Ok(None);
+            }
+            StructChunked::from_series(s.name().clone(), s.len(), out.iter())?
+                .with_outer_validity(ca.rechunk_validity())
+                .into_series()
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(text.with_name(s.name().clone())))
 }
 
 /// `df` with each struct column taken apart into `<name>.<field>` columns

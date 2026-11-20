@@ -945,3 +945,229 @@ fn a_writer_that_cannot_create_its_file_ends_the_run_with_its_own_error() {
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `stream(n)` with a Categorical column `venue` whose second category,
+/// `"B"`, first comes at row `late`.
+fn with_late_category(n: usize, late: usize) -> DataFrame {
+    let venue: Vec<&str> = (0..n).map(|i| if i < late { "A" } else { "B" }).collect();
+    let venue = Series::new("venue".into(), venue)
+        .cast(&DataType::from_categories(Categories::global()))
+        .unwrap();
+    let mut df = stream(n);
+    df.with_column(venue.into_column()).unwrap();
+    df
+}
+
+/// Review P2: an IPC output of a run over a Categorical column whose
+/// category first comes in a later chunk. Arrow's IPC file holds one
+/// dictionary a field for every batch, so the run failed at that chunk --
+/// at 10 rows a chunk -- where the same input as one chunk was written: the
+/// output depended on `chunk_size`. Now it is written at any chunk size,
+/// the same file each time.
+#[test]
+fn an_ipc_output_does_not_depend_on_when_a_category_first_comes() {
+    let df = with_late_category(100, 90);
+    let input = tmp("late-category-in.parquet");
+    write(&input, Format::Parquet, &df);
+    let mut got = Vec::new();
+    for chunk_size in [1000, 10, 7] {
+        let output = tmp(&format!("late-category-{chunk_size}.arrow"));
+        let mut cfg = config(&input, &output);
+        cfg.chunk_size = chunk_size;
+        let stats = run_config(&cfg, no_progress)
+            .unwrap_or_else(|e| panic!("chunk_size {chunk_size}: {e}"));
+        assert_eq!(stats.rows, 100);
+        got.push(read(&output, Format::Ipc));
+        cleanup(&[output]);
+    }
+    for g in &got[1..] {
+        assert!(g.equals_missing(&got[0]), "{g}\nvs\n{}", got[0]);
+    }
+    let venue: Vec<Option<String>> = got[0]
+        .column("venue")
+        .unwrap()
+        .cast(&DataType::String)
+        .unwrap()
+        .str()
+        .unwrap()
+        .iter()
+        .map(|v| v.map(str::to_string))
+        .collect();
+    assert_eq!(venue[89].as_deref(), Some("A"));
+    assert_eq!(venue[90].as_deref(), Some("B"));
+    assert_eq!(preds(&got[0]), bank_preds(&df));
+    cleanup(&[input]);
+}
+
+/// `stream(n)` with `day`, a Datetime in microseconds zoned to New York:
+/// midnight there on 1 January 2024 for the first half of the rows and on
+/// the 2nd for the second, which is 05:00 UTC.
+fn with_zoned_day(n: usize) -> DataFrame {
+    const US_PER_DAY: i64 = 86_400 * 1_000_000;
+    // 2024-01-01T05:00:00Z in microseconds.
+    let first = 1_704_085_200 * 1_000_000;
+    let day: Vec<i64> = (0..n)
+        .map(|i| first + if i < n / 2 { 0 } else { US_PER_DAY })
+        .collect();
+    let zone = TimeZone::opt_try_new(Some("America/New_York")).unwrap();
+    // Built on the integers: a cast to a zone drops it in a build without
+    // polars' time zones.
+    let day = Int64Chunked::from_vec("day".into(), day)
+        .into_datetime(TimeUnit::Microseconds, zone)
+        .into_series();
+    assert!(matches!(day.dtype(), DataType::Datetime(_, Some(_))));
+    let mut df = stream(n);
+    df.with_column(day.into_column()).unwrap();
+    df
+}
+
+/// Review P3: a zoned Datetime column failed as a group column (the
+/// closing lines cast it to text as a naive one), and in CSV and NDJSON
+/// output, which have no form for a zone in this build -- the NDJSON
+/// writer panicked. Python takes all three, and so does the run now: the
+/// group's key is its instant in UTC, as the bank's is, and the text
+/// formats write each instant in UTC, saying so.
+#[test]
+fn a_zoned_datetime_column_runs_as_a_group_and_into_every_format() {
+    let df = with_zoned_day(40);
+    let input = tmp("zoned-in.parquet");
+    write(&input, Format::Parquet, &df);
+    // As the group column, with every row withheld so the closing lines
+    // name each group.
+    let output = tmp("zoned-group.parquet");
+    let mut cfg = config(&input, &output);
+    cfg.specs[0].group = Some("day".into());
+    // Each of `stream`'s two groups has a clock of its own.
+    cfg.specs[0].clock = None;
+    cfg.specs[0].gap_cap = None;
+    cfg.specs[0].min_weight = Some(rheon_polars::FloatOrList::Float(rheon_polars::Num(1e9)));
+    let (stats, lines) = rheon_polars::run_config_reported(&cfg, no_progress).unwrap();
+    assert_eq!(stats.rows, 40);
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("2 groups whose last row was withheld")),
+        "{lines:?}"
+    );
+    cleanup(&[output]);
+    // Into each text format, the instant written in UTC.
+    for format in [Format::Csv, Format::Ndjson] {
+        let output = tmp(&format!("zoned-out.{}", ext(format)));
+        let cfg = config(&input, &output);
+        run_config(&cfg, no_progress).unwrap_or_else(|e| panic!("{format:?}: {e}"));
+        let text = std::fs::read_to_string(&output).unwrap();
+        // Polars' text for each format, the instant in UTC.
+        let (first, second) = match format {
+            Format::Csv => (
+                "2024-01-01T05:00:00.000000+0000",
+                "2024-01-02T05:00:00.000000+0000",
+            ),
+            _ => ("2024-01-01T05:00:00+00:00", "2024-01-02T05:00:00+00:00"),
+        };
+        assert!(
+            text.contains(first) && text.contains(second),
+            "{format:?}: {}",
+            &text[..text.len().min(400)]
+        );
+        cleanup(&[output]);
+    }
+    // A clock in the output's struct, zoned, is written the same way.
+    let mut zoned_clock = df.clone();
+    let zone = TimeZone::opt_try_new(Some("America/New_York")).unwrap();
+    let t = zoned_clock
+        .column("t")
+        .unwrap()
+        .cast(&DataType::Int64)
+        .unwrap()
+        .as_materialized_series()
+        .clone();
+    let t = (t * 1_000_000i64)
+        .i64()
+        .unwrap()
+        .clone()
+        .into_datetime(TimeUnit::Microseconds, zone)
+        .into_series();
+    zoned_clock.with_column(t.into_column()).unwrap();
+    let clocked = tmp("zoned-clock-in.parquet");
+    write(&clocked, Format::Parquet, &zoned_clock);
+    for format in [Format::Csv, Format::Ndjson] {
+        let output = tmp(&format!("zoned-clock-out.{}", ext(format)));
+        let mut cfg = config(&clocked, &output);
+        cfg.specs = vec![
+            serde_json::from_str(
+                r#"{"name": "ridge", "model": {"type": "ewridge"}, "targets": ["y"],
+                    "features": ["x0", "x1"], "clock": "t", "half_life": "50s",
+                    "gap_cap": "10s", "group": "group", "emit_clocks": true}"#,
+            )
+            .unwrap(),
+        ];
+        run_config(&cfg, no_progress).unwrap_or_else(|e| panic!("{format:?}: {e}"));
+        let text = std::fs::read_to_string(&output).unwrap();
+        let offset = if format == Format::Csv {
+            "+0000"
+        } else {
+            "+00:00"
+        };
+        assert!(text.contains(offset), "{format:?}: {}", &text[..400]);
+        cleanup(&[output]);
+    }
+    cleanup(&[input, clocked]);
+}
+
+/// Review P13: a dry run did not lay out the output, so an input column
+/// named as a flattened field of a spec -- `ridge.pred_y` -- passed it for
+/// a flat output and a CSV, and the run then failed on the duplicate name.
+#[test]
+fn a_dry_run_lays_out_the_output() {
+    let mut df = stream(20);
+    let clash = df
+        .column("y")
+        .unwrap()
+        .clone()
+        .with_name("ridge.pred_y".into());
+    df.with_column(clash).unwrap();
+    let input = tmp("dry-layout-in.parquet");
+    write(&input, Format::Parquet, &df);
+    let parquet = tmp("dry-layout-out.parquet");
+    let csv = tmp("dry-layout-out.csv");
+    config(&input, &parquet)
+        .dry_run()
+        .expect("the struct layout keeps the spec's fields in its column");
+    let mut flat = config(&input, &parquet);
+    flat.output_layout = rheon_polars::OutputLayout::Flat;
+    for (what, cfg) in [("flat", flat), ("csv", config(&input, &csv))] {
+        let dry = cfg.dry_run().map(|_| ()).unwrap_err().to_string();
+        let ran = run_config(&cfg, no_progress).unwrap_err().to_string();
+        assert!(dry.contains("ridge.pred_y"), "{what}: {dry}");
+        assert_eq!(dry, ran, "{what}: the dry run refuses as the run does");
+    }
+    cleanup(&[input, parquet, csv]);
+}
+
+/// Found beside review P3: this build's CSV writer has no form for a
+/// `Date`, a `Time` or a naive `Datetime` either, so a CSV output of an
+/// input with one was refused, where Python writes it. Each is written as
+/// Polars writes it.
+#[test]
+fn a_csv_output_writes_dates_and_times_as_polars_does() {
+    let mut df = stream(4);
+    // 2024-01-01 in days, at midnight in milliseconds, and 01:02:03.000004.
+    let day = Int32Chunked::from_vec("day".into(), vec![19_723; 4]).into_date();
+    let at = Int64Chunked::from_vec("at".into(), vec![1_704_067_200_000; 4])
+        .into_datetime(TimeUnit::Milliseconds, None);
+    let time = Int64Chunked::from_vec("time".into(), vec![3_723_000_004_000; 4]).into_time();
+    for s in [day.into_series(), at.into_series(), time.into_series()] {
+        df.with_column(s.into_column()).unwrap();
+    }
+    let input = tmp("temporal-csv-in.parquet");
+    let output = tmp("temporal-csv-out.csv");
+    write(&input, Format::Parquet, &df);
+    run_config(&config(&input, &output), no_progress).unwrap();
+    let text = std::fs::read_to_string(&output).unwrap();
+    let row = text.lines().nth(1).unwrap();
+    assert!(
+        row.contains(",2024-01-01,2024-01-01T00:00:00.000,01:02:03.000004000,"),
+        "{row}"
+    );
+    cleanup(&[input, output]);
+}

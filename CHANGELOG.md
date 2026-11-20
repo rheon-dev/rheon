@@ -48,6 +48,20 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **The command line's text and IPC outputs take every column Python's
+  do** (review P2, P3). An IPC output of a Categorical column failed at the
+  first chunk holding a category an earlier chunk did not, so the run
+  depended on `chunk_size`: Arrow's IPC file holds one dictionary a column
+  for all its batches. The IPC output now carries a Categorical column as
+  String, at any chunk size. A CSV output refused every `Date`, `Time` and
+  `Datetime` column, and a zoned `Datetime` failed as a group column and
+  panicked the NDJSON writer: the command line carries no time zone
+  database. Each is written as Polars writes it, a zoned instant in UTC
+  with the offset that says so (`+0000` in a CSV, `+00:00` in NDJSON), and
+  a zoned group column's key is its instant in UTC, as the bank's is.
+- **`--dry-run` lays out the output** (review P13), so an input column
+  named as a flattened field, such as `m.pred_y` beside spec `m`, is
+  refused by the dry run of a flat or CSV output, as the run refuses it.
 - `lasso`: under a `window_size`, `solve_failures` counts a coordinate
   descent that runs out of `max_iter` sweeps once rows have aged out of the
   window, where it excused one by the window's effective rows alone. A window
