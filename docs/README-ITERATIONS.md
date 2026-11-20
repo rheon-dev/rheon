@@ -1080,7 +1080,9 @@ selection.
 paragraphs in the user's words. Kept as written except: typos fixed
 ("parameterizaitons", "exteding", "to avoids"); long sentences split for
 WRITING §5; and two figures held to what was measured. The speed sentence is the user's final wording (2026-11-20: "almost two
-million rows a second on five factors on an M4 MacBook Pro", chosen as
+million rows a second on five factors from parquet files on an M4
+MacBook Pro", with "from parquet files" because the library exists for
+data that does not fit in memory; chosen as
 slightly imprecise but plain, over a figure that needs qualifying; it
 understates every measurement below). Measured
 from parquet after the first draft doubted the earlier wording: `ewridge` at k=20 over 64
