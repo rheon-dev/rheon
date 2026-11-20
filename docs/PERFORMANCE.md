@@ -286,6 +286,16 @@ five-feature `ewridge` on all threads,
 | 1,000 | 85 | 66 |
 | one group | 205 | 196 |
 
+**At 20 features the query reads a parquet file at over eleven million
+rows a second.** On 4M rows of a 20-feature `ewridge` over 64 groups, with
+a clock, half-life 1,000 and `min_weight` 25 (the workload of [Rows a
+second at each thread count](#rows-a-second-at-each-thread-count)),
+`pl.scan_parquet(...).rheon.fit_predict([spec]).collect()` ran at 11.5M
+rows a second on all 14 cores and 11.3M on 8. The eager bank on the same
+file, its read included, ran at 9.6M and 8.4M. Each figure is the best of
+three, on 2.0.0's main build (`c34869bc`) on 2026-11-20 at a load average
+of about 6.
+
 ### Serving against learning
 
 **`predict` skips learning, so it runs faster than `fit_predict`, and more

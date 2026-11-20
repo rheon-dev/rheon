@@ -1079,12 +1079,11 @@ selection.
 **Scope:** the opening paragraph under the banner, replaced by four
 paragraphs in the user's words. Kept as written except: typos fixed
 ("parameterizaitons", "exteding", "to avoids"); long sentences split for
-WRITING §5; and two figures held to what was measured. The speed reads
-"well over five million rows a second on 20 factors ... across a bank's
-groups on 8 or more cores": `ewridge` at k=20 is 3,465,506 rows a second on
-one core, and the bank over 64 groups 5.98M at 8 threads and 7.08M at 14
-(PERFORMANCE.md); "from parquet files" was dropped, since no figure was
-measured from parquet. "Tens of thousands of tests" became "nearly twenty
+WRITING §5; and two figures held to what was measured. The speed is the user's, measured
+from parquet after the first draft doubted it: `ewridge` at k=20 over 64
+groups, `pl.scan_parquet(...).rheon.fit_predict(...)`, 4M rows, ran at
+11.5M rows a second on all cores (11.3M on 8), best of 3, at a load of
+about 6 (PERFORMANCE.md, "A query against the eager bank"). "Tens of thousands of tests" became "nearly twenty
 thousand tests" (15,947 pytest and about 3,400 Rust tests in the full tier
 on 2026-11-20).
 
