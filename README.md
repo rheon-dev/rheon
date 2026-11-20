@@ -7,14 +7,32 @@
 >
 > **Every feature, one line each:** [FEATURES.md](docs/FEATURES.md) · **Four complete use cases on model selection, stability, factors, asynchronous streams:** [HIGHLIGHTS.md](docs/HIGHLIGHTS.md)
 
-rheon fits models online, one row at a time, to
-[Polars](https://pola.rs) data, for anyone whose data are too large to
-hold in memory at once: linear models, streaming moments, clustering and
-regime detection. Each row is predicted before the model learns from it.
-When the rows have a time order, a fit can also be local, following the
-recent rows without fitting the last rows again at every step. Features and targets can be means over a window of the stream,
-looking back or ahead. The models are written in Rust, and run from Python
-or from a command line of their own.
+rheon fits models online, one row at a time, with bounded memory over
+unlimited data. It is written in Rust, and its online least squares runs
+at well over five million rows a second on 20 factors on an M4 MacBook
+Pro, across a bank's groups on 8 or more cores. There are dozens of
+models, each checked against slower libraries by nearly twenty thousand
+tests, and by comparison fits over every parameter on more than a dozen
+public data sets and far more generated data.
+
+Most models support both an expanding and a rolling fit. A rolling fit
+decays the past: it needs ordered data, and approximates a local fit over
+a recent window at each step. Every prediction comes from the past, so
+rolling diagnostics never use the future. An embargo keeps a target that
+averages over the future from training the past.
+
+rheon is tightly integrated with [Polars](https://pola.rs): models can
+use Polars expressions, and it adds tools of its own. One is a rolling
+EWMA window, which bounds the past's weight to a window and so avoids the
+"infinite decay" problem. Another is a forward target, such as a reverse
+EWMA that runs from the next row into the future. rheon generates those
+targets as it runs the models, so it all happens in one pass, with no
+target or formula columns saved first. The embargo keeps such a target
+from leaking the future into the current estimate and its diagnostics.
+
+Many models, or many settings of one model, are fit in the same pass,
+and computed in parallel where they can be. That makes a large scan for
+model selection much faster than fitting each candidate on its own.
 
 | section | what it covers |
 |---|---|

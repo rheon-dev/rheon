@@ -1066,6 +1066,35 @@ tables, 1 python block (the first fit), 6 top-level sections.
 
 **Verdict:** pending.
 
+### I12, the user's opening (2026-11-20)
+
+**Prompt:** the user, 2026-11-20, a new description for the README's
+opening, written by hand (sent as a photograph of the text): rheon fits
+online with bounded memory over unlimited data; its speed; how it is
+checked; expanding and rolling fits; predictions from the past and the
+embargo; the Polars integration, the rolling EWMA window and forward
+targets made in the same pass; many models fit in one pass for model
+selection.
+
+**Scope:** the opening paragraph under the banner, replaced by four
+paragraphs in the user's words. Kept as written except: typos fixed
+("parameterizaitons", "exteding", "to avoids"); long sentences split for
+WRITING §5; and two figures held to what was measured. The speed reads
+"well over five million rows a second on 20 factors ... across a bank's
+groups on 8 or more cores": `ewridge` at k=20 is 3,465,506 rows a second on
+one core, and the bank over 64 groups 5.98M at 8 threads and 7.08M at 14
+(PERFORMANCE.md); "from parquet files" was dropped, since no figure was
+measured from parquet. "Tens of thousands of tests" became "nearly twenty
+thousand tests" (15,947 pytest and about 3,400 Rust tests in the full tier
+on 2026-11-20).
+
+**Counts** (`doc_review.py measure`): before, 2,045 prose words, 111
+sentences, mean 18.4, 2 of 35 or more and none of 45; after, 2,225 prose
+words, 119 sentences, mean 18.7, 5 of 35 or more and none of 45; tables,
+blocks and sections unchanged.
+
+**Verdict:** pending (the user).
+
 ## The ideas
 
 Every idea the reviews and the verdicts raised, grouped by kind. A status
