@@ -1469,21 +1469,40 @@ impl Queue {
     /// sketch for each quantile, none for any other, each at `front`'s rows.
     fn has_width(&self, var: &[bool], quant: &[bool]) -> bool {
         let (n, wide) = (var.len(), var.contains(&true));
-        let sketches = if quant.contains(&true) {
-            self.quant.len() == n
-                && self.quant.iter().zip(quant).all(|(s, &q)| match s {
-                    Some(s) => q && s.has_shape(self.front.len()),
-                    None => !q,
-                })
-        } else {
-            self.quant.is_empty()
+        // Each `front` row's value of operator `j`, once the stack is known
+        // to hold them.
+        let x = |i: usize, j: usize| {
+            if wide {
+                self.front.x::<true>(i, j)
+            } else {
+                self.front.x::<false>(i, j)
+            }
+        };
+        let sketches = || {
+            if quant.contains(&true) {
+                self.quant.len() == n
+                    && self
+                        .quant
+                        .iter()
+                        .zip(quant)
+                        .enumerate()
+                        .all(|(j, (s, &q))| match s {
+                            Some(s) => {
+                                q && s.has_shape(self.front.len())
+                                    && s.holds((0..self.front.len()).map(|i| x(i, j)))
+                            }
+                            None => !q,
+                        })
+            } else {
+                self.quant.is_empty()
+            }
         };
         self.n == n
             && self.var == var
             && self.front.has_width(n, wide)
             && self.back.has_width(n, wide)
             && (self.total.is_empty() || self.total.len() == self.sum_w() * n)
-            && sketches
+            && sketches()
     }
 }
 

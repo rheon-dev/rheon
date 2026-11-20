@@ -104,6 +104,13 @@ pub(crate) struct Arm {
 }
 
 impl Arm {
+    /// Whether bucket `k` is one the arm holds, which [`Arm::restore`]
+    /// indexes without growing it.
+    fn covers(&self, k: i32) -> bool {
+        let i = i64::from(k) - i64::from(self.lo);
+        !self.oct.is_empty() && i >= 0 && i < self.w.len() as i64
+    }
+
     /// The first and last octave held; `None` when empty.
     fn octaves(&self) -> Option<(i32, i32)> {
         (!self.oct.is_empty()).then(|| {
@@ -453,6 +460,21 @@ impl QSide {
         self.back.clear();
     }
 
+    /// Whether `front` holds the bucket of each of `values`, the `front`
+    /// rows' values, that [`QSide::pop`] puts back: a damaged state file
+    /// whose row lay outside them decoded and passed [`QSide::has_shape`],
+    /// and panicked indexing past the arm at the pop (review P7).
+    pub(crate) fn holds(&self, mut values: impl Iterator<Item = f64>) -> bool {
+        values.all(|x| {
+            x.is_nan()
+                || match Key::of(x) {
+                    Key::Zero => true,
+                    Key::Neg(k) => self.front.neg.covers(k),
+                    Key::Pos(k) => self.front.pos.covers(k),
+                }
+        })
+    }
+
     /// Whether the sketches can be read and added to, `front` holding a row
     /// of `prev` for each of its `front_rows`.
     pub(crate) fn has_shape(&self, front_rows: usize) -> bool {
@@ -738,6 +760,31 @@ mod tests {
             window_size: window,
             window_ns: None,
             closed: Closed::Right,
+        }
+    }
+
+    /// Review P7: a damaged state's `front` row whose bucket the sketch
+    /// does not hold passed the shape check and panicked at its pop,
+    /// indexing past the arm. `holds` finds it; every row a real turn-over
+    /// put there it holds, and a missing value is no bucket.
+    #[test]
+    fn the_front_holds_the_bucket_of_each_of_its_rows() {
+        let k = kernel(Direction::Backward, 2.0, Some(6.0));
+        let tau = [0.0, 1.0, 2.0, 3.0];
+        let x = [0.5, -3.0, f64::NAN, 1e-320];
+        let mut side = QSide::default();
+        side.turn_over(&k, &tau, |i| x[i]);
+        assert!(side.has_shape(tau.len()));
+        assert!(side.holds(x.iter().copied()));
+        for far in [1e300, -1e300, 4.0e-300] {
+            assert!(
+                !side.holds([0.5, far, f64::NAN, 1e-320].into_iter()),
+                "{far:e}"
+            );
+        }
+        // Each row a real turn-over put there pops without a panic.
+        for top in (0..tau.len()).rev() {
+            side.pop(top, x[top]);
         }
     }
 

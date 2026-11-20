@@ -2670,9 +2670,20 @@ impl Stream {
                 // spec's columns and reads the spec's slots: a state whose
                 // cfg is another width would index past both (review
                 // 2026-09-18, B3).
+                // And a flag of the cfg that sizes what the stream writes: a
+                // Huber state whose `emit_scale` read true where the spec's
+                // is false wrote a scale into buffers sized without one, and
+                // panicked at the first row (review P7).
+                let scale_differs = match (&m, &fresh) {
+                    (AnyModel::Robust(a), AnyModel::Robust(b)) => {
+                        a.cfg().emit_scale != b.cfg().emit_scale
+                    }
+                    _ => false,
+                };
                 if m.n_features() != fresh.n_features()
                     || m.n_targets() != fresh.n_targets()
                     || m.n_outputs() != fresh.n_outputs()
+                    || scale_differs
                 {
                     let which = if suffix.is_empty() {
                         String::new()

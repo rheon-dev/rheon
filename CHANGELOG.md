@@ -48,6 +48,16 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **Three more kinds of damaged state file are refused at load, and a
+  fourth at the chunk that reads it** (review P7), where each loaded and
+  panicked at the first chunk: a residual window's later snapshot of the
+  wrong width (every snapshot is now checked, not the boundary alone); a
+  Huber state whose saved model emits a scale its spec does not; a
+  quantile window's row whose bucket its sketch does not hold; and a
+  formula target's held rows damaged where Polars' IPC reader unwraps a
+  field, now refused as damaged. Polars' reader trusts the lengths the
+  held rows state, so some damage there still asks for an allocation that
+  aborts the process.
 - **Two text group keys whose hashes collide are two groups** (review
   P6). A chunk's rows were bucketed by a 64-bit FNV-1a hash of the key
   alone, so two keys with one hash, which can be made at will, were one
