@@ -502,10 +502,16 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
     };
     let mut names: HashSet<&str> = HashSet::new();
     for f in &config.formulas {
-        if f.name.is_empty() || f.name.starts_with("@po:") || f.name.starts_with("@in:") {
+        if f.name.is_empty()
+            || f.name.starts_with("@po:")
+            || f.name.starts_with("@in:")
+            || f.name.contains('\0')
+        {
+            // A NUL cannot be in a column name of the Arrow export, which
+            // panicked on one (review P11).
             return Err(format!(
-                "{WHO}: an output cannot be named {:?}: a name must not be empty or start with \
-                 \"@po:\" or \"@in:\". Name the expression (a column computation, such as \
+                "{WHO}: an output cannot be named {:?}: a name must not be empty, start with \
+                 \"@po:\" or \"@in:\", or hold a NUL character (\\0). Name the expression (a column computation, such as \
                  pl.col(\"x\") + 1) with .alias() or a keyword argument, such as \
                  with_windows(lf, m=...).",
                 f.name

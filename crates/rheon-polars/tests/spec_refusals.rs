@@ -1104,3 +1104,61 @@ fn marginal_learning_the_bins_without_bins_is_refused() {
         "",
     ));
 }
+
+/// Review P11: a NUL character in a spec's name or a target's name panicked
+/// in the Arrow export, after the bank had learned the chunk; each is
+/// refused when the spec is checked. A column target's name defaults to its
+/// column, and a formula target's is its own.
+#[test]
+fn a_nul_in_a_spec_or_target_name_is_refused() {
+    let e = check(
+        &sup(r#"{"type": "ewridge"}"#, "").replace(r#""name": "m""#, r#""name": "a\u0000b""#),
+    )
+    .unwrap_err();
+    assert!(e.contains("the spec's name holds a NUL character"), "{e}");
+    refused(
+        &sup(r#"{"type": "ewridge"}"#, "").replace(
+            r#""targets": ["y"]"#,
+            r#""targets": [{"column": "y", "name": "p\u0000q"}]"#,
+        ),
+        &["target \"p\\0q\" has a name holding a NUL character"],
+    );
+    refused(
+        &sup(r#"{"type": "ewridge"}"#, "")
+            .replace(r#""targets": ["y"]"#, r#""targets": ["y\u0000"]"#),
+        &["holding a NUL character"],
+    );
+    let formula = r#""targets": [{"name": "a\u0000b", "formula": ["-", ["rewm_mean", ["col", "mid"], {"half_life": "5s", "window_size": "10s"}], ["col", "mid"]]}], "clock": "t", "embargo": "10s""#;
+    let json = sup(r#"{"type": "ewridge"}"#, "")
+        .replace(r#""targets": ["y"]"#, formula)
+        .replace(r#""half_life": 10.0"#, r#""half_life": "10s""#);
+    let e = check(&json).unwrap_err();
+    assert!(e.contains("holding a NUL character"), "{e}");
+}
+
+/// Review P14: a feature named `intercept` beside `fit_intercept` gave two
+/// coefficients the one name, in `coef`, the Gram and the bank's tables. It
+/// is refused, and taken with `fit_intercept` off, or by a model with no
+/// constant term of its own.
+#[test]
+fn a_feature_named_intercept_beside_the_fits_own_is_refused() {
+    let features = r#""features": ["x0", "intercept"]"#;
+    for model in [
+        r#"{"type": "ewridge"}"#,
+        r#"{"type": "rls"}"#,
+        r#"{"type": "huber"}"#,
+    ] {
+        refused(
+            &sup(model, "").replace(r#""features": ["x0", "x1"]"#, features),
+            &["features lists \"intercept\", but fit_intercept is on"],
+        );
+        accepted(
+            &sup(model, r#", "fit_intercept": false"#)
+                .replace(r#""features": ["x0", "x1"]"#, features),
+        );
+    }
+    accepted(
+        &unsup(r#"{"type": "ew_cov"}"#, r#", "half_life": 10.0"#)
+            .replace(r#""features": ["x0", "x1"]"#, features),
+    );
+}
