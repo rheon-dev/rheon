@@ -70,6 +70,11 @@ impl RawKey<'_> {
         }
     }
 
+    /// Whether two keys are one: the same text, or both null.
+    pub(crate) fn same(self, other: RawKey<'_>) -> bool {
+        self.with_ref(|a| other.with_ref(|b| a == b))
+    }
+
     /// The owned key, for a group the bank has not seen, or a reader that
     /// wants a `GroupKey`.
     pub(crate) fn to_key(self) -> GroupKey {
@@ -97,22 +102,46 @@ impl<'c> Groups<'c> {
     }
 
     /// The rows' groups in two passes: each row's group, counted, then the
-    /// rows placed. `of` gives a row's key and its identity (equal
-    /// identities are one group); a key is kept for a group's first row.
+    /// rows placed. `of` gives a row's key and its 64-bit hash; a key is
+    /// kept for a group's first row. Rows whose hashes are equal are one
+    /// group only when their keys are: a hash alone merged two keys that
+    /// collide into one group inside a chunk, where across chunks they were
+    /// two (review P6), and FNV-1a's collisions can be made at will. A key
+    /// whose hash an earlier key of other text holds takes a group of its
+    /// own, found again by a scan of those -- a list that is empty but for
+    /// such a collision.
     fn partition(n: usize, mut of: impl FnMut(usize) -> (RawKey<'c>, u64)) -> Self {
+        use std::collections::hash_map::Entry;
         let mut slot_of: HashMap<u64, usize, rheon_core::FixedState> = HashMap::default();
+        let mut clashes: Vec<(u64, usize)> = Vec::new();
         let mut keys: Vec<RawKey<'c>> = Vec::new();
         let mut ends: Vec<usize> = Vec::new();
         let mut slots: Vec<usize> = Vec::with_capacity(n);
+        let mut new_slot = |keys: &mut Vec<RawKey<'c>>, key| {
+            keys.push(key);
+            ends.push(0);
+            keys.len() - 1
+        };
         for i in 0..n {
             let (key, id) = of(i);
-            let slot = *slot_of.entry(id).or_insert_with(|| {
-                keys.push(key);
-                ends.push(0);
-                keys.len() - 1
-            });
-            ends[slot] += 1;
+            let slot = match slot_of.entry(id) {
+                Entry::Vacant(e) => *e.insert(new_slot(&mut keys, key)),
+                Entry::Occupied(e) if keys[*e.get()].same(key) => *e.get(),
+                Entry::Occupied(_) => {
+                    match clashes.iter().find(|&&(h, s)| h == id && keys[s].same(key)) {
+                        Some(&(_, s)) => s,
+                        None => {
+                            let s = new_slot(&mut keys, key);
+                            clashes.push((id, s));
+                            s
+                        }
+                    }
+                }
+            };
             slots.push(slot);
+        }
+        for &slot in &slots {
+            ends[slot] += 1;
         }
         Self::placed(keys, ends, slots)
     }
@@ -235,8 +264,8 @@ impl<'c> Groups<'c> {
 /// two more clones (docs/records/PERFORMANCE-LOG.md P3). The key is read from
 /// the chunk, and its `GroupKey` built only for a group the bank has not
 /// seen -- it is still the *value* that is stored and serialized, so state
-/// files are unaffected. A 64-bit collision would merge two groups; the same
-/// 2^-64 exposure the session hash already documents.
+/// files are unaffected. Two keys whose hashes collide are still two groups:
+/// a hash match is confirmed by the keys' text ([`Groups::partition`]).
 pub(crate) fn group_indices<'c>(chunk: &'c ArrowChunk, spec: &Spec) -> PolarsResult<Groups<'c>> {
     let n = chunk.height();
     match &spec.group {
@@ -390,6 +419,44 @@ mod tests {
                 let first = rows[0];
                 prop_assert_eq!(&got.key(g).to_key().0, &texts[first]);
             }
+        }
+    }
+
+    /// A published pair of texts whose 64-bit FNV-1a hashes are equal.
+    const CLASH: [&str; 2] = ["8yn0iYCKYHlIj4-BwPqk", "GReLUrM4wMqfg9yzV3KQ"];
+
+    /// Review P6: two keys whose hashes collide were one group inside a
+    /// chunk. They are two, each with its own rows, beside a third key and
+    /// a null, in any order.
+    #[test]
+    fn keys_whose_hashes_collide_are_two_groups() {
+        use crate::bank::session_hash;
+        assert_eq!(session_hash(Some(CLASH[0])), session_hash(Some(CLASH[1])));
+        let texts = [
+            Some(CLASH[0]),
+            Some(CLASH[1]),
+            None,
+            Some("k"),
+            Some(CLASH[1]),
+            Some(CLASH[0]),
+            Some(CLASH[1]),
+        ];
+        let got = Groups::partition(texts.len(), |i| {
+            (
+                texts[i].map_or(RawKey::Null, RawKey::Text),
+                session_hash(texts[i]),
+            )
+        });
+        let want: Vec<(Option<&str>, Vec<usize>)> = vec![
+            (Some(CLASH[0]), vec![0, 5]),
+            (Some(CLASH[1]), vec![1, 4, 6]),
+            (None, vec![2]),
+            (Some("k"), vec![3]),
+        ];
+        assert_eq!(got.len(), want.len());
+        for (g, (key, rows)) in want.iter().enumerate() {
+            assert_eq!(got.key(g).to_key().0.as_deref(), *key);
+            assert_eq!(got.rows(g), rows.as_slice());
         }
     }
 

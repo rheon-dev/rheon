@@ -48,6 +48,13 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **Two text group keys whose hashes collide are two groups** (review
+  P6). A chunk's rows were bucketed by a 64-bit FNV-1a hash of the key
+  alone, so two keys with one hash, which can be made at will, were one
+  group inside a chunk and two across chunks: one group's rows were learned
+  into the other's model, and the answer depended on the chunking. A hash
+  match is now confirmed by the keys' text. The saved state is unchanged.
+  Session values are still told apart by their hash.
 - **A NUL character in a spec's name, a target's name or a `with_windows`
   output's name is refused** (review P11) when the spec or the call is
   checked. It panicked in the Arrow export, whose column names are C

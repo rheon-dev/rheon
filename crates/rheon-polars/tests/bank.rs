@@ -2179,3 +2179,47 @@ fn a_coarser_clock_field_floors_an_instant_before_1970() {
     assert_eq!(phys(&scored), phys(&want));
     assert_eq!(phys(&scored), vec![Some(-1_501), Some(-1), Some(1)]);
 }
+
+/// Review P6: two text keys whose 64-bit FNV-1a hashes are equal (a
+/// published pair) were one group inside a chunk and two across chunks, so
+/// the output depended on the chunking. They are two groups in both.
+#[test]
+fn keys_whose_hashes_collide_are_two_groups_in_any_chunking() {
+    let (a, b) = ("8yn0iYCKYHlIj4-BwPqk", "GReLUrM4wMqfg9yzV3KQ");
+    let spec: Spec = serde_json::from_str(
+        r#"{"name": "m", "model": {"type": "ewridge"}, "targets": ["y"], "features": ["x"],
+            "half_life": 50.0, "group": "g", "coef_every": 0}"#,
+    )
+    .unwrap();
+    let df = df!(
+        "g" => [a, b, a, b, a, b],
+        "x" => [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        "y" => [1.0, -2.0, 3.0, -4.0, 5.0, -6.0]
+    )
+    .unwrap();
+    let weights = |chunks: &[usize]| -> (Vec<Option<f64>>, usize) {
+        let mut bank = Bank::new(vec![spec.clone()]).unwrap();
+        let mut out = Vec::new();
+        let mut at = 0;
+        for &len in chunks {
+            let cols = bank.fit_predict(&df.slice(at as i64, len)).unwrap();
+            let w = cols[0]
+                .struct_()
+                .unwrap()
+                .field_by_name("weight_sum")
+                .unwrap();
+            out.extend(w.f64().unwrap().iter());
+            at += len;
+        }
+        (out, bank.groups()[0].len())
+    };
+    let (whole, groups) = weights(&[6]);
+    assert_eq!(groups, 2);
+    assert_eq!(
+        whole[..2],
+        [Some(0.0), Some(0.0)],
+        "each key's first row is its own"
+    );
+    assert_eq!(weights(&[1; 6]), (whole.clone(), 2));
+    assert_eq!(weights(&[2, 4]), (whole, 2));
+}
