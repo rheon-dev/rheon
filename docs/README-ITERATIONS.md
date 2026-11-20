@@ -1097,6 +1097,27 @@ blocks and sections unchanged.
 
 **Verdict:** approved by the user, 2026-11-20 ("where they can be" changed to "where possible" with the approval).
 
+### I13, the user's second opening (2026-11-20)
+
+**Prompt:** the user, 2026-11-20, an updated opening written by hand (a
+photograph of the text): ordered data, where rheon shines and sharding does
+not help; the clock issues of real-world data; rolling regime detection;
+saving and continuing the state; lagged factors from Polars expressions;
+checkpoint and resume, for static data and stream processing.
+
+**Scope:** the opening, four paragraphs, in the user's words. Changed:
+"Every model supports a rolling fit" became "Most models" (the user's
+choice: `sgd` and `pa` keep coefficients that do not decay, and the
+diagnostics are not fits); "dave" became "save"; the last sentence's
+repeated "semantics" was tightened to "All of this can be checkpointed and
+resumed, over static data and in stream processing"; long sentences split
+for WRITING section 5. Kept at the user's word (2026-11-20, "Keep
+unmatched"): "rheon's speed is unmatched over parquet data". No benchmark
+against another library on parquet backs it yet; the one head-to-head
+(scikit-learn at 10,000 features) is mixed.
+
+**Verdict:** pending (the user).
+
 ## The ideas
 
 Every idea the reviews and the verdicts raised, grouped by kind. A status
