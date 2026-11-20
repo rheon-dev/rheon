@@ -1066,6 +1066,37 @@ tables, 1 python block (the first fit), 6 top-level sections.
 
 **Verdict:** pending.
 
+### I12, the user's opening (2026-11-20)
+
+**Prompt:** the user, 2026-11-20, a new description for the README's
+opening, written by hand (sent as a photograph of the text): rheon fits
+online with bounded memory over unlimited data; its speed; how it is
+checked; expanding and rolling fits; predictions from the past and the
+embargo; the Polars integration, the rolling EWMA window and forward
+targets made in the same pass; many models fit in one pass for model
+selection.
+
+**Scope:** the opening paragraph under the banner, replaced by four
+paragraphs in the user's words. Kept as written except: typos fixed
+("parameterizaitons", "exteding", "to avoids"); long sentences split for
+WRITING §5; and two figures held to what was measured. The speed sentence is the user's final wording (2026-11-20: "over ten
+million rows per second on 20 factors from a parquet file on an M4 MacBook
+Pro", after two earlier wordings; "from a parquet file" because the library
+exists for data that does not fit in memory). Measured
+from parquet after the first draft doubted the earlier wording: `ewridge` at k=20 over 64
+groups, `pl.scan_parquet(...).rheon.fit_predict(...)`, 4M rows, ran at
+11.5M rows a second on all cores (11.3M on 8), best of 3, at a load of
+about 6 (PERFORMANCE.md, "A query against the eager bank"). "Tens of thousands of tests" became "nearly twenty
+thousand tests" (15,947 pytest and about 3,400 Rust tests in the full tier
+on 2026-11-20).
+
+**Counts** (`doc_review.py measure`): before, 2,045 prose words, 111
+sentences, mean 18.4, 2 of 35 or more and none of 45; after, 2,225 prose
+words, 119 sentences, mean 18.7, 5 of 35 or more and none of 45; tables,
+blocks and sections unchanged.
+
+**Verdict:** approved by the user, 2026-11-20 ("where they can be" changed to "where possible" with the approval).
+
 ## The ideas
 
 Every idea the reviews and the verdicts raised, grouped by kind. A status
