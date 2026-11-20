@@ -289,8 +289,7 @@ MAPIE 1.6.0 (PyPI 2026-10-19; also on master) and scikit-learn 1.9.1.
   `OnlineExchangeabilityTest`, `FixedDatasetExchangeabilityTest`, `RiskMonitoring`,
   `PermutationTest`, `PValuePermutationTest`, `SequentialMonteCarloTest`.
   `OnlineMartingaleTest(test_method="jumper_martingale"|"plugin_martingale", test_level=0.05,
-  jump_size=0.01, burn_in=100)`: CONFIRMED (scan spelling right; the first parameter list in the
-  file also has a `task`/data-dependent preparation step). `_venn_abers`: CONFIRMED as a private
+  jump_size=0.01, burn_in=100)`: CONFIRMED (scan spelling right). `_venn_abers`: CONFIRMED as a private
   module `mapie/_venn_abers.py` (present at v1.3.0 through v1.6.0) with `VennAbers().fit(p_cal, y_cal,
   precision=None)`, `.predict_proba(p_test)`, `VennAbersCV`, `VennAbersMultiClass`; being
   underscore-private, it carries no API stability promise (a dev-only oracle).
@@ -376,3 +375,239 @@ All statsmodels 0.15.0 (https://www.statsmodels.org/stable/).
   https://raw.githubusercontent.com/scikit-learn-contrib/MAPIE/master/mapie/exchangeability_testing/risk_monitoring.py
 - `confseq` (`betting_cs`, empirical-Bernstein CS; https://github.com/gostevehoward/confseq):
   not re-fetched here (the scan says not installable).
+
+## Task 514. The DCC `Q` recursion with given `(a, b)` and ADCC's `g`
+
+- "A Python library to compute it where one exists": MISSING for a recursion with GIVEN
+  parameters. `arch` (PyPI 9.0.0, 2026-11-11) is univariate only (per third-party READMEs;
+  arch's own docs were not located, so this is secondhand). Candidates that exist on PyPI or
+  GitHub: `mgarch` 0.3.0 (2022-07-07, "DCC-GARCH(1,1)", `mgarch.mgarch(dist).fit(rt)` and
+  `.predict(ndays)`, no filter with given parameters, no ADCC); `pymgarch` (`mg.DCC`, `mg.ADCC`
+  with `.fit(returns, marginals=...)` and `res.filter(new_returns)`, which reuses FITTED parameters
+  on new data, Cappiello-Engle-Sheppard ADCC; a young project, 0 stars; no documented way to pass
+  your own `(a, b, g)`); `multigarch` and `mvarch` (DCC/ADCC, not inspected). None is a mainstream
+  oracle. Verdict: no mainstream Python library does it.
+  https://pypi.org/pypi/mgarch/json , https://github.com/marwinsteiner/pymgarch
+- R `rmgarch` 1.4-3 (CRAN, 2026-09-10): `dccspec(uspec, VAR=FALSE, ..., dccOrder=c(1,1),
+  model=c("DCC","aDCC","FDCC"), groups, distribution="mvnorm", start.pars, fixed.pars)` and
+  `dccfilter(spec, data, out.sample=0, filter.control=list(), ...)`: CONFIRMED to exist, and
+  `fixed.pars` is "required for the filter" methods, so a filter at given parameters is
+  possible. The DCC coefficient names in the package's own tests are `dcca1`, `dccb1`, `dccg1`
+  (`[Joint]` prefix in a fit's `matcoef`); the exact `fixed.pars` spelling was not confirmed in a
+  doc page. It is an R second opinion, not a Python oracle, and its Q starts from the
+  full-sample covariance of the standardized residuals (`Qbar`) unless `filter.control$n.old` is
+  set, so rheon's online start must be set to the same `Qbar` for a bit comparison.
+  https://cran.r-project.org/web/packages/rmgarch/refman/rmgarch.html
+- The scan's own recommendation (the recursion written longhand in numpy from Engle 2002 and
+  Cappiello-Engle-Sheppard 2006) is the right primary oracle; no library claim to check.
+
+## Task 518. Window operators
+
+Polars (the docs are the stable page; PyPI latest 2.1.0, 2026-10-25; the scan used 2.0.0). All
+four methods below are marked UNSTABLE in the docs ("may change without being treated as a
+breaking change"), so a Polars upgrade can break the oracle without a deprecation.
+
+- `Expr.rolling_min_by(by, window_size, *, min_samples=1, closed='right')` and
+  `rolling_max_by`: CONFIRMED (`min_periods` was renamed `min_samples` in 1.21.0; `by` must be
+  Date, Datetime or an integer column, `"3i"` for integer windows; `closed` in `left`, `right`,
+  `both`, `none`). Exact.
+  https://docs.pola.rs/api/python/stable/reference/expressions/api/polars.Expr.rolling_min_by.html
+- `Expr.rolling_quantile_by(by, window_size, *, quantile, interpolation='nearest', min_samples=1,
+  closed='right')`: CONFIRMED. `interpolation` takes `'nearest'` (default), `'higher'`,
+  `'lower'`, `'midpoint'`, `'linear'` and also `'equiprobable'` (the scan's list omitted the
+  last). `quantile` is keyword-only. Exact for a hard window.
+  https://docs.pola.rs/api/python/stable/reference/expressions/api/polars.Expr.rolling_quantile_by.html
+- `Expr.rolling_rank_by(by, window_size, method='average', *, seed=None, min_samples=1,
+  closed='right')`: CONFIRMED. `method` in `average` (default; Float64 result), `min`, `max`,
+  `dense`, `random` (`seed` used only with `random`; with `seed=None` a seed is generated per
+  operation, so `random` is not reproducible unless seeded). Result is the index type unless
+  `average`.
+- `Expr.ewm_mean(*, com=None, span=None, half_life=None, alpha=None, adjust=True, min_samples=1,
+  ignore_nulls=False)`: CONFIRMED. `adjust=True` (default) uses weights `(1-alpha)^i` over
+  positions; `adjust=False` is the recursion `y_t = (1-alpha) y_{t-1} + alpha x_t`;
+  `half_life` gives `alpha = 1 - exp(-ln 2 / tau)`; `ignore_nulls=False` counts a null as a time
+  step. Note: this is a row-position operator, so the "count-weighted" comparison is against
+  `ewm_mean` on a row clock (the time-weighted operator is `ewm_mean_by`, whose signature the
+  fetched page did not show).
+  https://docs.pola.rs/api/python/stable/reference/expressions/api/polars.Expr.ewm_mean.html
+
+## Task 522. `hmm`
+
+hmmlearn (PyPI 0.3.3, 2024-10-31; docs `latest`, which carries no version string and may be ahead
+of the release).
+
+- `GaussianHMM(n_components=1, covariance_type='diag', min_covar=0.001, startprob_prior=1.0,
+  transmat_prior=1.0, means_prior=0, means_weight=0, covars_prior=0.01, covars_weight=1,
+  algorithm='viterbi', random_state=None, n_iter=10, tol=0.01, verbose=False, params='stmc',
+  init_params='stmc', implementation='log')`: CONFIRMED. `covariance_type` in `'spherical'`,
+  `'diag'`, `'full'`, `'tied'` (so `spherical` is available as the oracle; the docs' prose says
+  spherical is the default while the signature says `'diag'`: trust the signature). `params` selects
+  what EM updates and `init_params` what is initialized, both letters of `s`, `t`, `m`, `c`
+  (`params="t"` would learn only the transition matrix). `predict_proba(X, lengths=None)` returns the
+  SMOOTHED state posteriors, shape `(n_samples, n_components)`: CONFIRMED, so
+  `predict_proba(X[:t+1])[t-L]` is the fixed-lag smoothed probability of row `t-L` given rows up to `t`,
+  exact at fixed parameters. `decode(X, lengths=None, algorithm=None)`, `score(X, lengths=None)`,
+  `get_stationary_distribution()`: CONFIRMED. Caveat: with `params=""` the model must have
+  `startprob_`, `transmat_`, `means_`, `covars_` set by hand; the start distribution
+  `startprob_` enters the prefix smoother, so rheon's must equal it.
+  https://hmmlearn.readthedocs.io/en/latest/api.html
+
+## Task 523. `bocpd`
+
+The scan's reference is `hildensia/bayesian_changepoint_detection`, which has since been rewritten
+on PyTorch and published as `bayesian-changepoint` 1.2.2 (PyPI, 2026-11-06; renamed from `bayescd`
+in 1.1.0; requires `torch>=2.0`). Names (master, `bayesian_changepoint_detection/`):
+
+- `online_changepoint_detection(data, hazard_function, likelihood_model, device=None)` returning a
+  tuple of tensors: CORRECTED (the scan wrote `hazard_func` and `observation_likelihood`).
+- Hazards: `constant_hazard(lam, r, device=None)` and `negative_binomial_hazard(k, p, r, device=None)`
+  (CONFIRMED: `H(r) = P(len = r+1)/P(len >= r+1)` for `P(len = t) = C(t-1,k-1) p^k (1-p)^(t-k)`,
+  `H = p` at `k = 1`; zero for `r + 1 < k`). So "negative-binomial" hazard has an exact oracle.
+  A logistic hazard: MISSING (Turner et al. 2009's logistic form is not in the library).
+  The offline priors are spelled `const_prior`, `geometric_prior`, `negative_binomial_prior`
+  (the scan's `neg_binominal_prior` is CORRECTED).
+- Emissions (`online_likelihoods`): `StudentT(alpha=0.1, beta=0.1, kappa=1.0, mu=0.0)`,
+  `MultivariateT`, `Poisson`, `NormalKnownVariance(variance=1.0, mu=0.0, prior_variance=1.0)`.
+  So "known variance" exists (CONFIRMED); "known mean" (variance-only change) is MISSING:
+  write it longhand (a Gamma prior on the precision, a Student-t predictive with a fixed mean,
+  via scipy `t`).
+- Exactness caveat: run-length state (`alpha`, `beta`, `kappa`, and the centered mean) is
+  float32 (`torch.float32`; the data shift is done in float64 and cast back), so agreement with
+  rheon's f64 is to roughly 1e-6 relative, not bit-level; `torch` becomes a dev dependency of the
+  test group. Also the library carries pruning (`BaseLikelihood.prune(n)`); compare with pruning off.
+  https://github.com/hildensia/bayesian_changepoint_detection (raw files under `master`),
+  https://pypi.org/pypi/bayesian-changepoint/json
+
+## Task 525. Smaller options
+
+scikit-learn 1.9.1 unless noted.
+
+- `KMeans(n_clusters=8, *, init='k-means++', n_init='auto', max_iter=300, tol=0.0001, verbose=0,
+  random_state=None, copy_x=True, algorithm='lloyd')`: CONFIRMED. `init` may be an array of shape
+  `(n_clusters, n_features)`; with `n_init='auto'` an array `init` runs once (`n_init=1`). It runs
+  full Lloyd to convergence (`max_iter=300`), so the oracle for "given centers" row by row is
+  `KMeans(init=C, n_init=1, max_iter=1)` or `.predict`/`.transform` at frozen centers; and
+  `MiniBatchKMeans.partial_fit` for the incremental update (not re-fetched). `transform(X)`: CONFIRMED,
+  distances to every center, `(n_samples, n_clusters)`, Euclidean (not squared). `score(X, y=None,
+  sample_weight=None)`: CONFIRMED, returns the NEGATIVE inertia on `X` at the fitted centers
+  (`inertia_` is the weighted sum of squared distances), so an exponentially weighted inertia at
+  frozen centers = `-score(X, sample_weight=w)`.
+  https://scikit-learn.org/stable/modules/generated/sklearn.cluster.KMeans.html
+- `GaussianNB(*, priors=None, var_smoothing=1e-09)`: CONFIRMED (`priors` fixes the class priors,
+  "not adjusted according to the data"; `class_prior_` attribute). `var_smoothing`: CORRECTED
+  detail: the docs only say "portion of the largest variance of all features added to variances";
+  in source `epsilon_ = var_smoothing * max(var(X, axis=0))` taken over the `X` of each `fit` or
+  `partial_fit` call (so under `partial_fit` it is per call, not on the stream), with
+  `var_` carrying `+ epsilon_`. A rheon `var_smoothing` that scales to the running data needs
+  that nuance pinned. `partial_fit(X, y, classes=None, sample_weight=None)` uses Chan-Golub-LeVeque
+  updates.
+  https://scikit-learn.org/stable/modules/generated/sklearn.naive_bayes.GaussianNB.html
+- `QuadraticDiscriminantAnalysis(*, solver='svd', shrinkage=None, priors=None, reg_param=0.0,
+  store_covariance=False, tol=0.0001, covariance_estimator=None)`: CONFIRMED (`priors`,
+  `reg_param`). `reg_param` regularizes each class covariance as `(1 - reg_param) * S + reg_param * I`
+  (applied to the per-class scalings, i.e. the eigenvalues, which is rotation-invariant, so it
+  equals the matrix form). Also: QDA has `solver='eigen'` with `shrinkage` (`None`, `'auto'`
+  Ledoit-Wolf, or a float) and `covariance_estimator`, which is also the oracle for task
+  511's "shrinkage on `ew_class`" (per-class shrunk covariance).
+  `LinearDiscriminantAnalysis(solver, shrinkage, priors, ...)` for the tied case (not re-fetched).
+  https://scikit-learn.org/stable/modules/generated/sklearn.discriminant_analysis.QuadraticDiscriminantAnalysis.html
+- statsmodels `Holt(endog, exponential=False, damped_trend=False, initialization_method=None,
+  initial_level=None, initial_trend=None)`: CONFIRMED (0.15.0); `initialization_method` in `None`,
+  `'estimated'`, `'heuristic'`, `'legacy-heuristic'`, `'known'` (`'known'` requires `initial_level`
+  and, with a trend, `initial_trend`). `Holt.fit(smoothing_level=None, smoothing_trend=None, *,
+  damping_trend=None, optimized=True, start_params=None, use_brute=True, remove_bias=False,
+  method=None, minimize_kwargs=None)`: CONFIRMED; `optimized=False` with fixed smoothing values is
+  the exact filter. CORRECTED: `fit` has no `initial_level`/`initial_trend`/`use_boxcox`
+  arguments in 0.15.0; the known initial state goes on the constructor. `HoltWintersResults.forecast(steps=1)`:
+  CONFIRMED, out-of-sample from the end of the sample; the docs do not state the formula
+  (`l + h*b`, damped otherwise) nor the smoothing convention (`smoothing_trend` is the
+  beta of the error-correction form, to be pinned by a test), so the formula must be checked
+  against the source.
+  https://www.statsmodels.org/stable/generated/statsmodels.tsa.holtwinters.Holt.html
+- Holm beside Bonferroni: `statsmodels.stats.multitest.multipletests(pvals, alpha=0.05, method='hs',
+  maxiter=1, is_sorted=False, returnsorted=False)`: CONFIRMED; `method` strings include `'bonferroni'`,
+  `'sidak'`, `'holm-sidak'`, `'holm'`, `'simes-hochberg'`, `'hommel'`, `'fdr_bh'`, `'fdr_by'`,
+  `'fdr_tsbh'`, `'fdr_tsbky'`, `'fdr_gbs'`, `'lfdr'`. CORRECTED trap: the DEFAULT is `'hs'`
+  (Holm-Sidak), so Holm must be passed as `method='holm'`. Returns `(reject, pvals_corrected,
+  alphacSidak, alphacBonf)`.
+  https://www.statsmodels.org/stable/generated/statsmodels.stats.multitest.multipletests.html
+- river `drift.KSWIN(alpha=0.005, window_size=100, stat_size=30, seed=None, window=None)`:
+  CONFIRMED (docs 0.27.0). It compares the latest `stat_size` values with `stat_size` values drawn AT
+  RANDOM from the older part of the window and flags drift when the KS distance exceeds a threshold
+  from `alpha` and `stat_size`; `update(x)`, `drift_detected`. Not exact vs a deterministic rheon
+  test: the random draw is why it is a reference; compare with `scipy.stats.ks_2samp` on the same
+  two samples. https://riverml.xyz/latest/api/drift/KSWIN/
+- `deco`'s less biased alternative to `u` (Engle and Kelly 2012): MISSING as a library
+  function; the paper's formula is the only oracle (as the scan says).
+
+## Summary table
+
+| Task | Oracle claim | Verdict |
+|---|---|---|
+| 511 | sklearn OAS | CONFIRMED |
+| 511 | sklearn LedoitWolf | CONFIRMED |
+| 511 | sklearn ShrunkCovariance | CONFIRMED |
+| 511 | river LedoitWolf/OAS/Shrunk (delta, target) | CORRECTED |
+| 512 | statsmodels HC0-HC3 via get_robustcov_results / OLS.fit cov_type | CONFIRMED |
+| 512 | statsmodels cov_type cluster | CONFIRMED |
+| 512 | statsmodels RLM cov="H1" as the sandwich (it is H3) | CORRECTED |
+| 512 | statsmodels QuantReg vcov robust hsheather | CONFIRMED |
+| 513 | MAPIE regression metrics (coverage, width, ssc, mwi) | CONFIRMED |
+| 513 | sklearn mean_pinball_loss | CONFIRMED |
+| 513 | sklearn d2_pinball_score | CONFIRMED |
+| 513 | sklearn mean_absolute_error / river MAE | CONFIRMED |
+| 513 | sklearn log_loss (y_proba, no eps) / river LogLoss | CORRECTED |
+| 514 | Python library for DCC filter with given a,b / ADCC g | MISSING |
+| 514 | R rmgarch dccfilter fixed.pars | CONFIRMED |
+| 515 | MAPIE AbsoluteConformityScore sym=False | CONFIRMED |
+| 515 | MAPIE SplitConformalRegressor confidence_level list | CONFIRMED |
+| 515 | MAPIE ConformalizedQuantileRegressor symmetric_correction (constructor) | CORRECTED |
+| 515 | crepes predict_p_online | CONFIRMED |
+| 515 | MAPIE exchangeability_testing and _venn_abers | CONFIRMED |
+| 516 | statsmodels RecursiveLS constraints | CONFIRMED |
+| 516 | statsmodels OLS.fit_regularized for equalities | CORRECTED |
+| 517 | sklearn assume_centered=True | CONFIRMED |
+| 517 | scipy multivariate_normal.logpdf | CONFIRMED |
+| 517 | sklearn per-row score_samples | MISSING |
+| 518 | Polars rolling_min_by / rolling_max_by | CONFIRMED |
+| 518 | Polars rolling_quantile_by interpolation | CONFIRMED |
+| 518 | Polars rolling_rank_by | CONFIRMED |
+| 518 | Polars ewm_mean adjust=True | CONFIRMED |
+| 519 | filterpy x, log_likelihood | CONFIRMED |
+| 519 | filterpy mahalanobis (sqrt, not squared) | CORRECTED |
+| 520 | statsmodels het_arch | CONFIRMED |
+| 520 | statsmodels het_white (interaction_terms) | CONFIRMED |
+| 520 | statsmodels OLSInfluence dfbetas, cooks_distance | CONFIRMED |
+| 520 | MAPIE spiegelhalter_statistic / p_value (one-sided p) | CORRECTED |
+| 521 | dieboldmariano dm_test loss, one_sided, harvey_correction | CONFIRMED |
+| 521 | dieboldmariano t reference as an option (always t; h<->lags map) | CORRECTED |
+| 521 | MAPIE RiskMonitoring as mean loss difference test | CORRECTED |
+| 521 | statsmodels HAC Wald for Giacomini-White | CONFIRMED |
+| 521 | Giacomini-White as a library function | MISSING |
+| 522 | hmmlearn predict_proba on prefix | CONFIRMED |
+| 522 | hmmlearn params / init_params | CONFIRMED |
+| 522 | hmmlearn spherical covariance | CONFIRMED |
+| 523 | bayesian_changepoint_detection online API names | CORRECTED |
+| 523 | negative-binomial hazard | CONFIRMED |
+| 523 | logistic hazard | MISSING |
+| 523 | known-variance emission | CONFIRMED |
+| 523 | known-mean emission | MISSING |
+| 524 | sklearn BayesianRidge (defaults not evidence max) | CORRECTED |
+| 524 | sklearn SGDRegressor average=True | CONFIRMED |
+| 524 | sklearn SGD learning_rate optimal (not the regressor default) | CORRECTED |
+| 524 | sklearn PassiveAggressiveRegressor average (deprecated 1.8) | CORRECTED |
+| 524 | statsmodels RLM TukeyBiweight etc. | CONFIRMED |
+| 524 | statsmodels HuberScale as proposal 2 | CORRECTED |
+| 524 | sklearn Lasso/ElasticNet positive=True | CONFIRMED |
+| 524 | sklearn per-feature penalty weights | MISSING |
+| 524 | Vowpal Wabbit --invariant | CONFIRMED |
+| 525 | sklearn KMeans init=array, transform, score | CONFIRMED |
+| 525 | sklearn GaussianNB priors | CONFIRMED |
+| 525 | sklearn GaussianNB var_smoothing formula (per call) | CORRECTED |
+| 525 | sklearn QDA priors, reg_param | CONFIRMED |
+| 525 | statsmodels Holt known init, forecast | CONFIRMED |
+| 525 | statsmodels Holm via multipletests (default is holm-sidak) | CORRECTED |
+| 525 | river KSWIN | CONFIRMED |
+| 525 | deco less biased u (library) | MISSING |
+
+Totals over the 65 rows above: CONFIRMED 42, CORRECTED 16, MISSING 7. A CONFIRMED row can still carry an exactness caveat in its section (for example 511's OAS differs from the paper, 513's D2 uses a hindsight quantile); the row verdict is about names and meaning.
