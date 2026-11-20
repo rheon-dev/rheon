@@ -537,9 +537,7 @@ fn each_form_kernel_is_its_definition() {
                     t[i * k + i] = phi[i];
                 }
                 if coupled {
-                    for j in 1..k {
-                        t[j] = gc[j];
-                    }
+                    t[1..k].copy_from_slice(&gc[1..k]);
                 }
                 let want = mul(&mul(&t, &p, k), &transpose(&t, k), k);
                 let mut cc = c.clone();

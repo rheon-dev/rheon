@@ -301,7 +301,6 @@ impl Kalman {
     /// The process noise on the factor: [`Kalman::add_process_noise`]'s
     /// terms, a rank-one update for each slot.
     pub(super) fn factor_noise(&mut self, pi: usize, sigma2: f64, d: f64) {
-        let k = self.cfg.k_total();
         let off = usize::from(self.cfg.fit_intercept);
         let mut q = std::mem::take(&mut self.qbuf);
         self.q_held_into(sigma2, &mut q);
@@ -309,8 +308,7 @@ impl Kalman {
         for (qi, g) in q.iter_mut().zip(self.gap_factors.of(&self.cfg, d)) {
             *qi *= g;
         }
-        for i in 0..k {
-            let qd = q[i];
+        for (i, &qd) in q.iter().enumerate() {
             if qd == 0.0 {
                 continue;
             }
