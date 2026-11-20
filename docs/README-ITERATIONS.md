@@ -1079,8 +1079,11 @@ selection.
 **Scope:** the opening paragraph under the banner, replaced by four
 paragraphs in the user's words. Kept as written except: typos fixed
 ("parameterizaitons", "exteding", "to avoids"); long sentences split for
-WRITING §5; and two figures held to what was measured. The speed is the user's, measured
-from parquet after the first draft doubted it: `ewridge` at k=20 over 64
+WRITING §5; and two figures held to what was measured. The speed sentence is the user's final wording (2026-11-20: "almost two
+million rows a second on five factors on an M4 MacBook Pro", chosen as
+slightly imprecise but plain, over a figure that needs qualifying; it
+understates every measurement below). Measured
+from parquet after the first draft doubted the earlier wording: `ewridge` at k=20 over 64
 groups, `pl.scan_parquet(...).rheon.fit_predict(...)`, 4M rows, ran at
 11.5M rows a second on all cores (11.3M on 8), best of 3, at a load of
 about 6 (PERFORMANCE.md, "A query against the eager bank"). "Tens of thousands of tests" became "nearly twenty
