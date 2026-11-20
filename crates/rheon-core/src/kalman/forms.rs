@@ -172,16 +172,25 @@ impl Kalman {
         Ok(self)
     }
 
-    fn factor(&self) -> bool {
+    pub(super) fn factor(&self) -> bool {
         self.form == CovarianceForm::SquareRoot
     }
 
     /// Whether `P_ii` of covariance `pi` is not 0: the entry, or on the
     /// factor `C`'s row `i` (`L`'s column), read until an entry is not 0.
-    pub(super) fn sized(&self, pi: usize, i: usize) -> bool {
+    ///
+    /// `FACTOR` is the form ([`Kalman::factor`]), read by the caller once
+    /// for its loop over the slots, and once a row by
+    /// [`OnlineModel::step_into`], which steps the row in that form: a
+    /// branch on the form inside each loop over the slots cost the
+    /// covariance form 7% of its row in instructions (task 281 (3)'s
+    /// budget), so the covariance form's path is the one it had before the
+    /// factor was added.
+    #[inline(always)]
+    pub(super) fn sized<const FACTOR: bool>(&self, pi: usize, i: usize) -> bool {
         let k = self.cfg.k_total();
         let p = &self.p[pi];
-        if self.factor() {
+        if FACTOR {
             (i..k).any(|r| p[r * k + i] != 0.0)
         } else {
             p[i * k + i] != 0.0
@@ -199,8 +208,8 @@ impl Kalman {
 
     /// `pz = P z` for covariance `pi` against `zs`, and `z' P z`: the
     /// factor's `f = Cᵀ z` kept for its update.
-    pub(super) fn read_pz(&mut self, pi: usize) -> f64 {
-        if self.factor() {
+    pub(super) fn read_pz<const FACTOR: bool>(&mut self, pi: usize) -> f64 {
+        if FACTOR {
             factor_f(&self.p[pi], &self.zs, &mut self.fbuf);
             factor_cf(&self.p[pi], &self.fbuf, &mut self.pz);
             return self.fbuf.iter().map(|v| v * v).sum();
@@ -212,10 +221,11 @@ impl Kalman {
     /// Covariance `pi` takes the row whose `pz`, gain and `s` the step
     /// holds, `r = R / w`: the diffuse intercept's exact step where it is
     /// `open`, else the form's update.
-    pub(super) fn take(&mut self, pi: usize, open: bool, s: f64, r: f64) {
+    #[inline(always)]
+    pub(super) fn take<const FACTOR: bool>(&mut self, pi: usize, open: bool, s: f64, r: f64) {
         let k = self.cfg.k_total();
-        match (self.form, open) {
-            (CovarianceForm::SquareRoot, true) => {
+        match (FACTOR, open) {
+            (true, true) => {
                 // `C`'s row 0, `L`'s column 0.
                 let l = &mut self.p[pi];
                 l[0] = r.sqrt();
@@ -224,22 +234,26 @@ impl Kalman {
                 }
             }
             (_, true) => super::diffuse_step(&mut self.p[pi], &self.pz, s),
-            (CovarianceForm::Covariance, false) => {
-                super::take_the_row(&mut self.p[pi], &self.gain, &self.pz)
-            }
-            (CovarianceForm::SquareRoot, false) => {
-                carlson(&mut self.p[pi], &self.fbuf, r, &mut self.vbuf)
-            }
+            (false, false) => super::take_the_row(&mut self.p[pi], &self.gain, &self.pz),
+            (true, false) => carlson(&mut self.p[pi], &self.fbuf, r, &mut self.vbuf),
         }
     }
 
     /// `P += v x xᵀ`-style writes of one slot `i`: `P_ii += d`, and with the
     /// intercept's coupling `cc`, `P_00 += cc² v` and `P_0i += −cc v / a`
     /// (`d = v / a²`), entry by entry; on the factor, the rank-one update
-    /// by `x = sqrt(v) (e_i / a − cc e_0)`.
-    pub(super) fn add_slot(&mut self, pi: usize, i: usize, v: f64, a: f64, cc: Option<f64>) {
+    /// by `x = sqrt(v) (e_i / a − cc e_0)`. In the form `FACTOR` names,
+    /// which its caller has read once (`Kalman::sized`).
+    pub(super) fn add_slot_as<const FACTOR: bool>(
+        &mut self,
+        pi: usize,
+        i: usize,
+        v: f64,
+        a: f64,
+        cc: Option<f64>,
+    ) {
         let k = self.cfg.k_total();
-        if self.factor() {
+        if FACTOR {
             let mut x = std::mem::take(&mut self.xbuf);
             x.clear();
             x.resize(k, 0.0);
@@ -268,7 +282,7 @@ impl Kalman {
         let off = usize::from(self.cfg.fit_intercept);
         let mut q = std::mem::take(&mut self.qbuf);
         self.q_held_into(sigma2, &mut q);
-        let open = self.open(pi);
+        let open = self.open::<true>(pi);
         for (qi, g) in q.iter_mut().zip(self.gap_factors.of(&self.cfg, d)) {
             *qi *= g;
         }
@@ -278,20 +292,20 @@ impl Kalman {
             }
             if !self.cfg.standardize {
                 if !(open && i < off) {
-                    self.add_slot(pi, i, qd, 1.0, None);
+                    self.add_slot_as::<true>(pi, i, qd, 1.0, None);
                 }
                 continue;
             }
-            if !self.sized(pi, i) {
+            if !self.sized::<true>(pi, i) {
                 continue;
             }
             if i < off {
-                self.add_slot(pi, i, qd, 1.0, None);
+                self.add_slot_as::<true>(pi, i, qd, 1.0, None);
                 continue;
             }
             let a = self.map_a[i];
             let cc = (off == 1).then(|| self.map_c[i] / a);
-            self.add_slot(pi, i, qd, a, cc);
+            self.add_slot_as::<true>(pi, i, qd, a, cc);
         }
         self.qbuf = q;
     }

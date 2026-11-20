@@ -228,7 +228,7 @@ fn the_map_across_the_slots_is_the_map_a_slot_at_a_time() {
         let mut both = false;
         for (i, (x, y, d)) in stream(250, false, 21).iter().enumerate() {
             m.step(x, &[Some(*y)], *d, 1.0);
-            m.mark_live();
+            m.mark_live::<false>();
             let usable: Vec<bool> = (off..k).map(|j| m.current_scale(j).1).collect();
             both |= usable.iter().any(|u| *u) && usable.iter().any(|u| !*u);
             for live in [m.live.clone(), vec![true; k], vec![false; k]] {

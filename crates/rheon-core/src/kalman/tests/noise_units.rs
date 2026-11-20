@@ -306,11 +306,11 @@ fn rows_that_observe_nothing_leave_the_intercept_diffuse() {
         };
         let pred = k.step(x, &[y], if i == 0 { 0.0 } else { 1.0 }, w).pred;
         assert!(pred[0].is_nan());
-        assert!(k.open(0), "row {i}");
+        assert!(k.open::<false>(0), "row {i}");
     }
     let (x, y, w) = data[4];
     k.step(&x, &[Some(y)], 1.0, w);
-    assert!(!k.open(0));
+    assert!(!k.open::<false>(0));
     assert_eq!(k.beta[0][0], y, "the intercept took the innovation whole");
     let (x, _, _) = data[5];
     assert_eq!(k.predict(&x, 1.0).pred[0], y);
@@ -432,7 +432,7 @@ fn a_gap_before_the_first_observed_row_leaves_the_intercept_diffuse() {
     for _ in 0..3 {
         m.step(&[0.5, 0.5], &[Some(9.0)], 2.0, 0.0);
     }
-    assert!(m.open(0));
+    assert!(m.open::<false>(0));
     let (x, y, w) = ([0.7, -1.3], 1e6 + 4.25, 2.0);
     m.step(&x, &[Some(y)], 2.0, w);
     assert_eq!(m.beta[0][0], y, "the level, whole");

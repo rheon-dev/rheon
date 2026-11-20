@@ -1084,7 +1084,7 @@ fn the_re_map_is_refused_whole_past_its_limit_or_a_number() {
             refused,
             "{what}: the case is what it says"
         );
-        m.mark_live();
+        m.mark_live::<false>();
         m.follow_the_moments();
         if refused {
             assert_eq!(m.beta[0], b, "{what}: b kept");
