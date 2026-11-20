@@ -16,8 +16,8 @@ which the set of columns with a coefficient other than 0 changes.
 
 These steps need the library:
 
-- polars-online installed with numpy, an optional extra, which
-  `pip install "polars-online[numpy]"` adds. Each recipe builds its own
+- rheon installed with Polars and numpy, an optional extra, which
+  `pip install "rheon[polars,numpy]"` adds. Each recipe builds its own
   data and saves it to a parquet file.
 - For the model, the parameters of
   [`rheon.spec.lasso`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.lasso),

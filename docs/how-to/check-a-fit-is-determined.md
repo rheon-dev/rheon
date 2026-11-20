@@ -11,8 +11,8 @@ the columns involved, and refit without one of them.
 
 These steps need the library and a Gram:
 
-- polars-online installed with numpy, an optional extra, which
-  `pip install "polars-online[numpy]"` adds. The recipe generates its own
+- rheon installed with Polars and numpy, an optional extra, which
+  `pip install "rheon[polars,numpy]"` adds. The recipe generates its own
   data.
 - A Gram, as `bank.gram(name)` returns it for an `ewridge`, `lasso` or
   `ew_cov` spec, or one pooled from blocks ([Pool

@@ -10,7 +10,7 @@ rows. It sets `init`, which places the centers at the start, and
 
 These steps need the library, a stream and a few choices:
 
-- polars-online installed, and numpy to make the example's data.
+- rheon installed with Polars, and numpy to make the example's data.
 - A stream of numeric
   [feature](../GLOSSARY.md#the-model-bank-and-what-it-reads) columns,
   saved as a file in clock order, to read back with `pl.scan_parquet`.

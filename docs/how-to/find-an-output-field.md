@@ -22,7 +22,7 @@ columns silently** ([What is stable](../VERSIONS.md#what-is-stable)).
 
 These steps need the library and a spec:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The example reads
   `df`, a frame of 400 rows whose target `y` is `1 + 2·x0 − x1` plus
   noise.

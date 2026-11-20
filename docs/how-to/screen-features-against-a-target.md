@@ -11,7 +11,7 @@ the relations a correlation cannot see.
 
 These steps need the library and the columns to screen:
 
-- polars-online installed, and numpy to make the example's data.
+- rheon installed with Polars, and numpy to make the example's data.
 - A stream whose columns hold the
   [features](../GLOSSARY.md#the-model-bank-and-what-it-reads) and one or
   more [targets](../GLOSSARY.md#the-model-bank-and-what-it-reads). A

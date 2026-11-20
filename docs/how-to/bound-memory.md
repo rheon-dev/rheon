@@ -22,7 +22,7 @@ regression holds in its state for its refit.
 
 These steps need the library and a run that reads a file:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   `ticks.parquet`, 400 rows that Example data writes.
 - A run that reads a parquet file with `pl.scan_parquet`, which reads the

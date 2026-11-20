@@ -63,9 +63,7 @@ DEFERRED = (
     "CLAUDE.md",
 )
 
-#: The guides. Their links, namespace, variables and warnings are renamed and
-#: held; the prose that names the project `polars-online` is not yet, so the
-#: two rules of the package's and the project's names do not read them.
+#: The guides, held to every rule but the one of `po.` in messages.
 GUIDES = (
     "docs/*.md",
     "docs/how-to/*",
@@ -119,15 +117,15 @@ RELEASE_BEFORE_2 = (
     "tests/test_old_names.py",
 )
 
-#: The file formats keep the magic bytes 1.x wrote, so every 1.x state loads
-#: under 2.0 with no loader: these files write, read or corrupt them.
-MAGIC = (
-    "crates/rheon-polars/src/bank.rs",
-    "crates/rheon-polars/src/refresh.rs",
-    "crates/rheon-polars/src/windows_frame.rs",
-    "crates/rheon-polars/tests/state_portability.rs",
-    "tests/test_production_hardening.py",
-    "tests/test_windows.py",
+
+#: The guides whose sentences are about the time before 2.0: they name a
+#: release by its project, quote a reader's words of the day, or give the
+#: version a measurement was made on.
+PAST = (
+    "docs/WRITING.md",  # the user's own wording, quoted
+    "docs/VALIDATION.md",  # the release the defaults were measured on
+    "docs/contributing/cut-a-release.md",  # the last release before 2.0, by its project
+    "docs/how-to/reproduce-an-earlier-versions-fit.md",  # installs 1.2.0
 )
 
 #: Not renamed yet: each still names the old project or links its old home.
@@ -166,16 +164,19 @@ RULES = (
     Rule(
         "the package is imported as `rheon`; `polars_online` names only a release before 2.0",
         re.compile(r"polars_online"),
-        CODE + PROSE,
-        allowed=RELEASE_BEFORE_2,
+        CODE + PROSE + GUIDES,
+        allowed=(*RELEASE_BEFORE_2, *NAMES_THE_OLD, *PAST),
     ),
     Rule(
         "the project is `rheon`; `polars-online` names only a release before 2.0",
-        re.compile(r"polars-online"),
-        CODE + PROSE,
+        # Not the magic bytes the file formats keep from 1.x, so that every
+        # 1.x state loads under 2.0 with no loader.
+        re.compile(r"polars-online(?!-bank| windows| refresh_time| state hand-off)"),
+        CODE + PROSE + GUIDES,
         allowed=(
             *RELEASE_BEFORE_2,
-            *MAGIC,
+            *NAMES_THE_OLD,
+            *PAST,
             *NOT_YET,
             # The note under the title says what the package was called.
             "README.md",
@@ -330,6 +331,8 @@ def test_the_scan_sees_what_it_is_meant_to():
         "rheon-polars",
         "the online-learning kernel",
         "github.com/rheon-dev/rheon",
+        'b"polars-online-bank"',
+        'b"\\xb5polars-online windows"',
     ):
         assert not any(r.pattern.search(s) for r in RULES), s
     files = set(tracked_and_new())

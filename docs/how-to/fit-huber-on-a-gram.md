@@ -11,8 +11,8 @@ against that one factor.
 
 These steps need the library, numpy and the stream as a file:
 
-- polars-online installed with numpy, an optional extra, which
-  `pip install "polars-online[numpy]"` adds. The recipe builds its own
+- rheon installed with Polars and numpy, an optional extra, which
+  `pip install "rheon[polars,numpy]"` adds. The recipe builds its own
   data.
 - The rows in a file a Polars query can read in each pass, such as
   parquet. Each pass reads them twice: once for the scale, once for the

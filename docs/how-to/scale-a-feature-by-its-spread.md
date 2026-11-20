@@ -10,7 +10,7 @@ against its own recent mean and spread.
 
 These steps need the library and a stream with a clock:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The example reads
   `ticks.parquet`, which holds the README's `df`: 400 rows on the clock
   `t`, which steps by 1 a row. Its `y` is `1 + 2·x0 − x1` plus noise.

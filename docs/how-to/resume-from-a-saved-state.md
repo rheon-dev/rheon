@@ -9,7 +9,7 @@ or from the command line.
 
 Each way to resume needs a saved state and the rows that follow it:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The Python examples
   read `df`, the stream so far, and `today`, the 400 rows that follow it on
   the clock `t`. `lf` and `later` are the same rows, saved as
@@ -25,7 +25,7 @@ Each way to resume needs a saved state and the rows that follow it:
   learned in that group. Input that starts at or before that value has its
   own section, [Resume on input that overlaps the
   state](#resume-on-input-that-overlaps-the-state).
-- For the command line: the `polars-online` program, whose binaries are
+- For the command line: the `rheon` program, whose binaries are
   attached to each GitHub release, and the TOML file `job.toml` that [Run
   a bank over a file](run-a-bank-from-the-command-line.md#run-a-bank-over-a-file)
   has you write.
@@ -258,7 +258,7 @@ saved state to run.state
 A [saved state](../GLOSSARY.md#saving-and-serving) is everything a
 [model bank](../GLOSSARY.md#the-model-bank-and-what-it-reads) has learned,
 written to a file. A bank that resumes from a state this version of
-polars-online saved learns each new row as one unbroken run over the old
+rheon saved learns each new row as one unbroken run over the old
 rows and the new would have learned it. So it gives the same predictions
 as that run: to the bit on the operating system that saved it, and on
 another within `1e-12 × (1 + |value|)`. A state saved by an earlier 1.x
@@ -288,8 +288,8 @@ names what is wrong with the file:**
 | does not exist yet | `FileNotFoundError` | on a first run, build the bank from its specs with `rp.ModelBank(specs)`; otherwise, check the path |
 | is not a bank, or holds different specs from the `specs=` given | `ValueError` | check the path, and pass the specs the state was saved with |
 | holds a state that contradicts its own spec | `ValueError` | refit the bank from its input |
-| was written under a newer state schema or file format than this version reads | `ValueError` | upgrade polars-online to the version that wrote it, or a later one |
-| was saved by 0.13.0 or an earlier release | `ValueError`, saying an older version of polars-online wrote it | refit the bank from its input. `rheon.schema_version()` gives this version's schema |
+| was written under a newer state schema or file format than this version reads | `ValueError` | upgrade rheon to the version that wrote it, or a later one |
+| was saved by 0.13.0 or an earlier release | `ValueError`, saying a version of rheon older than this one wrote it | refit the bank from its input. `rheon.schema_version()` gives this version's schema |
 
 This code makes three loads that fail. It uses `df` and `ticks.parquet`
 from [Example data](../EXAMPLE-DATA.md):

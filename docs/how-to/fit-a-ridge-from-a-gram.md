@@ -11,8 +11,8 @@ and read each coefficient's standard error and t.
 
 These steps need the library and a Gram per block:
 
-- polars-online installed with numpy, an optional extra, which
-  `pip install "polars-online[numpy]"` adds. The recipe generates its own
+- rheon installed with Polars and numpy, an optional extra, which
+  `pip install "rheon[polars,numpy]"` adds. The recipe generates its own
   data: 40 weeks of 200 features, of which six matter.
 - A Gram per block from one pass, as [Keep a Gram per block in one
   pass](fit-weekly-grams-in-one-pass.md) makes them.

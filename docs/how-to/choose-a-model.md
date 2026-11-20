@@ -11,7 +11,7 @@ question.
 
 These steps need the library and a question to put to a stream:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   `df`, 400 rows a minute apart. In `df`, `y` is `1 + 2·x0 − x1` plus
   noise, and `ret`'s slope on `signal_a` is 0.8 on rows 0 to 199 and −0.8
@@ -23,7 +23,7 @@ These steps need the library and a question to put to a stream:
 ## Choose the family, then the model
 
 **Choose the family by the question you are asking, then the model by what
-your data need.** polars-online's models fall into four families, and each
+your data need.** rheon's models fall into four families, and each
 family answers one kind of question about a stream. Each model has an
 entry in [MODELS.md](../MODELS.md): when to reach for it, its update equations,
 its parameters, a recipe on data whose answer is known, and what it is

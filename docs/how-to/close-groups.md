@@ -18,7 +18,7 @@ bank writes out its running sums, a row per half-life and per
 
 These steps need the library and a column whose values name the groups:
 
-- polars-online and numpy installed, and
+- rheon, Polars and numpy installed, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   `df`, a frame of 400 rows with the features `x0` and `x1`.
 - A group column whose groups end in one of two ways: its key only ever

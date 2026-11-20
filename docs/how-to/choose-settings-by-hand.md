@@ -10,7 +10,7 @@ wants to choose one of its grid points with `rp.eval.metrics`, as
 
 These steps need the library and a spec with a grid:
 
-- polars-online and numpy installed. The recipe generates its own data.
+- rheon, Polars and numpy installed. The recipe generates its own data.
 - A [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads) with a
   [grid](../GLOSSARY.md#grids), such as several values of `half_life`.
   [Choose a model's settings from the stream's own

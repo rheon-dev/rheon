@@ -1,7 +1,7 @@
 <!-- kind: how-to -->
 # Add a model
 
-This how-to is for a contributor adding a model kind to polars-online: it
+This how-to is for a contributor adding a model kind to rheon: it
 lists every layer a new model touches, from the recursion in `rheon-core`
 to its line in the feature index, with the test that fails if you skip
 each step. It assumes you know the library's words (spec, [model

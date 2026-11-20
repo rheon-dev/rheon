@@ -18,7 +18,7 @@ carry a promise](../explanation/polars-interfaces.md) for why).
 
 These steps need the library and a frame to fit:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The example reads
   `df`, a frame of 400 rows on the clock `t`, and `today`, the 400 rows
   that follow it.

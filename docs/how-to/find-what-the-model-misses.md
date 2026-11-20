@@ -11,7 +11,7 @@ feature that fixes it.
 
 These steps need the library and a linear model:
 
-- polars-online installed, and numpy to make the example's data.
+- rheon installed with Polars, and numpy to make the example's data.
 - A [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads) of one of the
   ten linear models, such as `ewridge`, which take `emit_specification`
   and `emit_autocorr`. [What each costs, and which models take

@@ -15,8 +15,8 @@ stable](../VERSIONS.md#what-is-stable)).
 
 These steps need the library, numpy and a matrix:
 
-- polars-online installed with numpy, an optional extra, which
-  `pip install "polars-online[numpy]"` adds. The example builds its own
+- rheon installed with Polars and numpy, an optional extra, which
+  `pip install "rheon[polars,numpy]"` adds. The example builds its own
   matrix.
 - A correlation matrix, given as a numpy array, a dict that
   `bank.gram()` returns, or a [closed

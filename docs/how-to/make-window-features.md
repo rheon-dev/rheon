@@ -14,7 +14,7 @@ window operators of `rp.ops` and `.rheon.with_windows`.
 These steps need the library, a stream with a clock, and rows in clock
 order:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   `trades`, a stream of quotes with trades between them, saved as
   `trades.parquet`. Its `mid` is on every row, and `side`, `quantity` and

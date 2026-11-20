@@ -14,8 +14,8 @@ rows](../GRAM.md#how-a-gram-stands-in-for-the-rows) explains why.
 
 These steps need the library, numpy and a column that names each block:
 
-- polars-online installed with numpy, an optional extra, which
-  `pip install "polars-online[numpy]"` adds. `bank.gram(spec)` returns
+- rheon installed with Polars and numpy, an optional extra, which
+  `pip install "rheon[polars,numpy]"` adds. `bank.gram(spec)` returns
   numpy arrays, and `rheon.gram` fits from them.
 - [Example data](../EXAMPLE-DATA.md) built. The
   example reads `lf`, a

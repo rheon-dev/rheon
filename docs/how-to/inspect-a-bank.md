@@ -15,7 +15,7 @@ reports each group as it stood after the last row it learned from.
 
 These steps need the library and a bank that has learned from rows:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   `lf`, a [query](../GLOSSARY.md#the-model-bank-and-what-it-reads) over
   `ticks.parquet`: 400 rows in which four stocks, `b0` to `b3` in the

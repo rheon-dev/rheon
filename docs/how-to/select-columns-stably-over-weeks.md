@@ -13,8 +13,8 @@ run.
 
 These steps need the library and a Gram per week:
 
-- polars-online installed with numpy, an optional extra, which
-  `pip install "polars-online[numpy]"` adds. The recipes generate their
+- rheon installed with Polars and numpy, an optional extra, which
+  `pip install "rheon[polars,numpy]"` adds. The recipes generate their
   own data: 40 weeks of 200 features in families of five, of which six
   matter.
 - A Gram per week from one pass, as [Keep a Gram per block in one

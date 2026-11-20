@@ -1,7 +1,7 @@
 <!-- kind: explanation -->
 # How the library is tested
 
-This page explains, for anyone deciding whether to trust polars-online's
+This page explains, for anyone deciding whether to trust rheon's
 numbers, how each of its guarantees is held by a test, and where the tests
 run.
 

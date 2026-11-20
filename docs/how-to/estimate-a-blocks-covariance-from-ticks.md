@@ -12,7 +12,7 @@ that noise, and to series not observed on every row.
 
 These steps need the library and the prices:
 
-- polars-online installed, and numpy to make the example's data.
+- rheon installed with Polars, and numpy to make the example's data.
 - A stream of prices, one column per series, in clock order, and a column
   that names each row's block, such as the trading day. The block column
   is the spec's [group](../GLOSSARY.md#the-model-bank-and-what-it-reads),

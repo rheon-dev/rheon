@@ -17,7 +17,7 @@ which here becomes a kernel in the feature.
 These steps need the library, numpy, and a stream with the feature to fit
 along:
 
-- polars-online installed, with numpy, which the example uses to make its
+- rheon installed with Polars, with numpy, which the example uses to make its
   data and to fit the straight line it compares against.
 - A numeric column to fit along. The rows must fit in memory to be sorted
   by it: a sort holds every row while it sorts.

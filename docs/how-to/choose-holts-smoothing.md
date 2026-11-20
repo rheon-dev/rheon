@@ -11,7 +11,7 @@ prediction.
 
 These steps need the library:
 
-- polars-online installed, with numpy for the recipes, which build their
+- rheon installed with Polars, with numpy for the recipes, which build their
   own data and save it to a parquet file.
 - Optionally a [clock](../GLOSSARY.md#time) column, with the `gap_cap` a
   clock requires. Without one, each row is one clock unit. The recipes'

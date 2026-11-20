@@ -2,7 +2,7 @@
 # Change the public API
 
 This how-to is for a contributor who adds, renames or removes a public
-name of polars-online, or changes a default, and must see the change as a
+name of rheon, or changes a default, and must see the change as a
 diff and ship it in the right kind of release.
 
 **A change to the public API can break a user with no error at all.**

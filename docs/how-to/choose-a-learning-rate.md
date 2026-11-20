@@ -11,7 +11,7 @@ that caps `pa`'s step.
 
 These steps need the library:
 
-- polars-online installed, with numpy for the recipes. Each recipe builds
+- rheon installed with Polars, with numpy for the recipes. Each recipe builds
   its own data and saves it to a parquet file.
 - The parameters of
   [`rheon.spec.sgd`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.sgd),

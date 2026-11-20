@@ -11,8 +11,8 @@ triangle, or both.
 
 These steps need the library, numpy and a pass that leaves Grams:
 
-- polars-online installed with numpy, an optional extra, which
-  `pip install "polars-online[numpy]"` adds. The recipe builds its own
+- rheon installed with Polars and numpy, an optional extra, which
+  `pip install "rheon[polars,numpy]"` adds. The recipe builds its own
   data.
 - A [model bank](../GLOSSARY.md#the-model-bank-and-what-it-reads) whose `ewridge`, `lasso` or `ew_cov` spec keeps a
   Gram per block

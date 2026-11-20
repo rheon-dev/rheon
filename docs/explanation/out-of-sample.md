@@ -5,7 +5,7 @@ This page explains, for anyone who reads a model bank's predictions or
 diagnostics, why each one was made before the model learned its row, and
 what that guarantees about them.
 
-**Every prediction polars-online writes as it learns, and every diagnostic
+**Every prediction rheon writes as it learns, and every diagnostic
 it reads from the residuals, is out-of-sample.** A model predicts each row
 from what it has learned from the rows before it, and only then learns
 from the row. So no row's target reaches its own prediction. A

@@ -25,7 +25,7 @@ elsewhere:
 
 [Resume from a saved state](../how-to/resume-from-a-saved-state.md) gives
 the steps, from Python and from the [command
-line](../GLOSSARY.md#saving-and-serving) (the `polars-online` program), and
+line](../GLOSSARY.md#saving-and-serving) (the `rheon` program), and
 [Saved states](../STATE-WORKFLOW.md) says what each step guarantees.
 
 ## A save is a chunk's end

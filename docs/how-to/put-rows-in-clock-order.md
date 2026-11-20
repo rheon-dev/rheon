@@ -9,7 +9,7 @@ do when the bank warns about a query's row order or refuses a chunk.
 
 These steps need the library and a stream with a clock:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   `df`, a frame of 400 rows with a clock `t`, and `lf`, a query over the
   same rows saved as `ticks.parquet`.

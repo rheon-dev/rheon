@@ -12,8 +12,8 @@ both back with `rheon.gram`, and with numpy alone.
 These steps need the library, numpy and a column that names each block,
 the rows whose Gram is kept apart (here a week):
 
-- polars-online installed with numpy, an optional extra, which
-  `pip install "polars-online[numpy]"` adds. The recipe builds its own
+- rheon installed with Polars and numpy, an optional extra, which
+  `pip install "rheon[polars,numpy]"` adds. The recipe builds its own
   data.
 - A timestamp to make each row's week from, in the query. The week must be
   an integer, text or categorical column for the

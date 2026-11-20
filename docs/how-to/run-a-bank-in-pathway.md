@@ -9,7 +9,7 @@ predict and learn inside it.
 
 These steps need the library and, for a real pipeline, Pathway:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The example reads
   `df`, 400 rows in clock order.
 - For a pipeline, Pathway, installed under its own license, and an input

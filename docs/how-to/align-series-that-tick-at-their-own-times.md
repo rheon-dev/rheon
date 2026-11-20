@@ -13,7 +13,7 @@ grid fails and what the refresh grid recovers.
 
 These steps need the library and the ticks:
 
-- polars-online installed, and numpy to make the example's data.
+- rheon installed with Polars, and numpy to make the example's data.
 - The ticks in long form, one row per tick: a column naming the series,
   a [clock](../GLOSSARY.md#time) and the observed value. A wide frame
   becomes long with Polars' `unpivot`, its `index` the clock column, as

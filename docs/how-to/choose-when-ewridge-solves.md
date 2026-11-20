@@ -10,7 +10,7 @@ schedule leaves the fit.
 
 These steps need the library and an `ewridge` spec:
 
-- polars-online and numpy installed. Each recipe generates its own data.
+- rheon, Polars and numpy installed. Each recipe generates its own data.
 - An `ewridge` [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads)
   with a [clock](../GLOSSARY.md#time) and a half-life, or with
   `half_life=float("inf")` or `lam`.

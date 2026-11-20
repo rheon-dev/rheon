@@ -9,7 +9,7 @@ statement's result without first writing it to a file.
 
 These steps need the library, a database client and a table to read:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The example reads
   the file `ticks.parquet`.
 - py-polars 1.43.0 or later, whose `pl.scan_arrow_c_stream` reads the

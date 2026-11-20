@@ -26,7 +26,7 @@ own:
 ## The workflow in four steps
 
 A state file is the same file, byte for byte, whichever wrote it: a query,
-the `polars-online` command line and a `ModelBank` fed the same chunks
+the `rheon` command line and a `ModelBank` fed the same chunks
 write identical bytes.
 A query and an eager frame take it as `load_state` and `save_state`, and
 the TOML under the same two keys. The command line spells them `--load-state`
@@ -42,8 +42,8 @@ Each guarantee rests on a measured fact about how Polars runs a query
 |---|---|---|---|
 | **1. Fit, and keep the state** | `lf.rheon.fit_predict([spec], save_state="ridge.state")` | `save_state` in the TOML, or `--save-state` | the state is written whole, once the bank has been fed its last row, and two runs of the query write the same bytes |
 | **2. Inspect it** | Loading the file gives the `ModelBank` back: `rp.ModelBank.load(path)`, with `coef()` (the coefficients), `last_row()`, `summary()` and `describe()` (what it was fed), `gram()` and the rest. `save_bytes()` / `load_bytes()` are the same state as bytes, for a store that is not a file | | none of them needs a row of data |
-| **3. Serve from it, learning nothing** | `lf.rheon.predict("ridge.state")` | `polars-online --load-state p --predict`, which refuses `--save-state` | every row is predicted from the state as it stands, and the state never moves, so the same rows get the same predictions twice, on any thread count |
-| **4. Learn on from it** | `lf.rheon.fit_predict(load_state="ridge.state", save_state="ridge.state")` | `polars-online --load-state p --save-state p` | it resumes at the next row and replaces the file. The specs come from the file, and a `load_state` that is not a bank this build can read, or whose specs disagree with the ones passed, is a `ValueError` before any row is read. Input that overlaps the state is refused by default; [`skip_learned`](how-to/resume-from-a-saved-state.md#resume-on-input-that-overlaps-the-state) drops the overlap |
+| **3. Serve from it, learning nothing** | `lf.rheon.predict("ridge.state")` | `rheon --load-state p --predict`, which refuses `--save-state` | every row is predicted from the state as it stands, and the state never moves, so the same rows get the same predictions twice, on any thread count |
+| **4. Learn on from it** | `lf.rheon.fit_predict(load_state="ridge.state", save_state="ridge.state")` | `rheon --load-state p --save-state p` | it resumes at the next row and replaces the file. The specs come from the file, and a `load_state` that is not a bank this build can read, or whose specs disagree with the ones passed, is a `ValueError` before any row is read. Input that overlaps the state is refused by default; [`skip_learned`](how-to/resume-from-a-saved-state.md#resume-on-input-that-overlaps-the-state) drops the overlap |
 
 ### What a saved bank carries
 
@@ -100,7 +100,7 @@ window: largest difference from one run 0.0
 **The ways of running a bank differ in one case: a fit that keeps only the
 state, under a formula target.** `lf.rheon.fit_predict(save_state=...)` keeps
 predictions, so it refuses an embargo shorter than the target's window.
-`ModelBank.fit` and `polars-online --no-output` keep none, so they take any
+`ModelBank.fit` and `rheon --no-output` keep none, so they take any
 embargo.
 
 **A build refuses a bank file whose schema it does not read.** From 1.0,
@@ -177,7 +177,7 @@ holds the checks:
 | every run of a query ends in the same state, so two runs write the same bytes. A query that uses the bank twice runs it twice when it writes a state, and with nothing to write Polars may run it once | a query that reads another query twice, as `lf.join(lf)`, `pl.concat([lf, lf])` or `pl.collect_all` over two `sink_parquet` calls (each runs the query and writes its result to a file) do, runs its source twice, at the same time on two threads | each of those three wrote the file twice, on two threads, and the file was byte-identical to the one a `ModelBank` fed the same rows saves |
 | `load_state` and `predict(path)` are read when the query is built, so a query run twice gives the same result | the two runs above overlap, so a state read at run time could be read while the other run writes it | a query built against a state file, run again after the file was overwritten, gave the same frame |
 | the bank is fed exactly the rows the query pulled | a `head(n)` reaches the source as a row count, and the source stops there; a `sort().head(n)` does not, so the bank reads every row | `head(613)` wrote the state of a bank fed the first 613 rows, byte for byte, and `sort().head(5)` the whole stream's |
-| `predict` refuses `save_state`, as `polars-online --predict` does, since it learns nothing | | `predict(save_state=...)` is refused |
+| `predict` refuses `save_state`, as `rheon --predict` does, since it learns nothing | | `predict(save_state=...)` is refused |
 | a failure after the bank still writes the state on py-polars 1.x, and on 2.0 only for a stream short enough to finish first: [the one gap](explanation/state-and-resuming.md#the-one-gap-a-failure-after-the-bank) | Polars runs a source to the end of its input before it reports the error of a step after it | a cast that failed after the bank left the file, byte-identical to the whole stream's state |
 | building a query writes nothing | building or inspecting a query, by `collect_schema()` or `explain()`, runs no source | a source's run count stayed at 0 |
 

@@ -20,7 +20,7 @@ why). Three ways hold each row back until its target would have arrived:
 
 These steps need the library and a stream with a clock:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   `df`, a frame of 400 rows a minute apart on the clock `ts`, and `lf`, a
   [query](../GLOSSARY.md#the-model-bank-and-what-it-reads) over the same

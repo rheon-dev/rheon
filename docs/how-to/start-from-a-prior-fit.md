@@ -11,7 +11,7 @@ fades as the rows arrive or lasts for good.
 These steps need the library, an `ewridge` spec and the coefficients to
 start from:
 
-- polars-online and numpy installed. The recipe generates its own data.
+- rheon, Polars and numpy installed. The recipe generates its own data.
 - An `ewridge` [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads).
   For a prior that fades, a spec of one ridge value and one feature set:
   `ridge_scale="sum"` is refused beside a grid of `ridge` values or

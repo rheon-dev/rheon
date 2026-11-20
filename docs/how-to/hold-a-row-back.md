@@ -9,7 +9,7 @@ not learn from.
 
 These steps need the library and a stream:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   `df`, a frame of 400 rows on the clock `t`, and the file `ticks.parquet`,
   the same rows on disk. Its column `venue` takes turns between `"X"` and

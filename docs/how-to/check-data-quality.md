@@ -10,7 +10,7 @@ acts on what it finds.
 
 These steps need the library and a stream to check:
 
-- polars-online installed. The first recipe builds its own data, and the
+- rheon installed with Polars. The first recipe builds its own data, and the
   recipe in [Check that it worked](#check-that-it-worked) reuses it. The
   recipes in [Find a duplicated column](#find-a-duplicated-column) and
   [Read every group as one stream](#read-every-group-as-one-stream) use
@@ -24,7 +24,7 @@ These steps need the library and a stream to check:
 - numpy, which the recipes use to make their data, and which the two
   checks that read a [Gram](../GLOSSARY.md#fitting-a-model), `collinear`
   and `leakage`, need. Install it with
-  `pip install polars-online[numpy]`. Without it, `check()` gives a
+  `pip install "rheon[polars,numpy]"`. Without it, `check()` gives a
   [`not_checked`](../DATA-QUALITY.md#not_checked) finding in their place.
 
 ## Run the check after a pass

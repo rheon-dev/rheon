@@ -1,7 +1,7 @@
 <!-- kind: tutorial -->
 # Fit a model bank over parquet files in a query
 
-This tutorial is for anyone new to polars-online who has parquet files too
+This tutorial is for anyone new to rheon who has parquet files too
 large to hold in memory and wants to fit a model over them. You fit a
 regression over two million rows in eight parquet files, in a Polars
 [query](../GLOSSARY.md#the-model-bank-and-what-it-reads) (a chain of steps
@@ -10,7 +10,7 @@ predictions to a new parquet file, and in that file you find the
 coefficients you planted in the rows.
 
 To run the code, install the library and numpy with
-`pip install "polars-online[numpy]"`. Run each step's code in the same
+`pip install "rheon[polars,numpy]"`. Run each step's code in the same
 Python process, in a directory where it may write files.
 
 A [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads) describes one

@@ -11,7 +11,7 @@ gives evidence that can be read at any row.
 
 These steps need the library and two models' predictions on the same rows:
 
-- polars-online installed, and numpy to make the examples' data.
+- rheon installed with Polars, and numpy to make the examples' data.
 - Two [specs](../GLOSSARY.md#the-model-bank-and-what-it-reads) fitted in
   the same [bank](../GLOSSARY.md#the-model-bank-and-what-it-reads), so
   their output columns sit side by side on each row. The tests read each

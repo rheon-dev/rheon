@@ -2,7 +2,7 @@
 # Reproduce an earlier version's fit
 
 This how-to is for anyone who needs the numbers an earlier release of
-polars-online gave for a spec, such as to compare a fit made before an
+rheon gave for a spec, such as to compare a fit made before an
 upgrade with one made after it.
 
 Most changes to a model's numbers between releases have no setting that
@@ -19,7 +19,7 @@ rows under the settings on this page.
 
 These steps need the earlier release's number and the spec it ran:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The example reads
   `ticks.parquet`, 400 rows that Example data writes.
 - The release whose numbers you want, such as 1.2.0, and the
@@ -104,7 +104,8 @@ pl.scan_parquet("ticks.parquet").rheon.fit_predict([as_in_1_2_0]).sink_parquet("
 same input.**
 
 1. **Install the earlier release in an environment of its own,** so that
-   it does not replace this one:
+   it does not replace this one. A release before 2.0 is published under
+   the package's earlier name, polars-online:
 
    ```sh
    python -m venv old-env
@@ -115,7 +116,9 @@ same input.**
 2. **Run the same spec there, without the settings it did not have yet.**
    Save this code as `fit_old.py`. It is the spec of the example, with no
    `huber_scale` and no `huber_refit_rows`, and it writes its output to
-   `huber-1.2.0.parquet`:
+   `huber-1.2.0.parquet`. For a release before 2.0, such as 1.2.0, change
+   the import to `import polars_online as rp` and `.rheon` to `.online`,
+   the names that release has:
 
    ```python
    import polars as pl

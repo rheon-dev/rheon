@@ -9,7 +9,7 @@ out-of-sample errors with `rp.eval.grid_search`.
 
 These steps need the library, a stream in a file and a spec:
 
-- polars-online and numpy installed. Each recipe generates its own data.
+- rheon, Polars and numpy installed. Each recipe generates its own data.
 - The stream saved as a file in clock order, to read back with
   `pl.scan_parquet` as a [query](../GLOSSARY.md#the-model-bank-and-what-it-reads)
   (a Polars `LazyFrame`).

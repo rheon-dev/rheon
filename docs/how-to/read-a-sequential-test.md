@@ -10,7 +10,7 @@ however often you look.
 
 These steps need the library and a stream:
 
-- polars-online installed, and numpy to make the example's data. The
+- rheon installed with Polars, and numpy to make the example's data. The
   second recipe reads `lf`, the query over `df`, from
   [Example data](../EXAMPLE-DATA.md).
 - A stream saved as a file, or a frame in memory, with the column whose

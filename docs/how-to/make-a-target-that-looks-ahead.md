@@ -12,7 +12,7 @@ bank.
 These steps need the library, a stream with a clock, and a model that
 regresses its targets:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   `trades.parquet`, a stream of quotes with trades between them. Its `mid`
   is on every row, and `side`, `quantity` and `price` are null on a quote.

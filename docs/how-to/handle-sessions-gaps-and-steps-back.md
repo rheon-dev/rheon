@@ -9,7 +9,7 @@ or replays, and who wants to choose what each of them does to the fit.
 
 These steps need the library and a stream with a clock:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   `df`, a frame of 400 rows a minute apart, on the timestamp column `ts`.
   Its column `session` is `"m"` on the first 200 rows (a morning session)

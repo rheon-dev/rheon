@@ -1,7 +1,7 @@
 <!-- kind: reference -->
 # Glossary
 
-This reference page gives the one word polars-online uses for each concept,
+This reference page gives the one word rheon uses for each concept,
 for anyone who reads or writes the library's docs, docstrings and messages
 (the errors it raises and the warnings it issues). When a page uses a word
 without defining it, look the word up here. When you write a sentence, a
@@ -179,7 +179,7 @@ A bank's state can be saved to a file, and loaded to go on learning or to predic
 | **resume** | load a saved state and go on from the row after the last one the bank, or the `rp.stream` run, read before the state was saved | | yes |
 | **serve** | predict rows from a state without learning from them, with a `predict` call, such as `bank.predict` or a query's `online.predict` | *score rows* (24), meaning predict them without learning | yes |
 | **closed group** | a group whose rows have ended, or under `group_close="session"` one session span of a group, as the parameter `group_close` decides. The bank writes out, as rows, what the group's model has learned, its running sums where it keeps them, and frees what it held for it. `bank.closed_groups()` returns those rows | *finished group* (12) | yes |
-| **command line** | the `polars-online` program, which runs a bank from a TOML file, outside Python, reading a file in and writing one out, in Parquet, Arrow IPC, CSV or NDJSON | *CLI* (31); *runner* (61), a word of the code | yes |
+| **command line** | the `rheon` program, which runs a bank from a TOML file, outside Python, reading a file in and writing one out, in Parquet, Arrow IPC, CSV or NDJSON | *CLI* (31); *runner* (61), a word of the code | yes |
 
 ## Words kept out of user-facing text
 

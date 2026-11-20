@@ -11,7 +11,7 @@ a readiness warning.
 
 These steps need the library and a spec to gate:
 
-- polars-online installed, and numpy to make the examples' data.
+- rheon installed with Polars, and numpy to make the examples' data.
 - A [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads) that takes the
   gates. `min_weight` applies to every model that predicts,
   `min_settled_frac` to a spec with a finite `half_life` or a `lam` below 1,

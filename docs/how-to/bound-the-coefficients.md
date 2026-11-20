@@ -10,7 +10,7 @@ or to a fixed total, as portfolio weights are. It bounds the slopes of
 
 These steps need the library:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The first recipe
   reads `df`, 400 rows whose `signal_a` and `signal_b` are columns of
   noise, and whose `y` is `1 + 2·x0 − x1` plus noise. The second builds

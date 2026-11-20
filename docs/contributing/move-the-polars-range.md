@@ -2,7 +2,7 @@
 # Move the Polars range
 
 This how-to is for a contributor who must change the range of py-polars
-that polars-online declares, `polars>=1.37.0,<3` in `pyproject.toml`: cap
+that rheon declares, `polars>=1.37.0,<3` in `pyproject.toml`: cap
 it when a new Polars breaks the library, move its floor up, or move its
 ceiling up to a new major.
 

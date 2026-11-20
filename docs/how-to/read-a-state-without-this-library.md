@@ -2,7 +2,7 @@
 # Read a state without this library
 
 This how-to is for anyone who wants a program that does not use
-polars-online, in Python or another language, to read what a model bank
+rheon, in Python or another language, to read what a model bank
 has learned.
 
 A [model bank](../GLOSSARY.md#the-model-bank-and-what-it-reads)'s
@@ -15,7 +15,7 @@ can parse.
 
 These steps need the library, to export the state, and a JSON reader:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The example reads
   `df`, a frame of 400 rows with the features `x0` and `x1` and the target
   `y`.
@@ -63,6 +63,8 @@ polars-online-bank: half_life 'inf', as a number inf
 ## Check that it worked
 
 **The export's `magic` field reads `polars-online-bank`,** as the example
-prints, and each number your program reads matches the bank's. For the
+prints, and each number your program reads matches the bank's. The field
+keeps the package's name from before 2.0, so a state saved by any 1.x
+release reads the same way. For the
 coefficients, compare with `bank.coef()` ([Read the
 coefficients](read-the-coefficients.md)).

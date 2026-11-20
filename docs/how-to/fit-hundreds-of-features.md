@@ -11,8 +11,8 @@ run that work on the bank's idle threads with `gram_threads`.
 
 These steps need the library, numpy and a wide stream:
 
-- polars-online installed with numpy, an optional extra, which
-  `pip install "polars-online[numpy]"` adds. The recipe builds its own
+- rheon installed with Polars and numpy, an optional extra, which
+  `pip install "rheon[polars,numpy]"` adds. The recipe builds its own
   data.
 - An `ewridge` spec over 256 columns or more (the features and the
   intercept). `gram_threads` applies to

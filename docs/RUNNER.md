@@ -1,8 +1,8 @@
 <!-- kind: reference -->
-# The `polars-online` command line
+# The `rheon` command line
 
 This reference page is for anyone who runs a model bank as a job with the
-`polars-online` program: it gives every flag and TOML key, the files a run
+`rheon` program: it gives every flag and TOML key, the files a run
 reads and writes, its exit status and its Rust entry points. A [model
 bank](GLOSSARY.md#the-model-bank-and-what-it-reads) is a set of models
 fitted together over the same rows. The [command
@@ -111,7 +111,7 @@ A script can tell how a run ended from its exit status:
 | status | the run |
 |---|---|
 | 0 | finished, and wrote what it was asked for; or `--dry-run`, `--help` or `--version` printed its answer |
-| 1 | was refused or failed: a configuration, a state file or a value the bank refuses, or a file it cannot read or write. Standard error carries the message, led by `polars-online:` |
+| 1 | was refused or failed: a configuration, a state file or a value the bank refuses, or a file it cannot read or write. Standard error carries the message, led by `rheon:` |
 | 2 | could not parse its command line, such as a flag it does not know or a flag with its value missing. Standard error says what is wrong |
 
 **The summary goes to standard output, and everything else to standard
@@ -126,7 +126,7 @@ A spec with neither has no line, as in every run on this page.
 Standard error carries the progress line on a terminal, the timings
 `RHEON_TIMING=1` asks for, and the error of a run that fails. It also
 carries the [readiness warnings](GLOSSARY.md#warm-up-and-readiness) about a
-model's warm-up, led by `polars-online:` as an error is. So read a failure from the exit status: a line on standard error does
+model's warm-up, led by `rheon:` as an error is. So read a failure from the exit status: a line on standard error does
 not mean the run failed.
 
 **Read a run's result from its exit status and the files it writes, never
@@ -193,7 +193,7 @@ A flag given on the command line wins over its key in the TOML file:
 **A relative path in the TOML file is read from the file's own directory,
 and a relative path given as a flag from the working directory.** So a
 configuration runs the same from wherever a scheduler starts it, and
-`polars-online --config jobs/job.toml` reads `jobs/ticks.parquet`. A flag
+`rheon --config jobs/job.toml` reads `jobs/ticks.parquet`. A flag
 such as `--input today.parquet` names the file the shell sees, in the
 directory the command runs in. The input, the output, `load_state`,
 `save_state` and `closed_groups` all follow the rule.
@@ -419,7 +419,7 @@ with no output uses.
 ### Versioning
 
 The Rust Polars the command line carries is 0.55.2.
-`polars-online --version` prints three lines: the package's version, the
+`rheon --version` prints three lines: the package's version, the
 state schema its saved states are written in, and the Rust Polars it
 carries. `-V` prints the first line alone.
 

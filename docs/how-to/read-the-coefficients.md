@@ -20,7 +20,7 @@ A row's own `pred_<target>` came from the fit *before* that row
 
 These steps need the library and a model with coefficients:
 
-- polars-online and numpy installed, and
+- rheon, Polars and numpy installed, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   `lf`, a [query](../GLOSSARY.md#the-model-bank-and-what-it-reads) over
   `ticks.parquet`, and `df`, the same 400 rows as a frame, in which four

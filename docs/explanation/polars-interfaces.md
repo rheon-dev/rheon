@@ -1,7 +1,7 @@
 <!-- kind: explanation -->
 # Polars interfaces
 
-This page explains, for anyone who upgrades Polars under polars-online,
+This page explains, for anyone who upgrades Polars under rheon,
 the four ways the library crosses into Polars, which of them carry a
 promise, and what a break on a new Polars looks like.
 

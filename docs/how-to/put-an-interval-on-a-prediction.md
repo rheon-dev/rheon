@@ -11,7 +11,7 @@ the residuals do, including when targets arrive late.
 
 These steps need the library and a model whose error to measure:
 
-- polars-online installed, and numpy to make the examples' data.
+- rheon installed with Polars, and numpy to make the examples' data.
 - A [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads) of one of the
   ten linear models, such as `ewridge`, which take `emit_sigma`,
   `resid_quantiles` and `conformal`. [What each costs, and which models

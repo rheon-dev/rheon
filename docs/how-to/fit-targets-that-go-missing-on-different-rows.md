@@ -11,7 +11,7 @@ which rows each target's fit reads.
 
 These steps need the library:
 
-- polars-online installed, with numpy for the recipe, which builds its own
+- rheon installed with Polars, with numpy for the recipe, which builds its own
   data and saves it to a parquet file.
 - Targets that are [null](../GLOSSARY.md#the-model-bank-and-what-it-reads)
   on some rows. A null target leaves the row predicted and the clock

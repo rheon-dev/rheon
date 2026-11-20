@@ -1,7 +1,7 @@
 <!-- kind: tutorial -->
 # Fit, save and serve a model bank
 
-This tutorial is for anyone new to polars-online who wants to fit a model
+This tutorial is for anyone new to rheon who wants to fit a model
 once, and then use it from another program to predict new rows. You fit a
 regression over a file of past rows and save what it learned to a file.
 Then, in a new Python process, you load that file, predict rows whose
@@ -9,7 +9,7 @@ target is not yet known, and compare the predictions with the answer you
 planted.
 
 To run the code, install the library and numpy with
-`pip install "polars-online[numpy]"`, and run it in a directory where it
+`pip install "rheon[polars,numpy]"`, and run it in a directory where it
 may write files. Run steps 1 and 2 in one Python process, and steps 3 and
 4 in a second one, which step 3 starts.
 

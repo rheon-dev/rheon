@@ -10,7 +10,7 @@ too small or too large.
 
 These steps need the library and a linear model:
 
-- polars-online installed, and numpy to make the example's data.
+- rheon installed with Polars, and numpy to make the example's data.
 - A [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads) of one of the
   ten linear models, such as `ewridge`, `rls` or `kalman`, which are the
   models that take `emit_calibration`. [What each costs, and which models

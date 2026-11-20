@@ -11,8 +11,8 @@ coefficients beside the pooled fit's t.
 
 These steps need the library and a Gram per block:
 
-- polars-online installed with numpy, an optional extra, which
-  `pip install "polars-online[numpy]"` adds. The recipe generates its own
+- rheon installed with Polars and numpy, an optional extra, which
+  `pip install "rheon[polars,numpy]"` adds. The recipe generates its own
   data: 40 weeks of 200 features, of which six matter, and `x25`'s
   coefficient is drawn again each week.
 - A Gram per block from one pass, as [Keep a Gram per block in one

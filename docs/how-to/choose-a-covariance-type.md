@@ -10,7 +10,7 @@ move, and `embargo` when each row's class arrives late.
 
 These steps need the library, a stream with its classes, and a spec:
 
-- polars-online installed, and numpy to make the example's data.
+- rheon installed with Polars, and numpy to make the example's data.
 - A stream of numeric
   [feature](../GLOSSARY.md#the-model-bank-and-what-it-reads) columns and
   a column of classes, saved as a file in clock order, to read back with

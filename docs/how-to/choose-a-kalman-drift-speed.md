@@ -12,7 +12,7 @@ It also sets the process noise outright, with `q=`.
 
 These steps need the library and a stream with a clock:
 
-- polars-online installed, with numpy for the recipes. Each recipe builds
+- rheon installed with Polars, with numpy for the recipes. Each recipe builds
   its own data and saves it to a parquet file.
 - A [clock](../GLOSSARY.md#time) column, and the `gap_cap` a clock
   requires. The recipes' clock `t` steps by 1 a row.

@@ -9,7 +9,7 @@ a wide run faster, and smaller ones make a run hold less memory.
 
 These steps need the library and a run that reads a query:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   the file `ticks.parquet` and `df`, the same 400 rows of four stocks in
   the column `stock_id`.

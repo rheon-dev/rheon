@@ -1,5 +1,5 @@
 <!-- kind: how-to -->
-# What you can do with polars-online
+# What you can do with rheon
 
 Each task runs on data it makes up with a known answer, and prints what
 the library found, to read against that answer.
@@ -27,8 +27,8 @@ residual on this page, and every test read from them, is
 
 Each task builds its own data, so the tasks need only:
 
-- polars-online installed with numpy, as
-  `pip install "polars-online[numpy]"`.
+- rheon installed with Polars and numpy, as
+  `pip install "rheon[polars,numpy]"`.
 
 ## Automate a round of model selection
 

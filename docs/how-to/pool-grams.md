@@ -10,8 +10,8 @@ blocks' own levels.
 
 These steps need the library and a Gram per block:
 
-- polars-online installed with numpy, an optional extra, which
-  `pip install "polars-online[numpy]"` adds. Each recipe generates its
+- rheon installed with Polars and numpy, an optional extra, which
+  `pip install "rheon[polars,numpy]"` adds. Each recipe generates its
   own data.
 - A Gram per block, from one pass of a
   [model bank](../GLOSSARY.md#the-model-bank-and-what-it-reads) over the stream: an `ewridge` spec with

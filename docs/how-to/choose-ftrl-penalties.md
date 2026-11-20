@@ -10,7 +10,7 @@ shrink the fit under a half-life, and how to shrink it less.
 
 These steps need the library:
 
-- polars-online installed, with numpy for the recipe, which builds its own
+- rheon installed with Polars, with numpy for the recipe, which builds its own
   data and saves it to a parquet file.
 - Optionally a [clock](../GLOSSARY.md#time) column, with the `gap_cap` a
   clock requires. Without one, each row is one clock unit. The recipe's

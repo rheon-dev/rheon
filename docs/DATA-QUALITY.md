@@ -69,7 +69,7 @@ present on a third of the rows by design.
 
 **`not_checked` (info) says that numpy is not installed.** The checks that
 read a Gram, `collinear` and `leakage`, need numpy, an optional extra.
-Install it with `pip install polars-online[numpy]`.
+Install it with `pip install "rheon[polars,numpy]"`.
 
 **Every threshold was measured, both for how often it finds a planted
 problem and for how often it fires on clean data.** The streams are

@@ -16,7 +16,7 @@ are those of the same spec fitted to that group's rows alone.
 
 These steps need the library and a column whose values name the groups:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   `df`, a frame of 400 rows in which four stocks, `b0` to `b3` in the
   column `stock_id`, take turns row by row. They also read `lf`, a

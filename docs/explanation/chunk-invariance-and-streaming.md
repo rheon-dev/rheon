@@ -146,7 +146,7 @@ ask for its result. Three ways of running a bank stream from end to end:
 |---|---|---|
 | a query | files, with `pl.scan_parquet`, which reads them as a query | a file, with `sink_parquet`, which runs the query and writes the result without holding it all in memory |
 | your own loop | each chunk `lf.collect_batches()` gives (one chunk of the result at a time), passed to `bank.fit_predict` | whatever the loop does with each chunk's output |
-| the `polars-online` command line | a file | a file |
+| the `rheon` command line | a file | a file |
 
 **A step that needs every row before it can give its first row of output
 holds the stream in memory, wherever it sits in the query.** A `sort`

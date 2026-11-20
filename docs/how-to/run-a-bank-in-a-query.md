@@ -18,7 +18,7 @@ Arrow](hand-the-output-to-arrow.md).
 
 These steps need the library and a stream on disk:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read the
   file `ticks.parquet` and the same rows split across `ticks/*.parquet`,
   400 rows on the clock `t`. In them four stocks, `b0` to `b3` in the

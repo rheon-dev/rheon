@@ -11,7 +11,7 @@ on each row, so a row's own target never sets its weight.
 
 These steps need the library and a stream with a clock:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   `trades`, a stream of quotes with trades between them, and `df`, saved
   as `ticks.parquet`. `df`'s `ret` is `±0.8·signal_a` plus noise of

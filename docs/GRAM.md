@@ -18,7 +18,7 @@ a lasso path, or count how often each column is chosen on halves of the
 weeks. The module `rheon.gram` does each of these.
 
 `bank.gram()` and `rheon.gram` need numpy, an optional extra, which
-`pip install "polars-online[numpy]"` adds. The reference of
+`pip install "rheon[polars,numpy]"` adds. The reference of
 [`ModelBank.gram`](https://rheon-dev.github.io/rheon/rheon.html#rheon.ModelBank.gram)
 states each array and the identities between them.
 

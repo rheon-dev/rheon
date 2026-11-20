@@ -14,7 +14,7 @@ clips its steps a shorter memory (`huber_scale_half_life`).
 
 These steps need the library and a spec of one of the two models:
 
-- polars-online installed. Each example builds its own rows, so none
+- rheon installed with Polars. Each example builds its own rows, so none
   needs the [example data](../EXAMPLE-DATA.md).
 - A [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads) of `pa`, or of
   `sgd` with `loss="huber"`, whose

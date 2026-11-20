@@ -10,7 +10,7 @@ flags a stale or moved feature long before the coefficient on it runs away.
 
 These steps need the library and a linear model with features:
 
-- polars-online installed, and numpy to make the example's data.
+- rheon installed with Polars, and numpy to make the example's data.
 - A [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads) of one of the
   nine linear models with features, such as `rls` or `ewridge`, which take
   `emit_feature_health`. [What each costs, and which models take

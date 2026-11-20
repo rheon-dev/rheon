@@ -12,7 +12,7 @@ give `session_shrink` and `long_half_life`, and the model blends the means and c
 These steps need the library, a stream with sessions and an `ewridge`
 spec:
 
-- polars-online and numpy installed. The recipe generates its own data.
+- rheon, Polars and numpy installed. The recipe generates its own data.
 - A [session](../GLOSSARY.md#time) column, whose change of value starts a
   session, and a `session_gap` that is a number: the clock step the model
   takes at the change. `session_gap="reset"` is refused beside a blend,

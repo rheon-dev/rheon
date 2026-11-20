@@ -10,7 +10,7 @@ of models over the same rows, one for each
 [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads) (the description
 of a model) and each [group](../GLOSSARY.md#the-model-bank-and-what-it-reads).
 The [command line](../GLOSSARY.md#saving-and-serving), the standalone
-`polars-online` program, runs a bank from a TOML file. It takes the same
+`rheon` program, runs a bank from a TOML file. It takes the same
 specs as Python, reads and writes the same state file, and gives the same
 numbers. Every run reads its TOML file, and flags on the command line
 override most of what it says. [docs/RUNNER.md](../RUNNER.md) is the
@@ -20,7 +20,7 @@ reference for every flag, every TOML key and the exit status.
 
 A run needs the program, a TOML file and an input file:
 
-- The `polars-online` program, whose binaries are attached to each GitHub
+- The `rheon` program, whose binaries are attached to each GitHub
   release.
 - [Example data](../EXAMPLE-DATA.md) built, in the
   directory the commands run in. The examples read `ticks.parquet`, a

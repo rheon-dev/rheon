@@ -13,7 +13,7 @@ their regime with `bocpd`.
 
 These steps need the library and a model to watch:
 
-- polars-online installed, and numpy to make the examples' data.
+- rheon installed with Polars, and numpy to make the examples' data.
 - For a break in a regression: a
   [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads) of one of the ten
   linear models, such as `ewridge`, which take `emit_breaks` and

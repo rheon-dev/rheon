@@ -10,7 +10,7 @@ passing the query in place of its result.
 
 These steps need the library and a bank's output:
 
-- polars-online installed, and numpy to make the examples' data.
+- rheon installed with Polars, and numpy to make the examples' data.
 - The output of a [bank](../GLOSSARY.md#the-model-bank-and-what-it-reads)
   run: a frame with each spec's
   [output column](../GLOSSARY.md#what-a-bank-writes) and each target's

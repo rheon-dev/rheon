@@ -20,7 +20,7 @@ everything a bank needs to go on.
 
 Each way to serve needs a saved state and the rows to predict:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The Python examples
   read `df`, the stream so far, and `today`, the 400 rows that follow it on
   the clock `t`. `later` is `today`'s rows, saved as `today.parquet` and
@@ -36,7 +36,7 @@ Each way to serve needs a saved state and the rows to predict:
   learned, the prediction has seen its own target ([What predicting before
   learning cannot
   guarantee](../explanation/out-of-sample.md#what-predicting-before-learning-cannot-guarantee)).
-- For the command line: the `polars-online` program, whose binaries are
+- For the command line: the `rheon` program, whose binaries are
   attached to each GitHub release, the configuration file `job.toml`, and
   its state `run.state`. [Run a bank over a
   file](run-a-bank-from-the-command-line.md#run-a-bank-over-a-file) writes

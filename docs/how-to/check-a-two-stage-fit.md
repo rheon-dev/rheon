@@ -11,7 +11,7 @@ one you planted.
 
 The recipe builds its own data, so these steps need only:
 
-- polars-online installed, and numpy, which the recipe uses to make up its
+- rheon installed with Polars, and numpy, which the recipe uses to make up its
   rows.
 - For your own data, a two-stage pipeline: a first-stage
   [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads) whose residual

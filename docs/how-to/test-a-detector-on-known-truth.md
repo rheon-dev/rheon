@@ -11,8 +11,8 @@ beside the truth.
 
 The recipes build their own data, so these steps need only:
 
-- polars-online installed, and numpy, which `rp.sim.regimes` draws with.
-  Install it with `pip install polars-online[numpy]`.
+- rheon installed with Polars, and numpy, which `rp.sim.regimes` draws with.
+  Install it with `pip install "rheon[polars,numpy]"`.
 - A [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads) for the
   detector you mean to test, and the question it answers: a change in
   the correlations (`corrchange`), the age of the current regime

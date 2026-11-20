@@ -18,7 +18,7 @@ from it
 
 These steps need the library and a column of weights:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The example reads
   `df`, a frame of 400 rows whose target `y` is `1 + 2·x0 − x1` plus noise.
 - A numeric column of row weights, each 0 or above, in the stream or made

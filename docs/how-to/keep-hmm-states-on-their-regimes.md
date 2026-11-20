@@ -11,7 +11,7 @@ single extreme row from capturing a state.
 
 These steps need the library, a stream and a spec:
 
-- polars-online installed, and numpy to make the second example's data.
+- rheon installed with Polars, and numpy to make the second example's data.
 - A stream of numeric
   [feature](../GLOSSARY.md#the-model-bank-and-what-it-reads) columns,
   saved as a file in clock order, to read back with `pl.scan_parquet`.

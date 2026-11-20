@@ -350,8 +350,8 @@ measurements:
 
 | what you run | 3M rows | 12M rows | 24M rows |
 |---|---:|---:|---:|
-| `polars-online --config` | 0.75 GB | 0.85 GB | 0.86 GB |
-| `polars-online --config`, with `POLARS_ROW_GROUP_PREFETCH_SIZE=1` | 0.42 GB | 0.43 GB | 0.44 GB |
+| `rheon --config` | 0.75 GB | 0.85 GB | 0.86 GB |
+| `rheon --config`, with `POLARS_ROW_GROUP_PREFETCH_SIZE=1` | 0.42 GB | 0.43 GB | 0.44 GB |
 
 The bank's memory does not grow with the rows, and the allocator reuses
 the pages it frees rather than hold more as the run goes on. Most of what

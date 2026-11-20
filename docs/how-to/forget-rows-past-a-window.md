@@ -22,7 +22,7 @@ the weight inside the window.
 
 These steps need the library and a spec of one of the five models:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   `ticks.parquet`, 400 rows a unit of the clock `t` apart, in which the
   coefficient of `ret` on `signal_a` flips from 0.8 to −0.8 at row 200.

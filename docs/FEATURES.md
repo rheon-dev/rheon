@@ -1,7 +1,7 @@
 <!-- kind: map -->
 # Every feature
 
-This page lists every feature of polars-online, one line each, with a link
+This page lists every feature of rheon, one line each, with a link
 to the page that shows it, for a reader who wants the whole list or is
 looking for a capability by name. A name links its entry in the [API
 reference](https://rheon-dev.github.io/rheon/), which gives its
@@ -26,7 +26,7 @@ pages by the task you have in hand.
 | [Parameters every spec takes](#parameters-every-spec-takes) | the parameters shared by every model, by family |
 | [Errors and warnings](#errors-and-warnings) | the classes a caller can catch or filter |
 | [Versions and the environment](#versions-and-the-environment) | the version numbers, and the environment variables the library reads |
-| [The command line](#the-command-line) | `polars-online`, its flags and its configuration file's keys |
+| [The command line](#the-command-line) | `rheon`, its flags and its configuration file's keys |
 
 ## Models
 
@@ -246,7 +246,7 @@ The library reports its versions, and reads four environment variables.
 
 ## The command line
 
-`polars-online` runs a bank from a file to a file, with no Python, from a
+`rheon` runs a bank from a file to a file, with no Python, from a
 TOML configuration file. Each `[[specs]]` table takes a spec's `name` and
 the keywords every spec shares, and a `[specs.model]` table under it names
 the model with `type` and takes the model's own keywords ([Run a bank from the command

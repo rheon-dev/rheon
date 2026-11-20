@@ -10,7 +10,7 @@ keeps the gradient's cap that holds the fit steady.
 
 These steps need the library:
 
-- polars-online installed, with numpy for the recipe, which builds its own
+- rheon installed with Polars, with numpy for the recipe, which builds its own
   data and saves it to a parquet file.
 - A target that holds counts: 0 or more on every row where it is not
   [null](../GLOSSARY.md#the-model-bank-and-what-it-reads).

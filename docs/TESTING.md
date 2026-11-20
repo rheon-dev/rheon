@@ -117,7 +117,7 @@ each model's `predict` to its `step`, row by row.
 `crates/rheon-polars/tests/runner.rs` holds every input format (parquet,
 ipc, csv, ndjson), every output format, `Input::Batches` ≡ a query, and the
 failure paths to the numbers `ModelBank` gives on the same rows. CSV's
-flattened columns and JSON-text `coef` decode bit-exact. The `polars-online` command
+flattened columns and JSON-text `coef` decode bit-exact. The `rheon` command
 line is held to the same numbers through `run_online` in `tests/conftest.py`
 (`test_closed_groups`, `test_hardening`, `test_predict`, `test_no_output`,
 `test_label_delay`), and every `sh` block of `docs/RUNNER.md` runs. What a
@@ -1299,11 +1299,11 @@ and then `cargo bench -p rheon-bench --bench instructions` prints the
 counts. Elsewhere, a Linux container with Valgrind installed runs the same
 two commands. The workflow keeps each run's counts as an artifact.
 
-**The counts are of the baseline x86-64 build, not of the `polars-online`
+**The counts are of the baseline x86-64 build, not of the `rheon`
 wheel that runs on an x86-64 CPU with AVX2.** Valgrind counts the
 `rheon-bench` cases built with no `target-feature` flag, which is the build
-`polars-online-compat` and every build from source are. The x86-64 wheels of
-`polars-online` are built for AVX2 and FMA, and execute fewer instructions (a
+`rheon-compat` and every build from source are. The x86-64 wheels of
+`rheon` are built for AVX2 and FMA, and execute fewer instructions (a
 median 4.3% fewer, [What the x86-64 wheels
 need](VERSIONS.md#what-the-x86-64-wheels-need)). No budget holds that build's
 counts, so a change that costs instructions only there is not caught by them.

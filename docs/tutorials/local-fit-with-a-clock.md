@@ -1,7 +1,7 @@
 <!-- kind: tutorial -->
 # Follow a local fit through a day
 
-This tutorial is for anyone new to polars-online who wants a regression
+This tutorial is for anyone new to rheon who wants a regression
 that follows the most recent rows of a
 [stream](../GLOSSARY.md#the-model-bank-and-what-it-reads) (the rows a
 [model bank](../GLOSSARY.md#the-model-bank-and-what-it-reads) reads, in
@@ -10,7 +10,7 @@ the timestamps, and watch it recover a coefficient you planted, which
 drifts through a trading day and changes overnight.
 
 To run the code, install the library and numpy with
-`pip install "polars-online[numpy]"`. Run each step's code in the same
+`pip install "rheon[polars,numpy]"`. Run each step's code in the same
 Python process, in a directory where it may write files.
 
 A [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads) describes one

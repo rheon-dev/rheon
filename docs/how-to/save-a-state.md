@@ -9,12 +9,12 @@ a Python object, in a query or from the command line.
 
 These steps need the library and rows to learn from:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   `lf` and `later`, [queries](../GLOSSARY.md#the-model-bank-and-what-it-reads)
   over the files `ticks.parquet` and `today.parquet`, whose rows follow
   one another on the clock `t`.
-- For the command line: the `polars-online` program, whose binaries are
+- For the command line: the `rheon` program, whose binaries are
   attached to each GitHub release, and a TOML file of its settings.
   [Run a bank from the command line](run-a-bank-from-the-command-line.md)
   shows both.

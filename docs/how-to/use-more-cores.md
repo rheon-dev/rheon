@@ -15,7 +15,7 @@ explains why, and why the thread count never changes the numbers.
 
 These steps need the library and a machine with several cores:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   `ticks.parquet`, 400 rows of four stocks in the column `stock_id`. One
   example builds its own file.

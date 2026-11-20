@@ -20,7 +20,7 @@ runs the same bank inside a Polars query instead.
 
 These steps need the library and a stream:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   `df`, a frame of 400 rows on the clock `t`, in which four stocks, `b0` to
   `b3` in the column `stock_id`, take turns row by row. Its target `y` is

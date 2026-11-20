@@ -10,7 +10,7 @@ assumptions the residuals meet.
 
 These steps need the library and a least-squares fit:
 
-- polars-online installed, and numpy to make the example's data.
+- rheon installed with Polars, and numpy to make the example's data.
 - A [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads) of `ewridge`
   or `rls`, the two models that take `emit_robust_se`. `kalman` takes
   `emit_se_coef` alone ([What each costs, and which models take

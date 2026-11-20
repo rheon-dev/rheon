@@ -1,5 +1,5 @@
 <!-- kind: explanation -->
-# polars-online against scikit-learn
+# rheon against scikit-learn
 
 This page explains, for anyone who would otherwise fit a streaming
 regression with scikit-learn, how this library's regressions differ from

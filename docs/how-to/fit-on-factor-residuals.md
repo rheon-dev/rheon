@@ -20,7 +20,7 @@ window has passed, so the bank learns each row then.
 
 The recipe builds its own data, so these steps need only:
 
-- polars-online installed, and numpy, which the recipe uses to make up its
+- rheon installed with Polars, and numpy, which the recipe uses to make up its
   rows.
 - A stream in a file, read as a
   [query](../GLOSSARY.md#the-model-bank-and-what-it-reads) (a chain of
