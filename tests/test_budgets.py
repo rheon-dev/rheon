@@ -601,6 +601,60 @@ def test_the_baseline_is_read_from_a_file_a_directory_or_the_variable(tmp_path, 
     )
 
 
+def test_the_default_baseline_falls_back_to_the_last_release_before_the_rename(monkeypatch):
+    """Until rheon's first release its asset answers 404; the unset lookup
+    then reads the last `polars-online` release's, and only on a 404: another
+    refusal is reported, and a source named by the caller is read as named."""
+    then = baseline("1.5.0")
+    body = json.dumps({"version": then.version, "sha": then.sha, "measured": then.measured})
+    monkeypatch.delenv(budgets.BASELINE_VARIABLE, raising=False)
+    asked: list[str] = []
+
+    def answers(table):
+        def fetch(url, *args, **kwargs):
+            asked.append(url)
+            code = table[url]
+            if code == 200:
+                return body
+            err = budgets.NoBaseline(f"{url} answered {code}")
+            err.status = code
+            raise err
+
+        return fetch
+
+    new, old = budgets.BASELINE_URL, budgets.BASELINE_FALLBACK_URL
+    assert "rheon-dev/rheon" in new and "hgilde/polars-online" in old
+    assert new != old and old.endswith(budgets.BASELINE_ASSET)
+
+    monkeypatch.setattr(budgets, "_fetch", answers({new: 404, old: 200}))
+    assert budgets.read_baseline() == then
+    assert asked == [new, old]
+
+    asked.clear()  # rheon's own is there: the fallback is not asked
+    monkeypatch.setattr(budgets, "_fetch", answers({new: 200, old: 200}))
+    assert budgets.read_baseline() == then
+    assert asked == [new]
+
+    asked.clear()  # a refusal that is not a 404 is not a missing asset
+    monkeypatch.setattr(budgets, "_fetch", answers({new: 403, old: 200}))
+    with pytest.raises(budgets.NoBaseline):
+        budgets.read_baseline()
+    assert asked == [new]
+
+    asked.clear()  # neither published
+    monkeypatch.setattr(budgets, "_fetch", answers({new: 404, old: 404}))
+    with pytest.raises(budgets.NoBaseline):
+        budgets.read_baseline()
+    assert asked == [new, old]
+    assert "could not read" in budgets.baseline_or_reason()
+
+    asked.clear()  # a URL named by the caller is the only one asked
+    monkeypatch.setattr(budgets, "_fetch", answers({"https://example.org/b.json": 404}))
+    with pytest.raises(budgets.NoBaseline):
+        budgets.read_baseline("https://example.org/b.json")
+    assert asked == ["https://example.org/b.json"]
+
+
 def test_the_report_says_which_release_the_drift_is_from_or_why_none():
     doc = small()
     then = baseline("1.1.0")

@@ -27,7 +27,7 @@ before learning from it.** Summed over the stream, it is the stream's log
 marginal likelihood, the criterion that compares a Bayesian model's
 settings. `bocpd` predicts no target, so it has no squared error to score.
 The Notes of [`rp.eval.grid_search`'s
-docstring](https://rheon-dev.github.io/rheon/eval.html#rheon.eval.grid_search),
+docstring](https://rheon-dev.github.io/rheon/eval.html#rheon.polars.eval.grid_search),
 under *What is scored*, say so.
 
 1. **Decide whether breaks follow rows or time.** A number `hazard` says

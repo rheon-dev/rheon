@@ -57,8 +57,10 @@ reports each case's drift since; a release fails on a case past
 ``meta.drift_signoff`` with no ``[[signoff]]`` for its version. So nothing
 is committed after a release to record its numbers. ``--baseline`` (or
 ``RHEON_BUDGETS_BASELINE``) reads a local file, a directory holding
-one, or another URL instead. A run that cannot read it says so and goes on,
-unless it is told ``--require-baseline``, as CI and a release are.
+one, or another URL instead. Until rheon's first release has published its
+baseline (a 404), the newest release is the last one before the rename, the
+project's ``polars-online`` (``BASELINE_FALLBACK_URL``). A run that cannot
+read it says so and goes on, unless it is told ``--require-baseline``, as CI and a release are.
 """
 
 from __future__ import annotations
@@ -106,6 +108,14 @@ BASELINE_ASSET = "budgets-baseline.json"
 #: The newest release's copy: GitHub redirects ``latest`` to the newest
 #: release that is not a draft or a prerelease.
 BASELINE_URL = f"https://github.com/rheon-dev/rheon/releases/latest/download/{BASELINE_ASSET}"
+#: The last release before the rename, which the project published as
+#: `polars-online`. Until rheon's first release exists its URL answers 404
+#: and no drift would be reported at all; the measurements of that release are
+#: the same cases, so the default lookup falls back to its baseline on a 404
+#: and reads rheon's own from the first release on.
+BASELINE_FALLBACK_URL = (
+    f"https://github.com/hgilde/polars-online/releases/latest/download/{BASELINE_ASSET}"
+)
 BASELINE_VARIABLE = "RHEON_BUDGETS_BASELINE"
 #: The platforms whose resident memory a baseline must hold.
 BASELINE_PLATFORMS = PLATFORMS
@@ -762,7 +772,10 @@ class Baseline:
 
 class NoBaseline(RuntimeError):
     """The baseline could not be read: no network, no such asset yet, no
-    such file. A file that *is* read and is malformed is a ``ValueError``."""
+    such file. A file that *is* read and is malformed is a ``ValueError``.
+    ``status`` is the HTTP status that refused it, where one did."""
+
+    status: int | None = None
 
 
 def parse_baseline(text: str, where: str = "the baseline") -> Baseline:
@@ -804,7 +817,9 @@ def _fetch(url: str, attempts: int = 3, timeout: float = 30.0) -> str:
                 return resp.read().decode("utf-8")
         except urllib.error.HTTPError as e:
             if e.code < 500 and e.code != 429:
-                raise NoBaseline(f"{url} answered {e.code}") from e
+                err = NoBaseline(f"{url} answered {e.code}")
+                err.status = e.code
+                raise err from e
             last: Exception = e
         except (urllib.error.URLError, TimeoutError, OSError) as e:
             last = e
@@ -817,8 +832,18 @@ def read_baseline(source: str | Path | None = None) -> Baseline:
     """The last release's measurements, from ``source``: a URL, a file, or a
     directory holding ``budgets-baseline.json``. Unset, from
     ``RHEON_BUDGETS_BASELINE``, else from the newest GitHub release
-    (``BASELINE_URL``)."""
-    source = str(source or os.environ.get(BASELINE_VARIABLE) or BASELINE_URL)
+    (``BASELINE_URL``), and where that is not published yet (a 404), from the
+    last release before the rename (``BASELINE_FALLBACK_URL``). A source that
+    was asked for by name is read as named, with no fallback."""
+    named = source or os.environ.get(BASELINE_VARIABLE)
+    if not named:
+        try:
+            return parse_baseline(_fetch(BASELINE_URL), BASELINE_URL)
+        except NoBaseline as e:
+            if e.status != 404:
+                raise
+            return parse_baseline(_fetch(BASELINE_FALLBACK_URL), BASELINE_FALLBACK_URL)
+    source = str(named)
     if source.startswith(("https://", "http://")):
         return parse_baseline(_fetch(source), source)
     path = Path(source)

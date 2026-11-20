@@ -137,7 +137,7 @@ The fields are defined in [OUTPUTS.md](../OUTPUTS.md#seqtest), and every
 parameter in `seqtest`'s
 [docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.seqtest).
 For the same test over a frame in memory, use
-[`rp.eval.seqtest`](https://rheon-dev.github.io/rheon/eval.html#rheon.eval.seqtest).
+[`rp.eval.seqtest`](https://rheon-dev.github.io/rheon/eval.html#rheon.polars.eval.seqtest).
 To test which of two specs predicts closer, [Compare two
 models](compare-two-models.md#read-the-comparison-on-every-row) names them
 in `seqtest`'s `a` and `b`, and its evidence is read the same way.

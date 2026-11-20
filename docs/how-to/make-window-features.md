@@ -54,7 +54,7 @@ lists every operator, and how each one weighs the rows of its window.
 2. **Call `.rheon.with_windows` on the query, with each formula as a
    keyword argument.** It adds one column per formula after the input's
    columns, named by its keyword or its `.alias()`. The call is
-   [`rp.stream.with_windows(frame, name=formula, ...)`](https://rheon-dev.github.io/rheon/stream.html#rheon.stream.with_windows),
+   [`rp.stream.with_windows(frame, name=formula, ...)`](https://rheon-dev.github.io/rheon/stream.html#rheon.polars.stream.with_windows),
    written in a chain as `lf.rheon.with_windows(...)` on a query or
    `df.rheon.with_windows(...)` on a `DataFrame`.
 3. **Give the same call the clock keywords, once for every formula in

@@ -18,6 +18,8 @@ from rheon._spec import _json
 
 if TYPE_CHECKING:
     import polars as pl
+else:
+    from rheon._duration import _PolarsTypes as pl
 
 
 def _need_polars(who: str) -> None:

@@ -99,17 +99,36 @@ problem names.
 
 ### Code that still imports polars_online
 
-**polars-online 2.0.0 is a thin package that runs a 1.x program on rheon.**
-It holds no models of its own and depends on `rheon[polars]>=2.0.0,<3`.
-`import polars_online` gives rheon's Polars interface, `rheon.polars`, with
-one `DeprecationWarning` a process. The `.online` frame namespace gives one
-more, the first time it is used. Every call goes to rheon, so a name that
-2.0 removes is refused through the thin package as well.
+**polars-online 2.0.0 is a thin package that keeps a 1.x program's imports
+working on rheon.** It holds no models of its own and depends on
+`rheon[polars]>=2.0.0,<3`. `import polars_online` gives rheon's Polars
+interface, `rheon.polars`, with one `DeprecationWarning` a process. The
+`.online` frame namespace gives one more, the first time it is used, and
+1.x pickles load ([States and pickles across the
+rename](#states-and-pickles-across-the-rename)). It does not make a 1.x
+program run unchanged. The warning classes are renamed, and the thin package
+has no alias under the old names, so `po.PolarsOnlineWarning` and
+`po.PolarsOnlineDeprecationWarning` fail at their lookup, and so does the
+filter recommended above: run that check under 1.6.0. Every call goes to
+rheon, so a name that 2.0 removes is refused through the thin package as
+well.
 `polars-online-compat` 2.0.0 forwards to `rheon-compat` the same way.
 Install the thin package to keep a program running while you change its
 imports, then move the program to `rheon` and uninstall it. A requirement
 pinned as `polars-online~=1.0` stays on the 1.x series and never installs
 it.
+
+**If you installed rheon 1.5.0, `pip install -U rheon` gives you 2.0.0, which
+removes what 1.5.0 forwarded.** rheon 1.5.0 was an earlier forwarder: it
+pinned polars-online 1.5.0, and a program imported it as `import rheon.polars
+as po`, with the `.online` frame namespace and the `PolarsOnlineWarning` and
+`PolarsOnlineDeprecationWarning` classes. In 2.0.0 `rheon` holds the
+models itself. Change the import to `from rheon import polars as rp` (the
+module name `rheon.polars` is the same), and `po.` to `rp.`; `.online` to
+`.rheon`, as `lf.rheon.fit_predict`; and the warning classes to
+`rheon.RheonWarning` and `rheon.RheonDeprecationWarning`. Polars is now the
+extra, so install `"rheon[polars]"`. Or pin `rheon==1.5.0` to stay on the
+forwarder.
 
 ### States and pickles across the rename
 

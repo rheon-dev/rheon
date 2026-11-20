@@ -222,7 +222,7 @@ version, `REFRESH_VERSION` (`crates/rheon-polars/src/refresh.rs`).
 
 **Each stable part is pinned by a section of `tests/api_surface.txt`,
 except the command line's exit status, which a test holds.** The unstable
-names that stand in a section, `rp.sim`, `rheon.corr`, `rp.gbdt`,
+names that stand in a section, `rp.sim`, `rheon.corr`,
 `ArrowStruct`, `fit_predict_arrow` and `predict_arrow`, each carry the
 label `# unstable` on their line, so the snapshot says which of its lines
 carry no promise:
@@ -236,7 +236,7 @@ carry no promise:
 | the `.rheon` namespace | `[frame namespaces]` |
 | the frames the bank returns: `groups()`, `summary()`, `describe()`, `coef()`, `last_row()`, `marginal()`, `audit()`, `check()`, `solve_failures()`, `gram()`'s keys, and `rheon.spec`'s `output_index()`, `coef_index()`, `coef_fields()` | `[frame columns]`, each column with its dtype |
 | the closed-groups frame's columns | `[closed_groups columns]`, each column with its dtype, in order |
-| the helper modules' functions, each with its signature | `[helper modules]`, every public module of the package but `rheon.spec`, which has its own sections: today `corr`, `eval`, `gbdt`, `gram`, `ops`, `sim` and `stream` |
+| the helper modules' functions, each with its signature | `[helper modules]`, every public module of the package but `rheon.spec`, which has its own sections: today `corr`, `eval`, `gram`, `ops`, `sim` and `stream` |
 | `rp.stream.embargo`'s two columns, `_online_role` and `_online_role_weight` | `[helper modules]`, as the default of `embargo`'s `role`, the first column's name, which the second's extends; `tests/test_label_delay.py` reads both |
 | output field names and their dtypes | `[output field grammar]`, 29 spec shapes, one with every `emit_*` turned on |
 | the words each string-valued parameter takes, and `withheld_reason`'s | `[enum values]`, read from each parameter's refusal of a word it does not take |
@@ -448,7 +448,7 @@ and to each path in its `PATHS`, by the keyword that takes it:
 **The script compares each spec's output fields, and the frame
 `closed_groups` drains, bit by bit.** What it does not run is outside the
 comparison. That is the window operators (`rp.ewm_mean` and the rest,
-`with_windows`), `rheon.gram`, `rp.gbdt`, `refresh_time`, a bank's
+`with_windows`), `rheon.gram`, an internal helper for gradient-boosted trees, `refresh_time`, a bank's
 `threads=`, and every combination of settings beyond the ones named. It
 prints each field that differs, with the first row where it does, and
 exits 1. Each run reports which package it imported, so the comparison

@@ -83,6 +83,8 @@ from rheon._warnings import ReadinessWarning, _user_stacklevel
 
 if TYPE_CHECKING:
     import polars as pl
+else:
+    from rheon._duration import _PolarsTypes as pl
 
 __all__ = [
     "Gram",

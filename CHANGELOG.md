@@ -112,12 +112,19 @@ of old and new names.
   run's state loads into `lf.rheon.with_windows(load_state=...)` the same
   way. `scripts/compare_release.py` against 1.6.0, on the current names:
   1,296 fields of 74 specs, identical to the bit.
-- **The thin `polars-online` 2.0.0 runs a 1.x program on rheon.** It holds
-  no models, depends on `rheon[polars]>=2.0.0,<3`, and `polars-online-compat`
-  2.0.0 forwards to `rheon-compat` the same way. `import polars_online`
-  gives `rheon.polars` with one `DeprecationWarning` a process, and `.online`
-  gives one more the first time it is used. A name 2.0 removes is refused
-  through it as well.
+- **The thin `polars-online` 2.0.0 keeps a 1.x program's imports working on
+  rheon.** It holds no models, depends on `rheon[polars]>=2.0.0,<3`, and
+  `polars-online-compat` 2.0.0 forwards to `rheon-compat` the same way.
+  `import polars_online` gives `rheon.polars` with one `DeprecationWarning`
+  a process, and `.online` gives one more the first time it is used. The
+  warning classes are renamed, with no alias under the old names, so a filter
+  on `PolarsOnlineWarning` fails through it too, and a name 2.0 removes is
+  refused through it as well.
+- **For users of rheon 1.5.0**, an earlier forwarder that pinned
+  polars-online 1.5.0 (`import rheon.polars as po`, with `.online` and the
+  `PolarsOnline*` warnings): `pip install -U rheon` gives 2.0.0, where
+  `.online` and those warning names are gone. `docs/VERSIONS.md` names the
+  changes.
 - **A 1.x pickle loads with the thin package installed.** It maps
   `polars_online._bank` to `rheon.polars._bank` and
   `polars_online._polars_online` to `rheon._rheon` in `sys.modules`, so the

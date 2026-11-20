@@ -98,7 +98,7 @@ the sweep. The clean shapes:
 | six columns that hold still on a coarse grid, over 10,000 rows: the hour of the day on minute data, a regime that stays with probability 0.99, a price in ticks, a spread in whole ticks, an AR(0.9) rounded to integers, and a temperature in whole degrees | an audit |
 
 The docstring of
-[`ModelBank.check`](https://rheon-dev.github.io/rheon/rheon.html#rheon.ModelBank.check)
+[`ModelBank.check`](https://rheon-dev.github.io/rheon/rheon.html#rheon.polars.ModelBank.check)
 lists every check with its threshold.
 
 **Read a number past a million in a recipe's output as a model that has

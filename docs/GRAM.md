@@ -19,7 +19,7 @@ weeks. The module `rheon.gram` does each of these.
 
 `bank.gram()` and `rheon.gram` need numpy, an optional extra, which
 `pip install "rheon[polars,numpy]"` adds. The reference of
-[`ModelBank.gram`](https://rheon-dev.github.io/rheon/rheon.html#rheon.ModelBank.gram)
+[`ModelBank.gram`](https://rheon-dev.github.io/rheon/rheon.html#rheon.polars.ModelBank.gram)
 states each array and the identities between them.
 
 Each task on a set of Grams has a call in `rheon.gram` or the bank, and a
@@ -65,7 +65,7 @@ weighted means `m`, and `comoments` the columns' centered co-moments `C`,
 a `k × k` matrix. For each target, `cross_centered` holds the centered
 cross-moments `c` a fit is solved from, and `target_vars` its variance
 `V`. The reference of
-[`ModelBank.gram`](https://rheon-dev.github.io/rheon/rheon.html#rheon.ModelBank.gram)
+[`ModelBank.gram`](https://rheon-dev.github.io/rheon/rheon.html#rheon.polars.ModelBank.gram)
 lists every key. `rheon.gram.merge(..., within=True)` adds two,
 `within_parts` and `target_within_parts`: the number of parts with weight,
 and per target the number with weight for it.

@@ -511,7 +511,8 @@ in the table.
 
 **113 cells: 76 over the 22 model kinds' rows, 19 over the
 bank, 3 over the command line, 9 over the window operators, 4 over
-`refresh_time` and 2 over `rp.gbdt`'s sample.** Each row is one cell: the
+`refresh_time` and 2 over the sample of an internal helper for
+gradient-boosted trees.** Each row is one cell: the
 size it varies, its two sizes, the growth declared for a row's work and for
 the state in that size (written in `n`, the size), and the reason. The last
 column has the four native ratios from large to small, as measured on
@@ -656,7 +657,7 @@ held instead or why it needs no cell:
 | `Bank::fit_predict` with groups that close | groups open | O(1) a row | O(groups open) | closing a group drops its state; `bank.groups_seen` holds the open ones |
 | the Polars source behind `LazyFrame.rheon.fit_predict` | specs; rows | O(specs); O(1) | the bank's | `tests/test_scaling.py`, by time |
 | the chunked `ModelBank.fit_predict` | specs, at large and small calls | O(specs) | the bank's | `tests/test_scaling.py`, by time |
-| `rp.gbdt`'s build | rows | O(1) a row in the sample | O(sample) in the sample; O(rows) in XGBoost's and LightGBM's own matrices | the libraries bin every row by design; the sample is `gbdt.history` and `gbdt.sample` |
+| the gradient-boosted-tree helper's build (internal) | rows | O(1) a row in the sample | O(sample) in the sample; O(rows) in XGBoost's and LightGBM's own matrices | the libraries bin every row by design; the sample is `gbdt.history` and `gbdt.sample` |
 
 ### Specs on one stream
 

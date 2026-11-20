@@ -258,3 +258,53 @@ def test_wheel_smoke_bare_passes_on_the_checkout() -> None:
         """
     )
     assert "without Polars: ok" in out, out
+
+
+def test_type_hints_resolve_without_polars() -> None:
+    """`typing.get_type_hints` reads the annotations a type checker reads, and
+    with Polars unimportable it must still resolve every public function of
+    the neutral modules: a name that exists only under `TYPE_CHECKING`
+    (`pl.DataFrame`) raised `NameError` here, for `spec.coef_fields`,
+    `spec.coef_index`, `spec.output_index` and `gram.solve_subsets`. The
+    modules are the neutral ones with public callables (`rheon` itself,
+    `spec`, `gram`, `corr`); the walk takes each public function, each
+    public class and each of that class's public methods."""
+    out = _run(
+        BLOCK,
+        """
+        import importlib
+        import inspect
+        import typing
+
+        import rheon
+
+        checked = []
+        failed = []
+        for modname in ("rheon", "rheon.spec", "rheon.gram", "rheon.corr"):
+            mod = importlib.import_module(modname)
+            for name, obj in vars(mod).items():
+                if name.startswith("_"):
+                    continue
+                if inspect.isfunction(obj):
+                    todo = [(f"{modname}.{name}", obj)]
+                elif inspect.isclass(obj) and obj.__module__.split(".")[0] == "rheon":
+                    todo = [(f"{modname}.{name}", obj)] + [
+                        (f"{modname}.{name}.{m}", f)
+                        for m, f in vars(obj).items()
+                        if not m.startswith("_") and inspect.isfunction(f)
+                    ]
+                else:
+                    continue
+                for label, thing in todo:
+                    try:
+                        typing.get_type_hints(thing)
+                    except Exception as e:  # noqa: BLE001
+                        failed.append(f"{label}: {type(e).__name__}: {e}")
+                    checked.append(label)
+        assert len(checked) > 50, len(checked)
+        assert not failed, failed
+        assert "polars" not in sys.modules
+        print("ok")
+        """,
+    )
+    assert out.strip() == "ok"

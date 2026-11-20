@@ -21,7 +21,7 @@ onto `main` (a fast-forward where it can be) and the full tier runs once, on
 that sha, before the push (the user, 2026-11-03: "why bother with an
 integration branch").
 `scripts/gate.sh` takes one of two machine-wide tokens and waits for one
-(`POLARS_ONLINE_GATES`). The full tier runs, always, before every push on
+(`POLARS_ONLINE_GATES`, now `RHEON_GATES`). The full tier runs, always, before every push on
 the exact sha.
 Run at most two building agents at once on this machine -- three while the
 1-minute load stays under about 20 (the user, 2026-11-07) -- each with
@@ -51,7 +51,7 @@ word, and its PyPI approval is always the user's click. Workers lean on activati
 wave and its branch and worktree cleanup, run `scripts/clear_caches.sh
 --worktrees` (or whenever free disk is under 100 GB). sccache stays off:
 from a new worktree path a third of the crates miss its cache, so it is
-slower there; `POLARS_ONLINE_SCCACHE=1` turns it on for one checkout.
+slower there; `POLARS_ONLINE_SCCACHE=1` (now `RHEON_SCCACHE=1`) turns it on for one checkout.
 
 Amended 2026-11-14 (the user: "a too", on the coordinator's count of the day's
 gates): a wave pushed at once gets the full tier only, on the exact sha; the

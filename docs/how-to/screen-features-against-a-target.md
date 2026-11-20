@@ -40,7 +40,7 @@ noise alone pushes past a threshold set for one test.
    `|t_stat|`.** The table has one row per (feature, target) pair, with
    its moments, `corr`, `beta`, `t_stat` and `n_kish`, the effective number
    of rows behind them. [Its
-   docstring](https://rheon-dev.github.io/rheon/rheon.html#rheon.ModelBank.marginal)
+   docstring](https://rheon-dev.github.io/rheon/rheon.html#rheon.polars.ModelBank.marginal)
    defines each column.
 
 This code makes 200 features, of which three move the target, screens

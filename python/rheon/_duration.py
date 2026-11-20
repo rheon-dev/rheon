@@ -36,6 +36,30 @@ class _Expr:
     against it asks :func:`_is_expr` instead (``_spec._matches``)."""
 
 
+class _Frame:
+    """What ``pl.DataFrame`` is at run time for the annotations: see
+    :class:`_Expr`."""
+
+
+class _Schema:
+    """What ``pl.Schema`` is at run time for the annotations: see
+    :class:`_Expr`."""
+
+
+class _PolarsTypes:
+    """Stands for the ``pl`` module in a neutral module's annotations at run
+    time, where ``typing.get_type_hints`` evaluates ``pl.DataFrame`` and Polars
+    may be absent. A neutral module writes ``import polars as pl`` under
+    ``TYPE_CHECKING`` and ``from rheon._duration import _PolarsTypes as pl``
+    otherwise, so a type checker reads Polars and the run time reads these
+    classes, which no value is an instance of. Code that needs Polars itself
+    imports it inside the function."""
+
+    DataFrame = _Frame
+    Schema = _Schema
+    Expr = _Expr
+
+
 def _is_expr(value: Any) -> TypeGuard[pl.Expr]:
     """Whether ``value`` is a polars expression: never without Polars
     imported, since an expression is made by Polars."""

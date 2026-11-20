@@ -122,7 +122,7 @@ knowing, and often fine). Its `code` names the check, such as `missing`,
 where it was found, the measured `value` sits beside its `threshold`, and
 the `message` says what is wrong and, for most codes, what to do. The guide
 [docs/DATA-QUALITY.md](../DATA-QUALITY.md) lists every code under the problem it belongs to, and the docstring of
-[`ModelBank.check`](https://rheon-dev.github.io/rheon/rheon.html#rheon.ModelBank.check)
+[`ModelBank.check`](https://rheon-dev.github.io/rheon/rheon.html#rheon.polars.ModelBank.check)
 lists every check with its threshold.
 
 **A finding's `value` gives the number measured,** here the share
@@ -191,7 +191,7 @@ warning duplicate b3 x0_cents
 ## Read every group as one stream
 
 `bank.audit()` reads the audit's counts as a table, and its
-[docstring](https://rheon-dev.github.io/rheon/rheon.html#rheon.ModelBank.audit)
+[docstring](https://rheon-dev.github.io/rheon/rheon.html#rheon.polars.ModelBank.audit)
 defines each column.
 
 1. **Call `bank.audit()`.** It returns one row per

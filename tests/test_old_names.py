@@ -106,6 +106,8 @@ ENV_FALLBACK = (
 #: `polars-online` and the package `polars_online`, and the scripts and tests
 #: that compare with one, or read one's state, import it by that name.
 RELEASE_BEFORE_2 = (
+    "scripts/budgets.py",  # the drift baseline falls back to the last polars-online release
+    "tests/test_budgets.py",
     "scripts/compare_release.py",
     "scripts/release_probe.py",
     "scripts/rheon_import.py",
@@ -130,7 +132,6 @@ PAST = (
 
 #: Not renamed yet: each still names the old project or links its old home.
 NOT_YET = (
-    ".github/ISSUE_TEMPLATE/config.yml",
     ".github/workflows/ci.yml",
     ".github/workflows/polars-canary.yml",
     "examples/bank.toml",
@@ -193,7 +194,13 @@ RULES = (
         "the project's home is github.com/rheon-dev/rheon and rheon-dev.github.io/rheon",
         re.compile(r"hgilde"),
         CODE + PROSE + GUIDES,
-        allowed=("tests/test_old_names.py", *NOT_YET, *NAMES_THE_OLD),
+        allowed=(
+            "tests/test_old_names.py",
+            *NOT_YET,
+            *NAMES_THE_OLD,
+            "scripts/budgets.py",  # the baseline's fallback: the last polars-online release
+            "tests/test_budgets.py",
+        ),
     ),
     Rule(
         "the warning classes were renamed RheonWarning and RheonDeprecationWarning",
@@ -219,6 +226,14 @@ RULES = (
             # Lets a benchmark run under a release before 2.0, whose namespace is `.online`.
             "scripts/rheon_import.py",
         ),
+    ),
+    Rule(
+        "there is no public `gbdt` module: the helper for gradient-boosted trees is internal",
+        re.compile(r"\b(?:rp|po)\.gbdt"),
+        PROSE + GUIDES,
+        # The version guide lists the old name beside what became of it, and
+        # the records' table names the guides it files.
+        allowed=("tests/test_old_names.py", *NAMES_THE_OLD, "docs/README.md"),
     ),
     Rule(
         "the environment variables are RHEON_*; only the fallback reads the old names",
@@ -319,6 +334,7 @@ def test_the_scan_sees_what_it_is_meant_to():
         "df\\.online\\.predict",
         "POLARS_ONLINE_TIMING",
         "po.spec.ewridge",
+        "rp.gbdt.xgboost_matrix",
         r"po\.stream\.embargo",
     )
     caught = [s for s in samples if any(r.pattern.search(s) for r in RULES)]

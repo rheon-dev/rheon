@@ -29,7 +29,7 @@ deviation, at the feature's spread as it stands on that row.
 
 1. **Make each z-score a column with `rp.ewm_mean` and `rp.ewm_std` in
    the query's `.rheon.with_windows`
-   ([`rp.stream.with_windows`](https://rheon-dev.github.io/rheon/stream.html#rheon.stream.with_windows)),
+   ([`rp.stream.with_windows`](https://rheon-dev.github.io/rheon/stream.html#rheon.polars.stream.with_windows)),
    chained in the query before the
    [model bank](../GLOSSARY.md#the-model-bank-and-what-it-reads).** The
    z-score is `(x − rp.ewm_mean(x)) / rp.ewm_std(x)`. Give both

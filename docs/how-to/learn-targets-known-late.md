@@ -182,7 +182,7 @@ measurement.
 ## Write the delay out as rows
 
 **Use
-[`rp.stream.embargo`](https://rheon-dev.github.io/rheon/stream.html#rheon.stream.embargo)
+[`rp.stream.embargo`](https://rheon-dev.github.io/rheon/stream.html#rheon.polars.stream.embargo)
 when the delay has to be visible in the frame, or when another engine fits
 the model.** It returns every row twice: a copy to predict at `t` with
 weight 0, and a copy to learn from at `t + delay`.

@@ -22,7 +22,7 @@ pages by the task you have in hand.
 | [Scoring and comparing](#scoring-and-comparing) | `rp.eval`: scores, tests and searches over a bank's output |
 | [Fits from Grams](#fits-from-grams) | `rheon.gram`: fits over any blocks and columns, from the Grams one pass leaves |
 | [Correlation matrices](#correlation-matrices) | `rheon.corr`: repair, shrink and score a correlation matrix |
-| [Trees and simulation](#trees-and-simulation) | `rp.gbdt` and `rp.sim` |
+| [Simulation](#simulation) | `rp.sim` |
 | [Parameters every spec takes](#parameters-every-spec-takes) | the parameters shared by every model, by family |
 | [Errors and warnings](#errors-and-warnings) | the classes a caller can catch or filter |
 | [Versions and the environment](#versions-and-the-environment) | the version numbers, and the environment variables the library reads |
@@ -174,10 +174,11 @@ group's row.
 | [`rheon.corr.equicorr`](https://rheon-dev.github.io/rheon/corr.html#rheon.corr.equicorr), [`rheon.corr.equicorr_row`](https://rheon-dev.github.io/rheon/corr.html#rheon.corr.equicorr_row), [`rheon.corr.equicorr_loglik`](https://rheon-dev.github.io/rheon/corr.html#rheon.corr.equicorr_loglik), [`rheon.corr.block_means`](https://rheon-dev.github.io/rheon/corr.html#rheon.corr.block_means), [`rheon.corr.from_blocks`](https://rheon-dev.github.io/rheon/corr.html#rheon.corr.from_blocks), [`rheon.corr.signal_share`](https://rheon-dev.github.io/rheon/corr.html#rheon.corr.signal_share) | one correlation for a whole matrix or per block, and how much of its movement across blocks is not noise | [Track the average correlation](how-to/track-the-average-correlation.md) · [Choose another function](how-to/repair-and-score-a-correlation-matrix.md#choose-another-function) |
 | [`rheon.corr.epps_invert`](https://rheon-dev.github.io/rheon/corr.html#rheon.corr.epps_invert) | the correlation over several rows from lagged co-moments, undoing the Epps effect | [REGIMES.md](REGIMES.md), [Series that tick at their own times](explanation/asynchronous-series.md) |
 
-## Trees and simulation
+## Simulation
 
-Two modules sit beside the bank: one builds training data for
-gradient-boosted trees, and one simulates streams whose truth is known.
+One module sits beside the bank: `rp.sim` simulates streams whose truth is
+known. (The helper that builds training data for gradient-boosted trees is
+internal, and has no public name.)
 
 | feature | what it does | shown in |
 |---|---|---|

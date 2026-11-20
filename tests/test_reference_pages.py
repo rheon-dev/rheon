@@ -77,6 +77,60 @@ def test_every_link_the_readme_gives_lands_in_the_built_reference(built):
     assert not missing, missing
 
 
+#: A link into the reference anywhere in a guide: the page may sit under
+#: ``api/``, the id is read to the first character no id holds, and a
+#: template (``<name>``) is not a link.
+ANY_LINK = re.compile(r"https://rheon-dev\.github\.io/rheon/([\w./-]+?)\.html#([\w.\-<>]+)")
+
+
+def _guide_links() -> list[tuple[str, str, str]]:
+    """Every ``page.html#id`` link in the README, ``llms.txt`` and every file
+    under ``docs/`` that is not a record, the built reference or its output:
+    (the file, the page, the id)."""
+    files = [ROOT / "README.md", ROOT / "llms.txt"]
+    for path in sorted((ROOT / "docs").rglob("*")):
+        rel = path.relative_to(ROOT / "docs").parts
+        if rel[0] in {"records", "reference", "_build"} or path.suffix not in {".md", ".txt"}:
+            continue
+        files.append(path)
+    found = []
+    for path in files:
+        text = path.read_text(encoding="utf-8")
+        for page, anchor in ANY_LINK.findall(text):
+            if "<" not in anchor:
+                found.append((str(path.relative_to(ROOT)), page, anchor))
+    return found
+
+
+def test_every_anchor_a_guide_links_exists_in_the_built_reference(built):
+    """Names that need Polars are anchored ``rheon.polars.<name>``, which the
+    flat ``rheon.<name>`` is not: a link written the flat way lands at the
+    top of its page and no build says so. Every ``...html#id`` link in the
+    README, ``llms.txt`` and the guides (not the records) is held to the
+    built HTML."""
+    links = _guide_links()
+    assert len(links) >= 120, len(links)  # the scan reads the guides it is meant to
+    ids: dict[str, set[str] | None] = {}
+    missing = []
+    for where, page, anchor in links:
+        if page not in ids:
+            html = built / f"{page}.html"
+            ids[page] = _ids(html) if html.exists() else None
+        if ids[page] is None or anchor not in ids[page]:
+            missing.append(f"{where}: {page}.html#{anchor}")
+    assert not missing, missing
+
+
+def test_the_scan_of_the_guides_reads_what_it_is_meant_to():
+    where = {w for w, _, _ in _guide_links()}
+    assert {"README.md", "docs/FEATURES.md", "docs/how-to/run-a-bank-in-a-query.md"} <= where
+    assert not any(w.startswith("docs/records/") for w in where), where
+    assert ANY_LINK.findall(
+        "(https://rheon-dev.github.io/rheon/api/rheon.spec.ewridge.html#rheon.spec.ewridge)"
+    )
+    assert not [a for _, _, a in _guide_links() if "<" in a]
+
+
 def test_each_module_page_keeps_an_anchor_for_every_object_it_lists(built):
     """Every placed object, and every method and property of a class, keeps
     its old id on its module page, and that page links the object's own."""

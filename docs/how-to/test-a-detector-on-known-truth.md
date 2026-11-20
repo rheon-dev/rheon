@@ -72,7 +72,7 @@ truth_blocks: 8 rows; block, state, n_rows, corr
 | `truth_blocks` | each block's true correlation matrix, the mean over its rows, as its upper triangle with the diagonal, row by row: for two series `[1, rho, 1]` |
 
 Every keyword, and what it refuses, is in `rp.sim.regimes`'
-[docstring](https://rheon-dev.github.io/rheon/sim.html#rheon.sim.regimes).
+[docstring](https://rheon-dev.github.io/rheon/sim.html#rheon.polars.sim.regimes).
 
 ## Score the detector against the truth
 

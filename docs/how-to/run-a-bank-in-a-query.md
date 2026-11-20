@@ -5,7 +5,7 @@ This how-to is for anyone who runs a model bank inside a Polars query and
 wants to choose the chunk size, write the output to a file, filter it, or
 catch a misnamed column early.
 
-[`lf.rheon.fit_predict(specs)`](https://rheon-dev.github.io/rheon/namespaces.html#rheon._frame.LazyFrameOnlineNamespace.fit_predict)
+[`lf.rheon.fit_predict(specs)`](https://rheon-dev.github.io/rheon/namespaces.html#rheon.polars._frame.LazyFrameRheonNamespace.fit_predict)
 adds a [model bank](../GLOSSARY.md#the-model-bank-and-what-it-reads) to a
 Polars [query](../GLOSSARY.md#the-model-bank-and-what-it-reads), which
 feeds the bank its rows `chunk_size` at a time (100,000 by default) when
@@ -169,8 +169,8 @@ spec "ridge": feature column "x9" is not in the input, whose columns are ["t", "
 ## Call the functions a type checker sees
 
 **With a type checker, call `rp.fit_predict`,
-[`rp.predict`](https://rheon-dev.github.io/rheon/rheon.html#rheon.predict)
-and [`rp.unnest`](https://rheon-dev.github.io/rheon/rheon.html#rheon.unnest)
+[`rp.predict`](https://rheon-dev.github.io/rheon/rheon.html#rheon.polars.predict)
+and [`rp.unnest`](https://rheon-dev.github.io/rheon/rheon.html#rheon.polars.unnest)
 in place of the `.rheon` methods.** The package adds those methods to
 Polars' frames when it is imported, so a type checker cannot see them.
 

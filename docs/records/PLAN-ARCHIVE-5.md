@@ -2564,7 +2564,7 @@ plan adds `huber_scale` with the present behaviour as the default.
       `clock`; `bocpd`'s refusal names its current keywords. The user, 2026-10-25,
       asked for as much parallel work as possible and approved six builders
       at once for this effort (CLAUDE.md's four otherwise):
-      `POLARS_ONLINE_SLOTS=6`.
+      `POLARS_ONLINE_SLOTS=6` (now `RHEON_SLOTS`).
       *Classes 6-8 merged (278 (b))*, finding seven defects, each pinned as
       a labelled test of today's behaviour; fixed before 1.4.0 under the
       user's direction ("do the right thing ... as long as we can test"),

@@ -10,7 +10,7 @@ of models, one for each
 [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads) and
 [group](../GLOSSARY.md#the-model-bank-and-what-it-reads), over the same
 rows. In a loop you hold the bank as a
-[`ModelBank`](https://rheon-dev.github.io/rheon/rheon.html#rheon.ModelBank)
+[`ModelBank`](https://rheon-dev.github.io/rheon/rheon.html#rheon.polars.ModelBank)
 object, pass it each [chunk](../GLOSSARY.md#the-model-bank-and-what-it-reads),
 and ask it what it holds between chunks ([Inspect a
 bank](inspect-a-bank.md)). [Run a bank in a query](run-a-bank-in-a-query.md)
