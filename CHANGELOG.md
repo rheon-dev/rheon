@@ -24,7 +24,7 @@ returns.
   after a clock gap longer than the window is counted the same way. Only this
   count moves: predictions, coefficients and every emitted column are as
   before, and a state saved by an earlier build continues to the bit except
-  for it.
+  for it. Moves: `lasso.solve_failures`
 
 ## [2.0.0] — 2026-11-19
 

@@ -303,3 +303,15 @@ on the first row, within the golden 1e-12 throughout; no schema bump); every oth
 against their frozen frames in `break_wald_` (`quantiled`'s entry of
 `CONTINUES_WITHIN`, 4.7e-16 relative here) and re-save the current
 fixture's bytes.
+
+A nineteenth, the user's (2026-11-20, task 526: "Accept as exception 19"):
+a windowed `lasso` state saved by 2.0.0 or earlier continues to the bit in
+every field except `solve_failures`. Once rows have aged out of the window,
+a descent that runs out of `max_iter` sweeps now counts, where the window's
+effective rows alone used to excuse it, so a continued state counts its cap
+hits under the new rule (the rebuild after a clock gap longer than the
+window included). No emitted column moves and the layout is unchanged. The
+current fixture `lasso_window` of `rheon-core` regenerated: one byte, its
+`solve_failures` 0 -> 1, after its clock gap at row 36; every other fixture
+is byte for byte, and the kept `v61` to `v66` fixtures load and continue as
+before.
