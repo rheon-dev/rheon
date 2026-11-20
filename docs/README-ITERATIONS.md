@@ -1095,7 +1095,7 @@ sentences, mean 18.4, 2 of 35 or more and none of 45; after, 2,225 prose
 words, 119 sentences, mean 18.7, 5 of 35 or more and none of 45; tables,
 blocks and sections unchanged.
 
-**Verdict:** pending (the user).
+**Verdict:** approved by the user, 2026-11-20 ("where they can be" changed to "where possible" with the approval).
 
 ## The ideas
 

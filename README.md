@@ -9,11 +9,11 @@
 
 rheon fits models online, one row at a time, with bounded memory over
 unlimited data. It is written in Rust, and its online least squares runs
-at over ten million rows a second on 20 factors from a parquet file on
-an M4 MacBook Pro. There are dozens of
-models, each checked against slower libraries by nearly twenty thousand
-tests, and by comparison fits over every parameter on more than a dozen
-public data sets and far more generated data.
+at over ten million rows a second on 20 factors from a parquet file on an
+M4 MacBook Pro. There are dozens of models, each checked against slower
+libraries by nearly twenty thousand tests, and by comparison fits over
+every parameter on more than a dozen public data sets and far more
+generated data.
 
 Most models support both an expanding and a rolling fit. A rolling fit
 decays the past: it needs ordered data, and approximates a local fit over
@@ -31,7 +31,7 @@ target or formula columns saved first. The embargo keeps such a target
 from leaking the future into the current estimate and its diagnostics.
 
 Many models, or many settings of one model, are fit in the same pass,
-and computed in parallel where they can be. That makes a large scan for
+and computed in parallel where possible. That makes a large scan for
 model selection much faster than fitting each candidate on its own.
 
 | section | what it covers |
