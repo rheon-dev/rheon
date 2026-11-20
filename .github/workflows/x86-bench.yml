@@ -8,6 +8,7 @@ name: x86 bench
 on:
   push:
     branches: [vm-tools/x86-ci]
+    paths: [vm-tools/w479/**, vm-tools/w479-split/**]
   workflow_dispatch:
 permissions:
   contents: read
