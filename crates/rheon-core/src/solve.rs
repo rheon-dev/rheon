@@ -830,11 +830,32 @@ fn cols_dispatched(
     out.map_err(|index| llt::factor::LltError::NonPositivePivot { index })
 }
 
+/// [`cols_dispatched`], called from [`cholesky_seq`] through a function
+/// marked cold, so that the compiler lays the call out at the end of
+/// `cholesky_seq`. Called directly, the call sat between the order's test
+/// and the small factor's jump table, which the compiler moved up behind
+/// it, faer's path moved to the end, and the small factor's last store was
+/// copied into each order's branch; on x86-64 (AMD EPYC 9V74) `ew_class`
+/// (tied) at 4, 8 and 12 features ran 1.01 to 1.05 of its time before the
+/// loop, in both function layouts (task 479). Through this, in the x86-64
+/// release build (thin LTO), `cholesky_seq` is its code before the loop with
+/// the test of the order (8 instructions, 32 bytes) on faer's path and this
+/// call at its end: every later block is where it was, 32 bytes on. The
+/// cost at 13 and over is one more call, a jump to `cols_dispatched`.
+#[cold]
+#[inline(never)]
+fn cols_cold(
+    a: MatMut<'_, f64, usize, usize, faer::ContiguousFwd>,
+) -> Result<(), llt::factor::LltError> {
+    cols_dispatched(a)
+}
+
 /// faer's own Cholesky of `a`, sequential, its scratch in `work` where the
 /// caller keeps one, else in a buffer of its own; to the bit, an order up to
 /// the machine's small limit by [`small_llt`] and one past [`SMALL`] up to
 /// [`COLS`] by [`llt_cols`] where `a`'s columns are contiguous (an x86-64
-/// CPU with AVX2 takes faer's call from 9 to 12, where it was the faster).
+/// CPU with AVX2 takes faer's call from 9 to 12, where it was the faster),
+/// through [`cols_cold`].
 fn cholesky_seq(
     mut a: MatMut<'_, f64>,
     work: Option<&mut CholWork>,
@@ -847,7 +868,7 @@ fn cholesky_seq(
         && n <= COLS
         && let Some(cols) = a.rb_mut().try_as_col_major_mut()
     {
-        return cols_dispatched(cols);
+        return cols_cold(cols);
     }
     let req = llt::factor::cholesky_in_place_scratch::<f64>(n, Par::Seq, Default::default());
     let mut own;
