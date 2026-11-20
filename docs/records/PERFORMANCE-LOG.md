@@ -5302,8 +5302,13 @@ below 1.6.0 in the best, the median and each of the six rounds:
 `ew_class`'s diagonal covariance, 2.7% slower on the best and 3.3% on
 the medians, against a spread of 1.8%. Its code, `ewclass.rs` in `rheon-core`, is 1.6.0's byte for byte (the
 rename moved the file and nothing else), and no other `ew_class` row moved,
-so the gap is a small one in the build's layout or in the code around the
-row; it is not explained here. The flat `write_parquet` row's best-of-six gap
+so two more measurements settled it. 1.6.0 built on this machine from its tag
+(eight alternating rounds, Polars 2.0.0 in both) was still 2.4% faster on the
+median, so the PyPI wheel's build was not the cause. Both rebuilt with
+`-C llvm-args=-align-all-functions=6` were level: 2.0.0 3,650,279 against
+3,620,021 rows a second at best, +0.45% on the median of eight alternating
+rounds, inside a scatter of 0.65%; the full and shared rows level too (+0.2%
+and +0.1%). The gap is code placement in the default layout, not a slowdown. The flat `write_parquet` row's best-of-six gap
 is its own scatter (this build's six runs lay within 4.6%, 1.6.0's
 within 14%), and its medians are level. The writer is Polars'.
 
