@@ -201,7 +201,32 @@ fn cases() -> Vec<Case> {
             rows: 4_000,
         });
     }
+    // Task 479 (lasso split): the widths between, for the crossover of the
+    // split sweep (`lasso x`: filter on it alone), on each side of its
+    // floor of 32 features.
+    for k in [8, 24, 31, 32, 40, 48, 64, 96, 128] {
+        for (tag, penalties) in [
+            ("1 penalty", json!([0.01])),
+            ("3 penalties", json!([0.1, 0.01, 0.0])),
+        ] {
+            out.push(Case {
+                name: format!("lasso x k={k} {tag}"),
+                spec: decayed(json!({"type": "lasso", "penalties": penalties}), k, true),
+                shape: Shape::Linear,
+                warm: 2_000,
+                rows: if k > 64 { 4_000 } else { 10_000 },
+            });
+        }
+    }
     for k in [20, 200, 500] {
+        // Task 479 (lasso split prototype): one penalty as well as three.
+        out.push(Case {
+            name: format!("lasso k={k} 1 penalty"),
+            spec: decayed(json!({"type": "lasso", "penalties": [0.01]}), k, true),
+            shape: Shape::Linear,
+            warm: if k > 100 { 0 } else { 2_000 },
+            rows: if k > 100 { 4 * k } else { 20_000 },
+        });
         out.push(Case {
             name: format!("lasso k={k} 3 penalties"),
             spec: decayed(

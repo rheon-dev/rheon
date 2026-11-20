@@ -80,6 +80,52 @@ model that only the new build has is listed as an addition and passes.
 
 ### Performance
 
+- **`lasso`'s coordinate descent sweeps without a chain of dependent
+  subtractions from 40 features.** Each coordinate's update subtracted the
+  terms of the coefficients after it one at a time, each waiting for the
+  one before, and that chain was most of a row at wide widths (73% at 500
+  features). Now every partial sum takes the sweep's starting coefficients
+  off before the sweep begins, and each new coefficient's column comes off
+  the coordinates after it as soon as it is set: the same descent, each
+  update's terms in another order, all of it vector arithmetic. A zero
+  coefficient's column is left out where the correlation matrix is finite,
+  which is read only when a sweep first meets a zero coefficient, in one
+  pass that runs as vectors; the sweep it replaces from 64 features, which
+  left the zeros out too, read the matrix every solve. Against the build
+  before this release (the matrix reuse below included), a row takes, with
+  one penalty and with three (ranges over both function layouts), on arm64 (Apple M4 Pro): 0.83 to 0.84 and
+  0.78 at 40 features, 0.78 to 0.80 and 0.71 at 48, 0.67 to 0.68 and 0.66
+  at 64, 0.76 to 0.77 and 0.63 to 0.64 at 96, 0.78 to 0.81 and 0.61 to
+  0.62 at 128, 0.68 to 0.70 and 0.48 at 200, 0.61 to 0.63 and 0.41 at 500.
+  On x86-64 (AMD EPYC 9V74, a GitHub runner, measured on this change
+  against the build before it): 0.97 to 0.98 and 0.95 to 0.96 at 40, 0.95
+  to 0.96 and 0.90 at 48, 0.83 to 0.84 and 0.86 to 0.87 at 64, 0.83 to 0.86
+  and 0.80 to 0.81 at 96, 0.83 to 0.85 and 0.76 to 0.77 at 128, 0.73 to
+  0.75 and 0.61 to 0.62 at 200, 0.67 and 0.54 to 0.55 at 500. At 32
+  features it was 1.00 to 1.01 with one penalty and 1.03 with three on
+  x86, in both layouts, though faster on arm64 (0.83 to 0.89), so it
+  starts at 40 on every platform. Below 40 features nothing changes, to
+  the bit, and a row costs what it did. From 40 the order of each sum
+  moves predictions by at most about 61,000 ulps (8e-12 relative; 1,500 to
+  8,300 ulps at the 99.9th percentile) and coefficients by 1e-12 relative
+  at the 99.9th percentile, more where a fit in its warm-up stops at
+  `max_iter` before it settles (to 1e-6 relative at 500 features); every
+  descent tested stopped on the same sweep as before, and against
+  scikit-learn's coordinate descent on the same problem the fits are as
+  close to the optimum as they were. The penalty selected did not change
+  in any case measured, but a choice between two penalties that predict
+  alike to the last bits can, and so can whether a descent settles within
+  `max_iter`. Every field read from a fit or its residuals moves; the
+  features' health, the weights and the clocks do not. Moves:
+  `lasso.pred_*`, `lasso.resid_*`, `lasso.abs_resid_*`, `lasso.coef`,
+  `lasso.sigma_*`, `lasso.zscore_*`, `lasso.studentized_*`, `lasso.lo_*`,
+  `lasso.hi_*`, `lasso.coverage_*`, `lasso.hit_rate_*`, `lasso.ic_*`,
+  `lasso.r2_*`, `lasso.autocorr_*`, `lasso.drift*`, `lasso.calibration_*`,
+  `lasso.cusum*`, `lasso.break_wald_*`, `lasso.ljung_box_*`,
+  `lasso.breusch_pagan_*`, `lasso.ramsey_reset_*`, `lasso.skew_*`,
+  `lasso.kurtosis_*`, `lasso.jarque_bera_*`, `lasso.selected_*`,
+  `lasso.penalty_selected_*`, `lasso.withheld_reason`,
+  `lasso.solve_failures`.
 - `lasso` writes each solve's correlation matrix over the one its thread's
   last solve left, where every solve made and zeroed a new one (2 MB at 500
   features): 0.97 of the time a row at 500 features on arm64 (Apple M4 Pro,

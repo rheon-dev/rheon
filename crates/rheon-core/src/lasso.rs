@@ -74,6 +74,10 @@ use crate::since::Since;
 use crate::solve::dot_aug;
 use crate::{Decay, EwCov, GramPart, TargetGaps, TargetMoments};
 
+// The sweep with no dependent chain, from `split::SPLIT_MIN_K` features
+// (task 479).
+mod split;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LassoCfg {
     pub n_features: usize,
@@ -1027,6 +1031,8 @@ impl Lasso {
         for (g, gram) in grams.iter().enumerate() {
             let readers = self.acc.grams.readers(g);
             let (c, d, s, means) = self.standardized_in(gram, cross, &readers, CORR_BUF.take());
+            // A new correlation matrix, its finiteness not yet read.
+            support.reset();
             for (jj, &j) in readers.iter().enumerate() {
                 // No row of this target inside the window: no fit to report
                 // (C2). Without a window, no weight and no fit from an
@@ -1068,7 +1074,6 @@ impl Lasso {
                         }
                     }
                 }
-                support.reset(&c);
                 for (li, &lam) in self.cfg.lasso_path.iter().enumerate() {
                     // Coordinate descent, warm-started along the path.
                     let l1 = lam * self.cfg.l1_ratio;
@@ -1146,13 +1151,16 @@ impl Lasso {
     }
 }
 
-/// Coordinate descent at one point of the path: sweeps of [`cd_sweep`] (or
-/// [`cd_sweep_sparse`], where the coefficients are mostly zero) until the
-/// largest move settles below `limit` (`gramfit::settled`) or `max_iter`
-/// sweeps have run; whether it settled. Out of line, so the sweep compiles
-/// on its own rather than inside the solve: there its run over a row lost
-/// its fusion and kept its bounds checks when the solve's body moved (2.5%
-/// more instructions in `lasso_k20` on x86, task 374). A call per sweep
+/// Coordinate descent at one point of the path: sweeps of [`cd_sweep`]
+/// below [`split::SPLIT_MIN_K`] features, of [`split::cd_sweep_split`] from
+/// it, until the largest move settles below `limit` (`gramfit::settled`)
+/// or `max_iter` sweeps have run; whether it settled. Out of line, so the
+/// sweep compiles on its own rather than inside the solve: there its run
+/// over a row lost its fusion and kept its bounds checks when the solve's
+/// body moved (2.5% more instructions in `lasso_k20` on x86, task 374).
+/// Below the floor nothing but the one comparison is added to the chained
+/// descent: no pass over `c` (task 479: the prototype's check of `c` at
+/// every width cost 2.5% to 4% a row at 20 features on x86). A call per sweep
 /// rather than per path point cost `lasso` 16% more instructions a row at
 /// four features on arm64. `c` is its own transpose to the bit, as
 /// `standardized` makes it.
@@ -1170,9 +1178,10 @@ fn descend(
     support: &mut Support,
 ) -> bool {
     debug_assert!(is_symmetric(c, k), "the sweeps read a column as a row");
+    let split = k >= split::SPLIT_MIN_K;
     for _ in 0..max_iter {
-        let delta = if support.reads(b) {
-            cd_sweep_sparse(c, k, d, s, l1, l2, b, support)
+        let delta = if split {
+            split::cd_sweep_split(c, k, d, s, l1, l2, b, &mut support.acc, &mut support.finite)
         } else {
             cd_sweep(c, k, d, s, l1, l2, b, &mut support.acc)
         };
@@ -1183,56 +1192,28 @@ fn descend(
     false
 }
 
-/// The fewest features at which a sweep reads only the nonzero
-/// coefficients ([`Support`]): below it the dense run is as quick.
-const SPARSE_MIN_K: usize = 64;
-
-/// What [`cd_sweep_sparse`] reads: whether it may, and the buffers the
-/// sweeps work in.
+/// What the sweeps read beside the problem: whether the split sweep may
+/// leave a zero coefficient's column out, and the partial sums' buffer.
 #[derive(Default)]
 struct Support {
-    /// Every entry of the correlation matrix is finite, so a term `c_ij * 0`
-    /// is exactly 0 and leaving it out changes no bit of the sum. With a
-    /// NaN or an infinity in `c` that term is NaN, and the sparse sweep
-    /// is not used.
-    finite: bool,
-    /// The sweep's starting nonzero coefficients, ascending.
-    start: Vec<usize>,
-    /// Their values, in the same order.
-    vals: Vec<f64>,
+    /// Whether every entry of the correlation matrix is finite, so a term
+    /// `c_ij * 0` is exactly 0 and leaving it out changes no bit of the
+    /// sum. With a NaN or an infinity in `c` that term is NaN, and the
+    /// split sweep takes it off. `None` until a split sweep first meets a
+    /// zero coefficient, which reads it ([`split::all_finite`]) for the
+    /// matrix's every later sweep: a solve whose coefficients are all
+    /// nonzero, and the chained sweep below [`split::SPLIT_MIN_K`]
+    /// features, never read it.
+    finite: Option<bool>,
     /// The partial sums a sweep keeps for the coordinates not yet reached.
     acc: Vec<f64>,
 }
 
 impl Support {
-    /// For a new correlation matrix: whether the sparse sweep may read it.
-    /// The buffers keep what they hold.
-    fn reset(&mut self, c: &[f64]) {
-        self.finite = c.len() >= SPARSE_MIN_K * SPARSE_MIN_K && c.iter().all(|v| v.is_finite());
-    }
-
-    #[cfg(test)]
-    fn of(c: &[f64]) -> Self {
-        let mut support = Self::default();
-        support.reset(c);
-        support
-    }
-
-    /// Whether the next sweep runs sparse, its `start` read from `b`: the
-    /// terms left out are the zeros, so it pays below three quarters of
-    /// the coefficients nonzero.
-    fn reads(&mut self, b: &[f64]) -> bool {
-        if !self.finite {
-            return false;
-        }
-        self.start.clear();
-        self.start.extend(
-            b.iter()
-                .enumerate()
-                .filter(|(_, v)| **v != 0.0)
-                .map(|(i, _)| i),
-        );
-        self.start.len() * 4 <= b.len() * 3
+    /// For a new correlation matrix: its finiteness not yet read. The
+    /// buffer keeps what it holds.
+    fn reset(&mut self) {
+        self.finite = None;
     }
 }
 
@@ -1368,99 +1349,6 @@ fn cd_sweep(
         max_delta = max_delta.max((newb - bl[i]).abs());
         bl[i] = newb;
         pending = Some((i, newb));
-    }
-    max_delta
-}
-
-/// [`cd_sweep`] summing only the terms whose coefficient is nonzero: the
-/// other terms subtract exactly 0, so `rho` is the same bits, the terms in
-/// the same order, in `O(nnz)` a coordinate instead of `O(k)`. The chain
-/// that ends in `b_i` is `acc[i]` and then the starting nonzeros after `i`
-/// (`support.start`, with their values in `support.vals`), and each
-/// nonzero coefficient's column is taken off the partial sums of the
-/// coordinates after it beside the next coordinate's chain, in blocks of
-/// terms, the column's share per block. A zero coefficient has no column
-/// to take off. Needs every `c` finite ([`Support::finite`]).
-#[inline(never)]
-#[allow(clippy::too_many_arguments)]
-fn cd_sweep_sparse(
-    c: &[f64],
-    k: usize,
-    d: &[f64],
-    s: &[f64],
-    l1: f64,
-    l2: f64,
-    b: &mut [f64],
-    support: &mut Support,
-) -> f64 {
-    const BLOCK: usize = 8;
-    let mut max_delta: f64 = 0.0;
-    let Support {
-        start, vals, acc, ..
-    } = support;
-    acc.clear();
-    acc.extend_from_slice(d);
-    vals.clear();
-    vals.extend(start.iter().map(|&j| b[j]));
-    // The last coordinate set to a nonzero coefficient, its column not yet
-    // taken off `acc[i..]`.
-    let mut pending: Option<(usize, f64)> = None;
-    let mut next = 0;
-    let rows = c.chunks_exact(k).zip(s);
-    for (i, (row, &si)) in rows.take(k).enumerate() {
-        // The starting nonzeros past `i`.
-        while start.get(next).is_some_and(|&j| j <= i) {
-            next += 1;
-        }
-        let Some((acc_i, acc_after)) = acc[i..].split_first_mut() else {
-            break;
-        };
-        let Some(&cii) = row.get(i) else {
-            break;
-        };
-        if si <= 0.0 {
-            b[i] = 0.0;
-            continue;
-        }
-        let mut rho = *acc_i;
-        let (chain_at, chain_vals) = (&start[next..], &vals[next..]);
-        match pending {
-            None => {
-                for (&j, &bj) in chain_at.iter().zip(chain_vals) {
-                    rho -= row[j] * bj;
-                }
-            }
-            Some((p, bp)) => {
-                let Some((&cpi, column_after)) = c[p * k + i..(p + 1) * k].split_first() else {
-                    break;
-                };
-                rho -= cpi * bp;
-                // The column's terms, a share beside each block of the
-                // chain's, the rest after.
-                let blocks = chain_at.len().div_ceil(BLOCK).max(1);
-                let step = acc_after.len().div_ceil(blocks).next_multiple_of(4);
-                let (mut a_rest, mut p_rest) = (acc_after, column_after);
-                for (jb, vb) in chain_at.chunks(BLOCK).zip(chain_vals.chunks(BLOCK)) {
-                    for (&j, &bj) in jb.iter().zip(vb) {
-                        rho -= row[j] * bj;
-                    }
-                    let take = step.min(a_rest.len());
-                    let (a_now, a_later) = a_rest.split_at_mut(take);
-                    let (p_now, p_later) = p_rest.split_at(take);
-                    for (a, cpj) in a_now.iter_mut().zip(p_now) {
-                        *a -= cpj * bp;
-                    }
-                    (a_rest, p_rest) = (a_later, p_later);
-                }
-                for (a, cpj) in a_rest.iter_mut().zip(p_rest) {
-                    *a -= cpj * bp;
-                }
-            }
-        }
-        let newb = soft_over(rho, l1, cii + l2);
-        max_delta = max_delta.max((newb - b[i]).abs());
-        b[i] = newb;
-        pending = (newb != 0.0).then_some((i, newb));
     }
     max_delta
 }
@@ -4554,105 +4442,23 @@ mod tests {
         (c, d, s)
     }
 
-    /// The sparse sweep reads only the nonzero coefficients and must return
-    /// the dense sweep's bits: the coefficients after every sweep and the
-    /// move it reports, from a start with a few nonzero entries, at penalties
-    /// that keep the fit sparse and that let it fill in.
+    /// `descend` over a wide, sparse path (100 features, two held, starts
+    /// with most coefficients zero) is the split sweep's plain definition,
+    /// every term in its order and no zero column left out, to the bit:
+    /// the sweeps counted alike.
     #[test]
-    fn the_sparse_sweep_is_the_dense_sweep_to_the_bit() {
-        let k = 90;
-        let (c, d, s) = sparse_problem(k, 11);
-        for (l1, l2) in [(0.3, 0.0), (0.1, 0.0), (0.02, 0.01), (0.0, 0.0)] {
-            let mut dense = vec![0.0; k];
-            for i in [0usize, 20, 21, 77] {
-                dense[i] = 0.1 * (i as f64 + 1.0);
-            }
-            let mut sparse = dense.clone();
-            let mut support = Support::of(&c);
-            assert!(support.finite);
-            assert!(support.reads(&sparse), "the start is sparse");
-            for sweep in 0..25 {
-                let a = cd_sweep_serial(&c, k, &d, &s, l1, l2, &mut dense);
-                // Reads the sweep's starting nonzeros into `support`, whether
-                // or not `descend` would run it sparse.
-                support.reads(&sparse);
-                let b = cd_sweep_sparse(&c, k, &d, &s, l1, l2, &mut sparse, &mut support);
-                assert_eq!(a.to_bits(), b.to_bits(), "l1 {l1}, sweep {sweep}: the move");
-                for i in 0..k {
-                    assert_eq!(
-                        dense[i].to_bits(),
-                        sparse[i].to_bits(),
-                        "l1 {l1}, sweep {sweep}, coefficient {i}"
-                    );
-                }
-            }
-        }
-    }
-
-    /// A skipped term `c * 0` can differ from the dense one only in the sign
-    /// of a `rho` that is itself zero (`-0.0 - (-0.0)` is `+0.0`), and a zero
-    /// `rho` soft-thresholds to the literal `0.0` either way, so no output
-    /// bit depends on it. Held with signed zeros forced into `c`, the start
-    /// `b` and `d` (so `rho` starts at `-0.0`), at a penalty of 0 too.
-    #[test]
-    fn signed_zeros_do_not_separate_the_sparse_sweep_from_the_dense() {
-        let k = 80;
-        let (mut c, mut d, s) = sparse_problem(k, 21);
-        for i in 0..k {
-            for j in 0..i {
-                if (i + 2 * j) % 5 == 0 {
-                    let v = if (i + j) % 2 == 0 { -0.0 } else { 0.0 };
-                    c[i * k + j] = v;
-                    c[j * k + i] = v;
-                }
-            }
-            if i % 3 == 0 {
-                d[i] = -0.0;
-            }
-        }
-        for (l1, l2) in [(0.2, 0.0), (0.0, 0.0), (0.05, 0.02)] {
-            let mut dense = vec![0.0; k];
-            for (i, v) in dense.iter_mut().enumerate() {
-                if i % 4 == 1 {
-                    *v = -0.0;
-                } else if i % 9 == 0 {
-                    *v = 0.3;
-                }
-            }
-            let mut sparse = dense.clone();
-            let mut support = Support::of(&c);
-            assert!(support.finite);
-            for sweep in 0..12 {
-                support.reads(&sparse);
-                let a = cd_sweep_serial(&c, k, &d, &s, l1, l2, &mut dense);
-                let b = cd_sweep_sparse(&c, k, &d, &s, l1, l2, &mut sparse, &mut support);
-                assert_eq!(a.to_bits(), b.to_bits(), "l1 {l1}, sweep {sweep}");
-                for i in 0..k {
-                    assert_eq!(
-                        dense[i].to_bits(),
-                        sparse[i].to_bits(),
-                        "l1 {l1}, sweep {sweep}, {i}"
-                    );
-                }
-            }
-        }
-    }
-
-    /// `descend` picks the sparse sweep where it pays, per sweep, and its
-    /// result is the dense descent's, the sweeps counted alike.
-    #[test]
-    fn descend_over_a_wide_path_is_the_dense_descent_to_the_bit() {
+    fn descend_over_a_wide_path_is_the_split_descent_to_the_bit() {
         let k = 100;
         let (c, d, s) = sparse_problem(k, 5);
         let limit = crate::gramfit::sweep_tol(1e-10, 1.0, &d);
         let mut dense = vec![0.0; k];
         let mut sparse = vec![0.0; k];
-        let mut support = Support::of(&c);
+        let mut support = Support::default();
         for l1 in [0.4, 0.15, 0.05, 0.01, 0.0] {
             let mut converged_dense = false;
             for _ in 0..100 {
                 if crate::gramfit::settled(
-                    cd_sweep_serial(&c, k, &d, &s, l1, 0.0, &mut dense),
+                    split::cd_sweep_split_plain(&c, k, &d, &s, (l1, 0.0), &mut dense),
                     limit,
                 ) {
                     converged_dense = true;
@@ -4679,33 +4485,9 @@ mod tests {
                 );
             }
         }
-    }
-
-    /// Where the sparse sweep is used: from 64 features, with every
-    /// correlation finite (a NaN times a zero is NaN, so a zero's term could
-    /// not be left out), and below three quarters of the coefficients nonzero.
-    #[test]
-    fn the_sparse_sweep_runs_where_it_pays_and_is_exact() {
-        let k = 64;
-        let (c, _, _) = sparse_problem(k, 3);
-        let mut b = vec![0.0; k];
-        let mut support = Support::of(&c);
-        assert!(support.reads(&b), "no nonzero coefficient");
-        for v in b.iter_mut().take(48) {
-            *v = 1.0;
-        }
-        assert!(support.reads(&b), "48 of 64 is three quarters");
-        assert_eq!(support.start.len(), 48);
-        b[48] = -2.0;
-        assert!(!support.reads(&b), "49 of 64 is over three quarters");
-        // Below 64 features, and with a non-finite correlation.
-        let (c63, _, _) = sparse_problem(63, 3);
-        assert!(!Support::of(&c63).reads(&vec![0.0; 63]));
-        for bad in [f64::NAN, f64::INFINITY] {
-            let mut c_bad = c.clone();
-            c_bad[5 * k + 9] = bad;
-            assert!(!Support::of(&c_bad).reads(&vec![0.0; k]), "{bad}");
-        }
+        // The zero start read `c`'s finiteness, so zero columns were left
+        // out: the bits above are the skip's.
+        assert_eq!(support.finite, Some(true));
     }
 
     /// A symmetric problem of `k` features with a dense `c`: off-diagonals
@@ -4850,20 +4632,28 @@ mod tests {
     }
 
     /// `descend` over a path on a dense problem: the serial descent's
-    /// bits, the sweeps counted alike, the penalties from strong to none.
+    /// bits below 40 features (the chained sweep, through 39), the split
+    /// sweep's plain definition's from 40, the sweeps counted alike, the
+    /// penalties from strong to none, at 39, 40 and 41 and well to each
+    /// side. The floor is written here as a number, not read from
+    /// [`split::SPLIT_MIN_K`], so moving it either way fails.
     #[test]
     fn descend_on_a_dense_problem_is_the_serial_descent_to_the_bit() {
-        for k in [2, 3, 20, 50] {
+        for k in [2, 3, 20, 39, 40, 41, 90] {
             let (c, d) = dense_problem(k, 9, 0.3);
             let s = vec![1.0; k];
             let limit = crate::gramfit::sweep_tol(1e-10, 1.0, &d);
             let mut serial = vec![0.0; k];
             let mut chains = vec![0.0; k];
-            let mut support = Support::of(&c);
+            let mut support = Support::default();
             for l1 in [0.4, 0.15, 0.05, 0.01, 0.0] {
                 let mut converged_serial = false;
                 for _ in 0..100 {
-                    let delta = cd_sweep_serial(&c, k, &d, &s, l1, 0.0, &mut serial);
+                    let delta = if k >= 40 {
+                        split::cd_sweep_split_plain(&c, k, &d, &s, (l1, 0.0), &mut serial)
+                    } else {
+                        cd_sweep_serial(&c, k, &d, &s, l1, 0.0, &mut serial)
+                    };
                     if crate::gramfit::settled(delta, limit) {
                         converged_serial = true;
                         break;
@@ -4889,79 +4679,18 @@ mod tests {
                     );
                 }
             }
-        }
-    }
-
-    /// The sparse sweep on two chains is the serial dense sweep's bits: the
-    /// coefficients and the move after every sweep, from seeded starts of
-    /// every sparsity (zeros first, last and in runs, a coefficient held at
-    /// scale 0 among them), at penalties that keep the fit sparse and that
-    /// fill it in, with signed zeros in `c`, `d` and the start.
-    #[test]
-    fn the_sparse_sweep_on_two_chains_is_the_serial_sweep_to_the_bit() {
-        for k in [64, 65, 66, 71, 100, 130] {
-            for seed in 0..6u64 {
-                let (mut c, mut d, mut s) = sparse_problem(k, 40 + seed + k as u64);
-                let mut st = seed * 977 + k as u64;
-                for held in [0, 1, k / 3, k - 1] {
-                    if lcg(&mut st) > 0.2 {
-                        s[held] = 0.0;
-                    }
-                }
-                if seed % 2 == 1 {
-                    for i in 0..k {
-                        for j in 0..i {
-                            if (i + 3 * j + seed as usize).is_multiple_of(6) {
-                                let v = if (i + j) % 2 == 0 { -0.0 } else { 0.0 };
-                                c[i * k + j] = v;
-                                c[j * k + i] = v;
-                            }
-                        }
-                        if i % 5 == 0 {
-                            d[i] = -0.0;
-                        }
-                    }
-                }
-                let mut start = vec![0.0; k];
-                let fill = [0.02, 0.1, 0.4, 0.7][seed as usize % 4];
-                for v in start.iter_mut() {
-                    let u = lcg(&mut st);
-                    if u.abs() < fill {
-                        *v = if u > 0.3 { -0.0 } else { u + 0.01 };
-                    }
-                }
-                for (l1, l2) in [(0.3, 0.0), (0.1, 0.0), (0.02, 0.01), (0.0, 0.0)] {
-                    let mut serial = start.clone();
-                    let mut chains = start.clone();
-                    let mut support = Support::of(&c);
-                    assert!(support.finite);
-                    for sweep in 0..15 {
-                        let a = cd_sweep_serial(&c, k, &d, &s, l1, l2, &mut serial);
-                        support.reads(&chains);
-                        let b = cd_sweep_sparse(&c, k, &d, &s, l1, l2, &mut chains, &mut support);
-                        assert_eq!(
-                            a.to_bits(),
-                            b.to_bits(),
-                            "k {k}, seed {seed}, l1 {l1}, sweep {sweep}"
-                        );
-                        for i in 0..k {
-                            assert_eq!(
-                                serial[i].to_bits(),
-                                chains[i].to_bits(),
-                                "k {k}, seed {seed}, l1 {l1}, sweep {sweep}, coefficient {i}"
-                            );
-                        }
-                    }
-                }
-            }
+            // The split sweep read `c`'s finiteness at the zero start; the
+            // chained sweep never reads it.
+            let read = (k >= 40).then_some(true);
+            assert_eq!(support.finite, read, "k {k}");
         }
     }
 
     /// Task 479: a solve writes its correlation matrix over the buffer a
     /// solve before left on the thread (`CORR_BUF`), of any size and
     /// holding anything, and gives the bits a fresh, zeroed matrix gave:
-    /// two models of 70 features (the sparse sweep's side of
-    /// `SPARSE_MIN_K`) and 3, with an intercept and without, stepped in
+    /// two models of 70 features (the split sweep's side of
+    /// `split::SPLIT_MIN_K`) and 3, with an intercept and without, stepped in
     /// turn so the buffer shrinks and grows between solves; against the
     /// same with the buffer taken away before every row, and with it
     /// replaced by one longer than either matrix, full of NaN. A matrix
