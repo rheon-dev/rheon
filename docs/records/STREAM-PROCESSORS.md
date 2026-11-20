@@ -1,12 +1,11 @@
 <!-- kind: record -->
 # Stream processors rheon could run inside or beside, 2026-11-20
 
-*Status, 2026-11-20: a record, in progress. The research for PLAN task 531
-(request A8): which stream processors rheon should support beyond the Kafka
-consumer of task 530, and what each would cost. Read-only: nothing here was
-built or measured. Part 1 covers the first six candidates, part 2 the next
-six and part 3 the last four; the ranking and the proposed tasks follow in a
-later part.*
+*Status, 2026-11-20: a record. The research for PLAN task 531 (request
+A8): which stream processors rheon should support beyond the Kafka consumer
+of task 530, and what each would cost. Read-only: nothing here was built or
+measured. Sections 1 to 16 are the sixteen candidates; the ranking and the
+proposed tasks, for the user to choose from, close the record.*
 
 ## The question
 
@@ -815,7 +814,7 @@ Sources:
 [O4] https://docs.pola.rs/api/python/stable/reference/expressions/api/polars.Expr.map_batches.html
 [O5] https://github.com/pola-rs/polars
 
-## Notes for the later parts
+## Notes from the research
 
 - Every host here keeps state per key, and a rheon bank is one value for all
   its groups. Either rheon gains a per-group save and load, or a host keys by
@@ -824,7 +823,8 @@ Sources:
   time is the open question for the ranking.
 - After part 3: none of the sixteen runs a rheon bank in a stateful Python
   or Arrow function whose state its checkpoint holds, except row at a time
-  or by window (PyFlink, Spark, Bytewax, Quix, Faust, Pulsar Functions).
+  or by window or micro-batch (PyFlink, Spark, Bytewax, Quix, Faust,
+  Pulsar Functions).
   Materialize has no user functions; Arroyo's and RisingWave's stateful user
   code is Rust or a restricted embedded Python; Fluvio's is WebAssembly; and
   Polars forbids state in a function by design. Every broker (Kafka,
@@ -833,3 +833,161 @@ Sources:
 - No host among the first six passes Arrow batches to a stateful Python function:
   PyFlink's Arrow functions are stateless or per window, Spark passes pandas
   frames to its stateful calls, and the Python libraries pass Python objects.
+
+## The ranking
+
+Three verdicts. **Host**: rheon runs inside the processor and the
+processor's checkpoint holds (or can hold) its state with the input
+positions. **Beside**: rheon runs as its own consumer next to the system, in
+the shape of task 530 (state saved before the position is committed,
+`skip_learned` on replay). **Not usable**: neither, on what the docs read
+show.
+
+The order weighs what rheon needs first: (a) and (b) decide whether learning
+is right at all, (c) what it costs, (d) what happens to predictions on
+replay, (e) whether a raise under hard rule 12 is needed, and (f) whether the
+project will still be there. A mark of **?** means a "not verified" item in
+the candidate's section bears on that cell; the last column names it. The
+ranking is of fit for rheon, from the documentation; no candidate was run.
+
+| # | Candidate | Verdict | (a) key, order | (b) state, atomic | (c) Arrow / Python | (d) replay | (e) static | (f) adoption | Open items that could move it |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | Redpanda (§7) | beside | Kafka's, per partition ? | as task 530; offsets atomic with output in a transaction, the state file outside | any Kafka client | Kafka transactions; no KIP-890 | none new | 12.7k stars; repository archived ? | per-partition order equal to Kafka's in every case; where development continues |
+| 2 | Spark Structured Streaming (§3) | host | shuffle by key; no order within a group, restored from the `offset` column | state store versioned per micro-batch with the offsets: atomic | pandas through Arrow per micro-batch and key | state exactly-once; Kafka sink at-least-once | none new | very wide | whether `transformWithState` needs RocksDB in open-source Spark |
+| 3 | Apache Flink / PyFlink (§1) | host | `key_by`; order kept per sender-receiver pair | checkpoint holds state and offsets: atomic | Python per element over gRPC; Arrow only in stateless or windowed functions | end-to-end exactly-once with the Kafka sink | none new; PyFlink pins Python 3.12, pandas below 2.3, no thread mode on Windows | wide | a hook to save state only at checkpoint time ? |
+| 4 | Quix Streams (§5) | host (per message) or beside (as a batching sink) | per key, per partition | per-key RocksDB with changelog; offsets committed before the store flush | per message; batches only in sinks | at-least-once default; exactly-once option ? | none new | active, 1.6k stars | whether exactly-once uses Kafka transactions |
+| 5 | Apache Pulsar (§8) | beside | key hashed to a partition; Key_Shared or Failover keep per-key order | cursor in BookKeeper; transactions make ack and output atomic, the state file outside | Python consumer, per message; no Arrow | transactions; Functions effectively-once | binary client wheel ? | 47 listed adopters | whether a Functions state write is atomic with the ack; how the client wheel is linked |
+| 6 | Amazon Kinesis (§10) | beside | MD5 of the key to a shard; one reader per shard, parent before child | checkpoint per shard in DynamoDB, separate from the state | KCL through a Java daemon; record batches; no Arrow | at-least-once | none in rheon; a JVM beside Python | managed service ? | adoption figures |
+| 7 | Faust (§6) | host (by `take` batches) or beside | tables share the source's partitions | table changelog, bytes values; `exactly_once` with transactions | `take(max_, within)` batches of Python objects | at-least-once default; exactly-once option | none new | active fork, 1.9k stars | order under agent concurrency above one |
+| 8 | Kafka Streams (§2) | host only through a native binding | partition = task, fixed; strict order | store plus output plus offsets atomic under exactly-once v2 | none: Java only | exactly-once | a JNI library would be a new artifact to raise under rules 11 and 12 | very wide | how its RocksDB is linked (context only) |
+| 9 | NATS JetStream (§9) | beside | subject partitioning by hash; strict order needs `MaxAckPending` 1 | durable consumer position on the server; key-value store, not atomic with the ack ? | pure-Python client, pull batches | at-least-once; dedup window and double ack | none | CNCF, 21.1k stars | whether a key-value write can be atomic with an ack |
+| 10 | Fluvio (§15) | beside | key hashed to a partition; commit order kept | consumer offsets per name and partition; separate from the state | Python client, last release May 2025 | at-least-once producers | ? | 5.3k stars; release in transition | consumer groups and assignment; how the wheel is linked |
+| 11 | Polars' streaming engine (§16) | the engine already under every "beside" path; not a stream processor | one process; order kept by default | none: rheon's own | Arrow batches; no stateful function by design | none | already linked | 40.4k stars | none that bears on the verdict |
+| 12 | Bytewax (§4) | host | keyed exchange before stateful steps ? | picklable snapshot with input positions, at snapshot intervals | Python objects in `on_batch`; pickled between workers | at-least-once output | none new | community-maintained since May 2025; last release 2024-11 | that a key keeps one worker and its order |
+| 13 | Google Cloud Pub/Sub (§11) | beside, weakly | ordering keys, but a key can move between clients | ack state only; snapshots for seek | per-message callbacks | exactly-once delivery (pull, one region), not processing | ? | managed service ? | `grpcio` dependency; adoption figures |
+| 14 | Materialize (§13) | beside, through `SUBSCRIBE` | its own timestamps; partition order into a view not shown ? | no user functions; resume with `AS OF` | Postgres-protocol client, rows | Kafka sink exactly-once | none | 6.4k stars, BSL 1.1 | whether offset order survives into a view's row order |
+| 15 | RisingWave (§12) | not usable inside; beside only through its sinks | aggregate row order not stated ? | aggregates checkpointed, but embedded Python cannot import rheon | external functions stateless | internal state exactly-once; sinks mostly at-least-once | none | 9.4k stars | the row order an aggregate sees |
+| 16 | Arroyo (§14) | not usable | key space per subtask; arrival order ? | checkpoints hold offsets, but user code holds no state | Python scalar functions only; PyArrow announced, not released | restore from checkpoint | none | 5.1k stars | whether Python functions get rows or batches |
+
+What the order rests on:
+
+- **1, Redpanda**, ranks first because task 530's consumer runs on it
+  unchanged: its cost is a second broker in the CI matrix. It is a broker,
+  not a processor, so it adds no new way to host rheon.
+- **2, Spark**, and **3, Flink**, are the only hosts whose checkpoint holds
+  rheon's state atomically with the offsets *and* that are widely deployed.
+  Spark ranks above Flink because its stateful Python call receives a
+  micro-batch of a key's rows as frames through Arrow, where PyFlink's
+  stateful call receives one element at a time; Flink's end-to-end
+  exactly-once to Kafka is stronger than Spark's at-least-once Kafka sink.
+  The open item for each (Spark's state store requirement, PyFlink's
+  snapshot hook) changes the cost, not the verdict.
+- **4, Quix**, and **7, Faust**, are Kafka-native Python libraries with
+  per-key state in bytes. Quix is ranked higher for its active releases and
+  documented checkpoint order; Faust's batching (`take`) is better suited to
+  rheon than Quix's per-message processing, which is why the two are close.
+- **5, Pulsar**, **6, Kinesis**, **9, NATS** and **10, Fluvio** fit the
+  task 530 shape beside them; they are ordered by how directly they keep a
+  key's order for one consumer (Pulsar's Key_Shared and Kinesis's shard
+  leases directly, NATS only with one message in flight or partitioning,
+  Fluvio like Kafka but with a stale Python client).
+- **8, Kafka Streams**, has the strongest semantics of all and no Python;
+  it ranks in the middle because every route in needs a new native artifact
+  or a network call that gives up its atomicity.
+- **12 to 16** are held down by maintenance (Bytewax), by keys that move
+  between consumers (Pub/Sub), or by having no place for a stateful rheon
+  call (Materialize, RisingWave, Arroyo).
+
+What would move the ranking: a PyFlink snapshot hook would narrow the gap
+between Flink and Spark; a RocksDB requirement in open-source Spark would add
+a native store to Spark's deployment (not to rheon's wheel); Quix's
+exactly-once being transactional would raise it toward the two JVM hosts;
+Redpanda's archived repository, if development has stopped, would drop it to
+an alternative Kafka endpoint of little weight.
+
+## Proposed tasks
+
+For the user to choose from. Each would be a build task;
+none is started. All of them run beside or inside the systems as an
+adapter or recipe in the Python package's optional extras or in the docs,
+never a dependency of the package itself, and none links anything new into
+the wheel or the CLI.
+
+### P1. Run task 530's adapter against Redpanda in CI
+
+- **Scope:** add Redpanda as a second broker in the containerized CI job of
+  task 530; the same tests, unchanged: crash-and-replay bit-identical to an
+  uninterrupted run, and rebalances.
+- **Measures:** that every task 530 test passes on Redpanda as on Kafka;
+  the job's wall time on each.
+- **Risks:** KIP-890 is not implemented, so a Kafka 4.x client falls back to
+  the older transaction protocol; the GitHub repository reads as archived,
+  so the image's provenance and licence need a check before it enters CI.
+
+### P2. Save and load one group's state
+
+- **Scope:** a call that saves one group's state from a bank and one that
+  loads it into a bank, so a host keyed by group can hold each group's state
+  as its own value (needed by every host in the ranking for per-key state:
+  Spark, Flink, Quix, Faust, Bytewax, Pub/Sub). The saved form follows hard
+  rule 5 (versioned msgpack, fixtures).
+- **Measures:** bytes per group by model; time to load, update one row and
+  save, against updating the same row in a resident bank; and the same per
+  batch of a key's rows, which decides whether a per-key host is affordable.
+- **Risks:** a bank's state is not only its groups' (its clocks, notices,
+  shared settings), so a group's form must carry or rebuild those; a new
+  state form is a rule 5 layout change with fixtures; per-row load and save
+  may cost more than the update itself.
+
+### P3. A Spark Structured Streaming recipe
+
+- **Scope:** rheon in `transformWithStateInPandas`, keyed either by group
+  (with P2) or by Kafka partition (one bank per key, with no P2), each call
+  sorting its rows by `(partition, offset)` and running the bank on them as
+  a Polars frame; predictions out through `foreachBatch` deduplicated by
+  `batchId`.
+- **Measures:** per micro-batch: the pandas-to-Polars conversion, the bank's
+  time, and the state's save time and size, by number of keys and rows; a
+  restart test bit-identical to an uninterrupted run.
+- **Risks:** whether open-source Spark needs the RocksDB state store for
+  `transformWithState` (not verified); the stateful Python APIs are not
+  supported in Spark's real-time mode; all of a key's rows in a micro-batch
+  are held in memory; the Kafka sink alone is at-least-once.
+
+### P4. A PyFlink recipe
+
+- **Scope:** rheon in a `KeyedProcessFunction`, keyed by group (with P2) or
+  by a shard key holding a bank in `ValueState`; Kafka source and sink in
+  exactly-once mode.
+- **Measures:** per-element cost through the Python worker, with the bundle
+  size at its default and raised; checkpoint size and time; a restart test
+  bit-identical to an uninterrupted run.
+- **Risks:** no documented hook to save only at checkpoint time (not
+  verified), so a whole bank may be saved per element; PyFlink pins Python to
+  3.12 and pandas below 2.3 and has no thread mode on Windows, where rheon
+  deploys.
+
+### P5. A Quix Streams recipe
+
+- **Scope:** rheon as a batching sink run at each checkpoint flush, keeping
+  its own state beside Quix and saving it before the offsets commit; and,
+  for comparison, per message with `set_bytes` state (with P2).
+- **Measures:** throughput and latency of each at the default commit
+  interval; a crash-and-replay test bit-identical to an uninterrupted run.
+- **Risks:** a sink's flush comes before the offset commit, so a crash
+  between them replays rows rheon has learned, which `skip_learned` must
+  absorb; whether exactly-once is transactional (not verified); per-message
+  processing pays a frame per row.
+
+### P6. One "beside" adapter over any ordered log
+
+- **Scope:** generalize task 530's adapter so a broker plugs in by naming its
+  partition and position (Kafka offset, Pulsar message ID, Kinesis sequence
+  number, JetStream stream sequence, Fluvio offset), with Pulsar and Kinesis
+  as the first two after Kafka.
+- **Measures:** the crash-and-replay and rebalance tests of task 530 on each
+  broker; the per-batch cost of each client against Kafka's.
+- **Risks:** Kinesis's client library needs a JVM beside Python; Pulsar's
+  Key_Shared needs producers to batch by key or not at all; a position that
+  is not a plain integer (Pulsar's message ID) needs its own comparison in
+  the replay rule; each broker is another container in CI.
