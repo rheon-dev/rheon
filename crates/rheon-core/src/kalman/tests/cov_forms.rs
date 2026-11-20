@@ -635,3 +635,58 @@ fn the_factors_process_noise_leaves_a_diffuse_intercept_diffuse() {
     }
     assert_close(&factor.cov(0), &cov.p[0], 1e-12, "after the first row");
 }
+
+/// Each form is Bayesian regression's posterior at any scale of the target
+/// (review fable2, C5). With `obs_var` the noise `R` is given and the prior
+/// is `p0 R I` on every slot, so the posterior mean solves `(Σ w z zᵀ + I /
+/// p0) b = Σ w z y`, whatever `R`: the coefficients over the target's scale
+/// are the same numbers at a scale of 1, `2²⁶⁶` (about 1.2e80) and `2⁻²⁸²`
+/// (about 1.6e-85), all inside the input bound, and faer's LU solves them
+/// once. Carlson's step formed `sqrt(α_{j−1} α_j)`, a product of order `R²`,
+/// which overflowed at a noise near 1e154 -- its cross term 0, the factor
+/// finite and wrong (a slope of +0.047 where the posterior has −0.96) --
+/// and underflowed near 1e-154, the factor NaN and every prediction
+/// withheld. Where the product is not a normal double the square roots are
+/// taken apart now, each of a number of `R`'s order.
+#[test]
+fn every_form_is_the_posterior_at_any_scale_of_the_target() {
+    let data = rows(300, 5);
+    const K: usize = 4;
+    let p0 = 1.0;
+    let (mut a, mut rhs) = (vec![0.0; K * K], vec![0.0; K]);
+    for (x, y, w) in &data {
+        let z = [1.0, x[0], x[1], x[2]];
+        for i in 0..K {
+            rhs[i] += w * z[i] * y;
+            for j in 0..K {
+                a[i * K + j] += w * z[i] * z[j];
+            }
+        }
+    }
+    for i in 0..K {
+        a[i * K + i] += 1.0 / p0;
+    }
+    let want = crate::oracle::solve(&a, &rhs);
+    for scale in [1.0, 2f64.powi(266), 2f64.powi(-282), 1e80, 1e-85] {
+        for form in [CovarianceForm::Covariance, CovarianceForm::SquareRoot] {
+            let mut cfg = units_cfg(p0, f64::INFINITY);
+            cfg.obs_var = Some(0.25 * scale * scale);
+            let mut m = Kalman::new(cfg)
+                .unwrap()
+                .with_covariance_form(form)
+                .unwrap();
+            let mut withheld = 0;
+            for (i, (x, y, w)) in data.iter().enumerate() {
+                let st = m.step(x, &[Some(scale * y)], if i == 0 { 0.0 } else { 1.0 }, *w);
+                withheld += usize::from(i > 0 && st.pred[0].is_nan());
+            }
+            let got: Vec<f64> = m.coefficients()[0].iter().map(|b| b / scale).collect();
+            let off = apart(&got, &want, false);
+            assert!(
+                off < 1e-11 && withheld == 0,
+                "{form:?} at a scale of {scale:e}: {got:?} against {want:?}, {off:.1e} apart, \
+                 {withheld} predictions withheld"
+            );
+        }
+    }
+}

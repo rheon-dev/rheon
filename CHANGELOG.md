@@ -45,6 +45,13 @@ model that only the new build has is listed as an addition and passes.
   unchanged and moves no output bit. The state's schema is 68: a state of
   the square root says so in `covariance_form`, written only there, and a
   state of 67 or earlier loads as the covariance form it is, to the bit.
+  It holds at any scale of the noise inside the input bound: Carlson's
+  step took the root of a product of two numbers of the noise's order,
+  which overflowed from a noise near 1e154 (the coefficients finite and
+  wrong, 2.2 off statsmodels' exact diffuse filter at a target scale of
+  1e80) and underflowed from one near 1e-154 (every prediction withheld);
+  where that product is not a normal double the two roots are taken apart,
+  and the filter is 4.1e-15 off statsmodels at every scale.
 
 ### Fixed
 

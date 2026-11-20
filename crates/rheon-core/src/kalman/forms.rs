@@ -86,6 +86,15 @@ pub(super) fn factor_cf(l: &[f64], f: &[f64], out: &mut [f64]) {
 /// Carlson's measurement update of the factor (the module doc), `f = Cᵀ z`
 /// read before it, `r > 0`: `C`'s column `j` is `L`'s row `j`; `e` a
 /// scratch of `k`.
+///
+/// Each `α` is of the noise's order, `r` and up, so `α_{j−1} α_j` is of its
+/// square: it overflowed from a noise near 1e154 -- the cross term 0, the
+/// factor finite and wrong -- and underflowed from one near 1e-154, the
+/// factor NaN, half the exponent range of the covariance form, which holds
+/// `P` of the noise's order (review fable2, C5). Where the product is not a
+/// normal double, `f_j / sqrt(α_{j−1} α_j)` is taken as `f_j / sqrt(α_j) /
+/// sqrt(α_{j−1})`, each root of a number of the noise's order; elsewhere as
+/// it was, to the bit.
 pub(super) fn carlson(l: &mut [f64], f: &[f64], r: f64, e: &mut [f64]) {
     let k = f.len();
     e.fill(0.0);
@@ -94,7 +103,12 @@ pub(super) fn carlson(l: &mut [f64], f: &[f64], r: f64, e: &mut [f64]) {
         let fj = f[j];
         let next = alpha + fj * fj;
         let a = (alpha / next).sqrt();
-        let b = fj / (alpha * next).sqrt();
+        let both = alpha * next;
+        let b = if both.is_normal() {
+            fj / both.sqrt()
+        } else {
+            fj / next.sqrt() / alpha.sqrt()
+        };
         for (lji, ei) in l[j * k..j * k + j + 1].iter_mut().zip(e.iter_mut()) {
             let c = *lji;
             *lji = a * c - b * *ei;
