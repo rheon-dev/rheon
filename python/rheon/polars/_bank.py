@@ -141,6 +141,21 @@ def _with_outputs(df: pl.DataFrame, outs: list[pl.Series]) -> pl.DataFrame:
     return df.hstack(outs)
 
 
+def _refuse_nul_names(names: Iterable[str], who: str) -> None:
+    """Refuse a column whose name holds a NUL character, before its frame
+    crosses to the extension: a frame crosses as Arrow, whose column names
+    are C strings, and Polars' export of one panicked (``NulError``) rather
+    than refused it (review P11)."""
+    for name in names:
+        if "\0" in name:
+            msg = (
+                f"{who}: column {name!r} has a name holding a NUL character (\\0), which no "
+                "column name of an Arrow export can hold, so the frame cannot be handed to "
+                "rheon. Rename the column."
+            )
+            raise ValueError(msg)
+
+
 def _refuse_uint128(schema: pl.Schema, who: str, clocks: Collection[str | None] = ()) -> None:
     """Refuse a ``UInt128`` column by name, before a frame with one crosses
     to the extension. The extension's Polars is built without 128-bit
@@ -148,7 +163,9 @@ def _refuse_uint128(schema: pl.Schema, who: str, clocks: Collection[str | None] 
     (``PanicException: activate 'dtype-u128' feature``) before any of this
     library's code ran, whether a spec read the column or not (task 208's
     worker). A clock is told what an ``Int128`` clock is told (review round
-    5, B3); any other column, the cast to make."""
+    5, B3); any other column, the cast to make. A name holding a NUL
+    character is refused first (:func:`_refuse_nul_names`)."""
+    _refuse_nul_names(schema.names(), who)
     for name, dtype in schema.items():
         if dtype != pl.UInt128:
             continue
@@ -1105,6 +1122,7 @@ class ModelBank:
 
     def _check_frame(self, df: object, what: str) -> None:
         if isinstance(df, pl.DataFrame):
+            _refuse_nul_names(df.columns, f"ModelBank.{what}")
             # `dtypes` is a list; `schema` builds a Schema object. Only a
             # frame that holds a UInt128 column needs the names.
             if any(d == pl.UInt128 for d in df.dtypes):

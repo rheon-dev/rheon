@@ -73,8 +73,10 @@ model that only the new build has is listed as an addition and passes.
   Session values are still told apart by their hash.
 - **A NUL character in a spec's name, a target's name or a `with_windows`
   output's name is refused** (review P11) when the spec or the call is
-  checked. It panicked in the Arrow export, whose column names are C
-  strings, after the bank had learned the chunk.
+  checked, and so is a column so named in a frame handed to a bank or a
+  `with_windows`, `refresh_time` or plan surface, before it crosses. Each
+  panicked in the Arrow export, whose column names are C strings, the
+  names after the bank had learned the chunk.
 - **A feature named `intercept` beside `fit_intercept=True` is refused**
   (review P14). The fit's own constant term is named `intercept` in
   `coef`, the Gram and the bank's tables, so two coefficients shared one
