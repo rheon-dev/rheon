@@ -380,6 +380,21 @@ pub struct Lasso {
 /// the feature scales, and per target the column means.
 type Standardized = (Vec<f64>, Vec<Vec<f64>>, Vec<f64>, Vec<Vec<f64>>);
 
+thread_local! {
+    /// The correlation matrix a solve on this thread writes
+    /// ([`Lasso::standardized_in`]), lent to each solve and left here for
+    /// the next, whichever model runs it: one `k × k` matrix a thread, of
+    /// the widest solve it ran up to [`CORR_KEEP`], not one a model. A
+    /// solve opens no parallel section while it holds it; one that found it
+    /// lent out would make its own.
+    static CORR_BUF: std::cell::Cell<Vec<f64>> = const { std::cell::Cell::new(Vec::new()) };
+}
+
+/// The largest correlation matrix [`CORR_BUF`] keeps, in entries: 4 MiB,
+/// 724 features. A wider one is made for its solve and dropped after, as
+/// every one was, so a thread holds no more than this between solves.
+const CORR_KEEP: usize = 1 << 19;
+
 /// The accumulators a windowed path is fitted from, truncated to the window.
 /// The selection reads its errors per target ([`Lasso::window_sel_err`]).
 #[derive(Default)]
@@ -844,8 +859,24 @@ impl Lasso {
     /// cross-correlation `d` -- centred at its own means -- the feature scales
     /// `s`, and each target's column means over its rows, which the intercept
     /// is recovered from.
+    #[cfg(test)]
     fn standardized(&self, acc: &EwCov, cross: &Cross, readers: &[usize]) -> Standardized {
+        self.standardized_in(acc, cross, readers, Vec::new())
+    }
+
+    /// [`Self::standardized`], the correlation matrix written over `c`, a
+    /// buffer a solve before left ([`CORR_BUF`]): every entry is written,
+    /// so what it held is never read, and a solve at 500 features does not
+    /// make and zero a new 2 MB matrix (7% of its time, task 479).
+    fn standardized_in(
+        &self,
+        acc: &EwCov,
+        cross: &Cross,
+        readers: &[usize],
+        mut c: Vec<f64>,
+    ) -> Standardized {
         let k = self.cfg.n_features;
+        c.resize(k * k, 0.0);
         let off = usize::from(self.cfg.fit_intercept);
         if off == 0 {
             // No intercept: nothing to centre on. Scale by the raw second
@@ -856,7 +887,6 @@ impl Lasso {
             // of the centred and the raw problem, least squares only when
             // every feature has mean zero (review 2026-09-12, C8).
             let s: Vec<f64> = (0..k).map(|i| acc.raw(i, i).max(0.0).sqrt()).collect();
-            let mut c = vec![0.0; k * k];
             for i in 0..k {
                 for j in 0..=i {
                     c[i * k + j] = if s[i] > 0.0 && s[j] > 0.0 {
@@ -883,7 +913,6 @@ impl Lasso {
         // representation exists to avoid. Scaled in place into the
         // correlations below: each entry reads only itself and the scales,
         // so a second `k × k` matrix a solve was not needed (task 270, C-2).
-        let mut c = vec![0.0; k * k];
         for i in 0..k {
             for j in 0..k {
                 c[i * k + j] = acc.cov(i + off, j + off);
@@ -997,7 +1026,7 @@ impl Lasso {
         // One set of statistics per Gram, for the targets that read it.
         for (g, gram) in grams.iter().enumerate() {
             let readers = self.acc.grams.readers(g);
-            let (c, d, s, means) = self.standardized(gram, cross, &readers);
+            let (c, d, s, means) = self.standardized_in(gram, cross, &readers, CORR_BUF.take());
             for (jj, &j) in readers.iter().enumerate() {
                 // No row of this target inside the window: no fit to report
                 // (C2). Without a window, no weight and no fit from an
@@ -1104,6 +1133,9 @@ impl Lasso {
                         coefs[0] = b0;
                     }
                 }
+            }
+            if c.capacity() <= CORR_KEEP {
+                CORR_BUF.set(c);
             }
         }
         self.solve_failures += unconverged;
@@ -4923,5 +4955,65 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Task 479: a solve writes its correlation matrix over the buffer a
+    /// solve before left on the thread (`CORR_BUF`), of any size and
+    /// holding anything, and gives the bits a fresh, zeroed matrix gave:
+    /// two models of 70 features (the sparse sweep's side of
+    /// `SPARSE_MIN_K`) and 3, with an intercept and without, stepped in
+    /// turn so the buffer shrinks and grows between solves; against the
+    /// same with the buffer taken away before every row, and with it
+    /// replaced by one longer than either matrix, full of NaN. A matrix
+    /// past `CORR_KEEP` is not kept.
+    #[test]
+    fn a_solve_over_a_kept_correlation_buffer_is_a_fresh_ones_to_the_bit() {
+        let run = |before: &dyn Fn()| {
+            let mut out = Vec::new();
+            for fit_intercept in [true, false] {
+                let mut models: Vec<Lasso> = [70usize, 3]
+                    .iter()
+                    .map(|&k| {
+                        let mut c = cfg(k, 1, vec![0.1, 0.01, 0.0]);
+                        c.fit_intercept = fit_intercept;
+                        Lasso::new(c).unwrap()
+                    })
+                    .collect();
+                let mut s = 41u64;
+                for i in 0..120 {
+                    for m in models.iter_mut() {
+                        let k = m.cfg.n_features;
+                        let x: Vec<f64> = (0..k).map(|_| lcg(&mut s) + 0.2).collect();
+                        let y = 1.5 * x[0] - 0.75 * x[k - 1] + 0.05 * lcg(&mut s);
+                        before();
+                        let step = m.step(&x, &[Some(y)], if i == 0 { 0.0 } else { 1.0 }, 1.0);
+                        out.extend(step.pred.iter().map(|v| v.to_bits()));
+                    }
+                }
+                for m in &models {
+                    let beta = m.coefficients().expect("a fit");
+                    out.extend(beta.iter().flatten().flatten().map(|v| v.to_bits()));
+                }
+            }
+            out
+        };
+        let kept = run(&|| {});
+        let fresh = run(&|| drop(CORR_BUF.take()));
+        let junk = run(&|| CORR_BUF.set(vec![f64::NAN; 70 * 70 + 13]));
+        assert!(kept.len() > 1_000, "{}", kept.len());
+        assert_eq!(kept, fresh);
+        assert_eq!(kept, junk);
+        // Kept, and of the last solve's size: 3 x 3, the second model's.
+        let left = CORR_BUF.take();
+        assert_eq!(left.len(), 9);
+        // A matrix past the cap is dropped after its solve.
+        let wide = (CORR_KEEP as f64).sqrt() as usize + 1;
+        let mut m = Lasso::new(cfg(wide, 1, vec![0.1])).unwrap();
+        let mut s = 7u64;
+        // A marker a solve takes: left in place, no solve ran.
+        CORR_BUF.set(vec![1.0]);
+        let x: Vec<f64> = (0..wide).map(|_| lcg(&mut s)).collect();
+        m.step(&x, &[Some(x[0])], 0.0, 1.0);
+        assert!(CORR_BUF.take().is_empty(), "a matrix past the cap was kept");
     }
 }

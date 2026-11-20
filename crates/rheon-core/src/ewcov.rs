@@ -2203,6 +2203,30 @@ pub struct EwCovModel {
     view: crate::window::Kept<crate::window::KeptView>,
 }
 
+thread_local! {
+    /// The working space of a Mahalanobis distance on this thread
+    /// ([`MahalWork`]), lent to each read and left here for the next,
+    /// whichever model reads it: a thread reads one at a time, so a bank of
+    /// many groups keeps one factor a thread, not one a model. Lent, not
+    /// borrowed, since a factorization past 64 features runs a parallel
+    /// section ([`crate::scratch`]): a read that finds it lent out makes its
+    /// own.
+    static MAHAL_WORK: std::cell::Cell<Option<Box<MahalWork>>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// What a Mahalanobis distance is read in ([`EwCovModel::mahal_in`]): the
+/// factorization's working space (faer's scratch and the last factor,
+/// written over), the order that factor is of, the solve's column and the
+/// row's deviations. Each is written before it is read.
+#[derive(Default)]
+struct MahalWork {
+    factor: crate::solve::FactorWork,
+    order: usize,
+    quad: crate::solve::QuadWork,
+    delta: Vec<f64>,
+}
+
 /// What a window needs beyond the accumulator: where the clock has got to,
 /// and the snapshots to subtract.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2431,21 +2455,46 @@ impl EwCovModel {
         }
     }
 
+    /// The Mahalanobis distance of `x` from `cov`'s moments ([`Self::mahal_in`]),
+    /// in this thread's working space ([`MAHAL_WORK`]), lent for the call.
     fn mahal_of(cov: &EwCov, x: &[f64], scale: f64) -> f64 {
+        let mut work = MAHAL_WORK.take().unwrap_or_default();
+        let d = Self::mahal_in(cov, x, scale, &mut work);
+        MAHAL_WORK.set(Some(work));
+        d
+    }
+
+    /// [`Self::mahal_of`] in `work`: the factor of `C + s·prior·I` written
+    /// over the one the last call made, faer's scratch, the solve's column
+    /// and the deviations kept, so a row allocates nothing for it (task
+    /// 479). The factor is the one the allocating solve of the packed rows
+    /// made (`solve_spd_ridged`, which the tests keep as the reference), and
+    /// the distance its solution gives, to the bit. A factor of another
+    /// order than the last is made afresh and the kept one dropped, so a
+    /// thread keeps one factor, of the order it last read.
+    fn mahal_in(cov: &EwCov, x: &[f64], scale: f64, work: &mut MahalWork) -> f64 {
         if !cov.has_precision_prior() {
             return f64::NAN;
         }
         let k = cov.k();
-        let delta: Vec<f64> = x
-            .iter()
-            .enumerate()
-            .map(|(i, &xi)| cov.deviation(i, xi))
-            .collect();
+        let MahalWork {
+            factor,
+            order,
+            quad,
+            delta,
+        } = work;
+        if *order != k {
+            factor.drop_spares();
+            *order = k;
+        }
+        delta.clear();
+        delta.extend(x.iter().enumerate().map(|(i, &xi)| cov.deviation(i, xi)));
         // From the packed rows themselves, with no square laid out.
         let ridge = cov.precision_prior * cov.precision_scale;
-        match crate::solve::solve_spd_ridged(cov.comoments().packed(), ridge, &delta, k) {
-            Some((sol, _)) => {
-                let d2 = delta.iter().zip(&sol).map(|(d, s)| d * s).sum::<f64>() / scale;
+        match factor.factor_ridged(cov.comoments().packed(), ridge, k) {
+            Some(f) => {
+                let d2 = f.solve_dot(delta, quad) / scale;
+                factor.give(f);
                 if d2.is_finite() {
                     d2.max(0.0).sqrt()
                 } else {

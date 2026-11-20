@@ -532,17 +532,138 @@ fn small_llt(mut a: MatMut<'_, f64>) -> Result<(), llt::factor::LltError> {
     by_order!(1 2 3 4 5 6 7 8 9 10 11 12)
 }
 
+/// The largest order [`llt_cols`] takes: faer's own sequential Cholesky
+/// factorizes up to here in one unblocked pass ([`RECURSION_THRESHOLD`]),
+/// so its bits are the loop's.
+const COLS: usize = RECURSION_THRESHOLD;
+
+// How many times this thread has taken `llt_cols`: the order that sends a
+// call to it is read from here, as `SMALL_TAKEN`'s.
+#[cfg(test)]
+thread_local! {
+    static COLS_TAKEN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// [`llt_loop`]'s arithmetic in place on `a`'s lower triangle, of any order
+/// (taken from [`SMALL`] + 1 to [`COLS`]), a column at a time: column `j`
+/// takes `-l_jc · l_ic + ·` from each earlier column `c` in turn, a batch of
+/// eight rows held in registers across every `c`, which a vector unit takes
+/// a few rows at a time, then is multiplied by the reciprocal of its pivot's
+/// root. Each entry `(i, j)` takes the same products in the same order as
+/// [`llt_loop`]'s, `c = 0, 1, ...`, fused as `FUSED` says, so the bits are
+/// its and faer's; only the order the entries are visited in differs, which
+/// is faer's own (its lanes are rows of a batch). `Err(j)` at the first
+/// pivot that is not positive, or whose root is zero or not finite, as
+/// faer's. faer's call reaches the same arithmetic through its dispatch and
+/// scratch, and an order past [`SMALL`] went to it: on arm64 (Apple M4 Pro)
+/// this takes 0.66 of its time at 13, 0.73 at 16, 0.71 at 20, 0.86 at 24
+/// and 0.89 at 32 (task 479, `examples/factor_crossover.rs`).
+#[inline(always)]
+fn llt_cols<const FUSED: bool>(
+    mut a: MatMut<'_, f64, usize, usize, faer::ContiguousFwd>,
+) -> Result<(), usize> {
+    const B: usize = 8;
+    let n = a.nrows();
+    for j in 0..n {
+        let (left, right) = a.rb_mut().split_at_col_mut(j);
+        let left = left.rb();
+        let cj = &mut right.col_mut(0).as_slice_mut()[j..];
+        let len = cj.len();
+        let mut r = 0;
+        while r + B <= len {
+            let mut acc: [f64; B] = cj[r..r + B].try_into().expect("a batch");
+            for c in 0..j {
+                let col = left.col(c).as_slice();
+                let m = -col[j];
+                let xs: &[f64; B] = col[j + r..j + r + B].try_into().expect("a batch");
+                for (v, &x) in acc.iter_mut().zip(xs) {
+                    *v = if FUSED { m.mul_add(x, *v) } else { m * x + *v };
+                }
+            }
+            cj[r..r + B].copy_from_slice(&acc);
+            r += B;
+        }
+        for (i, v) in cj[r..].iter_mut().enumerate() {
+            let mut acc = *v;
+            for c in 0..j {
+                let col = left.col(c).as_slice();
+                let (m, x) = (-col[j], col[j + r + i]);
+                acc = if FUSED {
+                    m.mul_add(x, acc)
+                } else {
+                    m * x + acc
+                };
+            }
+            *v = acc;
+        }
+        let pivot = cj[0];
+        // faer's `!(pivot > 0)`: NaN is refused here, at its own pivot.
+        if pivot.partial_cmp(&0.0) != Some(Ordering::Greater) {
+            return Err(j);
+        }
+        let root = pivot.sqrt();
+        if root == 0.0 || !root.is_finite() {
+            return Err(j);
+        }
+        let inv = root.recip();
+        for v in cj.iter_mut() {
+            *v *= inv;
+        }
+    }
+    Ok(())
+}
+
+/// [`llt_cols`] with the fusing faer's instruction set has on this CPU, in a
+/// vector unit's feature context where that is AVX2 and FMA, as
+/// [`llt_dispatched`] picks it.
+#[inline(never)]
+fn cols_dispatched(
+    a: MatMut<'_, f64, usize, usize, faer::ContiguousFwd>,
+) -> Result<(), llt::factor::LltError> {
+    #[cfg(test)]
+    COLS_TAKEN.with(|t| t.set(t.get() + 1));
+    #[cfg(target_arch = "x86_64")]
+    let out = {
+        struct Lanes<'a>(MatMut<'a, f64, usize, usize, faer::ContiguousFwd>);
+        impl pulp::WithSimd for Lanes<'_> {
+            type Output = Result<(), usize>;
+            #[inline(always)]
+            fn with_simd<S: pulp::Simd>(self, _: S) -> Self::Output {
+                llt_cols::<true>(self.0)
+            }
+        }
+        match crate::sgd::x86_v3() {
+            Some(simd) => pulp::Simd::vectorize(simd, Lanes(a)),
+            None => llt_cols::<false>(a),
+        }
+    };
+    #[cfg(target_arch = "aarch64")]
+    let out = llt_cols::<true>(a);
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    let out = llt_cols::<false>(a);
+    out.map_err(|index| llt::factor::LltError::NonPositivePivot { index })
+}
+
 /// faer's own Cholesky of `a`, sequential, its scratch in `work` where the
-/// caller keeps one, else in a buffer of its own.
+/// caller keeps one, else in a buffer of its own; to the bit, an order up to
+/// the machine's small limit by [`small_llt`] and one past [`SMALL`] up to
+/// [`COLS`] by [`llt_cols`] where `a`'s columns are contiguous (an x86-64
+/// CPU with AVX2 takes faer's call from 9 to 12, where it was the faster).
 fn cholesky_seq(
-    a: MatMut<'_, f64>,
+    mut a: MatMut<'_, f64>,
     work: Option<&mut CholWork>,
 ) -> Result<(), llt::factor::LltError> {
-    if a.nrows() <= small_limit() {
+    let n = a.nrows();
+    if n <= small_limit() {
         return small_llt(a);
     }
-    let req =
-        llt::factor::cholesky_in_place_scratch::<f64>(a.nrows(), Par::Seq, Default::default());
+    if n > SMALL
+        && n <= COLS
+        && let Some(cols) = a.rb_mut().try_as_col_major_mut()
+    {
+        return cols_dispatched(cols);
+    }
+    let req = llt::factor::cholesky_in_place_scratch::<f64>(n, Par::Seq, Default::default());
     let mut own;
     let stack = match work {
         Some(w) => w.stack(req),
@@ -815,10 +936,15 @@ pub(crate) fn kept_work(solves: &mut Solves, k: usize, m: usize) -> &mut SolveWo
 /// rung's matrix is made from the packed rows as [`solve_spd`] makes it
 /// from `C + ridge·I`'s square -- `c_ij` below the diagonal, `(c_ii +
 /// ridge) + jitter` on it, the same trace -- so the solution and the
-/// attempts are its to the bit. `ew_cov`'s `mahal`, a factorization a row:
-/// laying the square out first, zeroed, then the triangle's rows into it,
-/// cost it 4% of its speed at 20 features on arm64 against the one copy of
-/// a square it made when the matrix was kept as one.
+/// attempts are its to the bit. `ew_cov`'s `mahal` was this, a
+/// factorization a row: laying the square out first, zeroed, then the
+/// triangle's rows into it, cost it 4% of its speed at 20 features on arm64
+/// against the one copy of a square it made when the matrix was kept as
+/// one. It now factorizes in a kept working space ([`FactorWork`]) and
+/// solves in a kept column ([`SpdFactor::solve_dot`]), the same arithmetic
+/// with nothing allocated (task 479); this stays as the reference its tests
+/// hold that path to.
+#[cfg(test)]
 pub(crate) fn solve_spd_ridged(
     c: &[f64],
     ridge: f64,
@@ -1294,6 +1420,26 @@ impl SpdFactor {
             acc += di * x[(i, 0)];
         }
         clamp_rounding(acc)
+    }
+
+    /// `dᵀ A⁻¹ d` from one solve in `work`'s kept column, summed as an
+    /// iterator's `sum` of the products: what [`solve_spd_ridged`]'s solution
+    /// dotted with `d` that way gives, to the bit, with nothing allocated
+    /// once `work` holds a column of this order. Unclamped, unlike
+    /// [`Self::quad_form`]: the caller reads the sign of a zero and a NaN as
+    /// it did.
+    pub(crate) fn solve_dot(&self, d: &[f64], work: &mut QuadWork) -> f64 {
+        let k = self.l.nrows();
+        debug_assert_eq!(d.len(), k);
+        let x = work.column(k);
+        for (i, &di) in d.iter().enumerate() {
+            x[(i, 0)] = di;
+        }
+        solve_in_place(&self.l, x.as_mut());
+        d.iter()
+            .enumerate()
+            .map(|(i, di)| di * x[(i, 0)])
+            .sum::<f64>()
     }
 
     /// [`Self::quad_forms`] written into `out`, the `m` vectors solved in
