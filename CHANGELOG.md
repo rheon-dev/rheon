@@ -93,6 +93,12 @@ model that only the new build has is listed as an addition and passes.
   fit's ages, or a clock step, too small to invert (below `2⁻¹⁰²⁴`) is read
   as none, as at 0, where it made the trend NaN with normal weights. Moves:
   `holt.*`.
+- `lasso` withholds a prediction whose `β·x` is beyond the largest double,
+  where it reported `±inf` (from 13 features, on rows inside the input
+  bound, once rows at the bound had grown the coefficients), and its
+  selection scores a row only where every path point's squared error is a
+  number, so such a row cannot leave a point's error NaN or infinite for
+  good. Moves: `lasso.*`.
 
 ### Tests and documents
 

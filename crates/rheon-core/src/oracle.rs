@@ -1144,6 +1144,33 @@ pub(crate) mod exact {
         }
     }
 
+    /// `b₀ + Σ bᵢ xᵢ` (`b₀` 0 without `intercept`) to [`BITS`] bits, rounded
+    /// once to a double: `±inf` where the sum is beyond the largest double,
+    /// which no order of summation in doubles escapes. Every product of two
+    /// doubles is exact in 1,024 bits, and the sum of a few hundred of them
+    /// rounds 2⁻¹⁰⁰⁰ relative at most.
+    pub(crate) fn dot_aug(b: &[f64], x: &[f64], intercept: bool) -> f64 {
+        let (mut acc, slopes) = if intercept {
+            (big(b[0]), &b[1..])
+        } else {
+            (zero(), b)
+        };
+        for (bi, xi) in slopes.iter().zip(x) {
+            acc = &acc + &(&big(*bi) * &big(*xi));
+        }
+        // Rounded to nearest, a sum overflows from the largest double plus
+        // half its last place, `2⁹⁷⁰`; `to_f64` would clamp it to the
+        // largest double instead.
+        let edge = &big(f64::MAX) + &big(2f64.powi(970));
+        if acc >= edge {
+            return f64::INFINITY;
+        }
+        if acc <= -edge.clone() {
+            return f64::NEG_INFINITY;
+        }
+        acc.to_f64().value()
+    }
+
     /// `x` standardized against the exponentially weighted moments of a
     /// stream with `x` itself admitted at unit weight after a decay of
     /// `lam`, from the definitions, in floats of 2,048 bits (review

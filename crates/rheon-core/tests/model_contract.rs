@@ -4762,14 +4762,14 @@ mod generated {
         .prop_map(move |v| sign.apply(v))
     }
 
-    /// A row of `targets` targets; `binary` targets are 0 or 1, the label a
+    /// A row of `k` features and `targets` targets; `binary` targets are 0 or 1, the label a
     /// classifier and a logistic loss read. The features sit on `sign`'s
     /// side of zero, and the targets too unless they are labels, which read
     /// the side of zero a value drawn of mixed signs fell on.
-    fn row(targets: usize, binary: bool, sign: Sign) -> impl Strategy<Value = GenRow> {
+    fn row_of(k: usize, targets: usize, binary: bool, sign: Sign) -> impl Strategy<Value = GenRow> {
         let target_sign = if binary { Sign::Mixed } else { sign };
         (
-            prop::collection::vec(value(sign), K),
+            prop::collection::vec(value(sign), k),
             prop::collection::vec(prop::option::weighted(0.85, value(target_sign)), targets),
             prop_oneof![5 => Just(1.0), 1 => Just(0.0), 1 => 0.0..30.0f64],
             // `-0.0` is a weight of 0 too (hard rule 9), and is drawn by
@@ -4801,12 +4801,18 @@ mod generated {
     /// model's 128 cases run about 43 of each (all 128 missing one has odds
     /// of `3 · (2/3)^128`, about `1e-22`) at the cost of the 128 they ran.
     fn stream(targets: usize, binary: bool) -> impl Strategy<Value = Vec<GenRow>> {
+        stream_of(K, targets, binary)
+    }
+
+    /// [`stream`] of `k` features: the width a model's wide paths start
+    /// from, which the contract's two features never reach.
+    fn stream_of(k: usize, targets: usize, binary: bool) -> impl Strategy<Value = Vec<GenRow>> {
         prop_oneof![
             Just(Sign::Mixed),
             Just(Sign::Positive),
             Just(Sign::Negative)
         ]
-        .prop_flat_map(move |sign| prop::collection::vec(row(targets, binary, sign), 1..60))
+        .prop_flat_map(move |sign| prop::collection::vec(row_of(k, targets, binary, sign), 1..60))
     }
 
     fn equal(a: &Step, b: &Step) -> bool {
@@ -5426,6 +5432,26 @@ mod generated {
         #[test]
         fn lasso(rows in stream(1, false), split in 0usize..60) {
             contract(|| Lasso::new(lasso_cfg()).unwrap(), &rows, split)?;
+        }
+
+        /// At 13, 20, 39 and 40 features, windowed and not (review
+        /// fable2, C8): coefficients finite but large after rows at the
+        /// input bound made `β·x` overflow on a row inside it, and the
+        /// prediction read `±inf` from 13 features on, where two never
+        /// reach. 39 and 40 straddle the split sweep's width.
+        #[test]
+        fn lasso_wide(
+            (k, rows) in prop_oneof![Just(13usize), Just(20), Just(39), Just(40)]
+                .prop_flat_map(|k| (Just(k), stream_of(k, 1, false))),
+            split in 0usize..60,
+            window in 0usize..2,
+        ) {
+            contract(|| {
+                let mut c = lasso_cfg();
+                c.n_features = k;
+                c.window = [None, Some(7.0)][window];
+                Lasso::new(c).unwrap()
+            }, &rows, split)?;
         }
 
         /// One-sided streams too, since docs/PLAN.md task 217 (D4). Drawn
