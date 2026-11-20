@@ -88,3 +88,34 @@ that once, at the end.
    POSIX-only calls outside a platform guard, and `tests/test_scaling.py`
    runs its checks on a stepped fake clock.
 
+## Speed claims (task 459, review A7)
+
+A speed figure that goes into the CHANGELOG, PLAN or a decision is held to
+three things before the merge that carries it, not after the push:
+
+1. **x86 before the merge.** Every change claimed as faster, and every change
+   to memory layout or call structure on a per-row path, is timed on x86-64
+   (the VM) before it merges: the VM's time, not only CI's instruction
+   count. The counts are a proxy that has failed both ways here (task 413:
+   +5% instructions, 14-17% fewer cycles; 452b: +0.46% instructions, time
+   0.87-0.89; 448's `hmm`: -6.4% instructions, 7% slower), and the two
+   platform-worse changes that reached main (421: x86 grouped 0.80-0.92;
+   450: +19% instructions and k=200 1.17 slower on x86, reverted) were both
+   found after the push. A change that is slower on either platform does
+   not merge as a speed change (the "no platform worse" rule).
+2. **Both layouts.** Each platform's figure is read under the default
+   layout and under the aligned one (every function aligned to 64 bytes); a
+   slowdown counts only if it persists across both, a gain is quoted as the
+   range the two give.
+3. **The control's spread with every ABBA.** Each ABBA runs an
+   identical-binary control beside the two builds (the shared harness does,
+   `vm-tools/abba/abba.py`) and its result is quoted with the control's
+   spread: "1.06 (identical binary 0.97-1.04, load 6)". A figure inside the
+   control's spread is "no measurable change", not a gain or a loss. At the
+   loads this machine runs under, the control has read +-3% to +-6.5%, so
+   the many 1.02-1.08 figures the review found were inside it.
+
+A CHANGELOG line that has only arm64 figures says "on arm64"; one with both
+platforms gives both. The review's list of lines that named no platform
+(`rls`, `kalman`, `ew_cov`, `ewridge` in 1.6.0) is corrected in the
+CHANGELOG.
