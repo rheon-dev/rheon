@@ -191,6 +191,9 @@ fn a_pass_over_groups_on_an_integer_and_a_row_count_clock_is_taken_in_segments_t
                 let (plain, taken) = run_on(clock, true, forward, &keys, &chunks);
                 assert_eq!(none, 0);
                 assert!(taken > 500, "{clock:?}: the plain loop took {taken} rows");
+                // Review 459, C8: a zip stops at the shorter, so a lost row
+                // would pass unseen without this.
+                assert_eq!(plain.len(), general.len());
                 for (i, (p, g)) in plain.iter().zip(&general).enumerate() {
                     assert_eq!(
                         p.map(f64::to_bits),
@@ -198,6 +201,116 @@ fn a_pass_over_groups_on_an_integer_and_a_row_count_clock_is_taken_in_segments_t
                         "{clock:?}, forward {forward}, chunks {chunks:?}, row {i}"
                     );
                 }
+            }
+        }
+    }
+}
+
+/// `run_on` with the stamps given, and the state saved at the end.
+fn run_stamped(
+    clock: Clock,
+    plain: bool,
+    forward: bool,
+    keys: &[i64],
+    ts: &[i64],
+    chunks: &[usize],
+) -> (Vec<Option<f64>>, u64, Vec<u8>) {
+    let n = keys.len();
+    let mid: Vec<f64> = (0..n).map(|i| 100.0 + (i % 7) as f64).collect();
+    let t = |secs: f64| match clock {
+        Clock::Datetime => json!(format!("{secs}s")),
+        Clock::Int => json!(secs * 1000.0),
+        Clock::Rows => json!(secs),
+    };
+    let mut config = json!({
+        "formulas": [{"name": "m", "tree": if forward {
+            json!(["rewm_mean", ["col", "mid"], {"half_life": t(5.0), "window_size": t(20.0)}])
+        } else {
+            json!(["ewm_mean", ["col", "mid"], {"half_life": t(5.0)}])
+        }}],
+        "group": "g",
+    });
+    if clock != Clock::Rows {
+        config["clock"] = json!("ts");
+        config["gap_cap"] = t(300.0);
+    }
+    let config: WindowsConfig = serde_json::from_value(config).unwrap();
+    let frame = |a: usize, z: usize| {
+        let mut cols = vec![];
+        match clock {
+            Clock::Datetime => cols.push(
+                Column::new("ts".into(), &ts[a..z])
+                    .cast(&DataType::Datetime(TimeUnit::Nanoseconds, None))
+                    .unwrap(),
+            ),
+            Clock::Int => {
+                let ms: Vec<i64> = ts[a..z].iter().map(|v| v / 1_000_000).collect();
+                cols.push(Column::new("ts".into(), ms));
+            }
+            Clock::Rows => {}
+        }
+        cols.push(Column::new("mid".into(), &mid[a..z]));
+        cols.push(Column::new("g".into(), &keys[a..z]));
+        DataFrame::new_infer_height(cols).unwrap()
+    };
+    let mut r = WindowsRun::new(config, frame(0, 1).schema()).unwrap();
+    r.set_plain_run(plain);
+    let (mut out, mut at) = (vec![], 0);
+    for &len in chunks.iter().cycle() {
+        if at >= n {
+            break;
+        }
+        let to = (at + len).min(n);
+        let o = r.feed(&frame(at, to), None).unwrap();
+        out.extend(o.column("m").unwrap().f64().unwrap().iter());
+        at = to;
+    }
+    let taken = r.plain_rows();
+    let tail = r.finish().unwrap();
+    out.extend(tail.column("m").unwrap().f64().unwrap().iter());
+    (out, taken, r.save_bytes().unwrap())
+}
+
+#[test]
+fn a_pass_over_several_groups_past_its_buffer_of_two_to_the_sixteen_rows_is_to_the_bit() {
+    // Review 459, C5: a pass over several groups holds at most 2^16 rows
+    // (`PASS`), and the next pass begins where it stopped; the largest
+    // several-group stream before this was 45,000 rows, so no pass was ever
+    // full. 140,000 rows over 3 keys, a tie in the stream's stamps across
+    // the first pass's edge (rows 65,536 and 65,537), on all three clocks,
+    // in one chunk and in chunks that cut at and beside the edge: the output
+    // and the saved state equal the general path's to the bit.
+    let n = 140_000usize;
+    let keys: Vec<i64> = (0..n as i64).map(|i| i % 3).collect();
+    let mut ts: Vec<i64> = (0..n as i64).map(|i| i * 1_000_000_000).collect();
+    ts[65_537] = ts[65_536];
+    for clock in [Clock::Datetime, Clock::Int, Clock::Rows] {
+        for forward in [false, true] {
+            // A forward window under groups needs a clock column.
+            if clock == Clock::Rows && forward {
+                continue;
+            }
+            for chunks in [vec![n], vec![65_536, 1, 70_000], vec![70_000]] {
+                let (general, none, gs) = run_stamped(clock, false, forward, &keys, &ts, &chunks);
+                let (plain, taken, ps) = run_stamped(clock, true, forward, &keys, &ts, &chunks);
+                assert_eq!(none, 0);
+                assert!(
+                    taken as usize > (1 << 16) + 1,
+                    "{clock:?}, chunks {chunks:?}: the plain loop took {taken} of {n}"
+                );
+                assert_eq!(plain.len(), general.len());
+                assert_eq!(plain.len(), n);
+                for (i, (p, g)) in plain.iter().zip(&general).enumerate() {
+                    assert_eq!(
+                        p.map(f64::to_bits),
+                        g.map(f64::to_bits),
+                        "{clock:?}, forward {forward}, chunks {chunks:?}, row {i}: {p:?} against {g:?}"
+                    );
+                }
+                assert!(
+                    gs == ps,
+                    "{clock:?}, forward {forward}, chunks {chunks:?}: the state"
+                );
             }
         }
     }

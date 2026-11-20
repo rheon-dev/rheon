@@ -227,6 +227,86 @@ mod tests {
         assert_eq!(e.kind(), ErrorKind::PermissionDenied, "{e}");
     }
 
+    /// Review 459, C10: a save whose write fails part way through the
+    /// encoding, through `Bank::save`'s own temporary and rename: the error
+    /// is the write's, the destination keeps the bytes it had, and no
+    /// temporary is left beside it. The writer passes the first `ok` bytes
+    /// to the file (past the buffer's 1 MiB for the largest, so the
+    /// temporary holds a partial encoding) and then fails.
+    #[test]
+    fn a_save_that_fails_mid_encode_leaves_the_destination_and_no_temporary() {
+        struct FailAfter<'a, W: Write> {
+            inner: &'a mut W,
+            left: usize,
+        }
+        impl<W: Write> Write for FailAfter<'_, W> {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                if self.left == 0 {
+                    return Err(io::Error::new(ErrorKind::StorageFull, "the disk"));
+                }
+                let n = buf.len().min(self.left);
+                self.left -= n;
+                self.inner.write(&buf[..n])
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                self.inner.flush()
+            }
+        }
+        let spec = serde_json::from_str(
+            r#"{"name": "m", "model": {"type": "ewridge"}, "targets": ["y"],
+                "features": ["x0", "x1", "x2"], "half_life": 10.0, "group": "g"}"#,
+        )
+        .unwrap();
+        let mut bank = Bank::new(vec![spec]).unwrap();
+        let n = 40_000usize;
+        let df = polars::df!(
+            "g" => (0..n as i64).map(|i| i % 5_000).collect::<Vec<_>>(),
+            "x0" => (0..n).map(|i| (i % 7) as f64).collect::<Vec<_>>(),
+            "x1" => (0..n).map(|i| (i % 11) as f64 * 0.5).collect::<Vec<_>>(),
+            "x2" => (0..n).map(|i| (i % 13) as f64 - 6.0).collect::<Vec<_>>(),
+            "y" => (0..n).map(|i| (i % 17) as f64).collect::<Vec<_>>()
+        )
+        .unwrap();
+        bank.fit_predict(&df).unwrap();
+        let full = bank.save_bytes().unwrap();
+        assert!(
+            full.len() > (1 << 20) + 1024,
+            "the encoding is {} bytes",
+            full.len()
+        );
+        let dir = std::env::temp_dir().join(format!("rheon-save-mid-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let dest = dir.join("bank.msgpack");
+        std::fs::write(&dest, b"the good state").unwrap();
+        for ok in [0usize, 1, 100, (1 << 20) + 17, full.len() - 1] {
+            let e = bank
+                .save_through(&dest, |b, w| {
+                    b.write_msgpack_io(&mut FailAfter { inner: w, left: ok })
+                })
+                .unwrap_err();
+            assert_eq!(e.kind(), ErrorKind::StorageFull, "after {ok} bytes: {e}");
+            assert_eq!(
+                std::fs::read(&dest).unwrap(),
+                b"the good state",
+                "after {ok} bytes"
+            );
+            let names: Vec<_> = std::fs::read_dir(&dir)
+                .unwrap()
+                .map(|e| e.unwrap().file_name())
+                .collect();
+            assert_eq!(
+                names,
+                ["bank.msgpack"],
+                "after {ok} bytes: a temporary was left"
+            );
+        }
+        // And the save that does not fail replaces it whole.
+        bank.save(&dest).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), full);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     fn libc_enospc() -> i32 {
         if cfg!(windows) { 112 } else { 28 }
     }

@@ -659,6 +659,46 @@ mod column_tests {
         }
     }
 
+    /// Review 459, C10: a clean run (every row processed and finite, one copy
+    /// and a range of bits) written in place after another run, so at a
+    /// `base` above 0 and equal to the rows written: the appending test's
+    /// values carry a NaN or an infinity in most runs, so this path at
+    /// `base > 0` was never held to the scatter. Every alignment of `base`
+    /// against a byte of bits, runs of 16 rows up, a short run first.
+    #[test]
+    fn a_clean_run_after_another_matches_the_scatter() {
+        for first in [1usize, 3, 7, 8, 9, 15, 16, 17, 23, 40] {
+            for len in [16usize, 17, 24, 31, 64, 100] {
+                for tail in [0usize, 5] {
+                    let n = first + len + tail;
+                    let vals: Vec<f64> = (0..first + len).map(|k| k as f64 * 0.75 - 9.0).collect();
+                    let processed = vec![true; first + len];
+                    let mut fast = F64Column::appending(n);
+                    fast.run(0, &vals[..first], &processed[..first]);
+                    fast.run(first, &vals[first..], &processed[first..]);
+                    fast.complete();
+                    let mut slow = F64Column::new(n);
+                    for (i, &v) in vals.iter().enumerate() {
+                        slow.set_if_finite(i, v);
+                    }
+                    let ctx = format!("first {first} len {len} tail {tail}");
+                    assert!(fast.packed, "{ctx}");
+                    for i in 0..n {
+                        assert_eq!(
+                            fast.values[i].to_bits(),
+                            slow.values[i].to_bits(),
+                            "value at {i}: {ctx}"
+                        );
+                        assert_eq!(fast.is_valid(i), slow.is_valid(i), "bit at {i}: {ctx}");
+                    }
+                    assert_eq!(fast.validity(), slow.validity(), "{ctx}");
+                    let (a, b) = (fast.finish_array(), slow.finish_array());
+                    assert_eq!(a.validity(), b.validity(), "{ctx}");
+                }
+            }
+        }
+    }
+
     /// `set` is for `n_eff`: valid whatever the value, null where never set.
     #[test]
     fn set_is_valid_whatever_the_value() {
