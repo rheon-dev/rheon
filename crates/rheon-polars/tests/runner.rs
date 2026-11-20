@@ -1285,3 +1285,44 @@ fn an_unwritable_state_directory_is_refused_before_the_run() {
     let _ = std::fs::remove_dir_all(&dir);
     cleanup(&[input, output]);
 }
+
+/// Review P12: under `--skip-learned`, an error named a row by its place
+/// among the rows the run kept, not in the input: a step back at input row
+/// 800, after 600 learned rows were skipped, was reported at row 200. It
+/// names the input's row, as the same file does without a state.
+#[test]
+fn a_skip_learned_error_names_the_inputs_row() {
+    let n = 1000;
+    let t: Vec<f64> = (0..n)
+        .map(|i| if i == 800 { i as f64 - 50.0 } else { i as f64 })
+        .collect();
+    let x0: Vec<f64> = (0..n).map(|i| ((i * 7) % 11) as f64).collect();
+    let x1: Vec<f64> = (0..n).map(|i| ((i * 5) % 13) as f64).collect();
+    let y: Vec<f64> = (0..n).map(|i| ((i * 3) % 17) as f64).collect();
+    let df = df!(
+        "group" => vec!["g0"; n], "t" => t, "x0" => x0, "x1" => x1, "y" => y
+    )
+    .unwrap();
+    let first = tmp("skip-row-first.parquet");
+    let all = tmp("skip-row-all.parquet");
+    let output = tmp("skip-row-out.parquet");
+    let state = tmp("skip-row.state");
+    write(&first, Format::Parquet, &df.slice(0, 600));
+    write(&all, Format::Parquet, &df);
+    let mut learn = config(&first, &output);
+    learn.save_state = Some(state.clone());
+    run_config(&learn, no_progress).unwrap();
+    let plain = run_config(&config(&all, &output), no_progress)
+        .unwrap_err()
+        .to_string();
+    assert!(plain.contains("at row 800 "), "{plain}");
+    for chunk_size in [64, 1000, 7] {
+        let mut resumed = config(&all, &output);
+        resumed.chunk_size = chunk_size;
+        resumed.load_state = Some(state.clone());
+        resumed.skip_learned = true;
+        let e = run_config(&resumed, no_progress).unwrap_err().to_string();
+        assert!(e.contains("at row 800 "), "chunk_size {chunk_size}: {e}");
+    }
+    cleanup(&[first, all, output, state]);
+}

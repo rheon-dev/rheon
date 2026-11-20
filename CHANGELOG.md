@@ -48,6 +48,17 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **A command-line run under `group_close` keeps nothing of a closed
+  group** (review P5). Its closing lines kept an entry for every group it
+  ever saw, about 190 bytes each, so a `--no-output --closed-groups` run
+  over a stream of many groups grew with the groups it closed: 886 MB at
+  four million against 166 MB at a quarter million. A closed group's entry
+  now goes, and the closing lines count the groups still open. A run with
+  neither `closed_groups` nor `save_state` drops each closed group's row
+  after its chunk, where the bank kept it to the end for nobody.
+- **A `--skip-learned` error names the input's row** (review P12), where it
+  named the row's place among the rows kept: a step back at input row 800,
+  after 600 learned rows were skipped, was reported at row 200.
 - **The command line refuses two paths that name one file** (review P4):
   of `input`, `output`, `load_state`, `save_state` and `closed_groups`,
   any two naming one file, however spelled, are refused before the run,

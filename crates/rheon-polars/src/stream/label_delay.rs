@@ -155,7 +155,7 @@ fn oldest(pending: &VecDeque<PendingRow>) -> usize {
 impl LabelRefusal {
     /// The refusal as the bank says it, naming the spec, the column and the
     /// row of the frame.
-    pub fn message(&self, spec: &Spec, row_base: usize) -> String {
+    pub fn message(&self, spec: &Spec, rows: &crate::arrow::InputRows) -> String {
         let label = spec.label_clock.as_ref().map_or("", |l| l.column());
         match *self {
             LabelRefusal::Before {
@@ -182,7 +182,7 @@ impl LabelRefusal {
                      its clock.",
                     spec.name,
                     spec.clock.as_deref().unwrap_or(""),
-                    row_base + row
+                    rows.at(row)
                 )
             }
             LabelRefusal::Full { row, held } => format!(
@@ -191,7 +191,7 @@ impl LabelRefusal {
                  max_held_rows, or set held_overflow=\"drop_oldest\" to drop the row that \
                  arrived first.",
                 spec.name,
-                row_base + row,
+                rows.at(row),
                 held + 1,
                 if spec.group.is_some() {
                     " of its group"

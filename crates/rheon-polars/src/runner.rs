@@ -30,8 +30,9 @@ use polars::prelude::*;
 use polars_utils::pl_path::PlRefPath;
 use serde::{Deserialize, Serialize};
 
+use crate::arrow::InputRows;
 use crate::atomic::AtomicFile;
-use crate::bank::{Bank, Learned};
+use crate::bank::{Bank, GroupKey, Learned};
 use crate::spec::Spec;
 
 /// Writing the output through a temporary is filesystem work, and polars'
@@ -696,7 +697,13 @@ impl RunConfig {
         if let Some(p) = &self.closed_groups {
             check_writable("writing closed groups", p)?;
         }
-        let out = augment(&mut bank, empty, self.predict, self.no_output(), 0)?;
+        let out = augment(
+            &mut bank,
+            empty,
+            self.predict,
+            self.no_output(),
+            InputRows::default(),
+        )?;
         // And the output laid out as its writer lays it out: a flattened
         // name that is already a column passed the dry run, and the run then
         // failed on it (review P13).
@@ -955,11 +962,16 @@ pub fn run_config_on_reported(
     // always has the closed rows that go with it. A run in which nothing
     // closed writes an empty frame with the schema, as an empty output does.
     let mut last = LastReasons::default();
+    // A closed group's row goes to the sidecar, or into the saved state; a
+    // run with neither has no reader for it, and kept it in the bank to the
+    // end of the stream.
+    let discard_closed = closed_target.is_none() && cfg.save_state.is_none();
     let stats = run_with(
         &mut bank,
         input,
         out,
         closed_target,
+        discard_closed,
         learned.as_ref(),
         Some(&mut last),
         opts,
@@ -1023,7 +1035,7 @@ pub fn run(
     opts: RunOptions,
     progress: impl FnMut(RunStats) -> PolarsResult<()>,
 ) -> PolarsResult<RunStats> {
-    run_with(bank, input, output, None, None, None, opts, progress)
+    run_with(bank, input, output, None, false, None, None, opts, progress)
 }
 
 /// [`run`], with the bank's closed groups (E54) drained after every chunk
@@ -1036,13 +1048,16 @@ pub fn run(
 /// learned before the bank sees it (`--skip-learned`, docs/PLAN.md task
 /// 196), and a chunk with none left is not fed. With `last`, each chunk's
 /// output notes each spec's groups' last `withheld_reason` for the run's
-/// closing lines (docs/PLAN.md task 116, H).
+/// closing lines (docs/PLAN.md task 116, H). With `discard_closed`, the
+/// closed groups no file and no state will carry are drained after every
+/// chunk and dropped, rather than kept in the bank for nobody.
 #[allow(clippy::too_many_arguments)]
 fn run_with(
     bank: &mut Bank,
     input: Input<'_>,
     output: Output<'_>,
     closed: Option<(&Path, Format)>,
+    discard_closed: bool,
     skip: Option<&Learned>,
     mut last: Option<&mut LastReasons>,
     opts: RunOptions,
@@ -1115,6 +1130,7 @@ fn run_with(
         };
 
         let mut stats = RunStats::default();
+        let mut rows_read = 0usize;
         let run = || -> PolarsResult<()> {
             loop {
                 let t = Instant::now();
@@ -1133,28 +1149,47 @@ fn run_with(
                          message."
                     ),
                 };
-                let chunk = match skip {
+                // The input's rows before this chunk, so an error names the
+                // input's row (task 120): the rows read, which under `skip`
+                // are more than the rows fed, and each kept row is named by
+                // its own place among them (review P12).
+                let read_before = rows_read;
+                rows_read += chunk.height();
+                let (chunk, rows) = match skip {
                     Some(learned) => {
-                        let kept = chunk.filter(&learned.unlearned(&chunk)?)?;
+                        let mask = learned.unlearned(&chunk)?;
+                        let kept = chunk.filter(&mask)?;
                         if kept.height() == 0 {
                             continue;
                         }
-                        kept
+                        let places: Vec<usize> = mask
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, m)| *m == Some(true))
+                            .map(|(i, _)| read_before + i)
+                            .collect();
+                        (kept, InputRows::kept(places))
                     }
-                    None => chunk,
+                    None => (chunk, InputRows::from_base(read_before)),
                 };
                 let height = chunk.height();
                 let t = Instant::now();
-                // `stats.rows` is the rows fed before this chunk, so an
-                // error names the input's row (task 120).
-                let out = augment(bank, chunk, opts.predict, opts.learn_only, stats.rows)?;
+                let queued = bank.closed_queued();
+                let out = augment(bank, chunk, opts.predict, opts.learn_only, rows)?;
                 if let Some(last) = last.as_deref_mut() {
                     last.note(bank.specs(), &out)?;
+                    last.forget_closed(bank, queued);
                 }
                 t_bank += t.elapsed();
                 let t = Instant::now();
                 deliver(out)?;
                 t_deliver_wait += t.elapsed();
+                if discard_closed && bank.closed_queued() > 0 {
+                    // Nobody reads them: no sidecar and no state to save
+                    // them with (review P8's pile, on the command line).
+                    bank.closed_groups(None, true)
+                        .map_err(|e| polars_err!(ComputeError: "{}", e))?;
+                }
                 if closed_writer.is_some() {
                     let rows = bank
                         .closed_groups(None, true)
@@ -1179,7 +1214,13 @@ fn run_with(
                     Empty::Plan(lf) => lf.collect()?,
                     Empty::Frame(df) => df,
                 };
-                deliver(augment(bank, empty, opts.predict, opts.learn_only, 0)?)?;
+                deliver(augment(
+                    bank,
+                    empty,
+                    opts.predict,
+                    opts.learn_only,
+                    InputRows::default(),
+                )?)?;
             }
             if closed_writer.is_some() && !closed_sent {
                 // Nothing closed: the empty frame with the schema, as an
@@ -1256,17 +1297,22 @@ fn run_with(
     })
 }
 
-/// Each spec's groups' last `withheld_reason` in the run, as the output
-/// carried it (docs/PLAN.md task 116, H): the summary keeps no reason per
-/// group, so the runner reads it off each chunk it writes, `O(groups)`.
+/// Each spec's open groups' last `withheld_reason` in the run, as the
+/// output carried it (docs/PLAN.md task 116, H): the summary keeps no
+/// reason per group, so the runner reads it off each chunk it writes,
+/// `O(open groups)`. A group's entry goes when it closes
+/// ([`Self::forget_closed`]): kept, the map grew by a group for every group
+/// a `group_close` run ever closed, about 190 bytes each, so the memory of
+/// a stream of many groups grew with the stream (review P5).
 #[derive(Debug, Default)]
-struct LastReasons(Vec<std::collections::HashMap<String, Option<String>>>);
+struct LastReasons(Vec<std::collections::HashMap<GroupKey, Option<String>>>);
 
 impl LastReasons {
     /// Note `out`'s rows, the bank's columns among them, in row order: a
     /// group's last row in the chunk is the one kept. A spec writes its
-    /// first instance's `withheld_reason` first; a group is its key's text,
-    /// the null key "null", and a spec without a group one key, "".
+    /// first instance's `withheld_reason` first; a group is its key as the
+    /// bank keys it, the null key apart from every text, and a spec without
+    /// a group one key, [`GroupKey::ungrouped`].
     fn note(&mut self, specs: &[Spec], out: &DataFrame) -> PolarsResult<()> {
         if self.0.len() != specs.len() {
             self.0.resize_with(specs.len(), Default::default);
@@ -1301,15 +1347,31 @@ impl LastReasons {
             let mut seen = std::collections::HashSet::new();
             for i in (0..out.height()).rev() {
                 let key = match keys {
-                    Some(k) => k.get(i).unwrap_or("null"),
-                    None => "",
+                    Some(k) => k.get(i),
+                    None => Some(""),
                 };
                 if seen.insert(key) {
-                    map.insert(key.to_string(), reasons.get(i).map(str::to_string));
+                    map.insert(
+                        GroupKey(key.map(str::to_string)),
+                        reasons.get(i).map(str::to_string),
+                    );
                 }
             }
         }
         Ok(())
+    }
+
+    /// Drop the entry of each group the bank closed since its queue held
+    /// `queued` rows and holds no stream for now -- a session's close that
+    /// the same chunk reopened keeps its group, and its entry.
+    fn forget_closed(&mut self, bank: &Bank, queued: usize) {
+        for (si, key) in bank.closed_keys_from(queued) {
+            if let Some(map) = self.0.get_mut(si)
+                && !bank.has_group(si, key)
+            {
+                map.remove(key);
+            }
+        }
     }
 }
 
@@ -1364,14 +1426,14 @@ fn augment(
     chunk: DataFrame,
     predict: bool,
     learn_only: bool,
-    row_base: usize,
+    rows: InputRows,
 ) -> PolarsResult<DataFrame> {
     let cols = if predict {
-        bank.predict_from(&chunk, row_base)?
+        bank.predict_rows(&chunk, rows)?
     } else {
         // A run with no output keeps no prediction: `ModelBank.fit`'s
         // run, which takes any embargo (review R2, P4).
-        bank.fit_predict_from_with(&chunk, row_base, learn_only)?
+        bank.fit_predict_rows(&chunk, rows, learn_only)?
     };
     // A readiness notice is a line on stderr, once per (spec, group,
     // instance) -- under `group_close = "session"` once per span, which it
@@ -2053,6 +2115,77 @@ mod tests {
     use polars::prelude::*;
 
     use super::{local_path, url_scheme, with_columns};
+
+    /// Review P5: under `group_close`, the closing lines' map kept an entry
+    /// for every group the run ever saw, closed ones too, so a run over a
+    /// stream of many groups grew with it. A closed group's entry goes; an
+    /// open group's, and one a session reopened in the same chunk, stays.
+    #[test]
+    fn the_closing_lines_keep_only_the_open_groups() {
+        use super::{Input, LastReasons, Output, RunOptions, run_with};
+        use crate::bank::{Bank, GroupKey};
+        // 200 groups of three rows each, in key order: under `monotone` a
+        // group closes when the next key comes, so one is open at the end.
+        let n = 600;
+        let g: Vec<i64> = (0..n).map(|i| i / 3).collect();
+        let x0: Vec<f64> = (0..n).map(|i| ((i * 7) % 11) as f64).collect();
+        let x1: Vec<f64> = (0..n).map(|i| ((i * 5) % 13) as f64).collect();
+        let df = df!("g" => g, "x0" => x0, "x1" => x1).expect("a frame");
+        let close = |how: &str, session: &str| -> crate::Spec {
+            serde_json::from_str(&format!(
+                r#"{{"name": "c", "model": {{"type": "ew_cov"}}, "features": ["x0", "x1"],
+                    "half_life": 40.0, "group": "g", "group_close": "{how}"{session}}}"#
+            ))
+            .expect("a spec")
+        };
+        let run = |spec: crate::Spec, df: DataFrame| -> (LastReasons, Bank) {
+            let mut bank = Bank::new(vec![spec]).expect("a bank");
+            let mut last = LastReasons::default();
+            let opts = RunOptions {
+                chunk_size: 50,
+                ..RunOptions::default()
+            };
+            run_with(
+                &mut bank,
+                Input::Lazy(df.lazy()),
+                Output::Discard,
+                None,
+                true,
+                None,
+                Some(&mut last),
+                opts,
+                |_| Ok(()),
+            )
+            .expect("the run");
+            (last, bank)
+        };
+        let (last, bank) = run(close("monotone", ""), df.clone());
+        assert_eq!(
+            last.0[0].len(),
+            1,
+            "{:?}",
+            last.0[0].keys().collect::<Vec<_>>()
+        );
+        assert!(last.0[0].contains_key(&GroupKey(Some("199".into()))));
+        assert_eq!(
+            bank.closed_queued(),
+            0,
+            "nobody reads them, so none is kept"
+        );
+        // Under `session`, a group whose session changes closes a span and
+        // goes on: it keeps its entry. One group, a session every 3 rows.
+        let mut one = df.clone();
+        one.with_column(Column::new("g".into(), vec![7i64; n as usize]))
+            .expect("a column");
+        one.with_column(Column::new(
+            "s".into(),
+            (0..n).map(|i| i / 3).collect::<Vec<i64>>(),
+        ))
+        .expect("a column");
+        let (last, _) = run(close("session", r#", "session": "s""#), one);
+        assert_eq!(last.0[0].len(), 1);
+        assert!(last.0[0].contains_key(&GroupKey(Some("7".into()))));
+    }
 
     /// `with_columns` against `DataFrame::with_column` called once a
     /// column, the loop it replaced: the same frame -- its columns, their

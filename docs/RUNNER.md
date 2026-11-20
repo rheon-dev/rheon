@@ -122,6 +122,9 @@ its own. It counts the groups whose last row was withheld, by
 `withheld_reason`, and those with a coefficient more ridge than data
 (`support_coef_min < 0.5`), as
 `spec "ridge": 2 groups whose last row was withheld (below_min_weight 2); 1 group with support_coef_min < 0.5`.
+Under `group_close`, a group that closed is not counted: its row went to
+`closed_groups` or the state, and the run keeps nothing of it, so its
+memory does not grow with the groups it closes.
 A spec with neither has no line, as in every run on this page.
 Standard error carries the progress line on a terminal, the timings
 `RHEON_TIMING=1` asks for, and the error of a run that fails. It also

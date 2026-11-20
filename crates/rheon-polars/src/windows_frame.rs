@@ -2201,7 +2201,12 @@ impl WindowsRun {
                     // A time of day is read too, in nanoseconds since
                     // midnight (review round 4, PD5).
                     let c = inputs.column(input_column(i).as_str())?;
-                    let ns = nanos_array(c.as_materialized_series(), 0, NanosRole::Increment, WHO)?;
+                    let ns = nanos_array(
+                        c.as_materialized_series(),
+                        &crate::arrow::InputRows::default(),
+                        NanosRole::Increment,
+                        WHO,
+                    )?;
                     Ok(Some((0..ns.len()).map(|r| ns.get(r)).collect()))
                 } else {
                     Ok(None)
@@ -2365,7 +2370,7 @@ impl WindowsRun {
         let values: Vec<ClockValue> = if col.dtype().is_temporal() {
             let ns = nanos_array(
                 col.as_materialized_series(),
-                base as usize,
+                &crate::arrow::InputRows::from_base(base as usize),
                 NanosRole::Clock,
                 WHO,
             )?;
