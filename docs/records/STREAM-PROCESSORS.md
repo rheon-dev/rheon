@@ -4,8 +4,9 @@
 *Status, 2026-11-20: a record, in progress. The research for PLAN task 531
 (request A8): which stream processors rheon should support beyond the Kafka
 consumer of task 530, and what each would cost. Read-only: nothing here was
-built or measured. Part 1 covers the first six candidates and part 2 the next
-six; the rest, the ranking and the proposed tasks follow in later parts.*
+built or measured. Part 1 covers the first six candidates, part 2 the next
+six and part 3 the last four; the ranking and the proposed tasks follow in a
+later part.*
 
 ## The question
 
@@ -642,6 +643,178 @@ Sources:
 [W7] https://docs.risingwave.com/integrations/destinations/apache-kafka (from a search summary; the page itself was not read)
 [W8] https://github.com/risingwavelabs/risingwave
 
+## 13. Materialize
+
+**(a) Keying and ordering.** A streaming SQL database over differential
+dataflow. A Kafka source tracks each partition's greatest offset in a
+progress subsource; the upsert envelope keeps the latest value per key
+[M1]. Ordering is by Materialize's own timestamps: `SUBSCRIBE` emits changes
+whose `mz_timestamp` "will never be less than any timestamp previously
+emitted", but sorting rows within a timestamp (`WITHIN TIMESTAMP ORDER BY`)
+is in private preview [M2]. Nothing read says a source partition's offset
+order survives into a view's row order within a group: not verified. SQL
+window functions (`lag`, `row_number` and the rest) exist [M3].
+
+**(b) State and checkpoints.** The source does not recover from committed
+offsets or join the consumer-group protocol [M1]; Materialize's state and
+progress are its own. No user-defined function, stateful or otherwise, is
+documented: the function reference lists no `CREATE FUNCTION` [M3], and its
+page returns 404 [M4]. So a rheon bank cannot live in Materialize's state.
+Rheon could only sit beside it, reading a view through `SUBSCRIBE` and
+resuming with `AS OF` from its last timestamp within the retained history
+[M2], saving its own state before it records that timestamp, as task 530
+does with offsets.
+
+**(c) Arrow or Python path.** None inside. Beside it, a Python client over
+the Postgres wire protocol reads `SUBSCRIBE` rows [M2, M5]; that client is
+row-oriented (an Arrow path was not found).
+
+**(d) Replay and exactly-once.** Kafka sinks are exactly-once by default,
+through Kafka transactions and a progress topic [M6]; a `SUBSCRIBE` consumer
+replays from `AS OF` [M2]. Rheon's predictions would leave through its own
+writer, not through these sinks.
+
+**(e) Static linking.** None in rheon for a client beside it.
+
+**(f) Adoption.** About 6.4k stars; the engine is under BSL 1.1, converting
+to Apache 2.0 after four years, free on a single node [M7].
+
+Sources:
+[M1] https://materialize.com/docs/sql/create-source/kafka/
+[M2] https://materialize.com/docs/sql/subscribe/
+[M3] https://materialize.com/docs/sql/functions/
+[M4] https://materialize.com/docs/sql/create-function/ (HTTP 404 on 2026-11-20)
+[M5] https://materialize.com/docs/integrations/client-libraries/python/ (from a search result; not read)
+[M6] https://materialize.com/docs/serve-results/sink/kafka/
+[M7] https://github.com/MaterializeInc/materialize
+
+## 14. Arroyo
+
+**(a) Keying and ordering.** Each operator splits into subtasks, each owning
+part of the key space; shuffle edges route events of one key to one subtask
+[Y1]. Time-based operators use event time and watermarks, dropping events
+later than the watermark, so the same input gives the same output whatever
+its arrival order [Y1]. Per-key arrival order through a shuffle is not
+stated [Y1]: not verified.
+
+**(b) State and checkpoints.** Checkpoints follow asynchronous barrier
+snapshotting (a Chandy-Lamport variant), stored as Parquet in object storage
+such as S3, and each holds the Kafka offsets, so a restore gives "identical
+results as if we had never failed" [Y1]. But user code holds no state of its
+own in the pages read: UDFs are scalar functions run serially over a batch
+[Y2], and the only aggregate functions (UDAFs) are Rust ones over a window's
+values [Y3]. A rheon bank could not live in a checkpoint.
+
+**(c) Arrow or Python path.** The engine is built on Arrow and DataFusion
+[Y1]. Python UDFs arrived in 0.12, declared with `@udf` and typed by hints
+[Y4]; Python UDAFs and "direct PyArrow support" were announced for the next
+release [Y4], but none of the releases since mention either [Y5]: not
+shipped, as far as the release notes show. Whether a Python UDF is called
+per row or per batch is not stated [Y2, Y4]: not verified.
+
+**(d) Replay and exactly-once.** Restore from the last checkpoint, with the
+offsets in it [Y1]; sink guarantees were not read: not verified.
+
+**(e) Static linking.** None in rheon; Arroyo is a Rust service.
+
+**(f) Adoption.** About 5.1k stars, Apache-2.0/MIT; offered as a managed
+service on Cloudflare, where only stateless pipelines into R2 are supported
+so far [Y6]. The latest release is v0.16.0 (dated "17 Nov" on the releases
+page, year not shown) [Y5].
+
+Sources:
+[Y1] https://www.arroyo.dev/docs/concepts
+[Y2] https://www.arroyo.dev/docs/udfs/
+[Y3] https://doc.arroyo.dev/releases/v0.6.0/ (from a search summary; not read)
+[Y4] https://www.arroyo.dev/blog/arroyo-0-12-0/
+[Y5] https://github.com/ArroyoSystems/arroyo/releases
+[Y6] https://github.com/ArroyoSystems/arroyo
+
+## 15. Fluvio
+
+**(a) Keying and ordering.** Records with a key are hashed (SipHash 2-4
+today) to a partition, so "records with the same key are always sent to the
+same partition", and records in a partition stay in commit order [L1]. The
+same two needs as Kafka. Consumer groups and partition assignment are not
+described on the consumer page [L2]: not verified.
+
+**(b) State and checkpoints.** Consumer offsets are kept per consumer name
+and partition, durably, committed manually or on reading the next record
+[L2]. A rheon consumer would save its state and then commit, as task 530
+does; not atomic. Fluvio's stateful layer, Stateful DataFlows (SDF), runs
+operators compiled to WebAssembly from Rust and is in preview [L3]; its
+sidebar lists a "Polars library" page that did not load: not verified.
+Python operators are not mentioned [L3], so a rheon bank cannot run inside
+SDF as far as the docs read show.
+
+**(c) Arrow or Python path.** The Python client `fluvio`, 0.21.0 of
+2025-05-24, Python 3.9 to 3.13 [L4, L5]. SmartModules are WebAssembly
+filters and maps applied per record before delivery [L6]. No Arrow path.
+
+**(d) Replay and exactly-once.** Producers are at-most-once or at-least-once
+(the default) [L7]; a consumer resumes from its committed offset [L2].
+
+**(e) Static linking.** None in rheon; whether the `fluvio` wheel bundles
+native Rust code statically was not read: not verified.
+
+**(f) Adoption.** About 5.3k stars, Apache-2.0; the README notes a move to a
+community-hosted build and release, with a development install meanwhile
+[L8]; the Python client's last release is from May 2025 [L5].
+
+Sources:
+[L1] https://www.fluvio.io/docs/latest/fluvio/concepts/partitions/
+[L2] https://www.fluvio.io/docs/latest/fluvio/concepts/consumers/
+[L3] https://fluvio-docs.pages.dev/sdf
+[L4] https://pypi.org/pypi/fluvio/json
+[L5] https://pypi.org/rss/project/fluvio/releases.xml
+[L6] https://www.fluvio.io/docs/smartmodules/features/operators/filter/ (from a search summary; not read)
+[L7] https://www.fluvio.io/docs/latest/fluvio/concepts/delivery-semantics/ (from a search summary; not read)
+[L8] https://github.com/infinyon/fluvio
+
+## 16. Polars' streaming engine
+
+Not a stream processor in the sense of the others: no broker, no
+partitions, no checkpoints. It is what rheon already runs on, so this
+section says what it would take to use it as the host.
+
+**(a) Keying and ordering.** One process; no routing of groups to owners.
+`collect_batches` keeps the order in which data is processed unless
+`maintain_order=False` [O1], and rheon's bank keys its groups itself. A
+source that keeps a Kafka partition's order (task 530's consumer, wrapped as
+an IO source) therefore delivers rows to rheon in order.
+
+**(b) State and checkpoints.** None in Polars. A custom source is an
+`register_io_source` callable yielding frames in batches [O2]; offsets and
+rheon's state are both rheon's to save. Rheon's own IO plugin already saves
+its state from a query (`save_state=` on `lf.rheon.fit_predict`).
+
+**(c) Arrow or Python path.** Arrow memory throughout, batches of a size the
+engine hints [O2]. The engine runs lazy queries in batches and falls back to
+the in-memory engine for operations it cannot stream [O3]. A stateful
+function inside a query is not offered: `map_batches` is documented as
+receiving a whole Series and must be pure, "it cannot modify or depend on
+state other than its arguments", and may be called on arbitrary data [O4].
+This is why rheon's expression plugin was removed and why rheon runs as an
+IO source and a batch loop instead. Both `register_io_source` and
+`collect_batches` are marked unstable [O1, O2]; rheon's floor of polars
+1.37.0 is where `collect_batches` stops reading ahead of a slower consumer,
+measured in this repository (`docs/records/LINKING.md`).
+
+**(d) Replay and exactly-once.** None: replay is whatever the source
+re-reads.
+
+**(e) Static linking.** Polars is already linked into the wheel, as Polars
+prescribes for a compiled extension (`docs/records/LINKING.md`); nothing new.
+
+**(f) Adoption.** About 40.4k stars, MIT [O5].
+
+Sources:
+[O1] https://docs.pola.rs/api/python/stable/reference/lazyframe/api/polars.LazyFrame.collect_batches.html
+[O2] https://docs.pola.rs/api/python/stable/reference/api/polars.io.plugins.register_io_source.html
+[O3] https://docs.pola.rs/user-guide/concepts/streaming/
+[O4] https://docs.pola.rs/api/python/stable/reference/expressions/api/polars.Expr.map_batches.html
+[O5] https://github.com/pola-rs/polars
+
 ## Notes for the later parts
 
 - Every host here keeps state per key, and a rheon bank is one value for all
@@ -649,6 +822,14 @@ Sources:
   shard (a Kafka partition) and holds a whole bank per key, saving it only at
   the host's checkpoint. Which hosts let a function save only at checkpoint
   time is the open question for the ranking.
-- No host among the six passes Arrow batches to a stateful Python function:
+- After part 3: none of the sixteen runs a rheon bank in a stateful Python
+  or Arrow function whose state its checkpoint holds, except row at a time
+  or by window (PyFlink, Spark, Bytewax, Quix, Faust, Pulsar Functions).
+  Materialize has no user functions; Arroyo's and RisingWave's stateful user
+  code is Rust or a restricted embedded Python; Fluvio's is WebAssembly; and
+  Polars forbids state in a function by design. Every broker (Kafka,
+  Redpanda, Pulsar, Kinesis, Fluvio) supports the task 530 shape: a consumer
+  beside it, state saved before the offset.
+- No host among the first six passes Arrow batches to a stateful Python function:
   PyFlink's Arrow functions are stateless or per window, Spark passes pandas
   frames to its stateful calls, and the Python libraries pass Python objects.
