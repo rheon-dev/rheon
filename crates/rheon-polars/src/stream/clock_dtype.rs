@@ -180,7 +180,10 @@ impl ClockDtype {
         };
         let per = self.ns_per_unit();
         let ns = |c: Option<ClockValue>| match c {
-            Some(ClockValue::Ns(n)) => Some(n / per),
+            // Floor, as Polars' cast to a coarser unit takes it: before
+            // 1970 a truncation rounded the instant up, toward 1970, to a
+            // time after the row's own (review P15).
+            Some(ClockValue::Ns(n)) => Some(n.div_euclid(per)),
             _ => None,
         };
         // An integer clock's values in its width: each came from a column

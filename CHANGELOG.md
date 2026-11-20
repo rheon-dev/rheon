@@ -48,6 +48,18 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **A chunk of no rows built without dtypes no longer pins a clock's
+  type** (review P10). `pl.DataFrame({"t": [], ...})`, what a poll that
+  found nothing builds, has `Null` columns, and fed first it pinned the
+  clock to `Float64`, in the bank and in its saved state, so the first rows
+  of an integer clock were refused; fed mid-stream, it was refused itself.
+  A chunk that holds no value of the clock now says nothing of its type.
+- **A clock field shown in a coarser unit floors an instant before 1970**
+  (review P15). The clock fields keep the first chunk's unit, and a later
+  chunk's finer instant before 1970 was truncated toward 1970, to a time
+  after the row's own (`23:59:59.999` became `00:00:00.000`). It is
+  floored, as Polars' cast to the coarser unit floors it. The fit reads
+  nanoseconds and does not move.
 - **A command-line run under `group_close` keeps nothing of a closed
   group** (review P5). Its closing lines kept an entry for every group it
   ever saw, about 190 bytes each, so a `--no-output --closed-groups` run

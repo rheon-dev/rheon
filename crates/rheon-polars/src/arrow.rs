@@ -88,6 +88,20 @@ impl ArrowCol {
         self.len() == 0
     }
 
+    /// The nulls the column holds.
+    pub fn null_count(&self) -> usize {
+        use polars_arrow::array::Array;
+        match self {
+            Self::F64(a) => a.null_count(),
+            Self::Num(a) => a.boxed().null_count(),
+            Self::Str(a) => a.null_count(),
+            Self::I64(a) => a.null_count(),
+            Self::U64(a) => a.null_count(),
+            Self::Nanos(a) => a.null_count(),
+            Self::Bool(a) => a.null_count(),
+        }
+    }
+
     /// True for the two integer forms, which is what `group_close =
     /// "monotone"` orders numerically rather than lexicographically.
     pub fn is_integer(&self) -> bool {
@@ -546,6 +560,21 @@ impl ArrowChunk {
 
     pub fn has(&self, name: &str) -> bool {
         self.name_set.contains(name)
+    }
+
+    /// Whether the chunk holds no value of column `name`: no rows, or only
+    /// nulls in every form it holds the column in -- what a frame built with
+    /// no dtypes, every column `Null`, holds. Such a column says nothing of
+    /// its type (review P10). `false` for a column the chunk has not got.
+    pub fn holds_no_value(&self, name: &str) -> bool {
+        self.has(name)
+            && (self.height == 0
+                || self.index.get(name).is_some_and(|at| {
+                    at.iter().all(|&i| {
+                        let c = &self.cols[i].1;
+                        c.null_count() == c.len()
+                    })
+                }))
     }
 
     /// A column as a polars `Series`, in the first of the given forms the

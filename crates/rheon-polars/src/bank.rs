@@ -3994,7 +3994,7 @@ impl Bank {
         // come out as, kept in the state for `last_row` (task 152), and
         // another number type refused (task 200). Kept only once the chunk
         // is taken: a refused chunk changes nothing.
-        let merged = self.clock_forms(chunk)?;
+        let (merged, kept_clocks) = self.clock_forms(chunk)?;
         // The key columns' forms, refused if another, kept as the clock's is.
         let keys = self.key_forms(chunk)?;
         // Everything parallel below -- the `par_iter`s here and the
@@ -4013,7 +4013,7 @@ impl Bank {
                 .clone()
                 .install(|| self.fit_predict_on_pool(chunk, &merged, &keys))?
         };
-        self.clock_dtypes = merged;
+        self.clock_dtypes = kept_clocks;
         self.key_dtypes = keys;
         Ok(out)
     }
@@ -4026,12 +4026,24 @@ impl Bank {
     /// integer clock of another width -- naming the spec, the column and
     /// both dtypes, as a key column of another form is refused. A chunk
     /// without the clock column says nothing here: its absence is another
-    /// check's to name.
+    /// check's to name. Nor does one that holds no value of it -- no rows,
+    /// or nulls alone, as a frame built with no dtypes has, its every column
+    /// `Null` (review P10): it is neither refused nor kept, so a poll that
+    /// found nothing does not pin the clock to `Float64` in the bank and its
+    /// saved state. Its own clock fields come out in the type kept, or, with
+    /// none kept, in the one it has.
+    ///
+    /// The second list is what the bank keeps once the chunk is taken.
+    #[allow(clippy::type_complexity)]
     fn clock_forms(
         &self,
         chunk: &ArrowChunk,
-    ) -> PolarsResult<Vec<Option<crate::stream::ClockDtype>>> {
-        self.specs
+    ) -> PolarsResult<(
+        Vec<Option<crate::stream::ClockDtype>>,
+        Vec<Option<crate::stream::ClockDtype>>,
+    )> {
+        let forms: Vec<_> = self
+            .specs
             .iter()
             .zip(&self.clock_dtypes)
             .map(|(s, kept)| {
@@ -4042,8 +4054,9 @@ impl Bank {
                         .and_then(|c| chunk.clock_dtype(c))
                         .as_ref(),
                 );
+                let silent = s.clock.as_deref().is_some_and(|c| chunk.holds_no_value(c));
                 match (kept, s.clock.as_deref()) {
-                    (Some(was), Some(c)) if chunk.has(c) && was.conflicts(&now) => {
+                    (Some(was), Some(c)) if !silent && chunk.has(c) && was.conflicts(&now) => {
                         polars_bail!(ComputeError:
                             "spec {:?}: clock column {:?} was {} and is now {}, but a stream \
                              keeps the type its clock began with, since an integer clock steps in \
@@ -4056,11 +4069,13 @@ impl Bank {
                             crate::arrow::dtype_name(&was.dtype())
                         )
                     }
-                    (Some(was), _) => Ok(Some(was.clone())),
-                    (None, _) => Ok(Some(now)),
+                    (Some(was), _) => Ok((Some(was.clone()), Some(was.clone()))),
+                    (None, _) if silent => Ok((Some(now), None)),
+                    (None, _) => Ok((Some(now.clone()), Some(now))),
                 }
             })
-            .collect()
+            .collect::<PolarsResult<_>>()?;
+        Ok(forms.into_iter().unzip())
     }
 
     /// Each spec's key columns in `chunk`, against the forms the bank keeps
@@ -4763,7 +4778,7 @@ impl Bank {
         // Scoring changes nothing, so a type the bank has not seen is read
         // off the chunk and not kept (task 152); another number type than
         // the bank's is refused, as in a learning run (task 200).
-        let clock_dtypes = self.clock_forms(chunk)?;
+        let (clock_dtypes, _) = self.clock_forms(chunk)?;
         let n = chunk.height();
         self.refuse_if_broken()?;
         self.refuse_name_clash(chunk.names())?;

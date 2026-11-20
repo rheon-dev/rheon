@@ -2051,3 +2051,131 @@ fn a_value_past_the_input_bound_is_missing_to_every_value_check() {
         }
     }
 }
+
+/// An integer clock's spec, for the clock-type tests below.
+fn int_clock_spec() -> Spec {
+    serde_json::from_str(
+        r#"{"name": "m", "model": {"type": "ewridge"}, "targets": ["y"], "features": ["x"],
+            "clock": "t", "half_life": 10.0, "gap_cap": 5.0, "group": "g"}"#,
+    )
+    .unwrap()
+}
+
+/// Review P10: a frame with no rows built without dtypes -- every column
+/// `Null`, what a poll that found nothing builds -- pinned the clock's type
+/// to `Float64`, in the bank and in its saved state, so the first rows of
+/// an integer clock were refused; fed mid-stream, it was refused itself. A
+/// chunk that holds no value of the clock says nothing of its type: no rows,
+/// or nulls alone.
+#[test]
+fn a_chunk_with_no_clock_value_does_not_pin_the_clocks_type() {
+    let rows = df!(
+        "t" => [1i64, 2, 3], "g" => ["a", "a", "b"], "x" => [1.0, 2.0, 3.0],
+        "y" => [1.0, 2.0, 3.0]
+    )
+    .unwrap();
+    let untyped = DataFrame::new(
+        0,
+        ["t", "g", "x", "y"]
+            .iter()
+            .map(|n| Column::full_null((*n).into(), 0, &DataType::Null))
+            .collect(),
+    )
+    .unwrap();
+    let want = {
+        let mut bank = Bank::new(vec![int_clock_spec()]).unwrap();
+        bank.fit_predict(&rows).unwrap()
+    };
+    // First, and then through a save and a load.
+    let mut bank = Bank::new(vec![int_clock_spec()]).unwrap();
+    assert_eq!(bank.fit_predict(&untyped).unwrap()[0].len(), 0);
+    let mut loaded = Bank::load_bytes(&bank.save_bytes().unwrap(), None).unwrap();
+    for b in [&mut bank, &mut loaded] {
+        let got = b
+            .fit_predict(&rows)
+            .expect("the integer clock's first rows");
+        assert!(
+            got[0]
+                .as_materialized_series()
+                .equals_missing(want[0].as_materialized_series())
+        );
+    }
+    // Mid-stream, no rows untyped.
+    let mut bank = Bank::new(vec![int_clock_spec()]).unwrap();
+    bank.fit_predict(&rows.slice(0, 2)).unwrap();
+    bank.fit_predict(&untyped)
+        .expect("a chunk with no clock value");
+    bank.fit_predict(&rows.slice(2, 1)).unwrap();
+    // A row whose clock is null in a `Float64` column is refused for the
+    // null, which a clock cannot take, not for its column's type.
+    let null_clock = df!(
+        "t" => [None::<f64>], "g" => ["a"], "x" => [1.0], "y" => [1.0]
+    )
+    .unwrap();
+    let e = bank.fit_predict(&null_clock).unwrap_err().to_string();
+    assert!(
+        e.contains("has a null, NaN or infinite value at row 0"),
+        "{e}"
+    );
+    // A chunk of no rows of the clock's own type is taken as before, and a
+    // value of another type is still refused.
+    let mut bank = Bank::new(vec![int_clock_spec()]).unwrap();
+    bank.fit_predict(&rows.slice(0, 2)).unwrap();
+    bank.fit_predict(&rows.clear()).unwrap();
+    let float = df!("t" => [9.0], "g" => ["a"], "x" => [1.0], "y" => [1.0]).unwrap();
+    let e = bank.fit_predict(&float).unwrap_err().to_string();
+    assert!(e.contains("was Int64 and is now Float64"), "{e}");
+}
+
+/// Review P15: a stream whose clock arrives in a finer unit than its first
+/// chunk's writes the clock fields in the first chunk's unit, and a
+/// pre-1970 instant was truncated toward 1970, to a time after the row's
+/// own. It is floored, as Polars' cast to the coarser unit floors it.
+#[test]
+fn a_coarser_clock_field_floors_an_instant_before_1970() {
+    let spec: Spec = serde_json::from_str(
+        r#"{"name": "m", "model": {"type": "ewridge"}, "targets": ["y"], "features": ["x"],
+            "clock": "t", "half_life": "10s", "gap_cap": "5s", "emit_clocks": true}"#,
+    )
+    .unwrap();
+    let ms = Int64Chunked::from_vec("t".into(), vec![-2_000])
+        .into_datetime(TimeUnit::Milliseconds, None)
+        .into_series();
+    let ns = Int64Chunked::from_vec("t".into(), vec![-1_500_000_001, -999_999, 1_000_001])
+        .into_datetime(TimeUnit::Nanoseconds, None)
+        .into_series();
+    let first = DataFrame::new(
+        1,
+        vec![
+            ms.into_column(),
+            Column::new("x".into(), [1.0]),
+            Column::new("y".into(), [1.0]),
+        ],
+    )
+    .unwrap();
+    let second = DataFrame::new(
+        3,
+        vec![
+            ns.clone().into_column(),
+            Column::new("x".into(), [1.0, 2.0, 3.0]),
+            Column::new("y".into(), [1.0, 2.0, 3.0]),
+        ],
+    )
+    .unwrap();
+    let mut bank = Bank::new(vec![spec]).unwrap();
+    bank.fit_predict(&first).unwrap();
+    let out = bank.fit_predict(&second).unwrap();
+    let scored = out[0]
+        .struct_()
+        .unwrap()
+        .field_by_name("scored_clock")
+        .unwrap();
+    let want = ns
+        .cast(&DataType::Datetime(TimeUnit::Milliseconds, None))
+        .unwrap();
+    assert_eq!(scored.dtype(), want.dtype());
+    let phys =
+        |s: &Series| -> Vec<Option<i64>> { s.to_physical_repr().i64().unwrap().iter().collect() };
+    assert_eq!(phys(&scored), phys(&want));
+    assert_eq!(phys(&scored), vec![Some(-1_501), Some(-1), Some(1)]);
+}
