@@ -11,7 +11,7 @@ library docs.
 - Part 0: skeleton.
 - Part 1 (huber, quantile, robust covariance, sgd, pa, ftrl): done, 2026-11-20.
 - Part 2 (kmeans, hmm online EM, mixtures, held_median, tails): done, 2026-11-20.
-- Part 3 pending.
+- Part 3 (bocpd, seqtest, drift, breaks, corrchange, adaptive conformal): done, 2026-11-20. Summary of all 17 families at the end of the file.
 
 ## Parts
 
@@ -784,3 +784,454 @@ exact merge for both cases and no caveat of its own.
 | mixtures | add statistics; else moment-matched reduction | exact with labels, common parameters or 2K components; reduction bounded by Runnalls' `B` |
 | held_median | union of the held rows, replayed | exact within the cap; two medians alone only bracket |
 | tails | Pébay's pairwise moment formulas | exact (last bits aside) |
+
+### Part 3: what changes from parts 1 and 2
+
+The definitions of part 1 stand. These six are **sequential**: each state is
+a statistic of a path in time order (a run length, a wealth, a cumulative
+excess, a prefix correlation, a tracked radius), so two things recur. First,
+**shards have no one-pass meaning** for most of them: interleaved rows carry
+no order in the saved state, and a quantity counted in rows or integrated
+over the clock is counted twice. Second, a cold B is a **restart at the
+seam**, and a restart is itself a statement: "a new run began here". Where
+the statistic composes over a restart (a wealth, a cumulative sum against a
+fixed reference) the merge is exact or valid; where B's rows were scored
+against a quantity learned from the past (a running mean, a scale, a fit, a
+radius) it is not, and a change exactly at the seam is absorbed by the cold
+start and seen by neither state. Resuming A's state on B's rows is the exact
+concatenation for all six today.
+
+Searches were made on 2026-11-20. Citations marked *(from memory)* were not
+confirmed by a search; the bounds marked "derived here" are this note's own
+algebra from the module's stated recursions, not a published result, and were
+not run.
+
+### bocpd (`bocpd.rs`)
+
+State: the run vector (per run: row count, weight, mean, scatter; `d` or
+`d*d` scatter) and each run's log joint `P(r_t = r, x_1:t)`, pruned below
+`prune_below` and capped at `max_run`.
+
+Merge rules:
+
+1. **No merge of two run-length posteriors is offered** by Adams and MacKay
+   (2007), "Bayesian online changepoint detection", arXiv 0710.3742
+   (confirmed), nor by Fearnhead and Liu (2007), "On-line inference for
+   multiple changepoint problems", JRSS B 69(4):589-605 (confirmed), whose
+   resampling is a rule for *dropping* hypotheses, not combining filters. The
+   Rust `changepoint` crate and the Python `bayesian_changepoint_detection`
+   package expose no merge that I know of *(from memory, not checked)*.
+2. **The straddling runs merge exactly** (derived here from the product
+   partition structure: Barry and Hartigan 1992, "Product partition models
+   for change point problems", Annals of Statistics 20 *(from memory)*). A
+   one-pass run of length `n_B + j` is A's run `j` continued through all of
+   B. Its statistics are A's run `j` pooled with B's oldest run (the one
+   holding all `n_B` rows), a conjugate sum, and its joint is
+
+   ```text
+   P(r_T = n_B + j, x_1:T) = P_A(r_s = j, x_1:s) · (1 − H)^{n_B} · m(A_j ∪ B) / m(A_j)
+   ```
+
+   with `m` the conjugate marginal likelihood (closed form for the
+   normal-inverse-Wishart and normal-inverse-gamma pairs), since the product
+   of a run's posterior predictives telescopes to that ratio. Exact for
+   `gaussian` and `diag` with a constant hazard, provided B's oldest run was
+   not pruned or folded.
+3. **The runs that began inside B do not.** B's joint for a run begun at
+   `tau` is the one-pass joint with the evidence `Z(tau) = P(x_1:tau,
+   change at tau)` replaced by B's own, which assumed a change at the seam.
+   The ratio `Z(tau) / Z_B(tau)` varies with `tau`, and computing it needs,
+   for every `tau` in B, the statistics of B's prefix up to `tau` to extend
+   each of A's runs: `O(n_B)` state B did not keep. Taking the ratio as
+   constant is the approximation "B's posterior, conditional on a change at
+   the seam"; it is close when B contains a decisive changepoint (then
+   `Z(tau)` for later `tau` is dominated by paths through it and the ratio
+   is nearly constant) and arbitrary otherwise. No published bound found.
+4. `robust`: a row's weight is read from the run's own predictive, so B's
+   rows were weighted against B's runs; neither rule 2's pooled statistics
+   nor its marginal ratio hold. None.
+5. Shards: a run length counts rows in time order; none. (Several streams
+   with *common* changepoints is a different model, a product of emissions
+   on one clock, not a merge of two states.)
+
+Exactness: **none** overall. Rule 2 is exact for its runs; rule 3 has no
+bound. If B's oldest run is gone (a decisive change inside B, or `max_run`
+reached), the straddling runs cannot be rebuilt at all, and the merged state
+is B's alone, which is what one pass also holds up to mass below
+`prune_below` in B's own accounting, not a bound on the one-pass mass.
+
+Cost: nothing added; the merged vector is at most `runs_A + runs_B`, folded
+at `max_run` as a row would fold it. A run is about `8(2d + 4)` bytes
+(`diag`) or `8(d^2 + d + 4)` (`gaussian`) plus its log joint, an estimate
+from the struct's fields; bounded by `max_run`, independent of stream length.
+
+Oracle: the unpruned recursion on the concatenated stream in `numpy`, with
+predictives from `scipy.stats.t` / `scipy.stats.multivariate_t` (the
+definition by hand, the density by the library); the straddling-run mass of
+rule 2 against the product of those predictives.
+
+Recommendation: no merge; steer concatenation to resuming. If one is wanted,
+rule 2 plus B's runs as they are, named "B's posterior given a change at the
+seam, plus A's runs carried through", `gaussian` and `diag` only.
+
+### seqtest (`seqtest.rs`)
+
+State: per target `n_pos`, `n_neg`, `log_e_pos`, `log_e_neg`; no decay.
+
+Merge rules:
+
+1. **Add the log wealths, add the counts.** B's stakes are predictable (a
+   function of B's earlier rows, in `[0, 1)`), so `E_A · E_B` is a
+   non-negative supermartingale under the module's null (conditional on the
+   whole past) over the concatenated stream, and Ville's inequality holds
+   for it at every row. The same argument covers shards read in time order:
+   at each row one factor moves, by a stake fixed before the row. This is
+   the product rule for sequential e-values: Vovk and Wang (2021),
+   "E-values: calibration, combination and applications", Annals of
+   Statistics 49(3):1736-1754 (confirmed), and their "Merging sequential
+   e-values via martingales", arXiv 2007.06382 (confirmed to exist; the
+   theorem was not read); Ramdas, Grünwald, Vovk and Shafer (2023),
+   "Game-theoretic statistics and safe anytime-valid inference",
+   Statistical Science 38 *(from memory)*.
+2. **The average `(E_A + E_B) / 2`** is an e-value under any dependence
+   (Vovk and Wang 2021: the arithmetic mean is essentially the only
+   admissible symmetric merge without independence, as reported by a later
+   paper of Wang's). Valid, weaker than the product, and not needed here.
+3. **Unclipped, the wealth is a function of the counts**: the module's
+   closed form `E_n = 2^n B(n⁺ + ½, n⁻ + ½) / B(½, ½)`, the
+   Krichevsky-Trofimov mixture (Krichevsky and Trofimov 1981, "The
+   performance of universal encoding", IEEE Trans. Information Theory 27
+   *(from memory)*). So the two-sided unclipped wealth of the union follows
+   from the summed counts exactly, shards and concatenation alike. The
+   shipped one-sided processes clip the stake at 0, which makes each a
+   function of the path (the clip binds whenever the running difference has
+   the other sign), and their one-pass value is not recoverable.
+
+Exactness: rule 1 is **exact as a test** (level `alpha` holds at every row,
+no approximation) and **not the one-pass wealth**. For the unclipped
+mixture the gap is bounded on one side: one pass is at most `½ ln n_A + ½ ln
+n_B + 2 ln 2` nats above the product (10.6 nats at `n_A = n_B = 10^4`; from
+`P_KT ≥ P_ML / (2√n)` *(from memory)* and the maximum likelihood of the
+union being at most the parts' sum), and unboundedly below it when the sign
+rate differs between the parts, where the restart helps. Rule 3 is
+**exact**, for a statistic the model does not emit.
+
+Cost: nothing added: 32 bytes a target, independent of stream length.
+
+Oracle: `scipy.special.betaln` for rule 3 on the summed counts; for rule 1,
+the recursion replayed with a restart at the seam, and the level by
+simulation under the null (rejections at `1/alpha` at most `alpha`).
+
+Recommendation: implement rule 1, documented as "a valid test of the same
+null, restarted at the seam; not the wealth of one pass". Consider emitting
+the two-sided mixture of rule 3 at a merge, since it is exact from counts.
+
+### drift (`drift.rs`, Page-Hinkley)
+
+State: `n`, `w`, `mean`, `cum`, `min_cum` (40 bytes).
+
+Merge rules:
+
+1. **A cumulative sum and its running minimum compose**: for increments
+   that do not depend on the past,
+
+   ```text
+   cum = cum_A + cum_B          min_cum = min(min_A, cum_A + min_B)
+   ```
+
+   which is the Lindley / max-plus composition of Page's CUSUM (Page 1954,
+   "Continuous inspection schemes", Biometrika 41(1/2):100-115, confirmed;
+   Hinkley 1971, "Inference about the change-point from cumulative sum
+   tests", Biometrika 58 *(from memory)*). Exact for a CUSUM against a
+   *fixed* reference level.
+2. **Page-Hinkley's reference is the running mean**, so B's increments
+   `e_t − mean_t − delta` used B's cold mean. The one-pass excess differs
+   from rule 1's by `Σ_B d_t (mean_t^B − mean_t^one)`, which is not in
+   either state. The mean itself merges exactly (age A's weight, pool).
+   Derived here, at unit spacing with A at its steady weight `1/(1 − λ)`:
+   `mean_j^B − mean_j^one = λ^j (mean_j^B − mean_A)`, so
+
+   ```text
+   |cum_merged − cum_one| ≤ Δ · λ / (1 − λ),    Δ = sup_j |mean_j^B − mean_A|
+   ```
+
+   At a half-life of 100 rows `λ/(1 − λ)` is 143.8, so `Δ = 0.1` error
+   units gives at most 14.4 error-rows, to be read against `threshold`.
+   With no decay the factor is `n_A ln(1 + n_B / n_A)` and does not settle.
+3. **Two more numbers make rule 2 exact in that case**: B keeping `C0 = Σ
+   d_j D_j` and `C1 = Σ d_j D_j mean_j^B` (`D_j` the decay since B's start)
+   gives the correction `C1 − mean_A · C0` (16 bytes). Away from A's steady
+   weight, or on an irregular clock, it is an approximation again.
+4. Libraries: `river.drift.PageHinkley` has no merge *(from memory)*. ADWIN
+   (Bifet and Gavaldà 2007, "Learning from time-changing data with adaptive
+   windowing", SIAM SDM *(from memory)*) keeps an exponential histogram
+   (Datar, Gionis, Indyk and Motwani 2002, "Maintaining stream statistics
+   over sliding windows", SIAM J. Computing 31 *(from memory)*), whose
+   buckets can be concatenated; that is a different detector.
+5. Shards: the literature's rule is to run a CUSUM per stream and combine
+   the statistics (sum or maximum) against a threshold of the combination's
+   own: Mei (2010), "Efficient scalable schemes for monitoring a large
+   number of data streams", Biometrika 97; Tartakovsky and Veeravalli
+   (2008), "Asymptotically optimal quickest change detection in distributed
+   sensor systems", Sequential Analysis 27 *(both from memory)*. That is a
+   new detector, not the one-pass statistic: each shard integrates its
+   excess over the same clock, so the sum counts the span twice.
+
+Exactness: **bounded** for concatenation under decay (rule 2's bound,
+`Δ λ/(1 − λ)`; 14.4 error-rows in the stated case), exact with rule 3's two
+numbers when A is at steady weight on a unit clock; **none** with no decay
+and for shards. A change at the seam is under-counted: B's cold mean starts
+at the new level.
+
+Cost: nothing (rules 1-2), or 16 bytes (rule 3); independent of stream
+length.
+
+Oracle: `numpy.cumsum` and `numpy.minimum.accumulate` on the concatenated
+errors for rule 1 and for the one-pass statistic (the module's own test
+does this); `river.drift.PageHinkley` at unit spacing as a second opinion
+would be a new dev-group library, and its forgetting factor is on the sum,
+not the mean *(from memory)*, so it would need care to match.
+
+Recommendation: steer concatenation to resuming. If a cold-B merge is
+wanted, rule 1 with the pooled mean, labelled approximate with the bound
+reported; rule 3 only if the user wants 16 bytes for exactness in one case.
+Refuse shards.
+
+### breaks (`breaks.rs`)
+
+State, per slot: the scale's sums (`v1`, `v2`, `vq`), `S1`, `S2`, `Z1`,
+`Z2`, the fourth-moment pair, under a horizon the lag products `P1_l`,
+`P2_l` and a ring of the last `L = 2h` studentized residuals; and the twin
+fits (`TwinFit`: two `EwCov` and cross terms, `O(k^2)`).
+
+Merge rules:
+
+1. **Age and add the sums** (`S1`, `S2`, `Z1`, `Z2`, the scale's, the
+   fourth moment's; the twin fits' Gram sums as `EwCov` merges). Exact as
+   the pooled sums of what each state scored, the same rule as `tails`.
+2. **What was scored is path-dependent twice**: `v` is a recursive residual
+   of each state's own fit, and `z = v / s` reads the scale of the rows
+   before, so B's `z` were studentized by B's young scale after B's own
+   wait of `SCALE_ROWS`. Neither can be redone from the sums.
+3. **Under the null the merged CUSUM keeps its distribution.** Brown,
+   Durbin and Evans (1975), "Techniques for testing the constancy of
+   regression relationships over time", JRSS B 37(2):149-192 *(from memory;
+   the search did not return it)*: recursive residuals are independent
+   `N(0, σ²)` under a constant relationship with Gaussian errors. B's cold
+   recursive residuals are a different orthogonal transform of B's errors
+   than the one-pass continuation's, equally independent and independent of
+   A's. So run once, the merged `Z1` is a sum of `n_A + n_B − 2k` such
+   terms where one pass has `n − k`: a valid CUSUM with `k` fewer terms
+   (and `SCALE_ROWS` fewer `z`), not the same path.
+4. **A break at the seam is invisible to rule 1**: B's fit starts in the
+   new regime, and its residuals are clean. The statistic that sees it is
+   the comparison of the two fits, which the two states give exactly: Chow
+   (1960), "Tests of equality between sets of coefficients in two linear
+   regressions", Econometrica 28 *(from memory)*, from the two Gram sums;
+   it is `break_wald`'s idea with A and B as the slow and fast fits.
+5. **Under a horizon the seam's lag products are missing**: `P_l` needs
+   `z_t z_{t−l}` across the seam, A's ring has its last `L` values, B's
+   first `L` are gone. At most `L(L + 1)/2` products per sum are omitted, of
+   `(n_A + n_B) L`; treating the seam as a break in the lag sums (as `rcov`
+   in part 1) is exact for what it says.
+6. Related: Ploberger and Krämer (1992), "The CUSUM test with OLS
+   residuals", Econometrica 60; Chu, Hornik and Kuan (1995), "MOSUM tests
+   for parameter constancy", Biometrika 82; Zeileis, Leisch, Hornik and
+   Kleiber (2002), "strucchange: an R package for testing for structural
+   change in linear regression models", J. Statistical Software 7 *(all
+   from memory)*. None gives a rule for merging two partial CUSUM states.
+7. Shards: the sums add and `Z1 / sqrt(S2)` keeps its null, but it is no
+   longer a path in time, and the lag products pair rows that were not
+   neighbours. None under a horizon.
+
+Exactness: **none** against one pass; rule 1 is exact as pooled sums, rule
+3 gives the null distribution exactly in the run-once Gaussian case, rule 5
+is a bounded omission (`L(L + 1)/2` products, zero with no horizon).
+
+Cost: nothing added; about 72 bytes plus `16 L` for the lag sums and `8 L`
+for the ring per slot, and the twin fits' `O(k^2)`; independent of stream
+length.
+
+Oracle: `statsmodels.stats.diagnostic.recursive_olsresiduals` on the
+concatenated rows and on each part (the recursive residuals and the CUSUM
+path); the Chow statistic from two `statsmodels` OLS fits against the
+pooled one; the level by simulation.
+
+Recommendation: add the sums with the seam as a break in the lag products,
+documented as "a CUSUM over both parts' own residuals", and report the
+A-against-B Wald (Chow) distance at the merge, since the seam is where the
+summed statistic is blind.
+
+### corrchange (`corrchange.rs`)
+
+State: `window`: a ring of the `2 * window_rows` latest rows, the held
+permutation critical value, its counter and the RNG. `monitor`: the span's
+rows, or after the history fills, the history's level and scale per pair
+with the monitored rows and their running moments.
+
+Merge rules:
+
+1. **`window`: the rows are the state**, so concatenation is the last
+   `2 * window_rows` rows of A's ring followed by B's: all B's when `n_B`
+   reaches the ring. The block summaries are rebuilt from the ring.
+   Exact in the statistic. The held critical value and RNG position are
+   not the one-pass ones (A's draws would have advanced the stream), so
+   the merged critical value is another valid draw of the same null,
+   equal in distribution, not in value; redraw on the merged ring.
+2. **Correlations of a union merge exactly from co-moment summaries**, the
+   rule `window_moments` already uses: Pébay (2008), "Formulas for robust,
+   one-pass parallel computation of covariances and arbitrary-order
+   statistical moments", Sandia report SAND2008-6212 *(from memory)*.
+3. **`monitor`'s statistic does not**: `Q = max_j (j/√T)|ρ̂_j − ρ̂_T|/D̂`
+   reads every prefix correlation of the span and a long-run variance
+   centred at the span's means (Wied, Krämer and Dehling 2012, "Testing for
+   a change in correlation at an unknown point in time using an extended
+   functional delta method", Econometric Theory 28(3):570-589, confirmed).
+   It needs the span's rows in order. So the merge is exact when the seam
+   falls on a span boundary (B's spans are then the one-pass spans), or
+   when both parts lie inside one span whose rows are still held (union,
+   replay). Otherwise B's spans are phase-shifted from one pass's: each is
+   a valid closed test at its level, on other rows.
+4. **The sequential form would merge where the closed one does not**: Wied
+   and Galeano (2013), "Monitoring correlation change in a sequence of
+   random variables", J. Statistical Planning and Inference 143 *(from
+   memory; the module reads their SFB 823 preprint)*: the detector at step
+   `k` compares the history's correlation with the correlation of the `k`
+   monitored rows, two co-moment summaries (rule 2), scaled by `D̂` from the
+   history. A's state past its history and B's monitored moments would give
+   it exactly, if B is taken as monitored rows against A's history.
+5. Shards: a ring holds rows without their times; none.
+
+Exactness: `window` **exact** (the statistic; the critical value in
+distribution); `monitor` **exact at a span boundary or inside one held
+span, else none** (a valid test on shifted spans). A change at the seam is
+seen by `window` (the windows straddle it) and by `monitor` only if the
+seam is inside a span.
+
+Cost: nothing added: `16 k window_rows` bytes for the ring, `8 k
+span_rows` for a span, bounded by the window, independent of stream length.
+
+Oracle: `numpy.corrcoef` on the union for rule 2; `Q` by the paper's
+definition in `numpy` on the concatenated span, with
+`scipy.stats.kstwobign.ppf(0.95)` (1.3581) for the boundary;
+`scipy.stats.permutation_test` for the window's null. No Python library
+computing the Wied-Krämer-Dehling statistic is known to me.
+
+Recommendation: `window`: merge the rings and redraw the critical value,
+exact. `monitor`: merge only at a span boundary or within a held span, and
+refuse otherwise with the reason.
+
+### adaptive conformal (`conformal.rs`)
+
+State, per slot: the multiplier `m`, the EW coverage pair, the EW mean
+weight pair, the held-rows mean; about 8 numbers. The residual spread
+`σ` is the slot's, outside this struct.
+
+Merge rules:
+
+1. **No state merge in the online literature.** Gibbs and Candès (2021),
+   "Adaptive conformal inference under distribution shift", NeurIPS
+   (confirmed); Angelopoulos, Candès and Tibshirani (2023), "Conformal PID
+   control for time series prediction", NeurIPS (confirmed); Gibbs and
+   Candès (2024), "Conformal inference for online prediction with arbitrary
+   distribution shifts", JMLR (confirmed), and Zaffran, Féron, Goude, Josse
+   and Dieuleveut (2022), "Adaptive conformal predictions for time series",
+   ICML *(from memory)*, *aggregate experts* run side by side at several
+   step sizes, which is two trackers kept, not one merged.
+2. **Concatenation: take B's `m`.** Derived here by coupling: two trackers
+   fed the same scaled scores at a constant step `η` never move apart, and
+   close by `η` each time a score falls between them, so
+
+   ```text
+   |m_B − m_one| ≤ max(|m_0 − m_A|, η)      and  ≤ η once they have met
+   ```
+
+   with `m_0 = Φ⁻¹(1 − α/2)` B's start. At `α = 0.1` (`m_0 = 1.645`) and a
+   rate of 0.05, the gap is at most `|1.645 − m_A|` at once and 0.05 after
+   about `|1.645 − m_A| / 0.05` scores between the two. With weights the
+   step is `η w / w̄` and `η` reads as the largest step. It assumes the
+   same `σ` and residuals in both, which a cold B's model does not give
+   until its spread has caught up.
+3. **The coverage guarantee survives exactly**: each part obeys the
+   module's telescoped bound, so the rows shown intervals over both miss
+   at a rate within `2(B + η)/(η T)` of `α`, for every sequence. The EW
+   coverage and mean-weight pairs merge as EW means (age, pool), exact as
+   scored.
+4. **Shards: a weighted mean of the two `m`**, by analogy with part 1's
+   parameter averaging; it lies between two trackers of the same quantile.
+   No bound against one pass; under stationary scores each `m` sits within
+   the tracker's own wander of the `1 − α` quantile of `s / σ`.
+5. **The mergeable alternative is a quantile of the scores, not a
+   tracker**: federated conformal prediction merges clients' calibration
+   scores through a quantile sketch (Lu, Yu, Karimireddy, Jordan and
+   Raskar 2023, "Federated conformal predictors for distributed uncertainty
+   quantification", arXiv 2305.17564, confirmed; ICML *from memory*), or
+   takes a quantile of the clients' quantiles (Humbert, Le Bars, Bellet and
+   Arlot 2023, "One-shot federated conformal prediction", ICML *(from
+   memory)*). Coverage then rests on (partial) exchangeability, not on the
+   every-sequence bound, and the sketch's error adds (the log buckets' `a`
+   of part 1). `EwQuantile` of `s / σ` would be this.
+
+Exactness: concatenation **bounded** (rule 2: `max(|m_0 − m_A|, η)`, then
+`η`; 0.05 in the stated case once met), with the coverage bound **exact**
+at twice its constant; shards **none**.
+
+Cost: nothing added: about 64 bytes a slot, independent of stream length.
+
+Oracle: the recursion replayed in `numpy` on the concatenated scores (the
+coupling bound asserted on every row), and `numpy.quantile` of `s / σ` at
+`1 − α` on the union for where both should sit. MAPIE's adaptive conformal
+option steps `α_t`, not the radius *(from memory)*, so it is no oracle for
+this form.
+
+Recommendation: concatenation takes B's `m` with the pooled EW pairs,
+documented with rule 2's bound, or resumes A (exact). For shards, the
+weighted mean labelled a heuristic, or refuse; if mergeable intervals are
+wanted in their own right, rule 5 is a separate model.
+
+### Part 3 summary
+
+| family | rule | exactness |
+|---|---|---|
+| bocpd | carry A's runs through B (pooled conjugate statistics, marginal ratio); B's runs as they are | straddling runs exact (`gaussian`, `diag`); runs begun in B none; `robust` and shards none |
+| seqtest | add log wealths and counts | exact as a test; not the one-pass wealth (unclipped: within `½ ln n_A + ½ ln n_B + 2 ln 2` above); unclipped mixture exact from counts |
+| drift | `cum` adds, `min` composes, mean pools | bounded under decay by `Δ λ/(1 − λ)`; exact with 16 bytes more in one case; no decay and shards none |
+| breaks | age and add the sums; seam as a break in the lag products | sums exact; none vs one pass; null kept run once; blind at the seam (use Chow) |
+| corrchange | `window`: merge the rings; `monitor`: only at a span boundary | `window` exact; `monitor` exact at a boundary or in a held span, else none |
+| conformal | take B's `m`, pool the EW pairs | bounded by `max(|m_0 − m_A|, η)`, then `η`; coverage bound exact at twice the constant; shards none |
+
+## Summary
+
+All 17 families. The verdict is against "the state of one pass over the
+union" (part 1's definition); "resume" means continuing A's state on B's
+rows, which is exact today for a concatenation and needs no merge.
+
+| family | verdict | recommendation |
+|---|---|---|
+| huber | exact while both refit buffers are live; else none | concatenate buffers where it applies; else add sums, labelled, distance to `RLM` measured |
+| quantile | as huber; sketch bounded by `a` | same as huber; measure against `QuantReg` |
+| robust covariance | exact as a break at the seam; shards none | offer the break form; unbroken form needs a small state growth (ask); refuse shards |
+| sgd | none (convexity bound only) | weighted averaging, labelled approximate; resume for concatenation |
+| pa | none (convexity bound only) | weighted averaging labelled approximate, or no merge; resume |
+| ftrl | exact for the summed objective; none vs one pass | add `zz`, `n`, `d`; document as the fit of both linearised losses |
+| kmeans | exact in warm-up and as pooled summaries; clustering none | weighted k-means over the 2k summaries; measure the inertia ratio |
+| hmm online EM | sums exact; none vs one pass; shards none | no shard merge; resume; cold-B merge only with explicit matching |
+| mixtures | exact with labels or 2K components; reduction bounded (Runnalls) | add statistics where labelled; else match and pool, report the bound |
+| held_median | exact within the cap | union and replay; refit on the union past the cap |
+| tails | exact (last bits aside) | implement Pébay's pairwise formulas |
+| bocpd | none (straddling runs exact) | no merge; resume; if wanted, "B given a change at the seam plus A's runs carried through" |
+| seqtest | exact as a test; not the one-pass wealth | add log wealths and counts; say it is a restart at the seam |
+| drift | bounded under decay (`Δ λ/(1 − λ)`); else none | resume; cold-B merge labelled with its bound; refuse shards |
+| breaks | none (sums exact, null kept) | add sums with a break at the seam; report the A-against-B Chow distance |
+| corrchange | `window` exact; `monitor` exact only at a span boundary | merge rings and redraw; refuse `monitor` off a boundary |
+| adaptive conformal | bounded (`max(|m_0 − m_A|, η)`, then `η`); shards none | take B's `m`, pool the EW pairs; shards a labelled heuristic or refused |
+
+Exact for both cases with no caveat: `tails`, `held_median` (within its
+cap), `corrchange`'s `window`. Exact for a stated reading: `ftrl` (summed
+objective), `rcov` (break at the seam), `seqtest` (validity), the labelled
+or buffered cases of `huber`, `quantile`, `kmeans` and mixtures. Bounded:
+`drift` under decay, `conformal`, the sketches, the mixture reduction. No
+one-pass meaning: `sgd`, `pa`, `hmm`, `bocpd`, `breaks`, and every shard
+merge of part 3. The bounds marked "derived here" in part 3 are this note's
+algebra and should be checked by the oracle named beside each before any is
+promised in a docstring.
