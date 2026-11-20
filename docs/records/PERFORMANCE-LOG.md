@@ -5220,6 +5220,119 @@ because one thread is 87% faster, not because more threads are slower.
 | 12M rows, 14 Polars and 14 bank threads | 1.9 s, 0.85 GB | 1.63 s, 0.86 GB |
 | 12M rows, 4 Polars and 14 bank threads | 2.1 s, 0.61 GB | 1.87 s, 0.58 GB |
 
+### 51. 2.0.0 against 1.6.0 (2026-11-19)
+
+*Provenance: measured at `1e2be3c4`, 2.0.0's code (the release's remaining
+commits change documents, not the wheel), on an Apple M4 Pro. Two builds in
+their own environments, both Python 3.12.13 beside polars 2.0.0: 1.6.0's
+wheel from PyPI (installed as `polars-online==1.6.0` with the `numpy`
+extra, then its polars lowered from 2.1.0, the newest that environment
+resolved, to 2.0.0, so that the two differ in nothing but the wheel) and this
+build. The third build the release steps name, 1.6.0 built here, was not
+made: the two builds agree to within the runs' scatter on every row but
+one, named below. Load: the 1-minute load average at the start of each run
+was 4.2 to 7.3 (the 5-minute average 5.6 to 6.2, the 15-minute 6.7 to 7.1),
+the machine's own background work included; the runs alternated this build
+and 1.6.0, each round this build first. `benchmark.py` ran six rounds and
+`wide_benchmark.py` three.*
+
+Release step 2 (`docs/contributing/cut-a-release.md`). Step 1, the bit for
+bit comparison with 1.6.0 (`scripts/compare_release.py`), found every field
+the same. Nothing here is slower than 1.6.0 past the runs' scatter, except
+one row, named below.
+
+#### The benchmark
+
+`scripts/benchmark.py`, each run the best of 3 over 200k rows. Each build's
+column is the best of its six runs; *the medians* compares the medians of the
+six; *spread* is the gap between this build's fastest and slowest run of the
+row, over its fastest:
+
+| configuration | notes | 1.6.0, PyPI's wheel | 2.0.0 | 2.0.0 against 1.6.0 | the medians | 2.0.0's spread |
+|---|---|---:|---:|---:|---:|---:|
+| ewridge k=5 | 1 target, 1 half_life | 6,092,608 | 6,062,321 | −0.5% | −0.3% | 1.1% |
+| ewridge k=20 | 1 target, 1 half_life | 3,538,179 | 3,521,806 | −0.5% | −0.6% | 3.1% |
+| ewridge k=50 | 1 target, 1 half_life | 1,251,457 | 1,258,626 | +0.6% | −0.2% | 1.5% |
+| ewridge k=20, 1 target(s) | 1 half_life | 3,489,016 | 3,501,917 | +0.4% | −0.8% | 3.5% |
+| ewridge k=20, 10 target(s) | 1 half_life | 1,624,521 | 1,624,894 | +0.0% | −0.3% | 1.8% |
+| ewridge k=20, 1 half_life(s) | 1 target | 2,859,289 | 2,813,919 | −1.6% | −1.5% | 2.5% |
+| ewridge k=20, 5 half_life(s) | 1 target | 1,960,763 | 1,963,821 | +0.2% | −1.1% | 6.1% |
+| ewridge | k=20, 1 target | 3,560,408 | 3,547,153 | −0.4% | −1.0% | 3.4% |
+| rls | k=20, 1 target | 2,524,466 | 2,565,399 | +1.6% | +0.9% | 3.0% |
+| kalman | k=20, 1 target | 2,358,961 | 2,329,247 | −1.3% | −0.7% | 1.1% |
+| lasso | k=20, 1 target | 2,062,440 | 2,079,047 | +0.8% | −0.2% | 2.5% |
+| huber | k=20, 1 target | 3,659,080 | 3,644,445 | −0.4% | +0.1% | 1.5% |
+| ftrl | k=20, 1 target | 5,105,943 | 5,122,114 | +0.3% | +0.2% | 2.0% |
+| ewridge + conformal | k=20, 90% interval | 3,439,107 | 3,360,203 | −2.3% | −0.7% | 1.9% |
+| sgd | k=20, squared loss, standardize=False | 7,600,697 | 7,633,066 | +0.4% | −0.1% | 1.6% |
+| sgd, simplex | k=20, coef >= 0, sum 1 | 2,386,919 | 2,402,453 | +0.7% | +0.4% | 1.9% |
+| pa | k=20, standardize=False | 8,448,548 | 8,576,713 | +1.5% | +0.0% | 3.8% |
+| kalman + revert | k=20, revert_half_life | 1,976,442 | 1,943,756 | −1.7% | −0.8% | 0.9% |
+| ew_cov | k=20: mean, std, corr (230 statistics) | 2,704,071 | 2,700,414 | −0.1% | −0.1% | 2.8% |
+| ew_cov, mahal | k=20: mean, mahal, mahal_q0.99 | 832,315 | 830,886 | −0.2% | −0.1% | 2.3% |
+| ew_class, full | k=20, 3 classes (QDA) | 609,929 | 610,938 | +0.2% | +0.3% | 1.2% |
+| ew_class, shared | k=20, 3 classes (LDA) | 640,566 | 641,905 | +0.2% | −0.4% | 1.6% |
+| ew_class, diagonal | k=20, 3 classes (naive Bayes) | 3,680,358 | 3,582,763 | −2.7% | −3.3% | 1.8% |
+| kmeans | 4 features, K=8 | 5,542,379 | 5,551,886 | +0.2% | −0.5% | 1.8% |
+| kmeans | k=20, K=8 | 3,501,418 | 3,524,775 | +0.7% | +0.4% | 1.4% |
+| micro | 4 features, eps=1 | 8,050,693 | 8,202,394 | +1.9% | +1.0% | 2.0% |
+| seqtest | sign of one column | 14,979,122 | 14,923,889 | −0.4% | −0.7% | 3.8% |
+| deco | k=20, ew dynamics | 5,166,240 | 5,204,787 | +0.7% | +1.0% | 2.7% |
+| deco, blocks | k=20 in 4 blocks | 3,031,555 | 3,084,744 | +1.8% | +0.7% | 2.0% |
+| hmm | 4 features, K=2 | 2,980,759 | 2,996,507 | +0.5% | −0.1% | 1.6% |
+| hmm | k=20, K=2 | 470,793 | 471,053 | +0.1% | +0.1% | 1.7% |
+| corrchange, monitor | 4 features, horizon 500 | 6,502,726 | 6,556,965 | +0.8% | −0.5% | 4.2% |
+| corrchange, window | 4 features, window 100, permute every 500 | 2,354,968 | 2,325,088 | −1.3% | −1.3% | 1.7% |
+| bocpd | 4 features, diag, max_run 200 | 979,425 | 980,053 | +0.1% | −0.3% | 0.9% |
+| bocpd | 4 features, diag, max_run 20 | 972,171 | 974,739 | +0.3% | −0.0% | 0.8% |
+| bocpd, gaussian | 4 features, full covariance, max_run 200 | 1,436,107 | 1,429,734 | −0.4% | −0.8% | 1.7% |
+| rcov | 4 features, kernel, groups of 1000 | 11,365,196 | 11,528,236 | +1.4% | +2.1% | 2.7% |
+| ew_cov, lags | k=20: mean, cov, lags 1−5 | 1,691,181 | 1,669,257 | −1.3% | −1.4% | 1.3% |
+| quantile | k=20, the median | 1,736,325 | 1,740,376 | +0.2% | +0.0% | 1.2% |
+| holt | level and trend of one column | 12,103,759 | 12,034,479 | −0.6% | −0.0% | 1.3% |
+| marginal | 20 features against one target | 10,281,367 | 10,319,917 | +0.4% | +0.3% | 0.9% |
+| audit | 20 continuous columns, 256 counters | 1,601,697 | 1,607,258 | +0.3% | +0.9% | 1.6% |
+| ew_cov, write_parquet struct | k=20, 230 statistics: the writer alone | 253,999 | 255,030 | +0.4% | +0.1% | 1.5% |
+| ew_cov, write_parquet flat | k=20, 230 statistics: the writer alone | 2,991,825 | 2,700,431 | −9.7% | −0.6% | 4.6% |
+
+**The two builds are level.** Every row but the flat `write_parquet` one
+(below) is within 2.7% of 1.6.0 either way on the best of six, and within 3.3% on the medians, which is the size of
+the rows' own spread (0.8% to 6.1%). One row is past its scatter and
+below 1.6.0 in the best, the median and each of the six rounds:
+`ew_class`'s diagonal covariance, 2.7% slower on the best and 3.3% on
+the medians, against a spread of 1.8%. Its code, `ewclass.rs` in `rheon-core`, is 1.6.0's byte for byte (the
+rename moved the file and nothing else), and no other `ew_class` row moved,
+so the gap is a small one in the build's layout or in the code around the
+row; it is not explained here. The flat `write_parquet` row's best-of-six gap
+is its own scatter (this build's six runs lay within 4.6%, 1.6.0's
+within 14%), and its medians are level. The writer is Polars'.
+
+#### The wide benchmark
+
+`scripts/wide_benchmark.py`, three runs of each build, the best of the
+three and the gap between the medians, rows a second:
+
+| features | configuration | 1.6.0, PyPI's wheel | 2.0.0 | 2.0.0 against 1.6.0 | the medians |
+|---:|---|---:|---:|---:|---:|
+| 200 | ewridge, default schedule (solve ~every 20 rows) | 87,609 | 87,758 | +0.2% | +0.1% |
+| 200 | ewridge, solve every 256 rows | 214,172 | 215,128 | +0.4% | +0.2% |
+| 200 | ewridge, solve every 256 rows, gram_block_rows 256 | 388,097 | 389,533 | +0.4% | +0.2% |
+| 200 | ewridge, solve every row | 7,265 | 7,227 | −0.5% | −0.7% |
+| 200 | lasso, 3 penalties (800 rows) | 2,296 | 2,301 | +0.2% | −0.2% |
+| 500 | ewridge, default schedule (solve ~every 20 rows) | 12,878 | 12,809 | −0.5% | +0.0% |
+| 500 | ewridge, solve every 256 rows | 39,162 | 39,003 | −0.4% | −0.4% |
+| 500 | ewridge, solve every 256 rows, gram_block_rows 256 | 95,201 | 95,306 | +0.1% | +0.1% |
+| 500 | lasso, 3 penalties (2000 rows) | 785 | 781 | −0.5% | −0.5% |
+| 1,000 | ewridge, default schedule (solve ~every 20 rows) | 11,439 | 11,291 | −1.3% | +6.4% |
+| 1,000 | ewridge, solve every 256 rows | 16,723 | 17,460 | +4.4% | +3.9% |
+| 1,000 | ewridge, solve every 256 rows, gram_block_rows 256 | 26,390 | 25,588 | −3.0% | −1.2% |
+
+Every row below 1,000 features is within 0.5% of 1.6.0 on the best and
+within 0.7% on the medians. The 1,000-feature fits are the ones whose
+run-to-run spread is 6% to 10% on this machine (section 49), and which read
+−1.3%, +4.4% and −3.0% on the best and +6.4%, +3.9% and −1.2% on the
+medians, in no consistent direction.
+
 ### 50. 1.6.0 against 1.5.0 (2026-11-18)
 
 *Provenance: measured at `ca9f9383`, 1.6.0's code (the release's own commits
