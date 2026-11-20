@@ -518,10 +518,11 @@ the state in that size (written in `n`, the size), and the reason. The last
 column has the four native ratios from large to small, as measured on
 2026-11-05 by a debug build: `SCALING_REPORT=1 cargo test -p rheon-bench
 --test scaling -- --nocapture` prints them. `bank.label_clock`'s were measured on
-2026-11-08, the same way, at a load of 5. The two `.window` cells were
+2026-11-08, the same way, at a load of 5, and `windows.rows_held`'s on
+2026-11-20 by a release build (`--release`) at a load of 7. The two `.window` cells were
 measured again on 2026-11-06, once a window's snapshots were laid out
 flat. A row's time and allocations are per
-row; the saved state and the heap are the state's. `(CI)` marks the 24 cells
+row; the saved state and the heap are the state's. `(CI)` marks the 25 cells
 Callgrind also counts. A cell whose ratio reads below 1 got cheaper at the
 larger size: a fixed cost shared by more rows, or a block that held its
 largest buffer at the smaller.
@@ -628,6 +629,7 @@ largest buffer at the smaller.
 | `runner.specs_per_call` | specs S from 16 to 128, calls of 16 rows | 16 → 128 | O(n) | O(n) | a call's output a spec, S: the chunk's columns and the specs' outputs are joined in one pass over their names | 7.75 · 7.79 · 7.99 · 7.81 |
 | `windows.groups` | groups G, rows in turn over all | 1,000 → 8,000 | O(1) | O(n) | a row touches its group's sums; a state a group | 0.82 · 1.06 · 7.48 · 7.89 |
 | `windows.groups_seen` (CI) | groups seen G (a block over 50) | 1,000 → 8,000 | O(1) | O(n) | a row resolves its own group; a state a group | 0.98 · 0.99 · 7.96 · 7.86 |
+| `windows.rows_held` (CI) | groups G, a pass over all at one stamp a block | 1,000 → 8,000 | O(1) | O(n) | each row is held until the next stamp, then resolved once; a block is a pass of G rows, so CI's count of a block is linear in G | 1.04 · 0.13 · 8.01 · 7.97 |
 | `windows.kernels` (CI) | kernels K | 1 → 8 | O(n) | O(n) | each kernel's queue a row | 2.98 · 2.25 · 2.42 · 2.58 |
 | `windows.operators` | operators O on one kernel | 1 → 8 | O(n) | O(n) | each operator's sums a row | 2.61 · 3.06 · 2.42 · 4.04 |
 | `windows.window_mean` (CI) | window W clock units | 1,250 → 10,000 | O(1) | O(n) | a row enters and leaves the queue once, O(1) amortized; W/step rows held | 0.90 · 1.00 · 7.74 · 6.92 |
