@@ -136,7 +136,7 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
-    # NumPy is the one optional dependency (`polars-online[numpy]`,
+    # NumPy is the one optional dependency (`rheon[numpy]`,
     # `numpy>=1.26`, no ceiling to drop), and every other job runs on the
     # locked NumPy. Its release candidates allowed and nothing else moved, a
     # red run means NumPy broke this library, a release before it ships (the

@@ -1,4 +1,4 @@
-"""Run a polars-online ModelBank inside a Pathway pipeline (ENHANCEMENTS E26).
+"""Run a rheon ModelBank inside a Pathway pipeline (ENHANCEMENTS E26).
 
 The division of labour, and the reason this is an example rather than a
 dependency:
@@ -6,7 +6,7 @@ dependency:
 * **Pathway** does the streaming plumbing — connectors, event-time alignment,
   windowing, late arrivals, exactly-once persistence — in its own Rust engine.
   It has no online regression.
-* **polars-online** does the model. It expects a frame that is already aligned
+* **rheon** does the model. It expects a frame that is already aligned
   and ordered, and keeps O(state) per stream.
 
 So they compose cleanly: Pathway hands us ordered batches, we hand back

@@ -5,7 +5,7 @@ accuracy against batch references, what each knob costs, whether the
 guarantees hold -- not to be fast; ``scripts/clustering_experiments.py`` runs
 the experiments the document quotes.
 
-Semantics match polars-online's models (docs/PLAN.md §2-§3): per row a decay
+Semantics match rheon's models (docs/PLAN.md §2-§3): per row a decay
 ``lam = 0.5**(d_clock/half_life)``, a weight ``w`` that scales the row (``w = 0``
 advances the clock and learns nothing, legal as the first row), the output
 computed *before* the update, ``weight_sum`` = the EW weight sum before the row and

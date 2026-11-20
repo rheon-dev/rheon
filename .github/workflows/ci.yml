@@ -410,7 +410,7 @@ jobs:
         run: uv run python scripts/compare_release.py --report
 
   # Publishes the reference the test job built to GitHub Pages, on every
-  # push to main that passed, at https://hgilde.github.io/polars-online/.
+  # push to main that passed, at https://rheon-dev.github.io/rheon/.
   # It needs Pages switched on for the repository (Settings > Pages >
   # Source: GitHub Actions — no starter workflow); if it is not, the site
   # lookup fails and the job skips the deploy with a notice rather than

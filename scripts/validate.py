@@ -174,7 +174,7 @@ def main() -> None:
     print()
     print(f"- Data: {source}")
     print(f"- Rows: {df.height}, features: {feats}, targets: {targets}")
-    print(f"- Polars {pl.__version__}, polars-online {rp.__version__}")
+    print(f"- Polars {pl.__version__}, rheon {rp.__version__}")
     section(
         "How the runs are set",
         "The clock is the row count: a row is a minute, and every number in clock units "
@@ -194,8 +194,8 @@ def main() -> None:
         "with `standardize=True`, so section 1's default schedule is section 2's `std` row |\n"
         "| **the features** | `x0` the row's log return, `x1` the last five's sum, `x2` and `x3` "
         "volume and trade count against their last 60 rows' mean and spread; section 6 also "
-        "runs each as a z-score, `(x - po.ewm_mean(x)) / po.ewm_std(x)` at the same half-life |\n"
-        "| **the scores** | from `po.eval.compare_specs`: `n` the rows scored, `r2` the "
+        "runs each as a z-score, `(x - rp.ewm_mean(x)) / rp.ewm_std(x)` at the same half-life |\n"
+        "| **the scores** | from `rp.eval.compare_specs`: `n` the rows scored, `r2` the "
         "out-of-sample R² against the target's mean over those rows, `ic` the correlation of "
         "the prediction with the target, `hit_rate` the share of rows whose sign it got "
         "right, `mse` the mean squared residual |\n\n"
@@ -445,9 +445,9 @@ def main() -> None:
         "The models of section 5 on the raw features and on each feature in units of its "
         "current spread, as [Scale a feature by its spread]"
         "(how-to/scale-a-feature-by-its-spread.md) makes it,"
-        f" `(x - po.ewm_mean(x, half_life={HL:g})) / "
-        f"po.ewm_std(x, half_life={HL:g})`, computed as columns by "
-        "`po.stream.with_windows`. A z-scored feature's coefficient is a response per "
+        f" `(x - rp.ewm_mean(x, half_life={HL:g})) / "
+        f"rp.ewm_std(x, half_life={HL:g})`, computed as columns by "
+        "`rp.stream.with_windows`. A z-scored feature's coefficient is a response per "
         "standard deviation of the feature as it is now, where a raw one is per unit. "
         "A z-scored feature fits better where the target moves with the feature relative "
         "to its volatility. The same rows, embargoes and memory as section 5.\n\n"

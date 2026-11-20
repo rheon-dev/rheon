@@ -1,4 +1,4 @@
-# Example model bank for the `polars-online` command line:
+# Example model bank for the `rheon` command line:
 #   cargo run -p rheon-cli -- --config examples/bank.toml
 #
 # Generate a matching input, beside this file, with:

@@ -289,7 +289,7 @@ def described_not_shown(lines: list[str]) -> list[tuple[int, str]]:
     """Count 10: paragraphs that name three or more of the library's names
     that no python block under the same heading shows, highest score first.
     A name written as code in the prose (``x=...``, ``f(...)``) scores twice.
-    It ranked the `po.target` paragraph third of 25 on the README of I7
+    It ranked the `rp.target` paragraph third of 25 on the README of I7
     (docs/README-ITERATIONS.md, V3)."""
     sections: list[dict[str, Any]] = [{"paras": [], "code": []}]
     buf: list[str] = []
@@ -618,7 +618,7 @@ def main() -> int:
     d = sub.add_parser("render", help="step 7: GitHub's rendering, as a standalone page")
     d.add_argument("file")
     d.add_argument("out")
-    d.add_argument("--title", default="polars-online README")
+    d.add_argument("--title", default="rheon README")
     d.add_argument("--label", default="", help="a banner above the page")
     args = ap.parse_args()
 

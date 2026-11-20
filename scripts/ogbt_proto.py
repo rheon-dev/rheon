@@ -5,7 +5,7 @@ behaviour -- accuracy against XGBoost, what each knob costs, whether the
 guarantees hold -- not to be fast; ``scripts/ogbt_experiments.py`` runs the
 experiments the document quotes.
 
-Semantics match polars-online's models: per row a decay
+Semantics match rheon's models: per row a decay
 ``lam = 0.5**(d_clock/half_life)``, a weight ``w`` that scales the row
 (``w = 0`` advances the clock and learns nothing), ``pred`` computed before
 the update, and ``weight_sum`` = the EW weight sum before the row.
