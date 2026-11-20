@@ -3375,9 +3375,9 @@ N_kl ← λ N_kl                                    before the row reads Π
 
 A state's density reads `M_l = Σ_l + ω_l·I` through its Cholesky factor.
 Under `covariance_type = "full"` with 13 features or more, each state keeps
-that factor itself, as `s·L·Lᵀ` with a scalar `s` between 1/4 and 1, and the
-row moves it by plane rotations in time `d²`, where narrower states keep
-their co-moments and factorize them in time `d³`. With `W` the state's
+that factor itself, as `s·L·Lᵀ` with a scalar `s` between 1/4 and 1. The row
+moves it by plane rotations in time `d²`, where narrower states keep their
+co-moments and factorize them in time `d³`. With `W` the state's
 weight before the row, `a = λW / (λW + w·p_l)`, `b = w·p_l / (λW + w·p_l)`
 and `δ` the row's deviation from the state's mean before the row:
 
