@@ -4,15 +4,15 @@
 This how-to is for anyone who fits a detector of changing correlation,
 such as `corrchange`, `hmm`, `bocpd` or `deco`, and wants to know how well
 it finds what it claims to. It simulates a stream with a planted change
-with `po.sim.regimes`, fits the detector, and prints each change it found
+with `rp.sim.regimes`, fits the detector, and prints each change it found
 beside the truth.
 
 ## Prerequisites
 
 The recipes build their own data, so these steps need only:
 
-- polars-online installed, and numpy, which `po.sim.regimes` draws with.
-  Install it with `pip install polars-online[numpy]`.
+- rheon installed with Polars, and numpy, which `rp.sim.regimes` draws with.
+  Install it with `pip install "rheon[polars,numpy]"`.
 - A [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads) for the
   detector you mean to test, and the question it answers: a change in
   the correlations (`corrchange`), the age of the current regime
@@ -22,11 +22,11 @@ The recipes build their own data, so these steps need only:
 
 ## Simulate a stream whose truth is known
 
-Use `po.sim.regimes` for a stream of several series whose correlation
+Use `rp.sim.regimes` for a stream of several series whose correlation
 changes by regime. It returns the rows a detector reads and, beside them,
 the truth it should find.
 
-1. **Call `po.sim.regimes` with the number of series, each regime's
+1. **Call `rp.sim.regimes` with the number of series, each regime's
    correlation in `states`, how the regimes follow one another in
    `transition`, and the blocks the stream is made of.** Each block of
    `rows_per_block` rows holds one regime. A `seed` makes the stream again
@@ -42,9 +42,9 @@ This code simulates four series in two regimes and prints the columns of
 each frame:
 
 ```python
-from rheon import polars as po
+from rheon import polars as rp
 
-sim = po.sim.regimes(                                  # 1.
+sim = rp.sim.regimes(                                  # 1.
     4, states=[0.2, 0.7],                     # four series; two regimes, at these equicorrelations
     transition=[[0.98, 0.02], [0.02, 0.98]],  # how the regimes switch
     n_blocks=8, rows_per_block=500,
@@ -71,8 +71,8 @@ truth_blocks: 8 rows; block, state, n_rows, corr
 | `truth_rows` | per row `t`: the block, state, volatility multiplier and interpolation fraction |
 | `truth_blocks` | each block's true correlation matrix, the mean over its rows, as its upper triangle with the diagonal, row by row: for two series `[1, rho, 1]` |
 
-Every keyword, and what it refuses, is in `po.sim.regimes`'
-[docstring](https://hgilde.github.io/polars-online/sim.html#rheon.sim.regimes).
+Every keyword, and what it refuses, is in `rp.sim.regimes`'
+[docstring](https://rheon-dev.github.io/rheon/sim.html#rheon.sim.regimes).
 
 ## Score the detector against the truth
 
@@ -102,14 +102,14 @@ This code plants a correlation that switches between 0 and 0.7 every
 import polars as pl
 
 # Two series whose correlation takes turns, 1,000 rows at a time, between 0 and 0.7.
-sim = po.sim.regimes(2, states=[0.0, 0.7], transition=[[0.0, 1.0], [1.0, 0.0]],
+sim = rp.sim.regimes(2, states=[0.0, 0.7], transition=[[0.0, 1.0], [1.0, 0.0]],
                      n_blocks=6, rows_per_block=1_000, seed=4)
 truth = sim["truth_rows"].select("t", "block", "state")
 sim["rows"].join(truth, on="t").write_parquet("known.parquet")                           # 1. and 2.
 returns = pl.scan_parquet("known.parquet").with_columns(pl.col("x_1", "x_2").diff())   # 3.
 
 # 4 and 5. The detector, and the first row of each run of flags.
-watch = po.spec.corrchange("watch", features=["x_1", "x_2"], kind="sequential",
+watch = rp.spec.corrchange("watch", features=["x_1", "x_2"], kind="sequential",
                            window_rows=300, monitor_rows=1_000)
 out = returns.rheon.fit_predict([watch]).collect().unnest("watch")
 found = out.filter(pl.col("flag") & ~pl.col("flag").shift(1, fill_value=False))["t"].to_list()
@@ -138,7 +138,7 @@ measure its false alarms.** False alarms are rare and fall at random, so
 one stream's count says little. This code fits the same spec on ten streams that hold one
 correlation, 0.35, throughout. It uses `watch` and `pl` from the
 code in [Score the detector against the
-truth](#score-the-detector-against-the-truth), and `po` from the code in
+truth](#score-the-detector-against-the-truth), and `rp` from the code in
 [Simulate a stream whose truth is
 known](#simulate-a-stream-whose-truth-is-known):
 
@@ -146,7 +146,7 @@ known](#simulate-a-stream-whose-truth-is-known):
 # Ten streams of 6,000 rows with no change, and the flags on all of them.
 flags = 0
 for seed in range(10):
-    quiet = po.sim.regimes(2, states=[0.35], transition=[[1.0]], n_blocks=6, rows_per_block=1_000, seed=seed)
+    quiet = rp.sim.regimes(2, states=[0.35], transition=[[1.0]], n_blocks=6, rows_per_block=1_000, seed=seed)
     quiet["rows"].write_parquet("quiet.parquet")
     out = pl.scan_parquet("quiet.parquet").with_columns(pl.col("x_1", "x_2").diff()).rheon.fit_predict([watch]).collect()
     flags += out["watch"].struct.field("flag").sum()

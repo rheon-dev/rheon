@@ -63,9 +63,9 @@ nothing on its first two rows. It reads `df` from [Example
 data](../EXAMPLE-DATA.md):
 
 ```python
-spec = po.spec.ewridge("m", targets=["y"], features=["x0", "x1"], clock="t", half_life=100.0, gap_cap=300.0)
-one_chunk = po.ModelBank([spec]).fit_predict(df)["m"]                                       # all 400 rows at once
-by_row = pl.concat(po.ModelBank([spec]).fit_predict_batches(df, chunk_size=1))["m"]       # 400 chunks of one row
+spec = rp.spec.ewridge("m", targets=["y"], features=["x0", "x1"], clock="t", half_life=100.0, gap_cap=300.0)
+one_chunk = rp.ModelBank([spec]).fit_predict(df)["m"]                                       # all 400 rows at once
+by_row = pl.concat(rp.ModelBank([spec]).fit_predict_batches(df, chunk_size=1))["m"]       # 400 chunks of one row
 print(f"largest difference in pred_y: {(one_chunk.struct.field('pred_y') - by_row.struct.field('pred_y')).abs().max()}")
 print(f"rows with coef: {one_chunk.struct.field('coef').is_not_null().sum()} as one chunk, "
       f"{by_row.struct.field('coef').is_not_null().sum()} as 400")
@@ -146,7 +146,7 @@ ask for its result. Three ways of running a bank stream from end to end:
 |---|---|---|
 | a query | files, with `pl.scan_parquet`, which reads them as a query | a file, with `sink_parquet`, which runs the query and writes the result without holding it all in memory |
 | your own loop | each chunk `lf.collect_batches()` gives (one chunk of the result at a time), passed to `bank.fit_predict` | whatever the loop does with each chunk's output |
-| the `polars-online` command line | a file | a file |
+| the `rheon` command line | a file | a file |
 
 **A step that needs every row before it can give its first row of output
 holds the stream in memory, wherever it sits in the query.** A `sort`
@@ -212,7 +212,7 @@ Polars cannot write out in its serialized form passes without a warning.
 The check reads the query that `fit`, `fit_predict_batches` and a query's
 `online` calls are given, so the frames your own loop passes are not
 checked. For a query whose order you know, silence the warning with
-`warnings.simplefilter("ignore", po.OrderNotGuaranteedWarning)`.
+`warnings.simplefilter("ignore", rp.OrderNotGuaranteedWarning)`.
 
 **`ModelBank.fit` does not warn when its state cannot depend on the row
 order.** That is when every spec is an `ewridge` or `rls` with decay off

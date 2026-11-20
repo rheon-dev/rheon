@@ -11,8 +11,8 @@ and read each coefficient's standard error and t.
 
 These steps need the library and a Gram per block:
 
-- polars-online installed with numpy, an optional extra, which
-  `pip install "polars-online[numpy]"` adds. The recipe generates its own
+- rheon installed with Polars and numpy, an optional extra, which
+  `pip install "rheon[polars,numpy]"` adds. The recipe generates its own
   data: 40 weeks of 200 features, of which six matter.
 - A Gram per block from one pass, as [Keep a Gram per block in one
   pass](fit-weekly-grams-in-one-pass.md) makes them.
@@ -30,9 +30,9 @@ a case.
    `group` is the week and whose `half_life` is `float("inf")`.
    `bank.gram(name)` returns one dict per week, oldest first.
 2. **Pool the weeks to fit on, and the weeks held out, with
-   `po.gram.merge`.** Each call returns the Gram of all their rows.
+   `rheon.gram.merge`.** Each call returns the Gram of all their rows.
 3. **Fit a grid of ridges in one call, with
-   `po.gram.solve(train, ridge=[...], standardize=True)`.** It returns a
+   `rheon.gram.solve(train, ridge=[...], standardize=True)`.** It returns a
    row of coefficients per ridge, the intercept first. With
    `standardize=True` one ridge means the same whatever the columns'
    units.
@@ -40,7 +40,7 @@ a case.
    function of the held-out Gram's arrays, as `mean_squared_error` in the
    recipe.
 5. **Keep the ridge with the lowest held-out error.**
-6. **Read the standard errors and t with `po.gram.coef_stats(train,
+6. **Read the standard errors and t with `rheon.gram.coef_stats(train,
    coef)`,** for the least-squares fit and for the ridge you kept.
 
 This code makes the stream and runs step 1:
@@ -51,7 +51,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # 40 weeks, a row every 20 minutes. 200 features in 40 families of five that share a factor, so
 # two features of one family correlate at 0.5. y depends on six of them, and x25's coefficient is
@@ -71,11 +71,11 @@ pl.DataFrame({"ts": ts, **dict(zip(features, x.T)), "y": y}).write_parquet("week
 
 # 1. One pass over the file leaves a Gram per week. The week is a column made in the query.
 lf = pl.scan_parquet("weeks.parquet").with_columns(week=pl.col("ts").dt.truncate("1w"))
-spec = po.spec.ewridge(
+spec = rp.spec.ewridge(
     "blocks", targets=["y"], features=features, group="week",
     half_life=float("inf"), solve_every=float("inf"), target_gaps="pairwise", gram_block_rows=256,
 )
-bank = po.ModelBank([spec])
+bank = rp.ModelBank([spec])
 bank.fit(lf)  # learns from every row, and keeps only the state
 blocks = bank.gram("blocks")  # one dict per week, oldest first
 ```
@@ -96,15 +96,15 @@ def mean_squared_error(g, coef):
 
 
 # 2 to 5. Pick the ridge by its error on the weeks held out.
-train, held_out = po.gram.merge(blocks[:2]), po.gram.merge(blocks[2:])  # fit on two weeks, judge on 38
+train, held_out = rp.gram.merge(blocks[:2]), rp.gram.merge(blocks[2:])  # fit on two weeks, judge on 38
 ridges = [0.0, 0.01, 0.03, 0.1, 0.3, 1.0]
-grid = po.gram.solve(train, ridge=ridges, standardize=True)  # a row per ridge, one eigendecomposition
+grid = rp.gram.solve(train, ridge=ridges, standardize=True)  # a row per ridge, one eigendecomposition
 errors = [mean_squared_error(held_out, coef) for coef in grid]
 print("held-out error by ridge: " + ", ".join(f"{r} {e:.4f}" for r, e in zip(ridges, errors)))
 best = int(np.argmin(errors))
 
 # 6. coef_stats on the least-squares fit and on the chosen ridge's, for the planted columns.
-plain, ridged = po.gram.coef_stats(train, grid[0]), po.gram.coef_stats(train, grid[best])
+plain, ridged = rp.gram.coef_stats(train, grid[0]), rp.gram.coef_stats(train, grid[best])
 print(f"{'column':>6} {'coef':>6} {'t':>5} {'ridge ' + str(ridges[best]):>12} {'t':>5}")
 for name in ["x0", "x5", "x10", "x15", "x20", "x25"]:
     i = train["columns"].index(name)
@@ -140,7 +140,7 @@ read at the ridge's slightly larger residual variance.
 
 ## Check the result
 
-**At ridge 0, `po.gram.coef_stats` gives the standard errors numpy
+**At ridge 0, `rheon.gram.coef_stats` gives the standard errors numpy
 computes from the rows,** within 1e-9 relative in the recipe, the
 intercept's included, when every row
 weighs 1 and `half_life` is `float("inf")`. What else you may see, and
@@ -152,8 +152,8 @@ what to do:
 | a ridge's t is smaller than least squares' | the ridge shrinks each coefficient, and its standard errors leave out the shrinkage and its bias | read a ridge's t to compare its coefficients with one another, not as a test |
 | the errors are correlated or heteroskedastic | least squares' standard errors are then too small | switch on `emit_robust_se` on the stream ([Can its t be trusted?](../DIAGNOSTICS.md#can-its-t-be-trusted)), or fit per-block coefficients |
 | the intercept's standard error and t are `nan` | the Gram was pooled within blocks, and each block had its own intercept | read the slopes ([Pool within blocks to leave their levels out](pool-grams.md#pool-within-blocks-to-leave-their-levels-out)) |
-| `po.gram.solve` differs from `bank.coef()` | the spec has `ridge_scale="sum"` or a `coef_prior`, or a `solve_every` that leaves `bank.coef()` as of an earlier row | to reproduce `bank.coef()`, pass `po.gram.solve` the spec's `ridge` and `standardize`. `solve` does not reproduce `ridge_scale="sum"` (a ridge on a decaying scale) or a `coef_prior` (a prior other than zero), so read those fits from `bank.coef()`. For the fit as of the last row, solve the Gram |
+| `rheon.gram.solve` differs from `bank.coef()` | the spec has `ridge_scale="sum"` or a `coef_prior`, or a `solve_every` that leaves `bank.coef()` as of an earlier row | to reproduce `bank.coef()`, pass `rheon.gram.solve` the spec's `ridge` and `standardize`. `solve` does not reproduce `ridge_scale="sum"` (a ridge on a decaying scale) or a `coef_prior` (a prior other than zero), so read those fits from `bank.coef()`. For the fit as of the last row, solve the Gram |
 
-The [reference for `po.gram.solve`](https://hgilde.github.io/polars-online/gram.html#rheon.gram.solve)
-and for [`po.gram.coef_stats`](https://hgilde.github.io/polars-online/gram.html#rheon.gram.coef_stats)
+The [reference for `rheon.gram.solve`](https://rheon-dev.github.io/rheon/gram.html#rheon.gram.solve)
+and for [`rheon.gram.coef_stats`](https://rheon-dev.github.io/rheon/gram.html#rheon.gram.coef_stats)
 give every parameter.

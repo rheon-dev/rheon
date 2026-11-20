@@ -3,14 +3,14 @@
 
 This how-to is for anyone who fits `bocpd` and wants to choose its
 `hazard`, the expected run between breaks, and its priors, from the
-stream's own out-of-sample log-likelihood with `po.eval.grid_search`. It
+stream's own out-of-sample log-likelihood with `rp.eval.grid_search`. It
 also tempers the model against single outlying rows with `robust_beta`.
 
 ## Prerequisites
 
 These steps need the library, a stream in a file and a spec:
 
-- polars-online and numpy installed. The recipe generates its own data.
+- rheon, Polars and numpy installed. The recipe generates its own data.
 - The stream saved as a file in clock order, to read back with
   `pl.scan_parquet` as a [query](../GLOSSARY.md#the-model-bank-and-what-it-reads)
   (a Polars `LazyFrame`).
@@ -26,8 +26,8 @@ These steps need the library, a stream in a file and a spec:
 before learning from it.** Summed over the stream, it is the stream's log
 marginal likelihood, the criterion that compares a Bayesian model's
 settings. `bocpd` predicts no target, so it has no squared error to score.
-The Notes of [`po.eval.grid_search`'s
-docstring](https://hgilde.github.io/polars-online/eval.html#rheon.eval.grid_search),
+The Notes of [`rp.eval.grid_search`'s
+docstring](https://rheon-dev.github.io/rheon/eval.html#rheon.eval.grid_search),
 under *What is scored*, say so.
 
 1. **Decide whether breaks follow rows or time.** A number `hazard` says
@@ -39,7 +39,7 @@ under *What is scored*, say so.
 2. **Build a `bocpd` spec builder with `functools.partial`,** giving it
    the keywords every spec shares. `hazard` takes one value a spec.
 3. **Pass the query, the builder and a `param_grid` of hazards to
-   `po.eval.grid_search`, with `scoring="loglik"`.** It returns a row per
+   `rp.eval.grid_search`, with `scoring="loglik"`.** It returns a row per
    hazard with its `loglik` a row, highest best, and a row for the choice.
 4. **Run the hazard ranked 1 on the rows to come.**
 5. **Report the `loglik` of the choice,** from `table.filter(kind="choice")`.
@@ -52,7 +52,7 @@ import functools
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # A mean that jumps at random, every 200 rows on average, to a level of spread 2, in noise of 1.
 rng = np.random.default_rng(14)
@@ -63,11 +63,11 @@ pl.DataFrame({"x": x}).write_parquet("jumps.parquet")
 
 # 2. One bocpd spec per hazard, its priors matching the planted spreads.
 bocpd = functools.partial(
-    po.spec.bocpd, features=["x"], mean_prior=[0.0], covariance_prior=[1.0],
+    rp.spec.bocpd, features=["x"], mean_prior=[0.0], covariance_prior=[1.0],
     mean_precision_prior=0.25, degrees_of_freedom_prior=2.0,   # a level's variance of 4: the noise's 1 over 0.25
 )
 # 3. Every hazard, scored by its log-likelihood in one pass.
-table = po.eval.grid_search(pl.scan_parquet("jumps.parquet"), bocpd, {"hazard": [20.0, 60.0, 200.0, 600.0, 2_000.0]}, scoring="loglik")
+table = rp.eval.grid_search(pl.scan_parquet("jumps.parquet"), bocpd, {"hazard": [20.0, 60.0, 200.0, 600.0, 2_000.0]}, scoring="loglik")
 
 # 4 and 5. Each hazard's score and rank, and what choosing from earlier rows earned.
 for hazard, loglik, rank in table.filter(kind="candidate").select("hazard", "loglik", "rank").iter_rows():
@@ -104,7 +104,7 @@ prior left out and with four priors given:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # A column of spread 1e-3 whose mean shifts by 4e-3 at row 150.
 rng = np.random.default_rng(16)
@@ -114,7 +114,7 @@ pl.DataFrame({"x": x}).write_parquet("small.parquet")
 
 # 1 and 2. The prior left to the first rows, then given at four scales.
 for prior in (None, [1e-6], [1e-3], [1.0], [100.0]):
-    cp = po.spec.bocpd("cp", features=["x"], hazard=250.0, degrees_of_freedom_prior=2.0, covariance_prior=prior)
+    cp = rp.spec.bocpd("cp", features=["x"], hazard=250.0, degrees_of_freedom_prior=2.0, covariance_prior=prior)
     out = pl.scan_parquet("small.parquet").rheon.fit_predict([cp]).collect().unnest("cp")
     print(f"covariance_prior {prior}: at row 299 the regime began at row {299 - out['run_mode'][299]}")
 ```
@@ -141,7 +141,7 @@ to choose it with the hazard.
    number a feature,** as `"covariance_prior": [[0.01], [0.1], [1.0]]`.
    Every combination of the keys is a spec of its own, all in one model
    bank.
-3. **Run `po.eval.grid_search` with `scoring="loglik"`.**
+3. **Run `rp.eval.grid_search` with `scoring="loglik"`.**
 4. **Read the table** as in [Choose the hazard](#choose-the-hazard).
 
 This code searches four values of `covariance_prior` at a hazard of 200,
@@ -150,13 +150,13 @@ on the stream of the first recipe, `jumps.parquet`:
 ```python
 # 1. The builder, with covariance_prior left out.
 bocpd = functools.partial(
-    po.spec.bocpd, features=["x"], mean_prior=[0.0],
+    rp.spec.bocpd, features=["x"], mean_prior=[0.0],
     mean_precision_prior=0.25, degrees_of_freedom_prior=2.0,
 )
 # 2. Each value a list of one number, for the one feature.
 grid = {"hazard": [200.0], "covariance_prior": [[0.01], [0.1], [1.0], [10.0]]}
 # 3. Every pair, scored by its log-likelihood in one pass.
-table = po.eval.grid_search(pl.scan_parquet("jumps.parquet"), bocpd, grid, scoring="loglik")
+table = rp.eval.grid_search(pl.scan_parquet("jumps.parquet"), bocpd, grid, scoring="loglik")
 # 4. Each prior's score and rank.
 for prior, loglik, rank in table.filter(kind="candidate").select("covariance_prior", "loglik", "rank").iter_rows():
     print(f"covariance_prior {prior}: loglik {loglik:.4f} a row, rank {rank}")
@@ -184,8 +184,8 @@ later a real shift is found.
 2. **Center and scale each feature in the query before the bank,** since
    the tempered predictive density (the density the model gives each row
    before learning it) is not free of the data's units. Make its
-   z-score `(pl.col("x") - po.ewm_mean("x", half_life=h)) /
-   po.ewm_std("x", half_life=h)` with `lf.online.with_windows`, which
+   z-score `(pl.col("x") - rp.ewm_mean("x", half_life=h)) /
+   rp.ewm_std("x", half_life=h)` with `lf.rheon.with_windows`, which
    runs the window operators (Polars' `with_columns` cannot).
 3. **Give `robust_beta=0.1`, and keep it below about 0.2.** Above that, a
    real shift is found late or not at all. Over 50 streams with a
@@ -202,7 +202,7 @@ the shift, under three powers:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # Level 0 and spread 1, one 20-sigma row at row 200, and a shift of 4 at row 400.
 rng = np.random.default_rng(15)
@@ -213,7 +213,7 @@ pl.DataFrame({"x": x}).write_parquet("outlier.parquet")
 
 # 1 and 3. The diagonal predictive, untempered and at two powers.
 for beta in (None, 0.1, 0.3):
-    cp = po.spec.bocpd("cp", features=["x"], hazard=250.0, covariance_type="diag", robust_beta=beta)
+    cp = rp.spec.bocpd("cp", features=["x"], hazard=250.0, covariance_type="diag", robust_beta=beta)
     out = pl.scan_parquet("outlier.parquet").rheon.fit_predict([cp]).collect().unnest("cp")
     began = [row - out["run_mode"][row] for row in (399, 599)]   # the row each current regime began on
     print(f"robust_beta {beta}: p_change {out['p_change'][200]:.2f} on the outlier; "

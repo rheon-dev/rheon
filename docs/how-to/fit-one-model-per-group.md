@@ -16,7 +16,7 @@ are those of the same spec fitted to that group's rows alone.
 
 These steps need the library and a column whose values name the groups:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   `df`, a frame of 400 rows in which four stocks, `b0` to `b3` in the
   column `stock_id`, take turns row by row. They also read `lf`, a
@@ -45,12 +45,12 @@ data](../EXAMPLE-DATA.md):
 
 ```python
 # 1. One model per stock.
-per_stock = po.spec.ewridge(
+per_stock = rp.spec.ewridge(
     "per_stock", targets=["y"], features=["x0", "x1"], clock="t", half_life=600.0, gap_cap=300.0,
     group="stock_id",           # one model per distinct value of this column
 )
 # 2. Fit them all in one pass.
-bank = po.ModelBank([per_stock])
+bank = rp.ModelBank([per_stock])
 together = bank.fit_predict(df)
 # 3. The groups the bank has seen.
 for row in bank.groups().iter_rows(named=True):
@@ -82,7 +82,7 @@ per hour.
 This code uses `lf` from [Example data](../EXAMPLE-DATA.md):
 
 ```python
-seasonal = po.spec.holt("seasonal", targets=["y"], clock="ts", gap_cap="1h",
+seasonal = rp.spec.holt("seasonal", targets=["y"], clock="ts", gap_cap="1h",
                         half_life="2h", group="hour")         # 2. one level and trend per hour of the day
 by_hour = lf.with_columns(hour=pl.col("ts").dt.hour()).rheon.fit_predict([seasonal]).collect()   # 1 and 3: the phase, as a column
 # One model per hour: each hour's rows, and the prediction its own model gave its last row.
@@ -115,7 +115,7 @@ column](#fit-a-model-for-each-value-of-a-column):
 ```python
 # Stock b0's rows alone give the same predictions.
 alone = {**per_stock, "group": None}           # a spec is a dict: the same spec without a group
-b0 = po.ModelBank([alone]).fit_predict(df.filter(pl.col("stock_id") == "b0"))
+b0 = rp.ModelBank([alone]).fit_predict(df.filter(pl.col("stock_id") == "b0"))
 in_bank = together.filter(pl.col("stock_id") == "b0")["per_stock"].struct.field("pred_y")
 print(f"b0 in the bank against b0 alone: {(in_bank - b0['per_stock'].struct.field('pred_y')).abs().max()} largest difference")
 ```

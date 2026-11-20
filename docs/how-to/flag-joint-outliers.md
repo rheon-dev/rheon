@@ -11,7 +11,7 @@ a threshold from the distances seen before each row.
 
 These steps need the library and a few columns that move together:
 
-- polars-online installed, and numpy to make the example's data.
+- rheon installed with Polars, and numpy to make the example's data.
 - A stream with two or more numeric columns, read as the
   [features](../GLOSSARY.md#the-model-bank-and-what-it-reads) of an
   [`ew_cov`](../MODELS.md#ew_cov--exponentially-weighted-moments) spec.
@@ -55,7 +55,7 @@ rows and prints the planted four:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # Two columns that correlate at 0.9, a third on its own, and four rows where only the combination is odd.
 rng = np.random.default_rng(7)
@@ -67,7 +67,7 @@ x0[planted], x1[planted] = 1.5, -1.5
 pl.DataFrame({"x0": x0, "x1": x1, "x2": c}).write_parquet("joint.parquet")
 
 # Fit the distances, and keep the rows past the threshold.
-mv = po.spec.ew_cov(
+mv = rp.spec.ew_cov(
     "mv", features=["x0", "x1", "x2"], half_life=1_000.0,
     stats=["mean", "std", "mahal"],      # 1. the distance, and each column's own spread to compare
     precision_prior=1e-6,                # 2. needed by mahal; fades as rows arrive
@@ -113,4 +113,4 @@ when the distance is wrong.
 | a `ValueError` naming `precision_prior` | `mahal` reads the inverse of the co-moments, which the prior makes solvable | give `precision_prior`, finite and above 0 |
 
 The fields and every parameter are defined in `ew_cov`'s
-[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.ew_cov).
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ew_cov).

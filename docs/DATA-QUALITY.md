@@ -23,10 +23,10 @@ of the library:
 
 | word | what it means here |
 |---|---|
-| spec | one model's description: the model, the columns it reads, and how it treats time. `po.spec.ewridge(...)` makes one; [the model table](MODELS.md#the-models-at-a-glance) lists every kind |
-| bank | `po.ModelBank`, a model bank: a set of models, one for each spec and group, fitted together over the same rows; `bank.fit(lf)` learns from a query's rows, and `bank.fit_predict_batches(lf)` also returns each row's prediction, made before the row is learned |
+| spec | one model's description: the model, the columns it reads, and how it treats time. `rheon.spec.ewridge(...)` makes one; [the model table](MODELS.md#the-models-at-a-glance) lists every kind |
+| bank | `rp.ModelBank`, a model bank: a set of models, one for each spec and group, fitted together over the same rows; `bank.fit(lf)` learns from a query's rows, and `bank.fit_predict_batches(lf)` also returns each row's prediction, made before the row is learned |
 | pass | one run of a bank over the stream |
-| audit | `po.spec.audit`, a spec that learns nothing and counts what its columns hold |
+| audit | `rheon.spec.audit`, a spec that learns nothing and counts what its columns hold |
 | usable value | a number a model can learn from: not null, NaN or infinite, and no larger than `1e100` in magnitude |
 | group | a spec's `group` column splits the stream, and each value of it gets a fit of its own |
 | `half_life`, `gap_cap` | each row's weight halves every `half_life` of the clock column; `gap_cap` is the longest step between two rows that a model decays by |
@@ -69,7 +69,7 @@ present on a third of the rows by design.
 
 **`not_checked` (info) says that numpy is not installed.** The checks that
 read a Gram, `collinear` and `leakage`, need numpy, an optional extra.
-Install it with `pip install polars-online[numpy]`.
+Install it with `pip install "rheon[polars,numpy]"`.
 
 **Every threshold was measured, both for how often it finds a planted
 problem and for how often it fires on clean data.** The streams are
@@ -98,7 +98,7 @@ the sweep. The clean shapes:
 | six columns that hold still on a coarse grid, over 10,000 rows: the hour of the day on minute data, a regime that stays with probability 0.99, a price in ticks, a spread in whole ticks, an AR(0.9) rounded to integers, and a temperature in whole degrees | an audit |
 
 The docstring of
-[`ModelBank.check`](https://hgilde.github.io/polars-online/rheon.html#rheon.ModelBank.check)
+[`ModelBank.check`](https://rheon-dev.github.io/rheon/rheon.html#rheon.ModelBank.check)
 lists every check with its threshold.
 
 **Read a number past a million in a recipe's output as a model that has
@@ -146,7 +146,7 @@ forward, and with `x1` dropped.
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # y = 1.0 x0 + 0.5 x1 + noise, with x0 and x1 correlated at 0.6. Two copies of x1 with gaps on
 # half the rows or more: one whose gaps fall at random, one whose gaps come when y is high.
@@ -172,8 +172,8 @@ lf = pl.scan_parquet("gaps.parquet")
 # One least-squares fit over a query, reused for each way below.
 def slopes(query, features):
     """Fit plain least squares (no decay) over the query; return the bank and the coefficients."""
-    spec = po.spec.ewridge("ols", targets=["y"], features=features, half_life=float("inf"))
-    bank = po.ModelBank([spec])
+    spec = rp.spec.ewridge("ols", targets=["y"], features=features, half_life=float("inf"))
+    bank = rp.ModelBank([spec])
     bank.fit(query)
     return bank, dict(bank.coef().select("term", "coef").iter_rows())
 
@@ -259,7 +259,7 @@ explains why one value on 5% of the rows erases a slope.
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # A feed that writes -999 where x1 was not measured, on 5% of the rows.
 rng = np.random.default_rng(11)
@@ -275,9 +275,9 @@ lf = pl.scan_parquet("sentinel.parquet")
 # The same fit for the feed as it comes and for the fix.
 def run(query):
     """Fit an audit and a ridge regression; return the bank, the final coefficients and R²."""
-    audit = po.spec.audit("audit", columns=["x0", "x1", "y"])
-    model = po.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], half_life=2_000.0)
-    bank = po.ModelBank([audit, model])
+    audit = rp.spec.audit("audit", columns=["x0", "x1", "y"])
+    model = rp.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], half_life=2_000.0)
+    bank = rp.ModelBank([audit, model])
     out = pl.concat(bank.fit_predict_batches(query, chunk_size=5_000)).unnest("ridge").tail(10_000)
     r2 = out.select(1 - (pl.col("y") - pl.col("pred_y")).pow(2).mean() / pl.col("y").var()).item()
     return bank, dict(bank.coef().select("term", "coef").iter_rows()), r2
@@ -397,7 +397,7 @@ of 20 rows, that is 150 half-lives held.
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # x1's feed stops at row 300 and comes back at row 3,300; the join that built the table carried
 # its last value forward, and kept the time it was observed in x1_seen.
@@ -425,8 +425,8 @@ lf = pl.scan_parquet("frozen.parquet")
 def run(query, model):
     """Fit an audit and the model; print the findings once. Return x1's largest |slope| while it
     was held, and the rms error of the predictions after it moves again."""
-    bank = po.ModelBank(
-        [po.spec.audit("audit", columns=["x0", "x1"], clock="t", gap_cap=5.0), model]
+    bank = rp.ModelBank(
+        [rp.spec.audit("audit", columns=["x0", "x1"], clock="t", gap_cap=5.0), model]
     )
     out = pl.concat(bank.fit_predict_batches(query, chunk_size=1_000)).unnest(model["name"])
     # x1's largest slope while it is held, and the error once it moves.
@@ -441,7 +441,7 @@ def run(query, model):
 common = dict(
     targets=["y"], features=["x0", "x1"], clock="t", gap_cap=5.0, half_life=20.0, coef_every=1
 )
-rls = po.spec.rls("rls", **common)
+rls = rp.spec.rls("rls", **common)
 bank, slope, rmse = run(lf, rls)
 shown = bank.check().select("severity", "code", "spec", "column", pl.col("value").round_sig_figs(3))
 for row in shown.iter_rows():
@@ -455,7 +455,7 @@ bank, slope, rmse = run(fixed, rls)
 print(f"rls, stale rows null: largest |slope| while held {slope:.3g}, rms error after {rmse:.3g}")
 
 # Or a model whose ridge does not fade.
-bank, slope, rmse = run(lf, po.spec.ewridge("ewridge", **common))
+bank, slope, rmse = run(lf, rp.spec.ewridge("ewridge", **common))
 print(f"ewridge, left alone:  largest |slope| while held {slope:.3g}, rms error after {rmse:.3g}")
 ```
 
@@ -565,7 +565,7 @@ three models: `rls` with no decay, `sgd` with `standardize=False`, and
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # A price near 5,000 that moves by about 1 a row, and a return written as a fraction (spread 0.001).
 rng = np.random.default_rng(5)
@@ -578,18 +578,18 @@ lf = pl.scan_parquet("level.parquet")
 
 # The three models the recipe compares, on the columns as they come.
 specs = [
-    po.spec.rls("rls", targets=["y"], features=["price", "ret"], half_life=float("inf")),
-    po.spec.sgd(
+    rp.spec.rls("rls", targets=["y"], features=["price", "ret"], half_life=float("inf")),
+    rp.spec.sgd(
         "sgd", targets=["y"], features=["price", "ret"], half_life=500.0, standardize=False
     ),
-    po.spec.ewridge("ewridge", targets=["y"], features=["price", "ret"], half_life=500.0),
+    rp.spec.ewridge("ewridge", targets=["y"], features=["price", "ret"], half_life=500.0),
 ]
 
 
 # One pass over a query, for the raw columns and for the rescaled ones.
 def run(query):
     """Fit every spec; print check()'s findings and each spec's R² over the last 10,000 rows."""
-    bank = po.ModelBank(specs)
+    bank = rp.ModelBank(specs)
     out = pl.concat(bank.fit_predict_batches(query, chunk_size=5_000)).tail(10_000)
     shown = bank.check().select(
         "severity", "code", "spec", "column", pl.col("value").round_sig_figs(3)
@@ -690,8 +690,8 @@ matrix. Two independent features that share a level are not collinear
 there: two at 5,000 and 3,000 read 1.0, where the uncentered index read
 5,061. A model fitted through the origin (`fit_intercept=False`) solves
 the raw design, where those two are nearly proportional. So it reads
-Belsley's uncentered index, which `po.gram.condition` computes, since
-centering would hide a dependency on the constant. `po.gram.vif` computes
+Belsley's uncentered index, which `rheon.gram.condition` computes, since
+centering would hide a dependency on the constant. `rheon.gram.vif` computes
 the factors from a saved Gram.
 
 The recipe records one quantity twice, in dollars as `x0` and in cents as
@@ -701,7 +701,7 @@ The recipe records one quantity twice, in dollars as `x0` and in cents as
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # x0 in dollars and x2 the same quantity in cents, recorded with a little noise of its own.
 rng = np.random.default_rng(9)
@@ -718,11 +718,11 @@ lf = pl.scan_parquet("collinear.parquet")
 def run(features):
     """Fit an audit with pairs and a ridge regression; print the findings, R², and x0's
     coefficient over the last 10,000 rows, alone and with x2's share of the same effect."""
-    audit = po.spec.audit("audit", columns=features, pairs=True)
-    model = po.spec.ewridge(
+    audit = rp.spec.audit("audit", columns=features, pairs=True)
+    model = rp.spec.ewridge(
         "ridge", targets=["y"], features=features, half_life=1_000.0, coef_every=1
     )
-    bank = po.ModelBank([audit, model])
+    bank = rp.ModelBank([audit, model])
     out = pl.concat(bank.fit_predict_batches(lf, chunk_size=5_000)).unnest("ridge").tail(10_000)
     # What the audit and the model each found.
     shown = bank.check().select(
@@ -789,7 +789,7 @@ exact up to the audit's `distinct_cap`, 256 by default.
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # A venue code 0-4 stored as a number; each venue adds its own amount to y, in no order.
 rng = np.random.default_rng(12)
@@ -804,9 +804,9 @@ lf = pl.scan_parquet("venues.parquet")
 # One pass with the given features, scored on the last 10,000 rows.
 def run(query, features):
     """Fit an audit of the columns as they arrive, and a ridge regression on the features."""
-    audit = po.spec.audit("audit", columns=["x", "venue"])
-    model = po.spec.ewridge("ridge", targets=["y"], features=features, half_life=2_000.0)
-    bank = po.ModelBank([audit, model])
+    audit = rp.spec.audit("audit", columns=["x", "venue"])
+    model = rp.spec.ewridge("ridge", targets=["y"], features=features, half_life=2_000.0)
+    bank = rp.ModelBank([audit, model])
     out = pl.concat(bank.fit_predict_batches(query, chunk_size=5_000)).unnest("ridge").tail(10_000)
     # What the audit found, then how well the model predicts.
     shown = bank.check().select(
@@ -880,7 +880,7 @@ explains why the false relation looks more certain the longer the stream.
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # Two random walks that have nothing to do with each other.
 rng = np.random.default_rng(2)
@@ -894,9 +894,9 @@ lf = pl.scan_parquet("walks.parquet")
 # One least-squares fit over a query, read back with its t.
 def run(query):
     """Fit an audit and plain least squares; print the findings, the slope and its t."""
-    audit = po.spec.audit("audit", columns=["x", "y"])
-    ols = po.spec.ewridge("ols", targets=["y"], features=["x"], half_life=float("inf"), ridge=1e-9)
-    bank = po.ModelBank([audit, ols])
+    audit = rp.spec.audit("audit", columns=["x", "y"])
+    ols = rp.spec.ewridge("ols", targets=["y"], features=["x"], half_life=float("inf"), ridge=1e-9)
+    bank = rp.ModelBank([audit, ols])
     bank.fit(query)
     # What the audit and the model each found.
     shown = bank.check().select(
@@ -906,8 +906,8 @@ def run(query):
         print(*row)
     # Solve the fit again from its running sums, to read the slope's t.
     g = bank.gram("ols")[0]  # the model's running sums
-    coef = po.gram.solve(g, ridge=1e-9)  # [intercept, slope]
-    stats = po.gram.coef_stats(g, coef)  # the slope's t, and the R², from the same sums
+    coef = rp.gram.solve(g, ridge=1e-9)  # [intercept, slope]
+    stats = rp.gram.coef_stats(g, coef)  # the slope's t, and the R², from the same sums
     print(f"slope {coef[1]:.3f}, t {stats['t'][1]:.1f}, R² {stats['r2']:.3f}")
 
 
@@ -933,7 +933,7 @@ differenced column is null, so the model skips it.
 
 **What to do.** Difference a level with `diff()` in the query before the
 bank, or take its deviation from a moving mean, such as
-`pl.col("x") - po.ewm_mean("x", ...)`. Model the change of the target on
+`pl.col("x") - rp.ewm_mean("x", ...)`. Model the change of the target on
 the changes of the features. A level that truly belongs in the model, such
 as a spread between two prices that reverts, is not a random walk, and its
 Dickey-Fuller statistic says so.
@@ -969,7 +969,7 @@ that flag fewer rows on heavy tails.
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # y = 0.5 x + noise from Student's t with 2 degrees of freedom: a stable relation, rare huge rows.
 rng = np.random.default_rng(4)
@@ -982,14 +982,14 @@ lf = pl.scan_parquet("tails.parquet")
 # An audit, ewridge with its sigma, drift and conformal interval, and huber beside it.
 common = dict(targets=["y"], features=["x"], clock="t", gap_cap=5.0, half_life=200.0, coef_every=1)
 specs = [
-    po.spec.audit("audit", columns=["x", "y"]),
-    po.spec.ewridge(
+    rp.spec.audit("audit", columns=["x", "y"]),
+    rp.spec.ewridge(
         "ewridge", **common, emit_sigma=True, emit_drift=True, drift_threshold=20.0, conformal=0.9
     ),
-    po.spec.huber("huber", **common),
+    rp.spec.huber("huber", **common),
 ]
 # Fit over the stream, and print what check() found.
-bank = po.ModelBank(specs)
+bank = rp.ModelBank(specs)
 out = pl.concat(bank.fit_predict_batches(lf, chunk_size=10_000)).tail(40_000)
 shown = bank.check().select("severity", "code", "spec", "column", pl.col("value").round_sig_figs(3))
 for row in shown.iter_rows():
@@ -1070,7 +1070,7 @@ embargo is the caller's to set
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # Returns with no structure: nothing in the past predicts the next ten rows.
 rng = np.random.default_rng(8)
@@ -1091,10 +1091,10 @@ lf = pl.scan_parquet("returns.parquet").with_columns(
 # One model of fwd on one feature, with or without an embargo.
 def run(feature, **embargo):
     """Fit a ridge regression of fwd on one feature; print the findings and the R²."""
-    spec = po.spec.ewridge(
+    spec = rp.spec.ewridge(
         "m", targets=["fwd"], features=[feature], clock="t", gap_cap=5.0, half_life=50.0, **embargo
     )
-    bank = po.ModelBank([spec])
+    bank = rp.ModelBank([spec])
     out = pl.concat(bank.fit_predict_batches(lf, chunk_size=5_000)).unnest("m")
     # The out-of-sample R² over the rows whose target is known.
     out = out.drop_nulls(["fwd", "pred_fwd"])
@@ -1195,7 +1195,7 @@ feed sent 1% of them twice, and delivered 0.5% a few rows late.
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # Trades at random times, in whole milliseconds, so some share a stamp. The feed sent 1% of them
 # twice, and delivered 0.5% of them a few rows after their place.
@@ -1215,20 +1215,20 @@ pl.concat([trades.with_columns(place=place), resent]).sort("place").drop("place"
 lf = pl.scan_parquet("trades.parquet")
 
 # An audit and a ridge regression on the trades' clock.
-audit = po.spec.audit("audit", columns=["x", "y"], clock="t", gap_cap=200.0)
-model = po.spec.ewridge(
+audit = rp.spec.audit("audit", columns=["x", "y"], clock="t", gap_cap=200.0)
+model = rp.spec.ewridge(
     "ridge", targets=["y"], features=["x"], clock="t", gap_cap=200.0, half_life=5_000.0
 )
 
 # Left alone: every step back is refused.
 try:
-    po.ModelBank([audit, model]).fit(lf)
+    rp.ModelBank([audit, model]).fit(lf)
 except ValueError as err:
     print(str(err).split(". ")[0])
 
 # Told that any step back starts the stream over, the model resets at each late row.
 # (The audit is left out: it reads the same clock, and would refuse the stream too.)
-restarting = po.spec.ewridge(
+restarting = rp.spec.ewridge(
     "ridge",
     targets=["y"],
     features=["x"],
@@ -1237,7 +1237,7 @@ restarting = po.spec.ewridge(
     half_life=5_000.0,
     restart_after_step_back=0.0,
 )
-bank = po.ModelBank([restarting])
+bank = rp.ModelBank([restarting])
 bank.fit(lf)
 shown = bank.check().select("severity", "code", "spec", "column", pl.col("value").round_sig_figs(3))
 for row in shown.iter_rows():
@@ -1245,7 +1245,7 @@ for row in shown.iter_rows():
 
 # The fix: drop the rows sent twice, then put the rest in clock order.
 fixed = lf.unique(maintain_order=True).sort("t", maintain_order=True)
-bank = po.ModelBank([audit, model])
+bank = rp.ModelBank([audit, model])
 bank.fit(fixed)
 shown = bank.check().select("severity", "code", "spec", "column", pl.col("value").round_sig_figs(3))
 for row in shown.iter_rows():
@@ -1314,7 +1314,7 @@ gates](MODELS.md#warm-up-gates) section of MODELS.md lists the gates.
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # Forty stocks with the same relation y = 0.5 x0 + 0.3 x1 + noise: four trade often, the rest twice.
 rng = np.random.default_rng(10)
@@ -1341,7 +1341,7 @@ small = [f"S{i:02d}" for i in range(4, 40)]
 # One regression per group, with a minimum weight before it predicts.
 def run(query, group):
     """Fit a regression per group; count the findings by code, and the small stocks' predictions."""
-    spec = po.spec.ewridge(
+    spec = rp.spec.ewridge(
         "ridge",
         targets=["y"],
         features=["x0", "x1"],
@@ -1349,7 +1349,7 @@ def run(query, group):
         half_life=float("inf"),
         min_weight=10.0,
     )
-    bank = po.ModelBank([spec])
+    bank = rp.ModelBank([spec])
     out = pl.concat(bank.fit_predict_batches(query, chunk_size=5_000)).unnest("ridge")
     # The findings by code, and the share of the small stocks' rows predicted.
     for row in bank.check().group_by("severity", "code", maintain_order=True).len().iter_rows():
@@ -1369,7 +1369,7 @@ run(pooled, "pool")
 print("-- half-lives that do not suit the stream --")
 # One half-life too short for the row rate, one far longer than the stream.
 specs = [
-    po.spec.ewridge(
+    rp.spec.ewridge(
         "short",
         targets=["y"],
         features=["x0", "x1"],
@@ -1378,12 +1378,12 @@ specs = [
         half_life=2.0,
         min_weight=10.0,
     ),
-    po.spec.ewridge(
+    rp.spec.ewridge(
         "long", targets=["y"], features=["x0", "x1"], clock="t", gap_cap=5.0, half_life=100_000.0
     ),
 ]
 # Fit both, and what check() says of each.
-bank = po.ModelBank(specs)
+bank = rp.ModelBank(specs)
 bank.fit(lf)
 shown = bank.check().select(
     "severity", "code", "spec", pl.col("value").round_sig_figs(3), "threshold"

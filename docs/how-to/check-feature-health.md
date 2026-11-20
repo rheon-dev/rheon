@@ -10,7 +10,7 @@ flags a stale or moved feature long before the coefficient on it runs away.
 
 These steps need the library and a linear model with features:
 
-- polars-online installed, and numpy to make the example's data.
+- rheon installed with Polars, and numpy to make the example's data.
 - A [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads) of one of the
   nine linear models with features, such as `rls` or `ewridge`, which take
   `emit_feature_health`. [What each costs, and which models take
@@ -50,7 +50,7 @@ when `rls`'s coefficient on it ran away:
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # y = x0 + 0.5 x1 + noise. x1's feed stops at row 300 and comes back at row 3,300; the join that
 # built the table carried its last value forward.
@@ -65,7 +65,7 @@ pl.DataFrame({"t": t, "x0": x0, "x1": np.where(held, x1[299], x1), "y": y}).writ
 feed = pl.scan_parquet("feed.parquet")
 
 # 1 and 2. rls, with its coefficients and each feature's health on every row.
-model = po.spec.rls(
+model = rp.spec.rls(
     "m", targets=["y"], features=["x0", "x1"], clock="t", gap_cap=5.0, half_life=20.0,
     coef_every=0,  # the coefficients on every row
     emit_feature_health=True,  # spread_ratio_x0, spread_ratio_x1, mean_shift_x0, mean_shift_x1

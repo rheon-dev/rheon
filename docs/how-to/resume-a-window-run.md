@@ -2,7 +2,7 @@
 # Resume a window run
 
 This how-to is for anyone who adds window columns with
-`po.stream.with_windows` to a stream that arrives in parts, such as a file
+`rp.stream.with_windows` to a stream that arrives in parts, such as a file
 a day, and wants the parts to give what one run over the whole stream
 gives. You save the run's state at the end of one part, and load it at the
 start of the next.
@@ -12,7 +12,7 @@ start of the next.
 These steps need the library, a stream with a clock, and the call that
 makes the windows:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   `trades`, a stream of quotes with trades between them, saved as
   `trades.parquet`. Its `mid` is on every row, and `side`, `quantity` and
@@ -25,7 +25,7 @@ makes the windows:
 - The stream cut into parts between stamps (clock values): a part that
   starts at the last stamp of the part before it is refused, as
   [Check the result](#check-the-result) says.
-- The same polars-online release for every part. The format of a window
+- The same rheon release for every part. The format of a window
   run's state is not promised, so a state one release saved need not load
   in the next, and a build refuses a state it cannot read, naming its
   version.
@@ -54,9 +54,9 @@ data](../EXAMPLE-DATA.md):
 ```python
 # The forward VWAP in one run over the whole stream, for comparison.
 next_minute = dict(half_life="10s", window_size="1m", reverse=True)
-vwap = dict(fwd_vwap=po.ewm_sum(pl.col("price") * pl.col("quantity"), **next_minute) / po.ewm_sum("quantity", **next_minute))
+vwap = dict(fwd_vwap=rp.ewm_sum(pl.col("price") * pl.col("quantity"), **next_minute) / rp.ewm_sum("quantity", **next_minute))
 clock = dict(clock="ts", gap_cap="5m", group="symbol")
-one_run = po.stream.with_windows(trades, **vwap, **clock)
+one_run = rp.stream.with_windows(trades, **vwap, **clock)
 
 # The same stream as two files.
 trades.head(2000).write_parquet("day1.parquet")

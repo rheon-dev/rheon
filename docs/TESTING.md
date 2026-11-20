@@ -49,12 +49,12 @@ spec and clock:
 | mutant | one small change `cargo mutants` makes to the source, such as a flipped operator or a function body replaced with a constant, before it reruns the tests. A mutant is *caught* when some test fails, and *missed*, a survivor, when every test still passes (`scripts/mutants.sh`) |
 | equivalent mutant | a mutant that no test can kill: on every input the code can receive, the mutated line computes what the original does |
 | tolerated mutant | a mutant that differs from the original only at an exact tie or by less than the computation's own error, so no test a correct implementation passes can kill it; listed apart, not as equivalent ([Mutation survivors](#mutation-survivors)) |
-| IC | the correlation of prediction with target, `po.eval`'s `ic` |
+| IC | the correlation of prediction with target, `rp.eval`'s `ic` |
 | hard rule N | the numbered hard rules in `CLAUDE.md` |
 | a model kind | one of the 22 model types a spec can name; `MINIMAL` in `tests/test_model_registry.py` holds one spec of each |
 | the ten regression models | the models the per-model sweeps run: `ewridge`, `rls`, `lasso`, `kalman`, `huber`, `quantile`, `sgd`, `pa`, `ftrl` and `holt`, which `REGRESSIONS` in `tests/test_model_registry.py` lists |
-| the window operators | exponentially weighted means, variances, sums, rates and quantiles of a column along the clock, with or without a hard window, which `po.stream.with_windows` runs over a stream: `po.ewm_mean`, `po.ewm_sum`, `po.ewm_rate`, `po.ewm_quantile`, `po.ewm_var` and `po.ewm_std` look back, and the first four look ahead under `reverse=True` |
-| a formula target | a spec's target written as an expression over a window operator that looks ahead, such as `po.ewm_mean("mid", ...) - pl.col("mid")`, which the bank resolves once the window has closed |
+| the window operators | exponentially weighted means, variances, sums, rates and quantiles of a column along the clock, with or without a hard window, which `rp.stream.with_windows` runs over a stream: `rp.ewm_mean`, `rp.ewm_sum`, `rp.ewm_rate`, `rp.ewm_quantile`, `rp.ewm_var` and `rp.ewm_std` look back, and the first four look ahead under `reverse=True` |
+| a formula target | a spec's target written as an expression over a window operator that looks ahead, such as `rp.ewm_mean("mid", ...) - pl.col("mid")`, which the bank resolves once the window has closed |
 | the column form | the same window expression written as a column by `with_windows(like=spec)` and fed back as a plain target under the same `embargo`: what a formula target is held to |
 | the brute force | `brute()` in `crates/rheon-polars/src/windows.rs`, which computes each row's window from the definition by scanning every row of its stretch, with no running sums |
 | the time-reversal identity | a forward window over a stream is a backward one over the same stream reversed in time, with the row itself left out, so a forward `closed="right"` is a backward `"left"` |
@@ -117,7 +117,7 @@ each model's `predict` to its `step`, row by row.
 `crates/rheon-polars/tests/runner.rs` holds every input format (parquet,
 ipc, csv, ndjson), every output format, `Input::Batches` ≡ a query, and the
 failure paths to the numbers `ModelBank` gives on the same rows. CSV's
-flattened columns and JSON-text `coef` decode bit-exact. The `polars-online` command
+flattened columns and JSON-text `coef` decode bit-exact. The `rheon` command
 line is held to the same numbers through `run_online` in `tests/conftest.py`
 (`test_closed_groups`, `test_hardening`, `test_predict`, `test_no_output`,
 `test_label_delay`), and every `sh` block of `docs/RUNNER.md` runs. What a
@@ -195,7 +195,7 @@ in `tests/test_second_opinion.py`, Vowpal Wabbit among them.
 | `huber` and `quantile` under a finite half-life, with nulls, several targets, `standardize` or zero weights; `ftrl` under a half-life; `sgd`'s Poisson loss and AdaGrad schedule; `ew_class` under decay; `EwQuantile` | **definition only**: `robust_ref`, `ftrl_ref`, `sgd_ref` and the definitions in `tests/test_diagnostics.py` and `tests/test_ew_class.py`. No library checked forgets as a half-life does, and scikit-learn's SGD has neither the Poisson loss nor AdaGrad | as each such model's row of the table gives |
 | `micro`, `seqtest`, `deco`, `corrchange`, `rcov` | **definition only**: the longhand oracles of [An oracle, not a golden number](#an-oracle-not-a-golden-number), each written from its paper. river's `DenStream` takes another macro step, so it could agree only statistically, and no Python library computes the other four | as each such model's row of the table gives |
 | the window operators | the brute force; the time-reversal identity; Polars' `ewm_mean_by` and `ewm_sum_by`; Polars' `rolling_sum_by`, for which rows a window holds ([The window operators and formula targets](#the-window-operators-and-formula-targets)) | 1e-9; 1e-9; 1e-9; exactly |
-| `po.ewm_quantile`, looking back with and without a window, and looking ahead | numpy's weighted quantile, `np.quantile(..., weights=, method="inverted_cdf")`, over the rows each window holds at the weights `po.ewm_sum` gives them; under even weights, statsmodels' MAD about 0 of the last 101 rows (`tests/test_ewm_quantile.py`) | `tanh(1/128)`, relative, the sketch's accuracy |
+| `rp.ewm_quantile`, looking back with and without a window, and looking ahead | numpy's weighted quantile, `np.quantile(..., weights=, method="inverted_cdf")`, over the rows each window holds at the weights `rp.ewm_sum` gives them; under even weights, statsmodels' MAD about 0 of the last 101 rows (`tests/test_ewm_quantile.py`) | `tanh(1/128)`, relative, the sketch's accuracy |
 | a formula target | its column form | bit for bit, every prediction |
 
 ### An oracle, not a golden number
@@ -590,7 +590,7 @@ push is tested on.
 #### How the test gate runs
 
 **At most two test gates run at once on the development Mac.**
-`scripts/gate.sh` takes one of `POLARS_ONLINE_GATES` (default 2) tokens,
+`scripts/gate.sh` takes one of `RHEON_GATES` (default 2) tokens,
 directories in the repository's common git directory holding their test
 gate's pid. It waits for one when all are held, prints that it waited and
 for how long, and starts its timing when it has a token. A token whose
@@ -642,7 +642,7 @@ file or the whole one. The released versions' environments, which
 renamed the same way.
 
 **A compiler cache does not speed up a new worktree, so it is off unless
-asked for.** sccache, turned on with `POLARS_ONLINE_SCCACHE=1` in
+asked for.** sccache, turned on with `RHEON_SCCACHE=1` in
 `scripts/env.sh`, caches each crate rustc compiles, keyed by its inputs. In
 a checkout whose path it had seen, a build from nothing took 33 s for the
 Rust tests and 91 s for the `release` extension, against 66 s and 241 s
@@ -809,7 +809,7 @@ runs the suite. In `ci.yml`'s `test` job and in each oracle grid's shard
 the sets are in place before the tests start, so there such a skip means all three copies, the cache, the artifact
 and `fetch`, failed. Among hundreds of tests a skip is easy to miss, and the run
 would pass without its check.
-The two steps set `POLARS_ONLINE_DATASETS_RESTORED=1`, and
+The two steps set `RHEON_DATASETS_RESTORED=1`, and
 `tests/offline_skips.py` then turns a skip whose reason begins with the
 loaders' `offline: could not download ` into a failure that names the set
 (a skip in a fixture shows as an error). `CI` alone does not turn it on:
@@ -1203,7 +1203,7 @@ Server 2022 and 2025 and GitHub's arm64 Macs, under each Python, but one. That o
 on Windows Server 2022, a value on a rounding boundary. The 17 groups hashed whole (`bits=52`) moved where the
 processor differs: 12 on Linux, 8 on Windows Server 2025 and 15 on 2022,
 and 3 on GitHub's arm64 Macs against the M4 Pro the hashes were written
-on. Those 3 are the groups that solve a Gram through `po.gram`. A per-platform set could not keep the guard's promise, that a hash
+on. Those 3 are the groups that solve a Gram through `rheon.gram`. A per-platform set could not keep the guard's promise, that a hash
 moves only after a passing run of its oracles on that platform, since only
 Linux runs the grids, and only on CI. A coarser rounding would hide what a
 whole hash is for, a change in the last bits a round-off case's ledger
@@ -1273,14 +1273,14 @@ names all three in `[meta]`. Changing one re-measures every case.
   higher in a later one is an increase like any other.
 - A case with no budget is reported with its measurement and fails nothing,
   which is how a new case gets its first budget. A measuring run, a dispatch
-  of the workflow with `measure` or `POLARS_ONLINE_BUDGETS=measure` for the
+  of the workflow with `measure` or `RHEON_BUDGETS=measure` for the
   tests, reports everything and fails nothing.
 - The last release's own measurements are the baseline every run's drift
   is read from. A release merges its run's instruction counts and each
   OS's memory into one file, `budgets-baseline.json`, and attaches it to
   its GitHub release as an asset, so nothing is committed after a release
   to record them. Every run then reads the newest release's copy, by a URL
-  that names no version (`https://github.com/hgilde/polars-online/releases/latest/download/budgets-baseline.json`),
+  that names no version (`https://github.com/rheon-dev/rheon/releases/latest/download/budgets-baseline.json`),
   and reports each case's drift since. A release fails on a case that
   moved more than 10% either way unless `budgets.toml` holds a
   `[[signoff]]` for it at that version. A push only warns of it, and only
@@ -1299,11 +1299,11 @@ and then `cargo bench -p rheon-bench --bench instructions` prints the
 counts. Elsewhere, a Linux container with Valgrind installed runs the same
 two commands. The workflow keeps each run's counts as an artifact.
 
-**The counts are of the baseline x86-64 build, not of the `polars-online`
+**The counts are of the baseline x86-64 build, not of the `rheon`
 wheel that runs on an x86-64 CPU with AVX2.** Valgrind counts the
 `rheon-bench` cases built with no `target-feature` flag, which is the build
-`polars-online-compat` and every build from source are. The x86-64 wheels of
-`polars-online` are built for AVX2 and FMA, and execute fewer instructions (a
+`rheon-compat` and every build from source are. The x86-64 wheels of
+`rheon` are built for AVX2 and FMA, and execute fewer instructions (a
 median 4.3% fewer, [What the x86-64 wheels
 need](VERSIONS.md#what-the-x86-64-wheels-need)). No budget holds that build's
 counts, so a change that costs instructions only there is not caught by them.

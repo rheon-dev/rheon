@@ -32,6 +32,21 @@ REPO = Path(__file__).resolve().parent.parent
 #: what is not text.
 HISTORY = (
     "docs/records/*",
+    # The records filed beside the guides (docs/README.md, *Records*), kept as
+    # they were written.
+    "docs/ARROW-SOURCES.md",
+    "docs/BOOSTED-TREES.md",
+    "docs/CLUSTERING.md",
+    "docs/ENHANCEMENTS.md",
+    "docs/GBDT-ADAPTER.md",
+    "docs/HUBER.md",
+    "docs/IMPROVEMENTS.md",
+    "docs/MARGINAL-LAGS-AND-BINS.md",
+    "docs/PLAN.md",
+    "docs/README-ITERATIONS.md",
+    "docs/REVIEW-*.md",
+    "docs/SIMPLIFICATION.md",
+    "docs/WARMUP-AND-CONVERGENCE.md",
     ".claude/*",
     "uv.lock",
     "Cargo.lock",
@@ -44,19 +59,21 @@ HISTORY = (
 #: Not yet scanned by any rule: the prose that explains the library to a reader
 #: (rewritten in its own commit), and the changelog's past sections.
 DEFERRED = (
-    "README.md",
-    "llms.txt",
-    "CONTRIBUTING.md",
     "CHANGELOG.md",
     "CLAUDE.md",
-    "CITATION.cff",
-    "SECURITY.md",
+)
+
+#: The guides, held to every rule but the one of `po.` in messages.
+GUIDES = (
     "docs/*.md",
     "docs/how-to/*",
     "docs/tutorials/*",
     "docs/explanation/*",
     "docs/contributing/*",
 )
+
+#: The guide that lists the old names beside the new ones.
+NAMES_THE_OLD = ("docs/VERSIONS.md",)
 
 
 @dataclass(frozen=True)
@@ -85,6 +102,46 @@ ENV_FALLBACK = (
     "scripts/rheon_import.py",  # picks the old name for a benchmark run on a release before 2.0
 )
 
+#: The files that name a release before 2.0 on purpose: it is the project
+#: `polars-online` and the package `polars_online`, and the scripts and tests
+#: that compare with one, or read one's state, import it by that name.
+RELEASE_BEFORE_2 = (
+    "scripts/compare_release.py",
+    "scripts/release_probe.py",
+    "scripts/rheon_import.py",
+    "scripts/bench_header.py",
+    "scripts/release_version.py",  # reads either name in the docs' pins
+    "tests/data.py",
+    "tests/test_released_state.py",
+    "tests/test_release_workflow.py",
+    "tests/test_old_names.py",
+)
+
+
+#: The guides whose sentences are about the time before 2.0: they name a
+#: release by its project, quote a reader's words of the day, or give the
+#: version a measurement was made on.
+PAST = (
+    "docs/WRITING.md",  # the user's own wording, quoted
+    "docs/VALIDATION.md",  # the release the defaults were measured on
+    "docs/contributing/cut-a-release.md",  # the last release before 2.0, by its project
+    "docs/how-to/reproduce-an-earlier-versions-fit.md",  # installs 1.2.0
+)
+
+#: Not renamed yet: each still names the old project or links its old home.
+NOT_YET = (
+    ".github/ISSUE_TEMPLATE/config.yml",
+    ".github/workflows/ci.yml",
+    ".github/workflows/polars-canary.yml",
+    "examples/bank.toml",
+    "examples/pathway_integration.py",
+    "scripts/clustering_proto.py",
+    "scripts/ogbt_proto.py",
+    "scripts/doc_review.py",
+    "scripts/validate.py",
+    "tests/test_reference_pages.py",
+)
+
 CODE = (
     "python/*",
     "crates/*",
@@ -99,12 +156,50 @@ CODE = (
     "writing_ratchet.toml",
 )
 
+#: The reader-facing files rewritten under the new name, held to the rules
+#: of the package's and the project's names beside the code.
+PROSE = ("README.md", "llms.txt", "CONTRIBUTING.md", "SECURITY.md", "CITATION.cff")
+
 RULES = (
+    Rule(
+        "the package is imported as `rheon`; `polars_online` names only a release before 2.0",
+        re.compile(r"polars_online"),
+        CODE + PROSE + GUIDES,
+        allowed=(*RELEASE_BEFORE_2, *NAMES_THE_OLD, *PAST),
+    ),
+    Rule(
+        "the project is `rheon`; `polars-online` names only a release before 2.0",
+        # Not the magic bytes the file formats keep from 1.x, so that every
+        # 1.x state loads under 2.0 with no loader.
+        re.compile(r"polars-online(?!-bank| windows| refresh_time| state hand-off)"),
+        CODE + PROSE + GUIDES,
+        allowed=(
+            *RELEASE_BEFORE_2,
+            *NAMES_THE_OLD,
+            *PAST,
+            *NOT_YET,
+            # The note under the title says what the package was called.
+            "README.md",
+            "llms.txt",
+        ),
+    ),
+    Rule(
+        "the crates are `rheon-core`, `rheon-polars`, `rheon-cli`, `rheon-py` and `rheon-bench`",
+        re.compile(r"(?<![A-Za-z0-9_-])online-(?:core|polars|py|cli|bench)(?![A-Za-z0-9_])"),
+        CODE + PROSE + GUIDES,
+        allowed=("tests/test_old_names.py", *NAMES_THE_OLD),
+    ),
+    Rule(
+        "the project's home is github.com/rheon-dev/rheon and rheon-dev.github.io/rheon",
+        re.compile(r"hgilde"),
+        CODE + PROSE + GUIDES,
+        allowed=("tests/test_old_names.py", *NOT_YET, *NAMES_THE_OLD),
+    ),
     Rule(
         "the warning classes were renamed RheonWarning and RheonDeprecationWarning",
         re.compile(r"PolarsOnline(?:Deprecation)?Warning|__polars_online_renamed__"),
-        CODE,
-        allowed=("tests/test_old_names.py",),
+        CODE + PROSE + GUIDES,
+        allowed=("tests/test_old_names.py", *NAMES_THE_OLD),
     ),
     Rule(
         "the frame namespaces are LazyFrameRheonNamespace and DataFrameRheonNamespace",
@@ -117,11 +212,10 @@ RULES = (
         # An accessor: `.online` after a name, a call or a subscript, as
         # `lf.online.fit_predict`, `df.online[...]`, `scan(...).online.`.
         re.compile(r"""(?<=[A-Za-z0-9_)\]"'])\\?\.online(?![A-Za-z0-9_-])"""),
-        CODE,
+        CODE + PROSE + GUIDES,
         allowed=(
             "tests/test_old_names.py",
-            # Reads docs/FEATURES.md, whose index still names `lf.online`.
-            "tests/test_feature_index.py",
+            *NAMES_THE_OLD,
             # Lets a benchmark run under a release before 2.0, whose namespace is `.online`.
             "scripts/rheon_import.py",
         ),
@@ -129,8 +223,8 @@ RULES = (
     Rule(
         "the environment variables are RHEON_*; only the fallback reads the old names",
         re.compile(r"POLARS_ONLINE_"),
-        CODE,
-        allowed=ENV_FALLBACK,
+        CODE + PROSE + GUIDES,
+        allowed=(*ENV_FALLBACK, *NAMES_THE_OLD),
     ),
     Rule(
         "a message names the path a user calls, `rp.` or `rheon.`, not `po.`",
@@ -214,6 +308,10 @@ def test_the_scan_sees_what_it_is_meant_to():
     rule's pattern matches a spelling it is meant to catch, and each allowed
     file exists, so a renamed file does not leave an exemption behind."""
     samples = (
+        "import polars_online as po",
+        "pip install polars-online",
+        "crates/online-polars/src",
+        "https://github.com/hgilde/polars-online",
         "PolarsOnlineWarning",
         "__polars_online_renamed__",
         "LazyFrameOnlineNamespace",
@@ -225,7 +323,17 @@ def test_the_scan_sees_what_it_is_meant_to():
     )
     caught = [s for s in samples if any(r.pattern.search(s) for r in RULES)]
     assert caught == list(samples)
-    for s in ("repo.spec", "rheon.polars", "self.online_mode", "x.online-prefetch1"):
+    for s in (
+        "repo.spec",
+        "rheon.polars",
+        "self.online_mode",
+        "x.online-prefetch1",
+        "rheon-polars",
+        "the online-learning kernel",
+        "github.com/rheon-dev/rheon",
+        'b"polars-online-bank"',
+        'b"\\xb5polars-online windows"',
+    ):
         assert not any(r.pattern.search(s) for r in RULES), s
     files = set(tracked_and_new())
     for rule in RULES:

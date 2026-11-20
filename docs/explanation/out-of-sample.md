@@ -5,7 +5,7 @@ This page explains, for anyone who reads a model bank's predictions or
 diagnostics, why each one was made before the model learned its row, and
 what that guarantees about them.
 
-**Every prediction polars-online writes as it learns, and every diagnostic
+**Every prediction rheon writes as it learns, and every diagnostic
 it reads from the residuals, is out-of-sample.** A model predicts each row
 from what it has learned from the rows before it, and only then learns
 from the row. So no row's target reaches its own prediction. A
@@ -56,10 +56,10 @@ from [Example data](../EXAMPLE-DATA.md) in one run,
 then predicts row 300 with a bank that has learned only rows 0 to 299:
 
 ```python
-spec = po.spec.ewridge("m", targets=["y"], features=["x0", "x1"], clock="t", half_life=100.0, gap_cap=300.0)
-one_run = po.ModelBank([spec]).fit_predict(df)["m"].struct.field("pred_y")   # every row, in one pass
+spec = rp.spec.ewridge("m", targets=["y"], features=["x0", "x1"], clock="t", half_life=100.0, gap_cap=300.0)
+one_run = rp.ModelBank([spec]).fit_predict(df)["m"].struct.field("pred_y")   # every row, in one pass
 
-first_300 = po.ModelBank([spec])
+first_300 = rp.ModelBank([spec])
 first_300.fit_predict(df.head(300))                                           # learns rows 0 to 299
 alone = first_300.predict(df.slice(300, 1))["m"].struct.field("pred_y")[0]    # predicts row 300, learning nothing
 print(f"row 300: {one_run[300]:.6f} in one run, {alone:.6f} from rows 0 to 299 alone")
@@ -157,7 +157,7 @@ write there. The diagnostics take each row in when it is learned, from the
 prediction it was given, so they stay out-of-sample.
 
 **The same target can instead be a column, made in the query before the
-bank with `po.stream.with_windows`, and it then needs an `embargo` of at
+bank with `rp.stream.with_windows`, and it then needs an `embargo` of at
 least its window's length.** A column holds the target's value at the
 row, so the bank writes a residual there. Without an `embargo`, the model
 learns each row's value at the row, before the rows that value was

@@ -2,7 +2,7 @@
 # Change the public API
 
 This how-to is for a contributor who adds, renames or removes a public
-name of polars-online, or changes a default, and must see the change as a
+name of rheon, or changes a default, and must see the change as a
 diff and ship it in the right kind of release.
 
 **A change to the public API can break a user with no error at all.**
@@ -95,9 +95,10 @@ Add the old name to the table that fits, with the new name in the message,
 and a test that the refusal names it.
 
 A minor release can still read an old name for a release, if it needs to,
-by warning with `PolarsOnlineDeprecationWarning`, a `DeprecationWarning`
+by warning with `rheon.RheonDeprecationWarning`, a `DeprecationWarning`
 that names the new spelling, and the next major refuses the name as above.
-No name is read that way now.
+No name of the API is read that way now. The environment variables' names
+from before the rename are, until the next major release.
 
 ## Add a spec parameter
 

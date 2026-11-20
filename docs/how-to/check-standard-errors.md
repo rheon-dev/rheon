@@ -10,7 +10,7 @@ assumptions the residuals meet.
 
 These steps need the library and a least-squares fit:
 
-- polars-online installed, and numpy to make the example's data.
+- rheon installed with Polars, and numpy to make the example's data.
 - A [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads) of `ewridge`
   or `rls`, the two models that take `emit_robust_se`. `kalman` takes
   `emit_se_coef` alone ([What each costs, and which models take
@@ -51,7 +51,7 @@ slope is 0, and a test at 5% should reject on about 5% of the streams:
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # 100 independent streams of 3,000 rows. x is persistent (AR(1) at 0.95); the target sums the next
 # h = 10 shocks, which x knows nothing about, so its true slope is 0.
@@ -71,7 +71,7 @@ pl.concat(frames).write_parquet("overlap.parquet")
 overlap = pl.scan_parquet("overlap.parquet")
 
 # 1 and 2. One slope per stream, with its plain, HC0 and HAC standard errors.
-model = po.spec.ewridge(
+model = rp.spec.ewridge(
     "m", targets=["fwd"], features=["x"], half_life=float("inf"), group="stream",
     embargo=h,  # a row's target is known h rows later, and is learned only then
     emit_se_coef=True,  # se_coef: assumes uncorrelated residuals
@@ -123,11 +123,11 @@ assumptions: turn on
 misses](find-what-the-model-misses.md) does, and read `se_coef` only where
 both are quiet.
 
-`po.gram.coef_stats`, which fits from a Gram, and `marginal`'s `t_stat`
+`rheon.gram.coef_stats`, which fits from a Gram, and `marginal`'s `t_stat`
 read Kish's size (the effective number of rows of the weighted fit), and are silent
-about the overlap. Read `po.gram.coef_stats`' t as a scale for comparing
+about the overlap. Read `rheon.gram.coef_stats`' t as a scale for comparing
 coefficients. For `marginal`, read `t_stat_serial`, which its `lags=` and
-`serial_rule=` add ([`po.spec.marginal`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.marginal)
+`serial_rule=` add ([`rheon.spec.marginal`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.marginal)
 gives their values), and which corrects each pair's count for rows that
 resemble their neighbors ([Can its t be
 trusted?](../DIAGNOSTICS.md#can-its-t-be-trusted)).

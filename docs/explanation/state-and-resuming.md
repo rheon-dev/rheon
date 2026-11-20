@@ -19,13 +19,13 @@ elsewhere:
 
 | use | the call | what the bank guarantees |
 |---|---|---|
-| [resume](../GLOSSARY.md#saving-and-serving) | `po.ModelBank.load(path)`, or `load_state=` on a [query](../GLOSSARY.md#the-model-bank-and-what-it-reads) (a Polars `LazyFrame`, a chain of steps that runs only when you ask for its result) | the next row is learned as one run would learn it |
+| [resume](../GLOSSARY.md#saving-and-serving) | `rp.ModelBank.load(path)`, or `load_state=` on a [query](../GLOSSARY.md#the-model-bank-and-what-it-reads) (a Polars `LazyFrame`, a chain of steps that runs only when you ask for its result) | the next row is learned as one run would learn it |
 | [serve](../GLOSSARY.md#saving-and-serving) | `bank.predict(frame)`, or a query's `online.predict(path)` | each row is predicted from the state as it stands, and the state never moves ([How each kind of row is served](../how-to/serve-from-a-saved-state.md#how-each-kind-of-row-is-served) gives how that compares with `fit_predict`) |
 | read elsewhere | `bank.write_json()` | everything `save` writes, as JSON |
 
 [Resume from a saved state](../how-to/resume-from-a-saved-state.md) gives
 the steps, from Python and from the [command
-line](../GLOSSARY.md#saving-and-serving) (the `polars-online` program), and
+line](../GLOSSARY.md#saving-and-serving) (the `rheon` program), and
 [Saved states](../STATE-WORKFLOW.md) says what each step guarantees.
 
 ## A save is a chunk's end
@@ -56,15 +56,15 @@ with one run over every row. It reads `df` from [Example
 data](../EXAMPLE-DATA.md):
 
 ```python
-spec = po.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], clock="t", half_life=600.0, gap_cap=300.0,
+spec = rp.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], clock="t", half_life=600.0, gap_cap=300.0,
                        embargo=5.0)   # each row learned 5 units of t after it is predicted
-whole = po.ModelBank([spec])
+whole = rp.ModelBank([spec])
 one_run = whole.fit_predict(df)["ridge"].struct.field("pred_y")
 
 # The same rows in four chunks, with the bank saved and loaded back after each.
 state, parts = None, []
 for chunk in df.iter_slices(100):
-    bank = po.ModelBank([spec]) if state is None else po.ModelBank.load_bytes(state, specs=[spec])
+    bank = rp.ModelBank([spec]) if state is None else rp.ModelBank.load_bytes(state, specs=[spec])
     parts.append(bank.fit_predict(chunk)["ridge"].struct.field("pred_y"))
     state = bank.save_bytes()   # the state as bytes, the same bytes bank.save would write to a file
 print(f"largest difference from one run: {(one_run - pl.concat(parts)).abs().max()}")
@@ -86,7 +86,7 @@ interrupted save leaves the old file whole. Each writes at its own moment:
 
 | run by | saves with | loads with | the file is written |
 |---|---|---|---|
-| a bank object | `bank.save(path)` | `po.ModelBank.load` | when `bank.save` is called |
+| a bank object | `bank.save(path)` | `rp.ModelBank.load` | when `bank.save` is called |
 | a query | `save_state=` | `load_state=` | when the bank has been fed its last row: the input's end, or the last of the rows a `head(n)` asked for |
 | the command line | `--save-state` | `--load-state` | only after it has finished writing its output file |
 
@@ -98,8 +98,8 @@ compares their bytes. It uses `df` and `ticks.parquet` from
 from pathlib import Path
 
 # The same state, saved from a bank and from a query.
-spec = po.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], clock="t", half_life=600.0, gap_cap=300.0)
-bank = po.ModelBank([spec])
+spec = rp.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], clock="t", half_life=600.0, gap_cap=300.0)
+bank = rp.ModelBank([spec])
 bank.fit_predict(df)
 bank.save("from_bank.state")                             # from a bank object
 (pl.scan_parquet("ticks.parquet")                        # the same rows, from a query

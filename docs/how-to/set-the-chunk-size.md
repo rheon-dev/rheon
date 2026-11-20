@@ -9,7 +9,7 @@ a wide run faster, and smaller ones make a run hold less memory.
 
 These steps need the library and a run that reads a query:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   the file `ticks.parquet` and `df`, the same 400 rows of four stocks in
   the column `stock_id`.
@@ -30,14 +30,14 @@ explains why.
 
 1. **On a query, pass the keyword `chunk_size` to the call that runs the
    bank,** to change the chunk from its default of 100,000 rows.
-   `lf.online.fit_predict`, `lf.online.predict`, `po.fit_predict`,
-   `po.predict`, `ModelBank.fit_predict_batches`, `ModelBank.fit`,
-   `po.eval.grid_search`, `with_windows` and `refresh_time` take it.
+   `lf.rheon.fit_predict`, `lf.rheon.predict`, `rp.fit_predict`,
+   `rp.predict`, `ModelBank.fit_predict_batches`, `ModelBank.fit`,
+   `rp.eval.grid_search`, `with_windows` and `refresh_time` take it.
    `with_windows` and `refresh_time` read a frame 100,000 rows at a time
    too.
 2. **To cut a frame into chunks, pass `chunk_size` with it to
-   `df.online.fit_predict`, `df.online.predict`, `po.fit_predict`,
-   `po.predict`, `ModelBank.fit` or `ModelBank.fit_predict_batches`.**
+   `df.rheon.fit_predict`, `df.rheon.predict`, `rp.fit_predict`,
+   `rp.predict`, `ModelBank.fit` or `ModelBank.fit_predict_batches`.**
    Without `chunk_size`, each of these takes a frame whole. A frame passed
    to `ModelBank.fit_predict` is always one chunk, whatever its size.
 3. **To report the coefficients on rows of your choosing whatever the
@@ -58,12 +58,12 @@ data](../EXAMPLE-DATA.md):
 
 ```python
 # The same spec over chunks of 10 rows, the whole file, and a frame.
-spec = po.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], clock="t", gap_cap=300.0,
+spec = rp.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], clock="t", gap_cap=300.0,
                        half_life=50.0, group="stock_id")
 query = pl.scan_parquet("ticks.parquet")
 small = query.rheon.fit_predict([spec], chunk_size=10).collect()       # read 10 rows at a time
 large = query.rheon.fit_predict([spec], chunk_size=100_000).collect()  # the whole file at once
-whole = po.ModelBank([spec]).fit_predict(df)                            # a frame: one chunk, whatever its size
+whole = rp.ModelBank([spec]).fit_predict(df)                            # a frame: one chunk, whatever its size
 
 # Compare the predictions, and count the rows that carry coef.
 def field(out, name):

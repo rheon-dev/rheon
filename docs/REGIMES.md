@@ -8,7 +8,7 @@ right, and what it misses. A regime detector makes a claim about a stream:
 that its correlation has changed, how long the current regime has lasted,
 or which state a row belongs to. A claim like that can only be checked on
 a stream whose answer is written down.
-[`po.sim.regimes`](how-to/test-a-detector-on-known-truth.md) generates one
+[`rp.sim.regimes`](how-to/test-a-detector-on-known-truth.md) generates one
 from a seed and returns the truth beside the rows.
 
 Five models make a claim about a stream: `deco`, `rcov`, `hmm`,
@@ -27,7 +27,7 @@ runs it on a planted answer.
 | [3. And is it the power its paper says?](#3-and-is-it-the-power-its-paper-says) | how often it rejects a real break | `corrchange`, `kind="monitor"` |
 | [4. Where the heavy tails go: `D-hat`](#4-where-the-heavy-tails-go-d-hat) | how well the statistic's denominator is estimated | `corrchange`, `kind="monitor"` |
 | [5. Two changepoint detectors on the same break](#5-two-changepoint-detectors-on-the-same-break) | false alarms on a quiet stream, and the delay to a real break | `corrchange(kind="window")`, `bocpd` |
-| [6. The Epps effect, and the two ways out](#6-the-epps-effect-and-the-two-ways-out) | what asynchrony does to a correlation, and what recovers it | `po.stream.refresh_time`, `ew_cov(lags=...)` |
+| [6. The Epps effect, and the two ways out](#6-the-epps-effect-and-the-two-ways-out) | what asynchrony does to a correlation, and what recovers it | `rp.stream.refresh_time`, `ew_cov(lags=...)` |
 | [7. `deco`: an equicorrelation that moves](#7-deco-an-equicorrelation-that-moves) | where `rho` levels off, and how fast it follows a switch | `deco` |
 | [8. `rcov`: three estimators against each block's truth](#8-rcov-three-estimators-against-each-blocks-truth) | each estimator's error under noise and asynchrony | `rcov` |
 | [9. The sequential detector against its paper](#9-the-sequential-detector-against-its-paper) | how often a monitoring period ends in a flag when nothing changed | `corrchange`, `kind="sequential"` |
@@ -123,7 +123,7 @@ the filter is started in four ways, and each is scored by how many rows it
 puts in the state that generated them.
 
 **No stream in this first experiment switched regime.**
-`po.sim.regimes` draws one state per block, and with ten blocks at a 1 %
+`rp.sim.regimes` draws one state per block, and with ten blocks at a 1 %
 chance per block of leaving state 0, every block of all eight seeds stayed
 there. So the first results table gives the share of rows the filter puts
 in that one true state. [The switch experiment](#through-a-switch) makes
@@ -131,7 +131,7 @@ the streams switch.
 
 | condition | value |
 |---|---|
-| streams | 8 seeds of `po.sim.regimes`: two series, 10 blocks of 400 rows, 4000 rows each, differenced into 3999 returns |
+| streams | 8 seeds of `rp.sim.regimes`: two series, 10 blocks of 400 rows, 4000 rows each, differenced into 3999 returns |
 | states drawn | correlation 0.1 and 0.8, under the sticky transition matrix `[[0.99, 0.01], [0.02, 0.98]]` |
 | states realized | state 0, at correlation 0.1, in every block of every seed |
 | the filter | `k = 2`, `half_life = 4000`, and `precision_prior = 0.01` except in the last row |
@@ -182,7 +182,7 @@ which agrees with either state within a row or two.
 
 | condition | value |
 |---|---|
-| streams | 8 seeds of `po.sim.regimes` with `durations=[3, 3]`: two series, 12 blocks of 400 rows, 4799 returns each, switching at rows 1200, 2400 and 3600, 24 switches in all |
+| streams | 8 seeds of `rp.sim.regimes` with `durations=[3, 3]`: two series, 12 blocks of 400 rows, 4799 returns each, switching at rows 1200, 2400 and 3600, 24 switches in all |
 | the filter | as above, but the true start's transition is the per-row hazard `1/1200` |
 | the score | the share of rows in the true state, a row with no `filtered_state1` counted as a miss; and the rows after each switch until the filter holds the new state for 20 rows |
 
@@ -334,7 +334,7 @@ The size in §2 and the power in §3 are close to WKD's tables even so.
 
 ## 5. Two changepoint detectors on the same break
 
-Both detectors read the same 20 pairs of streams from `po.sim.regimes`,
+Both detectors read the same 20 pairs of streams from `rp.sim.regimes`,
 each stream three series of 2000 rows. In each pair, one stream keeps a
 correlation of 0.2 throughout, and the other breaks from 0.2 to 0.7 at row
 1000. A false alarm is an alarm on the quiet stream, and the delay is the
@@ -423,8 +423,8 @@ they read:
 
 | way out | what it reads | correlation |
 |---|---|---|
-| refresh-time sampling, `po.stream.refresh_time` | a grid point at the first row by which both series have ticked since the last point: 19157 returns, 16 % of the 119991 at the finest interval. On average a grid point kept 81 % of the ticks since the one before | 0.543 |
-| lag inversion, `ew_cov(lags=...)` read through `po.corr.epps_invert` | every one of the 119991 fine returns, with no grid: the correlation at a scale of `L` rows, from the lagged co-moments at one row | 0.772 at `L` = 192 |
+| refresh-time sampling, `rp.stream.refresh_time` | a grid point at the first row by which both series have ticked since the last point: 19157 returns, 16 % of the 119991 at the finest interval. On average a grid point kept 81 % of the ticks since the one before | 0.543 |
+| lag inversion, `ew_cov(lags=...)` read through `rheon.corr.epps_invert` | every one of the 119991 fine returns, with no grid: the correlation at a scale of `L` rows, from the lagged co-moments at one row | 0.772 at `L` = 192 |
 
 The lag inversion is read at 15 values of `L`, on this stream and on four
 more from the next seeds, so its noise is printed beside it:
@@ -471,8 +471,8 @@ between 0.2 and 0.6.
 
 | condition | value |
 |---|---|
-| streams | 8 seeds of `po.sim.regimes`: m = 5, `states=[0.2, 0.6]`, `durations=[3, 3]`, 12 blocks of 400 rows, 4799 returns each, 24 switches in all |
-| the model | `po.spec.deco` with the default `dynamics="ew"`, at half-lives of 25, 100 and 400 rows |
+| streams | 8 seeds of `rp.sim.regimes`: m = 5, `states=[0.2, 0.6]`, `durations=[3, 3]`, 12 blocks of 400 rows, 4799 returns each, 24 switches in all |
+| the model | `rheon.spec.deco` with the default `dynamics="ew"`, at half-lives of 25, 100 and 400 rows |
 | level | `rho` averaged over the last 200 rows of each stretch of one state |
 | rows to the midpoint | the rows after a switch until `rho` passes the midpoint of the two levels |
 
@@ -509,7 +509,7 @@ and 0.8, under four conditions:
 | clean | nothing: the returns are the latent ones |
 | noise | noise with a standard deviation of 0.5 on each observed level (`noise=0.5`), which makes each return an MA(1) with a negative first autocorrelation, −0.17 here |
 | noise, half observed, previous tick | the noise, and each series observed on half the rows (`async_rates=[0.5, 0.5]`), its last value carried forward within the block |
-| noise, half observed, refresh time | the same rows through `po.stream.refresh_time`, block by block |
+| noise, half observed, refresh time | the same rows through `rp.stream.refresh_time`, block by block |
 
 Each cell is the bias of the block's correlation, its standard error, and
 the root-mean-square error. There are 190 blocks: 10 seeds of 20 blocks,

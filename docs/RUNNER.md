@@ -1,8 +1,8 @@
 <!-- kind: reference -->
-# The `polars-online` command line
+# The `rheon` command line
 
 This reference page is for anyone who runs a model bank as a job with the
-`polars-online` program: it gives every flag and TOML key, the files a run
+`rheon` program: it gives every flag and TOML key, the files a run
 reads and writes, its exit status and its Rust entry points. A [model
 bank](GLOSSARY.md#the-model-bank-and-what-it-reads) is a set of models
 fitted together over the same rows. The [command
@@ -97,7 +97,7 @@ run that finishes.
 ends.** `ModelBank.fit` and `ModelBank.fit_predict_batches` take each
 chunk's closed rows out of the bank and hold them in the process. They
 write the file when the chunks stop, even when the run stops early or
-fails. `lf.online.fit_predict` writes it only after the bank has been fed
+fails. `lf.rheon.fit_predict` writes it only after the bank has been fed
 its last row, so a run that fails writes no file. Either way, memory grows
 with the number of groups that close, never with the rows. Without
 `closed_groups=`, a bank keeps its closed rows until `bank.closed_groups()`
@@ -111,7 +111,7 @@ A script can tell how a run ended from its exit status:
 | status | the run |
 |---|---|
 | 0 | finished, and wrote what it was asked for; or `--dry-run`, `--help` or `--version` printed its answer |
-| 1 | was refused or failed: a configuration, a state file or a value the bank refuses, or a file it cannot read or write. Standard error carries the message, led by `polars-online:` |
+| 1 | was refused or failed: a configuration, a state file or a value the bank refuses, or a file it cannot read or write. Standard error carries the message, led by `rheon:` |
 | 2 | could not parse its command line, such as a flag it does not know or a flag with its value missing. Standard error says what is wrong |
 
 **The summary goes to standard output, and everything else to standard
@@ -124,9 +124,9 @@ its own. It counts the groups whose last row was withheld, by
 `spec "ridge": 2 groups whose last row was withheld (below_min_weight 2); 1 group with support_coef_min < 0.5`.
 A spec with neither has no line, as in every run on this page.
 Standard error carries the progress line on a terminal, the timings
-`POLARS_ONLINE_TIMING=1` asks for, and the error of a run that fails. It also
+`RHEON_TIMING=1` asks for, and the error of a run that fails. It also
 carries the [readiness warnings](GLOSSARY.md#warm-up-and-readiness) about a
-model's warm-up, led by `polars-online:` as an error is. So read a failure from the exit status: a line on standard error does
+model's warm-up, led by `rheon:` as an error is. So read a failure from the exit status: a line on standard error does
 not mean the run failed.
 
 **Read a run's result from its exit status and the files it writes, never
@@ -151,7 +151,7 @@ output = "fitted.parquet"    # the input's columns, plus one column per spec
 
 [[specs]]                    # one table per spec
 name = "ridge"               # the name of the spec's output column
-targets = ["y"]              # or a table: { column = "p", name = "price" }, as po.target
+targets = ["y"]              # or a table: { column = "p", name = "price" }, as rp.target
 features = ["x0"]
 clock = "t"                  # the clock: how far apart two rows are, which half_life and gap_cap are measured in
 half_life = 500.0            # in units of t
@@ -175,7 +175,7 @@ A flag given on the command line wins over its key in the TOML file:
 | `--output-format` | `output_format` | how to write the output, from the same four |
 | `--output-layout` | `output_layout` | `struct` (the default) writes each spec as one output column; `flat` writes each of its fields as a `<spec>.<field>` column, as a CSV always is. Under `flat`, `--dry-run` names the output as `(parquet, flat)` |
 | `--chunk-size` | `chunk_size` | rows per chunk; 100,000 by default |
-| `--threads` | `threads` | the threads the bank runs on, a whole number from 1 to 1,024, or to the machine's core count where that is larger; left out, the bank's default number of threads, which `POLARS_ONLINE_MAX_THREADS` sets. The output is the same at any count |
+| `--threads` | `threads` | the threads the bank runs on, a whole number from 1 to 1,024, or to the machine's core count where that is larger; left out, the bank's default number of threads, which `RHEON_MAX_THREADS` sets. The output is the same at any count |
 | `--load-state` | `load_state` | start from a saved state |
 | `--skip-learned` | `skip_learned` | drop the input's rows the loaded state has learned, as `ModelBank.skip_learned` does; needs `--load-state` or `load_state`, and a spec that reads a clock. A run that keeps no row writes an output with no rows, and saves the state it loaded, byte for byte |
 | `--save-state` | `save_state` | save the state when the run ends, after the output is committed |
@@ -193,7 +193,7 @@ A flag given on the command line wins over its key in the TOML file:
 **A relative path in the TOML file is read from the file's own directory,
 and a relative path given as a flag from the working directory.** So a
 configuration runs the same from wherever a scheduler starts it, and
-`polars-online --config jobs/job.toml` reads `jobs/ticks.parquet`. A flag
+`rheon --config jobs/job.toml` reads `jobs/ticks.parquet`. A flag
 such as `--input today.parquet` names the file the shell sees, in the
 directory the command runs in. The input, the output, `load_state`,
 `save_state` and `closed_groups` all follow the rule.
@@ -279,7 +279,7 @@ two surfaces then write byte-identical specs, so a state saved from one
 resumes under the other.
 
 **The same file builds the same bank in Python.** `tomllib` reads each
-`[[specs]]` table as the dict a builder returns, and `po.ModelBank` takes
+`[[specs]]` table as the dict a builder returns, and `rp.ModelBank` takes
 the list as it comes. Here the bank is built from `job.toml`, in the
 directory where [a plain run](how-to/run-a-bank-from-the-command-line.md#run-a-bank-over-a-file) wrote `fitted.parquet`:
 
@@ -287,12 +287,12 @@ directory where [a plain run](how-to/run-a-bank-from-the-command-line.md#run-a-b
 import tomllib
 
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 with open("job.toml", "rb") as f:
-    bank = po.ModelBank(tomllib.load(f)["specs"])
+    bank = rp.ModelBank(tomllib.load(f)["specs"])
 # The spec a Python builder makes from the same keywords
-spec = po.spec.ewridge(
+spec = rp.spec.ewridge(
     "ridge", targets=["y"], features=["x0"], clock="t",
     half_life=500.0, gap_cap=300.0, min_weight=5.0,
 )
@@ -330,7 +330,7 @@ The formula is Polars' expression written as a tree: an operator, its
 input and its keywords. TOML has no null, so a null literal is written
 `["lit"]`. **This written form is labeled unstable**: it may change in any
 release without that counting as a breaking change, in the TOML file and
-in the state it is saved into. With `POLARS_ONLINE_WARN_UNSTABLE=1`, the
+in the state it is saved into. With `RHEON_WARN_UNSTABLE=1`, the
 command line says so on standard error. The formula target itself, what it
 computes and when its rows are released, is promised. `group_close` is
 refused beside a formula target, and so is `group` without `clock`.
@@ -373,7 +373,7 @@ explains how the three stages share a run's time.
 
 The bank's own work runs on threads of its own. `--threads N`, or a
 `threads` key in the TOML, which the flag overrides, gives it N threads.
-Without either, it runs on as many threads as `POLARS_ONLINE_MAX_THREADS`
+Without either, it runs on as many threads as `RHEON_MAX_THREADS`
 gives, one per core when that is unset. The count is not saved with the
 state, so a resumed run takes the one it is given, and the output is the
 same at any count. [Set the bank's thread
@@ -384,7 +384,7 @@ account, including Polars' own threads and how the two interact.
 
 `chunk_size` is a keyword on the command line (`--chunk-size`, or
 `chunk_size` in the TOML). It has the same meaning and the same default,
-100,000, as on `lf.online.fit_predict` and `ModelBank.fit_predict_batches`.
+100,000, as on `lf.rheon.fit_predict` and `ModelBank.fit_predict_batches`.
 It never changes the numbers: one chunk or a thousand gives the same
 output, and it only trades memory for overhead. Only which rows carry
 `coef`, and `support_coef` beside it, can differ, and only by default. The
@@ -419,13 +419,13 @@ with no output uses.
 ### Versioning
 
 The Rust Polars the command line carries is 0.55.2.
-`polars-online --version` prints three lines: the package's version, the
+`rheon --version` prints three lines: the package's version, the
 state schema its saved states are written in, and the Rust Polars it
 carries. `-V` prints the first line alone.
 
 The command line carries its own Rust Polars, so py-polars' version
 matters only to the Python calls that read a query, such as
-`lf.online.fit_predict` and `ModelBank.fit`. For those, the floor is
+`lf.rheon.fit_predict` and `ModelBank.fit`. For those, the floor is
 py-polars 1.37.0. They read their input with `LazyFrame.collect_batches`,
 which gives a query's result one chunk at a time.
 py-polars added it in 1.34.0, but before 1.37.0 it ran ahead of a slower

@@ -17,7 +17,7 @@ which here becomes a kernel in the feature.
 These steps need the library, numpy, and a stream with the feature to fit
 along:
 
-- polars-online installed, with numpy, which the example uses to make its
+- rheon installed with Polars, with numpy, which the example uses to make its
   data and to fit the straight line it compares against.
 - A numeric column to fit along. The rows must fit in memory to be sorted
   by it: a sort holds every row while it sorts.
@@ -55,7 +55,7 @@ root-mean-square distance from the curve, beside the best straight line's:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # 1,200 noisy points on sin(x), saved.
 rng = np.random.default_rng(1)
@@ -64,7 +64,7 @@ pl.DataFrame({"x": x, "y": np.sin(x) + 0.1 * rng.standard_normal(1200)}).write_p
 
 # A straight line fitted locally at a given bandwidth, over the points sorted by x.
 def local(bandwidth):
-    kernel = po.spec.ewridge(
+    kernel = rp.spec.ewridge(
         "kernel", targets=["y"], features=["x"],
         clock="x",                  # 2. the clock is a feature: the decay is a kernel in it
         half_life=bandwidth,        # 3. the bandwidth, in x's own units

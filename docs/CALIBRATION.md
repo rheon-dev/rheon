@@ -3,7 +3,7 @@
 
 This how-to is for anyone who fits a model bank and wants to choose a
 model's settings, such as its half-life, from the stream's own
-out-of-sample errors with `po.eval.grid_search`, and to report what that
+out-of-sample errors with `rp.eval.grid_search`, and to report what that
 choice earned. A model's settings say how long it remembers (`half_life`),
 how hard it shrinks (`ridge`), how fast its coefficients may move
 (`coef_half_life`, `learning_rate`) and how often it expects a regime to
@@ -13,7 +13,7 @@ end (`hazard`).
 
 These steps need the library, a stream in a file and a spec:
 
-- polars-online and numpy installed. Each recipe on this page generates
+- rheon, Polars and numpy installed. Each recipe on this page generates
   its own data, so none needs the [example data](EXAMPLE-DATA.md).
 - The stream saved as a file in clock order, to read back with
   `pl.scan_parquet` as a [query](GLOSSARY.md#the-model-bank-and-what-it-reads)
@@ -22,7 +22,7 @@ These steps need the library, a stream in a file and a spec:
   whose setting you choose, and the values of the setting to try: a
   [grid](GLOSSARY.md#grids).
 
-## Choose a half-life with `po.eval.grid_search`
+## Choose a half-life with `rp.eval.grid_search`
 
 Use this for any setting a spec takes as a list: `half_life` on every
 model that decays, `ridge` and `feature_sets` on `ewridge`, and
@@ -37,7 +37,7 @@ judged by its residuals on rows it had not yet seen.
    value, for five half-lives on one thread ([How a grid shares its
    work](explanation/grids-and-instances.md#how-a-grid-shares-its-work)
    gives the measurement and the reason).
-2. **Pass the query and the spec to `po.eval.grid_search`.** It runs one
+2. **Pass the query and the spec to `rp.eval.grid_search`.** It runs one
    bank over the query, reading the file once. It cuts the rows into
    `n_splits` test spans, 5 by default, and before each span chooses from
    the rows before it. It returns a frame with a row for each
@@ -56,7 +56,7 @@ This code chooses a half-life for a stream whose coefficient wanders:
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # y = b x0 + 0.5 x1 + noise, where b wanders as a slow random walk.
 rng = np.random.default_rng(9)
@@ -66,12 +66,12 @@ b = 1.0 + np.cumsum(rng.normal(0, 0.01, n))
 pl.DataFrame({"t": np.arange(n, dtype=float), "x0": x0, "x1": x1, "y": b * x0 + 0.5 * x1 + e}).write_parquet("wander.parquet")
 
 # 1. One spec, five half-lives: a grid, one fit per half-life, from the same rows.
-grid = po.spec.ewridge(
+grid = rp.spec.ewridge(
     "grid", targets=["y"], features=["x0", "x1"], clock="t", gap_cap=5.0,
     half_life=[25.0, 100.0, 400.0, 1_600.0, 6_400.0],
 )
 # 2. Each half-life scored on the rows it had not seen, in one pass; five spans, each chosen from the rows before it.
-table = po.eval.grid_search(pl.scan_parquet("wander.parquet"), grid)
+table = rp.eval.grid_search(pl.scan_parquet("wander.parquet"), grid)
 
 # 3. Each half-life's error, its rank, and how often the rows before a span chose it.
 for half_life, mse, rank, chosen in table.filter(kind="candidate").select("half_life", "mse", "rank", "folds_chosen").iter_rows():
@@ -97,10 +97,10 @@ span chose 100, so the error of the choice and the error of rank 1 agree.
 the best error over the rows you report belongs to the grid point whose
 noise ran lowest ([Why the best error over a grid is
 optimistic](explanation/grids-and-instances.md#why-the-best-error-over-a-grid-is-optimistic)).
-`po.eval.grid_search` cuts the rows into spans as scikit-learn's
+`rp.eval.grid_search` cuts the rows into spans as scikit-learn's
 `TimeSeriesSplit(n_splits)` does, and scores every grid point on the same
 rows. Its
-[docstring](https://hgilde.github.io/polars-online/eval.html#rheon.eval.grid_search)
+[docstring](https://rheon-dev.github.io/rheon/eval.html#rheon.eval.grid_search)
 gives the cut, every keyword and every column of the table it returns.
 The `kind` column says what each row of the table is:
 
@@ -127,11 +127,11 @@ grid), `sgd`'s `learning_rate`, `holt`'s `trend_half_life` and `bocpd`'s
 
 1. **Build a spec builder with `functools.partial`,** giving it the
    keywords every spec shares.
-2. **Give `po.eval.grid_search` the builder, and a `param_grid` of the
+2. **Give `rp.eval.grid_search` the builder, and a `param_grid` of the
    values to try.** It builds one spec per grid point and fits them all in
    one bank, which reads the file once.
 3. **Read the table as in [step 3 and step
-   4](#choose-a-half-life-with-poevalgrid_search)** of the half-life
+   4](#choose-a-half-life-with-rpevalgrid_search)** of the half-life
    search.
 
 [Search the rate from the stream's own
@@ -148,29 +148,29 @@ targets were not yet known at the span's start.
 1. **Make the target a column of the stream,** with `with_windows` or
    `with_columns` in the query, as [Make the target a column before the
    bank](how-to/make-a-target-that-looks-ahead.md#make-the-target-a-column-before-the-bank)
-   shows. `po.eval.grid_search` scores a spec's target against its column,
+   shows. `rp.eval.grid_search` scores a spec's target against its column,
    and a [formula target](GLOSSARY.md#fitting-a-model) has none, so a spec
    that gives one is refused.
 2. **Count the most rows any target looks ahead.** For a target defined
    by rows, that is its count of rows. For a target defined by time, it
    is the most rows its window spans.
-3. **Pass that count as `gap=` to `po.eval.grid_search`.** It leaves those
+3. **Pass that count as `gap=` to `rp.eval.grid_search`.** It leaves those
    rows out between the rows a choice reads and the span it is scored on.
 4. **Read the table as in [step 3 and step
-   4](#choose-a-half-life-with-poevalgrid_search)** of the half-life
+   4](#choose-a-half-life-with-rpevalgrid_search)** of the half-life
    search.
 
 ## Choose each setting
 
 Each recipe plants a truth, searches its setting with
-`po.eval.grid_search`, and prints the error of each value and of the
+`rp.eval.grid_search`, and prints the error of each value and of the
 choice. `pa`'s `c` and `ftrl`'s `alpha` can be searched as `learning_rate`
 is, but [Choose a learning rate](how-to/choose-a-learning-rate.md) has no
 recipe that searches them, and sets each from what it means instead.
 
 | setting | model | searched as | how-to |
 |---|---|---|---|
-| `half_life` | every model that decays | a list in one spec | [Choose a half-life](#choose-a-half-life-with-poevalgrid_search) |
+| `half_life` | every model that decays | a list in one spec | [Choose a half-life](#choose-a-half-life-with-rpevalgrid_search) |
 | `ridge` | `ewridge` | a list in one spec | [Choose a ridge and a half-life](how-to/choose-a-ridge-and-half-life.md#choose-a-ridge) |
 | `ridge` and `half_life` | `ewridge` | both lists in one spec | [Choose a ridge and a half-life](how-to/choose-a-ridge-and-half-life.md#choose-the-ridge-and-the-half-life-together) |
 | `coef_half_life` | `kalman` | one spec per value | [Choose a Kalman filter's drift speed](how-to/choose-a-kalman-drift-speed.md#choose-the-speeds-from-the-streams-own-errors) |
@@ -184,8 +184,8 @@ recipe that searches them, and sets each from what it means instead.
 
 `kmeans`' `n_clusters`, `hmm`'s `n_components` and `huber_delta` have no
 out-of-sample score this pattern can choose them by: the Notes of
-[`po.eval.grid_search`'s
-docstring](https://hgilde.github.io/polars-online/eval.html#rheon.eval.grid_search)
+[`rp.eval.grid_search`'s
+docstring](https://rheon-dev.github.io/rheon/eval.html#rheon.eval.grid_search)
 give the reason for each, and what to do instead.
 
 ## Check that it worked

@@ -28,9 +28,9 @@ fit's residuals: a [refit](../GLOSSARY.md#fitting-a-model).
 
 `huber_delta`, `huber_scale`, `huber_scale_half_life`, `huber_refit_rows`,
 `quantile_refit_rows` and `refit_budget` are defined in the docstrings of
-[`po.spec.huber`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.huber),
-[`po.spec.quantile`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.quantile)
-and [`po.spec.sgd`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.sgd).
+[`rheon.spec.huber`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.huber),
+[`rheon.spec.quantile`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.quantile)
+and [`rheon.spec.sgd`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.sgd).
 Each model's update is in its entry in MODELS.md:
 [`huber`](../MODELS.md#huber--robust-regression),
 [`quantile`](../MODELS.md#quantile--robust-regression) and
@@ -176,7 +176,7 @@ This code fits one such stream of 2,000 rows, at about
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # y = 1000 + 2x plus noise, with about 12.5% of the rows 50 too high, all where x is above 0.
 rng = np.random.default_rng(6)
@@ -190,11 +190,11 @@ pl.DataFrame({"x": x, "y": y}).write_parquet("captured.parquet")
 # Least squares, and huber in one pass and with its refit, every row weighed the same.
 common = dict(targets=["y"], features=["x"], half_life=float("inf"))
 specs = [
-    po.spec.ewridge("least_squares", **common),
-    po.spec.huber("one_pass", huber_refit_rows=0, **common),  # no refit
-    po.spec.huber("refit", **common),                         # the first 500 rows refit, the default
+    rp.spec.ewridge("least_squares", **common),
+    rp.spec.huber("one_pass", huber_refit_rows=0, **common),  # no refit
+    rp.spec.huber("refit", **common),                         # the first 500 rows refit, the default
 ]
-bank = po.ModelBank(specs)
+bank = rp.ModelBank(specs)
 bank.fit(pl.scan_parquet("captured.parquet"))
 # Each fit's slope, beside the truth.
 print(f"outliers: {wild.mean():.1%}; the true slope: 2")

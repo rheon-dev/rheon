@@ -8,19 +8,19 @@ stream, the `lasso` model picks its penalty as it runs: you set the
 `penalties` to try, how the penalty in force is ranked
 (`select_half_life`), and how many sweeps each descent may take
 (`max_iter`). From a [Gram](../GLOSSARY.md#fitting-a-model), you walk the
-path knot by knot with `po.gram.lars_path`, and choose a penalty by its
-error on weeks held out with `po.gram.lasso_path`. A knot is a penalty at
+path knot by knot with `rheon.gram.lars_path`, and choose a penalty by its
+error on weeks held out with `rheon.gram.lasso_path`. A knot is a penalty at
 which the set of columns with a coefficient other than 0 changes.
 
 ## Prerequisites
 
 These steps need the library:
 
-- polars-online installed with numpy, an optional extra, which
-  `pip install "polars-online[numpy]"` adds. Each recipe builds its own
+- rheon installed with Polars and numpy, an optional extra, which
+  `pip install "rheon[polars,numpy]"` adds. Each recipe builds its own
   data and saves it to a parquet file.
 - For the model, the parameters of
-  [`po.spec.lasso`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.lasso),
+  [`rheon.spec.lasso`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.lasso),
   which its docstring defines. Its entry in
   [MODELS.md](../MODELS.md#lasso--lasso-path-its-penalty-chosen-as-it-runs)
   gives its update equation.
@@ -61,7 +61,7 @@ own data:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # 10 features, of which only x0, x1 and x2 carry weight in y; y10 is ten times y.
 rng = np.random.default_rng(3)
@@ -75,11 +75,11 @@ pl.DataFrame(x, schema=names).with_columns(y=y, y10=10 * y).write_parquet("spars
 penalties = [0.3, 0.1, 0.03]
 common = dict(features=names, half_life=float("inf"))
 specs = [
-    po.spec.lasso("fit_y", targets=["y"], penalties=penalties, **common),
-    po.spec.lasso("same_on_y10", targets=["y10"], penalties=penalties, **common),
-    po.spec.lasso("scaled_on_y10", targets=["y10"], penalties=[10 * p for p in penalties], **common),
+    rp.spec.lasso("fit_y", targets=["y"], penalties=penalties, **common),
+    rp.spec.lasso("same_on_y10", targets=["y10"], penalties=penalties, **common),
+    rp.spec.lasso("scaled_on_y10", targets=["y10"], penalties=[10 * p for p in penalties], **common),
 ]
-bank = po.ModelBank(specs)
+bank = rp.ModelBank(specs)
 bank.fit(pl.scan_parquet("sparse.parquet"))
 
 # The features each fit keeps at each penalty.
@@ -121,7 +121,7 @@ the model's half-life.
    the first recipe's `penalties` and `common`:
 
 ```python
-steady = po.spec.lasso("steady", targets=["y"], penalties=penalties, select_half_life=float("inf"), **common)
+steady = rp.spec.lasso("steady", targets=["y"], penalties=penalties, select_half_life=float("inf"), **common)
 ```
 
 ## Give a larger `max_iter` when a descent runs out
@@ -135,7 +135,7 @@ short of the lasso's solution.
 
 **If `bank.solve_failures()` counts a descent that ran out of its
 `max_iter` sweeps, give a larger `max_iter`.** Columns that nearly repeat
-each other slow the descent most. The Notes of `po.spec.lasso`'s
+each other slow the descent most. The Notes of `rheon.spec.lasso`'s
 docstring, under *The descent*, measure how many sweeps they take.
 
 1. **Read `bank.solve_failures()` after a fit.** For `lasso` it counts each
@@ -161,9 +161,9 @@ y = 2.0 * x[:, 0] - 1.5 * x[:, 2] + 1.0 * x[:, 3] + rng.standard_normal(n)
 pl.DataFrame(x, schema=names).with_columns(y=y).write_parquet("repeats.parquet")
 
 # The same lasso at three caps on its sweeps.
-specs = [po.spec.lasso(f"max_iter_{m}", targets=["y"], penalties=penalties, max_iter=m, **common)
+specs = [rp.spec.lasso(f"max_iter_{m}", targets=["y"], penalties=penalties, max_iter=m, **common)
          for m in (100, 1_000, 10_000)]
-bank = po.ModelBank(specs)
+bank = rp.ModelBank(specs)
 bank.fit(pl.scan_parquet("repeats.parquet"))
 for spec, failures in bank.solve_failures().select("spec", "solve_failures").iter_rows():
     print(f"{spec:>14}: {failures} descents ran out of sweeps")
@@ -182,14 +182,14 @@ At the default of 100 sweeps, thousands of descents stop short. At
 
 Use this to choose columns after the pass, from the Grams it left, on any
 set of weeks. A knot is a penalty at which the set of active columns,
-those whose coefficient is not 0, changes. `po.gram` follows the lasso
+those whose coefficient is not 0, changes. `rheon.gram` follows the lasso
 path two ways, and each suits a different question:
 
-| | `po.gram.lars_path`, and `po.gram.lars_paths` for many Grams | `po.gram.lasso_path` |
+| | `rheon.gram.lars_path`, and `rheon.gram.lars_paths` for many Grams | `rheon.gram.lasso_path` |
 |---|---|---|
 | computes | each knot exactly, from the largest penalty down, by least angle regression | the solution at each penalty given, each started from the one before, by coordinate descent |
 | stops | after `max_iter` knots past its first, or at the first knot with at least `max_active` columns active | at the last penalty |
-| time | 4 ms for the whole path, 201 knots, at 200 columns. [`po.gram.lars_path`'s docstring](https://hgilde.github.io/polars-online/gram.html#rheon.gram.lars_path) gives 0.2 ms for 40 knots at 200 columns, and 3 ms at 2,000 | 3 to 8 ms for 25 penalties at 200 columns |
+| time | 4 ms for the whole path, 201 knots, at 200 columns. [`rheon.gram.lars_path`'s docstring](https://rheon-dev.github.io/rheon/gram.html#rheon.gram.lars_path) gives 0.2 ms for 40 knots at 200 columns, and 3 ms at 2,000 | 3 to 8 ms for 25 penalties at 200 columns |
 | takes | `penalty_weights=`, a scale above 0 on each column's penalty | `penalty_weights=`, where a weight of 0 keeps a column in the fit at every penalty, and an elastic net (`l1_ratio` below 1) |
 | use it for | the first columns to enter: a selection, and [stability selection](select-columns-stably-over-weeks.md) | a penalty chosen by held-out error, an elastic net, a column that must stay in |
 
@@ -197,13 +197,13 @@ The times were measured on 14 cores at a load average near 12, the number
 of processes running or waiting to run, averaged over a minute.
 
 1. **Pool the weeks to fit on, and the weeks held out, with
-   `po.gram.merge`.**
-2. **Walk the path from its start with `po.gram.lars_path(train,
+   `rheon.gram.merge`.**
+2. **Walk the path from its start with `rheon.gram.lars_path(train,
    max_active=8)`.** It returns the `penalties` at each knot, the `active`
    columns there, and the `coef` at each knot, the intercept first.
 3. **Read the order in which the columns enter.** The first to enter are
    the ones the lasso chooses.
-4. **Run `po.gram.lasso_path(train, grid)` on a grid of penalties,** from
+4. **Run `rheon.gram.lasso_path(train, grid)` on a grid of penalties,** from
    the first knot's down a thousandfold.
 5. **Score each row of the grid on the held-out Gram.**
 6. **Keep the penalty with the lowest held-out error.**
@@ -220,7 +220,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # 40 weeks, a row every 20 minutes. 200 features in 40 families of five that share a factor, so
 # two features of one family correlate at 0.5. y depends on six of them, and x25's coefficient is
@@ -240,11 +240,11 @@ pl.DataFrame({"ts": ts, **dict(zip(features, x.T)), "y": y}).write_parquet("week
 
 # One pass over the file leaves a Gram per week. The week is a column made in the query.
 lf = pl.scan_parquet("weeks.parquet").with_columns(week=pl.col("ts").dt.truncate("1w"))
-spec = po.spec.ewridge(
+spec = rp.spec.ewridge(
     "blocks", targets=["y"], features=features, group="week",
     half_life=float("inf"), solve_every=float("inf"), target_gaps="pairwise", gram_block_rows=256,
 )
-bank = po.ModelBank([spec])
+bank = rp.ModelBank([spec])
 bank.fit(lf)  # learns from every row, and keeps only the state
 blocks = bank.gram("blocks")  # one dict per week, oldest first
 
@@ -259,26 +259,26 @@ def mean_squared_error(g, coef):
 
 
 # 1. Fit on four weeks, judge on the other 36.
-train, held_out = po.gram.merge(blocks[:4]), po.gram.merge(blocks[4:])
+train, held_out = rp.gram.merge(blocks[:4]), rp.gram.merge(blocks[4:])
 print(f"x25's coefficient: {b25[:4].mean():.2f} on average over these four weeks, {b25.mean():.3f} over all forty")
 
 # 2 and 3. LARS: the path from its start, knot by knot, to the first knot with at least eight columns active.
-path = po.gram.lars_path(train, max_active=8)
+path = rp.gram.lars_path(train, max_active=8)
 active = []
 for penalty, now in zip(path["penalties"], path["active"]):
     change = [f"+{c}" for c in now if c not in active] + [f"-{c}" for c in active if c not in now]
     print(f"knot at penalty {penalty:.4f}: {' '.join(change)}")
     active = now
-cd = po.gram.lasso_path(train, path["penalties"], tol=1e-12)  # coordinate descent at the knots
+cd = rp.gram.lasso_path(train, path["penalties"], tol=1e-12)  # coordinate descent at the knots
 print(f"coordinate descent at the knots, against LARS: within 1e-9: {np.abs(cd - path['coef']).max() < 1e-9}")
 
 # 4 to 6. Coordinate descent on 25 penalties, from the first knot's down a thousandfold, scored on the 36 weeks.
 grid = np.geomspace(path["penalties"][0], path["penalties"][0] / 1_000, 25)
-fits = po.gram.lasso_path(train, grid)
+fits = rp.gram.lasso_path(train, grid)
 errors = [mean_squared_error(held_out, coef) for coef in fits]
 best = int(np.argmin(errors))
 print(f"the best penalty, {grid[best]:.4f}: {np.count_nonzero(fits[best][1:])} columns, held-out error {errors[best]:.4f}")
-print(f"least squares on the same four weeks: held-out error {mean_squared_error(held_out, po.gram.solve(train)):.4f}")
+print(f"least squares on the same four weeks: held-out error {mean_squared_error(held_out, rp.gram.solve(train)):.4f}")
 ```
 
 ```text
@@ -317,11 +317,11 @@ check that the features it keeps are the ones you expect to matter.
 example](../MODELS.md#lasso--lasso-path-its-penalty-chosen-as-it-runs)
 reads them that way.
 
-**On a Gram, check coordinate descent against `po.gram.lars_path` at the
+**On a Gram, check coordinate descent against `rheon.gram.lars_path` at the
 knots,** as the recipe of [Choose columns on a Gram's lasso
 path](#choose-columns-on-a-grams-lasso-path) does: at a knot, least angle
 regression gives the lasso's coefficients exactly, and coordinate descent
 reaches them to its tolerance. If a `ReadinessWarning` names a penalty
 whose descent ran out of sweeps, that penalty's row is where the descent
-stopped: give `po.gram.lasso_path` a larger `max_iter`, or take the knots
-from `po.gram.lars_path`.
+stopped: give `rheon.gram.lasso_path` a larger `max_iter`, or take the knots
+from `rheon.gram.lars_path`.

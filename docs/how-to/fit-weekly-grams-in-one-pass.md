@@ -14,9 +14,9 @@ rows](../GRAM.md#how-a-gram-stands-in-for-the-rows) explains why.
 
 These steps need the library, numpy and a column that names each block:
 
-- polars-online installed with numpy, an optional extra, which
-  `pip install "polars-online[numpy]"` adds. `bank.gram(spec)` returns
-  numpy arrays, and `po.gram` fits from them.
+- rheon installed with Polars and numpy, an optional extra, which
+  `pip install "rheon[polars,numpy]"` adds. `bank.gram(spec)` returns
+  numpy arrays, and `rheon.gram` fits from them.
 - [Example data](../EXAMPLE-DATA.md) built. The
   example reads `lf`, a
   [query](../GLOSSARY.md#the-model-bank-and-what-it-reads) over
@@ -40,8 +40,8 @@ them.
    no output.
 4. **Read the Grams with `bank.gram(name)`,** one dict of numpy arrays per
    block, oldest first.
-5. **Pool the blocks you want with `po.gram.merge`,** and fit with
-   `po.gram.solve`. `po.gram.coef_stats` gives each coefficient's t.
+5. **Pool the blocks you want with `rheon.gram.merge`,** and fit with
+   `rheon.gram.solve`. `rheon.gram.coef_stats` gives each coefficient's t.
 
 Here one pass over `lf` leaves eight hourly Grams of its five features.
 Pooled, they give least squares on all 400 rows, near the truth
@@ -51,22 +51,22 @@ call. This code uses `lf` from [Example data](../EXAMPLE-DATA.md):
 ```python
 # 1 to 3. One Gram per hour, from one pass.
 features = ["x0", "x1", "x2", "signal_a", "signal_b"]
-hours = po.spec.ewridge(
+hours = rp.spec.ewridge(
     "hours", targets=["y"], features=features, group="hour",   # a Gram per hour
     half_life=float("inf"), solve_every=float("inf"),          # least squares' sums; solved only on the first rows
 )
-bank = po.ModelBank([hours])
+bank = rp.ModelBank([hours])
 bank.fit(lf.with_columns(hour=pl.col("ts").dt.truncate("1h")))   # the hour, made in the query
 hourly = bank.gram("hours")                 # 4. one dict of numpy arrays per hour, oldest first
 
 # 5. Pool every hour into one fit.
-pooled = po.gram.merge(hourly)              # the Gram of all the hours' rows
-coef = po.gram.solve(pooled)                # least squares: the intercept, then the features
-t = po.gram.coef_stats(pooled, coef)["t"]   # and each coefficient's t
+pooled = rp.gram.merge(hourly)              # the Gram of all the hours' rows
+coef = rp.gram.solve(pooled)                # least squares: the intercept, then the features
+t = rp.gram.coef_stats(pooled, coef)["t"]   # and each coefficient's t
 print(f"{len(hourly)} hourly Grams, pooled over {pooled['weight_sum']:.0f} rows")
 for name, b, tb in zip(pooled["columns"], coef, t):
     print(f"{name:>9} {b:+.2f}  t {tb:+6.1f}")
-morning = po.gram.solve(po.gram.merge(hourly[:3]), features=["x0", "x1"])   # any hours, any columns, from the same pass
+morning = rp.gram.solve(rp.gram.merge(hourly[:3]), features=["x0", "x1"])   # any hours, any columns, from the same pass
 print("x0 and x1 before 12:00:", " ".join(f"{b:+.2f}" for b in morning[1:3]))
 ```
 
@@ -105,7 +105,7 @@ with the week as the block and these settings:
 3. **Run the pass with `bank.fit`.**
 4. **Read the Grams with `bank.gram(name)`,** one dict per week, oldest
    first.
-5. **Pool them with `po.gram.merge`.**
+5. **Pool them with `rheon.gram.merge`.**
 
 **A block's Gram has `k²` entries, whatever its rows.**
 A week of 504 rows at 201 columns has a co-moment matrix of 323,208
@@ -132,7 +132,7 @@ same rows, or the rows a target misses do not depend on the features'
 values.** Under the default `target_gaps="own_rows"`, a block can hold
 several Grams: a target that is missing on rows where another is present
 gets a Gram of its own, one per pattern of gaps, each naming its
-`targets`, and `po.gram.merge` refuses parts whose targets differ. With
+`targets`, and `rheon.gram.merge` refuses parts whose targets differ. With
 the default, pool each set of targets' Grams across the weeks, those with
 the same `targets`. MODELS.md's
 [`ewridge`](../MODELS.md#ewridge--exponentially-weighted-ridge-regression)
@@ -149,7 +149,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # 40 weeks, a row every 20 minutes. 200 features in 40 families of five that share a factor, so
 # two features of one family correlate at 0.5. y depends on six of them, and x25's coefficient is
@@ -169,11 +169,11 @@ pl.DataFrame({"ts": ts, **dict(zip(features, x.T)), "y": y}).write_parquet("week
 
 # 1 to 3. One pass over the file leaves a Gram per week. The week is a column made in the query.
 lf = pl.scan_parquet("weeks.parquet").with_columns(week=pl.col("ts").dt.truncate("1w"))
-spec = po.spec.ewridge(
+spec = rp.spec.ewridge(
     "blocks", targets=["y"], features=features, group="week",
     half_life=float("inf"), solve_every=float("inf"), target_gaps="pairwise", gram_block_rows=256,
 )
-bank = po.ModelBank([spec])
+bank = rp.ModelBank([spec])
 bank.fit(lf)  # learns from every row, and keeps only the state
 blocks = bank.gram("blocks")  # 4. one dict per week, oldest first
 
@@ -184,9 +184,9 @@ print(f"weight_sum {first['weight_sum']:.0f} and n_kish {first['n_kish']:.0f}: i
 print(f"comoments {first['comoments'].shape}: {first['comoments'].nbytes:,} bytes a block")
 
 # 5. Pool the forty weeks, and fit with standard errors as if on the rows.
-pooled = po.gram.merge(blocks)  # the Gram of all 20,160 rows
-coef = po.gram.solve(pooled)  # least squares: the intercept, then x0 .. x199
-stats = po.gram.coef_stats(pooled, coef)  # its standard errors and t
+pooled = rp.gram.merge(blocks)  # the Gram of all 20,160 rows
+coef = rp.gram.solve(pooled)  # least squares: the intercept, then x0 .. x199
+stats = rp.gram.coef_stats(pooled, coef)  # its standard errors and t
 # Each planted coefficient beside its estimate.
 columns = pooled["columns"]
 print(f"pooled over {pooled['weight_sum']:,.0f} rows:")
@@ -247,9 +247,9 @@ hundreds of features](#keep-weekly-grams-of-hundreds-of-features) checks.
 
 | what you see | what it means | what to do |
 |---|---|---|
-| `po.gram.merge` refuses parts whose targets differ | under `target_gaps="own_rows"` a block holds a Gram per pattern of gaps | pool the Grams with the same `targets`, or give `target_gaps="pairwise"` where its condition holds |
+| `rheon.gram.merge` refuses parts whose targets differ | under `target_gaps="own_rows"` a block holds a Gram per pattern of gaps | pool the Grams with the same `targets`, or give `target_gaps="pairwise"` where its condition holds |
 | the pass runs out of memory | the bank holds a `k²` Gram for every block it has seen | make the week an integer with `.dt.date().cast(pl.Int32)`, give `group_close="monotone"`, loop over `bank.fit_predict_batches(lf)` and write `bank.closed_groups()` to a file of its own after each chunk, so the process holds only the weeks of one chunk at a time ([Close groups and read each one's row](close-groups.md), [Read Grams from saved files](read-grams-from-saved-files.md)) |
-| `bank.coef()` differs from `po.gram.solve` on the Gram | `bank.coef()` is as of the solve on each target's first rows | solve the Gram with `po.gram.solve` |
+| `bank.coef()` differs from `rheon.gram.solve` on the Gram | `bank.coef()` is as of the solve on each target's first rows | solve the Gram with `rheon.gram.solve` |
 
 ## Go on from the Grams
 

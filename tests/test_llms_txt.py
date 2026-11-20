@@ -47,7 +47,8 @@ KINDS = set(_native.model_kinds())
 def test_it_names_no_model_that_does_not_exist():
     """A hallucinated builder in the file that exists to prevent hallucination
     would be the worst of both."""
-    named = set(re.findall(r"po\.spec\.([a-z_]+)", TEXT))
+    named = set(re.findall(r"(?:rp|rheon)\.spec\.([a-z_]+)", TEXT))
+    assert named, "llms.txt names no builder as rp.spec.<name> or rheon.spec.<name>"
     assert named <= BUILDERS, f"llms.txt names {sorted(named - BUILDERS)}"
     quoted_types = set(re.findall(r'type = "([a-z_]+)"', TEXT))
     assert quoted_types <= KINDS, f"llms.txt quotes {sorted(quoted_types - KINDS)}"
@@ -61,20 +62,22 @@ def test_it_says_how_many_models_there_are():
 
 
 def test_every_builder_is_its_spec_type():
-    """`po.spec.ewridge` builds what a spec dict calls `ewridge`, as every
+    """`rp.spec.ewridge` builds what a spec dict calls `ewridge`, as every
     builder builds its own name (docs/PLAN.md task 196, N1): `ew_ridge` was
     the one pair spelled two ways, and an agent that got it wrong wrote a
     TOML that was refused. The map says the spellings agree."""
     differ = {b for b in BUILDERS if b not in KINDS}
     assert differ == set(), f"a name now differs: {sorted(differ)}"
-    assert "po.spec.ewridge" in TEXT
+    assert "rp.spec.ewridge" in TEXT
     assert 'type = "ewridge"' in TEXT
 
 
 def test_every_repository_link_resolves():
     """Links into the repo are absolute (the file is served from two places),
     so nothing here can follow them -- but the path they end in is local."""
-    for link in re.findall(r"https://github\.com/hgilde/polars-online/blob/main/(\S+?)\)", TEXT):
+    links = re.findall(r"https://github\.com/rheon-dev/rheon/blob/main/(\S+?)\)", TEXT)
+    assert len(links) > 20, "the repository links were not found"
+    for link in links:
         path, _, anchor = link.partition("#")
         assert (ROOT / path).exists(), f"llms.txt links to a missing file: {path}"
         if anchor:
@@ -89,13 +92,15 @@ def test_every_readme_anchor_exists():
         re.sub(r"\s", "-", re.sub(r"[^\w\s-]", "", h.strip().lower()))
         for h in re.findall(r"^#{1,6}\s+(.*?)\s*$", readme, flags=re.MULTILINE)
     }
-    for anchor in re.findall(r"https://github\.com/hgilde/polars-online#([\w-]+)\)", TEXT):
+    for anchor in re.findall(r"https://github\.com/rheon-dev/rheon#([\w-]+)\)", TEXT):
         assert anchor == "readme" or anchor in headings, f"llms.txt links to #{anchor}"
 
 
 def test_every_reference_page_is_built():
     """A link to `<name>.html` needs `docs/reference/<name>.rst` to exist."""
-    for page in re.findall(r"https://hgilde\.github\.io/polars-online/([\w-]+)\.html", TEXT):
+    pages = re.findall(r"https://rheon-dev\.github\.io/rheon/([\w-]+)\.html", TEXT)
+    assert pages, "the reference links were not found"
+    for page in pages:
         assert (ROOT / "docs" / "reference" / f"{page}.rst").exists(), f"no rst for {page}.html"
 
 

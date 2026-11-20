@@ -11,7 +11,7 @@ one you planted.
 
 The recipe builds its own data, so these steps need only:
 
-- polars-online installed, and numpy, which the recipe uses to make up its
+- rheon installed with Polars, and numpy, which the recipe uses to make up its
   rows.
 - For your own data, a two-stage pipeline: a first-stage
   [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads) whose residual
@@ -72,7 +72,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # A quote a second for 17 hours. mid = p + u: p is a random walk (the efficient price) and u a
 # transient that halves every 30 s. Three reference series s1-s3 follow p, each with noise of its own; none
@@ -96,17 +96,17 @@ pl.DataFrame({"ts": ts, "mid": p + u, "s1": s[0], "s2": s[1], "s3": s[2]}).write
 clock = dict(clock="ts", gap_cap="5m")
 back = dict(half_life="10m", window_size="60m")
 windows = pl.scan_parquet("quotes.parquet").rheon.with_windows(
-    A=pl.col("mid") - po.ewm_mean("mid", **back),
-    x1=pl.col("s1") - po.ewm_mean("s1", **back),
-    x2=pl.col("s2") - po.ewm_mean("s2", **back),
-    x3=pl.col("s3") - po.ewm_mean("s3", **back),
+    A=pl.col("mid") - rp.ewm_mean("mid", **back),
+    x1=pl.col("s1") - rp.ewm_mean("s1", **back),
+    x2=pl.col("s2") - rp.ewm_mean("s2", **back),
+    x3=pl.col("s3") - rp.ewm_mean("s3", **back),
     **clock,
 )
-fair = po.spec.ewridge("fair", targets=["A"], features=["x1", "x2", "x3"], half_life="2h", **clock)
+fair = rp.spec.ewridge("fair", targets=["A"], features=["x1", "x2", "x3"], half_life="2h", **clock)
 
 # Stage 2, reversion: the next 150 s's 30-second EWMA of the mid, less the mid, regressed on
 # resid_A. Each row is learned once its window has closed (embargo), and its residuals overlap.
-fwd = (po.ewm_mean("mid", half_life="30s", window_size="150s", reverse=True) - pl.col("mid")).alias("B")
+fwd = (rp.ewm_mean("mid", half_life="30s", window_size="150s", reverse=True) - pl.col("mid")).alias("B")
 settings = dict(
     targets=[fwd], half_life=float("inf"), embargo="150s", min_weight=1_000.0,
     emit_se_coef=True, emit_robust_se=True,                # 2.
@@ -114,9 +114,9 @@ settings = dict(
     emit_calibration=True,  # 1. B on pred: a slope of 1 says the coefficient needs no rescaling
     **clock,
 )
-revert = po.spec.ewridge("revert", features=["resid_A"], **settings)
-joint = po.spec.ewridge("joint", features=["A", "x1", "x2", "x3"], **settings)  # 3. one stage in place of two
-both = po.spec.ewridge("both", features=["resid_A", "x1", "x2", "x3"], **settings)  # 3. do the references add?
+revert = rp.spec.ewridge("revert", features=["resid_A"], **settings)
+joint = rp.spec.ewridge("joint", features=["A", "x1", "x2", "x3"], **settings)  # 3. one stage in place of two
+both = rp.spec.ewridge("both", features=["resid_A", "x1", "x2", "x3"], **settings)  # 3. do the references add?
 
 # Run both stages in one pass over the file.
 out = (

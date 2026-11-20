@@ -11,8 +11,8 @@ run that work on the bank's idle threads with `gram_threads`.
 
 These steps need the library, numpy and a wide stream:
 
-- polars-online installed with numpy, an optional extra, which
-  `pip install "polars-online[numpy]"` adds. The recipe builds its own
+- rheon installed with Polars and numpy, an optional extra, which
+  `pip install "rheon[polars,numpy]"` adds. The recipe builds its own
   data.
 - An `ewridge` spec over 256 columns or more (the features and the
   intercept). `gram_threads` applies to
@@ -113,7 +113,7 @@ import time
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # 4,096 rows of 1,000 features in float32; y is the sum of the first ten, plus noise.
 rng = np.random.default_rng(3)
@@ -126,11 +126,11 @@ pl.DataFrame({**dict(zip(features, x.T)), "y": y}).write_parquet("wide.parquet")
 # Learn the same stream three ways, keeping each Gram and time. The pass solves nothing.
 grams, seconds = {}, {}
 for way, block_rows, threads in [("by row", None, 1), ("blocked", 256, 1), ("blocked, 8", 256, 8)]:
-    spec = po.spec.ewridge(
+    spec = rp.spec.ewridge(
         "wide", targets=["y"], features=features, half_life=float("inf"), solve_every=float("inf"),
         gram_block_rows=block_rows, gram_threads=threads,
     )
-    bank = po.ModelBank([spec])
+    bank = rp.ModelBank([spec])
     t0 = time.perf_counter()
     bank.fit(pl.scan_parquet("wide.parquet"))
     seconds[way] = time.perf_counter() - t0
@@ -140,7 +140,7 @@ for way, block_rows, threads in [("by row", None, 1), ("blocked", 256, 1), ("blo
 print("time: " + ", ".join(f"{s:.2f} s {way}" for way, s in seconds.items()))
 same = grams["blocked"]["comoments"].tobytes() == grams["blocked, 8"]["comoments"].tobytes()
 print(f"the blocked Gram on 1 thread and on 8, bit for bit: {same}")
-by_row, blocked = po.gram.solve(grams["by row"]), po.gram.solve(grams["blocked"])
+by_row, blocked = rp.gram.solve(grams["by row"]), rp.gram.solve(grams["blocked"])
 print(f"the blocked fit and the row-by-row fit agree within 1e-12: {np.abs(by_row - blocked).max() < 1e-12}")
 print("x0 to x2, planted 1, found " + ", ".join(f"{b:.2f}" for b in blocked[1:4]))
 print(f"the 990 features with no effect: the largest |coefficient| {np.abs(blocked[11:]).max():.2f}")
@@ -170,6 +170,6 @@ bit for bit, as the recipe does, and time the two runs on the same file.
 | what you see | what it means | what to do |
 |---|---|---|
 | a refusal of `gram_block_rows` | the spec solves on every row, the default under `half_life=float("inf")` and under `lam`, or has a `window_size` | give `solve_every` a spacing, such as `float("inf")` with a row cap, and no `window_size` |
-| no speed-up from blocks | the spec solves often, and a solve takes the same time either way | solve more rarely, or leave the fits to `po.gram` after the pass |
+| no speed-up from blocks | the spec solves often, and a solve takes the same time either way | solve more rarely, or leave the fits to `rheon.gram` after the pass |
 | no speed-up from `gram_threads` | the bank's groups already keep every thread busy, so `"auto"` does not split, or the spec has 256 columns or fewer with blocks, or fewer than 725 without | nothing to gain from it; [Use more cores](use-more-cores.md) lists the other ways to use idle cores |
 | the blocked fit differs from the row-by-row one in the last digits | the product sums each entry in another order | expected: the two agree to rounding |

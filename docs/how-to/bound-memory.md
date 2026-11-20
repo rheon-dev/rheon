@@ -22,7 +22,7 @@ regression holds in its state for its refit.
 
 These steps need the library and a run that reads a file:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   `ticks.parquet`, 400 rows that Example data writes.
 - A run that reads a parquet file with `pl.scan_parquet`, which reads the
@@ -43,7 +43,7 @@ Python loop over the file's query alone. [Why memory stays
 bounded](../explanation/chunk-invariance-and-streaming.md#why-memory-stays-bounded)
 explains why.
 
-1. **Move a `filter` to after `.online.fit_predict(...)`,** where it
+1. **Move a `filter` to after `.rheon.fit_predict(...)`,** where it
    changes only which rows come out. To keep the bank from learning some
    rows, give them weight `0` in place of a filter ([Hold a row
    back](hold-a-row-back.md#keep-a-model-from-learning-rows-in-a-query)).
@@ -88,7 +88,7 @@ figure counts only memory in use:
 
 | what runs | Polars' default read-ahead | `POLARS_ROW_GROUP_PREFETCH_SIZE=1` |
 |---|---:|---:|
-| `lf.online.fit_predict(...).sink_parquet(...)` | 1.63 GB | 1.12 GB |
+| `lf.rheon.fit_predict(...).sink_parquet(...)` | 1.63 GB | 1.12 GB |
 | `bank.fit_predict_batches(lf)` | 1.41 GB | 1.07 GB |
 
 **The saving depends on how much data a block holds, so compare a run at
@@ -108,7 +108,7 @@ the bank's `threads` changes only the bank's speed.
    the script.
 2. **Leave the bank's `threads` unset,** which gives the bank one thread
    per core whatever `POLARS_MAX_THREADS` says, unless
-   `POLARS_ONLINE_MAX_THREADS` sets another count. [Use more
+   `RHEON_MAX_THREADS` sets another count. [Use more
    cores](use-more-cores.md) lists the calls that take `threads=`, to give
    a count of your own.
 
@@ -121,10 +121,10 @@ import os
 os.environ["POLARS_MAX_THREADS"] = "4"           # before import polars: sizes the reader's read-ahead
 
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # The run itself does not change.
-spec = po.spec.ewridge("ridge", targets=["y"], features=["x0", "x1", "x2"], clock="t",
+spec = rp.spec.ewridge("ridge", targets=["y"], features=["x0", "x1", "x2"], clock="t",
                        half_life=600.0, gap_cap=300.0, group="stock_id")
 (pl.scan_parquet("ticks.parquet")                     # written in Example data
    .rheon.fit_predict([spec], chunk_size=200_000)   # threads unset: the bank keeps every core
@@ -179,7 +179,7 @@ and the group that would pass the bound, with every new group after it,
 gives its refit up.** Under the MAD, a group reserves `(features + 26) · 8`
 bytes for each target and each row of the count. Under `"rms"` it reserves
 `(features + 20) · 8`. The [`huber`
-docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.huber)'s
+docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.huber)'s
 Notes give both. A group that gives its refit up keeps its one-pass fit, and a
 [readiness warning](../GLOSSARY.md#warm-up-and-readiness) says so once.
 
@@ -211,7 +211,7 @@ import warnings
 
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # 20 groups of 150 rows, y = 2x plus noise, saved.
 rng = np.random.default_rng(4)
@@ -219,9 +219,9 @@ x = rng.standard_normal(3_000)
 pl.DataFrame({"g": np.tile(np.arange(20), 150), "x": x, "y": 2 * x + rng.standard_normal(3_000)}).write_parquet("many.parquet")
 
 # Step 1: a bound of 1 MiB on the refit buffers of all 20 groups together.
-robust = po.spec.huber("robust", targets=["y"], features=["x"], half_life=float("inf"), group="g",
+robust = rp.spec.huber("robust", targets=["y"], features=["x"], half_life=float("inf"), group="g",
                        refit_budget=1.0)
-bank = po.ModelBank([robust])
+bank = rp.ModelBank([robust])
 with warnings.catch_warnings(record=True) as caught:
     warnings.simplefilter("always")
     bank.fit(pl.scan_parquet("many.parquet"))                      # learn, and keep no output

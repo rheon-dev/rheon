@@ -9,7 +9,7 @@ statement's result without first writing it to a file.
 
 These steps need the library, a database client and a table to read:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The example reads
   the file `ticks.parquet`.
 - py-polars 1.43.0 or later, whose `pl.scan_arrow_c_stream` reads the
@@ -29,7 +29,7 @@ to Polars through the Arrow PyCapsule interface, so no pyarrow is needed.
 3. **Read its result with Polars' `pl.scan_arrow_c_stream`,** which reads
    it as a [query](../GLOSSARY.md#the-model-bank-and-what-it-reads) of
    Polars'.
-4. **Chain `.online.fit_predict(specs)` on that query.**
+4. **Chain `.rheon.fit_predict(specs)` on that query.**
 5. **Run the query with `collect()`,** which gives one frame with a
    column for each spec.
 
@@ -39,7 +39,7 @@ data](../EXAMPLE-DATA.md):
 ```python
 import duckdb
 
-spec = po.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], clock="t", gap_cap=300.0,
+spec = rp.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], clock="t", gap_cap=300.0,
                        half_life=100.0)
 con = duckdb.connect()                                    # an in-memory database
 sql = "SELECT * FROM 'ticks.parquet' ORDER BY t"          # clock order, sorted by the database

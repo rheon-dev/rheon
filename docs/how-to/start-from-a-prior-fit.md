@@ -11,7 +11,7 @@ fades as the rows arrive or lasts for good.
 These steps need the library, an `ewridge` spec and the coefficients to
 start from:
 
-- polars-online and numpy installed. The recipe generates its own data.
+- rheon, Polars and numpy installed. The recipe generates its own data.
 - An `ewridge` [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads).
   For a prior that fades, a spec of one ridge value and one feature set:
   `ridge_scale="sum"` is refused beside a grid of `ridge` values or
@@ -22,8 +22,8 @@ start from:
   `[yesterday_bank.coef().filter(pl.col("target") == "y")["coef"].to_list()]`
   gives them in that order, from a bank of one spec, one group and one half-life.
 
-`ridge`, `ridge_scale` and `coef_prior` are defined in [`po.spec.ewridge`'s
-docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.ewridge),
+`ridge`, `ridge_scale` and `coef_prior` are defined in [`rheon.spec.ewridge`'s
+docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ewridge),
 and [`ewridge`'s update](../MODELS.md#the-update) gives the two systems a
 [solve](../GLOSSARY.md#fitting-a-model) reads.
 
@@ -66,7 +66,7 @@ lets each predict from its first row:
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # Today's truth: y = 0.5 + 2.2 x plus noise. Yesterday's fit was 0.5 + 2.0 x.
 rng = np.random.default_rng(11)
@@ -80,9 +80,9 @@ yesterday = [[0.5, 2.0]]   # one vector per target: the intercept, then a coeffi
 common = dict(targets=["y"], features=["x"], clock="t", gap_cap=10.0, half_life=500.0,
               coef_every=0, max_rows_between_solves=1, min_weight=0)
 specs = [
-    po.spec.ewridge("no_prior", **common),
-    po.spec.ewridge("fading", coef_prior=yesterday, ridge_scale="sum", ridge=20.0, **common),
-    po.spec.ewridge("lasting", coef_prior=yesterday, ridge=20.0, **common),
+    rp.spec.ewridge("no_prior", **common),
+    rp.spec.ewridge("fading", coef_prior=yesterday, ridge_scale="sum", ridge=20.0, **common),
+    rp.spec.ewridge("lasting", coef_prior=yesterday, ridge=20.0, **common),
 ]
 out = pl.scan_parquet("today_prior.parquet").rheon.fit_predict(specs).collect()
 

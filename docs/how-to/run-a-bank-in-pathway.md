@@ -9,7 +9,7 @@ predict and learn inside it.
 
 These steps need the library and, for a real pipeline, Pathway:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The example reads
   `df`, 400 rows in clock order.
 - For a pipeline, Pathway, installed under its own license, and an input
@@ -35,7 +35,7 @@ have.
 3. **To save the bank, keep `bank.save_bytes()`** wherever your pipeline's
    persistence keeps state.
 4. **To restore, load those bytes with
-   `po.ModelBank.load_bytes(blob, specs=specs)`.**
+   `rp.ModelBank.load_bytes(blob, specs=specs)`.**
 
 This code feeds the operator two plain frames with a save and a
 restore between them, and compares its predictions with one run's over the
@@ -45,7 +45,7 @@ same rows. It uses `df` from [Example data](../EXAMPLE-DATA.md):
 # The operator: a bank fed a chunk at a time, saved and restored as bytes.
 class BankOperator:                                  # the operator's state is the bank
     def __init__(self, specs):
-        self.specs, self.bank = specs, po.ModelBank(specs)
+        self.specs, self.bank = specs, rp.ModelBank(specs)
 
     def __call__(self, chunk: pl.DataFrame) -> pl.DataFrame:
         return self.bank.fit_predict(chunk)          # each chunk, in clock order
@@ -55,11 +55,11 @@ class BankOperator:                                  # the operator's state is t
         return self.bank.save_bytes()                # the bytes to store
 
     def restore(self, blob: bytes) -> None:
-        self.bank = po.ModelBank.load_bytes(blob, specs=self.specs)
+        self.bank = rp.ModelBank.load_bytes(blob, specs=self.specs)
 
 
 # Feed it two chunks, with a save and a restore between them.
-spec = po.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], clock="t", gap_cap=300.0,
+spec = rp.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], clock="t", gap_cap=300.0,
                        half_life=100.0)
 op = BankOperator([spec])
 first = op(df.head(200))                             # plain frames stand in for a pipeline's chunks
@@ -67,7 +67,7 @@ op.restore(op.snapshot())                            # a save and a restore betw
 rest = op(df.tail(200))                              # ... and the bank goes on where it was
 
 # Compare with one run over the same rows.
-one_run = po.ModelBank([spec]).fit_predict(df)       # the same rows, in one run
+one_run = rp.ModelBank([spec]).fit_predict(df)       # the same rows, in one run
 print("rows predicted:", first.height + rest.height)
 restored = pl.concat([first, rest])
 print("the same predictions as one run:",

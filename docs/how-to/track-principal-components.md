@@ -11,7 +11,7 @@ along it. It uses
 
 These steps need the library and a few columns that share a common move:
 
-- polars-online installed, and numpy to make the example's data.
+- rheon installed with Polars, and numpy to make the example's data.
 - A stream with two or more numeric columns, read as the
   [features](../GLOSSARY.md#the-model-bank-and-what-it-reads) of an
   [`ew_cov`](../MODELS.md#ew_cov--exponentially-weighted-moments) spec.
@@ -59,7 +59,7 @@ the ones read before the last row:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # Four columns moved by one factor with known loadings, each with noise of its own.
 rng = np.random.default_rng(8)
@@ -72,7 +72,7 @@ t = np.cumsum(rng.exponential(1.0, n))                     # a clock: about one 
 pl.DataFrame(dict(zip(names, x.T))).with_columns(factor=factor, t=t).write_parquet("factor.parquet")
 
 # Track the top component, and read it before the last row.
-mv = po.spec.ew_cov(
+mv = rp.spec.ew_cov(
     "mv", features=names, clock="t", gap_cap=10.0, half_life=2_000.0,
     stats=[],                    # no moments on each row: only the component
     pca=1,                       # 1. the top component
@@ -114,4 +114,4 @@ the rows were chunked.
 
 The fields, in the table under `pca`, and every parameter are defined in
 `ew_cov`'s
-[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.ew_cov).
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ew_cov).

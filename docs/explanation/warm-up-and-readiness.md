@@ -133,7 +133,7 @@ import warnings
 
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # The same relation, y = 2x plus noise, with a row every clock unit and with a row every five.
 rng = np.random.default_rng(2)
@@ -146,8 +146,8 @@ for step in (1.0, 5.0):
 # One ridge under each gate, at a half-life of 50 clock units.
 common = dict(targets=["y"], features=["x"], clock="t", gap_cap=10.0, half_life=50.0)  # a clock needs a gap_cap
 specs = [
-    po.spec.ewridge("halfway", min_settled_frac=0.5, **common),  # withhold until halfway to the steady state
-    po.spec.ewridge("weighted", min_weight=30.0, **common),      # withhold until weight_sum reaches 30
+    rp.spec.ewridge("halfway", min_settled_frac=0.5, **common),  # withhold until halfway to the steady state
+    rp.spec.ewridge("weighted", min_weight=30.0, **common),      # withhold until weight_sum reaches 30
 ]
 for step in (1.0, 5.0):
     with warnings.catch_warnings(record=True) as caught:
@@ -163,7 +163,7 @@ for step in (1.0, 5.0):
         print(f"a row every {step:g}, {spec}: first predicts at t = {first['t']:g}, weight_sum {first['weight_sum']:.1f}")
     # The remedy each readiness warning gives, its last sentence.
     for w in caught:
-        if issubclass(w.category, po.ReadinessWarning):
+        if issubclass(w.category, rp.ReadinessWarning):
             print("  warning: " + str(w.message).split(". ")[-1])
 ```
 
@@ -172,7 +172,7 @@ a row every 1, halfway: first predicts at t = 51, weight_sum 36.8
 a row every 1, weighted: first predicts at t = 39, weight_sum 30.3
 a row every 5, halfway: first predicts at t = 55, weight_sum 8.0
 a row every 5, weighted: never predicts
-  warning: Lower min_weight below 14.9, or increase half_life above 103, as https://github.com/hgilde/polars-online/blob/main/docs/DIAGNOSTICS.md#is-it-ready explains.
+  warning: Lower min_weight below 14.9, or increase half_life above 103, as https://github.com/rheon-dev/rheon/blob/main/docs/DIAGNOSTICS.md#is-it-ready explains.
 ```
 
 At a row every five clock units, `weight_sum` tops out near 14.9, so a

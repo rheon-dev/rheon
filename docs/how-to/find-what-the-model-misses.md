@@ -11,7 +11,7 @@ feature that fixes it.
 
 These steps need the library and a linear model:
 
-- polars-online installed, and numpy to make the example's data.
+- rheon installed with Polars, and numpy to make the example's data.
 - A [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads) of one of the
   ten linear models, such as `ewridge`, which take `emit_specification`
   and `emit_autocorr`. [What each costs, and which models take
@@ -56,7 +56,7 @@ with Polars before the bank, and reads each statistic's median over rows
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # y = 1.0 x0 + 0.5 x1 + noise on every stream, but for one fault each.
 rng = np.random.default_rng(5)
@@ -89,7 +89,7 @@ missing = pl.scan_parquet("missing.parquet").with_columns(
 
 # 1. A ridge with the three specification tests, on each stream and each fix.
 def spec(name, target, features):
-    return po.spec.ewridge(
+    return rp.spec.ewridge(
         name, targets=[target], features=features, half_life=1_000.0,
         emit_specification=True,  # ljung_box (10 lags), breusch_pagan, ramsey_reset, at a memory of 1,000 rows
     )

@@ -10,7 +10,7 @@ sets `drift_threshold` from them, and counts each detector's flags.
 
 These steps need the library, a linear model and a stable stretch:
 
-- polars-online installed, and numpy to make the example's data.
+- rheon installed with Polars, and numpy to make the example's data.
 - A [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads) of one of the
   ten linear models, such as `ewridge`, which take `emit_tails`,
   `emit_sigma` and `emit_drift`. [What each costs, and which models take
@@ -56,7 +56,7 @@ first flag after it:
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # 200,000 rows of a stable relation whose noise is Student's t with 3 degrees of freedom, then
 # 20,000 rows where the noise is three times as large.
@@ -68,7 +68,7 @@ pl.DataFrame({"x0": x0, "x1": x1, "y": 1.0 * x0 + 0.5 * x1 + noise}).write_parqu
 tails_stream = pl.scan_parquet("tails.parquet").with_row_index("row")
 
 # 1 and 2. Read the tails over a stretch known to be stable: the mean of kurtosis over rows 1,000-19,999.
-stable = po.spec.ewridge(
+stable = rp.spec.ewridge(
     "m", targets=["y"], features=["x0", "x1"], half_life=200.0, emit_tails=True, emit_sigma=True,
 )
 tails = tails_stream.head(20_000).rheon.fit_predict([stable]).rheon.unnest([stable]).collect()
@@ -90,7 +90,7 @@ def report(name, out, flag):
 
 # Drift at the default threshold, then at the one the kurtosis called for.
 for value in [20.0, threshold]:
-    spec = po.spec.ewridge(
+    spec = rp.spec.ewridge(
         "m", targets=["y"], features=["x0", "x1"], half_life=200.0,
         emit_drift=True, drift_threshold=value, emit_breaks=True, emit_sigma=True,
     )

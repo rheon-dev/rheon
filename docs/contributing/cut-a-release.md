@@ -1,7 +1,7 @@
 <!-- kind: how-to -->
 # Cut a release
 
-This how-to is for the maintainer who releases polars-online: it takes a
+This how-to is for the maintainer who releases rheon: it takes a
 checked build on `main` to a verified install from PyPI.
 
 **A release is dispatched, never tagged by hand, and never rehearsed.**
@@ -25,22 +25,22 @@ A release needs these before step 1:
 - The approval of the `Pypi` environment's required reviewer, the owner,
   for step 15. One approval covers both uploads: the release publishes two
   PyPI projects from the one job.
-- **The second PyPI project, `polars-online-compat`, set up once, before the
+- **The second PyPI project, `rheon-compat`, set up once, before the
   first release that publishes it.** A release uploads the same source under
-  two names, `polars-online` and `polars-online-compat` (the build for x86-64
+  two names, `rheon` and `rheon-compat` (the build for x86-64
   CPUs without AVX2; [What the x86-64 wheels
   need](../VERSIONS.md#what-the-x86-64-wheels-need)). Only the maintainer can
   create the project, and the workflow cannot. On pypi.org, signed in as the
   project's owner:
   1. Open *Your account*, then *Publishing*, and under *Add a new pending
      publisher* choose *GitHub*.
-  2. Enter the PyPI project name `polars-online-compat`, the owner `hgilde`,
-     the repository `polars-online`, the workflow name `release.yml` and the
-     environment name `pypi`. These are the values `polars-online`'s own
+  2. Enter the PyPI project name `rheon-compat`, the owner `rheon-dev`,
+     the repository `rheon`, the workflow name `release.yml` and the
+     environment name `pypi`. These are the values `rheon`'s own
      publisher has, with only the project's name different, so the one
      `Pypi` environment and its reviewer gate both uploads.
   3. Save. A pending publisher reserves the name and creates the project at
-     the first upload, as `polars-online`'s did, and it needs no API token
+     the first upload, as `rheon`'s did, and it needs no API token
      and no change to the repository's settings. The name was free on
      2026-11-18; register it before anyone else does.
   4. After the first release, open the new project's *Publishing* page and
@@ -75,8 +75,9 @@ Nothing leaves your checkout before step 13.
    build stays installed:
    1. Install the release from PyPI: `uv venv <scratch> --python 3.12`,
       then `uv pip install --python <scratch>
-      "polars-online[numpy]==<last>"`. The scripts import NumPy, which the
-      `numpy` extra brings.
+      "rheon[polars,numpy]==<last>"`, or `"polars-online[numpy]==<last>"`
+      for a last release before 2.0, which was published under that name.
+      The scripts import NumPy, which the `numpy` extra brings.
    2. Build the release here: `git worktree add <tag-dir> v<last>`, then,
       inside it, `uv sync` and `uv run maturin develop --release -m
       crates/rheon-py/Cargo.toml`. Its environment is `<tag-dir>/.venv`.
@@ -175,18 +176,20 @@ Nothing leaves your checkout before step 13.
 15. **Approve the `publish to PyPI` job,** in the `Pypi` environment, once
     every blocking job is green ([The release
     gate](../RELEASE-READINESS.md#the-release-gate)). It uploads
-    `polars-online-compat` and then `polars-online`. The tag and the
+    `rheon-compat` and then `rheon`. The tag and the
     GitHub release follow the upload.
 16. **Read the `verify` job's six legs.** After the upload, on Linux,
-    macOS and Windows, it installs `polars-online==<version>` and
-    `polars-online-compat==<version>` from PyPI, each into a fresh
+    macOS and Windows, it installs `rheon[polars]==<version>` and
+    `rheon-compat[polars]==<version>` from PyPI, each into a fresh
     environment, retrying for up to ten minutes while the index
     catches up. It checks that the package came from there, that exactly
     that one of the two is installed, and that the CPU has every feature the
-    wheel was built for. It checks that `po.__version__`,
-    `po.native_version()` and `po.schema_version()` are the release's, and
+    wheel was built for. It checks that `rheon.__version__`,
+    `rheon.native_version()` and `rheon.schema_version()` are the release's, and
     that an `ewridge` fit over a parquet file finds its line's slope
-    (`scripts/verify_release.py`).
+    (`scripts/verify_release.py`). Then it installs the same project with no
+    extra, and checks that `import rheon` runs without Polars and that
+    `from rheon import polars` names the `polars` extra (`--bare`).
 
 ## Check the result
 
@@ -196,7 +199,7 @@ The release is done when these hold:
 - The GitHub release carries the wheels and the sdist of both projects, the
   binaries and `budgets-baseline.json`, with the wheels' exact sizes under the
   CHANGELOG's section in its notes.
-- Both `polars-online` and `polars-online-compat` show the version on
+- Both `rheon` and `rheon-compat` show the version on
   PyPI.
 
 ## If a job fails
@@ -224,7 +227,7 @@ the same reason the job's is refused.
 1. **Download the run's files,** with
    `gh run download <run-id> -D artifacts`.
 2. **Write the CHANGELOG's section for the version to `notes.md`,** under
-   the line `polars-online <version>`.
+   the line `rheon <version>`.
 3. **Tag the tested sha,** with
    `git tag -a --cleanup=verbatim v<version> -F notes.md <sha>`, and push
    the tag.

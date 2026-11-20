@@ -9,7 +9,7 @@ or replays, and who wants to choose what each of them does to the fit.
 
 These steps need the library and a stream with a clock:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   `df`, a frame of 400 rows a minute apart, on the timestamp column `ts`.
   Its column `session` is `"m"` on the first 200 rows (a morning session)
@@ -79,10 +79,10 @@ df.with_columns(ts=pl.when(afternoon).then(pl.col("ts") + pl.duration(days=2)).o
 # Four ways to treat the weekend.
 common = dict(targets=["y"], features=["x0", "x1"], clock="ts", half_life="30m")   # ts is a Datetime: durations
 policies = [
-    po.spec.ewridge("capped", gap_cap="5m", **common),                             # the weekend counts as five minutes
-    po.spec.ewridge("uncapped", gap_cap="3d", **common),                           # the weekend counts in full
-    po.spec.ewridge("one_minute", gap_cap="5m", session="session", session_gap="1m", **common),   # one minute at the boundary
-    po.spec.ewridge("reset", gap_cap="5m", session="session", session_gap="reset", **common),  # a reset there
+    rp.spec.ewridge("capped", gap_cap="5m", **common),                             # the weekend counts as five minutes
+    rp.spec.ewridge("uncapped", gap_cap="3d", **common),                           # the weekend counts in full
+    rp.spec.ewridge("one_minute", gap_cap="5m", session="session", session_gap="1m", **common),   # one minute at the boundary
+    rp.spec.ewridge("reset", gap_cap="5m", session="session", session_gap="reset", **common),  # a reset there
 ]
 # Each policy's weight_sum around the boundary at row 200.
 fitted = pl.scan_parquet("weekend.parquet").rheon.fit_predict(policies).collect()

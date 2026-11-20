@@ -4,7 +4,7 @@
 This page explains, for anyone who trains XGBoost or LightGBM with
 `po.gbdt`, how it bins rows that do not fit in memory and hands them to
 each library, and why the kind of file it reads decides its memory. [Train XGBoost or LightGBM on
-files larger than memory](../GBDT.md) gives the steps.
+files larger than memory](GBDT.md) gives the steps.
 
 **Both libraries train in two stages, and only the first reads every
 row.** *Binning* places each feature's bins and puts every value into one,
@@ -227,7 +227,7 @@ The planted Gaussian rows' noise floor is 1.0. Where the level stays
 inside the training range, the margin and the feature score within 0.005
 of each other. On flights the feature won, and passing the prediction both
 ways scored 35.22, within 0.09 of it, which is why [the margin's
-steps](../GBDT.md#train-trees-around-an-online-models-prediction) pass
+steps](GBDT.md#train-trees-around-an-online-models-prediction) pass
 both.
 
 **The online prediction leaks nothing into the margin.** The online model
@@ -241,7 +241,7 @@ amount set by its thread count and by `POLARS_ROW_GROUP_PREFETCH_SIZE`,
 how many blocks of a parquet file it reads ahead.** From py-polars 1.37.0,
 the oldest this library supports, `collect_batches` fed directly by a
 file read as a query waits for its reader, as [Why the range is 1.37.0
-to 3](polars-interfaces.md#why-the-range-is-1370-to-3) measures. A step such as `with_columns` or a `select` that
+to 3](../explanation/polars-interfaces.md#why-the-range-is-1370-to-3) measures. A step such as `with_columns` or a `select` that
 computes reads ahead by about ten frames a thread.
 
 `xgboost_matrix` over a 1.0 GB source, on py-polars 2.0.0 on 2026-10-10,

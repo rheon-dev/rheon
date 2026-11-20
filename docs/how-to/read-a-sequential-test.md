@@ -10,7 +10,7 @@ however often you look.
 
 These steps need the library and a stream:
 
-- polars-online installed, and numpy to make the example's data. The
+- rheon installed with Polars, and numpy to make the example's data. The
   second recipe reads `lf`, the query over `df`, from
   [Example data](../EXAMPLE-DATA.md).
 - A stream saved as a file, or a frame in memory, with the column whose
@@ -55,7 +55,7 @@ import math
 
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # Gains of 0.1 on 60% of the rows and losses of 1.0 on the rest; and a column with no edge.
 rng = np.random.default_rng(9)
@@ -66,7 +66,7 @@ pl.DataFrame({
 }).write_parquet("signs.parquet")
 
 # 1 to 3. Test both columns' signs.
-sign = po.spec.seqtest("sign", targets=["skewed", "fair"])
+sign = rp.spec.seqtest("sign", targets=["skewed", "fair"])
 out = pl.scan_parquet("signs.parquet").rheon.fit_predict([sign]).collect().unnest("sign").with_row_index("row")
 
 
@@ -111,7 +111,7 @@ data](../EXAMPLE-DATA.md):
 ```python
 import math
 
-signs = lf.rheon.fit_predict([po.spec.seqtest("signs", targets=["y"], group="stock_id")]).collect().unnest("signs")   # 1
+signs = lf.rheon.fit_predict([rp.spec.seqtest("signs", targets=["y"], group="stock_id")]).collect().unnest("signs")   # 1
 rejected = (signs.filter(pl.col("log_e_pos_y") >= math.log(20))         # 2. the rows at the 5% level ...
             .group_by("stock_id", maintain_order=True).first())         # 3. ... and each stock's first
 print(f"stocks whose y tends positive at the 5% level: {rejected.height} of {signs['stock_id'].n_unique()}")
@@ -135,9 +135,9 @@ on a column you know has no edge, as the recipe's `fair`.
 
 The fields are defined in [OUTPUTS.md](../OUTPUTS.md#seqtest), and every
 parameter in `seqtest`'s
-[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.seqtest).
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.seqtest).
 For the same test over a frame in memory, use
-[`po.eval.seqtest`](https://hgilde.github.io/polars-online/eval.html#rheon.eval.seqtest).
+[`rp.eval.seqtest`](https://rheon-dev.github.io/rheon/eval.html#rheon.eval.seqtest).
 To test which of two specs predicts closer, [Compare two
 models](compare-two-models.md#read-the-comparison-on-every-row) names them
 in `seqtest`'s `a` and `b`, and its evidence is read the same way.

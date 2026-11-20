@@ -13,7 +13,7 @@ their regime with `bocpd`.
 
 These steps need the library and a model to watch:
 
-- polars-online installed, and numpy to make the examples' data.
+- rheon installed with Polars, and numpy to make the examples' data.
 - For a break in a regression: a
   [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads) of one of the ten
   linear models, such as `ewridge`, which take `emit_breaks` and
@@ -56,7 +56,7 @@ stable rows before it:
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # Three streams that break at row 3,000 of 6,000, each in one way.
 rng = np.random.default_rng(3)
@@ -73,7 +73,7 @@ broken = pl.scan_parquet("breaks.parquet").with_row_index("row")
 
 # 1 and 2. One ridge per stream, with the windowed break tests and drift.
 specs = [
-    po.spec.ewridge(
+    rp.spec.ewridge(
         kind, targets=[f"y_{kind}"], features=["x0", "x1"], half_life=200.0,
         emit_breaks=True,  # memory: the model's 200 rows
         emit_drift=True,  # at drift_delta=0.5 and drift_threshold=20
@@ -161,7 +161,7 @@ This code runs the CUSUM once over a stream whose intercept rises at row
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # y = 0.2 + 1.0 x0 + 0.5 x1 + noise until row 2,000 of 4,000, where the intercept rises to 0.7.
 rng = np.random.default_rng(2)
@@ -173,7 +173,7 @@ pl.DataFrame({"t": t, "x0": x0, "x1": x1, "y": y}).write_parquet("shift.parquet"
 shift = pl.scan_parquet("shift.parquet")
 
 # 1. Run once: half_life=inf weighs every row alike, and the CUSUM runs over the whole stream.
-model = po.spec.ewridge(
+model = rp.spec.ewridge(
     "ols", targets=["y"], features=["x0", "x1"], half_life=float("inf"), min_weight=30.0,
     emit_breaks=True,
 )
@@ -198,7 +198,7 @@ for row, value, bound in path.filter(pl.col("t").is_in([1_000.0, 2_000.0, 2_200.
 # 5. Refit over all of a query's rows: the whole stream, or from the crossing on.
 def coef(query):
     """The coefficients of a fit over every row of the query."""
-    bank = po.ModelBank([po.spec.ewridge("ols", targets=["y"], features=["x0", "x1"], half_life=float("inf"))])
+    bank = rp.ModelBank([rp.spec.ewridge("ols", targets=["y"], features=["x0", "x1"], half_life=float("inf"))])
     bank.fit(query)
     return ", ".join(f"{term} {c:.2f}" for term, c in bank.coef().select("term", "coef").iter_rows())
 
@@ -279,7 +279,7 @@ rows into the first cycle's monitored rows, and prints the rows each
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # Two columns, uncorrelated until row 560, then correlated at 0.7.
 rng = np.random.default_rng(10)
@@ -291,7 +291,7 @@ pairs = pl.scan_parquet("corr.parquet").with_row_index("row")
 
 # 1 to 3. The sequential test at three boundaries, and the rows each flags.
 for gamma in [0.0, 0.25, 0.45]:
-    watch = po.spec.corrchange(
+    watch = rp.spec.corrchange(
         "watch", features=["a", "b"],
         kind="sequential",
         window_rows=500,  # 500 rows of history, assumed stable ...
@@ -337,7 +337,7 @@ evidence.** Under a number `hazard`, `p_change` is `P(r ≤ 1)` given the
 row, and under a duration the chance that the row began a run. A break
 that takes several rows to show barely lifts it: 0.02 at most in the 50 rows after the spread quadruples in the example in
 [`bocpd` in MODELS.md](../MODELS.md#bocpd--how-long-has-this-regime-lasted).
-[`po.spec.bocpd`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.bocpd)'s
+[`rheon.spec.bocpd`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.bocpd)'s
 Notes, under *Reading p_change and run_mode*, measure three kinds of
 break.
 
@@ -360,7 +360,7 @@ stream's:
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # Two stocks whose rows take turns; each one's spread quadruples at a row of its own.
 rng = np.random.default_rng(11)
@@ -373,7 +373,7 @@ for stock, at in breaks.items():
 pl.concat(frames).sort("i", "stock").write_parquet("regimes.parquet")
 
 # 1 and 2. One bocpd per stock, a break expected every 500 of its rows, and the query run.
-runs = po.spec.bocpd("regime", features=["ret"], group="stock", hazard=500.0)
+runs = rp.spec.bocpd("regime", features=["ret"], group="stock", hazard=500.0)
 out = pl.scan_parquet("regimes.parquet").rheon.fit_predict([runs]).rheon.unnest([runs]).collect()
 # 3 and 4. The row each current run began on, in the stock's own rows and in the stream's.
 out = out.with_columns(

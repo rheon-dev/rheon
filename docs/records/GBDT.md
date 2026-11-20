@@ -22,10 +22,10 @@ in files:
   `pl.Enum`. Each recipe on this page writes its own files.
 - To train around an online model's prediction: the rows in clock order,
   and a spec for an online model of the target whose prediction follows
-  its level (see the README's [A first fit](../README.md#a-first-fit)).
+  its level (see the README's [A first fit](../../README.md#a-first-fit)).
 
 [How `po.gbdt` builds training
-data](explanation/how-po-gbdt-builds-training-data.md) explains how it
+data](how-po-gbdt-builds-training-data.md) explains how it
 bins the rows, how its bins compare with each library's own, and why the
 kind of file decides its memory.
 
@@ -147,7 +147,7 @@ LightGBMError: Cannot change max_bin after constructed Dataset handle.
 **Give a categorical feature as a `pl.Enum`, whose levels are fixed before
 the data.** `po.gbdt` refuses a `pl.Categorical`, whose codes depend on
 the process that made them ([Why a categorical feature is a
-`pl.Enum`](explanation/how-po-gbdt-builds-training-data.md#why-a-categorical-feature-is-a-plenum)).
+`pl.Enum`](how-po-gbdt-builds-training-data.md#why-a-categorical-feature-is-a-plenum)).
 
 1. **Cast the column to a `pl.Enum` before the build,** with
    `pl.col(c).cast(pl.Enum(levels))`, and name it among the features.
@@ -210,7 +210,7 @@ a pl.Categorical is refused: TypeError
 from the residuals of a first fit, not as a fixed number.** `δ` is in the
 target's units, so the defaults, 1.0 for XGBoost and 0.9 for LightGBM, fit
 only a target of the right scale ([Why a Huber loss's slope is set from
-the residuals](explanation/how-po-gbdt-builds-training-data.md#why-a-huber-losss-slope-is-set-from-the-residuals)).
+the residuals](how-po-gbdt-builds-training-data.md#why-a-huber-losss-slope-is-set-from-the-residuals)).
 
 1. **Train a first fit with squared error,** such as a model trained for a
    few rounds.
@@ -218,7 +218,7 @@ the residuals](explanation/how-po-gbdt-builds-training-data.md#why-a-huber-losss
 3. **Set `δ = 1.345 · MAD / 0.6745`,** where the MAD is the median absolute
    deviation of those residuals. On a stream, `po.ewm_quantile` gives the
    same scale as it moves ([Quantiles and a robust
-   scale](WINDOWS.md#quantiles-and-a-robust-scale)).
+   scale](../WINDOWS.md#quantiles-and-a-robust-scale)).
 4. **Train with the Huber objective and `δ`:** XGBoost's
    `{"objective": "reg:pseudohubererror", "huber_slope": δ}`, or
    LightGBM's `{"objective": "huber", "alpha": δ}`.
@@ -297,7 +297,7 @@ added back, so this task has a training half and a serving half.
 4. **Copy the prediction to a column of its own, to pass it as a feature
    too.** A margin and a feature are each better on some data ([When a
    margin helps, and when a feature
-   does](explanation/how-po-gbdt-builds-training-data.md#when-a-margin-helps-and-when-a-feature-does)).
+   does](how-po-gbdt-builds-training-data.md#when-a-margin-helps-and-when-a-feature-does)).
 5. **Write the result to a file with `sink_parquet`,** which writes it
    without holding it all in memory.
 6. **Build the training input with the prediction as the margin,** as
@@ -400,5 +400,5 @@ and what to do:
 | `LightGBMError: Cannot change max_bin after constructed Dataset handle.` | a binning parameter reached `lgb.train`, after the bins were set | pass it to `lightgbm_dataset` ([Set LightGBM's binning parameters when you build](#set-lightgbms-binning-parameters-when-you-build)) |
 | a `UserWarning` that the native engine cannot load a library, under `engine="auto"` | the build fell back to the Python engine, which grows the same trees more slowly | read the cause the warning names in parentheses, or pass `engine="python"` to choose that engine and silence the warning |
 | XGBoost's trees differ from those its own sketch of every row gives | the cuts come from a sample of 200,000 rows | pass `sample_rows=None` to keep XGBoost's own sketch |
-| memory grows far past a chunk on a Parquet file or a query | Polars reads ahead of a slower reader, as where a step that runs on every thread, such as `with_columns`, sits between the scan and `po.gbdt` ([Polars' read-ahead](explanation/how-po-gbdt-builds-training-data.md#polars-read-ahead)) | save the rows as Arrow IPC files, or lower `POLARS_ROW_GROUP_PREFETCH_SIZE` and `POLARS_MAX_THREADS` ([Bound a run's memory](how-to/bound-memory.md)) |
+| memory grows far past a chunk on a Parquet file or a query | Polars reads ahead of a slower reader, as where a step that runs on every thread, such as `with_columns`, sits between the scan and `po.gbdt` ([Polars' read-ahead](how-po-gbdt-builds-training-data.md#polars-read-ahead)) | save the rows as Arrow IPC files, or lower `POLARS_ROW_GROUP_PREFETCH_SIZE` and `POLARS_MAX_THREADS` ([Bound a run's memory](../how-to/bound-memory.md)) |
 | a model trained around a margin predicts far from the targets | it was served without its margin | serve it with the margin, as in step 9 of [Train trees around an online model's prediction](#train-trees-around-an-online-models-prediction) |

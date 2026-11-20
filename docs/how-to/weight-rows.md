@@ -18,7 +18,7 @@ from it
 
 These steps need the library and a column of weights:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The example reads
   `df`, a frame of 400 rows whose target `y` is `1 + 2·x0 − x1` plus noise.
 - A numeric column of row weights, each 0 or above, in the stream or made
@@ -49,14 +49,14 @@ finds the weight unchanged. It reads `df` from [Example
 data](../EXAMPLE-DATA.md):
 
 ```python
-weighted = po.spec.ewridge(
+weighted = rp.spec.ewridge(
     "weighted", targets=["y"], features=["x0", "x1"], half_life=float("inf"),
     weight="w",                # 1. a column of row weights
 )
 # Row 100 weighs nothing; then every weight times 10.
 ones = df.with_columns(w=pl.when(pl.int_range(pl.len()) == 100).then(0.0).otherwise(1.0))
 tens = ones.with_columns(pl.col("w") * 10)
-fields = [po.ModelBank([weighted]).fit_predict(frame)["weighted"].struct for frame in (ones, tens)]   # 3. fit each
+fields = [rp.ModelBank([weighted]).fit_predict(frame)["weighted"].struct for frame in (ones, tens)]   # 3. fit each
 # The rows around row 100, and what the scaling moved.
 for row in [99, 100, 101, 102]:
     print(f"row {row}: pred_y {fields[0].field('pred_y')[row]:.4f}, weight_sum {fields[0].field('weight_sum')[row]:g}")

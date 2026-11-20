@@ -10,7 +10,7 @@ of models, one for each
 [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads) and
 [group](../GLOSSARY.md#the-model-bank-and-what-it-reads), over the same
 rows. In a loop you hold the bank as a
-[`ModelBank`](https://hgilde.github.io/polars-online/rheon.html#rheon.ModelBank)
+[`ModelBank`](https://rheon-dev.github.io/rheon/rheon.html#rheon.ModelBank)
 object, pass it each [chunk](../GLOSSARY.md#the-model-bank-and-what-it-reads),
 and ask it what it holds between chunks ([Inspect a
 bank](inspect-a-bank.md)). [Run a bank in a query](run-a-bank-in-a-query.md)
@@ -20,7 +20,7 @@ runs the same bank inside a Polars query instead.
 
 These steps need the library and a stream:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   `df`, a frame of 400 rows on the clock `t`, in which four stocks, `b0` to
   `b3` in the column `stock_id`, take turns row by row. Its target `y` is
@@ -38,7 +38,7 @@ ordered stream, so a call that finds it busy on another thread raises
 `RuntimeError`: wait for that call to return, or give each thread its own
 bank.
 
-1. **Build a bank from the specs with `po.ModelBank(specs)`.** It starts
+1. **Build a bank from the specs with `rp.ModelBank(specs)`.** It starts
    with nothing learned.
 2. **Feed it the stream a chunk at a time with
    `bank.fit_predict_batches(query, chunk_size=...)`,** which reads a query
@@ -53,9 +53,9 @@ Here the bank reads 100 rows at a time, and stock `b0`'s coefficient on
 from [Example data](../EXAMPLE-DATA.md):
 
 ```python
-spec = po.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"],
+spec = rp.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"],
                        clock="t", half_life=600.0, gap_cap=300.0, group="stock_id")
-bank = po.ModelBank([spec])                                # 1. nothing learned yet
+bank = rp.ModelBank([spec])                                # 1. nothing learned yet
 for out in bank.fit_predict_batches(pl.scan_parquet("ticks.parquet"), chunk_size=100):   # 2.
     # out: the chunk's columns, plus one column per spec. 3. Between chunks, the bank answers questions:
     x0 = bank.coef().filter(pl.col("group") == "b0", pl.col("term") == "x0")["coef"][0]
@@ -63,7 +63,7 @@ for out in bank.fit_predict_batches(pl.scan_parquet("ticks.parquet"), chunk_size
 bank.save("bank.state")                                    # 4. written whole or not at all: a temporary file, then a rename
 
 # With chunks of your own: for chunk in pl.scan_parquet("ticks.parquet").collect_batches(): bank.fit_predict(chunk)
-# A run whose product is the state: po.ModelBank([spec]).fit(query) learns from every row and keeps no output.
+# A run whose product is the state: rp.ModelBank([spec]).fit(query) learns from every row and keeps no output.
 ```
 
 ```text
@@ -100,9 +100,9 @@ In `df` the four stocks take turns, so each last ticked at a different
 data](../EXAMPLE-DATA.md):
 
 ```python
-spec = po.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"],
+spec = rp.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"],
                        clock="t", half_life=600.0, gap_cap=300.0, group="stock_id")
-bank = po.ModelBank([spec])
+bank = rp.ModelBank([spec])
 bank.fit(pl.scan_parquet("ticks.parquet"))
 for group, rows, clock_last in bank.groups().select("group", "rows_fed", "clock_last").iter_rows():   # 1.
     print(f"{group}: {rows} rows, the last at t = {clock_last:.0f}")

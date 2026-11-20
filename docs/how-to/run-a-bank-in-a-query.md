@@ -5,7 +5,7 @@ This how-to is for anyone who runs a model bank inside a Polars query and
 wants to choose the chunk size, write the output to a file, filter it, or
 catch a misnamed column early.
 
-[`lf.online.fit_predict(specs)`](https://hgilde.github.io/polars-online/namespaces.html#rheon._frame.LazyFrameOnlineNamespace.fit_predict)
+[`lf.rheon.fit_predict(specs)`](https://rheon-dev.github.io/rheon/namespaces.html#rheon._frame.LazyFrameOnlineNamespace.fit_predict)
 adds a [model bank](../GLOSSARY.md#the-model-bank-and-what-it-reads) to a
 Polars [query](../GLOSSARY.md#the-model-bank-and-what-it-reads), which
 feeds the bank its rows `chunk_size` at a time (100,000 by default) when
@@ -18,7 +18,7 @@ Arrow](hand-the-output-to-arrow.md).
 
 These steps need the library and a stream on disk:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read the
   file `ticks.parquet` and the same rows split across `ticks/*.parquet`,
   400 rows on the clock `t`. In them four stocks, `b0` to `b3` in the
@@ -35,7 +35,7 @@ run it once.
 
 1. **Read the files with `pl.scan_parquet`,** which builds a query and
    reads nothing yet.
-2. **Add the bank with `.online.fit_predict(specs, chunk_size=...)`.**
+2. **Add the bank with `.rheon.fit_predict(specs, chunk_size=...)`.**
    The chunk size trades memory for overhead, and never changes the
    numbers ([Chunk invariance and
    streaming](../explanation/chunk-invariance-and-streaming.md)), and [Set
@@ -59,7 +59,7 @@ code uses the files `ticks.parquet` and `ticks/*.parquet` from [Example
 data](../EXAMPLE-DATA.md):
 
 ```python
-spec = po.spec.ewridge(                                   # a ridge regression of y for each stock, at two ridge values
+spec = rp.spec.ewridge(                                   # a ridge regression of y for each stock, at two ridge values
     "ridge",
     targets=["y"], features=["x0", "x1", "x2"],
     clock="t", half_life=600.0, gap_cap=300.0,
@@ -113,10 +113,10 @@ encodes a record's fields several times slower than the same values as
 plain columns, and a wide spec writes many fields: an `ew_cov` over 20
 series writes 233.
 
-1. **Chain `.online.unnest([spec])` after the bank,** which turns each
+1. **Chain `.rheon.unnest([spec])` after the bank,** which turns each
    field into a column of its own.
 2. **Write the result,** as
-   `.online.unnest([spec]).sink_parquet("fitted.parquet")`.
+   `.rheon.unnest([spec]).sink_parquet("fitted.parquet")`.
 
 The command line's `--output-layout flat` does the same for its files
 ([RUNNER.md](../RUNNER.md)).
@@ -137,17 +137,17 @@ back](hold-a-row-back.md#keep-a-model-from-learning-rows-in-a-query)).
 
 ## Catch a misnamed column before the query runs
 
-**`lf.online.fit_predict` checks each spec against the query's columns when
+**`lf.rheon.fit_predict` checks each spec against the query's columns when
 it is called, so a missing or non-numeric column raises `ValueError` before
-any row is read.** The error is `po.ColumnNotFoundError` for a missing
-column and `po.WrongTypeError` for a non-numeric one, and both are
+any row is read.** The error is `rheon.ColumnNotFoundError` for a missing
+column and `rheon.WrongTypeError` for a non-numeric one, and both are
 `ValueError`s. The bank refuses what only the values reveal, such as a
 null clock or a step back, while the query runs. That error arrives as
 `polars.exceptions.ComputeError` under py-polars 1.x, and as the bank's own
 `ValueError` under 2.0, since how a query wraps an error is Polars' to
 change. Either way its message names the row and the way out.
 
-1. **Call `.online.fit_predict` inside a `try`,** before you run the
+1. **Call `.rheon.fit_predict` inside a `try`,** before you run the
    query.
 2. **Catch `ValueError`,** and read which column the message names.
 
@@ -155,7 +155,7 @@ This code uses `ticks.parquet` from [Example
 data](../EXAMPLE-DATA.md):
 
 ```python
-misspelled = po.spec.ewridge("ridge", targets=["y"], features=["x0", "x9"], half_life=100.0)
+misspelled = rp.spec.ewridge("ridge", targets=["y"], features=["x0", "x9"], half_life=100.0)
 try:
     pl.scan_parquet("ticks.parquet").rheon.fit_predict([misspelled])   # refused here: the query never runs
 except ValueError as e:
@@ -168,21 +168,21 @@ spec "ridge": feature column "x9" is not in the input, whose columns are ["t", "
 
 ## Call the functions a type checker sees
 
-**With a type checker, call `po.fit_predict`,
-[`po.predict`](https://hgilde.github.io/polars-online/rheon.html#rheon.predict)
-and [`po.unnest`](https://hgilde.github.io/polars-online/rheon.html#rheon.unnest)
-in place of the `.online` methods.** The package adds those methods to
+**With a type checker, call `rp.fit_predict`,
+[`rp.predict`](https://rheon-dev.github.io/rheon/rheon.html#rheon.predict)
+and [`rp.unnest`](https://rheon-dev.github.io/rheon/rheon.html#rheon.unnest)
+in place of the `.rheon` methods.** The package adds those methods to
 Polars' frames when it is imported, so a type checker cannot see them.
 
-1. **Replace each `.online` method with the function of the same name.**
+1. **Replace each `.rheon` method with the function of the same name.**
 2. **Pass the frame as the function's first argument.**
 
 This code uses `lf` and `later` from [Example
 data](../EXAMPLE-DATA.md):
 
 ```python
-spec = po.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], clock="t", half_life=600.0, gap_cap=300.0)
-fitted = po.fit_predict(lf, [spec], save_state="ridge.state")   # lf.rheon.fit_predict([spec], save_state="ridge.state")
-columns = po.unnest(fitted, [spec]).collect()                   # fitted.rheon.unnest([spec]); running it saves the state
-predicted = po.predict(later, "ridge.state").collect()             # later.rheon.predict("ridge.state")
+spec = rp.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], clock="t", half_life=600.0, gap_cap=300.0)
+fitted = rp.fit_predict(lf, [spec], save_state="ridge.state")   # lf.rheon.fit_predict([spec], save_state="ridge.state")
+columns = rp.unnest(fitted, [spec]).collect()                   # fitted.rheon.unnest([spec]); running it saves the state
+predicted = rp.predict(later, "ridge.state").collect()             # later.rheon.predict("ridge.state")
 ```

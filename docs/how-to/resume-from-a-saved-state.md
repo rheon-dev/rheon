@@ -9,7 +9,7 @@ or from the command line.
 
 Each way to resume needs a saved state and the rows that follow it:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The Python examples
   read `df`, the stream so far, and `today`, the 400 rows that follow it on
   the clock `t`. `lf` and `later` are the same rows, saved as
@@ -25,7 +25,7 @@ Each way to resume needs a saved state and the rows that follow it:
   learned in that group. Input that starts at or before that value has its
   own section, [Resume on input that overlaps the
   state](#resume-on-input-that-overlaps-the-state).
-- For the command line: the `polars-online` program, whose binaries are
+- For the command line: the `rheon` program, whose binaries are
   attached to each GitHub release, and the TOML file `job.toml` that [Run
   a bank over a file](run-a-bank-from-the-command-line.md#run-a-bank-over-a-file)
   has you write.
@@ -35,7 +35,7 @@ Each way to resume needs a saved state and the rows that follow it:
 Use a bank object when your own Python code holds the rows, a frame at a
 time.
 
-1. **Load the state with `po.ModelBank.load`.** To check that the file
+1. **Load the state with `rp.ModelBank.load`.** To check that the file
    holds the [specs](../GLOSSARY.md#the-model-bank-and-what-it-reads) you
    expect, pass them as `specs=`, and the load refuses a file that holds
    other specs.
@@ -51,16 +51,16 @@ together. It uses `df` and `today` from [Example
 data](../EXAMPLE-DATA.md):
 
 ```python
-spec = po.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], clock="t", half_life=600.0, gap_cap=300.0)
-one_run = po.ModelBank([spec]).fit_predict(pl.concat([df, today]))   # df and today as one stream, for comparison
+spec = rp.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], clock="t", half_life=600.0, gap_cap=300.0)
+one_run = rp.ModelBank([spec]).fit_predict(pl.concat([df, today]))   # df and today as one stream, for comparison
 
 # A bank saved after df.
-bank = po.ModelBank([spec])
+bank = rp.ModelBank([spec])
 bank.fit_predict(df)
 bank.save("bank.state")
 
 # 1. Load the state, checking that it holds this spec.
-loaded = po.ModelBank.load("bank.state", specs=[spec])
+loaded = rp.ModelBank.load("bank.state", specs=[spec])
 # 2. Feed the next rows.
 resumed = loaded.fit_predict(today)
 # 3. Save again, for the next resume.
@@ -84,7 +84,7 @@ Use a query, a chain of Polars steps that runs only when you ask for its
 result, when the next rows are in a file or a stream too large to hold.
 
 1. **Name the state file in `load_state=` on the query's
-   `online.fit_predict`,** as `later.online.fit_predict(load_state=...)`.
+   `online.fit_predict`,** as `later.rheon.fit_predict(load_state=...)`.
    The specs come from the file, so the call needs none. To have the load
    check them, pass them too.
 2. **Name a file in `save_state=` to save the state when the run reaches
@@ -110,11 +110,11 @@ query over `today`'s rows. It uses `lf` and `later` from [Example
 data](../EXAMPLE-DATA.md):
 
 ```python
-spec = po.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], clock="t", half_life=600.0, gap_cap=300.0)
+spec = rp.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], clock="t", half_life=600.0, gap_cap=300.0)
 lf.rheon.fit_predict([spec], save_state="bank.state").sink_parquet("fitted.parquet")   # the stream so far
 (later.rheon.fit_predict(load_state="bank.state", save_state="bank.state")              # 1 and 2: load, and save at the end
       .sink_parquet("more.parquet"))                                                     # 3: run the query
-print(f"rows fed in all: {po.ModelBank.load('bank.state').rows_fed}")
+print(f"rows fed in all: {rp.ModelBank.load('bank.state').rows_fed}")
 ```
 
 ```text
@@ -181,7 +181,7 @@ rows, such as a row index written with the input, and drop the rows the
 bank learned with Polars' `filter` on it in the query before the bank. Or
 give the spec a clock, so that `skip_learned` can find them.
 
-1. **Load the state with `po.ModelBank.load`.**
+1. **Load the state with `rp.ModelBank.load`.**
 2. **Pass the input through `bank.skip_learned`.** It takes a frame or a
    query and keeps the row order, so a query stays a query.
 3. **Feed the kept rows to the bank,** or, for a query, run it with
@@ -206,13 +206,13 @@ stream = pl.DataFrame({"t": np.arange(2_000.0), "x0": x0, "x1": x1,
                        "y": 0.5 + 1.5 * x0 - 2.0 * x1 + 0.1 * noise})
 stream.slice(1_400).write_parquet("rerun.parquet")        # starts 100 rows before the save
 # A bank saved after the first 1,500 rows.
-spec = po.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], clock="t", half_life=600.0, gap_cap=300.0)
-saved = po.ModelBank([spec])
+spec = rp.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], clock="t", half_life=600.0, gap_cap=300.0)
+saved = rp.ModelBank([spec])
 saved.fit_predict(stream.head(1_500))
 saved.save("ridge.state")
 
 # The rerun as it stands is refused, and the bank is untouched.
-bank = po.ModelBank.load("ridge.state")                    # 1. load the state
+bank = rp.ModelBank.load("ridge.state")                    # 1. load the state
 try:
     bank.fit_predict(pl.read_parquet("rerun.parquet"))
 except ValueError as e:
@@ -223,9 +223,9 @@ print(f"skip_learned keeps {kept.collect().height} of {pl.scan_parquet('rerun.pa
 # 3. Learn on from the kept rows, and compare with one run over the whole stream.
 (kept.rheon.fit_predict(load_state="ridge.state", save_state="ridge.state")
      .sink_parquet("rerun-fitted.parquet"))
-one_run = po.ModelBank([spec])
+one_run = rp.ModelBank([spec])
 one_run.fit_predict(stream)
-print(f"the state is one run's, byte for byte: {po.ModelBank.load('ridge.state').save_bytes() == one_run.save_bytes()}")
+print(f"the state is one run's, byte for byte: {rp.ModelBank.load('ridge.state').save_bytes() == one_run.save_bytes()}")
 ```
 
 ```text
@@ -258,7 +258,7 @@ saved state to run.state
 A [saved state](../GLOSSARY.md#saving-and-serving) is everything a
 [model bank](../GLOSSARY.md#the-model-bank-and-what-it-reads) has learned,
 written to a file. A bank that resumes from a state this version of
-polars-online saved learns each new row as one unbroken run over the old
+rheon saved learns each new row as one unbroken run over the old
 rows and the new would have learned it. So it gives the same predictions
 as that run: to the bit on the operating system that saved it, and on
 another within `1e-12 × (1 + |value|)`. A state saved by an earlier 1.x
@@ -280,31 +280,31 @@ differ where the two runs' chunks end at different rows: without
 group's last row in each chunk that is not
 [skipped](../GLOSSARY.md#the-model-bank-and-what-it-reads).
 
-**If the state does not load, `po.ModelBank.load` raises an error that
+**If the state does not load, `rp.ModelBank.load` raises an error that
 names what is wrong with the file:**
 
 | the file | error | what to do |
 |---|---|---|
-| does not exist yet | `FileNotFoundError` | on a first run, build the bank from its specs with `po.ModelBank(specs)`; otherwise, check the path |
+| does not exist yet | `FileNotFoundError` | on a first run, build the bank from its specs with `rp.ModelBank(specs)`; otherwise, check the path |
 | is not a bank, or holds different specs from the `specs=` given | `ValueError` | check the path, and pass the specs the state was saved with |
 | holds a state that contradicts its own spec | `ValueError` | refit the bank from its input |
-| was written under a newer state schema or file format than this version reads | `ValueError` | upgrade polars-online to the version that wrote it, or a later one |
-| was saved by 0.13.0 or an earlier release | `ValueError`, saying an older version of polars-online wrote it | refit the bank from its input. `po.schema_version()` gives this version's schema |
+| was written under a newer state schema or file format than this version reads | `ValueError` | upgrade rheon to the version that wrote it, or a later one |
+| was saved by 0.13.0 or an earlier release | `ValueError`, saying a version of rheon older than this one wrote it | refit the bank from its input. `rheon.schema_version()` gives this version's schema |
 
 This code makes three loads that fail. It uses `df` and `ticks.parquet`
 from [Example data](../EXAMPLE-DATA.md):
 
 ```python
 # A saved bank, and a spec that does not match it.
-spec = po.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], clock="t", half_life=600.0, gap_cap=300.0)
-bank = po.ModelBank([spec])
+spec = rp.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], clock="t", half_life=600.0, gap_cap=300.0)
+bank = rp.ModelBank([spec])
 bank.fit_predict(df)
 bank.save("bank.state")
-other = po.spec.ewridge("ridge", targets=["y"], features=["x0"], clock="t", half_life=600.0, gap_cap=300.0)
+other = rp.spec.ewridge("ridge", targets=["y"], features=["x0"], clock="t", half_life=600.0, gap_cap=300.0)
 # Three loads that fail: no file, the wrong spec, not a state file.
 for path, specs in [("nowhere.state", [spec]), ("bank.state", [other]), ("ticks.parquet", None)]:
     try:
-        po.ModelBank.load(path, specs=specs)
+        rp.ModelBank.load(path, specs=specs)
     except (FileNotFoundError, ValueError) as e:
         print(f"{type(e).__name__}: {e}")
 ```
@@ -312,5 +312,5 @@ for path, specs in [("nowhere.state", [spec]), ("bank.state", [other]), ("ticks.
 ```text
 FileNotFoundError: [Errno 2] No such file or directory: 'nowhere.state'
 ValueError: state file: its specs do not match the bank's specs: spec "ridge" (1 of 1) differs at features: ["x0","x1"] in the file, ["x0"] in the bank. Load the state with the specs it was saved with.
-ValueError: state file: these bytes are not a polars-online bank state file, or the file is cut short. Load a whole file that ModelBank.save or the command line's save_state wrote.
+ValueError: state file: these bytes are not a rheon bank state file, or the file is cut short. Load a whole file that ModelBank.save or the command line's save_state wrote.
 ```

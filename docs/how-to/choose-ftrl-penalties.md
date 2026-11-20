@@ -10,13 +10,13 @@ shrink the fit under a half-life, and how to shrink it less.
 
 These steps need the library:
 
-- polars-online installed, with numpy for the recipe, which builds its own
+- rheon installed with Polars, with numpy for the recipe, which builds its own
   data and saves it to a parquet file.
 - Optionally a [clock](../GLOSSARY.md#time) column, with the `gap_cap` a
   clock requires. Without one, each row is one clock unit. The recipe's
   clock `t` steps by 1 a row, the same as no clock.
 - The parameters of
-  [`po.spec.ftrl`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.ftrl),
+  [`rheon.spec.ftrl`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ftrl),
   which its docstring defines: `alpha`, the learning-rate scale (0.1 by
   default), `beta`, its smoothing (1.0), `l1`, the L1 penalty (0.0), and
   `l2`, the L2 penalty (1.0). Its entry in
@@ -64,7 +64,7 @@ ridge's prediction, at two half-lives, at the default penalties and at
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # A constant target of 5, and a feature x that is noise.
 n = 20_000
@@ -74,11 +74,11 @@ pl.DataFrame({"t": np.arange(n, dtype=float), "x": x, "y": np.full(n, 5.0)}).wri
 # ftrl under the squared loss, at two half-lives, with the default penalties and lighter ones.
 settings = {"default": dict(beta=1.0, l2=1.0), "light": dict(beta=0.1, l2=0.0)}
 specs = [
-    po.spec.ftrl(f"{name}_{hl:g}", targets=["y"], features=["x"], loss="squared", clock="t", gap_cap=10.0,
+    rp.spec.ftrl(f"{name}_{hl:g}", targets=["y"], features=["x"], loss="squared", clock="t", gap_cap=10.0,
                  half_life=hl, alpha=0.1, **kw)
     for hl in (100.0, 1_000.0) for name, kw in settings.items()
 ]
-bank = po.ModelBank(specs)
+bank = rp.ModelBank(specs)
 bank.fit(pl.scan_parquet("five.parquet"))
 
 # Each fitted intercept, beside the ridge's prediction and the planted 5.

@@ -28,7 +28,7 @@ sys.path.insert(0, str(HERE))
 
 import families  # noqa: E402 -- beside this file, found through the path above
 
-project = "polars-online"
+project = "rheon"
 author = "Hans Gilde"
 release = rheon.__version__
 copyright = "Hans Gilde"  # noqa: A001 -- Sphinx's name for it
@@ -55,11 +55,11 @@ autodoc_typehints_format = "short"
 python_use_unqualified_type_names = True
 
 html_theme = "furo"
-html_title = f"polars-online {release}"
+html_title = f"rheon {release}"
 html_static_path: list[str] = []
 # `llms.txt` (llmstxt.org) is written for coding agents and lives at the repo
 # root, where GitHub serves it; copying it verbatim into the build root puts it
-# at https://hgilde.github.io/polars-online/llms.txt as well, so one file serves
+# at https://rheon-dev.github.io/rheon/llms.txt as well, so one file serves
 # both and cannot drift from itself. tests/test_llms_txt.py holds its contents
 # to the registry.
 html_extra_path = ["../../llms.txt"]

@@ -9,7 +9,7 @@ not learn from.
 
 These steps need the library and a stream:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   `df`, a frame of 400 rows on the clock `t`, and the file `ticks.parquet`,
   the same rows on disk. Its column `venue` takes turns between `"X"` and
@@ -59,7 +59,7 @@ data](../EXAMPLE-DATA.md):
 
 ```python
 # One spec, and four copies of the stream that differ only at row 100.
-held = po.spec.ewridge("held", targets=["y"], features=["x0", "x1"], clock="t", half_life=100.0, gap_cap=300.0,
+held = rp.spec.ewridge("held", targets=["y"], features=["x0", "x1"], clock="t", half_life=100.0, gap_cap=300.0,
                        weight="w", max_rows_between_solves=1)   # a solve on every row, so each fit read is current
 rows = df.with_columns(w=pl.lit(1.0))
 row_100 = pl.int_range(pl.len()) == 100
@@ -70,12 +70,12 @@ ways = {
     "predict": rows,                                                                             # 3.
 }
 # A bank that has seen rows 0 to 99, to tell whether the fit moved.
-before = po.ModelBank([held])
+before = rp.ModelBank([held])
 before.fit_predict(rows.head(100))                            # rows 0 to 99
 print(f"{'':<14} {'predicted':>9} {'clock':>6} {'fit moved':>9} {'weight_sum':>10}")
 # Each way: rows 0 to 99, then row 100, then row 101.
 for way, frame in ways.items():
-    bank = po.ModelBank([held])
+    bank = rp.ModelBank([held])
     bank.fit_predict(frame.head(100))
     if way == "predict":
         predicted = bank.predict(frame.slice(100, 1))         # predicts row 100 and learns nothing
@@ -124,7 +124,7 @@ rows learned before each row. This code uses `ticks.parquet` from [Example
 data](../EXAMPLE-DATA.md):
 
 ```python
-learn_from_x = po.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"],
+learn_from_x = rp.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"],
                                clock="t", half_life=float("inf"), gap_cap=300.0, weight="w")   # 2.
 fitted = (
     pl.scan_parquet("ticks.parquet")

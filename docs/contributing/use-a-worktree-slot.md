@@ -18,7 +18,7 @@ workspace crates the move changed.
 A worktree slot needs the main checkout and room for its builds:
 
 - The main checkout of the repository. The worktree slots live under its
-  `.claude/slots/<n>`, four by default (`POLARS_ONLINE_SLOTS` sets the
+  `.claude/slots/<n>`, four by default (`RHEON_SLOTS` sets the
   number).
 - A new name for the task's branch. `take` resets an existing branch of
   that name to its base, so the branch's own commits leave it.

@@ -64,7 +64,7 @@ cargo run --release -p rheon-core --example rls_bench
 cargo run --release -p rheon-core --example gram_block_bench
 
 # The bank through Python, with the time of each part of a chunk on stderr
-POLARS_ONLINE_TIMING=1 uv run python scripts/benchmark.py
+RHEON_TIMING=1 uv run python scripts/benchmark.py
 ```
 
 Other commands make the rest:
@@ -78,7 +78,7 @@ Other commands make the rest:
 | `uv run python scripts/sklearn_comparison.py` | this library against scikit-learn's `SGDRegressor` |
 | `cargo run --release -p rheon-core --example sgd_bench`, and the same with `sgd_signature` | `sgd`'s time for each feature |
 
-**For the time inside a run, set `POLARS_ONLINE_TIMING=1`, which prints two kinds
+**For the time inside a run, set `RHEON_TIMING=1`, which prints two kinds
 of line to stderr:**
 
 | printed by | once per | fields |
@@ -88,7 +88,7 @@ of line to stderr:**
 
 **The lines are written for a person, so their words and fields are not
 promised: a minor release may change them.** The variable turns them on at
-`1` and at no other value, as `POLARS_ONLINE_WARN_UNSTABLE` does. It is
+`1` and at no other value, as `RHEON_WARN_UNSTABLE` does. It is
 read once, at a process's first chunk, so set it before the process starts:
 set or cleared later, it changes nothing until the next process. A read of
 the environment costs in proportion to its size, so reading it once keeps a
@@ -97,7 +97,7 @@ call's work independent of the size of the environment.
 **A profile says where inside `process` the time goes, and the wall clock
 says how much.** A sampling profiler counts threads: `assemble` runs on
 every thread and `process` on one for a single group, so on 14 threads a
-20 ms `assemble` reads as 280. The amount is `POLARS_ONLINE_TIMING=1`'s,
+20 ms `assemble` reads as 280. The amount is `RHEON_TIMING=1`'s,
 and a profile shows where inside `process` it goes, by function. Its
 attribution to a line inside an inlined recursion is not reliable. On
 macOS these commands build the extension with symbols, sample a Python
@@ -276,7 +276,7 @@ model](#rows-a-second-for-each-model). In ns a row:
 **A query runs slower than the eager bank on the same rows at many groups,
 because it reads its input as the frames Polars hands it.** On 1M rows of a
 five-feature `ewridge` on all threads,
-`pl.scan_parquet(...).online.fit_predict([spec]).collect()` against
+`pl.scan_parquet(...).rheon.fit_predict([spec]).collect()` against
 `ModelBank([spec]).fit_predict(df)`, the best of five runs, two rounds, on
 1.3.0's build on 2026-10-24 at a load average of 1.9 to 3.4, in ns a row:
 
@@ -325,7 +325,7 @@ makes the file and runs each case:
 
 | what you write | 3M rows | 12M rows | what it is |
 |---|---:|---:|---|
-| `lf.online.fit_predict([spec])` | 1.2 GB | 1.8 GB | the bank inside a query |
+| `lf.rheon.fit_predict([spec])` | 1.2 GB | 1.8 GB | the bank inside a query |
 | `for chunk in lf.collect_batches(): bank.fit_predict(chunk)` | 1.1 GB | 1.5 GB | your own loop |
 
 The bank does not grow from 3M to 12M rows: the growth is the memory
@@ -350,8 +350,8 @@ measurements:
 
 | what you run | 3M rows | 12M rows | 24M rows |
 |---|---:|---:|---:|
-| `polars-online --config` | 0.75 GB | 0.85 GB | 0.86 GB |
-| `polars-online --config`, with `POLARS_ROW_GROUP_PREFETCH_SIZE=1` | 0.42 GB | 0.43 GB | 0.44 GB |
+| `rheon --config` | 0.75 GB | 0.85 GB | 0.86 GB |
+| `rheon --config`, with `POLARS_ROW_GROUP_PREFETCH_SIZE=1` | 0.42 GB | 0.43 GB | 0.44 GB |
 
 The bank's memory does not grow with the rows, and the allocator reuses
 the pages it frees rather than hold more as the run goes on. Most of what
@@ -392,7 +392,7 @@ measured on 2026-09-02 as the most memory the process held:
 
 ### What a window operator costs
 
-**A window operator, such as `po.ewm_mean`, does the same work on a row
+**A window operator, such as `rp.ewm_mean`, does the same work on a row
 however long its window, and holds about one window of rows.** So a window
 adds little memory: through `with_windows`, within 0.04 GB of reading and
 writing the file alone.
@@ -498,7 +498,7 @@ growing with the stream when it is the test's frame that grows.
 The Python surfaces add their own per-call work on top of the bank's, so
 `tests/test_scaling.py`, in the extended tier, times them in the same way.
 It times the chunked `ModelBank.fit_predict` and the Polars source behind
-`LazyFrame.online.fit_predict` by their specs, at large calls and at small
+`LazyFrame.rheon.fit_predict` by their specs, at large calls and at small
 ones, and the Polars source by its rows.
 
 A cell whose measurement exceeds its declaration is a *finding*. It is held
@@ -511,7 +511,7 @@ in the table.
 
 **113 cells: 76 over the 22 model kinds' rows, 19 over the
 bank, 3 over the command line, 9 over the window operators, 4 over
-`refresh_time` and 2 over `po.gbdt`'s sample.** Each row is one cell: the
+`refresh_time` and 2 over `rp.gbdt`'s sample.** Each row is one cell: the
 size it varies, its two sizes, the growth declared for a row's work and for
 the state in that size (written in `n`, the size), and the reason. The last
 column has the four native ratios from large to small, as measured on
@@ -654,9 +654,9 @@ held instead or why it needs no cell:
 | the clock | rows seen | O(1) | O(1) | the `clock_float` and `clock_temporal` budget cases count a fixed block |
 | the bank's `predict` | as `fit_predict`'s | as `fit_predict`'s | unchanged by a call | the same extraction and models, without the update |
 | `Bank::fit_predict` with groups that close | groups open | O(1) a row | O(groups open) | closing a group drops its state; `bank.groups_seen` holds the open ones |
-| the Polars source behind `LazyFrame.online.fit_predict` | specs; rows | O(specs); O(1) | the bank's | `tests/test_scaling.py`, by time |
+| the Polars source behind `LazyFrame.rheon.fit_predict` | specs; rows | O(specs); O(1) | the bank's | `tests/test_scaling.py`, by time |
 | the chunked `ModelBank.fit_predict` | specs, at large and small calls | O(specs) | the bank's | `tests/test_scaling.py`, by time |
-| `po.gbdt`'s build | rows | O(1) a row in the sample | O(sample) in the sample; O(rows) in XGBoost's and LightGBM's own matrices | the libraries bin every row by design; the sample is `gbdt.history` and `gbdt.sample` |
+| `rp.gbdt`'s build | rows | O(1) a row in the sample | O(sample) in the sample; O(rows) in XGBoost's and LightGBM's own matrices | the libraries bin every row by design; the sample is `gbdt.history` and `gbdt.sample` |
 
 ### Specs on one stream
 

@@ -2,7 +2,7 @@
 # Read a state without this library
 
 This how-to is for anyone who wants a program that does not use
-polars-online, in Python or another language, to read what a model bank
+rheon, in Python or another language, to read what a model bank
 has learned.
 
 A [model bank](../GLOSSARY.md#the-model-bank-and-what-it-reads)'s
@@ -15,12 +15,12 @@ can parse.
 
 These steps need the library, to export the state, and a JSON reader:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The example reads
   `df`, a frame of 400 rows with the features `x0` and `x1` and the target
   `y`.
 - A bank that has learned from rows, or a state file loaded with
-  `po.ModelBank.load` ([Save a state](save-a-state.md)).
+  `rp.ModelBank.load` ([Save a state](save-a-state.md)).
 - A JSON reader in the program that reads the export. The example uses
   Python's `json` module.
 
@@ -32,7 +32,7 @@ Export the state from Python, and read the JSON in the other program.
    or write it to a file with `bank.write_json(path)`. Every export is read
    back and checked against the state before you get it, and one that does
    not match raises `ValueError`.
-2. **Keep the binary file too, for resuming,** since `po.ModelBank.load`
+2. **Keep the binary file too, for resuming,** since `rp.ModelBank.load`
    reads only that form.
 3. **Parse the JSON with any reader.**
 4. **Turn the strings `"nan"`, `"inf"` and `"-inf"` back into numbers.**
@@ -47,7 +47,7 @@ data](../EXAMPLE-DATA.md):
 ```python
 import json
 
-bank = po.ModelBank([po.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], half_life=float("inf"))])
+bank = rp.ModelBank([rp.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], half_life=float("inf"))])
 bank.fit_predict(df)
 text = bank.write_json()                  # 1. everything save() writes, as JSON
 bank.write_json("bank.json")              # 1. the same, to a file
@@ -63,6 +63,8 @@ polars-online-bank: half_life 'inf', as a number inf
 ## Check that it worked
 
 **The export's `magic` field reads `polars-online-bank`,** as the example
-prints, and each number your program reads matches the bank's. For the
+prints, and each number your program reads matches the bank's. The field
+keeps the package's name from before 2.0, so a state saved by any 1.x
+release reads the same way. For the
 coefficients, compare with `bank.coef()` ([Read the
 coefficients](read-the-coefficients.md)).

@@ -7,14 +7,14 @@ mid. It makes the feature a column in the
 [query](../GLOSSARY.md#the-model-bank-and-what-it-reads) (a chain of
 Polars steps that runs only when you ask for its result) before the
 [model bank](../GLOSSARY.md#the-model-bank-and-what-it-reads), with the
-window operators of `po.ops` and `.online.with_windows`.
+window operators of `rp.ops` and `.rheon.with_windows`.
 
 ## Prerequisites
 
 These steps need the library, a stream with a clock, and rows in clock
 order:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   `trades`, a stream of quotes with trades between them, saved as
   `trades.parquet`. Its `mid` is on every row, and `side`, `quantity` and
@@ -31,8 +31,8 @@ order:
 ## Add the features as columns before the bank
 
 A [window operator](../GLOSSARY.md#fitting-a-model) of
-[`po.ops`](https://hgilde.github.io/polars-online/ops.html), such as
-`po.ewm_mean`, returns a Polars expression (a column computation, such as
+[`rp.ops`](https://rheon-dev.github.io/rheon/ops.html), such as
+`rp.ewm_mean`, returns a Polars expression (a column computation, such as
 `pl.col("x") + 1`). Its value on each row is computed over the rows near
 it on the clock. By default the window looks back from the row, so it
 makes a feature. Each operator keeps running sums, so it does the same
@@ -47,22 +47,22 @@ lists every operator, and how each one weighs the rows of its window.
    the window off, a `window_size`, how far back it reaches. Both are in the clock's
    units: numbers on a numeric clock, and durations such as `"10s"` on a
    temporal one. Around the operators, write element-wise Polars:
-   `pl.col("mid") - po.ewm_mean("mid", half_life="5s", window_size="2m")`
+   `pl.col("mid") - rp.ewm_mean("mid", half_life="5s", window_size="2m")`
    is the mid against its recent mean. [What a formula may
    hold](../WINDOWS.md#why-a-formula-around-the-operators-is-element-wise)
    lists what a formula may hold.
-2. **Call `.online.with_windows` on the query, with each formula as a
+2. **Call `.rheon.with_windows` on the query, with each formula as a
    keyword argument.** It adds one column per formula after the input's
    columns, named by its keyword or its `.alias()`. The call is
-   [`po.stream.with_windows(frame, name=formula, ...)`](https://hgilde.github.io/polars-online/stream.html#rheon.stream.with_windows),
-   written in a chain as `lf.online.with_windows(...)` on a query or
-   `df.online.with_windows(...)` on a `DataFrame`.
+   [`rp.stream.with_windows(frame, name=formula, ...)`](https://rheon-dev.github.io/rheon/stream.html#rheon.stream.with_windows),
+   written in a chain as `lf.rheon.with_windows(...)` on a query or
+   `df.rheon.with_windows(...)` on a `DataFrame`.
 3. **Give the same call the clock keywords, once for every formula in
    it:** `clock`, its `gap_cap`, and `group` for one set of windows per
    group.
 4. **Make the target column with Polars' `with_columns`, chained after
    `with_windows`,** if the input does not hold it.
-5. **Chain `.online.fit_predict` after it, with a spec that names the new
+5. **Chain `.rheon.fit_predict` after it, with a spec that names the new
    columns in its `features`.** Give the
    [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads) the same clock
    keywords, so the windows and the model share one clock.
@@ -78,12 +78,12 @@ from [Example data](../EXAMPLE-DATA.md):
 # Features that look back, on one clock shared with the model.
 clock = dict(clock="ts", gap_cap="5m", group="symbol")             # one clock for the windows and the model
 trends = pl.scan_parquet("trades.parquet").rheon.with_windows(    # 1 to 3: the features, windows that look back
-    trend_5s=pl.col("mid") - po.ewm_mean("mid", half_life="5s", window_size="2m"),
-    trend_30s=pl.col("mid") - po.ewm_mean("mid", half_life="30s", window_size="2m"),
+    trend_5s=pl.col("mid") - rp.ewm_mean("mid", half_life="5s", window_size="2m"),
+    trend_30s=pl.col("mid") - rp.ewm_mean("mid", half_life="30s", window_size="2m"),
     **clock,
 )
 # 5. A model that reads them: the target, how far from the mid each trade printed, null on a quote.
-by_trend = po.spec.ewridge("by_trend", targets=["edge"], features=["trend_5s", "trend_30s"], half_life="30m", **clock)
+by_trend = rp.spec.ewridge("by_trend", targets=["edge"], features=["trend_5s", "trend_30s"], half_life="30m", **clock)
 fitted = (trends.with_columns(edge=(pl.col("price") - pl.col("mid")).abs())  # 4. the target column
                 .rheon.fit_predict([by_trend])
                 .collect())                                         # 6. run the query
@@ -111,8 +111,8 @@ aaa = pl.read_parquet("trades.parquet").filter(pl.col("symbol") == "AAA")   # on
 aaa.write_parquet("aaa.parquet")
 # The running mean and the last minute's volume, by the library.
 ours = pl.scan_parquet("aaa.parquet").rheon.with_windows(
-    mean=po.ewm_mean("mid", half_life="5s"),                                 # no window_size: every row of the stretch
-    volume=po.ewm_sum("quantity", half_life=float("inf"), window_size="1m"), # evenly weighted: the last minute's volume
+    mean=rp.ewm_mean("mid", half_life="5s"),                                 # no window_size: every row of the stretch
+    volume=rp.ewm_sum("quantity", half_life=float("inf"), window_size="1m"), # evenly weighted: the last minute's volume
     clock="ts", gap_cap="5m",
 ).collect()
 # The same two by Polars' own functions.
@@ -152,11 +152,11 @@ from datetime import timedelta
 notional = pl.col("price") * pl.col("quantity")
 buys = pl.when(pl.col("side") == "buy")
 last_minute = dict(half_life="10s", window_size="1m")
-windowed = po.stream.with_windows(
+windowed = rp.stream.with_windows(
     trades,
-    mid_trend=po.ewm_mean("mid", half_life="5s", window_size="1m") - pl.col("mid"),  # the last minute's time-weighted mid, less the mid now
-    vwap=po.ewm_sum(notional, **last_minute) / po.ewm_sum("quantity", **last_minute),      # the last minute's trades, weighted most on the latest
-    buy_vwap=po.ewm_sum(buys.then(notional), min_samples=1, **last_minute) / po.ewm_sum(buys.then("quantity"), min_samples=1, **last_minute),   # the same, buys only; null in a minute with no buy
+    mid_trend=rp.ewm_mean("mid", half_life="5s", window_size="1m") - pl.col("mid"),  # the last minute's time-weighted mid, less the mid now
+    vwap=rp.ewm_sum(notional, **last_minute) / rp.ewm_sum("quantity", **last_minute),      # the last minute's trades, weighted most on the latest
+    buy_vwap=rp.ewm_sum(buys.then(notional), min_samples=1, **last_minute) / rp.ewm_sum(buys.then("quantity"), min_samples=1, **last_minute),   # the same, buys only; null in a minute with no buy
     clock="ts", gap_cap="5m", group="symbol",
 )
 print(windowed.columns)
@@ -173,7 +173,7 @@ print(f"row 1000: {behind.height} trades in the last minute; vwap {row['vwap']:.
 
 # The same column over the file, written to parquet.
 (pl.scan_parquet("trades.parquet")
-    .rheon.with_windows(vwap=po.ewm_sum(notional, **last_minute) / po.ewm_sum("quantity", **last_minute),
+    .rheon.with_windows(vwap=rp.ewm_sum(notional, **last_minute) / rp.ewm_sum("quantity", **last_minute),
                          clock="ts", gap_cap="5m", group="symbol")
     .sink_parquet("with_windows.parquet"))     # streams, holding about one window of rows
 ```
@@ -203,13 +203,13 @@ import re
 # Sorted by symbol, the clock across symbols steps back, and is refused.
 by_symbol = trades.sort("symbol")                          # every AAA row, then every BBB row
 try:
-    po.stream.with_windows(by_symbol, mid_mean=po.ewm_mean("mid", half_life="5s"),
+    rp.stream.with_windows(by_symbol, mid_mean=rp.ewm_mean("mid", half_life="5s"),
                            clock="ts", gap_cap="5m", group="symbol")
 except (ValueError, pl.exceptions.ComputeError) as e:
     print(re.search(r'clock column .* at row \d+', str(e)).group())
 # Back in clock order, the same call runs.
 in_order = by_symbol.sort("ts", maintain_order=True)       # back in clock order across the symbols
-print(po.stream.with_windows(in_order, mid_mean=po.ewm_mean("mid", half_life="5s"),
+print(rp.stream.with_windows(in_order, mid_mean=rp.ewm_mean("mid", half_life="5s"),
                              clock="ts", gap_cap="5m", group="symbol").height)
 ```
 
@@ -222,12 +222,12 @@ clock column "ts" steps back by 24m45s118ms961us at row 1502
 
 Use this when a feature is a window over another window, such as the
 recent trend of a rate. An operator's input can be an element-wise formula,
-`po.increment` included, but not another operator, which the outer operator
+`rp.increment` included, but not another operator, which the outer operator
 refuses when it is called.
 
-1. **Make the inner operator a column in one `.online.with_windows`
+1. **Make the inner operator a column in one `.rheon.with_windows`
    call.**
-2. **Window that column in a second `.online.with_windows` call,** chained
+2. **Window that column in a second `.rheon.with_windows` call,** chained
    after the first, with the same clock keywords.
 
 Here a rate of traded volume comes from a column of cumulative volume, as
@@ -242,11 +242,11 @@ volume = (
     pl.scan_parquet("trades.parquet")
     .with_columns(cum_volume=pl.col("quantity").cum_sum().over("symbol"))   # a running volume: null on the quotes
     .rheon.with_windows(                                                    # 1. an operator over an increment
-        volume_rate=po.ewm_rate(po.increment("cum_volume"), half_life="30s", window_size="5m"),   # units traded per second
+        volume_rate=rp.ewm_rate(rp.increment("cum_volume"), half_life="30s", window_size="5m"),   # units traded per second
         **clock,
     )
     .rheon.with_windows(                                                    # 2. a mean of that rate
-        rate_trend=po.ewm_mean("volume_rate", half_life="2m", window_size="10m"),
+        rate_trend=rp.ewm_mean("volume_rate", half_life="2m", window_size="10m"),
         **clock,
     )
     .collect()

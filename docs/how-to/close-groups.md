@@ -18,7 +18,7 @@ bank writes out its running sums, a row per half-life and per
 
 These steps need the library and a column whose values name the groups:
 
-- polars-online and numpy installed, and
+- rheon, Polars and numpy installed, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   `df`, a frame of 400 rows with the features `x0` and `x1`.
 - A group column whose groups end in one of two ways: its key only ever
@@ -58,24 +58,24 @@ upper triangle. It adds the span's own `rows_fed`, `rows_learned`,
 `ew_cov` with `pca` its eigendecomposition, and a `marginal` its pairs.
 
 Here a block id rises every 100 rows, so blocks 0 to 2 close, and block 3,
-the last, stays open. `po.gram.from_row` turns a closed row back into the
-dict `gram()` returns, so everything in `po.gram` works on it. This code
+the last, stays open. `rheon.gram.from_row` turns a closed row back into the
+dict `gram()` returns, so everything in `rheon.gram` works on it. This code
 uses `df` from [Example data](../EXAMPLE-DATA.md):
 
 ```python
 # 1. A Gram per block, each closed once a higher block arrives.
-blocks = po.spec.ew_cov("cov", features=["x0", "x1"], lam=1.0,   # lam=1.0: no decay
+blocks = rp.spec.ew_cov("cov", features=["x0", "x1"], lam=1.0,   # lam=1.0: no decay
                         group="block", group_close="monotone")   # a block is closed once a higher one arrives
 by_block = df.with_columns(block=pl.int_range(pl.len()) // 100)   # a block id that rises every 100 rows
 
 # 2 and 3. Feed the rows, and take the closed rows out.
-bank = po.ModelBank([blocks])
+bank = rp.ModelBank([blocks])
 bank.fit_predict(by_block)
 closed = bank.closed_groups()          # blocks 0, 1 and 2, oldest first: one half-life and one Gram, so one row each
 print(closed.select("group", "rows_fed", "rows_learned").rows())
 
-first = po.gram.from_row(closed.head(1))   # block 0's row, as the dict gram() returns
-print(f"{po.gram.correlation(first)[0, 1]:.3f}")   # everything in po.gram works on it: x0 and x1's correlation in block 0
+first = rp.gram.from_row(closed.head(1))   # block 0's row, as the dict gram() returns
+print(f"{rp.gram.correlation(first)[0, 1]:.3f}")   # everything in rp.gram works on it: x0 and x1's correlation in block 0
 ```
 
 ```text
@@ -95,11 +95,11 @@ neither the bank nor its saved state holds the closed rows. From Python,
 the rows read out are kept by the process and written to the file once,
 when the chunks stop. So memory grows with the number of groups that
 close, never with the rows. `fit` and `fit_predict_batches` write the file
-even when the run stops early or fails, but `lf.online.fit_predict` writes
+even when the run stops early or fails, but `lf.rheon.fit_predict` writes
 it only after the last chunk, so a run that fails writes no file. The
 command line writes the rows as it goes.
 
-1. **Pass a path as `closed_groups=`** to `lf.online.fit_predict`,
+1. **Pass a path as `closed_groups=`** to `lf.rheon.fit_predict`,
    `fit_predict_batches` or `fit`, or `--closed-groups` to the command line
    ([Closed groups to a sidecar
    file](../RUNNER.md#closed-groups-to-a-sidecar-file)).
@@ -112,9 +112,9 @@ and each closed block's row goes to `blocks.parquet`. This code uses `df`
 from [Example data](../EXAMPLE-DATA.md):
 
 ```python
-blocks = po.spec.ew_cov("cov", features=["x0", "x1"], lam=1.0, group="block", group_close="monotone")
+blocks = rp.spec.ew_cov("cov", features=["x0", "x1"], lam=1.0, group="block", group_close="monotone")
 df.with_columns(block=pl.int_range(pl.len()) // 100).write_parquet("by_block.parquet")   # the stream, on disk
-po.ModelBank([blocks]).fit(pl.scan_parquet("by_block.parquet"), closed_groups="blocks.parquet")   # 1 and 2: read back as a query
+rp.ModelBank([blocks]).fit(pl.scan_parquet("by_block.parquet"), closed_groups="blocks.parquet")   # 1 and 2: read back as a query
 print(pl.read_parquet("blocks.parquet").select("group", "rows_fed").rows())
 ```
 
@@ -133,7 +133,7 @@ data](../EXAMPLE-DATA.md):
 
 ```python
 # Block 0 in a bank that has seen only its rows, so it is still open: its Gram, packed as a closed row's is.
-open_bank = po.ModelBank([blocks])
+open_bank = rp.ModelBank([blocks])
 open_bank.fit_predict(by_block.head(100))
 still_open = open_bank.gram("cov", layout="packed")[0]
 row = closed.row(0, named=True)

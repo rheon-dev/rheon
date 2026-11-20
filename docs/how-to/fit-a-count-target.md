@@ -10,12 +10,12 @@ keeps the gradient's cap that holds the fit steady.
 
 These steps need the library:
 
-- polars-online installed, with numpy for the recipe, which builds its own
+- rheon installed with Polars, with numpy for the recipe, which builds its own
   data and saves it to a parquet file.
 - A target that holds counts: 0 or more on every row where it is not
   [null](../GLOSSARY.md#the-model-bank-and-what-it-reads).
 - The parameters of
-  [`po.spec.sgd`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.sgd),
+  [`rheon.spec.sgd`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.sgd),
   which its docstring defines. Its entry in
   [MODELS.md](../MODELS.md#sgd--stochastic-gradient-descent) gives the
   Poisson loss's link and gradient.
@@ -53,7 +53,7 @@ coefficients. This code builds its own data:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # Counts with log-rate 1 + 0.4·busy, and one row's count of 2,000.
 rng = np.random.default_rng(21)
@@ -66,9 +66,9 @@ pl.DataFrame({"busy": busy, "arrivals": arrivals, "clean": clean}).write_parquet
 
 # The Poisson loss at a constant rate, with the gradient's default cap and with none.
 common = dict(targets=["arrivals"], features=["busy"], half_life=float("inf"), loss="poisson", learning_rate=0.003)
-specs = [po.spec.sgd("capped", **common), po.spec.sgd("uncapped", clip_gradient=float("inf"), **common),
-         po.spec.sgd("no_large", **{**common, "targets": ["clean"]})]
-bank = po.ModelBank(specs)
+specs = [rp.spec.sgd("capped", **common), rp.spec.sgd("uncapped", clip_gradient=float("inf"), **common),
+         rp.spec.sgd("no_large", **{**common, "targets": ["clean"]})]
+bank = rp.ModelBank(specs)
 bank.fit(pl.scan_parquet("arrivals.parquet"))
 
 # Each fit's coefficients on the log-rate, beside the planted ones.
@@ -104,10 +104,10 @@ should predict without learning. This code tries a chunk whose second row
 holds −1:
 
 ```python
-counts = po.spec.sgd("counts", targets=["arrivals"], features=["busy"], half_life=float("inf"), loss="poisson")
+counts = rp.spec.sgd("counts", targets=["arrivals"], features=["busy"], half_life=float("inf"), loss="poisson")
 bad = pl.DataFrame({"busy": [0.1, 0.2, 0.3], "arrivals": [2.0, -1.0, 3.0]})
 try:
-    po.ModelBank([counts]).fit(bad)
+    rp.ModelBank([counts]).fit(bad)
 except ValueError as refused:
     print(refused)
 ```

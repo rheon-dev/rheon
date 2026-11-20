@@ -1,7 +1,7 @@
 <!-- kind: tutorial -->
 # Follow a local fit through a day
 
-This tutorial is for anyone new to polars-online who wants a regression
+This tutorial is for anyone new to rheon who wants a regression
 that follows the most recent rows of a
 [stream](../GLOSSARY.md#the-model-bank-and-what-it-reads) (the rows a
 [model bank](../GLOSSARY.md#the-model-bank-and-what-it-reads) reads, in
@@ -10,7 +10,7 @@ the timestamps, and watch it recover a coefficient you planted, which
 drifts through a trading day and changes overnight.
 
 To run the code, install the library and numpy with
-`pip install "polars-online[numpy]"`. Run each step's code in the same
+`pip install "rheon[polars,numpy]"`. Run each step's code in the same
 Python process, in a directory where it may write files.
 
 A [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads) describes one
@@ -34,7 +34,7 @@ from datetime import datetime, time
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # Two trading days, 9:30 to 16:00, a row a second.
 rng = np.random.default_rng(1)
@@ -68,7 +68,7 @@ for day, rows, first, last in spans.iter_rows():
 
 ## 2. Fit a regression that follows the recent rows
 
-`po.spec.ewridge` builds the spec of a ridge regression whose rows are
+`rheon.spec.ewridge` builds the spec of a ridge regression whose rows are
 weighted by their age. Give it a [clock](../GLOSSARY.md#time) (the
 timestamp column `ts`) and `half_life="10m"`, so each row's weight halves
 for every ten minutes of `ts` after it. The fit is then local: it is made
@@ -84,12 +84,12 @@ after that row, from its latest solve.
 Run the spec over both days in a query. The bank adds one [output
 column](../GLOSSARY.md#what-a-bank-writes), named after the spec, whose
 value in each row is a record of named
-[fields](../GLOSSARY.md#what-a-bank-writes), and `.online.unnest` turns
+[fields](../GLOSSARY.md#what-a-bank-writes), and `.rheon.unnest` turns
 each field into a column. Read the spec's coefficient on `flow` at half
 past each hour of the first day, from 10:30:
 
 ```python
-local = po.spec.ewridge(
+local = rp.spec.ewridge(
     "local", targets=["ret"], features=["flow"],
     clock="ts",                                    # the clock
     half_life="10m",                               # halves every 10m
@@ -161,7 +161,7 @@ over with nothing learned wherever `day` changes. Fit it, and read the
 second day's open beside the fit from step 2:
 
 ```python
-by_day = po.spec.ewridge(
+by_day = rp.spec.ewridge(
     "by_day", targets=["ret"], features=["flow"],
     clock="ts", half_life="10m", gap_cap="5m", coef_every=0,
     session="day",                                 # a new value of day is a new session

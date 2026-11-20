@@ -67,7 +67,7 @@ def test_every_switch_is_on_the_page():
 def test_every_switch_runs_in_the_every_switch_recipe():
     """*Every switch at once* turns each switch on, so its output lists every
     field the switches write."""
-    block = next(code for _, code, _ in RECIPES if 'po.spec.ewridge(\n    "every"' in code)
+    block = next(code for _, code, _ in RECIPES if 'rp.spec.ewridge(\n    "every"' in code)
     missing = sorted(
         s for s in _switches() - {"emit_selected", "emit_averaged"} if f"{s}=" not in block
     )

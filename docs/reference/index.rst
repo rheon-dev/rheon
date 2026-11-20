@@ -1,17 +1,17 @@
-polars-online
-=============
+rheon
+=====
 
-This is the API reference of polars-online, built from its docstrings, for
-a reader who has met the library in the `README
-<https://github.com/hgilde/polars-online#readme>`_ and wants one call's
+This is the API reference of rheon, built from its docstrings, for a
+reader who has met the library in the `README
+<https://github.com/rheon-dev/rheon#readme>`_ and wants one call's
 parameters, output and refusals. Install it with ``pip install
-polars-online``.
+"rheon[polars]"``, and import it as ``from rheon import polars as rp``.
 
-polars-online fits models online for `Polars <https://pola.rs>`_: linear
+rheon fits models online for `Polars <https://pola.rs>`_: linear
 models, streaming moments, clustering and regime detection, for data too
 large to hold in memory at once. The Rust core runs three ways: inside a
 Polars query (``lf.rheon.fit_predict(specs)``), fed chunks by a
-``ModelBank``, and from the ``polars-online`` command line. Every row is
+``ModelBank``, and from the ``rheon`` command line. Every row is
 predicted before it is learned from, and the numbers are the same whichever
 way the bank runs.
 
@@ -19,9 +19,9 @@ Each module's page lists its functions and classes by family, and each
 function and class has a page of its own. The guides, which the README's
 map leads to, show each call at work: the models, which calls stream, the
 state-file workflow, and performance. The `feature index
-<https://github.com/hgilde/polars-online/blob/main/docs/FEATURES.md>`_ lists
+<https://github.com/rheon-dev/rheon/blob/main/docs/FEATURES.md>`_ lists
 every function and class with a line each. The `highlights page
-<https://github.com/hgilde/polars-online/blob/main/docs/HIGHLIGHTS.md>`_ runs
+<https://github.com/rheon-dev/rheon/blob/main/docs/HIGHLIGHTS.md>`_ runs
 four use cases end to end. Each model's update equations
 are in its builder's docstring.
 

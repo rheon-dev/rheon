@@ -11,7 +11,7 @@ question.
 
 These steps need the library and a question to put to a stream:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   `df`, 400 rows a minute apart. In `df`, `y` is `1 + 2·x0 − x1` plus
   noise, and `ret`'s slope on `signal_a` is 0.8 on rows 0 to 199 and −0.8
@@ -23,7 +23,7 @@ These steps need the library and a question to put to a stream:
 ## Choose the family, then the model
 
 **Choose the family by the question you are asking, then the model by what
-your data need.** polars-online's models fall into four families, and each
+your data need.** rheon's models fall into four families, and each
 family answers one kind of question about a stream. Each model has an
 entry in [MODELS.md](../MODELS.md): when to reach for it, its update equations,
 its parameters, a recipe on data whose answer is known, and what it is
@@ -35,7 +35,7 @@ checked against. That page opens with the notation the update equations share.
    case** in the last column.
 4. **Look the model up in [MODELS.md](../MODELS.md)** for its parameters,
    and in its builder's reference page, such as the one for
-   [`po.spec.ewridge`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.ewridge), for its keywords and their defaults.
+   [`rheon.spec.ewridge`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ewridge), for its keywords and their defaults.
 
 | your question | the family | start with | change to another when |
 |---|---|---|---|
@@ -62,10 +62,10 @@ This code uses `df` from [Example data](../EXAMPLE-DATA.md):
 ```python
 common = dict(targets=["ret"], features=["signal_a"], clock="t", gap_cap=10.0)
 specs = [
-    po.spec.ewridge("ridge", half_life=float("inf"), **common),                # every row counts the same
-    po.spec.kalman("kalman", half_life=50.0, coef_half_life=20.0, **common),   # a coefficient that may drift
+    rp.spec.ewridge("ridge", half_life=float("inf"), **common),                # every row counts the same
+    rp.spec.kalman("kalman", half_life=50.0, coef_half_life=20.0, **common),   # a coefficient that may drift
 ]
-bank = po.ModelBank(specs)
+bank = rp.ModelBank(specs)
 bank.fit(df)                                         # learn every row, keep no output
 for r in bank.coef().filter(pl.col("term") == "signal_a").iter_rows(named=True):
     print(f"{r['spec']}: slope at the last row {r['coef']:.2f}")
@@ -87,7 +87,7 @@ of slope at row 200.
 This code uses `df` from [Example data](../EXAMPLE-DATA.md):
 
 ```python
-moves = po.spec.ew_cov("moves", features=["signal_a", "ret"], clock="t", gap_cap=10.0,
+moves = rp.spec.ew_cov("moves", features=["signal_a", "ret"], clock="t", gap_cap=10.0,
                        half_life=50.0, stats=["corr"])
 corr = df.rheon.fit_predict([moves])["moves"].struct.field("corr_signal_a_ret")
 print(f"corr(signal_a, ret) at row 199: {corr[199]:.2f}, at row 399: {corr[399]:.2f}")
@@ -114,8 +114,8 @@ points = centers[rng.integers(0, 3, 3000)] + rng.standard_normal((3000, 2))
 pl.DataFrame(points, schema=["a", "b"]).write_parquet("points.parquet")
 
 # k-means over the file, and the centers it found.
-clusters = po.spec.kmeans("clusters", features=["a", "b"], n_clusters=3, half_life=float("inf"))
-bank = po.ModelBank([clusters])
+clusters = rp.spec.kmeans("clusters", features=["a", "b"], n_clusters=3, half_life=float("inf"))
+bank = rp.ModelBank([clusters])
 bank.fit(pl.scan_parquet("points.parquet"))
 found = bank.coef()["coef"].to_numpy().reshape(3, 2).round(1)       # one row of (a, b) per center
 print("centers found:", sorted(found.tolist()))
@@ -160,16 +160,16 @@ transitions, so `500.0` at two states counts as 1,000. [Keep `hmm` states on the
 regimes](keep-hmm-states-on-their-regimes.md) sets the two.
 
 This code makes two series whose returns take turns, 500 rows at a time,
-between a calm regime and one 2.7 times as wide. It uses `po.sim.regimes`,
+between a calm regime and one 2.7 times as wide. It uses `rp.sim.regimes`,
 which returns the regime each row was drawn in beside the rows. `bocpd`
 dates each switch, and `hmm` says which regime each row is in:
 
 ```python
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # Make the data, and save it with its truth.
-sim = po.sim.regimes(                                         # two series, and the regime each row was drawn in
+sim = rp.sim.regimes(                                         # two series, and the regime each row was drawn in
     2, states=[0.3, 0.3], transition=[[0.0, 1.0], [1.0, 0.0]],   # the two regimes take turns, a block each
     n_blocks=6, rows_per_block=500,
     scale_state=[0.0, 1.0],                                   # regime 1's returns are e = 2.7 times as wide
@@ -180,8 +180,8 @@ sim["rows"].join(truth, on="t").write_parquet("regimes.parquet")
 returns = pl.scan_parquet("regimes.parquet").with_columns(pl.col("x_1", "x_2").diff())   # from the levels
 
 # One model dates each switch, the other names the regime.
-age = po.spec.bocpd("age", features=["x_1", "x_2"], hazard=500.0)   # how long has this regime lasted?
-which = po.spec.hmm(                                          # which regime is this row in?
+age = rp.spec.bocpd("age", features=["x_1", "x_2"], hazard=500.0)   # how long has this regime lasted?
+which = rp.spec.hmm(                                          # which regime is this row in?
     "which", features=["x_1", "x_2"], n_components=2, half_life=float("inf"),
     precision_prior=1e-2, warm_rows=500,
     transition=[0.998, 0.002, 0.002, 0.998], transition_prior=500.0,   # a regime lasts about 500 rows
@@ -234,9 +234,9 @@ import math
 # Two predictions of y, and a test between them.
 common = dict(targets=["y"], clock="t", gap_cap=10.0, half_life=100.0)
 specs = [
-    po.spec.ewridge("ridge", features=["x0", "x1"], **common),
-    po.spec.holt("holt", **common),                                    # y's own level and trend, no feature
-    po.spec.seqtest("closer", targets=["y"], a="ridge", b="holt"),     # does ridge predict closer?
+    rp.spec.ewridge("ridge", features=["x0", "x1"], **common),
+    rp.spec.holt("holt", **common),                                    # y's own level and trend, no feature
+    rp.spec.seqtest("closer", targets=["y"], a="ridge", b="holt"),     # does ridge predict closer?
 ]
 out = df.rheon.fit_predict(specs)
 passed = out["closer"].struct.field("log_e_a_y") >= math.log(20)    # the 5% level, however often you look

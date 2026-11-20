@@ -151,9 +151,9 @@ the docs set it:
 | `emit_robust_se`, `ewridge`'s and `rls`'s | [Can its t be trusted?](DIAGNOSTICS.md#can-its-t-be-trusted) |
 | `emit_clocks`, every model's | [Learn targets known late](how-to/learn-targets-known-late.md#check-that-it-worked), and the table of its two fields after this one |
 | `emit_huber_scale`, `huber`'s: `huber_scale_<t>`, the scale each row's cut is drawn in | [`huber`'s table](#huber), and its [entry](MODELS.md#huber--robust-regression) |
-| `ew_cov`'s extra `stats`, its `lags` (`lag_corr_l<l>_<a>_<b>`), `pca` (`pc<j>_*`) and `mahal_quantiles` (`mahal_q<p>`) | its own [section](MODELS.md#ew_cov--exponentially-weighted-moments) and its [docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.ew_cov) |
-| `seqtest`'s `a` and `b`, which replace its four fields with `log_e_a_<t>`, `log_e_b_<t>`, `wins_a_<t>` and `wins_b_<t>` | its own [section](MODELS.md#seqtest--a-sequential-test-of-a-sign-by-betting) and its [docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.seqtest) |
-| `deco`'s named blocks, which turn `u` and `rho` into one field per block and pair of blocks | its [docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.deco) |
+| `ew_cov`'s extra `stats`, its `lags` (`lag_corr_l<l>_<a>_<b>`), `pca` (`pc<j>_*`) and `mahal_quantiles` (`mahal_q<p>`) | its own [section](MODELS.md#ew_cov--exponentially-weighted-moments) and its [docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ew_cov) |
+| `seqtest`'s `a` and `b`, which replace its four fields with `log_e_a_<t>`, `log_e_b_<t>`, `wins_a_<t>` and `wins_b_<t>` | its own [section](MODELS.md#seqtest--a-sequential-test-of-a-sign-by-betting) and its [docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.seqtest) |
+| `deco`'s named blocks, which turn `u` and `rho` into one field per block and pair of blocks | its [docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.deco) |
 
 `emit_clocks` is the one switch every model takes, and it adds two fields:
 

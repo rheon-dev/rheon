@@ -2,7 +2,7 @@
 # Add an output field or a spec parameter
 
 This how-to is for a contributor adding an output field, a spec parameter,
-a kind of input column or a withheld reason to polars-online, without a new
+a kind of input column or a withheld reason to rheon, without a new
 model. It says where each goes, what pins it, and what each changes in a
 saved state. To add a model kind, see [Add a model](../EXTENDING.md), whose
 steps this page refers to by number.

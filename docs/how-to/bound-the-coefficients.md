@@ -10,7 +10,7 @@ or to a fixed total, as portfolio weights are. It bounds the slopes of
 
 These steps need the library:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The first recipe
   reads `df`, 400 rows whose `signal_a` and `signal_b` are columns of
   noise, and whose `y` is `1 + 2·x0 − x1` plus noise. The second builds
@@ -18,8 +18,8 @@ These steps need the library:
 - A model that takes bounds: `sgd`, stochastic gradient descent, or `pa`,
   passive-aggressive regression. No other model takes `coef_min`,
   `coef_max` or `coef_sum`. Their docstrings,
-  [`po.spec.sgd`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.sgd)
-  and [`po.spec.pa`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.pa),
+  [`rheon.spec.sgd`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.sgd)
+  and [`rheon.spec.pa`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.pa),
   define each parameter.
 
 ## Bound the slopes of `sgd`
@@ -53,7 +53,7 @@ their total:**
 This code uses `df` from [Example data](../EXAMPLE-DATA.md):
 
 ```python
-portfolio = po.spec.sgd(
+portfolio = rp.spec.sgd(
     "portfolio", targets=["y"], features=["signal_a", "signal_b", "x0"], half_life=200.0,
     loss="squared",              # any loss sgd takes
     learning_rate=0.01,
@@ -63,7 +63,7 @@ portfolio = po.spec.sgd(
     coef_sum=1.0,                # ... and the slopes summing to 1
     coef_every=0,
 )
-fit = po.ModelBank([portfolio]).fit_predict(df)
+fit = rp.ModelBank([portfolio]).fit_predict(df)
 last = fit["portfolio"].struct.field("coef").drop_nulls()[-1]
 assert min(last[1:]) >= 0.0 and abs(sum(last[1:]) - 1.0) < 1e-12   # the last row's slopes: at least 0, summing to 1
 ```
@@ -94,7 +94,7 @@ This code builds its own data:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # y = 0.9·a + 0.6·b plus noise: weights that sum to 1.5, outside a sum of 1.
 rng = np.random.default_rng(12)
@@ -104,7 +104,7 @@ pl.DataFrame({"a": a, "b": b, "y": 0.9 * a + 0.6 * b + 0.3 * e}).write_parquet("
 
 # pa with the slopes at least 0 and summing to 1, at the default c and at a small one, and sgd beside them.
 bounds = dict(targets=["y"], features=["a", "b"], half_life=float("inf"), coef_min=0.0, coef_sum=1.0, coef_every=0)
-specs = [po.spec.pa("pa_c1", **bounds), po.spec.pa("pa_c001", c=0.01, **bounds), po.spec.sgd("sgd", **bounds)]
+specs = [rp.spec.pa("pa_c1", **bounds), rp.spec.pa("pa_c001", c=0.01, **bounds), rp.spec.sgd("sgd", **bounds)]
 out = pl.scan_parquet("weights.parquet").rheon.fit_predict(specs).collect()
 
 # The last weights, and how far a's weight wanders over the last 5,000 rows.

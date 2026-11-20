@@ -1,7 +1,7 @@
 """Links into the API reference resolve to something that exists.
 
 The README, `llms.txt`, the feature index and MODELS.md point at
-https://hgilde.github.io/polars-online/,
+https://rheon-dev.github.io/rheon/,
 which is Sphinx over the docstrings. A link there can rot two ways: the page
 can stop being built, or the anchor can name an object that has been renamed
 or removed. Both are silent -- the reader gets a page that scrolls to
@@ -27,14 +27,17 @@ SOURCES = [
     ROOT / "docs" / "FEATURES.md",
     ROOT / "docs" / "MODELS.md",
 ]
-LINK = re.compile(r"https://hgilde\.github\.io/polars-online/([\w-]+)\.html(?:#([\w.\-]+))?")
+LINK = re.compile(r"https://rheon-dev\.github\.io/rheon/([\w-]+)\.html(?:#([\w.\-]+))?")
 
 
 def _links():
+    found = []
     for path in SOURCES:
         text = path.read_text(encoding="utf-8")
-        for page, anchor in LINK.findall(text):
-            yield path.name, page, anchor
+        found += [(path.name, page, anchor) for page, anchor in LINK.findall(text)]
+    # A pattern that matches no link checks nothing: every source links in.
+    assert {where for where, _, _ in found} == {p.name for p in SOURCES}, found[:3]
+    yield from found
 
 
 def _resolve(dotted: str):
@@ -78,7 +81,7 @@ def test_the_model_table_links_every_builder_to_its_page():
     table = models.split("| model | learns by | what it is |", 1)[1].split("\n\n", 1)[0]
     linked = set(
         re.findall(
-            r"\[`([a-z_]+)`\]\(https://hgilde\.github\.io/[^)]*#rheon\.spec\.([a-z_]+)\)",
+            r"\[`([a-z_]+)`\]\(https://rheon-dev\.github\.io/[^)]*#rheon\.spec\.([a-z_]+)\)",
             table,
         )
     )
@@ -100,7 +103,7 @@ def test_every_model_section_links_its_builder_and_its_source():
     for section in sections:
         head, body = section.split("\n", 1)
         api = re.search(
-            r"\*API:\* \[`po\.spec\.([a-z_]+)`\]\(https://hgilde\.github\.io/[^)]+\)", body
+            r"\*API:\* \[`rheon\.spec\.([a-z_]+)`\]\(https://rheon-dev\.github\.io/[^)]+\)", body
         )
         assert api, f"the section '### {head}' has no *API:* link"
         source = r"\(\.\./(crates/rheon-core/src/[\w/]+\.rs)\)"

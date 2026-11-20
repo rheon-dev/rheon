@@ -11,7 +11,7 @@ every pair's correlation moving takes O(m²).
 
 These steps need the library and the series:
 
-- polars-online installed, and numpy to make the example's data.
+- rheon installed with Polars, and numpy to make the example's data.
 - A stream with two or more numeric columns, read as the
   [features](../GLOSSARY.md#the-model-bank-and-what-it-reads) of a
   [`deco`](../MODELS.md#deco--one-correlation-for-the-whole-matrix) spec.
@@ -58,7 +58,7 @@ over the banks, beside the truth:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # Two sectors: the banks' common correlation rises at row 2,000, the miners' holds at 0.4.
 rng = np.random.default_rng(4)
@@ -73,9 +73,9 @@ cols |= {s: np.sqrt(0.4) * fb + np.sqrt(0.6) * own[5 + i] for i, s in enumerate(
 pl.DataFrame(cols).write_parquet("sectors.parquet")
 
 # deco over every series, beside an ew_cov over the banks.
-eq = po.spec.deco("eq", features=banks + miners, half_life=100.0,       # 1. every series
+eq = rp.spec.deco("eq", features=banks + miners, half_life=100.0,       # 1. every series
                   blocks={"banks": banks, "miners": miners})             # 2. one level per sector and per pair
-pairs = po.spec.ew_cov("pairs", features=banks, half_life=100.0, stats=["corr"])   # 3. the banks' every pair
+pairs = rp.spec.ew_cov("pairs", features=banks, half_life=100.0, stats=["corr"])   # 3. the banks' every pair
 out = pl.scan_parquet("sectors.parquet").rheon.fit_predict([eq, pairs]).collect()  # 4 and 5. add both, run; rho read before each row
 rho = out["eq"].struct.unnest()
 mean_corr = out["pairs"].struct.unnest().select(pl.mean_horizontal(pl.selectors.starts_with("corr_"))).to_series()
@@ -108,6 +108,6 @@ measures how far `rho` reads below the truth.
 | `rho` about two-thirds of an `ew_cov`'s mean `corr` | the estimate's downward bias, which Engle and Kelly note: `E[u]` is about 0.20 for a true 0.30 at six series | expected: read `rho` for how the correlation moves, and `corr` for its size |
 
 Every parameter is in `deco`'s
-[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.deco),
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.deco),
 including `dynamics="linear"`, which steps the level once a row with
 its own `alpha` and `beta`, and the fields in [OUTPUTS.md](../OUTPUTS.md#deco).

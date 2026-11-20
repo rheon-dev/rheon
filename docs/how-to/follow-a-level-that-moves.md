@@ -14,7 +14,7 @@ clips its steps a shorter memory (`huber_scale_half_life`).
 
 These steps need the library and a spec of one of the two models:
 
-- polars-online installed. Each example builds its own rows, so none
+- rheon installed with Polars. Each example builds its own rows, so none
   needs the [example data](../EXAMPLE-DATA.md).
 - A [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads) of `pa`, or of
   `sgd` with `loss="huber"`, whose
@@ -76,7 +76,7 @@ which every row stays within 3 of its target:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # y falls from 1,000 to -1,000 at 0.5 a row, with noise 0.3; the column level holds the level itself.
 rng = np.random.default_rng(17)
@@ -97,11 +97,11 @@ common = dict(half_life=200.0, min_weight=10.0)   # predictions withheld for the
 runs = {}
 # The level as a feature, at the default c and at c = 10.
 for name, c in [("default", {}), ("c=10", {"c": 10.0})]:
-    spec = po.spec.pa("m", targets=["y"], features=["x0", "x1", "level"], **common, **c)
+    spec = rp.spec.pa("m", targets=["y"], features=["x0", "x1", "level"], **common, **c)
     out = pl.scan_parquet("falling.parquet").rheon.fit_predict([spec]).collect()
     runs[name] = out["m"].struct.field("pred_y") - out["y"]
 # The differences, and the level read back as the last row's y plus the predicted change.
-diffs = po.spec.pa("d", targets=["dy"], features=["dx0", "dx1"], **common)
+diffs = rp.spec.pa("d", targets=["dy"], features=["dx0", "dx1"], **common)
 out = (pl.scan_parquet("falling.parquet")
          .with_columns(dy=pl.col("y").diff(), dx0=pl.col("x0").diff(), dx1=pl.col("x1").diff())   # 1. the differences
          .rheon.fit_predict([diffs])                                                              # 2. fitted
@@ -124,7 +124,7 @@ differenced     -0.73      -0.05  12
 At the default `c` the fit is still 1,789 past its target at row 800,
 and stays within 3 only from row 2,795. The differenced run follows the
 level from row 12. The [`pa`
-docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.pa)'s
+docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.pa)'s
 Notes, under *On a level that moves, give a larger c or difference the
 target*, give these runs and more.
 
@@ -163,7 +163,7 @@ the one shown, to within 0.06. This code builds its own data:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # y = 2x plus noise, with a shift of +20 at row 10,000; one row a unit of t.
 rng = np.random.default_rng(1)
@@ -174,11 +174,11 @@ pl.DataFrame({"t": np.arange(14_000.0), "x": x, "y": y}).write_parquet("shift.pa
 
 # The five fits, at a fit half-life of 500 rows.
 common = dict(targets=["y"], features=["x"], clock="t", gap_cap=10.0, half_life=500.0)
-specs = [po.spec.sgd("squared", loss="squared", **common),
-         po.spec.sgd("rms", loss="huber", huber_scale="rms", **common),
-         po.spec.sgd("mad", loss="huber", **common),                                  # the scale's half-life: the fit's 500
-         po.spec.sgd("mad_100", loss="huber", huber_scale_half_life=100.0, **common),  # a fifth of the fit's
-         po.spec.sgd("mad_20", loss="huber", huber_scale_half_life=20.0, **common)]
+specs = [rp.spec.sgd("squared", loss="squared", **common),
+         rp.spec.sgd("rms", loss="huber", huber_scale="rms", **common),
+         rp.spec.sgd("mad", loss="huber", **common),                                  # the scale's half-life: the fit's 500
+         rp.spec.sgd("mad_100", loss="huber", huber_scale_half_life=100.0, **common),  # a fifth of the fit's
+         rp.spec.sgd("mad_20", loss="huber", huber_scale_half_life=20.0, **common)]
 out = pl.scan_parquet("shift.parquet").rheon.fit_predict(specs).collect()
 # Each fit's error after the shift, and the rows until every 200-row average stays under 1.0.
 print("fit      rows 0-200  rows 200-400  rows until under 1.0")

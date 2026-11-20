@@ -1,7 +1,7 @@
 <!-- kind: explanation -->
 # Polars interfaces
 
-This page explains, for anyone who upgrades Polars under polars-online,
+This page explains, for anyone who upgrades Polars under rheon,
 the four ways the library crosses into Polars, which of them carry a
 promise, and what a break on a new Polars looks like.
 
@@ -9,8 +9,8 @@ promise, and what a break on a new Polars looks like.
 the four ways this library crosses into Polars carry no promise from
 Polars.** The two that stream data, `ModelBank` and the IO plugin (Polars'
 hook, `register_io_source`, that lets a Python function act as a query's
-input) behind `lf.online.fit_predict`, are among the three. So after you upgrade
-Polars, check a `ModelBank` call first, then a `lf.online.fit_predict`
+input) behind `lf.rheon.fit_predict`, are among the three. So after you upgrade
+Polars, check a `ModelBank` call first, then a `lf.rheon.fit_predict`
 query. The range of Polars the package
 accepts is measured by this project, run by run, as [Versions and the
 Polars pin](../VERSIONS.md#where-the-suite-has-passed) lists, and not
@@ -84,7 +84,7 @@ Arrow's own documentation states for it:**
 | interface | used by | its promise | a break would show as |
 |---|---|---|---|
 | pyo3-polars' extension types | `ModelBank` | none beyond the latest definitions working with the latest Polars: provided "for convenience" | a clean `AttributeError` before any data moves |
-| the IO plugin, `polars.io.plugins.register_io_source` | `lf.online.fit_predict`, `lf.online.predict`, and `with_windows` and `refresh_time` on a query | none: documented, but `@unstable` in py-polars (a warning only under `POLARS_WARN_UNSTABLE`), and its contract is partly unwritten | a wrong row count, not a crash |
+| the IO plugin, `polars.io.plugins.register_io_source` | `lf.rheon.fit_predict`, `lf.rheon.predict`, and `with_windows` and `refresh_time` on a query | none: documented, but `@unstable` in py-polars (a warning only under `POLARS_WARN_UNSTABLE`), and its contract is partly unwritten | a wrong row count, not a crash |
 | an expression's serialized form, `expr.meta.serialize(format="json")` | the window formulas, read into this library's own tree | none: Polars calls it unstable across versions; its shapes were measured the same on 1.34.0 and 1.44.2 | an unknown node, refused when the formula is read |
 | the Arrow PyCapsule interface | [`fit_predict_arrow` and `predict_arrow`](../how-to/hand-the-output-to-arrow.md) | an Arrow specification, which py-polars and pyarrow consume. Only the output side uses it, and the frame still goes in as a Polars frame | a break of Arrow's rather than of Polars' |
 
@@ -134,10 +134,10 @@ process's baseline every 2 ms:
 | 2.0.0 | 169 MB |
 
 **Every model is slower than reading the file, so on 1.34.0 to 1.36.1
-Polars held the whole input ahead of the bank.** `lf.online.fit_predict`, its result written to
+Polars held the whole input ahead of the bank.** `lf.rheon.fit_predict`, its result written to
 a parquet file without holding it all in memory, peaked at 1,768 MB on
 1.34.0, 920 MB on 1.37.1 and 632 MB on 2.0.0 over the same file, and
-`po.gbdt`'s parquet build at 2.3 GB on 1.34.0 and 1.36.1. Below 1.37.0 the
+`rp.gbdt`'s parquet build at 2.3 GB on 1.34.0 and 1.36.1. Below 1.37.0 the
 library could not keep the promise it is built on, running on data that
 does not fit in memory, so the floor is 1.37.0. Even from 1.37.0, a step
 such as `with_columns` between the file and the bank still lets Polars

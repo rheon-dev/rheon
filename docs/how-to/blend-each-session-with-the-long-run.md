@@ -12,7 +12,7 @@ give `session_shrink` and `long_half_life`, and the model blends the means and c
 These steps need the library, a stream with sessions and an `ewridge`
 spec:
 
-- polars-online and numpy installed. The recipe generates its own data.
+- rheon, Polars and numpy installed. The recipe generates its own data.
 - A [session](../GLOSSARY.md#time) column, whose change of value starts a
   session, and a `session_gap` that is a number: the clock step the model
   takes at the change. `session_gap="reset"` is refused beside a blend,
@@ -22,8 +22,8 @@ spec:
 - An `ewridge` spec with a [half-life](../GLOSSARY.md#time) short enough
   to follow a session, and a clock.
 
-`session_shrink` and `long_half_life` are defined in [`po.spec.ewridge`'s
-docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.ewridge),
+`session_shrink` and `long_half_life` are defined in [`rheon.spec.ewridge`'s
+docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ewridge),
 whose Notes, under *The session blend*, give the blend's equations.
 
 ## Start each session from a blend
@@ -62,7 +62,7 @@ from the eleventh session on:
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # 40 sessions of 300 rows. Each session's slope is drawn around a long-run slope of 2.
 rng = np.random.default_rng(5)
@@ -76,7 +76,7 @@ pl.DataFrame({"t": np.arange(days * per_day, dtype=float), "day": day, "x": x, "
 # Three blends, from none to the long run's moments alone.
 common = dict(targets=["y"], features=["x"], clock="t", gap_cap=10.0, half_life=50.0,
               session="day", session_gap=1.0, max_rows_between_solves=1, coef_every=0)
-blends = {f: po.spec.ewridge(f"blend_{i}", session_shrink=f, long_half_life=3000.0, **common) for i, f in enumerate([0.0, 0.5, 1.0])}
+blends = {f: rp.spec.ewridge(f"blend_{i}", session_shrink=f, long_half_life=3000.0, **common) for i, f in enumerate([0.0, 0.5, 1.0])}
 out = pl.scan_parquet("sessions.parquet").rheon.fit_predict(list(blends.values())).collect()
 
 # Each session's first row, and its first 20 rows, after ten sessions of history.

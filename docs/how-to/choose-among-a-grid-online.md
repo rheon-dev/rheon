@@ -10,7 +10,7 @@ average every grid point's prediction by its error, as the stream runs.
 
 These steps need the library and a grid:
 
-- polars-online installed, and numpy to make the example's data.
+- rheon installed with Polars, and numpy to make the example's data.
 - A [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads) with more than
   one [slot](../GLOSSARY.md#grids) per target: for `ewridge`, several
   values in `half_life` or `ridge`, or several named `feature_sets`. A
@@ -36,7 +36,7 @@ weights' formula.
    `pred_<t>__averaged`.
 2. **Run the query.** Each choice and each average is made from the rows
    before its row, so it can serve the row.
-3. **Score every slot with `po.eval.metrics`.** The chosen and averaged
+3. **Score every slot with `rp.eval.metrics`.** The chosen and averaged
    predictions are slots of their own, scored beside the grid's.
 4. **Count how often each slot was chosen,** from `selected_<t>`.
 
@@ -48,7 +48,7 @@ averages beside each half-life:
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # y = b x0 + 0.5 x1 + noise, where b wanders as a slow random walk.
 rng = np.random.default_rng(9)
@@ -63,19 +63,19 @@ common = dict(
     targets=["y"], features=["x0", "x1"], clock="t", gap_cap=5.0,
     half_life=[25.0, 100.0, 400.0, 1_600.0, 6_400.0],  # one fit per half-life, from the same rows
 )
-halves = po.spec.ewridge(
+halves = rp.spec.ewridge(
     "halves", **common,
     emit_selected=True,  # selected_y, pred_y__selected: the best half-life so far, row by row
     emit_averaged=True,  # pred_y__averaged: every half-life's prediction, weighted by its error
 )
-sharp = po.spec.ewridge("sharp", **common, emit_averaged=True, average_eta=10.0)  # leans harder on the best
+sharp = rp.spec.ewridge("sharp", **common, emit_averaged=True, average_eta=10.0)  # leans harder on the best
 # 2. Run the query.
 out = wander.rheon.fit_predict([halves, sharp]).collect()
 
 # 3. Every slot's out-of-sample error over the whole stream, best first.
 scores = pl.concat([
-    po.eval.metrics(out, "halves"),
-    po.eval.metrics(out, "sharp").filter(slot="pred_y__averaged").with_columns(slot=pl.lit("sharp: pred_y__averaged")),
+    rp.eval.metrics(out, "halves"),
+    rp.eval.metrics(out, "sharp").filter(slot="pred_y__averaged").with_columns(slot=pl.lit("sharp: pred_y__averaged")),
 ])
 for slot, mse, r2 in scores.sort("mse").select("slot", "mse", "r2").iter_rows():
     print(f"{slot:24} mse {mse:.4f}, R² {r2:.4f}")
@@ -116,7 +116,7 @@ Choose by whether the best setting itself moves:
 | what you need | what to use |
 |---|---|
 | a best setting that moves over the stream | `emit_selected`, or `emit_averaged` to hedge between slots that are close |
-| one setting to run on the rows to come | `po.eval.grid_search`, which chooses over a long stretch and scores the choice on rows it had not seen ([Choose a model's settings from the stream's own errors](../CALIBRATION.md)) |
+| one setting to run on the rows to come | `rp.eval.grid_search`, which chooses over a long stretch and scores the choice on rows it had not seen ([Choose a model's settings from the stream's own errors](../CALIBRATION.md)) |
 | a choice made by hand from an output frame you already have | [Choose settings by hand](choose-settings-by-hand.md) |
 
 The best error over the rows that chose it is optimistic, so report a
@@ -132,6 +132,6 @@ step 3 does:
 | what you see | what it means | what to do |
 |---|---|---|
 | `pred_<t>__selected` or `pred_<t>__averaged` near the best slot's error | the choice follows the best slot | serve it |
-| the choice worse than several fixed slots, and `selected_<t>` held mostly by the shortest half-life | the short half-life is ranked on few rows and wins by luck | use `emit_averaged` with a larger `average_eta`, drop the shortest half-life from the grid, or fix one setting with `po.eval.grid_search` |
+| the choice worse than several fixed slots, and `selected_<t>` held mostly by the shortest half-life | the short half-life is ranked on few rows and wins by luck | use `emit_averaged` with a larger `average_eta`, drop the shortest half-life from the grid, or fix one setting with `rp.eval.grid_search` |
 | the average worse than the choice | `average_eta` is too small, so slots far from the best keep much of their weight | increase `average_eta`. At `inf` the average is the choice |
 | `pred_<t>__averaged` null on a row | no slot had a prediction and an error on that row, as in the warm-up | read the rows after the warm-up |

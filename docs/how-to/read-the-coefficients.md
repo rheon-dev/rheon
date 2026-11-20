@@ -11,7 +11,7 @@ coefficients in two places, and both are the fit *after* the model learns the ro
 | from | the fit after | read with |
 |---|---|---|
 | the bank, live or loaded from a [state file](../GLOSSARY.md#saving-and-serving) with no data at hand | the last row each [group](../GLOSSARY.md#the-model-bank-and-what-it-reads) learned from | `bank.coef()` |
-| the output, as columns that show the fit as it moved | its own row | the field `coef`, spread into columns by `.online.unnest` |
+| the output, as columns that show the fit as it moved | its own row | the field `coef`, spread into columns by `.rheon.unnest` |
 
 A row's own `pred_<target>` came from the fit *before* that row
 ([Predictions made before learning](../explanation/out-of-sample.md)).
@@ -20,7 +20,7 @@ A row's own `pred_<target>` came from the fit *before* that row
 
 These steps need the library and a model with coefficients:
 
-- polars-online and numpy installed, and
+- rheon, Polars and numpy installed, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   `lf`, a [query](../GLOSSARY.md#the-model-bank-and-what-it-reads) over
   `ticks.parquet`, and `df`, the same 400 rows as a frame, in which four
@@ -36,28 +36,28 @@ output, a saved output, or numpy code that wants a matrix.
 
 1. **From a bank, with `bank.coef()`,** one row per coefficient. Pivot it
    on `term` for a row per group and a column per term.
-2. **From the output, with `.online.unnest(specs)` chained after
+2. **From the output, with `.rheon.unnest(specs)` chained after
    `fit_predict`,** which spreads the `coef` list into a column per term,
    as `coef_y_x0`. Give the spec `coef_every=0` to write `coef` on every
    row but a skipped one.
-3. **From a saved output, with `.online.unnest` on a query that reads the
+3. **From a saved output, with `.rheon.unnest` on a query that reads the
    file with `pl.scan_parquet`,** given the
    specs, a bank, or the path of the state the run saved.
 4. **As a matrix, by fixing the list's width on the rows that carry it,**
    with `.list.to_array(k)`, `k` being the height of
-   `po.spec.coef_index(spec)`.
+   `rheon.spec.coef_index(spec)`.
 
 Here the bank, the output and a saved output each give the same fit, near
 `df`'s truth. This code uses `lf` from [Example
 data](../EXAMPLE-DATA.md):
 
 ```python
-ols = po.spec.ewridge("ols", targets=["y"], features=["x0", "x1"], clock="t",
+ols = rp.spec.ewridge("ols", targets=["y"], features=["x0", "x1"], clock="t",
                       half_life=600.0, gap_cap=300.0, group="stock_id",
                       coef_every=0)         # write coef on every row but a skipped one
 
 # 1. From a bank -- live, or loaded from a state file with no data at hand.
-bank = po.ModelBank([ols])
+bank = rp.ModelBank([ols])
 bank.fit(lf)
 betas = bank.coef()                  # one row per coefficient: spec, group, instance, weight_sum, ..., term, coef
 wide = betas.pivot("term", index=["group", "instance"], values="coef")   # a row per (group, instance), a column per term
@@ -79,7 +79,7 @@ saved = pl.scan_parquet("fitted.parquet").rheon.unnest("ols.state").collect()
 print(saved.select(path.columns).equals(path))
 
 # 4. As a matrix: the rows that carry coef, fixed to the layout's width.
-k = po.spec.coef_index(ols).height   # 3: intercept, x0, x1
+k = rp.spec.coef_index(ols).height   # 3: intercept, x0, x1
 matrix = (
     pl.read_parquet("fitted.parquet")
     .select(pl.col("ols").struct.field("coef"))
@@ -134,7 +134,7 @@ streaming](../explanation/chunk-invariance-and-streaming.md)).
 without a cadence `coef` is null on most rows. That is why step 4
 keeps only the rows that carry it before it fixes the width.
 
-**With `separator="."`, `.online.unnest` names each column after its spec
+**With `separator="."`, `.rheon.unnest` names each column after its spec
 too,** as `ols.coef_y_x0`, as Polars' own `unnest(separator=)` does, so
 two specs that fit one target unnest side by side.
 
@@ -145,7 +145,7 @@ in one `coef` list:** one per target and point of a grid of `ridge`
 values, `feature_sets` or `penalties`. Each half-life of a `half_life`
 grid has a `coef` field of its own.
 
-1. **Spread the blocks into columns with `.online.unnest([spec])`.** Each
+1. **Spread the blocks into columns with `.rheon.unnest([spec])`.** Each
    block's columns are named the way its `pred` field is ([Find an output
    field by what it holds](find-an-output-field.md)).
 2. **Or read them from `bank.coef()`,** whose columns `target`, `ridge`,
@@ -158,9 +158,9 @@ data](../EXAMPLE-DATA.md):
 
 ```python
 # A grid of two half-lives by two ridge values, fitted on df.
-grid = po.spec.ewridge("m", targets=["y"], features=["x0", "x1"], clock="t",
+grid = rp.spec.ewridge("m", targets=["y"], features=["x0", "x1"], clock="t",
                        gap_cap=300.0, half_life=[100.0, 500.0], ridge=[1e-6, 0.5])
-grid_bank = po.ModelBank([grid])
+grid_bank = rp.ModelBank([grid])
 out = grid_bank.fit_predict(df)                             # df's columns, plus "m"
 # 1. The blocks spread into columns.
 cols = out.rheon.unnest([grid])                            # coef@h100 and coef@h500, spread into columns

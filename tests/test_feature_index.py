@@ -9,14 +9,15 @@ landing page over some seventy how-tos.
 The public names come from the contract the API snapshot already holds,
 ``tests/api_surface.txt`` (regenerated from the code by
 ``tests/test_api_surface.py``), and from the live registries beside it: the
-spec builders of ``po.spec.__all__`` and the native model kinds. A name the
-snapshot gains, a builder ``po.spec`` exports, a parameter every spec
+spec builders of ``rheon.spec.__all__`` and the native model kinds. A name the
+snapshot gains, a builder ``rheon.spec`` exports, a parameter every spec
 takes, a flag or a run-config key of the command line, or an environment
 variable the library reads fails here until the index has a line for it.
 Each name must appear in backticks, in a row's first cell (the cell that
 names its features), in the form a reader types it:
-``po.<name>``, ``po.<module>.<name>``, ``ModelBank.<name>``,
-``lf.online.<name>``, a spec parameter or a run-config key as itself in its
+``rheon.<name>`` or ``rp.<name>`` (a name of ``rheon`` itself, or one
+``rheon.polars`` adds), ``rheon.<module>.<name>`` or ``rp.<module>.<name>``,
+``ModelBank.<name>``, ``lf.rheon.<name>``, a spec parameter or a run-config key as itself in its
 own section, and a flag as ``--flag``.
 """
 
@@ -67,26 +68,31 @@ def _wanted(snapshot: str) -> list[tuple[str, str]]:
     sec = _sections(snapshot)
     want: list[tuple[str, str]] = []
     modules = {"corr", "eval", "gram", "ops", "sim", "spec", "stream"}
+    # A name of `rheon` itself is written `rheon.<name>`, and one that
+    # `rheon.polars` adds `rp.<name>`, as the examples import them.
+    prefix = {_name(line): "rheon" for line in sec["rheon"]}
+    prefix |= {_name(line): "rp" for line in sec["rheon.polars"]}
     for line in sec["rheon"] + sec["rheon.polars"]:
         name = _name(line)
-        # A module is listed by its functions; `po.<module>.` stands for it.
-        want.append(("", f"po.{name}." if name in modules else f"po.{name}"))
+        # A module is listed by its functions; `<prefix>.<module>.` stands for it.
+        p = prefix[name]
+        want.append(("", f"{p}.{name}." if name in modules else f"{p}.{name}"))
     for line in sec["ModelBank"]:
         name = _name(line)
         if not name.startswith("__"):
             want.append(("", f"ModelBank.{name}"))
     for line in sec["frame namespaces"]:
-        want.append(("", f"lf.online.{_name(line).rsplit('.', 1)[1]}"))
+        want.append(("", f"lf.rheon.{_name(line).rsplit('.', 1)[1]}"))
     module = None
     for line in sec["helper modules"]:
         if not line.startswith("    "):
             module = line.strip().split(":", 1)[0]
             continue
-        want.append(("", f"po.{module}.{_name(line)}"))
+        want.append(("", f"{prefix[module]}.{module}.{_name(line)}"))
     for name in rp.spec.__all__:
-        want.append(("", f"po.spec.{name}"))
+        want.append(("", f"rheon.spec.{name}"))
     for kind in _native.model_kinds():
-        want.append(("Models", f"po.spec.{kind}"))
+        want.append(("Models", f"rheon.spec.{kind}"))
     for line in sec["common parameters"]:
         want.append(("Parameters every spec takes", _name(line)))
     flags = [
@@ -131,7 +137,7 @@ def _missing(index: str, snapshot: str) -> list[str]:
     missing = []
     for section, name in _wanted(snapshot):
         where = cells.get(section, "") if section else everywhere
-        # `po.<module>.` must open a backticked name; any other name is one.
+        # `<prefix>.<module>.` must open a backticked name; any other name is one.
         pattern = rf"`{re.escape(name)}[\w.]*`" if name.endswith(".") else rf"`{re.escape(name)}`"
         if not re.search(pattern, where):
             missing.append(f"{name}" + (f" (under ## {section})" if section else ""))
@@ -155,22 +161,22 @@ def test_a_name_removed_from_the_index_is_found():
     index = INDEX.read_text(encoding="utf-8")
     snapshot = SNAPSHOT.read_text(encoding="utf-8")
     cut = "\n".join(
-        line for line in index.splitlines() if not line.startswith("| [`po.spec.holt`]")
+        line for line in index.splitlines() if not line.startswith("| [`rheon.spec.holt`]")
     )
     cut = cut.replace("[`ModelBank.last_row`]", "[last row]")
     cut = cut.replace("`gap_cap` |", "|").replace("`--skip-learned`, ", "")
     missing = _missing(cut, snapshot)
-    for name in ("po.spec.holt", "ModelBank.last_row", "gap_cap", "--skip-learned"):
+    for name in ("rheon.spec.holt", "ModelBank.last_row", "gap_cap", "--skip-learned"):
         assert any(m.startswith(name) for m in missing), (name, missing)
     # A row cut whose name another row's description still mentions, and
     # one whose name the section's prose mentions, are caught too.
     cut = "\n".join(
         line
         for line in index.splitlines()
-        if not line.startswith(("| [`ModelBank.gram`]", "| [`lf.online.with_windows`]"))
+        if not line.startswith(("| [`ModelBank.gram`]", "| [`lf.rheon.with_windows`]"))
     )
     missing = _missing(cut, snapshot)
-    for name in ("ModelBank.gram", "lf.online.with_windows"):
+    for name in ("ModelBank.gram", "lf.rheon.with_windows"):
         assert name in missing, (name, missing)
 
 

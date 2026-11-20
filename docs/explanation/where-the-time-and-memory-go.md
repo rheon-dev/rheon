@@ -45,7 +45,7 @@ import time
 
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # A million rows of 20 features, and a ridge over them.
 rng = np.random.default_rng(9)
@@ -54,7 +54,7 @@ features = [f"x{j}" for j in range(20)]
 pl.DataFrame(
     {"y": rng.standard_normal(n)} | {f: rng.standard_normal(n) for f in features}
 ).write_parquet("rows.parquet")
-spec = po.spec.ewridge("ridge", targets=["y"], features=features, half_life=1000.0)
+spec = rp.spec.ewridge("ridge", targets=["y"], features=features, half_life=1000.0)
 
 
 # Millions of rows a second through one run.
@@ -66,7 +66,7 @@ def rows_a_second(run):
 
 # Each part of a run, timed on its own.
 query = pl.scan_parquet("rows.parquet")
-bank = po.ModelBank([spec])
+bank = rp.ModelBank([spec])
 print(f"time to read the file:      {rows_a_second(lambda: query.collect()):.1f} million rows a second")
 print(f"time to learn, no output:   {rows_a_second(lambda: bank.fit(query)):.1f} million rows a second")
 print(f"time to learn and predict:  {rows_a_second(lambda: query.rheon.fit_predict([spec]).collect()):.1f} million rows a second")
@@ -99,7 +99,7 @@ import time
 
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # 200,000 rows of 50 features, on disk.
 rng = np.random.default_rng(1)
@@ -111,12 +111,12 @@ pl.DataFrame(
 
 # Time one fit at 5 features and at 50, best of three.
 for k in (5, 50):
-    spec = po.spec.ewridge("ridge", targets=["y"], features=[f"x{j}" for j in range(k)],
+    spec = rp.spec.ewridge("ridge", targets=["y"], features=[f"x{j}" for j in range(k)],
                            half_life=1000.0)
     seconds = []
     for _ in range(3):
         start = time.perf_counter()
-        po.ModelBank([spec]).fit(pl.scan_parquet("wide.parquet"))   # learn every row, keep no output
+        rp.ModelBank([spec]).fit(pl.scan_parquet("wide.parquet"))   # learn every row, keep no output
         seconds.append(time.perf_counter() - start)
     print(f"time at {k} features: {n / min(seconds) / 1e6:.1f} million rows a second")
 ```
@@ -163,7 +163,7 @@ figures, and how to set it.
 three sets a run's pace.** It runs as three stages, each with one chunk in
 flight: a reader thread, the bank on the calling thread, and a writer
 thread. A `closed_groups` file has a writer thread of its own.
-`POLARS_ONLINE_TIMING=1` prints how long the bank waited on each side.
+`RHEON_TIMING=1` prints how long the bank waited on each side.
 Polars encodes a parquet file's pages on its own threads, a column at a
 time in parallel, and an NDJSON file on the writer's own thread. A spec
 with many fields can make the writer the slowest stage. [Input and output
@@ -201,7 +201,7 @@ within a few counters' bytes, and it grows with the groups:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # A million rows of 20 features and 64 groups, on disk.
 rng = np.random.default_rng(3)
@@ -214,9 +214,9 @@ pl.DataFrame(
 
 # The state's size after 10,000 rows and after all of them, with and without groups.
 for group in (None, "g"):
-    spec = po.spec.ewridge("ridge", targets=["y"], features=features, half_life=1000.0, group=group)
+    spec = rp.spec.ewridge("ridge", targets=["y"], features=features, half_life=1000.0, group=group)
     for rows in (10_000, 1_000_000):
-        bank = po.ModelBank([spec])
+        bank = rp.ModelBank([spec])
         bank.fit(pl.scan_parquet("long.parquet").head(rows))     # learn, keep no output
         kb = len(bank.save_bytes()) / 1024                        # the state, as saved
         print(f"{'64 groups' if group else 'one group'}, after {rows:>9,} rows: state {kb:,.0f} KB")
@@ -236,7 +236,7 @@ groups, with `.over("group")` or `group_by=`, holds every row of its input:
 against a spec's groups](../PERFORMANCE.md#polars-rolling-windows-against-a-specs-groups)
 measures.
 
-**A window operator, such as `po.ewm_mean`, holds the rows of its window,
+**A window operator, such as `rp.ewm_mean`, holds the rows of its window,
 and does the same work on a row whatever the window's length.** [What a window operator
 costs](../PERFORMANCE.md#what-a-window-operator-costs) measures its time
 and memory against Polars' `rolling`.
@@ -251,11 +251,11 @@ here:
 |---|---|---|
 | a row slower than [its model's rows a second](../PERFORMANCE.md#rows-a-second-for-each-model) | the model's own learning step, `O(k²)` a row for a model that solves, and its solves on their schedule; below about 50 features, as much again in the bank's work around the row; and for a model with many fields, writing them | `solve_every` and `max_rows_between_solves`; `gram_block_rows` and `gram_threads` for a wide `ewridge`; only the `stats` you read for `ew_cov` |
 | a grid slower than one model | a ridge or feature-set grid shares one set of sums; each half-life of a grid keeps its own, run alongside the others | the number of half-lives |
-| small chunks slower than large ones | a fixed overhead per call: handing the frame across alone takes about 8 ms at 10,000 columns ([Set the chunk size](../how-to/set-the-chunk-size.md)), and gathering the columns and assembling the output add to it | `chunk_size`, 100,000 by default on the query and the command line; `df.online.fit_predict` takes the frame whole unless given one |
+| small chunks slower than large ones | a fixed overhead per call: handing the frame across alone takes about 8 ms at 10,000 columns ([Set the chunk size](../how-to/set-the-chunk-size.md)), and gathering the columns and assembling the output add to it | `chunk_size`, 100,000 by default on the query and the command line; `df.rheon.fit_predict` takes the frame whole unless given one |
 | memory that grows with the file | Polars reading ahead in the parquet file, sized from its thread count, and the allocator keeping pages it has freed | `POLARS_ROW_GROUP_PREFETCH_SIZE`, `POLARS_MAX_THREADS` |
-| `ModelBank.fit_predict` holding more than its output | a spec of many groups keeps buffers of about its output again until its groups are done; a spec of one group or none holds its output and two sets of buffers more | a smaller frame, or a query (`lf.online.fit_predict`), whose peak is a chunk's |
+| `ModelBank.fit_predict` holding more than its output | a spec of many groups keeps buffers of about its output again until its groups are done; a spec of one group or none holds its output and two sets of buffers more | a smaller frame, or a query (`lf.rheon.fit_predict`), whose peak is a chunk's |
 | memory that jumps with a filter | a filter before the bank makes Polars hold several blocks of each file per thread | a filter after the bank, or weight 0 on the rows to skip |
-| one core busy | one piece of work per spec and group per chunk; within one, the rows go one at a time | more groups or specs, `POLARS_ONLINE_MAX_THREADS`, `shards` for a wide `marginal`, and `gram_threads` for a wide `ewridge` or `ew_cov` |
+| one core busy | one piece of work per spec and group per chunk; within one, the rows go one at a time | more groups or specs, `RHEON_MAX_THREADS`, `shards` for a wide `marginal`, and `gram_threads` for a wide `ewridge` or `ew_cov` |
 | a query slower than `ModelBank.fit_predict` at many groups | the query reads its input as the frames Polars hands it, and the same bank code then takes longer to group, run and assemble them: 236 ns a row against 140 at 10,000 groups ([the query against `ModelBank.fit_predict`](../PERFORMANCE.md#a-query-against-the-eager-bank)) | `ModelBank.fit_predict` on a frame that fits in memory; the query where it does not |
 | a window's memory | its ring of snapshots, capped per ring | `snapshot_every`, `max_rows_between_snapshots`, `window_budget` |
 | a wide `marginal` | every pair of every target | `cross_lags`, `bins`, `feature_moments="shared"`, `shards` |

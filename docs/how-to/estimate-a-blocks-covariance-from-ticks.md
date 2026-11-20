@@ -12,7 +12,7 @@ that noise, and to series not observed on every row.
 
 These steps need the library and the prices:
 
-- polars-online installed, and numpy to make the example's data.
+- rheon installed with Polars, and numpy to make the example's data.
 - A stream of prices, one column per series, in clock order, and a column
   that names each row's block, such as the trading day. The block column
   is the spec's [group](../GLOSSARY.md#the-model-bank-and-what-it-reads),
@@ -65,7 +65,7 @@ estimate is that block's row of `bank.closed_groups()`.
    measures. It is not
    always positive semi-definite, so keep the default, `psd=True`, where
    the matrix must be.
-6. **Make a model bank of the specs with `po.ModelBank(specs)`.**
+6. **Make a model bank of the specs with `rp.ModelBank(specs)`.**
 7. **Fit it with `bank.fit(returns)`.**
 8. **Read each block's row of `bank.closed_groups(name)`.** `rcov` and `rcorr` hold the upper
    triangle of the matrix, row by row, as one flat list: for two series,
@@ -83,7 +83,7 @@ estimator's mean correlation over the blocks:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # Two noisy prices whose returns correlate at 0.6; p2 is observed on about 30% of the rows.
 rng = np.random.default_rng(4)
@@ -102,7 +102,7 @@ pl.DataFrame({
 # 2. Each price carried forward and differenced within its block.
 returns = pl.scan_parquet("blocks.parquet").with_columns(pl.col("p1", "p2").forward_fill().diff().over("block"))
 specs = [
-    po.spec.rcov(name, features=["p1", "p2"],
+    rp.spec.rcov(name, features=["p1", "p2"],
                  group="block", group_close="monotone",       # 3. a block closes when the next starts
                  kind=kind,                                   # 1. the estimator
                  block_rows=rows,                             # 4. the block's expected length
@@ -110,7 +110,7 @@ specs = [
     for name, kind, psd in [("plain", "plain", True), ("kernel", "kernel", True),
                             ("preavg", "preavg", True), ("balanced", "preavg", False)]
 ]
-bank = po.ModelBank(specs)                                    # 6. the bank
+bank = rp.ModelBank(specs)                                    # 6. the bank
 bank.fit(returns)                                             # 7. learn every block
 # 8. Each estimator's mean correlation over the blocks that closed.
 for name in ("plain", "kernel", "preavg", "balanced"):
@@ -143,4 +143,4 @@ bank: each is its own spec over the same returns.
 | a `ValueError` naming `half_life` or `lam` | a block's close ends its memory, so `rcov` refuses a decay | drop `half_life` and `lam` |
 
 Every parameter and every field of the closed block is in `rcov`'s
-[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.rcov).
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.rcov).

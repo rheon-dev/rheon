@@ -14,13 +14,13 @@ why). Three ways hold each row back until its target would have arrived:
 |---|---|---|
 | the same for every row | `embargo`, the delay on the clock | the spec |
 | a time of each row's own | `label_clock`, a column of the times | the spec |
-| one delay, to be visible in the frame or for another engine to fit | `po.stream.embargo` | the query, before the bank |
+| one delay, to be visible in the frame or for another engine to fit | `rp.stream.embargo` | the query, before the bank |
 
 ## Prerequisites
 
 These steps need the library and a stream with a clock:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   `df`, a frame of 400 rows a minute apart on the clock `ts`, and `lf`, a
   [query](../GLOSSARY.md#the-model-bank-and-what-it-reads) over the same
@@ -60,11 +60,11 @@ included, so the first five rows have learned nothing. It uses `df` from
 [Example data](../EXAMPLE-DATA.md):
 
 ```python
-fwd = po.spec.ewridge("fwd", targets=["y"], features=["x0", "x1"],
+fwd = rp.spec.ewridge("fwd", targets=["y"], features=["x0", "x1"],
                       clock="ts", gap_cap="1h", half_life="30m",
                       embargo="5m",      # 1. a target takes five minutes to arrive: learned five minutes later
                       emit_clocks=True)  # 2. scored_clock and learned_clock on every row
-rows = po.ModelBank([fwd]).fit_predict(df).unnest("fwd")   # 3. fit
+rows = rp.ModelBank([fwd]).fit_predict(df).unnest("fwd")   # 3. fit
 for row in [0, 4, 5, 6, 300]:
     r = rows.row(row, named=True)
     learned = f"the rows up to {r['learned_clock']:%H:%M}" if r["learned_clock"] else "no row yet"
@@ -121,7 +121,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import polars as pl
 
-from rheon import polars as po
+from rheon import polars as rp
 
 # 1. Make up flights, one every ten minutes, whose delay is known only when each one lands.
 rng = np.random.default_rng(3)
@@ -137,7 +137,7 @@ pl.DataFrame({
 ).write_parquet("flights.parquet")
 
 # 2. Fit them from the file, each delay learned at its landing.
-late = po.spec.ewridge(
+late = rp.spec.ewridge(
     "late", targets=["delay"], features=["distance"],
     clock="departed", gap_cap="1h", half_life="2d",
     label_clock="landed",   # learned at landing; each interval compared with the one given
@@ -182,7 +182,7 @@ measurement.
 ## Write the delay out as rows
 
 **Use
-[`po.stream.embargo`](https://hgilde.github.io/polars-online/stream.html#rheon.stream.embargo)
+[`rp.stream.embargo`](https://rheon-dev.github.io/rheon/stream.html#rheon.stream.embargo)
 when the delay has to be visible in the frame, or when another engine fits
 the model.** It returns every row twice: a copy to predict at `t` with
 weight 0, and a copy to learn from at `t + delay`.
@@ -191,7 +191,7 @@ weight 0, and a copy to learn from at `t + delay`.
    `lf.sort("t", maintain_order=True)`, before the call.** Order within
    each group is not enough, since the call merges the two copies by the
    clock alone.
-2. **Call `po.stream.embargo` with the clock and the delay.** It adds two
+2. **Call `rp.stream.embargo` with the clock and the delay.** It adds two
    columns: `_online_role`, which says which copy a row is, and
    `_online_role_weight`, 0 on the copies to predict and 1 on the rest.
 3. **Pass `_online_role_weight` to the spec's `weight`.**
@@ -220,15 +220,15 @@ the predicted copies to the built-in delay of the same five units. It uses
 
 ```python
 # 1. lf is already in clock order across all rows. 2. Every row twice, in clock order.
-doubled = po.stream.embargo(lf, clock="t", delay=5.0)
+doubled = rp.stream.embargo(lf, clock="t", delay=5.0)
 predicted = doubled.rheon.fit_predict(
-    [po.spec.ewridge("m", targets=["y"], features=["x0"], clock="t", gap_cap=10.0,
+    [rp.spec.ewridge("m", targets=["y"], features=["x0"], clock="t", gap_cap=10.0,
                      half_life=50.0, weight="_online_role_weight")]   # 3. 0 on the copies to predict, 1 on the rest
 ).filter(pl.col("_online_role") == "predict").collect()               # 4. keep the predicted copies
 
 # The built-in delay on the same rows: t is a row apart, so each t + 5 is another row's clock.
 built_in = lf.rheon.fit_predict(
-    [po.spec.ewridge("m", targets=["y"], features=["x0"], clock="t", gap_cap=10.0, half_life=50.0, embargo=5.0)]
+    [rp.spec.ewridge("m", targets=["y"], features=["x0"], clock="t", gap_cap=10.0, half_life=50.0, embargo=5.0)]
 ).collect()
 for field in ["pred_y", "weight_sum"]:
     a, b = predicted["m"].struct.field(field), built_in["m"].struct.field(field)
@@ -250,7 +250,7 @@ is five minutes. It uses `df` from [Example
 data](../EXAMPLE-DATA.md):
 
 ```python
-rows = po.ModelBank([fwd]).fit_predict(df).unnest("fwd")
+rows = rp.ModelBank([fwd]).fit_predict(df).unnest("fwd")
 gap = rows.select((pl.col("scored_clock") - pl.col("learned_clock")).min()).item()
 print(f"the shortest time from the newest row learned to the row predicted: {gap}")
 ```
@@ -261,6 +261,6 @@ the shortest time from the newest row learned to the row predicted: 0:05:00
 
 **Under `label_clock`, read `bank.summary()`'s `labels_missing` and
 `labels_dropped`.** A query keeps no bank, so fit the spec with one first:
-`bank = po.ModelBank([late])`, then
+`bank = rp.ModelBank([late])`, then
 `bank.fit(pl.scan_parquet("flights.parquet"))`. The two columns count the rows whose target never arrived and the
 rows dropped while they waited, which the model never learned.

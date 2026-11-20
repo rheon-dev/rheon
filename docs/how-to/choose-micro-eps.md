@@ -10,7 +10,7 @@ the output in one of two ways.
 
 These steps need the library, a stream and a first guess:
 
-- polars-online installed, and numpy to make the example's data.
+- rheon installed with Polars, and numpy to make the example's data.
 - A stream of numeric
   [feature](../GLOSSARY.md#the-model-bank-and-what-it-reads) columns,
   saved as a file in clock order, to read back with `pl.scan_parquet`.
@@ -36,10 +36,10 @@ weight (default 3), and only established summaries form clusters.
    moons at an `eps` of 0.07, rings at 0.1 and five Gaussians in twenty
    dimensions at 0.3 were each recovered with an adjusted Rand index of
    1.000.
-2. **Build the spec with `po.spec.micro`,** giving `features`,
+2. **Build the spec with `rheon.spec.micro`,** giving `features`,
    `half_life` and `eps`.
 3. **Run it on a stretch of the stream with
-   `pl.scan_parquet(...).online.fit_predict([mc])`.** The rows gain the
+   `pl.scan_parquet(...).rheon.fit_predict([mc])`.** The rows gain the
    spec's output column, `mc`, whose fields Polars' `unnest("mc")` spreads
    into columns.
 4. **Read the last rows' `n_clusters`, `n_micro` and `outlier`.**
@@ -60,7 +60,7 @@ fits again with `macro_link=2`. It prints what each finds on the last 1,000 rows
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # Three round clusters of spread 0.3, 5 apart.
 rng = np.random.default_rng(6)
@@ -71,7 +71,7 @@ pl.DataFrame({"a": xy[:, 0], "b": xy[:, 1]}).write_parquet("blobs3.parquet")
 
 # 2 to 4. Build and fit each eps, and read the last rows' clusters, summaries and outliers.
 for eps, macro_link in ((0.002, None), (0.07, None), (0.3, None), (0.3, 2.0)):
-    mc = po.spec.micro("mc", features=["a", "b"], half_life=1_000.0, eps=eps, macro_link=macro_link)
+    mc = rp.spec.micro("mc", features=["a", "b"], half_life=1_000.0, eps=eps, macro_link=macro_link)
     late = pl.scan_parquet("blobs3.parquet").rheon.fit_predict([mc]).collect().unnest("mc").tail(1_000)
     print(f"eps {eps}, macro_link {macro_link}: clusters {late['n_clusters'][-1]}, "
           f"summaries {late['n_micro'][-1]}, outliers {late['outlier'].mean():.0%}")
@@ -104,4 +104,4 @@ of the scattered rows were flagged and 0.3% of the rest.
 
 The fields are defined in [OUTPUTS.md](../OUTPUTS.md#micro), and every
 parameter, `beta_mu` and `macro_link` among them, in `micro`'s
-[docstring](https://hgilde.github.io/polars-online/spec.html#rheon.spec.micro).
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.micro).

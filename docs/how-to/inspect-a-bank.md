@@ -15,13 +15,13 @@ reports each group as it stood after the last row it learned from.
 
 These steps need the library and a bank that has learned from rows:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   `lf`, a [query](../GLOSSARY.md#the-model-bank-and-what-it-reads) over
   `ticks.parquet`: 400 rows in which four stocks, `b0` to `b3` in the
   column `stock_id`, take turns, and whose target `y` is
   `1 + 2·x0 − x1` plus noise.
-- A bank, live or loaded with `po.ModelBank.load` from a state file
+- A bank, live or loaded with `rp.ModelBank.load` from a state file
   ([Save a state](save-a-state.md)).
 
 ## Read what a bank holds
@@ -44,14 +44,14 @@ is loaded back with nothing but the file. This code uses `lf` from
 
 ```python
 # A bank fitted per stock, and saved.
-spec = po.spec.ewridge("ridge", targets=["y"], features=["x0", "x1", "x2"], clock="t", gap_cap=300.0,
+spec = rp.spec.ewridge("ridge", targets=["y"], features=["x0", "x1", "x2"], clock="t", gap_cap=300.0,
                        half_life=600.0, group="stock_id")
-fitted = po.ModelBank([spec])
+fitted = rp.ModelBank([spec])
 fitted.fit(lf)                           # learn from every row of the file, keep only the state
 fitted.save("bank.state")
 
 # Loaded back from the file alone, it describes itself.
-bank = po.ModelBank.load("bank.state")   # no specs=: the file is enough
+bank = rp.ModelBank.load("bank.state")   # no specs=: the file is enough
 print(repr(bank))                        # 1. its specs, its groups, the rows it was fed
 print(bank.rows_fed, bank.solve_failures()["solve_failures"].to_list())   # 2. rows fed; solves that needed help, per group
 print(bank.output_fields["ridge"])       # 3. the fields of the spec's column
@@ -99,9 +99,9 @@ data](../EXAMPLE-DATA.md):
 
 ```python
 # A ridge per stock, learned from every row of lf.
-spec = po.spec.ewridge("ridge", targets=["y"], features=["x0", "x1", "x2"], clock="t", gap_cap=300.0,
+spec = rp.spec.ewridge("ridge", targets=["y"], features=["x0", "x1", "x2"], clock="t", gap_cap=300.0,
                        half_life=600.0, group="stock_id")
-bank = po.ModelBank([spec])
+bank = rp.ModelBank([spec])
 bank.fit(lf)
 
 # 1. The four tables, each a frame.
@@ -172,7 +172,7 @@ The columns of `summary()`, each count an `Int64`:
 **All four tables cover every spec by default, with `spec` as the first
 column, so the tables of banks from different runs stack.**
 
-1. **Load each bank's state file** with `po.ModelBank.load`.
+1. **Load each bank's state file** with `rp.ModelBank.load`.
 2. **Stack `coef()`, `summary()` or `describe()` with a plain
    `pl.concat`,** since they have the same columns for every spec.
 3. **Stack `last_row()` with `how="diagonal_relaxed"`,** since its fields
@@ -187,13 +187,13 @@ from pathlib import Path
 
 Path("fits").mkdir(exist_ok=True)
 for name, half_life in [("fast", 50.0), ("slow", 1000.0)]:    # two half-lives, a bank and a file each
-    one = po.ModelBank([po.spec.ewridge(name, targets=["y"], features=["x0", "x1"], clock="t",
+    one = rp.ModelBank([rp.spec.ewridge(name, targets=["y"], features=["x0", "x1"], clock="t",
                                         gap_cap=300.0, half_life=half_life)])
     one.fit(lf)
     one.save(f"fits/{name}.state")
 
 # 1. Load the files back, and stack their tables in one.
-banks = [po.ModelBank.load(f) for f in sorted(Path("fits").glob("*.state"))]
+banks = [rp.ModelBank.load(f) for f in sorted(Path("fits").glob("*.state"))]
 betas = pl.concat([b.coef() for b in banks])                          # 2. the same columns for every spec
 last = pl.concat([b.last_row() for b in banks], how="diagonal_relaxed")   # 3. fields that differ by spec
 for row in betas.pivot("term", index="spec", values="coef").iter_rows(named=True):

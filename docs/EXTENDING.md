@@ -1,7 +1,7 @@
 <!-- kind: how-to -->
 # Add a model
 
-This how-to is for a contributor adding a model kind to polars-online: it
+This how-to is for a contributor adding a model kind to rheon: it
 lists every layer a new model touches, from the recursion in `rheon-core`
 to its line in the feature index, with the test that fails if you skip
 each step. It assumes you know the library's words (spec, [model
@@ -555,7 +555,7 @@ streams.
 
 ## The Python surface — `python/rheon`
 
-A model reaches Python users through a builder in `po.spec`, whose
+A model reaches Python users through a builder in `rheon.spec`, whose
 signature and output fields the API snapshot pins.
 
 ### Step 9 — `_spec_<family>.py`, `_spec.py` and `spec.py`
@@ -636,7 +636,7 @@ is for the arithmetic, which they cannot see.
 **Check:**
 `test_model_registry::test_every_builder_has_a_per_model_test_file` fails
 for a builder with no such file, or for one whose file never calls
-`po.spec.<builder>(`.
+`rheon.spec.<builder>(`.
 
 ### Step 12 — Per-model sweeps
 
@@ -669,7 +669,7 @@ are kept by hand, and `tests/test_model_registry.py` holds all three:
 | list | what it is | what to add |
 |---|---|---|
 | `scripts/release_probe.py`'s `WORKLOAD` | the specs the weight-scale, released-state and rename checks run | the model. Enter its builder in `tests/test_released_state.py`'s `INTRODUCED` under the next release, the first that has it, so no earlier release is asked to build it |
-| `tests/test_budgets_memory.py`'s `WORKLOAD` | every model with every output it has switched on, whose fields' bytes per row are held to `budgets.toml` | the model at its fullest. Run the test with `POLARS_ONLINE_BUDGETS_OUT=<dir>`, then write its budgets with `python scripts/budgets.py apply <dir>/memory.json` |
+| `tests/test_budgets_memory.py`'s `WORKLOAD` | every model with every output it has switched on, whose fields' bytes per row are held to `budgets.toml` | the model at its fullest. Run the test with `RHEON_BUDGETS_OUT=<dir>`, then write its budgets with `python scripts/budgets.py apply <dir>/memory.json` |
 | `_spec.UNSUPERVISED` | exactly the models whose empty `targets` the bank fills from `features[0]`, which `ModelKind::is_unsupervised` names in `spec.rs` | an unsupervised model, and its name in that function's doc comment, which nothing holds |
 
 **Add a command-line case.** `tests/test_cli_every_kind.py`'s `CASES` runs
@@ -819,7 +819,7 @@ its `entry` link to the new heading. Add a line for its builder in
 `test_model_registry::test_the_models_page_documents_every_model`. And
 `test_api_links`: `test_the_model_table_links_every_builder_to_its_page`
 wants the table row to link ``
-[`<name>`](https://hgilde.github.io/polars-online/spec.html#rheon.spec.<name>)
+[`<name>`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.<name>)
 ``. `test_every_model_section_links_its_builder_and_its_source` wants the
 heading's section to carry an `*API:*` link to the builder and a `*Rust:*`
 link to `crates/rheon-core/src/<file>.rs`, which must exist.

@@ -12,7 +12,7 @@ bank.
 These steps need the library, a stream with a clock, and a model that
 regresses its targets:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   `trades.parquet`, a stream of quotes with trades between them. Its `mid`
   is on every row, and `side`, `quantity` and `price` are null on a quote.
@@ -44,7 +44,7 @@ why the bank waits.
 
 1. **Write the target as an expression around an operator that looks
    ahead, and name it with `.alias()`.** The operators that look ahead are
-   `po.ewm_mean`, `po.ewm_sum`, `po.ewm_rate` and `po.ewm_quantile`, each
+   `rp.ewm_mean`, `rp.ewm_sum`, `rp.ewm_rate` and `rp.ewm_quantile`, each
    with `reverse=True`. The alias names the output fields: `.alias("fwd_edge")`
    gives `pred_fwd_edge`. An expression with no operator that looks ahead
    is known at its own row, and the spec builder raises `ValueError`
@@ -73,16 +73,16 @@ uses `trades.parquet` from [Example data](../EXAMPLE-DATA.md):
 # Features that look back, on one clock shared with the model.
 clock = dict(clock="ts", gap_cap="5m", group="symbol")             # one clock for the windows and the model
 trends = pl.scan_parquet("trades.parquet").rheon.with_windows(    # the features: windows that look back
-    trend_5s=pl.col("mid") - po.ewm_mean("mid", half_life="5s", window_size="2m"),
-    trend_30s=pl.col("mid") - po.ewm_mean("mid", half_life="30s", window_size="2m"),
+    trend_5s=pl.col("mid") - rp.ewm_mean("mid", half_life="5s", window_size="2m"),
+    trend_30s=pl.col("mid") - rp.ewm_mean("mid", half_life="30s", window_size="2m"),
     **clock,
 )
 # 1. A target that looks ahead: the next minute's VWAP, less the mid.
 notional = pl.col("price") * pl.col("quantity")
 next_minute = dict(half_life="10s", window_size="1m", reverse=True)
-fwd_edge = (po.ewm_sum(notional, **next_minute) / po.ewm_sum("quantity", **next_minute) - pl.col("mid")).alias("fwd_edge")
+fwd_edge = (rp.ewm_sum(notional, **next_minute) / rp.ewm_sum("quantity", **next_minute) - pl.col("mid")).alias("fwd_edge")
 # 2 to 4. The target in targets, learned two minutes late, once its minute is known.
-edge = po.spec.ewridge("edge", targets=[fwd_edge], features=["trend_5s", "trend_30s"],
+edge = rp.spec.ewridge("edge", targets=[fwd_edge], features=["trend_5s", "trend_30s"],
                        half_life="30m", embargo="2m", **clock)
 fitted = trends.rheon.fit_predict([edge]).collect()      # 5. trades, the two trends, and the column edge
 expression = fitted["edge"].struct
@@ -90,7 +90,7 @@ print(f"rows {fitted.height}, of which predicted {fitted.height - expression.fie
 print(f"resid_fwd_edge null on {expression.field('resid_fwd_edge').null_count()} rows")
 
 # An embargo shorter than the target's window is refused.
-short = po.spec.ewridge("short", targets=[fwd_edge], features=["trend_5s"], half_life="30m", embargo="30s", **clock)
+short = rp.spec.ewridge("short", targets=[fwd_edge], features=["trend_5s"], half_life="30m", embargo="30s", **clock)
 try:
     trends.rheon.fit_predict([short])                    # refused when the query is built
 except ValueError as e:
@@ -127,7 +127,7 @@ targets](#give-the-target-as-a-formula-in-the-specs-targets):
 ```python
 # The same target as a column, and the same model on it.
 as_column = trends.rheon.with_windows(fwd_edge, like=edge).collect()   # the target the model learned, as a column
-by_column = po.spec.ewridge("by_column", targets=["fwd_edge"], features=["trend_5s", "trend_30s"],
+by_column = rp.spec.ewridge("by_column", targets=["fwd_edge"], features=["trend_5s", "trend_30s"],
                             half_life="30m", embargo="2m", **clock)     # the same model, its target named as that column
 column_form = as_column.rheon.fit_predict([by_column])
 
@@ -142,9 +142,9 @@ largest difference between the two forms: 0.0
 
 ## Make the target a column before the bank
 
-**To have a residual on each row whose window has closed, make the target a column with `po.stream.with_windows` in the query before the
+**To have a residual on each row whose window has closed, make the target a column with `rp.stream.with_windows` in the query before the
 bank, and give the spec an `embargo` of at least the window's length.**
-The expression is the column `po.stream.with_windows` makes from it, fed
+The expression is the column `rp.stream.with_windows` makes from it, fed
 back to the bank, so both forms give the same predictions. Their
 predictions differ only where the `embargo` equals the window under the default `closed="right"`
 and a row falls exactly one window after another ([Check the targets the
@@ -158,7 +158,7 @@ arrived. So does any column that holds a value from after its row, such as
 the price five minutes on: give the spec an `embargo` of that horizon
 ([Learn targets known late](learn-targets-known-late.md)).
 
-1. **Make the column with `po.stream.with_windows(query, target, like=spec)`.**
+1. **Make the column with `rp.stream.with_windows(query, target, like=spec)`.**
    `like=` takes the spec's clock settings, and nulls the target on every
    row the spec would not learn from.
 2. **Name the column in the spec's `targets`,** under the same `embargo`.
@@ -177,16 +177,16 @@ flows = pl.scan_parquet("trades.parquet").with_columns(                   # a qu
     flow=pl.when(pl.col("side") == "buy").then(pl.col("quantity")).otherwise(-pl.col("quantity"))
 )
 fwd_move = (
-    po.ewm_mean("price", half_life=float("inf"), window_size="5m", reverse=True)       # the mean trade price over the next five minutes
+    rp.ewm_mean("price", half_life=float("inf"), window_size="5m", reverse=True)       # the mean trade price over the next five minutes
     - pl.col("mid")                                                        # less the mid at the row
 ).alias("fwd_move")                                                        # the alias names the target
-ahead_5m = po.spec.ewridge("ahead_5m", targets=[fwd_move], features=["flow"],
+ahead_5m = rp.spec.ewridge("ahead_5m", targets=[fwd_move], features=["flow"],
                            clock="ts", gap_cap="5m", half_life="30m", embargo="5m", group="symbol")
 moves = flows.rheon.fit_predict([ahead_5m]).rheon.unnest([ahead_5m]).collect()   # does buying predict the price rising?
 
 # The same target as a column, made in the query by with_windows on the spec's clock, then named in targets.
 as_column = {**ahead_5m, "targets": ["fwd_move"]}                      # a spec is a dict: a copy with the column as target
-made = po.stream.with_windows(flows, fwd_move, like=ahead_5m).rheon.fit_predict([as_column])   # like= takes the spec's clock settings, and nulls the target where the spec would not learn
+made = rp.stream.with_windows(flows, fwd_move, like=ahead_5m).rheon.fit_predict([as_column])   # like= takes the spec's clock settings, and nulls the target where the spec would not learn
 column = made.rheon.unnest([as_column]).collect()
 
 # The two forms side by side.
@@ -219,7 +219,7 @@ about 1, where two positive numbers always agree, so its `hit_rate` reads
 1.0 whatever the fit. A difference sits about zero too. A target that
 looks ahead takes the same forms, such as the log of the next five
 minutes' mean trade price over the mid,
-`(po.ewm_mean("price", half_life=float("inf"), window_size="5m", reverse=True) / pl.col("mid")).log().alias("fwd_log")`.
+`(rp.ewm_mean("price", half_life=float("inf"), window_size="5m", reverse=True) / pl.col("mid")).log().alias("fwd_log")`.
 `mid * exp(pred)` turns its prediction back into a price. This code regresses four forms of a
 trade's price against the mid at its row on the same signed size, `flow`.
 It reads `trades.parquet` from [Example data](../EXAMPLE-DATA.md):
@@ -235,7 +235,7 @@ returns = flows.with_columns(
     log_ret=(pl.col("price") / pl.col("mid")).log(),                    # ln(price / mid), about zero
     diff=pl.col("price") - pl.col("mid"),                               # price - mid, about zero
 )
-vs_mid = po.spec.ewridge("vs_mid", targets=["ratio", "fwd_return", "log_ret", "diff"], features=["flow"],
+vs_mid = rp.spec.ewridge("vs_mid", targets=["ratio", "fwd_return", "log_ret", "diff"], features=["flow"],
                          clock="ts", gap_cap="5m", half_life="30m", group="symbol", emit_metrics=True)
 against_mid = returns.rheon.fit_predict([vs_mid]).rheon.unnest([vs_mid]).collect()
 # How often each form's prediction had the sign right.
@@ -266,7 +266,7 @@ skips any row with a null feature. This code uses `trades.parquet` from
 
 ```python
 edges = pl.scan_parquet("trades.parquet").with_columns(edge=(pl.col("price") - pl.col("mid")).abs())   # the target as a column, null on the quotes
-by_size = po.spec.ewridge("by_size", targets=["edge"], features=["quantity"],
+by_size = rp.spec.ewridge("by_size", targets=["edge"], features=["quantity"],
                           clock="ts", gap_cap="5m", half_life="30m", group="symbol")
 printed = edges.rheon.fit_predict([by_size]).rheon.unnest([by_size]).collect()   # does a larger trade print farther from the mid?
 is_trade = printed["quantity"].is_not_null()

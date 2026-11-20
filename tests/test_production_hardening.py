@@ -617,7 +617,6 @@ MOVED_PAGES = {
     # where it points to each of these (task 338 stage 8).
     "docs/WINDOWS.md": "## Where to go next",
     "docs/MODELS.md": "## Where to go next",
-    "docs/GBDT.md": "## Where to go next",
 }
 
 # The README, the pages its sections moved to, and the runner guide its

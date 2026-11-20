@@ -4,14 +4,14 @@
 This how-to is for anyone who wants each row to count in a fit by a weight
 from a scale of its target that a few wild values do not move, such as
 `1 / scale²`.
-It makes the scale with `po.ewm_quantile` from the targets already known
+It makes the scale with `rp.ewm_quantile` from the targets already known
 on each row, so a row's own target never sets its weight.
 
 ## Prerequisites
 
 These steps need the library and a stream with a clock:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   `trades`, a stream of quotes with trades between them, and `df`, saved
   as `ticks.parquet`. `df`'s `ret` is `±0.8·signal_a` plus noise of
@@ -26,14 +26,14 @@ These steps need the library and a stream with a clock:
   on the clock later, as under a spec's [`embargo`](../GLOSSARY.md#time)
   (the delay on the clock between predicting a row and learning from it).
 
-## Make a robust scale with `po.ewm_quantile`
+## Make a robust scale with `rp.ewm_quantile`
 
 **Divide the median of `|x|` by `Φ⁻¹(3/4)` for a scale that a few wild
 values do not move: the median absolute deviation (MAD) of `x` about 0.**
 `Φ⁻¹(3/4) = 0.6744897501960817` is the MAD of a standard normal, so for
 normal values the result estimates their standard deviation. It holds while
 up to half the weight is wild, where a single value of 1e6 is enough to set
-a standard deviation. `po.ewm_quantile` is the quantile of a window's values, each
+a standard deviation. `rp.ewm_quantile` is the quantile of a window's values, each
 weighed by its age on the clock, as [Quantiles and a robust scale](../WINDOWS.md#quantiles-and-a-robust-scale)
 describes.
 
@@ -44,7 +44,7 @@ describes.
    hold another operator. So make the median a column in one
    `with_windows` call, and take the MAD of the deviation from it in a
    second.
-2. **Make the scale a column with `po.ewm_quantile` of the absolute
+2. **Make the scale a column with `rp.ewm_quantile` of the absolute
    value, at `quantile=0.5`, divided by `0.6744897501960817`.** Call it
    in `with_windows` before the
    [model bank](../GLOSSARY.md#the-model-bank-and-what-it-reads), with
@@ -64,10 +64,10 @@ prints = trades.filter(pl.col("price").is_not_null()).with_row_index("i").with_c
     dev=pl.col("price") - pl.col("mid") + pl.when(pl.col("i") % 40 == 0).then(1.0).otherwise(0.0),
 )
 spread = dict(half_life="2m")
-scales = po.stream.with_windows(
+scales = rp.stream.with_windows(
     prints,
-    mad=po.ewm_quantile(pl.col("dev").abs(), quantile=0.5, **spread) / 0.6744897501960817,   # the EW-MAD about 0
-    std=po.ewm_std("dev", **spread),                                                         # moved by every wild print
+    mad=rp.ewm_quantile(pl.col("dev").abs(), quantile=0.5, **spread) / 0.6744897501960817,   # the EW-MAD about 0
+    std=rp.ewm_std("dev", **spread),                                                         # moved by every wild print
     clock="ts", gap_cap="5m", group="symbol",
 )
 # The last row's EW-MAD again by hand: numpy's weighted median of |dev| over its symbol's prints.
@@ -85,7 +85,7 @@ medians over the prints: mad 0.0204, std 0.1815; the prints' spread is 0.02
 ```
 
 The two values of the last row are 0.27% apart, inside the 0.78% within
-which `po.ewm_quantile` reads a quantile. One print in 40 at 50 times the
+which `rp.ewm_quantile` reads a quantile. One print in 40 at 50 times the
 spread multiplies the standard deviation by nine, and moves the MAD by 2%.
 
 ## Leave out the targets not yet known
@@ -101,7 +101,7 @@ window by when each row's target becomes known:
 | the target of row *t* is known | the scale on row *t* | how |
 |---|---|---|
 | at the next row | over the rows before *t* | `closed="left"`: the rows at *t*'s own clock value are outside its window, so its target is too |
-| `d` of the clock later, as under a spec's `embargo` | over the rows whose targets have arrived by *t*, those at or before `t − d` | the stream twice, from `po.stream.embargo(lf, clock=, delay=d)`: a predict row at *t* and a learn row at `t + d`; the operator reads the target only on the learn rows, `pl.when(pl.col("_online_role") == "learn").then(...)`, and the predict rows, filtered back, carry the scale |
+| `d` of the clock later, as under a spec's `embargo` | over the rows whose targets have arrived by *t*, those at or before `t − d` | the stream twice, from `rp.stream.embargo(lf, clock=, delay=d)`: a predict row at *t* and a learn row at `t + d`; the operator reads the target only on the learn rows, `pl.when(pl.col("_online_role") == "learn").then(...)`, and the predict rows, filtered back, carry the scale |
 
 A shift of the target column by `k` rows in Polars' `with_columns`, before
 the call (`pl.col("y").shift(k).over("symbol")`), lags it by rows rather
@@ -112,7 +112,7 @@ counts there.
 
 For a target known `d` of the clock later:
 
-1. **Double the stream with `po.stream.embargo(query, clock=, delay=d)`.**
+1. **Double the stream with `rp.stream.embargo(query, clock=, delay=d)`.**
    Each row comes out twice: a predict row at its own clock value, and a
    learn row `d` later, told apart by the column `_online_role`.
 2. **Read the target only on the learn rows,** with
@@ -130,11 +130,11 @@ data](../EXAMPLE-DATA.md):
 
 ```python
 # Each target of ret arrives 5 rows late: the stream twice, a predict row at t and a learn row at t + 5.
-doubled = po.stream.embargo(pl.scan_parquet("ticks.parquet"), clock="t", delay=5.0)
+doubled = rp.stream.embargo(pl.scan_parquet("ticks.parquet"), clock="t", delay=5.0)
 known = pl.when(pl.col("_online_role") == "learn").then(pl.col("ret").abs())   # a target counts once it has arrived
 scaled = (
     doubled.rheon.with_windows(
-        ret_scale=po.ewm_quantile(known, quantile=0.5, half_life=20.0) / 0.6744897501960817,
+        ret_scale=rp.ewm_quantile(known, quantile=0.5, half_life=20.0) / 0.6744897501960817,
         clock="t", gap_cap=10.0,
     )
     .filter(pl.col("_online_role") == "predict")                               # back to one row per row
@@ -181,9 +181,9 @@ known](#leave-out-the-targets-not-yet-known):
 
 ```python
 weighted = scaled.with_columns(w=1.0 / pl.col("ret_scale") ** 2)            # 1. the weight, null where the scale is
-by_scale = po.spec.ewridge("by_scale", targets=["ret"], features=["signal_a"], weight="w",
+by_scale = rp.spec.ewridge("by_scale", targets=["ret"], features=["signal_a"], weight="w",
                            clock="t", gap_cap=10.0, half_life=100.0, embargo=5.0)   # 2 and 3
-bank = po.ModelBank([by_scale])
+bank = rp.ModelBank([by_scale])
 bank.fit_predict(weighted)
 print(f"rows skipped for a null weight: {bank.summary()['rows_skipped'][0]}")
 ```
@@ -194,7 +194,7 @@ rows skipped for a null weight: 5
 
 ## Use a model's own scale of its residuals
 
-**For the scale of a model's residual, use the scale `po.spec.huber` can
+**For the scale of a model's residual, use the scale `rheon.spec.huber` can
 emit, with `emit_huber_scale=True`, in the field `huber_scale_<target>`.**
 It is the model's own robust scale of its residuals, read before the row.
 It takes each residual in when the row is learned, so the spec's
@@ -213,16 +213,16 @@ each row of a second model by `1 / huber_scale_y²`. It uses
 
 ```python
 # A huber fit that emits its robust scale of the residuals, read before each row.
-robust = po.spec.huber("robust", targets=["y"], features=["x0", "x1"], clock="t", gap_cap=10.0,
+robust = rp.spec.huber("robust", targets=["y"], features=["x0", "x1"], clock="t", gap_cap=10.0,
                        half_life=100.0, emit_huber_scale=True)
 residual_scale = pl.col("robust").struct.field("huber_scale_y")
 rows = (pl.scan_parquet("ticks.parquet").rheon.fit_predict([robust])
           .with_columns(w=1.0 / residual_scale ** 2)               # the weight, null where the scale is
           .collect())
 # A second model, each row weighed by the scale.
-by_residual = po.spec.ewridge("by_residual", targets=["y"], features=["x0", "x1"], weight="w",
+by_residual = rp.spec.ewridge("by_residual", targets=["y"], features=["x0", "x1"], weight="w",
                               clock="t", gap_cap=10.0, half_life=100.0)
-bank = po.ModelBank([by_residual])
+bank = rp.ModelBank([by_residual])
 bank.fit_predict(rows)
 print(f"huber_scale_y on the last row: {rows['robust'].struct.field('huber_scale_y')[-1]:.3f}; the noise's spread is 0.5")
 print(f"rows skipped for a null weight: {bank.summary()['rows_skipped'][0]}")
@@ -239,9 +239,9 @@ rows skipped for a null weight: 4
 targets known by that row:** `np.quantile(x, 0.5, weights=w,
 method="inverted_cdf")`, with each value weighed by
 `0.5 ** (age / half_life)` from its arrival. The recipes of [Make a robust
-scale with `po.ewm_quantile`](#make-a-robust-scale-with-poewm_quantile)
+scale with `rp.ewm_quantile`](#make-a-robust-scale-with-rpewm_quantile)
 and [Leave out the targets not yet
 known](#leave-out-the-targets-not-yet-known) do so. The two agree within the
-0.78% within which `po.ewm_quantile` reads a quantile. Then check that the
+0.78% within which `rp.ewm_quantile` reads a quantile. Then check that the
 scale is null until the first target arrives, and that `bank.summary()`
 counts those rows in `rows_skipped`.

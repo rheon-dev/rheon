@@ -28,7 +28,7 @@ blend among them as the stream runs:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # y = x0 - x1 plus noise, a row each unit of the clock column t.
 rng = np.random.default_rng(1)
@@ -38,7 +38,7 @@ frame = pl.DataFrame({"t": np.arange(n, dtype=float), "x0": x0, "x1": x1, "y": x
 frame.write_parquet("grid.parquet")
 
 # Two half-lives, by two ridge values, by two feature sets: eight grid points in one spec.
-grid = po.spec.ewridge(
+grid = rp.spec.ewridge(
     "m", targets=["y"], features=["x0", "x1"],
     clock="t", gap_cap=5.0,                              # the clock, and the largest step a model decays by
     half_life=[100.0, 1000.0],                           # an instance each, with a Gram of its own
@@ -47,13 +47,13 @@ grid = po.spec.ewridge(
     emit_selected=True,                                  # the grid point with the lowest error so far
     emit_averaged=True,                                  # every grid point, weighted by its error
 )
-bank = po.ModelBank([grid])
+bank = rp.ModelBank([grid])
 bank.fit(pl.scan_parquet("grid.parquet"))
 # The state: one Gram per instance.
 sums = bank.gram("m")
 print(f"{len(sums)} Grams: " + ", ".join(f"{g['instance']} (weight_sum {g['weight_sum']:.1f})" for g in sums))
 # The predictions: one slot per grid point, and the two that choose among them.
-slots = po.spec.output_index(grid).filter(pl.col("field").str.starts_with("pred_"))
+slots = rp.spec.output_index(grid).filter(pl.col("field").str.starts_with("pred_"))
 print(f"{slots.height} slots:")
 for field, instance in slots.select("field", "instance").iter_rows():
     print(f"  {field:30} instance {instance}")
@@ -86,7 +86,7 @@ what it holds](../how-to/find-an-output-field.md).
 `kalman`'s `coef_half_life`, its drift speed, takes one value per
 coefficient. `sgd`'s `learning_rate`, `holt`'s `trend_half_life` and
 `bocpd`'s `hazard` take a single value. For each of them, give the bank
-one spec per value, which `po.eval.grid_search` builds from its
+one spec per value, which `rp.eval.grid_search` builds from its
 `param_grid`.
 The bank still reads the stream once for all of them. [Choose a setting that takes no list](../CALIBRATION.md#choose-a-setting-that-takes-no-list)
 shows how.
@@ -108,7 +108,7 @@ instance.
 **An instance is named by a suffix of its half-life.** The name is
 `@h100` for a half-life of 100 (`@h10m` for a duration), and `""` where
 the spec has only one instance. It is the `instance` column of
-`bank.coef()` and `po.spec.output_index()`, and the `instance` key of
+`bank.coef()` and `rheon.spec.output_index()`, and the `instance` key of
 each Gram `bank.gram()` returns. A slot that chooses across
 instances, such as `pred_y__selected`, has
 none.
@@ -181,8 +181,8 @@ far. `emit_averaged` adds one more, a blend of every grid point's
 prediction, each weighted down as its error rises above the best one's.
 Those two slots hold a prediction and no residual. So the example's
 eight grid points, in two instances, write eight slots of their own for
-its one target, and the two switches add two more. `po.eval.metrics` and
-`po.eval.grid_search` score each slot, and name it in their `slot`
+its one target, and the two switches add two more. `rp.eval.metrics` and
+`rp.eval.grid_search` score each slot, and name it in their `slot`
 column.
 
 ## Why the best error over a grid is optimistic
@@ -200,7 +200,7 @@ than another, and chooses one on the first half of the rows:
 ```python
 import numpy as np
 import polars as pl
-from rheon import polars as po
+from rheon import polars as rp
 
 # y = x0 + noise; z0 ... z19 are noise that y never reads.
 rng = np.random.default_rng(3)
@@ -212,11 +212,11 @@ pl.DataFrame({"x0": x0, **{f"z{j}": z[j] for j in range(20)}, "y": x0 + e}).writ
 # Twenty feature sets, each x0 and one z: alike but for the noise each z adds.
 sets = {f"z{j}": ["x0", f"z{j}"] for j in range(20)}
 features = ["x0", *(f"z{j}" for j in range(20))]
-spec = po.spec.ewridge("sets", targets=["y"], features=features, half_life=50.0, feature_sets=sets)
+spec = rp.spec.ewridge("sets", targets=["y"], features=features, half_life=50.0, feature_sets=sets)
 out = pl.scan_parquet("noise.parquet").rheon.fit_predict([spec]).collect()
 
 # The set with the lowest error on the first half, against the average of the twenty, on each half.
-first, second = po.eval.metrics(out.head(n // 2), spec), po.eval.metrics(out.tail(n // 2), spec)
+first, second = rp.eval.metrics(out.head(n // 2), spec), rp.eval.metrics(out.tail(n // 2), spec)
 pick = first.sort("mse").row(0, named=True)
 later = second.filter(slot=pick["slot"])["mse"].item()
 print(f"{pick['slot']} on the rows it was chosen on: mse {pick['mse']:.4f}, the average {first['mse'].mean():.4f}")
@@ -236,7 +236,7 @@ first number is the optimism, and on real data it is mixed in with any
 real difference between the grid points.
 
 **So choose a grid point on one stretch of rows, and report what it
-earned on the rows after that stretch.** `po.eval.grid_search` does both:
+earned on the rows after that stretch.** `rp.eval.grid_search` does both:
 it cuts the rows into spans, chooses the best grid point from the rows
 before each span, and scores the choice on the span. [Calibrating a
 model](../CALIBRATION.md) gives the steps for each setting.
@@ -249,6 +249,6 @@ partly by luck. On a stream whose coefficient wanders, a selection among
 five half-lives held the shortest on 41% of the rows, though a longer one
 predicted best over the whole stream. Use `emit_selected` where the best
 grid point itself moves. To choose one grid point to run on the rows to
-come, use `po.eval.grid_search`. [Choose among a grid's settings as the
+come, use `rp.eval.grid_search`. [Choose among a grid's settings as the
 stream runs](../how-to/choose-among-a-grid-online.md) shows both switches
 on that stream.

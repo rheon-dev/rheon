@@ -1,14 +1,159 @@
 <!-- kind: reference -->
 # Versions and the Polars pin
 
-This page is the reference, for anyone who pins polars-online in their
+This page is the reference, for anyone who pins rheon in their
 requirements or upgrades it, on what each release may change and which
 versions of Polars it runs with.
 
 Two versions matter when you install this package. Its own version says
-when to expect a breaking change. The range of Polars it accepts,
-`polars>=1.37.0,<3`, is measured by this project, and Polars does not
+when to expect a breaking change. The range of Polars its `polars` extra
+accepts, `polars>=1.37.0,<3`, is measured by this project, and Polars does not
 promise it.
+
+## The 2.0 rename
+
+**From 2.0.0 the package is called rheon, and its Polars interface is the
+module `rheon.polars`.** The models keep the parameters, defaults, output
+fields and state files they had in 1.6.0, and a fit under the current names
+gives the same numbers to the bit. To move a program to 2.0, change its
+install line, its imports and the names in [Names the rename
+changed](#names-the-rename-changed). Then replace any name that 1.6.0 still
+read with a deprecation warning, since 2.0 refuses each of them.
+
+### Names the rename changed
+
+**Every name that carried the old package's name now carries rheon's.** The
+spec builders, their keywords, the output fields, the TOML keys and the
+command line's flags keep their names. Each changed name, by its 1.x
+spelling:
+
+| in 1.x | in 2.0 |
+|---|---|
+| `pip install polars-online` | `pip install "rheon[polars]"`. Polars is an extra, so `pip install rheon` alone installs no Polars |
+| `pip install polars-online-compat`, the build for every x86-64 CPU | `pip install "rheon-compat[polars]"` ([What the x86-64 wheels need](#what-the-x86-64-wheels-need)) |
+| the `numpy` extra, `polars-online[numpy]` | `rheon[numpy]`, as in `pip install "rheon[polars,numpy]"` |
+| `import polars_online as po` | `from rheon import polars as rp`, which holds every public name |
+| `po.ModelBank`, `po.fit_predict`, `po.ewm_mean`, `po.stream` and every other name | `rp.ModelBank`, `rp.fit_predict`, `rp.ewm_mean`, `rp.stream` and the rest |
+| the frame namespace `.online`, as `lf.online.fit_predict` | `.rheon`, as `lf.rheon.fit_predict`. Importing `rheon.polars` registers it |
+| `PolarsOnlineWarning` and `PolarsOnlineDeprecationWarning` | `rheon.RheonWarning` and `rheon.RheonDeprecationWarning` |
+| `POLARS_ONLINE_MAX_THREADS`, `POLARS_ONLINE_TIMING`, `POLARS_ONLINE_WARN_UNSTABLE` and `POLARS_ONLINE_SKIP_CPU_CHECK` | `RHEON_MAX_THREADS`, `RHEON_TIMING`, `RHEON_WARN_UNSTABLE` and `RHEON_SKIP_CPU_CHECK` ([Environment variables across the rename](#environment-variables-across-the-rename)) |
+| the command `polars-online` | the command `rheon` |
+| `po.gbdt`, the unstable training inputs for XGBoost and LightGBM | no public module: it was an internal helper and never a stable interface, so 2.0 keeps it out of the public names, where it can change without a major release |
+
+The repository is at
+[github.com/rheon-dev/rheon](https://github.com/rheon-dev/rheon), and the
+API reference at
+[rheon-dev.github.io/rheon](https://rheon-dev.github.io/rheon/).
+
+**The names that need no Polars are in `rheon` itself, and `import rheon`
+runs without Polars installed.** They are the module `rheon.spec` and the
+function `rheon.target`, the error classes, the warnings `RheonWarning`,
+`RheonDeprecationWarning`, `ReadinessWarning` and `UnstableWarning`, the
+modules `rheon.gram` and `rheon.corr`, and the functions
+`rheon.schema_version()`, `rheon.native_version()` and
+`rheon.thread_pool_size()`. `rheon.polars` re-exports each of them, so `rp.spec` and `rheon.spec` are the same module.
+Without Polars, `from rheon import polars` raises an `ImportError` that says
+to install `rheon[polars]`.
+
+**`rp.ColumnNotFoundError`, `rp.OutputColumnNotFoundError` and
+`rp.UnstableWarning` keep Polars' classes as parents, as in 1.x.** Each is a
+subclass of the `rheon` class of the same name, which has no Polars parent.
+So `except rheon.ColumnNotFoundError` catches both. Once `rheon.polars` is
+imported, the library raises the `rp.` classes, so `except
+pl.exceptions.ColumnNotFoundError` goes on catching what it caught in 1.x.
+
+### What 2.0 removes
+
+**2.0 refuses every name that the 1.x series read under an old spelling.**
+In 1.x, a parameter, keyword, word, function or call form renamed from
+2026-10-11 on was still read, with a `PolarsOnlineDeprecationWarning`. In 2.0
+each is refused, and the error names the current spelling ([How an old
+name is refused](#how-an-old-name-is-refused)). A program that runs on
+1.6.0 with no such warning needs none of these changes. To find the names a
+program still uses, run its tests under 1.6.0 with that warning made an
+error: `warnings.simplefilter("error", po.PolarsOnlineDeprecationWarning)`.
+
+| what 1.x still read | what 2.0 takes |
+|---|---|
+| the model keywords and words renamed on 2026-10-11, such as `kmeans`' `k` and `"kmeanspp"` | the names in [Names that changed](#names-that-changed), such as `n_clusters` and `"k-means++"` |
+| `po.rewm_mean`, `po.rewm_sum` and `po.rewm_rate` | `rp.ewm_mean(..., reverse=True)` and the rest |
+| `ModelBank.to_json` and `save_json`; `save(path=)` and `load(path=)` | `write_json(file=None)`; `save(file=)` and `load(source=)` |
+| the calls `bank.rows_fed()` and `bank.output_fields()` | the properties `bank.rows_fed` and `bank.output_fields` |
+| `closed_groups` and `chunk_size` given by position to `fit` and `fit_predict_batches` | the same arguments by keyword |
+| `po.eval`'s `spec_name` and `spec_names`; `po.corr.matrix` | `spec` and `specs`; `rheon.gram.correlation` |
+| `po.gram.subset(cols=)`, `max_steps` in `lars_path` and `lars_paths`, and `cross_centred` in `po.gram.from_row` | `rheon.gram.subset(columns=)`, `max_iter` and `cross_centered` |
+
+**Two arguments that 1.x accepted and ignored are refused.** A number or a
+duration given as `with_windows`' `session_gap` is refused, since every
+window ends at a session change and none spans the gap. `theta` beside
+`preavg_rows` in `rp.spec.rcov` is refused, from the builder, a spec dict
+and a TOML file.
+A window run's state saved with a numeric `session_gap` still loads under a
+call without one.
+
+**`rheon.WrongTypeError`, `rheon.RefusedValueError` and
+`rheon.OutputColumnNotFoundError` each have one standard parent.** They are
+a `TypeError`, a `ValueError` and a `ColumnNotFoundError`, and no longer
+also a `ValueError`, a `TypeError` and a `KeyError`. Catch the class the
+problem names.
+
+### Code that still imports polars_online
+
+**polars-online 2.0.0 is a thin package that runs a 1.x program on rheon.**
+It holds no models of its own and depends on `rheon[polars]>=2.0.0,<3`.
+`import polars_online` gives rheon's Polars interface, `rheon.polars`, with
+one `DeprecationWarning` a process. The `.online` frame namespace gives one
+more, the first time it is used. Every call goes to rheon, so a name that
+2.0 removes is refused through the thin package as well.
+`polars-online-compat` 2.0.0 forwards to `rheon-compat` the same way.
+Install the thin package to keep a program running while you change its
+imports, then move the program to `rheon` and uninstall it. A requirement
+pinned as `polars-online~=1.0` stays on the 1.x series and never installs
+it.
+
+### States and pickles across the rename
+
+**A state file that 1.x saved loads in 2.0, and goes on as it would in
+1.6.0.** The rename kept the file's format and its schema version, so
+`rp.ModelBank.load` reads a bank that 1.6.0 saved and continues it to the
+bit. A window run's state from `with_windows(save_state=...)` loads into
+`lf.rheon.with_windows(load_state=...)` the same way. Some states that
+1.x releases before 1.6.0 saved go on within a stated tolerance instead,
+each named in [State files across
+releases](#state-files-across-releases).
+
+**A pickle made by 1.x loads in 2.0 only with the thin polars-online
+2.0.0 installed.** A pickle names the class of each object by its import
+path, and 1.x's bank is `polars_online._bank.ModelBank`. The thin package
+maps `polars_online._bank` to `rheon.polars._bank` and
+`polars_online._polars_online` to `rheon._rheon`, so the pickle loads and
+goes on as rheon's bank. Without the thin package, unpickling raises
+`ModuleNotFoundError`. To upgrade without it, load each pickled bank under
+1.x and save it with `bank.save(...)`, then read the file under 2.0 with
+`rp.ModelBank.load`. A pickle made by 2.0 holds the same state, behind
+rheon's import path.
+
+### Environment variables across the rename
+
+**Each environment variable is read by its `RHEON_` name, and by its old
+`POLARS_ONLINE_` name while the new one is unset.** An empty value counts
+as set. When both are set, the new name is used and nothing is printed.
+2.x reads the old names, and the next major release stops reading them.
+
+**In Python, each old name that is read gives one
+`rheon.RheonDeprecationWarning` a process, at `import rheon`.** For
+`POLARS_ONLINE_MAX_THREADS` it reads:
+
+```text
+rheon: the environment variable POLARS_ONLINE_MAX_THREADS was renamed RHEON_MAX_THREADS. The old name is read for now, and will not be read from the next major release. Set RHEON_MAX_THREADS instead.
+```
+
+**The command line prints one notice for each old name when it starts,** to
+standard error. For `POLARS_ONLINE_TIMING` it reads:
+
+```text
+rheon: warning: POLARS_ONLINE_TIMING was renamed RHEON_TIMING, and the old name is read for now. Set RHEON_TIMING instead.
+```
 
 ## This package's own versioning
 
@@ -22,13 +167,13 @@ versioning, and
 
 ### Pinning the version
 
-**To keep your code working across the 1.x series, pin the major version
-in your requirements, as `polars-online~=1.0` or `polars-online>=1,<2`.**
+**To keep your code working across the 2.x series, pin the major version
+in your requirements, as `rheon~=2.0` or `rheon>=2,<3`.**
 A minor release adds models, parameters, outputs and functions, and breaks
 nothing stable. It can also correct numbers that were wrong, or move last
 bits when a sum is taken in another order, each declared with its size. So
 pin the minor as well if your numbers must not move.
-`polars-online~=1.6.0` pins the current minor: it takes that minor's patch
+`rheon~=1.6.0` pins the current minor: it takes that minor's patch
 releases and stops before the next minor.
 [Reproduce an earlier version's fit](how-to/reproduce-an-earlier-versions-fit.md)
 shows how to get back an earlier release's numbers where a setting gives
@@ -39,8 +184,9 @@ them back.
 removed parts of the 0.x API, to make it more standard and consistent. A
 [spec](GLOSSARY.md#the-model-bank-and-what-it-reads) keyword renamed up to
 2026-10-07 is refused with an error that names the new one. One renamed on
-2026-10-11, when the parameters took the names 1.0 keeps, is still read,
-with a warning, until 2.0 ([Names that changed](#names-that-changed)).
+2026-10-11, when the parameters took the names 1.0 keeps, was read with a
+warning through 1.x, and 2.0 refuses it in the same way ([Names that
+changed](#names-that-changed)).
 
 ### What is stable
 
@@ -53,41 +199,38 @@ in any minor release:
 
 | | what it covers |
 |---|---|
-| **stable** | everything in `rheon.__all__`; the `po.spec` constructors, their keywords and their defaults; the functions of the helper modules `po.eval`, `po.gram`, `po.ops` and `po.stream`; the `.online` namespace; the [output field names](how-to/find-an-output-field.md); the columns, and their types, of the frames a bank and `po.spec` return, and of the closed-groups frame; the words each string-valued parameter takes; the TOML config keys; the command line's flags, its exit status and the files it writes; and the environment variables the package reads |
-| **unstable** | the file format of a window run's state (`with_windows(save_state=...)`); the written form of a formula target, in a TOML config or inside a bank's state; the Arrow export: `fit_predict_arrow`, `predict_arrow` and `ArrowStruct`; and the modules `po.sim`, `po.corr` and `po.gbdt`. Each says so in its docstring, and warns with `UnstableWarning` when used with `POLARS_ONLINE_WARN_UNSTABLE=1` set |
-| **not stable** | any name that starts with an underscore, apart from the two columns `po.stream.embargo` adds, `_online_role` and `_online_role_weight`, which are stable; the Rust crates (`rheon-core`, `rheon-polars`, `rheon-cli` and `rheon-py`), which are not published to crates.io, so nothing outside this repository builds against them; a model's numbers within the 1e-12 tolerance its stored reference results are held to, which depend on the platform and the Polars version; and the text the command line prints (its summary, readiness warnings and errors) and the timing lines `POLARS_ONLINE_TIMING=1` asks for, which are written for a person and may be reworded in a minor release |
+| **stable** | everything in `rheon.__all__` and `rheon.polars.__all__`; the `rheon.spec` constructors, their keywords and their defaults; the functions of the helper modules `rp.eval`, `rheon.gram`, `rp.ops` and `rp.stream`; the `.rheon` namespace; the [output field names](how-to/find-an-output-field.md); the columns, and their types, of the frames a bank and `rheon.spec` return, and of the closed-groups frame; the words each string-valued parameter takes; the TOML config keys; the command line's flags, its exit status and the files it writes; and the environment variables the package reads |
+| **unstable** | the file format of a window run's state (`with_windows(save_state=...)`); the written form of a formula target, in a TOML config or inside a bank's state; the Arrow export: `fit_predict_arrow`, `predict_arrow` and `ArrowStruct`; and the modules `rp.sim` and `rheon.corr`. Each says so in its docstring, and warns with `UnstableWarning` when used with `RHEON_WARN_UNSTABLE=1` set |
+| **not stable** | any name that starts with an underscore, apart from the two columns `rp.stream.embargo` adds, `_online_role` and `_online_role_weight`, which are stable; the Rust crates (`rheon-core`, `rheon-polars`, `rheon-cli` and `rheon-py`), which are not published to crates.io, so nothing outside this repository builds against them; a model's numbers within the 1e-12 tolerance its stored reference results are held to, which depend on the platform and the Polars version; and the text the command line prints (its summary, readiness warnings and errors) and the timing lines `RHEON_TIMING=1` asks for, which are written for a person and may be reworded in a minor release |
 
 **Each unstable part is unstable for a reason that a promise would make
 costly.** The window run's state reached version 10 in under four weeks
 (2026-09-30 to 2026-10-24), versions 2 to 9 in the first nine days. The
 formula tree is read from `expr.meta.serialize`, whose form Polars calls
 unstable across its versions. The Arrow export's input side still arrives
-as a Polars frame, and its import is not built. `po.sim` and `po.corr`
-stand beside the bank: neither reads its outputs, as `po.eval` and
-`po.gram` do. `po.sim`'s frames also rest on NumPy's `Generator`, which
-promises no stream across NumPy versions. `po.gbdt` is built on the
-boosting libraries' C interfaces and on how their Python classes hold a
-native handle, so a new version of one of those libraries may need a new
-release of this package.
+as a Polars frame, and its import is not built. `rp.sim` and `rheon.corr`
+stand beside the bank: neither reads its outputs, as `rp.eval` and
+`rheon.gram` do. `rp.sim`'s frames also rest on NumPy's `Generator`, which
+promises no stream across NumPy versions.
 
 ### What the API is
 
-**The API is bigger than `rheon.__all__`: four surfaces can break
+**The API is bigger than `rheon.__all__` and `rheon.polars.__all__`: four surfaces can break
 your code with no error at import.** Each is stable, and each
 change to one shows as a diff in the snapshot:
 
 | surface | what is API | how a change would break you |
 |---|---|---|
 | output field names, the largest surface | every field name you read from a spec's output column, as `out["m"].struct.field("pred_y")`: `pred_y__r0.000001@h100`, `resid_y__r0.5@h100`, `abs_resid_q0.95_y0`, `weight_sum@h500`. They are built from ridge values, half-life suffixes, feature-set labels, quantile levels and target names | a new output, a renamed suffix or a float rendered another way fails as a `StructFieldNotFoundError` in your pipeline |
-| the spec constructors | the twenty-two model builders of `po.spec`, every keyword's name and every default. The keywords are keyword-only, so their order is not API | a renamed keyword is refused, naming the new one ([How an old name is refused](#how-an-old-name-is-refused)) |
+| the spec constructors | the twenty-two model builders of `rheon.spec`, every keyword's name and every default. The keywords are keyword-only, so their order is not API | a renamed keyword is refused, naming the new one ([How an old name is refused](#how-an-old-name-is-refused)) |
 | defaults | every default, whether a builder sets it in Python or the bank resolves it in Rust from a keyword left as `None` | no error: it silently changes your numbers, which is worse than breaking your code |
 | state files and the TOML config | a state file's layout and version, and every key of a run config, a spec and each model type | a file or a config that loaded before is refused |
 
 **A state file records the schema version that decides whether it
-loads.** `po.schema_version()` gives the installed release's, which moves
+loads.** `rheon.schema_version()` gives the installed release's, which moves
 with every change to a state's layout. A release refuses a file whose
 schema is older than the oldest it loads, by that version. A window run's
-state and a `po.stream.refresh_time` state each carry a version of their
+state and a `rp.stream.refresh_time` state each carry a version of their
 own.
 
 ### What each kind of release may change
@@ -225,16 +368,13 @@ name another model still takes, such as `ewridge`'s `k` as a feature, is
 not touched. A name that has no current spelling to point to, or whose
 model takes none, gets the plain unknown-name error.
 
-**Three error classes lost their older parent.** `po.WrongTypeError` is
-a `TypeError` only, `po.RefusedValueError` a `ValueError` only, and
-`po.OutputColumnNotFoundError` a `po.ColumnNotFoundError` only, not also a
-`KeyError`. Catch the class the problem names.
-
 ### Names that changed
 
 **Each name renamed or removed since 0.x has one current name or
 replacement, listed by its old name.** Older pages, notes and the
-CHANGELOG use the names of their day. On 2026-10-02 the
+CHANGELOG use the names of their day. The table writes an old name with
+`po.`, the 1.x package, and a current one with `rp.` (`rheon.polars`) or
+`rheon.`. On 2026-10-02 the
 public parameters and output fields were renamed to Polars' words. A few
 other changes renamed one name each, and four surfaces were removed. A
 spec that passes a parameter renamed on 2026-10-02 is refused, and the
@@ -251,7 +391,7 @@ new spelling (see [How an old name is refused](#how-an-old-name-is-refused)).
 | `halflife`, alone or inside a name: `long_halflife`, `coef_halflife`, `revert_halflife`, `select_halflife`, `level_halflife`, `trend_halflife` | `half_life`, and so `long_half_life` and the rest | 2026-10-02 |
 | `max_dclock` | `gap_cap` | 2026-10-02 |
 | `label_delay` | `embargo` | 2026-10-02 |
-| a model's `window`, its hard cutoff; `po.eval.rolling_metrics`, its `window` and then its `window_size` | `window_size`; `po.eval.window_metrics` and `every`: its windows do not overlap, as Polars' `group_by_dynamic(every=)` | 2026-10-02, then 2026-10-07 |
+| a model's `window`, its hard cutoff; `po.eval.rolling_metrics`, its `window` and then its `window_size` | `window_size`; `rp.eval.window_metrics` and `every`: its windows do not overlap, as Polars' `group_by_dynamic(every=)` | 2026-10-02, then 2026-10-07 |
 | `min_periods` | `min_weight` | 2026-10-02 |
 | `on_clock_reset` and its policies `"error"` and `"reset_state"`; `min_backwards_jump`; and before it `min_session_clock` | `restart_after_step_back`. Unset, every step back is refused, as `"error"` did; set, a step back larger than it resets the model, as `"reset_state"` did, and `0` resets it at every step back | 2026-10-02; `min_session_clock` was removed in 0.9.0, and the policies `"max"` and `"zero"` in 0.12.0 |
 | `emit_resid_z`, and its field `resid_z_<t>` | `emit_zscore`, and `zscore_<t>` | 2026-10-02 |
@@ -264,15 +404,15 @@ new spelling (see [How an old name is refused](#how-an-old-name-is-refused)).
 | `lasso`'s `lam_selected_<t>` | `penalty_selected_<t>` | 2026-10-02 |
 | `pcorr_<a>_<b>`, `absresid_q<p>`, and the PCA loadings `pc<j>_<feature>` | `partial_corr_<a>_<b>`, `abs_resid_q<p>`, and `pc<j>_loading_<feature>` | 2026-10-02 |
 | `bocpd`'s `logscore`; `hmm`'s `p_<k>` and `p1_<k>` | `loglik`; `filtered_state<j>` and `predicted_state<j>` | 2026-10-02, then 1.0.0 |
-| `po.prep`, and `refresh_time`'s `time=` and `by=` | `po.stream`, and `clock=` and `group=` | 0.12.0 |
+| `po.prep`, and `refresh_time`'s `time=` and `by=` | `rp.stream`, and `clock=` and `group=` | 0.12.0 |
 | `po.corr.signal_share`'s `n_eff_blocks` | `n_kish_blocks` | 2026-10-02 |
 | `po.eval`'s `by` and `min_obs` | `group`, which also takes one key as a bare string, and `min_samples` | 2026-10-07 |
-| `po.corr.shift` | `po.corr.absorption_shift` | 2026-10-07 |
+| `po.corr.shift` | `rheon.corr.absorption_shift` | 2026-10-07 |
 | `po.gram.lasso_path`'s `lambdas` | `penalties` | 2026-10-07 |
 | `corrchange`'s `horizon` and `window`; `rcov`'s `window` | `span_rows`; `preavg_rows` | 0.3.0 |
-| `po.run`, the Python runner | removed: the `polars-online` command line, or `ModelBank.fit(lf)` | 0.7.0 |
-| the expression plugin: `pl.col(...).online.<model>`, `po.online` and `InMemoryExpressionWarning` | removed, because a stateful expression is handed its whole column: `lf.online.fit_predict` | 0.7.0 |
-| `po.window.ewm` and `po.window.lookahead_rewm`, with `split=` | removed: the window operators, such as `po.ewm_mean` and `po.ewm_sum(..., reverse=True)`, run by `with_windows` or as a spec's target | 2026-10-03 |
+| `po.run`, the Python runner | removed: the `rheon` command line, or `ModelBank.fit(lf)` | 0.7.0 |
+| the expression plugin: `pl.col(...).online.<model>`, `po.online` and `InMemoryExpressionWarning` | removed, because a stateful expression is handed its whole column: `lf.rheon.fit_predict` | 0.7.0 |
+| `po.window.ewm` and `po.window.lookahead_rewm`, with `split=` | removed: the window operators, such as `rp.ewm_mean` and `rp.ewm_sum(..., reverse=True)`, run by `with_windows` or as a spec's target | 2026-10-03 |
 | a spec's `type = "ew_ridge"` | `type = "ewridge"`, the builder's spelling | 2026-10-07 |
 | `chunk_rows`, and the command line's `--chunk-rows` | `chunk_size` and `--chunk-size`, Polars' name | 2026-10-07 |
 | the command line's `--resume` | `--load-state`, beside the TOML key `load_state` | 2026-10-07 |
@@ -285,7 +425,7 @@ new spelling (see [How an old name is refused](#how-an-old-name-is-refused)).
 | `bocpd`'s `prior_mean`, `prior_kappa`, `prior_nu` and `prior_scale` | `mean_prior`, `mean_precision_prior`, `degrees_of_freedom_prior` and `covariance_prior` | 2026-10-11 |
 | `window_every` | `snapshot_every`, beside `max_rows_between_snapshots` | 2026-10-11 |
 | `ew_cov`'s `max_rows_between_pca` | `max_rows_between_pcas`, as `max_rows_between_solves` | 2026-10-11 |
-| `lasso`'s `lasso_path` | `penalties`, as `po.gram.lasso_path` names them | 2026-10-11 |
+| `lasso`'s `lasso_path` | `penalties`, as `rheon.gram.lasso_path` names them | 2026-10-11 |
 | `corrchange`'s `span_rows`, and `reset_on_flag` | `window_rows`, and `change_action`, `"flag"` or `"reset"` as `drift_action` | 2026-10-11 |
 | `holt`'s `level_half_life` | the spec's `half_life` | 2026-10-07 |
 | a model window that keeps a row exactly `window_size` old | `closed="both"`; the default, `closed="right"`, drops it | 2026-10-07 |
@@ -297,10 +437,10 @@ new spelling (see [How an old name is refused](#how-an-old-name-is-refused)).
 | `audit()`'s `rows`, `null`, `nan`, `pos_inf`, `neg_inf`, `beyond_bound` and `distinct`, and its clock table's `max_step` | `rows_fed`, `null_count`, `nan_count`, `pos_inf_count`, `neg_inf_count`, `beyond_bound_count` and `n_unique`, and `step_max` | 1.0.0 |
 | `marginal()`'s `t_serial`; `closed_groups()`' `pair_t_serial`; `gram()`'s `cross_centred` | `t_stat_serial`; `pair_t_stat_serial`; `cross_centered` | 1.0.0 |
 | the bank's `save(path=)`, `load(path=)`, `to_json` and `save_json`; the methods `rows_fed()` and `output_fields()` | `save(file=)`, `load(source=)` and `write_json(file=None)`; the properties `rows_fed` and `output_fields` | 1.0.0 |
-| `po.rewm_mean`, `po.rewm_sum` and `po.rewm_rate` | `po.ewm_mean(..., reverse=True)` and the rest | 1.0.0 |
+| `po.rewm_mean`, `po.rewm_sum` and `po.rewm_rate` | `rp.ewm_mean(..., reverse=True)` and the rest | 1.0.0 |
 | `po.eval`'s `spec_name` and `spec_names` | `spec`, a name or the spec dict, and `specs` | 1.0.0 |
-| `po.gram.subset(cols=)`; `lars_path`'s and `lars_paths`' `max_steps`; `po.corr.matrix` | `columns=`; `max_iter`; `po.gram.correlation` | 1.0.0 |
-| the command `online`, and its variable `ONLINE_TIMING` | `polars-online`, and `POLARS_ONLINE_TIMING`, on at `1` only | 1.0.0 |
+| `po.gram.subset(cols=)`; `lars_path`'s and `lars_paths`' `max_steps`; `po.corr.matrix` | `columns=`; `max_iter`; `rheon.gram.correlation` | 1.0.0 |
+| the command `online`, and its variable `ONLINE_TIMING` | `rheon`, and `RHEON_TIMING`, on at `1` only | 1.0.0, then 2.0.0 |
 
 ### State files across releases
 
@@ -345,7 +485,7 @@ the change, or in this list:
 | 1.4.0 or earlier | `ew_class` under a hard window and `covariance_type="diag"` | a state below its `window_budget` continues to the bit. One that had reached it thins or refuses its snapshots later than before, and from that row does not continue to the bit |
 | 1.4.0 or earlier | a bank under the default `refit_budget` | the groups it gave up stay given up, every group it holds continues to the bit, and a group it first sees after the load refits until 320 MiB is reserved |
 | 1.5.0 or earlier | a window run's state, or a window formula inside a bank's state | it loads and saves back the same bytes, and continues within 1e-12 relative, not to the bit, once a row after the load has a gap of a hundredth of a half-life or more (a row's held mass is taken from the discount's own `exp2` from there up). A gap below that, and `ewm_sum`, `ewm_rate` and `ewm_quantile`, are as before |
-| 1.5.0 or earlier | a window run's state, or a window formula inside a bank's state, whose call has a `po.ewm_sum` with the default `min_samples` | it is refused as another call, since the default of a sum is now 0 and the state's call says 1. An expression that says `min_samples=1` resumes it, with its nulls where a window holds no value |
+| 1.5.0 or earlier | a window run's state, or a window formula inside a bank's state, whose call has an `ewm_sum` with the default `min_samples` | it is refused as another call, since the default of a sum is now 0 and the state's call says 1. An expression that says `min_samples=1` resumes it, with its nulls where a window holds no value |
 
 **The two unstable formats are outside that promise:** a window run's
 state, and a formula target inside a bank's state.
@@ -397,7 +537,7 @@ be any version in the range:
 | what you use | the lowest py-polars | why |
 |---|---|---|
 | `ModelBank` alone | 1.28.1 | the release that added the `PySeries._export` it calls |
-| every call that reads a query, such as `lf.online.fit_predict`, `lf.online.predict`, `ModelBank.fit` and `ModelBank.fit_predict_batches`, `with_windows` and `refresh_time` | 1.37.0 | they read the query one chunk at a time, with `LazyFrame.collect_batches`, which before 1.37.0 reads ahead of a slower reader without limit ([The floor and the ceiling](#the-floor-and-the-ceiling)) |
+| every call that reads a query, such as `lf.rheon.fit_predict`, `lf.rheon.predict`, `ModelBank.fit` and `ModelBank.fit_predict_batches`, `with_windows` and `refresh_time` | 1.37.0 | they read the query one chunk at a time, with `LazyFrame.collect_batches`, which before 1.37.0 reads ahead of a slower reader without limit ([The floor and the ceiling](#the-floor-and-the-ceiling)) |
 | the examples that stream a DuckDB, ADBC or pyarrow source into a bank | 1.43.0 | for `pl.scan_arrow_c_stream` |
 
 ### The floor and the ceiling
@@ -429,7 +569,7 @@ and the rest stream a database or a pyarrow reader through
 `tests/test_scaffold.py` asserts the pin and the range.
 
 **The Rust `polars` inside the wheel is 0.55.2, and the command line uses
-it alone:** the `polars-online` command never touches py-polars, so the
+it alone:** the `rheon` command never touches py-polars, so the
 py-polars range does not apply to it.
 
 [Polars interfaces](explanation/polars-interfaces.md) explains why a
@@ -438,9 +578,9 @@ first.
 
 ## NumPy
 
-**NumPy is the one optional dependency, `numpy>=1.26` with no ceiling.**
-It is needed only by the `numpy` extra, `polars-online[numpy]`, for
-`po.sim`, `po.corr`, `po.gram` and `ModelBank.gram`. The floor follows
+**NumPy is the second optional dependency, beside Polars, as `numpy>=1.26`
+with no ceiling.** It is needed only by the `numpy` extra, `rheon[numpy]`, for
+`rp.sim`, `rheon.corr`, `rheon.gram` and `ModelBank.gram`. The floor follows
 the oldest Python this package supports: NumPy's first wheels for Python
 3.12 are 1.26.0. No run on NumPy 1.26 is recorded.
 
@@ -462,11 +602,11 @@ the Polars range makes.
 
 ## What the x86-64 wheels need
 
-**The x86-64 wheels of `polars-online` need a CPU with AVX2, FMA and the
-rest of Polars' default feature set, and `polars-online-compat` is the same
-package for every x86-64 CPU.** Both are built from one source at one
+**The x86-64 wheels of `rheon` need a CPU with AVX2, FMA and the rest of
+Polars' default feature set, and `rheon-compat` builds the same package
+for every x86-64 CPU.** Install it as `pip install "rheon-compat[polars]"`. Both are built from one source at one
 version, and both are imported as `rheon`. A Linux (glibc and musl),
-Windows or macOS Intel wheel of `polars-online` is compiled for the features
+Windows or macOS Intel wheel of `rheon` is compiled for the features
 below, which are the ones Polars builds its own default runtime
 (`polars-runtime-32`) for, as its wheels record them in
 `BUILD_FEATURE_FLAGS`:
@@ -501,19 +641,19 @@ build's time. Only Intel was measured: no AMD machine was available.
 loads.** `import rheon` reads the CPU's features with the `cpuid`
 instruction, in pure Python, and compares them with the list the wheel was
 built for. A feature missing from the CPU issues a `RuntimeWarning` that
-names it and says to install `polars-online-compat`; going on would end in an
+names it and says to install `rheon-compat`; going on would end in an
 illegal instruction at the first model that used one. The check does nothing
-on ARM, in `polars-online-compat`, in a package built from the source
+on ARM, in `rheon-compat`, in a package built from the source
 distribution (which is built for baseline x86-64), and when the environment
-variable `POLARS_ONLINE_SKIP_CPU_CHECK` is set to anything. A CPU the check
+variable `RHEON_SKIP_CPU_CHECK` is set to anything. A CPU the check
 cannot read, because the system refuses executable memory, is not a reason to
 refuse the import: it warns of nothing.
 
 **To change from one package to the other, uninstall the first.** The two
 install the same files under `rheon/`, so pip does not stop both being
 installed, and the second install's files replace the first's; uninstalling
-either then removes files the other needs. Run `pip uninstall polars-online`
-before `pip install polars-online-compat`, and the reverse. Both have wheels
+either then removes files the other needs. Run `pip uninstall rheon`
+before `pip install "rheon-compat[polars]"`, and the reverse. Both have wheels
 for macOS (arm64, x86_64), Windows x64 and Linux (x64 glibc and musl, aarch64
 glibc), and an sdist for the rest, so either installs wherever the other
 does; on ARM they are the same build.

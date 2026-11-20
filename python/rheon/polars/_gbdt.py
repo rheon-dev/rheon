@@ -847,7 +847,7 @@ def xgboost_matrix(
     - :func:`lightgbm_dataset`, LightGBM's training input from the same
       sources.
     - `Training XGBoost and LightGBM
-      <https://github.com/rheon-dev/rheon/blob/main/docs/GBDT.md>`_,
+      <https://github.com/rheon-dev/rheon/blob/main/docs/records/GBDT.md>`_,
       the guide: training around an online model's prediction as the
       margin, and serving with it.
 
@@ -1341,7 +1341,7 @@ def lightgbm_dataset(
     - :func:`xgboost_matrix`, XGBoost's training input from the same
       sources.
     - `Training XGBoost and LightGBM
-      <https://github.com/rheon-dev/rheon/blob/main/docs/GBDT.md>`_,
+      <https://github.com/rheon-dev/rheon/blob/main/docs/records/GBDT.md>`_,
       the guide: training around an online model's prediction as the
       margin, and serving with it.
 

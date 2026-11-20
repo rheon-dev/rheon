@@ -22,12 +22,12 @@ columns silently** ([What is stable](../VERSIONS.md#what-is-stable)).
 
 These steps need the library and a spec:
 
-- polars-online installed, and
+- rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The example reads
   `df`, a frame of 400 rows whose target `y` is `1 + 2·x0 − x1` plus
   noise.
-- The spec whose output you read. `po.spec.output_index` and
-  `po.spec.coef_fields` build their tables from the spec alone, before
+- The spec whose output you read. `rheon.spec.output_index` and
+  `rheon.spec.coef_fields` build their tables from the spec alone, before
   any row is fed.
 
 ## Find a field's name from the values it holds
@@ -37,14 +37,14 @@ renders the names, so they always agree with the output:
 
 | table | one row per | use it for |
 |---|---|---|
-| `po.spec.output_index(spec)` | field: its name, its kind, the target, ridge and half-life its name encodes, and its dtype | any field, such as a prediction |
-| `po.spec.coef_fields(spec)` | coefficient: the list field it sits in, its position there, and its column once unnested | one coefficient |
+| `rheon.spec.output_index(spec)` | field: its name, its kind, the target, ridge and half-life its name encodes, and its dtype | any field, such as a prediction |
+| `rheon.spec.coef_fields(spec)` | coefficient: the list field it sits in, its position there, and its column once unnested | one coefficient |
 
-1. **Filter `po.spec.output_index(spec)` on the values you want,** such as
+1. **Filter `rheon.spec.output_index(spec)` on the values you want,** such as
    `kind`, `target`, `ridge` and `half_life`, and take its `field`.
 2. **Read that field from the spec's column** with Polars'
    `struct.field(name)`.
-3. **For a coefficient, filter `po.spec.coef_fields(spec)` on its `term`
+3. **For a coefficient, filter `rheon.spec.coef_fields(spec)` on its `term`
    and grid values,** and read its `position` in the list its `field`
    names.
 
@@ -53,18 +53,18 @@ on `x1` at the smaller ridge comes back as `df`'s −1. This code uses `df`
 from [Example data](../EXAMPLE-DATA.md):
 
 ```python
-grid = po.spec.ewridge("m", targets=["y"], features=["x0", "x1"], clock="t",
+grid = rp.spec.ewridge("m", targets=["y"], features=["x0", "x1"], clock="t",
                        gap_cap=300.0, half_life=[100.0, 500.0], ridge=[1e-6, 0.5])
 out = df.rheon.fit_predict([grid])  # df's columns, plus the spec's column "m"
 
 # 1 and 2. A field's name, found from the values it holds.
-idx = po.spec.output_index(grid)     # every field, with the values its name encodes, and its dtype
+idx = rp.spec.output_index(grid)     # every field, with the values its name encodes, and its dtype
 name = idx.filter((pl.col("kind") == "pred") & (pl.col("target") == "y")
                   & (pl.col("ridge") == 1e-6) & (pl.col("half_life") == 500.0))["field"].item()
 print(name, out["m"].struct.field(name).dtype)
 
 # 3. A coefficient's place in its list, found the same way.
-row = po.spec.coef_fields(grid).filter(                        # one row per coefficient: its list, position, and unnest column
+row = rp.spec.coef_fields(grid).filter(                        # one row per coefficient: its list, position, and unnest column
     (pl.col("term") == "x1") & (pl.col("ridge") == 1e-6) & (pl.col("half_life") == 500.0)
 ).row(0, named=True)
 x1 = out["m"].struct.field(row["field"]).drop_nulls().list.get(row["position"])
@@ -78,7 +78,7 @@ coef@h500 2 -1.00
 
 **If your own code parses the field names after the bank, keep `__` and
 `@` out of target names and feature-set labels.** A target named `y__r0.5`
-renders like a ridge grid on `y`. Filtering `po.spec.output_index` needs no
+renders like a ridge grid on `y`. Filtering `rheon.spec.output_index` needs no
 such care.
 
 ## Read a name by eye
@@ -110,7 +110,7 @@ A number in a name renders as a plain decimal in `[1e-6, 1e7)`, as
 
 ## Check that it worked
 
-**List the spec's fields with `po.spec.output_fields(spec)`, or the
+**List the spec's fields with `rheon.spec.output_fields(spec)`, or the
 output's with `out["m"].struct.fields`, and find the name there.** A name
 that `output_index` gives is always among them, as `pred_y__r0.000001@h500`
 is in the example. [Read the coefficients](read-the-coefficients.md)

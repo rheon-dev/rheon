@@ -2,7 +2,7 @@
 # Release readiness
 
 This page is the reference, for a contributor who changes the release
-workflow or cuts a release, on what a release of polars-online is held to
+workflow or cuts a release, on what a release of rheon is held to
 before anything reaches PyPI.
 
 **A release is tested on every OS, and at both ends of the Polars range,
@@ -41,16 +41,16 @@ page, and GitHub emails when one is waiting.
 | `ci` | the whole of `ci.yml`, called: lint, and the Rust and Python suites on Linux, macOS and Windows | yes |
 | `budgets` | the whole of `budgets.yml`, called: every instruction count against its budget, and each case's drift since the last release against the sign-off | yes |
 | `baseline` | the run's instruction counts and each OS's floor-Python memory, merged into `budgets-baseline.json` for the release's assets; refused if a budgeted quantity is missing or two legs disagree ([The budgets baseline](#the-budgets-baseline)) | yes |
-| `sdist` | the source distribution of `polars-online`, installed and run, and the same source's distribution under the name `polars-online-compat`, built | yes |
-| `build` | the six wheels of each of the two projects, `polars-online` and `polars-online-compat`, twelve in all, each installed and run; the x86-64 wheels of `polars-online` are built for AVX2 and FMA and the rest are not ([Two projects, one source](#two-projects-one-source)); and the command-line binaries on the five targets that build one, all but musl, from the `polars-online` legs alone. The Linux binaries are built in the wheels' manylinux2014 image, and refused above glibc 2.17 | yes |
+| `sdist` | the source distribution of `rheon`, installed and run, and the same source's distribution under the name `rheon-compat`, built | yes |
+| `build` | the six wheels of each of the two projects, `rheon` and `rheon-compat`, twelve in all, each installed and run; the x86-64 wheels of `rheon` are built for AVX2 and FMA and the rest are not ([Two projects, one source](#two-projects-one-source)); and the command-line binaries on the five targets that build one, all but musl, from the `rheon` legs alone. The Linux binaries are built in the wheels' manylinux2014 image, and refused above glibc 2.17 | yes |
 | `wheel-size` | every wheel of both projects against the README's install *size* row, and their exact sizes for the release's notes ([The README's size row](#the-readmes-size-row)) | yes |
 | `write-state`, then `read-state` | the cross-OS state hand-off: a state written on macOS is loaded, and its stream continued, on Windows and Linux | yes |
 | `next-polars` | the Python suite, less its `soak`, `pins` and `oracle_grid` tests, in two legs: on the newest Polars the declared range admits, and on the next major | only the first leg (the second is advisory) |
 | `floor-polars` | the same suite on the floor, 1.37.0, of the declared range: exactly the py-polars and runtime package that `pyproject.toml`'s floor names, read by `scripts/polars_floor.py`. A test that needs a newer Polars skips there by version (`tests/polars_version.py`) | yes |
 | `next-numpy` | the same suite in two legs, with only NumPy upgraded: on the newest NumPy, which the optional extra's `numpy>=1.26` admits, and on NumPy's next release candidate | only the first leg (the second is advisory) |
-| `publish to PyPI` | the upload of `polars-online-compat`, then of `polars-online` | it is the gate |
+| `publish to PyPI` | the upload of `rheon-compat`, then of `rheon` | it is the gate |
 | `tag`, then `release` | the tag `v<version>` on the tested sha, annotated with the CHANGELOG's section, then the GitHub release page with the wheels, the sdist, the command-line binaries and `budgets-baseline.json`, its notes the CHANGELOG's section and the wheels' exact sizes | no: they run after the upload |
-| `verify` | `polars-online==<version>` and `polars-online-compat==<version>` each installed from PyPI on Linux, macOS and Windows, its versions and schema checked and one fit run ([the last step](contributing/cut-a-release.md#steps)) | no: it reports on what was uploaded |
+| `verify` | `rheon[polars]==<version>` and `rheon-compat[polars]==<version>` each installed from PyPI on Linux, macOS and Windows, its versions and schema checked and one fit run ([the last step](contributing/cut-a-release.md#steps)) | no: it reports on what was uploaded |
 
 **The legs that move a dependency leave out three pytest markers.** `soak`
 marks the opt-in long runs over millions of rows. `pins` marks the tests
@@ -129,7 +129,7 @@ install and its script.
 ## The runs that watch the dependencies
 
 **Two kinds of run look for a break, in Polars and in NumPy, the one
-optional dependency** (`polars-online[numpy]`, `numpy>=1.26`). The canary
+optional dependency** (`rheon[numpy]`, `numpy>=1.26`). The canary
 reports one, and the legs every release runs before it publishes withhold
 the release:
 
@@ -207,7 +207,7 @@ kept.
 
 **A state file is versioned msgpack, with a schema version and a bank
 `format_version`.** `SCHEMA_VERSION` (`crates/rheon-core/src/lib.rs`, and
-`po.schema_version()` from Python) moves with every layout change. The
+`rheon.schema_version()` from Python) moves with every layout change. The
 bank's `format_version` is 2, or 3 when a spec carries a clock parameter
 as a duration. The bank refuses a file older than
 `MIN_BANK_SCHEMA_VERSION` (`crates/rheon-polars/src/bank.rs`) by its
@@ -215,14 +215,14 @@ version, and the models' own states have a floor of their own,
 `MIN_SCHEMA_VERSION` (`crates/rheon-core/src/lib.rs`). A window run's
 state, from `with_windows`, has its own version, `WINDOWS_VERSION`
 (`crates/rheon-polars/src/windows_frame.rs`), and a change to it moves
-the bank's schema too. The state of `po.stream.refresh_time` has its own
+the bank's schema too. The state of `rp.stream.refresh_time` has its own
 version, `REFRESH_VERSION` (`crates/rheon-polars/src/refresh.rs`).
 
 ## What the API snapshot pins
 
 **Each stable part is pinned by a section of `tests/api_surface.txt`,
 except the command line's exit status, which a test holds.** The unstable
-names that stand in a section, `po.sim`, `po.corr`, `po.gbdt`,
+names that stand in a section, `rp.sim`, `rheon.corr`, `rp.gbdt`,
 `ArrowStruct`, `fit_predict_arrow` and `predict_arrow`, each carry the
 label `# unstable` on their line, so the snapshot says which of its lines
 carry no promise:
@@ -233,17 +233,17 @@ carry no promise:
 | the constructors' keyword names and the defaults they set in Python | `[common parameters]`, which lists once the keywords every spec shares (`CommonKwargs` in `python/rheon/_kwargs.py`), and `[spec constructors]` |
 | the defaults that resolve in Rust, `min_weight`'s per-kind rule included | `[resolved defaults]`, read off the bank's own build of each kind (`_rheon.resolved_defaults`); `tests/test_spec_defaults.py` holds MODELS.md's warm-up tables to it |
 | `ModelBank`'s methods, `__init__` included | `[ModelBank]` |
-| the `.online` namespace | `[frame namespaces]` |
-| the frames the bank returns: `groups()`, `summary()`, `describe()`, `coef()`, `last_row()`, `marginal()`, `audit()`, `check()`, `solve_failures()`, `gram()`'s keys, and `po.spec`'s `output_index()`, `coef_index()`, `coef_fields()` | `[frame columns]`, each column with its dtype |
+| the `.rheon` namespace | `[frame namespaces]` |
+| the frames the bank returns: `groups()`, `summary()`, `describe()`, `coef()`, `last_row()`, `marginal()`, `audit()`, `check()`, `solve_failures()`, `gram()`'s keys, and `rheon.spec`'s `output_index()`, `coef_index()`, `coef_fields()` | `[frame columns]`, each column with its dtype |
 | the closed-groups frame's columns | `[closed_groups columns]`, each column with its dtype, in order |
-| the helper modules' functions, each with its signature | `[helper modules]`, every public module of the package but `po.spec`, which has its own sections: today `corr`, `eval`, `gbdt`, `gram`, `ops`, `sim` and `stream` |
-| `po.stream.embargo`'s two columns, `_online_role` and `_online_role_weight` | `[helper modules]`, as the default of `embargo`'s `role`, the first column's name, which the second's extends; `tests/test_label_delay.py` reads both |
+| the helper modules' functions, each with its signature | `[helper modules]`, every public module of the package but `rheon.spec`, which has its own sections: today `corr`, `eval`, `gbdt`, `gram`, `ops`, `sim` and `stream` |
+| `rp.stream.embargo`'s two columns, `_online_role` and `_online_role_weight` | `[helper modules]`, as the default of `embargo`'s `role`, the first column's name, which the second's extends; `tests/test_label_delay.py` reads both |
 | output field names and their dtypes | `[output field grammar]`, 29 spec shapes, one with every `emit_*` turned on |
 | the words each string-valued parameter takes, and `withheld_reason`'s | `[enum values]`, read from each parameter's refusal of a word it does not take |
 | the TOML config keys: the run config's, a spec's, and each model type's | `[toml keys]`, read from serde's refusal of a key a table has not got |
-| the command line's flags, and whether each takes a value | `[cli flags]`, from `polars-online --help` |
+| the command line's flags, and whether each takes a value | `[cli flags]`, from `rheon --help` |
 | the command line's exit status: 0, 1 for a refusal or a run error, 2 for a usage error | [*Exit status*](RUNNER.md#exit-status) and the command line's test `the_exit_status_is_0_for_a_run_1_for_a_refusal_and_2_for_usage` (`crates/rheon-cli/tests/run.rs`), not the snapshot |
-| the environment variables, `POLARS_ONLINE_MAX_THREADS` and `POLARS_ONLINE_TIMING` among them | `[env vars]`, from every read in `crates/*/src` and the package |
+| the environment variables, `RHEON_MAX_THREADS` and `RHEON_TIMING` among them | `[env vars]`, from every read in `crates/*/src` and the package |
 
 **A default that resolves in Rust is pinned where the bank builds it.**
 A builder passes `None` for it, so a constructor's signature shows `None`.
@@ -296,15 +296,15 @@ they are worth:**
 ## Two projects, one source
 
 **A release uploads two PyPI projects built from the one source and the one
-version: `polars-online` and `polars-online-compat`.** They are imported as
-`rheon` alike. The x86-64 wheels of `polars-online` (Linux glibc and
+version: `rheon` and `rheon-compat`.** They are imported as
+`rheon` alike. The x86-64 wheels of `rheon` (Linux glibc and
 musl, Windows, macOS Intel) are built with
 `-C target-feature=<the 14 features of Polars' default runtime>`, the
 workflow's `X86_FEATURES`, through `RUSTFLAGS`, which maturin-action hands on
-to its manylinux and musllinux containers. `polars-online-compat` is built
-without them, for baseline x86-64, which is what `polars-online` was before the
+to its manylinux and musllinux containers. `rheon-compat` is built
+without them, for baseline x86-64, which is what the default build was before the
 split. The ARM wheels (macOS arm64, Linux aarch64) are built alike under both
-names, and `polars-online-compat` ships them as Polars' own
+names, and `rheon-compat` ships them as Polars' own
 `polars-runtime-compat` does, so that either installs wherever the other
 does. [What the x86-64 wheels need](VERSIONS.md#what-the-x86-64-wheels-need)
 has the features, the reason and what a user does.
@@ -329,22 +329,22 @@ extension, `rheon/_cpu_check.py` reads the CPU's features with
 **Each wheel is held to this in its own build job, before the upload.** The
 smoke test checks which of the two distributions is installed, and not the
 other. It checks that the recorded features are the workflow's list for a
-`polars-online` x86-64 wheel and empty for every other. And it checks that the
+`rheon` x86-64 wheel and empty for every other. And it checks that the
 runner's CPU has all of them, which runs the machine code of the check on
 Linux, Windows and macOS Intel (musl in Alpine). The failing path, a CPU that lacks a
 feature, cannot be reached on a runner that has them all, so
 `tests/test_cpu_check.py` tests the warning against a faked CPU.
 
 **The Budgets run and its instruction counts are of the baseline build, not
-the `polars-online` wheel a user installs on an x86-64 CPU.** They count the
+the `rheon` wheel a user installs on an x86-64 CPU.** They count the
 workspace's `cargo test -p rheon-bench` cases under Valgrind with no
-`target-feature` flag, which is what `polars-online-compat` and every build
+`target-feature` flag, which is what `rheon-compat` and every build
 from source are. The x86-64 wheel's instruction counts differ (a median 4.3%
 fewer in the measurement [VERSIONS.md](VERSIONS.md#what-the-x86-64-wheels-need)
 gives), and no budget holds them.
 
 **The setup the second project needs on PyPI** is the maintainer's, and
-once: a pending trusted publisher for `polars-online-compat` with the
+once: a pending trusted publisher for `rheon-compat` with the
 repository's own workflow and environment ([Cut a
 release](contributing/cut-a-release.md#prerequisites)).
 
@@ -408,8 +408,8 @@ release:
 |---|---|
 | `tests/test_release_workflow.py` | a dispatch is the only trigger, with `publish` off unless asked; the version is checked before the wheels and the sdist are built; CI runs inside the release on every OS, and its Pages grant is inert; the upload waits for every job, and the tag for the upload, on the tested sha; the NumPy legs; the floor leg, read from `pyproject.toml`, and the canary's monthly run of it; the floor Python in every leg that moves a dependency; the Linux command-line binaries built in the manylinux2014 image and held to glibc 2.17; the budgets baseline merged and attached; every wheel held to the README's size row; the tag and the release each tried three times; the `verify` job's install from PyPI on every OS; only the release jobs write; `scripts/release_version.py`'s rules, its refusal of a version older than an `INTRODUCED` or `PARAMETER_INTRODUCED` entry among them; and the throughput table's date, no older than the previous release |
 | `tests/test_release_packaging.py` | the release job's steps run for real: the files it collects, each binary named by its target, the Windows `.exe` suffix kept, and no binary sent to PyPI; the tag's push against a local remote, which lands once, succeeds when the tag is there on the tested sha, fails when it is on another and gives up after three tries; the release's creation against a stand-in for `gh`, finished rather than repeated when an attempt landed; and its notes |
-| `tests/test_compat_package.py` | the rename to `polars-online-compat` and its refusal of a tree it already changed; every target built under both names, the `RUSTFLAGS` expression giving the feature list to the default x86-64 legs and to no other, the compat project renamed after the README's links and before the build, only the default legs building the command-line binary, the smoke test's arguments, the compat sdist, both projects uploaded from folders of their own, compat first, and both verified from PyPI; the smoke test's refusals of the other project, another feature record and a runner without a feature; and the package running its CPU check before any other import |
-| `tests/test_cpu_check.py` | `build.rs`, compiled and run for real, recording exactly the `target-feature` flags in every spelling cargo passes them, and nothing off x86; the CPU check's comparison, its warning and `POLARS_ONLINE_SKIP_CPU_CHECK` against a faked CPU; the real reader against `/proc/cpuinfo` on an x86-64 Linux host; and, in a fresh interpreter, the order in which the package's modules are asked for |
+| `tests/test_compat_package.py` | the rename to `rheon-compat` and its refusal of a tree it already changed; every target built under both names, the `RUSTFLAGS` expression giving the feature list to the default x86-64 legs and to no other, the compat project renamed after the README's links and before the build, only the default legs building the command-line binary, the smoke test's arguments, the compat sdist, both projects uploaded from folders of their own, compat first, and both verified from PyPI; the smoke test's refusals of the other project, another feature record and a runner without a feature; and the package running its CPU check before any other import |
+| `tests/test_cpu_check.py` | `build.rs`, compiled and run for real, recording exactly the `target-feature` flags in every spelling cargo passes them, and nothing off x86; the CPU check's comparison, its warning and `RHEON_SKIP_CPU_CHECK` against a faked CPU; the real reader against `/proc/cpuinfo` on an x86-64 Linux host; and, in a fresh interpreter, the order in which the package's modules are asked for |
 | `tests/test_ci_cost_policy.py` | every workflow bounded by timeouts and a concurrency group, releases queueing rather than canceling, and the rest of the CI policy ([The policy, as the test holds it](TESTING.md#the-policy-as-the-test-holds-it)) |
 
 ## Compare with the last release, bit for bit
@@ -447,8 +447,8 @@ and to each path in its `PATHS`, by the keyword that takes it:
 
 **The script compares each spec's output fields, and the frame
 `closed_groups` drains, bit by bit.** What it does not run is outside the
-comparison. That is the window operators (`po.ewm_mean` and the rest,
-`with_windows`), `po.gram`, `po.gbdt`, `refresh_time`, a bank's
+comparison. That is the window operators (`rp.ewm_mean` and the rest,
+`with_windows`), `rheon.gram`, `rp.gbdt`, `refresh_time`, a bank's
 `threads=`, and every combination of settings beyond the ones named. It
 prints each field that differs, with the first row where it does, and
 exits 1. Each run reports which package it imported, so the comparison
