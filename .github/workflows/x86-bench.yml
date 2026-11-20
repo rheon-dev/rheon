@@ -1,0 +1,56 @@
+# Coordinator's x86-64 measurements on a GitHub runner, beside the cloud
+# sessions whose containers restart: task 479's per-row factorizations and
+# the lasso split sweep, each in both function layouts with an
+# identical-binary control. Lives only on branch vm-tools/x86-ci; runs on a
+# push to it. A shared runner is noisy, so read each ratio against its
+# control's spread.
+name: x86 bench
+on:
+  push:
+    branches: [vm-tools/x86-ci]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  w479:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - name: free disk and use a leaner linker
+        uses: ./.github/actions/linux-build-prep
+      - name: task 479, main against the branch
+        env:
+          CARGO_INCREMENTAL: "0"
+          CARGO_BUILD_JOBS: "4"
+        run: |
+          cp -r vm-tools/w479 "$RUNNER_TEMP/w479-harness"
+          git config user.email ci@example.invalid && git config user.name ci
+          bash "$RUNNER_TEMP/w479-harness/run_x86.sh" https://github.com/rheon-dev/rheon.git 6
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: w479-x86-out
+          path: w479-x86-out/
+  lasso-split:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - name: free disk and use a leaner linker
+        uses: ./.github/actions/linux-build-prep
+      - name: the lasso split sweep against the current one
+        env:
+          CARGO_INCREMENTAL: "0"
+        run: |
+          sed -i 's/CARGO_BUILD_JOBS=2/CARGO_BUILD_JOBS=4/' vm-tools/w479-split/run_x86.sh
+          bash vm-tools/w479-split/run_x86.sh "$RUNNER_TEMP/w479s" 6
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: w479s-x86-out
+          path: ${{ runner.temp }}/w479s/out/
