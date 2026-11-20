@@ -676,6 +676,7 @@ ENUM_PROBES: list[
     ("hmm.init", "hmm", {}, "model.init", "word"),
     ("huber.huber_scale", "huber", {}, "model.huber_scale", "word"),
     ("huber.ridge_scale", "huber", {}, "model.ridge_scale", "word"),
+    ("kalman.covariance_form", "kalman", {}, "model.covariance_form", "word"),
     ("kmeans.init", "kmeans", {}, "model.init", "word"),
     ("lasso.target_gaps", "lasso", {}, "model.target_gaps", "word"),
     ("lasso.window_budget", "lasso", {"window_size": 100.0}, "model.window_budget", "key"),

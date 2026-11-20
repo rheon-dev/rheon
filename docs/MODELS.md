@@ -871,6 +871,26 @@ variance is `R_j / w`. A reverting coefficient's drift over a gap `D` is
 run of null targets. The docstring's update gives the form under
 `obs_var`, which runs on the covariance itself.
 
+The last line subtracts two numbers of `P_j`'s size to leave one of the
+posterior's, so it rounds at `u·p0`, with `u` the unit roundoff: at
+`p0 = 1e12` it loses digits to the fourth place. `covariance_form =
+"square_root"` holds `P_j` as an upper-triangular factor, `P_j = C Cᵀ`,
+and updates `C` column by column, with `f = Cᵀz̃`, `a_0 = 1/w` and
+`a_j = a_{j−1} + f_j²` (Carlson's update):
+
+```
+C_j ← √(a_{j−1}/a_j)·C_j − f_j/√(a_{j−1}a_j) · Σ_{i<j} C_i f_i
+```
+
+`C`'s entries are of size `√p0`, so it rounds at `u·√p0`. Use it for a
+vague prior, `p0` of about `1e8` or more. On arm64 it takes 1.14 to 1.72
+times the covariance form's time per row with no drift, and 2.4 to 16
+times under `coef_half_life` or `q` at 5 to 50 coefficients, since the
+drift then updates `C` once per coefficient. At `p0 = 1e15`, against
+statsmodels' Kalman filter under its exact diffuse initialization, its
+predictions agree to 3.3e-13 where the covariance form's are up to 0.78
+off.
+
 #### Example
 
 **A coefficient that may drift follows a jump that running sums only

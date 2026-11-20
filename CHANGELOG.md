@@ -11,6 +11,23 @@ returns.
 
 ## [Unreleased]
 
+### Added
+
+- **`kalman(covariance_form="square_root")`** (task 281 (3)): the filter
+  holds its covariance as an upper-triangular factor, `P = C Cᵀ`, and
+  updates the factor by Carlson's step, so a vague prior costs it no
+  digits. The default, `"covariance"`, subtracts two numbers of `P`'s size
+  on each row and rounds at `u·p0`: at `p0 = 1e12` it was 6.7e-5 off the
+  posterior in a coefficient where the square root was 1.0e-13, and at
+  `p0 = 1e15` its predictions were up to 0.78 off statsmodels' exact
+  diffuse filter where the square root's agreed to 3.3e-13. Use it for
+  `p0` of about 1e8 or more. On arm64 it costs 1.14 to 1.72 times the
+  covariance form's time per row with no drift, and 2.4 to 16 times under
+  `coef_half_life` or `q`, at 5 to 50 coefficients. The default is
+  unchanged and moves no output bit. The state's schema is 68: a state of
+  the square root says so in `covariance_form`, written only there, and a
+  state of 67 or earlier loads as the covariance form it is, to the bit.
+
 ## [2.0.0] — 2026-11-19
 
 ### Changed (breaking)
