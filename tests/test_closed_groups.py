@@ -1094,3 +1094,33 @@ def test_an_integer_key_used_as_both_session_and_group_orders_numerically():
     keys = [int(k) for k in bank.closed_groups(drop=False)["group"].to_list()]
     assert keys == sorted(keys), keys  # numeric order, not lexical
     assert 9 in keys and 10 in keys and keys.index(9) < keys.index(10), keys
+
+
+def test_a_query_with_no_reader_keeps_no_closed_row(monkeypatch):
+    """Review P8: ``lf.rheon.fit_predict`` with ``group_close`` and neither
+    ``closed_groups=`` nor ``save_state=`` builds a bank of its own, which
+    kept every closed group's row, its Gram among them, to the end of the
+    query, where nobody could read them: about 4 KB a group at 20
+    features. Each chunk's are dropped after it, so the queue never holds
+    more than one chunk's closes; with a reader, every row still reaches
+    it."""
+    df = frame(range(400), n_per=2)
+    spec = cov_spec(group_close="monotone")
+    queued = []
+    run = rp.ModelBank._fit_predict_from
+
+    def watched(bank, chunk, seen):
+        out = run(bank, chunk, seen)
+        queued.append(bank.closed_groups(drop=False).height)
+        return out
+
+    monkeypatch.setattr(rp.ModelBank, "_fit_predict_from", watched)
+    out = df.lazy().rheon.fit_predict([spec], chunk_size=20).collect()
+    assert out.height == df.height
+    # The plan's schema, from a run on no rows, and then the 40 chunks.
+    assert len(queued) == 41, queued
+    assert max(queued) <= 10, queued
+    # Unchanged where something reads them: every group but the last.
+    whole = rp.ModelBank([spec])
+    whole.fit_predict(df)
+    assert whole.closed_groups().height == 399

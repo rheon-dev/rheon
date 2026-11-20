@@ -48,6 +48,12 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **A query under `group_close` with nowhere to put the closed groups
+  keeps none of them** (review P8). `lf.rheon.fit_predict(specs)` with a
+  spec that closes groups, and neither `closed_groups=` nor `save_state=`,
+  kept every closed group's row, its Gram among it, in a bank nobody could
+  read, to the end of the query: about 4 KB a group at 20 features, 2.2 GB
+  at 400,000 groups. Each chunk's closed rows are now dropped after it.
 - **Three more kinds of damaged state file are refused at load, and a
   fourth at the chunk that reads it** (review P7), where each loaded and
   panicked at the first chunk: a residual window's later snapshot of the
