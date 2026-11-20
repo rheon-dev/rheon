@@ -242,3 +242,98 @@ def test_inputs_are_the_same_bits_from_the_same_case():
     assert a.equals(b) and co.data_key(case) == co.data_key(dict(case))
     assert {"t", "w", "g", "x0", "x3", "y0", "hit", "lab"} <= set(a.columns)
     assert a["g"].n_unique() <= 5 and np.all(np.diff(a["t"].to_numpy()) > 0)
+
+
+def test_a_movement_of_one_ulp_is_one_ulp_whatever_the_binade():
+    """Review 459, A6 / C11: a nudge of one ulp up from 1.0 and one down from
+    the double below 2.0 is exactly 1, across zero's sign and at the edge of a
+    binade as well; the relative movement, by contrast, differs by 2x."""
+    below_two = np.nextafter(2.0, 0.0)
+    x = np.array([1.0, below_two, 1.0, -1.0, 0.0, 5e-324, 2.0])
+    y = np.array([np.nextafter(1.0, 2.0), np.nextafter(below_two, 0.0), np.nextafter(1.0, 0.0),
+                  np.nextafter(-1.0, 0.0), -0.0, -5e-324, np.nextafter(2.0, 0.0)])  # fmt: skip
+    assert co.ulps(x, y).tolist() == [1.0, 1.0, 1.0, 1.0, 0.0, 2.0, 1.0]
+    assert co.ulps(np.array([1.0]), np.array([2.0]))[0] == 2.0**52
+    st = _stats([1.0, below_two, 3.0], [float(y[0]), float(y[1]), 3.0])
+    assert st["max_ulps"] == 1.0 and st["median_ulps_moved"] == 1.0
+    assert st["over_ulps"] == 0
+    # Far from one ulp: 1e-20 against 3e-20 is tens of quadrillions of ulps,
+    # whatever the floor makes of it.
+    st = _stats([1e-20, 1.0], [3e-20, 1.0])
+    assert st["max_ulps"] > 1e15 and st["over_ulps"] == 1
+
+
+def test_ulps_over_a_threshold_are_counted_and_the_median_is_of_the_moved():
+    base = np.linspace(1.0, 1.9, 9)
+    steps = [0, 0, 0, 1, 1, 2, 6, 7, 100]
+    moved = [float(v) for v in base]
+    for i, n in enumerate(steps):
+        for _ in range(n):
+            moved[i] = float(np.nextafter(moved[i], 3.0))
+    st = _stats([float(v) for v in base], moved)
+    assert st["max_ulps"] == 100.0
+    assert st["median_ulps_moved"] == 4.0, "the median of 1, 1, 2, 6, 7, 100"
+    assert st["over_ulps"] == 3, "6, 7 and 100 are over 5"
+    assert co.column_stats(pl.Series(base), pl.Series(moved), 1e-12, over=6)["over_ulps"] == 2
+
+
+def test_a_row_count_mismatch_is_a_movement_and_fails_the_run():
+    """Review 459, A6 / C11: columns of 3 and 2 rows were kind ``length`` and
+    dropped by the summary, so ``--require-identical`` passed them."""
+    st = co.column_stats(pl.Series([1.0, 2.0, 3.0]), pl.Series([1.0, 2.0]), 1e-12)
+    assert st["kind"] == "length" and st["rows_a"] == 3 and st["rows_b"] == 2
+    assert st["rows_differing"] == 3
+    cmp = {
+        "columns": {"m.pred": {k: v for k, v in st.items() if k != "_rows"}},
+        "only_in_a": [],
+        "only_in_b": [],
+        "rows_any_differ": 3,
+        "decisions": [],
+    }
+    result = {"name": "x", "status": "ok", "summary": co.summarize(cmp), **cmp}
+    assert result["summary"]["row_count_mismatch"] == {"m.pred": [3, 2]}
+    assert co.moved_anything([result])
+    (why,) = co.broken([result])
+    assert "row counts differ" in why
+
+
+def test_compare_files_marks_every_row_when_one_build_lost_rows(tmp_path):
+    a, b = tmp_path / "a.parquet", tmp_path / "b.parquet"
+    pl.DataFrame({"p": [1.0, 2.0, 3.0], "flag": [True, False, True]}).write_parquet(a)
+    pl.DataFrame({"p": [1.0, 2.0], "flag": [True, False]}).write_parquet(b)
+    case = {**co.CASE_DEFAULTS, "name": "x"}
+    cmp = co.compare_files(a, b, case, 1e-12)
+    assert cmp["rows_any_differ"] == 3
+    s = co.summarize(cmp)
+    assert set(s["row_count_mismatch"]) == {"p", "flag"}
+
+
+class _Refusing:
+    """A build that refuses every case, as a build raising in its run does."""
+
+    def __init__(self, label: str, ok: bool) -> None:
+        self.label, self.ok, self.meta = label, ok, {}
+
+    def run(self, mode, case, files, builtin, inp, meta, out, timeout):
+        if self.ok:
+            pl.DataFrame({"p": [1.0]}).write_parquet(out)
+            return {"status": "ok", "file": f"{self.label}/rheon", "native": self.label}
+        return {"status": "refused", "error": "ValueError: no", "native": self.label}
+
+
+@pytest.mark.parametrize("oks", [(True, False), (False, True), (False, False)])
+def test_a_case_that_raises_on_one_build_alone_fails_loudly(tmp_path, oks):
+    """Review 459, A6 / C11: a case one build refused was skipped as 'not
+    comparable'; it is the largest movement two builds can show."""
+    args = co.parse(["--time-rounds", "0", "--a", "x", "--b", "y"])
+    case = {**co.CASE_DEFAULTS, "name": "x/one", "item": "x", "rows": 50, "specs": None}
+    builds = (_Refusing("A", oks[0]), _Refusing("B", oks[1]))
+    res = co.run_case_pair(case, [], args, builds, tmp_path / "work", tmp_path / "out")
+    assert res["natives"] == ["A", "B"], "each case records the native libraries it ran"
+    if all(o is False for o in oks):
+        assert res["status"] == "not comparable" and co.broken([res]) == []
+    else:
+        assert res["status"] == "one-sided"
+        (why,) = co.broken([res])
+        assert "only one build ran it" in why and "ValueError" in why
+        assert co.moved_anything([res])
