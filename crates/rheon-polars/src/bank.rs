@@ -5395,11 +5395,21 @@ impl Bank {
     /// directory that is not there, `PermissionError` for one it cannot
     /// write, ... from it).
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
+        self.save_through(path, |bank, w| bank.write_msgpack_io(w))
+    }
+
+    /// [`Bank::save`] with the encoding written by `encode`, so a test can
+    /// hand it a writer that fails part way.
+    fn save_through(
+        &self,
+        path: &Path,
+        encode: impl FnOnce(&Self, &mut std::io::BufWriter<std::fs::File>) -> std::io::Result<()>,
+    ) -> std::io::Result<()> {
         self.refuse_if_broken()
             .map_err(|e| std::io::Error::other(e.to_string()))?;
         let (file, pending) = crate::atomic::AtomicFile::create(path)?;
         let mut w = std::io::BufWriter::with_capacity(1 << 20, file);
-        self.write_msgpack_io(&mut w)?;
+        encode(self, &mut w)?;
         // Flushed, then closed, so `commit` reopens exactly one handle to sync.
         w.into_inner().map_err(|e| e.into_error())?;
         pending.commit()

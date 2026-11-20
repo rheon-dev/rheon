@@ -253,6 +253,12 @@ pub const CELLS: &[Cell] = &[
     // --- the window operators, `WindowsRun::feed` ---------------------------
     cell("windows.groups", 1000, 8, Const, Pow(1)),
     cell("windows.groups_seen", 1000, 8, Const, Pow(1)),
+    // A held row's resolution (review 459, A9; task 455 moved the flush of
+    // `groups_seen`'s held rows out of its timed block): each block is one
+    // pass over all G groups at one stamp, so every row of it is held until
+    // the next block's first row resolves the lot. A block is G rows (its
+    // work read a row), so the instruction count CI reads is linear in G.
+    cell("windows.rows_held", 1000, 8, Const, Pow(1)),
     cell("windows.kernels", 1, 8, Pow(1), Pow(1)),
     cell("windows.operators", 1, 8, Pow(1), Pow(1)),
     cell("windows.window_mean", 1250, 8, Const, Pow(1)),
@@ -298,6 +304,7 @@ pub const BENCH_CELLS: &[&str] = &[
     "bank.specs_mixed",
     "bank.specs_per_call",
     "windows.groups_seen",
+    "windows.rows_held",
     "windows.history",
     "windows.window_mean",
     "windows.kernels",
@@ -427,6 +434,13 @@ impl ScaleRun {
                     && run.queued() < self.size / 2 =>
             {
                 return Err(format!("{id}: the window holds {} rows", run.queued()));
+            }
+            Work::Windows { run, .. } if id == "windows.rows_held" && run.held() != self.size => {
+                return Err(format!(
+                    "{id}: {} rows held after a block, not the {} of a pass",
+                    run.held(),
+                    self.size
+                ));
             }
             _ => {}
         }
@@ -1324,7 +1338,7 @@ fn bank_setup(id: &'static str, n: usize, blocks: usize) -> ScaleRun {
 
 fn windows_setup(id: &'static str, n: usize, blocks: usize) -> ScaleRun {
     let dim = id.split_once('.').expect("windows.<dimension>").1;
-    let block = 1_000;
+    let mut block = 1_000;
     let sum = |col: &str| json!(["ewm_sum", ["col", col], {"half_life": 1000.0}]);
     let windowed =
         |op: &str| json!([op, ["col", "x0"], {"half_life": 1000.0, "window_size": n as f64}]);
@@ -1348,6 +1362,17 @@ fn windows_setup(id: &'static str, n: usize, blocks: usize) -> ScaleRun {
         "groups_seen" => {
             warm = 2 * n + 1;
             group_of = Some(Box::new(move |i| if i < 2 * n { i % n } else { i % 50 }));
+            vec![sum("x0")]
+        }
+        // Passes over all `n` groups, a group's clock a step a pass, so a
+        // pass is `n` rows at one stamp: each is held until the next pass's
+        // first row, which resolves and emits all `n` of them. A block is a
+        // pass; the warm-up's second pass leaves the first block `n` rows to
+        // resolve, as every later block leaves the next.
+        "rows_held" => {
+            warm = 2 * n;
+            block = n;
+            group_of = Some(Box::new(move |i| i % n));
             vec![sum("x0")]
         }
         // `n` kernels: one operator each, at `n` half-lives.

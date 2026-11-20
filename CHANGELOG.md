@@ -516,30 +516,32 @@ of old and new names.
   coordinates before it off ahead of time, beside the previous
   coordinate's work, which halves the chain of dependent subtractions a
   sweep waits on; each sum takes the same subtractions in the same order.
-  1.1 times as fast at 20 features, 1.4 at 100, 1.7 to 1.8 at 200 to 500.
-  Outputs and saved state unchanged to the bit.
+  1.1 times as fast at 20 features, 1.4 at 100, 1.7 to 1.8 at 200 to 500
+  (on arm64). Outputs and saved state unchanged to the bit.
 - `ewridge`'s solves no longer allocate: the lists a solve formed and
   dropped (about 22 at five features) are kept and written over. `ewridge`
   at five features is 1.57 times as fast a row (1.2 at twenty), and a bank
-  of 1,000 groups at five features twice as fast. Outputs and saved state
-  unchanged to the bit.
+  of 1,000 groups at five features twice as fast (on arm64). Outputs and
+  saved state unchanged to the bit.
 - `rls` keeps each rotation's working entry in a register, folds the
   decay into the rotations, and takes each coefficient's terms off as the
   coefficients arrive, with targets sharing each pass: 1.5 to 1.8 times as
-  fast through `fit_predict` at 20 and 50 features (1.8 with 3 targets).
+  fast through `fit_predict` at 20 and 50 features (1.8 with 3 targets),
+  on arm64.
   Outputs and saved state unchanged to the bit.
 - `ew_cov`'s correlations, `lag_corr` and `partial_corr` divide two at a
   time (the zero-variance case is chosen after the division rather than
   branched around it): the 20-feature model 1.4 times as fast, 1.6 at 50,
-  1.7 for `lag_corr` with 5 lags, about 1.2 through the bank. Outputs
-  unchanged to the bit.
+  1.7 for `lag_corr` with 5 lags, about 1.2 through the bank (on arm64).
+  Outputs unchanged to the bit.
 - `kalman` forms `P z` as four independent sums at a time and updates
   each row of `P` along its own memory: 1.37 times as fast per row at 20
-  features, 1.29 with a revert. Outputs and saved state unchanged to the
-  bit.
+  features, 1.29 with a revert (on arm64). Outputs and saved state
+  unchanged to the bit.
 - `seqtest`, `kmeans` and `micro` choose with selects where they branched
   on data: `kmeans` 1.12 times as fast at k=4 and 1.15 at k=20, `micro`
-  1.12, `seqtest` 1.06. Outputs and saved state unchanged to the bit.
+  1.12, `seqtest` 1.06 (on arm64). Outputs and saved state unchanged to the
+  bit.
 - The bank's data summary copies a run of rows across its columns from
   runs of 8 rows rather than 32: `ew_cov` through the bank at 1,000 and
   10,000 groups about 5% faster on x86, level on arm64. Outputs and saved

@@ -394,6 +394,12 @@ growth = "1"
 small = 1000
 large = 8000
 
+[scaling.cells."windows.rows_held"]
+what = "WindowsRun::feed of one pass over 1,000 groups at one stamp, each row held until the next pass resolves it, then 8,000: a block is a pass, so linear in the groups and O(1) a held row"
+growth = "n"
+small = 1000
+large = 8000
+
 [scaling.cells."windows.history"]
 what = "WindowsRun::feed, a running ewm_sum, after 1,000 rows, then 8,000"
 growth = "1"

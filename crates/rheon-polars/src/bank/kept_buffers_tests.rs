@@ -104,3 +104,105 @@ fn only_a_spec_with_nothing_held_back_keeps_its_buffers() {
         .collect();
     assert_eq!(dense, [true, true, true, false, true, true]);
 }
+
+/// Review 459, C10: the specs above, each its own shape, in one bank, with a
+/// weight whose first row is 0 (the clock advances and nothing is learned)
+/// and a spec that resets on drift, which a level shift in the target from
+/// row 300 sets off (`seqtest` takes no weight, and runs without one): the
+/// bank keeping its runs' buffers gives what one keeping none gives, to the
+/// bit, and the same state.
+#[test]
+fn buffers_kept_across_several_specs_of_different_shapes_change_nothing() {
+    let weighted = |text: &str| {
+        let mut v: serde_json::Value = serde_json::from_str(text).unwrap();
+        // `seqtest` counts trials and takes no weight.
+        if v["model"]["type"] != "seqtest" {
+            v["weight"] = serde_json::json!("w");
+        }
+        v
+    };
+    let mut specs: Vec<serde_json::Value> = SPECS.iter().map(|t| weighted(t)).collect();
+    specs.push(weighted(
+        r#"{"name": "r", "model": {"type": "ewridge"}, "targets": ["y"], "features": ["x0", "x1"],
+            "clock": "t", "gap_cap": 100.0, "half_life": 30.0, "min_weight": 4.0,
+            "emit_drift": true, "drift_threshold": 2.0, "drift_action": "reset"}"#,
+    ));
+    let bank = || {
+        let specs: Vec<Spec> = specs
+            .iter()
+            .map(|v| serde_json::from_value(v.clone()).unwrap())
+            .collect();
+        let mut b = Bank::new(specs).unwrap();
+        b.set_threads(Some(1)).unwrap();
+        b
+    };
+    let weighted_frame = |from: usize, n: usize, holes: usize| {
+        let mut df = frame(from, n, holes);
+        let w: Vec<f64> = (0..n)
+            .map(|i| {
+                if from + i == 0 {
+                    0.0
+                } else {
+                    1.0 + ((from + i) % 3) as f64 * 0.5
+                }
+            })
+            .collect();
+        df.with_column(Column::new("w".into(), w)).unwrap();
+        // A level shift in the target from row 300, for the drift to find.
+        let y: Vec<f64> = df
+            .column("y")
+            .unwrap()
+            .f64()
+            .unwrap()
+            .into_no_null_iter()
+            .enumerate()
+            .map(|(i, v)| if from + i >= 300 { v + 40.0 } else { v })
+            .collect();
+        df.with_column(Column::new("y".into(), y)).unwrap();
+        df
+    };
+    let (mut kept, mut fresh) = (bank(), bank());
+    let mut reused = false;
+    let mut reset = false;
+    for (from, n, holes) in [
+        (0, 60, 0),
+        (60, 60, 3),
+        (120, 17, 2),
+        (137, 60, 0),
+        (197, 40, 4),
+        (237, 200, 0),
+        (437, 200, 0),
+    ] {
+        let df = weighted_frame(from, n, holes);
+        reused |= !kept.spares.outs.is_empty();
+        fresh.spares = super::Spares::default();
+        let a = kept.fit_predict(&df).unwrap();
+        let b = fresh.fit_predict(&df).unwrap();
+        assert_eq!(a.len(), b.len());
+        for (ca, cb) in a.iter().zip(&b) {
+            assert!(
+                ca.as_materialized_series()
+                    .equals_missing(cb.as_materialized_series()),
+                "rows {from}..: column {} differs with buffers kept",
+                ca.name()
+            );
+            if ca.name().as_str() == "r" {
+                let fields = ca.struct_().unwrap().fields_as_series();
+                // A row flagged as drift is a reset, under `drift_action`.
+                for d in fields.iter().filter(|f| f.name().starts_with("drift")) {
+                    reset |= d.bool().is_ok_and(|c| c.any());
+                }
+            }
+        }
+    }
+    assert!(reused, "no run's buffers were kept, so nothing was tested");
+    assert!(
+        reset,
+        "the drift reset never fired, so its path was not tested"
+    );
+    assert_eq!(
+        kept.save_bytes().unwrap(),
+        fresh.save_bytes().unwrap(),
+        "the state moved"
+    );
+}

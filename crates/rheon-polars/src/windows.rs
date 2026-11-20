@@ -4060,12 +4060,13 @@ mod tests {
         // of 0.65 amplified 2.9 times (1.4 k), its argument's two
         // roundings (1.1), `h/ln 2`'s (0.9) and the product's (0.5); the
         // closed form's `powf` adds `k` ulps of 0.35, amplified alike (0.7
-        // k), and its own three roundings (1.9). Held at `10·2⁻⁵²`, a libm
-        // up to 2.5 ulps off: measured 1 with Apple's, and 5 with Apple's
-        // moved by up to 2 ulps, where `1e-15` (4.5), the bound before,
-        // failed.
+        // k), and its own three roundings (1.9). Held at `11·2⁻⁵²`, a libm
+        // up to 3 ulps off (Windows' `ucrtbase` `expm1` was measured up to
+        // 3 ulps off; the `k` of `rheon_core`'s oracle `LIBM`): measured 1
+        // with Apple's, and 5 with Apple's moved by up to 2 ulps, where
+        // `1e-15` (4.5), the bound before, failed.
         assert!(
-            (got - want).abs() <= 10.0 * f64::EPSILON,
+            (got - want).abs() <= 11.0 * f64::EPSILON,
             "{got} vs {want}: {:e} of 2^-52",
             (got - want).abs() / f64::EPSILON
         );

@@ -90,8 +90,9 @@ TAU = 1.0
 U = 2.0**-53
 
 #: The units of ``u`` a platform's ``ln``, ``exp`` or ``exp2`` may be off,
-#: relative: four ulps. Apple's and glibc's are within one and Windows'
-#: has not been measured to the ulp; numpy's own AVX512 kernels for
+#: relative: four ulps. Apple's and glibc's are within one, Windows'
+#: ``ucrtbase`` within 3 (its ``expm1``, measured against a correctly
+#: rounded one; ``exp2`` within 2); numpy's own AVX512 kernels for
 #: ``exp`` and ``log`` on doubles, which the rebuild's ages and densities
 #: go through on such a CPU, state no bound (its float32 ones state 2.52
 #: and 3.83 ulps), so the bound leaves four.

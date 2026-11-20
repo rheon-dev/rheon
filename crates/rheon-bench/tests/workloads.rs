@@ -58,7 +58,21 @@ fn the_scaling_cells_budgets_toml_holds_are_the_benchs() {
         let c = cell_of(id);
         assert!(c.finding.is_none(), "{id}: an open finding is not counted");
         let t = &cells[*id];
+        // A cell whose block is a pass over its size (`windows.rows_held`)
+        // has a row's work declared, and a count of the block that grows
+        // with the size times that.
+        let rows =
+            |which: &str| rheon_bench::scaling::scale_setup(&format!("{id}:{which}")).block_rows;
+        let per_size = id == &"windows.rows_held";
+        if per_size {
+            assert_eq!(
+                (rows("small"), rows("large")),
+                (c.small, c.large()),
+                "{id}: a block is a pass"
+            );
+        }
         let growth = match c.work {
+            Growth::Const if per_size => "n".to_owned(),
             Growth::Const => "1".to_owned(),
             Growth::Log => "log n".to_owned(),
             Growth::Pow(1) => "n".to_owned(),

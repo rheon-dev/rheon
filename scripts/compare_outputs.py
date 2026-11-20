@@ -17,6 +17,12 @@ emitted column:
   floor is printed, default 1e-12: a value near zero is noise, and a ratio to
   it would call the noise a movement), the rows that differ at all (by bits),
   nulls that appear or vanish, a NaN or an infinity that does;
+- beside it, the movement in ulps, which needs no floor: the number of
+  doubles between ``a`` and ``b`` (their bits read as ordered integers), with
+  the largest, the 99.9th percentile and the median over the elements that
+  moved, and the count over ``--ulps-over`` (default 5). Relative movement
+  maps to ulps only within a factor of two, and a floor hides or inflates a
+  value near zero, so a claim of "under N ulps" is read from these;
 - a list of floats (``coef``): the same, over its elements, and the rows
   whose length changed;
 - every other column (a Boolean, an integer, a string, an Enum such as
@@ -69,7 +75,10 @@ but ``name``:
     ``False`` leaves the case out of the timing rounds.
 
 Inputs are generated once, by this tool, and read by both builds, so the
-streams are the same bits. Everything is written to ``--out``: a markdown table
+streams are the same bits. A case whose two outputs have different row
+counts, or that one build refuses and the other runs, cannot be compared
+column by column: it is reported as moved, named on stderr, and makes the
+tool exit 1 whatever the flags. Everything is written to ``--out``: a markdown table
 per item, ``summary.md`` and ``report.json``.
 """
 
@@ -92,6 +101,8 @@ from typing import Any
 REPO = Path(__file__).resolve().parents[1]
 SELF = Path(__file__).resolve()
 DEFAULT_FLOOR = 1e-12
+#: The default ulp count a movement is counted over (``--ulps-over``).
+DEFAULT_ULPS_OVER = 5
 
 #: Defaults of a case's fields.
 CASE_DEFAULTS: dict[str, Any] = {
@@ -463,7 +474,26 @@ def _float_arrays(a: Any, b: Any) -> tuple[Any, ...]:
     return na, nb, x, y
 
 
-def _float_stats(a: Any, b: Any, floor: float, rowid: Any, nrows: int) -> dict[str, Any]:
+def ulps(x: Any, y: Any) -> Any:
+    """The distance in ulps between two arrays of finite doubles, element by
+    element: the bits read as integers ordered as the doubles are (a negative
+    double's magnitude negated, so ``-0.0`` and ``0.0`` are both 0), then
+    subtracted. The difference is taken in unsigned 64-bit arithmetic, which is
+    exact for any two doubles, and returned as float64 (exact below 2**53)."""
+    import numpy as np
+
+    def ordered(v: Any) -> Any:
+        i = np.ascontiguousarray(v, dtype=np.float64).view(np.int64)
+        return np.where(i < 0, -(i & np.int64(0x7FFF_FFFF_FFFF_FFFF)), i).view(np.uint64)
+
+    ox, oy = ordered(x), ordered(y)
+    big = ox.view(np.int64) >= oy.view(np.int64)
+    return np.where(big, ox - oy, oy - ox).astype(np.float64)
+
+
+def _float_stats(
+    a: Any, b: Any, floor: float, rowid: Any, nrows: int, over: int = DEFAULT_ULPS_OVER
+) -> dict[str, Any]:
     """Movement of one float column pair of equal length, element by element;
     ``rowid`` maps an element to its row (the identity for a plain column)."""
     import numpy as np
@@ -477,6 +507,8 @@ def _float_stats(a: Any, b: Any, floor: float, rowid: Any, nrows: int) -> dict[s
     idx = np.flatnonzero(finite)
     rel = np.abs(x[idx] - y[idx]) / np.maximum(np.maximum(np.abs(x[idx]), np.abs(y[idx])), floor)
     moved = rel[rel > 0]
+    u = ulps(x[idx], y[idx])
+    u_moved = u[u > 0]
     rows = np.zeros(nrows, dtype=bool)
     rows[rowid[bitdiff]] = True
     worst = int(rowid[idx[int(np.argmax(rel))]]) if rel.size and rel.max() > 0 else None
@@ -489,6 +521,11 @@ def _float_stats(a: Any, b: Any, floor: float, rowid: Any, nrows: int) -> dict[s
         "median_rel": float(np.median(rel)) if rel.size else 0.0,
         "median_rel_moved": float(np.median(moved)) if moved.size else 0.0,
         "max_abs": float(np.max(np.abs(x[idx] - y[idx]))) if idx.size else 0.0,
+        "max_ulps": float(u.max()) if u.size else 0.0,
+        "p999_ulps": float(np.quantile(u, 0.999)) if u.size else 0.0,
+        "median_ulps_moved": float(np.median(u_moved)) if u_moved.size else 0.0,
+        "ulps_over": over,
+        "over_ulps": int((u > over).sum()),
         "worst_row": worst,
         "nulls_vanish": int((~na & nb).sum()),
         "nulls_appear": int((na & ~nb).sum()),
@@ -499,11 +536,14 @@ def _float_stats(a: Any, b: Any, floor: float, rowid: Any, nrows: int) -> dict[s
     }
 
 
-def column_stats(a: Any, b: Any, floor: float) -> dict[str, Any]:
+def column_stats(a: Any, b: Any, floor: float, over: int = DEFAULT_ULPS_OVER) -> dict[str, Any]:
     """How one column moved between two builds: a float column's relative
-    movement, a list of floats' (per element), or, for any other type, the rows
-    that differ, which is a decision that flipped. ``_rows`` is the mask of
-    rows that differ at all."""
+    movement and its ulps, a list of floats' (per element), or, for any other
+    type, the rows that differ, which is a decision that flipped. ``_rows`` is
+    the mask of rows that differ at all. Columns of different lengths are kind
+    ``length``, every row of the longer counted as differing: nothing about
+    them can be compared row by row, and a run that lost or gained rows has
+    moved."""
     import numpy as np
     import polars as pl
 
@@ -511,13 +551,15 @@ def column_stats(a: Any, b: Any, floor: float) -> dict[str, Any]:
     if a.len() != b.len():
         return {
             "kind": "length",
-            "rows_differing": abs(a.len() - b.len()),
-            "_rows": np.zeros(0, bool),
+            "rows_a": a.len(),
+            "rows_b": b.len(),
+            "rows_differing": max(a.len(), b.len()),
+            "_rows": np.ones(max(a.len(), b.len()), bool),
         }
     out: dict[str, Any] = {"rows": n}
     ia, ib = _list_inner(a.dtype), _list_inner(b.dtype)
     if _is_floatish(a.dtype) and _is_floatish(b.dtype):
-        out.update(kind="float", **_float_stats(a, b, floor, np.arange(n), n))
+        out.update(kind="float", **_float_stats(a, b, floor, np.arange(n), n, over))
     elif ia is not None and ib is not None and _is_floatish(ia) and _is_floatish(ib):
         la, lb = a.cast(pl.List(pl.Float64)), b.cast(pl.List(pl.Float64))
         lens_a, lens_b = la.list.len(), lb.list.len()
@@ -526,7 +568,9 @@ def column_stats(a: Any, b: Any, floor: float) -> dict[str, Any]:
         sub_a, sub_b = la.gather(keep), lb.gather(keep)
         counts = np.maximum(sub_a.list.len().fill_null(0).to_numpy(), 1)
         rowid = np.repeat(keep, counts)
-        out.update(kind="list", **_float_stats(_explode(sub_a), _explode(sub_b), floor, rowid, n))
+        out.update(
+            kind="list", **_float_stats(_explode(sub_a), _explode(sub_b), floor, rowid, n, over)
+        )
         out["shape_rows"] = int(shape.sum())
         out["_rows"] |= shape
     else:
@@ -592,7 +636,9 @@ def _decision_flips(spec: dict, cols_a: Any, cols_b: Any, names: list[str]) -> l
     return out
 
 
-def compare_files(a_path: Path, b_path: Path, case: dict, floor: float) -> dict[str, Any]:
+def compare_files(
+    a_path: Path, b_path: Path, case: dict, floor: float, over: int = DEFAULT_ULPS_OVER
+) -> dict[str, Any]:
     """The two builds' output files of one case, compared."""
     import numpy as np
     import polars as pl
@@ -608,12 +654,13 @@ def compare_files(a_path: Path, b_path: Path, case: dict, floor: float) -> dict[
     for c in cols:
         a = pl.read_parquet(a_path, columns=[c])[c]
         b = pl.read_parquet(b_path, columns=[c])[c]
-        st = column_stats(a, b, floor)
+        st = column_stats(a, b, floor, over)
         rows = st.pop("_rows")
         if row_any is None:
             row_any = np.zeros(len(rows), dtype=bool)
-        if len(rows) == len(row_any):
-            row_any |= rows
+        if len(rows) > len(row_any):
+            row_any = np.concatenate([row_any, np.zeros(len(rows) - len(row_any), bool)])
+        row_any[: len(rows)] |= rows
         result["columns"][c] = st
     result["rows_any_differ"] = int(row_any.sum()) if row_any is not None else 0
 
@@ -631,6 +678,7 @@ def summarize(result: dict[str, Any]) -> dict[str, Any]:
     cols = result["columns"]
     floaty = {c: s for c, s in cols.items() if s["kind"] in ("float", "list")}
     exact = {c: s for c, s in cols.items() if s["kind"] == "exact"}
+    lengths = {c: [s["rows_a"], s["rows_b"]] for c, s in cols.items() if s["kind"] == "length"}
     moved = [c for c, s in floaty.items() if s["rows_differing"]]
     worst = max(floaty, key=lambda c: floaty[c]["max_rel"], default=None)
     flips = {c: s["rows_differing"] for c, s in exact.items() if s["rows_differing"]}
@@ -647,6 +695,11 @@ def summarize(result: dict[str, Any]) -> dict[str, Any]:
         "max_rel": max((s["max_rel"] for s in floaty.values()), default=0.0),
         "p999_rel": max((s["p999_rel"] for s in floaty.values()), default=0.0),
         "median_rel": max((s["median_rel"] for s in floaty.values()), default=0.0),
+        "max_ulps": max((s["max_ulps"] for s in floaty.values()), default=0.0),
+        "p999_ulps": max((s["p999_ulps"] for s in floaty.values()), default=0.0),
+        "median_ulps_moved": max((s["median_ulps_moved"] for s in floaty.values()), default=0.0),
+        "over_ulps": sum(s["over_ulps"] for s in floaty.values()),
+        "row_count_mismatch": lengths,
         "rows_any_differ": result["rows_any_differ"],
         "nulls_vanish": sum(s.get("nulls_vanish", 0) for s in floaty.values()),
         "nulls_appear": sum(s.get("nulls_appear", 0) for s in floaty.values()),
@@ -801,6 +854,10 @@ def fmt(x: float | None) -> str:
     return "0" if x == 0 else f"{x:.2e}"
 
 
+def fmt_ulps(x: float) -> str:
+    return f"{x:.0f}" if x < 1e6 else f"{x:.2e}"
+
+
 def table_for(item: str, results: list[dict], floor: float, builds: tuple[Build, Build]) -> str:
     lines = [
         f"## {item}",
@@ -808,19 +865,21 @@ def table_for(item: str, results: list[dict], floor: float, builds: tuple[Build,
         "Relative movement = |a-b| / max(|a|, |b|, "
         f"{floor:g}); max, 99.9th percentile and median are the worst column's, over the "
         "rows where both are finite. `live` is the median over float columns of the share of "
-        "A's values that are not null: a case that never leaves warm-up shows it.",
+        "A's values that are not null: a case that never leaves warm-up shows it. "
+        "Ulps are the doubles between a and b, no floor: max and p99.9 over the "
+        "finite pairs, median over those that moved, and the count over the threshold.",
         "",
-        "| case | rows | float cols (moved) | live | max | p99.9 | median | rows differing "
-        "| nulls -/+ "
+        "| case | rows | float cols (moved) | live | max | p99.9 | median | ulps max / p99.9 "
+        "/ median moved | over N ulps | rows differing | nulls -/+ "
         "| flips | state | time A min/med | time B min/med | B/A min, med |",
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     detail: list[str] = []
     for r in results:
         name = r["name"]
         if r["status"] != "ok":
             lines.append(
-                f"| {name} | | {r['status']}: {r.get('why', '')[:80]} | | | | | | | | | | |"
+                f"| {name} | | {r['status']}: {r.get('why', '')[:80]} | | | | | | | | | | | | |"
             )
             continue
         s, t = r["summary"], r.get("timing") or {}
@@ -840,10 +899,17 @@ def table_for(item: str, results: list[dict], floor: float, builds: tuple[Build,
             f"| {name} | {r['rows']:,} | {s['float_columns']} ({s['float_columns_moved']}) | "
             f"{s['live_share']:.0%} | "
             f"{fmt(s['max_rel'])} | {fmt(s['p999_rel'])} | {fmt(s['median_rel'])} | "
+            f"{fmt_ulps(s['max_ulps'])} / {fmt_ulps(s['p999_ulps'])} / "
+            f"{fmt_ulps(s['median_ulps_moved'])} | {s['over_ulps']:,} | "
             f"{s['rows_any_differ']:,} | {s['nulls_vanish']}/{s['nulls_appear']} | {flips} | "
             f"{state} | {ta} | {tb} | {ratio} |"
         )
         notes = []
+        if s["row_count_mismatch"]:
+            notes.append(
+                "**row counts differ** (A, B): "
+                + ", ".join(f"`{c}` {a}/{b}" for c, (a, b) in s["row_count_mismatch"].items())
+            )
         if s["added_columns"] or s["removed_columns"]:
             notes.append(
                 f"columns only in B: {s['added_columns']}, only in A: {s['removed_columns']}"
@@ -874,20 +940,22 @@ def table_for(item: str, results: list[dict], floor: float, builds: tuple[Build,
             if moved:
                 detail += [
                     "",
-                    "| column | max | p99.9 | median | median (moved) | rows differing "
-                    "| nulls -/+ | worst row |",
-                    "|---|---|---|---|---|---|---|---|",
+                    "| column | max | p99.9 | median | median (moved) | ulps max / p99.9 "
+                    "/ median moved | over N ulps | rows differing | nulls -/+ | worst row |",
+                    "|---|---|---|---|---|---|---|---|---|---|",
                 ]
                 for c, st in moved[:25]:
                     detail.append(
                         f"| `{c}` | {fmt(st['max_rel'])} | {fmt(st['p999_rel'])} | "
                         f"{fmt(st['median_rel'])} | "
-                        f"{fmt(st['median_rel_moved'])} | {st['rows_differing']:,} | "
+                        f"{fmt(st['median_rel_moved'])} | {fmt_ulps(st['max_ulps'])} / "
+                        f"{fmt_ulps(st['p999_ulps'])} / {fmt_ulps(st['median_ulps_moved'])} | "
+                        f"{st['over_ulps']:,} | {st['rows_differing']:,} | "
                         f"{st['nulls_vanish']}/{st['nulls_appear']} | {st['worst_row']} |"
                     )
                 if len(moved) > 25:
                     detail.append(
-                        f"| ... {len(moved) - 25} more columns in report.json | | | | | | | |"
+                        f"| ... {len(moved) - 25} more columns in report.json | | | | | | | | | |"
                     )
             detail.append("")
     if any(
@@ -933,7 +1001,26 @@ def write_reports(
     return summary
 
 
+def broken(results: list[dict]) -> list[str]:
+    """The cases that cannot be compared and are not the same: one build ran
+    and the other refused or crashed, or the two outputs' row counts differ.
+    Each is a movement however small the numbers, and the tool fails on it."""
+    out = []
+    for r in results:
+        if r["status"] == "one-sided":
+            out.append(f"{r['name']}: only one build ran it ({r.get('why', '')[:200]})")
+        elif r["status"] == "ok" and r["summary"].get("row_count_mismatch"):
+            cols = r["summary"]["row_count_mismatch"]
+            c, (a, b) = next(iter(cols.items()))
+            out.append(
+                f"{r['name']}: row counts differ ({len(cols)} columns; `{c}` {a} in A, {b} in B)"
+            )
+    return out
+
+
 def moved_anything(results: list[dict]) -> bool:
+    if broken(results):
+        return True
     for r in results:
         if r["status"] != "ok":
             continue
@@ -970,6 +1057,12 @@ def parse(argv: list[str]) -> argparse.Namespace:
     ap.add_argument("--list", action="store_true", help="list the selected cases and stop")
     ap.add_argument("--rows-scale", type=float, default=1.0, help="scale every case's rows")
     ap.add_argument("--floor", type=float, default=DEFAULT_FLOOR)
+    ap.add_argument(
+        "--ulps-over",
+        type=int,
+        default=DEFAULT_ULPS_OVER,
+        help="count the elements that move by more than this many ulps",
+    )
     ap.add_argument("--time-rounds", type=int, default=5, help="ABBA rounds; 0 skips timing")
     ap.add_argument("--threads", type=int, default=2, help="POLARS_MAX_THREADS of every run")
     ap.add_argument(
@@ -1033,9 +1126,12 @@ def run_case_pair(
         for key in ("file", "version", "native", "polars"):
             if key in metas[build.label]:
                 build.meta[key] = metas[build.label][key]
+    result["natives"] = [metas[b.label].get("native") for b in builds]
     bad = [(b.label, metas[b.label]) for b in builds if metas[b.label].get("status") != "ok"]
     if bad:
-        result["status"] = "not comparable"
+        # Both refused: the case is outside what either build takes. One alone:
+        # the builds behave differently, which is the largest movement there is.
+        result["status"] = "not comparable" if len(bad) == len(builds) else "one-sided"
         result["why"] = "; ".join(
             f"{label}: {m.get('status')} {m.get('error', '')}" for label, m in bad
         )
@@ -1044,7 +1140,9 @@ def run_case_pair(
         raise SystemExit(
             f"both builds imported {builds[0].meta['file']}: nothing would be compared"
         )
-    cmp = compare_files(outs[builds[0].label], outs[builds[1].label], case, args.floor)
+    cmp = compare_files(
+        outs[builds[0].label], outs[builds[1].label], case, args.floor, args.ulps_over
+    )
     result.update(status="ok", summary=summarize(cmp), **cmp)
     sa, sb = (metas[b.label].get("state_sha") for b in builds)
     result["state"] = "-" if sa is None and sb is None else ("same" if sa == sb else "differs")
@@ -1116,7 +1214,8 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"{case['name']}: {res['status']}"
             + (
-                f", max movement {fmt(s['max_rel'])}, {s['rows_any_differ']} rows differ"
+                f", max movement {fmt(s['max_rel'])} ({fmt_ulps(s['max_ulps'])} ulps), "
+                f"{s['rows_any_differ']} rows differ"
                 if s
                 else ""
             )
@@ -1130,6 +1229,11 @@ def main(argv: list[str] | None = None) -> int:
         "argv": sys.argv[1:],
     }
     print(write_reports(out, results, args.floor, builds, header))
+    failures = broken(results)
+    for line in failures:
+        print(f"NOT COMPARABLE: {line}", file=sys.stderr)
+    if failures:
+        return 1
     return 1 if args.require_identical and moved_anything(results) else 0
 
 

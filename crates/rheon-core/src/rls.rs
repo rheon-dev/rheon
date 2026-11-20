@@ -1224,6 +1224,98 @@ mod tests {
         }
     }
 
+    /// One step as it was before the decay was folded into the rotations
+    /// (task 416): the decay a pass over `R` and `u` first, the rotations
+    /// after it, the coefficients by the serial back-substitution; a row
+    /// that learns nothing scales the unpacked square's upper triangle and
+    /// `u` by `sqrt(lam)`.
+    fn step_serial(m: &mut Rls, x: &[f64], y: &[Option<f64>], d_clock: f64, weight: f64) {
+        let k = m.cfg.k_total();
+        let lam = m.cfg.decay.factor(d_clock);
+        let mut z: Vec<f64> = std::iter::once(1.0).chain(x.iter().copied()).collect();
+        m.w_sum = lam * m.w_sum + weight;
+        let learns = weight > 0.0 && y.iter().all(Option::is_some);
+        crate::model::age_target_weights(&mut m.w_target, |_| learns, lam, weight);
+        m.s2 = lam * lam * m.s2 + if learns { weight * weight } else { 0.0 };
+        let root = (lam != 1.0).then(|| lam.sqrt());
+        let mut r = square::unpack(&m.r, k);
+        if learns {
+            let sw = weight.sqrt();
+            for v in &mut z {
+                *v *= sw;
+            }
+            let mut yb: Vec<f64> = y.iter().map(|v| sw * v.unwrap()).collect();
+            fold_serial(&mut r, &mut m.u, &mut z, &mut yb, k, root);
+            m.beta = solve_serial(&r, &m.u, k);
+            m.seen = true;
+        } else if let Some(s) = root {
+            for i in 0..k {
+                for v in &mut r[i * k + i..(i + 1) * k] {
+                    *v *= s;
+                }
+            }
+            for u in m.u.iter_mut() {
+                for v in u.iter_mut() {
+                    *v *= s;
+                }
+            }
+        }
+        m.r = square::pack(&r, k);
+    }
+
+    /// Review 459, C9: the step with task 416's `else if decays` branch (a
+    /// row that learns nothing scales `R` and `u` in place) against the
+    /// serial order, every state byte after every row: a zero-weight first
+    /// row, null targets, clock steps of 0, 1 and 7, three targets, and k of
+    /// 1, 2, 3, 5 and 33.
+    #[test]
+    fn a_step_leaves_the_state_of_the_serial_order_after_every_row() {
+        let mut state = 416u64;
+        for k in [1usize, 2, 3, 5, 33] {
+            for hl in [30.0, f64::INFINITY] {
+                let cfg = RlsCfg {
+                    decay: Decay::Halflife(hl),
+                    ..rls_cfg(k, 3, 30.0, 1.0)
+                };
+                let mut fast = Rls::new(cfg.clone()).unwrap();
+                let mut serial = Rls::new(cfg).unwrap();
+                let (mut skipped, mut learned) = (0, 0);
+                for row in 0..300 {
+                    let x: Vec<f64> = (0..k).map(|_| lcg(&mut state)).collect();
+                    let y: Vec<Option<f64>> = (0..3)
+                        .map(|j| {
+                            let v = x.iter().sum::<f64>() * (j + 1) as f64 + 0.1 * lcg(&mut state);
+                            (lcg(&mut state) > -0.8).then_some(v)
+                        })
+                        .collect();
+                    let weight = if row == 0 || lcg(&mut state) < -0.9 {
+                        0.0
+                    } else {
+                        1.0 + lcg(&mut state).abs()
+                    };
+                    let d_clock = [0.0, 1.0, 7.0][row % 3];
+                    if weight > 0.0 && y.iter().all(Option::is_some) {
+                        learned += 1;
+                    } else {
+                        skipped += 1;
+                    }
+                    let mut out = Step::default();
+                    fast.step_into(&x, &y, d_clock, weight, &mut out);
+                    step_serial(&mut serial, &x, &y, d_clock, weight);
+                    assert_eq!(
+                        rmp_serde::to_vec(&fast).unwrap(),
+                        rmp_serde::to_vec(&serial).unwrap(),
+                        "k={k} hl={hl} row {row}: the state"
+                    );
+                }
+                assert!(
+                    skipped > 30 && learned > 100,
+                    "{skipped} skipped, {learned} learned"
+                );
+            }
+        }
+    }
+
     #[test]
     fn cfg_validation_rejects_each_bad_field() {
         let bad = |f: &dyn Fn(&mut RlsCfg), want: &str| {

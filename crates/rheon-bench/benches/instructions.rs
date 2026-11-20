@@ -188,6 +188,8 @@ fn windows(mut run: WindowsCase) -> WindowsCase {
 #[bench::scale_bank_by_specs_per_call_large(args = ("bank.specs_per_call:large"), setup = scale_setup)]
 #[bench::scale_windows_by_groups_seen_small(args = ("windows.groups_seen:small"), setup = scale_setup)]
 #[bench::scale_windows_by_groups_seen_large(args = ("windows.groups_seen:large"), setup = scale_setup)]
+#[bench::scale_windows_by_rows_held_small(args = ("windows.rows_held:small"), setup = scale_setup)]
+#[bench::scale_windows_by_rows_held_large(args = ("windows.rows_held:large"), setup = scale_setup)]
 #[bench::scale_windows_by_history_small(args = ("windows.history:small"), setup = scale_setup)]
 #[bench::scale_windows_by_history_large(args = ("windows.history:large"), setup = scale_setup)]
 #[bench::scale_windows_by_window_mean_small(args = ("windows.window_mean:small"), setup = scale_setup)]

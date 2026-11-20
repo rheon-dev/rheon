@@ -41,6 +41,13 @@ struct Breaks {
     /// A step of the cap, or a unit either side of it: the edge of "past the
     /// cap", where an exact test and a rounded one part.
     edge: f64,
+    /// A NaN, +inf or -inf in place of `x`'s value, never a null: a column
+    /// with no null is read where it lies (review 459, C7).
+    nonfinite: f64,
+    /// Where the integer clock starts, in ms (0: the usual 1.7e12): near
+    /// either end of an i64, the steps are differences no i64 subtraction
+    /// of the extremes holds (review 459, C7).
+    int_base: i64,
 }
 
 /// The clock a case runs on.
@@ -118,8 +125,18 @@ fn data(n: usize, seed: u64, b: Breaks, keys: u32) -> Data {
         m += (r.next() - 0.5) * 0.02;
         d.ts_ns.push((t * 1e9) as i64 + 1_700_000_000_000_000_000);
         d.ts_f.push(((t * 1e9) as i64) as f64 / 1e9);
-        d.ts_i.push((t * 1e3) as i64 + 1_700_000_000_000);
-        d.x.push((r.next() >= b.null).then_some(m));
+        let base = if b.int_base == 0 {
+            1_700_000_000_000
+        } else {
+            b.int_base
+        };
+        d.ts_i.push((t * 1e3) as i64 + base);
+        let nonfinite = r.next() < b.nonfinite;
+        d.x.push((r.next() >= b.null).then_some(if nonfinite {
+            [f64::NAN, f64::INFINITY, f64::NEG_INFINITY][(r.next() * 3.0) as usize % 3]
+        } else {
+            m
+        }));
         d.y.push((r.next() >= b.null).then_some(m * 0.5 + r.next()));
         d.g.push(if r.next() < b.rare {
             i64::from(keys)
@@ -474,6 +491,7 @@ fn cases() -> Vec<Case> {
                 back: 0.001,
                 rare: 0.003,
                 edge: 0.002,
+                ..Breaks::default()
             },
         ),
     ];
@@ -570,18 +588,149 @@ fn cases() -> Vec<Case> {
             }
         }
     }
+    cases.extend(review_cases());
     cases
 }
 
-/// One run of a case: its outputs and state, and how many rows the plain loop took.
-fn run(c: &Case, d: &Data, n: usize, chunks: &[usize], reload: bool, plain: bool) -> (H, u64) {
+/// Review 459, C7: what the cases above never held the plain loop to `push`
+/// on: a `like=` spec's `accept` columns (a row with a null in one is
+/// accepted by no fit), non-null NaN and infinities in a column with no
+/// null, a cap no step reaches (a clocked run cannot leave `gap_cap` out),
+/// and an integer clock at either end of an i64.
+fn review_cases() -> Vec<Case> {
+    let mut out = vec![];
+    let mut add =
+        |name: &str, clk: Clk, flavor: usize, breaks: Breaks, edit: &dyn Fn(&mut Value)| {
+            for (grouped, keys) in [(false, 1), (true, 1), (true, 12)] {
+                if clk == Clk::Rows && grouped && matches!(flavor, 7 | 10..=13) {
+                    continue;
+                }
+                let mut config = json!({"formulas": formulas(clk, flavor)});
+                if clk != Clk::Rows {
+                    config["clock"] = json!("ts");
+                    config["gap_cap"] = match clk {
+                        Clk::Datetime => json!("30s"),
+                        Clk::Int => json!(29999.5),
+                        _ => json!(30.0),
+                    };
+                }
+                if grouped {
+                    config["group"] = json!("g");
+                }
+                edit(&mut config);
+                out.push(Case {
+                    name: format!(
+                        "{} flavor {flavor} {name} grouped {grouped} keys {keys}",
+                        clk.name()
+                    ),
+                    config,
+                    clk,
+                    grouped,
+                    session: false,
+                    breaks,
+                    keys,
+                    engages: 8,
+                    // One flavor of each in the essentials (a stream fed a
+                    // row at a time is long in a test build); all extended.
+                    essential: clk != Clk::Float
+                        && flavor
+                            == match name {
+                                "accept" | "nonfinite" => 1,
+                                _ => 5,
+                            },
+                });
+            }
+        };
+    let nulls = Breaks {
+        null: 0.02,
+        ..Breaks::default()
+    };
+    let accept = |c: &mut Value| c["like"] = json!({"spec": "fit", "accept": ["y"]});
+    for flavor in [0, 1, 5, 13] {
+        add("accept", Clk::Datetime, flavor, nulls, &accept);
+    }
+    add("accept", Clk::Rows, 1, nulls, &accept);
+    let nonfinite = Breaks {
+        nonfinite: 0.01,
+        ..Breaks::default()
+    };
+    for clk in [Clk::Datetime, Clk::Int, Clk::Rows] {
+        for flavor in [1, 5, 6] {
+            add("nonfinite", clk, flavor, nonfinite, &|_| {});
+        }
+    }
+    // A clocked run cannot leave `gap_cap` out (it is refused: the default,
+    // an infinite cap, is the clockless run's, which the row-count cases
+    // hold); a cap no step reaches is the nearest, every step under it.
+    let far = |c: &mut Value| {
+        c["gap_cap"] = match c["gap_cap"] {
+            Value::String(_) => json!("100000d"),
+            _ => json!(1e300),
+        };
+    };
+    for clk in [Clk::Datetime, Clk::Float, Clk::Int] {
+        for flavor in [0, 1, 5, 10, 13] {
+            add(
+                "a cap no step reaches",
+                clk,
+                flavor,
+                Breaks::default(),
+                &far,
+            );
+            add(
+                "a cap no step reaches, long steps",
+                clk,
+                flavor,
+                Breaks {
+                    cap: 0.003,
+                    ..Breaks::default()
+                },
+                &far,
+            );
+        }
+    }
+    for (name, base) in [
+        ("i64 top", i64::MAX - 10_000_000_000),
+        ("i64 bottom", i64::MIN + 1_000),
+    ] {
+        for flavor in [0, 1, 5, 10, 13] {
+            add(
+                name,
+                Clk::Int,
+                flavor,
+                Breaks {
+                    int_base: base,
+                    ..Breaks::default()
+                },
+                &|_| {},
+            );
+        }
+    }
+    out
+}
+
+/// When a run saves its state and loads it into a fresh run.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Reload {
+    Never,
+    /// After the second chunk.
+    Once,
+    /// After every `n`th chunk.
+    Every(usize),
+}
+
+/// One run of a case: its outputs and state, and how many rows the plain
+/// loop took. The chunk lengths are taken in turn, again from the first once
+/// they run out, until the stream is fed (review 459, C6: one-row chunks
+/// covered the first 200 rows only, and the rest was never fed).
+fn run(c: &Case, d: &Data, n: usize, chunks: &[usize], reload: Reload, plain: bool) -> (H, u64) {
     let config: WindowsConfig = serde_json::from_value(c.config.clone()).unwrap();
     let schema = frame(d, c.clk, c.grouped, c.session, 0, 1).schema().clone();
     let mut run = WindowsRun::new(config.clone(), &schema).unwrap();
     run.set_plain_run(plain);
     let mut h = H(0xcbf29ce484222325, 0);
     let (mut at, mut taken) = (0usize, 0u64);
-    for (k, &len) in chunks.iter().enumerate() {
+    for (k, &len) in chunks.iter().cycle().enumerate() {
         let to = (at + len).min(n);
         if at >= to {
             break;
@@ -598,7 +747,12 @@ fn run(c: &Case, d: &Data, n: usize, chunks: &[usize], reload: bool, plain: bool
             }
         }
         at = to;
-        if reload && k == 1 {
+        let now = match reload {
+            Reload::Never => false,
+            Reload::Once => k == 1,
+            Reload::Every(every) => (k + 1) % every == 0,
+        };
+        if now {
             let bytes = run.save_bytes().unwrap();
             h.bytes(&bytes);
             taken += run.plain_rows();
@@ -613,21 +767,29 @@ fn run(c: &Case, d: &Data, n: usize, chunks: &[usize], reload: bool, plain: bool
 }
 
 /// Every case `keep` takes, each stream `n` rows.
-fn hold_to_push(keep: impl Fn(&Case) -> bool, n: usize) {
+/// `small`: the stream fed a row at a time, and in chunks of 1, 2, 3 and 5
+/// rows reloaded every 97th chunk (review 459, C6), the whole stream either
+/// way; otherwise in one chunk, and in two chunkings reloaded once. Two
+/// tests, so a test runner runs them side by side.
+fn hold_to_push(keep: impl Fn(&Case) -> bool, n: usize, small: bool) {
     let mut engaged = 0u64;
     let mut total = 0u64;
     for (ci, c) in cases().iter().enumerate().filter(|(_, c)| keep(c)) {
         let d = data(n, 0x9E3779B97F4A7C15 ^ ci as u64, c.breaks, c.keys);
-        for (k, chunks) in [
-            vec![n],
-            vec![1; 200],
-            vec![7, 1, 13, 64, 1500, 415, 3000],
-            vec![1000, 1000, 1000],
-        ]
-        .iter()
-        .enumerate()
-        {
-            let reload = k >= 2;
+        let chunkings = if small {
+            vec![
+                (vec![1], Reload::Never),
+                (vec![1, 2, 3, 5], Reload::Every(97)),
+            ]
+        } else {
+            vec![
+                (vec![n], Reload::Never),
+                (vec![7, 1, 13, 64, 1500, 415, 3000], Reload::Once),
+                (vec![1000, 1000, 1000], Reload::Once),
+            ]
+        };
+        for (k, (chunks, reload)) in chunkings.iter().enumerate() {
+            let reload = *reload;
             let (general, none) = run(c, &d, n, chunks, reload, false);
             let (plain, taken) = run(c, &d, n, chunks, reload, true);
             assert_eq!(none, 0, "{}: switched off, yet it took rows", c.name);
@@ -637,7 +799,7 @@ fn hold_to_push(keep: impl Fn(&Case) -> bool, n: usize) {
                 "{} chunking {k}: the plain loop moved a bit or a state byte",
                 c.name
             );
-            if k == 0 && c.engages > 0 {
+            if !small && k == 0 && c.engages > 0 {
                 // Most rows of a stream that is plain mostly.
                 assert!(
                     taken * 10 >= (n as u64) * u64::from(c.engages),
@@ -650,16 +812,28 @@ fn hold_to_push(keep: impl Fn(&Case) -> bool, n: usize) {
         }
     }
     println!("plain loop engaged in {engaged} cases, {total} rows in all");
-    assert!(engaged > 10);
+    assert!(small || engaged > 10);
+    assert!(total > 0, "the plain loop took no row");
 }
 
 #[test]
 fn the_plain_loop_gives_push_every_bit_and_every_state_byte() {
-    hold_to_push(|c| c.essential, 1500);
+    hold_to_push(|c| c.essential, 1500, false);
+}
+
+#[test]
+fn the_plain_loop_gives_push_every_bit_and_every_state_byte_a_few_rows_at_a_time() {
+    hold_to_push(|c| c.essential, 1500, true);
 }
 
 #[test]
 #[ignore = "extended: several minutes in a test build"]
 fn the_plain_loop_gives_push_every_bit_and_every_state_byte_in_every_case() {
-    hold_to_push(|_| true, 3000);
+    hold_to_push(|_| true, 3000, false);
+}
+
+#[test]
+#[ignore = "extended: several minutes in a test build"]
+fn the_plain_loop_gives_push_every_bit_and_every_state_byte_in_every_case_a_few_rows_at_a_time() {
+    hold_to_push(|_| true, 3000, true);
 }
