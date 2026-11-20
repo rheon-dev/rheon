@@ -1,0 +1,32 @@
+# Coordinator's x86-64 measurement of task 479's x86 fix (the column loop in
+# vector lanes) against main, per process and in one process, both function
+# layouts. Lives only on branch vm-tools/x86-ci; runs when its harness changes.
+name: x86 bench 479 fix
+on:
+  push:
+    branches: [vm-tools/x86-ci]
+    paths: [vm-tools/w479-x86fix/**]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - name: free disk and use a leaner linker
+        uses: ./.github/actions/linux-build-prep
+      - name: tip and lanes against main
+        env:
+          CARGO_INCREMENTAL: "0"
+          W479_XOVER: "1"
+        run: |
+          sed -i 's/CARGO_BUILD_JOBS=2/CARGO_BUILD_JOBS=4/' vm-tools/w479-x86fix/run_x86.sh
+          bash vm-tools/w479-x86fix/run_x86.sh "$RUNNER_TEMP/w479x" 6
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: w479x-x86-out
+          path: ${{ runner.temp }}/w479x/out/
