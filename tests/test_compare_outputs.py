@@ -132,7 +132,7 @@ def test_one_ulp_in_one_column_is_that_column_alone(tmp_path, capsys):
     st = case["columns"]["smoke_ridge.pred_y0"]
     assert 0 < st["max_rel"] <= 2.0**-52 * 1.01, "one ulp is at most 2**-52 relative"
     assert st["max_ulps"] == 1.0 and st["p999_ulps"] <= 1.0
-    assert 0 < st["max_abs"] and st["p999_abs"] <= st["max_abs"]
+    assert st["max_abs"] > 0 and st["p999_abs"] <= st["max_abs"]
     assert st["median_rel"] <= st["p999_rel"] <= st["max_rel"]
     assert st["nulls_vanish"] == 0 and st["nulls_appear"] == 0
     assert case["summary"]["worst_column"] == "smoke_ridge.pred_y0"
