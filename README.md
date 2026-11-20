@@ -9,8 +9,8 @@
 
 rheon fits models online, one row at a time, with bounded memory over
 unlimited data. It is written in Rust, and its online least squares runs
-at almost two million rows a second on five factors from parquet files
-on an M4 MacBook Pro. There are dozens of
+at over ten million rows a second on 20 factors from a parquet file on
+an M4 MacBook Pro. There are dozens of
 models, each checked against slower libraries by nearly twenty thousand
 tests, and by comparison fits over every parameter on more than a dozen
 public data sets and far more generated data.
