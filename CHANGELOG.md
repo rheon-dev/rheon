@@ -11,6 +11,21 @@ returns.
 
 ## [Unreleased]
 
+### Fixed
+
+- `lasso`: under a `window_size`, `solve_failures` counts a coordinate
+  descent that runs out of `max_iter` sweeps once rows have aged out of the
+  window, where it excused one by the window's effective rows alone. A window
+  that has started to drop rows holds its span's rows however long the
+  stream, so one holding fewer than the warm-up bound (about 2.3 rows a
+  feature at the defaults; 50 features in a window of 80 rows) is never out
+  of its warm-up, and its cap hits are the settings', not the rows'. While the
+  window still holds every row, the rule is the unwindowed one. The rebuild
+  after a clock gap longer than the window is counted the same way. Only this
+  count moves: predictions, coefficients and every emitted column are as
+  before, and a state saved by an earlier build continues to the bit except
+  for it.
+
 ## [2.0.0] — 2026-11-19
 
 ### Changed (breaking)

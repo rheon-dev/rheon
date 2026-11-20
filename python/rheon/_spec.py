@@ -2387,8 +2387,10 @@ def lasso(
     nothing about the data, so it is not counted; the fit is still where the
     descent stopped. Past it every cap hit is counted, as is every one
     under a decay whose Kish size stays below that bound (about ``(1 + lam)
-    / (1 - lam)`` rows for ``lam`` the decay a row): no more rows would lift
-    it, so the stream is never out of its warm-up. A ``max_iter`` below
+    / (1 - lam)`` rows for ``lam`` the decay a row), or under a
+    ``window_size`` whose window holds fewer rows than that bound once rows
+    have aged out of it: no more rows would lift it, so the stream is never
+    out of its warm-up. A ``max_iter`` below
     ``ln(1/tol) / 2``, about 12 sweeps, is counted always, since no number
     of rows would settle it.
     """
