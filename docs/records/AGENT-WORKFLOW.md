@@ -6,6 +6,28 @@ docs read most), so every session loads a short summary and this file holds
 the detail and the reason for each rule. CLAUDE.md's "Workflow" section is
 the summary.
 
+## Worker rules learned the hard way (from the coordinator's notes, 2026-11-20)
+
+- **The gate.** Never pipe `scripts/gate.sh`, run it inside a monitor, or chain
+  `gate && commit`. Read `GATE EXIT 0` from its log in a separate command, and never
+  commit in a checkout a running gate reads: a pipe hid a failed exit, and a commit
+  under a running gate changed what it tested.
+- **Git.** No squash, no rebase of a merged branch: a worker's squash once reverted a
+  merge. No `git commit -a` after a merge: it commits conflict markers as resolved, so
+  check `git status` and grep for markers first. Before reporting, compare `git diff
+  --stat main...<branch>` with what the report claims.
+- **Never share `target/` with a clone.** A clone building into another checkout's
+  `target/` overwrites its artifacts, and that checkout's gate then tests the wrong binary.
+- **Evidence.** Never `| head` a check that is meant to be complete. A `cargo test`
+  filter that matches nothing exits 0, so grep the test count when a run is evidence.
+  Print proof that a feature activated (a counter, a path taken) before trusting a green
+  number.
+- **Batches.** Write a batch's tests first and run them on the old build to see each fail;
+  fix them all; run the tests once; commit per batch, naming the findings.
+- **Re-measure a premise.** Before acting on a plan row, measure its premise again at
+  HEAD; test a numeric fix under short, long and no decay; time a speed change against the
+  last release's wheel as well as against `main`.
+
 Iterating (task 245; docs/TESTING.md, "Iterating" and "Caches and when to
 clear them"): workers run `scripts/quick.sh` while iterating and finish
 with `scripts/quick.sh --extended` plus the lints, not a full gate, and

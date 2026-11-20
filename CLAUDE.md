@@ -134,6 +134,22 @@ runs both tiers, but a plain `cargo test` skips the extended Rust tests
    `a` and `b` are both 0/0. Guard every such division; an unguarded one poisons the state
    with a NaN that never washes out.
 
+- **State stays bounded, of reasonable size, and the fit stays one pass** (the user,
+  2026-11-20). New state is fine, log results included, while its size is bounded by
+  the model's shape or a window, never by the stream's length, and stays reasonable.
+  A significant growth in state or window memory above the current caps is raised with
+  the user before it lands: state each change's size (bytes as a function of k, groups
+  and window) beside today's. A worker who finds a change would break any of this stops
+  and brings it to the user. An earlier rejection may be reopened on these terms; one
+  that failed on measurement or correctness stays closed without new evidence.
+- **A libm result (`ln`, `exp`, `powf`, ...) may sit in the state** (the user,
+  2026-11-20). Such a field continues to the bit on the same OS. Across OSes that field
+  alone is compared within the smallest tolerance that passes, stated in ulps beside the
+  test, and a tolerance that is not tiny goes to the user before it lands. Every other
+  field stays bit-exact across OSes (`docs/TESTING.md`, "The math library's last bits").
+- **Output-moving speed changes**: under 5 ulps and faster, take it; above 5 ulps, or a
+  change not measured in ulps, is the user's call (`scripts/compare_outputs.py` reports ulps).
+
 - **Budgets only tighten** (`budgets.toml`; task 251, the user, 2026-10-11:
   "we want to avoid slipping by 5% repeatedly"). A failure says *over its
   budget*: find the cause; if it buys something worth having, raise the

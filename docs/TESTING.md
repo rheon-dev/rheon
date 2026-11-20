@@ -414,6 +414,32 @@ the boundary with Polars, `tests/test_ffi_memory.py` and
 | `docs/VALIDATION.md`, where the defaults were chosen | regenerated and compared, so the numbers behind them cannot silently stop being true (`tests/test_validation_doc.py`) |
 | no data files in the repository | tests generate or download their own data, and a data file, a large file or generated output that gets tracked fails a test (`tests/test_repo_hygiene.py`) |
 
+### Traps the suite has already fallen into
+
+Each of these failed a run once, on a platform the author had not tested.
+
+- **A skip must be true.** Generate only valid cases rather than skipping
+  invalid ones. A Hypothesis `assume` is a skip too: enough of them fail
+  the run on `filter_too_much`. Skip only as a platform guard, with the
+  reason in the marker.
+- **Docstrings on Python 3.13 and later lose their common indentation when
+  compiled**, and CI's macOS legs run 3.14. A test that parses a
+  docstring calls `inspect.cleandoc` first.
+- **Opening a directory as a file raises `PermissionError` on Windows** and
+  `IsADirectoryError` elsewhere. A test pins `OSError`, never one
+  platform's subclass.
+- **Run each platform's branch over every input.** A check that compared
+  bytes on the Mac hid a tolerance branch that only Linux took, where
+  `inf - inf` gave NaN. A branch taken on another platform gets a test that
+  forces it here, and its results are checked finite.
+- **`cargo mutants` cannot see the Python tests.** A Rust line that only
+  pytest exercises survives mutation, so it needs a Rust test of its own.
+  Restore a hand-mutated file by copying the original back, not with
+  `sed`, where `*` is a pattern.
+- **Chunk invariance is about the numbers.** Compare every float field
+  across chunkings. `coef` on each group's last row of each chunk differs
+  by design.
+
 ## How the suite runs
 
 **The essentials gate each commit while a task is in progress, the whole
@@ -969,6 +995,14 @@ measured 1.4 times as slow for `exp` and `exp2` and 3.5 to 4.5 times for
 | a build against itself | one chunk against many, one thread against eight, a state saved and continued | exactly: both sides call the same library on the same machine |
 | a value pinned to its bits | a digest or a frozen number from a fixed stream | a stream that calls none of those functions, such as a decay given as a literal `lam` on a clock that steps by 1, so the pin holds on every platform |
 | this library against an oracle | another library, or a definition computed another way | a bound derived from both computations' rounding: a few ulps for each call to one of those functions, times the formula's amplification, measured on all three platforms and written beside the test |
+
+**Compare a state field that passed through one of those functions within
+a stated tolerance across platforms, and every other field exactly.** A state saved on one OS and continued on another runs the
+other OS's library on that field. So the state-fixture and continuation
+tests compare that field, and only that field, within the smallest
+tolerance that passes, given in ulps beside the test. A tolerance above a
+few ulps is a design question, not a test setting. Every other field stays
+exact on every platform.
 
 **A Rust oracle comparison is held to a derived bound, from the helpers in
 `crates/rheon-core/src/oracle.rs`.** A fixed tolerance such as `1e-9` is
