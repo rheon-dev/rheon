@@ -11,6 +11,18 @@ returns.
 
 ## [Unreleased]
 
+### Performance
+
+- `ew_cov`'s `mahal` factorizes and solves in a working space its thread
+  keeps, written over from row to row, where each row made a new matrix
+  for the factor, another for the solve and two lists. On arm64 (Apple M4
+  Pro, both function layouts) a row takes 0.35 to 0.42 of the time at 2 and
+  4 features, 0.60 to 0.66 at 6 and 8, 0.90 at 20 and 0.92 at 32, and the
+  same time at 10 to 16, where the factorization is most of a row. The
+  space is one factor a thread, of the order it last read, not one a model,
+  so a bank of many groups holds no more memory. Every output is unchanged
+  to the bit.
+
 ## [2.0.0] — 2026-11-19
 
 ### Changed (breaking)

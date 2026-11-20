@@ -815,10 +815,15 @@ pub(crate) fn kept_work(solves: &mut Solves, k: usize, m: usize) -> &mut SolveWo
 /// rung's matrix is made from the packed rows as [`solve_spd`] makes it
 /// from `C + ridge·I`'s square -- `c_ij` below the diagonal, `(c_ii +
 /// ridge) + jitter` on it, the same trace -- so the solution and the
-/// attempts are its to the bit. `ew_cov`'s `mahal`, a factorization a row:
-/// laying the square out first, zeroed, then the triangle's rows into it,
-/// cost it 4% of its speed at 20 features on arm64 against the one copy of
-/// a square it made when the matrix was kept as one.
+/// attempts are its to the bit. `ew_cov`'s `mahal` was this, a
+/// factorization a row: laying the square out first, zeroed, then the
+/// triangle's rows into it, cost it 4% of its speed at 20 features on arm64
+/// against the one copy of a square it made when the matrix was kept as
+/// one. It now factorizes in a kept working space ([`FactorWork`]) and
+/// solves in a kept column ([`SpdFactor::solve_dot`]), the same arithmetic
+/// with nothing allocated (task 479); this stays as the reference its tests
+/// hold that path to.
+#[cfg(test)]
 pub(crate) fn solve_spd_ridged(
     c: &[f64],
     ridge: f64,
@@ -1294,6 +1299,26 @@ impl SpdFactor {
             acc += di * x[(i, 0)];
         }
         clamp_rounding(acc)
+    }
+
+    /// `dᵀ A⁻¹ d` from one solve in `work`'s kept column, summed as an
+    /// iterator's `sum` of the products: what [`solve_spd_ridged`]'s solution
+    /// dotted with `d` that way gives, to the bit, with nothing allocated
+    /// once `work` holds a column of this order. Unclamped, unlike
+    /// [`Self::quad_form`]: the caller reads the sign of a zero and a NaN as
+    /// it did.
+    pub(crate) fn solve_dot(&self, d: &[f64], work: &mut QuadWork) -> f64 {
+        let k = self.l.nrows();
+        debug_assert_eq!(d.len(), k);
+        let x = work.column(k);
+        for (i, &di) in d.iter().enumerate() {
+            x[(i, 0)] = di;
+        }
+        solve_in_place(&self.l, x.as_mut());
+        d.iter()
+            .enumerate()
+            .map(|(i, di)| di * x[(i, 0)])
+            .sum::<f64>()
     }
 
     /// [`Self::quad_forms`] written into `out`, the `m` vectors solved in
