@@ -20,27 +20,31 @@ returns.
   up to 4 MiB (724 features); a wider one is made and dropped as before.
   Every output is unchanged to the bit.
 - A Cholesky factorization of 13 to 64 features is computed by a loop of
-  our own, a column at a time with eight rows held in registers, where it
-  went through faer's call: the same products in the same order, so every
-  factor is faer's to the bit, without faer's dispatch and scratch. On
-  arm64 (Apple M4 Pro, both function layouts, each against the previous
-  build) a row takes 0.87 to 0.88 of the time at 20 features in `hmm` (two
-  states, full covariance) and `ew_cov`'s `mahal`, 0.90 to 0.91 in
-  `ew_class` (full and tied), 0.92 to 0.96 at 13 and 16, and 0.94 to 0.96 at
-  32; `bocpd` with a full covariance 0.96 at 16. Every other model that
-  factorizes a matrix of that size (`ewridge`, `deco` and the rest) takes
-  the same loop, unmeasured here. Up to 12 features nothing changes, and an
-  x86-64 CPU with AVX2 keeps faer's call from 9 to 12. Every output is
-  unchanged to the bit.
+  our own, a column at a time, where it went through faer's call: the
+  same products in the same order, so every factor is faer's to the bit,
+  without faer's dispatch and scratch. A column's rows are taken in vector
+  lanes, up to 32 rows held in registers across every earlier column, on
+  x86-64 with AVX2 and on arm64 from 16 features; on arm64 below 16, eight
+  rows at a time. On arm64 (Apple M4 Pro, both function layouts, each
+  against the build before these changes) a row takes 0.91 to 0.93 of the
+  time at 13 and 16 features in `hmm` (two states, full covariance), 0.82
+  to 0.83 at 20 and 32; `ew_class` full 0.94 to 0.95 at 13 and 0.88 at 20;
+  `bocpd` with a full covariance 0.96 at 16 (`ew_cov`'s `mahal` below,
+  with its working space). Every other model that factorizes a matrix of
+  that size (`ewridge`, `deco` and the rest) takes the same loop,
+  unmeasured here. Up to 12 features nothing changes, and an x86-64 CPU
+  with AVX2 keeps faer's call from 9 to 12. Every output is unchanged to
+  the bit.
 - `ew_cov`'s `mahal` factorizes and solves in a working space its thread
   keeps, written over from row to row, where each row made a new matrix
   for the factor, another for the solve and two lists. On arm64 (Apple M4
   Pro, both function layouts) a row takes 0.35 to 0.42 of the time at 2 and
   4 features, 0.60 to 0.66 at 6 and 8, 0.90 at 20 and 0.92 at 32, and the
-  same time at 10 to 16, where the factorization is most of a row. The
-  space is one factor a thread, of the order it last read, not one a model,
-  so a bank of many groups holds no more memory. Every output is unchanged
-  to the bit.
+  same time at 10 to 16, where the factorization is most of a row; with
+  the factorization's loop above as well, 0.65 to 0.66 at 13 and 32
+  features and 0.70 at 16. The space is one factor a thread, of the order
+  it last read, not one a model, so a bank of many groups holds no more
+  memory. Every output is unchanged to the bit.
 
 ## [2.0.0] — 2026-11-19
 
