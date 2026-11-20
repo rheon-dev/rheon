@@ -1,0 +1,31 @@
+# Coordinator's x86-64 measurement of the hmm factor-state landing
+# (task-479-hmm-land) against main, both function layouts, with an
+# identical-binary control. Lives only on branch vm-tools/x86-ci; runs when
+# its harness changes.
+name: x86 bench hmm land
+on:
+  push:
+    branches: [vm-tools/x86-ci]
+    paths: [vm-tools/w479-hmm-land/**]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  hmm-land:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - name: free disk and use a leaner linker
+        uses: ./.github/actions/linux-build-prep
+      - name: the hmm factor-state landing against main
+        env:
+          WORK: ${{ runner.temp }}/w479-land
+          JOBS: "4"
+        run: bash vm-tools/w479-hmm-land/run_x86.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: w479-land-x86-out
+          path: ${{ runner.temp }}/w479-land/out/
