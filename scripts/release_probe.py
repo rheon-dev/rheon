@@ -5,7 +5,11 @@ numeric clocks, and every builder called by keyword. Each spec is built and
 run on its own, so a spec a build refuses -- a model or a parameter it does
 not have -- is recorded as refused rather than ending the run. Writes every
 output field of every spec, and the frame `closed_groups` drains, to a
-parquet file, and what ran to a JSON manifest:
+parquet file, and what ran, each spec's kind and the count of each hard
+path the run reached (`PATHS`) to a JSON manifest. Every spec of
+`WORKLOAD` and `HARD_PATHS` runs four times: on `stream()`; on it with
+each group's first row at weight 0 (`w0_`), and with it null (`null0_`);
+and saved at `RESUME_AT`, loaded and continued (`resume_`):
 
     python scripts/release_probe.py OUT.parquet MANIFEST.json
 
@@ -31,7 +35,9 @@ import importlib
 import importlib.util
 import inspect
 import json
+import os
 import sys
+import tempfile
 import warnings
 
 import numpy as np
@@ -51,7 +57,13 @@ def stream(n: int = 400, seed: int = 7) -> pl.DataFrame:
     """Three interleaved groups on an irregular clock with gaps past the
     cap, a session change halfway, null features (skipped rows), null
     targets (predict-only rows), zero weights, a 0/1 label, a class label,
-    and a block key that only increases, for the models that close groups."""
+    and a block key that only increases, for the models that close groups.
+
+    Two columns serve `HARD_PATHS` alone, derived from the others so no
+    other column's draws move: `x1b`, `x1` stepped up by 4 from row 220, a
+    break for `bocpd`'s fold to follow; and `ts_decade`, `ts` with each
+    group's first row (rows 0 to 2) a decade earlier, so each group's
+    temporal clock runs at a decade's age from its second row on."""
     rng = np.random.default_rng(seed)
     t = np.cumsum(rng.choice([0.5, 1.0, 1.5, 2.0], size=n))
     # Two gaps past the cap. Raising rows 90 and 250 alone, as this did until
@@ -72,28 +84,48 @@ def stream(n: int = 400, seed: int = 7) -> pl.DataFrame:
     # `restart_after_step_back = 10`.
     t_back = t.copy()
     t_back[150:] -= 30.0
-    return pl.DataFrame(
-        {
-            "t": t,
-            "g": np.array(["a", "b", "c"])[np.arange(n) % 3],
-            "s": np.where(np.arange(n) < n // 2, "am", "pm"),
-            "block": np.arange(n) // 50,
-            "x0": x0,
-            "x1": x[:, 1],
-            "x2": x[:, 2],
-            "y": yy,
-            "z": z,
-            "w": w,
-            "hit": (y > 0.5).astype(float),
-            "lab": np.where(y > 0.5, "up", "down"),
-            "t_back": t_back,
-        }
-    ).with_columns(
-        pl.col("x0", "y").fill_nan(None),
-        # `t` as a time of day: the temporal clock and its duration
-        # parameters, on the same steps.
-        ts=pl.datetime(2024, 1, 2, 9, 30) + pl.duration(milliseconds=(pl.col("t") * 1000)),
+    return (
+        pl.DataFrame(
+            {
+                "t": t,
+                "g": np.array(["a", "b", "c"])[np.arange(n) % 3],
+                "s": np.where(np.arange(n) < n // 2, "am", "pm"),
+                "block": np.arange(n) // 50,
+                "x0": x0,
+                "x1": x[:, 1],
+                "x2": x[:, 2],
+                "y": yy,
+                "z": z,
+                "w": w,
+                "hit": (y > 0.5).astype(float),
+                "lab": np.where(y > 0.5, "up", "down"),
+                "t_back": t_back,
+            }
+        )
+        .with_columns(
+            pl.col("x0", "y").fill_nan(None),
+            # `t` as a time of day: the temporal clock and its duration
+            # parameters, on the same steps.
+            ts=pl.datetime(2024, 1, 2, 9, 30) + pl.duration(milliseconds=(pl.col("t") * 1000)),
+            x1b=pl.col("x1") + pl.when(pl.int_range(pl.len()) >= BREAK_AT).then(4.0).otherwise(0.0),
+        )
+        .with_columns(
+            ts_decade=pl.col("ts")
+            - pl.when(pl.int_range(pl.len()) < FIRST_ROWS)
+            .then(DECADE)
+            .otherwise(pl.duration(days=0)),
+        )
     )
+
+
+#: The row from which `x1b` is `x1` stepped up by 4.
+BREAK_AT = 220
+#: Ten years and the two leap days between 2014 and 2024, as `ts_decade`
+#: moves each group's first row back.
+DECADE = pl.duration(days=3653)
+#: A decade in nanoseconds, 365.25 days a year: the clock age
+#: `activations` holds `ts_decade`'s groups to.
+DECADE_NS = int(3652.5 * 86_400 * 10**9)
 
 
 #: Where `states` stops: the first half of `stream()`.
@@ -535,6 +567,156 @@ REACH: list[tuple[str, str, dict, list[str]]] = [
 WORKLOAD += REACH
 
 
+def _clocked(name: str) -> tuple[str, dict]:
+    """A spec of `WORKLOAD` that reads the clock `t`, as its builder and its
+    keyword arguments."""
+    builder, kw = next((b, kw) for n, b, kw, _ in WORKLOAD if n == name)
+    return builder, dict(kw)
+
+
+#: The kinds that read a clock, one spec of each from `WORKLOAD`, for the
+#: paths every kind takes on its own: a reset after a step back, a session.
+CLOCKED = [
+    "rls", "lasso", "kalman", "huber", "quantile", "ftrl", "sgd", "pa", "holt", "ew_cov",
+    "kmeans", "micro", "ew_class", "marginal", "deco", "corrchange", "bocpd", "hmm",
+]  # fmt: skip
+
+#: The paths that can change numbers without a tolerance-held test seeing
+#: it, beside `WORKLOAD`'s: `bocpd`'s pruning and its fold at the cap, a
+#: clock at a decade's age, a reset after a step back in every kind that
+#: reads a clock, and a session crossed by each kind of clock. A
+#: compensated mean's low part is reached by `kmeans` and `micro` in
+#: `WORKLOAD`. `activations` counts each path in the run, so the comparison
+#: shows each was reached rather than assuming it; `main` also runs every
+#: spec on the first rows of each group at zero weight and null, and saved,
+#: loaded and continued mid-stream.
+HARD_PATHS: list[tuple[str, str, dict, list[str]]] = [
+    # Pruning that drops runs from the middle of the vector, and a cap the
+    # runs reach, over a break at `BREAK_AT`: the fold keeps the run
+    # carrying the mass, before the break and after it.
+    *[
+        (
+            f"bocpd_fold_{shape}",
+            "bocpd",
+            dict(
+                features=["x1b", "x2"],
+                covariance_type=shape,
+                covariance_prior=[1.0],
+                prune_below=1e-3,
+                max_run=30,
+                **CLOCK,
+            ),
+            [],
+        )
+        for shape in ("diag", "full")
+    ],
+    # A temporal clock whose groups began a decade before the rest of their
+    # rows, every clock parameter a duration.
+    (
+        "decade_ridge",
+        "ewridge",
+        dict(
+            FIT,
+            clock="ts_decade",
+            half_life="25s",
+            gap_cap="6s",
+            session="s",
+            session_gap="10s",
+            emit_clocks=True,
+        ),
+        [],
+    ),
+    (
+        "decade_ew_cov",
+        "ew_cov",
+        dict(
+            features=["x0", "x1", "x2"],
+            stats=["mean", "var", "cov"],
+            group="g",
+            clock="ts_decade",
+            half_life="25s",
+            gap_cap="6s",
+            weight="w",
+            window_size="40s",
+        ),
+        [],
+    ),
+    (
+        "decade_kmeans",
+        "kmeans",
+        dict(
+            features=["x1", "x2"],
+            n_clusters=2,
+            group="g",
+            clock="ts_decade",
+            half_life="25s",
+            gap_cap="6s",
+            weight="w",
+        ),
+        [],
+    ),
+    # A reset after a step back, in every kind that reads a clock (`ewridge`'s
+    # is `ridge_step_back` above).
+    *[
+        (
+            f"step_back_{name}",
+            _clocked(name)[0],
+            dict(_clocked(name)[1], group=None, clock="t_back", restart_after_step_back=10.0),
+            [],
+        )
+        for name in CLOCKED
+    ],
+    # A session crossed: a clock step replaced by `session_gap`, and a
+    # session that resets the model.
+    *[
+        (
+            f"session_{name}",
+            _clocked(name)[0],
+            dict(_clocked(name)[1], session="s", session_gap=10.0),
+            [],
+        )
+        for name in ("kalman", "ew_cov", "kmeans", "micro", "bocpd", "hmm", "holt")
+    ],
+    ("session_reset", "ewridge", dict(FIT, session="s", session_gap="reset"), []),
+]
+
+#: Where each spec's resumed run is saved and loaded: inside the first
+#: session, before `t_back` steps back at row 150 and before the gap at row
+#: 250, so the file carries a running session, a clock and a restart's
+#: watch to the rows after it.
+RESUME_AT = 137
+
+#: The first row of each group: rows 0, 1 and 2 of `stream()`.
+FIRST_ROWS = 3
+
+
+def first_rows_zero_weight(df: pl.DataFrame) -> pl.DataFrame:
+    """`df` with each group's first row at weight 0: the first update of
+    every model is the 0/0 a zero-weight row makes of an empty state."""
+    first = pl.int_range(pl.len()) < FIRST_ROWS
+    return df.with_columns(w=pl.when(first).then(0.0).otherwise(pl.col("w")))
+
+
+#: The columns `first_rows_null` empties: every feature, target and label.
+NULLED = ["x0", "x1", "x2", "x1b", "y", "z", "hit", "lab"]
+
+
+def first_rows_null(df: pl.DataFrame) -> pl.DataFrame:
+    """`df` with every feature, target and label null on each group's first
+    row: the first row a model is fed is one it skips."""
+    first = pl.int_range(pl.len()) < FIRST_ROWS
+    return df.with_columns(pl.when(~first).then(pl.col(c)).alias(c) for c in NULLED)
+
+
+#: The streams beside `stream()` every spec runs on, each spec's output
+#: under the prefix, with which specs it applies to: the zero weights to
+#: the specs that read `w`.
+VARIANTS = [
+    ("w0_", first_rows_zero_weight, lambda kw: kw.get("weight") == "w"),
+    ("null0_", first_rows_null, lambda kw: True),
+]
+
+
 #: Task 144's renames, new name -> old, so the probe can run under a released
 #: wheel that predates them (``scripts/compare_release.py``,
 #: ``tests/test_released_state.py``): the workload is written in the current
@@ -651,31 +833,234 @@ def build(builder: str, name: str, kw: dict) -> dict:
     return getattr(po.spec, builder)(name, **_speak(builder, kw))
 
 
+#: The paths `activations` counts, each a number of rows, runs, values,
+#: groups or specs that took it in the run: 0 is a path the workload no
+#: longer reaches, which `scripts/compare_release.py` fails on.
+PATHS = [
+    "bocpd drops runs below prune_below",
+    "bocpd folds the runs at max_run",
+    "kmeans carries a compensated mean's low part",
+    "micro carries a compensated mean's low part",
+    "a numeric clock crosses a session",
+    "a temporal clock crosses a session",
+    "a temporal clock at a decade's age",
+    "a reset after a step back",
+    "zero-weight first rows",
+    "null first rows",
+    "a state saved mid-stream, loaded and continued",
+]
+
+
+def _states(bank) -> list[dict]:
+    """The state of each group of the bank's last spec, as `write_json`
+    gives it."""
+    doc = json.loads(bank.write_json())
+    return [group for _, group in doc["states"][-1]]
+
+
+def _runs(group: dict) -> list[float]:
+    """The lengths of the runs one group's `bocpd` holds."""
+    (model,) = [m["model"]["Bocpd"] for m in group["models"]]
+    return [r["len"] for r in model["runs"]]
+
+
+def _low_parts(node: object) -> int:
+    """The non-zero values under every key ending in `_lo`: what a
+    compensated mean carries beyond its double."""
+    if isinstance(node, dict):
+        return sum(
+            _nonzero(v) if str(k).endswith("_lo") else _low_parts(v) for k, v in node.items()
+        )
+    if isinstance(node, list):
+        return sum(_low_parts(v) for v in node)
+    return 0
+
+
+def _nonzero(node: object) -> int:
+    if isinstance(node, list):
+        return sum(_nonzero(v) for v in node)
+    return int(isinstance(node, (int, float)) and node != 0)
+
+
+def _summary(bank, name: str) -> pl.DataFrame:
+    return bank.summary().filter(pl.col("spec") == name)
+
+
+def _after_first_rows(df: pl.DataFrame, kw: dict) -> list[int]:
+    """The row of each group, as `kw` groups `df`, that follows the group's
+    rows among the first `FIRST_ROWS`: rows 3, 4 and 5 grouped by `g`, row 3
+    for one group."""
+    group = kw.get("group")
+    keys = df[group].to_list() if group else [None] * df.height
+    first, seen, rows = set(keys[:FIRST_ROWS]), set(), []
+    for i in range(FIRST_ROWS, df.height):
+        if keys[i] in first and keys[i] not in seen:
+            seen.add(keys[i])
+            rows.append(i)
+    return rows
+
+
+def _first_rows_learned_nothing(df: pl.DataFrame, kw: dict, out: pl.DataFrame, name: str) -> bool:
+    """Whether `name` learned nothing from the first rows, its `weight_sum`
+    exactly 0 on each group's next row, and ends with a `weight_sum` finite
+    and positive: no 0/0 of the first rows reached the state, where it
+    would never wash out."""
+    if "weight_sum" not in out[name].struct.fields:
+        return False
+    ws = out[name].struct.field("weight_sum")
+    last = ws.drop_nulls()
+    ends = last.len() > 0 and 0.0 < last[-1] < INF
+    return ends and all(ws[i] == 0.0 for i in _after_first_rows(df, kw))
+
+
+def activations(
+    counts: dict[str, int],
+    prefix: str,
+    name: str,
+    builder: str,
+    kw: dict,
+    bank,
+    out: pl.DataFrame,
+    df: pl.DataFrame,
+) -> None:
+    """Add what one run of `name` on `df`, the stream `prefix` names,
+    reached to `counts`: the proof each path of `PATHS` ran, counted in the
+    run's outputs, its summary and its state."""
+    if prefix in ("w0_", "null0_"):
+        # The first rows weighed nothing, or were skipped, every feature
+        # null, so each group's next row is scored on a weight of exactly
+        # 0. A spec with no feature (`holt`, `audit`, `seqtest`) counts a
+        # row of null targets as one to predict, and is not counted.
+        path = "zero-weight first rows" if prefix == "w0_" else "null first rows"
+        counts[path] += _first_rows_learned_nothing(df, kw, out, name)
+        return
+    if prefix:
+        return
+    if builder == "bocpd":
+        for group in _states(bank):
+            lengths = _runs(group)
+            # Without a prune the lengths are 0 to the longest, every one.
+            counts["bocpd drops runs below prune_below"] += int(max(lengths)) + 1 - len(lengths)
+        if "max_run" in kw:
+            # `run_mode` reads the cap only where the capped run, which the
+            # fold made, carries the most mass.
+            mode = out[name].struct.field("run_mode")
+            counts["bocpd folds the runs at max_run"] += int((mode == kw["max_run"] - 1).sum())
+    if builder in ("kmeans", "micro"):
+        path = f"{builder} carries a compensated mean's low part"
+        counts[path] += sum(_low_parts(group["models"]) for group in _states(bank))
+    if "session" in kw and "clock" in kw:  # `rcov` closes its groups by session
+        temporal = kw["clock"] in ("ts", "ts_decade")
+        path = f"a {'temporal' if temporal else 'numeric'} clock crosses a session"
+        counts[path] += int(_summary(bank, name)["session_changes"].sum())
+    if kw.get("clock") == "ts_decade":
+        counts["a temporal clock at a decade's age"] += sum(
+            group["persisted"]["clock"]["exact"]["elapsed_ns"] >= DECADE_NS
+            for group in _states(bank)
+        )
+    if "restart_after_step_back" in kw:
+        counts["a reset after a step back"] += int(_summary(bank, name)["resets"].sum())
+
+
+def _fields(
+    columns: dict[str, pl.Series],
+    label: str,
+    name: str,
+    out: pl.DataFrame,
+    closed: pl.DataFrame,
+    height: int,
+) -> None:
+    for field in out[name].struct.fields:
+        columns[f"{label}.{field}"] = out[name].struct.field(field)
+    for col in closed.columns if closed.height else []:
+        columns[f"{label}.closed.{col}"] = closed[col].extend_constant(None, height - closed.height)
+
+
+def _resume(specs: list[dict], name: str, df: pl.DataFrame, folder: str):
+    """`specs` fitted on `df`'s rows before `RESUME_AT`, saved, loaded, and
+    fitted on the rest: the outputs and closed groups of both halves, and
+    the rows the loaded bank says it was fed."""
+    bank = po.ModelBank(specs)
+    first = bank.fit_predict(df.head(RESUME_AT)).select(name)
+    closed = [bank.closed_groups()]
+    path = os.path.join(folder, f"{name}.state")
+    bank.save(path)
+    loaded = po.ModelBank.load(path, specs=specs)
+    fed = loaded.rows_fed
+    second = loaded.fit_predict(df.slice(RESUME_AT)).select(name)
+    closed.append(loaded.closed_groups())
+    closed = [c for c in closed if c.height]
+    both = pl.concat(closed, how="vertical_relaxed") if closed else pl.DataFrame()
+    return pl.concat([first, second]), both, fed
+
+
 def main(out_path: str, manifest_path: str) -> None:
+    """Every spec of `WORKLOAD` and `HARD_PATHS` on `stream()`, on each of
+    `VARIANTS`, and resumed from a state saved at `RESUME_AT`: every output
+    field to `out_path`, what ran, what each spec's kind is and what each
+    path of `PATHS` counted to the manifest."""
     warnings.simplefilter("ignore")
     df = stream()
     columns: dict[str, pl.Series] = {}
     ran: list[str] = []
     refused: dict[str, str] = {}
+    kinds: dict[str, str] = {}
     built: dict[str, dict] = {}
-    for name, builder, kw, reads in WORKLOAD:
+    counts = dict.fromkeys(PATHS, 0)
+    unmeasured: dict[str, str] = {}
+    specs = WORKLOAD + HARD_PATHS
+
+    def run(label: str, name: str, builder: str, kw: dict, frame: pl.DataFrame, go) -> None:
+        kinds[label] = builder
         try:
+            bank, out, closed = go()
+        except Exception as e:  # a spec, or a stream, this build does not take
+            refused[label] = f"{type(e).__name__}: {e}"[:300]
+            return
+        ran.append(label)
+        _fields(columns, label, name, out, closed, df.height)
+        try:
+            activations(counts, label[: -len(name)], name, builder, kw, bank, out, frame)
+        except Exception as e:  # an API or a state layout this build lacks
+            unmeasured[label] = f"{type(e).__name__}: {e}"[:300]
+
+    def fitted(stream_: pl.DataFrame, name: str, builder: str, kw: dict, reads: list[str]):
+        def go():
             built[name] = build(builder, name, kw)
             bank = po.ModelBank([built[r] for r in reads] + [built[name]])
-            out = bank.fit_predict(df)
-            closed = bank.closed_groups()
-        except Exception as e:  # a spec this build does not have
-            refused[name] = f"{type(e).__name__}: {e}"[:300]
-            continue
-        ran.append(name)
-        for field in out[name].struct.fields:
-            columns[f"{name}.{field}"] = out[name].struct.field(field)
-        for col in closed.columns if closed.height else []:
-            columns[f"{name}.closed.{col}"] = closed[col].extend_constant(
-                None, df.height - closed.height
-            )
+            out = bank.fit_predict(stream_)
+            return bank, out, bank.closed_groups()
+
+        return go
+
+    for name, builder, kw, reads in specs:
+        run(name, name, builder, kw, df, fitted(df, name, builder, kw, reads))
+    for prefix, variant, applies in VARIANTS:
+        frame = variant(df)
+        for name, builder, kw, reads in specs:
+            if applies(kw):
+                go = fitted(frame, name, builder, kw, reads)
+                run(prefix + name, name, builder, kw, frame, go)
+    with tempfile.TemporaryDirectory() as folder:
+        for name, builder, kw, reads in specs:
+
+            def resumed(name=name, builder=builder, kw=kw, reads=reads):
+                bank_specs = [built[r] for r in reads] + [build(builder, name, kw)]
+                out, closed, fed = _resume(bank_specs, name, df, folder)
+                counts["a state saved mid-stream, loaded and continued"] += fed == RESUME_AT
+                return None, out, closed
+
+            run(f"resume_{name}", name, builder, kw, df, resumed)
     pl.DataFrame(columns).write_parquet(out_path)
-    manifest = {"version": po.__version__, "file": po.__file__, "ran": ran, "refused": refused}
+    manifest = {
+        "version": po.__version__,
+        "file": po.__file__,
+        "ran": ran,
+        "refused": refused,
+        "kinds": kinds,
+        "activations": counts,
+        "unmeasured": unmeasured,
+    }
     with open(manifest_path, "w", encoding="utf-8") as fh:
         json.dump(manifest, fh, indent=1)
 

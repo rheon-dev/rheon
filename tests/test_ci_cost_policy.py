@@ -45,6 +45,9 @@ def load(path):
 
 ALL = {p.name: load(p) for p in WORKFLOWS}
 CI = ALL["ci.yml"]
+#: The jobs of ci.yml whose OS matrix follows the cost policy: the test
+#: matrix, and the bit-for-bit comparison with the newest release.
+MATRIX_JOBS = ["test", "bits"]
 
 
 class TestEveryJobIsBounded:
@@ -156,25 +159,28 @@ class TestTheMatrixDefaultsToCheap:
             if run.startswith("uv run"):
                 assert s.get("env", {}).get("UV_NO_SYNC") == "1", f"{run!r} may re-sync"
 
-    def test_the_expensive_runners_are_opt_in_not_opt_out(self):
+    @pytest.mark.parametrize("job", MATRIX_JOBS)
+    def test_the_expensive_runners_are_opt_in_not_opt_out(self, job):
         """The regression that cost 830 minutes: the *fallback* branch of the
         expression must be the cheap one, since fallback is what unforeseen
         event types get."""
-        expr = " ".join(str(CI["jobs"]["test"]["strategy"]["matrix"]["os"]).split())
+        expr = " ".join(str(CI["jobs"][job]["strategy"]["matrix"]["os"]).split())
         fallback = expr.rsplit("||", 1)[-1]
         assert "macos" not in fallback, f"macOS is the fallback branch: {fallback}"
         assert "windows" not in fallback, f"Windows is the fallback branch: {fallback}"
         assert "ubuntu" in fallback
 
-    def test_visibility_test_fails_safe_on_a_missing_field(self):
+    @pytest.mark.parametrize("job", MATRIX_JOBS)
+    def test_visibility_test_fails_safe_on_a_missing_field(self, job):
         """`private == false` is deliberate: an event payload with no
         repository yields null, and null == false is false, so the cheap
         branch is taken. `private` alone, or `!private`, would invert that."""
-        expr = " ".join(str(CI["jobs"]["test"]["strategy"]["matrix"]["os"]).split())
+        expr = " ".join(str(CI["jobs"][job]["strategy"]["matrix"]["os"]).split())
         assert "github.event.repository.private == false" in expr
 
-    def test_macos_is_reachable_only_by_dispatch_or_going_public(self):
-        expr = " ".join(str(CI["jobs"]["test"]["strategy"]["matrix"]["os"]).split())
+    @pytest.mark.parametrize("job", MATRIX_JOBS)
+    def test_macos_is_reachable_only_by_dispatch_or_going_public(self, job):
+        expr = " ".join(str(CI["jobs"][job]["strategy"]["matrix"]["os"]).split())
         for clause in expr.split("||"):
             if "macos" in clause:
                 assert "private == false" in clause or "workflow_dispatch" in clause, (
@@ -223,6 +229,7 @@ class TestWindowsIsTwoImagesAndEveryJobNamesItsMachine:
             assert uses[1] == self.REPORT, (name, job, uses[:2])
             assert "if" not in steps[1], (name, job)
         assert sorted(found) == [
+            "ci.yml:bits",
             "ci.yml:test",
             "cli-memory.yml:measure",
             "cpu-paths.yml:oracles",
@@ -265,22 +272,24 @@ class TestStepOrderingThatHasAlreadyBrokenCI:
                 return i
         return None
 
-    def test_disk_is_freed_before_the_cache_is_restored(self):
+    @pytest.mark.parametrize("job", MATRIX_JOBS)
+    def test_disk_is_freed_before_the_cache_is_restored(self, job):
         """The Ubuntu image starts with 9.3 GB free and the restored target/
         does not fit: the job died with "No space left on device" inside
         rust-cache, too hard to even write its own log."""
-        free = self._index("test", lambda t: "free disk" in t)
-        cache = self._index("test", lambda t: "rust-cache" in t)
+        free = self._index(job, lambda t: "free disk" in t)
+        cache = self._index(job, lambda t: "rust-cache" in t)
         assert free is not None and cache is not None
         assert free < cache, "disk must be freed before the cache is restored"
 
-    def test_rustflags_are_set_before_anything_compiles(self):
+    @pytest.mark.parametrize("job", MATRIX_JOBS)
+    def test_rustflags_are_set_before_anything_compiles(self, job):
         """Rustflags are part of cargo's fingerprint. Written after `uv sync`
         they invalidated its build and made `maturin develop --release`
         recompile the workspace: 18 minutes, every Linux run."""
-        free = self._index("test", lambda t: "free disk" in t)
-        sync = self._index("test", lambda t: False)
-        for i, step in enumerate(CI["jobs"]["test"]["steps"]):
+        free = self._index(job, lambda t: "free disk" in t)
+        sync = self._index(job, lambda t: False)
+        for i, step in enumerate(CI["jobs"][job]["steps"]):
             if "uv sync" in str(step.get("run", "")):
                 sync = i
                 break
@@ -292,7 +301,7 @@ class TestStepOrderingThatHasAlreadyBrokenCI:
         job never passed, so ~70 minutes of compilation was discarded on every
         run and the next one started cold -- a cycle that could not break
         itself."""
-        for job in ("lint", "test"):
+        for job in ("lint", *MATRIX_JOBS):
             for step in CI["jobs"][job]["steps"]:
                 if "rust-cache" in str(step.get("uses", "")):
                     assert step.get("with", {}).get("cache-on-failure") is True, job
@@ -362,17 +371,38 @@ class TestPythonVersions:
         assert job.get("env", {}).get("UV_PYTHON") == "${{ matrix.python }}"
         assert "matrix.python" in job["name"]
 
-    def test_the_release_comparison_reports_once_and_never_gates(self):
-        """scripts/compare_release.py on one leg: it installs the newest
-        release from PyPI, and a difference between releases may be intended."""
+    def test_the_release_comparison_gates_every_os_in_a_job_of_its_own(self):
+        """scripts/compare_release.py compares every output with the newest
+        release's, bit for bit, and fails on a move the CHANGELOG does not
+        declare: on Linux, macOS and Windows while public, in the `bits`
+        job, on a release build of the extension, at the floor Python, and
+        gating -- no `--report`, no `continue-on-error`. It ran on one leg
+        of the test job, report only, before 2026-11-20."""
         steps = [
-            s for s in CI["jobs"]["test"]["steps"] if "compare_release.py" in str(s.get("run", ""))
+            (job, s)
+            for job, spec in CI["jobs"].items()
+            for s in spec.get("steps", [])
+            if "compare_release.py" in str(s.get("run", ""))
         ]
-        assert len(steps) == 1, steps
-        step = steps[0]
-        assert "--report" in step["run"] and step.get("continue-on-error") is True
+        assert [job for job, _ in steps] == ["bits"], steps
+        ((_, step),) = steps
+        assert "--report" not in step["run"] and "continue-on-error" not in step
+        assert "if" not in step
+        job = CI["jobs"]["bits"]
+        public = " ".join(str(job["strategy"]["matrix"]["os"]).split()).split("||")[0]
+        for os_ in ("ubuntu-latest", "macos-latest", "windows-latest"):
+            assert os_ in public, public
         floor, _ = self._declared()
-        assert f"matrix.python == '{floor}'" in step["if"] and "runner.os == 'Linux'" in step["if"]
+        assert job["env"]["UV_PYTHON"] == floor
+        runs = [str(s.get("run", "")) for s in job["steps"]]
+        build = [r for r in runs if "maturin develop" in r]
+        assert build == [
+            "uv run --no-sync maturin develop --release -m crates/rheon-py/Cargo.toml"
+        ], runs
+        assert runs.index(build[0]) < runs.index(step["run"])
+        # The sync leaves the project out, so the extension compiles once.
+        assert "uv sync --locked --no-install-project" in runs, runs
+        assert "pull_request" in CI["on"] and "push" in CI["on"]
 
     def test_coverage_rides_on_one_legs_own_run(self):
         """`coverage (python)` ran the whole suite a second time on every OS,
@@ -916,6 +946,7 @@ class TestTheLinuxPrepIsOneAction:
         # shards on 2026-10-25, the VM checks' wheel builds on 2026-11-18.
         assert sorted(callers) == [
             "budgets.yml:instructions",
+            "ci.yml:bits",
             "ci.yml:test",
             "cli-memory.yml:measure",
             "leakcheck.yml:native",

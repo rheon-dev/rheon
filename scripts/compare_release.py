@@ -4,12 +4,25 @@
     uv run python scripts/compare_release.py --against 0.9.1
     uv run python scripts/compare_release.py --report         # print; exit 0 whatever differs
 
-Step 1 of a release (docs/contributing/cut-a-release.md). A test
-with a tolerance lets a small numeric change through, and a change to the
-numbers a model returns makes a release a minor under the pre-1.0 rule, so
-before a release every output field is compared with the last release's,
-bit for bit. A field that differs is either a change the CHANGELOG
-declares, or a regression, whose cause then gets a test.
+CI runs it on every push and pull request, on Linux, macOS and Windows
+(`.github/workflows/ci.yml`, `bits`), and step 1 of a release runs it
+again (docs/contributing/cut-a-release.md). A test with a tolerance lets
+a small numeric change through, so every output field is compared with
+the last release's, bit for bit, on the same machine, where both builds
+call the same math library. A field that differs is either a change the
+CHANGELOG declares, or a regression, whose cause then gets a test.
+
+**A declaration** is a clause in a CHANGELOG entry above the release
+compared against (`[Unreleased]`, and while a release is cut, its own
+section): ``Moves:`` and the fields it moves, each backticked as
+``model.field``, the model by its builder's name, with ``*`` and ``?`` as
+wildcards (`ewridge.pred_*`, `*.weight_sum`, `rcov.closed.*`). The rest of
+the entry is the reason, and an entry with none fails. A field that moved,
+went, or whose spec this build refuses, fails the run unless a declaration
+covers it; a field or a spec that only this build has is an addition,
+listed and passed. The probe also counts each hard path its workload is
+built to reach (`release_probe.PATHS`), and a path counted 0 fails the
+run: a comparison that no longer reaches a path does not compare it.
 
 The released version is installed from PyPI into a cached venv under
 `.cache/release-compare/`, beside the Polars this environment has, and
@@ -19,20 +32,23 @@ the project `polars-online` and imports as `polars_online`; from 2.0 it is
 the venv has. Each run reports which
 package it imported, so the comparison cannot quietly compare a
 build with itself. A spec the released version refuses is listed as not
-comparable, not as a difference.
+comparable, an addition, not as a difference.
 """
 
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 import polars as pl
@@ -175,24 +191,128 @@ def first_difference(a: pl.Series, b: pl.Series) -> str:
     return "bits differ (e.g. -0.0 against 0.0)"
 
 
+#: A declaration: ``Moves:`` and one or more backticked ``model.field``
+#: patterns, inside a CHANGELOG entry whose own text is the reason.
+MOVES = re.compile(r"Moves: (`[^`]+`(?:(?:,? and |, )`[^`]+`)*)")
+#: A CHANGELOG section's heading, with its version or `Unreleased`.
+HEADING = re.compile(r"^## \[([^\]]+)\]")
+
+
+class Declaration(NamedTuple):
+    """One ``Moves:`` clause: the patterns it names, as ``model.field``
+    with ``*`` and ``?`` as wildcards, the entry's text without the clause,
+    and the CHANGELOG line the entry starts on. A named tuple, not a
+    dataclass: the tests load this script by its path, outside
+    `sys.modules`, where a dataclass cannot be made."""
+
+    patterns: tuple[str, ...]
+    reason: str
+    line: int
+
+    def covers(self, kind: str, field: str) -> bool:
+        return any(fnmatch.fnmatchcase(f"{kind}.{field}", p) for p in self.patterns)
+
+
+def _key(version: str) -> tuple[int, ...] | None:
+    try:
+        return tuple(int(p) for p in version.split("."))
+    except ValueError:
+        return None
+
+
+def unreleased(changelog: str, since: str) -> list[tuple[int, str]]:
+    """The lines, with their numbers from 1, of every section above the
+    one for the release `since`: `[Unreleased]`, and a version not yet on
+    PyPI while a release is cut. The sections are newest first, so it stops
+    at the first heading of `since` or any version before it."""
+    lines: list[tuple[int, str]] = []
+    reading = False
+    released = _key(since)
+    for number, line in enumerate(changelog.splitlines(), 1):
+        heading = HEADING.match(line)
+        if heading:
+            version = _key(heading.group(1))
+            if version is not None and released is not None and version <= released:
+                break
+            reading = True
+            continue
+        if reading:
+            lines.append((number, line))
+    return lines
+
+
+def _entries(lines: list[tuple[int, str]]) -> list[tuple[int, str]]:
+    """Each list item or paragraph of `lines`, joined to one line, with the
+    number of the line it starts on. Fenced code is left out."""
+    entries: list[tuple[int, list[str]]] = []
+    fenced = False
+    for number, line in lines:
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
+        if not line.strip() or line.startswith(("#", "- ", "* ")):
+            entries.append((number, []))
+        if line.strip() and not line.startswith("#"):
+            if not entries:
+                entries.append((number, []))
+            entries[-1][1].append(line.strip())
+    return [(n, " ".join(text)) for n, text in entries if text]
+
+
+def declarations(changelog: str, since: str) -> tuple[list[Declaration], list[str]]:
+    """The ``Moves:`` declarations above the release `since`, and what is
+    wrong with any of them: a pattern that is not ``model.field``, or an
+    entry that gives no reason beside the clause."""
+    found: list[Declaration] = []
+    errors: list[str] = []
+    for number, text in _entries(unreleased(changelog, since)):
+        for clause in MOVES.finditer(text):
+            patterns = tuple(re.findall(r"`([^`]+)`", clause.group(1)))
+            for pattern in patterns:
+                if "." not in pattern or " " in pattern:
+                    errors.append(
+                        f"CHANGELOG.md:{number}: `{pattern}` is not `model.field` "
+                        "(a model's builder, a dot, and an output field; * and ? as wildcards)"
+                    )
+            reason = MOVES.sub("", text).lstrip("-* ").strip(" .")
+            words = re.findall(r"[A-Za-z]{2,}", reason)
+            if len(words) < 3:
+                errors.append(
+                    f"CHANGELOG.md:{number}: the entry declaring {', '.join(patterns)} "
+                    "gives no reason: say what moved the numbers, and by how much"
+                )
+            found.append(Declaration(patterns, reason, number))
+    return found, errors
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--against", help="the released version; default the newest on PyPI")
     ap.add_argument("--report", action="store_true", help="exit 0 whatever differs")
+    ap.add_argument(
+        "--changelog",
+        type=Path,
+        default=REPO / "CHANGELOG.md",
+        help="where the declarations are read (default: the checkout's CHANGELOG.md)",
+    )
     args = ap.parse_args()
     version = args.against or newest_release()
     CACHE.mkdir(parents=True, exist_ok=True)
 
     old, old_meta = probe(released_python(version), f"released-{version}")
     new, new_meta = probe(Path(sys.executable), "this-build")
+    declared, errors = declarations(args.changelog.read_text(encoding="utf-8"), version)
     lines: list[str] = []
-    code = compare(version, old, old_meta, new, new_meta, lines)
+    code = compare(version, old, old_meta, new, new_meta, lines, declared, errors)
     text = "\n".join(lines)
     print(text)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as fh:
-            title = f"## Against {release_project(version)} {version}, bit for bit"
+            verdict = {0: "passed", 1: "FAILED", 2: "compared nothing"}[code]
+            title = f"## Against {release_project(version)} {version}, bit for bit: {verdict}"
             fh.write(f"{title}\n\n```text\n{text}\n```\n")
     return 0 if args.report and code == 1 else code
 
@@ -204,9 +324,18 @@ def compare(
     new: pl.DataFrame,
     new_meta: dict,
     out: list[str],
+    declared: list[Declaration] | None = None,
+    errors: list[str] | None = None,
 ) -> int:
-    """Write the comparison into `out`: 0 identical, 1 different, 2 nothing compared."""
+    """Write the comparison into `out`: 0 identical, or every field that
+    moved declared; 1 a field moved or went that no declaration covers, a
+    declaration is malformed or names no model the workload runs, or a path
+    of the workload went unreached; 2 nothing compared. A field or a spec
+    this build has and the release does not is an addition, listed and
+    passed."""
     print = out.append  # noqa: A001 -- every line goes to the report
+    declared = declared or []
+    errors = list(errors or [])
     old_name = release_project(old_meta["version"])
     print(f"released: {old_name} {old_meta['version']} from {old_meta['file']}")
     print(f"this:     rheon {new_meta['version']} from {new_meta['file']}")
@@ -214,43 +343,102 @@ def compare(
         print("both runs imported the same package; nothing was compared")
         return 2
 
+    kinds = {**old_meta.get("kinds", {}), **new_meta.get("kinds", {})}
+    known = set(kinds.values())
+    for d in declared:
+        for pattern in d.patterns:
+            kind = pattern.split(".", 1)[0]
+            if "." in pattern and not any(fnmatch.fnmatchcase(k, kind) for k in known):
+                errors.append(
+                    f"CHANGELOG.md:{d.line}: `{pattern}` names no model the workload runs "
+                    f"(its models: {', '.join(sorted(known))})"
+                )
+
     specs = [s for s in new_meta["ran"] if s in old_meta["ran"]]
     not_comparable = sorted(set(new_meta["ran"]) - set(old_meta["ran"]))
-    differs: dict[str, list[str]] = {}
-    # A spec the release ran and this build does not is a difference, not a
-    # silence: refused here, it would drop out of `specs` above and the
-    # verdict would say "identical" (task 160, SC1).
+    # Each a (spec, field, what happened) that a declaration must cover.
+    moved: list[tuple[str, str, str]] = []
+    added: list[str] = []
+    # A spec the release ran and this build refuses is every field of it
+    # gone, not a silence: refused here, it would drop out of `specs` above
+    # and the verdict would say "identical" (task 160, SC1).
     for spec in [s for s in old_meta["ran"] if s not in new_meta["ran"]]:
         why = new_meta.get("refused", {}).get(spec, "not run by this build")
-        differs.setdefault(spec, []).append(f"refused by this build: {why}")
+        fields = [c.split(".", 1)[1] for c in old.columns if c.split(".", 1)[0] == spec]
+        for field in fields or ["*"]:
+            moved.append((spec, field, f"refused by this build: {why}"))
     compared = 0
     for col in new.columns:
-        spec = col.split(".", 1)[0]
+        spec, field = col.split(".", 1)
         if spec not in specs:
             continue
         if col not in old.columns:
-            differs.setdefault(spec, []).append(f"{col}: new in this build")
+            added.append(col)
             continue
         compared += 1
         if not same(old[col], new[col]):
-            differs.setdefault(spec, []).append(f"{col}: {first_difference(old[col], new[col])}")
-    gone = [c for c in old.columns if c.split(".", 1)[0] in specs and c not in new.columns]
-    for col in gone:
-        differs.setdefault(col.split(".", 1)[0], []).append(f"{col}: gone from this build")
+            moved.append((spec, field, first_difference(old[col], new[col])))
+    for col in old.columns:
+        spec, field = col.split(".", 1)
+        if spec in specs and col not in new.columns:
+            moved.append((spec, field, "gone from this build"))
 
     print(f"\n{compared} fields of {len(specs)} specs compared bit for bit over {new.height} rows")
-    if not_comparable:
-        print(f"not comparable (refused by {version}): {', '.join(not_comparable)}")
+    if added or not_comparable:
+        print(f"\nadded, not compared ({len(added)} fields, {len(not_comparable)} specs):")
+        for col in added:
+            print(f"  {col}: new in this build")
         for spec in not_comparable:
-            print(f"  {spec}: {old_meta['refused'].get(spec, '?')}")
-    if not differs:
-        print(f"identical to {version}")
-        return 0
-    print(f"\nDIFFERENT from {version}, in {sum(map(len, differs.values()))} fields:")
-    for spec, found in differs.items():
-        print(f"  {spec}")
+            print(f"  {spec}: refused by {version}: {old_meta['refused'].get(spec, '?')}")
+
+    reached = new_meta.get("activations")
+    if reached is not None:
+        was = old_meta.get("activations") or {}
+        print(f"\npaths the workload reached, counted (this build / {version}):")
+        for path, count in reached.items():
+            print(f"  {path}: {count} / {was.get(path, '-')}")
+            if not count:
+                errors.append(f"the workload no longer reaches {path}: counted {count}")
+        for spec, why in new_meta.get("unmeasured", {}).items():
+            errors.append(f"{spec}: its paths could not be counted: {why}")
+
+    covered: dict[tuple[str, str, str], Declaration] = {}
+    for item in moved:
+        spec, field, _ = item
+        for d in declared:
+            if d.covers(kinds.get(spec, spec), field):
+                covered[item] = d
+                break
+    undeclared = [m for m in moved if m not in covered]
+    if covered:
+        print(f"\nmoved, as the CHANGELOG declares ({len(covered)} fields):")
+        for (spec, field, what), d in covered.items():
+            print(f"  {spec}.{field} ({kinds.get(spec, spec)}): {what}")
+            print(f"    CHANGELOG.md:{d.line}: {d.reason[:160]}")
+    unused = [d for d in declared if d not in covered.values()]
+    for d in unused:
+        print(f"\ndeclared, nothing moved: {', '.join(d.patterns)} (CHANGELOG.md:{d.line})")
+    if errors:
+        print("\nFAILED:")
+        for e in errors:
+            print(f"  {e}")
+    if not undeclared:
+        if not errors:
+            print(f"\nidentical to {version}" if not covered else "\nevery move declared")
+        return 1 if errors else 0
+    print(f"\nDIFFERENT from {version}, not declared, in {len(undeclared)} fields:")
+    by_spec: dict[str, list[str]] = {}
+    for spec, field, what in undeclared:
+        by_spec.setdefault(spec, []).append(f"{spec}.{field}: {what}")
+    for spec, found in by_spec.items():
+        print(f"  {spec} ({kinds.get(spec, spec)})")
         for line in found:
             print(f"    {line}")
+    print(
+        "\nDeclare each in the CHANGELOG entry that moved it, ending the entry with "
+        "`Moves:` and the fields as `model.field` (CHANGELOG.md's header), "
+        "or find the cause and pin it with a test."
+    )
     return 1
 
 
