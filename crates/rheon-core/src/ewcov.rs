@@ -438,6 +438,12 @@ pub struct EwCov {
 }
 
 impl EwCov {
+    /// Study C4's variant D ([`crate::study_c4`]): weight with no data,
+    /// which leaves the means and co-moments as they are.
+    #[cfg(feature = "study-c4")]
+    pub fn study_lift(&mut self, add: f64) {
+        self.w_sum += add;
+    }
     pub fn new(k: usize) -> Self {
         Self {
             k,

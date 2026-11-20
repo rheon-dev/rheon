@@ -64,6 +64,12 @@ pub struct EwCovDiag {
 }
 
 impl EwCovDiag {
+    /// Study C4's variant D ([`crate::study_c4`]): weight with no data,
+    /// which leaves the means and co-moments as they are.
+    #[cfg(feature = "study-c4")]
+    pub fn study_lift(&mut self, add: f64) {
+        self.w_sum += add;
+    }
     /// An empty accumulator over `k` slots with a ridge of `prior`, finite
     /// and `> 0`, as [`EwCov::with_precision_prior`].
     pub fn with_precision_prior(k: usize, prior: f64) -> Result<Self, String> {

@@ -384,6 +384,10 @@ pub struct EwClass {
     /// The step's buffers between rows; see [`ScoreWork`].
     #[serde(skip)]
     work: ScoreWork,
+    /// Study C4's prototype ([`crate::study_c4`]); never written.
+    #[cfg(feature = "study-c4")]
+    #[serde(skip)]
+    study: crate::study_c4::Study,
 }
 
 /// The window's clock and the snapshots it subtracts.
@@ -542,6 +546,8 @@ impl EwClass {
             win,
             factors: Factors::default(),
             work: ScoreWork::default(),
+            #[cfg(feature = "study-c4")]
+            study: Default::default(),
         })
     }
 
@@ -787,6 +793,8 @@ impl EwClass {
             Covariance::Full => {
                 delta.clear();
                 delta.resize(k, 0.0);
+                #[cfg(feature = "study-c4")]
+                let mut study_m = Vec::new();
                 for c in 0..nc {
                     if weights[c] <= 0.0 {
                         continue;
@@ -794,6 +802,28 @@ impl EwClass {
                     let cov = &classes[c];
                     for (i, (d, &xi)) in delta.iter_mut().zip(x).enumerate() {
                         *d = cov.deviation(i, xi);
+                    }
+                    // Study C4: B and C factorize their own matrix each row.
+                    #[cfg(feature = "study-c4")]
+                    if self.study.active() && view.is_none() {
+                        self.study.matrix(
+                            c,
+                            cov.n_eff(),
+                            cov.comoments().packed(),
+                            k,
+                            &mut study_m,
+                        );
+                        match SpdFactor::of(&study_m, k) {
+                            Some(f) => {
+                                let q = f.quad_form(delta, quad);
+                                ell[c] = (weights[c] / total).ln() - 0.5 * f.log_det() - 0.5 * q;
+                                continue;
+                            }
+                            None => {
+                                *solve_failed = true;
+                                return nan(out);
+                            }
+                        }
                     }
                     let fresh;
                     let (packed, ridge) = (cov.comoments().packed(), self.class_ridge(cov));
@@ -889,10 +919,20 @@ impl EwClass {
                         (Some(f), true) => Some(f.diag_log_det(c, nc, cov, ridge, k)),
                         _ => None,
                     };
+                    #[cfg(feature = "study-c4")]
+                    let study = self.study.active() && view.is_none();
+                    #[cfg(feature = "study-c4")]
+                    let kept = if study { None } else { kept };
                     let mut log_det = 0.0;
                     let mut q = 0.0;
                     for (i, xi) in x.iter().enumerate() {
                         let v = cov.var(i) + ridge;
+                        #[cfg(feature = "study-c4")]
+                        let v = if study {
+                            self.study.diag(c, cov.n_eff(), i, cov.var(i))
+                        } else {
+                            v
+                        };
                         let d = cov.deviation(i, *xi);
                         if kept.is_none() {
                             log_det += v.ln();
@@ -932,6 +972,50 @@ impl EwClass {
             z += (l - top).exp();
         }
         out.extend(ell.iter().map(|&l| (l - top).exp() / z));
+    }
+}
+
+/// Study C4's prototype ([`crate::study_c4`]): set before the first row.
+#[cfg(feature = "study-c4")]
+impl EwClass {
+    pub fn set_study(&mut self, v: crate::study_c4::Variant) {
+        let (c, d) = (self.cfg.n_classes, self.cfg.n_features);
+        self.study = crate::study_c4::Study::new(v, c, d);
+    }
+
+    pub fn study(&self) -> &crate::study_c4::Study {
+        &self.study
+    }
+
+    /// The labelled class's squared deviations from its means before the
+    /// row, once it has weight; empty otherwise.
+    fn study_deviations(&mut self, x: &[f64], label: Option<usize>) -> Vec<f64> {
+        let mut e = std::mem::take(&mut self.study.e);
+        e.clear();
+        let Some(c) = label.filter(|_| self.study.set()) else {
+            return e;
+        };
+        match self.classes.get(c) {
+            Some(cov) if cov.n_eff() > 0.0 => {
+                e.extend(
+                    x.iter()
+                        .enumerate()
+                        .map(|(i, &v)| cov.deviation(i, v).powi(2)),
+                );
+            }
+            Some(_) => {}
+            None => {
+                let cov = &self.diag_classes[c];
+                if cov.n_eff() > 0.0 {
+                    e.extend(
+                        x.iter()
+                            .enumerate()
+                            .map(|(i, &v)| cov.deviation(i, v).powi(2)),
+                    );
+                }
+            }
+        }
+        e
     }
 }
 
@@ -1028,6 +1112,8 @@ impl OnlineModel for EwClass {
             // survives a row. This is the cost the `window` doc states.
             self.factors.invalidate_all();
         }
+        #[cfg(feature = "study-c4")]
+        let study_e = self.study_deviations(x, label);
         for (c, cov) in self.classes.iter_mut().enumerate() {
             if label == Some(c) {
                 cov.update(x, lam, weight);
@@ -1042,6 +1128,22 @@ impl OnlineModel for EwClass {
                 cov.update(x, lam, weight);
             } else {
                 cov.decay(lam);
+            }
+        }
+        #[cfg(feature = "study-c4")]
+        {
+            self.study.age(lam);
+            let w = if study_e.is_empty() { 0.0 } else { weight };
+            self.study.observe(lam, w, &study_e);
+            self.study.e = study_e;
+            // Variant D lifts only a class that has been seen.
+            if let Some(add) = self.study.lift(lam) {
+                for c in self.classes.iter_mut().filter(|c| c.n_eff() > 0.0) {
+                    c.study_lift(add);
+                }
+                for c in self.diag_classes.iter_mut().filter(|c| c.n_eff() > 0.0) {
+                    c.study_lift(add);
+                }
             }
         }
         self.n_eff = lam * self.n_eff + if learn { weight } else { 0.0 };

@@ -119,6 +119,8 @@ mod solve;
 mod specification;
 mod spread;
 mod stats;
+#[cfg(feature = "study-c4")]
+pub mod study_c4;
 mod tails;
 /// The thread pools of the tests that run one computation at several pool
 /// sizes, held within what a Windows runner can commit.

@@ -484,6 +484,10 @@ pub struct Hmm {
     /// (`restore`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     factor_states: Vec<EwFactor>,
+    /// Study C4's prototype ([`crate::study_c4`]); never written.
+    #[cfg(feature = "study-c4")]
+    #[serde(skip)]
+    study: crate::study_c4::Study,
 }
 
 impl Hmm {
@@ -562,6 +566,8 @@ impl Hmm {
             states,
             diag_states,
             factor_states: Vec::new(),
+            #[cfg(feature = "study-c4")]
+            study: Default::default(),
             cfg,
         };
         m.take_up_factors();
@@ -591,6 +597,11 @@ impl Hmm {
         // A test's stand-in for a build before the factor form.
         #[cfg(test)]
         if tests_factor::COMOMENTS_ONLY.with(std::cell::Cell::get) {
+            return;
+        }
+        // Study C4: B and C read their matrices from the co-moments.
+        #[cfg(feature = "study-c4")]
+        if self.study.set() {
             return;
         }
         let d = self.cfg.n_features;
@@ -633,6 +644,18 @@ impl Hmm {
             factors,
             ..
         } = self;
+        #[cfg(feature = "study-c4")]
+        if self.study.active() {
+            let mut m = Vec::new();
+            for (s, cov) in states.iter().enumerate() {
+                if factors.peek(s).is_none() {
+                    self.study
+                        .matrix(s, cov.n_eff(), cov.comoments().packed(), d, &mut m);
+                    factors.set(s, k, SpdFactor::of(&m, d));
+                }
+            }
+            return;
+        }
         for (s, cov) in states.iter().enumerate() {
             if factors.peek(s).is_none() {
                 // Factorized in the cache's working space, from the packed
@@ -820,6 +843,14 @@ impl Hmm {
 
     /// [`Self::state_matrix`], written over `m`.
     fn state_matrix_into(&self, s: usize, m: &mut Vec<f64>) {
+        #[cfg(feature = "study-c4")]
+        if self.study.active() {
+            let cov = &self.states[s];
+            let d = self.cfg.n_features;
+            self.study
+                .matrix(s, cov.n_eff(), cov.comoments().packed(), d, m);
+            return;
+        }
         Self::matrix_of(&self.cfg, &self.states[s], m);
     }
 
@@ -869,6 +900,12 @@ impl Hmm {
                     let (mut log_det, mut q) = (0.0, 0.0);
                     for (i, xi) in x.iter().enumerate() {
                         let v = cov.var(i) + r;
+                        #[cfg(feature = "study-c4")]
+                        let v = if self.study.active() {
+                            self.study.diag(s, cov.n_eff(), i, cov.var(i))
+                        } else {
+                            v
+                        };
                         let dv = cov.deviation(i, *xi);
                         log_det += v.ln();
                         q += dv * dv / v;
@@ -1108,6 +1145,8 @@ impl Hmm {
         }
         self.buffer.clear();
         self.seeded = true;
+        #[cfg(feature = "study-c4")]
+        self.study_seed();
         self.factors.clear();
         self.take_up_factors();
     }
@@ -1186,6 +1225,8 @@ impl Hmm {
             self.n_eff *= lam;
             if self.cfg.learn {
                 self.age_states(x, lam);
+                #[cfg(feature = "study-c4")]
+                self.study_age(lam);
                 self.factors.clear();
             }
             return;
@@ -1215,6 +1256,8 @@ impl Hmm {
             self.n_eff = lam * before;
             if self.cfg.learn {
                 self.age_states(x, lam);
+                #[cfg(feature = "study-c4")]
+                self.study_age(lam);
                 self.factors.clear();
             }
             return;
@@ -1257,6 +1300,8 @@ impl Hmm {
                     *a += if z > 0.0 { weight * j / z } else { 0.0 };
                 }
             }
+            #[cfg(feature = "study-c4")]
+            let study_e = self.study_deviations(x, &work.post);
             for (s, cov) in self.states.iter_mut().enumerate() {
                 cov.update(x, lam, weight * work.post[s]);
             }
@@ -1271,11 +1316,101 @@ impl Hmm {
                     self.solve_failures += 1;
                 }
             }
+            #[cfg(feature = "study-c4")]
+            {
+                self.study.age(lam);
+                self.study.observe(lam, weight, &study_e);
+                self.study.e = study_e;
+                if let Some(add) = self.study.lift(lam) {
+                    self.states.iter_mut().for_each(|c| c.study_lift(add));
+                    self.diag_states.iter_mut().for_each(|c| c.study_lift(add));
+                }
+            }
             self.factors.clear();
         }
         // The posterior is the next row's `p`, and the `p` it replaces the
         // next row's buffer.
         std::mem::swap(&mut self.p, &mut work.post);
+    }
+}
+
+/// Study C4's prototype ([`crate::study_c4`]): set before the first row.
+#[cfg(feature = "study-c4")]
+impl Hmm {
+    pub fn set_study(&mut self, v: crate::study_c4::Variant) {
+        self.study = crate::study_c4::Study::new(v, self.cfg.k, self.cfg.n_features);
+        self.factors.clear();
+    }
+
+    pub fn study(&self) -> &crate::study_c4::Study {
+        &self.study
+    }
+
+    /// The doubles the model's state holds for its states' covariances.
+    pub fn study_state_len(&self) -> usize {
+        let d = self.cfg.n_features;
+        let per = if !self.factor_states.is_empty() {
+            d * (d + 1) / 2 + 2 * d + 3
+        } else if !self.diag_states.is_empty() {
+            3 * d + 4
+        } else {
+            d * (d + 1) / 2 + 2 * d + 5
+        };
+        self.cfg.k * per + self.study.state_len()
+    }
+
+    fn study_age(&mut self, lam: f64) {
+        self.study.age(lam);
+        self.study.observe(lam, 0.0, &[]);
+        if let Some(add) = self.study.lift(lam) {
+            self.states.iter_mut().for_each(|c| c.study_lift(add));
+            self.diag_states.iter_mut().for_each(|c| c.study_lift(add));
+        }
+    }
+
+    /// `e_i = Σ_s p_s·(x_i − μ_si)²`, from the means before the row.
+    fn study_deviations(&mut self, x: &[f64], post: &[f64]) -> Vec<f64> {
+        let mut e = std::mem::take(&mut self.study.e);
+        e.clear();
+        if !self.study.set() {
+            return e;
+        }
+        e.resize(x.len(), 0.0);
+        for (s, &p) in post.iter().enumerate() {
+            for (i, (ei, &xi)) in e.iter_mut().zip(x).enumerate() {
+                let dv = match (self.states.get(s), self.factor_states.get(s)) {
+                    (Some(c), _) => c.deviation(i, xi),
+                    (None, Some(f)) => f.deviation(i, xi),
+                    (None, None) => self.diag_states[s].deviation(i, xi),
+                };
+                *ei += p * dv * dv;
+            }
+        }
+        e
+    }
+
+    /// `ŝ` from the seeded states' variances, pooled by their weights.
+    fn study_seed(&mut self) {
+        let d = self.cfg.n_features;
+        let mut pooled = vec![0.0; d];
+        let mut total = 0.0;
+        for s in 0..self.cfg.k {
+            let (w, v): (f64, Vec<f64>) = match self.states.get(s) {
+                Some(c) => (c.n_eff(), (0..d).map(|i| c.var(i)).collect()),
+                None => {
+                    let c = &self.diag_states[s];
+                    (c.n_eff(), (0..d).map(|i| c.var(i)).collect())
+                }
+            };
+            total += w;
+            for (p, vi) in pooled.iter_mut().zip(v) {
+                *p += w * vi;
+            }
+        }
+        if total > 0.0 {
+            pooled.iter_mut().for_each(|p| *p /= total);
+            self.study.seed_scale(&pooled, total);
+        }
     }
 }
 
