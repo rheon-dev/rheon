@@ -70,9 +70,17 @@ impl RawKey<'_> {
         }
     }
 
-    /// Whether two keys are one: the same text, or both null.
+    /// Whether two keys are one: the same text, or both null. Text against
+    /// text, the only pair [`Groups::partition`] meets but for a null, is
+    /// compared as it stands, with no integer's digits written.
+    #[inline]
     pub(crate) fn same(self, other: RawKey<'_>) -> bool {
-        self.with_ref(|a| other.with_ref(|b| a == b))
+        match (self, other) {
+            (RawKey::Text(a), RawKey::Text(b)) => a == b,
+            (RawKey::Null, RawKey::Null) => true,
+            (RawKey::Null, _) | (_, RawKey::Null) => false,
+            _ => self.with_ref(|a| other.with_ref(|b| a == b)),
+        }
     }
 
     /// The owned key, for a group the bank has not seen, or a reader that
@@ -102,36 +110,53 @@ impl<'c> Groups<'c> {
     }
 
     /// The rows' groups in two passes: each row's group, counted, then the
-    /// rows placed. `of` gives a row's key and its 64-bit hash; a key is
-    /// kept for a group's first row. Rows whose hashes are equal are one
-    /// group only when their keys are: a hash alone merged two keys that
-    /// collide into one group inside a chunk, where across chunks they were
-    /// two (review P6), and FNV-1a's collisions can be made at will. A key
-    /// whose hash an earlier key of other text holds takes a group of its
-    /// own, found again by a scan of those -- a list that is empty but for
-    /// such a collision.
-    fn partition(n: usize, mut of: impl FnMut(usize) -> (RawKey<'c>, u64)) -> Self {
+    /// rows placed. `of` gives a row's key, its 64-bit hash and, for a text
+    /// read from an Arrow string view, the view's 128 bits; a key is kept
+    /// for a group's first row. Rows whose hashes are equal are one group
+    /// only when their keys are: a hash alone merged two keys that collide
+    /// into one group inside a chunk, where across chunks they were two
+    /// (review P6), and FNV-1a's collisions can be made at will. Two equal
+    /// views are one text -- the length, and the bytes or where they are --
+    /// so the common case, a row of its group's first row's very text, is
+    /// one integer comparison; any other is compared by text. A key whose
+    /// hash an earlier key of other text holds takes a group of its own,
+    /// found again by a scan of those -- a list that is empty but for such
+    /// a collision.
+    fn partition(n: usize, mut of: impl FnMut(usize) -> (RawKey<'c>, u64, Option<u128>)) -> Self {
         use std::collections::hash_map::Entry;
         let mut slot_of: HashMap<u64, usize, rheon_core::FixedState> = HashMap::default();
         let mut clashes: Vec<(u64, usize)> = Vec::new();
         let mut keys: Vec<RawKey<'c>> = Vec::new();
+        let mut views: Vec<Option<u128>> = Vec::new();
         let mut ends: Vec<usize> = Vec::new();
         let mut slots: Vec<usize> = Vec::with_capacity(n);
-        let mut new_slot = |keys: &mut Vec<RawKey<'c>>, key| {
-            keys.push(key);
-            ends.push(0);
-            keys.len() - 1
+        let mut new_slot =
+            |keys: &mut Vec<RawKey<'c>>, views: &mut Vec<Option<u128>>, key, view| {
+                keys.push(key);
+                views.push(view);
+                ends.push(0);
+                keys.len() - 1
+            };
+        let same = |keys: &[RawKey<'c>],
+                    views: &[Option<u128>],
+                    s: usize,
+                    key: RawKey<'c>,
+                    view: Option<u128>| {
+            (view.is_some() && views[s] == view) || keys[s].same(key)
         };
         for i in 0..n {
-            let (key, id) = of(i);
+            let (key, id, view) = of(i);
             let slot = match slot_of.entry(id) {
-                Entry::Vacant(e) => *e.insert(new_slot(&mut keys, key)),
-                Entry::Occupied(e) if keys[*e.get()].same(key) => *e.get(),
+                Entry::Vacant(e) => *e.insert(new_slot(&mut keys, &mut views, key, view)),
+                Entry::Occupied(e) if same(&keys, &views, *e.get(), key, view) => *e.get(),
                 Entry::Occupied(_) => {
-                    match clashes.iter().find(|&&(h, s)| h == id && keys[s].same(key)) {
+                    match clashes
+                        .iter()
+                        .find(|&&(h, s)| h == id && same(&keys, &views, s, key, view))
+                    {
                         Some(&(_, s)) => s,
                         None => {
-                            let s = new_slot(&mut keys, key);
+                            let s = new_slot(&mut keys, &mut views, key, view);
                             clashes.push((id, s));
                             s
                         }
@@ -293,10 +318,15 @@ pub(crate) fn group_indices<'c>(chunk: &'c ArrowChunk, spec: &Spec) -> PolarsRes
                 )),
                 ArrowCol::Str(a) => {
                     let mut values = a.iter();
-                    Ok(Groups::partition(n, |_| {
+                    let views = a.views();
+                    Ok(Groups::partition(n, |i| {
                         let v = values.next().expect("one value a row");
                         // `session_hash`, not a copy of it (review 2026-09-12, D7).
-                        (v.map_or(RawKey::Null, RawKey::Text), session_hash(v))
+                        (
+                            v.map_or(RawKey::Null, RawKey::Text),
+                            session_hash(v),
+                            v.map(|_| views[i].as_u128()),
+                        )
                     }))
                 }
                 // `ArrowChunk::key` never returns the numeric form, a clock
@@ -409,8 +439,8 @@ mod tests {
         ) {
             let texts: Vec<Option<String>> = ids.iter().map(|v| v.map(|v| format!("k{v}"))).collect();
             let got = Groups::partition(texts.len(), |i| match &texts[i] {
-                Some(t) => (RawKey::Text(t), crate::bank::session_hash(Some(t))),
-                None => (RawKey::Null, crate::bank::session_hash(None)),
+                Some(t) => (RawKey::Text(t), crate::bank::session_hash(Some(t)), None),
+                None => (RawKey::Null, crate::bank::session_hash(None), None),
             });
             let want = naive(&ids.iter().map(|v| v.map(i64::from)).collect::<Vec<_>>());
             prop_assert_eq!(got.len(), want.len());
@@ -441,10 +471,17 @@ mod tests {
             Some(CLASH[0]),
             Some(CLASH[1]),
         ];
+        // A view for some rows -- equal for equal text, as a string view's
+        // bits are -- and none for others, which are compared by text.
+        let view = |i: usize| {
+            let t = texts[i]?;
+            (i % 2 == 0).then(|| u128::from(t.as_bytes()[0]))
+        };
         let got = Groups::partition(texts.len(), |i| {
             (
                 texts[i].map_or(RawKey::Null, RawKey::Text),
                 session_hash(texts[i]),
+                view(i),
             )
         });
         let want: Vec<(Option<&str>, Vec<usize>)> = vec![

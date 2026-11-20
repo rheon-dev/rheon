@@ -69,8 +69,12 @@ model that only the new build has is listed as an addition and passes.
   alone, so two keys with one hash, which can be made at will, were one
   group inside a chunk and two across chunks: one group's rows were learned
   into the other's model, and the answer depended on the chunking. A hash
-  match is now confirmed by the keys' text. The saved state is unchanged.
-  Session values are still told apart by their hash.
+  match is now confirmed by the keys' text, by their Arrow string views
+  first, which for a key of up to 12 bytes are the text itself. The saved
+  state is unchanged. Measured on arm64, `ew_cov` at k=4 over 400,000 rows
+  of 50 text groups, one thread: about 1% slower for 6-byte keys and 2%
+  for 23-byte ones; nothing measurable at 5,000 groups. Session values are
+  still told apart by their hash.
 - **A NUL character in a spec's name, a target's name or a `with_windows`
   output's name is refused** (review P11) when the spec or the call is
   checked, and so is a column so named in a frame handed to a bank or a
