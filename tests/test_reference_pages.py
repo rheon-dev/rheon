@@ -98,7 +98,7 @@ def _guide_links() -> list[tuple[str, str, str]]:
         text = path.read_text(encoding="utf-8")
         for page, anchor in ANY_LINK.findall(text):
             if "<" not in anchor:
-                found.append((str(path.relative_to(ROOT)), page, anchor))
+                found.append((path.relative_to(ROOT).as_posix(), page, anchor))
     return found
 
 
