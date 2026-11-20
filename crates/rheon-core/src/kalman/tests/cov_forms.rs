@@ -582,3 +582,56 @@ fn each_form_kernel_is_its_definition() {
         }
     }
 }
+
+/// Unstandardized in units of the noise, the factor's process noise
+/// (`factor_noise`) is the covariance form's: every slot takes it but a
+/// diffuse intercept, which takes none before its first row. Rows that
+/// observe nothing across gaps of 2 leave the noise to the first observed
+/// row, which charges the slopes with it and takes the diffuse step whole
+/// in both forms, which agree on `P` after it. A factor that charged the intercept, or left a
+/// slope out, would size the intercept or lose that slope's noise (the
+/// changed-lines mutants pass on `i < off` there, 2026-11-20).
+#[test]
+fn the_factors_process_noise_leaves_a_diffuse_intercept_diffuse() {
+    let cfg = KalmanCfg {
+        min_weight_holds_learning: false,
+        noise_units: true,
+        n_features: 2,
+        n_targets: 1,
+        fit_intercept: true,
+        decay: Decay::Halflife(f64::INFINITY),
+        half_life: vec![20.0],
+        q: None,
+        obs_var: None,
+        p0: 1.0,
+        share_p: false,
+        min_weight: 0.0,
+        revert_half_life: vec![f64::INFINITY],
+        standardize: false,
+    };
+    let k = 3;
+    let mut forms = [CovarianceForm::Covariance, CovarianceForm::SquareRoot].map(|form| {
+        Kalman::new(cfg.clone())
+            .unwrap()
+            .with_covariance_form(form)
+            .unwrap()
+    });
+    for m in &mut forms {
+        for _ in 0..3 {
+            m.step(&[0.5, 0.5], &[Some(9.0)], 2.0, 0.0);
+        }
+    }
+    let [cov, factor] = &forms;
+    assert!(cov.open::<false>(0) && factor.open::<true>(0));
+    let (x, y, w) = ([0.7, -1.3], 1e6 + 4.25, 2.0);
+    for m in &mut forms {
+        m.step(&x, &[Some(y)], 2.0, w);
+        assert_eq!(m.beta[0][0], y, "the level, whole");
+    }
+    let [cov, factor] = &forms;
+    for i in 1..k {
+        let v = cov.p[0][i * k + i];
+        assert!(v > 1.0, "slot {i} took the gaps' noise: {v}");
+    }
+    assert_close(&factor.cov(0), &cov.p[0], 1e-12, "after the first row");
+}
