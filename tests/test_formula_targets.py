@@ -1022,7 +1022,7 @@ def test_a_bank_state_from_before_the_windows_state_changed_is_refused_by_number
     state = bank.save_bytes()
     key = b"\xaeschema_version"
     i = state.index(key) + len(key)
-    assert state[i] == 68, state[i]
+    assert state[i] == 69, state[i]
     for before in range(25, 61):
         old = state[:i] + bytes([before]) + state[i + 1 :]
         with pytest.raises(

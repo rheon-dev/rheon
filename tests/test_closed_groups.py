@@ -1059,7 +1059,7 @@ def test_schema_version_is_current():
     them, and ``marginal``'s pre-65 mark cleared once its histogram is
     built (task 340), and 68 for ``kalman``'s covariance held as its square
     root's factor (task 281 (3))."""
-    assert rp.schema_version() == 68
+    assert rp.schema_version() == 69
 
 
 def test_an_integer_key_used_as_both_session_and_group_orders_numerically():
