@@ -46,11 +46,18 @@ returns.
   scikit-learn's coordinate descent on the same problem the fits are as
   close to the optimum as they were. The penalty selected did not change
   in any case measured, but a choice between two penalties that predict
-  alike to the last bits can. Moves: `lasso.pred_*`, `lasso.resid_*`,
-  `lasso.abs_resid_*`, `lasso.coef`, `lasso.sigma_*`, `lasso.zscore_*`,
-  `lasso.lo_*`, `lasso.hi_*`, `lasso.coverage_*`, `lasso.hit_rate_*`,
-  `lasso.ic_*`, `lasso.r2_*`, `lasso.autocorr_*`, `lasso.drift*`,
-  `lasso.selected_*`, `lasso.penalty_selected_*`, `lasso.withheld_reason`.
+  alike to the last bits can, and so can whether a descent settles within
+  `max_iter`. Every field read from a fit or its residuals moves; the
+  features' health, the weights and the clocks do not. Moves:
+  `lasso.pred_*`, `lasso.resid_*`, `lasso.abs_resid_*`, `lasso.coef`,
+  `lasso.sigma_*`, `lasso.zscore_*`, `lasso.studentized_*`, `lasso.lo_*`,
+  `lasso.hi_*`, `lasso.coverage_*`, `lasso.hit_rate_*`, `lasso.ic_*`,
+  `lasso.r2_*`, `lasso.autocorr_*`, `lasso.drift*`, `lasso.calibration_*`,
+  `lasso.cusum*`, `lasso.break_wald_*`, `lasso.ljung_box_*`,
+  `lasso.breusch_pagan_*`, `lasso.ramsey_reset_*`, `lasso.skew_*`,
+  `lasso.kurtosis_*`, `lasso.jarque_bera_*`, `lasso.selected_*`,
+  `lasso.penalty_selected_*`, `lasso.withheld_reason`,
+  `lasso.solve_failures`.
 - `lasso` writes each solve's correlation matrix over the one its thread's
   last solve left, where every solve made and zeroed a new one (2 MB at 500
   features): 0.97 of the time a row at 500 features on arm64 (Apple M4 Pro,
