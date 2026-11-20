@@ -287,6 +287,7 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
         }
     ),
     "audit": frozenset({"pairs", "distinct_cap"}),
+    "kalman": frozenset({"covariance_form"}),
 }
 
 
@@ -2426,6 +2427,7 @@ def kalman(
     share_p: bool = False,
     revert_half_life: float | Duration | list[float | Duration] | None = None,
     standardize: bool = True,
+    covariance_form: Literal["covariance", "square_root"] = "covariance",
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """A regression whose coefficients drift, tracked by a Kalman filter.
@@ -2501,8 +2503,9 @@ def kalman(
         with no units under ``standardize``. Without ``standardize`` a
         slope's prior ``p0 * R`` carries its feature's units, so ``p0`` is in
         one over the feature's squared units there. Default 1.0, a prior as
-        uncertain as one observation. Finite and above 0. Keep it well below
-        1e10, where the covariance form loses digits (*The prior* in Notes).
+        uncertain as one observation. Finite and above 0. From about 1e8 the
+        default ``covariance_form`` loses digits; ``"square_root"`` keeps
+        them (*The square root* in Notes).
     ``share_p``
         Keep one ``P`` for every target, where by default each target has its
         own. Targets observed on the same rows would each carry the same
@@ -2545,6 +2548,19 @@ def kalman(
         builds the column with :func:`rheon.polars.ewm_mean
         <rheon.polars.ops.ewm_mean>` and :func:`rheon.polars.ewm_std
         <rheon.polars.ops.ewm_std>`.
+    ``covariance_form``
+        How the filter holds ``P``. ``"covariance"``, the default, holds
+        ``P`` and updates it as ``P_j <- P_j - g z' P_j``, which subtracts two
+        numbers of ``P``'s size to leave one of the posterior's, so it
+        rounds at ``u * p0``, ``u`` the unit roundoff. ``"square_root"``
+        holds a triangular ``C`` with ``P = C C'`` and updates ``C``, which
+        rounds at ``u * sqrt(p0)`` (*The square root* in Notes). Use it for
+        a vague prior, ``p0`` of about 1e8 or more. It costs time on every
+        row: 1.14 to 1.72 times the covariance form's with no drift, and
+        2.4 to 16 times under ``coef_half_life`` or ``q``, at 5 to 50
+        coefficients on arm64, since each row's drift then updates the
+        factor once per coefficient. At ``p0 = 1`` the two agree to about
+        1e-9 of a prediction.
 
     .. rubric:: Output
 
@@ -2743,9 +2759,28 @@ def kalman(
     is not predicted, and with an intercept every row after the first has
     one sized. With ``obs_var`` given, unstandardized and with no process
     noise, the filter is the ridge regression with penalty ``1 / p0``. A
-    covariance whose diagonal goes below 0 is sized again at ``p0``. The
-    covariance form loses digits at a huge prior: as a stand-in for least
-    squares it was 4.2e-6 off at ``p0=1e12``, against 3.4e-10 at 1e8.
+    covariance whose diagonal goes below 0 is sized again at ``p0``.
+
+    **The square root.** Under ``covariance_form="square_root"`` the filter
+    holds ``C``, upper triangular with ``P_j = C C'``. A row with ``f = C'
+    z``, ``a_0 = 1 / w`` (``R_j / w`` under ``obs_var``) and ``a_j =
+    a_(j-1) + f_j ** 2`` updates each
+    column ``C_j`` of ``C`` in turn (Carlson 1973), to the factor of the
+    posterior, with nothing subtracted at ``P``'s size:
+
+    .. code-block:: text
+
+        C_j <- sqrt(a_(j-1) / a_j) C_j - f_j / sqrt(a_(j-1) a_j) * sum_(i<j) C_i f_i
+
+    The drift, a slope's prior and the reversion each update ``C`` by plane
+    rotations. Against the posterior solved directly, on 300 rows of three
+    features with unlike means and scales, unstandardized and with no
+    drift: at ``p0 = 1e12`` the covariance form was 6.7e-5 off in a
+    coefficient and the square root 1.0e-13; at 1e15, 1.3e-2 against
+    9.6e-14. Through the bank, the square root's predictions at ``p0`` of
+    1e8, 1e10 and 1e12 came within 2.4e-9, 2.4e-11 and 2.4e-13 of those at
+    1e14, the ``1 / p0`` the prior's own weight moves them by; the
+    covariance form's stayed up to 0.19 apart at every one.
 
     **Standardizing.** The filter's state is held in the coordinates of an
     *anchor*, the moments at its last re-map, and maps the process noise and
@@ -2830,7 +2865,16 @@ def kalman(
         "share_p": share_p,
         "revert_half_life": revert_half_life,
         "standardize": standardize,
+        "covariance_form": covariance_form,
     }
+    words = ("covariance", "square_root")
+    if covariance_form not in words:
+        raise ValueError(
+            words_refusal(f"spec {quoted(name)}", "covariance_form", covariance_form, words)
+        )
+    # Written only where it is not the default, as the Rust spec skips it there.
+    if covariance_form == "covariance":
+        del model["covariance_form"]
     return _common(name, model, targets=targets, features=features, **common)
 
 

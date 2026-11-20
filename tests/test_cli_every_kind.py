@@ -317,7 +317,7 @@ CASES: list[Case] = [
             standardize=False,
         ),
     ),
-    Case("kalman2", "kalman", full2(q=[0.0, 1e-4, 1e-4])),
+    Case("kalman2", "kalman", full2(q=[0.0, 1e-4, 1e-4], covariance_form="square_root")),
     Case(
         "lasso",
         "lasso",

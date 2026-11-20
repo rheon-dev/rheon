@@ -878,6 +878,7 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
             share_p,
             revert_half_life,
             standardize,
+            covariance_form,
         } => {
             let cfg = KalmanCfg {
                 n_features: spec.k(),
@@ -906,7 +907,8 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
                 // (docs/PLAN.md task 278); a state saved before keeps its own.
                 noise_units: true,
             };
-            Ok(AnyModel::Kalman(Box::new(Kalman::new(cfg)?)))
+            let model = Kalman::new(cfg)?.with_covariance_form(*covariance_form)?;
+            Ok(AnyModel::Kalman(Box::new(model)))
         }
         ModelKind::Huber { .. } => huber_model(spec, decay),
         ModelKind::Quantile { .. } => quantile_model(spec, decay),

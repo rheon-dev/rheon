@@ -4099,8 +4099,10 @@ mod tests {
         // 328's count of the rows `corrchange`'s window ring has taken,
         // whose loaders read 65: unchanged too. 67 for task 340's pending
         // notices saved with a stream and `marginal`'s mark cleared at its
-        // freeze, whose loaders read 66: unchanged too.
-        assert_eq!((WINDOWS_VERSION, rheon_core::SCHEMA_VERSION), (10, 67));
+        // freeze, whose loaders read 66: unchanged too. 68 for task 281
+        // (3)'s square root of a `kalman`'s covariance, whose loader reads
+        // 67: unchanged too.
+        assert_eq!((WINDOWS_VERSION, rheon_core::SCHEMA_VERSION), (10, 68));
         assert_eq!(MIN_WINDOWS_VERSION, 9);
     }
 

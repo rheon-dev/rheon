@@ -5233,3 +5233,61 @@ class TestAuditIsScipyAndStatsmodels:
         dev = np.abs(x - np.median(x))
         dlo, dhi = np.quantile(dev, [0.48, 0.52])
         assert dlo <= got["mad"] <= dhi
+
+
+@pytest.mark.parametrize("coef_hl", [50.0, float("inf")], ids=["drift", "static"])
+def test_kalmans_square_root_at_a_vague_prior_is_statsmodels_exact_diffuse_filter(coef_hl):
+    """``covariance_form="square_root"`` at ``p0 = 1e15`` against
+    statsmodels' Kalman filter under its exact diffuse initialization
+    (Durbin and Koopman, ch. 5), the limit of an infinite prior computed in
+    closed form, which shares no arithmetic with the square root's update:
+    unstandardized, ``P`` in units of the noise, ``R = 1/w``, the drift
+    ``(ln 2 / coef_half_life)**2`` a row, three features of unlike means and
+    scales. The one-step predictions after the diffuse rows agree to 3.3e-13
+    of their size under drift and 9.7e-15 without (measured 2026-11-20),
+    each recursion's rounding a few units of ``u`` a row amplified by the
+    posterior's condition; held to 1e-11. The covariance form at the same
+    prior is up to 0.78 off, the digits a huge ``p0`` costs it."""
+    from statsmodels.tsa.statespace.kalman_filter import KalmanFilter
+
+    rng = np.random.default_rng(281)
+    n = 600
+    x = rng.standard_normal((n, 3)) * [1.0, 2.0, 0.5] + [0.5, -1.0, 3.0]
+    y = 1.0 + (2.0 + np.arange(n) / n) * x[:, 0] - x[:, 1] + 0.5 * x[:, 2] + rng.standard_normal(n)
+    w = rng.uniform(0.5, 1.5, n)
+    kf = KalmanFilter(k_endog=1, k_states=4)
+    kf.bind(y[:, None])
+    kf["design"] = np.column_stack([np.ones(n), x]).T[None, :, :]
+    kf["obs_cov"] = (1.0 / w)[None, None, :]
+    kf["transition"] = np.eye(4)
+    kf["selection"] = np.eye(4)
+    kf["state_cov"] = (0.0 if np.isinf(coef_hl) else (np.log(2.0) / coef_hl) ** 2) * np.eye(4)
+    kf.initialize_diffuse()
+    res = kf.filter()
+    s = res.nobs_diffuse
+    assert s == 4
+    want = res.forecasts[0][s:]
+    frame = pl.DataFrame({"t": np.arange(n, dtype=float), "y": y, "w": w}).with_columns(
+        **{f"x{i}": pl.Series(x[:, i]) for i in range(3)}
+    )
+    off = {}
+    for form in ("square_root", "covariance"):
+        spec = rp.spec.kalman(
+            "k",
+            targets=["y"],
+            features=["x0", "x1", "x2"],
+            clock="t",
+            gap_cap=1e9,
+            coef_half_life=coef_hl,
+            p0=1e15,
+            standardize=False,
+            weight="w",
+            half_life=100.0,
+            min_weight=0.0,
+            covariance_form=form,
+        )
+        got = rp.ModelBank([spec], threads=1).fit_predict(frame).unnest("k")["pred_y"]
+        got = got.to_numpy().astype(float)[s:]
+        off[form] = float(np.max(np.abs(got - want) / np.maximum(np.abs(want), 1.0)))
+    assert off["square_root"] < 1e-11, off
+    assert off["covariance"] > 1e-3, off

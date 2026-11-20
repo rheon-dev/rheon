@@ -855,6 +855,31 @@ pub fn all() -> Vec<Case> {
             Targets::Linear(2),
             40
         ),
+        // The square root's form (schema 68, docs/PLAN.md task 281 (3)): the
+        // spec's form, `P` in units of the noise with its intercepts
+        // diffuse until a row observes the targets, held as its factor
+        // `L = Cᵀ`, at a vague prior, saved past the diffuse step and the
+        // drift, with the reversion's coupling, so every write to the
+        // factor has acted. `kalman_output_only` is the same filter held as
+        // `P`, the covariance form, which a state saved before 68 is.
+        case!(
+            "kalman_square_root",
+            "Kalman",
+            Kalman,
+            Kalman::new(KalmanCfg {
+                noise_units: true,
+                min_weight_holds_learning: false,
+                min_weight: 10.0,
+                p0: 1e12,
+                ..kalman_cfg()
+            })
+            .unwrap()
+            .with_covariance_form(rheon_core::CovarianceForm::SquareRoot)
+            .unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
         case!(
             "huber",
             "Robust",

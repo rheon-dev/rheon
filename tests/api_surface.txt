@@ -20,7 +20,7 @@
   spec
   target(column: 'str', *, name: 'str | None' = None) -> 'Target'
   thread_pool_size(*, threads: 'int | None' = None) -> 'int'
-  schema_version = 67
+  schema_version = 68
 
 [rheon.polars]  # what `rheon.polars` adds to the names above, which it re-exports
   ConsumedSourceWarning
@@ -268,6 +268,7 @@
     share_p = False
     revert_half_life = None
     standardize = True
+    covariance_form = 'covariance'
     common
   kmeans:
     name
@@ -2413,6 +2414,7 @@
   hmm.init: farthest, first, k-means++, lloyd
   huber.huber_scale: mad, rms
   huber.ridge_scale: mean, sum
+  kalman.covariance_form: covariance, square_root
   kmeans.init: farthest, first, k-means++, lloyd
   lasso.target_gaps: own_rows, pairwise
   lasso.window_budget: refuse, thin
@@ -2544,7 +2546,7 @@
     hmm: covariance_type, covs, exog_tvtp, init, learn, means, n_components, precision_prior, seed, transition, transition_prior, tvtp_coef, warm_rows
     holt: trend, trend_half_life
     huber: emit_huber_scale, feature_sets, huber_delta, huber_refit_rows, huber_scale, huber_scale_half_life, max_rows_between_solves, refit_budget, ridge, ridge_scale, solve_every, standardize
-    kalman: coef_half_life, obs_var, p0, q, revert_half_life, share_p, standardize
+    kalman: coef_half_life, covariance_form, obs_var, p0, q, revert_half_life, share_p, standardize
     kmeans: dead_frac, init, n_clusters, scale_floor, seed, split_merge, split_merge_every_rows, standardize, update_every_rows, warm_rows
     lasso: closed, l1_ratio, max_iter, max_rows_between_snapshots, max_rows_between_solves, penalties, select_half_life, snapshot_every, solve_every, target_gaps, tol, window_budget, window_size
     marginal: bin_budget, bin_edges, bin_huber_delta, bin_refit_rows, bin_rule, bin_stat, bin_warm_rows, bins, closed, cross_lags, feature_moments, lags, max_rows_between_snapshots, refit_budget, serial_rule, shards, snapshot_every, window_budget, window_lags, window_size

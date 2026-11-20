@@ -622,6 +622,8 @@ rule = "remedy"
 text = "is relative to another column, but {_RELATIVE_REMOVED}"
 reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends in the remedy: \"... and name that column in targets.\""
 
+[messages."crates/rheon-core/src/kalman/forms.rs"]
+
 [messages."python/rheon/_cpu_check.py"]
 "remedy" = 2
 "where" = 2
@@ -637,6 +639,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [docstrings."python/rheon/polars/_errors.py"]
 
 [docstrings."python/rheon/polars/_warnings.py"]
+
+[vocabulary."crates/rheon-core/src/kalman/forms.rs#messages"]
 
 [vocabulary."python/rheon/_cpu_check.py#messages"]
 

@@ -519,3 +519,68 @@ def test_with_no_drift_a_tight_prior_holds_the_coefficients():
     (s8, i8), (s12, i12) = learned[1e-8], learned[1e-12]
     assert s12 < 1e-6 and 5e3 < s8 / s12 < 2e4
     assert i12 < 1e-6 and 5e3 < i8 / i12 < 2e4
+
+
+@pytest.mark.parametrize("noise", [{"obs_var": 1.0}, {}], ids=["fixed noise", "learned noise"])
+def test_the_square_root_reads_a_vague_priors_limit(noise):
+    """``covariance_form="square_root"`` holds ``P``'s triangular factor, so
+    the update rounds at ``u * sqrt(p0)`` where the covariance form rounds
+    at ``u * p0``: the last fit goes on to statsmodels' ``WLS`` at the rate
+    ``1 / p0`` past where the covariance form's rounding stops it. Measured
+    2026-11-20 on the relations frame: the square root 1.8e-8, 1.8e-10 and
+    1.85e-12 off at ``p0`` 1e6, 1e8 and 1e10, and 2.9e-14 at 1e12, where
+    the covariance form was 4.2e-6 off."""
+    df = _relations_frame()
+    x = sm.add_constant(df.select(_RF).to_numpy())
+    wls = sm.WLS(df["y"].to_numpy(), x, weights=df["w"].to_numpy()).fit().params
+    kw = dict(q=[0.0] * 4, standardize=False, half_life=float("inf"), **noise)
+    errs = {}
+    for p0 in (1e6, 1e8, 1e10, 1e12):
+        _, bank = _run(df, p0=p0, covariance_form="square_root", **kw)
+        errs[p0] = float(np.max(np.abs(_last_coef(bank) - wls)))
+    _, bank = _run(df, p0=1e12, **kw)
+    covariance = float(np.max(np.abs(_last_coef(bank) - wls)))
+    print({k: f"{v:.3g}" for k, v in errs.items()}, f"covariance form {covariance:.3g}")
+    for lo, hi in ((1e6, 1e8), (1e8, 1e10)):
+        assert 50.0 < errs[lo] / errs[hi] < 200.0, errs
+    assert errs[1e12] < 1e-11 and covariance > 1000 * errs[1e12], (errs, covariance)
+
+
+def test_the_square_root_is_one_run_in_any_chunking_and_across_a_save():
+    """Hard rule 3 and a resumed state under ``covariance_form =
+    "square_root"``, at a vague prior and with drift: chunks of 1, 7 and
+    600 rows, and a bank saved and loaded at row 777, give the one chunk's
+    numbers to the bit. The spec reports back as it was given, and the
+    default's spec writes no ``covariance_form``."""
+    df = _relations_frame()
+    spec = rp.spec.kalman(
+        "m",
+        targets=["y", "z"],
+        features=_RF,
+        clock="t",
+        gap_cap=1e9,
+        weight="w",
+        half_life=200.0,
+        coef_half_life=100.0,
+        p0=1e10,
+        covariance_form="square_root",
+    )
+    assert rp.ModelBank([spec]).specs[0] == spec
+    plain = rp.spec.kalman("m", targets=["y"], features=_RF, q=[0.0] * 4, half_life=200.0)
+    assert "covariance_form" not in plain["model"]
+    whole = rp.ModelBank([spec]).fit_predict(df).unnest("m").drop("coef")
+    assert whole["pred_y"].is_not_null().sum() > 1900
+    for rows in (1, 7, 600):
+        bank = rp.ModelBank([spec])
+        parts = [bank.fit_predict(df.slice(i, rows)) for i in range(0, df.height, rows)]
+        assert pl.concat(parts).unnest("m").drop("coef").equals(whole, null_equal=True), rows
+    bank = rp.ModelBank([spec])
+    head = bank.fit_predict(df.slice(0, 777))
+    loaded = rp.ModelBank.load_bytes(bank.save_bytes(), specs=[spec])
+    tail = loaded.fit_predict(df.slice(777))
+    assert pl.concat([head, tail]).unnest("m").drop("coef").equals(whole, null_equal=True)
+
+
+def test_covariance_form_takes_two_words():
+    with pytest.raises(ValueError, match='"covariance" or "square_root"'):
+        _spec(covariance_form="factor")

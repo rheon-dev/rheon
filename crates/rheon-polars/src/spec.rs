@@ -265,6 +265,17 @@ pub enum ModelKind {
         /// a plain Bayesian linear regression on the features' own scale.
         #[serde(default = "default_true")]
         standardize: bool,
+        /// `"covariance"` (the default) holds `P` and updates it in its
+        /// covariance form; `"square_root"` holds a triangular factor of it
+        /// and updates that, which keeps the digits a vague prior (a huge
+        /// `p0`) costs the other (`rheon_core::CovarianceForm`; docs/PLAN.md
+        /// task 281 (3)). Skipped at its default, so a spec written before
+        /// it serializes as it did.
+        #[serde(
+            default,
+            skip_serializing_if = "rheon_core::CovarianceForm::is_covariance"
+        )]
+        covariance_form: rheon_core::CovarianceForm,
     },
     /// Huber regression (docs/PLAN.md §4.5).
     Huber {
@@ -3726,6 +3737,9 @@ mod sgd_tests;
 
 #[cfg(test)]
 mod huber_scale_tests;
+
+#[cfg(test)]
+mod covariance_form_tests;
 
 #[cfg(test)]
 mod pa_tests;

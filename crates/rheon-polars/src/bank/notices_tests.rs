@@ -213,7 +213,9 @@ fn a_bank_of_schema_66_loads_its_streams_with_no_pending_notice() {
                 m.retain(|(k, v)| !(k.as_str() == Some("pending") && v.is_array()));
                 *pending += before - m.len();
                 for (k, v) in m.iter_mut() {
-                    if k.as_str() == Some("schema_version") && v.as_u64() == Some(67) {
+                    if k.as_str() == Some("schema_version")
+                        && v.as_u64() == Some(u64::from(rheon_core::SCHEMA_VERSION))
+                    {
                         *v = rmpv::Value::from(66);
                         *schema += 1;
                     }

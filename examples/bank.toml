@@ -53,6 +53,7 @@ min_weight = 20.0
 type = "kalman"
 coef_half_life = 3600.0
 # revert_half_life = ["inf", 7200.0, 7200.0, 7200.0]  # slopes revert toward zero; intercept stays a random walk
+# covariance_form = "square_root"  # hold P as its triangular factor, for a vague prior (p0 of 1e8 or more)
 
 # Which of the two is closer, row by row: a sequential test on the sign of
 # `|resid_kalman| - |resid_ridge|`, anytime-valid at every row

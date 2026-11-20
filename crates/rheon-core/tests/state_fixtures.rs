@@ -241,6 +241,13 @@ use rheon_core::{MIN_SCHEMA_VERSION, ModelState, SCHEMA_VERSION, State};
 /// change, the notices a bank's stream keeps, is the bank harness's. Every
 /// other kept case converts to the current bytes exactly.
 ///
+/// 67 kept since 68 let `kalman` hold its covariance as the square root's
+/// factor (docs/PLAN.md task 281 (3)), written with the field
+/// `covariance_form` only where it is not the covariance form: a 67 state
+/// has none and loads as the covariance form it is, so every kept case
+/// converts to the current bytes exactly. The new form is the case
+/// `kalman_square_root`, which has no kept file.
+///
 /// The kept schemas, each a `v<N>/` directory found beside the current set.
 fn previous() -> Vec<u32> {
     frozen::PREVIOUS_SETS.iter().map(|(s, _)| *s).collect()
@@ -1996,6 +2003,67 @@ fn kalmans_noise_units_form_is_written_with_its_intercept_open() {
         assert!(
             at(&v, &["model", "Kalman", "cfg", "noise_units"]).is_none(),
             "{name}"
+        );
+    }
+}
+
+/// `kalman`'s square root (schema 68, docs/PLAN.md task 281 (3)):
+/// `kalman_square_root` names its form, `covariance_form = "square_root"`,
+/// and holds each covariance as the factor `L = Cᵀ`, lower triangular with
+/// its upper triangle 0 to the bit, a positive diagonal and an entry below
+/// it that is not 0, so the factor's every write has acted; its
+/// continuation keeps it so. Every other `kalman` case, the covariance
+/// form, writes no `covariance_form`, which a state saved before 68 lacks.
+#[test]
+fn kalmans_square_root_is_written_as_its_factor() {
+    if regenerating() {
+        return;
+    }
+    let k = 3;
+    let factors = |v: &rmpv::Value| -> Vec<Vec<f64>> {
+        at(v, &["model", "Kalman", "p"])
+            .and_then(rmpv::Value::as_array)
+            .expect("p")
+            .iter()
+            .map(|p| {
+                p.as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|x| x.as_f64().unwrap())
+                    .collect()
+            })
+            .collect()
+    };
+    let lower = |l: &[f64]| {
+        l.len() == k * k
+            && (0..k * k).all(|ij| ij / k >= ij % k || l[ij].to_bits() == 0)
+            && (0..k).all(|i| l[i * k + i] > 0.0)
+            && (0..k * k).any(|ij| ij / k > ij % k && l[ij] != 0.0)
+    };
+    let f = frozen::ALL
+        .iter()
+        .find(|f| f.name == "kalman_square_root")
+        .expect("kalman_square_root: no fixture; add the case and regenerate");
+    let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+    let form = at(&v, &["model", "Kalman", "covariance_form"]).and_then(rmpv::Value::as_str);
+    assert_eq!(form, Some("square_root"), "covariance_form");
+    let held = factors(&v);
+    assert!(held.len() == 2 && held.iter().all(|l| lower(l)), "{held:?}");
+    let mut m = load(&case_of(f), &f.bytes()).unwrap();
+    for row in f.rows() {
+        m.step(&row);
+    }
+    let after = rmpv::decode::read_value(&mut named(&m.state()).as_slice()).unwrap();
+    assert!(factors(&after).iter().all(|l| lower(l)), "the continuation");
+    for f in frozen::ALL.iter().filter(|f| f.variant == "Kalman") {
+        if f.name == "kalman_square_root" {
+            continue;
+        }
+        let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+        assert!(
+            at(&v, &["model", "Kalman", "covariance_form"]).is_none(),
+            "{}",
+            f.name
         );
     }
 }

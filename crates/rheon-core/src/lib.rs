@@ -171,7 +171,7 @@ pub use huber_refit::{
     refit_reservation,
 };
 pub use influence::Influence;
-pub use kalman::{Kalman, KalmanCfg};
+pub use kalman::{CovarianceForm, Kalman, KalmanCfg};
 pub use lasso::{Lasso, LassoCfg};
 pub use margbins::{BinCfg, BinRule, BinStat};
 pub(crate) use margbins::{MarginalBins, edges_from};
@@ -844,7 +844,18 @@ pub use window::{
 ///     form, written from a current bank.
 ///
 ///   Schema 66's fixtures are kept (`tests/state_fixtures/v66/`).
-pub const SCHEMA_VERSION: u32 = 67;
+/// - 68 (2026-11-20, task 281 (3), the user's decision of the same day):
+///   `kalman` may hold its covariance as the square root's triangular
+///   factor (a spec's `covariance_form = "square_root"`,
+///   [`CovarianceForm`]), in the same `p` of `k * k` numbers per
+///   covariance, the factor's transpose `L = Cᵀ` with its upper triangle
+///   0, and says so in `covariance_form`, written only where it is not
+///   `"covariance"`. A state of 67 or earlier has no field and loads as the
+///   covariance form, which it is, and goes on to the bit; no state of the
+///   covariance form moves a byte but the schema's number. Schema 67's
+///   fixtures are kept (`tests/state_fixtures/v67/`), and the new form is
+///   the case `kalman_square_root`.
+pub const SCHEMA_VERSION: u32 = 68;
 
 /// The default solve cadence of `ewridge`, `lasso`, `huber` and `quantile`
 /// (docs/PLAN.md task 115 (b)): a solve once the weight learned since the last
