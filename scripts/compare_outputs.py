@@ -505,7 +505,8 @@ def _float_stats(
     finite = valid & np.isfinite(x) & np.isfinite(y)
     inf_change = valid & ~nan_x & ~nan_y & (np.isinf(x) | np.isinf(y)) & (x != y)
     idx = np.flatnonzero(finite)
-    rel = np.abs(x[idx] - y[idx]) / np.maximum(np.maximum(np.abs(x[idx]), np.abs(y[idx])), floor)
+    absd = np.abs(x[idx] - y[idx])
+    rel = absd / np.maximum(np.maximum(np.abs(x[idx]), np.abs(y[idx])), floor)
     moved = rel[rel > 0]
     u = ulps(x[idx], y[idx])
     u_moved = u[u > 0]
@@ -520,7 +521,8 @@ def _float_stats(
         "p999_rel": float(np.quantile(rel, 0.999)) if rel.size else 0.0,
         "median_rel": float(np.median(rel)) if rel.size else 0.0,
         "median_rel_moved": float(np.median(moved)) if moved.size else 0.0,
-        "max_abs": float(np.max(np.abs(x[idx] - y[idx]))) if idx.size else 0.0,
+        "max_abs": float(absd.max()) if idx.size else 0.0,
+        "p999_abs": float(np.quantile(absd, 0.999)) if idx.size else 0.0,
         "max_ulps": float(u.max()) if u.size else 0.0,
         "p999_ulps": float(np.quantile(u, 0.999)) if u.size else 0.0,
         "median_ulps_moved": float(np.median(u_moved)) if u_moved.size else 0.0,
@@ -620,17 +622,25 @@ def _decision_flips(spec: dict, cols_a: Any, cols_b: Any, names: list[str]) -> l
     else:
         groups = [c for pat in spec["columns"] for c in names if fnmatch.fnmatch(c, pat)]
         if groups:
-            picks = []
+            picks, tops = [], []
             for src in (cols_a, cols_b):
                 m = np.column_stack(
                     [src(c).cast(pl.Float64).fill_null(-np.inf).to_numpy() for c in groups]
                 )
                 picks.append(np.argmax(m, axis=1))
+                tops.append(np.max(m, axis=1))
+            # The largest value's absolute movement (a posterior's, say): what
+            # the decision is read from, where a relative movement of a far
+            # class's tiny probability says little about the answer.
+            both = np.isfinite(tops[0]) & np.isfinite(tops[1])
+            top = np.abs(tops[0][both] - tops[1][both])
             out.append(
                 {
                     "name": spec["name"],
                     "flips": int((picks[0] != picks[1]).sum()),
                     "rows": int(picks[0].size),
+                    "top_abs_max": float(top.max()) if top.size else 0.0,
+                    "top_abs_p999": float(np.quantile(top, 0.999)) if top.size else 0.0,
                 }
             )
     return out
@@ -941,8 +951,9 @@ def table_for(item: str, results: list[dict], floor: float, builds: tuple[Build,
                 detail += [
                     "",
                     "| column | max | p99.9 | median | median (moved) | ulps max / p99.9 "
-                    "/ median moved | over N ulps | rows differing | nulls -/+ | worst row |",
-                    "|---|---|---|---|---|---|---|---|---|---|",
+                    "/ median moved | over N ulps | abs max / p99.9 | rows differing "
+                    "| nulls -/+ | worst row |",
+                    "|---|---|---|---|---|---|---|---|---|---|---|",
                 ]
                 for c, st in moved[:25]:
                     detail.append(
@@ -950,13 +961,26 @@ def table_for(item: str, results: list[dict], floor: float, builds: tuple[Build,
                         f"{fmt(st['median_rel'])} | "
                         f"{fmt(st['median_rel_moved'])} | {fmt_ulps(st['max_ulps'])} / "
                         f"{fmt_ulps(st['p999_ulps'])} / {fmt_ulps(st['median_ulps_moved'])} | "
-                        f"{st['over_ulps']:,} | {st['rows_differing']:,} | "
+                        f"{st['over_ulps']:,} | {fmt(st.get('max_abs'))} / "
+                        f"{fmt(st.get('p999_abs'))} | {st['rows_differing']:,} | "
                         f"{st['nulls_vanish']}/{st['nulls_appear']} | {st['worst_row']} |"
                     )
                 if len(moved) > 25:
                     detail.append(
-                        f"| ... {len(moved) - 25} more columns in report.json | | | | | | | | | |"
+                        f"| ... {len(moved) - 25} more columns in report.json | | | | | | | | | | |"
                     )
+            argmaxes = [d for d in r.get("decisions", []) if "top_abs_max" in d]
+            if argmaxes:
+                detail += [
+                    "",
+                    "| argmax decision | flips | rows | largest value: abs max | abs p99.9 |",
+                    "|---|---|---|---|---|",
+                ]
+                detail += [
+                    f"| {d['name']} | {d['flips']} | {d['rows']:,} | {fmt(d['top_abs_max'])} | "
+                    f"{fmt(d['top_abs_p999'])} |"
+                    for d in argmaxes
+                ]
             detail.append("")
     if any(
         "load" in (r.get("timing") or {}) or (r.get("timing") or {}).get("load_max")

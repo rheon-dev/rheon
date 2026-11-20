@@ -248,6 +248,19 @@ use rheon_core::{MIN_SCHEMA_VERSION, ModelState, SCHEMA_VERSION, State};
 /// converts to the current bytes exactly. The new form is the case
 /// `kalman_square_root`, which has no kept file.
 ///
+/// 68 kept since 69 made a wide `full` `hmm` state keep the Cholesky
+/// factor of its matrix as the state (task 479; rule 5's twentieth
+/// exception, the user's, 2026-11-20): at 13 features or more, once seeded,
+/// a state is its weight, means and `M = σ·L Lᵀ`, written in
+/// `factor_states` only where it is not empty, and a learned row moves the
+/// factor by rotations. A 68 state of that width holds co-moments; it loads
+/// as their factor and goes on in the factor form, within [`TAKEN_UP`]'s
+/// bounds of its frozen continuation, not to the bit. The cases `hmm_full`
+/// (13 features) and `hmm_full_narrow` (12, which keeps the co-moments)
+/// were written into `v68/` by the schema-68 build, so the conversion and
+/// the width it starts at are held; every other kept case, the narrow one
+/// among them, converts to the current bytes exactly.
+///
 /// The kept schemas, each a `v<N>/` directory found beside the current set.
 fn previous() -> Vec<u32> {
     frozen::PREVIOUS_SETS.iter().map(|(s, _)| *s).collect()
@@ -365,6 +378,24 @@ const CONTINUES_WITHIN: &[(&str, f64, std::ops::Range<usize>)] = &[
 ///   `1 + |stat|` (a few units in its last place), measured 2026-11-05 on
 ///   macOS arm64; the bound is 24 times that.
 const RENUMBERED: &[(&str, f64, std::ops::Range<usize>)] = &[("corrchange_window", 1e-14, 0..1)];
+
+/// The `hmm` cases of schema 68 or earlier that load in the factor form
+/// (rule 5's twentieth exception), each with two bounds. A kept state holds
+/// co-moments, which load as their factor, the one its next row read; the
+/// current fixture's factor was taken up at the seeding and moved by the
+/// rotations of every learned row since. So the converted state is the
+/// current fixture's field for field -- weights, means and ridge scales to
+/// the bit -- but for each state's `σ` and `L`, whose matrices `σ·L Lᵀ`
+/// part by at most the first bound of the largest diagonal entry
+/// ([`taken_up_rule`]); and its continuation parts from the frozen one,
+/// which the co-moments read, by at most the second, by [`agree`]'s
+/// measure.
+///
+/// - `hmm_full`: 13 features, 2 states, saved about 25 learned rows after
+///   the seeding. Measured 2026-11-20 on macOS arm64: the matrices
+///   4.7e-16 apart (two units in the last place), the continuation 5.3e-15
+///   (30 ulps, a posterior); the bounds are 21 and 19 times those.
+const TAKEN_UP: &[(&str, f64, f64)] = &[("hmm_full", 1e-14, 1e-13)];
 
 /// How far a continuation may part from the one frozen, on a platform other
 /// than the writer's: the golden files' tolerance (`tests/golden.rs`).
@@ -651,9 +682,30 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
             // starts, ten Lloyd passes): the rule since finds the same
             // centres in another order (the doc above `previous`).
             let reseeded = f.name == "kmeans_warming";
+            // A wide `full` `hmm` of 68 or earlier, in co-moments, loads
+            // in the factor form ([`TAKEN_UP`]).
+            let taken_up = TAKEN_UP
+                .iter()
+                .find(|(n, _, _)| *n == f.name && schema < 69)
+                .map(|&(_, m, c)| (m, c));
             let kept = rmpv::decode::read_value(&mut &f.bytes()[..]).unwrap();
             // A `holt` of 61-63 keeps no line fit (the doc above `previous`).
-            if f.name == "kmeans" || f.name == "holt" {
+            if let Some((bound, _)) = taken_up {
+                let saved = named(&m.state());
+                let again = load(&case, &saved).unwrap_or_else(|e| panic!("{what}: {e}"));
+                assert!(
+                    named(&again.state()) == saved,
+                    "{what}: saved, loaded, saved"
+                );
+                let decode = |b: &[u8]| rmpv::decode::read_value(&mut &b[..]).unwrap();
+                taken_up_rule(
+                    &kept,
+                    &decode(&saved),
+                    &decode(&current.bytes()),
+                    bound,
+                    &what,
+                );
+            } else if f.name == "kmeans" || f.name == "holt" {
                 let saved = named(&m.state());
                 let again = load(&case, &saved).unwrap_or_else(|e| panic!("{what}: {e}"));
                 assert!(
@@ -730,6 +782,7 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                     tol
                 };
                 let tol = moved.map_or(tol, |b| tol.max(b));
+                let tol = taken_up.map_or(tol, |(_, b)| tol.max(b));
                 let got = m.step(row);
                 if let Some((_, slots)) = &within {
                     assert!(
@@ -1073,7 +1126,9 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 50] = [
+    const FORMS: [(&str, &[&str]); 51] = [
+        // Schema 69 (task 479): a wide `full` state's factor.
+        ("hmm_full", &["model", "Hmm", "factor_states"]),
         // Schema 66 (task 327): a diagonal shape's variances alone.
         ("hmm_diag", &["model", "Hmm", "diag_states"]),
         ("ew_class_diag", &["model", "EwClass", "diag_classes"]),
@@ -2068,6 +2123,81 @@ fn kalmans_square_root_is_written_as_its_factor() {
     }
 }
 
+/// `hmm`'s factor form (schema 69, task 479): `hmm_full`, 13 features
+/// under `full`, holds each state as its weight, means, ridge scale, `σ` in
+/// `[1/4, 1]` and `L`, the lower triangle of a Cholesky factor of order 13
+/// (91 numbers, every pivot positive, an entry below one not 0), and no
+/// co-moments; the factor has moved since its take-up, so some `σ` is
+/// below 1, and its continuation keeps the form. `hmm_full_narrow`, 12
+/// features, and every other `hmm` case write no `factor_states`, which a
+/// state saved before 69 lacks.
+#[test]
+fn a_wide_full_hmm_is_written_as_its_factors() {
+    if regenerating() {
+        return;
+    }
+    let d = 13;
+    let forms = |v: &rmpv::Value| -> Vec<(f64, Vec<f64>)> {
+        at(v, &["model", "Hmm", "factor_states"])
+            .and_then(rmpv::Value::as_array)
+            .expect("factor_states")
+            .iter()
+            .map(|f| {
+                let sigma = at(f, &["sigma"]).and_then(rmpv::Value::as_f64).unwrap();
+                let l = at(f, &["l"])
+                    .and_then(rmpv::Value::as_array)
+                    .unwrap()
+                    .iter()
+                    .map(|x| x.as_f64().unwrap())
+                    .collect();
+                (sigma, l)
+            })
+            .collect()
+    };
+    let factor = |(sigma, l): &(f64, Vec<f64>)| {
+        let col = |j: usize| j * d - j * j.saturating_sub(1) / 2;
+        (0.25..=1.0).contains(sigma)
+            && l.len() == d * (d + 1) / 2
+            && (0..d).all(|j| l[col(j)] > 0.0)
+            && l.iter().all(|x| x.is_finite())
+            && (0..d).any(|j| (j + 1..d).any(|i| l[col(j) + i - j] != 0.0))
+    };
+    let f = frozen::ALL
+        .iter()
+        .find(|f| f.name == "hmm_full")
+        .expect("hmm_full: no fixture; add the case and regenerate");
+    let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+    let held = forms(&v);
+    assert!(held.len() == 2 && held.iter().all(factor), "{held:?}");
+    assert!(
+        held.iter().any(|(sigma, _)| *sigma < 1.0),
+        "no factor has moved"
+    );
+    let states = at(&v, &["model", "Hmm", "states"]).and_then(rmpv::Value::as_array);
+    assert_eq!(
+        states.map(Vec::len),
+        Some(0),
+        "co-moments beside the factors"
+    );
+    let mut m = load(&case_of(f), &f.bytes()).unwrap();
+    for row in f.rows() {
+        m.step(&row);
+    }
+    let after = rmpv::decode::read_value(&mut named(&m.state()).as_slice()).unwrap();
+    assert!(forms(&after).iter().all(factor), "the continuation");
+    for f in frozen::ALL
+        .iter()
+        .filter(|f| f.variant == "Hmm" && f.name != "hmm_full")
+    {
+        let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+        assert!(
+            at(&v, &["model", "Hmm", "factor_states"]).is_none(),
+            "{}",
+            f.name
+        );
+    }
+}
+
 /// `audit`'s counters in both of their forms (schema 54, docs/PLAN.md task
 /// 223 (b)): a summary past the cap, with decrements, and exact counts below
 /// it. Integers, which [`held`] does not count, so read here.
@@ -2660,4 +2790,102 @@ fn equal_infinities_agree_at_any_tolerance() {
     }
     assert!(!agree(1.0, 1.0 + 1e-15, 0.0));
     assert!(agree(1.0, 1.0 + 1e-15, 1e-12));
+}
+
+/// A kept wide `full` `hmm` state, in co-moments, converted to the factor
+/// form ([`TAKEN_UP`]): the kept state holds no factor and the converted
+/// one holds one a state and no co-moments; the converted state is the
+/// current fixture's field for field, every number to the bit, but for each
+/// state's `σ` and `L`, whose matrices are within `bound` of the largest
+/// diagonal entry ([`factor_matrices_apart`]).
+fn taken_up_rule(
+    kept: &rmpv::Value,
+    saved: &rmpv::Value,
+    current: &rmpv::Value,
+    bound: f64,
+    what: &str,
+) {
+    let factors = |v: &rmpv::Value| {
+        at(v, &["model", "Hmm", "factor_states"])
+            .and_then(rmpv::Value::as_array)
+            .map_or(0, Vec::len)
+    };
+    let states = |v: &rmpv::Value| {
+        at(v, &["model", "Hmm", "states"])
+            .and_then(rmpv::Value::as_array)
+            .map_or(0, Vec::len)
+    };
+    assert!(
+        factors(kept) == 0 && states(kept) == 2,
+        "{what}: the kept state is in co-moments"
+    );
+    assert!(
+        factors(saved) == 2 && states(saved) == 0,
+        "{what}: loaded, in the factor form"
+    );
+    // Every number but each state's `σ` and `L` to the bit.
+    fn without_factor(v: &rmpv::Value) -> rmpv::Value {
+        match v {
+            rmpv::Value::Map(m) => rmpv::Value::Map(
+                m.iter()
+                    .filter(|(k, _)| !matches!(k.as_str(), Some("sigma" | "l")))
+                    .map(|(k, v)| (k.clone(), without_factor(v)))
+                    .collect(),
+            ),
+            rmpv::Value::Array(a) => rmpv::Value::Array(a.iter().map(without_factor).collect()),
+            v => v.clone(),
+        }
+    }
+    same_but_floats(&without_factor(saved), &without_factor(current), 0.0, what);
+    let apart = factor_matrices_apart(saved, current);
+    assert!(
+        apart <= bound,
+        "{what}: the converted matrices are {apart:e} of their size from the current fixture's"
+    );
+}
+
+/// The states' matrices `M = σ·L Lᵀ` of two saved `hmm` factor forms, each
+/// state's `L` its packed lower triangle column by column: the largest
+/// `|ΔMᵢⱼ|` over the largest `Mᵢᵢ`, over every state.
+fn factor_matrices_apart(got: &rmpv::Value, want: &rmpv::Value) -> f64 {
+    let states = |v: &rmpv::Value| -> Vec<Vec<f64>> {
+        at(v, &["model", "Hmm", "factor_states"])
+            .and_then(rmpv::Value::as_array)
+            .expect("factor_states")
+            .iter()
+            .map(|f| {
+                let sigma = at(f, &["sigma"]).and_then(rmpv::Value::as_f64).unwrap();
+                let l: Vec<f64> = at(f, &["l"])
+                    .and_then(rmpv::Value::as_array)
+                    .unwrap()
+                    .iter()
+                    .map(|x| x.as_f64().unwrap())
+                    .collect();
+                let d = at(f, &["m"]).and_then(rmpv::Value::as_array).unwrap().len();
+                let col = |j: usize| j * d - j * j.saturating_sub(1) / 2;
+                let mut m = vec![0.0; d * d];
+                for i in 0..d {
+                    for j in 0..=i {
+                        let s: f64 = (0..=j).map(|t| l[col(t) + i - t] * l[col(t) + j - t]).sum();
+                        m[i * d + j] = sigma * s;
+                    }
+                }
+                m
+            })
+            .collect()
+    };
+    let (g, w) = (states(got), states(want));
+    assert_eq!(g.len(), w.len(), "the number of states");
+    g.iter()
+        .zip(&w)
+        .map(|(a, b)| {
+            let d = (a.len() as f64).sqrt() as usize;
+            let scale = (0..d).map(|i| b[i * d + i]).fold(0.0, f64::max);
+            a.iter()
+                .zip(b)
+                .map(|(x, y)| (x - y).abs())
+                .fold(0.0, f64::max)
+                / scale
+        })
+        .fold(0.0, f64::max)
 }

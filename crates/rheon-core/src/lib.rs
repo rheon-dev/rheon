@@ -163,7 +163,7 @@ pub use ftrl::{Ftrl, FtrlCfg, FtrlLoss};
 pub use gaps::{GramPart, TargetGaps};
 pub use hasher::{FixedHasher, FixedState};
 pub use health::FeatureHealth;
-pub use hmm::{Hmm, HmmCfg};
+pub use hmm::{EwFactor, Hmm, HmmCfg};
 pub use holt::{Holt, HoltCfg};
 pub use huber_refit::{
     BIN_REFIT_ROWS_PER_BIN, DEFAULT_REFIT_MAX_FEATURES, DEFAULT_REFIT_ROWS, MAX_REFIT_ROWS,
@@ -855,7 +855,23 @@ pub use window::{
 ///   covariance form moves a byte but the schema's number. Schema 67's
 ///   fixtures are kept (`tests/state_fixtures/v67/`), and the new form is
 ///   the case `kalman_square_root`.
-pub const SCHEMA_VERSION: u32 = 68;
+/// - 69 (2026-11-20, task 479, the user's decision of the same day, "Land
+///   it from k ≥ 13"): `hmm` under `covariance_type = "full"` at 13
+///   features or more ([`Hmm::FACTOR_FROM`]) keeps each state, once
+///   seeded, as its weight, its means and the Cholesky factor of its
+///   matrix, `M = σ·L Lᵀ` ([`EwFactor`]), in `factor_states`, written only
+///   where it is not empty, with `states` empty; a learned row moves the
+///   factor by plane rotations where the co-moments were updated and
+///   factorized afresh. Narrower states, `tied` and `diag` keep their
+///   layout and their bits. A `full` state of 68 or earlier at 13 features
+///   or more, once seeded, holds co-moments: it loads as their factor, the
+///   one its next row read, and goes on in the factor form within rounding
+///   of the old build's rows, not to the bit (CLAUDE.md rule 5's twentieth
+///   exception); a state still in its warm-up loads as it was and takes
+///   its factor up at its seeding. Schema 68's fixtures are kept
+///   (`tests/state_fixtures/v68/`), with the cases `hmm_full` (13 features)
+///   and `hmm_full_narrow` (12) written into it by the schema-68 build.
+pub const SCHEMA_VERSION: u32 = 69;
 
 /// The default solve cadence of `ewridge`, `lasso`, `huber` and `quantile`
 /// (docs/PLAN.md task 115 (b)): a solve once the weight learned since the last

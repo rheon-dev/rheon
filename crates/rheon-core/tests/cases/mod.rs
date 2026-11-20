@@ -257,6 +257,28 @@ fn decay() -> Decay {
     Decay::Halflife(H)
 }
 
+/// `hmm` with full covariance over `d` features, seeded from its first ten
+/// learned rows: the `hmm_full` cases.
+fn hmm_full_cfg(d: usize) -> HmmCfg {
+    HmmCfg {
+        n_features: d,
+        k: 2,
+        decay: decay(),
+        covariance: Covariance::Full,
+        precision_prior: 1e-2,
+        min_weight: 0.0,
+        learn: true,
+        transition_prior: 1.0,
+        transition: None,
+        means: None,
+        covs: None,
+        warm_rows: 10,
+        seed_rule: SeedRule::First,
+        seed: 1,
+        tvtp: None,
+    }
+}
+
 fn ewridge_cfg() -> EwRidgeCfg {
     EwRidgeCfg {
         n_features: K,
@@ -1876,6 +1898,29 @@ pub fn all() -> Vec<Case> {
             })
             .unwrap(),
             K,
+            Targets::None,
+            40
+        ),
+        // The full shape on each side of the width from which each state
+        // keeps its covariance as a Cholesky factor (schema 69, task 479):
+        // 13 features, saved some 25 learned rows after the factor was
+        // taken up, so the factor has moved by its rotations and its scale;
+        // and 12, which keeps the co-moments.
+        case!(
+            "hmm_full",
+            "Hmm",
+            Hmm,
+            Hmm::new(hmm_full_cfg(13)).unwrap(),
+            13,
+            Targets::None,
+            40
+        ),
+        case!(
+            "hmm_full_narrow",
+            "Hmm",
+            Hmm,
+            Hmm::new(hmm_full_cfg(12)).unwrap(),
+            12,
             Targets::None,
             40
         ),

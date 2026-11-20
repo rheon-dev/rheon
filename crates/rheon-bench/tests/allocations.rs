@@ -417,19 +417,26 @@ fn hmm_and_deco_keep_their_factors_working_space() {
 /// matrix and their list (review 11's S5-1). Each is kept in the row's
 /// working space now, the factor written over the last row's, so a row
 /// stepped into a kept `Step` allocates nothing, as under the full and
-/// diagonal covariances (task 316).
+/// diagonal covariances (task 316). From 13 features a full state keeps
+/// its Cholesky factor and moves it by rotations in the row's kept
+/// deviation (task 479): nothing a row either.
 #[test]
 fn hmm_with_a_shared_covariance_allocates_nothing_a_row() {
-    for (covariance, before) in [("tied", 7.0), ("full", 0.0), ("diag", 0.0)] {
+    for (covariance, d, before) in [
+        ("tied", 4, 7.0),
+        ("full", 4, 0.0),
+        ("diag", 4, 0.0),
+        ("full", 13, 0.0),
+    ] {
         let got = per_row_with(
             json!({"name": "m", "model": {"type": "hmm", "n_components": 2,
                                            "covariance_type": covariance, "precision_prior": 1.0},
-                   "features": names("x", 4), "clock": "t", "gap_cap": 100.0, "half_life": 1000.0}),
-            4,
+                   "features": names("x", d), "clock": "t", "gap_cap": 100.0, "half_life": 1000.0}),
+            d,
             0,
             true,
         );
-        check(&format!("hmm {covariance} K=2 d=4"), got, 0.0, before);
+        check(&format!("hmm {covariance} K=2 d={d}"), got, 0.0, before);
     }
 }
 

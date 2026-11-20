@@ -126,6 +126,37 @@ model that only the new build has is listed as an addition and passes.
   `lasso.kurtosis_*`, `lasso.jarque_bera_*`, `lasso.selected_*`,
   `lasso.penalty_selected_*`, `lasso.withheld_reason`,
   `lasso.solve_failures`.
+
+- **`hmm` with a full covariance and 13 features or more keeps each state's
+  Cholesky factor as the state**, `M = s·L·Lᵀ` with the scalar `s` held
+  between 1/4 and 1, and a learned row moves it by plane rotations in time
+  `d²`, where the state kept co-moments and factorized them after every
+  learned row in time `d³`. A row of 2 states takes, against the build with
+  the column loop below (both function layouts, each beside an
+  identical-binary control within ±6.5%): on arm64 (Apple M4 Pro) 0.93 of
+  the time at 13 features, 0.75 to 0.76 at 20 and 0.48 at 32, and against
+  the build before that loop 0.84 to 0.85, 0.73 to 0.74 and 0.52 to 0.54; on
+  x86-64 (AMD EPYC, the same arithmetic timed before landing) 0.91 at 13,
+  0.79 at 20 and 0.535 at 32. Below 13 features the rotations
+  are the slower (1.05 to 1.07 at 4 and 8 features on both platforms), so a
+  narrower state, and every `tied` and `diag` one, keeps its co-moments and
+  every output bit. The saved state is smaller: 2,621 bytes for 2 states of
+  13 features against 4,180, 5,023 against 8,598 at 20, 11,179 against
+  20,262 at 32. The two forms hold the same matrix in exact arithmetic and
+  round differently: against 2.0.0 over 20,000 rows at 13, 20 and 32
+  features (grouped, chunked, saved and loaded, with nulls, with no decay),
+  a filtered or predicted state probability moved by at most 5.7e-12
+  (99.9th percentile 2.8e-13), `loglik` by at most 9.0e-11 relative (99.9th
+  percentile of its absolute movement 5.0e-11), a state mean in `coef` by
+  at most 1.4e-11; no `state` and no argmax of the probabilities changed.
+  Against the same recursion carried in 512 bits, the factor form's
+  densities, probabilities and scores are as close as the co-moments' (its
+  matrix within 680 units of rounding, theirs within 95, on 13 to 32
+  features). A state saved by an earlier build at that width loads as the
+  factor of its co-moments and goes on in the factor form within rounding
+  of the earlier build; the schema is 69. Moves:
+  `hmm.filtered_state*`, `hmm.predicted_state*`, `hmm.loglik`, `hmm.state`,
+  `hmm.coef`.
 - `lasso` writes each solve's correlation matrix over the one its thread's
   last solve left, where every solve made and zeroed a new one (2 MB at 500
   features): 0.97 of the time a row at 500 features on arm64 (Apple M4 Pro,
@@ -148,6 +179,19 @@ model that only the new build has is listed as an addition and passes.
   unmeasured here. Up to 12 features nothing changes, and an x86-64 CPU
   with AVX2 keeps faer's call from 9 to 12. Every output is unchanged to
   the bit.
+
+  our own, a column at a time with eight rows held in registers, where it
+  went through faer's call: the same products in the same order, so every
+  factor is faer's to the bit, without faer's dispatch and scratch. On
+  arm64 (Apple M4 Pro, both function layouts, each against the previous
+  build) a row takes 0.87 to 0.88 of the time at 20 features in `hmm` (two
+  states, full covariance) and `ew_cov`'s `mahal`, 0.90 to 0.91 in
+  `ew_class` (full and tied), 0.92 to 0.96 at 13 and 16, and 0.94 to 0.96 at
+  32; `bocpd` with a full covariance 0.96 at 16. Every other model that
+  factorizes a matrix of that size (`ewridge`, `deco` and the rest) takes
+  the same loop, unmeasured here. Up to 12 features nothing changes, and an
+  x86-64 CPU with AVX2 keeps faer's call from 9 to 12. Every output is
+  unchanged to the bit.
 - `ew_cov`'s `mahal` factorizes and solves in a working space its thread
   keeps, written over from row to row, where each row made a new matrix
   for the factor, another for the solve and two lists. On arm64 (Apple M4
@@ -158,6 +202,11 @@ model that only the new build has is listed as an addition and passes.
   features and 0.70 at 16. The space is one factor a thread, of the order
   it last read, not one a model, so a bank of many groups holds no more
   memory. Every output is unchanged to the bit.
+
+  same time at 10 to 16, where the factorization is most of a row. The
+  space is one factor a thread, of the order it last read, not one a model,
+  so a bank of many groups holds no more memory. Every output is unchanged
+  to the bit.
 
 ## [2.0.0] — 2026-11-19
 

@@ -220,6 +220,26 @@ def hmm(
         xi_kl = p_k(t-1) Pi_kl f_l / sum over all pairs
         N_kl <- N_kl + w * xi_kl
 
+    Under ``covariance_type = "full"`` with 13 features or more, each state
+    keeps the Cholesky factor of ``M_l = Sigma_l + omega_l I`` in place of
+    its running co-moments, as ``s * L L'`` with the scalar ``s`` kept
+    between 1/4 and 1, and the row moves the factor by plane rotations, in
+    time ``d^2``, where the co-moments are factorized afresh, in time
+    ``d^3``. With ``W`` the state's weight before the row,
+    ``a = λW / (λW + w p_l)``, ``b = w p_l / (λW + w p_l)`` and ``delta``
+    the row's deviation from the state's mean before the row:
+
+    .. code-block:: text
+
+        s'      = a * s
+        L' L''  = L L' + (b / s) * delta delta'        by plane rotations
+        M_l'    = s' L' L''  = a M_l + a b delta delta'
+
+    The two forms are the same matrix in exact arithmetic, and their
+    outputs part in the last digits: a posterior by at most about ``6e-12``
+    over 20,000 rows at 13 to 32 features. Below 13 features the
+    factorization is the faster, and is kept.
+
     .. rubric:: Example
 
     This code plants two regimes, at -2 and +2, between which a chain

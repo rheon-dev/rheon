@@ -3373,6 +3373,25 @@ N_kl ← λ N_kl                                    before the row reads Π
 ξ_kl = p_k(t−1)·Π_kl·f_l / Σ                     N_kl ← N_kl + w·ξ_kl
 ```
 
+A state's density reads `M_l = Σ_l + ω_l·I` through its Cholesky factor.
+Under `covariance_type = "full"` with 13 features or more, each state keeps
+that factor itself, as `s·L·Lᵀ` with a scalar `s` between 1/4 and 1. The row
+moves it by plane rotations in time `d²`, where narrower states keep their
+co-moments and factorize them in time `d³`. With `W` the state's
+weight before the row, `a = λW / (λW + w·p_l)`, `b = w·p_l / (λW + w·p_l)`
+and `δ` the row's deviation from the state's mean before the row:
+
+```
+s'     = a·s
+L'L'ᵀ  = L·Lᵀ + (b/s)·δδᵀ                       by plane rotations
+M_l'   = s'·L'L'ᵀ = a·M_l + a·b·δδᵀ
+```
+
+It is the same matrix in exact arithmetic, and the densities part from a
+refactorization's in their last digits. The rotations cost about 0.9 of a
+factorization's time at 13 features, 0.75 at 20 and half at 32, on arm64
+and x86-64 alike, and more than it below 13, where the factorization stays.
+
 #### Example
 
 **Because regimes last, the filter beats a rule that knows the true
