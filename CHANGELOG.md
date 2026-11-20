@@ -13,6 +13,12 @@ returns.
 
 ### Performance
 
+- `lasso` writes each solve's correlation matrix over the one its thread's
+  last solve left, where every solve made and zeroed a new one (2 MB at 500
+  features): 0.97 of the time a row at 500 features on arm64 (Apple M4 Pro,
+  both function layouts), level at 20 and 200. A thread keeps one matrix of
+  up to 4 MiB (724 features); a wider one is made and dropped as before.
+  Every output is unchanged to the bit.
 - A Cholesky factorization of 13 to 64 features is computed by a loop of
   our own, a column at a time with eight rows held in registers, where it
   went through faer's call: the same products in the same order, so every
