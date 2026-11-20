@@ -9,7 +9,42 @@ order, another kernel), each declared with its size. Before 1.0, the minor
 version carried breaking changes, and any change to the numbers a model
 returns.
 
+**An entry that moves an output's numbers ends with `Moves:` and the
+fields it moves**, each backticked as `model.field`: the model by its
+builder's name, the field as the output names it, `*` and `?` as
+wildcards. The rest of the entry is the reason, which says what moved the
+numbers and by how much:
+
+```text
+- **`ewridge` adds its Gram in another order**, which moves its predictions
+  and coefficients by at most 2 ulps. Moves: `ewridge.pred_*`, `ewridge.coef`.
+```
+
+On every push and pull request, CI compares every output field of a
+workload that reaches every model with the newest release's, bit for bit,
+on Linux, macOS and Windows (`scripts/compare_release.py`). It reads the
+`Moves:` clauses of the entries above that release's section, and fails
+on a field that moved, or went, that none of them names. A field or a
+model that only the new build has is listed as an addition and passes.
+
 ## [Unreleased]
+
+### Tests and documents
+
+- Every output is compared with the newest release's, bit for bit, on every
+  push and pull request, on Linux, macOS and Windows, and a field that moves
+  without a `Moves:` declaration fails the run (the header above has the
+  format). The comparison used to gate only a release, and ran on one
+  platform between releases as a report. Its workload now also reaches the
+  paths that could move numbers without a tolerance-held test seeing it,
+  and counts each one so a path it stops reaching fails the run as well:
+  `bocpd` dropping runs below `prune_below` and folding the runs at
+  `max_run`, the low part of `kmeans`' and `micro`'s compensated means, a
+  numeric and a temporal clock crossing a session, a temporal clock at a
+  decade's age, a reset after a step back in each of the 19 kinds that read
+  a clock, and every spec run again with each group's first row at weight 0,
+  with it null, and saved mid-stream, loaded and continued: 6,158 fields of
+  416 specs, against 1,296 of 74. Against 2.0.0 every field is identical.
 
 ## [2.0.0] — 2026-11-19
 

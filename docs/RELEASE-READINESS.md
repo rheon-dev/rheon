@@ -420,7 +420,9 @@ and a change to the numbers a model returns makes a release a minor.
 `uv run python scripts/compare_release.py` installs the newest release
 from PyPI into a cached venv under `.cache/release-compare/`. It runs the
 workload in `scripts/release_probe.py` under both builds, over 400 rows
-with groups, sessions, gaps, nulls and zero weights.
+with groups, sessions, gaps, nulls and zero weights, and again on each
+group's first row at weight 0, on it null, and saved mid-stream, loaded
+and continued.
 
 **The workload's specs hold every model, every output a regression can
 emit, and the settings that take a path of their own.** Every output is
@@ -451,14 +453,23 @@ comparison. That is the window operators (`rp.ewm_mean` and the rest,
 `with_windows`), `rheon.gram`, an internal helper for gradient-boosted trees, `refresh_time`, a bank's
 `threads=`, and every combination of settings beyond the ones named. It
 prints each field that differs, with the first row where it does, and
-exits 1. Each run reports which package it imported, so the comparison
+exits 1 unless the CHANGELOG declares the move: an entry above the
+release's section that ends with `Moves:` and the field as `model.field`
+([the test suite's
+account](TESTING.md#outputs-against-the-last-release-bit-for-bit) has the
+format). Each run reports which package it imported, so the comparison
 cannot compare a build with itself. A spec the old release refuses is
-listed as not comparable, not as a difference. `--against 0.9.1` names
-another release, and `--report` prints without failing.
+listed as not comparable, an addition, not as a difference; so is a field
+only the new build emits. The workload also counts each hard path it
+reaches (`bocpd`'s pruning and fold, a compensated mean's low part, a
+session crossed, a temporal clock at a decade's age, a reset after a step
+back, first rows at weight 0 and null, a state continued), and a path
+counted 0 fails the run. `--against 0.9.1` names another release, and
+`--report` prints without failing.
 
-**CI runs the same comparison on every push to `main` and every pull
-request, report only,** so a change
-shows at the commit that made it. On 2026-11-03, 1.4.0's build against
+**CI runs the same comparison on every push and every pull request, on
+Linux, macOS and Windows, and fails on a move no entry declares,** so a
+change shows at the commit that made it. On 2026-11-03, 1.4.0's build against
 1.3.0 compared 1,283 fields of 72 specs, and each of the 637 that differed
 is declared in the CHANGELOG. The specs that set a keyword 1.3.0 does not
 take, such as `huber_refit_rows`, were not comparable.

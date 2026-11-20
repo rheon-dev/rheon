@@ -1042,7 +1042,10 @@ without a stated reason:** `oracles.toml` holds each oracle grid's error
 against its oracle, and `budgets.toml` holds each hot path's instruction
 count and each output's memory. Each number is compared with the file,
 never with the previous run, so a run of small drifts adds up against one
-number instead of each passing against the last.
+number instead of each passing against the last. A third check holds
+every output to the last release's bits, and moves only with a declaration
+([Outputs against the last release, bit for
+bit](#outputs-against-the-last-release-bit-for-bit)).
 
 ### The oracle ledger
 
@@ -1342,6 +1345,57 @@ median 4.3% fewer, [What the x86-64 wheels
 need](VERSIONS.md#what-the-x86-64-wheels-need)). No budget holds that build's
 counts, so a change that costs instructions only there is not caught by them.
 `.github/workflows/vm-checks.yml` builds the `v3` layout for a VM to time.
+
+### Outputs against the last release, bit for bit
+
+**Every push and pull request compares every output field with the newest
+release's, bit for bit, and fails on a field that moved without a
+declaration.** Most tests compare within a tolerance, so a change that
+moves the last bits of a number passes them. CI's `bits` job, on Linux,
+macOS and Windows, builds the checkout, installs the newest release from
+PyPI into a second environment, and runs `scripts/compare_release.py`,
+which runs the workload of `scripts/release_probe.py` under both builds.
+Both run on one machine, so both call the same `exp` and `ln`, and a
+difference is the code's, not the math library's.
+
+**The workload reaches every model and every output, and each path that
+can move numbers without a tolerance-held test seeing it.** Every spec runs
+four times: on a stream of 400 rows with groups, sessions, gaps past the
+cap, nulls and zero weights; on it with each group's first row at weight 0;
+with that row null in every feature and target; and saved at row 137,
+loaded and continued. Beside the specs that switch every output on, it
+holds `bocpd` with pruning and a length cap over a break, a temporal clock
+whose groups began a decade before their other rows, a reset after a step
+back in every kind that reads a clock, and sessions crossed by a numeric
+and a temporal clock. Each path is counted in the run, and a count of 0
+fails the comparison, since a path no longer reached is no longer compared:
+
+| path | what is counted |
+|---|---|
+| `bocpd` drops runs below `prune_below` | the run lengths missing below the longest in the final state, which holds every length without a prune |
+| `bocpd` folds the runs at `max_run` | the rows whose `run_mode` is `max_run - 1`, a run only the fold makes |
+| a compensated mean's low part, in `kmeans` and in `micro` | the non-zero `_lo` values of the final states |
+| a numeric clock, and a temporal one, crosses a session | the summary's `session_changes` |
+| a temporal clock at a decade's age | the groups whose state's clock has run ten years |
+| a reset after a step back | the summary's `resets` |
+| zero-weight first rows, and null first rows | the specs whose `weight_sum` is exactly 0 on each group's next row and ends finite and positive |
+| a state saved mid-stream, loaded and continued | the loaded banks that report the rows fed before the save |
+
+`tests/test_release_compare.py` runs each counter on a stream that does
+not take its path, where it counts 0.
+
+**A move is declared in the CHANGELOG entry that makes it.** The entry ends
+with `Moves:` and the fields, each backticked as `model.field`, the model
+by its builder's name, with `*` and `?` as wildcards, such as
+`ewridge.pred_*` or `*.weight_sum` (the CHANGELOG's header has an
+example). The rest of the entry is its reason, and an entry with none fails, as does a pattern that
+is not `model.field` or names no model the workload runs. The comparison
+reads the entries above the section of the release it compares against:
+`[Unreleased]`, and while a release is cut, the new version's section. A
+field that moved, went from the output, or whose spec the new build
+refuses fails unless a declaration names it; a declared move passes and is
+listed in the job's summary with its entry. A field or a spec only the new
+build has is an addition: listed, and passed.
 
 ## Where it is thin, and what is left
 

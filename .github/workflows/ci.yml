@@ -400,14 +400,78 @@ jobs:
         with:
           path: docs/_build/html
 
-      # Every output against the newest release's, bit for bit: a commit that
-      # moves a number shows it here, not first at release time. Reported,
-      # never gating: a change between releases may be intended, and the
-      # release step decides (docs/contributing/cut-a-release.md, step 1).
-      - name: outputs against the newest release (report only)
-        if: runner.os == 'Linux' && matrix.python == '3.12'
+  # Every output against the newest release's, bit for bit, on each OS: a
+  # commit that moves a number fails here, at the commit that moved it,
+  # unless the CHANGELOG declares the move (scripts/compare_release.py's
+  # docstring has the `Moves:` format). The tests compare within
+  # tolerances, so a change in the last bits passes them; this is the one
+  # check of every bit. Both builds run on the one runner, so they call the
+  # one math library: `exp` and `ln` cannot differ between them, as they
+  # do between Apple's library, glibc and each Windows image's
+  # `ucrtbase.dll`. One Windows image, then: two would compare the same.
+  #
+  # Its own job, not a step of `test`: the Windows test legs take two to
+  # three hours and stop at their first failing step, and this answer is
+  # wanted in the build's time. The build is the test job's: the same
+  # toolchain, disk and Defender steps, and `maturin develop --release`; the
+  # sync leaves the project out, so the extension is compiled once. The
+  # newest release comes from PyPI into a venv of its own beside this
+  # environment's Polars, and the workload (scripts/release_probe.py, every
+  # spec on four streams, with a count of each hard path it reaches) runs
+  # under both, about 2 seconds a build on an M-series Mac.
+  #
+  # The matrix follows the test job's COST POLICY: all three while public
+  # or dispatched, Windows beside Linux weekly, Linux alone otherwise.
+  bits:
+    name: outputs against the newest release, bit for bit (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # Cold, the release build of the extension took about 35 minutes on
+    # Windows and 18 on Linux; the comparison itself takes seconds.
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: >-
+          ${{ github.event.repository.private == false
+              && fromJSON('["ubuntu-latest", "macos-latest", "windows-latest"]')
+           || github.event_name == 'workflow_dispatch'
+              && fromJSON('["ubuntu-latest", "macos-latest", "windows-latest"]')
+           || github.event_name == 'schedule'
+              && fromJSON('["ubuntu-latest", "windows-latest"]')
+           || fromJSON('["ubuntu-latest"]') }}
+    env:
+      # The floor, as the lint job names it, and the interpreter the
+      # release's venv takes too.
+      UV_PYTHON: "3.12"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: the machine this job ran on
+        uses: ./.github/actions/machine-report
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      # Before the cache and before anything compiles, as in `test`.
+      - name: free disk and use a leaner linker (Linux)
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/linux-build-prep
+      - name: exclude the build from Defender (Windows)
+        if: runner.os == 'Windows'
         continue-on-error: true
-        run: uv run python scripts/compare_release.py --report
+        run: |
+          Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE","$env:USERPROFILE\.cargo","$env:USERPROFILE\.rustup"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          cache-on-failure: true
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+      - run: uv sync --locked --no-install-project
+      - name: build the extension
+        run: uv run --no-sync maturin develop --release -m crates/rheon-py/Cargo.toml
+      # Gating: no `--report`, no `continue-on-error`. The declared moves,
+      # the additions and each path's count go to the job summary.
+      - name: every output against the newest release, bit for bit
+        run: uv run --no-sync python scripts/compare_release.py
 
   # Publishes the reference the test job built to GitHub Pages, on every
   # push to main that passed, at https://rheon-dev.github.io/rheon/.

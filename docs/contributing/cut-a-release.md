@@ -60,9 +60,12 @@ Nothing leaves your checkout before step 13.
 
 1. **Compare every output with the last release's,** with
    `uv run python scripts/compare_release.py`. It exits 0 when every
-   field is the same to the bit, and otherwise prints each field that
-   differs with the first row where it does. Declare each difference in
-   the CHANGELOG, or find its cause and pin it with a test ([Compare with
+   field is the same to the bit or its move is declared, and otherwise
+   prints each field that differs with the first row where it does. CI
+   runs it on every push, so this run should find nothing new. Declare
+   each difference in the CHANGELOG entry that made it, which ends with
+   `Moves:` and the fields as `model.field`, or find its cause and pin it
+   with a test ([Compare with
    the last release, bit for
    bit](../RELEASE-READINESS.md#compare-with-the-last-release-bit-for-bit)).
 2. **Benchmark this build against the last release.** Run this
