@@ -722,7 +722,7 @@ def test_the_versions_pages_pin_names_the_current_minor(copy):
     v = release_version.versions(copy)["pyproject.toml"]
     major, minor, _ = v.split(".", 2)
     text = page.read_text(encoding="utf-8")
-    (name,) = set(re.findall(rf"(rheon|polars-online)~={major}\.{minor}\.0", text))
+    name = "rheon"
     pin = f"{name}~={major}.{minor}.0"
     assert pin in text
     page.write_text(text.replace(pin, f"{name}~=0.1.0"), encoding="utf-8")

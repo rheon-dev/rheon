@@ -62,7 +62,7 @@ def versions(root: Path = REPO) -> dict[str, str | None]:
         "Cargo.toml rheon-core pin": deps.get("rheon-core", {}).get("version"),
         "Cargo.toml rheon-polars pin": deps.get("rheon-polars", {}).get("version"),
         "python/rheon/__init__.py": match(r'^__version__ = "([^"]+)"', init),
-        "docs/VALIDATION.md": match(r"(?:rheon|polars-online) (\d+\.\d+\.\d+\S*)", validation),
+        "docs/VALIDATION.md": match(r"rheon (\d+\.\d+\.\d+\S*)", validation),
     }
 
 
@@ -73,11 +73,9 @@ def schema(root: Path = REPO) -> int:
     return int(found)
 
 
-#: docs/VERSIONS.md's example pin: ``rheon~=0.13.0`` names the 0.13 series. The
-#: pattern and the VALIDATION.md one also read the old project name, until the
-#: docs are rewritten under the new one.
+#: docs/VERSIONS.md's example pin: ``rheon~=0.13.0`` names the 0.13 series.
 VERSIONS = "docs/VERSIONS.md"
-PIN = re.compile(r"(?:rheon|polars-online)~=(\d+\.\d+\.\d+)")
+PIN = re.compile(r"rheon~=(\d+\.\d+\.\d+)")
 
 
 def unreleased(changelog: str) -> str:

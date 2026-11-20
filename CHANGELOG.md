@@ -11,6 +11,8 @@ returns.
 
 ## [Unreleased]
 
+## [2.0.0] — 2026-11-19
+
 ### Changed (breaking)
 
 Code that ran on 1.6.0 must change for these: the package's name, its
