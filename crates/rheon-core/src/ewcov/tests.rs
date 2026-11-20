@@ -3383,3 +3383,102 @@ fn a_window_view_is_written_in_place_only_over_one_of_its_shape() {
         write(&damaged, &mut out, "a damaged state's rows");
     }
 }
+
+/// The distance the allocating solve gave, as `mahal_of` read it before
+/// task 479: the solution `solve_spd_ridged` returns, dotted with the
+/// deviations as an iterator's `sum`.
+fn mahal_allocating(cov: &EwCov, x: &[f64], scale: f64) -> f64 {
+    if !cov.has_precision_prior() {
+        return f64::NAN;
+    }
+    let delta: Vec<f64> = (0..cov.k()).map(|i| cov.deviation(i, x[i])).collect();
+    let ridge = cov.precision_prior * cov.precision_scale;
+    match crate::solve::solve_spd_ridged(cov.comoments().packed(), ridge, &delta, cov.k()) {
+        Some((sol, _)) => {
+            let d2 = delta.iter().zip(&sol).map(|(d, s)| d * s).sum::<f64>() / scale;
+            if d2.is_finite() {
+                d2.max(0.0).sqrt()
+            } else {
+                f64::NAN
+            }
+        }
+        None => f64::NAN,
+    }
+}
+
+/// Task 479: a row's `mahal` in the kept working space -- the factor
+/// written over the last row's, faer's scratch and the solve's column kept
+/// -- is the allocating solve's to the bit, row by row, through the whole
+/// stream: at orders each side of the small factor's switch (12 and 13)
+/// and of the small solve's (4 and 5), and beyond, on a pool of four
+/// threads, one working space across every order and back to one it held,
+/// and the step's own (the thread's) beside it; unbiased and not; a prior so small that the early rows need
+/// the jitter's rungs; rows of weight 0; a row far from the rest; and the
+/// first rows, where the co-moments are singular.
+#[test]
+fn the_kept_mahal_working_space_is_the_allocating_solve_to_the_bit() {
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(4)
+        .build()
+        .unwrap();
+    pool.install(|| {
+        let mut checked = 0usize;
+        let mut rungs = 0usize;
+        // One working space across the orders, as a thread keeps one: each
+        // change of order drops the kept factor and makes one afresh.
+        let mut kept = MahalWork::default();
+        for k in [1usize, 2, 4, 5, 12, 13, 20, 33, 13] {
+            for (bias, prior) in [(true, 1.0), (false, 1e-14)] {
+                let mut cfg = mahal_cfg(k, prior);
+                cfg.bias = bias;
+                cfg.decay = crate::Decay::Halflife(40.0);
+                let mut m = EwCovModel::new(cfg).unwrap();
+                let mut s = 3 + k as u64;
+                for r in 0..300 {
+                    let far = if r == 150 { 1e6 } else { 1.0 };
+                    let x: Vec<f64> = (0..k)
+                        .map(|i| far * lcg(&mut s) + if i % 2 == 0 { 0.3 * r as f64 } else { 0.0 })
+                        .collect();
+                    let cov = m.cov().clone();
+                    let scale = m.second_moment_scale(&cov);
+                    let want = mahal_allocating(&cov, &x, scale);
+                    let got = EwCovModel::mahal_in(&cov, &x, scale, &mut kept);
+                    assert_eq!(
+                        got.to_bits(),
+                        want.to_bits(),
+                        "k {k}, row {r}: {got} vs {want}"
+                    );
+                    checked += 1;
+                    let ridge = cov.precision_prior * cov.precision_scale();
+                    if cov.has_precision_prior()
+                        && let Some((_, attempts)) = crate::solve::solve_spd_ridged(
+                            cov.comoments().packed(),
+                            ridge,
+                            &vec![1.0; k],
+                            k,
+                        )
+                    {
+                        rungs += usize::from(attempts > 0);
+                    }
+                    // The row as the step reads it: its slot is the same.
+                    let pred = crate::OnlineModel::step(
+                        &mut m,
+                        &x,
+                        &[],
+                        if r == 0 { 0.0 } else { 1.0 },
+                        if r % 7 == 3 { 0.0 } else { 1.0 },
+                    )
+                    .pred;
+                    if !pred.is_empty() && pred[0].is_finite() {
+                        assert_eq!(pred[0].to_bits(), got.to_bits(), "k {k}, row {r}, step");
+                    }
+                }
+            }
+        }
+        // One factor kept, of the last order read: not one an order.
+        assert_eq!(kept.factor.kept(), 1);
+        assert_eq!(kept.order, 13);
+        assert!(checked >= 4_000, "{checked}");
+        assert!(rungs > 0, "no row needed a jitter's rung");
+    });
+}

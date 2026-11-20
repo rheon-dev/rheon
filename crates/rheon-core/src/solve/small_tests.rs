@@ -224,7 +224,7 @@ fn the_switch_gives_faers_bits_on_both_sides_of_it() {
 
 /// Which path a call takes: an order up to the machine's limit (`SMALL`, 12,
 /// here unless x86-64 has AVX2) takes the small factor and the next takes
-/// faer's; an order of 0 takes neither the small factor's
+/// the column loop or faer's (`the_column_loop_is_taken_from_13_to_64`); an order of 0 takes neither the small factor's
 /// loops nor faer's scratch. (A threshold moved by one would give the same
 /// bits, so the bits cannot say.)
 #[test]
@@ -271,7 +271,7 @@ fn the_limit_is_8_for_the_fused_x86_loop_and_12_otherwise() {
 /// The blocked factor's last block is of any order from 1: a matrix of `64 +
 /// t` is a block of 64 and a block of `t`, the second through
 /// `cholesky_seq`'s small path up to `SMALL`. Each `t` from 1 to `SMALL + 2`
-/// factors (the 13th and 14th, past the switch, take faer's call), the
+/// factors (the 13th and 14th, past the switch, take the column loop), the
 /// same bits at one thread and four, and the failing pivot is named in the
 /// whole matrix's numbering at each position of the last block.
 #[test]
@@ -628,4 +628,193 @@ fn each_form_of_the_loop_matches_a_plain_reference_to_the_bit() {
     check_llt_loops::<10>(10);
     check_llt_loops::<11>(11);
     check_llt_loops::<12>(12);
+}
+
+/// The calls this thread's `llt_cols` has taken, in total so far.
+fn cols_taken() -> usize {
+    COLS_TAKEN.with(|t| t.get())
+}
+
+/// Task 479: past `SMALL` and up to `COLS` (64), `cholesky_seq` factorizes
+/// by the column loop, which is faer's sequential Cholesky to the bit at
+/// every such order: each side of both switches (12 and 13, 64 and 65,
+/// which is faer's call again) over every case `cases` draws, with and
+/// without a kept scratch, on a pool of four threads.
+#[test]
+fn the_column_loop_is_faers_to_the_bit_on_both_sides_of_its_range() {
+    let (mut ok, mut refused) = (0, 0);
+    {
+        crate::test_pool::pool(4).install(|| {
+            let mut s = 23u64;
+            let mut work = CholWork::default();
+            for n in [12, 13, 14, 16, 20, 31, 32, 33, 64, 65] {
+                // Every case to 33; at 64 and 65, which `cases` makes slowly
+                // in a debug build, the conditions and a refused pivot at the
+                // first, a middle and the last place.
+                let drawn = if n <= 33 {
+                    cases(n, &mut s)
+                } else {
+                    let mut few = Vec::new();
+                    for cond in [1.0, 1e8, 1e14, 1e18] {
+                        few.push((format!("spd cond {cond:e}"), spd(n, cond, &mut s)));
+                    }
+                    for j in [0, n / 2, n - 1] {
+                        for (what, v) in [("negative", -1.0), ("NaN", f64::NAN)] {
+                            let mut a = spd(n, 1e3, &mut s);
+                            a[(j, j)] = v;
+                            few.push((format!("{what} pivot at {j}"), a));
+                        }
+                    }
+                    few.into_iter()
+                        .map(|(w, a)| {
+                            (
+                                w,
+                                Mat::from_fn(n, n, |i, j| if i >= j { a[(i, j)] } else { 0.0 }),
+                            )
+                        })
+                        .collect()
+                };
+                for (what, m) in drawn {
+                    let want = faer_seq(&m);
+                    let mut l = m.clone();
+                    let r = cholesky_seq(l.as_mut(), None).map_err(index);
+                    assert_same(n, &format!("{what}, no scratch"), &want, &(l, r));
+                    let mut l = m.clone();
+                    let r = cholesky_seq(l.as_mut(), Some(&mut work)).map_err(index);
+                    assert_same(n, &format!("{what}, kept scratch"), &want, &(l, r));
+                    if want.1.is_ok() {
+                        ok += 1;
+                    } else {
+                        refused += 1;
+                    }
+                }
+            }
+        });
+    }
+    assert!(
+        ok >= 200 && refused >= 600,
+        "{ok} factored, {refused} refused"
+    );
+}
+
+/// The column loop in a vector unit's lanes (`llt_lanes`) cuts each column
+/// by its length: vectors of the unit's width, the last moved up where the
+/// width does not divide, passes of up to `lanes_group` vectors, single
+/// rows below one vector. Every order it takes, so every column length
+/// from 1 to 64 and every cut, against faer to the bit: well and badly
+/// conditioned, and a pivot refused at the first column, at each of the
+/// last eight (where a column is a pass of one short vector or none), and
+/// at the middle.
+#[test]
+fn the_column_loop_is_faers_to_the_bit_at_every_order() {
+    let mut s = 31u64;
+    for n in SMALL + 1..=COLS {
+        let mut drawn: Vec<(String, Mat<f64>)> = Vec::new();
+        for cond in [1.0, 1e8, 1e16] {
+            drawn.push((format!("cond {cond:e}"), spd(n, cond, &mut s)));
+        }
+        for j in [0, n / 2].into_iter().chain(n - 8..n) {
+            let mut a = spd(n, 1e3, &mut s);
+            a[(j, j)] = -1.0;
+            drawn.push((format!("negative pivot at {j}"), a));
+        }
+        for (what, a) in drawn {
+            let m = Mat::from_fn(n, n, |i, j| if i >= j { a[(i, j)] } else { 0.0 });
+            let want = faer_seq(&m);
+            let before = cols_taken();
+            let mut l = m.clone();
+            let r = cholesky_seq(l.as_mut(), None).map_err(index);
+            assert_eq!(cols_taken() - before, 1, "order {n}, {what}");
+            assert_same(n, &what, &want, &(l, r));
+        }
+    }
+}
+
+/// The order from which the column loop runs in vector lanes: every order
+/// it takes on an x86-64 CPU with AVX2 (none without), from
+/// `NEON_LANES_FROM` (16) on arm64; each side of the switch.
+#[test]
+fn the_lanes_are_taken_from_their_order() {
+    #[cfg(target_arch = "aarch64")]
+    let from = Some(NEON_LANES_FROM);
+    #[cfg(target_arch = "x86_64")]
+    let from = crate::sgd::x86_v3().map(|_| SMALL + 1);
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    let from: Option<usize> = None;
+    let mut s = 37u64;
+    for n in SMALL + 1..=COLS {
+        let a = spd(n, 10.0, &mut s);
+        let mut l = Mat::from_fn(n, n, |i, j| if i >= j { a[(i, j)] } else { 0.0 });
+        let before = LANES_TAKEN.with(|t| t.get());
+        cholesky_seq(l.as_mut(), None).expect("positive definite");
+        let taken = LANES_TAKEN.with(|t| t.get()) - before;
+        assert_eq!(
+            taken,
+            usize::from(from.is_some_and(|f| n >= f)),
+            "order {n}"
+        );
+    }
+}
+
+/// Which orders take the column loop: 13 to 64, and none up to 12 (the
+/// small factor's, or faer's from 9 on an x86-64 CPU with AVX2) nor past
+/// 64 (faer's). A matrix whose columns are not contiguous -- a transposed
+/// view -- never takes it, and past 12 takes faer's call, with the bits
+/// faer gives that view. (The bits are
+/// the same on every path, so only the count can say a switch moved.)
+#[test]
+fn the_column_loop_is_taken_from_13_to_64() {
+    assert_eq!(COLS, 64);
+    let mut s = 29u64;
+    for n in 1..=COLS + 2 {
+        let m = Mat::from_fn(n, n, |i, j| {
+            if i == j {
+                1.0 + n as f64
+            } else if i > j {
+                0.1 * draw(&mut s)
+            } else {
+                0.0
+            }
+        });
+        let before = cols_taken();
+        let mut l = m.clone();
+        cholesky_seq(l.as_mut(), None).expect("diagonally dominant");
+        assert_eq!(
+            cols_taken() - before,
+            usize::from(n > SMALL && n <= COLS),
+            "order {n}"
+        );
+        // The same lower triangle, held by rows: a view whose columns are
+        // strided, which faer takes, giving what faer's call gives it (not
+        // always the contiguous bits: faer's strided path does not fuse).
+        let mut t = m.transpose().to_owned();
+        let mut f = t.clone();
+        let before = cols_taken();
+        let r = cholesky_seq(t.as_mut().transpose_mut(), None).map_err(index);
+        assert_eq!(cols_taken(), before, "order {n}, strided");
+        if n <= SMALL {
+            // The small factor reads entries, not columns: its own bits.
+            continue;
+        }
+        let mut mem = MemBuffer::new(llt::factor::cholesky_in_place_scratch::<f64>(
+            n,
+            Par::Seq,
+            Default::default(),
+        ));
+        let want = llt::factor::cholesky_in_place(
+            f.as_mut().transpose_mut(),
+            Default::default(),
+            Par::Seq,
+            MemStack::new(&mut mem),
+            Default::default(),
+        )
+        .map(|_| ())
+        .map_err(|llt::factor::LltError::NonPositivePivot { index }| index);
+        assert_same(
+            n,
+            "strided",
+            &(f.transpose().to_owned(), want),
+            &(t.transpose().to_owned(), r),
+        );
+    }
 }

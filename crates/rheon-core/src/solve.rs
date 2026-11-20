@@ -532,17 +532,345 @@ fn small_llt(mut a: MatMut<'_, f64>) -> Result<(), llt::factor::LltError> {
     by_order!(1 2 3 4 5 6 7 8 9 10 11 12)
 }
 
+/// The largest order [`llt_cols`] takes: faer's own sequential Cholesky
+/// factorizes up to here in one unblocked pass ([`RECURSION_THRESHOLD`]),
+/// so its bits are the loop's.
+const COLS: usize = RECURSION_THRESHOLD;
+
+// How many times this thread has taken `llt_cols`: the order that sends a
+// call to it is read from here, as `SMALL_TAKEN`'s.
+#[cfg(test)]
+thread_local! {
+    static COLS_TAKEN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// [`llt_loop`]'s arithmetic in place on `a`'s lower triangle, of any order
+/// (taken from [`SMALL`] + 1 to [`COLS`]), a column at a time: column `j`
+/// takes `-l_jc · l_ic + ·` from each earlier column `c` in turn, a batch of
+/// eight rows held in registers across every `c`, which a vector unit takes
+/// a few rows at a time, then is multiplied by the reciprocal of its pivot's
+/// root. Each entry `(i, j)` takes the same products in the same order as
+/// [`llt_loop`]'s, `c = 0, 1, ...`, fused as `FUSED` says, so the bits are
+/// its and faer's; only the order the entries are visited in differs, which
+/// is faer's own (its lanes are rows of a batch). `Err(j)` at the first
+/// pivot that is not positive, or whose root is zero or not finite, as
+/// faer's. faer's call reaches the same arithmetic through its dispatch and
+/// scratch, and an order past [`SMALL`] went to it: on arm64 (Apple M4 Pro)
+/// this takes 0.66 of its time at 13, 0.73 at 16, 0.71 at 20, 0.86 at 24
+/// and 0.89 at 32 (task 479, `examples/factor_crossover.rs`).
+#[inline(always)]
+fn llt_cols<const FUSED: bool>(
+    mut a: MatMut<'_, f64, usize, usize, faer::ContiguousFwd>,
+) -> Result<(), usize> {
+    const B: usize = 8;
+    let n = a.nrows();
+    for j in 0..n {
+        let (left, right) = a.rb_mut().split_at_col_mut(j);
+        let left = left.rb();
+        let cj = &mut right.col_mut(0).as_slice_mut()[j..];
+        let len = cj.len();
+        let mut r = 0;
+        while r + B <= len {
+            let mut acc: [f64; B] = cj[r..r + B].try_into().expect("a batch");
+            for c in 0..j {
+                let col = left.col(c).as_slice();
+                let m = -col[j];
+                let xs: &[f64; B] = col[j + r..j + r + B].try_into().expect("a batch");
+                for (v, &x) in acc.iter_mut().zip(xs) {
+                    *v = if FUSED { m.mul_add(x, *v) } else { m * x + *v };
+                }
+            }
+            cj[r..r + B].copy_from_slice(&acc);
+            r += B;
+        }
+        for (i, v) in cj[r..].iter_mut().enumerate() {
+            let mut acc = *v;
+            for c in 0..j {
+                let col = left.col(c).as_slice();
+                let (m, x) = (-col[j], col[j + r + i]);
+                acc = if FUSED {
+                    m.mul_add(x, acc)
+                } else {
+                    m * x + acc
+                };
+            }
+            *v = acc;
+        }
+        let pivot = cj[0];
+        // faer's `!(pivot > 0)`: NaN is refused here, at its own pivot.
+        if pivot.partial_cmp(&0.0) != Some(Ordering::Greater) {
+            return Err(j);
+        }
+        let root = pivot.sqrt();
+        if root == 0.0 || !root.is_finite() {
+            return Err(j);
+        }
+        let inv = root.recip();
+        for v in cj.iter_mut() {
+            *v *= inv;
+        }
+    }
+    Ok(())
+}
+
+/// The most vectors [`llt_lanes`] holds in registers across the earlier
+/// columns: enough independent sums to keep every fused multiply-add unit
+/// busy through its latency (two units of four cycles on an x86-64 core,
+/// eight sums of four lanes; four units on an Apple core, sixteen of two),
+/// and few enough to stay in the sixteen (AVX2) or thirty-two (NEON) vector
+/// registers with the broadcast and the loads.
+const fn lanes_group(lanes: usize) -> usize {
+    if lanes >= 4 { 8 } else { 16 }
+}
+
+/// [`llt_cols`] in a vector unit's lanes, fused, every entry's products in
+/// the same order (`c = 0, 1, ...`), so the bits are its and faer's: column
+/// `j`'s rows below the diagonal are taken as vectors of `S::F64_LANES`
+/// rows, the last one moved up to end at the column's end where the count
+/// does not divide (its rows already in the vector above it are computed
+/// twice, from the same values, to the same bits, and that pair is always
+/// held in the same pass, so neither reads the other's result), up to
+/// [`lanes_group`] vectors held across every earlier column at once; a
+/// column shorter than a vector is taken a row at a time. Where
+/// [`llt_cols`] held eight rows in one register's worth of sums, a long
+/// column's sums were one dependent chain a lane, and each row past the
+/// last full batch a chain of its own, run one after another: on x86-64
+/// that loop was bound by the latency of its multiply-adds (task 479, the
+/// x86 regression).
+#[inline(always)]
+fn llt_lanes<S: pulp::Simd>(
+    simd: S,
+    mut a: MatMut<'_, f64, usize, usize, faer::ContiguousFwd>,
+) -> Result<(), usize> {
+    let lanes = S::F64_LANES;
+    let group = lanes_group(lanes);
+    let n = a.nrows();
+    for j in 0..n {
+        let (left, right) = a.rb_mut().split_at_col_mut(j);
+        let left = left.rb();
+        let cj = &mut right.col_mut(0).as_slice_mut()[j..];
+        let len = cj.len();
+        if len < lanes {
+            for (i, v) in cj.iter_mut().enumerate() {
+                let mut acc = *v;
+                for c in 0..j {
+                    let col = left.col(c).as_slice();
+                    acc = (-col[j]).mul_add(col[j + i], acc);
+                }
+                *v = acc;
+            }
+        } else {
+            let full = len / lanes;
+            let tail = len % lanes != 0;
+            // The last pass holds the moved-up vector with the one it
+            // overlaps; the rest of the full vectors, `group` at a time.
+            let last = full.min(if tail { group - 1 } else { group });
+            lanes_pass(simd, left, cj, j, full - last, last, tail);
+            let mut hi = full - last;
+            while hi > 0 {
+                let count = hi.min(group);
+                lanes_pass(simd, left, cj, j, hi - count, count, false);
+                hi -= count;
+            }
+        }
+        let pivot = cj[0];
+        // faer's `!(pivot > 0)`: NaN is refused here, at its own pivot.
+        if pivot.partial_cmp(&0.0) != Some(Ordering::Greater) {
+            return Err(j);
+        }
+        let root = pivot.sqrt();
+        if root == 0.0 || !root.is_finite() {
+            return Err(j);
+        }
+        let inv = root.recip();
+        let (head, rest) = S::as_mut_simd_f64s(cj);
+        let by = simd.splat_f64s(inv);
+        for v in head {
+            *v = simd.mul_f64s(*v, by);
+        }
+        for v in rest {
+            *v *= inv;
+        }
+    }
+    Ok(())
+}
+
+/// One pass of [`llt_lanes`] over column `j` (`cj`, from the diagonal
+/// down): `count` full vectors from vector `first`, and the moved-up last
+/// vector if `tail`, each sum in a register of its own ([`lanes_block`]).
+#[inline(always)]
+fn lanes_pass<S: pulp::Simd>(
+    simd: S,
+    left: MatRef<'_, f64, usize, usize, faer::ContiguousFwd>,
+    cj: &mut [f64],
+    j: usize,
+    first: usize,
+    count: usize,
+    tail: bool,
+) {
+    macro_rules! by_count {
+        ($($n:literal)*) => {
+            match (count, tail) {
+                $(
+                    ($n, false) => lanes_block::<S, $n, false>(simd, left, cj, j, first),
+                    ($n, true) => lanes_block::<S, $n, true>(simd, left, cj, j, first),
+                )*
+                _ => unreachable!("a pass of {count} vectors"),
+            }
+        };
+    }
+    by_count!(1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16)
+}
+
+/// `N` full vectors of column `j` from vector `first` (and the moved-up
+/// last one if `TAIL`), loaded, taking `-l_jc · l_ic + ·` from each earlier
+/// column `c` in turn, then stored.
+#[inline(always)]
+fn lanes_block<S: pulp::Simd, const N: usize, const TAIL: bool>(
+    simd: S,
+    left: MatRef<'_, f64, usize, usize, faer::ContiguousFwd>,
+    cj: &mut [f64],
+    j: usize,
+    first: usize,
+) {
+    let lanes = S::F64_LANES;
+    let load = |v: &[f64]| S::as_simd_f64s(v).0[0];
+    let (r0, t) = (first * lanes, cj.len() - lanes);
+    let mut acc = [simd.splat_f64s(0.0); N];
+    for (s, v) in acc
+        .iter_mut()
+        .zip(cj[r0..r0 + N * lanes].chunks_exact(lanes))
+    {
+        *s = load(v);
+    }
+    let mut at = if TAIL {
+        load(&cj[t..t + lanes])
+    } else {
+        simd.splat_f64s(0.0)
+    };
+    for c in 0..j {
+        let col = &left.col(c).as_slice()[j..];
+        let m = simd.splat_f64s(-col[0]);
+        for (s, x) in acc
+            .iter_mut()
+            .zip(col[r0..r0 + N * lanes].chunks_exact(lanes))
+        {
+            *s = simd.mul_add_e_f64s(m, load(x), *s);
+        }
+        if TAIL {
+            at = simd.mul_add_e_f64s(m, load(&col[t..t + lanes]), at);
+        }
+    }
+    for (s, v) in acc
+        .iter()
+        .zip(cj[r0..r0 + N * lanes].chunks_exact_mut(lanes))
+    {
+        S::as_mut_simd_f64s(v).0[0] = *s;
+    }
+    if TAIL {
+        S::as_mut_simd_f64s(&mut cj[t..t + lanes]).0[0] = at;
+    }
+}
+
+/// The smallest order [`llt_lanes`] takes where the vector unit is NEON
+/// (arm64); [`llt_cols`] below it. An Apple core runs `llt_cols`'s
+/// leftover rows, each a chain of its own, side by side out of order, so
+/// up to 15 its batch of eight and the rows past it are as fast as the
+/// lanes, whose passes cost more to set up a column: on an Apple M4 Pro,
+/// the factorization alone at 13 took 1.05 to 1.08 of `llt_cols`' time in
+/// lanes, level at 16, 0.91 at 20 and 0.81 at 32 (`factor_crossover`); in
+/// `hmm` (two states, full) 1.02 at 13, level at 16, 0.96 at 20 and 0.86
+/// at 32 (task 479, the x86 regression). On x86-64 with AVX2 the lanes
+/// take every order from 13: `llt_cols` compiled there to scalar sums, a
+/// chain a lane, and a core with a smaller window ran its leftover rows'
+/// chains largely one after another.
+#[cfg(target_arch = "aarch64")]
+const NEON_LANES_FROM: usize = 16;
+
+// How many times this thread has taken `llt_lanes`.
+#[cfg(test)]
+thread_local! {
+    static LANES_TAKEN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// [`llt_cols`] with the fusing faer's instruction set has on this CPU, in a
+/// vector unit's feature context where that is AVX2 and FMA, as
+/// [`llt_dispatched`] picks it; in that unit's lanes ([`llt_lanes`]) where
+/// it is AVX2, or NEON from [`NEON_LANES_FROM`].
+#[inline(never)]
+fn cols_dispatched(
+    a: MatMut<'_, f64, usize, usize, faer::ContiguousFwd>,
+) -> Result<(), llt::factor::LltError> {
+    #[cfg(test)]
+    COLS_TAKEN.with(|t| t.set(t.get() + 1));
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    struct Lanes<'a>(MatMut<'a, f64, usize, usize, faer::ContiguousFwd>);
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    impl pulp::WithSimd for Lanes<'_> {
+        type Output = Result<(), usize>;
+        #[inline(always)]
+        fn with_simd<S: pulp::Simd>(self, simd: S) -> Self::Output {
+            #[cfg(test)]
+            LANES_TAKEN.with(|t| t.set(t.get() + 1));
+            llt_lanes(simd, self.0)
+        }
+    }
+    #[cfg(target_arch = "x86_64")]
+    let out = match crate::sgd::x86_v3() {
+        Some(simd) => pulp::Simd::vectorize(simd, Lanes(a)),
+        None => llt_cols::<false>(a),
+    };
+    #[cfg(target_arch = "aarch64")]
+    let out = match pulp::aarch64::Neon::try_new() {
+        Some(simd) if a.nrows() >= NEON_LANES_FROM => pulp::Simd::vectorize(simd, Lanes(a)),
+        _ => llt_cols::<true>(a),
+    };
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    let out = llt_cols::<false>(a);
+    out.map_err(|index| llt::factor::LltError::NonPositivePivot { index })
+}
+
+/// [`cols_dispatched`], called from [`cholesky_seq`] through a function
+/// marked cold, so that the compiler lays the call out at the end of
+/// `cholesky_seq`. Called directly, the call sat between the order's test
+/// and the small factor's jump table, which the compiler moved up behind
+/// it, faer's path moved to the end, and the small factor's last store was
+/// copied into each order's branch; on x86-64 (AMD EPYC 9V74) `ew_class`
+/// (tied) at 4, 8 and 12 features ran 1.01 to 1.05 of its time before the
+/// loop, in both function layouts (task 479). Through this, in the x86-64
+/// release build (thin LTO), `cholesky_seq` is its code before the loop with
+/// the test of the order (8 instructions, 32 bytes) on faer's path and this
+/// call at its end: every later block is where it was, 32 bytes on. The
+/// cost at 13 and over is one more call, a jump to `cols_dispatched`.
+#[cold]
+#[inline(never)]
+fn cols_cold(
+    a: MatMut<'_, f64, usize, usize, faer::ContiguousFwd>,
+) -> Result<(), llt::factor::LltError> {
+    cols_dispatched(a)
+}
+
 /// faer's own Cholesky of `a`, sequential, its scratch in `work` where the
-/// caller keeps one, else in a buffer of its own.
+/// caller keeps one, else in a buffer of its own; to the bit, an order up to
+/// the machine's small limit by [`small_llt`] and one past [`SMALL`] up to
+/// [`COLS`] by [`llt_cols`] where `a`'s columns are contiguous (an x86-64
+/// CPU with AVX2 takes faer's call from 9 to 12, where it was the faster),
+/// through [`cols_cold`].
 fn cholesky_seq(
-    a: MatMut<'_, f64>,
+    mut a: MatMut<'_, f64>,
     work: Option<&mut CholWork>,
 ) -> Result<(), llt::factor::LltError> {
-    if a.nrows() <= small_limit() {
+    let n = a.nrows();
+    if n <= small_limit() {
         return small_llt(a);
     }
-    let req =
-        llt::factor::cholesky_in_place_scratch::<f64>(a.nrows(), Par::Seq, Default::default());
+    if n > SMALL
+        && n <= COLS
+        && let Some(cols) = a.rb_mut().try_as_col_major_mut()
+    {
+        return cols_cold(cols);
+    }
+    let req = llt::factor::cholesky_in_place_scratch::<f64>(n, Par::Seq, Default::default());
     let mut own;
     let stack = match work {
         Some(w) => w.stack(req),
@@ -815,10 +1143,15 @@ pub(crate) fn kept_work(solves: &mut Solves, k: usize, m: usize) -> &mut SolveWo
 /// rung's matrix is made from the packed rows as [`solve_spd`] makes it
 /// from `C + ridge·I`'s square -- `c_ij` below the diagonal, `(c_ii +
 /// ridge) + jitter` on it, the same trace -- so the solution and the
-/// attempts are its to the bit. `ew_cov`'s `mahal`, a factorization a row:
-/// laying the square out first, zeroed, then the triangle's rows into it,
-/// cost it 4% of its speed at 20 features on arm64 against the one copy of
-/// a square it made when the matrix was kept as one.
+/// attempts are its to the bit. `ew_cov`'s `mahal` was this, a
+/// factorization a row: laying the square out first, zeroed, then the
+/// triangle's rows into it, cost it 4% of its speed at 20 features on arm64
+/// against the one copy of a square it made when the matrix was kept as
+/// one. It now factorizes in a kept working space ([`FactorWork`]) and
+/// solves in a kept column ([`SpdFactor::solve_dot`]), the same arithmetic
+/// with nothing allocated (task 479); this stays as the reference its tests
+/// hold that path to.
+#[cfg(test)]
 pub(crate) fn solve_spd_ridged(
     c: &[f64],
     ridge: f64,
@@ -1294,6 +1627,26 @@ impl SpdFactor {
             acc += di * x[(i, 0)];
         }
         clamp_rounding(acc)
+    }
+
+    /// `dᵀ A⁻¹ d` from one solve in `work`'s kept column, summed as an
+    /// iterator's `sum` of the products: what [`solve_spd_ridged`]'s solution
+    /// dotted with `d` that way gives, to the bit, with nothing allocated
+    /// once `work` holds a column of this order. Unclamped, unlike
+    /// [`Self::quad_form`]: the caller reads the sign of a zero and a NaN as
+    /// it did.
+    pub(crate) fn solve_dot(&self, d: &[f64], work: &mut QuadWork) -> f64 {
+        let k = self.l.nrows();
+        debug_assert_eq!(d.len(), k);
+        let x = work.column(k);
+        for (i, &di) in d.iter().enumerate() {
+            x[(i, 0)] = di;
+        }
+        solve_in_place(&self.l, x.as_mut());
+        d.iter()
+            .enumerate()
+            .map(|(i, di)| di * x[(i, 0)])
+            .sum::<f64>()
     }
 
     /// [`Self::quad_forms`] written into `out`, the `m` vectors solved in
