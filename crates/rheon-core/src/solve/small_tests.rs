@@ -697,6 +697,39 @@ fn the_column_loop_is_faers_to_the_bit_on_both_sides_of_its_range() {
     );
 }
 
+/// The column loop in a vector unit's lanes (`llt_lanes`) cuts each column
+/// by its length: vectors of the unit's width, the last moved up where the
+/// width does not divide, passes of up to `lanes_group` vectors, single
+/// rows below one vector. Every order it takes, so every column length
+/// from 1 to 64 and every cut, against faer to the bit: well and badly
+/// conditioned, and a pivot refused at the first column, at each of the
+/// last eight (where a column is a pass of one short vector or none), and
+/// at the middle.
+#[test]
+fn the_column_loop_is_faers_to_the_bit_at_every_order() {
+    let mut s = 31u64;
+    for n in SMALL + 1..=COLS {
+        let mut drawn: Vec<(String, Mat<f64>)> = Vec::new();
+        for cond in [1.0, 1e8, 1e16] {
+            drawn.push((format!("cond {cond:e}"), spd(n, cond, &mut s)));
+        }
+        for j in [0, n / 2].into_iter().chain(n - 8..n) {
+            let mut a = spd(n, 1e3, &mut s);
+            a[(j, j)] = -1.0;
+            drawn.push((format!("negative pivot at {j}"), a));
+        }
+        for (what, a) in drawn {
+            let m = Mat::from_fn(n, n, |i, j| if i >= j { a[(i, j)] } else { 0.0 });
+            let want = faer_seq(&m);
+            let before = cols_taken();
+            let mut l = m.clone();
+            let r = cholesky_seq(l.as_mut(), None).map_err(index);
+            assert_eq!(cols_taken() - before, 1, "order {n}, {what}");
+            assert_same(n, &what, &want, &(l, r));
+        }
+    }
+}
+
 /// Which orders take the column loop: 13 to 64, and none up to 12 (the
 /// small factor's, or faer's from 9 on an x86-64 CPU with AVX2) nor past
 /// 64 (faer's). A matrix whose columns are not contiguous -- a transposed

@@ -613,32 +613,195 @@ fn llt_cols<const FUSED: bool>(
     Ok(())
 }
 
+/// The most vectors [`llt_lanes`] holds in registers across the earlier
+/// columns: enough independent sums to keep every fused multiply-add unit
+/// busy through its latency (two units of four cycles on an x86-64 core,
+/// eight sums of four lanes; four units on an Apple core, sixteen of two),
+/// and few enough to stay in the sixteen (AVX2) or thirty-two (NEON) vector
+/// registers with the broadcast and the loads.
+const fn lanes_group(lanes: usize) -> usize {
+    if lanes >= 4 { 8 } else { 16 }
+}
+
+/// [`llt_cols`] in a vector unit's lanes, fused, every entry's products in
+/// the same order (`c = 0, 1, ...`), so the bits are its and faer's: column
+/// `j`'s rows below the diagonal are taken as vectors of `S::F64_LANES`
+/// rows, the last one moved up to end at the column's end where the count
+/// does not divide (its rows already in the vector above it are computed
+/// twice, from the same values, to the same bits, and that pair is always
+/// held in the same pass, so neither reads the other's result), up to
+/// [`lanes_group`] vectors held across every earlier column at once; a
+/// column shorter than a vector is taken a row at a time. Where
+/// [`llt_cols`] held eight rows in one register's worth of sums, a long
+/// column's sums were one dependent chain a lane, and each row past the
+/// last full batch a chain of its own, run one after another: on x86-64
+/// that loop was bound by the latency of its multiply-adds (task 479, the
+/// x86 regression).
+#[inline(always)]
+fn llt_lanes<S: pulp::Simd>(
+    simd: S,
+    mut a: MatMut<'_, f64, usize, usize, faer::ContiguousFwd>,
+) -> Result<(), usize> {
+    let lanes = S::F64_LANES;
+    let group = lanes_group(lanes);
+    let n = a.nrows();
+    for j in 0..n {
+        let (left, right) = a.rb_mut().split_at_col_mut(j);
+        let left = left.rb();
+        let cj = &mut right.col_mut(0).as_slice_mut()[j..];
+        let len = cj.len();
+        if len < lanes {
+            for (i, v) in cj.iter_mut().enumerate() {
+                let mut acc = *v;
+                for c in 0..j {
+                    let col = left.col(c).as_slice();
+                    acc = (-col[j]).mul_add(col[j + i], acc);
+                }
+                *v = acc;
+            }
+        } else {
+            let full = len / lanes;
+            let tail = len % lanes != 0;
+            // The last pass holds the moved-up vector with the one it
+            // overlaps; the rest of the full vectors, `group` at a time.
+            let last = full.min(if tail { group - 1 } else { group });
+            lanes_pass(simd, left, cj, j, full - last, last, tail);
+            let mut hi = full - last;
+            while hi > 0 {
+                let count = hi.min(group);
+                lanes_pass(simd, left, cj, j, hi - count, count, false);
+                hi -= count;
+            }
+        }
+        let pivot = cj[0];
+        // faer's `!(pivot > 0)`: NaN is refused here, at its own pivot.
+        if pivot.partial_cmp(&0.0) != Some(Ordering::Greater) {
+            return Err(j);
+        }
+        let root = pivot.sqrt();
+        if root == 0.0 || !root.is_finite() {
+            return Err(j);
+        }
+        let inv = root.recip();
+        let (head, rest) = S::as_mut_simd_f64s(cj);
+        let by = simd.splat_f64s(inv);
+        for v in head {
+            *v = simd.mul_f64s(*v, by);
+        }
+        for v in rest {
+            *v *= inv;
+        }
+    }
+    Ok(())
+}
+
+/// One pass of [`llt_lanes`] over column `j` (`cj`, from the diagonal
+/// down): `count` full vectors from vector `first`, and the moved-up last
+/// vector if `tail`, each sum in a register of its own ([`lanes_block`]).
+#[inline(always)]
+fn lanes_pass<S: pulp::Simd>(
+    simd: S,
+    left: MatRef<'_, f64, usize, usize, faer::ContiguousFwd>,
+    cj: &mut [f64],
+    j: usize,
+    first: usize,
+    count: usize,
+    tail: bool,
+) {
+    macro_rules! by_count {
+        ($($n:literal)*) => {
+            match (count, tail) {
+                $(
+                    ($n, false) => lanes_block::<S, $n, false>(simd, left, cj, j, first),
+                    ($n, true) => lanes_block::<S, $n, true>(simd, left, cj, j, first),
+                )*
+                _ => unreachable!("a pass of {count} vectors"),
+            }
+        };
+    }
+    by_count!(1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16)
+}
+
+/// `N` full vectors of column `j` from vector `first` (and the moved-up
+/// last one if `TAIL`), loaded, taking `-l_jc · l_ic + ·` from each earlier
+/// column `c` in turn, then stored.
+#[inline(always)]
+fn lanes_block<S: pulp::Simd, const N: usize, const TAIL: bool>(
+    simd: S,
+    left: MatRef<'_, f64, usize, usize, faer::ContiguousFwd>,
+    cj: &mut [f64],
+    j: usize,
+    first: usize,
+) {
+    let lanes = S::F64_LANES;
+    let load = |v: &[f64]| S::as_simd_f64s(v).0[0];
+    let (r0, t) = (first * lanes, cj.len() - lanes);
+    let mut acc = [simd.splat_f64s(0.0); N];
+    for (s, v) in acc
+        .iter_mut()
+        .zip(cj[r0..r0 + N * lanes].chunks_exact(lanes))
+    {
+        *s = load(v);
+    }
+    let mut at = if TAIL {
+        load(&cj[t..t + lanes])
+    } else {
+        simd.splat_f64s(0.0)
+    };
+    for c in 0..j {
+        let col = &left.col(c).as_slice()[j..];
+        let m = simd.splat_f64s(-col[0]);
+        for (s, x) in acc
+            .iter_mut()
+            .zip(col[r0..r0 + N * lanes].chunks_exact(lanes))
+        {
+            *s = simd.mul_add_e_f64s(m, load(x), *s);
+        }
+        if TAIL {
+            at = simd.mul_add_e_f64s(m, load(&col[t..t + lanes]), at);
+        }
+    }
+    for (s, v) in acc
+        .iter()
+        .zip(cj[r0..r0 + N * lanes].chunks_exact_mut(lanes))
+    {
+        S::as_mut_simd_f64s(v).0[0] = *s;
+    }
+    if TAIL {
+        S::as_mut_simd_f64s(&mut cj[t..t + lanes]).0[0] = at;
+    }
+}
+
 /// [`llt_cols`] with the fusing faer's instruction set has on this CPU, in a
 /// vector unit's feature context where that is AVX2 and FMA, as
-/// [`llt_dispatched`] picks it.
+/// [`llt_dispatched`] picks it; in that unit's lanes ([`llt_lanes`]) where
+/// it is AVX2 or NEON.
 #[inline(never)]
 fn cols_dispatched(
     a: MatMut<'_, f64, usize, usize, faer::ContiguousFwd>,
 ) -> Result<(), llt::factor::LltError> {
     #[cfg(test)]
     COLS_TAKEN.with(|t| t.set(t.get() + 1));
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    struct Lanes<'a>(MatMut<'a, f64, usize, usize, faer::ContiguousFwd>);
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    impl pulp::WithSimd for Lanes<'_> {
+        type Output = Result<(), usize>;
+        #[inline(always)]
+        fn with_simd<S: pulp::Simd>(self, simd: S) -> Self::Output {
+            llt_lanes(simd, self.0)
+        }
+    }
     #[cfg(target_arch = "x86_64")]
-    let out = {
-        struct Lanes<'a>(MatMut<'a, f64, usize, usize, faer::ContiguousFwd>);
-        impl pulp::WithSimd for Lanes<'_> {
-            type Output = Result<(), usize>;
-            #[inline(always)]
-            fn with_simd<S: pulp::Simd>(self, _: S) -> Self::Output {
-                llt_cols::<true>(self.0)
-            }
-        }
-        match crate::sgd::x86_v3() {
-            Some(simd) => pulp::Simd::vectorize(simd, Lanes(a)),
-            None => llt_cols::<false>(a),
-        }
+    let out = match crate::sgd::x86_v3() {
+        Some(simd) => pulp::Simd::vectorize(simd, Lanes(a)),
+        None => llt_cols::<false>(a),
     };
     #[cfg(target_arch = "aarch64")]
-    let out = llt_cols::<true>(a);
+    let out = match pulp::aarch64::Neon::try_new() {
+        Some(simd) => pulp::Simd::vectorize(simd, Lanes(a)),
+        None => llt_cols::<true>(a),
+    };
     #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     let out = llt_cols::<false>(a);
     out.map_err(|index| llt::factor::LltError::NonPositivePivot { index })
