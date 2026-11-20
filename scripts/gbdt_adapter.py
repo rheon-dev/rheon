@@ -35,7 +35,6 @@ import argparse
 import hashlib
 import json
 import os
-import resource
 import shutil
 import subprocess
 import sys
@@ -292,8 +291,14 @@ class Meter:
             for k in rec:
                 rec[k] = round(rec[k], 2)
         # macOS reports ru_maxrss in bytes, Linux in KiB.
-        scale = 1 if sys.platform == "darwin" else 1024
-        rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * scale
+        # `resource` is POSIX's; Windows reports no peak here.
+        try:
+            import resource
+        except ImportError:
+            rss = float("nan")
+        else:
+            scale = 1 if sys.platform == "darwin" else 1024
+            rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * scale
         return {
             "phases": self.phases,
             "peak_gb": round((self._fp()[1] if self._fp else rss) / 1e9, 2),
@@ -303,7 +308,9 @@ class Meter:
 
 
 def _load() -> list[float]:
-    return [round(v, 1) for v in os.getloadavg()]
+    """The 1, 5 and 15-minute loads; empty where the platform has none (Windows)."""
+    getloadavg = getattr(os, "getloadavg", None)
+    return [round(v, 1) for v in getloadavg()] if getloadavg is not None else []
 
 
 class Counter:

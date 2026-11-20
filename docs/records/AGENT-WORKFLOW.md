@@ -60,3 +60,31 @@ since the full tier re-runs everything it does. Budget tightenings from CI's
 counts ride with the next wave rather than taking a gate of their own. Workers
 run fmt and clippy `--all-targets` before `scripts/quick.sh --extended`, and
 that once, at the end.
+
+## Before each push (task 459, review A5)
+
+1. The full tier on the exact sha (above).
+2. `uv run python scripts/ci_status.py <sha of the last push>`: every job of
+   every workflow on the commit before this one, read from `gh run list
+   --commit` and `gh run view --json jobs`. It exits 0 only when every job
+   completed with success (or was skipped by its workflow's `if:`). A
+   failure, a timeout or a cancelled job is exit 1; a run still queued or in
+   progress, or none yet, is exit 2: wait for it, or say in the push's
+   report that it was pending. A cancelled job says nothing about that sha
+   (a later push cancelled it): read the workflow's last completed run
+   before pushing past it. The one red it does not count is a Budgets job
+   whose only complaint is a budget to tighten, which rides with the next
+   wave (`--strict` counts it too).
+3. Push only when step 2 is 0, or its failures are understood and the push
+   fixes them (say which, and check the next run's jobs the same way). Why:
+   from 2026-11-16 CI on main was red for about two days. All four Windows
+   legs failed on eight runs and nine more were cancelled before a Windows
+   leg reported (it reports about 90 minutes after a push), while Budgets
+   was red on the same shas for tightenings that ride, so a red CI read as
+   the expected one. The two failures (`os.getloadavg` in
+   `compare_outputs.py`, a 0/0 from Windows' 15.6 ms CPU clock in
+   `test_scaling.py`) now each have a test that fails on the Mac:
+   `tests/test_platform_calls.py` walks `scripts/` and `tests/` for
+   POSIX-only calls outside a platform guard, and `tests/test_scaling.py`
+   runs its checks on a stepped fake clock.
+

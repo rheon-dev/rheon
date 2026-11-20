@@ -14,7 +14,6 @@
 # (`huber_refit_rows=0`), or a number of MiB, `inf` for no bound. The parquet
 # file is cached under `.cache/huber/`, written by a process of its own.
 import argparse
-import resource
 import subprocess
 import sys
 import warnings
@@ -81,8 +80,14 @@ def main() -> None:
         for batch in pl.scan_parquet(path).collect_batches():
             bank.fit_predict(batch)
     # `ru_maxrss` is in bytes on macOS and in KiB on Linux.
-    unit = 1 if sys.platform == "darwin" else 1024
-    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * unit / 2**20
+    # `resource` is POSIX's; Windows reports no peak here.
+    try:
+        import resource
+    except ImportError:
+        peak = float("nan")
+    else:
+        unit = 1 if sys.platform == "darwin" else 1024
+        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * unit / 2**20
     state = len(bank.save_bytes()) / 2**20
     given_up = int(bank.summary()["refit_given_up"].sum())
     print(

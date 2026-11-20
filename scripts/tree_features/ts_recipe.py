@@ -4,7 +4,6 @@ y), with_windows(group=category, closed="left"); compared with the
 prototype's per-row loop."""
 
 import math
-import resource
 import sys
 import time
 from pathlib import Path
@@ -31,7 +30,17 @@ learn_rows = base.select(
     "rid", "tailnum", c=pl.col("avail"), y=pl.col("y"), one=pl.lit(1.0), role=pl.lit(1, pl.Int8)
 )
 stream = pl.concat([pred_rows, learn_rows]).sort("c", "role", "rid")
-r0 = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+try:  # `resource` is POSIX's; Windows reports no peak here.
+    import resource
+except ImportError:
+    resource = None  # type: ignore[assignment]
+
+
+def _maxrss() -> float:
+    return float("nan") if resource is None else resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+
+
+r0 = _maxrss()
 t0 = time.perf_counter()
 out = stream.rheon.with_windows(
     S=rp.ewm_sum("y", half_life=hl, closed="left"),
