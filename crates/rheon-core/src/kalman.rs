@@ -21,6 +21,13 @@
 //! with `P_j` and `Q` in units of `R_j`, `R_j` read as 1 in `s`, wherever the
 //! noise is learned (below).
 //!
+//! The last line is the covariance form, the default ([`CovForm`]). `P_j`
+//! may instead be updated by the Joseph form, `P_j <- (I − k z') P_j (I −
+//! k z')' + (R_j / w_row) k k'`, or held as a triangular factor `C`, `P_j =
+//! C C'`, by Carlson's update (`kalman/forms.rs` states each): the factor
+//! rounds at `u sqrt(p0)` where `P_j` rounds at `u p0`, so a huge prior
+//! costs it no digits, at O(k³) a row under process noise for O(k²).
+//!
 //! **The noise is a scale, not a weight (docs/PLAN.md task 278).** The
 //! model's noise `R_j` is one constant per target, and the prior `p0 R_j` and
 //! the drift `R_j (ln 2 / h)²` are multiples of it, so `P_j / R_j` and the
@@ -491,6 +498,9 @@ use serde::{Deserialize, Serialize};
 use crate::model::{ModelState, OnlineModel, State, StateError, Step, check_schema};
 use crate::{Decay, EwDiag};
 
+mod forms;
+pub use forms::CovForm;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct KalmanCfg {
     pub n_features: usize,
@@ -957,6 +967,17 @@ pub struct Kalman {
     /// The gap noise's factors for the last gap charged ([`GapFactors`]).
     #[serde(skip)]
     gap_factors: GapFactors,
+    /// The form `p` is held and updated in (`kalman/forms.rs`): `P`, or
+    /// its upper-triangular factor. Written only when not the default.
+    #[serde(default, skip_serializing_if = "CovForm::is_default")]
+    form: CovForm,
+    /// The factor's `f = Cᵀ z`, the Joseph form's `M` and a slot's `x`.
+    #[serde(skip)]
+    fbuf: Vec<f64>,
+    #[serde(skip)]
+    mbuf: Vec<f64>,
+    #[serde(skip)]
+    xbuf: Vec<f64>,
 }
 
 /// The layout `Kalman` loads, checked on the way in: every vector at the
@@ -978,6 +999,8 @@ struct KalmanV4 {
     sig2: Vec<f64>,
     wsig: Vec<f64>,
     wj: Vec<f64>,
+    #[serde(default)]
+    form: CovForm,
 }
 
 impl TryFrom<KalmanV4> for Kalman {
@@ -1081,6 +1104,10 @@ impl TryFrom<KalmanV4> for Kalman {
             ubuf: vec![],
             vbuf: vec![],
             gap_factors: GapFactors::default(),
+            form: v.form,
+            fbuf: vec![],
+            mbuf: vec![],
+            xbuf: vec![],
         })
     }
 }
@@ -1139,6 +1166,10 @@ impl Kalman {
             ubuf: vec![],
             vbuf: vec![],
             gap_factors: GapFactors::default(),
+            form: CovForm::Covariance,
+            fbuf: vec![],
+            mbuf: vec![],
+            xbuf: vec![],
             cfg,
         };
         model.ensure_buffers();
@@ -1373,7 +1404,7 @@ impl Kalman {
     /// variance there, and the intercept would start at 0 as a prior sure of
     /// it.
     fn open(&self, pi: usize) -> bool {
-        self.units() && self.cfg.fit_intercept && self.p[pi][0] == 0.0
+        self.units() && self.cfg.fit_intercept && !self.sized(pi, 0)
     }
 
     /// A quadratic form in `P`, `z' P z` or a trace, over the noise `r`: in
@@ -1440,8 +1471,7 @@ impl Kalman {
     /// Whether slot `i` holds anything: a coefficient or a variance, in any
     /// target or covariance. A slot that holds nothing reads no coordinate.
     fn is_live(&self, i: usize) -> bool {
-        let k = self.cfg.k_total();
-        self.p.iter().any(|p| p[i * k + i] != 0.0) || self.beta.iter().any(|b| b[i] != 0.0)
+        (0..self.p.len()).any(|pi| self.sized(pi, i)) || self.beta.iter().any(|b| b[i] != 0.0)
     }
 
     fn mark_live(&mut self) {
@@ -1562,6 +1592,11 @@ impl Kalman {
             self.map_fresh = false;
             self.ubuf = vec![vec![0.0; k]; self.p.len()];
             self.vbuf = vec![0.0; k];
+            self.fbuf = vec![0.0; k];
+            self.xbuf = vec![0.0; k];
+            if self.form == CovForm::Joseph {
+                self.mbuf = vec![0.0; k * k];
+            }
         }
     }
 
@@ -1622,7 +1657,13 @@ impl Kalman {
             }
             finite &= off == 0 || b0.is_finite();
         }
-        for (p, u) in self.p.iter().zip(self.ubuf.iter_mut()) {
+        let factor = self.form == CovForm::Factor;
+        for (p, u) in self.p.iter_mut().zip(self.ubuf.iter_mut()) {
+            if factor {
+                // `C <- A C`: row 0 `C_0· + Σ c_l C_l·`, row `i` `a_i C_i·`.
+                finite &= forms::factor_remap(p, u, a, c, off, false);
+                continue;
+            }
             for i in off..k {
                 finite &= (p[i * k + i] * (a[i] * a[i])).is_finite();
             }
@@ -1658,7 +1699,11 @@ impl Kalman {
                 *bi *= ai;
             }
         }
-        for (p, u) in self.p.iter_mut().zip(&self.ubuf) {
+        for (p, u) in self.p.iter_mut().zip(self.ubuf.iter_mut()) {
+            if factor {
+                forms::factor_remap(p, u, a, c, off, true);
+                continue;
+            }
             for i in off..k {
                 let ai = a[i];
                 let row = &mut p[i * k..(i + 1) * k];
@@ -1685,9 +1730,7 @@ impl Kalman {
     /// half-lives with no process noise to restore it, holds nothing, and is
     /// sized again.
     fn is_unsized(&self, pi: usize) -> bool {
-        let k = self.cfg.k_total();
-        let p = &self.p[pi];
-        (0..k).all(|i| p[i * k + i] == 0.0)
+        (0..self.cfg.k_total()).all(|i| !self.sized(pi, i))
     }
 
     /// Whether target `j` is predicted, `min_weight` aside: it has weight,
@@ -1776,6 +1819,11 @@ impl Kalman {
             transit(b, &self.phi, coupled.then_some(&g[..]));
         }
         for p in &mut self.p {
+            if self.form == CovForm::Factor {
+                // `C <- Phi_a C`: `Phi_a` is upper triangular, and so is `C`.
+                forms::factor_transit(p, &self.phi, coupled.then_some(&g[..]));
+                continue;
+            }
             if coupled {
                 // v = P g, before P moves; then P' = Phi P Phi + the coupling's
                 // terms in the intercept's row and column (the module doc).
@@ -1814,6 +1862,9 @@ impl Kalman {
     fn add_process_noise(&mut self, pi: usize, sigma2: f64, d: f64) {
         if d == 0.0 {
             return;
+        }
+        if self.form == CovForm::Factor {
+            return self.factor_noise(pi, sigma2, d);
         }
         let k = self.cfg.k_total();
         let off = usize::from(self.cfg.fit_intercept);
@@ -1869,7 +1920,7 @@ impl Kalman {
         let noise = self.readiness_noise(pi);
         // `readiness_noise` is a positive number, or NaN for none.
         if d == 0.0 || noise.is_nan() || self.is_unsized(pi) {
-            return std::borrow::Cow::Borrowed(&self.p[pi]);
+            return self.cov(pi);
         }
         let k = self.cfg.k_total();
         let off = usize::from(self.cfg.fit_intercept);
@@ -1878,7 +1929,7 @@ impl Kalman {
         let live: Vec<bool> = (0..k).map(|i| self.is_live(i)).collect();
         let (mut a, mut c) = (vec![1.0; k], vec![0.0; k]);
         self.map_into(&live, &mut a, &mut c);
-        let mut p = self.p[pi].clone();
+        let mut p = self.cov(pi).into_owned();
         for i in 0..k {
             let qd = q[i] * self.cfg.gap_noise(i, d);
             if qd == 0.0 || (self.cfg.standardize && p[i * k + i] == 0.0) {
@@ -1915,12 +1966,12 @@ impl Kalman {
         let k = self.cfg.k_total();
         let off = usize::from(self.cfg.fit_intercept);
         for i in 0..k {
-            if self.p[pi][i * k + i] != 0.0 || !self.current_scale(i).1 {
+            if self.sized(pi, i) || !self.current_scale(i).1 {
                 continue;
             }
             if i < off {
                 if intercept {
-                    self.p[pi][0] += v;
+                    self.add_slot(pi, 0, v, 1.0, None);
                     self.live[0] = true;
                 }
                 continue;
@@ -1929,16 +1980,8 @@ impl Kalman {
                 self.anchor_slot_here(i);
             }
             let a = self.map_a[i];
-            let open = self.open(pi);
-            let p = &mut self.p[pi];
-            if off == 1 && !open {
-                let cc = self.map_c[i] / a;
-                p[0] += cc * cc * v;
-                let o = -cc * v / a;
-                p[i] += o;
-                p[i * k] += o;
-            }
-            p[i * k + i] += v / (a * a);
+            let cc = (off == 1 && !self.open(pi)).then(|| self.map_c[i] / a);
+            self.add_slot(pi, i, v, a, cc);
             self.live[i] = true;
         }
     }
@@ -1956,6 +1999,11 @@ impl Kalman {
     fn lost_definiteness(&self, pi: usize) -> bool {
         let k = self.cfg.k_total();
         let p = &self.p[pi];
+        if self.form == CovForm::Factor {
+            // A factor's `C Cᵀ` is positive semi-definite while it is a
+            // set of numbers.
+            return !p.iter().all(|v| v.is_finite());
+        }
         (0..k).any(|i| {
             let v = p[i * k + i];
             !(v >= 0.0 && v.is_finite())
@@ -1999,6 +2047,11 @@ impl Kalman {
     fn size_whole(&mut self, pi: usize, v: f64) {
         let k = self.cfg.k_total();
         if v > 0.0 && v.is_finite() {
+            let v = if self.form == CovForm::Factor {
+                v.sqrt()
+            } else {
+                v
+            };
             let p = &mut self.p[pi];
             p.fill(0.0);
             for i in 0..k {
@@ -2038,7 +2091,8 @@ impl Kalman {
     /// through `z^a`.
     fn prior_quad(&self, pi: usize, x: &[f64], d_clock: f64, r: f64) -> f64 {
         let k = self.cfg.k_total();
-        let p = &self.p[pi];
+        let p = self.cov(pi);
+        let p = &p[..];
         let za = self.anchored(x);
         let w: Vec<f64> = if self.cfg.reverts() {
             let phi: Vec<f64> = (0..k).map(|i| self.cfg.phi(i, d_clock)).collect();
@@ -2656,6 +2710,7 @@ impl OnlineModel for Kalman {
         // and `P` takes the row once, after every target's update (the
         // module doc, task 204).
         let mut shared_pz = false;
+        let mut zpz_kept = 0.0;
         let mut shared_update = false;
         // In units of the noise the gain reads no noise, `s = z' P z + 1 /
         // w`, and a covariance whose intercept is unsized takes its first
@@ -2663,8 +2718,9 @@ impl OnlineModel for Kalman {
         // is open is read before any target's update moves `P`.
         let units = self.units();
         let diffuse = units && self.cfg.fit_intercept;
-        let open_shared = diffuse && self.cfg.share_p && self.p[0][0] == 0.0;
+        let open_shared = diffuse && self.cfg.share_p && !self.sized(0, 0);
         let mut shared_s = f64::NAN;
+        let mut shared_r = f64::NAN;
         for (j, &pred_j) in pred.iter().enumerate() {
             let pi = if self.cfg.share_p { 0 } else { j };
             let Some(yj) = obs(j) else {
@@ -2674,13 +2730,13 @@ impl OnlineModel for Kalman {
             };
             let sigma2 = self.noise[j];
             // Unshared, target `j`'s covariance moves only below.
-            let open = open_shared || (diffuse && !self.cfg.share_p && self.p[pi][0] == 0.0);
+            let open = open_shared || (diffuse && !self.cfg.share_p && !self.sized(pi, 0));
             // pz = P z
             if !shared_pz {
-                matvec(&self.p[pi], &self.zs, &mut self.pz);
+                zpz_kept = self.read_pz(pi);
                 shared_pz = self.cfg.share_p;
             }
-            let zpz: f64 = self.zs.iter().zip(&self.pz).map(|(z, p)| z * p).sum();
+            let zpz = zpz_kept;
             let r_inn = if units { 1.0 } else { sigma2 };
             let s_inn = zpz + r_inn / weight;
             let mut err = yj - self.zb[j];
@@ -2711,10 +2767,9 @@ impl OnlineModel for Kalman {
                 if self.cfg.share_p {
                     shared_update = true;
                     shared_s = s_inn;
-                } else if open {
-                    diffuse_step(&mut self.p[pi], &self.pz, s_inn);
+                    shared_r = r_inn / weight;
                 } else {
-                    take_the_row(&mut self.p[pi], &self.gain, &self.pz);
+                    self.take(pi, open, s_inn, r_inn / weight);
                 }
             }
             // EW residual variance from the out-of-sample prediction. Its
@@ -2742,11 +2797,7 @@ impl OnlineModel for Kalman {
         // Every target that updated read the same `P z` and the same noise,
         // so the same gain: `P` takes the row once.
         if shared_update {
-            if open_shared {
-                diffuse_step(&mut self.p[0], &self.pz, shared_s);
-            } else {
-                take_the_row(&mut self.p[0], &self.gain, &self.pz);
-            }
+            self.take(0, open_shared, shared_s, shared_r);
         }
 
         // Standardization stats update last, so this row's z used the prior
@@ -5564,4 +5615,6 @@ mod tests {
 
     // Task 278's: `P` in units of the noise, each against the form before.
     mod noise_units;
+    // Task 281 (3)'s: the covariance's update forms at a huge prior.
+    mod cov_forms;
 }
