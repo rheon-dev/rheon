@@ -155,7 +155,11 @@ impl Kalman {
             (0..k * k).any(|ij| ij / k != ij % k && p[ij] != 0.0)
                 || (0..k).any(|i| p[i * k + i] < 0.0)
         }) {
-            return Err("kalman: the covariance's form is set before its first row".into());
+            return Err(
+                "kalman: its covariance has taken a row, and only a covariance that has \
+                        not is given another form. Set covariance_form on a new filter."
+                    .into(),
+            );
         }
         if form == CovarianceForm::SquareRoot && self.form != CovarianceForm::SquareRoot {
             for p in &mut self.p {
