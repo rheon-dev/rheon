@@ -13,6 +13,18 @@ returns.
 
 ### Performance
 
+- A Cholesky factorization of 13 to 64 features is computed by a loop of
+  our own, a column at a time with eight rows held in registers, where it
+  went through faer's call: the same products in the same order, so every
+  factor is faer's to the bit, without faer's dispatch and scratch. On
+  arm64 (Apple M4 Pro, both function layouts, each against the previous
+  build) a row takes 0.87 to 0.88 of the time at 20 features in `hmm` (two
+  states, full covariance) and `ew_cov`'s `mahal`, 0.90 to 0.91 in
+  `ew_class` (full and tied), 0.92 to 0.96 at 13 and 16, and 0.94 to 0.96 at
+  32; `bocpd` with a full covariance 0.96 at 16. Every model that
+  factorizes a matrix of that size gains (`ewridge`, `deco` and the
+  rest). Up to 12 features nothing changes, and an x86-64 CPU with AVX2
+  keeps faer's call from 9 to 12. Every output is unchanged to the bit.
 - `ew_cov`'s `mahal` factorizes and solves in a working space its thread
   keeps, written over from row to row, where each row made a new matrix
   for the factor, another for the solve and two lists. On arm64 (Apple M4
