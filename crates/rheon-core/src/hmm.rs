@@ -481,7 +481,8 @@ pub struct Hmm {
     /// `σ`, its matrix being `σ·L Lᵀ` with `L` its [`Self::lstate`]: the
     /// decay's scale `a` multiplies `σ` (one rounding a row, the ridge's
     /// scale's kind), not every entry of `L` by `√a`. Kept in
-    /// `[2⁻¹²⁸, 1]` by exact rescalings of `L` by powers of two.
+    /// `[1/4, 1]` by exact rescalings of `L` by halves, so `ln σ`, which a
+    /// read adds `k` times to `ln det L Lᵀ`, cancels nothing large.
     #[cfg(feature = "hmm-factor-scaled")]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     lscale: Vec<f64>,
@@ -727,8 +728,12 @@ impl Hmm {
     /// PROTOTYPE (task 479, feature `hmm-factor-scaled`): a learned row on
     /// states held as `M = σ·L Lᵀ`. `M' = a·M + a·b·δδᵀ` is
     /// `σ'·(L Lᵀ + v vᵀ)` with `σ' = a·σ` and `v = √(ab/σ')·δ`: `σ` takes the
-    /// scale and the rotations add `v vᵀ` unscaled. Below `2⁻¹²⁸`, `σ` is
-    /// multiplied by `2¹²⁸` and `L` by `2⁻⁶⁴`, which changes no bit of `M`.
+    /// scale and the rotations add `v vᵀ` unscaled. Below `1/4`, `σ` is
+    /// multiplied by 4 and `L` by `1/2`, which changes no bit of `M` (a
+    /// `k²/2` pass every `ln 4 / (1 − a)` rows or so). Kept near 1 so that
+    /// `k·ln σ`, which a read adds to `ln det L Lᵀ`, cancels nothing large:
+    /// at a floor of `2⁻¹²⁸` it did, and the log densities lost about
+    /// `k·ulp(88)` (measured: a median error ten times today's at k = 4).
     #[cfg(feature = "hmm-factor-scaled")]
     fn learn_scaled_states(
         &mut self,
@@ -739,7 +744,7 @@ impl Hmm {
         v: &mut Vec<f64>,
     ) {
         use crate::ewcov::FactorStep;
-        const FLOOR: f64 = 1.0 / (1u128 << 127) as f64 / 2.0;
+        const FLOOR: f64 = 0.25;
         let d = self.cfg.n_features;
         let prior = self.cfg.precision_prior;
         let states = self
@@ -763,8 +768,8 @@ impl Hmm {
                     );
                     let kept = f.rotate_unit_in_place(v);
                     if kept && *sig < FLOOR {
-                        f.scale_exact(1.0 / (1u64 << 63) as f64 / 2.0);
-                        *sig *= (1u128 << 127) as f64 * 2.0;
+                        f.scale_exact(0.5);
+                        *sig *= 4.0;
                     }
                     if !kept {
                         self.solve_failures += 1;
@@ -3936,7 +3941,7 @@ mod tests {
     /// of one row a line, `d_clock weight x0 x1 ...`, and
     /// `RHEON_HMM_HALF_LIFE` the half-life in clock units (the bank's
     /// `half_life`); 2 states, `precision_prior = 1`, the bank's
-    /// `warm_rows` of 1000 and k-means++ seeding. compare_outputs' inputs
+    /// `warm_rows` of 1000 and its default seeding, Lloyd's. compare_outputs' inputs
     /// are such streams.
     #[cfg(feature = "hmm-factor-state")]
     #[test]
@@ -3962,7 +3967,7 @@ mod tests {
             decay: Decay::Halflife(hl),
             precision_prior: 1.0,
             warm_rows: 1000,
-            seed_rule: SeedRule::Kmeanspp,
+            seed_rule: SeedRule::Lloyd,
             seed: 0,
             ..cfg(d, 2)
         };
