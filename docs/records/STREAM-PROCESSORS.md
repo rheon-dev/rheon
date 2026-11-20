@@ -4,8 +4,8 @@
 *Status, 2026-11-20: a record, in progress. The research for PLAN task 531
 (request A8): which stream processors rheon should support beyond the Kafka
 consumer of task 530, and what each would cost. Read-only: nothing here was
-built or measured. Part 1 covers six candidates; the rest, the ranking and the
-proposed tasks follow in later parts.*
+built or measured. Part 1 covers the first six candidates and part 2 the next
+six; the rest, the ranking and the proposed tasks follow in later parts.*
 
 ## The question
 
@@ -380,6 +380,267 @@ Sources:
 [A4] https://pypi.org/pypi/faust-streaming/json
 [A5] https://github.com/faust-streaming/faust
 [A6] https://pypi.org/rss/project/faust-streaming/releases.xml
+
+## 7. Redpanda
+
+Redpanda is a broker, not a processor: it speaks the Kafka API, so the
+question is whether task 530's consumer runs on it unchanged.
+
+**(a) Keying and ordering.** Kafka clients for protocol 0.11 or later work
+with it, and `confluent-kafka-python` and `librdkafka` are among the clients
+it validates [R1]. Partitions, keys and per-partition order are Kafka's, so
+the consumer of task 530 gets the same keying and order (that the partition
+order matches Kafka's in every case was not tested; the claim is the
+compatibility claim of [R1]).
+
+**(b) State and checkpoints.** No state of its own for a consumer. Rheon's
+state stays where task 530 puts it. Transactions are enabled by default, and
+a consume-transform-produce loop can send its offsets in the same transaction
+as its output (`sendOffsetsToTransaction`) [R2]; rheon's state file is still
+outside that transaction, so the state-then-offset order plus
+`skip_learned` is what makes learning exactly-once, as on Kafka.
+
+**(c) Arrow or Python path.** Through a Kafka client, exactly as task 530.
+Redpanda's own in-broker data transforms run as WebAssembly, in JavaScript,
+Go or Rust, a single record at a time, with no aggregations or joins and
+at-least-once delivery [R3]; they cannot hold a bank, so rheon has no place
+inside the broker.
+
+**(d) Replay and exactly-once.** Exactly-once with idempotent producers and
+transactions [R2]; atomicity is not guaranteed under remote recovery, a stuck
+transaction can block `read_committed` consumers, and KIP-890 is not
+implemented, so Kafka 4.x clients fall back to the older transaction protocol
+[R1, R2].
+
+**(e) Static linking.** None new for the Python adapter. A Rust CLI consumer
+would meet the same `librdkafka` question task 530 raises.
+
+**(f) Adoption.** About 12.7k stars; the README calls it "Kafka API
+compatible ... No ZooKeeper. No JVM!" [R4]. That GitHub page now says the
+repository is archived and read-only, with issues moved to
+`redpanda-data/community`, and the Community Edition is under Redpanda's own
+licence [R4]; where development continues was not verified.
+
+Sources:
+[R1] https://docs.redpanda.com/current/develop/kafka-clients/
+[R2] https://docs.redpanda.com/current/develop/transactions/
+[R3] https://docs.redpanda.com/current/develop/data-transforms/how-transforms-work/
+[R4] https://github.com/redpanda-data/redpanda
+
+## 8. Apache Pulsar
+
+**(a) Keying and ordering.** With a message key, the producer hashes it to a
+partition, so messages of one key stay in order; there is no order across
+partitions [P1]. Of the subscription types, Exclusive and Failover give one
+consumer per partition (Failover can duplicate or reorder during a switch),
+Shared gives no order, and Key_Shared delivers all messages of a key to one
+consumer and keeps their order, if producers batch by key or not at all [P1].
+
+**(b) State and checkpoints.** A consumer's position is a cursor per
+subscription, stored durably in BookKeeper [P1, P2]. Transactions let an
+application "consume, process, and produce messages in one atomic operation"
+across partitions [P3], so acknowledgements and output commit together; a
+rheon state file would again sit outside, behind the same state-then-ack
+order as task 530. Pulsar Functions keep state in BookKeeper's table service
+through `put_state`/`get_state`, values arbitrary binary data [P4], which
+could hold rheon's bytes; whether a state update is atomic with the
+acknowledgement is not stated [P4]: not verified.
+
+**(c) Arrow or Python path.** A Python consumer through `pulsar-client`
+(wheels for CPython 3.10 to 3.14, every platform rheon ships on) [P5], or a
+Python Pulsar Function, which handles one message per call [P6]. No Arrow
+path; a batch is the consumer's own accumulation. Window functions, which
+batch, are Java only [P7].
+
+**(d) Replay and exactly-once.** Broker-side deduplication by producer
+sequence ID [P1]; transactions for consume-process-produce [P3]. Functions
+offer at-most-once, at-least-once (default) and effectively-once, the last
+needing deduplication and a Failover subscription [P7]; exactly-once in
+Functions covers only an idempotent function of a single event [P3].
+
+**(e) Static linking.** None in rheon. `pulsar-client` ships per-platform
+binary wheels of 4 to 11 MB [P5]; that they wrap the C++ client statically
+was not verified.
+
+**(f) Adoption.** An Apache project; its case-studies page lists 47
+organizations, among them Intuit, Cisco, Tencent, Discord, Flipkart and
+Splunk [P8].
+
+Sources:
+[P1] https://pulsar.apache.org/docs/next/concepts-messaging/
+[P2] https://pulsar.apache.org/docs/next/concepts-architecture-overview/
+[P3] https://pulsar.apache.org/docs/next/txn-why/
+[P4] https://pulsar.apache.org/docs/next/functions-develop-state/
+[P5] https://pypi.org/project/pulsar-client/
+[P6] https://pulsar.apache.org/docs/next/functions-overview/
+[P7] https://pulsar.apache.org/docs/next/functions-concepts/
+[P8] https://pulsar.apache.org/case-studies/
+
+## 9. NATS JetStream
+
+**(a) Keying and ordering.** JetStream has subjects, not partitions.
+Deterministic partitioning maps subject tokens (the group key, say) to a
+fixed number of partitions by hash [N1]; without it, durable-consumer
+distribution is not partition-aware and messages of one subject can reach
+different subscribers [N1]. A redelivery "doesn't slot back into stream
+order"; strict order needs `MaxAckPending` of 1, at a cost in throughput
+[N2]. So rheon's per-group order holds only with one consumer per partition
+and one message in flight, or with rheon restoring order from the stream
+sequence number within a batch.
+
+**(b) State and checkpoints.** A durable consumer's position is kept on the
+server and advances as messages are acked [N3]. JetStream also has a
+replicated key-value store and an object store for larger payloads [N4],
+either of which could hold rheon's bytes. Nothing documented makes a write to
+them atomic with an ack: not verified, and probably not, so the
+state-then-ack order of task 530 would carry over.
+
+**(c) Arrow or Python path.** `nats-py`, a pure-Python client [N5]; pull
+consumers fetch in batches, a larger batch meaning fewer round trips [N3]. No
+Arrow path.
+
+**(d) Replay and exactly-once.** At-least-once with redelivery until acked;
+a consumer can start from the beginning, the latest message, a sequence
+number or a time [N4, N2]. Publish deduplication by `Nats-Msg-Id` within a
+duplicate window (2 minutes by default) and a double ack (`ack_sync` in
+Python) that waits for the server, which the documentation presents as
+exactly-once [N6].
+
+**(e) Static linking.** None: the client is pure Python [N5].
+
+**(f) Adoption.** A CNCF project; the server has about 21.1k stars and more
+than 40 client implementations [N7].
+
+Sources:
+[N1] https://docs.nats.io/nats-concepts/subject_mapping
+[N2] https://docs.nats.io/learn/jetstream/delivery-and-acknowledgment
+[N3] https://docs.nats.io/nats-concepts/jetstream/consumers
+[N4] https://docs.nats.io/nats-concepts/jetstream
+[N5] https://pypi.org/project/nats-py/
+[N6] https://docs.nats.io/using-nats/developer/develop_jetstream/model_deep_dive
+[N7] https://github.com/nats-io/nats-server
+
+## 10. Amazon Kinesis Data Streams
+
+**(a) Keying and ordering.** A partition key is hashed by MD5 to a shard;
+each shard is read by one stream-consumer instance at a time, "which
+preserves the order of the records in that shard", and each record carries
+its sequence number [KN1]. On a reshard, the client library finishes the
+parent shard before its children, so records stay in put order [KN2]. A
+stream keyed by group gives rheon both needs, like Kafka.
+
+**(b) State and checkpoints.** The Kinesis Client Library (KCL) keeps one
+lease per shard and a checkpoint sequence number per shard in a DynamoDB
+table [KN2]. Rheon's state would be saved before the checkpoint is written,
+as in task 530; the two are separate writes (DynamoDB and wherever the state
+goes), not atomic, and `skip_learned` covers the gap.
+
+**(c) Arrow or Python path.** The KCL is Java; Python runs through the
+MultiLangDaemon, which needs Java installed [KN2]; `amazon-kclpy` 3.2.0 is
+its Python interface [KN3]. Records are opaque blobs [KN1], handed to a
+record processor in batches [KN4]. No Arrow path.
+
+**(d) Replay and exactly-once.** At-least-once: producer retries and record
+processor restarts both duplicate records, and a moved shard processor
+restarts from its last checkpoint [KN4]. AWS's advice is idempotent output
+keyed by shard and sequence number [KN4], which is the shape of rheon's
+state-then-checkpoint plus `skip_learned`.
+
+**(e) Static linking.** None in rheon; the cost is a JVM beside the Python
+consumer for the KCL [KN2].
+
+**(f) Adoption.** A managed AWS service; no public adoption figures were
+read: not verified.
+
+Sources:
+[KN1] https://docs.aws.amazon.com/streams/latest/dev/key-concepts.html
+[KN2] https://docs.aws.amazon.com/streams/latest/dev/shared-throughput-kcl-consumers.html
+[KN3] https://pypi.org/project/amazon-kclpy/
+[KN4] https://docs.aws.amazon.com/streams/latest/dev/kinesis-record-processor-duplicates.html
+
+## 11. Google Cloud Pub/Sub
+
+**(a) Keying and ordering.** No partitions. Messages with the same ordering
+key arrive in publish order once ordering is enabled on the subscription; a
+key usually stays with one streaming-pull client while it has outstanding
+messages, but affinity can move, so "applications should handle any client
+processing a given key" [G1]. A redelivery of one message redelivers every
+later message of its key, acknowledged ones too [G1]. Publishing is limited
+to 1 MBps per ordering key [G1]. For rheon, a group can move between
+consumers at any time, so each consumer would need any group's state on
+demand: the bank has no per-group load today.
+
+**(b) State and checkpoints.** No consumer state beyond the subscription's
+ack state. Snapshots record that ack state at a point in time and last at
+most seven days [G2]. Rheon's state would live outside, saved before the ack;
+not atomic.
+
+**(c) Arrow or Python path.** `google-cloud-pubsub` 2.44.0, Python 3.10 or
+newer [G3]; messages arrive one by one to a callback (batching by the
+consumer's own code). No Arrow path.
+
+**(d) Replay and exactly-once.** Seek to a snapshot, or to a time if
+retention of acknowledged messages is configured [G2]. Exactly-once delivery
+(pull subscriptions only, in one region) means no redelivery after a
+successful ack, not exactly-once processing; publisher retries can still
+duplicate, and with ordering, acks must arrive in order, which limits
+throughput to thousands of messages a second [G4].
+
+**(e) Static linking.** None in rheon; whether the client depends on
+`grpcio` was not stated on the page read: not verified.
+
+**(f) Adoption.** A managed Google Cloud service; no adoption figures read:
+not verified.
+
+Sources:
+[G1] https://docs.cloud.google.com/pubsub/docs/ordering
+[G2] https://docs.cloud.google.com/pubsub/docs/replay-overview
+[G3] https://pypi.org/project/google-cloud-pubsub/
+[G4] https://docs.cloud.google.com/pubsub/docs/exactly-once-delivery
+
+## 12. RisingWave
+
+**(a) Keying and ordering.** A streaming SQL database; the pages read say
+nothing of the order in which an aggregate sees its rows [W1]: not verified,
+and SQL gives none without an `ORDER BY`, which the aggregate page does not
+mention [W1].
+
+**(b) State and checkpoints.** Checkpoints are Chandy-Lamport snapshots,
+every second by default, persisted to remote storage [W2], with barriers
+from the meta node [W3]. Internal state updates are exactly-once "without
+relying on Kafka transactions" [W4]. The only stateful user code is a
+user-defined aggregate (`create_state`, `accumulate`, optional `retract` and
+`finish`) [W1], whose state would be checkpointed with the rest; how it is
+serialized is not stated [W1].
+
+**(c) Arrow or Python path.** Two kinds of Python function. Embedded ones,
+including every aggregate, run in an interpreter inside RisingWave, are
+disabled by default, and may import only `json`, `decimal`, `re`, `math`
+and `datetime` [W5]: rheon cannot be imported there. External ones run in a
+separate UDF server (the `arrow-udf` SDK) reached over gRPC or HTTP/2, with a
+`batch=True` option, but are scalar or table functions only, without state,
+and one server is held to a core by the GIL [W6]. So rheon could run only as
+a stateless external function, keeping its own state outside RisingWave's
+checkpoints, which gives up (b).
+
+**(d) Replay and exactly-once.** Recovery restarts from the last checkpoint
+[W2]; sinks are connector-dependent, many at-least-once [W4], and the Kafka
+sink is at-least-once [W7].
+
+**(e) Static linking.** None in rheon for an external function server.
+
+**(f) Adoption.** About 9.4k stars, Apache-2.0, written in Rust; the README
+names no adopters [W8].
+
+Sources:
+[W1] https://docs.risingwave.com/sql/commands/sql-create-aggregate
+[W2] https://docs.risingwave.com/reference/fault-tolerance
+[W3] https://docs.risingwave.com/get-started/architecture
+[W4] https://docs.risingwave.com/reference/risingwave-kafka-streams-comparison
+[W5] https://docs.risingwave.com/sql/udfs/embedded-python-udfs
+[W6] https://docs.risingwave.com/sql/udfs/use-udfs-in-python
+[W7] https://docs.risingwave.com/integrations/destinations/apache-kafka (from a search summary; the page itself was not read)
+[W8] https://github.com/risingwavelabs/risingwave
 
 ## Notes for the later parts
 
