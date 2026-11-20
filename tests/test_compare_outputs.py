@@ -131,6 +131,8 @@ def test_one_ulp_in_one_column_is_that_column_alone(tmp_path, capsys):
     assert moved == ["smoke_ridge.pred_y0"]
     st = case["columns"]["smoke_ridge.pred_y0"]
     assert 0 < st["max_rel"] <= 2.0**-52 * 1.01, "one ulp is at most 2**-52 relative"
+    assert st["max_ulps"] == 1.0 and st["p999_ulps"] <= 1.0
+    assert 0 < st["max_abs"] and st["p999_abs"] <= st["max_abs"]
     assert st["median_rel"] <= st["p999_rel"] <= st["max_rel"]
     assert st["nulls_vanish"] == 0 and st["nulls_appear"] == 0
     assert case["summary"]["worst_column"] == "smoke_ridge.pred_y0"
@@ -215,6 +217,16 @@ def test_a_declared_decision_flips_where_it_crosses_its_threshold():
         cols_a.__getitem__, cols_b.__getitem__, names,
     )  # fmt: skip
     assert arg["flips"] == 1
+    assert arg["top_abs_max"] == pytest.approx(0.1), "row 1's largest value moved 0.8 -> 0.9"
+
+
+def test_ulps_are_read_off_the_bits_across_zero_and_sign():
+    tiny = np.nextafter(0.0, 1.0)
+    x = np.array([1.0, -0.0, 1.0, -tiny, -1.0, 2.0])
+    y = np.array([np.nextafter(1.0, 2.0), 0.0, 1.0, tiny, np.nextafter(-1.0, -2.0), 1.0])
+    got = co._ulps(x, y)
+    assert got[:5].tolist() == [1.0, 1.0, 0.0, 3.0, 1.0]
+    assert got[5] == 2.0**52, "the doubles in [1, 2)"
 
 
 def test_cases_are_files_of_dicts_found_by_a_folder(tmp_path):
