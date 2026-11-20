@@ -31,6 +31,12 @@
 //! NaN or an infinity in `c` it is taken off, as the chained sweep's
 //! `c * 0` is.
 
+/// The fewest features the split sweep runs at. Measured (task 479, ABBA
+/// on arm64 in both layouts, ns a row split / chained): 1.07 to 1.15 at 8
+/// features, 1.00 to 1.03 at 20, 0.85 to 0.95 at 32, 0.67 to 0.72 from 48
+/// with three penalties. Below it the chained sweep runs, and its bits stay.
+pub(super) const SPLIT_MIN_K: usize = 32;
+
 /// One sweep of the descent with the two runs swapped (the module's
 /// account); the largest move. `acc` is the partial sums' buffer; `finite`
 /// says every entry of `c` is finite.

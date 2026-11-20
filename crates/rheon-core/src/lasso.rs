@@ -1168,9 +1168,10 @@ fn descend(
     support: &mut Support,
 ) -> bool {
     debug_assert!(is_symmetric(c, k), "the sweeps read a column as a row");
-    if cfg!(feature = "lasso-split") {
+    if cfg!(feature = "lasso-split") && k >= split::SPLIT_MIN_K {
         // Task 479 (lasso split prototype): the same descent, each `rho_i`'s
-        // terms in another order (`split`); not the default.
+        // terms in another order (`split`); not the default. Narrower, the
+        // chained sweep is as quick or quicker, and its bits stay.
         for _ in 0..max_iter {
             let delta =
                 split::cd_sweep_split(c, k, d, s, l1, l2, b, &mut support.acc, support.all_finite);
