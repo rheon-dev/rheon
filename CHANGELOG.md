@@ -60,6 +60,19 @@ model that only the new build has is listed as an addition and passes.
   count moves: predictions, coefficients and every emitted column are as
   before, and a state saved by an earlier build continues to the bit except
   for it. Moves: `lasso.solve_failures`.
+- **`sgd` and `pa` with `standardize` come back from a long clock gap.**
+  The row is standardized against moments that include it, and after a gap
+  of about 53 half-lives or more the history's share of those moments, `a`,
+  is below `2⁻⁵³`. The row's deviation from their mean was formed as
+  `x − (m + b·d)`, whose rounding, `2⁻⁵³·|d|`, is then larger than the
+  deviation itself, `a·d`; divided by a scale of `sqrt(a)`, it made a step
+  that left the slopes up to 1e151 for good. On a two-feature stream with
+  one gap of 100 to 1,000 half-lives, 3 seeds in 20 ended 4e9 to 8e150 off
+  under `sgd` and 3e11 to 6e15 off under `pa`; now none does. Where `a` is
+  below `2⁻¹⁰` the deviation is `a·d`, held to a 2,048-bit longhand of the
+  standardization to 1e-12; above it the arithmetic is as it was, so only
+  rows after a gap of about 14 half-lives or more move (by up to 1.1e-12
+  after one of 15, measured). Moves: `sgd.*`, `pa.*`.
 
 ### Tests and documents
 

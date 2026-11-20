@@ -1143,6 +1143,60 @@ pub(crate) mod exact {
             (quad.to_f64().value(), det.ln().to_f64().value())
         }
     }
+
+    /// `x` standardized against the exponentially weighted moments of a
+    /// stream with `x` itself admitted at unit weight after a decay of
+    /// `lam`, from the definitions, in floats of 2,048 bits (review
+    /// fable2, C1). `rows` are `(x_i, lam_i, w_i)` as
+    /// `EwDiag::update(x_i, lam_i, w_i)` takes them: `lam_i` decays every
+    /// row before row `i`. Row `i` ends with the weight `ω_i = w_i · Π_{j>i}
+    /// lam_j · lam`, the new row with 1, and over `W = 1 + Σ ω_i`
+    ///
+    /// ```text
+    /// m = (x + Σ ω_i x_i) / W,   v = ((x − m)² + Σ ω_i (x_i − m)²) / W,   z = (x − m) / sqrt(v)
+    /// ```
+    ///
+    /// each rounded once to a double at the end. No recursion, no running
+    /// mean and no compensated pair: it shares none of the mean-form
+    /// update's arithmetic. The history's weight beside the row's 1 may be
+    /// `2⁻¹⁰⁰⁰` after a long gap, and a sum keeps it to the bits the
+    /// precision has past that, so 2,048: about a thousand bits of it, where
+    /// 512 kept twelve. `None` where `v` is 0.
+    pub(crate) fn standardized(rows: &[(f64, f64, f64)], lam: f64, x: f64) -> Option<f64> {
+        const SBITS: usize = 2048;
+        let b = |x: f64| -> Big {
+            Big::try_from(x)
+                .expect("a finite input")
+                .with_precision(SBITS)
+                .value()
+        };
+        let mut omega: Vec<Big> = Vec::with_capacity(rows.len());
+        let mut factor = b(lam);
+        for &(_, l, w) in rows.iter().rev() {
+            omega.push(&b(w) * &factor);
+            factor = &factor * &b(l);
+        }
+        omega.reverse();
+        let xb = b(x);
+        let mut w_sum = b(1.0);
+        let mut s = xb.clone();
+        for (&(xi, _, _), o) in rows.iter().zip(&omega) {
+            w_sum = &w_sum + o;
+            s = &s + &(o * &b(xi));
+        }
+        let mean = &s / &w_sum;
+        let dx = &xb - &mean;
+        let mut ss = &dx * &dx;
+        for (&(xi, _, _), o) in rows.iter().zip(&omega) {
+            let d = &b(xi) - &mean;
+            ss = &ss + &(o * &(&d * &d));
+        }
+        let var = &ss / &w_sum;
+        if var == b(0.0) {
+            return None;
+        }
+        Some((&dx / &var.sqrt()).to_f64().value())
+    }
 }
 
 #[cfg(test)]

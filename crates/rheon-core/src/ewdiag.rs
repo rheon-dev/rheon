@@ -407,7 +407,9 @@ impl Including<'_> {
     /// for the slot, the variance floored at zero as [`EwDiag::var`] floors
     /// it, and `x`'s deviation from the mean it leaves, the pair's
     /// ([`crate::comp::dev`]; docs/PLAN.md task 101) -- which `x − mean`
-    /// would round.
+    /// would round -- or, where the history's share `a` is below
+    /// [`SMALL_SHARE`], `a·d`, `d` the row's deviation from the mean before
+    /// it ([`Self::deviation_of`]).
     #[inline]
     pub fn moments(&self, i: usize, x: f64) -> (f64, f64, f64) {
         self.moments_of(self.sc.m[i], self.sc.m_lo[i], self.sc.c[i], x)
@@ -426,10 +428,44 @@ impl Including<'_> {
         (
             hi,
             crate::solve::clamp_rounding(c),
-            crate::comp::dev(x, hi, lo),
+            self.deviation_of(x, d, hi, lo),
         )
     }
+
+    /// `x`'s deviation from the mean the admitted row leaves, `(hi, lo)`,
+    /// `d` its deviation from the mean before it: the pair's,
+    /// `(x − hi) − lo`, while the history's share `a` is at least
+    /// [`SMALL_SHARE`], and `a·d` below it (and above 0).
+    ///
+    /// The two are the same number in exact arithmetic, the row at unit
+    /// weight making `a + b = 1`. The pair's carries the rounding of the
+    /// step `b·d` it took, about `2⁻⁵³·|d|`, which is `2⁻⁵³/a` of the
+    /// deviation `a·d`: nothing on an ordinary row, and after a long clock
+    /// gap, `a` below `2⁻⁵³`, larger than the deviation itself. `z` was
+    /// then rounding noise over a scale of `sqrt(a)`, exactly 0 or as large
+    /// as 1e75, and `sgd` divided its step by that scale: one gap of 500
+    /// half-lives left slopes near 1e75 for good (review fable2, C1). `a·d`
+    /// is good to a rounding of itself at any `a`. Below [`SMALL_SHARE`]
+    /// the pair's is off by up to `2⁻⁴³` of the deviation, so the switch
+    /// moves a deviation by no more than that, and no row of a stream whose
+    /// gaps are shorter than about 14 half-lives -- every row its moments
+    /// carry ten or more rows of history on -- is moved by a bit. At `a =
+    /// 0` the row is the whole history and the pair's gives `+0`, which `a·d`
+    /// would give as `-0` for a negative `d`.
+    #[inline(always)]
+    pub(crate) fn deviation_of(&self, x: f64, d: f64, hi: f64, lo: f64) -> f64 {
+        if self.a < SMALL_SHARE && self.a > 0.0 {
+            self.a * d
+        } else {
+            crate::comp::dev(x, hi, lo)
+        }
+    }
 }
+
+/// The history's share `a` below which [`Including::deviation_of`] reads
+/// the row's deviation as `a·d`: `2⁻¹⁰`, where the pair's form is good to
+/// `2⁻⁴³` of the deviation.
+pub(crate) const SMALL_SHARE: f64 = 1.0 / 1024.0;
 
 #[cfg(test)]
 mod tests {
@@ -625,10 +661,20 @@ mod tests {
                     let read: Vec<(f64, f64, f64)> = (0..k).map(|i| inc.moments(i, x[i])).collect();
                     let mut unit = d.clone();
                     unit.update(&x, lam, 1.0);
+                    // The history's share as `including` forms it: below
+                    // `SMALL_SHARE` the deviation from the mean the row
+                    // leaves is that share of its deviation from the mean
+                    // before it.
+                    let a = lam * d.n_eff() / (lam * d.n_eff() + 1.0);
                     for (i, &(m, v, dev)) in read.iter().enumerate() {
                         assert_eq!(m.to_bits(), unit.mean(i).to_bits(), "mean {i}");
                         assert_eq!(v.to_bits(), unit.var(i).to_bits(), "var {i}");
-                        assert_eq!(dev.to_bits(), unit.deviation(i, x[i]).to_bits(), "dev {i}");
+                        let want = if a < SMALL_SHARE && a > 0.0 {
+                            a * d.deviation(i, x[i])
+                        } else {
+                            unit.deviation(i, x[i])
+                        };
+                        assert_eq!(dev.to_bits(), want.to_bits(), "dev {i}");
                     }
                     assert_eq!(d, before, "reading moved the accumulator");
                     // The stream's own weight, which may be 0 or 2.5, is what

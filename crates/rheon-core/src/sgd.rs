@@ -2010,6 +2010,8 @@ impl pulp::WithSimd for StandardizeLanes<'_> {
         let (va, vb, vab) = (simd.splat_f64s(a), simd.splat_f64s(b), simd.splat_f64s(ab));
         let (zero, one) = (simd.splat_f64s(0.0), simd.splat_f64s(1.0));
         let inf = simd.splat_f64s(f64::INFINITY);
+        // `Including::deviation_of`'s choice, one for the row.
+        let small = a < crate::ewdiag::SMALL_SHARE && a > 0.0;
         for i in 0..xv.len() {
             let xi = xv[i];
             // `moments_of`: d, the centred moment, Kahan's step of the mean.
@@ -2024,7 +2026,11 @@ impl pulp::WithSimd for StandardizeLanes<'_> {
             let m = t;
             // `clamp_rounding`: 0 where `c2 <= 0`, NaN kept.
             let v = simd.select_f64s(simd.less_than_or_equal_f64s(c2, zero), zero, c2);
-            let dev = simd.sub_f64s(simd.sub_f64s(xi, m), lo2);
+            let dev = if small {
+                simd.mul_f64s(va, d)
+            } else {
+                simd.sub_f64s(simd.sub_f64s(xi, m), lo2)
+            };
             if off == 0 {
                 let raw = simd.add_f64s(v, simd.mul_f64s(m, m));
                 let pos = simd.greater_than_f64s(raw, zero);
@@ -2052,7 +2058,11 @@ impl pulp::WithSimd for StandardizeLanes<'_> {
             let (mut h2, mut l2) = (ht[i], lt[i]);
             crate::comp::add(&mut h2, &mut l2, b * d);
             let v = crate::solve::clamp_rounding(c2);
-            let dev = crate::comp::dev(xi, h2, l2);
+            let dev = if small {
+                a * d
+            } else {
+                crate::comp::dev(xi, h2, l2)
+            };
             if off == 0 {
                 let raw = v + h2 * h2;
                 zt[i] = if raw > 0.0 { xi / raw.sqrt() } else { xi };
@@ -2806,6 +2816,122 @@ mod tests {
             }
         }
         assert!(checked > 4000, "{checked}");
+    }
+
+    /// A row standardized against the moments that include it, after a
+    /// clock gap of up to 1,000 half-lives, is what exact arithmetic gives
+    /// (review fable2, C1): `z = (x − m)/sqrt(v)` from the stream's
+    /// definitions at 2,048 bits (`oracle::exact::standardized`), to 1e-12
+    /// of itself. After a gap the history's share `a = λW/(λW + 1)` is
+    /// tiny, and the deviation from the mean that includes the row is
+    /// `a·d`, `d` its deviation from the mean before it. Formed as `x − (m +
+    /// b·d)`, it carried the rounding of `b·d`, `2⁻⁵³·|d|`, `2⁻⁵³/a` of the
+    /// deviation: on a5c4dcef `z` was 6.4e-2 off at 55 half-lives, and past
+    /// `a < 2⁻⁵³` exactly 0 or rounding noise over a scale of `sqrt(a)`,
+    /// and the step, divided by that scale, left slopes of up to 1e151 for
+    /// good. The ordinary rows (a gap of one row) are held to the same
+    /// bound, and the gaps each side of `SMALL_SHARE`.
+    #[test]
+    fn a_row_after_a_long_gap_is_standardized_as_exact_arithmetic_does() {
+        let hl = 20.0f64;
+        let mut worst = 0.0f64;
+        let mut checked = 0usize;
+        // Each side of `SMALL_SHARE` (13 and 15 half-lives here), and on
+        // to 1,000 half-lives.
+        for gap in [1.0, 20.0, 260.0, 300.0, 1100.0, 2000.0, 10_000.0, 20_000.0] {
+            for seed in 0..40u64 {
+                let mut s = seed.wrapping_mul(0x9e37_79b9) + 80;
+                let (k, off) = (2usize, 1usize);
+                let mut sc = EwDiag::new(k + off);
+                let mut rows: Vec<Vec<(f64, f64, f64)>> = vec![Vec::new(); k];
+                for i in 0..300 {
+                    let x = [1.0, 0.5 + lcg(&mut s), -3.0 + 2.0 * lcg(&mut s)];
+                    let lam = if i == 0 { 1.0 } else { (-1.0 / hl).exp2() };
+                    let w = if i % 11 == 5 { 0.25 } else { 1.0 };
+                    sc.update(&x, lam, w);
+                    for (f, r) in rows.iter_mut().enumerate() {
+                        r.push((x[off + f], lam, w));
+                    }
+                }
+                let lam = (-gap / hl).exp2();
+                assert_eq!(scaler_decay(&sc, lam, 1.0), lam, "the history is kept");
+                let x = [0.5 + lcg(&mut s), -3.0 + 2.0 * lcg(&mut s)];
+                let (mut z, mut m, mut sd) = (vec![0.0; k], vec![0.0; k], vec![0.0; k]);
+                standardize_row(&sc, off, &x, lam, &mut z, &mut m, &mut sd);
+                let lazy: Vec<f64> = standardized(&sc, off, &x, lam).collect();
+                for f in 0..k {
+                    assert_eq!(z[f].to_bits(), lazy[f].to_bits(), "the two paths agree");
+                    let want =
+                        crate::oracle::exact::standardized(&rows[f], lam, x[f]).expect("a spread");
+                    let err = (z[f] - want).abs() / want.abs();
+                    worst = worst.max(err);
+                    assert!(
+                        err <= 1e-12,
+                        "gap {gap}, seed {seed}, feature {f}: z {:e} against {want:e}, \
+                         {err:e} of it",
+                        z[f]
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, 8 * 40 * 2);
+        println!("worst relative error of z: {worst:e}");
+    }
+
+    /// One clock gap of 500 half-lives, then 3,000 ordinary rows: the fit
+    /// comes back (review fable2, C1, its reproduction). Before the fix the
+    /// worst error over the last 500 rows was 6.1e75 at a constant rate,
+    /// the slopes near 1e75; each later step moves a slope by at most
+    /// `lr·clip`, so they never came back. Under `inv_scaling` too.
+    #[test]
+    fn one_long_gap_leaves_a_standardized_fit_that_recovers() {
+        for schedule in [
+            LearningRate::Constant,
+            LearningRate::InvScaling { power: 0.25 },
+        ] {
+            for gap in [1_300.0, 2_000.0, 10_000.0, 20_000.0] {
+                let mut worst = 0.0f64;
+                for seed in [80u64, 81, 82, 83, 84, 85, 86, 87] {
+                    let mut m = Sgd::new(SgdCfg {
+                        n_targets: 2,
+                        decay: Decay::Halflife(20.0),
+                        learning_rate: 0.01,
+                        schedule,
+                        clip_gradient: 1e3,
+                        standardize: true,
+                        min_weight: 3.0,
+                        ..cfg(2, SgdLoss::Squared)
+                    })
+                    .unwrap();
+                    let mut s = seed;
+                    let row = |s: &mut u64| {
+                        let x = [lcg(s), lcg(s)];
+                        let y: Vec<Option<f64>> = (0..2)
+                            .map(|j| {
+                                Some(0.5 * (j as f64 + 1.0) + x[0] - 0.5 * x[1] + 0.05 * lcg(s))
+                            })
+                            .collect();
+                        (x, y)
+                    };
+                    for i in 0..300 {
+                        let (x, y) = row(&mut s);
+                        m.step(&x, &y, if i == 0 { 0.0 } else { 1.0 }, 1.0);
+                    }
+                    for i in 0..3000 {
+                        let (x, y) = row(&mut s);
+                        let st = m.step(&x, &y, if i == 0 { gap } else { 1.0 }, 1.0);
+                        if i >= 2500 {
+                            worst = worst.max((st.pred[0] - y[0].unwrap()).abs());
+                        }
+                    }
+                }
+                assert!(
+                    worst < 1.0,
+                    "{schedule:?}, gap {gap}: |error| {worst:e} 2,500 rows after one gap"
+                );
+            }
+        }
     }
 
     fn lcg(state: &mut u64) -> f64 {

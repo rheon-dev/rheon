@@ -283,3 +283,44 @@ def test_a_bank_saved_around_the_switch_goes_on_to_the_bit(cut):
     back = rp.ModelBank.load_bytes(first.save_bytes())
     tail = back.fit_predict(df[cut:])
     assert _floats(pl.concat([head, tail])).equals(whole)
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        dict(model="sgd", learning_rate=0.01, clip_gradient=1e3),
+        dict(
+            model="sgd", learning_rate=0.05, schedule="inv_scaling", power=0.25, clip_gradient=1e3
+        ),
+        dict(model="pa"),
+    ],
+    ids=["sgd", "sgd_inv_scaling", "pa"],
+)
+@pytest.mark.parametrize("gap", [100.0, 500.0, 1000.0], ids=lambda g: f"{g:g}hl")
+def test_one_long_gap_leaves_a_fit_that_recovers(spec, gap):
+    """One clock gap of 100 to 1,000 half-lives, then 3,000 ordinary rows
+    (review fable2, C1). After such a gap the history's share of the moments
+    that include the row, ``a``, is below ``2**-53``, and the row's deviation
+    from their mean was formed as ``x - (m + b d)``: rounding noise of
+    ``2**-53 |d|`` against a true deviation of ``a d``, divided by a scale of
+    ``sqrt(a)``. On a5c4dcef 3 seeds in 20 ended 4e9 to 8e150 off for
+    ``sgd`` and 3e11 to 6e15 off for ``pa``, for good; the deviation is now
+    ``a d``. AdaGrad is not here: its step, normalized by a sum of squared
+    gradients that decays across the gap as the scale does, is ``lr /
+    sqrt(a)`` in the caller's units in exact arithmetic."""
+    spec = dict(spec)
+    kind = spec.pop("model")
+    worst = 0.0
+    for seed in range(20):
+        rng = np.random.default_rng(seed)
+        n0, n = 300, 3300
+        x = rng.uniform(-1.0, 1.0, (n, 2))
+        y = 0.5 + x[:, 0] - 0.5 * x[:, 1] + 0.05 * rng.uniform(-1.0, 1.0, n)
+        dt = np.ones(n)
+        dt[n0] = 20.0 * gap
+        frame = pl.DataFrame({"t": np.cumsum(dt), "x0": x[:, 0], "x1": x[:, 1], "y": y})
+        common = dict(targets=["y"], features=["x0", "x1"], clock="t", gap_cap=1e15, half_life=20.0)
+        built = getattr(rp.spec, kind)("m", **common, **spec)
+        pred = rp.ModelBank([built]).fit_predict(frame)["m"].struct.field("pred_y").to_numpy()
+        worst = max(worst, float(np.max(np.abs(pred[n0 + 2500 :] - y[n0 + 2500 :]))))
+    assert worst < 1.0, worst
