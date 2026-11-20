@@ -1,4 +1,4 @@
-# polars-online
+# rheon
 
 Streaming / online regression models for Polars. Rust core, exposed as
 (1) a chunk-fed Python "model bank", which also takes a `LazyFrame` and chunks
@@ -141,7 +141,7 @@ runs both tiers, but a plain `cargo test` skips the extended Rust tests
   quoting a CHANGELOG *Performance* entry (`scripts/budgets.py raises` holds
   this over the file's history). Or it says *tighten the budget to N*: run
   `python scripts/budgets.py apply` on the run's `measured.json` (the
-  Budgets artifact) or `memory.json` (`POLARS_ONLINE_BUDGETS_OUT`), so the
+  Budgets artifact) or `memory.json` (`RHEON_BUDGETS_OUT`), so the
   gain is kept. Instruction counts come from CI's Linux Valgrind;
   `cargo test -p rheon-bench` runs the cases natively. A proposal that
   changes a data layout, a per-row path or a default that adds work carries

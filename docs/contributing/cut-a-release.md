@@ -37,12 +37,11 @@ A release needs these before step 1:
   2. Enter the PyPI project name `rheon-compat`, the owner `rheon-dev`,
      the repository `rheon`, the workflow name `release.yml` and the
      environment name `pypi`. These are the values `rheon`'s own
-     publisher has, with only the project's name different, so the one
+     publisher must have, with only the project's name different, so the one
      `Pypi` environment and its reviewer gate both uploads.
   3. Save. A pending publisher reserves the name and creates the project at
-     the first upload, as `rheon`'s did, and it needs no API token
-     and no change to the repository's settings. The name was free on
-     2026-11-18; register it before anyone else does.
+     the first upload, and it needs no API token and no change to the
+     repository's settings. Register it before anyone else takes the name.
   4. After the first release, open the new project's *Publishing* page and
      check that the publisher is now listed as active, and that both
      projects name the same repository, workflow and environment.

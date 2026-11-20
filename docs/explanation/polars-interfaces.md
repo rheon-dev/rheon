@@ -135,10 +135,9 @@ process's baseline every 2 ms:
 
 **Every model is slower than reading the file, so on 1.34.0 to 1.36.1
 Polars held the whole input ahead of the bank.** `lf.rheon.fit_predict`, its result written to
-a parquet file without holding it all in memory, peaked at 1,768 MB on
-1.34.0, 920 MB on 1.37.1 and 632 MB on 2.0.0 over the same file, and
-an internal helper for gradient-boosted trees, building from parquet, at
-2.3 GB on 1.34.0 and 1.36.1. Below 1.37.0 the
+a parquet file without holding it all in memory, peaked at 1,768 MB on 1.34.0, 920 MB on 1.37.1 and 632 MB on 2.0.0 over
+the same file. An internal helper for gradient-boosted trees, building
+from parquet, peaked at 2.3 GB on 1.34.0 and 1.36.1. Below 1.37.0 the
 library could not keep the promise it is built on, running on data that
 does not fit in memory, so the floor is 1.37.0. Even from 1.37.0, a step
 such as `with_columns` between the file and the bank still lets Polars

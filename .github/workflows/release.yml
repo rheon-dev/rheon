@@ -775,9 +775,10 @@ jobs:
   # run creates no tag, and the version can be dispatched again.
   #
   # Trusted publishing (OIDC), so there is no API token to store or rotate.
-  # Registered on PyPI on 2026-09-03 as a pending trusted publisher for
-  # `rheon` (owner rheon-dev, repository rheon, workflow
-  # release.yml, environment pypi); the first publish claimed the name.
+  # The PyPI project `rheon` exists (its 1.5.0 was a forwarder to
+  # the package's former name); it must list a trusted publisher with owner rheon-dev,
+  # repository rheon, workflow release.yml and environment pypi before the
+  # first release from this repository, or the upload is refused.
   # `rheon-compat` is a second PyPI project, uploaded from this job
   # as well, and needs the same trusted publisher registered on it (a
   # pending one, before its first upload: docs/contributing/cut-a-release.md,
