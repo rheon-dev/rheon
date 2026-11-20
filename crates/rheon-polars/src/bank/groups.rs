@@ -475,7 +475,7 @@ mod tests {
         // bits are -- and none for others, which are compared by text.
         let view = |i: usize| {
             let t = texts[i]?;
-            (i % 2 == 0).then(|| u128::from(t.as_bytes()[0]))
+            i.is_multiple_of(2).then(|| u128::from(t.as_bytes()[0]))
         };
         let got = Groups::partition(texts.len(), |i| {
             (
