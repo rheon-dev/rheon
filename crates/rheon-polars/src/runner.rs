@@ -78,6 +78,36 @@ fn check_parent(what: &str, path: &Path) -> PolarsResult<()> {
     Err(io_err(what, path, e))
 }
 
+/// [`check_parent`], and then that a file can be made beside `path`: a
+/// temporary sibling, as the writer at the end makes, created and removed
+/// at once. A directory the process may not write passed `check_parent`
+/// and was found by the save after the output had been published, the
+/// state lost (review P9).
+fn check_writable(what: &str, path: &Path) -> PolarsResult<()> {
+    check_parent(what, path)?;
+    AtomicFile::create(path)
+        .map(drop)
+        .map_err(|e| io_err(what, path, e))
+}
+
+/// The path `path` names, for telling whether two of a run's paths are one
+/// file: the file's own canonical path where it is there, its directory's
+/// with its name where only the directory is, and the path as given where
+/// neither is.
+fn file_identity(path: &Path) -> PathBuf {
+    if let Ok(p) = path.canonicalize() {
+        return p;
+    }
+    let parent = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
+    match (parent.canonicalize(), path.file_name()) {
+        (Ok(dir), Some(name)) => dir.join(name),
+        _ => path.to_path_buf(),
+    }
+}
+
 /// A file format the runner reads and writes.
 ///
 /// Reading goes through polars' lazy scans, so a source is read the way
@@ -503,6 +533,7 @@ impl RunConfig {
         if !self.no_output() {
             self.output_format()?;
         }
+        self.check_distinct_paths()?;
         // Each spec's checks and the bank's -- a duplicate name, a `seqtest`
         // comparison naming a spec the bank has not got or a residual a side
         // does not emit -- so that a dry run reports them and not the first
@@ -518,6 +549,44 @@ impl RunConfig {
             && let Some(why) = bank.fit_predict_refusal()
         {
             return Err(why.to_string());
+        }
+        Ok(())
+    }
+
+    /// The refusal of two of the run's paths that name one file (review
+    /// P4): the input, the output, `load_state`, `save_state` and
+    /// `closed_groups` each its own, since whichever is written last would
+    /// replace the other -- a state saved over the output, an output over
+    /// its input or over the state the next run resumes from. `load_state`
+    /// and `save_state` may be one file: a run that goes on from a state
+    /// and saves it again.
+    fn check_distinct_paths(&self) -> Result<(), String> {
+        let named: Vec<(&str, &Path)> = [
+            ("input", Some(self.input.as_path())),
+            ("output", Some(self.output.as_path())),
+            ("load_state", self.load_state.as_deref()),
+            ("save_state", self.save_state.as_deref()),
+            ("closed_groups", self.closed_groups.as_deref()),
+        ]
+        .into_iter()
+        .filter_map(|(what, p)| p.filter(|p| !p.as_os_str().is_empty()).map(|p| (what, p)))
+        .collect();
+        let ids: Vec<PathBuf> = named.iter().map(|(_, p)| file_identity(p)).collect();
+        for i in 0..named.len() {
+            for j in i + 1..named.len() {
+                let pair = (named[i].0, named[j].0);
+                if pair == ("load_state", "save_state") || ids[i] != ids[j] {
+                    continue;
+                }
+                return Err(format!(
+                    "config: {} and {} both name {}, but each is a file of its own, and the run \
+                     would write one over the other. Give {} a path of its own.",
+                    pair.0,
+                    pair.1,
+                    named[j].1.display(),
+                    pair.1
+                ));
+            }
         }
         Ok(())
     }
@@ -614,6 +683,18 @@ impl RunConfig {
                 .learned()
                 .map_err(|e| polars_err!(ComputeError: "{}", e))?;
             learned.unlearned(&empty)?;
+        }
+        // The files the run writes, as it checks them before its first
+        // row; the output's and the sidecar's writers make their temporaries
+        // at the start, and the save its at the end (review P9).
+        if let Some(p) = &self.save_state {
+            check_writable("saving state", p)?;
+        }
+        if !self.no_output() {
+            check_writable("writing output", &self.output)?;
+        }
+        if let Some(p) = &self.closed_groups {
+            check_writable("writing closed groups", p)?;
         }
         let out = augment(&mut bank, empty, self.predict, self.no_output(), 0)?;
         // And the output laid out as its writer lays it out: a flattened
@@ -830,7 +911,7 @@ pub fn run_config_on_reported(
         }
     };
     if let Some(p) = &cfg.save_state {
-        check_parent("saving state", p)?;
+        check_writable("saving state", p)?;
     }
     // The output directory too, so an unwritable one is refused before the
     // bank learns a chunk rather than by the writer thread mid-run (review

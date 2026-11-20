@@ -48,6 +48,17 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **The command line refuses two paths that name one file** (review P4):
+  of `input`, `output`, `load_state`, `save_state` and `closed_groups`,
+  any two naming one file, however spelled, are refused before the run,
+  where the run wrote one over the other (the state over the output or the
+  input, the output over the state the next run resumes from). `load_state`
+  and `save_state` may still be one file.
+- **An unwritable `save_state` directory is refused before the run**
+  (review P9), by the run and by `--dry-run`, which make and remove a
+  temporary beside the file; it was found by the save, after the output had
+  been published. The dry run checks the output's and `closed_groups`'
+  directories the same way.
 - **The command line's text and IPC outputs take every column Python's
   do** (review P2, P3). An IPC output of a Categorical column failed at the
   first chunk holding a category an earlier chunk did not, so the run

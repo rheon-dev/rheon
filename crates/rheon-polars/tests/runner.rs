@@ -1171,3 +1171,117 @@ fn a_csv_output_writes_dates_and_times_as_polars_does() {
     );
     cleanup(&[input, output]);
 }
+
+/// Review P4: two of a run's paths naming one file were taken, and the run
+/// wrote one over the other -- the state over the output or the input, the
+/// output over the state the next run resumes from. Each pair is refused,
+/// however the path is spelled; `load_state` and `save_state` may be one.
+#[test]
+fn two_paths_naming_one_file_are_refused() {
+    let dir = tmp("one-file-dir");
+    std::fs::create_dir_all(&dir).unwrap();
+    let input = dir.join("in.parquet");
+    write(&input, Format::Parquet, &closing_stream());
+    // The same file through `..`, and a file that is not there yet.
+    let respelled = dir
+        .join("..")
+        .join(dir.file_name().unwrap())
+        .join("in.parquet");
+    let other = |name: &str| dir.join(name);
+    let base = || {
+        let mut cfg = config(&input, &other("out.parquet"));
+        cfg.specs = vec![closing_spec()];
+        cfg
+    };
+    type Set = fn(&mut RunConfig, PathBuf);
+    let roles: [(&str, Set); 5] = [
+        ("input", |c, p| c.input = p),
+        ("output", |c, p| c.output = p),
+        ("load_state", |c, p| c.load_state = Some(p)),
+        ("save_state", |c, p| c.save_state = Some(p)),
+        ("closed_groups", |c, p| c.closed_groups = Some(p)),
+    ];
+    for (i, (a, set_a)) in roles.iter().enumerate() {
+        for (b, set_b) in &roles[i + 1..] {
+            let mut cfg = base();
+            // A name with a format's extension serves every role.
+            let shared = if *a == "input" {
+                input.clone()
+            } else {
+                other("x.parquet")
+            };
+            let spelled = if *a == "input" {
+                respelled.clone()
+            } else {
+                shared.clone()
+            };
+            set_a(&mut cfg, shared);
+            set_b(&mut cfg, spelled);
+            let got = cfg.validate();
+            if (*a, *b) == ("load_state", "save_state") {
+                assert!(got.is_ok(), "{a} and {b}: {got:?}");
+                continue;
+            }
+            let e = got.unwrap_err();
+            assert!(
+                e.contains(&format!("config: {a} and {b} both name")),
+                "{a} and {b}: {e}"
+            );
+        }
+    }
+    // Distinct paths pass.
+    let mut cfg = base();
+    cfg.save_state = Some(other("s.state"));
+    cfg.closed_groups = Some(other("closed.parquet"));
+    cfg.validate().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Review P9: a `save_state` in a directory the process may not write
+/// passed the check before the run, which asked only whether the directory
+/// was there, and the save failed after the output was published -- and a
+/// dry run said the config was fine. Both refuse it before a row is read,
+/// and the output is not written.
+///
+/// Unix only, and skipped where the process may write past the mode bits,
+/// as `a_writer_that_cannot_create_its_file_ends_the_run_with_its_own_error`
+/// is.
+#[cfg(unix)]
+#[test]
+fn an_unwritable_state_directory_is_refused_before_the_run() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tmp("read-only-state-dir");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let probe = dir.join("probe");
+    if std::fs::File::create(&probe).is_ok() {
+        eprintln!(
+            "skipped: this process can create a file in a 0555 directory \
+             (running as root, or with CAP_DAC_OVERRIDE), so no save is refused"
+        );
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
+    let input = tmp("read-only-state-in.parquet");
+    let output = tmp("read-only-state-out.parquet");
+    write(&input, Format::Parquet, &stream(30));
+    let state = dir.join("s.state");
+    let mut cfg = config(&input, &output);
+    cfg.save_state = Some(state.clone());
+    let dry = cfg.dry_run().unwrap_err();
+    let ran = run_config(&cfg, no_progress).unwrap_err();
+    for e in [&dry, &ran] {
+        let msg = e.to_string();
+        assert!(
+            matches!(e, PolarsError::IO { .. })
+                && msg.contains(&format!("saving state {}", state.display())),
+            "{msg}"
+        );
+    }
+    assert!(!output.exists(), "the output is not written");
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    cleanup(&[input, output]);
+}
