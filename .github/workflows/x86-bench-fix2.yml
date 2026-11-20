@@ -1,0 +1,28 @@
+# Coordinator's x86-64 measurement of task 479's second x86 fix (the cold
+# trampoline that keeps cholesky_seq's layout) against main, per process and
+# in one process, both layouts. Lives only on branch vm-tools/x86-ci; runs
+# when its harness changes.
+name: x86 bench 479 fix2
+on:
+  push:
+    branches: [vm-tools/x86-ci]
+    paths: [vm-tools/w479-x86fix2/**]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  fix2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - name: free disk and use a leaner linker
+        uses: ./.github/actions/linux-build-prep
+      - name: the new tip against main
+        run: bash vm-tools/w479-x86fix2/run_x86.sh "$RUNNER_TEMP/w479x2" 8
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: w479x2-x86-out
+          path: ${{ runner.temp }}/w479x2/out/
