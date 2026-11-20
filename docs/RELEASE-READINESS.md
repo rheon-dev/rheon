@@ -461,9 +461,8 @@ format). Each run reports which package it imported, so the comparison
 cannot compare a build with itself. A spec the old release refuses is
 listed as not comparable, an addition, not as a difference; so is a field
 only the new build emits. The workload also counts each hard path it
-reaches (`bocpd`'s pruning and fold, a compensated mean's low part, a
-session crossed, a temporal clock at a decade's age, a reset after a step
-back, first rows at weight 0 and null, a state continued), and a path
+reaches, such as `bocpd`'s fold, a session crossed, a clock a decade old,
+first rows at weight 0, and a state continued. A path
 counted 0 fails the run. `--against 0.9.1` names another release, and
 `--report` prints without failing.
 

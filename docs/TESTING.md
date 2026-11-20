@@ -1360,14 +1360,14 @@ difference is the code's, not the math library's.
 
 **The workload reaches every model and every output, and each path that
 can move numbers without a tolerance-held test seeing it.** Every spec runs
-four times: on a stream of 400 rows with groups, sessions, gaps past the
-cap, nulls and zero weights; on it with each group's first row at weight 0;
-with that row null in every feature and target; and saved at row 137,
-loaded and continued. Beside the specs that switch every output on, it
-holds `bocpd` with pruning and a length cap over a break, a temporal clock
-whose groups began a decade before their other rows, a reset after a step
-back in every kind that reads a clock, and sessions crossed by a numeric
-and a temporal clock. Each path is counted in the run, and a count of 0
+on a stream of 400 rows with groups, sessions, gaps past the cap, nulls and
+zero weights. It runs three more times: with each group's first row at
+weight 0, with that row null in every feature and target, and saved at row
+137, loaded and continued. Beside the specs that switch every output on,
+the workload holds `bocpd` with pruning and a length cap over a break, and
+a temporal clock whose groups began a decade before their other rows. It
+also holds a reset after a step back in every kind that reads a clock, and
+sessions crossed by a numeric and a temporal clock. Each path is counted in the run, and a count of 0
 fails the comparison, since a path no longer reached is no longer compared:
 
 | path | what is counted |
