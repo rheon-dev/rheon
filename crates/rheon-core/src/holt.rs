@@ -81,7 +81,8 @@
 //! same.
 //!
 //! **A row the model cannot learn from is transparent.** A null target, or a
-//! zero weight, leaves the level and slope where the last observation put
+//! zero weight -- and a weight below the smallest normal double, `2⁻¹⁰²²`,
+//! which is read as 0 -- leaves the level and slope where the last observation put
 //! them and adds the row's delta to that target's `s`, so the next observed
 //! row forecasts, and decays, over the whole gap: the same numbers as if the
 //! row were absent and its clock folded into the next one, which is what
@@ -222,16 +223,21 @@ impl Holt {
         // multiplied by after: these values feed the next row's, so every
         // division here sits on the chain one row waits on the last for,
         // and a division takes several times a multiplication's latency.
-        // `w > 0` on any row that learns, so `s0_new > 0` and `r0` is
-        // finite; `rs` is formed only where `spread > 0`.
+        // A row that learns has a normal weight (`step_into` reads a
+        // subnormal one as 0), so `s0_new` is normal and `r0` finite. `rs`
+        // is infinite where the spread is 0, every observation at one
+        // clock, and where it is below `2⁻¹⁰²⁴`, a spread the doubles keep
+        // only a few bits of, reached by small weights a small clock step
+        // apart: there the slope is read as not determined, as at 0. Its
+        // gain `w·ā·∞` made the trend NaN for good (review fable2, C7).
         let r0 = 1.0 / s0_new;
         let age = s0 * aged * r0;
         let spread = self.fit_spread[j] + s0 * w * aged * aged * r0;
         self.fit_weight[j] = s0_new;
         self.fit_age[j] = age;
         self.fit_spread[j] = spread;
-        if spread > 0.0 {
-            let rs = 1.0 / spread;
+        let rs = 1.0 / spread;
+        if rs.is_finite() {
             (w * (r0 + age * age * rs), w * age * rs)
         } else {
             (w * r0, 0.0)
@@ -314,6 +320,18 @@ impl OnlineModel for Holt {
             return;
         }
         let m = self.cfg.n_targets;
+        // A weight below the smallest normal double is a weight of 0: the
+        // row advances the clock and learns nothing (hard rule 9). Each
+        // gain is a weight times a reciprocal kept to multiply by, and the
+        // reciprocal of a sum that small is infinite: a first row of weight
+        // `1e-310` left the line fit's `1/Q` infinite and the level and trend
+        // NaN for good (review fable2, C7). What such a row would teach is
+        // below a double's resolution beside any normal weight.
+        let weight = if weight < f64::MIN_POSITIVE {
+            0.0
+        } else {
+            weight
+        };
         // The decays for a target observed on the previous row, where `s` is
         // this row's delta: every target of a stream with no gaps.
         let row_decays = self.decays(d_clock);
@@ -392,14 +410,16 @@ impl OnlineModel for Holt {
                 // · g/s`. A move over no clock has no slope, and an infinite
                 // trend half-life none to give where the line fit is kept:
                 // the line fit's slope is then the whole history's drift.
-                let textbook = s > 0.0 && (line.is_none() || self.cfg.trend_half_life.is_finite());
-                let held_b = lam_b * self.w_trend[j];
                 // The reciprocals of the trend's denominator and of the
                 // clock step, each divided into once. `ri = 1/s` is infinite
-                // only at `s = 0`, where `textbook` is false, so neither
-                // the comparison nor `by_textbook` below reads it.
-                let rb = 1.0 / (held_b + weight);
+                // at `s = 0`, and at a step below `2⁻¹⁰²⁴`, which is read as
+                // no clock (review fable2, C7): `textbook` is false there,
+                // so neither the comparison nor `by_textbook` below reads it.
                 let ri = 1.0 / s;
+                let clocked = ri.is_finite();
+                let textbook = clocked && (line.is_none() || self.cfg.trend_half_life.is_finite());
+                let held_b = lam_b * self.w_trend[j];
+                let rb = 1.0 / (held_b + weight);
                 let trend = self.trend[j];
                 let level = self.level[j];
                 let by_textbook = || {
@@ -426,7 +446,7 @@ impl OnlineModel for Holt {
                     (None, true) => by_textbook(),
                     (None, false) => trend,
                 };
-                if s > 0.0 {
+                if clocked {
                     self.w_trend[j] = held_b + weight;
                 }
             }
@@ -1763,6 +1783,88 @@ mod tests {
         .zip(want)
         {
             assert_eq!((got.0, bits(&got.1)), (h, picks.to_vec()), "{name}");
+        }
+    }
+
+    /// A row of subnormal weight learns nothing, as a row of weight 0 learns
+    /// nothing (hard rule 9; review fable2, C7): the stream with it is the
+    /// stream with that row at weight 0, to the bit, and so first or later,
+    /// on a trend or without. The line fit kept `1/S0`, `1/Q` and `1/(λW +
+    /// w)` to multiply by, and the reciprocal of a number below `2⁻¹⁰²⁴` is
+    /// infinite: a first row of weight `1e-310` made the second row's slope
+    /// gain `0·∞`, and the level and trend NaN for good. A weight of `1e-300`,
+    /// normal, is still learned.
+    #[test]
+    fn a_row_of_subnormal_weight_is_a_row_of_weight_zero() {
+        let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+        for trend in [true, false] {
+            for at in [0usize, 1, 7, 200] {
+                for tiny in [5e-324, 1e-320, 1e-310, 2e-308] {
+                    let run = |w_at: f64| {
+                        let mut m = Holt::new(HoltCfg {
+                            min_weight: 3.0,
+                            trend,
+                            ..cfg(20.0, 80.0)
+                        })
+                        .unwrap();
+                        let mut s = 7u64;
+                        let mut out = Vec::new();
+                        for i in 0..400 {
+                            let w = if i == at { w_at } else { 1.0 };
+                            let y = 1.0 + 0.01 * i as f64 + 0.05 * lcg(&mut s);
+                            let st = m.step(&[], &[Some(y)], if i == 0 { 0.0 } else { 1.0 }, w);
+                            out.push((st.pred[0].to_bits(), st.n_eff.to_bits()));
+                        }
+                        (out, bits(&m.coefficients()[0]))
+                    };
+                    let (got, coef) = run(tiny);
+                    let (want, want_coef) = run(0.0);
+                    assert!(
+                        got == want && coef == want_coef,
+                        "trend {trend}, weight {tiny:e} at row {at}"
+                    );
+                    // On the line, or with no trend a half-life's lag behind it.
+                    let last = f64::from_bits(got[399].0);
+                    let lag = if trend {
+                        0.0
+                    } else {
+                        0.01 * 20.0 / std::f64::consts::LN_2
+                    };
+                    assert!((last - (4.99 - lag)).abs() < 0.1, "trend {trend}: {last}");
+                }
+            }
+        }
+        // A normal weight, however small, is learned: the first row is the level.
+        let mut m = Holt::new(cfg(20.0, 80.0)).unwrap();
+        m.step(&[], &[Some(3.0)], 0.0, 1e-300);
+        assert_eq!(m.level(), &[3.0]);
+    }
+
+    /// The line fit's spread of ages `Q` below `2⁻¹⁰²⁴`, where its
+    /// reciprocal is infinite, reached with normal weights: a first row at
+    /// `1e-300` and a second `1e-5` of a clock unit later leave `Q = 1e-310`,
+    /// and the slope's gain `w·ā/Q` was `1e-305·∞`, the trend NaN for good
+    /// (review fable2, C7). The slope is read as not determined there, as at
+    /// `Q = 0`: the level's weighted mean, the slope unmoved. A clock step
+    /// below the smallest normal, whose reciprocal is infinite too, is a
+    /// step of no clock: the level moves and the slope does not. Each stream
+    /// then follows its line.
+    #[test]
+    fn a_spread_or_a_clock_step_too_small_to_invert_leaves_the_fit_finite() {
+        for (w0, d1) in [(1e-300, 1e-5), (1.0, 1e-310), (1e-300, 1e-160)] {
+            let mut m = Holt::new(cfg(20.0, 80.0)).unwrap();
+            m.step(&[], &[Some(1.0)], 0.0, w0);
+            m.step(&[], &[Some(1.0)], d1, 1.0);
+            let mut last = f64::NAN;
+            for i in 2..400 {
+                last = m.step(&[], &[Some(1.0 + 0.01 * i as f64)], 1.0, 1.0).pred[0];
+                assert!(
+                    m.level()[0].is_finite() && m.trend()[0].is_finite(),
+                    "{w0:e}, {d1:e}: row {i}, {:?}",
+                    m.coefficients()
+                );
+            }
+            assert!((last - 4.99).abs() < 1e-2, "{w0:e}, {d1:e}: {last}");
         }
     }
 }

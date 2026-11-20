@@ -1465,18 +1465,22 @@ class TestHoltAcrossAMissingObservation:
         # Every settled row up to the one after the gap, which is `l + 2b`.
         np.testing.assert_allclose(pred[s : missing + 2], smooth(gappy)[s : missing + 2], rtol=1e-9)
 
-    @pytest.mark.parametrize("how", ["null", "zero weight"])
+    @pytest.mark.parametrize("how", ["null", "zero weight", "subnormal weight"])
     def test_a_row_it_cannot_learn_from_is_as_if_absent(self, how):
+        """A weight below the smallest normal double is a weight of 0 (review
+        fable2, C7): the line fit's reciprocal of a weight that small was
+        infinite, and the level and trend NaN for good."""
         n = 150
         y = self.series(n)
         skip = np.arange(n) % 3 == 2
+        tiny = {"zero weight": 0.0, "subnormal weight": 1e-310}.get(how, 1.0)
         full = pl.DataFrame(
             {
                 "t": np.arange(n, dtype=float),
                 "y": [
                     None if s and how == "null" else float(v) for v, s in zip(y, skip, strict=True)
                 ],
-                "w": np.where(skip & (how == "zero weight"), 0.0, 1.0),
+                "w": np.where(skip, tiny, 1.0),
             },
             schema={"t": pl.Float64, "y": pl.Float64, "w": pl.Float64},
         )

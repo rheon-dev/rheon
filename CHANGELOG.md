@@ -86,6 +86,13 @@ model that only the new build has is listed as an addition and passes.
   square root). It read the covariance before the transition and gave
   `z·b` at a `b` shrunk to nothing, where the step, which reads it after,
   withheld. Moves: `kalman.pred_*`.
+- `holt` reads a weight below the smallest normal double, `2⁻¹⁰²²`, as 0:
+  the row advances the clock and learns nothing. Its gains multiply by kept
+  reciprocals, and a first row of weight `1e-310` made the line fit's `1/Q`
+  infinite and the level and trend NaN for good. A spread of the line
+  fit's ages, or a clock step, too small to invert (below `2⁻¹⁰²⁴`) is read
+  as none, as at 0, where it made the trend NaN with normal weights. Moves:
+  `holt.*`.
 
 ### Tests and documents
 
