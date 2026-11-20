@@ -3403,8 +3403,10 @@ class ModelBank:
             counts, so nearly dependent features show here. So does every
             cap hit under a decay whose Kish size stays below that bound
             (about ``(1 + lam) / (1 - lam)`` rows for ``lam`` the decay a
-            row), which no more rows would lift: the stream is then never
-            out of its warm-up. A ``max_iter``
+            row), or under a ``window_size`` once rows have aged out of a
+            window that holds fewer than that bound, which no more rows
+            would lift: the stream is then never out of its warm-up. A
+            ``max_iter``
             below ``ln(1/tol) / 2``, about 12, is never excused: no number of
             rows would settle it.
         ``kmeans``

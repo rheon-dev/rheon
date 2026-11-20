@@ -145,7 +145,8 @@ docstring, under *The descent*, measure how many sweeps they take.
    about 2.3 rows a feature at the default, a rule the docstring of
    `ModelBank.solve_failures` gives. It leaves them out only while the
    stream is still growing toward that many. Under a decay that stays below
-   it, every one is counted.
+   it, or a `window_size` whose window holds fewer rows than it once rows
+   have aged out, every one is counted.
 2. **If it is above 0, give the spec a larger `max_iter`,** and fit again
    until the count is 0.
 

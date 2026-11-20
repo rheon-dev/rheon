@@ -348,7 +348,8 @@ pub struct Lasso {
     /// that many rows, while the stream is still growing toward that many,
     /// is not counted: it is the warm-up (`gramfit::young`), and the fit is
     /// still where it stopped. A decay that holds the Kish size under that
-    /// number for good is no warm-up.
+    /// number for good is no warm-up, and nor is a window that holds fewer
+    /// once rows have aged out of it.
     pub solve_failures: u64,
     /// Whether the explicit cadence's first period runs on the default
     /// weight-share schedule (`since::FirstPeriod`; task 278): set by a
@@ -1069,10 +1070,15 @@ impl Lasso {
                             gram.n_kish(),
                             // A window's Kish size is of the rows inside
                             // it, which the live Gram's scale does not
-                            // describe: no limit is read there, and the
-                            // rows alone decide, as before.
+                            // describe. The view exists only once rows have
+                            // aged out of the window, and from then on the
+                            // window holds its span's rows however long the
+                            // stream: it is at its limit, as a Gram whose
+                            // scale has run to 0 (task 526). Until then the
+                            // window holds every row and the live Gram, its
+                            // scale included, is the fit's.
                             if view.is_some() {
-                                1.0
+                                0.0
                             } else {
                                 self.acc.grams.grams[g].prior_scale()
                             },
@@ -2803,6 +2809,67 @@ mod tests {
         }
         assert!(kish_at_100 > 90.0 && kish_at_100 < 115.0, "{kish_at_100}");
         assert_eq!(m.solve_failures, 0, "the young fit is not a failure");
+    }
+
+    /// The window's reading of the same rule (task 526): a window of 80
+    /// rows, no decay, holds a Kish size of 80 once rows age out of it, under
+    /// the 115 the defaults' 100 sweeps need at 50 features, and no more
+    /// rows raise it. The sweeps run out for good and every cap hit counts.
+    /// Before the fix a window was excused by its rows alone, so none did,
+    /// on any row.
+    #[test]
+    fn a_window_too_short_for_the_features_is_not_a_warm_up() {
+        let k = 50;
+        let mut c = cfg(k, 1, vec![0.01, 0.001, 0.0]);
+        c.window = Some(80.0);
+        c.max_iter = 100;
+        c.tol = 1e-10;
+        let mut m = Lasso::new(c).unwrap();
+        let mut s = 13u64;
+        let mut at_row_1000 = 0;
+        for i in 0..5000 {
+            let common = lcg(&mut s);
+            let x: Vec<f64> = (0..k).map(|_| 0.7 * common + lcg(&mut s)).collect();
+            let y = x[0] - 0.5 * x[1] + 0.25 * x[2] + 0.5 * lcg(&mut s);
+            m.step(&x, &[Some(y)], if i == 0 { 0.0 } else { 1.0 }, 1.0);
+            if i == 999 {
+                at_row_1000 = m.solve_failures;
+            }
+        }
+        let kish = m.gram_kish()[0].unwrap();
+        assert!(
+            kish < 115.0 && kish > 70.0,
+            "the window's Kish size is {kish}"
+        );
+        assert!(at_row_1000 > 0, "none counted in the first 1,000 rows");
+        let later = m.solve_failures - at_row_1000;
+        assert!(later >= 3000, "{later} counted on the 4,000 rows after");
+    }
+
+    /// The same stream under a window of 2,000 rows: the window holds every
+    /// row through the first 100, a Kish size growing past the bound at
+    /// about row 115, so their cap hits are the warm-up and none is counted,
+    /// as without a window. The window has dropped no row yet, so it is
+    /// still growing.
+    #[test]
+    fn a_long_window_is_still_a_warm_up() {
+        let k = 50;
+        let mut c = cfg(k, 1, vec![0.01, 0.001, 0.0]);
+        c.window = Some(2000.0);
+        c.max_iter = 100;
+        c.tol = 1e-10;
+        let mut m = Lasso::new(c).unwrap();
+        let mut s = 13u64;
+        let mut kish_at_100 = 0.0;
+        for i in 0..100 {
+            let common = lcg(&mut s);
+            let x: Vec<f64> = (0..k).map(|_| 0.7 * common + lcg(&mut s)).collect();
+            let y = x[0] - 0.5 * x[1] + 0.25 * x[2] + 0.5 * lcg(&mut s);
+            m.step(&x, &[Some(y)], if i == 0 { 0.0 } else { 1.0 }, 1.0);
+            kish_at_100 = m.gram_kish()[0].unwrap();
+        }
+        assert!(kish_at_100 > 90.0 && kish_at_100 < 115.0, "{kish_at_100}");
+        assert_eq!(m.solve_failures, 0, "the young window is not a failure");
     }
 
     /// The stopping rule is dimensionless (task 278, D3): the target scaled
