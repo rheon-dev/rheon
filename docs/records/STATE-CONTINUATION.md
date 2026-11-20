@@ -315,3 +315,35 @@ current fixture `lasso_window` of `rheon-core` regenerated: one byte, its
 `solve_failures` 0 -> 1, after its clock gap at row 36; every other fixture
 is byte for byte, and the kept `v61` to `v66` fixtures load and continue as
 before.
+
+A twentieth, the user's (2026-11-20, task 479: "Land it from k ≥ 13"):
+`hmm` under `covariance_type = "full"` with 13 features or more keeps each
+state, once seeded, as its weight, its means and the Cholesky factor of its
+matrix, `M = σ·L Lᵀ` with `σ` in `[1/4, 1]`, and a learned row moves the
+factor by plane rotations, where the co-moments were updated and factorized
+afresh on the next row (schema 69). An `hmm` full-covariance state of 13 or
+more features saved before schema 69, once seeded, holds co-moments: it
+loads, converts its co-moments to their factor -- the factor its next row
+would have read, to the bit -- and continues in the factor form. Its first
+row reads as the old build's, to the bit; from the first row it learns, it
+continues within the measured bound rather than to the bit: on 13, 20 and
+32 features under half-lives of 20 and 400 rows and none, 2,000 rows a run
+saved after 600 (`a_state_of_schema_68_loads_over_the_grid`,
+`crates/rheon-core/src/hmm/tests_factor.rs`, macOS arm64), a filtered or
+predicted posterior moved by at most 1.9e-13 from the old build's and
+`loglik` by at most 6.8e-14 of `1 + |loglik|`, and no reported `state`
+changed; the test holds them to 2e-12 and 1e-12. Every weight, mean and
+ridge scale continues to the bit until the posteriors that weigh the rows
+part. Such a state re-saves in the factor form: not the old build's bytes,
+nor this build's for the same rows, whose factor was taken up at the
+seeding and rotated since, but bytes that load back the same; its matrices
+are within 4.7e-16 of the largest diagonal entry of this build's (the kept
+`v68/hmm_full`, held to 1e-14, its 16-row continuation to 1e-13 of
+`1 + |x|`, measured 5.3e-15, by `TAKEN_UP` in
+`crates/rheon-core/tests/state_fixtures.rs`). A state saved inside its
+warm-up loads in co-moments and takes its factor up at its seeding, so it
+continues to the bit of this build's run. Narrower `full` states, `tied` and
+`diag` keep their layout and continue to the bit, and re-save the current
+fixture's bytes (`v68/hmm_full_narrow`, 12 features). The current fixture
+`hmm_full` (13 features) is the factor form; every other fixture moved only
+its schema number.

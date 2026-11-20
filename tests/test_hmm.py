@@ -152,6 +152,30 @@ def test_chunk_invariance(size):
     assert want.drop("coef").equals(got.drop("coef"))
 
 
+@pytest.mark.parametrize("d", [12, 13, 20])
+@pytest.mark.parametrize("size", [1, 37, 2000])
+def test_chunk_invariance_on_both_sides_of_the_factor_form(d, size):
+    """From 13 features a full state keeps its covariance's Cholesky factor
+    and moves it by each learned row, where 12 keep co-moments and
+    factorize them: on both sides, one chunk or many give the same bits,
+    and so does a save and load mid-stream and one inside the warm-up."""
+    df = blobs(n=2000, run=100, seed=6, d=d)
+    features = [f"x{i}" for i in range(d)]
+    want = run(df, warm_rows=200, features=features).drop("coef")
+    bank = rp.ModelBank([spec(warm_rows=200, features=features)])
+    parts = [bank.fit_predict(df[i : i + size]) for i in range(0, df.height, size)]
+    got = pl.concat(parts)["h"].struct.unnest().drop("coef")
+    assert want.equals(got)
+    if size == 2000:
+        for at in (120, 900):
+            s = spec(warm_rows=200, features=features)
+            bank = rp.ModelBank([s])
+            head = bank.fit_predict(df[:at])["h"].struct.unnest().drop("coef")
+            again = rp.ModelBank.load_bytes(bank.save_bytes(), [s])
+            tail = again.fit_predict(df[at:])["h"].struct.unnest().drop("coef")
+            assert want.equals(pl.concat([head, tail])), at
+
+
 def test_save_load_mid_stream():
     df = blobs(n=1200, run=100, seed=7)
     s = spec(warm_rows=200)

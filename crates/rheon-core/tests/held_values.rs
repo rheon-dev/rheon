@@ -1336,12 +1336,21 @@ fn ew_class_classifies_the_same_at_every_level() {
 /// `hmm`, seeded from its own warm-up rows: the filtered state probabilities
 /// and the row's log-likelihood at every level are those at 0.5, and each
 /// state's spread in the stopped feature decays (task 110). A Gaussian
-/// emission shifted with its data is the same density.
+/// emission shifted with its data is the same density. At 3 features the
+/// states keep co-moments; at 13, each state's Cholesky factor
+/// (`Hmm::FACTOR_FROM`, task 479), whose spread is read from `σ·L Lᵀ`,
+/// ridge included, which decays with the data's.
 #[test]
 fn hmm_filters_the_same_at_every_level() {
+    for width in [3, Hmm::FACTOR_FROM] {
+        hmm_filters_the_same_at_every_level_at(width);
+    }
+}
+
+fn hmm_filters_the_same_at_every_level_at(width: usize) {
     let make = || {
         Hmm::new(HmmCfg {
-            n_features: 3,
+            n_features: width,
             k: 2,
             decay: decay(),
             covariance: Covariance::Full,
@@ -1359,39 +1368,54 @@ fn hmm_filters_the_same_at_every_level() {
         })
         .unwrap()
     };
+    // The stopped feature's spread in each state: its variance, or under
+    // the factor form its entry of `M`, the ridge's share included.
+    let spread = |m: &Hmm, s: usize| match (m.state_cov(s), m.state_factor(s)) {
+        (Some(c), _) => c.var(2),
+        (None, Some(f)) => f.matrix()[2 * width + 2],
+        (None, None) => unreachable!("a full state"),
+    };
+    // Past the three features of `stream`, features that move on every row
+    // and are the same at every level.
+    let more = |i: usize| -> Vec<f64> {
+        let mut s = 0x77 + i as u64;
+        (3..width).map(|_| lcg(&mut s)).collect()
+    };
     let run = |level: f64| {
         let mut m = make();
         let (mut out, mut at_stop) = (Vec::new(), [0.0; 2]);
         for (i, (x, _)) in stream(level).iter().enumerate() {
-            let s = m.step(x, &[], d(i), 1.0);
+            let x = [&x[..], &more(i)].concat();
+            let s = m.step(&x, &[], d(i), 1.0);
             out.push((s.pred[0], s.pred[s.pred.len() - 1]));
             if i == MOVING - 1 {
-                at_stop = [
-                    m.state_cov(0).unwrap().var(2),
-                    m.state_cov(1).unwrap().var(2),
-                ];
+                at_stop = [spread(&m, 0), spread(&m, 1)];
             }
         }
-        (
-            out,
-            at_stop,
-            [
-                m.state_cov(0).unwrap().var(2),
-                m.state_cov(1).unwrap().var(2),
-            ],
-        )
+        assert_eq!(m.state_factor(0).is_some(), width >= Hmm::FACTOR_FROM);
+        (out, at_stop, [spread(&m, 0), spread(&m, 1)])
     };
     // Each state's weight is its share of the rows, so its spread decays at
     // that share of the rate: 2.7e-22 of its value at the stop, measured at
     // 0.5. What a stall would leave is a floor that grows with the level
-    // (the gap squared: 5e-8 at 1e12), so each level is held to 0.5's.
+    // (the gap squared: 5e-8 at 1e12), so each level is held to 0.5's. At
+    // 13 features the rows after the stop all fall to one state, whose
+    // spread decays; the other, given no weight, learns nothing and keeps
+    // its matrix to the bit, as its co-moments would.
     let (base, _, base_end) = run(0.5);
     for level in LEVELS {
         let (out, at_stop, end) = run(level);
+        assert!(
+            (0..2).any(|s| end[s] <= 1e-15 * at_stop[s]),
+            "{width} features, level {level}: no state's spread decays"
+        );
         for s in 0..2 {
+            let decays = end[s] <= 1e-15 * at_stop[s];
+            let idle = width >= Hmm::FACTOR_FROM && end[s] == at_stop[s];
             assert!(
-                end[s] <= 1e-15 * at_stop[s] && end[s] <= 4.0 * base_end[s] + 1e-300,
-                "level {level}, state {s}: variance {:e} of {:e}, against {:e} at 0.5",
+                (decays || idle) && end[s] <= 4.0 * base_end[s] + 1e-300,
+                "{width} features, level {level}, state {s}: variance {:e} of {:e}, against {:e} \
+                 at 0.5",
                 end[s],
                 at_stop[s],
                 base_end[s]
@@ -1405,7 +1429,8 @@ fn hmm_filters_the_same_at_every_level() {
             let ((p, ll), (bp, bll)) = (out[i], base[i]);
             assert!(
                 [p, ll, bp, bll].iter().all(|v| v.is_finite()),
-                "level {level}, row {i}: p {p} and loglik {ll} against {bp} and {bll} at 0.5"
+                "{width} features, level {level}, row {i}: p {p} and loglik {ll} against {bp} and \
+                 {bll} at 0.5"
             );
             worst_p = worst_p.max((p - bp).abs());
             worst_ll = worst_ll.max((ll - bll).abs() / (1.0 + bll.abs()));
@@ -1416,8 +1441,14 @@ fn hmm_filters_the_same_at_every_level() {
         // filter's softmax lifts the data's own last bits past it; a stall
         // moved these fits by 4e-2 and more at 1e12.
         let tol = steps_of(level).max(1e-12);
-        assert!(worst_p <= tol, "level {level}: p {worst_p:e}");
-        assert!(worst_ll <= tol, "level {level}: loglik {worst_ll:e}");
+        assert!(
+            worst_p <= tol,
+            "{width} features, level {level}: p {worst_p:e}"
+        );
+        assert!(
+            worst_ll <= tol,
+            "{width} features, level {level}: loglik {worst_ll:e}"
+        );
     }
 }
 

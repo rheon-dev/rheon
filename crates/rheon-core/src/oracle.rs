@@ -1002,6 +1002,147 @@ pub(crate) mod exact {
             pivot_ratio,
         })
     }
+
+    /// The precision of [`Recursion`]: 512 bits. Its inputs are doubles, so
+    /// each step rounds by 2⁻⁵¹² relative, and a few thousand steps leave
+    /// more than 400 bits under a double's last place.
+    const RBITS: usize = 512;
+
+    fn rbig(x: f64) -> Big {
+        Big::try_from(x)
+            .expect("a finite input")
+            .with_precision(RBITS)
+            .value()
+    }
+
+    fn rzero() -> Big {
+        Big::ZERO.with_precision(RBITS).value()
+    }
+
+    /// A symmetric positive definite `M` carried through the mean-form
+    /// recursion of an accumulator's co-moments with its decaying ridge,
+    /// `M ← a·M + c·d dᵀ` (`a`, `c` and `d` the doubles the step was given),
+    /// or reset to `r·I`, in floats of [`RBITS`] bits (task 479's
+    /// factor form of `hmm`). Its readings -- an entry's distance from a
+    /// double matrix, `dᵀ M⁻¹ d` and `ln det M` -- are each rounded once to
+    /// a double. No Cholesky: the readings eliminate without pivoting, as
+    /// [`wald`] does, and `ln det` is the logarithm of the pivots' product.
+    pub(crate) struct Recursion {
+        n: usize,
+        m: Vec<Big>,
+    }
+
+    impl Recursion {
+        /// `M` from a double matrix, row-major `n × n`: its lower triangle,
+        /// mirrored.
+        pub(crate) fn of(a: &[f64]) -> Self {
+            let n = (a.len() as f64).sqrt().round() as usize;
+            assert_eq!(n * n, a.len(), "a square matrix");
+            let mut m = vec![rzero(); n * n];
+            for i in 0..n {
+                for j in 0..=i {
+                    let v = rbig(a[i * n + j]);
+                    m[j * n + i] = v.clone();
+                    m[i * n + j] = v;
+                }
+            }
+            Self { n, m }
+        }
+
+        /// `M ← a·M + c·d dᵀ`.
+        pub(crate) fn step(&mut self, a: f64, c: f64, d: &[f64]) {
+            let n = self.n;
+            let (a, c) = (rbig(a), rbig(c));
+            let d: Vec<Big> = d.iter().map(|&x| rbig(x)).collect();
+            for i in 0..n {
+                let cd = &c * &d[i];
+                for (j, dj) in d.iter().enumerate().take(i + 1) {
+                    let v = &(&a * &self.m[i * n + j]) + &(&cd * dj);
+                    self.m[j * n + i] = v.clone();
+                    self.m[i * n + j] = v;
+                }
+            }
+        }
+
+        /// `M ← r·I`.
+        pub(crate) fn reset(&mut self, r: f64) {
+            let n = self.n;
+            for (ij, v) in self.m.iter_mut().enumerate() {
+                *v = if ij / n == ij % n { rbig(r) } else { rzero() };
+            }
+        }
+
+        /// The largest `|M̂ᵢⱼ − Mᵢⱼ|` over the largest `Mᵢᵢ`, in units of
+        /// [`super::U`], for `M̂` row-major `n × n` (its lower triangle read).
+        pub(crate) fn off(&self, approx: &[f64]) -> f64 {
+            let n = self.n;
+            let mut worst = 0f64;
+            for i in 0..n {
+                for j in 0..=i {
+                    let e = (&rbig(approx[i * n + j]) - &self.m[i * n + j])
+                        .to_f64()
+                        .value();
+                    worst = worst.max(e.abs());
+                }
+            }
+            worst / self.scale() / super::U
+        }
+
+        /// [`Self::off`] of `σ·L Lᵀ`, formed exactly from `σ` and `L`
+        /// (row-major `n × n`, lower triangular).
+        pub(crate) fn off_factor(&self, l: &[f64], sigma: f64) -> f64 {
+            let n = self.n;
+            let sigma = rbig(sigma);
+            let l: Vec<Big> = l.iter().map(|&x| rbig(x)).collect();
+            let mut worst = 0f64;
+            for i in 0..n {
+                for j in 0..=i {
+                    let mut s = rzero();
+                    for t in 0..=j {
+                        s = &s + &(&l[i * n + t] * &l[j * n + t]);
+                    }
+                    let e = (&(&sigma * &s) - &self.m[i * n + j]).to_f64().value();
+                    worst = worst.max(e.abs());
+                }
+            }
+            worst / self.scale() / super::U
+        }
+
+        fn scale(&self) -> f64 {
+            let n = self.n;
+            (0..n)
+                .map(|i| self.m[i * n + i].to_f64().value())
+                .fold(0f64, f64::max)
+        }
+
+        /// `(dᵀ M⁻¹ d, ln det M)`, each rounded once to a double.
+        pub(crate) fn quad_log_det(&self, d: &[f64]) -> (f64, f64) {
+            let n = self.n;
+            let mut m: Vec<Vec<Big>> = (0..n)
+                .map(|i| {
+                    let mut row = self.m[i * n..(i + 1) * n].to_vec();
+                    row.push(rbig(d[i]));
+                    row
+                })
+                .collect();
+            let (mut quad, mut det) = (rzero(), rbig(1.0));
+            for c in 0..n {
+                let pivot = m[c][c].clone();
+                assert!(pivot > rzero(), "not positive definite at pivot {c}");
+                for r in c + 1..n {
+                    let f = &m[r][c] / &pivot;
+                    let src = m[c].clone();
+                    for (x, s) in m[r].iter_mut().zip(&src).skip(c) {
+                        *x = &*x - &(&f * s);
+                    }
+                }
+                let y = m[c][n].clone();
+                quad = &quad + &(&(&y * &y) / &pivot);
+                det = &det * &pivot;
+            }
+            (quad.to_f64().value(), det.ln().to_f64().value())
+        }
+    }
 }
 
 #[cfg(test)]

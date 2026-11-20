@@ -1177,6 +1177,142 @@ impl SpdFactor {
         self.moved()
     }
 
+    /// `L L'ᵀ = L Lᵀ + v vᵀ` in place: [`Self::updated`]'s rotations at
+    /// `c = 1`, to its bits (every product by `√1` is exact, so it is left
+    /// out), for a factor that *is* its owner's state -- `hmm`'s factor form
+    /// ([`crate::hmm`]) -- where no co-moments stand behind it to factorize
+    /// afresh. So the move is neither capped nor counted, and a factor taken
+    /// up from a factorization that needed jitter moves too: the matrix it
+    /// holds is the state's. `false` refuses a `v` of the wrong size or
+    /// not finite before anything moves, or reports a factor the rotations
+    /// left with a pivot or an entry that is not a positive finite number,
+    /// which then holds no meaning; either way the owner starts its matrix
+    /// again.
+    pub(crate) fn add_outer_in_place(&mut self, v: &mut [f64]) -> bool {
+        let k = self.l.nrows();
+        if v.len() != k || !v.iter().all(|x| x.is_finite()) {
+            return false;
+        }
+        for j in 0..k {
+            let Some(col) = self.l.col_mut(j).try_as_col_major_mut() else {
+                return false;
+            };
+            let col = &mut col.as_slice_mut()[j..];
+            let (d, p) = (col[0], v[j]);
+            // As `updated`: over the larger of the two, so neither square
+            // overflows nor underflows.
+            let big = d.abs().max(p.abs());
+            let (dd, pp) = (d / big, p / big);
+            let r = big * (dd * dd + pp * pp).sqrt();
+            let (cos, sin) = (d / r, p / r);
+            col[0] = r;
+            for (li, xi) in col[1..].iter_mut().zip(&mut v[j + 1..]) {
+                let l = *li;
+                *li = cos * l + sin * *xi;
+                *xi = cos * *xi - sin * l;
+            }
+        }
+        self.log_det = OnceLock::new();
+        self.is_a_factor()
+    }
+
+    /// Every entry of `L` multiplied by `2⁻ᵉ`, `1 <= e <= 1022`: `L Lᵀ`
+    /// scaled by `4⁻ᵉ`, exactly, short of an entry that leaves the normal
+    /// range.
+    pub(crate) fn scale_by_power_of_two(&mut self, e: u32) {
+        debug_assert!((1..=1022).contains(&e));
+        let by = f64::from_bits(u64::from(1023 - e) << 52);
+        let k = self.l.nrows();
+        for j in 0..k {
+            if let Some(col) = self.l.col_mut(j).try_as_col_major_mut() {
+                for x in &mut col.as_slice_mut()[j..] {
+                    *x *= by;
+                }
+            }
+        }
+        self.log_det = OnceLock::new();
+    }
+
+    /// The factor of `r·I`, `√r` on the diagonal: the bits a factorization
+    /// of `r·I` gives (each pivot is `√(r − 0)`), with none run. `None`
+    /// unless `r` is positive and finite.
+    pub(crate) fn scaled_identity(k: usize, r: f64) -> Option<Self> {
+        if !(r > 0.0 && r.is_finite()) {
+            return None;
+        }
+        let mut l = Mat::zeros(k, k);
+        let s = r.sqrt();
+        for i in 0..k {
+            l[(i, i)] = s;
+        }
+        Some(Self {
+            l,
+            log_det: OnceLock::new(),
+            attempts: 0,
+            jitter: 0.0,
+            moves: 0,
+        })
+    }
+
+    /// This factor as a state holds it: `L` alone, with no jitter rung or
+    /// count of moves, which say how a factorization was reached and mean
+    /// nothing once the factor is the state ([`Self::add_outer_in_place`]).
+    pub(crate) fn as_state(mut self) -> Self {
+        self.attempts = 0;
+        self.jitter = 0.0;
+        self.moves = 0;
+        self
+    }
+
+    /// `L`'s lower triangle, column by column (each column from its
+    /// diagonal down): the order a state writes it in.
+    pub(crate) fn lower_columns(&self) -> Vec<f64> {
+        let k = self.l.nrows();
+        let mut out = Vec::with_capacity(k * (k + 1) / 2);
+        for j in 0..k {
+            for i in j..k {
+                out.push(self.l[(i, j)]);
+            }
+        }
+        out
+    }
+
+    /// The factor whose lower triangle is `lower`, column by column
+    /// ([`Self::lower_columns`]), as a state holds it ([`Self::as_state`]):
+    /// `None` unless `lower` is a triangle of order `k` and a Cholesky
+    /// factor, every pivot a positive finite number and every entry finite.
+    pub(crate) fn of_lower_columns(k: usize, lower: &[f64]) -> Option<Self> {
+        let packed = k
+            .checked_add(1)
+            .and_then(|n| k.checked_mul(n))
+            .map(|n| n / 2);
+        if packed != Some(lower.len()) {
+            return None;
+        }
+        let mut l = Mat::zeros(k, k);
+        let mut entries = lower.iter();
+        for j in 0..k {
+            for i in j..k {
+                l[(i, j)] = *entries.next()?;
+            }
+        }
+        let f = Self {
+            l,
+            log_det: OnceLock::new(),
+            attempts: 0,
+            jitter: 0.0,
+            moves: 0,
+        };
+        f.is_a_factor().then_some(f)
+    }
+
+    /// `L` row-major, `k*k`, zeros above the diagonal: for a test's oracle.
+    #[cfg(test)]
+    pub(crate) fn lower_rows(&self) -> Vec<f64> {
+        let k = self.l.nrows();
+        (0..k * k).map(|ij| self.l[(ij / k, ij % k)]).collect()
+    }
+
     /// The factor of `E·A·E` with `E = diag(e)`, every `e_i` finite and
     /// `> 0` -- `A`'s rows and columns rescaled, as a correlation matrix
     /// moves when the scales it is taken in do -- made from this one in

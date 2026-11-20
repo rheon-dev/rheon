@@ -67,12 +67,42 @@
 //! With `tvtp` the matrix is a function of an exogenous column instead,
 //! `Πₖₗ(t) = softmaxₗ(Aₖₗ + Bₖₗ·zₜ)` from fixed coefficients, and the
 //! count-based learning is off.
+//!
+//! # The factor form
+//!
+//! A state's density reads `Mₗ = Σₗ + rₗI` through its Cholesky factor.
+//! Below [`Hmm::FACTOR_FROM`] features (13) a state keeps its co-moments and
+//! the factor is made afresh, `O(d³)`, on the row after each learned one.
+//! Under `full` at 13 features or more, a seeded state keeps the factor
+//! itself as its state ([`EwFactor`]) and the learned row moves it, `O(d²)`.
+//! With `a = λW/(λW + w)` and `b = w/(λW + w)` the state's mean-form step
+//! (`W` its weight, `w = w_row·pₗ`) and `δ` the row's deviation from its
+//! means before the row, the accumulator's `M' = a·M + a·b·δδᵀ` (its ridge's
+//! scale decaying by the same `a`) is held as
+//!
+//! ```text
+//! M  = σ·L Lᵀ                   σ in [1/4, 1]
+//! σ' = a·σ
+//! L' L'ᵀ = L Lᵀ + (b/σ)·δδᵀ     plane rotations, column by column
+//! σ' < 1/4:  L ← 2⁻ᵉ·L,  σ' ← 4ᵉ·σ'   (exact; M unmoved)
+//! ln det M = 2·Σⱼ ln Lⱼⱼ + d·ln σ,   δᵀM⁻¹δ = |L⁻¹δ|²/σ
+//! ```
+//!
+//! The factor taken up at the seeding is the one the co-moments' read
+//! made, to the bit; from the first learned row the reads part from a
+//! refactorization's in their last bits (`hmm/factor.rs` has the rest).
+//! The rotations cost about 0.92 of a factorization at 13 features, 0.75
+//! at 20 and 0.5 at 32, and more than it below 13, which is why the form
+//! starts there.
 
 use serde::{Deserialize, Serialize};
 
 use crate::cluster::kmeans::seed_centres;
 use crate::solve::{FactorWork, QuadWork, SpdFactor};
 use crate::{Covariance, Decay, EwCov, EwCovDiag, SeedRule};
+
+mod factor;
+pub use factor::EwFactor;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HmmCfg {
@@ -444,6 +474,16 @@ pub struct Hmm {
     /// The `full` shape's per-state factors between rows; see [`Factors`].
     #[serde(skip)]
     factors: Factors,
+    /// Under `full` at [`Self::FACTOR_FROM`] features or more, once the
+    /// states are seeded: each state as its weight, means and the Cholesky
+    /// factor of its matrix, moved by each learned row ([`EwFactor`]), and
+    /// [`Self::states`] empty. Empty in every other shape and width, and
+    /// before the seeding, and then not written: it is the last field, the
+    /// one the compact encoding lets skip. A `full` state of schema 68 or
+    /// earlier at that width holds co-moments, and loads as their factor
+    /// (`restore`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    factor_states: Vec<EwFactor>,
 }
 
 impl Hmm {
@@ -454,6 +494,16 @@ impl Hmm {
     /// memory without bound, a state at a time (review 2026-10-06, CF2's
     /// sibling, the ceiling kmeans' `k` has). At it the matrix is 8 MiB.
     pub const MAX_K: usize = 1 << 10;
+
+    /// The fewest features at which a `full` state keeps the Cholesky
+    /// factor of its matrix as its state and moves it by each learned row
+    /// ([`EwFactor`]), where a narrower one keeps its co-moments and
+    /// factorizes them after each learned row. Measured over 2 states, the
+    /// factor's rotations cost about 0.92 of a factorization's time at 13
+    /// features, 0.75 at 20 and 0.5 at 32 (Apple M4 Pro and AMD EPYC alike,
+    /// two function layouts each), and 1.05 to 1.07 at 4 and 8, where the
+    /// factorization is the cheaper.
+    pub const FACTOR_FROM: usize = 13;
 
     /// `k` held to [`Self::MAX_K`], in the words every layer that checks it
     /// says: the core's `validate` and the spec's.
@@ -501,7 +551,7 @@ impl Hmm {
             }
         }
         let seeded = cfg.means.is_some();
-        Ok(Self {
+        let mut m = Self {
             p: vec![1.0 / k as f64; k],
             a: vec![0.0; k * k],
             n_eff: 0.0,
@@ -511,8 +561,55 @@ impl Hmm {
             factors: Factors::default(),
             states,
             diag_states,
+            factor_states: Vec::new(),
             cfg,
-        })
+        };
+        m.take_up_factors();
+        Ok(m)
+    }
+
+    /// Whether the states are held as factors ([`Self::factor_states`]).
+    fn factored(&self) -> bool {
+        !self.factor_states.is_empty()
+    }
+
+    /// Once the states are seeded, under `full` at [`Self::FACTOR_FROM`]
+    /// features or more: each state's factor of `C + s·r·I` made from its
+    /// co-moments -- the factor the cache builds, to the bit, so the rows
+    /// up to the next learned one read what the co-moments gave them --
+    /// becomes the state ([`EwFactor::take_up`]). A factorization that fails
+    /// leaves every state in its co-moments, which the next row tries again
+    /// (`ensure_factors`), and fails as the co-moments' read fails.
+    fn take_up_factors(&mut self) {
+        if self.factored()
+            || !self.seeded
+            || !matches!(self.cfg.covariance, Covariance::Full)
+            || self.cfg.n_features < Self::FACTOR_FROM
+        {
+            return;
+        }
+        // A test's stand-in for a build before the factor form.
+        #[cfg(test)]
+        if tests_factor::COMOMENTS_ONLY.with(std::cell::Cell::get) {
+            return;
+        }
+        let d = self.cfg.n_features;
+        let mut held = Vec::with_capacity(self.states.len());
+        for cov in &self.states {
+            let r = self.cfg.precision_prior * cov.precision_scale();
+            match self
+                .factors
+                .work
+                .factor_ridged(cov.comoments().packed(), r, d)
+            {
+                Some(f) => held.push(EwFactor::take_up(cov, f)),
+                None => return,
+            }
+        }
+        self.factors.clear();
+        self.factors.work.drop_spares();
+        self.states.clear();
+        self.factor_states = held;
     }
 
     /// Build the `full` shape's per-state factors from the current (pre-row)
@@ -521,6 +618,12 @@ impl Hmm {
     /// paths `clear` the cache, so under `learn = false` it is built once.
     fn ensure_factors(&mut self) {
         if !self.seeded || !matches!(self.cfg.covariance, Covariance::Full) {
+            return;
+        }
+        // The factor form's factors are its state; a take-up that failed
+        // is tried again first.
+        self.take_up_factors();
+        if self.factored() {
             return;
         }
         let (k, d) = (self.cfg.k, self.cfg.n_features);
@@ -563,9 +666,17 @@ impl Hmm {
     }
 
     /// The accumulator of state `s` under `full` and `tied`; `None` under
-    /// `diag`, whose states keep no covariance ([`Self::state_diag`]).
+    /// `diag`, whose states keep no covariance ([`Self::state_diag`]), and
+    /// where the states are held as factors ([`Self::state_factor`]).
     pub fn state_cov(&self, s: usize) -> Option<&EwCov> {
         self.states.get(s)
+    }
+
+    /// State `s` as its factor form under `full` at [`Self::FACTOR_FROM`]
+    /// features or more once seeded ([`EwFactor`]); `None` elsewhere
+    /// ([`Self::state_cov`]).
+    pub fn state_factor(&self, s: usize) -> Option<&EwFactor> {
+        self.factor_states.get(s)
     }
 
     /// The accumulator of state `s` under `diag`, its variances alone;
@@ -576,6 +687,9 @@ impl Hmm {
 
     /// The mean of state `s`, in every shape.
     pub fn state_means(&self, s: usize) -> &[f64] {
+        if let Some(f) = self.factor_states.get(s) {
+            return f.means();
+        }
         match self.states.get(s) {
             Some(c) => c.means(),
             None => self.diag_states[s].means(),
@@ -688,9 +802,10 @@ impl Hmm {
     }
 
     fn ridge(&self, s: usize) -> f64 {
-        let scale = match self.states.get(s) {
-            Some(c) => c.precision_scale(),
-            None => self.diag_states[s].precision_scale(),
+        let scale = match (self.states.get(s), self.factor_states.get(s)) {
+            (Some(c), _) => c.precision_scale(),
+            (None, Some(f)) => f.precision_scale(),
+            (None, None) => self.diag_states[s].precision_scale(),
         };
         self.cfg.precision_prior * scale
     }
@@ -807,6 +922,18 @@ impl Hmm {
                 shared_work.give(f);
                 for (s, o) in out.iter_mut().enumerate() {
                     *o = base - 0.5 * log_det - 0.5 * forms[s];
+                }
+            }
+            Covariance::Full if self.factored() => {
+                // Each state's factor is its state ([`EwFactor`]).
+                delta.clear();
+                delta.resize(d, 0.0);
+                for (o, f) in out.iter_mut().zip(&self.factor_states) {
+                    for (i, (dv, &xi)) in delta.iter_mut().zip(x).enumerate() {
+                        *dv = f.deviation(i, xi);
+                    }
+                    let (log_det, q) = f.read(delta, quad);
+                    *o = base - 0.5 * log_det - 0.5 * q;
                 }
             }
             Covariance::Full => {
@@ -982,6 +1109,7 @@ impl Hmm {
         self.buffer.clear();
         self.seeded = true;
         self.factors.clear();
+        self.take_up_factors();
     }
 
     /// The factor a row of clock `d_clock` ages the transition counts by
@@ -1002,6 +1130,9 @@ impl Hmm {
     /// state (task 181), is refused before it gets here (`OnlineModel`,
     /// task 183).
     fn age_states(&mut self, x: &[f64], lam: f64) {
+        for f in self.factor_states.iter_mut() {
+            f.age(lam);
+        }
         for s in self.states.iter_mut() {
             s.update(x, lam, 0.0);
         }
@@ -1132,6 +1263,14 @@ impl Hmm {
             for (s, cov) in self.diag_states.iter_mut().enumerate() {
                 cov.update(x, lam, weight * work.post[s]);
             }
+            // The factor form's rotations; one that left no factor started
+            // its state's matrix again at its ridge, and is counted.
+            let prior = self.cfg.precision_prior;
+            for (s, f) in self.factor_states.iter_mut().enumerate() {
+                if !f.update(x, lam, weight * work.post[s], prior, &mut work.delta) {
+                    self.solve_failures += 1;
+                }
+            }
             self.factors.clear();
         }
         // The posterior is the next row's `p`, and the `p` it replaces the
@@ -1215,17 +1354,27 @@ impl crate::OnlineModel for Hmm {
                     m.states.clear();
                 }
                 // `k` states at the cfg's width, in the shape's accumulator
-                // and none in the other, `k` marginals, a `k×k` transition
+                // and none in the others, `k` marginals, a `k×k` transition
                 // matrix and buffered rows `d` long (review 2026-09-18, B3).
+                // The factor form only where it is taken up: `full`, seeded,
+                // at `FACTOR_FROM` features or more.
+                let factored = m.factored();
                 let (kept, other) = if diagonal {
-                    (m.diag_states.len(), m.states.len())
+                    (m.diag_states.len(), m.states.len() + m.factor_states.len())
+                } else if factored {
+                    (m.factor_states.len(), m.states.len() + m.diag_states.len())
                 } else {
                     (m.states.len(), m.diag_states.len())
                 };
                 if kept != k
                     || other != 0
+                    || (factored
+                        && (!matches!(m.cfg.covariance, Covariance::Full)
+                            || !m.seeded
+                            || d < Self::FACTOR_FROM))
                     || m.states.iter().any(|s| !s.has_shape(d))
                     || m.diag_states.iter().any(|s| !s.has_shape(d))
+                    || m.factor_states.iter().any(|f| f.order() != d)
                     || m.p.len() != k
                     || m.a.len() != k * k
                     || m.buffer.iter().any(|(x, _)| x.len() != d)
@@ -1238,6 +1387,15 @@ impl crate::OnlineModel for Hmm {
                 // No window reads a run here (review 2026-09-26, C3 and C4).
                 m.states.iter_mut().for_each(EwCov::set_runs_off);
                 m.diag_states.iter_mut().for_each(EwCovDiag::set_runs_off);
+                // A `full` state of schema 68 or earlier at `FACTOR_FROM`
+                // features or more holds co-moments: it loads as their
+                // factor, the one its next row read, and goes on in the
+                // factor form (rule 5's twentieth exception). A state of 69
+                // still in co-moments there is one whose take-up failed,
+                // which its next row tries again.
+                if s.schema_version < 69 && m.states.iter().all(|c| !c.has_pending()) {
+                    m.take_up_factors();
+                }
                 Ok(m)
             }
             other => Err(crate::StateError::WrongModel {
@@ -1259,6 +1417,9 @@ impl crate::OnlineModel for Hmm {
         Self::n_outputs_for(self.cfg.k)
     }
 }
+
+#[cfg(test)]
+mod tests_factor;
 
 #[cfg(test)]
 mod tests {
@@ -1394,11 +1555,35 @@ mod tests {
             sum_after, sum_before,
             "a failed row moved the state weights"
         );
+        // The factor form (task 479), whose state no NaN reaches: states
+        // given a spread of 1e-300 learn rows on their means, which move no
+        // factor, and a row at 1e90 overflows every quadratic form.
+        let d = 13;
+        let mut m = Hmm::new(HmmCfg {
+            decay: Decay::Halflife(f64::INFINITY),
+            precision_prior: 1e-300,
+            ..tests_factor::given(d, 1e-300)
+        })
+        .unwrap();
+        for i in 0..20 {
+            let at = if (i / 5) % 2 == 0 { -3.0 } else { 3.0 };
+            crate::OnlineModel::step(&mut m, &vec![at; d], &[], 1.0, 1.0);
+        }
+        assert!(m.factored() && m.solve_failures == 0 && m.n_eff == 20.0);
+        let held = m.factor_states.clone();
+        let out = crate::OnlineModel::step(&mut m, &vec![1e90; d], &[], 1.0, 1.0);
+        assert!(out.pred.iter().all(|v| v.is_nan()));
+        assert_eq!(m.solve_failures, 1, "the row did not fail to score");
+        assert_eq!(m.n_eff, 20.0, "a failed row advanced n_eff alone");
+        assert_eq!(m.factor_states, held, "a failed row moved the states");
     }
 
     impl Hmm {
         /// State `s`'s weight, in every shape.
         fn n_eff_of(&self, s: usize) -> f64 {
+            if let Some(f) = self.factor_states.get(s) {
+                return f.n_eff();
+            }
             match self.states.get(s) {
                 Some(c) => c.n_eff(),
                 None => self.diag_states[s].n_eff(),
@@ -2171,9 +2356,22 @@ mod tests {
     }
 
     /// A copy keeps the factors the cache holds, so a scorer copied keeps
-    /// what it factorized, and none of the working space (task 307).
+    /// what it factorized, and none of the working space (task 307); in the
+    /// factor form (task 479) the factors are the state, which a copy keeps
+    /// whole, with no cache and still none of the working space.
     #[test]
     fn a_copy_keeps_the_factors_and_no_working_space() {
+        let mut wide = Hmm::new(HmmCfg {
+            learn: false,
+            ..tests_factor::given(13, 1.0)
+        })
+        .unwrap();
+        wide.step(&[0.1; 13], &[], 1.0, 1.0);
+        assert!(wide.factors.row.is_some());
+        let copy = wide.clone();
+        assert!(copy.factored() && copy.factor_states == wide.factor_states);
+        assert!(copy.factors.held.is_empty() && copy.factors.row.is_none());
+        assert_eq!(copy.factors.work.kept(), 0);
         let mut scorer = Hmm::new(given(HmmCfg {
             learn: false,
             ..cfg(2, 2)
@@ -2812,6 +3010,30 @@ mod tests {
             assert_eq!(m.a, halved, "{case}");
             assert_eq!(m.solve_failures, fails + u64::from(broken), "{case}");
         }
+        // The factor form (task 479): the broken row is one that overflows
+        // every quadratic form against states of spread 1e-300, kept there
+        // by rows on their means, in runs, so every transition is counted.
+        let d = 13;
+        for (x, w, broken) in [(0.5, 0.0, false), (1e300, 1.0, false), (1e90, 1.0, true)] {
+            let case = format!("{d} features, {x} at weight {w}");
+            let mut m = Hmm::new(HmmCfg {
+                decay: Decay::Halflife(10.0),
+                precision_prior: 1e-300,
+                ..tests_factor::given(d, 1e-300)
+            })
+            .unwrap();
+            for i in 0..40 {
+                let at = if (i / 5) % 2 == 0 { -3.0 } else { 3.0 };
+                m.step(&vec![at; d], &[], 1.0, 1.0);
+            }
+            assert!(m.factored(), "{case}");
+            let (a, fails) = (m.a.clone(), m.solve_failures);
+            assert!(a.iter().all(|v| *v > 0.0), "{case}: {a:?}");
+            m.step(&vec![x; d], &[], 10.0, w);
+            let halved: Vec<f64> = a.iter().map(|v| 0.5 * v).collect();
+            assert_eq!(m.a, halved, "{case}");
+            assert_eq!(m.solve_failures, fails + u64::from(broken), "{case}");
+        }
     }
 
     /// A row whose feature is not usable cannot be scored or learned, in
@@ -3017,6 +3239,45 @@ mod tests {
         let back = Hmm::restore(&rmp_serde::from_slice(&bytes).unwrap()).unwrap();
         assert!(back.factors.peek(0).is_none(), "and not written");
         assert_eq!(back, scorer);
+        // The factor form (task 479): a factor a state, of the cfg's width,
+        // with no co-moments beside them, and only where it is taken up --
+        // under `full`, seeded, at `FACTOR_FROM` features or more.
+        let wide = Hmm::new(tests_factor::given(13, 1.0)).unwrap();
+        assert!(wide.factored());
+        assert_eq!(Hmm::restore(&wide.state()).unwrap(), wide);
+        let narrow = EwFactor::take_up(
+            &EwCov::with_precision_prior(12, 1.0).unwrap(),
+            SpdFactor::scaled_identity(12, 1.0).unwrap(),
+        );
+        let refuse_wide = |edit: &dyn Fn(&mut Hmm)| {
+            let mut s = wide.state();
+            let ModelState::Hmm(inner) = &mut s.model else {
+                unreachable!()
+            };
+            edit(inner);
+            match Hmm::restore(&s) {
+                Err(StateError::Invalid(e)) => assert!(e.contains("wrong shape"), "{e}"),
+                other => panic!("{other:?}"),
+            }
+        };
+        refuse_wide(&|m| {
+            m.factor_states.pop();
+        });
+        refuse_wide(&|m| m.factor_states[1] = narrow.clone());
+        refuse_wide(&|m| m.states = vec![EwCov::new(13), EwCov::new(13)]);
+        refuse_wide(&|m| m.seeded = false);
+        refuse_wide(&|m| m.cfg.covariance = Covariance::Shared);
+        let mut s = Hmm::new(tests_factor::given(12, 1.0)).unwrap().state();
+        let ModelState::Hmm(inner) = &mut s.model else {
+            unreachable!()
+        };
+        assert!(!inner.factored());
+        inner.states.clear();
+        inner.factor_states = vec![narrow.clone(), narrow.clone()];
+        match Hmm::restore(&s) {
+            Err(StateError::Invalid(e)) => assert!(e.contains("wrong shape"), "12: {e}"),
+            other => panic!("12: {other:?}"),
+        }
     }
 
     /// The factors rebuilt in the cache's kept working space -- the factors
@@ -3048,6 +3309,28 @@ mod tests {
         );
         let shown = format!("{kept:?}");
         assert!(shown.contains("factors: Factors(") && !shown.contains("FactorWork"));
+        // The factor form (task 479) builds no factor: its kept working
+        // space is the row's, and a fresh one reads the same bits.
+        let d = 13;
+        let mut kept = Hmm::new(tests_factor::wide(d, Decay::Halflife(30.0))).unwrap();
+        let mut fresh = kept.clone();
+        for (i, (x, dt)) in tests_factor::blobs(d, 400, 7).iter().enumerate() {
+            let w = if i % 37 == 5 { 0.0 } else { 1.0 };
+            fresh.factors.work = FactorWork::default();
+            fresh.factors.row = None;
+            let a = kept.step(x, &[], *dt, w);
+            let b = fresh.step(x, &[], *dt, w);
+            let bits = |v: &[f64]| v.iter().map(|p| p.to_bits()).collect::<Vec<_>>();
+            assert_eq!(bits(&a.pred), bits(&b.pred), "{d} features, row {i}");
+            assert_eq!(
+                a.n_eff.to_bits(),
+                b.n_eff.to_bits(),
+                "{d} features, row {i}"
+            );
+        }
+        assert!(kept.factored() && kept.factors.held.is_empty());
+        assert_eq!(kept.factors.work.kept(), 0, "no factor kept to write over");
+        assert_eq!(kept, fresh);
     }
 
     /// The factor cache is the `full` shape's, built once the states are
@@ -3074,6 +3357,19 @@ mod tests {
         .unwrap();
         full.step(&[0.1, 0.2], &[], 1.0, 1.0);
         assert!(full.factors.peek(0).is_some() && full.factors.peek(1).is_some());
+        // At `FACTOR_FROM` features the factors are the states (task 479):
+        // the cache builds none, and a model still warming up holds neither.
+        let mut wide = Hmm::new(HmmCfg {
+            learn: false,
+            ..tests_factor::given(13, 1.0)
+        })
+        .unwrap();
+        wide.step(&[0.1; 13], &[], 1.0, 1.0);
+        assert!(wide.factored() && wide.factors.peek(0).is_none());
+        let mut warming = Hmm::new(tests_factor::wide(13, Decay::Halflife(5.0))).unwrap();
+        warming.step(&[0.1; 13], &[], 1.0, 1.0);
+        assert!(!warming.seeded && !warming.factored());
+        assert!(warming.factors.peek(0).is_none(), "warming up");
     }
 
     /// Task 252: a filter that does not learn, handed a row of no weight and
