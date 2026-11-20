@@ -34,17 +34,16 @@
 
 /// The fewest features the split sweep runs at, on every platform and for
 /// any number of penalties. Measured (task 479, ABBA in both function
-/// layouts, ns a row split / chained): on arm64 (Apple M4 Pro), 1.07 to
-/// 1.15 at 8 features and 1.00 to 1.03 at 20, then from 32 against the
-/// chained sweep (the sparse one from 64) 0.83 to 0.89 at 32 to 40, 0.61 to
-/// 0.81 from 48 to 128, 0.41 to 0.63 at 500, one penalty or three. On
-/// x86-64 (AMD EPYC 9V74) the prototype, which also read every entry of
-/// `c` for finiteness each solve at every width, was 1.01 to 1.06 at 32
-/// and 0.54 to 0.80 at 500; that read alone cost it 2.5% to 4% at 20,
-/// where the split sweep does not run, so the floor is provisional on x86
-/// until this build is measured there (task 479). Below it the chained
-/// sweep runs, and its bits are the ones before the split sweep.
-pub(super) const SPLIT_MIN_K: usize = 32;
+/// layouts, ns a row split / chained): on arm64 (Apple M4 Pro) 1.07 to
+/// 1.15 at 8 features and 1.00 to 1.03 at 20, then against the chained
+/// sweep (the sparse one from 64) 0.85 to 0.91 at 32, 0.78 to 0.86 at 40,
+/// 0.61 to 0.81 from 48 to 128, 0.41 to 0.63 at 500, one penalty or
+/// three. On x86-64 (AMD EPYC 9V74) 1.00 to 1.03 at 32, slower with three
+/// penalties in both layouts, so the floor is 40 on every platform: 0.95 to
+/// 0.98 at 40, 0.76 to 0.96 from 48 to 128, 0.54 to 0.67 at 500. Below it
+/// the chained sweep runs, and its bits are the ones before the split
+/// sweep.
+pub(super) const SPLIT_MIN_K: usize = 40;
 
 /// One sweep of the descent with the two runs swapped (the module's
 /// account); the largest move. `acc` is the partial sums' buffer; `finite`

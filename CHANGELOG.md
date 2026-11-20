@@ -14,7 +14,7 @@ returns.
 ### Performance
 
 - **`lasso`'s coordinate descent sweeps without a chain of dependent
-  subtractions from 32 features.** Each coordinate's update subtracted the
+  subtractions from 40 features.** Each coordinate's update subtracted the
   terms of the coefficients after it one at a time, each waiting for the
   one before, and that chain was most of a row at wide widths (73% at 500
   features). Now every partial sum takes the sweep's starting coefficients
@@ -25,22 +25,23 @@ returns.
   which is read only when a sweep first meets a zero coefficient, in one
   pass that runs as vectors; the sweep it replaces from 64 features, which
   left the zeros out too, read the matrix every solve. Against the build
-  before it (the matrix reuse below in both), a row takes 0.42 to 0.43 of
-  the time at 500 features with three penalties and 0.69 to 0.71 with one,
-  0.49 and 0.70 at 200, 0.63 to 0.73 from 48 to 128 features with three
-  penalties and 0.70 to 0.83 with one, and 0.78 to 0.91 at 32 and 40
-  (arm64, Apple M4 Pro, both function layouts). On x86-64 (AMD EPYC 9V74,
-  both function layouts), provisional until this build is measured there:
-  a prototype that also read the whole matrix for finiteness every solve,
-  at every width, took 0.54 at 500 features with three penalties and 0.80
-  with one, 0.60 and 0.86 at 200, 0.83 to 0.90 from 48 to 128 with three
-  penalties and 0.94 to 1.03 with one, and 1.01 to 1.06 at 32; that read
-  alone cost it 2.5% to 4% a row at 20 features, where nothing else
-  differed. Below 32 features nothing changes, to the bit, and a row
-  costs what it did. From 32 the order of each sum moves predictions by
-  at most about 61,000 ulps (8e-12 relative; 1,500 to 8,300 ulps at the
-  99.9th percentile) and coefficients by 1e-12 relative at the 99.9th
-  percentile, more where a fit in its warm-up stops at
+  before this release (the matrix reuse below included), a row takes, with
+  one penalty and with three (ranges over both function layouts), on arm64 (Apple M4 Pro): 0.83 to 0.84 and
+  0.78 at 40 features, 0.78 to 0.80 and 0.71 at 48, 0.67 to 0.68 and 0.66
+  at 64, 0.76 to 0.77 and 0.63 to 0.64 at 96, 0.78 to 0.81 and 0.61 to
+  0.62 at 128, 0.68 to 0.70 and 0.48 at 200, 0.61 to 0.63 and 0.41 at 500.
+  On x86-64 (AMD EPYC 9V74, a GitHub runner, measured on this change
+  against the build before it): 0.97 to 0.98 and 0.95 to 0.96 at 40, 0.95
+  to 0.96 and 0.90 at 48, 0.83 to 0.84 and 0.86 to 0.87 at 64, 0.83 to 0.86
+  and 0.80 to 0.81 at 96, 0.83 to 0.85 and 0.76 to 0.77 at 128, 0.73 to
+  0.75 and 0.61 to 0.62 at 200, 0.67 and 0.54 to 0.55 at 500. At 32
+  features it was 1.00 to 1.01 with one penalty and 1.03 with three on
+  x86, in both layouts, though faster on arm64 (0.83 to 0.89), so it
+  starts at 40 on every platform. Below 40 features nothing changes, to
+  the bit, and a row costs what it did. From 40 the order of each sum
+  moves predictions by at most about 61,000 ulps (8e-12 relative; 1,500 to
+  8,300 ulps at the 99.9th percentile) and coefficients by 1e-12 relative
+  at the 99.9th percentile, more where a fit in its warm-up stops at
   `max_iter` before it settles (to 1e-6 relative at 500 features); every
   descent tested stopped on the same sweep as before, and against
   scikit-learn's coordinate descent on the same problem the fits are as

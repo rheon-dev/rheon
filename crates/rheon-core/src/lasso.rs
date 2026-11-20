@@ -4565,12 +4565,14 @@ mod tests {
     }
 
     /// `descend` over a path on a dense problem: the serial descent's
-    /// bits below [`split::SPLIT_MIN_K`] features (the chained sweep), the
-    /// split sweep's plain definition's from it, the sweeps counted alike,
-    /// the penalties from strong to none, on each side of the switch.
+    /// bits below 40 features (the chained sweep, through 39), the split
+    /// sweep's plain definition's from 40, the sweeps counted alike, the
+    /// penalties from strong to none, at 39, 40 and 41 and well to each
+    /// side. The floor is written here as a number, not read from
+    /// [`split::SPLIT_MIN_K`], so moving it either way fails.
     #[test]
     fn descend_on_a_dense_problem_is_the_serial_descent_to_the_bit() {
-        for k in [2, 3, 20, 31, 32, 33, 50] {
+        for k in [2, 3, 20, 39, 40, 41, 90] {
             let (c, d) = dense_problem(k, 9, 0.3);
             let s = vec![1.0; k];
             let limit = crate::gramfit::sweep_tol(1e-10, 1.0, &d);
@@ -4580,7 +4582,7 @@ mod tests {
             for l1 in [0.4, 0.15, 0.05, 0.01, 0.0] {
                 let mut converged_serial = false;
                 for _ in 0..100 {
-                    let delta = if k >= split::SPLIT_MIN_K {
+                    let delta = if k >= 40 {
                         split::cd_sweep_split_plain(&c, k, &d, &s, (l1, 0.0), &mut serial)
                     } else {
                         cd_sweep_serial(&c, k, &d, &s, l1, 0.0, &mut serial)
@@ -4612,7 +4614,7 @@ mod tests {
             }
             // The split sweep read `c`'s finiteness at the zero start; the
             // chained sweep never reads it.
-            let read = (k >= split::SPLIT_MIN_K).then_some(true);
+            let read = (k >= 40).then_some(true);
             assert_eq!(support.finite, read, "k {k}");
         }
     }
