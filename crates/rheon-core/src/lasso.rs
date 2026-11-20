@@ -1030,6 +1030,8 @@ impl Lasso {
         for (g, gram) in grams.iter().enumerate() {
             let readers = self.acc.grams.readers(g);
             let (c, d, s, means) = self.standardized_in(gram, cross, &readers, CORR_BUF.take());
+            // A new correlation matrix, its finiteness not yet read.
+            support.reset();
             for (jj, &j) in readers.iter().enumerate() {
                 // No row of this target inside the window: no fit to report
                 // (C2). Without a window, no weight and no fit from an
@@ -1071,7 +1073,6 @@ impl Lasso {
                         }
                     }
                 }
-                support.reset(&c);
                 for (li, &lam) in self.cfg.lasso_path.iter().enumerate() {
                     // Coordinate descent, warm-started along the path.
                     let l1 = lam * self.cfg.l1_ratio;
@@ -1147,10 +1148,13 @@ impl Lasso {
 /// Coordinate descent at one point of the path: sweeps of [`cd_sweep`]
 /// below [`split::SPLIT_MIN_K`] features, of [`split::cd_sweep_split`] from
 /// it, until the largest move settles below `limit` (`gramfit::settled`)
-/// or `max_iter` sweeps have run; whether it settled. Out of line, so the sweep compiles
-/// on its own rather than inside the solve: there its run over a row lost
-/// its fusion and kept its bounds checks when the solve's body moved (2.5%
-/// more instructions in `lasso_k20` on x86, task 374). A call per sweep
+/// or `max_iter` sweeps have run; whether it settled. Out of line, so the
+/// sweep compiles on its own rather than inside the solve: there its run
+/// over a row lost its fusion and kept its bounds checks when the solve's
+/// body moved (2.5% more instructions in `lasso_k20` on x86, task 374).
+/// Below the floor nothing but the one comparison is added to the chained
+/// descent: no pass over `c` (task 479: the prototype's check of `c` at
+/// every width cost 2.5% to 4% a row at 20 features on x86). A call per sweep
 /// rather than per path point cost `lasso` 16% more instructions a row at
 /// four features on arm64. `c` is its own transpose to the bit, as
 /// `standardized` makes it.
@@ -1171,7 +1175,7 @@ fn descend(
     let split = k >= split::SPLIT_MIN_K;
     for _ in 0..max_iter {
         let delta = if split {
-            split::cd_sweep_split(c, k, d, s, l1, l2, b, &mut support.acc, support.finite)
+            split::cd_sweep_split(c, k, d, s, l1, l2, b, &mut support.acc, &mut support.finite)
         } else {
             cd_sweep(c, k, d, s, l1, l2, b, &mut support.acc)
         };
@@ -1186,29 +1190,24 @@ fn descend(
 /// leave a zero coefficient's column out, and the partial sums' buffer.
 #[derive(Default)]
 struct Support {
-    /// Every entry of the correlation matrix is finite, so a term `c_ij * 0`
-    /// is exactly 0 and leaving it out changes no bit of the sum. With a
-    /// NaN or an infinity in `c` that term is NaN, and the split sweep
-    /// takes it off. Read only from [`split::SPLIT_MIN_K`] features, and
-    /// only checked there.
-    finite: bool,
+    /// Whether every entry of the correlation matrix is finite, so a term
+    /// `c_ij * 0` is exactly 0 and leaving it out changes no bit of the
+    /// sum. With a NaN or an infinity in `c` that term is NaN, and the
+    /// split sweep takes it off. `None` until a split sweep first meets a
+    /// zero coefficient, which reads it ([`split::all_finite`]) for the
+    /// matrix's every later sweep: a solve whose coefficients are all
+    /// nonzero, and the chained sweep below [`split::SPLIT_MIN_K`]
+    /// features, never read it.
+    finite: Option<bool>,
     /// The partial sums a sweep keeps for the coordinates not yet reached.
     acc: Vec<f64>,
 }
 
 impl Support {
-    /// For a new correlation matrix: whether the split sweep may leave
-    /// zero columns out of it. The buffer keeps what it holds.
-    fn reset(&mut self, c: &[f64]) {
-        self.finite =
-            c.len() >= split::SPLIT_MIN_K * split::SPLIT_MIN_K && c.iter().all(|v| v.is_finite());
-    }
-
-    #[cfg(test)]
-    fn of(c: &[f64]) -> Self {
-        let mut support = Self::default();
-        support.reset(c);
-        support
+    /// For a new correlation matrix: its finiteness not yet read. The
+    /// buffer keeps what it holds.
+    fn reset(&mut self) {
+        self.finite = None;
     }
 }
 
@@ -4387,8 +4386,7 @@ mod tests {
         let limit = crate::gramfit::sweep_tol(1e-10, 1.0, &d);
         let mut dense = vec![0.0; k];
         let mut sparse = vec![0.0; k];
-        let mut support = Support::of(&c);
-        assert!(support.finite);
+        let mut support = Support::default();
         for l1 in [0.4, 0.15, 0.05, 0.01, 0.0] {
             let mut converged_dense = false;
             for _ in 0..100 {
@@ -4420,6 +4418,9 @@ mod tests {
                 );
             }
         }
+        // The zero start read `c`'s finiteness, so zero columns were left
+        // out: the bits above are the skip's.
+        assert_eq!(support.finite, Some(true));
     }
 
     /// A symmetric problem of `k` features with a dense `c`: off-diagonals
@@ -4575,7 +4576,7 @@ mod tests {
             let limit = crate::gramfit::sweep_tol(1e-10, 1.0, &d);
             let mut serial = vec![0.0; k];
             let mut chains = vec![0.0; k];
-            let mut support = Support::of(&c);
+            let mut support = Support::default();
             for l1 in [0.4, 0.15, 0.05, 0.01, 0.0] {
                 let mut converged_serial = false;
                 for _ in 0..100 {
@@ -4609,6 +4610,10 @@ mod tests {
                     );
                 }
             }
+            // The split sweep read `c`'s finiteness at the zero start; the
+            // chained sweep never reads it.
+            let read = (k >= split::SPLIT_MIN_K).then_some(true);
+            assert_eq!(support.finite, read, "k {k}");
         }
     }
 

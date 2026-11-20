@@ -201,9 +201,10 @@ fn cases() -> Vec<Case> {
             rows: 4_000,
         });
     }
-    // Task 479 (lasso split prototype): the widths between, for the
-    // crossover of the split sweep (`lasso x`: filter on it alone).
-    for k in [8, 32, 48, 64, 96, 128] {
+    // Task 479 (lasso split): the widths between, for the crossover of the
+    // split sweep (`lasso x`: filter on it alone), on each side of its
+    // floor of 32 features.
+    for k in [8, 24, 31, 32, 40, 48, 64, 96, 128] {
         for (tag, penalties) in [
             ("1 penalty", json!([0.01])),
             ("3 penalties", json!([0.1, 0.01, 0.0])),

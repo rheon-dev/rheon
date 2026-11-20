@@ -28,18 +28,28 @@
 //! a register across four terms. A zero coefficient's column subtracts
 //! exactly 0 and is left out where every `c` is finite (`finite`); with a
 //! NaN or an infinity in `c` it is taken off, as the chained sweep's
-//! `c * 0` is.
+//! `c * 0` is. Whether `c` is finite is read once a correlation matrix,
+//! and only when a sweep first meets a zero coefficient: a fit with none
+//! never pays the pass over its `k²` entries ([`all_finite`]).
 
-/// The fewest features the split sweep runs at. Measured (task 479, ABBA
-/// in both function layouts, ns a row split / chained, on arm64): 1.07 to
-/// 1.15 at 8 features, 1.00 to 1.03 at 20, 0.85 to 0.95 at 32, 0.67 to
-/// 0.72 from 48 with three penalties, 0.43 at 500. Below it the chained
+/// The fewest features the split sweep runs at, on every platform and for
+/// any number of penalties. Measured (task 479, ABBA in both function
+/// layouts, ns a row split / chained): on arm64 (Apple M4 Pro), 1.07 to
+/// 1.15 at 8 features and 1.00 to 1.03 at 20, then from 32 against the
+/// chained sweep (the sparse one from 64) 0.83 to 0.89 at 32 to 40, 0.61 to
+/// 0.81 from 48 to 128, 0.41 to 0.63 at 500, one penalty or three. On
+/// x86-64 (AMD EPYC 9V74) the prototype, which also read every entry of
+/// `c` for finiteness each solve at every width, was 1.01 to 1.06 at 32
+/// and 0.54 to 0.80 at 500; that read alone cost it 2.5% to 4% at 20,
+/// where the split sweep does not run, so the floor is provisional on x86
+/// until this build is measured there (task 479). Below it the chained
 /// sweep runs, and its bits are the ones before the split sweep.
 pub(super) const SPLIT_MIN_K: usize = 32;
 
 /// One sweep of the descent with the two runs swapped (the module's
 /// account); the largest move. `acc` is the partial sums' buffer; `finite`
-/// says every entry of `c` is finite.
+/// says whether every entry of `c` is finite, `None` until a sweep over
+/// this `c` first needed to know, when it is read ([`all_finite`]) and kept.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn cd_sweep_split(
     c: &[f64],
@@ -50,12 +60,12 @@ pub(super) fn cd_sweep_split(
     l2: f64,
     b: &mut [f64],
     acc: &mut Vec<f64>,
-    finite: bool,
+    finite: &mut Option<bool>,
 ) -> f64 {
     debug_assert_eq!(c.len(), k * k);
     acc.clear();
     acc.extend_from_slice(&d[..k]);
-    let skip = |v: f64| finite && v == 0.0;
+    let mut skip = |v: f64| v == 0.0 && *finite.get_or_insert_with(|| all_finite(c));
     // The starting coefficients' terms: `a_m −= c_mj b_j` for `j > m`, `j`
     // ascending, read from row `j`'s first `j` entries (`c` is symmetric).
     let mut j0 = 0;
@@ -122,6 +132,14 @@ pub(super) fn cd_sweep_split(
         i0 = i1;
     }
     max_delta
+}
+
+/// Whether every entry of `c` is finite: so a term `c_ij * 0` is exactly 0
+/// and leaving it out changes no bit of a sum. Every entry is read, no
+/// early exit, so the pass runs as vectors (the early-exit `all` ran one
+/// entry at a time).
+pub(super) fn all_finite(c: &[f64]) -> bool {
+    c.iter().fold(true, |ok, v| ok & v.is_finite())
 }
 
 /// `a_m −= rows[0][m] bs[0]`, then `rows[1][m] bs[1]`, ..., in that order
@@ -225,23 +243,77 @@ mod tests {
 
     /// Blocked by four, zero columns left out: the same bits as the plain
     /// definition, at every width around the block's edges and with every
-    /// kind of penalty, sweep after sweep.
+    /// kind of penalty, sweep after sweep; with `c` known finite, and with
+    /// it not yet read, when the first zero coefficient reads it.
     #[test]
     fn the_blocked_sweep_is_the_plain_one_to_the_bit() {
         for k in [0, 1, 2, 3, 4, 5, 7, 8, 9, 13, 64, 67] {
             for (l1, l2) in [(0.0, 0.0), (0.05, 0.0), (0.3, 0.1)] {
-                let (c, d, s, b0) = problem(k, 11 + k as u64);
-                let (mut b, mut want) = (b0.clone(), b0);
-                let mut acc = Vec::new();
-                for sweep in 0..4 {
-                    let got = cd_sweep_split(&c, k, &d, &s, l1, l2, &mut b, &mut acc, true);
-                    let exp = plain(&c, k, &d, &s, (l1, l2), &mut want);
-                    assert_eq!(got.to_bits(), exp.to_bits(), "k={k} sweep {sweep}");
-                    for (x, y) in b.iter().zip(&want) {
-                        assert_eq!(x.to_bits(), y.to_bits(), "k={k} sweep {sweep}");
+                for known in [Some(true), None] {
+                    let (c, d, s, b0) = problem(k, 11 + k as u64);
+                    let (mut b, mut want) = (b0.clone(), b0);
+                    let mut acc = Vec::new();
+                    let mut finite = known;
+                    for sweep in 0..4 {
+                        let got =
+                            cd_sweep_split(&c, k, &d, &s, l1, l2, &mut b, &mut acc, &mut finite);
+                        let exp = plain(&c, k, &d, &s, (l1, l2), &mut want);
+                        assert_eq!(got.to_bits(), exp.to_bits(), "k={k} sweep {sweep}");
+                        for (x, y) in b.iter().zip(&want) {
+                            assert_eq!(x.to_bits(), y.to_bits(), "k={k} sweep {sweep}");
+                        }
                     }
+                    // Every start but k = 0's has a zero coefficient.
+                    let read = if k == 0 { known } else { Some(true) };
+                    assert_eq!(finite, read, "k={k} {known:?}");
                 }
             }
+        }
+    }
+
+    /// Where no coefficient is zero, before or after the sweep, `c` is not
+    /// read for finiteness at all (`finite` stays unknown), and the sweep
+    /// is the plain definition's bits; the first zero reads it, once.
+    #[test]
+    fn finiteness_is_read_only_when_a_zero_coefficient_needs_it() {
+        let k = 40;
+        let (c, d, _, _) = problem(k, 7);
+        let s = vec![1.0; k];
+        let b0: Vec<f64> = (0..k).map(|i| 0.5 + i as f64).collect();
+        let (mut b, mut want) = (b0.clone(), b0);
+        let (mut acc, mut finite) = (Vec::new(), None);
+        // No penalty: no coefficient thresholds to zero.
+        let got = cd_sweep_split(&c, k, &d, &s, 0.0, 0.0, &mut b, &mut acc, &mut finite);
+        let exp = plain(&c, k, &d, &s, (0.0, 0.0), &mut want);
+        assert_eq!(got.to_bits(), exp.to_bits());
+        assert!(b.iter().all(|v| *v != 0.0), "the fit is dense");
+        assert_eq!(finite, None, "read with no zero coefficient");
+        // A penalty past every |rho|: the first coefficient set is zero.
+        cd_sweep_split(&c, k, &d, &s, 1e9, 0.0, &mut b, &mut acc, &mut finite);
+        assert_eq!(finite, Some(true));
+        // Kept for the next sweep: a `c` with a NaN is not read again.
+        let mut nan = c.clone();
+        nan[3] = f64::NAN;
+        cd_sweep_split(&nan, k, &d, &s, 1e9, 0.0, &mut b, &mut acc, &mut finite);
+        assert_eq!(finite, Some(true));
+    }
+
+    /// `all_finite` over every position of a vector's length and its tail:
+    /// one NaN, one infinity of either sign, anywhere, makes it false.
+    #[test]
+    fn all_finite_finds_one_non_finite_entry_anywhere() {
+        for n in [0, 1, 3, 4, 5, 8, 17, 33] {
+            let c: Vec<f64> = (0..n).map(|i| i as f64 - 2.5).collect();
+            assert!(super::all_finite(&c), "n={n}");
+            for at in 0..n {
+                for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+                    let mut x = c.clone();
+                    x[at] = bad;
+                    assert!(!super::all_finite(&x), "n={n} at {at} {bad}");
+                }
+            }
+            let big: Vec<f64> = (0..n).map(|_| f64::MAX).collect();
+            assert!(super::all_finite(&big), "the largest finite, n={n}");
         }
     }
 
@@ -256,22 +328,27 @@ mod tests {
         c[4 * k + 1] = f64::INFINITY;
         c[k + 4] = f64::INFINITY;
         let b0 = vec![0.0; k];
-        let (mut b, mut want) = (b0.clone(), b0);
-        let mut acc = Vec::new();
-        cd_sweep_split(&c, k, &d, &s, 0.01, 0.0, &mut b, &mut acc, false);
-        plain(&c, k, &d, &s, (0.01, 0.0), &mut want);
-        for (x, y) in b.iter().zip(&want) {
-            assert_eq!(x.is_nan(), y.is_nan());
-            if !x.is_nan() {
-                assert_eq!(x.to_bits(), y.to_bits());
+        // Known not finite, and not yet read: the zero start reads it.
+        for known in [Some(false), None] {
+            let (mut b, mut want) = (b0.clone(), b0.clone());
+            let (mut acc, mut finite) = (Vec::new(), known);
+            cd_sweep_split(&c, k, &d, &s, 0.01, 0.0, &mut b, &mut acc, &mut finite);
+            assert_eq!(finite, Some(false));
+            plain(&c, k, &d, &s, (0.01, 0.0), &mut want);
+            for (x, y) in b.iter().zip(&want) {
+                assert_eq!(x.is_nan(), y.is_nan());
+                if !x.is_nan() {
+                    assert_eq!(x.to_bits(), y.to_bits());
+                }
             }
+            // `soft_over` reads a NaN `rho` as inside the threshold (0), as
+            // the chained sweep does: the NaN is in the partial sum, not
+            // the move.
+            assert!(
+                acc.iter().any(|v| v.is_nan()),
+                "the infinity reached nothing"
+            );
         }
-        // `soft_over` reads a NaN `rho` as inside the threshold (0), as the
-        // chained sweep does: the NaN is in the partial sum, not the move.
-        assert!(
-            acc.iter().any(|v| v.is_nan()),
-            "the infinity reached nothing"
-        );
     }
 
     /// Signed zeros in `c`, `d` and the start, with zero columns left out
@@ -306,7 +383,8 @@ mod tests {
                 let (mut b, mut want) = (start.clone(), start.clone());
                 let mut acc = Vec::new();
                 for sweep in 0..12 {
-                    let got = cd_sweep_split(&c, k, &d, &s, l1, l2, &mut b, &mut acc, true);
+                    let got =
+                        cd_sweep_split(&c, k, &d, &s, l1, l2, &mut b, &mut acc, &mut Some(true));
                     let exp = plain(&c, k, &d, &s, (l1, l2), &mut want);
                     assert_eq!(got.to_bits(), exp.to_bits(), "k={k} sweep {sweep}");
                     for (x, y) in b.iter().zip(&want) {
@@ -326,7 +404,7 @@ mod tests {
             let (mut b, mut chained) = (b0.clone(), b0);
             let (mut acc, mut acc2) = (Vec::new(), Vec::new());
             for _ in 0..3 {
-                cd_sweep_split(&c, k, &d, &s, 0.02, 0.0, &mut b, &mut acc, true);
+                cd_sweep_split(&c, k, &d, &s, 0.02, 0.0, &mut b, &mut acc, &mut Some(true));
                 super::super::cd_sweep(&c, k, &d, &s, 0.02, 0.0, &mut chained, &mut acc2);
                 for (x, y) in b.iter().zip(&chained) {
                     assert!((x - y).abs() <= 1e-12 * (1.0 + y.abs()), "{x} vs {y}");

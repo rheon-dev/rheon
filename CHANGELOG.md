@@ -20,15 +20,27 @@ returns.
   features). Now every partial sum takes the sweep's starting coefficients
   off before the sweep begins, and each new coefficient's column comes off
   the coordinates after it as soon as it is set: the same descent, each
-  update's terms in another order, all of it vector arithmetic. Against the
-  previous build, a row takes 0.43 of the time at 500 features with three
-  penalties and 0.75 to 0.79 with one, 0.48 and 0.70 to 0.74 at 200, 0.67
-  to 0.72 from 48 to 128 features with three penalties, and 0.85 to 0.95
-  at 32 (arm64, Apple M4 Pro, both function layouts; x86-64: VERIFY). Below
-  32 features nothing changes, to the bit. From 32 the order of each sum
-  moves predictions by at most about 61,000 ulps (8e-12 relative; 1,500 to
-  8,300 ulps at the 99.9th percentile) and coefficients by 1e-12 relative at
-  the 99.9th percentile, more where a fit in its warm-up stops at
+  update's terms in another order, all of it vector arithmetic. A zero
+  coefficient's column is left out where the correlation matrix is finite,
+  which is read only when a sweep first meets a zero coefficient, in one
+  pass that runs as vectors; the sweep it replaces from 64 features, which
+  left the zeros out too, read the matrix every solve. Against the build
+  before it (the matrix reuse below in both), a row takes 0.42 to 0.43 of
+  the time at 500 features with three penalties and 0.69 to 0.71 with one,
+  0.49 and 0.70 at 200, 0.63 to 0.73 from 48 to 128 features with three
+  penalties and 0.70 to 0.83 with one, and 0.78 to 0.91 at 32 and 40
+  (arm64, Apple M4 Pro, both function layouts). On x86-64 (AMD EPYC 9V74,
+  both function layouts), provisional until this build is measured there:
+  a prototype that also read the whole matrix for finiteness every solve,
+  at every width, took 0.54 at 500 features with three penalties and 0.80
+  with one, 0.60 and 0.86 at 200, 0.83 to 0.90 from 48 to 128 with three
+  penalties and 0.94 to 1.03 with one, and 1.01 to 1.06 at 32; that read
+  alone cost it 2.5% to 4% a row at 20 features, where nothing else
+  differed. Below 32 features nothing changes, to the bit, and a row
+  costs what it did. From 32 the order of each sum moves predictions by
+  at most about 61,000 ulps (8e-12 relative; 1,500 to 8,300 ulps at the
+  99.9th percentile) and coefficients by 1e-12 relative at the 99.9th
+  percentile, more where a fit in its warm-up stops at
   `max_iter` before it settles (to 1e-6 relative at 500 features); every
   descent tested stopped on the same sweep as before, and against
   scikit-learn's coordinate descent on the same problem the fits are as
