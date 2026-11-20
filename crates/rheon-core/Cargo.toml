@@ -20,6 +20,12 @@ publish = false
 unsafe_code = "forbid"
 
 
+[features]
+# Task 479 (lasso split prototype): `lasso`'s coordinate descent sweeps with
+# no dependent chain of subtractions (`src/lasso/split.rs`). Moves output
+# bits; off by default, for the user to decide on.
+lasso-split = []
+
 [dependencies]
 faer.workspace = true
 # Not used by name: faer's `std` feature less `private-gemm-x86` (the

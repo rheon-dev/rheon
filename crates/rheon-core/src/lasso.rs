@@ -74,6 +74,10 @@ use crate::since::Since;
 use crate::solve::dot_aug;
 use crate::{Decay, EwCov, GramPart, TargetGaps, TargetMoments};
 
+// Task 479 (lasso split prototype): the sweep with no dependent chain, used
+// under the `lasso-split` build feature only.
+mod split;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LassoCfg {
     pub n_features: usize,
@@ -1164,6 +1168,18 @@ fn descend(
     support: &mut Support,
 ) -> bool {
     debug_assert!(is_symmetric(c, k), "the sweeps read a column as a row");
+    if cfg!(feature = "lasso-split") {
+        // Task 479 (lasso split prototype): the same descent, each `rho_i`'s
+        // terms in another order (`split`); not the default.
+        for _ in 0..max_iter {
+            let delta =
+                split::cd_sweep_split(c, k, d, s, l1, l2, b, &mut support.acc, support.all_finite);
+            if crate::gramfit::settled(delta, limit) {
+                return true;
+            }
+        }
+        return false;
+    }
     for _ in 0..max_iter {
         let delta = if support.reads(b) {
             cd_sweep_sparse(c, k, d, s, l1, l2, b, support)
@@ -1190,6 +1206,9 @@ struct Support {
     /// NaN or an infinity in `c` that term is NaN, and the sparse sweep
     /// is not used.
     finite: bool,
+    /// Every entry of the correlation matrix is finite, at any width: read
+    /// by the `lasso-split` sweep alone, and set only in that build.
+    all_finite: bool,
     /// The sweep's starting nonzero coefficients, ascending.
     start: Vec<usize>,
     /// Their values, in the same order.
@@ -1203,6 +1222,7 @@ impl Support {
     /// The buffers keep what they hold.
     fn reset(&mut self, c: &[f64]) {
         self.finite = c.len() >= SPARSE_MIN_K * SPARSE_MIN_K && c.iter().all(|v| v.is_finite());
+        self.all_finite = cfg!(feature = "lasso-split") && c.iter().all(|v| v.is_finite());
     }
 
     #[cfg(test)]
@@ -4574,6 +4594,10 @@ mod tests {
     /// `descend` picks the sparse sweep where it pays, per sweep, and its
     /// result is the dense descent's, the sweeps counted alike.
     #[test]
+    #[cfg_attr(
+        feature = "lasso-split",
+        ignore = "task 479 prototype: the split sweep moves bits by design"
+    )]
     fn descend_over_a_wide_path_is_the_dense_descent_to_the_bit() {
         let k = 100;
         let (c, d, s) = sparse_problem(k, 5);
@@ -4785,6 +4809,10 @@ mod tests {
     /// `descend` over a path on a dense problem: the serial descent's
     /// bits, the sweeps counted alike, the penalties from strong to none.
     #[test]
+    #[cfg_attr(
+        feature = "lasso-split",
+        ignore = "task 479 prototype: the split sweep moves bits by design"
+    )]
     fn descend_on_a_dense_problem_is_the_serial_descent_to_the_bit() {
         for k in [2, 3, 20, 50] {
             let (c, d) = dense_problem(k, 9, 0.3);

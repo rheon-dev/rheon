@@ -202,6 +202,14 @@ fn cases() -> Vec<Case> {
         });
     }
     for k in [20, 200, 500] {
+        // Task 479 (lasso split prototype): one penalty as well as three.
+        out.push(Case {
+            name: format!("lasso k={k} 1 penalty"),
+            spec: decayed(json!({"type": "lasso", "penalties": [0.01]}), k, true),
+            shape: Shape::Linear,
+            warm: if k > 100 { 0 } else { 2_000 },
+            rows: if k > 100 { 4 * k } else { 20_000 },
+        });
         out.push(Case {
             name: format!("lasso k={k} 3 penalties"),
             spec: decayed(
