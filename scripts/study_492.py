@@ -150,6 +150,14 @@ class GarchPOQ:
             np.sum(th[1 : 1 + p]) + 0.5 * np.sum(th[1 + p : 1 + p + o]) + np.sum(th[1 + p + o :])
         )
 
+    # variance targeting: omega = v (1 - c . phi), phi the k - 1 free parameters
+    def c_vec(self) -> np.ndarray:
+        return np.concatenate([np.ones(self.p), 0.5 * np.ones(self.o), np.ones(self.q)])
+
+    def project_free(self, phi: np.ndarray) -> np.ndarray:
+        A, b = self.constraints(0.0)
+        return project_halfspaces(np.asarray(phi, dtype=float), A[1:, 1:], b[1:])
+
     def grid(self, v: float) -> list[np.ndarray]:
         out = []
         for a in (0.02, 0.05, 0.1):
@@ -171,7 +179,8 @@ class GarchPOQ:
     def init(self, start: float) -> dict:
         m = max(self.p, self.o)
         return {
-            "e": [math.sqrt(start)] * m,  # pre-sample e2 = start, sign: positive
+            "e": [math.sqrt(start)] * m,  # pre-sample e2 = start (arch's backcast)
+            "a": [0.5 * start] * self.o,  # pre-sample asymmetric term: arch's 0.5 * backcast
             "s2": [start] * self.q,
             "d": [np.zeros(self.k) for _ in range(self.q)],
         }
@@ -184,7 +193,7 @@ class GarchPOQ:
         for i in range(p):
             x[1 + i] = e[i] * e[i]
         for j in range(o):
-            x[1 + p + j] = e[j] * e[j] if e[j] < 0.0 else 0.0
+            x[1 + p + j] = st["a"][j]
         for kk in range(q):
             x[1 + p + o + kk] = st["s2"][kk]
         s2 = float(th @ x)
@@ -196,12 +205,14 @@ class GarchPOQ:
     def push(self, st: dict, r: float, s2: float, dl: np.ndarray) -> None:
         if st["e"]:
             st["e"] = [r] + st["e"][:-1]
+        if st["a"]:
+            st["a"] = [r * r if r < 0.0 else 0.0] + st["a"][:-1]
         st["s2"] = [s2] + st["s2"][:-1]
         st["d"] = [dl * s2] + st["d"][:-1]
 
     def state_floats(self) -> int:
         k = self.k
-        return k + k * (k + 1) // 2 + max(self.p, self.o) + self.q + self.q * k + 5
+        return k + k * (k + 1) // 2 + max(self.p, self.o) + self.o + self.q + self.q * k + 5
 
 
 @dataclass
@@ -323,6 +334,7 @@ def huber_constants(c: float) -> tuple[float, float]:
 class Online:
     spec: object
     robust_c: float = 0.0
+    target: bool = False  # omega = v (1 - persistence), v the running mean of r^2 (study 485's form)
     warm: int = WARM
     t0: float = float(WARM)
     buffer: list = field(default_factory=list)
@@ -354,10 +366,26 @@ class Online:
         b = backcast(rows * rows)
         v = float(np.mean(rows * rows))
         spec = self.spec
-        grid = [tuple(spec.project(g, v)) for g in spec.grid(v)]
-        self.fit = batch_core.maximize(objective(spec, rows, b), lambda th: spec.project(th, v), grid)
-        self.theta = np.asarray(self.fit.theta, dtype=float).copy()
-        self.H = np.zeros((spec.k, spec.k))
+        if self.target:
+            c = spec.c_vec()
+            J = np.vstack([-v * c, np.eye(spec.k - 1)])
+            full = objective(spec, rows, b)
+
+            def targeted(phi: np.ndarray, grad: bool):  # noqa: ANN202
+                th = np.concatenate([[v * (1.0 - float(c @ phi))], phi])
+                ll, g, I = full(th, grad)
+                return ll, J.T @ g, J.T @ I @ J
+
+            grid = [tuple(spec.project_free(g[1:])) for g in spec.grid(v)]
+            self.fit = batch_core.maximize(targeted, spec.project_free, grid)
+            phi = np.asarray(self.fit.theta, dtype=float)
+            self.theta = np.concatenate([[v * (1.0 - float(c @ phi))], phi])
+            self.H = np.zeros((spec.k - 1, spec.k - 1))
+        else:
+            grid = [tuple(spec.project(g, v)) for g in spec.grid(v)]
+            self.fit = batch_core.maximize(objective(spec, rows, b), lambda th: spec.project(th, v), grid)
+            self.theta = np.asarray(self.fit.theta, dtype=float).copy()
+            self.H = np.zeros((spec.k, spec.k))
         self.st = spec.init(b)
         for x in rows:
             self._row(float(x), step=False)
@@ -372,7 +400,12 @@ class Online:
         r2 = r * r
         self.n_seen += 1
         self.mean_r2 += (r2 - self.mean_r2) / self.n_seen
-        info = 0.5 * np.outer(dl, dl)
+        if self.target:
+            vv = self.mean_r2
+            dfree = dl[1:] - vv * spec.c_vec() * dl[0]
+        else:
+            dfree = dl
+        info = 0.5 * np.outer(dfree, dfree)
         z2 = r2 / s2
         resid = z2 - 1.0
         if self.robust_c > 0.0:
@@ -386,11 +419,19 @@ class Online:
             self.n_steps += 1
             gamma = 1.0 / (self.n_steps + self.t0)
             self.H += gamma * (info - self.H)
-            proposal = self.theta + gamma * np.linalg.solve(self.H, 0.5 * resid * dl)
-            new = spec.project(proposal, self.mean_r2)
-            if not np.array_equal(new, proposal):
-                self.projected += 1
-            self.theta = new
+            move = gamma * np.linalg.solve(self.H, 0.5 * resid * dfree)
+            if self.target:
+                proposal = self.theta[1:] + move
+                phi = spec.project_free(proposal)
+                if not np.array_equal(phi, proposal):
+                    self.projected += 1
+                self.theta = np.concatenate([[vv * (1.0 - float(spec.c_vec() @ phi))], phi])
+            else:
+                proposal = self.theta + move
+                new = spec.project(proposal, self.mean_r2)
+                if not np.array_equal(new, proposal):
+                    self.projected += 1
+                self.theta = new
         else:
             self.H += (info - self.H) / self.n_seen
         spec.push(self.st, r, s2, dl)
@@ -429,8 +470,11 @@ def compare(model: str, seed: int, n: int = 10_000) -> dict:
         "ll_batch": ll_b,
     }
     start = backcast(r * r)
-    for tag, c in (("plain", 0.0), ("huber2", 2.0)):
-        est = Online(spec, robust_c=c)
+    variants = [("plain", 0.0, False), ("huber2", 2.0, False)]
+    if isinstance(spec, GarchPOQ):  # EGARCH has no closed-form target
+        variants += [("target", 0.0, True), ("target_huber2", 2.0, True)]
+    for tag, c, tg in variants:
+        est = Online(spec, robust_c=c, target=tg)
         t = time.perf_counter()
         for x in r:
             est.update(float(x))
@@ -526,7 +570,7 @@ def summary(outdir: str) -> None:
               f"{sum(d['arch_converged'] for d in rs)}, arch fit median "
               f"{np.median([d['arch_seconds'] for d in rs]):.2f} s")
         names = rs[0]["names"]
-        for tag in ("plain", "huber2"):
+        for tag in [t for t in ("plain", "huber2", "target", "target_huber2") if t in rs[0]]:
             v = [d[tag] for d in rs]
             G = np.array([x["gap_se"] for x in v])
             worst_i = int(np.argmax(np.max(np.abs(G), axis=1)))
