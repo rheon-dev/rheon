@@ -83,6 +83,15 @@ model that only the new build has is listed as an addition and passes.
   predicts from four threads failed on py-polars 2.0, 16 of 20 on 1.37.
   `bank.closed_groups(drop=False)` now reads beside a `predict` too; a drain
   still needs the bank alone.
+- Refusals that came as Python's or pyo3's own words now name the call and
+  the argument, with what to pass: `ModelBank.drop_groups(None)` (pass
+  `[None]` for the null group) or a key that is not a string;
+  `ModelBank(None)`; a spec dict holding a set, by its key; `fit(None)`,
+  `fit_predict_batches(None)` and a dict of columns given in place of a
+  frame; `ModelBank.save` to a file opened for text. `ModelBank.load_bytes`
+  takes a `bytearray` or a `memoryview`, as `ModelBank.load` does, and
+  names anything else. A spec named as an input column is refused without
+  Polars' `duplicate: ` in front of the sentence.
 - `rp.stream.with_windows` checks `chunk_size` as `refresh_time` and
   `lf.rheon.fit_predict` do, while the plan is built: `True` ran in one-row
   chunks, `2.5` failed only when the plan ran, and `"a"` raised Python's own
