@@ -140,9 +140,10 @@ CALIBRATION
    statsmodels): with no decay both reduce to statsmodels' exactly.
 4. **Conditioning** far from zero: the online model is more accurate (above).
 5. Not compared: `test_inst_causality` (it reads only `sigma_u`, so it follows from
-   the same sums; its `sig_mask[causing_ind, caused_ind] = 1` pairs indices
-   elementwise, which looks wrong for more than one variable on each side, and is
-   worth its own check), impulse responses, forecast-error variance decomposition,
+   the same sums; in statsmodels 0.15.0 its `sig_mask[causing_ind, caused_ind] = 1`
+   pairs the indices elementwise, so with two or more variables on each side it
+   fails: k = 4, `causing=[0, 1]` raises `IndexError`, while `causing=[0]` runs),
+   impulse responses, forecast-error variance decomposition,
    `trend` other than `"c"`, exogenous regressors.
 
 ## Caveats and what was not done
