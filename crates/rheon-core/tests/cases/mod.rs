@@ -276,6 +276,7 @@ fn hmm_full_cfg(d: usize) -> HmmCfg {
         seed_rule: SeedRule::First,
         seed: 1,
         tvtp: None,
+        prior_rows: None,
     }
 }
 
@@ -1867,6 +1868,7 @@ pub fn all() -> Vec<Case> {
                 seed_rule: SeedRule::First,
                 seed: 1,
                 tvtp: None,
+                prior_rows: None,
             })
             .unwrap(),
             K,
@@ -1895,6 +1897,7 @@ pub fn all() -> Vec<Case> {
                 seed_rule: SeedRule::First,
                 seed: 1,
                 tvtp: None,
+                prior_rows: None,
             })
             .unwrap(),
             K,
@@ -1911,6 +1914,24 @@ pub fn all() -> Vec<Case> {
             "Hmm",
             Hmm,
             Hmm::new(hmm_full_cfg(13)).unwrap(),
+            13,
+            Targets::None,
+            40
+        ),
+        // The full shape under a prior of its own, saved inside its
+        // warm-up (schema 70): it holds `ŝ` at 0 and no factor, takes them up
+        // at its seeding five rows after the save, and goes on under the
+        // prior.
+        case!(
+            "hmm_full_warming",
+            "Hmm",
+            Hmm,
+            Hmm::new(HmmCfg {
+                warm_rows: 45,
+                prior_rows: Some(6.5),
+                ..hmm_full_cfg(13)
+            })
+            .unwrap(),
             13,
             Targets::None,
             40

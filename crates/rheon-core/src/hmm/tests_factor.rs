@@ -1,7 +1,10 @@
 //! The factor form of a wide `full` state (task 479; [`EwFactor`]): where it
 //! starts, what it keeps, how it reads against the co-moments it replaces
-//! and against the exact recursion, and how a state saved before it loads.
-//! The co-moment form's tests are `tests`'.
+//! and against the exact recursion. The co-moment form's tests are `tests`'.
+//! Its form under the stabilized prior, the default, is held by
+//! `tests_stabilized`; the tests here that read the rotations against the
+//! decaying ridge build a model as a build before the prior did
+//! ([`ridge`]), which is how a model's factor form learned until schema 70.
 
 use std::cell::Cell;
 
@@ -20,6 +23,12 @@ pub(super) fn old<T>(f: impl FnOnce() -> T) -> T {
     let out = f();
     COMOMENTS_ONLY.with(|c| c.set(false));
     out
+}
+
+/// A model of `cfg` as a build before the stabilized prior built it: every
+/// state under the decaying ridge alone.
+fn ridge(cfg: HmmCfg) -> Hmm {
+    super::tests_stabilized::before_the_prior(|| Hmm::new(cfg).unwrap())
 }
 
 fn lcg(state: &mut u64) -> f64 {
@@ -62,6 +71,7 @@ pub(super) fn wide(d: usize, decay: Decay) -> HmmCfg {
         seed_rule: SeedRule::First,
         seed: 7,
         tvtp: None,
+        prior_rows: None,
     }
 }
 
@@ -162,8 +172,8 @@ fn the_taken_up_factor_reads_as_the_comoments_did() {
     for d in [13, 20] {
         for decay in [Decay::Halflife(60.0), Decay::Halflife(f64::INFINITY)] {
             let cfg = wide(d, decay);
-            let mut new = Hmm::new(cfg.clone()).unwrap();
-            let mut was = Hmm::new(cfg).unwrap();
+            let mut new = ridge(cfg.clone());
+            let mut was = ridge(cfg);
             let (mut same, mut differ, mut moved) = (0, 0, false);
             for (i, (x, dt)) in blobs(d, 400, 9).iter().enumerate() {
                 let w = if i % 17 == 3 { 0.0 } else { 1.0 };
@@ -258,11 +268,10 @@ fn a_factor_state_saved_mid_stream_continues_to_the_bit() {
 #[test]
 fn a_factor_stands_on_a_row_of_no_weight_and_restarts_after_a_total_decay() {
     let d = 13;
-    let mut m = Hmm::new(HmmCfg {
+    let mut m = ridge(HmmCfg {
         warm_rows: 30,
         ..wide(d, Decay::Halflife(5.0))
-    })
-    .unwrap();
+    });
     let rows = blobs(d, 200, 4);
     for (x, dt) in &rows {
         m.step(x, &[], *dt, 1.0);
@@ -423,7 +432,7 @@ fn track(d: usize, decay: Decay, n: usize, every: usize, seed: u64) -> Track {
     let cfg = wide(d, decay);
     let prior = cfg.precision_prior;
     let base = -0.5 * d as f64 * std::f64::consts::TAU.ln();
-    let mut m = Hmm::new(cfg).unwrap();
+    let mut m = ridge(cfg);
     let (mut work, mut quad) = (FactorWork::default(), QuadWork::default());
     let mut out = Track::default();
     let mut shadow: Vec<EwCov> = Vec::new();
@@ -637,135 +646,12 @@ fn the_factor_holds_the_exact_recursion_over_the_grid() {
     }
 }
 
-/// A wide `full` state saved by a build before the factor form, in
-/// co-moments, at schema 68 (rule 5's twentieth exception): it loads as
-/// the factors its co-moments give, which are what its next row would have
-/// read, so that row reads as the old build read it, to the bit; from the
-/// first row learned after the load it goes on in the factor form, within
-/// rounding of the old build's continuation, not to the bit
-/// ([`CONVERTED_POST`], [`CONVERTED_SCORE`]). A state saved inside its
-/// warm-up loads as it was and takes its factors up at its seeding, so it
-/// goes on to the bit of a run of this build; a state of 12 features loads
-/// and goes on in co-moments, to the bit of the old build. Each run is `n`
-/// rows, saved after 60 (in the warm-up) and after 600, under half-lives of
-/// 20 and 400 rows and none: `(max |Δp|, max |Δloglik| / (1 + |loglik|))`
-/// over the continuations, every filtered and predicted posterior and every
-/// reported state the old build's.
-fn converted(widths: &[usize], n: usize) -> (f64, f64) {
-    let (mut worst_post, mut worst_score) = (0f64, 0f64);
-    for &d in widths {
-        for decay in [
-            Decay::Halflife(20.0),
-            Decay::Halflife(400.0),
-            Decay::Halflife(f64::INFINITY),
-        ] {
-            for at in [60, 600] {
-                let rows = blobs(d, n, 31 + d as u64);
-                let mut was = Hmm::new(wide(d, decay)).unwrap();
-                for (i, (x, dt)) in rows[..at].iter().enumerate() {
-                    let w = if i % 19 == 7 { 0.0 } else { 1.0 };
-                    old(|| was.step(x, &[], *dt, w));
-                }
-                let mut state = was.state();
-                state.schema_version = 68;
-                let mut back = Hmm::restore(&state).unwrap();
-                let wide_enough = d >= Hmm::FACTOR_FROM && at > 100;
-                assert_eq!(back.factored(), wide_enough, "{d} {decay:?} {at}");
-                if wide_enough {
-                    for s in 0..2 {
-                        let fresh = SpdFactor::of(&was.state_matrix(s), d).unwrap();
-                        assert_eq!(back.factor_states[s].factor(), &fresh.into_state());
-                        assert_eq!(back.factor_states[s].sigma(), 1.0);
-                    }
-                }
-                // A run of this build, for the warm-up's case.
-                let mut new = Hmm::new(wide(d, decay)).unwrap();
-                for (i, (x, dt)) in rows[..at].iter().enumerate() {
-                    let w = if i % 19 == 7 { 0.0 } else { 1.0 };
-                    new.step(x, &[], *dt, w);
-                }
-                let mut first = true;
-                for (i, (x, dt)) in rows[at..].iter().enumerate() {
-                    let w = if i % 19 == 7 { 0.0 } else { 1.0 };
-                    let a = back.step(x, &[], *dt, w);
-                    let b = old(|| was.step(x, &[], *dt, w));
-                    let c = new.step(x, &[], *dt, w);
-                    let what = format!("{d} {decay:?} saved at {at}, row {i}");
-                    if !wide_enough || first {
-                        // The warm-up's state is this build's run; the
-                        // narrow one, and the first read of a converted
-                        // one, the old build's.
-                        let want = if d >= Hmm::FACTOR_FROM && !wide_enough {
-                            &c
-                        } else {
-                            &b
-                        };
-                        assert_eq!(bits(&a.pred), bits(&want.pred), "{what}");
-                        first = w == 0.0 && first;
-                        continue;
-                    }
-                    assert_eq!(a.pred[4], b.pred[4], "{what}: the reported state");
-                    for (p, q) in a.pred[..4].iter().zip(&b.pred[..4]) {
-                        worst_post = worst_post.max((p - q).abs());
-                    }
-                    worst_score =
-                        worst_score.max((a.pred[5] - b.pred[5]).abs() / (1.0 + b.pred[5].abs()));
-                }
-                assert_eq!(back.factored(), d >= Hmm::FACTOR_FROM, "{d}");
-            }
-        }
-    }
-    println!("{widths:?}: posteriors {worst_post:e}, loglik {worst_score:e}");
-    assert!(
-        worst_post > 0.0,
-        "nothing moved: the factor form never acted"
-    );
-    (worst_post, worst_score)
-}
-
-/// How far a converted state's continuation may part from the old build's:
-/// a posterior, absolutely. Measured 2026-11-20 on macOS arm64 over the
-/// grid of [`a_state_of_schema_68_loads_over_the_grid`] (13, 20 and 32
-/// features, 2,000 rows a run): 1.9e-13; the bound is about ten times it.
-const CONVERTED_POST: f64 = 2e-12;
-
-/// The same of `loglik`, relative to `1 + |loglik|`: measured 6.8e-14.
-const CONVERTED_SCORE: f64 = 1e-12;
-
-#[test]
-fn a_state_of_schema_68_loads_as_its_factor_and_goes_on_within_rounding() {
-    let (post, score) = converted(&[12, 13, 20], 1200);
-    assert!(
-        post <= CONVERTED_POST,
-        "posteriors {post:e} from the old build's"
-    );
-    assert!(
-        score <= CONVERTED_SCORE,
-        "loglik {score:e} from the old build's"
-    );
-}
-
-/// [`a_state_of_schema_68_loads_as_its_factor_and_goes_on_within_rounding`]
-/// at 32 features too, 2,000 rows a run: the grid its bounds were measured
-/// on. `--nocapture` prints the worst numbers.
-#[test]
-#[ignore = "extended: a state of schema 68 converted, over the grid its bounds were measured on"]
-fn a_state_of_schema_68_loads_over_the_grid() {
-    let (post, score) = converted(&[12, 13, 20, 32], 2000);
-    assert!(
-        post <= CONVERTED_POST,
-        "posteriors {post:e} from the old build's"
-    );
-    assert!(
-        score <= CONVERTED_SCORE,
-        "loglik {score:e} from the old build's"
-    );
-}
-
 /// The factor form's state is the smaller, bounded by the shape alone: a
 /// state's triangle `d(d + 1)/2`, its means and their low parts, and four
-/// numbers, where the co-moments write their whole `d × d` matrix and more.
-/// `--nocapture` prints both forms' bytes, in the state file's encoding.
+/// numbers, where the co-moments write their whole `d × d` matrix and more;
+/// beside the states, the factor form keeps its prior as factored, `d`
+/// numbers a model, which the co-moments do not. `--nocapture` prints both
+/// forms' bytes, in the state file's encoding.
 #[test]
 fn the_factor_form_is_the_smaller_state() {
     for d in [13, 20, 32] {
@@ -782,10 +668,11 @@ fn the_factor_form_is_the_smaller_state() {
         println!("{d} features, 2 states: {factor} bytes, {comoments} in co-moments");
         assert!(new.factored() && !was.factored());
         // Each state: `d(d+1)/2 + 2d + 4` doubles of 9 bytes, where the
-        // co-moments write `d² + 2d + 5` and their runs, at most.
+        // co-moments write `d² + 2d + 5` and their runs, at most; and the
+        // model's factored prior, `d` more.
         let floats = |n: usize| 9 * n;
         assert!(
-            factor + floats(2 * (d * d - d * (d + 1) / 2)) <= comoments,
+            factor + floats(2 * (d * d - d * (d + 1) / 2)) <= comoments + floats(d),
             "{d}: {factor} against {comoments}"
         );
     }

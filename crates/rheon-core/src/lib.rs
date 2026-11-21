@@ -119,8 +119,6 @@ mod solve;
 mod specification;
 mod spread;
 mod stats;
-#[cfg(feature = "study-c4")]
-pub mod study_c4;
 mod tails;
 /// The thread pools of the tests that run one computation at several pool
 /// sizes, held within what a Windows runner can commit.
@@ -165,7 +163,7 @@ pub use ftrl::{Ftrl, FtrlCfg, FtrlLoss};
 pub use gaps::{GramPart, TargetGaps};
 pub use hasher::{FixedHasher, FixedState};
 pub use health::FeatureHealth;
-pub use hmm::{EwFactor, Hmm, HmmCfg};
+pub use hmm::{EwFactor, Hmm, HmmCfg, Stabilized};
 pub use holt::{Holt, HoltCfg};
 pub use huber_refit::{
     BIN_REFIT_ROWS_PER_BIN, DEFAULT_REFIT_MAX_FEATURES, DEFAULT_REFIT_ROWS, MAX_REFIT_ROWS,
@@ -873,7 +871,26 @@ pub use window::{
 ///   its factor up at its seeding. Schema 68's fixtures are kept
 ///   (`tests/state_fixtures/v68/`), with the cases `hmm_full` (13 features)
 ///   and `hmm_full_narrow` (12) written into it by the schema-68 build.
-pub const SCHEMA_VERSION: u32 = 69;
+/// - 70 (2026-11-20, the user's decision of the same day): `hmm` under
+///   `covariance_type` `"full"` and `"diag"` in a model that learns forgets
+///   each state's covariance toward a stabilized prior worth `prior_rows`
+///   rows (`d` by default; [`Stabilized`]), where it kept a decaying ridge.
+///   The model keeps the prior's scale `ŝ`, its weight `V` and, in the
+///   factor form, the prior as factored `f` (`2d + 1` numbers a model there,
+///   `d + 1` elsewhere) in `stabilized`, written only where the model has a
+///   prior, as the last field; `factor_states`, no longer last, is written
+///   always, empty or not; the configuration gains `prior_rows`. A state of
+///   69 or earlier has none of them: it loads with `prior_rows` absent (the
+///   default) and, under those shapes, a prior seeded from its states'
+///   moments -- `ŝ` their variances pooled by weight, `V` their total weight,
+///   a factor form taken up again from its co-moments at its target -- and
+///   goes on under it, neither to the bit nor within rounding of the old
+///   build (CLAUDE.md rule 5's twenty-second exception); a state still in
+///   its warm-up goes on to the bit of this build's run. `tied`, a model
+///   that does not learn, and every other model keep their bits. Schema
+///   69's fixtures are kept (`tests/state_fixtures/v69/`); the new form
+///   saved inside the warm-up is the case `hmm_full_warming`.
+pub const SCHEMA_VERSION: u32 = 70;
 
 /// The default solve cadence of `ewridge`, `lasso`, `huber` and `quantile`
 /// (docs/PLAN.md task 115 (b)): a solve once the weight learned since the last

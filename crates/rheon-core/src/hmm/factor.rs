@@ -328,6 +328,44 @@ impl EwFactor {
         f
     }
 
+    /// A factor form held under the ridge, as a build before stabilized
+    /// forgetting left it, read back as its data's co-moments:
+    /// `C = σ·L Lᵀ − ridge·I`, its lower triangle packed row by row as an
+    /// accumulator packs it ([`crate::LowerTriangle::packed`]).
+    pub(crate) fn comoments_under(&self, ridge: f64) -> Vec<f64> {
+        let d = self.order();
+        let m = self.matrix();
+        let mut c = Vec::with_capacity(d * (d + 1) / 2);
+        for i in 0..d {
+            for j in 0..=i {
+                c.push(m[i * d + j] - if i == j { ridge } else { 0.0 });
+            }
+        }
+        c
+    }
+
+    /// The state taken up again under stabilized forgetting from its
+    /// co-moments `c` ([`Self::comoments_under`]): `m·C + diag(add)`
+    /// factorized, with `m = W/(W + P₀)` and `addᵢ = P₀ψᵢ/(W + P₀)`, the
+    /// weight and means as they were, `σ = 1`. Where that matrix has no
+    /// factor the state starts at its prior, `diag(add)`.
+    pub(crate) fn retake_stabilized(
+        &mut self,
+        c: &[f64],
+        m: f64,
+        add: &[f64],
+        work: &mut FactorWork,
+    ) {
+        match work.factor_shrunk(c, m, add, self.order()) {
+            Some(l) => {
+                self.l = l.into_state();
+                self.sigma = 1.0;
+            }
+            None => self.restart_at_prior(add, 1.0),
+        }
+        self.precision_scale = 1.0;
+    }
+
     /// Whether [`Self::age_stabilized`] at `lam` leaves `σ` past the
     /// normal range, where the state starts again at its prior.
     pub(crate) fn ages_out(&self, lam: f64, prior_rows: f64) -> bool {
@@ -340,7 +378,7 @@ impl EwFactor {
     /// `W ← λW`, the means stay, and the matrix the state reads,
     /// `(W·M + F)/(W + P₀)`, holds `λ(W·M + F)` over the new total, so
     /// `σ ← α·σ` with `α = λ(W + P₀)/(λW + P₀)`. The factored prior `F`
-    /// decays with it; the caller tops it up ([`Self::add_prior`]). Where
+    /// decays with it; the caller moves it ([`Self::shift_prior`]). Where
     /// `α·σ` leaves the normal range ([`Self::ages_out`]) what is kept is
     /// below `2⁻¹⁰²⁰` of the prior, and the state starts again at the prior
     /// `P₀·diag(psi)`: `true` where it did.
@@ -364,36 +402,6 @@ impl EwFactor {
         }
     }
 
-    /// `q·eⱼeⱼᵀ` of prior, in the units of `W·M + F`, added to the matrix:
-    /// `L Lᵀ + (q/(Tσ))·eⱼeⱼᵀ` with `T = W + P₀`. `false` where the rotations
-    /// left no factor.
-    pub(crate) fn add_prior(
-        &mut self,
-        j: usize,
-        q: f64,
-        prior_rows: f64,
-        v: &mut Vec<f64>,
-    ) -> bool {
-        let t = self.w_sum + prior_rows;
-        let s = (q / (t * self.sigma)).sqrt();
-        s == 0.0 || self.l.add_axis_in_place(j, s, v)
-    }
-
-    /// `−q·eⱼeⱼᵀ` of prior (`q < 0`) taken from the matrix, as
-    /// [`Self::add_prior`] adds it: a downdate. `false` where it would leave
-    /// no positive definite matrix, or left no factor.
-    pub(crate) fn remove_prior(
-        &mut self,
-        j: usize,
-        q: f64,
-        prior_rows: f64,
-        v: &mut Vec<f64>,
-    ) -> bool {
-        let t = self.w_sum + prior_rows;
-        let s = (-q / (t * self.sigma)).sqrt();
-        s == 0.0 || self.l.remove_axis_in_place(j, s, v)
-    }
-
     /// `diag(q)` of prior, in the units of `W·M + F`, added to the matrix
     /// at once (each `qⱼ` of either sign): `L Lᵀ + diag(q)/(Tσ)` factorized
     /// afresh ([`FactorWork::refactor_shifted`]), `σ` as it was. `false`,
@@ -411,23 +419,6 @@ impl EwFactor {
         work.refactor_shifted(&mut self.l, add)
     }
 
-    /// `q·eⱼeⱼᵀ` of prior added where `q > 0`, taken where `q < 0`.
-    pub(crate) fn move_prior(
-        &mut self,
-        j: usize,
-        q: f64,
-        prior_rows: f64,
-        v: &mut Vec<f64>,
-    ) -> bool {
-        if q > 0.0 {
-            self.add_prior(j, q, prior_rows, v)
-        } else if q < 0.0 {
-            self.remove_prior(j, q, prior_rows, v)
-        } else {
-            true
-        }
-    }
-
     /// The row `x` learned at weight `w` under stabilized forgetting, after
     /// its decay ([`Self::age_stabilized`]): the accumulator's step at
     /// `λ = 1`, `W' = W + w`, `a = W/W'`, `b = w/W'`, means as
@@ -442,17 +433,11 @@ impl EwFactor {
     /// `false` where the rotations left no factor; the state then starts
     /// again at its prior as factored, `diag(held)`, and the owner counts
     /// it. `v` is working space.
-    ///
-    /// With `mean_rows = k0 > 0` (a study of a mean prior, under the
-    /// `study-c4` feature) the means step by `bₘ = w/(W' + k0)` and the
-    /// step's weight is `W'·(a·bₘ² + b·(1 − bₘ)²)`.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn update_stabilized(
         &mut self,
         x: &[f64],
         w: f64,
         prior_rows: f64,
-        mean_rows: f64,
         held: &[f64],
         v: &mut Vec<f64>,
     ) -> bool {
@@ -462,18 +447,8 @@ impl EwFactor {
         }
         let w_old = self.w_sum;
         let w_new = w_old + w;
-        #[allow(unused_mut)]
-        let (a, mut b) = (w_old / w_new, w / w_new);
-        #[allow(unused_mut)]
-        let mut c = a * w;
-        #[cfg(not(feature = "study-c4"))]
-        let _ = mean_rows;
-        #[cfg(feature = "study-c4")]
-        if mean_rows > 0.0 {
-            let bm = w / (w_new + mean_rows);
-            c = w_new * (a * bm * bm + b * (1.0 - bm) * (1.0 - bm));
-            b = bm;
-        }
+        let (a, b) = (w_old / w_new, w / w_new);
+        let c = a * w;
         v.clear();
         v.extend(
             x.iter()

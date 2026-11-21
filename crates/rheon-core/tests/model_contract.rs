@@ -1124,6 +1124,7 @@ fn hmm_cfg() -> HmmCfg {
         seed_rule: SeedRule::First,
         seed: 1,
         tvtp: None,
+        prior_rows: None,
     }
 }
 

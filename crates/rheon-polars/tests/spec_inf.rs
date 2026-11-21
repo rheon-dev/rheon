@@ -48,7 +48,7 @@ const MEANS_SOMETHING: [(&str, &str); 9] = [
 ];
 
 /// Where it is no setting: a step, a penalty, a tube or a threshold at `inf`.
-const MEANS_NOTHING: [(&str, &str, &str); 17] = [
+const MEANS_NOTHING: [(&str, &str, &str); 18] = [
     // A floor no weight reaches withheld every row for good, said only by a
     // notice a half-life after the stream settled (task 278, the user's
     // decision of 2026-10-25), as a scalar and in a per-target list.
@@ -105,6 +105,12 @@ const MEANS_NOTHING: [(&str, &str, &str); 17] = [
     // `q` alone: beside `coef_half_life` the pair is refused first (review
     // 2026-10-06, PC6).
     ("", "type = \"kalman\"\nq = [inf, 0.5]", "q"),
+    // A prior worth infinitely many rows is no data at all.
+    (
+        "",
+        "type = \"hmm\"\nn_components = 2\nprecision_prior = 0.1\nprior_rows = inf",
+        "prior_rows",
+    ),
 ];
 
 #[test]

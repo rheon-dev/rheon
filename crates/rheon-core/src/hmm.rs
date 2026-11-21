@@ -115,7 +115,10 @@ pub struct HmmCfg {
     pub covariance: Covariance,
     /// Ridge on every state covariance, finite and `> 0`; decays with the
     /// state's own data, as `ew_class`'s does. Required: a state's centred
-    /// co-moments start at zero.
+    /// co-moments start at zero. Under `full` and `diag` in a model that
+    /// learns, the states forget toward a prior instead ([`Stabilized`]),
+    /// and this is the ridge only where every feature's pooled variance is
+    /// 0.
     pub precision_prior: f64,
     pub min_weight: f64,
     /// Update the states and the transition counts. `false` filters with
@@ -144,6 +147,13 @@ pub struct HmmCfg {
     /// softmaxₗ(Aₖₗ + Bₖₗ·zₜ)` from an exogenous column and the counts are
     /// not learned.
     pub tvtp: Option<(Vec<f64>, Vec<f64>)>,
+    /// `P₀`, the rows of weight the stabilized prior of each `full` or
+    /// `diag` state's covariance is worth ([`Stabilized`]), finite and
+    /// `> 0`; `None` is `n_features`. Refused under `tied` and in a model
+    /// that does not learn, which take no prior. Absent from a state of
+    /// schema 69 or earlier, which loads with `None`.
+    #[serde(default)]
+    pub prior_rows: Option<f64>,
 }
 
 impl HmmCfg {
@@ -176,6 +186,32 @@ impl HmmCfg {
                  precision_prior to a finite positive value.",
                 self.precision_prior
             ));
+        }
+        if let Some(p) = self.prior_rows {
+            if !(p.is_finite() && p > 0.0) {
+                no.refuse(format!(
+                    "hmm: prior_rows must be finite and above 0, but it is {p}: it is how many \
+                     rows of weight each state's prior covariance is worth. Set prior_rows to a \
+                     finite positive value, or leave it out for the number of features."
+                ));
+            }
+            if !self.learn || matches!(self.covariance, Covariance::Shared) {
+                no.refuse(format!(
+                    "hmm: prior_rows does not apply {}, which takes no prior: a state's \
+                     covariance forgets toward the prior only under covariance_type \"full\" or \
+                     \"diag\" with learn on. Leave prior_rows out{}.",
+                    if self.learn {
+                        "under covariance_type \"tied\""
+                    } else {
+                        "with learn off"
+                    },
+                    if self.learn {
+                        ", or set covariance_type to \"full\" or \"diag\""
+                    } else {
+                        ", or turn learn on"
+                    }
+                ));
+            }
         }
         if !(self.transition_prior.is_finite() && self.transition_prior >= 0.0) {
             no.refuse(format!(
@@ -485,21 +521,23 @@ pub struct Hmm {
     /// states are seeded: each state as its weight, means and the Cholesky
     /// factor of its matrix, moved by each learned row ([`EwFactor`]), and
     /// [`Self::states`] empty. Empty in every other shape and width, and
-    /// before the seeding, and then not written: it is the last field, the
-    /// one the compact encoding lets skip. A `full` state of schema 68 or
-    /// earlier at that width holds co-moments, and loads as their factor
-    /// (`restore`).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// before the seeding. Written always since schema 70, after the
+    /// fields it follows: the compact encoding is positional, and only a
+    /// last field may skip. A state of schema 69 wrote it only where it was
+    /// not empty, its last field then, and loads with it empty where it is
+    /// absent. A `full` state of schema 68 or earlier at that width holds
+    /// co-moments, and loads as their factor (`restore`).
+    #[serde(default)]
     factor_states: Vec<EwFactor>,
-    /// Stabilized forgetting of the states' covariances
-    /// ([`Self::with_stabilized`]); `None` in every model a spec builds,
-    /// and never written: it is not yet an option.
-    #[serde(skip)]
+    /// Stabilized forgetting of the states' covariances ([`Stabilized`]):
+    /// under `full` and `diag` in a model that learns, from its build on,
+    /// and `None` under `tied` and in a model that does not learn. Written
+    /// only where it is `Some`: the last field, the one the compact encoding
+    /// lets skip. A state of schema 69 or earlier has none, and loads with
+    /// one seeded from its states (`restore`; rule 5's twenty-second
+    /// exception).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     stabilized: Option<Box<Stabilized>>,
-    /// Study C4's prototype ([`crate::study_c4`]); never written.
-    #[cfg(feature = "study-c4")]
-    #[serde(skip)]
-    study: crate::study_c4::Study,
 }
 
 impl Hmm {
@@ -536,80 +574,29 @@ impl Hmm {
         Ok(())
     }
 
+    /// A model of `cfg`. Under `full` and `diag`, in a model that learns,
+    /// each state's covariance forgets toward a prior worth `prior_rows`
+    /// rows, `d` by default ([`Stabilized`]).
     pub fn new(cfg: HmmCfg) -> Result<Self, String> {
-        Self::build(cfg, None)
+        let p0 = cfg.prior_rows.unwrap_or(cfg.n_features as f64);
+        // A test's stand-in for a build before stabilized forgetting.
+        #[cfg(test)]
+        if tests_stabilized::NO_PRIOR.with(std::cell::Cell::get) {
+            return Self::build(cfg, None);
+        }
+        Self::build(cfg, Some(p0))
     }
 
-    /// A model whose `full` or `diag` states forget toward a prior worth
-    /// `prior_rows` rows ([`Stabilized`]): not yet an option of the spec,
-    /// for the study of it and its tests. A model that does not learn, or of
-    /// another shape, takes no prior.
-    #[doc(hidden)]
-    pub fn with_stabilized(cfg: HmmCfg, prior_rows: f64) -> Result<Self, String> {
-        if !(prior_rows > 0.0 && prior_rows.is_finite()) {
-            return Err(format!(
-                "hmm: the prior's rows must be a positive number, but they are {prior_rows}"
-            ));
-        }
-        Self::build(cfg, Some(prior_rows))
-    }
-
-    /// [`Self::with_stabilized`] read through co-moments at every width:
-    /// the exact recursion, `O(d³)` a row, which the factor form tops up
-    /// lazily; for the study and the tests.
-    #[doc(hidden)]
-    pub fn with_stabilized_comoments(cfg: HmmCfg, prior_rows: f64) -> Result<Self, String> {
-        let mut m = Self::with_stabilized(cfg, prior_rows)?;
-        if m.factored() {
-            // Given states at that width are taken up at once.
-            return Err("hmm: the co-moment form takes no given states".into());
-        }
+    /// [`Self::new`] read through co-moments at every width: the exact
+    /// recursion, `O(d³)` a row, which the factor form moves its prior
+    /// toward lazily; for the tests.
+    #[cfg(test)]
+    pub(crate) fn new_comoments(cfg: HmmCfg) -> Result<Self, String> {
+        let mut m = tests_factor::old(|| Self::new(cfg))?;
         if let Some(st) = m.stabilized.as_deref_mut() {
             st.comoments = true;
         }
         Ok(m)
-    }
-
-    /// A study of a mean prior under stabilized forgetting: each learned
-    /// row's mean step divides by `rows` more of weight at the state's
-    /// current mean (`EwCov::update_anchored`). Before the first row.
-    #[cfg(feature = "study-c4")]
-    pub fn set_mean_prior(&mut self, rows: f64) {
-        if let Some(st) = self.stabilized.as_deref_mut() {
-            st.mean_rows = rows;
-        }
-    }
-
-    /// A study of the factor form's tolerance `τ` ([`Stabilized`]): a
-    /// coordinate's prior is moved to its target before a read once it is
-    /// more than `τ` of it away. Before the first row.
-    #[doc(hidden)]
-    pub fn set_stabilized_tau(&mut self, tau: f64) {
-        if let Some(st) = self.stabilized.as_deref_mut() {
-            st.tau = tau;
-        }
-    }
-
-    /// A study's band for the bulk form, and a study's cursor for the axis
-    /// form ([`Stabilized`]). Before the first row.
-    #[cfg(feature = "study-c4")]
-    pub fn set_stabilized_study(&mut self, wide: bool, cursor_mean: bool, frozen: bool) {
-        if let Some(st) = self.stabilized.as_deref_mut() {
-            st.wide = wide;
-            st.cursor_mean = cursor_mean;
-            st.frozen = frozen;
-        }
-    }
-
-    /// The factor form's prior topped up a coordinate at a time, by
-    /// rotations ([`Stabilized`]): the first form built, for the study's
-    /// comparison with the one that moves every coordinate at once. Before
-    /// the first row.
-    #[doc(hidden)]
-    pub fn set_stabilized_axis(&mut self) {
-        if let Some(st) = self.stabilized.as_deref_mut() {
-            st.axis = true;
-        }
     }
 
     /// The stabilized prior, where it is in force: set, the states seeded and
@@ -663,8 +650,6 @@ impl Hmm {
             diag_states,
             factor_states: Vec::new(),
             stabilized: None,
-            #[cfg(feature = "study-c4")]
-            study: Default::default(),
             cfg,
         };
         let shape = matches!(m.cfg.covariance, Covariance::Full | Covariance::Diagonal);
@@ -708,14 +693,13 @@ impl Hmm {
         if tests_factor::COMOMENTS_ONLY.with(std::cell::Cell::get) {
             return;
         }
-        // Study C4: B and C read their matrices from the co-moments.
-        #[cfg(feature = "study-c4")]
-        if self.study.set() {
-            return;
-        }
         let d = self.cfg.n_features;
         let mut held = Vec::with_capacity(self.states.len());
-        if self.stabilized.as_deref().is_some_and(|st| st.comoments) {
+        if self
+            .stabilized
+            .as_deref()
+            .is_some_and(Stabilized::comoments)
+        {
             return;
         }
         if let Some(st) = self.stabilized.as_deref_mut().filter(|_| self.cfg.learn) {
@@ -782,18 +766,6 @@ impl Hmm {
             factors,
             ..
         } = self;
-        #[cfg(feature = "study-c4")]
-        if self.study.active() {
-            let mut m = Vec::new();
-            for (s, cov) in states.iter().enumerate() {
-                if factors.peek(s).is_none() {
-                    self.study
-                        .matrix(s, cov.n_eff(), cov.comoments().packed(), d, &mut m);
-                    factors.set(s, k, SpdFactor::of(&m, d));
-                }
-            }
-            return;
-        }
         for (s, cov) in states.iter().enumerate() {
             if factors.peek(s).is_none() {
                 // Factorized in the cache's working space, from the packed
@@ -997,14 +969,6 @@ impl Hmm {
             }
             return;
         }
-        #[cfg(feature = "study-c4")]
-        if self.study.active() {
-            let cov = &self.states[s];
-            let d = self.cfg.n_features;
-            self.study
-                .matrix(s, cov.n_eff(), cov.comoments().packed(), d, m);
-            return;
-        }
         Self::matrix_of(&self.cfg, &self.states[s], m);
     }
 
@@ -1064,12 +1028,6 @@ impl Hmm {
                     let (mut log_det, mut q) = (0.0, 0.0);
                     for (i, xi) in x.iter().enumerate() {
                         let v = cov.var(i) + r;
-                        #[cfg(feature = "study-c4")]
-                        let v = if self.study.active() {
-                            self.study.diag(s, cov.n_eff(), i, cov.var(i))
-                        } else {
-                            v
-                        };
                         let dv = cov.deviation(i, *xi);
                         log_det += v.ln();
                         q += dv * dv / v;
@@ -1318,8 +1276,6 @@ impl Hmm {
         if self.stabilized.is_some() {
             self.seed_stabilized();
         }
-        #[cfg(feature = "study-c4")]
-        self.study_seed();
         self.factors.clear();
         self.take_up_factors();
     }
@@ -1398,8 +1354,6 @@ impl Hmm {
             self.n_eff *= lam;
             if self.cfg.learn {
                 self.age_states(x, lam);
-                #[cfg(feature = "study-c4")]
-                self.study_age(lam);
                 self.factors.clear();
             }
             return;
@@ -1429,8 +1383,6 @@ impl Hmm {
             self.n_eff = lam * before;
             if self.cfg.learn {
                 self.age_states(x, lam);
-                #[cfg(feature = "study-c4")]
-                self.study_age(lam);
                 self.factors.clear();
             }
             return;
@@ -1473,8 +1425,6 @@ impl Hmm {
                     *a += if z > 0.0 { weight * j / z } else { 0.0 };
                 }
             }
-            #[cfg(feature = "study-c4")]
-            let study_e = self.study_deviations(x, &work.post);
             for (s, cov) in self.states.iter_mut().enumerate() {
                 cov.update(x, lam, weight * work.post[s]);
             }
@@ -1487,16 +1437,6 @@ impl Hmm {
             for (s, f) in self.factor_states.iter_mut().enumerate() {
                 if !f.update(x, lam, weight * work.post[s], prior, &mut work.delta) {
                     self.solve_failures += 1;
-                }
-            }
-            #[cfg(feature = "study-c4")]
-            {
-                self.study.age(lam);
-                self.study.observe(lam, weight, &study_e);
-                self.study.e = study_e;
-                if let Some(add) = self.study.lift(lam) {
-                    self.states.iter_mut().for_each(|c| c.study_lift(add));
-                    self.diag_states.iter_mut().for_each(|c| c.study_lift(add));
                 }
             }
             self.factors.clear();
@@ -1521,7 +1461,7 @@ impl Hmm {
     ) {
         debug_assert!(self.seeded && self.cfg.learn && self.buffer.is_empty());
         let lam = self.cfg.decay.factor(d_clock);
-        let saved = self.age_stabilized(x, lam, work, weight <= 0.0);
+        let saved = self.age_stabilized(lam, work, weight <= 0.0);
         self.ensure_factors_stabilized();
         // The chain as the row's clock leaves it: the counts decay over the
         // clock since the last row before `Π` is read, on every row, so a
@@ -1618,20 +1558,31 @@ impl Hmm {
 
 /// Stabilized forgetting's steps ([`Stabilized`]).
 impl Hmm {
-    /// `ŝ` from the states' variances, pooled by their weights.
-    fn seed_stabilized(&mut self) {
+    /// `ŝ` from the states' variances, pooled by their weights, and `V`
+    /// their total weight. `comoments`: a factor form's states' co-moments
+    /// ([`EwFactor::comoments_under`]), read in place of states it does not
+    /// keep.
+    fn seed_stabilized_with(&mut self, comoments: &[Vec<f64>]) {
         let d = self.cfg.n_features;
         let mut pooled = vec![0.0; d];
         let mut total = 0.0;
         for s in 0..self.cfg.k {
-            let w = match self.states.get(s) {
-                Some(c) => {
+            let w = match (self.states.get(s), comoments.get(s)) {
+                (Some(c), _) => {
                     for (p, i) in pooled.iter_mut().zip(0..d) {
                         *p += c.n_eff() * c.var(i);
                     }
                     c.n_eff()
                 }
-                None => {
+                (None, Some(c)) => {
+                    let w = self.factor_states[s].n_eff();
+                    for (p, i) in pooled.iter_mut().zip(0..d) {
+                        let v = crate::solve::clamp_rounding(c[crate::ewcov::row_at(i) + i]);
+                        *p += w * v;
+                    }
+                    w
+                }
+                (None, None) => {
                     let c = &self.diag_states[s];
                     for (p, i) in pooled.iter_mut().zip(0..d) {
                         *p += c.n_eff() * c.var(i);
@@ -1649,14 +1600,62 @@ impl Hmm {
         }
     }
 
+    /// [`Self::seed_stabilized_with`] from the states the model keeps.
+    fn seed_stabilized(&mut self) {
+        self.seed_stabilized_with(&[]);
+    }
+
+    /// A state of schema 69 or earlier under `full` or `diag` that learns,
+    /// which kept no prior, put under one worth `p0` rows: seeded from its
+    /// states as the seeding seeds it, where they are seeded. A factor form
+    /// held under the ridge is read back as its co-moments, `σ·L Lᵀ` less
+    /// the ridge it has reached, and taken up again under the prior, every
+    /// coordinate at its target.
+    fn stabilize_loaded(&mut self, p0: f64) {
+        let d = self.cfg.n_features;
+        self.stabilized = Some(Box::new(Stabilized::new(
+            p0,
+            d,
+            self.cfg.decay,
+            self.cfg.precision_prior,
+        )));
+        if !self.seeded {
+            return;
+        }
+        let prior = self.cfg.precision_prior;
+        let comoments: Vec<Vec<f64>> = self
+            .factor_states
+            .iter()
+            .map(|f| f.comoments_under(prior * f.precision_scale()))
+            .collect();
+        self.seed_stabilized_with(&comoments);
+        let Self {
+            factor_states,
+            stabilized,
+            factors,
+            ..
+        } = self;
+        let Some(st) = stabilized.as_deref_mut() else {
+            return;
+        };
+        if factor_states.is_empty() {
+            return;
+        }
+        st.hold_all();
+        for (f, c) in factor_states.iter_mut().zip(&comoments) {
+            let (m, add) = st.shrink(f.n_eff());
+            f.retake_stabilized(c, m, add, &mut factors.work);
+        }
+        factors.work.drop_spares();
+    }
+
     /// The row's decay, before its read: every state's weight by `λ`; in
     /// the factor form each matrix's scale with it and the factored prior,
     /// and, where any coordinate's prior is then more than `τ` from its
     /// target, every coordinate moved to `1 + τ/2` of it in every state by
     /// one factorization a state ([`EwFactor::shift_prior`]; to the target
     /// itself where a state's scale left the normal range and it started
-    /// again at its prior). The axis form moves the coordinates that are
-    /// due alone, each by its rotations.
+    /// again at its prior).
     ///
     /// Where `transient` (a row of weight 0) the moves serve its read
     /// alone: the states and `f` as they stood before them are handed back
@@ -1666,14 +1665,12 @@ impl Hmm {
     #[inline(never)]
     fn age_stabilized(
         &mut self,
-        x: &[f64],
         lam: f64,
         work: &mut RowWork,
         transient: bool,
     ) -> Option<(Vec<EwFactor>, Vec<f64>)> {
         // `update(x, lam, 0)`'s numbers, to the bit, in `O(1)`: the weight
         // ages and `a = λW/λW = 1` moves nothing else.
-        let _ = x;
         for s in self.states.iter_mut() {
             s.decay(lam);
         }
@@ -1687,8 +1684,8 @@ impl Hmm {
         let st = self.stabilized.as_deref_mut()?;
         let p0 = st.prior_rows;
         // A state that starts again at its prior holds all of it, so every
-        // coordinate is topped up in the others (rare: a gap of a thousand
-        // half-lives).
+        // coordinate is moved to its target in the others (rare: a gap of a
+        // thousand half-lives).
         let all = self.factor_states.iter().any(|f| f.ages_out(lam, p0));
         let restarts: Vec<bool> = self
             .factor_states
@@ -1696,36 +1693,20 @@ impl Hmm {
             .map(|f| f.age_stabilized(lam, p0, st.psi()))
             .filter(|_| all)
             .collect();
-        let all = st.age(lam, all);
-        let saved = (transient && !all && !st.due().is_empty())
-            .then(|| (self.factor_states.clone(), st.held.clone()));
-        if !st.axis {
-            // Every coordinate at once, by one factorization a state,
-            // whenever any is due.
-            if all || !st.due().is_empty() {
-                st.settle_all(all);
-                for (s, f) in self.factor_states.iter_mut().enumerate() {
-                    let restarted = restarts.get(s).copied().unwrap_or(false);
-                    if !restarted
-                        && !f.shift_prior(st.moves(), p0, &mut work.delta, &mut self.factors.work)
-                    {
-                        f.restart_at_prior(&st.held, 1.0 / (f.n_eff() + p0));
-                        self.solve_failures += 1;
-                    }
-                }
-            }
-            return saved;
-        }
-        for i in 0..st.due().len() {
-            let j = st.due()[i];
-            let q = st.settle(j, all);
-            if q != 0.0 {
-                for (s, f) in self.factor_states.iter_mut().enumerate() {
-                    let restarted = restarts.get(s).copied().unwrap_or(false);
-                    if !restarted && !f.move_prior(j, q, p0, &mut work.delta) {
-                        f.restart_at_prior(&st.held, 1.0 / (f.n_eff() + p0));
-                        self.solve_failures += 1;
-                    }
+        let (all, due) = st.age(lam, all);
+        let saved =
+            (transient && !all && due).then(|| (self.factor_states.clone(), st.held.clone()));
+        // Every coordinate at once, by one factorization a state, whenever
+        // any is due.
+        if due {
+            st.settle_all(all);
+            for (s, f) in self.factor_states.iter_mut().enumerate() {
+                let restarted = restarts.get(s).copied().unwrap_or(false);
+                if !restarted
+                    && !f.shift_prior(st.moves(), p0, &mut work.delta, &mut self.factors.work)
+                {
+                    f.restart_at_prior(&st.held, 1.0 / (f.n_eff() + p0));
+                    self.solve_failures += 1;
                 }
             }
         }
@@ -1819,9 +1800,8 @@ impl Hmm {
 
     /// A learned row under stabilized forgetting, its states aged already
     /// ([`Self::age_stabilized`]): each state learns it at `λ = 1` and
-    /// weight `w·pₗ`; `ŝ` takes the row's squared deviations from the means
-    /// before it; in the factor form's axis form the cursor's coordinate is
-    /// topped up.
+    /// weight `w·pₗ`, and `ŝ` takes the row's squared deviations from the
+    /// means before it.
     #[inline(never)]
     fn learn_stabilized(&mut self, x: &[f64], weight: f64, d_clock: f64, work: &mut RowWork) {
         let Some(mut st) = self.stabilized.take() else {
@@ -1831,19 +1811,13 @@ impl Hmm {
         let mut e = std::mem::take(&mut st.e);
         e.clear();
         e.resize(x.len(), 0.0);
-        #[allow(unused_mut)]
-        let mut scored: &[f64] = post;
-        #[cfg(feature = "study-c4")]
-        if st.frozen {
-            scored = &[];
-        }
         fn add(e: &mut [f64], x: &[f64], p: f64, dev: impl Fn(usize, f64) -> f64) {
             for (i, (ei, &xi)) in e.iter_mut().zip(x).enumerate() {
                 let dv = dev(i, xi);
                 *ei += p * dv * dv;
             }
         }
-        for (s, &p) in scored.iter().enumerate() {
+        for (s, &p) in post.iter().enumerate() {
             match (self.states.get(s), self.factor_states.get(s)) {
                 (Some(c), _) => add(&mut e, x, p, |i, xi| c.deviation(i, xi)),
                 (None, Some(f)) => add(&mut e, x, p, |i, xi| f.deviation(i, xi)),
@@ -1853,59 +1827,20 @@ impl Hmm {
                 }
             }
         }
-        // A study's mean prior (`set_mean_prior`) where its feature is on.
-        let k0 = st.mean_rows;
         for (s, cov) in self.states.iter_mut().enumerate() {
-            #[cfg(feature = "study-c4")]
-            if k0 > 0.0 {
-                cov.update_anchored(x, weight * post[s], k0);
-                continue;
-            }
             cov.update(x, 1.0, weight * post[s]);
         }
         for (s, cov) in self.diag_states.iter_mut().enumerate() {
-            #[cfg(feature = "study-c4")]
-            if k0 > 0.0 {
-                cov.update_anchored(x, weight * post[s], k0);
-                continue;
-            }
             cov.update(x, 1.0, weight * post[s]);
         }
         let p0 = st.prior_rows;
         for (s, f) in self.factor_states.iter_mut().enumerate() {
-            if !f.update_stabilized(x, weight * post[s], p0, k0, &st.held, &mut work.delta) {
+            if !f.update_stabilized(x, weight * post[s], p0, &st.held, &mut work.delta) {
                 self.solve_failures += 1;
             }
         }
-        #[allow(unused_mut)]
-        let mut seen = weight;
-        #[cfg(feature = "study-c4")]
-        if st.frozen {
-            seen = 0.0;
-        }
-        st.observe(d_clock, seen, &e);
+        st.observe(d_clock, weight, &e);
         st.e = e;
-        if self.factored() && st.axis {
-            // Up only: a prior above its target is taken down before a read
-            // once it is `τ` over, a downdate costing three rotations' work.
-            let j = st.next();
-            #[cfg(feature = "study-c4")]
-            let q = if st.cursor_mean {
-                st.top_up_mean(j, self.cfg.decay.factor(d_clock))
-            } else {
-                st.top_up_short(j)
-            };
-            #[cfg(not(feature = "study-c4"))]
-            let q = st.top_up_short(j);
-            if q > 0.0 {
-                for f in self.factor_states.iter_mut() {
-                    if !f.move_prior(j, q, p0, &mut work.delta) {
-                        f.restart_at_prior(&st.held, 1.0 / (f.n_eff() + p0));
-                        self.solve_failures += 1;
-                    }
-                }
-            }
-        }
         self.stabilized = Some(st);
         self.factors.clear();
     }
@@ -1915,92 +1850,12 @@ impl Hmm {
     fn predict_stabilized(&self, x: &[f64], exog: Option<f64>, d_clock: f64) -> crate::Step {
         let mut c = self.clone();
         let lam = self.cfg.decay.factor(d_clock);
-        c.age_stabilized(x, lam, &mut RowWork::default(), false);
+        c.age_stabilized(lam, &mut RowWork::default(), false);
         c.ensure_factors_stabilized();
         crate::Step {
             pred: c.read(x, exog, self.counts_lam(d_clock)),
             n_eff: self.n_eff,
             extra: None,
-        }
-    }
-}
-
-/// Study C4's prototype ([`crate::study_c4`]): set before the first row.
-#[cfg(feature = "study-c4")]
-impl Hmm {
-    pub fn set_study(&mut self, v: crate::study_c4::Variant) {
-        self.study = crate::study_c4::Study::new(v, self.cfg.k, self.cfg.n_features);
-        self.factors.clear();
-    }
-
-    pub fn study(&self) -> &crate::study_c4::Study {
-        &self.study
-    }
-
-    /// The doubles the model's state holds for its states' covariances.
-    pub fn study_state_len(&self) -> usize {
-        let d = self.cfg.n_features;
-        let per = if !self.factor_states.is_empty() {
-            d * (d + 1) / 2 + 2 * d + 3
-        } else if !self.diag_states.is_empty() {
-            3 * d + 4
-        } else {
-            d * (d + 1) / 2 + 2 * d + 5
-        };
-        self.cfg.k * per + self.study.state_len()
-    }
-
-    fn study_age(&mut self, lam: f64) {
-        self.study.age(lam);
-        self.study.observe(lam, 0.0, &[]);
-        if let Some(add) = self.study.lift(lam) {
-            self.states.iter_mut().for_each(|c| c.study_lift(add));
-            self.diag_states.iter_mut().for_each(|c| c.study_lift(add));
-        }
-    }
-
-    /// `e_i = Σ_s p_s·(x_i − μ_si)²`, from the means before the row.
-    fn study_deviations(&mut self, x: &[f64], post: &[f64]) -> Vec<f64> {
-        let mut e = std::mem::take(&mut self.study.e);
-        e.clear();
-        if !self.study.set() {
-            return e;
-        }
-        e.resize(x.len(), 0.0);
-        for (s, &p) in post.iter().enumerate() {
-            for (i, (ei, &xi)) in e.iter_mut().zip(x).enumerate() {
-                let dv = match (self.states.get(s), self.factor_states.get(s)) {
-                    (Some(c), _) => c.deviation(i, xi),
-                    (None, Some(f)) => f.deviation(i, xi),
-                    (None, None) => self.diag_states[s].deviation(i, xi),
-                };
-                *ei += p * dv * dv;
-            }
-        }
-        e
-    }
-
-    /// `ŝ` from the seeded states' variances, pooled by their weights.
-    fn study_seed(&mut self) {
-        let d = self.cfg.n_features;
-        let mut pooled = vec![0.0; d];
-        let mut total = 0.0;
-        for s in 0..self.cfg.k {
-            let (w, v): (f64, Vec<f64>) = match self.states.get(s) {
-                Some(c) => (c.n_eff(), (0..d).map(|i| c.var(i)).collect()),
-                None => {
-                    let c = &self.diag_states[s];
-                    (c.n_eff(), (0..d).map(|i| c.var(i)).collect())
-                }
-            };
-            total += w;
-            for (p, vi) in pooled.iter_mut().zip(v) {
-                *p += w * vi;
-            }
-        }
-        if total > 0.0 {
-            pooled.iter_mut().for_each(|p| *p /= total);
-            self.study.seed_scale(&pooled, total);
         }
     }
 }
@@ -2125,12 +1980,47 @@ impl crate::OnlineModel for Hmm {
                 // No window reads a run here (review 2026-09-26, C3 and C4).
                 m.states.iter_mut().for_each(EwCov::set_runs_off);
                 m.diag_states.iter_mut().for_each(EwCovDiag::set_runs_off);
+                // Stabilized forgetting, under `full` and `diag` in a model
+                // that learns. A state of 70 or later holds its `ŝ`, `V` and
+                // `f`, and derives the rest from its configuration; one of
+                // 69 or earlier holds none, and loads as this build would
+                // continue from its moments: `ŝ` the states' variances
+                // pooled by weight, `V` their total weight, and a factor
+                // form taken up again from its co-moments (rule 5's
+                // twenty-second exception).
+                let wants = m.cfg.learn
+                    && matches!(m.cfg.covariance, Covariance::Full | Covariance::Diagonal);
+                let p0 = m.cfg.prior_rows.unwrap_or(d as f64);
+                let (decay, fallback) = (m.cfg.decay, m.cfg.precision_prior);
+                let factored = m.factored();
+                let fits = match (wants, m.stabilized.as_deref_mut()) {
+                    (true, Some(st)) => {
+                        s.schema_version >= 70
+                            && st.rebuild(p0, d, decay, fallback)
+                            && st.held.is_empty() != factored
+                    }
+                    (true, None) => {
+                        if s.schema_version >= 70 {
+                            false
+                        } else {
+                            m.stabilize_loaded(p0);
+                            true
+                        }
+                    }
+                    (false, st) => st.is_none(),
+                };
+                if !fits {
+                    return Err(crate::model::damaged(
+                        "hmm",
+                        "its saved prior does not fit its configuration",
+                    ));
+                }
                 // A `full` state of schema 68 or earlier at `FACTOR_FROM`
                 // features or more holds co-moments: it loads as their
-                // factor, the one its next row read, and goes on in the
-                // factor form (rule 5's twentieth exception). A state of 69
-                // still in co-moments there is one whose take-up failed,
-                // which its next row tries again.
+                // factor and goes on in the factor form (rule 5's twentieth
+                // exception), under its prior (the twenty-second). A state
+                // of 69 or later still in co-moments there is one whose
+                // take-up failed, which its next row tries again.
                 if s.schema_version < 69 && m.states.iter().all(|c| !c.has_pending()) {
                     m.take_up_factors();
                 }
@@ -2220,6 +2110,8 @@ mod tests {
             let ModelState::Hmm(inner) = &mut s.model else {
                 unreachable!()
             };
+            // A state before schema 70 keeps no prior.
+            inner.stabilized = None;
             edit(inner);
             Hmm::restore(&s)
         };
@@ -2260,6 +2152,10 @@ mod tests {
         let full = Hmm::new(cfg(3, 2)).unwrap();
         let mut s = full.state();
         s.schema_version = 65;
+        let ModelState::Hmm(inner) = &mut s.model else {
+            unreachable!()
+        };
+        inner.stabilized = None;
         let back = Hmm::restore(&s).unwrap();
         assert!(back.diag_states.is_empty() && back.states.len() == 2);
     }
@@ -2311,7 +2207,12 @@ mod tests {
             crate::OnlineModel::step(&mut m, &vec![at; d], &[], 1.0, 1.0);
         }
         assert!(m.factored() && m.solve_failures == 0 && m.n_eff == 20.0);
-        let held = m.factor_states.clone();
+        // The row's decay and the prior's move before its read, which a
+        // row that fails to score keeps, as the next read would make them;
+        // nothing it learns.
+        let mut aged = m.clone();
+        aged.age_stabilized(1.0, &mut RowWork::default(), false);
+        let held = aged.factor_states.clone();
         let out = crate::OnlineModel::step(&mut m, &vec![1e90; d], &[], 1.0, 1.0);
         assert!(out.pred.iter().all(|v| v.is_nan()));
         assert_eq!(m.solve_failures, 1, "the row did not fail to score");
@@ -2373,6 +2274,7 @@ mod tests {
             seed_rule: SeedRule::First,
             seed: 7,
             tvtp: None,
+            prior_rows: None,
         }
     }
 
@@ -2959,7 +2861,8 @@ mod tests {
         };
         let tau = c.transition_prior;
         let mut m = Hmm::new(c.clone()).unwrap();
-        let rows = stream(200, 29, 12);
+        // Runs of 6 rows, so every count holds several switches' worth.
+        let rows = stream(200, 29, 6);
         for (i, (x, _)) in rows.iter().enumerate() {
             m.step(x, &[], if i == 0 { 0.0 } else { 1.0 }, 1.0);
         }
@@ -4051,7 +3954,8 @@ mod tests {
         let shown = format!("{kept:?}");
         assert!(shown.contains("factors: Factors(") && !shown.contains("FactorWork"));
         // The factor form (task 479) builds no factor: its kept working
-        // space is the row's, and a fresh one reads the same bits.
+        // space is the row's and the one matrix the prior's move factorizes
+        // in, and a fresh one reads the same bits.
         let d = 13;
         let mut kept = Hmm::new(tests_factor::wide(d, Decay::Halflife(30.0))).unwrap();
         let mut fresh = kept.clone();
@@ -4070,7 +3974,11 @@ mod tests {
             );
         }
         assert!(kept.factored() && kept.factors.held.is_empty());
-        assert_eq!(kept.factors.work.kept(), 0, "no factor kept to write over");
+        assert_eq!(
+            kept.factors.work.kept(),
+            1,
+            "the prior's move's matrix alone"
+        );
         assert_eq!(kept, fresh);
     }
 
@@ -4237,8 +4145,13 @@ mod tests {
                     let p = m.filtered().to_vec();
                     let x = rows[5].0.clone();
                     // The densities about the largest, which cancels in `ξ`'s
-                    // normalisation: a far state's own underflows to 0.
-                    let logf = m.log_densities(&x).unwrap();
+                    // normalisation: a far state's own underflows to 0. Read
+                    // after the row's decay, as the row reads them: under the
+                    // prior a state's matrix moves with its weight.
+                    let mut aged = m.clone();
+                    aged.age_stabilized(lam, &mut RowWork::default(), false);
+                    aged.ensure_factors_stabilized();
+                    let logf = aged.log_densities(&x).unwrap();
                     let top = logf.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
                     let f: Vec<f64> = logf.iter().map(|v| (v - top).exp()).collect();
                     let n_before = m.a.clone();

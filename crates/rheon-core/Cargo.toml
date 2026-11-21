@@ -16,16 +16,6 @@ description = "Streaming / online regression models. Pure Rust, no Polars depend
 # Polars dependency, no `unsafe`, and is exhaustively tested.
 publish = false
 
-[features]
-# Study C4 (review fable2): a prototype of stabilized forgetting and a relative
-# floor for `hmm` and `ew_class` covariances. Off by default and in every
-# shipped build; the study's example needs it.
-study-c4 = []
-
-[[example]]
-name = "study_c4"
-required-features = ["study-c4"]
-
 [lints.rust]
 unsafe_code = "forbid"
 

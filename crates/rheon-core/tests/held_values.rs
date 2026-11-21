@@ -1338,8 +1338,8 @@ fn ew_class_classifies_the_same_at_every_level() {
 /// state's spread in the stopped feature decays (task 110). A Gaussian
 /// emission shifted with its data is the same density. At 3 features the
 /// states keep co-moments; at 13, each state's Cholesky factor
-/// (`Hmm::FACTOR_FROM`, task 479), whose spread is read from `σ·L Lᵀ`,
-/// ridge included, which decays with the data's.
+/// (`Hmm::FACTOR_FROM`, task 479), whose data's part is read from `σ·L Lᵀ`
+/// less the stabilized prior it holds (schema 70).
 #[test]
 fn hmm_filters_the_same_at_every_level() {
     for width in [3, Hmm::FACTOR_FROM] {
@@ -1365,14 +1365,23 @@ fn hmm_filters_the_same_at_every_level_at(width: usize) {
             seed_rule: SeedRule::First,
             seed: 3,
             tvtp: None,
+            prior_rows: None,
         })
         .unwrap()
     };
     // The stopped feature's spread in each state: its variance, or under
-    // the factor form its entry of `M`, the ridge's share included.
+    // the factor form, whose matrix `Σ = (W·M + F)/(W + P₀)` holds the
+    // stabilized prior `F = diag(f)` beside the data, the data's part of
+    // its entry, `W·M = (W + P₀)·Σ − f`. The prior's share is read away
+    // because it does not decay with the data (its scale is tracked at ten
+    // half-lives); a stall would leave a floor in `M`.
     let spread = |m: &Hmm, s: usize| match (m.state_cov(s), m.state_factor(s)) {
         (Some(c), _) => c.var(2),
-        (None, Some(f)) => f.matrix()[2 * width + 2],
+        (None, Some(f)) => {
+            let st = m.stabilized().expect("a prior");
+            let t = f.n_eff() + st.prior_rows();
+            t * f.matrix()[2 * width + 2] - st.factored_prior()[2]
+        }
         (None, None) => unreachable!("a full state"),
     };
     // Past the three features of `stream`, features that move on every row
@@ -1399,21 +1408,27 @@ fn hmm_filters_the_same_at_every_level_at(width: usize) {
     // that share of the rate: 2.7e-22 of its value at the stop, measured at
     // 0.5. What a stall would leave is a floor that grows with the level
     // (the gap squared: 5e-8 at 1e12), so each level is held to 0.5's. At
-    // 13 features the rows after the stop all fall to one state, whose
-    // spread decays; the other, given no weight, learns nothing and keeps
-    // its matrix to the bit, as its co-moments would.
+    // 13 features a state given no weight would learn nothing and keep its
+    // matrix to the bit, as its co-moments would.
     let (base, _, base_end) = run(0.5);
+    // The factor form's data part is read as a difference of the prior's
+    // size: 1e-20 of rounding about 0, at any level.
+    let slack = if width >= Hmm::FACTOR_FROM {
+        1e-18
+    } else {
+        0.0
+    };
     for level in LEVELS {
         let (out, at_stop, end) = run(level);
         assert!(
-            (0..2).any(|s| end[s] <= 1e-15 * at_stop[s]),
+            (0..2).any(|s| end[s].abs() <= 1e-15 * at_stop[s]),
             "{width} features, level {level}: no state's spread decays"
         );
         for s in 0..2 {
-            let decays = end[s] <= 1e-15 * at_stop[s];
+            let decays = end[s].abs() <= 1e-15 * at_stop[s];
             let idle = width >= Hmm::FACTOR_FROM && end[s] == at_stop[s];
             assert!(
-                (decays || idle) && end[s] <= 4.0 * base_end[s] + 1e-300,
+                (decays || idle) && end[s].abs() <= 4.0 * base_end[s].abs() + slack * at_stop[s],
                 "{width} features, level {level}, state {s}: variance {:e} of {:e}, against {:e} \
                  at 0.5",
                 end[s],
@@ -1609,6 +1624,7 @@ fn a_row_of_no_weight_moves_nothing_without_a_target() {
             seed_rule: SeedRule::First,
             seed: 3,
             tvtp: None,
+            prior_rows: None,
         })
         .unwrap()
     });

@@ -4172,8 +4172,9 @@ mod tests {
         // freeze, whose loaders read 66: unchanged too. 68 for task 281
         // (3)'s square root of a `kalman`'s covariance, whose loader reads
         // 67: unchanged too. 69 for task 479's factor form of a wide
-        // `full` `hmm` state, whose loader reads 68: unchanged too.
-        assert_eq!((WINDOWS_VERSION, rheon_core::SCHEMA_VERSION), (10, 69));
+        // `full` `hmm` state, whose loader reads 68: unchanged too. 70 for
+        // `hmm`'s stabilized prior, whose loader reads 69: unchanged too.
+        assert_eq!((WINDOWS_VERSION, rheon_core::SCHEMA_VERSION), (10, 70));
         assert_eq!(MIN_WINDOWS_VERSION, 9);
     }
 

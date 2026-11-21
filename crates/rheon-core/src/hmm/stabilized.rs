@@ -1,7 +1,5 @@
-//! Stabilized forgetting for an `hmm` state's covariance (review fable2,
-//! C4; the study `.claude/coord/review-fable2/C4-STUDY.md`). Not yet an
-//! option: [`super::Hmm::with_stabilized`] builds a model under it, for the
-//! study and the tests, until the user decides whether it is the default.
+//! Stabilized forgetting for an `hmm` state's covariance, under
+//! `covariance_type` `"full"` and `"diag"` in a model that learns.
 //!
 //! Exponential forgetting flattens a state's posterior toward nothing, so a
 //! state that wins no rows for a while keeps a matrix whose ridge decays
@@ -23,7 +21,9 @@
 //! sits in read alike. With no data (`W → 0`) `Σ → Ψ`, never 0, so a
 //! returning state reads a broad density; at no decay it is scikit-learn
 //! QDA's `reg_param` shrinkage, `reg_param = P₀/(n + P₀)`, toward `Ψ`. The
-//! means take no prior.
+//! means take no prior. `P₀` is the spec's `prior_rows`, `d` (the number of
+//! features) by default: the degrees of freedom scikit-learn's
+//! `BayesianGaussianMixture` gives its Wishart prior.
 //!
 //! **The prior's scale** `ψ` is the pooled within-state variance, tracked
 //! at ten times the model's half-life from the row's squared deviations
@@ -36,10 +36,11 @@
 //! ψᵢ  = max(ŝᵢ, 2⁻¹⁰⁰·maxⱼ ŝⱼ)        precision_prior where every ŝ is 0
 //! ```
 //!
-//! seeded from the seeded states' variances, pooled by weight. The floor
-//! keeps a feature that never varies from a zero variance (review C2): its
-//! deviations are then 0 and read nothing, and one that moves again reads a
-//! large but finite form, so the row is learned and `ŝ` follows it.
+//! seeded from the seeded states' variances, pooled by weight (`V` their
+//! total weight). The floor keeps a feature that never varies from a zero
+//! variance: its deviations are then 0 and read nothing, and one that moves
+//! again reads a large but finite form, so the row is learned and `ŝ`
+//! follows it.
 //!
 //! **The factor form** (`full` at [`super::Hmm::FACTOR_FROM`] features and
 //! more) keeps `Σ = σ·L Lᵀ` and moves it by rotations, `O(d²)` a row. The
@@ -73,21 +74,15 @@
 //! in would, to rounding (hard rule 9). `f` is the same for every state
 //! (they share `λ` and the moves), so it is kept once. The read is off the
 //! exact one by `diag(P₀ψ − f)`, within `τ` of each coordinate's prior; the
-//! prior's share of `Σ` is `P₀/(W + P₀)`. The state is `ŝ`, `V` and `f`:
-//! `2d + 1` numbers a model.
+//! prior's share of `Σ` is `P₀/(W + P₀)`, so a quadratic form is within a
+//! factor `1/(1 − τ)` of the exact recursion's and `ln det` within
+//! `d·ln(1 − τ)`, a bound reached only by a state with no data.
 //!
-//! **The axis form** ([`super::Hmm::set_stabilized_axis`]), the first one
-//! built and kept for the study that compared them, moves one coordinate at
-//! a time by a rank-one rotation from its column on (`F += qⱼ·eⱼeⱼᵀ`, about
-//! `2(d − j)²` products, `2d³/3` for all `d`; down by LINPACK's `dchdd`):
-//! after each learned row the cursor's coordinate where it is short, and
-//! before each read every coordinate more than `τ` away. Its coordinates
-//! fall due one by one, about `d·ln 2/(1.5τ·h)` of them a row beside the
-//! cursor's. Measured 2026-11-20 (arm64, two states, ns a row against
-//! today's ridge): at a half-life of 50 rows it cost 1.3x, 2.0x and 2.6x at
-//! 13, 20 and 32 features, where moving all at once costs what
-//! `.claude/coord/review-fable2/C4-BD-BETTER.md` tabulates, and reads as
-//! close to the exact recursion at the same `τ`.
+//! The state is `ŝ`, `V` and, in the factor form, `f`: `2d + 1` numbers a
+//! model there, `d + 1` elsewhere. `ψ`, the slow decay and `P₀` are derived
+//! from `ŝ` and the configuration when a state is loaded.
+
+use serde::{Deserialize, Serialize};
 
 use crate::Decay;
 
@@ -105,8 +100,11 @@ thread_local! {
     pub(crate) static EAGER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// The model's part of stabilized forgetting; see the module docs.
-#[derive(Debug, Clone, PartialEq)]
+/// The model's part of stabilized forgetting; see the module docs. Written
+/// as `ŝ`, `V` and `f` alone ([`Saved`]); the rest is derived on load
+/// ([`Self::rebuild`]).
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(into = "Saved", from = "Saved")]
 pub struct Stabilized {
     /// `P₀`, the prior's weight in rows.
     pub(crate) prior_rows: f64,
@@ -118,90 +116,143 @@ pub struct Stabilized {
     psi: Vec<f64>,
     /// The factor form's `f`, in the units of `W·M + F`; empty elsewhere.
     pub(crate) held: Vec<f64>,
-    /// The next coordinate a learned row tops up.
-    cursor: usize,
-    /// The decay at ten half-lives.
+    /// The decay at ten half-lives (derived).
     slow: Decay,
-    /// `(d_clock, λ_slow)` of the last row (derived).
-    slow_at: (f64, f64),
-    /// The ridge where every `ŝ` is 0.
+    /// `(d_clock, λ_slow)` of the last row, `None` before one (derived).
+    slow_at: Option<(f64, f64)>,
+    /// The ridge where every `ŝ` is 0 (derived: `precision_prior`).
     fallback: f64,
-    /// Working space: the row's deviations, and the coordinates due.
+    /// Working space: the row's deviations, and every coordinate's move.
     pub(crate) e: Vec<f64>,
-    due: Vec<usize>,
     add: Vec<f64>,
-    /// Read through co-moments at every width (the exact recursion).
-    pub(crate) comoments: bool,
-    /// A study's mean prior: rows of weight at the state's current mean
-    /// that each learned row's mean step also divides by; 0 is none.
-    pub(crate) mean_rows: f64,
-    /// [`TAU`], or a study's own.
-    pub(crate) tau: f64,
-    /// The factor form tops its prior up a coordinate at a time, by
-    /// rotations, with a cursor (the first form built; kept for the
-    /// study's comparison). Otherwise every coordinate at once, by a
-    /// factorization, whenever one is due.
-    pub(crate) axis: bool,
-    /// Working space: every coordinate's move ([`Self::settle_all`]).
     moves: Vec<f64>,
-    /// A study's band for the bulk form: topped up to `1 + τ` of the
-    /// target and taken down from `1 + 3τ/2`, where the form as built tops
-    /// up to `1 + τ/2` and takes down from `1 + τ`.
-    #[cfg(feature = "study-c4")]
-    pub(crate) wide: bool,
-    /// A study's cursor for the axis form: each learned row's coordinate
-    /// topped up to `d(1 − λ)/(1 − λᵈ)` of its target, so that over the
-    /// cursor's cycle of `d` rows it holds its target on average.
-    #[cfg(feature = "study-c4")]
-    pub(crate) cursor_mean: bool,
-    /// A study's fixed prior: `ŝ` stays as the seeding left it.
-    #[cfg(feature = "study-c4")]
-    pub(crate) frozen: bool,
+    /// A test's exact recursion: read through co-moments at every width.
+    #[cfg(test)]
+    pub(crate) comoments: bool,
+}
+
+/// How [`Stabilized`] is written: `ŝ`, `V` and `f`.
+#[derive(Serialize, Deserialize)]
+struct Saved {
+    scale: Vec<f64>,
+    scale_weight: f64,
+    factored_prior: Vec<f64>,
+}
+
+impl From<Stabilized> for Saved {
+    fn from(st: Stabilized) -> Self {
+        Self {
+            scale: st.scale,
+            scale_weight: st.scale_w,
+            factored_prior: st.held,
+        }
+    }
+}
+
+/// Read with nothing derived yet: [`Stabilized::rebuild`] derives it from
+/// the configuration, which the owner's `restore` holds.
+impl From<Saved> for Stabilized {
+    fn from(s: Saved) -> Self {
+        Self {
+            prior_rows: f64::NAN,
+            scale: s.scale,
+            scale_w: s.scale_weight,
+            psi: Vec::new(),
+            held: s.factored_prior,
+            slow: Decay::Lam(1.0),
+            slow_at: None,
+            fallback: f64::NAN,
+            e: Vec::new(),
+            add: Vec::new(),
+            moves: Vec::new(),
+            #[cfg(test)]
+            comoments: false,
+        }
+    }
+}
+
+/// What a state holds: `P₀`, `ŝ`, `V` and `f`. Everything else is derived
+/// from them and the configuration, or is working space.
+impl PartialEq for Stabilized {
+    fn eq(&self, other: &Self) -> bool {
+        self.prior_rows.to_bits() == other.prior_rows.to_bits()
+            && self.scale == other.scale
+            && self.scale_w.to_bits() == other.scale_w.to_bits()
+            && self.held == other.held
+    }
+}
+
+/// As [`PartialEq`] reads it: no working space and nothing derived.
+impl std::fmt::Debug for Stabilized {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Stabilized")
+            .field("prior_rows", &self.prior_rows)
+            .field("scale", &self.scale)
+            .field("scale_w", &self.scale_w)
+            .field("held", &self.held)
+            .finish()
+    }
+}
+
+/// The slow decay, at ten times the model's half-life.
+fn slow_of(decay: Decay) -> Decay {
+    match decay {
+        Decay::Halflife(h) => Decay::Halflife(10.0 * h),
+        Decay::Lam(l) => Decay::Lam(l.powf(0.1)),
+    }
 }
 
 impl Stabilized {
     pub(crate) fn new(prior_rows: f64, d: usize, decay: Decay, fallback: f64) -> Self {
-        let slow = match decay {
-            Decay::Halflife(h) => Decay::Halflife(10.0 * h),
-            Decay::Lam(l) => Decay::Lam(l.powf(0.1)),
-        };
         Self {
             prior_rows,
             scale: vec![0.0; d],
             scale_w: 0.0,
             psi: vec![fallback; d],
             held: Vec::new(),
-            cursor: 0,
-            slow,
-            slow_at: (f64::NAN, 1.0),
+            slow: slow_of(decay),
+            slow_at: None,
             fallback,
             e: Vec::with_capacity(d),
-            due: Vec::with_capacity(d),
             add: Vec::with_capacity(d),
-            comoments: false,
-            mean_rows: 0.0,
-            tau: TAU,
-            axis: false,
             moves: Vec::with_capacity(d),
-            #[cfg(feature = "study-c4")]
-            wide: false,
-            #[cfg(feature = "study-c4")]
-            cursor_mean: false,
-            #[cfg(feature = "study-c4")]
-            frozen: false,
+            #[cfg(test)]
+            comoments: false,
         }
+    }
+
+    /// A loaded state's derived parts, from its configuration: `P₀`, the
+    /// slow decay, the fallback and `ψ`. `false` where what was read
+    /// cannot be this model's: `ŝ` not `d` numbers, any of `ŝ`, `V` and `f`
+    /// not finite or below 0, or `f` neither empty nor `d` long.
+    pub(crate) fn rebuild(
+        &mut self,
+        prior_rows: f64,
+        d: usize,
+        decay: Decay,
+        fallback: f64,
+    ) -> bool {
+        let fine = |v: &f64| v.is_finite() && *v >= 0.0;
+        if self.scale.len() != d
+            || !(self.held.is_empty() || self.held.len() == d)
+            || !self.scale.iter().all(fine)
+            || !self.held.iter().all(fine)
+            || !fine(&self.scale_w)
+        {
+            return false;
+        }
+        self.prior_rows = prior_rows;
+        self.slow = slow_of(decay);
+        self.slow_at = None;
+        self.fallback = fallback;
+        self.psi = vec![fallback; d];
+        self.refresh_psi();
+        true
     }
 
     /// `ψ`.
     pub(crate) fn psi(&self) -> &[f64] {
         &self.psi
-    }
-
-    /// `P₀ψⱼ`, the prior a factored state holds at coordinate `j` when it is
-    /// topped up.
-    #[inline]
-    pub(crate) fn target(&self, j: usize) -> f64 {
-        self.prior_rows * self.psi[j]
     }
 
     /// `P₀ψ`.
@@ -225,14 +276,29 @@ impl Stabilized {
         (w / t, move |i| self.prior_rows * self.psi[i] / t)
     }
 
-    /// The due coordinates [`Self::age`] found.
-    pub(crate) fn due(&self) -> &[usize] {
-        &self.due
-    }
-
     /// `ŝ` and `V`.
     pub fn scale(&self) -> (&[f64], f64) {
         (&self.scale, self.scale_w)
+    }
+
+    /// `P₀`.
+    pub fn prior_rows(&self) -> f64 {
+        self.prior_rows
+    }
+
+    /// `f`, the prior the factor form holds as factored, in the units of
+    /// `W·M + F`; empty in the other forms.
+    pub fn factored_prior(&self) -> &[f64] {
+        &self.held
+    }
+
+    /// Whether the states are read through their co-moments at every width:
+    /// a test's exact recursion.
+    pub(crate) fn comoments(&self) -> bool {
+        #[cfg(test)]
+        return self.comoments;
+        #[cfg(not(test))]
+        false
     }
 
     fn refresh_psi(&mut self) {
@@ -261,19 +327,23 @@ impl Stabilized {
         self.refresh_psi();
     }
 
-    /// The factor form's start: every coordinate topped up.
+    /// The factor form's start: every coordinate at its target.
     pub(crate) fn hold_all(&mut self) {
         self.held = self.targets();
-        self.cursor = 0;
     }
 
     /// The row's deviations `e` at weight `w` into `ŝ` (none at `w = 0`,
     /// where `V` decays alone), after a clock step of `d_clock`.
     pub(crate) fn observe(&mut self, d_clock: f64, w: f64, e: &[f64]) {
-        if d_clock.to_bits() != self.slow_at.0.to_bits() {
-            self.slow_at = (d_clock, self.slow.factor(d_clock));
-        }
-        let v = self.slow_at.1 * self.scale_w + w;
+        let lam = match self.slow_at {
+            Some((at, lam)) if at.to_bits() == d_clock.to_bits() => lam,
+            _ => {
+                let lam = self.slow.factor(d_clock);
+                self.slow_at = Some((d_clock, lam));
+                lam
+            }
+        };
+        let v = lam * self.scale_w + w;
         if v > 0.0 && w > 0.0 {
             let b = w / v;
             // `ŝ`'s largest in the pass that moves it, for the floor.
@@ -287,93 +357,28 @@ impl Stabilized {
         self.scale_w = v;
     }
 
-    /// The factored prior's decay, `f ← λf`, and the coordinates then due a
-    /// move before the read: those more than `τ` from their target, or
-    /// every one where `all`, which is handed back ([`Self::settle`]).
-    pub(crate) fn age(&mut self, lam: f64, all: bool) -> bool {
+    /// The factored prior's decay, `f ← λf`, and whether a move is due
+    /// before the read: some coordinate below `1 − τ` or above `1 + τ` of its
+    /// target, or `all` (handed back too).
+    pub(crate) fn age(&mut self, lam: f64, all: bool) -> (bool, bool) {
         #[cfg(test)]
         let all = all || EAGER.with(std::cell::Cell::get);
-        self.due.clear();
-        for (j, h) in self.held.iter_mut().enumerate() {
+        let mut due = false;
+        for (h, p) in self.held.iter_mut().zip(&self.psi) {
             *h *= lam;
-            let t = self.prior_rows * self.psi[j];
-            #[allow(unused_mut)]
-            let mut over = 1.0 + self.tau;
-            #[cfg(feature = "study-c4")]
-            if self.wide {
-                over = 1.0 + 1.5 * self.tau;
-            }
-            if all || *h < (1.0 - self.tau) * t || *h > over * t {
-                self.due.push(j);
-            }
+            let t = self.prior_rows * p;
+            due |= *h < (1.0 - TAU) * t || *h > (1.0 + TAU) * t;
         }
-        all
-    }
-
-    /// The coordinate a learned row tops up, and the cursor moved on.
-    pub(crate) fn next(&mut self) -> usize {
-        let j = self.cursor;
-        self.cursor = (self.cursor + 1) % self.held.len().max(1);
-        j
-    }
-
-    /// [`Self::top_up`] where `fⱼ` is short of its target; 0, and `fⱼ` as
-    /// it is, where it is at or above it.
-    pub(crate) fn top_up_short(&mut self, j: usize) -> f64 {
-        if self.held[j] < self.target(j) {
-            self.top_up(j)
-        } else {
-            0.0
-        }
-    }
-
-    /// A study's cursor ([`Self::cursor_mean`]): coordinate `j` topped up
-    /// to `d(1 − λ)/(1 − λᵈ)` of its target where it holds less.
-    #[cfg(feature = "study-c4")]
-    pub(crate) fn top_up_mean(&mut self, j: usize, lam: f64) -> f64 {
-        let d = self.held.len() as f64;
-        let c = if lam < 1.0 {
-            d * (1.0 - lam) / (1.0 - lam.powf(d))
-        } else {
-            1.0
-        };
-        let goal = self.target(j) * c;
-        let q = goal - self.held[j];
-        if q > 0.0 {
-            self.held[j] = goal;
-            q
-        } else {
-            0.0
-        }
-    }
-
-    /// Coordinate `j` moved, before a read: to its target where `all` or
-    /// where it holds more, else to `1 + τ/2` of it, so it decays through
-    /// its target before it is due again (the band `[1 − τ, 1 + τ/2]` is
-    /// crossed in `1.5τ/(1 − λ)` rows where `[1 − τ, 1]` took `τ/(1 − λ)`).
-    /// What it moved by.
-    pub(crate) fn settle(&mut self, j: usize, all: bool) -> f64 {
-        let t = self.target(j);
-        let h = self.held[j];
-        let goal = if all || h > t {
-            t
-        } else {
-            t * (1.0 + 0.5 * self.tau)
-        };
-        self.held[j] = goal;
-        goal - h
+        (all, due || all)
     }
 
     /// Every coordinate moved at once, before a read: to its target where
-    /// `all`, else to `1 + τ/2` of it ([`Self::settle`]'s goal for a
-    /// coordinate that is short). What each moved by, of either sign.
+    /// `all`, else to `1 + τ/2` of it, so it decays through its target
+    /// before it is due again (the band `[1 − τ, 1 + τ/2]` is crossed in
+    /// `1.5τ/(1 − λ)` rows where `[1 − τ, 1]` took `τ/(1 − λ)`). What each
+    /// moved by, of either sign, is [`Self::moves`].
     pub(crate) fn settle_all(&mut self, all: bool) {
-        #[allow(unused_mut)]
-        let mut lift = if all { 1.0 } else { 1.0 + 0.5 * self.tau };
-        #[cfg(feature = "study-c4")]
-        if self.wide && !all {
-            lift = 1.0 + self.tau;
-        }
+        let lift = if all { 1.0 } else { 1.0 + 0.5 * TAU };
         self.moves.clear();
         for (h, p) in self.held.iter_mut().zip(&self.psi) {
             let goal = self.prior_rows * p * lift;
@@ -385,14 +390,5 @@ impl Stabilized {
     /// What [`Self::settle_all`] moved each coordinate by.
     pub(crate) fn moves(&self) -> &[f64] {
         &self.moves
-    }
-
-    /// What coordinate `j` is short of its target, `P₀ψⱼ − fⱼ` (negative
-    /// where `ψ` has fallen below what it holds), and `fⱼ` set to it.
-    pub(crate) fn top_up(&mut self, j: usize) -> f64 {
-        let t = self.target(j);
-        let q = t - self.held[j];
-        self.held[j] = t;
-        q
     }
 }

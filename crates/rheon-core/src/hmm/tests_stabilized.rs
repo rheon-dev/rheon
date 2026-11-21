@@ -1,9 +1,27 @@
-//! Stabilized forgetting ([`Stabilized`]): review fable2's C2, C3 and C4
-//! reproductions under it, its factor form against the exact recursion,
-//! and the contract a row keeps (predict, zero-weight rows).
+//! Stabilized forgetting ([`Stabilized`]), the default under `full` and
+//! `diag` in a model that learns: review fable2's C2, C3 and C4
+//! reproductions, which a build before it failed, its factor form against
+//! the exact recursion, and the contract a row keeps (predict, zero-weight
+//! rows).
+
+use std::cell::Cell;
 
 use super::*;
 use crate::OnlineModel;
+
+thread_local! {
+    /// Set by a test: [`Hmm::new`] builds no prior, as a build before
+    /// stabilized forgetting did, every state under the decaying ridge.
+    pub(super) static NO_PRIOR: Cell<bool> = const { Cell::new(false) };
+}
+
+/// `f` run as a build before stabilized forgetting ran it ([`NO_PRIOR`]).
+pub(super) fn before_the_prior<T>(f: impl FnOnce() -> T) -> T {
+    NO_PRIOR.with(|c| c.set(true));
+    let out = f();
+    NO_PRIOR.with(|c| c.set(false));
+    out
+}
 
 fn lcg(state: &mut u64) -> f64 {
     *state = state
@@ -30,13 +48,15 @@ fn cfg(d: usize, hl: f64, covariance: Covariance) -> HmmCfg {
         seed_rule: SeedRule::First,
         seed: 7,
         tvtp: None,
+        prior_rows: None,
     }
 }
 
 /// The review's stream: two regimes at `−1` and `1` in runs of 7 rows with
 /// unit-range noise, `edit` changing a row and giving its clock step. Its
-/// NaN rows among the last 500 and the solve failures, for a model under
-/// stabilized forgetting at `P₀ = d` (`stabilized`) or today's ridge.
+/// NaN rows among the last 500 and the solve failures, for the model as
+/// built (`stabilized`, at the default `P₀ = d`) or as a build before it,
+/// under the decaying ridge alone.
 fn run(
     cfg: HmmCfg,
     stabilized: bool,
@@ -45,10 +65,11 @@ fn run(
 ) -> (usize, u64) {
     let d = cfg.n_features;
     let mut m = if stabilized {
-        Hmm::with_stabilized(cfg, d as f64).unwrap()
-    } else {
         Hmm::new(cfg).unwrap()
+    } else {
+        before_the_prior(|| Hmm::new(cfg).unwrap())
     };
+    assert_eq!(m.stabilized.is_some(), stabilized);
     let mut s = 5u64;
     let mut nan_tail = 0;
     for i in 0..n {
@@ -64,25 +85,27 @@ fn run(
 }
 
 /// C2a: under `diag`, a feature that never varies has a variance of 0 in
-/// every state. Today's ridge decays to 0 with it and every row is NaN from
-/// about 1,065 half-lives; the prior's floor keeps the variance positive.
+/// every state. The decaying ridge of a build before the prior went to 0
+/// with it, and every row was NaN from about 1,065 half-lives; the prior's
+/// floor keeps the variance positive. That build still fails here, so the
+/// stream reproduces the fault.
 #[test]
 fn c2a_a_constant_column_reads_under_the_prior() {
     let edit = |_: usize, x: &mut Vec<f64>| {
         x[2] = 0.0;
         1.0
     };
-    let today = run(cfg(3, 2.0, Covariance::Diagonal), false, 3000, edit);
+    let before = run(cfg(3, 2.0, Covariance::Diagonal), false, 3000, edit);
     assert!(
-        today.0 > 0,
-        "the reproduction no longer fails today: {today:?}"
+        before.0 > 0,
+        "the reproduction no longer fails without the prior: {before:?}"
     );
     let (nan, fails) = run(cfg(3, 2.0, Covariance::Diagonal), true, 3000, edit);
     assert_eq!((nan, fails), (0, 0));
 }
 
 /// C2b: a feature varies, sticks for 1,200 half-lives, and moves again.
-/// Today every row after it moves is NaN; under the prior none is.
+/// Without the prior every row after it moves was NaN; under it none is.
 #[test]
 fn c2b_a_feature_that_sticks_and_moves_again_reads_under_the_prior() {
     let edit = |i: usize, x: &mut Vec<f64>| {
@@ -92,29 +115,36 @@ fn c2b_a_feature_that_sticks_and_moves_again_reads_under_the_prior() {
         1.0
     };
     for cov in [Covariance::Full, Covariance::Diagonal] {
-        let today = run(cfg(3, 2.0, cov), false, 4600, edit);
-        assert!(today.0 > 0, "{cov:?}: no longer fails today: {today:?}");
+        let before = run(cfg(3, 2.0, cov), false, 4600, edit);
+        assert!(
+            before.0 > 0,
+            "{cov:?}: no longer fails without the prior: {before:?}"
+        );
         let (nan, fails) = run(cfg(3, 2.0, cov), true, 4600, edit);
         assert_eq!((nan, fails), (0, 0), "{cov:?}");
     }
 }
 
-/// C3a: six rows each 300 half-lives apart. Today the factor form (13
-/// features) keeps pivots near `1e-170` and every later row is NaN; under
-/// the prior each gap's read stands on the prior, at 12 features and 13.
+/// C3a: six rows each 300 half-lives apart. Without the prior the factor
+/// form (13 features) kept pivots near `1e-170` and every later row was
+/// NaN; under it each gap's read stands on the prior, at 12 features and 13.
 #[test]
 fn c3a_a_burst_of_gaps_reads_under_the_prior() {
     let edit = |i: usize, _: &mut Vec<f64>| if (100..106).contains(&i) { 6000.0 } else { 1.0 };
-    let today = run(cfg(13, 20.0, Covariance::Full), false, 1000, edit);
-    assert!(today.0 > 0, "no longer fails today: {today:?}");
+    let before = run(cfg(13, 20.0, Covariance::Full), false, 1000, edit);
+    assert!(
+        before.0 > 0,
+        "no longer fails without the prior: {before:?}"
+    );
     for d in [12, 13] {
         let (nan, fails) = run(cfg(d, 20.0, Covariance::Full), true, 1000, edit);
         assert_eq!((nan, fails), (0, 0), "{d}");
     }
 }
 
-/// C3b: the last feature sticks at `0.25` from row 100 on. Today the factor
-/// form goes NaN at about 2,050 half-lives; under the prior it reads on.
+/// C3b: the last feature sticks at `0.25` from row 100 on. Without the
+/// prior the factor form went NaN at about 2,050 half-lives; under it the
+/// model reads on.
 #[test]
 fn c3b_a_stuck_feature_reads_under_the_prior() {
     let edit = |d: usize| {
@@ -125,8 +155,11 @@ fn c3b_a_stuck_feature_reads_under_the_prior() {
             1.0
         }
     };
-    let today = run(cfg(13, 2.0, Covariance::Full), false, 6000, edit(13));
-    assert!(today.0 > 0, "no longer fails today: {today:?}");
+    let before = run(cfg(13, 2.0, Covariance::Full), false, 6000, edit(13));
+    assert!(
+        before.0 > 0,
+        "no longer fails without the prior: {before:?}"
+    );
     for d in [12, 13] {
         let (nan, fails) = run(cfg(d, 2.0, Covariance::Full), true, 6000, edit(d));
         assert_eq!((nan, fails), (0, 0), "{d}");
@@ -134,14 +167,14 @@ fn c3b_a_stuck_feature_reads_under_the_prior() {
 }
 
 /// C4: regime B (at 6) is absent for 20 half-lives and returns for 400
-/// rows. Today `full` and `diag` filter none of its returning rows into its
-/// own state; under the prior nearly all, at 3 features and at 13.
+/// rows. Without the prior `full` and `diag` filtered none of its returning
+/// rows into its own state; under it nearly all, at 3 features and at 13.
 #[test]
 fn c4_a_returning_regime_is_recognised_under_the_prior() {
     for d in [3, 13] {
         for cov in [Covariance::Full, Covariance::Diagonal] {
             let (hl, absent) = (20.0, 400);
-            let mut m = Hmm::with_stabilized(cfg(d, hl, cov), d as f64).unwrap();
+            let mut m = Hmm::new(cfg(d, hl, cov)).unwrap();
             let mut s = 9u64;
             let (mut b_state, mut in_b, mut b_rows) = (0, 0, 0);
             for i in 0..400 + absent + 400 {
@@ -223,14 +256,11 @@ struct Track {
     score: Vec<f64>,
 }
 
-fn track(d: usize, decay: Decay, n: usize, seed: u64, eager: bool, axis: bool) -> Track {
+fn track(d: usize, decay: Decay, n: usize, seed: u64, eager: bool) -> Track {
     EAGER.with(|c| c.set(eager));
     let p0 = d as f64;
-    let mut m = Hmm::with_stabilized(wide(d, decay), p0).unwrap();
-    if axis {
-        m.set_stabilized_axis();
-    }
-    let mut e = Hmm::with_stabilized_comoments(wide(d, decay), p0).unwrap();
+    let mut m = Hmm::new(wide(d, decay)).unwrap();
+    let mut e = Hmm::new_comoments(wide(d, decay)).unwrap();
     let base = -0.5 * d as f64 * std::f64::consts::TAU.ln();
     let mut quad = QuadWork::default();
     let mut exact: Vec<Recursion> = Vec::new();
@@ -261,9 +291,9 @@ fn track(d: usize, decay: Decay, n: usize, seed: u64, eager: bool, axis: bool) -
         }
         let lam = decay.factor(dt);
         let mut aged = before.clone();
-        aged.age_stabilized(x, lam, &mut RowWork::default(), w == 0.0);
+        aged.age_stabilized(lam, &mut RowWork::default(), w == 0.0);
         let st = aged.stabilized().unwrap();
-        let target: Vec<f64> = (0..d).map(|j| st.target(j)).collect();
+        let target = st.targets();
         let held = st.held.clone();
         if i < n / 3 {
             out.band.push(
@@ -358,21 +388,18 @@ fn continue_shadow(exact: &mut [Recursion], aged: &Hmm, m: &Hmm, w: f64, deltas:
 /// the form as built -- it holds its own recursion as closely, and reads off
 /// stabilized forgetting's by the prior not yet moved to its target: within
 /// `τ` of each coordinate's prior at every read (held here), which is
-/// `P₀/(W + P₀)` of the matrix. Both forms: every coordinate moved at once
-/// by a factorization (the form as built), and a coordinate at a time by
-/// rotations (the axis form). Measured 2026-11-20 (13 and 20 features,
-/// half-lives of 20 and 500 rows, 2,000 rows, arm64), all at once and then a
-/// coordinate at a time: eagerly 145 and 1.9e3 units of rounding, densities
-/// within 1e-12 of either recursion; lazily 131 and 190 units of rounding,
-/// up to 0.33 and 0.39 nats in a near density at a half-life of 20 rows
-/// (0.35 and 0.28 at 500), and 8.9e-3 and 7.1e-3 in a posterior.
+/// `P₀/(W + P₀)` of the matrix. Measured 2026-11-20 (13 and 20 features,
+/// half-lives of 20 and 500 rows, 2,000 rows, arm64): eagerly 145 units of
+/// rounding, densities within 1e-12 of either recursion; lazily 131 units
+/// of rounding, up to 0.33 nats in a near density at a half-life of 20 rows
+/// (0.35 at 500), and 8.9e-3 in a posterior.
 fn hold_the_exact_recursion(widths: &[usize], n: usize) {
     for &d in widths {
         for decay in [Decay::Halflife(20.0), Decay::Halflife(500.0)] {
-            for (eager, axis) in [(true, false), (false, false), (true, true), (false, true)] {
-                let t = track(d, decay, n, 3, eager, axis);
+            for eager in [true, false] {
+                let t = track(d, decay, n, 3, eager);
                 println!(
-                    "{d} {decay:?} eager {eager} axis {axis}: off {:.0}, logf {:.1e}; from \
+                    "{d} {decay:?} eager {eager}: off {:.0}, logf {:.1e}; from \
                      stabilized forgetting: logf {:.1e}, post {:.1e}, score {:.1e}",
                     max(&t.off),
                     max(&t.logf),
@@ -383,12 +410,12 @@ fn hold_the_exact_recursion(widths: &[usize], n: usize) {
                 assert!(max(&t.off) < 4096.0, "{d} {decay:?} {eager}");
                 assert!(max(&t.logf) < 2e-11, "{d} {decay:?} {eager}");
                 // Every read stands on a prior within `τ` of its target in
-                // every coordinate, in either form; topped up before every
-                // read, on the target itself.
+                // every coordinate; topped up before every read, on the
+                // target itself.
                 let band = if eager { 0.0 } else { TAU };
                 assert!(
                     max(&t.band) <= band,
-                    "{d} {decay:?} {eager} {axis}: {:e} of the target off",
+                    "{d} {decay:?} {eager}: {:e} of the target off",
                     max(&t.band)
                 );
                 if eager {
@@ -438,38 +465,21 @@ fn shapes() -> [(usize, Covariance); 4] {
     ]
 }
 
-/// A model under the prior; `axis`: its factor form moving a coordinate at
-/// a time, where the form as built moves all at once.
-fn model(d: usize, cov: Covariance, axis: bool) -> Hmm {
-    let c = HmmCfg {
+/// A model under the prior.
+fn model(d: usize, cov: Covariance) -> Hmm {
+    Hmm::new(HmmCfg {
         covariance: cov,
         ..wide(d, Decay::Halflife(20.0))
-    };
-    let mut m = Hmm::with_stabilized(c, d as f64).unwrap();
-    if axis {
-        m.set_stabilized_axis();
-    }
-    m
-}
-
-/// [`shapes`], and the factor form's shape once more in its axis form.
-fn forms() -> [(usize, Covariance, bool); 5] {
-    let [a, b, c, d] = shapes();
-    [
-        (a.0, a.1, false),
-        (b.0, b.1, false),
-        (c.0, c.1, false),
-        (d.0, d.1, false),
-        (13, Covariance::Full, true),
-    ]
+    })
+    .unwrap()
 }
 
 /// `predict` is the step's read without the step, to the bit, though the
 /// states age before the read: it ages a copy.
 #[test]
 fn predict_is_the_step_without_the_step_under_the_prior() {
-    for (d, cov, axis) in forms() {
-        let mut m = model(d, cov, axis);
+    for (d, cov) in shapes() {
+        let mut m = model(d, cov);
         for (i, (x, dt, w)) in rows(d, 600).into_iter().enumerate() {
             let p = m.predict(&x, dt);
             let kept = m.clone();
@@ -488,9 +498,9 @@ fn predict_is_the_step_without_the_step_under_the_prior() {
 /// read alone.
 #[test]
 fn a_zero_weight_row_is_clock_alone_under_the_prior() {
-    for (d, cov, axis) in forms() {
+    for (d, cov) in shapes() {
         let factored = d >= 13 && cov == Covariance::Full;
-        let (mut with, mut without) = (model(d, cov, axis), model(d, cov, axis));
+        let (mut with, mut without) = (model(d, cov), model(d, cov));
         let mut carried = 0.0;
         let mut worst = 0f64;
         for (i, (x, dt, _)) in rows(d, 900).into_iter().enumerate() {
@@ -516,35 +526,264 @@ fn a_zero_weight_row_is_clock_alone_under_the_prior() {
     }
 }
 
-/// Only `full` and `diag` take the prior, and only a model that learns.
+/// Only `full` and `diag` take the prior, and only a model that learns;
+/// `prior_rows` is refused where nothing takes it, and where it is not a
+/// finite number above 0. Its default is the number of features.
 #[test]
 fn the_prior_is_for_a_learning_full_or_diag_model() {
-    let c = |cov, learn| HmmCfg {
+    let c = |cov, learn, prior_rows| HmmCfg {
         covariance: cov,
         learn,
         means: Some(vec![-3.0, -3.0, 3.0, 3.0]),
         covs: Some(vec![1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0]),
+        prior_rows,
         ..wide(2, Decay::Halflife(20.0))
     };
     for cov in [Covariance::Full, Covariance::Diagonal] {
-        let m = Hmm::with_stabilized(c(cov, true), 2.0).unwrap();
+        let m = Hmm::new(c(cov, true, Some(2.5))).unwrap();
         // Given states: `ŝ` from their variances at once.
         let st = m.stabilized().unwrap();
         assert_eq!(st.scale(), (&[1.0, 1.0][..], 2.0));
+        assert_eq!(st.prior_rows(), 2.5);
+        let m = Hmm::new(c(cov, true, None)).unwrap();
+        assert_eq!(m.stabilized().unwrap().prior_rows(), 2.0);
+        assert!(Hmm::new(c(cov, false, None)).unwrap().stabilized.is_none());
+        let e = Hmm::new(c(cov, false, Some(2.0))).unwrap_err();
         assert!(
-            Hmm::with_stabilized(c(cov, false), 2.0)
-                .unwrap()
-                .stabilized()
-                .is_none()
+            e.contains("prior_rows does not apply with learn off"),
+            "{e}"
         );
     }
     assert!(
-        Hmm::with_stabilized(c(Covariance::Shared, true), 2.0)
+        Hmm::new(c(Covariance::Shared, true, None))
             .unwrap()
-            .stabilized()
+            .stabilized
             .is_none()
     );
+    let e = Hmm::new(c(Covariance::Shared, true, Some(2.0))).unwrap_err();
+    assert!(
+        e.contains("prior_rows does not apply under covariance_type \"tied\""),
+        "{e}"
+    );
     for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
-        assert!(Hmm::with_stabilized(c(Covariance::Full, true), bad).is_err());
+        let e = Hmm::new(c(Covariance::Full, true, Some(bad))).unwrap_err();
+        assert!(
+            e.contains("prior_rows must be finite and above 0"),
+            "{bad}: {e}"
+        );
     }
+}
+
+/// What [`loaded_under_the_prior`] measured: the continuations of the
+/// converted states against the old build's, over the seeded runs.
+#[derive(Default, Debug)]
+struct Loaded {
+    /// The largest `|Δp|` of a filtered or predicted posterior.
+    post: f64,
+    /// The share of rows whose reported state differs.
+    flipped: f64,
+    /// Seeded runs converted, of them in the factor form, and warm-up runs.
+    seeded: usize,
+    factored: usize,
+    warming: usize,
+}
+
+/// A state of schema 69 or earlier under `full` or `diag` that learns
+/// (rule 5's twenty-second exception): it was saved by a build before the
+/// prior, under the decaying ridge, in co-moments (schema 68, or below 13
+/// features, or `diag`) or in the factor form under the ridge (schema 69,
+/// 13 features or more), and keeps no `ŝ`, `V` or `f`. It loads as this
+/// build would continue from its moments:
+///
+/// - `ŝ` the states' variances pooled by weight, `V` their total weight
+///   (a factor form's variances read from `σ·L Lᵀ` less its ridge);
+/// - a factor form taken up again from its co-moments, at `P₀ψ`:
+///   `σ·L Lᵀ = (W·C + P₀Ψ)/(W + P₀)` within rounding, and `f = P₀ψ`;
+/// - saved inside its warm-up, it continues to the bit of this build's run.
+///
+/// It goes on under the prior: neither the old build's continuation to the
+/// bit nor within rounding of it. What is held: its `weight_sum` is the old
+/// build's to the bit, every output is a number wherever the old build's
+/// was, and the state re-saves bytes that load back the same and continue
+/// to the bit. `--nocapture` prints how far the posteriors part.
+fn loaded_under_the_prior(widths: &[(usize, Covariance)], n: usize) -> Loaded {
+    use super::tests_factor::{blobs, wide};
+    let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+    let mut out = Loaded::default();
+    let (mut rows_seen, mut rows_flipped) = (0usize, 0usize);
+    for &(d, covariance) in widths {
+        for decay in [
+            Decay::Halflife(20.0),
+            Decay::Halflife(400.0),
+            Decay::Halflife(f64::INFINITY),
+        ] {
+            let factor_width = covariance == Covariance::Full && d >= Hmm::FACTOR_FROM;
+            let schemas: &[u32] = if factor_width { &[68, 69] } else { &[69] };
+            for &schema in schemas {
+                for at in [60, 600] {
+                    let cfg = HmmCfg {
+                        covariance,
+                        ..wide(d, decay)
+                    };
+                    let what = format!("{d} {covariance:?} {decay:?} schema {schema} at {at}");
+                    let rows = blobs(d, n, 41 + d as u64);
+                    let w_of = |i: usize| if i % 19 == 7 { 0.0 } else { 1.0 };
+                    // The old build: no prior; at 68, no factor form either.
+                    let step_old = |m: &mut Hmm, x: &[f64], dt: f64, w: f64| {
+                        if schema == 68 {
+                            super::tests_factor::old(|| m.step(x, &[], dt, w))
+                        } else {
+                            m.step(x, &[], dt, w)
+                        }
+                    };
+                    let mut was = before_the_prior(|| Hmm::new(cfg.clone()).unwrap());
+                    let mut fresh = Hmm::new(cfg.clone()).unwrap();
+                    for (i, (x, dt)) in rows[..at].iter().enumerate() {
+                        step_old(&mut was, x, *dt, w_of(i));
+                        fresh.step(x, &[], *dt, w_of(i));
+                    }
+                    assert!(was.stabilized.is_none(), "{what}");
+                    let mut state = was.state();
+                    state.schema_version = schema;
+                    let mut back = Hmm::restore(&state).unwrap();
+                    let st = back.stabilized.as_deref().expect("a prior");
+                    assert_eq!(st.prior_rows(), d as f64, "{what}");
+                    if !was.seeded {
+                        // Inside the warm-up: this build's run, to the bit.
+                        out.warming += 1;
+                        assert_eq!(st.scale().1, 0.0, "{what}");
+                        for (i, (x, dt)) in rows[at..].iter().enumerate() {
+                            let w = w_of(at + i);
+                            let (a, b) = (back.step(x, &[], *dt, w), fresh.step(x, &[], *dt, w));
+                            assert_eq!(bits(&a.pred), bits(&b.pred), "{what}, row {i}");
+                        }
+                        assert_eq!(back, fresh, "{what}");
+                        continue;
+                    }
+                    out.seeded += 1;
+                    // The moments the old build kept: each state's weight
+                    // and co-moments `C` (a factor form's `σ·L Lᵀ` less the
+                    // ridge it has reached).
+                    let moments: Vec<(f64, Vec<f64>)> = (0..2)
+                        .map(|s| match (was.state_cov(s), was.state_factor(s)) {
+                            (Some(c), _) => (c.n_eff(), c.comoments().to_full()),
+                            (None, Some(f)) => {
+                                let r = was.cfg.precision_prior * f.precision_scale();
+                                let mut m = f.matrix();
+                                (0..d).for_each(|i| m[i * d + i] -= r);
+                                (f.n_eff(), m)
+                            }
+                            (None, None) => {
+                                let c = &was.diag_states[s];
+                                let mut m = vec![0.0; d * d];
+                                (0..d).for_each(|i| m[i * d + i] = c.var(i));
+                                (c.n_eff(), m)
+                            }
+                        })
+                        .collect();
+                    let total: f64 = moments.iter().map(|(w, _)| w).sum();
+                    let (scale, v) = st.scale();
+                    assert_eq!(v.to_bits(), total.to_bits(), "{what}: V");
+                    for (i, &si) in scale.iter().enumerate() {
+                        let want = moments
+                            .iter()
+                            .map(|(w, c)| w * c[i * d + i].max(0.0))
+                            .sum::<f64>()
+                            / total;
+                        assert!(
+                            (si - want).abs() <= 1e-13 * want.abs(),
+                            "{what}: ŝ[{i}] {si} against {want}"
+                        );
+                    }
+                    assert_eq!(back.factored(), factor_width, "{what}");
+                    if factor_width {
+                        out.factored += 1;
+                        let psi = st.psi().to_vec();
+                        let held = st.held.clone();
+                        assert_eq!(held, st.targets(), "{what}: f at its target");
+                        for (s, (w, c)) in moments.iter().enumerate() {
+                            let f = &back.factor_states[s];
+                            assert_eq!((f.sigma(), f.n_eff()), (1.0, *w), "{what}");
+                            let got = f.matrix();
+                            let p0 = d as f64;
+                            let mut top = 0f64;
+                            let mut apart = 0f64;
+                            for i in 0..d {
+                                for j in 0..d {
+                                    let prior = if i == j { p0 * psi[i] } else { 0.0 };
+                                    let want = (w * c[i * d + j] + prior) / (w + p0);
+                                    apart = apart.max((got[i * d + j] - want).abs());
+                                    top = top.max(want.abs());
+                                }
+                            }
+                            assert!(apart <= 1e-13 * top, "{what}: {apart:e} of {top:e}");
+                        }
+                    }
+                    // A converted state saves bytes that load back the same.
+                    let bytes = rmp_serde::to_vec_named(&back.state()).unwrap();
+                    let again: crate::State = rmp_serde::from_slice(&bytes).unwrap();
+                    let mut twin = Hmm::restore(&again).unwrap();
+                    assert_eq!(twin, back, "{what}");
+                    for (i, (x, dt)) in rows[at..].iter().enumerate() {
+                        let w = w_of(at + i);
+                        let a = back.step(x, &[], *dt, w);
+                        let b = step_old(&mut was, x, *dt, w);
+                        let t = twin.step(x, &[], *dt, w);
+                        assert_eq!(bits(&a.pred), bits(&t.pred), "{what}, row {i}: the twin");
+                        assert_eq!(a.n_eff.to_bits(), b.n_eff.to_bits(), "{what}, row {i}");
+                        for (p, q) in a.pred.iter().zip(&b.pred) {
+                            assert!(!p.is_nan() || q.is_nan(), "{what}, row {i}: {p} for {q}");
+                        }
+                        for (p, q) in a.pred[..4].iter().zip(&b.pred[..4]) {
+                            out.post = out.post.max((p - q).abs());
+                        }
+                        rows_seen += 1;
+                        rows_flipped += usize::from(a.pred[4] != b.pred[4]);
+                    }
+                }
+            }
+        }
+    }
+    out.flipped = rows_flipped as f64 / rows_seen.max(1) as f64;
+    println!("{widths:?}: {out:?}");
+    out
+}
+
+#[test]
+fn a_state_before_schema_70_loads_under_the_prior() {
+    let out = loaded_under_the_prior(
+        &[
+            (4, Covariance::Diagonal),
+            (12, Covariance::Full),
+            (13, Covariance::Full),
+        ],
+        900,
+    );
+    assert!(
+        out.seeded > 0 && out.factored > 0 && out.warming > 0,
+        "{out:?}"
+    );
+    assert!(out.post > 0.0, "nothing moved: the prior never acted");
+}
+
+/// [`a_state_before_schema_70_loads_under_the_prior`] at 20 and 32 features
+/// too, 2,000 rows a run: the grid exception 22's numbers were measured on.
+#[test]
+#[ignore = "extended: states before schema 70 loaded under the prior, over the grid"]
+fn a_state_before_schema_70_loads_under_the_prior_over_the_grid() {
+    let out = loaded_under_the_prior(
+        &[
+            (4, Covariance::Diagonal),
+            (20, Covariance::Diagonal),
+            (12, Covariance::Full),
+            (13, Covariance::Full),
+            (20, Covariance::Full),
+            (32, Covariance::Full),
+        ],
+        2000,
+    );
+    assert!(
+        out.seeded > 0 && out.factored > 0 && out.warming > 0,
+        "{out:?}"
+    );
 }

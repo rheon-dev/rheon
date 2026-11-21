@@ -658,6 +658,7 @@ fn hmm_golden() {
         seed_rule: SeedRule::First,
         seed: 1,
         tvtp: None,
+        prior_rows: None,
     })
     .unwrap();
     check("hmm", &signature(&mut m, 5), GOLDEN_HMM);
@@ -1299,6 +1300,7 @@ fn hmm_tvtp_golden() {
         seed_rule: SeedRule::First,
         seed: 1,
         tvtp: Some((vec![2.0, 0.0, 0.0, 2.0], vec![0.0, 1.5, -1.0, 0.0])),
+        prior_rows: None,
     })
     .unwrap();
     check("hmm_tvtp", &signature(&mut m, 5), GOLDEN_HMM_TVTP);
@@ -1582,10 +1584,16 @@ const GOLDEN_CORRCHANGE: &[f64] = &[0.8103851544234802, 0.764942538158755, 0.662
 // from the module docs gives these to 2.5e-16, and the old ones, under the old
 // reading, to 1.2e-16 (-1.1511065244639265, -2.6218190023816343,
 // -0.875789289803333).
+// Re-pinned 2026-11-20 (schema 70, rule 5's twenty-second exception): the
+// states' covariances forget toward a stabilized prior worth `d` rows, `Σ =
+// (W·M + d·diag(ψ))/(W + d)`, where they kept a decaying ridge; `hmm`'s
+// `tests_stabilized` holds that recursion against one carried in 512 bits,
+// and `tests/test_second_opinion.py` against scikit-learn's QDA at no decay.
+// Before: -1.1509510476558056, -2.6217067703865613, -0.8756632595908331.
 const GOLDEN_HMM: &[f64] = &[
-    -1.1509510476558056,
-    -2.6217067703865613,
-    -0.8756632595908331,
+    -1.1938166867425974,
+    -2.6918303565613972,
+    -0.8942115051164505,
 ];
 const GOLDEN_RCOV: &[f64] = &[15.118271471980519, -2.2219191583655915, 22.721761773534745];
 // Re-pinned 2026-10-05 (docs/PLAN.md task 158): the stream runs `preavg_rows
@@ -1860,10 +1868,12 @@ const GOLDEN_EW_RIDGE_SET_BOTH: &[f64] =
     &[0.23958810892448573, 2.20363868480897, -0.06755913936964053];
 const GOLDEN_EW_RIDGE_SET_ONE: &[f64] =
     &[0.6226036377649254, 1.6401144565737151, -0.12394041898406416];
+// Re-pinned 2026-11-20 as `GOLDEN_HMM` was (schema 70). Before:
+// -1.0643298399245595, -1.8091334719187875, -1.0356264682715979.
 const GOLDEN_HMM_TVTP: &[f64] = &[
-    -1.0643298399245595,
-    -1.8091334719187875,
-    -1.0356264682715979,
+    -1.1218784704483222,
+    -1.9440536711070382,
+    -1.0190379841570159,
 ];
 // Both again for task 211 (`GOLDEN_KALMAN_PLAIN`'s note).
 const GOLDEN_KALMAN_OBS_VAR: &[f64] =

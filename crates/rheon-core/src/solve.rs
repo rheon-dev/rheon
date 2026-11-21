@@ -335,7 +335,7 @@ impl FactorWork {
     /// `t <= j`), the diagonal added, and that factorized in place (`k³/6`
     /// more), in a
     /// kept matrix that then changes places with `f`'s. A diagonal added
-    /// coordinate by coordinate ([`SpdFactor::add_axis_in_place`]) costs
+    /// coordinate by coordinate, a rank-one update along each axis, costs
     /// `2(k − j)²` products each, `2k³/3` in all, in rotations that do not
     /// vectorize. `false`, with `f` unmoved, where the sum has a pivot that
     /// is not a positive finite number (an `add` below what the matrix
@@ -1608,99 +1608,6 @@ impl SpdFactor {
         ok && chk == 0.0
     }
 
-    /// `L L'ᵀ = L Lᵀ + s²·eⱼ eⱼᵀ` in place: [`Self::add_outer_in_place`]
-    /// of the step `s·eⱼ`, to its bits, from column `j` on (the rotations of
-    /// the columns before it are the identity, `cos = 1`, `sin = 0`, so they
-    /// are skipped): about `(k − j)²/2` rotations where a full step takes
-    /// `k²/2`. `v` is working space. `false` where a pivot left the
-    /// double's range.
-    pub(crate) fn add_axis_in_place(&mut self, j: usize, s: f64, v: &mut Vec<f64>) -> bool {
-        let k = self.l.nrows();
-        if j >= k || !s.is_finite() {
-            return false;
-        }
-        v.clear();
-        v.resize(k, 0.0);
-        v[j] = s;
-        // Each new pivot `r = √(d² + p²)` is at least the old one, and each
-        // rotation's factors are at most 1, so a factor stays one: only a
-        // pivot past the double's range is checked for, as it is made,
-        // where `add_outer_in_place` reads every entry again.
-        let mut ok = true;
-        for c in j..k {
-            let Some(col) = self.l.col_mut(c).try_as_col_major_mut() else {
-                return false;
-            };
-            let col = &mut col.as_slice_mut()[c..];
-            let (d, p) = (col[0], v[c]);
-            let big = d.abs().max(p.abs());
-            let (dd, pp) = (d / big, p / big);
-            let r = big * (dd * dd + pp * pp).sqrt();
-            ok &= r.is_finite();
-            let (cos, sin) = (d / r, p / r);
-            col[0] = r;
-            for (li, xi) in col[1..].iter_mut().zip(&mut v[c + 1..]) {
-                let l = *li;
-                *li = cos * l + sin * *xi;
-                *xi = cos * *xi - sin * l;
-            }
-        }
-        self.log_det = OnceLock::new();
-        ok
-    }
-
-    /// `L L'ᵀ = L Lᵀ − s²·eⱼ eⱼᵀ` in place: LINPACK's `dchdd` for the step
-    /// `x = s·eⱼ`. With `p = L⁻¹x` (zero above `j`) and `α = √(1 − |p|²)`,
-    /// rotations `(cᵢ, sᵢ)` for `i` from the last down to `j` fold each
-    /// `pᵢ` into `α`, and each row of `L` from `j` on is turned by them, its
-    /// entries from `j` to the diagonal (Golub and Van Loan's downdate).
-    /// `false`, with `L` unmoved, where `|p| >= 1`: the matrix less the step
-    /// would not be positive definite; `false` too where the rotations left
-    /// no factor. `p` is working space. About `(k − j)²/2` products for the
-    /// solve and `(k − j)²` for the rotations.
-    pub(crate) fn remove_axis_in_place(&mut self, j: usize, s: f64, p: &mut Vec<f64>) -> bool {
-        let k = self.l.nrows();
-        if j >= k || !s.is_finite() {
-            return false;
-        }
-        p.clear();
-        p.resize(2 * k, 0.0);
-        let (p, rot) = p.split_at_mut(k);
-        // `L p = s·eⱼ`, forward from `j`.
-        let mut norm = 0.0;
-        for i in j..k {
-            let mut v = if i == j { s } else { 0.0 };
-            for (t, &pt) in p.iter().enumerate().take(i).skip(j) {
-                v -= self.l[(i, t)] * pt;
-            }
-            p[i] = v / self.l[(i, i)];
-            norm += p[i] * p[i];
-        }
-        if norm.is_nan() || norm >= 1.0 {
-            return false;
-        }
-        // The rotations, `cᵢ` in `rot[i]` and `sᵢ` in `p[i]`.
-        let mut alpha = (1.0 - norm).sqrt();
-        for i in (j..k).rev() {
-            let r = (alpha * alpha + p[i] * p[i]).sqrt();
-            rot[i] = alpha / r;
-            p[i] /= r;
-            alpha = r;
-        }
-        for row in j..k {
-            let mut xx = 0.0;
-            for i in (j..=row).rev() {
-                let (c, sn) = (rot[i], p[i]);
-                let lv = self.l[(row, i)];
-                let t = c * xx + sn * lv;
-                self.l[(row, i)] = c * lv - sn * xx;
-                xx = t;
-            }
-        }
-        self.log_det = OnceLock::new();
-        self.is_a_factor()
-    }
-
     /// The factor of `diag(a)`, `√aᵢ` on the diagonal; `None` unless every
     /// `aᵢ` is positive and finite.
     pub(crate) fn diagonal(a: &[f64]) -> Option<Self> {
@@ -2372,66 +2279,12 @@ mod tests {
     use super::*;
     use crate::oracle::CanonBits;
 
-    /// A step along an axis is [`SpdFactor::add_outer_in_place`]'s of the
-    /// same vector, to the bit, and the downdate takes it back to within
-    /// rounding of the matrix it was added to (faer's LU solve of the
-    /// matrix, `crate::oracle`, as the second opinion on the form); a
-    /// downdate that would leave no positive definite matrix is refused
-    /// and moves nothing.
-    #[test]
-    fn an_axis_step_and_its_downdate() {
-        let mut s = 3u64;
-        let mut next = || {
-            s = s
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
-            ((s >> 11) as f64 / (1u64 << 53) as f64) - 0.5
-        };
-        for k in [1, 4, 13] {
-            let b: Vec<f64> = (0..k * k).map(|_| next()).collect();
-            let mut a = vec![0.0; k * k];
-            for i in 0..k {
-                for j in 0..k {
-                    a[i * k + j] = (0..k).map(|t| b[i * k + t] * b[j * k + t]).sum::<f64>()
-                        + if i == j { 0.5 } else { 0.0 };
-                }
-            }
-            let f0 = SpdFactor::of(&a, k).unwrap().into_state();
-            let mut v = Vec::new();
-            for j in 0..k {
-                let (mut axis, mut outer) = (f0.clone(), f0.clone());
-                assert!(axis.add_axis_in_place(j, 0.75, &mut v));
-                let mut e = vec![0.0; k];
-                e[j] = 0.75;
-                assert!(outer.add_outer_in_place(&mut e));
-                assert_eq!(axis, outer, "{k} {j}");
-                assert!(axis.remove_axis_in_place(j, 0.75, &mut v));
-                let back = axis.lower_rows();
-                let mut llt = vec![0.0; k * k];
-                for r in 0..k {
-                    for c in 0..k {
-                        llt[r * k + c] = (0..k).map(|t| back[r * k + t] * back[c * k + t]).sum();
-                    }
-                }
-                let delta: Vec<f64> = (0..k).map(|_| next()).collect();
-                let want = crate::oracle::quad_form(&a, &delta);
-                let got = crate::oracle::quad_form(&llt, &delta);
-                assert!((got - want).abs() <= 1e-12 * want, "{k} {j}: {got} {want}");
-                // `a_jj` is at least its Schur complement: more than that
-                // cannot come off.
-                let mut too_much = f0.clone();
-                assert!(!too_much.remove_axis_in_place(j, a[j * k + j].sqrt() * 1.01, &mut v));
-                assert_eq!(too_much, f0, "{k} {j}: refused before moving");
-            }
-        }
-    }
-
     /// [`FactorWork::refactor_shifted`] leaves the factor of the matrix
     /// with the diagonal added, of either sign: `L Lᵀ` within a few units
     /// of rounding of it (carried in 512 bits, `crate::oracle::exact`), its
     /// quadratic form and `ln det` faer's LU's of the sum (`crate::oracle`),
-    /// and where every step is up, the factor the axis steps reach, to
-    /// rounding. Below 64 features and above, where the factorization goes
+    /// and where every step is up, the factor that one rank-one update along
+    /// each axis reaches ([`SpdFactor::add_outer_in_place`]), to rounding. Below 64 features and above, where the factorization goes
     /// by blocks. A diagonal that takes more than a coordinate holds is
     /// refused and moves nothing, and so is one of the wrong length.
     #[test]
@@ -2498,9 +2351,10 @@ mod tests {
                 assert_eq!((f.attempts(), f.jitter(), f.moves()), (0, 0.0, 0));
                 if sign > 0.0 {
                     let mut axis = f0.clone();
-                    let mut v = Vec::new();
                     for (j, q) in add.iter().enumerate() {
-                        assert!(axis.add_axis_in_place(j, q.sqrt(), &mut v));
+                        let mut e = vec![0.0; k];
+                        e[j] = q.sqrt();
+                        assert!(axis.add_outer_in_place(&mut e));
                     }
                     let (x, y) = (axis.lower_rows(), f.lower_rows());
                     let apart = x
