@@ -60,6 +60,10 @@ model that only the new build has is listed as an addition and passes.
   count moves: predictions, coefficients and every emitted column are as
   before, and a state saved by an earlier build continues to the bit except
   for it. Moves: `lasso.solve_failures`.
+- `rp.stream.with_windows` checks `chunk_size` as `refresh_time` and
+  `lf.rheon.fit_predict` do, while the plan is built: `True` ran in one-row
+  chunks, `2.5` failed only when the plan ran, and `"a"` raised Python's own
+  comparison error. Each is now a `WrongTypeError` naming `chunk_size`.
 
 ### Tests and documents
 

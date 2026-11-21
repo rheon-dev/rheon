@@ -8,11 +8,13 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+import numpy as np
 import polars as pl
 import pytest
 from polars.io.plugins import register_io_source
 
 from rheon import polars as rp
+from rheon.polars import WrongTypeError
 
 TIER = "essential"
 
@@ -112,6 +114,23 @@ def test_a_chunk_size_below_one_is_refused():
         rp.stream.refresh_time(
             ticks.lazy(), series="s", names=["a", "b"], clock="t", value="v", chunk_size=0
         )
+
+
+@pytest.mark.parametrize("bad", [True, 2.5, "a"])
+def test_a_chunk_size_that_is_not_a_whole_number_is_refused_by_name(bad):
+    """`with_windows` checked only `chunk_size < 1`: `True` ran in one-row
+    chunks, `2.5` failed when the plan ran and `"a"` raised Python's raw
+    comparison error. It is checked as `refresh_time` and `lf.rheon`'s
+    surfaces check it, as the plan is built (review fable2, Y3)."""
+    lf = _frame().lazy()
+    with pytest.raises(
+        WrongTypeError, match="^with_windows: chunk_size must be a whole number of at least 1"
+    ):
+        rp.stream.with_windows(lf, chunk_size=bad, m=rp.ewm_mean("x", half_life=4.0))
+    # A numpy integer is a whole number.
+    out = rp.stream.with_windows(lf, chunk_size=np.int64(2), m=rp.ewm_mean("x", half_life=4.0))
+    want = rp.stream.with_windows(lf, m=rp.ewm_mean("x", half_life=4.0))
+    assert out.collect().equals(want.collect())
 
 
 def test_an_embargo_of_no_length_is_refused_on_a_temporal_clock():
