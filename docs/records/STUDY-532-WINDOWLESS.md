@@ -610,6 +610,7 @@ Runtime of `scripts/study_532b.py`: 75 s (the header of this record says
 is identical to the one above, line for line. Table R1's counts are identical;
 only its seconds column moved (0.3 to 0.4 on four rows). Table L4 (peak
 resident memory and seconds) and Table C1 (ns per row) are measurements of this
-machine and moved by noise: L4 within 8% a cell, the C1 Python states by
--26% to +9% (for example `ewm_mean` 230 ns against 308), the Polars side by up
-to +28% (bucketed b=5, B=12: 87.6 ns against 68.3), no ordering changed.
+machine and moved by noise: L4 within 11% a cell, the C1 Python states by
+-41% to +7% (`max envelope` 126 ns against 214, `ewm_mean` 230 against 308),
+the Polars side by -23% to +28% (bucketed b=5, B=12: 87.6 ns against 68.3),
+and no ordering of features changed.
