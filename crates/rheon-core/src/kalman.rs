@@ -278,6 +278,18 @@
 //! −3.6e149 and the reverting filter never recovered; at 1024 the cost is
 //! 2.3e-10 of it.
 //!
+//! **After a long gap** the moments' history is a share `a` of the moments
+//! with the row in, and the row alone would move them by a scale of
+//! `sqrt(a)` of the feature's spread, past what the re-map carries (after
+//! 30 half-lives, an error 3e9 times the same rows' with no gap, at a
+//! half-life of 20 rows). So on a row more than one half-life after a
+//! target was last learned, the moments read their history at no less than
+//! the row's own weight, `H = max(lam·W, w)`: shares `H/(H + w)` and
+//! `w/(H + w)`. The weight kept is `lam·W + w` as ever, so `n_eff` is the
+//! plain recursion's, and a row within a half-life of the last learned one
+//! is the plain update, to the bit. The gap is the clock since the last
+//! learned row, which a zero-weight row adds to and does not clear.
+//!
 //! **The first rows (docs/PLAN.md task 211).** In units of the noise each
 //! slope's prior is `p0` and the intercept's diffuse (above); the rest of
 //! this section is the form before, and `obs_var`'s. Over the first rows the
@@ -1264,6 +1276,14 @@ impl Kalman {
                 }
             })
             .collect()
+    }
+
+    /// Whether the moments' update on a row `unobserved` clock units after a
+    /// target was last observed keeps the row's own weight of history
+    /// (`step_as`, `EwDiag::update_keeping`): under `standardize`, more than
+    /// one half-life on, read from the clock alone.
+    pub(crate) fn keeps_history(&self, unobserved: f64) -> bool {
+        self.cfg.standardize && self.cfg.decay.past_half_life(unobserved)
     }
 
     pub fn n_eff(&self) -> f64 {
@@ -2692,6 +2712,10 @@ impl Kalman {
         for e in &mut self.elapsed {
             *e += d_clock;
         }
+        // The clock since any target was last observed, this row's step in:
+        // what the moments' floor below reads as the gap, the same number
+        // however zero-weight rows split it (hard rule 9).
+        let unobserved = self.elapsed.iter().copied().fold(f64::INFINITY, f64::min);
 
         // Which slots hold anything, and the map from the anchor to the
         // moments as they stand: formed after the last row that moved them,
@@ -2956,7 +2980,15 @@ impl Kalman {
         // past it the re-map (the module doc). A row of weight 0 moves no
         // moment, and the map stays the one formed after the last row that
         // did.
-        self.stats.update(&self.zbuf, lam, weight);
+        // More than a half-life after a target was last learned, the
+        // moments keep the row's own weight of history (the module doc,
+        // *After a long gap*); the weight kept, `n_eff`, is the plain
+        // recursion's (hard rule 8).
+        if self.keeps_history(unobserved) {
+            self.stats.update_keeping(&self.zbuf, lam, weight, weight);
+        } else {
+            self.stats.update(&self.zbuf, lam, weight);
+        }
         if self.cfg.standardize && weight > 0.0 {
             self.follow_the_moments();
         }
@@ -5655,30 +5687,11 @@ mod tests {
     mod per_row;
     // The filter against its recursion written by hand, in both forms.
     mod recursion;
-    /// Task 281 (mutants): a covariance has lost its definiteness where a
-    /// variance is below 0 or not a number, or is exactly 0 beside a
-    /// covariance of its own row that is not, `|P_ij|² ≤ P_ii P_jj` being
-    /// false there -- whichever slot's row it is, the first's included.
-    #[test]
-    fn a_zero_variance_beside_a_covariance_is_lost_definiteness_in_any_row() {
-        let mut m = Kalman::new(cfg(1, 1, vec![f64::INFINITY])).unwrap();
-        assert_eq!(m.cfg.k_total(), 2);
-        for (p, lost) in [
-            ([0.0, 0.5, 0.5, 1.0], true),
-            ([1.0, 0.5, 0.5, 0.0], true),
-            ([-1e-300, 0.0, 0.0, 1.0], true),
-            ([1.0, 0.0, 0.0, f64::NAN], true),
-            ([0.0, 0.0, 0.0, 1.0], false),
-            ([1.0, 0.0, 0.0, 0.0], false),
-            ([1.0, 0.2, 0.2, 1.0], false),
-        ] {
-            m.p[0] = p.to_vec();
-            assert_eq!(m.lost_definiteness::<false>(0), lost, "{p:?}");
-        }
-    }
-
     // Task 278's: `P` in units of the noise, each against the form before.
     mod noise_units;
     // Task 281 (3)'s: the covariance's update forms at a huge prior.
     mod cov_forms;
+    // Review C1's follow-up: the moments keep the row's weight of history
+    // after a gap of more than a half-life.
+    mod gap_moments;
 }

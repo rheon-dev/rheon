@@ -267,6 +267,22 @@ model that only the new build has is listed as an addition and passes.
   median of 2e-3 to 5e-3 relative, the error the same. `weight_sum`,
   `min_weight` and the state's layout are unchanged; a weighted state saved
   before continues by the new read, not to the bit. Moves: `sgd.*`, `pa.*`.
+- **`kalman` with `standardize` comes back from a long clock gap.** `b`
+  and `P` are held in coordinates the features' moments define. After a
+  gap that decayed the moments' history to a share `a` of the moments with
+  the row in, the row alone moved them by a scale of `sqrt(a)` of the
+  feature's spread, past what the re-map of `b` and `P` carries: on
+  streams of 2 and 8 features at a half-life of 20 rows, the error after a
+  gap of 30 half-lives was 3e9 times that of the same rows with no gap
+  (2e8 to 3e60 over gaps of 30 to 200), and under a drifting truth 8e6
+  times that of a filter started at the gap. Now, on a row more than one
+  half-life after a target was last learned, the moments read their history
+  at no less than the row's own weight. With no drift the rows after a gap
+  of 30 to 1,100 half-lives are those with no gap to three digits, and
+  under drift within 1.1 of a fresh filter. The weight kept is the plain
+  recursion's, so `weight_sum` and `min_weight` do not move, and a row
+  within a half-life of the last learned one is as it was, to the bit.
+  Moves: `kalman.*`.
 - `kalman` with `revert_half_life`: `predict` withholds the prediction
   where the step does, across a clock gap long enough to take the
   covariance to exactly 0 (about 540 reversion half-lives, 1,075 in the

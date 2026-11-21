@@ -245,6 +245,38 @@ impl EwDiag {
         self.w_sum = w_new;
     }
 
+    /// [`Self::update`], the moments read against a history of at least
+    /// `floor`: where the history's decayed weight `lam·W` is below it (and
+    /// there is a history, and the row has a weight), the old statistics
+    /// take the share `floor / (floor + w)` in place of `lam·W / (lam·W +
+    /// w)`. The weight kept is `lam·W + w` either way, so `n_eff` is the
+    /// plain recursion's (hard rule 8); where the floor does not bind this
+    /// is `update`, to the bit. `true` where it bound.
+    pub(crate) fn update_keeping(&mut self, x: &[f64], lam: f64, w: f64, floor: f64) -> bool {
+        let carried = lam * self.w_sum;
+        if !(self.w_sum > 0.0 && w > 0.0 && floor > carried) {
+            self.update(x, lam, w);
+            return false;
+        }
+        debug_assert_eq!(x.len(), self.k);
+        let total = floor + w;
+        let a = floor / total;
+        let b = w / total;
+        for (((ci, mi), lo), &xi) in self
+            .c
+            .iter_mut()
+            .zip(self.m.iter_mut())
+            .zip(self.m_lo.iter_mut())
+            .zip(x)
+        {
+            let d = crate::comp::dev(xi, *mi, *lo);
+            *ci = a * *ci + a * b * d * d;
+            crate::comp::add(mi, lo, b * d);
+        }
+        self.w_sum = carried + w;
+        true
+    }
+
     /// [`Self::update`]'s moments across vector lanes, a lane a slot, with
     /// the weights `a` and `b` it computed for the row: AVX2's four where
     /// this CPU has them (pulp's check, made once), and one at a time where

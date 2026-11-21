@@ -50,6 +50,18 @@ impl Decay {
         }
     }
 
+    /// Whether a clock step of `d_clock` is more than one half-life:
+    /// `factor(d_clock) < 1/2`, read from the clock, with no power taken
+    /// under a half-life. Under `Lam(l)` the half-life in clock units is
+    /// `-1 / log2(l)`, so the step is past it where `d_clock · log2(l) <
+    /// −1`; no decay (`inf`, or `l` of 1) has none.
+    pub fn past_half_life(&self, d_clock: f64) -> bool {
+        match *self {
+            Decay::Halflife(h) => d_clock > h,
+            Decay::Lam(l) => l < 1.0 && d_clock * l.log2() < -1.0,
+        }
+    }
+
     pub fn factor(&self, d_clock: f64) -> f64 {
         match *self {
             Decay::Halflife(h) => {
