@@ -7,7 +7,10 @@ tail, and four mitigations on the same grid (§11), of which variance
 targeting and a 500-row batch start pass it. Part 4: ARMA(1,1) against
 statsmodels over the same seeds, with and without decay (§12). Part 5:
 ETS(A,A,N) against statsmodels' `ETSModel` (§13). Part 6: DCC(1,1) with
-GARCH(1,1) margins against a batch fit written from the definition (§14). Nothing in the package or the Rust crates was changed. The scan this
+GARCH(1,1) margins against a batch fit written from the definition (§14).
+Part 7: the proposed tolerances (§15). The request named the deliverable
+`STUDY-485-ESTIMATORS.md`; it is this record, kept under the name it was
+committed with (`ORACLE-STUDY-485.md`). Nothing in the package or the Rust crates was changed. The scan this
 builds on is `vm-tools/research/485-TIME-SERIES-SCAN.md` on branch
 `vm-tools/oracle-gap-scan` (written from `a5c4dcef`); its section numbers are
 cited as "scan §N".*
@@ -609,3 +612,86 @@ in the median (0.0065) but not on every seed (max 0.023).
 is the full one), ADCC, cDCC, Student-t, the grid form over `(a, b)`, a
 given `Q̄` (the scan's exact form (a)), plain or batch-started margins, and
 the first-stage-corrected SEs.
+
+## 15. Proposed tolerances
+
+No grid was run for this section; every figure comes from the grids of parts
+2 to 6 (§10 to §14), at 10,000 rows unless stated. "SE" is the batch fit's
+standard error as each part defines it; "units" is the parameter's own scale.
+"p90" is the 90th percentile over the fifty seeds.
+
+### 15.1 Results against the criterion
+
+Criterion: every parameter within 2 batch SEs on at least 45 of 50 seeds at
+10,000 rows.
+
+| model and form | criterion | largest gap in SE (by parameter) | largest gap in units | estimand and SEs |
+|---|---|---|---|---|
+| GARCH(1,1), plain | **fails**, 34 of 50 | `ω` 63.4, `α` 13.7, `β` 10.8 | `ω` 0.21, `α` 0.068, `β` 0.086 | the quasi-likelihood's; arch's own robust SEs |
+| GARCH(1,1), 1a: variance targeting | **passes at the boundary**, 45 of 50 | `ω` 3.82, `α` 2.35, `β` 2.71 | `ω` 0.011, `α` 0.014, `β` 0.018 | **estimand changed**: `ω` is a moment estimate tied to the running variance, not a likelihood estimate; compared in arch's unrestricted SEs, which are not the targeted estimator's |
+| GARCH(1,1), 3: 500-row batch start | **passes**, 47 of 50 | `ω` 2.77, `α` 4.05, `β` 3.17 | `ω` 0.0077, `α` 0.020, `β` 0.021 | **start changed**: 500 rows buffered with no output and one batch optimization (arch stood in for it); arch's own robust SEs |
+| ARMA(1,1) | **passes**, 50 of 50 | `φ` 0.34, `θ` 0.56, `σ²` 0.30 | `φ` 0.0036, `θ` 0.0071, `σ²` 0.0040 | conditional least squares against statsmodels' exact likelihood (same limit); statsmodels' own OPG SEs |
+| ARMA(1,1) under decay, against its weighted fit | passes, 50 of 50 at half-lives 500, 5,000 and none | 0.22 (500), 0.30 (5,000), 0.57 (none) | — | **SEs approximated**: unweighted SEs scaled by `sqrt(n/n_eff)` |
+| ARMA(1,1) under decay, against the unweighted fit | fails at half-life 500 (10 of 50); passes at 5,000 and none | 5.54 (500) | — | by design: decay estimates the recent rows' fit |
+| ETS(A,A,N) | **passes**, 50 of 50 | `α` 1.06, `β` 1.74, `σ²` 0.34 | `α` 0.0077, `β` 0.0043, `σ²` 0.0047 | statsmodels' own SEs for `α, β` (`cov_type="approx"`); `σ²`'s SE is the closed form `σ̂² sqrt(2/n)`, not statsmodels' |
+| DCC(1,1), two series | **passes**, 48 of 50 | `a` 2.96, `b` 2.73 | `a` 0.017, `b` 0.044 | **SEs approximated**: a second-stage sandwich by numerical derivatives, leaving out the margins' estimation error; online margins are 1a's, so the margins' estimand is changed too |
+
+### 15.2 Proposed test tolerances for rheon
+
+Two kinds of test, as the scan split them.
+
+**Fixed parameters (class E): exact against a library, per row.** These are
+rounding tolerances, measured in parts 1 to 6:
+
+| model | oracle | proposed tolerance | measured | reason |
+|---|---|---|---|---|
+| GARCH(1,1) variance filter | `GARCH.compute_variance`, backcast given, bounds `[0, ∞)` | 1e-13 relative, every row | 2.2e-16 | the same recursion in the same order; the margin covers a fused multiply-add |
+| ARMA(1,1) one-step predictions | `SARIMAX(...).filter(params).forecasts`, rows past 300 | 1e-9 absolute on a unit innovation | 3.2e-10 | the Kalman filter's own rounding; the zero start's difference has decayed as `θ^t` by row 300 |
+| ETS(A,A,N) one-step predictions | `ETSModel(...).smooth(params).fittedvalues`, known states | 1e-12 relative or 1e-10 absolute, whichever is larger | at most 8.7e-11 absolute over the grid's 100 series, on levels that wander with the trend | the same recursion; the absolute floor covers rounding on a level far from zero |
+| DCC `ρ_t` given `(a, b)`, `Q̄`, `Q₀` | the recursion from the definition, through `lfilter` | 1e-12 relative | passes at 1e-12 | the same arithmetic in another order |
+
+**Estimated parameters (class A): statistical, on a seeded grid.** Each is
+stated in the units the test reads: parameter gaps in the oracle's SEs
+(the test computes the oracle's fit and its SEs on the same rows), and path
+gaps in the quantity's own units. Each grid test is 50 seeds at 10,000 rows
+(an `oracle_grid` test); the count and the per-seed bound are both asserted.
+The per-seed bound is the measured maximum with about 1.2 to 2 times headroom,
+rounded, so that a regression fails and noise does not.
+
+| model and form | proposed assertion | measured | reason |
+|---|---|---|---|
+| GARCH(1,1), plain | none: do not ship it as an estimator | 34 of 50; max 63 SE | the early transient sticks on the `α + β` ridge (§10); no tolerance that passes it would catch a regression |
+| GARCH(1,1), 1a | at least 45 of 50 within 2 SE; every seed within 5 SE on `ω` and 3.5 on `α, β`; median variance-path gap at most 5% on every seed | 45; max 3.82 / 2.35 / 2.71; path max 4.0% | the count is the criterion with no headroom, so any regression fails (see the questions); the per-seed bounds catch a stuck seed, which is the failure the plain form shows |
+| GARCH(1,1), 3 | at least 45 of 50 within 2 SE; every seed within 5 SE; median variance-path gap at most 12% on every seed | 47; max 4.05; path max 9.7% | two seeds of headroom on the count; the path bound is about 1.25 times the worst seed |
+| ARMA(1,1) | every seed within 1 SE on `φ`, `θ` and `σ²`; one-step prediction RMS gap to the batch parameters' predictions at most 0.025 innovation SDs over the second half | max 0.56 SE; RMS max 0.0155 | 1.8 times the worst seed: the estimator is far inside the criterion, so the criterion itself would not catch a regression |
+| ARMA(1,1) under decay | every seed within 1 scaled SE of the weighted fit at half-lives 500 and 5,000 | max 0.22 and 0.30 | the weighted fit is the oracle under decay; its SEs are approximated, so the bound is loose on purpose |
+| ETS(A,A,N) | every seed within 2.5 SE on `α`, `β` (oracle SEs) and `σ²` (closed-form SE); prediction RMS gap at most 0.05 error SDs | max 1.74 SE (`β`); RMS max 0.029 | 1.4 times the worst seed |
+| DCC(1,1), two series | at least 45 of 50 within 2 approximate SE; every seed within 4 SE; per-seed median `|ρ_t − ρ_t(batch)|` at most 0.03 over the second half | 48; max 2.96; `ρ` max 0.0227 | the count keeps three seeds of headroom; the `ρ` bound is in correlation units, 1.3 times the worst seed, and replaces the scan's 0.02, which one seed exceeds |
+
+An essentials-tier version of each (seconds, not minutes) can take three
+seeds of the grid at 10,000 rows with the per-seed bounds alone; the counts
+need the grid.
+
+### 15.3 Caveats
+
+1. **One truth per model**, Gaussian innovations throughout: no heavy tails,
+   no second persistence, no roots near the boundary. Every count above is
+   for that one point; G2 to G4, A2, E1, E3 and D1 at `k = 3` were planned
+   (§4) and not run.
+2. **Two GARCH passes change the problem.** 1a's `ω` is not a likelihood
+   estimate, and its comparison uses the unrestricted fit's SEs; 3 needs a
+   500-row buffer and a batch optimizer in the core, which does not exist.
+   1a passes at exactly the criterion (45 of 50).
+3. **Approximated SEs:** DCC (no first-stage correction, so the true spread is
+   wider and the counts are conservative), ARMA under decay (`sqrt(n/n_eff)`
+   scaling), ETS's `σ²` (closed form).
+4. **Seeds do not carry over.** These seeds are numpy's; a test in rheon's
+   suite generates its own data (`tests/data.py`), so the counts and bounds
+   carry over, the per-seed figures do not. The bounds' headroom is for that.
+5. **Starts are part of the estimator.** GARCH's 75-row backcast buffer,
+   ARMA's two-phase warm-up (needed because the Gauss-Newton matrix is
+   singular at `(0, 0)`), ETS's known initial states and DCC's 100-row
+   information warm-up all shaped these numbers; a port must keep them or
+   be measured again.
+6. Not studied: uneven clocks, zero-weight rows, the grid forms, decay for
+   GARCH, ETS and DCC, and anything past 10,000 rows.
