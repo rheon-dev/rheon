@@ -96,6 +96,40 @@ fn restore_stamped_hawkes(s: &State) -> Result<Box<dyn Run>, String> {
     Ok(Box::new(StampedHawkes { model, ns }))
 }
 
+/// An `expectile` handed each row's stamp in integer nanoseconds, as a
+/// stream hands it: its state holds the last stamp, the last counted row's,
+/// and under a clock window a stamp a row.
+struct StampedExpectile {
+    model: Expectile,
+    ns: i128,
+}
+
+impl Run for StampedExpectile {
+    fn step(&mut self, r: &Row) -> Out {
+        self.ns += ns_of_seconds(r.d).unwrap();
+        self.model.stamp_next(Stamp::Ns(self.ns));
+        let s = self.model.step(&r.x, &r.y, r.d, r.w);
+        Out {
+            pred: s.pred,
+            n_eff: s.n_eff,
+            extra: Vec::new(),
+        }
+    }
+
+    fn state(&self) -> State {
+        self.model.state()
+    }
+}
+
+fn restore_stamped_expectile(s: &State) -> Result<Box<dyn Run>, String> {
+    let model = Expectile::restore(s).map_err(|e| e.to_string())?;
+    let ns = match model.last_stamp() {
+        Some(Stamp::Ns(ns)) => ns,
+        other => return Err(format!("expected a temporal stamp, found {other:?}")),
+    };
+    Ok(Box::new(StampedExpectile { model, ns }))
+}
+
 /// The bare accumulator, which no model's state is and which a variant
 /// still names: stepped by its own `update`, its means and co-moments
 /// reported as the slots, the co-moments all `K²` of them row by row. The
@@ -2202,7 +2236,93 @@ pub fn all() -> Vec<Case> {
             targets: Targets::Linear(2),
             before: 45,
         },
+        // The one pass, saved on a row of weight 0 (row 40): the sums, and
+        // the clock that row stepped over, held for the next row that counts.
+        case!(
+            "expectile",
+            "Expectile",
+            Expectile,
+            Expectile::new(expectile_cfg(0)).unwrap(),
+            K,
+            Targets::Linear(2),
+            41
+        ),
+        // Saved with each target's refit buffer part full.
+        case!(
+            "expectile_refit",
+            "Expectile",
+            Expectile,
+            Expectile::new(expectile_cfg(60)).unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        // Saved after each target's refit ran, its buffer freed.
+        case!(
+            "expectile_refit_done",
+            "Expectile",
+            Expectile,
+            Expectile::new(expectile_cfg(15)).unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        // A full window of twelve rows, the fit its exact refit.
+        case!(
+            "expectile_window",
+            "Expectile",
+            Expectile,
+            Expectile::new(ExpectileCfg {
+                decay: Decay::Halflife(f64::INFINITY),
+                window_rows: Some(12),
+                ..expectile_cfg(0)
+            })
+            .unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        // Over a span of the clock, rows stamped, saved on a row of weight
+        // 0: a stamp a row, the last counted row's and the last row's.
+        Case {
+            name: "expectile_clock_window",
+            variant: "Expectile",
+            build: || {
+                Box::new(StampedExpectile {
+                    model: Expectile::new(ExpectileCfg {
+                        decay: Decay::Halflife(f64::INFINITY),
+                        window_clock: Some(8.0),
+                        closed: WindowClosed::Both,
+                        ..expectile_cfg(0)
+                    })
+                    .unwrap(),
+                    ns: 0,
+                })
+            },
+            restore: restore_stamped_expectile,
+            n_features: K,
+            targets: Targets::Linear(2),
+            before: 41,
+        },
     ]
+}
+
+/// An upper `expectile` of two targets under decay, its first rows' refit
+/// filling on its `refit_rows`-th learned row (0: off).
+fn expectile_cfg(refit_rows: u32) -> ExpectileCfg {
+    ExpectileCfg {
+        n_features: K,
+        n_targets: 2,
+        fit_intercept: true,
+        decay: decay(),
+        expectile: 0.8,
+        min_weight: 2.0,
+        refit_rows,
+        window_rows: None,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        max_state_bytes: None,
+    }
 }
 
 fn hawkes_cfg(window_events: Option<usize>) -> HawkesCfg {
