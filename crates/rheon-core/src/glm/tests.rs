@@ -184,8 +184,11 @@ fn the_increment_form_is_the_sums_form() {
 }
 
 /// With the buffer as long as the stream, the refit's answer is the batch
-/// target itself: Newton by the oracle's LU from 0 agrees to 1e-9 (the two
-/// stop at steps of 1e-11 and 1e-14 of a fit of order 1).
+/// target itself: Newton by the oracle's LU from 0 agrees to 4e-9 (the two
+/// stop at steps of 1e-11 and 1e-14 of a fit of order 1, and the Gamma fit's
+/// conditioning carries the refit's stop to 1.02e-9 on Linux and Windows
+/// x86-64, whose `exp` differs from macOS's in the last bits; 1e-9 held on
+/// macOS arm64 only).
 #[test]
 fn the_refit_is_the_batch_fit_of_its_rows() {
     for family in [GlmFamily::Poisson, GlmFamily::Gamma] {
@@ -201,7 +204,7 @@ fn the_refit_is_the_batch_fit_of_its_rows() {
         let want = batch(&c, &rows, &vec![1.0; rows.len()]);
         let got = &m.coefficients()[0];
         assert!(
-            max_gap(got, &want) < 1e-9,
+            max_gap(got, &want) < 4e-9,
             "{family:?}: {got:?} vs {want:?}"
         );
         assert_eq!(m.solve_failures(), 0);
