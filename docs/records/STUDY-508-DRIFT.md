@@ -299,8 +299,8 @@ sd at row 5,000, or a ramp to +1 sd over 1,000 rows from row 5,000. Bits: an
 error rate of 0.10, a step to 0.25, or a ramp to 0.25. Delay: rows from the
 change to the first flag at or after it (the change row is 1). A false alarm
 is a flag on the null stream, or before the change. The prototype runs these
-(its flags are river's, §1); river would take about as long for all but
-KSWIN, whose scipy call makes it twenty times slower.
+(its flags are river's, §1); river is faster for ADWIN (compiled) and about
+twenty times slower for KSWIN (a scipy call a row).
 
 | detector | null: alarms | per row | per check (ADWIN) | step: alarms before | step delay median | p10 | p90 | missed | ramp delay median | p90 | missed |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -452,6 +452,9 @@ bounds it.
 
 Pure Python against river (Rust for ADWIN; Python and scipy for the others),
 the means of 20,000 rows (KSWIN 2,000 or fewer) after the window is filled.
+ADWIN's window is held at `W` by `max_width` on a null stream (river has no
+cap, so its window grows from `W` by the 20,000 timed rows); KSWIN runs at
+`alpha = 0` so that it never resets and every row is a test.
 These rank the work; they do not predict the Rust option's cost. ADWIN's row
 is `O(1)` amortized plus, every `clock` rows, a scan of its `O(M log W)`
 buckets: going from 1,000 to 10,000 rows adds three levels, and the cost
