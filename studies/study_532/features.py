@@ -452,6 +452,11 @@ class WindowSpec:
     min_samples: int = 1
     ddof: int = 1
     cap: int = 1 << 20
+    # ``asof_ties``: accept a repeated time and read the window as of the row
+    # (rows up to and including it). Polars instead gives every row of a
+    # repeated time the window of the last of them, which a stream knows only
+    # when the time moves on; the study measures the difference.
+    asof_ties: bool = False
 
 
 class Rolling:
@@ -501,7 +506,7 @@ class Rolling:
             s = max(0, e - spec.rows)
         else:
             assert t is not None
-            if self.last_t is not None and t <= self.last_t:
+            if self.last_t is not None and (t < self.last_t or (t == self.last_t and not spec.asof_ties)):
                 raise ClockError(f"time {t} after {self.last_t}")
             self.last_t = t
             self.times.append(t)

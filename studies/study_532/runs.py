@@ -162,6 +162,7 @@ def units() -> list[Unit]:
         _rolling_by(200, "left", 3),
         _rolling_by(30, "both", 2, ddof=0),
         _rolling_by(30, "none", 1),
+        _rolling_by(12, "right", 4),  # often short of min_samples: skipped updates
         _ewm_mean(10.0),
         _ewm_mean(10.0, adjust=False),
         _ewm_mean(4.0, ignore_nulls=True, min_samples=5),
