@@ -580,6 +580,53 @@ def giacomini_white_candidate():
     )
 
 
+def rls_def(y, X, p0=1e6):
+    """Recursive least squares, beta_0 = 0, P_0 = p0 I; returns the pre-update predictions x_t' beta_{t-1} and the final beta."""
+    k = X.shape[1]
+    b, P = np.zeros(k), p0 * np.eye(k)
+    pred = np.empty(len(y))
+    for t in range(len(y)):
+        x = X[t]
+        pred[t] = x @ b
+        Px = P @ x
+        g = Px / (1.0 + x @ Px)
+        b = b + g * (y[t] - pred[t])
+        P = P - np.outer(g, Px)
+    return pred, b
+
+
+@check
+def chained_model_candidate():
+    """PLAN 543 is not on origin/main (the last task there is 539): a chain is read as model A's pre-update prediction fed to model B
+    as a feature, both updated row by row.  Oracle: statsmodels RecursiveLS run twice (B on A's one-step forecasts)."""
+    import statsmodels.api as sm
+
+    rng = np.random.default_rng(11)
+    n = 300
+    X = rng.standard_normal((n, 3))
+    y = X @ np.array([1.0, -0.5, 0.25]) + 0.3 * rng.standard_normal(n)
+    # stage A: y ~ X;  stage B: y ~ [1, pred_A]
+    predA, _ = rls_def(y, X)
+    XB = np.column_stack([np.ones(n), predA])
+    predB, _ = rls_def(y, XB)
+    resA = sm.RecursiveLS(y, X).fit()
+    fa = np.asarray(resA.filter_results.forecasts[0])
+    resB = sm.RecursiveLS(y, np.column_stack([np.ones(n), fa])).fit()
+    fb = np.asarray(resB.filter_results.forecasts[0])
+    k = 5  # the diffuse start (statsmodels' P_0 = 1e6 I is the same prior, but its first k rows are absorbed)
+    report(
+        "543",
+        "chained RLS (A's pre-update prediction feeds B)",
+        "statsmodels",
+        {
+            "stage A, rows k.. : max |forecast - definition|": float(np.max(np.abs(fa[k:] - predA[k:]))),
+            "stage B, rows 2k.. : max |forecast - definition|": float(np.max(np.abs(fb[2 * k :] - predB[2 * k :]))),
+            "stage B, rows 2k.. : max |gap| relative to |predB|": float(np.max(np.abs(fb[2 * k :] - predB[2 * k :]) / np.maximum(np.abs(predB[2 * k :]), 1e-3))),
+        },
+        "n=300, 3 features; prior beta_0=0, P_0=1e6 I in the definition (statsmodels' approximate diffuse start)",
+    )
+
+
 def main(argv):
     names = argv or list(CHECKS)
     for n in names:
