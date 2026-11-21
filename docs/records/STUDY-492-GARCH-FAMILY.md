@@ -687,12 +687,12 @@ log-likelihood. scipy is used for the special functions and `lfilter`.
 
 ### Open derivations (not settled by hand or by a test)
 
-1. **The skew-t's closed-form score in `nu` and `lambda`**: `a` and `b` depend on `nu` and `lambda` through `c`; the
-   script uses a central difference of the closed-form density (the mean score at the truth is zero within noise).
-   Needed before any Rust port.
-2. **The EGARCH variance target**: `E[s]` has no closed form in `(alpha, gamma)` for the Gaussian case, so no
-   target and the unrestricted `omega` form; and a score clip fitted to EGARCH's log scale (the variance-scale
-   Huber centring biases `omega`).
+1. **The skew-t's closed-form score in `nu` and `lambda`**: closed in part 4 (section 1 there), verified against
+   central differences; the script now uses it.
+2. **The EGARCH variance target**: a log-variance target is derived in part 4 (section 2), exact under the normal;
+   it does not beat the free `omega` against arch. Still open: a score clip fitted to EGARCH's log scale (the
+   variance-scale Huber centring biases `omega`), and the online step's stability on a start that hit the
+   iteration cap (seed 492006, part 4).
 3. **A root-based step for GARCH(2,2)**: step on the sum of the `beta`s and the filter's roots, not on `beta_1` and
    `beta_2` separately; not tried. GARCH(2,2) carries no pass tolerance until it is.
 4. Also open: a shape stabiliser for the t's online `nu` after the metric projection (section 7, risks); and the
@@ -718,3 +718,176 @@ log-likelihood. scipy is used for the special functions and `lfilter`.
 2. The H-metric projection removes the blow-ups in FIGARCH and in the t forms; should it become the step's projection
    for the whole family (part 1's GARCH(2,2) projected rows, 137,000, are the same mechanism)? Untested on GARCH(2,2).
 3. The skew-t closed form (open derivation 1) is the one item before a port.
+
+# Study 492, part 4: the open derivations, skew-t score and EGARCH target (B11, part 1 of 2)
+
+Python and numpy only (`scripts/study_492.py`); no Rust, no source change. Two of section 7's open derivations:
+the skew-t's score in its shape parameters, and a variance target for EGARCH. Status: both derived and verified;
+the skew-t closed form is now the script's score; the EGARCH target is an option (`Online(target=True,
+level="start"|"running")` on `egarch`), measured, not adopted.
+
+## 1. The skew-t score in closed form
+
+**Density** (Hansen 1994, arch's `SkewStudent`; `nu > 2`, `-1 < lambda < 1`), for the standardised `z`:
+
+    c   = G((nu+1)/2) / (sqrt(pi (nu-2)) G(nu/2))
+    a   = 4 lambda c (nu-2)/(nu-1),        b = sqrt(1 + 3 lambda^2 - a^2)
+    sg  = sign(z + a/b),   q = 1 + sg lambda,   m = (b z + a)/q
+    log f(z) = ln b + ln c - (nu+1)/2 ln(1 + m^2/(nu-2))
+
+**Step 1, `c`.** `ln c = lgamma((nu+1)/2) - lgamma(nu/2) - 1/2 ln pi - 1/2 ln(nu-2)`, so
+
+    (ln c)_nu  = 1/2 [psi((nu+1)/2) - psi(nu/2) - 1/(nu-2)],     (ln c)_lam = 0
+
+(the Student-t's constant term, part 2).
+
+**Step 2, `a`.** `a` is `lambda` times `4 c (nu-2)/(nu-1)`; `d/d nu [(nu-2)/(nu-1)] = 1/(nu-1)^2`:
+
+    a_lam = 4 c (nu-2)/(nu-1)                  (= a/lambda, written without the division)
+    a_nu  = a (ln c)_nu + 4 lambda c/(nu-1)^2
+
+**Step 3, `b`.** From `b^2 = 1 + 3 lambda^2 - a^2`, `2 b b_x = d(3 lambda^2)/dx - 2 a a_x`:
+
+    b_lam = (3 lambda - a a_lam)/b,            b_nu = -a a_nu / b
+
+**Step 4, `m`.** `q` depends on `lambda` only (`q_lam = sg`); `sg` is constant away from the kink `z = -a/b`:
+
+    m_nu  = (b_nu z + a_nu)/q,                 m_lam = (b_lam z + a_lam)/q - sg m/q
+
+**Step 5, the kink.** The branch point `z = -a/b` moves with `(nu, lambda)`, but `m = 0` there on both
+branches, so `log f` is continuous in the parameters at every `z`; its derivative exists at every `z` except
+the one point `z = -a/b`, a set of probability zero. No term from the moving branch point enters the score.
+
+**Step 6, the log-density.** With `D = nu - 2 + m^2` and `d/dx ln(1 + m^2/(nu-2))`:
+
+    d log f/d lam = b_lam/b - (nu+1) m m_lam / D
+    d log f/d nu  = b_nu/b + (ln c)_nu - 1/2 ln(1 + m^2/(nu-2))
+                    - (nu+1)(2 m m_nu (nu-2) - m^2) / (2 (nu-2) D)
+
+At `lambda = 0` (`a = 0`, `b = 1`, `m = z`, `m_nu = 0`) the `nu` score is part 2's Student-t score, term for term.
+
+**Step 7, the GARCH parameters.** The shape does not enter the variance recursion, so the chain rule runs only
+through `z = e/sqrt(s)`: `dz/d theta = -z/2 dl`, `d log f/dz = -(nu+1) m b/(q D)`, and
+`d l_t/d theta = d log f/dz (-z/2) dl - 1/2 dl = 1/2 w dl` with
+`w = (nu+1) m b z/(q D) - 1`, part 2's form (already closed, unchanged). The shape score has no recursion: it
+is the row's `(d log f/d nu, d log f/d lam)` at the row's `z`. (For the record: an EGARCH skew-t would also
+carry the shape through `E|z|` in the news term; arch's EGARCH keeps `sqrt(2/pi)` for every distribution,
+so with arch's form it would not.)
+
+**Verification** (`study_492.py check t`; `skewt_shape_score` against differences of `logf`, 2,401 values of `z`
+in `[-8, 8]` and `N(0, 4)` at each of 8 points `(nu, lambda)` = (6, -0.2), (6, 0), (3, 0.5), (4.5, -0.7),
+(12, 0.3), (30, -0.05), (2.3, 0.9), (100, -0.95), excluding `|z + a/b| < 0.01`):
+
+| reference | max abs error | max rel error |
+|---|---|---|
+| part 2's central difference (steps `1e-5 nu`, `1e-6`) | 3.4e-6 | 5.2e-6 |
+| Richardson extrapolation of two central differences | 6.1e-9 | 9.9e-8 |
+
+The error against the central difference is the difference's own (it falls 500-fold when the reference is
+extrapolated); the worst points are the edges, `nu = 2.3, lambda = 0.9` and `nu = 100, lambda = -0.95`. Within
+the default points it is 4e-9 absolute. The full score now matches a central difference of the likelihood to
+5.2e-8 relative in the shape rows, a check that is no longer a difference against the same difference. The
+mean score at the truth over 400,000 draws is unchanged, zero within its SE.
+
+## 2. The skew-t comparison with the closed form
+
+GARCH(1,1) skew-t, seeds 492100 to 492109, 10,000 rows, against arch, before (central difference) and after:
+
+| variant | score | within 2 SE (every parameter) | median abs `nu` gap (arch SE 0.36) | median abs `lambda` gap | worst gap (SE) | us/row |
+|---|---|---|---|---|---|---|
+| free, online | difference | 9 of 10 | 0.086 | 0.0010 | 4.39 (`alpha`, 492108) | 114 |
+| free, online | closed form | 9 of 10 | 0.086 | 0.0010 | 4.55 (`alpha`, 492108) | 94 |
+| targeted, online | difference | 10 of 10 | 0.087 | 0.0013 | 1.91 | 129 |
+| targeted, online | closed form | 10 of 10 | 0.087 | 0.0013 | 1.91 | 115 |
+
+No change in the counts or the shape gap: the same seed (492108, the start that hit the iteration cap) is the one
+outside 2 SE. The largest end-of-run parameter difference between the two scores is 0.018, on that seed
+(a 1e-9 score change amplified over 9,500 steps on a poorly started run). Part 2 quoted 0.12 for the free
+form's `nu` gap; that is its 50-seed median, the first ten seeds' is 0.086 either way. The closed form is
+17% faster per row in numpy (two `digamma` calls and about 40 flops against four density evaluations, eight
+`lgamma`).
+
+## 3. An EGARCH variance target
+
+**What `omega` fixes.** `l_t = log s_t = omega + beta l_{t-1} + alpha (|z_{t-1}| - c) + gamma z_{t-1}` with
+`c = sqrt(2/pi)`. For iid `z` with `E z = 0` and `E|z| = c`, the news term has mean 0, so for `0 <= beta < 1`
+the stationary mean is exactly
+
+    E[log s] = omega/(1 - beta),       whatever alpha and gamma.
+
+**The target.** `log e_t^2 = l_t + log z_t^2` with `z_t` independent of `l_t`, so
+`E[log e^2] = E[log s] + E[log z^2]`. Under the normal, `log z^2` is `log chi2_1`, whose mean is
+`psi(1/2) + ln 2 = -gamma_E - ln 2 = -1.27036`. The rule:
+
+    L     = mean(log e_t^2) + gamma_E + ln 2           (an unbiased estimate of E[log s])
+    omega = L (1 - beta)
+
+**Closed form under the normal: yes, exact**, and `alpha, gamma` do not enter. It is the GARCH forms' targeting
+with `v = L`, `phi = (alpha, gamma, beta)`, `c = (0, 0, 1)`; the free parameters' sensitivity is
+`d_phi l - L (0, 0, 1) d_omega l`, no new recursion. Checked by simulation (4M rows): at `(0, 0.15, -0.08, 0.97)`
+the mean of `log s` is +0.0000 against 0, `mean log e^2 + 1.2704` is -0.0003; at `(-0.05, 0.2, -0.1, 0.9)`,
+-0.4997 and -0.4994 against -0.5.
+
+**Why part 1 found no closed form.** Part 1 targeted `E[s]` (the sample variance). `ln E[s] = E[ln s] + K`,
+with `K = sum_j [-alpha beta^j c + ln(exp(p_j^2/2) Phi(p_j) + exp(n_j^2/2) Phi(n_j))]`,
+`p_j, n_j = beta^j (alpha +- gamma)` (Nelson 1991; the stationary `l` is a sum of independent news terms and
+`E exp(u|z| + g z)` is closed under the normal). That is a convergent series (terms fall as `beta^(2j)`), not a
+finite closed form; `egarch_log_mean_gap` sums it (0.1294 at the truth, simulated 0.1298). Targeting the
+log-variance avoids it.
+
+**Under the t (approximation).** Two terms change. (i) `E[log z^2]` for the standardised t is closed:
+`z^2 = (nu-2)/nu F(1, nu)`, so `E[log z^2] = ln(nu-2) + psi(1/2) - psi(nu/2)` (-1.500 at `nu = 6`; simulated
+-1.501). (ii) arch's EGARCH keeps `c = sqrt(2/pi)` for every distribution, while the t's
+`E|z| = sqrt((nu-2)/pi) G((nu-1)/2)/G(nu/2)` (0.750 at `nu = 6`, against 0.798), so the news term has mean
+`alpha (E|z| - c)` and `E[log s] = (omega + alpha (E|z| - c))/(1 - beta)`. The t rule is
+`omega = (1 - beta) L - alpha (E|z| - c)` with `L = mean(log e^2) - E[log z^2]`, both at the start's `nu`.
+It is exact given `nu`; the approximation is that `nu` is the start's estimate (500 rows, an SE near 1), and
+`alpha` now enters. The `E[s]` target does not exist under the t: `E exp(u|z|)` is infinite for the t, so the
+unconditional variance is infinite whenever `alpha` or `gamma` is not 0. Both t moments are in the script
+(`e_logz2_t`, `e_abs_t`) and checked by simulation; the EGARCH-t estimator is not built (the study's t forms
+are on `GarchPOQ` only), so the t rule is not run against arch.
+
+**Results** (EGARCH(1,1), Gaussian, seeds 492000 to 492009, 10,000 rows, truth `(0, 0.15, -0.08, 0.97)`,
+arch's `omega` SE median 0.0013):
+
+| variant | within 2 SE (every parameter) | median abs `omega` gap (SE) | worst `omega` gap (SE) | median abs `omega` gap (value) | path gap max, median | us/row |
+|---|---|---|---|---|---|---|
+| plain (free `omega`) | 9 of 10 | 0.21 | 8.91 (492006) | 0.0003 | 3.8% | 17 |
+| target, `L` held at the first 500 rows (as specified) | 4 of 10 | 2.16 | 5.10 | 0.0027 | 10.3% | 23 |
+| target, `L` running | 8 of 10 (one blew up) | 0.41 | 2.01 | 0.0005 | 3.8% | 23 |
+
+The held target is the rule as stated, `alpha, beta, gamma` at the start's fit and `L` from the first 500 rows;
+it is worse than the free form because a 500-row mean of `log s` with `beta = 0.97` has an SD near 0.2 (the
+AR(1) long-run variance `0.25 x 65.7/500` plus `pi^2/2/500` for `log z^2`), i.e. `omega` off by about
+`0.03 x 0.2 = 0.006`, several arch SEs. The running `L` removes that and lands near the free form (0.41 SE
+against 0.21), but does not beat it. Seed 492006, whose batch start hit the 50-iteration cap at
+`(alpha, gamma, beta) = (-0.06, -0.04, 0.988)`, defeats every form: plain is 8.9 SE off on `omega`, held is
+10.7 SE off on `alpha`, and the running target's step left float range at row 746 (`alpha` -7.3, `gamma` 16.4;
+EGARCH projects `beta` only, `alpha` and `gamma` are unconstrained). The run records it as failed. The cause is
+the start, not the target; a guard on the EGARCH step (a trust region, or a box on `alpha` and `gamma`) is not
+derived here.
+
+Recommendation: keep the free-`omega` EGARCH. The log target is exact and cheap, and it is the right target if
+one is wanted (the `E[s]` one is a series under the normal and does not exist under the t), but it buys no
+accuracy here.
+
+## 4. State and cost
+
+* **Skew-t closed form: state unchanged** (GARCH(1,1) skew-t free online 28 floats, 224 bytes). It adds no
+  state: `a`, `b`, `c` and their derivatives are recomputed from `(nu, lambda)` each row, as the density already
+  was. Per row: 2 `digamma`, 1 `log1p`, about 40 flops against 4 extra density evaluations (8 `lgamma`, 4 `log1p`),
+  94 against 114 us/row in numpy. `digamma` is a libm-class result in the state's path, as before.
+* **EGARCH target: state smaller.** `omega` is no longer stepped, so `H` is 3x3 (6 floats) instead of 4x4 (10);
+  `L` takes the slot of the running mean of `e^2`, which EGARCH does not use (its projection has no scale);
+  `held` keeps the start's mean of `log e^2`, `running` carries the running one in the same slot. 25 to 21 floats,
+  200 to 168 bytes (section 7's EGARCH formula with `k(k+1)/2` replaced by `(k-1)k/2`).
+  Per row: one `log` and the `omega = L (1 - beta)` product, 17 to 23 us/row in numpy (the target's extra
+  array work, not its math). A zero residual has `log e^2 = -inf`; the script floors `e^2` at the smallest
+  normal float, a production form needs a stated floor or a skip.
+
+## 5. Open after this part
+
+* The EGARCH-t target rule (section 3) is derived and its moments checked, not run against arch: there is no
+  EGARCH-t estimator in the study.
+* A step guard for EGARCH's unconstrained `alpha, gamma` after a capped start (seed 492006).
+* Part 2 of B11 (the coordinator's second half) is not this part's.

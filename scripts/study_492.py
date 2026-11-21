@@ -59,7 +59,7 @@ Part 2 (Student-t and skew-t, Hansen 1994): the innovations ``z`` are standardis
 Per-row log-likelihood ``l_t = log f(z_t) - 1/2 ln s_t``. Score in the GARCH parameters:
 ``g_t = 1/2 w_t dl_t``, Student-t ``w = (nu + 1) z^2/(nu - 2 + z^2) - 1``, skew-t
 ``w = (nu + 1) m b z/((1 + sg lambda)(nu - 2 + m^2)) - 1``. The shape score is d log f/d nu (closed form for
-the t; a central difference of the closed-form density for the skew-t, nu and lambda); the online step takes
+the t; for the skew-t too since part 4, ``skewt_shape_score``, the difference kept as a check); the online step takes
 BHHH information (the running mean of the outer product of the whole score).
 
 Part 3 (FIGARCH): the section below the part-2 code.
@@ -90,6 +90,7 @@ ABS_Z = math.sqrt(2.0 / math.pi)
 MARGIN = 1e-4
 OMEGA_FLOOR_FRAC = 1e-6
 BACKCAST_ROWS = 75
+TINY = 2.2250738585072014e-308  # floor of e^2 under the log (a zero residual has log e^2 = -inf)
 WARM = 500
 SEED0 = 492000
 
@@ -279,6 +280,20 @@ class Egarch11:
         th[3] = min(max(th[3], 0.0), 1.0 - MARGIN)  # arch: 0 <= beta < 1
         return th
 
+    # Log-variance target (part 4, section 2): E[log s] = omega/(1 - beta) exactly when E z = 0 and
+    # E|z| = sqrt(2/pi), so omega = L (1 - beta) with L an estimate of E[log s]; under the normal
+    # L = mean(log e^2) - E[log z^2], E[log z^2] = psi(1/2) + ln 2. In the GARCH forms' notation
+    # omega = v (1 - c.phi) with v = L, phi = (alpha, gamma, beta), c = (0, 0, 1).
+    log_target: bool = True
+
+    def c_vec(self) -> np.ndarray:
+        return np.array([0.0, 0.0, 1.0])
+
+    def project_free(self, phi: np.ndarray) -> np.ndarray:
+        out = np.asarray(phi, dtype=float).copy()
+        out[2] = min(max(out[2], 0.0), 1.0 - MARGIN)
+        return out
+
     def persistence(self, th: np.ndarray) -> float:
         return float(th[3])
 
@@ -314,6 +329,43 @@ class Egarch11:
     def state_floats(self) -> int:
         k = self.k
         return k + k * (k + 1) // 2 + 1 + 1 + k + 5
+
+
+E_LOGZ2_NORMAL = float(digamma(0.5)) + math.log(
+    2.0
+)  # E[log z^2], z ~ N(0, 1): -1.2704 (= -gamma_E - ln 2)
+
+
+def e_logz2_t(nu: float) -> float:
+    """E[log z^2] for the standardised Student-t: z^2 = (nu - 2)/nu F(1, nu), E log F(1, nu) = psi(1/2) - psi(nu/2) + ln nu."""
+    return math.log(nu - 2.0) + float(digamma(0.5) - digamma(nu / 2.0))
+
+
+def e_abs_t(nu: float) -> float:
+    """E|z| for the standardised Student-t."""
+    return math.sqrt((nu - 2.0) / math.pi) * math.exp(
+        math.lgamma((nu - 1.0) / 2.0) - math.lgamma(nu / 2.0)
+    )
+
+
+def egarch_log_mean_gap(alpha: float, gamma: float, beta: float, tol: float = 1e-17) -> float:
+    """K = ln E[s] - E[ln s] for EGARCH(1,1,1) under the normal (Nelson 1991): the stationary
+    ln s - omega/(1-beta) = sum_j beta^j (alpha(|z| - c) + gamma z), independent terms, and
+    E exp(u|z| + g z) = exp((u+g)^2/2) Phi(u+g) + exp((u-g)^2/2) Phi(u-g); so K is the convergent series
+    sum_j [-alpha beta^j c + ln(exp(p_j^2/2) Phi(p_j) + exp(n_j^2/2) Phi(n_j))], p_j, n_j = beta^j (alpha +- gamma).
+    Exact as a series, not in finite terms; the terms fall as beta^(2j)."""
+    from scipy.special import log_ndtr
+
+    k, bj = 0.0, 1.0
+    while True:
+        p, n = bj * (alpha + gamma), bj * (alpha - gamma)
+        term = -alpha * bj * ABS_Z + float(
+            np.logaddexp(0.5 * p * p + log_ndtr(p), 0.5 * n * n + log_ndtr(n))
+        )
+        k += term
+        bj *= beta
+        if abs(term) < tol or bj < 1e-300:
+            return k
 
 
 MODELS = {
@@ -386,6 +438,9 @@ class Online:
     target: bool = (
         False  # omega = v (1 - persistence), v the running mean of r^2 (study 485's form)
     )
+    # EGARCH's log-variance target L = mean(log e^2) - E[log z^2]: "start" holds the first 500 rows' mean,
+    # "running" carries the running mean (in mean_r2's slot: EGARCH targeted keeps no mean of e^2)
+    level: str = "start"
     warm: int = WARM
     t0: float = float(WARM)
     buffer: list = field(default_factory=list)
@@ -395,6 +450,8 @@ class Online:
     n_seen: int = 0
     n_steps: int = 0
     mean_r2: float = 0.0
+    mean_logr2: float = 0.0
+    start_logr2: float = 0.0
     rob_kappa: float = 0.0
     rob_slope: float = 0.0
     preds: list = field(default_factory=list)
@@ -417,6 +474,10 @@ class Online:
         b = backcast(rows * rows)
         v = float(np.mean(rows * rows))
         spec = self.spec
+        v_grid = v
+        if self.target and getattr(spec, "log_target", False):
+            self.start_logr2 = float(np.mean(np.log(np.maximum(rows * rows, TINY))))
+            v = self.start_logr2 - E_LOGZ2_NORMAL  # L, the target of E[log s]
         if self.target:
             c = spec.c_vec()
             J = np.vstack([-v * c, np.eye(spec.k - 1)])
@@ -427,7 +488,7 @@ class Online:
                 ll, g, I = full(th, grad)
                 return ll, J.T @ g, J.T @ I @ J
 
-            grid = [tuple(spec.project_free(g[1:])) for g in spec.grid(v)]
+            grid = [tuple(spec.project_free(g[1:])) for g in spec.grid(v_grid)]
             self.fit = batch_core.maximize(targeted, spec.project_free, grid)
             phi = np.asarray(self.fit.theta, dtype=float)
             self.theta = np.concatenate([[v * (1.0 - float(c @ phi))], phi])
@@ -453,7 +514,11 @@ class Online:
         r2 = r * r
         self.n_seen += 1
         self.mean_r2 += (r2 - self.mean_r2) / self.n_seen
-        if self.target:
+        if self.target and getattr(spec, "log_target", False):
+            self.mean_logr2 += (math.log(max(r2, TINY)) - self.mean_logr2) / self.n_seen
+            vv = (self.mean_logr2 if self.level == "running" else self.start_logr2) - E_LOGZ2_NORMAL
+            dfree = dl[1:] - vv * spec.c_vec() * dl[0]
+        elif self.target:
             vv = self.mean_r2
             dfree = dl[1:] - vv * spec.c_vec() * dl[0]
         else:
@@ -523,14 +588,28 @@ def compare_garch(model: str, seed: int, n: int = 10_000) -> dict:
         "ll_batch": ll_b,
     }
     start = backcast(r * r)
-    variants = [("plain", 0.0, False), ("huber2", 2.0, False)]
-    if isinstance(spec, GarchPOQ):  # EGARCH has no closed-form target
-        variants += [("target", 0.0, True), ("target_huber2", 2.0, True)]
-    for tag, c, tg in variants:
-        est = Online(spec, robust_c=c, target=tg)
+    variants = [("plain", 0.0, False, ""), ("huber2", 2.0, False, "")]
+    if isinstance(spec, GarchPOQ):
+        variants += [("target", 0.0, True, ""), ("target_huber2", 2.0, True, "")]
+    else:  # EGARCH's log-variance target (part 4): held at the start's level, or running
+        variants += [("target_start", 0.0, True, "start"), ("target_running", 0.0, True, "running")]
+    for tag, c, tg, lev in variants:
+        est = Online(spec, robust_c=c, target=tg, level=lev or "start")
         t = time.perf_counter()
-        for x in r:
-            est.update(float(x))
+        try:
+            for x in r:
+                est.update(float(x))
+        except (
+            ZeroDivisionError,
+            OverflowError,
+            np.linalg.LinAlgError,
+        ):  # the variance left float range
+            out[tag] = {
+                "failed_row": len(est.preds) - 1,
+                "theta": est.theta.tolist(),
+                "start_stop": est.fit.stop,
+            }
+            continue
         secs = time.perf_counter() - t - est.start_seconds
         th = est.theta
         pred = np.asarray(est.preds)
@@ -676,11 +755,57 @@ def scores(dist: str, z: np.ndarray, nu: float, lam: float) -> tuple[np.ndarray,
     sg = np.where(z > -a / b, 1.0, -1.0)
     m = (b * z + a) / (1.0 + sg * lam)
     w = (nu + 1.0) * m * b * z / ((1.0 + sg * lam) * (nu - 2.0 + m * m)) - 1.0
+    if SKEWT_CLOSED:
+        return w, skewt_shape_score(z, nu, lam)
+    return w, skewt_shape_score_cd(z, nu, lam)
+
+
+SKEWT_CLOSED = (
+    True  # False: part 2's central difference (kept for the check and the before/after runs)
+)
+
+
+def skewt_shape_score_cd(z: np.ndarray, nu: float, lam: float) -> np.ndarray:
+    """Central difference of the closed-form log-density (part 2's form; steps 1e-5 nu, 1e-6)."""
     hn = 1e-5 * nu
     hl = 1e-6
     s_nu = (logf(z, nu + hn, lam) - logf(z, nu - hn, lam)) / (2.0 * hn)
     s_lam = (logf(z, nu, lam + hl) - logf(z, nu, lam - hl)) / (2.0 * hl)
-    return w, np.stack([s_nu, s_lam], axis=1)
+    return np.stack([s_nu, s_lam], axis=1)
+
+
+def skewt_shape_score(z: np.ndarray, nu: float, lam: float) -> np.ndarray:
+    """Closed-form (d/d nu, d/d lambda) of the skew-t log-density at fixed z (part 4 of the record,
+    section 1). With q = 1 + sg lambda, m = (b z + a)/q, D = nu - 2 + m^2:
+
+        (ln c)_nu = [psi((nu+1)/2) - psi(nu/2) - 1/(nu-2)] / 2
+        a_nu = a (ln c)_nu + 4 lambda c/(nu-1)^2,     a_lam = 4 c (nu-2)/(nu-1)
+        b_nu = -a a_nu / b,                            b_lam = (3 lambda - a a_lam) / b
+        m_nu = (b_nu z + a_nu)/q,                      m_lam = (b_lam z + a_lam)/q - sg m/q
+        d/d nu     = b_nu/b + (ln c)_nu - 1/2 ln(1 + m^2/(nu-2)) - (nu+1)(2 m m_nu (nu-2) - m^2)/(2 (nu-2) D)
+        d/d lambda = b_lam/b - (nu+1) m m_lam / D
+    """
+    a, b, c = consts(nu, lam)
+    sg = np.where(z > -a / b, 1.0, -1.0)
+    q = 1.0 + sg * lam
+    m = (b * z + a) / q
+    n2 = nu - 2.0
+    dlnc = 0.5 * (digamma((nu + 1.0) / 2.0) - digamma(nu / 2.0) - 1.0 / n2)
+    a_nu = a * dlnc + 4.0 * lam * c / ((nu - 1.0) * (nu - 1.0))
+    a_lam = 4.0 * c * n2 / (nu - 1.0)
+    b_nu = -a * a_nu / b
+    b_lam = (3.0 * lam - a * a_lam) / b
+    m_nu = (b_nu * z + a_nu) / q
+    m_lam = (b_lam * z + a_lam) / q - sg * m / q
+    D = n2 + m * m
+    s_nu = (
+        b_nu / b
+        + dlnc
+        - 0.5 * np.log1p(m * m / n2)
+        - (nu + 1.0) * (2.0 * m * m_nu * n2 - m * m) / (2.0 * n2 * D)
+    )
+    s_lam = b_lam / b - (nu + 1.0) * m * m_lam / D
+    return np.stack([s_nu, s_lam], axis=1)
 
 
 def shape_dim(dist: str) -> int:
@@ -1061,6 +1186,46 @@ def check_t() -> None:
     print(
         f"t: shape score closed form vs difference max abs {np.max(np.abs(S[:, 0] - Sn)):.2e}, mean {S.mean():.2e}"
     )
+    # the skew-t's closed-form shape score against central differences of log f (part 4): part 2's steps, and
+    # a Richardson extrapolation of two steps; away from the kink z = -a/b, where the one-sided derivatives differ
+    worst = {"cd": [0.0, 0.0], "richardson": [0.0, 0.0]}
+    for nu, lam in (
+        (6, -0.2),
+        (6, 0.0),
+        (3, 0.5),
+        (4.5, -0.7),
+        (12, 0.3),
+        (30, -0.05),
+        (2.3, 0.9),
+        (100, -0.95),
+    ):
+        zz = np.concatenate([2.0 * rng.standard_normal(2000), np.linspace(-8.0, 8.0, 401)])
+        cf = skewt_shape_score(zz, nu, lam)
+
+        def cd(hn: float, hl: float) -> np.ndarray:
+            return np.stack(
+                [
+                    (logf(zz, nu + hn, lam) - logf(zz, nu - hn, lam)) / (2.0 * hn),
+                    (logf(zz, nu, lam + hl) - logf(zz, nu, lam - hl)) / (2.0 * hl),
+                ],
+                axis=1,
+            )
+
+        hl = 1e-3 * min(1.0 - abs(lam), 0.5)
+        rich = (4.0 * cd(5e-4 * (nu - 2.0), hl / 2.0) - cd(1e-3 * (nu - 2.0), hl)) / 3.0
+        a_, b_, _ = consts(nu, lam)
+        keep = np.abs(zz + a_ / b_) > 1e-2
+        for ref, tag in ((skewt_shape_score_cd(zz, nu, lam), "cd"), (rich, "richardson")):
+            ab = np.abs(cf - ref)[keep]
+            worst[tag][0] = max(worst[tag][0], float(ab.max()))
+            worst[tag][1] = max(
+                worst[tag][1], float((ab / np.maximum(np.abs(ref[keep]), 1e-3)).max())
+            )
+    print(
+        "skew-t: closed-form shape score, max abs / rel error over 8 (nu, lambda) points: "
+        + ", ".join(f"vs {k} {v[0]:.1e} / {v[1]:.1e}" for k, v in worst.items())
+    )
+    assert worst["richardson"][1] < 1e-6
     zs = draws("skewt", 400_000, 3)
     _, S2 = scores("skewt", zs, 6.0, -0.2)
     print(
