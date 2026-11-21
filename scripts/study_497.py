@@ -161,7 +161,7 @@ class KalmanGLM:
     phi: float = 1.0
     p0: float = 1.0
     b0: np.ndarray | None = None
-    form: str = "standard"  # EKF covariance update: "standard" or "joseph"
+    form: str = "standard"  # EKF covariance update: "standard", "joseph" or "joseph_rank1"
     points: tuple = ("merwe", 1.0, 2.0, 0.0)  # ("merwe", alpha, beta, kappa) or ("julier", kappa)
     ukf_r: str = "expected"  # "plugin" or "expected"
     clamp: bool = True
@@ -224,10 +224,16 @@ class KalmanGLM:
                 self.b = b + K * (y - mu)
                 if self.form == "standard":
                     P = Pp - s * np.outer(K, K)
+                elif self.form == "joseph_rank1":
+                    # the Joseph form expanded for a scalar observation, O(k^2):
+                    # (I - K h')P(I - K h')' + R K K' = P - K u' - u K' + s K K', u = P h
+                    u = m * Px
+                    KuT = np.outer(K, u)
+                    P = Pp - KuT - KuT.T + s * np.outer(K, K)
                 else:
                     IKH = self.I - np.outer(K, m * x)
                     P = IKH @ Pp @ IKH.T + R * np.outer(K, K)
-                self.P = 0.5 * (P + P.T) if self.form == "standard" else P
+                self.P = 0.5 * (P + P.T) if self.form != "joseph" else P
         else:
             chi = sigma_points(b, Pp, self.c)
             z = fam.inv(self._eta(chi @ x))
@@ -1035,6 +1041,21 @@ def _pf_case(family, T, seed, N, reps):
         "pf_mc_sd_over_post_sd_median": float(np.median(mc_sd / sd)),
         "ekf": _sd_units(ekf, exact, rows),
         "ukf": _sd_units(ukf, exact, rows),
+        # the gap beyond the PF's own band, 4 Monte Carlo sd of its mean, in
+        # posterior sd; and the gap on the rows where the PF is sharp (mc sd < 0.05 sd)
+        **{
+            f"{name}_beyond_4mc_max": float(
+                np.max(np.maximum(np.abs(f["b"][rows] - mean_b[rows]) - 4 * mc_sd, 0.0) / sd)
+            )
+            for name, f in (("ekf", ekf), ("ukf", ukf))
+        },
+        **{
+            f"{name}_z_max_where_sharp": float(
+                np.max((np.abs(f["b"][rows] - mean_b[rows]) / sd)[mc_sd / sd < 0.05])
+            )
+            for name, f in (("ekf", ekf), ("ukf", ukf))
+        },
+        "sharp_fraction": float(np.mean(mc_sd / sd < 0.05)),
     }
 
 
@@ -1414,6 +1435,141 @@ def summarise_div(res):
         print("  small alpha", r)
 
 
+# --------------------------------------------------------------------------- part 4
+
+
+def state_bytes(k: int, packed: bool) -> int:
+    """Persisted state per target: b (k), P (k(k+1)/2 packed or k^2 full), D, n."""
+    return 8 * (k + (k * (k + 1) // 2 if packed else k * k) + 2)
+
+
+def flops(k: int, filt: str, form: str = "standard") -> int:
+    """Multiply-adds counted as 2 flops, per observing row, excluding the link
+    and variance functions (counted separately as evaluations)."""
+    prior = k * k + k  # P / lam^D (or none) and + q D^2 on the diagonal
+    if filt == "ekf":
+        base = prior + 2 * k * k + 2 * k + 2 * k  # Px, x'Px, K, b
+        upd = {"standard": 2 * k * k, "joseph_rank1": 6 * k * k, "joseph": 4 * k**3 + 4 * k * k}
+        return base + upd[form]
+    n = 2 * k + 1
+    chol = k**3 // 3 + k * k  # c P^- and its Cholesky
+    return prior + chol + n * k + 2 * n * k + 2 * n + 2 * n * k + 2 * k + 2 * k * k
+
+
+def _time_filter(make, X, y, w, budget_s: float = 5.0) -> float:
+    """Microseconds per row, the best of repeated passes within budget_s."""
+    best = math.inf
+    t_end = time.perf_counter() + budget_s
+    while time.perf_counter() < t_end:
+        f = make()
+        t0 = time.perf_counter()
+        for t in range(len(y)):
+            f.step(X[t], y[t], w[t])
+        best = min(best, (time.perf_counter() - t0) / len(y) * 1e6)
+    return best
+
+
+def part4(args) -> dict:
+    res: dict = {"cost": [], "rank1": []}
+    for k in (2, 5, 20, 50):
+        X, y, w, _ = make_data("poisson", k, 400, 9000 + k, zero_frac=0.0, var_frac=0.0)
+        p0 = p0_for(k, "calibrated")
+        row = {
+            "k": k,
+            "state_bytes_packed": state_bytes(k, True),
+            "state_bytes_full": state_bytes(k, False),
+            "ukf_scratch_bytes": 8 * ((2 * k + 1) * k + 2 * (2 * k + 1) + k * k),
+        }
+        for name, kw in (
+            ("ekf_standard", {"filt": "ekf", "form": "standard"}),
+            ("ekf_joseph_rank1", {"filt": "ekf", "form": "joseph_rank1"}),
+            ("ekf_joseph", {"filt": "ekf", "form": "joseph"}),
+            ("ukf", {"filt": "ukf"}),
+        ):
+
+            def make(kw=kw, k=k, p0=p0):
+                return KalmanGLM(k, family="poisson", q=1e-4, lam=0.995, p0=p0, **kw)
+
+            row[name + "_us_per_row_numpy"] = _time_filter(make, X, y, w, args.time_budget)
+            row[name + "_flops"] = flops(k, kw["filt"], kw.get("form", "standard"))
+        row["ukf_link_evals"] = 2 * k + 1
+        row["ekf_link_evals"] = 1
+        res["cost"].append(row)
+        print("cost", k, file=sys.stderr, flush=True)
+    # the rank-1 Joseph form against filterpy's matrix Joseph form, on the part 1
+    # Poisson streams (both priors), and against the numpy matrix form
+    for k in (2, 5):
+        for q, lam in ((1e-4, 1.0), (0.0, 0.99), (1e-4, 0.995)):
+            for first_zero in (False, True):
+                seed = 1000 + 10 * k + int(first_zero)
+                X, y, w, _ = make_data(
+                    "poisson", k, args.rows, seed, q_true=1e-4, first_zero=first_zero
+                )
+                for kind in ("calibrated", "wide"):
+                    p0 = p0_for(k, kind)
+                    r1 = run_filter(
+                        KalmanGLM(k, family="poisson", q=q, lam=lam, p0=p0, form="joseph_rank1"),
+                        X,
+                        y,
+                        w,
+                    )
+                    jm = run_filter(
+                        KalmanGLM(k, family="poisson", q=q, lam=lam, p0=p0, form="joseph"), X, y, w
+                    )
+                    ref = filterpy_ekf(X, y, w, "poisson", k, q, lam, 1.0, p0)
+                    band = run_filter(
+                        perturbed(
+                            KalmanGLM(k, family="poisson", q=q, lam=lam, p0=p0, form="joseph")
+                        ),
+                        X,
+                        y,
+                        w,
+                    )
+                    res["rank1"].append(
+                        {
+                            "k": k,
+                            "q": q,
+                            "lam": lam,
+                            "first_zero": first_zero,
+                            "prior": kind,
+                            "clamped": _clamped(jm["pred"], "poisson"),
+                            "rank1_vs_filterpy": gap(r1, ref),
+                            "rank1_vs_joseph": gap(r1, jm),
+                            "band": gap(band, jm),
+                        }
+                    )
+    return res
+
+
+def summarise4(res):
+    print("part 4")
+    for r in res["cost"]:
+        print(
+            f"  k={r['k']}: state {r['state_bytes_packed']} B packed, "
+            f"{r['state_bytes_full']} B full; UKF scratch {r['ukf_scratch_bytes']} B"
+        )
+        for name in ("ekf_standard", "ekf_joseph_rank1", "ekf_joseph", "ukf"):
+            print(
+                f"     {name:18s} {r[name + '_us_per_row_numpy']:8.1f} us/row (numpy), "
+                f"{r[name + '_flops']:8d} flops"
+            )
+    for c in (0, 1):
+
+        def sel(r, c=c):
+            return (r["clamped"] > 0) == bool(c)
+
+        n = sum(1 for r in res["rank1"] if sel(r))
+        tag = "clamped" if c else "unclamped"
+        print(
+            f"  rank-1 Joseph [{tag}, {n}] vs filterpy",
+            _worst(res["rank1"], "rank1_vs_filterpy", where=sel),
+            "vs matrix Joseph",
+            _worst(res["rank1"], "rank1_vs_joseph", where=sel),
+            "band",
+            _worst(res["rank1"], "band", where=sel),
+        )
+
+
 # --------------------------------------------------------------------------- driver
 
 
@@ -1509,6 +1665,12 @@ def summarise3(res):
         )
         for name in ("ekf", "ukf"):
             print(f"     {name:22s}", {k: float(f"{r[name][k]:.3g}") for k in keys})
+            if f"{name}_beyond_4mc_max" in r:
+                print(
+                    f"     {name} beyond 4 mc sd: {r[name + '_beyond_4mc_max']:.3g}; "
+                    f"z max where the PF is sharp ({r['sharp_fraction']:.2f} of cells): "
+                    f"{r[name + '_z_max_where_sharp']:.3g}"
+                )
     for r in res["static"]:
         print(f"  static {r['family']} k={r['k']}:", json.dumps(r["rows"]))
 
@@ -1518,6 +1680,7 @@ PARTS = {
     "part2": (part2, summarise2),
     "part3": (part3, summarise3),
     "divergence": (divergence, summarise_div),
+    "part4": (part4, summarise4),
 }
 
 
@@ -1531,6 +1694,7 @@ def main(argv=None):
     ap.add_argument("--particles", type=int, default=50000)
     ap.add_argument("--div-rows", type=int, default=1000)
     ap.add_argument("--seeds", type=int, default=50)
+    ap.add_argument("--time-budget", type=float, default=4.0, help="seconds per timed case")
     ap.add_argument("--force", action="store_true", help="recompute a part whose result exists")
     args = ap.parse_args(argv)
     os.makedirs(args.out, exist_ok=True)
