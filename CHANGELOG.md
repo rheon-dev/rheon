@@ -31,6 +31,30 @@ model that only the new build has is listed as an addition and passes.
 
 ### Added
 
+- **`glm`, generalized linear models fitted one row at a time** (task 500):
+  Poisson, Gamma, binomial and Tweedie regression, each with its log or
+  canonical link (the Poisson's log, the Gamma's log and inverse, the
+  binomial's logit, the Tweedie's log and power `μ^(1−p)`). Each row takes
+  one Fisher-scoring step on the penalized likelihood, `G = λG + wW·zzᵀ`,
+  `β += (G + R·I)⁻¹·wW(z̃ − η)·z`, each row's weight frozen at the fit that
+  scored it; the prediction is the mean, made before the row. Each target's
+  first `max(200, 10k)` learned rows are refit to convergence by penalized
+  IRLS (`refit_rows`, under `refit_budget`), since without a start 23 and
+  34 of 50 Poisson and Gamma streams at 20 coefficients stuck or ran away;
+  while the buffer fills its rows are held to a step of 1 in their own
+  linear predictor, and `step_cap` is the alternative with no buffer, at
+  1.5 to 2 times the refit's gap without decay. A row weight counts its row
+  (statsmodels' `freq_weights`). Against statsmodels' `GLM` and glum over
+  50 seeds at 20 coefficients the largest gap was 0.47, 0.33 and 0.61
+  standard errors at 10,000 rows (Poisson, Gamma, Tweedie at `p = 1.5`) and
+  0.20, 0.16 and 0.31 at 100,000. A target outside the family's range is
+  refused, naming the row. Decay only, no window: an exact window needs
+  each row in it. The family objects (variance, link, unit deviance,
+  working weight and response) are written once in `rheon-core`'s
+  `family.rs`, for the models that will reuse them. State: `k(k+1)/2 + k +
+  1` numbers a target, and `refit_rows·(features + 2)` more until the
+  refit runs, a group's buffers held to 256 KB when the spec is built.
+
 - **`kalman(covariance_form="square_root")`** (task 281 (3)): the filter
   holds its covariance as an upper-triangular factor, `P = C Cᵀ`, and
   updates the factor by Carlson's step, so a vague prior costs it no
