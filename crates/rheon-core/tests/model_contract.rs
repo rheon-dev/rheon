@@ -4419,6 +4419,17 @@ fn bocpd_recovers_from_bounded_extremes() {
 #[test]
 fn corrchange_predict_is_the_step() {
     predict_is_the_step_without_the_step(|| CorrChange::new(corrchange_cfg()).unwrap(), 0, true);
+    // The scalar mode ages its standardiser on a zero-weight row where the
+    // pairwise mode has none to age (review S12: that line was in no
+    // configuration the contract ran).
+    let scalar = || {
+        CorrChange::new(CorrChangeCfg {
+            scalar: true,
+            ..corrchange_cfg()
+        })
+        .unwrap()
+    };
+    predict_is_the_step_without_the_step(scalar, 0, true);
 }
 
 #[test]
