@@ -209,8 +209,12 @@ class OnlineSarima:
     and returns its prediction (made before ``y`` is read; NaN while the
     differencing ring fills, with the reason in ``reasons``)."""
 
-    def __init__(self, spec: Spec, warm: int | None = None) -> None:
+    def __init__(self, spec: Spec, warm: int | None = None, batch_start: int = 0) -> None:
         self.spec = spec
+        self.batch_start = batch_start
+        self.buffer: list[float] = []
+        self.started = not batch_start
+        self.batch_fit = None
         self.warm = warm if warm is not None else max(50, 2 * spec.s)
         L = ring_lengths(spec)
         self.ry = Ring(L["y (differencing)"])
@@ -272,10 +276,42 @@ class OnlineSarima:
             base -= dk * self.ry.lag(k)
         self.ry.push(y)
         w = y - base
+        if not self.started:
+            self.buffer.append(w)
+            self.reasons[row] = (
+                f"buffering {self.batch_start} differenced rows for the batch start "
+                "(fitted by the core's optimizer); no parameters yet"
+            )
+            if len(self.buffer) == self.batch_start:
+                self._start()
+            return math.nan
         what = self._what()
         pred = base + what
         self._row_w(w, what)
         return pred
+
+    def _start(self) -> None:
+        """Remedy (a) of study 485: fit the buffer's conditional least squares
+        by the core-held optimizer (``batch_core.maximize``, projected Newton),
+        then replay the buffer at the fitted ``beta`` with ``beta`` held,
+        building ``R``, ``s2`` and the rings; steps follow at gain ``1/W``,
+        ``W`` counting the buffer."""
+        rows = np.asarray(self.buffer)
+        self.batch_fit = css_fit(self.spec, rows)
+        self.beta = np.clip(self.batch_fit.theta, -CAP, CAP)
+        self._set_polys()
+        for w in rows:
+            what = self._what()
+            e = float(w) - what
+            psi = self._psi()
+            self.W += 1.0
+            g = 1.0 / self.W
+            self.R += g * (np.outer(psi, psi) - self.R)
+            self.s2 += g * (e * e - self.s2)
+            self._advance(float(w), e)
+        self.t = len(self.buffer)
+        self.buffer = []
+        self.started = True
 
     def _row_w(self, w: float, what: float) -> None:
         sp = self.spec
@@ -283,7 +319,15 @@ class OnlineSarima:
         t = self.t
         self.t += 1
         warm = self.warm
-        if t < warm:
+        if self.batch_start:
+            psi = self._psi()
+            self.W += 1.0
+            g = 1.0 / self.W
+            self.R += g * (np.outer(psi, psi) - self.R)
+            self.s2 += g * (e * e - self.s2)
+            step = g * np.linalg.solve(self.R, psi * e)
+            self.beta = np.clip(self.beta + step, -CAP, CAP)
+        elif t < warm:
             # phase 1: the lag-1 and lag-s autocorrelations at beta = 0
             self.syy += w * w
             if sp.p:
@@ -352,6 +396,49 @@ class OnlineSarima:
         return rings + n + n * (n + 1) // 2 + 6
 
 
+def css_objective(spec: Spec, w: np.ndarray):  # noqa: ANN201
+    """``-1/2 sum e_t^2`` over ``w`` from a zero start, its gradient
+    ``sum psi_t e_t`` and Gauss-Newton matrix ``sum psi_t psi_t'``, by the
+    estimator's own recursions at fixed parameters (``batch_core``'s
+    objective form)."""
+
+    def f(theta: np.ndarray, grad: bool):  # noqa: ANN202
+        est = OnlineSarima(spec, warm=10**9)
+        est.beta = np.asarray(theta, dtype=float).copy()
+        est._set_polys()
+        n = spec.n_params
+        g = np.zeros(n)
+        H = np.zeros((n, n))
+        sse = 0.0
+        for v in w:
+            what = est._what()
+            e = float(v) - what
+            sse += e * e
+            if grad:
+                psi = est._psi()
+                g += psi * e
+                H += np.outer(psi, psi)
+            est._advance(float(v), e)
+        if not math.isfinite(sse):
+            return -math.inf, g, H
+        return -0.5 * sse, g, H
+
+    return f
+
+
+def css_fit(spec: Spec, w: np.ndarray):  # noqa: ANN201
+    """The batch start's fit: ``batch_core.maximize`` (study 485's core-held
+    projected Newton) on the conditional least squares, the projection the
+    online clip, the start grid ``{-0.5, 0, 0.5}`` per coefficient."""
+    import itertools
+
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "study_485"))
+    import batch_core
+
+    grid = [tuple(g) for g in itertools.product((-0.5, 0.0, 0.5), repeat=spec.n_params)]
+    return batch_core.maximize(css_objective(spec, w), lambda th: np.clip(th, -CAP, CAP), grid)
+
+
 def fixed_predictions(spec: Spec, beta: np.ndarray, w: np.ndarray) -> np.ndarray:
     """One-step predictions of ``w`` at fixed parameters from a zero start
     (the conditional recursion), and the residuals."""
@@ -410,7 +497,12 @@ SARIMAX_SETTINGS = {
     "method": "lbfgs",
     "maxiter": 200,
     "cov_type": "opg",
+    "low_memory": "fit(low_memory=True, cov_type='none'), then filter(cov_type='opg') "
+    "storing no covariance arrays (identical to the default path, part 2)",
 }
+
+
+LEAN = 0  # set by _lean() at first use
 
 
 def sarimax_fit(spec: Spec, y: np.ndarray, start_params=None):  # noqa: ANN201
@@ -425,6 +517,8 @@ def sarimax_fit(spec: Spec, y: np.ndarray, start_params=None):  # noqa: ANN201
 
     from statsmodels.tsa.statespace.sarimax import SARIMAX
 
+    global LEAN
+    LEAN = _lean()
     st = SARIMAX_SETTINGS
     model = SARIMAX(
         y,
@@ -438,34 +532,83 @@ def sarimax_fit(spec: Spec, y: np.ndarray, start_params=None):  # noqa: ANN201
     )
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = model.fit(
+        fit = model.fit(
             start_params=start_params,
             method=st["method"],
             maxiter=st["maxiter"],
-            cov_type=st["cov_type"],
+            cov_type="none",
+            low_memory=True,
             disp=False,
         )
+        res = model.filter(fit.params, cov_type=st["cov_type"], conserve_memory=LEAN)
+    res.mle_retvals_fit = fit.mle_retvals
     return model, res
 
 
-def sarima_case(spec: Spec, seed: int, n: int = N_ROWS, tol0: bool = True) -> dict:
-    """One series: the online estimator against SARIMAX on the same rows."""
+def _lean() -> int:
+    """statsmodels' memory flags that keep the likelihood and the forecast
+    means and drop every stored covariance, gain and smoothing array: at
+    ``s = 168`` (170 states) the default results store ``n r^2`` floats per
+    covariance array, 2.3 GB each at 10,000 rows, and four fits at once ran
+    out of the machine's 15 GB. ``fit(low_memory=True, cov_type="none")`` then
+    ``filter(params, cov_type="opg", conserve_memory=LEAN)`` gives the default
+    path's parameters, standard errors, log-likelihood and forecasts to the
+    bit (checked on four ``s = 7`` fits, part 2)."""
+    from statsmodels.tsa.statespace import kalman_filter as kf
+
+    return (
+        kf.MEMORY_NO_PREDICTED_COV
+        | kf.MEMORY_NO_FILTERED_COV
+        | kf.MEMORY_NO_GAIN
+        | kf.MEMORY_NO_SMOOTHING
+        | kf.MEMORY_NO_STD_FORECAST
+        | kf.MEMORY_NO_FORECAST_COV
+    )
+
+
+def batch_window(spec: Spec) -> int:
+    """The batch start's buffer: 500 differenced rows (study 485's), or three
+    seasons when that is longer."""
+    return max(500, 3 * spec.s)
+
+
+def sarima_variants(spec: Spec, plain_only: bool) -> dict[str, dict]:
+    """The online forms run on each case: ``""`` the plain start (§3), and
+    ``"batch."`` the batch start of ``batch_window(spec)`` rows."""
+    out: dict[str, dict] = {"": {}}
+    if not plain_only:
+        out["batch."] = {"batch_start": batch_window(spec)}
+    return out
+
+
+def sarima_case(
+    spec: Spec,
+    seed: int,
+    n: int = N_ROWS,
+    tol0: bool = True,
+    start: str = "default",
+    plain_only: bool = True,
+) -> dict:
+    """One series: each online form against SARIMAX on the same rows. Field
+    names of the plain form are bare; the batch start's carry ``batch.``."""
     y = simulate_sarima(spec, n, seed)
+    runs = {}
+    for pre, kw in sarima_variants(spec, plain_only).items():
+        t0 = time.perf_counter()
+        est = OnlineSarima(spec, **kw)
+        pred = np.array([est.update(float(v)) for v in y])
+        runs[pre] = (est, pred, time.perf_counter() - t0)
     t0 = time.perf_counter()
-    est = OnlineSarima(spec)
-    pred = np.array([est.update(float(v)) for v in y])
-    t_online = time.perf_counter() - t0
-    t0 = time.perf_counter()
-    model, res = sarimax_fit(spec, y)
+    # start="online": SARIMAX's L-BFGS starts from the plain online estimate
+    sp0 = runs[""][0].params if start == "online" else None
+    model, res = sarimax_fit(spec, y, start_params=sp0)
     t_batch = time.perf_counter() - t0
     b = np.asarray(res.params, dtype=float)
     se = np.asarray(res.bse, dtype=float)
-    o = est.params
-    L = est.ry.n
-    w = model.endog[:, 0] if model.endog.ndim == 2 else np.asarray(model.endog)
-    w = np.asarray(w, dtype=float).ravel()
+    L = runs[""][0].ry.n
+    w = np.asarray(model.endog, dtype=float).ravel()
     # the fixed-parameter recursion at the batch parameters against SARIMAX's filter
-    fres = model.filter(b)
+    fres = model.filter(b, conserve_memory=LEAN)
     fc = np.asarray(fres.forecasts, dtype=float).ravel()
     mine = fixed_predictions(spec, b[:-1], w)
     tail_w = slice(w.shape[0] - 1000, w.shape[0])
@@ -477,42 +620,49 @@ def sarima_case(spec: Spec, seed: int, n: int = N_ROWS, tol0: bool = True) -> di
     if tol0:
         tol_saved = model.ssm.tolerance
         model.ssm.tolerance = 0.0
-        fc0 = np.asarray(model.filter(b).forecasts, dtype=float).ravel()
+        fc0 = np.asarray(model.filter(b, conserve_memory=LEAN).forecasts, dtype=float).ravel()
         model.ssm.tolerance = tol_saved
         gap_tol0 = float(np.max(np.abs(mine[tail_w] - fc0[tail_w])))
     base = y[L:] - w  # y_t - w_t
     yhat_b = base + fc
     half = slice(n // 2, n)
-    yh = pred[half]
     yb = np.concatenate([np.full(L, math.nan), yhat_b])[half]
     out = {
         "spec": spec.name,
         "seed": seed,
         "n": n,
-        "silent_rows": int(np.sum(np.isnan(pred))),
-        "silent_explained": int(
-            sum(1 for i in range(n) if math.isnan(pred[i]) and i in est.reasons)
-        ),
-        "sm_converged": bool(res.mle_retvals.get("converged", False)),
-        "sm_iterations": int(res.mle_retvals.get("iterations", -1)),
+        "sm_converged": bool(res.mle_retvals_fit.get("converged", False)),
+        "sm_iterations": int(res.mle_retvals_fit.get("iterations", -1)),
+        "sm_start": start,
         "llf_batch": float(res.llf),
-        "llf_online_params": float(model.loglike(o)) if o[-1] > 0 else math.nan,
         "filter_gap_last1000": float(np.max(np.abs(mine[tail_w] - fc[tail_w]))),
         "filter_gap_tol0_last1000": gap_tol0,
         "w_abs_max_last1000": float(np.max(np.abs(w[tail_w]))),
-        "pred_rms_gap_second_half": float(np.sqrt(np.mean((yh - yb) ** 2))),
-        "online_mse_second_half": float(np.mean((y[half] - yh) ** 2)),
-        "batch_mse_second_half": float(np.mean((y[half] - yb) ** 2)),
-        "t_online_s": t_online,
         "t_batch_s": t_batch,
-        "state_bytes": est.state_bytes(),
     }
     for i, nm in enumerate(spec.names):
         out[f"{nm}_batch"] = float(b[i])
-        out[f"{nm}_online"] = float(o[i])
         out[f"{nm}_se"] = float(se[i])
-        out[f"{nm}_gap_se"] = float((o[i] - b[i]) / se[i])
-    out["max_abs_gap_se"] = float(max(abs(out[f"{nm}_gap_se"]) for nm in spec.names))
+    for pre, (est, pred, t_online) in runs.items():
+        o = est.params
+        yh = pred[half]
+        out[pre + "silent_rows"] = int(np.sum(np.isnan(pred)))
+        out[pre + "silent_explained"] = int(
+            sum(1 for i in range(n) if math.isnan(pred[i]) and i in est.reasons)
+        )
+        out[pre + "llf_online_params"] = float(model.loglike(o)) if o[-1] > 0 else math.nan
+        out[pre + "pred_rms_gap_second_half"] = float(np.sqrt(np.mean((yh - yb) ** 2)))
+        out[pre + "online_mse_second_half"] = float(np.mean((y[half] - yh) ** 2))
+        out[pre + "batch_mse_second_half"] = float(np.mean((y[half] - yb) ** 2))
+        out[pre + "t_online_s"] = t_online
+        out[pre + "state_bytes"] = est.state_bytes()
+        if est.batch_fit is not None:
+            out[pre + "start_fit_stop"] = est.batch_fit.stop
+            out[pre + "start_fit_iterations"] = est.batch_fit.iterations
+        for i, nm in enumerate(spec.names):
+            out[f"{pre}{nm}_online"] = float(o[i])
+            out[f"{pre}{nm}_gap_se"] = float((o[i] - b[i]) / se[i])
+        out[pre + "max_abs_gap_se"] = float(max(abs(out[f"{pre}{nm}_gap_se"]) for nm in spec.names))
     return out
 
 
@@ -554,48 +704,69 @@ def run_grid(path: str, fn, cases: list[tuple], key, workers: int = 4) -> list[d
     return _load(path)
 
 
-def summarise_sarima(rows: list[dict], spec: Spec) -> dict:
-    rows = [r for r in rows if r["spec"] == spec.name]
-    out: dict = {"spec": spec.name, "cases": len(rows)}
+def summarise_sarima(rows: list[dict], spec: Spec, pre: str = "") -> dict:
+    rows = [r for r in rows if r["spec"] == spec.name and pre + "max_abs_gap_se" in r]
+    out: dict = {"spec": spec.name, "variant": pre or "plain.", "cases": len(rows)}
+    if not rows:
+        return out
     for nm in spec.names:
-        g = np.abs([r[f"{nm}_gap_se"] for r in rows])
+        g = np.abs([r[f"{pre}{nm}_gap_se"] for r in rows])
         out[nm] = {
             "median": float(np.median(g)),
             "max": float(np.max(g)),
             "over2": int(np.sum(g > 2)),
             "worst_seed": int(rows[int(np.argmax(g))]["seed"]),
-            "worst_signed": float(rows[int(np.argmax(g))][f"{nm}_gap_se"]),
+            "worst_signed": float(rows[int(np.argmax(g))][f"{pre}{nm}_gap_se"]),
         }
-    out["all_within_2"] = int(sum(1 for r in rows if r["max_abs_gap_se"] <= 2.0))
+    out["all_within_2"] = int(sum(1 for r in rows if r[pre + "max_abs_gap_se"] <= 2.0))
     out["sm_converged"] = int(sum(r["sm_converged"] for r in rows))
     out["sm_iterations_max"] = int(max(r["sm_iterations"] for r in rows))
     for f in (
         "filter_gap_last1000",
         "filter_gap_tol0_last1000",
-        "pred_rms_gap_second_half",
-        "t_online_s",
+        pre + "pred_rms_gap_second_half",
+        pre + "t_online_s",
         "t_batch_s",
     ):
         v = np.array([r[f] for r in rows if f in r and not math.isnan(r[f])])
-        out[f] = {
+        out[f.removeprefix(pre)] = {
             "median": float(np.median(v)) if v.size else math.nan,
             "max": float(np.max(v)) if v.size else math.nan,
             "cases": int(v.size),
         }
-    ratio = np.array([r["online_mse_second_half"] / r["batch_mse_second_half"] for r in rows])
+    ratio = np.array(
+        [r[pre + "online_mse_second_half"] / r[pre + "batch_mse_second_half"] for r in rows]
+    )
     out["mse_ratio_second_half"] = {"median": float(np.median(ratio)), "max": float(np.max(ratio))}
-    dll = np.array([r["llf_batch"] - r["llf_online_params"] for r in rows])
-    out["llf_gap_total"] = {"median": float(np.median(dll)), "max": float(np.max(dll))}
-    out["silent_rows"] = sorted({r["silent_rows"] for r in rows})
-    out["silent_unexplained"] = int(sum(r["silent_rows"] - r["silent_explained"] for r in rows))
-    out["state_bytes"] = rows[0]["state_bytes"]
+    dll = np.array([r["llf_batch"] - r[pre + "llf_online_params"] for r in rows])
+    out["llf_gap_total"] = {
+        "median": float(np.median(dll)),
+        "max": float(np.max(dll)),
+        "min": float(np.min(dll)),
+    }
+    out["silent_rows"] = sorted({r[pre + "silent_rows"] for r in rows})
+    out["silent_unexplained"] = int(
+        sum(r[pre + "silent_rows"] - r[pre + "silent_explained"] for r in rows)
+    )
+    out["state_bytes"] = rows[0][pre + "state_bytes"]
+    if pre + "start_fit_stop" in rows[0]:
+        out["start_fits"] = {
+            "converged": int(sum(r[pre + "start_fit_stop"] == "converged" for r in rows)),
+            "iterations_max": int(max(r[pre + "start_fit_iterations"] for r in rows)),
+        }
     return out
 
 
 def print_sarima(summ: dict, spec: Spec) -> None:
     print(
         f"== {spec.name}: SARIMA({spec.p},{spec.d},{spec.q})({spec.P},{spec.D},{spec.Q},{spec.s})"
+        f" [{summ.get('variant', 'plain.')[:-1]}]"
     )
+    if not summ["cases"]:
+        print("   no cases yet")
+        return
+    if "start_fits" in summ:
+        print(f"   start fits: {summ['start_fits']}")
     print(f"   truth {spec.truth}; cases {summ['cases']}; state {summ['state_bytes']} B")
     for nm in spec.names:
         g = summ[nm]
@@ -710,6 +881,10 @@ def sarima_checks(spec: Spec, seed: int = 487) -> dict:
 SPECS = {
     "s7_full": Spec("s7_full", 1, 1, 1, 1, 1, 1, 7, (0.5, 0.3, -0.3, -0.5, 1.0)),
     "s7_airline": Spec("s7_airline", 0, 1, 1, 0, 1, 1, 7, (-0.4, -0.6, 1.0)),
+    "s24_full": Spec("s24_full", 1, 1, 1, 1, 1, 1, 24, (0.5, 0.3, -0.3, -0.5, 1.0)),
+    "s24_airline": Spec("s24_airline", 0, 1, 1, 0, 1, 1, 24, (-0.4, -0.6, 1.0)),
+    "s168_full": Spec("s168_full", 1, 1, 1, 1, 1, 1, 168, (0.5, 0.3, -0.3, -0.5, 1.0)),
+    "s168_airline": Spec("s168_airline", 0, 1, 1, 0, 1, 1, 168, (-0.4, -0.6, 1.0)),
 }
 
 
@@ -727,6 +902,90 @@ def part1(args) -> dict:  # noqa: ANN001
     )
     res["summary"] = [summarise_sarima(rows, SPECS[k]) for k in ("s7_full", "s7_airline")]
     return res
+
+
+P2_SPECS = ("s24_full", "s24_airline", "s168_airline", "s168_full")
+TABLE_S = (4, 7, 12, 24, 52, 96, 168, 336, 672, 1440, 8760)
+TABLE_FORMS = {
+    "(0,1,1)(0,1,1,s) airline": (0, 1, 1, 0, 1, 1),
+    "(1,1,1)(1,1,1,s)": (1, 1, 1, 1, 1, 1),
+    "(1,0,1)(1,0,1,s)": (1, 0, 1, 1, 0, 1),
+    "(1,1,1)(1,1,0,s)": (1, 1, 1, 1, 1, 0),
+}
+
+
+def state_table() -> list[dict]:
+    """The estimator's state in bytes against ``s``: each ring, ``beta``,
+    ``R`` and the scalars, checked against the floats the implementation
+    allocates; beside it the batch start's buffer (held only until the start
+    is fitted) and the exact Kalman filter's state and covariance
+    ``8 (r + r(r+1)/2)``, ``r = max(p + sP, q + sQ + 1)`` (scan §3), which the
+    fixed-parameter oracle runs."""
+    out = []
+    for form, (p, d, q, P, D, Q) in TABLE_FORMS.items():
+        for s in TABLE_S:
+            n = p + q + P + Q
+            spec = Spec("t", p, d, q, P, D, Q, s, tuple([0.1] * n + [1.0]))
+            parts = state_floats(spec)
+            est = OnlineSarima(spec)
+            assert est.allocated_floats() == sum(parts.values())
+            r = max(p + s * P, q + s * Q + 1)
+            out.append(
+                {
+                    "form": form,
+                    "s": s,
+                    "rings_floats": {k: v for k, v in parts.items() if k in ring_lengths(spec)},
+                    "ring_floats_total": sum(ring_lengths(spec).values()),
+                    "other_floats": sum(parts.values()) - sum(ring_lengths(spec).values()),
+                    "state_bytes": 8 * sum(parts.values()),
+                    "batch_start_buffer_bytes": 8 * batch_window(spec),
+                    "kalman_r": r,
+                    "kalman_bytes": 8 * (r + r * (r + 1) // 2),
+                }
+            )
+    return out
+
+
+def part2(args) -> dict:  # noqa: ANN001
+    res: dict = {
+        "sarimax_settings": SARIMAX_SETTINGS,
+        "seeds": [SEEDS[0], SEEDS[-1]],
+        "n": N_ROWS,
+        "batch_window": {k: batch_window(SPECS[k]) for k in P2_SPECS},
+    }
+    res["state_table"] = state_table()
+    path = os.path.join(args.out, "sarima.jsonl")
+    cases = [(SPECS[k], seed) for k in P2_SPECS for seed in SEEDS[: args.seeds]]
+    key = lambda x: (x["spec"], x["seed"]) if isinstance(x, dict) else (x[0].name, x[1])  # noqa: E731
+    if args.no_run:
+        rows = _load(path)
+    else:
+        rows = run_grid(path, sarima_case_p2, cases, key=key, workers=args.workers)
+    res["summary"] = [
+        summarise_sarima(rows, SPECS[k], pre) for k in P2_SPECS for pre in ("", "batch.")
+    ]
+    have = {key(r) for r in rows}
+    res["complete"] = all(key(c) in have for c in cases)
+    return res
+
+
+def sarima_case_p2(spec: Spec, seed: int) -> dict:
+    return sarima_case(spec, seed, plain_only=False)
+
+
+def summarise2(res: dict) -> None:
+    print("SARIMAX settings:", res["sarimax_settings"])
+    print("batch windows:", res["batch_window"], "complete:", res["complete"])
+    print("state table (bytes):")
+    for row in res["state_table"]:
+        print(
+            f"   {row['form']:28s} s={row['s']:5d} rings {row['ring_floats_total']:6d} floats "
+            f"+ {row['other_floats']:3d}: {row['state_bytes']:7d} B; start buffer "
+            f"{row['batch_start_buffer_bytes']:6d} B; Kalman r={row['kalman_r']:5d} "
+            f"{row['kalman_bytes']:10d} B"
+        )
+    for summ in res["summary"]:
+        print_sarima(summ, SPECS[summ["spec"]])
 
 
 def summarise1(res: dict) -> None:
@@ -747,7 +1006,7 @@ def versions() -> dict:
     return out
 
 
-PARTS = {"part1": (part1, summarise1)}
+PARTS = {"part1": (part1, summarise1), "part2": (part2, summarise2)}
 
 
 def main(argv=None) -> int:  # noqa: ANN001
@@ -757,6 +1016,7 @@ def main(argv=None) -> int:  # noqa: ANN001
     ap.add_argument("--seeds", type=int, default=len(SEEDS), help="the first N seeds")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--force", action="store_true", help="recompute the part's summary")
+    ap.add_argument("--no-run", action="store_true", help="summarise the cached cases; run nothing")
     args = ap.parse_args(argv)
     os.makedirs(args.out, exist_ok=True)
     path = os.path.join(args.out, f"{args.part}.json")
@@ -770,8 +1030,9 @@ def main(argv=None) -> int:  # noqa: ANN001
         res = run(args)
         res["versions"] = versions()
         res["_seconds"] = time.perf_counter() - t0
-        with open(path, "w") as fh:
-            json.dump(res, fh, indent=1)
+        if res.get("complete", True):
+            with open(path, "w") as fh:
+                json.dump(res, fh, indent=1)
     summarise(res)
     return 0
 
