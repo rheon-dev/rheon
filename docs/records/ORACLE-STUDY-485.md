@@ -5,7 +5,8 @@ for in request A9: the plan below, GARCH(1,1) on one series (§9), over fifty
 seeds (§10), where the plain estimator fails the proposed criterion in the
 tail, and four mitigations on the same grid (§11), of which variance
 targeting and a 500-row batch start pass it. Part 4: ARMA(1,1) against
-statsmodels over the same seeds, with and without decay (§12). Nothing in the package or the Rust crates was changed. The scan this
+statsmodels over the same seeds, with and without decay (§12). Part 5:
+ETS(A,A,N) against statsmodels' `ETSModel` (§13). Nothing in the package or the Rust crates was changed. The scan this
 builds on is `vm-tools/research/485-TIME-SERIES-SCAN.md` on branch
 `vm-tools/oracle-gap-scan` (written from `a5c4dcef`); its section numbers are
 cited as "scan §N".*
@@ -427,8 +428,12 @@ has no flat ridge at these roots.
 | none | unweighted fit, its SE | 0.0571 / 0.344 / 0 | 0.112 / 0.562 / 0 | 0.151 / 0.298 / 0 | 50 |
 | none | weighted (CSS) against unweighted (exact) fit | 0.00606 / 0.0427 / 0 | 0.00548 / 0.0439 / 0 | 0.00521 / 0.0821 / 0 | 50 |
 
+**Verdict under decay:** against its own weighted fit, every half-life
+passes (50 of 50 at 500, 5,000 and none); against the unweighted fit,
+half-life 500 does not (10 of 50), while 5,000 and none do (50 of 50).
+
 The decayed estimator tracks the weighted fit of the same half-life closely
-(every gap under 0.3 scaled SE). Against the unweighted fit it is as far as
+(every gap under 0.3 scaled SE at half-lives 500 and 5,000). Against the unweighted fit it is as far as
 the weighted fit itself is (at `h = 500`, 10 of 50 within 2 SE for both),
 which is the decay doing its job: it estimates the recent rows' fit, not the
 whole series'. The oracle under decay is therefore the weighted fit; the
@@ -439,3 +444,74 @@ gaps against the unweighted batch parameters: 0.034 (`h = 500`), 0.010
 **Not measured:** MA(2) (§4's A2), roots near 0.8 or beyond, heavy tails,
 uneven clocks, and the decayed estimator on a series whose parameters move
 (the case decay is for).
+
+## 13. Part 5: ETS(A,A,N) against statsmodels
+
+`scripts/study_485/ets.py` (the estimator, the oracle, the comparison and the
+grid in one file: `python ets.py OUT.jsonl`, resumable, `--summary` for the
+table), `scripts/study_485/test_ets.py`.
+
+**The truth** (the coordinator's for this part): `α = 0.3`, `β = 0.1`,
+`σ = 1.0`, in `ETSModel`'s parameterization, where the trend moves by
+`β e_t` (the classical `β* = β/α` is 1/3); additive error, additive trend, no
+damping, no season. The series start from a given level 10 and trend 0.1
+(§4's E2 had `β = 0.05`). A local linear trend has no stationary
+distribution, so there is no burn-in.
+
+**The estimator.** Each row predicts `ŷ_t = l_{t−1} + b_{t−1}` before
+reading `y_t`, then takes one Gauss-Newton step on `e_t²` with the gradient
+`ψ_t = ∂ŷ_t/∂(α, β)` carried by the states' own sensitivity recursion
+(module docstring), gain `1/t`, and projects onto statsmodels' own box
+(`α` in `[1e-4, 1 − 1e-4]`, `β/α` in `[1e-4, 1 − 1e-4]`). It starts at
+`(α, β) = (0.5, 0.05)` with the initial states given, accumulates the
+Gauss-Newton matrix over the first 50 rows with the parameters held, and
+steps from row 51. `σ²` is the running mean of its own one-step squared
+errors. Nothing is buffered; every row emits. State: 13 floats, 104 bytes.
+
+**The oracle and its settings.** `statsmodels.tsa.exponential_smoothing.ets.
+ETSModel(y, error="add", trend="add", damped_trend=False,
+initialization_method="known", initial_level=10, initial_trend=0.1)`,
+`fit(disp=False)` with its defaults: maximum likelihood with `σ²`
+concentrated out, optimizer `"lbfgs"` with a numerical gradient
+(`approx_grad=True`), `β` fitted internally as `β/α` with both in
+`[1e-4, 1 − 1e-4]`, maximum 1,000 iterations; `cov_type="approx"`, the
+inverse of a complex-step numerical Hessian (the only one `ETSModel`
+offers), statsmodels 0.15.0. It converged on all 100 cases. The initial
+states are known to both sides, so neither estimates them.
+
+**Whose standard errors.** For `α` and `β` they are the oracle's own
+(`ETSResults.bse`). For `σ²` statsmodels gives none, since it is
+concentrated out of the likelihood: its `σ̂²` is the mean squared one-step
+residual at the fitted `(α, β)` (recomputed here and equal to `ETSResults.mse`
+to 4e-13), and its SE is the Gaussian closed form `σ̂² sqrt(2/n)`, written
+here, not the oracle's.
+
+**Fixed parameters** (`test_ets.py`): the smoother's one-step predictions
+equal `ETSModel.smooth(params).fittedvalues` to rtol 1e-12 (on every grid case
+the batch parameters' predictions met `fittedvalues` to 8.7e-11 absolute, on
+levels that wander with the trend). Out-of-sample, scale equivariance
+(states and target scaled by 37: `α, β` unmoved, `σ²` by 37², rtol 1e-9) and
+admissibility at every row are held too.
+
+**The grid** (seeds 485000 to 485049; absolute gaps in the SEs above; "over
+3" counts seeds; the last column is the criterion's count):
+
+| rows | `α` in SE: median / max / over 3 | `β` | `σ²` | all within 2 SE |
+|---|---|---|---|---|
+| 2,000 | 0.446 / 1.79 / 0 | 0.358 / 2.64 / 0 | 0.231 / 0.523 / 0 | 49 |
+| 10,000 | 0.237 / 1.06 / 0 | 0.211 / 1.74 / 0 | 0.131 / 0.339 / 0 | **50** |
+
+One-step predictions over the second half against the batch parameters'
+predictions on the same rows: RMS gap median 0.028 (max 0.095) at 2,000 rows
+and 0.0087 (max 0.029) at 10,000, on a unit error; the online MSE is 1.0021
+(max 1.0090) and 1.0004 (max 1.0013) times the batch parameters'. No
+online `β` ended at its bound.
+
+**Against the criterion** (all parameters within 2 batch SEs on at least 45
+of 50 seeds at 10,000 rows): **passes, 50 of 50** (with `α` and `β` in the
+oracle's own SEs, `σ²` in the closed form). Like ARMA, it needed none of the
+GARCH mitigations.
+
+**Not measured:** damped and seasonal forms, multiplicative forms, the
+half-life (decay) form rheon's `holt` uses, estimated or heuristic initial
+states, and the grid form over `(α, β)` (§3 (b)).
