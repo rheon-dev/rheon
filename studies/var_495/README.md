@@ -22,6 +22,9 @@ collected by the repo's pytest (`testpaths = ["tests"]`), and nothing is added t
 - `calibration.py`: size of the online Granger test under decay, and detection
   after a break (Monte Carlo; results below).
 
+Environment used: a standalone venv (Python 3.13, numpy 2.5.5, scipy 1.18.1,
+statsmodels 0.15.0), not `uv sync`, which would build the Rust extension.
+
 ## The model, in short
 
 The model keeps the last `p` rows itself, so a row is just `y_t` (k values) and a
@@ -125,7 +128,32 @@ accurate of the two.
 
 ### Under decay (no oracle: statsmodels has no forgetting)
 
-CALIBRATION
+`python calibration.py 1000` (about 4 minutes): a bivariate VAR(1) with N(0, I)
+noise, `1 -> 0` absent, the test read once at the stream's end, 1000 streams each
+(Monte Carlo standard error of a 5% rate: 0.007):
+
+| lam | T | n_eff | size of `f` at 5% | size of `ssr_f` at 5% | mean `sigma_u` diagonal (truth 1) |
+|---|---|---|---|---|---|
+| 1 | 500 | 499 | 0.057 | 0.056 | 1.001 |
+| 0.99 | 2000 | ~199 | 0.046 | 0.046 | 0.999 |
+| 0.95 | 2000 | ~39 | 0.035 | 0.031 | 1.001 |
+
+- `sigma_u = SSE n_eff / (W df)` is unbiased for the noise under decay. The first
+  draft used statsmodels' `SSE / df` there, which estimates `Sigma V / W`, about
+  `Sigma / (1 + lam)`: half the noise. The Wald statistic was right either way (it
+  needs `SSE / df` times `Sxx^{-1}`, which is what the decayed fit's variance is),
+  so only the reported `sigma_u`, `sigma_u_mle` and `cov_params` moved.
+- With Kish's `n_eff` for the degrees of freedom the test holds its size at
+  `n_eff ~ 200` and is conservative at `n_eff ~ 40` (0.031 to 0.035 against 0.05):
+  a decayed sample is not `n_eff` independent rows, and the F reference is an
+  approximation there. A `min_weight` of a few hundred keeps the p-values honest.
+- Detection after a break (one stream; the `1 -> 0` coefficient switches from 0 to
+  0.25 at row 1000; rows until the 1% test rejects at every later row): 148 rows
+  with no decay, 66 at `lam = 0.995`, 435 at 0.99, never at 0.98 (with `n_eff ~
+  100` the test's power at this effect is well below 1, so it dips above 1% now and
+  then). One path only: an illustration, not a power study. No decay detects a
+  switch-on fast but would be slow to forget a switch-off; that is the point of the
+  decay.
 
 ## Differences from statsmodels, and why
 
