@@ -44,8 +44,11 @@ TYPES = ("hc0", "hc1", "hc2", "hc3")
 
 
 class HCSandwich:
-    def __init__(self, k: int, types=TYPES):
+    def __init__(self, k: int, types=TYPES, warm: int | None = None):
         self.d = k + 1
+        # rows folded into the bread before the meat starts: the fit's first out-of-sample
+        # residuals (a fit on d rows) are far off and, at lam=1, never wash out (512c's last rows)
+        self.warm = self.d if warm is None else warm
         self.types = tuple(types)
         self.B = np.zeros((self.d, self.d))
         self.b = np.zeros(self.d)
@@ -69,7 +72,7 @@ class HCSandwich:
         for t in self.M:
             self.M[t] *= lam * lam
         e = g = np.nan
-        if w > 0 and self.rows >= d:
+        if w > 0 and self.rows >= self.warm:
             try:
                 bd = np.linalg.solve(Bd, self.b)
                 v = np.linalg.solve(Bd, z)
@@ -209,22 +212,27 @@ def report(seeds: int = 20) -> None:
             for sd in range(seeds):
                 k = 3
                 x, y, dt, w = stream(sd, n, k, hetero=het)
-                hc = HCSandwich(k)
+                hc = HCSandwich(k, warm=20)
+                hu = HCSandwich(k)  # unprotected: the meat starts at the first row with a fit
                 for i in range(n):
                     hc.update(x[i], y[i], 1.0, 1.0)
+                    hu.update(x[i], y[i], 1.0, 1.0)
                 X = sm.add_constant(x, prepend=True)
                 ref = {t.lower(): np.sqrt(np.diag(sm.OLS(y, X).fit(cov_type=t.upper()).cov_params())) for t in TYPES}
                 for a in TYPES:
                     se = np.sqrt(np.diag(hc.cov(a)))
                     for b in TYPES:
                         rat[(a, b)].append(se / ref[b])
+                rat.setdefault("u", []).append(np.sqrt(np.diag(hu.cov("hc3"))) / ref["hc3"])
             for a in TYPES:
                 v = np.array(rat[(a, a)])
                 v0 = np.array(rat[("hc3", "hc0")])
                 rows.append([n, a.upper() + "*", float(v.mean()), float(v.min()), float(v.max()), float(np.abs(v - 1).max())])
             v0 = np.array(rat[("hc3", "hc0")])
             rows.append([n, "existing oos HC0 (=HC3*) vs HC0", float(v0.mean()), float(v0.min()), float(v0.max()), float(np.abs(v0 - 1).max())])
-        table(f"512c: SE ratio rheon type / statsmodels same type (final fit, unit weights, no decay; k=3, {'heteroskedastic' if het else 'homoskedastic'}; over seeds and coefficients)",
+            vu = np.array(rat["u"])
+            rows.append([n, "HC3* with no warm-up (meat from row k+1)", float(vu.mean()), float(vu.min()), float(vu.max()), float(np.abs(vu - 1).max())])
+        table(f"512c: SE ratio rheon type / statsmodels same type (final fit, unit weights, no decay; meat starts after 20 rows; k=3, {'heteroskedastic' if het else 'homoskedastic'}; over seeds and coefficients)",
               ["n", "type", "mean", "min", "max", "max |ratio-1|"], rows)
 
     rows = [[k, nt, extra_bytes(k, nt), extra_bytes(k, nt, lags=5)] for k in (3, 20, 100) for nt in (2, 3, 4)]
