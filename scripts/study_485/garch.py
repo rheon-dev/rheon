@@ -233,6 +233,7 @@ def compare(n: int, seed: int, truth: tuple[float, float, float]) -> dict[str, f
     out = {
         "n": float(n),
         "seed": float(seed),
+        "arch_converged": float(res.convergence_flag),  # 0: SLSQP converged
         "arch_path_vs_filter_max_rel": float(
             np.max(np.abs(path_b / res.conditional_volatility**2 - 1.0))
         ),

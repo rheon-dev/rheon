@@ -1,8 +1,9 @@
 # Online estimators for GARCH, ARMA, ETS and DCC against their batch fits: a numpy study
 
-*Status, 2026-11-21: a record, in progress. Part 1 of the study asked for in
-request A9: the plan below, and the first measurement (GARCH(1,1), one
-series). Nothing in the package or the Rust crates was changed. The scan this
+*Status, 2026-11-21: a record, in progress. Parts 1 and 2 of the study asked
+for in request A9: the plan below, GARCH(1,1) on one series (§9), and
+GARCH(1,1) over fifty seeds (§10), where the plain estimator fails the
+proposed criterion in the tail. Nothing in the package or the Rust crates was changed. The scan this
 builds on is `vm-tools/research/485-TIME-SERIES-SCAN.md` on branch
 `vm-tools/oracle-gap-scan` (written from `a5c4dcef`); its section numbers are
 cited as "scan §N".*
@@ -54,7 +55,10 @@ This study measures them before any Rust is written:
 **Environment.** A separate venv outside the repository (the session's
 scratchpad), Python 3.13.18, `numpy 2.5.5`, `arch 9.0.0`, `statsmodels
 0.15.0`, `scipy 1.18.1` (pulled in by both), `pandas 3.1.1`, `pytest 9.2.0`.
-The repository's `.venv` and `pyproject.toml` are untouched.
+The repository's `.venv` and `pyproject.toml` are untouched. `scipy`, which
+comes in through `arch` and `statsmodels`, is accepted as an oracle too
+(the coordinator's answer of 2026-11-21): it is the optimizer of the DCC batch
+fit, and its `multivariate_normal` gives the DCC per-row likelihood.
 
 ## 3. Estimators
 
@@ -199,3 +203,52 @@ compensating.
 on seeds 1 to 3 (not part of the plan's seed range) put `α` and `β` at 3.5
 SEs on one seed at 10,000 rows, and `ω` at 4 to 9 SEs at 2,000 rows: the
 fifty-seed grid is what decides the criterion.
+
+## 10. Part 2: GARCH(1,1), fifty seeds
+
+`scripts/study_485/grid_garch.py`, the estimator of part 1 unchanged. G1
+(`ω = 0.02, α = 0.08, β = 0.90`), seeds 485000 to 485049, at 2,000 and 10,000
+rows: 100 cases, about 2.5 minutes in all. The script appends one JSON line per
+case and resumes after the last one written; `--summary` prints the table
+below. arch's SLSQP reported convergence on all 100 cases.
+
+Absolute values over the fifty seeds. "Over 3 SE" counts seeds.
+
+| quantity | 2,000 rows: median | max | over 3 SE | 10,000 rows: median | max | over 3 SE |
+|---|---|---|---|---|---|---|
+| `ω` gap in batch SEs | 0.99 | 24.0 | 6 | 0.83 | 63.4 | 6 |
+| `α` gap in batch SEs | 0.94 | 6.51 | 7 | 1.03 | 13.7 | 9 |
+| `β` gap in batch SEs | 0.83 | 5.41 | 4 | 0.60 | 10.8 | 6 |
+| log-likelihood gap per row | 1.28e-3 | 0.158 | — | 1.77e-4 | 0.108 | — |
+| median variance-path gap, second half | 7.1% | 137% | — | 2.6% | 102% | — |
+
+| count over the fifty seeds | 2,000 rows | 10,000 rows |
+|---|---|---|
+| any parameter over 3 SE | 12 | 12 |
+| every parameter within 2 SE | 31 | 34 |
+| variance-path gap over 5% | 33 | 13 |
+| the online parameters out-score arch's fit | 0 | 0 |
+| 90th percentile: path gap; log-likelihood gap per row | 17.9%; 1.09e-2 | 9.9%; 3.0e-3 |
+
+**Against §7's GARCH criterion** (every parameter within 2 SEs on 90% of
+seeds at 10,000 rows; path gap under 5% after 5,000 rows): **failed.** 34 of
+50 seeds (68%) are inside 2 SEs and 37 of 50 (74%) inside 5% on the path. The
+medians meet the criteria; the tail does not.
+
+**The failure is a stuck transient, not slow convergence.** The worst seeds
+are the same at both sizes and do not improve from 2,000 to 10,000 rows:
+
+| seed | rows | arch `(ω, α, β)` | online `(ω, α, β)` |
+|---|---|---|---|
+| 485000 | 2,000 | (0.0215, 0.0658, 0.9061) | (0.1758, 0.0170, 0.8730) |
+| 485000 | 10,000 | (0.0222, 0.0811, 0.8965) | (0.2306, 0.0591, 0.8105) |
+| 485041 | 2,000 | (0.0175, 0.0684, 0.9121) | (0.0368, 0.0002, 0.9809) |
+| 485041 | 10,000 | (0.0208, 0.0735, 0.9064) | (0.0659, 0.0056, 0.9597) |
+
+Early steps, taken with an information matrix from 75 rows, push `α` onto its
+boundary (485041) or `ω` far up with the persistence down (485000); with a
+gain of `1/(t + 75)` the remaining steps are too small to walk back along the
+`α + β` ridge in 10,000 rows. This is the risk scan §8 names. The mitigations
+it lists are what part 3 should measure on the same grid: variance targeting,
+a cap on each step's size, a longer buffered batch fit as the start, and a
+gain that decays more slowly than `1/t`.
