@@ -474,7 +474,7 @@ def test_min_weight_withholds_a_block_with_fewer_returns(kind):
     accepted and did nothing: ``min_weight=1e9`` closed the same row as the
     default (task 278, the user's decision of 2026-10-25)."""
     df = ticks(n=300, blocks=2).with_columns(
-        # Ten zero-weight rows in block 0: they advance the clock and are no
+        # Ten zero-weight rows in block 0: they count in no clock and are no
         # return, so the block holds 140 returns over 150 rows.
         w=pl.when(pl.int_range(pl.len()) % 15 == 7).then(0.0).otherwise(1.0)
     )

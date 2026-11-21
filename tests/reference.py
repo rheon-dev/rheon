@@ -685,8 +685,10 @@ def kalman_ref(
 
     - the transition ``b <- Phi b``, ``P <- Phi P Phi`` with
       ``Phi = diag(2^(-d / r_i))`` from ``revert_half_life`` runs first, before
-      the prediction, on every accepted row (a null target or a zero weight
-      still advances the clock); ``inf`` is ``Phi = I`` (E41);
+      the prediction, on every accepted row (a null target still advances
+      the clock; a row of weight 0 is in no clock, so a caller steps the reference
+      over the stream without such rows, as ``tests/counted.py`` does); ``inf`` is
+      ``Phi = I`` (E41);
     - features are standardized with the EW stats *before* the row's update,
       using scale 1 for the intercept slot and for a feature whose variance
       is not positive (the core's ``variance_is_usable`` since T-E9; see

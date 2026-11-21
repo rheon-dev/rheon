@@ -24,7 +24,8 @@ hard rules 2, 8 and 9):
 - ``weight_sum`` is the weight before the row's update and before its own decay,
   so its ages are counted from the last accepted row; under a ``window`` it
   is the weight inside the window, as seen from there.
-- A zero-weight row advances the clock and teaches nothing.
+- A zero-weight row teaches nothing and counts in no clock: the reference
+  steps over the stream without it.
 """
 
 from __future__ import annotations

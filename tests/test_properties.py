@@ -83,7 +83,7 @@ _values = st.one_of(
     st.sampled_from([INPUT_BOUND, -INPUT_BOUND, float("nan"), float("inf"), float("-inf")]),
     st.none(),
 )
-#: A weight of ``-0.0`` is a weight of 0, "advance the clock, learn nothing"
+#: A weight of ``-0.0`` is a weight of 0, "learn nothing, count in no clock"
 #: (hard rule 9): it is not below zero, so the bank takes it. Hypothesis never
 #: draws it from ``floats(min_value=0.0)``, so it is named (task 209 (e)).
 _weights = st.one_of(

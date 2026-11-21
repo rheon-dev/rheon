@@ -197,7 +197,7 @@ def test_a_save_goes_on_to_the_bit(kw):
 
 
 def test_a_zero_weight_row_learns_none_of_its_events():
-    """A row of weight 0 advances the clock and learns nothing: every
+    """A row of weight 0 learns nothing and counts in no clock: every
     intensity and fit is the stream's whose row carries no event."""
     df = _stream(400, 2, 5).drop("g")
     zero = pl.col("w") == 0.0

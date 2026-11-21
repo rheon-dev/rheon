@@ -65,8 +65,8 @@ class TestRls:
         row while its weight was still 0, so the prior's scale stayed at 1
         across it, where ``rls`` ages its factor on every row; after two such
         rows a clock unit apart the two, documented as one estimator, were
-        6.8e-2 apart. A zero-weight row advances the clock and ages the prior
-        in both."""
+        6.8e-2 apart. A zero-weight row counts in no clock (hard rule 9), so it
+        ages the prior in neither."""
         rng = np.random.default_rng(3)
         n = 60
         x = rng.standard_normal((n, 2))

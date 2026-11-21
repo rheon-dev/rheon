@@ -225,7 +225,7 @@ class TestOracle:
         # bound and are capped, the light ones promote late.
         w = np.exp(rng.uniform(math.log(0.5), math.log(8.0), len(rows))).tolist()
         for i in range(0, len(rows), 41):
-            w[i] = 0.0  # advance the clock, learn nothing
+            w[i] = 0.0  # learn nothing, count in no clock
         w[0] = 0.0  # ... even as the first row
         w[7] = None  # a null weight skips the row
         t = np.cumsum(np.where(np.arange(len(rows)) % 23 == 0, 40.0, rng.random(len(rows)) + 0.5))

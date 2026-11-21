@@ -5,7 +5,7 @@ instance's unless set, and ``inf`` the run-once form (docs/PLAN.md task
 221). The oracles -- statsmodels on the same rows -- are in
 ``tests/test_second_opinion.py``; this file holds each accumulator to the
 hard rules: a field never reads its own row (rule 2), one chunk or many give
-the same numbers (rule 3), a weight of zero only advances the clock, as the
+the same numbers (rule 3), a weight of zero learns nothing and counts in no clock, as the
 first row too (rule 9), the state goes on to the bit across a save, a reset
 starts it over, and a knob without its switch is refused.
 """

@@ -487,7 +487,7 @@ withheld_reason = { budget = 1.125 }
 
 [memory.ew_class]
 class = { budget = 1.125 }
-coef = { budget = 40.5 }
+coef = { budget = 39.325 }
 learned_clock = { budget = 8.125 }
 p_down = { budget = 8.125 }
 p_up = { budget = 8.125 }
@@ -569,7 +569,7 @@ calibration_slope_y = { budget = 8.125 }
 calibration_slope_z = { budget = 8.125 }
 calibration_wald_y = { budget = 8.125 }
 calibration_wald_z = { budget = 8.125 }
-coef = { budget = 71.485 }
+coef = { budget = 68.9058 }
 coverage_y = { budget = 8.125 }
 coverage_z = { budget = 8.125 }
 cusum_sq_y = { budget = 8.125 }
@@ -609,8 +609,8 @@ ramsey_reset_z = { budget = 8.125 }
 resid_y = { budget = 8.125 }
 resid_z = { budget = 8.125 }
 scored_clock = { budget = 8.125 }
-se_coef = { budget = 72.475 }
-se_coef_hc0 = { budget = 71.181 }
+se_coef = { budget = 69.8555 }
+se_coef_hc0 = { budget = 68.6498 }
 settled_frac = { budget = 8.125 }
 sigma_y = { budget = 8.125 }
 sigma_z = { budget = 8.125 }
@@ -621,7 +621,7 @@ spread_ratio_x1 = { budget = 8.125 }
 spread_ratio_x2 = { budget = 8.125 }
 studentized_y = { budget = 8.125 }
 studentized_z = { budget = 8.125 }
-support_coef = { budget = 72.475 }
+support_coef = { budget = 69.8555 }
 weight_sum = { budget = 8.125 }
 withheld_reason = { budget = 1.125 }
 zscore_y = { budget = 8.125 }
@@ -636,7 +636,7 @@ breusch_pagan_hit = { budget = 8.125 }
 calibration_intercept_hit = { budget = 8.125 }
 calibration_slope_hit = { budget = 8.125 }
 calibration_wald_hit = { budget = 8.125 }
-coef = { budget = 39.805 }
+coef = { budget = 38.5394 }
 coverage_hit = { budget = 8.125 }
 cusum_hit = { budget = 8.125 }
 cusum_sq_hit = { budget = 8.125 }
@@ -669,7 +669,7 @@ withheld_reason = { budget = 1.125 }
 zscore_hit = { budget = 8.125 }
 
 [memory.hmm]
-coef = { budget = 40.0 }
+coef = { budget = 38.845 }
 filtered_state0 = { budget = 8.125 }
 filtered_state1 = { budget = 8.125 }
 learned_clock = { budget = 8.125 }
@@ -691,7 +691,7 @@ breusch_pagan_y = { budget = 8.125 }
 calibration_intercept_y = { budget = 8.125 }
 calibration_slope_y = { budget = 8.125 }
 calibration_wald_y = { budget = 8.125 }
-coef = { budget = 24.0 }
+coef = { budget = 23.485 }
 coverage_y = { budget = 8.125 }
 cusum_sq_y = { budget = 8.125 }
 cusum_y = { budget = 8.125 }
@@ -734,7 +734,7 @@ calibration_slope_y = { budget = 8.125 }
 calibration_slope_z = { budget = 8.125 }
 calibration_wald_y = { budget = 8.125 }
 calibration_wald_z = { budget = 8.125 }
-coef = { budget = 71.485 }
+coef = { budget = 68.9538 }
 coverage_y = { budget = 8.125 }
 coverage_z = { budget = 8.125 }
 cusum_sq_y = { budget = 8.125 }
@@ -780,7 +780,7 @@ spread_ratio_x1 = { budget = 8.125 }
 spread_ratio_x2 = { budget = 8.125 }
 studentized_y = { budget = 8.125 }
 studentized_z = { budget = 8.125 }
-support_coef = { budget = 72.475 }
+support_coef = { budget = 69.9043 }
 weight_sum = { budget = 8.125 }
 withheld_reason = { budget = 1.125 }
 zscore_y = { budget = 8.125 }
@@ -803,7 +803,7 @@ calibration_slope_y = { budget = 8.125 }
 calibration_slope_z = { budget = 8.125 }
 calibration_wald_y = { budget = 8.125 }
 calibration_wald_z = { budget = 8.125 }
-coef = { budget = 71.485 }
+coef = { budget = 68.9538 }
 coverage_y = { budget = 8.125 }
 coverage_z = { budget = 8.125 }
 cusum_sq_y = { budget = 8.125 }
@@ -843,7 +843,7 @@ ramsey_reset_z = { budget = 8.125 }
 resid_y = { budget = 8.125 }
 resid_z = { budget = 8.125 }
 scored_clock = { budget = 8.125 }
-se_coef = { budget = 72.475 }
+se_coef = { budget = 69.9043 }
 settled_frac = { budget = 8.125 }
 sigma_y = { budget = 8.125 }
 sigma_z = { budget = 8.125 }
@@ -861,7 +861,7 @@ zscore_z = { budget = 8.125 }
 
 [memory.kmeans]
 cluster = { budget = 8.125 }
-coef = { budget = 70.4515 }
+coef = { budget = 67.9682 }
 dist = { budget = 8.125 }
 dist_second = { budget = 8.125 }
 learned_clock = { budget = 8.125 }
@@ -919,7 +919,7 @@ calibration_wald_y__p0 = { budget = 8.125 }
 calibration_wald_z__p0 = { budget = 8.125 }
 "calibration_wald_z__p0.05" = { budget = 8.125 }
 "calibration_wald_z__p0.2" = { budget = 8.125 }
-coef = { budget = 198.2051 }
+coef = { budget = 190.6114 }
 coverage_y__p0 = { budget = 8.125 }
 "coverage_y__p0.05" = { budget = 8.125 }
 "coverage_y__p0.2" = { budget = 8.125 }
@@ -1061,7 +1061,7 @@ weight_sum = { budget = 8.0 }
 
 [memory.micro]
 cluster = { budget = 8.125 }
-coef = { budget = 210.5146 }
+coef = { budget = 202.4194 }
 dist = { budget = 8.125 }
 learned_clock = { budget = 8.125 }
 micro_id = { budget = 8.125 }
@@ -1090,7 +1090,7 @@ calibration_slope_y = { budget = 8.125 }
 calibration_slope_z = { budget = 8.125 }
 calibration_wald_y = { budget = 8.125 }
 calibration_wald_z = { budget = 8.125 }
-coef = { budget = 71.485 }
+coef = { budget = 68.9538 }
 coverage_y = { budget = 8.125 }
 coverage_z = { budget = 8.125 }
 cusum_sq_y = { budget = 8.125 }
@@ -1156,7 +1156,7 @@ calibration_coverage_y = { budget = 8.125 }
 calibration_coverage_z = { budget = 8.125 }
 calibration_wald_y = { budget = 8.125 }
 calibration_wald_z = { budget = 8.125 }
-coef = { budget = 71.485 }
+coef = { budget = 68.9538 }
 coverage_y = { budget = 8.125 }
 coverage_z = { budget = 8.125 }
 cusum_sq_y = { budget = 8.125 }
@@ -1202,7 +1202,7 @@ spread_ratio_x1 = { budget = 8.125 }
 spread_ratio_x2 = { budget = 8.125 }
 studentized_y = { budget = 8.125 }
 studentized_z = { budget = 8.125 }
-support_coef = { budget = 72.475 }
+support_coef = { budget = 69.9043 }
 weight_sum = { budget = 8.125 }
 withheld_reason = { budget = 1.125 }
 zscore_y = { budget = 8.125 }
@@ -1230,7 +1230,7 @@ calibration_slope_y = { budget = 8.125 }
 calibration_slope_z = { budget = 8.125 }
 calibration_wald_y = { budget = 8.125 }
 calibration_wald_z = { budget = 8.125 }
-coef = { budget = 71.485 }
+coef = { budget = 68.9538 }
 coverage_y = { budget = 8.125 }
 coverage_z = { budget = 8.125 }
 cusum_sq_y = { budget = 8.125 }
@@ -1270,8 +1270,8 @@ ramsey_reset_z = { budget = 8.125 }
 resid_y = { budget = 8.125 }
 resid_z = { budget = 8.125 }
 scored_clock = { budget = 8.125 }
-se_coef = { budget = 72.475 }
-se_coef_hc0 = { budget = 71.181 }
+se_coef = { budget = 69.9043 }
+se_coef_hc0 = { budget = 68.6498 }
 settled_frac = { budget = 8.125 }
 sigma_y = { budget = 8.125 }
 sigma_z = { budget = 8.125 }
@@ -1315,7 +1315,7 @@ calibration_slope_y = { budget = 8.125 }
 calibration_slope_z = { budget = 8.125 }
 calibration_wald_y = { budget = 8.125 }
 calibration_wald_z = { budget = 8.125 }
-coef = { budget = 71.485 }
+coef = { budget = 68.9538 }
 coverage_y = { budget = 8.125 }
 coverage_z = { budget = 8.125 }
 cusum_sq_y = { budget = 8.125 }
@@ -1417,7 +1417,7 @@ breusch_pagan_hit = { budget = 8.125 }
 calibration_intercept_hit = { budget = 8.125 }
 calibration_slope_hit = { budget = 8.125 }
 calibration_wald_hit = { budget = 8.125 }
-coef = { budget = 39.805 }
+coef = { budget = 38.5394 }
 coverage_hit = { budget = 8.125 }
 cusum_hit = { budget = 8.125 }
 cusum_sq_hit = { budget = 8.125 }
@@ -1450,7 +1450,7 @@ withheld_reason = { budget = 1.125 }
 zscore_hit = { budget = 8.125 }
 
 [memory.hawkes]
-coef = { budget = 89.25 }
+coef = { budget = 86.125 }
 intensity_y = { budget = 8.125 }
 intensity_z = { budget = 8.125 }
 learned_clock = { budget = 8.125 }

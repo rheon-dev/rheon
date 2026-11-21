@@ -16,7 +16,8 @@ Conventions, shared with the core and the bank (docs/PLAN.md section 3):
 - A row with a null / non-finite / out-of-bound feature, or such a weight,
   is skipped: every output null, nothing learned, the clock still advances.
 - ``weight_sum`` is the EW weight before the row and before its own decay.
-- A zero weight advances the clock and learns nothing.
+- A zero weight learns nothing and counts in no clock: the reference steps
+  over the stream without it.
 """
 
 from __future__ import annotations

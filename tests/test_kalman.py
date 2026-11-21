@@ -200,8 +200,8 @@ def _gappy(n: int = 400, seed: int = 0) -> pl.DataFrame:
     ],
 )
 def test_a_zero_weight_row_inside_a_gap_moves_no_prediction(build):
-    """Hard rule 9 through the bank: a row of weight 0 advances the clock and
-    learns nothing, so one inserted half-way through every clock gap leaves
+    """Hard rule 9 through the bank: a row of weight 0 learns nothing and counts in no
+    clock, so one inserted half-way through every clock gap leaves
     every real row's prediction where it was, to rounding. `kalman` charged
     its process noise per row, ``Q d**2``, which is not additive over a split
     gap, and moved them by 0.197 at ``coef_half_life = 20``; `rls`,

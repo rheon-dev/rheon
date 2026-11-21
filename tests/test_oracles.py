@@ -18,6 +18,7 @@ import polars as pl
 import pytest
 
 import ledger
+from counted import counted, counts
 from data import synthetic
 from reference import NORMAL_Q3, ftrl_ref, kalman_ref, lasso_ref, robust_ref
 from rheon import polars as rp
@@ -28,6 +29,10 @@ MAXD = 50.0
 
 
 def _arrays(df, k):
+    """The reference's inputs over the rows that count: a row of weight 0 is in
+    no clock (hard rule 9), so the reference steps over the stream without it
+    and the bank's outputs are held to it on those rows (``counts``)."""
+    df = counted(df)
     x = np.column_stack([df[f"x{j}"].to_numpy() for j in range(k)])
     n = df.height
     dc = np.zeros(n)
@@ -54,7 +59,7 @@ class TestKalmanOracle:
 
     def _compare(self, df, k=3, targets=("y0",), **kw):
         x, dc, w = _arrays(df, k)
-        y = np.column_stack([df[t].to_numpy() for t in targets])
+        y = np.column_stack([counted(df)[t].to_numpy() for t in targets])
         ref = kalman_ref(x, y, dc, w, gap_cap=MAXD, **kw)
         spec = rp.spec.kalman(
             "m",
@@ -72,7 +77,7 @@ class TestKalmanOracle:
             share_p=kw.get("share_p", False),
             min_weight=kw.get("min_weight", 10.0),
         )
-        out = rp.ModelBank([spec]).fit_predict(df)
+        out = rp.ModelBank([spec]).fit_predict(df).filter(counts())
         for j, t in enumerate(targets):
             for field, key in (("pred_", "pred"), ("resid_", "resid")):
                 got = out["m"].struct.field(f"{field}{t}").to_numpy().astype(float)
@@ -88,6 +93,7 @@ class TestKalmanOracle:
         df, _ = synthetic(seed=71, n_groups=1, n_rows=300, k=3, null_frac=0.0)
         self._compare(df)
 
+    @pytest.mark.filterwarnings("ignore::rheon.ReadinessWarning")
     @pytest.mark.parametrize(
         ("targets", "share_p"),
         [(("y0",), False), (("y0", "y1"), True)],
@@ -96,18 +102,20 @@ class TestKalmanOracle:
     def test_a_row_with_no_prediction_ages_sigma2s_weight(self, targets, share_p):
         """sigma2's weight ages on every row the filter sees, a row with a
         target, a weight and no prediction included: one that comes after a
-        run of rows of weight 0 has taken the weight under ``min_weight``
-        (review 2026-09-12, N6; ``kalman.rs``). No other case withholds a
-        prediction once they have begun, and kalman_ref aged the weight on
-        such a row by nothing, so its sigma2 forgot less across it than the
-        core's: 1.75e-3 from the bank on one target (task 177). The run of
-        230 rows of weight 0 holds the predictions back on the rows at its
-        end and just after it (asserted)."""
+        run of rows of a weight so small they teach it nothing has taken the
+        weight under ``min_weight`` (review 2026-09-12, N6; ``kalman.rs``). No
+        other case withholds a prediction once they have begun, and kalman_ref
+        aged the weight on such a row by nothing, so its sigma2 forgot less
+        across it than the core's: 1.75e-3 from the bank on one target (task
+        177). The run of 230 rows of weight 1e-9 holds the predictions back on
+        the rows at its end and just after it (asserted). It is a run of
+        weights near 0 and not of 0: a row of weight 0 counts in no clock, so
+        a run of them takes nothing under the floor (the next test)."""
         df, _ = synthetic(
             seed=71, n_groups=1, n_rows=420, k=3, n_targets=len(targets), null_frac=0.0
         )
         w = df["w"].to_numpy().copy()
-        w[100:330] = 0.0
+        w[100:330] = 1e-9
         df = df.with_columns(pl.Series("w", w))
         out = self._compare(df, targets=targets, share_p=share_p)
         for t in targets:
@@ -115,9 +123,22 @@ class TestKalmanOracle:
             withheld = np.isnan(pred[330:])
             assert withheld.any() and not withheld.all(), f"{t}: none withheld after the run"
 
+    def test_a_run_of_zero_weight_rows_takes_nothing_under_the_floor(self):
+        """Hard rule 9: rows of weight 0 count in no clock, so 230 of them in a
+        row age no weight, and the filter's predictions after the run are
+        the reference's over the stream without them, with none withheld that
+        the stream without them does not withhold."""
+        df, _ = synthetic(seed=71, n_groups=1, n_rows=420, k=3, null_frac=0.0)
+        w = df["w"].to_numpy().copy()
+        w[100:330] = 0.0
+        df = df.with_columns(pl.Series("w", w))
+        out = self._compare(df)
+        pred = out["m"].struct.field("pred_y0").to_numpy().astype(float)
+        assert np.isfinite(pred[100:]).all(), "a run of rows of weight 0 withheld a prediction"
+
     def test_a_zero_weight_first_row(self):
         """Hard rule 9 at the head of the stream: a first row of weight 0
-        advances the clock and teaches nothing, and the feature moments'
+        teaches nothing and counts in no clock, and the feature moments'
         update after it is 0/0. kalman_ref divided by that weight unguarded,
         so none of its 120 predictions was a number while the bank's 108
         were (review 2026-10-06, TA1)."""
@@ -158,7 +179,7 @@ class TestKalmanOracle:
     def test_no_intercept(self):
         df, _ = synthetic(seed=78, n_groups=1, n_rows=200, k=2, null_frac=0.0)
         x, dc, w = _arrays(df, 2)
-        y = df["y0"].to_numpy().reshape(-1, 1)
+        y = counted(df)["y0"].to_numpy().reshape(-1, 1)
         ref = kalman_ref(x, y, dc, w, fit_intercept=False, min_weight=10.0, gap_cap=MAXD)
         spec = rp.spec.kalman(
             "m",
@@ -172,7 +193,7 @@ class TestKalmanOracle:
             coef_half_life=100.0,
             min_weight=10.0,
         )
-        out = rp.ModelBank([spec]).fit_predict(df)
+        out = rp.ModelBank([spec]).fit_predict(df).filter(counts())
         _close(
             out["m"].struct.field("pred_y0").to_numpy().astype(float),
             ref["pred"][:, 0],
@@ -361,8 +382,8 @@ class TestLassoPredPath:
     solve through the predictions it made. It checks when each solve ran:
     ``solve_every``, its default, ``max_rows_between_solves`` and the forced
     first solve. It checks what each was fitted from: the decay, a capped gap,
-    and skipped and zero-weight rows. And it checks that each reached the
-    optimum, not wherever a warm start left the descent. The reference
+    and skipped rows, and the zero-weight rows that count in no clock. And it
+    checks that each reached the optimum, not wherever a warm start left the descent. The reference
     descends from zero to 1e-14, so no warm start can change the answer it
     holds the library to.
     """
@@ -426,7 +447,10 @@ class TestLassoPredPath:
             **descent,
             **kw,
         )
-        out = rp.ModelBank([spec]).fit_predict(df)["m"]
+        # A row of weight 0 counts in no clock (hard rule 9): the reference
+        # steps over the rows that count, and the bank's are held to it.
+        out = rp.ModelBank([spec]).fit_predict(df).filter(counts())["m"]
+        df = counted(df)
         n, npath, kt = df.height, len(self.PATH), len(self.FEATURES) + 1
         x = df.select(self.FEATURES).to_numpy()
         y = df["y"].to_numpy()
@@ -505,7 +529,8 @@ class TestLassoPredPath:
 
     def test_an_elastic_net_solves_on_a_row_cap_beside_the_clock(self):
         """``max_rows_between_solves`` beside ``solve_every``. A zero-weight
-        row counts as a row; a skipped row does not. The capped gap equals
+        row counts in no clock, a row count included, and a skipped row does
+        not count either. The capped gap equals
         ``solve_every``, so each gap forces a solve."""
         self._compare(
             self._stream(32),
@@ -584,7 +609,7 @@ class TestRobustOracles:
             # read exactly from the buffered |e| (task 323).
             ref_kw = {"refit_rows": spec_kw.get("quantile_refit_rows", 500), **(ref_kw or {})}
         x, dc, w = _arrays(df, k)
-        y = np.column_stack([df[t].to_numpy() for t in targets])
+        y = np.column_stack([counted(df)[t].to_numpy() for t in targets])
         ref = robust_ref(
             x,
             y,
@@ -608,7 +633,7 @@ class TestRobustOracles:
             max_rows_between_solves=1,
             **spec_kw,
         )
-        out = rp.ModelBank([spec]).fit_predict(df)
+        out = rp.ModelBank([spec]).fit_predict(df).filter(counts())
         for j, t in enumerate(targets):
             _close(
                 out["m"].struct.field(f"pred_{t}").to_numpy().astype(float),
@@ -653,16 +678,14 @@ class TestRobustOracles:
     )
     @pytest.mark.parametrize("scale", ["mad", "rms"])
     def test_rows_of_weight_zero(self, model, n_rows, zeros, scale):
-        """A row of weight 0 advances the clock and teaches nothing (hard rule
-        9). The core's residual scale keeps three rules for it: sigma2's
-        weight ages on every row the model sees, a row of weight 0 or with no
-        prediction included (review 2026-09-12, S13 and N6), and a row of
-        weight 0 moves no sigma2, a quantile nudge included (review
-        2026-10-05, CC5). No other case holds such a row, and robust_ref aged
-        the weight only on the rows it moved sigma2 on, which put it 5.1e-4 to
-        4.6e-2 from the bank on these four cases (task 177). A hundred rows of
-        weight 0 in a row take the weight under ``min_weight``, so the rows at
-        the end of them and just after have a target and no prediction."""
+        """A row of weight 0 learns nothing and counts in no clock (hard rule
+        9): the reference steps over the stream without those rows, and the
+        bank's output on the rows that count is held to it. The core's
+        residual scale ages its weight on every row the model sees, a row with
+        no prediction included (review 2026-09-12, S13 and N6; the next test
+        holds it), and a row of weight 0 moves no sigma2, a quantile nudge
+        included (review 2026-10-05, CC5). A hundred rows of weight 0 in a row
+        age nothing, so no row after them is withheld."""
         df, _ = synthetic(seed=91, n_groups=1, n_rows=n_rows, k=2, null_frac=0.0)
         w = df["w"].to_numpy().copy()
         w[zeros] = 0.0
@@ -673,8 +696,32 @@ class TestRobustOracles:
             out = self._compare(df, model="quantile", ref_kw={"quantile": 0.9}, quantile=0.9)
         pred = out["m"].struct.field("pred_y0").to_numpy().astype(float)
         if zeros.step is None:
-            withheld = np.isnan(pred[zeros.start :])
-            assert withheld.any() and not withheld.all(), "the weight must fall under min_weight"
+            # The run is in no clock, so on the rows that count (the stream
+            # without it) it takes no weight under min_weight.
+            assert np.isfinite(pred[zeros.start :]).all(), "the run withheld a prediction"
+
+    @pytest.mark.parametrize("model", ["huber", "quantile"])
+    @pytest.mark.parametrize("scale", ["mad", "rms"])
+    def test_a_row_with_no_prediction_ages_sigma2s_weight(self, model, scale):
+        """sigma2's weight ages on every row the model sees, a row with a
+        target, a weight and no prediction included (review 2026-09-12, S13
+        and N6), and robust_ref aged the weight only on the rows it moved
+        sigma2 on, which put it 5.1e-4 to 4.6e-2 from the bank on these cases
+        (task 177). A hundred rows of weight 1e-9 in a row take the weight
+        under ``min_weight``, so the rows at the end of them and just after
+        have a target and no prediction (asserted). A run of weight near 0 and
+        not of 0, which counts in no clock."""
+        df, _ = synthetic(seed=91, n_groups=1, n_rows=300, k=2, null_frac=0.0)
+        w = df["w"].to_numpy().copy()
+        w[100:200] = 1e-9
+        df = df.with_columns(pl.Series("w", w))
+        if model == "huber":
+            out = self._compare(df, scale=scale)
+        else:
+            out = self._compare(df, model="quantile", ref_kw={"quantile": 0.9}, quantile=0.9)
+        pred = out["m"].struct.field("pred_y0").to_numpy().astype(float)
+        withheld = np.isnan(pred[100:])
+        assert withheld.any() and not withheld.all(), "the weight must fall under min_weight"
 
     @pytest.mark.parametrize("scale", ["mad", "rms"])
     @pytest.mark.parametrize("delta", [0.5, 1.5, 10.0])

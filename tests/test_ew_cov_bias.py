@@ -185,7 +185,10 @@ def test_row_weights_and_windows_are_numpy_cov_with_aweights(
     w = df["w"].to_numpy()
     checked = 0
     for i in range(20, len(t)):
-        age = t[i - 1] - t[:i]
+        # A row of weight 0 counts in no clock (hard rule 9): the state read at
+        # row i stands at the last row before it that counted.
+        last = max(j for j in range(i) if w[j] > 0)
+        age = t[last] - t[:i]
         keep = (w[:i] > 0) & (np.ones(i, bool) if window is None else age < window)
         if keep.sum() < 3:
             continue
@@ -211,7 +214,7 @@ def test_one_weighted_row_reads_null_and_leaves_nothing_behind(window: float | N
     """Hard rule 9. One row of weight has no spread to correct: ``W**2 - Q``
     is 0, and Polars gives null. So the rows read while the history holds one
     row of weight -- the first, rows of weight 0 before it, and rows of weight
-    0 after it that age it -- read null, where ``bias=True`` reads a variance
+    0 after it, which change nothing -- read null, where ``bias=True`` reads a variance
     of 0. Once a second row is learned every value is the definition's, so
     nothing undefined reached the state; ``weight_sum`` is the same under
     both."""
@@ -233,9 +236,12 @@ def test_one_weighted_row_reads_null_and_leaves_nothing_behind(window: float | N
         assert (biased[name][one_row] == 0.0).all(), (name, biased[name].to_list())
     assert unbiased["weight_sum"].equals(biased["weight_sum"])
     x = df.select("a", "b").to_numpy()
+    # Rows of weight 0 count in no clock: the clock is the rank among the rows
+    # that count, and the state read at row i stands at the last of them.
+    rank = np.cumsum(np.array(w) > 0) - 1
     for i in range(7, n):
         keep = np.array(w[:i]) > 0
-        aw = np.array(w[:i])[keep] * 0.5 ** ((i - 1 - np.arange(i)[keep]) / 3.0)
+        aw = np.array(w[:i])[keep] * 0.5 ** ((rank[i - 1] - rank[:i][keep]) / 3.0)
         cov = np.cov(x[:i][keep].T, aweights=aw, ddof=1)
         assert unbiased["var_a"][i] == pytest.approx(cov[0, 0], rel=1e-12), i
         assert unbiased["cov_a_b"][i] == pytest.approx(cov[0, 1], rel=1e-10, abs=1e-12), i

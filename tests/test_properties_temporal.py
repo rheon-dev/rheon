@@ -513,7 +513,7 @@ def temporal_streams(draw, model: str, min_rows=1, max_rows=40):
     steps of the column: ties, gaps of a few steps and gaps past
     ``gap_cap``, from an instant near one of ``ANCHORS``. Features,
     targets and weights are seeded, with nulls, and zero weights, which
-    advance the clock and teach nothing."""
+    teach nothing and count in no clock."""
     dtype = draw(clock_dtypes(), label="dtype")
     step = _step(dtype)
     cap = draw(st.integers(1, 8), label="gap_cap in steps")

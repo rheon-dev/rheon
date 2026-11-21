@@ -70,7 +70,7 @@ class TestWeights:
 
     @pytest.mark.parametrize(("model", "extra"), MODELS, ids=[m for m, _ in MODELS])
     def test_zero_weight_is_a_pure_decay_row(self, model, extra):
-        """w = 0 is legal and means "advance the clock, learn nothing": a
+        """w = 0 is legal and means "learn nothing, count in no clock": a
         zero-weight row with a far target is the same row with its target
         null, so every row after it reads the same, to the bit. Under a short
         half-life and no `min_weight`, so the rows after it predict and the

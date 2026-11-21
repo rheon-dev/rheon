@@ -439,8 +439,8 @@ def test_pa1_keeps_the_hard_rules_where_its_cap_binds():
     the cap binds (`c = inf` predicts otherwise): one chunk, 7 and 600 give
     the same numbers (hard rule 3); a row's prediction does not move when
     its own target does (rule 2); `weight_sum` is the decayed weight before
-    the row (rule 8); and the zero-weight first row advances the clock and
-    teaches nothing, so the rows after it predict as the stream without it
+    the row (rule 8); and the zero-weight first row teaches nothing and counts in
+    no clock, so the rows after it predict as the stream without it
     does (rule 9)."""
     df = _cc4(n=1200).with_columns(pl.col("y") + 1000.0)
     w = np.r_[0.0, np.ones(df.height - 1)]

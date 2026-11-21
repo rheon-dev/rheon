@@ -392,9 +392,11 @@ class TestInputs:
 
 
 def test_the_e31_scenario_no_longer_goes_null():
-    """`weight = 0` scored without learning but let the clock run, so `weight_sum`
-    decayed under `min_weight` and the outputs went null mid-batch
-    (measured in docs/ENHANCEMENTS.md E31). `predict` freezes it."""
+    """`weight = 0` once scored without learning but let the clock run, so
+    `weight_sum` decayed under `min_weight` and the outputs went null mid-batch
+    (measured in docs/ENHANCEMENTS.md E31). A row of weight 0 now counts in no
+    clock (hard rule 9): `fit_predict` over a batch of them scores each as
+    `predict` does, from the state as it stands, and the weight stays put."""
     n = 100
     rng = np.random.default_rng(1)
     x = rng.standard_normal(200)
@@ -408,11 +410,14 @@ def test_the_e31_scenario_no_longer_goes_null():
     zero_w = rp.ModelBank.load_bytes(bank.save_bytes(), [spec]).fit_predict(
         batch.with_columns(w=pl.lit(0.0))
     )
-    assert zero_w["m"].struct.field("pred_y").is_null().sum() > 30, "the scenario changed"
+    assert not zero_w["m"].struct.field("pred_y").is_null().any(), "weight 0 went null"
+    assert zero_w["m"].struct.field("weight_sum").n_unique() == 1, "weight_sum decayed"
     scored = bank.predict(batch)
     assert not scored["m"].struct.field("pred_y").is_null().any()
     weight_sum = scored["m"].struct.field("weight_sum")
     assert weight_sum.n_unique() == 1, "weight_sum decayed while scoring"
+    assert zero_w["m"].struct.field("pred_y").equals(scored["m"].struct.field("pred_y"))
+    assert zero_w["m"].struct.field("weight_sum").equals(weight_sum)
 
 
 def test_holt_extrapolates_over_the_clock_distance():
