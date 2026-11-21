@@ -1098,6 +1098,117 @@ fn the_n_eff_accessor_is_the_steps_under_a_window() {
     );
 }
 
+/// 40 rows, the second target absent on every third row: each target's
+/// weight from `target_n_eff_into` after each row, against its recursion
+/// over the rows it learned, `w_j <- lam * w_j + [learned]`. A model that
+/// fits its targets on one shared solve (`joint`, `rls`) learns a row only
+/// where every target is present, so both targets' weights skip those
+/// rows; any other learns each target on the rows that carry it. Either
+/// way a weight with gaps ends under the shared weight of every row, so a
+/// model that reported the shared weight fails. Whether the model keeps a
+/// weight per target at all.
+fn each_target_weight_is_its_own<M: OnlineModel>(mut m: M, joint: bool) -> bool {
+    let kind = m.state().model.kind();
+    let lam = 0.5f64.powf(1.0 / HALFLIFE);
+    let mut s = 20261122u64;
+    let (mut want, mut every) = ([0.0f64; 2], 0.0f64);
+    let mut got = Vec::new();
+    for i in 0..40 {
+        let x: Vec<f64> = (0..K).map(|_| lcg(&mut s)).collect();
+        let y0 = 0.5 + x[0] - 0.5 * x[1];
+        let y = [Some(y0), (i % 3 != 2).then_some(1.0 + x[1])];
+        let d = if i == 0 { 0.0 } else { 1.0 };
+        m.step(&x, &y, d, 1.0);
+        let lam = if i == 0 { 1.0 } else { lam };
+        let all = y.iter().all(Option::is_some);
+        for (w, y) in want.iter_mut().zip(&y) {
+            let learned = if joint { all } else { y.is_some() };
+            *w = lam * *w + f64::from(u8::from(learned));
+        }
+        every = lam * every + 1.0;
+        if !m.target_n_eff_into(&mut got) {
+            return false;
+        }
+        assert_eq!(got.len(), 2, "{kind}: one weight a target");
+        for j in 0..2 {
+            assert!(
+                (got[j] - want[j]).abs() <= 1e-12 * want[j].max(1.0),
+                "{kind}, row {i}, target {j}: weight {} where the rows it learned give {}",
+                got[j],
+                want[j]
+            );
+        }
+    }
+    assert!(
+        want[1] < every - 1.0,
+        "{kind}: the absent rows took nothing off"
+    );
+    true
+}
+
+/// Every model that keeps a weight per target reports each target's own
+/// (review S11: `Rls::target_n_eff_into` returning the shared weight for
+/// every target passed every test). The list is held to the models that
+/// say they keep one, so a new one is not left out.
+#[test]
+fn every_per_target_weight_is_the_rows_that_carried_that_target() {
+    let kept: Vec<&str> = [
+        (
+            "ewridge",
+            each_target_weight_is_its_own(EwRidge::new(ewridge_cfg()).unwrap(), false),
+        ),
+        (
+            "rls",
+            each_target_weight_is_its_own(Rls::new(rls_cfg()).unwrap(), true),
+        ),
+        (
+            "lasso",
+            each_target_weight_is_its_own(
+                Lasso::new(LassoCfg {
+                    n_targets: 2,
+                    ..lasso_cfg()
+                })
+                .unwrap(),
+                false,
+            ),
+        ),
+        (
+            "kalman",
+            each_target_weight_is_its_own(Kalman::new(kalman_cfg()).unwrap(), false),
+        ),
+        (
+            "robust",
+            each_target_weight_is_its_own(Robust::new(huber_mad_cfg()).unwrap(), false),
+        ),
+        (
+            "ftrl",
+            each_target_weight_is_its_own(Ftrl::new(ftrl_cfg()).unwrap(), false),
+        ),
+        (
+            "sgd",
+            each_target_weight_is_its_own(Sgd::new(sgd_cfg()).unwrap(), false),
+        ),
+        (
+            "pa",
+            each_target_weight_is_its_own(Pa::new(pa_cfg()).unwrap(), false),
+        ),
+        (
+            "holt",
+            each_target_weight_is_its_own(Holt::new(holt_cfg()).unwrap(), false),
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(k, kept)| kept.then_some(k))
+    .collect();
+    assert_eq!(
+        kept,
+        [
+            "ewridge", "rls", "lasso", "kalman", "robust", "ftrl", "sgd", "pa", "holt"
+        ],
+        "the models that keep a weight per target"
+    );
+}
+
 #[test]
 fn ew_class() {
     for covariance in [Covariance::Full, Covariance::Shared, Covariance::Diagonal] {
