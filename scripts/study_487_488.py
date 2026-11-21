@@ -46,8 +46,10 @@ follow. Every row after the differencing ring emits.
 The oracle: ``statsmodels.tsa.statespace.sarimax.SARIMAX`` (settings in
 ``sarimax_fit``) fitted on the same rows.
 
-**488, ETS** (Hyndman, Koehler, Ord and Snyder 2008, ch. 2 and Table 2.2) is
-added by parts 3 and 4.
+**488, ETS** (Hyndman, Koehler, Ord and Snyder 2008, ch. 2 and Table 2.2):
+``OnlineEts``, the recursive prediction-error estimator of the smoothing
+parameters with the states' sensitivities carried, against ``ETSModel`` with
+known initial states (parts 3 and 4); the grid form is costed, not built.
 
 Data are generated from seeded numpy generators; nothing is read from disk.
 numpy only in the estimators; statsmodels and scipy are imported only in the
@@ -56,6 +58,11 @@ oracles and the data generator (``scipy.signal.lfilter``).
 Run (the study's venv holds numpy, scipy, pandas and statsmodels)::
 
     .venv-487/bin/python scripts/study_487_488.py part1   (SARIMA, s = 7)
+    .venv-487/bin/python scripts/study_487_488.py part2   (SARIMA, s = 24, 168; state table)
+    .venv-487/bin/python scripts/study_487_488.py part3   (ETS additive season, m = 7, 24, 168)
+    .venv-487/bin/python scripts/study_487_488.py part4   (ETS multiplicative; the grid form's cost)
+
+``--no-run`` summarises the cached cases without running any.
 
 Each grid case is appended to ``<out>/<grid>.jsonl`` as it finishes, so a rerun
 resumes; ``<out>/<part>.json`` holds the part's summary.
@@ -1003,6 +1010,12 @@ def summarise1(res: dict) -> None:
 EPS = 1e-4  # statsmodels' margin on alpha, beta/alpha and gamma/(1 - alpha)
 PHI_BOUNDS = (0.8, 0.98)  # statsmodels' default bounds on the damping
 ETS_L0, ETS_B0 = 10.0, 0.1
+MUL_SEASON_TEXTBOOK = False  # True: Table 2.2's divisor (part 4 measures the gap)
+ETS_L0_MUL = 1000.0  # the multiplicative forms need y > 0: a level of 1,000 on a unit error
+
+
+def ets_l0(spec: EtsSpec) -> float:
+    return ETS_L0_MUL if spec.seasonal == "mul" else ETS_L0
 
 
 def ets_initial_seasonal(m: int) -> np.ndarray:
@@ -1105,7 +1118,7 @@ class OnlineEts:
         self.buffer: list[float] = []
         self.batch_fit = None
         self.reasons: dict[int, str] = {}
-        self.l, self.b = ETS_L0, ETS_B0
+        self.l, self.b = ets_l0(spec), ETS_B0
         self.s = ets_initial_seasonal_for(spec)
         self.Dl = np.zeros(k)
         self.Db = np.zeros(k)
@@ -1193,7 +1206,11 @@ class OnlineEts:
             Dlb = Dlb + self.b * u[3]
         if sp.seasonal == "mul":
             # e = y - (l + phi b) s;  l <- lb + alpha e / s;  b <- phi b + beta e / s;
-            # s_t = s_{t-m} + gamma e / (l + phi b)   (Hyndman et al. 2008, Table 2.2)
+            # s_t = s_{t-m} + gamma e / l_t with the UPDATED level l_t: statsmodels'
+            # ETSModel runs the classical component form
+            # s_t = gamma* y / l_t + (1 - gamma*) s_{t-m}, gamma* = gamma / (1 - alpha),
+            # which is this. Hyndman et al. 2008, Table 2.2, divide by l_{t-1} + phi b_{t-1}
+            # instead (``MUL_SEASON_TEXTBOOK``); the two are different models.
             de = -psi
             nl = lb + a * e / sv
             Dnl = Dlb + (e / sv) * u[0] + a * (de / sv - e * Dsv / (sv * sv))
@@ -1201,8 +1218,9 @@ class OnlineEts:
             Dnb = phi * self.Db + (e / sv) * u[1] + bt * (de / sv - e * Dsv / (sv * sv))
             if sp.damped:
                 Dnb = Dnb + self.b * u[3]
-            ns = sv + g * e / lb
-            Dns = Dsv + (e / lb) * u[2] + g * (de / lb - e * Dlb / (lb * lb))
+            den, Dden = (lb, Dlb) if MUL_SEASON_TEXTBOOK else (nl, Dnl)
+            ns = sv + g * e / den
+            Dns = Dsv + (e / den) * u[2] + g * (de / den - e * Dden / (den * den))
         else:
             nl = lb + a * e
             Dnl = Dlb + e * u[0] - a * psi
@@ -1346,7 +1364,7 @@ def etsmodel_fit(spec: EtsSpec, y: np.ndarray):  # noqa: ANN201
         seasonal=spec.seasonal,
         seasonal_periods=spec.m,
         initialization_method="known",
-        initial_level=ETS_L0,
+        initial_level=ets_l0(spec),
         initial_trend=ETS_B0,
         initial_seasonal=ets_initial_seasonal_for(spec),
     )
@@ -1594,6 +1612,175 @@ def summarise3(res: dict) -> None:
             )
 
 
+MUL_SPECS: dict[str, EtsSpec] = {}
+for _m in (7, 24, 168):
+    MUL_SPECS[f"aam_m{_m}_c"] = EtsSpec(f"aam_m{_m}_c", False, _m, (0.3, 0.001, 0.05, 1.0), "mul")
+    MUL_SPECS[f"aadm_m{_m}_b"] = EtsSpec(
+        f"aadm_m{_m}_b", True, _m, (0.3, 0.01, 0.05, 0.9, 1.0), "mul"
+    )
+P4_SPECS = tuple(MUL_SPECS)
+
+
+def textbook_gap(spec: EtsSpec, seed: int = SEEDS[0]) -> dict:
+    """The largest gap between Table 2.2's multiplicative season
+    (divisor ``l_{t-1} + phi b_{t-1}``) and statsmodels' (divisor ``l_t``) at
+    ``ETSModel``'s fitted parameters on one series, against ``fittedvalues``."""
+    global MUL_SEASON_TEXTBOOK
+    y = simulate_ets(spec, N_ROWS, seed)
+    _, res = etsmodel_fit(spec, y)
+    fv = np.asarray(res.fittedvalues, dtype=float)
+    out = {"spec": spec.name, "seed": seed, "abs_fitted_max": float(np.abs(fv).max())}
+    for flag in (False, True):
+        MUL_SEASON_TEXTBOOK = flag
+        try:
+            mine = ets_fixed(spec, np.asarray(res.params, dtype=float), y)
+        finally:
+            MUL_SEASON_TEXTBOOK = False
+        d = np.abs(mine - fv)
+        key = "textbook" if flag else "statsmodels_form"
+        out[key + "_abs_max"] = float(d.max())
+        out[key + "_ulps_max"] = float(d.max() / np.spacing(np.abs(fv).max()))
+    return out
+
+
+GRID_COARSE = {
+    "alpha": [0.1 * i for i in range(1, 10)],
+    "beta_star": [0.01, 0.03, 0.1, 0.3],
+    "gamma_star": [0.01, 0.03, 0.1, 0.3],
+    "phi": [0.8, 0.85, 0.9, 0.95, 0.98],
+}
+
+
+def grid_form_estimate(rows: list[dict], spec: EtsSpec) -> dict:
+    """What a bank of fixed-parameter members on ``GRID_COARSE`` could reach
+    against the criterion, from the batch fits already run (no grid estimator
+    is built): per seed, the member nearest the batch estimate coordinate by
+    coordinate in the batch SEs. The grid's argmin is never nearer than that,
+    so the count is an upper bound. And the members a spacing of 4 SE per
+    coordinate would need, from the median SEs, so that the nearest member
+    were always within 2 SE."""
+    rows = [r for r in rows if r["spec"] == spec.name]
+    names = spec.names[:-1]
+    n_all = len(rows)
+    # a batch estimate on its bound has no SE (statsmodels gives NaN): left out
+    rows = [r for r in rows if all(math.isfinite(r[f"{nm}_se"]) for nm in names)]
+    if not rows:
+        return {"spec": spec.name, "cases": 0}
+    within = 0
+    worst = []
+    for r in rows:
+        a = r["smoothing_level_batch"]
+        coords = {
+            "smoothing_level": GRID_COARSE["alpha"],
+            "smoothing_trend": [a * x for x in GRID_COARSE["beta_star"]],
+            "smoothing_seasonal": [(1 - a) * x for x in GRID_COARSE["gamma_star"]],
+            "damping_trend": GRID_COARSE["phi"],
+        }
+        gaps = [min(abs(v - r[f"{nm}_batch"]) for v in coords[nm]) / r[f"{nm}_se"] for nm in names]
+        worst.append(max(gaps))
+        within += int(max(gaps) <= 2.0)
+    se = {nm: float(np.median([r[f"{nm}_se"] for r in rows])) for nm in names}
+    a_med = float(np.median([r["smoothing_level_batch"] for r in rows]))
+    spans = {
+        "smoothing_level": 1.0,
+        "smoothing_trend": a_med,  # beta in (0, alpha)
+        "smoothing_seasonal": 1.0 - a_med,  # gamma in (0, 1 - alpha)
+        "damping_trend": 0.18,
+    }
+    need = {nm: max(1, math.ceil(spans[nm] / (4.0 * se[nm]))) for nm in names}
+    members_coarse = 9 * 4 * 4 * (5 if spec.damped else 1)
+    members_fine = int(np.prod(list(need.values())))
+    return {
+        "spec": spec.name,
+        "cases": len(rows),
+        "cases_without_se": n_all - len(rows),
+        "coarse_members": members_coarse,
+        "coarse_upper_bound_within_2": within,
+        "coarse_nearest_worst_se_median": float(np.median(worst)),
+        "median_se": se,
+        "fine_values_per_param": need,
+        "fine_members": members_fine,
+        "fine_state_bytes": members_fine * 8 * (2 + spec.m + 1),
+        "coarse_state_bytes": members_coarse * 8 * (2 + spec.m + 1),
+    }
+
+
+def time_vector_update(members: int, m: int, rows: int = 2000) -> float:
+    """Seconds per member-row of the additive fixed-parameter update
+    vectorized over ``members`` in numpy (a timing of the member update, not a
+    grid estimator)."""
+    rng = np.random.default_rng(0)
+    a = rng.uniform(0.1, 0.9, members)
+    b = a * 0.05
+    g = (1 - a) * 0.05
+    lvl = np.full(members, 10.0)
+    tr = np.zeros(members)
+    seas = np.zeros((m, members))
+    sse = np.zeros(members)
+    y = rng.standard_normal(rows) + 10.0
+    t0 = time.perf_counter()
+    for t in range(rows):
+        k = t % m
+        e = y[t] - (lvl + tr + seas[k])
+        sse += e * e
+        lvl = lvl + tr + a * e
+        tr = tr + b * e
+        seas[k] += g * e
+    return (time.perf_counter() - t0) / (rows * members)
+
+
+def part4(args) -> dict:  # noqa: ANN001
+    res: dict = {"seeds": [SEEDS[0], SEEDS[-1]], "n": N_ROWS, "l0_mul": ETS_L0_MUL}
+    res["checks"] = [ets_checks(MUL_SPECS[k]) for k in ("aam_m24_c", "aadm_m24_b")]
+    res["textbook_gap"] = [textbook_gap(MUL_SPECS[k]) for k in P4_SPECS]
+    res["state_table_mul"] = ets_state_table("mul")
+    path = os.path.join(args.out, "ets_mul.jsonl")
+    cases = [(MUL_SPECS[k], seed) for k in P4_SPECS for seed in SEEDS[: args.seeds]]
+    key = lambda x: (x["spec"], x["seed"]) if isinstance(x, dict) else (x[0].name, x[1])  # noqa: E731
+    if args.no_run:
+        rows = _load(path)
+    else:
+        rows = run_grid(path, ets_case, cases, key=key, workers=args.workers)
+    res["summary"] = [
+        summarise_ets(rows, MUL_SPECS[k], pre) for k in P4_SPECS for pre in ("", "batch.")
+    ]
+    add_rows = _load(os.path.join(args.out, "ets.jsonl"))
+    res["grid_form"] = [grid_form_estimate(add_rows, ETS_SPECS[k]) for k in P3_SPECS] + [
+        grid_form_estimate(rows, MUL_SPECS[k]) for k in P4_SPECS
+    ]
+    res["vector_update_s_per_member_row"] = {
+        f"{G} members, m = {m}": time_vector_update(G, m)
+        for G in (144, 720, 20000)
+        for m in (24, 168)
+    }
+    have = {key(r) for r in rows}
+    res["complete"] = all(key(c) in have for c in cases)
+    return res
+
+
+def summarise4(res: dict) -> None:
+    for c in res["checks"]:
+        print("checks", c)
+    for c in res["textbook_gap"]:
+        print("textbook gap", c)
+    print("complete:", res["complete"])
+    for summ in res["summary"]:
+        print_sarima(summ, MUL_SPECS[summ["spec"]])  # type: ignore[arg-type]
+        if summ.get("cases"):
+            fa, fr, fu = (
+                summ[k]["max"]
+                for k in ("fixed_gap_abs_max", "fixed_gap_rel_max", "fixed_gap_ulps_max")
+            )
+            print(
+                f"   fixed-parameter gap to fittedvalues: abs max {fa:.3g}, "
+                f"rel max {fr:.3g}, ulps of the largest |prediction| max {fu:.3g}"
+            )
+    for g in res["grid_form"]:
+        print("grid form", g)
+    for k, v in res["vector_update_s_per_member_row"].items():
+        print(f"vector update {k}: {v * 1e9:.2f} ns per member-row")
+
+
 def versions() -> dict:
     out = {"python": sys.version.split()[0]}
     for mod in ("numpy", "scipy", "statsmodels", "pandas"):
@@ -1608,6 +1795,7 @@ PARTS = {
     "part1": (part1, summarise1),
     "part2": (part2, summarise2),
     "part3": (part3, summarise3),
+    "part4": (part4, summarise4),
 }
 
 
