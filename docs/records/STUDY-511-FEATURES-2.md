@@ -510,3 +510,77 @@ At `lr w |z|^2` near 1e-4 the two steps differ by 3.8e-7 in the coefficients (fi
 
 **Not built in 524, and why:** per-feature penalty weights (oracle MISSING, above); Huber's proposal-2 scale (oracle not the same quantity); several quantiles in one spec (plumbing). **Changes a default: no**, for any of the built items.
 
+## 525. Smaller options
+
+Task 525 lists six items. **Built:** `kmeans` with given centres, `ew_class` fixed priors with `reg_param` and `var_smoothing`, `holt` `forecast(h)` with a known start, Holm beside Bonferroni, a window two-sample test. **Excluded, oracle MISSING (C1): `deco`'s less biased alternative to `u`**
+(Engle and Kelly 2012: the paper's formula is the only oracle; no library computes it). Oracles: scikit-learn 1.9.1, statsmodels 0.15.0, scipy 1.18.1; river 0.26 for the KSWIN reference.
+
+### 525 (a) `kmeans` with given (fixed) centres, distances to every centre, an EW inertia
+
+Fixed centres `C`: the `K` Euclidean distances to every centre as output slots, the assignment (first minimum wins, as `kmeans.rs`), and the EW inertia, the EW mean of the row's squared distance to its nearest centre in the mean form (`m' = a m + b d^2`), read before the row folds in. The diagonal metric `1/v_i`
+(`mw`) is a standardisation option; the oracle is the unit metric. Against `KMeans(n_clusters=K, init=C, n_init=1, max_iter=1)` fitted once on `C` itself and its `cluster_centers_` set to `C` (the one-point fit rounds): `transform(X)`, `predict(X)`, `-score(X, sample_weight=omega)`; 300 rows, 20 seeds, half-life 30, weights in [.5, 2],
+10% zero-weight rows, a zero-weight first row (K = 3 / 8 / 20 at p = 2 / 5 / 16):
+
+| quantity | gap |
+|---|---|
+| distances vs `transform` (absolute) | 1.4e-13 / 2.0e-14 / 1.6e-14 |
+| assignment vs `predict` | 0 mismatches in 6000 rows each |
+| EW inertia `m W` vs `-score(X, sample_weight=omega)` (relative) | 9.7e-16 / 9.2e-16 / 6.6e-16 |
+
+C1: `KMeans` runs full Lloyd, so the "given centres" oracle is a frozen fit, which is exactly this study; **learning from given centres has no exact oracle here** (`MiniBatchKMeans.partial_fit` was not re-fetched by C1) and was not studied. Zero weight: a zero-weight row ages `W`, learns nothing, and is not scored into the inertia.
+**State added:** the centres `8 K p` bytes (K = 20, p = 16: 2.5 KB: the `kmeans` state already holds them), the EW inertia and its weight 16 bytes; the `K` distances are output slots. Nothing grows with the stream. **No default changes** (a new option and output).
+
+### 525 (b) `ew_class`: fixed class priors, a regulariser that does not fade, `var_smoothing`
+
+Beside `ew_class`'s class posterior `softmax(ln pi_c - 1/2 ln det M_c - 1/2 (x - mu_c)' M_c^-1 (x - mu_c))` with `pi_c = n_c / sum n`: **fixed priors** replace `pi_c`; **`reg_param`** `r`: `M_c = (1 - r) S_c + r I` with `S_c` the class covariance (divisor `W_c`), a constant share of `I`, where today's
+`precision_prior` ridge is `precision_prior * s_c` with `s' = a s` (`s = 1/n_c` at `lam = 1`: 0.167 / 0.020 / 0.0025 after 6 / 50 / 400 rows, measured), so it fades; **`var_smoothing`** `v` on the diagonal shape: `M_c = diag(v_ci + eps)`, `eps = v max_i var_i`, the total variance of all rows pooled from the class moments
+(`var_i = sum_c n_c (C_c[i,i] + (m_ci - m_i)^2)/N`): no new state.
+
+| case (15 query rows, 20 seeds, absolute gap in the posteriors) | gap |
+|---|---|
+| vs `QuadraticDiscriminantAnalysis(priors, reg_param)`, `reg_param` = 0 / .1 / .5, `lam = 1`, unit weights | 3.0e-13 / 1.4e-13 / 9.9e-15 |
+| vs `GaussianNB(priors, var_smoothing)`, `var_smoothing` = 1e-9 / 1e-2 / .5 | 3.0e-15 / 5.8e-15 / 2.6e-15 |
+| `GaussianNB` with row weights in [.5, 2], given the `var_smoothing` that reproduces rheon's epsilon | 7.2e-15 |
+| fixed priors and `reg_param` .2 (`full`) under half-life 40, weights, 10% zero-weight rows, zero first row vs the two-pass weighted definition | 1.0e-14 |
+
+**Where the oracles are not exact, and two source findings.** (1) C1's `var_smoothing` nuance is confirmed in the source: `epsilon_ = var_smoothing * max(np.var(X, axis=0))` is the **unweighted** variance of the rows of each `fit`/`partial_fit` call. Rheon's `eps` reads the (weighted, decayed) total variance, so with row weights the
+same `var_smoothing` gives a different `eps` (up to 6% relative here); the comparison is exact when scikit-learn is handed the `var_smoothing` that reproduces rheon's `eps`, as above; an unweighted `eps` would need the unweighted variance, a second accumulator rheon does not keep. (2) **A correction to C1's QDA note**: scikit-learn 1.9.1's QDA `svd` solver
+sets `scaling = S**2 / n_samples` (divisor `n`, not `n - 1`; its stored `covariance_` is computed from the same scalings), and applies `reg_param` to those scalings as `(1 - reg_param) scaling + reg_param`: the same matrix as `(1 - r) S + r I` in the eigenbasis. So the comparison is with the biased class covariance (a first run with the unbiased factor was
+off by 0.25 in the posteriors, which is how this was found). sklearn has no decay or class-moment weights in QDA, so the decayed comparison is to a two-pass definition (1e-14). **State added:** fixed priors `8 n_classes` bytes, `reg_param` and `var_smoothing` 8 each, all configuration; `eps` is read from the class moments at each solve. Per group 0. **No default changes.**
+
+### 525 (c) `holt`: `forecast(h)` and a known initial level and trend
+
+`forecast(h) = l + h b` (`h` clock units ahead; at `h = s` it is the prediction the model already emits). A **known start** `(l_0, b_0)`: the state begins with weights, so the first gains are `alpha` and `beta` and not 1. Saturated weights `W_0 = 1/(1 - lam_l)`, `V_0 = 1/(1 - lam_b)` give, in the textbook gains `g = w/(lam_l W + w)`,
+`h = w/(lam_b V + w) g/s`, exactly `alpha = 1 - lam_l` and `beta = 1 - lam_b` from row 1. The line-fit gain (`g = max(g_f, g_t)`, which makes the unseeded model a least-squares line before the textbook gains settle) would dominate the first rows of a known start with a gain of about `1/n`, so it is **off under a known start**: a decision, not a default change (the known start is new).
+Against `Holt(initialization_method='known', initial_level, initial_trend).fit(smoothing_level, smoothing_trend, optimized=False)` (C1: the known state goes on the constructor, not on `fit`; `smoothing_trend` is `beta*` of the error-correction form, which is rheon's `b' = (1 - beta) b + beta (l' - l)/s`; unit clock, 120 rows, 20 seeds, absolute gaps):
+
+| `(alpha, beta)` | one-step forecasts (`fittedvalues`) | level | trend | `forecast(h)`, h = 1 / 5 / 30 |
+|---|---|---|---|---|
+| (.3, .1) | 1.4e-14 | 1.4e-14 | 1.4e-15 | 2.8e-14 |
+| (.6, .3) | 1.1e-14 | 7.1e-15 | 2.3e-15 | 4.3e-14 |
+| (.1, .05) | 2.1e-14 | 1.8e-14 | 1.0e-15 | 2.8e-14 |
+
+Zero weight: a zero-weight row is transparent, its clock joins the next row's `s`; against the stream without those rows and the gaps folded, level and trend differ by 0 (10% zero-weight rows, a zero-weight first row). **Where it is not exact:** statsmodels has no clock and no weights, so the comparison is on a unit clock with unit weights (the irregular clock and weights
+are `holt`'s own and unchanged). **State added:** 0 (`l`, `b`, `W`, `V` exist; the known weights are two configuration numbers); `forecast(h)` is an output.
+
+### 525 (d) Holm beside `corrchange`'s Bonferroni
+
+`corrchange`'s `monitor` tests each of `m = k(k-1)/2` pairs at the Kolmogorov quantile `1 - alpha/m` (Bonferroni). Holm's step-down orders the pairs' statistics and tests the largest against the quantile at `1 - alpha/m`, the next at `1 - alpha/(m-1)`, and so on until one fails; equivalently the p-values (`kstwobign.sf`) against `alpha/(m - j)`.
+Against `multipletests(p, alpha=.05, method='holm')` (C1's trap: the default is `'hs'`, Holm-Sidak, so Holm must be passed by name) and `method='bonferroni'`, 100 p-value sets each at m = 3 / 10 / 45 (a mix of null and small p-values): **0 rejection mismatches, adjusted p-values and Bonferroni's equal to 0 gap**; Holm rejected a superset of Bonferroni's on every set.
+The quantile form was asserted equal to the p-value form on every replication below. 4000 replications of the `monitor` pairs' sup statistics at alpha .05 (a shifted pair: +1.6 in the statistic):
+
+| case | FWER Bonferroni / Holm | share of shifted pairs flagged, Bonferroni / Holm |
+|---|---|---|
+| m = 10, none shifted | 0.053 / 0.053 | |
+| m = 10, 3 shifted | 0.038 / 0.051 | 1.000 / 1.000 |
+| m = 45, 5 shifted | 0.043 / 0.050 | 0.9998 / 0.9999 |
+
+(binomial sd 0.0034.) Holm holds the level where Bonferroni is conservative, and the power gain is small on this shift: Holm's value is a tighter level, a modest gain in power. A per-row monitor repeated over time is not a one-shot family: both are per read, as Bonferroni is today. **State added: 0** (`O(m log m)` per read; 190 pairs at k = 20).
+**No default changes**: `alpha_adjust` gains `"holm"` beside `"bonferroni"` and `"none"`.
+
+### 525 (e) A window two-sample test for feature health
+
+The last `r` values against the `window - r` before them in a ring, the Kolmogorov-Smirnov distance by a merge of the two sorted samples; a deterministic split. River's `KSWIN` (C1: CONFIRMED, a reference, not exact) draws `stat_size` values **at random** from the older part and flags when `ks_2samp(..., method="auto")`'s p-value is at most `alpha` **and** the statistic exceeds 0.1
+(the source's rule, read from river 0.26), so it is not deterministic and the exact comparison is `scipy.stats.ks_2samp` on the same two samples. Statistic against `ks_2samp` (windows 100 / 300 / 1000 with recents 30 / 50 / 100, ties on half of the seeds): 1.1e-16 absolute in each. The p-value is `ks_2samp`'s (`exact` for small samples, asymptotic otherwise), a function of the statistic and the two sizes,
+so it needs no state. **State added:** a ring of `window` values, `8 window` bytes **per feature** (window 1000: 8 KB a feature; k = 20: 160 KB; the 256 KB per-group cap holds `window <= 32768 / k` values a feature, and the ring is the part to cap); cost `O(window log window)` a read, `O(log window)` with a sorted structure. A hard window, no decay; a zero-weight row enters no ring. **No default changes** (a new test).
+
