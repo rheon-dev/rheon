@@ -1,6 +1,6 @@
 """The online VAR(p) against statsmodels: each check returns its worst error.
 
-Run ``python compare.py`` for the table the README quotes; ``test_online_var.py``
+Run ``python scripts/study_495.py`` for the tables the record quotes; ``test_online_var.py``
 asserts the same checks. Errors are relative to the reference's largest entry
 (``max|a - b| / max|b|``) unless stated.
 """
