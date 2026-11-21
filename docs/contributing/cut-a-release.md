@@ -61,7 +61,10 @@ Nothing leaves your checkout before step 13.
 1. **Compare every output with the last release's,** with
    `uv run python scripts/compare_release.py`. It exits 0 when every
    field is the same to the bit or its move is declared, and otherwise
-   prints each field that differs with the first row where it does. CI
+   prints each field that differs with the first row where it does. It
+   exits 2 when it compared nothing, and fails when the release ran under
+   half of this build's specs, a `Moves:` pattern is wildcards alone, or
+   a version is not dotted whole numbers. CI
    runs it on every push, so this run should find nothing new. Declare
    each difference in the CHANGELOG entry that made it, which ends with
    `Moves:` and the fields as `model.field`, or find its cause and pin it
