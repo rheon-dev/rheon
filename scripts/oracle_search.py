@@ -42,7 +42,8 @@ def lic(dist: str) -> str:
 
 
 def report(task, quantity, dist, gaps: dict, case: str):
-    print(f"[{task}] {quantity} | {dist} {ver(dist)} ({lic(dist)}) | case: {case}")
+    who = dist if dist.startswith("R ") else f"{dist} {ver(dist)} ({lic(dist)})"
+    print(f"[{task}] {quantity} | {who} | case: {case}")
     for k, v in gaps.items():
         print(f"    {k}: {v:.3e}" if isinstance(v, float) else f"    {k}: {v}")
 
@@ -708,6 +709,22 @@ f("TSRV7", rTSCov(p, K=7, J=1))
         "TSRV K=7 against the ZMA formula / (1 - nbar/n)": rel(R["TSRV7"], tsrv_def(lr, 7) / (1 - nbar / n)),
     }
     report("499", "RV, BPV, MedRV, TPQ, Parzen RK, TSRV", f"R highfrequency {rver('highfrequency')} (GPL)", out, "500 returns / 500 prices; rel. gap to the definitions")
+
+
+@check
+def r_cusum():
+    rng = np.random.default_rng(4)
+    x = np.concatenate([rng.standard_normal(150), 1.0 + rng.standard_normal(150)])
+    code = """
+suppressMessages(library(qcc))
+cu <- cusum(x, center=0, std.dev=1, decision.interval=5, se.shift=1, plot=FALSE)
+for (i in seq_along(x)) { f(paste0("pos", i), cu$pos[i]); f(paste0("neg", i), cu$neg[i]) }
+"""
+    R = run_r(code, x=x)
+    cp, cm = cusum_def(x, 0.0, 0.5)
+    gp = max(abs(R[f"pos{i + 1}"] - cp[i]) for i in range(len(x)))
+    gm = max(abs(-R[f"neg{i + 1}"] - cm[i]) for i in range(len(x)))
+    report("508", "tabular two-sided CUSUM, fixed target", f"R qcc {rver('qcc')} (GPL-2)", {"C+": gp, "C- (qcc stores it negated)": gm}, "300 N(0,1) with a 1-sigma shift at 150; k = se.shift/2 = 0.5; the run-length (ARL) oracle is spc::xcusum.arl")
 
 
 def main(argv):
