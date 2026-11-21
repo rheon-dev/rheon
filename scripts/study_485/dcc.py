@@ -365,6 +365,16 @@ def huber_radius(c: float, k: int) -> float:
 REMEDIES: dict[str, dict[str, dict[str, object]]] = {
     "huber2": {"stage2": {"robust_c": 2.0}, "margins": {"robust_c": 2.0}},
     "huber2_s2": {"stage2": {"robust_c": 2.0}, "margins": {}},
+    # part 3: the bounded batch start in both stages (500 rows each, in turn),
+    # alone and with the robust score
+    "batch500": {
+        "stage2": {"batch_start": 500, "warm": 500, "t0": 500.0},
+        "margins": {"batch_start": True, "warm": 500, "t0": 500.0},
+    },
+    "batch500_huber2": {
+        "stage2": {"batch_start": 500, "warm": 500, "t0": 500.0, "robust_c": 2.0},
+        "margins": {"batch_start": True, "warm": 500, "t0": 500.0, "robust_c": 2.0},
+    },
 }
 
 
@@ -392,20 +402,51 @@ def loglik_rows_k(rmat: np.ndarray, z: np.ndarray) -> np.ndarray:
 INFEASIBLE = 1e12
 
 
-def batch_fit_k(r: np.ndarray) -> dict[str, object]:
-    """The oracle, ``k`` series: ``batch_fit``'s, with the full likelihood."""
+def loglik_rows_cl(rmat: np.ndarray, z: np.ndarray) -> np.ndarray:
+    """The composite (pairwise) second-stage log-likelihood of each row: the
+    sum over every pair ``i < j`` of the two-series ``loglik_rows`` at
+    ``R_t``'s ``(i, j)`` entry (Engle, Shephard and Sheppard 2008, all pairs).
+    DCC's ``Q`` recursion is entrywise, so each pair's ``R_t`` block is the
+    full model's: only the likelihood changes."""
+    i, j = np.triu_indices(z.shape[1], 1)
+    rho = rmat[:, i, j]
+    zi, zj = z[:, i], z[:, j]
+    d = 1.0 - rho * rho
+    s = zi * zi + zj * zj
+    p = zi * zj
+    return np.sum(-0.5 * (np.log(d) + (s - 2.0 * rho * p) / d - s), axis=1)
+
+
+def batch_margin_z(r: np.ndarray) -> np.ndarray:
+    """Stage one of the oracle: arch's GARCH(1,1) per margin, ``z`` from its
+    in-sample volatility."""
+    z = np.empty_like(r)
+    for i in range(r.shape[1]):
+        _, res = garch.arch_fit(r[:, i])
+        z[:, i] = r[:, i] / np.asarray(res.conditional_volatility)
+    return z
+
+
+def batch_fit_k(r: np.ndarray, likelihood: str = "full") -> dict[str, object]:
+    """The oracle, ``k`` series: ``batch_fit``'s, with the full likelihood, or
+    (``likelihood="cl"``, request A11 part 3) the composite over all pairs."""
+    z = batch_margin_z(r)
+    qbar = z.T @ z / z.shape[0]
+    out = fit_second_stage(z, qbar, likelihood)
+    out.update(z=z, qbar=qbar)
+    return out
+
+
+def fit_second_stage(z: np.ndarray, qbar: np.ndarray, likelihood: str = "full") -> dict:
+    """``(a, b)`` maximizing the second-stage likelihood on ``z`` by SLSQP, and
+    the sandwich SEs (for the composite, the Godambe form of the same)."""
     from scipy.optimize import minimize
     from statsmodels.tools.numdiff import approx_fprime, approx_hess
 
-    k = r.shape[1]
-    z = np.empty_like(r)
-    for i in range(k):
-        _, res = garch.arch_fit(r[:, i])
-        z[:, i] = r[:, i] / np.asarray(res.conditional_volatility)
-    qbar = z.T @ z / z.shape[0]
+    row_ll = loglik_rows_k if likelihood == "full" else loglik_rows_cl
 
     def rows(theta: np.ndarray) -> np.ndarray:
-        return loglik_rows_k(r_path_k(theta[0], theta[1], z, qbar), z)
+        return row_ll(r_path_k(theta[0], theta[1], z, qbar), z)
 
     def neg(theta: np.ndarray) -> float:
         # SLSQP's line search and finite differences can step outside the
@@ -436,8 +477,6 @@ def batch_fit_k(r: np.ndarray) -> dict[str, object]:
         "se_classic": np.sqrt(np.diag(hinv)),
         "success": bool(fit.success),
         "nit": int(fit.nit),
-        "z": z,
-        "qbar": qbar,
         "llf": -float(fit.fun),
     }
 
@@ -453,7 +492,14 @@ class OnlineDccK:
     running mean of ``min(s, q) / k``, so the score is mean zero at the truth
     for any elliptical noise. The information matrix is not rescaled by the
     clipped score's slope (unlike garch.py and arma.py, where it is a
-    univariate mean; here it was not derived)."""
+    univariate mean; here it was not derived).
+
+    ``batch_start = W`` (request A11, remedy (a); 0: off): the first ``W`` rows
+    are buffered and emit nothing (NaN); ``fit_second_stage`` (the oracle's
+    SLSQP, standing in for a batch fit the model would own) fits ``(a, b)`` on
+    them with ``Qbar`` their mean ``z z'``; the rows are replayed with
+    ``(a, b)`` held, building ``Q``, its derivatives, ``Qbar`` and ``H``
+    (set ``warm = t0 = W``)."""
 
     k: int = 3
     a0: float = 0.03
@@ -463,6 +509,9 @@ class OnlineDccK:
     robust_c: float = 0.0
     rob_q: float = field(init=False)
     rob_kappa: float = 0.0
+    batch_start: int = 0
+    started: bool = False
+    buffer: list[np.ndarray] = field(default_factory=list)
 
     theta: np.ndarray = field(init=False)
     qbar: np.ndarray = field(init=False)
@@ -487,20 +536,29 @@ class OnlineDccK:
         self.rob_q = huber_radius(self.robust_c, k) if self.robust_c > 0.0 else math.inf
 
     def update(self, z: np.ndarray) -> None:
-        a, b = self.theta
-        z = np.asarray(z, dtype=float)
-        if self.n_seen == 0:
-            self.q = np.eye(self.k)
-        else:
-            zz = np.outer(self.prev_z, self.prev_z)
-            q_prev = self.q
-            self.q = (1.0 - a - b) * self.qbar + a * zz + b * q_prev
-            self.dqa = zz - self.qbar + b * self.dqa
-            self.dqb = q_prev - self.qbar + b * self.dqb
-        dg = np.diag(self.q)
-        d = 1.0 / np.sqrt(dg)
-        rmat = self.q * np.outer(d, d)
-        self.pred.append(rmat[np.triu_indices(self.k, 1)])
+        if self.batch_start and not self.started:
+            self.buffer.append(np.asarray(z, dtype=float).copy())
+            self.pred.append(np.full(self.k * (self.k - 1) // 2, np.nan))
+            if len(self.buffer) == self.batch_start:
+                self._start()
+            return
+        self._update(z)
+
+    def _start(self) -> None:
+        zb = np.asarray(self.buffer)
+        fit = fit_second_stage(zb, zb.T @ zb / zb.shape[0])
+        self.theta = np.array(project(*(float(x) for x in fit["theta"])))
+        self.started = True
+        n0 = len(self.pred)
+        for x in zb:
+            self._update(x)
+        del self.pred[n0:]
+        self.buffer = []
+
+    def _score(
+        self, z: np.ndarray, rmat: np.ndarray, d: np.ndarray, dg: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """The row's score and information in ``(a, b)``: the full likelihood."""
         rinv = np.linalg.inv(rmat)
         u = rinv @ z
         if self.robust_c > 0.0:
@@ -517,6 +575,24 @@ class OnlineDccK:
         g = np.array([0.5 * float(np.sum(m * dr)) for dr in drs])
         prods = [rinv @ dr for dr in drs]
         info = np.array([[0.5 * float(np.sum(pi * pj.T)) for pj in prods] for pi in prods])
+        return g, info
+
+    def _update(self, z: np.ndarray) -> None:
+        a, b = self.theta
+        z = np.asarray(z, dtype=float)
+        if self.n_seen == 0:
+            self.q = np.eye(self.k)
+        else:
+            zz = np.outer(self.prev_z, self.prev_z)
+            q_prev = self.q
+            self.q = (1.0 - a - b) * self.qbar + a * zz + b * q_prev
+            self.dqa = zz - self.qbar + b * self.dqa
+            self.dqb = q_prev - self.qbar + b * self.dqb
+        dg = np.diag(self.q)
+        d = 1.0 / np.sqrt(dg)
+        rmat = self.q * np.outer(d, d)
+        self.pred.append(rmat[np.triu_indices(self.k, 1)])
+        g, info = self._score(z, rmat, d, dg)
         self.last_g, self.last_info = g, info
         self.n_seen += 1
         if self.n_seen <= self.warm:
@@ -533,16 +609,59 @@ class OnlineDccK:
         self.prev_z = z.copy()
 
 
+@dataclass
+class OnlineDccCL(OnlineDccK):
+    """Stage two online on the composite likelihood over all pairs (request
+    A11, part 3): ``OnlineDccK``'s ``Q`` recursion, start and step, with the
+    row's score and information summed over the pairs ``i < j`` of part 6's
+    two-series forms at ``rho_ij = R_t[i, j]``::
+
+        g_t = sum_ij dl_ij/drho * grad rho_ij
+        I_t = sum_ij (1 + rho^2)/(1 - rho^2)^2 * grad rho_ij grad rho_ij'
+
+    No ``k``-by-``k`` inverse: ``k (k - 1) / 2`` scalar terms per row."""
+
+    def _score(
+        self, z: np.ndarray, rmat: np.ndarray, d: np.ndarray, dg: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        assert self.robust_c == 0.0
+        i, j = np.triu_indices(self.k, 1)
+        rho = rmat[i, j]
+        dd = 1.0 - rho * rho
+        p = z[i] * z[j]
+        ss = z[i] * z[i] + z[j] * z[j]
+        dl = rho / dd + (p * dd - rho * (ss - 2.0 * rho * p)) / (dd * dd)
+        grad = np.stack(
+            [
+                dq[i, j] * d[i] * d[j] - 0.5 * rho * (dq[i, i] / dg[i] + dq[j, j] / dg[j])
+                for dq in (self.dqa, self.dqb)
+            ],
+            axis=1,
+        )
+        g = grad.T @ dl
+        info = (grad * ((1.0 + rho * rho) / (dd * dd))[:, None]).T @ grad
+        return g, info
+
+
+def online_margin_z(
+    r: np.ndarray, margins: dict[str, object] | None = None
+) -> tuple[np.ndarray, np.ndarray]:
+    """Stage one online: each margin's targeted online GARCH (options
+    ``margins``); the rows where every margin emits and their ``z``."""
+    k = r.shape[1]
+    mkw = {"target": "running", **(margins or {})}
+    s2 = np.column_stack([np.asarray(garch.run(r[:, i], **mkw).pred) for i in range(k)])
+    rows = np.flatnonzero(np.all(np.isfinite(s2), axis=1))
+    return rows, r[rows] / np.sqrt(s2[rows])
+
+
 def online_k(
     r: np.ndarray, margins: dict[str, object] | None = None, **kw: object
 ) -> tuple[OnlineDccK, np.ndarray, np.ndarray]:
     """Both stages online, ``k`` series (``online``'s, with ``OnlineDccK``);
     ``margins`` adds options to each margin's ``garch.OnlineGarch``."""
     k = r.shape[1]
-    mkw = {"target": "running", **(margins or {})}
-    s2 = np.column_stack([np.asarray(garch.run(r[:, i], **mkw).pred) for i in range(k)])
-    rows = np.flatnonzero(np.all(np.isfinite(s2), axis=1))
-    z = r[rows] / np.sqrt(s2[rows])
+    rows, z = online_margin_z(r, margins)
     est = OnlineDccK(k=k, **kw)  # type: ignore[arg-type]
     for row in z:
         est.update(row)
@@ -680,6 +799,117 @@ def summary_k(outs: list[Path]) -> None:
         print(f"  criterion: {verdict}")
 
 
+def compare_cl(
+    n: int, seed: int, k: int, ab: tuple[float, float], rho_bar: float, nu: float | None
+) -> dict[str, float]:
+    """Request A11, part 3: the full likelihood and the composite over pairs on
+    one series, each online against its own batch oracle (``fit_second_stage``
+    on arch's margins), with the wall time of every piece."""
+    import time
+
+    clock = time.perf_counter
+    t_all = clock()
+    r = simulate_k(n, seed, k, ab, rho_bar, nu=nu)
+    t = clock()
+    z_b = batch_margin_z(r)
+    qbar_b = z_b.T @ z_b / n
+    times = {"t_batch_margins": clock() - t}
+    t = clock()
+    rows, z_o = online_margin_z(r)
+    times["t_online_margins"] = clock() - t
+    iu = np.triu_indices(k, 1)
+    tail = slice(n // 2, n)
+    out: dict[str, float] = {
+        "n": float(n),
+        "seed": float(seed),
+        "k": float(k),
+        "nu": nu or -1.0,
+        "a_true": ab[0],
+        "b_true": ab[1],
+        "rho_bar": rho_bar,
+    }
+    paths = {}
+    for lik, cls in (("full", OnlineDccK), ("cl", OnlineDccCL)):
+        t = clock()
+        bf = fit_second_stage(z_b, qbar_b, lik)
+        times[f"t_{lik}_batch"] = clock() - t
+        t = clock()
+        est = cls(k=k)
+        for row in z_o:
+            est.update(row)
+        times[f"t_{lik}_online"] = clock() - t
+        th_b, se, th_o = bf["theta"], bf["se"], est.theta
+        paths[lik] = r_path_k(th_b[0], th_b[1], z_b, qbar_b)[:, iu[0], iu[1]]
+        pred = np.full((n, len(iu[0])), np.nan)
+        pred[rows] = np.asarray(est.pred)
+        gap = np.median(np.abs(pred[tail] - paths[lik][tail]), axis=0)
+        out[f"{lik}_batch_success"] = float(bf["success"])
+        out[f"{lik}_rho_gap_worst_pair_median"] = float(gap.max())
+        out[f"{lik}_online_steps_projected"] = float(est.n_projected)
+        for i, name in enumerate(NAMES):
+            out[f"{lik}_{name}_batch"] = float(th_b[i])
+            out[f"{lik}_{name}_online"] = float(th_o[i])
+            out[f"{lik}_{name}_batch_se"] = float(se[i])
+            out[f"{lik}_{name}_diff_in_se"] = float((th_o[i] - th_b[i]) / se[i])
+    # the composite's estimand against the full one's, in the full fit's SEs
+    for name in NAMES:
+        out[f"cl_vs_full_batch_{name}_in_full_se"] = (
+            out[f"cl_{name}_batch"] - out[f"full_{name}_batch"]
+        ) / out[f"full_{name}_batch_se"]
+    out["cl_vs_full_batch_rho_gap_worst_pair_median"] = float(
+        np.median(np.abs(paths["cl"][tail] - paths["full"][tail]), axis=0).max()
+    )
+    out.update(times)
+    out["t_case"] = clock() - t_all
+    return out
+
+
+def grid_cl(out: Path, n: int, k: int, nu: float | None, shard: tuple[int, int] = (0, 1)) -> None:
+    finished = {(int(r["seed"]), int(r["n"])) for r in load(out)}
+    seeds = [s for i, s in enumerate(SEEDS) if i % shard[1] == shard[0]]
+    with out.open("a", encoding="utf-8") as f:
+        for seed in seeds:
+            if (seed, n) in finished:
+                continue
+            f.write(json.dumps(compare_cl(n, seed, k, (0.05, 0.93), 0.5, nu)) + "\n")
+            f.flush()
+            print(f"dcc cl k {k}: n {n} seed {seed} done", flush=True)
+
+
+def summary_cl(outs: list[Path]) -> None:
+    recs = [r for out in outs for r in load(out)]
+    for lik in ("full", "cl"):
+        within = sum(all(abs(r[f"{lik}_{p}_diff_in_se"]) <= 2 for p in NAMES) for r in recs)
+        worst = max(recs, key=lambda r: max(abs(r[f"{lik}_{p}_diff_in_se"]) for p in NAMES))
+        med = [np.median(np.abs([r[f"{lik}_{p}_diff_in_se"] for r in recs])) for p in NAMES]
+        gap = np.array([r[f"{lik}_rho_gap_worst_pair_median"] for r in recs])
+        tb = np.median([r[f"t_{lik}_batch"] for r in recs])
+        to = np.median([r[f"t_{lik}_online"] for r in recs])
+        ok = sum(r[f"{lik}_batch_success"] == 1 for r in recs)
+        se = (
+            np.median([r[f"{lik}_a_batch_se"] for r in recs]),
+            np.median([r[f"{lik}_b_batch_se"] for r in recs]),
+        )
+        print(
+            f"{lik}: {len(recs)} seeds, SLSQP success {ok}; within 2 SE {within}; median "
+            f"a {med[0]:.3g} b {med[1]:.3g}; worst seed {int(worst['seed'])} a "
+            f"{worst[lik + '_a_diff_in_se']:+.3g} b {worst[lik + '_b_diff_in_se']:+.3g} SE; "
+            f"worst-pair rho gap median {np.median(gap):.3g} max {gap.max():.3g}; median SE "
+            f"a {se[0]:.3g} b {se[1]:.3g}; median time: batch {tb:.2f} s, online {to:.2f} s"
+        )
+    for p in NAMES:
+        v = np.abs([r[f"cl_vs_full_batch_{p}_in_full_se"] for r in recs])
+        print(
+            f"cl batch vs full batch, {p} in full SE: median {np.median(v):.3g} max {v.max():.3g}"
+        )
+    g = np.array([r["cl_vs_full_batch_rho_gap_worst_pair_median"] for r in recs])
+    print(
+        f"cl batch vs full batch rho gap (worst pair): median {np.median(g):.3g} max {g.max():.3g}"
+    )
+    for key in ("t_batch_margins", "t_online_margins", "t_case"):
+        print(f"median {key} {np.median([r[key] for r in recs]):.2f} s")
+
+
 def load(out: Path) -> list[dict]:
     if not out.exists():
         return []
@@ -730,7 +960,23 @@ def _opt(name: str, default: str | None = None) -> str | None:
 
 
 if __name__ == "__main__":
-    if "--k" in sys.argv:
+    if "--cl" in sys.argv:
+        # request A11, part 3: full against composite,
+        #   dcc.py OUT.jsonl --cl --k K [--nu NU --rows N --shard I/K]
+        #   dcc.py OUT1.jsonl [OUT2.jsonl ...] --cl --summary
+        if "--summary" in sys.argv:
+            summary_cl([Path(x) for x in sys.argv[1 : sys.argv.index("--cl")]])
+        else:
+            nu_s = _opt("--nu")
+            si, sk = (int(x) for x in str(_opt("--shard", "0/1")).split("/"))
+            grid_cl(
+                Path(sys.argv[1]),
+                int(str(_opt("--rows", "10000"))),
+                int(str(_opt("--k"))),
+                None if nu_s is None else float(nu_s),
+                (si, sk),
+            )
+    elif "--k" in sys.argv:
         # the k-series path (request A10, part 4):
         #   dcc.py OUT.jsonl --k 3 [--a A --b B --rho-bar R --nu NU --rows N --shard I/K]
         #     [--remedy NAME]   (request A11: an entry of REMEDIES)

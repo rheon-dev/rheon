@@ -70,7 +70,8 @@ nothing). ``gain500``, ``gain2000``: remedy (b), the step's gain
 ``1/(t + T)`` at ``T`` 500 or 2,000 in place of ``1/(t + 75)``. ``huber2``:
 remedy (c), the robust score, the standardized error clipped at 2 with
 running centring and slope; ``huber2_gauss``: the same with their standard
-normal values (garch.py, ``robust_c``).
+normal values (garch.py, ``robust_c``). ``batch500_huber2`` (part 3): both,
+the 500-row targeted batch start and the robust score.
 """
 
 from __future__ import annotations
@@ -98,6 +99,13 @@ REMEDIES: dict[str, dict[str, object]] = {
     "gain2000": {**ONLINE, "gain": "offset", "gain_t0": 2000.0},
     "huber2": {**ONLINE, "robust_c": 2.0},
     "huber2_gauss": {**ONLINE, "robust_c": 2.0, "robust_center": "gauss"},
+    "batch500_huber2": {
+        **ONLINE,
+        "batch_start": True,
+        "warm": 500,
+        "t0": 500.0,
+        "robust_c": 2.0,
+    },
 }
 
 

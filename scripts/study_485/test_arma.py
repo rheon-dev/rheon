@@ -84,3 +84,27 @@ def test_robust_default_is_the_plain_estimator():
     y = arma.simulate(2000, *arma.TRUTH, seed=27)
     plain, named = arma.run(y), arma.run(y, robust_c=0.0)
     assert np.array_equal(plain.beta, named.beta) and plain.pred == named.pred
+
+
+def test_batch_start_emits_nothing_then_starts_at_sarimax():
+    """Request A11, remedy (a): the buffered rows emit NaN, the start is
+    SARIMAX's fit of them, and the predictions stay out of sample."""
+    y = arma.simulate(1500, 0.8, 0.3, 1.0, seed=28)
+    est = arma.OnlineArma(batch_start=500, robust_c=2.0)
+    for v in y[:500]:
+        est.update(float(v))
+    _, res = arma.sarimax_fit(y[:500])
+    np.testing.assert_array_equal(est.beta, np.asarray(res.params)[:2])
+    for v in y[500:]:
+        est.update(float(v))
+    assert all(np.isnan(est.pred[:500])) and not any(np.isnan(est.pred[500:]))
+    y2 = y.copy()
+    y2[1000] += 50.0
+    other = arma.run(y2, batch_start=500, robust_c=2.0).pred
+    assert est.pred[:1001] == other[:1001] and est.pred[1001] != other[1001]
+
+
+def test_batch_start_default_is_the_plain_estimator():
+    y = arma.simulate(2000, *arma.TRUTH, seed=29)
+    plain, named = arma.run(y), arma.run(y, batch_start=0)
+    assert np.array_equal(plain.beta, named.beta) and plain.pred == named.pred

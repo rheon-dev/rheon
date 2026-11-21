@@ -152,3 +152,74 @@ def test_robust_second_stage_out_of_sample_and_admissible():
     head = zip(est.pred[:1001], other.pred[:1001], strict=True)
     assert all(np.array_equal(x, y) for x, y in head)
     assert not np.array_equal(est.pred[1001], other.pred[1001])
+
+
+def test_composite_rows_are_the_pairs_sum():
+    """Request A11, part 3: the composite row log-likelihood is the sum over
+    pairs of the two-series one, and equals the full one at two series."""
+    r = dcc.simulate_k(800, 51, 4, (0.05, 0.93), 0.5)
+    z = dcc.batch_margin_z(r)
+    rmat = dcc.r_path_k(0.04, 0.9, z, z.T @ z / z.shape[0])
+    ref = sum(
+        dcc.loglik_rows(rmat[:, i, j], z[:, [i, j]]) for i in range(4) for j in range(i + 1, 4)
+    )
+    np.testing.assert_allclose(dcc.loglik_rows_cl(rmat, z), ref, rtol=1e-12, atol=1e-12)
+    two = rmat[:, :2, :2] / np.sqrt(
+        np.einsum("tii->ti", rmat[:, :2, :2])[:, :, None]
+        * np.einsum("tii->ti", rmat[:, :2, :2])[:, None, :]
+    )
+    np.testing.assert_allclose(
+        dcc.loglik_rows_cl(two, z[:, :2]), dcc.loglik_rows_k(two, z[:, :2]), atol=1e-12
+    )
+
+
+def test_composite_online_score_is_the_derivative():
+    """The composite step's score at a row, parameters held, is the central
+    difference of that row's composite log-likelihood along the same Q path."""
+    rng = np.random.default_rng(52)
+    z = rng.standard_normal((300, 4))
+
+    def run(theta: np.ndarray) -> dcc.OnlineDccCL:
+        est = dcc.OnlineDccCL(k=4, a0=theta[0], b0=theta[1], warm=10**9)
+        for x in z:
+            est.update(x)
+        return est
+
+    def row_ll(theta: np.ndarray) -> float:
+        rho = run(theta).pred[-1]
+        i, j = np.triu_indices(4, 1)
+        return float(
+            sum(dcc.loglik_rows(np.array([rho[m]]), z[-1:, [i[m], j[m]]])[0] for m in range(len(i)))
+        )
+
+    theta = np.array([0.04, 0.9])
+    num = approx_fprime(theta, row_ll, centered=True)
+    np.testing.assert_allclose(run(theta).last_g, num, rtol=1e-6, atol=1e-8)
+
+
+def test_composite_online_is_the_full_at_two_series():
+    r = dcc.simulate_k(2000, 53, 2, (0.05, 0.93), 0.5)
+    _, z = dcc.online_margin_z(r)
+    a, c = dcc.OnlineDccK(k=2), dcc.OnlineDccCL(k=2)
+    for x in z:
+        a.update(x)
+        c.update(x)
+    np.testing.assert_allclose(c.theta, a.theta, rtol=1e-10)
+
+
+def test_batch_start_second_stage():
+    """Request A11, remedy (a) on the second stage: NaN while buffering, the
+    start at the batch fit of the buffered rows, admissible after."""
+    r = dcc.simulate_k(1600, 54, 3, (0.05, 0.93), 0.5, nu=5.0)
+    rem = dcc.REMEDIES["batch500_huber2"]
+    est, rows, z = dcc.online_k(r, rem["margins"], **rem["stage2"])
+    assert rows[0] == 500
+    assert all(np.all(np.isnan(x)) for x in est.pred[:500])
+    assert not any(np.any(np.isnan(x)) for x in est.pred[500:])
+    fit = dcc.fit_second_stage(z[:500], z[:500].T @ z[:500] / 500)
+    probe = dcc.OnlineDccK(k=3, **rem["stage2"])
+    for x in z[:500]:
+        probe.update(x)
+    np.testing.assert_array_equal(probe.theta, np.array(dcc.project(*fit["theta"])))
+    a, b = est.theta
+    assert a >= 0 and b >= 0 and a + b <= 1 - dcc.MARGIN_EPS + 1e-15

@@ -16,7 +16,10 @@ which supersede §15.2's grid assertions where they differ. Request A11, part 1:
 remedies for the early transient, a bounded batch start and a slower early
 gain, on targeted GARCH at persistence 0.99 and ETS at `α` 0.6, with the 0.97
 control (§21). Part 2: the third remedy, a Huber-clipped score, on targeted
-GARCH and three-series DCC under t(5), with ARMA as the control (§22). The request named the deliverable
+GARCH and three-series DCC under t(5), with ARMA as the control (§22). Part 3:
+the batch start and the robust score together on those two sets, and DCC's
+composite likelihood over pairs against the full one at three and five series
+(§23). The request named the deliverable
 `STUDY-485-ESTIMATORS.md`; it is this record, kept under the name it was
 committed with (`ORACLE-STUDY-485.md`). Nothing in the package or the Rust crates was changed. The scan this
 builds on is `vm-tools/research/485-TIME-SERIES-SCAN.md` on branch
@@ -1348,3 +1351,182 @@ run together.
 together; a clipping constant other than 2; the DCC information matrix
 rescaled by the clipped score's slope; the robust score's own standard
 errors (every gap is in the Gaussian fits' SEs); rows past 10,000.
+
+The coordinator accepted part 2 (2026-11-21) and keeps the robust score's
+result as a finding: it clears neither set, and it costs the normal-noise DCC
+control its headroom (47 to 45).
+
+## 23. Request A11, part 3: the batch start with the robust score, and DCC's composite likelihood
+
+Two questions, 10,000 rows, seeds 485000 to 485049, every grid fresh, each
+set's own oracle and criterion. Thirteen grids, about 8 minutes in four
+processes on four cores under nohup, resumable per seed.
+
+### 23.1 The bounded batch start with the robust score (a + c)
+
+**The combination.** §21's batch start and §22's clipped score at `c = 2`
+(running centring and slope), in every estimator they touch:
+
+- targeted GARCH (`vt_garch.py --remedy batch500_huber2`): 500 rows fitted by
+  §16's targeted batch fit and replayed (§21), the robust statistics
+  accumulated over the replay, then clipped steps at `1/(t + 500)`;
+- DCC (`dcc.py ... --k 3 --remedy batch500_huber2`): each margin as above;
+  then the second stage buffers its own first 500 rows of `z` (rows 500 to
+  999, which emit nothing), fits `(a, b)` on them with `fit_second_stage`
+  (the oracle's SLSQP on the full likelihood, standing in for a batch fit the
+  model would own, `Q̄` their mean `zzᵀ`), replays them with `(a, b)` held to
+  build `Q`, its derivatives, `Q̄` and `H`, and steps from there with the
+  clipped score (`warm = t0 = 500`). 1,000 rows emit no correlation;
+- ARMA (`grid_arma.py OUTDIR t5_phi080_batch500_huber2|n_phi080_batch500_huber2`,
+  `arma.OnlineArma(batch_start=500, robust_c=2.0)`): `SARIMAX` fits the first
+  500 rows (the two warm-up phases are skipped), the rows are replayed with
+  `(φ, θ)` held, then clipped steps.
+
+The batch start alone (a) was also run on sets (3) and (4)
+(`--remedy batch500`), which §22 listed as not verified, so the two parts can
+be told apart.
+
+| set | remedy | within 2 | worst seed (SE) | other |
+|---|---|---|---|---|
+| (3) GARCH targeted, t(5), against the Gaussian targeted fit | none (§18) | 45 | 485009: `β` −32.4 | path max 49% |
+| | (c) `huber2` (§22) | 46 | 485023: `α` −4.35 | path max 13.8% |
+| | (a) `batch500` | 48 | 485009: `β` −29.0 (`α` +3.07) | path max 48% |
+| | **(a + c)** | **48** | 485003: `α` −2.12, `β` +2.23 | every seed within 3.5 SE; path max 8.6%; 50 within 2 of arch's t fit's SEs |
+| (4) DCC three series, t(5) | none (§19) | 40 | 485049: `b` −13.6 | projection on 41 seeds; worst-pair `ρ` gap max 0.075 |
+| | (c) `huber2` (§22) | 43 | 485039: `a` −10.8 | projection on 28; 0.093 |
+| | (a) `batch500` | 47 | 485012: `a` −10.4, `b` +9.23 | 49 within 4 SE; projection on 6; 0.082 |
+| | **(a + c)** | **43** | 485032: `a` −3.24, `b` +2.87 | **every seed within 4 SE**; projection on 3; 0.021 |
+| ARMA `φ` 0.8, normal (control) | none / (c) | 50 / 50 | 485029: `θ` −0.56 / 485015: `φ` −0.48 | medians `φ, θ, σ²` 0.071, 0.119, 0.166 / 0.103, 0.147, 0.166 |
+| | (a + c) | 50 | 485013: `φ` −0.32 | medians 0.059, 0.066, 0.056; RMS gap max 0.018 |
+| ARMA `φ` 0.8, t(5) (control) | none / (c) | 50 / 50 | 485025: `σ²` −1.02 / 485009: `σ²` +1.03 | medians 0.076, 0.145, 0.286 / 0.214, 0.265, 0.277 |
+| | (a + c) | 50 | 485026: `θ` +0.74 | medians 0.167, 0.170, 0.088; every seed within 1 SE |
+| GARCH targeted, normal, P 0.98 (control) | none / (c) | 47 / 47 | 485027: `β` +2.70 / `α` −4.57 | path max 4.1% / 5.9% |
+| | (a + c) | **50** | 485048: `α` −1.28, `β` +1.22 | path max 2.4% |
+| DCC three series, normal (control) | none / (c) | 47 / 45 | 485045: `a` −2.85 / 485007: `a` −3.60 | `ρ` gap max 0.015 / 0.019 |
+| | (a + c) | **50** | 485010: `b` +1.38 | projection on no seed; `ρ` gap max 0.013 |
+
+arch converged on every GARCH fit, statsmodels on every ARMA fit, SLSQP on
+every DCC batch fit.
+
+**Reading.**
+
+- **(3) passes with (a + c), 48 of 50, and every seed is inside §20.2's
+  per-seed bounds on `α, β`.** Neither part does it alone. The batch start
+  alone keeps the stuck seed (485009 at −29 SE): the heavy rows that throw it
+  come after row 500. The clip alone frees 485009 but starts from the plain
+  start (46). Together the start is good and no later row can throw it.
+- **(4) does not reach the count with (a + c), 43 of 50, but its tail is
+  gone:** every seed within 4 SE (§20.2's per-seed bound), the worst-pair `ρ`
+  gap at most 0.021 (bound 0.03), the projection acting on 3 seeds (§19: 41).
+  The count is lost in the middle, not the tail: the medians widen (`a` 0.61,
+  `b` 0.74 SE against §19's 0.52, 0.44) because under t(5) the clipped score
+  is not the Gaussian quasi-likelihood's estimator (§22), and the gap is read
+  in the Gaussian fit's SEs. The batch start alone gives 47, a pass by the
+  count with two seeds of headroom, but keeps one stuck seed (485012 at 10.4
+  SE, `a` low and `b` high on the ridge). So the two remedies trade: (a)
+  alone meets the count with a stuck seed; (a + c) removes every stuck seed
+  and misses the count by two.
+- **The controls do not lose anything; three gain.** ARMA keeps 50 of 50 under
+  both noises, inside §20.2's bounds on every seed, its medians lower than
+  §22's robust-only run (t(5): `φ` 0.17 against 0.21). The normal-noise GARCH
+  and DCC controls each rise from 47 to 50, with no seed past 1.4 SE. The
+  robust score's cost at the normal (§22: GARCH's worst seed 4.57 SE, DCC 45)
+  disappears once it starts from a batch point.
+
+**Not verified:** a batch window other than 500 rows; the DCC second stage
+started on the same 500 rows as the margins (here they run in turn, so 1,000
+rows emit no correlation); the batch starts by the models' own optimizers;
+(a + c) on §21's sets (1) and (2); a clipping constant other than 2; the
+robust estimator's own standard errors.
+
+### 23.2 DCC: the composite likelihood over pairs against the full likelihood
+
+**The two objectives,** on the same standardized residuals and the same `Q`
+recursion (entrywise, so each pair's `R_t` block is the full model's):
+
+- **full** (§19): `Σ_t −½ (ln|R_t| + zₜᵀR_t⁻¹zₜ − zₜᵀzₜ)`;
+- **composite, all pairs** (Engle, Shephard and Sheppard 2008, the all-pairs
+  form): `Σ_t Σ_{i<j} −½ (ln(1 − ρ²_ij,t) + (z²_i + z²_j − 2ρ_ij,t z_i z_j)/(1 − ρ²_ij,t) − z²_i − z²_j)`,
+  the sum of part 6's two-series likelihood over the `k(k − 1)/2` pairs
+  (`dcc.loglik_rows_cl`; a test holds it to the pairwise sum and, at two
+  series, to the full one).
+
+**Oracles.** Both are §19's, differing only in the objective: arch's Gaussian
+GARCH(1,1) per margin, `z` from its in-sample volatility, `Q̄` the sample mean
+of `zzᵀ`, `Q₀ = Q̄`, `(a, b)` maximizing the objective by scipy's SLSQP from
+`(0.03, 0.85)` with the same bounds, constraint and infeasible guard
+(`fit_second_stage(z, Q̄, "full" | "cl")`). SEs: the second-stage sandwich
+`H⁻¹JᵀJH⁻¹` by statsmodels' numerical derivatives of the same objective's
+per-row terms, which for the composite is its Godambe (composite-likelihood)
+sandwich; the margins' estimation error is left out of both, as in §19.
+
+**Online.** Full: §19's `OnlineDccK`. Composite: `OnlineDccCL`, the same `Q`
+recursion, start, gain and projection, with the row's score and information
+summed over pairs of part 6's two-series forms (no `k × k` inverse). Its score
+equals a central difference of the row's composite likelihood (test, four
+series), and at two series it equals the full estimator to 1e-10. Both read
+the same online margins (§19's targeted GARCH). Each is compared with its own
+oracle, in that oracle's SEs. No remedy is applied (§23.1's are not in this
+comparison).
+
+**Truth:** `(a, b) = (0.05, 0.93)`, `Q̄` off-diagonals 0.5, margins
+`(0.02, 0.08, 0.90)`, as §19, at `k = 3` and `k = 5`; normal noise and
+multivariate t(5) (§19's construction).
+
+| k | noise | likelihood | within 2 | worst seed (SE) | medians `a`, `b` (SE) | worst-pair `ρ` gap: median / max | median SE `a`, `b` |
+|---|---|---|---|---|---|---|---|
+| 3 | normal | full | 47 | 485045: `a` −2.85, `b` +2.17 | 0.34, 0.31 | 0.0046 / 0.015 | 0.00235, 0.00366 |
+| 3 | normal | composite | 45 | 485038: `a` −4.26, `b` +3.45 | 0.45, 0.43 | 0.0048 / 0.022 | 0.00254, 0.00391 |
+| 3 | t(5) | full | 40 | 485049: `a` +3.32, `b` −13.6 | 0.52, 0.44 | 0.011 / 0.075 | 0.00327, 0.00498 |
+| 3 | t(5) | composite | 39 | 485026: `a` +6.77, `b` −15.2 | 0.72, 0.63 | 0.013 / 0.083 | 0.00361, 0.00553 |
+| 5 | normal | full | **50** | 485033: `a` −1.30, `b` +0.69 | 0.31, 0.32 | 0.0058 / 0.012 | 0.00138, 0.00215 |
+| 5 | normal | composite | **50** | 485020: `a` −1.55, `b` +1.00 | 0.38, 0.29 | 0.0060 / 0.012 | 0.00171, 0.00266 |
+| 5 | t(5) | full | 37 | 485032: `a` −13.7, `b` +15.5 | 0.99, 0.70 | 0.012 / 0.143 | 0.00205, 0.00308 |
+| 5 | t(5) | composite | 39 | 485032: `a` −14.0, `b` +15.4 | 0.88, 0.50 | 0.013 / 0.145 | 0.00258, 0.00388 |
+
+The `k = 3` full rows reproduce §19 (47 and 40, the same worst seeds). SLSQP
+succeeded on all 400 batch fits.
+
+**The composite's estimand against the full one** (the two batch fits on the
+same `z`, in the full fit's SEs): at `k = 3`, median 0.27 (`a`) and 0.25
+(`b`), at most 0.96 and 1.19 (normal), and 0.30, 0.31, at most 0.80 and 0.84
+(t(5)); at `k = 5`, median 0.61 and 0.60, at most 1.55 and 2.01 (normal), 0.34
+and 0.40, at most 1.38 and 1.36 (t(5)). The worst-pair median gap between
+their correlation paths is at most 0.0042 (`k = 3`) and 0.0058 (`k = 5`). The
+composite's SEs are larger: by about 8% at `k = 3` and 24% at `k = 5`
+(normal), the efficiency it gives up.
+
+**Wall time per case** (median, seconds, `time.perf_counter`, measured with
+four grid processes on four cores, so each figure carries that load; numpy,
+one row at a time in Python, indicative of the ratio rather than of a Rust
+port):
+
+| k | noise | batch margins (arch) | full batch fit + SEs | composite batch fit + SEs | online margins | full online, 10,000 rows | composite online | whole case |
+|---|---|---|---|---|---|---|---|---|
+| 3 | normal | 0.09 | 0.48 | 0.21 | 0.69 | 1.36 | 1.41 | 4.5 |
+| 3 | t(5) | 0.09 | 0.51 | 0.23 | 0.66 | 1.35 | 1.41 | 4.6 |
+| 5 | normal | 0.14 | 1.19 | 0.74 | 1.11 | 1.33 | 1.32 | 6.2 |
+| 5 | t(5) | 0.15 | 1.23 | 0.75 | 1.10 | 1.33 | 1.32 | 6.3 |
+
+**Reading.**
+
+- **At `k = 5` with normal noise both pass, 50 of 50;** at `k = 3` the full
+  passes (47) and the composite is at the floor (45, no headroom), its worst
+  seed at 4.26 SE, over §20.2's per-seed bound of 4. Under t(5) both fail at
+  both sizes (37 to 40), with the same ridge seeds, so the heavy-tail failure
+  of §19 is not a property of the full likelihood: the composite shares it,
+  and at `k = 5` it reaches 15 SE on one seed (485032) under either
+  objective. §23.1's remedies were measured at `k = 3` only.
+- **The composite estimates a nearby but different point** (within 2.01 of
+  the full fit's SEs on every seed, 0.6 at the median at `k = 5`, correlation
+  paths within 0.006) with SEs 8% to 24% wider. As an oracle for rheon, each
+  form must be held to its own batch fit, as here.
+- **Cost.** The composite batch fit takes 40% to 60% of the full one's time;
+  online, the two cost the same in this numpy form (1.3 to 1.4 s per 10,000
+  rows at both sizes), since the per-row Python overhead, not the `k × k`
+  inverse, dominates at `k ≤ 5`. At larger `k` the full likelihood's inverse
+  and its `O(k³)` per row would separate them; that was not measured.
+
+**Not verified:** `k` above 5; contiguous-pair or subsampled-pair composites;
+the composite under §23.1's remedies; first-stage-corrected SEs for either
+objective; timings without concurrent load, or in Rust.

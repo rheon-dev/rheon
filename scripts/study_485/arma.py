@@ -43,6 +43,13 @@ clipped (the clipped error's slope, so the step keeps Gauss-Newton's scale).
 ``s2`` stays the mean of the unclipped ``e^2``. The clip is symmetric, so no
 centring is needed under symmetric noise.
 
+Request A11, remedy (a), a bounded batch start (``batch_start = W``; 0: off):
+the first ``W`` rows are buffered and emit nothing; statsmodels' ``SARIMAX``
+fits them (standing in for a batch fit the model would own), ``beta`` starts
+at that fit, and the rows are replayed with ``beta`` held (the two warm-up
+phases are skipped), building ``R``, ``s2``, ``psi`` and the kept residual;
+steps follow at gain ``1/t``, ``t`` counting the buffer.
+
 State per target: ``beta`` (2), ``R`` (3 distinct), ``psi`` (2), ``y_{t-1}``,
 ``ehat_{t-1}``, ``s2``, ``W``, the row count and the two sums of the first
 phase: 14 floats, 112 bytes.
@@ -106,6 +113,7 @@ class OnlineArma:
     warm: int = 50
     margin: float = 1e-2
     robust_c: float = 0.0
+    batch_start: int = 0
 
     beta: np.ndarray = field(default_factory=lambda: np.zeros(2))
     R: np.ndarray = field(default_factory=lambda: np.zeros((2, 2)))
@@ -119,6 +127,9 @@ class OnlineArma:
     syy1: float = 0.0
     rob_m: float = 0.0
     rob_n: int = 0
+    started: bool = False
+    replaying: bool = False
+    buffer: list[float] = field(default_factory=list)
     lam: float = field(init=False)
 
     pred: list[float] = field(default_factory=list)
@@ -127,13 +138,34 @@ class OnlineArma:
         self.lam = 1.0 if math.isinf(self.half_life) else 2.0 ** (-1.0 / self.half_life)
 
     def update(self, y: float) -> None:
+        if self.batch_start and not self.started:
+            self.buffer.append(y)
+            self.pred.append(math.nan)
+            if len(self.buffer) == self.batch_start:
+                self._start()
+            return
+        self._row(y)
+
+    def _start(self) -> None:
+        rows = np.asarray(self.buffer)
+        _, res = sarimax_fit(rows)
+        cap = 1.0 - self.margin
+        self.beta = np.clip(np.asarray(res.params, dtype=float)[:2], -cap, cap)
+        self.started = self.replaying = True
+        for v in rows:
+            self._row(float(v))
+        self.replaying = False
+        self.buffer = []
+
+    def _row(self, y: float) -> None:
         phi, theta = self.beta
         x = np.array([self.prev_y, self.prev_e])
         yhat = phi * self.prev_y + theta * self.prev_e
-        self.pred.append(yhat)
+        if not self.replaying:
+            self.pred.append(yhat)
         e = y - yhat
         self.n_seen += 1
-        if self.n_seen <= self.warm:
+        if self.n_seen <= self.warm and not self.batch_start:
             # phase 1: the lag-1 autocorrelation at beta = 0
             self.syy += y * y
             self.syy1 += y * self.prev_y
@@ -158,7 +190,7 @@ class OnlineArma:
         gamma = 1.0 / self.W
         self.R += gamma * (np.outer(psi, psi) - self.R)
         self.s2 += gamma * (e * e - self.s2)
-        if self.n_seen > 2 * self.warm:
+        if self.n_seen > 2 * self.warm and not self.replaying:
             step = gamma * np.linalg.solve(self.R, psi * e_step)
             cap = 1.0 - self.margin
             self.beta = np.clip(self.beta + step, -cap, cap)
