@@ -60,6 +60,14 @@ the seeds whose index in 485000..485049 is I modulo K, so K processes can share
 a grid, each appending to its own file. ``--nu NU`` (part 3) draws Student-t
 noise with ``NU`` degrees of freedom, scaled to unit variance, and makes arch's
 ``dist="t"`` fit (``nu`` estimated) the primary oracle (``compare``).
+
+``--remedy NAME`` (request A11) runs the online estimator with one of the
+early-transient remedies in ``REMEDIES`` (options of ``garch.OnlineGarch``)
+in place of part 1's; the oracle is unchanged. Without it every field is as
+before. ``batch500``: remedy (a), the first 500 rows fitted by the targeted
+batch fit and used as the online start (``t0 = 500``; those rows emit
+nothing). ``gain500``, ``gain2000``: remedy (b), the step's gain
+``1/(t + T)`` at ``T`` 500 or 2,000 in place of ``1/(t + 75)``.
 """
 
 from __future__ import annotations
@@ -80,6 +88,12 @@ SEEDS = range(485000, 485050)
 SIZES = (2000, 10000)
 PARAMS = ("alpha", "beta")
 CROSS_START = np.array([0.05, 0.90])  # the online start, not arch's optimum
+ONLINE = {"target": "running"}  # part 1's estimator (part 3's 1a)
+REMEDIES: dict[str, dict[str, object]] = {
+    "batch500": {**ONLINE, "batch_start": True, "warm": 500, "t0": 500.0},
+    "gain500": {**ONLINE, "gain": "offset", "gain_t0": 500.0},
+    "gain2000": {**ONLINE, "gain": "offset", "gain_t0": 2000.0},
+}
 
 
 def vt_process():  # noqa: ANN201
@@ -228,7 +242,11 @@ def _gaps(
 
 
 def compare(
-    n: int, seed: int, truth: tuple[float, float, float] = TRUTH, nu: float | None = None
+    n: int,
+    seed: int,
+    truth: tuple[float, float, float] = TRUTH,
+    nu: float | None = None,
+    remedy: str = "",
 ) -> dict[str, float]:
     """The online estimator against the batch targeting fit on one series.
 
@@ -236,13 +254,14 @@ def compare(
     unit variance, and the primary oracle is arch's fit with ``dist="t"``,
     estimating ``nu`` as arch does; the Gaussian quasi-likelihood fit, the
     online estimator's own estimand, is reported beside it (``qml_`` fields).
-    Without ``nu`` the fields are part 1's, unchanged."""
+    Without ``nu`` the fields are part 1's, unchanged. ``remedy`` names an
+    entry of ``REMEDIES``; empty, the estimator is part 1's."""
     r = garch.simulate(n, *truth, seed=seed, nu=nu)
     r2 = r * r
     am, res = vt_fit(r, "t" if nu else "normal")
     v_T = am.volatility.target(r)
 
-    est = garch.run(r, target="running")
+    est = garch.run(r, **(REMEDIES[remedy] if remedy else ONLINE))
     theta_o = est.theta.copy()
     start = garch.backcast(r2[: garch.BACKCAST_ROWS])
     pred = np.asarray(est.pred)
@@ -274,6 +293,8 @@ def compare(
         "omega_true": truth[0],
         "omega_online": float(theta_o[0]),
     }
+    if remedy:
+        out["remedy"] = remedy  # type: ignore[assignment]
     out.update(_gaps("", res, v_T, theta_o, path_args))
     if nu:
         out["nu_true"] = float(nu)
@@ -331,6 +352,7 @@ def run(
     truth: tuple[float, float, float] = TRUTH,
     shard: tuple[int, int] = (0, 1),
     nu: float | None = None,
+    remedy: str = "",
 ) -> None:
     finished = done(out)
     seeds = [s for i, s in enumerate(SEEDS) if i % shard[1] == shard[0]]
@@ -339,7 +361,7 @@ def run(
             for seed in seeds:
                 if (seed, n) in finished:
                     continue
-                f.write(json.dumps(compare(n, seed, truth, nu)) + "\n")
+                f.write(json.dumps(compare(n, seed, truth, nu, remedy)) + "\n")
                 f.flush()
                 print(f"vt: seed {seed} n {n} done", flush=True)
 
@@ -434,12 +456,13 @@ def main() -> None:
     ap.add_argument("--persistence", type=float, default=None)
     ap.add_argument("--shard", default="0/1")
     ap.add_argument("--nu", type=float, default=None)
+    ap.add_argument("--remedy", default="", choices=["", *REMEDIES])
     a = ap.parse_args()
     if a.summary:
         summary(a.out)
         return
     i, k = (int(x) for x in a.shard.split("/"))
-    run(a.out[0], tuple(a.rows), truth_at(a.persistence), (i, k), a.nu)
+    run(a.out[0], tuple(a.rows), truth_at(a.persistence), (i, k), a.nu, a.remedy)
 
 
 if __name__ == "__main__":

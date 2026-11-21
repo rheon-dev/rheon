@@ -12,7 +12,10 @@ Part 7: the proposed tolerances (§15). Request A10, part 1: GARCH(1,1) variance
 targeting against a batch variance-targeting fit run by arch (§16). Part 2: the same at 100,000 rows and at
 persistence 0.97 and 0.99 (§17). Part 3: Student-t(5) noise for targeted
 GARCH, ARMA(1,1) at two AR roots and ETS(A,A,N) at two smoothing levels (§18). Part 4: DCC(1,1) on three series with t(5) noise (§19). Part 5: the revised tolerances (§20),
-which supersede §15.2's grid assertions where they differ. The request named the deliverable
+which supersede §15.2's grid assertions where they differ. Request A11, part 1: two
+remedies for the early transient, a bounded batch start and a slower early
+gain, on targeted GARCH at persistence 0.99 and ETS at `α` 0.6, with the 0.97
+control (§21). The request named the deliverable
 `STUDY-485-ESTIMATORS.md`; it is this record, kept under the name it was
 committed with (`ORACLE-STUDY-485.md`). Nothing in the package or the Rust crates was changed. The scan this
 builds on is `vm-tools/research/485-TIME-SERIES-SCAN.md` on branch
@@ -1124,3 +1127,113 @@ and gets no floor here.
 4. For DCC beyond two series, should rheon use the full likelihood (as
    measured here at `k = 3`) or the composite likelihood over pairs (scan
    §9), which was not measured?
+
+## 21. Request A11, part 1: a bounded batch start and a slower early gain
+
+Request A11 tests three remedies for the early transient behind §20.3's
+failures: (a) a bounded batch start, (b) a slower early gain, (c) a robust
+score. This part runs (a) and (b) on two failing sets, targeted GARCH at
+persistence 0.99 (§17: 44 of 50) and ETS(A,A,N) at `α = 0.6` under normal and
+t(5) noise (§18: 6 of 50 each), with the control targeted GARCH at 0.97 (§17:
+48 of 50). 10,000 rows, seeds 485000 to 485049, every grid fresh. Each set
+keeps its own oracle and criterion: targeted GARCH against §16's targeted
+batch fit, `α` and `β` within 2 of arch's robust SEs; ETS against `ETSModel`
+with known initial states, `α, β` in its SEs and `σ²` in the closed form,
+all three within 2 SE.
+
+**Options, not forks.** `garch.OnlineGarch` gained `gain="offset"` with
+`gain_t0`, and its `batch_start` now uses the targeted batch fit when `target`
+is set (that pairing was never run before); `vt_garch.py --remedy NAME` runs
+an entry of its `REMEDIES`. `ets.OnlineEts` gained `batch_start` (rows) and
+`gain_t0`; `ets.py --remedy NAME`. Each default leaves the arithmetic as it
+was: a §18 ETS `α = 0.6` case and a §17 0.99 case were recomputed; the ETS
+case matched every field, and the GARCH case matched every online field to
+the bit while arch's own SLSQP fit of the oracle moved by about 2e-8 relative
+(`α_batch` 0.08061946392 then 0.08061946198; the `α` gap −3.199727 then
+−3.199726 SE): the oracle's code is untouched, and its optimizer is not
+bit-reproducible on this machine. 47 study tests pass (the 36 before, and 11
+new: each remedy out of sample and admissible at every row, the buffered rows
+emit nothing, each batch start begins at its library's fit of the buffered
+rows, the GARCH offset gains scale-equivariant, and ETS's defaults equal part
+5's to the bit). Twelve grids, about 2.5 minutes in four processes under
+nohup, one JSON line per seed, resumable.
+
+| remedy | name | targeted GARCH | ETS(A,A,N) |
+|---|---|---|---|
+| (a) bounded batch start | `batch500` | the first 500 rows are buffered and emit nothing; §16's targeted batch fit of those rows (arch standing in for an optimizer the model would own) gives `(α, β)`, and `ω = v_W(1 − α − β)`, `v_W` their mean `r²`, which is that fit's own target; the 500 rows are replayed at that point to build the information matrix; steps from row 501 at `1/(t + 500)` (§11's 3, on the targeted form) | the first 500 rows are buffered and emit nothing; `ETSModel` fits them with the known initial states; the rows are replayed at that fit (states, sensitivities, `R`, `σ²`, parameters held); steps from row 501 at `1/t`, `t` counting the buffer |
+| (b) slower early gain | `gain500`, `gain2000` | the step's gain is `1/(t + T)` with `T` 500 or 2,000 in place of `1/(t + 75)`; the information matrix keeps its `1/(t + 75)` average. At row 10,000 the gain is 0.96 (`T` 500) and 0.84 (2,000) of the plain one | the step's gain is `1/(t + T)` in place of `1/t`; `R` and `σ²` keep their `1/t` means. At row 10,000: 0.95 and 0.83 of the plain gain |
+
+Results. "Within 2" is the set's criterion count; the worst seed is the one
+with the largest gap in SE over the criterion's parameters; "medians" are the
+absolute gaps' medians over the seeds; the path column is targeted GARCH's
+per-seed median relative gap of the one-step variance to the batch path over
+the second half (its max over seeds), ETS's one-step prediction RMS gap to the
+batch parameters' (max over seeds).
+
+| set | remedy | within 2 | worst seed (SE) | medians (SE) | path or RMS gap, max |
+|---|---|---|---|---|---|
+| GARCH targeted, P 0.99 | none (§17) | 44, fails | 485006: `α` −7.00, `β` +6.31 | `α` 0.51, `β` 0.38 | 8.5% |
+| | (a) `batch500` | **50**, passes | 485038: `α` −1.41, `β` +0.64 | 0.28, 0.25 | 3.4% |
+| | (b) `gain500` | 46, passes by one | 485016: `α` −5.35, `β` +4.09 | 0.39, 0.41 | 7.7% |
+| | (b) `gain2000` | 39, fails | 485022: `α` −3.17, `β` +3.04 | 1.59, 1.13 | 5.2% |
+| GARCH targeted, P 0.97 (control) | none (§17) | 48, passes | 485027: `α` −2.01, `β` +2.92 | 0.30, 0.36 | 3.9% |
+| | (a) `batch500` | 50 | 485006: `α` −1.48, `β` +1.12 | 0.32, 0.20 | 2.9% |
+| | (b) `gain500` | 48 | 485027: `α` −3.80, `β` +4.05 | 0.30, 0.24 | 5.1% |
+| | (b) `gain2000` | 50 | 485027: `α` −0.73, `β` +1.93 | 1.06, 0.58 | 3.8% |
+| ETS `α` 0.6, normal | none (§18) | 6, fails | 485017: `β` −9.98 | `α` 1.99, `β` 5.12, `σ²` 1.26 | 0.132 |
+| | (a) `batch500` | **50**, passes | 485042: `β` −0.42 | 0.044, 0.052, 0.044 | 0.016 |
+| | (b) `gain500` | 0, fails | 485027: `β` −16.2 | 5.63, 13.1, 4.65 | 0.228 |
+| | (b) `gain2000` | 0, fails | 485014: `β` −21.8 | 6.80, 19.4, 9.46 | 0.324 |
+| ETS `α` 0.6, t(5) | none (§18) | 6, fails | 485006: `β` −13.1 | 2.18, 4.86, 1.10 | 0.186 |
+| | (a) `batch500` | **50**, passes | 485014: `β` +0.42 | 0.047, 0.065, 0.043 | 0.017 |
+| | (b) `gain500` | 0, fails | 485006: `β` −17.9 | 5.77, 13.2, 4.48 | 0.269 |
+| | (b) `gain2000` | 0, fails | 485010: `β` −21.9 | 7.18, 19.5, 9.55 | 0.352 |
+
+arch converged on all 300 GARCH fits; statsmodels on every ETS fit but one
+normal-noise case in each normal grid, seed 485036, the case that did not
+converge in §18 either (the same series and the same oracle). The online parameters never out-scored the batch fit. With `ω` (its
+delta-method SE) added to the GARCH count, `batch500` gives 45 at 0.99 and 49
+at 0.97 (§17: 38 and 48). The online persistence ends within 0.0042 of the
+batch's at 0.99 under `batch500` (§17: 0.015). The ETS one-step MSE over the
+second half under `batch500` is at most 1.0011 times the batch parameters'
+(normal and t(5); §18: 1.019 and 1.038). No online ETS `β` ended at its bound.
+
+**The control.** (a) does not leave the 0.97 control unchanged: it improves
+it, 48 to 50, with the worst seed at 1.48 SE against 2.92. (b) at `T = 500`
+keeps the count (48) but its worst seed grows (485027: 3.80 and 4.05 SE
+against 2.01 and 2.92). (b) at `T = 2,000` raises the count to 50 while the
+median `α` gap triples (1.06 against 0.30 SE) and the median path gap rises
+(1.9% against 1.2%): the count moves the right way for the wrong reason, a
+smaller gain that stays nearer where it was rather than nearer the batch
+point.
+
+**Reading.**
+
+- **(a) clears every set measured, 50 of 50, and lifts the control.** The
+  0.99 ridge (§17) and ETS's slow approach from `(0.5, 0.05)` (§18) are both
+  start problems: from a batch point on 500 rows the 9,500 one-row steps stay
+  by the full-sample batch point (ETS: 0.05 SE at the median, where part 5's
+  plain estimator at `α = 0.3` was 0.24). The caveats of §11's 3 hold: it is
+  not one pass from the first row; 500 rows emit nothing; it runs a batch
+  optimizer once, which the core does not have (arch and statsmodels stand in
+  for it here), and the start is the oracle's own estimator on a prefix of the
+  same series. The buffer is 500 floats (4 KB), bounded by the window, not the
+  stream; after it the state is as before (GARCH 128 bytes, ETS 104).
+- **(b) is not a remedy here.** At 0.99, `T = 500` moves the count from 44 to
+  46 (one seed of headroom over 45) with a stuck seed still at 5.35 SE, and
+  `T = 2,000` drops it to 39: the smaller gain leaves the estimate short of
+  the batch point (median gaps 1.6 and 1.1 SE), trading the stuck transient
+  for a slow approach. For ETS it makes the failure worse (0 of 50 at both
+  `T`): ETS's failure is a slow approach from the start (§18), and a smaller
+  early gain slows the approach further (median `β` gap 13 and 19 SE against
+  5.1). With §11's 4a (`1/sqrt(t)`, diverged) and 4b (a floor, a tracking
+  gain), no gain schedule measured has fixed the transient without a cost
+  elsewhere.
+
+**Not verified:** (a) and (b) on targeted GARCH under t(5) and three-series
+DCC under t(5), and remedy (c), a robust score (request A11's later parts);
+the ARMA `φ = 0.8` control; the sets that pass today under these remedies
+(ETS `α` 0.1 and 0.3, targeted GARCH at 0.98); a batch window other than 500
+rows; a gain ramp of another shape than `1/(t + T)`; a batch start by the
+model's own optimizer rather than the library's; 2,000 rows and anything past
+10,000.

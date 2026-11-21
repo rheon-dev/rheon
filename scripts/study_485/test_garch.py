@@ -82,6 +82,10 @@ VARIANTS = [
     {"gain": "sqrt"},
     {"gain": "floor", "gain_floor": 1e-3},
     {"batch_start": True, "warm": 500, "t0": 500.0},
+    # request A11's remedies on the targeted form
+    {"target": "running", "batch_start": True, "warm": 500, "t0": 500.0},
+    {"target": "running", "gain": "offset", "gain_t0": 500.0},
+    {"gain": "offset", "gain_t0": 2000.0},
 ]
 
 
@@ -101,7 +105,7 @@ def test_variants_out_of_sample_and_admissible(kw):
     assert est.pred[901] != other[901]
 
 
-@pytest.mark.parametrize("kw", VARIANTS[:5], ids=str)
+@pytest.mark.parametrize("kw", [kw for kw in VARIANTS if not kw.get("batch_start")], ids=str)
 def test_variants_scale_equivariant(kw):
     r = garch.simulate(2000, *TRUTH, seed=18)
     c = 37.0
@@ -123,3 +127,20 @@ def test_defaults_are_the_plain_estimator():
     plain = garch.run(r)
     named = garch.run(r, target="", step_cap=0.0, gain="inv", batch_start=False)
     assert np.array_equal(plain.theta, named.theta) and plain.pred == named.pred
+
+
+def test_targeted_batch_start_starts_at_the_targeted_fit():
+    """Request A11, remedy (a) on the targeted form: before any step the
+    parameters are the targeted batch fit of the buffered rows, and omega is
+    that fit's own target, the buffered rows' mean r^2, times 1 - alpha - beta."""
+    import vt_garch
+
+    r = garch.simulate(600, *TRUTH, seed=21)
+    est = garch.OnlineGarch(target="running", batch_start=True, warm=500, t0=500.0)
+    for x in r[:500]:
+        est.update(float(x))
+    _, res = vt_garch.vt_fit(r[:500])
+    a, b = np.asarray(res.params, dtype=float)[:2]
+    assert est.n_steps == 0 and est.theta[1] == a and est.theta[2] == b
+    assert est.theta[0] == pytest.approx(np.mean(r[:500] ** 2) * (1 - a - b), rel=1e-15)
+    assert all(np.isnan(est.pred))

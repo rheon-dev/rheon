@@ -148,7 +148,14 @@ class OnlineGarch:
     - ``batch_start``: the buffered rows (``warm`` of them) are fitted by
       ``arch``'s batch fit, standing in for a batch fit the model would own,
       and the parameters start there; the replay then builds the information
-      matrix at those parameters.
+      matrix at those parameters. With ``target`` set (request A11), the batch
+      fit is the targeted one (``vt_garch.vt_fit`` on the buffered rows) and
+      ``omega`` starts at ``v_W (1 - alpha - beta)``, ``v_W`` the mean of the
+      buffered rows' ``r^2``, which is that fit's own target.
+    - ``gain="offset"`` (request A11, remedy (b), a slower early gain): the
+      parameter step's gain is ``1/(t + gain_t0)``, smaller than
+      ``1/(t + t0)`` early and the same order late; the information matrix
+      keeps its ``1/(t + t0)`` average.
     """
 
     alpha0: float = 0.05
@@ -161,6 +168,7 @@ class OnlineGarch:
     step_cap: float = 0.0
     gain: str = "inv"
     gain_floor: float = 1e-3
+    gain_t0: float = 0.0
     batch_start: bool = False
 
     theta: np.ndarray = field(init=False)
@@ -179,7 +187,7 @@ class OnlineGarch:
 
     def __post_init__(self) -> None:
         assert self.target in ("", "running", "warmup"), self.target
-        assert self.gain in ("inv", "sqrt", "floor"), self.gain
+        assert self.gain in ("inv", "sqrt", "floor", "offset"), self.gain
         self.theta = np.array([math.nan, self.alpha0, self.beta0])
         k = 2 if self.target else 3
         self.H = np.zeros((k, k))
@@ -197,7 +205,13 @@ class OnlineGarch:
     def _start(self) -> None:
         rows = np.asarray(self.buffer)
         b = backcast(rows[:BACKCAST_ROWS] ** 2)
-        if self.batch_start:
+        if self.batch_start and self.target:
+            import vt_garch  # the targeted batch fit (lazy: vt_garch imports this module)
+
+            _, res = vt_garch.vt_fit(rows)
+            a, bb = (float(x) for x in np.asarray(res.params, dtype=float)[:2])
+            self.theta = np.array([math.nan, a, bb])
+        elif self.batch_start:
             _, res = arch_fit(rows)
             self.theta = np.asarray(res.params, dtype=float).copy()
         else:
@@ -207,6 +221,8 @@ class OnlineGarch:
             self.vbar = float(np.mean(rows * rows))
         if self.target:
             v = self.vbar if self.target == "warmup" else b
+            if self.batch_start:
+                v = float(np.mean(rows * rows))
             self.theta[0] = v * (1.0 - self.theta[1] - self.theta[2])
         self.started = True
         self.sigma2, self.d = self._advance(b, b, np.zeros(3))
@@ -231,6 +247,8 @@ class OnlineGarch:
             return 1.0 / math.sqrt(t)
         if self.gain == "floor":
             return max(1.0 / t, self.gain_floor)
+        if self.gain == "offset":
+            return 1.0 / (self.n_steps + self.gain_t0)
         return 1.0 / t
 
     def _row(self, r: float, step: bool) -> None:

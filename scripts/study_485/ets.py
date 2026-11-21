@@ -37,6 +37,20 @@ and trend are given (as statsmodels' ``initialization_method="known"``),
 
 numpy only in the estimator; statsmodels is the oracle, imported only by the
 comparison and the tests.
+
+Request A11's early-transient remedies are options of ``OnlineEts`` (each
+default leaves the arithmetic above unchanged) and of the grid
+(``--remedy NAME``, an entry of ``REMEDIES``):
+
+- ``batch_start = W`` (remedy (a)): the first ``W`` rows are buffered and emit
+  nothing; ``ETSModel`` fits them (known initial states; it stands in for a
+  batch fit the model would own, and imports statsmodels into the estimator's
+  path for this remedy only), ``theta`` starts at that fit, and the ``W`` rows
+  are replayed at it with ``theta`` held, building ``R``, ``s2``, the states
+  and their sensitivities; the steps then go on at gain ``1/t``, ``t`` counting
+  the buffered rows.
+- ``gain_t0 = T`` (remedy (b), a slower early gain): the step's gain is
+  ``1/(t + T)`` in place of ``1/t``; ``R`` and ``s2`` keep their ``1/t`` means.
 """
 
 from __future__ import annotations
@@ -55,6 +69,11 @@ SEEDS = range(485000, 485050)
 SIZES = (2000, 10000)
 BOUND = 1e-4  # statsmodels' default margin on alpha and beta/alpha
 NAMES = ("alpha", "beta", "sigma2")
+REMEDIES: dict[str, dict[str, object]] = {
+    "batch500": {"batch_start": 500},
+    "gain500": {"gain_t0": 500.0},
+    "gain2000": {"gain_t0": 2000.0},
+}
 
 
 def simulate(
@@ -102,6 +121,8 @@ class OnlineEts:
     alpha0: float = 0.5
     beta0: float = 0.05
     warm: int = 50
+    batch_start: int = 0
+    gain_t0: float = 0.0
 
     lev: float = field(init=False)
     tr: float = field(init=False)
@@ -112,14 +133,34 @@ class OnlineEts:
     s2: float = 0.0
     n_seen: int = 0
     pred: list[float] = field(default_factory=list)
+    buffer: list[float] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.lev, self.tr = self.l0, self.b0
         self.theta = np.array([self.alpha0, self.beta0])
 
     def update(self, y: float) -> None:
+        if self.batch_start and self.n_seen == 0:
+            self.buffer.append(y)
+            self.pred.append(math.nan)
+            if len(self.buffer) == self.batch_start:
+                self._start()
+            return
+        self._row(y, step=True)
+
+    def _start(self) -> None:
+        rows = np.asarray(self.buffer)
+        _, res = ets_fit(rows, self.l0, self.b0)
+        ab = np.asarray(res.params, dtype=float)
+        self.theta = np.array(project(float(ab[0]), float(ab[1])))
+        for v in rows:
+            self._row(float(v), step=False)
+        self.buffer = []
+
+    def _row(self, y: float, step: bool) -> None:
         yhat = self.lev + self.tr
-        self.pred.append(yhat)
+        if step:
+            self.pred.append(yhat)
         e = y - yhat
         psi = self.Sl + self.Sb
         self.n_seen += 1
@@ -127,8 +168,9 @@ class OnlineEts:
         self.R += gamma * (np.outer(psi, psi) - self.R)
         self.s2 += gamma * (e * e - self.s2)
         alpha, beta = self.theta
-        if self.n_seen > self.warm:
-            a, b = self.theta + gamma * np.linalg.solve(self.R, psi * e)
+        if step and self.n_seen > self.warm:
+            g = gamma if self.gain_t0 == 0.0 else 1.0 / (self.n_seen + self.gain_t0)
+            a, b = self.theta + g * np.linalg.solve(self.R, psi * e)
             self.theta = np.array(project(float(a), float(b)))
         # the states and their sensitivities advance at the parameters the
         # row was predicted with
@@ -168,13 +210,18 @@ def ets_fit(y: np.ndarray, l0: float = L0, b0: float = B0):  # noqa: ANN201
 
 
 def compare(
-    n: int, seed: int, truth: tuple[float, float, float] = TRUTH, nu: float | None = None
+    n: int,
+    seed: int,
+    truth: tuple[float, float, float] = TRUTH,
+    nu: float | None = None,
+    remedy: str = "",
 ) -> dict[str, float]:
     """The online estimator against the batch fit on one simulated series.
     ``alpha`` and ``beta`` gaps are in statsmodels' own standard errors;
     statsmodels gives none for ``sigma2`` (it is concentrated out), so its gap
     is in the Gaussian closed form ``sigma2 * sqrt(2/n)``. ``truth`` and ``nu``
-    (Student-t errors) default to part 5's Gaussian series."""
+    (Student-t errors) default to part 5's Gaussian series; ``remedy`` names
+    an entry of ``REMEDIES`` (empty: part 5's estimator)."""
     y = simulate(n, *truth, seed=seed, nu=nu)
     _, res = ets_fit(y)
     ab = np.asarray(res.params, dtype=float)
@@ -184,7 +231,7 @@ def compare(
     s2_b = float(np.mean(e_b * e_b))
     b = np.array([ab[0], ab[1], s2_b])
     se = np.array([ab_se[0], ab_se[1], s2_b * math.sqrt(2.0 / n)])
-    est = run(y)
+    est = run(y, **(REMEDIES[remedy] if remedy else {}))
     o = est.params
     pred = np.asarray(est.pred)
     tail = slice(n // 2, n)
@@ -217,6 +264,7 @@ def grid(
     sizes: tuple[int, ...] = SIZES,
     truth: tuple[float, float, float] = TRUTH,
     nu: float | None = None,
+    remedy: str = "",
 ) -> None:
     finished = {(int(r["seed"]), int(r["n"])) for r in load(out)}
     with out.open("a", encoding="utf-8") as f:
@@ -224,8 +272,10 @@ def grid(
             for seed in SEEDS:
                 if (seed, n) in finished:
                     continue
-                rec = compare(n, seed, truth, nu)
+                rec = compare(n, seed, truth, nu, remedy)
                 rec.update(alpha_true=truth[0], beta_true=truth[1], nu=nu or -1.0)
+                if remedy:
+                    rec["remedy"] = remedy  # type: ignore[assignment]
                 f.write(json.dumps(rec) + "\n")
                 f.flush()
                 print(f"ets: n {n} seed {seed} done", flush=True)
@@ -282,14 +332,17 @@ def _opt(name: str) -> float | None:
 if __name__ == "__main__":
     # options (request A10, part 3): --alpha A sets the truth to (A, A/3, 1.0),
     # keeping part 5's beta/alpha of 1/3; --nu NU gives Student-t errors;
-    # --rows N runs that one row count
+    # --rows N runs that one row count; --remedy NAME (request A11) an entry of REMEDIES
     alpha_opt, nu_opt, rows_opt = _opt("--alpha"), _opt("--nu"), _opt("--rows")
+    remedy_opt = sys.argv[sys.argv.index("--remedy") + 1] if "--remedy" in sys.argv else ""
+    assert remedy_opt in ("", *REMEDIES), remedy_opt
     truth_opt = TRUTH if alpha_opt is None else (alpha_opt, alpha_opt / 3.0, 1.0)
     sizes_opt = SIZES if rows_opt is None else (int(rows_opt),)
     if sys.argv[1] == "--one":
-        for k, v in compare(int(sys.argv[2]), int(sys.argv[3]), truth_opt, nu_opt).items():
+        one = compare(int(sys.argv[2]), int(sys.argv[3]), truth_opt, nu_opt, remedy_opt)
+        for k, v in one.items():
             print(f"{k:34s} {v: .10g}")
     elif "--summary" in sys.argv[2:]:
         summary(Path(sys.argv[1]))
     else:
-        grid(Path(sys.argv[1]), sizes_opt, truth_opt, nu_opt)
+        grid(Path(sys.argv[1]), sizes_opt, truth_opt, nu_opt, remedy_opt)
