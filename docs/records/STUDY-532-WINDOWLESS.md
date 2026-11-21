@@ -13,7 +13,7 @@ numpy, scipy and Python only, against Polars 2.0.0 (the version `uv.lock`
 pins); nothing in the crates is changed. Code: `studies/study_532b/`
 (`bucket.py`, `ew.py`, `lag.py` the states; `runs_*.py` the checks;
 `exact.py` the exact references; `report.py` the tables). Entry point:
-`python scripts/study_532b.py` (about two minutes; `--quick`, `--part=N`).
+`python scripts/study_532b.py` (75 s; `--quick`, `--part=N`).
 Every table below is its output.
 
 ## Answer
@@ -23,7 +23,14 @@ Every table below is its output.
    (`every = b`, `period = B b`, `offset = -(B - 1) b`) and on every row of
    `rolling_*_by(window_size = B b)` whose time is the last tick of its bucket,
    count, min and max have 0 bit differences and 0 validity differences, with
-   nulls, zero-weight rows, NaN and both infinities (Tables B1, B3).
+   nulls, zero-weight rows, NaN and both infinities (Tables B1, B3; B3 itself
+   is on finite data, and the non-finite rows are checked in "Sonnet rerun"
+   and in Table R1), when the time rises strictly within a group. Two limits,
+   found in the rerun: at `B = 1`, min and max differ on the windows that hold
+   a NaN (14 windows of 242; Polars' tumbling min and max skip a NaN; the
+   count is exact); and where a time repeats, a row that is not the last of
+   its time sees only the rows before it, where Polars gives every row of the
+   time the window of the last one (118 of 1211 aligned rows differ in count).
 2. **Sum, mean and variance cannot match Polars' bits and do not need to:**
    Polars sums a window's rows in its own order (an add-and-subtract
    compensated sum for overlapping windows), which a state with no rows cannot
@@ -32,9 +39,10 @@ Every table below is its output.
    0 ulps from `math.fsum`; Polars' was up to 62 ulps from it, and that is the
    whole gap between the two (Table B2). Mean: 1 ulp from exact against
    Polars' 62. Variance (centred sums per bucket, Chan's merge): up to
-   1.2e4 ulps from exact (relative 3e-12 at a level of 1e3) against Polars'
-   1.9e4, with a lower median (24 to 117 against 108 to 119), on overlapping
-   windows; on windows that do not overlap (`B = 1`) Polars computes the
+   1.2e4 ulps from exact (relative 2.4e-12 at a level of 1e3; 9.0e-12 on
+   another seed) against Polars' 1.9e4, with a median of 57 to 117 against
+   108 to 119 (lower on four of the five overlapping shapes, 2 ulps higher at
+   `b = 1`, `B = 60`), on overlapping windows; on windows that do not overlap (`B = 1`) Polars computes the
    variance from the rows in two passes and is within 2 ulps of exact, the
    buckets 9277. The plain sum
    of squares the request named cancels: 2.6e8 ulps (relative 4e-8) at a level
@@ -128,11 +136,13 @@ read after it.
   an envelope a NaN poisons the state for good, as it does in Polars.
 - The **clock**: a bucketed window needs only `floor(t / b)` not to fall
   within a group; a repeated time, or times out of order inside the current
-  bucket, land in the same bucket. So the repeated-time problem of study 532's
-  span windows (Polars gives each row of a repeated time the window of the
-  last row at that time) does not arise at bucket ends: a read at the end of a
-  bucket is the same whichever row of the bucket came last. `ewm_mean_by`
-  takes a repeat (`dt = 0`).
+  bucket, land in the same bucket. So a read after the last row of a bucket is
+  the same whichever order the bucket's rows came in. The repeated-time
+  problem of study 532's span windows (Polars gives each row of a repeated
+  time the window of the last row at that time) does remain row by row: a row
+  that is not the last of its time is read from the rows up to it, so a
+  per-row comparison with `rolling_*_by` holds only at the last row of each
+  time (Sonnet rerun, check h). `ewm_mean_by` takes a repeat (`dt = 0`).
 
 ### Bucketed windows
 
@@ -247,6 +257,12 @@ The script's full output follows. Notes:
   max gaps in units of the span's standard deviation (so a random walk and
   white noise read alike); sd relative. Rows with fewer than 3 values in the
   span are left out.
+- **Table B5**'s sizes are those of this study's packed struct, read from
+  `to_bytes()`; the size is fixed by the layout (the ring is a fixed number of
+  slots), so "does not move with the rows" holds by construction, not by a
+  growth measurement, and the last column is computed, not measured. A msgpack
+  form writes each f64 as 9 bytes (a tag and the 8), unless the slots are
+  written as one binary blob.
 - **Table E3** compares with Polars' `rolling_max(w)` and `rolling_min(w)`; the
   envelopes have no Polars counterpart.
 - **Table L4** measures the process's peak resident memory, each case in its
@@ -349,7 +365,7 @@ Each gap is median / 95th percentile / largest. Count: relative to the span's co
 
 Per bucket and column: `n` (u64), the sum and its compensation, the centred sum of squares, min, max: 48 bytes. Per column: the current bucket id (8 bytes; a bank shares one across the columns of a group). Measured: the saved size after streaming 20000 rows through one group (it does not move with the rows).
 
-| B | keeps bucket k-B (p) | bytes, one column | formula | measured peak | 10 columns, one shared id |
+| B | keeps bucket k-B (p) | formula | bytes, one column (formula) | saved size, peak | 10 columns, one shared id (computed) |
 |---|---|---|---|---|---|
 | 1 | no | 8 + 48 (B + p) | 56 | 56 | 488 |
 | 1 | yes | 8 + 48 (B + p) | 104 | 104 | 968 |
@@ -540,16 +556,26 @@ the trade between Table B4's edge gap and this.
   (measured 0 and 1). Against Polars the gap is Polars' own error, up to 62
   ulps here; a test against Polars should allow its distance from exact plus
   2 ulps, or a relative 1e-14 on this generator.
-- **Bucketed variance**: against exact arithmetic, relative 1e-11 at a level
-  of 1e3 with unit steps (measured 3e-12; it grows with `level^2 / variance`,
-  as Polars' does: 8e-10 at a level of 1e6).
+- **Bucketed variance**: against exact arithmetic, relative 3e-11 at a level
+  of 1e3 with unit steps (measured 2.4e-12 on the study's frame and 9.0e-12 on
+  another seed, so 1e-11 is on the edge). It grows with `level^2 / variance`,
+  and on overlapping windows Polars' error is of the same size: at a level of
+  1e6, up to 6.1e-9 for both across window shapes (8.4e-10 for `b = 20`,
+  `B = 12`, the shape first quoted here); at 1e9, 6.3e-6 for the buckets and
+  3.2e-5 for Polars. At `B = 1` Polars is within 5 ulps of exact at 1e3 and
+  1e6 (2.8e-12 at 1e9) and the buckets are not (1.7e-10 at 1e6, 1.7e-6 at
+  1e9).
 - **The window edge inside a bucket is not a tolerance**: the bucketed form is
   exact for its own window, `[(k-B+1) b, t]`. A test should check it against
   that window (Polars `rolling_*_by` on bucket-end rows, or
   `group_by_dynamic`), and the gap to the sliding span belongs in the
   documentation as Table B4's numbers.
 - **EW features**: same machine, bit-exact against Polars and across any
-  chunking and resume. Across operating systems, with alpha carried, a
+  chunking and resume, with NaN equal to NaN whatever its sign: the states'
+  NaNs have the sign bit set (0xfff8..., x86's default NaN from `inf - inf`)
+  and Polars' on the same rows do not (0x7ff8...), 47440 outputs on the
+  non-finite frame, and every non-NaN output is equal by raw bits. A test
+  compares NaN with NaN, not raw bits. Across operating systems, with alpha carried, a
   continuation is bit-exact. Against Polars run on another OS, one ulp of
   `exp` moves `ewm_mean` by at most 1 ulp here (5 in study 532) and
   `ewm_var`/`ewm_std` by up to 612 ulps (relative about 1e-13; study 532
@@ -584,6 +610,9 @@ the trade between Table B4's edge gap and this.
   deliberate fault in `EwmMean.load` (alpha not read back) fails it at 2
   chunks. Study 532's Table 2 ran on a frame with NaN only, so its EW resume
   checks are weaker than they read.
+- The byte formulas are for this study's packed struct, not rheon's msgpack
+  (see Table B5's note); a layout change in the library changes the constants,
+  not the dependence on `B`, `k` and the rows.
 - The decayed envelope is a different feature from a rolling max, not an
   approximation of it; no `O(1)` state gives the exact windowed max (the
   argument is in the Answer, item 7).
@@ -610,7 +639,49 @@ Runtime of `scripts/study_532b.py`: 75 s (the header of this record says
 is identical to the one above, line for line. Table R1's counts are identical;
 only its seconds column moved (0.3 to 0.4 on four rows). Table L4 (peak
 resident memory and seconds) and Table C1 (ns per row) are measurements of this
-machine and moved by noise: L4 within 11% a cell, the C1 Python states by
+machine and moved by noise: L4 within 12% a cell, the C1 Python states by
 -41% to +7% (`max envelope` 126 ns against 214, `ewm_mean` 230 against 308),
 the Polars side by -23% to +28% (bucketed b=5, B=12: 87.6 ns against 68.3),
 and no ordering of features changed.
+
+### Part 2: each claim checked another way (`python -m studies.study_532b.recheck`, 44 to 48 s)
+
+Unlike the tables, these compare raw bits (a NaN's sign and the sign of a zero
+count), use two other seeds, and use a reference that shares no code with the
+state. Verdicts:
+
+| claim | verdict | measured |
+|---|---|---|
+| (a) bucketed count, min, max equal `group_by_dynamic` to the bit | holds for `B > 1`; at `B = 1` min and max differ on NaN windows | 3 seeds x finite and non-finite x 8 shapes: 0 validity and 0 raw-bit differences in count, min and max, and the two sides have the same windows (0 missing either way). Exception: `B = 1`, non-finite: every window that holds a NaN differs in min and max (14, 14 and 7 windows on the three seeds) and no other window does, the windows holding only infinities (21, 14, 18) included. Aligned rows against `rolling_*_by`, 2 seeds x 8 shapes x both frames: 0/0 (this includes `B = 1`). |
+| (a') the `B` read is exactly the statistic of `[(k-B+1) b, t]` | holds | brute-force numpy window, every row of 6000, 4 shapes x both frames: 0 mismatches in count, min, max (NaN windows give NaN min and max); the sum is 0 ulps from `math.fsum` on every finite window |
+| (a'') the same on rows of a repeated time | does not hold for every row | with the times rounded down to even, so that some repeat, aligned rows: count differs on 118, min on 25, max on 21 of 1211; on the 1082 that are the last row of their time: 0, 0, 0 |
+| (b) bucketed sum about 0 ulps from `fsum`, Polars up to 62 | holds | 0 ulps on every window of 3 seeds at level 1e3, and of seed 532 at 1e6 and 1e9; Polars 15 to 62 at b = 5 to 60, B > 1 (3 to 4 at `B = 1`); the mean 1 ulp against Polars' 62. Adversarial sums (values of 1e16 with 1 and 1e-3, 300 series): 0 error |
+| (c) variance | numbers hold; two statements were loose (corrected above) | max 12470 ulps, 2.4e-12 relative at 1e3 (Polars 16266); 5532 to 52747 ulps (7.4e-13 to 9.0e-12) on the other seeds; the "lower median" holds on 4 of 5 overlapping shapes (57 to 117 against 108 to 119), not at `b = 1`; at 1e6 ours up to 6.1e-9 and Polars' the same; at 1e9, 6.3e-6 against 3.2e-5; at `B = 1` Polars is within 5 ulps at levels 1e3 and 1e6 (2.8e-12 relative at 1e9) and the buckets 1.7e-10 and 1.7e-6 relative |
+| (d) window-edge table | holds | the re-run reproduces every cell of Table B4 (0 differing lines); 12 buckets: mean 95th percentile 0.0994 and 0.135 sd, sd 0.0711 and 0.106, min and max differ on 3.7% to 5.7% of rows, bracket violations 0 on all six shapes; interpolated read cuts the count and mean gaps by 2.1x to 7.9x |
+| (e) EW features equal Polars to the bit, alpha carried | holds except for the sign of a NaN | 3 seeds, clean frame: 0 validity and 0 raw-bit differences on 11 outputs. Non-finite frame: 0 validity differences, and 47440, 40330 and 49610 raw-bit differences, every one a NaN against a NaN: the state's has the sign bit set (0xfff8...) and Polars' not (0x7ff8...). Every non-NaN output is equal. Lags (9 outputs, both frames): 0 and 0 by raw bits |
+| (f) state bytes | holds | read from `to_bytes()`, fresh and after 3000 rows: `ewm_mean` 32, `ewm_var` and `ewm_std` 56, `ewm_mean_by` 25, envelope and decayed max 17; lag `8 + 8k + ceil(k/8)` at k = 1, 5, 8, 9, 20, 64 (17, 49, 73, 82, 171, 528); bucketed `8 + 48 (B + p)` at B = 1, 4, 12, 60 and p = 0, 1 (56 to 2936). These are the study's packed struct, not msgpack (note under Table B5) |
+| (g) chunk and resume invariance | holds | Table R1 identical; by raw bits too (NaN sign included): 21 of 21 equal to the uncut stream at 2, 17, 300 chunks and every row, on both frames. A fault injected into `EwmMean.load` (alpha not read back) fails 4 of 21 features on the clean frame at 2 chunks, and goes unseen on the non-finite frame at 2 chunks (21 of 21 pass), caught only from 17 chunks |
+| (h) study 532's EW resume checks ran only on NaN data | holds | `studies/study_532/report.py` on `origin/vm/study-532` builds `df = frame(n, nonfinite=True)` for its Table 2 and has no clean-frame chunking. Here, after a group's first NaN or infinity every EW output of the group is NaN (4068 rows valid, 0 finite, all 11 EW outputs), and the first non-finite rows are 66, 566, 655, 785 and 879 of 5000, so a cut at row 2500 resumes NaN states for every group |
+
+### Part 3: what the rerun changed in this record
+
+The earlier numbers stay; these statements were corrected where they stand:
+
+- Answer 1 and the Definitions' clock paragraph: bit equality with
+  `rolling_*_by` needs a time that rises strictly, or the last row of a
+  repeated time; at `B = 1` min and max differ from Polars on NaN windows
+  (the note under Table B1 said so; the Answer did not).
+- Answer 2: the variance medians (57 to 117 against 108 to 119 on the
+  overlapping shapes, not 24 to 117) and the relative error at a level of 1e3
+  (2.4e-12 here, 9.0e-12 on another seed).
+- Tolerances: the variance bound (3e-11, not 1e-11) and the level-1e6 figure
+  (up to 6.1e-9 across window shapes, not 8e-10, which was one shape); the EW
+  tolerance says NaN equals NaN whatever its sign (the state's NaNs carry the
+  sign bit, Polars' do not).
+- Table B5: the two middle column headings were swapped (the formula text sat
+  under "bytes" and the number under "formula"); the note says the sizes are
+  fixed by the layout, are this study's packed struct and not msgpack, and
+  that the last column is computed.
+- The header's run time: 75 s, not two minutes.
+
+Not changed: every table's numbers; no bucketed, EW or lag code.

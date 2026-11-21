@@ -292,10 +292,10 @@ def table_b5() -> None:
             [
                 "B",
                 "keeps bucket k-B (p)",
-                "bytes, one column",
                 "formula",
-                "measured peak",
-                "10 columns, one shared id",
+                "bytes, one column (formula)",
+                "saved size, peak",
+                "10 columns, one shared id (computed)",
             ],
             rows,
         )
