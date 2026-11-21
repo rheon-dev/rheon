@@ -496,7 +496,17 @@ fn extract(
             } else if let ModelKind::EwClass { classes, .. } = &spec.model {
                 label_column(chunk, spec, c, classes, layout)
             } else {
-                let v = f64_column(chunk, spec, "target", c, layout)?;
+                // `bocpd`'s hazard column rides in this slot and is not a
+                // target: a missing one is named as what it is (review
+                // fable2, Y7).
+                let role = match spec.model {
+                    ModelKind::Bocpd {
+                        hazard_col: Some(_),
+                        ..
+                    } => "hazard",
+                    _ => "target",
+                };
+                let v = f64_column(chunk, spec, role, c, layout)?;
                 // A `strict_binary` target is 0 or 1, and anything else is an
                 // error naming the row, as a label outside `ew_class`'s
                 // classes is -- checked here, before any stream is touched, so

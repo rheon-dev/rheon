@@ -162,9 +162,12 @@ def warn_unstable(what: str, *, stacklevel: int = 3) -> None:
     caller, the user's line under a wrapper."""
     if not _unstable_on():
         return
+    # The variable the `1` was read from: under the old name alone, unsetting
+    # the new one silenced nothing (review fable2, Y7).
+    var = _env.read_from(UNSTABLE_VAR)
     warnings.warn(
         f"{what}: this is unstable, so it may change in any release without that counting "
-        f"as a breaking change. Set {UNSTABLE_VAR}=0, or unset it, to silence this warning.",
+        f"as a breaking change. Set {var}=0, or unset it, to silence this warning.",
         _unstable_class(),
         stacklevel=stacklevel,
     )

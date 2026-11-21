@@ -106,6 +106,11 @@ model that only the new build has is listed as an addition and passes.
   and ignored by `solve` and `vif`; a `comoments` too small raised numpy's
   own errors. A Gram as `ModelBank.gram()` returns it, whole or packed, is
   unchanged.
+- With only the old `POLARS_ONLINE_WARN_UNSTABLE=1` set, the
+  `UnstableWarning` said to set or unset `RHEON_WARN_UNSTABLE`, which was
+  not set; it names the variable the value was read from. And `bocpd`'s
+  `hazard_col`, missing from the input, is called the hazard column, not a
+  target column.
 - `rp.stream.with_windows` checks `chunk_size` as `refresh_time` and
   `lf.rheon.fit_predict` do, while the plan is built: `True` ran in one-row
   chunks, `2.5` failed only when the plan ran, and `"a"` raised Python's own

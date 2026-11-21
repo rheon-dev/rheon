@@ -45,6 +45,15 @@ def get(name: str) -> str | None:
     return value
 
 
+def read_from(name: str) -> str:
+    """The variable :func:`get` reads ``name``'s value from: ``name`` itself,
+    unless it is not set and its old name is, so a message about the value can
+    name the variable that holds it."""
+    if os.environ.get(name) is None and os.environ.get(RENAMED[name]) is not None:
+        return RENAMED[name]
+    return name
+
+
 def warn_old_names() -> None:
     """Read every variable once, so that each old name set without its new one
     warns now, at ``import rheon``, and not at the first call that reads it."""
