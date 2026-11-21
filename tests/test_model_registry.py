@@ -50,6 +50,7 @@ MINIMAL: dict[str, dict[str, object]] = {
     "ew_cov": {"targets": None, "features": ["x0", "x1"]},
     "sgd": {"learning_rate": 0.01},
     "pa": {},
+    "glm": {},
     "holt": {"features": None},
     "kmeans": {"targets": None, "features": ["x0", "x1"], "n_clusters": 2},
     "micro": {"targets": None, "features": ["x0", "x1"], "eps": 0.3},
@@ -259,6 +260,7 @@ DIAGNOSTIC_READS: dict[str, set[str]] = {
             "ew_cov",
             "sgd",
             "pa",
+            "glm",
             "holt",
             "kmeans",
             "micro",
@@ -700,6 +702,9 @@ def test_every_models_realized_dtypes_are_the_ones_output_index_declares():
         df = frame
         if name == "ew_class":
             df = frame.with_columns(pl.Series("y", ["a", "b"] * (n // 2)))
+        if name == "glm":
+            # The default Poisson family takes counts.
+            df = frame.with_columns(pl.col("y").abs().round())
         out = rp.ModelBank([spec]).fit_predict(df)["m"]
         declared = dict(
             zip(*(rp.spec.output_index(spec)[c].to_list() for c in ("field", "dtype")), strict=True)

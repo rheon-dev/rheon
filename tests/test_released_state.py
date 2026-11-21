@@ -89,7 +89,7 @@ REFUSED = [v for v in RELEASES if _major(v) < 1]
 #: each: a release before it has no builder for one, and its probe records
 #: the refusal (`audit`, task 223 (b), after 0.13.0). A literal, read by
 #: `scripts/release_version.py` as `PARAMETER_INTRODUCED` is.
-INTRODUCED = {"audit": "1.0.0"}
+INTRODUCED = {"audit": "1.0.0", "glm": "2.1.0"}
 
 #: The workload's specs that need a parameter newer than a release, by the
 #: first release that takes it (task 271's `huber_scale` in 1.3.0, task
@@ -504,9 +504,15 @@ def test_every_spec_was_saved_by_the_release_at_an_older_schema(refused):
     ]
     newer = {name for name, *_ in probe.WORKLOAD} - set(manifest["saved"]) - reach
     assert set(manifest["refused"]) - reach == newer
+    builders = {name: builder for name, builder, *_ in probe.WORKLOAD}
     for name, why in manifest["refused"].items():
         if name not in reach and not _parameter_newer(name, version):
-            assert why.startswith("AttributeError") and name in why, (name, why)
+            # The refusal names the builder a spec calls, which two specs of
+            # one kind (`glm`, `glm_tweedie_cap`) share.
+            assert why.startswith("AttributeError") and builders.get(name, name) in why, (
+                name,
+                why,
+            )
     # An older schema: the refusal below is by the version, not the layout.
     assert manifest["schema"] < rp.schema_version()
 

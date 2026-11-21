@@ -58,7 +58,7 @@ def glm(
         between 1 and 2; amounts above 0 above 2). A target value outside
         the family's range is refused with the row named.
     ``link``
-        How the mean ``μ`` is read from the linear predictor ``η = x'β``:
+        How the mean ``μ`` is read from ``η = x'β``:
         ``"log"`` (``μ = e^η``), ``"logit"`` (the binomial's), ``"inverse"``
         (``μ = 1/η``, the Gamma family's canonical link) or ``"power"``
         (``μ = η^(1/(1 - p))``, the Tweedie family's canonical link). Each
@@ -88,7 +88,7 @@ def glm(
         targets * refit_rows * (features + 2)`` bytes until the refit runs,
         at most 256 KB: a count past that is refused, naming the bytes.
     ``step_cap``
-        The most one learned row may move its own linear predictor, above
+        The most one learned row may move its own ``η``, above
         0, or ``inf`` for no cap. Default: none where the refit runs, and 1
         where it does not (*The start* in Notes).
     ``refit_budget``
@@ -236,6 +236,12 @@ def glm(
     shape, and a group's are held to 256 KB when the spec is built. There is
     no window: removing a row exactly would need each row in the window,
     stored with the weight it was scored at.
+
+    **The spans.** ``half_life`` and ``gap_cap`` take a number (rows, with
+    no clock) or a clock duration, as every spec's do. ``refit_rows`` counts
+    rows and has no clock form: the buffer's size must be known when the
+    spec is built, to be held to its cap, and a span of the clock holds a
+    number of rows that depends on the data.
     """
     model: dict[str, Any] = {
         "type": "glm",

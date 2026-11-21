@@ -151,6 +151,7 @@ EXCEPT = {
     "ftrl": ONE_SLOT | NOT_LEAST_SQUARES,
     "sgd": ONE_SLOT | NOT_LEAST_SQUARES,
     "pa": ONE_SLOT | NOT_LEAST_SQUARES,
+    "glm": ONE_SLOT | NOT_LEAST_SQUARES,
     "holt": ONE_SLOT | NOT_LEAST_SQUARES | {"emit_feature_health"},
 }
 
@@ -176,6 +177,7 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
     ("ftrl", "ftrl", fullest("ftrl", **dict(FIT, targets=["hit"])), []),
     ("sgd", "sgd", fullest("sgd", **FIT, learning_rate=0.01), []),
     ("pa", "pa", fullest("pa", **FIT), []),
+    ("glm", "glm", fullest("glm", **dict(FIT, targets=["hit"])), []),
     ("holt", "holt", fullest("holt", targets=["y"], group="g", half_life=25.0, **CLOCK), []),
     (
         "ew_cov",

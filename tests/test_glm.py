@@ -9,6 +9,7 @@ continuation and the refit's budget.
 from __future__ import annotations
 
 import json
+from datetime import date
 
 import numpy as np
 import polars as pl
@@ -197,3 +198,48 @@ def test_a_refit_past_the_groups_cap_is_refused_at_the_call():
     )
     resolved = json.loads(native.resolved_defaults(_spec._json(many)))
     assert resolved["model"]["refit_rows"] == 321
+
+
+def test_a_half_life_and_a_gap_cap_in_durations_are_the_numbers_on_a_clock_in_the_same_unit():
+    """Every span a glm takes that has a clock form takes it: ``half_life``
+    and ``gap_cap``, in days on a date clock, are the run on that clock as a
+    number of days. ``refit_rows`` counts rows and has no clock form (the
+    docstring says why)."""
+    days = [d for d in pl.date_range(date(2024, 1, 1), date(2024, 12, 31), eager=True)]
+    days = [d for d in days if d.weekday() < 5]
+    rng = np.random.default_rng(5)
+    x = rng.normal(size=len(days))
+    df = pl.DataFrame({"d": days, "x0": x, "y": rng.poisson(np.exp(0.3 + 0.5 * x)).astype(float)})
+    df = df.with_columns(n=pl.col("d").cast(pl.Int32).cast(pl.Float64))
+    kw = dict(targets=["y"], features=["x0"])
+    ref = rp.ModelBank([rp.spec.glm("m", clock="n", half_life=5.0, gap_cap=10.0, **kw)])
+    got = rp.ModelBank([rp.spec.glm("m", clock="d", half_life="5d", gap_cap="10d", **kw)])
+    ref_out, got_out = ref.fit_predict(df)["m"], got.fit_predict(df)["m"]
+    assert got_out.equals(ref_out, null_equal=True)
+    # The decay is on: the weight is well below the row count.
+    assert ref_out.struct.field("weight_sum").max() < 10
+
+
+def test_a_zero_weight_row_is_in_no_count_and_the_weighted_rows_are_the_stream_without_it():
+    """A zero-weight row is predicted and learns nothing, and adds nothing to
+    ``weight_sum`` or to the refit's count of learned rows: the weighted rows'
+    outputs, every field, are those of the stream with the zero-weight rows
+    taken out, to the bit. With no decay, since a decay by the clock's
+    step is the clock layer's to leave out for such a row. The first row and
+    a run of rows at the refit's boundary are among the zeros."""
+    df = counts(600, seed=3).with_columns(w=pl.lit(1.0))
+    zero = np.zeros(df.height, dtype=bool)
+    zero[[0, 1, 2, 40, 41, 119, 120, 121, 122, 300]] = True
+    zero[::11] = True
+    withzero = df.with_columns(w=pl.when(pl.Series(zero)).then(0.0).otherwise(1.0))
+    kept = withzero.filter(pl.col("w") > 0)
+    kw = dict(weight="w", refit_rows=60, coef_every=0)
+    a = rp.ModelBank([spec(**kw)]).fit_predict(withzero)["m"].struct.unnest()
+    b = rp.ModelBank([spec(**kw)]).fit_predict(kept)["m"].struct.unnest()
+    mask = pl.Series(~zero)
+    a = a.filter(mask)
+    assert a.height == b.height > 400
+    assert a.equals(b, null_equal=True), [c for c in a.columns if not a[c].equals(b[c])]
+    # The zero-weight rows are predicted all the same.
+    zeros = rp.ModelBank([spec(**kw)]).fit_predict(withzero)["m"].struct.unnest().filter(~mask)
+    assert zeros["pred_y"].drop_nulls().len() > 0

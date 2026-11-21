@@ -164,7 +164,7 @@ IRREGULAR_CV = 0.5
 #: joins here (``tests/test_check.py`` holds the list to the registry's), and
 #: is measured for ``_UNCENTRED_LIMITS`` if it does not centre its features.
 _REGRESSIONS = frozenset(
-    ["ewridge", "lasso", "kalman", "huber", "quantile", "ftrl", "sgd", "pa", "rls"]
+    ["ewridge", "lasso", "kalman", "huber", "quantile", "ftrl", "sgd", "pa", "rls", "glm"]
 )
 #: The models whose fit reads a ridge in the features' squared units unless
 #: ``standardize``.

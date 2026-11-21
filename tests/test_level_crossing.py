@@ -44,8 +44,16 @@ MODELS = [
 IDS = [m for m, _ in MODELS]
 
 
+#: The regressions this stream is not for, and why.
+LEFT_OUT = {
+    "glm": "takes counts, never negative: its target cannot cross zero, and a "
+    "negative one is refused by name",
+}
+
+
 def test_every_regression_crosses():
-    assert set(IDS) == REGRESSIONS
+    assert set(IDS) | set(LEFT_OUT) == REGRESSIONS
+    assert not set(IDS) & set(LEFT_OUT)
 
 
 def crossing(n: int = N, seed: int = 17) -> pl.DataFrame:

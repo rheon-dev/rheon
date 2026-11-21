@@ -393,7 +393,11 @@ class TestPerTargetMinPeriods:
             "ftrl": lambda: rp.spec.ftrl("m", features=["x0"], loss="squared", **common),
             "sgd": lambda: rp.spec.sgd("m", features=["x0"], learning_rate=0.01, **common),
             "pa": lambda: rp.spec.pa("m", features=["x0"], **common),
+            "glm": lambda: rp.spec.glm("m", features=["x0"], family="gamma", **common),
         }[kind]()
+        if kind == "glm":
+            # A Gamma amount is above 0.
+            df = df.with_columns(pl.col("y0", "y1").abs() + 0.1)
         out = rp.ModelBank([spec]).fit_predict(df)
         names = out["m"].struct.fields
         pred = {

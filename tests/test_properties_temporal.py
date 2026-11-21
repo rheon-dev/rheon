@@ -644,6 +644,8 @@ def delayed_streams(draw):
     kw |= DELAYED_MODELS[model]
     # `MINIMAL`'s ``None`` drops an argument, as `test_model_registry._build` reads it.
     spec = getattr(rp.spec, model)("m", **{k: v for k, v in kw.items() if v is not None})
+    if model == "glm":
+        df = df.with_columns(y=pl.col("y").abs().round())  # a count target
     return df, spec
 
 

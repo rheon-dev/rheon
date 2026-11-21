@@ -217,6 +217,8 @@ _INF_OK: dict[str, frozenset[str]] = {
     "quantile": frozenset({"refit_budget"}),
     "pa": frozenset({"c", "coef_min", "coef_max"}),
     "holt": frozenset({"trend_half_life"}),
+    # No cap on a row's step; no bound on the refit buffers.
+    "glm": frozenset({"step_cap", "refit_budget"}),
     # No bound on the bins' memory (docs/PLAN.md task 131).
     "marginal": frozenset({"bin_budget", "bin_huber_delta", "refit_budget"}),
 }

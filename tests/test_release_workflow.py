@@ -655,6 +655,17 @@ def copy(tmp_path):
     for rel in PLACES:
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(REPO / rel, tmp_path / rel)
+    # The copy is release day: the entries the released-state test files under
+    # the next minor (a spec or kind added since the last release) name the
+    # version being released, as the version bump of that day makes them.
+    v = release_version.versions(tmp_path)["pyproject.toml"]
+    test = tmp_path / "tests/test_released_state.py"
+    text = test.read_text(encoding="utf-8")
+    for entries in release_version.introduced(tmp_path).values():
+        for name, first in entries.items():
+            if release_version._key(first) > release_version._key(v):
+                text = text.replace(f'"{name}": "{first}"', f'"{name}": "{v}"')
+    test.write_text(text, encoding="utf-8")
     return tmp_path
 
 

@@ -174,6 +174,12 @@ dev = [
     # own predictions. BSD-3-Clause, no dependencies, and wheels for every
     # Python and OS that CI runs. The floor is the version measured.
     "vowpalwabbit>=9.11.9",
+    # glum, a second batch fit for `glm` (docs/PLAN.md task 500) beside
+    # statsmodels' `GLM`: its ridge-penalized Poisson, Gamma, binomial and
+    # Tweedie fits, in tests/test_second_opinion_glm.py. BSD-3-Clause, with
+    # wheels for every Python and OS CI runs. The floor is the version
+    # measured.
+    "glum>=3.5.0",
     # Second opinions for settings a self-referential oracle alone held
     # (review 2026-10-06, TA4): hmmlearn's GaussianHMM (BSD-3-Clause) for
     # `hmm`'s filter at fixed parameters, and padasip's FilterRLS (MIT) for

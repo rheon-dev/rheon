@@ -44,6 +44,7 @@ FAMILIES: dict[str, tuple[str, ...]] = {
         "sgd",
         "pa",
         "ftrl",
+        "glm",
         "holt",
     ),
     "Moments and correlation": ("ew_cov", "marginal", "deco", "rcov", "audit"),

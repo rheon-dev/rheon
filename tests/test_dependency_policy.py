@@ -214,10 +214,16 @@ PARKED = (
     "elastic license",
 )
 
-#: Libraries whose installed metadata names no licence at all, with the
-#: licence read at the source and where. An entry goes once the metadata
-#: names one (`test_the_licence_table_holds_only_what_the_metadata_lacks`).
+#: Libraries whose installed metadata names no licence at all, or names one
+#: only as a word that is no identifier ("BSD"), with the licence read at
+#: the source and where. An entry goes once the metadata names one
+#: (`test_the_licence_table_holds_only_what_the_metadata_lacks`).
 READ_AT_THE_SOURCE = {
+    "glum": (
+        "BSD-3-Clause",
+        "the LICENSE file in the glum 3.5.0 wheel's dist-info/licenses, read "
+        "2026-11-21: the three-clause text; its metadata says only BSD",
+    ),
     "bayesian-changepoint-detection": (
         "MIT",
         "LICENSE in github.com/hildensia/bayesian_changepoint_detection at 5b7edb6, "
@@ -297,7 +303,7 @@ def test_every_test_library_carries_an_open_licence() -> None:
             if name not in READ_AT_THE_SOURCE:
                 bad[name] = "no licence in its metadata, and none read at the source"
             continue
-        if not is_open(declared):
+        if not is_open(declared) and name not in READ_AT_THE_SOURCE:
             bad[name] = declared
     assert not bad, f"libraries without an open licence: {bad}"
 
@@ -305,7 +311,8 @@ def test_every_test_library_carries_an_open_licence() -> None:
 def test_the_licence_table_holds_only_what_the_metadata_lacks() -> None:
     for name, (licence, where) in READ_AT_THE_SOURCE.items():
         assert name in _groups(), f"{name} is in no group any more"
-        assert licence_of(importlib.metadata.metadata(name)) is None, (
+        declared = licence_of(importlib.metadata.metadata(name))
+        assert declared is None or not is_open(declared), (
             f"{name}'s metadata names a licence now; drop it from the table"
         )
         assert is_open(licence) and where

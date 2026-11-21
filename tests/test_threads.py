@@ -567,7 +567,7 @@ def kind_frame(case: str) -> pl.DataFrame:
     """Four keys interleaved at random, an irregular clock with a few gaps
     past ``GAP_CAP``, weights with zeros among them (and as 0 or 1), a feature with nulls,
     two targets with a break in the first, and a key that only grows (rcov's
-    block). ``ftrl`` reads 0/1 targets, ``ew_class`` a label."""
+    block). ``ftrl`` reads 0/1 targets, ``ew_class`` a label, ``glm`` counts."""
     rng = np.random.default_rng(31)
     i = np.arange(N_KINDS)
     step = np.where(rng.random(N_KINDS) < 0.005, 80.0, rng.exponential(1.0, N_KINDS))
@@ -592,6 +592,8 @@ def kind_frame(case: str) -> pl.DataFrame:
     builder = CASES[case][0]
     if builder == "ftrl":
         df = df.with_columns((pl.col("y") > 1).cast(pl.Float64), (pl.col("z") > 0).cast(pl.Float64))
+    if builder == "glm":
+        df = df.with_columns(pl.col("y", "z").abs().round())
     if builder == "ew_class":
         df = df.with_columns(y=pl.when(pl.col("y") > 1).then(pl.lit("a")).otherwise(pl.lit("b")))
     return df

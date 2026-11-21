@@ -397,6 +397,7 @@ _U32 = frozenset(
         "huber_refit_rows",
         "bin_refit_rows",
         "quantile_refit_rows",
+        "refit_rows",
     }
 )
 
@@ -758,6 +759,7 @@ __all__ = [
     "ew_cov",
     "ewridge",
     "ftrl",
+    "glm",
     "holt",
     "huber",
     "kalman",
@@ -5070,6 +5072,7 @@ from rheon._spec_audit import audit  # noqa: E402
 from rheon._spec_changepoint import bocpd, corrchange  # noqa: E402
 from rheon._spec_class import ew_class  # noqa: E402
 from rheon._spec_cluster import kmeans, micro  # noqa: E402
+from rheon._spec_glm import glm  # noqa: E402
 from rheon._spec_gradient import sgd  # noqa: E402
 from rheon._spec_regimes import hmm, rcov  # noqa: E402
 from rheon._spec_robust import huber, quantile  # noqa: E402

@@ -116,7 +116,7 @@ def _spec(model, extra, **kw):
 def test_predict_is_fit_predict_of_the_next_row(model, extra):
     """The contract, per model, with every diagnostic on and a clock, groups
     and weights in play."""
-    df = _frame(binary=model == "ftrl")
+    df = _frame(binary=model in ("ftrl", "glm"))  # a label, a count
     specs = [_spec(model, extra)]
     bank = rp.ModelBank(specs)
     bank.fit_predict(df.head(40))

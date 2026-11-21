@@ -271,7 +271,7 @@ def _integers(dtype: pl.DataType, path: str) -> list[tuple[str, pl.DataType]]:
 def _each_kind_fitted():
     """Every kind at its fullest (``test_model_registry.fullest``), closing
     its groups where it may, fitted on rows every kind can read: a 0/1
-    ``ftrl`` target, a text ``ew_class`` label, a key that only grows."""
+    ``ftrl`` target, ``glm`` counts, a text ``ew_class`` label, a key that only grows."""
     from test_model_registry import MINIMAL, fullest
 
     rng = np.random.default_rng(244)
@@ -305,6 +305,8 @@ def _each_kind_fitted():
         df = base
         if name == "ftrl":
             df = df.with_columns((pl.col(c) > 0).cast(pl.Float64) for c in ("y", "z"))
+        if name == "glm":
+            df = df.with_columns(pl.col("y", "z").abs().round())
         if name == "ew_class":
             df = df.with_columns(
                 y=pl.when(pl.col("y") > 0).then(pl.lit("a")).otherwise(pl.lit("b"))
