@@ -53,9 +53,14 @@ Data are generated from seeded numpy generators; nothing is read from disk.
 Run (the study's venv holds numpy, scipy, filterpy and statsmodels; the record
 says how it was made):
 
-    .venv-497/bin/python scripts/study_497.py part1 --out <dir>
-    .venv-497/bin/python scripts/study_497.py part2 --out <dir>
-    ...
+    .venv-497/bin/python scripts/study_497.py part1 --out <dir>       (filterpy, EKF)
+    .venv-497/bin/python scripts/study_497.py part2 --out <dir>       (filterpy, UKF)
+    .venv-497/bin/python scripts/study_497.py part3 --out <dir>       (second oracle)
+    .venv-497/bin/python scripts/study_497.py divergence --out <dir>
+    OMP_NUM_THREADS=1 .venv-497/bin/python scripts/study_497.py part4 --out <dir>
+
+Each part writes <dir>/<part>.json; a rerun prints the cached result unless
+--force is given.
 """
 
 from __future__ import annotations

@@ -1,12 +1,13 @@
 # Extended and unscented Kalman filters for GLM observations: a numpy study (PLAN task 497)
 
-*Status, 2026-11-21: a record, in progress. Request A13, part 1: the recursions
+*Status, 2026-11-21: a record, complete for request A13. Request A13, part 1: the recursions
 in numpy, the linear Gaussian case against filterpy's `KalmanFilter` and
 `ExtendedKalmanFilter`, and the Poisson EKF against filterpy's
 `ExtendedKalmanFilter` (§3, §4). Part 2: the UKF for every family and the EKF
 for binomial and Gamma against filterpy (§5). Part 3: the second oracle (a
 grid filter, a particle filter and statsmodels' static posterior, §6), `k =
-20` and zero-weight rows (§7), and divergence (§8). Nothing in the package or the Rust crates was
+20` and zero-weight rows (§7), and divergence (§8). Part 4: cost and state
+size (§9), the proposed tolerances (§10) and the conclusions (§11). Nothing in the package or the Rust crates was
 changed. The scan this builds on is `vm-tools/research/494-MODELS-SCAN.md` on
 branch `vm-tools/oracle-gap-scan`, section 3 ("scan §3"). The runnable study is
 `scripts/study_497.py`.*
@@ -78,7 +79,7 @@ beyond it pulls `eta` back by about 1 a row (`Δeta ≈ -x'P^-x / (x'P^-x + 1/mu
 same gain times innovation: multiply numerator and denominator of `K (y - mu)`
 by `1/m^2`. The two differ in rounding only. With `q = 0` and `lam = 1` the EKF
 is one Fisher-scoring step per row on the posterior, the recursive IRLS of the
-GLM study (task 500), with the prior's `P0^{-1}` as its ridge.
+GLM study (`STUDY-500-GLM.md`), with the prior's `P0^{-1}` as its ridge.
 
 ## 3. Oracle 1, the settings that make filterpy compute the same thing
 
@@ -336,7 +337,7 @@ Read:
    as `k` grows: 0.70 sd (Poisson) and 2.6 sd (Gamma) from the mode at `k =
    20` after 2,000 rows, where the UKF is 0.26 and 1.0. The early rows'
    linearisation error is never revisited; the batch fit relinearises at the
-   end. This is task 500's finding for recursive IRLS, which the EKF with `q =
+   end. This is the GLM study's finding for recursive IRLS, which the EKF with `q =
    0` is.
 
 Run: `.venv-497/bin/python scripts/study_497.py part3 --out <dir>` (about 620 s:
@@ -449,3 +450,152 @@ tends to a second-order EKF; the weights of `-1e6` cost about six digits in
 `zbar` (not measured beyond "no failure").
 
 Run: `.venv-497/bin/python scripts/study_497.py divergence --out <dir>` (80 s).
+
+## 9. Part 4: cost per row and state size
+
+**State.** EKF and UKF keep the same persisted state per target, which is
+`kalman`'s own: `b` (k), `P` (symmetric), the clock `D` and the weight sum `n`.
+The sigma points are scratch, rebuilt every row.
+
+| k | packed `P`: `8 (k(k+1)/2 + k + 2)` B | full `P`: `8 (k^2 + k + 2)` B | UKF scratch per row: `8 (3k^2 + 5k + 2)` B |
+|---|---|---|---|
+| 2 | 56 | 64 | 192 |
+| 5 | 176 | 256 | 816 |
+| 20 | 1,856 | 3,376 | 10,416 |
+| 50 | 10,616 | 20,416 | 62,016 |
+
+`kalman` stores `P` full and row-major today, `8 k^2` bytes per covariance, and
+`b` and the clock beside it; the GLM option adds **no persisted field** at a
+fixed `phi` (a learned Gamma dispersion would add one float). The state is
+bounded by `k`, never by the stream's length. The UKF's scratch is `2k + 1`
+points of `k`, their `z_i` and `V(z_i)`, and the Cholesky factor.
+
+**Arithmetic per observing row** (leading terms, a multiply and an add each
+counted; the script's `flops` gives the full counts):
+
+| filter | flops | at k = 2 / 5 / 20 / 50 | link evaluations |
+|---|---|---|---|
+| EKF, standard form | about `5 k^2` | 30 / 150 / 2,100 / 12,750 | 1 (`g^{-1}`, `dmu/deta`, `V`) |
+| EKF, Joseph expanded for a scalar observation | about `9 k^2` | 46 / 250 / 3,700 / 22,750 | 1 |
+| EKF, Joseph as matrix products (filterpy's) | about `4 k^3` | 70 / 700 / 34,900 / 517,750 | 1 |
+| UKF, Merwe or Julier points | about `k^3/3 + 13 k^2` | 84 / 453 / 8,508 / 77,268 | `2k + 1` (`g^{-1}` and `V` at each point) |
+
+**Measured, numpy** (one thread, the best of repeated 400-row passes, 4 s per
+case, Poisson, `q = 1e-4`, `lam = 0.995`), in microseconds per row:
+
+| k | EKF standard | EKF Joseph, scalar | EKF Joseph, matrix | UKF |
+|---|---|---|---|---|
+| 2 | 17.6 | 21.5 | 21.0 | 28.7 |
+| 5 | 17.9 | 21.9 | 21.6 | 29.3 |
+| 20 | 20.0 | 25.0 | 25.6 | 35.6 |
+| 50 | 30.6 | 42.4 | 51.0 | 68.2 |
+
+These are Python's per-call overhead (about 17 µs) plus a little arithmetic; they
+rank the filters but say nothing about a Rust row. The flop counts do: at `k =
+20` the EKF's standard-form update is about 2,100 flops, the arithmetic of
+`kalman`'s own Gaussian update (the same formulas with `m = 1`), plus one
+exponential; the UKF's is about 8,500 flops plus 41 exponentials, four times
+as much. No Rust was written or timed.
+
+**The expanded Joseph form is not filterpy's in rounding.** For a scalar
+observation `(I - K h')P(I - K h')' + R K K' = P - K u' - u K' + s K K'` with
+`u = P h`, an `O(k^2)` form. On the 19 well-conditioned Poisson streams of §4
+it is within 2.4e-14 (`b`) of filterpy, about twice the band; on the 5 streams
+that reach the clamp it parts from filterpy's matrix product by 7.1e-7 on `b`,
+as far as the standard form (1.9e-7) and 2,000 times the band. The
+cancellation the matrix form avoids returns when the products are expanded. A
+Rust EKF matched against filterpy at the band on such streams needs the
+`O(k^3)` matrix form; at `O(k^2)` it is held to its own form's band.
+
+Run: `OMP_NUM_THREADS=1 .venv-497/bin/python scripts/study_497.py part4 --out <dir>`
+(71 s, each timed case 4 s).
+
+## 10. Proposed tolerances
+
+Gaps to filterpy are rounding and are stated relative (`b` against the run's
+largest `|b_j|`, `P` and `pred` per row; §4). One ulp of a value near 1 is 2.2e-16,
+so 1e-12 relative is about 4,500 ulps; ulps are not used for `P` or `b`,
+whose entries pass through 0.
+
+| check | proposed | measured worst | margin |
+|---|---|---|---|
+| EKF (Joseph, matrix) vs filterpy `ExtendedKalmanFilter`, streams that never reach the clamp | 1e-12 relative on `b`, `P`, `pred` | 6.1e-15 `b`, 3.3e-14 `P`, 6.0e-14 `pred` (k = 2, 5, 20) | 16x or more |
+| EKF, standard or scalar-Joseph form, vs filterpy, same streams | 1e-12 relative | 2.4e-14 `b`, 3.8e-14 `P`, 2.1e-13 `pred` | 4x or more |
+| UKF vs filterpy `UnscentedKalmanFilter` (2.0) as it runs, same streams | 1e-12 relative | 5.1e-14 `b`, 4.1e-14 `P`, 1.9e-13 `pred` | 5x or more |
+| UKF vs filterpy with the exact prior handed over | 2e-14 relative on `b`, 5e-14 on `P` and `pred` | 1.7e-15 `b`, 7.2e-15 `P`, 7.4e-15 `pred` | 6x or more |
+| any filter vs filterpy on a stream that reaches the clamp | at most 10 times the 1-ulp band of the same filter on the same stream | 2.0 times (matrix Joseph) | 5x |
+| linear Gaussian: EKF, UKF vs `KalmanFilter` | 1e-13 relative on `b` and `P`, 1e-13 absolute on `pred` | 2.0e-15 `b`, 9.5e-15 `P`, 6.2e-15 `pred` | 10x or more |
+| zero-weight rows: `b`, `P`, `n_eff` held, and equal to the folded stream | to the bit | 0 | |
+| out of sample: a row's target and weight move no earlier or same-row prediction | to the bit | 0 | |
+
+Against the second oracle the gaps are approximation error, a statistic of
+the stream, so a test holds them to measured bounds with room, on the seeds
+measured here:
+
+| check | proposed bound | measured |
+|---|---|---|
+| grid filter vs `KalmanFilter` (the grid's own check) | 1e-8 sd | 1.2e-9 sd |
+| UKF vs grid, k = 2, `z` max / median | 1.0 / 0.1 sd | 0.59 / 0.058 |
+| EKF vs grid, k = 2, `z` max / median | 1.5 / 0.1 sd | 0.96 / 0.068 |
+| UKF and EKF sd over the grid's sd | within [0.8, 1.5] | 0.89 to 1.35 |
+| UKF vs particle filter, k = 5, beyond 4 Monte Carlo sd | 1.0 sd | 0.78 |
+| EKF vs particle filter, k = 5 | Poisson and binomial only: 1.0 sd beyond the band | 0.76 (Gamma: 3.8, lost track) |
+| UKF vs statsmodels' static posterior mode, row 2,000, k ≤ 20 | 1.5 Laplace sd | 1.04 |
+| EKF vs the same | k ≤ 5: 1.0 sd; k = 20: none (2.6 measured) | 0.85 at k ≤ 5 |
+
+## 11. What this means for the GLM option of `kalman`, and what was not verified
+
+1. **The UKF is the one to build first.** It costs `O(k^3)` against the EKF's
+   `O(k^2)`, but it is the closer to the exact posterior in all 21
+   comparisons by the largest gap (9 grid settings, 3 particle-filter streams,
+   9 static cases at row 2,000) and in 8 of the 9 grid settings by the median
+   (§6), never lost track (0 of 600 streams
+   against 15, §8), and survived the feature spikes that sent the EKF's state
+   to NaN or 1e27. The EKF is a cheap option for binomial, where it never
+   failed.
+2. **Settings for a filterpy-matched Rust filter**: `F = I`/`fx = I`;
+   forgetting and noise as `P / lam^D + q D^2 I` (filterpy's `Q = (lam^{-D} -
+   1) P + q D^2 I`); EKF linearised at the prior mean with `mu`, `dmu/deta`
+   and `V` at the clamped `eta`; Joseph matrix form for filterpy's bits on
+   ill-conditioned streams; UKF with Merwe `(1, 2, 0)` (no negative weight) and
+   the "expected" `R`; `P` kept symmetric (packed storage does it).
+3. **Pure forgetting needs a bound on `P`** under separation (§8, D3).
+4. **The clamp is linearised at the bound**, never differentiated (§2).
+
+Not verified, or not run:
+
+- No Rust: costs per row are numpy timings (Python overhead) and flop counts.
+- Cross-OS behaviour of `exp` and `log1p`-type calls in the link functions was
+  not examined (one Linux machine).
+- filterpy's `SimplexSigmaPoints` and `CubatureKalmanFilter` were not run;
+  Merwe at three settings and Julier at one were.
+- A learned dispersion (`phi` for Gamma, or `kalman`'s learned noise scale in
+  units of `R`) was not studied: `phi` is fixed and `P` is absolute here.
+- The binomial family is Bernoulli rows only (no trial counts).
+- The particle filter was run at `k = 5` with `lam = 1` only (power discounting
+  has no particle form); at `k = 20` the only second oracle is the static
+  posterior (`q = 0`).
+- The iterated EKF, a candidate remedy for the overshoot of §8, was not tried.
+- D4's cost in digits of a large negative centre weight was not measured.
+- Clock steps other than 1 were exercised only through zero-weight rows
+  folded into the next row's `d`.
+- filterpy 1.4.x (which does not redraw sigma points after `predict`) was
+  not run; the statement about it in §3 is from its source, not a run.
+
+## 12. Reproducing
+
+The study's venv, kept beside the repository and ignored by git:
+`uv venv .venv-497 --python 3.12`, then numpy 2.5.5, scipy 1.18.1, filterpy
+2.0.0 and statsmodels 0.15.0 installed into it with `uv pip`. Each part writes
+`<out>/<part>.json` and a rerun prints the cached result unless `--force` is
+given, so an interrupted series resumes at the first part without a result:
+
+```text
+.venv-497/bin/python scripts/study_497.py part1 --out <dir>        # 10 s
+.venv-497/bin/python scripts/study_497.py part2 --out <dir>        # 200 s
+.venv-497/bin/python scripts/study_497.py part3 --out <dir>        # 620 s
+.venv-497/bin/python scripts/study_497.py divergence --out <dir>   # 80 s
+OMP_NUM_THREADS=1 .venv-497/bin/python scripts/study_497.py part4 --out <dir>   # 71 s
+```
+
+Every stream is drawn from a seeded numpy generator; nothing is read from disk.
