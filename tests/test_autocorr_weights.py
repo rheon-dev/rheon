@@ -12,7 +12,8 @@ a row with a residual and a positive weight ``w`` folds it,
     (a pair, once the residual ``lag`` back exists)
     Wc' = lam Wc + w,  cross' = (lam Wc / Wc') cross + a (w / Wc') d (r_lag - mean)
 
-and every other row only ages ``W`` and ``Wc``; the field on a row is read
+and every other row only ages ``W`` and ``Wc``, but a row of weight 0, which
+counts in no clock (hard rule 9) and ages nothing; the field on a row is read
 before the row's own residual (``cross / var``, clamped to [-1, 1], once a
 pair has weight and the variance is positive). The stream's residual series
 alternates two regimes in blocks of 150 rows: weight 1 at ``phi = +0.8``, and
@@ -56,9 +57,13 @@ def _hand(resid: list[float | None], weights: list[float], *, weighed: bool) -> 
     previous: float | None = None
     lam = 2.0 ** (-1.0 / HALF_LIFE)
     out: list[float | None] = []
-    for t, (r, w) in enumerate(zip(resid, weights, strict=True)):
+    started = False
+    for r, w in zip(resid, weights, strict=True):
         out.append(max(-1.0, min(1.0, cross / var)) if w_pairs > 0.0 and var > 0.0 else None)
-        step = 1.0 if t == 0 else lam  # the first row has no clock step
+        if w == 0.0:
+            continue  # in no clock (hard rule 9)
+        step = lam if started else 1.0  # the first row has no clock step
+        started = True
         if r is None or not math.isfinite(r) or w <= 0.0:
             big_w *= step
             w_pairs *= step

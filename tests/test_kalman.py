@@ -463,8 +463,10 @@ def test_with_no_drift_and_a_fixed_noise_the_filter_is_rls(p0):
     assert np.isfinite(a).sum() >= df.height - 2
     np.testing.assert_allclose(a, b, rtol=0.0, atol=1e-12)
     assert filt["weight_sum"].equals(rls["weight_sum"])
-    ca = np.array(filt["coef"].to_list(), dtype=float)
-    cb = np.array(rls["coef"].to_list(), dtype=float)
+    # A row of weight 0 carries no `coef` in either (hard rule 9).
+    assert filt["coef"].is_null().equals(rls["coef"].is_null())
+    ca = np.array(filt["coef"].drop_nulls().to_list(), dtype=float)
+    cb = np.array(rls["coef"].drop_nulls().to_list(), dtype=float)
     np.testing.assert_allclose(ca, cb, rtol=0.0, atol=1e-12)
     noisier, _ = _run(df, q=[0.0] * 4, obs_var=7.0, p0=p0, standardize=False, **kw)
     np.testing.assert_allclose(noisier["pred_y"].to_numpy().astype(float), a, atol=1e-12)

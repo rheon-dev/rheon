@@ -921,6 +921,10 @@ def given_errors(seed: int, cov: str, k: int, half_life: float) -> dict[str, flo
     s = hmm_stream(seed, k, own=True)
     assert given_shape(s["c0"], cov) is not None
     out, learned = model_run(s, half_life, cov)
+    # The rule rebuilt on the rows that count (hard rule 9), as em_errors.
+    kept = s["w"] > 0.0
+    s = {**s, "x": s["x"][kept], "w": s["w"][kept]}
+    out = out.filter(pl.Series(kept))
     want = rule_from_scratch(s, half_life, cov)
 
     def rel(a: np.ndarray, b: np.ndarray) -> float:

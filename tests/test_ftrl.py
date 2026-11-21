@@ -213,11 +213,15 @@ def test_no_smoothing_no_penalty_and_a_zero_weight_first_row_stay_finite(
     spec = _spec(weight="w", fit_intercept=fit_intercept, coef_every=1, **kw)
     out = rp.ModelBank([spec]).fit_predict(df)
     pred = _pred(out)
-    coef = np.array(out["m"].struct.field("coef").to_list(), float)
+    # A row of weight 0 is scored, carries no `coef` and counts in no clock
+    # (hard rule 9): the reference steps over the rows that count.
+    m = w != 0.0
+    coef = np.array(out.filter(pl.Series(m))["m"].struct.field("coef").to_list(), float)
     assert np.isfinite(pred).all() and np.isfinite(coef).all()
-    assert (coef[:, -1] != 0.0).sum() > n - 100, "the late feature never learned"
-    ref = ftrl_ref(x, y[:, None], np.ones(n), w, fit_intercept=fit_intercept, **kw)["pred"][:, 0]
-    assert np.max(np.abs(pred - ref) / (1.0 + np.abs(ref))) < 1e-12
+    assert (coef[:, -1] != 0.0).sum() > len(coef) - 100, "the late feature never learned"
+    ones = np.ones(m.sum())
+    ref = ftrl_ref(x[m], y[m, None], ones, w[m], fit_intercept=fit_intercept, **kw)["pred"][:, 0]
+    assert np.max(np.abs(pred[m] - ref) / (1.0 + np.abs(ref))) < 1e-12
 
 
 def test_bad_config_rejected():

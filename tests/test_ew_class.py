@@ -286,7 +286,7 @@ class TestOracle:
         t = np.cumsum(rng.integers(1, 4, 900).astype(float))
         t[300:] += 50.0  # one long gap, capped by gap_cap
         w = rng.uniform(0.2, 2.0, 900)
-        w[::17] = 0.0  # zero-weight rows: scored, clock advanced, not learned
+        w[::17] = 0.0  # zero-weight rows: scored, in no clock (hard rule 9), not learned
         w[::23] = np.nan  # null weight: skipped
         y = [None if i % 11 == 4 else int(v) for i, v in enumerate(lab)]
         df = frame(X, lab, t=t, w=w).with_columns(
@@ -295,16 +295,19 @@ class TestOracle:
         params = dict(half_life=60.0, min_weight=2.0, precision_prior=0.3)
         s = spec(clock="t", gap_cap=20.0, weight="w", covariance_type=covariance, **params)
         bank = rp.ModelBank([s])
-        got = unnested(bank.fit_predict(df))
+        # The oracle steps over the rows that count: a row of weight 0 is in
+        # no clock (hard rule 9), and the bank's other rows are its.
+        kept = ~(w == 0.0)
+        got = unnested(bank.fit_predict(df)).filter(pl.Series(kept))
         rows, o = replay(
-            X,
-            y,
+            X[kept],
+            [v for v, k in zip(y, kept, strict=True) if k],
             covariance=covariance,
             prior=0.3,
             half_life=60.0,
             min_weight=2.0,
-            t=t,
-            w=w,
+            t=t[kept],
+            w=w[kept],
             gap_cap=20.0,
         )
         _same_as_oracle(got, rows, ["a", "b", "c"], covariance)

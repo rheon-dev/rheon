@@ -122,7 +122,10 @@ weight 0, its clock step included (rule 5's twenty-fourth exception said the
 step was counted).
 
 On this build every one of the 106 cases is equal to the bit, outputs and
-state, and the three clocks agree: `a_number_clock_and_a_temporal_one_agree_on_every_kind`
+state, and so are 36 more on `tn`, a number clock whose steps no double sums
+exactly (tenths and a third): the gap after a row of weight 0 is read once,
+from the last row that counted, never as a sum of the steps either side of
+it, so the equality holds to the bit on every OS. The three clocks agree: `a_number_clock_and_a_temporal_one_agree_on_every_kind`
 runs each spec on the number clock and on the `Datetime` clock with every
 span a duration, to the bit.
 

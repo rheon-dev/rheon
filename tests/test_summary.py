@@ -292,10 +292,12 @@ def test_events_zero_weights_sessions_and_backwards_clocks():
     feed(bank, df, 3)
     s = bank.summary().sort("spec")
     rb, rs = s.rows(named=True)
-    assert rs["session_changes"] == 2 and rs["resets"] == 2 + 3
+    assert rs["session_changes"] == 2 and rs["resets"] == 2 + 2
     # The step back at row 60 is also the s1 -> s2 boundary: a new session
-    # owns its clock, so that one is a session change, not a step back.
-    assert rs["clock_backwards"] == 3 and rs["rows_zero_weight"] == 10
+    # owns its clock, so that one is a session change, not a step back; and
+    # the one at row 40 is a row of weight 0, which counts in no clock and
+    # in no step-back rule (hard rule 9).
+    assert rs["clock_backwards"] == 2 and rs["rows_zero_weight"] == 10
     assert rs["rows_learned"] == n - 10 and rs["weight_sum"] == n - 10
     assert rb["session_changes"] == 0 and rb["clock_backwards"] == 4 and rb["resets"] == 4
     assert rb["rows_zero_weight"] == 0 and rb["weight_sum"] == n

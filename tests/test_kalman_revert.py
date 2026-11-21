@@ -29,6 +29,7 @@ import numpy as np
 import polars as pl
 import pytest
 
+from counted import counted, counts
 from data import synthetic
 from reference import compute_dclock, kalman_ref
 from rheon import polars as rp
@@ -91,6 +92,9 @@ class TestOracle:
     filter is held to in ``test_oracles.py``."""
 
     def _compare(self, df, k=3, targets=("y0",), **kw):
+        # The oracle steps over the rows that count: a row of weight 0 is in
+        # no clock (hard rule 9), and the bank's other rows are its.
+        full, df = df, counted(df)
         x, dc, w = _arrays(df, k)
         y = np.column_stack([df[t].to_numpy() for t in targets])
         ref = kalman_ref(x, y, dc, w, gap_cap=MAXD, **kw)
@@ -112,7 +116,7 @@ class TestOracle:
             fit_intercept=kw.get("fit_intercept", True),
             standardize=kw.get("standardize", True),
         )
-        out = rp.ModelBank([spec]).fit_predict(df)
+        out = rp.ModelBank([spec]).fit_predict(full).filter(counts())
         for j, t in enumerate(targets):
             for field, key in (("pred_", "pred"), ("resid_", "resid")):
                 _close(_field(out, f"{field}{t}"), ref[key][:, j], what=f"{field}{t}")
@@ -430,16 +434,17 @@ class TestExactness:
         assert c[-1, 0] == c_fit[0]  # the `inf` slot is untouched to the bit
         assert abs(c[-1, 3]) < 1e-30 * abs(c_fit[3]) + 1e-300
 
-    def test_a_zero_weight_row_advances_the_transition(self):
-        # Weight 0 is "advance the clock, learn nothing": the reversion is
-        # clock, so it applies, and the measurement does not.
+    def test_a_zero_weight_row_reads_the_transition_and_keeps_none(self):
+        # A row of weight 0 counts in no clock (hard rule 9): it is predicted
+        # over its step, the reversion applied on a copy, and the state the
+        # next row reads has neither the measurement nor the reversion.
         rng = np.random.default_rng(105)
         n = 200
         x = rng.normal(size=(n, 2))
         y = x @ np.array([1.0, -1.0]) + rng.normal(0.0, 0.1, n)
         w = np.ones(n)
-        w[-1] = 0.0
-        y[-1] = 1e6  # would move any coefficient if it were learned from
+        w[-2] = 0.0
+        y[-2] = 1e6  # would move any coefficient if it were learned from
         df = pl.DataFrame({"y0": y, "x0": x[:, 0], "x1": x[:, 1], "w": w})
         spec = _spec(
             features=["x0", "x1"],
@@ -449,9 +454,11 @@ class TestExactness:
             q=[0.0] * 3,
             coef_every=0,
         )
-        c = _coef(rp.ModelBank([spec]).fit_predict(df))
-        assert c[-1, 1:] == pytest.approx(c[-2, 1:] * 0.5 ** (1.0 / 4.0), rel=1e-12)
-        assert c[-1, 0] == c[-2, 0]
+        out = rp.ModelBank([spec]).fit_predict(df)
+        gone = rp.ModelBank([spec]).fit_predict(df.filter(pl.int_range(pl.len()) != n - 2))
+        assert _coef(out)[-1].tolist() == _coef(gone)[-1].tolist()
+        assert _field(out, "pred_y0")[-1] == _field(gone, "pred_y0")[-1]
+        assert np.isfinite(_field(out, "pred_y0")[-2])
 
     def test_predict_propagates_over_the_clock_distance(self):
         # `predict(df)` scores each row as the next row of the stream: the

@@ -32,6 +32,7 @@ import polars as pl
 import pytest
 
 import reference
+from counted import counts
 from reference_paths import _age_and_learn, _ew_variance
 from rheon import polars as rp
 
@@ -193,6 +194,18 @@ class TestProjection:
 
 
 # ------------------------------------------------------------------ oracles
+
+
+def _counted(X, y, t, w):
+    """The rows that count in a clock: those whose weight is not 0."""
+    keep = np.array([v is None or v != 0.0 for v in w])
+    pick = np.flatnonzero(keep)
+    return (
+        np.asarray(X)[pick],
+        np.asarray(y)[pick],
+        np.asarray(t)[pick],
+        [w[i] for i in pick],
+    )
 
 
 def _usable(v: float) -> bool:
@@ -507,7 +520,10 @@ class TestOracle:
             coef_every=0,
             **kw,
         )
-        out = rp.ModelBank([spec]).fit_predict(_frame(X, y, t, w))
+        out = rp.ModelBank([spec]).fit_predict(_frame(X, y, t, w)).filter(counts())
+        # A row of weight 0 counts in no clock (hard rule 9): the replay
+        # steps over the rows that count.
+        X, y, t, w = _counted(X, y, t, w)
         want = sgd_replay(
             X,
             y,
@@ -562,7 +578,10 @@ class TestOracle:
             coef_every=0,
             **kw,
         )
-        out = rp.ModelBank([spec]).fit_predict(_frame(X, y, t, w))
+        out = rp.ModelBank([spec]).fit_predict(_frame(X, y, t, w)).filter(counts())
+        # A row of weight 0 counts in no clock (hard rule 9): the replay
+        # steps over the rows that count.
+        X, y, t, w = _counted(X, y, t, w)
         want = pa_replay(
             X,
             y,

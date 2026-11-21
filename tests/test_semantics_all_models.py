@@ -15,6 +15,7 @@ rather than skipped silently:
 import numpy as np
 import polars as pl
 import pytest
+from polars.testing import assert_frame_equal
 
 from rheon import polars as rp
 
@@ -125,11 +126,13 @@ class TestNullPolicy:
     def test_target_null_is_predict_only(self, model, extra):
         """A null target is scored and not learned. The row has its
         prediction and no residual. And the model learns nothing from it:
-        every later row is what it is with the row at weight 0, the other
-        way to advance the clock and learn nothing, field for field and
-        ``coef`` included -- but ``weight_sum``, the shared weight, which
-        counts every processed row (hard rule 8) and so is the zero-weight
-        stream's plus the row's weight, decayed. `kalman`, `sgd` and `pa`
+        every later row is what it is with the row at weight 0, field for
+        field and ``coef`` included -- but ``weight_sum``, the shared weight,
+        which counts every processed row (hard rule 8) and so is the
+        zero-weight stream's plus the row's weight, decayed. To rounding: the
+        null target's row is a step of the clock and the zero-weight row is
+        none (hard rule 9), so the next row's decay is one factor over two
+        unit steps against two, ``2^(-2/h)`` against ``2^(-1/h)^2``. `kalman`, `sgd` and `pa`
         run unstandardized here: their standardizer takes every processed
         row's features, a null target's included, as `kalman.rs` and
         `sgd.rs` document (`standardize` is their default since docs/PLAN.md
@@ -152,10 +155,17 @@ class TestNullPolicy:
         w[row] = 0.0
         zero = run(model, extra, df.with_columns(w=pl.Series(w, dtype=pl.Float64)), **CLOCKED)
         a, b = _fields(out).slice(row + 1), _fields(zero).slice(row + 1)
-        assert a.drop("weight_sum").equals(b.drop("weight_sum"), null_equal=True)
+        near = dict(check_exact=False, rel_tol=1e-9, abs_tol=1e-12)
+        assert_frame_equal(
+            a.drop("weight_sum", "settled_frac"), b.drop("weight_sum", "settled_frac"), **near
+        )
+        # `settled_frac` is read before the row's step, so the row after the
+        # null target's has counted its step and the zero-weight one's not.
+        assert_frame_equal(a.select("settled_frac")[1:], b.select("settled_frac")[1:], **near)
         lam = 0.5 ** (1.0 / 200.0)  # the rows are one clock unit apart
         more = a["weight_sum"].to_numpy() - b["weight_sum"].to_numpy()
-        np.testing.assert_allclose(more, lam ** np.arange(len(more)), rtol=1e-12)
+        # From the row after next, for the same reason as `settled_frac`.
+        np.testing.assert_allclose(more[1:], lam ** np.arange(1, len(more)), rtol=1e-9)
 
     def test_null_weight_skips_the_row(self, model, extra):
         """A null weight skips the row: every field of it is null, and every

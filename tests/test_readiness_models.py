@@ -325,8 +325,11 @@ class TestTheHardRules:
     @pytest.mark.parametrize("kind", ROW_FIELD_KINDS)
     def test_a_zero_weight_row_and_a_null_target_learn_nothing(self, kind):
         """A zero-weight row and a null target teach the statistic nothing:
-        the next row reads the same either way. (Unstandardized, since a
-        null target's features still teach `kalman`'s standardizer.)"""
+        the row reads the same either way. The zero-weight row also counts
+        in no clock (hard rule 9), so the rows after it read as the stream
+        without it, where the null target's row is still a step.
+        (Unstandardized, since a null target's features still teach
+        `kalman`'s standardizer.)"""
         df = frame(120)
         zero = df.with_columns(
             pl.when(pl.int_range(pl.len()) == 50).then(0.0).otherwise(pl.col("w")).alias("w")
@@ -343,9 +346,12 @@ class TestTheHardRules:
             emit_error_inflation=True,
             **extra,
         )
+        gone = df.filter(pl.int_range(pl.len()) != 50)
         a = unnest(rp.ModelBank([s]).fit_predict(zero))["error_inflation_y"].to_numpy()
         b = unnest(rp.ModelBank([s]).fit_predict(null))["error_inflation_y"].to_numpy()
-        np.testing.assert_array_equal(a[:52], b[:52])
+        c = unnest(rp.ModelBank([s]).fit_predict(gone))["error_inflation_y"].to_numpy()
+        np.testing.assert_array_equal(a[:51], b[:51])
+        np.testing.assert_array_equal(np.delete(a, 50), c)
         assert np.isfinite(a[51])
 
 

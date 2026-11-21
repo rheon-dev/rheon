@@ -182,7 +182,11 @@ def replay(pred, resid, sigma, lam, w, accepted, *, coverage, rate=0.05):
         if cov_w > 0.0:
             cov_out[i] = cov
         r, lam_i, w_i = resid[i], lam[i], w[i]
-        if not math.isfinite(r) or w_i <= 0.0:
+        if w_i == 0.0:
+            # A row of weight 0 is scored and counts in no clock (hard rule
+            # 9): it ages nothing.
+            continue
+        if not math.isfinite(r):
             cov_w *= lam_i
             w_rows *= lam_i
             continue
@@ -209,7 +213,9 @@ def replay(pred, resid, sigma, lam, w, accepted, *, coverage, rate=0.05):
 def row_plan(df, *, clock, gap_cap, half_life, weight, features):
     """The stream's per-row decay factor and weight, and which rows it
     accepts: a null or non-finite feature or weight skips the row, and its
-    clock delta is folded into the next accepted row's."""
+    clock delta is folded into the next accepted row's; so is a row of
+    weight 0's, which is accepted and scored but counts in no clock (hard
+    rule 9)."""
     n = df.height
     t = df[clock].to_numpy().astype(float) if clock else np.arange(n, dtype=float)
     wcol = df[weight].to_list() if weight else [1.0] * n
@@ -226,8 +232,10 @@ def row_plan(df, *, clock, gap_cap, half_life, weight, features):
         if not ok:
             continue
         accepted[i] = True
-        lam[i] = math.exp2(-(min(pending, gap_cap) / half_life))  # a capped total (S3)
         w[i] = float(wi)
+        if w[i] == 0.0:
+            continue
+        lam[i] = math.exp2(-(min(pending, gap_cap) / half_life))  # a capped total (S3)
         pending = 0.0
     return lam, w, accepted
 

@@ -133,30 +133,30 @@ class TestWeights:
     # point here, and the readiness notice says so.
     @pytest.mark.filterwarnings("ignore::rheon.ReadinessWarning")
     @pytest.mark.parametrize("model", ["ewridge", "ew_cov"])
-    def test_a_zero_weight_row_forgets_the_history_its_decay_takes(self, model):
-        """docs/PLAN.md task 115 (c), decided 2026-09-28 (§12 found it): a
-        zero-weight row advances the clock and learns nothing (hard rule 9), so
-        the history ages by the row's gap -- all of it where the decay factor
-        ``2^(-gap/h)`` underflows to exactly 0, from 1075 half-lives on. There
-        the mean-form update is 0/0 (``lam*W + w = 0``), and the guard used to
-        refuse it and keep the history un-aged, so the next row saw the old
-        count. Now the row is the decay alone, as one half-life short of it all
-        but is. `crates/rheon-core/tests/model_contract.rs` holds every model
-        to it."""
+    def test_a_zero_weight_row_leaves_the_history_to_the_next_row(self, model):
+        """docs/PLAN.md task 115 (c), decided 2026-09-28, under hard rule 9 as
+        task 539 restates it: a zero-weight row counts in no clock and learns
+        nothing, so it ages nothing, and the next row that counts ages the
+        history by the whole gap from the last row that counted -- all of
+        it where the decay factor ``2^(-gap/h)`` underflows to exactly 0,
+        from 1075 half-lives on, capped or not, where the mean-form update's
+        guard once kept the history un-aged. The zero-weight row's own gap
+        aged the history before task 539."""
         n0 = 40
 
-        def n_eff_after(gap: float, w: float, cap: float = 1e9) -> tuple[float, float]:
-            """``weight_sum`` at the zero-weight (or weighted) row and at the row after it."""
-            t = [*np.arange(float(n0)), n0 - 1 + gap, n0 + gap]
+        def n_eff_after(gap: float, w: float, cap: float = 1e9) -> tuple[float, float, float]:
+            """``weight_sum`` at the zero-weight (or weighted) row, the row a
+            unit after it and the row a unit after that."""
+            t = [*np.arange(float(n0)), n0 - 1 + gap, n0 + gap, n0 + 1 + gap]
             rng = np.random.default_rng(0)
-            x = rng.normal(size=(n0 + 2, 2))
+            x = rng.normal(size=(n0 + 3, 2))
             df = pl.DataFrame(
                 {
                     "t": t,
                     "x0": x[:, 0],
                     "x1": x[:, 1],
                     "y0": 2 * x[:, 0],
-                    "w": [1.0] * n0 + [w, 1.0],
+                    "w": [1.0] * n0 + [w, 1.0, 1.0],
                 }
             )
             kw = dict(features=["x0", "x1"], clock="t", weight="w", half_life=1.0, gap_cap=cap)
@@ -166,20 +166,18 @@ class TestWeights:
                 else rp.spec.ew_cov("m", **kw)
             )
             weight_sum = _f(_run(df, spec), "weight_sum")
-            return weight_sum[n0], weight_sum[n0 + 1]
+            return weight_sum[n0], weight_sum[n0 + 1], weight_sum[n0 + 2]
 
-        # Aged to nothing: the factor is positive, however small.
-        at, after = n_eff_after(1074.0, 0.0)
-        assert 1.9 < at < 2.0 and after < 1e-300, (at, after)
-        _, after = n_eff_after(5000.0, 0.0, cap=1000.0)
-        assert after < 1e-300, after
-        # Forgotten: the factor is 0, from 1075 half-lives on, capped or not.
-        for gap, cap in [(1075.0, 1e9), (5000.0, 1e9), (5000.0, 2000.0)]:
-            at, after = n_eff_after(gap, 0.0, cap)
-            assert 1.9 < at < 2.0 and after == 0.0, (gap, cap, at, after)
+        # The zero-weight row ages nothing: the row after it reads the weight
+        # it read. That row then ages the history by the whole gap, to
+        # nothing or to exactly 0, and the next reads that row's weight
+        # alone, before its own decay.
+        for gap, cap in [(1074.0, 1e9), (1075.0, 1e9), (5000.0, 1e9), (5000.0, 2000.0)]:
+            at, nxt, after = n_eff_after(gap, 0.0, cap)
+            assert 1.9 < at < 2.0 and nxt == at and after == 1.0, (gap, cap, at, nxt, after)
         # A weighted row on the same gap starts over.
-        _, after = n_eff_after(5000.0, 1.0, cap=2000.0)
-        assert after == 1.0, after
+        _, nxt, _ = n_eff_after(5000.0, 1.0, cap=2000.0)
+        assert nxt == 1.0, nxt
 
     def test_null_weight_skips_the_row(self):
         df = pl.DataFrame({"x0": [1.0, 2.0, 3.0], "y0": [1.0, 2.0, 3.0], "w": [1.0, None, 1.0]})

@@ -61,13 +61,18 @@ fn zero(i: usize) -> bool {
 /// on a zero row (300) and on a weighted one (340), each as a `Datetime`
 /// too (`tbs`), a session `s` of 40 rows, label times `lt` and `lts` a
 /// quarter step to three steps after each row, and a block key `g` for
-/// `rcov`.
+/// `rcov`. And `tn`, a number clock whose steps are not sums a double holds
+/// exactly (tenths, and a third), with `tbn` its step back and `ltn` its
+/// label times: a row of weight 0 whose time were carried into the next
+/// row's step as a sum would part from the stream without it in the last
+/// bits there, where the gap read once from the last row that counts does
+/// not.
 fn frame() -> DataFrame {
     let mut r = lcg(7);
-    let mut cols: [Vec<f64>; 9] = Default::default();
-    let [t, tb, x0w, x1w, y, yb, w, wb, lt] = &mut cols;
+    let mut cols: [Vec<f64>; 12] = Default::default();
+    let [t, tb, x0w, x1w, y, yb, w, wb, lt, tn, tbn, ltn] = &mut cols;
     let (mut x0, mut x1, mut lab, mut g, mut s) = (vec![], vec![], vec![], vec![], vec![]);
-    let mut clock = 0.0f64;
+    let (mut clock, mut odd) = (0.0f64, 0.0f64);
     for i in 0..N {
         if i > 0 {
             clock += if i == 260 {
@@ -77,6 +82,21 @@ fn frame() -> DataFrame {
             };
         }
         t.push(clock);
+        if i > 0 {
+            odd += if i == 260 {
+                7200.1
+            } else {
+                // No draw: the other columns keep theirs.
+                0.1 * ((i * 7919 % 7) + 1) as f64 + 1.0 / 3.0
+            };
+        }
+        tn.push(odd);
+        tbn.push(match i {
+            300 => odd - 2.5,
+            340 => odd - 3.0,
+            _ => odd,
+        });
+        ltn.push(odd + 0.7);
         // Steps back: 2.5 units at the zero row 300, 3 at the weighted 340.
         tb.push(match i {
             300 => clock - 2.5,
@@ -112,7 +132,8 @@ fn frame() -> DataFrame {
     let (ts, tbs, lts) = (ns(t), ns(tb), ns(lt));
     df!("t" => t.clone(), "ts" => ts, "tb" => tb.clone(), "tbs" => tbs, "x0" => x0,
         "x1" => x1, "y" => y.clone(), "yb" => yb.clone(), "lab" => lab, "w" => w.clone(),
-        "wb" => wb.clone(), "lt" => lt.clone(), "lts" => lts, "g" => g, "s" => s)
+        "wb" => wb.clone(), "lt" => lt.clone(), "lts" => lts, "g" => g, "s" => s,
+        "tn" => tn.clone(), "tbn" => tbn.clone(), "ltn" => ltn.clone())
     .unwrap()
 }
 
@@ -125,6 +146,8 @@ enum Clock {
     Number,
     /// `ts`, the same instants as a `Datetime`.
     Temporal,
+    /// `tn`, a number clock whose steps no double sums exactly.
+    Irregular,
 }
 
 impl Clock {
@@ -134,6 +157,7 @@ impl Clock {
             Clock::Rows => String::new(),
             Clock::Number => format!(r#", "clock": "{number}""#),
             Clock::Temporal => format!(r#", "clock": "{temporal}""#),
+            Clock::Irregular => format!(r#", "clock": "{number}n""#),
         }
     }
 
@@ -411,7 +435,9 @@ fn spec_text(name: &str, model: &str, rest: &str, clock: Clock) -> String {
                 .map_or(text.len(), |e| at + 14 + e);
             text.replace_range(at..end, "");
         }
-        (Clock::Number | Clock::Temporal, None) => text.push_str(r#", "gap_cap": @100"#),
+        (Clock::Number | Clock::Temporal | Clock::Irregular, None) => {
+            text.push_str(r#", "gap_cap": @100"#)
+        }
         _ => {}
     }
     // `@v`: a span of `v` clock units.
@@ -425,6 +451,7 @@ fn spec_text(name: &str, model: &str, rest: &str, clock: Clock) -> String {
     let label = match clock {
         Clock::Rows => String::new(),
         Clock::Number => r#", "label_clock": "lt""#.into(),
+        Clock::Irregular => r#", "label_clock": "ltn""#.into(),
         Clock::Temporal => r#", "label_clock": "lts""#.into(),
     };
     text = text.replace(" #label", &label);
@@ -678,7 +705,8 @@ fn a_zero_weight_row_counts_in_no_clock_on_every_kind() {
     let mut failures = Vec::new();
     let mut cases = 0;
     for (name, model, rest, clocks) in SPECS {
-        for &clock in *clocks {
+        let irregular = clocks.contains(&Clock::Number).then_some(Clock::Irregular);
+        for clock in clocks.iter().copied().chain(irregular) {
             let text = spec_text(name, model, rest, clock);
             let spec = spec_of(&text);
             cases += 1;
@@ -732,7 +760,7 @@ fn a_zero_weight_row_counts_in_no_clock_on_every_kind() {
         );
     }
     assert!(failures.is_empty() || audit);
-    assert!(cases > 90, "{cases} cases");
+    assert!(cases > 130, "{cases} cases");
 }
 
 /// Every clock works the same way (the user, 2026-11-21: "All clocks should

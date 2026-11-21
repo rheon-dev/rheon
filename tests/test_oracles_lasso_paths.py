@@ -36,6 +36,7 @@ import numpy as np
 import polars as pl
 import pytest
 
+from counted import counted, counts
 from reference_paths import lasso_paths_ref
 from rheon import polars as rp
 
@@ -103,7 +104,9 @@ def _stream(seed: int, n: int = 240, level: float = 2.0) -> pl.DataFrame:
 def _model_clock(df: pl.DataFrame) -> tuple[np.ndarray, np.ndarray]:
     """The clock the model is stepped on, whose steps ``gap_cap`` caps and a
     row skipped for a null feature folds into the next, and which rows are
-    skipped (each at the clock of the last row learned)."""
+    skipped (each at the clock of the last row learned), over the rows that
+    count: a row of weight 0 is in no clock (hard rule 9)."""
+    df = counted(df)
     dt = np.diff(df["t"].to_numpy(), prepend=0.0)
     skipped = df.select(pl.any_horizontal(pl.col(FEATURES).is_null())).to_series().to_numpy()
     clock, pending, last = np.zeros(df.height), 0.0, 0.0
@@ -141,7 +144,10 @@ def _fit(df: pl.DataFrame, **kw):
         max_iter=100_000,
         **kw,
     )
-    out = rp.ModelBank([spec]).fit_predict(df)["m"]
+    # A row of weight 0 counts in no clock (hard rule 9): the reference
+    # steps over the rows that count, and the bank's are held to it.
+    out = rp.ModelBank([spec]).fit_predict(df).filter(counts())["m"]
+    df = counted(df)
     n = df.height
     dc = np.zeros(n)
     dc[1:] = np.diff(df["t"].to_numpy())
@@ -162,6 +168,7 @@ def _held_to_the_reference(df, spec, out, ref, lam_selected=True, min_selected=1
     every held ``coef`` and, where asked, ``lam_selected`` on at least
     ``min_selected`` rows of each target; then two probes that the
     comparison can fail."""
+    df = counted(df)
     n, kt = df.height, len(ref["coef"][0, 0, 0])
     index = rp.spec.output_index(spec)
     y = df.select(TARGETS).to_numpy().astype(float)
@@ -341,8 +348,11 @@ class TestWindow:
         clock, skipped = _model_clock(df)
         bucket = np.floor(clock / 32.0)
         first = np.r_[True, bucket[1:] != bucket[:-1]] & ~skipped
+        # Back on the stream's rows: a row of weight 0 is on no clock.
+        on_rows = np.zeros(df.height, dtype=bool)
+        on_rows[df.select(counts()).to_series().to_numpy()] = first
         df = df.with_columns(
-            yc=pl.when(pl.Series(first)).then(-2.0 + 1.5 * pl.col("x3") - 0.4 * pl.col("x0"))
+            yc=pl.when(pl.Series(on_rows)).then(-2.0 + 1.5 * pl.col("x3") - 0.4 * pl.col("x0"))
         )
         spec, out, ref = _fit(
             df,

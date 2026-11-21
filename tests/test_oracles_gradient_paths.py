@@ -27,6 +27,7 @@ import numpy as np
 import polars as pl
 import pytest
 
+from counted import counted, counts
 from reference import ftrl_ref
 from reference_paths import holt_ref, pa_ref, sgd_ref
 from rheon import polars as rp
@@ -98,6 +99,9 @@ def _stream(seed: int, kind: str = "linear", dup: bool = False, n: int = 400) ->
 
 
 def _inputs(df):
+    # A row of weight 0 counts in no clock: the references step over the
+    # rows that count (hard rule 9), and the bank's are held to them.
+    df = counted(df)
     dc = np.zeros(df.height)
     dc[1:] = np.diff(df["t"].to_numpy())
     return (
@@ -166,7 +170,7 @@ class TestFtrl:
             min_weight=8.0,
             **kw,
         )
-        out = rp.ModelBank([spec]).fit_predict(df)["m"]
+        out = rp.ModelBank([spec]).fit_predict(df).filter(counts())["m"]
         ref = ftrl_ref(x, y, dc, w, min_weight=8.0, gap_cap=MAX_DCLOCK, **kw)
         # ftrl_ref reports the weights a row was scored with, the bank's
         # `coef` those after it, which the next row is scored with (below,
@@ -190,7 +194,7 @@ class TestFtrl:
             l1=1.0,
             coef_every=0,
         )
-        out = rp.ModelBank([spec]).fit_predict(df)["m"]
+        out = rp.ModelBank([spec]).fit_predict(df).filter(counts())["m"]
         ref = ftrl_ref(x, y, dc, w, gap_cap=MAX_DCLOCK, l1=1.0)
         accepted = np.flatnonzero(~np.isnan(ref["weight_sum"]))
         rows = out.struct.field("coef").to_list()
@@ -218,7 +222,7 @@ class TestPassiveAggressive:
             standardize=False,  # the oracle reads the features as they stand
             **given,
         )
-        out = rp.ModelBank([spec]).fit_predict(df)["m"]
+        out = rp.ModelBank([spec]).fit_predict(df).filter(counts())["m"]
         _held(out, pa_ref(x, y, dc, w, gap_cap=MAX_DCLOCK, **kw), y)
         assert (w > 1.0).any() and ((w > 0.0) & (w < 1.0)).any()
 
@@ -238,7 +242,7 @@ class TestPassiveAggressive:
             fit_intercept=False,
             **kw,
         )
-        out = rp.ModelBank([spec]).fit_predict(df)["m"]
+        out = rp.ModelBank([spec]).fit_predict(df).filter(counts())["m"]
         _held(out, pa_ref(x, y, dc, w, gap_cap=MAX_DCLOCK, fit_intercept=False, **kw), y)
 
 
@@ -284,7 +288,7 @@ class TestSgd:
             **kw,
             **_one_pass(loss),
         )
-        out = rp.ModelBank([spec]).fit_predict(df)["m"]
+        out = rp.ModelBank([spec]).fit_predict(df).filter(counts())["m"]
         _held(out, sgd_ref(x, y, dc, w, gap_cap=MAX_DCLOCK, **kw), y)
 
     def test_without_an_intercept(self):
@@ -303,7 +307,7 @@ class TestSgd:
             fit_intercept=False,
             **kw,
         )
-        out = rp.ModelBank([spec]).fit_predict(df)["m"]
+        out = rp.ModelBank([spec]).fit_predict(df).filter(counts())["m"]
         _held(out, sgd_ref(x, y, dc, w, gap_cap=MAX_DCLOCK, fit_intercept=False, **kw), y)
 
     @pytest.mark.parametrize(("schedule", "rate"), SCHEDULES, ids=[s for s, _ in SCHEDULES])
@@ -330,7 +334,7 @@ class TestSgd:
             fit_intercept=fit_intercept,
             **kw,
         )
-        out = rp.ModelBank([spec]).fit_predict(df)["m"]
+        out = rp.ModelBank([spec]).fit_predict(df).filter(counts())["m"]
         ref = sgd_ref(x, y, dc, w, gap_cap=MAX_DCLOCK, fit_intercept=fit_intercept, **kw)
         _held(out, ref, y)
         assert ref["clipped"] > 1000, f"the clip bound {ref['clipped']} times"
@@ -381,7 +385,7 @@ class TestTheUnstableRate:
         )
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            out = rp.ModelBank([spec]).fit_predict(df)["m"]
+            out = rp.ModelBank([spec]).fit_predict(df).filter(counts())["m"]
         ref = sgd_ref(x, y, dc, w, gap_cap=MAX_DCLOCK, **kw)
         reasons = out.struct.field("withheld_reason").cast(pl.String)
         gated = int((reasons == "unstable_rate").sum())
@@ -443,7 +447,7 @@ class TestStandardized:
             **kw,
             **_one_pass(loss),
         )
-        out = rp.ModelBank([spec]).fit_predict(df)["m"]
+        out = rp.ModelBank([spec]).fit_predict(df).filter(counts())["m"]
         ref = sgd_ref(
             x, y, dc, w, gap_cap=MAX_DCLOCK, standardize=True, fit_intercept=fit_intercept, **kw
         )
@@ -469,7 +473,7 @@ class TestStandardized:
             fit_intercept=fit_intercept,
             **given,
         )
-        out = rp.ModelBank([spec]).fit_predict(df)["m"]
+        out = rp.ModelBank([spec]).fit_predict(df).filter(counts())["m"]
         ref = pa_ref(
             x, y, dc, w, gap_cap=MAX_DCLOCK, standardize=True, fit_intercept=fit_intercept, **kw
         )
@@ -513,7 +517,7 @@ class TestStandardized:
         else:
             spec = rp.spec.pa("m", **common, **kw, **bounds)
             ref = pa_ref(x, y, dc, w, gap_cap=MAX_DCLOCK, standardize=True, **kw, **bounds)
-        out = rp.ModelBank([spec]).fit_predict(df)["m"]
+        out = rp.ModelBank([spec]).fit_predict(df).filter(counts())["m"]
         _held(out, ref, y)
 
 
@@ -585,7 +589,7 @@ class TestStandardizedOtherLosses:
             fit_intercept=fit_intercept,
             **kw,
         )
-        out = rp.ModelBank([spec]).fit_predict(df)["m"]
+        out = rp.ModelBank([spec]).fit_predict(df).filter(counts())["m"]
         ref = sgd_ref(
             x, y, dc, w, gap_cap=MAX_DCLOCK, standardize=True, fit_intercept=fit_intercept, **kw
         )
@@ -617,7 +621,7 @@ class TestStandardizedOtherLosses:
             fit_intercept=fit_intercept,
             **kw,
         )
-        out = rp.ModelBank([spec]).fit_predict(df)["m"]
+        out = rp.ModelBank([spec]).fit_predict(df).filter(counts())["m"]
         ref = sgd_ref(
             x, y, dc, w, gap_cap=MAX_DCLOCK, standardize=True, fit_intercept=fit_intercept, **kw
         )
@@ -656,7 +660,7 @@ class TestStandardizedOtherLosses:
             standardize=standardize,
             **kw,
         )
-        out = rp.ModelBank([spec]).fit_predict(df)["m"]
+        out = rp.ModelBank([spec]).fit_predict(df).filter(counts())["m"]
         ref = sgd_ref(x, y, dc, w, gap_cap=MAX_DCLOCK, standardize=standardize, **kw)
         _held(out, ref, y)
         bound = _on_a_bound(ref["coef"][~np.isnan(ref["weight_sum"])], bounds)
@@ -713,7 +717,7 @@ class TestSgdHuberScale:
                 **extra,
                 **_one_pass("huber"),
             )
-            return rp.ModelBank([spec]).fit_predict(df)["m"]
+            return rp.ModelBank([spec]).fit_predict(df).filter(counts())["m"]
 
         out = bank(**scale)
         ref = sgd_ref(x, y, dc, w, gap_cap=MAX_DCLOCK, standardize=standardize, **kw, **scale)
@@ -748,7 +752,12 @@ class TestHolt:
         a ``min_weight`` the gappy target's own weight falls under after
         its block of nulls."""
         df = _stream(5 if not dup else 6, kind="holt", dup=dup)
-        y = df.select(TARGETS).to_numpy().astype(float)
+        # The first row weighs 0 and counts in no clock: the first that
+        # counts, row 1, is given no `ya`, so that target starts after it.
+        df = df.with_columns(
+            ya=pl.when(pl.int_range(pl.len()) == 1).then(None).otherwise(pl.col("ya"))
+        )
+        y = counted(df).select(TARGETS).to_numpy().astype(float)
         spec = rp.spec.holt(
             "m",
             targets=TARGETS,
@@ -758,8 +767,9 @@ class TestHolt:
             coef_every=0,
             **kw,
         )
-        out = rp.ModelBank([spec]).fit_predict(df)["m"]
-        ref = holt_ref(y, df["t"].to_numpy(), df["w"].to_numpy(), gap_cap=MAX_DCLOCK, **kw)
+        out = rp.ModelBank([spec]).fit_predict(df).filter(counts())["m"]
+        kept = counted(df)
+        ref = holt_ref(y, kept["t"].to_numpy(), kept["w"].to_numpy(), gap_cap=MAX_DCLOCK, **kw)
         # On every row: before a target's first observation there is no
         # level, and the core's coef is null there, as docs/OUTPUTS.md says
         # (it was [0, 0]; docs/PLAN.md task 97).
@@ -767,4 +777,7 @@ class TestHolt:
         first = [int(np.argmax(~np.isnan(ref["coef"][:, j, 0]))) for j in range(len(TARGETS))]
         assert max(first) > 0, "some target should start after the first row"
         if dup:
-            assert np.isnan(ref["pred"][240:300, 1]).sum() > 10, "the gate should withhold"
+            # The stream's rows 240 to 300, among the rows that count.
+            at = np.flatnonzero(df.select(counts()).to_series().to_numpy())
+            span = (at >= 240) & (at < 300)
+            assert np.isnan(ref["pred"][span, 1]).sum() > 10, "the gate should withhold"

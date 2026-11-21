@@ -313,13 +313,17 @@ def coef_rows(out: pl.DataFrame) -> list[np.ndarray | None]:
 
 def solve_rows(coef: list[np.ndarray | None]) -> list[int]:
     """The rows a solve moved the fit on (``coef`` is written on every row
-    under ``coef_every=0`` and is the fit after the row)."""
-    return [
-        i
-        for i in range(1, len(coef))
-        if coef[i] is not None
-        and (coef[i - 1] is None or not np.array_equal(coef[i], coef[i - 1], equal_nan=True))
-    ]
+    under ``coef_every=0`` and is the fit after the row), each against the
+    last row that carries one: a row of weight 0 carries none (hard rule
+    9)."""
+    rows, last = [], None
+    for i, c in enumerate(coef):
+        if c is None:
+            continue
+        if i > 0 and (last is None or not np.array_equal(c, last, equal_nan=True)):
+            rows.append(i)
+        last = c
+    return rows
 
 
 @pytest.mark.parametrize("schedule", SCHEDULES.values(), ids=SCHEDULES.keys())
@@ -354,8 +358,11 @@ def test_solve_every_zero_is_a_row_cap_of_one(model, extra):
     read them (task 364), so ``coef`` and ``support_coef`` are null on those
     rows, where the explicit ``solve_every=0`` runs every solve."""
     df = relation_frame(n=600)
-    zero = relation_run(model, df, solve_every=0.0, **extra)
-    cap = relation_run(model, df, max_rows_between_solves=1, **extra)
+    # On the rows that count: a row of weight 0 is scored and carries no
+    # `coef` (hard rule 9).
+    zero = relation_run(model, df, solve_every=0.0, **extra).filter(pl.col("w") != 0.0)
+    cap = relation_run(model, df, max_rows_between_solves=1, **extra).filter(pl.col("w") != 0.0)
+    df = df.filter(pl.col("w") != 0.0)
     assert zero["pred_y"].is_not_null().sum() > 500
     if model != "ewridge":
         assert zero.equals(cap, null_equal=True)

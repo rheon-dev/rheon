@@ -227,7 +227,9 @@ class TestMahalOracle:
             d = 0.0 if prev_t is None else min(t[i] - prev_t, gap_cap)
             prev_t = t[i]
             pending += d
-            if accepted[i]:
+            # A row of weight 0 counts in no clock (hard rule 9): its time
+            # joins the next step, and it decays nothing.
+            if accepted[i] and w_col[i] != 0.0:
                 lam[i] = math.exp2(-(min(pending, gap_cap) / half_life))  # capped (S3)
                 pending = 0.0
         ww = np.array([0.0 if v is None else v for v in w_col])
@@ -911,7 +913,8 @@ class TestMahalQuantilesUnderWeightsAndAClock:
     """``mahal_q<p>`` promises the EW quantile of the past distances "at the
     model's half-life and each row's weight": a past score ``j`` weighs
     ``w_j * 2^(-(C - C_j) / half_life)``, ``C`` the clock summed in capped
-    steps, and a row of weight 0 is scored but joins no history. Held to
+    steps, and a row of weight 0 is scored but joins no history and no
+    clock. Held to
     that within the sketch's ``tanh(1/128)``, on an irregular clock with a
     gap past the cap and weights with zeros; and the reference is shown to
     see both, by the rows where an unweighted or a row-clock reference is
@@ -939,7 +942,17 @@ class TestMahalQuantilesUnderWeightsAndAClock:
         )
         out = rp.ModelBank([s]).fit_predict(frame(X, t=t, w=w))
         d = field(out, "mahal")
-        clock = np.cumsum(np.minimum(steps, cap))
+        # The clock summed in capped steps between the rows that count: a row
+        # of weight 0 is in no clock (hard rule 9), so each row reads the
+        # clock of the last row of positive weight at or before it.
+        clock = np.zeros(n)
+        last = None
+        for i in range(n):
+            if w[i] > 0.0:
+                clock[i] = 0.0 if last is None else clock[last] + min(t[i] - t[last], cap)
+                last = i
+            else:
+                clock[i] = 0.0 if last is None else clock[last]
         alpha = math.tanh(1 / 128)
         joined = np.isfinite(d) & (w > 0.0)
         checked = unweighted_off = row_clock_off = 0

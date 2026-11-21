@@ -131,12 +131,11 @@ def test_a_field_never_reads_its_own_row(switch):
 
 
 @pytest.mark.parametrize("switch", SWITCHES)
-def test_zero_weight_rows_only_advance_the_clock(switch):
+def test_zero_weight_rows_leave_no_trace(switch):
     """Rule 9: the stream opens on two rows of weight zero, which leave no
     trace -- the fields are those of the stream without them -- and no
-    field is NaN. They share row 2's clock: a diagnostic's readiness reads
-    how far the stream has settled, and the clock a row of weight zero
-    covers counts toward it (task 232 (1))."""
+    field is NaN. They share row 2's clock, and count in no clock (task
+    539)."""
     _, fields = SWITCHES[switch]
     df = _frame().with_columns(_HEADS_AT_ROW_2)
     spec = _spec(switch, clock="t", gap_cap=10.0)
@@ -317,13 +316,16 @@ def test_robust_se_is_chunk_invariant(memory):
     df = _frame()
     spec = _robust_spec(**({"robust_se_half_life": memory} if memory is not None else {}))
     whole = _run(df, spec).select(ROBUST)
-    assert whole["se_coef_hac"].drop_nulls().len() > 600, "the test reads values"
+    # A row of weight 0 is no row of the `coef` cadence (hard rule 9).
+    assert whole["se_coef_hac"].drop_nulls().len() > 550, "the test reads values"
     for chunk in (7, 600):
         got = _run(df, spec, chunk).select(ROBUST)
         assert got.equals(whole, null_equal=True), f"{chunk}-row chunks"
 
 
-def test_robust_se_zero_weight_rows_only_advance_the_clock():
+def test_robust_se_counts_no_zero_weight_row():
+    """Leading rows of weight 0 count in no clock (hard rule 9): the robust
+    standard errors after them are the stream's without them."""
     df = _frame().with_columns(_HEADS_AT_ROW_2)
     spec = _robust_spec(clock="t", gap_cap=10.0)
     out = _run(df, spec)
@@ -390,7 +392,8 @@ def test_robust_se_lags_default_to_the_horizons_twice_its_rows():
     a horizon of 3, and 6 lags, where ``ceil(2 * 2.5)`` read 5."""
     df = _frame()
     default = _run(df, _robust_spec(robust_se_lags=None, embargo=2.5))["se_coef_hac"]
-    assert default.drop_nulls().len() > 600, "the test reads values"
+    # A row of weight 0 is no row of the `coef` cadence (hard rule 9).
+    assert default.drop_nulls().len() > 550, "the test reads values"
     six = _run(df, _robust_spec(robust_se_lags=6, embargo=2.5))["se_coef_hac"]
     five = _run(df, _robust_spec(robust_se_lags=5, embargo=2.5))["se_coef_hac"]
     assert default.equals(six, null_equal=True)
