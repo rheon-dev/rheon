@@ -250,6 +250,8 @@ def _alarm_stats(make, gen, n: int, at: int | None, seeds: int, count_checks=Non
         "delay_p10": float(np.percentile(d, 10)),
         "delay_p90": float(np.percentile(d, 90)),
         "missed": missed,
+        "delay_max": float(np.max(d)),
+        "delays": delays,
     }
 
 
@@ -441,12 +443,12 @@ def cost(timed: int = 20_000) -> list[dict]:
         t_rv = _time_rows(rv, tail)
         out.append({"detector": "ADWIN", "W": W, "ours_us": t_ours * 1e6, "ours_clock1_us": t_ours1 * 1e6, "river_us": t_rv * 1e6})
         for r in (30, W // 10):
-            k = KSWIN(window_size=W, stat_size=r, seed=1)
+            k = KSWIN(window_size=W, stat_size=r, seed=1, alpha=0.0)  # alpha 0: never flags, every row a test
             for x in fill:
                 k.update(x)
             nt = 2_000 if r == 30 else max(100, 200_000 // W)
             t_k = _time_rows(k, tail[:nt])
-            kr = rdrift.KSWIN(window_size=W, stat_size=r, seed=1)
+            kr = rdrift.KSWIN(window_size=W, stat_size=r, seed=1, alpha=0.0)
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 for x in fill:
@@ -562,7 +564,8 @@ def adwin_drift_of_sums(offset: float, cap: int, rows: int, seed: int = 8) -> di
     s, v = _window_exact(xs[-w:])
     return {
         "offset": offset, "cap": cap, "rows": rows, "width": w,
-        "total_rel": float(abs(Fraction(det.total) - s) / abs(s)) if s else float(abs(Fraction(det.total) - s)),
+        "total_abs": float(abs(Fraction(det.total) - s)),
+        "total_rel": float(abs(Fraction(det.total) - s) / abs(s)),
         "var_rel": float(abs(Fraction(det.var) - v) / v),
         "var_per_row": float(v / w),
     }
@@ -592,22 +595,32 @@ def mean_forms(rows: int, offset: float, seed: int = 9) -> dict:
 
 
 def ph_sum_error(rows: int, seed: int = 10, alpha: float = 1.0) -> dict:
-    """Page-Hinkley's cumulative sum ``m_t`` against the exact sum of the same increments.
+    """Page-Hinkley's cumulative sum ``m_t`` against a more precise run of the same recursion.
 
-    Each row adds ``x_t - xbar_t - delta`` (``xbar_t`` as the detector holds it); with ``alpha = 1``
-    the reference is ``fsum`` of those increments, so the gap is the accumulation's rounding alone.
+    Each row adds ``x_t - xbar_t - delta`` (``xbar_t`` as the detector holds it, so the mean's own
+    rounding is left out). With ``alpha = 1`` the reference is ``fsum`` of those increments (exact,
+    rounded once); with ``alpha < 1`` it is the recursion in ``np.longdouble`` (x86-64's 64-bit
+    significand, 11 bits more than a double).
     """
     xs = data.real("none", rows, seed).tolist()
     det = PageHinkley(alpha=alpha, threshold=1e300)
     devs = []
     worst = 0.0
+    la = np.longdouble(alpha)
+    ld = np.longdouble(0.0)
+    dl = np.longdouble(det.delta)
     for i, x in enumerate(xs):
         det.update(x)
-        devs.append(x - det.mean)
-        if (i + 1) in (10**3, 10**4, 10**5, 10**6) or i + 1 == rows:
-            ref = math.fsum(devs + [-det.delta] * (i + 1))
+        dev = x - det.mean
+        if alpha == 1.0:
+            devs.append(dev)
+        else:
+            ld = la * ld + np.longdouble(dev) - dl
+        k = i + 1
+        if k in (10**3, 10**4, 10**5, 10**6) or k == rows:
+            ref = math.fsum(devs + [-det.delta] * k) if alpha == 1.0 else float(ld)
             worst = max(worst, abs(det.s_inc - ref))
-    return {"rows": rows, "final_m": det.s_inc, "worst_abs": worst, "rel_to_final": worst / abs(det.s_inc)}
+    return {"rows": rows, "alpha": alpha, "final_m": det.s_inc, "worst_abs": worst, "rel_to_final": worst / abs(det.s_inc)}
 
 
 def ddm_count_vs_recursive(rows: int = 1_000_000, seed: int = 12) -> dict:
@@ -622,3 +635,29 @@ def ddm_count_vs_recursive(rows: int = 1_000_000, seed: int = 12) -> dict:
         e += b
         worst = max(worst, ulps(p, e / n))
     return {"rows": rows, "max_ulps": worst, "final_ulps": ulps(p, e / n)}
+
+
+# The ADWIN delay the bound implies for a step at an exact split.
+
+def adwin_n1(delta: float, n0: int, dmu: float, sd0: float, bound: str, factor: float, L: float = 5.0) -> int:
+    """Smallest ``n1`` with ``|dmu| > factor * eps_cut`` for a split at the change (``n0`` rows before it).
+
+    ``factor = 2`` is Theorem 3.1's false-negative statement (the window shrinks with probability at
+    least ``1 - delta``); ``factor = 1`` is where the statistic's expected value first crosses the
+    threshold. The window's variance is the mixture's, ``sd0^2 + n0 n1 dmu^2 / (n0 + n1)^2``.
+    """
+    for n1 in range(1, 10**7):
+        width = n0 + n1
+        if bound == "hoeffding":
+            m_recip = 1.0 / n0 + 1.0 / n1
+            eps = math.sqrt(m_recip / 2.0 * math.log(4.0 * width / delta))
+        else:
+            if n1 < L:
+                continue
+            var = sd0 * sd0 + n0 * n1 * dmu * dmu / (width * width)
+            dp = math.log(2.0 * math.log(width) / delta)
+            m_recip = 1.0 / (n0 - L + 1.0) + 1.0 / (n1 - L + 1.0)
+            eps = math.sqrt(2.0 * m_recip * var * dp) + 2.0 / 3.0 * dp * m_recip
+        if abs(dmu) > factor * eps:
+            return n1
+    return -1

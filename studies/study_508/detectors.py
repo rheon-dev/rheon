@@ -573,9 +573,12 @@ class KSWIN:
         self.test = test
         self.draw = draw
         self.drift = False
-        self.crit = math.sqrt(-math.log(alpha) / stat_size)
         n, m = window_size - stat_size, stat_size
-        self.crit_all = math.sqrt(-0.5 * math.log(alpha / 2.0) * (n + m) / (n * m))
+        if alpha > 0.0:
+            self.crit = math.sqrt(-math.log(alpha) / stat_size)
+            self.crit_all = math.sqrt(-0.5 * math.log(alpha / 2.0) * (n + m) / (n * m))
+        else:  # never flags
+            self.crit = self.crit_all = math.inf
         self._reset()
 
     def _reset(self) -> None:
