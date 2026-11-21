@@ -444,8 +444,8 @@ and the gap to a `long double` run is 1.8e-11.
 **DDM.** The recursive rate and `errors / n` differ by up to 265 ulps over a
 million rows and by 75 at the end; DDM compares `p + s` to `p_min + k s_min`
 with gaps of order `s_min`, about 3e-4 at a million rows, so 265 ulps (about
-4e-15 at a rate of 0.1) cannot move a flag unless the two sides are equal to 14 digits, which
-they were in none of the runs.
+4e-15 at a rate of 0.1) can move a flag only where the two sides agree to
+about 14 digits; the two forms moved no flag in §2.
 
 **KSWIN's ties.** `D` is decided by `==` on the doubles, as scipy decides it,
 and `h` matched scipy's on every tied pair (1c). The exact p-value assumes
