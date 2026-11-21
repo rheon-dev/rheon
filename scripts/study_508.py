@@ -125,6 +125,15 @@ def main() -> None:
         rows,
     )
 
+    print("## 1c. The statistic D against scipy's, on samples with ties (300 pairs a row)\n")
+    rows = [
+        [r["na"], r["nb"], r["trials"], r["not_bit_equal"], r["max_ulps"], r["h_differ"]]
+        for r in compare.kswin_stat_gaps()
+    ]
+    table(
+        ["n old", "n new", "pairs", "D not bit-equal", "max ulps", "h = round(r D) differing"], rows
+    )
+
     print("## 2. The paper's forms where river departs from them (5 seeds x 10,000 rows)\n")
     rows = [
         [

@@ -882,3 +882,43 @@ def adwin_margins(seeds: int = 20, n: int = 10_000) -> dict:
             worst = min(worst, det.min_margin)
             tests += det.tests
     return {"tests": tests, "min_rel_margin": worst}
+
+
+def kswin_stat_gaps(trials: int = 300, seed: int = 1) -> list[dict]:
+    """The statistic ``D`` against ``scipy.stats.ks_2samp``'s, in ulps, on tied samples.
+
+    Equal sizes: ours is ``h / r`` (``h`` an integer count gap, one division). Unequal sizes (the
+    deterministic draw): ours is ``max |i/na - j/nb|``. scipy returns the difference of two
+    ``linspace`` values, ``k * (1/n)`` each, so its double can sit a few ulps from either.
+    """
+    from detectors import ks_h, ks_stat
+
+    rng = np.random.default_rng(seed)
+    out = []
+    for na, nb in ((30, 30), (50, 50), (100, 100), (300, 300), (70, 30), (970, 30)):
+        worst = 0
+        differ = 0
+        h_differ = 0
+        for _ in range(trials):
+            a = np.round(rng.standard_normal(na), 1).tolist()
+            b = np.round(rng.standard_normal(nb) + rng.uniform(0, 1), 1).tolist()
+            ours = ks_h(a, b) / na if na == nb else ks_stat(a, b)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                theirs = float(sstats.ks_2samp(a, b, method="exact").statistic)
+            if ours != theirs:
+                differ += 1
+                worst = max(worst, ulps(ours, theirs))
+            if na == nb and round(theirs * na) != ks_h(a, b):
+                h_differ += 1
+        out.append(
+            {
+                "na": na,
+                "nb": nb,
+                "trials": trials,
+                "not_bit_equal": differ,
+                "max_ulps": worst,
+                "h_differ": h_differ if na == nb else None,
+            }
+        )
+    return out
