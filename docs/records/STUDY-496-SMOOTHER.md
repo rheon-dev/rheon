@@ -1,16 +1,21 @@
-# Study 496: a fixed-lag smoother beside `kalman` (part 1 of 3)
+# Study 496: a fixed-lag smoother beside `kalman`
 
-Status: parts 1 and 2 done. Part 1: the recursion, its exactness, the k = 2
+Status: done (parts 1 to 3). Part 1: the recursion, its exactness, the k = 2
 comparison against statsmodels and filterpy, the out-of-sample check, cost and
-state size. Part 2 (sections 6 to 9, `scripts/study_496_part2.py`): k = 5 and
-20, exponential forgetting, zero-weight rows, cost and state at k = 5 and 20.
-Part 3 is not started.
+state size. Part 2 (sections 6 to 9): k = 5 and 20, exponential forgetting,
+zero-weight rows, cost and state at k = 5 and 20. Part 3 (sections 10 to 16):
+one script, the recursions and the emission rule restated, state and cost
+formulas, numerical risks, the oracles, and the proposed test tolerances from
+50 seeds at N = 10000.
 
-Script: `scripts/study_496.py` (Python and numpy only; seeded generators, no data
-files). `uv run python scripts/study_496.py` runs everything in about four
-minutes; `--quick` runs one seed at N = 2000 in about 20 seconds. Versions:
-numpy 2.5.5, scipy 1.18.1, statsmodels 0.15.0, filterpy 2.0.0 (installed into
-the dev venv for the study; it is not in `pyproject.toml`).
+Script: `scripts/study_496.py`, the single script for all three parts (Python
+and numpy only; seeded generators, no data files). `uv run python
+scripts/study_496.py --quick` runs every check of parts 1 and 2 and a one-seed
+tolerance table in about 50 seconds; without `--quick` it runs the recorded
+sizes; `--section <name>` (repeatable) runs chosen sections. Every section
+records pass/fail checks and the run exits 1 if any fails (section 10).
+Versions: numpy 2.5.5, scipy 1.18.1, statsmodels 0.15.0, filterpy 2.0.0
+(installed into the dev venv for the study; it is not in `pyproject.toml`).
 
 ## Question
 
@@ -318,12 +323,12 @@ delayed value.
 
 # Part 2: k = 5 and 20, forgetting, zero-weight rows, costs
 
-Script: `scripts/study_496_part2.py`, which imports part 1's data generator and
-summaries and generalizes the filter and the three forms (ring, full augmented,
-reduced augmented) to a forgetting factor and row weights. Each section runs on
-its own, every one under 30 seconds except `--section k` (about 75 seconds in
-all; no single table row over 19 seconds), which was run under `nohup` with a
-log: `uv run python scripts/study_496_part2.py --section k|forget|zero|cost`.
+Script: part 2 was written as `scripts/study_496_part2.py`, which generalized
+the filter and the three forms (ring, full augmented, reduced augmented) to a
+forgetting factor and row weights; part 3 merged it into `scripts/study_496.py`
+(sections `forms`, `forget`, `zero`, `cost` there) and deleted it. The
+generalized classes reduce to part 1's arithmetic bit for bit at `lam = 1` and
+unit weights, so part 1's sections now run on them.
 Same versions as part 1; same data (`x_t ~ N(0, I_k)`, `Q = q I`, `R = 1`,
 `P0 = 10 I`, seeds 0 to 4, N = 2000). The augmented form is run while
 `k(L+1) <= 600`, so not at k = 20, L = 100.
@@ -535,3 +540,301 @@ measured, and every byte count is the formula.
   state over `kalman`'s and would go to the user with these numbers before it
   lands; the ring as written (186 KB at k = 20, L = 100, mean and covariance,
   `L` solves a row) is the smallest state that still emits a covariance.
+
+# Part 3: one script, the recursions, state, cost, risks, tolerances
+
+## 10. The consolidated script
+
+`scripts/study_496.py` now holds parts 1 and 2: one filter (`filter_gen`, with
+forgetting and row weights), one full RTS (`full_rts_gen`), the batched ring
+(`ring_vec_gen`), the three streaming forms (`Ring`, with `cache_g`;
+`Augmented`; `Reduced`), the two library oracles (`sm_smoother`,
+`fp_smoother`) and nine sections: `full`, `exact`, `forms`, `contraction`,
+`oos` (part 1), `forget`, `zero`, `cost` (part 2, `exact`, `forms` and `cost`
+also covering k = 5 and 20) and `seeds` (part 3). Part 1's own classes were
+dropped: at `lam = 1` and `w = 1` the generalized ones do the same operations
+(`P / 1.0 + Q`, `R / 1.0`), and the full run reproduces every recorded
+number of sections 2, 3 and 6 to 8 to the printed digit (the timings of
+sections 5 and 9 aside), except the "ring stream vs vectorized" column at
+k = 2, which is now taken on seed 0 alone (8.1e-17 to 6.5e-16, was 1.4e-16 to
+6.5e-16 over five seeds).
+
+Each section records checks with a threshold, and the run exits 1 if one
+fails: the library comparisons below 1e-11 relative, the forms against each
+other below 1e-12, the streaming ring against its batched arithmetic below
+1e-13, the forgetting ring against the hand-written full RTS below 1e-13, the
+out-of-sample and zero-weight properties exactly (bit-identical where section
+4 or 8 says so), the gain products shrinking with L, the "all blocks / lam"
+foil differing by more than 1e-6 (the test has teeth), and the covariances'
+predicted gap RMS within a factor 0.7 to 1.4 of the measured one.
+
+| run | checks | wall time (4 cores) |
+|---|---|---|
+| `--quick` (one seed, N = 2000, prefix rows {L, 1999}, `lam` 0.99 only, the streaming ring where L <= 10 or k = 2, the augmented form where `k(L+1) <= 250`, a one-seed tolerance table at N = 2000) | 129 of 129 passed | 49 s |
+| sections `full` to `cost` at the recorded sizes | 151 of 151 passed | 195 s |
+| `--section seeds --seeds 50 --n 10000 --workers 3` (under `nohup`, logged) | 12 of 12 passed | 375 s |
+
+## 11. The recursions, together
+
+With a forgetting factor `lam` in (0, 1] (1: none) and row weights `w_t >= 0`:
+
+```text
+filter, row t:
+    P_{t|t-1} = P_{t-1|t-1} / lam + Q           (row 1: P_{1|0} = P0; mean unchanged)
+    pred_t    = x_t' b_{t|t-1}                  (before y_t)
+    if w_t > 0:
+        s_t = x_t' P_{t|t-1} x_t + R / w_t,  g_t = P_{t|t-1} x_t / s_t
+        b_{t|t} = b_{t|t-1} + g_t (y_t - pred_t),  P_{t|t} = P_{t|t-1} - g_t x_t' P_{t|t-1}
+    else:  b_{t|t} = b_{t|t-1},  P_{t|t} = P_{t|t-1}     (skipped, not a zero gain)
+```
+
+**(a) Ring (lag-L RTS).** State: the filter's `(b, P)` and `L` slots
+`(b_{s|s}, P_{s|s})` for `s = t-L .. t-1`, optionally with
+`G_s = P_{s|s} (P_{s|s} / lam + Q)^{-1}`, which is fixed once row `s` is
+filtered. After row `t`'s update:
+
+```text
+m <- b_{t|t},  V <- P_{t|t}
+for s = t-1 down to t-L:
+    P_{s+1|s} = P_{s|s} / lam + Q
+    m <- b_{s|s} + G_s (m - b_{s|s})
+    V <- P_{s|s} + G_s (V - P_{s+1|s}) G_s'
+emit for row t-L: (m, V);   then slot t mod L <- (b_{t|t}, P_{t|t}[, G_t])
+```
+
+**(b') Reduced augmented.** State: `a_j = E[beta_{t-j} | Y_t]` (j = 0..L),
+`C_j = cov(beta_{t-j}, beta_t | Y_t)` (j = 1..L, `k x k`, not symmetric),
+`D_j = cov(beta_{t-j} | Y_t)` (j = 1..L, symmetric), and `P = C_0 = D_0`.
+
+```text
+shift (row t > 1):  a_j <- a_{j-1},  C_j <- C_{j-1},  D_j <- D_{j-1}   (j = L down to 1)
+                    C_0 <- C_0 / lam + Q,  D_0 = C_0                    (head block only)
+update (w_t > 0):   h_j = C_j x_t,  s = x_t' h_0 + R / w_t,  e = y_t - x_t' a_0
+                    a_j += h_j e / s,  C_j -= h_j h_0' / s,  D_j -= h_j h_j' / s
+emit for row t-L:   (a_L, D_L)
+```
+
+The shift is a relabelling: stored as a ring of `L` slots it moves no memory.
+The full augmented form (b) is the same filter on the stacked state with its
+whole `k(L+1)` square covariance, and agrees with both to 1e-14 (sections 3, 6,
+7, 8); it is a check, not a candidate.
+
+**Emission rule.** Row `t` emits the value for row `t - L`, after row `t` is
+seen: the pair `E[beta_{t-L} | y_1 .. y_t]` and its covariance. Nothing from a
+row after `t` enters it. Both forms read only the filter's states up to `t`
+(or are a filter on rows up to `t`), and neither feeds anything back into the
+filter, so row `t`'s prediction is the plain filter's `x_t' b_{t|t-1}`, formed
+before `y_t`, bit for bit. Rows `t < L` emit nothing for an earlier row; the
+last `L` rows' values come only at a later row or an end-of-stream flush. The
+value on row `t`'s line depends on `y_t`, as a post-update coefficient does,
+and describes row `t - L`, so it must be named as row `t - L`'s value emitted
+at `t`. Section 4 holds every emission up to row 1000 bit-identical when the
+targets after row 1000 change, in all three forms and at every L.
+
+## 12. State size
+
+Floats are f64, 8 bytes. With `p = k + k(k+1)/2` (a mean and a symmetric
+covariance), the filter's own `(b, P)` is `8p = 4k(k+3)` bytes, and:
+
+| form | bytes | over the filter's own |
+|---|---|---|
+| (a) ring as written (`b`, `P` a slot) | `8 (L+1) p = 4 (L+1) k (k+3)` | `4 L k (k+3)` |
+| (a) ring with `G` cached | `8 (p + L (p + k²)) = 4k(k+3) + 12 L k(k+1)` | `12 L k (k+1)` |
+| (b') reduced augmented | `8 (k(L+1) + k(k+1)/2 + L (k² + k(k+1)/2))`, the same number | `12 L k (k+1)` |
+| (b) augmented, full (symmetric) | `8 (m + m(m+1)/2) = 4 m (m+3)`, `m = k(L+1)` | |
+| mean only: ring with `G`, no `P` slots | `8 (p + L (k + k²))` | `8 L k (k+1)` |
+
+The cached ring and the reduced form store the same count: the ring's slot is
+`(b_s, P_s, G_s)`, the reduced form's `(a_j, D_j, C_j)`.
+
+| k | L | filter alone | ring as written | ring, `G` cached | reduced | augmented (full) | reduced / filter |
+|---|---|---|---|---|---|---|---|
+| 2 | 1 | 40 | 80 | 112 | 112 | 112 | 3 |
+| 2 | 10 | 40 | 440 | 760 | 760 | 2,200 | 19 |
+| 2 | 100 | 40 | 4,040 | 7,240 | 7,240 | 165,640 | 181 |
+| 5 | 1 | 160 | 320 | 520 | 520 | 520 | 3 |
+| 5 | 10 | 160 | 1,760 | 3,760 | 3,760 | 12,760 | 24 |
+| 5 | 100 | 160 | 16,160 | 36,160 | 36,160 | 1,026,160 | 226 |
+| 20 | 1 | 1,840 | 3,680 | 6,880 | 6,880 | 6,880 | 4 |
+| 20 | 10 | 1,840 | 20,240 | 52,240 | 52,240 | 196,240 | 28 |
+| 20 | 100 | 1,840 | 185,840 | 505,840 | 505,840 | 16,345,840 | 275 |
+
+All are bounded by `k` and `L`, never by the stream's length. Per target: a
+bank with several targets of the same features holds one such state each.
+
+## 13. Cost per row
+
+Multiply-adds, leading terms (the filter's own `O(k²)` step excluded):
+
+| form | mean only | mean and covariance |
+|---|---|---|
+| (a) ring as written | `L (k³ solve + k²)` | `L (k³ solve + 2k³)` |
+| (a) ring, `G` cached | `L k²` (+ one `k³` solve a row) | `2 L k³` (+ one solve) |
+| (b') reduced | `2 L k²` (`h_j`, `C_j`) | `3 L k²` (and `D_j`) |
+| (b) augmented, full | `(k(L+1))²` | `(k(L+1))²` |
+
+The reduced form is the only one whose covariance costs `O(L k²)`; the ring's
+covariance pass is two `k x k` products per slot. Measured in Python (one
+interpreted step a row, so interpreter and numpy dispatch more than arithmetic;
+no figure for Rust), from the full run of section 10:
+
+| k | L | ring us/row | ring, `G` cached | augmented | reduced |
+|---|---|---|---|---|---|
+| 2 | 1 | 25 | 26 | 24 | 18 |
+| 2 | 10 | 131 | 145 | 28 | 29 |
+| 2 | 100 | 1537 | 689 | 159 | 25 |
+| 5 | 1 | 24 | 29 | 17 | 23 |
+| 5 | 10 | 153 | 106 | 28 | 24 |
+| 5 | 100 | 1603 | 694 | 1432 | 37 |
+| 20 | 1 | 40 | 39 | 21 | 22 |
+| 20 | 10 | 248 | 124 | 267 | 38 |
+| 20 | 100 | 2619 | 1074 | not run | 187 |
+
+The flop count at k = 20, L = 100 is about 120,000 multiply-adds a row for the
+reduced form with its covariance and about 1.6 million for the cached ring,
+against about 1,300 for the filter's own update: a factor near 100 on the
+per-row work of the filter for the cheaper form.
+
+## 14. Numerical risks
+
+- **The prior-dominated first rows.** While `P0` dominates, a lag-L estimate
+  built from a handful of rows can sit tens of posterior SDs from the full
+  smoother's (59 SD at k = 2, L = 1, q = 1e-5; up to 21 SD at k = 5 and 20 in
+  section 15's 50 seeds). This is the model being honest about a prior, not
+  rounding, but it rules out a gap tolerance over all rows: the tolerances below
+  are for rows 500 on, and the burn-in a test excludes must grow with the
+  smoother's memory (longer for larger k and smaller q).
+- **The gap grows with k.** One target informs each of k coefficients less per
+  row, so the memory is longer than `sqrt(R / q)` and the same L closes less
+  (L = 100, q = 1e-3: RMS 0.051, 0.057, 0.095 SD at k = 2, 5, 20). Rounding
+  grows with k and L too: the emitted value is within 4.4e-13 of the libraries
+  at k = 20, L = 100, against 2e-16 at k = 2, L = 1 (L backward steps through
+  `k x k` solves; filterpy inverts `P_{s+1|s}` explicitly).
+- **Small q.** The gains approach `I` (`G = P (P + Q)^{-1}`), so the gap
+  shrinks only as about `(1 - sqrt(q x² / R))^L`: at q = 1e-5 an L of 100 still
+  leaves 0.7 SD. The solve itself stays well conditioned (`P + Q` is as well
+  conditioned as `P`). The covariance pass forms `V - P_{s+1|s}`, a difference
+  of nearly equal matrices when `G` is near `I`; with q = 0 and `lam = 1`
+  (a fixed regression) every lag's value is the latest filtered one. The
+  in-stream gap estimate `P_{s|t} - P_{s|N}` is a difference of close numbers
+  and should be read as an order of magnitude below about 1e-8 relative.
+- **Symmetry and definiteness.** Neither `V` in the ring nor `D_j` in the
+  reduced form stays symmetric under rounding; the study symmetrizes on
+  emission and keeps `P` symmetric each row. Whether the square-root covariance
+  form the filter can run in carries over to the lag is not studied.
+- **Zero-weight rows** must skip the update (section 8): a zero gain times a
+  NaN target is NaN, and it would never wash out.
+- **Forgetting** inflates the head block only (section 7); dividing every block
+  by `lam` is a different model and differs by up to 0.1 relative in the
+  emitted means.
+
+## 15. Oracles used
+
+- statsmodels `KalmanSmoother` (time-varying `design`, `obs_cov` per row,
+  `state_cov` per row for forgetting, `y = NaN` for a zero-weight row,
+  `initialize_known(0, P0)`), run on each prefix `y_1 .. y_t` and read at
+  `t - L`.
+- filterpy `KalmanFilter.batch_filter(..., Hs=, Rs=, update_first=True)` and
+  `rts_smoother(..., Qs=)` (fading memory `alpha = 1/sqrt(lam)`, `z = None` for
+  a zero-weight row), on each prefix likewise.
+- A hand-written full RTS (`full_rts_gen`), checked against both libraries on
+  all rows to 6e-15, used for the gap to the full smoother and as the prefix
+  oracle under forgetting (bit-identical to the ring there).
+- Internal second derivations: the full augmented filter (a different
+  algorithm: a Kalman filter on the stacked state), the dropped stream with the
+  clock carried (zero-weight rows), the random-walk bridge midpoint, and
+  `G_0 b_{1|t}` for a zero-weight first row.
+- statsmodels' `UnobservedComponents` is not used: it has no regression on a
+  time-varying row.
+
+Largest relative difference of the emitted mean and covariance to each library
+on the prefix (q = 1e-3, seed 0, N = 2000, rows `t` in {L, 500, 1234, 1999}):
+
+| k | L | statsmodels | filterpy |
+|---|---|---|---|
+| 2 | 1 | 1.7e-16 | 2.2e-16 |
+| 2 | 10 | 3.6e-15 | 3.6e-15 |
+| 2 | 100 | 6.2e-15 | 7.1e-15 |
+| 5 | 1 | 2.8e-16 | 3.7e-16 |
+| 5 | 10 | 5.3e-15 | 3.2e-14 |
+| 5 | 100 | 1.5e-14 | 3.4e-14 |
+| 20 | 1 | 4.3e-16 | 3.1e-15 |
+| 20 | 10 | 1.5e-15 | 2.4e-14 |
+| 20 | 100 | 2.9e-13 | 4.4e-13 |
+
+A test against a library smoother on the prefix can therefore hold 1e-11
+relative at k <= 20, L <= 100 (23 times the largest seen), which is the
+script's threshold.
+
+## 16. The gap over 50 seeds, and the proposed test tolerances
+
+50 seeds (0 to 49) fitted the budget: 375 s on 3 processes, run under `nohup`
+with a log. N = 10000, `x_t ~ N(0, I_k)`, `Q = q I`, `R = 1`, `P0 = 10 I`. The
+gap is `|b_{s|s+L} - b_{s|N}| / sd_{s|N}`, the full smoother's posterior SD;
+"max" is over rows `s >= 500` (to `N - L - 1`) and the k coefficients of a seed.
+The tolerance is 1.5 times the max over seeds, rounded up to a multiple of
+0.05.
+
+| k | q | L | gap max, rows >= 500, max over 50 seeds (seed) | median over seeds | gap RMS, rows >= 500, worst seed | RMS predicted, worst seed | gap max, all rows | proposed tolerance (SD) |
+|---|---|---|---|---|---|---|---|---|
+| 5 | 0.01 | 1 | 5.35 (44) | 4.54 | 0.967 | 0.945 | 10.8 | 8.05 |
+| 5 | 0.01 | 10 | 2.91 (5) | 2.36 | 0.472 | 0.46 | 4.55 | 4.40 |
+| 5 | 0.01 | 100 | 0.0054 (37) | 0.00323 | 0.000355 | 0.000348 | 0.0054 | 0.05 |
+| 5 | 0.001 | 1 | 5.27 (21) | 4.07 | 1.02 | 0.978 | 20.6 | 7.95 |
+| 5 | 0.001 | 10 | 3.94 (21) | 3.14 | 0.783 | 0.751 | 9.35 | 5.95 |
+| 5 | 0.001 | 100 | 0.337 (33) | 0.269 | 0.057 | 0.0542 | 0.337 | 0.55 |
+| 20 | 0.01 | 1 | 7.81 (26) | 5.47 | 1.13 | 1.1 | 10.2 | 11.75 |
+| 20 | 0.01 | 10 | 4.58 (26) | 3.64 | 0.736 | 0.72 | 8.08 | 6.90 |
+| 20 | 0.01 | 100 | 0.0841 (24) | 0.0638 | 0.00838 | 0.0081 | 0.0841 | 0.15 |
+| 20 | 0.001 | 1 | 6.16 (37) | 4.79 | 1.07 | 1.04 | 19.7 | 9.25 |
+| 20 | 0.001 | 10 | 4.93 (37) | 3.86 | 0.865 | 0.835 | 17.8 | 7.40 |
+| 20 | 0.001 | 100 | 0.586 (46) | 0.484 | 0.0953 | 0.0915 | 0.625 | 0.90 |
+
+**PROPOSED TEST TOLERANCE** for the gap to the full smoother at rows 500 on,
+N = 10000, in posterior SD, per k and L (the larger over the two q; a test that
+runs one q can take that q's row above):
+
+| k | L | tolerance (SD) | binding q |
+|---|---|---|---|
+| 5 | 1 | 8.05 | 1e-2 |
+| 5 | 10 | 5.95 | 1e-3 |
+| 5 | 100 | 0.55 | 1e-3 |
+| 20 | 1 | 11.75 | 1e-2 |
+| 20 | 10 | 7.40 | 1e-3 |
+| 20 | 100 | 0.90 | 1e-3 (**open: the state rule**) |
+
+Read together:
+
+- These bound a maximum over about 10,000 k draws, so at L = 1 and 10 they are
+  extreme-value numbers (an RMS near 1 SD gives a max of 5 to 8 over the
+  47,500 to 190,000 row-coefficient draws of a seed), and they grow slowly with
+  N and k. A test at another N or
+  burn-in needs its own run; the script's `--seeds` and `--n` give it.
+- At small L the gap is the model's, not an error: the lag-1 value is a
+  different estimate with about twice the full smoother's variance, so a test of
+  L = 1 against the full smoother checks only that nothing is grossly wrong.
+  The sharp tests are the exactness on the prefix (1e-11 relative, section 15)
+  and the covariances' prediction of the gap's RMS (worst-seed RMS within 6 %
+  of the worst-seed prediction over the 50 seeds, above).
+- At L = 100 the gap is small and its tolerance is a real check (0.05 SD at
+  k = 5, q = 1e-2).
+- **k = 20, L = 100 is the state rule's decision, which remains open.** The
+  tolerance (0.90 SD; 0.15 at q = 1e-2) is proposed for the case it would test,
+  but the state it needs, 505,840 bytes a target for either the reduced form
+  or the ring with `G` cached (185,840 for the ring as written, which solves
+  `L` systems a row), is 275 times the filter's own 1,840 bytes and is
+  "significant growth" under the state rule: it goes to the user with these
+  numbers before any lag that large lands at that k. Nothing here decides it;
+  smaller `L` or `k` (36 KB at k = 5, L = 100; 52 KB at k = 20, L = 10) is the
+  same question at a smaller size.
+
+## Still open after part 3
+
+The filter's other paths and whether each commutes with the lag: learned noise
+(the noise scale changes `P`'s units mid-stream), the diffuse intercept,
+standardized coordinates and their re-anchoring, reverting slots (`Phi != I`:
+`P_{s+1|s} = Phi P Phi' + Q` and `G = P Phi' P_{s+1|s}^{-1}`), clock gaps
+(section 8's dropped stream is the evidence that a gap enters as `Q` per clock
+unit), several targets, and the square-root covariance form. Also chunk
+invariance of the ring (it holds per row, so it should be exact), the output
+naming of the delayed value, and the end-of-stream flush.
