@@ -194,6 +194,4 @@ class ClockLag:
         ts = struct.unpack_from(f"<{m}q", data, 8)
         vs = struct.unpack_from(f"<{m}d", data, 8 + 8 * m)
         bits = data[8 + 16 * m :]
-        self.rows = deque(
-            (ts[j], vs[j] if bits[j // 8] >> (j % 8) & 1 else None) for j in range(m)
-        )
+        self.rows = deque((ts[j], vs[j] if bits[j // 8] >> (j % 8) & 1 else None) for j in range(m))

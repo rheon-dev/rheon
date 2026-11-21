@@ -595,7 +595,10 @@ def part4(quick: bool) -> None:
 
 
 def part5(quick: bool) -> None:
-    print("### Table L5: where the lag size checks cross, per group (cap 256 KB = 262144 bytes, warn at 131072)\n")
+    print(
+        "### Table L5: where the lag size checks cross, per group "
+        "(cap 256 KB = 262144 bytes, warn at 131072)\n"
+    )
     print(
         "The count at the threshold is the largest the state allows at or under it; "
         "the bytes are read from `to_bytes()` of a real state at that count and one "
@@ -620,7 +623,12 @@ def part5(quick: bool) -> None:
     print("### Table L6: the clock lag's saved bytes by rows held (one column, nulls included)\n")
     print(
         md(
-            ["rows held", "saved bytes", "8 + 16 m + ceil(m/8)", "bytes added per row (difference)"],
+            [
+                "rows held",
+                "saved bytes",
+                "8 + 16 m + ceil(m/8)",
+                "bytes added per row (difference)",
+            ],
             rchk.held_row_bytes(),
         )
     )
@@ -628,7 +636,13 @@ def part5(quick: bool) -> None:
     print("### Table L7: 4 columns x 1000 groups, at each threshold\n")
     print(
         md(
-            ["threshold", "row lag k", "bank state (1000 groups)", "clock lag rows", "bank state (1000 groups)"],
+            [
+                "threshold",
+                "row lag k",
+                "bank state (1000 groups)",
+                "clock lag rows",
+                "bank state (1000 groups)",
+            ],
             rchk.example_totals(),
         )
     )
@@ -670,7 +684,12 @@ def part5(quick: bool) -> None:
         )
     )
     print()
-    print(md(["piece (ns a row, loop overhead taken off)", "ns"], rchk.comparison_cost(500_000 if quick else 2_000_000)))
+    print(
+        md(
+            ["piece (ns a row, loop overhead taken off)", "ns"],
+            rchk.comparison_cost(500_000 if quick else 2_000_000),
+        )
+    )
     print()
     print("### Table L10: the threshold tests (`studies/study_532b/test_lag_checks.py`)\n")
     print(md(["test", "result"], rchk.test_results()))

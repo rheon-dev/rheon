@@ -41,11 +41,11 @@ def test_row_thresholds_are_exact_boundaries() -> None:
     # the packed state measured at the boundary, not only the formula
     k = max_row_k(CAP)
     st = Lag("shift", k)
-    for i in range(k + 1):
+    for _ in range(k + 1):
         st.step(1.0)
     assert len(st.to_bytes()) <= CAP
     st = Lag("shift", k + 1)
-    for i in range(k + 2):
+    for _ in range(k + 2):
         st.step(1.0)
     assert len(st.to_bytes()) > CAP
 
@@ -101,7 +101,9 @@ def _stream(n: int, seed: int = 1, step: int = 3):
     rng = np.random.default_rng(seed)
     t = np.cumsum(rng.integers(1, step + 1, n))
     x = rng.standard_normal(n)
-    return t.tolist(), [None if r < 0.05 else float(v) for r, v in zip(rng.random(n), x, strict=True)]
+    return t.tolist(), [
+        None if r < 0.05 else float(v) for r, v in zip(rng.random(n), x, strict=True)
+    ]
 
 
 def _reference(ts, xs, d):

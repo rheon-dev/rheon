@@ -7,13 +7,14 @@ proposed here. This study asks what can stand in for a rolling statistic with
 a state bounded by the feature's shape alone: (1) a time span cut into `B`
 fixed buckets of the clock, each bucket holding a few sums, never a row;
 (2) the exponentially weighted forms, including a decayed min and max
-envelope; (3) lags, which cannot be windowless, and how to serve them anyway.
+envelope; (3) lags, which cannot be windowless: their exact state, and the size
+checks that keep it under the per-group cap.
 
 numpy, scipy and Python only, against Polars 2.0.0 (the version `uv.lock`
 pins); nothing in the crates is changed. Code: `studies/study_532b/`
 (`bucket.py`, `ew.py`, `lag.py` the states; `runs_*.py` the checks;
 `exact.py` the exact references; `report.py` the tables). Entry point:
-`python scripts/study_532b.py` (75 s; `--quick`, `--part=N`).
+`python scripts/study_532b.py` (78 s; `--quick`, `--part=N`).
 Every table below is its output.
 
 ## Answer
@@ -101,9 +102,8 @@ Every table below is its output.
    outputs are the last `k` values, any f64 each, so the state determines
    `8k` bytes). The state equals Polars' `shift`, `diff`, `pct_change` to the
    bit (Table L1) and saves `8 + 8k + ceil(k/8)` bytes: 17, 49 and 171 for
-   `k = 1, 5, 20` (Table L2). **Recommended: the bank keeps no lag; a lag is an
-   input column the user computes with Polars before the bank.** See "Lags"
-   below for the trade-off and the cost of each way.
+   `k = 1, 5, 20` (Table L2). The bank keeps exact lags; "Lag size checks"
+   (Tables L5 to L10) gives the size checks that go with them.
 9. **Chunk and resume invariance** (Table R1): 21 features, every state saved
    to bytes and loaded at every cut, cut into 2, 17, ~300 chunks and after
    every row: all 21 equal the uncut stream to the bit, and the 18 with a
@@ -114,6 +114,14 @@ Every table below is its output.
     outputs (the read combines `B` buckets: 3.8 us at `B = 4`, 48 us at 240).
     Polars takes 11 to 17 ns for the EW features and 51 to 70 ns for the five
     `rolling_*_by` over the same span.
+11. **Lag size checks** (Tables L5 to L10, section "Lag size checks"). A row
+    lag of `k` is `8 + 8k + ceil(k/8)` bytes a column and group, so the check
+    runs at the call: one column crosses 128 KB at `k = 16130` and the 256 KB
+    cap at `k = 32262`; 4 columns at 4032 and 8064. A clock lag holds
+    `16 + 1/8` bytes per held row per column (a time, a value, a validity
+    bit; 8 bytes of header), so it crosses 128 KB at 8128 rows and 256 KB at
+    16256 for one column, 2031 and 4063 for 4. The clock check runs on every
+    row and adds 26 to 34 ns to a step of 230 to 260 ns (Python).
 
 ## Definitions
 
@@ -209,32 +217,31 @@ Polars itself would compute on the same OS.
 
 Study 532's `Lag`: the last `k` values with their validity, and how many rows
 were seen up to `k`; `shift`, `diff = x - x_{-k}`,
-`pct_change = (x - x_{-k}) / x_{-k}`.
+`pct_change = (x - x_{-k}) / x_{-k}`. The clock lag of `D` time units
+(`ClockLag`, `lag_checks.py`) is the value of the latest row at or before
+`t - D`, null until there is one; it holds the rows in `(t - D, t]` and that
+one anchor row, so how many is the data's.
 
 ## Lags: can they be served with no row in the bank?
 
-Not by the bank: any state that serves a lag of `k` determines the last `k`
-values, so it is at least `8k` bytes, and the ring above is that plus a few
-bytes. The ways to serve a lag with the bank keeping nothing all move the `k`
-values somewhere else:
+No: any state that serves a lag of `k` determines the last `k` values, so it
+is at least `8k` bytes, and the ring above is that plus a few bytes. The
+bank keeps exact lags (the user's decision, after this study first
+recommended otherwise; see "Lag size checks"). For reference, the other ways
+to get the same values all move the `k` values somewhere else, and Tables L3
+and L4 measure what they cost:
 
 | way | exact | bank state | who holds the `k` values | cost |
 |---|---|---|---|---|
-| the bank keeps a lag state | yes, chunk and resume invariant (Table R1) | `8 + 8k + ceil(k/8)` bytes a column and group (17, 49, 171) | the bank | a window of `k` rows in the state, which the user's rule excludes |
+| the bank keeps a lag state | yes, chunk and resume invariant (Table R1) | `8 + 8k + ceil(k/8)` bytes a column and group (17, 49, 171) | the bank | `8k` bytes a column and group, checked against the per-group cap (Tables L5 to L10) |
 | the user lags with Polars `shift(k).over(g)` over the whole frame before the bank (one `LazyFrame` plan) | yes | none | Polars | Polars holds the frame for `over`: about 50 bytes a row measured, 2.2 GB at 40M rows (Table L4); no bound by `k` |
 | the user lags each chunk before the bank, carrying the last `k` rows of each group to the next chunk | yes, to the bit (Table L3) | none | the user's loop (`k` rows a group) | the user writes the carry; forgetting it gives wrong lags at every chunk start (up to 14274 of 20000 rows for `k = 20` and 300 chunks, Table L3) and breaks chunk invariance silently |
 | the lag is a column of the source, computed once offline | yes | none | the source | an offline pass sorted by group; a lag fixed at write time |
 | a windowless substitute: the value's deviation from its EW mean before the update, `x - m_prev` | not a lag | the EW mean's 32 bytes | nobody | a different feature: a decayed "change" with no fixed horizon |
 
-**Recommendation: the bank keeps no lag.** Lags enter the bank as input
-columns: written as `shift(k).over(g)` in the frame the bank reads when it
-fits (Polars computes them exactly), and precomputed in the source when it
-does not. A chunk-fed caller carries the last `k` rows a group itself, and the
-bank's documentation must show that carry, because a lag computed chunk by
-chunk without it is wrong at every chunk start and nothing fails. If a
-chunk-fed lag inside the bank is wanted after all, the lag state above is the
-smallest that can exist (`8k` bytes plus 9 for `k <= 8`), and it is the user's
-call as an exception to the no-window rule.
+Of these, only the first keeps a chunk-fed stream correct with no work by the
+caller: a lag computed chunk by chunk without the carry is wrong at every
+chunk start and nothing fails (Table L3).
 
 ## Results
 
@@ -522,7 +529,8 @@ Rows that differ from one Polars pass of `shift(k).over("g")`: each chunk lagged
 ## State bytes as formulas
 
 Per group and per input column; no row of the stream is stored by any feature
-below except the lag, whose `k` values are the lag itself.
+below except the lags, whose `k` values (or the rows of the last `D` time
+units) are the lag itself.
 
 | feature | saved bytes | examples | grows with |
 |---|---|---|---|
@@ -532,6 +540,7 @@ below except the lag, whose `k` values are the lag itself.
 | `ewm_mean_by` | 25 | | nothing |
 | max or min envelope, decayed max (`r` carried) | 17 | | nothing |
 | lag `k` (`shift`, `diff`, `pct_change`) | `8 + 8k + ceil(k/8)`, lower bound `8k` | `k = 1`: 17; 5: 49; 20: 171 | `k` |
+| clock lag, `m` rows held | `8 + 16 m + ceil(m/8)` | `m = 1000`: 16133 | the rows in the last `D` time units |
 
 For `c` columns and `G` groups multiply by `c G` (the bucketed id once per
 group): `B = 12`, 10 columns, 1000 groups: 5.8 MB; the EW features: 0.3 to
@@ -621,6 +630,189 @@ the trade between Table B4's edge gap and this.
   Polars'; a later Polars that changes one of them moves the sum and variance
   gaps or breaks the EW bit-equality, which a test against the pinned Polars
   catches.
+
+
+## Lag size checks
+
+The first version of this record recommended that the bank keep no lag and
+that the user compute `shift` with Polars before it. **That recommendation is
+withdrawn: the user keeps exact lags in the bank**, so the lag text above
+(the Answer's item 8, the section "Lags: can they be served with no row in
+the bank?") no longer argues it, and no Polars-shift option is proposed. What
+the bank needs instead is a check that a lag's state stays under the
+per-group cap (256 KB by default): refused above it, warned above half of it
+(128 KB). Code: `studies/study_532b/lag_checks.py`; the tables are part 5 of
+`scripts/study_532b.py` (`--part=5`, 4 s); the tests are
+`studies/study_532b/test_lag_checks.py`, also printed as Table L10.
+
+**The two lags.**
+
+- **(A) Row lag of `k`** (the value `k` rows back). The bytes are known at the
+  call: `columns x (8 + 8k + ceil(k/8))` for one group (Table L2 measured the
+  formula at `k = 1, 5, 20`; Table L5 reads `to_bytes()` of a real state at
+  each threshold). The call is refused when that exceeds the cap and warned
+  when it exceeds half of it. "Exceeds" is strict: a state exactly at a
+  threshold passes it (tested).
+- **(B) Clock lag of `D` time units** (the value of the latest row at or
+  before `t - D`; one day is `D = 86400` for a clock in seconds). The rows
+  held are those in the last `D` and one anchor, so the size depends on the
+  data and the check runs as the stream goes: after each row it compares the
+  rows held with two counts worked out once from the byte formula. It warns
+  once, the first time the state is over half the cap, and refuses at the row
+  that would take it over the cap (the row is not kept, so the state saved
+  stays under the cap). The refusal says what the lag would hold and points
+  to a bucketed approximation of the lag (one value per fixed time bucket, a
+  state that does not grow with the rows; PLAN task 536 tracks it). The
+  message text describes that mechanism and cites no plan section or task:
+
+  > a lag of 86400 time units on the clock holds every row of that span, and
+  > this group's lag state would reach 262153 bytes at 16257 rows, over the
+  > 262144-byte per-group cap; use a bucketed approximation of the lag (one
+  > value per fixed time bucket, a state that does not grow with the number
+  > of rows)
+
+**Bytes per held row per column (the clock lag): 16 + 1/8, that is 16.125.**
+A held row is a time (i64, 8 bytes) and a value (f64, 8 bytes), and a
+validity bit for the value (a null is a row with no value; a zero-weight row
+is one); plus 8 bytes of header (the count and a pad) once. Measured on the
+saved bytes of real states (`ClockLag.to_bytes()`), by differences between
+consecutive sizes of 0, 1, 8, 9, ... 16256 rows (Table L6): 25 bytes at one row, 16133
+at 1000, 262136 at 16256, with nulls in the data; the formula agrees at every
+size. Every column of a group holds its own rows (its own times too), so 4
+columns hold 4 times the bytes: the study counts them so, and the run in
+Table L8 feeds one column and multiplies. These are this study's packed
+struct, as everywhere in this record (the note under Table B5); the real
+saved form is msgpack, which writes an f64 as 9 bytes and an integer time as
+1 to 9, so the real bytes are higher and the real thresholds lower than
+these, by an amount this study did not measure (a row lag of `k` is then
+about `9k` bytes, not `8k`). The thresholds
+below must be recomputed from the real format's bytes, and the code that
+checks should read them from the saved size, not from this formula.
+
+**Thresholds worked out** (1 KB = 1024 bytes; 128 KB = 131072, 256 KB =
+262144; with 1000-byte kilobytes every count moves by 2.4%). For one group:
+
+| | 1 column | 4 columns |
+|---|---|---|
+| row lag `k` at 128 KB (warn) | 16130 | 4032 |
+| row lag `k` at 256 KB (refuse above) | 32262 | 8064 |
+| clock lag, rows held at 128 KB (warn above) | 8128 | 2031 |
+| clock lag, rows held at 256 KB (refuse above) | 16256 | 4063 |
+
+With 4 columns and 1000 groups the bank's lag state at the 256 KB threshold
+is 262 MB for either lag (Table L7): the cap is per group, so the bank's
+total is the cap times the groups, which is a separate decision for the
+user. In rows of a day (Table L8): a clock of seconds and one row every 10 s
+holds 8641 rows a day, 139345 bytes for one column, warned (over 128 KB) and
+under the cap; one row every 5 s holds 17281, 278665 bytes, refused at the
+16257th row held; with 4 columns one row every 15 s, 5761 rows held, is
+already refused, at row 4064.
+
+**Per-row cost of the running check (Python, Table L9).** The lag's own step
+(append, evict the rows now older than the anchor, read the output) takes
+230 to 260 ns a row. The check adds one comparison of the rows held with a
+row count, after the append: 26 to 34 ns on the step, 11 to 13% (25 to 41 ns over four runs; the
+comparison alone, `if len(rows) > m_warn`, 14 to 16 ns in a bare loop; the
+rest is the attribute reads and the `cap is not None` test of this
+implementation). The eviction test alone, with nothing to evict, is about 33
+ns; it is part of the lag, not of the check, and is the part that moves with
+the data (an eviction runs when rows leave the window, one a row on average
+at steady state). The check's cost does not move with the rows held
+beyond noise (103, 3023 and 12000 rows: 26, 33, 34 ns in the run printed). After the warning the comparison is against the cap, so
+a stream above half the cap pays the same. Each timed run is under 1 s
+(best of 11, 300000 rows). These are Python's costs on this machine; no
+Rust check was built or timed.
+
+**Limits of the measurement.** The tests cover the logic of the thresholds
+(exact boundaries, equality at a threshold, warn once, the refused row not
+kept, a burst that passes, no plan reference in any message) and a mutation
+of either strictness fails one; they do not test a Rust implementation. The
+day-lag runs use one row at a fixed interval (Table L8); a stream with
+bursts holds more rows in some days than its average says, which is why the
+check runs on the stream and not on the rate. The row counts above for one
+day assume the lag is declared per column; if columns share the times, a
+column added costs 8 bytes a held row, not 16, and the 4-column threshold
+rows move up (not built). The clock lag's definition (the latest row at or
+before `t - D`) is a choice; a definition without the anchor row holds one row
+fewer.
+
+### Table L5: where the lag size checks cross, per group (cap 256 KB = 262144 bytes, warn at 131072)
+
+The count at the threshold is the largest the state allows at or under it; the bytes are read from `to_bytes()` of a real state at that count and one past it (columns times one column's bytes).
+
+| columns | lag | count at 128 KB | bytes there | bytes one past | count at 256 KB | bytes there | bytes one past |
+|---|---|---|---|---|---|---|---|
+| 1 | row lag, k | 16130 | 131065 | 131073 | 32262 | 262137 | 262145 |
+| 1 | clock lag, rows held | 8128 | 131072 | 131089 | 16256 | 262136 | 262153 |
+| 4 | row lag, k | 4032 | 131072 | 131108 | 8064 | 262112 | 262148 |
+| 4 | clock lag, rows held | 2031 | 131032 | 131096 | 4063 | 262096 | 262160 |
+
+### Table L6: the clock lag's saved bytes by rows held (one column, nulls included)
+
+| rows held | saved bytes | 8 + 16 m + ceil(m/8) | bytes added per row (difference) |
+|---|---|---|---|
+| 0 | 8 | 8 |  |
+| 1 | 25 | 25 | 17.000 |
+| 8 | 137 | 137 | 16.000 |
+| 9 | 154 | 154 | 17.000 |
+| 100 | 1621 | 1621 | 16.121 |
+| 1000 | 16133 | 16133 | 16.124 |
+| 10000 | 161258 | 161258 | 16.125 |
+| 16256 | 262136 | 262136 | 16.125 |
+
+### Table L7: 4 columns x 1000 groups, at each threshold
+
+| threshold | row lag k | bank state (1000 groups) | clock lag rows | bank state (1000 groups) |
+|---|---|---|---|---|
+| 128 KB | 4032 | 131.1 MB | 2031 | 131.0 MB |
+| 256 KB | 8064 | 262.1 MB | 4063 | 262.1 MB |
+
+### Table L8: a clock lag of one day (86400 s) on streams of one row per interval, the check run on the stream (two days, or until refused)
+
+| rate | columns | rows held at steady state | bytes | first row warned | first row refused | verdict |
+|---|---|---|---|---|---|---|
+| 1 row / 60 s | 1 | 1441 | 23245 |  |  | ok |
+| 1 row / 60 s | 4 | 1441 | 92980 |  |  | ok |
+| 1 row / 15 s | 1 | 5761 | 92905 |  |  | ok |
+| 1 row / 15 s | 4 | 5761 | 371620 | 2032 | 4064 | refused |
+| 1 row / 10 s | 1 | 8641 | 139345 | 8129 |  | warned |
+| 1 row / 10 s | 4 | 8641 | 557380 | 2032 | 4064 | refused |
+| 1 row / 8 s | 1 | 10801 | 174175 | 8129 |  | warned |
+| 1 row / 8 s | 4 | 10801 | 696700 | 2032 | 4064 | refused |
+| 1 row / 5 s | 1 | 17281 | 278665 | 8129 | 16257 | refused |
+| 1 row / 5 s | 4 | 17281 | 1114660 | 2032 | 4064 | refused |
+| 1 row / 1 s | 1 | 86401 | 1393225 | 8129 | 16257 | refused |
+| 1 row / 1 s | 4 | 86401 | 5572900 | 2032 | 4064 | refused |
+
+### Table L9: per-row cost of the running check (best of 11 over 300000 rows of one group, off and on alternating; ns a row of `ClockLag.step`, Python 3.13)
+
+| rows held | step, check off (append + eviction) | step, check on | the check adds | relative |
+|---|---|---|---|---|
+| 103 | 232 | 258 | 26 | 11% |
+| 3023 | 252 | 285 | 33 | 13% |
+| 12000 | 255 | 289 | 34 | 13% |
+
+| piece (ns a row, loop overhead taken off) | ns |
+|---|---|
+| empty loop | 10.7 |
+| size comparison, `if len(rows) > m_warn` | 13.9 |
+| eviction test with nothing to evict, `while len(rows) > 1 and rows[1][0] <= edge` | 34.8 |
+
+### Table L10: the threshold tests (`studies/study_532b/test_lag_checks.py`)
+
+| test | result |
+|---|---|
+| test_a_burst_that_passes_is_not_refused | pass |
+| test_a_size_exactly_at_a_threshold_passes_it | pass |
+| test_clock_bytes_equal_the_saved_state_and_bound_the_rows | pass |
+| test_clock_check_warns_at_half_and_refuses_at_the_cap | pass |
+| test_clock_lag_is_the_latest_row_at_or_before_the_edge | pass |
+| test_clock_thresholds_are_exact_boundaries | pass |
+| test_messages_cite_no_plan | pass |
+| test_more_columns_cross_sooner | pass |
+| test_row_bytes_equal_the_saved_state | pass |
+| test_row_thresholds_are_exact_boundaries | pass |
+| test_row_verdicts | pass |
 
 ## Sonnet rerun (2026-11-21)
 

@@ -205,7 +205,10 @@ def comparison_cost(n: int = 2_000_000) -> list[list]:
     return [
         ["empty loop", f"{e:.1f}"],
         ["size comparison, `if len(rows) > m_warn`", f"{c - e:.1f}"],
-        ["eviction test with nothing to evict, `while len(rows) > 1 and rows[1][0] <= edge`", f"{v - e:.1f}"],
+        [
+            "eviction test with nothing to evict, `while len(rows) > 1 and rows[1][0] <= edge`",
+            f"{v - e:.1f}",
+        ],
     ]
 
 
