@@ -342,13 +342,17 @@ def missing(doc: dict, cases: dict[str, dict], only: set[str] | None = None) -> 
 def numbers(doc: dict) -> dict[str, float]:
     """Every number a raise must answer for: each case's worst and p95 as a
     gap, its floor, its tolerance, its ideal and its count of values, and
-    the file's tolerance. A gap under its case's floor is the floor, as
+    the file's tolerance and its tolerance elsewhere. A gap under its case's floor is the floor, as
     ``check`` judges it: round-off moving below the floor raises nothing,
     and the floor's own key answers for a wider one. A case with no floor
     has a floor of 0 and one with no tolerance the file's, so adding either
     is a raise too."""
     tol = float(doc["meta"]["tolerance"])
     out = {"tolerance": tol}
+    # What a rerun on another platform than the ledger's is held to: wider
+    # there lets every case through wider too (review S3).
+    if "tolerance_elsewhere" in doc["meta"]:
+        out["tolerance_elsewhere"] = float(doc["meta"]["tolerance_elsewhere"])
     for case, e in doc.get("case", {}).items():
         ideal = float(e.get("ideal", 0.0))
         floor = float(e.get("floor", 0.0))

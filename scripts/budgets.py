@@ -66,6 +66,7 @@ read it says so and goes on, unless it is told ``--require-baseline``, as CI and
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
 import json
 import math
@@ -329,7 +330,7 @@ def check_file(
             )
         if key.startswith("instructions.") and not isinstance(table.get("budget", 0), int):
             errors.append(f"{key}.budget is a count of instructions, a whole number")
-    known = set(entries(doc)) | set(tolerances(doc))
+    known = set(entries(doc)) | set(budget_numbers(doc))
     quoted = performance_text(changelog).casefold()
     for i, r in enumerate(doc.get("raised", [])):
         where = f"[[raised]] #{i + 1} ({r.get('key', '?')})"
@@ -393,11 +394,48 @@ def check_scaling_file(doc: dict, cells: list[str] | None) -> list[str]:
     return errors
 
 
+def growth_order(growth: str) -> float:
+    """A declared growth as a number that rises as it allows more: ``"1"`` 0,
+    ``"log n"`` 0.5 (between a constant and ``n``), ``"n^e"`` its exponent."""
+    if growth == "1":
+        return 0.0
+    if growth == "log n":
+        return 0.5
+    m = re.fullmatch(r"n(?:\^(\d+))?", growth)
+    if m is None:
+        raise ValueError(f"growth {growth!r}: one of 1, log n, n, n^e")
+    return float(int(m.group(1) or 1))
+
+
 def budget_numbers(doc: dict) -> dict[str, float]:
-    """Every number a raise must answer for: each budget, and each tolerance."""
+    """Every number a raise must answer for: each budget, each tolerance, the
+    drift past which a release needs a sign-off, and the scaling table's
+    tolerance and each cell's declared growth (as ``growth_order``): each
+    of them loosens a check when it rises (review S3)."""
     out = {k: t["budget"] for k, t in entries(doc).items() if "budget" in t}
     out.update(tolerances(doc))
+    meta = doc.get("meta", {})
+    if "drift_signoff" in meta:
+        out["drift_signoff"] = float(meta["drift_signoff"])
+    scaling = doc.get("scaling", {})
+    if "tolerance" in scaling:
+        out["scaling.tolerance"] = float(scaling["tolerance"])
+    for cell, t in scaling.get("cells", {}).items():
+        with contextlib.suppress(ValueError):  # check_scaling_file names it
+            out[f"scaling.cells.{cell}.growth"] = growth_order(str(t.get("growth")))
     return out
+
+
+def budgets_dropped(had: set[str], after: dict) -> list[str]:
+    """The keys in ``had`` (budgets an earlier version gave) whose entries
+    ``after`` keeps with no ``budget``: such a case reads as new, so
+    ``check`` only warns at any count (review S3)."""
+    return [
+        f"{k}: the entry is kept and its budget is gone, so no count can fail it; "
+        "write the budget back, or remove the case from the bench and the file"
+        for k, t in sorted(entries(after).items())
+        if k in had and "budget" not in t
+    ]
 
 
 def unexplained_raises(old: dict, new: dict, ledger: dict | None = None) -> list[str]:
@@ -482,6 +520,8 @@ def check_history(versions: list[tuple[str, str]], working: str | None) -> list[
         if i:
             errors += [f"{label}: {e}" for e in _unexplained(last, numbers, ledger, unused)]
         last.update(numbers)
+    # A budget the history had, on an entry the file still lists without one.
+    errors += budgets_dropped(set(last), ledger)
     return errors
 
 

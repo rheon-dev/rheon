@@ -406,6 +406,21 @@ class TestTheRules:
         assert oracles.check_history(versions, up + entry) == []
         assert oracles.check_history(versions[:2], None) == []
 
+    def test_a_wider_tolerance_elsewhere_is_a_raise(self):
+        """Review S3: what a rerun on another platform is held to rose with
+        no entry."""
+        assert "tolerance_elsewhere = 0.05\n" in SMALL
+        wider = SMALL.replace("tolerance_elsewhere = 0.05\n", "tolerance_elsewhere = 0.49\n")
+        (error,) = oracles.check_history([("a" * 40, SMALL)], wider)
+        assert error.startswith("working tree: tolerance_elsewhere: 0.05 -> 0.49"), error
+        entry = (
+            '\n[[raised]]\nkey = "tolerance_elsewhere"\nfrom = 0.05\nto = 0.49\n'
+            'date = 2026-10-26\nreason = "another platform rounds it twice as far"\n'
+            'changelog = "twice as far"\n'
+        )
+        assert oracles.check_history([("a" * 40, SMALL)], wider + entry) == []
+        assert oracles.check_file(tomllib.loads(wider + entry), "twice as far") == []
+
     def test_a_floor_raised_or_added_needs_an_entry_and_answers_for_its_case(self):
         # A wider floor lifts the case's worst and p95 to it: the floor's
         # entry answers for all three.

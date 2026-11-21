@@ -10,8 +10,11 @@
 #   worth having, raise the budget, with a [[raised]] entry at the end of
 #   this file (the key, the old and new number, the date, the reason) and a
 #   CHANGELOG *Performance* entry the entry quotes; `scripts/budgets.py
-#   raises` holds every increase in this file's git history to both. A
-#   wider tolerance is a raise too.
+#   raises` holds every increase in this file's git history to both, and
+#   each entry answers one increase. A wider tolerance is a raise too, and
+#   so is a higher `drift_signoff`, a wider `[scaling] tolerance` or a
+#   faster declared growth (keyed by its exponent: 1 is 0, log n 0.5).
+#   Deleting a budget from a case the file still lists fails as well.
 # - A measurement under its budget by more than the tolerance fails as
 #   well, naming the number to tighten the budget to, so the change that
 #   made the gain is the one that keeps it (`scripts/budgets.py apply`

@@ -403,6 +403,48 @@ def test_an_entry_answers_one_raise_not_a_return_to_its_number():
     assert budgets.check_history(versions[:2], None) == []
 
 
+SCALED = SMALL.replace(
+    "# --- raises and sign-offs",
+    '[scaling]\ntolerance = 0.10\n\n[scaling.cells."ewridge.k"]\ngrowth = "n"\n'
+    'small = 2\nlarge = 4\nwhat = "k"\n\n# --- raises and sign-offs',
+)
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "key"),
+    [
+        ("tolerance = 0.10\n", "tolerance = 0.49\n", "scaling.tolerance: 0.1 -> 0.49"),
+        ('growth = "n"', 'growth = "n^9"', "scaling.cells.ewridge.k.growth: 1.0 -> 9.0"),
+        ('growth = "n"', 'growth = "log n"', None),
+        ("drift_signoff = 0.10", "drift_signoff = 0.99", "drift_signoff: 0.1 -> 0.99"),
+    ],
+)
+def test_the_scaling_and_drift_numbers_are_raises_too(old, new, key):
+    """Review S3: `[scaling] tolerance`, each cell's growth and
+    `drift_signoff` each loosen a check when they rise, so each needs an
+    entry like a budget; a tighter growth needs none."""
+    assert SCALED.count(old) == 1
+    errors = budgets.check_history([("a" * 40, SCALED)], SCALED.replace(old, new))
+    if key is None:
+        assert errors == []
+    else:
+        (error,) = errors
+        assert key in error, error
+
+
+def test_a_budget_line_deleted_from_a_kept_entry_fails():
+    """Review S3: a case whose `budget =` line is deleted reads as new, and
+    `check` only warns at any count; the history holds that it had one."""
+    gone = SMALL.replace("what = \"case a\"\nbudget = 1000000\n", "what = \"case a\"\n")
+    assert "budget" not in budgets.entries(tomllib.loads(gone))["instructions.a"]
+    (error,) = budgets.check_history([("a" * 40, SMALL)], gone)
+    assert error.startswith("instructions.a: the entry is kept and its budget is gone"), error
+    (v,) = budgets.judge_all(tomllib.loads(gone), {"instructions.a": 10_000_000.0})
+    assert v.status == "unmeasured" and not v.failed, "why the history must hold it"
+    # A case never budgeted (b) is new, not dropped.
+    assert budgets.check_history([("a" * 40, SMALL)], SMALL) == []
+
+
 def test_a_wider_tolerance_is_a_raise():
     wider = SMALL.replace("instructions = 0.02", "instructions = 0.05")
     (error,) = budgets.check_history([("a" * 40, SMALL)], wider)
