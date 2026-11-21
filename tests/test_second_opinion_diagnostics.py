@@ -1086,6 +1086,20 @@ class TestNestedComparisonsAreTheirPapers:
                 )
                 np.testing.assert_allclose(got, fit.tvalues[0], rtol=1e-12)
 
+    def test_clark_west_s_p_value_is_scipys_normal_tail_on_both_signs(self):
+        """The one-sided p-value is ``P(Z > cw)``, scipy's ``norm.sf``, for
+        a statistic of either sign (review S14: only a printed doc page held
+        it, so a p-value read from ``|cw|``, wrong for every negative
+        statistic, passed the tests)."""
+        from scipy.stats import norm
+
+        out = _nested_out(1500, 108, 0.0, groups=20)
+        cw = rp.eval.clark_west(out, big="big", small="small", group="g")
+        stat, p = cw["cw"].to_numpy(), cw["p_value"].to_numpy()
+        assert (stat < 0).any() and (stat > 0).any(), stat
+        np.testing.assert_allclose(p, norm.sf(stat), rtol=1e-12, atol=0)
+        assert (p[stat < 0] > 0.5).all()
+
     def test_the_exponentially_weighted_form_at_each_row(self):
         h, lags = 250.0, 2
         out = _nested_out(1200, 102, 0.1)
