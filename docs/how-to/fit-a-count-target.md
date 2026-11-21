@@ -3,8 +3,10 @@
 
 This how-to is for anyone whose target is a count, such as arrivals a
 minute or trades an hour, and who wants a rate to predict it. It fits
-`sgd` under `loss="poisson"`, the one model that takes a count target, and
-keeps the gradient's cap that holds the fit steady.
+`sgd` under `loss="poisson"`, a gradient step a row, and keeps the
+gradient's cap that holds the fit steady. [`glm`](../MODELS.md#glm--generalized-linear-models-poisson-gamma-binomial-tweedie)
+fits the same model by a Newton step a row, with no learning rate, in
+O(k³) time a row for `k` coefficients where `sgd` takes O(k).
 
 ## Prerequisites
 

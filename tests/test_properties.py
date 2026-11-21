@@ -57,9 +57,15 @@ MODELS = [
     ("ftrl", {}),
     ("sgd", {"learning_rate": 0.01, "clip_gradient": 1e3}),
     ("pa", {}),
+    ("glm", {}),
     ("holt", {"features": None}),  # no features keyword
 ]
 IDS = [m[0] for m in MODELS]
+
+#: The models fed a 0/1 target: `ftrl` predicts a probability, and `glm`'s
+#: default Poisson family takes counts, which a 0/1 target is and a signed
+#: one is not.
+BINARY = {"ftrl", "glm"}
 
 #: 30 streams a property in the extended tier, the tier's count in the
 #: essentials (``tiers.ESSENTIAL_EXAMPLES``).
@@ -178,7 +184,7 @@ def _signed_columns(model: str) -> tuple[str, ...]:
     """The columns a one-sided stream signs for ``model``: ``ftrl``'s target
     is a label, ``y0 > 0``, so it signs its features only, and ``holt`` reads
     its target alone."""
-    if model == "ftrl":
+    if model in BINARY:
         return ("x0", "x1")
     if model == "holt":
         return ("y0",)
@@ -329,7 +335,7 @@ def build(model, extra, **kw):
 def binarize(df, model):
     """ftrl needs a 0/1 target; keep the missing ones missing, so the null
     policy is still exercised."""
-    if model != "ftrl":
+    if model not in BINARY:
         return df
     return df.with_columns(
         y0=pl.when(_missing("y0")).then(None).otherwise((pl.col("y0") > 0).cast(pl.Float64))
@@ -523,7 +529,7 @@ class TestUniversalProperties:
             assert scored, f"no row scored, not even warm row {WARM_ROWS - 1}"
             idx = data.draw(st.sampled_from(scored), label="scored row")
             was = y[idx]
-            if model == "ftrl":
+            if model in BINARY:
                 y[idx] = 0.0 if was else 1.0
             elif abs(was) < 1e15:
                 y[idx] = was + 12345.0
@@ -807,7 +813,7 @@ def test_every_switch_moves_an_output(model, extra):
     shows: `closed="both"` keeps a row exactly a window old (the clock
     steps by 1), and a cadence or a thinned ring holds fewer rows."""
     df = _ordinary()
-    if model == "ftrl":
+    if model in BINARY:
         df = df.with_columns(y0=(pl.col("y0") > 1).cast(pl.Float64))
     shared = unnested(rp.ModelBank([build(model, extra)]).fit_predict(df))
     for name in SWITCHES_FOR[model]:
@@ -1394,6 +1400,8 @@ def test_a_weight_past_the_bound_is_missing(kind, value):
     )
     if kind == "ew_class":
         df = df.with_columns(y=pl.when(pl.col("y") > 0).then(pl.lit("a")).otherwise(pl.lit("b")))
+    if kind in BINARY:
+        df = df.with_columns(y=(pl.col("y") > 0).cast(pl.Float64))
     spec = {**_kind_spec(kind), "weight": "w"}
     w = df["w"].to_list()
     w[8] = None

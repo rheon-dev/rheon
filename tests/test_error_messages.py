@@ -582,6 +582,7 @@ BUILDERS = {
     rp.spec.ew_cov: dict(features=["x0", "y"], targets=None),
     rp.spec.sgd: {},
     rp.spec.pa: {},
+    rp.spec.glm: {},
     rp.spec.holt: dict(features=None),
     rp.spec.kmeans: dict(features=["x0", "y"], targets=None, n_clusters=2),
     rp.spec.ew_class: dict(targets=None, label="y", classes=["a", "b"], precision_prior=1.0),

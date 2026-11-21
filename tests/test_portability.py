@@ -374,6 +374,7 @@ class TestOutputSchemaStability:
         ("ftrl", {"features": ["x0", "x1"]}),
         ("sgd", {"features": ["x0", "x1"], "learning_rate": 0.01}),
         ("pa", {"features": ["x0", "x1"]}),
+        ("glm", {"features": ["x0", "x1"]}),
         ("holt", {}),
     ]
 
@@ -407,7 +408,11 @@ class TestOutputSchemaStability:
             **kw,
             **extra,
         )
-        out = rp.ModelBank([spec]).fit_predict(_frame().drop("g"))
+        df = _frame().drop("g")
+        if model == "glm":
+            # The default Poisson family takes counts.
+            df = df.with_columns(y0=pl.col("y0").abs().round())
+        out = rp.ModelBank([spec]).fit_predict(df)
         assert [f.name for f in out.schema["m"].fields] == rp.spec.output_fields(spec)
 
     def test_ew_cov_names_match_the_realized_struct(self):

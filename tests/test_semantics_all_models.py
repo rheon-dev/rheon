@@ -32,6 +32,7 @@ MODELS = [
     ("ftrl", {}),
     ("sgd", {"learning_rate": 0.01}),
     ("pa", {}),
+    ("glm", {}),
     # Holt is the one model with no features, so it opts out of the shared set.
     ("holt", {"features": None}),  # no features keyword
 ]
@@ -46,6 +47,11 @@ VARIANTS = [
 ]
 SWEEP = MODELS + VARIANTS
 IDS = [m for m, _ in MODELS] + [f"{m}-blocked" for m, _ in VARIANTS]
+
+#: The models fed a 0/1 target: `ftrl` predicts a probability, and `glm`'s
+#: default Poisson family takes counts, which a 0/1 target is and a linear
+#: one is not.
+BINARY = {"ftrl", "glm"}
 
 #: Models that treat a null in *any* target as predict-only for all targets.
 SHARED_STATE_MODELS = {"rls"}
@@ -90,7 +96,7 @@ WITH_FEATURES_IDS = [i for (m, _), i in zip(SWEEP, IDS, strict=True) if m != "ho
 
 @pytest.mark.parametrize(("model", "extra"), WITH_FEATURES, ids=WITH_FEATURES_IDS)
 def test_feature_null_skips_the_row_entirely(model, extra):
-    df = frame(binary=model == "ftrl")
+    df = frame(binary=model in BINARY)
     x = df["x0"].to_list()
     x[10] = None
     df = df.with_columns(x0=pl.Series(x, dtype=pl.Float64))
@@ -130,7 +136,7 @@ class TestNullPolicy:
         task 195)."""
         if model in ("kalman", "sgd", "pa"):
             extra = {**extra, "standardize": False}
-        df = frame(binary=model == "ftrl")
+        df = frame(binary=model in BINARY)
         # Row 21: off the blocked variant's solves (rows 4, 8, ... since its
         # first period ran on the default schedule, task 278), where a row
         # of weight 0 would wait a row to solve and a null target would not.
@@ -154,7 +160,7 @@ class TestNullPolicy:
     def test_null_weight_skips_the_row(self, model, extra):
         """A null weight skips the row: every field of it is null, and every
         other row is what it is with the row deleted, ``coef`` included."""
-        df = frame(binary=model == "ftrl")
+        df = frame(binary=model in BINARY)
         w = df["w"].to_list()
         w[15] = None
         out = _fields(run(model, extra, df.with_columns(w=pl.Series(w)), **CLOCKED))
@@ -165,7 +171,7 @@ class TestNullPolicy:
         )
 
     def test_negative_weight_is_rejected(self, model, extra):
-        df = frame(binary=model == "ftrl")
+        df = frame(binary=model in BINARY)
         w = df["w"].to_list()
         w[5] = -1.0
         df = df.with_columns(w=pl.Series(w, dtype=pl.Float64))
@@ -176,7 +182,7 @@ class TestNullPolicy:
 @pytest.mark.parametrize(("model", "extra"), SWEEP, ids=IDS)
 class TestWarmup:
     def test_outputs_are_null_until_min_periods(self, model, extra):
-        df = frame(binary=model == "ftrl")
+        df = frame(binary=model in BINARY)
         out = run(model, extra, df, min_weight=5.0)
         preds = slot(out, "pred_", model)
         neff = slot(out, "weight_sum", model)
@@ -196,7 +202,7 @@ class TestWarmup:
         row 11, after one. `ewridge`'s noise gate is off here: three rows
         for three coefficients leave no residual degrees of freedom, so it
         withholds row 13 on its own account (`above_max_error_inflation`)."""
-        df = frame(binary=model == "ftrl")
+        df = frame(binary=model in BINARY)
         y = df["y0"].to_list()
         y[:10] = [None] * 10
         df = df.with_columns(y0=pl.Series(y, dtype=pl.Float64))
@@ -214,7 +220,7 @@ class TestWarmup:
         list on the warmup rows, which made the documented way to read one
         coefficient -- `coef.list.get(position)` -- raise "index out of
         bounds" instead of returning null (IMPROVEMENTS U7)."""
-        df = frame(binary=model == "ftrl")
+        df = frame(binary=model in BINARY)
         # The models that solve on a schedule report nothing until the first
         # solve, which is the state this is about; delay it a few rows, with
         # rows of weight 0, which never solve. (A clock schedule did it until
@@ -243,7 +249,7 @@ class TestWarmup:
                 assert c[0] is None, f"{model}.{name}: unsolved row is not null"
 
     def test_n_eff_is_reported_before_the_update(self, model, extra):
-        df = frame(binary=model == "ftrl")
+        df = frame(binary=model in BINARY)
         out = run(model, extra, df, min_weight=0.0)
         assert slot(out, "weight_sum", model)[0] == 0.0
 
@@ -279,7 +285,7 @@ class TestClockSemantics:
     def _clocked(self, model, extra, t, **kw):
         n = len(t)
         rng = np.random.default_rng(1)
-        y = (rng.random(n) < 0.5).astype(float) if model == "ftrl" else np.arange(float(n))
+        y = (rng.random(n) < 0.5).astype(float) if model in BINARY else np.arange(float(n))
         df = pl.DataFrame({"t": t, "x0": np.arange(float(n)), "x1": np.ones(n), "y0": y})
         return run(
             model,
@@ -311,7 +317,7 @@ class TestClockSemantics:
     def test_session_reset(self, model, extra):
         n = 4
         rng = np.random.default_rng(2)
-        y = (rng.random(n) < 0.5).astype(float) if model == "ftrl" else np.arange(float(n))
+        y = (rng.random(n) < 0.5).astype(float) if model in BINARY else np.arange(float(n))
         df = pl.DataFrame(
             {
                 "t": [0.0, 1.0, 2.0, 3.0],
@@ -337,7 +343,7 @@ class TestClockSemantics:
 @pytest.mark.parametrize(("model", "extra"), SWEEP, ids=IDS)
 class TestUniversalInvariants:
     def test_chunk_invariance(self, model, extra):
-        df = frame(n=120, seed=3, binary=model == "ftrl")
+        df = frame(n=120, seed=3, binary=model in BINARY)
         spec = build(model, extra, group=None)
         one = rp.ModelBank([spec]).fit_predict(df).select("m").unnest("m")
         bank = rp.ModelBank([spec])
@@ -350,7 +356,7 @@ class TestUniversalInvariants:
         assert one.select(keep).equals(many.select(keep), null_equal=True)
 
     def test_save_load_mid_stream(self, model, extra, tmp_path):
-        df = frame(n=120, seed=4, binary=model == "ftrl")
+        df = frame(n=120, seed=4, binary=model in BINARY)
         spec = build(model, extra)
         a = rp.ModelBank([spec])
         a.fit_predict(df.slice(0, 60))
@@ -363,7 +369,7 @@ class TestUniversalInvariants:
         assert ra.equals(rb, null_equal=True)
 
     def test_groups_are_independent(self, model, extra):
-        df = frame(n=120, seed=5, binary=model == "ftrl").with_columns(g=pl.Series(["a", "b"] * 60))
+        df = frame(n=120, seed=5, binary=model in BINARY).with_columns(g=pl.Series(["a", "b"] * 60))
         spec = build(model, extra, group="g")
         both = rp.ModelBank([spec]).fit_predict(df)
         solo_df = df.filter(pl.col("g") == "a")
@@ -383,7 +389,7 @@ class TestUniversalInvariants:
                 "x0": x0,
                 "x1": rng.standard_normal(n),
                 "y0": (rng.random(n) < 0.5).astype(float)
-                if model == "ftrl"
+                if model in BINARY
                 else rng.standard_normal(n) * 1e4,
                 "t": np.arange(float(n)),
                 "w": np.ones(n),

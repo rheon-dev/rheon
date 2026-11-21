@@ -937,6 +937,7 @@ fn only_models_that_predict_a_target_have_residual_fields() {
         r#"{"type": "corrchange"}"#,
         r#"{"type": "bocpd"}"#,
         r#"{"type": "audit"}"#,
+        r#"{"type": "glm"}"#,
     ];
     let mut seen = Vec::new();
     for model in kinds {

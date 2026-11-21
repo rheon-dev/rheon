@@ -639,6 +639,20 @@ def _registrations() -> list[Registration]:
             level=None,
         ),
         Registration(
+            key="glm",
+            builder="glm",
+            build=_spec("glm"),
+            stream=poisson,
+            oracle=glm(sm.families.Poisson()),
+            classes=frozenset({1, 2, 5}),
+            limit="the Poisson maximum likelihood fit (statsmodels GLM), one Fisher-scoring "
+            "step a row with each row's weight frozen at the fit that scored it: a bias of "
+            "order 1/n against the 1/sqrt(n) noise, after a refit of the first rows; a count "
+            "has no level to add",
+            other=OTHER_POISSON,
+            level=None,
+        ),
+        Registration(
             key="pa",
             builder="pa",
             build=_spec("pa"),

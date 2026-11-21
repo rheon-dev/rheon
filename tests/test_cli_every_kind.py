@@ -392,6 +392,23 @@ CASES: list[Case] = [
     ),
     Case("pa2", "pa", full2(mode="pa")),
     Case(
+        "glm",
+        "glm",
+        {
+            **full(**CLOSE, family="binomial", link="logit", ridge=2.0, refit_rows=30),
+            "targets": ["hit"],
+        },
+    ),
+    Case(
+        "glm_tweedie",
+        "glm",
+        {
+            **full(family="tweedie", link="power", var_power=1.6, refit_rows=40, refit_budget=64.0),
+            "targets": ["hit"],
+        },
+    ),
+    Case("glm2", "glm", {**full2(refit_rows=0, step_cap=0.5), "targets": ["hit"]}),
+    Case(
         "ftrl",
         "ftrl",
         {

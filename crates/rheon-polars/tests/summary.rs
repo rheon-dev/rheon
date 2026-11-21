@@ -136,8 +136,13 @@ fn make_df(n: usize) -> DataFrame {
         });
         lbl.push((k % 11 != 3).then(|| if a + b > 0.0 { "up" } else { "down" }.to_string()));
     }
+    // A count for `glm`'s Poisson family: `y`'s size, rounded.
+    let cnt: Vec<Option<f64>> = y
+        .iter()
+        .map(|v| v.map(|v| (3.0 * v).abs().round()))
+        .collect();
     df!("g" => group, "t" => t, "sess" => sess, "x0" => x0, "x1" => x1,
-        "y" => y, "w" => w, "lbl" => lbl)
+        "y" => y, "cnt" => cnt, "w" => w, "lbl" => lbl)
     .unwrap()
 }
 
@@ -1078,6 +1083,14 @@ fn every_kind_refuses_or_loads_corruption(prefix_step: usize, flip_step: usize) 
             "[]",
             r#"["x0", "x1"]"#,
             false,
+        ),
+        // Its refit's buffer part full when the file is saved.
+        (
+            "glm",
+            r#"{"type": "glm", "refit_rows": 400}"#,
+            r#"["cnt"]"#,
+            r#"["x0", "x1"]"#,
+            true,
         ),
     ];
     let mut seen = Vec::new();

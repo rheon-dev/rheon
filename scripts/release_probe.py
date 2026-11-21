@@ -191,6 +191,7 @@ def _fullest() -> dict[str, dict]:
         "ftrl": simple,
         "sgd": simple,
         "pa": simple,
+        "glm": simple,
         "holt": simple | {"emit_feature_health"},
     }
     fit = dict(FIT, targets=["y", "z"])
@@ -204,6 +205,7 @@ def _fullest() -> dict[str, dict]:
         "ftrl": dict(fit, targets=["hit"]),
         "sgd": dict(fit, learning_rate=0.01),
         "pa": fit,
+        "glm": dict(fit, targets=["hit"]),
         "holt": dict(targets=["y"], group="g", half_life=25.0, **CLOCK),
     }
     return {
@@ -288,6 +290,10 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
     ("ftrl", "ftrl", dict(FIT, targets=["hit"]), []),
     ("sgd", "sgd", dict(FIT, learning_rate=0.01), []),
     ("pa", "pa", dict(FIT), []),
+    # A count, with the refit filled on its 40th learned row of a group.
+    ("glm", "glm", dict(FIT, targets=["hit"], refit_rows=40), []),
+    # A Tweedie amount with no refit, every row held to the step cap.
+    ("glm_tweedie_cap", "glm", dict(FIT, targets=["hit"], family="tweedie", refit_rows=0), []),
     ("holt", "holt", dict(targets=["y"], group="g", half_life=25.0, **CLOCK), []),
     (
         "ew_cov",
@@ -577,7 +583,7 @@ def _clocked(name: str) -> tuple[str, dict]:
 #: The kinds that read a clock, one spec of each from `WORKLOAD`, for the
 #: paths every kind takes on its own: a reset after a step back, a session.
 CLOCKED = [
-    "rls", "lasso", "kalman", "huber", "quantile", "ftrl", "sgd", "pa", "holt", "ew_cov",
+    "rls", "lasso", "kalman", "huber", "quantile", "ftrl", "sgd", "pa", "glm", "holt", "ew_cov",
     "kmeans", "micro", "ew_class", "marginal", "deco", "corrchange", "bocpd", "hmm",
 ]  # fmt: skip
 

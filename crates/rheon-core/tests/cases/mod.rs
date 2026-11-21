@@ -151,6 +151,9 @@ pub enum Targets {
     /// The same, the first target on every row and the others null on
     /// every row before the second number: a target that joins late.
     JoiningFrom(usize, usize),
+    /// `n` positive targets: each linear target squared, plus 0.1 -- a
+    /// Gamma or Tweedie amount for `glm`.
+    Positive(usize),
     /// One 0/1 target.
     Binary,
     /// One class label in `0..n`.
@@ -217,6 +220,12 @@ impl Case {
                         .map(|j| {
                             (!null && (j == 0 || i >= first))
                                 .then_some(signal * (1.0 + j as f64) + noise - j as f64)
+                        })
+                        .collect(),
+                    Targets::Positive(t) => (0..t)
+                        .map(|j| {
+                            let v = signal * (1.0 + j as f64) + noise - j as f64;
+                            (!null).then_some(v * v + 0.1)
                         })
                         .collect(),
                     Targets::Binary => {
@@ -474,6 +483,24 @@ fn sgd_cfg(loss: SgdLoss, n_targets: usize) -> SgdCfg {
         min_weight_holds_learning: true,
         target_spread: false,
         mad_anchor: false,
+    }
+}
+
+/// A Gamma `glm` of two targets whose refit fills on its `refit_rows`-th
+/// learned row.
+fn glm_cfg(refit_rows: u32) -> GlmCfg {
+    GlmCfg {
+        n_features: K,
+        n_targets: 2,
+        fit_intercept: true,
+        decay: decay(),
+        family: GlmFamily::Gamma,
+        link: GlmLink::Log,
+        var_power: 1.5,
+        ridge: 1.0,
+        min_weight: 3.0,
+        refit_rows,
+        step_cap: f64::INFINITY,
     }
 }
 
@@ -1444,6 +1471,42 @@ pub fn all() -> Vec<Case> {
             K,
             Targets::Linear(2),
             20
+        ),
+        // Saved with each target's refit buffer half full.
+        case!(
+            "glm_refit",
+            "Glm",
+            Glm,
+            Glm::new(glm_cfg(60)).unwrap(),
+            K,
+            Targets::Positive(2),
+            40
+        ),
+        // Saved after each target's refit ran, its buffer freed.
+        case!(
+            "glm_refit_done",
+            "Glm",
+            Glm,
+            Glm::new(glm_cfg(15)).unwrap(),
+            K,
+            Targets::Positive(2),
+            40
+        ),
+        // No refit: a Tweedie fit at p = 1.5 held to the step cap.
+        case!(
+            "glm_cap",
+            "Glm",
+            Glm,
+            Glm::new(GlmCfg {
+                family: GlmFamily::Tweedie,
+                refit_rows: 0,
+                step_cap: 1.0,
+                ..glm_cfg(0)
+            })
+            .unwrap(),
+            K,
+            Targets::Positive(2),
+            40
         ),
         case!(
             "holt",

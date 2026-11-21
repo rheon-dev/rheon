@@ -217,6 +217,18 @@
     strict_binary = False
     loss = 'logistic'
     common
+  glm:
+    name
+    targets
+    features
+    family = 'poisson'
+    link = None
+    var_power = None
+    ridge = None
+    refit_rows = None
+    step_cap = None
+    refit_budget = None
+    common
   hmm:
     name
     features
@@ -619,6 +631,27 @@
     stream.robust_se_half_life = 50.0
     stream.specification_half_life = 50.0
     stream.tails_half_life = 50.0
+  glm(features=['x0'], half_life=50.0, targets=['y']):
+    model.decay.Halflife = 50.0
+    model.family = "poisson"
+    model.fit_intercept = true
+    model.link = "log"
+    model.min_weight = 2.0
+    model.n_features = 1
+    model.n_targets = 1
+    model.refit_rows = 200
+    model.ridge = 1.0
+    model.step_cap = "inf"
+    model.var_power = 1.5
+    stream.breaks_half_life = 50.0
+    stream.calibration_half_life = 200.0
+    stream.feature_health_half_life = 50.0
+    stream.influence_half_life = 50.0
+    stream.max_error_inflation = "inf"
+    stream.min_weight = [2.0]
+    stream.robust_se_half_life = 50.0
+    stream.specification_half_life = 50.0
+    stream.tails_half_life = 50.0
   hmm(features=['x0', 'x1'], half_life=50.0, n_components=2, precision_prior=0.1):
     model.covariance = "full"
     model.covs = null
@@ -994,6 +1027,11 @@
   bocpd(features=['x0', 'x1'], robust_beta=0.1), the lines that differ from bocpd's:
     model.emission = "robust"
     model.robust_beta = 0.1
+  glm(family='tweedie', features=['x0'], half_life=50.0, targets=['y']), the lines that differ from glm's:
+    model.family = "tweedie"
+  glm(features=['x0'], half_life=50.0, refit_rows=0, targets=['y']), the lines that differ from glm's:
+    model.refit_rows = 0
+    model.step_cap = 1.0
 
 [ModelBank]  # name and signature: a parameter added or a default moved is a diff here
   __init__(self, specs: 'Iterable[dict[str, Any]]', *, threads: 'int | None' = None) -> 'None'
@@ -1971,6 +2009,13 @@
     settled_frac: f64
     withheld_reason: enum
     coef: list[f64]
+  glm minimal:
+    pred_y: f64
+    resid_y: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
+    coef: list[f64]
   ftrl minimal:
     pred_y: f64
     resid_y: f64
@@ -2204,6 +2249,7 @@
     cross_centered: List[Float64]
     coef: List[Float64]
   ftrl: the shared columns only
+  glm: the shared columns only
   hmm: the shared columns only
   holt: the shared columns only
   huber: the shared columns only
@@ -2426,6 +2472,8 @@
   marginal.serial_rule: bartlett, geometric, truncated
   marginal.shards: auto
   marginal.window_budget: refuse, thin
+  glm.family: binomial, gamma, poisson, tweedie
+  glm.link: inverse, log, logit, power
   pa.mode: pa, pa1, pa2
   rcov.kernel: parzen
   rcov.kind: kernel, plain, preavg
@@ -2546,6 +2594,7 @@
     ew_cov: bias, closed, gram_threads, lags, mahal_quantiles, max_rows_between_pcas, max_rows_between_snapshots, pca, pca_every, precision_prior, snapshot_every, stats, window_budget, window_size
     ewridge: closed, coef_prior, feature_sets, gram_block_rows, gram_threads, long_half_life, max_rows_between_snapshots, max_rows_between_solves, ridge, ridge_scale, session_shrink, snapshot_every, solve_every, standardize, target_gaps, window_budget, window_size
     ftrl: alpha, beta, l1, l2, loss, strict_binary
+    glm: family, link, refit_budget, refit_rows, ridge, step_cap, var_power
     hmm: covariance_type, covs, exog_tvtp, init, learn, means, n_components, precision_prior, prior_rows, seed, transition, transition_prior, tvtp_coef, warm_rows
     holt: trend, trend_half_life
     huber: emit_huber_scale, feature_sets, huber_delta, huber_refit_rows, huber_scale, huber_scale_half_life, max_rows_between_solves, refit_budget, ridge, ridge_scale, solve_every, standardize

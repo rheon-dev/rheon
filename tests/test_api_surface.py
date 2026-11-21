@@ -250,6 +250,7 @@ def describe_api(cli: Path | None = None) -> str:
         ("quantile", dict(targets=["y"], features=["x0"], half_life=100.0, quantile=0.5)),
         ("sgd", dict(targets=["y"], features=["x0"], half_life=100.0, learning_rate=0.01)),
         ("pa", dict(targets=["y"], features=["x0"], half_life=100.0)),
+        ("glm", dict(targets=["y"], features=["x0"], half_life=100.0)),
         ("ftrl", dict(targets=["y"], features=["x0"], half_life=100.0)),
         ("holt", dict(targets=["y"], half_life=100.0)),
         (
@@ -401,6 +402,8 @@ RESOLVED_VARIANTS: list[tuple[str, dict[str, object]]] = [
     ("corrchange", {"kind": "sequential"}),
     ("rcov", {"kind": "preavg"}),
     ("bocpd", {"robust_beta": 0.1}),
+    ("glm", {"family": "tweedie"}),
+    ("glm", {"refit_rows": 0}),
 ]
 
 
@@ -686,6 +689,19 @@ ENUM_PROBES: list[
     ("marginal.serial_rule", "marginal", {"lags": [1]}, "model.serial_rule", "word"),
     ("marginal.shards", "marginal", {}, "model.shards", "word"),
     ("marginal.window_budget", "marginal", {"window_size": 100.0}, "model.window_budget", "key"),
+    ("glm.family", "glm", {}, "model.family", "word"),
+    (
+        "glm.link",
+        "glm",
+        {},
+        "model.link",
+        "word",
+        {
+            "logit": {"family": "binomial"},
+            "inverse": {"family": "gamma"},
+            "power": {"family": "tweedie"},
+        },
+    ),
     ("pa.mode", "pa", {}, "model.mode", "word"),
     ("rcov.kernel", "rcov", {}, "model.kernel", "word"),
     ("rcov.kind", "rcov", {}, "model.kind", "word"),

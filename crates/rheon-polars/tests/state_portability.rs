@@ -79,6 +79,11 @@ const SPECS: &[(&str, &str, &str)] = &[
         r#""targets": ["yb"], "features": ["x0"], "half_life": 50.0"#,
     ),
     (
+        "glm",
+        r#"{"type": "glm", "refit_rows": 60}"#,
+        r#""targets": ["yb"], "features": ["x0", "x1"], "half_life": 50.0"#,
+    ),
+    (
         "hmm",
         r#"{"type": "hmm", "n_components": 2, "covariance_type": "full", "precision_prior": 0.1, "learn": true}"#,
         r#""targets": ["x0"], "features": ["x0", "x1"], "half_life": 50.0"#,

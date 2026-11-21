@@ -395,7 +395,15 @@ fn hold(ids: &[&str]) {
 /// The surfaces each test below holds, by the prefix of their cells' ids.
 const SURFACES: &[&[&str]] = &[
     &["ewridge.", "rls.", "lasso.", "kalman."],
-    &["huber.", "quantile.", "sgd.", "pa.", "ftrl.", "holt."],
+    &[
+        "huber.",
+        "quantile.",
+        "sgd.",
+        "pa.",
+        "ftrl.",
+        "holt.",
+        "glm.",
+    ],
     &["ew_cov.", "marginal.", "deco.", "rcov.", "corrchange."],
     &[
         "hmm.",

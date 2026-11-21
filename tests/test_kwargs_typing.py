@@ -36,6 +36,7 @@ BUILDERS = [
     "ew_cov",
     "sgd",
     "pa",
+    "glm",
     "holt",
     "kmeans",
     "micro",

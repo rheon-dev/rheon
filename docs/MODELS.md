@@ -1,7 +1,7 @@
 <!-- kind: reference -->
 # Models
 
-The reference entry of each of the twenty-two models a spec can name, by
+The reference entry of each of the twenty-three models a spec can name, by
 family, for a reader who knows which model they want to look up. A
 model's parameters, their defaults and its refusals are in its docstring,
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md).
@@ -28,7 +28,7 @@ which models keep each, and why.
 
 ## The models at a glance
 
-The twenty-two models fall into four families, and each family answers one
+The twenty-three models fall into four families, and each family answers one
 kind of question about a stream. Each name links its builder's reference
 page, which gives its keywords and their defaults, and *entry* links its
 entry on this page. [Choose a model](how-to/choose-a-model.md) says which
@@ -46,6 +46,7 @@ to start with for which question.
 | [`sgd`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.sgd) · [entry](#sgd--stochastic-gradient-descent) | step | stochastic gradient descent with squared, Huber, quantile, ε-insensitive, Poisson and logistic losses |
 | [`pa`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.pa) · [entry](#pa--passive-aggressive-regression) | step | passive-aggressive regression, with no learning rate to tune |
 | [`ftrl`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ftrl) · [entry](#ftrl--online-logistic-regression) | step | FTRL-proximal regression, logistic by default, with an L1 penalty that zeroes coefficients |
+| [`glm`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.glm) · [entry](#glm--generalized-linear-models-poisson-gamma-binomial-tweedie) | step | Poisson, Gamma, binomial and Tweedie regression, a Newton step a row on the likelihood, for counts, positive amounts, proportions and amounts with an exact zero |
 | [`holt`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.holt) · [entry](#holt--holts-linear-trend) | step | Holt's linear trend, the baseline that uses no features |
 | **[Moments and correlation](#moments-and-correlation)** | | track the running moments and correlations of the columns you name |
 | [`ew_cov`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ew_cov) · [entry](#ew_cov--exponentially-weighted-moments) | accumulate | running mean, variance, covariance, correlation, partial correlation, Mahalanobis distance and principal components |
@@ -239,7 +240,7 @@ per target, give `min_weight` a list. The default depends on the model:
 
 | default | models |
 |---|---|
-| one per unknown: the features, and the intercept when there is one | `lasso`, `kalman`, `huber`, `quantile`, `rls`, `sgd`, `pa`, `ftrl` |
+| one per unknown: the features, and the intercept when there is one | `lasso`, `kalman`, `huber`, `quantile`, `rls`, `sgd`, `pa`, `ftrl`, `glm` |
 | the feature count plus one (1 for `holt`) | `ew_cov`, `ew_class`, `kmeans`, `micro`, `holt` |
 | 3 | `marginal`, `deco` |
 | 1 | `bocpd` |
@@ -434,7 +435,7 @@ first prediction at t = 30: weight_sum 27.18, settled_frac 0.182
 
 ## Linear models
 
-Ten models predict a numeric target. Nine regress it on features, and
+Eleven models predict a numeric target. Ten regress it on features, and
 `holt`, a baseline, uses none. Several of them take the same parameters:
 
 | parameters | taken by | explained under |
@@ -459,6 +460,7 @@ What `half_life` decays differs by model:
 | `sgd` | `weight_sum`, the running moments `standardize` scales by, the spreads its cut and tube are drawn in (the Huber cut's at `huber_scale_half_life` when given), and adagrad's sums, but not the coefficients |
 | `pa` | `weight_sum`, each target's own weight, the running moments `standardize` scales by and the spread its tube is drawn in, but not the coefficients |
 | `ftrl` | its per-coordinate sums, but not its penalties, so a shorter half-life shrinks the fit more |
+| `glm` | each target's Gram `G`, and its ridge with the rows, so a row of weight 0 moves no coefficient |
 | `holt` | the level, and the trend at `trend_half_life`, four times `half_life` by default |
 
 ### `ewridge` — exponentially weighted ridge regression
@@ -1723,6 +1725,125 @@ When `ftrl`'s fit is not the one you need:
 
 **With decay off, `ftrl` matches river's `FTRLProximal`:** the two agree to 1e-12, row for
 row, and Vowpal Wabbit's `--ftrl` agrees to its single precision.
+
+### `glm` — generalized linear models: Poisson, Gamma, binomial, Tweedie
+
+*API:* [`rheon.spec.glm`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.glm) — *Rust:* [`glm.rs`](../crates/rheon-core/src/glm.rs) — *Outputs:* [fields](OUTPUTS.md#glm)
+
+A generalized linear model, fitted one row at a time by one step of
+iteratively reweighted least squares (Fisher scoring) a row.
+
+Use `glm` for a target whose spread grows with its mean, or that has a
+floor or a ceiling. Counts take `family="poisson"`, and positive amounts
+such as prices, sizes and durations take `"gamma"`. Proportions and 0/1
+outcomes take `"binomial"`, and amounts with an exact zero, such as an
+insurance claim, take `"tweedie"`. Its prediction is the mean on the target's own scale. It
+takes O(k³) time a row and target for `k` coefficients, a Cholesky
+factorization; [`sgd`](#sgd--stochastic-gradient-descent) with
+`loss="poisson"` or `"logistic"` takes a gradient step on the same
+likelihood in O(k).
+
+Its parameters, their defaults and what each refuses are in its
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.glm),
+and the fields it writes in [OUTPUTS.md](OUTPUTS.md#glm). The parameters
+every spec takes are in [What every spec takes](#what-every-spec-takes).
+
+#### The update
+
+Each target keeps a Gram `G` and its coefficients `β`. With `η = zᵀβ` the
+fit before the row, `μ = g⁻¹(η)` its mean through the link `g`, `V` the
+family's variance and `R` the ridge:
+
+```
+W  = 1 / (g'(μ)² V(μ))          z̃ = η + (y − μ) g'(μ)
+G  = λ·G + w·W·z zᵀ
+β += (G + R·I)⁻¹ · w·W·(z̃ − η)·z
+```
+
+`pred` is `μ`, made before the row is learned. Without decay this is the
+penalized batch fit's IRLS, the rows' weights `W` frozen at the fit that
+scored them, so it tracks statsmodels' `GLM` with `freq_weights` on the
+same rows. The bias the frozen weights leave shrinks as `1/n`, against
+the standard error's `1/√n`. A family's links are its canonical one and the
+log: the Poisson's log, the Gamma's log and inverse, the binomial's logit,
+and the Tweedie's log and power `μ^(1 − p)`.
+
+**The first rows are refit.** Before `k` rows the fit is underdetermined,
+and one row can throw it off for good: a Gamma row scored at a very
+negative `η` steps by `y·e^|η|`, and a Poisson row scored at too large a
+mean starves its direction of curvature. Each target's first `refit_rows`
+learned rows are therefore kept and, once the buffer is full, fitted to
+convergence by penalized IRLS, and `G` is rebuilt at that fit; the buffer
+is then freed. While it fills, each row's own step in `η` is held to 1, so
+the predictions before the refit are sound. `step_cap` instead holds each
+row's own step in `η` to a bound, with no buffer, at a larger bias without
+decay.
+
+**The spans.** `half_life` and `gap_cap` take a number (rows, with no clock)
+or a clock duration, as every spec's do. `refit_rows` counts rows and has no clock
+form: the buffer's size must be known when the spec is built, to be held
+to its cap, and a span of the clock holds a number of rows that depends on
+the data.
+
+#### Example
+
+**`glm` predicts a count's mean on the count's scale.** Here the truth is
+a Poisson count whose log mean is `0.5 + 0.3·x`, and the coefficients are
+on the log scale:
+
+```python
+import numpy as np
+import polars as pl
+from rheon import polars as rp
+
+# Poisson counts with a log mean of 0.5 + 0.3 x.
+rng = np.random.default_rng(5)
+x = rng.standard_normal(20_000)
+y = rng.poisson(np.exp(0.5 + 0.3 * x)).astype(float)
+pl.DataFrame({"x": x, "y": y}).write_parquet("counts.parquet")
+
+# One Poisson fit, with no decay, learned over the file one chunk at a time.
+bank = rp.ModelBank([rp.spec.glm("pois", targets=["y"], features=["x"], half_life=float("inf"))])
+bank.fit(pl.scan_parquet("counts.parquet"))
+# The coefficients are on the log scale.
+print({r["term"]: round(r["coef"], 2) for r in bank.coef().iter_rows(named=True)})
+```
+
+```text
+{'intercept': 0.5, 'x': 0.3}
+```
+
+#### See also
+
+When `glm`'s fit is not the one you need:
+
+- [`sgd`](#sgd--stochastic-gradient-descent) with `loss="poisson"` or
+  `"logistic"`, a gradient step on the same likelihood in O(k) time.
+- [`ftrl`](#ftrl--online-logistic-regression), a sparse logistic
+  regression.
+- [`ewridge`](#ewridge--exponentially-weighted-ridge-regression), the
+  least-squares fit, for a target whose spread does not grow with its
+  mean.
+
+#### Notes
+
+**Measured against statsmodels and glum** over 50 seeds at 20
+coefficients, the ridge matched. The largest gap was 0.47, 0.33 and 0.61
+standard errors at 10,000 rows (Poisson; Gamma of shape 2; Tweedie at
+`p = 1.5`, dispersion 2), and 0.20, 0.16 and 0.31 at 100,000. The fit's
+error against the true coefficients equals the batch fit's to 0.01
+standard errors on average.
+
+**The state is bounded by the spec.** A target keeps `k(k+1)/2 + k + 1`
+numbers, and until its refit runs a buffer of `refit_rows·(features + 2)`,
+the one part whose size is not the model's shape. A group's buffers are
+held to 256 KB when the spec is built: a `refit_rows` past it is refused,
+naming the bytes, and the default shrinks to fit.
+
+**There is no window.** A row's contribution to `G` is its weight at the
+fit that scored it, so removing a row exactly needs the row itself. A
+window of 2,000 rows at 20 coefficients would hold 384 KB a target, past a
+group's cap; decay forgets in place.
 
 ### `holt` — Holt's linear trend
 

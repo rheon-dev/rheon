@@ -93,6 +93,9 @@ KINDS: dict[str, Builder] = {
     "sgd": lambda **kw: rp.spec.sgd("m", learning_rate=0.02, **kw),
     "pa": lambda **kw: rp.spec.pa("m", **kw),
     "ftrl": lambda **kw: rp.spec.ftrl("m", loss="squared", **kw),
+    # Counts: `_stream` gives its targets as the nearest whole numbers of
+    # their magnitude.
+    "glm": lambda **kw: rp.spec.glm("m", **kw),
     # The trend at the level's half-life: at its default, four times it, the
     # trend settles past the stream's end, and every diagnostic that waits
     # for the fit to settle (calibration, breaks, specification, tails)
@@ -286,6 +289,14 @@ def _frame() -> pl.DataFrame:
     )
 
 
+def _stream(kind: str) -> pl.DataFrame:
+    """The frame as ``kind`` reads it: whole numbers for ``glm``'s counts."""
+    df = _frame()
+    if kind == "glm":
+        df = df.with_columns(pl.col("y", "y2").abs().round())
+    return df
+
+
 #: Each stream's keywords on the base spec.
 VARIANTS: dict[str, dict[str, Any]] = {
     "rows": dict(weight="w"),
@@ -321,7 +332,7 @@ def _run_cached(kind: str, variant: str, key: str, grid: bool) -> pl.DataFrame:
     with warnings.catch_warnings():
         # A clocked embargo without `horizon_rows` says so once per reader.
         warnings.simplefilter("ignore", rp.ReadinessWarning)
-        out = rp.ModelBank([spec], threads=1).fit_predict(_frame())
+        out = rp.ModelBank([spec], threads=1).fit_predict(_stream(kind))
     return out.select("m").unnest("m")
 
 

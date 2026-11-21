@@ -456,6 +456,62 @@ fn pa_golden() {
     check("pa", &signature(&mut m, 0), GOLDEN_PA);
 }
 
+/// The positive target `glm` reads: the stream's `y` squared plus 0.1, so
+/// a Gamma or Tweedie amount, with the same null row.
+fn glm_signature(m: &mut Glm) -> Vec<f64> {
+    let mut out = Vec::new();
+    for (i, (x, y, d, w)) in stream().into_iter().enumerate() {
+        let y = [y[0].map(|v| v * v + 0.1)];
+        let step = m.step(&x, &y, d, w);
+        if matches!(i, 20 | 45 | 59) {
+            out.push(step.pred[0]);
+        }
+    }
+    out
+}
+
+/// A Gamma `glm` under decay whose first 15 learned rows are refit, so the
+/// signature's rows read the refit's fit and the recursion after it.
+#[test]
+fn glm_golden() {
+    let mut m = Glm::new(GlmCfg {
+        n_features: 2,
+        n_targets: 1,
+        fit_intercept: true,
+        decay: Decay::Halflife(20.0),
+        family: GlmFamily::Gamma,
+        link: GlmLink::Log,
+        var_power: 1.5,
+        ridge: 1.0,
+        min_weight: 3.0,
+        refit_rows: 15,
+        step_cap: f64::INFINITY,
+    })
+    .unwrap();
+    check("glm", &glm_signature(&mut m), GOLDEN_GLM);
+}
+
+/// A Tweedie `glm` at `p = 1.5` with no refit, every row held to the step
+/// cap.
+#[test]
+fn glm_cap_golden() {
+    let mut m = Glm::new(GlmCfg {
+        n_features: 2,
+        n_targets: 1,
+        fit_intercept: true,
+        decay: Decay::Halflife(20.0),
+        family: GlmFamily::Tweedie,
+        link: GlmLink::Log,
+        var_power: 1.5,
+        ridge: 1.0,
+        min_weight: 3.0,
+        refit_rows: 0,
+        step_cap: 0.5,
+    })
+    .unwrap();
+    check("glm_cap", &glm_signature(&mut m), GOLDEN_GLM_CAP);
+}
+
 /// The constrained path (ENHANCEMENTS E40): slopes on the simplex, so the
 /// projection with a sum and a wall both take part; the truth (1.5, -0.75)
 /// lies outside the set.
@@ -1537,6 +1593,8 @@ fn ew_class_windowed_golden() {
 }
 
 // --- generated; see the module docs ---
+const GOLDEN_GLM: &[f64] = &[0.8190287944178032, 1.5909174698270316, 1.3226756023793542];
+const GOLDEN_GLM_CAP: &[f64] = &[0.8059966005129862, 2.2639186345702202, 1.0964813502655293];
 // Frozen 2026-10-09 (docs/PLAN.md task 223 (b)); the moments, the lag
 // pairs and the median are held to their definitions in `audit/tests.rs`.
 const GOLDEN_AUDIT: &[f64] = &[

@@ -27,7 +27,8 @@ def frame_for(name: str, n: int = 240) -> pl.DataFrame:
     x0, x1 = rng.normal(size=n), rng.normal(size=n)
     y = 2.0 * x0 - x1 + 0.1 * rng.normal(size=n)
     df = pl.DataFrame({"x0": x0, "x1": x1, "y": y, "g": np.arange(n) // 60})
-    if name == "ftrl":
+    if name in ("ftrl", "glm"):
+        # `glm`'s default Poisson family takes counts, which 0/1 is.
         df = df.with_columns(y=(pl.col("y") > 0).cast(pl.Float64))
     if name == "ew_class":
         df = df.with_columns(y=pl.when(pl.col("y") > 0).then(pl.lit("a")).otherwise(pl.lit("b")))

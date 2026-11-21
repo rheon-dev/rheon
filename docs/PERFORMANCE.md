@@ -519,7 +519,7 @@ in the table.
 
 ### The table
 
-**113 cells: 76 over the 22 model kinds' rows, 19 over the
+**116 cells: 79 over the 23 model kinds' rows, 19 over the
 bank, 3 over the command line, 9 over the window operators, 4 over
 `refresh_time` and 2 over the sample of an internal helper for
 gradient-boosted trees.** Each row is one cell: the
@@ -571,6 +571,9 @@ largest buffer at the smaller.
 | `pa.k` | features k | 4 → 32 | O(n) | O(n) | one projection, k | 3.33 · 1.00 · 4.01 · 1.94 |
 | `pa.targets` | targets T | 1 → 8 | O(n) | O(n) | a projection a target | 3.22 · 1.00 · 2.92 · 1.64 |
 | `pa.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | coefficients only | 1.00 · 1.00 · 1.00 · 1.00 |
+| `glm.k` | features k | 4 → 32 | O(n³) | O(n²) | a Cholesky of `G + R I` a row and target, `G` of k² | 57.97 · 1.00 · 18.71 · 8.03 |
+| `glm.targets` | targets T | 1 → 8 | O(n) | O(n) | a Gram and a solve a target | 8.02 · 1.00 · 6.92 · 2.31 |
+| `glm.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | the refit's buffer freed once it ran | 1.01 · 1.00 · 1.00 · 1.00 |
 | `ftrl.k` | features k | 4 → 32 | O(n) | O(n) | per-coordinate running sums, k | 4.74 · 1.00 · 3.99 · 1.69 |
 | `ftrl.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | running sums only | 0.99 · 1.00 · 1.00 · 1.00 |
 | `holt.targets` | targets T | 1 → 8 | O(n) | O(n) | a level and trend a target | 4.95 · 1.00 · 4.99 · 1.35 |

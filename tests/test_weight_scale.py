@@ -48,6 +48,10 @@ EXCEPTIONS = {
     "ftrl": "an importance weight, as Vowpal Wabbit's: the gradient carries it "
     "against l1, l2 and beta in absolute weight (task 147 kept VW's semantics)",
     "pa": "a weight below 1 scales tau, one above 1 counts as 1",
+    # A weight counts its row that many times in the likelihood
+    # (freq_weights), beside a ridge R/2 |b|^2 of fixed mass, as rls's delta.
+    "glm": "a freq weight against a sum-scale ridge, which a heavier stream outweighs sooner",
+    "glm_tweedie_cap": "glm's: a freq weight against a sum-scale ridge",
     "hmm": "A <- decay A + w xi against the Dirichlet pseudo-count tau",
     "seqtest": "it scores ridge against kalman, which moves",
     # Its `sigma` (and `zscore`, which reads it) folds the predictions

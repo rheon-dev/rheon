@@ -199,6 +199,7 @@ ledger.guard(
     "sgd_epsilon_insensitive", lambda: guard_outputs("sgd:epsilon_insensitive"), oracles=["scipy"]
 )
 ledger.guard("sgd_poisson", lambda: guard_outputs("sgd:poisson"), oracles=["statsmodels"])
+ledger.guard("glm", lambda: guard_outputs("glm"), oracles=["statsmodels"])
 ledger.guard("sgd_logistic", lambda: guard_outputs("sgd:logistic"), oracles=["statsmodels"])
 ledger.guard("sgd_huber", lambda: guard_outputs("sgd:huber"), oracles=["statsmodels"])
 ledger.guard("sgd_rates", guard_rates, oracles=["statsmodels"])
@@ -322,6 +323,10 @@ CONSISTENCY: dict[str, tuple[float, float | None]] = {
     # and -0.43 (sgd at power 1, rate 2).
     "huber": (0.0025, -0.35),
     "sgd:huber": (0.006, -0.35),
+    # One Newton step a row after a refit of the first 210 rows: the frozen
+    # weights' bias falls about as 1/n. Measured 2026-11-21, 50 seeds:
+    # 0.000476 (seed 3) at 32,000 rows and -0.67.
+    "glm": (0.00075, -0.5),
 }
 
 #: The cut a registration's rate is read from, where the first cut is not
@@ -443,6 +448,12 @@ START_CUTS = {200.0: [200, 400, 800, 1600, 2400, 3200], cv.INF: CUTS}
 #: of 200. Measured over 50 seeds on 2026-10-25 (the worst seed, then the same
 #: model's worst from a fresh start), and the bound:
 START: dict[str, dict[float, float]] = {
+    # A Newton step a row leaves the loaded state within a few hundred rows
+    # under decay; without it the other regime's rows stay in the batch fit
+    # and the one pass, frozen at the fits that scored them, nears it as
+    # they are outweighed. Measured 2026-11-21, 50 seeds: 0.00529 (seed 43)
+    # at 3,200 rows, and 0.0345 (seed 35) at 32,000.
+    "glm": {200.0: 0.008, cv.INF: 0.052},
     # The batch fit on every row, the other regime's included: rounding, to
     # 8.6e-14 (ewridge), 2.3e-13 (rls) and 4.5e-11 (lasso).
     "ewridge": {200.0: 1e-11, cv.INF: 1e-11},
@@ -528,6 +539,13 @@ START_RATE: dict[str, float] = {
 #: start's, 0.793.
 START_AS_FRESH = {"pa"}
 
+#: Models that leave a loaded state before the first cut under decay, so
+#: the evidence that it was far off is read against a fresh start at that
+#: cut, not as a fixed distance: `glm`'s Newton step a row, measured
+#: 2026-11-21 (50 seeds) at 0.143 from the truth at 200 rows, a half-life,
+#: where a fresh start is 0.00189 (the median of each).
+START_FAST = {"glm"}
+
 #: Cells that fail on a defect: the reason, with its measurement.
 START_DEFECTS: dict[tuple[str, float], str] = {}
 
@@ -572,7 +590,10 @@ def test_start_from_another_regime(key, half_life):
     else:
         _record(key, f"start_{h}_at_{last}", p.to_oracle[last].values)
     # The evidence: at the first cut the fit is still far from this stream's own.
-    assert p.to_truth[cuts[0]].median > 0.3, "the loaded state was a long way off"
+    if key in START_FAST and not np.isinf(half_life):
+        assert p.to_truth[cuts[0]].median > 10 * p.clean[cuts[0]].median, "the state was off"
+    else:
+        assert p.to_truth[cuts[0]].median > 0.3, "the loaded state was a long way off"
     if np.isinf(half_life) and key in START_AS_FRESH:
         assert p.to_truth[cuts[-1]].worst <= 1.5 * p.clean[cuts[-1]].worst
     elif np.isinf(half_life) and key in START_RATE:
@@ -1157,6 +1178,9 @@ REBREAK: dict[str, dict[str, tuple[float, float]]] = {
         "variance": (12, 0.047),
         "regime": (12, 0.028),
     },
+    # A Newton step a row: back on the decayed batch fit within a few
+    # half-lives. Measured 2026-11-21: 0.00167, 0.00242 and 0.0319 at 12.
+    "glm": {"level": (12, 0.0025), "slope": (12, 0.0037), "regime": (12, 0.048)},
     "sgd:huber": {
         "level": (8, 0.038),
         "slope": (8, 0.037),

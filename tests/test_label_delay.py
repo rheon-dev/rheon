@@ -1064,7 +1064,7 @@ AFTER_THE_UPDATE = frozenset({"coef", "support_coef", "se_coef", "se_coef_hc0", 
 
 def kind_frame(kind: str, *, n: int = 400, steps=None, seed: int = 5) -> pl.DataFrame:
     """Two features, a target with a level shift halfway, uneven weights;
-    the target binary for `ftrl` and a label for `ew_class`. ``steps`` puts a
+    the target binary for `ftrl`, a label for `ew_class` and a count for `glm`. ``steps`` puts a
     clock ``t`` under it (the first step is the first row's clock)."""
     rng = np.random.default_rng(seed)
     x0, x1 = rng.standard_normal(n), rng.standard_normal(n)
@@ -1080,6 +1080,8 @@ def kind_frame(kind: str, *, n: int = 400, steps=None, seed: int = 5) -> pl.Data
         df = df.with_columns(t=pl.Series(np.cumsum(steps), dtype=pl.Float64))
     if kind == "ftrl":
         df = df.with_columns(y=(pl.col("y") > 1).cast(pl.Float64))
+    if kind == "glm":
+        df = df.with_columns(y=pl.col("y").abs().round())
     if kind == "ew_class":
         df = df.with_columns(y=pl.when(pl.col("y") > 1).then(pl.lit("a")).otherwise(pl.lit("b")))
     return df
@@ -1480,6 +1482,7 @@ DOUBLED: dict[str, dict] = {
     "ew_cov": {},
     "ewridge": {},
     "ftrl": {},
+    "glm": {},
     "huber": {},
     "kmeans": {},
     "lasso": {},
@@ -1618,8 +1621,10 @@ SHORT = 0.5
 #: The drift flags' prefix.
 DRIFT = "drift_"
 #: The kinds the level shift halfway does not trip the detector on: `holt`
-#: follows a level, and `ftrl` scores a probability against a 0/1 label.
-QUIET = frozenset({"holt", "ftrl"})
+#: follows a level, `ftrl` scores a probability against a 0/1 label, and
+#: `glm` scores a count whose spread grows with its level: the shift trips
+#: none of its flags on this stream (measured 2026-11-21).
+QUIET = frozenset({"holt", "ftrl", "glm"})
 
 
 def scores_a_target(kind: str) -> bool:

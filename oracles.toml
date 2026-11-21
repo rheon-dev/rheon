@@ -5719,6 +5719,54 @@ n = 50
 worst = 0.00402839
 p95 = 0.00371578
 
+[group."convergence.glm"]
+tests = [
+    "tests/test_convergence.py::test_consistency[glm]",
+    "tests/test_convergence.py::test_reconvergence_after_a_break[glm-level]",
+    "tests/test_convergence.py::test_reconvergence_after_a_break[glm-regime]",
+    "tests/test_convergence.py::test_reconvergence_after_a_break[glm-slope]",
+    "tests/test_convergence.py::test_start_from_another_regime[glm-200]",
+    "tests/test_convergence.py::test_start_from_another_regime[glm-inf]",
+]
+oracles = { "statsmodels" = "0.15.0" }
+dataset = ""
+
+[case."convergence.glm.break_level_at_12"]
+ideal = 0.0
+n = 50
+
+[case."convergence.glm.break_regime_at_12"]
+ideal = 0.0
+n = 50
+
+[case."convergence.glm.break_slope_at_12"]
+ideal = 0.0
+n = 50
+
+[case."convergence.glm.consistency_at_2000"]
+ideal = 0.0
+n = 50
+
+[case."convergence.glm.consistency_at_32000"]
+ideal = 0.0
+n = 50
+
+[case."convergence.glm.consistency_at_500"]
+ideal = 0.0
+n = 50
+
+[case."convergence.glm.consistency_at_8000"]
+ideal = 0.0
+n = 50
+
+[case."convergence.glm.start_200_at_3200"]
+ideal = 0.0
+n = 50
+
+[case."convergence.glm.start_inf_at_32000"]
+ideal = 0.0
+n = 50
+
 # --- raises
 
 [[raised]]

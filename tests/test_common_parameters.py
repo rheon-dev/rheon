@@ -177,11 +177,13 @@ STREAM = _stream()
 
 def frame(variant: str, df: pl.DataFrame | None = None) -> pl.DataFrame:
     """The stream as ``variant`` reads it: a label for ``ftrl`` (logistic)
-    and ``ew_class``."""
+    and ``ew_class``, a count for ``glm``."""
     df = STREAM if df is None else df
     kind = VARIANTS.get(variant, (variant, {}))[0]
     if kind == "ftrl":
         df = df.with_columns(y=(pl.col("y") > 1).cast(pl.Float64))
+    if kind == "glm":
+        df = df.with_columns(y=pl.col("y").abs().round())
     if kind == "ew_class":
         df = df.with_columns(y=pl.when(pl.col("y") > 1).then(pl.lit("a")).otherwise(pl.lit("b")))
     return df
@@ -536,7 +538,11 @@ STATE_KEY = {"marginal": "feature", "audit": "column"}
 #: times its worst. Its sketch rounds each ``|e|`` into buckets, and the
 #: last bits a reordered sum moves can cross a bucket's edge.
 ORDER_RTOL = 1e-12
-ORDER_RTOL_BY_KIND = {"lasso": 1e-10, "quantile": 2e-11}
+#: ``glm``'s refit stops at a step of 1e-11 of its own, so the order of the
+#: features picks which point just inside that tolerance it stops at, and
+#: the recursion carries the difference on: 3.5e-9 on ``pred`` at the worst
+#: of 50 seeds (2026-11-21).
+ORDER_RTOL_BY_KIND = {"lasso": 1e-10, "quantile": 2e-11, "glm": 1e-8}
 #: ``lasso``'s descent visits the features in the order given and stops at
 #: its sweep cap (100) or its tolerance, so at its defaults the order picks
 #: which unconverged point a solve returns: 4.6e-4 relative on ``pred`` at

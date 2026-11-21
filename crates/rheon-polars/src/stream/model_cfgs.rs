@@ -1018,6 +1018,65 @@ pub(crate) fn read_floor(spec: &Spec, min_weight: &[f64]) -> f64 {
     }
 }
 
+/// The words a `glm`'s `family` takes, the default first.
+pub const GLM_FAMILIES: [&str; 4] = ["poisson", "gamma", "binomial", "tweedie"];
+
+/// The words a `glm`'s `link` takes.
+pub const GLM_LINKS: [&str; 4] = ["log", "logit", "inverse", "power"];
+
+/// A `glm` spec's configuration, its decay `Lam(1)` for the caller to set:
+/// the family and link read from their words, the refit's default from the
+/// features ([`rheon_core::default_glm_refit_rows`]) and the cap's from the
+/// refit ([`rheon_core::default_glm_step_cap`]).
+pub fn glm_cfg(spec: &Spec) -> Result<rheon_core::GlmCfg, String> {
+    use rheon_core::{GlmFamily, GlmLink};
+    let ModelKind::Glm {
+        family,
+        link,
+        var_power,
+        ridge,
+        refit_rows,
+        step_cap,
+        ..
+    } = &spec.model
+    else {
+        return Err(not_a(spec, "glm_cfg", "glm"));
+    };
+    let words = |param: &str, words: &[&str], got: &str| {
+        crate::spec::spec_words_refusal(&spec.name, param, words, got)
+    };
+    let family = match family.as_deref().unwrap_or("poisson") {
+        "poisson" => GlmFamily::Poisson,
+        "gamma" => GlmFamily::Gamma,
+        "binomial" => GlmFamily::Binomial,
+        "tweedie" => GlmFamily::Tweedie,
+        other => return Err(words("family", &GLM_FAMILIES, other)),
+    };
+    let link = match link.as_deref() {
+        None => family.default_link(),
+        Some("log") => GlmLink::Log,
+        Some("logit") => GlmLink::Logit,
+        Some("inverse") => GlmLink::Inverse,
+        Some("power") => GlmLink::Power,
+        Some(other) => return Err(words("link", &GLM_LINKS, other)),
+    };
+    let refit_rows =
+        refit_rows.unwrap_or_else(|| rheon_core::default_glm_refit_rows(spec.k(), spec.m()));
+    Ok(rheon_core::GlmCfg {
+        n_features: spec.k(),
+        n_targets: spec.m(),
+        fit_intercept: spec.fit_intercept,
+        decay: Decay::Lam(1.0),
+        family,
+        link,
+        var_power: var_power.unwrap_or(1.5),
+        ridge: ridge.unwrap_or(1.0),
+        min_weight: spec.min_periods_or_default(),
+        refit_rows,
+        step_cap: step_cap.map_or_else(|| rheon_core::default_glm_step_cap(refit_rows), |n| n.0),
+    })
+}
+
 #[cfg(test)]
 mod refit_tests {
     //! The refit's default (docs/PLAN.md task 277): on at

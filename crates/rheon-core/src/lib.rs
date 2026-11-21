@@ -81,8 +81,10 @@ mod ewcov;
 mod ewdiag;
 mod ewlagcov;
 mod ewridge;
+mod family;
 mod ftrl;
 mod gaps;
+mod glm;
 /// Fits read off an exported Gram, offline (docs/PLAN.md tasks 226-227).
 pub mod gramfit;
 mod hasher;
@@ -159,8 +161,13 @@ pub use ewcov::{
 pub use ewdiag::{EwDiag, Including};
 pub use ewlagcov::{EwLagCov, MAX_LAG, check_lag_ceiling};
 pub use ewridge::{EwRidge, EwRidgeCfg};
+pub use family::{ETA_CLIP, Family, GlmFamily, GlmLink, Working};
 pub use ftrl::{Ftrl, FtrlCfg, FtrlLoss};
 pub use gaps::{GramPart, TargetGaps};
+pub use glm::{
+    DEFAULT_GLM_REFIT_ROWS, GLM_GROUP_REFIT_CAP, GLM_REFIT_PASSES, Glm, GlmCfg,
+    default_glm_refit_rows, default_glm_step_cap,
+};
 pub use hasher::{FixedHasher, FixedState};
 pub use health::FeatureHealth;
 pub use hmm::{EwFactor, Hmm, HmmCfg, Stabilized};
