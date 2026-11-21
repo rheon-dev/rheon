@@ -592,3 +592,24 @@ the trade between Table B4's edge gap and this.
   Polars'; a later Polars that changes one of them moves the sum and variance
   gaps or breaks the EW bit-equality, which a test against the pinned Polars
   catches.
+
+## Sonnet rerun (2026-11-21)
+
+A second worker re-ran `scripts/study_532b.py` from commit 669e0f3 and re-checked
+each claim against the code. Parts: 1 the re-run, 2 the claim checks
+(`studies/study_532b/recheck.py`), 3 corrections.
+
+### Part 1: the re-run
+
+| python | numpy | scipy | polars | machine | venv |
+|---|---|---|---|---|---|
+| 3.13.18 | 2.5.2 | 1.18.1 | 2.0.0 | Linux x86_64 | `uv venv` + `uv pip install numpy==2.5.2 scipy polars==2.0.0` |
+
+Runtime of `scripts/study_532b.py`: 75 s (the header of this record says
+"about two minutes"). Every deterministic table (B1 to B5, E1 to E3, L1 to L3)
+is identical to the one above, line for line. Table R1's counts are identical;
+only its seconds column moved (0.3 to 0.4 on four rows). Table L4 (peak
+resident memory and seconds) and Table C1 (ns per row) are measurements of this
+machine and moved by noise: L4 within 8% a cell, the C1 Python states by
+-26% to +9% (for example `ewm_mean` 230 ns against 308), the Polars side by up
+to +28% (bucketed b=5, B=12: 87.6 ns against 68.3), no ordering changed.
