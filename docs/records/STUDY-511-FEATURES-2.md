@@ -394,3 +394,64 @@ needs `8 (3 + 2d)` bytes a held run (log-mass, `len`, `n`, mean, mean's low part
 
 **Changes a default: no.** `hazard` stays the constant per-row hazard; the NB hazard and the known-variance emission are options.
 
+## 524. Regression variants
+
+Task 524 lists nine items. Selection by C1's verdicts: **built** evidence-maximized ridge (`BayesianRidge`, CORRECTED on exactness), averaged `sgd` and `pa` (`SGDRegressor(average=True)`, CONFIRMED, `pa` spelling CORRECTED),
+`positive=True` (`Lasso`, `ElasticNet`, CONFIRMED), and (next section) the redescending norms and Huber's scale (`RLM`), the `sgd` elastic net with the `optimal` schedule, and Vowpal Wabbit's importance-invariant step;
+**excluded, oracle MISSING (C1): per-feature penalty weights on `lasso`** (scikit-learn has no such parameter; the column-rescaling device is an identity, not an independent oracle). "Several quantiles in one spec" is plumbing (one `quantile`
+model per level; `QuantReg` is one fit per `q`, C1): its state is the sum of the levels' and it needs no new recursion, so it is listed, not studied.
+
+### 524 (a) Evidence-maximized ridge at solve time with `pred_std`
+
+At a solve, from the accumulator over `(x, y)` (the centred Gram `G = n C_xx`, `X'y = n c_xy`, `y'y = n C_yy`, with `n` Kish's count and the weights scaled to sum to `n`): the MacKay / Tipping fixed point, eigen-decomposing `G`
+once (`e_i`), iterating `coef = V ((V' X'y)/(e + lam/alpha))`, `sse = y'y - 2 coef'X'y + coef'G coef`, `gamma = sum alpha e_i / (lam + alpha e_i)`, `lam = (gamma + 2 l_1)/(|coef|^2 + 2 l_2)`, `alpha = (n - gamma + 2 a_1)/(sse + 2 a_2)`, the
+intercept unpenalised (centring), `pred_std = sqrt(1/alpha + (x - m)' Sigma (x - m))`, `Sigma = (alpha G + lam I)^-1`, `alpha_0 = 1/(var y)`, `lam_0 = 1`; the same stopping rule as sklearn (sum of absolute coefficient changes under `tol`).
+
+**A correction to C1's note on `n`.** C1 wrote that `sample_weight` rescales rows by `sqrt(w)` so that `n` in the fixed point is the row count. In scikit-learn 1.9.1's source the `alpha` update uses `sw_sum = sample_weight.sum()` (and the weighted `y_var`
+for `alpha_0`), not the row count. So rheon's "weights scaled to Kish `n`" **is** `BayesianRidge`'s own convention when it is handed weights that sum to Kish's `n`: the comparison is exact under decay and row weights, not only at unit weights.
+
+Against `BayesianRidge(alpha_1, alpha_2, lambda_1, lambda_2, tol=1e-14, max_iter=5000).fit(X, y, sample_weight=w')` (C1: the defaults are MAP with `1e-6` hyperpriors and `tol=1e-3`, so the comparison gives rheon the same four pseudo-counts and a tiny `tol`; also with
+all four 0, pure evidence maximization), k = 6, 160 rows, 20 seeds, relative gaps:
+
+| case | coef | intercept | `alpha_` | `lambda_` | `pred_std` |
+|---|---|---|---|---|---|
+| `lam = 1`, unit weights, priors `1e-6` | 1.3e-13 | 5.4e-15 | 4.4e-14 | 9.3e-14 | 6.8e-14 |
+| `lam = 1`, unit weights, priors 0 | 1.3e-13 | 5.2e-15 | 4.6e-14 | 9.2e-14 | 6.7e-14 |
+| `lam = 1`, weights in [.5, 2], priors `1e-6` | 1.1e-13 | 1.0e-14 | 2.7e-14 | 5.2e-14 | 1.4e-14 |
+| half-life 50, weights, 10% zero-weight rows, zero first row, priors `1e-6` | 9.8e-14 | 6.6e-15 | 2.5e-14 | 2.6e-14 | 1.9e-14 |
+
+At sklearn's defaults (`tol = 1e-3`, `max_iter = 300`) the same rule gives the same iteration count on every seed and the same fit (7e-14). C1's caveat stands: the update "does not guarantee that the marginal likelihood is increasing"; the loop is sklearn's, so the guarantee is the same.
+Warm-starting `(alpha, lam)` from the previous solve (one row later) takes 3.4 iterations against 4.2 cold (the fit differs only within `tol`). A zero-weight row adds nothing to `G`, `X'y` or `n`; a zero-weight first row leaves `n = 0`, the solve withheld.
+**State added: 16 bytes** (`alpha`, `lam`, the warm start); the eigendecomposition `V, e` and `Sigma` are solve scratch, `8 k^2` bytes if cached for per-row `pred_std` (derived, rebuilt on load, not persisted); cost `O(k^3)` per solve, `O(k^2)` per `pred_std` row.
+
+### 524 (b) Averaged `sgd` and `pa`, weighted by the decay
+
+The average is the EW mean of the iterates in the mean form: `W' = lam W + w`, `bbar += (w/W')(b' - bbar)`, one more k_total-vector. At `half_life = inf` and unit weights it is the uniform (Polyak-Ruppert) average of every iterate. Against
+`SGDRegressor(average=True)` fed one row at a time by `partial_fit(shuffle=False)`, 300 rows, 20 seeds (rheon's plain step `b -= lr (p - y) z w`; penalty `None`, constant rate), absolute gap in the averaged coefficients:
+
+| case | coefficients | intercept |
+|---|---|---|
+| `sgd`, k = 3 / 10, `lr = .01`, `half_life = inf`, unit weights | 2.7e-15 / 4.0e-15 | 5.6e-17 / 2.2e-16 |
+| `pa` (PA-I, `C = 1`, `eps = .1`, **no intercept**), k = 3 / 10, `half_life = inf` | 3.6e-15 / 5.8e-15 | |
+
+C1: `PassiveAggressiveRegressor` is deprecated since 1.8 (removed in 1.10), so the `pa` oracle is `SGDRegressor(loss="epsilon_insensitive", penalty=None, learning_rate="pa1", eta0=C)`. **Where it is not exact:** rheon's `pa` keeps the intercept inside `|z|^2` (the augmented form,
+Crammer et al.) where sklearn keeps it outside, so the `pa` comparison is on the no-intercept case (the one where the two steps are the same step); and rheon's `pa` row weight (`min(w, 1) tau`) has no sklearn counterpart. The decay-weighted average is rheon's: sklearn's is
+uniform, so the oracle is exact only at `half_life = inf` (C1), and under decay, weights and zero-weight rows (half-life 40, 10% zero-weight rows, zero first row) it is checked against the two-pass `sum omega b_i / sum omega` over the recorded iterates (7.7e-16) and
+against the stream with the zero-weight rows removed and their gaps folded (1.6e-16). Zero weight: no new iterate, the average only ages (its `W`).
+**State added: `8 k_total + 8` bytes** a target (k = 20: 176; k = 100: 816), doubling an `sgd` target's coefficient state; nothing grows with the stream.
+
+### 524 (c) `positive=True` on the streaming lasso
+
+`lasso.rs`'s coordinate step on the standardised correlation Gram, `b_i = soft(rho_i, l l1) / (C_ii + l (1 - l1))`, with `positive`: `b_i = max(rho_i - l l1, 0)/(C_ii + l (1 - l1))`. Against `Lasso(positive=True)` and `ElasticNet(l1_ratio, positive=True)`
+fitted on the standardised features with `sample_weight` = the EW weights (C1: sklearn rescales the weights to sum `n`, so `alpha` is on the same per-weight scale as a decayed fit; `tol=1e-14`), alpha .15, k = 8, 200 rows, 20 seeds; largest gap in the standardised coefficients and the
+intercept; the unconstrained step against sklearn as the control; zeros per fit are the coefficients the constraint holds at 0:
+
+| case | `positive` gap | control (unconstrained) | zeros per fit |
+|---|---|---|---|
+| `lam = 1`, unit weights, lasso | 2.7e-13 | 6.2e-13 | 4.2 |
+| `lam = 1`, unit weights, elastic net `l1_ratio` .5 | 8.9e-14 | 1.5e-13 | 4.0 |
+| half-life 50, weights, 10% zero-weight rows, zero first row, lasso | 2.9e-13 | 1.2e-12 | 4.4 |
+| half-life 50, weights, zero weight rows, elastic net .5 | 1.1e-13 | 1.4e-13 | 4.2 |
+
+Positivity in the standardised coordinates is positivity in the raw ones (the scale is positive), so one constraint serves both. Decay and zero weight change only the Gram. **State added: 0** (the warm start is the same coefficient vector). It changes no default (`positive = False`).
+
