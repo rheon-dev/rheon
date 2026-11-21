@@ -1215,6 +1215,47 @@ impl EwCov {
         held.merge_into(self.c.packed_mut(), self.k);
     }
 
+    /// A row at weight `w` with no decay whose mean takes `k0` more rows of
+    /// weight at its current value: the mean steps by `bₘ = w/(W' + k0)`
+    /// rather than `b = w/W'`, and the co-moments, about the new mean, by
+    /// `M' = a·M + (a·bₘ² + b·(1 − bₘ)²)·δδᵀ` (at `bₘ = b` the usual
+    /// `a·b`). For `hmm`'s study of a mean prior under stabilized
+    /// forgetting, on an accumulator that blocks no rows and keeps no runs.
+    #[cfg(feature = "study-c4")]
+    pub(crate) fn update_anchored(&mut self, x: &[f64], w: f64, k0: f64) {
+        debug_assert!(self.pending.block_rows == 0);
+        if w.is_nan() || w <= 0.0 {
+            return;
+        }
+        let Some((a, b, w_new)) = self.step_factors(1.0, w) else {
+            return;
+        };
+        self.rows_learned += 1;
+        let bm = w / (w_new + k0);
+        let coef = a * bm * bm + b * (1.0 - bm) * (1.0 - bm);
+        let k = self.k;
+        let d = &mut self.dev.0;
+        d.clear();
+        d.extend(
+            x.iter()
+                .zip(&self.m)
+                .zip(&self.m_lo)
+                .map(|((&xi, &mi), &li)| crate::comp::dev(xi, mi, li)),
+        );
+        let c = self.c.packed_mut();
+        for i in 0..k {
+            let at = row_at(i);
+            let cd = coef * d[i];
+            for j in 0..=i {
+                c[at + j] = a * c[at + j] + cd * d[j];
+            }
+        }
+        for ((mi, lo), &di) in self.m.iter_mut().zip(self.m_lo.iter_mut()).zip(d.iter()) {
+            crate::comp::add(mi, lo, bm * di);
+        }
+        self.commit_scalars(1.0, w, a, w_new);
+    }
+
     /// [`Self::update_riding`], the co-moments' rank-one step taken by
     /// `step` ([`CoStep`]): at once ([`EachRow`]) or held ([`HeldSteps`]).
     #[inline(always)]

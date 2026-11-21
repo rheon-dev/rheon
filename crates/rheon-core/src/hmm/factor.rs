@@ -319,6 +319,195 @@ impl EwFactor {
         self.w_sum *= lam;
     }
 
+    /// The factor form of `cov` under stabilized forgetting
+    /// ([`super::stabilized`]), whose matrix `(W·C + F)/(W + P₀)` factors as
+    /// `l`: the same weight and means, `σ = 1`.
+    pub(crate) fn take_up_stabilized(cov: &EwCov, l: SpdFactor) -> Self {
+        let mut f = Self::take_up(cov, l);
+        f.precision_scale = 1.0;
+        f
+    }
+
+    /// Whether [`Self::age_stabilized`] at `lam` leaves `σ` past the
+    /// normal range, where the state starts again at its prior.
+    pub(crate) fn ages_out(&self, lam: f64, prior_rows: f64) -> bool {
+        let alpha = lam * (self.w_sum + prior_rows) / (lam * self.w_sum + prior_rows);
+        let sigma = self.sigma * alpha;
+        sigma.is_nan() || sigma < f64::MIN_POSITIVE
+    }
+
+    /// A row's decay under stabilized forgetting: the data's weight decays,
+    /// `W ← λW`, the means stay, and the matrix the state reads,
+    /// `(W·M + F)/(W + P₀)`, holds `λ(W·M + F)` over the new total, so
+    /// `σ ← α·σ` with `α = λ(W + P₀)/(λW + P₀)`. The factored prior `F`
+    /// decays with it; the caller tops it up ([`Self::add_prior`]). Where
+    /// `α·σ` leaves the normal range ([`Self::ages_out`]) what is kept is
+    /// below `2⁻¹⁰²⁰` of the prior, and the state starts again at the prior
+    /// `P₀·diag(psi)`: `true` where it did.
+    pub(crate) fn age_stabilized(&mut self, lam: f64, prior_rows: f64, psi: &[f64]) -> bool {
+        let t = self.w_sum + prior_rows;
+        // [`EwCov`]'s decay of the weight alone: `λW + 0`.
+        self.w_sum *= lam;
+        let t_new = self.w_sum + prior_rows;
+        let alpha = lam * t / t_new;
+        if alpha == 1.0 {
+            return false;
+        }
+        let sigma = self.sigma * alpha;
+        if sigma.is_nan() || sigma < f64::MIN_POSITIVE {
+            self.restart_at_prior(psi, prior_rows / t_new);
+            true
+        } else {
+            self.sigma = sigma;
+            self.lift_sigma();
+            false
+        }
+    }
+
+    /// `q·eⱼeⱼᵀ` of prior, in the units of `W·M + F`, added to the matrix:
+    /// `L Lᵀ + (q/(Tσ))·eⱼeⱼᵀ` with `T = W + P₀`. `false` where the rotations
+    /// left no factor.
+    pub(crate) fn add_prior(
+        &mut self,
+        j: usize,
+        q: f64,
+        prior_rows: f64,
+        v: &mut Vec<f64>,
+    ) -> bool {
+        let t = self.w_sum + prior_rows;
+        let s = (q / (t * self.sigma)).sqrt();
+        s == 0.0 || self.l.add_axis_in_place(j, s, v)
+    }
+
+    /// `−q·eⱼeⱼᵀ` of prior (`q < 0`) taken from the matrix, as
+    /// [`Self::add_prior`] adds it: a downdate. `false` where it would leave
+    /// no positive definite matrix, or left no factor.
+    pub(crate) fn remove_prior(
+        &mut self,
+        j: usize,
+        q: f64,
+        prior_rows: f64,
+        v: &mut Vec<f64>,
+    ) -> bool {
+        let t = self.w_sum + prior_rows;
+        let s = (-q / (t * self.sigma)).sqrt();
+        s == 0.0 || self.l.remove_axis_in_place(j, s, v)
+    }
+
+    /// `q·eⱼeⱼᵀ` of prior added where `q > 0`, taken where `q < 0`.
+    pub(crate) fn move_prior(
+        &mut self,
+        j: usize,
+        q: f64,
+        prior_rows: f64,
+        v: &mut Vec<f64>,
+    ) -> bool {
+        if q > 0.0 {
+            self.add_prior(j, q, prior_rows, v)
+        } else if q < 0.0 {
+            self.remove_prior(j, q, prior_rows, v)
+        } else {
+            true
+        }
+    }
+
+    /// The row `x` learned at weight `w` under stabilized forgetting, after
+    /// its decay ([`Self::age_stabilized`]): the accumulator's step at
+    /// `λ = 1`, `W' = W + w`, `a = W/W'`, `b = w/W'`, means as
+    /// [`EwCov::update`] moves them, and
+    ///
+    /// ```text
+    /// W'·M' + F = W·M + F + (W·w/W')·δδᵀ
+    /// σ' = σ·(W + P₀)/(W' + P₀)
+    /// L' L'ᵀ = L Lᵀ + (W·w/W')/((W' + P₀)·σ')·δδᵀ
+    /// ```
+    ///
+    /// `false` where the rotations left no factor; the state then starts
+    /// again at its prior as factored, `diag(held)`, and the owner counts
+    /// it. `v` is working space.
+    ///
+    /// With `mean_rows = k0 > 0` (a study of a mean prior, under the
+    /// `study-c4` feature) the means step by `bₘ = w/(W' + k0)` and the
+    /// step's weight is `W'·(a·bₘ² + b·(1 − bₘ)²)`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn update_stabilized(
+        &mut self,
+        x: &[f64],
+        w: f64,
+        prior_rows: f64,
+        mean_rows: f64,
+        held: &[f64],
+        v: &mut Vec<f64>,
+    ) -> bool {
+        debug_assert_eq!(x.len(), self.order());
+        if w.is_nan() || w <= 0.0 {
+            return true;
+        }
+        let w_old = self.w_sum;
+        let w_new = w_old + w;
+        #[allow(unused_mut)]
+        let (a, mut b) = (w_old / w_new, w / w_new);
+        #[allow(unused_mut)]
+        let mut c = a * w;
+        #[cfg(not(feature = "study-c4"))]
+        let _ = mean_rows;
+        #[cfg(feature = "study-c4")]
+        if mean_rows > 0.0 {
+            let bm = w / (w_new + mean_rows);
+            c = w_new * (a * bm * bm + b * (1.0 - bm) * (1.0 - bm));
+            b = bm;
+        }
+        v.clear();
+        v.extend(
+            x.iter()
+                .zip(&self.m)
+                .zip(&self.m_lo)
+                .map(|((&xi, &mi), &li)| crate::comp::dev(xi, mi, li)),
+        );
+        if b > 0.0 {
+            for ((mi, lo), &di) in self.m.iter_mut().zip(self.m_lo.iter_mut()).zip(v.iter()) {
+                crate::comp::add(mi, lo, b * di);
+            }
+        }
+        self.w_sum = w_new;
+        let t_new = w_new + prior_rows;
+        let alpha = (w_old + prior_rows) / t_new;
+        let mut sigma = self.sigma * alpha;
+        if sigma.is_nan() || sigma < f64::MIN_POSITIVE {
+            // A weight past the normal range of the rest: what the state
+            // held is below `2⁻¹⁰²⁰` of the row's share.
+            self.restart_at_prior(held, 1.0 / t_new);
+            sigma = 1.0;
+        }
+        // `W·w/W'`, the step's weight in `W'·M' + F`.
+        if c == 0.0 {
+            self.sigma = sigma;
+            self.lift_sigma();
+            return true;
+        }
+        let root = (c / (t_new * sigma)).sqrt();
+        v.iter_mut().for_each(|x| *x *= root);
+        if self.l.add_outer_in_place_fused(v) {
+            self.sigma = sigma;
+            self.lift_sigma();
+            true
+        } else {
+            self.restart_at_prior(held, 1.0 / t_new);
+            false
+        }
+    }
+
+    /// The matrix started again at `scale·diag(prior)`, `σ = 1`: the prior
+    /// alone, the data's share gone. A prior that is no positive finite
+    /// diagonal leaves `M` as it is.
+    pub(crate) fn restart_at_prior(&mut self, prior: &[f64], scale: f64) {
+        let d: Vec<f64> = prior.iter().map(|p| p * scale).collect();
+        if let Some(l) = SpdFactor::diagonal(&d) {
+            self.l = l;
+            self.sigma = 1.0;
+        }
+    }
+
     /// `M = ridge·I`, `σ = 1`: whether `ridge` is a positive finite number,
     /// without which `M` is not moved.
     fn restart(&mut self, ridge: f64) -> bool {

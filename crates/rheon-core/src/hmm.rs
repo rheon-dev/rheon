@@ -103,6 +103,8 @@ use crate::{Covariance, Decay, EwCov, EwCovDiag, SeedRule};
 
 mod factor;
 pub use factor::EwFactor;
+mod stabilized;
+pub use stabilized::Stabilized;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HmmCfg {
@@ -484,6 +486,11 @@ pub struct Hmm {
     /// (`restore`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     factor_states: Vec<EwFactor>,
+    /// Stabilized forgetting of the states' covariances
+    /// ([`Self::with_stabilized`]); `None` in every model a spec builds,
+    /// and never written: it is not yet an option.
+    #[serde(skip)]
+    stabilized: Option<Box<Stabilized>>,
     /// Study C4's prototype ([`crate::study_c4`]); never written.
     #[cfg(feature = "study-c4")]
     #[serde(skip)]
@@ -525,6 +532,68 @@ impl Hmm {
     }
 
     pub fn new(cfg: HmmCfg) -> Result<Self, String> {
+        Self::build(cfg, None)
+    }
+
+    /// A model whose `full` or `diag` states forget toward a prior worth
+    /// `prior_rows` rows ([`Stabilized`]): not yet an option of the spec,
+    /// for the study of it and its tests. A model that does not learn, or of
+    /// another shape, takes no prior.
+    #[doc(hidden)]
+    pub fn with_stabilized(cfg: HmmCfg, prior_rows: f64) -> Result<Self, String> {
+        if !(prior_rows > 0.0 && prior_rows.is_finite()) {
+            return Err(format!(
+                "hmm: the prior's rows must be a positive number, but they are {prior_rows}"
+            ));
+        }
+        Self::build(cfg, Some(prior_rows))
+    }
+
+    /// [`Self::with_stabilized`] read through co-moments at every width:
+    /// the exact recursion, `O(d³)` a row, which the factor form tops up
+    /// lazily; for the study and the tests.
+    #[doc(hidden)]
+    pub fn with_stabilized_comoments(cfg: HmmCfg, prior_rows: f64) -> Result<Self, String> {
+        let mut m = Self::with_stabilized(cfg, prior_rows)?;
+        if m.factored() {
+            // Given states at that width are taken up at once.
+            return Err("hmm: the co-moment form takes no given states".into());
+        }
+        if let Some(st) = m.stabilized.as_deref_mut() {
+            st.comoments = true;
+        }
+        Ok(m)
+    }
+
+    /// A study of a mean prior under stabilized forgetting: each learned
+    /// row's mean step divides by `rows` more of weight at the state's
+    /// current mean (`EwCov::update_anchored`). Before the first row.
+    #[cfg(feature = "study-c4")]
+    pub fn set_mean_prior(&mut self, rows: f64) {
+        if let Some(st) = self.stabilized.as_deref_mut() {
+            st.mean_rows = rows;
+        }
+    }
+
+    /// A study of the factor form's tolerance `τ` ([`Stabilized`]): a
+    /// coordinate's prior is moved to its target before a read once it is
+    /// more than `τ` of it away. Before the first row.
+    #[cfg(feature = "study-c4")]
+    pub fn set_stabilized_tau(&mut self, tau: f64) {
+        if let Some(st) = self.stabilized.as_deref_mut() {
+            st.tau = tau;
+        }
+    }
+
+    /// The stabilized prior, where it is in force: set, the states seeded and
+    /// learned.
+    pub fn stabilized(&self) -> Option<&Stabilized> {
+        self.stabilized
+            .as_deref()
+            .filter(|_| self.seeded && self.cfg.learn)
+    }
+
+    fn build(cfg: HmmCfg, prior_rows: Option<f64>) -> Result<Self, String> {
         cfg.validate()?;
         let (k, d) = (cfg.k, cfg.n_features);
         // No window reads a run here, so none is kept (docs/PLAN.md task
@@ -566,10 +635,23 @@ impl Hmm {
             states,
             diag_states,
             factor_states: Vec::new(),
+            stabilized: None,
             #[cfg(feature = "study-c4")]
             study: Default::default(),
             cfg,
         };
+        let shape = matches!(m.cfg.covariance, Covariance::Full | Covariance::Diagonal);
+        if let Some(p0) = prior_rows.filter(|_| shape && m.cfg.learn) {
+            m.stabilized = Some(Box::new(Stabilized::new(
+                p0,
+                d,
+                m.cfg.decay,
+                m.cfg.precision_prior,
+            )));
+            if m.seeded {
+                m.seed_stabilized();
+            }
+        }
         m.take_up_factors();
         Ok(m)
     }
@@ -606,6 +688,35 @@ impl Hmm {
         }
         let d = self.cfg.n_features;
         let mut held = Vec::with_capacity(self.states.len());
+        if self.stabilized.as_deref().is_some_and(|st| st.comoments) {
+            return;
+        }
+        if let Some(st) = self.stabilized.as_deref_mut().filter(|_| self.cfg.learn) {
+            // `(W·C + P₀Ψ)/(W + P₀)`, every coordinate's prior topped up.
+            let p0 = st.prior_rows;
+            let mut add = vec![0.0; d];
+            for cov in &self.states {
+                let t = cov.n_eff() + p0;
+                for (a, &p) in add.iter_mut().zip(st.psi()) {
+                    *a = p0 * p / t;
+                }
+                let m = cov.n_eff() / t;
+                match self
+                    .factors
+                    .work
+                    .factor_shrunk(cov.comoments().packed(), m, &add, d)
+                {
+                    Some(f) => held.push(EwFactor::take_up_stabilized(cov, f)),
+                    None => return,
+                }
+            }
+            st.hold_all();
+            self.factors.clear();
+            self.factors.work.drop_spares();
+            self.states.clear();
+            self.factor_states = held;
+            return;
+        }
         for cov in &self.states {
             let r = self.cfg.precision_prior * cov.precision_scale();
             match self
@@ -843,6 +954,22 @@ impl Hmm {
 
     /// [`Self::state_matrix`], written over `m`.
     fn state_matrix_into(&self, s: usize, m: &mut Vec<f64>) {
+        if let Some(st) = self.stabilized() {
+            let cov = &self.states[s];
+            let d = self.cfg.n_features;
+            let (scale, add) = st.shrink_of(cov.n_eff());
+            let c = cov.comoments().packed();
+            m.clear();
+            m.resize(d * d, 0.0);
+            for i in 0..d {
+                let at = crate::ewcov::row_at(i);
+                for j in 0..=i {
+                    m[i * d + j] = scale * c[at + j];
+                }
+                m[i * d + i] += add(i);
+            }
+            return;
+        }
         #[cfg(feature = "study-c4")]
         if self.study.active() {
             let cov = &self.states[s];
@@ -872,12 +999,19 @@ impl Hmm {
     #[cfg(test)]
     fn log_densities(&self, x: &[f64]) -> Option<Vec<f64>> {
         let mut work = RowWork::default();
-        self.log_densities_into(x, &mut work).then_some(work.logf)
+        let ok = if self.stabilized().is_some() {
+            self.log_densities_into::<true>(x, &mut work)
+        } else {
+            self.log_densities_into::<false>(x, &mut work)
+        };
+        ok.then_some(work.logf)
     }
 
     /// [`Self::log_densities`], written over the working space's `logf`:
-    /// whether there is a density.
-    fn log_densities_into(&self, x: &[f64], work: &mut RowWork) -> bool {
+    /// whether there is a density. `S`: under stabilized forgetting
+    /// ([`Self::stabilized`]); a constant, so today's build of it is
+    /// compiled as it was without that.
+    fn log_densities_into<const S: bool>(&self, x: &[f64], work: &mut RowWork) -> bool {
         let (k, d) = (self.cfg.k, self.cfg.n_features);
         let base = -0.5 * d as f64 * std::f64::consts::TAU.ln();
         let RowWork {
@@ -895,6 +1029,9 @@ impl Hmm {
         out.resize(k, f64::NEG_INFINITY);
         match self.cfg.covariance {
             Covariance::Diagonal => {
+                if let Some(st) = self.stabilized().filter(|_| S) {
+                    return Self::diag_stabilized(st, &self.diag_states, x, base, out);
+                }
                 for (s, (o, cov)) in out.iter_mut().zip(&self.diag_states).enumerate() {
                     let r = self.ridge(s);
                     let (mut log_det, mut q) = (0.0, 0.0);
@@ -1023,13 +1160,19 @@ impl Hmm {
     /// from `predict`, which may not.
     fn read(&self, x: &[f64], exog: Option<f64>, lam: f64) -> Vec<f64> {
         let mut out = Vec::new();
-        self.read_into(x, exog, lam, &mut out, &mut RowWork::default());
+        let mut work = RowWork::default();
+        if self.stabilized().is_some() {
+            self.read_into::<true>(x, exog, lam, &mut out, &mut work);
+        } else {
+            self.read_into::<false>(x, exog, lam, &mut out, &mut work);
+        }
         out
     }
 
     /// [`Self::read`], the outputs written over `out`: whether `work` now
-    /// holds what the update needs ([`RowWork`]).
-    fn read_into(
+    /// holds what the update needs ([`RowWork`]). `S` as in
+    /// [`Self::log_densities_into`].
+    fn read_into<const S: bool>(
         &self,
         x: &[f64],
         exog: Option<f64>,
@@ -1047,7 +1190,7 @@ impl Hmm {
             return false;
         }
         self.transition_at_into(exog, lam, work);
-        if !self.log_densities_into(x, work) {
+        if !self.log_densities_into::<S>(x, work) {
             nan(out);
             return false;
         }
@@ -1145,6 +1288,9 @@ impl Hmm {
         }
         self.buffer.clear();
         self.seeded = true;
+        if self.stabilized.is_some() {
+            self.seed_stabilized();
+        }
         #[cfg(feature = "study-c4")]
         self.study_seed();
         self.factors.clear();
@@ -1205,7 +1351,7 @@ impl Hmm {
         if self.cfg.learn {
             self.a.iter_mut().for_each(|v| *v *= lam);
         }
-        let read = self.read_into(x, self.exog_of(y), 1.0, &mut out.pred, work);
+        let read = self.read_into::<false>(x, self.exog_of(y), 1.0, &mut out.pred, work);
         out.n_eff = self.n_eff;
         out.extra = None;
         // The warm-up rows age as `n_eff` does, so the states the replay seeds
@@ -1332,6 +1478,384 @@ impl Hmm {
         // next row's buffer.
         std::mem::swap(&mut self.p, &mut work.post);
     }
+
+    /// [`Self::step_in`] under stabilized forgetting, the states seeded and
+    /// learned ([`Self::stabilized`]): they age before the read and learn
+    /// the row at `λ = 1` after it.
+    #[inline(never)]
+    fn step_in_stabilized(
+        &mut self,
+        x: &[f64],
+        y: &[Option<f64>],
+        d_clock: f64,
+        weight: f64,
+        out: &mut crate::Step,
+        work: &mut RowWork,
+    ) {
+        debug_assert!(self.seeded && self.cfg.learn && self.buffer.is_empty());
+        let lam = self.cfg.decay.factor(d_clock);
+        let saved = self.age_stabilized(x, lam, work, weight <= 0.0);
+        self.ensure_factors_stabilized();
+        // The chain as the row's clock leaves it: the counts decay over the
+        // clock since the last row before `Π` is read, on every row, so a
+        // zero-weight row ages them as the gap it sits in would and the next
+        // row reads what it would were that row not there (hard rule 9).
+        // The row read them before its own decay, and a zero-weight row's
+        // decay before the next one: against the Dirichlet pseudo-count,
+        // which does not decay, that moved the fit 1.2e-5 in the contract
+        // test (docs/PLAN.md task 214). The states need no such step: their
+        // means, co-moments and prior scale, all a density reads, do not
+        // move on a row that adds no weight.
+        if self.cfg.learn {
+            self.a.iter_mut().for_each(|v| *v *= lam);
+        }
+        let read = self.read_into::<true>(x, self.exog_of(y), 1.0, &mut out.pred, work);
+        if saved.is_some() {
+            self.restore_stabilized(saved);
+        }
+        out.n_eff = self.n_eff;
+        out.extra = None;
+        if weight <= 0.0 {
+            // Advance the clock and learn nothing: the counts have aged
+            // above, the accumulators age with them, `n_eff` decays with
+            // them -- hard rule 8, the same recursion in every model, which
+            // is what makes `min_weight` mean the same number of rows across
+            // a bank (docs/REVIEW-E54-E64.md H3) -- and `p` does not move.
+            self.n_eff *= lam;
+            self.observe_stabilized(d_clock, 0.0);
+            self.factors.clear();
+            return;
+        }
+        let before = self.n_eff;
+        self.n_eff = lam * before + weight;
+        if !read {
+            // A state's factorization failed, or a density was not finite --
+            // a quadratic form overflowing against a state of tiny spread --
+            // so the row cannot be scored or learned: a usable row that fails
+            // of its own, and so counted. It still happened, so it ages the
+            // clock like a zero-weight row --
+            // `n_eff`, the counts and the states all decay by `lam`, nothing
+            // is added -- rather than `n_eff` advancing on its own (review
+            // 2026-09-18).
+            self.solve_failures += 1;
+            self.n_eff = lam * before;
+            self.observe_stabilized(d_clock, 0.0);
+            self.factors.clear();
+            return;
+        }
+        if self.cfg.learn {
+            let k = self.cfg.k;
+            // The filtered joint of consecutive states, from the *pre-row*
+            // `p` and the `Π` the row read; the counts have decayed on the
+            // clock above, like every accumulator here.
+            if self.cfg.tvtp.is_none() {
+                // `Π` as the row read it: without `tvtp` that is
+                // `transition()`, the counts as they stand, which nothing
+                // has moved since the read (the frozen state fixtures
+                // continue to the bit through this update).
+                // About the largest density, not `logf[0]`: a state whose
+                // density is astronomically small makes `exp(logf[l] −
+                // logf[0])` overflow the other way, and the counts go to
+                // NaN. The reference cancels in the normalisation.
+                let RowWork {
+                    pi,
+                    logf,
+                    exps: scaled,
+                    joint,
+                    ..
+                } = &mut *work;
+                let top = logf.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                scaled.clear();
+                scaled.extend(logf.iter().map(|v| (v - top).exp()));
+                joint.clear();
+                joint.resize(k * k, 0.0);
+                let mut z = 0.0;
+                for kk in 0..k {
+                    for l in 0..k {
+                        let v = self.p[kk] * pi[kk * k + l] * scaled[l];
+                        joint[kk * k + l] = v;
+                        z += v;
+                    }
+                }
+                for (a, j) in self.a.iter_mut().zip(joint.iter()) {
+                    *a += if z > 0.0 { weight * j / z } else { 0.0 };
+                }
+            }
+            self.learn_stabilized(x, weight, d_clock, work);
+        }
+        // The posterior is the next row's `p`, and the `p` it replaces the
+        // next row's buffer.
+        std::mem::swap(&mut self.p, &mut work.post);
+    }
+}
+
+/// Stabilized forgetting's steps ([`Stabilized`]).
+impl Hmm {
+    /// `ŝ` from the states' variances, pooled by their weights.
+    fn seed_stabilized(&mut self) {
+        let d = self.cfg.n_features;
+        let mut pooled = vec![0.0; d];
+        let mut total = 0.0;
+        for s in 0..self.cfg.k {
+            let w = match self.states.get(s) {
+                Some(c) => {
+                    for (p, i) in pooled.iter_mut().zip(0..d) {
+                        *p += c.n_eff() * c.var(i);
+                    }
+                    c.n_eff()
+                }
+                None => {
+                    let c = &self.diag_states[s];
+                    for (p, i) in pooled.iter_mut().zip(0..d) {
+                        *p += c.n_eff() * c.var(i);
+                    }
+                    c.n_eff()
+                }
+            };
+            total += w;
+        }
+        if total > 0.0 {
+            pooled.iter_mut().for_each(|p| *p /= total);
+        }
+        if let Some(st) = self.stabilized.as_deref_mut() {
+            st.seed(&pooled, total);
+        }
+    }
+
+    /// The row's decay, before its read: every state's weight by `λ`; in
+    /// the factor form each matrix's scale with it and the factored prior,
+    /// and the coordinates whose prior has fallen below `1 − τ` of its
+    /// target topped up in every state (all of them where a state's scale
+    /// left the normal range and it started again at its prior).
+    ///
+    /// Where `transient` (a row of weight 0) the top-ups serve its read
+    /// alone: the states and `f` as they stood before them are handed back
+    /// for the caller to put back after the read, so a zero-weight row
+    /// leaves the factors as the gap it sits in would, to rounding (hard
+    /// rule 9). A row that starts a state again keeps them.
+    #[inline(never)]
+    fn age_stabilized(
+        &mut self,
+        x: &[f64],
+        lam: f64,
+        work: &mut RowWork,
+        transient: bool,
+    ) -> Option<(Vec<EwFactor>, Vec<f64>)> {
+        // `update(x, lam, 0)`'s numbers, to the bit, in `O(1)`: the weight
+        // ages and `a = λW/λW = 1` moves nothing else.
+        let _ = x;
+        for s in self.states.iter_mut() {
+            s.decay(lam);
+        }
+        for s in self.diag_states.iter_mut() {
+            s.decay(lam);
+        }
+        self.factors.clear();
+        if !self.factored() {
+            return None;
+        }
+        let st = self.stabilized.as_deref_mut()?;
+        let p0 = st.prior_rows;
+        // A state that starts again at its prior holds all of it, so every
+        // coordinate is topped up in the others (rare: a gap of a thousand
+        // half-lives).
+        let all = self.factor_states.iter().any(|f| f.ages_out(lam, p0));
+        let restarts: Vec<bool> = self
+            .factor_states
+            .iter_mut()
+            .map(|f| f.age_stabilized(lam, p0, st.psi()))
+            .filter(|_| all)
+            .collect();
+        let all = st.age(lam, all);
+        let saved = (transient && !all && !st.due().is_empty())
+            .then(|| (self.factor_states.clone(), st.held.clone()));
+        for i in 0..st.due().len() {
+            let j = st.due()[i];
+            let q = st.settle(j, all);
+            if q != 0.0 {
+                for (s, f) in self.factor_states.iter_mut().enumerate() {
+                    let restarted = restarts.get(s).copied().unwrap_or(false);
+                    if !restarted && !f.move_prior(j, q, p0, &mut work.delta) {
+                        f.restart_at_prior(&st.held, 1.0 / (f.n_eff() + p0));
+                        self.solve_failures += 1;
+                    }
+                }
+            }
+        }
+        saved
+    }
+
+    /// What [`Self::age_stabilized`] handed back, put back.
+    #[inline(never)]
+    fn restore_stabilized(&mut self, saved: Option<(Vec<EwFactor>, Vec<f64>)>) {
+        if let (Some((f, held)), Some(st)) = (saved, self.stabilized.as_deref_mut()) {
+            self.factor_states = f;
+            st.held = held;
+        }
+    }
+
+    /// The `diag` states' log densities under stabilized forgetting, each
+    /// variance `(W·v + P₀ψ)/(W + P₀)`, into `out`: whether all are finite.
+    #[inline(never)]
+    fn diag_stabilized(
+        st: &Stabilized,
+        states: &[EwCovDiag],
+        x: &[f64],
+        base: f64,
+        out: &mut [f64],
+    ) -> bool {
+        let (p0, psi) = (st.prior_rows, st.psi());
+        for (o, cov) in out.iter_mut().zip(states) {
+            let t = cov.n_eff() + p0;
+            let (m, a) = (cov.n_eff() / t, p0 / t);
+            let (mut log_det, mut q) = (0.0, 0.0);
+            for (i, xi) in x.iter().enumerate() {
+                let v = m * cov.var(i) + a * psi[i];
+                let dv = cov.deviation(i, *xi);
+                log_det += v.ln();
+                q += dv * dv / v;
+            }
+            *o = base - 0.5 * log_det - 0.5 * q;
+        }
+        out.iter().all(|v| v.is_finite())
+    }
+
+    /// [`Self::ensure_factors`] under stabilized forgetting.
+    fn ensure_factors_stabilized(&mut self) {
+        if !self.seeded || !matches!(self.cfg.covariance, Covariance::Full) {
+            return;
+        }
+        self.take_up_factors();
+        if self.factored() {
+            return;
+        }
+        let (k, d) = (self.cfg.k, self.cfg.n_features);
+        let Self {
+            states,
+            factors,
+            stabilized,
+            ..
+        } = self;
+        if let Some(st) = stabilized.as_deref_mut() {
+            Self::factors_stabilized(st, states, factors, k, d);
+        }
+    }
+
+    /// The `full` states' factors in co-moments under stabilized
+    /// forgetting, each of `(W·C + P₀Ψ)/(W + P₀)`.
+    #[inline(never)]
+    fn factors_stabilized(
+        st: &mut Stabilized,
+        states: &[EwCov],
+        factors: &mut Factors,
+        k: usize,
+        d: usize,
+    ) {
+        for (s, cov) in states.iter().enumerate() {
+            if factors.peek(s).is_none() {
+                let (m, add) = st.shrink(cov.n_eff());
+                let f = factors
+                    .work
+                    .factor_shrunk(cov.comoments().packed(), m, add, d);
+                factors.set(s, k, f);
+            }
+        }
+    }
+
+    /// A row that teaches the states nothing: `V` decays.
+    fn observe_stabilized(&mut self, d_clock: f64, w: f64) {
+        if let Some(st) = self.stabilized.as_deref_mut() {
+            st.observe(d_clock, w, &[]);
+            debug_assert!(w == 0.0);
+        }
+    }
+
+    /// A learned row under stabilized forgetting, its states aged already
+    /// ([`Self::age_stabilized`]): each state learns it at `λ = 1` and
+    /// weight `w·pₗ`; `ŝ` takes the row's squared deviations from the means
+    /// before it; in the factor form the cursor's coordinate is topped up.
+    #[inline(never)]
+    fn learn_stabilized(&mut self, x: &[f64], weight: f64, d_clock: f64, work: &mut RowWork) {
+        let Some(mut st) = self.stabilized.take() else {
+            return;
+        };
+        let post = &work.post;
+        let mut e = std::mem::take(&mut st.e);
+        e.clear();
+        e.resize(x.len(), 0.0);
+        fn add(e: &mut [f64], x: &[f64], p: f64, dev: impl Fn(usize, f64) -> f64) {
+            for (i, (ei, &xi)) in e.iter_mut().zip(x).enumerate() {
+                let dv = dev(i, xi);
+                *ei += p * dv * dv;
+            }
+        }
+        for (s, &p) in post.iter().enumerate() {
+            match (self.states.get(s), self.factor_states.get(s)) {
+                (Some(c), _) => add(&mut e, x, p, |i, xi| c.deviation(i, xi)),
+                (None, Some(f)) => add(&mut e, x, p, |i, xi| f.deviation(i, xi)),
+                (None, None) => {
+                    let c = &self.diag_states[s];
+                    add(&mut e, x, p, |i, xi| c.deviation(i, xi))
+                }
+            }
+        }
+        // A study's mean prior (`set_mean_prior`) where its feature is on.
+        let k0 = st.mean_rows;
+        for (s, cov) in self.states.iter_mut().enumerate() {
+            #[cfg(feature = "study-c4")]
+            if k0 > 0.0 {
+                cov.update_anchored(x, weight * post[s], k0);
+                continue;
+            }
+            cov.update(x, 1.0, weight * post[s]);
+        }
+        for (s, cov) in self.diag_states.iter_mut().enumerate() {
+            #[cfg(feature = "study-c4")]
+            if k0 > 0.0 {
+                cov.update_anchored(x, weight * post[s], k0);
+                continue;
+            }
+            cov.update(x, 1.0, weight * post[s]);
+        }
+        let p0 = st.prior_rows;
+        for (s, f) in self.factor_states.iter_mut().enumerate() {
+            if !f.update_stabilized(x, weight * post[s], p0, k0, &st.held, &mut work.delta) {
+                self.solve_failures += 1;
+            }
+        }
+        st.observe(d_clock, weight, &e);
+        st.e = e;
+        if self.factored() {
+            // Up only: a prior above its target is taken down before a read
+            // once it is `τ` over, a downdate costing three rotations' work.
+            let j = st.next();
+            let q = st.top_up_short(j);
+            if q > 0.0 {
+                for f in self.factor_states.iter_mut() {
+                    if !f.move_prior(j, q, p0, &mut work.delta) {
+                        f.restart_at_prior(&st.held, 1.0 / (f.n_eff() + p0));
+                        self.solve_failures += 1;
+                    }
+                }
+            }
+        }
+        self.stabilized = Some(st);
+        self.factors.clear();
+    }
+
+    /// `predict` under stabilized forgetting: the step's read, on a copy
+    /// aged as the step ages the states before it.
+    fn predict_stabilized(&self, x: &[f64], exog: Option<f64>, d_clock: f64) -> crate::Step {
+        let mut c = self.clone();
+        let lam = self.cfg.decay.factor(d_clock);
+        c.age_stabilized(x, lam, &mut RowWork::default(), false);
+        c.ensure_factors_stabilized();
+        crate::Step {
+            pred: c.read(x, exog, self.counts_lam(d_clock)),
+            n_eff: self.n_eff,
+            extra: None,
+        }
+    }
 }
 
 /// Study C4's prototype ([`crate::study_c4`]): set before the first row.
@@ -1432,7 +1956,13 @@ impl crate::OnlineModel for Hmm {
             return;
         }
         let mut work = self.factors.row.take().unwrap_or_default();
-        self.step_in(x, y, d_clock, weight, out, &mut work);
+        // Stabilized forgetting's own step, out of line, so today's is
+        // compiled as it was without it.
+        if self.stabilized().is_some() {
+            self.step_in_stabilized(x, y, d_clock, weight, out, &mut work);
+        } else {
+            self.step_in(x, y, d_clock, weight, out, &mut work);
+        }
         self.factors.row = Some(work);
     }
 
@@ -1441,6 +1971,9 @@ impl crate::OnlineModel for Hmm {
             return refused;
         }
         let exog = self.cfg.tvtp.as_ref().map(|_| 0.0);
+        if self.stabilized().is_some() {
+            return self.predict_stabilized(x, exog, d_clock);
+        }
         crate::Step {
             pred: self.read(x, exog, self.counts_lam(d_clock)),
             n_eff: self.n_eff,
@@ -1455,6 +1988,9 @@ impl crate::OnlineModel for Hmm {
     fn predict_with(&self, x: &[f64], y: &[Option<f64>], d_clock: f64) -> crate::Step {
         if let Some(refused) = crate::model::refused_predict_with(self, x, y, d_clock) {
             return refused;
+        }
+        if self.stabilized().is_some() {
+            return self.predict_stabilized(x, self.exog_of(y), d_clock);
         }
         crate::Step {
             pred: self.read(x, self.exog_of(y), self.counts_lam(d_clock)),
@@ -1555,6 +2091,9 @@ impl crate::OnlineModel for Hmm {
 
 #[cfg(test)]
 mod tests_factor;
+
+#[cfg(test)]
+mod tests_stabilized;
 
 #[cfg(test)]
 mod tests {

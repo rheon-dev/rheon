@@ -146,6 +146,49 @@ fn factorize_ridged_into(
     None
 }
 
+/// [`factorize_ridged_into`] of `m·C + diag(add)`, `C` its lower triangle
+/// packed row by row: the matrix a state reads under stabilized forgetting
+/// ([`crate::hmm`]), its data's co-moments shrunk toward a diagonal prior.
+/// Each rung's entries are `m·c_ij` below the diagonal and `(m·c_ii +
+/// add_i) + jitter` on it, written straight into `l`.
+fn factorize_shrunk_into(
+    c: &[f64],
+    m: f64,
+    add: &[f64],
+    k: usize,
+    l: &mut Mat<f64>,
+    work: &mut CholWork,
+) -> Option<(u32, f64)> {
+    debug_assert_eq!(c.len(), crate::ewcov::row_at(k));
+    debug_assert_eq!(add.len(), k);
+    let diag = |i: usize| m * c[crate::ewcov::row_at(i) + i] + add[i];
+    let trace: f64 = (0..k).map(diag).sum();
+    let base = if trace > 0.0 { trace / k as f64 } else { 1.0 };
+    let threads = crate::pieces::degree();
+    if !(l.nrows() == k && l.ncols() == k) {
+        *l = Mat::zeros(k, k);
+    }
+    for (attempts, &eps) in JITTER.iter().enumerate() {
+        let jitter = base * eps;
+        for j in 0..k {
+            let col = l.col_as_slice_mut(j);
+            let (above, rest) = col.split_at_mut(j);
+            above.fill(0.0);
+            rest[0] = diag(j) + jitter;
+            let mut at = crate::ewcov::row_at(j + 1) + j;
+            for (i, v) in (j + 1..).zip(&mut rest[1..]) {
+                *v = m * c[at];
+                at += i + 1;
+            }
+        }
+        if cholesky_in_place(l.as_mut(), threads, (LEAF, TILE), Some(&mut *work)).is_ok() {
+            clear_upper(l);
+            return Some((attempts as u32, jitter));
+        }
+    }
+    None
+}
+
 /// The ladder [`factorize`] and [`factorize_into`] climb: the attempts so
 /// far and the jitter `eps · trace/k` (`trace/k` read as 1 where the trace
 /// is not positive) for each `eps` in [`JITTER`] in turn; each caller
@@ -257,6 +300,32 @@ impl FactorWork {
     pub(crate) fn factor_ridged(&mut self, c: &[f64], ridge: f64, k: usize) -> Option<SpdFactor> {
         let spare = self.spare(k);
         SpdFactor::of_ridged_in(c, ridge, k, spare, &mut self.chol)
+    }
+
+    /// [`Self::factor`] of `m·C + diag(add)`, `C` given as its lower
+    /// triangle packed row by row ([`factorize_shrunk_into`]).
+    #[inline(never)]
+    pub(crate) fn factor_shrunk(
+        &mut self,
+        c: &[f64],
+        m: f64,
+        add: &[f64],
+        k: usize,
+    ) -> Option<SpdFactor> {
+        let spare = self
+            .spares
+            .iter()
+            .position(|f| f.order() == k)
+            .map(|i| self.spares.swap_remove(i));
+        let mut l = spare.map_or_else(Mat::new, |f| f.l);
+        let (attempts, jitter) = factorize_shrunk_into(c, m, add, k, &mut l, &mut self.chol)?;
+        Some(SpdFactor {
+            l,
+            log_det: OnceLock::new(),
+            attempts,
+            jitter,
+            moves: 0,
+        })
     }
 
     /// A copy of `f`, written over a kept factor of its order where there
@@ -1423,6 +1492,155 @@ impl SpdFactor {
         self.is_a_factor()
     }
 
+    /// [`Self::add_outer_in_place`], its bits, with the check that it left
+    /// a factor made as the rotations run rather than by reading `L` again:
+    /// each new pivot `√(d² + p²)` positive and finite, and each rotated
+    /// entry finite (summed as `l·0`, which is not a number exactly where
+    /// `l` is not finite). The pass that read `L` again was a fifth of a
+    /// stabilized `hmm` row at 13 features.
+    pub(crate) fn add_outer_in_place_fused(&mut self, v: &mut [f64]) -> bool {
+        let k = self.l.nrows();
+        if v.len() != k || !v.iter().all(|x| x.is_finite()) {
+            return false;
+        }
+        let (mut ok, mut chk) = (true, 0.0);
+        for j in 0..k {
+            let Some(col) = self.l.col_mut(j).try_as_col_major_mut() else {
+                return false;
+            };
+            let col = &mut col.as_slice_mut()[j..];
+            let (d, p) = (col[0], v[j]);
+            let big = d.abs().max(p.abs());
+            let (dd, pp) = (d / big, p / big);
+            let r = big * (dd * dd + pp * pp).sqrt();
+            ok &= r > 0.0 && r.is_finite();
+            let (cos, sin) = (d / r, p / r);
+            col[0] = r;
+            for (li, xi) in col[1..].iter_mut().zip(&mut v[j + 1..]) {
+                let l = *li;
+                *li = cos * l + sin * *xi;
+                *xi = cos * *xi - sin * l;
+                chk += *li * 0.0;
+            }
+        }
+        self.log_det = OnceLock::new();
+        ok && chk == 0.0
+    }
+
+    /// `L L'ᵀ = L Lᵀ + s²·eⱼ eⱼᵀ` in place: [`Self::add_outer_in_place`]
+    /// of the step `s·eⱼ`, to its bits, from column `j` on (the rotations of
+    /// the columns before it are the identity, `cos = 1`, `sin = 0`, so they
+    /// are skipped): about `(k − j)²/2` rotations where a full step takes
+    /// `k²/2`. `v` is working space. `false` where a pivot left the
+    /// double's range.
+    pub(crate) fn add_axis_in_place(&mut self, j: usize, s: f64, v: &mut Vec<f64>) -> bool {
+        let k = self.l.nrows();
+        if j >= k || !s.is_finite() {
+            return false;
+        }
+        v.clear();
+        v.resize(k, 0.0);
+        v[j] = s;
+        // Each new pivot `r = √(d² + p²)` is at least the old one, and each
+        // rotation's factors are at most 1, so a factor stays one: only a
+        // pivot past the double's range is checked for, as it is made,
+        // where `add_outer_in_place` reads every entry again.
+        let mut ok = true;
+        for c in j..k {
+            let Some(col) = self.l.col_mut(c).try_as_col_major_mut() else {
+                return false;
+            };
+            let col = &mut col.as_slice_mut()[c..];
+            let (d, p) = (col[0], v[c]);
+            let big = d.abs().max(p.abs());
+            let (dd, pp) = (d / big, p / big);
+            let r = big * (dd * dd + pp * pp).sqrt();
+            ok &= r.is_finite();
+            let (cos, sin) = (d / r, p / r);
+            col[0] = r;
+            for (li, xi) in col[1..].iter_mut().zip(&mut v[c + 1..]) {
+                let l = *li;
+                *li = cos * l + sin * *xi;
+                *xi = cos * *xi - sin * l;
+            }
+        }
+        self.log_det = OnceLock::new();
+        ok
+    }
+
+    /// `L L'ᵀ = L Lᵀ − s²·eⱼ eⱼᵀ` in place: LINPACK's `dchdd` for the step
+    /// `x = s·eⱼ`. With `p = L⁻¹x` (zero above `j`) and `α = √(1 − |p|²)`,
+    /// rotations `(cᵢ, sᵢ)` for `i` from the last down to `j` fold each
+    /// `pᵢ` into `α`, and each row of `L` from `j` on is turned by them, its
+    /// entries from `j` to the diagonal (Golub and Van Loan's downdate).
+    /// `false`, with `L` unmoved, where `|p| >= 1`: the matrix less the step
+    /// would not be positive definite; `false` too where the rotations left
+    /// no factor. `p` is working space. About `(k − j)²/2` products for the
+    /// solve and `(k − j)²` for the rotations.
+    pub(crate) fn remove_axis_in_place(&mut self, j: usize, s: f64, p: &mut Vec<f64>) -> bool {
+        let k = self.l.nrows();
+        if j >= k || !s.is_finite() {
+            return false;
+        }
+        p.clear();
+        p.resize(2 * k, 0.0);
+        let (p, rot) = p.split_at_mut(k);
+        // `L p = s·eⱼ`, forward from `j`.
+        let mut norm = 0.0;
+        for i in j..k {
+            let mut v = if i == j { s } else { 0.0 };
+            for (t, &pt) in p.iter().enumerate().take(i).skip(j) {
+                v -= self.l[(i, t)] * pt;
+            }
+            p[i] = v / self.l[(i, i)];
+            norm += p[i] * p[i];
+        }
+        if norm.is_nan() || norm >= 1.0 {
+            return false;
+        }
+        // The rotations, `cᵢ` in `rot[i]` and `sᵢ` in `p[i]`.
+        let mut alpha = (1.0 - norm).sqrt();
+        for i in (j..k).rev() {
+            let r = (alpha * alpha + p[i] * p[i]).sqrt();
+            rot[i] = alpha / r;
+            p[i] /= r;
+            alpha = r;
+        }
+        for row in j..k {
+            let mut xx = 0.0;
+            for i in (j..=row).rev() {
+                let (c, sn) = (rot[i], p[i]);
+                let lv = self.l[(row, i)];
+                let t = c * xx + sn * lv;
+                self.l[(row, i)] = c * lv - sn * xx;
+                xx = t;
+            }
+        }
+        self.log_det = OnceLock::new();
+        self.is_a_factor()
+    }
+
+    /// The factor of `diag(a)`, `√aᵢ` on the diagonal; `None` unless every
+    /// `aᵢ` is positive and finite.
+    pub(crate) fn diagonal(a: &[f64]) -> Option<Self> {
+        if !a.iter().all(|&x| x > 0.0 && x.is_finite()) {
+            return None;
+        }
+        let k = a.len();
+        let mut l = Mat::zeros(k, k);
+        for (i, &x) in a.iter().enumerate() {
+            l[(i, i)] = x.sqrt();
+        }
+        let f = Self {
+            l,
+            log_det: OnceLock::new(),
+            attempts: 0,
+            jitter: 0.0,
+            moves: 0,
+        };
+        f.is_a_factor().then_some(f)
+    }
+
     /// Every entry of `L` multiplied by `2⁻ᵉ`, `1 <= e <= 1022`: `L Lᵀ`
     /// scaled by `4⁻ᵉ`, exactly, short of an entry that leaves the normal
     /// range.
@@ -2072,6 +2290,60 @@ mod small_tests;
 mod tests {
     use super::*;
     use crate::oracle::CanonBits;
+
+    /// A step along an axis is [`SpdFactor::add_outer_in_place`]'s of the
+    /// same vector, to the bit, and the downdate takes it back to within
+    /// rounding of the matrix it was added to (faer's LU solve of the
+    /// matrix, `crate::oracle`, as the second opinion on the form); a
+    /// downdate that would leave no positive definite matrix is refused
+    /// and moves nothing.
+    #[test]
+    fn an_axis_step_and_its_downdate() {
+        let mut s = 3u64;
+        let mut next = || {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((s >> 11) as f64 / (1u64 << 53) as f64) - 0.5
+        };
+        for k in [1, 4, 13] {
+            let b: Vec<f64> = (0..k * k).map(|_| next()).collect();
+            let mut a = vec![0.0; k * k];
+            for i in 0..k {
+                for j in 0..k {
+                    a[i * k + j] = (0..k).map(|t| b[i * k + t] * b[j * k + t]).sum::<f64>()
+                        + if i == j { 0.5 } else { 0.0 };
+                }
+            }
+            let f0 = SpdFactor::of(&a, k).unwrap().into_state();
+            let mut v = Vec::new();
+            for j in 0..k {
+                let (mut axis, mut outer) = (f0.clone(), f0.clone());
+                assert!(axis.add_axis_in_place(j, 0.75, &mut v));
+                let mut e = vec![0.0; k];
+                e[j] = 0.75;
+                assert!(outer.add_outer_in_place(&mut e));
+                assert_eq!(axis, outer, "{k} {j}");
+                assert!(axis.remove_axis_in_place(j, 0.75, &mut v));
+                let back = axis.lower_rows();
+                let mut llt = vec![0.0; k * k];
+                for r in 0..k {
+                    for c in 0..k {
+                        llt[r * k + c] = (0..k).map(|t| back[r * k + t] * back[c * k + t]).sum();
+                    }
+                }
+                let delta: Vec<f64> = (0..k).map(|_| next()).collect();
+                let want = crate::oracle::quad_form(&a, &delta);
+                let got = crate::oracle::quad_form(&llt, &delta);
+                assert!((got - want).abs() <= 1e-12 * want, "{k} {j}: {got} {want}");
+                // `a_jj` is at least its Schur complement: more than that
+                // cannot come off.
+                let mut too_much = f0.clone();
+                assert!(!too_much.remove_axis_in_place(j, a[j * k + j].sqrt() * 1.01, &mut v));
+                assert_eq!(too_much, f0, "{k} {j}: refused before moving");
+            }
+        }
+    }
 
     /// [`SpdFactor::solve_into`] is [`SpdFactor::solve`] to the bit, in one
     /// kept matrix and one kept output across shapes it returns to, and the

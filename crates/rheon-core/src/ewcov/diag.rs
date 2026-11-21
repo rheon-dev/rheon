@@ -297,6 +297,38 @@ impl EwCovDiag {
         self.prior_scale *= lam;
     }
 
+    /// `EwCov::update_anchored`'s step on the variances.
+    #[cfg(feature = "study-c4")]
+    pub(crate) fn update_anchored(&mut self, x: &[f64], w: f64, k0: f64) {
+        if w.is_nan() || w <= 0.0 {
+            return;
+        }
+        self.rows_learned += 1;
+        let w_new = self.w_sum + w;
+        let (a, b) = (self.w_sum / w_new, w / w_new);
+        let bm = w / (w_new + k0);
+        let coef = a * bm * bm + b * (1.0 - bm) * (1.0 - bm);
+        for ((vi, mi), (lo, &xi)) in self
+            .v
+            .iter_mut()
+            .zip(self.m.iter_mut())
+            .zip(self.m_lo.iter_mut().zip(x))
+        {
+            let d = crate::comp::dev(xi, *mi, *lo);
+            *vi = a * *vi + coef * d * d;
+            crate::comp::add(mi, lo, bm * d);
+        }
+        self.precision_scale = if a <= 0.0 {
+            1.0
+        } else {
+            self.precision_scale * a
+        };
+        self.w_sum = w_new;
+        if let Some(q) = self.q_sum.as_mut() {
+            *q += w * w;
+        }
+    }
+
     /// Age the accumulator without adding data, as [`EwCov::decay`].
     pub fn decay(&mut self, lam: f64) {
         self.w_sum *= lam;

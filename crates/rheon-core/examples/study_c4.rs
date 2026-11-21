@@ -33,7 +33,35 @@ fn read(path: &str) -> Vec<f64> {
         .collect()
 }
 
+/// `F:<rows>`: stabilized forgetting as `Hmm::with_stabilized` builds it
+/// (the factor form tops its prior up lazily from 13 features); `E:<rows>`:
+/// the same read through co-moments at every width, the exact recursion.
+/// `M:<rows>:<mean rows>`: `F` with a mean prior (`Hmm::set_mean_prior`);
+/// `T:<rows>:<tau>`: `F` at its own tolerance (`Hmm::set_stabilized_tau`).
+fn stabilized(s: &str) -> Option<(f64, bool, f64, f64)> {
+    let two = |v: &str| {
+        let (p, k) = v.split_once(':').unwrap();
+        (p.parse::<f64>().unwrap(), k.parse::<f64>().unwrap())
+    };
+    match s.split_once(':') {
+        Some(("F", v)) => Some((v.parse().unwrap(), false, 0.0, 0.0)),
+        Some(("E", v)) => Some((v.parse().unwrap(), true, 0.0, 0.0)),
+        Some(("M", v)) => {
+            let (p, k) = two(v);
+            Some((p, false, k, 0.0))
+        }
+        Some(("T", v)) => {
+            let (p, t) = two(v);
+            Some((p, false, 0.0, t))
+        }
+        _ => None,
+    }
+}
+
 fn variant(s: &str) -> Variant {
+    if stabilized(s).is_some() {
+        return Variant::A;
+    }
     match s.split_once(':') {
         None if s == "A" => Variant::A,
         Some(("B", v)) => Variant::B {
@@ -59,6 +87,7 @@ fn build(
     model: &str,
     cov: Covariance,
     v: Variant,
+    fast: Option<(f64, bool, f64, f64)>,
     d: usize,
     k: usize,
     decay: Decay,
@@ -67,7 +96,7 @@ fn build(
 ) -> Model {
     match model {
         "hmm" => {
-            let mut m = Hmm::new(HmmCfg {
+            let cfg = HmmCfg {
                 n_features: d,
                 k,
                 decay,
@@ -83,8 +112,18 @@ fn build(
                 seed_rule: SeedRule::Kmeanspp,
                 seed: 7,
                 tvtp: None,
-            })
-            .unwrap();
+            };
+            let mut m = match fast {
+                Some((p0, false, _, _)) => Hmm::with_stabilized(cfg, p0).unwrap(),
+                Some((p0, true, _, _)) => Hmm::with_stabilized_comoments(cfg, p0).unwrap(),
+                None => Hmm::new(cfg).unwrap(),
+            };
+            if let Some((_, _, k0, tau)) = fast {
+                m.set_mean_prior(k0);
+                if tau > 0.0 {
+                    m.set_stabilized_tau(tau);
+                }
+            }
             m.set_study(v);
             Model::Hmm(Box::new(m))
         }
@@ -111,6 +150,7 @@ fn build(
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let (model, cov, v) = (&a[1], Covariance::parse(&a[2]).unwrap(), variant(&a[3]));
+    let fast = stabilized(&a[3]);
     let d: usize = a[4].parse().unwrap();
     let k: usize = a[5].parse().unwrap();
     let hl: f64 = a[6].parse().unwrap();
@@ -126,7 +166,7 @@ fn main() {
     let mut state_len = 0;
     let mut failures = 0;
     for rep in 0..reps.max(1) {
-        let mut m = build(model, cov, v, d, k, decay, prior, warm);
+        let mut m = build(model, cov, v, fast, d, k, decay, prior, warm);
         let mut step = Step::default();
         let keep = rep == 0;
         let t = Instant::now();

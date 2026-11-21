@@ -1115,6 +1115,26 @@ pub(crate) mod exact {
                 .fold(0f64, f64::max)
         }
 
+        /// `(W·M + diag(add))/(W + P₀)`, formed in [`RBITS`] bits: the
+        /// matrix a state reads under stabilized forgetting, `add` its prior
+        /// (`P₀ψ`, or the part of it a factor holds).
+        pub(crate) fn shrunk(&self, w: f64, p0: f64, add: &[f64]) -> Self {
+            let n = self.n;
+            let (w, p0) = (rbig(w), rbig(p0));
+            let t = &w + &p0;
+            let mut m = self.m.clone();
+            for i in 0..n {
+                for j in 0..n {
+                    let mut v = &w * &self.m[i * n + j];
+                    if i == j {
+                        v = &v + &rbig(add[i]);
+                    }
+                    m[i * n + j] = &v / &t;
+                }
+            }
+            Self { n, m }
+        }
+
         /// `(dᵀ M⁻¹ d, ln det M)`, each rounded once to a double.
         pub(crate) fn quad_log_det(&self, d: &[f64]) -> (f64, f64) {
             let n = self.n;
