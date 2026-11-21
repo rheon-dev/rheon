@@ -32,7 +32,11 @@ use serde_json::{Value, json};
 /// The digest of every output's null mask (all platforms).
 const MASKS: u64 = 0x7d9052681ddf16a6;
 /// The digest of every output float's bits and every state byte, arm64 macOS.
-const BITS: u64 = 0x162b1609e20133e2;
+/// 0x162b1609e20133e2 until windows state 11 (review P7) ended each state
+/// with its checksum; the same digest, with each state read back to its
+/// version-10 form (the entry cut, the version 10), gave 0x162b1609e20133e2
+/// again, so no output bit and no other state byte moved.
+const BITS: u64 = 0xf19d9c9140f82a7e;
 /// Rows a case runs over.
 const ROWS: usize = 2000;
 
