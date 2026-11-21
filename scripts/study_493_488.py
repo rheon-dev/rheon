@@ -96,17 +96,95 @@ def theta_full(spec: base.EtsSpec, th: np.ndarray) -> tuple[float, float, float,
     return (float(th[0]), float(th[1]), float(th[2]), float(th[3]) if spec.damped else 1.0)
 
 
-def radius_minus_one(spec: base.EtsSpec, th: np.ndarray) -> float:
+def radius_matrix(spec: base.EtsSpec, th: np.ndarray) -> float:
     """The largest eigenvalue modulus of the discount matrix ``D = F - g w'``
-    after the one exact unit root, minus 1: negative inside the admissible
-    region. For the multiplicative season this is the additive form's matrix at
-    the same parameters, the linearisation about unit seasonal factors
-    (``mul_region_check``)."""
+    after the one exact unit root, minus 1, from the ``(m + 2)``-square matrix
+    (``8 (m + 2)^2`` bytes before the solver's workspace). Study 488's and part
+    1's route; kept only to check ``radius_minus_one``."""
     return base.ets_radius(theta_full(spec, th), spec.m) - 1.0
 
 
+# The polynomial route (O(m) working memory). With damping ``phi`` (``phi = 1``
+# undamped) the innovations form of ETS(A,Ad,A) is
+#     (1 - B)(1 - phi B)(1 - B^m) y_t = Theta(B) e_t,
+#     Theta = S(B) (1 - B^m) + gamma B^m (1 - B)(1 - phi B),
+#     S = 1 + (alpha + phi beta - 1 - phi) B + phi (1 - alpha) B^2,
+# (derived from l, b and s in lag form: y/e = B [alpha + phi beta B/(1 - phi B)]
+# /(1 - B) + phi beta B/(1 - phi B) + gamma B^m/(1 - B^m) + 1), and the
+# eigenvalues of D are the reciprocals of Theta's roots (m + 2 of each; at
+# phi = 1 this is the polynomial of ``radius_poly_check``). Theta(1) = 0 is the
+# unit root; ``Theta / (1 - B)`` (the running sum of the coefficients) has the
+# other m + 1. "Every eigenvalue inside the unit circle" is "every root of that
+# quotient outside it", which the Schur-Cohn step-down decides in O(m^2) time
+# and O(m) memory (no companion matrix), and the radius is the smallest scale
+# ``s`` for which the quotient's roots scaled by ``s`` clear the circle, by
+# bisection on ``s``.
+
+
+def theta_coefficients(spec: base.EtsSpec, th: np.ndarray) -> np.ndarray:
+    """``Theta / (1 - B)``'s coefficients (ascending, ``m + 2`` of them)."""
+    al, be, ga, ph = theta_full(spec, th)
+    m = spec.m
+    c = np.zeros(m + 3)
+    S = (1.0, al + ph * be - 1.0 - ph, ph * (1.0 - al))
+    P2 = (1.0, -(1.0 + ph), ph)
+    for j in range(3):
+        c[j] += S[j]
+        c[m + j] += -S[j] + ga * P2[j]
+    return np.cumsum(c)[:-1]
+
+
+def schur_stable_outside(d: np.ndarray) -> bool:
+    """True when every root of ``sum d_j B^j`` lies strictly outside the unit
+    circle: the Schur-Cohn step-down on the reversed polynomial ``a`` (roots
+    inside), ``|a_0| < |a_n|`` at every degree and ``a <- (a_n a - a_0
+    reverse(a))[1:]``. Each step is rescaled by its largest entry (the test is
+    homogeneous in ``a``)."""
+    a = d[::-1].copy()
+    while a.size > 1:
+        a0, an = a[0], a[-1]
+        if not (abs(a0) < abs(an)):
+            return False
+        a = (an * a - a0 * a[::-1])[1:]
+        a /= np.max(np.abs(a))
+    return True
+
+
+def radius_poly(spec: base.EtsSpec, th: np.ndarray) -> float:
+    """The largest eigenvalue modulus of ``D`` after the unit root, from the
+    polynomial (bisection on the scale to 1e-14, within ``1 +- w``,
+    ``w = min(0.25, 300/m)`` so no scaled coefficient overflows; a radius outside
+    that band is returned as its edge)."""
+    d = theta_coefficients(spec, th)
+    n = d.size
+    w = min(0.25, 300.0 / spec.m)
+    j = np.arange(n, dtype=float)
+
+    def stable(sc: float) -> bool:
+        return schur_stable_outside(d * np.exp(-j * math.log(sc)))
+
+    lo, hi = 1.0 - w, 1.0 + w
+    if stable(lo):
+        return lo
+    if not stable(hi):
+        return hi
+    while hi - lo > 1e-14:
+        mid = 0.5 * (lo + hi)
+        if stable(mid):
+            hi = mid
+        else:
+            lo = mid
+    return 0.5 * (lo + hi)
+
+
+def radius_minus_one(spec: base.EtsSpec, th: np.ndarray) -> float:
+    return radius_poly(spec, th) - 1.0
+
+
 def admissible(spec: base.EtsSpec, th: np.ndarray) -> bool:
-    return radius_minus_one(spec, th) < 0.0
+    """Every eigenvalue of ``D`` but the unit root strictly inside the unit
+    circle: one Schur-Cohn test on the unscaled quotient."""
+    return schur_stable_outside(theta_coefficients(spec, th))
 
 
 # --------------------------------------------------------------------------
@@ -247,11 +325,16 @@ def maximize_region(objective, spec: base.EtsSpec, grid: list[tuple]):  # noqa: 
         n_radius += 1
         return radius_minus_one(spec, to_theta(spec, tp))
 
+    def adm(tp: np.ndarray) -> bool:
+        nonlocal n_radius
+        n_radius += 1
+        return admissible(spec, to_theta(spec, tp))
+
     evals = 0
     best, best_f = None, -math.inf
     for point in grid:
         tp = project_prime(spec, np.asarray(point, dtype=float))
-        if r(tp) >= 0.0:
+        if not adm(tp):
             continue
         fv, _, _ = objective(tp, False)
         evals += 1
@@ -290,18 +373,18 @@ def maximize_region(objective, spec: base.EtsSpec, grid: list[tuple]):  # noqa: 
 
         def proj(x: np.ndarray, theta=theta, Mr=Mr, r0=r0) -> np.ndarray:  # noqa: ANN001
             x = project_prime(spec, x)
-            if r(x) < 0.0:
+            if adm(x):
                 return x
             gr = grad_r()
             Mg = np.linalg.solve(Mr, gr)
             lam = max(0.0, (r0 + float(gr @ (x - theta))) / max(float(gr @ Mg), 1e-300))
             x2 = project_prime(spec, x - lam * Mg)
-            if r(x2) < 0.0:
+            if adm(x2):
                 return x2
             lo, hi = 0.0, 1.0
             for _ in range(8):
                 mid = 0.5 * (lo + hi)
-                if r(theta + mid * (x - theta)) < 0.0:
+                if adm(theta + mid * (x - theta)):
                     lo = mid
                 else:
                     hi = mid
@@ -754,6 +837,70 @@ def radius_poly_check() -> list[dict]:
             r1 = base.ets_radius((a, beta, g, 1.0), m) - 1.0
             r2 = rad(a, beta, g, m) - 1.0
             out.append({"m": m, "alpha": a, "beta": beta, "gamma": g, "matrix": r1, "polynomial": r2})
+    return out
+
+
+def radius_route_check(n_points: int = 120) -> dict:
+    """The polynomial route against the matrix route, and the working memory of
+    each. ``n_points`` random parameter points per ``(m, damped)`` (alpha,
+    beta/alpha, gamma/(1 - alpha) log-uniform in the box, phi in [0.8, 0.98]),
+    ``m`` = 7, 24, 168: the largest absolute difference of ``r`` (within the
+    bisection band), the points where the sign (admissible or not) differs, and
+    those with ``|r| < 1e-6`` (the edge). Memory: the peak of numpy allocations
+    (tracemalloc) over one ``radius_poly`` and one ``admissible`` call, against
+    the matrix route's ``8 (m + 2)^2`` bytes for its matrix alone."""
+    import tracemalloc
+
+    rng = np.random.default_rng(493)
+    out: dict = {"points": []}
+    for m in (7, 24, 168):
+        for damped in (False, True):
+            spec = base.EtsSpec("chk", damped, m, (0.3, 0.01, 0.05) + ((0.9,) if damped else ()) + (1.0,))
+            maxdiff, sign_diff, edge, n_adm, n_in_band = 0.0, 0, 0, 0, 0
+            for _ in range(n_points):
+                a = math.exp(rng.uniform(math.log(0.01), math.log(0.9)))
+                b = a * math.exp(rng.uniform(math.log(1e-3), math.log(0.9)))
+                g = (1.0 - a) * math.exp(rng.uniform(math.log(1e-4), math.log(0.5)))
+                th = np.array([a, b, g] + ([rng.uniform(0.8, 0.98)] if damped else []))
+                rp = radius_minus_one(spec, th)
+                rm = radius_matrix(spec, th)
+                w = min(0.25, 300.0 / m)
+                inband = abs(rm) < w - 1e-9
+                n_in_band += int(inband)
+                if inband:
+                    maxdiff = max(maxdiff, abs(rp - rm))
+                sign_diff += int(admissible(spec, th) != (rm < 0.0))
+                edge += int(abs(rm) < 1e-6)
+                n_adm += int(rm < 0.0)
+            out["points"].append(
+                {"m": m, "damped": damped, "n": n_points, "admissible": n_adm, "in_band": n_in_band,
+                 "max_abs_diff_r": maxdiff, "sign_disagreements": sign_diff, "near_edge_1e-6": edge}
+            )
+    mem = []
+    for m in (24, 168, 1440, 8760):
+        for damped in (False, True):
+            spec = base.EtsSpec("chk", damped, m, (0.3, 0.01, 0.05) + ((0.9,) if damped else ()) + (1.0,))
+            th = np.array([0.3, 0.0003, 0.0001] + ([0.9] if damped else []))
+            row = {"m": m, "damped": damped}
+            for name, fn in (("radius_value", radius_poly), ("sign_test", lambda sp, t: admissible(sp, t))):
+                tracemalloc.start()
+                tracemalloc.reset_peak()
+                fn(spec, th)
+                row[name + "_peak_bytes"] = tracemalloc.get_traced_memory()[1]
+                tracemalloc.stop()
+            row["matrix_route_matrix_bytes"] = 8 * (m + 2) ** 2
+            row["r_minus_1"] = radius_minus_one(spec, th)
+            mem.append(row)
+    out["memory"] = mem
+    # the largest m whose measured peak is under 256 KB / 128 KB, extrapolated
+    # from the linear fit of the measured peaks against m (undamped value route)
+    xs = np.array([r["m"] for r in mem if not r["damped"]], dtype=float)
+    ys = np.array([r["radius_value_peak_bytes"] for r in mem if not r["damped"]], dtype=float)
+    slope, icpt = np.polyfit(xs, ys, 1)
+    out["peak_bytes_fit"] = {"slope_per_m": float(slope), "intercept": float(icpt)}
+    out["m_at_cap"] = int((CAP_BYTES - icpt) / slope)
+    out["m_at_warn"] = int((WARN_BYTES - icpt) / slope)
+    out["m_matrix_route_cap"] = int(largest_m(lambda m: 8 * (m + 2) ** 2, CAP_BYTES) + 1)
     return out
 
 
@@ -1243,6 +1390,8 @@ class OnlineAdccT(dcc.OnlineDccT):
     dqg: np.ndarray = dataclasses_field(init=False)
     n_repaired: int = 0
     last_delta: float = math.nan
+    n_mode: str = "running"  # "window": N is the mean of n n' over the start window, then frozen
+    frozen: bool = False
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -1251,6 +1400,11 @@ class OnlineAdccT(dcc.OnlineDccT):
         self.nmat = np.zeros((k, k))
         self.dqg = np.zeros((k, k))
         self.H = np.zeros((3, 3))
+
+    def shared_start(self, zb: np.ndarray) -> None:
+        super().shared_start(zb)
+        if self.n_mode == "window":
+            self.frozen = True  # N is now the mean over the start window, held
 
     def _fit_buffer(self, zb: np.ndarray) -> None:
         import batch_core
@@ -1325,8 +1479,9 @@ class OnlineAdccT(dcc.OnlineDccT):
             self.n_projected += int(not np.allclose(projected, proposal, rtol=0.0, atol=1e-15))
             self.theta = projected
         self.qbar += (np.outer(z, z) - self.qbar) / self.n_seen
-        nz = neg_part(z)
-        self.nmat += (np.outer(nz, nz) - self.nmat) / self.n_seen
+        if not self.frozen:
+            nz = neg_part(z)
+            self.nmat += (np.outer(nz, nz) - self.nmat) / self.n_seen
         self.prev_z = z.copy()
 
 
@@ -1693,10 +1848,228 @@ def summarise_adcc(res: dict) -> None:
             print("   ", key, d.get(key))
 
 
+
+def run_engine(r: np.ndarray, k: int, n_mode: str = "running"):  # noqa: ANN201
+    """The A12 engine's two stages on ``r``: the margins online, the shared
+    start, the t stage; returns the estimator, the rows it saw and its
+    emitted correlations aligned to the input rows."""
+    rem = dcc.REMEDIES["shared500core_t"]
+    mkw = {"target": "running", **rem["margins"]}
+    margin_est = [garch.run(r[:, i], **mkw) for i in range(k)]
+    s2 = np.column_stack([np.asarray(m.pred) for m in margin_est])
+    rows = np.flatnonzero(np.all(np.isfinite(s2), axis=1))
+    est = OnlineAdccT(k=k, n_mode=n_mode, **rem["stage2"])
+    zbuf = np.column_stack(
+        [r[: len(m.replay_sigma2), i] / np.sqrt(np.asarray(m.replay_sigma2)) for i, m in enumerate(margin_est)]
+    )
+    est.shared_start(zbuf)
+    for row in r[rows] / np.sqrt(s2[rows]):
+        est.update(row)
+    pred = np.full((r.shape[0], k * (k - 1) // 2), np.nan)
+    pred[rows] = np.asarray(est.pred)
+    return est, rows, pred
+
+
+def adcc_window_case(k: int, noise: str, seed: int, cached: dict, n: int = ADCC_ROWS) -> dict:
+    """Part 4 (a): the online ADCC with ``N`` the mean of ``n n'`` over the
+    start window (frozen after the start), against (i) the full-sample-``N``
+    oracle of ``adcc_case`` (its fit read from the cache) and (ii) an oracle
+    whose ``N`` is the mean over the same 500 rows (the oracle's own first 500
+    standardized rows), fitted here."""
+    nu_true = ADCC_NU if noise == "t5" else None
+    n0 = calibrate_n0(k, nu_true, OUT)
+    r, _ = simulate_adcc(n, seed, k, ADCC_TRUTH, ADCC_RHO_BAR, n0, nu_true)
+    out: dict = {"spec": f"adcc_k{k}_{noise}", "seed": seed, "k": k, "noise": noise, "n": n}
+    z_b = dcc.batch_margin_z(r)
+    qbar_b = z_b.T @ z_b / n
+    n_win = n_mean(z_b[:ADCC_START])
+    iu = np.triu_indices(k, 1)
+    t0 = time.perf_counter()
+    est, rows, pred = run_engine(r, k, "window")
+    out["t_online_s"] = time.perf_counter() - t0
+    th_o = est.theta
+    out["silent_rows"] = int(n - rows.size)
+    out["online_steps_projected"] = int(est.n_projected)
+    out["online_q_repaired"] = int(est.n_repaired)
+    out["online_in_region"] = bool(th_o[0] + th_o[1] + est.last_delta * th_o[2] < 1.0)
+    out["n_frozen_vs_oracle_window_max_abs"] = float(np.max(np.abs(est.nmat - n_win)))
+    for i, nm in enumerate(ADCC_NAMES):
+        out[f"{nm}_online"] = float(th_o[i])
+        out[f"run_{nm}_online_cached"] = cached["a_online" if nm == "a" else f"{nm}_online"]
+    tail = slice(n // 2, n)
+    for lik, tg in (("normal", "g"), ("t", "t")):
+        # (ii) the window-N oracle, fitted here
+        f = fit_adcc(z_b, qbar_b, n_win, lik)
+        th, se = f["theta"], f["se"]
+        rho_w = q_path_adcc(th[0], th[1], th[2], z_b, qbar_b, n_win)[:, iu[0], iu[1]]
+        out[f"{tg}w_rho_gap_worst_pair_median"] = float(np.median(np.abs(pred[tail] - rho_w[tail]), axis=0).max())
+        out[f"{tg}w_batch_success"] = f["success"]
+        # (i) the full-N oracle, from the cache
+        nf = n_mean(z_b)
+        thf = np.array([cached[f"{tg}_{nm}_batch"] for nm in ADCC_NAMES])
+        sef = np.array([cached[f"{tg}_{nm}_se"] for nm in ADCC_NAMES])
+        rho_f = q_path_adcc(thf[0], thf[1], thf[2], z_b, qbar_b, nf)[:, iu[0], iu[1]]
+        out[f"{tg}f_rho_gap_worst_pair_median"] = float(np.median(np.abs(pred[tail] - rho_f[tail]), axis=0).max())
+        for i, nm in enumerate(ADCC_NAMES):
+            out[f"{tg}w_{nm}_batch"] = float(th[i])
+            out[f"{tg}w_{nm}_se"] = float(se[i])
+            out[f"{tg}w_{nm}_gap_se"] = float((th_o[i] - th[i]) / se[i])
+            out[f"{tg}f_{nm}_gap_se"] = float((th_o[i] - thf[i]) / sef[i])
+            # how far the window N moves the oracle itself, in the full-N oracle's SE
+            out[f"{tg}_oracle_window_minus_full_{nm}_se"] = float((th[i] - thf[i]) / sef[i])
+    return out
+
+
+def _adcc_window_args(a):  # noqa: ANN001, ANN202
+    return adcc_window_case(*a)
+
+
+def run_window_cases(path: str, k: int, seeds: list[int], workers: int, full_rows: list[dict]) -> list[dict]:
+    done = {(r["spec"], r["seed"]) for r in base._load(path)}
+    cache = {(r["spec"], r["seed"]): r for r in full_rows}
+    todo = [
+        (k, noise, s_, cache[(f"adcc_k{k}_{noise}", s_)])
+        for noise in ("normal", "t5")
+        for s_ in seeds
+        if (f"adcc_k{k}_{noise}", s_) not in done
+    ]
+    if todo:
+        print(f"{path}: {len(done)} cached, {len(todo)} to run", flush=True)
+        from multiprocessing import get_context
+
+        with get_context("fork").Pool(workers) as pool, open(path, "a") as fh:
+            for i, res in enumerate(pool.imap_unordered(_adcc_window_args, todo)):
+                fh.write(json.dumps(res) + "\n")
+                fh.flush()
+                if (i + 1) % 10 == 0:
+                    print(f"  {i + 1}/{len(todo)}", flush=True)
+    return base._load(path)
+
+
+def window_count(rows: list[dict], tag: str) -> dict:
+    n = len(rows)
+    gaps = np.array([[abs(r[f"{tag}_{nm}_gap_se"]) for nm in ADCC_NAMES] for r in rows])
+    rho = np.array([r[f"{tag}_rho_gap_worst_pair_median"] for r in rows])
+    return {
+        "cases": n,
+        "within2": int(np.sum(np.all(gaps <= 2.0, axis=1))),
+        "within4": int(np.sum(np.all(gaps <= 4.0, axis=1))),
+        "rho_gap_le_003": int(np.sum(rho <= 0.03)),
+        "rho_gap_max": float(rho.max()),
+        "worst_gap_se": float(gaps.max()),
+        "worst_seed": int(rows[int(np.argmax(gaps.max(axis=1)))]["seed"]),
+        "median_gap_se": {nm: float(np.median(gaps[:, i])) for i, nm in enumerate(ADCC_NAMES)},
+        "max_gap_se": {nm: float(gaps[:, i].max()) for i, nm in enumerate(ADCC_NAMES)},
+    }
+
+
+def part4(args) -> dict:  # noqa: ANN001
+    res = adcc_part(3, args)
+    seeds = SEEDS[: args.seeds]
+    full2 = base._load(os.path.join(args.out, "adcc_k2.jsonl"))
+    path = os.path.join(args.out, "adcc_window_k2.jsonl")
+    wrows = base._load(path) if args.no_run else run_window_cases(path, 2, seeds, args.workers, full2)
+    win: dict = {}
+    for noise in ("normal", "t5"):
+        sub = sorted((r for r in wrows if r["noise"] == noise), key=lambda r: r["seed"])
+        if not sub:
+            continue
+        d = {
+            "vs_full_N_gaussian_oracle": window_count(sub, "gf"),
+            "vs_full_N_t_oracle": window_count(sub, "tf"),
+            "vs_window_N_gaussian_oracle": window_count(sub, "gw"),
+            "vs_window_N_t_oracle": window_count(sub, "tw"),
+            "frozen_N_equals_oracle_window_N_max_abs": float(max(r["n_frozen_vs_oracle_window_max_abs"] for r in sub)),
+            "oracle_window_minus_full_in_full_se_median_abs": {
+                nm: float(np.median([abs(r[f"t_oracle_window_minus_full_{nm}_se"]) for r in sub])) for nm in ADCC_NAMES
+            },
+            "oracle_window_minus_full_in_full_se_max_abs": {
+                nm: float(max(abs(r[f"t_oracle_window_minus_full_{nm}_se"]) for r in sub)) for nm in ADCC_NAMES
+            },
+            "online_steps_projected_seeds": int(sum(r["online_steps_projected"] > 0 for r in sub)),
+            "online_q_repaired_max": int(max(r["online_q_repaired"] for r in sub)),
+            "online_in_region": int(sum(r["online_in_region"] for r in sub)),
+            "silent_rows": sorted({r["silent_rows"] for r in sub}),
+        }
+        win[noise] = d
+    res["window_n"] = win
+    res["window_n_cases"] = len(wrows)
+    res["complete"] = res["complete"] and len(wrows) == 2 * len(seeds)
+    res["state_caps_full"] = {"k2": adcc_bytes(2), "k3": adcc_bytes(3)}
+    return res
+
+
+def summarise_part4(res: dict) -> None:
+    summarise_adcc(res)
+    for noise, d in res.get("window_n", {}).items():
+        print("window N,", noise)
+        for key, v in d.items():
+            print("   ", key, v)
+
+
+REGION_SETS = (
+    "aaa_m24", "aada_m24", "aaa_m168", "aada_m168", "aaa_m168_b", "aada_m168_b", "aam_m168_c", "aadm_m168_b",
+)  # the sets where the unconstrained fit leaves the region on some seed (parts 1 and 2)
+
+
+def region_part(args) -> dict:  # noqa: ANN001
+    """Part 4 (addendum): the region check by the polynomial route (O(m)
+    working memory) in the batch start; the eight sets where it binds, both
+    region variants, against the matrix route's counts of parts 1 and 2. On the
+    other ten sets every unconstrained fit already lies inside the region, the
+    constraint never acts and the counts are the ones of parts 1 and 2."""
+    variants = ("rp_adm", "rp_adm_hub")
+    path = os.path.join(args.out, "region.jsonl")
+    seeds = SEEDS[: args.seeds]
+    cases = [(k, s_, variants) for k in REGION_SETS for s_ in seeds]
+    rows = base._load(path) if args.no_run else run_cases(path, cases, args.workers)
+    by_set: dict[str, list[dict]] = {}
+    for r in rows:
+        by_set.setdefault(r["spec"], []).append(r)
+    bl = baseline_rows()
+    res: dict = {"variants": list(variants), "n": N_ROWS}
+    res["summary"] = [
+        summarise_set(k, sorted(by_set.get(k, []), key=lambda r: r["seed"]), bl.get(k, []), variants)
+        for k in REGION_SETS
+    ]
+    old: dict = {}
+    for fn, vs in (("part1.json", ("rp_adm",)), ("part2.json", ("rp_adm_hub",))):
+        full = os.path.join(args.out, fn)
+        if os.path.exists(full):
+            for x in json.load(open(full))["summary"]:
+                for v in vs:
+                    old.setdefault(x["spec"], {})[v] = {
+                        "within2": x[v]["within2"], "worst_gap_se": x[v]["worst_gap_se"],
+                        "t_online_median_s": x[v].get("t_online_median_s"),
+                    }
+    res["matrix_route"] = {k: old.get(k, {}) for k in REGION_SETS}
+    res["route_check"] = radius_route_check()
+    have = {(r["spec"], r["seed"]) for r in rows}
+    res["complete"] = all((c[0], c[1]) in have for c in cases)
+    return res
+
+
+def summarise_region(res: dict) -> None:
+    print("complete:", res["complete"])
+    for x in res["summary"]:
+        old = res["matrix_route"].get(x["spec"], {})
+        for v in res["variants"]:
+            d = x[v]
+            print(
+                f"{x['spec']:13s} {v:11s} polynomial route {d['within2']:3d}/{d['cases']}  matrix route "
+                f"{old.get(v, {}).get('within2')}; worst {d['worst_gap_se']:.3g} (matrix {old.get(v, {}).get('worst_gap_se')}); "
+                f"{d['t_online_median_s']:.2f} s/case (matrix {old.get(v, {}).get('t_online_median_s')})"
+            )
+    for k, v in res["route_check"].items():
+        print("route_check", k, v)
+
+
 PARTS = {
     "part1": (lambda a: ets_part("part1", a), summarise_ets),
     "part2": (lambda a: ets_part("part2", a), summarise_ets),
     "part3": (lambda a: adcc_part(2, a), summarise_adcc),
+    "part4": (part4, summarise_part4),
+    "region": (region_part, summarise_region),
 }
 
 
