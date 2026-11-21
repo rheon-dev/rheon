@@ -435,10 +435,10 @@ impl Hawkes {
 
     /// The bytes of the numbers a model of this shape holds at most: its
     /// running sums, `8 (k + D (1 + k) + D (D + 1) / 2 + 2)`, and a full
-    /// window's rows, `8 W (1 + D + k)`, with its sum `B` and its clock, `8 (k
-    /// + 1)`. The one part
-    /// whose size the data could set is the window's rows, and `W` bounds it,
-    /// so this is known from the settings alone.
+    /// window's rows, `8 W (1 + D + k)`, with its sum `B` and its clock,
+    /// `8 (k + 1)`. The one part whose size the data could set is the
+    /// window's rows, and `W` bounds it, so this is known from the settings
+    /// alone.
     pub fn state_bytes(n_targets: usize, n_decays: usize, window_events: Option<usize>) -> u64 {
         let (n, k) = (n_targets as u64, (n_targets * n_decays) as u64);
         let sums = k + n * (1 + k) + n * (n + 1) / 2 + 2;

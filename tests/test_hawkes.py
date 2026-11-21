@@ -72,9 +72,8 @@ def _system(
             ja, ua = divmod(a, u)
             src = nodes == ja
             earlier = rows[src][None, :] < rows[mine][:, None]
-            excite = (
-                betas[ua] * mk[src][None, :] * np.exp(-betas[ua] * (tk[mine][:, None] - tk[src][None, :]))
-            )  # fmt: skip
+            lag = tk[mine][:, None] - tk[src][None, :]
+            excite = betas[ua] * mk[src][None, :] * np.exp(-betas[ua] * lag)
             b[i, a + 1] = np.sum(w * np.sum(np.where(earlier, excite, 0.0), axis=1))
     return g, b
 
@@ -90,7 +89,7 @@ def _stream(n: int, d: int, seed: int) -> pl.DataFrame:
         u = rng.uniform(size=n)
         v = np.where(u < 0.3, 1.0, np.where(u < 0.33, 2.0, np.where(u < 0.36, 0.5 + u, 0.0)))
         v = np.where((u > 0.5) & (u < 0.6), -1.0, v)
-        cols[f"n{j}"] = [None if 0.9 < x else y for x, y in zip(u, v, strict=True)]
+        cols[f"n{j}"] = [None if x > 0.9 else y for x, y in zip(u, v, strict=True)]
     cols["w"] = np.where(np.arange(n) % 11 == 5, 0.0, 1.0 + (np.arange(n) % 3))
     cols["g"] = ["a" if i % 3 else "b" for i in range(n)]
     return pl.DataFrame(cols)
