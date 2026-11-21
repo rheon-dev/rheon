@@ -2,7 +2,8 @@
 
 *Status, 2026-11-21: a record, in progress for request A14. Part 1: the
 classifier written from the definitions and compared with river's, row by
-row, on both of river's code paths (§2, §3). Nothing in the package or the
+row, on both of river's code paths (§2, §3). Part 2: the regressor and its
+observers against river's (§4). Nothing in the package or the
 Rust crates was changed. The scan this builds on is
 `vm-tools/research/494-MODELS-SCAN.md` on branch `vm-tools/oracle-gap-scan`,
 section 9 ("scan §9"). The runnable study is `scripts/study_503.py`.*
@@ -184,3 +185,133 @@ feature has a threshold passing `min_branch_fraction`: E split 19 times under
 `-inf` and 9 under 0 (accuracy 0.781 against 0.777), G 28 and 19 (0.671
 against 0.667), J 14 and 12. A build that matches river takes `-inf`; the
 choice should be stated in the model's docs.
+
+## 4. Part 2: the regressor and its observers
+
+Run: `.venv-503/bin/python scripts/study_503.py part2 --out <dir>` (50 s).
+
+**The regressor** (`HTRegressor`). A leaf keeps the target's weight `W`, mean
+and sum of squared deviations `S` (river's Python `stats.Var`: `n += w; m +=
+(w/n)(y - m); S += w (y - m_old)(y - m_new)`, variance `S / (W - 1)`), and per
+feature an observer that can return, for each candidate threshold, the target
+statistics of the leaf's rows at or below it. The merit of a threshold is the
+variance reduction (Ikonomovska et al.):
+
+```text
+VR = var(S) - (W_l / W) var(S_l) - (W_r / W) var(S_r),   0 when a side has < min_samples_split (5)
+split when  VR(second) / VR(best) < 1 - eps   or   eps < tau,   with VR(best) > 0 and R = 1
+```
+
+Sides are combined and subtracted with Chan et al.'s parallel formulas, in
+river's order (`S = S_a + S_b + (m_a - m_b)^2 W_a W_b / (W_a + W_b)`, the
+mean as `(W_a m_a + W_b m_b) / W`; subtraction as river's `__isub__`, which
+uses the updated mean). The leaf predicts its mean (`leaf_prediction='mean'`).
+A failed attempt on E-BST and TE-BST observers prunes their bad split points
+(FIMT-DD's rule as river has it: a node whose merit ratio falls below `r - 2
+eps`, only where its left subtree is all bad). river's memory manager runs
+after every decided attempt, with the reactivation of §3.3.
+
+**Observers.**
+
+* **E-BST** (`EBSTSplitter`): a binary search tree with a node per distinct
+  feature value seen at the leaf, each holding the target statistics of the
+  rows at or below its value in its subtree; split candidates are every
+  stored value, by an in-order walk. **Its size is the number of distinct
+  values**: at one leaf that never splits, 1,000 nodes after 1,000 rows,
+  40,000 after 40,000. It grows with the stream: by the user's rule it is
+  out (N).
+* **TE-BST** (`TEBSTSplitter(digits=1)`, river's default): E-BST on values
+  rounded to `digits` decimals with Python's `round`. Bounded by the number
+  of distinct rounded values, which is the feature's range times `10^digits`:
+  on N(0, 1) data 60, 69, 76, 81 nodes after 1,000, 5,000, 20,000, 40,000
+  rows at 1 digit, and 378 to 672 at 2 digits. The bound holds only for a
+  bounded feature; a heavy tail keeps adding nodes. The rounding is part of
+  the arithmetic: on 200,000 N(0, 9) values `floor(|x| 10^d + 0.5) / 10^d`
+  (with the sign) gave the same doubles as Python's `round(x, d)` for d = 1,
+  2, 3, but they are different functions at decimal ties, and a build must
+  pin one.
+* **QO** (`QOSplitter(radius=0.25)`): slot `floor(x / radius)` keeps the
+  weight and mean of `x` and the target statistics of its rows; candidates
+  are the midpoints of consecutive slots' `x` means. Bounded by range over
+  radius: 26, 30, 32, 34 slots after 1,000 to 40,000 N(0, 1) rows. A slot cap
+  (`max_slots`, a value whose slot would be new goes to the nearest existing
+  slot) makes the bound hard; part 3 uses it.
+
+### 4.1 Against river, row by row
+
+Prequential, 20,000 rows each, river's `HoeffdingTreeRegressor` with
+`leaf_prediction='mean'` and the same splitter:
+
+| case | k | stream | observer | settings | splits | predictions differ | split rows, structure, thresholds | observer size, mean (max) | MSE |
+|---|---|---|---|---|---|---|---|---|---|
+| RA | 5 | random tree, depth 6 | TE-BST 1 | river's defaults | 68 | 0 of 20,000 | identical, 0 ulps | 18.4 (48) nodes | 0.766 |
+| RB | 8 | Friedman #1 | TE-BST 1 | `grace_period` 50 | 170 | 0 | identical | 13.0 (39) | 0.304 |
+| RC | 5 | random tree | E-BST | `grace_period` 100 | 108 | 0 | identical | 47.0 (243) | 0.488 |
+| RD | 5 | random tree | QO 0.25 | `grace_period` 100 | 107 | 0 | identical | 7.7 (22) slots | 0.641 |
+| RE | 8 | Friedman #1 | QO 0.25 | `grace_period` 50 | 152 | 0 | identical | 8.8 (24) | 0.348 |
+| RF | 5 | random tree, weights U(0.2, 3) | TE-BST 1 | `grace_period` 50 | 297 | 0 | identical | 8.1 (35) | 0.444 |
+| RG | 5 | random tree, weights U(0.2, 3) | QO 0.25 | `grace_period` 50 | 272 | 0 | identical | 5.6 (25) | 0.689 |
+
+**The regressor matches river's to the bit**: every prediction, every split
+row, every threshold, and the number of nodes or slots in every observer at
+the end. river's single feature quirk is the classifier's: with one feature
+the second-best merit is the null split's `-inf`, so `-inf / VR(best) < 1 -
+eps` and every attempt with a positive merit splits (36 splits in 3,000 rows
+of noise sd 3, same rows here); in the regressor a null merit of 0 gives the
+same (0 / VR < 1 - eps), so the choice does not matter there.
+
+### 4.2 Where river's QO departs from its definition
+
+Two things in river 0.27's `QOSplitter.best_evaluated_split_suggestion`,
+confirmed on river's own first split (3,000 rows, radius 0.25, first split at
+row 100):
+
+1. **The partition scored is not the one the threshold makes.** At the
+   midpoint between slots `i-1` and `i` the running sum already holds slot
+   `i`, so the merit is that of `{slots <= i} | {slots > i}` while the
+   threshold sends slot `i` right. At river's split the right child started
+   with 62 rows; the threshold sends 65 right.
+2. **The left child gets the whole leaf's statistics.** The candidate keeps a
+   reference to the running accumulator, which by the end of the walk holds
+   every slot. River's left child started with `n = 100` (all rows) and the
+   parent's mean, 0.1077; the 35 rows the threshold sends left have mean
+   -0.2451. The left leaf then predicts the parent's mean until it has seen
+   enough rows to move it, and its `last_split_attempt_at` is the parent's
+   weight.
+
+The script's `river_quirks=True` reproduces both (that is how §4.1 matched);
+`False` scores the partition the threshold makes and copies the left
+statistics. On the same rows the definition lowered the prequential MSE from
+0.641 to 0.516 (RD), 0.348 to 0.331 (RE) and 0.689 to 0.613 (RG). **A build
+should implement the definition, and its oracle test against river must use
+TE-BST or E-BST, or a QO oracle written here, not river's QO.** With TE-BST
+and E-BST the definition and river are the same tree.
+
+### 4.3 What was not reproduced: river's leaf models
+
+river's regressor defaults to `leaf_prediction='adaptive'`: each leaf also
+trains river's `LinearRegression` (SGD) and predicts with whichever of the
+mean and the model has the lower faded squared error (`model_selector_decay =
+0.95`). The tree's splits do not depend on the leaf model (the split rows were
+the same as with `'mean'` in all seven cases), so the structure above holds
+for it; the leaf model was not reproduced here and its predictions were not
+compared. On these streams the adaptive leaves lowered the MSE (RA 0.766 to
+0.683, RB 0.304 to 0.182, RE 0.348 to 0.201; RG 0.689 to 0.630). A rheon leaf
+model would be one of this library's own models (`sgd`'s state per leaf),
+held to its own oracle; it adds `(k + 1)` floats or more per leaf. Two
+details for whoever builds it: river's adaptive leaf updates its faded
+errors **without the row's weight** (a zero-weight row moves them, §6), and
+a child copies its parent's leaf model and faded errors at a split.
+
+### 4.4 The classification observers
+
+river's classifier offers `GaussianSplitter(n_splits=10)` (5 floats per class
+and feature, the default, §2) and `HistogramSplitter(n_bins=256,
+n_splits=32)` (a streaming histogram per class and feature, up to `n_bins`
+bins of three numbers each). On 10,000 rows (5 features, 2 classes,
+`grace_period` 50, `mc` leaves, river's Python path) the histograms split
+more and scored better: accuracy 0.644 Gaussian, 0.670 with 32 bins, 0.681
+with 256 bins, at up to 32 and 256 bins per observer (90 on average for 256).
+The Gaussian observer is the small one and the one river's Rust path has; the
+histogram is a later option, and its bytes are `24 n_bins` per class and
+feature.

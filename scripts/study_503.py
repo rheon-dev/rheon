@@ -57,6 +57,7 @@ Each part writes <dir>/<part>.json; a rerun prints the cached result unless
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import math
 import os
@@ -390,7 +391,7 @@ def split_merit(counts, left, right, criterion: str, form: str, sum_=naive_sum) 
 
 
 class CLeaf:
-    __slots__ = ("counts", "obs", "depth", "last", "mc", "nb", "active")
+    __slots__ = ("counts", "obs", "depth", "last", "mc", "nb", "active", "capped")
 
     def __init__(self, depth: int, counts: list, sum_=None):
         self.counts = counts
@@ -400,6 +401,7 @@ class CLeaf:
         self.mc = 0.0
         self.nb = 0.0
         self.active = True
+        self.capped = False  # deactivated by the memory cap (may be reactivated)
 
     def total(self) -> float:
         return naive_sum(self.counts)
@@ -474,7 +476,7 @@ class HTClassifier:
         self.n_split_attempts = 0
         # memory cap (part 3): None, or (max_bytes, layout)
         self.cap = None
-        self.n_inactive_by_cap = 0
+        self.rows_learned = 0
 
     # ---- class bookkeeping
     def class_index(self, y) -> int:
@@ -594,6 +596,9 @@ class HTClassifier:
         self.weight_seen += w
         if w == 0.0 and self.zero_weight == "skip":
             return
+        self.rows_learned += 1
+        if self.cap is not None and self.rows_learned % self.recheck == 0:
+            self._enforce_cap()
         node = self.root
         parent, right = -1, False
         br = self.branches
@@ -788,11 +793,283 @@ class HTClassifier:
         return len(self.branches) + len(self.leaves)
 
     # ---- memory cap (part 3) -------------------------------------------------
-    def _may_grow(self) -> bool:
-        return True
+    def struct_bytes(self, n_leaves: int, n_branches: int) -> int:
+        return clf_struct_bytes(self.C, n_leaves, n_branches)
 
-    def _enforce_cap(self) -> None:
-        return None
+    def obs_reserve(self) -> int:
+        return 40 * self.k * self.C
+
+    def promise(self, leaf) -> float:
+        # river's: the weight the majority class gets wrong
+        return self._sum(leaf.counts) - max(leaf.counts)
+
+
+# --------------------------------------------------------------------------- state and cap
+
+# The packed layout a build would save (little-endian, no padding). Its length
+# is the state size reported in part 3; `pack` and `unpack` are also the save
+# and resume of part 4.
+#
+#   classifier  header 40 + 8 C   (version, k, C, leaves, branches, root,
+#                                  weight seen, rows learned, C labels)
+#               branch 36         (feature u32, threshold, left i32, right i32,
+#                                  left and right weight)
+#               leaf   8 C + 27   (C class weights, last attempt, mc and nb
+#                                  correct weight, depth u16, flags u8)
+#               observers 40 k C  (per active leaf that has learned: k x C x
+#                                  [W, mean, S, min, max])
+#   regressor   header 40, branch 20 (no weights: nothing routes by them),
+#               leaf 35 (W, mean, S, last attempt, depth, flags),
+#               QO observer 2 + 36 per slot (slot index i32, x mean, W, y mean, y S),
+#               E-BST observer 4 + 33 per node (value, W, mean, S, child flags).
+
+CLF_BRANCH, REG_BRANCH = 36, 20
+
+
+def clf_struct_bytes(C: int, n_leaves: int, n_branches: int) -> int:
+    return 40 + 8 * C + CLF_BRANCH * n_branches + (8 * C + 27) * n_leaves
+
+
+def reg_struct_bytes(n_leaves: int, n_branches: int) -> int:
+    return 40 + REG_BRANCH * n_branches + 35 * n_leaves
+
+
+def clf_state_bytes(t) -> int:
+    n_obs = sum(1 for lf in t.leaves if lf.obs is not None)
+    return clf_struct_bytes(t.C, len(t.leaves), len(t.branches)) + 40 * t.k * t.C * n_obs
+
+
+def reg_state_bytes(t) -> int:
+    b = reg_struct_bytes(len(t.leaves), len(t.branches))
+    for lf in t.leaves:
+        if lf.obs is not None:
+            for ob in lf.obs:
+                b += 2 + 36 * ob.n_slots() if isinstance(ob, QO) else 4 + 33 * ob.n_nodes()
+    return b
+
+
+def cap_set(self, max_bytes: int, recheck: int = 1000, promise: str = "river") -> None:
+    """Bound the packed state by `max_bytes`. A split is refused when the
+    structure alone (every leaf inactive) would pass the cap; after every split
+    and every `recheck` learned rows, the leaves are ranked by promise and only
+    as many keep observers as the bytes left by the structure pay for at their
+    largest (40 k C for the Gaussian observers, k (2 + 36 max_slots) for QO).
+    A leaf deactivated by the cap keeps its class weights (target statistics)
+    and predicts from them; a leaf ranked back in gets empty observers."""
+    self.cap = int(max_bytes)
+    self.recheck = int(recheck)
+    self.promise_kind = promise
+    self._enforce_cap()
+
+
+def cap_may_grow(self) -> bool:
+    return self.struct_bytes(len(self.leaves) + 1, len(self.branches) + 1) <= self.cap
+
+
+def cap_enforce(self) -> None:
+    budget = self.cap - self.struct_bytes(len(self.leaves), len(self.branches))
+    max_active = max(0, budget // self.obs_reserve())
+    elig = [i for i, lf in enumerate(self.leaves) if lf.active or lf.capped]
+    elig.sort(key=lambda i: self.promise(self.leaves[i]))  # stable: ties keep leaf order
+    cutoff = len(elig) - min(max_active, len(elig))
+    for i in elig[:cutoff]:
+        lf = self.leaves[i]
+        if lf.active:
+            lf.active = False
+            lf.capped = True
+            lf.obs = None
+    for i in elig[cutoff:]:
+        lf = self.leaves[i]
+        if lf.capped:
+            lf.active = True
+            lf.capped = False
+            lf.obs = None
+
+
+def _flags(lf) -> int:
+    return (1 if lf.active else 0) | (2 if lf.obs is not None else 0) | (4 if lf.capped else 0)
+
+
+def pack_clf(t: HTClassifier) -> bytes:
+    out = io.BytesIO()
+    labels = [-1] * t.C
+    for lab, i in t.labels.items():
+        labels[i] = int(lab)
+    out.write(
+        struct.pack(
+            "<IIIIIidQ",
+            503,
+            t.k,
+            t.C,
+            len(t.leaves),
+            len(t.branches),
+            t.root,
+            t.weight_seen,
+            t.rows_learned,
+        )
+    )
+    out.write(struct.pack(f"<{t.C}q", *labels))
+    for b in t.branches:
+        out.write(struct.pack("<Idiidd", b[0], b[1], b[2], b[3], b[4], b[5]))
+    for lf in t.leaves:
+        out.write(
+            struct.pack(f"<{t.C + 3}dHB", *lf.counts, lf.last, lf.mc, lf.nb, lf.depth, _flags(lf))
+        )
+    for lf in t.leaves:
+        if lf.obs is not None:
+            out.write(np.asarray(lf.obs, dtype="<f8").tobytes())
+    return out.getvalue()
+
+
+def unpack_clf(buf: bytes, **params) -> HTClassifier:
+    v, k, C, L, B, root, ws, rl = struct.unpack_from("<IIIIIidQ", buf, 0)
+    assert v == 503
+    t = HTClassifier(k, C, **params)
+    off = 40
+    labels = struct.unpack_from(f"<{C}q", buf, off)
+    off += 8 * C
+    t.labels = {lab: i for i, lab in enumerate(labels) if lab != -1}
+    t.root, t.weight_seen, t.rows_learned = root, ws, rl
+    t.branches = []
+    for _ in range(B):
+        f, th, le, ri, lw, rw = struct.unpack_from("<Idiidd", buf, off)
+        off += CLF_BRANCH
+        t.branches.append([f, th, le, ri, lw, rw])
+    t.leaves = []
+    has_obs = []
+    for _ in range(L):
+        vals = struct.unpack_from(f"<{C + 3}dHB", buf, off)
+        off += 8 * C + 27
+        lf = CLeaf(vals[C + 3], list(vals[:C]))
+        lf.last, lf.mc, lf.nb = vals[C], vals[C + 1], vals[C + 2]
+        fl = vals[C + 4]
+        lf.active, lf.capped = bool(fl & 1), bool(fl & 4)
+        has_obs.append(bool(fl & 2))
+        t.leaves.append(lf)
+    n_o = 5 * k * C
+    for lf, h in zip(t.leaves, has_obs, strict=True):
+        if h:
+            a = np.frombuffer(buf, dtype="<f8", count=n_o, offset=off)
+            off += 8 * n_o
+            lf.obs = a.reshape(k * C, 5).tolist()
+    assert off == len(buf)
+    return t
+
+
+def pack_reg(t: HTRegressor) -> bytes:
+    out = io.BytesIO()
+    out.write(
+        struct.pack(
+            "<IIIIIidQ",
+            504,
+            t.k,
+            0,
+            len(t.leaves),
+            len(t.branches),
+            t.root,
+            t.weight_seen,
+            t.rows_learned,
+        )
+    )
+    for b in t.branches:
+        out.write(struct.pack("<Idii", b[0], b[1], b[2], b[3]))
+    for lf in t.leaves:
+        out.write(struct.pack("<4dHB", *lf.stats, lf.last, lf.depth, _flags(lf)))
+    for lf in t.leaves:
+        if lf.obs is None:
+            continue
+        for ob in lf.obs:
+            if isinstance(ob, QO):
+                out.write(struct.pack("<H", len(ob.slots)))
+                for i in sorted(ob.slots):
+                    xn, xm, v = ob.slots[i]
+                    assert xn == v[0]
+                    out.write(struct.pack("<i4d", i, xm, v[0], v[1], v[2]))
+            else:
+                nodes = []
+                stack = [ob.root] if ob.root is not None else []
+                while stack:
+                    nd = stack.pop()
+                    nodes.append(nd)
+                    stack.extend(c for c in (nd[3], nd[2]) if c is not None)
+                out.write(struct.pack("<I", len(nodes)))
+                for nd in nodes:
+                    fl = (1 if nd[2] is not None else 0) | (2 if nd[3] is not None else 0)
+                    out.write(struct.pack("<4dB", nd[0], *nd[1], fl))
+    return out.getvalue()
+
+
+def unpack_reg(buf: bytes, **params) -> HTRegressor:
+    v, k, _, L, B, root, ws, rl = struct.unpack_from("<IIIIIidQ", buf, 0)
+    assert v == 504
+    t = HTRegressor(k, **params)
+    off = 40
+    t.root, t.weight_seen, t.rows_learned = root, ws, rl
+    t.branches = []
+    for _ in range(B):
+        f, th, le, ri = struct.unpack_from("<Idii", buf, off)
+        off += REG_BRANCH
+        t.branches.append([f, th, le, ri])
+    t.leaves, has_obs = [], []
+    for _ in range(L):
+        n, m, S_, last, depth, fl = struct.unpack_from("<4dHB", buf, off)
+        off += 35
+        lf = RLeaf(depth, [n, m, S_])
+        lf.last = last
+        lf.active, lf.capped = bool(fl & 1), bool(fl & 4)
+        has_obs.append(bool(fl & 2))
+        t.leaves.append(lf)
+    for lf, h in zip(t.leaves, has_obs, strict=True):
+        if not h:
+            continue
+        lf.obs = []
+        for _ in range(k):
+            ob = t._new_obs()
+            if isinstance(ob, QO):
+                (ns,) = struct.unpack_from("<H", buf, off)
+                off += 2
+                for _ in range(ns):
+                    i, xm, n, ym, yS = struct.unpack_from("<i4d", buf, off)
+                    off += 36
+                    ob.slots[i] = [n, xm, [n, ym, yS]]
+            else:
+                (nn,) = struct.unpack_from("<I", buf, off)
+                off += 4
+
+                def read(off_):
+                    val, n, m, S_, fl = struct.unpack_from("<4dB", buf, off_)
+                    return [val, [n, m, S_], None, None], fl, off_ + 33
+
+                if nn:
+                    root_nd, fl, off = read(off)
+                    ob.root = root_nd
+                    stack = [(root_nd, fl)]
+                    # preorder, left before right: rebuild with an explicit stack
+                    pending = []
+                    nd, fl = root_nd, fl
+                    while True:
+                        if fl & 1:
+                            if fl & 2:
+                                pending.append(nd)
+                            child, cfl, off = read(off)
+                            nd[2] = child
+                            nd, fl = child, cfl
+                            continue
+                        if fl & 2:
+                            child, cfl, off = read(off)
+                            nd[3] = child
+                            nd, fl = child, cfl
+                            continue
+                        if not pending:
+                            break
+                        par = pending.pop()
+                        child, cfl, off = read(off)
+                        par[3] = child
+                        nd, fl = child, cfl
+                    del stack
+            lf.obs.append(ob)
+    assert off == len(buf), (off, len(buf))
+    return t
 
 
 # --------------------------------------------------------------------------- streams
@@ -1416,7 +1693,7 @@ class QO:
 
 
 class RLeaf:
-    __slots__ = ("stats", "obs", "depth", "last", "active")
+    __slots__ = ("stats", "obs", "depth", "last", "active", "capped")
 
     def __init__(self, depth: int, stats: list):
         self.stats = stats
@@ -1424,6 +1701,7 @@ class RLeaf:
         self.depth = depth
         self.last = stats[0]
         self.active = True
+        self.capped = False
 
 
 class HTRegressor:
@@ -1464,6 +1742,7 @@ class HTRegressor:
         self.root = ~0
         self.weight_seen = 0.0
         self.cap = None
+        self.rows_learned = 0
 
     def _new_obs(self):
         kind = self.splitter[0]
@@ -1490,6 +1769,9 @@ class HTRegressor:
         self.weight_seen += w
         if w == 0.0 and self.zero_weight == "skip":
             return
+        self.rows_learned += 1
+        if self.cap is not None and self.rows_learned % self.recheck == 0:
+            self._enforce_cap()
         node = self.root
         parent, right = -1, False
         br = self.branches
@@ -1590,11 +1872,25 @@ class HTRegressor:
     def n_nodes(self) -> int:
         return len(self.branches) + len(self.leaves)
 
-    def _may_grow(self) -> bool:
-        return True
+    def struct_bytes(self, n_leaves: int, n_branches: int) -> int:
+        return reg_struct_bytes(n_leaves, n_branches)
 
-    def _enforce_cap(self) -> None:
-        return None
+    def obs_reserve(self) -> int:
+        if self.splitter[0] != "qo" or len(self.splitter) < 3 or self.splitter[2] is None:
+            raise ValueError("a byte cap needs a bounded observer: ('qo', radius, max_slots)")
+        return self.k * (2 + 36 * self.splitter[2])
+
+    def promise(self, leaf) -> float:
+        if self.promise_kind == "sse":
+            return leaf.stats[2]  # the leaf's sum of squared deviations
+        return -leaf.depth  # river's: shallow leaves first
+
+
+for _cls, _sb in ((HTClassifier, clf_state_bytes), (HTRegressor, reg_state_bytes)):
+    _cls.set_cap = cap_set
+    _cls._may_grow = cap_may_grow
+    _cls._enforce_cap = cap_enforce
+    _cls.state_bytes = _sb
 
 
 def reg_stream(
@@ -1842,6 +2138,43 @@ def _gaussian_obs_vs_hist(n: int, seed: int) -> dict:
     return out
 
 
+def _observer_growth(seed: int) -> dict:
+    """Observer size at one leaf that never splits, against rows learned: E-BST
+    keeps a node per distinct value, TE-BST per distinct rounded value, QO a
+    slot per occupied interval of width radius."""
+    X, y, _ = reg_stream(40_000, 1, seed, kind="tree")
+    obs = {"ebst": EBST(None), "tebst_1": EBST(1), "tebst_2": EBST(2), "qo_0.25": QO(0.25)}
+    marks = [1_000, 5_000, 20_000, 40_000]
+    out = {name: [] for name in obs}
+    for i in range(len(X)):
+        for o in obs.values():
+            o.update(float(X[i, 0]), float(y[i]), 1.0)
+        if i + 1 in marks:
+            for name, o in obs.items():
+                out[name].append(o.n_nodes() if isinstance(o, EBST) else o.n_slots())
+    out["rows"] = marks
+    return out
+
+
+def _rounding_forms(n: int, seed: int) -> dict:
+    """TE-BST rounds with Python's round(x, digits) (correctly rounded decimal);
+    the obvious Rust form (x * 10^d).round() / 10^d is not the same function."""
+    rng = np.random.default_rng(seed)
+    v = (rng.standard_normal(n) * 3.0).tolist()
+    out = {}
+    for d in (1, 2, 3):
+        sc = 10.0**d
+        diff = 0
+        for x in v:
+            a = round(x, d)
+            b = math.floor(abs(x) * sc + 0.5) / sc
+            b = math.copysign(b, x)
+            diff += a != b
+        out[f"digits_{d}"] = diff
+    out["n"] = n
+    return out
+
+
 def part2(args) -> dict:
     res = {"cases": []}
     for i, (name, k, skw, tkw, spl) in enumerate(REG_CASES):
@@ -1851,6 +2184,8 @@ def part2(args) -> dict:
     res["qo_quirk"] = _qo_quirk_demo(9)
     res["one_feature"] = _reg_one_feature(3000, 11)
     res["clf_observers"] = _gaussian_obs_vs_hist(args.rows // 2, 12)
+    res["observer_growth"] = _observer_growth(13)
+    res["rounding"] = _rounding_forms(200_000, 14)
     return res
 
 
@@ -1899,6 +2234,234 @@ def summarise2(res) -> None:
     print("QO quirk:", json.dumps(res["qo_quirk"]))
     print("one feature:", json.dumps(res["one_feature"]))
     print("classification observers:", json.dumps(res["clf_observers"]))
+    print("observer growth at one leaf:", json.dumps(res["observer_growth"]))
+    print("rounding forms that differ from round(x, d):", json.dumps(res["rounding"]))
+
+
+# --------------------------------------------------------------------------- part 3
+
+CAPS = [None, 1 << 20, 256 << 10, 64 << 10]
+
+
+def _cap_name(c) -> str:
+    return "none" if c is None else f"{c >> 10} KB"
+
+
+def _river_size(model) -> int:
+    from river.tree.utils import calculate_object_size
+
+    return int(calculate_object_size(model))
+
+
+def _run_capped_clf(X, y, tkw, cap, n_tail, check_every=2000):
+    k = X.shape[1]
+    t = HTClassifier(k, 2, **tkw)
+    if cap is not None:
+        t.set_cap(cap)
+    hits = np.zeros(len(X), dtype=bool)
+    worst = 0
+    t0 = time.perf_counter()
+    for i in range(len(X)):
+        xi = X[i].tolist()
+        if i:
+            hits[i] = t.predict(xi) == y[i]
+        t.learn(xi, int(y[i]), 1.0)
+        if i % check_every == 0 or i == len(X) - 1:
+            worst = max(worst, t.state_bytes())
+    b = pack_clf(t)
+    assert len(b) == t.state_bytes()
+    return {
+        "cap": _cap_name(cap),
+        "accuracy": float(hits[1:].mean()),
+        "accuracy_tail": float(hits[-n_tail:].mean()),
+        "leaves": len(t.leaves),
+        "active": sum(lf.active for lf in t.leaves),
+        "capped": sum(lf.capped for lf in t.leaves),
+        "bytes_end": len(b),
+        "bytes_max_checked": worst,
+        "within_cap": cap is None or worst <= cap,
+        "seconds": time.perf_counter() - t0,
+    }
+
+
+def _run_river_clf(X, y, tkw, cap, n_tail, period):
+    kw = dict(tkw)
+    kw["max_size"] = 1e9 if cap is None else cap / 2**20
+    kw["memory_estimate_period"] = period
+    m = river_classifier(False, **kw)
+    hits = np.zeros(len(X), dtype=bool)
+    t0 = time.perf_counter()
+    for i in range(len(X)):
+        xi = dict(enumerate(X[i].tolist()))
+        if i:
+            hits[i] = m.predict_one(xi) == y[i]
+        m.learn_one(xi, int(y[i]))
+    return {
+        "cap": _cap_name(cap),
+        "accuracy": float(hits[1:].mean()),
+        "accuracy_tail": float(hits[-n_tail:].mean()),
+        "leaves": m.n_leaves,
+        "active": m.n_active_leaves,
+        "river_size_end": _river_size(m),
+        "seconds": time.perf_counter() - t0,
+    }
+
+
+def _run_capped_reg(X, y, tkw, spl, cap, promise, n_tail, check_every=2000):
+    k = X.shape[1]
+    t = HTRegressor(k, splitter=spl, **tkw)
+    if cap is not None:
+        t.set_cap(cap, promise=promise)
+    err = np.zeros(len(X))
+    worst = 0
+    t0 = time.perf_counter()
+    for i in range(len(X)):
+        xi = X[i].tolist()
+        err[i] = (t.predict(xi) - y[i]) ** 2
+        t.learn(xi, float(y[i]), 1.0)
+        if i % check_every == 0 or i == len(X) - 1:
+            worst = max(worst, t.state_bytes())
+    b = pack_reg(t)
+    assert len(b) == t.state_bytes()
+    return {
+        "cap": _cap_name(cap),
+        "promise": promise,
+        "mse": float(err[1:].mean()),
+        "mse_tail": float(err[-n_tail:].mean()),
+        "leaves": len(t.leaves),
+        "active": sum(lf.active for lf in t.leaves),
+        "bytes_end": len(b),
+        "bytes_max_checked": worst,
+        "within_cap": cap is None or worst <= cap,
+        "seconds": time.perf_counter() - t0,
+    }
+
+
+def _run_river_reg(X, y, tkw, radius, cap, n_tail, period):
+    kw = dict(tkw)
+    kw["max_size"] = 1e9 if cap is None else cap / 2**20
+    kw["memory_estimate_period"] = period
+    m = river_regressor(splitter=river_splitter(("qo", radius)), **kw)
+    err = np.zeros(len(X))
+    t0 = time.perf_counter()
+    for i in range(len(X)):
+        xi = dict(enumerate(X[i].tolist()))
+        err[i] = (m.predict_one(xi) - y[i]) ** 2
+        m.learn_one(xi, float(y[i]))
+    return {
+        "cap": _cap_name(cap),
+        "mse": float(err[1:].mean()),
+        "mse_tail": float(err[-n_tail:].mean()),
+        "leaves": m.n_leaves,
+        "active": m.n_active_leaves,
+        "river_size_end": _river_size(m),
+        "seconds": time.perf_counter() - t0,
+    }
+
+
+def _state_table(seed: int) -> dict:
+    """The packed size of grown trees against the formula, and river's own
+    measure (Python object sizes) of river's trees grown on the same rows."""
+    rows = []
+    for k, C in ((5, 2), (20, 2), (20, 5)):
+        X, y, w = clf_stream(20_000, k, C, seed + k + C, depth=8, noise=0.02)
+        tkw = {"grace_period": 50, "tau": 0.1}
+        t = HTClassifier(k, C, **tkw)
+        for i in range(len(X)):
+            t.learn(X[i].tolist(), int(y[i]), 1.0)
+        b = pack_clf(t)
+        n_obs = sum(lf.obs is not None for lf in t.leaves)
+        formula = clf_struct_bytes(C, len(t.leaves), len(t.branches)) + 40 * k * C * n_obs
+        rp = river_classifier(False, **tkw)
+        for i in range(len(X)):
+            rp.learn_one(dict(enumerate(X[i].tolist())), int(y[i]))
+        rows.append(
+            {
+                "tree": "classifier, Gaussian",
+                "k": k,
+                "classes": C,
+                "leaves": len(t.leaves),
+                "with_observers": n_obs,
+                "packed": len(b),
+                "formula": formula,
+                "river_leaves": rp.n_leaves,
+                "river_object_size": _river_size(rp),
+            }
+        )
+    for spl in (("qo", 0.25, None), ("tebst", 1), ("ebst",)):
+        k = 10
+        X, y, w = reg_stream(20_000, k, seed + 50, kind="tree")
+        tkw = {"grace_period": 100}
+        t = HTRegressor(k, splitter=spl, **tkw)
+        for i in range(len(X)):
+            t.learn(X[i].tolist(), float(y[i]), 1.0)
+        b = pack_reg(t)
+        sizes = mine_obs_sizes(t)
+        rv = river_regressor(splitter=river_splitter(spl), **tkw)
+        for i in range(len(X)):
+            rv.learn_one(dict(enumerate(X[i].tolist())), float(y[i]))
+        rows.append(
+            {
+                "tree": f"regressor, {spl[0]}",
+                "k": k,
+                "leaves": len(t.leaves),
+                "with_observers": sum(lf.obs is not None for lf in t.leaves),
+                "bins_mean": sizes["mean"],
+                "bins_max": sizes["max"],
+                "packed": len(b),
+                "formula": reg_state_bytes(t),
+                "river_leaves": rv.n_leaves,
+                "river_object_size": _river_size(rv),
+            }
+        )
+    return {"rows": rows}
+
+
+def part3(args) -> dict:
+    res = {"state": _state_table(300)}
+    print("state table done", flush=True)
+    n = args.cap_rows
+    n_tail = n // 4
+    # classifier: k = 50 features, two classes, a depth-10 concept
+    X, y, _ = clf_stream(n, 50, 2, 301, depth=10, noise=0.05)
+    tkw = {"grace_period": 50, "tau": 0.1}
+    res["clf"] = {"rows": n, "k": 50, "classes": 2, "tree": tkw, "mine": [], "river": []}
+    for cap in CAPS:
+        r = _run_capped_clf(X, y, tkw, cap, n_tail)
+        res["clf"]["mine"].append(r)
+        print("clf mine", json.dumps(r), flush=True)
+    for cap in CAPS:
+        r = _run_river_clf(X, y, tkw, cap, n_tail, args.mem_period)
+        res["clf"]["river"].append(r)
+        print("clf river", json.dumps(r), flush=True)
+    # regressor: k = 20, QO radius 0.25 at most 32 slots a feature
+    X, y, _ = reg_stream(n, 20, 302, kind="tree", depth=10)
+    tkw = {"grace_period": 50}
+    spl = ("qo", 0.25, 32)
+    res["reg"] = {"rows": n, "k": 20, "splitter": list(spl), "tree": tkw, "mine": [], "river": []}
+    for cap in CAPS:
+        for promise in ("river", "sse") if cap is not None else ("river",):
+            r = _run_capped_reg(X, y, tkw, spl, cap, promise, n_tail)
+            res["reg"]["mine"].append(r)
+            print("reg mine", json.dumps(r), flush=True)
+    for cap in CAPS:
+        r = _run_river_reg(X, y, tkw, 0.25, cap, n_tail, args.mem_period)
+        res["reg"]["river"].append(r)
+        print("reg river", json.dumps(r), flush=True)
+    return res
+
+
+def summarise3(res) -> None:
+    print("state table:")
+    for r in res["state"]["rows"]:
+        print("  ", json.dumps(r))
+    for kind in ("clf", "reg"):
+        d = res[kind]
+        print(f"{kind}: rows={d['rows']} k={d['k']} tree={d['tree']}")
+        for r in d["mine"]:
+            print("  mine ", json.dumps(r))
+        for r in d["river"]:
+            print("  river", json.dumps(r))
 
 
 # --------------------------------------------------------------------------- main
@@ -1906,6 +2469,7 @@ def summarise2(res) -> None:
 PARTS = {
     "part1": (part1, summarise1),
     "part2": (part2, summarise2),
+    "part3": (part3, summarise3),
 }
 
 
@@ -1916,6 +2480,10 @@ def main(argv=None):
     ap.add_argument("--rows", type=int, default=20000)
     ap.add_argument("--py-rows", type=int, default=20000)
     ap.add_argument("--reg-rows", type=int, default=20000)
+    ap.add_argument("--cap-rows", type=int, default=200_000)
+    ap.add_argument(
+        "--mem-period", type=int, default=5000, help="river's memory_estimate_period in part 3"
+    )
     ap.add_argument("--force", action="store_true", help="recompute a part whose result exists")
     args = ap.parse_args(argv)
     os.makedirs(args.out, exist_ok=True)
