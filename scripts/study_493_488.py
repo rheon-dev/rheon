@@ -807,6 +807,83 @@ def checks() -> dict:
 # parts
 
 
+# --------------------------------------------------------------------------
+# the state caps (the user's rule: 256 KB per group by default, warn at half,
+# refuse at the cap; a bank-wide total that can be infinite)
+
+CAP_BYTES = 256 * 1024
+WARN_BYTES = CAP_BYTES // 2
+CAP_MS = (7, 12, 24, 52, 96, 168, 336, 720, 1440, 2184, 4320, 8760)
+
+
+def cap_verdict(nbytes: int) -> str:
+    return "refuse" if nbytes >= CAP_BYTES else ("warn" if nbytes >= WARN_BYTES else "ok")
+
+
+def ets_bytes(k: int, m: int) -> int:
+    """The estimator's state: level, trend, the season ring, their
+    sensitivities to ``k`` parameters (``(2 + m) k``), ``theta``, ``R``
+    (``k (k + 1) / 2``) and four scalars: ``8 ((k + 1) (2 + m) + k +
+    k (k + 1) / 2 + 4)``, i.e. ``32 m + 168`` (k = 3) and ``40 m + 224`` (k = 4)."""
+    return 8 * ((k + 1) * (2 + m) + k + k * (k + 1) // 2 + 4)
+
+
+def ets_buffer_bytes(m: int) -> int:
+    """The batch start's buffer, held until the start is fitted."""
+    return 8 * max(500, 3 * m)
+
+
+def largest_m(fn, limit: int) -> int:  # noqa: ANN001
+    """The largest ``m`` with ``fn(m) < limit`` (``fn`` increasing)."""
+    lo, hi = 1, 10**7
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if fn(mid) < limit:
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo
+
+
+def state_caps() -> dict:
+    out: dict = {"cap_bytes": CAP_BYTES, "warn_bytes": WARN_BYTES, "rows": [], "limits": {}}
+    for m in CAP_MS:
+        row: dict = {"m": m, "buffer": ets_buffer_bytes(m), "region_matrix": 8 * (m + 2) ** 2}
+        for k, nm in ((3, "aaa"), (4, "aada")):
+            b = ets_bytes(k, m)
+            row[nm] = b
+            row[nm + "_peak"] = b + ets_buffer_bytes(m)
+            row[nm + "_verdict"] = cap_verdict(b)
+            row[nm + "_peak_verdict"] = cap_verdict(b + ets_buffer_bytes(m))
+        out["rows"].append(row)
+    for k, nm in ((3, "aaa"), (4, "aada")):
+        out["limits"][nm] = {
+            "state_warn_m": largest_m(lambda m, k=k: ets_bytes(k, m), WARN_BYTES) + 1,
+            "state_refuse_m": largest_m(lambda m, k=k: ets_bytes(k, m), CAP_BYTES) + 1,
+            "peak_warn_m": largest_m(lambda m, k=k: ets_bytes(k, m) + ets_buffer_bytes(m), WARN_BYTES) + 1,
+            "peak_refuse_m": largest_m(lambda m, k=k: ets_bytes(k, m) + ets_buffer_bytes(m), CAP_BYTES) + 1,
+        }
+    out["limits"]["region_matrix_over_cap_m"] = largest_m(lambda m: 8 * (m + 2) ** 2, CAP_BYTES) + 1
+    # the formulas against the floats the estimator allocates, per m and form
+    chk = []
+    for m in (7, 24, 168, 1440):
+        for damped in (False, True):
+            spec = base.EtsSpec("cap", damped, m, (0.3, 0.01, 0.05) + ((0.9,) if damped else ()) + (1.0,))
+            est = OnlineEtsRp(spec, VARIANTS["rp_adm_hub"], batch_start=base.ets_window(spec))
+            chk.append(
+                {
+                    "m": m,
+                    "damped": damped,
+                    "allocated_bytes": 8 * est.allocated_floats(),
+                    "formula_bytes": ets_bytes(spec.n_params, m),
+                    "state_bytes_method": est.state_bytes(),
+                }
+            )
+    out["allocation_check"] = chk
+    out["bank_total_note"] = "bank total = sum over groups of the per-group bytes; with the total cap at infinity only the per-group cap binds"
+    return out
+
+
 def ets_part(part: str, args) -> dict:  # noqa: ANN001
     variants = PART_VARIANTS[part]
     path = os.path.join(args.out, f"{part}.jsonl")
@@ -820,6 +897,9 @@ def ets_part(part: str, args) -> dict:  # noqa: ANN001
     res: dict = {"seeds": [seeds[0], seeds[-1]], "n": N_ROWS, "variants": list(variants)}
     if part == "part1":
         res["checks"] = checks()
+    if part == "part2":
+        res["state_caps"] = state_caps()
+        res["checks"] = {"gradient": checks()["gradient"]}
     res["summary"] = [
         summarise_set(k, sorted(by_set.get(k, []), key=lambda r: r["seed"]), bl.get(k, []), variants)
         for k in SET_ORDER
@@ -833,6 +913,17 @@ def summarise_ets(res: dict) -> None:
     if "checks" in res:
         for k, v in res["checks"].items():
             print("check", k, v)
+    if "state_caps" in res:
+        sc = res["state_caps"]
+        print(f"cap {sc['cap_bytes']} B, warn {sc['warn_bytes']} B; limits {sc['limits']}")
+        print("m, aaa, aada, buffer, aaa+buffer, aada+buffer, region matrix; verdicts")
+        for r in sc["rows"]:
+            print(
+                r["m"], r["aaa"], r["aada"], r["buffer"], r["aaa_peak"], r["aada_peak"], r["region_matrix"],
+                r["aaa_verdict"], r["aada_verdict"], r["aaa_peak_verdict"], r["aada_peak_verdict"],
+            )
+        for c in sc["allocation_check"]:
+            print("allocation", c)
     print("complete:", res["complete"])
     print_summary(res["summary"], tuple(res["variants"]))
 
