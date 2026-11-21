@@ -173,6 +173,21 @@ the rows the state has learned, so each row is learned once:
 | with a null clock | keeps it, for the bank to refuse by name |
 | at or before its group's last clock value | drops it: the state has learned it |
 
+**`skip_learned` finds the learned rows by each group's last clock value,
+so it is right only where, within a group, the clock never goes back.** A
+spec with `session` or `restart_after_step_back` lets a group's clock start
+again lower: at a session change, or at a step back larger than
+`restart_after_step_back`. On a stream whose clock does start again, the
+last clock value is not a place in the stream, and the rule would drop the
+next session's rows, which the state has not learned, and keep earlier ones
+it has. Nothing in the input or the state tells such a stream from one
+whose clock runs on, such as a timestamp with the day as the session. So
+under those settings `skip_learned` raises `ValueError` unless you pass
+`clock_runs_on=True`, which says that within each group the clock never
+goes back. Pass it only when that is so. When the clock does start again,
+drop the learned rows with Polars' `filter` before the bank, on a column
+that orders the whole stream, such as a date or a row number.
+
 **A bank whose specs all count rows, with no clock, has no position to
 compare, and `skip_learned` raises `ValueError` there.** If the input
 starts where the saved input did, drop the learned rows with
@@ -236,7 +251,9 @@ the state is one run's, byte for byte: True
 
 **On the command line, give `--skip-learned` beside `--load-state`** (the
 TOML key `skip_learned`). It filters each chunk it reads as
-`skip_learned` does. Here the second run feeds `job.toml`'s input,
+`skip_learned` does, and refuses the same specs: give `--clock-runs-on`
+(the TOML key `clock_runs_on`) where `skip_learned` would take
+`clock_runs_on=True`. Here the second run feeds `job.toml`'s input,
 `ticks.parquet`, again, which the first has just learned, and learns none
 of it twice. The rows it drops get no output row, so its output file is
 empty:

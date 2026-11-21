@@ -506,12 +506,14 @@ class ModelBank:
         return self._native.drop_groups(listed, index)
 
     @overload
-    def skip_learned(self, frame: pl.DataFrame) -> pl.DataFrame: ...
+    def skip_learned(self, frame: pl.DataFrame, *, clock_runs_on: bool = False) -> pl.DataFrame: ...
 
     @overload
-    def skip_learned(self, frame: pl.LazyFrame) -> pl.LazyFrame: ...
+    def skip_learned(self, frame: pl.LazyFrame, *, clock_runs_on: bool = False) -> pl.LazyFrame: ...
 
-    def skip_learned(self, frame: pl.DataFrame | pl.LazyFrame) -> pl.DataFrame | pl.LazyFrame:
+    def skip_learned(
+        self, frame: pl.DataFrame | pl.LazyFrame, *, clock_runs_on: bool = False
+    ) -> pl.DataFrame | pl.LazyFrame:
         """The rows of a frame or query that the bank has not learned.
 
         Use it to resume a saved bank on input that overlaps what the bank
@@ -522,11 +524,30 @@ class ModelBank:
         Without a clock in any spec, pass the bank only the rows after the
         last one it learned.
 
+        It finds the rows by each group's last clock, so it is right only
+        where, within a group, the clock never goes back. A spec with
+        ``session`` or ``restart_after_step_back`` lets a group's clock start
+        again lower, and on such a stream the last clock is not a place in
+        it: the rule would drop the next session's unlearned rows and keep
+        learned ones, and the bank would take them without a word. Nothing in
+        the frame or the state tells that stream from one whose clock runs on
+        across sessions, such as a timestamp with the day as the session, so
+        under those settings the call refuses unless ``clock_runs_on=True``
+        says the clock runs on.
+
         .. rubric:: Parameters
 
         ``frame``
             The input, a ``DataFrame`` or a ``LazyFrame``, holding each spec's
             clock column and ``group`` column.
+        ``clock_runs_on``
+            ``True`` declares that, within each group, the clock never goes
+            back, across sessions and step backs included. Needed when a spec
+            that reads a clock sets ``session`` or ``restart_after_step_back``;
+            accepted, and changing nothing, otherwise. Where the clock does
+            start again, do not set it: filter the input before the bank on a
+            column that orders the whole stream, such as a date or a row
+            number, instead.
 
         .. rubric:: Returns
 
@@ -541,7 +562,8 @@ class ModelBank:
 
         ``ValueError``
             No spec reads a clock, so there is no position on a clock to
-            resume from.
+            resume from; or a spec that reads a clock sets ``session`` or
+            ``restart_after_step_back`` and ``clock_runs_on`` is not ``True``.
         :class:`~rheon.WrongTypeError`
             A clock column is not a number, a ``Date``, a ``Datetime`` or a
             ``Duration``, or a clock is temporal in the frame and was numeric
@@ -552,7 +574,7 @@ class ModelBank:
             ``ValueError`` and Polars' ``ColumnNotFoundError``.
         ``TypeError``
             ``frame`` is neither a ``DataFrame`` nor a ``LazyFrame``, such as
-            a dict.
+            a dict, or ``clock_runs_on`` is not a bool.
 
         .. rubric:: Examples
 
@@ -597,6 +619,15 @@ class ModelBank:
                 f"is {type(frame).__name__}. Pass the input you would pass to fit_predict."
             )
             raise TypeError(msg)
+        if not isinstance(clock_runs_on, bool):
+            msg = (
+                "ModelBank.skip_learned: clock_runs_on must be a bool, but its type is "
+                f"{type(clock_runs_on).__name__}. Pass True only if, within each group, the "
+                "clock never goes back."
+            )
+            raise TypeError(msg)
+        if not clock_runs_on:
+            _refuse_a_clock_that_may_start_again(self.specs)
         schema = frame.lazy().collect_schema()
         keep: pl.Expr | None = None
         for spec, groups in zip(self.specs, self._native.last_clocks(), strict=True):
@@ -4003,6 +4034,35 @@ class ModelBank:
 #: reads it (a ``Date`` counts days).
 _NANOS_PER = {"ms": 1_000_000, "us": 1_000, "ns": 1}
 _NANOS_PER_DAY = 86_400 * 1_000_000_000
+
+
+def _refuse_a_clock_that_may_start_again(specs: list[dict[str, Any]]) -> None:
+    """`skip_learned` places a row by its group's last clock, which is a place
+    in the stream only while a group's clock never goes back. Refuse the first
+    spec whose settings let it start again, unless the caller has declared
+    that this stream's clock runs on (the command line's `Bank::learned`
+    gives the same refusal)."""
+    for spec in specs:
+        if spec.get("clock") is None:
+            continue
+        if spec.get("session") is not None:
+            setting = f"session={spec['session']!r}"
+            how = "a session change"
+        elif spec.get("restart_after_step_back") is not None:
+            setting = "restart_after_step_back"
+            how = "a step back larger than restart_after_step_back"
+        else:
+            continue
+        name = spec["name"]
+        msg = (
+            f'ModelBank.skip_learned: spec "{name}" sets {setting}, so a group\'s clock '
+            f"may start again lower at {how}, and then its last clock is not a place in the "
+            "stream: the rows after it are not the rows the bank has not learned. If, within "
+            "each group, the clock never goes back (a timestamp that runs on across sessions), "
+            "pass clock_runs_on=True. Otherwise filter the input before the bank on a column "
+            "that orders the whole stream, such as a date or a row number."
+        )
+        raise ValueError(msg)
 
 
 def _unlearned(

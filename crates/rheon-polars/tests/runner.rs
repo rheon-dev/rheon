@@ -113,6 +113,7 @@ fn config(input: &Path, output: &Path) -> RunConfig {
         threads: None,
         load_state: None,
         skip_learned: false,
+        clock_runs_on: false,
         save_state: None,
         keep_columns: vec![],
         predict: false,
@@ -860,6 +861,77 @@ fn a_dry_run_that_skips_what_was_learned_takes_the_positions_first() {
         ),
         "{e}"
     );
+    cleanup(&[input, output, state]);
+}
+
+/// Under a spec whose group's clock may start again lower -- `session`, or
+/// `restart_after_step_back` -- the last clock is not a place in the stream,
+/// so `skip_learned` is refused, by the dry run as by the run, unless
+/// `clock_runs_on` declares the clock never goes back; and `clock_runs_on`
+/// alone is refused as meaning nothing (review fable2, Y2, the user's
+/// "refuse unless declared", 2026-11-20).
+#[test]
+fn skip_learned_refuses_a_clock_that_may_start_again_unless_declared() {
+    let input = tmp("restart-skip-in.parquet");
+    let output = tmp("restart-skip-out.parquet");
+    let state = tmp("restart-skip-state.bin");
+    write(&input, Format::Parquet, &stream(50));
+    let settings: [(&str, serde_json::Value, &str); 3] = [
+        (
+            "restart_after_step_back",
+            serde_json::json!({"restart_after_step_back": 5.0}),
+            "sets restart_after_step_back, so a",
+        ),
+        (
+            "session_gap",
+            serde_json::json!({"session": "group", "session_gap": 1.0}),
+            "sets session = \"group\", so a",
+        ),
+        (
+            "group_close",
+            serde_json::json!({"session": "group", "group_close": "session"}),
+            "sets session = \"group\", so a",
+        ),
+    ];
+    for (what, extra, says) in settings {
+        let mut json = serde_json::to_value(spec()).unwrap();
+        for (k, v) in extra.as_object().unwrap() {
+            json[k] = v.clone();
+        }
+        let mut cfg = config(&input, &output);
+        cfg.specs = vec![serde_json::from_value(json).unwrap()];
+        cfg.save_state = Some(state.clone());
+        run_config(&cfg, no_progress).unwrap();
+        let mut resumed = cfg.clone();
+        resumed.save_state = None;
+        resumed.load_state = Some(state.clone());
+        resumed.skip_learned = true;
+        for e in [
+            resumed.dry_run().unwrap_err().to_string(),
+            run_config(&resumed, no_progress).unwrap_err().to_string(),
+        ] {
+            assert!(
+                e.contains("config: skip_learned = true (--skip-learned), but spec \"ridge\" ")
+                    && e.contains(says)
+                    && e.contains("set clock_runs_on = true (--clock-runs-on)"),
+                "{what}: {e}"
+            );
+        }
+        resumed.clock_runs_on = true;
+        resumed.dry_run().unwrap();
+        run_config(&resumed, no_progress).unwrap();
+    }
+    let mut alone = config(&input, &output);
+    alone.clock_runs_on = true;
+    let e = alone.validate().unwrap_err();
+    assert!(
+        e.starts_with("config: clock_runs_on = true (--clock-runs-on) says how skip_learned")
+            && e.contains("leave out clock_runs_on"),
+        "{e}"
+    );
+    alone.skip_learned = true;
+    alone.load_state = Some(state.clone());
+    alone.validate().unwrap();
     cleanup(&[input, output, state]);
 }
 

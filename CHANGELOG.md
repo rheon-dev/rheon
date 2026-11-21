@@ -46,6 +46,22 @@ model that only the new build has is listed as an addition and passes.
   the square root says so in `covariance_form`, written only there, and a
   state of 67 or earlier loads as the covariance form it is, to the bit.
 
+### Changed
+
+- **`ModelBank.skip_learned` and the command line's `--skip-learned` refuse a
+  spec with `session` or `restart_after_step_back` unless the caller
+  declares that the clock runs on,** by `skip_learned(frame,
+  clock_runs_on=True)`, `--clock-runs-on`, or the config key
+  `clock_runs_on = true`. They keep a row whose clock is after its group's
+  last one, which is right only where, within a group, the clock never goes
+  back. Those two settings let it start again lower, at a session change or
+  a large step back. On such a stream the rule dropped the next session's
+  unlearned rows (0 kept of 300 on three days whose clock restarts daily)
+  and kept learned ones, and the bank took them without a word. The input
+  and the state cannot tell that stream from one whose clock runs on across
+  sessions, where the rule is exactly right, so the caller says which. A
+  call that was right before, under those settings, now needs the argument.
+
 ### Fixed
 
 - `lasso`: under a `window_size`, `solve_failures` counts a coordinate

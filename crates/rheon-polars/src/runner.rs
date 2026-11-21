@@ -307,9 +307,18 @@ pub struct RunConfig {
     /// reads a clock, a row is kept when its clock is after its group's last
     /// one, its group is new to the bank, or its clock is null
     /// (`ModelBank.skip_learned` in Python; docs/PLAN.md task 196, N26).
-    /// Requires `load_state` and a spec that reads a clock.
+    /// Requires `load_state` and a spec that reads a clock. Right only where,
+    /// within a group, the clock never goes back: under a spec with `session`
+    /// or `restart_after_step_back` it is refused unless `clock_runs_on`
+    /// declares that (review fable2, Y2).
     #[serde(default)]
     pub skip_learned: bool,
+    /// Declares, for `skip_learned`, that within each group the clock never
+    /// goes back, across sessions and step backs included
+    /// (`ModelBank.skip_learned(clock_runs_on=True)` in Python). Requires
+    /// `skip_learned`.
+    #[serde(default)]
+    pub clock_runs_on: bool,
     /// Save the bank state here after running.
     #[serde(default)]
     pub save_state: Option<PathBuf>,
@@ -483,6 +492,14 @@ impl RunConfig {
                     .into(),
             );
         }
+        if self.clock_runs_on && !self.skip_learned {
+            return Err(
+                "config: clock_runs_on = true (--clock-runs-on) says how skip_learned reads the \
+                 saved state's clocks, but skip_learned is not set, so nothing reads it. Set \
+                 skip_learned (--skip-learned), or leave out clock_runs_on."
+                    .into(),
+            );
+        }
         if self.predict {
             if self.load_state.is_none() {
                 return Err(
@@ -611,7 +628,7 @@ impl RunConfig {
             // What the run takes before its first row: a bank with no clock
             // to resume by is refused here too.
             let learned = bank
-                .learned()
+                .learned(self.clock_runs_on)
                 .map_err(|e| polars_err!(ComputeError: "{}", e))?;
             learned.unlearned(&empty)?;
         }
@@ -838,7 +855,7 @@ pub fn run_config_on_reported(
     // so every chunk is filtered against the same positions.
     let learned = if cfg.skip_learned {
         Some(
-            bank.learned()
+            bank.learned(cfg.clock_runs_on)
                 .map_err(|e| polars_err!(ComputeError: "{}", e))?,
         )
     } else {

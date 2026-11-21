@@ -1018,7 +1018,7 @@
   rows_fed
   save(self, file: 'str | os.PathLike[str] | IO[bytes]') -> 'None'
   save_bytes(self) -> 'bytes'
-  skip_learned(self, frame: 'pl.DataFrame | pl.LazyFrame') -> 'pl.DataFrame | pl.LazyFrame'
+  skip_learned(self, frame: 'pl.DataFrame | pl.LazyFrame', *, clock_runs_on: 'bool' = False) -> 'pl.DataFrame | pl.LazyFrame'
   solve_failures(self, spec: 'str | int | None' = None, group: 'str | Iterable[str | None] | None' = None) -> 'pl.DataFrame'
   specs
   summary(self, spec: 'str | int | None' = None, group: 'str | Iterable[str | None] | None' = None) -> 'pl.DataFrame'
@@ -2461,6 +2461,7 @@
 [toml keys]  # read from the refusal of a key the table has not got: a key added, renamed or removed is a diff here; the run config's keys need the CLI
   run config:
     chunk_size
+    clock_runs_on
     closed_groups
     input
     input_format
@@ -2571,6 +2572,7 @@
   --threads <N>
   --load-state <LOAD_STATE>
   --skip-learned
+  --clock-runs-on
   --save-state <SAVE_STATE>
   --closed-groups <CLOSED_GROUPS>
   --predict
