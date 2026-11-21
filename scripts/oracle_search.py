@@ -727,6 +727,60 @@ for (i in seq_along(x)) { f(paste0("pos", i), cu$pos[i]); f(paste0("neg", i), cu
     report("508", "tabular two-sided CUSUM, fixed target", f"R qcc {rver('qcc')} (GPL-2)", {"C+": gp, "C- (qcc stores it negated)": gm}, "300 N(0,1) with a 1-sigma shift at 150; k = se.shift/2 = 0.5; the run-length (ARL) oracle is spc::xcusum.arl")
 
 
+@check
+def r_rmgarch_dcc():
+    """R rmgarch dccfit (Gaussian DCC and ADCC): feed its own sigma_t, a, b, g into the hand recursion and compare R_t."""
+    rng = np.random.default_rng(6)
+    T = 1500
+    # simulate an ADCC(0.05, 0.90, 0.03) correlation path with GARCH(1,1) vols (so the estimates are not at a boundary)
+    Qb = np.array([[1.0, 0.5], [0.5, 1.0]])
+    Nb = 0.25 * np.eye(2) + 0.1 * np.ones((2, 2))
+    Q, e_prev = Qb.copy(), np.zeros(2)
+    h = np.full(2, 1e-4)
+    r = np.empty((T, 2))
+    for t in range(T):
+        n_prev = np.minimum(e_prev, 0)
+        Q = (1 - 0.05 - 0.90) * Qb - 0.03 * Nb + 0.05 * np.outer(e_prev, e_prev) + 0.03 * np.outer(n_prev, n_prev) + 0.90 * Q
+        d = 1 / np.sqrt(np.diag(Q))
+        Rt = Q * np.outer(d, d)
+        z = np.linalg.cholesky(Rt) @ rng.standard_normal(2)
+        r[t] = np.sqrt(h) * z
+        h = 1e-6 + 0.07 * r[t] ** 2 + 0.90 * h
+        e_prev = z
+    code = """
+suppressMessages({library(rugarch); library(rmgarch)})
+Y <- cbind(r1, r2)
+u <- ugarchspec(mean.model=list(armaOrder=c(0,0), include.mean=FALSE), variance.model=list(model="sGARCH", garchOrder=c(1,1)))
+for (m in c("DCC", "aDCC")) {
+  sp <- dccspec(uspec=multispec(replicate(2, u)), dccOrder=c(1,1), distribution="mvnorm", model=m)
+  fit <- dccfit(sp, data=Y, fit.control=list(eval.se=FALSE))
+  cf <- coef(fit); pre <- if (m == "DCC") "d" else "a"
+  f(paste0(pre, "_a"), cf["[Joint]dcca1"]); f(paste0(pre, "_b"), cf["[Joint]dccb1"])
+  f(paste0(pre, "_g"), if (m == "aDCC") cf["[Joint]dccg1"] else 0)
+  S <- sigma(fit); Q <- fit@mfit$Q
+  for (t in seq_len(nrow(Y))) { f(paste0(pre, "_s1_", t), S[t,1]); f(paste0(pre, "_s2_", t), S[t,2])
+    f(paste0(pre, "_q11_", t), Q[[t]][1,1]); f(paste0(pre, "_q12_", t), Q[[t]][1,2]); f(paste0(pre, "_q22_", t), Q[[t]][2,2]) }
+}
+"""
+    R = run_r(code, r1=r[:, 0], r2=r[:, 1])
+    out = {}
+    for pre, name in (("d", "DCC"), ("a", "ADCC")):
+        D = np.column_stack([[R[f"{pre}_s1_{t + 1}"] for t in range(T)], [R[f"{pre}_s2_{t + 1}"] for t in range(T)]])
+        a, b, g = R[f"{pre}_a"], R[f"{pre}_b"], R[f"{pre}_g"]
+        eps = r / D
+        nn = np.minimum(eps, 0.0)
+        Qs = [np.array([[R[f"{pre}_q11_{t + 1}"], R[f"{pre}_q12_{t + 1}"]], [R[f"{pre}_q12_{t + 1}"], R[f"{pre}_q22_{t + 1}"]]]) for t in range(T)]
+        # the recursion Q_{t+1} = C + a e_t e_t' + g n_t n_t' + b Q_t has a constant C = (1-a-b) Qbar - g Nbar: recover it at every t
+        C = np.array([Qs[t + 1] - a * np.outer(eps[t], eps[t]) - g * np.outer(nn[t], nn[t]) - b * Qs[t] for t in range(T - 1)])
+        out[f"{name}: (a, b, g)"] = f"({a:.4f}, {b:.4f}, {g:.4f})"
+        out[f"{name}: spread of the implied constant C over t (max |C_t - mean C|)"] = float(np.max(np.abs(C - C.mean(0))))
+        out[f"{name}: |C| scale"] = float(np.max(np.abs(C.mean(0))))
+        Qb = eps.T @ eps / T
+        Nb = nn.T @ nn / T
+        out[f"{name}: implied (1-a-b)Qbar - gNbar vs the sample-moment one, max |gap|"] = float(np.max(np.abs(C.mean(0) - ((1 - a - b) * Qb - g * Nb))))
+    report("493/514", "DCC / ADCC Q recursion given (a, b, g) and the conditional vols", f"R rmgarch {rver('rmgarch')} (GPL)", out, "T=1500, N=2, simulated ADCC(0.05, 0.90, 0.03) with GARCH(1,1) vols; rmgarch's own Q_t, sigma_t, estimates")
+
+
 def main(argv):
     names = argv or list(CHECKS)
     for n in names:
