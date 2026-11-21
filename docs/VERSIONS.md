@@ -242,7 +242,7 @@ change to one shows as a diff in the snapshot:
 | surface | what is API | how a change would break you |
 |---|---|---|
 | output field names, the largest surface | every field name you read from a spec's output column, as `out["m"].struct.field("pred_y")`: `pred_y__r0.000001@h100`, `resid_y__r0.5@h100`, `abs_resid_q0.95_y0`, `weight_sum@h500`. They are built from ridge values, half-life suffixes, feature-set labels, quantile levels and target names | a new output, a renamed suffix or a float rendered another way fails as a `StructFieldNotFoundError` in your pipeline |
-| the spec constructors | the twenty-three model builders of `rheon.spec`, every keyword's name and every default. The keywords are keyword-only, so their order is not API | a renamed keyword is refused, naming the new one ([How an old name is refused](#how-an-old-name-is-refused)) |
+| the spec constructors | the twenty-four model builders of `rheon.spec`, every keyword's name and every default. The keywords are keyword-only, so their order is not API | a renamed keyword is refused, naming the new one ([How an old name is refused](#how-an-old-name-is-refused)) |
 | defaults | every default, whether a builder sets it in Python or the bank resolves it in Rust from a keyword left as `None` | no error: it silently changes your numbers, which is worse than breaking your code |
 | state files and the TOML config | a state file's layout and version, and every key of a run config, a spec and each model type | a file or a config that loaded before is refused |
 

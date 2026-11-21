@@ -80,9 +80,10 @@ class TestWeights:
         x = [0.5 + 0.25 * i + 0.1 * (-1) ** i for i in range(n)]
         y = [1.0 + 2.0 * v + 0.05 * (-1) ** (i // 2) for i, v in enumerate(x)]
         w = [1.0] * n
-        if model == "ftrl":
+        binary = model in ("ftrl", "glm")  # a 0/1 target; a count's is never negative
+        if binary:
             y = [float(v > 2.5) for v in y]
-        x[at], y[at], w[at] = 99.0, (1.0 if model == "ftrl" else -500.0), 0.0
+        x[at], y[at], w[at] = 99.0, (1.0 if binary else -500.0), 0.0
         df = pl.DataFrame({"x0": x, "y0": y, "w": w})
         spec = _spec(model, weight="w", half_life=5.0, min_weight=0.0, **extra)
         out = _run(df, spec)

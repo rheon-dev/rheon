@@ -266,7 +266,7 @@ class TestWarmup:
         `min_weight = 0` too); where a model predicts on row 2, the
         prediction is checked as well. `ewridge`'s noise gate is off: two
         rows for three coefficients leave no residual degrees of freedom."""
-        df = frame(binary=model == "ftrl")
+        df = frame(binary=model in BINARY)
         gate = {"max_error_inflation": float("inf")} if model == "ewridge" else {}
         out = run(model, extra, df, half_life=2.0, min_weight=1.5, **gate)
         neff = slot(out, "weight_sum", model)

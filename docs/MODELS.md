@@ -1,7 +1,7 @@
 <!-- kind: reference -->
 # Models
 
-The reference entry of each of the twenty-three models a spec can name, by
+The reference entry of each of the twenty-four models a spec can name, by
 family, for a reader who knows which model they want to look up. A
 model's parameters, their defaults and its refusals are in its docstring,
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md).
@@ -28,7 +28,7 @@ which models keep each, and why.
 
 ## The models at a glance
 
-The twenty-three models fall into four families, and each family answers one
+The twenty-four models fall into four families, and each family answers one
 kind of question about a stream. Each name links its builder's reference
 page, which gives its keywords and their defaults, and *entry* links its
 entry on this page. [Choose a model](how-to/choose-a-model.md) says which
