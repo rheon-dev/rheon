@@ -455,3 +455,58 @@ intercept; the unconstrained step against sklearn as the control; zeros per fit 
 
 Positivity in the standardised coordinates is positivity in the raw ones (the scale is positive), so one constraint serves both. Decay and zero weight change only the Gram. **State added: 0** (the warm start is the same coefficient vector). It changes no default (`positive = False`).
 
+### 524 (d) Redescending norms for `huber`
+
+`huber` reweights each row by the robust weight of its **prior** (out-of-sample) residual, `w(u) = psi(u)/u`, `u = r/(c s)`, into the mean-form Gram. A redescending norm changes the weight function only: Tukey's biweight `(1 - u^2)^2` for `|u| < 1`, else **exactly 0**.
+**Exact part:** each weight function against `statsmodels.robust.norms.*.weights` (C1: `TukeyBiweight`, not `TukeyBisquare`; `HuberT(t)`, `Hampel(a, b, c)`, `AndrewWave(a)`, `RamsayE(a)`), 4801 points in [-12, 12]: gap 0 for Huber, Tukey (c = 4.685), Hampel (2, 4, 8)
+and Ramsay (a = .3), 1.7e-16 for Andrews (a = 1.339); 2927 / 3118 / 1602 of the points have weight exactly 0 for Tukey / Andrews / Hampel. A row at weight 0 is a legal zero-weight row for the Gram (it advances the clock and learns nothing, rule 9); whether it still counts in `n_eff`
+and `min_weight` is a decision to make on the Rust side (today's Huber weight is never 0, so the question is new).
+
+**Statistical part, where the oracle is not exact.** `RLM` is converged IRLS; rheon's `huber` is one pass. C1: Tukey is non-convex, so the oracle must start from the same fit. With the scale **fixed** (a `FixedRLM` subclass returns the clean noise's 1; `update_scale=False`), the first `3 (k+1)`
+rows at weight 1, k = 3, mean over 10 seeds of the largest coefficient error against the truth, and the gap between the one-pass and the `RLM` coefficients:
+
+| stream | OLS | Huber one-pass / RLM | Tukey one-pass / RLM | gap Huber | gap Tukey |
+|---|---|---|---|---|---|
+| n = 400, clean | 0.069 | 0.076 / 0.076 | 0.075 / 0.076 | 0.011 | 0.014 |
+| n = 400, 15% one-sided outliers (sd 8, mean +6) | 0.199 | 0.129 / 0.086 | **0.573** / 0.087 | 0.086 | **0.54** |
+| n = 3000, clean | 0.027 | 0.030 / 0.028 | 0.030 / 0.028 | 0.0045 | 0.0056 |
+| n = 3000, 15% one-sided outliers | 0.089 | 0.039 / 0.034 | 0.040 / 0.031 | 0.018 | 0.025 |
+
+So the one-pass redescending fit is within 0.025 of the converged `RLM` at n = 3000 and **fails at n = 400 with heavy contamination** (error 0.57, worse than Huber's 0.13): the first rows set a biased fit, and a redescending weight then gives the outliers near the fit weight 0 and the clean rows far from the biased
+fit weight 0 too, so it cannot leave the basin. It is the non-convexity C1 named, arising online: a redescending norm needs a robust start (the `huber_refit` of the first rows, or a Huber warm-up) before it is switched on. **Huber's proposal-2 scale was not built**: the oracle C1 found is
+`statsmodels.robust.scale.HuberScale`, which "differs slightly" from the textbook proposal 2 (an `h` constant of `n, p, d`) and `scale.Huber` is location and scale only, so there is no oracle for the quantity; recorded, not studied. **State added: 0** (a weight function; the scale state `huber` keeps is unchanged). It changes no default (`huber_norm = "huber"`).
+
+### 524 (e) `sgd`: the elastic-net penalty and scikit-learn's `optimal` schedule
+
+`sgd`'s L2 today is `g_i = d z_i w + l2 b_i`. The addition is scikit-learn's: the L2 as a shrinkage `b <- b (1 - (1 - l1_ratio) eta alpha)` taken before the gradient step, and the L1 by **Tsuruoka et al.'s cumulative penalty** (`u += l1_ratio eta alpha`, each `b_j` truncated by `u + q_j` or `u - q_j`, `q_j` the penalty already
+applied), with the schedules `constant`, `invscaling` (`eta_0 / t^power_t`) and `optimal` (`eta_t = 1/(alpha (t_0 + t - 1))`, `t_0 = 1/(eta_0 alpha)`, `eta_0 = sqrt(1/sqrt(alpha))` for the squared loss: the source's `typw / max(1, gradient(1, -typw))`). I read the update from scikit-learn's `_sgd_fast.pyx.tp` (shipped in the wheel).
+Row weight multiplies the update; a zero-weight row is skipped, and `t` counts learned rows. Against `SGDRegressor(penalty, alpha = .05, learning_rate, shuffle=False).partial_fit(X, y, sample_weight)`, 300 rows, 20 seeds, row weights in [.5, 2], largest absolute gap (coef / intercept):
+
+| schedule | l2 | l1 | elasticnet (l1_ratio .4) |
+|---|---|---|---|
+| `optimal` | 5.3e-15 / 4.4e-16 | 2.7e-15 / 4.2e-16 | 6.2e-15 / 4.4e-16 |
+| `invscaling` | 1.0e-15 / 8.3e-17 | 5.6e-17 / 1.1e-16 | 7.2e-16 / 8.3e-17 |
+| `constant` | 3.3e-15 / 2.2e-16 | 1.1e-16 / 5.6e-17 | 2.2e-15 / 2.2e-16 |
+
+(C1's CORRECTED holds: `optimal` is `SGDClassifier`'s default, not `SGDRegressor`'s, whose default is `invscaling`; `t0` is not a parameter, and the source's rule above is what the exact comparison used.) **A trap met:** scikit-learn re-creates the cumulative penalty `u, q` on **every** `partial_fit` call, so
+a row-by-row `partial_fit` loses the L1 memory and cannot be the oracle for an L1 stream; one call over all rows is the stream, and is the comparison used. Zero-weight rows (15%, a zero-weight first row) against the stream without them: gap 0 (the schedule and the penalty both count learned rows). `sgd` has no coefficient decay, so decay does not enter.
+With a large `eta_0` at small `alpha` the `optimal` schedule's first steps overshoot (`eta_1 = sqrt(1/sqrt(alpha))`: 3.2 at `alpha = .01`) on unscaled features, in scikit-learn as in the numpy form; its tests used features of norm below 1. **State added:** `q` (one `k`-vector), `u` and `t`: `8 (k + 2)` bytes a target under an L1 part (k = 20: 176; k = 100: 816), 16 bytes (`t` and a flag) under L2 with `optimal` alone.
+
+### 524 (f) Vowpal Wabbit's importance-invariant step
+
+Karampatziakis and Langford's importance-aware update, for the squared loss: instead of `b += lr w (y - p) z`, `b += (y - p) (1 - exp(-lr w |z|^2))/|z|^2 z`, so `p' = y + (p - y) exp(-lr w |z|^2)`: a heavy row moves the prediction to its target and stops, where the plain step overshoots. Row weight `w` is the importance.
+Against VW 9.11.9 `--sgd --invariant` (C1: `--invariant` is real and on by default; `--sgd` switches off the adaptive and normalized updates, leaving the plain-plus-invariant step; VW's squared loss is `(p - y)^2`, so its `-l` is half of the `1/2 (p - y)^2` rate used here; explicit constant feature; predictions clipped off with `--min_prediction/--max_prediction`;
+the example text must carry plain floats, a numpy 2 `repr` silently zeroes the features), row-by-row predictions and final weights, 200 rows, 10% zero-weight rows, 5 seeds (relative; **VW keeps float32 weights, so the floor is float32's**):
+
+| case | predictions | weights |
+|---|---|---|
+| `lr` .05, importance in [.5, 2] | 8.3e-7 | 1.3e-7 |
+| `lr` .05, importance in [.5, 20] | 8.0e-7 | 1.2e-7 |
+| `lr` .5, importance in [.5, 2] | 7.6e-7 | 1.9e-7 |
+| `lr` .5, importance in [.5, 20] | 9.4e-7 | 2.2e-7 |
+
+At `lr w |z|^2` near 1e-4 the two steps differ by 3.8e-7 in the coefficients (first order); at a huge importance (1e6) the plain step overshoots the target on 50/50 rows, the invariant one leaves a residual of at most 4.4e-16. A zero-weight row is a no-op (`1 - e^0 = 0`). Decay: none (no coefficient decay).
+**State added: 0.** It is an option (`invariant = false` by default), and agrees with the plain step to first order where `lr w |z|^2` is small, so a default of today is unchanged; **if it were made the default, outputs would move** at large weights, which is the coordinator's call, not proposed here.
+
+**Not built in 524, and why:** per-feature penalty weights (oracle MISSING, above); Huber's proposal-2 scale (oracle not the same quantity); several quantiles in one spec (plumbing). **Changes a default: no**, for any of the built items.
+

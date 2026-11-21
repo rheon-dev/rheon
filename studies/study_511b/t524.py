@@ -329,3 +329,6 @@ def report(seeds: int = 20) -> None:
     report_ridge(seeds)
     report_average(seeds)
     report_positive(seeds)
+    from . import t524b
+
+    t524b.report(seeds)
