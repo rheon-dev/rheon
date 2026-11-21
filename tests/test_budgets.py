@@ -435,7 +435,7 @@ def test_the_scaling_and_drift_numbers_are_raises_too(old, new, key):
 def test_a_budget_line_deleted_from_a_kept_entry_fails():
     """Review S3: a case whose `budget =` line is deleted reads as new, and
     `check` only warns at any count; the history holds that it had one."""
-    gone = SMALL.replace("what = \"case a\"\nbudget = 1000000\n", "what = \"case a\"\n")
+    gone = SMALL.replace('what = "case a"\nbudget = 1000000\n', 'what = "case a"\n')
     assert "budget" not in budgets.entries(tomllib.loads(gone))["instructions.a"]
     (error,) = budgets.check_history([("a" * 40, SMALL)], gone)
     assert error.startswith("instructions.a: the entry is kept and its budget is gone"), error
