@@ -303,3 +303,56 @@ Zero weight: a zero-weight row is skipped by all of the above (no differential, 
 
 **Changes a default: no.** (The HLN-and-t form would be a better default by the size table; that is the coordinator's call, not made here.)
 
+## 522. `hmm`: fixed-lag smoothing, `params=`, `spherical`, prior weights for given states
+
+Beside `hmm.rs`'s Hamilton filter (`p~ = p Pi` from the filtered `p` the previous row left, uniform before the first; `f_l = N(x | mu_l, S_l)`; `loglik = ln sum p~ f`; `p = p~ f/sum`; transition counts
+`A += w xi`, `xi_kl = p_k(t-1) Pi_kl f_l / sum`, `Pi = (A + tau)/sum(A + tau)`; each state's accumulator takes the row at weight `w p_l`). A zero-weight row leaves the filtered `p` where it was (rule 9, and the Rust test
+`a_zero_weight_row_is_clock_alone`), so the filter, the counts and the smoother's ring skip it; its clock ages the counts and the states as the gap would. Oracle: hmmlearn 0.3.3 `GaussianHMM`.
+
+**Fixed-lag smoothing under an embargo.** `gamma_{t-L|t} ~ p_{t-L} * beta`, `beta_t = 1`, `beta_{s-1} = Pi (f_s * beta_s)` for `s = t .. t-L+1` (normalised): the smoothed posterior of row `t - L` given rows to `t`,
+emitted at row `t` (so the output is `L` rows late by construction: the embargo is the lag; it is available as a feature or label only for rows `L` back). State: the last `L` likelihood vectors and **one** filtered vector `alpha_{t-L}`,
+advanced a row at a time by `alpha_{t-L} <- norm((alpha_{t-L-1} Pi) * f_{t-L})` (the two-ring form, a ring of filtered vectors as well, is `2x` larger and equal to 1e-16), `8 K (L + 2)` bytes with `p`. At **fixed parameters** it is exact; under learning the
+stored `f` and `alpha` were made at the then-current parameters and `Pi` at the read is the current one, so the read is the smoother of a drifting model (an approximation: nothing to compare to; hmmlearn has no online mode).
+
+Against hmmlearn at fixed parameters (`params=""`, `startprob_ = (1/K) 1'Pi`: C1: the start distribution enters the prefix smoother, and rheon's first `p~` is `(1/K) 1'Pi`; 10% zero-weight rows skipped, zero first row; lags 1, 3, 8):
+
+| case | `score` (summed `ln p(x_t | x_<t)`), rel | filtered `p` = `predict_proba(X[:t+1])[t]`, abs | smoothed `p` = `predict_proba(X[:t+1])[t-L]`, abs | advance form vs two rings |
+|---|---|---|---|---|
+| full, K = 2, d = 2 | 8.3e-16 | 2.0e-14 | 2.8e-14 | 1.1e-16 |
+| full, K = 3, d = 3 | 1.3e-15 | 5.5e-14 | 6.3e-14 | 1.1e-16 |
+| spherical, K = 2, d = 2 | 1.0e-15 | 2.8e-14 | 3.0e-14 | 1.1e-16 |
+| spherical, K = 3, d = 3 | 1.1e-15 | 4.0e-14 | 5.4e-14 | 2.2e-16 |
+
+**`spherical` covariance.** `S_l = s_l I`, the scalar `s_l' = a s_l + a b |delta|^2/d` (the mean-form step with the mean squared deviation), 8 bytes a state against `8 d(d+1)/2` (full: 24 / 440 / 10200 at
+d = 2 / 10 / 50) and `8 d` (diag). The density (above) and the learned variance both match hmmlearn: against `GaussianHMM._do_mstep` (`covariance_type="spherical"`, `params="mc"`) on the **same recorded responsibilities**, 400 rows, K = 2 / 3:
+means 6.8e-16 / 8.0e-16, spherical variance 2.5e-15 / 2.6e-15 (relative). The comparison is of the update formulas given the responsibilities (exact); the responsibilities themselves are the filter's, not EM's smoothed ones.
+hmmlearn's `spherical` takes `covars_` as `(K,)` for scoring but EM stores `(K, d)`; setting `_covars_` as the tiled form is what EM needs (a library quirk met, not worked around beyond that).
+
+**Prior weights for given states.** Given means enter as a prior worth `kappa` rows (the mean form started at `W = kappa`, `m = mu_0`; today's pair is `kappa = 1`), given variances with hmmlearn's `covars_prior`
+and `covars_weight`: `mu = (kappa mu_0 + sum g x)/(kappa + sum g)`, `s = (covars_prior + W C)/(max(covars_weight - 1, 0) + sum g)` with `W C` the centred sum of squares about the posterior mean (which
+carries the `kappa (mu - mu_0)^2` term hmmlearn writes out) and `sum g` the data mass without the prior's. Against `_do_mstep` with `means_prior`, `means_weight`, `covars_prior`, `covars_weight`
+(`half_life = inf`; same responsibilities), (`kappa`, `covars_prior`, `covars_weight`) = (1, .01, 1) / (5, .2, 3) / (20, 1, 10): means 8.6e-16 / 1.9e-15 / 2.3e-15, variance 2.3e-15 / 4.5e-15 / 2.9e-15. **Under a decay the prior fades**
+as `kappa 2^(-t/h)` (after 600 rows at half-life 30 the prior is 2e-5 of a state's weight), where hmmlearn's is permanent: a starting point, as the given states already are; the exactness is at `half_life = inf`. The default
+`kappa = 1` is today's behaviour, so the option changes nothing until set.
+
+**Partial learning, `params=`.** Letters `s t m c` gate which parts learn (`s`: the start vector is not learned online, as rheon's is the uniform `p`; `t`, `m`, `c` gate the counts, the means and the variances). The frozen parts are asserted
+**bit-equal** to what was given. An online pass learns with the filtered, not the smoothed, responsibilities, so there is **no exact oracle** for the learned values: hmmlearn's EM (`params=letters`, 100 iterations, same perturbed start) is the
+statistical one. Largest error against the generating values after 4000 rows, 2 states, d = 2, mean over 4 streams:
+
+| letters | online pass | hmmlearn EM |
+|---|---|---|
+| `t` | 0.0111 | 0.0107 |
+| `m` | 0.0395 | 0.0396 |
+| `c` | 0.0416 | **defect: diverges** |
+| `mc` | 0.184 | 0.0418 |
+| `tmc` | 0.465 | 0.0423 |
+
+One part to name: hmmlearn 0.3.3 accumulates its `post` and `obs` statistics only when `'m'` is in `params` (`_needs_sufficient_statistics_for_mean`), so **`params="c"` alone diverges** (variances to 1e8 in the first
+M-step); C1's CONFIRMED stands for names and meaning, with this defect. Single-parameter learning (`t`, `m`) matches EM; learning jointly from a perturbed start, one online pass trails batch EM (0.18 and 0.47 against 0.04): the usual
+cost of the filtered responsibilities, and a reason `params=` is useful (learn the transition matrix with the emissions given, which is the case that matches).
+
+**State added** (per `hmm` group): the fixed-lag smoother `8 K (L + 2)` bytes: K = 2, L = 5: 112; K = 3, L = 20: 528; K = 5, L = 100: 4 KB; K = 8, L = 1000: 64 KB; the 256 KB per-group cap bounds `L` at
+`262144/(8K) - 2` (K = 8: 4094; K = 2: 16382). A spherical state `8` bytes of variance in place of `8 d (d+1)/2`: it **reduces** state. Prior weights and `params=`: 0 (configuration: `8` bytes each). Nothing grows with the stream.
+
+**Changes a default: no.** Four options; `kappa = 1`, all letters, a full or diag covariance and no smoother remain what they are.
+
