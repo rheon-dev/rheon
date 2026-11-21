@@ -460,11 +460,20 @@ impl QSide {
         self.back.clear();
     }
 
-    /// Whether `front` holds the bucket of each of `values`, the `front`
-    /// rows' values, that [`QSide::pop`] puts back: a damaged state file
-    /// whose row lay outside them decoded and passed [`QSide::has_shape`],
-    /// and panicked indexing past the arm at the pop (review P7).
-    pub(crate) fn holds(&self, mut values: impl Iterator<Item = f64>) -> bool {
+    /// Whether the sketches can be read and added to, `front` holding a row
+    /// of `prev` for each of its rows, whose values are `front`, and the
+    /// bucket of each that [`QSide::pop`] puts back: a damaged state file
+    /// whose row lay outside the arm decoded, passed the shape check and
+    /// panicked indexing past the arm at the pop (review P7).
+    pub(crate) fn has_shape(&self, front: impl ExactSizeIterator<Item = f64>) -> bool {
+        Some(self.prev.len()) == front.len().checked_mul(3)
+            && self.front.has_shape()
+            && self.back.has_shape()
+            && self.holds(front)
+    }
+
+    /// Whether `front` holds the bucket of each of `values`.
+    fn holds(&self, mut values: impl Iterator<Item = f64>) -> bool {
         values.all(|x| {
             x.is_nan()
                 || match Key::of(x) {
@@ -473,14 +482,6 @@ impl QSide {
                     Key::Pos(k) => self.front.pos.covers(k),
                 }
         })
-    }
-
-    /// Whether the sketches can be read and added to, `front` holding a row
-    /// of `prev` for each of its `front_rows`.
-    pub(crate) fn has_shape(&self, front_rows: usize) -> bool {
-        Some(self.prev.len()) == front_rows.checked_mul(3)
-            && self.front.has_shape()
-            && self.back.has_shape()
     }
 
     /// The buckets the sketches hold.
@@ -774,7 +775,7 @@ mod tests {
         let x = [0.5, -3.0, f64::NAN, 1e-320];
         let mut side = QSide::default();
         side.turn_over(&k, &tau, |i| x[i]);
-        assert!(side.has_shape(tau.len()));
+        assert!(side.has_shape(x.iter().copied()));
         assert!(side.holds(x.iter().copied()));
         for far in [1e300, -1e300, 4.0e-300] {
             assert!(
@@ -1088,19 +1089,19 @@ mod tests {
         for (i, x) in values(50, 3).into_iter().enumerate() {
             q.push(&k, i as f64, x);
         }
-        assert!(q.has_shape(0));
-        assert!(!q.has_shape(1));
+        assert!(q.has_shape(std::iter::empty()));
+        assert!(!q.has_shape(std::iter::once(1.0)));
         let mut bad = q.clone();
         bad.back.pos.lo += 1;
-        assert!(!bad.has_shape(0));
+        assert!(!bad.has_shape(std::iter::empty()));
         let mut bad = q.clone();
         bad.back.neg.oct.pop();
-        assert!(!bad.has_shape(0));
+        assert!(!bad.has_shape(std::iter::empty()));
         let mut bad = q.clone();
         bad.back.scale = 0.0;
-        assert!(!bad.has_shape(0));
+        assert!(!bad.has_shape(std::iter::empty()));
         let mut bad = q;
         bad.back.total = f64::NAN;
-        assert!(!bad.has_shape(0));
+        assert!(!bad.has_shape(std::iter::empty()));
     }
 }

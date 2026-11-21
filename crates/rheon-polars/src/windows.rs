@@ -934,6 +934,14 @@ impl Stack {
         self.vals[(i * self.n + j) * row_w::<W>()]
     }
 
+    fn x_of(&self, wide: bool, i: usize, j: usize) -> f64 {
+        if wide {
+            self.x::<true>(i, j)
+        } else {
+            self.x::<false>(i, j)
+        }
+    }
+
     #[inline]
     fn x<const W: bool>(&self, i: usize, j: usize) -> f64 {
         self.vals[(i * self.n + j) * row_w::<W>() + 1]
@@ -1469,40 +1477,21 @@ impl Queue {
     /// sketch for each quantile, none for any other, each at `front`'s rows.
     fn has_width(&self, var: &[bool], quant: &[bool]) -> bool {
         let (n, wide) = (var.len(), var.contains(&true));
-        // Each `front` row's value of operator `j`, once the stack is known
-        // to hold them.
-        let x = |i: usize, j: usize| {
-            if wide {
-                self.front.x::<true>(i, j)
-            } else {
-                self.front.x::<false>(i, j)
-            }
-        };
-        let sketches = || {
-            if quant.contains(&true) {
-                self.quant.len() == n
-                    && self
-                        .quant
-                        .iter()
-                        .zip(quant)
-                        .enumerate()
-                        .all(|(j, (s, &q))| match s {
-                            Some(s) => {
-                                q && s.has_shape(self.front.len())
-                                    && s.holds((0..self.front.len()).map(|i| x(i, j)))
-                            }
-                            None => !q,
-                        })
-            } else {
-                self.quant.is_empty()
-            }
-        };
+        let rows = self.front.len();
         self.n == n
             && self.var == var
             && self.front.has_width(n, wide)
             && self.back.has_width(n, wide)
             && (self.total.is_empty() || self.total.len() == self.sum_w() * n)
-            && sketches()
+            && if quant.contains(&true) {
+                self.quant.len() == n
+                    && (self.quant.iter().zip(quant).enumerate()).all(|(j, (s, &q))| match s {
+                        Some(s) => q && s.has_shape((0..rows).map(|i| self.front.x_of(wide, i, j))),
+                        None => !q,
+                    })
+            } else {
+                self.quant.is_empty()
+            }
     }
 }
 
@@ -1669,29 +1658,7 @@ pub struct Windows {
 
 /// A map as a sorted list, so the state's bytes do not depend on the
 /// hasher.
-mod sorted_map {
-    use std::collections::HashMap;
-    use std::hash::BuildHasher;
-
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    pub fn serialize<S: Serializer, H>(
-        m: &HashMap<String, usize, H>,
-        s: S,
-    ) -> Result<S::Ok, S::Error> {
-        let mut v: Vec<(&String, &usize)> = m.iter().collect();
-        v.sort();
-        v.serialize(s)
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>, H: BuildHasher + Default>(
-        d: D,
-    ) -> Result<HashMap<String, usize, H>, D::Error> {
-        Ok(Vec::<(String, usize)>::deserialize(d)?
-            .into_iter()
-            .collect())
-    }
-}
+mod sorted_map;
 
 /// `ClockCfg` with its session gap tagged. The core type's own derive
 /// writes `Some(SessionGap::Reset)` as a bare unit, which msgpack reads back
