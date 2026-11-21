@@ -48,6 +48,51 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **Under `label_clock`, a row of weight 0 is held and learned at its label
+  time** (review P1), as `embargo` learns it: a step of the clock that
+  teaches nothing. It was scored and never held, so the clock of the labels
+  learned stepped over it, and the steps either side of it were one step,
+  capped once by `gap_cap` where `embargo` caps each; a zero-weight first
+  row did not start that clock. `embargo = d` and a label time of
+  `clock + d` now give the same numbers with zero weights, as they are
+  documented to. Likewise a stream whose first row is skipped (a null
+  feature) starts the clock of the labels learned at that row's label time,
+  as it starts `embargo`'s at its clock, so the first label learned steps
+  from it as under `embargo` (`rls`'s prior decayed over no step). A row
+  of weight 0 with a label time now counts against `max_held_rows`: under
+  `held_overflow="refuse"` a stream of many such rows can be refused where
+  it passed, under `"drop_oldest"` one can be dropped and counted in
+  `labels_dropped`, and `conformal_rate="auto"` counts it among the rows
+  waiting. To keep a row that is only to be predicted out of the held rows,
+  give it a null label time. Measured by `scripts/compare_outputs.py`
+  against the build before (arm64, polars 2.0.0; 12 models, 1 to 200
+  groups, chunks of 7 to a whole stream, gaps, nulls, a save and load):
+  outputs move only for weighted specs under `label_clock` whose stream has
+  rows of weight 0, by up to the whole value (nulls appear and vanish where
+  `min_weight` reads the new weight), and for unweighted ones whose group's
+  first row is skipped (`rls`, `sgd`, `pa`); every spec under `embargo` or
+  no delay moves 0 ulps. A state saved by an earlier build loads and
+  continues by the new rule from the rows it holds, not to the bit of a
+  fresh run. Moves: `ewridge.pred_*`, `ewridge.resid_*`, `ewridge.coef`,
+  `ewridge.support_coef`, `ewridge.sigma_*`, `ewridge.lo_*`,
+  `ewridge.hi_*`, `ewridge.coverage_*`, `ewridge.hit_rate_*`,
+  `ewridge.ic_*`, `ewridge.r2_*`, `ewridge.drift_*`, `ewridge.weight_sum`,
+  `ewridge.withheld_reason`, `rls.pred_*`, `rls.resid_*`, `rls.coef`,
+  `rls.weight_sum`, `rls.withheld_reason`, `lasso.pred_*`,
+  `lasso.resid_*`, `lasso.coef`, `lasso.weight_sum`,
+  `lasso.withheld_reason`, `huber.pred_*`, `huber.resid_*`, `huber.coef`,
+  `huber.support_coef`, `huber.weight_sum`, `huber.withheld_reason`,
+  `quantile.pred_*`, `quantile.resid_*`, `quantile.coef`,
+  `quantile.support_coef`, `quantile.weight_sum`,
+  `quantile.withheld_reason`, `sgd.pred_*`, `sgd.resid_*`, `sgd.coef`,
+  `sgd.weight_sum`, `sgd.withheld_reason`, `pa.pred_*`, `pa.resid_*`,
+  `pa.coef`, `pa.weight_sum`, `pa.withheld_reason`, `ftrl.pred_*`,
+  `ftrl.resid_*`, `ftrl.coef`, `ftrl.weight_sum`, `ftrl.withheld_reason`,
+  `ew_cov.mean_*`, `ew_cov.std_*`, `ew_cov.corr_*`, `ew_cov.weight_sum`,
+  `ew_cov.withheld_reason`, `kmeans.dist`, `kmeans.dist_second`,
+  `kmeans.coef`, `kmeans.weight_sum`, `kmeans.withheld_reason`,
+  `ew_class.p_*`, `ew_class.class`, `ew_class.coef`,
+  `ew_class.weight_sum`, `ew_class.withheld_reason`.
 - **A query under `group_close` with nowhere to put the closed groups
   keeps none of them** (review P8). `lf.rheon.fit_predict(specs)` with a
   spec that closes groups, and neither `closed_groups=` nor `save_state=`,
