@@ -222,3 +222,180 @@ to 0.06 s. These are numpy costs and say nothing about Rust.
    section 3, before part 2?
 3. Is `arch`'s unrestricted fit the right oracle for a targeted online form,
    or is a targeted batch fit (as the base used) required? Not run here.
+
+---
+
+# Study 492, part 2: Student-t and skew-t innovations (GARCH(1,1), GJR-GARCH(1,1))
+
+Python and numpy only (`scripts/study_492_t.py`, built on part 1's `GarchPOQ`); no Rust, no source
+change. The shape parameters (`nu`, and `lambda` for the skew-t) are fitted in the batch start and
+then either held or updated online. Oracle: `arch_model(y, mean='Zero', vol='GARCH', dist='t'|'skewt',
+rescale=False)`, batch fit on the same rows. Seeds 492100 to 492149, 10,000 rows, truth
+GARCH(1,1) `(0.05, 0.08, 0.90)`, GJR `(0.03, 0.05, 0.10, 0.87)`, `nu = 6`, `lambda = -0.2`.
+
+Status: part 2 complete for GARCH(1,1) t, GARCH(1,1) skew-t and GJR t, 10 seeds (the first ten) and
+50 seeds both reported. GARCH(2,2) t is wired in (`MODELS['g22']`) but was **not run** here. The
+estimator has a failure mode on a few seeds (section 5); it is recorded, not fixed.
+
+## 1. The math
+
+Standardised innovation `z` (mean 0, variance 1), `e_t = sigma_t z_t`, `s_t = sigma_t^2`.
+
+**Student-t (nu > 2).** The standardised density is
+`f(z) = c (1 + z^2/(nu-2))^(-(nu+1)/2)`, `c = G((nu+1)/2) / (sqrt(pi (nu-2)) G(nu/2))`
+(the scaling `sqrt((nu-2)/nu)` makes the variance 1). Row log-likelihood
+`l_t = ln c - (nu+1)/2 ln(1 + z_t^2/(nu-2)) - 1/2 ln s_t`.
+
+Score in the GARCH parameters. With `dz^2/ds = -z^2/s`,
+
+    d l_t / d s_t = w_t / (2 s_t),     w_t = (nu+1) z_t^2 / (nu - 2 + z_t^2) - 1
+    g_t(theta)    = 1/2 w_t d ln s_t / d theta
+
+(`w` replaces the Gaussian `z^2 - 1`; it is bounded by `nu`, so a Student-t score is already
+clipped by the likelihood, which is why part 1's Huber clip is not used here). Score in `nu`:
+
+    d l_t / d nu = 1/2 [psi((nu+1)/2) - psi(nu/2) - 1/(nu-2)] - 1/2 ln(1 + z^2/(nu-2))
+                   + (nu+1) z^2 / (2 (nu-2) (nu-2+z^2))
+
+Checks (`study_492_t.py check`): `E w^2 = 2 nu/(nu+3)` to 3 digits at nu = 4, 6, 12 (4M draws);
+shape score against a central difference of `ln f`, 1.6e-10 absolute; the density integrates to
+1, mean 0, variance 1 (quad); the log-likelihood at arch's own parameters equals arch's to 2e-13.
+
+**Skew-t (Hansen 1994; arch's `SkewStudent`, parameters `eta = nu`, `lambda` in (-1, 1)).**
+
+    a = 4 lambda c (nu-2)/(nu-1),   b^2 = 1 + 3 lambda^2 - a^2
+    f(z) = b c (1 + m^2/(nu-2))^(-(nu+1)/2),   m = (b z + a) / (1 + sg lambda),   sg = sign(z + a/b)
+
+(`a` is the mean and `b^2` the variance correction, so `z` has mean 0 and variance 1; `lambda < 0`
+puts the long tail on the left.) The GARCH score has the same form with
+`dm/dz = b/(1 + sg lambda)`:
+
+    w_t = (nu+1) m b z / ((1 + sg lambda)(nu - 2 + m^2)) - 1,    g_t(theta) = 1/2 w_t d ln s_t / d theta
+
+This closed form agrees with a central difference of the full likelihood to 1.1e-7 relative
+(`check`). **Left open: the skew-t's scores in `nu` and `lambda` are not derived in closed form.**
+`a` and `b` depend on `nu` and `lambda` through `c`, and the result was not settled by hand;
+they are a central difference (steps `1e-5 nu`, `1e-6`) of the closed-form density. At the truth,
+the mean shape score over 400,000 draws is `(2.5e-5, -9.0e-4)` with SEs `(5.8e-5, 1.2e-3)`, i.e. zero
+within noise, and the full-vector score matches a central difference of the likelihood (a weaker
+check for the shape rows, which compare a difference to the same difference). A production form
+would carry the closed forms.
+
+**The batch start.** The first 500 rows are buffered; `batch_core.maximize` (part 1's projected
+Newton, BHHH information) maximises the likelihood jointly in `(theta, shape)` from a small grid
+(shape starts `nu` in {5, 10} and, for the skew-t, `(7, -0.2)`), with `nu` in `[2.05, 300]` and
+`|lambda| < 0.99` (arch's bounds). Fitting `nu` on the start's standardised residuals separately
+was not tried; the joint fit is the same Newton step in one more dimension.
+
+**The online step.** Two modes, both measured:
+
+* `online`: the shape is stepped with the GARCH parameters, `x = (theta, shape)`,
+  `H <- H + gamma (s s' - H)`, `x <- Proj(x + gamma H^-1 s)`, `gamma = 1/(t+500)`, `s` the whole
+  per-row score (BHHH, the running mean of its outer product; the Gaussian part's expected
+  information is not used because the shape rows have none that is as cheap).
+* `fixed`: `nu` (and `lambda`) held at the start's values.
+
+Stability: held shape does not work (section 3): a 500-row estimate of `nu` has an SE near 1, and the
+miss sets the tail weight of every later score. The online step tracks arch (median `nu` gap 0.1 on
+an arch SE of 0.35) but is not safe everywhere (section 5).
+
+**State.** Floats `k + m + nf(nf+1)/2 + max(p,o) + o + q + q k + 3`, `k` GARCH parameters, `m`
+shape parameters (1 or 2), `nf` the stepped parameters (`k` or `k-1` if targeted, plus `m` if the
+shape is online), the 3 scalars being the running mean of `e^2`, its count and the step count.
+Bounded by the shape, not the stream, plus the 500-row buffer (4 KB) until the start. Bytes = 8 x:
+
+| model | omega | shape | floats | bytes | vs Gaussian (part 1) |
+|---|---|---|---|---|---|
+| GARCH(1,1) t | free | online | 22 | 176 | 128 (base) |
+| GARCH(1,1) t | free | fixed | 18 | 144 | |
+| GARCH(1,1) t | targeted | online | 18 | 144 | |
+| GARCH(1,1) skew-t | free | online | 28 | 224 | |
+| GARCH(1,1) skew-t | targeted | online | 23 | 184 | |
+| GJR(1,1) t | free | online | 30 | 240 | 208 |
+| GJR(1,1) t | targeted | online | 25 | 200 | |
+
+## 2. Verification of the work-in-progress file (step 0)
+
+`scripts/study_492_t.py` was left untracked by an earlier agent, unverified. Verified, then kept:
+
+* It imports part 1's `GarchPOQ`, `backcast` (so inherits the 8e-16 filter match to arch and the GJR
+  `0.5 * backcast` pre-sample term) and the base's `batch_core`.
+* `check` passes (section 1): scores against central differences, log-likelihood against arch's at
+  arch's parameters (2e-13 t, 5e-13 skew-t), densities normalised, `E w^2` identity.
+* A smoke case (`one g11 skewt 492100`) ran: batch start converged, all four variants within 2 SE.
+* The earlier agent's cache of 199 cases (`.cache/study492t`, version of the script unknown, includes
+  GARCH(2,2)) was **not used**; the grid below was rerun from scratch with this file.
+* One thing I tried and removed: a per-row cap on the shape's move plus `nu` in `[3, 100]` online. It
+  did not fix the failures of section 5 (the free-`omega` runs left the stable region regardless), so the
+  file is as it was verified.
+
+## 3. Results against arch (10,000 rows)
+
+Gap in arch's (robust-default) standard errors on `(omega, alpha[, gamma], beta, shape)`; path gap
+`|s_online - s_arch|/s_arch` over rows 9,000 to 9,999 (online: the run's one-step prediction made
+before the update; arch: its in-sample path). "free" is `plain_*` (unrestricted `omega`), "targeted" is
+`target_*` (`omega` at the running variance). Seeds within 2 SE on every parameter, `omega` and the
+shape included.
+
+| model, variant | 10 seeds | 50 seeds | median shape gap to arch (arch SE) | path gap, max over last 1000: median / 90th pct (50 seeds) | |persistence gap| 90th pct |
+|---|---|---|---|---|---|
+| GARCH(1,1) t, free, online | 10 | 46 | nu 0.095 (0.35) | 3.5% / 11.5% | 0.004 |
+| GARCH(1,1) t, targeted, online | 9 | 43 | nu 0.118 | 5.5% / 19.7% | 0.007 |
+| GARCH(1,1) t, free, fixed nu | 4 | 19 | nu 0.88 | 6.0% / n/a | |
+| GARCH(1,1) skew-t, free, online | 9 | 43 | eta 0.12 (0.34), lambda 0.002 (0.013) | 4.1% / 16.8% | 0.004 |
+| GARCH(1,1) skew-t, targeted, online | 10 | 44 | eta 0.21, lambda 0.002 | 6.8% / 17.8% | 0.005 |
+| GARCH(1,1) skew-t, free, fixed shape | 2 | 10 | eta 0.85, lambda 0.031 | 6.5% / n/a | |
+| GJR t, free, online | 10 | 48 | nu 0.100 (0.35) | 5.5% / 8.8% | 0.004 |
+| GJR t, targeted, online | 9 | 43 | nu 0.149 | 7.3% / 20.5% | 0.010 |
+| GJR t, free, fixed nu | 4 | 18 | nu 0.88 | 7.0% / n/a | |
+
+On the first 10 seeds the free online form is at or near arch: GARCH(1,1) t 10 of 10, skew-t 9 of 10
+(seed 492108, `alpha` 4.4 SE, a batch start that hit the iteration cap), GJR t 10 of 10; median path
+gap 3.8%, 3.6% and 5.8%; worst path gap 9% (t), 26% (skew-t), 8% (GJR t); persistence gap at most
+0.005. Over 50 seeds the counts fall to 46, 43 and 48; the median seed stays near arch, the loss is a
+tail of seeds (section 5), not a general drift. Fixing the shape at the start's value costs most
+seeds (19, 10, 18 of 50): the start's `nu` from 500 rows misses arch's by a median 0.9 (3 SE) and
+`lambda` by 0.03 (2 SE), and the log-likelihood gap is -3.9 (t) and -10.6 (skew-t) against -0.4 and
+-0.5 for the online shape.
+
+The `ll gap` is the log-likelihood of the online parameters on the full 10,000 rows minus arch's
+maximum, a median of -0.4 to -1.4 (nats): the online fit is within a nat or so of the batch maximum
+on the median seed.
+
+## 4. State and per-row cost
+
+State bytes in section 1. Per-row cost in numpy (predict, push, step, Python overhead included; 4-core
+VM; median over 50 seeds; microseconds per row): GARCH(1,1) t 55 (free), 75 (targeted); skew-t 106
+(free), 127 (targeted), which includes the four difference evaluations of the density for the shape
+scores; GJR t 58 (free), 75 (targeted); fixed shape 52 to 54 for t, 101 for skew-t. The batch start
+(one joint fit of 500 rows) costs 0.2 s (t), 0.3 s (skew-t, up to the 50-iteration cap on one seed),
+0.34 s (GJR t); arch's whole 10,000-row fit 0.03 to 0.06 s. These are numpy costs and say nothing
+about Rust.
+
+## 5. Where it fails
+
+Counting the seeds out of the 2 SE band, by cause (50 seeds, free, online):
+
+* **A step that leaves the stable region, GARCH(1,1) t seeds 492111 and 492134** (and 492111 for GJR t):
+  with unrestricted `omega` the step takes `omega` to 33 to 60, `beta` to 0 and `nu` to 3 or 66 to 290,
+  with 9,000 projected rows; the path gap exceeds 1,000%. These are the two cases that show up in the
+  "worst seed" columns of the 50-seed summary. The targeted form on the same seeds does not blow up
+  but is 7 to 9 SE off on `nu` (492111: `nu` 2.9 against arch's 6.3) or on `omega`. A heavy-tailed run of
+  outliers shifts the `nu` estimate and the free parameters together through the BHHH matrix.
+  Not derived: a step that cannot do that; the cap on the shape move (removed, section 2) did not
+  help. Candidates not tried: a `log(nu - 2)` or `1/nu` parametrisation, a scale of `H` fixed after the
+  start, or holding `nu` fixed after a larger start.
+* **The skew-t's iteration-capped batch start** (492108, 50 iterations) and a few moderate misses
+  (2 to 10 SE; the worst is 492144, `alpha` 10.5 SE with 87 projected rows): the cause was not
+  isolated. A weakly identified `omega` and `alpha` on 500 rows is the suspect, as in part 1; not tested.
+* Targeting `omega` does not improve the within-2 SE count here (43 to 44 of 50): `omega` is
+  then a function of the other parameters and the running variance while arch's is free.
+
+## 6. Questions for the coordinator
+
+1. The free-`omega` online form is the better match to arch on the median seed but blows up on 2
+   of 50 GARCH(1,1) t seeds; the targeted form is safer but 43 of 50. Which is wanted?
+2. Shape update in the online step needs a stabiliser (section 5). Is a `log(nu-2)` step worth a
+   part 3 slot, or should `nu` be held after a start long enough that its SE is small (the start
+   would have to be several thousand rows; the base's start is 500)?
+3. The skew-t shape scores need a closed form before any Rust port.
