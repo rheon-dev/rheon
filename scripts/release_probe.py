@@ -384,6 +384,13 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
     ),
     # Each row where `y` or `z` is above 0 an event of that node; the zero weights
     # learn none of theirs.
+    # Each target a series of returns, after a start of 50 rows.
+    (
+        "garch",
+        "garch",
+        dict(targets=["y", "z"], start_rows=50, horizon=3, group="g", **CLOCK),
+        [],
+    ),
     (
         "hawkes",
         "hawkes",

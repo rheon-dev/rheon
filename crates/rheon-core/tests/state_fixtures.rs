@@ -1565,7 +1565,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         // `garch`'s series (task 492), a path into the list by index: its
         // start's buffer, then each process's lags once started, the
         // targeted GARCH's Huber score, a skewed t's shape, EGARCH's
-        // invertibility and FIGARCH's ring, and a start of a clock span's
+        // binned residuals and FIGARCH's ring, and a start of a clock span's
         // stamp.
         ("garch", &["model", "Garch", "series", "1", "buffer"]),
         ("garch_started", &["model", "Garch", "series", "0", "h"]),
@@ -1582,7 +1582,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
             &["model", "Garch", "series", "0", "slope"],
         ),
         ("garch_skewt", &["model", "Garch", "series", "0", "theta"]),
-        ("garch_egarch", &["model", "Garch", "series", "0", "inv"]),
+        ("garch_egarch", &["model", "Garch", "series", "0", "zbins"]),
         (
             "garch_figarch",
             &["model", "Garch", "series", "0", "filter", "ring"],

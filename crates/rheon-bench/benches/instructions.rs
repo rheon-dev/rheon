@@ -107,6 +107,8 @@ const FAKETIME_ENV: [&str; 4] = [
 #[bench::corrchange_monitor_w2500(args = ("corrchange_monitor_w2500"), setup = model_setup)]
 #[bench::corrchange_window_w100(args = ("corrchange_window_w100"), setup = model_setup)]
 #[bench::hawkes(args = ("hawkes"), setup = model_setup)]
+#[bench::garch(args = ("garch"), setup = model_setup)]
+#[bench::garch_figarch(args = ("garch_figarch"), setup = model_setup)]
 fn model(mut run: ModelRun) -> ModelRun {
     black_box(rheon_budget_model_rows(black_box(&mut run)));
     run

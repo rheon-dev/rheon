@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 use super::dist;
 use super::filter::Filter;
 use super::fit::OMEGA_FLOOR_FRAC;
-use super::fit::{ab_set, backcast, clip_shape, fit, log_lyapunov, set_of};
+use super::fit::{ab_set, backcast, clip_shape, fit, set_of};
+use super::guard;
 use super::linalg::{HalfSpaces, backward, chol_solve, cholesky, forward, tri, unpack};
 use super::{GarchCfg, GarchDist, GarchVol};
 use crate::Stamp;
@@ -44,8 +45,9 @@ pub(super) struct Series {
     pub filter: Filter,
     /// The weighted running mean of `e²`.
     pub mean_e2: f64,
-    /// EGARCH's running mean of `ln Λ`, its empirical invertibility.
-    pub inv: f64,
+    /// EGARCH's standardized residuals, weighted counts in the guard's bins
+    /// ([`guard::BINS`]); empty for the other processes.
+    pub zbins: Vec<f64>,
     /// The Huber score's running centring `E[min(z², c²)]` and slope
     /// `E[z² 1[z² < c²]]`, under variance targeting.
     pub kappa: f64,
@@ -66,7 +68,11 @@ impl Series {
             h: vec![0.0; nf * (nf + 1) / 2],
             filter: Filter::empty(),
             mean_e2: 0.0,
-            inv: 0.0,
+            zbins: if cfg.vol == GarchVol::Egarch {
+                vec![0.0; guard::BINS]
+            } else {
+                Vec::new()
+            },
             kappa: 0.0,
             slope: 0.0,
         }
@@ -83,8 +89,14 @@ impl Series {
         } else {
             self.filter.sens.len() == k && self.filter.ring.is_empty()
         };
+        let bins = if cfg.vol == GarchVol::Egarch {
+            guard::BINS
+        } else {
+            0
+        };
         self.theta.len() == cfg.n_params()
             && self.h.len() == nf * (nf + 1) / 2
+            && self.zbins.len() == bins
             && lags
             && self.refits <= MAX_REFITS
             && (!self.started || self.buffer.is_empty())
@@ -151,7 +163,7 @@ impl Series {
         self.started = true;
         self.w_sum = 0.0;
         self.mean_e2 = 0.0;
-        self.inv = 0.0;
+        self.zbins.fill(0.0);
         self.kappa = 0.0;
         self.slope = 0.0;
         self.h.fill(0.0);
@@ -173,6 +185,9 @@ impl Series {
         let a = w / self.w_sum;
         let e2 = e * e;
         self.mean_e2 += a * (e2 - self.mean_e2);
+        if vol == GarchVol::Egarch {
+            self.zbins[guard::bin(e / s.sqrt())] += w;
+        }
         let mut sc = [0.0; 6];
         if cfg.dist == GarchDist::Normal {
             let mut df = [0.0; 4];
@@ -222,19 +237,21 @@ impl Series {
             }
         }
         if !replay {
-            self.step(cfg, a, e, &sc[..nf]);
-        }
-        if vol == GarchVol::Egarch {
-            self.inv += a * (log_lyapunov(&self.theta, e) - self.inv);
+            self.step(cfg, a, &sc[..nf]);
         }
         self.filter.push(vol, e, s, dl);
     }
 
     /// The step `θ ← Proj(θ + a H⁻¹ g)` at gain `a`, projected in `H`'s
-    /// metric; none where `H` is not positive definite, where the step
-    /// would leave a parameter that is not a number, or, for EGARCH, where
-    /// it would take the running invertibility to 0 or above.
-    fn step(&mut self, cfg: &GarchCfg, a: f64, e: f64, sc: &[f64]) {
+    /// metric onto the form's set (EGARCH's box, [`super::fit::egarch_set`],
+    /// then cut back to keep its filter contracting, [`guard`]); none where
+    /// `H` is not positive definite
+    /// or the step would leave a parameter that is not a number. No step is
+    /// refused on a running mean: such a mean holds each past row at the
+    /// parameters of its time, so once it crosses its bound it refuses every
+    /// step one way and takes every step the other, a ratchet driven by the
+    /// score's noise.
+    fn step(&mut self, cfg: &GarchCfg, a: f64, sc: &[f64]) {
         let (vol, k, nf) = (cfg.vol, cfg.vol.k(), cfg.n_free());
         let mut hm = unpack(&self.h, nf);
         for i in 0..nf {
@@ -268,17 +285,12 @@ impl Series {
         if !new.iter().all(|v| v.is_finite()) {
             return;
         }
-        // EGARCH: a step that would leave the running invertibility at 0
-        // or above is refused, unless it lowers it from where the current
-        // parameters would leave it (a stream the current ones no longer
-        // invert is stepped back toward the region, not held out of it).
-        if vol == GarchVol::Egarch {
-            let at = |t: &[f64]| self.inv + a * (log_lyapunov(t, e) - self.inv);
-            let moved = at(&new);
-            if moved >= 0.0 && moved > at(th) {
-                return;
-            }
-        }
+        // EGARCH: the step cut back to keep its filter contracting
+        let new = if vol == GarchVol::Egarch {
+            guard::cut(&self.theta, &new, &self.zbins)
+        } else {
+            new
+        };
         self.theta = new;
     }
 

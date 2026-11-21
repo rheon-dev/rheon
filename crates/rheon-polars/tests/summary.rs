@@ -1099,6 +1099,14 @@ fn every_kind_refuses_or_loads_corruption(prefix_step: usize, flip_step: usize) 
             "[]",
             true,
         ),
+        // Saved after its start, a t's shape beside the process.
+        (
+            "garch",
+            r#"{"type": "garch", "dist": "t", "start_rows": 50}"#,
+            r#"["y"]"#,
+            "[]",
+            false,
+        ),
     ];
     let mut seen = Vec::new();
     for &(kind, model, targets, features, half_life) in kinds {

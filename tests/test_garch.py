@@ -1,0 +1,290 @@
+"""``garch`` through the bank: the variance recursion against its
+definition, row by row, at the parameters the bank reports, and what the
+bank owes every model -- out-of-sample reads, chunk invariance, a save
+mid-stream, zero weights and nulls, weights as relative evidence, its
+refusals, its output schema, and a start over a span of the clock held to
+the group's state cap (task 492).
+
+The oracle for the recursion is the definition written out in numpy:
+``s_{t+1} = ω + α e_t² + γ 1[e_t < 0] e_t² + β s_t`` at the parameters the
+bank reports after row ``t`` (``coef_every=0``), and FIGARCH's
+``ω/(1 - β) + Σ λ_j e²_{t+1-j}`` with ``arch``'s own ``figarch_weights``.
+``arch``'s batch fits are the oracle for the estimator, in
+``tests/test_second_opinion_garch.py``.
+"""
+
+from __future__ import annotations
+
+import io
+import math
+import warnings
+
+import numpy as np
+import polars as pl
+import pytest
+from arch.univariate.recursions import figarch_weights
+
+import rheon
+from rheon import polars as rp
+
+TIER = "essential"
+
+
+def _returns(n: int, seed: int, gamma: float = 0.0) -> np.ndarray:
+    """A GJR series at ``(0.05, 0.08, γ, 0.9 - γ/2)``, normal innovations."""
+    rng = np.random.default_rng(seed)
+    w, a, b = 0.05, 0.08, 0.9 - gamma / 2
+    s, e, out = 1.0, 0.0, np.empty(n)
+    for t, z in enumerate(rng.standard_normal(n + 300)):
+        s = w + (a + (gamma if e < 0 else 0.0)) * e * e + b * s
+        e = math.sqrt(s) * z
+        if t >= 300:
+            out[t - 300] = e
+    return out
+
+
+def _frame(n: int, seed: int, gamma: float = 0.0) -> pl.DataFrame:
+    rng = np.random.default_rng(seed + 1)
+    y = _returns(n, seed, gamma)
+    return pl.DataFrame(
+        {
+            "t": np.arange(n, dtype=float),
+            "g": np.where(np.arange(n) % 3 == 0, "a", "b"),
+            "y": y,
+            "w": np.where(rng.uniform(size=n) < 0.1, 0.0, 1.0 + rng.integers(0, 3, n)),
+        }
+    )
+
+
+def _spec(**kw) -> dict:
+    return rp.spec.garch("m", targets=["y"], **{"start_rows": 100, **kw})
+
+
+def _out(spec: dict, df: pl.DataFrame) -> pl.DataFrame:
+    return rp.ModelBank([spec]).fit_predict(df).unnest("m")
+
+
+@pytest.mark.parametrize("kw", [{}, {"vol": "gjr"}, {"vol": "gjr", "dist": "t"}])
+def test_the_variance_is_the_recursion_at_the_reported_parameters(kw):
+    """Each row's variance is the recursion from the row before, at the
+    parameters the bank reported after that row, to rounding."""
+    gamma = 0.1 if "vol" in kw else 0.0
+    df = pl.DataFrame({"y": _returns(800, 3, gamma)})
+    out = _out(_spec(coef_every=0, **kw), df)
+    y, s = df["y"].to_numpy(), out["variance_y"].to_numpy()
+    coef = out["coef"].to_list()
+    checked = 0
+    for t in range(200, 799):
+        th = coef[t]
+        if th is None or not np.isfinite(s[t]):
+            continue
+        e2 = y[t] * y[t]
+        if len(th) == 3 or "dist" in kw and len(th) == 4 and "vol" not in kw:
+            want = th[0] + th[1] * e2 + th[2] * s[t]
+        else:
+            want = th[0] + (th[1] + (th[2] if y[t] < 0 else 0.0)) * e2 + th[3] * s[t]
+        assert abs(s[t + 1] - want) <= 1e-13 * want, (t, s[t + 1], want)
+        checked += 1
+    assert checked > 500
+
+
+def test_figarch_is_its_weights_over_the_squared_returns():
+    """FIGARCH's variance at the parameters reported after the row before:
+    ``arch``'s weights over the last ``M`` squared returns, the lags before
+    the start's first row read as the backcast (none here: the row checked
+    is past ``M`` rows)."""
+    m = 50
+    y = _returns(2400, 4)
+    out = _out(
+        _spec(vol="figarch", truncation=m, start_rows=2000, coef_every=0), pl.DataFrame({"y": y})
+    )
+    s, coef = out["variance_y"].to_numpy(), out["coef"].to_list()
+    for t in (2100, 2250, 2398):
+        om, phi, d, beta = coef[t]
+        lam = figarch_weights(np.array([phi, d, beta]), 1, 1, m)
+        want = om / (1 - beta) + float(np.dot(lam, y[t + 1 - np.arange(1, m + 1)] ** 2))
+        assert abs(s[t + 1] - want) <= 1e-12 * want, (t, s[t + 1], want)
+
+
+def test_a_rows_variance_is_read_before_the_row():
+    """The variance a row reports does not read the row's return: changing
+    it moves the row's standardized residual, and the variance of the next
+    row, alone."""
+    df = pl.DataFrame({"y": _returns(400, 5)})
+    s = _spec()
+    a = _out(s, df)
+    b = _out(
+        s,
+        df.with_columns(
+            pl.when(pl.int_range(400) == 300).then(9.0).otherwise(pl.col("y")).alias("y")
+        ),
+    )
+    assert a["variance_y"][:301].equals(b["variance_y"][:301])
+    assert a["std_resid_y"][300] != b["std_resid_y"][300]
+    assert a["variance_y"][301] != b["variance_y"][301]
+    assert a["variance_y"][:100].is_null().all() and a["variance_y"][100:].is_not_null().all()
+
+
+@pytest.mark.parametrize("kw", [{}, {"vol": "egarch"}, {"vol": "gjr", "dist": "t", "horizon": 4}])
+def test_chunk_invariance(kw):
+    df = _frame(700, 6)
+    s = _spec(group="g", weight="w", coef_every=0, **kw)
+    one = rp.ModelBank([s]).fit_predict(df)
+    for size in (1, 13, 211):
+        bank = rp.ModelBank([s])
+        many = pl.concat([bank.fit_predict(df.slice(i, size)) for i in range(0, 700, size)])
+        assert one.equals(many, null_equal=True), size
+
+
+@pytest.mark.parametrize("kw", [{}, {"dist": "skewt"}, {"variance_targeting": True}])
+def test_a_save_goes_on_to_the_bit(kw):
+    df = _frame(600, 7)
+    s = _spec(group="g", weight="w", **kw)
+    for cut in (1, 150, 330, 599):
+        a = rp.ModelBank([s])
+        a.fit_predict(df.slice(0, cut))
+        buf = io.BytesIO()
+        a.save(buf)
+        b = rp.ModelBank.load_bytes(buf.getvalue(), specs=[s])
+        rest = df.slice(cut)
+        assert a.fit_predict(rest).equals(b.fit_predict(rest), null_equal=True), cut
+
+
+@pytest.mark.parametrize("kw", [{}, {"vol": "figarch", "truncation": 30, "start_rows": 2000}])
+def test_a_zero_weight_row_steps_no_recursion(kw):
+    """The stream with rows of weight 0, and rows whose return is null,
+    gives every other row, to the bit, the output of the stream without
+    them: the recursion is per observation, and such a row is none. They
+    are still read."""
+    n = 2600 if "vol" in kw else 600
+    df = _frame(n, 8).drop("g")
+    df = df.with_columns(
+        pl.when(pl.int_range(n) % 17 == 5).then(None).otherwise(pl.col("y")).alias("y")
+    )
+    s = _spec(weight="w", coef_every=0, **kw)
+    full = _out(s, df)
+    keep = ((df["w"] > 0) & df["y"].is_not_null()).to_numpy()
+    thin = _out(s, df.filter(pl.Series(keep)))
+    for f in ("variance_y", "std_resid_y", "coef"):
+        assert full[f].filter(pl.Series(keep)).equals(thin[f], null_equal=True), f
+    read = full.filter(pl.Series(~keep))
+    assert read["variance_y"].drop_nulls().len() > 20, "such a row is still read"
+
+
+def test_a_weight_scales_nothing_but_the_weight():
+    """Every weight doubled leaves the variances and the fit where they
+    were, to rounding; ``weight_sum`` doubles."""
+    df = _frame(800, 9).drop("g")
+    s = _spec(weight="w", coef_every=0)
+    a = _out(s, df)
+    b = _out(s, df.with_columns(pl.col("w") * 2.0))
+    np.testing.assert_allclose(a["variance_y"].to_numpy(), b["variance_y"].to_numpy(), rtol=1e-9)
+    np.testing.assert_allclose(b["weight_sum"].to_numpy(), 2 * a["weight_sum"].to_numpy())
+
+
+def test_the_forecast_reverts_to_the_long_run_variance():
+    """``forecast_<t>`` is ``ω + (α + β) f`` run ``horizon - 1`` rows from the
+    row's variance, at the parameters reported after the row before."""
+    df = pl.DataFrame({"y": _returns(600, 10)})
+    out = _out(_spec(horizon=6, coef_every=0), df)
+    s, fc, coef = out["variance_y"], out["forecast_y"], out["coef"].to_list()
+    for t in (450, 520, 598):
+        om, a, b = coef[t]
+        f = s[t + 1]
+        for _ in range(5):
+            f = om + (a + b) * f
+        assert abs(fc[t + 1] - f) <= 1e-13 * f, t
+
+
+def test_names_match_the_realized_struct():
+    df = _frame(300, 11).with_columns(pl.col("y").alias("z"))
+    for kw in ({}, {"horizon": 3}, {"vol": "gjr", "dist": "t"}):
+        spec = rp.spec.garch("m", targets=["y", "z"], start_rows=100, **kw)
+        out = rp.ModelBank([spec]).fit_predict(df)
+        assert [f.name for f in out.schema["m"].fields] == rp.spec.output_fields(spec)
+    terms = rp.spec.coef_index(rp.spec.garch("m", targets=["y"], vol="gjr", dist="t"))["term"]
+    assert terms.to_list() == ["omega", "alpha", "gamma", "beta", "nu"]
+    terms = rp.spec.coef_index(rp.spec.garch("m", targets=["y"], vol="figarch"))["term"]
+    assert terms.to_list() == ["omega", "phi", "d", "beta"]
+
+
+@pytest.mark.parametrize(
+    ("kw", "says"),
+    [
+        ({"half_life": 50.0}, "half_life does not apply to garch"),
+        ({"vol": "arch"}, "vol"),
+        ({"dist": "ged"}, "dist"),
+        ({"vol": "gjr", "dist": "skewt"}, 'does not take vol = "gjr"'),
+        ({"vol": "egarch", "dist": "t"}, "takes vol"),
+        ({"vol": "egarch", "horizon": 2}, "one row ahead only"),
+        ({"vol": "gjr", "variance_targeting": True}, "variance_targeting"),
+        ({"truncation": 100}, "truncation is FIGARCH's"),
+        ({"vol": "figarch", "start_rows": 500}, "at least 2000"),
+        ({"start_rows": 10}, "at least 50"),
+        ({"start_span": 50.0}, "Leave one of them out"),
+        ({"max_state_bytes": 0}, "above 0"),
+        ({"emit_sigma": True}, "emit_sigma"),
+    ],
+)
+def test_refusals(kw, says):
+    with pytest.raises(ValueError, match=says):
+        rp.ModelBank([_spec(**kw)])
+
+
+def test_features_are_refused():
+    with pytest.raises(TypeError, match="features"):
+        rp.spec.garch("m", targets=["y"], features=["x"])
+
+
+def test_a_start_span_on_a_temporal_clock_is_a_duration():
+    """``start_span`` as a duration on a temporal clock: rows a minute
+    apart, a start of two hours closes at its 121st row."""
+    n = 400
+    df = pl.DataFrame(
+        {
+            "ts": pl.datetime_range(
+                pl.datetime(2026, 1, 1),
+                pl.datetime(2026, 1, 1) + pl.duration(minutes=n - 1),
+                "1m",
+                eager=True,
+            ),
+            "y": _returns(n, 12),
+        }
+    )
+    spec = rp.spec.garch("m", targets=["y"], clock="ts", gap_cap="1h", start_span="2h")
+    out = rp.ModelBank([spec]).fit_predict(df).unnest("m")
+    first = out["variance_y"].is_not_null().arg_true()[0]
+    # the 121st row is the first two hours from the first, and the fit may
+    # double the span: the first report is just past one of the two
+    assert first in (121, 241), first
+    with pytest.raises(ValueError, match="start_span"):
+        rp.ModelBank(
+            [rp.spec.garch("m", targets=["y"], clock="ts", gap_cap="1h", start_span=120.0)]
+        )
+
+
+def test_a_clock_span_start_is_warned_of_once_and_refused_at_the_cap():
+    """A start over a span of the clock buffers the rows the span has, which
+    the data decides, so its bytes are checked as the rows go in: the first
+    row to take a group past half of ``max_state_bytes`` warns, once,
+    naming the group; the row that would take it past the cap stops the run
+    with an error naming the group and the bytes."""
+    cap = 176 + 16 + 16 * 300
+    s = rp.spec.garch(
+        "m", targets=["y"], group="g", clock="t", gap_cap=1e9, start_span=1e9, max_state_bytes=cap
+    )
+
+    def rows(group: str, n: int, first: int = 0) -> pl.DataFrame:
+        i = np.arange(first, first + n)
+        return pl.DataFrame({"g": group, "t": i.astype(float), "y": _returns(n, first + 1)})
+
+    bank = rp.ModelBank([s])
+    with pytest.warns(rheon.RheonWarning, match=r'group "a": the state holds \d+ bytes') as seen:
+        bank.fit_predict(pl.concat([rows("a", 200), rows("b", 30)]))
+    assert len(seen) == 1
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        bank.fit_predict(rows("a", 30, 200))
+    with pytest.raises(Exception, match=r'group "a".*start_span.*above max_state_bytes of') as e:
+        bank.fit_predict(rows("a", 200, 230))
+    assert str(cap) in str(e.value)

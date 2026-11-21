@@ -1,7 +1,7 @@
 <!-- kind: reference -->
 # Models
 
-The reference entry of each of the twenty-four models a spec can name, by
+The reference entry of each of the twenty-five models a spec can name, by
 family, for a reader who knows which model they want to look up. A
 model's parameters, their defaults and its refusals are in its docstring,
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md).
@@ -28,7 +28,7 @@ which models keep each, and why.
 
 ## The models at a glance
 
-The twenty-four models fall into four families, and each family answers one
+The twenty-five models fall into four families, and each family answers one
 kind of question about a stream. Each name links its builder's reference
 page, which gives its keywords and their defaults, and *entry* links its
 entry on this page. [Choose a model](how-to/choose-a-model.md) says which
@@ -54,6 +54,7 @@ to start with for which question.
 | [`deco`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.deco) · [entry](#deco--one-correlation-for-the-whole-matrix) | accumulate | one correlation for the whole matrix: Engle & Kelly's equicorrelation, or one per block and per pair of blocks |
 | [`rcov`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.rcov) · [entry](#rcov--a-blocks-realized-covariance-robust-to-noise) | accumulate | a block's realized covariance, robust to microstructure noise: the Barndorff-Nielsen–Hansen–Lunde–Shephard kernel or Christensen–Kinnebrock–Podolskij pre-averaging, reported when a group closes |
 | [`audit`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.audit) · [entry](#audit--what-a-streams-columns-hold) | accumulate | what each column holds, counted in one pass: nulls, NaNs and infinities apart, repeated values, runs, persistence, tails and duplicated columns, and the clock's duplicate stamps and gaps, read back as a table and by `bank.check()` |
+| [`garch`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.garch) · [entry](#garch--how-large-will-the-next-return-be) | step | the GARCH family, a conditional variance for each return series: GARCH(1,1), GJR, EGARCH and FIGARCH, with normal, Student-t or skewed-t innovations, its parameters learned a row at a time after a start fitted by likelihood |
 | **[Clustering and classification](#clustering-and-classification)** | | put labels on rows |
 | [`kmeans`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.kmeans) · [entry](#kmeans--exponentially-weighted-k-means) | step | exponentially weighted k-means: cluster labels assigned before the row is learned from, with a split–merge move that finds a cluster born after seeding |
 | [`micro`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.micro) · [entry](#micro--density-based-clustering-any-shape) | step | density-based clustering: DenStream micro-clusters linked into clusters of any shape and number, flagging the rows that belong to none |
@@ -245,7 +246,7 @@ per target, give `min_weight` a list. The default depends on the model:
 | the feature count plus one (1 for `holt`) | `ew_cov`, `ew_class`, `kmeans`, `micro`, `holt` |
 | 3 | `marginal`, `deco` |
 | 1 | `bocpd` |
-| 0, each having a gate of its own or nothing to gate | `ewridge`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes` |
+| 0, each having a gate of its own or nothing to gate | `ewridge`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes`, `garch` |
 
 **`min_settled_frac` is off by default.** Set it when the half-life was
 chosen to average over regimes or seasons that a shorter history would not
@@ -1988,7 +1989,8 @@ principal-component scores, `u` and `loglik` measure the row's own values
 against that state. `marginal`,
 `rcov` and `audit` write only `weight_sum` on a row, and keep their results
 in the state: read them as a table after the run, or, for `rcov`, when a
-block closes.
+block closes. `garch` forecasts each return's variance before the row
+arrives, from a model of how variance clusters in time.
 
 ### `ew_cov` — exponentially weighted moments
 
@@ -2710,6 +2712,181 @@ absolute deviation are numpy's while the counts are exact. Past the cap,
 they are within about 1% of the rows in rank. Each pair's correlation
 agrees with `np.corrcoef` over the rows where both columns are usable,
 within 1e-13 relative, in each group and in the pooled merge.
+
+### `garch` — how large will the next return be?
+
+*API:* [`rheon.spec.garch`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.garch) — *Rust:* [`garch.rs`](../crates/rheon-core/src/garch.rs) — *Outputs:* [fields](OUTPUTS.md#garch)
+
+The GARCH family: the variance of each row's return given the rows before
+it, with the process's parameters learned one row at a time.
+
+Use `garch` on returns, or on any zero-mean residual whose size clusters in
+time, when you want each row's variance forecast before the row arrives: a
+risk limit, a position size, a standardized residual for a detector
+downstream. Each target is its own series with its own parameters. The
+start's rows (2,000 by default) report nothing; after them every row
+reports its variance, its standardized residual and, with `horizon`, the
+variance further ahead.
+
+Its parameters, their defaults and what each refuses are in its
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.garch),
+and the fields it writes in [OUTPUTS.md](OUTPUTS.md#garch). The parameters
+every spec takes are in [What every spec takes](#what-every-spec-takes),
+apart from `features`, `half_life` and `lam`, which it refuses: the
+recursion is per observation and the estimate weighs every row it has
+learned. A row's weight scales its evidence. A row of weight 0, or whose
+return is null, steps nothing: the next row's lags are those of the last row
+learned, as if it were not there; it is still read.
+
+#### The processes
+
+With `s_t` the variance of row `t`'s return `e_t` given the rows before it,
+and `z_t = e_t / √s_t`:
+
+```
+garch    s_t = ω + α e²_{t−1} + β s_{t−1}
+gjr      s_t = ω + α e²_{t−1} + γ 1[e_{t−1} < 0] e²_{t−1} + β s_{t−1}
+egarch   ln s_t = ω + α (|z_{t−1}| − √(2/π)) + γ z_{t−1} + β ln s_{t−1}
+figarch  s_t = ω/(1 − β) + Σ_{j=1..M} λ_j e²_{t−j}
+         λ_1 = φ − β + d,  λ_j = β λ_{j−1} + δ_j − φ δ_{j−1},  δ_j = d Π_{i=2..j} (i − 1 − d)/i
+```
+
+The process is the `vol` parameter. GARCH(1,1) is the default. In GJR, a fall
+lifts the variance more than a rise of the same size. EGARCH runs in
+the logarithm of the variance, so no sign constraint keeps it positive.
+FIGARCH's memory of the squared returns decays like a power of the lag
+rather than geometrically, cut at `truncation` lags (1,000). `dist` picks the
+innovations: normal; Student's t, whose degrees of freedom `ν` are learned;
+Hansen's skewed t, which learns a skew `λ` too. The t takes `garch` and
+`gjr`, the skewed t `garch` alone. Every lag before the first row is the
+backcast, the `0.94^i`-weighted mean of the first 75 squared returns.
+
+#### The update
+
+Each learned row of weight `w_t` steps the parameters by the score of its
+log-likelihood `l_t = log f(z_t) − ½ ln s_t`. The score is `g_t = ½ w ∂ln
+s_t/∂θ`, with `w = z² − 1` under the normal and a bounded `w` under a t, and
+the sensitivity `∂ln s_t/∂θ` is carried by its own recursion:
+
+```
+a_t = w_t / W_t          W_t the weight learned, the start's included
+H  ← H + a_t (I_t − H)   I_t = ½ ∂ln s ∂ln sᵀ, or the score's outer product under a t
+θ  ← Proj_H(θ + a_t H⁻¹ g_t)
+```
+
+`Proj_H` projects onto the process's admissible set, the persistence at most
+`1 − 10⁻⁴`, in `H`'s own metric. A Newton step projected in the Euclidean
+metric is no ascent where the bounds hold parameters the likelihood barely
+tells apart, such as `α + β` near 1; in `H`'s metric it is. A t's `ν` is
+stepped as `ln(ν − 2)`, so no step crosses 2.
+
+**EGARCH's guard keeps the filter that runs contracting.** Its set holds
+`α ≥ |γ|` and `α ≤ 1`; its variance stays within a factor of `10⁶` of the
+0.94-weighted mean square, as `arch`'s does; and the mean of `ln |β − (α |z|
++ γ z)/2|` over the standardized residuals the filter has met, the
+recursion's Lyapunov exponent, is held below 0 at the parameters as they
+stand, a step that would break it cut back along the step to where it
+holds. While it holds, the filter forgets its start and a small error in it
+dies out. It agrees with `arch` wherever `arch`'s own filter contracts, and
+carries no proof that the estimate it guards is consistent. The guard with
+such a proof, Wintenberger's stable likelihood, bounds the recursion at the
+smallest variance it can reach. So it excludes persistent processes (`β`
+near 1) whose filter does contract.
+
+**The start.** The first `start_rows` rows of a target, or the rows of the
+first `start_span` of the clock, are fitted by the model's own projected
+Newton on their likelihood, from a small grid, and replayed at the fit to
+build `H`. A fit that does not converge, or sits on a bound of the
+process's parameters, waits for twice the rows and refits, at most twice,
+while `max_state_bytes` holds the doubled buffer.
+
+**Variance targeting** (`variance_targeting=True`, `vol="garch"` with
+normal innovations) sets the level by the running mean square, `ω = v̄ (1 −
+α − β)`, and learns `α` and `β` alone, with a Huber-clipped score. It is
+another estimate, `ω` a moment rather than a likelihood one, and needs
+returns with a finite fourth moment. It is not the safer choice. On series
+at persistence 0.98 its forecasts, each made before its row, lost a mean of
+3.4 nats over 8,000 rows to the true process, against 2.8 for the free `ω`:
+its level rides on one running mean the whole stream shares.
+
+The state is `8 (2k + m + n(n + 1)/2 + 9)` bytes a target for `k` process
+parameters, `m` shape parameters and `n` stepped coordinates. EGARCH keeps
+64 bins of residuals beside them, 512 bytes. That is 168 bytes for `garch`,
+216 for `gjr`, 728 for `egarch`, 208 for `garch` with a t, and `216 + 8 M`
+for `figarch` (8,216 at 1,000 lags). The start's buffer adds 16 bytes a
+row until it is fitted, 32,000 at the default.
+
+#### Rows and the clock
+
+**The recursion is per observation.** A row's lags are the row before it,
+however far back on the clock that was, so a gap, a capped gap or a session
+change breaks nothing. None of the process's parameters has a duration
+form: `β` is a share of the last observation's variance, not of an hour's. The start is the one span: of rows, `start_rows`, or of the clock,
+`start_span`, a number of the clock column's units or a duration such as
+`"1d"` on a temporal clock. A span's rows are the data's to decide, so their
+bytes are checked as they come: a warning past half of `max_state_bytes`,
+and a refusal at it.
+
+#### Example
+
+**It recovers the process it did not see made.** This code simulates a
+GARCH(1,1) at `(ω, α, β) = (0.05, 0.08, 0.9)` and prints the fit after
+20,000 rows:
+
+```python
+import numpy as np
+import polars as pl
+from rheon import polars as rp
+
+rng = np.random.default_rng(7)
+e, s, r = 0.0, 2.5, []
+for z in rng.standard_normal(20_000):
+    s = 0.05 + 0.08 * e * e + 0.9 * s
+    e = np.sqrt(s) * z
+    r.append(e)
+pl.DataFrame({"r": r}).write_parquet("returns.parquet")
+
+model = rp.spec.garch("g", targets=["r"])
+bank = rp.ModelBank([model])
+bank.fit(pl.scan_parquet("returns.parquet"))
+coef = {row["term"]: row["coef"] for row in bank.coef().iter_rows(named=True)}
+print(f"alpha: true 0.08, found {coef['alpha']:.2f}")
+print(f"beta: true 0.90, found {coef['beta']:.2f}")
+```
+
+```text
+alpha: true 0.08, found 0.07
+beta: true 0.90, found 0.91
+```
+
+#### See also
+
+For a variance or a clustering measured another way:
+
+- [`ew_cov`](#ew_cov--exponentially-weighted-moments), for a variance with a
+  fixed decay rather than a fitted one.
+- [`hawkes`](#hawkes--how-much-does-each-event-excite-the-next), for the
+  clustering of events rather than of sizes.
+
+#### Notes
+
+**It agrees with `arch`'s batch fit to first order.** It is the recursive
+prediction-error method: with the gain `1/W` and a batch start, its
+estimate agrees with the batch fit of the same rows to first order. Against
+`arch`'s batch fit of 10,000 simulated rows, on 50 series of each form,
+every parameter was within two of `arch`'s standard errors on all 50. The
+log-likelihood its forecasts lost to `arch`'s path had a median of 0.9 of
+its expected size, `(k/2)(ln(n/n₀) + 1)` for `k` parameters and `n₀` rows of
+start, and was at most 2.6 times it. At 100,000 rows the median gap was 0.04
+to 0.14 standard errors.
+
+**Left out.** GARCH(2,2): `arch`'s own fits split its two `β`s differently
+from series to series, and the online fit is not yet held to a tolerance.
+GJR with the skewed t: under skewed innovations GJR's persistence reads
+`E[z² 1(z < 0)]` rather than the half of `E[z²]` its forecast uses. A t on
+EGARCH or FIGARCH, APARCH, the generalized error distribution and a mean
+model: none has an online estimator checked against `arch`. EGARCH's
+forecast past one row has no closed form.
 
 ## Clustering and classification
 

@@ -1482,6 +1482,9 @@ DOUBLED: dict[str, dict] = {
     "ew_cov": {},
     "ewridge": {},
     "ftrl": {},
+    # Its recursion is per observation: a lesson late steps it in the same
+    # order, from the same rows.
+    "garch": {},
     "glm": {},
     "huber": {},
     "kmeans": {},

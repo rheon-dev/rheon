@@ -307,6 +307,24 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         dict(columns=["x0", "x1", "y"], group="g", pairs=True, clock="t", gap_cap=6.0),
         [],
     ),
+    # Each target a series of returns, after a start of 50 rows; GJR with a
+    # t, a forecast three rows ahead: every field it has.
+    (
+        "garch",
+        "garch",
+        dict(
+            targets=["y", "z"],
+            vol="gjr",
+            dist="t",
+            horizon=3,
+            start_rows=50,
+            group="g",
+            coef_every=0,
+            emit_clocks=True,
+            **CLOCK,
+        ),
+        [],
+    ),
     (
         "hawkes",
         "hawkes",

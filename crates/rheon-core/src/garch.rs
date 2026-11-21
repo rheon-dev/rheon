@@ -55,19 +55,17 @@
 //! to `arch`'s `[2.05, 300]`; `λ` to `[−0.99, 0.99]`.
 //!
 //! **EGARCH** has no sign constraints in `arch`, and its likelihood is
-//! defined only where the inverted recursion is stable. Its set holds `α ≥
-//! |γ|`, `α ≤ 1` and `0 ≤ β ≤ 1 − 10⁻⁴`, and a step is refused that would
-//! take the running mean of `ln Λ_t` to 0 or above, Wintenberger's (2013)
-//! empirical invertibility, with `α_W = ω − α √(2/π)`:
-//!
-//! ```text
-//! Λ_t = max{β, ½ (γ e_t + α |e_t|) e^{−α_W / (2 (1 − β))} − β}
-//! ```
-//!
-//! the inverted recursion's Lipschitz coefficient over every variance it
-//! can reach; the start maximizes the likelihood under the same
-//! constraint over its rows. Its variance is held within `arch`'s bounds,
-//! a factor `10⁶` either side of the 0.94-weighted mean of `e²`.
+//! defined only where the inverted recursion is stable. Its guard
+//! (`garch::guard`) keeps the filter that runs contracting: its steps and
+//! its start are projected onto `α ≥ |γ|` (the news term never negative),
+//! `α ≤ 1` and `0 ≤ β ≤ 1 − 10⁻⁴`; its variance is held within `arch`'s
+//! bounds, a factor `10⁶` either side of the 0.94-weighted mean of `e²`;
+//! and the mean of `ln |β − (α |z| + γ z)/2|` over the standardized
+//! residuals the filter has met, the recursion's Lyapunov exponent, read at
+//! the parameters as they stand from 64 bins of `z`, is held below 0, a
+//! step that would break it cut back along the step to where it holds. It
+//! agrees with `arch` wherever `arch`'s own filter contracts, and carries no
+//! proof that the estimate it guards is consistent.
 //!
 //! **Variance targeting** (`variance_targeting`, `garch` with normal
 //! innovations): `ω = v̄ (1 − α − β)`, `v̄` the running mean of `e²`, and
@@ -117,13 +115,13 @@
 //! before the row, and each target's own weight gates it (hard rule 8);
 //! there is no decay.
 //!
-//! **State**, per target, in bytes: `8 (2k + m + n(n + 1)/2 + 10)` for `k`
+//! **State**, per target, in bytes: `8 (2k + m + n(n + 1)/2 + 9)` for `k`
 //! process parameters, `m` shape parameters and `n` stepped coordinates,
-//! plus the larger of the start's buffer, 16 bytes a row until it is
-//! fitted, and FIGARCH's ring, `8 M`: 176 for `garch` (152 targeted), 224
-//! for `gjr` and `egarch`, 216 and 264 for `garch` with a t and a skewed t,
-//! 272 for `gjr` with a t, and `224 + 8 M` (8,224 at `M = 1000`) for
-//! `figarch`, each with 32,000 for the default start's buffer until it is
+//! EGARCH's 64 bins of `z` (512) beside them, plus the larger of the start's
+//! buffer, 16 bytes a row until it is fitted, and FIGARCH's ring, `8 M`: 168
+//! for `garch` (144 targeted), 216 for `gjr`, 728 for `egarch`, 208 and 256
+//! for `garch` with a t and a skewed t, 264 for `gjr` with a t, and `216 + 8
+//! M` (8,216 at `M = 1000`) for `figarch`, each with 32,000 for the default start's buffer until it is
 //! fitted (64,000 or 128,000 after a refit), and 16 for the model. A row
 //! costs `O(n³)` (the solve, `n ≤ 5`) and FIGARCH's `O(M)` pass for its
 //! weights and their derivatives.
@@ -138,6 +136,7 @@ use crate::model::{ModelState, OnlineModel, State, StateError, Step, check_schem
 mod dist;
 mod filter;
 mod fit;
+mod guard;
 mod linalg;
 mod optim;
 mod series;
@@ -496,11 +495,17 @@ impl Garch {
     }
 
     /// The bytes one target's series holds with `rows` buffered for its
-    /// start: `8 (2k + m + n(n + 1)/2 + 10)`, and the larger of the buffer,
+    /// start: `8 (2k + m + n(n + 1)/2 + 9)`, EGARCH's bins, `8 · 64`, and
+    /// the larger of the buffer,
     /// `16 rows`, and FIGARCH's ring, `8 M`.
     pub fn series_bytes(cfg: &GarchCfg, rows: usize) -> u64 {
         let (k, m, n) = (cfg.vol.k(), cfg.dist.shape_len(), cfg.n_free());
-        let fixed = 8 * (2 * k + m + n * (n + 1) / 2 + 10) as u64;
+        let bins = if cfg.vol == GarchVol::Egarch {
+            guard::BINS
+        } else {
+            0
+        };
+        let fixed = 8 * (2 * k + m + n * (n + 1) / 2 + 9 + bins) as u64;
         fixed + (16 * rows as u64).max(8 * cfg.truncation() as u64)
     }
 
@@ -535,11 +540,21 @@ impl Garch {
         self.series.iter().map(|s| (s.refits, s.sound)).collect()
     }
 
-    /// EGARCH's running empirical invertibility per target, the mean of
-    /// `ln Λ` the steps hold below 0 (0 before the start, and for the other
-    /// processes).
+    /// EGARCH's guard per target: the mean of `ln |β − (α |z| + γ z)/2|`
+    /// at the parameters as they stand, over the standardized residuals the
+    /// filter has met, which the steps hold below 0 (0 before the start, and
+    /// for the other processes).
     pub fn invertibility(&self) -> Vec<f64> {
-        self.series.iter().map(|s| s.inv).collect()
+        self.series
+            .iter()
+            .map(|s| {
+                if s.started && !s.zbins.is_empty() {
+                    guard::mean_log_mu(&s.theta, &s.zbins)
+                } else {
+                    0.0
+                }
+            })
+            .collect()
     }
 
     /// Write the row's report for target `j` into `out` at its slots, the

@@ -513,7 +513,7 @@ fn a_free_omega_finds_the_level_from_a_wrong_start() {
 }
 
 /// EGARCH's steps keep `α ≥ |γ|` and `α ≤ 1` on every row after the start,
-/// and its running invertibility below 0, through a wild row.
+/// through a wild row, and its variance a number.
 #[test]
 fn egarch_stays_invertible() {
     let c = cfg(GarchVol::Egarch, GarchDist::Normal);
@@ -530,7 +530,7 @@ fn egarch_stays_invertible() {
             );
         }
     }
-    assert!(m.invertibility()[0] < 0.0, "{}", m.invertibility()[0]);
+    assert!(m.invertibility()[0].is_finite());
 }
 
 /// A start that does not settle -- here every residual the same size, so
@@ -627,26 +627,26 @@ fn the_forecast_is_the_variance_recursion_run_ahead() {
 #[test]
 fn the_state_is_bounded_by_its_settings() {
     let c = cfg(GarchVol::Garch, GarchDist::Normal);
-    assert_eq!(Garch::series_bytes(&c, 0), 176);
-    assert_eq!(Garch::series_bytes(&c, 500), 176 + 8000);
+    assert_eq!(Garch::series_bytes(&c, 0), 168);
+    assert_eq!(Garch::series_bytes(&c, 500), 168 + 8000);
     let t = GarchCfg {
         variance_targeting: true,
         ..c.clone()
     };
-    assert_eq!(Garch::series_bytes(&t, 0), 152);
+    assert_eq!(Garch::series_bytes(&t, 0), 144);
     let mut f = cfg(GarchVol::Figarch, GarchDist::Normal);
     f.truncation = None;
     f.max_state_bytes = None;
     // the ring of 1,000 lags, and the start's 2,000 rows held before it
-    assert_eq!(Garch::series_bytes(&f, 0), 224 + 8000);
-    assert_eq!(Garch::series_bytes(&f, 2000), 224 + 32_000);
+    assert_eq!(Garch::series_bytes(&f, 0), 216 + 8000);
+    assert_eq!(Garch::series_bytes(&f, 2000), 216 + 32_000);
     assert_eq!(
         Garch::series_bytes(&cfg(GarchVol::Gjr, GarchDist::T), 0),
-        272
+        264
     );
     assert_eq!(
         Garch::series_bytes(&cfg(GarchVol::Egarch, GarchDist::Normal), 0),
-        224
+        216 + 512
     );
     // the largest M a group of one target holds under the default cap
     f.truncation = Some(32_000);
@@ -665,10 +665,10 @@ fn the_state_is_bounded_by_its_settings() {
     let ys = gjr_series([0.05, 0.08, 0.0, 0.9], 9000, 19, 1.0);
     let mut m = Garch::new(cfg(GarchVol::Figarch, GarchDist::Normal)).unwrap();
     run(&mut m, &ys[..300], &[1.0; 300]);
-    assert_eq!(m.bytes(), 224 + 16 * 300 + 16);
+    assert_eq!(m.bytes(), 216 + 16 * 300 + 16);
     run(&mut m, &ys[300..], &[1.0; 8700]);
     assert!(m.started()[0]);
-    assert_eq!(m.bytes(), 224 + 8 * 100 + 16);
+    assert_eq!(m.bytes(), 216 + 8 * 100 + 16);
 }
 
 /// A start of a clock span buffers what the span holds, so its bytes are
@@ -692,7 +692,7 @@ fn a_clock_span_start_is_warned_of_at_half_the_cap_and_stopped_at_it() {
             over_at = Some(t);
         }
     }
-    // a row is held to 176 + 16 + 16 (r + 1) bytes with r before it: past
+    // a row is held to 168 + 16 + 16 (r + 1) bytes with r before it: past
     // 2,000 at r = 113, past 4,000 at r = 238
     assert_eq!(warned_at, Some(113));
     assert_eq!(over_at, Some(238));

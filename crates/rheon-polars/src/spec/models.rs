@@ -711,6 +711,35 @@ impl Spec {
             // Its features and its kernels are checked above; every value
             // is the model's own to check.
             ModelKind::Hawkes { .. } => {}
+            // Its features are checked above. No decay: the recursion is per
+            // observation and the estimate weighs every row it learned. The
+            // start is rows or a span of the clock, not both; every other
+            // value is the model's own to check, here at the call, where the
+            // state's size against its cap is known too.
+            ModelKind::Garch {
+                start_rows,
+                start_span,
+                ..
+            } => {
+                if self.half_life.is_some() || self.lam.is_some() {
+                    no.refuse(format!(
+                        "spec {:?}: {decay_key} does not apply to garch, whose variance \
+                     recursion is per observation and whose estimate weighs every row it has \
+                     learned. Leave {decay_key} out.",
+                        self.name
+                    ));
+                }
+                if start_rows.is_some() && start_span.is_some() {
+                    no.refuse(format!(
+                        "spec {:?}: start_rows (a count of rows) and start_span (a span of the \
+                     clock) both say where the start closes. Leave one of them out.",
+                        self.name
+                    ));
+                }
+                no.take(crate::stream::garch_cfg(self).map(|_| ()).map_err(|e| {
+                    format!("spec {:?}: {}", self.name, e.trim_start_matches("garch: "))
+                }));
+            }
             // The shared checks (non-empty features and targets, no column on
             // both sides, a decay, `min_weight` per target, no residual
             // diagnostics) and one of its own: given edges and the knobs for

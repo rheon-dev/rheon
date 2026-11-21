@@ -22,6 +22,7 @@ TIER = "mixed"
 BUILDERS = [
     "audit",
     "hawkes",
+    "garch",
     "bocpd",
     "corrchange",
     "deco",

@@ -519,7 +519,7 @@ in the table.
 
 ### The table
 
-**120 cells: 83 over the 24 model kinds' rows, 19 over the
+**123 cells: 86 over the 25 model kinds' rows, 19 over the
 bank, 3 over the command line, 9 over the window operators, 4 over
 `refresh_time` and 2 over the sample of an internal helper for
 gradient-boosted trees.** Each row is one cell: the
@@ -530,7 +530,8 @@ column has the four native ratios from large to small, as measured on
 --test scaling -- --nocapture` prints them. `bank.label_clock`'s were measured on
 2026-11-08, the same way, at a load of 5, and `windows.rows_held`'s on
 2026-11-20 by a release build (`--release`) at a load of 7, and the four
-`hawkes` cells' on 2026-11-21 by a debug build at a load of 5. The two `.window` cells were
+`hawkes` cells' on 2026-11-21 by a debug build at a load of 5. The three
+`garch` cells were measured the same day the same way, at a load of 11. The two `.window` cells were
 measured again on 2026-11-06, once a window's snapshots were laid out
 flat. A row's time and allocations are per
 row; the saved state and the heap are the state's. `(CI)` marks the 25 cells
@@ -623,6 +624,9 @@ largest buffer at the smaller.
 | `hawkes.decays` | decays U, one node | 1 → 8 | O(n^3) | O(n) | a row solves its p = 1 + U terms, p³; the state holds 2U + 4 numbers | 15.03 · 1.00 · 2.75 · 1.12 |
 | `hawkes.window` | window W rows with an event, two nodes and decays | 100 → 800 | O(1) | O(n) | a dropped row is taken back in O(D k), its block's sums formed once every W rows; W rows held, 8 (2 + D + k) bytes each | 0.97 · 0.76 · 7.69 · 6.75 |
 | `hawkes.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | its running sums only | 1.00 · 1.00 · 1.00 · 1.00 |
+| `garch.targets` | targets T, one series each | 1 → 8 | O(n) | O(n) | each target steps its own series and keeps its own parameters, information matrix and lags | 8.10 · 8.39 · 6.33 · 2.51 |
+| `garch.truncation` | FIGARCH's lags M | 100 → 800 | O(n) | O(n) | a row is one pass of the M weights, their derivatives and the ring; the ring holds M squared returns | 3.18 · 0.97 · 6.35 · 3.30 |
+| `garch.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | the parameters, the information matrix and the lags only; the start's buffer is gone | 1.01 · 1.00 · 1.00 · 1.00 |
 | `bank.groups_seen` (CI) | groups seen G (a block over 50 of them) | 250 → 2,000 | O(1) | O(n) | a row touches its group's state alone; a state a group | 1.03 · 1.00 · 7.99 · 7.14 |
 | `bank.groups_seen_per_call` (CI) | groups seen G, calls of four rows to one group each | 1,000 → 8,000 | O(1) | O(n) | a call finds each of its groups' state by key and takes only their notices; a state a group | 1.00 · 1.00 · 7.98 · 7.33 |
 | `bank.specs` (CI) | specs S, one set of columns | 1 → 8 | O(n) | O(n) | each spec steps its model, S | 8.28 · 7.67 · 7.80 · 7.23 |

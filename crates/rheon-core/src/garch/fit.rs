@@ -97,9 +97,10 @@ pub(super) fn ab_set() -> HalfSpaces {
     }
 }
 
-/// EGARCH's set, `θ = (ω, α, γ, β)`: `α ≥ |γ|` (the news term is never
-/// negative, the half of Wintenberger's invertibility a box can hold),
-/// `α ≤ 1`, `0 ≤ β ≤ 1 − 10⁻⁴`; `ω` is free.
+/// EGARCH's box, the set its start's fit and every step are projected
+/// onto, `θ = (ω, α, γ, β)`: `α ≥ |γ|` (the news term is never negative),
+/// `α ≤ 1`, `0 ≤ β ≤ 1 − 10⁻⁴`; `ω` free. The rest of its guard, the
+/// filter's running Lyapunov exponent, is [`super::guard`]'s.
 pub(super) fn egarch_set() -> HalfSpaces {
     HalfSpaces {
         a: vec![
@@ -112,6 +113,22 @@ pub(super) fn egarch_set() -> HalfSpaces {
         b: vec![0.0, 0.0, -1.0, 0.0, -(1.0 - MARGIN)],
         n: 4,
     }
+}
+
+/// Whether EGARCH's start may fit `theta` on its rows, beyond the set: the
+/// guard's part that reads the data, its filter contracting on the
+/// standardized residuals the filter at `theta` gives the rows
+/// ([`super::guard`]).
+pub(super) fn egarch_start_admits(theta: &[f64], rows: &[[f64; 2]], bc: f64) -> bool {
+    let mut f = Filter::new(GarchVol::Egarch, 4, 0, bc);
+    let mut counts = vec![0.0; super::guard::BINS];
+    let mut dl = [0.0; 4];
+    for r in rows {
+        let s = f.predict(GarchVol::Egarch, theta, &mut dl);
+        counts[super::guard::bin(r[0] / s.sqrt())] += r[1];
+        f.push(GarchVol::Egarch, r[0], s, &dl);
+    }
+    super::guard::admits(theta, &counts)
 }
 
 /// The set of a process's `θ`, its `ω` at least `floor` (none for EGARCH).
@@ -404,9 +421,7 @@ pub(super) fn fit(
                 }
             }
             let obj = |x: &[f64], g: bool| {
-                // the stable likelihood: none outside the empirical
-                // invertibility of the buffer's rows
-                if invertibility(x, rows) >= 0.0 {
+                if !egarch_start_admits(x, rows, bc) {
                     return Eval::bad(4);
                 }
                 likelihood(vol, dist, 4, rows, bc, x, g)
@@ -486,26 +501,4 @@ pub(super) fn fit(
             })
         }
     }
-}
-
-/// EGARCH's invertibility on a row of residual `e` (Wintenberger 2013, the
-/// Lipschitz coefficient of the inverted recursion over every variance it
-/// can reach): with `α_W = ω − α √(2/π)` the recursion's constant in his
-/// form, `ln Λ = ln max{β, ½ (γ e + α |e|) e^{−α_W / (2 (1 − β))} − β}`.
-/// Under `α ≥ |γ|` the recursion is stable, and its variance forgets its
-/// start, where the mean of `ln Λ` over the rows is below 0.
-pub(super) fn log_lyapunov(theta: &[f64], e: f64) -> f64 {
-    let (om, a, g, b) = (theta[0], theta[1], theta[2], theta[3]);
-    let aw = om - a * super::filter::ABS_Z;
-    let news = 0.5 * (g * e + a * e.abs()) * (-aw / (2.0 * (1.0 - b))).exp();
-    b.max(news - b).max(f64::MIN_POSITIVE).ln()
-}
-
-/// The weighted mean of [`log_lyapunov`] over the buffer: Wintenberger's
-/// empirical invertibility, which the stable likelihood holds below 0.
-fn invertibility(theta: &[f64], rows: &[[f64; 2]]) -> f64 {
-    let (s, w) = rows.iter().fold((0.0, 0.0), |(s, w), r| {
-        (s + r[1] * log_lyapunov(theta, r[0]), w + r[1])
-    });
-    s / w
 }

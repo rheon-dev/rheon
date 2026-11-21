@@ -195,6 +195,9 @@ OPEN = {
     "MIT",
     "MIT-0",
     "MPL-2.0",
+    # The University of Illinois/NCSA Open Source License (arch's), an
+    # OSI-approved permissive licence.
+    "NCSA",
     "PSF-2.0",
     "Python-2.0",
     "Unlicense",

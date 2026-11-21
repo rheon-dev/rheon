@@ -47,7 +47,7 @@ FAMILIES: dict[str, tuple[str, ...]] = {
         "glm",
         "holt",
     ),
-    "Moments and correlation": ("ew_cov", "marginal", "deco", "rcov", "audit"),
+    "Moments and correlation": ("ew_cov", "marginal", "deco", "rcov", "audit", "garch"),
     "Clustering and classification": ("kmeans", "micro", "ew_class"),
     "Sequential tests and regimes": ("seqtest", "corrchange", "bocpd", "hmm", "hawkes"),
 }
@@ -108,6 +108,11 @@ MEANING: dict[str, str] = {
         "node `<t>`'s intensity, its expected events per unit of the clock, just before this "
         "row's events, from the fit on the rows before"
     ),
+    "variance_<t>": (
+        "the variance of `<t>` on this row given the rows before it, read before the row is learned"
+    ),
+    "std_resid_<t>": "`<t>` over the square root of its variance on this row",
+    "forecast_<t>": "the variance of `<t>` `horizon - 1` rows past this one, from the same rows",
     "u": (
         "the equicorrelation this row alone implies"
         " (Engle and Kelly's Lemma 2.3, from the standardized row)"
@@ -193,6 +198,9 @@ ALSO_NULL: dict[str, str] = {
         "while withheld, and while the fit is not determined: before every node has had an "
         "event, and while two of its terms cannot be told apart"
     ),
+    "variance_<t>": "while withheld, and before the target's start is fitted",
+    "std_resid_<t>": "where the variance is null, and where `<t>` is",
+    "forecast_<t>": "where the variance is null",
     "u": (
         "while withheld, where fewer than two of the block's columns have a positive variance "
         "before the row, and where every standardized value is 0"
@@ -636,6 +644,9 @@ def stem(field: str, targets: tuple[str, ...], features: tuple[str, ...]) -> str
             "n_pos",
             "n_neg",
             "intensity",
+            "variance",
+            "std_resid",
+            "forecast",
         ):
             if base == f"{pre}_{t}":
                 return f"{pre}_<t>"

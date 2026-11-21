@@ -55,6 +55,34 @@ model that only the new build has is listed as an addition and passes.
   1` numbers a target, and `refit_rows·(features + 2)` more until the
   refit runs, a group's buffers held to 256 KB when the spec is built.
 
+- **`garch`, the GARCH family fitted one row at a time** (task 492): a
+  conditional variance for each target, a zero-mean return series, from
+  GARCH(1,1), GJR, EGARCH or FIGARCH (`vol`, truncated at `truncation`
+  lags, 1,000 by default), with normal, Student-t or skewed-t innovations
+  (`dist`; the t on `garch` and `gjr`, the skewed t on `garch`). Each row
+  reports its variance before it is learned, its standardized residual and,
+  with `horizon`, the variance further ahead; `coef` holds the parameters.
+  The parameters are learned by a recursive Gauss-Newton step on each row's
+  score, `θ ← Proj_H(θ + a H⁻¹ g)`, projected onto the process's set in
+  `H`'s own metric, after a start of `start_rows` rows (2,000) or a
+  `start_span` of the clock fitted by the model's own projected Newton; a
+  start that did not converge or sits on a bound doubles its rows and
+  refits, at most twice. A t's `ν` is stepped as `ln(ν − 2)`. Variance
+  targeting is an option of `garch` with normal innovations, with a
+  Huber-clipped score; it forecasts worse than the free `ω` on persistent
+  series. EGARCH's guard keeps its filter contracting: `α ≥ |γ|`, `α ≤ 1`,
+  `arch`'s variance bounds, and the mean of `ln |β − (α |z| + γ z)/2|` held
+  below 0 by cutting the step back, never by refusing it. No decay: the
+  recursion is per observation, and a row of weight 0 or a null return
+  steps nothing. The state is `8 (2k + m + n(n + 1)/2 + 9)` bytes a target,
+  plus EGARCH's 512 bytes of residual bins, the start's buffer (16 bytes a
+  row until it is fitted) and FIGARCH's ring (`8 M`), held to
+  `max_state_bytes` (256 KB, at most 64 MiB). Against `arch`'s batch fit of
+  10,000 simulated rows, 50 series a form: every parameter within 2 of
+  `arch`'s standard errors on all 50, the out-of-sample log-likelihood lost
+  to `arch`'s path a median 0.9 of its expected size and at most 2.6 times
+  it; at 100,000 rows the median gap 0.04 to 0.14 standard errors. GARCH(2,2)
+  is left out: its two `β`s are not yet held to a tolerance.
 - **`hawkes`, a self-exciting point process** (task 498): each target a
   node, a value above 0 on a row an event of that mark; exponential kernels
   at the given `kernel_decays`. Each row reports every node's
