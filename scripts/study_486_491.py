@@ -15,9 +15,22 @@ with no decay; under decay, batch weighted least squares written longhand
 opinion) and the weighted autocovariances written longhand fed to statsmodels'
 ``levinson_durbin(isacov=True)``.
 
+Part 2 (task 491): streaming spectral estimates.
+
+* ``StreamingWelch``: a ring of the last ``nperseg`` rows; every ``hop = nperseg -
+  noverlap`` rows the ring's segment periodogram is folded into the Welch mean and
+  into an exponentially weighted periodogram.
+* ``StreamingLombScargle``: the last ``W`` rows of an uneven clock and six running
+  sums per frequency (three shared), added on entry, subtracted on leaving, rebuilt
+  from the ring every ``W`` rows.
+
+Oracles: ``scipy.signal`` ``welch``, ``periodogram``, ``spectrogram`` (per-segment,
+for the weighted mean) and ``lombscargle``; astropy ``LombScargle`` for the
+normalisation.
+
 Every series is generated here from a seed; nothing is read from or written to
-disk. Run: ``.venv/bin/python scripts/study_486_491.py [ar]``. Parts 2 (spectral,
-491) and 3 (order selection) add their sections to this file.
+disk. Run: ``.venv/bin/python scripts/study_486_491.py [ar] [spectral]``. Part 3
+(order selection) adds its section to this file.
 """
 
 from __future__ import annotations
@@ -521,7 +534,573 @@ def part_ar() -> None:
     print(f"\n(part 1 ran in {time.perf_counter() - t0:.0f} s)")
 
 
+# =========================================================================== part 2
+# Task 491: streaming spectral estimates against scipy.signal.
+
+FS = 10.0
+SPEC_SEGMENTS = (256, 1024, 4096)
+SPEC_N = 32768
+
+
+def two_sines(n: int, seed: int, fs: float = FS) -> np.ndarray:
+    """Stationary: 3 + sin(2 pi 0.73 t) + 0.5 sin(2 pi 2.1 t + 1) + N(0, 1), t = i / fs."""
+    rng = np.random.default_rng(seed)
+    t = np.arange(n) / fs
+    return (
+        3.0
+        + np.sin(2 * np.pi * 0.73 * t)
+        + 0.5 * np.sin(2 * np.pi * 2.1 * t + 1.0)
+        + rng.standard_normal(n)
+    )
+
+
+def taper(name: str, n: int) -> np.ndarray:
+    """The periodic window (``get_window(name, n)``, fftbins=True). The window is
+    configuration, not state; scipy's values are used so the comparison isolates the
+    streaming. Written out, hann is ``0.5 - 0.5 cos(2 pi k / n)``, which differs from
+    scipy's (a cosine of ``linspace(-pi, pi)``) by 1 ulp; ``section_welch`` reports it."""
+    return scipy.signal.get_window(name, n)
+
+
+def one_sided(p: np.ndarray, n: int) -> np.ndarray:
+    """Double every bin but DC and (n even) Nyquist: scipy's one-sided density."""
+    p = p.copy()
+    if n % 2 == 0:
+        p[1:-1] *= 2.0
+    else:
+        p[1:] *= 2.0
+    return p
+
+
+def segment_periodogram(
+    x: np.ndarray, w: np.ndarray, win: np.ndarray, fs: float
+) -> np.ndarray | None:
+    """One segment's one-sided density. ``w`` are data weights: a sample's amplitude is
+    ``win * sqrt(w)``; the constant detrend removes the w-weighted mean; the scale is
+    ``1 / (fs * sum (win^2 w))``. At w = 1 this is scipy's periodogram(detrend='constant').
+    A weight-0 sample's value is never multiplied (it may be NaN). None if sum w = 0."""
+    live = w > 0.0
+    sw = float(np.sum(w[live]))
+    if not sw > 0.0:
+        return None
+    xx = np.where(live, x, 0.0)
+    m = float(np.sum(w[live] * xx[live])) / sw
+    a = win * np.sqrt(np.where(live, w, 0.0))
+    spec = np.abs(np.fft.rfft(a * (xx - m))) ** 2 / (fs * float(np.sum(a * a)))
+    return one_sided(spec, len(x))
+
+
+class StreamingWelch:
+    """Welch over a ring of the last ``nperseg`` rows, hop = nperseg - noverlap.
+
+    Every row writes its value and weight into the ring (a zero-weight row holds its
+    slot on the clock and contributes nothing). Once the ring is full, every ``hop``
+    rows the ring's segment periodogram is folded into two accumulators:
+    the mean (``P_sum / M``, scipy's welch) and the exponentially weighted one
+    (``P_ew = beta P_ew + P_seg``, ``Z = beta Z + 1``, read ``P_ew / Z``)."""
+
+    def __init__(self, nperseg: int, noverlap: int, window: str, fs: float = FS, beta: float = 0.9):
+        self.n, self.hop, self.fs, self.beta = nperseg, nperseg - noverlap, fs, beta
+        self.win = taper(window, nperseg)  # configuration, recomputable; not state
+        self.x = np.zeros(nperseg)
+        self.w = np.zeros(nperseg)
+        self.pos = 0  # next slot
+        self.rows = 0  # rows seen (the clock)
+        k = nperseg // 2 + 1
+        self.p_sum = np.zeros(k)
+        self.m = 0
+        self.p_ew = np.zeros(k)
+        self.z = 0.0
+        self.last: np.ndarray | None = None  # the latest segment's periodogram (for the check only)
+
+    def update(self, x: float, w: float = 1.0) -> None:
+        self.x[self.pos] = x
+        self.w[self.pos] = w
+        self.pos = (self.pos + 1) % self.n
+        self.rows += 1
+        if self.rows >= self.n and (self.rows - self.n) % self.hop == 0:
+            xs = np.concatenate((self.x[self.pos :], self.x[: self.pos]))
+            ws = np.concatenate((self.w[self.pos :], self.w[: self.pos]))
+            p = segment_periodogram(xs, ws, self.win, self.fs)
+            self.p_ew *= self.beta
+            self.z *= self.beta
+            self.last = p
+            if p is not None:
+                self.p_sum += p
+                self.m += 1
+                self.p_ew += p
+                self.z += 1.0
+
+    def welch(self) -> np.ndarray:
+        return self.p_sum / self.m if self.m else np.full_like(self.p_sum, np.nan)
+
+    def ew(self) -> np.ndarray:
+        return self.p_ew / self.z if self.z > 0 else np.full_like(self.p_ew, np.nan)
+
+    @property
+    def nbytes(self) -> int:
+        # ring values + weights, mean sum, EW sum, M, Z, pos, rows
+        return self.x.nbytes + self.w.nbytes + self.p_sum.nbytes + self.p_ew.nbytes + 4 * 8
+
+
+class StreamingLombScargle:
+    """Lomb-Scargle over the last ``W`` rows of an uneven clock, at fixed angular
+    frequencies ``omega``. Per frequency six sums (weights normalised at read):
+    ``Sc = sum w c, Ss = sum w s, Scc = sum w c^2, Scs = sum w c s, Syc = sum w y c,
+    Sys = sum w y s`` with ``c, s = cos, sin(omega (t - o))``; three shared:
+    ``Sw, Sy = sum w y, Syy = sum w y^2``; and the count of weighted rows. A row adds
+    its terms; the row leaving the window subtracts its terms (its trig recomputed
+    from the ring). Every ``W`` rows the sums are recomputed from the ring, the
+    origin ``o`` rebased to the oldest time, which bounds both the subtraction's
+    drift and the size of the phase argument."""
+
+    def __init__(self, omega: np.ndarray, window: int, recompute: bool = True):
+        self.om = np.asarray(omega, float)
+        self.W, self.recompute = window, recompute
+        self.t = np.zeros(window)
+        self.y = np.zeros(window)
+        self.w = np.zeros(window)
+        self.pos = self.filled = self.rows = 0
+        self.o = 0.0
+        self.origin_set = False
+        f = len(self.om)
+        self.s = np.zeros((6, f))
+        self.g = np.zeros(3)
+        self.cnt = 0
+
+    def _terms(self, t: float, y: float, w: float) -> np.ndarray:
+        arg = self.om * (t - self.o)
+        c, s = np.cos(arg), np.sin(arg)
+        return w * np.array((c, s, c * c, c * s, y * c, y * s))
+
+    def update(self, t: float, y: float, w: float = 1.0) -> None:
+        if not self.origin_set:
+            self.o, self.origin_set = t, True
+        if self.filled == self.W:  # the leaving row
+            wo = self.w[self.pos]
+            if wo > 0.0:
+                to, yo = self.t[self.pos], self.y[self.pos]
+                self.s -= self._terms(to, yo, wo)
+                self.g -= (wo, wo * yo, wo * yo * yo)
+                self.cnt -= 1
+                if self.cnt == 0:  # an empty window drops the subtraction's residue
+                    self.s[:] = 0.0
+                    self.g[:] = 0.0
+        else:
+            self.filled += 1
+        self.t[self.pos], self.y[self.pos], self.w[self.pos] = t, y, w
+        self.pos = (self.pos + 1) % self.W
+        self.rows += 1
+        if w > 0.0:  # a zero-weight row holds a slot of the window and adds nothing
+            self.s += self._terms(t, y, w)
+            self.g += (w, w * y, w * y * y)
+            self.cnt += 1
+        if self.recompute and self.rows % self.W == 0:
+            self._rebuild()
+
+    def _rebuild(self) -> None:
+        idx = (np.arange(self.filled) + (self.pos - self.filled)) % self.W
+        t, y, w = self.t[idx], self.y[idx], self.w[idx]
+        live = w > 0.0
+        t, y, w = t[live], y[live], w[live]
+        self.o = float(t[0]) if len(t) else self.o
+        arg = np.outer(t - self.o, self.om)
+        c, s = np.cos(arg), np.sin(arg)
+        wc = w[:, None]
+        self.s = np.array(
+            [
+                (wc * c).sum(0),
+                (wc * s).sum(0),
+                (wc * c * c).sum(0),
+                (wc * c * s).sum(0),
+                (wc * y[:, None] * c).sum(0),
+                (wc * y[:, None] * s).sum(0),
+            ]
+        )
+        self.g = np.array([w.sum(), (w * y).sum(), (w * y * y).sum()])
+        self.cnt = int(live.sum())
+
+    def power(self, normalize: str = "power", floating_mean: bool = False) -> np.ndarray:
+        """scipy's lombscargle on the window's weighted rows: the weighted projection of y
+        on (cos, sin) -- on (1, cos, sin) with ``floating_mean`` -- which is what the
+        phase offset tau diagonalises. 'power': (N / 2) v' M^-1 v; 'normalize':
+        v' M^-1 v / YY, with the weights normalised to sum 1."""
+        sw = self.g[0]
+        if self.cnt == 0 or not sw > 0.0:  # no weighted row in the window: no fit
+            return np.full(len(self.om), np.nan)
+        C, S, CC, CS, YC, YS = self.s / sw
+        Y, YY = self.g[1] / sw, self.g[2] / sw
+        SS = 1.0 - CC
+        if floating_mean:
+            CC, SS, CS = CC - C * C, SS - S * S, CS - C * S
+            YC, YS, YY = YC - Y * C, YS - Y * S, YY - Y * Y
+        det = CC * SS - CS * CS
+        # A column that vanishes on the rows (the sine at the Nyquist of an even clock)
+        # leaves a one-column fit; scipy reaches the same by clamping CC, SS at epsneg.
+        tol = 1e-10 * (CC + SS)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            q = (SS * YC * YC - 2.0 * CS * YC * YS + CC * YS * YS) / det
+            q = np.where(tol >= SS, YC * YC / CC, np.where(tol >= CC, YS * YS / SS, q))
+        if normalize == "power":
+            return 0.5 * self.cnt * q
+        return q / YY
+
+    @property
+    def nbytes(self) -> int:
+        # ring t, y, w; six sums per frequency; three shared sums; pos, filled, rows, count, origin
+        return self.t.nbytes + self.y.nbytes + self.w.nbytes + self.s.nbytes + self.g.nbytes + 5 * 8
+
+
+def spec_gap(a, b) -> tuple[float, float]:
+    a, b = np.asarray(a, float), np.asarray(b, float)
+    ab = float(np.max(np.abs(a - b)))
+    return ab, ab / float(np.max(np.abs(b)))
+
+
+def section_welch() -> None:
+    print("\n## Streaming Welch and the segment periodogram vs scipy.signal\n")
+    print(
+        f"Signal: two sines + N(0,1) + 3, fs = {FS}, N = {SPEC_N}, seed 0; reads at 12 checkpoints (scipy welch on x[:t]).\n"
+    )
+    k = np.arange(4096)
+    print(
+        f"(hann written out vs scipy's get_window at n = 4096: max gap {np.max(np.abs(0.5 - 0.5 * np.cos(2 * np.pi * k / 4096) - taper('hann', 4096))):.1e}.)\n"
+    )
+    print(
+        "| nperseg | overlap | window | segments | welch abs | welch rel | periodogram abs | periodogram rel | EW (beta=0.9) vs spectrogram abs | rel |"
+    )
+    print("|---|---|---|---|---|---|---|---|---|---|")
+    x = two_sines(SPEC_N, 0)
+    worst = {}
+    for nps in SPEC_SEGMENTS:
+        for ov in (0, nps // 2):
+            for wname in ("hann", "boxcar"):
+                m = StreamingWelch(nps, ov, wname)
+                checks = set(np.linspace(nps, SPEC_N, 12).astype(int)) | {SPEC_N}
+                g = np.zeros(6)
+                for i in range(SPEC_N):
+                    m.update(x[i])
+                    t = i + 1
+                    if t in checks:
+                        _, pw = scipy.signal.welch(
+                            x[:t],
+                            FS,
+                            window=wname,
+                            nperseg=nps,
+                            noverlap=ov,
+                            detrend="constant",
+                            scaling="density",
+                        )
+                        a, r = spec_gap(m.welch(), pw)
+                        g[0], g[1] = max(g[0], a), max(g[1], r)
+                        # the latest segment is x[s:s+nps], s the last segment start <= t - nps
+                        s0 = (t - nps) // m.hop * m.hop
+                        _, pp = scipy.signal.periodogram(
+                            x[s0 : s0 + nps],
+                            FS,
+                            window=wname,
+                            detrend="constant",
+                            scaling="density",
+                        )
+                        a, r = spec_gap(m.last, pp)
+                        g[2], g[3] = max(g[2], a), max(g[3], r)
+                        _, _, sx = scipy.signal.spectrogram(
+                            x[:t],
+                            FS,
+                            window=wname,
+                            nperseg=nps,
+                            noverlap=ov,
+                            detrend="constant",
+                            scaling="density",
+                            mode="psd",
+                        )
+                        k = sx.shape[1]
+                        wt = m.beta ** np.arange(k - 1, -1, -1)
+                        a, r = spec_gap(m.ew(), sx @ wt / wt.sum())
+                        g[4], g[5] = max(g[4], a), max(g[5], r)
+                worst[(nps, ov, wname)] = g
+                print(
+                    f"| {nps} | {ov} | {wname} | {m.m} | "
+                    + " | ".join(f"{v:.1e}" for v in g)
+                    + " |"
+                )
+
+
+def section_welch_zero_weight() -> None:
+    print("\n## Welch with zero-weight rows (10% weight 0, half NaN; others U(0.5, 1.5))\n")
+    n, nps = 8192, 256
+    x = two_sines(n, 1)
+    rng = np.random.default_rng(7)
+    w = rng.uniform(0.5, 1.5, n)
+    z = rng.choice(n, n // 10, replace=False)
+    w[z] = 0.0
+    x = x.copy()
+    x[z[: len(z) // 2]] = np.nan
+    w[:3] = 0.0  # the stream opens on zero-weight rows
+    x[0] = np.nan
+    # one whole segment of zero weight
+    w[2048 : 2048 + nps] = 0.0
+    print(
+        "| overlap | window | welch rel vs scipy periodogram per segment (window = win*sqrt(w), detrend=False on x - m_w) | EW rel | NaN in state | segments kept / seen |"
+    )
+    print("|---|---|---|---|---|---|")
+    for ov in (0, nps // 2):
+        for wname in ("hann", "boxcar"):
+            m = StreamingWelch(nps, ov, wname)
+            for i in range(n):
+                m.update(x[i], w[i])
+            hop = nps - ov
+            segs, wts = [], []
+            starts = range(0, n - nps + 1, hop)
+            for j, s0 in enumerate(starts):
+                xs, ws = x[s0 : s0 + nps], w[s0 : s0 + nps]
+                live = ws > 0
+                if not live.any():
+                    continue
+                xx = np.where(live, xs, 0.0)
+                mw = np.sum(ws[live] * xx[live]) / np.sum(ws[live])
+                _, pp = scipy.signal.periodogram(
+                    xx - mw,
+                    FS,
+                    window=taper(wname, nps) * np.sqrt(ws),
+                    detrend=False,
+                    scaling="density",
+                )
+                segs.append(pp)
+                wts.append(m.beta ** (len(starts) - 1 - j))
+            segs = np.array(segs)
+            _, rw = spec_gap(m.welch(), segs.mean(0))
+            wts = np.array(wts)
+            _, re = spec_gap(m.ew(), wts @ segs / wts.sum())
+            nan = any(np.isnan(a).any() for a in (m.p_sum, m.p_ew, np.array([m.z])))
+            print(f"| {ov} | {wname} | {rw:.1e} | {re:.1e} | {nan} | {m.m} / {len(starts)} |")
+    # w = 1 everywhere with weights passed: identical to the unweighted path, to the bit
+    m1, m2 = StreamingWelch(nps, nps // 2, "hann"), StreamingWelch(nps, nps // 2, "hann")
+    xa = two_sines(4096, 2)
+    for v in xa:
+        m1.update(v)
+        m2.update(v, 1.0)
+    print(
+        f"\nUnit weights passed explicitly equal the default to the bit: {np.array_equal(m1.welch(), m2.welch())}."
+    )
+
+
+def ls_oracle(t, y, w, om, normalize, floating_mean):
+    live = w > 0
+    return scipy.signal.lombscargle(
+        t[live], y[live], om, normalize=normalize, weights=w[live], floating_mean=floating_mean
+    )
+
+
+def section_lomb_scargle() -> None:
+    from astropy.timeseries import LombScargle
+
+    print("\n## Lomb-Scargle normalisation: scipy vs astropy (slow method), 2000 jittered rows\n")
+    rng = np.random.default_rng(3)
+    n, dt = 2000, 1.0 / FS
+    t = (np.arange(n) + rng.uniform(-0.3, 0.3, n)) * dt
+    y = (
+        3.0
+        + np.sin(2 * np.pi * 0.73 * t)
+        + 0.5 * np.sin(2 * np.pi * 2.1 * t + 1.0)
+        + rng.standard_normal(n)
+    )
+    f = np.linspace(0.05, FS / 2, 64)
+    om = 2 * np.pi * f
+    print("| scipy lombscargle | astropy LombScargle | rel gap |")
+    print("|---|---|---|")
+    for fm in (False, True):
+        for sn, an in (("power", "psd"), ("normalize", "standard")):
+            ps = scipy.signal.lombscargle(t, y, om, normalize=sn, floating_mean=fm)
+            pa = LombScargle(t, y, fit_mean=fm, center_data=fm, normalization=an).power(
+                f, method="slow"
+            )
+            print(
+                f"| normalize='{sn}', floating_mean={fm} | normalization='{an}', fit_mean={fm}, center_data={fm} | {spec_gap(ps, pa)[1]:.1e} |"
+            )
+    # astropy's default center_data=True with fit_mean=False vs scipy on y - mean
+    ps = scipy.signal.lombscargle(t, y - y.mean(), om, normalize="normalize")
+    pa = LombScargle(t, y, fit_mean=False, center_data=True).power(f, method="slow")
+    print(
+        f"| normalize='normalize' on y - mean(y) | astropy defaults but fit_mean=False | {spec_gap(ps, pa)[1]:.1e} |"
+    )
+    ps = scipy.signal.lombscargle(t, y, om, normalize="normalize", floating_mean=True)
+    pa = LombScargle(t, y).power(f, method="slow")
+    print(
+        f"| normalize='normalize', floating_mean=True | astropy defaults (standard, fit_mean, center_data) | {spec_gap(ps, pa)[1]:.1e} |"
+    )
+
+    print(
+        "\n## Streaming Lomb-Scargle over the last W rows vs scipy.signal.lombscargle on the window's rows\n"
+    )
+    print(
+        "Clock t_i = (i + u_i) / fs, u_i ~ U(-0.3, 0.3) (30% jitter), 64 frequencies 0.05..5 Hz; N = 4 W + 37 rows; 9 reads."
+    )
+    print(
+        "Gap: worst over the reads and the four (normalize, floating_mean) forms. 'raw t' gives scipy the times as they"
+    )
+    print("came; 'rebased' gives it t - t_oldest, the stream's own origin.\n")
+    print(
+        "Columns 4 to 7 leave out the last frequency, the Nyquist (5 Hz), which has its own two columns.\n"
+    )
+    print(
+        "| W | jitter | recompute every W | rel vs scipy (raw t) | abs | rel vs scipy (rebased) | no-recompute rel (raw t) | Nyquist rel vs scipy | Nyquist rel vs written out |"
+    )
+    print("|---|---|---|---|---|---|---|---|---|")
+    for W in SPEC_SEGMENTS:
+        for jit in (0.3, 0.0):
+            n = 4 * W + 37
+            rng = np.random.default_rng(11)
+            t = (np.arange(n) + rng.uniform(-jit, jit, n)) * dt
+            y = (
+                3.0
+                + np.sin(2 * np.pi * 0.73 * t)
+                + 0.5 * np.sin(2 * np.pi * 2.1 * t + 1.0)
+                + rng.standard_normal(n)
+            )
+            w = np.ones(n)
+            reads = set(np.linspace(W // 2, n, 9).astype(int))
+            res = []
+            for rec in (True, False):
+                m = StreamingLombScargle(om, W, recompute=rec)
+                g = np.zeros(5)
+                for i in range(n):
+                    m.update(t[i], y[i], w[i])
+                    if i + 1 in reads:
+                        lo = max(0, i + 1 - W)
+                        tw, yw, ww = t[lo : i + 1], y[lo : i + 1], w[lo : i + 1]
+                        for sn in ("power", "normalize"):
+                            for fm in (False, True):
+                                ours = m.power(sn, fm)
+                                ref = ls_oracle(tw, yw, ww, om, sn, fm)
+                                scale = np.max(np.abs(ref))
+                                d = np.abs(ours - ref)
+                                g[0], g[1] = (
+                                    max(g[0], d[:-1].max() / scale),
+                                    max(g[1], d[:-1].max()),
+                                )
+                                ref2 = ls_oracle(tw - tw[0], yw, ww, om, sn, fm)
+                                g[2] = max(
+                                    g[2], np.abs(ours - ref2)[:-1].max() / np.max(np.abs(ref2))
+                                )
+                                g[3] = max(g[3], d[-1] / scale)
+                                if (
+                                    jit == 0.0
+                                ):  # the Nyquist written out: the cosine column alone, (-1)^i
+                                    c, yy, sw = (
+                                        (-1.0) ** np.arange(lo, i + 1),
+                                        yw.copy(),
+                                        ww / ww.sum(),
+                                    )
+                                    if fm:
+                                        c, yy = c - sw @ c, yy - sw @ yy
+                                    q = (sw @ (yy * c)) ** 2 / (sw @ (c * c))
+                                    ex = (
+                                        0.5 * len(yw) * q if sn == "power" else q / (sw @ (yy * yy))
+                                    )
+                                    g[4] = max(g[4], abs(ours[-1] - ex) / scale)
+                res.append(g)
+            nyq_ex = f"{res[0][4]:.1e}" if jit == 0.0 else "n/a"
+            print(
+                f"| {W} | {jit} | yes | {res[0][0]:.1e} | {res[0][1]:.1e} | {res[0][2]:.1e} | {res[1][0]:.1e} | {res[0][3]:.1e} | {nyq_ex} |"
+            )
+
+    print("\n### Zero-weight rows and a long stream (W = 256)\n")
+    W, n = 256, 20000
+    rng = np.random.default_rng(5)
+    t = (np.arange(n) + rng.uniform(-0.3, 0.3, n)) * dt
+    y = 3.0 + np.sin(2 * np.pi * 0.73 * t) + rng.standard_normal(n)
+    w = rng.uniform(0.5, 1.5, n)
+    z = rng.choice(n, n // 10, replace=False)
+    w[z] = 0.0
+    y[z[::2]] = np.nan
+    w[:2], y[0] = 0.0, np.nan
+    w[5000 : 5000 + W] = 0.0  # one whole window of weight 0
+    for rec in (True, False):
+        m = StreamingLombScargle(om, W, recompute=rec)
+        worst, nan_state, empty_nan = 0.0, False, None
+        for i in range(n):
+            m.update(t[i], y[i], w[i])
+            nan_state |= bool(np.isnan(m.s).any() or np.isnan(m.g).any())
+            if i + 1 == 5000 + W:
+                empty_nan = bool(np.isnan(m.power()).all())
+            if (i + 1) % 997 == 0 and i + 1 != 5000 + W:
+                lo = max(0, i + 1 - W)
+                if (w[lo : i + 1] > 0).any():
+                    for sn in ("power", "normalize"):
+                        for fm in (False, True):
+                            worst = max(
+                                worst,
+                                spec_gap(
+                                    m.power(sn, fm),
+                                    ls_oracle(
+                                        t[lo : i + 1], y[lo : i + 1], w[lo : i + 1], om, sn, fm
+                                    ),
+                                )[1],
+                            )
+        print(
+            f"- recompute={rec}: {n} rows, 10% weight 0 (half NaN), weights U(0.5, 1.5): worst rel vs scipy (weights=w on the w > 0 rows) {worst:.1e}; NaN in the sums: {nan_state}; a window of only weight-0 rows reads NaN (no fit): {empty_nan}."
+        )
+
+
+def section_spectral_cost() -> None:
+    print("\n## Cost (numpy, this machine) and state bytes\n")
+    print(
+        "| nperseg / W | overlap | Welch state B | Welch us/row (amortised, hop rows per FFT) | one segment (FFT) us | Welch read us | LS state B (F=64) | LS us/row | LS read us | LS rebuild us (every W rows) |"
+    )
+    print("|---|---|---|---|---|---|---|---|---|---|")
+    om = 2 * np.pi * np.linspace(0.05, FS / 2, 64)
+    for nps in SPEC_SEGMENTS:
+        n = max(8 * nps, 16384)
+        x = two_sines(n, 0)
+        for ov in (0, nps // 2):
+            m = StreamingWelch(nps, ov, "hann")
+            t0 = time.perf_counter()
+            for i in range(n):
+                m.update(x[i])
+            per_row = (time.perf_counter() - t0) / n * 1e6
+            ws = np.ones(nps)
+            t0 = time.perf_counter()
+            for _ in range(200):
+                segment_periodogram(x[:nps], ws, m.win, FS)
+            seg = (time.perf_counter() - t0) / 200 * 1e6
+            t0 = time.perf_counter()
+            for _ in range(2000):
+                m.welch()
+            rd = (time.perf_counter() - t0) / 2000 * 1e6
+            if ov == 0:
+                ls = StreamingLombScargle(om, nps)
+                tt = np.arange(n) / FS
+                t0 = time.perf_counter()
+                for i in range(n):
+                    ls.update(tt[i], x[i])
+                ls_row = (time.perf_counter() - t0) / n * 1e6
+                t0 = time.perf_counter()
+                for _ in range(2000):
+                    ls.power("power", True)
+                ls_rd = (time.perf_counter() - t0) / 2000 * 1e6
+                t0 = time.perf_counter()
+                for _ in range(20):
+                    ls._rebuild()
+                ls_rb = (time.perf_counter() - t0) / 20 * 1e6
+                lsc = f"{ls.nbytes} | {ls_row:.1f} | {ls_rd:.1f} | {ls_rb:.0f}"
+            else:
+                lsc = " | | | "
+            print(f"| {nps} | {ov} | {m.nbytes} | {per_row:.2f} | {seg:.1f} | {rd:.2f} | {lsc} |")
+
+
+def part_spectral() -> None:
+    t0 = time.perf_counter()
+    section_welch()
+    section_welch_zero_weight()
+    section_lomb_scargle()
+    section_spectral_cost()
+    print(f"\n(part 2 ran in {time.perf_counter() - t0:.0f} s)")
+
+
 if __name__ == "__main__":
     parts = sys.argv[1:] or ["ar"]
     if "ar" in parts:
         part_ar()
+    if "spectral" in parts:
+        part_spectral()
