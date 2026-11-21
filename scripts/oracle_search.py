@@ -781,6 +781,53 @@ for (m in c("DCC", "aDCC")) {
     report("493/514", "DCC / ADCC Q recursion given (a, b, g) and the conditional vols", f"R rmgarch {rver('rmgarch')} (GPL)", out, "T=1500, N=2, simulated ADCC(0.05, 0.90, 0.03) with GARCH(1,1) vols; rmgarch's own Q_t, sigma_t, estimates")
 
 
+def spiegelhalter_def(y, p):
+    """Spiegelhalter 1986: Z = sum (y - p)(1 - 2p) / sqrt(sum (1 - 2p)^2 p (1 - p)); two-sided normal p-value."""
+    from scipy import stats
+
+    z = float(np.sum((y - p) * (1 - 2 * p)) / np.sqrt(np.sum((1 - 2 * p) ** 2 * p * (1 - p))))
+    return z, float(2 * stats.norm.sf(abs(z)))
+
+
+@check
+def r_rms_spiegelhalter():
+    rng = np.random.default_rng(12)
+    n = 500
+    p = np.clip(rng.beta(2, 5, n), 0.01, 0.99)
+    y = (rng.uniform(size=n) < np.clip(p * 1.15, 0, 1)).astype(float)  # slightly miscalibrated
+    code = """
+suppressMessages(library(rms))
+v <- val.prob(p, y, pl=FALSE)
+f("z", v["S:z"]); f("pval", v["S:p"]); f("brier", v["Brier"])
+"""
+    R = run_r(code, p=p, y=y)
+    z, pv = spiegelhalter_def(y, p)
+    report("520", "Spiegelhalter calibration z-test", f"R rms {rver('rms')} (GPL), val.prob", {"|z gap|": abs(R["z"] - z), "|p gap|": abs(R["pval"] - pv), "Brier gap": abs(R["brier"] - float(np.mean((p - y) ** 2)))}, "500 predictions from Beta(2,5), outcomes at 1.15 p; rms 6.8-1 built from the CRAN archive (R 4.3.3)")
+
+
+@check
+def r_expectreg():
+    rng = np.random.default_rng(5)
+    n, tau = 400, 0.3
+    X = rng.standard_normal((n, 3))
+    y = 1.0 + X @ np.array([1.0, -2.0, 0.5]) + rng.standard_t(4, n)
+    A = np.column_stack([np.ones(n), X])
+    b = np.linalg.lstsq(A, y, rcond=None)[0]
+    for _ in range(200):  # IRLS fixed point of the asymmetric least squares loss
+        w = np.where(y - A @ b < 0, 1 - tau, tau)
+        b = np.linalg.solve(A.T @ (w[:, None] * A), A.T @ (w * y))
+    code = """
+suppressMessages(library(expectreg))
+d <- data.frame(y=y, x1=x1, x2=x2, x3=x3)
+fit <- expectreg.ls(y ~ rb(x1, "parametric") + rb(x2, "parametric") + rb(x3, "parametric"), data=d, expectiles=0.3, estimate="laws")
+f("c1", fit$intercept)
+for (i in 1:3) f(paste0("c", i + 1), fit$coefficients[[i]][1, 1])
+"""
+    R = run_r(code, y=y, x1=X[:, 0], x2=X[:, 1], x3=X[:, 2])
+    got = np.array([R[f"c{i + 1}"] for i in range(4)])
+    report("501", "expectile regression (linear terms)", f"R expectreg {rver('expectreg')} (GPL)", {"max |coef - definition|": float(np.max(np.abs(got - b)))}, "same 400 rows as the pygam check, tau=0.3")
+
+
 def main(argv):
     names = argv or list(CHECKS)
     for n in names:
