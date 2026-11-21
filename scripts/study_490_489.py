@@ -1135,6 +1135,162 @@ def summarise2(res):
         )
 
 
+def _windows_matrix(y, W):
+    """Column t - W + 1 holds the window ending at row t (W x (N - W + 1))."""
+    from numpy.lib.stride_tricks import sliding_window_view
+
+    return np.ascontiguousarray(sliding_window_view(y, W).T)
+
+
+def part3(args):
+    out = {"versions": _versions()}
+    period = 24
+    N = 2400
+    y = make_series(N, [period], seed=4903)
+    full = _sm_stl(y, period, {})
+    amp = float(np.std(full["seasonal"]))
+    trend_sd = float(np.std(np.diff(full["trend"])))
+    nt = STLPort(10 * period, period).cfg["trend"]
+    Wmax = 20 * period
+    lo, hi = Wmax, N - Wmax  # rows whose full-history value is far from both ends
+    emb = []
+    for m in (2, 4, 7, 10, 20):
+        W = m * period
+        port = STLPort(W, period)
+        S_op, T_op = port.operator()
+        Y = _windows_matrix(y, W)  # column c: window ending at row c + W - 1
+        Sw = S_op @ Y
+        Tw = T_op @ Y
+        ends = np.arange(W - 1, N)
+        per_h = []
+        for h in range(W):
+            pos = W - 1 - h
+            rows = ends - h
+            sel = (rows >= lo) & (rows < hi)
+            ds = Sw[pos, sel] - full["seasonal"][rows[sel]]
+            dt = Tw[pos, sel] - full["trend"][rows[sel]]
+            # revision: the same row's value from the next window (one more row seen)
+            if h + 1 < W:
+                nxt = Sw[pos - 1, 1:] if pos >= 1 else None
+                rv = Sw[pos, :-1] - nxt
+                rv = rv[sel[:-1]]
+                rev = float(np.sqrt(np.mean(rv**2)))
+            else:
+                rev = float("nan")
+            per_h.append(
+                {
+                    "h": h,
+                    "seasonal_rms": float(np.sqrt(np.mean(ds**2))),
+                    "seasonal_max": float(np.max(np.abs(ds))),
+                    "trend_rms": float(np.sqrt(np.mean(dt**2))),
+                    "trend_max": float(np.max(np.abs(dt))),
+                    "seasonal_revision_rms": rev,
+                }
+            )
+        best = min(per_h, key=lambda r: r["seasonal_rms"] + r["trend_rms"])
+        emb.append({"m": m, "W": W, "per_h": per_h, "best_h": best["h"]})
+    out["embargo"] = {"period": period, "N": N, "trend": nt, "seasonal_amp_sd": amp,
+                      "rows_compared": [lo, hi], "windows": emb, "trend_step_sd": trend_sd}
+
+    # influence reach of one row on another in the full fit (n = 480), central row
+    n = 20 * period
+    port = STLPort(n, period)
+    S_op, T_op = port.operator()
+    i = n // 2
+    reach = {}
+    for name, M in (("seasonal", S_op), ("trend", T_op)):
+        row = np.abs(M[i])
+        d = np.abs(np.arange(n) - i)
+        tot = row.sum()
+        r = {"l1": float(tot), "nonzero_max_distance": int(d[row > 0].max())}
+        for tol in (1e-3, 1e-6, 1e-9, 1e-12):
+            # smallest D with the mass beyond D below tol of the total
+            ok = [D for D in range(n) if row[d > D].sum() <= tol * tot]
+            r[f"D_{tol:g}"] = int(ok[0])
+        reach[name] = r
+    out["reach"] = {"n": n, "row": i, **reach}
+
+    # robust loop and iteration counts: port against statsmodels, window by window
+    rob = []
+    yo = make_series(24 * 12, [24], seed=4904, outliers=0.03)
+    for label, W, kw, robust, inner, outer in [
+        ("robust defaults (inner 2, outer 15)", 96, {}, True, None, None),
+        ("robust inner 1 outer 5, seasonal 13", 168, {"seasonal": 13}, True, 1, 5),
+        ("robust, jumps 3/5/4", 120, {"seasonal_jump": 3, "trend_jump": 5, "low_pass_jump": 4}, True, None, None),
+        ("not robust, outer 3 (weights used)", 96, {}, False, 5, 3),
+        ("inner 1", 96, {}, False, 1, None),
+        ("inner 2", 96, {}, False, 2, None),
+        ("inner 10", 96, {}, False, 10, None),
+    ]:
+        port = STLPort(W, 24, **kw)
+        acc = {}
+        nwin = 0
+        for t in range(W - 1, yo.size, args.robust_stride):
+            win = yo[t - W + 1 : t + 1]
+            orc = _sm_stl(win, 24, kw, robust=robust, inner=inner, outer=outer)
+            mine = port.fit(win, inner=inner, outer=outer, robust=robust)
+            _merge(acc, _cmp_fit(mine, orc, ("seasonal", "trend", "resid", "weights")))
+            nwin += 1
+        rob.append({"label": label, "W": W, "windows": nwin, "vs_sm": acc,
+                    "port_ms": _time(lambda: port.fit(win, inner=inner, outer=outer, robust=robust), args.time_budget) * 1e3,
+                    "statsmodels_ms": _time(lambda: _sm_stl(win, 24, kw, robust, inner, outer), args.time_budget) * 1e3})
+    out["robust"] = rob
+    # how far the inner loop is from converged: inner 5 against inner 50, one window
+    win = y[:96]
+    p5 = STLPort(96, 24).fit(win, inner=5)
+    p50 = STLPort(96, 24).fit(win, inner=50)
+    out["inner_convergence"] = {c: float(np.max(np.abs(p5[c] - p50[c]))) for c in ("seasonal", "trend")}
+    out["inner_convergence"]["seasonal_sd"] = float(np.std(p50["seasonal"]))
+
+    # state size
+    out["state"] = state_table()
+    return out
+
+
+def state_table():
+    """Bytes per group and target, and per spec, as functions of p and W = m p."""
+    rows = []
+    for p in (7, 12, 24, 52, 168, 288, 1440):
+        for m in (4, 7, 10):
+            W = m * p
+            rows.append({
+                "period": p, "m": m, "W": W,
+                # ring of W doubles + head + count + the last clock (a break empties the ring)
+                "ring_bytes_per_group": 8 * W + 24,
+                # kernels: seasonal and trend rows at one lag, shared by every group of a spec
+                "kernel_bytes_per_spec_one_lag": 2 * 8 * W,
+                # robust: statsmodels' scratch for one fit, freed after (not state)
+                "robust_scratch_bytes": 8 * (7 * (W + 2 * p) + 3 * W),
+            })
+    return rows
+
+
+def summarise3(res):
+    e = res["embargo"]
+    print(f"== embargo: period {e['period']}, trend {e['trend']}, seasonal sd {e['seasonal_amp_sd']:.3f},"
+          f" rows {e['rows_compared']}")
+    nt = e["trend"]
+    for w in e["windows"]:
+        W = w["W"]
+        hs = sorted({0, 12, (nt - 1) // 2, nt, W // 2, W - 1, w["best_h"]} & set(range(W)))
+        print(f"  W {W} ({w['m']} periods), best h {w['best_h']}:")
+        for h in hs:
+            r = w["per_h"][h]
+            print(f"    h {h:>4}: seasonal rms {r['seasonal_rms']:.2e} max {r['seasonal_max']:.2e};"
+                  f" trend rms {r['trend_rms']:.2e} max {r['trend_max']:.2e}; revision rms {r['seasonal_revision_rms']:.2e}")
+    r = res["reach"]
+    print(f"== reach (n {r['n']}, row {r['row']}):", {k: r[k] for k in ("seasonal", "trend")})
+    for x in res["robust"]:
+        parts = [f"{c[:5]} {a['bit_equal']}/{a['n']} max {a['max_abs']:.1e}" for c, a in x["vs_sm"].items()]
+        print(f"  {x['label']:<38} W {x['W']} windows {x['windows']}: " + "; ".join(parts)
+              + f"; port {x['port_ms']:.1f} ms, sm {x['statsmodels_ms']:.2f} ms")
+    print("  inner 5 vs inner 50:", res["inner_convergence"])
+    for s_ in res["state"]:
+        if s_["m"] == 4:
+            print(f"  p {s_['period']:>5} W {s_['W']:>5}: ring {s_['ring_bytes_per_group']} B, kernels {s_['kernel_bytes_per_spec_one_lag']} B,"
+                  f" robust scratch {s_['robust_scratch_bytes']} B")
+
+
 # ------------------------------------------------------------------------- data
 
 
@@ -1173,6 +1329,7 @@ def _versions():
 PARTS = {
     "part1": (part1, summarise1),
     "part2": (part2, summarise2),
+    "part3": (part3, summarise3),
 }
 
 
@@ -1182,6 +1339,7 @@ def main(argv=None):
     ap.add_argument("--out", default=os.path.join(".cache", "study_490_489"))
     ap.add_argument("--stl-rows", type=int, default=240, help="rows after the first full window")
     ap.add_argument("--variant-stride", type=int, default=8, help="windows between variant fits")
+    ap.add_argument("--robust-stride", type=int, default=2, help="windows between robust fits")
     ap.add_argument("--time-budget", type=float, default=0.5, help="seconds per timed case")
     ap.add_argument("--force", action="store_true", help="recompute a part whose result exists")
     args = ap.parse_args(argv)
