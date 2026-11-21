@@ -67,17 +67,32 @@ class TestWeights:
         ):
             _run(df, _spec(weight="w"))
 
-    def test_zero_weight_is_a_pure_decay_row(self):
-        # w = 0 is legal and means "advance the clock, learn nothing".
-        df = pl.DataFrame({"x0": [1.0, 99.0, 2.0], "y0": [1.0, 99.0, 2.0], "w": [1.0, 0.0, 1.0]})
-        out = _run(df, _spec(weight="w"))
-        skipped = _run(
-            pl.DataFrame({"x0": [1.0, 99.0, 2.0], "y0": [1.0, None, 2.0], "w": [1.0, 0.0, 1.0]}),
-            _spec(weight="w"),
-        )
-        # The zero-weight row contributes nothing, so the final prediction is
-        # the same as if its target had been null.
-        assert _f(out, "pred_y0")[2] == _f(skipped, "pred_y0")[2]
+    @pytest.mark.parametrize(("model", "extra"), MODELS, ids=[m for m, _ in MODELS])
+    def test_zero_weight_is_a_pure_decay_row(self, model, extra):
+        """w = 0 is legal and means "advance the clock, learn nothing": a
+        zero-weight row with a far target is the same row with its target
+        null, so every row after it reads the same, to the bit. Under a short
+        half-life and no `min_weight`, so the rows after it predict and the
+        comparison is of numbers (review S8: at `min_weight = 1` every
+        prediction compared was null in both streams)."""
+        n, at = 12, 4
+        x = [0.5 + 0.25 * i + 0.1 * (-1) ** i for i in range(n)]
+        y = [1.0 + 2.0 * v + 0.05 * (-1) ** (i // 2) for i, v in enumerate(x)]
+        w = [1.0] * n
+        if model == "ftrl":
+            y = [float(v > 2.5) for v in y]
+        x[at], y[at], w[at] = 99.0, (1.0 if model == "ftrl" else -500.0), 0.0
+        df = pl.DataFrame({"x0": x, "y0": y, "w": w})
+        spec = _spec(model, weight="w", half_life=5.0, min_weight=0.0, **extra)
+        out = _run(df, spec)
+        nulled = _run(df.with_columns(y0=pl.when(pl.int_range(n) == at).then(None)
+                                      .otherwise(pl.col("y0"))), spec)  # fmt: skip
+        preds = _f(out, "pred_y0")
+        assert all(p is not None for p in preds[at + 1 :]), f"{model}: {preds}"
+        assert preds[at + 1 :] == _f(nulled, "pred_y0")[at + 1 :], model
+        assert _f(out, "weight_sum") == _f(nulled, "weight_sum"), model
+        later = out["m"].slice(at + 1)
+        assert later.equals(nulled["m"].slice(at + 1), null_equal=True), model
 
     @pytest.mark.parametrize(("model", "extra"), MODELS, ids=[m for m, _ in MODELS])
     def test_leading_zero_weight_rows_do_not_disable_the_model(self, model, extra):
@@ -227,11 +242,22 @@ class TestNonFinite:
 
     @pytest.mark.parametrize("bad", [INF, -INF, np.nan])
     def test_non_finite_target_is_treated_as_null(self, bad):
-        df = pl.DataFrame({"x0": [1.0, 2.0, 3.0], "y0": [1.0, bad, 3.0]})
-        out = _run(df)
-        # predict-only: the row is counted, but contributes no target information
+        """Predict-only: the row is counted, and contributes no target
+        information, so every row after it is the null-target stream's, to
+        the bit, and a finite target there would have moved them (review
+        S16: row 1 is withheld either way, so the two assertions held with
+        a finite target too)."""
+        x = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]
+        y = [1.0, 2.5, 3.0, 4.5, 5.0, 6.5, 7.0]
+        frame = lambda y1: pl.DataFrame({"x0": x, "y0": [y[0], y1, *y[2:]]})  # noqa: E731
+        out, nulled, finite = _run(frame(bad)), _run(frame(None)), _run(frame(50.0))
         assert _f(out, "weight_sum")[2] == pytest.approx(2.0)
         assert _f(out, "resid_y0")[1] is None
+        later = out["m"].slice(2)
+        assert later.equals(nulled["m"].slice(2), null_equal=True)
+        preds = _f(out, "pred_y0")[2:]
+        assert any(p is not None for p in preds), preds
+        assert preds != _f(finite, "pred_y0")[2:], "a finite target there moves them"
 
     @pytest.mark.parametrize("bad", [INF, -INF, np.nan])
     def test_non_finite_weight_skips_the_row(self, bad):

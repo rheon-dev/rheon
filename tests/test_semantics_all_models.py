@@ -247,6 +247,32 @@ class TestWarmup:
         out = run(model, extra, df, min_weight=0.0)
         assert slot(out, "weight_sum", model)[0] == 0.0
 
+    def test_min_weight_reads_the_weight_before_the_rows_decay(self, model, extra):
+        """Hard rule 8, at a threshold that tells the two readings apart
+        (review S7). Under a half-life of 2 rows, `lam = 2^-1/2`, the weight
+        before rows 1, 2 and 3 is 1, 1.707 and 2.207, so `min_weight = 1.5`
+        first holds on row 2. A gate that read the weight after the row's
+        own decay, `lam` times it, would see 0.707, 1.207 and 1.561 and open
+        a row late, on row 3. At a half-life of 200 and the thresholds above
+        the two readings open on the same row, so they could not tell.
+        The gate's verdict is read from `withheld_reason`, since `huber` and
+        `quantile` have no fit to read on row 2 whatever the gate says (at
+        `min_weight = 0` too); where a model predicts on row 2, the
+        prediction is checked as well. `ewridge`'s noise gate is off: two
+        rows for three coefficients leave no residual degrees of freedom."""
+        df = frame(binary=model == "ftrl")
+        gate = {"max_error_inflation": float("inf")} if model == "ewridge" else {}
+        out = run(model, extra, df, half_life=2.0, min_weight=1.5, **gate)
+        neff = slot(out, "weight_sum", model)
+        lam = 0.5**0.5
+        np.testing.assert_allclose(neff[:4], [0.0, 1.0, 1.0 + lam, 1.0 + lam + lam**2], rtol=1e-12)
+        why = slot(out, "withheld_reason", model)
+        below = [r == "below_min_weight" for r in why[:4]]
+        assert below == [True, True, False, False], f"{model}: {why[:4]}, weight_sum {neff[:4]}"
+        preds = slot(out, "pred_", model)
+        if model not in ("huber", "quantile"):
+            assert preds[2] is not None, f"{model}: no prediction on row 2"
+
 
 @pytest.mark.parametrize(("model", "extra"), SWEEP, ids=IDS)
 class TestClockSemantics:
