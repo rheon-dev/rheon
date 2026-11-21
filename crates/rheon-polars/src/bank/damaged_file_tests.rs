@@ -917,3 +917,32 @@ fn the_decoders_own_failures_are_said_in_plain_words() {
          short. Load a whole file that ModelBank.save or the command line's save_state wrote."
     );
 }
+
+/// Review P7: a Huber state whose saved cfg reads `emit_scale` where the
+/// spec's does not loaded, and its first row wrote a scale into buffers the
+/// spec sized without one: a panic. It is refused at load, as a model of
+/// another shape is.
+#[test]
+fn a_huber_state_that_emits_a_scale_its_spec_does_not_is_refused() {
+    let huber = |emit: bool| {
+        spec(&format!(
+            r#"{{"name": "m", "model": {{"type": "huber", "emit_huber_scale": {emit}}},
+                "targets": ["y"], "features": ["x"], "group": "g", "half_life": 10.0}}"#
+        ))
+    };
+    let mut with = Bank::new(vec![huber(true)]).unwrap();
+    with.fit_predict(&frame()).unwrap();
+    let theirs: BankFile = rmp_serde::from_slice(&with.save_bytes().unwrap()).unwrap();
+    let mut without = Bank::new(vec![huber(false)]).unwrap();
+    without.fit_predict(&frame()).unwrap();
+    let bytes = without.save_bytes().unwrap();
+    let damaged = reencoded(&bytes, |f| {
+        f.states[0][0].1.models[0].model = theirs.states[0][0].1.models[0].model.clone();
+    });
+    let e = Bank::load_bytes(&damaged, None).map(drop).unwrap_err();
+    assert!(e.contains("it is damaged, since its saved model"), "{e}");
+    Bank::load_bytes(&bytes, None)
+        .unwrap()
+        .fit_predict(&frame())
+        .unwrap();
+}

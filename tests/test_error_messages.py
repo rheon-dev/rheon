@@ -1692,3 +1692,64 @@ def test_a_mismatched_spec_on_load_is_named():
         "half_life: 20.0 in the file, 25.0 in the bank. Load the state with the specs it was "
         "saved with."
     )
+
+
+# --- review P11: a NUL character in a name ------------------------------------
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        "spec name",
+        "target name",
+        "formula target name",
+        "bank input column",
+        "with_windows output",
+        "with_windows input column",
+    ],
+)
+def test_a_nul_in_a_name_is_refused_not_a_panic(call):
+    """A NUL character in a spec's, a target's or an output's name, or in a
+    column of a frame handed over, panicked in the Arrow export, whose names
+    are C strings: a ``PanicException``, which ``except Exception`` does not
+    catch, after the bank had learned the chunk. Each is refused, naming
+    the name."""
+    df = pl.DataFrame({"t": [0.0, 1.0, 2.0], "x": [1.0, 2.0, 3.0], "y": [1.0, 2.0, 3.0]})
+    nul = df.with_columns(pl.col("x").alias("a\0b"))
+    forward = rp.ewm_sum("y", half_life=1.0, window_size=1.0, reverse=True)
+    calls = {
+        "spec name": lambda: rp.ModelBank(
+            [rp.spec.ewridge("m\0x", targets=["y"], features=["x"], half_life=5.0)]
+        ).fit_predict(df),
+        "target name": lambda: rp.ModelBank(
+            [
+                rp.spec.ewridge(
+                    "m", targets=[{"column": "y", "name": "p\0q"}], features=["x"], half_life=5.0
+                )
+            ]
+        ).fit_predict(df),
+        "formula target name": lambda: rp.ModelBank(
+            [
+                rp.spec.ewridge(
+                    "m",
+                    targets=[forward.alias("a\0b")],
+                    features=["x"],
+                    half_life=5.0,
+                    clock="t",
+                    gap_cap=5.0,
+                    embargo=1.0,
+                )  # fmt: skip
+            ]
+        ).fit_predict(df),
+        "bank input column": lambda: rp.ModelBank(
+            [rp.spec.ewridge("m", targets=["y"], features=["x"], half_life=5.0)]
+        ).fit_predict(nul),
+        "with_windows output": lambda: rp.stream.with_windows(
+            df, **{"a\0b": rp.ewm_sum("x", half_life=1.0)}, clock="t", gap_cap=5.0
+        ),
+        "with_windows input column": lambda: rp.stream.with_windows(
+            nul, s=rp.ewm_sum("x", half_life=1.0), clock="t", gap_cap=5.0
+        ),
+    }
+    with pytest.raises(ValueError, match="NUL character"):
+        calls[call]()

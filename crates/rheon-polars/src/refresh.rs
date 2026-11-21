@@ -650,7 +650,7 @@ impl RefreshTime {
         let (numbers, nanos) = if time_dtype.is_temporal() {
             let ns = crate::arrow::nanos_array(
                 time_col.as_materialized_series(),
-                base,
+                &crate::arrow::InputRows::from_base(base),
                 crate::arrow::NanosRole::Clock,
                 "rp.stream.refresh_time",
             )?;

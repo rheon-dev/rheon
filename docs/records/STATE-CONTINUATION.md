@@ -347,3 +347,45 @@ continues to the bit of this build's run. Narrower `full` states, `tied` and
 fixture's bytes (`v68/hmm_full_narrow`, 12 features). The current fixture
 `hmm_full` (13 features) is the factor form; every other fixture moved only
 its schema number.
+
+A twenty-first, the user's (2026-11-20, review P1: "Accept exception 21"):
+under `label_clock` a row of weight 0 with a label time is held and
+learned at that time as a zero-weight step of the clock of the labels
+learned, as `embargo` learns it, where a build before scored it and held
+nothing; and a stream whose first row is skipped starts that clock at the
+skipped row's label time (P1b), as `embargo`'s starts at its clock. The
+layout is unchanged (a held row of weight 0 is a `PendingRow` with `w = 0`)
+and there is no schema bump. A `label_clock` state of schema 67 to 69 saved
+by a build before the fix holds none of the zero-weight rows it scored whose
+label times had not passed at the save, and the rows it holds, those a full
+buffer dropped among them, were chosen without them; no loader can restore
+rows never written. It loads, re-saves its own bytes, and continues by the
+new rule from the rows it holds, every later zero-weight row held: so its
+continuation is neither the old build's nor a fresh run's of this build, and
+the state it re-saves after those rows is neither. Exactly, it continues as
+this build continues the same stream with the label times of the
+zero-weight rows before the save null (scored and not held, as the old
+build did), to the bit, but for `labels_missing`, which counts those nulls.
+A state saved after a skipped first row and before its first label was
+learned holds no start for that clock, and continues without it, as the old
+build did.
+A stream with no zero-weight row and no skipped first row, every `embargo`
+and every spec without a delay continue to the bit. Measured by
+`scripts/compare_outputs.py` against `a5c4dcef` (arm64, polars 2.0.0; 12
+models in four cases of 4,000 to 30,000 rows, 1 to 200 groups, chunks of 7
+to a whole stream, gaps, nulls, a save and load): only the weighted
+`label_clock` specs moved, by up to the whole value with nulls appearing and
+vanishing at `min_weight`, and the unweighted `label_clock` `rls`, `sgd` and
+`pa` where a group's first row was skipped; `embargo`, no delay, and the
+smoke, `kalman` and `lasso` cases 0 ulps. The current fixtures
+`bank_label_clock` and `bank_conformal_auto` of `rheon-polars` regenerated
+(their `label_frame` scores a zero-weight row on rows 7, 17, 27 and 37, and
+row 37's label time, 94, is in flight at the save at row 40;
+`bank_conformal_auto`'s unbounded buffer holds it, which
+`a_label_buffer_is_frozen_holding_a_zero_weight_row` holds non-empty); every
+other fixture, the whole of `rheon-core`'s, is byte for byte. The kept
+`v67/` and `v68/` sets of those two kinds are held by `HELD_ZERO_WEIGHT`
+(`crates/rheon-polars/tests/state_fixtures.rs`): each re-saves bytes that
+load back the same, and continues to the bit of its twin, a bank of this
+build fed the rows before the save with the zero-weight rows' label times
+null, `labels_missing` aside.

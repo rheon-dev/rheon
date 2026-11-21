@@ -998,6 +998,17 @@ def _source(
         bank = make_bank()
         seen = 0
         closed: list[pl.DataFrame] = []
+        # A closed group's row is read into `closed_groups=` or saved with
+        # the state; a learning run with neither has no reader for it, and
+        # its bank, its own, kept every closed group's row (its Gram among
+        # it) to the end of the query (review P8). `group_close` is what
+        # bounds a bank of many groups, so those rows are dropped instead.
+        discard_closed = (
+            step == "fit_predict"
+            and closed_path is None
+            and save_path is None
+            and any(s.get("group_close") is not None for s in bank.specs)
+        )
         for chunk in plan.collect_batches(chunk_size=rows, maintain_order=True):
             if n_rows is not None:
                 chunk = chunk.head(n_rows - seen)
@@ -1014,6 +1025,8 @@ def _source(
                 drained = bank.closed_groups()
                 if drained.height:
                     closed.append(drained)
+            elif discard_closed:
+                bank.closed_groups()
             if predicate is not None:
                 out = out.filter(predicate)
             if with_columns is not None:

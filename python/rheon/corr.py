@@ -320,7 +320,7 @@ def nearest(
         An entry of ``a`` that is not finite; a Gram column, other than the
         intercept, with no variance; ``a`` not square; ``w`` without one
         weight per column, or with a weight that is not finite and above 0;
-        ``max_iter`` below 1.
+        ``max_iter`` below 1; ``tol`` not above 0.
 
     .. rubric:: Examples
 
@@ -386,6 +386,15 @@ def nearest(
         msg = (
             f"rheon.corr.nearest: max_iter must be at least 1, but it is {max_iter}. "
             "Set max_iter to 1 or more."
+        )
+        raise ValueError(msg)
+    # A relative change is never below 0, so a `tol` at or below it is never
+    # met, and the run went on to `max_iter` with nothing said (review
+    # fable2, Y5).
+    if not tol > 0.0:
+        msg = (
+            f"rheon.corr.nearest: tol must be above 0, but it is {tol!r}. Set tol to the "
+            "relative change to stop at, such as the default 1e-8."
         )
         raise ValueError(msg)
     x = 0.5 * (x + x.T)
@@ -841,6 +850,9 @@ def absorption(r: Any, k: int) -> float:
     ``ValueError``
         ``k`` outside ``1..n``, ``r`` an array that is not square, or a
         Gram column other than the intercept with no variance.
+    :class:`~rheon.WrongTypeError`
+        ``k`` is not a whole number, such as ``2.0`` or ``True``. It is both
+        a ``TypeError`` and a ``ValueError``.
     ``numpy.linalg.LinAlgError``
         ``r`` is an array holding ``nan`` entries, where numpy's eigensolver
         does not converge.
@@ -862,6 +874,15 @@ def absorption(r: Any, k: int) -> float:
     - :func:`spectral`, the eigenpairs themselves.
     """
     np = _np()
+    # A count, as `spectral`'s `k` is: `True` ran as 1 and `2.0` failed in
+    # numpy's slicing (review fable2, Y5).
+    if isinstance(k, bool) or not isinstance(k, numbers.Integral):
+        msg = (
+            f"rheon.corr.absorption: k must be a whole number, but it is {k!r}. Set k to the "
+            "number of leading eigenvalues to sum, such as 1."
+        )
+        raise WrongTypeError(msg)
+    k = operator.index(k)
     vals = np.linalg.eigvalsh(_matrix(r, "rheon.corr.absorption"))[::-1]
     total = float(vals.sum())
     if not 1 <= k <= vals.size:
@@ -1290,7 +1311,7 @@ def mp_edge(n: int, m: int, sigma2: float = 1.0) -> tuple[float, float]:
     .. rubric:: Raises
 
     ``ValueError``
-        ``n`` or ``m`` not above 0.
+        ``n`` or ``m`` not above 0, or ``sigma2`` not a finite number above 0.
 
     .. rubric:: Examples
 
@@ -1317,6 +1338,14 @@ def _mp_edge(n: int, m: int, sigma2: float, who: str) -> tuple[float, float]:
         msg = (
             f"{who}: n and m must be above 0, but they are {n} and {m}. "
             "Set n to the number of rows and m to the number of columns."
+        )
+        raise ValueError(msg)
+    # A variance is above 0: a negative one put the lower edge above the
+    # upper, and 0 or NaN edges that bound nothing (review fable2, Y5).
+    if not 0.0 < sigma2 < float("inf"):
+        msg = (
+            f"{who}: sigma2 must be a finite number above 0, but it is {sigma2!r}. Set sigma2 "
+            "to the noise variance, 1 for a correlation matrix, or leave it out."
         )
         raise ValueError(msg)
     q = n / m

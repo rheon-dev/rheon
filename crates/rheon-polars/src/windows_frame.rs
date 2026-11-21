@@ -502,10 +502,16 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
     };
     let mut names: HashSet<&str> = HashSet::new();
     for f in &config.formulas {
-        if f.name.is_empty() || f.name.starts_with("@po:") || f.name.starts_with("@in:") {
+        if f.name.is_empty()
+            || f.name.starts_with("@po:")
+            || f.name.starts_with("@in:")
+            || f.name.contains('\0')
+        {
+            // A NUL cannot be in a column name of the Arrow export, which
+            // panicked on one (review P11).
             return Err(format!(
-                "{WHO}: an output cannot be named {:?}: a name must not be empty or start with \
-                 \"@po:\" or \"@in:\". Name the expression (a column computation, such as \
+                "{WHO}: an output cannot be named {:?}: a name must not be empty, start with \
+                 \"@po:\" or \"@in:\", or hold a NUL character (\\0). Name the expression (a column computation, such as \
                  pl.col(\"x\") + 1) with .alias() or a keyword argument, such as \
                  with_windows(lf, m=...).",
                 f.name
@@ -2201,7 +2207,12 @@ impl WindowsRun {
                     // A time of day is read too, in nanoseconds since
                     // midnight (review round 4, PD5).
                     let c = inputs.column(input_column(i).as_str())?;
-                    let ns = nanos_array(c.as_materialized_series(), 0, NanosRole::Increment, WHO)?;
+                    let ns = nanos_array(
+                        c.as_materialized_series(),
+                        &crate::arrow::InputRows::default(),
+                        NanosRole::Increment,
+                        WHO,
+                    )?;
                     Ok(Some((0..ns.len()).map(|r| ns.get(r)).collect()))
                 } else {
                     Ok(None)
@@ -2365,7 +2376,7 @@ impl WindowsRun {
         let values: Vec<ClockValue> = if col.dtype().is_temporal() {
             let ns = nanos_array(
                 col.as_materialized_series(),
-                base as usize,
+                &crate::arrow::InputRows::from_base(base as usize),
                 NanosRole::Clock,
                 WHO,
             )?;
@@ -2807,15 +2818,26 @@ impl WindowsRun {
                  out load_state to start over."
             )
         })?;
-        let held = IpcReader::new(Cursor::new(file.held))
-            .finish()
-            .map_err(|e| {
+        // Polars' IPC reader unwraps one field of a record batch's header,
+        // so bytes damaged there panic inside it rather than return its
+        // error (review P7): the panic is taken as the damage it reports.
+        let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            IpcReader::new(Cursor::new(file.held)).finish()
+        }));
+        let held = match read {
+            Ok(read) => read.map_err(|e| {
                 format!(
                     "{WHO}: the rows the state holds cannot be read ({e}), so it is damaged. \
-                     Load an undamaged copy of the state file, or leave out load_state to start \
-                     over."
+                     Load an undamaged copy of the state file, or leave out load_state to \
+                     start over."
                 )
-            })?;
+            }),
+            Err(_) => Err(format!(
+                "{WHO}: the rows the state holds cannot be read (a record batch is out of \
+                 spec), so it is damaged. Load an undamaged copy of the state file, or leave \
+                 out load_state to start over."
+            )),
+        }?;
         if held.height() != file.core.held() {
             return Err(format!(
                 "{WHO}: the state holds {} rows but counts {}, so it is damaged. Load an undamaged \
@@ -2965,6 +2987,54 @@ mod tests {
             "wide" => t.iter().map(|v| format!("row {v} {}", "pad".repeat(20))).collect::<Vec<_>>(),
         )
         .unwrap()
+    }
+
+    /// Review P7: polars' IPC reader unwraps a field of a record batch's
+    /// header, so a state whose held rows were damaged there panicked at
+    /// the load rather than being refused. Every byte of the held rows'
+    /// IPC file, set to 0x00 or 0xff, is refused or loads; none panics.
+    ///
+    /// Not every damage: the reader trusts the lengths the file states, and
+    /// one of this fixture's length bytes set to 0x7f asks it for 3.6e16
+    /// bytes, an allocation failure that aborts the process and that no
+    /// unwind can take. Only a check of the file's bytes before they are read, such
+    /// as a checksum in the state, would refuse that.
+    #[test]
+    fn damaged_held_rows_are_refused_and_never_panic() {
+        let cfg = config(FORWARD);
+        let f = frame(&[1.0, 2.0, 3.0, 4.0]);
+        let mut run = WindowsRun::new(cfg.clone(), f.schema()).unwrap();
+        run.feed(&f, None).unwrap();
+        assert!(run.held() > 0, "the fixture: rows held");
+        let good = run.save_bytes().unwrap();
+        let magic = b"ARROW1";
+        let at = |from: usize| {
+            good[from..]
+                .windows(magic.len())
+                .position(|w| w == magic)
+                .map(|i| from + i)
+        };
+        let start = at(0).expect("the held rows' IPC file");
+        let end = at(start + magic.len()).expect("its closing magic") + magic.len();
+        let mut refused = 0;
+        for i in start..end {
+            for v in [0x00u8, 0xff] {
+                if good[i] == v {
+                    continue;
+                }
+                let mut bad = good.clone();
+                bad[i] = v;
+                let got = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    WindowsRun::load_bytes(&bad, cfg.clone(), f.schema()).map(drop)
+                }));
+                match got {
+                    Ok(Ok(())) => {}
+                    Ok(Err(_)) => refused += 1,
+                    Err(_) => panic!("byte {i} set to {v:#04x} panicked the load"),
+                }
+            }
+        }
+        assert!(refused > 0, "some damage is refused");
     }
 
     /// The cores of one spec's groups hold one copy of the call and its plan,

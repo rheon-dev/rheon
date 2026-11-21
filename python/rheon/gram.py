@@ -370,6 +370,51 @@ def _feature_slots(
     return slots, icept
 
 
+def _check_shapes(np: Any, g: Gram, who: str) -> None:
+    """Refuse a Gram whose arrays are not sized to its columns and targets,
+    with the message the native half gives (`gramfit.rs`). A Gram is a
+    mapping a caller can build or edit: a `means` of one entry was broadcast
+    by numpy into a wrong fit with nothing said, and a 2 x 2 `comoments` of a
+    3-column Gram raised numpy's own index error (review fable2, Y6).
+
+    `k` is the number of `columns` and `m` of `targets`. `comoments` is
+    `k x k`, or the packed upper triangle of `k (k + 1) / 2`. A key is
+    checked only when given: `correlation` reads a mapping of `columns` and
+    `comoments` alone, and the functions fill `means_by_target`,
+    `cross_centered` and the target moments when they are absent."""
+    k = len(_columns(g, who))
+    m = len(g.get("targets") or ())
+    como = g.get("comoments")
+    como_size = 0 if como is None else int(np.size(como))
+    packed = como is not None and np.ndim(como) == 1 and como_size == k * (k + 1) // 2
+    shapes: list[tuple[str, Any, int]] = [
+        ("means", g.get("means"), k),
+        ("comoments", como, k * (k + 1) // 2 if packed else k * k),
+        ("cross_moments", g.get("cross_moments"), m * k),
+    ]
+    for key in ("means_by_target", "cross_centered"):
+        v = g.get(key)
+        if v is not None and (np.size(v) > 0 or m == 0):
+            shapes.append((key, v, m * k))
+    for key in ("target_weights", "target_means", "target_vars", "target_n_kish"):
+        if g.get(key) is not None:
+            shapes.append((key, g.get(key), m))
+    if g.get("target_within_parts") is not None:
+        shapes.append(("target_within_parts", g.get("target_within_parts"), m))
+    for key, v, want in shapes:
+        if v is None:
+            continue
+        got = int(np.size(v))
+        square = key != "comoments" or packed or np.ndim(v) == 2
+        if got != want or not square:
+            msg = (
+                f"{who}: the Gram's {key} has {got} entries, but a Gram of {k} columns and {m} "
+                f"targets has {want}. Pass each Gram as ModelBank.gram() or rheon.gram.merge() "
+                "returns it, with every array sized to its columns and targets."
+            )
+            raise ValueError(msg)
+
+
 def _is_packed(np: Any, g: Gram) -> bool:
     """Whether a Gram's ``comoments`` is the packed upper triangle
     (``ModelBank.gram(layout="packed")``), one axis, rather than the whole
@@ -457,7 +502,8 @@ def merge(grams: Sequence[Gram], *, within: bool = False) -> Gram:
         the gap from 0 to the other parts' means, as if its rows had not
         been demeaned. With ``within=True``, also when a part has no
         ``cross_centered`` and neither an intercept column nor
-        ``target_means`` to center its cross-moments at.
+        ``target_means`` to center its cross-moments at. And when a part has
+        an array not sized to the Gram's columns and targets, such as a ``means`` of one entry.
     ``KeyError``
         When a part has no ``columns`` key, such as a mapping built by hand.
 
@@ -607,6 +653,8 @@ def merge(grams: Sequence[Gram], *, within: bool = False) -> Gram:
             "to pool."
         )
         raise ValueError(msg)
+    for p in parts:
+        _check_shapes(np, p, "rheon.gram.merge")
     if len(parts) == 1 and not within:
         # Nothing to pool: the part is its own union, its group, instance and
         # lags included, which the pooled form drops (review 2026-10-05, YB8).
@@ -1108,7 +1156,8 @@ def subset(g: Gram, columns: Sequence[str | int]) -> Gram:
         ``columns`` and its older name ``cols`` are given together.
     ``ValueError``
         A column named twice, by name or by position, since two copies of
-        one column make the subset's matrix singular.
+        one column make the subset's matrix singular; an array not sized to
+        the Gram's columns and targets, such as a ``means`` of one entry.
 
     .. rubric:: Examples
 
@@ -1145,6 +1194,7 @@ def subset(g: Gram, columns: Sequence[str | int]) -> Gram:
     for those columns.
     """
     np = _np()
+    _check_shapes(np, g, "rheon.gram.subset")
     idx = _col_index(g, columns, "rheon.gram.subset")
     names = _columns(g, "rheon.gram.subset")
     _refuse_repeated(names, idx, "rheon.gram.subset", "columns")
@@ -1234,6 +1284,7 @@ def correlation(g: Gram) -> Any:
     1 on 200 random matrices.
     """
     np = _np()
+    _check_shapes(np, g, "rheon.gram.correlation")
     c = _comoments(np, g)
     s = np.sqrt(np.clip(np.diag(c), 0.0, None))
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -1311,7 +1362,8 @@ def solve(
         The intercept among ``features``, or a column named twice in them
         (one column solved twice is a singular system, and only one of its
         two coefficients could be reported); a ``ridge`` that is not finite
-        and at least 0.
+        and at least 0; an array not sized to the Gram's columns and
+        targets, such as a ``means`` of one entry.
 
     .. rubric:: Examples
 
@@ -1394,6 +1446,7 @@ def solve(
     decomposition's time (measured on an Apple M4 Pro under load).
     """
     np = _np()
+    _check_shapes(np, g, "rheon.gram.solve")
     ridges = np.atleast_1d(np.asarray(ridge, dtype=float))
     if not np.all(np.isfinite(ridges) & (ridges >= 0.0)):
         # A negative ridge solved a different, possibly indefinite, system
@@ -2966,7 +3019,8 @@ def coef_stats(
         A ``coef`` without one entry per Gram column; a Gram without target
         moments, such as a mapping built by hand without them
         (:meth:`~rheon.polars.ModelBank.gram` reports both); the intercept
-        or a column named twice among ``features``, as for :func:`solve`.
+        or a column named twice among ``features``, as for :func:`solve`;
+        an array not sized to the Gram's columns and targets, such as a ``means`` of one entry.
     ``KeyError``, ``IndexError``
         As for :func:`solve`.
 
@@ -3054,6 +3108,7 @@ def coef_stats(
     coefficients, not as a p-value.
     """
     np = _np()
+    _check_shapes(np, g, "rheon.gram.coef_stats")
     t = _target_index(g, target, "rheon.gram.coef_stats")
     slots, icept = _feature_slots(g, features, "rheon.gram.coef_stats")
     if g.get("target_vars") is None or g.get("target_n_kish") is None:
@@ -3176,7 +3231,9 @@ def vif(g: Gram, *, features: Sequence[str | int] | None = None) -> Any:
     .. rubric:: Raises
 
     ``ValueError``
-        The intercept or a column named twice among ``features``.
+        The intercept or a column named twice among ``features``; an array
+        not sized to the Gram's columns and targets, such as a ``means`` of
+        one entry.
     ``KeyError``
         A name the Gram does not have.
     ``IndexError``
@@ -3237,6 +3294,7 @@ def vif(g: Gram, *, features: Sequence[str | int] | None = None) -> Any:
     read ``inf``.
     """
     np = _np()
+    _check_shapes(np, g, "rheon.gram.vif")
     slots, _ = _feature_slots(g, features, "rheon.gram.vif")
     r = correlation(g)[np.ix_(slots, slots)]
     out = np.full(len(slots), np.inf)
@@ -3299,7 +3357,9 @@ def condition(g: Gram, *, features: Sequence[str | int] | None = None) -> dict[s
         A position outside the Gram's columns.
     ``ValueError``
         A column named twice, by name or by position: two copies of one
-        column are an exact dependency, which needs no diagnosis.
+        column are an exact dependency, which needs no diagnosis. Or an
+        array not sized to the Gram's columns and targets, such as a
+        ``means`` of one entry.
 
     .. rubric:: Examples
 
@@ -3338,6 +3398,7 @@ def condition(g: Gram, *, features: Sequence[str | int] | None = None) -> dict[s
     square roots of the eigenvalues of the scaled second-moment matrix.
     """
     np = _np()
+    _check_shapes(np, g, "rheon.gram.condition")
     names = _columns(g, "rheon.gram.condition")
     slots = (
         list(range(len(names)))

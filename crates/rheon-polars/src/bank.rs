@@ -18,10 +18,7 @@ use rayon::prelude::*;
 use rheon_core::{ClockCfg, Disorder, usable};
 use serde::{Deserialize, Serialize};
 
-use crate::arrow::{
-    ArrowChunk, ClockArray, ClockCol, KeyDtype, KeyForm, LabelTimes, chunk_from_frame_at,
-    f64_values,
-};
+use crate::arrow::{ArrowChunk, ClockArray, ClockCol, KeyDtype, KeyForm, LabelTimes, f64_values};
 use crate::column::F64Column;
 use crate::resolvers::{
     FormulaBundle, SavedResolvers, TargetWindows, prepare_targets, resolve_targets,
@@ -432,7 +429,7 @@ fn label_column(
                          from 0), which is not one of the classes {:?}. List every value the \
                          column can hold in classes, or set the label to null on rows the model \
                          should predict without learning.",
-                        spec.name, name, val, chunk.row_base() + j, classes
+                        spec.name, name, val, chunk.rows().at(j), classes
                     ),
                 },
             },
@@ -496,7 +493,17 @@ fn extract(
             } else if let ModelKind::EwClass { classes, .. } = &spec.model {
                 label_column(chunk, spec, c, classes, layout)
             } else {
-                let v = f64_column(chunk, spec, "target", c, layout)?;
+                // `bocpd`'s hazard column rides in this slot and is not a
+                // target: a missing one is named as what it is (review
+                // fable2, Y7).
+                let role = match spec.model {
+                    ModelKind::Bocpd {
+                        hazard_col: Some(_),
+                        ..
+                    } => "hazard",
+                    _ => "target",
+                };
+                let v = f64_column(chunk, spec, role, c, layout)?;
                 // A `strict_binary` target is 0 or 1, and anything else is an
                 // error naming the row, as a label outside `ew_class`'s
                 // classes is -- checked here, before any stream is touched, so
@@ -518,7 +525,7 @@ fn extract(
                          from 0), but strict_binary takes only 0 or 1. Set the target to null \
                          on rows the model should predict without learning, or leave out \
                          strict_binary to clamp each value to the range from 0 to 1.",
-                        spec.name, c, v[j], chunk.row_base() + source_row(layout, j)
+                        spec.name, c, v[j], chunk.rows().at(source_row(layout, j))
                     );
                 }
                 // A Poisson fit takes counts, and a negative one is an error
@@ -535,7 +542,7 @@ fn extract(
                          from 0), but loss=\"poisson\" takes a count, which is never negative. \
                          Set the target to null on rows the model should predict without \
                          learning, or choose another loss.",
-                        spec.name, c, v[j], chunk.row_base() + source_row(layout, j)
+                        spec.name, c, v[j], chunk.rows().at(source_row(layout, j))
                     );
                 }
                 // `bocpd`'s hazard column rides in the targets slot and is
@@ -560,7 +567,7 @@ fn extract(
                          from 0), but a hazard, the expected number of rows between \
                          changepoints, must be above 1. Set it above 1, or to null to use the \
                          spec's own hazard on that row.",
-                        spec.name, c, v[j], chunk.row_base() + source_row(layout, j)
+                        spec.name, c, v[j], chunk.rows().at(source_row(layout, j))
                     );
                 }
                 Ok(v)
@@ -581,7 +588,7 @@ fn extract(
                 "spec {:?}: clock column {:?} has a null, NaN or infinite value at row {} \
                  (counting from 0), and a clock needs a value on every row. Drop the rows with \
                  no clock value, or fill them, before the bank reads them.",
-                spec.name, c, chunk.row_base() + source_row(layout, j)
+                spec.name, c, chunk.rows().at(source_row(layout, j))
             )
         };
         // An integer column's values in the stream's row order, a null
@@ -632,7 +639,7 @@ fn extract(
                              (counting from 0), above {}, the largest value an integer clock \
                              holds (an Int64's). Shift the clock by subtracting an origin, then \
                              cast it to Int64.",
-                            spec.name, c, x, chunk.row_base() + source_row(layout, j), i64::MAX
+                            spec.name, c, x, chunk.rows().at(source_row(layout, j)), i64::MAX
                         );
                     };
                     v.push(x);
@@ -732,7 +739,7 @@ fn extract(
                          from 0), but a weight must be at least 0. Set the weight to 0 for a \
                          row the model should predict without learning, or to null to skip \
                          the row.",
-                        spec.name, c, v[j], chunk.row_base() + source_row(layout, j)
+                        spec.name, c, v[j], chunk.rows().at(source_row(layout, j))
                     );
                 }
                 // `rcov` sums returns over a block; a fractional weight has
@@ -747,7 +754,7 @@ fn extract(
                          from 0), but rcov takes a weight of 0 or 1 only, since a realized \
                          covariance sums returns rather than weighing them. Set the weight to 1 \
                          on a row that is a return and to 0 on one that is not.",
-                        spec.name, c, v[j], chunk.row_base() + source_row(layout, j)
+                        spec.name, c, v[j], chunk.rows().at(source_row(layout, j))
                     );
                 }
                 Ok(Some(v))
@@ -1035,7 +1042,7 @@ fn check_monotone(
     integer: bool,
     text: bool,
     high_water: Option<&GroupKey>,
-    row_base: usize,
+    rows: &crate::arrow::InputRows,
 ) -> PolarsResult<()> {
     use std::cmp::Ordering::*;
     if groups.is_empty() {
@@ -1049,7 +1056,7 @@ fn check_monotone(
              \"monotone\" closes groups in the order of their keys, and a null has no place in \
              that order. Give every row a group key, or set group_close = \"session\" with a \
              session column (session=) whose changes close each group.",
-            spec.name, row_base + groups.rows(g)[0]
+            spec.name, rows.at(groups.rows(g)[0])
         );
     }
     let mut slot = vec![usize::MAX; n];
@@ -1081,7 +1088,7 @@ fn check_monotone(
                  group_close = \"monotone\" needs the keys in ascending order, as numbers for an \
                  integer column and as text otherwise. {sort}, or set group_close = \"session\" with \
                  a session column (session=).",
-                spec.name, row_base + r, keys[gi], keys[prev]
+                spec.name, rows.at(r), keys[gi], keys[prev]
             );
         }
         prev = gi;
@@ -1109,7 +1116,7 @@ fn check_monotone(
                  bank has read, and group_close = \"monotone\" never takes a group below that. \
                  Remove the rows whose group is below {}, or sort the rows by the group column \
                  before the bank's first call.",
-                spec.name, row_base + groups.rows(0)[0], keys[0], hw, hw
+                spec.name, rows.at(groups.rows(0)[0]), keys[0], hw, hw
             );
         }
     }
@@ -1197,7 +1204,7 @@ fn process<'s>(
     cfgs: &[ClockCfg],
     cols: &[SpecColumns],
     formulas: &[Option<FormulaBundle>],
-    row_base: usize,
+    input_rows: &crate::arrow::InputRows,
     mut sinks: Vec<Option<Sink<'s>>>,
     spares: &mut Spares,
 ) -> Processed<'s> {
@@ -1337,7 +1344,7 @@ fn process<'s>(
                             }
                         }
                         Err(refusal) => {
-                            outs.push((si, Err(backwards_clock(spec, refusal, row_base))));
+                            outs.push((si, Err(backwards_clock(spec, refusal, input_rows))));
                             break 'segments;
                         }
                     }
@@ -3307,6 +3314,26 @@ impl Bank {
         Ok(dropped)
     }
 
+    /// How many closed groups' rows wait in the queue ([`Self::closed_groups`]),
+    /// for a reader that wants to know which of them a chunk added
+    /// ([`Self::closed_keys_from`]).
+    pub fn closed_queued(&self) -> usize {
+        self.closed.len()
+    }
+
+    /// The spec index and key of each closed row in the queue from place
+    /// `from` on, oldest first: a chunk's closes, read before the queue is
+    /// drained, with `from` the [`Self::closed_queued`] taken before it.
+    pub fn closed_keys_from(&self, from: usize) -> impl Iterator<Item = (usize, &GroupKey)> {
+        self.closed.iter().skip(from).map(|r| (r.spec, &r.group))
+    }
+
+    /// Whether spec `spec` holds a stream for `key`: a group that has not
+    /// closed, or that a session reopened. `false` for a spec out of range.
+    pub fn has_group(&self, spec: usize, key: &GroupKey) -> bool {
+        self.states.get(spec).is_some_and(|m| m.contains_key(key))
+    }
+
     /// Rows fed so far, over every chunk and group: skipped rows and dropped
     /// groups included, which is why it is not the sum of the groups'
     /// `rows_fed` in [`Self::summary`]. `rows_seen` before review round 4
@@ -3914,11 +3941,25 @@ impl Bank {
         row_base: usize,
         learn_only: bool,
     ) -> PolarsResult<Vec<Column>> {
+        self.fit_predict_rows(df, crate::arrow::InputRows::from_base(row_base), learn_only)
+    }
+
+    /// [`Self::fit_predict_from_with`] for the input rows `rows` names, one
+    /// a row of `df`: the rows a filter kept from a chunk of the input, such
+    /// as the command line's `--skip-learned`, whose errors then name each
+    /// row's place in the input rather than among the rows kept (review
+    /// P12).
+    pub fn fit_predict_rows(
+        &mut self,
+        df: &DataFrame,
+        rows: crate::arrow::InputRows,
+        learn_only: bool,
+    ) -> PolarsResult<Vec<Column>> {
         // Before the frame is cast: a broken bank refuses the chunk whatever
         // is in it, and a column error would otherwise hide that and the cast
         // would be work thrown away (review 2026-09-17, second pass).
         self.refuse_if_broken()?;
-        let chunk = chunk_from_frame_at(df, &self.specs, row_base)?;
+        let chunk = crate::arrow::chunk_from_frame_rows(df, &self.specs, rows)?;
         let arrays = self.fit_predict_arrow_with(&chunk, learn_only)?;
         named_columns(&self.specs, arrays)
     }
@@ -3963,7 +4004,7 @@ impl Bank {
         // come out as, kept in the state for `last_row` (task 152), and
         // another number type refused (task 200). Kept only once the chunk
         // is taken: a refused chunk changes nothing.
-        let merged = self.clock_forms(chunk)?;
+        let (merged, kept_clocks) = self.clock_forms(chunk)?;
         // The key columns' forms, refused if another, kept as the clock's is.
         let keys = self.key_forms(chunk)?;
         // Everything parallel below -- the `par_iter`s here and the
@@ -3982,7 +4023,7 @@ impl Bank {
                 .clone()
                 .install(|| self.fit_predict_on_pool(chunk, &merged, &keys))?
         };
-        self.clock_dtypes = merged;
+        self.clock_dtypes = kept_clocks;
         self.key_dtypes = keys;
         Ok(out)
     }
@@ -3995,12 +4036,24 @@ impl Bank {
     /// integer clock of another width -- naming the spec, the column and
     /// both dtypes, as a key column of another form is refused. A chunk
     /// without the clock column says nothing here: its absence is another
-    /// check's to name.
+    /// check's to name. Nor does one that holds no value of it -- no rows,
+    /// or nulls alone, as a frame built with no dtypes has, its every column
+    /// `Null` (review P10): it is neither refused nor kept, so a poll that
+    /// found nothing does not pin the clock to `Float64` in the bank and its
+    /// saved state. Its own clock fields come out in the type kept, or, with
+    /// none kept, in the one it has.
+    ///
+    /// The second list is what the bank keeps once the chunk is taken.
+    #[allow(clippy::type_complexity)]
     fn clock_forms(
         &self,
         chunk: &ArrowChunk,
-    ) -> PolarsResult<Vec<Option<crate::stream::ClockDtype>>> {
-        self.specs
+    ) -> PolarsResult<(
+        Vec<Option<crate::stream::ClockDtype>>,
+        Vec<Option<crate::stream::ClockDtype>>,
+    )> {
+        let forms: Vec<_> = self
+            .specs
             .iter()
             .zip(&self.clock_dtypes)
             .map(|(s, kept)| {
@@ -4011,8 +4064,9 @@ impl Bank {
                         .and_then(|c| chunk.clock_dtype(c))
                         .as_ref(),
                 );
+                let silent = s.clock.as_deref().is_some_and(|c| chunk.holds_no_value(c));
                 match (kept, s.clock.as_deref()) {
-                    (Some(was), Some(c)) if chunk.has(c) && was.conflicts(&now) => {
+                    (Some(was), Some(c)) if !silent && chunk.has(c) && was.conflicts(&now) => {
                         polars_bail!(ComputeError:
                             "spec {:?}: clock column {:?} was {} and is now {}, but a stream \
                              keeps the type its clock began with, since an integer clock steps in \
@@ -4025,11 +4079,13 @@ impl Bank {
                             crate::arrow::dtype_name(&was.dtype())
                         )
                     }
-                    (Some(was), _) => Ok(Some(was.clone())),
-                    (None, _) => Ok(Some(now)),
+                    (Some(was), _) => Ok((Some(was.clone()), Some(was.clone()))),
+                    (None, _) if silent => Ok((Some(now), None)),
+                    (None, _) => Ok((Some(now.clone()), Some(now))),
                 }
             })
-            .collect()
+            .collect::<PolarsResult<_>>()?;
+        Ok(forms.into_iter().unzip())
     }
 
     /// Each spec's key columns in `chunk`, against the forms the bank keeps
@@ -4127,7 +4183,7 @@ impl Bank {
                     integer_keys[si],
                     matches!(&key_dtypes[si][0], Some(k) if k.form == KeyForm::Text),
                     self.high_water[si].as_ref(),
-                    chunk.row_base(),
+                    chunk.rows(),
                 )?;
             }
         }
@@ -4226,7 +4282,7 @@ impl Bank {
                 // a clock value that is not a number is (review 2026-10-06, PB7).
                 stream
                     .check_steps(sc.clock.as_ref(), idx, *base)
-                    .map_err(|refusal| non_finite_step(&specs[*si], refusal, chunk.row_base()))?;
+                    .map_err(|refusal| non_finite_step(&specs[*si], refusal, chunk.rows()))?;
                 stream
                     .check_clock(
                         &cfgs[*si],
@@ -4235,7 +4291,7 @@ impl Bank {
                         idx,
                         *base,
                     )
-                    .map_err(|refusal| backwards_clock(&specs[*si], refusal, chunk.row_base()))?;
+                    .map_err(|refusal| backwards_clock(&specs[*si], refusal, chunk.rows()))?;
                 // Under `label_clock`, a label time before its row, or a buffer
                 // past its bound (task 341). Asked only of a spec with one: the
                 // call is ten arguments a group (task 375, P32).
@@ -4243,20 +4299,20 @@ impl Bank {
                     return Ok(());
                 }
                 stream
-                .check_labels(
-                    &specs[*si],
-                    &cfgs[*si],
-                    &sc.features,
-                    sc.clock.as_ref(),
-                    sc.label.as_ref(),
-                    sc.session.as_deref(),
-                    sc.weight.as_deref(),
-                    idx,
-                    *base,
-                )
-                .map_err(
-                    |r| polars_err!(ComputeError: "{}", r.message(&specs[*si], chunk.row_base())),
-                )
+                    .check_labels(
+                        &specs[*si],
+                        &cfgs[*si],
+                        &sc.features,
+                        sc.clock.as_ref(),
+                        sc.label.as_ref(),
+                        sc.session.as_deref(),
+                        sc.weight.as_deref(),
+                        idx,
+                        *base,
+                    )
+                    .map_err(
+                        |r| polars_err!(ComputeError: "{}", r.message(&specs[*si], chunk.rows())),
+                    )
             };
         let checked = if par() {
             work.par_iter().try_for_each(check)
@@ -4477,7 +4533,7 @@ impl Bank {
             cfgs,
             &cols,
             &formulas,
-            chunk.row_base(),
+            chunk.rows(),
             sinks1,
             &mut self.spares,
         );
@@ -4538,7 +4594,7 @@ impl Bank {
                 cfgs,
                 &cols,
                 &formulas,
-                chunk.row_base(),
+                chunk.rows(),
                 sinks2,
                 &mut self.spares,
             );
@@ -4700,8 +4756,18 @@ impl Bank {
     /// [`Self::predict`] for rows `row_base..` of a longer input, as
     /// [`Self::fit_predict_from`] is to [`Self::fit_predict`].
     pub fn predict_from(&self, df: &DataFrame, row_base: usize) -> PolarsResult<Vec<Column>> {
+        self.predict_rows(df, crate::arrow::InputRows::from_base(row_base))
+    }
+
+    /// [`Self::predict_from`] for the input rows `rows` names, as
+    /// [`Self::fit_predict_rows`] takes them.
+    pub fn predict_rows(
+        &self,
+        df: &DataFrame,
+        rows: crate::arrow::InputRows,
+    ) -> PolarsResult<Vec<Column>> {
         self.refuse_if_broken()?;
-        let chunk = chunk_from_frame_at(df, &self.specs, row_base)?;
+        let chunk = crate::arrow::chunk_from_frame_rows(df, &self.specs, rows)?;
         let arrays = self.predict_arrow(&chunk)?;
         named_columns(&self.specs, arrays)
     }
@@ -4722,7 +4788,7 @@ impl Bank {
         // Scoring changes nothing, so a type the bank has not seen is read
         // off the chunk and not kept (task 152); another number type than
         // the bank's is refused, as in a learning run (task 200).
-        let clock_dtypes = self.clock_forms(chunk)?;
+        let (clock_dtypes, _) = self.clock_forms(chunk)?;
         let n = chunk.height();
         self.refuse_if_broken()?;
         self.refuse_name_clash(chunk.names())?;
@@ -4860,34 +4926,52 @@ impl Bank {
     ///
     /// `spec` out of range, or a frame the columns cannot make.
     pub fn closed_groups(&mut self, spec: Option<usize>, drop: bool) -> Result<DataFrame, String> {
+        if !drop {
+            return self.peek_closed_groups(spec);
+        }
+        // Before anything is taken: a frame the clock columns cannot make
+        // drains nothing.
+        let clock = self.closed_clock(spec)?;
+        let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.closed)
+            .into_iter()
+            .partition(|r| spec.is_none_or(|si| r.spec == si));
+        self.closed = rest;
+        closed_frame(&self.specs, &mine, clock.as_ref()).map_err(|e| e.to_string())
+    }
+
+    /// [`Self::closed_groups`] with `drop` false, on a shared borrow: a peek
+    /// changes nothing, so it can run beside other readers (`predict` on
+    /// other threads, which the Python binding allows).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::closed_groups`].
+    pub fn peek_closed_groups(&self, spec: Option<usize>) -> Result<DataFrame, String> {
+        let clock = self.closed_clock(spec)?;
+        let taken: Vec<ClosedRow> = self
+            .closed
+            .iter()
+            .filter(|r| spec.is_none_or(|si| r.spec == si))
+            .cloned()
+            .collect();
+        closed_frame(&self.specs, &taken, clock.as_ref()).map_err(|e| e.to_string())
+    }
+
+    /// The clock dtype the closed-group frame of `spec` (all closing specs
+    /// when `None`) is written in, after checking `spec` is in range.
+    fn closed_clock(&self, spec: Option<usize>) -> Result<Option<ClockDtype>, String> {
         if let Some(si) = spec
             && si >= self.specs.len()
         {
             return Err(spec_index_out_of_range(si, self.specs.len()));
         }
-        // Before anything is taken: a frame the clock columns cannot make
-        // drains nothing.
         let closing: Vec<usize> = match spec {
             Some(si) => vec![si],
             None => (0..self.specs.len())
                 .filter(|&si| self.specs[si].group_close.is_some())
                 .collect(),
         };
-        let clock = self.frame_clock(&closing)?.cloned();
-        let taken: Vec<ClosedRow> = if drop {
-            let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.closed)
-                .into_iter()
-                .partition(|r| spec.is_none_or(|si| r.spec == si));
-            self.closed = rest;
-            mine
-        } else {
-            self.closed
-                .iter()
-                .filter(|r| spec.is_none_or(|si| r.spec == si))
-                .cloned()
-                .collect()
-        };
-        closed_frame(&self.specs, &taken, clock.as_ref()).map_err(|e| e.to_string())
+        Ok(self.frame_clock(&closing)?.cloned())
     }
 
     /// The state as the struct every encoding writes. One builder, so the

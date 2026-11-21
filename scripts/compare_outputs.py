@@ -55,7 +55,8 @@ but ``name``:
 ``seed`` ``null_features`` ``null_targets`` ``extras`` ``gaps`` ``shift``
     the data: the seed; the share of rows with ``x0`` or ``y0`` null; extra
     columns (``hit`` a 0/1, ``lab`` a two-class and ``lab3`` a three-class label, ``s`` a session,
-    ``block`` a growing key); clock jumps past ``ctx["gap_cap"]``; a change of
+    ``block`` a growing key, ``avail`` a label time 0 to 24 clock units after the row's clock,
+    for ``label_clock``); clock jumps past ``ctx["gap_cap"]``; a change of
     the true coefficients at 60% of the stream.
 ``save_at``
     a share of the stream after which the state is saved, loaded and the run continues.
@@ -312,6 +313,9 @@ def make_input(case: dict) -> Any:
         cols["s"] = np.where(np.arange(n) < n // 2, "am", "pm")
     if "block" in extras:
         cols["block"] = np.arange(n) // 1000
+    if "avail" in extras:
+        # Delays that differ row to row, so a short one overtakes a long one.
+        cols["avail"] = t + (np.arange(n) * 7919 % 25).astype(float)
     df = pl.DataFrame(cols)
     if case["null_features"]:
         df = df.with_columns(

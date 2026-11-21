@@ -105,6 +105,19 @@ def _json(spec: dict[str, Any] | list[dict[str, Any]]) -> str:
                 "on the clock and is not a target. Pass the value the parameter takes, such "
                 "as a number, a word or a column's name."
             )
+        if v is not None and not isinstance(v, str):
+            # Anything else is no JSON value, and `json` refused it naming
+            # neither the spec nor the key (review fable2, Y4). A set's order
+            # is not fixed, and a list's is the outputs' order.
+            if isinstance(v, (set, frozenset)):
+                raise TypeError(
+                    f"{_who(who)}: {key} takes no set, since its order is not fixed and the "
+                    "order of a spec's columns is the order of its outputs. Pass a list."
+                )
+            raise TypeError(
+                f"{_who(who)}: {key} takes no {type(v).__name__}. Pass the value the parameter "
+                "takes, such as a number, a word, a column's name or a list of them."
+            )
         return v
 
     def name(s: Any) -> Any:

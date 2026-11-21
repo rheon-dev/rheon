@@ -104,6 +104,13 @@ pub(crate) struct Arm {
 }
 
 impl Arm {
+    /// Whether bucket `k` is one the arm holds, which [`Arm::restore`]
+    /// indexes without growing it.
+    fn covers(&self, k: i32) -> bool {
+        let i = i64::from(k) - i64::from(self.lo);
+        !self.oct.is_empty() && i >= 0 && i < self.w.len() as i64
+    }
+
     /// The first and last octave held; `None` when empty.
     fn octaves(&self) -> Option<(i32, i32)> {
         (!self.oct.is_empty()).then(|| {
@@ -454,11 +461,27 @@ impl QSide {
     }
 
     /// Whether the sketches can be read and added to, `front` holding a row
-    /// of `prev` for each of its `front_rows`.
-    pub(crate) fn has_shape(&self, front_rows: usize) -> bool {
-        Some(self.prev.len()) == front_rows.checked_mul(3)
+    /// of `prev` for each of its rows, whose values are `front`, and the
+    /// bucket of each that [`QSide::pop`] puts back: a damaged state file
+    /// whose row lay outside the arm decoded, passed the shape check and
+    /// panicked indexing past the arm at the pop (review P7).
+    pub(crate) fn has_shape(&self, front: impl ExactSizeIterator<Item = f64>) -> bool {
+        Some(self.prev.len()) == front.len().checked_mul(3)
             && self.front.has_shape()
             && self.back.has_shape()
+            && self.holds(front)
+    }
+
+    /// Whether `front` holds the bucket of each of `values`.
+    fn holds(&self, mut values: impl Iterator<Item = f64>) -> bool {
+        values.all(|x| {
+            x.is_nan()
+                || match Key::of(x) {
+                    Key::Zero => true,
+                    Key::Neg(k) => self.front.neg.covers(k),
+                    Key::Pos(k) => self.front.pos.covers(k),
+                }
+        })
     }
 
     /// The buckets the sketches hold.
@@ -738,6 +761,31 @@ mod tests {
             window_size: window,
             window_ns: None,
             closed: Closed::Right,
+        }
+    }
+
+    /// Review P7: a damaged state's `front` row whose bucket the sketch
+    /// does not hold passed the shape check and panicked at its pop,
+    /// indexing past the arm. `holds` finds it; every row a real turn-over
+    /// put there it holds, and a missing value is no bucket.
+    #[test]
+    fn the_front_holds_the_bucket_of_each_of_its_rows() {
+        let k = kernel(Direction::Backward, 2.0, Some(6.0));
+        let tau = [0.0, 1.0, 2.0, 3.0];
+        let x = [0.5, -3.0, f64::NAN, 1e-320];
+        let mut side = QSide::default();
+        side.turn_over(&k, &tau, |i| x[i]);
+        assert!(side.has_shape(x.iter().copied()));
+        assert!(side.holds(x.iter().copied()));
+        for far in [1e300, -1e300, 4.0e-300] {
+            assert!(
+                !side.holds([0.5, far, f64::NAN, 1e-320].into_iter()),
+                "{far:e}"
+            );
+        }
+        // Each row a real turn-over put there pops without a panic.
+        for top in (0..tau.len()).rev() {
+            side.pop(top, x[top]);
         }
     }
 
@@ -1041,19 +1089,19 @@ mod tests {
         for (i, x) in values(50, 3).into_iter().enumerate() {
             q.push(&k, i as f64, x);
         }
-        assert!(q.has_shape(0));
-        assert!(!q.has_shape(1));
+        assert!(q.has_shape(std::iter::empty()));
+        assert!(!q.has_shape(std::iter::once(1.0)));
         let mut bad = q.clone();
         bad.back.pos.lo += 1;
-        assert!(!bad.has_shape(0));
+        assert!(!bad.has_shape(std::iter::empty()));
         let mut bad = q.clone();
         bad.back.neg.oct.pop();
-        assert!(!bad.has_shape(0));
+        assert!(!bad.has_shape(std::iter::empty()));
         let mut bad = q.clone();
         bad.back.scale = 0.0;
-        assert!(!bad.has_shape(0));
+        assert!(!bad.has_shape(std::iter::empty()));
         let mut bad = q;
         bad.back.total = f64::NAN;
-        assert!(!bad.has_shape(0));
+        assert!(!bad.has_shape(std::iter::empty()));
     }
 }

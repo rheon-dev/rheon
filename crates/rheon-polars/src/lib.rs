@@ -68,8 +68,8 @@ mod windows_frame;
 mod wrong_type;
 
 pub use arrow::{
-    ArrowChunk, ArrowCol, ClockArray, ClockCol, NumArray, chunk_from_frame, chunk_from_frame_at,
-    export_struct_to_c,
+    ArrowChunk, ArrowCol, ClockArray, ClockCol, InputRows, NumArray, chunk_from_frame,
+    chunk_from_frame_at, chunk_from_frame_rows, export_struct_to_c,
 };
 // The Arrow types an `ArrowChunk` is built from and a `fit_predict_arrow`
 // result is read as, plus the C Data Interface export a binding layer hands

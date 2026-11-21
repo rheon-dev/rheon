@@ -222,22 +222,26 @@ shows them at work.
     learned before an earlier long one. ``resid`` on the row is its label
     less that served prediction. ``embargo=d`` is the case
     ``label_clock = clock + d``, and gives the same numbers wherever the
-    clock adds up exactly. A row with weight 0 is scored and not held, and
-    so is a row whose label time is null: its label never arrives, and
-    :meth:`~rheon.polars.ModelBank.summary` counts it in
-    ``labels_missing``. A label time before its row's clock is refused,
-    naming the row. A list gives one column per target; this version takes
-    a list only when every entry names the same column. ``max_held_rows``
-    bounds the rows a group holds; past it ``held_overflow="refuse"`` (the
-    default) refuses the chunk and ``"drop_oldest"`` drops the row that
-    arrived first, counted in ``labels_dropped``, as a clock reset's drop
-    is. Rows still held at the end are not learned unless the state is saved
-    and resumed. Refused beside ``embargo``, a window-expression target,
-    ``group_close``, a ``session`` column and ``drift_action="reset"``, and
-    for ``holt``, ``kalman``, ``hmm`` and ``micro``, whose score reaches from
-    the newest learned row. Cost: a held row is placed in label-time order
-    by bisection, moving the shorter side of the buffer, 0.006 microseconds
-    a row with about 100 rows held and 0.38 with about 800 (Apple M4 Pro).
+    clock adds up exactly. A row with weight 0 is held like any row and
+    learned at its label time, where it moves the clock and teaches nothing,
+    as ``embargo`` learns it; it counts against ``max_held_rows``. A row
+    whose label time is null is scored and not held: its label never
+    arrives, and :meth:`~rheon.polars.ModelBank.summary` counts it in
+    ``labels_missing``. A null label time is how to keep a row that is only
+    to be scored out of the held rows. A label time before its row's clock
+    is refused, naming the row. A list gives one column per target; this
+    version takes a list only when every entry names the same column.
+    ``max_held_rows`` bounds the rows a group holds; past it
+    ``held_overflow="refuse"`` (the default) refuses the chunk and
+    ``"drop_oldest"`` drops the row that arrived first, counted in
+    ``labels_dropped``, as a clock reset's drop is. Rows still held at the
+    end are not learned unless the state is saved and resumed. Refused
+    beside ``embargo``, a window-expression target, ``group_close``, a
+    ``session`` column and ``drift_action="reset"``, and for ``holt``,
+    ``kalman``, ``hmm`` and ``micro``, whose score reaches from the newest
+    learned row. Cost: a held row is placed in label-time order by
+    bisection, moving the shorter side of the buffer, 0.006 microseconds a
+    row with about 100 rows held and 0.38 with about 800 (Apple M4 Pro).
 ``group``, ``group_close``
     One model state per value of the ``group`` column. ``group_close`` says
     when a key is finished, so its state can be dropped. ``"monotone"``: the

@@ -88,6 +88,20 @@ impl ArrowCol {
         self.len() == 0
     }
 
+    /// The nulls the column holds.
+    pub fn null_count(&self) -> usize {
+        use polars_arrow::array::Array;
+        match self {
+            Self::F64(a) => a.null_count(),
+            Self::Num(a) => a.boxed().null_count(),
+            Self::Str(a) => a.null_count(),
+            Self::I64(a) => a.null_count(),
+            Self::U64(a) => a.null_count(),
+            Self::Nanos(a) => a.null_count(),
+            Self::Bool(a) => a.null_count(),
+        }
+    }
+
     /// True for the two integer forms, which is what `group_close =
     /// "monotone"` orders numerically rather than lexicographically.
     pub fn is_integer(&self) -> bool {
@@ -362,10 +376,11 @@ pub struct ArrowChunk {
     index: PlHashMap<PlSmallStr, Vec<usize>>,
     /// `names` as a set, for [`Self::has`].
     name_set: PlHashSet<PlSmallStr>,
-    /// The input row this chunk's first row is: an error names `row_base +
-    /// i`, so a surface that feeds an input in chunks names the input's row,
-    /// not the chunk's (task 120). 0 unless [`Self::with_row_base`] says.
-    row_base: usize,
+    /// The input row each of this chunk's rows is: an error names
+    /// `rows.at(i)`, so a surface that feeds an input in chunks names the
+    /// input's row, not the chunk's (task 120). Row `i` is input row `i`
+    /// unless [`Self::with_row_base`] or [`Self::with_input_rows`] says.
+    rows: InputRows,
     /// Each temporal or integer clock column's dtype as it arrived, for the
     /// clock fields to echo it (docs/PLAN.md tasks 152 and 200).
     clock_dtypes: Vec<(PlSmallStr, DataType)>,
@@ -442,7 +457,7 @@ impl ArrowChunk {
             names,
             index,
             name_set,
-            row_base: 0,
+            rows: InputRows::default(),
             clock_dtypes: Vec::new(),
             integer_text: PlHashSet::default(),
             key_dtypes: Vec::new(),
@@ -516,13 +531,23 @@ impl ArrowChunk {
     /// counts its row from.
     #[must_use]
     pub fn with_row_base(mut self, row_base: usize) -> Self {
-        self.row_base = row_base;
+        self.rows = InputRows::from_base(row_base);
         self
     }
 
-    /// The input row the chunk's first row is ([`Self::with_row_base`]).
-    pub fn row_base(&self) -> usize {
-        self.row_base
+    /// The chunk, as the input rows `rows` names: the rows a filter kept,
+    /// such as `--skip-learned`'s, whose errors name each row's place in
+    /// the input and not among the rows kept (review P12).
+    #[must_use]
+    pub fn with_input_rows(mut self, rows: InputRows) -> Self {
+        self.rows = rows;
+        self
+    }
+
+    /// The input row each of the chunk's rows is ([`Self::with_row_base`],
+    /// [`Self::with_input_rows`]).
+    pub fn rows(&self) -> &InputRows {
+        &self.rows
     }
 
     pub fn height(&self) -> usize {
@@ -535,6 +560,21 @@ impl ArrowChunk {
 
     pub fn has(&self, name: &str) -> bool {
         self.name_set.contains(name)
+    }
+
+    /// Whether the chunk holds no value of column `name`: no rows, or only
+    /// nulls in every form it holds the column in -- what a frame built with
+    /// no dtypes, every column `Null`, holds. Such a column says nothing of
+    /// its type (review P10). `false` for a column the chunk has not got.
+    pub fn holds_no_value(&self, name: &str) -> bool {
+        self.has(name)
+            && (self.height == 0
+                || self.index.get(name).is_some_and(|at| {
+                    at.iter().all(|&i| {
+                        let c = &self.cols[i].1;
+                        c.null_count() == c.len()
+                    })
+                }))
     }
 
     /// A column as a polars `Series`, in the first of the given forms the
@@ -804,6 +844,12 @@ fn wanted(specs: &[Spec]) -> Vec<(PlSmallStr, Want)> {
 fn spec_reads(s: &Spec) -> Vec<(&str, Want, &'static str)> {
     let (target_want, target_role) = match &s.model {
         ModelKind::EwClass { .. } => (Want::Text, "label"),
+        // `bocpd`'s hazard column rides in the targets slot, and is not a
+        // target (review fable2, Y7).
+        ModelKind::Bocpd {
+            hazard_col: Some(_),
+            ..
+        } => (Want::Number, "hazard"),
         _ => (Want::Number, "target"),
     };
     let mut reads: Vec<(&str, Want, &'static str)> = s
@@ -1100,6 +1146,38 @@ fn text_array(s: &Series, reader: Reader<'_>, name: &str) -> PolarsResult<Utf8Vi
         .unwrap_or_else(|| Utf8ViewArray::new_empty(ArrowDataType::Utf8View)))
 }
 
+/// Which input row each row of a chunk is, for the errors that name a row:
+/// the rows from `base` on, one after another, or the rows a filter kept,
+/// each its own place in the input.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct InputRows {
+    base: usize,
+    kept: Option<std::sync::Arc<[usize]>>,
+}
+
+impl InputRows {
+    /// Rows `base`, `base + 1`, ...
+    pub fn from_base(base: usize) -> Self {
+        Self { base, kept: None }
+    }
+
+    /// Row `i` is input row `kept[i]`.
+    pub fn kept(kept: Vec<usize>) -> Self {
+        Self {
+            base: 0,
+            kept: Some(kept.into()),
+        }
+    }
+
+    /// The input row the chunk's row `i` is.
+    pub fn at(&self, i: usize) -> usize {
+        match &self.kept {
+            Some(k) => k.get(i).copied().unwrap_or(self.base + i),
+            None => self.base + i,
+        }
+    }
+}
+
 /// A frame as an [`ArrowChunk`], reading only what the specs name.
 ///
 /// This is the polars adapter: every dtype decision the bank used to make is
@@ -1115,6 +1193,16 @@ pub fn chunk_from_frame_at(
     df: &DataFrame,
     specs: &[Spec],
     row_base: usize,
+) -> PolarsResult<ArrowChunk> {
+    chunk_from_frame_rows(df, specs, InputRows::from_base(row_base))
+}
+
+/// [`chunk_from_frame`] for the input rows `rows` names, one a row of `df`
+/// ([`ArrowChunk::with_input_rows`]).
+pub fn chunk_from_frame_rows(
+    df: &DataFrame,
+    specs: &[Spec],
+    rows: InputRows,
 ) -> PolarsResult<ArrowChunk> {
     let names: Vec<PlSmallStr> = df.get_column_names().iter().map(|n| (*n).clone()).collect();
     // `group_close = "monotone"` reads keys in the *column's* order -- an
@@ -1197,7 +1285,7 @@ pub fn chunk_from_frame_at(
         // for Datetime(ms/us/ns) (docs/records/TESTING-LOG.md T-E10). `check_clocks` has
         // already refused a spec that gives this clock plain numbers.
         if want == Want::Clock && s.dtype().is_temporal() {
-            let col = ArrowCol::Nanos(nanos_array(s, row_base, NanosRole::Clock, &reader)?);
+            let col = ArrowCol::Nanos(nanos_array(s, &rows, NanosRole::Clock, &reader)?);
             clock_dtypes.push((name.clone(), s.dtype().clone()));
             have.insert((name.clone(), col.form()));
             cols.push((name.clone(), col));
@@ -1232,7 +1320,7 @@ pub fn chunk_from_frame_at(
         cols.push((name.clone(), col));
     }
     Ok(ArrowChunk::new(df.height(), cols, names)?
-        .with_row_base(row_base)
+        .with_input_rows(rows)
         .with_clock_dtypes(clock_dtypes)
         .with_integer_text_keys(integer_text)
         .with_key_dtypes(key_dtypes))
@@ -1248,6 +1336,10 @@ fn first_reader<'a>(specs: &'a [Spec], column: &str) -> Option<(&'a str, &'stati
         let name = s.name.as_str();
         let target_role = match &s.model {
             ModelKind::EwClass { .. } => "label",
+            ModelKind::Bocpd {
+                hazard_col: Some(_),
+                ..
+            } => "hazard",
             _ => "target",
         };
         let mut roles = s
@@ -1533,7 +1625,7 @@ fn nanos_per_unit<W: std::fmt::Display + ?Sized>(
 /// what the column is read for ([`NanosRole`]).
 pub(crate) fn nanos_array<W: std::fmt::Display + ?Sized>(
     s: &Series,
-    row_base: usize,
+    rows: &InputRows,
     role: NanosRole,
     who: &W,
 ) -> PolarsResult<Int64Array> {
@@ -1545,14 +1637,14 @@ pub(crate) fn nanos_array<W: std::fmt::Display + ?Sized>(
                 "{who}: column {:?} holds a duration at row {} (counting from 0) longer than \
                  about 292 years, which nanoseconds cannot hold. Drop or correct the rows with \
                  such a duration.",
-                s.name(), row_base + i
+                s.name(), rows.at(i)
             )
         } else {
             polars_err!(ComputeError:
                 "{who}: column {:?} holds an instant at row {} (counting from 0) before 21 \
                  September 1677 or after 11 April 2262, which nanoseconds cannot hold. Drop or \
                  correct the rows outside those dates.",
-                s.name(), row_base + i
+                s.name(), rows.at(i)
             )
         }
     };
@@ -1605,6 +1697,10 @@ fn role_of(specs: &[Spec], name: &str) -> &'static str {
             if t.value_column() == Some(name) {
                 return match &s.model {
                     ModelKind::EwClass { .. } => "label",
+                    ModelKind::Bocpd {
+                        hazard_col: Some(_),
+                        ..
+                    } => "hazard",
                     _ => "target",
                 };
             }
@@ -1687,10 +1783,10 @@ mod tests {
         let tod = Int64Chunked::new("tod".into(), since_midnight)
             .into_time()
             .into_series();
-        let ns = nanos_array(&tod, 0, NanosRole::Increment, "w").unwrap();
+        let ns = nanos_array(&tod, &InputRows::default(), NanosRole::Increment, "w").unwrap();
         let read: Vec<Option<i64>> = (0..ns.len()).map(|i| ns.get(i)).collect();
         assert_eq!(read, since_midnight);
-        let err = nanos_array(&tod, 0, NanosRole::Clock, "w").unwrap_err();
+        let err = nanos_array(&tod, &InputRows::default(), NanosRole::Clock, "w").unwrap_err();
         assert!(
             err.to_string().contains(
                 "w: clock column \"tod\" is a time of day, which starts again at midnight"
@@ -1698,7 +1794,7 @@ mod tests {
             "{err}"
         );
         let text = Series::new("s".into(), ["a"]);
-        let err = nanos_array(&text, 0, NanosRole::Increment, "w").unwrap_err();
+        let err = nanos_array(&text, &InputRows::default(), NanosRole::Increment, "w").unwrap_err();
         assert!(
             err.to_string().contains(
                 "w: column \"s\" is String, which cannot be read as an increment's input"
@@ -1711,7 +1807,9 @@ mod tests {
             .into_series();
         for role in [NanosRole::Clock, NanosRole::Increment] {
             assert_eq!(
-                nanos_array(&date, 0, role, "w").unwrap().value(0),
+                nanos_array(&date, &InputRows::default(), role, "w")
+                    .unwrap()
+                    .value(0),
                 86_400_000_000_000
             );
         }

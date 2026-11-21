@@ -95,9 +95,12 @@ def fold(df, pred, coverage=0.9, rate=0.05, auto=False):
     step from the label time released before it (capped) and folding
     `y - pred` at its weight, its interval scored against the radius it was
     shown; then the row reads `sigma`, its interval `pred ± m·sigma` and the
-    coverage, and is held, unless its weight is 0 or its label time null.
-    The multiplier `m` starts at `Φ⁻¹(1 − α/2)` on the first release with a
-    residual, unscored, and steps by `rate · (w/w̄) · (err − α)`.
+    coverage, and is held, unless its label time is null: a row of weight 0
+    is held too, and its release steps the folds by its label step and adds
+    nothing (in the conformal step it only ages the coverage and the count
+    of rows `w̄` is over). The multiplier `m` starts at `Φ⁻¹(1 − α/2)` on the
+    first release with a residual, unscored, and steps by
+    `rate · (w/w̄) · (err − α)`.
 
     `auto`, `conformal_rate="auto"`: each release with a residual also
     folds the count of rows still waiting, itself aside, into `n̄`, an EW
@@ -136,28 +139,35 @@ def fold(df, pred, coverage=0.9, rate=0.05, auto=False):
                 hits *= lam
                 hit_w *= lam
                 continue
-            # The conformal step, against the radius the row was shown.
-            w_rows = lam * w_rows + 1.0
-            w_mean += (w[j] - w_mean) / w_rows
-            if auto:
-                waiting = len(held) + len(due) - k - 1
-                nbar += (waiting - nbar) / w_rows
-            if not math.isfinite(m):
-                given += 1.0
-                if given >= 1.0 + nbar:
-                    m, given = norm_ppf(1.0 - 0.5 * alpha), 0.0
+            # The conformal step, against the radius the row was shown. A
+            # row of weight 0 is no evidence: it ages the coverage and the
+            # count, and takes no step.
+            if w[j] <= 0.0:
                 cov_w *= lam
-            elif not math.isfinite(shown):
-                cov_w *= lam
+                w_rows *= lam
             else:
-                miss = abs(r) > shown
-                cw = lam * cov_w + w[j]
-                cov = (lam * cov_w * cov + w[j] * (0.0 if miss else 1.0)) / cw
-                cov_w = cw
-                eta = rate
-                if nbar > 0.0:
-                    eta /= 1.0 + rate * g * nbar / 0.5
-                m = max(m + eta * (w[j] / w_mean) * ((1.0 if miss else 0.0) - alpha), 0.0)
+                w_rows = lam * w_rows + 1.0
+                w_mean += (w[j] - w_mean) / w_rows
+                if auto:
+                    waiting = len(held) + len(due) - k - 1
+                    nbar += (waiting - nbar) / w_rows
+                if not math.isfinite(m):
+                    given += 1.0
+                    if given >= 1.0 + nbar:
+                        m, given = norm_ppf(1.0 - 0.5 * alpha), 0.0
+                    cov_w *= lam
+                elif not math.isfinite(shown):
+                    cov_w *= lam
+                else:
+                    miss = abs(r) > shown
+                    cw = lam * cov_w + w[j]
+                    cov = (lam * cov_w * cov + w[j] * (0.0 if miss else 1.0)) / cw
+                    cov_w = cw
+                    eta = rate
+                    if nbar > 0.0:
+                        eta /= 1.0 + rate * g * nbar / 0.5
+                    step = eta * (w[j] / w_mean) * ((1.0 if miss else 0.0) - alpha)
+                    m = max(m + step, 0.0)
             # The spread.
             w_new = lam * rw + w[j]
             var = (lam * rw * var + w[j] * r * r) / w_new
@@ -173,7 +183,7 @@ def fold(df, pred, coverage=0.9, rate=0.05, auto=False):
             cover[i] = cov
         if hit_w > 0.0:
             hit_rate[i] = hits / hit_w
-        if avail[i] is not None and w[i] > 0.0:
+        if avail[i] is not None:
             held.append((avail[i], i, q))
     return {"sigma_y": sigma, "lo_y": lo, "hi_y": hi, "coverage_y": cover, "hit_rate_y": hit_rate}
 
