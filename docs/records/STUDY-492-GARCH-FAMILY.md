@@ -1,6 +1,6 @@
 # Study 492, part 1: online GJR-GARCH, EGARCH and GARCH(2,2), Gaussian
 
-Python and numpy only (`scripts/study_492.py`); no Rust, no source change. The
+Python and numpy only (`scripts/study_492.py garch`); no Rust, no source change. The
 question: can the online GARCH estimator of study 485 (requests A9 to A12:
 variance-targeted GARCH(1,1), a 500-row batch start by a small projected-Newton
 optimizer, a Huber-clipped score) extend to GJR-GARCH (leverage), EGARCH and
@@ -8,7 +8,7 @@ GARCH(2,2), and how near do the extensions stay to `arch`'s batch fits on the
 same rows? This part is Gaussian innovations. Student-t, skew-t and FIGARCH
 come in parts 2 and 3.
 
-Status: part 1 complete for the three models at 10,000 rows: 50 seeds (492000 to 492049) for GJR and EGARCH, 49 for GARCH(2,2) (the 50th was still running at the commit; the figures are over the 49 finished). Open:
+Status: part 1 complete for the three models at 10,000 rows: 50 seeds (492000 to 492049) for GJR, EGARCH and GARCH(2,2) (part 3 read the finished 50th GARCH(2,2) seed: the counts are unchanged, 12 and 15 within 2 SE plain, 29 and 32 targeted; the tables below keep part 1's text). Open:
 EGARCH has no variance-targeted form (see 1.3); the GARCH(2,2) oracle
 comparison is weak for a reason that belongs to the model, not the estimator
 (see 4).
@@ -227,7 +227,7 @@ to 0.06 s. These are numpy costs and say nothing about Rust.
 
 # Study 492, part 2: Student-t and skew-t innovations (GARCH(1,1), GJR-GARCH(1,1))
 
-Python and numpy only (`scripts/study_492_t.py`, built on part 1's `GarchPOQ`); no Rust, no source
+Python and numpy only (`scripts/study_492.py t`, built on part 1's `GarchPOQ`; it was `scripts/study_492_t.py` until part 3 merged the two scripts); no Rust, no source
 change. The shape parameters (`nu`, and `lambda` for the skew-t) are fitted in the batch start and
 then either held or updated online. Oracle: `arch_model(y, mean='Zero', vol='GARCH', dist='t'|'skewt',
 rescale=False)`, batch fit on the same rows. Seeds 492100 to 492149, 10,000 rows, truth
@@ -257,7 +257,7 @@ clipped by the likelihood, which is why part 1's Huber clip is not used here). S
     d l_t / d nu = 1/2 [psi((nu+1)/2) - psi(nu/2) - 1/(nu-2)] - 1/2 ln(1 + z^2/(nu-2))
                    + (nu+1) z^2 / (2 (nu-2) (nu-2+z^2))
 
-Checks (`study_492_t.py check`): `E w^2 = 2 nu/(nu+3)` to 3 digits at nu = 4, 6, 12 (4M draws);
+Checks (`study_492.py check t`): `E w^2 = 2 nu/(nu+3)` to 3 digits at nu = 4, 6, 12 (4M draws);
 shape score against a central difference of `ln f`, 1.6e-10 absolute; the density integrates to
 1, mean 0, variance 1 (quad); the log-likelihood at arch's own parameters equals arch's to 2e-13.
 
@@ -316,7 +316,7 @@ Bounded by the shape, not the stream, plus the 500-row buffer (4 KB) until the s
 
 ## 2. Verification of the work-in-progress file (step 0)
 
-`scripts/study_492_t.py` was left untracked by an earlier agent, unverified. Verified, then kept:
+`scripts/study_492_t.py` (now merged into `scripts/study_492.py`, part 3) was left untracked by an earlier agent, unverified. Verified, then kept:
 
 * It imports part 1's `GarchPOQ`, `backcast` (so inherits the 8e-16 filter match to arch and the GJR
   `0.5 * backcast` pre-sample term) and the base's `batch_core`.
@@ -399,3 +399,322 @@ Counting the seeds out of the 2 SE band, by cause (50 seeds, free, online):
    part 3 slot, or should `nu` be held after a start long enough that its SE is small (the start
    would have to be several thousand rows; the base's start is 500)?
 3. The skew-t shape scores need a closed form before any Rust port.
+
+---
+
+# Study 492, part 3: FIGARCH with a capped truncation, the state cap, one script, tolerances
+
+Python and numpy only; one entry point now, `scripts/study_492.py` (the part-2 script is merged into it and
+deleted). No Rust, no source change. Oracle: arch 9.0.0. Seeds: FIGARCH 492200 to 492219 (20 seeds; the first 10
+are reported beside the 20), Gaussian GARCH(1,1) and GJR 492000 to 492049 (rerun with the merged script), the t
+and skew-t figures are part 2's (the merged script reproduces seed 492111 bit for bit).
+
+```
+python scripts/study_492.py --quick            # every family, 2 to 3 seeds on 3000 rows, smoke bounds: 17 to 20 s
+python scripts/study_492.py figarch            # 10 seeds at 10,000 rows (the grid below ran 20); garch, t: 50
+python scripts/study_492.py grid figarch DIR --seeds 20     # resumable; SHARD and NSHARDS spread it over cores
+python scripts/study_492.py summary figarch DIR              # the tables below, with the tolerance verdicts
+python scripts/study_492.py one figarch 492201 --ms 500,1000  # one case, printed
+```
+
+## 1. The FIGARCH form
+
+**Which FIGARCH arch fits.** `arch.univariate.FIGARCH(p=1, q=1, truncation=1000)`: the fractionally integrated
+GARCH(1,1) written as an ARCH(infinity) in the squared residual and truncated at a fixed lag `M`, with the
+pre-sample squared residuals all equal to arch's backcast (the exponentially weighted mean of the first 75 squared
+rows, `0.94^i` weights). arch's documentation names no source for it; it is the fractionally integrated recursion
+`h_t = omega + [1 - beta L - (1 - phi L)(1 - L)^d] e_t^2 + beta h_{t-1}` solved for the weights, then cut at `M`
+(the fixed-truncation estimation form). arch's own `figarch_weights`, filter and bounds are what the script
+compares with, and its default `M` is 1000.
+
+    h_t = omega/(1 - beta) + sum_{j=1}^{M} lam_j e_{t-j}^2          (e_s^2 = backcast for s < 0)
+    lam_1 = phi - beta + d,   delta_1 = d,
+    delta_j = (j - 1 - d)/j delta_{j-1},   lam_j = beta lam_{j-1} + delta_j - phi delta_{j-1}
+
+Constraints (arch's, which keep every `lam_j >= 0`): `omega > 0`, `phi >= 0`, `0 <= d <= 1`, `2 phi + d <= 1`,
+`0 <= beta <= phi + d`; the script adds `d <= 1 - 1e-4` and an `omega` floor, as the GARCH forms do. The weights
+sum to less than 1 and the untruncated sum is exactly 1 (the process is integrated: strictly stationary, with no
+finite variance), so the truncated model's long-run variance, `omega/(1 - beta)/(1 - sum_{j<=M} lam_j)`, is set
+by the tail mass `1 - sum_{j<=M} lam_j ~ M^-d`. That is why `M` is part of the model and why a short `M` moves
+`omega` (section 4).
+
+**The online step, state and sensitivity.** The state is a ring of the last `M` squared residuals plus the usual
+`theta` (4) and `H` (4 x 4, symmetric). Unlike the GARCH forms, the sensitivity of `h_t` is not a finite
+recursion; it is a dot product of the ring with the weight derivatives, at the current `theta`:
+
+    dh/domega = 1/(1 - beta)
+    dh/dphi, dh/dd = dlam_phi . ring,  dlam_d . ring
+    dh/dbeta = omega/(1 - beta)^2 + dlam_beta . ring
+
+The weights and their derivatives are not state: they are a pure function of `theta` and one O(M) pass produces
+them. With `P_j = prod_{i=2}^{j} (i - 1 - d)/i` (`P_1 = 1`), `delta_j = d P_j` (no division by `d`), and
+`u_1 = d - beta + phi`, `u_j = delta_j - phi delta_{j-1}`: `lam` is the linear recursion `lam_j = beta lam_{j-1} +
+u_j`, and its three derivatives are the same recursion driven by `du/dphi = (1, -delta_1, ..., -delta_{M-1})`,
+`du/dd = (1, d delta_j/dd - phi d delta_{j-1}/dd)` with `d delta_j/dd = P_j + d dP_j`, `dP_j = -P_j sum_{i=2}^{j}
+1/(i - 1 - d)`, and `du/dbeta = (-1, lam_1, ..., lam_{M-1})`. A Rust pass runs the four recursions in lock step
+along `j` against the ring with O(1) scratch; the numpy script materialises four M-vectors per row.
+
+The step is part 1's: `g = (z^2 - 1)/(2 h) dh`, `H <- H + gamma (dh dh'/(2 h^2) - H)`, `theta <- Proj(theta +
+gamma H^-1 g)`, `gamma = 1/(t + 500)`, the first 500 rows buffered and fitted by `batch_core.maximize` from arch's
+own starting grid (`d` in .2, .5, .7; `phi`, `beta` as fractions of their bounds; `omega` from the variance
+target of the truncated weights), the buffer replayed at that fit to build `H`.
+
+**Two projections of the step.** `euclid` is part 1's Euclidean projection onto the constraint set. `metric`
+projects in the metric of the step's own `H` (`argmin (y - x)' H (y - x)` over the set: Dykstra's algorithm in the
+coordinates `u = L' y`, `H = L L'`). The Euclidean projection of a Newton step is not an ascent direction of the
+likelihood when `H` is far from the identity: the constraints bind on `phi`, `d` and `beta`, which the likelihood
+barely separates, and a cut `phi` leaves `d` and `omega` with moves computed for an uncut `phi`. Seed 492201 shows it
+(section 3).
+
+## 2. Verification (`study_492.py check figarch`, seconds)
+
+* The weights against arch's `figarch_weights`: 1.7e-18 absolute at M = 1000.
+* The analytic weight derivatives against central differences: 1.6e-10 (phi), 1.2e-9 (d), 9.3e-11 (beta), relative.
+* The fixed-parameter filter against arch's conditional variance at arch's own fitted parameters, every row of
+  3000: 5.3e-15 relative (so the backcast handling, including the lags that reach before the sample, is arch's).
+* The likelihood's score against a central difference of the likelihood: 5.6e-9 relative.
+
+## 3. Results against arch (Gaussian, 10,000 rows, 20 seeds, truth `(omega, phi, d, beta) = (0.03, 0.2, 0.4, 0.5)`)
+
+Data come from the truncation-1000 process (arch's default), by arch's recursion. arch is fitted at the same
+`M` as the online form ("same M") and at `M = 1000` (the reference). The gap is in arch's (robust-default)
+standard errors, as in parts 1 and 2; the path gap is `|s_online - s_arch|/s_arch` over rows 9,000 to 9,999.
+arch's median standard errors at M = 1000: `(0.007, 0.039, 0.033, 0.052)`; its fits converged on 20 of 20 at
+every `M` (0.1 s at M = 100, 0.3 s at M = 1000).
+
+| online form, M | vs arch at | seeds within 2 SE, every parameter (first 10 / 20) | median abs gap in SE: omega, phi, d, beta | path gap, max over the last 1000 rows: median / worst seed | log-lik gap: median / worst |
+|---|---|---|---|---|---|
+| euclid, 100 | M = 100 | 7 / 14 | 0.75, 0.52, 0.85, 0.74 | 8.3% / 1800% | -1.65 / -6439 |
+| euclid, 500 | M = 500 | 8 / 16 | 0.40, 0.39, 0.58, 0.43 | 5.5% / 1480% | -0.61 / -5281 |
+| euclid, 1000 | M = 1000 | 8 / 16 | 0.41, 0.47, 0.44, 0.53 | 5.9% / 667% | -0.64 / -3541 |
+| metric, 100 | M = 100 | 8 / 18 | 0.53, 0.39, 0.83, 0.59 | 6.6% / 19.0% | -0.90 / -9.3 |
+| metric, 100 | M = 1000 | 1 / 1 | 4.72, 0.34, 0.89, 0.86 | 11.6% / 22.5% | -6.64 / -23.3 |
+| metric, 500 | M = 500 | 8 / 17 | 0.48, 0.28, 0.57, 0.57 | 5.0% / 15.4% | -0.43 / -10.5 |
+| metric, 500 | M = 1000 | 8 / 15 | 1.66, 0.28, 0.57, 0.58 | 5.5% / 15.6% | -0.95 / -9.4 |
+| **metric, 1000** | M = 1000 | **8 / 17** | 0.42, 0.32, 0.47, 0.56 | **5.0% / 16.8%** | **-0.33 / -11.7** |
+
+* **FIGARCH extends, with the metric projection.** At M = 1000, 17 of 20 seeds are within 2 SE of arch on all four
+  parameters, the median absolute gaps are at most 0.56 SE (omega 0.0029, phi 0.013, d 0.017, beta 0.027 in
+  value), the median seed's variance path is 5.0% from arch's and the worst seed's 16.8%, and the likelihood is
+  0.33 nats below arch's maximum on the median seed (a nat or so, as in part 2). No seed leaves the region.
+* **The Euclidean projection blows up on 1 seed in 20.** Seed 492201: the 500-row start lands at `(0.18, 0.045,
+  0.178, 0)`; from row 600 the step is projected on nearly every row (8,658 of 9,500) and ends at `(2.11, 0, 1,
+  0)`, the likelihood 3,541 nats below arch's, a variance path 667% from arch's. It is part 1's step and the
+  mechanism of part 2's two blown-up t seeds (section 5 of part 2); the metric projection on the same seed ends at
+  `(0.042, 0.171, 0.308, 0.346)`, 4.7 nats below arch's maximum. The metric form still misses 2 SE on
+  three seeds (492201, 492203, 492213), by 2.5 to 4.0 SE at the worst parameter, `omega` high and `beta` low in
+  each, with starts that took 12 to 17 iterations (492203: "no ascent" at 17).
+* **The online estimate is biased down in `d` by about one SE and slightly in `beta`.** Median online
+  `(omega, phi, d, beta)` at M = 1000, metric: `(0.036, 0.193, 0.365, 0.480)` against arch's mean `(0.032,
+  0.205, 0.400, 0.500)`. A 500-row start with M = 1000 sees almost no row whose ring is not mostly the backcast
+  (a lag beyond `t` carries `lam_j x backcast`), so `d` is identified by the stream, at `1/(t + 500)`.
+  Not tried: a longer start; fitting `H` by a second pass.
+* **A short `M` is a different model and the gap says so.** M = 100 matches arch at M = 100 as well as M = 1000
+  does at its own (18 of 20), but against the M = 1000 reference it is 1 of 20, `omega` 4.7 SE high (arch's own
+  M = 100 fit has mean `omega` 0.062 against 0.032): the shorter truncation loses tail mass and `omega` compensates.
+  M = 500 is 15 of 20 against the M = 1000 reference, the median `omega` gap 1.7 SE.
+
+Cost (numpy, 4-core VM, median over seeds): 103, 119 and 141 microseconds per row at M = 100, 500 and 1000
+(Python overhead is about 100; the slope is about 0.04 microseconds per unit of `M`), the start 0.13 s.
+Extrapolation was measured separately: 261 microseconds at M = 4000, 1.2 ms at 16,000, 2.6 ms at 32,751.
+
+## 4. Truncation length against accuracy
+
+Two measurements, both at the truth `(0.03, 0.2, 0.4, 0.5)`:
+
+**The filter's truncation error alone** (fixed parameters, data from a truncation-32,000 process, relative gap
+of the `M`-filter to the 32,000-filter's variance over the last 1000 rows; three seeds, range): tail mass
+`1 - sum_{j<=M} lam_j` and the gap (the reference is itself cut: its own tail mass is 1.7%, so each gap below
+understates the gap to the untruncated process).
+
+| M | state bytes | % of the 256 KiB cap | tail mass | median gap | max gap |
+|---|---|---|---|---|---|
+| 100 | 936 | 0.4% | 17.1% | 16% to 25% | 43% to 54% |
+| 500 | 4,136 | 1.6% | 9.0% | 6.5% to 14% | 17% to 32% |
+| 1000 | 8,136 | 3.1% | 6.8% | 4.6% to 9.4% | 12% to 23% |
+| 4000 | 32,136 | 12.3% | 3.9% | 1.8% to 3.6% | 4.5% to 8.5% |
+| 16,000 | 128,136 | 48.9% | 2.2% | 0.3% to 0.65% | 0.8% to 1.6% |
+| 32,000 | 256,136 | 97.7% | 1.7% | (reference) | (reference) |
+
+The tail mass falls like `M^-d` with `d = 0.4`, a factor 3 per factor 16 in `M`; the gap to the 32,000-filter
+falls faster (a factor 14 from M = 1000 to 16,000) because the reference holds the weights out to 32,000, so the
+rows near the bottom of the table are the part between `M` and 32,000, not a distance to the untruncated process.
+At n = 10,000 rows every `M` above the sample length reads the backcast for the whole pre-sample, so the 16,000 and
+32,000 rows also partly measure the backcast treatment.
+
+**The fit when the data are longer-memoried than the filter** (6 seeds, data from a truncation-4000 process,
+metric projection, arch fitted at the same `M`): arch's own mean `omega` is 0.068 (M = 500), 0.054 (M = 1000) and
+0.035 (M = 4000) against the truth 0.03; `phi`, `d` and `beta` barely move (`d` 0.412, 0.414, 0.417). The online
+form at M = 1000 is within 2 SE of arch at M = 1000 on 4 of 6 seeds, within 2 SE of arch at M = 4000 on 2 of 6
+(`omega` 7 SE high on the worst), against 4 of 6 for the online form at M = 4000 and arch at M = 4000: the
+estimator is as good as arch at the same truncation, and a truncation shorter than the data's costs `omega`, not
+the dynamics.
+
+**Chosen M: 1000.** It is arch's default and the oracle's truncation (so the comparison is like for like), it fits
+17 of 20 seeds, and it costs 8,136 bytes. It is not the accurate `M`: for the variance path to be within about
+5% of the long-memory process on the median row the truncation must be about 4000 (a 2 to 3.5% median gap), and
+within about 1% about 16,000. Both are inside the cap (section 5); the cost that binds is the per-row pass, linear
+in `M`.
+
+## 5. The state cap
+
+The coordinator's rule: every model's data-dependent state needs a stated cap, 256 KB per group by default. Here
+256 KB is read as 256 KiB = 262,144 bytes; at 256,000 bytes the numbers below move by under 2%.
+
+What FIGARCH stores: the ring of `M` squared residuals (the newest first), `theta` (4 floats), `H` (4 x 4
+symmetric, 10), the running mean of `e^2`, its count and the step count (3):
+
+    floats = M + 17,    bytes = 8 M + 136
+
+Before the start the 500-row buffer (4,000 bytes) is the only state (the ring is built when the buffer is
+replayed), so the peak is the larger of the two, not the sum. The weights and their derivatives are not stored
+(one pass per row, O(1) scratch in a Rust port). A port that cached them to avoid the pass would store five
+M-vectors (`40 M` bytes) and reach the cap at `M = 6,553`; that is the layout to avoid.
+
+**The cap is reached at `M = 32,751`**: `8 M + 136 <= 262,144` gives `M <= 32,751`, which is 262,144 bytes exactly (at
+256,000 bytes, `M <= 31,983`). The values proposed: M = 1000 (8,136 bytes, 3.1% of the cap, the oracle's
+truncation), M = 4000 (32,136 bytes, 12.3%) for a 5% variance-path accuracy against the long-memory process, and
+M = 16,000 (128,136 bytes, 48.9%) for a 1% accuracy. **Every M that the accuracy measurements call for stays within
+the cap, plainly: the cap does not bind before accuracy does.** What binds first is the pass: about 30 M floating-point
+operations per row (four recursions of two operations, four dot products, the cumulative product and sum) and
+2.6 ms per row in numpy at the cap's largest M, against 0.14 ms at M = 1000. The bytes of the other models are
+at most 312 (section 6), 0.1% of the cap. A bank holding FIGARCH for many groups pays `8 M + 136` bytes and `O(M)` time per group.
+
+## 6. Tolerances
+
+Each is a count or a bound from the measured distribution over seeds; a bound on a gap is 1.5 times the measured
+median or worst, rounded up to a clean figure. They are in `TOL` in `scripts/study_492.py`, applied by
+`summary` and by the full run; `--quick` applies only smoke bounds (a few seeds on short series, structural, so it
+cannot flake on a 2 SE count: path gap median under 100%, shape gap median under 3 SE, FIGARCH state equals
+`M + 17`).
+
+| family | quantity (unit) | measured | bound | tight or loose |
+|---|---|---|---|---|
+| Gaussian GARCH(1,1), 50 seeds | seeds within 2 SE of arch on every parameter (fraction) | 49/50 | >= 0.90 (45) | tight: one seed of slack in 4 |
+| | path gap, max over the last 1000 rows, median over seeds (relative) | 0.025 | <= 0.05 | tight |
+| | same, worst seed | 0.363 | <= 0.6 | **loose**: one seed, 492026, `omega` 3.7 SE high (the next worst is 0.105, the 98th percentile 0.11) |
+| GJR(1,1), 50 seeds | within 2 SE | 49/50 | >= 0.90 | tight |
+| | path gap median / worst | 0.034 / 0.111 | <= 0.05 / <= 0.2 | tight / loose by the 1.5 factor |
+| EGARCH(1,1), 50 seeds | within 2 SE | 46/50 | >= 0.90 (45) | **one seed of slack**; three batch starts hit the 50-iteration cap |
+| | path gap median | 0.034 | <= 0.05 | tight; no bound on the worst (0.61, seed 492006, `omega` 8.9 SE) |
+| GARCH(2,2), 50 seeds | none | 12/50 plain, 29/50 targeted within 2 SE | **no pass tolerance** | the failure is the expected result: `beta_1` and `beta_2` are weakly identified (arch's own fits split their sum differently seed to seed), the persistence gap is the better figure (0.085 plain, 0.037 targeted) |
+| t, skew-t, GJR t, 50 seeds | within 2 SE, every parameter (fraction) | 46, 43, 48 of 50 | >= 0.80 (40) | loose: 43/50 is the worst, 6 seeds of slack |
+| | shape within 2 SE (fraction) | 47, 46, 49 of 50 | >= 0.85 (43) | loose |
+| | shape gap, median over seeds (arch SE; in value: nu 0.095 to 0.12, eta 0.12, lambda 0.002) | 0.25 (nu), 0.34 and 0.12 (eta, lambda), 0.29 | <= 0.5 | tight |
+| | path gap, median over seeds of the max | 0.035, 0.041, 0.055 | <= 0.10 | tight |
+| | same, 90th percentile over seeds | 0.115, 0.168, 0.088 | <= 0.25 | loose; **no bound on the worst**: two GARCH(1,1) t seeds (492111, 492134) blow up (7,880% and 4,580%), GJR t 492111 is off by 99% |
+| FIGARCH, M = 1000, metric, 20 seeds | within 2 SE of arch at the same M | 17/20 | >= 0.75 (15) | tight |
+| | parameter gap, median over seeds, each parameter (arch SE) | 0.42, 0.32, 0.47, 0.56 | <= 1.0 | loose |
+| | path gap median / worst | 0.050 / 0.168 | <= 0.10 / <= 0.25 | tight / loose |
+| | log-likelihood gap, worst seed | -11.7 | > -50 | loose: it separates the blow-up (-3541) from the rest |
+
+The Student-t and skew-t counts and the shape gap are the loosest because the shape parameter's standard
+error is wide (0.35 for `nu` at 10,000 rows), the 500-row start misses it by a median 0.9 (section 3 of part 2),
+and a heavy-tailed run moves the shape and the GARCH parameters together. The Euclidean-projection FIGARCH is
+not given a tolerance: it is the baseline whose 1 in 20 blow-up the metric projection removes.
+
+## 7. The family, summarised
+
+### Recursions (`l_t = log s_t`, `s_t = sigma_t^2`, `z_t = e_t/sigma_t`)
+
+| model | conditional variance | sensitivity carried | step |
+|---|---|---|---|
+| GARCH(p, q), GJR(p, o, q) | `s_t = omega + sum a_i e_{t-i}^2 + sum g_j 1[e_{t-j} < 0] e_{t-j}^2 + sum b_k s_{t-k}` (GJR's pre-sample asymmetric term is `0.5 x backcast`) | `d_t = x_t + sum b_k d_{t-k}`, `dl = d_t/s_t` | `g = (z^2 - 1)/2 dl`, `I = dl dl'/2`; Gaussian quasi-likelihood |
+| EGARCH(1,1,1) | `l_t = omega + beta l_{t-1} + alpha (abs z_{t-1} - sqrt(2/pi)) + gamma z_{t-1}` | `dl_t = (1, abs z - c, z, l_{t-1}) + (beta - (alpha abs z + gamma z)/2) dl_{t-1}` | same; no variance target |
+| t, skew-t on the above | the same `s_t` | the same | `g = w dl/2`, `w = (nu + 1) z^2/(nu - 2 + z^2) - 1` (t), the skew-t's `w` of part 2; shape stepped with BHHH information |
+| FIGARCH(1,1), truncation M | `h_t = omega/(1 - beta) + sum_{j<=M} lam_j e_{t-j}^2` | `dh` by the ring and the weight derivatives (section 1) | `g = (z^2 - 1)/(2h) dh`, `I = dh dh'/(2h^2)`, metric projection |
+
+All: `H <- H + gamma (I - H)`, `theta <- Proj(theta + gamma H^-1 g)`, `gamma = 1/(t + 500)`, a 500-row batch start,
+out-of-sample predictions (the row's prediction is made before its update).
+
+### State bytes, as formulas
+
+`k = 1 + p + o + q`; `m` shape parameters (1 for t, 2 for skew-t); `nf` the stepped parameters.
+
+| model | floats | bytes (example) |
+|---|---|---|
+| GARCH(p,o,q) Gaussian | `k + k(k+1)/2 + max(p,o) + o + q + q k + 5` | GARCH(1,1) 152, GJR 208, GARCH(2,2) 312 |
+| EGARCH(1,1,1) | `k + k(k+1)/2 + 1 + 1 + k + 5`, `k = 4` | 200 |
+| t / skew-t | `k + m + nf(nf+1)/2 + max(p,o) + o + q + q k + 3` | GARCH(1,1) t 176, skew-t 224, GJR t 240 |
+| FIGARCH(1,1) | `M + 4 + 10 + 3` | `8 M + 136`: 8,136 at M = 1000 |
+
+Every one adds the 500-row buffer (4,000 bytes) until the start. Against the 256 KiB cap (262,144 bytes) every
+model but FIGARCH is under 0.1%; FIGARCH reaches it at `M = 32,751`.
+
+### Cost per row
+
+Floating-point operations: GARCH-type forms are `O(k^2 + q k + k^3/3)` (the solve) with `k <= 5`, and the
+projection only when an iterate leaves the set (Dykstra over about `k + 2` half-spaces, hundreds of sweeps in the worst
+case; a production form wants a closed-form projection per shape); the t adds two digamma values and a
+`log1p` per row, the skew-t four more density evaluations for the shape scores (central differences) or the
+closed forms; FIGARCH is about `30 M`. Measured in numpy, with Python overhead (4-core VM, median over seeds, microseconds per
+row): GJR 41 (free), 62 (targeted); EGARCH 19; GARCH(2,2) 58 and 65; GARCH(1,1) t 55 (free), skew-t 106; GJR t 58;
+FIGARCH 103, 119, 141 and 261 at M = 100, 500, 1000 and 4000. These say nothing about Rust.
+
+### Numerical risks
+
+* **The two blown-up t seeds, 492111 and 492134 (GARCH(1,1) t, free `omega`).** The step takes `omega` to 33 to 60,
+  `beta` to 0 and `nu` to 67 or 293, with 9,200 to 9,500 projected rows, a likelihood 9,900 to 12,600 nats below arch's.
+  Part 3 found the mechanism: it is the Euclidean projection of a Newton step, as in FIGARCH seed 492201. Projecting
+  in the step's own metric (`H`, with the shape eliminated by the Schur complement) removes the blow-up on both
+  (likelihood gap -190 and -151 nats, `omega` 0.19 and 0.14), but leaves them off: `nu` 2.7 and 2.9 against arch's
+  6.3. Over seeds 492100 to 492119 the metric form changes nothing where the projection was inactive (17 of 20
+  seeds within 2 SE with the Euclidean projection, 18 with the metric one) and the worst likelihood gap goes from -12,644 to -190.
+  Spot check on one family only (GARCH(1,1) t, 20 seeds); not run on skew-t, GJR t or the 50-seed grid. The shape
+  stabiliser of part 2's question 2 (a `log(nu - 2)` step, or holding `nu`) is still open.
+* **The GJR pre-sample term.** arch reads the pre-sample asymmetric term as `0.5 x backcast`; the script read it as
+  zero, which put the first rows' variance 5.7% off, decaying. Fixed in part 1; the filter now matches arch at its own
+  parameters to 8e-16 on every row, all three Gaussian models, and to 5.3e-15 for FIGARCH.
+* **The EGARCH iteration cap.** The batch start hit its 50-iteration cap on 3 of 50 seeds; one of them, 492006, is
+  `omega` 8.9 SE off with a 61% path gap. `omega` times `1 - beta` is the mean of `log s` and `beta` is near 1: the
+  ridge. The Huber clip biases EGARCH (21 of 50 within 2 SE): plain is the form.
+* **FIGARCH's start.** 500 rows against `M = 1000` give a start whose ring is mostly backcast; seed 492201's start
+  `(0.18, 0.045, 0.178, 0)` is a local optimum, 492203 stops with "no ascent". The metric projection recovers the
+  first; the second ends 11.7 nats below arch's maximum and 4 SE off on `beta`.
+* **Libm.** FIGARCH uses no libm function in the weights (a cumulative product, a cumulative sum and divisions);
+  the GARCH forms use none either; the t and skew-t use `log1p`, `digamma` and `lgamma`, so their `theta` is a libm
+  field in the sense of the cross-OS rule: continue to the bit on one OS, a tolerance across OSes. Not measured here.
+* **Variance target.** None for EGARCH (see 1.3 of part 1) or FIGARCH (the untruncated variance is infinite; the
+  truncated one is a function of `M`).
+
+### Oracles
+
+arch 9.0.0 throughout: `arch_model(..., mean='Zero', dist='normal'|'t'|'skewt', vol='GARCH'|'EGARCH', rescale=False)`
+and `arch.univariate.FIGARCH(p=1, q=1, truncation=M)` in `ZeroMean`, each fitted by arch's default optimizer on the
+same rows; arch's own filter, weights and backcast are compared to ours at arch's fitted parameters (8e-16 to 5.3e-15
+relative, every row). The `check` subcommands compare each analytic score to a central difference of the
+log-likelihood. scipy is used for the special functions and `lfilter`.
+
+### Open derivations (not settled by hand or by a test)
+
+1. **The skew-t's closed-form score in `nu` and `lambda`**: `a` and `b` depend on `nu` and `lambda` through `c`; the
+   script uses a central difference of the closed-form density (the mean score at the truth is zero within noise).
+   Needed before any Rust port.
+2. **The EGARCH variance target**: `E[s]` has no closed form in `(alpha, gamma)` for the Gaussian case, so no
+   target and the unrestricted `omega` form; and a score clip fitted to EGARCH's log scale (the variance-scale
+   Huber centring biases `omega`).
+3. **A root-based step for GARCH(2,2)**: step on the sum of the `beta`s and the filter's roots, not on `beta_1` and
+   `beta_2` separately; not tried. GARCH(2,2) carries no pass tolerance until it is.
+4. Also open: a shape stabiliser for the t's online `nu` after the metric projection (section 7, risks); and the
+   FIGARCH weight-derivative pass as one fused loop with O(1) scratch (derived and verified here in vector form).
+
+## 8. Notes for the merge
+
+* `scripts/study_492_t.py` is deleted; its code lives in `scripts/study_492.py` under the `t` subcommand, names
+  suffixed `_t` where they would collide (`MODELS` became `T_MODELS` for the t family; the part-1 `compare`,
+  `check`, `grid` and `summary` became `compare_garch` and so on, and one resumable `grid` and `summary` serve the
+  three families). A record written by the old `grid` has the same fields and is read by the new `summary`.
+* The script gained the metric projection (`FigOnline(metric=True)`, `OnlineT(metric=True)`, both off by default
+  for the GARCH and t forms, so part 1 and 2's results are unchanged) and one file-level lint exemption. The
+  repository's `ruff check .` and `ruff format --check .` are clean with it.
+* **`docs/README.md` needs a row for this record at merge**; it was not edited here.
+* Untracked `.claude/` is not committed.
+
+## 9. Questions for the coordinator
+
+1. FIGARCH at `M = 1000` is within the cap by a factor of 32 and matches arch's default; is the oracle's truncation
+   the right target, or do we want `M = 4000` (a 5% accuracy against the long-memory process, 12% of the cap, about
+   twice the per-row time)?
+2. The H-metric projection removes the blow-ups in FIGARCH and in the t forms; should it become the step's projection
+   for the whole family (part 1's GARCH(2,2) projected rows, 137,000, are the same mechanism)? Untested on GARCH(2,2).
+3. The skew-t closed form (open derivation 1) is the one item before a port.
