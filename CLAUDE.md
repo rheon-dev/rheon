@@ -129,7 +129,11 @@ runs both tiers, but a plain `cargo test` skips the extended Rust tests
    library's convention, not one model's quirk (review 2026-09-12, D10). Each target's
    `min_weight` is checked against that target's own weight where the model keeps one
    (S2); the emitted `weight_sum` is the shared weight either way.
-9. **A zero-weight row is legal** and means "advance the clock, learn nothing" — including
+9. **A zero-weight row is legal** and means "learn nothing, and leave the clock where it
+   was": the next row decays as if the zero-weight row were not there (the user,
+   2026-11-21: "This is always true on every model"). It is still predicted, and it counts
+   in no clock: not a row clock, a row-counted span or window, a `gap_cap`, a step-back or
+   session rule, or `n_eff`. This holds including
    as the *first* row of a stream, where `lam*w_sum + w` is 0 and the mean-form update's
    `a` and `b` are both 0/0. Guard every such division; an unguarded one poisons the state
    with a NaN that never washes out.
