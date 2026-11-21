@@ -511,6 +511,75 @@ def realized_library_candidate():
     report("499", "RV, BPV, MedRV, TPV, realized kernel", "realized-library", out, "500 log returns; rel. gap to the definitions (BNS 2004, ADS 2012, BNHLS 2008)")
 
 
+def dm_def(y, p1, p2, h, hln=True, one_sided=False):
+    """Diebold & Mariano 1995 with Harvey, Leybourne & Newbold 1997: sqrt((T+1-2h+h(h-1)/T)/T) factor, Student t(T-1) reference.
+    The one-sided p-value is for H1: P1 has the smaller loss (statistic negative)."""
+    from scipy import stats
+
+    d = (y - p1) ** 2 - (y - p2) ** 2
+    T = len(d)
+    dm = d - d.mean()
+    gam = lambda k: float(np.sum(dm[k:] * dm[: T - k]) / T)
+    V = (gam(0) + 2 * sum(gam(k) for k in range(1, h))) / T
+    st = d.mean() / np.sqrt(V)
+    if hln:
+        st *= np.sqrt((T + 1 - 2 * h + h * (h - 1) / T) / T)
+    p = stats.t.cdf(st, T - 1) if one_sided else 2 * stats.t.cdf(-abs(st), T - 1)
+    return float(st), float(p)
+
+
+@check
+def dm_candidate():
+    from dieboldmariano import dm_test
+
+    rng = np.random.default_rng(9)
+    T, h = 200, 3
+    y = rng.standard_normal(T).cumsum() * 0.1
+    p1 = y + rng.standard_normal(T) * 0.5
+    p2 = y + rng.standard_normal(T) * 0.6
+    out = {}
+    for hln in (True, False):
+        for one in (False, True):
+            st, p = dm_def(y, p1, p2, h, hln, one)
+            stat, pv = dm_test(y, p1, p2, h=h, harvey_correction=hln, one_sided=one)
+            out[f"harvey={hln}, one_sided={one}: |stat gap| / |p gap|"] = f"{abs(stat - st):.2e} / {abs(pv - p):.2e}"
+    report("521", "Diebold-Mariano (HLN, t reference, one-sided)", "dieboldmariano", out, "T=200, h=3, squared loss")
+
+
+@check
+def giacomini_white_candidate():
+    """GW 2006 (tau = 1): Z_t = h_{t-1} d_t, h = (1, d_{t-1}); Wald S = T Zbar' Omega^-1 Zbar, Omega = mean Z Z', chi2(q)."""
+    from scipy import stats
+    from feval import gw
+
+    rng = np.random.default_rng(10)
+    T = 300
+    e1 = rng.standard_normal(T) * 1.0
+    e2 = rng.standard_normal(T) * 1.1
+    L = np.column_stack([e1**2, e2**2])
+    d = L[:, 0] - L[:, 1]
+    H = np.column_stack([np.ones(T - 1), d[:-1]])
+    Z = H * d[1:, None]
+    zb = Z.mean(0)
+    Om = Z.T @ Z / len(Z)
+    n = len(Z)
+    wald = float(n * zb @ np.linalg.solve(Om, zb))
+    S, cval, pv = gw(L[1:], tau=1, H=H)
+    Om_c = np.cov(Z.T, ddof=1)
+    S1, _, _ = gw(L[1:], tau=1, H=H[:, :1])  # unconditional (q = 1): the DM case
+    z1 = Z[:, 0]
+    wald1 = float(n * z1.mean() ** 2 / np.mean(z1**2))
+    q = wald / n
+    uncentred_r2 = float(n * q / (1 + q))
+    report(
+        "521",
+        "Giacomini-White conditional test (tau=1, instruments 1 and d_{t-1})",
+        "feval",
+        {"S (feval)": float(S), "Wald definition": wald, "T * uncentred R^2 form": uncentred_r2, "|S - Wald|": float(abs(S - wald)), "|S - R^2 form|": float(abs(S - uncentred_r2)), "|p - chi2 sf of S|": float(abs(pv - stats.chi2.sf(S, 2))), "Wald with the centred covariance": float(n * zb @ np.linalg.solve(Om_c, zb)), "q=1: |S - Wald|": float(abs(S1 - wald1)), "q=1: T*R^2 form": float(n * (wald1 / n) / (1 + wald1 / n))},
+        "T=300, squared losses of two forecasters; feval installed from GitHub (not on PyPI), 0.0.2; its tau=2 with covar_style=sample raises TypeError",
+    )
+
+
 def main(argv):
     names = argv or list(CHECKS)
     for n in names:
