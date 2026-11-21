@@ -11,7 +11,8 @@ GARCH(1,1) margins against a batch fit written from the definition (§14).
 Part 7: the proposed tolerances (§15). Request A10, part 1: GARCH(1,1) variance
 targeting against a batch variance-targeting fit run by arch (§16). Part 2: the same at 100,000 rows and at
 persistence 0.97 and 0.99 (§17). Part 3: Student-t(5) noise for targeted
-GARCH, ARMA(1,1) at two AR roots and ETS(A,A,N) at two smoothing levels (§18). Part 4: DCC(1,1) on three series with t(5) noise (§19). The request named the deliverable
+GARCH, ARMA(1,1) at two AR roots and ETS(A,A,N) at two smoothing levels (§18). Part 4: DCC(1,1) on three series with t(5) noise (§19). Part 5: the revised tolerances (§20),
+which supersede §15.2's grid assertions where they differ. The request named the deliverable
 `STUDY-485-ESTIMATORS.md`; it is this record, kept under the name it was
 committed with (`ORACLE-STUDY-485.md`). Nothing in the package or the Rust crates was changed. The scan this
 builds on is `vm-tools/research/485-TIME-SERIES-SCAN.md` on branch
@@ -1009,3 +1010,117 @@ gain does not bring it back in 10,000 rows, as with GARCH in §10 and §18.
 **Not verified:** a Student-t second stage or an online `ν`; first-stage-
 corrected SEs; more than 10,000 rows under t(5); the composite likelihood
 (at `k = 3` the full one is used, as the definition gives).
+
+The coordinator accepted part 4 (2026-11-21) and keeps the t(5) DCC failure
+with its Gaussian control.
+
+## 20. Request A10, part 5: revised tolerances
+
+No grid was run for this section. Every figure comes from the grids of
+§10 to §19, at 10,000 rows unless stated; worst seeds not printed in those
+sections were read from the same grids' saved results. "Within 2" is the
+criterion's count (every parameter within 2 of the oracle's SEs, in the
+oracle's units as each section defines them); "headroom" is the count less
+45, and a floor of 45 has headroom when at least 2 seeds are spare (47 or
+more). This section supersedes §15.2's grid assertions where they differ;
+§15.2's fixed-parameter (class E) tolerances stand.
+
+### 20.1 Every set
+
+| set | section | within 2 | worst seed (parameter, SE) | headroom at 45 | meant to pass |
+|---|---|---|---|---|---|
+| GARCH plain, against arch's fit | §10 | 34 | 485000 (`ω` +63.4) | fails (−11) | no |
+| GARCH 1a, against arch's unrestricted fit | §11 | 45 (`α, β` only: 47) | 485027 (`ω` −3.82) | 0 | — (wrong oracle) |
+| GARCH targeted, against the targeted fit, P 0.98 | §16 | 47 | 485027 (`β` +2.70) | 2 | yes |
+| GARCH targeted, 100,000 rows | §17 | 48 | 485027 (`β` +4.31) | 3 | yes |
+| GARCH targeted, P 0.97 | §17 | 48 | 485027 (`β` +2.92) | 3 | yes |
+| GARCH targeted, P 0.99 | §17 | 44 | 485006 (`α` −7.00) | fails (−1) | no |
+| GARCH targeted, t(5), against the t fit | §18 | 35 | 485009 (`β` −55.3) | not comparable | no |
+| GARCH targeted, t(5), against the Gaussian targeted fit | §18 | 45 | 485009 (`β` −32.4) | 0 | no |
+| ARMA `φ` 0.6, normal | §12 | 50 | 485029 (`θ` −0.56) | 5 | yes |
+| ARMA `φ` 0.8, normal | §18 | 50 | 485029 (`θ` −0.56) | 5 | yes |
+| ARMA `φ` 0.95, normal | §18 | 49 | 485021 (`σ²` +3.95) | 4 | yes |
+| ARMA `φ` 0.8, t(5) | §18 | 50 | 485025 (`σ²` −1.02) | 5 | yes |
+| ARMA `φ` 0.95, t(5) | §18 | 49 | 485009 (`σ²` +2.18) | 4 | yes |
+| ETS `α` 0.3, normal | §13 | 50 | 485043 (`β` −1.74) | 5 | yes |
+| ETS `α` 0.1, normal | §18 | 50 | 485033 (`α` +0.93) | 5 | yes |
+| ETS `α` 0.1, t(5) | §18 | 49 | 485020 (`σ²` +2.32) | 4 | yes |
+| ETS `α` 0.6, normal | §18 | 6 | 485017 (`β` −9.98) | fails (−39) | no |
+| ETS `α` 0.6, t(5) | §18 | 6 | 485006 (`β` −13.1) | fails (−39) | no |
+| DCC two series, normal | §14 | 48 | 485001 (`a` −2.96) | 3 | yes |
+| DCC three series, normal | §19 | 47 | 485045 (`a` −2.85) | 2 | yes |
+| DCC three series, t(5) | §19 | 40 | 485049 (`b` −13.6) | fails (−5) | no |
+
+### 20.2 Revised floors (the sets meant to pass)
+
+A floor is set only where every set meant to pass clears it with at least
+two seeds spare. Each is a grid test of seeds at 10,000 rows (an
+`oracle_grid` test); the count and every per-seed bound are asserted. The
+per-seed bounds are the worst measured seed across the family's passing
+sets times about 1.2 to 1.5, rounded.
+
+| family (sets) | count floor | per-seed bounds (worst measured) | oracle |
+|---|---|---|---|
+| GARCH(1,1) with `ω` targeted at the running variance (P 0.97 and 0.98, normal noise) | **45 of 50** within 2 SE on `α, β` (measured 47, 48) | `α, β` ≤ 3.5 SE (2.92); `ω` ≤ 5 delta-method SE (3.77); median variance-path gap ≤ 5% (4.1%); `α + β` within 0.02 of the batch (0.013) | a **targeted** batch fit (§16's: arch's GARCH with `ω = v_T(1 − α − β)`), its robust SEs on `(α, β)`; not arch's unrestricted fit, against which the same runs have no headroom (45) |
+| ARMA(1,1), `φ` ≤ 0.8 (0.6, 0.8; normal and t(5)) | **47 of 50** (measured 50, 50, 50) | `φ, θ` ≤ 1 SE (0.56); `σ²` ≤ 1.5 SE (1.02, t(5)); prediction RMS gap ≤ 0.025 (0.019) | statsmodels `SARIMAX`, Gaussian likelihood, OPG SEs |
+| ARMA(1,1), `φ` = 0.95 (normal and t(5)) | **47 of 50** (49, 49) | every parameter ≤ 5 SE (3.95); RMS gap ≤ 0.08 (0.067) | as above |
+| ETS(A,A,N), `α` ≤ 0.3 (0.1, 0.3; normal and t(5)) | **47 of 50** (50, 50, 49) | `α, β` ≤ 2.5 SE (2.05); `σ²` ≤ 3 closed-form SE (2.32, t(5), where the Gaussian closed form understates the spread about twofold); RMS gap ≤ 0.06 (0.042) | `ETSModel`, known initial states, its SEs |
+| DCC(1,1), two and three series, normal margins | **45 of 50** (48, 47) | `a, b` ≤ 4 sandwich SE (2.96); worst-pair median `ρ` gap ≤ 0.03 (0.023) | the definition, second-stage SLSQP, sandwich SEs (accepted) |
+
+Changes from §15.2: the targeted GARCH grid moves to a targeted oracle and
+adds a persistence bound; ARMA's every-seed 1 SE holds only for `φ ≤ 0.8`
+and only on `φ, θ` (one t(5) seed reaches 1.02 on `σ²`), and `φ = 0.95` gets
+its own bounds; ETS's `σ²` and RMS bounds widen for t noise; the ARMA and
+ETS floors rise to 47, which every passing set clears by two or more. The
+500-row batch start (§11, 47 of 50) was not re-measured on the wider grid
+and gets no floor here.
+
+### 20.3 The sets that fail, and what rheon's tests should assert instead
+
+- **GARCH plain** (34): the early transient sticks on the `α + β` ridge
+  (§10). Do not ship it as an estimator; no assertion.
+- **GARCH targeted at P 0.99** (44): the same ridge, along `α ↔ β` with the
+  persistence close (gap at most 0.015, median 0.0015), and a running
+  variance far from `v_T` early on (47% at half the rows). The 0.98 grid
+  carries the count. At 0.99, assert in the model's own units, per seed:
+  `α + β` within 0.02 of the targeted batch fit (measured 0.015) and the
+  median variance-path gap at most 12% (8.5%).
+- **GARCH targeted under t(5)**: against arch's t fit (35) it is a different
+  estimator (the t likelihood, SEs about 1.3 times smaller), so not
+  comparable in those units; assert nothing against it. Against its own
+  estimand, the Gaussian targeted fit, 45 with one stuck seed (485009:
+  persistence 0.62 against 0.98). The normal-noise grid carries the count;
+  under t(5) assert only the median seed: the larger of the `α, β` gaps at
+  most 1 SE of the Gaussian targeted fit (measured median 0.64). A per-seed
+  bound would have to admit 485009 and would then catch nothing.
+- **ETS at `α` 0.6** (6, under both noises): a slow approach from the start
+  `(0.5, 0.05)` under the `1/t` gain, biased one way (`β` low, `α` high) and
+  shrinking with rows (−4.4, −4.0, −2.6 SE at 2,000, 10,000, 40,000 on one
+  seed). Not the noise. Assert in its own units: the online one-step MSE
+  over the second half at most 1.05 times the batch parameters' on every
+  seed (measured 1.019 normal, 1.038 t(5)); the parameter gaps are not a
+  usable tolerance at this `α` until the estimator's start or gain changes.
+- **DCC three series under t(5)** (40): heavy-tailed early rows push `(a, b)`
+  off the batch point along the ridge (seven seeds) or down in persistence
+  (three); the projection acts on 41 seeds. The normal-noise grid (47)
+  carries the count. Under t(5) assert per seed the worst-pair median `ρ`
+  gap at most 0.10 (measured 0.075), in correlation units, and the median
+  seed's larger `a, b` gap at most 1 SE (measured 0.64).
+
+### 20.4 Questions for the coordinator
+
+1. The targeted GARCH oracle needs `arch` in the repository's dev group,
+   where it is not today (statsmodels, scipy and scikit-learn are), and the
+   targeted process subclassed as §16 does. Is `arch` acceptable as a test
+   dependency, and is a subclassed process an acceptable oracle under the
+   rule that the library computes the quantity?
+2. Four failures share one cause, an early transient the `1/t` gain cannot
+   undo (GARCH at 0.99 and under t(5), DCC under t(5), ETS at `α` 0.6).
+   Should the estimators change (a batch start, which passed at 47 in §11;
+   a slower early gain; a robust score) before floors are fixed, instead of
+   the own-unit assertions of §20.3?
+3. Is two spare seeds the headroom wanted, and should ARMA and ETS take the
+   raised floor of 47?
+4. For DCC beyond two series, should rheon use the full likelihood (as
+   measured here at `k = 3`) or the composite likelihood over pairs (scan
+   §9), which was not measured?
