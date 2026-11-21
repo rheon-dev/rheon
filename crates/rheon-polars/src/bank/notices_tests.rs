@@ -229,6 +229,10 @@ fn a_bank_of_schema_66_loads_its_streams_with_no_pending_notice() {
     let mut v = rmpv::decode::read_value(&mut &bytes[..]).unwrap();
     let (mut pending, mut schema) = (0, 0);
     strip(&mut v, &mut pending, &mut schema);
+    // A file of 66 ends with no checksum (schema 71's).
+    if let rmpv::Value::Map(m) = &mut v {
+        m.retain(|(k, _)| k.as_str() != Some("checksum"));
+    }
     assert_eq!(
         (pending, schema),
         (1, 2),

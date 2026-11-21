@@ -188,6 +188,13 @@ const REGENERATE: &str = "PRINT_STATE_FIXTURES=1 cargo test -p rheon-polars --te
 /// zero-weight rows, so its two label kinds convert exactly too
 /// ([`HELD_ZERO_WEIGHT_FROM`]).
 ///
+/// 70 kept since 71 ended a bank file and a window run's state (version 11)
+/// with a checksum of their bytes (review P7). A kept file has none and
+/// loads as it did, so every kept kind goes on to the bit and converts to
+/// the current bytes exactly, the windows states included. No bank file
+/// here holds a formula target; a 70 bank whose target's core is version 10
+/// is held by `state_checksum.rs`.
+///
 /// The kept schemas, each a `v<N>/` directory found beside the current set.
 fn previous() -> Vec<u32> {
     frozen::PREVIOUS_SETS.iter().map(|(s, _)| *s).collect()
@@ -607,7 +614,8 @@ fn kept_rules(bytes: &[u8]) -> Vec<u8> {
     );
     let mut out = Vec::new();
     rmpv::encode::write_value(&mut out, &v).unwrap();
-    out
+    // Edited on purpose, so sealed again (schema 71's checksum).
+    rheon_polars::reseal(&out)
 }
 
 /// `bytes`, held to every stream having stayed in the kept form: no stream
@@ -690,7 +698,8 @@ fn kept_quantile(bytes: &[u8]) -> Vec<u8> {
     assert_eq!(found, 1, "bank_diagnosed holds one quantile fit");
     let mut out = Vec::new();
     rmpv::encode::write_value(&mut out, &v).unwrap();
-    out
+    // Edited on purpose, so sealed again (schema 71's checksum).
+    rheon_polars::reseal(&out)
 }
 
 fn diagnosed_run(bytes: &[u8], input: &DataFrame) -> Ran {
@@ -1791,6 +1800,31 @@ fn a_kept_schema_without_its_set_on_disk_is_refused() {
     assert_eq!(set_on_disk(&root, 44), Ok(2));
     assert!(set_on_disk(&root, 43).is_err(), "another schema has no set");
     std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// The form schema 71 added, held in the files (review 5, B1 and D3): every
+/// current bank file and window run's state ends with its checksum entry,
+/// and every kept file of 70 with none; a `refresh_time` state keeps none.
+#[test]
+fn the_current_bank_and_windows_fixtures_end_with_their_checksum() {
+    const TAIL: &[u8] = b"\xa8checksum\xc4\x08";
+    let sealed = |bytes: &[u8]| {
+        bytes.len() > TAIL.len() + 8
+            && &bytes[bytes.len() - 8 - TAIL.len()..bytes.len() - 8] == TAIL
+    };
+    let mut held = 0;
+    for f in frozen::ALL {
+        let bytes = unhex(f.state);
+        let want = !f.name.starts_with("refresh_time");
+        assert_eq!(sealed(&bytes), want, "{}", f.name);
+        held += usize::from(want);
+    }
+    assert_eq!(held, 15, "twelve bank files and three window states");
+    for (schema, set) in previous_sets() {
+        for f in set {
+            assert!(!sealed(&unhex(f.state)), "v{schema}/{}", f.name);
+        }
+    }
 }
 
 /// Each kept schema's fixtures, held to the loader the change after it
@@ -3161,6 +3195,10 @@ fn a_conformal_radius_of_schema_66_is_shown_then_converted() {
     let mut found = 0;
     to_66(&mut v, &mut found);
     assert_eq!(found, 1, "one tracker");
+    // A file of 66 ends with no checksum (schema 71's).
+    if let rmpv::Value::Map(m) = &mut v {
+        m.retain(|(k, _)| k.as_str() != Some("checksum"));
+    }
     let mut old = Vec::new();
     rmpv::encode::write_value(&mut old, &v).unwrap();
     let mut bank = Bank::load_bytes(&old, Some(std::slice::from_ref(&spec))).unwrap();

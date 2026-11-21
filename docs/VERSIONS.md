@@ -223,8 +223,9 @@ in any minor release:
 | **not stable** | any name that starts with an underscore, apart from the two columns `rp.stream.embargo` adds, `_online_role` and `_online_role_weight`, which are stable; the Rust crates (`rheon-core`, `rheon-polars`, `rheon-cli` and `rheon-py`), which are not published to crates.io, so nothing outside this repository builds against them; a model's numbers within the 1e-12 tolerance its stored reference results are held to, which depend on the platform and the Polars version; and the text the command line prints (its summary, readiness warnings and errors) and the timing lines `RHEON_TIMING=1` asks for, which are written for a person and may be reworded in a minor release |
 
 **Each unstable part is unstable for a reason that a promise would make
-costly.** The window run's state reached version 10 in under four weeks
-(2026-09-30 to 2026-10-24), versions 2 to 9 in the first nine days. The
+costly.** The window run's state reached version 11 in under eight weeks
+(2026-09-30 to 2026-11-21): versions 2 to 9 in the first nine days, 10 by
+2026-10-24, and 11, a checksum of the file's bytes, on 2026-11-21. The
 formula tree is read from `expr.meta.serialize`, whose form Polars calls
 unstable across its versions. The Arrow export's input side still arrives
 as a Polars frame, and its import is not built. `rp.sim` and `rheon.corr`

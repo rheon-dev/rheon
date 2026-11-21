@@ -154,8 +154,31 @@ model that only the new build has is listed as an addition and passes.
   quantile window's row whose bucket its sketch does not hold; and a
   formula target's held rows damaged where Polars' IPC reader unwraps a
   field, now refused as damaged. Polars' reader trusts the lengths the
-  held rows state, so some damage there still asks for an allocation that
-  aborts the process.
+  held rows state, so some damage there still asked for an allocation that
+  aborts the process; the checksum below refuses such a file first.
+- **A bank's and a window run's state file end with a checksum, checked
+  before anything is read** (review P7). The file's last entry, `checksum`,
+  is the 64-bit xxh3 hash of every byte before it (the hash Polars already
+  links; nothing new is linked), so a changed byte or a file cut short is
+  refused as damaged. Without it, about one damage in fifty that still
+  decoded loaded in silence and changed the output (28 of 1,500 random
+  single-byte damages of a `with_windows` state), a few loaded into a state
+  that failed at its next chunk, and a held row's Arrow IPC whose length
+  byte read 0x7f made Polars ask for 3.6e16 bytes, which aborts the process
+  before any error can be raised. Every byte of a saved bank file and
+  window state, set to five other values, is now refused, and none panics
+  or aborts. The bank's schema is 71 and the window state's version 11; a
+  file of schema 70 or earlier (version 10 or earlier) has no checksum and
+  loads as it did, to the bit, and saves the new form. The JSON export
+  carries none. Cost, on arm64 (M4 Pro, a bank of 1,000 groups holding an
+  `ewridge` and an `ew_cov` each, 4.2 MB, the median of 12 runs of 41 in
+  an ABBA against 2875e1f9 at a load of 4 to 7): `save_bytes` 5.6 to 6.6
+  ms (+1.0 ms, one pass of the hash over the encoded bytes), a save to a
+  file 16.6 to 17.3 ms (+4%, hashed as it is written), `load_bytes` 16.4
+  to 16.6 ms (+1.4%); a window run of 1,000 groups (1.7 MB) saves in 1.49
+  to 1.55 ms (+4%) and loads in 4.31 to 4.34 ms (+0.7%). The base build's
+  own runs spread by 5.5 to 6.5 ms in `save_bytes`, so only that figure is
+  outside it. Not measured on x86-64.
 - **Two text group keys whose hashes collide are two groups** (review
   P6). A chunk's rows were bucketed by a 64-bit FNV-1a hash of the key
   alone, so two keys with one hash, which can be made at will, were one

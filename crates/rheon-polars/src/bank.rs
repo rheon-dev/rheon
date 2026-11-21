@@ -2678,6 +2678,11 @@ pub struct CoefField {
 
 const BANK_MAGIC: &str = "polars-online-bank";
 
+/// The first schema whose bank file ends with a checksum of its bytes
+/// (`checksum.rs`): a file of this schema or later without one is damaged,
+/// and a file of an earlier one loads without it.
+const SEALED_FROM_SCHEMA: u32 = 71;
+
 /// The envelope of a [`BankFile`], read on its own first: a file from a newer
 /// build may carry keys this build's [`Spec`] refuses, and the version check
 /// has to run before that refusal can be mistaken for "not a bank file".
@@ -2753,6 +2758,13 @@ struct BankFile<S = FileStates> {
     /// file's bytes move.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     refit_reserved: Vec<(usize, f64)>,
+    /// The xxh3-64 of every byte before it, from schema 71
+    /// ([`SEALED_FROM_SCHEMA`]; `checksum.rs` has the layout). The last
+    /// field, so a file written a group at a time is hashed as it goes. Read
+    /// from the file's last bytes before anything is decoded, never by
+    /// serde; the JSON export writes none.
+    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
+    checksum: Option<crate::checksum::Trailer>,
 }
 
 pub struct Bank {
@@ -5058,6 +5070,7 @@ impl Bank {
                 .filter(|(_, k)| k.iter().any(Option::is_some))
                 .map(|(si, k)| (si, k.clone()))
                 .collect(),
+            checksum: None,
         })
     }
 
@@ -5069,16 +5082,25 @@ impl Bank {
     /// built by this crate cannot make happen.
     pub fn save_bytes(&self) -> Result<Vec<u8>, String> {
         self.refuse_if_broken().map_err(|e| e.to_string())?;
-        let mut out = Vec::new();
-        self.write_msgpack(&mut out)?;
+        // Into memory the checksum is patched in after, one pass of the
+        // hash; a file is hashed as it is written (`write_msgpack`).
+        let mut file = self.to_file_with(LazyStates(self))?;
+        file.checksum = Some(crate::checksum::Trailer::Patched);
+        let mut out = rmp_serde::encode::to_vec_named(&file).map_err(|e| e.to_string())?;
+        crate::checksum::seal(&mut out);
         Ok(out)
     }
 
     /// The msgpack [`Bank::save_bytes`] returns, written to `out` as it is
-    /// encoded, one group's snapshot at a time.
+    /// encoded, one group's snapshot at a time, and hashed as it goes for
+    /// the checksum it ends with (`checksum.rs`'s `Hashing`).
     fn write_msgpack<W: std::io::Write>(&self, out: &mut W) -> Result<(), String> {
-        let file = self.to_file_with(LazyStates(self))?;
-        rmp_serde::encode::write_named(out, &file).map_err(|e| e.to_string())
+        let (mut out, checksum) = crate::checksum::Hashing::new(out);
+        let mut file = self.to_file_with(LazyStates(self))?;
+        file.checksum = Some(checksum);
+        rmp_serde::encode::write_named(&mut out, &file).map_err(|e| e.to_string())?;
+        // The hashing writer holds up to a block: handed on here.
+        std::io::Write::flush(&mut out).map_err(|e| e.to_string())
     }
 
     /// [`Self::write_msgpack`] for a file: a failed write keeps the
@@ -5129,6 +5151,20 @@ impl Bank {
     /// differ from the file's -- the state would not be the state of the bank
     /// the caller has in mind.
     pub fn load_bytes(bytes: &[u8], expected_specs: Option<&[Spec]>) -> Result<Self, String> {
+        // The checksum first, before a byte is decoded: damage that decodes
+        // would load in silence, or panic or abort further in.
+        let sealed = match crate::checksum::check(bytes) {
+            crate::checksum::Seal::Broken => {
+                return Err(
+                    "state file: it is damaged (its bytes do not match the checksum it was \
+                     saved with). Load an undamaged copy of the state file, or rebuild it from \
+                     its input."
+                        .into(),
+                );
+            }
+            crate::checksum::Seal::Holds => true,
+            crate::checksum::Seal::Absent => false,
+        };
         // The decoder's own text names the file's fields and MessagePack
         // markers, words of the code: the header's failure is said whole.
         let header: BankHeader = rmp_serde::from_slice(bytes).map_err(|_| {
@@ -5168,71 +5204,15 @@ impl Bank {
                     .into(),
             );
         }
-        // Past the header, the bytes are a bank file of a version this build
-        // reads, so a refusal is damage. A model's own refusal (a `try_from`
-        // of its saved form, which rmp-serde shows bare) already says what to
-        // do; any other is said with the remedy here, so the text has one.
-        let mut file: BankFile = rmp_serde::from_slice(bytes).map_err(|e| {
-            use rmp_serde::decode::Error as De;
-            // The decoder's own failures in plain words: its text names
-            // MessagePack markers, a word of the code.
-            // serde's own refusals arrive as `Syntax` too, in its words.
-            const KIND: &str = "a value is not of the kind the file holds there";
-            const KNOWN: &str = "a value it must hold is missing, or it holds one this build \
-                                 does not know";
-            let plain = match &e {
-                De::InvalidMarkerRead(_) | De::InvalidDataRead(_) => Some("it is cut short"),
-                De::TypeMismatch(_)
-                | De::OutOfRange
-                | De::LengthMismatch(_)
-                | De::Uncategorized(_) => Some(KIND),
-                De::Utf8Error(_) => Some("a text value is not valid text"),
-                De::DepthLimitExceeded => {
-                    Some("its values nest deeper than a state file's values ever do")
-                }
-                De::Syntax(m)
-                    if ["invalid type", "invalid value", "invalid length"]
-                        .iter()
-                        .any(|p| m.starts_with(p)) =>
-                {
-                    Some(KIND)
-                }
-                De::Syntax(m)
-                    if [
-                        "missing field",
-                        "unknown field",
-                        "unknown variant",
-                        "duplicate field",
-                    ]
-                    .iter()
-                    .any(|p| m.starts_with(p)) =>
-                {
-                    Some(KNOWN)
-                }
-                De::Syntax(_) => None,
-            };
-            if let Some(what) = plain {
-                return format!(
-                    "state file: it is damaged ({what}). Load an undamaged copy of the state \
-                     file, or rebuild it from its input."
-                );
-            }
-            let body = e.to_string();
-            if body.ends_with("rebuild it from its input.") {
-                format!("state file: it is damaged: {body}")
-            } else {
-                // Its first sentence only: a refusal written for another
-                // reader, such as a formula's for the command line's TOML,
-                // ends with a remedy that cannot mend a state file.
-                let cut = [". ", "; "].iter().filter_map(|sep| body.find(sep)).min();
-                let what =
-                    cut.map_or_else(|| body.strip_suffix('.').unwrap_or(&body), |at| &body[..at]);
-                format!(
-                    "state file: it is damaged ({what}). Load an undamaged copy of the state \
-                     file, or rebuild it from its input."
-                )
-            }
-        })?;
+        if found >= SEALED_FROM_SCHEMA && !sealed {
+            return Err(
+                "state file: it is damaged (the checksum it ends with is missing or cut). Load \
+                 an undamaged copy of the state file, or rebuild it from its input."
+                    .into(),
+            );
+        }
+        // Past the header a refusal is damage (`file_encoding::damaged`).
+        let mut file: BankFile = rmp_serde::from_slice(bytes).map_err(file_encoding::damaged)?;
         if let Some(exp) = expected_specs {
             // Both sides filled, since filling is what a bank does to its
             // specs before it runs them: a caller who wrote the spec in TOML

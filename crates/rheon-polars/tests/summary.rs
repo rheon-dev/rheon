@@ -831,6 +831,27 @@ fn a_saved_summary_that_is_not_its_spec_s_is_refused_and_none_stays_none() {
     assert!(stream.save().persisted.summary.is_none());
 }
 
+/// A saved file with a bit flipped, `b`: refused as it is, by the checksum
+/// it ends with, and returned sealed again where the flip is before the
+/// checksum's entry (its last 19 bytes), so the checks behind the checksum
+/// -- what a file edited and sealed on purpose meets -- are swept too.
+fn sealed_again(b: &[u8], pos: usize, specs: &[Spec]) -> Vec<u8> {
+    let err = Bank::load_bytes(b, Some(specs))
+        .err()
+        .expect("a flipped bit is refused by the checksum");
+    // A flip in the checksum's own key or marker leaves a file that does
+    // not end with one, which its header refuses, as damaged or cut.
+    assert!(
+        err.contains("damaged") || err.contains("cut short"),
+        "{err}"
+    );
+    if pos < b.len() - 19 {
+        rheon_polars::reseal(b)
+    } else {
+        b.to_vec()
+    }
+}
+
 /// Every prefix of a state file, and every one of a spread of bit flips,
 /// is either loaded or refused with an error -- never a panic -- and what
 /// loads can be read and saved again.
@@ -876,6 +897,7 @@ fn truncated_and_bit_flipped_files_are_refused_or_loaded_never_panic() {
         for bit in [0, 3, 7] {
             let mut b = bytes.clone();
             b[pos] ^= 1 << bit;
+            let b = sealed_again(&b, pos, &specs);
             if b != bytes && Bank::load_bytes(&b, Some(&specs)).is_ok() {
                 loaded_flipped += 1;
             }
@@ -1109,6 +1131,7 @@ fn every_kind_refuses_or_loads_corruption(prefix_step: usize, flip_step: usize) 
             for bit in [0, 7] {
                 let mut b = bytes.clone();
                 b[pos] ^= 1 << bit;
+                let b = sealed_again(&b, pos, &specs);
                 tried += 1;
                 if Bank::load_bytes(&b, Some(&specs)).is_ok() {
                     loaded_flipped += 1;

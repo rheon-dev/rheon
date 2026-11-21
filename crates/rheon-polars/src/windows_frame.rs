@@ -95,6 +95,10 @@ impl WindowsConfig {
 
 const WHO: &str = "with_windows";
 const WINDOWS_MAGIC: &str = "polars-online windows";
+/// 11 since review P7: the state ends with `checksum`, the xxh3-64 of
+/// every byte before it (`checksum.rs`), checked before anything is
+/// decoded; a version-10 state has none and loads as one
+/// ([`SEALED_FROM_VERSION`]);
 /// 10 since task 272 (d): a queue keeps a quantile's sketches (`quant`) and
 /// an operator its level (`quantile`), each written only where there is a
 /// quantile, so a version-9 state is a version-10 state without one and
@@ -118,7 +122,11 @@ const WINDOWS_MAGIC: &str = "polars-online windows";
 /// task 143: formulas over operators, where 1 held descriptions. An older
 /// state would load with defaults and misbehave. The bank's schema moves
 /// with this number (review R4, A2; R6, D5).
-const WINDOWS_VERSION: u32 = 10;
+const WINDOWS_VERSION: u32 = 11;
+
+/// The first version whose state ends with a checksum: a state of this
+/// version or later without one is damaged.
+const SEALED_FROM_VERSION: u32 = 11;
 
 /// The oldest windows state this build reads: 9, whose layout is 10's
 /// without a quantile (task 272 (d)). A bank file embeds a core per window
@@ -148,6 +156,12 @@ struct FileOut<'a> {
     last_row: &'a [u8],
     /// The group and session columns' dtypes, by role (task 159, F2).
     key_dtypes: &'a [(String, String)],
+    /// The xxh3-64 of every byte before it (version 11; `checksum.rs`),
+    /// last; read from the file's last bytes, never by serde. None only in
+    /// a test that encodes a file by hand and seals it after
+    /// (`crate::reseal`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    checksum: Option<crate::checksum::Trailer>,
 }
 
 /// The rest of the file, after [`Header`]'s two fields.
@@ -2660,7 +2674,7 @@ impl WindowsRun {
                 .finish(&mut r)
                 .map_err(|e| e.to_string())?;
         }
-        rmp_serde::to_vec_named(&FileOut {
+        let mut out = rmp_serde::to_vec_named(&FileOut {
             magic: WINDOWS_MAGIC,
             version: WINDOWS_VERSION,
             config: &self.k.config,
@@ -2682,8 +2696,11 @@ impl WindowsRun {
             },
             last_row: &last_row,
             key_dtypes: &self.k.key_dtypes,
+            checksum: Some(crate::checksum::Trailer::Patched),
         })
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+        crate::checksum::seal(&mut out);
+        Ok(out)
     }
 
     /// [`Self::save_bytes`] to `path`, replacing it whole or not at all.
@@ -2719,6 +2736,20 @@ impl WindowsRun {
         config: WindowsConfig,
         input: &Schema,
     ) -> Result<Self, Refused> {
+        // The checksum first, before a byte is decoded: damage that decodes
+        // would load in silence, or panic or abort further in.
+        let sealed = match crate::checksum::check(bytes) {
+            crate::checksum::Seal::Broken => {
+                return Err(format!(
+                    "{WHO}: the state is damaged (its bytes do not match the checksum it was \
+                     saved with). Load an undamaged copy of the state file, or leave out \
+                     load_state to start over."
+                )
+                .into());
+            }
+            crate::checksum::Seal::Holds => true,
+            crate::checksum::Seal::Absent => false,
+        };
         let header: Header = rmp_serde::from_slice(bytes).map_err(|e| {
             format!(
                 "{WHO}: the state cannot be read ({e}), so it is damaged or was not saved by a \
@@ -2740,6 +2771,13 @@ impl WindowsRun {
                  version of rheon that saved it, or leave out load_state to start \
                  over.",
                 header.version
+            )
+            .into());
+        }
+        if header.version >= SEALED_FROM_VERSION && !sealed {
+            return Err(format!(
+                "{WHO}: the state is damaged (the checksum it ends with is missing or cut). Load \
+                 an undamaged copy of the state file, or leave out load_state to start over."
             )
             .into());
         }
@@ -4043,7 +4081,7 @@ mod tests {
         assert!(
             err.contains(
                 "the state's version is 2, but this version of rheon reads versions 9 \
-                 to 10"
+                 to 11"
             ),
             "{err}"
         );
@@ -4174,7 +4212,9 @@ mod tests {
         // 67: unchanged too. 69 for task 479's factor form of a wide
         // `full` `hmm` state, whose loader reads 68: unchanged too. 70 for
         // `hmm`'s stabilized prior, whose loader reads 69: unchanged too.
-        assert_eq!((WINDOWS_VERSION, rheon_core::SCHEMA_VERSION), (10, 70));
+        // 71 with windows state 11 (review P7): both end with a checksum;
+        // a 70 bank's 10 cores have none and load as they did.
+        assert_eq!((WINDOWS_VERSION, rheon_core::SCHEMA_VERSION), (11, 71));
         assert_eq!(MIN_WINDOWS_VERSION, 9);
     }
 
@@ -4638,7 +4678,9 @@ mod tests {
             resume_first: file.resume_first,
             resume_first_session: file.resume_first_session,
             last_row: &[],
+            checksum: None,
         })
+        .map(|b| crate::reseal(&b))
         .unwrap();
         let err = WindowsRun::load_bytes(&stripped, config(LEFT), df.schema())
             .err()
@@ -4684,7 +4726,9 @@ mod tests {
                 resume_first: file.resume_first,
                 resume_first_session: file.resume_first_session,
                 last_row: &file.last_row,
+                checksum: None,
             })
+            .map(|b| crate::reseal(&b))
             .unwrap();
             match WindowsRun::load_bytes(&damaged, config(FORWARD), df.schema()) {
                 Err(err) => assert!(err.contains("the state is damaged"), "{what}: {err}"),
@@ -5118,7 +5162,14 @@ mod tests {
             version: WINDOWS_VERSION,
         })
         .unwrap();
+        // Unsealed, it is refused as damaged before it is decoded; sealed,
+        // by the decoder.
         let err = load(&header);
+        assert!(
+            err.starts_with("with_windows: the state is damaged (the checksum it ends with"),
+            "{err}"
+        );
+        let err = load(&crate::reseal(&header));
         assert!(
             err.starts_with("with_windows: the state cannot be read ("),
             "{err}"
@@ -5137,7 +5188,9 @@ mod tests {
                 resume_first: file.resume_first,
                 resume_first_session: file.resume_first_session,
                 last_row: &file.last_row,
+                checksum: None,
             })
+            .map(|b| crate::reseal(&b))
             .unwrap()
         };
         // The core of another call: a window of 3 under this call's 2.

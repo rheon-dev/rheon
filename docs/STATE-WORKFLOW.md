@@ -103,6 +103,14 @@ predictions, so it refuses an embargo shorter than the target's window.
 `ModelBank.fit` and `rheon --no-output` keep none, so they take any
 embargo.
 
+**A damaged state file is refused before any of it is read.** A bank's
+state file and a window run's end with a checksum, the 64-bit xxh3 hash of
+every byte before it, and a load checks it first. A changed byte or a file
+cut short is refused as damaged, where some such damage used to load in
+silence and change the output, and some made the next chunk fail or the
+process abort. A file saved before the checksum (bank schema 70 or earlier,
+windows state 10 or earlier) has none and loads as it did.
+
 **A build refuses a bank file whose schema it does not read.** From 1.0,
 every later 1.x build loads a 1.x file, apart from a formula target's
 written form and a window run's state, whose formats may change in a minor
@@ -141,8 +149,9 @@ refusal. Here is what each rule guarantees, and the test that holds it:
 | without a clock column, an input that does not begin with a new session | refused: a row-count clock steps forward at every row | `test_without_a_clock_the_next_file_begins_with_a_new_session` |
 | a state of another version, or a damaged file | refused by its version, or reported as damaged | `test_a_windows_state_of_another_version_is_refused_by_its_version`, `test_a_damaged_windows_state_says_so` |
 
-The windows state is version 10, and this build reads 9 too, whose layout
-is 10's without a quantile operator. A bank file carries a windows state
+The windows state is version 11, and this build reads 9 and 10 too: 10's
+layout is 11's without the checksum, and 9's is 10's without a quantile
+operator. A bank file carries a windows state
 for each formula target, and a Rust test pairs the two version numbers, so
 a change to the windows state cannot pass the bank unseen. A state
 resumes only the call that saved it (`test_a_state_resumes_only_its_own_call`).
