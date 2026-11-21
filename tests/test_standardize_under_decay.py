@@ -292,35 +292,52 @@ def test_a_bank_saved_around_the_switch_goes_on_to_the_bit(cut):
         dict(
             model="sgd", learning_rate=0.05, schedule="inv_scaling", power=0.25, clip_gradient=1e3
         ),
+        dict(model="sgd", learning_rate=0.05, schedule="adagrad", clip_gradient=1e3),
         dict(model="pa"),
     ],
-    ids=["sgd", "sgd_inv_scaling", "pa"],
+    ids=["sgd", "sgd_inv_scaling", "sgd_adagrad", "pa"],
 )
-@pytest.mark.parametrize("gap", [100.0, 500.0, 1000.0], ids=lambda g: f"{g:g}hl")
+@pytest.mark.parametrize("gap", [30.0, 100.0, 500.0, 1000.0], ids=lambda g: f"{g:g}hl")
 def test_one_long_gap_leaves_a_fit_that_recovers(spec, gap):
-    """One clock gap of 100 to 1,000 half-lives, then 3,000 ordinary rows
-    (review fable2, C1). After such a gap the history's share of the moments
-    that include the row, ``a``, is below ``2**-53``, and the row's deviation
-    from their mean was formed as ``x - (m + b d)``: rounding noise of
-    ``2**-53 |d|`` against a true deviation of ``a d``, divided by a scale of
-    ``sqrt(a)``. On a5c4dcef 3 seeds in 20 ended 4e9 to 8e150 off for
+    """One clock gap of 30 to 1,000 half-lives, then 3,000 ordinary rows
+    (review fable2, C1 and its follow-up). After such a gap the history's
+    share of the moments that include the row, ``a``, is tiny. The row's
+    deviation from their mean was formed as ``x - (m + b d)``: rounding noise
+    of ``2**-53 |d|`` against a true deviation of ``a d``, divided by a scale
+    of ``sqrt(a)``. On a5c4dcef 3 seeds in 20 ended 4e9 to 8e150 off for
     ``sgd`` and 3e11 to 6e15 off for ``pa``, for good; the deviation is now
-    ``a d``. AdaGrad is not here: its step, normalized by a sum of squared
-    gradients that decays across the gap as the scale does, is ``lr /
-    sqrt(a)`` in the caller's units in exact arithmetic."""
+    ``a d``. Even exact, the step is divided by a scale of ``sqrt(a)`` times
+    the feature's spread, and the rows after the gap read a scaler of one or
+    two rows: AdaGrad's slopes were thrown by ``lr / sqrt(a)`` spreads (rows
+    6 to 100 after a gap of 30 half-lives 2.6e8 times the error of the same
+    stream with no gap, on a5c4dcef). The scaler now keeps one row's weight
+    into any row once the fit is held, so the fit comes back 2,500 rows on,
+    and over rows 6 to 100 after the gap the error is within twice the
+    no-gap stream's (measured 1.02 to 1.32 here, by learner)."""
     spec = dict(spec)
     kind = spec.pop("model")
     worst = 0.0
+    after, twin = [], []
     for seed in range(20):
         rng = np.random.default_rng(seed)
         n0, n = 300, 3300
         x = rng.uniform(-1.0, 1.0, (n, 2))
         y = 0.5 + x[:, 0] - 0.5 * x[:, 1] + 0.05 * rng.uniform(-1.0, 1.0, n)
-        dt = np.ones(n)
-        dt[n0] = 20.0 * gap
-        frame = pl.DataFrame({"t": np.cumsum(dt), "x0": x[:, 0], "x1": x[:, 1], "y": y})
+        mean = 0.5 + x[:, 0] - 0.5 * x[:, 1]
         common = dict(targets=["y"], features=["x0", "x1"], clock="t", gap_cap=1e15, half_life=20.0)
         built = getattr(rp.spec, kind)("m", **common, **spec)
-        pred = rp.ModelBank([built]).fit_predict(frame)["m"].struct.field("pred_y").to_numpy()
+        runs = []
+        for jump in (20.0 * gap, 1.0):
+            dt = np.ones(n)
+            dt[n0] = jump
+            frame = pl.DataFrame({"t": np.cumsum(dt), "x0": x[:, 0], "x1": x[:, 1], "y": y})
+            runs.append(
+                rp.ModelBank([built]).fit_predict(frame)["m"].struct.field("pred_y").to_numpy()
+            )
+        pred, same = runs
         worst = max(worst, float(np.max(np.abs(pred[n0 + 2500 :] - y[n0 + 2500 :]))))
+        after.append(float(np.mean((pred[n0 + 6 : n0 + 101] - mean[n0 + 6 : n0 + 101]) ** 2)))
+        twin.append(float(np.mean((same[n0 + 6 : n0 + 101] - mean[n0 + 6 : n0 + 101]) ** 2)))
     assert worst < 1.0, worst
+    ratio = max(after) / max(twin)
+    assert ratio < 2.0, (ratio, max(after), max(twin))

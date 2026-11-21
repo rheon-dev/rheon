@@ -389,3 +389,51 @@ other fixture, the whole of `rheon-core`'s, is byte for byte. The kept
 load back the same, and continues to the bit of its twin, a bank of this
 build fed the rows before the save with the zero-weight rows' label times
 null, `labels_missing` aside.
+
+A twenty-third, the user's (2026-11-20, review C1: "Accept exception 23";
+the twenty-second is `hmm`'s stabilized forgetting, written on its own
+branch): `sgd` and `pa` under `standardize` read each row in the stream's
+own unit of weight, one row's `ŵ = Σw²/Σw` over the rows the scaler
+learned until the switch (Kish's weight per row, held in `Warmup`'s two
+sums, frozen with the count), where they read every row at weight 1. While
+the scaler warms up a row is admitted to the moments at `ŵ`, and once the
+fit is held at `min(ŵ, w)`, its own weight and at most one row's; and the
+scaler's history keeps at least `ŵ·n/(n + 1)` of weight into a row before
+the switch (`n` Kish's count) and `ŵ` after it, its decay taken as
+`max(lam, min(1, floor/W))`. The layout is unchanged (the two sums were
+already in the state, only counted) and there is no schema bump. On a
+stream whose weights are all 1, `ŵ` is exactly 1 and the read is the old
+build's, so a unit-weight state continues to the bit (where a later gap
+leaves the history's decayed weight under one row, the floor binds and the
+row is read as this build reads any stream there: the fix of the gap, a
+change to the outputs the CHANGELOG declares, not of the state). A state
+saved by an earlier build
+whose rows were not all of weight 1 loads, re-saves the same bytes, and
+continues by the new read from the old read's moments and fit, not to the
+bit: at a half-life of 20 rows and weights of 0.5 to 1.5, its predictions,
+residuals and coefficients move by a median of 2e-3 to 5e-3 relative from
+the first row whose step is read at another weight, with no `weight_sum`,
+`min_weight` gate or null moved. There is no fix of the weighted read
+without it: the defect was in how every weighted row was read. The current
+fixtures of `rheon-core` that hold a weighted `sgd` or `pa`, every `sgd_*`
+and `pa*` case (15: `sgd`, `sgd_warming`, `sgd_huber`, `sgd_huber_mad`,
+`sgd_huber_mad_anchored`, `sgd_huber_refit`, `sgd_huber_refit_done`,
+`sgd_spread`, `sgd_unstable`, `sgd_resting`, `sgd_spread_adagrad`, `sgd_eps`,
+`sgd_logistic`, `pa`, `pa_warming`), regenerated; every other fixture, and
+the whole of `rheon-polars`'s, is byte for byte. The kept `v61/` to `v68/`
+sets of those cases are held by `READ_ANEW`
+(`crates/rheon-core/tests/state_fixtures.rs`): each re-saves bytes that load
+back the same, and continues within a measured bound of its frozen
+continuation (the largest move of any number after the save, measured
+2026-11-20 on macOS arm64 over every kept set: 1.1e-4 to 1.9e-3 of
+`1 + |x|` for a held fit, from the third row after the save, and 3.1e-2 and
+8.6e-2 for `sgd_warming` and `pa_warming`, whose predictions read the
+moments, from the first; `sgd_unstable`'s outputs did not move). A
+release's own files (`tests/test_released_state.py`) of the 14 `sgd` and
+`pa` specs of its probe, all on weighted rows, are declared moved since
+2.0.0 and held to the release's own continuation within `WITHIN`'s 0.06 of
+`1 + |v|` (measured: 2.9e-3 to 2.1e-2 in predictions, residuals and
+coefficients) and 0.25 for the two diagnosed specs (6.6e-2 and 8.0e-2, in a
+Jarque-Bera statistic and a hit rate), every release from 1.0.0 to 2.0.0,
+with no non-float field, null or withheld row moved; a 1.3.0 Huber `sgd`
+state goes on within 3e-3 of 1.3.0's continuation (8.1e-4 measured).

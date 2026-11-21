@@ -34,8 +34,12 @@
 //! switched a short half-life, which is where the wander costs most.
 //!
 //! **The switch** happens once, on the row after whose scaler update the
-//! count first reaches [`WARMUP_ROWS`]: until then every number is the one
-//! the model gave before task 206, to the bit. A restart or a drift reset
+//! count first reaches [`WARMUP_ROWS`]: until then the model runs the
+//! design it had before task 206, and on a stream of unit weights every
+//! number is the one it gave then, to the bit. A weighted stream's rows are
+//! read in its own unit of weight, one row's [`Warmup::row_weight`], where
+//! they were read at 1, so its numbers are not that build's.
+//! A restart or a drift reset
 //! builds the model again, scaler and count with it, so a new warm-up
 //! begins. The count stops at the switch: it has nothing more to decide.
 //!
@@ -124,6 +128,55 @@ impl Warmup {
     /// prediction.
     pub fn switched(&self) -> bool {
         self.switched
+    }
+
+    /// **One row's weight, in the stream's own units**: `Σw² / Σw` over the
+    /// rows the scaler learned until the switch, the weight Kish's count
+    /// gives each of its rows (`Σw = n · Σw²/Σw`), and frozen with the
+    /// count. Exactly 1 on a stream of unit weights; 1 before any row, where
+    /// the scaler holds nothing to weigh it against. Every weight a row is
+    /// read at and every floor the scaler's history keeps is in this unit,
+    /// so that a stream whose weights are all scaled by `c` is read as the
+    /// unscaled one (`sgd.rs`, `scaler_decay`; review fable2, C1's rule A).
+    pub(crate) fn row_weight(&self) -> f64 {
+        if self.w > 0.0 && self.w2 > 0.0 {
+            self.w2 / self.w
+        } else {
+            1.0
+        }
+    }
+
+    /// The weight a row is read at against the moments that include it,
+    /// and the least weight the scaler's history keeps into it (the floor
+    /// `sgd.rs`'s `scaler_decay` takes), both from one division a row.
+    ///
+    /// **The read.** While the scaler warms up: one row's
+    /// ([`Self::row_weight`]), whatever the row's own, so `predict`, which
+    /// has no weight (it passes `f64::INFINITY`), reads what the step reads.
+    /// Once the fit is held in the caller's units a prediction reads no
+    /// moment, and the row is read at its own weight, at most one row's: its
+    /// share of the moments is then the share the scaler's update gives it,
+    /// and never more than a typical row's.
+    ///
+    /// **The floor.** Once switched: one row's. Before: `n / (n + 1)` of one
+    /// row's, `n` Kish's count, half a row after the first and 22/23 at the
+    /// switch. Before the switch the floor must not bind on a regular
+    /// stream, and after the first row the history *is* one row. At unit
+    /// weights the history before row `n + 1` weighs `lam·(1 − lam^n)/(1 −
+    /// lam)`, which at a half-life of one row is `1 − 2^-n`, 1/2 at row 2;
+    /// `n/(n + 1)` lies under it at every `n` and meets it at `n = 1`, so the
+    /// floor binds on no regular unit-weight stream whose half-life is a row
+    /// or more, and still holds a share of the moments after a long gap early
+    /// in the stream (`pa`'s error after a gap at row 20 or 21 within 3.7
+    /// times the same rows' with no gap, where it was up to 1e19 times).
+    pub(crate) fn read(&self, weight: f64) -> (f64, f64) {
+        let one = self.row_weight();
+        if self.switched {
+            (one.min(weight), one)
+        } else {
+            let n = self.count();
+            (one, one * (n / (n + 1.0)))
+        }
     }
 
     /// The scaler has learned a row at `weight`: counted, and `true` on the

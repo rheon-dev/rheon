@@ -3992,6 +3992,18 @@ def pa(
     variances of out-of-sample error above the noise, where the fit without
     ``standardize`` had 0.18. Past the warm-up a box or a sum bounds the
     coefficients in the caller's units and is projected as for :func:`sgd`.
+    The scaler reads each row in the stream's own unit of weight, one
+    row's of the stream, and its history keeps at least that weight into
+    any row, as for :func:`sgd` (*Decay and the rate* there). The step is
+    divided by the row's scale, and after a long gap a history decayed to
+    almost nothing read the row against a scale of one row: over rows 6 to
+    100 after a gap of 30 half-lives or more the error at the 99th
+    percentile over seeds was up to 6,000 times that of the same stream
+    with no gap, and is now within 1.1 times of it. At weights of 1/8 on 8
+    features the row, read at weight 1, was too large a share of the
+    moments, and the error was 1,720 noise variances; read in the stream's
+    unit it is 0.097, and at constant weights of 1 or more every prediction
+    is the one at weights of 1, to the bit.
     """
     model: dict[str, Any] = {
         "type": "pa",

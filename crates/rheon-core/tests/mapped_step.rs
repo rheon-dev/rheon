@@ -3,7 +3,9 @@
 //! tasks 206 and 220).
 //!
 //! Past the warm-up each row is standardized against the features'
-//! moments with the row admitted at unit weight, `z_i = (x_i − m_i) / s_i`
+//! moments with the row admitted at its own weight, at most one row's of
+//! the stream (`ŵ = Σw²/Σw` over the warm-up's rows), and the history kept
+//! at no less than `ŵ` (review C1), `z_i = (x_i − m_i) / s_i`
 //! (`x_i / s_i` through the origin, `s_i` the root of the raw second
 //! moment), and the row's step `Δβ` in those coordinates is mapped into
 //! the caller's units, `Δb_i = Δβ_i / s_i` and `Δb_0 = Δβ_0 − Σ m_i Δb_i`.
@@ -83,20 +85,17 @@ fn rows(n: usize) -> Vec<Row> {
 }
 
 /// The row's map: each feature's mean and scale with the row admitted at
-/// unit weight after the decay, over the earlier rows at their weights
-/// decayed since, and `z`, the intercept's 1 first where there is one.
-/// Through the origin the mean is 0 and the scale the root of the raw
-/// second moment; a scale of 0 is read as 1.
+/// weight `admit`, over the earlier rows at their weights as the scaler
+/// keeps them into this row (`history`, already aged), and `z`, the
+/// intercept's 1 first where there is one. Through the origin the mean is
+/// 0 and the scale the root of the raw second moment; a scale of 0 is read
+/// as 1.
 type Map = (Vec<f64>, Vec<f64>, Vec<f64>);
 
-fn map(history: &[([f64; 2], f64)], x: &[f64; 2], off: usize) -> Map {
+fn map(history: &[([f64; 2], f64)], x: &[f64; 2], admit: f64, off: usize) -> Map {
     let n = history.len();
-    let mut weights: Vec<f64> = history
-        .iter()
-        .enumerate()
-        .map(|(r, (_, w))| w * LAM.powi((n - r) as i32))
-        .collect();
-    weights.push(1.0);
+    let mut weights: Vec<f64> = history.iter().map(|(_, w)| *w).collect();
+    weights.push(admit);
     let total: f64 = weights.iter().sum();
     let value = |r: usize, f: usize| if r < n { history[r].0[f] } else { x[f] };
     let (mut m, mut sc, mut z) = (vec![0.0; 2], vec![1.0; 2], vec![1.0; off]);
@@ -119,6 +118,22 @@ fn map(history: &[([f64; 2], f64)], x: &[f64; 2], off: usize) -> Map {
         z.push((x[f] - m[f]) / sc[f]);
     }
     (m, sc, z)
+}
+
+/// The scaler's history aged into a row: every kept weight times
+/// `max(LAM, min(1, floor / W))`, `W` their sum, so that it keeps at least
+/// `floor` (review C1). `floor` is one row's weight `ŵ` once the fit is
+/// held and `ŵ·n/(n + 1)` before, `n` Kish's count of the warm-up's rows.
+fn age(history: &mut [([f64; 2], f64)], floor: f64) {
+    let total: f64 = history.iter().map(|(_, w)| w).sum();
+    let lam = if floor > 0.0 && total > 0.0 {
+        LAM.max((floor / total).min(1.0))
+    } else {
+        LAM
+    };
+    for (_, w) in history.iter_mut() {
+        *w *= lam;
+    }
 }
 
 /// `Δβ` mapped into the caller's units and added to `b`.
@@ -248,15 +263,23 @@ fn against_the_equations(
 ) -> (usize, usize) {
     let mut history: Vec<([f64; 2], f64)> = Vec::new();
     let (mut stepped, mut moved) = (0, 0);
+    // Kish's sums over the warm-up's rows: one row's weight is `Σw²/Σw`.
+    let (mut kw, mut kw2) = (0.0f64, 0.0f64);
     for (i, (x, y, w)) in rows(260).into_iter().enumerate() {
         let d = if i == 0 { 0.0 } else { 1.0 };
+        let one = if kw > 0.0 { kw2 / kw } else { 1.0 };
         if !model.switched() {
+            let n = if kw2 > 0.0 { kw * kw / kw2 } else { 0.0 };
+            age(&mut history, one * (n / (n + 1.0)));
             model.step(&x, &y, d, w);
             history.push((x, w));
+            kw += w;
+            kw2 += w * w;
             continue;
         }
+        age(&mut history, one);
         let (before, spread) = (model.coef(), model.spread());
-        let (m, sc, z) = map(&history, &x, off);
+        let (m, sc, z) = map(&history, &x, one.min(w), off);
         let mut want = before.clone();
         for (j, b) in before.iter().enumerate() {
             let Some(yj) = y[j].filter(|_| w > 0.0) else {

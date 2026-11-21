@@ -261,6 +261,14 @@ use rheon_core::{MIN_SCHEMA_VERSION, ModelState, SCHEMA_VERSION, State};
 /// the width it starts at are held; every other kept case, the narrow one
 /// among them, converts to the current bytes exactly.
 ///
+/// And since review C1 (rule 5's twenty-third exception, the user's,
+/// 2026-11-20), with no layout change and no schema bump, `sgd` and `pa`
+/// under `standardize` read a row in the stream's own unit of weight. Every
+/// kept `sgd_*` and `pa*` case is weighted, so the current set's were
+/// regenerated and a kept state of those cases continues by the new read,
+/// within [`READ_ANEW`]'s bounds of its frozen continuation, not to the
+/// bit; it saves bytes that load back to the same.
+///
 /// The kept schemas, each a `v<N>/` directory found beside the current set.
 fn previous() -> Vec<u32> {
     frozen::PREVIOUS_SETS.iter().map(|(s, _)| *s).collect()
@@ -396,6 +404,45 @@ const RENUMBERED: &[(&str, f64, std::ops::Range<usize>)] = &[("corrchange_window
 ///   4.7e-16 apart (two units in the last place), the continuation 5.3e-15
 ///   (30 ulps, a posterior); the bounds are 21 and 19 times those.
 const TAKEN_UP: &[(&str, f64, f64)] = &[("hmm_full", 1e-14, 1e-13)];
+
+/// The weighted `sgd` and `pa` cases under `standardize` (rule 5's
+/// twenty-third exception, the user's, 2026-11-20; review C1), each with
+/// how far its continuation may part from a previous set's frozen one by
+/// [`agree`]'s measure. The scaler reads a row in the stream's own unit of
+/// weight, one row's `ŵ = Σw²/Σw` of the warm-up's rows, while it warms up
+/// and the smaller of that and the row's own weight once the fit is held,
+/// where it read every row at 1, and keeps `ŵ·n/(n + 1)` and then `ŵ` of
+/// history into a row; at unit weights both are 1 and nothing moves. These
+/// cases' rows are weighted, so the current set's states, written by this
+/// build, are not what a kept state converts to (no layout changed: it
+/// loads as it was), and a kept state continues by the new read from the
+/// old read's moments and fit. It is held to saving bytes that load back to
+/// the same, and its continuation within the bound. Measured 2026-11-20 on
+/// macOS arm64 over every kept set (v61 to v68), the largest move of any
+/// number after the save, in the comment; the bounds are about three times
+/// those. A held fit's prediction reads no moment, and the first number
+/// that moved is on row 3 after the save (row 4 for `sgd_resting`); a
+/// warming case's prediction reads the moments, and moves from row 0.
+/// `sgd_unstable` (a constant rate of 2, past the bound its gate holds)
+/// reports every number after the save to the bit, measured, so its bound
+/// is 0; its state moved, so it is listed.
+const READ_ANEW: &[(&str, f64)] = &[
+    ("sgd", 0.0003),                   // 1.1e-4
+    ("sgd_warming", 0.1),              // 3.1e-2
+    ("sgd_huber", 0.0025),             // 8.2e-4
+    ("sgd_huber_mad", 0.005),          // 1.5e-3
+    ("sgd_huber_mad_anchored", 0.005), // 1.9e-3
+    ("sgd_huber_refit", 0.0006),       // 2.1e-4
+    ("sgd_huber_refit_done", 0.0025),  // 8.5e-4
+    ("sgd_spread", 0.0025),            // 8.1e-4
+    ("sgd_unstable", 0.0),             // 0
+    ("sgd_resting", 0.005),            // 1.6e-3
+    ("sgd_spread_adagrad", 0.0035),    // 1.2e-3
+    ("sgd_eps", 0.0012),               // 4.1e-4
+    ("sgd_logistic", 0.0003),          // 1.1e-4
+    ("pa", 0.002),                     // 6.8e-4
+    ("pa_warming", 0.25),              // 8.6e-2
+];
 
 /// How far a continuation may part from the one frozen, on a platform other
 /// than the writer's: the golden files' tolerance (`tests/golden.rs`).
@@ -688,6 +735,12 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                 .iter()
                 .find(|(n, _, _)| *n == f.name && schema < 69)
                 .map(|&(_, m, c)| (m, c));
+            // A weighted `sgd` or `pa` under `standardize` reads its rows in
+            // the stream's own unit of weight since review C1 ([`READ_ANEW`]).
+            let read_anew = READ_ANEW
+                .iter()
+                .find(|(n, _)| *n == f.name)
+                .map(|&(_, b)| b);
             let kept = rmpv::decode::read_value(&mut &f.bytes()[..]).unwrap();
             // A `holt` of 61-63 keeps no line fit (the doc above `previous`).
             if let Some((bound, _)) = taken_up {
@@ -741,6 +794,16 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                         same_but_floats(&decode(&saved), &decode(&current.bytes()), bound, &what);
                     }
                 }
+            } else if read_anew.is_some() {
+                // Its state is the old read's, not the current fixture's
+                // (whose rows before the save were read anew), so it is held
+                // to saving bytes that load back to the same.
+                let saved = named(&m.state());
+                let again = load(&case, &saved).unwrap_or_else(|e| panic!("{what}: {e}"));
+                assert!(
+                    named(&again.state()) == saved,
+                    "{what}: saved, loaded, saved"
+                );
             } else if renumbered.is_some() {
                 assert_eq!(schema, 65, "{what}: RENUMBERED is for schema 65's windows");
                 renumbered_rule(&case, &named(&m.state()), &current.bytes(), 0.0, &what);
@@ -783,6 +846,7 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                 };
                 let tol = moved.map_or(tol, |b| tol.max(b));
                 let tol = taken_up.map_or(tol, |(_, b)| tol.max(b));
+                let tol = read_anew.map_or(tol, |b| tol.max(b));
                 let got = m.step(row);
                 if let Some((_, slots)) = &within {
                     assert!(

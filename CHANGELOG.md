@@ -227,6 +227,46 @@ model that only the new build has is listed as an addition and passes.
   standardization to 1e-12; above it the arithmetic is as it was, so only
   rows after a gap of about 14 half-lives or more move (by up to 1.1e-12
   after one of 15, measured). Moves: `sgd.*`, `pa.*`.
+- **`sgd` and `pa` with `standardize` read each row in the stream's own
+  unit of weight, and keep one row's weight of history into it.** The
+  scaler's unit is one row's weight of the stream, `ŵ = Σw²/Σw` over the
+  rows it learned while it warmed up (Kish's weight per row; exactly 1
+  when every weight is 1). While it warms up a row is read at `ŵ` and the
+  history keeps at least `ŵ·n/(n + 1)`, `n` Kish's count; once the
+  coefficients are held in the caller's units a row is read at its own
+  weight, at most `ŵ`, and the history decays by `max(lam, min(1, ŵ/W))`,
+  `W` its weight before the row. Two things were wrong. Every row was read
+  at weight 1 against moments in the weights' units, so a row was a share
+  of them that grew as the weights shrank: at weights of 1/8, AdaGrad on 8
+  features had an error of 1,140 noise variances where weights of 1 give
+  0.18, and `pa` 1,720; on weights falling 100-fold over the stream
+  AdaGrad's was 4,176; with one row in 100 at 100 times the rest and a
+  half-life of 5 rows, 444. And after a long gap the history's share `a`
+  of the moments a row is read against was tiny: each step is divided by
+  the row's scale, `sqrt(a)` times the feature's spread, so AdaGrad moved
+  a slope by `lr / sqrt(a)` spreads (2e8 rates after 60 half-lives, slopes
+  near 1e89 after two gaps of 600 in a row), and the next rows were read
+  against a scaler of one or two rows. Over rows 6 to 100 after a gap of
+  30 half-lives or more, a constant rate's error at the 99th percentile
+  over seeds was up to 185 times that of the same stream with no gap and
+  `pa`'s 6,000 times; after a gap of 60 half-lives at the warm-up's
+  twenty-first row, 1e17 to 1e19 times. Now AdaGrad moves a slope by at
+  most `sqrt(2)` rates of its feature's spread across any gap, at any
+  scale of the weights (at most 1.414212 measured, to 2,000 half-lives,
+  at weights times 2^-7 and 128); each learner's error after a gap is within 1.1
+  (constant, `pa`) and about 3 (AdaGrad) times the no-gap stream's, and
+  within 1.24, 1.22 and 3.7 after one at row 20 or 21; weights all scaled
+  by a power of two are read as the unscaled ones, to the bit, and AdaGrad
+  fits them within 4e-5 of the target's spread (its epsilon is in the
+  target's units); the four weighted cases above score 0.184, 0.097, 0.174
+  and 0.69. On streams whose weights are all 1 the floor binds only where
+  the history's decayed weight is under one row, at a half-life of 20 rows
+  after a gap of more than about 5 half-lives, and nothing else moves. On
+  weighted streams every prediction and coefficient moves from the second
+  learned row: at a half-life of 20 rows and weights of 0.5 to 1.5, by a
+  median of 2e-3 to 5e-3 relative, the error the same. `weight_sum`,
+  `min_weight` and the state's layout are unchanged; a weighted state saved
+  before continues by the new read, not to the bit. Moves: `sgd.*`, `pa.*`.
 - `kalman` with `revert_half_life`: `predict` withholds the prediction
   where the step does, across a clock gap long enough to take the
   covariance to exactly 0 (about 540 reversion half-lives, 1,075 in the

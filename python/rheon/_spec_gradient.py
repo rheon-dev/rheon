@@ -185,7 +185,8 @@ def sgd(
         suits every column. Default ``True``, as for :func:`kalman`: without
         it, features 100 times larger put the default rate past its
         stability bound (*Standardizing* in Notes). Each row is standardized
-        against the running moments with the row admitted, as scikit-learn's
+        against the running moments with the row admitted at one row's
+        weight of the stream (*Decay and the rate*), as scikit-learn's
         ``StandardScaler.partial_fit`` then ``transform`` do:
         ``z_i = (x_i - m_i) / s_i``, ``m_i`` and ``s_i`` the exponentially
         weighted (EW) mean and standard deviation, and ``s_i = 1`` for a
@@ -621,8 +622,10 @@ def sgd(
     rests. ``"inv_scaling"`` from a rate past the bound is withheld on its
     first rows and released as the rate falls, once the large gains of those
     rows have faded from the sums. ``"adagrad"`` moves a coefficient at most
-    the rate a row, and the quantile and epsilon-insensitive steps are a
-    sign times the rate, so none of them is withheld for its rate.
+    the rate a row (under ``standardize``, a slope at most ``sqrt(2)`` rates
+    of its feature's spread, across any gap: *Decay and the rate*), and the
+    quantile and epsilon-insensitive steps are a sign times the rate, so
+    none of them is withheld for its rate.
 
     **Decay and the rate.** A sign-valued step moves the fit's level by the
     rate times the row's weight. So at the default 0.01, a level the target
@@ -631,12 +634,46 @@ def sgd(
     rows away. The level it starts at is the running mean of its first rows
     (*The target's level* in Notes). AdaGrad's sum of squared gradients and
     ``weight_sum`` both decay on the model's clock, so an annealed or
-    adapted rate opens up again after a long gap instead of staying frozen.
+    adapted rate opens up again after a long gap instead of staying frozen,
+    up to the rate and no further.
     The coefficients themselves do not decay: every row's step moves them,
     so under ``"constant"`` their memory is in rows, about
     ``1 / (lr * E[z**2])`` of them, whatever the clock between rows.
     ``half_life`` reaches ``weight_sum`` and ``min_weight``, the scaler, the
     scales ``s`` and ``s_y``, and AdaGrad's sum, not the coefficients.
+
+    Under ``standardize`` the scaler reads every row in the stream's own
+    unit of weight, one row's: ``w1 = sum w**2 / sum w`` over the rows it
+    learned while it warmed up, the weight Kish's count gives each of them,
+    exactly 1 when every weight is 1. While the scaler warms up a row is
+    read at ``w1`` and the history keeps at least ``n / (n + 1)`` of it,
+    ``n`` Kish's count; once the coefficients are held in the caller's
+    units a row is read at its own weight, at most ``w1``, and the history
+    keeps at least ``w1``: with ``W`` its weight before the row, it decays by
+    ``max(lam, min(1, w1 / W))`` in place of ``lam``. A step is taken in the
+    row's standardized coordinates and divided by the row's scale to reach
+    the caller's units. After a gap that leaves the history a share ``a`` of
+    the moments the row is read against, that scale is ``sqrt(a)`` times the
+    feature's spread, so without the floor a step at most the rate in
+    ``z`` moved a slope by ``lr / sqrt(a)`` of its spread: 2e8 rates after a
+    gap of 60 half-lives, and the rows after the gap were read against a
+    scaler of one or two rows. With it the share is at least 1/2, and
+    ``"adagrad"`` moves a slope by at most ``sqrt(2) * lr`` of the scaler's
+    spread before the row, whatever the gap. Measured on streams of 2 and 8
+    features with spreads from 0.03 to 30 and a half-life of 20 rows, over
+    rows 6 to 100 after a gap of 30 half-lives or more: a constant rate's
+    and :func:`pa`'s error at the 99th percentile over seeds was up to 185
+    and 6,000 times that of the same stream with no gap, and is now within
+    1.1 times of it, and AdaGrad's about 3 times. A row read at weight 1
+    against moments in the weights' units was a share of them that grew as
+    the weights shrank: at weights of 1/8, AdaGrad on 8 features scored
+    1,140 noise variances of error where weights of 1 score 0.18, and on
+    weights falling 100-fold over the stream it scored 4,176. In the
+    stream's own unit, weights all scaled by a power of two are read as the
+    unscaled ones, to the bit, and both score as weights of 1 do. The floor
+    binds only where the history's decayed weight is below one row's: at a
+    half-life of 20 rows after a gap of more than about 5 half-lives, and at
+    a half-life of a row or two now and then.
 
     **The tube.** In units of the noise, on a target a fit predicts to R²,
     the tube is ``eps / sqrt(1 - R²)`` noise standard deviations wide: at
@@ -677,8 +714,9 @@ def sgd(
     are known. Against the moments from before the row, a variance a few
     rows old can be tiny by chance, and one step throws a coefficient the
     rest of a short group never brings back. Admitted, the row's
-    standardized value is at most ``sqrt(weight_sum)``, and
-    ``sqrt(weight_sum + 1)`` without an intercept. Without ``standardize``,
+    standardized value is at most ``sqrt(weight_sum / w1)``, the history's
+    weight in rows of the stream (*Decay and the rate*), and
+    ``sqrt(weight_sum / w1 + 1)`` without an intercept. Without ``standardize``,
     features 100 times larger put the default rate past its stability
     bound, so every prediction is withheld as ``unstable_rate``.
 

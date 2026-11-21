@@ -7,7 +7,9 @@
 //! moves no prediction. `kalman` holds `b` and `P` in the coordinates of an
 //! anchor and follows every move of the moments exactly from its first row,
 //! with no warm-up (docs/PLAN.md task 211). Held here: `sgd`'s and `pa`'s
-//! rows up to the switch are the old build's to the bit; after it, and for
+//! rows up to the switch are the old build's to the bit at unit weights
+//! (a weighted stream's are read in its own unit of weight since review
+//! C1); after it, and for
 //! `kalman` throughout, rows that move only the scaler leave every
 //! prediction and coefficient where it was; a power of two in the features'
 //! units changes no bit; and a save at, before or after the switch goes on
@@ -253,22 +255,36 @@ fn fnv(h: &mut u64, v: f64) {
 }
 
 /// Up to the row that ends the warm-up, every prediction and every
-/// coefficient is the build's before task 206, to the bit: the digests were
-/// that build's (`ed76944`), over every row from the first to the switch,
-/// both included. The switch row's predictions are made before the switch,
-/// and its coefficients are the old read-out, which the switch keeps.
+/// coefficient of a stream of unit weights is the build's before task 206,
+/// to the bit: the digests were that build's (`ed76944`), over every row
+/// from the first to the switch, both included. The switch row's
+/// predictions are made before the switch, and its coefficients are the old
+/// read-out, which the switch keeps.
+///
+/// A weighted stream's warm-up is not that build's since review C1 (rule
+/// 5's twenty-third exception): the scaler reads each row at one row's
+/// weight of the stream, `Σw²/Σw` of the rows it has learned, where it read
+/// it at 1, and keeps `n/(n + 1)` of that weight of history into it, so a
+/// stream whose weights are all scaled by a power of two is read as the
+/// unscaled one. At unit weights both are 1 and the history's weight is
+/// never under the floor at this decay, so those digests did not move. The
+/// weighted ones are this build's, printed 2026-11-20; on `ed76944` and to
+/// 6a594f88 they were `0xaf01_4ed8_2f48_62aa`, `0xa800_dd9b_d794_8e88`,
+/// `0x307f_85c7_ceb1_14a6`, `0xb54a_2797_8e0e_970b`,
+/// `0x8958_0977_2e27_2aec` and `0x77e8_1c5a_5178_8230`.
 #[test]
 fn the_rows_up_to_the_switch_are_the_old_builds_to_the_bit() {
-    // Printed by this test on `ed76944`, the build before task 206.
+    // Printed by this test on `ed76944`, the build before task 206 (the
+    // unit-weight streams), and on review C1's build (the weighted ones).
     const DIGESTS: &[(&str, u64)] = &[
         ("sgd squared", 0xbad6_0e8b_d634_02ce),
-        ("sgd huber adagrad l2, weighted", 0xaf01_4ed8_2f48_62aa),
-        ("sgd simplex, weighted", 0xa800_dd9b_d794_8e88),
-        ("sgd through the origin", 0x307f_85c7_ceb1_14a6),
+        ("sgd huber adagrad l2, weighted", 0x5305_c13d_a283_e41b),
+        ("sgd simplex, weighted", 0xbbd4_1e78_6d13_1ac4),
+        ("sgd through the origin", 0x8b97_906a_bc9b_e4a1),
         ("pa1", 0x8b36_e80e_36eb_165c),
-        ("pa, weighted", 0xb54a_2797_8e0e_970b),
-        ("pa2 simplex, weighted", 0x8958_0977_2e27_2aec),
-        ("pa1 through the origin", 0x77e8_1c5a_5178_8230),
+        ("pa, weighted", 0x6890_db6e_2a7a_8853),
+        ("pa2 simplex, weighted", 0x388f_e69e_146d_ecd7),
+        ("pa1 through the origin", 0xd3a9_ce59_0bb6_f96f),
     ];
     let mut got = Vec::new();
     // `kalman` has no warm-up since task 211, and its first rows moved

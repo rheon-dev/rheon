@@ -1005,16 +1005,45 @@ def _moments(
     return m, s
 
 
+def _scaler_weights(kish_w: float, kish_w2: float, held: bool, w: float) -> tuple[float, float]:
+    """The weight a row is read at and the least weight the scaler's history
+    keeps into it (the ``sgd`` builder's docstring, review C1), both in the
+    stream's own unit of weight: one row's, ``Σw² / Σw`` over the rows the
+    scaler learned until the switch (1 before any). While the scaler warms
+    up the row is read at one row's weight and the history keeps ``n / (n +
+    1)`` of it, ``n`` Kish's count; once the fit is held the row is read at
+    its own weight, at most one row's, and the history keeps one row's."""
+    one = kish_w2 / kish_w if kish_w > 0.0 and kish_w2 > 0.0 else 1.0
+    if held:
+        return min(one, w), one
+    n = kish_w**2 / kish_w2 if kish_w2 > 0.0 else 0.0
+    return one, one * (n / (n + 1.0))
+
+
+def _scaler_aged(om: list[float], lam: float, floor: float) -> list[float]:
+    """The scaler's kept weights aged into a row: each times ``max(lam,
+    min(1, floor / W))``, ``W`` their sum, so the history keeps at least
+    ``floor``."""
+    total = float(np.sum(om)) if om else 0.0
+    if floor > 0.0 and total > 0.0:
+        lam = max(lam, min(1.0, floor / total))
+    return [o * lam for o in om]
+
+
 def _row_map(
-    rows: list[np.ndarray], om: list[float], x: np.ndarray, fit_intercept: bool
+    rows: list[np.ndarray],
+    om: list[float],
+    x: np.ndarray,
+    fit_intercept: bool,
+    admit: float = 1.0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """The row's map under ``standardize`` (the ``sgd`` builder's docstring):
-    the moments with the row itself admitted at unit weight, ``rows`` and
-    ``om`` the earlier rows already aged by this row's decay. ``z``, ``m``
-    and ``s`` over the coefficient slots, the intercept's ``(1, 0, 1)``
-    first: ``z_i = (x_i - m_i) / s_i``, or ``x_i / s_i`` without an
-    intercept."""
-    m, s = _moments([*rows, x], [*om, 1.0], fit_intercept)
+    the moments with the row itself admitted at weight ``admit``
+    (:func:`_scaler_weights`), ``rows`` and ``om`` the earlier rows already
+    aged into this row (:func:`_scaler_aged`). ``z``, ``m`` and ``s`` over
+    the coefficient slots, the intercept's ``(1, 0, 1)`` first: ``z_i = (x_i
+    - m_i) / s_i``, or ``x_i / s_i`` without an intercept."""
+    m, s = _moments([*rows, x], [*om, admit], fit_intercept)
     z = (x - m) / s
     if fit_intercept:
         return (
@@ -1177,8 +1206,10 @@ def pa_ref(
     every row's. Returns ``pred``, ``weight_sum`` and ``coef`` (after the row).
 
     Under ``standardize``, ``z`` is the row standardized against the
-    features' EW moments with the row admitted at unit weight
-    (:func:`_row_map`), the moments learning each row at its weight. While
+    features' EW moments with the row admitted at one row's weight of the
+    stream, and its own once the fit is held, and the history kept at no
+    less than one row's (:func:`_scaler_weights`, :func:`_row_map`), the
+    moments learning each row at its weight. While
     Kish's count of the weights the moments have learned, undecayed, is
     below 22, ``b`` is in those coordinates, ``p = z . b``, and ``coef`` is it
     read out with the moments as they stand (:func:`_read_out`); on the row
@@ -1213,8 +1244,9 @@ def pa_ref(
         xt = np.concatenate(([1.0], X[i])) if fit_intercept else X[i]
         z = xt
         if standardize:
-            om = [o * lam for o in om]
-            z, mv, sv = _row_map(rows, om, X[i], fit_intercept)
+            admit, floor = _scaler_weights(kish_w, kish_w2, held, float(w[i]))
+            om = _scaler_aged(om, lam, floor)
+            z, mv, sv = _row_map(rows, om, X[i], fit_intercept, admit)
         weight_sum[i] = w_sum
         p = b @ (xt if (held or not standardize) else z)
         pred[i] = np.where(w_target >= min_weight, p, np.nan)
@@ -1340,8 +1372,10 @@ def sgd_ref(
     (after the row), and ``clipped``, how many coordinates the clip bound.
 
     Under ``standardize``, ``z`` is the row standardized against the
-    features' EW moments with the row admitted at unit weight
-    (:func:`_row_map`), the moments learning each row at its weight. While
+    features' EW moments with the row admitted at one row's weight of the
+    stream, and its own once the fit is held, and the history kept at no
+    less than one row's (:func:`_scaler_weights`, :func:`_row_map`), the
+    moments learning each row at its weight. While
     Kish's count of the weights the moments have learned, undecayed, is
     below 22, ``b`` is in those coordinates, ``eta = z . b``, the ridge is on
     ``b`` there and ``coef`` is ``b`` read out with the moments as they stand
@@ -1422,8 +1456,9 @@ def sgd_ref(
         xt = np.concatenate(([1.0], X[i])) if fit_intercept else X[i]
         z, scale = xt, np.ones(kt)
         if standardize:
-            om = [o * lam for o in om]
-            z, mv, scale = _row_map(rows, om, X[i], fit_intercept)
+            admit, floor = _scaler_weights(kish_w, kish_w2, held, float(w[i]))
+            om = _scaler_aged(om, lam, floor)
+            z, mv, scale = _row_map(rows, om, X[i], fit_intercept, admit)
         weight_sum[i] = w_sum
         p = links.get(loss, lambda e: e)(b @ (xt if (held or not standardize) else z))
         predicted = w_target >= min_weight

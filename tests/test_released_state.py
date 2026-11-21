@@ -132,6 +132,25 @@ def _buildable(version: str) -> list[str]:
     ]
 
 
+#: The probe's `sgd` and `pa` specs, every one under `standardize` (the
+#: default) on weighted rows: rule 5's twenty-third exception moves them all.
+READ_ANEW = (
+    "sgd",
+    "full_sgd",
+    "sgd_huber",
+    "sgd_huber_mad",
+    "sgd_huber_refit",
+    "sgd_quantile",
+    "sgd_epsilon_insensitive",
+    "sgd_poisson",
+    "sgd_logistic",
+    "sgd_adagrad",
+    "pa",
+    "full_pa",
+    "pa_pa1",
+    "pa_pa2",
+)
+
 #: The specs whose numbers a CHANGELOG entry declares moved since a release,
 #: ``(spec, the newest release whose files it moves) -> the entry``. A file
 #: of that release or an older one goes on from its own numbers, not this
@@ -332,6 +351,18 @@ DECLARED: dict[tuple[str, str], str] = {
     # release's own continuation (`WITHIN`), not to the bit.
     ("bocpd", "1.5.0"): "the next release, Changed: `bocpd`'s diagonal form of two "
     "features or more takes its log densities as the logs of products of blocks of 8",
+    # Review C1 (the next release's Fixed, and rule 5's twenty-third
+    # exception, the user's, 2026-11-20): `sgd` and `pa` under `standardize`
+    # read each row in the stream's own unit of weight, one row's
+    # `Σw²/Σw`, where every release read it at 1. The probe's rows are
+    # weighted, so a file of any release goes on by the new read from the
+    # old read's moments and fit: neither the release's own continuation
+    # nor this build's, and within `WITHIN`'s bound of the release's.
+    **{
+        (name, "2.0.0"): "the next release, Fixed: `sgd` and `pa` with `standardize` read "
+        "each row in the stream's own unit of weight"
+        for name in READ_ANEW
+    },
 }
 
 #: The fields of the conformal interval, which a release's file goes on in
@@ -615,6 +646,15 @@ GOLDEN = 1e-12
 #:   a file of any release goes on within rounding of that release's own
 #:   continuation, not to the bit: 1.8e-13 at most here (`run_mean`), inside
 #:   the golden tolerance.
+#: - `sgd` and `pa` under `standardize` read each row in the stream's own
+#:   unit of weight since review C1 (rule 5's twenty-third exception), so a
+#:   file of any release, its rows weighted, goes on by the new read from the
+#:   old read's moments and fit. Measured 2026-11-20 on every 1.x and 2.0.0
+#:   release, the largest gap of any field, of `1 + |v|`: the predictions,
+#:   residuals and coefficients 2.9e-3 (`sgd_logistic`) to 2.1e-2 (`pa`,
+#:   `pa_pa1`), so 0.06; a diagnosed spec's statistics up to 6.6e-2
+#:   (`full_sgd`'s Jarque-Bera) and 8.0e-2 (`full_pa`'s `hit_rate`), so
+#:   0.25. No non-float field, no null and no withheld row moved.
 WITHIN: dict[tuple[str, str], float] = {
     ("bocpd", "1.5.0"): GOLDEN,
     ("full_holt", "1.3.0"): GOLDEN,
@@ -627,6 +667,7 @@ WITHIN: dict[tuple[str, str], float] = {
     },
     ("ew_class_window", "1.2.0"): GOLDEN,
     ("ridge_blocked", "1.0.1"): GOLDEN,
+    **{(name, "2.0.0"): 0.25 if name.startswith("full_") else 0.06 for name in READ_ANEW},
 }
 
 
@@ -876,9 +917,20 @@ def test_a_moved_spec_goes_on_as_its_release_did(resumed):
         specs = [built[r] for r in work[name]] + [built[name]]
         bank = rp.ModelBank.load(states / f"{name}.state", specs=specs)
         got = {"rows": bank.fit_predict(second).select(name), **probe.tables(bank, name)}
-        young = (YOUNG if name in ABSORBS else YOUNG_SQ) if name.startswith("full_") else None
+        # The young sums moved after 1.3.0 (below): a later release's file
+        # reads them as this build does, and a diagnosed spec of it moved by
+        # another entry is held by that entry's bound alone.
+        young = (
+            (YOUNG if name in ABSORBS else YOUNG_SQ)
+            if name.startswith("full_") and _version(version) <= _version("1.3.0")
+            else None
+        )
         rule = dict(within=_within(name, version), young=young)
-        if (name, "1.4.0") in DECLARED and DECLARED[(name, "1.4.0")].endswith("residual spread"):
+        if (
+            _version(version) <= _version("1.4.0")
+            and (name, "1.4.0") in DECLARED
+            and DECLARED[(name, "1.4.0")].endswith("residual spread")
+        ):
             # Each group's first row of the second half, where the saved
             # radius is shown.
             groups = second["g"].to_numpy()
@@ -953,9 +1005,13 @@ def test_every_declared_move_names_a_spec_and_a_release():
         # Offline the 1.x releases are not listed; a declared move is of one.
         listed = since in RELEASES if PUBLISHED is not None else _major(since) >= 1
         assert name in names and listed and why, (name, since, why)
-    # A tolerance excuses only a declared move, of the same releases' files.
+    # A tolerance excuses only a declared move, of the same releases' files,
+    # and only within rounding (1e-9), but rule 5's twenty-third exception's:
+    # a weighted `sgd` or `pa` file goes on by a new read, not within
+    # rounding of its release (`WITHIN`'s bounds of 0.06 and 0.25).
     for (name, since), tol in WITHIN.items():
-        assert (name, since) in DECLARED and 0 < tol <= 1e-9, (name, since, tol)
+        most = 0.25 if name in READ_ANEW and since == "2.0.0" else 1e-9
+        assert (name, since) in DECLARED and 0 < tol <= most, (name, since, tol)
     assert set(RESETS) <= {n for n, _ in DECLARED}
 
 
@@ -1074,10 +1130,12 @@ def test_no_refit_is_the_release_before_it_to_the_bit(tmp_path):
     outliers, nulls and zero weights, where the default's refit runs on both
     targets and moves each (the activation check below):
 
-    - **a state 1.3.0 saved goes on to the bit**, every spec: ``huber`` under
-      both scales and with feature sets, and ``sgd``'s Huber loss under each
-      schedule, saved by 1.3.0 at row 1,000 and loaded here, reports what
-      1.3.0's own run reports on the rows after it. The file has no
+    - **a state 1.3.0 saved goes on to the bit**, every ``huber`` spec:
+      under both scales and with feature sets, saved by 1.3.0 at row 1,000
+      and loaded here, it reports what 1.3.0's own run reports on the rows
+      after it; ``sgd``'s Huber loss under each schedule does within 3e-3,
+      since it reads each weighted row in the stream's own unit of weight
+      (rule 5's twenty-third exception). The file has no
       ``huber_refit_rows`` and loads with the refit off, so it never refits
       rows its stream has passed; it keeps 1.3.0's fixed sketch buckets and
       the ``sgd`` steps it was fitted with.
@@ -1153,13 +1211,26 @@ def test_no_refit_is_the_release_before_it_to_the_bit(tmp_path):
             pl.col(c).struct.unnest().name.prefix(f"{c}.") for c in frame.columns
         ).with_columns(pl.col(pl.Enum).cast(pl.String))
 
-    # A state 1.3.0 saved goes on to the bit, every spec, past the 500 rows
-    # the default would refit at.
-    names = [s["name"] for s in released]
+    # A state 1.3.0 saved goes on to the bit, every `huber` spec, past the
+    # 500 rows the default would refit at. The `sgd` specs read each weighted
+    # row in the stream's own unit of weight since review C1 (rule 5's
+    # twenty-third exception), so they go on by that read from 1.3.0's fit,
+    # not to the bit: their predictions within 3e-3 of `1 + |v|` of 1.3.0's
+    # own continuation (measured 2026-11-20: 8.1e-4 at most, `s_constant`'s
+    # second target; 5e-6 to 5e-5 elsewhere), with the same nulls.
+    huber = [s["name"] for s in released if s["name"].startswith("h_")]
     resumed = rp.ModelBank.load(saved, specs=released).fit_predict(df.slice(half))
-    assert plain(resumed.select(names)).equals(
-        plain(then.slice(half).select(names)), null_equal=True
+    assert plain(resumed.select(huber)).equals(
+        plain(then.slice(half).select(huber)), null_equal=True
     )
+    for name in (s["name"] for s in released if s["name"].startswith("s_")):
+        got, want = _floats(resumed.select(name)), _floats(then.slice(half).select(name))
+        for field in (f for f in want if ".pred_" in f):
+            u, v = got[field], want[field]
+            np.testing.assert_array_equal(np.isnan(u), np.isnan(v), err_msg=field)
+            ok = np.isfinite(v)
+            gap = (np.abs(u[ok] - v[ok]) / (1 + np.abs(v[ok]))).max()
+            assert gap < 3e-3, (field, gap)
 
     off = run(0)
     assert plain(off.select("h_rms")).equals(plain(then.select("h_rms")), null_equal=True)

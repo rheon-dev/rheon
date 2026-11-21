@@ -1734,11 +1734,18 @@ const GOLDEN_FTRL: &[f64] = &[0.4937166166955374, 0.5893822512193234, 0.45266254
 // rate reads the weight decayed to the row, `lam·W`, where it read `W`, so a
 // zero-weight row in between moves nothing; the three were
 // -9.140859901712872e-5, 0.9626546015542387 and -0.09404195296589056, and
-// `sgd_ref` with the new rate gives the new ones to 1.2e-16.
+// `sgd_ref` with the new rate gives the new ones to 1.2e-16. Again for review
+// C1 (2026-11-20): the scaler reads a row in the stream's own unit of weight,
+// `Σw²/Σw` of the warm-up's rows (here 1.147 at the switch), while it warms
+// up and `min` of it and the row's weight once the fit is held, where it read
+// every row at 1, and keeps that weight of history into a row; this stream's
+// weights are 0.5, 1 and 1.5, so every row from the second moved. The three
+// were -0.038104258384859244, 0.9538283159665557 and -0.1118003974730884;
+// `sgd_ref` with the new read gives the new ones to 2.3e-16.
 const GOLDEN_SGD: &[f64] = &[
-    -0.038104258384859244,
-    0.9538283159665557,
-    -0.1118003974730884,
+    -0.042084949526490584,
+    0.9624471778471987,
+    -0.11215033114181669,
 ];
 const GOLDEN_SGD_SQUARED: &[f64] = &[
     0.31727038792368356,

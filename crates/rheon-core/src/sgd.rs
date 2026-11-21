@@ -26,8 +26,9 @@
 //! alone overflows past 709.
 //!
 //! **`standardize`** takes the step on the row standardized against the
-//! features' EW moments with the row admitted at unit weight (the row's
-//! map `M`; [`SgdCfg::standardize`] says why the row is in): `z = M x̃`,
+//! features' EW moments with the row admitted at one row's weight of the
+//! stream (the row's map `M`; [`SgdCfg::standardize`] says why the row is
+//! in, and *Learning rates* below at what weight): `z = M x̃`,
 //! `x̃ = [1, x]`, `z_0 = 1` and `z_i = (x_i − m_i) / s_i`, `m_i` and `s_i` the
 //! mean and standard deviation, or without an intercept `z_i = x_i / s_i`,
 //! `s_i` the root of the raw second moment, uncentred (review 2026-09-12,
@@ -151,7 +152,35 @@
 //! that anneals with `n_eff`, or AdaGrad's per-coordinate `lr / (sqrt(G_i) + eps)`.
 //! AdaGrad's accumulator and `n_eff` are both decayed on the model's clock, so
 //! an annealed or adapted rate re-opens after a long gap instead of staying
-//! frozen at whatever it had converged to. The coefficients do not decay:
+//! frozen at whatever it had converged to, up to the rate and no further.
+//!
+//! **The row's weight in the scaler.** The scaler reads every row in the
+//! stream's own unit of weight, one row's: `ŵ = Σw²/Σw` over the rows it
+//! learned until the switch, the weight Kish's count gives each of them,
+//! exactly 1 at unit weights ([`scaler_decay`]). The row is admitted at `ŵ`
+//! while the scaler warms up and at `min(ŵ, w)` once the fit is held, and
+//! the history keeps at least `ŵ·n/(n + 1)` (`n` Kish's count) and then `ŵ`
+//! of weight into the row. A step taken in the row's coordinates is mapped
+//! into the caller's by dividing it by the row's scale, and after a gap
+//! that left the history a share `a` of the moments with the row in, that
+//! scale is `sqrt(a)` times the feature's spread: without the floor
+//! AdaGrad's step, at most the rate in the row's coordinates, moved a slope
+//! by `lr / sqrt(a)` spreads (2e8 rates after a gap of 60 half-lives), and
+//! every learner's next rows were read against a scaler of one or two rows.
+//! With it the share is at least 1/2, and AdaGrad moves a slope by at most
+//! `sqrt(2) · lr` of the scaler's spread before the row, `|Δb_i| · sd_i <=
+//! sqrt(2) · lr`, across any gap and at any scale of the weights. A row read
+//! at weight 1 against moments in the weights' units was a share of them
+//! that grew as the weights shrank: at weights of 1/8 and 8 features
+//! AdaGrad's intercept was pushed the wrong way on every row (an error of
+//! 1,140 noise variances, where weights of 1 give 0.18), and on weights
+//! falling 100-fold over the stream each later row was read as a row of the
+//! warm-up's size (4,176). In the stream's own unit a stream whose weights
+//! are all scaled by a power of two is read as the unscaled one, to the
+//! bit, and a light row is read at its own share. The floor binds only
+//! where the history's decayed weight is under one row's, `lam·W < ŵ`: at
+//! a half-life of 20 rows after a gap of more than about 5 half-lives, and
+//! at a half-life of a row or two now and then. The coefficients do not decay:
 //! under a constant rate their memory is in rows, about `1 / (lr · E[z²])`,
 //! whatever the clock between them (docs/PLAN.md task 146).
 //!
@@ -226,8 +255,10 @@
 //! the gate, a constant rate past the bound diverged until the clip held
 //! it, finite and wrong (the last 1,000 of 20,000 rows' error 3.6e4 times the
 //! target's variance at 0.5), with no notice. AdaGrad's step moves a slot at most the rate a
-//! row, and the quantile and epsilon-insensitive steps are a sign times the
-//! rate: neither can grow, and none is gated.
+//! row in the row's coordinates (under `standardize`, a slope at most
+//! `sqrt(2)` rates of its feature's spread in the caller's units, across
+//! any gap; above), and the quantile and epsilon-insensitive steps are a
+//! sign times the rate: neither can grow, and none is gated.
 
 use serde::{Deserialize, Serialize};
 
@@ -305,7 +336,8 @@ pub struct SgdCfg {
     /// care (they standardize inside the solve, or not at all).
     ///
     /// The moments a row is standardized against **include the row**, as one
-    /// more row of the stream at unit weight ([`EwDiag::including`]): that
+    /// more row of the stream, at one row's weight of it (the module docs,
+    /// *The row's weight in the scaler*): that
     /// is sklearn's `partial_fit` then `transform`, and it bounds a
     /// standardized value by `sqrt(n_eff)` whatever the running variance
     /// happens to be (the bound is reached when the history has no spread
@@ -322,17 +354,23 @@ pub struct SgdCfg {
     /// row is standardized the way every row the coefficients were learned
     /// from was (sklearn's loop predicts against the moments from before the
     /// row instead, which is two standardizations a row and a prediction
-    /// with no bound). The row's own weight applies to what it teaches, not
+    /// with no bound). While the scaler warms up the row is read at one
+    /// row's weight of the stream, `Σw²/Σw` of the rows the scaler has
+    /// learned, whatever its own: its weight applies to what it teaches, not
     /// to where it sits among the rows seen, so a prediction never depends
-    /// on the weight and `predict` gives the step's number exactly.
+    /// on the row's weight and `predict` gives the step's number exactly.
+    /// Once the fit is held a prediction reads no moment, and the row is
+    /// read at its own weight, at most one row's, so that a light row is not
+    /// a larger share of the moments than its update makes it.
     ///
     /// **The warm-up** ([`crate::Warmup`]): until Kish's count of the rows
     /// the scaler has learned reaches 22 the coefficients are read out with
     /// the moments as they stand, while each step was taken in the
     /// coordinates of its own row, so a coefficient "per unit of `x`" moves
     /// with the scaler as well as with the fit; and for a weight other than
-    /// 1 the coordinates the gradient was taken in (the row at unit weight)
-    /// and the ones the projection and the coefficients use a moment later
+    /// one row's the coordinates the gradient was taken in (the row at one
+    /// row's weight) and the ones the projection and the coefficients use a
+    /// moment later
     /// (the row at its weight) differ (review 2026-09-12, D5). From the row
     /// after the switch the coefficients are held in the caller's units and
     /// each step is mapped by its own row's map, once: a prediction is `x̃ᵀb`
@@ -1809,16 +1847,57 @@ fn slopes_stepped(
 /// moments, `a·c` and `a·b·d²` with `a` its share, are themselves subnormal,
 /// carrying fewer bits than a double has and nothing of the history but a
 /// spread the row never had. `standardized`, `standardize_row` and both
-/// models' updates read it, `w` 1 for the row admitted at unit weight, so
-/// what `standardized` reads is still to the bit what the update at unit
-/// weight leaves.
+/// models' updates read it, `w` the weight the row is admitted at for the
+/// read and its own for the update, so what `standardized` reads is to the
+/// bit what the update at the admitted weight leaves.
+///
+/// **The floor** (`floor`, from `Warmup::read`): the history keeps at
+/// least `floor` of weight into the row, the decay taken being `max(lam,
+/// min(1, floor/W))`, `W` its weight before the row, so `lam·W >= min(W,
+/// floor)`. Once the fit is held `floor` is one row's weight of the stream,
+/// `ŵ = Σw²/Σw` of the warm-up's rows, and the row is read at no more than
+/// `ŵ` (`Warmup::read`), so the history's share of the moments
+/// that include it is at least 1/2 wherever `W >= ŵ`, and the scale a row is
+/// divided by at least `sd / sqrt(2)`, `sd` the scaler's own before the row.
+/// Held, a step taken in the row's coordinates is mapped into the caller's
+/// by dividing it by that scale, and after a long gap the history's share
+/// `a` is tiny and the scale `sqrt(a)` times the feature's spread: AdaGrad's
+/// step, at most the rate in the row's coordinates whatever its sum holds,
+/// became `lr / sqrt(a)` feature spreads (a slope moved by 2e8 times the
+/// rate after a gap of 60 half-lives, and two such gaps in a row left slopes
+/// near 1e89), and every learner's next rows were read against a scaler of
+/// one or two rows while the fit stayed in the caller's units. The floor is
+/// the least weight that gives the bound: one row's, the most the row itself
+/// is read at. It binds only where `lam·W < ŵ`: on a row after a gap of more
+/// than `log2(W/ŵ)` half-lives (about 5 at a half-life of 20 rows), and now
+/// and then at a half-life of a row or two, where the history holds a row
+/// or two; it moves no bit of a stream on which it does not. Before the
+/// switch `floor` is `ŵ·n/(n + 1)`, `n` Kish's count, which binds on no
+/// regular stream of unit weights whose half-life is a row or more and keeps
+/// a gap there from reading the row against nothing (`pa`'s error after a
+/// gap of 60 half-lives at row 21 was 9e18 times that of the same rows with
+/// no gap). Both are in the stream's own unit, so a stream whose weights are
+/// all scaled by a power of two decays the same, to the bit. It composes
+/// across a gap split by zero-weight rows, as `max(lam_a·lam_b·W, min(W,
+/// floor))`, while `floor` is the same on the zero-weight row and the row
+/// after it: a zero-weight row moves neither of the warm-up's sums. `floor`
+/// 0 keeps `lam`. No weight a model emits or gates on reads the scaler's.
 #[inline]
-pub(crate) fn scaler_decay(sc: &EwDiag, lam: f64, w: f64) -> f64 {
-    crate::gaps::decay_into(lam, sc.n_eff(), w)
+pub(crate) fn scaler_decay(sc: &EwDiag, lam: f64, w: f64, floor: f64) -> f64 {
+    let history = sc.n_eff();
+    // A multiply and a compare on the rows it does not bind on, every row of
+    // a steady stream; the division only where it does.
+    let lam = if lam * history < floor && history > 0.0 {
+        lam.max((floor / history).min(1.0))
+    } else {
+        lam
+    };
+    crate::gaps::decay_into(lam, history, w)
 }
 
 /// `x` standardized against the moments of `sc` with the row itself
-/// admitted at unit weight after a decay of `lam` ([`EwDiag::including`];
+/// admitted at weight `admit` after the decay [`scaler_decay`] takes with
+/// `floor` ([`EwDiag::including_at`];
 /// `SgdCfg::standardize` says why the row is in): feature `i` sits in
 /// slot `off + i` of the scaler, and is divided by that sd, or by 1 while
 /// it has no spread (the per-slot scale of [`scales_of`]). Lazy: `step`
@@ -1830,8 +1909,10 @@ pub(crate) fn standardized<'a>(
     off: usize,
     x: &'a [f64],
     lam: f64,
+    admit: f64,
+    floor: f64,
 ) -> impl Iterator<Item = f64> + 'a {
-    let inc = sc.including(scaler_decay(sc, lam, 1.0));
+    let inc = sc.including_at(scaler_decay(sc, lam, admit, floor), admit);
     x.iter().enumerate().map(move |(i, &xi)| {
         let (mean, v, dev) = inc.moments(off + i, xi);
         if off == 0 {
@@ -1860,16 +1941,19 @@ pub(crate) fn standardized<'a>(
 /// Feature `i` sits in slot `off + i` of the scaler and slot `i` of `z`,
 /// `mean` and `scale`.
 #[inline]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn standardize_row(
     sc: &EwDiag,
     off: usize,
     x: &[f64],
     lam: f64,
+    admit: f64,
+    floor: f64,
     z: &mut [f64],
     mean: &mut [f64],
     scale: &mut [f64],
 ) {
-    let inc = sc.including(scaler_decay(sc, lam, 1.0));
+    let inc = sc.including_at(scaler_decay(sc, lam, admit, floor), admit);
     // Every slice cut to the row's length first, so that the loop indexes
     // each without a bounds check: six a feature, a third of the loop.
     let n = x.len();
@@ -2166,6 +2250,10 @@ impl OnlineModel for Sgd {
         // -- each feature's mean and scale beside `z` -- maps the step into
         // the caller's units (the module docs, docs/PLAN.md task 206).
         let held = self.warmup.switched();
+        // The weight the row is read at and the weight the scaler's history
+        // keeps into it, both in the stream's own units and both from the
+        // warm-up as the row arrives (`Warmup::read`).
+        let (admit, floor) = self.warmup.read(weight);
         if self.scaler.is_some() {
             self.ensure_buffers();
             let Self {
@@ -2188,12 +2276,17 @@ impl OnlineModel for Sgd {
                     off,
                     x,
                     lam,
+                    admit,
+                    floor,
                     &mut zbuf[off..],
                     &mut mbuf[off..],
                     &mut sbuf[off..],
                 );
             } else {
-                for (z, v) in zbuf[off..].iter_mut().zip(standardized(sc, off, x, lam)) {
+                for (z, v) in zbuf[off..]
+                    .iter_mut()
+                    .zip(standardized(sc, off, x, lam, admit, floor))
+                {
                     *z = v;
                 }
             }
@@ -2562,7 +2655,7 @@ impl OnlineModel for Sgd {
             }
         }
         if let Some(sc) = &mut self.scaler {
-            sc.update(&self.rawbuf, scaler_decay(sc, lam, weight), weight);
+            sc.update(&self.rawbuf, scaler_decay(sc, lam, weight, floor), weight);
         }
         // Project after the scaler moved: the bounds live in the caller's
         // units, and in standardized coordinates they move with the scales,
@@ -2678,8 +2771,10 @@ impl OnlineModel for Sgd {
                 // the thread's rather than one of the model's, and not a
                 // fresh vector per row.
                 Some(sc) => crate::scratch::with_borrow_mut(&PREDICT_Z, |z| {
+                    // The warm-up's read: at one row's weight, the step's.
+                    let (admit, floor) = self.warmup.read(f64::INFINITY);
                     z.clear();
-                    z.extend(standardized(sc, off, x, lam));
+                    z.extend(standardized(sc, off, x, lam, admit, floor));
                     predict_with(z, &mut pred);
                 }),
             }
@@ -2784,8 +2879,8 @@ mod tests {
                         .collect();
                     let lam = 0.95;
                     let (mut z1, mut m1, mut s1) = (vec![0.0; k], vec![0.0; k], vec![0.0; k]);
-                    standardize_row(&sc, off, &x, lam, &mut z1, &mut m1, &mut s1);
-                    let inc = sc.including(scaler_decay(&sc, lam, 1.0));
+                    standardize_row(&sc, off, &x, lam, 1.0, 1.0, &mut z1, &mut m1, &mut s1);
+                    let inc = sc.including(scaler_decay(&sc, lam, 1.0, 1.0));
                     let (hi, lo, c) = sc.parts();
                     let (mut z2, mut m2, mut s2) = (vec![0.0; k], vec![0.0; k], vec![0.0; k]);
                     standardize_scalar(
@@ -2854,11 +2949,12 @@ mod tests {
                     }
                 }
                 let lam = (-gap / hl).exp2();
-                assert_eq!(scaler_decay(&sc, lam, 1.0), lam, "the history is kept");
+                assert_eq!(scaler_decay(&sc, lam, 1.0, 0.0), lam, "the history is kept");
                 let x = [0.5 + lcg(&mut s), -3.0 + 2.0 * lcg(&mut s)];
                 let (mut z, mut m, mut sd) = (vec![0.0; k], vec![0.0; k], vec![0.0; k]);
-                standardize_row(&sc, off, &x, lam, &mut z, &mut m, &mut sd);
-                let lazy: Vec<f64> = standardized(&sc, off, &x, lam).collect();
+                // The warm-up's read, which keeps `lam` however long the gap.
+                standardize_row(&sc, off, &x, lam, 1.0, 0.0, &mut z, &mut m, &mut sd);
+                let lazy: Vec<f64> = standardized(&sc, off, &x, lam, 1.0, 0.0).collect();
                 for f in 0..k {
                     assert_eq!(z[f].to_bits(), lazy[f].to_bits(), "the two paths agree");
                     let want =
@@ -4279,8 +4375,11 @@ mod tests {
     }
 
     /// Without an intercept, `standardize` divides each feature by the root
-    /// of its raw second moment, the row admitted at unit weight, and leaves
-    /// a feature with none (here one always 0) at a scale of 1. While the
+    /// of its raw second moment, the row admitted at one row's weight of the
+    /// stream, `ŵ = Σw²/Σw` over the warm-up's rows, while the scaler warms
+    /// up and at `min(ŵ, w)` once the fit is held, the history kept at no
+    /// less than `ŵ·n/(n + 1)` and then `ŵ` (`scaler_decay`; review C1), and
+    /// leaves a feature with none (here one always 0) at a scale of 1. While the
     /// scaler warms up the betas are in those coordinates and the
     /// coefficients are the betas over the root of the raw moment as it
     /// stands; on the row Kish's count of the weights reaches 22 they are
@@ -4308,9 +4407,25 @@ mod tests {
             let w = 0.5 + 0.5 * (lcg(&mut s) + 1.0);
             let d_clock = if i == 0 { 0.0 } else { 1.0 };
             let lam = 0.5f64.powf(d_clock / 10.0);
+            let one = if kish_w > 0.0 { kish_w2 / kish_w } else { 1.0 };
+            let n = if kish_w2 > 0.0 {
+                kish_w * kish_w / kish_w2
+            } else {
+                0.0
+            };
+            let (admit, floor) = if held {
+                (one.min(w), one)
+            } else {
+                (one, one * (n / (n + 1.0)))
+            };
+            let lam_s = if floor > 0.0 && w_sum > 0.0 {
+                lam.max((floor / w_sum).min(1.0))
+            } else {
+                lam
+            };
             let scale: Vec<f64> = (0..3)
                 .map(|f| {
-                    let raw = (lam * s2[f] + x[f] * x[f]) / (lam * w_sum + 1.0);
+                    let raw = (lam_s * s2[f] + admit * x[f] * x[f]) / (lam_s * w_sum + admit);
                     if raw > 0.0 { raw.sqrt() } else { 1.0 }
                 })
                 .collect();
@@ -4332,9 +4447,9 @@ mod tests {
                 } else {
                     b[f] -= 0.1 * ((want - y) * z[f] * w + 0.01 * b[f]);
                 }
-                s2[f] = lam * s2[f] + w * x[f] * x[f];
+                s2[f] = lam_s * s2[f] + w * x[f] * x[f];
             }
-            w_sum = lam * w_sum + w;
+            w_sum = lam_s * w_sum + w;
             if !held {
                 kish_w += w;
                 kish_w2 += w * w;
@@ -4675,6 +4790,19 @@ mod tests {
     /// `standardize`, on this stream, gives the new picks to 6e-16. Under
     /// the gate that held the scale's learning back, as every fit did then
     /// and a state written before schema 64 goes on (task 278, D10).
+    /// Re-pinned for review C1 (2026-11-20, rule 5's twenty-third
+    /// exception): the scaler reads each row in the stream's own unit of
+    /// weight, `Σw²/Σw` of the warm-up's rows, while it warms up and the
+    /// smaller of that and the row's weight once the fit is held, where it
+    /// read every row at 1, so this stream's weights from 0.5 to 1.5 moved
+    /// every prediction from the second row. The picks were
+    /// `[2.496277502087633, 0.14614547077981044, 4.2455196022404635]` and
+    /// `[3.8184571260400335, 0.6039531382865846, 4.8134477635370345]`, the
+    /// digests `0xe5e2_e8b6_26de_7159` and `0x5c6b_9580_7ef9_2eeb`;
+    /// `sgd_ref` with the new read gives the squared loss's new picks to
+    /// 2.7e-15 (it has no `min_weight_holds_learning`, which the Huber
+    /// loss's scale reads here, and is 1.2e-3 off that loss's picks, as it
+    /// was off the old ones).
     #[test]
     fn the_huber_and_squared_losses_did_not_move() {
         let run = |loss: SgdLoss| {
@@ -4715,12 +4843,12 @@ mod tests {
         assert_ne!(huber.0, squared.0, "the cut binds on the outliers");
         for ((h, got), (digest, picks)) in [huber, squared].into_iter().zip([
             (
-                0xe5e2_e8b6_26de_7159_u64,
-                [2.496277502087633, 0.14614547077981044, 4.2455196022404635],
+                0x64d4_76ea_964d_a496_u64,
+                [2.494501641711098, 0.14615718195207794, 4.245156316660929],
             ),
             (
-                0x5c6b_9580_7ef9_2eeb_u64,
-                [3.8184571260400335, 0.6039531382865846, 4.8134477635370345],
+                0xf556_bcfe_7a79_a474_u64,
+                [3.811314295083695, 0.6033274744442707, 4.811773607294475],
             ),
         ]) {
             assert_eq!(h, digest, "picks {got:?}");
@@ -5187,3 +5315,11 @@ mod gate_tests;
 #[cfg(test)]
 #[path = "sgd/target_spread_tests.rs"]
 mod target_spread_tests;
+
+#[cfg(test)]
+#[path = "sgd/gap_tests.rs"]
+mod gap_tests;
+
+#[cfg(test)]
+#[path = "sgd/weight_unit_tests.rs"]
+mod weight_unit_tests;

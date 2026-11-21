@@ -66,8 +66,9 @@
 //! left a target at a level of 1,000 at R² 0.76 to 0.80.
 //!
 //! **`standardize`** reads `z` as the features standardized against their
-//! EW moments with the row admitted, `sgd`'s scaler, its rule and its
-//! warm-up ([`crate::Sgd`], [`crate::SgdCfg::standardize`],
+//! EW moments with the row admitted, `sgd`'s scaler, its rule, its unit
+//! of weight (one row's of the stream) and its warm-up ([`crate::Sgd`],
+//! [`crate::SgdCfg::standardize`],
 //! [`crate::Warmup`]; docs/PLAN.md task 206), so `s` and `C` stop being in
 //! the features' units: `z = M x̃`, `x̃ = [1, x]`, `z_0 = 1` and `z_i = (x_i −
 //! m_i) / s_i` (`z_i = x_i / s_i`, the root of the raw second moment,
@@ -499,6 +500,9 @@ impl OnlineModel for Pa {
         // values in the same order, so every sum below is formed to the
         // same bits.
         let held = self.warmup.switched();
+        // As `sgd`: the weight the row is read at and the weight the
+        // scaler's history keeps into it (`Warmup::read`).
+        let (admit, floor) = self.warmup.read(weight);
         let direct = self.scaler.is_none();
         if !direct {
             if off == 1 {
@@ -513,6 +517,8 @@ impl OnlineModel for Pa {
                 off,
                 x,
                 lam,
+                admit,
+                floor,
                 &mut self.zbuf[off..],
                 &mut self.mbuf[off..],
                 &mut self.sbuf[off..],
@@ -520,7 +526,7 @@ impl OnlineModel for Pa {
             Some(sc) => {
                 for (z, v) in self.zbuf[off..]
                     .iter_mut()
-                    .zip(standardized(sc, off, x, lam))
+                    .zip(standardized(sc, off, x, lam, admit, floor))
                 {
                     *z = v;
                 }
@@ -614,7 +620,7 @@ impl OnlineModel for Pa {
             }
         }
         if let Some(sc) = &mut self.scaler {
-            sc.update(&self.rawbuf, scaler_decay(sc, lam, weight), weight);
+            sc.update(&self.rawbuf, scaler_decay(sc, lam, weight, floor), weight);
         }
         // Project after the scaler moved, as `sgd` does: the bounds live in
         // the caller's units, and in standardized coordinates they move with
@@ -699,8 +705,9 @@ impl OnlineModel for Pa {
             Some(sc) => crate::scratch::with_borrow_mut(&PREDICT_Z, |z| {
                 let off = usize::from(fit_intercept);
                 let lam = self.cfg.decay.factor(d_clock);
+                let (admit, floor) = self.warmup.read(f64::INFINITY);
                 z.clear();
-                z.extend(standardized(sc, off, x, lam));
+                z.extend(standardized(sc, off, x, lam, admit, floor));
                 predict_with(z, &mut pred);
             }),
         }

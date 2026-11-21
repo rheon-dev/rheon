@@ -154,11 +154,26 @@ impl EwDiag {
     /// history and its variance is zero.
     #[inline]
     pub fn including(&self, lam: f64) -> Including<'_> {
-        let w_new = lam * self.w_sum + 1.0;
+        self.including_at(lam, 1.0)
+    }
+
+    /// [`Self::including`] with the row admitted at weight `s`: the moments
+    /// as `update(x, lam, s)` leaves them. A row of no weight read against
+    /// no history reads the moments as they stand (hard rule 9).
+    #[inline]
+    pub fn including_at(&self, lam: f64, s: f64) -> Including<'_> {
+        let w_new = lam * self.w_sum + s;
+        if w_new <= 0.0 {
+            return Including {
+                sc: self,
+                a: 1.0,
+                b: 0.0,
+            };
+        }
         Including {
             sc: self,
             a: lam * self.w_sum / w_new,
-            b: 1.0 / w_new,
+            b: s / w_new,
         }
     }
 
