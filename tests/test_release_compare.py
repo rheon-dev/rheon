@@ -506,3 +506,38 @@ def test_a_path_no_longer_reached_fails():
     assert code == 1, text
     assert "the workload no longer reaches another path: counted 0" in text, text
     assert "another path: 0 / -" in text, text
+
+
+def test_a_pattern_of_wildcards_alone_declares_nothing():
+    """Review S18 (1): `*.*` covered every moved, gone and refused field
+    with three words of reason; a pattern must name a model or a field."""
+    new = OLD.with_columns(pl.Series("ridge.pred_y", [1.0, 99.0]))
+    for pattern in ("*.*", "?*.?*", "[a-z]*.[a-z]*"):
+        assert compare.names_nothing(pattern), pattern
+        entry = f"- The numbers moved a little. Moves: `{pattern}`."
+        code, text = _compare(new, entry)
+        assert code == 1 and "is wildcards alone" in text, text
+    for pattern in ("*.weight_sum", "kmeans.*", "ewridge.pred_*"):
+        assert not compare.names_nothing(pattern), pattern
+
+
+def test_a_release_that_ran_none_of_this_builds_specs_compares_nothing():
+    """Review S18 (2): a release that ran no spec this build runs compared
+    0 fields and said `identical`, exit 0."""
+    code, text = _compare(OLD.clone(), old_ran=[])
+    assert code == 2 and "identical" not in text, text
+    assert "0 fields of 0 specs compared" in text and "nothing was compared" in text, text
+    # Most of the workload unseen fails; one spec in four new passes (above).
+    code, text = _compare(OLD.clone(), old_ran=["km"])
+    assert code == 1 and "the release ran 1 of this build's 3 specs" in text, text
+
+
+def test_a_version_the_read_cannot_order_is_an_error():
+    """Review S18 (3): `2.0.0.post1`, `2.0.0rc1` or `v2.0.0` never ended the
+    read, so every past section's clauses counted."""
+    for since in ("0.0.2.post1", "0.0.2rc1", "v0.0.2"):
+        found, errors = compare.declarations(CHANGELOG, since)
+        assert any("not a version of dotted whole numbers" in e for e in errors), (since, errors)
+    found, errors = compare.declarations(CHANGELOG.replace("[0.0.3]", "[0.0.3rc1]"), "0.0.2")
+    assert any("'0.0.3rc1' is neither" in e for e in errors), errors
+    assert compare.declarations(CHANGELOG, "0.0.2")[1] == []

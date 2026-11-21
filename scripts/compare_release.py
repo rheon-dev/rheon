@@ -220,6 +220,24 @@ def _key(version: str) -> tuple[int, ...] | None:
         return None
 
 
+#: A wildcard or a character class: what is left of a pattern's part once
+#: these are taken out is what it names.
+_WILD = re.compile(r"\[[^\]]*\]|[*?]")
+#: Below this share of this build's specs also run by the release, the
+#: comparison holds too little to pass on: most of the workload would go
+#: unseen (review S18).
+MIN_SHARE_COMPARED = 0.5
+
+
+def names_nothing(pattern: str) -> bool:
+    """Whether a ``model.field`` pattern is wildcards alone on both sides of
+    its dot (``*.*``, ``?*.?*``, ``[a-z]*.[a-z]*``): it would declare every
+    move of every field (review S18). ``*.weight_sum`` and ``kmeans.*`` each
+    name something."""
+    model, _, field = pattern.partition(".")
+    return not _WILD.sub("", model) and not _WILD.sub("", field)
+
+
 def unreleased(changelog: str, since: str) -> list[tuple[int, str]]:
     """The lines, with their numbers from 1, of every section above the
     one for the release `since`: `[Unreleased]`, and a version not yet on
@@ -267,6 +285,17 @@ def declarations(changelog: str, since: str) -> tuple[list[Declaration], list[st
     entry that gives no reason beside the clause."""
     found: list[Declaration] = []
     errors: list[str] = []
+    # A version the read cannot order never ends it, so every past
+    # section's clauses would count (review S18).
+    if _key(since) is None:
+        errors.append(f"the release {since!r} is not a version of dotted whole numbers")
+    for number, line in enumerate(changelog.splitlines(), 1):
+        heading = HEADING.match(line)
+        if heading and heading.group(1) != "Unreleased" and _key(heading.group(1)) is None:
+            errors.append(
+                f"CHANGELOG.md:{number}: the section {heading.group(1)!r} is neither "
+                "`Unreleased` nor a version of dotted whole numbers"
+            )
     for number, text in _entries(unreleased(changelog, since)):
         for clause in MOVES.finditer(text):
             patterns = tuple(re.findall(r"`([^`]+)`", clause.group(1)))
@@ -275,6 +304,11 @@ def declarations(changelog: str, since: str) -> tuple[list[Declaration], list[st
                     errors.append(
                         f"CHANGELOG.md:{number}: `{pattern}` is not `model.field` "
                         "(a model's builder, a dot, and an output field; * and ? as wildcards)"
+                    )
+                elif names_nothing(pattern):
+                    errors.append(
+                        f"CHANGELOG.md:{number}: `{pattern}` is wildcards alone, so it would "
+                        "declare every field of every model: name the model or the field"
                     )
             reason = MOVES.sub("", text).lstrip("-* ").strip(" .")
             words = re.findall(r"[A-Za-z]{2,}", reason)
@@ -330,7 +364,9 @@ def compare(
     """Write the comparison into `out`: 0 identical, or every field that
     moved declared; 1 a field moved or went that no declaration covers, a
     declaration is malformed or names no model the workload runs, or a path
-    of the workload went unreached; 2 nothing compared. A field or a spec
+    of the workload went unreached, or the release ran under
+    ``MIN_SHARE_COMPARED`` of this build's specs; 2 nothing compared (no
+    field compared and none gone). A field or a spec
     this build has and the release does not is an addition, listed and
     passed."""
     print = out.append  # noqa: A001 -- every line goes to the report
@@ -384,6 +420,12 @@ def compare(
             moved.append((spec, field, "gone from this build"))
 
     print(f"\n{compared} fields of {len(specs)} specs compared bit for bit over {new.height} rows")
+    ours = len(new_meta["ran"])
+    if ours and len(specs) < MIN_SHARE_COMPARED * ours:
+        errors.append(
+            f"the release ran {len(specs)} of this build's {ours} specs: under "
+            f"{MIN_SHARE_COMPARED:.0%}, too few to compare"
+        )
     if added or not_comparable:
         print(f"\nadded, not compared ({len(added)} fields, {len(not_comparable)} specs):")
         for col in added:
@@ -422,6 +464,10 @@ def compare(
         print("\nFAILED:")
         for e in errors:
             print(f"  {e}")
+    if compared == 0 and not moved:
+        # Nothing on either side was read: no field compared, none gone.
+        print(f"\nno field compared with {version}: nothing was compared")
+        return 2
     if not undeclared:
         if not errors:
             print(f"\nidentical to {version}" if not covered else "\nevery move declared")
