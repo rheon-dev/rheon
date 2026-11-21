@@ -1,4 +1,5 @@
-"""Study 505 / 502: block incremental PCA (part 1) and kernel RLS (part 2).
+"""Study 505 / 502: block incremental PCA (part 1), kernel RLS (part 2), and the
+proposed tolerances with the checks every run ends with (part 3).
 
 Python and numpy only; nothing here is part of the package. Every input is drawn
 from seeded generators; no data file is read or written. The notes are
@@ -29,15 +30,18 @@ and the sliding-window KRLS. Oracles: sklearn KernelRidge on the dictionary
 atoms and on the window rows, and sklearn Nystroem(landmarks = the dictionary)
 then Ridge on every learned row (the subset-of-regressors fit KRLS runs).
 
-Run: uv run python scripts/study_505_502.py pca    (about 20 s)
-     uv run python scripts/study_505_502.py krls   (about 150 s; run with nohup)
+Run (the single entry point; each run ends with its checks, exit 1 on a failure):
+     uv run python scripts/study_505_502.py --quick   (every check, short grid: ~10 s)
+     uv run python scripts/study_505_502.py pca       (about 15 s)
+     uv run python scripts/study_505_502.py krls      (about 1 to 2.5 minutes)
      uv run python scripts/study_505_502.py krls exact zero cost   (any subset of:
          exact grid window zero numerics cost)
+     uv run python scripts/study_505_502.py tol       (tolerance tables, 20 KRLS seeds: ~70 s)
+     uv run python scripts/study_505_502.py [all]     (everything: about 2 minutes)
 """
 
 from __future__ import annotations
 
-import sys
 import time
 
 import numpy as np
@@ -314,6 +318,7 @@ def exp_ipca():
         f"worst truncated vs IPCA(r): angle {fmt(worst_t[0])}, 1-cos {fmt(worst_t[1])}, "
         f"ratio gap {fmt(worst_t[2])}"
     )
+    return worst, worst_t
 
 
 def exp_decay():
@@ -370,16 +375,16 @@ def exp_decay():
         f"worst (lambda < 1) truncated r = k vs weighted PCA: angle {fmt(worst_rk[0])}, "
         f"ratio gap {fmt(worst_rk[1])}"
     )
+    return worst, worst_rk
 
 
-def exp_window(width: int = 2000):
+def exp_window(width: int = 2000, n: int = 20000):
     """Exact form with a window of the last `width` rows: each block added, the
     block that left removed at its current decayed weight. The truncated form
     has no window (an SVD cannot give back a row it has folded in)."""
-    print(f"\n### Window of the last {width} rows (N = 20000): against PCA on the window rows\n")
+    print(f"\n### Window of the last {width} rows (N = {n}): against PCA on the window rows\n")
     print("| k | n | lambda | angle | 1-cos | ratio gap |")
     print("|---|---|---|---|---|---|")
-    n = 20000
     worst = np.zeros(3)
     for k in KS:
         nc = n_compare(k)
@@ -413,6 +418,7 @@ def exp_window(width: int = 2000):
     print(
         f"\nworst window: angle {fmt(worst[0])}, 1-cos {fmt(worst[1])}, ratio gap {fmt(worst[2])}"
     )
+    return worst
 
 
 def exp_zero_weight():
@@ -462,6 +468,7 @@ def exp_zero_weight():
         f"- end of stream vs PCA on the weighted rows: exact angle {fmt(ae[0])}, ratio gap "
         f"{fmt(ae[2])}; truncated (r = 4 of k = 5) angle {fmt(at[0])}, ratio gap {fmt(at[2])}"
     )
+    return {"nan": nan_seen, "unchanged": unchanged, "w_decay": w_ok, "angle": ae[0]}
 
 
 def exp_block_size():
@@ -482,6 +489,7 @@ def exp_block_size():
             B = saved
             worst = max(worst, float(np.max(np.abs(a.c - b1.c)) / np.max(np.abs(b1.c))))
     print(f"- largest |C(b=200) - C(b=1)| / max|C|: {fmt(worst)} (rounding, not bit-equal)")
+    return worst
 
 
 def exp_cost():
@@ -517,17 +525,6 @@ def exp_cost():
             f"| {k} | {r} | {np.median(te) * 1e3:.2f} ms | {np.median(th) * 1e3:.2f} ms | "
             f"{np.median(tt) * 1e3:.2f} ms | {sb_e:,} | {sb_t:,} |"
         )
-
-
-def main_pca():
-    t0 = time.time()
-    exp_ipca()
-    exp_decay()
-    exp_window()
-    exp_zero_weight()
-    exp_block_size()
-    exp_cost()
-    print(f"\n(total {time.time() - t0:.1f} s)")
 
 
 # ==========================================================================
@@ -771,7 +768,10 @@ def exp_krls_exact():
 
 def exp_krls_grid():
     """nu = 1e-3, caps 20/50/200, N = 2000: growth, gaps, held-out error."""
-    print(f"\n### Grid: nu = {NU}, r = {R_RIDGE}, N = {N_ROWS}, 5 seeds (worst gap, mean MSE)\n")
+    print(
+        f"\n### Grid: nu = {NU}, r = {R_RIDGE}, N = {N_ROWS}, {len(SEEDS)} seeds "
+        "(worst gap, mean MSE)\n"
+    )
     print(
         "| kernel | k | M | atoms in rows 1-1000 / 1001-2000 (mean) | uncapped ALD atoms (mean) | "
         "pred gap: KRLS vs Nystroem+Ridge, same D, all rows | pred gap: atoms-only KRLS vs "
@@ -825,6 +825,7 @@ def exp_krls_window():
         "max coef gap / max coef | held-out MSE at the end |"
     )
     print("|---|---|---|---|---|---|")
+    worst = 0.0
     for kname in KERNELS:
         for k in KDIMS:
             for width in CAPS:
@@ -849,13 +850,16 @@ def exp_krls_window():
                                 ),
                             )
                     em += mse(m.predict(xt), yt) / len(SEEDS)
+                worst = max(worst, pg)
                 print(f"| {kname} | {k} | {width} | {fmt(pg)} | {fmt(cg)} | {em:.4f} |")
+    return worst
 
 
 def exp_krls_zero_weight():
     print("\n### Zero-weight rows (first 50 rows, then one row in ten, at w = 0)\n")
     k = 2
     x, y, xt, _ = make_regression(3, N_ROWS, k)
+    flags = {}
     rng = np.random.default_rng(77)
     w = rng.uniform(0.5, 1.5, N_ROWS) * (rng.random(N_ROWS) >= 0.1)
     w[:50] = 0.0
@@ -892,6 +896,8 @@ def exp_krls_zero_weight():
             f"{idx[0]}; nu = 0, M = 20 vs Nystroem+Ridge(sample_weight): {fmt(g_sor)}; window "
             f"W = 200 vs KernelRidge(sample_weight): {fmt(g_win)}"
         )
+        flags[kname] = {"nan": nan, "unchanged": unchanged, "first": int(idx[0]), "win": g_win}
+    return flags
 
 
 def exp_krls_numerics():
@@ -959,29 +965,272 @@ def exp_krls_cost():
             )
 
 
-def main_krls(parts):
-    t0 = time.time()
+# ==========================================================================
+# Part 3: proposed tolerances, the single entry point, and its checks
+# ==========================================================================
+
+# The proposed tolerances (part 3), each 1.5 times the largest gap measured over
+# the seeds and the grid, rounded up to a power of ten (exp_tolerances prints
+# the measurement they come from). The checks below hold every run to them.
+TOL_PCA_ANGLE = 1e-12  # rad: exact block form at lambda = 1 against IncrementalPCA
+TOL_KRLS_PRED = 1e-8  # abs prediction: atoms-only KRLS against KernelRidge on the atoms
+# full KRLS against Nystroem + Ridge on its dictionary and every row, where no
+# row was learned by projection before an admission (its batch definition)
+TOL_KRLS_FULL_SOR = 1e-7
+# full KRLS where the cap did not bind (the dictionary stopped growing by the
+# ALD test): its held-out MSE over batch KernelRidge's on all rows, minus 1. A
+# statistical bound, not rounding: 1.5 x the measured 0.020 is 0.030, rounded
+# up to 0.05 (a power of ten, 0.1, would be too coarse to catch a regression).
+TOL_KRLS_FULL_MSE = 0.05
+KRLS_TOL_SEEDS = 20  # seeds behind the KRLS tolerance table (5 for the PCA one)
+
+
+def round_up_pow10(v: float) -> float:
+    """The rule for a proposed tolerance: 1.5 times the measured maximum,
+    rounded up to a power of ten."""
+    return float(10.0 ** np.ceil(np.log10(1.5 * v))) if v > 0 else 0.0
+
+
+def exp_tolerances(krls_seeds: int):
+    """(a) the exact block form at lambda = 1, unit weights, against
+    IncrementalPCA(n_components=None) on the same 200-row batches: the largest
+    principal angle of the top-n space; (b) atoms-only KRLS against KernelRidge
+    on its atoms: the largest absolute held-out prediction difference; with the
+    full KRLS (every row learned) measured beside it against what it can be
+    held to."""
+    out = {}
+    print(
+        f"\n### Tolerance (a): exact block form vs IncrementalPCA, lambda = 1, {len(SEEDS)} seeds\n"
+    )
+    print("| k | n compared | N | largest angle over seeds (rad) | 1.5 x, up to a power of 10 |")
+    print("|---|---|---|---|---|")
+    worst_a = 0.0
+    for k in KS:
+        nc = n_compare(k)
+        for n in NS:
+            g = 0.0
+            for seed in SEEDS:
+                x = make_stream(seed, n, k)
+                ex = run_stream(ExactEw(k), x, np.ones(n), 1.0)
+                ip = IncrementalPCA(n_components=None)
+                for lo in range(0, n, B):
+                    ip.partial_fit(x[lo : lo + B])
+                ve, _, re_ = ex.top(nc)
+                c = compare(ve, re_, ip.components_[:nc], ip.explained_variance_ratio_[:nc])
+                g = max(g, c[0])
+            worst_a = max(worst_a, g)
+            print(f"| {k} | {nc} | {n} | {fmt(g)} | {round_up_pow10(g):.0e} |")
+    out["pca"] = worst_a
+    print(
+        f"\nlargest: {fmt(worst_a)} rad; proposed tolerance {round_up_pow10(worst_a):.0e} rad "
+        f"(the script holds runs to {TOL_PCA_ANGLE:.0e})"
+    )
+
+    seeds = range(krls_seeds)
+    print(
+        f"\n### Tolerance (b): atoms-only KRLS vs KernelRidge on the atoms, nu = {NU}, "
+        f"r = {R_RIDGE}, N = {N_ROWS}, {krls_seeds} seeds\n"
+    )
+    print(
+        "| kernel | k | M | atoms (max) | atoms-only: largest abs pred gap | 1.5 x, up to a "
+        "power of 10 | full KRLS vs Nystroem+Ridge, same D, all rows: seeds with no row "
+        "projected before the last admission, largest gap there / elsewhere | full: "
+        "MSE ratio to KernelRidge on D (min / max) | full: MSE ratio to batch KernelRidge, "
+        "all rows (min / max) | full, seeds where the cap did not bind: largest abs(MSE "
+        "ratio to batch - 1) |"
+    )
+    print("|---|---|---|---|---|---|---|---|---|---|")
+    worst_b = 0.0
+    worst_ratio_d = 0.0
+    worst_c = 0.0
+    worst_sat = 0.0
+    for kname in KERNELS:
+        for k in KDIMS:
+            batch_mse = {}
+            for cap in CAPS:
+                g_at = 0.0
+                r_d = [np.inf, 0.0]
+                sat = -1.0  # no seed where the cap did not bind
+                g_sor = [0.0, 0.0]  # no row projected before an admission / some
+                n_exact = 0
+                r_b = [np.inf, 0.0]
+                n_at = 0
+                for seed in seeds:
+                    x, y, xt, yt = make_regression(seed, N_ROWS, k)
+                    w = np.ones(N_ROWS)
+                    mo = run_ald(kname, x, y, w, cap, NU, atoms_only=True)
+                    idx = np.array(mo.admitted)
+                    kr = oracle_kr(kname, k, x[idx], y[idx], w[idx]).predict(xt)
+                    g_at = max(g_at, float(np.max(np.abs(mo.predict(xt) - kr))))
+                    n_at = max(n_at, len(idx))
+                    m = run_ald(kname, x, y, w, cap, NU)
+                    pred = m.predict(xt)
+                    gs = float(np.max(np.abs(pred - oracle_sor(kname, k, m.d, x, y, w)(xt))))
+                    # rows learned by projection before the last admission (unit
+                    # weights: every row is learned, the admitted ones as atoms)
+                    projected = m.admitted[-1] + 1 - len(m.admitted)
+                    n_exact += projected == 0
+                    g_sor[projected > 0] = max(g_sor[projected > 0], gs)
+                    rd = mse(pred, yt) / mse(kr, yt)
+                    r_d = [min(r_d[0], rd), max(r_d[1], rd)]
+                    if seed not in batch_mse:
+                        batch_mse[seed] = mse(oracle_kr(kname, k, x, y, w).predict(xt), yt)
+                    rb = mse(pred, yt) / batch_mse[seed]
+                    r_b = [min(r_b[0], rb), max(r_b[1], rb)]
+                    if len(m.d) < cap:
+                        sat = max(sat, abs(rb - 1.0))
+                worst_b = max(worst_b, g_at)
+                worst_ratio_d = max(worst_ratio_d, r_d[1])
+                worst_sat = max(worst_sat, sat)
+                worst_c = max(worst_c, g_sor[0])
+                g_ex = fmt(g_sor[0]) if n_exact else "-"
+                g_pr = fmt(g_sor[1]) if n_exact < krls_seeds else "-"
+                print(
+                    f"| {kname} | {k} | {cap} | {n_at} | {fmt(g_at)} | "
+                    f"{round_up_pow10(g_at):.0e} | {n_exact} of {krls_seeds}: {g_ex} / {g_pr} | "
+                    f"{r_d[0]:.3f} / {r_d[1]:.3f} | {r_b[0]:.3f} / {r_b[1]:.3f} | "
+                    f"{f'{sat:.1e}' if sat >= 0 else '-'} |"
+                )
+    out["krls"] = worst_b
+    out["ratio_d"] = worst_ratio_d
+    out["full_exact"] = worst_c
+    out["sat"] = worst_sat
+    print(
+        f"\nlargest: {fmt(worst_b)}; proposed tolerance {round_up_pow10(worst_b):.0e} "
+        f"(the script holds runs to {TOL_KRLS_PRED:.0e}); full KRLS's largest held-out "
+        f"MSE ratio to KernelRidge on its own atoms: {worst_ratio_d:.2f}; full KRLS vs "
+        f"Nystroem+Ridge where no row was projected before an admission: {fmt(worst_c)}, "
+        f"1.5 x up to a power of 10: {round_up_pow10(worst_c):.0e}; full KRLS where the cap "
+        f"did not bind: largest abs(MSE ratio to batch KernelRidge - 1) {worst_sat:.1e}"
+    )
+    return out
+
+
+CHECKS: list[tuple[str, bool]] = []
+
+
+def check(name: str, ok: bool) -> None:
+    CHECKS.append((name, bool(ok)))
+
+
+def run_pca(quick: bool) -> None:
+    w_e, w_t = exp_ipca()
+    check(
+        f"exact vs IncrementalPCA angle {fmt(w_e[0])} < {TOL_PCA_ANGLE:.0e}", w_e[0] < TOL_PCA_ANGLE
+    )
+    check(f"truncated vs IncrementalPCA(r) angle {fmt(w_t[0])} < 1e-12", w_t[0] < 1e-12)
+    w_d, w_rk = exp_decay()
+    check(f"exact vs weighted PCA (decay) angle {fmt(w_d[0])} < 1e-12", w_d[0] < 1e-12)
+    check(f"truncated r = k vs weighted PCA angle {fmt(w_rk[0])} < 1e-12", w_rk[0] < 1e-12)
+    w_w = exp_window(*((1000, 4000) if quick else (2000, 20000)))
+    check(f"window vs PCA on the window angle {fmt(w_w[0])} < 1e-12", w_w[0] < 1e-12)
+    z = exp_zero_weight()
+    check("zero-weight blocks: no NaN", not z["nan"])
+    check("zero-weight blocks leave the state bit-identical", z["unchanged"])
+    check("zero-weight blocks only decay W", z["w_decay"])
+    bs = exp_block_size()
+    check(f"block size 200 vs 1: {fmt(bs)} < 1e-12", bs < 1e-12)
+    if not quick:
+        exp_cost()
+
+
+def run_krls(quick: bool, parts: list[str]) -> None:
     parts = parts or ["exact", "grid", "window", "zero", "numerics", "cost"]
+    if quick:
+        parts = [p for p in parts if p in ("exact", "window", "zero")]
     if "exact" in parts:
-        exp_krls_exact()
+        w = exp_krls_exact()
+        g = max(v for (_, case), v in w.items() if case.startswith("atoms"))
+        check(f"atoms-only KRLS vs KernelRidge {fmt(g)} < {TOL_KRLS_PRED:.0e}", g < TOL_KRLS_PRED)
     if "grid" in parts:
         exp_krls_grid()
     if "window" in parts:
-        exp_krls_window()
+        g = exp_krls_window()
+        check(f"window KRLS vs KernelRidge on the window {fmt(g)} < 1e-7", g < 1e-7)
     if "zero" in parts:
-        exp_krls_zero_weight()
+        z = exp_krls_zero_weight()
+        for kname, f in z.items():
+            check(f"{kname} zero-weight rows: no NaN", not f["nan"])
+            check(f"{kname} zero-weight rows leave the state unchanged", f["unchanged"])
+            check(f"{kname} first atom is the first weighted row", f["first"] == 50)
     if "numerics" in parts:
         exp_krls_numerics()
     if "cost" in parts:
         exp_krls_cost()
-    print(f"\n(total {time.time() - t0:.1f} s)")
+
+
+def run_tol(krls_seeds: int) -> None:
+    t = exp_tolerances(krls_seeds)
+    check(f"tolerance (a): {fmt(t['pca'])} < {TOL_PCA_ANGLE:.0e}", t["pca"] < TOL_PCA_ANGLE)
+    check(f"tolerance (b): {fmt(t['krls'])} < {TOL_KRLS_PRED:.0e}", t["krls"] < TOL_KRLS_PRED)
+    check(
+        f"full KRLS, cap not bound: abs(MSE ratio to batch - 1) {t['sat']:.1e} < "
+        f"{TOL_KRLS_FULL_MSE:.2f}",
+        t["sat"] < TOL_KRLS_FULL_MSE,
+    )
+    check(
+        f"full KRLS vs Nystroem+Ridge, no projection before an admission: "
+        f"{fmt(t['full_exact'])} < {TOL_KRLS_FULL_SOR:.0e}",
+        t["full_exact"] < TOL_KRLS_FULL_SOR,
+    )
+
+
+def quick_grid() -> None:
+    """The short run: 2 seeds, N = 2000 for the PCA grids, lambda in {1, 0.99},
+    caps and windows 20 and 50 (the tolerance table keeps 20, 50 and 200)."""
+    global SEEDS, NS, LAMS, CAPS
+    SEEDS, NS, LAMS, CAPS = range(2), (2000,), (1.0, 0.99), (20, 50)
+
+
+def main() -> int:
+    import argparse
+
+    ap = argparse.ArgumentParser(
+        description="Block incremental PCA and kernel RLS against library oracles."
+    )
+    ap.add_argument(
+        "part",
+        nargs="?",
+        default="all",
+        choices=("pca", "krls", "tol", "all"),
+        help="pca, krls, tol (the tolerance tables) or all (default)",
+    )
+    ap.add_argument(
+        "krls_parts",
+        nargs="*",
+        help="with krls: any of exact grid window zero numerics cost (default all)",
+    )
+    ap.add_argument("--quick", action="store_true", help="a short run (2 seeds, a smaller grid)")
+    ap.add_argument(
+        "--krls-seeds",
+        type=int,
+        default=None,
+        help=f"seeds for the KRLS tolerance table (default {KRLS_TOL_SEEDS}, 2 with --quick)",
+    )
+    args = ap.parse_args()
+    if args.quick:
+        quick_grid()
+    krls_seeds = args.krls_seeds or (2 if args.quick else KRLS_TOL_SEEDS)
+    t0 = time.time()
+    if args.part in ("pca", "all"):
+        print("\n## Block incremental PCA")
+        run_pca(args.quick)
+    if args.part in ("krls", "all"):
+        print("\n## Kernel RLS")
+        run_krls(args.quick, args.krls_parts)
+    if args.part in ("tol", "all"):
+        print("\n## Proposed tolerances")
+        if args.quick:
+            global CAPS
+            CAPS = (20, 50, 200)
+        run_tol(krls_seeds)
+    print("\n## Checks\n")
+    for name, ok in CHECKS:
+        print(f"- {'PASS' if ok else 'FAIL'}: {name}")
+    failed = sum(not ok for _, ok in CHECKS)
+    print(f"\n{len(CHECKS) - failed} passed, {failed} failed (total {time.time() - t0:.1f} s)")
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
-    which = sys.argv[1] if len(sys.argv) > 1 else "pca"
-    if which == "pca":
-        main_pca()
-    elif which == "krls":
-        main_krls(sys.argv[2:])
-    else:
-        raise SystemExit(f"unknown part {which!r}; parts: 'pca', 'krls'")
+    raise SystemExit(main())

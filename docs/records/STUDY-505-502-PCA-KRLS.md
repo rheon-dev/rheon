@@ -1,14 +1,19 @@
 <!-- kind: record -->
 # Study 505 / 502: block incremental PCA, and kernel RLS
 
-A Python-only numpy study; nothing here changes the package. The script is
-`scripts/study_505_502.py` (`uv run python scripts/study_505_502.py pca`, about
-14 s; `... krls`, about 150 s, run under nohup); every input comes from seeded
-generators and no data file is read or written. Part 1 (task 505, block
-incremental PCA) and part 2 (task 502, kernel RLS) are below. Part 3 is not
-written yet.
+A Python-only numpy study; nothing here changes the package. One script is the
+entry point, `scripts/study_505_502.py`, with the subcommands `pca`, `krls`,
+`tol` (the tolerance tables) and `all` (the default), and `--quick` for a short
+run of every check (see part 3 for the times). Every input comes from seeded
+generators and no data file is read or written; nothing random is on the
+output path. Part 1 (task 505, block incremental PCA), part 2 (task 502,
+kernel RLS) and part 3 (the single script, the proposed tolerances and the
+summary an implementation starts from) are below.
 
-**Status:** parts 1 and 2 done; part 3 missing.
+**Status:** done (parts 1 to 3). This record needs a row in `docs/README.md`'s
+Records table: until the coordinator adds it at the merge,
+`tests/test_doc_structure.py::test_every_document_under_docs_has_a_row_in_the_index`
+fails on this branch. The row is left to the merge on purpose.
 
 Notation: `k` columns, `n` the components compared (1, 2, 5 for k = 2, 5, 20),
 `r` the rows of a truncated basis (`n + 2` capped at `k`, or `k`), `b` the
@@ -617,3 +622,248 @@ run with nohup and logged); the exact cases and the cost table 2.4 s.
 | poly | 1e-06 | 10 | 2.7e-03 | 218 | 1.3e-02 | 3.8e-10 | 2.1e-06 | 1.9e+05 | 4.2e-11 |
 | poly | 1e-09 | 20 | 1.2e-09 | 1962 | 1.0e-02 | 1.0e+00 | -2.1e-03 | 3.9e+17 | 1.7e+00 |
 | poly | 0 | 15 | 3.4e-12 | 1985 | 1.3e-02 | 1.0e+00 | -6.1e+05 | 4.4e+17 | 1.8e+01 |
+
+## Part 3: the single script, proposed tolerances, and the summary
+
+### The script
+
+`scripts/study_505_502.py` is the one entry point (the parts' separate `main`s
+are gone; no other study script was left behind):
+
+```text
+uv run python scripts/study_505_502.py [pca | krls [exact grid window zero numerics cost] | tol | all] [--quick] [--krls-seeds N]
+```
+
+Each run ends with a `## Checks` list and exits 1 if any check fails. The
+checks: exact block PCA against IncrementalPCA (`< 1e-12` rad, the proposed
+tolerance), the truncated form against `IncrementalPCA(r)` and, at `r = k`,
+against weighted PCA under decay, the exact form under decay and in a window
+against PCA (each `< 1e-12` rad), block size 200 against 1 (`< 1e-12`
+relative), the zero-weight invariants of both parts (no NaN, state unchanged,
+`W` only decayed, the first atom is the first weighted row), atoms-only KRLS
+against KernelRidge on the atoms (`< 1e-8`, the proposed tolerance), the
+window KRLS against KernelRidge on the window (`< 1e-7`), and, with `tol`, the
+two checks on the full KRLS given in the tolerances below.
+
+`--quick` runs 2 seeds, `N = 2000`, `lambda` in {1, 0.99}, a 1000-row window
+over 4000 rows, KRLS caps and windows 20 and 50, KRLS parts `exact`, `window`
+and `zero`, and the tolerance tables at 2 seeds with the full `M` grid (20, 50,
+200); it skips the timing tables, the KRLS growth grid and the `nu` sweep. Times on this VM:
+`--quick` 9.7 s (21 checks, all passing, through `uv run`); `pca` 13 s; `tol`
+72 s at 20 KRLS seeds; `all` 124 s, 21 checks passing (`krls` is the rest:
+about 50 s alone, 150 s when part 2 ran it beside other work). The long runs
+went under nohup, logged.
+
+### Proposed tolerances
+
+The rule: 1.5 times the largest gap over the seeds, rounded up to a power of
+ten, per cell and over the grid. The script holds every run to the grid's
+value (`TOL_*` at the top of its part 3).
+
+**(a) Block PCA, exact form, `lambda = 1`, unit weights, against
+`IncrementalPCA(n_components=None).partial_fit` on the same 200-row batches**,
+in radians of the largest principal angle between the top-`n` spaces
+(`n` = 1, 2, 5 for `k` = 2, 5, 20), 5 seeds:
+
+| k | N = 2000: largest angle (rad) | proposed | N = 20000: largest angle (rad) | proposed |
+|---|---|---|---|---|
+| 2 | 2.4e-15 | 1e-14 | 3.2e-14 | 1e-13 |
+| 5 | 1.5e-14 | 1e-13 | 9.1e-14 | 1e-12 |
+| 20 | 1.9e-14 | 1e-13 | 3.4e-14 | 1e-13 |
+
+**Proposed: `1e-12` rad** over the grid (largest 9.1e-14). The same bound
+covers the other exact comparisons of part 1 (decay and weights against PCA on
+the weighted rows, 1.6e-14; the window, 3.3e-14; the truncated form against
+`IncrementalPCA(r)`, 9.5e-14), and the script holds them to it as well.
+
+**(b) Atoms-only KRLS against `KernelRidge(alpha=0.1, sample_weight=w)` on the
+same dictionary (its atoms' `x`, `y`, `w`)**, in the largest absolute
+difference of the predictions on 500 held-out rows (the target's spread is
+about 1.5), `nu = 1e-3`, `N = 2000`, **20 seeds**:
+
+| kernel | k | M = 20 | proposed | M = 50 | proposed | M = 200 | proposed |
+|---|---|---|---|---|---|---|---|
+| RBF | 2 | 4.6e-12 | 1e-11 | 8.0e-11 | 1e-9 | 6.1e-10 (95 atoms) | 1e-9 |
+| RBF | 5 | 7.4e-15 | 1e-13 | 1.9e-13 | 1e-12 | 1.6e-11 | 1e-10 |
+| poly | 2 | 1.1e-10 (10 atoms) | 1e-9 | same | 1e-9 | same | 1e-9 |
+| poly | 5 | 3.0e-13 | 1e-12 | 1.1e-11 | 1e-10 | 1.5e-9 (56 atoms) | 1e-8 |
+
+**Proposed: `1e-8`** absolute over the grid (largest 1.5e-9, polynomial
+`k = 5, M = 200`). The 5 seeds of part 2 gave 2.5e-10 and so 1e-9; seed 5 to
+19 raised it by a factor of 6, which is why the table rests on 20. The gap
+grows with `cond(K_D)` (polynomial, and RBF at `k = 2`), not with the stream.
+
+**The full KRLS (every row learned) is not held to KernelRidge on its
+dictionary**: it is a different estimator (it also learns the rows it did not
+admit), and the gap is 0.17 to 13 with no tolerance to propose. Its held-out
+MSE over KernelRidge-on-atoms' is 0.05 to 0.95 in every cell but one, and
+reaches 1.29 in that one (polynomial `k = 5, M = 200`, where batch KernelRidge
+on all rows is worse than the 56 atoms alone by the same factor), so "beats
+KernelRidge on its atoms" is not a valid test either. What its test can check, from the
+20-seed measurements:
+
+1. **Against `Nystroem(landmarks = its dictionary)` + `Ridge(alpha=0.1,
+   fit_intercept=False, sample_weight=w)` on every learned row, where no row
+   was learned by projection before the last admission** (the full form's
+   batch definition holds exactly there: a cap that binds before any rejection,
+   `nu = 0` under the stop rule, or a polynomial that saturates without a
+   rejection): largest gap 1.9e-8 (polynomial `k = 5, M = 200`; 3.3e-14 to
+   1.9e-9 elsewhere), **proposed `1e-7`**. Where rows were projected during
+   the growth phase the gap is Engel's approximation, 4.6e-5 to 1.7e-2 here,
+   bounded by `nu`, and not a tolerance.
+2. **The held-out error against batch KernelRidge on all rows, where the cap
+   did not bind** (the dictionary stopped growing by the ALD test: polynomial
+   at its feature dimension, RBF `k = 2` at `M = 200` with 90 to 95 atoms):
+   `|MSE(KRLS) / MSE(batch) - 1|` at most 2.0e-2 (RBF) and 1.1e-5 (polynomial),
+   **proposed `0.05`** (1.5 times 0.020 is 0.030; a power of ten, 0.1, would
+   be too coarse to catch a regression). This is a statistical bound on these
+   streams, not rounding. Where the cap binds, the ratio is 0.53 to 17.9 and
+   depends on `M` and the data; no bound was measured that a test could hold.
+
+The 20-seed table (`uv run python scripts/study_505_502.py tol`):
+
+| kernel | k | M | atoms (max) | atoms-only: largest abs pred gap | 1.5 x, up to a power of 10 | full vs Nystroem+Ridge, same D, all rows: seeds with no row projected before the last admission, gap there / elsewhere | full: MSE ratio to KernelRidge on D (min / max) | full: MSE ratio to batch KernelRidge (min / max) | full, cap not bound: largest abs(MSE ratio to batch - 1) |
+|---|---|---|---|---|---|---|---|---|---|
+| rbf | 2 | 20 | 20 | 4.6e-12 | 1e-11 | 3 of 20: 4.9e-11 / 8.2e-04 | 0.205 / 0.721 | 2.786 / 9.815 | - |
+| rbf | 2 | 50 | 50 | 8.0e-11 | 1e-09 | 0 of 20: - / 5.2e-03 | 0.220 / 0.610 | 1.024 / 1.817 | - |
+| rbf | 2 | 200 | 95 | 6.1e-10 | 1e-09 | 0 of 20: - / 1.7e-02 | 0.590 / 0.954 | 0.997 / 1.020 | 2.0e-02 |
+| rbf | 5 | 20 | 20 | 7.4e-15 | 1e-13 | 20 of 20: 3.3e-14 / - | 0.536 / 0.806 | 7.954 / 17.851 | - |
+| rbf | 5 | 50 | 50 | 1.9e-13 | 1e-12 | 20 of 20: 8.4e-13 / - | 0.429 / 0.718 | 4.008 / 8.938 | - |
+| rbf | 5 | 200 | 200 | 1.6e-11 | 1e-10 | 0 of 20: - / 2.6e-03 | 0.289 / 0.490 | 1.403 / 1.924 | - |
+| poly | 2 | 20 | 10 | 1.1e-10 | 1e-09 | 13 of 20: 1.9e-09 / 4.6e-05 | 0.047 / 0.337 | 1.000 / 1.000 | 6.2e-06 |
+| poly | 2 | 50 | 10 | 1.1e-10 | 1e-09 | 13 of 20: 1.9e-09 / 4.6e-05 | 0.047 / 0.337 | 1.000 / 1.000 | 6.2e-06 |
+| poly | 2 | 200 | 10 | 1.1e-10 | 1e-09 | 13 of 20: 1.9e-09 / 4.6e-05 | 0.047 / 0.337 | 1.000 / 1.000 | 6.2e-06 |
+| poly | 5 | 20 | 20 | 3.0e-13 | 1e-12 | 20 of 20: 8.7e-13 / - | 0.349 / 0.705 | 0.895 / 7.419 | - |
+| poly | 5 | 50 | 50 | 1.1e-11 | 1e-10 | 20 of 20: 6.9e-11 / - | 0.171 / 0.567 | 0.527 / 3.216 | - |
+| poly | 5 | 200 | 56 | 1.5e-09 | 1e-08 | 14 of 20: 1.9e-08 / 7.9e-05 | 0.111 / 1.293 | 1.000 / 1.000 | 1.1e-05 |
+
+The window KRLS (not asked for a tolerance here) was within 1.0e-8 of
+KernelRidge on the window's rows over 5 seeds; the script holds it to 1e-7.
+
+**Seeds.** Part 1's tables and tolerance (a): 5 seeds (0 to 4). Part 2's tables:
+5 seeds. Tolerance (b) and the full-KRLS bounds: 20 seeds (0 to 19). `--quick`:
+2 seeds.
+
+### Summary for an implementation
+
+Everything below is restated from parts 1 and 2 so that an implementation can
+start from this section alone. `k` columns, `b` rows a block, `r` the rows of a
+truncated basis, `M` the dictionary cap (or the window's rows), `lam` the decay
+per row, `w` a row's weight.
+
+**Block PCA, exact form** (mean form, the decayed weighted covariance). A block
+decays each row to its end, `u_i = w_i lam^(b-1-i)`, `U = sum u_i`,
+`m_B = sum u_i x_i / U`, `C_B = (1/U) sum u_i (x_i - m_B)(x_i - m_B)'`; then
+
+```text
+W' = lam^b W + U,   a = lam^b W / W',   beta = U / W'
+m' = m + beta (m_B - m)
+C' = a C + beta C_B + a beta (m - m_B)(m - m_B)'
+read: eigh(C), descending; components, variances lambda_j, ratios lambda_j / trace(C)
+```
+
+It equals the per-row recursion to rounding (7.4e-15 relative at `b = 200`
+against `b = 1`), so the block size is not part of the result beyond rounding.
+A window removes a leaving block at its current decayed weight by the
+inverse combination (`W_r = W - U`, `m_r = (W m - U m_B) / W_r`,
+`C_r = (W C - U C_B - (W_r U / W) d d') / W_r`, `d = m_r - m_B`).
+
+**Block PCA, truncated form** (`C ~ V' diag(s^2) V`, `V` the top `r` rows). The
+thin SVD of the `(r + b + 1) x k` stack `[sqrt(a) diag(s) V; sqrt(beta u_i / U)
+(x_i - m_B); sqrt(a beta) (m - m_B)]` gives the new `V`, `s` (top `r` kept);
+`tr' = a tr + beta trace(C_B) + a beta |m - m_B|^2`; `m`, `W` as above. Exact at
+`r = k` or when the data's rank is at most `r`; for `r < k` it drops the mass
+outside the top `r` at every block and never recovers it. No window.
+
+**ALD-KRLS** (dictionary `D` of `m <= M` atoms, ridge `r`, threshold `nu`). Per
+row with `w > 0`:
+
+```text
+kv = k(D, x),  a = Kinv kv,  delta = k(x, x) - kv' a
+if delta > nu and m < M:                       (admit; the cap's rule is: stop admitting)
+    Kinv <- [[Kinv + a a'/delta, -a/delta], [-a'/delta, 1/delta]]
+    P    <- [[P + a a'/(r delta), -a/(r delta)], [-a'/(r delta), 1/(r delta)]]
+    alpha <- [alpha; 0],  kv <- [kv; k(x, x)],  D <- [D; x]
+g = P kv / (1/w + kv' P kv),  alpha += g (y - kv' alpha),  P -= g (P kv)'
+predict: k(D, x)' alpha
+```
+
+`w = 0` returns before the test: the state is unchanged, bit for bit. The
+atoms-only form skips the RLS step for a row it does not admit.
+
+**Window KRLS** (every learned row of the last `M` rows is an atom, ridge `c`):
+
+```text
+drop oldest while its row index <= t - M:   Q <- Q[1:,1:] - f f'/e,   e = Q_00, f = Q[1:,0]
+add (w > 0):  q = Q kv,  s = k(x, x) + c/w - kv' q,  Q <- [[Q + q q'/s, -q/s], [-q'/s, 1/s]]
+alpha = Q y_W
+```
+
+**State** (f64 bytes; all bounded by the shape, the cap or the window, never by
+the stream):
+
+| form | fields | bytes |
+|---|---|---|
+| block PCA, exact | `W`, `m`, `C` (packed triangle) | `8 (1 + k + k (k+1)/2)` |
+| block PCA, truncated | `W`, `m`, `V`, `s`, `tr` | `8 (2 + k + r k + r)` |
+| block PCA, a block held | its rows, weights, `lam` | `+ 8 b (k + 2)` |
+| block PCA, exact, windowed | the window's rows and weights | `+ 8 W_rows (k + 1)` |
+| ALD-KRLS | `D`, `Kinv`, `P`, `alpha` | `8 (M k + 2 M^2 + M)` dense; `8 (M k + M (M+1) + M)` with both symmetric matrices packed |
+| window KRLS | rows, `y`, row index, `Q` | `8 (M k + 2 M + M^2)` dense; `8 (M k + 2 M + M (M+1)/2)` packed |
+
+At `k = 2000, r = 12`: 16.0 MB exact against 208 kB truncated. At `M = 200,
+k = 5`: 650 kB ALD-KRLS (331 kB packed), 331 kB window, per group.
+
+**Cost.** Exact block fold `2 b k^2` flops (`2 k^2` a row), read `~10 k^3`
+(`eigh`, per read, not per row). Truncated fold: the thin SVD of
+`(r + b + 1) x k`, `~4 k (r + b + 1)^2 + 8 (r + b + 1)^3` a block, no read.
+Measured at `b = 200`: `k = 20`: 0.05 ms exact fold, 0.2 ms truncated;
+`k = 2000, r = 12`: 82 ms exact fold plus 483 ms per read, 153 ms truncated.
+ALD-KRLS: `M k` kernel evaluations plus about `6` to `8 M^2` flops a row
+(`O(M^2)`); window KRLS about `6 M^2` a row (`4 M^2` to add, `2 M^2` to drop), `2 M^2` a read.
+Measured (numpy, one row at a time): 20 to 30 us a row at `M <= 50`, 100 to
+140 us at `M = 200`; the window 40 to 60 and 270 to 290 us.
+
+**Numerical risks.**
+
+- `nu` and positive definiteness. Both `Kinv` and `P` carry `1/delta` at
+  each admission, and `delta` is a difference of nearly equal numbers. At
+  `nu >= 1e-3 k(x, x)` both stay positive definite (`Kinv` within 1.4e-7 of
+  `inv(K_D)`, `cond(K_D)` 1.1e7, RBF `k = 2, M = 200`). At `nu = 1e-6`, `P`
+  is indefinite (smallest eigenvalue -1.1e4) and predictions are 0.40 off the
+  batch fit on the same dictionary; at `nu <= 1e-9` (and 0) `Kinv` is
+  indefinite too and predictions are 22 off; the polynomial admits rounding
+  residuals into a saturated span (atoms 11 to 20 in 10 dimensions). An
+  implementation refuses `nu` below about `1e-8 k(x, x)` (or keeps a Cholesky
+  of `K_D` and re-tests `delta` against it). The window KRLS with `c > 0` never
+  met this: its Schur complement is at least `c / w`.
+- The truncated PCA at `r < k` is an approximation: up to 0.46 rad from PCA
+  on the weighted rows on these streams (and scikit-learn's own
+  `IncrementalPCA(r)` is 0.57 rad from batch PCA), 2e-3 to 4e-3 rad once the
+  first regime has decayed away. Only `r = k` or `lam = 1` (against
+  `IncrementalPCA(r)`) can be held to a library.
+- Dictionary saturation. RBF at `k = 5, gamma = 1/k` admits about one row in
+  two at `nu = 1e-3` (984 atoms of 2000 uncapped): ALD does not sparsify there,
+  so every cap binds at once (in the first `M` rows) and the dictionary is
+  simply the first `M` rows; the held-out error then rests on `M` (MSE 0.26 at
+  `M = 20`, 0.032 at `M = 200`, batch 0.019). The polynomial saturates at its
+  feature dimension (`C(k+3, 3)`: 10 at `k = 2`, 56 at `k = 5`), after which
+  every `delta` is rounding, and only `nu` keeps those rows out.
+- The window PCA's removal subtracts; a mean far from the spread loses digits
+  there (not measured beyond offset 5, spread 3).
+
+**Oracles.**
+
+- Block PCA: `sklearn.decomposition.IncrementalPCA.partial_fit` on the same
+  200-row batches (`lam = 1`, unit weights; `n_components=None` for the exact
+  form, `r` for the truncated); `sklearn.decomposition.PCA(svd_solver='full')`
+  on `[Y; -Y]`, `Y = sqrt(u_i / U) (x_i - m_u)`, under decay and weights;
+  `scipy.linalg.eigh` of `np.cov(aweights=u, bias=True)`. Measure: the largest
+  principal angle (`scipy.linalg.subspace_angles`), and the ratio gap.
+- KRLS: `sklearn.kernel_ridge.KernelRidge(alpha=r, sample_weight=w)` on the
+  atoms (atoms-only form) and on the window rows (window form);
+  `sklearn.kernel_approximation.Nystroem(n_components=m)` on the atoms then
+  `Ridge(alpha=r, fit_intercept=False, sample_weight=w)` on every learned row
+  (the full form's batch definition on the same dictionary); batch
+  `KernelRidge` on all rows for the held-out error. Measure: the largest
+  absolute prediction difference on 500 held-out rows.
