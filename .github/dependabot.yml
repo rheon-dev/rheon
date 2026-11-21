@@ -27,3 +27,10 @@ updates:
   # security bump of a polars-family crate moves one of the crates above
   # alone, so CI is meant to fail on it: the fix is to move the whole family
   # by hand.
+  #
+  # Dependabot has no *yank* alerts: GitHub's advisory database holds
+  # security advisories, and a yanked release carries none. `yanks.yml`
+  # (`scripts/yanks.py`) fails weekly, and on a push that changes either
+  # lock, when a locked version is yanked on crates.io or PyPI. The other
+  # watchers: `advisories.yml` (OSV advisories against both locks, weekly)
+  # and `polars-canary.yml` (the next Polars, weekly).

@@ -29,7 +29,21 @@ model that only the new build has is listed as an addition and passes.
 
 ## [Unreleased]
 
+### Changed
+
+- **The build and development py-polars moves 2.0.0 -> 2.1.0** (task 540).
+  The declared range `>=1.37.0,<3` is unchanged: rust `polars` 0.55.2 and
+  `pyo3-polars` 0.28.0 are still the newest crates, and the wheel's own copy
+  of Polars never meets the user's. `docs/VALIDATION.md` is regenerated on it.
+
 ### Added
+
+- **A weekly check for yanked locked versions** (task 540):
+  `.github/workflows/yanks.yml` runs `scripts/yanks.py`, which looks every
+  registry package of `Cargo.lock` up in crates.io's index and of `uv.lock`
+  in PyPI's JSON API, and fails on a yanked version. Dependabot has no yank
+  alerts, since GitHub's advisory database holds security advisories only.
+  It runs on Thursdays and on a push that changes either lock.
 
 - **`glm`, generalized linear models fitted one row at a time** (task 500):
   Poisson, Gamma, binomial and Tweedie regression, each with its log or

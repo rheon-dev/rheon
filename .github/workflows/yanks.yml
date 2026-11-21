@@ -1,0 +1,36 @@
+name: Yanks
+
+# A yank withdraws one release from its registry; a lock that names it keeps
+# building, and Dependabot says nothing, because GitHub's advisory database
+# holds security advisories and no yanks. `scripts/yanks.py` looks every
+# registry package of `Cargo.lock` up in crates.io's sparse index and of
+# `uv.lock` in PyPI's JSON API, and fails when a locked version is yanked.
+# Weekly, since a version is yanked against a lock nobody changed, and on a
+# push that changes either lock. Standard library only.
+on:
+  schedule:
+    - cron: "17 6 * * 4" # Thursdays, 06:17 UTC
+  push:
+    paths:
+      - Cargo.lock
+      - uv.lock
+  workflow_dispatch:
+
+# Least privilege: no token scope by default, granted per job.
+permissions: {}
+
+concurrency:
+  group: yanks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  yanks:
+    name: No locked version is yanked
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: look every locked version up; fail on a yanked one
+        run: python3 scripts/yanks.py
