@@ -97,11 +97,11 @@ budget = 48112220
 
 [instructions.sgd]
 what = "sgd, 20 features, squared loss, learning rate 0.01, standardized: AnyModel::step_into, into one kept Step"
-budget = 2427776
+budget = 2537026
 
 [instructions.sgd_huber]
 what = "sgd, 20 features, Huber loss in the MAD scale, learning rate 0.01, standardized: AnyModel::step_into, into one kept Step"
-budget = 2815341
+budget = 2881700
 
 [instructions.sgd_huber_refit]
 what = "sgd, 20 features, Huber loss in the MAD scale, learning rate 0.01, standardized, the refit of the first 2,500 rows on the block's 500th row: AnyModel::step_into, into one kept Step"
@@ -109,7 +109,7 @@ budget = 31454774
 
 [instructions.pa]
 what = "pa, 20 features, standardized: AnyModel::step_into, into one kept Step"
-budget = 2141010
+budget = 2254570
 
 [instructions.seqtest]
 what = "seqtest on one column's sign: AnyModel::step_into, into one kept Step"
@@ -1515,6 +1515,30 @@ to = 12605148
 date = 2026-11-15
 reason = "task 413: lasso's coordinate descent takes each coordinate's terms from the coordinates before it off ahead of time, beside the previous coordinate's chain, which halves the dependent subtractions a sweep waits on; at 20 features the sweep runs 6-13% more instructions (arm64) for 14-17% fewer cycles, 1.1 times as fast through fit_predict and 1.7-1.8 at 200-500 features, outputs identical to the bit. CI's count on 682332c4 (run 43752576671), +5.25%"
 changelog = "`lasso`'s coordinate descent takes each coordinate's terms from the"
+
+[[raised]]
+key = "instructions.sgd"
+from = 2427776
+to = 2537026
+date = 2026-11-21
+reason = "review C1 (rule 5's twenty-third exception, the user's decision of 2026-11-20): sgd and pa read each row in the stream's own unit of weight (Kish's w_hat from the warm-up sums) and keep one row's weight of history, which bounds every step after a gap by sqrt(2) times the rate and makes the fit invariant to the scale of the weights; the row's read takes one more division and the floor a comparison and a division where it binds. CI's count on 2875e1f9 (run 44883272342)"
+changelog = "`sgd` and `pa` with `standardize` pay a division a row"
+
+[[raised]]
+key = "instructions.sgd_huber"
+from = 2815341
+to = 2881700
+date = 2026-11-21
+reason = "review C1 (rule 5's twenty-third exception, the user's decision of 2026-11-20): sgd and pa read each row in the stream's own unit of weight (Kish's w_hat from the warm-up sums) and keep one row's weight of history, which bounds every step after a gap by sqrt(2) times the rate and makes the fit invariant to the scale of the weights; the row's read takes one more division and the floor a comparison and a division where it binds. CI's count on 2875e1f9 (run 44883272342)"
+changelog = "`sgd` and `pa` with `standardize` pay a division a row"
+
+[[raised]]
+key = "instructions.pa"
+from = 2141010
+to = 2254570
+date = 2026-11-21
+reason = "review C1 (rule 5's twenty-third exception, the user's decision of 2026-11-20): sgd and pa read each row in the stream's own unit of weight (Kish's w_hat from the warm-up sums) and keep one row's weight of history, which bounds every step after a gap by sqrt(2) times the rate and makes the fit invariant to the scale of the weights; the row's read takes one more division and the floor a comparison and a division where it binds. CI's count on 2875e1f9 (run 44883272342)"
+changelog = "`sgd` and `pa` with `standardize` pay a division a row"
 
 [[signoff]]
 key = "instructions.clock_temporal"

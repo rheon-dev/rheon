@@ -5623,19 +5623,19 @@ p95 = 0.0
 [case."second_opinion_hmm.hmm_batch_limit.covs_over_tolerance"]
 ideal = 0.0
 n = 50
-worst = 0.946233
-p95 = 0.171748
+worst = 0.230516
+p95 = 0.0999406
 
 [case."second_opinion_hmm.hmm_batch_limit.means_over_tolerance"]
 ideal = 0.0
 n = 50
-worst = 0.186701
-p95 = 0.0532583
+worst = 0.0683633
+p95 = 0.040873
 
 [case."second_opinion_hmm.hmm_batch_limit.transitions_over_tolerance"]
 ideal = 0.0
 n = 50
-worst = 0.158499
+worst = 0.118761
 p95 = 0.106121
 
 [case."second_opinion_hmm.hmm_online_em.error_over_tolerance"]
