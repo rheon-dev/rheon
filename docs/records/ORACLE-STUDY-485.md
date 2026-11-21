@@ -9,7 +9,8 @@ statsmodels over the same seeds, with and without decay (§12). Part 5:
 ETS(A,A,N) against statsmodels' `ETSModel` (§13). Part 6: DCC(1,1) with
 GARCH(1,1) margins against a batch fit written from the definition (§14).
 Part 7: the proposed tolerances (§15). Request A10, part 1: GARCH(1,1) variance
-targeting against a batch variance-targeting fit run by arch (§16). The request named the deliverable
+targeting against a batch variance-targeting fit run by arch (§16). Part 2: the same at 100,000 rows and at
+persistence 0.97 and 0.99 (§17). The request named the deliverable
 `STUDY-485-ESTIMATORS.md`; it is this record, kept under the name it was
 committed with (`ORACLE-STUDY-485.md`). Nothing in the package or the Rust crates was changed. The scan this
 builds on is `vm-tools/research/485-TIME-SERIES-SCAN.md` on branch
@@ -768,3 +769,59 @@ later parts.
 which needs a long-run variance of `r²`); a library's own targeting
 process, since none exists; arch's SLSQP is checked only against one other
 optimizer on the same likelihood.
+
+## 17. Request A10, part 2: variance targeting at 100,000 rows and at two more persistence levels
+
+The oracle is §16's: arch has no `VarianceTargetingGARCH` in any release
+checked, and the coordinator accepted §16's oracle (arch's `GARCH`
+subclassed to `(α, β)` with `ω = v_T(1 − α − β)`, fitted and given robust
+SEs by arch) as the substitute (2026-11-21). The online estimator is §16's,
+unchanged. `vt_garch.py` gained options, not a fork: `--rows`,
+`--persistence P` and `--shard I/K` (seeds by index modulo `K`, each shard
+its own JSON-lines file, resumable as before; `--summary` reads their
+union).
+
+**Truths.** At 100,000 rows, G1 (`ω = 0.02, α = 0.08, β = 0.90`). The two
+persistence levels keep `α = 0.08`, give `β` the rest, and set `ω = 1 − P`
+so the unconditional variance `ω/(1 − α − β)` is 1.0, as G1's is:
+`P = 0.97`: `(0.03, 0.08, 0.89)`; `P = 0.99`: `(0.01, 0.08, 0.91)`. Seeds
+485000 to 485049. Runs: 100,000 rows in three shards, about 50 seconds
+(about 3 seconds a case, not the 25 minutes expected); the two levels at
+10,000 rows, about 1 minute together. arch converged on all 150 cases; the
+scipy cross-fit was within 0.001 SE of arch's on every case; the online
+parameters never out-scored the batch fit.
+
+Absolute gaps over the fifty seeds, in arch's SEs (`ω`: delta-method SE,
+`v_T` fixed), and in units.
+
+| run | α and β within 2 SE | with ω too | α or β over 3 SE | α in SE: median / p90 / max | β in SE: median / p90 / max | ω in SE: max | max gap in units (α, β, ω) | path gap: median / max; seeds over 5% | `v̄` at half the rows from `v_T`: median / max |
+|---|---|---|---|---|---|---|---|---|---|
+| P = 0.98, 10,000 (§16) | **47** | 46 | 0 | 0.36 / 1.15 / 2.50 | 0.35 / 0.84 / 2.70 | 3.77 | 0.014, 0.018, 0.0099 | 1.3% / 4.1%; 0 | 5.6% / 21% |
+| P = 0.98, 100,000 | **48, passes** | 44 | 1 | 0.44 / 1.03 / 2.30 | 0.08 / 0.61 / 4.31 | 6.63 | 0.0039, 0.0099, 0.0060 | 0.46% / 2.6%; 0 | 1.9% / 7.9% |
+| P = 0.97, 10,000 | **48, passes** | 48 | 0 | 0.30 / 1.03 / 2.23 | 0.36 / 0.81 / 2.92 | 3.30 | 0.014, 0.024, 0.013 | 1.2% / 3.9%; 0 | 4.2% / 14% |
+| P = 0.99, 10,000 | **44, fails** | 38 | 3 | 0.51 / 2.29 / 7.00 | 0.38 / 1.60 / 6.31 | 8.29 | 0.029, 0.033, 0.012 | 1.4% / 8.5%; 5 | 8.9% / 47% |
+
+**Worst seeds.**
+
+- 100,000 rows: 485027, `α` −2.30, `β` +4.31 SE. It was the worst seed at
+  10,000 rows too (−1.76, +2.70): its `β` gap shrank from 0.018 to 0.0099 in
+  units while the SEs shrank by about `sqrt(10)`, so in SEs it grew. The
+  `1/(t + 75)` gain walks the `α + β` ridge more slowly than the batch fit
+  tightens; at 100,000 rows the tail is one seed, not a population.
+- P = 0.97: 485027 (−2.01, +2.92) and 485000 (−2.23, +1.64).
+- P = 0.99: 485006 (`α` −7.00, `β` +6.31 SE: online `(0.0475, 0.9426)`
+  against arch's `(0.0767, 0.9096)`), 485035 (−3.91, +2.67) and 485000
+  (−3.20, +2.44). Six seeds fail; on every one the online `α` is low and
+  `β` high, the batch fit is inside its constraint (`α + β` at most 0.9896),
+  and the persistence is close (within 0.015). So the online estimator
+  trades `α` for `β` along the ridge without reaching the batch point. At
+  0.99 the running variance is also the worst start: at half the rows it is
+  8.9% from `v_T` at the median and 47% at worst, so the early steps take
+  `ω` from a mean far from the one the batch fit targets.
+
+**Verdict.** Variance targeting passes at P = 0.97 (48 of 50) and 0.98
+(47 at 10,000 rows, 48 at 100,000), and **fails at P = 0.99 (44 of 50) at
+10,000 rows**, with path gaps over 5% on five seeds. Headroom where it
+passes is two or three seeds. Rows past 10,000 at P = 0.99 were not run;
+whether 0.99 passes at 100,000 is open. Not run here: Student-t noise and
+three-series DCC (request A10's later parts).

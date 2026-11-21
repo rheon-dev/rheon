@@ -48,12 +48,21 @@ steps taken with ``v_t``, not ``v_T`` (``vbar_half_rel``: ``v_{T/2} / v_T - 1``)
 which is the price of being one-pass.
 
     python vt_garch.py OUT.jsonl            # the grid, resuming after the last finished case
-    python vt_garch.py OUT.jsonl --summary  # the table
+    python vt_garch.py OUT.jsonl --summary  # the table (several files: their union)
     python vt_garch.py --check              # the oracle's own checks (a few seconds)
+
+Options for the grid (request A10, part 2): ``--rows N [N ...]`` replaces the
+row counts (default 2,000 and 10,000); ``--persistence P`` replaces the truth
+by ``(1 - P, 0.08, P - 0.08)``: alpha stays 0.08, beta takes the rest of the
+persistence and omega is set so the unconditional variance
+``omega / (1 - alpha - beta)`` is 1.0, as G1's is; ``--shard I/K`` runs only
+the seeds whose index in 485000..485049 is I modulo K, so K processes can share
+a grid, each appending to its own file.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import math
 import sys
@@ -270,29 +279,50 @@ def done(out: Path) -> set[tuple[int, int]]:
     }
 
 
-def run(out: Path) -> None:
+def truth_at(persistence: float | None) -> tuple[float, float, float]:
+    """G1, or alpha 0.08 at another persistence with unit unconditional variance."""
+    if persistence is None:
+        return TRUTH
+    return (1.0 - persistence, 0.08, persistence - 0.08)
+
+
+def run(
+    out: Path,
+    sizes: tuple[int, ...] = SIZES,
+    truth: tuple[float, float, float] = TRUTH,
+    shard: tuple[int, int] = (0, 1),
+) -> None:
     finished = done(out)
+    seeds = [s for i, s in enumerate(SEEDS) if i % shard[1] == shard[0]]
     with out.open("a", encoding="utf-8") as f:
-        for n in SIZES:
-            for seed in SEEDS:
+        for n in sizes:
+            for seed in seeds:
                 if (seed, n) in finished:
                     continue
-                f.write(json.dumps(compare(n, seed)) + "\n")
+                f.write(json.dumps(compare(n, seed, truth)) + "\n")
                 f.flush()
                 print(f"vt: seed {seed} n {n} done", flush=True)
 
 
-def summary(out: Path) -> None:
-    recs = [json.loads(x) for x in out.read_text(encoding="utf-8").splitlines() if x.strip()]
-    for n in SIZES:
+def summary(outs: list[Path]) -> None:
+    recs = [
+        json.loads(x)
+        for out in outs
+        for x in out.read_text(encoding="utf-8").splitlines()
+        if x.strip()
+    ]
+    for n in sorted({int(r["n"]) for r in recs}):
         rows = [r for r in recs if int(r["n"]) == n]
         conv = sum(r["arch_converged"] == 0 for r in rows)
-        print(f"rows {n}: {len(rows)} seeds; arch converged on {conv}")
+        truths = sorted({(r["omega_true"], r["alpha_true"], r["beta_true"]) for r in rows})
+        print(f"rows {n}: {len(rows)} seeds; truth {truths}; arch converged on {conv}")
         for k in (
             "alpha_diff_in_se",
             "beta_diff_in_se",
             "omega_diff_in_se",
             "omega_diff",
+            "alpha_diff",
+            "beta_diff",
             "llf_diff_per_row",
             "pred_median_rel_second_half",
             "vbar_half_rel",
@@ -316,15 +346,27 @@ def summary(out: Path) -> None:
                 f"  worst seed {int(r['seed'])}: alpha {r['alpha_diff_in_se']:+.2f} SE, "
                 f"beta {r['beta_diff_in_se']:+.2f} SE, omega {r['omega_diff']:+.2e}"
             )
-        if n == max(SIZES):
-            verdict = "passes" if ab >= 0.9 * len(rows) else "fails"
-            print(f"  criterion (45 of 50 with alpha, beta within 2 SE at {n} rows): {verdict}")
+        verdict = "passes" if ab >= 0.9 * len(rows) else "fails"
+        print(f"  criterion (90% of seeds with alpha, beta within 2 SE at {n} rows): {verdict}")
+
+
+def main() -> None:
+    if sys.argv[1:] == ["--check"]:
+        check()
+        return
+    ap = argparse.ArgumentParser()
+    ap.add_argument("out", nargs="+", type=Path)
+    ap.add_argument("--summary", action="store_true")
+    ap.add_argument("--rows", nargs="+", type=int, default=list(SIZES))
+    ap.add_argument("--persistence", type=float, default=None)
+    ap.add_argument("--shard", default="0/1")
+    a = ap.parse_args()
+    if a.summary:
+        summary(a.out)
+        return
+    i, k = (int(x) for x in a.shard.split("/"))
+    run(a.out[0], tuple(a.rows), truth_at(a.persistence), (i, k))
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] == ["--check"]:
-        check()
-    elif "--summary" in sys.argv[2:]:
-        summary(Path(sys.argv[1]))
-    else:
-        run(Path(sys.argv[1]))
+    main()
