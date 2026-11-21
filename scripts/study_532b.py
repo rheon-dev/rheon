@@ -4,7 +4,7 @@ Run with a Python that has numpy, scipy and the pinned Polars (2.0.0):
 ``python scripts/study_532b.py`` prints every table of
 docs/records/STUDY-532-WINDOWLESS.md. ``--quick`` runs smaller frames;
 ``--part=N`` (repeatable) runs only part N (1 buckets, 2 exponential weights,
-3 lags, 4 chunk and resume invariance and cost).
+3 lags, 4 chunk and resume invariance and cost, 5 lag size checks).
 """
 
 from __future__ import annotations

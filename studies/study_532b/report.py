@@ -13,6 +13,7 @@ import scipy
 from . import runs_bucket as rb
 from . import runs_ew as rew
 from . import runs_lag as rlag
+from . import runs_lag_checks as rchk
 from . import runs_resume as rres
 from .bucket import Bucketed, BucketSpec
 from .common import make_frame, stream_values
@@ -589,10 +590,97 @@ def part4(quick: bool) -> None:
     table_c1(quick)
 
 
+# ---------------------------------------------------------------------------
+# Part 5
+
+
+def part5(quick: bool) -> None:
+    print("### Table L5: where the lag size checks cross, per group (cap 256 KB = 262144 bytes, warn at 131072)\n")
+    print(
+        "The count at the threshold is the largest the state allows at or under it; "
+        "the bytes are read from `to_bytes()` of a real state at that count and one "
+        "past it (columns times one column's bytes).\n"
+    )
+    print(
+        md(
+            [
+                "columns",
+                "lag",
+                "count at 128 KB",
+                "bytes there",
+                "bytes one past",
+                "count at 256 KB",
+                "bytes there",
+                "bytes one past",
+            ],
+            rchk.thresholds(),
+        )
+    )
+    print()
+    print("### Table L6: the clock lag's saved bytes by rows held (one column, nulls included)\n")
+    print(
+        md(
+            ["rows held", "saved bytes", "8 + 16 m + ceil(m/8)", "bytes added per row (difference)"],
+            rchk.held_row_bytes(),
+        )
+    )
+    print()
+    print("### Table L7: 4 columns x 1000 groups, at each threshold\n")
+    print(
+        md(
+            ["threshold", "row lag k", "bank state (1000 groups)", "clock lag rows", "bank state (1000 groups)"],
+            rchk.example_totals(),
+        )
+    )
+    print()
+    print(
+        "### Table L8: a clock lag of one day (86400 s) on streams of one row per interval, "
+        "the check run on the stream (two days, or until refused)\n"
+    )
+    print(
+        md(
+            [
+                "rate",
+                "columns",
+                "rows held at steady state",
+                "bytes",
+                "first row warned",
+                "first row refused",
+                "verdict",
+            ],
+            rchk.day_examples(quick),
+        )
+    )
+    print()
+    n = 100_000 if quick else 300_000
+    print(
+        f"### Table L9: per-row cost of the running check (best of 11 over {n} rows of one "
+        "group, off and on alternating; ns a row of `ClockLag.step`, Python 3.13)\n"
+    )
+    print(
+        md(
+            [
+                "rows held",
+                "step, check off (append + eviction)",
+                "step, check on",
+                "the check adds",
+                "relative",
+            ],
+            rchk.check_cost(n),
+        )
+    )
+    print()
+    print(md(["piece (ns a row, loop overhead taken off)", "ns"], rchk.comparison_cost(500_000 if quick else 2_000_000)))
+    print()
+    print("### Table L10: the threshold tests (`studies/study_532b/test_lag_checks.py`)\n")
+    print(md(["test", "result"], rchk.test_results()))
+    print()
+
+
 def main(argv: list[str]) -> None:
     quick = "--quick" in argv
     parts = [a for a in argv if a.startswith("--part=")]
-    want = {p.split("=", 1)[1] for p in parts} or {"1", "2", "3", "4"}
+    want = {p.split("=", 1)[1] for p in parts} or {"1", "2", "3", "4", "5"}
     t0 = time.time()
     versions()
     if "1" in want:
@@ -603,4 +691,6 @@ def main(argv: list[str]) -> None:
         part3(quick)
     if "4" in want:
         part4(quick)
+    if "5" in want:
+        part5(quick)
     print(f"(all tables: {time.time() - t0:.0f} s)", file=sys.stderr)

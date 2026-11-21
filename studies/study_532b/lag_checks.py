@@ -137,9 +137,10 @@ class ClockLag:
     (``LagSizeError``) at the row that would take it over the cap, and notes
     the half-cap crossing once in ``warning``.
 
-    The check is one integer comparison against two row counts worked out
-    once from the byte formula (``m_warn``, ``m_cap``), so it adds no
-    arithmetic per row; the time-window eviction is part of the lag itself.
+    The check is one integer comparison against a row count worked out once
+    from the byte formula (``m_warn``, which becomes ``m_cap`` once the
+    warning is given), so it adds no arithmetic per row; the time-window
+    eviction is part of the lag itself.
     """
 
     def __init__(self, duration: int, columns: int = 1, cap: int | None = CAP) -> None:
@@ -166,12 +167,12 @@ class ClockLag:
         if m > self.m_cap:
             self.rows.pop()  # the row is not kept: the state stays under the cap
             raise LagSizeError(clock_refusal(self.duration, m, self.columns, self.cap))
-        if not self.warning:
-            self.warning = (
-                f"a lag of {self.duration} time units on the clock now holds {m} rows, "
-                f"{clock_lag_bytes(m, self.columns)} bytes, over half of the "
-                f"{self.cap}-byte per-group cap"
-            )
+        self.warning = (
+            f"a lag of {self.duration} time units on the clock now holds {m} rows, "
+            f"{clock_lag_bytes(m, self.columns)} bytes, over half of the "
+            f"{self.cap}-byte per-group cap"
+        )
+        self.m_warn = self.m_cap  # said once; from here the comparison is against the cap
 
     def to_bytes(self) -> bytes:
         """The count (u32) and a pad (u32), the ``m`` times (i64) oldest
