@@ -37,12 +37,25 @@ Fit (read from the sums, any time)
     SSE    = Syy - Sxy' B
     n_eff  = W^2 / V                              (Kish; the row count when w = 1, lam = 1)
     df     = n_eff - (m + 1)
-    Sigma_u = SSE / df                            (statsmodels' ``sigma_u``)
-    Sigma_mle = SSE / n_eff                       (statsmodels' ``sigma_u_mle``)
+    Sigma_u = SSE n_eff / (W df)                  (statsmodels' ``sigma_u``)
+    Sigma_mle = SSE / W                           (statsmodels' ``sigma_u_mle``)
+
+With no decay and unit weights ``W = n_eff = n`` and these are statsmodels'
+``SSE / df`` and ``SSE / n``. Under decay ``SSE / W`` is the weighted mean squared
+residual, which estimates the noise covariance; ``SSE / df`` would not (it
+estimates ``Sigma (V / W)``, half of it at steady state, ``V / W -> 1 / (1 + lam)``).
 
 The inverse of the weighted ``Z'Z`` (``Z = [1, X]``) is block form:
 ``(Z'Z)^{-1}`` has lag block ``Sxx^{-1}``, cross block ``-Sxx^{-1} xbar`` and
-constant entry ``1/W + xbar' Sxx^{-1} xbar``; ``cov_params = (Z'Z)^{-1} kron Sigma_u``.
+constant entry ``1/W + xbar' Sxx^{-1} xbar``, and
+
+    cov_params = (W / n_eff) (Z'Z)^{-1} kron Sigma_u
+
+the sandwich ``(Z'Ω Z)^{-1} Z'Ω^2 Z (Z'Ω Z)^{-1}`` for homoskedastic noise when the
+weights ``Ω`` are independent of the regressors (``Z'Ω^2 Z ~ (V / W) Z'Ω Z``): a
+decayed fit has the variance of ``n_eff`` rows, not of ``W``. The factor is 1 with
+no decay, so this is statsmodels' ``cov_params`` there; it is ``SSE / df`` times
+``(Z'Z)^{-1}`` either way, and so is the Wald statistic below.
 
 Granger causality (Wald, as ``VARResults.test_causality``)
 -----------------------------------------------------------
@@ -199,10 +212,14 @@ class OnlineVAR:
         return self.n_eff() - (self.k * (self.p if p is None else p) + 1)
 
     def sigma_u(self, p: int | None = None) -> np.ndarray:
-        return self.sse(p) / self.df_resid(p)
+        return self.sse(p) * (self.n_eff() / self.w_sum) / self.df_resid(p)
 
     def sigma_u_mle(self, p: int | None = None) -> np.ndarray:
-        return self.sse(p) / self.n_eff()
+        return self.sse(p) / self.w_sum
+
+    def _coef_scale(self) -> float:
+        """``W / n_eff``: the factor between ``Sigma_u`` and a decayed fit's variance."""
+        return self.w_sum / self.n_eff()
 
     def zz_inv(self) -> np.ndarray:
         """``(Z'Z)^{-1}`` of the weighted design ``Z = [1, X]``, from the centred sums."""
@@ -217,7 +234,7 @@ class OnlineVAR:
         return out
 
     def cov_params(self) -> np.ndarray:
-        return np.kron(self.zz_inv(), self.sigma_u())
+        return np.kron(self.zz_inv(), self._coef_scale() * self.sigma_u())
 
     def predict_x(self, x: np.ndarray) -> np.ndarray:
         if not self._ready():
@@ -258,7 +275,7 @@ class OnlineVAR:
         b = self.slopes()
         beta = b[np.ix_(r_idx, e_idx)]
         g = np.linalg.inv(self.sxx)[np.ix_(r_idx, r_idx)]
-        sig = self.sigma_u()[np.ix_(e_idx, e_idx)]
+        sig = self._coef_scale() * self.sigma_u()[np.ix_(e_idx, e_idx)]
         wald = float(np.trace(np.linalg.solve(sig, beta.T @ np.linalg.solve(g, beta))))
         if kind == "wald":
             return {"statistic": wald, "pvalue": float(stats.chi2.sf(wald, q)), "df": q}
