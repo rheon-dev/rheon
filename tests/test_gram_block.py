@@ -343,8 +343,16 @@ def test_a_state_written_before_the_field_loads_with_blocking_off(tmp_path):
     assert end == len(now)
     assert _msgpack_write(tree) == now, "the reader and writer are not each other's inverse"
     assert b"gram_block_rows" in now
-    before = _msgpack_write(_without_key(tree, "gram_block_rows"))
+    assert b"checksum" in now, "a current file ends with its checksum entry"
+    # A file from before the field is also one from before the checksum, which
+    # a file of schema 70 or earlier does not carry: the entry is dropped and
+    # the version named is the last without it. (A file of 71 that lacks the
+    # entry, or whose bytes were edited, is refused as damaged.)
+    older = _without_key(_without_key(tree, "gram_block_rows"), "checksum")
+    older = ("map", [(k, 70 if k == "schema_version" else x) for k, x in older[1]])
+    before = _msgpack_write(older)
     assert b"gram_block_rows" not in before
+    assert b"checksum" not in before
     (tmp_path / "before.state").write_bytes(before)
     old = rp.ModelBank.load(tmp_path / "before.state")
     assert old.specs[0]["model"].get("gram_block_rows") is None

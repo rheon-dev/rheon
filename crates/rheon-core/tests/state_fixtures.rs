@@ -727,6 +727,7 @@ const KEPT_COUNTS: &[(u32, usize)] = &[
     (67, 82),
     (68, 85),
     (69, 85),
+    (70, 86),
 ];
 
 /// The names one set holds that the next does not, each set given as a

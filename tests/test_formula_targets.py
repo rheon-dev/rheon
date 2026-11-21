@@ -963,6 +963,18 @@ def test_a_boolean_also_read_as_a_number_reaches_the_formula_as_a_boolean() -> N
 # Review round R4 (2026-10-03)
 
 
+def _unsealed(state: bytes) -> bytes:
+    """A bank file as a writer before the checksum wrote it: the file's last
+    entry, ``checksum`` (``a8 "checksum" c4 08`` and eight digest bytes), cut
+    off and the top-level map one entry shorter."""
+    tail = b"\xa8checksum\xc4\x08"
+    assert state[-8 - len(tail) : -8] == tail, "the file does not end with its checksum"
+    body = bytearray(state[: -8 - len(tail)])
+    assert 0x80 < body[0] <= 0x8F, "the bank file's map is a fixmap"
+    body[0] -= 1
+    return bytes(body)
+
+
 def test_a_bank_state_from_before_the_windows_state_changed_is_refused_by_number() -> None:
     """R4-A2, then R6-D5: a bank file carries each formula target's window
     core in the windows state's own form, which went to version 3 in round
@@ -1018,13 +1030,16 @@ def test_a_bank_state_from_before_the_windows_state_changed_is_refused_by_number
     too; 68 since task 281 (3), for ``kalman``'s square root, so 67 loads
     too; 69 since task 479, for ``hmm``'s factor form of a wide ``full``
     state, so 68 loads too; 70 since ``hmm``'s stabilized prior under
-    ``"full"`` and ``"diag"``, so 69 loads too."""
+    ``"full"`` and ``"diag"``, so 69 loads too; 71 since the checksum a file
+    ends with, so 70 loads too. A file before 71 has no checksum entry, so
+    the files here drop it as well as naming an older number: a 71 file
+    whose number was edited would be refused as damaged instead."""
     bank = rp.ModelBank([spec(fwd())])
     bank.fit_predict(stream(60, 50))
-    state = bank.save_bytes()
+    state = _unsealed(bank.save_bytes())
     key = b"\xaeschema_version"
     i = state.index(key) + len(key)
-    assert state[i] == 70, state[i]
+    assert state[i] == 71, state[i]
     for before in range(25, 61):
         old = state[:i] + bytes([before]) + state[i + 1 :]
         with pytest.raises(
@@ -1032,8 +1047,8 @@ def test_a_bank_state_from_before_the_windows_state_changed_is_refused_by_number
             match="^state file: it was written by a version of rheon older than this one reads",
         ):
             rp.ModelBank.load_bytes(old)
-    rp.ModelBank.load_bytes(state[:i] + bytes([61]) + state[i + 1 :])
-    rp.ModelBank.load_bytes(state[:i] + bytes([62]) + state[i + 1 :])
+    for kept in (61, 62, 70):
+        rp.ModelBank.load_bytes(state[:i] + bytes([kept]) + state[i + 1 :])
 
 
 def test_a_target_named_after_its_own_column_is_refused_at_the_builder(

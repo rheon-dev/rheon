@@ -1792,6 +1792,7 @@ const KEPT_COUNTS: &[(u32, usize)] = &[
     (67, 18),
     (68, 18),
     (69, 18),
+    (70, 18),
 ];
 
 /// The one place a set lacks a case of the set before it: the window

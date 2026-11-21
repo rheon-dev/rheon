@@ -1060,8 +1060,10 @@ def test_schema_version_is_current():
     built (task 340), 68 for ``kalman``'s covariance held as its square
     root's factor (task 281 (3)), 69 for ``hmm``'s factor form of a wide
     ``full`` state (task 479), and 70 for ``hmm``'s stabilized prior under
-    ``"full"`` and ``"diag"`` (rule 5's twenty-second exception)."""
-    assert rp.schema_version() == 70
+    ``"full"`` and ``"diag"`` (rule 5's twenty-second exception), and 71 for
+    the checksum a bank's and a window run's file ends with (no layout of a
+    model moved, so 70 loads too)."""
+    assert rp.schema_version() == 71
 
 
 def test_an_integer_key_used_as_both_session_and_group_orders_numerically():
