@@ -33,9 +33,8 @@ import random
 from dataclasses import dataclass, field
 
 import numpy as np
-from scipy.linalg import solve_triangular
-
 import philox as P
+from scipy.linalg import solve_triangular
 
 LANE_UNIFORM = 0
 LANE_NORMAL = 1
@@ -205,13 +204,17 @@ class RheonBandit:
 
     def __post_init__(self) -> None:
         self.arms = [ArmState.new(self.d, self.l2) for _ in range(self.k)]
-        self.draws = RowDraws(P.DrawStream(self.seed, self.group), max_u=4 + self.k, max_z=self.k * self.d)
+        self.draws = RowDraws(
+            P.DrawStream(self.seed, self.group), max_u=4 + self.k, max_z=self.k * self.d
+        )
 
     def scores(self, x: np.ndarray) -> np.ndarray:
         x = np.asarray(x, dtype=float)
         self.draws.set_row(self.n)
         if self.mab_draw_layout and self.policy in ("linucb", "lints", "egreedy"):
-            flag = self.draws.next_u(1)[0]  # mabwiser draws the explore flag for every linear policy
+            flag = self.draws.next_u(1)[
+                0
+            ]  # mabwiser draws the explore flag for every linear policy
         else:
             flag = 1.0
         if self.policy == "egreedy" and flag < self.eps:
@@ -269,8 +272,22 @@ class Longhand:
     """Li et al. (2010) Algorithm 1 and Agrawal and Goyal (2013), per arm, with the
     sums kept as written (A, b) and every solve and inverse taken afresh."""
 
-    def __init__(self, k, d, policy, alpha=1.0, l2=1.0, eps=0.1, lam=1.0, noise_prec=1.0, ts_root="compatible",
-                 ties="first", seed=P.DEFAULT_SEED, group=0, mab_draw_layout=True) -> None:
+    def __init__(
+        self,
+        k,
+        d,
+        policy,
+        alpha=1.0,
+        l2=1.0,
+        eps=0.1,
+        lam=1.0,
+        noise_prec=1.0,
+        ts_root="compatible",
+        ties="first",
+        seed=P.DEFAULT_SEED,
+        group=0,
+        mab_draw_layout=True,
+    ) -> None:
         self.k, self.d, self.policy = k, d, policy
         self.alpha, self.l2, self.eps, self.lam, self.noise_prec = alpha, l2, eps, lam, noise_prec
         self.ts_root, self.ties, self.mab = ts_root, ties, mab_draw_layout
@@ -282,7 +299,11 @@ class Longhand:
     def act(self, x):
         x = np.asarray(x, dtype=float)
         self.draws.set_row(self.n)
-        flag = self.draws.next_u(1)[0] if (self.mab and self.policy in ("linucb", "lints", "egreedy")) else 1.0
+        flag = (
+            self.draws.next_u(1)[0]
+            if (self.mab and self.policy in ("linucb", "lints", "egreedy"))
+            else 1.0
+        )
         if self.policy == "egreedy" and flag < self.eps:
             s = self.draws.next_u(self.k).copy()
             return int(np.argmax(s)), s
@@ -324,7 +345,9 @@ class Longhand:
 
 
 class MabPolicy:
-    def __init__(self, k, d, policy, alpha=1.0, l2=1.0, eps=0.1, seed=P.DEFAULT_SEED, group=0) -> None:
+    def __init__(
+        self, k, d, policy, alpha=1.0, l2=1.0, eps=0.1, seed=P.DEFAULT_SEED, group=0
+    ) -> None:
         from mabwiser.mab import MAB, LearningPolicy
 
         lp = {
@@ -349,7 +372,11 @@ class MabPolicy:
         x = np.asarray(x, dtype=float).reshape(1, -1)
         if not self.fitted:
             # mabwiser predicts only once fitted: a fit on no rows initialises every arm.
-            self.mab.fit(decisions=np.array([], dtype=int), rewards=np.array([]), contexts=np.zeros((0, self.d)))
+            self.mab.fit(
+                decisions=np.array([], dtype=int),
+                rewards=np.array([]),
+                contexts=np.zeros((0, self.d)),
+            )
             self.fitted = True
         self._inject()
         self.draws.set_row(self.n)
@@ -360,7 +387,9 @@ class MabPolicy:
     def learn(self, arm, x, y, w=1.0):
         if w <= 0.0:
             return
-        self.mab.partial_fit(decisions=np.array([arm]), rewards=np.array([y]), contexts=np.asarray(x).reshape(1, -1))
+        self.mab.partial_fit(
+            decisions=np.array([arm]), rewards=np.array([y]), contexts=np.asarray(x).reshape(1, -1)
+        )
         self.n += 1
 
 
@@ -441,7 +470,9 @@ def simulate(policy, env: Env, T: int, weights: np.ndarray | None = None) -> dic
     return {"regret": np.cumsum(reg), "arms": arms, "scores": np.array(scores)}
 
 
-def replay(policies: dict[str, object], env: Env, T: int, driver: str) -> dict[str, dict[str, float]]:
+def replay(
+    policies: dict[str, object], env: Env, T: int, driver: str
+) -> dict[str, dict[str, float]]:
     """Every policy scores the same row; the ``driver``'s choice is the logged
     action and every policy learns it. Choices and scores compared row by row."""
     ch = {n: np.empty(T, dtype=int) for n in policies}
@@ -498,7 +529,9 @@ class VWPolicy:
     def __init__(self, k, d, eps=0.1, seed=P.DEFAULT_SEED, group=0, extra=""):
         from vowpalwabbit import Workspace
 
-        self.vw = Workspace(f"--cb_explore {k} --epsilon {eps} --quiet --random_seed 1 {extra}".strip())
+        self.vw = Workspace(
+            f"--cb_explore {k} --epsilon {eps} --quiet --random_seed 1 {extra}".strip()
+        )
         self.k, self.n, self.s = k, 0, P.DrawStream(seed, group)
         self.last = None
 
@@ -534,18 +567,26 @@ def regret_table(T: int = 2000, seeds: int = 8, k: int = 5, d: int = 6, with_lib
     def mk():
         out = {
             "LinUCB alpha=1 (rheon form)": lambda s: RheonBandit(k, d, "linucb", alpha=1.0, seed=s),
-            "LinUCB, river's bound (rheon form)": lambda s: RheonBandit(k, d, "linucb_pred", seed=s),
-            "LinTS alpha=1, fast root (rheon form)": lambda s: RheonBandit(k, d, "lints", ts_root="fast", seed=s),
+            "LinUCB, river's bound (rheon form)": lambda s: RheonBandit(
+                k, d, "linucb_pred", seed=s
+            ),
+            "LinTS alpha=1, fast root (rheon form)": lambda s: RheonBandit(
+                k, d, "lints", ts_root="fast", seed=s
+            ),
             "LinTS alpha=0.3, fast root (rheon form)": lambda s: RheonBandit(
                 k, d, "lints", alpha=0.3, ts_root="fast", seed=s
             ),
-            "LinTS alpha=1, compatible root (rheon form)": lambda s: RheonBandit(k, d, "lints", seed=s),
+            "LinTS alpha=1, compatible root (rheon form)": lambda s: RheonBandit(
+                k, d, "lints", seed=s
+            ),
             "eps-greedy 0.1 (rheon form)": lambda s: RheonBandit(k, d, "egreedy", eps=0.1, seed=s),
             "greedy (eps 0)": lambda s: RheonBandit(k, d, "egreedy", eps=0.0, seed=s),
             "uniform random": lambda s: RandomPolicy(k, seed=s),
         }
         if with_libs:
-            out["mabwiser LinTS alpha=1, its own generator"] = lambda s: MabOwnRng(k, d, "lints", alpha=1.0)
+            out["mabwiser LinTS alpha=1, its own generator"] = lambda s: MabOwnRng(
+                k, d, "lints", alpha=1.0
+            )
             out["mabwiser LinUCB alpha=1"] = lambda s: MabPolicy(k, d, "linucb", alpha=1.0, seed=s)
             out["Vowpal Wabbit --cb_explore, eps 0.1"] = lambda s: VWPolicy(k, d, 0.1, seed=s)
         return out
@@ -558,7 +599,11 @@ def regret_table(T: int = 2000, seeds: int = 8, k: int = 5, d: int = 6, with_lib
             if isinstance(pol, MabOwnRng):
                 from mabwiser.mab import MAB, LearningPolicy
 
-                pol.mab = MAB(arms=list(range(k)), learning_policy=LearningPolicy.LinTS(alpha=1.0), seed=1000 + s)
+                pol.mab = MAB(
+                    arms=list(range(k)),
+                    learning_policy=LearningPolicy.LinTS(alpha=1.0),
+                    seed=1000 + s,
+                )
             r = simulate(pol, Env(k, d, seed=100 + s), T)["regret"]
             finals.append(r[-1])
             halves.append(r[T // 2 - 1])
@@ -598,8 +643,21 @@ def save_state(p: RheonBandit) -> bytes:
 def load_state(p: RheonBandit, b: bytes) -> RheonBandit:
     import struct
 
-    q = RheonBandit(p.k, p.d, p.policy, alpha=p.alpha, l2=p.l2, eps=p.eps, lam=p.lam, noise_prec=p.noise_prec,
-                    ts_root=p.ts_root, ties=p.ties, seed=p.seed, group=p.group, mab_draw_layout=p.mab_draw_layout)
+    q = RheonBandit(
+        p.k,
+        p.d,
+        p.policy,
+        alpha=p.alpha,
+        l2=p.l2,
+        eps=p.eps,
+        lam=p.lam,
+        noise_prec=p.noise_prec,
+        ts_root=p.ts_root,
+        ties=p.ties,
+        seed=p.seed,
+        group=p.group,
+        mab_draw_layout=p.mab_draw_layout,
+    )
     (q.n,) = struct.unpack_from("<Q", b, 0)
     off = 8
     m = p.d * (p.d + 1) // 2
@@ -651,14 +709,18 @@ def bandit_invariance(T: int = 1500, k: int = 4, d: int = 5):
 
     rows = logged_stream(T, k, d, 7)
     makers = {
-        "LinTS, fast root": lambda: RheonBandit(k, d, "lints", ts_root="fast", seed=3, group=P.group_hash("g")),
-        "eps-greedy 0.2": lambda: RheonBandit(k, d, "egreedy", eps=0.2, seed=3, group=P.group_hash("g")),
+        "LinTS, fast root": lambda: RheonBandit(
+            k, d, "lints", ts_root="fast", seed=3, group=P.group_hash("g")
+        ),
+        "eps-greedy 0.2": lambda: RheonBandit(
+            k, d, "egreedy", eps=0.2, seed=3, group=P.group_hash("g")
+        ),
         "LinUCB, decay 0.99": lambda: RheonBandit(k, d, "linucb", lam=0.99, seed=3),
     }
     out = []
     for name, mk in makers.items():
         digests = set()
-        for cname, ch in S.chunkings(T).items():
+        for ch in S.chunkings(T).values():
             for resume in (False, True):
                 digests.add(run_logged(mk, rows, ch, resume))
         out.append((name, len(S.chunkings(T)) * 2, len(digests), sorted(digests)[0]))
@@ -677,7 +739,10 @@ def zero_weight_checks(k: int = 3, d: int = 4):
     p.learn(a0, x0, y0, 1.0)
     return [
         ("a zero-weight first row leaves the state (R, u, n) unchanged, byte for byte", unchanged),
-        ("the next row, same context, gets the same draws and scores", sc1.tobytes() == sc2.tobytes()),
+        (
+            "the next row, same context, gets the same draws and scores",
+            sc1.tobytes() == sc2.tobytes(),
+        ),
         ("after one learned row n = 1", p.n == 1),
     ]
 
@@ -700,7 +765,9 @@ def mvn_transform_check() -> bool:
         B_ = g.normal(size=(d, d))
         cov = B_ @ B_.T + d * np.eye(d)
         mean = g.normal(size=d)
-        a = np.random.default_rng(1000 + s).multivariate_normal(mean, cov, size=1, method="cholesky")
+        a = np.random.default_rng(1000 + s).multivariate_normal(
+            mean, cov, size=1, method="cholesky"
+        )
         z = np.random.default_rng(1000 + s).standard_normal((1, d))
         b = z @ np.linalg.cholesky(cov).T
         b += mean
@@ -713,9 +780,15 @@ def oracle_table(T: int = 1000, k: int = 5, d: int = 6, seed: int = 1):
 
     def add(label, res):
         for n, r in res.items():
-            rows.append((label, n, r["rows differing in choice"], r["max |score diff|"], r["max relative"]))
+            rows.append(
+                (label, n, r["rows differing in choice"], r["max |score diff|"], r["max relative"])
+            )
 
-    for pol, lab in [("linucb", "LinUCB alpha=1"), ("lints", "LinTS alpha=1"), ("egreedy", "LinGreedy eps=0.1")]:
+    for pol, lab in [
+        ("linucb", "LinUCB alpha=1"),
+        ("lints", "LinTS alpha=1"),
+        ("egreedy", "LinGreedy eps=0.1"),
+    ]:
         ps = {
             "mabwiser": MabPolicy(k, d, pol, alpha=1.0, eps=0.1),
             "rheon form": RheonBandit(k, d, pol, alpha=1.0, eps=0.1),
@@ -724,10 +797,16 @@ def oracle_table(T: int = 1000, k: int = 5, d: int = 6, seed: int = 1):
         add(lab + " (driver: mabwiser)", replay(ps, Env(k, d, seed), T, "mabwiser"))
     fast = RheonBandit(k, d, "lints", ts_root="fast")
     lf = Longhand(k, d, "lints", ts_root="fast")
-    add("LinTS alpha=1, fast root (driver: longhand)", replay({"longhand": lf, "rheon form": fast}, Env(k, d, seed), T,
-                                                             "longhand"))
+    add(
+        "LinTS alpha=1, fast root (driver: longhand)",
+        replay({"longhand": lf, "rheon form": fast}, Env(k, d, seed), T, "longhand"),
+    )
     cov_err = fast_root_covariance(fast, lf)
     rp = RheonBandit(k, d, "linucb_pred", ties="river")
-    ps = {"river": RiverPolicy(k, d), "rheon form": rp, "longhand": Longhand(k, d, "linucb_pred", ties="river")}
+    ps = {
+        "river": RiverPolicy(k, d),
+        "rheon form": rp,
+        "longhand": Longhand(k, d, "linucb_pred", ties="river"),
+    }
     add("river LinUCBDisjoint (driver: river)", replay(ps, Env(k, d, seed), T, "river"))
     return rows, cov_err, getattr(rp, "tie_rows", 0)

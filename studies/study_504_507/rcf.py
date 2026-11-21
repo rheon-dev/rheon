@@ -34,7 +34,6 @@ and a forest's score is the mean over its trees.
 from __future__ import annotations
 
 import numpy as np
-
 import philox as P
 
 LANE_CUT = 3
@@ -52,7 +51,9 @@ class LazyUniforms:
     def __call__(self) -> float:
         if self.j >= len(self.buf):
             b = len(self.buf) // 4
-            self.buf.extend(P.philox4x64(((self.tree << 32) | b, LANE_CUT, self.n, self.s.slot), self.s.key))
+            self.buf.extend(
+                P.philox4x64(((self.tree << 32) | b, LANE_CUT, self.n, self.s.slot), self.s.key)
+            )
         w = self.buf[self.j]
         self.j += 1
         return P.u01(w)
@@ -87,7 +88,17 @@ class Tree:
         if self.free:
             i = self.free.pop()
             return i
-        for a in (self.leaf, self.par, self.lft, self.rgt, self.q, self.c, self.cnt, self.lo, self.hi):
+        for a in (
+            self.leaf,
+            self.par,
+            self.lft,
+            self.rgt,
+            self.q,
+            self.c,
+            self.cnt,
+            self.lo,
+            self.hi,
+        ):
             a.append(None)
         return len(self.leaf) - 1
 
@@ -140,7 +151,7 @@ class Tree:
             span = hi2 - lo2
             S = np.cumsum(span)
             r = 0 + (span.sum() - 0) * uniform()  # numpy's sum (pairwise from 8 terms), as rrcf
-            q = int(np.argmax(S >= r))
+            q = int(np.argmax(r <= S))
             c = lo2[q] + S[q] - r
             if c <= lo[q] or c >= hi[q]:
                 new = self._new_leaf(x)
@@ -270,11 +281,15 @@ def make_stream(T: int, shingle: int, seed: int) -> np.ndarray:
     y = np.sin(2 * np.pi * t / 50) + 0.1 * g.normal(size=t.size)
     for k in g.choice(np.arange(100, T), size=max(1, T // 300), replace=False):
         y[k : k + 5] += 3.0  # anomalies
-    y[200:210] = y[200]  # a flat run: exact duplicate shingles... of a constant only if shingle <= 10
+    y[200:210] = y[
+        200
+    ]  # a flat run: exact duplicate shingles... of a constant only if shingle <= 10
     return np.array([y[i : i + shingle] for i in range(T)])
 
 
-def run(T=1000, shingle=4, num_trees=8, tree_size=64, seed=3, source="philox", weights=None, mode="rrcf"):
+def run(
+    T=1000, shingle=4, num_trees=8, tree_size=64, seed=3, source="philox", weights=None, mode="rrcf"
+):
     """Feed rrcf and the port the same points with the same draws. ``source``:
     'philox' (the stream's lane 3, served to both) or 'mt' (rrcf's own MT19937
     draws through a ``RandomState(seed)``, recorded and served to the port)."""
@@ -284,7 +299,9 @@ def run(T=1000, shingle=4, num_trees=8, tree_size=64, seed=3, source="philox", w
     stream = P.DrawStream(seed, P.group_hash("rcf"))
     forest = [rrcf.RCTree() for _ in range(num_trees)]
     ports = [Tree(shingle, mode) for _ in range(num_trees)]
-    plain = [rrcf.RCTree(random_state=1000 + t) for t in range(num_trees)] if source == "mt" else None
+    plain = (
+        [rrcf.RCTree(random_state=1000 + t) for t in range(num_trees)] if source == "mt" else None
+    )
     if source == "philox":
         served = [ServedRS() for _ in range(num_trees)]
         for tr, s in zip(forest, served, strict=True):
@@ -338,7 +355,9 @@ def run(T=1000, shingle=4, num_trees=8, tree_size=64, seed=3, source="philox", w
     trees_equal = all(rrcf_branches(f) == p.branches() for f, p in zip(forest, ports, strict=True))
     plain_equal = None
     if plain:
-        plain_equal = all(rrcf_branches(a) == rrcf_branches(b) for a, b in zip(plain, forest, strict=True))
+        plain_equal = all(
+            rrcf_branches(a) == rrcf_branches(b) for a, b in zip(plain, forest, strict=True)
+        )
     misrouted = sum(
         sum(pt._query(pt.lo[leaf]) != leaf for leaf in set(pt.of.values())) for pt in ports
     )
@@ -414,16 +433,18 @@ def modes_table(T=1500, shingle=4, num_trees=20, tree_size=128, seed=3):
     out = []
     for mode in ["rrcf", "paper"]:
         r = run(T, shingle, num_trees, tree_size, seed, mode=mode)
-        out.append({
-            "mode": mode,
-            "rows equal to rrcf's score (bits)": r["scores equal to the bit"],
-            "Spearman vs rrcf": float(spearmanr(r["s_ref"], r["s_port"]).statistic),
-            "AUC rrcf": float(roc_auc_score(lab, r["s_ref"])),
-            "AUC port": float(roc_auc_score(lab, r["s_port"])),
-            "insertions reaching a leaf": r["leaf cuts"],
-            "insertions": r["insertions"],
-            "leaves a query misses (end)": r["leaves a query does not reach (end)"],
-        })
+        out.append(
+            {
+                "mode": mode,
+                "rows equal to rrcf's score (bits)": r["scores equal to the bit"],
+                "Spearman vs rrcf": float(spearmanr(r["s_ref"], r["s_port"]).statistic),
+                "AUC rrcf": float(roc_auc_score(lab, r["s_ref"])),
+                "AUC port": float(roc_auc_score(lab, r["s_port"])),
+                "insertions reaching a leaf": r["leaf cuts"],
+                "insertions": r["insertions"],
+                "leaves a query misses (end)": r["leaves a query does not reach (end)"],
+            }
+        )
     return out
 
 
@@ -449,7 +470,10 @@ def violations_table(T=800, shingle=4, num_trees=8, tree_size=64, seed=3):
             paper[t].insert(X[i], i, LazyUniforms(stream, i, t))
     a = [separation_violations_rrcf(f) for f in forest]
     b = [separation_violations_port(p) for p in paper]
-    return (sum(x for x, _ in a), sum(y for _, y in a)), (sum(x for x, _ in b), sum(y for _, y in b))
+    return (sum(x for x, _ in a), sum(y for _, y in a)), (
+        sum(x for x, _ in b),
+        sum(y for _, y in b),
+    )
 
 
 def invariance(T=800, shingle=4, num_trees=6, tree_size=64, seed=4):

@@ -36,7 +36,6 @@ from collections.abc import Callable
 from itertools import accumulate
 
 import numpy as np
-
 import philox as P
 
 PADDING = 0.15
@@ -44,8 +43,14 @@ LANE_BUILD = 2
 
 
 class Trees:
-    def __init__(self, limits: list[tuple[float, float]], n_trees: int, height: int, window_size: int,
-                 uniform: Callable[[], float]) -> None:
+    def __init__(
+        self,
+        limits: list[tuple[float, float]],
+        n_trees: int,
+        height: int,
+        window_size: int,
+        uniform: Callable[[], float],
+    ) -> None:
         self.d = len(limits)
         self.n_trees, self.h, self.window = n_trees, height, window_size
         n_int = 2**height - 1
@@ -184,8 +189,13 @@ def river_hst(n_trees, height, window, limits_list, rng: random.Random):
     from river import anomaly
 
     names = [f"x{i:02d}" for i in range(len(limits_list))]
-    m = anomaly.HalfSpaceTrees(n_trees=n_trees, height=height, window_size=window,
-                               limits=dict(zip(names, limits_list, strict=True)), seed=0)
+    m = anomaly.HalfSpaceTrees(
+        n_trees=n_trees,
+        height=height,
+        window_size=window,
+        limits=dict(zip(names, limits_list, strict=True)),
+        seed=0,
+    )
     m.rng = rng
     return m, names
 
@@ -275,7 +285,9 @@ def compare(T, d, n_trees, height, window, seed, limits=None, source="river"):
         "draws": 2 * n_trees * (2**height - 1),
         "features equal": bool(np.array_equal(fr, port.feature)),
         "splits equal (bits)": bool(sr.tobytes() == port.split.tobytes()),
-        "masses equal at the end": bool(L.tobytes() == port.l.tobytes() and R.tobytes() == port.r.tobytes()),
+        "masses equal at the end": bool(
+            L.tobytes() == port.l.tobytes() and R.tobytes() == port.r.tobytes()
+        ),
         "rows": T,
         "scores equal to the bit": int(np.sum(s_river.view(np.uint64) == s_port.view(np.uint64))),
         "max |score diff|": float(np.max(np.abs(s_river - s_port))),
@@ -347,6 +359,13 @@ def state_table():
     rows = []
     for n_trees in [10, 25, 50, 100]:
         for h in [4, 6, 8, 10, 12]:
-            rows.append((n_trees, h, n_trees * (2 ** (h + 1) - 1), state_bytes_formula(n_trees, h, False),
-                         state_bytes_formula(n_trees, h, True)))
+            rows.append(
+                (
+                    n_trees,
+                    h,
+                    n_trees * (2 ** (h + 1) - 1),
+                    state_bytes_formula(n_trees, h, False),
+                    state_bytes_formula(n_trees, h, True),
+                )
+            )
     return rows

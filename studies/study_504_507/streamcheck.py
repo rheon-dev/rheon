@@ -19,9 +19,8 @@ import sys
 from pathlib import Path
 
 import numpy as np
-import scipy.special as sps
-
 import philox as P
+import scipy.special as sps
 
 
 def check_kats() -> list[tuple[str, int, int]]:
@@ -45,11 +44,22 @@ def check_numpy(n_random: int = 3000, seed: int = 504) -> list[tuple[str, int, i
         c = tuple(rng.getrandbits(64) for _ in range(4))
         k = (rng.getrandbits(64), rng.getrandbits(64))
         bad += P.philox4x64(c, k) != P.numpy_block(c, k)
-    rows.append(("random 256-bit counters and 128-bit keys: blocks equal", n_random - bad, n_random))
+    rows.append(
+        ("random 256-bit counters and 128-bit keys: blocks equal", n_random - bad, n_random)
+    )
     # Edge counters: numpy's carry (counter - 1 across a word boundary).
-    edges = [(0, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1), (P.M64, P.M64, P.M64, P.M64), (0, 0, 2**63, 7)]
+    edges = [
+        (0, 0, 0, 0),
+        (0, 1, 0, 0),
+        (0, 0, 1, 0),
+        (0, 0, 0, 1),
+        (P.M64, P.M64, P.M64, P.M64),
+        (0, 0, 2**63, 7),
+    ]
     bad = sum(P.philox4x64(c, (11, 13)) != P.numpy_block(c, (11, 13)) for c in edges)
-    rows.append(("counters at word boundaries (numpy's carry): blocks equal", len(edges) - bad, len(edges)))
+    rows.append(
+        ("counters at word boundaries (numpy's carry): blocks equal", len(edges) - bad, len(edges))
+    )
     # The layout's counters: (j, lane, n, slot) for a few groups and rows.
     cases = 0
     bad = 0
@@ -69,11 +79,16 @@ def check_numpy(n_random: int = 3000, seed: int = 504) -> list[tuple[str, int, i
         ref = P.numpy_uniforms((0, 0, n, 0), s.key, 4)
         cases += 4
         bad += int(np.sum(mine.view(np.uint64) != ref.view(np.uint64)))
-    rows.append(("uniforms [0,1) of a row (one block) vs Generator(Philox).random", cases - bad, cases))
+    rows.append(
+        ("uniforms [0,1) of a row (one block) vs Generator(Philox).random", cases - bad, cases)
+    )
     # Vectorised Philox against the scalar one.
     c = np.array([[rng.getrandbits(64) for _ in range(4)] for _ in range(1000)], dtype=np.uint64)
     v = P.philox4x64_np(c, (3, 5))
-    ok = sum(tuple(int(x) for x in v[i]) == P.philox4x64(tuple(int(x) for x in c[i]), (3, 5)) for i in range(1000))
+    ok = sum(
+        tuple(int(x) for x in v[i]) == P.philox4x64(tuple(int(x) for x in c[i]), (3, 5))
+        for i in range(1000)
+    )
     rows.append(("vectorised numpy form vs scalar longhand", ok, 1000))
     return rows
 
@@ -161,7 +176,9 @@ class Consumer:
         return bytes(out)
 
 
-def run_chunked(rows, chunks: list[int], resume_every: int | None = None, seed: int = P.DEFAULT_SEED) -> str:
+def run_chunked(
+    rows, chunks: list[int], resume_every: int | None = None, seed: int = P.DEFAULT_SEED
+) -> str:
     c = Consumer(seed)
     h = hashlib.sha256()
     i = 0
@@ -220,7 +237,9 @@ def check_processes() -> list[tuple[str, str, str]]:
     res = []
     for hs in ["0", "4242", "random"]:
         env = dict(os.environ, PYTHONHASHSEED=hs)
-        o = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True)
+        o = subprocess.run(
+            [sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True
+        )
         a, b = o.stdout.split()
         res.append((f"PYTHONHASHSEED={hs}", a, b))
     return res
@@ -238,6 +257,9 @@ def check_zero_weight() -> list[tuple[str, bool]]:
     return [
         ("a zero-weight first row leaves n at 0", n_after_zero == 0),
         ("it emits the draws of the first learned row (n = 0)", a == b),
-        ("zero-weight rows after one learned row emit the n = 1 draws", d[: len(e)] == e and d[len(e) :] == e),
+        (
+            "zero-weight rows after one learned row emit the n = 1 draws",
+            d[: len(e)] == e and d[len(e) :] == e,
+        ),
         ("n counts learned rows only (1 + 1 = 2)", c.n["g"] == 2),
     ]
