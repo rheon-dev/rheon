@@ -545,6 +545,15 @@ def summarise1(res):
 # STL from the paper's definitions, with the Fortran's conventions.
 
 
+def _cube(x):
+    """x ** 3 through the C library's pow, as compiled code computes it (numpy's
+    own power differs from glibc's pow in the last bit for about 5% of values;
+    a square is x * x either way, since compilers turn pow(x, 2) into that)."""
+    x = np.asarray(x, np.float64)
+    flat = [math.pow(v, 3.0) if math.isfinite(v) else v**3 for v in x.ravel().tolist()]
+    return np.array(flat, np.float64).reshape(x.shape)
+
+
 class LoessPlan:
     """A loess evaluated at given positions, each over a window of rows.
 
@@ -556,7 +565,9 @@ class LoessPlan:
         if q > n: h += (q - n) // 2              ("fortran", statsmodels)
                   h *= q / n                     ("paper": lambda_q = lambda_n q / n)
         v_j = T(|j - xs| / h)  (tricube (1 - u^3)^3 for u < 1, else 0)
-              "fortran": 1 for |j - xs| <= 0.001 h, 0 above 0.999 h
+              "fortran": 1 for |j - xs| <= 0.001 h, 0 above 0.999 h, and each
+              cube through the C library's pow, as statsmodels' compiled code;
+              "fortran_mul": the same with each cube as x * x * x
         v_j *= rho_j (robustness weights, when given)
         weights normalised to sum 1; for degree 1 (and h > 0) a weighted line:
         abar = sum v_j j, c = sum v_j (j - abar)^2,
@@ -580,7 +591,7 @@ class LoessPlan:
         self.jf = np.where(self.mask, j, 0).astype(np.float64)
         h = np.maximum(xs - nleft, nright - xs).astype(np.float64)
         if q > n:
-            if rule == "fortran":
+            if rule != "paper":
                 h = h + float((q - n) // 2)
             else:
                 h = h * (q / n)
@@ -588,17 +599,22 @@ class LoessPlan:
         self.xs = xs
         r = np.abs(self.jf - xs[:, None])
         hh = h[:, None]
-        if rule == "fortran":
+        if rule != "paper":
             h9 = 0.999 * hh
             h1 = 0.001 * hh
             with np.errstate(divide="ignore", invalid="ignore"):
-                tri = (1.0 - (r / hh) ** 3) ** 3
+                if rule == "fortran":
+                    tri = _cube(1.0 - _cube(r / hh))
+                else:  # "fortran_mul": the cube as x * x * x, as Rust's powi(3) gives it
+                    u = r / hh
+                    v = 1.0 - u * u * u
+                    tri = v * v * v
             w = np.where(r <= h1, 1.0, tri)
             w = np.where(r <= h9, w, 0.0)
         else:
             with np.errstate(divide="ignore", invalid="ignore"):
                 u = r / hh
-                w = np.where(u < 1.0, (1.0 - u**3) ** 3, 0.0)
+                w = np.where(u < 1.0, _cube(1.0 - _cube(u)), 0.0)
             w = np.where(hh == 0, np.where(r == 0, 1.0, 0.0), w)
         self.w0 = np.where(self.mask, w, 0.0)
         self.rng = n - 1.0
@@ -849,7 +865,7 @@ def robustness_weights(R, rule="fortran"):
     h = 3.0 * (part[mid0] + part[mid1])  # 6 median |R|
     if h == 0:
         return np.ones(n)
-    if rule == "fortran":
+    if rule != "paper":
         w = np.where(r <= 0.999 * h, (1.0 - (r / h) ** 2) ** 2, 0.0)
         return np.where(r <= 0.001 * h, 1.0, w)
     u = r / h
@@ -882,6 +898,241 @@ def mstl_port(y, periods, windows, iterate=2, stl_kwargs=None, ports=None, inner
             deseas = deseas - seasonal[i]
     return {"seasonal": seasonal, "trend": fit["trend"], "resid": deseas - fit["trend"],
             "weights": fit["weights"], "periods": periods, "windows": windows}
+
+
+class OnlineSTL:
+    """A ring of the last W learned rows; at each learned row, once W rows are
+    held, STL on the ring and the components of row t - h (position W - 1 - h).
+
+    A row of weight 0 or with a null target is not pushed: it learns nothing
+    and emits nothing (statsmodels' STL takes no observation weights, so a
+    weight has no oracle; the ring is by position of learned rows). The state
+    is the ring (W doubles), the head and the count.
+    """
+
+    def __init__(self, W, h, port, kernel=False, inner=None, outer=None, robust=False):
+        assert 0 <= h < W
+        self.W, self.h, self.port = W, h, port
+        self.ring = np.zeros(W)
+        self.head = 0
+        self.count = 0
+        self.inner, self.outer, self.robust = inner, outer, robust
+        self.kernel = None
+        if kernel:
+            S, T = port.operator(inner=5 if inner is None else inner)
+            p = W - 1 - h
+            self.kernel = (S[p].copy(), T[p].copy())
+
+    def window(self):
+        return np.concatenate([self.ring[self.head :], self.ring[: self.head]])
+
+    def push(self, y, w=1.0):
+        if w == 0 or not math.isfinite(y):
+            return None
+        self.ring[self.head] = y
+        self.head = (self.head + 1) % self.W
+        self.count += 1
+        if self.count < self.W:
+            return None
+        win = self.window()
+        p = self.W - 1 - self.h
+        if self.kernel is not None:
+            s_ = float(self.kernel[0] @ win)
+            t_ = float(self.kernel[1] @ win)
+            return {"seasonal": s_, "trend": t_, "resid": win[p] - s_ - t_}
+        fit = self.port.fit(win, inner=self.inner, outer=self.outer, robust=self.robust)
+        return {k: float(fit[k][p]) for k in ("seasonal", "trend", "resid")}
+
+
+STL2_CASES = [
+    # name, period, W, STL settings
+    ("p24 W96 defaults", 24, 96, {}),
+    ("p24 W168 seasonal13", 24, 168, {"seasonal": 13}),
+    ("p12 W72 degrees 0", 12, 72, {"seasonal_deg": 0, "trend_deg": 0, "low_pass_deg": 0}),
+    ("p24 W120 jumps 3/5/4", 24, 120, {"seasonal_jump": 3, "trend_jump": 5, "low_pass_jump": 4}),
+    ("p7 W56 seasonal11 trend15", 7, 56, {"seasonal": 11, "trend": 15}),
+    ("p52 W260 seasonal7", 52, 260, {}),
+]
+
+
+def _sm_stl(win, period, kw, robust=False, inner=None, outer=None):
+    from statsmodels.tsa.seasonal import STL
+
+    r = STL(win, period=period, robust=robust, **kw).fit(inner_iter=inner, outer_iter=outer)
+    return {"seasonal": np.asarray(r.seasonal), "trend": np.asarray(r.trend),
+            "resid": np.asarray(r.resid), "weights": np.asarray(r.weights)}
+
+
+def _cmp_fit(mine, oracle, comps=("seasonal", "trend", "resid")):
+    return {c: gap_stats(mine[c], oracle[c]) for c in comps}
+
+
+def _merge(acc, new):
+    """Fold gap_stats over many windows: counts add, maxima take the max."""
+    for c, st in new.items():
+        if c not in acc:
+            acc[c] = dict(st)
+            continue
+        a = acc[c]
+        a["n"] += st["n"]
+        a["bit_equal"] += st["bit_equal"]
+        for k in ("max_abs", "max_ulps", "max_ulps_of_1", "max_rel_scale"):
+            if k in st:
+                a[k] = max(a[k], st[k])
+    return acc
+
+
+def part2(args):
+    rows_after = args.stl_rows
+    out = {"versions": _versions(), "cases": []}
+    for ci, (name, period, W, kw) in enumerate(STL2_CASES):
+        N = W + rows_after
+        y = make_series(N, [period], seed=4900 + ci)
+        port = STLPort(W, period, **kw)
+        cfg = dict(port.cfg)
+        nt = cfg["trend"]
+        h = (nt - 1) // 2
+        scale = float(np.std(y))
+        S_op, T_op = port.operator()
+        mul = STLPort(W, period, rule="fortran_mul", **kw)
+        paper = STLPort(W, period, rule="paper", **kw)
+        acc = {"port": {}, "kernel": {}, "kernel_at_embargo": {}, "fortran_mul": {}, "paper": {}}
+        online = OnlineSTL(W, h, port)
+        online_k = OnlineSTL(W, h, port, kernel=True)
+        emitted_equal = 0
+        emitted = 0
+        for t in range(W - 1, N):
+            win = y[t - W + 1 : t + 1]
+            orc = _sm_stl(win, period, kw)
+            for key, st in _cmp_fit(port.fit(win), orc).items():
+                st["max_rel_scale"] = st["max_abs"] / scale
+                _merge(acc["port"], {key: st})
+            kern = {"seasonal": S_op @ win, "trend": T_op @ win}
+            kern["resid"] = win - kern["seasonal"] - kern["trend"]
+            g = _cmp_fit(kern, orc)
+            for st in g.values():
+                st["max_rel_scale"] = st["max_abs"] / scale
+            _merge(acc["kernel"], g)
+            if (t - W + 1) % args.variant_stride == 0:
+                for key, p_ in (("fortran_mul", mul), ("paper", paper)):
+                    g = _cmp_fit(p_.fit(win), orc)
+                    for st in g.values():
+                        st["max_rel_scale"] = st["max_abs"] / scale
+                    _merge(acc[key], g)
+        # the online class, row by row, against the port and the oracle at t - h
+        for t in range(N):
+            e = online.push(float(y[t]))
+            ek = online_k.push(float(y[t]))
+            if e is None:
+                continue
+            emitted += 1
+            win = y[t - W + 1 : t + 1]
+            orc = _sm_stl(win, period, kw)
+            p = W - 1 - h
+            same = all(e[c] == orc[c][p] for c in ("seasonal", "trend", "resid"))
+            emitted_equal += same
+            g = {c: gap_stats(np.array([ek[c]]), orc[c][p : p + 1], scale) for c in ("seasonal", "trend")}
+            _merge(acc["kernel_at_embargo"], g)
+        # no lookahead: rewriting every row after t leaves row t's emission unchanged
+        t_chk = W + rows_after // 2
+        o1 = OnlineSTL(W, h, port)
+        o2 = OnlineSTL(W, h, port)
+        y2 = y.copy()
+        y2[t_chk + 1 :] = 1e6
+        e1 = e2 = None
+        for t in range(t_chk + 1):
+            e1 = o1.push(float(y[t]))
+            e2 = o2.push(float(y2[t]))
+        out["cases"].append(
+            {
+                "name": name,
+                "W": W,
+                "rows": N,
+                "windows": N - W + 1,
+                "embargo_h": h,
+                "cfg": cfg,
+                "inner": 5,
+                "outer": 0,
+                "robust": False,
+                "scale_sd": scale,
+                "port_vs_sm": acc["port"],
+                "kernel_vs_sm": acc["kernel"],
+                "kernel_at_embargo_vs_sm": acc["kernel_at_embargo"],
+                "fortran_mul_vs_sm": acc["fortran_mul"],
+                "paper_vs_sm": acc["paper"],
+                "online_emitted": emitted,
+                "online_emitted_bit_equal_sm": emitted_equal,
+                "no_lookahead": e1 == e2,
+                "subseries_points_k": sorted({k for _, k, *_ in port.sub}),
+            }
+        )
+    # cost per emission (one window, repeated)
+    timing = []
+    for name, period, W, kw in STL2_CASES:
+        y = make_series(W, [period], seed=1)
+        port = STLPort(W, period, **kw)
+        S_op, T_op = port.operator()
+        p = W - 1 - (port.cfg["trend"] - 1) // 2
+        ks, kt = S_op[p].copy(), T_op[p].copy()
+        timing.append(
+            {
+                "name": name,
+                "W": W,
+                "port_ms": _time(lambda: port.fit(y), args.time_budget) * 1e3,
+                "statsmodels_ms": _time(lambda: _sm_stl(y, period, kw), args.time_budget) * 1e3,
+                "kernel_two_dots_us": _time(lambda: (ks @ y, kt @ y), args.time_budget) * 1e6,
+            }
+        )
+    out["timing"] = timing
+    return out
+
+
+def _time(fn, budget):
+    fn()
+    n = 0
+    t0 = time.perf_counter()
+    while True:
+        fn()
+        n += 1
+        el = time.perf_counter() - t0
+        if el > budget:
+            return el / n
+
+
+def summarise2(res):
+    def line(label, acc):
+        parts = []
+        for c in ("seasonal", "trend", "resid"):
+            if c in acc:
+                a = acc[c]
+                parts.append(
+                    f"{c[:5]} {a['bit_equal']}/{a['n']} max {a['max_abs']:.1e}"
+                    f" ({a['max_ulps']:.0f} ulps, {a.get('max_rel_scale', float('nan')):.1e} sd)"
+                )
+        print(f"    {label:<18}" + "; ".join(parts))
+
+    for c in res["cases"]:
+        cfg = c["cfg"]
+        print(
+            f"== {c['name']}: W {c['W']}, {c['windows']} windows, h {c['embargo_h']}, k {c['subseries_points_k']},"
+            f" seasonal {cfg['seasonal']} trend {cfg['trend']} low_pass {cfg['low_pass']}"
+            f" degs {cfg['seasonal_deg']}/{cfg['trend_deg']}/{cfg['low_pass_deg']}"
+            f" jumps {cfg['seasonal_jump']}/{cfg['trend_jump']}/{cfg['low_pass_jump']}"
+        )
+        line("port", c["port_vs_sm"])
+        line("kernel (all pos)", c["kernel_vs_sm"])
+        line("kernel at t-h", c["kernel_at_embargo_vs_sm"])
+        line("cube as x*x*x", c["fortran_mul_vs_sm"])
+        line("paper's rule", c["paper_vs_sm"])
+        print(
+            f"    online: {c['online_emitted_bit_equal_sm']}/{c['online_emitted']} emissions bit-equal;"
+            f" no lookahead {c['no_lookahead']}"
+        )
+    for t in res["timing"]:
+        print(
+            f"  cost {t['name']}: port {t['port_ms']:.2f} ms, statsmodels {t['statsmodels_ms']:.2f} ms,"
+            f" kernel two dots {t['kernel_two_dots_us']:.2f} us"
+        )
 
 
 # ------------------------------------------------------------------------- data
@@ -921,6 +1172,7 @@ def _versions():
 
 PARTS = {
     "part1": (part1, summarise1),
+    "part2": (part2, summarise2),
 }
 
 
@@ -928,6 +1180,9 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("part", choices=sorted(PARTS))
     ap.add_argument("--out", default=os.path.join(".cache", "study_490_489"))
+    ap.add_argument("--stl-rows", type=int, default=240, help="rows after the first full window")
+    ap.add_argument("--variant-stride", type=int, default=8, help="windows between variant fits")
+    ap.add_argument("--time-budget", type=float, default=0.5, help="seconds per timed case")
     ap.add_argument("--force", action="store_true", help="recompute a part whose result exists")
     args = ap.parse_args(argv)
     os.makedirs(args.out, exist_ok=True)
