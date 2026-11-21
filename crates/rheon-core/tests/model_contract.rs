@@ -735,6 +735,7 @@ fn every_state_kind_is_distinct_and_named() {
         "corrchange",
         "bocpd",
         "audit",
+        "glm",
     ];
     let mut seen = std::collections::HashSet::new();
     for k in kinds {
@@ -767,6 +768,7 @@ fn every_state_kind_is_distinct_and_named() {
         CorrChange::new(corrchange_cfg()).unwrap().state(),
         Bocpd::new(bocpd_cfg()).unwrap().state(),
         Audit::new(audit_cfg()).unwrap().state(),
+        Glm::new(glm_cfg()).unwrap().state(),
     ];
     let from_states: Vec<&str> = states.iter().map(|s| s.model.kind()).collect();
     assert_eq!(from_states, kinds);
@@ -831,6 +833,7 @@ fn one_state_of_each_kind() -> Vec<State> {
         CorrChange::new(corrchange_cfg()).unwrap().state(),
         Bocpd::new(bocpd_cfg()).unwrap().state(),
         Audit::new(audit_cfg()).unwrap().state(),
+        Glm::new(glm_cfg()).unwrap().state(),
         State::new(ModelState::EwCov(Box::new(EwCov::new(1)))),
     ]
 }
@@ -886,6 +889,7 @@ fn every_model_refuses_every_other_models_state_by_name() {
     refuses_every_other_kind::<CorrChange>("corrchange", &states);
     refuses_every_other_kind::<Bocpd>("bocpd", &states);
     refuses_every_other_kind::<Audit>("audit", &states);
+    refuses_every_other_kind::<Glm>("glm", &states);
 }
 
 /// Task 252: each model hands back the configuration it was built from,
@@ -941,6 +945,8 @@ fn every_model_hands_back_its_configuration() {
     same(Bocpd::new(c.clone()).unwrap(), &c, Bocpd::cfg);
     let c = audit_cfg();
     same(Audit::new(c.clone()).unwrap(), &c, Audit::cfg);
+    let c = glm_cfg();
+    same(Glm::new(c.clone()).unwrap(), &c, Glm::cfg);
 }
 
 fn ew_class_cfg() -> EwClassCfg {
@@ -1518,6 +1524,7 @@ fn every_model_refuses_at_restore_a_configuration_its_new_refuses() {
             0.into(),
             "distinct_cap must be from 1 to",
         ),
+        refused(Glm::new(glm_cfg()).unwrap(), "decay", zero(), h),
     ];
     // Every model's `restore`: the twenty-one kinds, `robust` under both
     // losses.
@@ -1930,6 +1937,7 @@ fn exactly_the_scheduled_solvers_report_a_solve_share() {
         ),
         ("bocpd", share(Bocpd::new(bocpd_cfg()).unwrap())),
         ("audit", share(Audit::new(audit_cfg()).unwrap())),
+        ("glm", share(Glm::new(glm_cfg()).unwrap())),
     ];
     let reporting: Vec<&str> = shares
         .iter()
@@ -1974,6 +1982,7 @@ const PROBED: &[(&str, &str)] = &[
     ("CorrChange", "corrchange"),
     ("Bocpd", "bocpd"),
     ("Audit", "audit"),
+    ("Glm", "glm"),
 ];
 
 #[test]
@@ -4309,6 +4318,45 @@ fn hmm_recovers_from_bounded_extremes() {
     );
 }
 
+/// A Poisson `glm` whose refit fills on its tenth learned row, inside the
+/// probes' streams, so the contract holds the buffer, the refit and the
+/// recursion after it.
+fn glm_cfg() -> GlmCfg {
+    GlmCfg {
+        n_features: K,
+        n_targets: 2,
+        fit_intercept: true,
+        decay: decay(),
+        family: GlmFamily::Poisson,
+        link: GlmLink::Log,
+        var_power: 1.5,
+        ridge: 1.0,
+        min_weight: 3.0,
+        refit_rows: 10,
+        step_cap: f64::INFINITY,
+    }
+}
+
+#[test]
+fn glm() {
+    let r = probe_with(Glm::new(glm_cfg()).unwrap(), 2, Some(&Glm::n_eff));
+    check(&r, "glm", 2, 1);
+    // The cap's path, with no refit.
+    let c = GlmCfg {
+        refit_rows: 0,
+        step_cap: 1.0,
+        family: GlmFamily::Gamma,
+        ..glm_cfg()
+    };
+    let r = probe_with(Glm::new(c).unwrap(), 2, Some(&Glm::n_eff));
+    check(&r, "glm", 2, 1);
+}
+
+#[test]
+fn glm_predict_is_the_step() {
+    predict_is_the_step_without_the_step(|| Glm::new(glm_cfg()).unwrap(), 2, false);
+}
+
 #[test]
 fn audit_predict_is_the_step() {
     // No slots, so this holds `n_eff` and that `predict` moved nothing; the
@@ -4582,6 +4630,10 @@ fn every_model_refuses_a_state_without_the_low_parts() {
         (
             "audit",
             refuses_without_low_parts(|| Audit::new(audit_cfg()).unwrap(), &none),
+        ),
+        (
+            "glm",
+            refuses_without_low_parts(|| Glm::new(glm_cfg()).unwrap(), &two),
         ),
     ];
     // Each model that keeps a mean had parts to drop, so its refusal is of
@@ -5635,6 +5687,11 @@ mod generated {
         #[test]
         fn audit(rows in stream(0, false), split in 0usize..60) {
             contract(|| Audit::new(audit_cfg()).unwrap(), &rows, split)?;
+        }
+
+        #[test]
+        fn glm(rows in stream(2, false), split in 0usize..60) {
+            contract(|| Glm::new(glm_cfg()).unwrap(), &rows, split)?;
         }
     }
 }
