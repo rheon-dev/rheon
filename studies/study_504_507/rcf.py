@@ -537,3 +537,34 @@ def state_table():
         for d in [1, 4, 8, 16]:
             rows.append((nt, ts, d, state_bytes(nt, ts, d)))
     return rows
+
+
+def zero_weight_check(T=200, shingle=4, num_trees=4, tree_size=32, seed=5) -> list:
+    """A zero-weight row is inserted with the next learned row's draws, scored,
+    and taken back out: every tree's branches, counts and leaves are as before."""
+    X = make_stream(T, shingle, seed)
+    stream = P.DrawStream(seed, P.group_hash("rcf"))
+    trees = [Tree(shingle, "paper") for _ in range(num_trees)]
+    for i in range(tree_size):
+        for k, t in enumerate(trees):
+            t.insert(X[i], i, LazyUniforms(stream, i, k))
+
+    def snap():
+        return [(t.branches(), sorted((i, t.cnt[v]) for i, v in t.of.items())) for t in trees]
+
+    before = snap()
+    n = tree_size
+    scores = []
+    for k, t in enumerate(trees):
+        t.insert(X[n], n, LazyUniforms(stream, n, k))
+        scores.append(t.codisp(n))
+        t.forget(n)
+    same = snap() == before
+    learned = []
+    for k, t in enumerate(trees):
+        t.insert(X[n], n, LazyUniforms(stream, n, k))
+        learned.append(t.codisp(n))
+    return [
+        ("a zero-weight row leaves every tree as it was (branches, counts, leaves)", same),
+        ("its score equals the score the same row gets when learned next", scores == learned),
+    ]

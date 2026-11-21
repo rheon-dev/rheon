@@ -83,7 +83,8 @@ def main() -> None:
         list(nm.items()),
     )
     table(
-        "G4. A drawing consumer over 5,000 rows, 40 groups, 20% zero weights (first row zero): "
+        f"G4. A drawing consumer over {2000 if q else 5000:,} rows, 40 groups, "
+        "20% zero weights (first row zero): "
         "digest of every "
         "emitted draw",
         ["chunking", "digest"],
@@ -260,6 +261,7 @@ def main() -> None:
         ["runs", "distinct digests", "digest"],
         [R.invariance(300 if q else 800)],
     )
+    table("R4b. Zero-weight rows in the forest", ["check", "holds"], R.zero_weight_check())
     table(
         "R5. Random cut forest state per group (no cap built in rrcf; tree_size is the window)",
         ["trees", "tree size", "d", "bytes"],
