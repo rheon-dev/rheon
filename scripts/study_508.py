@@ -126,8 +126,11 @@ def main() -> None:
     rows = []
     for dec in (None, 1, 0):
         r = compare.kswin_size(seeds=args.seeds, decimals=dec)
-        rows.append(["none" if dec is None else f"{dec} decimals", r["tests"], r["rejects"], r["rate"], r["exact_size"], r["alpha"]])
-    table(["values rounded to", "tests", "rejections", "rate", "exact size (continuous)", "alpha"], rows)
+        se = (r["exact_size"] * (1 - r["exact_size"]) / r["tests"]) ** 0.5
+        rows.append(["none" if dec is None else f"{dec} decimals", r["tests"], r["rejects"], r["rate"], r["exact_size"],
+                     (r["rate"] - r["exact_size"]) / se, r["alarms"], r["alarms_per_row"]])
+    table(["values rounded to", "tests (no reset)", "p <= alpha", "rate", "exact size (continuous)",
+           "z (as if independent)", "alarms, river's reset", "alarms per row"], rows)
 
     print("## 4. State size\n")
     rows = [[r["width"], r["levels"], r["levels_bound"], r["buckets"], 5 * r["levels_bound"], r["bytes_counted"],
@@ -173,10 +176,12 @@ def main() -> None:
     rows = []
     for a in (1.0, 1 - 1e-4):
         r = compare.ph_sum_error(1_000_000, alpha=a)
-        rows.append([a, r["rows"], r["final_m"], r["worst_abs"], r["rel_to_final"]])
+        rows.append([repr(a), r["rows"], r["final_m"], r["worst_abs"], r["rel_to_final"]])
     table(["Page-Hinkley alpha", "rows", "m_t at the end", "worst abs gap", "relative to m_t"], rows)
     r = compare.ddm_count_vs_recursive()
     table(["DDM rows", "max ulps, recursive p vs errors/n", "at the end"], [[r["rows"], r["max_ulps"], r["final_ulps"]]])
+    r = compare.adwin_margins()
+    table(["ADWIN cut tests (20 seeds x 3 streams)", "closest | |mu0 - mu1| / eps_cut - 1 |"], [[r["tests"], r["min_rel_margin"]]])
     print(f"total {time.time() - t0:.0f} s")
 
 

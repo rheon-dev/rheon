@@ -173,9 +173,9 @@ def paper_forms(n: int = 10_000, seeds: int = 5) -> list[dict]:
                     ia = np.flatnonzero(a[at:])
                     ib = np.flatnonzero(b[at:])
                     if len(ia):
-                        first_r.append(int(ia[0]))
+                        first_r.append(int(ia[0]) + 1)  # the change row is 1, as in the delay tables
                     if len(ib):
-                        first_p.append(int(ib[0]))
+                        first_p.append(int(ib[0]) + 1)
             out.append({
                 "form": label, "kind": kind, "river_flags": fr, "paper_flags": fp, "rows_differ": differ,
                 "delay_river": statistics.median(first_r) if first_r else None,
@@ -308,22 +308,33 @@ def alarms(seeds: int = 200, n: int = 10_000, labels: list[str] | None = None) -
 
 
 def kswin_size(seeds: int = 200, n: int = 10_000, decimals: int | None = None) -> dict:
-    """KSWIN on the null: share of tests (full-window rows) that reject, against the test's exact size."""
-    rejects = tests = 0
-    det_proto = KSWIN(seed=11)
+    """KSWIN on the null: the test's size, and the alarm rate river's reset leaves.
+
+    The size is measured with ``alpha = 0`` (the detector never flags, so never resets) by counting
+    the tests whose p-value is at most 0.005; under the null each test's p-value has exactly the
+    test's size whatever the dependence between tests. The alarm rate is river's detector as is:
+    an alarm resets the window, so the clustered rejections of overlapping windows count once.
+    """
+    alpha = 0.005
+    rejects = tests = alarms = alarm_tests = 0
     for seed in range(seeds):
         xs = data.real("none", n, seed)
         if decimals is not None:
             xs = np.round(xs, decimals)
-        det = KSWIN(seed=11 + seed)
-        for x in xs:
-            f = det.update(float(x))
-            tests += det.tested
-            rejects += f
-    r = det_proto.r
-    hc = min(h for h in range(1, r + 1) if ks_pvalue_equal(r, h) <= det_proto.alpha)
+        quiet = KSWIN(seed=11 + seed, alpha=0.0)
+        det = KSWIN(seed=11 + seed, alpha=alpha)
+        for x in xs.tolist():
+            quiet.update(x)
+            if quiet.tested:
+                tests += 1
+                rejects += quiet.p_value <= alpha
+            alarms += det.update(x)
+            alarm_tests += det.tested
+    r = 30
+    hc = min(h for h in range(1, r + 1) if ks_pvalue_equal(r, h) <= alpha)
     return {"tests": tests, "rejects": rejects, "rate": rejects / tests, "exact_size": ks_pvalue_equal(r, hc),
-            "alpha": det_proto.alpha, "decimals": decimals}
+            "alpha": alpha, "decimals": decimals, "alarms": alarms, "alarm_tests": alarm_tests,
+            "alarms_per_row": alarms / (seeds * n)}
 
 
 # ---------------------------------------------------------------------------
@@ -661,3 +672,33 @@ def adwin_n1(delta: float, n0: int, dmu: float, sd0: float, bound: str, factor: 
         if abs(dmu) > factor * eps:
             return n1
     return -1
+
+
+# How close ADWIN's cut test comes to a tie: a libm ``ln`` a few ulps off could flip only a test
+# whose margin is that small.
+
+class _MarginAdwin(Adwin):
+    def __init__(self, **kw) -> None:
+        super().__init__(**kw)
+        self.min_margin = math.inf
+        self.tests = 0
+
+    def _cut(self, n0: float, n1: float, dmean: float) -> bool:
+        dp = math.log(2.0 * math.log(self.width) / self.delta)
+        m_recip = 1.0 / (n0 - self.L + 1.0) + 1.0 / (n1 - self.L + 1.0)
+        eps = math.sqrt(2.0 * m_recip * (self.var / self.width) * dp) + 2.0 / 3.0 * dp * m_recip
+        self.tests += 1
+        self.min_margin = min(self.min_margin, abs(abs(dmean) / eps - 1.0))
+        return abs(dmean) > eps
+
+
+def adwin_margins(seeds: int = 20, n: int = 10_000) -> dict:
+    worst = math.inf
+    tests = 0
+    for seed in range(seeds):
+        for kind in KINDS:
+            det = _MarginAdwin()
+            run(det, stream_for(kind, False, n, seed))
+            worst = min(worst, det.min_margin)
+            tests += det.tests
+    return {"tests": tests, "min_rel_margin": worst}
