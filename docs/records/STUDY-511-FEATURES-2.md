@@ -232,3 +232,74 @@ the whole per-group allowance by itself.
 
 **Changes a default: no.** All are new tests; `influence`'s convention (weighted mean square) is kept, and the weighted DFBETAS and Cook's are stated in it.
 
+## 521. Forecast comparison
+
+Beside `rp.eval.diebold_mariano`'s recursion (the squared-loss differential, positive when `a` is closer; Newey-West variance with
+Bartlett weights over `lags`; a normal reference; two-sided; `half_life=` gives EW sums). Everything below is an option or a new output; the defaults are unchanged.
+
+**Diebold-Mariano: HLN, a t reference, any loss, a one-sided p.** With `d` the loss differential, `m` its EW mean, `W = sum w`, `n = W^2/sum w^2`
+(Kish), `h = lags + 1`: `S = sum w (d-m)^2 + 2 sum_l (1 - l/h) sum_{i>=l} w_i (d_i-m)(d_{i-l}-m)` (a pair weighted by its later row), `dm = m sqrt(n) / sqrt(S/W)`,
+HLN `dm * sqrt((n + 1 - 2h + h(h-1)/n)/n)`, p from the normal (today) or from t with `n - 1` df, one-sided `sf(dm)` for "`a` is closer". The centred lag products
+expand about the one global `m`: `sum w (d_i-m)(d_{i-l}-m) = P_l - m A_l - m B_l + m^2 N_l`, four EW sums per lag over the rows that have a lag-`l` partner (`A_l = sum w d_i`,
+`B_l = sum w d_{i-l}`, `N_l = sum w`, `P_l = sum w d_i d_{i-l}`) and a ring of the last `lags` differentials.
+
+Against `dieboldmariano.dm_test` 1.1.0 (`variance_estimator="bartlett"`, `h = lags + 1`: C1: `"acf"`, its default, is a rectangular sum, not Bartlett; `harvey_correction` on and off;
+the oracle's differential is `loss_a - loss_b`, so its statistic has the opposite sign; 200 rows, 10 seeds; losses squared, absolute, LINEX (a = 0.5), pinball (.8)):
+
+| quantity | largest gap |
+|---|---|
+| statistic, HLN on and off, lags 0 / 2 / 5, four losses | 8.8e-16 relative |
+| two-sided p with the t reference (`n-1` df), same cases | 7.3e-11 absolute |
+| one-sided p ("a closer"), same cases | 3.7e-11 absolute |
+| statistic under half-life 40, weights, 10% zero-weight rows, zero first row vs the two-pass weighted definition (lags 3, HLN) | 4.9e-15 |
+| same vs the stream with zero-weight rows removed and gaps folded | 5.5e-16 |
+
+The p gap is the oracle's: it takes the t tail from its own incomplete-beta routine (accurate to about 1e-11). C1's points hold: the oracle's p-value is always from the t, so a normal reference needs
+another oracle, and here it is scipy's normal tail on the same statistic. **Size** (share of 400 null streams of 400 rows, iid differentials, final-row two-sided test at 5%, binomial sd 0.011; `n` = Kish):
+
+| case | normal (today) | normal + HLN | t, n-1 | t + HLN |
+|---|---|---|---|---|
+| half-life 10, lags 0 / 4 | 0.068 / 0.095 | 0.063 / 0.053 | 0.060 / 0.078 | 0.053 / 0.048 |
+| half-life 30, lags 0 / 4 | 0.065 / 0.075 | 0.063 / 0.053 | 0.058 / 0.063 | 0.055 / 0.048 |
+| half-life 100, lags 0 / 4 | 0.065 / 0.065 | 0.065 / 0.055 | 0.065 / 0.063 | 0.065 / 0.055 |
+
+So at a short effective sample and some lags, HLN with the t is what keeps the size near 5% (today's form: 9.5% at half-life 10, lags 4). Making it the default would be a change; **not proposed here**, offered as options.
+
+**Anytime-valid test of the mean loss difference, beside `seqtest`** (task 508, "CUSUM, Page-Hinkley, ADWIN and the other change detectors", does not take it on its text: it tests a change in one stream, not
+`E[d] <= 0` between two forecasts; `seqtest` is a sign test on one stream). C1: MAPIE `RiskMonitoring` monitors one model's risk against a reference threshold, so it is no oracle; the usable oracle is its bound function.
+Online form, bounded differences `r = (d/B + 1)/2 in [0, 1]`: the conjugate-mixture empirical-Bernstein confidence sequence (Howard et al. 2021) as MAPIE spells it, `S_t = sum r`, `V_t = sum (r_i - mu_{i-1})^2`
+(`mu_{i-1}` the running mean of the rows before, 1/2 at the first), `lower_t = max(mu_t - B(V_t, alpha/2)/t, 0)` with the running maximum, reject "a is not better" when the lower bound passes 1/2. No decay and a zero weight skips the row, as `seqtest`
+(a forgetting test is not an e-process). Against `conjugate_mixture_empirical_bernstein_bound(r, v_opt, alpha, bound_side)` (150 rows, running intersection): **0 gap** lower and upper, to the bit (it is the same boundary function).
+A second, longhand form: the betting e-process `E_t = prod (1 + lam_t d_t)`, `lam_t = clip(mu/(var + mu^2), 0, 1/2)` from the rows before (4 floats), valid by Ville's inequality; no library oracle, so it is checked by its guarantee.
+Share of 100 streams of 1500 rows that **ever** rejected (CM-EB read every 10 rows, the betting process every row; differentials in [-1, 1], noise sd .35):
+
+| stream | CM-EB | betting | median stop, CM-EB / betting |
+|---|---|---|---|
+| E[d] = 0 (the null's edge) | 0 | 0.01 | - / 210 |
+| E[d] = -0.05 | 0 | 0 | - |
+| E[d] = +0.10 | 1.00 | 1.00 | 299 / 87 |
+| E[d] = +0.20 | 1.00 | 1.00 | 129 / 37 |
+
+Both hold their level (the CS is conservative: 0 of 100 at the edge); the betting form stops about three times earlier. **Two things to settle on the Rust side:** the differential must be bounded
+(`B` configured; squared loss is not bounded, and clipping `d` to `[-B, B]` is symmetric, so it keeps `E[d] = 0` only where the differential is symmetric under the null: a different test); and the boundary is a root of a gamma-function
+equation (`gammainc`, `gammaln`: libm-grade), so a stored running bound is a libm result in the state (CLAUDE.md's cross-OS rule), which dropping the running intersection avoids (the CS stays valid without it).
+
+**Giacomini-White's conditional test**: `Z_t = h_t d_t` for instruments `h_t = (1, d_{t-1}, ...)`, `stat = n Zbar' Omega^-1 Zbar`, `Omega = Gamma_0 + sum_l (1 - l/(L+1))(Gamma_l + Gamma_l')`, `Gamma_l = sum w Z_i Z_{i-l}' / W`, `chi2(q)`
+(uncentred: the null is `E[Z] = 0`). Against statsmodels (relative gap, 300 rows, 20 seeds), q = 1 / 2 / 3 instruments with lags 0 / 3 / 5:
+
+| oracle | iid, H0 true | AR(.3), H0 false |
+|---|---|---|
+| the definition by `S_hac_simple(Z, nlags=L, weights_bartlett)` (exact) | 8e-14 / 4e-16 / 1e-15 | 6e-14 / 5e-16 / 7e-16 |
+| `OLS(d, h).fit(cov_type="HAC", maxlags=L, kernel="bartlett").wald_test(I, use_f=False)` (C1's) | 0.042 / 0.19 / 0.29 | 0.074 / 0.70 / 0.69 |
+
+**Where the oracle is not exact.** C1's HAC Wald is asymptotically equivalent but not the same number: the Wald regresses `d` on `h` and builds the HAC from the fitted residuals `u`, the definition builds it from `d`
+(`u = d - h'delta`); they differ by that plug-in, 4% to 29% on iid data and up to 70% where `d` is predictable. So the exact oracle used is statsmodels' own `S_hac_simple` on `Z`, and the HAC Wald is
+reported as the second opinion, with this gap named. Giacomini-White itself is MISSING as a library function (C1). Size, 500 null streams at half-life 100 rows (binomial sd 0.010): 0.060 (q = 1, lags 0) and 0.052 (q = 2, lags 3).
+
+Zero weight: a zero-weight row is skipped by all of the above (no differential, no instrument, no lag), the ageing is the clock's; verified for DM (above).
+
+**State added** (per slot): DM `8 (4 + 4 L + L)` bytes for `L` lags (the lag-0 sums fold into the four scalars): 32 / 192 / 432 / 1232 at L = 0 / 4 / 10 / 30; CM-EB 48 (six scalars; the running bounds are the libm part); betting 32; GW
+`8 ((L+1) q^2 + q L + q + (q-1) + 2)`: 32 (q = 1, L = 0), 216 (q = 2, L = 3), 1.8 KB (q = 4, L = 10), 17.9 KB (q = 8, L = 30). Each grows with its configured `L`, `q` only; nothing with the stream; each adds its bytes per group to the bank's total.
+
+**Changes a default: no.** (The HLN-and-t form would be a better default by the size table; that is the coordinator's call, not made here.)
+
