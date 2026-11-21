@@ -717,28 +717,76 @@ fn the_clock_counts_duplicates_gaps_and_regular_steps() {
     assert_eq!(uncapped.clock().unwrap().gaps, None);
 }
 
-/// Hard rule 9: a row of weight 0, the first included, adds nothing to
-/// `n_eff` and divides nothing by zero; its values are counted, since a
-/// value is a value whatever its row weighs.
+/// Hard rule 9 (the user, 2026-11-21: an audit stops counting zero-weight
+/// rows): a row of weight 0, the first included, advances the clock and
+/// learns nothing. Its values reach no count, moment, counter, run, lag or
+/// pair: every column and pair reads as the stream with those rows left
+/// out, to the bit. Its clock step is the clock's, counted as every row's
+/// is, so the clock reads as the stream fed every row; and it adds nothing
+/// to `n_eff` and divides nothing by zero.
 #[test]
-fn a_zero_weight_row_is_counted_and_adds_no_weight() {
-    let mut m = Audit::new(AuditCfg {
+fn a_zero_weight_row_advances_the_clock_and_counts_nothing() {
+    let cfg2 = AuditCfg {
         pairs: true,
+        gap_cap: Some(4.0),
         ..cfg(2)
-    })
-    .unwrap();
-    let s = m.step(&[1.0, 2.0], &[], 0.0, 0.0);
-    assert_eq!(s.n_eff, 0.0);
-    m.step(&[3.0, 2.0], &[], 1.0, 0.0);
-    assert_eq!(m.n_eff(), 0.0);
-    m.step(&[5.0, 1.0], &[], 1.0, 2.5);
-    assert_eq!(m.predict(&[0.0, 0.0], 1.0).n_eff, 2.5);
-    let c = m.column(0);
-    assert_eq!((c.count, c.mean), (3, 3.0));
-    assert!(m.pair(0, 1).unwrap().corr.is_finite());
-    let bytes = rmp_serde::to_vec(&m.state()).unwrap();
+    };
+    let (mut with, mut without, mut every) = (
+        Audit::new(cfg2.clone()).unwrap(),
+        Audit::new(cfg2.clone()).unwrap(),
+        Audit::new(cfg2).unwrap(),
+    );
+    let mut r = SplitMix64::new(921);
+    let mut first_kept = true;
+    for i in 0..300 {
+        // Repeats, so runs, equal neighbours and the smallest change are
+        // read; nulls and NaN, so the unusable counts are; and a zero
+        // weight on every fifth row, the first among them.
+        let v = |r: &mut SplitMix64| (r.uniform() * 6.0).round();
+        let mut x = vec![v(&mut r), v(&mut r)];
+        if i % 11 == 4 {
+            x[0] = f64::NAN;
+        }
+        if i % 13 == 6 {
+            x[1] = NULL;
+        }
+        let d = if i == 0 {
+            0.0
+        } else {
+            [0.0, 1.0, 2.5, 5.0][i % 4]
+        };
+        let zero = i % 5 == 0;
+        let s = with.step(&x, &[], d, if zero { 0.0 } else { 1.0 });
+        assert_eq!(s.n_eff, without.n_eff(), "row {i}: n_eff is the kept rows'");
+        every.step(&x, &[], d, 1.0);
+        if !zero {
+            without.step(&x, &[], if first_kept { 0.0 } else { d }, 1.0);
+            first_kept = false;
+        }
+    }
+    for j in 0..2 {
+        let (a, b) = (with.column(j), without.column(j));
+        assert_eq!(format!("{a:?}"), format!("{b:?}"), "column {j}");
+        assert_eq!(
+            a.rows, 240,
+            "column {j}: the zero-weight rows are not counted"
+        );
+    }
+    assert_eq!(
+        format!("{:?}", with.pair(0, 1)),
+        format!("{:?}", without.pair(0, 1))
+    );
+    assert_eq!(
+        format!("{:?}", with.columns),
+        format!("{:?}", without.columns)
+    );
+    assert_eq!(format!("{:?}", with.pairs), format!("{:?}", without.pairs));
+    assert_eq!(with.clock, every.clock, "every row's step is the clock's");
+    assert_eq!(with.clock().unwrap().steps, 299);
+    assert_eq!(with.n_eff(), 240.0);
+    let bytes = rmp_serde::to_vec(&with.state()).unwrap();
     let back: State = rmp_serde::from_slice(&bytes).unwrap();
-    assert_eq!(Audit::restore(&back).unwrap(), m);
+    assert_eq!(Audit::restore(&back).unwrap(), with);
 }
 
 /// Merging the audits of two streams gives the audit of both: the counts

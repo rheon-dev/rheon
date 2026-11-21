@@ -83,11 +83,15 @@
 //! it.
 //!
 //! **A row's weight** goes into `n_eff`, the accumulated weight before the
-//! row, undecayed (CLAUDE.md hard rule 8; `audit` has no decay). Nothing
-//! else reads it: a value is a value whatever its row weighs, so a row of
-//! weight 0 is counted like any other (hard rule 9 asks only that it divide
-//! nothing by zero, and nothing here divides by a weight). Nor does `audit`
-//! refuse a value that is not usable, as every other model does
+//! row, undecayed (CLAUDE.md hard rule 8; `audit` has no decay). A row of
+//! weight 0 advances the clock and learns nothing (hard rule 9; the user,
+//! 2026-11-21): its step is the clock's and is counted as every row's is,
+//! and its values reach no count, moment, counter, run, lag or pair, so
+//! every column and pair reads as the stream with that row left out. Until
+//! then such a row's values were counted like any other's. Any other weight
+//! moves `n_eff` alone: a value is a value whatever its row weighs. A bank's
+//! `audit` takes no weight column, so every row it reads weighs 1. Nor does
+//! `audit` refuse a value that is not usable, as every other model does
 //! ([`OnlineModel`]): it counts it, which is the point.
 //!
 //! **Merging** ([`Audit::merge`]) two audits of different streams -- two
@@ -1375,8 +1379,9 @@ impl Audit {
 
 impl OnlineModel for Audit {
     /// Count the row: every column's value, the pairs' and the clock's step.
-    /// The weight goes into `n_eff` alone, and a value that is not usable is
-    /// counted, not refused (the module's doc).
+    /// A row of weight 0 counts its clock step alone; any other weight goes
+    /// into `n_eff` alone, and a value that is not usable is counted, not
+    /// refused (the module's doc).
     fn step_into(
         &mut self,
         x: &[f64],
@@ -1392,6 +1397,12 @@ impl OnlineModel for Audit {
         let cap = self.cfg.distinct_cap;
         if !self.fresh && d_clock.is_finite() && d_clock >= 0.0 {
             self.step_clock(d_clock);
+        }
+        self.fresh = false;
+        // Hard rule 9: a zero-weight row advances the clock, above, and
+        // learns nothing.
+        if weight == 0.0 {
+            return;
         }
         for (c, &v) in self.columns.iter_mut().zip(x) {
             c.add(v, cap);
@@ -1416,7 +1427,6 @@ impl OnlineModel for Audit {
         if weight.abs() <= INPUT_BOUND && weight > 0.0 {
             self.n_eff += weight;
         }
-        self.fresh = false;
     }
 
     fn predict(&self, _x: &[f64], _d_clock: f64) -> Step {

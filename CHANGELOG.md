@@ -140,6 +140,20 @@ model that only the new build has is listed as an addition and passes.
   `kmeans.coef`, `kmeans.weight_sum`, `kmeans.withheld_reason`,
   `ew_class.p_*`, `ew_class.class`, `ew_class.coef`,
   `ew_class.weight_sum`, `ew_class.withheld_reason`.
+- **`audit` learns nothing from a row of weight 0** (hard rule 9; the
+  user's decision of 2026-11-21). Such a row advances the clock, and its
+  step is counted with the clock's as every row's is, but its values reach
+  no count, moment, distinct-value counter, run, lag or pair, so every
+  column and pair reads as the stream with that row left out; until now its
+  values were counted like any other's. A bank's `audit` takes no `weight`
+  column, so every row it reads weighs 1 and no output or `ModelBank.audit()`
+  table moves (`scripts/compare_outputs.py` against 2875e1f9: 0 ulps on
+  every field of four cases, two of them an `audit` with pairs beside a
+  weighted `ewridge` on streams with zero-weight rows, and the three audit
+  tables identical); the change is to the model's own counts, for a caller
+  that steps it with weights. An audit state saved by an earlier build
+  keeps what it counted, goes on to the bit, and counts no zero-weight row
+  from its load.
 - **A query under `group_close` with nowhere to put the closed groups
   keeps none of them** (review P8). `lf.rheon.fit_predict(specs)` with a
   spec that closes groups, and neither `closed_groups=` nor `save_state=`,
