@@ -35,6 +35,8 @@ import os
 import sys
 import time
 from dataclasses import dataclass
+from dataclasses import dataclass as dataclasses_dataclass
+from dataclasses import field as dataclasses_field
 
 # one BLAS thread per worker, set before numpy loads (set afterwards it does
 # nothing: four workers on four threads each ran at a load of 12)
@@ -932,9 +934,769 @@ def versions() -> dict:
     return base.versions()
 
 
+# --------------------------------------------------------------------------
+# asymmetric DCC (Cappiello, Engle and Sheppard 2006) on study 485's DCC engine
+#
+#   Q_t = Qbar - a Qbar - b Qbar - g N + a z_{t-1} z_{t-1}' + g n_{t-1} n_{t-1}' + b Q_{t-1}
+#   n_t = z_t * (z_t < 0) elementwise,   N = mean of n n',   Qbar = mean of z z'
+#   R_t = diag(Q_t)^(-1/2) Q_t diag(Q_t)^(-1/2)
+#
+# The admissible set is a, b, g >= 0 and a + b + delta g < 1, delta the largest
+# generalized eigenvalue of N against Qbar (the largest eigenvalue of
+# Qbar^(-1/2) N Qbar^(-1/2)): it makes the intercept C = (1 - a - b) Qbar - g N
+# positive semi-definite, so every Q_t is (CES 2006, section 3). The engine's
+# second stage is carried over unchanged: the margins' targeted online GARCH
+# (batch start of 500 rows, Huber score 2), the shared start (both stages
+# fitted on the margins' 500 rows by the core's optimizer), a Student-t second
+# stage with nu fitted at the start and held, Fisher scoring at gain
+# 1/(t + 500), information averaged at the same gain, Qbar and N running means.
+
+import dcc  # noqa: E402  (study_485/dcc.py, carried byte for byte)
+import garch  # noqa: E402  (study_485/garch.py)
+
+ADCC_TRUTH = (0.03, 0.93, 0.03)  # a, b, g
+ADCC_NAMES = ("a", "b", "g")
+ADCC_RHO_BAR = 0.5
+ADCC_NU = 5.0
+ADCC_EPS = 1e-4
+ADCC_ROWS = 10_000
+ADCC_START = 500
+ADCC_GRID_A_B = dcc_grid = [(a, b) for a in (0.01, 0.03, 0.05, 0.1) for b in (0.8, 0.85, 0.9, 0.95)]
+
+
+def neg_part(z: np.ndarray) -> np.ndarray:
+    """``n = z * (z < 0)`` elementwise."""
+    return np.minimum(z, 0.0)
+
+
+def n_mean(z: np.ndarray) -> np.ndarray:
+    nv = neg_part(z)
+    return nv.T @ nv / z.shape[0]
+
+
+def delta_of(qbar: np.ndarray, nmat: np.ndarray) -> float:
+    """The largest eigenvalue of ``Qbar^(-1/2) N Qbar^(-1/2)``."""
+    L = np.linalg.cholesky(qbar)
+    Li = np.linalg.inv(L)
+    return float(np.linalg.eigvalsh(Li @ nmat @ Li.T)[-1])
+
+
+def project_adcc(x: np.ndarray, delta: float) -> np.ndarray:
+    """Euclidean projection of ``(a, b, g)`` onto ``a, b, g >= 0`` and
+    ``a + b + delta g <= 1 - 1e-4``: clip, and if the sum is over, the
+    Lagrange form ``theta_i = max(0, x_i - lam c_i)`` with ``c = (1, 1,
+    delta)`` and ``lam`` by bisection so that ``c . theta`` meets the cap
+    (the KKT solution of the projection)."""
+    cap = 1.0 - ADCC_EPS
+    c = np.array([1.0, 1.0, delta])
+    x = np.asarray(x, dtype=float)
+    y = np.maximum(x, 0.0)
+    if float(c @ y) <= cap:
+        return y
+    lo, hi = 0.0, float(np.max(x / c))
+    for _ in range(200):
+        mid = 0.5 * (lo + hi)
+        if float(c @ np.maximum(x - mid * c, 0.0)) > cap:
+            lo = mid
+        else:
+            hi = mid
+    return np.maximum(x - hi * c, 0.0)
+
+
+def simulate_adcc(
+    n: int,
+    seed: int,
+    k: int,
+    abg: tuple[float, float, float],
+    rho_bar: float,
+    n0: np.ndarray,
+    nu: float | None = None,
+    burn: int = 1000,
+    margin: tuple[float, float, float] = dcc.MARGIN,
+) -> tuple[np.ndarray, np.ndarray]:
+    """``n`` rows of ``k`` returns (GARCH(1,1) margins) and their standardized
+    residuals ``z``: ADCC correlation with the intercept ``(1 - a - b) Qbar - g N0``
+    (``N0`` the model's own ``E[n n']``, ``calibrate_n0``), Gaussian or
+    multivariate Student-t (unit variances) innovations, as ``dcc.simulate_k``."""
+    a, b, g = abg
+    w, al, be = margin
+    rng = np.random.default_rng(seed)
+    x = rng.standard_normal((n + burn, k))
+    scale = np.ones(n + burn) if nu is None else np.sqrt((nu - 2.0) / rng.chisquare(nu, n + burn))
+    qbar = np.full((k, k), rho_bar)
+    np.fill_diagonal(qbar, 1.0)
+    c0 = (1.0 - a - b) * qbar - g * n0
+    assert np.linalg.eigvalsh(c0)[0] >= 0.0, "the truth's intercept is not positive semi-definite"
+    q = qbar.copy()
+    s2 = np.full(k, w / (1.0 - al - be))
+    prev_r2 = s2.copy()
+    prev_z = np.zeros(k)
+    out = np.empty((n + burn, k))
+    zs = np.empty((n + burn, k))
+    for t in range(n + burn):
+        if t > 0:
+            nv = np.minimum(prev_z, 0.0)
+            q = c0 + a * np.outer(prev_z, prev_z) + g * np.outer(nv, nv) + b * q
+        d = 1.0 / np.sqrt(np.diag(q))
+        z = np.linalg.cholesky(q * np.outer(d, d)) @ x[t] * scale[t]
+        s2 = w + al * prev_r2 + be * s2
+        out[t] = np.sqrt(s2) * z
+        zs[t] = z
+        prev_r2 = out[t] ** 2
+        prev_z = z
+    return out[burn:], zs[burn:]
+
+
+def calibrate_n0(k: int, nu: float | None, cache: str) -> np.ndarray:
+    """``N0`` such that the process's own ``E[n n']`` equals it (a fixed point,
+    iterated four times on 150,000-row pilot runs, seed 493001; started at the
+    standard normal orthant value ``diag 1/2, offdiag rho/4 + sqrt(1 - rho^2)/(2 pi)``).
+    The estimators never see it: they use the sample ``N``. It only keeps the
+    truth's intercept consistent. Cached."""
+    key = f"k{k}_nu{'inf' if nu is None else int(nu)}"
+    path = os.path.join(cache, "adcc_n0.json")
+    store = json.load(open(path)) if os.path.exists(path) else {}
+    if key in store:
+        return np.array(store[key]["n0"])
+    rho = ADCC_RHO_BAR
+    n0 = np.full((k, k), rho / 4.0 + math.sqrt(1.0 - rho * rho) / (2.0 * math.pi))
+    np.fill_diagonal(n0, 0.5)
+    hist = []
+    for _ in range(4):
+        _, z = simulate_adcc(150_000, 493001, k, ADCC_TRUTH, rho, n0, nu)
+        new = n_mean(z)
+        hist.append(float(np.max(np.abs(new - n0))))
+        n0 = new
+    store[key] = {"n0": n0.tolist(), "max_change_by_iteration": hist, "zz_mean": (z.T @ z / z.shape[0]).tolist()}
+    with open(path, "w") as fh:
+        json.dump(store, fh, indent=1)
+    return n0
+
+
+# ---- the batch side: the likelihood written by hand, scipy computes the oracle
+
+
+def q_path_adcc(a: float, b: float, g: float, z: np.ndarray, qbar: np.ndarray, nmat: np.ndarray) -> np.ndarray:
+    """``R_t`` for every row, ``Q_0 = Qbar``, by ``lfilter`` (the input of the
+    recursion is data only: ``C + a z z' + g n n'`` of the previous row)."""
+    from scipy.signal import lfilter
+
+    n, k = z.shape
+    nv = neg_part(z)
+    zz = z[:, :, None] * z[:, None, :]
+    nn = nv[:, :, None] * nv[:, None, :]
+    u = np.empty((n, k, k))
+    u[0] = qbar
+    u[1:] = (1.0 - a - b) * qbar - g * nmat + a * zz[:-1] + g * nn[:-1]
+    q = lfilter([1.0], [1.0, -b], u, axis=0)
+    d = 1.0 / np.sqrt(np.einsum("tii->ti", q))
+    return q * d[:, :, None] * d[:, None, :]
+
+
+def fit_adcc(z: np.ndarray, qbar: np.ndarray, nmat: np.ndarray, lik: str) -> dict:
+    """The oracle: ``(a, b, g)`` (``lik="normal"``) or ``(a, b, g, nu)``
+    (``"t"``) maximizing the second-stage log-likelihood by scipy's SLSQP,
+    from ``(0.03, 0.85, 0.02[, 8])``, ``a, b, g >= 0``, ``a + b + delta g <=
+    1 - 1e-4``, ``nu`` in [2.1, 200], ``ftol`` 1e-12; sandwich SEs
+    ``H^-1 J'J H^-1`` by statsmodels' numerical differentiation (the second
+    stage only, as study 485 §14)."""
+    from scipy.optimize import minimize
+    from statsmodels.tools.numdiff import approx_fprime, approx_hess
+
+    delta = delta_of(qbar, nmat)
+    p = 3 if lik == "normal" else 4
+
+    def rows(th: np.ndarray) -> np.ndarray:
+        rm = q_path_adcc(th[0], th[1], th[2], z, qbar, nmat)
+        if lik == "normal":
+            return dcc.loglik_rows_k(rm, z)
+        return dcc.loglik_rows_t(rm, z, float(th[3]))
+
+    def neg(th: np.ndarray) -> float:
+        a, b, g = (float(x) for x in th[:3])
+        if a < 0.0 or b < 0.0 or g < 0.0 or a + b + delta * g >= 1.0 or (p == 4 and th[3] <= 2.0):
+            return dcc.INFEASIBLE
+        v = -float(np.sum(rows(th)))
+        return v if math.isfinite(v) else dcc.INFEASIBLE
+
+    x0 = np.array([0.03, 0.85, 0.02] + ([8.0] if p == 4 else []))
+    bounds = [(0.0, 1.0)] * 3 + ([(2.1, 200.0)] if p == 4 else [])
+    fit = minimize(
+        neg,
+        x0=x0,
+        method="SLSQP",
+        bounds=bounds,
+        constraints=[{"type": "ineq", "fun": lambda t: 1.0 - ADCC_EPS - t[0] - t[1] - delta * t[2]}],
+        options={"ftol": 1e-12, "maxiter": 500},
+    )
+    th = fit.x
+    hess = approx_hess(th, lambda t: float(np.sum(rows(t))))
+    scores = approx_fprime(th, rows)
+    hinv = np.linalg.inv(-hess)
+    cov = hinv @ (scores.T @ scores) @ hinv
+    return {
+        "theta": th,
+        "se": np.sqrt(np.diag(cov)),
+        "success": bool(fit.success),
+        "nit": int(fit.nit),
+        "llf": -float(fit.fun),
+        "delta": delta,
+    }
+
+
+def scipy_likelihood_rows(rmat: np.ndarray, z: np.ndarray, lik: str, nu: float = 0.0) -> np.ndarray:
+    """The same per-row log-likelihood computed by ``scipy.stats``, one call
+    per row: ``multivariate_normal.logpdf(z; R_t)`` less the independent
+    ``logpdf(z; I)`` (the second-stage likelihood subtracts the margins'
+    part), or ``multivariate_t.logpdf(z; scale = R_t (nu - 2) / nu, df = nu)``
+    (unit-variance t). Used as the check of the vectorized hand-written one."""
+    from scipy.stats import multivariate_normal, multivariate_t
+
+    n, k = z.shape
+    out = np.empty(n)
+    if lik == "normal":
+        ind = multivariate_normal.logpdf(z, mean=np.zeros(k), cov=np.eye(k))
+        for t in range(n):
+            out[t] = multivariate_normal.logpdf(z[t], mean=np.zeros(k), cov=rmat[t]) - ind[t]
+    else:
+        for t in range(n):
+            out[t] = multivariate_t.logpdf(z[t], loc=np.zeros(k), shape=rmat[t] * (nu - 2.0) / nu, df=nu)
+    return out
+
+
+# ---- the batch start's objective (a, b, g, nu), analytic score, for the core's optimizer
+
+
+def adcc_t_objective(z: np.ndarray, qbar: np.ndarray, nmat: np.ndarray):  # noqa: ANN201
+    """``batch_core.dcc_t_objective`` with the asymmetric term: the
+    multivariate-t second-stage log-likelihood in ``(a, b, g, nu)``, ``Q_0 =
+    Qbar``, the three sensitivities ``dQ/da = zz' - Qbar + b dQ'/da``, ``dQ/db
+    = Q' - Qbar + b dQ'/db``, ``dQ/dg = nn' - N + b dQ'/dg``, the score in
+    ``(a, b, g)`` ``1/2 tr((w u u' - R^-1) dR)``, ``w = (nu + k)/(nu - 2 + s)``,
+    ``dR = D^-1/2 dQ D^-1/2 - 1/2 (L R + R L)``, in ``nu`` ``dcc_t_row``'s;
+    its Gauss-Newton fallback the sum of the rows' score outer products."""
+    import batch_core
+
+    n, k = z.shape
+    nv = neg_part(z)
+    zz = z[:, :, None] * z[:, None, :]
+    nn = nv[:, :, None] * nv[:, None, :]
+
+    def f(theta: np.ndarray, grad: bool):  # noqa: ANN202
+        a, b, g, nu = (float(x) for x in theta)
+        gv = np.zeros(4)
+        H = np.zeros((4, 4))
+        if not nu > 2.0:
+            return -math.inf, gv, H
+        c0 = (1.0 - a - b) * qbar - g * nmat
+        q = qbar.copy()
+        dq = [np.zeros((k, k)) for _ in range(3)]
+        ll = 0.0
+        for t in range(n):
+            if t > 0:
+                q_prev = q
+                q = c0 + a * zz[t - 1] + g * nn[t - 1] + b * q_prev
+                if grad:
+                    dq = [
+                        zz[t - 1] - qbar + b * dq[0],
+                        q_prev - qbar + b * dq[1],
+                        nn[t - 1] - nmat + b * dq[2],
+                    ]
+            dg = np.diag(q)
+            if not np.all(dg > 0.0):
+                return -math.inf, gv, H
+            d = 1.0 / np.sqrt(dg)
+            rmat = q * np.outer(d, d)
+            lr, s, dnu = batch_core.dcc_t_row(z[t], rmat, nu)
+            if not math.isfinite(lr):
+                return -math.inf, gv, H
+            ll += lr
+            if grad:
+                rinv = np.linalg.inv(rmat)
+                u = rinv @ z[t]
+                m = (nu + k) / (nu - 2.0 + s) * np.outer(u, u) - rinv
+                row = np.empty(4)
+                for i, dqi in enumerate(dq):
+                    lam = np.diag(dqi) / dg
+                    dr = dqi * np.outer(d, d) - 0.5 * (lam[:, None] * rmat + rmat * lam[None, :])
+                    row[i] = 0.5 * float(np.sum(m * dr))
+                row[3] = dnu
+                gv += row
+                H += np.outer(row, row)
+        return ll, gv, H
+
+    return f
+
+
+ADCC_T_GRID = [(a, b, g, v) for a, b in ADCC_GRID_A_B for g in (0.01, 0.05) for v in (4.0, 8.0, 20.0)]
+
+
+@dataclasses_dataclass
+class OnlineAdccT(dcc.OnlineDccT):
+    """``dcc.OnlineDccT`` with the asymmetric term. State beyond the DCC's:
+    ``N`` (the running mean of ``n n'``), ``dQ/dg``, ``g`` and a 3-by-3
+    information matrix; ``n_{t-1}`` is derived from the stored ``z_{t-1}``.
+    ``update(z)`` takes one row of standardized residuals; the row's
+    correlation is emitted before ``z`` is read."""
+
+    nmat: np.ndarray = dataclasses_field(init=False)
+    dqg: np.ndarray = dataclasses_field(init=False)
+    n_repaired: int = 0
+    last_delta: float = math.nan
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        k = self.k
+        self.theta = np.array([self.a0, self.b0, 0.02])
+        self.nmat = np.zeros((k, k))
+        self.dqg = np.zeros((k, k))
+        self.H = np.zeros((3, 3))
+
+    def _fit_buffer(self, zb: np.ndarray) -> None:
+        import batch_core
+
+        qbar = zb.T @ zb / zb.shape[0]
+        nmat = n_mean(zb)
+        delta = delta_of(qbar, nmat)
+
+        def proj(th: np.ndarray) -> np.ndarray:
+            p3 = project_adcc(th[:3], delta)
+            return np.array([p3[0], p3[1], p3[2], min(max(float(th[3]), batch_core.NU_MIN), batch_core.NU_MAX)])
+
+        self.batch_fit = batch_core.maximize(adcc_t_objective(zb, qbar, nmat), proj, ADCC_T_GRID)
+        th = self.batch_fit.theta
+        self.theta = project_adcc(th[:3], delta)
+        self.nu = float(th[3])
+
+    def _score(self, z: np.ndarray, rmat: np.ndarray, d: np.ndarray, dg: np.ndarray):  # noqa: ANN202
+        k, nu = self.k, self.nu
+        rinv = np.linalg.inv(rmat)
+        u = rinv @ z
+        s = float(z @ u)
+        m = (nu + k) / (nu - 2.0 + s) * np.outer(u, u) - rinv
+        drs = []
+        for dq in (self.dqa, self.dqb, self.dqg):
+            lam = np.diag(dq) / dg
+            drs.append(dq * np.outer(d, d) - 0.5 * (lam[:, None] * rmat + rmat * lam[None, :]))
+        g = np.array([0.5 * float(np.sum(m * dr)) for dr in drs])
+        prods = [rinv @ dr for dr in drs]
+        A = np.array([[0.5 * float(np.sum(pi * pj.T)) for pj in prods] for pi in prods])
+        tr = np.array([float(np.trace(pi)) for pi in prods])
+        info = (nu + k) / (nu + k + 2.0) * A - np.outer(tr, tr) / (2.0 * (nu + k + 2.0))
+        return g, info
+
+    def _update(self, z: np.ndarray) -> None:
+        a, b, g = self.theta
+        z = np.asarray(z, dtype=float)
+        if self.n_seen == 0:
+            self.q = np.eye(self.k)  # as the engine: no earlier row
+        else:
+            zz = np.outer(self.prev_z, self.prev_z)
+            pn = neg_part(self.prev_z)
+            nn = np.outer(pn, pn)
+            q_prev = self.q
+            q = (1.0 - a - b) * self.qbar - g * self.nmat + a * zz + g * nn + b * q_prev
+            if not (np.all(np.diag(q) > 0.0) and np.linalg.slogdet(q)[0] > 0.0):
+                # a replayed row's running Qbar and N can leave the intercept
+                # indefinite for a few rows; fall back to the symmetric form
+                # and count it (reported; zero after the start in every case)
+                q = (1.0 - a - b) * self.qbar + a * zz + b * q_prev
+                self.n_repaired += 1
+            self.q = q
+            self.dqa = zz - self.qbar + b * self.dqa
+            self.dqb = q_prev - self.qbar + b * self.dqb
+            self.dqg = nn - self.nmat + b * self.dqg
+        dg = np.diag(self.q)
+        d = 1.0 / np.sqrt(dg)
+        rmat = self.q * np.outer(d, d)
+        self.pred.append(rmat[np.triu_indices(self.k, 1)])
+        gs, info = self._score(z, rmat, d, dg)
+        self.last_g, self.last_info = gs, info
+        self.n_seen += 1
+        if self.n_seen <= self.warm:
+            self.H += (info - self.H) / self.n_seen
+        else:
+            self.n_steps += 1
+            gamma = 1.0 / (self.n_steps + self.t0)
+            self.H += gamma * (info - self.H)
+            proposal = self.theta + gamma * np.linalg.solve(self.H, gs)
+            self.last_delta = delta_of(self.qbar, self.nmat)
+            projected = project_adcc(proposal, self.last_delta)
+            self.n_projected += int(not np.allclose(projected, proposal, rtol=0.0, atol=1e-15))
+            self.theta = projected
+        self.qbar += (np.outer(z, z) - self.qbar) / self.n_seen
+        nz = neg_part(z)
+        self.nmat += (np.outer(nz, nz) - self.nmat) / self.n_seen
+        self.prev_z = z.copy()
+
+
+def adcc_distinct_floats(k: int) -> int:
+    """The estimator's state beyond the margins, in floats (the distinct
+    entries of each symmetric matrix): ``Qbar``, ``N``, ``Q`` and the three
+    sensitivities (6 matrices of ``k (k + 1) / 2``), the last ``z`` (``k``),
+    ``theta`` (3), the information (6), ``nu`` and the row count: ``3 k (k + 1)
+    + k + 11``."""
+    return 6 * (k * (k + 1) // 2) + k + 3 + 6 + 1 + 1
+
+
+MARGIN_STATE_BYTES = 128  # one targeted online GARCH(1,1) (study 485, dcc.py's docstring)
+ADCC_KS = (2, 3, 5, 10, 11, 20, 21, 50, 70, 71, 100, 101, 140)
+
+
+def adcc_bytes(k: int) -> dict:
+    """The group's state in bytes against ``k``: the correlation stage
+    (``8 (3 k (k + 1) + k + 11) = 24 k^2 + 32 k + 88``), the ``k`` margins
+    (128 B each), and the shared start's buffers, held until the start is fitted:
+    each margin's 500 rows of ``r``, its 500 in-sample variances (kept in this
+    implementation, not freed), and the stage's 500 rows of ``z``: ``12,000 k``
+    bytes. ``steady`` is the state after the start; ``peak`` includes the buffers."""
+    stage = 8 * adcc_distinct_floats(k)
+    steady = stage + MARGIN_STATE_BYTES * k
+    buffers = 8 * ADCC_START * 3 * k
+    return {"k": k, "stage": stage, "margins": MARGIN_STATE_BYTES * k, "steady": steady,
+            "buffers": buffers, "peak": steady + buffers}
+
+
+def adcc_caps() -> dict:
+    rows = []
+    for k in ADCC_KS:
+        b = adcc_bytes(k)
+        b["steady_verdict"] = cap_verdict(b["steady"])
+        b["peak_verdict"] = cap_verdict(b["peak"])
+        rows.append(b)
+    def first_k(key: str, limit: int) -> int:
+        k = 1
+        while adcc_bytes(k)[key] < limit:
+            k += 1
+        return k
+    return {
+        "rows": rows,
+        "limits": {
+            "steady_warn_k": first_k("steady", WARN_BYTES),
+            "steady_refuse_k": first_k("steady", CAP_BYTES),
+            "peak_warn_k": first_k("peak", WARN_BYTES),
+            "peak_refuse_k": first_k("peak", CAP_BYTES),
+        },
+    }
+
+
+def adcc_case(k: int, noise: str, seed: int, n: int = ADCC_ROWS) -> dict:
+    """One seed: simulate, the oracles (Gaussian and t), the online engine."""
+    nu_true = ADCC_NU if noise == "t5" else None
+    n0 = calibrate_n0(k, nu_true, OUT)
+    t_all = time.perf_counter()
+    r, z_true = simulate_adcc(n, seed, k, ADCC_TRUTH, ADCC_RHO_BAR, n0, nu_true)
+    out: dict = {"spec": f"adcc_k{k}_{noise}", "seed": seed, "k": k, "noise": noise, "n": n}
+    # --- the oracles: arch's margins, z from the in-sample volatility
+    t0 = time.perf_counter()
+    z_b = dcc.batch_margin_z(r)
+    qbar_b = z_b.T @ z_b / n
+    n_b = n_mean(z_b)
+    out["delta"] = delta_of(qbar_b, n_b)
+    fits = {lik: fit_adcc(z_b, qbar_b, n_b, lik) for lik in ("normal", "t")}
+    out["t_oracle_s"] = time.perf_counter() - t0
+    iu = np.triu_indices(k, 1)
+    # --- the engine: shared start, t second stage
+    t0 = time.perf_counter()
+    rem = dcc.REMEDIES["shared500core_t"]
+    mkw = {"target": "running", **rem["margins"]}
+    margin_est = [garch.run(r[:, i], **mkw) for i in range(k)]
+    s2 = np.column_stack([np.asarray(m.pred) for m in margin_est])
+    rows = np.flatnonzero(np.all(np.isfinite(s2), axis=1))
+    est = OnlineAdccT(k=k, **rem["stage2"])
+    zbuf = np.column_stack(
+        [r[: len(m.replay_sigma2), i] / np.sqrt(np.asarray(m.replay_sigma2)) for i, m in enumerate(margin_est)]
+    )
+    est.shared_start(zbuf)
+    for row in r[rows] / np.sqrt(s2[rows]):
+        est.update(row)
+    out["t_online_s"] = time.perf_counter() - t0
+    th_o = est.theta
+    pred = np.full((n, len(iu[0])), np.nan)
+    pred[rows] = np.asarray(est.pred)
+    tail = slice(n // 2, n)
+    out.update(
+        silent_rows=int(n - rows.size),
+        first_dcc_row=int(rows[0]),
+        online_steps_projected=int(est.n_projected),
+        online_q_repaired=int(est.n_repaired),
+        online_delta_last=float(est.last_delta),
+        online_in_region=bool(th_o[0] + th_o[1] + est.last_delta * th_o[2] < 1.0),
+        nu_online_start=float(est.nu),
+        start_fit_stop=est.batch_fit.stop,
+        start_fit_iterations=est.batch_fit.iterations,
+        start_fit_evaluations=est.batch_fit.evaluations,
+        start_fit_theta=[float(x) for x in est.batch_fit.theta],
+        state_floats_distinct=adcc_distinct_floats(k),
+    )
+    for i, nm in enumerate(ADCC_NAMES):
+        out[f"{nm}_online"] = float(th_o[i])
+    for lik, tag in (("normal", "g"), ("t", "t")):
+        f = fits[lik]
+        th, se = f["theta"], f["se"]
+        rm_b = q_path_adcc(th[0], th[1], th[2], z_b, qbar_b, n_b)
+        rho_b = rm_b[:, iu[0], iu[1]]
+        gap = np.median(np.abs(pred[tail] - rho_b[tail]), axis=0)
+        # the online parameters on the oracle's z, in the oracle's likelihood
+        rm_o = q_path_adcc(th_o[0], th_o[1], th_o[2], z_b, qbar_b, n_b)
+        if lik == "normal":
+            ll_o = float(np.sum(dcc.loglik_rows_k(rm_o, z_b)))
+            hand = dcc.loglik_rows_k(rm_b, z_b)
+        else:
+            ll_o = float(np.sum(dcc.loglik_rows_t(rm_o, z_b, float(th[3]))))
+            hand = dcc.loglik_rows_t(rm_b, z_b, float(th[3]))
+        t1 = time.perf_counter()
+        sp = scipy_likelihood_rows(rm_b, z_b, lik, float(th[3]) if lik == "t" else 0.0)
+        out[f"{tag}_scipy_check_s"] = time.perf_counter() - t1
+        out[f"{tag}_scipy_row_maxabs"] = float(np.max(np.abs(sp - hand)))
+        out[f"{tag}_scipy_total_diff"] = float(abs(np.sum(sp) - np.sum(hand)))
+        out[f"{tag}_batch_success"] = f["success"]
+        out[f"{tag}_batch_nit"] = f["nit"]
+        out[f"{tag}_batch_at_constraint"] = bool(th[0] + th[1] + f["delta"] * th[2] >= 1.0 - ADCC_EPS - 1e-6 or min(th[:3]) <= 1e-6)
+        out[f"{tag}_llf_batch"] = f["llf"]
+        out[f"{tag}_llf_diff_per_row"] = (f["llf"] - ll_o) / n
+        out[f"{tag}_rho_gap_worst_pair_median"] = float(gap.max())
+        for i, nm in enumerate(ADCC_NAMES):
+            out[f"{tag}_{nm}_batch"] = float(th[i])
+            out[f"{tag}_{nm}_se"] = float(se[i])
+            out[f"{tag}_{nm}_gap_se"] = float((th_o[i] - th[i]) / se[i])
+            out[f"{tag}_{nm}_gap_abs"] = float(th_o[i] - th[i])
+        if lik == "t":
+            out["t_nu_batch"] = float(th[3])
+            out["t_nu_se"] = float(se[3])
+    out["t_case_s"] = time.perf_counter() - t_all
+    return out
+
+
+def _adcc_case_args(a):  # noqa: ANN001, ANN202
+    return adcc_case(*a)
+
+
+def run_adcc_cases(path: str, cases: list[tuple], workers: int) -> list[dict]:
+    done = {(r["spec"], r["seed"]) for r in base._load(path)}
+    todo = [c for c in cases if (f"adcc_k{c[0]}_{c[1]}", c[2]) not in done]
+    if todo:
+        print(f"{path}: {len(done)} cached, {len(todo)} to run", flush=True)
+        # the calibration is cached by the first call, before the workers fork
+        for k, noise in sorted({(c[0], c[1]) for c in todo}):
+            calibrate_n0(k, ADCC_NU if noise == "t5" else None, OUT)
+        from multiprocessing import get_context
+
+        with get_context("fork").Pool(workers) as pool, open(path, "a") as fh:
+            for i, res in enumerate(pool.imap_unordered(_adcc_case_args, todo)):
+                fh.write(json.dumps(res) + "\n")
+                fh.flush()
+                if (i + 1) % 10 == 0:
+                    print(f"  {i + 1}/{len(todo)}", flush=True)
+    return base._load(path)
+
+
+def adcc_count(rows: list[dict], tag: str) -> dict:
+    """The criterion for one oracle (``tag`` ``g``: Gaussian, ``t``: Student-t):
+    seeds with ``a``, ``b`` and ``g`` all within 2 of the oracle's SEs, and
+    study 485 section 24.3's per-seed bounds (every parameter within 4 SE;
+    worst-pair correlation gap at most 0.03)."""
+    n = len(rows)
+    gaps = np.array([[abs(r[f"{tag}_{nm}_gap_se"]) for nm in ADCC_NAMES] for r in rows]) if n else np.zeros((0, 3))
+    within2 = int(np.sum(np.all(gaps <= 2.0, axis=1))) if n else 0
+    within4 = int(np.sum(np.all(gaps <= 4.0, axis=1))) if n else 0
+    rho = np.array([r[f"{tag}_rho_gap_worst_pair_median"] for r in rows]) if n else np.zeros(0)
+    wi = int(np.argmax(gaps.max(axis=1))) if n else 0
+    return {
+        "cases": n,
+        "within2": within2,
+        "within4": within4,
+        "rho_gap_le_003": int(np.sum(rho <= 0.03)) if n else 0,
+        "rho_gap_max": float(rho.max()) if n else math.nan,
+        "median_gap_se": {nm: float(np.median(gaps[:, i])) for i, nm in enumerate(ADCC_NAMES)} if n else {},
+        "max_gap_se": {nm: float(gaps[:, i].max()) for i, nm in enumerate(ADCC_NAMES)} if n else {},
+        "worst_seed": int(rows[wi]["seed"]) if n else None,
+        "worst_gap_se": float(gaps.max()) if n else math.nan,
+        "max_gap_abs": {nm: float(max(abs(r[f"{tag}_{nm}_gap_abs"]) for r in rows)) for nm in ADCC_NAMES} if n else {},
+        "median_se": {nm: float(np.median([r[f"{tag}_{nm}_se"] for r in rows])) for nm in ADCC_NAMES} if n else {},
+        "llf_gap_per_row_median": float(np.median([r[f"{tag}_llf_diff_per_row"] for r in rows])) if n else math.nan,
+        "llf_gap_per_row_max": float(max(r[f"{tag}_llf_diff_per_row"] for r in rows)) if n else math.nan,
+        "batch_success": int(sum(r[f"{tag}_batch_success"] for r in rows)),
+        "batch_at_constraint": int(sum(r[f"{tag}_batch_at_constraint"] for r in rows)),
+    }
+
+
+def adcc_checks() -> dict:
+    """Checks, on one series per setting: the reduction (``g = 0`` gives study
+    485's DCC path), the asymmetric term's definition, the analytic gradient of
+    the start's objective and the online score against central differences, the
+    out-of-sample property, and the hand-written likelihood against scipy.stats
+    (also reported per case)."""
+    out: dict = {}
+    k = 2
+    n0 = calibrate_n0(k, None, OUT)
+    r, z = simulate_adcc(3000, 493, k, ADCC_TRUTH, ADCC_RHO_BAR, n0, None)
+    qbar = z.T @ z / z.shape[0]
+    nmat = n_mean(z)
+    out["n0"] = n0.tolist()
+    out["n0_orthant_closed_form_offdiag"] = ADCC_RHO_BAR / 4.0 + math.sqrt(1.0 - ADCC_RHO_BAR**2) / (2.0 * math.pi)
+    out["delta_of_truth_process"] = delta_of(np.full((2, 2), 0.5) + 0.5 * np.eye(2), n0)
+    # (1) g = 0 reduces to study 485's DCC path
+    rm = q_path_adcc(0.05, 0.9, 0.0, z, qbar, nmat)
+    rd = dcc.r_path_k(0.05, 0.9, z, qbar)
+    out["g0_equals_dcc_max_abs"] = float(np.max(np.abs(rm - rd)))
+    # (2) the definition, row by row, against a direct loop
+    a, b, g = 0.04, 0.9, 0.03
+    q = qbar.copy()
+    worst = 0.0
+    rmat = q_path_adcc(a, b, g, z, qbar, nmat)
+    for t in range(1, 200):
+        zp = z[t - 1]
+        npv = zp * (zp < 0)
+        q = qbar - a * qbar - b * qbar - g * nmat + a * np.outer(zp, zp) + b * q + g * np.outer(npv, npv)
+        d = 1.0 / np.sqrt(np.diag(q))
+        worst = max(worst, float(np.max(np.abs(q * np.outer(d, d) - rmat[t]))))
+    out["definition_loop_vs_lfilter_max_abs"] = worst
+    # (3) the start objective's gradient against central differences of its value
+    zb = z[:300]
+    qb, nb = zb.T @ zb / 300, n_mean(zb)
+    obj = adcc_t_objective(zb, qb, nb)
+    th = np.array([0.04, 0.9, 0.03, 7.0])
+    _, g_an, _ = obj(th, True)
+    num = np.zeros(4)
+    for j in range(4):
+        h = 1e-6
+        tp, tm = th.copy(), th.copy()
+        tp[j] += h
+        tm[j] -= h
+        num[j] = (obj(tp, False)[0] - obj(tm, False)[0]) / (2 * h)
+    out["start_objective_gradient_rel_err"] = float(np.max(np.abs(g_an - num)) / np.max(np.abs(num)))
+    # (4) the online row score against central differences of the row log-likelihood
+    est = OnlineAdccT(k=k, warm=10**9, t0=10.0)
+    est.theta = np.array([0.04, 0.9, 0.03])
+    est.nu = 7.0
+    est.started = True
+    for x in z[:200]:
+        est._update(x)
+    # the t row log density at the engine's own Q path as a function of theta, replayed
+    def row_ll(theta: np.ndarray) -> float:
+        e = OnlineAdccT(k=k, warm=10**9, t0=10.0)
+        e.theta = np.array(theta, dtype=float)
+        e.nu = 7.0
+        e.started = True
+        for x in z[:200]:
+            e._update(x)
+        # the last row's rho and density
+        rm_last = np.eye(k)
+        rm_last[0, 1] = rm_last[1, 0] = e.pred[-1][0]
+        s = float(z[199] @ np.linalg.solve(rm_last, z[199]))
+        return float(
+            math.lgamma(0.5 * (7.0 + k)) - math.lgamma(3.5) - 0.5 * k * math.log(math.pi * 5.0)
+            - 0.5 * np.linalg.slogdet(rm_last)[1] - 0.5 * (7.0 + k) * math.log1p(s / 5.0)
+        )
+    # the engine's last-row score is for z[199] at the Q path that used z[:199]; compare its g
+    gnum = np.zeros(3)
+    base_th = np.array([0.04, 0.9, 0.03])
+    for j in range(3):
+        h = 1e-6
+        tp, tm = base_th.copy(), base_th.copy()
+        tp[j] += h
+        tm[j] -= h
+        gnum[j] = (row_ll(tp) - row_ll(tm)) / (2 * h)
+    out["online_score_rel_err"] = float(np.max(np.abs(est.last_g - gnum)) / np.max(np.abs(gnum)))
+    # (5) out of sample: change row 150, earlier emitted correlations are unchanged
+    e1, e2 = OnlineAdccT(k=k, warm=50, t0=50.0), OnlineAdccT(k=k, warm=50, t0=50.0)
+    for t in range(300):
+        e1.update(z[t])
+        e2.update(z[t] + (5.0 if t == 150 else 0.0))
+    out["out_of_sample_max_move_up_to_changed_row"] = float(
+        max(np.max(np.abs(e1.pred[t] - e2.pred[t])) for t in range(151))
+    )
+    # (6) the hand-written likelihood against scipy.stats
+    rm = q_path_adcc(0.04, 0.9, 0.03, z, qbar, nmat)
+    for lik in ("normal", "t"):
+        hand = dcc.loglik_rows_k(rm, z) if lik == "normal" else dcc.loglik_rows_t(rm, z, 5.0)
+        sp = scipy_likelihood_rows(rm[:1000], z[:1000], lik, 5.0)
+        out[f"scipy_{lik}_row_maxabs_1000_rows"] = float(np.max(np.abs(sp - hand[:1000])))
+    out["allocated_distinct_state_floats_k2_k3"] = [adcc_distinct_floats(2), adcc_distinct_floats(3)]
+    return out
+
+
+def adcc_part(k: int, args) -> dict:  # noqa: ANN001
+    seeds = SEEDS[: args.seeds]
+    path = os.path.join(args.out, f"adcc_k{k}.jsonl")
+    cases = [(k, noise, s) for noise in ("normal", "t5") for s in seeds]
+    rows = base._load(path) if args.no_run else run_adcc_cases(path, cases, args.workers)
+    res: dict = {"k": k, "seeds": [seeds[0], seeds[-1]], "n": ADCC_ROWS, "truth": list(ADCC_TRUTH)}
+    if k == 2:
+        res["checks"] = adcc_checks()
+    res["state_caps"] = adcc_caps()
+    for noise in ("normal", "t5"):
+        sub = sorted((r for r in rows if r["noise"] == noise), key=lambda r: r["seed"])
+        d: dict = {"vs_gaussian_oracle": adcc_count(sub, "g"), "vs_t_oracle": adcc_count(sub, "t")}
+        if sub:
+            d["scipy_row_maxabs"] = {
+                tg: float(max(r[f"{tg}_scipy_row_maxabs"] for r in sub)) for tg in ("g", "t")
+            }
+            d["scipy_total_diff_max"] = {
+                tg: float(max(r[f"{tg}_scipy_total_diff"] for r in sub)) for tg in ("g", "t")
+            }
+            d["silent_rows"] = sorted({r["silent_rows"] for r in sub})
+            d["online_steps_projected_seeds"] = int(sum(r["online_steps_projected"] > 0 for r in sub))
+            d["online_steps_projected_max"] = int(max(r["online_steps_projected"] for r in sub))
+            d["online_q_repaired_max"] = int(max(r["online_q_repaired"] for r in sub))
+            d["online_in_region"] = int(sum(r["online_in_region"] for r in sub))
+            d["start_fit_stops"] = {
+                s_: int(sum(r["start_fit_stop"] == s_ for r in sub)) for s_ in ("converged", "no ascent", "iteration cap")
+            }
+            d["nu_online_start_median"] = float(np.median([r["nu_online_start"] for r in sub]))
+            d["nu_online_start_range"] = [
+                float(min(r["nu_online_start"] for r in sub)),
+                float(max(r["nu_online_start"] for r in sub)),
+            ]
+            d["nu_oracle_median"] = float(np.median([r["t_nu_batch"] for r in sub]))
+            d["delta_median"] = float(np.median([r["delta"] for r in sub]))
+            d["t_online_median_s"] = float(np.median([r["t_online_s"] for r in sub]))
+            d["t_case_median_s"] = float(np.median([r["t_case_s"] for r in sub]))
+            d["batch_param_median"] = {
+                nm: float(np.median([r[f"g_{nm}_batch"] for r in sub])) for nm in ADCC_NAMES
+            }
+            d["online_param_median"] = {
+                nm: float(np.median([r[f"{nm}_online"] for r in sub])) for nm in ADCC_NAMES
+            }
+        res[noise] = d
+    have = {(r["spec"], r["seed"]) for r in rows}
+    res["complete"] = all((f"adcc_k{c[0]}_{c[1]}", c[2]) in have for c in cases)
+    return res
+
+
+def summarise_adcc(res: dict) -> None:
+    if "checks" in res:
+        for key, v in res["checks"].items():
+            print("check", key, v)
+    print("complete:", res["complete"], "k =", res["k"], "truth", res["truth"])
+    sc = res.get("state_caps")
+    if sc:
+        print("state caps:", sc["limits"])
+        for r in sc["rows"]:
+            print("  ", r)
+    for noise in ("normal", "t5"):
+        d = res[noise]
+        for orc in ("vs_gaussian_oracle", "vs_t_oracle"):
+            c = d[orc]
+            print(
+                f"{noise:6s} {orc:20s}: within2 {c['within2']}/{c['cases']}, within4 {c['within4']}, "
+                f"rho gap<=0.03 {c['rho_gap_le_003']} (max {c['rho_gap_max']:.4f}); worst {c['worst_gap_se']:.3g} SE "
+                f"(seed {c['worst_seed']}); max gap in SE {c['max_gap_se']}; max abs {c['max_gap_abs']}; "
+                f"median SE {c['median_se']}; llf gap/row median {c['llf_gap_per_row_median']:.2g} max "
+                f"{c['llf_gap_per_row_max']:.2g}; SLSQP ok {c['batch_success']}; at constraint {c['batch_at_constraint']}"
+            )
+        for key in ("scipy_row_maxabs", "scipy_total_diff_max", "silent_rows", "online_steps_projected_seeds",
+                    "online_steps_projected_max", "online_q_repaired_max", "online_in_region", "start_fit_stops",
+                    "nu_online_start_median", "nu_online_start_range", "nu_oracle_median", "delta_median",
+                    "t_online_median_s", "t_case_median_s", "batch_param_median", "online_param_median"):
+            print("   ", key, d.get(key))
+
+
 PARTS = {
     "part1": (lambda a: ets_part("part1", a), summarise_ets),
     "part2": (lambda a: ets_part("part2", a), summarise_ets),
+    "part3": (lambda a: adcc_part(2, a), summarise_adcc),
 }
 
 
