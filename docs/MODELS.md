@@ -2630,7 +2630,10 @@ a count of their own, and anything else is usable. A usable value enters
 the moments by Terriberry's update of the central sums `M2`, `M3` and `M4`,
 with `n` the usable values before it. Its value's counter adds one, and
 past `distinct_cap` distinct values the counters run as a Misra-Gries
-summary. Nothing decays, and a row's weight plays no part:
+summary. Nothing decays. A row of weight 0 reaches no count, moment,
+counter or pair, nor the clock's steps, as it counts in no clock of any
+model; a bank's `audit` takes no weight column, so every row it reads
+weighs 1 and counts:
 
 ```
 n' = n + 1      d = x − mean      e = d / n'      t = d·e·n

@@ -10,8 +10,8 @@ row counts in a fit. In a model that keeps running sums, a row of weight 2
 moves the fit as two rows of weight 1 at the same clock value do.
 
 **A weight of 0 is legal, and a negative weight is refused.** A row of
-weight 0 is predicted and moves the clock, but the model learns nothing
-from it
+weight 0 is predicted, but the model learns nothing from it and it moves no
+clock: the next row decays as if it were not there
 ([Hold a row back](hold-a-row-back.md)).
 
 ## Prerequisites

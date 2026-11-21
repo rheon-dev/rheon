@@ -382,8 +382,8 @@ def hmm(
     decay on the clock but grow by ``w`` per row, so the staying probability
     rises with the rows' density. A row reads ``Pi`` from the counts its own
     clock has decayed, so after a gap that takes them to nothing it reads the
-    prior's mean. A row of weight 0 moves the clock and learns nothing, as
-    in every model.
+    prior's mean. A row of weight 0 is predicted, learns nothing and moves
+    no clock, as in every model.
 
     **The transition prior.** The prior pulls harder than its count
     suggests. The counts are the filtered joint of consecutive states, read
@@ -502,8 +502,8 @@ def rcov(
     estimate rides in the row the close emits. It refuses ``half_life`` and
     ``lam``, since ``group_close`` ends each block and no decay applies.
     ``weight`` is taken only as 0 or 1, since a sum over returns has no
-    fractional row, and a zero-weight row advances the clock and enters no
-    ring (the recent returns the model keeps to form its lagged products).
+    fractional row, and a zero-weight row moves no clock and enters no ring
+    (the recent returns the model keeps to form its lagged products).
     Each switch that reads residuals is refused, as is
     ``emit_feature_health``. This model's own:
 

@@ -107,8 +107,12 @@ before it is scored, as the next row would (so under `label_clock` it is
 scored from the labels known at its clock, which the doubled-stream oracle
 in `label_clock.rs` holds), and it is held for nothing. The clock check
 (`Stream::check_clock`) and the label check skip it, and `coef` without a
-cadence sits on the chunk's last row of positive weight. A zero-weight row
-whose features are null is skipped, and counts in no clock either.
+cadence sits on the chunk's last row of positive weight. The readiness
+notices' waits neither start nor end on it, and under `label_clock` it is no
+`labels_missing` (it waits for no label). A zero-weight row whose features
+are null is skipped, and counts in no clock either. A state saved before the
+change continues under the new rule with no loader: rule 5's twenty-fifth
+exception, with its measurement (docs/records/STATE-CONTINUATION.md).
 
 Only the core changed besides: `hawkes` loses its own `carry` and `seen`
 (the stream does it now; the state is two fields shorter, `8 (k + D (1 + k)

@@ -24,7 +24,7 @@ def _state_bytes(d: int, u: int, window_events: int | None) -> int:
     its running sums, and a full window's rows with its sum, clock and
     weight."""
     k = d * u
-    sums = k + d * (1 + k) + d * (d + 1) // 2 + 3
+    sums = k + d * (1 + k) + d * (d + 1) // 2 + 2
     window = 0 if window_events is None else window_events * (2 + d + k) + k + 2
     return 8 * (sums + window)
 

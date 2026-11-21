@@ -2558,6 +2558,7 @@ mod pre_row_sigma;
 mod stack_line;
 mod state_cap;
 mod unmet_floor;
+mod weightless;
 use notified::span_name;
 pub use notified::{Notice, Notified};
 use pre_row_sigma::pre_row_sigma;
@@ -2565,6 +2566,7 @@ use state_cap::state_cap_notice;
 use unmet_floor::{
     Projection, inflation_notice, unmet_floor_notice, unsolved_notice, unstable_rate_notice,
 };
+use weightless::Weightless;
 
 impl Stream {
     pub fn new(spec: &Spec) -> Result<Self, String> {
@@ -3171,71 +3173,24 @@ impl Stream {
             // counts (docs/PLAN.md task 223 (b)).
             let accept = spec.model.reads_every_row() || accepts(features, weight, i);
             let c = clock.map(|c| c.at(i));
-            // A row of weight 0 counts in no clock (hard rule 9; the user,
-            // 2026-11-21: "the next row should decay as if they were not
-            // present"): it is scored as `predict` scores a row, from the
-            // last row that counted over its step read on a copy of the
-            // clock, and the stream's clock, its rows, the `coef` cadence
-            // and the fresh fold stay where they were. So the next row
-            // steps from the last row that counted -- one step on a row
-            // clock, one gap under `gap_cap`, one session rule -- and no
-            // model, window, diagnostic or held-row buffer sees it.
+            // A row of weight 0 counts in no clock (hard rule 9): it is
+            // planned on copies of the clock and left out of everything the
+            // schedule counts ([`Self::weightless_plan`]).
             if w == Some(0.0) {
-                let s = session.map(|s| s[i]);
-                let adv = clock_state.clone().advance_scoring(cfg, c, s);
-                let d_fresh = match restart_fold.as_ref() {
-                    Some(f) if fresh_steps => f.clone().advance_scoring(cfg, c, s).d_clock,
-                    _ => 0.0,
-                };
-                let zero = if adv.reset || (adv.session_changed && spec.closes_on_session()) {
-                    Weightless::Fresh
-                } else if adv.session_changed {
-                    Weightless::Blended
-                } else {
-                    Weightless::AsIs
-                };
-                // Processed, as every accepted row is: the count `settled`
-                // rounds by and `rows_processed` report it. A row of weight
-                // 0 whose features are not usable is skipped as well, and
-                // scored by nothing.
+                let (plan, place) = self.weightless_plan(
+                    spec,
+                    cfg,
+                    (&clock_state, restart_fold.as_ref().filter(|_| fresh_steps)),
+                    (c, session.map(|s| s[i])),
+                    (ri, i, fed, accept),
+                    keep_elapsed,
+                );
                 if accept {
                     rows_seen = rows_seen.saturating_add(1);
                 }
-                plans.push(RowPlan {
-                    ri,
-                    i,
-                    pending: usize::MAX,
-                    d_clock: adv.d_clock,
-                    d_fresh,
-                    elapsed_step: adv.d_clock,
-                    stamp: None,
-                    // Without a clock column, the place the next row that
-                    // counts takes: a row clock counts no such row.
-                    clock: c.or(Some(ClockValue::F64(fed as f64))),
-                    reset: false,
-                    blend: false,
-                    session_changed: false,
-                    backwards: false,
-                    capped: false,
-                    accept,
-                    want_coef: false,
-                    emit: true,
-                    drift_ri: ri,
-                    learn: false,
-                    buffered: false,
-                    parks: false,
-                    w: 0.0,
-                    zero,
-                });
-                // Its place on the elapsed clock, which an `embargo` reads to
-                // release the held rows whose wait it has seen out.
+                plans.push(plan);
                 if keep_elapsed {
-                    elapsed.push(
-                        clock_state
-                            .clone()
-                            .advance_stamped(cfg, &self.exact_caps, c, s, true)
-                            .elapsed_stamp,
-                    );
+                    elapsed.push(place);
                 }
                 continue;
             }
@@ -4326,27 +4281,9 @@ struct RowPlan {
     /// row's does.
     parks: bool,
     w: f64,
-    /// A row of weight 0 (hard rule 9, the user, 2026-11-21: "the next row
-    /// should decay as if they were not present"), and the state it is
-    /// scored by. Such a row is scored and never learned, and moves no
-    /// clock: pass 1 reads its step on a copy of the clock, as `predict`
-    /// does, and leaves the stream's own where it was, so the next row
-    /// steps from the last row that counted (docs/PLAN.md task 539).
+    /// A row of weight 0, and the state it is scored by: scored, never
+    /// learned, in no clock ([`Stream::weightless_plan`]; hard rule 9).
     zero: Weightless,
-}
-
-/// Whether a row weighs 0, and if so which state it is scored by: the state
-/// as it stands, a fresh stream's (a session change that starts one), or a
-/// copy blended toward the long run (`session_shrink`) -- the three classes
-/// `predict` scores a row by ([`Stream::predict_chunk`]). The models are
-/// never touched: a fresh or blended state is a copy for the one row.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Weightless {
-    /// A row of positive weight, or one only replayed or scored.
-    No,
-    AsIs,
-    Fresh,
-    Blended,
 }
 
 impl RowPlan {
@@ -4698,11 +4635,9 @@ fn run_instance(
         if !plan.accept {
             continue;
         }
-        // A row of weight 0 that `predict` would score by a fresh stream (a
-        // session change that starts one) or by a copy blended toward the
-        // long run is scored by such a copy here, and the instance's own
-        // model is put back after the row: the row learns nothing and moves
-        // nothing (hard rule 9).
+        // A row of weight 0 that `predict` would score by a fresh or a
+        // blended model is scored by such a copy, the instance's own put
+        // back after the row (hard rule 9).
         let kept_model = match plan.zero {
             Weightless::Fresh => Some(std::mem::replace(
                 inst.model.get_mut(),

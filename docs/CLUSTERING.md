@@ -156,8 +156,9 @@ bank already enforces (`docs/PLAN.md` §2–§3, `CLAUDE.md`):
 6. **`n_eff` means the same thing in every model** (rule 8): the accumulated
    weight before this row's update and before its own decay. `min_periods`
    gates the output on it.
-7. **A zero-weight row is legal** (rule 9), including as the first row: advance
-   the clock, learn nothing, still emit. Every division by an accumulated weight
+7. **A zero-weight row is legal** (rule 9), including as the first row: still
+   emit, learn nothing, move no clock (the stream steps the next row from
+   the last that counted, so the model never sees the row). Every division by an accumulated weight
    must be guarded.
 8. **A null feature** skips the row (`docs/PLAN.md` §3's null policy).
 9. **State is versioned msgpack**, loadable on macOS and Windows; `f64`

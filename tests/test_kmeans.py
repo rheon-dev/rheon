@@ -510,14 +510,15 @@ class TestDefinitions:
         """The standardized metric each row is read in, from numpy: ``1/v``
         with ``v`` the biased weighted variance of each feature over the
         rows learned before it (weight above 0), each at its weight decayed
-        on the clock, ``np.cov(aweights=, bias=True)``; 1 where ``v`` is 0
-        or there are fewer than two such rows."""
+        on the clock to the last of them, ``np.cov(aweights=, bias=True)``;
+        1 where ``v`` is 0 or there are fewer than two such rows."""
         out = np.ones(X.shape)
         for i in range(1, len(X)):
             idx = np.flatnonzero(w[:i] > 0.0)
             if idx.size < 2:
                 continue
-            aw = w[idx] * _decay(t[i - 1] - t[idx], half_life)
+            # Decayed to the last row that counted (hard rule 9).
+            aw = w[idx] * _decay(t[idx[-1]] - t[idx], half_life)
             v = np.diag(np.cov(X[idx].T, aweights=aw, bias=True))
             out[i] = np.where(v > 0.0, 1.0 / np.where(v > 0.0, v, 1.0), 1.0)
         return out
@@ -593,7 +594,10 @@ class TestDefinitions:
                 # The metric the state holds for the next row is numpy's.
                 np.testing.assert_allclose(state["mw"], metric[last + 1], rtol=1e-12)
             got = state["clusters"]
-            for g, (n, c, r2) in zip(got, summarise(last, done[-1]), strict=True):
+            # The state stands at the last row that counted: a row of weight 0
+            # moves no clock (hard rule 9).
+            at = max(j for j in range(last + 1) if w[j] > 0.0)
+            for g, (n, c, r2) in zip(got, summarise(at, done[-1]), strict=True):
                 assert math.isclose(g["n"], n, rel_tol=1e-9), (last, g["n"], n)
                 np.testing.assert_allclose(g["c"], c, rtol=1e-9, atol=1e-12)
                 assert math.isclose(g["r2"], r2, rel_tol=1e-9, abs_tol=1e-12), (last, g, r2)

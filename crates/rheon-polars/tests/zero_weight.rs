@@ -49,7 +49,7 @@ fn zero(i: usize) -> bool {
         || (100..104).contains(&i)
         || (259..262).contains(&i)
         || (63..67).contains(&i)
-        || (i % 40 == 0 && i > 0)
+        || (i.is_multiple_of(40) && i > 0)
         || i == 300
 }
 
@@ -640,6 +640,29 @@ fn streams() -> (DataFrame, DataFrame, Vec<f64>) {
     let mask = BooleanChunked::from_iter_values("m".into(), w.iter().map(|&v| v != 0.0));
     let without = df.filter(&mask).unwrap();
     (df, without, w)
+}
+
+/// Every kind a bank weights is here: a new kind fails until it joins.
+#[test]
+fn every_kind_but_the_two_that_take_no_weight_is_here() {
+    let mut have: Vec<String> = SPECS
+        .iter()
+        .map(|(name, model, rest, clocks)| {
+            spec_of(&spec_text(name, model, rest, clocks[0]))
+                .model
+                .kind_name()
+                .to_string()
+        })
+        .chain(["audit", "seqtest"].map(String::from))
+        .collect();
+    have.sort();
+    have.dedup();
+    let mut want: Vec<String> = rheon_polars::ModelKind::KINDS
+        .iter()
+        .map(|k| k.to_string())
+        .collect();
+    want.sort();
+    assert_eq!(have, want);
 }
 
 /// Every kind, every clock: the weighted rows' outputs and the final state

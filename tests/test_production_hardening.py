@@ -374,17 +374,19 @@ class TestScoringWithoutLearning:
         )
 
     def test_zero_weight_rows_score_and_freeze_the_fit_exactly(self):
-        """Mean-form accumulators decayed with nothing added are themselves, so
-        the coefficients do not move by one bit while scoring."""
+        """A row of weight 0 is scored and moves nothing (hard rule 9), so
+        the fit does not move by one bit while scoring: a bank that scored
+        60 such rows predicts a probe as the bank before them does, and the
+        rows carry no `coef`, being no row of its cadence."""
         fit = self._frame(100)
         bank = self._fitted(fit)
-        before = bank.fit_predict(fit.tail(1))["m"].struct.field("coef").to_list()[-1]
-
         scored = self._frame(60, seed=1, weight=0.0).with_columns(pl.col("t") + 100.0)
-        out = rp.ModelBank.load_bytes(bank.save_bytes()).fit_predict(scored)["m"].struct
-        after = out.field("coef").to_list()[-1]
-        assert after == before, "scoring moved the coefficients"
+        after = rp.ModelBank.load_bytes(bank.save_bytes())
+        out = after.fit_predict(scored)["m"].struct
         assert out.field("pred_y")[0] is not None, "scoring emitted nothing"
+        assert out.field("coef").null_count() == 60
+        probe = self._frame(5, seed=3).with_columns(pl.col("t") + 200.0)
+        assert after.predict(probe).equals(bank.predict(probe)), "scoring moved the fit"
 
     def _score_null_targets(self, **kw):
         """The coefficients before and after 60 rows whose target is null,
@@ -404,11 +406,12 @@ class TestScoringWithoutLearning:
         cross-moments alike, and mean-form accumulators aged with nothing
         added are themselves: the coefficients do not move by one bit, as
         with weight 0. What differs from weight 0 is `weight_sum`, which counts
-        every row and so keeps counting (docs/PLAN.md task 81)."""
+        every row and so keeps counting (docs/PLAN.md task 81), where a row of
+        weight 0 counts in no clock and leaves it where it was (task 539)."""
         before, after, weight_sum = self._score_null_targets()
         assert after == before, "a row without the target moved its fit"
-        # Weight 0 decays `weight_sum` toward nothing; here it holds at the steady
-        # state of a half-life of 20 rows, `1 / (1 - lam)`.
+        # Weight 0 moves no clock, so `weight_sum` stands where it was; here it
+        # holds at the steady state of a half-life of 20 rows, `1 / (1 - lam)`.
         steady = 1.0 / (1.0 - 0.5 ** (1.0 / 20.0))
         assert weight_sum[-1] == pytest.approx(steady, rel=1e-2), (
             "every row counts toward weight_sum"
@@ -423,20 +426,17 @@ class TestScoringWithoutLearning:
         before, after, _ = self._score_null_targets(target_gaps="pairwise")
         assert after != before, "if this ever stops drifting, the README can say so"
 
-    def test_a_long_scoring_tail_decays_n_eff_under_min_periods(self):
-        """The documented cost of scoring with weight 0: the clock still
-        advances, so `weight_sum` decays and eventually `min_weight` blanks the
-        output even though the fit behind it is unchanged."""
+    def test_a_long_scoring_tail_keeps_n_eff_and_its_predictions(self):
+        """Scoring with weight 0 moves no clock (hard rule 9), so `weight_sum`
+        does not decay and `min_weight` never blanks the output of a fit
+        that has not changed. It decayed, and the output went null, until
+        such a row counted in no clock (task 539)."""
         bank = self._fitted(self._frame(100))
         scored = self._frame(200, seed=2, weight=0.0).with_columns(pl.col("t") + 100.0)
         out = rp.ModelBank.load_bytes(bank.save_bytes()).fit_predict(scored)["m"].struct
         weight_sum = out.field("weight_sum").to_list()
-        assert weight_sum[0] > 3.0 > weight_sum[-1], (weight_sum[0], weight_sum[-1])
-        preds = out.field("pred_y").to_list()
-        assert preds[0] is not None and preds[-1] is None
-        # ... and it is only the gate: the fit is still there underneath.
-        coefs = [c for c in out.field("coef").to_list() if c is not None]
-        assert coefs[0] == coefs[-1]
+        assert weight_sum[0] > 3.0 and weight_sum[-1] == weight_sum[0]
+        assert out.field("pred_y").null_count() == 0
 
 
 class TestSerializationRobustness:

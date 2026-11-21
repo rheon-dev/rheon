@@ -74,8 +74,8 @@ bank.save("bank.state")
 - **`weight_sum` is accumulated weight**, before the model learns this row and before its own decay —
   the same definition in every model. `min_weight` is in those units, so it is a
   weight, not a number of rows.
-- **A zero-weight row is legal** and means "advance the clock, learn nothing", including
-  as the first row of a stream.
+- **A zero-weight row is legal** and means "predict it, learn nothing, move no clock": the
+  next row decays as if it were not there, including after a first row of weight 0.
 - **Make a target from its row's columns as a column** before the bank,
   `lf.with_columns(ret=(pl.col("p") / pl.col("mid")).log())`, and name it in
   `targets`: a log ratio sits about zero, where `hit_rate` takes its sign. `rheon.target`

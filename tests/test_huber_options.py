@@ -400,9 +400,15 @@ class TestDelayedLabels:
     delayed run's ``coef`` at row ``r`` is the undelayed run's at ``r - E``,
     to the bit, on a stream whose cut binds and whose delayed predictions
     differ from the undelayed ones; were a row weighed by the prediction
-    made where it was scored, the two fits would part."""
+    made where it was scored, the two fits would part. The delay counts the
+    rows of the row clock, in which a row of weight 0 is none (hard rule
+    9): ``behind`` maps a row to the row ``E`` such rows before it."""
 
     E = 25
+
+    def behind(self, df: pl.DataFrame) -> dict[int, int]:
+        counted = [i for i, w in enumerate(df["w"].to_list()) if w != 0.0]
+        return {r: counted[k - self.E] for k, r in enumerate(counted) if k >= self.E}
 
     def _runs(self):
         df = _frame().drop("t")
@@ -418,9 +424,9 @@ class TestDelayedLabels:
         a = plain["m"].struct.field("coef").to_list()
         b = held["m"].struct.field("coef").to_list()
         compared = 0
-        for r in range(self.E, df.height):
-            if b[r] is not None and a[r - self.E] is not None:
-                assert b[r] == a[r - self.E], r
+        for r, s in self.behind(df).items():
+            if b[r] is not None and a[s] is not None:
+                assert b[r] == a[s], r
                 compared += 1
         assert compared > 1000
         # The two runs score from different fits, so a weight read from the
@@ -440,8 +446,8 @@ class TestDelayedLabels:
         x = df.select(FEATURES).to_numpy()
         q = _field(held, "pred_y0__all")
         compared = 0
-        for r in range(self.E, df.height):
-            c = coef[r - self.E]
+        for r, s in self.behind(df).items():
+            c = coef[s]
             if c is None or not np.isfinite(q[r]):
                 continue
             # Slots are target-major then set: y0's "all" set is the second.

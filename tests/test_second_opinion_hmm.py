@@ -839,8 +839,14 @@ def em_errors(seed: int, cov: str, k: int, half_life: float) -> dict[str, float]
     ones, and the largest count."""
     s = hmm_stream(seed, k)
     out, learned = model_run(s, half_life, cov)
-    want = rule_from_scratch(s, half_life, cov)
-    bound = rule_error_bound(s, half_life, cov, want)
+    # A row of weight 0 counts in no clock (hard rule 9): the rule, whose
+    # clock steps a row at a time, is rebuilt on the rows that count, and
+    # the model's rows of positive weight are held to it.
+    kept = s["w"] > 0.0
+    counted = {**s, "x": s["x"][kept], "w": s["w"][kept]}
+    out = out.filter(pl.Series(kept))
+    want = rule_from_scratch(counted, half_life, cov)
+    bound = rule_error_bound(counted, half_life, cov, want)
 
     def over(error: np.ndarray, key: str) -> float:
         return float((error / np.maximum(bound[key], U)).max())
