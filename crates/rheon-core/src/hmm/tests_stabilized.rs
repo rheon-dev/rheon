@@ -347,12 +347,11 @@ fn continue_shadow(exact: &mut [Recursion], aged: &Hmm, m: &Hmm, w: f64, deltas:
 /// 2,000 rows, arm64): eagerly 1.8e3 units of rounding, densities within
 /// 1e-12 of either; lazily up to 0.45 nats in a near density at a half-life
 /// of 20 rows (0.23 at 500) and 1.2e-2 in a posterior.
-#[test]
-fn the_factor_form_holds_the_exact_recursion() {
-    for d in [13, 20] {
+fn hold_the_exact_recursion(widths: &[usize], n: usize) {
+    for &d in widths {
         for decay in [Decay::Halflife(20.0), Decay::Halflife(500.0)] {
             for eager in [true, false] {
-                let t = track(d, decay, 2000, 3, eager);
+                let t = track(d, decay, n, 3, eager);
                 println!(
                     "{d} {decay:?} eager {eager}: off {:.0}, logf {:.1e}; from stabilized \
                      forgetting: logf {:.1e}, post {:.1e}, score {:.1e}",
@@ -374,6 +373,19 @@ fn the_factor_form_holds_the_exact_recursion() {
             }
         }
     }
+}
+
+#[test]
+fn the_factor_form_holds_the_exact_recursion() {
+    hold_the_exact_recursion(&[13], 600);
+}
+
+/// [`the_factor_form_holds_the_exact_recursion`] over the grid its bounds
+/// were measured on: 13 and 20 features, 2,000 rows a run.
+#[test]
+#[ignore = "extended: the stabilized factor form against the 512-bit recursion over its grid"]
+fn the_factor_form_holds_the_exact_recursion_over_the_grid() {
+    hold_the_exact_recursion(&[13, 20], 2000);
 }
 
 /// Rows of [`blobs`], a zero-weight one every 13th and a gap of 30 clock
