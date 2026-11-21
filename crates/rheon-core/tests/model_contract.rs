@@ -131,6 +131,33 @@ fn probe_with<M: OnlineModel + Clone>(
     let before_clear = rmp_serde::to_vec(&m.state()).unwrap();
     m.clear_lags();
     let lags_are_a_no_op = rmp_serde::to_vec(&m.state()).unwrap() == before_clear;
+    // Rule 8, here rather than only in `check`, so that every model probed
+    // is held to it, the models that assert individually and a model added
+    // without its own assertions alike (review S6: `pa` reading the weight
+    // after its own decay passed once its hand-written probe was gone).
+    // `n_eff` is the weight before the row's update and its decay: 0 before
+    // the first row, 1 after one row of weight 1, `lam + 1` after two, and
+    // a ten-half-life gap decays it by 2^-10 on the row after the gap. A
+    // model that does not decay ([`NO_DECAY`]) sums the weights instead.
+    if NO_DECAY.contains(&kind) {
+        assert_eq!(n_eff[..3], [0.0, 1.0, 2.0], "{kind}: the weights summed");
+        assert_eq!(after_gap, before_gap + 1.0, "{kind}: no decay over a gap");
+    } else {
+        assert_eq!(n_eff[0], 0.0, "{kind}: nothing seen before the first row");
+        assert_eq!(n_eff[1], 1.0, "{kind}: one row of weight 1");
+        let two = 0.5f64.powf(1.0 / HALFLIFE) + 1.0;
+        assert!(
+            (n_eff[2] - two).abs() < 1e-12,
+            "{kind}: n_eff after two rows is {}, not the weight before the row's decay {two}",
+            n_eff[2]
+        );
+        let want = before_gap * 0.5f64.powi(10) + 1.0;
+        assert!(
+            (after_gap - want).abs() < 1e-9,
+            "{kind}: gap decay got {after_gap} want {want}"
+        );
+    }
+
     // Asserted here rather than in `check`, so that the models with outputs
     // of their own -- which assert individually instead of calling it -- are
     // held to it too.
@@ -192,6 +219,14 @@ const COUNTS_UNUSABLE: &[&str] = &["audit"];
 /// test writes its statistic where the span closes -- so the predict-parity
 /// helper cannot ask for 300 rows with every slot ready.
 const SPARSE_OUTPUT: &[&str] = &["corrchange"];
+
+/// The models whose `n_eff` is every row's weight summed, with no decay:
+/// `audit`, a record of the rows; `bocpd`, whose recursion over run lengths
+/// does not decay; `rcov`, a block estimator; `seqtest`, an e-process that
+/// would not be one if it forgot. `probe_with` holds them to the sum where
+/// it holds every other model to rule 8's decayed recursion, so a model
+/// added here is a choice made in this file, not a default.
+const NO_DECAY: &[&str] = &["audit", "bocpd", "rcov", "seqtest"];
 
 /// Slots null by design except on a flag, which the ready count leaves out:
 /// `corrchange`'s `since_change` dates a change only where one is flagged
@@ -1991,7 +2026,10 @@ fn every_model_state_variant_is_probed_here() {
         variants,
         "a ModelState variant has no contract probe"
     );
-    // Each model's probe is in this file, found by its kind.
+    // Each model's probes are in this file, found by its kind: the step
+    // against predict, and the contract probe, which runs `probe_with` and
+    // so rule 8's recursion (review S6: the roll call required only the
+    // first, so a model added without the second was never held to rule 8).
     let src = include_str!("model_contract.rs");
     for (variant, kind) in PROBED {
         if *kind == "ew_cov_accumulator" {
@@ -2002,7 +2040,31 @@ fn every_model_state_variant_is_probed_here() {
             src.contains(&probe),
             "{variant}: add `{probe}` to this file"
         );
+        let contract = contract_probe_of(kind);
+        let body = fn_body(src, &contract)
+            .unwrap_or_else(|| panic!("{variant}: add `#[test] {contract}` to this file"));
+        assert!(
+            body.contains("probe_with("),
+            "{variant}: `{contract}` must run `probe_with`, which holds rule 8"
+        );
     }
+}
+
+/// The contract probe of a kind: `fn <kind>()`, `ew_cov`'s named apart from
+/// the accumulator's.
+fn contract_probe_of(kind: &str) -> String {
+    match kind {
+        "ew_cov" => "fn ew_cov_model()".to_owned(),
+        _ => format!("fn {kind}()"),
+    }
+}
+
+/// The body of the test function `signature` in `src`, from its line to the
+/// closing brace at the start of a line; `None` unless it is a `#[test]`.
+fn fn_body<'a>(src: &'a str, signature: &str) -> Option<&'a str> {
+    let at = src.find(&format!("#[test]\n{signature} {{"))?;
+    let end = src[at..].find("\n}\n")?;
+    Some(&src[at..at + end])
 }
 
 #[test]
