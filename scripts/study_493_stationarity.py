@@ -29,6 +29,16 @@ so a rerun resumes or only prints):
         144 paths takes about 19 s, a 1,000,000-row batch of 32 about 80 s;
         run it under nohup)
 
+    .venv-493/bin/python scripts/study_493_stationarity.py part3
+        the same at 3 series (fixed variant first): stationarity_k3.jsonl,
+        stationarity_long_k3.jsonl (about 33 s and 118 s a batch)
+
+    .venv-493/bin/python scripts/study_493_stationarity.py drift
+        why the running targets drift: the map m -> E[R12] at fixed targets
+        (Qbar12 = m, N12 = the normal orthant moment h(m)), also at g = 0, and
+        the running variant's Qbar12 at the truth against the ODE
+        dm/dtau = E[R12](m) - m: stationarity_drift.json
+
 Environment: the venv ``.venv-493`` (numpy, scipy), excluded through
 ``.git/info/exclude``.
 """
@@ -348,8 +358,8 @@ def sim_part(k: int, force: bool) -> list[dict]:
             for line in fh:
                 d = json.loads(line)
                 done[(d["noise"], d["variant"])] = d
-    for noise in NOISES:
-        for variant in ("fixed", "running"):
+    for variant in ("fixed", "running"):
+        for noise in NOISES:
             if (noise, variant) in done:
                 continue
             t0 = time.time()
@@ -491,6 +501,137 @@ def print_sim(batches: list[dict]) -> None:
             )
 
 
+# --------------------------------------------------------------------------
+# part 3 (b): why the running targets drift (2 series, the truth point)
+
+DRIFT_M = (0.5, 0.4, 0.3, 0.2, 0.1, 0.0, -0.1, -0.2)
+DRIFT_BURN = 2_000
+
+
+def drift_paths(
+    noise: str, qb12: np.ndarray, n12: np.ndarray, running: bool, rows: int, abg: tuple = TRUTH
+) -> dict:
+    """2 series at the truth (a, b, g), one path per (target, seed), vectorized.
+    ``qb12``, ``n12``: the targets' off-diagonals per target (diagonals 1 and
+    1/2). ``running``: the targets are running means of z z' and n n' from
+    500 pseudo-rows at the given values. Returns per path the time averages
+    after DRIFT_BURN rows of q12, R12 and z1 z2, and (running) Qbar12 at the
+    checkpoints."""
+    a, b, g = abg
+    S = len(SIM_SEEDS)
+    M = len(qb12)
+    rngs = [np.random.default_rng(sd + 7) for sd in SIM_SEEDS]
+    qb = np.zeros((M, S, 2, 2))
+    nn_t = np.zeros((M, S, 2, 2))
+    qb[..., 0, 0] = qb[..., 1, 1] = 1.0
+    qb[..., 0, 1] = qb[..., 1, 0] = qb12[:, None]
+    nn_t[..., 0, 0] = nn_t[..., 1, 1] = 0.5
+    nn_t[..., 0, 1] = nn_t[..., 1, 0] = n12[:, None]
+    q = qb.copy()
+    acc = {"q12": np.zeros((M, S)), "r12": np.zeros((M, S)), "zz12": np.zeros((M, S))}
+    traj: dict = {}
+    for t0 in range(0, rows, 10_000):
+        m = min(10_000, rows - t0)
+        e = np.stack([r.standard_normal((m, 2)) for r in rngs], axis=1)
+        if noise == "t5":
+            w = np.stack([np.sqrt((NU - 2.0) / r.chisquare(NU, m)) for r in rngs], axis=1)
+            e = e * w[:, :, None]
+        for j in range(m):
+            t = t0 + j
+            r12 = q[..., 0, 1] / np.sqrt(q[..., 0, 0] * q[..., 1, 1])
+            z1 = np.broadcast_to(e[j, :, 0], (M, S))
+            z2 = r12 * z1 + np.sqrt(np.maximum(1.0 - r12 * r12, 0.0)) * e[j, :, 1]
+            z = np.stack([z1, z2], axis=-1)
+            nv = np.minimum(z, 0.0)
+            zz = z[..., :, None] * z[..., None, :]
+            nn = nv[..., :, None] * nv[..., None, :]
+            if t >= DRIFT_BURN:
+                acc["q12"] += q[..., 0, 1]
+                acc["r12"] += r12
+                acc["zz12"] += zz[..., 0, 1]
+            c = (1.0 - a - b) * qb - g * nn_t
+            if running:
+                cnt = RUN_PRIOR + t + 1
+                qb += (zz - qb) / cnt
+                nn_t += (nn - nn_t) / cnt
+            q = c + a * zz + g * nn + b * q
+            if running and (t + 1) in CHECKPOINTS:
+                traj[str(t + 1)] = qb[..., 0, 1].tolist()
+    n_avg = rows - DRIFT_BURN
+    return {key: (v / n_avg).tolist() for key, v in acc.items()} | {"qbar12_traj": traj}
+
+
+def drift_part(force: bool) -> dict:
+    """(i) The targeting map: fixed targets Qbar12 = m, N12 = h(m) (the normal
+    orthant moment; diagonals 1 and 1/2), the stationary E[R12] (the time
+    average of R12) as phi(m). A running Qbar12 is a stochastic approximation
+    of E[z1 z2] = E[R12] with gain 1/(500 + t), so it follows
+    dm/dtau = phi(m) - m, tau = log((500 + t)/500), and moves down wherever
+    phi(m) < m. (ii) The running variant at the truth, Qbar12 at the
+    checkpoints, against that ODE integrated from 0.5 with phi interpolated."""
+    path = os.path.join(OUT, "stationarity_drift.json")
+    if os.path.exists(path) and not force:
+        return load_json(path)
+    ms = np.array(DRIFT_M)
+    hs = np.array([orthant_closed(m) for m in ms])
+    res: dict = {"m": ms.tolist(), "h": hs.tolist()}
+    for noise in NOISES:
+        t0 = time.time()
+        fixed = drift_paths(noise, ms, hs, False, SIM_ROWS)
+        run = drift_paths(
+            noise, np.array([RHO_BAR]), np.array([n0_of(2, noise)[0, 1]]), True, SIM_ROWS
+        )
+        phi = np.median(np.array(fixed["r12"]), axis=1)
+        order = np.argsort(ms)
+        m, tau, pred = RHO_BAR, 0.0, {}
+        for t in CHECKPOINTS:
+            if t > SIM_ROWS:
+                break
+            tau_c = math.log((RUN_PRIOR + t) / RUN_PRIOR)
+            h = (tau_c - tau) / 4_000
+            for _ in range(4_000):
+                m += (float(np.interp(m, ms[order], phi[order])) - m) * h
+            tau = tau_c
+            pred[str(t)] = m
+        res[noise] = {
+            "fixed": fixed,
+            "running": run,
+            "phi": phi.tolist(),
+            "ode": pred,
+            "seconds": time.time() - t0,
+        }
+        if noise == "normal":
+            # the symmetric DCC (g = 0) at the same a, b: phi(0) = 0 by the
+            # symmetry z2 -> -z2, so any offset at m = 0 comes from g
+            sym = drift_paths(noise, ms, hs, False, SIM_ROWS, abg=(TRUTH[0], TRUTH[1], 0.0))
+            res[noise]["phi_g0"] = np.median(np.array(sym["r12"]), axis=1).tolist()
+        print(f"drift {noise}: {time.time() - t0:.1f} s", flush=True)
+    with open(path, "w") as fh:
+        json.dump(res, fh, indent=1)
+    return res
+
+
+def print_drift(res: dict) -> None:
+    for noise in NOISES:
+        d = res[noise]
+        print(f"\n== drift {noise}: m, phi(m) = E R12, phi - m, E q12, E z1z2 (medians over seeds)")
+        for i, m in enumerate(res["m"]):
+            q12 = np.median(d["fixed"]["q12"][i])
+            zz = np.median(d["fixed"]["zz12"][i])
+            g0 = f"  g=0: phi-m {d['phi_g0'][i] - m:+.4f}" if "phi_g0" in d else ""
+            print(
+                f"  m {m:+.2f}: phi {d['phi'][i]:+.4f}  phi-m {d['phi'][i] - m:+.4f}{g0}  "
+                f"q12 {q12:+.4f}  zz {zz:+.4f}"
+            )
+        traj = d["running"]["qbar12_traj"]
+        for t in sorted(traj, key=int):
+            v = np.array(traj[t])[0]
+            print(
+                f"  running Qbar12 at {int(t):>6}: median {np.median(v):+.4f} "
+                f"[{v.min():+.4f}, {v.max():+.4f}]  ODE {d['ode'].get(t, float('nan')):+.4f}"
+            )
+
+
 def print_lam(batches: list[dict]) -> None:
     """The smallest eigenvalue of Q over each path (median over seeds), and
     the median over seeds of the diagonal's variance against its exact value."""
@@ -512,7 +653,7 @@ def print_lam(batches: list[dict]) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("part", choices=("part1", "part2", "part3"))
+    ap.add_argument("part", choices=("part1", "part2", "part3", "drift"))
     ap.add_argument("--force", action="store_true")
     args = ap.parse_args()
     if args.part == "part1":
@@ -522,6 +663,13 @@ def main() -> None:
         print_sim(batches)
         print_lam(batches)
         print_long(long_part(2, args.force))
+    elif args.part == "part3":
+        batches = sim_part(3, args.force)
+        print_sim(batches)
+        print_lam(batches)
+        print_long(long_part(3, args.force))
+    elif args.part == "drift":
+        print_drift(drift_part(args.force))
 
 
 if __name__ == "__main__":
