@@ -1041,3 +1041,108 @@ is the cause; if they fail, go to part 2. The step headlined is part 5's PACF st
   not isolated from a persistence effect. (a) and (b) share the betas and differ in `alpha2` and persistence only.
 
 **Part 2 is needed.** Not done here.
+
+# Study 492, part 7: GARCH(2,2) at matched persistence, the worst seed, and 100,000 rows (B12, part 2 of 2)
+
+Python and numpy only (`scripts/study_492_b12b.py`: `run`, `summary`, `freeze`, `freeze-summary`, `diagnose`; it reuses
+`study_492_b11.compare_g22` unchanged); arch 9.0.0 the oracle; no Rust, no source change. Seeds 0 to 49 as in part 6, so the
+reference row below reproduces part 6's (c) exactly (PACF 30 of 50, targeted 25).
+
+**Status: complete.** All four items ran; nothing is missing. The 100,000-row run used all 50 seeds.
+
+## 1. Matched persistence: only the lag split changes
+
+Every truth has `alpha1 = alpha2 = 0.05`, `beta1 + beta2 = 0.87` (persistence 0.97), `omega = 0.03` (unconditional
+variance 1). The brief's "beta1 = beta2 = 0.235" does not keep the beta sum (it is 0.47), so the equal-lag truth uses
+0.435 each. `P1 = a1 + b1`, `P2 = a2 + b2`; `1 - P1 z - P2 z^2` has roots outside the unit circle when
+`P1 + P2 < 1`, `P2 - P1 < 1`: all four have `P1 + P2 = 0.97` and `P2 < P1`, so all are stationary.
+
+| truth (beta1, beta2) | ratio b2/b1 | arch corr(b1, b2) median (weakest) | arch SE b1 / b2, median | PACF within 2 SE: all / no omega | targeted: all / no omega | PACF path gap max over last 1000: median / worst |
+|---|---|---|---|---|---|---|
+| (0.45, 0.42) reference | 0.93 | -0.998 (-0.943) | 0.213 / 0.196 | **30** / 33 | 25 / 31 | 8.9% / 115% |
+| (0.435, 0.435) equal | 1.00 | -0.998 (-0.943) | 0.203 / 0.187 | **33** / 36 | 23 / 28 | 8.4% / 123% |
+| (0.60, 0.27) separated | 0.45 | -0.999 (-0.985) | 0.224 / 0.203 | **31** / 35 | 28 / 31 | 9.0% / 178% |
+| (0.75, 0.12) strongly separated | 0.16 | -0.999 (-0.990) | 0.244 / 0.220 | **30** / 32 | 27 / 33 | 11.6% / 139% |
+
+(PACF persistence within 2 SE: 39, 41, 40, 40 of 50. Arch converged on all 200 fits.)
+
+**Separation is not the cause.** From zero separation to a lag ratio of 0.16 the PACF count is 30 to 33 of 50 (binomial SE
+about 3.5, so these are one number), arch's correlation of the two beta estimates is -0.998 to -0.999 at every level, and its
+SEs for both betas stay at 0.19 to 0.24. If separation mattered, the separated truths would pass and the equal one fail;
+the equal one scores 33 and the strongest separation 30. None approaches the 45 of 50 that a pass would need.
+
+## 2. The worst seed: where does the online step leave arch?
+
+Worst by variance-path gap in the PACF step: seed 12 (115%). Worst by parameter gap: seed 47 (11.9 SE on b1, 11.9 on b2).
+Both were run (`study_492_b12b.py diagnose m_ref SEED`); the start is frozen by replacing the 500-row batch start's
+parameters with arch's full-sample fit and replaying the 500 rows under them.
+
+**Seed 12** (arch full-sample `[0.035, 0.052, 0.075, 0.221, 0.619]`, SE `[.006, .010, .011, .116, .106]`):
+
+| PACF step | rows | theta | gap in SE | projected rows | path max rel (last <= 1000) |
+|---|---|---|---|---|---|
+| 500-row batch start | 500 | `[0.020, 0, 0.027, 0.953, 0]` | -2.6, -5.2, -4.4, 6.3, -5.9 | 0 | |
+| | 2000 | `[0.014, 0.025, 0.010, 0.672, 0.279]` | -3.6, -2.7, -6.0, 3.9, -3.2 | 210 | 64% |
+| | 10000 | `[0.023, 0.001, 0.041, 0.000, 0.937]` | -2.0, -5.1, -3.1, -1.9, 3.0 | 783 | 115% |
+| start frozen to arch | 2000 | `[0.030, 0.037, 0.031, 0.800, 0.101]` | -0.9, -1.6, -4.0, 5.0, -4.9 | 40 | 34% |
+| | 10000 | `[0.039, 0.055, 0.056, 0.147, 0.707]` | 0.7, 0.3, -1.7, -0.6, 0.8 | 86 | 14% |
+
+The 500-row start is a boundary fit (`alpha1 = 0`, `beta2 = 0`, `beta1 = 0.95`; arch's own fit on those 500 rows is the same
+point), the iterate sits on `alpha1 ~ 0` from there to 10,000 rows, and the log-likelihood gap is -163 at 10,000 rows. With the
+start frozen to arch the same step ends within 2 SE on all five and at a 14% path gap. For seed 12 the gap is in the
+**start**. (The Euclidean-coordinate targeted step is destroyed by the same frozen start: it ends at `(0, 0, 0, 1, 0)` after
+810 projected rows, the persistence margin and nonnegativity clips: its gap is in the **projection**.)
+
+**Seed 47** (arch full-sample `[0.041, 0.071, 0.073, 0.000, 0.818]`, SE `[.006, .006, .005, .039, .036]`): arch's own fit
+has `beta1` on its zero boundary, so its SE for `beta1` is the SE of a constrained fit and the "12 SE" is measured in that.
+The PACF step ends at `[0.031, 0.081, 0.031, 0.467, 0.393]`, with one projected row, a path gap of 4.4% and a log-likelihood
+**0.76 below arch's** (-13911.38 against -13910.62): the online fit is at the likelihood optimum along the ridge, only at a
+different point on it (`beta1 + beta2` 0.86 against 0.82). Freezing the start to arch's boundary solution makes it **worse**
+(2,967 projected rows, ends at `[0.001, 0.004, 0.024, 0.006, 0.966]`, ll gap -219): the step cannot hold a boundary point, and
+each clip throws away the move. For seed 47 the gap is in arch's boundary SE and, when started on it, in the **projection**;
+it is not in the start and not in the step.
+
+**Across all 50 seeds** (`freeze`, PACF step, start frozen to arch's full-sample fit): within 2 SE on **34** of 50 (35 without
+omega), against 30 unfrozen; path gap max over last 1000, median 10.1% (8.9% unfrozen); ll gap median -1.70 (-1.44), worst
+-286 (-242); projected rows median 73. So the start explains seed 12 and some others, but moving the count from 30 to 34 is
+inside a binomial SE of 3.5: **most of the shortfall is in the step along the ridge and the projection, not in the start.**
+Arch's own fit sits on a nonnegativity boundary (some parameter below 1e-6) on 11 of the 50 seeds at 10,000 rows and on 1
+of 50 at 100,000, where its SEs are not the SEs of an interior fit.
+
+## 3. The reference truth at 100,000 rows
+
+50 seeds, 100,000 rows each (about 30 s a seed), same comparison:
+
+| (c) reference | within 2 SE: all / no omega | persistence / beta sum | median / worst path gap (max over last 1000) | arch corr(b1,b2) median, arch SE b1 / b2 |
+|---|---|---|---|---|
+| PACF step, 10,000 rows | 30 / 33 | 39 / 38 | 8.9% / 115% | -0.998, 0.213 / 0.196 |
+| PACF step, 100,000 rows | **37** / 38 | 41 / 38 | 3.1% / 149% (seed 36) | -1.000 (weakest -0.998), 0.152 / 0.139 |
+| targeted step, 10,000 rows | 25 / 31 | 32 / 33 | 14.2% / 573% | |
+| targeted step, 100,000 rows | **22** / 26 | 26 / 27 | 5.3% / 191% | |
+
+Ten times the rows moves the PACF count from 30 to 37 of 50 (a difference of about 1.4 binomial SE) and does not reach 45.
+Arch's `beta` SEs shrink by only a quarter, not by `sqrt(10)`, and the correlation goes to -1.000: the ridge does not
+resolve with data on this scale. The targeted step does not improve (25 to 22). The median path gap falls to 3.1%, and some
+seeds still end far from arch (worst ll gap -3,085 for the PACF step).
+
+## 4. Verdict
+
+**The lag separation is not the cause of the GARCH(2,2) failure, and a "weak identification" reading that rests on it is not
+supported.** At persistence 0.97, equal lags, a ratio of 0.45 and a ratio of 0.16 give 33, 31 and 30 of 50 against the
+reference's 30 (all within seed noise of one another), with arch's correlation of the two betas -0.998 to -0.999 at every
+level: the ridge is a property of the GARCH(2,2) likelihood at these sample sizes (and does not weaken at 100,000 rows:
+-1.000), not of closeness of the lags. The ridge is real and plausibly why the step is slow, but the counts do not show that it
+is the cause of the misses: the start is a contributor on some seeds (seed 12; the count rises 30 to 34 when the start is
+frozen to arch) and the projection on others (seed 47, and the targeted step's boundary clips), and arch's own boundary
+solutions (11 of 50 at 10,000 rows) make "within 2 SE of arch" a noisy yardstick. Not isolated: persistence itself
+at matched separation (part 6's lower-persistence truths gave 29 and 34 of 50 with other changes confounded), and a mixture
+of causes was not decomposed beyond the freeze test.
+
+**Could a (p, q) > 1 form ship with a stated truth range?** Not from these counts. No truth in parts 6 and 7 reaches 45 of 50:
+the PACF step's best are 37 (reference truth, 100,000 rows), 34 (alpha2 = 0.05 truth, 10,000 rows) and 33 (equal lags), and
+separation and persistence bounds do not select a passing region, because separation changes nothing (30 to 33) and the
+persistence 0.80 and 0.85 truths of part 6 also fail (29 and 34). The only quantity that is mostly right is the persistence
+(39 to 41 of 50 within 2 SE), which is also below 45. A GARCH(2,2) could be offered only with a claim the counts do not
+contradict, such as "the variance path is within about 3% of arch's at the median at 100,000 rows (9% at 10,000)", with the stated
+caveat that parameter-level agreement (the 2-SE criterion) fails on a quarter to a half of seeds and the worst seeds are far
+off; that is not a pass, and this study does not claim one.
