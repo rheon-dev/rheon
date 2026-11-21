@@ -1116,7 +1116,7 @@ unmatched"): "rheon's speed is unmatched over parquet data". No benchmark
 against another library on parquet backs it yet; the one head-to-head
 (scikit-learn at 10,000 features) is mixed.
 
-**Verdict:** pending (the user).
+**Verdict:** approved (the user, 2026-11-20: "Approved readme opening").
 
 ## The ideas
 

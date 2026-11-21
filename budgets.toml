@@ -69,7 +69,7 @@ budget = 2119477
 
 [instructions.ewridge_k20]
 what = "ewridge, 20 features, 1 target, half-life 1000: AnyModel::step_into, into one kept Step"
-budget = 6656385
+budget = 6331811
 
 [instructions.ewridge_k200]
 what = "ewridge, 200 features, 1 target, half-life 1000, min_weight 200, the default schedule: AnyModel::step_into, into one kept Step"
@@ -81,15 +81,15 @@ budget = 13525796
 
 [instructions.huber_k20]
 what = "huber, 20 features, 1 target, half-life 1000, the MAD scale: AnyModel::step_into, into one kept Step"
-budget = 6202789
+budget = 5818665
 
 [instructions.huber_k20_sets]
 what = "huber, 20 features, 1 target, half-life 1000, the MAD scale, feature sets of 5, 10 and 20 features: AnyModel::step_into, into one kept Step"
-budget = 8002718
+budget = 7589200
 
 [instructions.huber_k20_sum]
 what = "huber, 20 features, 1 target, half-life 1000, the MAD scale, ridge_scale sum: AnyModel::step_into, into one kept Step"
-budget = 6395189
+budget = 5926403
 
 [instructions.huber_k20_refit]
 what = "huber, 20 features, 1 target, half-life 1000, the MAD scale, the refit of the first 2,500 rows on the block's 500th row: AnyModel::step_into, into one kept Step"
@@ -184,7 +184,7 @@ budget = 7194026
 
 [instructions.quantile]
 what = "quantile, the median, 20 features, half-life 1000: AnyModel::step_into, into one kept Step"
-budget = 14262785
+budget = 13661658
 
 [instructions.quantile_refit]
 what = "quantile, the median, 20 features, half-life 1000, the refit of the first 2,500 rows on the block's 500th row: AnyModel::step_into, into one kept Step"
@@ -210,7 +210,7 @@ budget = 3693873
 
 [instructions.ew_class]
 what = "ew_class, 20 features, 3 classes, full covariance, precision prior 1: AnyModel::step_into, into one kept Step"
-budget = 41581252
+budget = 36955252
 
 [instructions.deco]
 what = "deco, 20 features, ew dynamics: AnyModel::step_into, into one kept Step"
