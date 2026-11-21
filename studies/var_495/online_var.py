@@ -59,6 +59,12 @@ refers it to chi2(q); ``kind="f"`` (statsmodels' default) uses ``lambda_W / q``
 against F(q, k df), statsmodels' (Lutkepohl's) denominator of ``k`` times the
 residual degrees of freedom.
 
+For one caused equation, ``lambda_W = (SSR_r - SSR_u) / (SSR_u / df)`` (the
+restricted fit is never run), so ``grangercausalitytests``' single-equation
+statistics follow from the same sums: ``ssr_f = lambda_W / q`` against
+F(q, df), ``ssr_chi2 = n lambda_W / df`` and ``lr = n log(1 + lambda_W / df)``
+against chi2(q).
+
 State size
 ----------
 ``p k`` lag buffer, ``m + k`` means, ``m^2 + m k + k^2`` co-moments and three
@@ -260,6 +266,21 @@ class OnlineVAR:
             df2 = self.k * self.df_resid()
             f = wald / q
             return {"statistic": f, "pvalue": float(stats.f.sf(f, q, df2)), "df": (q, df2)}
+        # Single-equation forms, as ``statsmodels.tsa.stattools.grangercausalitytests``
+        # (one caused equation). There ``wald = (SSR_r - SSR_u) / (SSR_u / df)``, so
+        # every one of its statistics is a function of ``wald``, ``df`` and ``n``.
+        if len(e_idx) != 1:
+            raise ValueError(f"kind {kind!r} tests one caused equation")
+        df, n = self.df_resid(), self.n_eff()
+        if kind == "ssr_f":
+            f = wald / q
+            return {"statistic": f, "pvalue": float(stats.f.sf(f, q, df)), "df": (q, df)}
+        if kind == "ssr_chi2":
+            s = n * wald / df
+            return {"statistic": s, "pvalue": float(stats.chi2.sf(s, q)), "df": q}
+        if kind == "lr":
+            s = n * np.log1p(wald / df)
+            return {"statistic": s, "pvalue": float(stats.chi2.sf(s, q)), "df": q}
         raise ValueError(f"kind {kind!r} not recognised")
 
 
