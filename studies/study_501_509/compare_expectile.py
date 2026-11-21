@@ -156,19 +156,25 @@ def online_vs_batch(seeds=10):
                 continue
             for tau in (0.1, 0.5, 0.9):
                 for refit in (0, 200):
-                    gaps = []
+                    gaps, yard = [], []
                     for s in range(seeds):
                         Z, y = D.regression(n, 3, s)
                         w = D.weights(n, s, "random")
                         m, *_ = E.run_online(Z, y, w, tau, lam, refit_rows=refit)
                         v = D.decayed(w, lam)
+                        # sampling yardstick: sqrt(p / n_kish), the RMS fitted-value
+                        # error of a fit of p coefficients, in residual-scale units
+                        yard.append(np.sqrt(4 / (np.sum(v) ** 2 / np.sum(v * v))))
                         b = E.irls(Z, y, v, tau).beta
                         r = y - Z @ b
                         scale = np.sqrt(np.sum(v * r * r) / np.sum(v))
                         d = Z @ (m.beta - b)
                         gaps.append(np.sqrt(np.sum(v * d * d) / np.sum(v)) / scale)
-                    rows.append((lam, n, tau, refit, float(np.mean(gaps)), float(np.max(gaps))))
-    return ("lam", "n", "tau", "refit rows", "mean gap/scale", "max gap/scale"), rows
+                    rows.append((lam, n, tau, refit, float(np.mean(gaps)), float(np.max(gaps)),
+                                 float(np.mean(yard))))
+    hdr = ("lam", "n", "tau", "refit rows", "mean gap/scale", "max gap/scale",
+           "yardstick sqrt(p/n_kish)")
+    return hdr, rows
 
 
 def window_vs_batch(seeds=4, n=1_500):

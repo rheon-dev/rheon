@@ -80,9 +80,20 @@ def wls(Z: np.ndarray, y: np.ndarray, v: np.ndarray) -> np.ndarray | None:
         return None
     G = (Z * v[:, None]).T @ Z
     c = (Z * v[:, None]).T @ y
-    if np.linalg.matrix_rank(G) < Z.shape[1]:
+    return chol_solve(G, c)
+
+
+def chol_solve(G: np.ndarray, c: np.ndarray) -> np.ndarray | None:
+    """G^-1 c by Cholesky; None when G is not positive definite to working
+    precision (a pivot under 1e-12 of the largest diagonal: no fit)."""
+    try:
+        L = np.linalg.cholesky(G)
+    except np.linalg.LinAlgError:
         return None
-    return np.linalg.solve(G, c)
+    if np.min(np.diag(L)) ** 2 < 1e-12 * np.max(np.diag(G)):
+        return None
+    u = np.linalg.solve(L, c)
+    return np.linalg.solve(L.T, u)
 
 
 @dataclass
@@ -235,11 +246,12 @@ class OnlineExpectile:
         self.c = self.c + f * (z * y - self.c)
         if w > 0.0:
             self.rows += 1
-        if self.rows >= self.p and np.all(np.isfinite(self.G)):
-            if np.linalg.matrix_rank(self.G) == self.p:
-                self.beta = np.linalg.solve(self.G, self.c)
-        elif not np.all(np.isfinite(self.G)):
+        if not np.all(np.isfinite(self.G)):
             self.beta = np.full(self.p, np.nan)
+        elif self.rows >= self.p:
+            b = chol_solve(self.G, self.c)
+            if b is not None:
+                self.beta = b
         return pred, n_eff
 
     def state(self) -> np.ndarray:
