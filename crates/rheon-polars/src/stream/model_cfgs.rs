@@ -63,20 +63,29 @@ pub fn audit_cfg(spec: &Spec) -> Result<rheon_core::AuditCfg, String> {
 /// targets, and every parameter check is the model's.
 pub fn hawkes_cfg(spec: &Spec, decay: rheon_core::Decay) -> Result<rheon_core::HawkesCfg, String> {
     let ModelKind::Hawkes {
-        kernel_decays,
         window_events,
-        // Checked by the spec, which knows the groups' cap.
-        max_state_bytes: _,
+        window_size,
+        closed,
+        max_state_bytes,
+        ..
     } = &spec.model
     else {
         return Err(not_a(spec, "hawkes_cfg", "hawkes"));
     };
     let cfg = rheon_core::HawkesCfg {
         n_targets: spec.m(),
-        kernel_decays: kernel_decays.clone().unwrap_or_default(),
+        kernel_decays: spec
+            .model
+            .hawkes_kernels()
+            .into_iter()
+            .map(|(b, _)| b)
+            .collect(),
         decay,
         min_weight: spec.min_periods_or_default(),
         window_events: *window_events,
+        window_clock: window_size.as_ref().map(Span::value),
+        closed: closed.edge(),
+        max_state_bytes: *max_state_bytes,
     };
     cfg.validate()?;
     Ok(cfg)

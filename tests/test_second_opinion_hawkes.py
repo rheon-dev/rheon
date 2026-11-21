@@ -34,7 +34,8 @@ from rheon import polars as rp
 TIER = "essential"
 
 #: Where tick's minimiser and this fit part: relative to the largest
-#: coefficient. Measured at most 3.9e-14 over the cases below (the window 1.1e-14).
+#: coefficient. Measured at most 3.9e-14 over the cases below (the window 1.1e-14,
+#: the clock window 4.6e-14).
 TOL = 1e-12
 
 
@@ -207,4 +208,31 @@ def test_the_window_is_tick_refit_on_its_events():
         want = _ticks_minimiser(model)
         got = np.asarray(coef[row])
         worst = max(worst, _rel(got, want))
+    assert worst < TOL, worst
+
+
+def test_the_clock_window_is_tick_refit_on_the_events_of_its_span():
+    """Under ``window_size = D`` the fit at a row is tick's minimiser over
+    the events of the last ``D``, shifted to the start of the observation
+    ``max(T - D, 0)`` and observed to the row's clock ``T``, across many
+    turnovers of the window's blocks and the rows that leave it."""
+    decays, d, end, span = [1.0, 6.0], 2, 1_000.0, 80.0
+    events = _simulate(decays, d, end, 10)
+    df = _frame(events, end)
+    out = rp.ModelBank([_spec(decays, d, window_size=span, coef_every=0)]).fit_predict(df)
+    coef = out["h"].struct.field("coef")
+    t = df["t"].to_numpy()
+    event_rows = np.flatnonzero(df.select(pl.sum_horizontal(pl.exclude("t")) > 0).to_series())
+    worst, held = 0.0, []
+    for row in range(len(df) // 10, len(df), 89):
+        start = max(t[row] - span, 0.0)
+        kept = event_rows[(event_rows <= row) & (t[event_rows] > t[row] - span)]
+        held.append(len(kept))
+        window = [np.sort(t[kept][df[f"n{j}"].to_numpy()[kept] > 0]) - start for j in range(d)]
+        model = ModelHawkesSumExpKernLeastSq(decays=np.array(decays))
+        model.fit(window, end_times=t[row] - start)
+        want = _ticks_minimiser(model)
+        got = np.asarray(coef[row])
+        worst = max(worst, _rel(got, want))
+    assert min(held) > 20 and max(held) < 200, held
     assert worst < TOL, worst

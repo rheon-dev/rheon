@@ -44,6 +44,20 @@ model that only the new build has is listed as an addition and passes.
   `max_state_bytes` (256 KB by default) at the call. A fit the events
   cannot identify (a scaled pivot of `G` below `1e-10`) reports no
   intensity. A row's weight gates its events and scales none.
+  Or a window of the last `window_size` clock units (task 538: every model
+  works on rows and on the clock where it can), the events of the last that
+  long, observed over the same span, agreeing with tick refit on them to
+  5e-14; its edge is the window kinds', `closed="right"` (the default) or
+  `"both"`, decided on the rows' exact stamps. The events a span holds are
+  the data's, so its state is held to `max_state_bytes` as the rows go in: a
+  warning past half of it, once for the group, and an error at it, each
+  naming the group and the bytes. Under a window `weight_sum` and
+  `min_weight` read the weight of the event rows inside it. On a temporal
+  clock the span is a duration (`window_size="5m"`) and the kernels are
+  given by their half-lives (`kernel_half_lives=["500ms", "2s"]`, `β = ln 2
+  / half-life`, in place of `kernel_decays`), the intensity and `mu` in
+  events per second. A row of weight 0 counts in no clock, is in no window
+  and no `weight_sum`, and is still read (task 539).
 - **`kalman(covariance_form="square_root")`** (task 281 (3)): the filter
   holds its covariance as an upper-triangular factor, `P = C Cᵀ`, and
   updates the factor by Carlson's step, so a vague prior costs it no

@@ -63,6 +63,7 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
     ("micro", &["prune_every"]),
     ("ew_class", &["window_size", "snapshot_every"]),
     ("marginal", &["window_size", "snapshot_every"]),
+    ("hawkes", &["window_size", "kernel_half_lives"]),
 ];
 
 /// The parameters that take a duration on a temporal clock or a number that
@@ -425,6 +426,14 @@ impl Spec {
             } => {
                 put(&mut out, "trend_half_life", trend_half_life.as_ref());
             }
+            ModelKind::Hawkes {
+                window_size,
+                kernel_half_lives,
+                ..
+            } => {
+                put(&mut out, "window_size", window_size.as_ref());
+                put_list(&mut out, "kernel_half_lives", kernel_half_lives.as_ref());
+            }
             ModelKind::Micro { prune_every, .. } => {
                 put(&mut out, "prune_every", prune_every.as_ref());
             }
@@ -488,6 +497,12 @@ impl Spec {
                 "spec {:?}: {d} is a duration, but lam is a decay over one clock unit, which a \
                  duration cannot give. Give half_life as a duration in place of lam, with a \
                  Datetime, Date or Duration clock.",
+                self.name
+            )),
+            (Some(d), Some("kernel_decays")) => Err(format!(
+                "spec {:?}: {d} is a duration, but kernel_decays are rates per clock unit, which \
+                 a duration cannot give. Give the kernels as kernel_half_lives, in durations \
+                 (a decay is ln 2 / half-life), and leave kernel_decays out.",
                 self.name
             )),
             (Some(d), Some("q")) => Err(format!(

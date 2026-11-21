@@ -1176,11 +1176,12 @@ fn a_hawkes_window_past_its_state_cap_is_refused() {
                 "half_life": "inf"}}"#
         )
     };
-    // Two nodes, two decays: 8 * 7 = 56 bytes a row, 152 for the sums.
+    // Two nodes, two decays: 8 * 8 = 64 bytes a row (its clock, its weight,
+    // two marks, four sums), 160 for the sums and 48 beside the window.
     let at = |w: usize| rheon_polars::rheon_core::Hawkes::state_bytes(2, 2, Some(w));
-    assert_eq!(at(4_000), 8 * (19 + 4_000 * 7 + 5));
+    assert_eq!(at(4_000), 8 * (20 + 4_000 * 8 + 6));
     let cap = 256 * 1024;
-    let fits = ((cap - at(0)) / 56) as usize;
+    let fits = ((cap - at(0)) / 64) as usize;
     assert!(at(fits) <= cap && at(fits + 1) > cap);
     accepted(&spec(&format!(
         r#"{{"type": "hawkes", "kernel_decays": [1.0, 5.0], "window_events": {fits}}}"#
@@ -1203,10 +1204,96 @@ fn a_hawkes_window_past_its_state_cap_is_refused() {
         &spec(r#"{"type": "hawkes", "kernel_decays": [1.0, 5.0], "max_state_bytes": 0}"#),
         &["max_state_bytes must be above 0"],
     );
-    refused(&spec(r#"{"type": "hawkes"}"#), &["needs kernel_decays"]);
+    refused(&spec(r#"{"type": "hawkes"}"#), &["needs its kernels"]);
     refused(
         r#"{"name": "m", "model": {"type": "hawkes", "kernel_decays": [1.0]},
             "targets": ["a"], "features": ["x"], "half_life": 10.0}"#,
         &["hawkes takes no features"],
+    );
+}
+
+/// `hawkes`' window of clock units: a span above 0, beside no other window,
+/// with `closed` only under it, a number where the kernels' decays are
+/// rates, and a state whose fixed part alone fits `max_state_bytes`; what
+/// the span holds is the data's, and is checked as the rows go in.
+#[test]
+fn a_hawkes_clock_window_is_refused_where_it_conflicts() {
+    let spec = |model: &str, rest: &str| {
+        format!(
+            r#"{{"name": "m", "model": {model}, "targets": ["a", "b"], "features": [],
+                "half_life": "inf", {rest} "clock": "t", "gap_cap": 1e9}}"#
+        )
+    };
+    let hawkes = |more: &str| format!(r#"{{"type": "hawkes", "kernel_decays": [1.0, 5.0]{more}}}"#);
+    accepted(&spec(&hawkes(r#", "window_size": 30.0"#), ""));
+    accepted(&spec(
+        &hawkes(r#", "window_size": 30.0, "closed": "both""#),
+        "",
+    ));
+    for bad in ["0.0", "-1.0", r#""inf""#] {
+        refused(
+            &spec(&hawkes(&format!(r#", "window_size": {bad}"#)), ""),
+            &["window_size must be a finite span of the clock above 0"],
+        );
+    }
+    refused(
+        &spec(&hawkes(r#", "window_size": 30.0, "window_events": 10"#), ""),
+        &["are two windows, and the fit holds one"],
+    );
+    refused(
+        &spec(&hawkes(r#", "closed": "both""#), ""),
+        &["closed applies only under a window"],
+    );
+    // A duration is a span of a temporal clock, which a rate refuses: the
+    // kernels are given by their half-lives there, as `half_life` is.
+    refused(
+        &spec(&hawkes(r#", "window_size": "5m""#), ""),
+        &[
+            "kernel_decays are rates per clock unit",
+            "Give the kernels as kernel_half_lives",
+        ],
+    );
+    let halves =
+        |more: &str| format!(r#"{{"type": "hawkes", "kernel_half_lives": ["1s", "10s"]{more}}}"#);
+    accepted(
+        &spec(&halves(r#", "window_size": "5m", "closed": "both""#), "")
+            .replace(
+                r#""half_life": "inf""#,
+                r#""half_life": "inf", "gap_cap": "1h""#,
+            )
+            .replace(r#", "gap_cap": 1e9"#, ""),
+    );
+    // Numbers of the clock's units for a numeric clock.
+    accepted(&spec(
+        r#"{"type": "hawkes", "kernel_half_lives": [0.5, 4.0], "window_size": 30.0}"#,
+        "",
+    ));
+    // Both forms of the kernels, a duration beside a number, and a
+    // half-life that is no span.
+    refused(
+        &spec(&hawkes(r#", "kernel_half_lives": [1.0]"#), ""),
+        &["kernel_decays and kernel_half_lives both set the kernels"],
+    );
+    refused(
+        &spec(r#"{"type": "hawkes", "kernel_half_lives": [1.0, 0.0]}"#, ""),
+        &["each of kernel_half_lives must be a finite span of the clock above 0"],
+    );
+    refused(
+        &spec(&halves(r#", "window_size": 30.0"#), ""),
+        &["kernel_half_lives is a duration but gap_cap is a plain number"],
+    );
+    // A window forgets by dropping: a half-life beside it is refused.
+    refused(
+        &spec(&hawkes(r#", "window_size": 30.0"#), "")
+            .replace(r#""half_life": "inf""#, r#""half_life": 10.0"#),
+        &["takes no decay"],
+    );
+    // The fixed part alone is held to the cap.
+    refused(
+        &spec(
+            &hawkes(r#", "window_size": 30.0, "max_state_bytes": 100"#),
+            "",
+        ),
+        &["with no event in its window", "max_state_bytes of 100"],
     );
 }

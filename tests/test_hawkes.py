@@ -104,6 +104,8 @@ def _spec(d: int = 2, **kw: object) -> dict:
         "half_life": 30.0,
     }
     args.update(kw)
+    if args.get("kernel_decays") is None:
+        del args["kernel_decays"]
     return rp.spec.hawkes("h", **args)
 
 
@@ -128,9 +130,12 @@ def test_the_fit_is_the_contrasts_minimiser(half_life):
     t, marks = df["t"].to_numpy(), _marks(df, 2)
     gamma = 0.0 if half_life == INF else math.log(2.0) / half_life
     for row in range(60, 300, 37):
+        # The fit after a row of weight 0 is the one after the last row that
+        # counted: the zero-weight row is in no clock.
+        row = np.flatnonzero(df["w"].to_numpy()[: row + 1] > 0)[-1]
         g, b = _system(t[: row + 1], marks[: row + 1], [1.0, 4.0], gamma, t[0], t[row])
         want = np.linalg.solve(g, b.T).T.ravel()
-        got = np.asarray(out[row])
+        got = np.asarray(out[int(row)])
         err = np.max(np.abs(got - want)) / np.max(np.abs(want))
         assert err < 1e-10, (row, err)
 
@@ -157,7 +162,14 @@ def test_each_intensity_is_read_before_the_rows_events():
             assert abs(got - want) <= 1e-10 * (1.0 + abs(want)), (row, i, got, want)
 
 
-@pytest.mark.parametrize("kw", [{}, {"half_life": INF, "window_events": 9}])
+WINDOWED = [
+    {"half_life": INF, "window_events": 9},
+    {"half_life": INF, "window_size": 3.0},
+    {"half_life": INF, "window_size": 3.0, "closed": "both"},
+]
+
+
+@pytest.mark.parametrize("kw", [{}, *WINDOWED])
 def test_chunk_invariance(kw):
     """The fit on every row (``coef_every=0``), so ``coef`` is held too, not
     only at a chunk's end."""
@@ -170,7 +182,7 @@ def test_chunk_invariance(kw):
         assert one.equals(many, null_equal=True), size
 
 
-@pytest.mark.parametrize("kw", [{}, {"half_life": INF, "window_events": 9}])
+@pytest.mark.parametrize("kw", [{}, *WINDOWED])
 def test_a_save_goes_on_to_the_bit(kw):
     df = _stream(500, 2, 4)
     s = _spec(group="g", weight="w", **kw)
@@ -229,6 +241,66 @@ def test_a_window_keeps_its_rows_with_an_event():
         assert np.max(np.abs(got - want)) / np.max(np.abs(want)) < 1e-10, row
 
 
+@pytest.mark.parametrize("closed", ["right", "both"])
+def test_a_clock_window_keeps_the_events_of_its_span(closed):
+    """The window of ``window_size`` clock units is the definition's fit on
+    the events of the last ``window_size``, observed over ``(T - window_size,
+    T]``, from the first row until there is that much clock; and ``closed``
+    says whether an event exactly that old is in it. The clock is in
+    quarters, so rows sit on the edge."""
+    n, span = 500, 6.0
+    rng = np.random.default_rng(8)
+    t = np.cumsum(rng.integers(0, 6, n) * 0.25)
+    df = pl.DataFrame(
+        {
+            "t": t,
+            "n0": (rng.uniform(size=n) < 0.5).astype(float),
+            "n1": (rng.uniform(size=n) < 0.3).astype(float),
+        }
+    )
+    out = rp.ModelBank(
+        [_spec(half_life=INF, window_size=span, closed=closed, coef_every=0)]
+    ).fit_predict(df)
+    coef = out["h"].struct.field("coef")
+    marks = df.select("n0", "n1").to_numpy()
+    events = np.flatnonzero(marks.sum(axis=1) > 0)
+    edge = checked = 0
+    for row in range(40, n, 7):
+        age = t[row] - t[events[events <= row]]
+        edge += int(np.sum(age == span))
+        kept = events[events <= row][(age < span) if closed == "right" else (age <= span)]
+        start = max(t[row] - span, t[0])
+        g, b = _system(t[kept], marks[kept], [1.0, 4.0], 0.0, start, t[row])
+        got = coef[row]
+        if np.linalg.cond(g) > 1e8:
+            # Too few events to tell the terms apart: no fit is reported.
+            assert got.is_null().all(), row
+            continue
+        want = np.linalg.solve(g, b.T).T.ravel()
+        assert np.max(np.abs(np.asarray(got) - want)) / np.max(np.abs(want)) < 1e-10, row
+        checked += 1
+    assert edge > 10 and checked > 30, "the stream put few events on the window's edge"
+
+
+def test_the_weight_under_a_window_is_the_weight_inside_it():
+    """``weight_sum`` is the weight of the event rows the window holds, as
+    the last row left it: a window of events holds ``window_events`` of them,
+    one of clock units those within its span; a row without an event is no
+    part of it."""
+    df = _stream(300, 2, 12).drop("g")
+    t, marks, w = df["t"].to_numpy(), _marks(df, 2), df["w"].to_numpy()
+    have = marks.sum(axis=1) > 0
+    for kw in ({"window_events": 7}, {"window_size": 2.0}):
+        out = rp.ModelBank([_spec(half_life=INF, weight="w", **kw)]).fit_predict(df)
+        got = out["h"].struct.field("weight_sum").to_numpy()
+        for row in range(1, 300):
+            prior = np.flatnonzero(have[:row])
+            # The window is cut at the last row that counted.
+            last = np.flatnonzero(w[:row] > 0)[-1]
+            held = prior[-7:] if "window_events" in kw else prior[t[last] - t[prior] < 2.0]
+            assert abs(got[row] - w[held].sum()) < 1e-9, (kw, row)
+
+
 def test_names_match_the_realized_struct():
     """One intensity a target, then the shared fields and ``coef``, each of
     the dtype ``output_index`` declares."""
@@ -270,6 +342,11 @@ def test_two_nodes_on_the_same_rows_report_nothing():
         ({"kernel_decays": []}, "at least one decay"),
         ({"window_events": 0, "half_life": INF}, "at least 1"),
         ({"window_events": 10}, "takes no decay"),
+        ({"window_size": 5.0}, "takes no decay"),
+        ({"window_size": 5.0, "window_events": 4, "half_life": INF}, "are two windows"),
+        ({"window_size": 0.0, "half_life": INF}, "finite span of the clock above 0"),
+        ({"window_size": INF, "half_life": INF}, "window_size must be finite"),
+        ({"closed": "both"}, "closed applies only under a window"),
         ({"half_life": math.log(2.0) / 1.0002}, "within 0.1% of 1"),
         ({"emit_sigma": True}, "emit_sigma"),
     ],
@@ -289,9 +366,21 @@ def test_features_and_a_temporal_clock_are_refused():
             )
         }
     ).with_columns(pl.lit(1.0).alias("y"))
-    with pytest.raises(ValueError, match="kernel_decays is a plain number"):
+    with pytest.raises(ValueError, match="kernel_decays are rates per clock unit"):
         spec = rp.spec.hawkes(
             "h", targets=["y"], kernel_decays=[1.0], clock="ts", gap_cap="1h", half_life="1d"
+        )
+        rp.ModelBank([spec]).fit_predict(df)
+    # A duration is a window on a temporal clock, which the rates refuse.
+    with pytest.raises(ValueError, match="kernel_decays are rates per clock unit"):
+        spec = rp.spec.hawkes(
+            "h",
+            targets=["y"],
+            kernel_decays=[1.0],
+            clock="ts",
+            gap_cap="1h",
+            half_life=INF,
+            window_size="1h",
         )
         rp.ModelBank([spec]).fit_predict(df)
 
@@ -307,7 +396,7 @@ def test_the_window_is_held_to_the_groups_state_cap():
     import rheon
     from rheon._spec_point import _state_bytes
 
-    # Two nodes, two decays: 56 bytes a row, so 4,681 rows fill 256 KB.
+    # Two nodes, two decays: 64 bytes a row, so 4,096 rows fill 256 KB.
     assert _state_bytes(2, 2, 4_000) < 256 * 1024 < _state_bytes(2, 2, 4_700)
     with pytest.raises(
         ValueError, match=r"would hold \d+ bytes in each group, past max_state_bytes of 262144"
@@ -320,7 +409,7 @@ def test_the_window_is_held_to_the_groups_state_cap():
         _spec(half_life=INF, window_events=2_000)
         _spec(half_life=INF, window_events=4_700, max_state_bytes=1 << 20)
     with pytest.raises(
-        ValueError, match="hold 752 bytes in each group, past max_state_bytes of 500"
+        ValueError, match="hold 848 bytes in each group, past max_state_bytes of 500"
     ):
         rp.ModelBank([_spec(half_life=INF, window_events=10, max_state_bytes=500)])
     with pytest.raises(ValueError, match="max_state_bytes must be above 0"):
@@ -334,3 +423,194 @@ def test_the_window_is_held_to_the_groups_state_cap():
         bank.fit_predict(df.slice(i, 500))
         sizes.append(len(bank.save_bytes()))
     assert max(sizes[1:]) - min(sizes[1:]) < 200, sizes
+
+
+def test_a_burst_in_a_clock_window_is_warned_of_once_and_refused_at_the_cap():
+    """A window of clock units holds the events its span has, which the data
+    decides, so the cap is checked as the rows go in: the first row to take a
+    group past half of ``max_state_bytes`` warns, once, naming the group and
+    the bytes; the row that would take it past the cap stops the run with an
+    error naming the group and the bytes. A group that stays under says
+    nothing."""
+    import warnings
+
+    import rheon
+    from rheon._spec_point import _state_bytes
+
+    # Two nodes, two decays: 64 bytes a row and a 32-byte stamp beside each.
+    cap = _state_bytes(2, 2, 0) + 8 * (4 + 2) + 40 + 96 * 150
+    s = _spec(group="g", half_life=INF, window_size=1_000.0, max_state_bytes=cap)
+
+    def burst(group: str, n: int, first: int = 0) -> pl.DataFrame:
+        i = np.arange(first, first + n)
+        return pl.DataFrame({"g": group, "t": i * 0.01, "n0": 1.0, "n1": 1.0, "w": 1.0})
+
+    bank = rp.ModelBank([s])
+    with pytest.warns(rheon.RheonWarning, match=r'group "a": the state holds \d+ bytes') as seen:
+        bank.fit_predict(pl.concat([burst("a", 100), burst("b", 30)]))
+    assert len(seen) == 1
+    assert f"past half of max_state_bytes ({cap})" in str(seen[0].message)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        # Under the cap and past half: said already, and not said again.
+        bank.fit_predict(burst("a", 30, 100))
+    with pytest.raises(Exception, match=r'group "a".*to \d+ bytes, above max_state_bytes of') as e:
+        bank.fit_predict(burst("a", 100, 130))
+    assert str(cap) in str(e.value)
+    # The bank learned part of the chunk and stops there.
+    with pytest.raises(Exception, match="cannot go on"):
+        bank.fit_predict(burst("b", 1, 30))
+
+
+def _grid(n: int, seed: int, weights: bool = False) -> pl.DataFrame:
+    """Rows a quarter of a unit apart in steps, so that sums of steps are
+    exact, with two event columns and, optionally, rows of weight 0."""
+    rng = np.random.default_rng(seed)
+    t = np.cumsum(rng.integers(0, 6, n) * 0.25)
+    cols: dict[str, object] = {
+        "t": t,
+        "n0": (rng.uniform(size=n) < 0.5).astype(float),
+        "n1": (rng.uniform(size=n) < 0.35).astype(float),
+    }
+    if weights:
+        cols["w"] = np.where(rng.uniform(size=n) < 0.25, 0.0, 1.0 + rng.integers(0, 3, n))
+    return pl.DataFrame(cols)
+
+
+@pytest.mark.parametrize(
+    "kw",
+    [
+        {"half_life": INF},
+        {"half_life": 40.0},
+        {"half_life": INF, "window_events": 9},
+        {"half_life": INF, "window_size": 3.0},
+        {"half_life": INF, "window_size": 3.0, "closed": "both"},
+    ],
+)
+def test_a_zero_weight_row_counts_in_no_clock(kw):
+    """The stream with rows of weight 0 gives every other row, to the bit,
+    the output of the stream without them: the next row steps from the last
+    row that counted, the zero-weight row is in no window and none of
+    ``weight_sum``. It is still predicted."""
+    df = _grid(500, 21, weights=True)
+    s = _spec(**kw, weight="w", coef_every=0)
+    full = rp.ModelBank([s]).fit_predict(df).unnest("h")
+    kept = df.filter(pl.col("w") > 0)
+    thin = rp.ModelBank([s]).fit_predict(kept).unnest("h")
+    mask = (df["w"] > 0).to_numpy()
+    for f in ("intensity_n0", "intensity_n1", "weight_sum", "coef"):
+        got = full[f].filter(pl.Series(mask))
+        assert got.equals(thin[f], null_equal=True), f
+    zero = full.filter(pl.Series(~mask))
+    assert zero["intensity_n0"].drop_nulls().len() > 20, "a zero-weight row is still predicted"
+
+
+def test_half_lives_are_the_decays_ln_2_over_them():
+    """``kernel_half_lives`` on a numeric clock are numbers of its units, the
+    decays ``ln 2 / half-life`` by hand, to the bit, and name their terms by
+    the half-life."""
+    df = _grid(400, 5)
+    kw = {"half_life": INF, "coef_every": 0, "gap_cap": 1e9}
+    by_half = rp.ModelBank([_spec(kernel_decays=None, kernel_half_lives=[0.5, 3.0], **kw)])
+    by_rate = rp.ModelBank([_spec(kernel_decays=[math.log(2) / 0.5, math.log(2) / 3.0], **kw)])
+    a, b = by_half.fit_predict(df).unnest("h"), by_rate.fit_predict(df).unnest("h")
+    assert a.equals(b, null_equal=True)
+    assert by_half.coef()["coef"].equals(by_rate.coef()["coef"])
+    terms = by_half.coef()["term"].to_list()
+    assert "alpha_n0_h0.5" in terms and "alpha_n1_h3" in terms, terms
+    with pytest.raises(ValueError, match="both set the kernels"):
+        rp.ModelBank([_spec(kernel_half_lives=[1.0])])
+    with pytest.raises(ValueError, match="needs its kernels"):
+        rp.ModelBank([_spec(kernel_decays=None)])
+    with pytest.raises(ValueError, match="kernel_half_lives must be a finite span"):
+        rp.ModelBank([_spec(kernel_decays=None, kernel_half_lives=[1.0, 0.0])])
+
+
+@pytest.mark.parametrize("quarter", [True, False])
+def test_a_temporal_clock_takes_durations(quarter):
+    """On a temporal clock every span is a duration, read in seconds off the
+    exact stamps: ``kernel_half_lives``, ``window_size`` and ``gap_cap`` as
+    durations give, to the bit on steps of a quarter second, and within 1e-11
+    on millisecond steps (where a step's seconds differ in the last bit; 1e-13
+    measured, where a window holds 5 events or more), the
+    output of the same model on a numeric clock of seconds with the decays
+    converted by hand. Its terms are named by the half-lives as written."""
+    rng = np.random.default_rng(3)
+    n = 500
+    steps = rng.integers(0, 6, n) * 250 if quarter else rng.integers(1, 900, n)
+    ms = np.cumsum(steps)
+    base = pl.DataFrame(
+        {
+            "n0": (rng.uniform(size=n) < 0.5).astype(float),
+            "n1": (rng.uniform(size=n) < 0.35).astype(float),
+            "w": np.where(rng.uniform(size=n) < 0.2, 0.0, 1.0),
+        }
+    )
+    temporal = base.with_columns(pl.Series("t", ms).cast(pl.Datetime("ms")))
+    numeric = base.with_columns(pl.Series("t", ms / 1000.0))
+    common = {
+        "targets": ["n0", "n1"],
+        "clock": "t",
+        "half_life": INF,
+        "weight": "w",
+        "coef_every": 0,
+    }
+    # A span to the microsecond-and-a-half, so that no row sits exactly on
+    # its edge, where the numeric clock's rounded difference would decide
+    # it the other way (the stamps decide it exactly).
+    spans = (
+        [("10s", "both"), ("3s", "right")]
+        if quarter
+        else [("9999500us", "both"), ("2999500us", "right")]
+    )
+    for window, closed in spans:
+        spec_t = rp.spec.hawkes(
+            "h",
+            kernel_half_lives=["500ms", "2s"],
+            window_size=window,
+            closed=closed,
+            gap_cap="1h",
+            **common,
+        )
+        spec_n = rp.spec.hawkes(
+            "h",
+            kernel_decays=[math.log(2) / 0.5, math.log(2) / 2.0],
+            window_size=int(window[:-2]) / 1e6 if window.endswith("us") else float(window[:-1]),
+            closed=closed,
+            gap_cap=3600.0,
+            **common,
+        )
+        bank_t, bank_n = rp.ModelBank([spec_t]), rp.ModelBank([spec_n])
+        a = bank_t.fit_predict(temporal).unnest("h")
+        b = bank_n.fit_predict(numeric).unnest("h")
+        for f in ("intensity_n0", "intensity_n1", "weight_sum", "coef"):
+            if quarter:
+                assert a[f].equals(b[f], null_equal=True), (window, f)
+            else:
+                # Where the window holds a few events: with fewer the fit is
+                # near singular and a last-bit difference of a step moves it.
+                held = (b["weight_sum"] >= 5).to_numpy()
+                assert held.sum() > 150
+                if f == "coef" and window[0] not in "19":
+                    continue  # a few events fit ten terms: no digits to compare
+                if f == "coef":
+
+                    def rows(c: pl.Series) -> np.ndarray:
+                        return np.array(
+                            [
+                                [np.nan if x is None else x for x in v] if v else [np.nan] * 10
+                                for v in c.to_list()
+                            ]
+                        )
+
+                    got, want = rows(a[f])[held], rows(b[f])[held]
+                    nan = np.isnan(want)
+                    assert np.array_equal(np.isnan(got), nan), (window, f)
+                    assert np.max(np.abs(got[~nan] - want[~nan])) < 1e-10, (window, f)
+                else:
+                    x, y = a[f].to_numpy()[held], b[f].to_numpy()[held]
+                    assert np.array_equal(np.isnan(x), np.isnan(y)), (window, f)
+                    assert np.allclose(x, y, rtol=1e-11, atol=1e-11, equal_nan=True), (window, f)
+        assert a["intensity_n0"].drop_nulls().len() > 200
+        terms = bank_t.coef()["term"].to_list()
+        assert "alpha_n1_h500ms" in terms and "alpha_n0_h2s" in terms, terms

@@ -618,7 +618,7 @@ largest buffer at the smaller.
 | `audit.history` | rows already seen | 1,000 → 8,000 | O(1) | O(log n) | D counters at most; their counts' encodings lengthen as the counts grow, log in the rows | 0.86 · 0.93 · 1.26 · 1.24 |
 | `hawkes.nodes` | nodes D, two decays | 1 → 8 | O(n^3) | O(n^2) | a row solves its p = 1 + 2D terms, p³; the state holds b, D·p, and the nodes' pairs | 21.80 · 1.00 · 13.18 · 2.04 |
 | `hawkes.decays` | decays U, one node | 1 → 8 | O(n^3) | O(n) | a row solves its p = 1 + U terms, p³; the state holds 2U + 4 numbers | 15.03 · 1.00 · 2.75 · 1.12 |
-| `hawkes.window` | window W rows with an event, two nodes and decays | 100 → 800 | O(1) | O(n) | a dropped row is taken back in O(D k), its block's sums formed once every W rows; W rows held, 8 (1 + D + k) bytes each | 0.97 · 0.76 · 7.69 · 6.75 |
+| `hawkes.window` | window W rows with an event, two nodes and decays | 100 → 800 | O(1) | O(n) | a dropped row is taken back in O(D k), its block's sums formed once every W rows; W rows held, 8 (2 + D + k) bytes each | 0.97 · 0.76 · 7.69 · 6.75 |
 | `hawkes.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | its running sums only | 1.00 · 1.00 · 1.00 · 1.00 |
 | `bank.groups_seen` (CI) | groups seen G (a block over 50 of them) | 250 → 2,000 | O(1) | O(n) | a row touches its group's state alone; a state a group | 1.03 · 1.00 · 7.99 · 7.14 |
 | `bank.groups_seen_per_call` (CI) | groups seen G, calls of four rows to one group each | 1,000 → 8,000 | O(1) | O(n) | a call finds each of its groups' state by key and takes only their notices; a state a group | 1.00 · 1.00 · 7.98 · 7.33 |

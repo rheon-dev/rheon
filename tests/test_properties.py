@@ -1155,14 +1155,13 @@ COMBINATIONS = {kind: _combinations(kind) for kind in UNCLOCKED_KINDS}
 
 
 def test_each_kind_takes_every_stream_parameter_but_those_it_refuses():
-    """The probe is no false skip: the eight kinds are the ones no sweep
+    """The probe is no false skip: the seven kinds are the ones no sweep
     cut, and each runs under every stream parameter but the ones `REFUSED`
     names, all together too."""
     assert UNCLOCKED_KINDS == [
         "audit",
         "corrchange",
         "deco",
-        "hawkes",
         "hmm",
         "kmeans",
         "rcov",

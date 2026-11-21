@@ -7,8 +7,9 @@
 from __future__ import annotations
 
 import warnings
-from typing import Any, Unpack
+from typing import Any, Literal, Unpack
 
+from rheon._duration import Duration
 from rheon._kwargs import CommonKwargs
 from rheon._spec import TargetList, _checked, _common
 from rheon._warnings import RheonWarning, _user_stacklevel
@@ -20,10 +21,11 @@ MAX_STATE_BYTES = 256 * 1024
 
 def _state_bytes(d: int, u: int, window_events: int | None) -> int:
     """The bytes a group's state holds at most, as the model counts them:
-    its running sums, and a full window's rows with its sum and clock."""
+    its running sums, and a full window's rows with its sum, clock and
+    weight."""
     k = d * u
-    sums = k + d * (1 + k) + d * (d + 1) // 2 + 2
-    window = 0 if window_events is None else window_events * (1 + d + k) + k + 1
+    sums = k + d * (1 + k) + d * (d + 1) // 2 + 3
+    window = 0 if window_events is None else window_events * (2 + d + k) + k + 2
     return 8 * (sums + window)
 
 
@@ -32,8 +34,11 @@ def hawkes(
     name: str,
     *,
     targets: TargetList,
-    kernel_decays: list[float],
+    kernel_decays: list[float] | None = None,
+    kernel_half_lives: list[float | Duration] | None = None,
     window_events: int | None = None,
+    window_size: float | Duration | None = None,
+    closed: Literal["right", "both"] = "right",
     max_state_bytes: int | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
@@ -51,50 +56,92 @@ def hawkes(
     :mod:`rheon.spec`. A row's ``weight`` only decides whether its events
     are learned: 0 skips them, and any weight above 0 learns them at their
     marks, since an event's excitation is a fact of the process rather than
-    evidence to scale. ``half_life`` is how fast the fit forgets, ``inf``
-    for not at all.
+    evidence to scale. A row of weight 0 counts in no clock: the next row
+    steps as if it were not there, it is in no window, and its weight is in
+    no ``weight_sum``; it is still read, from the last row that counted.
+    ``half_life`` is how fast the fit forgets, ``inf`` for not at all.
 
     This model's own parameters:
 
-    ``kernel_decays``
-        The decay ``β`` of each exponential kernel, per unit of the clock,
-        each above 0 and no two equal. Each node excites every node through
-        one kernel ``α β exp(-β t)`` per decay, which integrates to ``α``,
-        so ``1/β`` is how long an event's excitation lasts. Two or three
-        decays a decade apart cover a short and a long memory. Required.
-        On a temporal clock it is refused, since a rate has no duration
-        form: give the clock as a number of seconds instead.
+    ``kernel_decays``, ``kernel_half_lives``
+        The kernels, each node exciting every node through one kernel ``α β
+        exp(-β t)`` per decay ``β``, which integrates to ``α``, so ``1/β`` is
+        how long an event's excitation lasts. Two or three decays a decade
+        apart cover a short and a long memory. Give one of the two. The
+        decays ``β`` are rates per unit of the clock, each above 0 and no two
+        equal; a rate has no duration form, so a temporal clock is given
+        ``kernel_half_lives`` instead: each kernel's half-life ``ln 2 / β``
+        as a number of the clock's units or a duration such as ``"500ms"``,
+        as ``half_life`` is, and ``β = ln 2 / half-life`` in the clock's
+        unit, seconds on a temporal clock. Required: one of them.
     ``window_events``
         Fit only the last this many rows that carried an event, observed
         from the clock of the row dropped last, in place of a decay: set
         ``half_life`` to ``inf`` beside it. The window keeps each of its
-        rows, ``8 * (1 + D + D * U)`` bytes each for ``D`` targets and
+        rows, ``8 * (2 + D + D * U)`` bytes each for ``D`` targets and
         ``U`` decays. Default none.
+    ``window_size``
+        Fit only the events of the last this long on the clock, observed
+        over those same ``window_size`` units (or from the first row, until
+        there are that many), in place of a decay: set ``half_life`` to
+        ``inf`` beside it. A number of the clock's units, or of rows where
+        the spec has no clock, or a duration such as ``"5m"`` on a temporal
+        clock; finite and above 0. A row leaves the window when it is
+        ``window_size`` old on the clock (decayed after ``gap_cap``),
+        before the row that reaches that age reads its intensity, decided
+        on the rows' exact stamps (integer nanoseconds on a temporal
+        clock). It is the window's span on the clock where ``window_events``
+        is its count of events: how many events it holds is the data's, so
+        its bytes are checked as the rows go in (see ``max_state_bytes``).
+        Refused beside ``window_events``. Default none.
+    ``closed``
+        Which edge of ``window_size`` holds the row exactly that old, in
+        Polars' words (``rolling_sum_by(closed=)``). ``"right"``, the
+        default, keeps the rows less than ``window_size`` old, so the
+        window is ``(T - window_size, T]``, as the window operators and
+        ``rolling_sum_by`` do. ``"both"`` keeps that row too and is refused
+        without ``window_size``. ``"left"`` and ``"none"`` would leave out
+        the row the window ends at, which a model cannot do: both are
+        refused.
     ``max_state_bytes``
-        The bytes a group's state may hold, a full window's rows included.
-        The settings fix the size, so it is checked here: a spec past it is
-        refused, and one past half of it is warned of
-        (:class:`rheon.RheonWarning`). Default 256 KB, ``262144``.
+        The bytes a group's state may hold, a window's rows included.
+        ``window_events`` fixes the size, so it is checked here: a spec past
+        it is refused, and one past half of it is warned of
+        (:class:`rheon.RheonWarning`). A ``window_size`` window holds the
+        events the span has, so it is checked as the rows go in: the first
+        row to take a group past half of it raises a warning, once for the
+        group, naming the group and the bytes, and the row that would take
+        it past the cap stops the run with an error naming the group and the
+        bytes, the bank having learned part of the chunk. Each row of the
+        window takes ``8 * (2 + D + D * U)`` bytes and a stamp of 32 beside
+        it. Default 256 KB, ``262144``.
 
     .. rubric:: Output
 
     A value of 0 or below, or a null, is no event, so a row can be a clock
     tick alone. Every row reports each node's intensity, its expected events
     per unit of the clock, read before the row's events from the fit on every
-    row before them. One output column, named after the spec, holds a record
+    row before them. On a temporal clock a quantity measured on the clock
+    reaches the output in seconds (as ``holt``'s trend does): the intensity
+    and the base rate ``mu`` are events per second, and ``alpha``, a count
+    of events, has no unit. One output column, named after the spec, holds a record
     of these fields in each row. `docs/OUTPUTS.md#hawkes
     <https://github.com/rheon-dev/rheon/blob/main/docs/OUTPUTS.md#hawkes>`_
     gives each field's type and when it is null:
 
     ``intensity_<t>``
         Per target: the node's intensity just before the row's events, in
-        events per unit of the clock, from the fit on the rows before. Null
+        events per unit of the clock (per second on a temporal clock), from
+        the fit on the rows before. Null
         below ``min_weight``, and while the fit is not determined: before
         every node has had an event, or while two of its terms cannot be
         told apart, as when two nodes' events fall on the same rows.
     ``weight_sum``
         The weight the model has accumulated before the row and before the
-        row's own decay: every row's weight, an event or not.
+        row's own decay: every row's weight, an event or not. Under a
+        window, the weight inside it: that of the rows with an event the
+        window holds, as it stood after the last row and before this row
+        takes any out.
     ``settled_frac``
         How far the model had come toward its steady state under decay
         before the row.
@@ -104,19 +151,27 @@ def hawkes(
         ``below_min_weight``. A fit not yet determined (``intensity_<t>``
         null with ``weight_sum`` past ``min_weight``) gives none.
     ``coef``
-        The fit after the row, per target ``i``: ``mu``, the base rate,
-        then ``alpha_<j>_beta<β>`` for each source target ``j`` and decay
-        ``β``, the events of ``i`` one event of ``j`` causes through that
-        kernel. :func:`coef_index` names them. The fit is not held to 0 or
-        above: a negative ``alpha`` is an event that inhibits.
+        The fit after the row, per target ``i``: ``mu``, the base rate (per
+        unit of the clock, per second on a temporal clock), then
+        ``alpha_<j>_beta<β>`` for each source target ``j`` and decay ``β``
+        (``alpha_<j>_h<half-life>`` where the kernels are given by
+        ``kernel_half_lives``, the half-life as written, ``h500ms``), the
+        events of ``i`` one event of ``j`` causes through that kernel.
+        :func:`coef_index` names them. The fit is not held to 0 or above: a
+        negative ``alpha`` is an event that inhibits.
 
     .. rubric:: Raises
 
     As every builder does (:mod:`rheon.spec`); ``TypeError`` for
     ``features``, which this model does not take; and ``ValueError``
-    naming the problem for ``kernel_decays`` empty, not above 0 or with a
-    decay twice, ``window_events`` below 1 or beside a finite
-    ``half_life``, and a ``half_life`` whose rate ``ln 2 / half_life`` is
+    naming the problem for neither ``kernel_decays`` nor
+    ``kernel_half_lives`` given, or both; ``kernel_decays`` empty, not above
+    0 or with a decay twice; a ``kernel_half_lives`` entry not finite or not
+    above 0; ``window_events`` below 1 or beside a finite
+    ``half_life``, ``window_size`` not finite or not above 0, beside a
+    finite ``half_life`` or ``window_events``, ``closed``
+    other than ``"right"`` or ``"both"``, or ``"both"`` without
+    ``window_size``, and a ``half_life`` whose rate ``ln 2 / half_life`` is
     within 0.1% of a decay or of a sum of two.
 
     .. rubric:: The update
@@ -143,8 +198,9 @@ def hawkes(
         G₀ₐ = (β_a b_j(a)[0] - R_a) / (β_a - γ)
         Gₐᵦ = (β_a b_j(a)[b] + β_b b_j(b)[a] + β_a β_b Q_j(a)j(b) - R_a R_b) / (β_a + β_b - γ)
 
-    The state is ``R``, ``b``, ``Q``, ``G₀₀`` and the weight, ``8 * (k + D
-    * (1 + k) + D * (D + 1) / 2 + 2)`` bytes for ``k = D * U``, whatever the
+    The state is ``R``, ``b``, ``Q``, ``G₀₀``, the weight and the clock a
+    zero-weight row left uncounted, ``8 * (k + D
+    * (1 + k) + D * (D + 1) / 2 + 3)`` bytes for ``k = D * U``, whatever the
     stream's length.
 
     .. rubric:: Example
@@ -211,17 +267,32 @@ def hawkes(
     kept in two blocks of rows, so that no sum is ever rescaled by a growing
     exponential, and ``R``, ``b`` and ``Q`` are formed afresh from the rows
     each time a block turns over, so their rounding is that of one window.
+    ``window_events`` drops the oldest row once the window holds more rows
+    than it; ``window_size`` drops every row ``window_size`` old at the row
+    it reads, and observes the interval ``(T - window_size, T]``, so ``G₀₀``
+    is ``min(window_size, the clock since the first row)``. Its edge is
+    decided on each row's exact stamp, never a clock summed in doubles.
+    Either way, the fit is that of the window's events alone.
     """
+    # `kernel_decays` is always written, null beside `kernel_half_lives`, as
+    # the Rust spec writes it.
     model: dict[str, Any] = {"type": "hawkes", "kernel_decays": kernel_decays}
+    if kernel_half_lives is not None:
+        model["kernel_half_lives"] = kernel_half_lives
     # Each absent when not given, as the Rust spec leaves it out, so a bank
     # reports the dict this made (`ModelBank.specs`).
     if window_events is not None:
         model["window_events"] = window_events
+    if window_size is not None:
+        model["window_size"] = window_size
+    if closed != "right":
+        model["closed"] = closed
     if max_state_bytes is not None:
         model["max_state_bytes"] = max_state_bytes
     cap = MAX_STATE_BYTES if max_state_bytes is None else max_state_bytes
-    if isinstance(kernel_decays, list) and isinstance(window_events, int) and cap > 0:
-        need = _state_bytes(len(targets), len(kernel_decays), window_events)
+    kernels = kernel_decays if kernel_decays is not None else kernel_half_lives
+    if isinstance(kernels, list) and isinstance(window_events, int) and cap > 0:
+        need = _state_bytes(len(targets), len(kernels), window_events)
         if cap // 2 < need <= cap:
             warnings.warn(
                 RheonWarning(

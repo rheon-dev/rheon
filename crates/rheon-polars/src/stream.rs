@@ -371,6 +371,18 @@ impl AnyModel {
         dispatch!(self, m => m.window_over_budget())
     }
 
+    /// The state's bytes past half of the cap, taken
+    /// ([`OnlineModel::take_state_warning`]).
+    pub fn take_state_warning(&mut self) -> Option<(u64, u64)> {
+        dispatch!(self, m => m.take_state_warning())
+    }
+
+    /// The bytes a row would have taken the state to, past the cap
+    /// ([`OnlineModel::state_over_cap`]).
+    pub fn state_over_cap(&self) -> Option<(u64, u64)> {
+        dispatch!(self, m => m.state_over_cap())
+    }
+
     /// Each target's own weight, for the per-target warmup
     /// ([`OnlineModel::target_n_eff_into`]).
     pub fn target_n_eff_into(&self, out: &mut Vec<f64>) -> bool {
@@ -2207,6 +2219,12 @@ impl Stream {
             })
     }
 
+    /// The first of this stream's models whose state a row would have taken
+    /// past its cap: the bytes and the cap ([`OnlineModel::state_over_cap`]).
+    pub fn state_over_cap(&self) -> Option<(u64, u64)> {
+        self.models.iter().find_map(|(_, m)| m.state_over_cap())
+    }
+
     /// Whether `min_settled_frac` withholds what instance `i` reports from its
     /// state as it stands -- `marginal`'s table, whose rows carry nothing to
     /// withhold (task 278). The fraction is the one the next row would read,
@@ -2517,10 +2535,12 @@ mod conformal_rows;
 mod notified;
 mod pre_row_sigma;
 mod stack_line;
+mod state_cap;
 mod unmet_floor;
 use notified::span_name;
 pub use notified::{Notice, Notified};
 use pre_row_sigma::pre_row_sigma;
+use state_cap::state_cap_notice;
 use unmet_floor::{
     Projection, inflation_notice, unmet_floor_notice, unsolved_notice, unstable_rate_notice,
 };
@@ -4761,6 +4781,11 @@ fn run_instance(
             inst.model
                 .get_mut()
                 .step_sharded_into(xs, &sc.ys, step_d, w, inst.shards, step);
+            // A state the data sizes passed half of its cap on this row:
+            // said once, with the group, by the bank.
+            if let Some((bytes, cap)) = inst.model.get_mut().take_state_warning() {
+                inst.notified.raise(state_cap_notice(inst.spec, bytes, cap));
+            }
         } else {
             inst.model.get().predict_into(xs, &sc.ys, score_d, step);
         }

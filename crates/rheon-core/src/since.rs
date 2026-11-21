@@ -239,7 +239,7 @@ pub(crate) fn events_on_the_row_clock(
 /// adding `d` to the time it removes, an integer one by `d`'s whole units
 /// and its fraction (task 200); a `d` with no nanoseconds (infinite) leaves
 /// a number of the same clock.
-fn back_by(stamp: Stamp, d: f64) -> Stamp {
+pub(crate) fn back_by(stamp: Stamp, d: f64) -> Stamp {
     if d == 0.0 {
         return stamp;
     }

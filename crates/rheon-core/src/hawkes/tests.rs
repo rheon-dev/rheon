@@ -1,5 +1,6 @@
 use super::*;
 use crate::oracle;
+use crate::seconds_of_ns;
 
 fn lcg(state: &mut u64) -> f64 {
     *state = state
@@ -53,6 +54,9 @@ fn cfg(n: usize, betas: &[f64]) -> HawkesCfg {
         decay: Decay::Halflife(f64::INFINITY),
         min_weight: 0.0,
         window_events: None,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        max_state_bytes: None,
     }
 }
 
@@ -305,7 +309,7 @@ fn a_saved_window_goes_on_to_the_bit() {
 }
 
 /// The state's size: `8 (k + D (1 + k) + D (D + 1) / 2 + 2)` bytes of numbers, whatever
-/// the stream's length, and the window's at most `8 W (1 + D + k)` beside.
+/// the stream's length, and the window's at most `8 W (2 + D + k)` beside.
 #[test]
 fn the_state_is_bounded_by_its_shape_and_window() {
     for (n, betas) in [(1usize, vec![1.0, 5.0]), (2, vec![0.7, 4.0, 15.0])] {
@@ -335,7 +339,7 @@ fn the_state_is_bounded_by_its_shape_and_window() {
             m.step(&[], &y, d, 1.0);
             most = most.max(rmp_serde::to_vec(&m.state()).unwrap().len());
         }
-        let window = cap * (1 + n + k);
+        let window = cap * (2 + n + k);
         eprintln!(
             "  window {cap}: at most {} bytes of msgpack, bound {} numbers",
             most,
@@ -555,5 +559,581 @@ fn the_state_never_passes_the_bytes_its_settings_give() {
             most = most.max(8 * floats(&v));
         }
         assert_eq!(most, bound, "{n} nodes, {betas:?}, window {window:?}");
+    }
+}
+
+// ---- the window of clock units (PLAN 498/538) ----
+
+/// A stream whose steps are multiples of a quarter of a unit, so that sums
+/// of them are exact and a row is often exactly a span old: the same rows
+/// as [`stream`], with the steps rounded.
+fn grid_stream(n: usize, rows: usize, seed: u64) -> Vec<Row> {
+    let mut s = seed ^ 0x9e37;
+    stream(n, rows, seed)
+        .into_iter()
+        .enumerate()
+        .map(|(i, (_, y))| {
+            let d = if i == 0 {
+                0.0
+            } else {
+                (lcg(&mut s) * 6.0).floor() * 0.25
+            };
+            (d, y)
+        })
+        .collect()
+}
+
+fn clock_cfg(n: usize, betas: &[f64], span: f64, closed: WindowClosed) -> HawkesCfg {
+    HawkesCfg {
+        window_clock: Some(span),
+        closed,
+        ..cfg(n, betas)
+    }
+}
+
+/// The rows of `line` up to `i` that a window of `span` holds at `line[i]`'s
+/// clock, from the definition: those with an event, less than `span` old
+/// (or exactly that old, under `Both`).
+fn in_clock_window(
+    line: &[(f64, Vec<f64>)],
+    i: usize,
+    span: f64,
+    closed: WindowClosed,
+) -> Vec<(f64, Vec<f64>)> {
+    line[..=i]
+        .iter()
+        .filter(|(t, m)| {
+            let age = line[i].0 - t;
+            m.iter().any(|v| *v > 0.0)
+                && match closed {
+                    WindowClosed::Right => age < span,
+                    WindowClosed::Both => age <= span,
+                }
+        })
+        .cloned()
+        .collect()
+}
+
+/// The window of clock units is the definition's fit on the events of the
+/// last `span`, observed over `(T − span, T]` -- from the first row until
+/// there is that much clock -- at every row of a stream many spans long,
+/// under either edge, over steps that put rows exactly a span old, across the
+/// older block running out and rebuilding.
+#[test]
+fn the_clock_window_is_the_definitions_fit_on_the_events_in_it() {
+    for (n, betas, span, closed) in [
+        (1, vec![1.0, 5.0], 2.5, WindowClosed::Right),
+        (1, vec![1.0, 5.0], 2.5, WindowClosed::Both),
+        (2, vec![0.7, 4.0, 15.0], 6.0, WindowClosed::Right),
+        (2, vec![0.7, 4.0, 15.0], 6.0, WindowClosed::Both),
+        (3, vec![2.0], 0.75, WindowClosed::Right),
+        (2, vec![1.0, 8.0], 40.0, WindowClosed::Right),
+    ] {
+        let rows = grid_stream(n, 400, 211 + (span * 4.0) as u64);
+        let line = timeline(&rows);
+        let mut m = Hawkes::new(clock_cfg(n, &betas, span, closed)).unwrap();
+        let mut worst: f64 = 0.0;
+        let mut at_edge = 0;
+        for (i, (d, y)) in rows.iter().enumerate() {
+            m.step(&[], y, *d, 1.0);
+            let window = in_clock_window(&line, i, span, closed);
+            assert_eq!(m.window_rows(), window.len(), "{span} {closed:?} row {i}");
+            at_edge += usize::from(
+                line[..i]
+                    .iter()
+                    .any(|(t, mk)| line[i].0 - t == span && mk.iter().any(|v| *v > 0.0)),
+            );
+            let start = (line[i].0 - span).max(line[0].0);
+            if window.is_empty() || line[i].0 == start {
+                continue;
+            }
+            let (g_want, b_want) = oracle::hawkes_system(&window, &betas, 0.0, start, line[i].0);
+            let (g, b) = m.system();
+            let err = rel(&g, &g_want).max(rel(&b, &b_want));
+            assert!(
+                err < 1e-12,
+                "{n} nodes, {span} {closed:?}, row {i}: G/b {err:e}"
+            );
+            worst = worst.max(err);
+        }
+        if span < 10.0 {
+            assert!(at_edge > 5, "{span}: the stream put few rows at the edge");
+        }
+        eprintln!("clock window {span} {closed:?}, {n} nodes: worst G/b {worst:.2e}");
+    }
+}
+
+/// A row exactly a span old has left under `Right` and stays under `Both`,
+/// the edge Polars' `rolling_*_by(closed=)` draws; and a row that leaves
+/// does so at the first row at or past its age, before that row's
+/// intensity is read.
+#[test]
+fn a_row_exactly_a_span_old_is_on_the_edge_closed_says() {
+    for (closed, kept) in [(WindowClosed::Right, 3), (WindowClosed::Both, 4)] {
+        let mut m = Hawkes::new(clock_cfg(1, &[1.0], 3.0, closed)).unwrap();
+        // Events at the clocks 0, 1, 2 and 3.
+        for d in [0.0, 1.0, 1.0, 1.0] {
+            m.step(&[], &[Some(1.0)], d, 1.0);
+        }
+        assert_eq!(m.window_rows(), kept, "{closed:?}");
+    }
+    // Rows at 0, 0.5, 3.0 and 3.5: at 3.5 the first two are 3.5 and 3.0 old,
+    // both out under `Right`.
+    let mut m = Hawkes::new(clock_cfg(1, &[1.0], 3.0, WindowClosed::Right)).unwrap();
+    for d in [0.0, 0.5, 2.5, 0.5] {
+        m.step(&[], &[Some(1.0)], d, 1.0);
+    }
+    assert_eq!(m.window_rows(), 2);
+}
+
+/// The clock window decides its edge on the stamps it is handed, exact in
+/// integer nanoseconds, where a clock summed in doubles drifts: steps of
+/// 100 ms against a span of 700 ms. The window's members are those the
+/// integer clock gives at every row.
+#[test]
+fn the_clock_window_reads_its_edge_off_the_stamps() {
+    const MS: i128 = 1_000_000;
+    let n = 2;
+    let betas = [3.0, 12.0];
+    let span_ns = 700 * MS;
+    let span = seconds_of_ns(span_ns);
+    let rows = stream(n, 500, 31);
+    let mut ns = 0i128;
+    let mut stamps = Vec::new();
+    let mut s = 19u64;
+    for i in 0..rows.len() {
+        if i > 0 {
+            ns += 100 * MS * (lcg(&mut s) * 4.0).floor() as i128;
+        }
+        stamps.push(ns);
+    }
+    let mut m = Hawkes::new(clock_cfg(n, &betas, span, WindowClosed::Right)).unwrap();
+    let mut prev = 0i128;
+    let mut flipped = 0;
+    let mut own = 0.0;
+    for (i, ((_, y), &at)) in rows.iter().zip(&stamps).enumerate() {
+        let d = seconds_of_ns(at - prev);
+        prev = at;
+        own += d;
+        m.stamp_next(Stamp::Ns(at));
+        m.step(&[], y, d, 1.0);
+        let has_event = |y: &[Option<f64>]| y.iter().any(|v| Hawkes::mark(*v) > 0.0);
+        let want = rows[..=i]
+            .iter()
+            .zip(&stamps)
+            .filter(|(row, t)| at - **t < span_ns && has_event(&row.1))
+            .count();
+        assert_eq!(m.window_rows(), want, "row {i}");
+        // The summed clock, which the stamps are there to not read, puts a
+        // row exactly 700 ms old on the other side of the edge.
+        flipped += rows[..i]
+            .iter()
+            .zip(&stamps)
+            .filter(|(row, t)| {
+                at - **t == span_ns && has_event(&row.1) && own - seconds_of_ns(**t) < span
+            })
+            .count();
+    }
+    assert!(m.window_rows() > 0);
+    assert!(
+        flipped > 0,
+        "the stream had no row the summed clock misreads"
+    );
+}
+
+/// Under a window `n_eff` is the weight inside it (hard rule 8): the weights
+/// of the event rows held as the last row left them, before the row's own
+/// clock step, for either kind of window. A row with no event, or of weight 0, is no part of the fit and
+/// adds none.
+#[test]
+fn under_a_window_n_eff_is_the_weight_inside_it() {
+    let rows = grid_stream(2, 300, 59);
+    let line = timeline(&rows);
+    let weight = |i: usize| match i % 7 {
+        0 => 0.0,
+        1 => 2.5,
+        2 => 0.5,
+        _ => 1.0,
+    };
+    for kind in 0..3 {
+        let c = match kind {
+            0 => HawkesCfg {
+                window_events: Some(9),
+                ..cfg(2, &[1.0, 4.0])
+            },
+            1 => clock_cfg(2, &[1.0, 4.0], 3.0, WindowClosed::Right),
+            _ => clock_cfg(2, &[1.0, 4.0], 3.0, WindowClosed::Both),
+        };
+        let mut m = Hawkes::new(c).unwrap();
+        let mut held: VecDeque<(f64, f64)> = VecDeque::new();
+        for (i, (d, y)) in rows.iter().enumerate() {
+            // The weight inside the window as the last row left it, before
+            // this row's own clock step (hard rule 8).
+            let want: f64 = held.iter().map(|(_, w)| w).sum();
+            assert!(
+                (m.n_eff() - want).abs() < 1e-12,
+                "kind {kind} row {i}: accessor"
+            );
+            let s = m.step(&[], y, *d, weight(i));
+            assert!(
+                (s.n_eff - want).abs() < 1e-12,
+                "kind {kind} row {i}: {} against {want}",
+                s.n_eff
+            );
+            // A row of weight 0 counts in no clock: it drops no row.
+            if weight(i) > 0.0 {
+                match kind {
+                    0 => {}
+                    1 => held.retain(|(t, _)| line[i].0 - t < 3.0),
+                    _ => held.retain(|(t, _)| line[i].0 - t <= 3.0),
+                }
+            }
+            if weight(i) > 0.0 && line[i].1.iter().any(|v| *v > 0.0) {
+                held.push_back((line[i].0, weight(i)));
+                if kind == 0 && held.len() > 9 {
+                    held.pop_front();
+                }
+            }
+        }
+    }
+}
+
+/// A row of weight 0 learns none of its events under a window of clock
+/// units either, and the window holds none of the row: its state is that of
+/// a row with no event, to the bit.
+#[test]
+fn a_zero_weight_row_is_no_part_of_a_clock_window() {
+    let rows = grid_stream(2, 160, 5);
+    let c = clock_cfg(2, &[1.0, 4.0], 4.0, WindowClosed::Right);
+    let mut a = Hawkes::new(c.clone()).unwrap();
+    let mut b = Hawkes::new(c.clone()).unwrap();
+    for (i, (d, y)) in rows.iter().enumerate() {
+        if i % 5 == 3 {
+            a.step(&[], y, *d, 0.0);
+            b.step(&[], &[None, None], *d, 0.0);
+        } else {
+            a.step(&[], y, *d, 1.0);
+            b.step(&[], y, *d, 1.0);
+        }
+    }
+    assert_eq!(a, b);
+    // The first row at weight 0: nothing divides by it.
+    let mut m = Hawkes::new(c).unwrap();
+    m.step(&[], &[Some(1.0), Some(1.0)], 0.0, 0.0);
+    let s = m.step(&[], &[Some(1.0), Some(1.0)], 1.0, 1.0);
+    assert_eq!(s.n_eff, 0.0);
+    assert!(m.r.iter().chain(&m.b).chain(&m.q).all(|v| v.is_finite()));
+}
+
+/// A save mid-window goes on to the bit, stamped or not, in either block,
+/// and a read ahead from a restored state is the live one's.
+#[test]
+fn a_saved_clock_window_goes_on_to_the_bit() {
+    const MS: i128 = 1_000_000;
+    let rows = grid_stream(2, 300, 77);
+    let c = clock_cfg(2, &[1.0, 6.0], 2.0, WindowClosed::Right);
+    for stamped in [false, true] {
+        let mut at = 0i128;
+        let stamps: Vec<i128> = rows
+            .iter()
+            .map(|(d, _)| {
+                at += (d * 1000.0).round() as i128 * MS;
+                at
+            })
+            .collect();
+        let feed = |m: &mut Hawkes, i: usize| {
+            if stamped {
+                m.stamp_next(Stamp::Ns(stamps[i]));
+            }
+            m.step(&[], &rows[i].1, rows[i].0, 1.0)
+        };
+        for cut in [0, 1, 5, 40, 41, 97, 150, 211] {
+            let mut m = Hawkes::new(c.clone()).unwrap();
+            for i in 0..cut {
+                feed(&mut m, i);
+            }
+            let bytes = rmp_serde::to_vec(&m.state()).unwrap();
+            let mut back = Hawkes::restore(&rmp_serde::from_slice(&bytes).unwrap()).unwrap();
+            assert_eq!(m, back, "stamped {stamped}, cut {cut}: the state");
+            for (i, row) in rows.iter().enumerate().skip(cut) {
+                let ahead = back.predict(&[], row.0);
+                let a = feed(&mut m, i);
+                let b = feed(&mut back, i);
+                let bits = |s: &Step| s.pred.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+                assert_eq!(bits(&a), bits(&b), "stamped {stamped}, cut {cut}, row {i}");
+                assert_eq!(bits(&a), bits(&ahead), "predict, cut {cut}, row {i}");
+                assert_eq!(a.n_eff, ahead.n_eff);
+            }
+            assert_eq!(m, back, "stamped {stamped}, cut {cut}");
+        }
+    }
+}
+
+/// `predict` is the step's answer at the row, across the rows that leave: the
+/// window is cut at the row's clock on a copy, the state untouched.
+#[test]
+fn a_read_ahead_is_the_step_across_the_rows_that_leave() {
+    for closed in [WindowClosed::Right, WindowClosed::Both] {
+        let rows = grid_stream(2, 250, 13);
+        let mut m = Hawkes::new(clock_cfg(2, &[1.0, 4.0], 1.5, closed)).unwrap();
+        let mut cut_ahead = 0;
+        for (d, y) in &rows {
+            let before = m.clone();
+            let p = m.predict(&[], *d);
+            let ahead = m.stamp_ahead(*d).unwrap();
+            cut_ahead += usize::from(m.oldest_has_left(ahead));
+            assert_eq!(before, m, "a read moved the state");
+            let s = m.step(&[], y, *d, 1.0);
+            assert_eq!(
+                p.pred.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                s.pred.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
+            );
+            assert_eq!(p.n_eff, s.n_eff);
+        }
+        assert!(cut_ahead > 20, "{closed:?}: few reads cut the window");
+    }
+}
+
+/// A clock window's size is the data's, so it is counted as the rows go in:
+/// the first row to pass half of the cap raises a warning, once, and the
+/// state is never taken past the cap, the row that would being the one not
+/// learned.
+#[test]
+fn a_burst_of_events_is_warned_of_at_half_the_cap_and_stopped_at_it() {
+    assert_eq!(
+        std::mem::size_of::<Stamp>(),
+        32,
+        "the byte counts, and the docs, say 32"
+    );
+    let (n, betas) = (2usize, vec![1.0, 4.0]);
+    let one_row = Hawkes::clock_state_bytes(n, 2, 1) - Hawkes::clock_state_bytes(n, 2, 0);
+    // 100 rows fit; a span that holds more than that is the burst.
+    let cap = Hawkes::clock_state_bytes(n, 2, 100);
+    let mut c = clock_cfg(n, &betas, 1e6, WindowClosed::Right);
+    c.max_state_bytes = Some(cap);
+    let step = |m: &mut Hawkes, i: usize| {
+        m.step(
+            &[],
+            &[Some(1.0), Some(1.0)],
+            if i == 0 { 0.0 } else { 0.01 },
+            1.0,
+        )
+    };
+    let mut m = Hawkes::new(c.clone()).unwrap();
+    let mut warned_at = None;
+    let mut over_at = None;
+    let mut high = 0u64;
+    for i in 0..300usize {
+        step(&mut m, i);
+        let held = Hawkes::clock_state_bytes(n, 2, m.window_rows());
+        high = high.max(held);
+        assert!(held <= cap, "row {i}: {held} bytes past the cap {cap}");
+        if let Some((bytes, said_cap)) = m.take_state_warning() {
+            assert!(warned_at.replace(i).is_none(), "warned twice");
+            assert_eq!(said_cap, cap);
+            assert_eq!(bytes, held);
+            assert!(2 * bytes > cap && 2 * (bytes - one_row) <= cap, "{bytes}");
+        }
+        if let Some((bytes, said_cap)) = m.state_over_cap() {
+            over_at.get_or_insert(i);
+            assert_eq!(said_cap, cap);
+            assert_eq!(bytes, cap + one_row, "the row that would have passed it");
+        }
+    }
+    // The first row to hold more than half of the cap's bytes warns (the
+    // sums are part of them); the 101st (index 100) is the first not learned.
+    let half = (1..=100)
+        .find(|&r| 2 * Hawkes::clock_state_bytes(n, 2, r) > cap)
+        .unwrap();
+    assert_eq!(warned_at, Some(half - 1));
+    assert_eq!(over_at, Some(100));
+    assert_eq!(m.window_rows(), 100);
+    assert_eq!(high, cap);
+    // A span that holds few rows stays under the cap and says nothing.
+    let mut quiet = Hawkes::new(HawkesCfg {
+        window_clock: Some(0.05),
+        ..c.clone()
+    })
+    .unwrap();
+    for i in 0..300usize {
+        step(&mut quiet, i);
+        assert!(quiet.take_state_warning().is_none());
+        assert!(quiet.state_over_cap().is_none());
+    }
+    // The warning is once a group: a save and load after it goes on without
+    // saying it again, and the overrun is held across a save.
+    let mut m = Hawkes::new(c).unwrap();
+    for i in 0..60usize {
+        step(&mut m, i);
+    }
+    assert!(m.take_state_warning().is_some());
+    let bytes = rmp_serde::to_vec(&m.state()).unwrap();
+    let mut back = Hawkes::restore(&rmp_serde::from_slice(&bytes).unwrap()).unwrap();
+    for i in 60..300usize {
+        step(&mut back, i);
+        assert!(back.take_state_warning().is_none(), "row {i}");
+    }
+    assert!(back.state_over_cap().is_some());
+    let bytes = rmp_serde::to_vec(&back.state()).unwrap();
+    let again = Hawkes::restore(&rmp_serde::from_slice(&bytes).unwrap()).unwrap();
+    assert_eq!(again.state_over_cap(), back.state_over_cap());
+}
+
+/// The numbers a clock window's state holds are the bytes it counts: the
+/// sums and the window's rows, the clock the model tracks and a stamp a row.
+#[test]
+fn a_clock_windows_numbers_are_the_bytes_it_counts() {
+    fn floats(v: &rmpv::Value) -> u64 {
+        match v {
+            rmpv::Value::Array(a) => a.iter().map(floats).sum(),
+            rmpv::Value::Map(m) => m
+                .iter()
+                .filter(|(k, _)| k.as_str() != Some("cfg"))
+                .map(|(_, v)| floats(v))
+                .sum(),
+            rmpv::Value::F64(_) => 1,
+            _ => 0,
+        }
+    }
+    let (n, betas) = (2usize, vec![0.7, 4.0, 15.0]);
+    let mut m = Hawkes::new(clock_cfg(n, &betas, 5.0, WindowClosed::Right)).unwrap();
+    let mut most = 0;
+    for (d, y) in grid_stream(n, 1500, 3) {
+        m.step(&[], &y, d, 1.0);
+        let bytes = rmp_serde::to_vec_named(&m.state()).unwrap();
+        let v = rmpv::decode::read_value(&mut bytes.as_slice()).unwrap();
+        let rows = m.window_rows() as u64;
+        // Unstamped, a row's stamp is a raw clock and 0 removed: two
+        // numbers, where the model counts a stamp as 32 bytes.
+        let want = Hawkes::state_bytes(n, betas.len(), Some(m.window_rows())) + 8 + 16 * rows;
+        assert_eq!(8 * floats(&v), want, "{rows} rows");
+        most = most.max(rows);
+    }
+    assert!(most > 10);
+}
+
+#[test]
+fn the_clock_windows_settings_are_refused_where_they_conflict() {
+    let refuse = |c: HawkesCfg, says: &str| {
+        let e = Hawkes::new(c).unwrap_err();
+        assert!(e.contains(says), "{e}");
+    };
+    for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        refuse(
+            clock_cfg(1, &[1.0], bad, WindowClosed::Right),
+            "finite number of clock units above 0",
+        );
+    }
+    let mut c = clock_cfg(1, &[1.0], 5.0, WindowClosed::Right);
+    c.window_events = Some(5);
+    refuse(c, "two windows");
+    let mut c = cfg(1, &[1.0]);
+    c.closed = WindowClosed::Both;
+    refuse(c, "no clock window");
+    let mut c = clock_cfg(1, &[1.0], 5.0, WindowClosed::Right);
+    c.decay = Decay::Halflife(100.0);
+    refuse(c, "takes no decay");
+    let mut c = clock_cfg(1, &[1.0], 5.0, WindowClosed::Right);
+    c.max_state_bytes = Some(0);
+    refuse(c, "max_state_bytes must be above 0");
+    let mut c = clock_cfg(1, &[1.0], 5.0, WindowClosed::Right);
+    c.max_state_bytes = Some(10);
+    refuse(c, "past max_state_bytes of 10");
+}
+
+/// A row of weight 0 counts in no clock (hard rule 9): the stream with such
+/// rows among its rows gives every other row the output, to the bit, of the
+/// stream without them, whose next row steps by the zero-weight rows' steps
+/// and its own; the rows are in no window and none of `n_eff`, and the state
+/// at the end is the same; and each is read as any row is, from the last row
+/// that counted.
+#[test]
+fn a_zero_weight_row_counts_in_no_clock() {
+    const MS: i128 = 1_000_000;
+    let base = grid_stream(2, 260, 41);
+    let configs = [
+        cfg(2, &[1.0, 4.0]),
+        HawkesCfg {
+            window_events: Some(11),
+            ..cfg(2, &[1.0, 4.0])
+        },
+        clock_cfg(2, &[1.0, 4.0], 3.0, WindowClosed::Right),
+        clock_cfg(2, &[1.0, 4.0], 3.0, WindowClosed::Both),
+    ];
+    for (c, config) in configs.iter().enumerate() {
+        for stamped in [false, true] {
+            if stamped && config.window_clock.is_none() {
+                continue;
+            }
+            // The stream with zero-weight rows: after some rows, one to
+            // three of them with events, steps of their own (some 0).
+            let mut with: Vec<(f64, Vec<Option<f64>>, f64)> = Vec::new();
+            let mut without: Vec<(f64, Vec<Option<f64>>, f64)> = Vec::new();
+            let mut s = 77u64 + c as u64;
+            for (i, (d, y)) in base.iter().enumerate() {
+                // Zero rows before the row `i`, if any: they carry their
+                // steps, summed as the model sums them.
+                let mut carried: Option<f64> = None;
+                if i % 4 == 2 || i == 0 {
+                    for _ in 0..1 + (lcg(&mut s) * 3.0) as usize {
+                        let dz = (lcg(&mut s) * 5.0).floor() * 0.25;
+                        let dz = if i == 0 { 0.0 } else { dz };
+                        with.push((dz, vec![Some(1.0), Some(2.0)], 0.0));
+                        carried = Some(carried.map_or(dz, |c| c + dz));
+                    }
+                }
+                let d_in = if i == 0 { 0.0 } else { *d };
+                with.push((d_in, y.clone(), 1.0));
+                let total = match carried {
+                    Some(cz) if i != 0 => cz + d_in,
+                    _ => d_in,
+                };
+                without.push((total, y.clone(), 1.0));
+            }
+            let mut a = Hawkes::new(config.clone()).unwrap();
+            let mut b = Hawkes::new(config.clone()).unwrap();
+            let (mut ns_a, mut ns_b) = (0i128, 0i128);
+            let mut outs_a = Vec::new();
+            let mut zero_reads = 0;
+            for (d, y, w) in &with {
+                ns_a += (d * 1000.0).round() as i128 * MS;
+                if stamped {
+                    a.stamp_next(Stamp::Ns(ns_a));
+                }
+                let before = a.clone();
+                let ahead = before.predict(&[], *d);
+                let step = a.step(&[], y, *d, *w);
+                if *w == 0.0 {
+                    zero_reads += 1;
+                    // Read as any row is: the read ahead of the state it left.
+                    assert_eq!(
+                        step.pred.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                        ahead.pred.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
+                    );
+                } else {
+                    outs_a.push((step.pred, step.n_eff));
+                }
+            }
+            for (k, (d, y, w)) in without.iter().enumerate() {
+                ns_b += (d * 1000.0).round() as i128 * MS;
+                if stamped {
+                    b.stamp_next(Stamp::Ns(ns_b));
+                }
+                let step = b.step(&[], y, *d, *w);
+                let (pa, na) = &outs_a[k];
+                assert_eq!(
+                    pa.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                    step.pred.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                    "config {c}, stamped {stamped}, row {k}"
+                );
+                assert_eq!(
+                    na.to_bits(),
+                    step.n_eff.to_bits(),
+                    "config {c}, row {k}: n_eff"
+                );
+            }
+            assert!(zero_reads > 40);
+            assert_eq!(a, b, "config {c}, stamped {stamped}: the state");
+        }
     }
 }

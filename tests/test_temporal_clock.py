@@ -519,6 +519,13 @@ class TestEveryClockParameterTakesADuration:
             # Huber loss's (task 271).
             kw["loss"] = "huber"
         kw.update(clock="t", gap_cap="1h")
+        if builder == "hawkes":
+            # A rate per clock unit has no duration: the kernels are half-lives.
+            kw.pop("kernel_decays", None)
+            kw["kernel_half_lives"] = ["30s", "2m"]
+            # A window takes no decay beside it: the parameter under test
+            # sets its own half_life where it is that one.
+            kw["half_life"] = float("inf")
         return kw
 
     #: A duration each parameter can take on the frame above, and whatever
@@ -532,6 +539,7 @@ class TestEveryClockParameterTakesADuration:
         "long_half_life": ("1h", {"session": "s", "session_gap": "10m", "session_shrink": 0.5}),
         "solve_every": ("10s", {}),
         "window_size": ("30m", {}),
+        "kernel_half_lives": (["20s", "10m"], {}),
         "select_half_life": ("1h", {}),
         "coef_half_life": ("2m", {}),
         "revert_half_life": ("1h", {}),
@@ -611,7 +619,7 @@ class TestEveryClockParameterTakesADuration:
                 if k != name
             }
             plain = {k: v for k, v in plain.items() if v is not None}
-            plain[name] = 600.0
+            plain[name] = [600.0, 60.0] if isinstance(value, list) else 600.0
             with pytest.raises(ValueError, match=f"{name} is a plain number"):
                 rp.ModelBank([fn("m", **plain)]).fit_predict(df)
             seen += 1

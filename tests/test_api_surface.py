@@ -403,6 +403,8 @@ RESOLVED_VARIANTS: list[tuple[str, dict[str, object]]] = [
     ("rcov", {"kind": "preavg"}),
     ("bocpd", {"robust_beta": 0.1}),
     ("hawkes", {"half_life": float("inf"), "window_events": 20}),
+    ("hawkes", {"half_life": float("inf"), "window_size": 30.0, "closed": "both"}),
+    ("hawkes", {"kernel_decays": None, "kernel_half_lives": [0.5, 4.0]}),
 ]
 
 
@@ -661,6 +663,13 @@ ENUM_PROBES: list[
     ("ew_class.closed", "ew_class", {"window_size": 100.0}, "model.closed", "word"),
     ("ew_cov.closed", "ew_cov", {"window_size": 100.0}, "model.closed", "word"),
     ("ewridge.closed", "ewridge", {"window_size": 100.0}, "model.closed", "word"),
+    (
+        "hawkes.closed",
+        "hawkes",
+        {"half_life": float("inf"), "window_size": 100.0},
+        "model.closed",
+        "word",
+    ),
     ("lasso.closed", "lasso", {"window_size": 100.0}, "model.closed", "word"),
     ("marginal.closed", "marginal", {"window_size": 100.0}, "model.closed", "word"),
     ("ew_class.covariance_type", "ew_class", {}, "model.covariance_type", "word"),

@@ -1342,6 +1342,12 @@ fn process<'s>(
                                 outs.push((si, Err(over_budget(spec, key, bytes, cadence, true))));
                                 break 'segments;
                             }
+                            // A state the data sizes that a row would have taken
+                            // past its cap: the model learned no row after it.
+                            if let Some((bytes, cap)) = stream.state_over_cap() {
+                                outs.push((si, Err(over_state_cap(spec, key, bytes, cap))));
+                                break 'segments;
+                            }
                         }
                         Err(refusal) => {
                             outs.push((si, Err(backwards_clock(spec, refusal, input_rows))));
@@ -1561,7 +1567,7 @@ use inline::{join_maybe_par, map_maybe_par, map_range_maybe_par, map_vec_maybe_p
 pub(crate) use refusals::clock_amount;
 #[cfg(test)]
 use refusals::over_budget_message;
-use refusals::{backwards_clock, non_finite_step, over_budget};
+use refusals::{backwards_clock, non_finite_step, over_budget, over_state_cap};
 
 /// Drop the streams a refused chunk materialized, `(spec index, key)` each.
 /// A new group's Huber refit buffers against its spec's `refit_budget`

@@ -748,6 +748,9 @@ fn hawkes_golden() {
         decay: Decay::Halflife(15.0),
         min_weight: 0.0,
         window_events: None,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        max_state_bytes: None,
     };
     let mut m = Hawkes::new(cfg.clone()).unwrap();
     let mut got = signature_of(&mut m, 0, false);

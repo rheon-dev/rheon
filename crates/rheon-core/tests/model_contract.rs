@@ -4334,15 +4334,31 @@ fn hawkes_cfg() -> HawkesCfg {
         decay: decay(),
         min_weight: 10.0,
         window_events: None,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        max_state_bytes: None,
     }
 }
 
 /// A window of a few rows, so the probes run through its turnovers; a
-/// window takes no decay.
+/// window takes no decay, and its `n_eff` is the weight inside it, at most
+/// the six rows', so a `min_weight` of 3.
 fn hawkes_windowed_cfg() -> HawkesCfg {
     HawkesCfg {
         decay: Decay::Halflife(f64::INFINITY),
         window_events: Some(6),
+        min_weight: 3.0,
+        ..hawkes_cfg()
+    }
+}
+
+/// The same over a span of the clock: the probes' rows are a unit apart, so
+/// a window of 12.5 units holds thirteen rows.
+fn hawkes_clock_cfg() -> HawkesCfg {
+    HawkesCfg {
+        decay: Decay::Halflife(f64::INFINITY),
+        window_clock: Some(12.5),
+        min_weight: 3.0,
         ..hawkes_cfg()
     }
 }
@@ -4364,14 +4380,28 @@ fn hawkes() {
     assert!((r.n_eff[2] - (0.5f64.powf(1.0 / HALFLIFE) + 1.0)).abs() < 1e-12);
     assert!((r.after_gap - (r.before_gap * 0.5f64.powi(10) + 1.0)).abs() < 1e-9);
     assert!(r.roundtrips);
-    // The window forgets by dropping, so its weight does not decay.
+    // Under a window `n_eff` is the weight inside it (hard rule 8): the six
+    // rows' of a window of six, the thirteen of a span of 12.5 units a step
+    // apart (the clocks 28 to 40); and a gap neither decays it nor adds a row the window has not
+    // room for.
     let r = probe_with(
         Hawkes::new(hawkes_windowed_cfg()).unwrap(),
         2,
         Some(&Hawkes::n_eff),
     );
-    assert_eq!(r.n_eff, vec![0.0, 1.0, 2.0, 40.0]);
-    assert_eq!(r.after_gap, r.before_gap + 1.0, "no decay over a gap");
+    assert_eq!(r.n_eff, vec![0.0, 1.0, 2.0, 6.0]);
+    assert_eq!(r.after_gap, r.before_gap, "a gap does not move the window");
+    assert!(r.roundtrips);
+    // A gap past the clock window's span takes every row out of it, at the
+    // row the gap ends on; only that row is in the weight the next reports.
+    let r = probe_with(
+        Hawkes::new(hawkes_clock_cfg()).unwrap(),
+        2,
+        Some(&Hawkes::n_eff),
+    );
+    assert_eq!(r.n_eff, vec![0.0, 1.0, 2.0, 13.0]);
+    assert_eq!(r.before_gap, 13.0);
+    assert_eq!(r.after_gap, 1.0, "the gap emptied the window");
     assert!(r.roundtrips);
 }
 
@@ -4379,6 +4409,7 @@ fn hawkes() {
 fn hawkes_predict_is_the_step() {
     predict_is_the_step_without_the_step(|| Hawkes::new(hawkes_cfg()).unwrap(), 2, false);
     predict_is_the_step_without_the_step(|| Hawkes::new(hawkes_windowed_cfg()).unwrap(), 2, false);
+    predict_is_the_step_without_the_step(|| Hawkes::new(hawkes_clock_cfg()).unwrap(), 2, false);
 }
 
 #[test]
@@ -5735,6 +5766,13 @@ mod generated {
         #[test]
         fn hawkes_windowed(rows in stream(2, false), split in 0usize..60) {
             contract(|| Hawkes::new(hawkes_windowed_cfg()).unwrap(), &rows, split)?;
+        }
+
+        /// A window of clock units leaves rows at the steps' own, which the
+        /// stream's gaps and zero steps put on and off its edge.
+        #[test]
+        fn hawkes_clock_windowed(rows in stream(2, false), split in 0usize..60) {
+            contract(|| Hawkes::new(hawkes_clock_cfg()).unwrap(), &rows, split)?;
         }
     }
 }

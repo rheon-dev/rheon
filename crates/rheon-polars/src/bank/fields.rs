@@ -356,15 +356,15 @@ pub fn coef_fields(spec: &Spec) -> Vec<CoefField> {
     };
     let terms: Vec<String> = if matches!(spec.model, crate::ModelKind::Holt { .. }) {
         vec!["level".into(), "trend".into()]
-    } else if let crate::ModelKind::Hawkes { kernel_decays, .. } = &spec.model {
-        // `μ`, then `α` from each source node at each kernel decay, the
-        // source outer: the order of `Hawkes::coefficients`.
-        let betas = kernel_decays.as_deref().unwrap_or_default();
+    } else if matches!(spec.model, crate::ModelKind::Hawkes { .. }) {
+        // `μ`, then `α` from each source node at each kernel, the source
+        // outer: the order of `Hawkes::coefficients`.
+        let kernels = spec.model.hawkes_kernels();
         std::iter::once("mu".to_string())
             .chain(spec.targets.iter().flat_map(|src| {
-                betas
+                kernels
                     .iter()
-                    .map(move |b| format!("alpha_{src}_beta{}", crate::spec::num_label(*b)))
+                    .map(move |(_, label)| format!("alpha_{src}_{label}"))
             }))
             .collect()
     } else if matches!(

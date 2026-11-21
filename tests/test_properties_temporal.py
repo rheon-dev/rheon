@@ -489,6 +489,16 @@ def clock_specs(draw, model: str, step: int, cap: int):
             degrees_of_freedom_prior=2.0,
             covariance_prior=[1.0],
         )
+    elif model == "hawkes":
+        # Task 539: the kernels as durations, the window as a span with its
+        # edge, and zero-weight rows that count in no clock.
+        # No forgetting beside the window: a half-life within 0.1% of a
+        # kernel's is refused, and a drawn one could land there.
+        kw |= dict(targets=["y"], half_life=float("inf"))
+        kw["kernel_half_lives"] = [steps(1, 6), steps(7, 40)]
+        kw |= maybe("window_size", 1, 60)
+        if "window_size" in kw:
+            kw["closed"] = draw(st.sampled_from(["right", "both"]))
     else:
         assert model == "rls", model
         kw |= xy | maybe("embargo", 1, 5)

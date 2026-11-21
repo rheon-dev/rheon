@@ -3573,7 +3573,10 @@ Its parameters, their defaults and what each refuses are in its
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md#hawkes). The parameters
 every spec takes are in [What every spec takes](#what-every-spec-takes),
 apart from `features`, which it refuses. A row's weight only decides whether
-its events are learned: 0 skips them, any weight above 0 learns them.
+its events are learned: 0 skips them, any weight above 0 learns them. A row
+of weight 0 also counts in no clock: the next row steps as if it were not
+there, it is in no window, and its weight is in no `weight_sum`; it is still
+read, from the last row that counted.
 
 #### The update
 
@@ -3592,9 +3595,28 @@ Gₐᵦ = (β_a b_j(a)[b] + β_b b_j(b)[a] + β_a β_b Q_j(a)j(b) − R_a R_b) /
 
 `θ_i` minimizes the least-squares contrast `Σ_i ∫ λ_i² dt − 2 ∫ λ_i dN_i`,
 each instant weighted by its decay. `G` is not kept, since it can be read
-from `b` and `Q`. The state is `8 (k + D (1 + k) + D (D + 1) / 2 + 2)` bytes
-for `D` nodes and `k = D U` excitations: 64 bytes for one node and two
-decays, 200 for two nodes and three.
+from `b` and `Q`. The state is `8 (k + D (1 + k) + D (D + 1) / 2 + 3)` bytes
+for `D` nodes and `k = D U` excitations: 72 bytes for one node and two
+decays, 208 for two nodes and three.
+
+#### The kernels, and a temporal clock
+
+The kernels are given by their decays, `kernel_decays=[1.0, 5.0]`, rates per
+unit of the clock, or by their half-lives, `kernel_half_lives=[0.5, 2.0]`,
+with `β = ln 2 / half-life` (give one of the two). A rate has no duration
+form, so on a temporal clock the kernels are given by their half-lives as
+durations, as `half_life` is: `kernel_half_lives=["500ms", "2s"]`,
+`window_size="5m"`, `gap_cap="1h"`. A temporal clock is read in its own
+integer nanoseconds, a duration is its seconds, and the model then runs in
+seconds. Take the same spec on a numeric clock of seconds, with the decays `ln
+2 / half-life` converted by hand. Its output is the same to the bit where a
+step's seconds are the same double on both clocks (quarter seconds, say), and
+within 1e-13 where they differ in the last bit of a step. **Quantities measured on a
+temporal clock reach the output in seconds**, as for `holt`'s trend: each
+node's `intensity` and the base rate `mu` in `coef` are events per second,
+and each `alpha`, a count of events, has no unit. A term's name carries the
+kernel as it was given: `alpha_<j>_beta2` for a decay, `alpha_<j>_h500ms`
+for a half-life.
 
 #### Example
 
@@ -3666,14 +3688,47 @@ fall on the same rows give `G` a condition number near `1e14`, and an exact
 solution of digits of rounding. Where a pivot of `G` scaled to a unit
 diagonal falls below `1e-10`, the row reports no intensity.
 
-**The window keeps its rows.** `window_events = W` fits the last `W` rows
-that carried an event, alone. Dropping the oldest takes back exactly what it
-added, through the sums of its excitation of the later rows. Those are kept
-in two blocks, so that no sum is rescaled by a growing exponential.
+**The window keeps its rows, counted in events or in clock units.**
+`window_events = W` fits the last `W` rows that carried an event, alone.
+`window_size = D` fits the events of the last `D` clock units, alone, and
+observes the interval `(T − D, T]` (from the first row, until there are `D`
+units of it), so a stretch with no event in it is observed as one. Either
+way dropping a row takes back exactly what it added, through the sums of its
+excitation of the later rows, which are kept in two blocks so that no sum is
+rescaled by a growing exponential. A fit with `window_size` agrees with
+tick refit on the events inside the span to 1e-14 of the largest
+coefficient. Give one of the two: they are two windows, and the fit holds
+one. The span is a number of the clock's units, or of rows where the spec
+has no clock, or a duration on a temporal clock.
 
-**The window's bytes are known from the spec.** The window holds
-`8 (1 + D + k)` bytes a row, 32 for one node and two decays, and
-`window_events` bounds its rows. So a group's whole state is known when the
-spec is built. A spec past `max_state_bytes` is refused, and one past half of
-it is warned of. At its default of 256 KB, that is about 8,190 rows of one
-node and two decays, or 3,637 of two nodes and three.
+**The window's edge.** A row leaves a `window_size` window at the first row
+that finds it `D` old, before that row's intensity is read, decided on the
+rows' exact stamps and not on a clock summed in doubles. The edge is that of
+the window operators and Polars' `rolling_*_by(closed=)`. `closed = "right"`
+(the default) keeps the rows less than `D` old, so a row exactly `D` old has
+left and the window is `(T − D, T]`. `closed = "both"` keeps it, `[T − D,
+T]`. `"left"` and `"none"` would leave out the row the window ends
+at, which a model cannot do, and are refused.
+
+**The weight under a window.** `weight_sum`, and the `min_weight` gate that
+reads it, count the weight of the rows with an event that the window holds,
+as the last row left them. A row that leaves at this row still counts in
+what the row reports, as weight a decay takes at this row is still
+undecayed in it. A row with no event is no part of the
+fit, and the model keeps no record of it, so its weight is not counted. Set
+`min_weight` at most the weight a window can hold.
+
+**The state's bytes are held to `max_state_bytes`.** The window holds `8 (2 + D
++ k)` bytes a row (its clock, its weight, its marks and its `k` sums), 40 for
+one node and two decays, and `window_events` bounds its rows, so a group's
+whole state is known when the spec is built. A spec past `max_state_bytes` is
+refused, and one past half of it is warned of. At its default of 256 KB, that
+is about 4,090 rows of one node and two decays, or 3,200 of two nodes and
+three. A `window_size` window holds as many events as its span does, which
+the data decides, so each row holds a stamp of 32 bytes more. The bytes are
+checked as the rows go in. The first row to take a group past half of
+`max_state_bytes` gives a warning, once for the group, naming the group and
+the bytes. The row that would take it past the cap is not learned, and the
+bank stops with an error naming the group and the bytes, having learned part
+of the chunk. A spec whose state without any event is already past the cap
+is refused when it is built.

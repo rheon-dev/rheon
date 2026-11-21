@@ -58,7 +58,8 @@
 //! ```
 //!
 //! So the state is `R` (`k`), `b` (`D p`), `Q` (symmetric, `D (D + 1) / 2`),
-//! `G₀₀` and the weight: `8 (k + D (1 + k) + D (D + 1) / 2 + 2)` bytes, whatever the stream's length, and a row
+//! `G₀₀`, the weight and the clock a zero-weight row left
+//! uncounted: `8 (k + D (1 + k) + D (D + 1) / 2 + 3)` bytes, whatever the stream's length, and a row
 //! costs `U` exponentials and `O(D k)` additions to learn. A read assembles `G`
 //! in `O(k²)` and solves it by Cholesky in `O(p³)`, once a row, for the
 //! intensities the row reports. `γ` within 0.1% of a decay `β_u` or of a sum
@@ -78,26 +79,49 @@
 //! intensity, can be negative where the data say so.
 //!
 //! **The weight.** A row's weight decides only whether its events are
-//! learned: 0 advances the clock and learns nothing (hard rule 9), and any
+//! learned: 0 learns nothing and counts in no clock (hard rule 9: the next
+//! row steps as if the zero-weight row were not there, from the last row
+//! that counted, and the row is in no window and none of `n_eff`; it is
+//! still read, as any row is), and any
 //! weight above 0 learns the row's events at their marks. An event's
 //! excitation is a fact of the process, not evidence to scale, and `G`'s
 //! event part is read from `b` only because the same marks build both.
 //! `weight_sum` is the decayed sum of the rows' weights, every row's, as in
 //! every model (hard rule 8).
 //!
-//! **The window** (`window_events = W`). The fit is that of the last `W`
-//! rows that carried an event, alone, observed from the clock of the row
-//! dropped last (from the first row until one is): excitation by an event
-//! before the window is dropped too. Dropping the oldest row `e` takes back
-//! exactly what it added:
+//! **The window** (`window_events = W`, or `window_clock = D`). The fit is
+//! that of the last `W` rows that carried an event, or of the events of the
+//! last `D` clock units, alone: excitation by an event before the window is
+//! dropped too. Dropping the oldest row `e` takes back exactly what it added:
 //!
 //! ```text
 //! b_j[0] −= m_e,j      Q_jl −= m_e,j m_e,l      R_ju −= m_e,j β_u e^(−β_u (T − t_e))
 //! b_i[(j, u)] −= β_u m_e,j F_e[i, u],    F_e[i, u] = Σ_{later rows l} m_l,i e^(−β_u (t_l − t_e))
-//! G₀₀ = T − t_e
 //! ```
 //!
-//! `F_e` cannot be kept as one running sum: rescaled as `t_e` moves, it would
+//! and `G₀₀` is the clock observed: `T − t_e` for a window of `W` rows, from
+//! the clock of the row dropped last (from the first row until one is), and
+//! `min(D, the clock since the first row)` for a window of `D` units, the
+//! interval `(T − D, T]` a fit of its events alone observes.
+//!
+//! **The window of `D` clock units** keeps each event row until it is `D`
+//! old on the decayed clock. A row's age is decided on the exact stamps of
+//! its clock and the reading row's ([`Stamp::cmp_span`]: integer nanoseconds
+//! on a temporal clock, a single subtraction of raw values on a number
+//! clock), never on a clock summed in doubles, so a row exactly `D` old is
+//! always on one side of the edge. It is the window kinds' edge
+//! ([`WindowClosed`], Polars' `rolling_*_by(closed=)`): under the default
+//! `Right`, a row exactly `D` old has left and the window is `(T − D, T]`;
+//! under `Both` it is kept and the window is `[T − D, T]`. A row leaves at
+//! the first row at or after the one it ages out on, before that row's
+//! intensity is read, so each row reports from the events of the last `D`
+//! before it (events on earlier rows at its own clock included). How many
+//! events that holds is the data's, so the bytes it takes are checked as it
+//! runs ([`Hawkes::state_bytes`]): the first row to take the state past half
+//! of `max_state_bytes` raises a warning, once, and one that would take it
+//! past the cap is not learned and is reported ([`OnlineModel::state_over_cap`]).
+//!
+//! **`F_e` cannot be kept as one running sum**: rescaled as `t_e` moves, it would
 //! multiply its rounding by up to `e^(β W)`. The window keeps its rows in two
 //! blocks. The older holds, for each row, `F` over the later rows of its own
 //! block, formed once by the backward recursion `F_r = e^(−β (t_{r+1} − t_r))
@@ -106,18 +130,29 @@
 //! every factor at most 1. When the older block runs out, the newer becomes
 //! it, and `R`, `b` and `Q` are formed afresh from its rows, so their
 //! rounding is that of one window, not of every row the stream ever dropped.
-//! A row costs `O(D k)` amortised; the window holds `8 (1 + D + k)` bytes a
+//! A row costs `O(D k)` amortised; the window holds `8 (2 + D + k)` bytes a
 //! row in either block (a newer row's `k` sums are 0 until its block becomes
-//! the older), `8 W (1 + D + k)` beside the state once full. A window forgets
-//! by dropping, so it takes no decay.
+//! the older), and, under `D` clock units, a stamp of 32 bytes beside each.
+//! A window forgets by dropping, so it takes no decay.
+//!
+//! **The weight under a window** (hard rule 8) is the weight inside it: the
+//! rows that carried an event and are held, each with its weight (8 bytes a
+//! row), added as the row is learned and taken back as it leaves. A row with
+//! no event is no part of the fit, so the model keeps no record of it: its
+//! weight is not in `n_eff`, which a window's `min_weight` therefore reads as
+//! the weight of the events the fit is made of. As every `n_eff` is, it is
+//! read before the row's own clock step: a row that a window of clock units
+//! drops at this row is still in the weight the row reports, as weight a
+//! decay takes at this row is still undecayed in it.
 
 use std::collections::VecDeque;
 
 use serde::{Deserialize, Serialize};
 
-use crate::Decay;
 use crate::model::{ModelState, OnlineModel, State, StateError, Step, check_schema};
+use crate::since::back_by;
 use crate::solve::{KEPT_ORDER, Solves, solve_definite_in};
+use crate::{Decay, Stamp, WindowClosed};
 
 /// The least pivot of `G` scaled to a unit diagonal that a fit is read
 /// at: below it `G`'s condition number is above `1e10`, and the fit has
@@ -147,6 +182,19 @@ pub struct HawkesCfg {
     pub min_weight: f64,
     /// Fit the last this many rows that carried an event, alone.
     pub window_events: Option<usize>,
+    /// Fit the events of the last this many clock units, alone (seconds on a
+    /// temporal clock). How many that is, the data decides.
+    #[serde(default)]
+    pub window_clock: Option<f64>,
+    /// Which edge of a clock window holds the row exactly `window_clock`
+    /// old: `Right`, the default, keeps rows less than that old, `Both`
+    /// keeps that row too.
+    #[serde(default)]
+    pub closed: WindowClosed,
+    /// The bytes a group's state may hold, a window's rows included; the
+    /// default is [`MAX_STATE_BYTES`].
+    #[serde(default)]
+    pub max_state_bytes: Option<u64>,
 }
 
 /// `γ`, the forgetting rate per clock unit that `decay` gives.
@@ -229,22 +277,70 @@ impl HawkesCfg {
             }
         }
         no.take(crate::model::check_min_weight("hawkes", self.min_weight));
-        if let Some(w) = self.window_events {
-            if w == 0 {
+        if self.window_events == Some(0) {
+            no.refuse(
+                "hawkes: window_events must be at least 1, but it is 0. Give the number \
+                 of rows with an event the fit keeps, or leave it out for no window.",
+            );
+        }
+        if let Some(d) = self.window_clock {
+            if !(d.is_finite() && d > 0.0) {
+                no.refuse(format!(
+                    "hawkes: the clock window must be a finite number of clock units above 0, \
+                     but it is {d}. Give the span of clock the fit keeps events of, or leave \
+                     it out for no window.",
+                ));
+            }
+            if self.window_events.is_some() {
                 no.refuse(
-                    "hawkes: window_events must be at least 1, but it is 0. Give the number \
-                     of rows with an event the fit keeps, or leave it out for no window.",
+                    "hawkes: a window of clock units and window_events are two windows, and \
+                     the fit holds one. Leave one of them out.",
                 );
             }
-            if self.decay.check().is_ok() && rate(self.decay) > 0.0 {
+        } else if self.closed != WindowClosed::Right {
+            no.refuse(
+                "hawkes: closed = \"both\" says which edge of a clock window keeps the row \
+                 exactly its span old, but there is no clock window. Give the window's span, \
+                 or leave closed out.",
+            );
+        }
+        if (self.window_events.is_some() || self.window_clock.is_some())
+            && self.decay.check().is_ok()
+            && rate(self.decay) > 0.0
+        {
+            no.refuse(
+                "hawkes: a window forgets by dropping the oldest events, so it takes no decay, \
+                 but half_life (or lam) decays too. Set half_life to inf, or leave out the \
+                 window.",
+            );
+        }
+        if let Some(cap) = self.max_state_bytes {
+            if cap == 0 {
                 no.refuse(
-                    "hawkes: window_events forgets by dropping the oldest events, so it takes \
-                     no decay, but half_life (or lam) decays too. Set half_life to inf, or \
-                     leave out window_events.",
+                    "hawkes: max_state_bytes must be above 0, but it is 0. Give the bytes a \
+                     group's state may hold, or leave it out for 256 KB.",
                 );
+            } else if self.n_targets > 0 && !betas.is_empty() {
+                let (n, u) = (self.n_targets, betas.len());
+                let bytes = match (self.window_events, self.window_clock) {
+                    (Some(w), _) => Hawkes::state_bytes(n, u, Some(w)),
+                    (None, Some(_)) => Hawkes::clock_state_bytes(n, u, 0),
+                    (None, None) => Hawkes::state_bytes(n, u, None),
+                };
+                if bytes > cap {
+                    no.refuse(format!(
+                        "hawkes: its state would hold {bytes} bytes, past max_state_bytes of \
+                         {cap}. Lower window_events, or raise max_state_bytes.",
+                    ));
+                }
             }
         }
         no.finish()
+    }
+
+    /// The bytes a group's state may hold.
+    fn cap(&self) -> u64 {
+        self.max_state_bytes.unwrap_or(MAX_STATE_BYTES)
     }
 
     fn dims(&self) -> (usize, usize, usize) {
@@ -255,12 +351,13 @@ impl HawkesCfg {
 
 /// The rows a window keeps, oldest first, in two blocks (see the module
 /// docs): the first `old` the older block, the rest the newer. Every row
-/// holds the same numbers -- its time, its `D` marks and its `k` forward
-/// sums, which a newer row holds at 0 until its block becomes the older --
-/// so the window's size is its rows' count times one figure, whatever the
-/// blocks' split. Times are held relative to the newer block's start `t_m`,
-/// never as the clock's sum: an older row's `t_m − t_r`, a newer row's `t_r
-/// − t_m`.
+/// holds the same numbers -- its time, its weight, its `D` marks and its `k`
+/// forward sums, which a newer row holds at 0 until its block becomes the
+/// older -- so the window's size is its rows' count times one figure,
+/// whatever the blocks' split. Times are held relative to the newer block's
+/// start `t_m`, never as the clock's sum: an older row's `t_m − t_r`, a newer
+/// row's `t_r − t_m`. A window of clock units holds each row's stamp too,
+/// which decides when it leaves.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct EventWindow {
     /// The clock since `t_m`, now.
@@ -268,21 +365,44 @@ struct EventWindow {
     /// The rows of the older block, at the front.
     old: usize,
     time: VecDeque<f64>,
+    /// Each row's weight, and their sum: the weight inside the window.
+    weight: VecDeque<f64>,
+    w_in: f64,
     marks: VecDeque<f64>,
     fwd: VecDeque<f64>,
     /// `B[i, u] = Σ_newer m_l,i e^(−β_u (t_l − t_m))`, `k`.
     new_sum: Vec<f64>,
+    /// A window of clock units: each row's place on the decayed clock, held
+    /// exactly, and where the clock stands.
+    #[serde(default)]
+    stamp: VecDeque<Stamp>,
+    #[serde(default)]
+    track: Option<ClockTrack>,
+}
+
+/// Where a clock window reads the clock from: the steps summed, which times
+/// a row handed no stamp, and the last stamp handed, which a read ahead
+/// (`predict`) moves forward by its step.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+struct ClockTrack {
+    own: f64,
+    #[serde(default)]
+    last: Option<Stamp>,
 }
 
 impl EventWindow {
-    fn new(k: usize) -> Self {
+    fn new(k: usize, clocked: bool) -> Self {
         Self {
             since: 0.0,
             old: 0,
             time: VecDeque::new(),
+            weight: VecDeque::new(),
+            w_in: 0.0,
             marks: VecDeque::new(),
             fwd: VecDeque::new(),
             new_sum: vec![0.0; k],
+            stamp: VecDeque::new(),
+            track: clocked.then(ClockTrack::default),
         }
     }
 
@@ -290,13 +410,16 @@ impl EventWindow {
         self.time.len()
     }
 
-    fn has_shape(&self, n: usize, k: usize, cap: usize) -> bool {
+    fn has_shape(&self, n: usize, k: usize, cap: Option<usize>, clocked: bool) -> bool {
         let rows = self.time.len();
         self.marks.len() == rows * n
+            && self.weight.len() == rows
             && self.fwd.len() == rows * k
             && self.new_sum.len() == k
             && self.old <= rows
-            && rows <= cap
+            && cap.is_none_or(|c| rows <= c)
+            && self.track.is_some() == clocked
+            && self.stamp.len() == if clocked { rows } else { 0 }
     }
 }
 
@@ -313,7 +436,38 @@ pub struct Hawkes {
     /// `G₀₀ = ∫ w dt`.
     g0: f64,
     w_sum: f64,
+    /// The clock since the last counted row, which the zero-weight rows
+    /// since have stepped over: the next counted row steps by it and its
+    /// own step. 0 while the last row counted.
+    #[serde(default)]
+    carry: f64,
+    /// Whether a row has counted yet, or only zero-weight rows have come.
+    #[serde(default)]
+    seen: Seen,
     window: Option<EventWindow>,
+    /// The bytes a clock window's next row would have taken the state to,
+    /// past the cap: from then on no row's events are learned.
+    #[serde(default)]
+    over: Option<u64>,
+    /// The half-of-the-cap warning has been raised (once a group).
+    #[serde(default)]
+    warned: bool,
+    /// The next row's stamp, which a step takes; and the warning raised and
+    /// not yet taken. Never state: neither is held between two calls.
+    #[serde(skip)]
+    next: Option<Stamp>,
+    #[serde(skip)]
+    warning: Option<u64>,
+}
+
+/// What the rows so far have been: none, only rows of weight 0, or at least
+/// one that counted (positive weight, in a clock and a window).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+enum Seen {
+    #[default]
+    Nothing,
+    OnlyZero,
+    Counted,
 }
 
 /// The buffers a read assembles and solves its system in, one set a thread,
@@ -420,7 +574,14 @@ impl Hawkes {
             q: vec![0.0; n * (n + 1) / 2],
             g0: 0.0,
             w_sum: 0.0,
-            window: cfg.window_events.map(|_| EventWindow::new(k)),
+            carry: 0.0,
+            seen: Seen::Nothing,
+            window: (cfg.window_events.is_some() || cfg.window_clock.is_some())
+                .then(|| EventWindow::new(k, cfg.window_clock.is_some())),
+            over: None,
+            warned: false,
+            next: None,
+            warning: None,
             cfg,
         })
     }
@@ -429,21 +590,52 @@ impl Hawkes {
         &self.cfg
     }
 
+    /// The weight the fit is made of (hard rule 8): every row's, decayed,
+    /// and under a window the weight of the event rows it holds.
     pub fn n_eff(&self) -> f64 {
-        self.w_sum
+        self.window.as_ref().map_or(self.w_sum, |w| w.w_in)
+    }
+
+    /// The numbers of the running sums, in bytes: `8 (k + D (1 + k) + D (D +
+    /// 1) / 2 + 3)`.
+    fn sums_bytes(n: u64, k: u64) -> u64 {
+        8 * (k + n * (1 + k) + n * (n + 1) / 2 + 3)
+    }
+
+    /// The bytes of a window's rows: `8 (2 + D + k)` each, with the newer
+    /// block's sum `B`, the clock since its start and the weight inside, `8
+    /// (k + 2)`.
+    fn window_bytes(n: u64, k: u64, rows: u64) -> u64 {
+        8 * (rows * (2 + n + k) + k + 2)
     }
 
     /// The bytes of the numbers a model of this shape holds at most: its
-    /// running sums, `8 (k + D (1 + k) + D (D + 1) / 2 + 2)`, and a full
-    /// window's rows, `8 W (1 + D + k)`, with its sum `B` and its clock,
-    /// `8 (k + 1)`. The one part whose size the data could set is the
-    /// window's rows, and `W` bounds it, so this is known from the settings
-    /// alone.
+    /// running sums, `8 (k + D (1 + k) + D (D + 1) / 2 + 3)`, and a full
+    /// window of `W` rows with an event, `8 W (2 + D + k)`, with its sum `B`,
+    /// its clock and its weight, `8 (k + 2)`. The one part whose size the
+    /// data could set is the window's rows, and `W` bounds it, so this is
+    /// known from the settings alone. A window of clock units is not
+    /// bounded by its settings: see [`Self::clock_state_bytes`].
     pub fn state_bytes(n_targets: usize, n_decays: usize, window_events: Option<usize>) -> u64 {
         let (n, k) = (n_targets as u64, (n_targets * n_decays) as u64);
-        let sums = k + n * (1 + k) + n * (n + 1) / 2 + 2;
-        let window = window_events.map_or(0, |w| w as u64 * (1 + n + k) + k + 1);
-        8 * (sums + window)
+        Self::sums_bytes(n, k) + window_events.map_or(0, |w| Self::window_bytes(n, k, w as u64))
+    }
+
+    /// The bytes a window of clock units holds with `rows` event rows in it:
+    /// [`Self::state_bytes`] for that many rows, and a stamp
+    /// ([`std::mem::size_of`] a [`Stamp`]) with each, the one the clock
+    /// tracks, and the clock summed (8). It grows with the events the span
+    /// holds, so it is read as the rows go in.
+    pub fn clock_state_bytes(n_targets: usize, n_decays: usize, rows: usize) -> u64 {
+        let stamp = std::mem::size_of::<Stamp>() as u64;
+        Self::state_bytes(n_targets, n_decays, Some(rows)) + (rows as u64 + 1) * stamp + 8
+    }
+
+    /// The stamp last handed to a step of a clock window ([`Stamp`]), `None`
+    /// before one, and without a clock window: where a caller that stamps
+    /// its rows resumes from a restored state.
+    pub fn last_stamp(&self) -> Option<Stamp> {
+        self.window.as_ref()?.track.as_ref()?.last
     }
 
     /// The rows with an event the window holds; 0 without a window.
@@ -598,13 +790,16 @@ impl Hawkes {
 
     /// Add the row's events to the newer block, and drop the oldest row
     /// while the window holds more than its rows.
-    fn window_learn(&mut self, y: &[Option<f64>]) {
+    fn window_learn(&mut self, y: &[Option<f64>], weight: f64, now: Option<Stamp>) {
         let (n, u_n, k) = self.cfg.dims();
         let betas = &self.cfg.kernel_decays;
         let Some(w) = self.window.as_mut() else {
             return;
         };
         w.time.push_back(w.since);
+        w.weight.push_back(weight);
+        w.w_in += weight;
+        w.stamp.extend(now);
         for j in 0..n {
             w.marks.push_back(Self::mark(y.get(j).copied().flatten()));
         }
@@ -667,6 +862,11 @@ impl Hawkes {
         }
         self.g0 = w.since + off;
         w.time.pop_front();
+        w.w_in = (w.w_in - w.weight.pop_front().unwrap_or(0.0)).max(0.0);
+        if w.weight.is_empty() {
+            w.w_in = 0.0;
+        }
+        w.stamp.pop_front();
         w.marks.drain(..n);
         w.fwd.drain(..k);
         w.old -= 1;
@@ -729,11 +929,174 @@ impl Hawkes {
             *t = now - *t;
         }
         w.time.pop_front();
+        w.weight.pop_front();
+        w.w_in = w.weight.iter().sum();
+        w.stamp.pop_front();
         w.marks.drain(..n);
         w.fwd.drain(..k);
         w.old = rows - 1;
         w.new_sum.fill(0.0);
         w.since = 0.0;
+    }
+}
+
+impl Hawkes {
+    /// The state to the row's clock, `d_clock` after the last: what `predict`
+    /// reads on a copy. `R` decays by the kernels, `b` and `Q` by the row's
+    /// decay, `G₀₀` by its step; a window of clock units then drops the rows
+    /// that are out of it at `now`, and observes no more than its span.
+    fn advance(&mut self, d_clock: f64, now: Option<Stamp>) {
+        let (n, u_n, _) = self.cfg.dims();
+        let gamma = self.gamma();
+        let f = self.cfg.decay.factor(d_clock);
+        for (u, beta) in self.cfg.kernel_decays.iter().enumerate() {
+            let e = (-beta * d_clock).exp();
+            for j in 0..n {
+                self.r[j * u_n + u] *= e;
+            }
+        }
+        for v in self.b.iter_mut().chain(self.q.iter_mut()) {
+            *v *= f;
+        }
+        self.g0 = f * self.g0 + Self::g0_step(gamma, d_clock);
+        if let Some(w) = self.window.as_mut() {
+            w.since += d_clock;
+        }
+        if let (Some(now), Some(span)) = (now, self.cfg.window_clock) {
+            // A row that left means the clock is at least a span old; and
+            // the observation is no longer than the span in any case.
+            let dropped = self.trim(now);
+            if dropped || self.g0 > span {
+                self.g0 = span;
+            }
+        }
+    }
+
+    /// Whether the oldest row of a clock window has left at `now`.
+    fn oldest_has_left(&self, now: Stamp) -> bool {
+        let Some(span) = self.cfg.window_clock else {
+            return false;
+        };
+        self.window
+            .as_ref()
+            .and_then(|w| w.stamp.front())
+            .is_some_and(|&s| self.cfg.closed.has_left(now, s, span))
+    }
+
+    /// Drop the rows of a clock window that have left at `now`, oldest
+    /// first, each by the older block's exact subtraction (the block is formed
+    /// from the newer when it has run out). True if any left.
+    fn trim(&mut self, now: Stamp) -> bool {
+        let mut dropped = false;
+        while self.oldest_has_left(now) {
+            if self.window.as_ref().is_some_and(|w| w.old == 0) {
+                self.form_old_block();
+            } else {
+                self.drop_oldest();
+            }
+            dropped = true;
+        }
+        dropped
+    }
+
+    /// A row's stamp: the one handed, or the clock summed from the steps
+    /// where none was, for a window of clock units; and the clock moved on.
+    fn stamp_row(&mut self, d_clock: f64, handed: Option<Stamp>) -> Option<Stamp> {
+        let track = self.window.as_mut()?.track.as_mut()?;
+        track.own += d_clock;
+        track.last = handed;
+        Some(handed.unwrap_or(Stamp::from(track.own)))
+    }
+
+    /// The stamp of a row `d_clock` after the last stepped, for a read ahead.
+    fn stamp_ahead(&self, d_clock: f64) -> Option<Stamp> {
+        let track = self.window.as_ref()?.track.as_ref()?;
+        Some(match track.last {
+            Some(last) => back_by(last, -d_clock),
+            None => Stamp::from(track.own + d_clock),
+        })
+    }
+
+    /// The intensities of the state as it stands, gated on `n_eff`, for a
+    /// copy that [`Self::advance`] has brought to a row.
+    fn read_here(&self, n_eff: f64) -> Step {
+        let p = self.b.len() / self.cfg.n_targets;
+        let mut pred = Vec::new();
+        with_scratch(p, |sc| {
+            Self::intensities_into(
+                &self.cfg, n_eff, &self.r, &self.b, &self.q, self.g0, sc, &mut pred,
+            )
+        });
+        Step {
+            pred,
+            n_eff,
+            extra: None,
+        }
+    }
+
+    /// The clock since the last row that counted, for a row `d_clock` after
+    /// the last one stepped: the zero-weight rows' steps in between are
+    /// part of it.
+    fn since_counted(&self, d_clock: f64) -> f64 {
+        match self.seen {
+            Seen::Counted => self.carry + d_clock,
+            _ => d_clock,
+        }
+    }
+
+    /// What a row `d_clock` after the last row that counted reads, at the
+    /// stamp `now` (none without a clock window): the state advanced on a
+    /// copy, the state untouched.
+    fn read_ahead(&self, d_clock: f64, now: Option<Stamp>) -> Step {
+        // A clock window drops, at the row, the events out of it by then:
+        // on a copy, by the step's own routine.
+        if let Some(now) = now.filter(|&s| self.oldest_has_left(s)) {
+            let mut at = self.clone();
+            at.advance(d_clock, Some(now));
+            return at.read_here(self.n_eff());
+        }
+        let (n, u_n, _) = self.cfg.dims();
+        let gamma = self.gamma();
+        let f = self.cfg.decay.factor(d_clock);
+        let mut g0 = f * self.g0 + Self::g0_step(gamma, d_clock);
+        if let Some(span) = self.cfg.window_clock.filter(|&span| g0 > span) {
+            g0 = span;
+        }
+        let mut pred = Vec::new();
+        let p = self.b.len() / n;
+        with_scratch(p, |sc| {
+            let mut r = std::mem::take(&mut sc.r);
+            let mut b = std::mem::take(&mut sc.b);
+            let mut q = std::mem::take(&mut sc.q);
+            r.clear();
+            r.extend_from_slice(&self.r);
+            for (u, beta) in self.cfg.kernel_decays.iter().enumerate() {
+                let e = (-beta * d_clock).exp();
+                for j in 0..n {
+                    r[j * u_n + u] *= e;
+                }
+            }
+            b.clear();
+            b.extend(self.b.iter().map(|v| v * f));
+            q.clear();
+            q.extend(self.q.iter().map(|v| v * f));
+            Self::intensities_into(&self.cfg, self.n_eff(), &r, &b, &q, g0, sc, &mut pred);
+            sc.r = r;
+            sc.b = b;
+            sc.q = q;
+        });
+        Step {
+            pred,
+            n_eff: self.n_eff(),
+            extra: None,
+        }
+    }
+
+    /// Bytes a clock window holds with its newest row in, and whether the
+    /// row that would add one more passes the cap.
+    fn clock_bytes_with(&self, extra: usize) -> u64 {
+        let (n, u, _) = self.cfg.dims();
+        Self::clock_state_bytes(n, u, self.window_rows() + extra)
     }
 }
 
@@ -753,24 +1116,38 @@ impl OnlineModel for Hawkes {
             *out = refused;
             return;
         }
-        let (n, u_n, _) = self.cfg.dims();
-        let gamma = self.gamma();
-        let f = self.cfg.decay.factor(d_clock);
-        // The state to the row's clock: what `predict` reads on copies.
-        for (u, beta) in self.cfg.kernel_decays.iter().enumerate() {
-            let e = (-beta * d_clock).exp();
-            for j in 0..n {
-                self.r[j * u_n + u] *= e;
+        let n = self.cfg.n_targets;
+        let handed = self.next.take();
+        // A row of weight 0 counts in no clock (hard rule 9): it is read as
+        // any row is, from the last row that counted, and leaves everything
+        // as it was but the clock it has stepped over, which the next row
+        // that counts steps by with its own.
+        if weight <= 0.0 {
+            let d = self.since_counted(d_clock);
+            *out = self.read_ahead(d, handed.or_else(|| self.stamp_ahead(d)));
+            match self.seen {
+                Seen::Counted => self.carry = d,
+                _ => self.seen = Seen::OnlyZero,
             }
+            return;
         }
-        for v in self.b.iter_mut().chain(self.q.iter_mut()) {
-            *v *= f;
-        }
-        self.g0 = f * self.g0 + Self::g0_step(gamma, d_clock);
-        if let Some(w) = self.window.as_mut() {
-            w.since += d_clock;
-        }
-        let n_eff = self.w_sum;
+        // The first row to count after rows of weight 0 is the model's
+        // first: its clock is where the model starts.
+        let d_clock = match self.seen {
+            Seen::Counted => self.carry + d_clock,
+            Seen::OnlyZero => 0.0,
+            Seen::Nothing => d_clock,
+        };
+        self.carry = 0.0;
+        self.seen = Seen::Counted;
+        let now = self.stamp_row(d_clock, handed);
+        // Read before the row's own clock step, as every `n_eff` is (hard
+        // rule 8): a row a clock window drops at this row still counts, as
+        // weight not yet decayed does.
+        let n_eff = self.n_eff();
+        // The state to the row's clock, what `predict` reads on copies.
+        self.advance(d_clock, now);
+        let f = self.cfg.decay.factor(d_clock);
         let p = self.b.len() / n;
         with_scratch(p, |sc| {
             Self::intensities_into(
@@ -786,10 +1163,23 @@ impl OnlineModel for Hawkes {
         });
         out.n_eff = n_eff;
         out.extra = None;
-        self.w_sum = f * self.w_sum + weight;
-        // A weight is usable here, so not above 0 is 0.
-        if weight <= 0.0 || !y.iter().take(n).any(|v| Self::mark(*v) > 0.0) {
+        if self.window.is_none() {
+            self.w_sum = f * self.w_sum + weight;
+        }
+        if !y.iter().take(n).any(|v| Self::mark(*v) > 0.0) {
             return;
+        }
+        // A clock window's next row that would take the state past its cap
+        // is not learned, nor any after it: the overrun is reported.
+        if self.over.is_some() {
+            return;
+        }
+        if now.is_some() {
+            let bytes = self.clock_bytes_with(1);
+            if bytes > self.cfg.cap() {
+                self.over = Some(bytes);
+                return;
+            }
         }
         // Each event from `R` before the row's events (the left limit).
         let k = self.r.len();
@@ -819,43 +1209,35 @@ impl OnlineModel for Hawkes {
         }
         debug_assert_eq!(self.r.len(), k);
         if self.window.is_some() {
-            self.window_learn(y);
+            self.window_learn(y, weight, now);
+            if now.is_some() && !self.warned {
+                let bytes = self.clock_bytes_with(0);
+                if 2 * bytes > self.cfg.cap() {
+                    self.warned = true;
+                    self.warning = Some(bytes);
+                }
+            }
         }
     }
 
     fn predict(&self, _x: &[f64], d_clock: f64) -> Step {
-        let (n, u_n, _) = self.cfg.dims();
-        let gamma = self.gamma();
-        let f = self.cfg.decay.factor(d_clock);
-        let g0 = f * self.g0 + Self::g0_step(gamma, d_clock);
-        let mut pred = Vec::new();
-        let p = self.b.len() / n;
-        with_scratch(p, |sc| {
-            let mut r = std::mem::take(&mut sc.r);
-            let mut b = std::mem::take(&mut sc.b);
-            let mut q = std::mem::take(&mut sc.q);
-            r.clear();
-            r.extend_from_slice(&self.r);
-            for (u, beta) in self.cfg.kernel_decays.iter().enumerate() {
-                let e = (-beta * d_clock).exp();
-                for j in 0..n {
-                    r[j * u_n + u] *= e;
-                }
-            }
-            b.clear();
-            b.extend(self.b.iter().map(|v| v * f));
-            q.clear();
-            q.extend(self.q.iter().map(|v| v * f));
-            Self::intensities_into(&self.cfg, self.w_sum, &r, &b, &q, g0, sc, &mut pred);
-            sc.r = r;
-            sc.b = b;
-            sc.q = q;
-        });
-        Step {
-            pred,
-            n_eff: self.w_sum,
-            extra: None,
+        let d = self.since_counted(d_clock);
+        self.read_ahead(d, self.stamp_ahead(d))
+    }
+
+    /// A clock window learns its rows' stamps: they decide when each leaves.
+    fn stamp_next(&mut self, stamp: Stamp) {
+        if self.cfg.window_clock.is_some() {
+            self.next = Some(stamp);
         }
+    }
+
+    fn take_state_warning(&mut self) -> Option<(u64, u64)> {
+        self.warning.take().map(|bytes| (bytes, self.cfg.cap()))
+    }
+
+    fn state_over_cap(&self) -> Option<(u64, u64)> {
+        self.over.map(|bytes| (bytes, self.cfg.cap()))
     }
 
     fn state(&self) -> State {
@@ -872,9 +1254,11 @@ impl OnlineModel for Hawkes {
                 let shaped = m.r.len() == k
                     && m.b.len() == n * (1 + k)
                     && m.q.len() == n * (n + 1) / 2
-                    && match (&m.window, m.cfg.window_events) {
-                        (None, None) => true,
-                        (Some(w), Some(cap)) => w.has_shape(n, k, cap),
+                    && match (&m.window, m.cfg.window_events, m.cfg.window_clock) {
+                        (None, None, None) => true,
+                        (Some(w), cap, clock) if cap.is_some() || clock.is_some() => {
+                            w.has_shape(n, k, cap, clock.is_some())
+                        }
                         _ => false,
                     };
                 if !shaped {
