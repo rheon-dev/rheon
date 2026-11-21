@@ -526,6 +526,93 @@ def test_fit_predict_is_refused_while_scoring():
     assert bank.fit_predict(df.head(10)).height == 10
 
 
+def test_lazy_predict_from_many_threads_at_once():
+    """`lf.rheon.predict(bank)` builds its plan by peeking at the bank's
+    closed groups, and the peek took the exclusive borrow: while another
+    thread was inside `predict`, 9 of 20 lazy predicts on py-polars 2.0
+    (16 on 1.37) failed with "the bank is in use on another thread", the
+    very error that says concurrent `predict` calls are fine (review
+    fable2, Y1). A peek changes nothing, so it takes the shared borrow."""
+    n = 400_000
+    rng = np.random.default_rng(0)
+    df = pl.DataFrame({"x0": rng.normal(size=n), "x1": rng.normal(size=n)}).with_columns(
+        y=pl.col.x0 * 2 - pl.col.x1
+    )
+    spec = rp.spec.ewridge("ridge", targets=["y"], features=["x0", "x1"], half_life=100.0)
+    bank = rp.ModelBank([spec])
+    bank.fit(df.head(1000))
+    want = bank.predict(df).select(pl.col.ridge.struct.field("pred_y").sum()).item()
+    start = threading.Barrier(4)
+    sums: list[float] = []
+    errors: list[BaseException] = []
+
+    def work() -> None:
+        start.wait()
+        for _ in range(5):
+            try:
+                got = (
+                    df.lazy()
+                    .rheon.predict(bank)
+                    .select(pl.col.ridge.struct.field("pred_y").sum())
+                    .collect()
+                    .item()
+                )
+                sums.append(got)
+            except BaseException as e:  # noqa: BLE001
+                errors.append(e)
+
+    threads = [threading.Thread(target=work) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors, errors
+    # The same predictions every time; their sum only to rounding, since
+    # Polars adds a column's chunks in parallel.
+    assert sums == pytest.approx([want] * 20, rel=1e-12)
+
+
+def test_a_peek_at_the_closed_groups_runs_beside_predict():
+    """The peek itself, called while two threads score: refused before the
+    fix, a frame now. The overlap is made certain: the scorers must still
+    be running when the peek returns, or the round is tried again; five
+    rounds without an overlap fail the test, which then tested nothing. A
+    drain still needs the bank alone."""
+    n = 2_000_000
+    rng = np.random.default_rng(0)
+    df = pl.DataFrame({"x0": rng.standard_normal(n), "y": rng.standard_normal(n)})
+    spec = rp.spec.ewridge("m", targets=["y"], features=["x0"], half_life=[10.0, 100.0, 1000.0])
+    bank = rp.ModelBank([spec])
+    bank.fit(df.head(1000))
+    for _ in range(5):
+        started = threading.Event()
+        errors: list[BaseException] = []
+
+        def score(started=started, errors=errors) -> None:
+            started.set()
+            try:
+                bank.predict(df)
+            except BaseException as e:  # noqa: BLE001
+                errors.append(e)
+
+        threads = [threading.Thread(target=score) for _ in range(2)]
+        for t in threads:
+            t.start()
+        started.wait()
+        time.sleep(0.02)
+        peeked = bank.closed_groups(drop=False)
+        df.lazy().rheon.predict(bank)  # the plan's build peeks too
+        overlapped = any(t.is_alive() for t in threads)
+        for t in threads:
+            t.join()
+        assert not errors, errors
+        assert peeked.height == 0
+        if overlapped:
+            break
+    else:
+        pytest.fail("the scorers finished before the peek, five times")
+
+
 # --- the command line -------------------------------------------------------------
 
 

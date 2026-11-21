@@ -60,6 +60,13 @@ model that only the new build has is listed as an addition and passes.
   count moves: predictions, coefficients and every emitted column are as
   before, and a state saved by an earlier build continues to the bit except
   for it. Moves: `lasso.solve_failures`.
+- `lf.rheon.predict(bank)` runs from several threads at once on one bank, as
+  `bank.predict` does. Building the plan peeks at the bank's closed groups,
+  and the peek took the bank for itself, so it was refused with "the bank is
+  in use on another thread" while another thread was scoring: 9 of 20 lazy
+  predicts from four threads failed on py-polars 2.0, 16 of 20 on 1.37.
+  `bank.closed_groups(drop=False)` now reads beside a `predict` too; a drain
+  still needs the bank alone.
 - `rp.stream.with_windows` checks `chunk_size` as `refresh_time` and
   `lf.rheon.fit_predict` do, while the plan is built: `True` ran in one-row
   chunks, `2.5` failed only when the plan ran, and `"a"` raised Python's own

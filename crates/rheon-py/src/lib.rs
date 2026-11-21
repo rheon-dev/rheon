@@ -864,12 +864,16 @@ impl PyModelBank {
         spec: Option<usize>,
         drop: bool,
     ) -> PyResult<PyDataFrame> {
-        let mut this = slf.try_borrow_mut().map_err(|_| busy("closed_groups"))?;
-        Ok(PyDataFrame(
-            this.inner
-                .closed_groups(spec, drop)
-                .map_err(PyValueError::new_err)?,
-        ))
+        // A peek changes nothing, so it takes the shared borrow and runs
+        // beside `predict` on other threads; only a drain needs the bank alone.
+        let frame = if drop {
+            let mut this = slf.try_borrow_mut().map_err(|_| busy("closed_groups"))?;
+            this.inner.closed_groups(spec, true)
+        } else {
+            let this = slf.try_borrow().map_err(|_| busy("closed_groups"))?;
+            this.inner.peek_closed_groups(spec)
+        };
+        Ok(PyDataFrame(frame.map_err(PyValueError::new_err)?))
     }
 
     /// The pairs of a `marginal` spec (`Bank::marginal`), one row per
