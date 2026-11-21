@@ -22,7 +22,7 @@ in a bin adds ``w`` to one cell of that pair's table. With ``N = sum n_ab`` and
 the margins ``n_a = sum_b n_ab``, ``n_b = sum_a n_ab``, the plug-in estimate is
 read from the table, ``ln`` at read time only::
 
-    MI = sum_{n_ab > 0} (n_ab / N) * (ln n_ab + ln N - ln n_a - ln n_b)      (nats)
+    MI = sum_{n_ab > 0} (n_ab / N) * ln((n_ab / n_a) * (N / n_b))      (nats)
 
 The Miller-Madow correction applies ``H_MM = H + (m - 1) / (2N)`` (``m`` the
 nonzero cells) to each of ``H(X)``, ``H(Y)``, ``H(X, Y)``, and
@@ -154,11 +154,11 @@ def mi_from_tables(c: np.ndarray) -> dict[str, np.ndarray]:
     na = c.sum(axis=-1)
     nb = c.sum(axis=-2)
     with np.errstate(divide="ignore", invalid="ignore"):
-        ln = np.where(c > 0, np.log(np.where(c > 0, c, 1.0)), 0.0)
-        lna = np.log(np.where(na > 0, na, 1.0))
-        lnb = np.log(np.where(nb > 0, nb, 1.0))
-        lnn = np.log(np.where(n > 0, n, 1.0))
-        term = ln + lnn[..., None, None] - lna[..., :, None] - lnb[..., None, :]
+        # One log of a ratio of order one, not ln n_ab + ln N - ln n_a - ln n_b: under
+        # decay the stored weights run to 1/RENORM_AT, their logs to about 115, and the
+        # difference of four such logs kept only about 1e-14 of an MI of order one.
+        ratio = (c / na[..., :, None]) * (n[..., None, None] / nb[..., None, :])
+        term = np.log(np.where(c > 0, ratio, 1.0))
         mi = np.where(c > 0, c * term, 0.0).sum(axis=(-2, -1)) / np.where(n > 0, n, np.nan)
     bxy = (c > 0).sum(axis=(-2, -1))
     bx = (na > 0).sum(axis=-1)
