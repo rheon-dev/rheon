@@ -59,6 +59,27 @@ pub fn audit_cfg(spec: &Spec) -> Result<rheon_core::AuditCfg, String> {
     Ok(cfg)
 }
 
+/// A `hawkes` spec's [`rheon_core::HawkesCfg`]: its nodes are the spec's
+/// targets, and every parameter check is the model's.
+pub fn hawkes_cfg(spec: &Spec, decay: rheon_core::Decay) -> Result<rheon_core::HawkesCfg, String> {
+    let ModelKind::Hawkes {
+        kernel_decays,
+        window_events,
+    } = &spec.model
+    else {
+        return Err(not_a(spec, "hawkes_cfg", "hawkes"));
+    };
+    let cfg = rheon_core::HawkesCfg {
+        n_targets: spec.m(),
+        kernel_decays: kernel_decays.clone().unwrap_or_default(),
+        decay,
+        min_weight: spec.min_periods_or_default(),
+        window_events: *window_events,
+    };
+    cfg.validate()?;
+    Ok(cfg)
+}
+
 /// A `bocpd` spec's [`BocpdCfg`]; every parameter check is the model's.
 pub fn bocpd_cfg(spec: &Spec) -> Result<BocpdCfg, String> {
     let ModelKind::Bocpd {

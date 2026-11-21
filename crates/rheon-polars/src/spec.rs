@@ -1242,6 +1242,22 @@ pub enum ModelKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         distinct_cap: Option<usize>,
     },
+    /// A self-exciting point process (Hawkes) fitted online by least
+    /// squares, exactly: each target is a node, and a value above 0 on a row
+    /// is an event of that node, of that mark. Exponential kernels at the
+    /// given decays; one intensity a node per row, read before the row's
+    /// events, and the fit (`μ` and the `α`s) in `coef`. No features.
+    #[serde(rename = "hawkes")]
+    Hawkes {
+        /// The kernels' decays `β`, per clock unit: each node excites every
+        /// node through one kernel `α β e^(−β t)` per decay. Required.
+        #[serde(default)]
+        kernel_decays: Option<Vec<f64>>,
+        /// Fit the last this many rows that carried an event, alone, in
+        /// place of a decay. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window_events: Option<usize>,
+    },
 }
 
 /// The two sides of a `seqtest` comparison, as [`ModelKind::compares`]
@@ -1293,6 +1309,7 @@ impl ModelKind {
         "corrchange",
         "bocpd",
         "audit",
+        "hawkes",
     ];
 
     pub fn kind_name(&self) -> &'static str {
@@ -1319,6 +1336,7 @@ impl ModelKind {
             ModelKind::CorrChange { .. } => "corrchange",
             ModelKind::Bocpd { .. } => "bocpd",
             ModelKind::Audit { .. } => "audit",
+            ModelKind::Hawkes { .. } => "hawkes",
         }
     }
 
@@ -1633,7 +1651,10 @@ impl ModelKind {
         self.is_unsupervised()
             || matches!(
                 self,
-                ModelKind::EwClass { .. } | ModelKind::SeqTest { .. } | ModelKind::Marginal { .. }
+                ModelKind::EwClass { .. }
+                    | ModelKind::SeqTest { .. }
+                    | ModelKind::Marginal { .. }
+                    | ModelKind::Hawkes { .. }
             )
     }
 
@@ -2518,6 +2539,10 @@ impl Spec {
             ModelKind::Bocpd { .. } => 1.0,
             // Nothing is gated: `audit` reports nothing per row.
             ModelKind::Audit { .. } => 0.0,
+            // The fit is read where its system is definite and well posed,
+            // which is the gate: no row count says when the events have
+            // told its terms apart.
+            ModelKind::Hawkes { .. } => 0.0,
             // The noise gate is this model's readiness gate
             // (docs/WARMUP-AND-CONVERGENCE.md §2.1): `max_error_inflation`
             // tracks the model where a count of weight cannot, and the
@@ -2901,6 +2926,21 @@ impl Spec {
                      or restart_after_step_back, to reset the test."
                 ));
             }
+        } else if let ModelKind::Hawkes { kernel_decays, .. } = &self.model {
+            if !self.features.is_empty() {
+                no.refuse(format!(
+                    "spec {name:?}: hawkes takes no features, but features lists {}: each of \
+                     its targets is a node, whose values above 0 are its events. Put the event \
+                     columns in targets, and leave out features.",
+                    columns_counted(self.features.len())
+                ));
+            }
+            if kernel_decays.is_none() {
+                no.refuse(format!(
+                    "spec {name:?}: hawkes needs kernel_decays, but it is not set. Give the \
+                     decay of each exponential kernel, per clock unit, such as [1.0, 5.0]."
+                ));
+            }
         } else if self.features.is_empty() && !(columns_missing && self.model.is_unsupervised()) {
             columns_missing = true;
             no.refuse(format!(
@@ -3038,6 +3078,10 @@ impl Spec {
                 ModelKind::SeqTest { .. } => Some((
                     "tests the signs of its targets",
                     ", and name the columns whose signs are tested in targets",
+                )),
+                ModelKind::Hawkes { .. } => Some((
+                    "reads each target as a node's events",
+                    ", and name the columns whose values above 0 are the events in targets",
                 )),
                 ModelKind::Ftrl { loss, .. }
                     if loss.as_deref().unwrap_or("logistic") == "logistic" =>

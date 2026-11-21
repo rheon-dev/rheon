@@ -356,6 +356,17 @@ pub fn coef_fields(spec: &Spec) -> Vec<CoefField> {
     };
     let terms: Vec<String> = if matches!(spec.model, crate::ModelKind::Holt { .. }) {
         vec!["level".into(), "trend".into()]
+    } else if let crate::ModelKind::Hawkes { kernel_decays, .. } = &spec.model {
+        // `μ`, then `α` from each source node at each kernel decay, the
+        // source outer: the order of `Hawkes::coefficients`.
+        let betas = kernel_decays.as_deref().unwrap_or_default();
+        std::iter::once("mu".to_string())
+            .chain(spec.targets.iter().flat_map(|src| {
+                betas
+                    .iter()
+                    .map(move |b| format!("alpha_{src}_beta{}", crate::spec::num_label(*b)))
+            }))
+            .collect()
     } else if matches!(
         spec.model,
         crate::ModelKind::KMeans { .. }
@@ -1099,6 +1110,33 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                 );
                 p.class = Some(class.clone());
                 fields.push(p);
+            }
+            fields.push(
+                FieldMeta::new(format!("weight_sum{suffix}"), "weight_sum")
+                    .decay(suffix, d)
+                    .src(Source::NEff(mi)),
+            );
+            fields.push(
+                FieldMeta::new(format!("coef{suffix}"), "coef")
+                    .decay(suffix, d)
+                    .src(Source::Coef(mi)),
+            );
+        }
+        return fields;
+    }
+    // hawkes predicts no target's value: per instance, each node's
+    // intensity before the row's events, then `n_eff` and the fit as `coef`.
+    if matches!(spec.model, crate::ModelKind::Hawkes { .. }) {
+        let m = spec.targets.len();
+        let mut fields = Vec::new();
+        for (mi, (suffix, d)) in decays.iter().enumerate() {
+            for (t_i, t) in spec.targets.iter().enumerate() {
+                fields.push(
+                    FieldMeta::new(format!("intensity_{t}{suffix}"), "intensity")
+                        .decay(suffix, d)
+                        .target(t)
+                        .src(Source::Stat(mi * m + t_i)),
+                );
             }
             fields.push(
                 FieldMeta::new(format!("weight_sum{suffix}"), "weight_sum")

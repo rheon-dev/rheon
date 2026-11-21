@@ -107,6 +107,7 @@ pub enum AnyModel {
     CorrChange(Box<CorrChange>),
     Bocpd(Box<Bocpd>),
     Audit(Box<rheon_core::Audit>),
+    Hawkes(Box<rheon_core::Hawkes>),
 }
 
 /// A flush's shards, run on whichever pool the caller is in: the bank's
@@ -153,6 +154,7 @@ macro_rules! dispatch {
             AnyModel::CorrChange($m) => $body,
             AnyModel::Bocpd($m) => $body,
             AnyModel::Audit($m) => $body,
+            AnyModel::Hawkes($m) => $body,
         }
     };
 }
@@ -503,7 +505,9 @@ impl AnyModel {
             | AnyModel::Deco(_)
             | AnyModel::Rcov(_)
             | AnyModel::CorrChange(_)
-            | AnyModel::Audit(_) => 0,
+            | AnyModel::Audit(_)
+            // Every read it withholds is a row's, not a failure.
+            | AnyModel::Hawkes(_) => 0,
         }
     }
 
@@ -570,6 +574,8 @@ impl AnyModel {
             // audit has none: its value is what it counted, read by
             // `Bank::audit`.
             AnyModel::Audit(_) => None,
+            // `μ` and the `α`s, one row per node: `coef_fields` names them.
+            AnyModel::Hawkes(m) => Some(m.coefficients()),
         }
     }
 
@@ -1316,14 +1322,17 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         ModelKind::Audit { .. } => Ok(AnyModel::Audit(Box::new(rheon_core::Audit::new(
             audit_cfg(spec)?,
         )?))),
+        ModelKind::Hawkes { .. } => Ok(AnyModel::Hawkes(Box::new(rheon_core::Hawkes::new(
+            hawkes_cfg(spec, decay)?,
+        )?))),
     }
 }
 
 mod model_cfgs;
 use model_cfgs::read_floor;
 pub use model_cfgs::{
-    audit_cfg, bocpd_cfg, corrchange_cfg, deco_block_names, deco_cfg, hmm_cfg, huber_model,
-    quantile_model, rcov_cfg, sgd_model,
+    audit_cfg, bocpd_cfg, corrchange_cfg, deco_block_names, deco_cfg, hawkes_cfg, hmm_cfg,
+    huber_model, quantile_model, rcov_cfg, sgd_model,
 };
 
 /// One grid combo: the rendered label plus the machine values it encodes, so
@@ -1425,7 +1434,8 @@ pub fn combos(spec: &Spec) -> Vec<Combo> {
         | ModelKind::Hmm { .. }
         | ModelKind::CorrChange { .. }
         | ModelKind::Bocpd { .. }
-        | ModelKind::Audit { .. } => vec![Combo::default()],
+        | ModelKind::Audit { .. }
+        | ModelKind::Hawkes { .. } => vec![Combo::default()],
         // `p` for the penalty, since `l` is a lag's (`lag_corr_l1_a_b`); and
         // no label for a path of one point, as a single ridge or half-life
         // writes none, while the machine value says which it is.

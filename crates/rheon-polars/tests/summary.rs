@@ -1057,6 +1057,13 @@ fn every_kind_refuses_or_loads_corruption(prefix_step: usize, flip_step: usize) 
             r#"["x0", "x1"]"#,
             false,
         ),
+        (
+            "hawkes",
+            r#"{"type": "hawkes", "kernel_decays": [0.5, 2.0]}"#,
+            r#"["y"]"#,
+            "[]",
+            true,
+        ),
     ];
     let mut seen = Vec::new();
     for &(kind, model, targets, features, half_life) in kinds {

@@ -81,7 +81,11 @@ pub const DURATION_OR_UNIT_FREE_FIELDS: &[(&str, &[&str])] = &[("bocpd", &["haza
 /// (`lam`) and a variance per unit (`kalman`'s `q`). A rate has no duration
 /// form, so a temporal clock refuses one; the half-life it stands in for
 /// takes a duration instead.
-pub const CLOCK_RATES: &[(&str, &[&str])] = &[("*", &["lam"]), ("kalman", &["q"])];
+pub const CLOCK_RATES: &[(&str, &[&str])] = &[
+    ("*", &["lam"]),
+    ("kalman", &["q"]),
+    ("hawkes", &["kernel_decays"]),
+];
 
 /// What a spec's clock-unit parameters are written in, which decides the
 /// clock column it can read (docs/PLAN.md task 88).
@@ -444,6 +448,10 @@ impl Spec {
         }
         match &self.model {
             ModelKind::Kalman { q: Some(q), .. } if q.iter().any(|v| v.0 != 0.0) => Some("q"),
+            ModelKind::Hawkes {
+                kernel_decays: Some(_),
+                ..
+            } => Some("kernel_decays"),
             _ => None,
         }
     }
