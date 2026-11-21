@@ -188,13 +188,18 @@ _GRAMMED = frozenset(["ewridge", "lasso", "ew_cov"])
 #: ratio of feature spreads at which its out-of-sample R^2 had lost no more
 #: than 0.05 at half-lives 20, 200 and infinite (docs/PLAN.md task 223's
 #: measurement). ``kalman``, ``sgd`` and ``pa`` centre unless
-#: ``standardize = False``; ``rls`` and ``ftrl`` never do.
+#: ``standardize = False``; ``rls``, ``ftrl`` and ``expectile`` never do.
 _UNCENTRED_LIMITS: dict[str, tuple[float, float]] = {
     "ftrl": (0.5, 1.5),
     "kalman": (2.0, 2.0),
     "sgd": (3.0, 3.0),
     "pa": (3.0, 2.0),
     "rls": (math.inf, 30.0),
+    # No ridge to pull it, so a level costs it only the Gram's conditioning:
+    # at tau 0.5 its R^2 lost nothing to 3e5 and 0.002 at 1e6 under decay,
+    # and without decay it reported nothing from 1e6, a pivot under its
+    # floor; a spread ratio of 1e6 lost 0.001 (2026-11-21).
+    "expectile": (1e5, 1e6),
 }
 #: ``rls``'s level limit is this times ``sqrt(W / delta_left)``, ``W`` the
 #: weight its fit holds and ``delta_left`` the part of its prior ``delta I``
@@ -664,6 +669,9 @@ def _spec_findings(
                 "needed jitter, kept the previous fit or ran its refit of the first rows to "
                 "its pass cap"
                 if kind in ("huber", "quantile")
+                else "ran an exact refit, of its first rows or of its window, to its pass "
+                "cap or found the rows determined no fit"
+                if kind == "expectile"
                 else "needed jitter or kept the previous fit"
             )
             add(

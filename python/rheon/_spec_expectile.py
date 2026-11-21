@@ -32,13 +32,12 @@ def expectile(
 
     Use it for a tail of the target that should weigh how far the rows past
     it lie, not only how many there are: the 0.9 expectile of a loss, a
-    latency or a demand. It minimises the squared error with the rows above
-    the fit weighed ``tau`` and those below ``1 - tau``, so ``expectile=0.5``
-    is the least-squares fit and a level near 1 is an upper envelope that
-    every large row pulls up. Use :func:`quantile` for the level a share of
-    the rows fall below, which no single row can move far, and
-    :func:`ewridge` for the mean with its diagnostics. A row takes O(k²)
-    time for ``k`` features, and a window refits its rows on every row.
+    latency or a demand. Rows above the fit weigh ``tau`` in its squared
+    error and rows at or below it ``1 - tau``, so ``expectile=0.5`` is the
+    least-squares fit and a level near 1 an upper envelope that every large
+    row pulls up. Use :func:`quantile` for the level a share of the rows fall
+    below, which no single row can move far, and :func:`ewridge` for the mean
+    with its diagnostics.
 
     .. rubric:: Parameters
 
@@ -232,7 +231,8 @@ def expectile(
     500 rows fivefold.
 
     **The state** is ``k(k+1)/2 + 2k + 4`` numbers a target, ``k`` the
-    coefficients, and the shared weight and clock: 0.4 KB at 5 features.
+    coefficients, and the shared weight and clock: 0.4 KB at 5 features. A
+    row takes O(k²) time and a solve of O(k³).
     Until each target's refit runs, ``refit_rows (features + 2)`` more. A
     window holds its rows instead of the sums, and refits them on every
     row: about ``passes * rows * k²`` work a row, the passes 1 to 2 on

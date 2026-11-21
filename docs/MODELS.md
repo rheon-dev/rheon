@@ -1382,13 +1382,13 @@ When `expectile`'s fit is not the one you need:
 
 **The fit is statsmodels' `RLM` with `MQuantileNorm(tau,
 LeastSquares())`.** The refit of the first rows and every row of a window
-match it on the same rows to 2.3e-14 and 7.6e-15 relative, and a window of
-the constant alone matches `scipy.stats.expectile` within 2 ulps of the
-largest target. At `tau = 0.5` the one pass is the decayed least-squares
-fit to rounding. Elsewhere the one pass is a statistical approximation:
-measured over 10 seeds with decay, the gap of its fitted values to the
-exact decayed fit was 0.02 to 0.4 times the batch fit's own sampling error
-on average, and 1.2 times it at worst (500 rows, `tau = 0.9`). Without
+match it on the same rows, to 2.3e-14 and 7.6e-15 relative. A window of the
+constant alone matches `scipy.stats.expectile` within 2 ulps of the largest
+target. At `tau = 0.5` the one pass is the decayed least-squares
+fit to rounding. Elsewhere the one pass is a statistical approximation.
+Measured over 10 seeds with decay, its fitted values stood 0.02 to 0.4 of
+the batch fit's own sampling error from the exact decayed fit on average,
+and 1.2 of it at worst (500 rows, `tau = 0.9`). Without
 decay, the refit of the first rows cut that gap fivefold at 500 rows.
 
 **The state is bounded by the spec.** The sums take `k(k+1)/2 + 2k + 4`

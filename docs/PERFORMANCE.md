@@ -530,8 +530,8 @@ column has the four native ratios from large to small, as measured on
 --test scaling -- --nocapture` prints them. `bank.label_clock`'s were measured on
 2026-11-08, the same way, at a load of 5, and `windows.rows_held`'s on
 2026-11-20 by a release build (`--release`) at a load of 7, and the four
-`hawkes` cells' on 2026-11-21 by a debug build at a load of 5, and the four
-`expectile` cells' on 2026-11-21 the same way at a load of 14. The two `.window` cells were
+`hawkes` cells' on 2026-11-21 by a debug build at a load of 5. The four
+`expectile` cells' were measured on 2026-11-21 the same way, at a load of 14. The two `.window` cells were
 measured again on 2026-11-06, once a window's snapshots were laid out
 flat. A row's time and allocations are per
 row; the saved state and the heap are the state's. `(CI)` marks the 25 cells
