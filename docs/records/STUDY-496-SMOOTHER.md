@@ -1,8 +1,10 @@
 # Study 496: a fixed-lag smoother beside `kalman` (part 1 of 3)
 
-Status: part 1 done (the recursion, its exactness, the k = 2 comparison against
-statsmodels and filterpy, the out-of-sample check, cost and state size). Parts 2
-and 3 are not started.
+Status: parts 1 and 2 done. Part 1: the recursion, its exactness, the k = 2
+comparison against statsmodels and filterpy, the out-of-sample check, cost and
+state size. Part 2 (sections 6 to 9, `scripts/study_496_part2.py`): k = 5 and
+20, exponential forgetting, zero-weight rows, cost and state at k = 5 and 20.
+Part 3 is not started.
 
 Script: `scripts/study_496.py` (Python and numpy only; seeded generators, no data
 files). `uv run python scripts/study_496.py` runs everything in about four
@@ -313,3 +315,223 @@ re-anchoring, reverting slots, weighted and zero-weight rows, clock gaps,
 several targets, the square-root covariance form) and whether each commutes
 with the lag; chunk invariance of the ring; and the output naming of the
 delayed value.
+
+# Part 2: k = 5 and 20, forgetting, zero-weight rows, costs
+
+Script: `scripts/study_496_part2.py`, which imports part 1's data generator and
+summaries and generalizes the filter and the three forms (ring, full augmented,
+reduced augmented) to a forgetting factor and row weights. Each section runs on
+its own, every one under 30 seconds except `--section k` (about 75 seconds in
+all; no single table row over 19 seconds), which was run under `nohup` with a
+log: `uv run python scripts/study_496_part2.py --section k|forget|zero|cost`.
+Same versions as part 1; same data (`x_t ~ N(0, I_k)`, `Q = q I`, `R = 1`,
+`P0 = 10 I`, seeds 0 to 4, N = 2000). The augmented form is run while
+`k(L+1) <= 600`, so not at k = 20, L = 100.
+
+## 6. k = 5 and k = 20
+
+### Exactness on the prefix (q = 1e-3, seed 0)
+
+The emitted mean and covariance for row `t - L` against statsmodels'
+`KalmanSmoother` and filterpy's `rts_smoother`, each run on `y_1 .. y_t`, for
+`t` in {L, 500, 1234, 1999}; largest relative difference:
+
+| k | L | vs statsmodels | vs filterpy |
+|---|---|---|---|
+| 5 | 1 | 2.8e-16 | 3.7e-16 |
+| 5 | 10 | 5.3e-15 | 3.2e-14 |
+| 5 | 100 | 1.5e-14 | 3.4e-14 |
+| 20 | 1 | 4.3e-16 | 3.1e-15 |
+| 20 | 10 | 1.5e-15 | 2.4e-14 |
+| 20 | 100 | 2.9e-13 | 4.4e-13 |
+
+Both libraries handled k = 20 without trouble (each call under 0.2 s); nothing
+failed. The difference grows with k and L as rounding through `L` backward
+steps of `k x k` solves does (filterpy inverts `P_{s+1|s}` explicitly), and
+stays at the 1e-13 level at k = 20, L = 100: the emitted value is the prefix's
+full smoother.
+
+### The forms agree; the gap to the full smoother
+
+Columns as in section 3 (5 seeds; "ring stream vs vectorized" on seed 0).
+
+| k | q | L | ring vs aug | ring vs reduced | ring stream vs vectorized | gap max, rows >= 500 | gap RMS, rows >= 500 | RMS predicted by the covariances |
+|---|---|---|---|---|---|---|---|---|
+| 5 | 0.01 | 1 | 3.8e-16 | 3.8e-16 | 4.2e-17 | 4.53 | 1 | 0.943 |
+| 5 | 0.01 | 10 | 5.4e-15 | 5.7e-15 | 1.7e-16 | 2.47 | 0.49 | 0.46 |
+| 5 | 0.01 | 100 | 6.4e-15 | 6.4e-15 | 1.7e-16 | 0.00229 | 0.000355 | 0.000348 |
+| 5 | 0.001 | 1 | 3.8e-16 | 3.8e-16 | 1.3e-16 | 3.8 | 1.04 | 0.971 |
+| 5 | 0.001 | 10 | 8.3e-15 | 9.6e-15 | 3.1e-16 | 3.08 | 0.801 | 0.747 |
+| 5 | 0.001 | 100 | 8.4e-15 | 9.0e-15 | 4.0e-16 | 0.266 | 0.0567 | 0.0538 |
+| 20 | 0.01 | 1 | 3.6e-16 | 3.6e-16 | 1.4e-16 | 5.57 | 1.1 | 1.1 |
+| 20 | 0.01 | 10 | 2.8e-15 | 2.8e-15 | 2.9e-16 | 3.26 | 0.718 | 0.719 |
+| 20 | 0.01 | 100 | not run | 3.0e-14 | 2.9e-16 | 0.0581 | 0.0088 | 0.00874 |
+| 20 | 0.001 | 1 | 2.7e-16 | 2.7e-16 | 1.6e-16 | 4.15 | 1.03 | 1.03 |
+| 20 | 0.001 | 10 | 2.8e-15 | 2.5e-15 | 2.4e-16 | 3.33 | 0.833 | 0.83 |
+| 20 | 0.001 | 100 | not run | 3.1e-14 | 5.4e-16 | 0.421 | 0.0937 | 0.0925 |
+
+"not run": the full augmented state at k = 20, L = 100 has `k(L+1) = 2020`
+slots, 2,043,230 floats with the covariance stored symmetric (16,345,840 bytes;
+32,659,360 as a full square), from the formula in section 5.
+
+- **The forms agree to 3e-14 at every k and L**, and the streaming ring equals
+  the batched arithmetic to 5.4e-16.
+- **The gap grows with k at fixed q and L**: at q = 1e-2, L = 100 the RMS is
+  1.3e-4 SD at k = 2, 3.6e-4 at k = 5 and 8.8e-3 at k = 20; at q = 1e-3, L = 100
+  it is 0.051, 0.057 and 0.094. One target spread over k coefficients informs
+  each of them less per row (the others' uncertainty is noise to it), so the
+  smoother's memory is longer than part 1's `sqrt(R / q)` and the same L closes
+  less of the gap. At L = 1 the gap stays about 1 SD at every k. The
+  covariances still predict the RMS to within 7 % (0 to 1 % at k = 20), so a
+  model can report the gap in-stream at any k.
+
+## 7. Exponential forgetting
+
+`kalman` has no forgetting factor (part 1, section 1); this adds one per row,
+`lam` in (0, 1]. The change to the recursion is the prediction step alone:
+
+```text
+P_{t|t-1} = P_{t-1|t-1} / lam + Q        (was P_{t-1|t-1} + Q; the mean is unchanged)
+```
+
+That is the random walk with row-varying noise
+`Q_t = (1/lam - 1) P_{t-1|t-1} + Q`. `P_{t-1|t-1}` depends on the rows' `x`
+and weights, never on `y`, so this is still a linear Gaussian state-space model
+and its RTS smoother is the full smoother "under the same forgetting". In the
+smoother only the predicted covariance changes:
+
+```text
+P_{s+1|s} = P_{s|s} / lam + Q,   G_s = P_{s|s} P_{s+1|s}^{-1},   the rest as in section 1
+```
+
+In the augmented forms the extra noise enters `beta_t` alone, so the head
+block is the only one that is inflated: `C_0 <- C_0 / lam + Q`, with
+`C_j` and `D_j` (j >= 1) moved unchanged (`cov(beta_{t-j}, beta_t) =
+cov(beta_{t-j}, beta_{t-1})` still holds, the noise being independent of the
+past). Dividing every block by `lam` is a different model and does not agree
+(column "all blocks / lam").
+
+Oracles: (1) a hand-written full RTS under the same forgetting on the prefix
+`y_1 .. y_t`; (2) statsmodels' `KalmanSmoother` with a time-varying
+`state_cov[..., t] = (1/lam - 1) P_{t|t} + Q` (from this filter's `P_{t|t}`;
+statsmodels' own filtered covariance then matches it to 5.4e-16 and its
+filtered mean to 1.7e-15 at lam = 0.99); (3) filterpy's own fading-memory
+filter (`alpha = 1/sqrt(lam)`, matching this filter to 8.5e-16), whose
+`rts_smoother` has no `alpha` and is given `Qs[t+1] = (alpha² - 1) P_t + Q`
+from filterpy's filtered covariances. k = 5, N = 2000, rows `t` in
+{L, 500, 1234, 1999} for the prefix columns (seed 0); gap over 5 seeds. The
+q = 0 rows forget only, on data that still drift at q = 1e-3.
+
+| q | lam | L | ring vs hand RTS on prefix | vs statsmodels on prefix | vs filterpy on prefix | ring vs reduced | ring vs aug | all blocks / lam, vs ring | gap RMS, rows >= 500 | RMS predicted |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 0.001 | 0.999 | 1 | 0 | 3.2e-16 | 4.1e-16 | 1.8e-16 | 1.8e-16 | 0.00054 | 1.03 | 0.97 |
+| 0.001 | 0.999 | 10 | 0 | 8.0e-15 | 1.8e-14 | 7.7e-15 | 7.9e-15 | 0.0031 | 0.788 | 0.743 |
+| 0.001 | 0.999 | 100 | 0 | 2.3e-14 | 2.3e-14 | 4.7e-15 | n/a | 0.0043 | 0.0533 | 0.0512 |
+| 0.001 | 0.99 | 1 | 0 | 6.7e-16 | 4.0e-16 | 3.7e-16 | 3.7e-16 | 0.0054 | 0.931 | 0.962 |
+| 0.001 | 0.99 | 10 | 0 | 4.7e-15 | 2.0e-14 | 1.1e-14 | 9.9e-15 | 0.03 | 0.683 | 0.705 |
+| 0.001 | 0.99 | 100 | 0 | 1.0e-14 | 2.0e-14 | 6.0e-15 | n/a | 0.041 | 0.0294 | 0.0314 |
+| 0 | 0.999 | 1 | 0 | 1.1e-14 | 1.5e-14 | 1.8e-16 | 1.8e-16 | 0.00074 | 13.6 | 0.926 |
+| 0 | 0.999 | 10 | 0 | 2.0e-14 | 2.4e-14 | 3.9e-15 | 3.1e-15 | 0.0043 | 13.5 | 0.914 |
+| 0 | 0.999 | 100 | 0 | 1.1e-14 | 2.5e-14 | 3.2e-15 | n/a | 0.0084 | 12.1 | 0.806 |
+| 0 | 0.99 | 1 | 0 | 5.7e-16 | 7.6e-16 | 1.8e-16 | 1.8e-16 | 0.0058 | 2.44 | 0.964 |
+| 0 | 0.99 | 10 | 0 | 1.1e-14 | 2.1e-14 | 5.1e-15 | 5.1e-15 | 0.032 | 2.23 | 0.881 |
+| 0 | 0.99 | 100 | 0 | 1.1e-14 | 1.6e-14 | 3.6e-15 | n/a | 0.099 | 0.918 | 0.357 |
+
+("n/a": the full augmented form is not run at L = 100 in this section.)
+
+- **The ring is still exact under forgetting**: bit-identical to the
+  hand-written full RTS on the prefix (the same arithmetic), and within 2.5e-14
+  of statsmodels and filterpy. The reduced and full augmented forms agree with
+  it to 1.1e-14 when only the head block is inflated.
+- **With q = 0 the smoother's gain is `lam I` exactly** (2.7e-15 measured):
+  `P_{s+1|s} = P_{s|s} / lam`, so the mean pass is
+  `b_{s|t} = (1 - lam) b_{s|s} + lam b_{s+1|t}` with no solve, and the gap
+  shrinks as `lam^L` (memory `1/(1 - lam)` rows: 100 at 0.99, 1000 at 0.999).
+- **Forgetting alone on drifting data is a misspecified model**, and there the
+  gap in posterior SD (12 to 14 at lam = 0.999) is far above what the
+  covariances predict (0.8 to 0.9): the forgetting is too slow for the drift,
+  the filtered estimate lags, and the posterior SD does not see the bias. The
+  agreement columns are unaffected; the in-stream gap estimate is only as good
+  as the model.
+
+## 8. Zero-weight rows
+
+Row weights enter as `R_t = R / w_t`. A zero-weight row advances the clock and
+learns nothing: the prediction step runs (`P_{t|t-1} = P_{t-1|t-1} + Q`, or
+`P0` on the first row), the prediction `x_t' b_{t|t-1}` is emitted, and the
+update is **skipped**, so `b_{t|t} = b_{t|t-1}` and `P_{t|t} = P_{t|t-1}`. The
+update must be skipped rather than run with a zero gain: `0 * (y_t - pred_t)`
+is NaN when the zero-weight row's target is NaN or infinite, and no division by
+`w` happens on such a row. Data: k = 5, q = 1e-3, N = 2000, 221 zero-weight
+rows: row 0 (the first row), 200 scattered at random, and a run at rows
+700 to 720; their targets set to NaN.
+
+| L | any NaN (emitted, predictions; all forms) | NaN vs 1e300 targets on zero rows | ring vs reduced | ring vs aug | vs statsmodels (y missing) | vs filterpy (z = None) | kept rows vs dropped stream, clock carried | isolated zero row vs neighbours' midpoint |
+|---|---|---|---|---|---|---|---|---|
+| 1 | none | bit-identical | 1.8e-16 | 1.8e-16 | 2.2e-16 | 7.7e-16 | 4.4e-16 | 2.4e-17 |
+| 10 | none | bit-identical | 7.4e-15 | 7.2e-15 | 1.5e-14 | 5.5e-14 | 8.9e-16 | 9.0e-17 |
+| 100 | none | bit-identical | 7.3e-15 | n/a | 2.4e-14 | 5.4e-14 | 1.8e-15 | 2.3e-16 |
+
+The library oracles mark the row missing (statsmodels: `y = NaN`; filterpy:
+`z = None`), the prefix rows checked include the first-row emission (`t = L`)
+and rows inside the run. The "dropped stream" removes the zero-weight rows and
+carries the clock: the next kept row's prediction adds `Q` times the clock
+units since the last kept row (and the first kept row's prior is `P0` plus `Q`
+per zero row before it). Its filter matches the kept rows to 1.2e-16 (`P + Q +
+Q` against `P + 2Q` is the only rounding), and its smoother, run from the
+last kept row at or before `t` back to `r`, matches every kept row's emission.
+
+What a zero-weight row emits, exactly. For a zero-weight row `r`, at
+`t = r + L` the ring emits
+
+```text
+b_{r|t} = E[beta_r | y_1 .. y_t] = b_{r|r} + G_r (b_{r+1|t} - b_{r|r}),
+b_{r|r} = b_{r-1|r-1},  P_{r|r} = P_{r-1|r-1} + Q,  G_r = P_{r|r} (P_{r|r} + Q)^{-1}
+```
+
+with its covariance from the same RTS step: the coefficient at row `r`'s clock
+time given everything up to row `t`. Between two kept rows (unit clock steps,
+equal `Q` either side) it is exactly the midpoint of the neighbours' smoothed
+means given the same rows, `(b_{r-1|t} + b_{r+1|t}) / 2` (measured to 2.3e-16):
+a linear interpolation in clock time, as the random walk's bridge gives. On the
+first row (`b_{0|0} = 0`, `P_{0|0} = P0`) it is `P0 (P0 + Q)^{-1} b_{1|t}`
+(0 difference measured at L = 10). A kept row's emission is unchanged by the
+zero-weight rows except through the clock: it equals the dropped stream's
+smoothed value conditioned on the same targets, which is that stream's
+lag `L - m` value when `m` zero-weight rows fall inside the window. No NaN at
+any L in any form.
+
+## 9. Per-row cost and state size (k = 5 and 20)
+
+As in section 5: one interpreted Python step per row, so these microseconds are
+interpreter overhead plus numpy dispatch and say nothing about Rust; timed after
+the first L rows (q = 1e-3, seed 0), on 1000 rows, or 300 for the two rings
+and the augmented form at L = 100. Bytes are f64 from section 5's formulas (the ring with `G`
+cached and the reduced form have the same count,
+`(k + k(k+1)/2) + L (k + k(k+1)/2 + k²)`).
+
+| k | L | ring us/row | bytes | ring, G cached us/row | bytes | augmented us/row | bytes | reduced us/row | bytes |
+|---|---|---|---|---|---|---|---|---|---|
+| 5 | 1 | 24 | 320 | 25 | 520 | 15 | 520 | 18 | 520 |
+| 5 | 10 | 142 | 1,760 | 83 | 3,760 | 23 | 12,760 | 20 | 3,760 |
+| 5 | 100 | 1258 | 16,160 | 673 | 36,160 | 2641 | 1,026,160 | 34 | 36,160 |
+| 20 | 1 | 34 | 3,680 | 38 | 6,880 | 20 | 6,880 | 21 | 6,880 |
+| 20 | 10 | 230 | 20,240 | 141 | 52,240 | 213 | 196,240 | 38 | 52,240 |
+| 20 | 100 | 2228 | 185,840 | 879 | 505,840 | not run | 16,345,840 (formula) | 143 | 505,840 |
+
+Formula only: the augmented form at k = 20, L = 100 (not run; 32,659,360 bytes
+if its covariance were stored as a full square). Every other entry was
+measured, and every byte count is the formula.
+
+- The reduced augmented form is the cheapest per row at every k and L, with
+  the covariance included (143 us at k = 20, L = 100 against 879 for the ring
+  with `G` cached and 2228 for the ring as written, which solves `L` systems a
+  row). The full augmented form is `(k(L+1))²` a row and in state: 2.6 ms and
+  1 MB at k = 5, L = 100, 16 MB at k = 20, L = 100. It stays ruled out.
+- State: the reduced form and the cached ring are bounded by `k²` and `L`,
+  never by the stream. At k = 20, L = 100 that is 506 KB against the filter's
+  own 1,840 bytes (`k + k(k+1)/2` floats), 275 times; at k = 5, L = 100,
+  36 KB against 160 bytes. A lag of 100 at k = 20 is a significant growth in
+  state over `kalman`'s and would go to the user with these numbers before it
+  lands; the ring as written (186 KB at k = 20, L = 100, mean and covariance,
+  `L` solves a row) is the smallest state that still emits a covariance.
