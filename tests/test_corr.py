@@ -667,3 +667,102 @@ def test_matrix_reads_an_array_a_gram_and_a_closed_row():
     assert np.allclose(np.diag(from_row), 1.0)
     with pytest.raises(ValueError, match="must be a square matrix, a Gram or a row of"):
         corr._matrix(np.zeros((2, 3)))
+
+
+# --- review S15: the numbers and the bounds no test held ---------------------
+
+
+def test_nearest_reports_the_weighted_distance_by_its_definition():
+    """``||W^1/2 (A - X) W^1/2||_F`` with ``W = diag(w)``, written out."""
+    w = np.array([1.0, 4.0, 0.25, 2.0])
+    x, dist, _ = corr.nearest(HIGHAM_4, w)
+    root = np.diag(np.sqrt(w))
+    want = np.linalg.norm(root @ (HIGHAM_4 - x) @ root, "fro")
+    assert dist == pytest.approx(want, rel=1e-12)
+    _, plain, _ = corr.nearest(HIGHAM_4)
+    assert dist != pytest.approx(plain, rel=1e-3), "the weights move it"
+
+
+def test_signal_share_is_its_definition():
+    """``clip(1 - mean_b(1 / (n_b - 3)) / var_b(z_b), 0, 1)``, written out,
+    on blocks of unequal sizes and a share inside (0, 1)."""
+    z = np.array([0.10, 0.35, 0.05, 0.40, 0.22])
+    n = np.array([40.0, 200.0, 25.0, 120.0, 60.0])
+    want = 1.0 - np.mean(1.0 / (n - 3.0)) / np.var(z, ddof=1)
+    assert 0.0 < want < 1.0
+    assert corr.signal_share(z, n) == pytest.approx(want, rel=1e-12)
+    two = np.column_stack([z, z[::-1] * 0.5])
+    got = corr.signal_share(two, n)
+    np.testing.assert_allclose(got[0], want, rtol=1e-12)
+
+
+def test_signal_share_s_bounds_on_both_sides():
+    """A block of 4 has a ``z`` variance and one of 3 has none; two blocks
+    have a spread across them and one has none."""
+    z = np.array([0.1, 0.5, 0.3])
+    assert np.isfinite(corr.signal_share(z, [4.0, 4.0, 4.0]))
+    assert np.isnan(corr.signal_share(z, [4.0, 3.0, 4.0]))
+    assert np.isfinite(corr.signal_share(z[:2], [100.0, 100.0]))
+    assert np.isnan(corr.signal_share(z[:1], [100.0]))
+
+
+def test_shrink_scales_with_the_sample_below_unit_variances():
+    """Constant-correlation shrinkage is the same at any scale of the
+    sample: ``x`` times ``c`` shrinks ``c**2 S`` by the same intensity to
+    ``c**2`` times the same matrix. At ``c = 0.1`` every variance is under
+    0.5, where a floor on the variances read for the standard deviations
+    would bend it; the columns' variances differ, so the ratio of standard
+    deviations in the intensity's ``rho`` is not 1."""
+    rng = np.random.default_rng(7)
+    f = rng.standard_normal((400, 1))
+    load = np.array([0.9, 0.3, -0.5])
+    x = (f * load + 0.6 * rng.standard_normal((400, 3))) * np.array([1.0, 2.0, 3.0])
+    s = np.cov(x, rowvar=False, bias=True)
+    want, alpha = corr.shrink(s, x=x)
+    assert 0.0 < alpha < 1.0
+    c = 0.1
+    small = np.cov(c * x, rowvar=False, bias=True)
+    assert (np.diag(small) < 0.5).all()
+    got, a2 = corr.shrink(small, x=c * x)
+    assert a2 == pytest.approx(alpha, rel=1e-9)
+    np.testing.assert_allclose(got, c * c * want, rtol=1e-9)
+
+
+def test_shrink_s_constant_target_of_two_columns_is_the_matrix():
+    """With two columns the mean correlation is their one correlation, so
+    the constant-correlation target is the matrix itself."""
+    s = np.array([[2.0, 0.9], [0.9, 1.5]])
+    got, alpha = corr.shrink(s, alpha=1.0)
+    assert alpha == 1.0
+    np.testing.assert_allclose(got, s, rtol=1e-15)
+
+
+def test_the_refusal_bounds_on_both_sides():
+    """Each bound, at the value it refuses and at the nearest it takes."""
+    # nearest: a weight of 0 is refused, a small positive one taken.
+    with pytest.raises(ValueError, match=r"w\[1\] is 0.0"):
+        corr.nearest(HIGHAM_3, [1.0, 0.0, 1.0])
+    assert np.isfinite(corr.nearest(HIGHAM_3, [1.0, 1e-3, 1.0])[1])
+    # shrink: one row cannot estimate the intensity, two can.
+    x = np.array([[1.0, 2.0], [2.0, 1.0], [0.0, 0.5]])
+    s = np.cov(x, rowvar=False, bias=True)
+    with pytest.raises(ValueError, match="at least 2 rows"):
+        corr.shrink(s, x=x[:1])
+    assert 0.0 <= corr.shrink(s, x=x[:2])[1] <= 1.0
+    # equicorr_row: one entry has no correlation, two have one.
+    assert np.isnan(corr.equicorr_row([1.0]))
+    assert corr.equicorr_row([1.0, 1.0]) == pytest.approx(1.0)
+    # equicorr_loglik: R is positive definite on (-1/(n-1), 1) alone.
+    row = [0.3, -0.2, 0.5]
+    assert np.isnan(corr.equicorr_loglik([0.3], 0.0))
+    assert np.isfinite(corr.equicorr_loglik(row[:2], 0.0))
+    assert np.isnan(corr.equicorr_loglik(row, -0.5))
+    assert np.isfinite(corr.equicorr_loglik(row, -0.5 + 1e-9))
+    assert np.isnan(corr.equicorr_loglik(row, 1.0))
+    assert np.isfinite(corr.equicorr_loglik(row, 1.0 - 1e-9))
+    # fisher_se: an AR(1) product of +-1 is refused, one inside taken.
+    for a, b in ((1.0, 1.0), (1.0, -1.0)):
+        with pytest.raises(ValueError, match="above -1 and below 1"):
+            corr.fisher_se(103, phi_a=a, phi_b=b)
+    assert np.isfinite(corr.fisher_se(103, phi_a=0.999, phi_b=0.999))
+    assert np.isfinite(corr.fisher_se(103, phi_a=0.999, phi_b=-0.999))
