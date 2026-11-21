@@ -891,3 +891,107 @@ accuracy here.
   EGARCH-t estimator in the study.
 * A step guard for EGARCH's unconstrained `alpha, gamma` after a capped start (seed 492006).
 * Part 2 of B11 (the coordinator's second half) is not this part's.
+
+# Study 492, part 5: a stationary GARCH(2,2) step and a nu stabiliser (B11, part 2 of 2)
+
+Python and numpy only (`scripts/study_492_b11.py`, which imports `scripts/study_492.py` unchanged); arch 9.0.0
+the oracle; no Rust, no source change. `study_492_b11.py check` runs the derivation checks (seconds);
+`g22 DIR 0 10000 SEED...`, `t DIR 0 10000 SEED...` and `summary DIR` reproduce the figures below (50 seeds each,
+four shards, about two minutes on a 4-core VM). Open derivations 3 and 4 of section 7.
+
+## 1. GARCH(2,2) in partial-autocorrelation coordinates
+
+**Derivation.** `e2_t` is an ARMA(2,2): `e2_t = omega + P1 e2_{t-1} + P2 e2_{t-2} + u_t - b1 u_{t-1} - b2 u_{t-2}`,
+`P_i = a_i + b_i`, so covariance stationarity is that the roots of `1 - P1 z - P2 z^2` lie outside the unit circle.
+The Barndorff-Nielsen and Schou (1973) / Jones (1987) map takes the open square `(-1, 1)^2` onto exactly that region:
+`P2 = r2`, `P1 = r1 (1 - r2)`, `r_i = tanh(u_i)`, `u` unconstrained. arch's nonnegativity (`a_i, b_i >= 0`) adds
+`r_i >= 0` and `0 <= a_i <= P_i`. The step is study 485's targeted Newton step (`omega = v (1 - P1 - P2) = v (1 - r1)(1 - r2)`)
+taken in `x = (a1, a2, u1, u2)`, with `phi = (a1, a2, P1 - a1, P2 - a2)` and the chain rule
+`dP1/du1 = (1 - r2)(1 - r1^2)`, `dP1/du2 = -r1 (1 - r2^2)`, `dP2/du2 = 1 - r2^2`; `score_x = J' score_phi`,
+`I_x = J' I_phi J`. The projection is closed form (`u_i <- max(u_i, 0)`, then `a_i <- clip(a_i, 0, P_i)`; the margin
+`(1 - r1)(1 - r2) >= 1e-4` by lowering `r1`), replacing Dykstra. The batch start is part 1's (in `phi`); its `H` is
+carried to `x` as `J' H J` at the start's fit. The roots of `1 - beta(L)` are then outside too (`b >= 0`,
+`b1 + b2 < 1`).
+
+**A finding that changes the question.** Under arch's nonnegativity the stationary region in the roots' coordinates
+is the same set as part 1's half-spaces (with all coefficients `>= 0`, the roots are outside iff `P1 + P2 < 1`).
+Part 1's projected step never left it either: its final reciprocal-root modulus is at most 0.99994. So the map does
+not add stationarity; it changes the coordinates the Newton step is taken in and the shape of the boundary (the
+`tanh` boundary is reached only asymptotically). A Newton step is invariant to a reparametrisation to first order,
+so any gain comes from the map's curvature and from fewer projections, not from the stationarity condition itself.
+
+**Checks** (`check`): the Jacobian against central differences, max abs 1.0e-10 over 200 points, every image
+stationary and `x -> phi -> x` exact; the score in `x` against a central difference of the targeted log-likelihood
+(800 rows), max rel 1.5e-7.
+
+**Results** (Gaussian, 10,000 rows, seeds 492000 to 492049, the same rows and arch fits for both; `target` is part 1's
+targeted step, which reproduces part 1's 29 of 50):
+
+| GARCH(2,2), targeted | 10 seeds within 2 SE | 50 seeds within 2 SE (all / without omega) | persistence within 2 SE | beta sum within 2 SE | path gap, max over last 1000: median / worst | ll gap median / worst | projected rows |
+|---|---|---|---|---|---|---|---|
+| part 1 (phi, Dykstra) | 5 | 29 / 32 | 36 | 37 | 13.8% / 264% | -3.7 / -471 | 17,783 |
+| PACF step | 6 | 36 / 38 | 46 | 41 | 9.3% / 101% | -1.6 / -123 | 5,591 |
+
+Max reciprocal-root modulus over every step of every seed under the PACF step: 0.99992 for `1 - P(L)` (the margin
+`P1 + P2 <= 1 - 1e-4` bounds it between 0.9999 and 0.99995), 0.99845 for `1 - beta(L)`; never 1.
+
+Reading it: the PACF step lifts the count from 29 to 36 of 50 (11 seeds gained, 4 lost); paired, the difference
+is 0.14 +- 0.076 per seed, 1.8 SE, so it is **not a significant lift at 2 SE**. It is clearer on the identified
+combination (persistence within 2 SE on 46 against 36 seeds), the path (median-seed worst gap 9.3% against 13.8%,
+worst seed 101% against 264%) and the likelihood (worst seed -123 against -471 nats). **The weak identification
+of `beta1` and `beta2` remains**: arch's own correlation of the two estimates has median -1.00 over the 50 seeds
+(-0.975 at its weakest); of the 14 PACF seeds outside 2 SE, 9 are out on `beta1` or `beta2` (gaps of opposite
+sign and near-equal size, up to 12 SE on seed 492023), and 4 are out on `beta1`/`beta2` alone (up to 4.9 SE where
+the persistence is within 2 SE). The map separates `P1 + P2` from
+the split, but the split is the ridge of arch's own likelihood, so no step can be held to arch's split.
+Recommendation: judge GARCH(2,2) on the persistence and the path, not on `beta1`/`beta2` in SE.
+
+## 2. The nu stabiliser for the Student-t
+
+**Derivation.** Step `s = log(nu - 2)`, `nu = 2 + exp(s)`: `score_s = (nu - 2) score_nu`, `I_s = (nu - 2)^2 I_nu`
+(checked against a central difference, rel 5.7e-8). Why it stabilises: the t's `nu` score carries `1/(nu - 2)` terms
+and its information falls like `nu^-4` at large `nu`, so a Newton step linear in `nu` is far too large where the
+likelihood is flat (large `nu`) and can cross 2 where it is steep. In `s` the step is a relative move of `nu - 2`
+(`nu - 2 <- (nu - 2) e^ds`): it cannot reach 2, and a large `nu` moves only in proportion. Two slower forms were
+also run: a gain `kappa = 0.1` on the shape's component of the joint step, and a cap `|ds| <= 0.01` per row.
+
+**Results** (GARCH(1,1) t, free `omega`, 10,000 rows, seeds 492100 to 492149; one shared batch start per seed):
+
+| form | 10 seeds | 50 seeds within 2 SE | 492111: nu (arch 6.26), ll gap | 492134: nu (arch 6.33), ll gap | worst ll gap | path gap max, worst seed |
+|---|---|---|---|---|---|---|
+| nu, Euclidean projection (part 2) | 10 | 46 | 292.6, -12,644 | 67.2, -9,880 | -12,644 | 7,883% |
+| nu, metric projection (part 3) | 10 | 47 | 2.72, -190 | 2.94, -151 | -190 | 136% |
+| s, Euclidean projection | 10 | 45 | 2.05, -785 | 300, -9,975 | -9,975 | 6,940% |
+| **s, metric projection** | 10 | **48** | **6.58, -1.4** | **6.40, -0.4** | **-6.7** | **13.2%** |
+| s, metric, kappa 0.1 | 5 | 26 | 38.5, -175 | 8.67, -12 | -175 | 21.8% |
+| s, metric, cap 0.01 | 0 | 1 | 8.12, -10.7 | 8.09, -8.4 | -20.8 | 15.5% |
+
+**Both blown-up seeds converge** under `s` with the metric projection: within 2 SE on every parameter (max 1.2 and
+0.8 SE), a likelihood within 1.4 nats of arch's. 48 of 50 seeds within 2 SE against 46 (part 2) and 47 (part 3);
+the worst likelihood gap goes from -12,644 to -6.7 nats. The two parts are both needed: `s` alone, with the
+Euclidean projection, still blows up (the projection of the Newton step is the mechanism, part 3), and the metric
+projection alone leaves `nu` at 2.7 to 2.9 (the step in `nu` drives it to the floor once the free parameters are
+pulled back; in `s` the floor is unreachable and the pull is relative). The slower gains are worse: they leave
+`nu` near the 500-row start's value (a median 0.9 off, part 2), which is what fixing the shape did. Not run here:
+skew-t (the `lambda` coordinate would want `atanh`), GJR t and the targeted form.
+
+## 3. State and cost
+
+* **No state added by either transform.** The PACF step stores `x = (a1, a2, u1, u2)` in `phi`'s four slots (`omega`
+  and `phi` are recomputed from `x` and the running variance each row); the t form stores `s` in `nu`'s slot. GARCH(2,2)
+  stays at part 1's 312 bytes, GARCH(1,1) t free online at 22 floats, 176 bytes (plus the 4 KB buffer until the start).
+* **Per row.** PACF: two `tanh`, a 4 x 4 Jacobian and two 4 x 4 products (about 60 flops), and a closed-form projection
+  (a few compares) instead of Dykstra. Measured 131 us/row in numpy against 57 for part 1, but that includes the
+  diagnostic reciprocal-root computation (two `np.roots`, 44 us each, measured); without it about 45 us/row (an estimate:
+  the measured total less the measured diagnostic). The `s` form: one `exp` per row; 59 against 58 us/row.
+* **Libm.** `tanh` (PACF) and `exp` (the `s` form) put libm results in the state's path, so `x` and `s` are libm fields
+  under the cross-OS rule: to the bit on one OS, a tolerance across OSes. Not measured here.
+
+## 4. Open after this part
+
+* Open derivation 3 is closed as derived and measured: the stationary step exists, lifts the count by 1.8 SE (not 2),
+  and cannot remove the `beta1`/`beta2` ridge, which is arch's own.
+* Open derivation 4 is closed for GARCH(1,1) t (free): `s = log(nu - 2)` with the metric projection. Not run: skew-t,
+  GJR t, the targeted forms, GARCH(2,2) t; whether the metric projection should be the family's projection (part 3,
+  question 2) now has one more case for it.
+* `docs/README.md` still needs this record's row at merge (not edited here).
