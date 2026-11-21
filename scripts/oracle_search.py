@@ -285,6 +285,98 @@ def expectile_candidates():
     report("501", "expectile regression (linear terms)", "pygam", {"max |coef - definition|": float(np.max(np.abs(got - b)))}, "400 rows, 3 features, t(4) noise, tau=0.3, lam=0")
 
 
+def dcc_loglik_def(r, D, a, b, g=0.0):
+    """Engle 2002 / Cappiello-Engle-Sheppard 2006 Gaussian DCC(ADCC) log-likelihood given the univariate vols D (T x N).
+
+    eps = r/D; Q_bar = mean eps eps'; N_bar = mean n n', n = min(eps, 0);
+    Q_t = (1-a-b) Q_bar - g N_bar + a eps_{t-1} eps_{t-1}' + g n_{t-1} n_{t-1}' + b Q_{t-1}; R_t = diag(Q)^-1/2 Q diag(Q)^-1/2.
+    Returns (loglik over t>=1 of the full-H form, the list of R_t); Q_0 = Q_bar."""
+    T, N = r.shape
+    eps = r / D
+    nn = np.minimum(eps, 0.0)
+    Qb = eps.T @ eps / T
+    Nb = nn.T @ nn / T
+    Q = Qb.copy()
+    ll = 0.0
+    Rs = [np.corrcoef(np.eye(N))]
+    for t in range(1, T):
+        Q = (1 - a - b) * Qb - g * Nb + a * np.outer(eps[t - 1], eps[t - 1]) + g * np.outer(nn[t - 1], nn[t - 1]) + b * Q
+        d = 1 / np.sqrt(np.diag(Q))
+        R = Q * np.outer(d, d)
+        H = R * np.outer(D[t], D[t])
+        ll += -0.5 * (N * np.log(2 * np.pi) + np.linalg.slogdet(H)[1] + r[t] @ np.linalg.solve(H, r[t]))
+        Rs.append(R)
+    return ll, Rs
+
+
+@check
+def dcc_candidates():
+    from mgarch import mgarch
+
+    rng = np.random.default_rng(6)
+    T, N = 400, 2
+    L = np.linalg.cholesky(np.array([[1.0, 0.5], [0.5, 1.0]]))
+    r = rng.standard_normal((T, N)) @ L.T * 0.01
+    D = np.sqrt(np.maximum(1e-8, pd_ewma(r)))
+    m = mgarch("norm")
+    m.rt = np.matrix(r - r.mean(0))
+    m.T, m.N = T, N
+    got = -m.mgarch_loglike((0.05, 0.9), D)  # its likelihood is -2x(sum of terms)? compare both scalings
+    ll, _ = dcc_loglik_def(m.rt.A, D, 0.05, 0.9)
+    report("493/514", "Gaussian DCC log-likelihood at given (a, b)", "mgarch", {"|-mgarch_loglike - definition|": float(abs(got - ll)), "|-mgarch_loglike/2 - definition|": float(abs(got / 2 - ll)), "definition": float(ll)}, "T=400, N=2, rho=0.5, vols from a fixed EWMA; mgarch computes log(D_t.sum()) and reshapes the returns for Q_bar")
+
+
+def pd_ewma(r, lam=0.94):
+    v = np.empty_like(r)
+    v[0] = r.var(0)
+    for t in range(1, len(r)):
+        v[t] = lam * v[t - 1] + (1 - lam) * r[t - 1] ** 2
+    return v
+
+
+def linucb_def(X, arms, y, x, arm, alpha, lam):
+    """Li, Chu, Langford, Schapire 2010 (disjoint): A = lam I + sum x x', theta = A^-1 b, score = theta'x + alpha sqrt(x'A^-1 x)."""
+    m = arms == arm
+    A = lam * np.eye(X.shape[1]) + X[m].T @ X[m]
+    th = np.linalg.solve(A, X[m].T @ y[m])
+    return float(th @ x + alpha * np.sqrt(x @ np.linalg.solve(A, x))), th, A
+
+
+@check
+def bandit_candidates():
+    rng = np.random.default_rng(7)
+    n, d = 150, 3
+    X = rng.standard_normal((n, d))
+    arms = rng.integers(0, 3, n)
+    y = np.array([X[i] @ np.array([1.0, 0.5, -1.0]) * (1 + arms[i]) + 0.1 * rng.standard_normal() for i in range(n)])
+    xq = rng.standard_normal(d)
+    alpha, lam = 1.5, 1.0
+    out = {}
+    from mabwiser.mab import MAB, LearningPolicy
+    import numpy as _np
+
+    mab = MAB([0, 1, 2], LearningPolicy.LinUCB(alpha=alpha, l2_lambda=lam), seed=0)
+    mab.fit(decisions=arms.tolist(), rewards=y.tolist(), contexts=X)
+    ex = mab.predict_expectations(xq.reshape(1, -1))
+    out["mabwiser LinUCB: max |expectation - definition|"] = max(abs(ex[a] - linucb_def(X, arms, y, xq, a, alpha, lam)[0]) for a in range(3))
+    report("504", "LinUCB (disjoint) scores", "mabwiser", out, "150 rounds, 3 arms, d=3, alpha=1.5, lambda=1")
+    # river: the policy's bonus is the posterior predictive sigma (which includes the 1/beta noise term)
+    from river import bandit
+
+    pol = bandit.LinUCBDisjoint(alpha=lam, beta=1.0, seed=0)
+    for i in range(n):
+        pol.update(int(arms[i]), {j: float(X[i, j]) for j in range(d)}, float(y[i]))
+    ctx = {j: float(xq[j]) for j in range(d)}
+    g = {}
+    for a in range(3):
+        dist = pol._bayes_lin_regs[a].predict_dist_one(ctx)
+        _, th, A = linucb_def(X, arms, y, xq, a, 1.0, lam)
+        # river score = mu + sigma, sigma^2 = 1/beta + x'A^-1 x  (alpha_li = 1 only if 1/beta -> 0)
+        g[f"arm {a}: |mu - theta'x|"] = float(abs(dist.mu - th @ xq))
+        g[f"arm {a}: |sigma^2 - x'A^-1 x| (noise term)"] = float(abs(dist.sigma**2 - xq @ np.linalg.solve(A, xq)))
+    report("504", "LinUCB (disjoint) posterior of the arms", "river", g, "same rounds; river's bonus is sigma of the predictive, 1/beta included")
+
+
 def main(argv):
     names = argv or list(CHECKS)
     for n in names:
