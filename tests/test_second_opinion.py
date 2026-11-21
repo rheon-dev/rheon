@@ -1890,8 +1890,7 @@ class TestAStandardizedKalmanIsFilterpy:
         assert np.isfinite(got[1:]).all() and np.isnan(got[:1]).all()
         # Task 97: coef after row i, applied to row i + 1, is row i + 1's pred.
         coef = out["coef"].to_list()
-        # A row of weight 0 carries no `coef` (hard rule 9): each row is read
-        # with the last row's that carries one, as the state stands.
+        # A row of weight 0 carries no `coef` (hard rule 9): read the last.
         for i in range(1, n):
             if coef[i] is None:
                 coef[i] = coef[i - 1]

@@ -106,7 +106,7 @@ class TestRlsRobustStandardErrorsAreTheSandwich:
         from statsmodels.stats.sandwich_covariance import S_hac_simple
 
         lags = 4
-        df = _sandwich_rows(900, 51)
+        df = _sandwich_rows(1000, 51)
         kw: dict[str, Any] = {"half_life": half_life}
         if weighted:
             kw["weight"] = "w"
@@ -127,8 +127,12 @@ class TestRlsRobustStandardErrorsAreTheSandwich:
         X = sm.add_constant(df.select("x0", "x1").to_numpy())
         ready = out["settled_frac"].fill_null(1.0).fill_nan(1.0).to_numpy() >= 0.95
         checked = 0
-        for t in (700, 800, 899):
-            omega = w[: t + 1] * 0.5 ** ((t - np.arange(t + 1)) / half_life)
+        # A row of weight 0 counts in no clock (hard rule 9): ages run over
+        # the rows that count, and the rows read are such rows.
+        c = np.cumsum(w != 0.0)
+        for t in (800, 900, 999):
+            t = int(np.flatnonzero(w[: t + 1] != 0.0)[-1])
+            omega = w[: t + 1] * 0.5 ** ((c[t] - c[: t + 1]) / half_life)
             keep = np.isfinite(resid[: t + 1]) & (omega > 0) & ready[: t + 1]
             assert keep.sum() >= 40, keep.sum()
             Xk, ek, om = X[: t + 1][keep], resid[: t + 1][keep], omega[keep]
