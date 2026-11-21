@@ -584,6 +584,7 @@ class KSWIN:
         self.rng = random.Random(self.seed)
         self.p_value = 0.0
         self.stat = 0.0
+        self.tested = False
 
     def update(self, x: float, w: float = 1.0) -> bool:
         if w == 0.0:
@@ -595,7 +596,9 @@ class KSWIN:
         win = self.window
         win.append(x)
         if len(win) < self.W:
+            self.tested = False
             return False
+        self.tested = True
         r, W = self.r, self.W
         if self.draw == "random":
             old = [win[i] for i in self.rng.sample(range(W - r), r)]
