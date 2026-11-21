@@ -75,6 +75,7 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -418,22 +419,38 @@ def _rebase_allows(before_doc: dict, after_doc: dict, ledger: dict) -> dict[str,
     return out
 
 
-def _unexplained(
-    before: dict, after: dict, ledger: dict, allowed: dict[str, float] | None = None
-) -> list[str]:
-    allowed = allowed or {}
-    retired = [r["key"] for r in ledger.get("retired", []) if "key" in r]
-    raised = set()
+def raised_entries(ledger: dict) -> Counter:
+    """The ledger's ``[[raised]]`` entries as (key, from, to) in the gaps
+    ``numbers`` keys, each counted: one entry answers one raise."""
+    out: Counter = Counter()
     for r in ledger.get("raised", []):
         if {"key", "from", "to"} <= set(r):
             k = r["key"]
-            raised.add(
+            out[
                 (
                     k,
                     written(raised_value(ledger, k, r["from"])),
                     written(raised_value(ledger, k, r["to"])),
                 )
-            )
+            ] += 1
+    return out
+
+
+def _unexplained(
+    before: dict,
+    after: dict,
+    ledger: dict,
+    allowed: dict[str, float] | None = None,
+    unused: Counter | None = None,
+) -> list[str]:
+    """The numbers made worse from ``before`` to ``after`` that nothing
+    answers. ``unused``, when given, is the entries not yet spent on an
+    earlier step of the history: each raise spends one, so a number raised,
+    tightened back and raised again to the same value needs a second entry
+    (review S2)."""
+    allowed = allowed or {}
+    retired = [r["key"] for r in ledger.get("retired", []) if "key" in r]
+    unused = raised_entries(ledger) if unused is None else unused
 
     def at_floor(k: str) -> bool:
         # A worst or p95 that rose only to its case's floor: the floor's
@@ -452,18 +469,25 @@ def _unexplained(
             and after[k] == after.get("tolerance")
         )
 
-    return [
-        f"{k}: {before[k]:.6g} -> {after[k]:.6g} with no [[raised]] entry for it"
-        for k in sorted(set(before) & set(after))
-        if worse(k, before[k], after[k])
-        # A number retired since answers for nothing more.
-        and not any(retires(r, k) for r in retired)
-        and not at_floor(k)
-        and not follows_the_file(k)
-        and (k, written(before[k]), written(after[k])) not in raised
-        # Within the rebase's share, to the six figures the file writes.
-        and not (k in allowed and after[k] <= allowed[k] * (1 + 1e-6))
-    ]
+    out = []
+    for k in sorted(set(before) & set(after)):
+        if not (
+            worse(k, before[k], after[k])
+            # A number retired since answers for nothing more.
+            and not any(retires(r, k) for r in retired)
+            and not at_floor(k)
+            and not follows_the_file(k)
+            # Within the rebase's share, to the six figures the file writes.
+            and not (k in allowed and after[k] <= allowed[k] * (1 + 1e-6))
+        ):
+            continue
+        step = (k, written(before[k]), written(after[k]))
+        if unused[step] > 0:
+            unused[step] -= 1
+            continue
+        spent = "; the entries for it answered earlier raises, one each" if step in unused else ""
+        out.append(f"{k}: {before[k]:.6g} -> {after[k]:.6g} with no [[raised]] entry for it{spent}")
+    return out
 
 
 def check_file(doc: dict, changelog: str) -> list[str]:
@@ -587,6 +611,7 @@ def check_history(versions: list[tuple[str, str]], working: str | None) -> list[
     if not texts:
         return []
     ledger = tomllib.loads(texts[-1][1])
+    unused = raised_entries(ledger)
     errors: list[str] = []
     last: dict[str, float] = {}
     previous: dict = {}
@@ -595,7 +620,7 @@ def check_history(versions: list[tuple[str, str]], working: str | None) -> list[
         now = numbers(doc)
         if i:
             allowed = _rebase_allows(previous, doc, ledger)
-            errors += [f"{label}: {e}" for e in _unexplained(last, now, ledger, allowed)]
+            errors += [f"{label}: {e}" for e in _unexplained(last, now, ledger, allowed, unused)]
         last.update(now)
         previous = doc
     retired = [r["key"] for r in ledger.get("retired", []) if "key" in r]

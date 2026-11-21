@@ -389,6 +389,20 @@ def test_a_raise_committed_without_its_entry_is_answered_by_a_later_one_and_dele
     assert len(budgets.check_history(versions, _raised(1_100_000))) == 1
 
 
+def test_an_entry_answers_one_raise_not_a_return_to_its_number():
+    """Review S2: raised with an entry, tightened back, then drifted up to the
+    raised number again. The entry was spent on the first raise, so the
+    second needs its own; two entries answer both."""
+    up, down = _raised(1_100_000, RAISE), _raised(1_000_000, RAISE)
+    versions = [("a" * 40, SMALL), ("b" * 40, up), ("c" * 40, down)]
+    (error,) = budgets.check_history(versions, up)
+    assert "working tree: instructions.a: 1000000 -> 1100000" in error
+    assert "answered earlier raises" in error
+    assert budgets.check_history(versions, up + RAISE) == []
+    # The control: one raise, one entry.
+    assert budgets.check_history(versions[:2], None) == []
+
+
 def test_a_wider_tolerance_is_a_raise():
     wider = SMALL.replace("instructions = 0.02", "instructions = 0.05")
     (error,) = budgets.check_history([("a" * 40, SMALL)], wider)

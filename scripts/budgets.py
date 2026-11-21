@@ -77,6 +77,7 @@ import time
 import tomllib
 import urllib.error
 import urllib.request
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -409,14 +410,37 @@ def unexplained_raises(old: dict, new: dict, ledger: dict | None = None) -> list
     return _unexplained(budget_numbers(old), budget_numbers(new), ledger)
 
 
-def _unexplained(before: dict[str, float], after: dict[str, float], ledger: dict) -> list[str]:
-    raised = {(r.get("key"), r.get("from"), r.get("to")) for r in ledger.get("raised", [])}
-    return [
-        f"{key}: {before[key]} -> {after[key]} with no [[raised]] entry "
-        f"(key = {key!r}, from = {before[key]}, to = {after[key]})"
-        for key in sorted(set(before) & set(after))
-        if after[key] > before[key] and (key, before[key], after[key]) not in raised
-    ]
+def raised_entries(ledger: dict) -> Counter:
+    """The ledger's ``[[raised]]`` entries as (key, from, to), each counted:
+    one entry answers one raise."""
+    return Counter((r.get("key"), r.get("from"), r.get("to")) for r in ledger.get("raised", []))
+
+
+def _unexplained(
+    before: dict[str, float],
+    after: dict[str, float],
+    ledger: dict,
+    unused: Counter | None = None,
+) -> list[str]:
+    """The rises from ``before`` to ``after`` no entry answers. ``unused``,
+    when given, is the entries not yet spent on an earlier step of the
+    history; each rise spends one, so a budget raised, tightened back and
+    raised again to the same number needs a second entry (review S2)."""
+    unused = raised_entries(ledger) if unused is None else unused
+    out = []
+    for key in sorted(set(before) & set(after)):
+        if not after[key] > before[key]:
+            continue
+        step = (key, before[key], after[key])
+        if unused[step] > 0:
+            unused[step] -= 1
+            continue
+        out.append(
+            f"{key}: {before[key]} -> {after[key]} with no [[raised]] entry "
+            f"(key = {key!r}, from = {before[key]}, to = {after[key]})"
+            + ("; the entries for it answered earlier raises, one each" if step in unused else "")
+        )
+    return out
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -450,12 +474,13 @@ def check_history(versions: list[tuple[str, str]], working: str | None) -> list[
     if not texts:
         return []
     ledger = loads(texts[-1][1])
+    unused = raised_entries(ledger)
     errors: list[str] = []
     last: dict[str, float] = {}
     for i, (label, text) in enumerate(texts):
         numbers = budget_numbers(loads(text))
         if i:
-            errors += [f"{label}: {e}" for e in _unexplained(last, numbers, ledger)]
+            errors += [f"{label}: {e}" for e in _unexplained(last, numbers, ledger, unused)]
         last.update(numbers)
     return errors
 

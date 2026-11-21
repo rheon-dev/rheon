@@ -390,6 +390,22 @@ class TestTheRules:
         assert oracles.check_file(doc, "nothing")[0].endswith("'worth having'")
         assert isinstance(doc["raised"][0]["date"], dt.date)
 
+    def test_an_entry_answers_one_raise_not_a_return_to_its_number(self):
+        """Review S2: worst 0.1, 0.2 with its entry, back to 0.1, then 0.2
+        again: the entry was spent on the first raise."""
+        entry = (
+            '\n[[raised]]\nkey = "m.g.err.worst"\nfrom = 0.1\nto = 0.2\ndate = 2026-10-26\n'
+            'reason = "the price of a change worth having"\nchangelog = "worth having"\n'
+        )
+        up = SMALL.replace("worst = 0.1\n", "worst = 0.2\n") + entry
+        down = SMALL + entry
+        versions = [("a" * 40, SMALL), ("b" * 40, up), ("c" * 40, down)]
+        (error,) = oracles.check_history(versions, up)
+        assert error.startswith("working tree: m.g.err.worst: 0.1 -> 0.2"), error
+        assert "answered earlier raises" in error
+        assert oracles.check_history(versions, up + entry) == []
+        assert oracles.check_history(versions[:2], None) == []
+
     def test_a_floor_raised_or_added_needs_an_entry_and_answers_for_its_case(self):
         # A wider floor lifts the case's worst and p95 to it: the floor's
         # entry answers for all three.
