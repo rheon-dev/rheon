@@ -11,6 +11,7 @@ import polars as pl
 import scipy
 
 from . import runs_bucket as rb
+from . import runs_ew as rew
 from .bucket import Bucketed, BucketSpec
 from .common import make_frame
 
@@ -244,6 +245,76 @@ def part1(quick: bool) -> None:
     table_b5()
 
 
+# ---------------------------------------------------------------------------
+# Part 2
+
+
+def table_e1(n: int) -> None:
+    print(
+        f"### Table E1: exponentially weighted features against Polars, one pass "
+        f"({n} rows, 5 groups, `over`)\n"
+    )
+    print(
+        "Nulls about 3% of x, zero-weight rows about 4% (masked to null); the second "
+        "column set adds NaN, +inf and -inf in 0.4% of x. alpha is carried in the state.\n"
+    )
+    a = rew.vs_polars(make_frame(n))
+    b = rew.vs_polars(make_frame(n, nonfinite=True))
+    rows = []
+    for (name, r), (_, q) in zip(a, b, strict=True):
+        rows.append([name, r["valid"], r["validity_diff"], r["bit_diff"], r["max_ulp"],
+                     q["valid"], q["validity_diff"], q["bit_diff"], q["max_ulp"]])
+    print(md(["output", "valid", "validity diff", "bit diff", "max ulp",
+              "valid (non-finite)", "validity diff", "bit diff", "max ulp"], rows))
+    print()
+
+
+def table_e2() -> None:
+    print(
+        "### Table E2: the carried alpha, a state saved at row 10000 of 20000 and "
+        "continued (one series, hl = 10)\n"
+    )
+    print(
+        "Largest ulp gap over the second half to the uncut stream: loaded from the "
+        "bytes (alpha carried), and with alpha recomputed by a libm that differs by "
+        "one ulp, in alpha itself or in `exp(-ln 2 / hl)` (the libm result).\n"
+    )
+    print(md(["feature", "saved bytes", "alpha carried", "alpha +1 ulp", "alpha -1 ulp",
+              "exp +1 ulp", "exp -1 ulp"], rew.carried_alpha()))
+    print()
+
+
+def table_e3() -> None:
+    print(
+        "### Table E3: the decayed envelopes against Polars' rolling extremes "
+        "(20000 rows, after a start-up of 5 w)\n"
+    )
+    print(
+        "Max envelope minus `rolling_max(w)`, in units of `rolling_std(w)`: mean (the "
+        "bias), 5th and 95th percentiles, share of rows above; the min envelope's "
+        "mean gap to `rolling_min(w)`; the correlation of the max envelope with "
+        "`rolling_max(w)`.\n"
+    )
+    print(md(["series", "w", "half-life", "max: mean gap", "p5", "p95", "rows above",
+              "min: mean gap", "corr(max env, rolling_max)"], rew.envelope_bias()))
+    print()
+    print(
+        "Cormode et al.'s decayed max `max(x, r y)` against `rolling_max(w)` (same "
+        "units); the last column is the share of rows where it is just the current "
+        "value:\n"
+    )
+    print(md(["series", "w", "half-life", "mean gap", "p5", "p95", "rows equal to x"],
+             rew.decayed_max_rows()))
+    print()
+
+
+def part2(quick: bool) -> None:
+    n = 6000 if quick else 20000
+    table_e1(n)
+    table_e2()
+    table_e3()
+
+
 def main(argv: list[str]) -> None:
     quick = "--quick" in argv
     parts = [a for a in argv if a.startswith("--part=")]
@@ -252,4 +323,6 @@ def main(argv: list[str]) -> None:
     versions()
     if "1" in want:
         part1(quick)
+    if "2" in want:
+        part2(quick)
     print(f"(all tables: {time.time() - t0:.0f} s)", file=sys.stderr)
