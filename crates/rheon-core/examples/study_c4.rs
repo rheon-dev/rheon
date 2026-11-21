@@ -38,6 +38,24 @@ fn read(path: &str) -> Vec<f64> {
 /// the same read through co-moments at every width, the exact recursion.
 /// `M:<rows>:<mean rows>`: `F` with a mean prior (`Hmm::set_mean_prior`);
 /// `T:<rows>:<tau>`: `F` at its own tolerance (`Hmm::set_stabilized_tau`).
+/// `F` and `T` are the axis form (a coordinate at a time, the first built);
+/// `Y:<rows>` and `Y:<rows>:<tau>` the bulk form (every coordinate at once).
+/// `W:<rows>:<tau>` is the bulk form under the wider band; `U:<rows>:<tau>`
+/// the axis form with the cursor that holds its target on average.
+fn axis(s: &str) -> bool {
+    matches!(s.split_once(':'), Some(("F" | "T" | "M" | "U", _)))
+}
+
+/// `Z:<rows>:<tau>` is the bulk form with `ŝ` fixed at its seeding.
+fn study_knobs(s: &str) -> (bool, bool, bool) {
+    match s.split_once(':') {
+        Some(("W", _)) => (true, false, false),
+        Some(("U", _)) => (false, true, false),
+        Some(("Z", _)) => (false, false, true),
+        _ => (false, false, false),
+    }
+}
+
 fn stabilized(s: &str) -> Option<(f64, bool, f64, f64)> {
     let two = |v: &str| {
         let (p, k) = v.split_once(':').unwrap();
@@ -50,10 +68,15 @@ fn stabilized(s: &str) -> Option<(f64, bool, f64, f64)> {
             let (p, k) = two(v);
             Some((p, false, k, 0.0))
         }
-        Some(("T", v)) => {
+        Some(("T" | "W" | "U" | "Z", v)) => {
             let (p, t) = two(v);
             Some((p, false, 0.0, t))
         }
+        Some(("Y", v)) if v.contains(':') => {
+            let (p, t) = two(v);
+            Some((p, false, 0.0, t))
+        }
+        Some(("Y", v)) => Some((v.parse().unwrap(), false, 0.0, 0.0)),
         _ => None,
     }
 }
@@ -88,6 +111,8 @@ fn build(
     cov: Covariance,
     v: Variant,
     fast: Option<(f64, bool, f64, f64)>,
+    axis: bool,
+    knobs: (bool, bool, bool),
     d: usize,
     k: usize,
     decay: Decay,
@@ -118,6 +143,10 @@ fn build(
                 Some((p0, true, _, _)) => Hmm::with_stabilized_comoments(cfg, p0).unwrap(),
                 None => Hmm::new(cfg).unwrap(),
             };
+            if axis {
+                m.set_stabilized_axis();
+            }
+            m.set_stabilized_study(knobs.0, knobs.1, knobs.2);
             if let Some((_, _, k0, tau)) = fast {
                 m.set_mean_prior(k0);
                 if tau > 0.0 {
@@ -166,7 +195,8 @@ fn main() {
     let mut state_len = 0;
     let mut failures = 0;
     for rep in 0..reps.max(1) {
-        let mut m = build(model, cov, v, fast, d, k, decay, prior, warm);
+        let (ax, knobs) = (axis(&a[3]), study_knobs(&a[3]));
+        let mut m = build(model, cov, v, fast, ax, knobs, d, k, decay, prior, warm);
         let mut step = Step::default();
         let keep = rep == 0;
         let t = Instant::now();

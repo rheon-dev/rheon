@@ -441,6 +441,11 @@ impl Factors {
     /// factor is never read. The factors are kept for it to write over:
     /// as many as the cache held, so never more than one a state.
     fn clear(&mut self) {
+        // Nothing held (a `diag` model, or states that are their factors):
+        // the drain below, empty, was 7% of a stabilized `diag` row.
+        if self.held.is_empty() {
+            return;
+        }
         for f in self.held.drain(..).flatten() {
             self.work.give(f);
         }
@@ -578,10 +583,32 @@ impl Hmm {
     /// A study of the factor form's tolerance `τ` ([`Stabilized`]): a
     /// coordinate's prior is moved to its target before a read once it is
     /// more than `τ` of it away. Before the first row.
-    #[cfg(feature = "study-c4")]
+    #[doc(hidden)]
     pub fn set_stabilized_tau(&mut self, tau: f64) {
         if let Some(st) = self.stabilized.as_deref_mut() {
             st.tau = tau;
+        }
+    }
+
+    /// A study's band for the bulk form, and a study's cursor for the axis
+    /// form ([`Stabilized`]). Before the first row.
+    #[cfg(feature = "study-c4")]
+    pub fn set_stabilized_study(&mut self, wide: bool, cursor_mean: bool, frozen: bool) {
+        if let Some(st) = self.stabilized.as_deref_mut() {
+            st.wide = wide;
+            st.cursor_mean = cursor_mean;
+            st.frozen = frozen;
+        }
+    }
+
+    /// The factor form's prior topped up a coordinate at a time, by
+    /// rotations ([`Stabilized`]): the first form built, for the study's
+    /// comparison with the one that moves every coordinate at once. Before
+    /// the first row.
+    #[doc(hidden)]
+    pub fn set_stabilized_axis(&mut self) {
+        if let Some(st) = self.stabilized.as_deref_mut() {
+            st.axis = true;
         }
     }
 
@@ -1624,11 +1651,14 @@ impl Hmm {
 
     /// The row's decay, before its read: every state's weight by `λ`; in
     /// the factor form each matrix's scale with it and the factored prior,
-    /// and the coordinates whose prior has fallen below `1 − τ` of its
-    /// target topped up in every state (all of them where a state's scale
-    /// left the normal range and it started again at its prior).
+    /// and, where any coordinate's prior is then more than `τ` from its
+    /// target, every coordinate moved to `1 + τ/2` of it in every state by
+    /// one factorization a state ([`EwFactor::shift_prior`]; to the target
+    /// itself where a state's scale left the normal range and it started
+    /// again at its prior). The axis form moves the coordinates that are
+    /// due alone, each by its rotations.
     ///
-    /// Where `transient` (a row of weight 0) the top-ups serve its read
+    /// Where `transient` (a row of weight 0) the moves serve its read
     /// alone: the states and `f` as they stood before them are handed back
     /// for the caller to put back after the read, so a zero-weight row
     /// leaves the factors as the gap it sits in would, to rounding (hard
@@ -1669,6 +1699,23 @@ impl Hmm {
         let all = st.age(lam, all);
         let saved = (transient && !all && !st.due().is_empty())
             .then(|| (self.factor_states.clone(), st.held.clone()));
+        if !st.axis {
+            // Every coordinate at once, by one factorization a state,
+            // whenever any is due.
+            if all || !st.due().is_empty() {
+                st.settle_all(all);
+                for (s, f) in self.factor_states.iter_mut().enumerate() {
+                    let restarted = restarts.get(s).copied().unwrap_or(false);
+                    if !restarted
+                        && !f.shift_prior(st.moves(), p0, &mut work.delta, &mut self.factors.work)
+                    {
+                        f.restart_at_prior(&st.held, 1.0 / (f.n_eff() + p0));
+                        self.solve_failures += 1;
+                    }
+                }
+            }
+            return saved;
+        }
         for i in 0..st.due().len() {
             let j = st.due()[i];
             let q = st.settle(j, all);
@@ -1773,7 +1820,8 @@ impl Hmm {
     /// A learned row under stabilized forgetting, its states aged already
     /// ([`Self::age_stabilized`]): each state learns it at `λ = 1` and
     /// weight `w·pₗ`; `ŝ` takes the row's squared deviations from the means
-    /// before it; in the factor form the cursor's coordinate is topped up.
+    /// before it; in the factor form's axis form the cursor's coordinate is
+    /// topped up.
     #[inline(never)]
     fn learn_stabilized(&mut self, x: &[f64], weight: f64, d_clock: f64, work: &mut RowWork) {
         let Some(mut st) = self.stabilized.take() else {
@@ -1783,13 +1831,19 @@ impl Hmm {
         let mut e = std::mem::take(&mut st.e);
         e.clear();
         e.resize(x.len(), 0.0);
+        #[allow(unused_mut)]
+        let mut scored: &[f64] = post;
+        #[cfg(feature = "study-c4")]
+        if st.frozen {
+            scored = &[];
+        }
         fn add(e: &mut [f64], x: &[f64], p: f64, dev: impl Fn(usize, f64) -> f64) {
             for (i, (ei, &xi)) in e.iter_mut().zip(x).enumerate() {
                 let dv = dev(i, xi);
                 *ei += p * dv * dv;
             }
         }
-        for (s, &p) in post.iter().enumerate() {
+        for (s, &p) in scored.iter().enumerate() {
             match (self.states.get(s), self.factor_states.get(s)) {
                 (Some(c), _) => add(&mut e, x, p, |i, xi| c.deviation(i, xi)),
                 (None, Some(f)) => add(&mut e, x, p, |i, xi| f.deviation(i, xi)),
@@ -1823,12 +1877,25 @@ impl Hmm {
                 self.solve_failures += 1;
             }
         }
-        st.observe(d_clock, weight, &e);
+        #[allow(unused_mut)]
+        let mut seen = weight;
+        #[cfg(feature = "study-c4")]
+        if st.frozen {
+            seen = 0.0;
+        }
+        st.observe(d_clock, seen, &e);
         st.e = e;
-        if self.factored() {
+        if self.factored() && st.axis {
             // Up only: a prior above its target is taken down before a read
             // once it is `τ` over, a downdate costing three rotations' work.
             let j = st.next();
+            #[cfg(feature = "study-c4")]
+            let q = if st.cursor_mean {
+                st.top_up_mean(j, self.cfg.decay.factor(d_clock))
+            } else {
+                st.top_up_short(j)
+            };
+            #[cfg(not(feature = "study-c4"))]
             let q = st.top_up_short(j);
             if q > 0.0 {
                 for f in self.factor_states.iter_mut() {

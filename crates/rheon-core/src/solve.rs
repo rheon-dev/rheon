@@ -328,6 +328,87 @@ impl FactorWork {
         })
     }
 
+    /// `f` made the factor of its matrix with `diag(add)` added,
+    /// `L' L'ᵀ = L Lᵀ + diag(add)`: the lower triangle of `L Lᵀ` laid out
+    /// column by column (`k³/6` products, column `j`'s a run of
+    /// `out[j.., j] += L[j, t]·L[j.., t]` over contiguous entries for each
+    /// `t <= j`), the diagonal added, and that factorized in place (`k³/6`
+    /// more), in a
+    /// kept matrix that then changes places with `f`'s. A diagonal added
+    /// coordinate by coordinate ([`SpdFactor::add_axis_in_place`]) costs
+    /// `2(k − j)²` products each, `2k³/3` in all, in rotations that do not
+    /// vectorize. `false`, with `f` unmoved, where the sum has a pivot that
+    /// is not a positive finite number (an `add` below what the matrix
+    /// holds on that coordinate), or an entry that is not finite.
+    #[inline(never)]
+    pub(crate) fn refactor_shifted(&mut self, f: &mut SpdFactor, add: &[f64]) -> bool {
+        let k = f.order();
+        if add.len() != k {
+            return false;
+        }
+        let mut out = self.spare(k).map_or_else(Mat::new, |s| s.l);
+        if !(out.nrows() == k && out.ncols() == k) {
+            out = Mat::zeros(k, k);
+        }
+        // Column `j` of the sum from its diagonal down: `L`'s columns `t`
+        // up to `j`, each from row `j` down, by row `j`'s entry there; four
+        // columns a pass, so a pass over the column's short run does four
+        // columns' work. The products are added in the order of `t`, one at
+        // a time, and the diagonal's shift last.
+        for (j, &shift) in add.iter().enumerate() {
+            let n = k - j;
+            let col = out.col_as_slice_mut(j);
+            col.fill(0.0);
+            let dst = &mut col[j..][..n];
+            let mut t = 0;
+            while t + 4 <= j + 1 {
+                let c = [
+                    f.l[(j, t)],
+                    f.l[(j, t + 1)],
+                    f.l[(j, t + 2)],
+                    f.l[(j, t + 3)],
+                ];
+                let a0 = &f.l.col_as_slice(t)[j..][..n];
+                let a1 = &f.l.col_as_slice(t + 1)[j..][..n];
+                let a2 = &f.l.col_as_slice(t + 2)[j..][..n];
+                let a3 = &f.l.col_as_slice(t + 3)[j..][..n];
+                for i in 0..n {
+                    dst[i] = dst[i] + c[0] * a0[i] + c[1] * a1[i] + c[2] * a2[i] + c[3] * a3[i];
+                }
+                t += 4;
+            }
+            while t <= j {
+                let c = f.l[(j, t)];
+                let a = &f.l.col_as_slice(t)[j..][..n];
+                for i in 0..n {
+                    dst[i] += c * a[i];
+                }
+                t += 1;
+            }
+            dst[0] += shift;
+        }
+        let threads = crate::pieces::degree();
+        let done =
+            cholesky_in_place(out.as_mut(), threads, (LEAF, TILE), Some(&mut self.chol)).is_ok();
+        let mut made = SpdFactor {
+            l: out,
+            log_det: OnceLock::new(),
+            attempts: 0,
+            jitter: 0.0,
+            moves: 0,
+        };
+        let ok = done && {
+            clear_upper(&mut made.l);
+            made.is_a_factor()
+        };
+        if ok {
+            std::mem::swap(&mut f.l, &mut made.l);
+            f.log_det = OnceLock::new();
+        }
+        self.spares.push(made);
+        ok
+    }
+
     /// A copy of `f`, written over a kept factor of its order where there
     /// is one: `f.clone()`, to the bit.
     pub(crate) fn copy(&mut self, f: &SpdFactor) -> SpdFactor {
@@ -2342,6 +2423,104 @@ mod tests {
                 assert!(!too_much.remove_axis_in_place(j, a[j * k + j].sqrt() * 1.01, &mut v));
                 assert_eq!(too_much, f0, "{k} {j}: refused before moving");
             }
+        }
+    }
+
+    /// [`FactorWork::refactor_shifted`] leaves the factor of the matrix
+    /// with the diagonal added, of either sign: `L Lᵀ` within a few units
+    /// of rounding of it (carried in 512 bits, `crate::oracle::exact`), its
+    /// quadratic form and `ln det` faer's LU's of the sum (`crate::oracle`),
+    /// and where every step is up, the factor the axis steps reach, to
+    /// rounding. Below 64 features and above, where the factorization goes
+    /// by blocks. A diagonal that takes more than a coordinate holds is
+    /// refused and moves nothing, and so is one of the wrong length.
+    #[test]
+    fn a_diagonal_added_by_one_factorization() {
+        let mut s = 29u64;
+        let mut next = || {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((s >> 11) as f64 / (1u64 << 53) as f64) - 0.5
+        };
+        let mut work = FactorWork::default();
+        for k in [1, 4, 13, 32, 70] {
+            let b: Vec<f64> = (0..k * k).map(|_| next()).collect();
+            let mut a = vec![0.0; k * k];
+            for i in 0..k {
+                for j in 0..k {
+                    a[i * k + j] = (0..k).map(|t| b[i * k + t] * b[j * k + t]).sum::<f64>()
+                        + if i == j { 0.5 } else { 0.0 };
+                }
+            }
+            let f0 = SpdFactor::of(&a, k).unwrap().into_state();
+            let llt = |f: &SpdFactor| {
+                let l = f.lower_rows();
+                let mut m = vec![0.0; k * k];
+                for r in 0..k {
+                    for c in 0..k {
+                        m[r * k + c] = (0..k).map(|t| l[r * k + t] * l[c * k + t]).sum();
+                    }
+                }
+                m
+            };
+            let held = llt(&f0);
+            for sign in [1.0, -1.0] {
+                // Up by as much as 2 a coordinate, or down by under the 0.5
+                // every coordinate holds beside a positive semidefinite part.
+                let add: Vec<f64> = (0..k)
+                    .map(|_| {
+                        let u = next() + 0.5;
+                        if sign > 0.0 { 2.0 * u } else { -0.45 * u }
+                    })
+                    .collect();
+                let mut f = f0.clone();
+                // Twice, so the second writes over the first's kept matrix.
+                for round in 0..2 {
+                    f = f0.clone();
+                    assert!(work.refactor_shifted(&mut f, &add), "{k} {sign} {round}");
+                }
+                let mut want = held.clone();
+                for (j, q) in add.iter().enumerate() {
+                    want[j * k + j] += q;
+                }
+                let off =
+                    crate::oracle::exact::Recursion::of(&want).off_factor(&f.lower_rows(), 1.0);
+                assert!(off < 64.0, "{k} {sign}: {off} units of rounding off");
+                let delta: Vec<f64> = (0..k).map(|_| next()).collect();
+                let (q, ld) = (
+                    crate::oracle::quad_form(&want, &delta),
+                    crate::oracle::log_det(&want),
+                );
+                let got = f.quad_form(&delta, &mut QuadWork::default());
+                assert!((got - q).abs() <= 1e-11 * q, "{k} {sign}: {got} {q}");
+                assert!((f.log_det() - ld).abs() <= 1e-11 * k as f64, "{k} {sign}");
+                assert_eq!((f.attempts(), f.jitter(), f.moves()), (0, 0.0, 0));
+                if sign > 0.0 {
+                    let mut axis = f0.clone();
+                    let mut v = Vec::new();
+                    for (j, q) in add.iter().enumerate() {
+                        assert!(axis.add_axis_in_place(j, q.sqrt(), &mut v));
+                    }
+                    let (x, y) = (axis.lower_rows(), f.lower_rows());
+                    let apart = x
+                        .iter()
+                        .zip(&y)
+                        .map(|(p, q)| (p - q).abs())
+                        .fold(0.0, f64::max);
+                    assert!(apart < 1e-12 * (k as f64), "{k}: {apart:e}");
+                }
+            }
+            let mut f = f0.clone();
+            let mut too_much = vec![0.0; k];
+            too_much[k / 2] = -1.01 * a[(k / 2) * k + k / 2];
+            assert!(!work.refactor_shifted(&mut f, &too_much), "{k}");
+            assert_eq!(f, f0, "{k}: refused before moving");
+            assert!(!work.refactor_shifted(&mut f, &vec![0.0; k + 1]), "{k}");
+            let mut nan = vec![0.0; k];
+            nan[0] = f64::NAN;
+            assert!(!work.refactor_shifted(&mut f, &nan), "{k}");
+            assert_eq!(f, f0, "{k}: a NaN refused before moving");
         }
     }
 

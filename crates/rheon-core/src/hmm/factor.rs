@@ -53,7 +53,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::EwCov;
-use crate::solve::{QuadWork, SpdFactor};
+use crate::solve::{FactorWork, QuadWork, SpdFactor};
 
 /// The least `σ` a state keeps: below it, `L` is halved as many times as
 /// it takes and `σ` multiplied by 4 as many.
@@ -392,6 +392,23 @@ impl EwFactor {
         let t = self.w_sum + prior_rows;
         let s = (-q / (t * self.sigma)).sqrt();
         s == 0.0 || self.l.remove_axis_in_place(j, s, v)
+    }
+
+    /// `diag(q)` of prior, in the units of `W·M + F`, added to the matrix
+    /// at once (each `qⱼ` of either sign): `L Lᵀ + diag(q)/(Tσ)` factorized
+    /// afresh ([`FactorWork::refactor_shifted`]), `σ` as it was. `false`,
+    /// the factor unmoved, where that left none. `add` is working space.
+    pub(crate) fn shift_prior(
+        &mut self,
+        q: &[f64],
+        prior_rows: f64,
+        add: &mut Vec<f64>,
+        work: &mut FactorWork,
+    ) -> bool {
+        let c = (self.w_sum + prior_rows) * self.sigma;
+        add.clear();
+        add.extend(q.iter().map(|q| q / c));
+        work.refactor_shifted(&mut self.l, add)
     }
 
     /// `q·eⱼeⱼᵀ` of prior added where `q > 0`, taken where `q < 0`.

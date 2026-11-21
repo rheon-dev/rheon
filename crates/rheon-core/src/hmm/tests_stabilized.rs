@@ -169,7 +169,7 @@ fn c4_a_returning_regime_is_recognised_under_the_prior() {
     }
 }
 
-use super::stabilized::EAGER;
+use super::stabilized::{EAGER, TAU};
 use super::tests_factor::{blobs, wide};
 use crate::oracle::exact::Recursion;
 use crate::solve::QuadWork;
@@ -212,6 +212,10 @@ fn max(v: &[f64]) -> f64 {
 ///   before every read; one whose `ψ` fell since keeps the larger prior).
 #[derive(Default, Debug)]
 struct Track {
+    /// The factored prior's distance from its target at each read before
+    /// the first long gap, as a share of the target: the largest over the
+    /// coordinates.
+    band: Vec<f64>,
     off: Vec<f64>,
     logf: Vec<f64>,
     gap_logf: Vec<f64>,
@@ -219,10 +223,13 @@ struct Track {
     score: Vec<f64>,
 }
 
-fn track(d: usize, decay: Decay, n: usize, seed: u64, eager: bool) -> Track {
+fn track(d: usize, decay: Decay, n: usize, seed: u64, eager: bool, axis: bool) -> Track {
     EAGER.with(|c| c.set(eager));
     let p0 = d as f64;
     let mut m = Hmm::with_stabilized(wide(d, decay), p0).unwrap();
+    if axis {
+        m.set_stabilized_axis();
+    }
     let mut e = Hmm::with_stabilized_comoments(wide(d, decay), p0).unwrap();
     let base = -0.5 * d as f64 * std::f64::consts::TAU.ln();
     let mut quad = QuadWork::default();
@@ -258,6 +265,14 @@ fn track(d: usize, decay: Decay, n: usize, seed: u64, eager: bool) -> Track {
         let st = aged.stabilized().unwrap();
         let target: Vec<f64> = (0..d).map(|j| st.target(j)).collect();
         let held = st.held.clone();
+        if i < n / 3 {
+            out.band.push(
+                held.iter()
+                    .zip(&target)
+                    .map(|(h, t)| (h / t - 1.0).abs())
+                    .fold(0.0, f64::max),
+            );
+        }
         let mut deltas = Vec::new();
         let (mut lf, mut le) = ([0.0; 2], [0.0; 2]);
         for s in 0..2 {
@@ -342,19 +357,23 @@ fn continue_shadow(exact: &mut [Recursion], aged: &Hmm, m: &Hmm, w: f64, deltas:
 /// `2e-11`, its own recursion's and stabilized forgetting's alike. Lazily --
 /// the form as built -- it holds its own recursion as closely, and reads off
 /// stabilized forgetting's by the prior not yet moved to its target: within
-/// `τ` of each coordinate's prior, which is `P₀/(W + P₀)` of the matrix.
-/// Measured 2026-11-20 (13 and 20 features, half-lives of 20 and 500 rows,
-/// 2,000 rows, arm64): eagerly 1.8e3 units of rounding, densities within
-/// 1e-12 of either; lazily up to 0.45 nats in a near density at a half-life
-/// of 20 rows (0.23 at 500) and 1.2e-2 in a posterior.
+/// `τ` of each coordinate's prior at every read (held here), which is
+/// `P₀/(W + P₀)` of the matrix. Both forms: every coordinate moved at once
+/// by a factorization (the form as built), and a coordinate at a time by
+/// rotations (the axis form). Measured 2026-11-20 (13 and 20 features,
+/// half-lives of 20 and 500 rows, 2,000 rows, arm64), all at once and then a
+/// coordinate at a time: eagerly 145 and 1.9e3 units of rounding, densities
+/// within 1e-12 of either recursion; lazily 131 and 190 units of rounding,
+/// up to 0.33 and 0.39 nats in a near density at a half-life of 20 rows
+/// (0.35 and 0.28 at 500), and 8.9e-3 and 7.1e-3 in a posterior.
 fn hold_the_exact_recursion(widths: &[usize], n: usize) {
     for &d in widths {
         for decay in [Decay::Halflife(20.0), Decay::Halflife(500.0)] {
-            for eager in [true, false] {
-                let t = track(d, decay, n, 3, eager);
+            for (eager, axis) in [(true, false), (false, false), (true, true), (false, true)] {
+                let t = track(d, decay, n, 3, eager, axis);
                 println!(
-                    "{d} {decay:?} eager {eager}: off {:.0}, logf {:.1e}; from stabilized \
-                     forgetting: logf {:.1e}, post {:.1e}, score {:.1e}",
+                    "{d} {decay:?} eager {eager} axis {axis}: off {:.0}, logf {:.1e}; from \
+                     stabilized forgetting: logf {:.1e}, post {:.1e}, score {:.1e}",
                     max(&t.off),
                     max(&t.logf),
                     max(&t.gap_logf),
@@ -363,6 +382,15 @@ fn hold_the_exact_recursion(widths: &[usize], n: usize) {
                 );
                 assert!(max(&t.off) < 4096.0, "{d} {decay:?} {eager}");
                 assert!(max(&t.logf) < 2e-11, "{d} {decay:?} {eager}");
+                // Every read stands on a prior within `τ` of its target in
+                // every coordinate, in either form; topped up before every
+                // read, on the target itself.
+                let band = if eager { 0.0 } else { TAU };
+                assert!(
+                    max(&t.band) <= band,
+                    "{d} {decay:?} {eager} {axis}: {:e} of the target off",
+                    max(&t.band)
+                );
                 if eager {
                     assert!(max(&t.gap_logf) < 2e-11, "{d} {decay:?}");
                     assert!(max(&t.post) < 1e-12, "{d} {decay:?}");
@@ -410,20 +438,38 @@ fn shapes() -> [(usize, Covariance); 4] {
     ]
 }
 
-fn model(d: usize, cov: Covariance) -> Hmm {
+/// A model under the prior; `axis`: its factor form moving a coordinate at
+/// a time, where the form as built moves all at once.
+fn model(d: usize, cov: Covariance, axis: bool) -> Hmm {
     let c = HmmCfg {
         covariance: cov,
         ..wide(d, Decay::Halflife(20.0))
     };
-    Hmm::with_stabilized(c, d as f64).unwrap()
+    let mut m = Hmm::with_stabilized(c, d as f64).unwrap();
+    if axis {
+        m.set_stabilized_axis();
+    }
+    m
+}
+
+/// [`shapes`], and the factor form's shape once more in its axis form.
+fn forms() -> [(usize, Covariance, bool); 5] {
+    let [a, b, c, d] = shapes();
+    [
+        (a.0, a.1, false),
+        (b.0, b.1, false),
+        (c.0, c.1, false),
+        (d.0, d.1, false),
+        (13, Covariance::Full, true),
+    ]
 }
 
 /// `predict` is the step's read without the step, to the bit, though the
 /// states age before the read: it ages a copy.
 #[test]
 fn predict_is_the_step_without_the_step_under_the_prior() {
-    for (d, cov) in shapes() {
-        let mut m = model(d, cov);
+    for (d, cov, axis) in forms() {
+        let mut m = model(d, cov, axis);
         for (i, (x, dt, w)) in rows(d, 600).into_iter().enumerate() {
             let p = m.predict(&x, dt);
             let kept = m.clone();
@@ -442,9 +488,9 @@ fn predict_is_the_step_without_the_step_under_the_prior() {
 /// read alone.
 #[test]
 fn a_zero_weight_row_is_clock_alone_under_the_prior() {
-    for (d, cov) in shapes() {
+    for (d, cov, axis) in forms() {
         let factored = d >= 13 && cov == Covariance::Full;
-        let (mut with, mut without) = (model(d, cov), model(d, cov));
+        let (mut with, mut without) = (model(d, cov, axis), model(d, cov, axis));
         let mut carried = 0.0;
         let mut worst = 0f64;
         for (i, (x, dt, _)) in rows(d, 900).into_iter().enumerate() {

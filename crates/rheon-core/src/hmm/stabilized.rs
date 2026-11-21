@@ -44,31 +44,50 @@
 //! **The factor form** (`full` at [`super::Hmm::FACTOR_FROM`] features and
 //! more) keeps `Σ = σ·L Lᵀ` and moves it by rotations, `O(d²)` a row. The
 //! data's step is one rank-one step and the decay a scalar, but the prior's
-//! share of `Σ` changes with `W`, and adding a diagonal to a factor costs a
-//! rank-one step a coordinate, `O(d³)`. So the factor holds `W·M + F` over
-//! `W + P₀`, with `F = diag(f)` the prior *as factored*, which decays with
-//! the data, `f ← λf`, and is topped up to `P₀ψ` one coordinate at a time
-//! (`F += qⱼ·eⱼeⱼᵀ`, a rotation from column `j` on, about `(d − j)²/2`):
+//! share of `Σ` changes with `W`: after a row's decay the matrix is short of
+//! `(1 − λ)·P₀Ψ`, a diagonal of full rank, and no `O(d²)` step adds one to a
+//! factor. So the factor holds `W·M + F` over `W + P₀`, with `F = diag(f)`
+//! the prior *as factored*, which decays with the data, `f ← λf`, and is
+//! moved back to `P₀ψ` only when it has drifted: before a row's read,
+//! whenever any coordinate's `f` is more than `τ` ([`TAU`]) from `P₀ψ`,
+//! every coordinate is moved at once, to `1 + τ/2` of its target (so it
+//! decays through the target before it is due again):
 //!
-//! - after each learned row, coordinate `j = cursor` where it is short of
-//!   its target, the cursor moving on;
-//! - before each row's read, every coordinate whose `f` is more than `τ`
-//!   ([`TAU`]) from `P₀ψ`: below it, so a gap's read stands on its whole
-//!   prior, topped up to `1 + τ/2` of it so it decays through the target
-//!   before it is due again; or above it, where `ψ` has fallen faster than
-//!   `f` decays (after the seeding, or a gap long enough to empty `V`),
-//!   taken back to it by a downdate (`F −= qⱼ·eⱼeⱼᵀ`, LINPACK's `dchdd`).
+//! ```text
+//! A   = L Lᵀ + diag(q)/((W + P₀)·σ)     qⱼ = (1 + τ/2)·P₀ψⱼ − fⱼ, either sign
+//! L'  = chol(A)                          f ← (1 + τ/2)·P₀ψ
+//! ```
 //!
-//! On a row of weight 0 the moves before the read serve that read alone and
-//! are put back after it, so the row leaves the factors as the gap it sits
+//! `L Lᵀ` is laid out in `d³/6` products and factorized in `d³/6` more, both
+//! in runs over contiguous columns
+//! ([`crate::solve::FactorWork::refactor_shifted`]). Every coordinate decays
+//! by the same `λ`, so all fall due together: at a half-life of `h` rows the
+//! band `[1 − τ, 1 + τ/2]` is crossed every `1.5τ·h/ln 2` rows (6.8 rows at
+//! `h = 50`, 68 at `h = 500`), and that is how often a state is factorized.
+//! A coordinate is also due where it holds more than `1 + τ` of its target:
+//! `ψ` has fallen faster than `f` decays (after the seeding, or a gap long
+//! enough to empty `V`).
+//!
+//! On a row of weight 0 the move before the read serves that read alone and
+//! is put back after it, so the row leaves the factors as the gap it sits
 //! in would, to rounding (hard rule 9). `f` is the same for every state
 //! (they share `λ` and the moves), so it is kept once. The read is off the
-//! exact one by `diag(P₀ψ − f)`: within `τ` of a coordinate's prior, and
-//! within `1 − λ^d` of it where the cursor comes round first; the prior's
-//! share of `Σ` is `P₀/(W + P₀)`. The moves cost `(d − j)²/2` rotations
-//! each; at a half-life of `h` rows the band is crossed every `1.5τ·h/ln 2`
-//! rows, so about `d·ln 2/(1.5τ·h)` of them a row, beside the cursor's one.
-//! The state is `ŝ`, `V`, `f` and the cursor: `2d + 2` numbers a model.
+//! exact one by `diag(P₀ψ − f)`, within `τ` of each coordinate's prior; the
+//! prior's share of `Σ` is `P₀/(W + P₀)`. The state is `ŝ`, `V` and `f`:
+//! `2d + 1` numbers a model.
+//!
+//! **The axis form** ([`super::Hmm::set_stabilized_axis`]), the first one
+//! built and kept for the study that compared them, moves one coordinate at
+//! a time by a rank-one rotation from its column on (`F += qⱼ·eⱼeⱼᵀ`, about
+//! `2(d − j)²` products, `2d³/3` for all `d`; down by LINPACK's `dchdd`):
+//! after each learned row the cursor's coordinate where it is short, and
+//! before each read every coordinate more than `τ` away. Its coordinates
+//! fall due one by one, about `d·ln 2/(1.5τ·h)` of them a row beside the
+//! cursor's. Measured 2026-11-20 (arm64, two states, ns a row against
+//! today's ridge): at a half-life of 50 rows it cost 1.3x, 2.0x and 2.6x at
+//! 13, 20 and 32 features, where moving all at once costs what
+//! `.claude/coord/review-fable2/C4-BD-BETTER.md` tabulates, and reads as
+//! close to the exact recursion at the same `τ`.
 
 use crate::Decay;
 
@@ -118,6 +137,26 @@ pub struct Stabilized {
     pub(crate) mean_rows: f64,
     /// [`TAU`], or a study's own.
     pub(crate) tau: f64,
+    /// The factor form tops its prior up a coordinate at a time, by
+    /// rotations, with a cursor (the first form built; kept for the
+    /// study's comparison). Otherwise every coordinate at once, by a
+    /// factorization, whenever one is due.
+    pub(crate) axis: bool,
+    /// Working space: every coordinate's move ([`Self::settle_all`]).
+    moves: Vec<f64>,
+    /// A study's band for the bulk form: topped up to `1 + τ` of the
+    /// target and taken down from `1 + 3τ/2`, where the form as built tops
+    /// up to `1 + τ/2` and takes down from `1 + τ`.
+    #[cfg(feature = "study-c4")]
+    pub(crate) wide: bool,
+    /// A study's cursor for the axis form: each learned row's coordinate
+    /// topped up to `d(1 − λ)/(1 − λᵈ)` of its target, so that over the
+    /// cursor's cycle of `d` rows it holds its target on average.
+    #[cfg(feature = "study-c4")]
+    pub(crate) cursor_mean: bool,
+    /// A study's fixed prior: `ŝ` stays as the seeding left it.
+    #[cfg(feature = "study-c4")]
+    pub(crate) frozen: bool,
 }
 
 impl Stabilized {
@@ -142,6 +181,14 @@ impl Stabilized {
             comoments: false,
             mean_rows: 0.0,
             tau: TAU,
+            axis: false,
+            moves: Vec::with_capacity(d),
+            #[cfg(feature = "study-c4")]
+            wide: false,
+            #[cfg(feature = "study-c4")]
+            cursor_mean: false,
+            #[cfg(feature = "study-c4")]
+            frozen: false,
         }
     }
 
@@ -190,6 +237,11 @@ impl Stabilized {
 
     fn refresh_psi(&mut self) {
         let top = self.scale.iter().cloned().fold(0.0, f64::max);
+        self.floor_psi(top);
+    }
+
+    /// `ψ` from `ŝ`, whose largest is `top`.
+    fn floor_psi(&mut self, top: f64) {
         if top > 0.0 && top.is_finite() {
             let floor = FLOOR * top;
             for (p, &s) in self.psi.iter_mut().zip(&self.scale) {
@@ -224,10 +276,13 @@ impl Stabilized {
         let v = self.slow_at.1 * self.scale_w + w;
         if v > 0.0 && w > 0.0 {
             let b = w / v;
+            // `ŝ`'s largest in the pass that moves it, for the floor.
+            let mut top = 0.0;
             for (s, &ei) in self.scale.iter_mut().zip(e) {
                 *s += b * (ei - *s);
+                top = f64::max(top, *s);
             }
-            self.refresh_psi();
+            self.floor_psi(top);
         }
         self.scale_w = v;
     }
@@ -242,7 +297,13 @@ impl Stabilized {
         for (j, h) in self.held.iter_mut().enumerate() {
             *h *= lam;
             let t = self.prior_rows * self.psi[j];
-            if all || *h < (1.0 - self.tau) * t || *h > (1.0 + self.tau) * t {
+            #[allow(unused_mut)]
+            let mut over = 1.0 + self.tau;
+            #[cfg(feature = "study-c4")]
+            if self.wide {
+                over = 1.0 + 1.5 * self.tau;
+            }
+            if all || *h < (1.0 - self.tau) * t || *h > over * t {
                 self.due.push(j);
             }
         }
@@ -266,6 +327,26 @@ impl Stabilized {
         }
     }
 
+    /// A study's cursor ([`Self::cursor_mean`]): coordinate `j` topped up
+    /// to `d(1 − λ)/(1 − λᵈ)` of its target where it holds less.
+    #[cfg(feature = "study-c4")]
+    pub(crate) fn top_up_mean(&mut self, j: usize, lam: f64) -> f64 {
+        let d = self.held.len() as f64;
+        let c = if lam < 1.0 {
+            d * (1.0 - lam) / (1.0 - lam.powf(d))
+        } else {
+            1.0
+        };
+        let goal = self.target(j) * c;
+        let q = goal - self.held[j];
+        if q > 0.0 {
+            self.held[j] = goal;
+            q
+        } else {
+            0.0
+        }
+    }
+
     /// Coordinate `j` moved, before a read: to its target where `all` or
     /// where it holds more, else to `1 + τ/2` of it, so it decays through
     /// its target before it is due again (the band `[1 − τ, 1 + τ/2]` is
@@ -281,6 +362,29 @@ impl Stabilized {
         };
         self.held[j] = goal;
         goal - h
+    }
+
+    /// Every coordinate moved at once, before a read: to its target where
+    /// `all`, else to `1 + τ/2` of it ([`Self::settle`]'s goal for a
+    /// coordinate that is short). What each moved by, of either sign.
+    pub(crate) fn settle_all(&mut self, all: bool) {
+        #[allow(unused_mut)]
+        let mut lift = if all { 1.0 } else { 1.0 + 0.5 * self.tau };
+        #[cfg(feature = "study-c4")]
+        if self.wide && !all {
+            lift = 1.0 + self.tau;
+        }
+        self.moves.clear();
+        for (h, p) in self.held.iter_mut().zip(&self.psi) {
+            let goal = self.prior_rows * p * lift;
+            self.moves.push(goal - *h);
+            *h = goal;
+        }
+    }
+
+    /// What [`Self::settle_all`] moved each coordinate by.
+    pub(crate) fn moves(&self) -> &[f64] {
+        &self.moves
     }
 
     /// What coordinate `j` is short of its target, `P₀ψⱼ − fⱼ` (negative
