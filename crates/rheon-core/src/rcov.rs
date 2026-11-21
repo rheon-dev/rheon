@@ -3353,6 +3353,72 @@ mod tests {
         assert_eq!(clip_psd(&[f64::INFINITY, 0.0, 0.0, 1.0], 2), None);
     }
 
+    /// The repair applied on a stream (review S13: `clip_psd` was held on
+    /// hand matrices only, and no stream reached the line that takes its
+    /// result). A block of 4 returns over 20 features has a covariance of
+    /// rank 4, whose 16 null eigenvalues come out of the arithmetic a hair
+    /// either side of 0, so some blocks need the repair. Where one was
+    /// repaired, the estimate reported is the unrepaired one (`psd = false`,
+    /// the same estimator under `plain`) put through the clip, to the bit,
+    /// and not the unrepaired one; the clip itself is held to the hand rule
+    /// by `the_psd_repair_clips_the_negative_eigenvalues_alone`. Which blocks
+    /// need it is rounding, so the platform's; on each run here some do, and
+    /// a block that needs none is the unrepaired estimate to the bit.
+    #[test]
+    fn a_stream_whose_estimate_needs_the_repair_reports_the_repaired_one() {
+        use crate::OnlineModel;
+        let k = 20;
+        let mut fired = 0;
+        for seed in 0..12u64 {
+            let run = |psd: bool| {
+                let mut m = Rcov::new(RcovCfg {
+                    psd,
+                    ..cfg(k, RcovKind::Plain)
+                })
+                .unwrap();
+                let mut s = 1000 + seed;
+                for _ in 0..4 {
+                    let x: Vec<f64> = (0..k).map(|_| 0.01 * lcg(&mut s)).collect();
+                    m.step(&x, &[], 1.0, 1.0);
+                }
+                m.estimate()
+            };
+            let (repaired, raw) = (run(true), run(false));
+            assert_eq!(raw.psd_repaired, Some(false), "seed {seed}: unrepaired");
+            let (got, was) = (repaired.rcov.unwrap(), raw.rcov.unwrap());
+            match repaired.psd_repaired {
+                Some(false) => assert!(
+                    got.iter()
+                        .zip(&was)
+                        .all(|(a, b)| a.to_bits() == b.to_bits()),
+                    "seed {seed}: not repaired, and not the unrepaired estimate"
+                ),
+                Some(true) => {
+                    fired += 1;
+                    let (clipped, needed) = clip_psd(&was, k).unwrap();
+                    assert!(
+                        needed,
+                        "seed {seed}: reported repaired, and nothing to clip"
+                    );
+                    assert!(
+                        got.iter()
+                            .zip(&clipped)
+                            .all(|(a, b)| a.to_bits() == b.to_bits()),
+                        "seed {seed}: reported repaired, and not the clipped estimate"
+                    );
+                    assert!(
+                        got.iter()
+                            .zip(&was)
+                            .any(|(a, b)| a.to_bits() != b.to_bits()),
+                        "seed {seed}: reported repaired, and the estimate is the unrepaired one"
+                    );
+                }
+                None => panic!("seed {seed}: the repair could not run"),
+            }
+        }
+        assert!(fired > 0, "no block needed the repair");
+    }
+
     /// A row with a value that is not usable is not a return of the block
     /// (`OnlineModel`, task 183), as a row of weight 0 is not: the block
     /// keeps no decay, so the estimator with the row is the estimator
