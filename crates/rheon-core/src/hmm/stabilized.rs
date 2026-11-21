@@ -101,8 +101,8 @@ thread_local! {
 }
 
 /// The model's part of stabilized forgetting; see the module docs. Written
-/// as `ŝ`, `V` and `f` alone ([`Saved`]); the rest is derived on load
-/// ([`Self::rebuild`]).
+/// as `ŝ`, `V` and `f` alone (`Saved`); the rest is derived on load from
+/// the configuration (`rebuild`).
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(into = "Saved", from = "Saved")]
 pub struct Stabilized {

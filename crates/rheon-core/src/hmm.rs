@@ -14,7 +14,7 @@
 //!
 //! ```text
 //! p̃ₗ = Σₖ pₖ·Πₖₗ                                   the predicted state
-//! fₗ = N(x | μₗ, Σₗ + rₗI)                          the state's density
+//! fₗ = N(x | μₗ, Sₗ)                                the state's density
 //! loglik = ln Σₗ p̃ₗ·fₗ                              the row's surprise
 //! pₗ ← p̃ₗ·fₗ / Σ                                    the filtered state
 //! ```
@@ -35,10 +35,20 @@
 //! covariance, and each variance's step reads no other entry, so the
 //! numbers are the ones a state keeping its whole matrix gave, to the bit.
 //! The densities go through the factorization, forms and softmax path
-//! `ew_class` uses (`quad_forms_logdet`'s, to the bit), with the same
-//! decaying `precision_prior` ridge -- which is **required** here as it is
-//! there: a state's centred co-moments start at zero, and a zero matrix has
-//! no density.
+//! `ew_class` uses (`quad_forms_logdet`'s, to the bit). `Sₗ`, the matrix a
+//! state reads, is its co-moments `Σₗ` and a prior, so that a state's
+//! centred co-moments, which start at zero, never leave it without a
+//! density:
+//!
+//! - under `tied`, and in a model that does not learn, the same decaying
+//!   `precision_prior` ridge as `ew_class`'s, `Sₗ = Σₗ + rₗI`, `rₗ` the
+//!   ridge's share of the state's weight;
+//! - under `full` and `diag` in a model that learns, a stabilized prior
+//!   worth `P₀` (`prior_rows`, `d` by default) rows at `diag(ψ)`, the
+//!   features' pooled within-state variance: with `W` the state's weight
+//!   after the row's decay, `Sₗ = (W·Σₗ + P₀·diag(ψ))/(W + P₀)`, and the
+//!   ridge only where every `ψ` is 0 ([`Stabilized`] has the recursion and
+//!   its factor form).
 //!
 //! # Learning
 //!
@@ -70,15 +80,16 @@
 //!
 //! # The factor form
 //!
-//! A state's density reads `Mₗ = Σₗ + rₗI` through its Cholesky factor.
+//! A state's density reads `Mₗ = Sₗ` through its Cholesky factor.
 //! Below [`Hmm::FACTOR_FROM`] features (13) a state keeps its co-moments and
 //! the factor is made afresh, `O(d³)`, on the row after each learned one.
 //! Under `full` at 13 features or more, a seeded state keeps the factor
 //! itself as its state ([`EwFactor`]) and the learned row moves it, `O(d²)`.
 //! With `a = λW/(λW + w)` and `b = w/(λW + w)` the state's mean-form step
 //! (`W` its weight, `w = w_row·pₗ`) and `δ` the row's deviation from its
-//! means before the row, the accumulator's `M' = a·M + a·b·δδᵀ` (its ridge's
-//! scale decaying by the same `a`) is held as
+//! means before the row, under the ridge the accumulator's
+//! `M' = a·M + a·b·δδᵀ` (its ridge's scale decaying by the same `a`) is held
+//! as
 //!
 //! ```text
 //! M  = σ·L Lᵀ                   σ in [1/4, 1]
@@ -91,6 +102,10 @@
 //! The factor taken up at the seeding is the one the co-moments' read
 //! made, to the bit; from the first learned row the reads part from a
 //! refactorization's in their last bits (`hmm/factor.rs` has the rest).
+//! Under the stabilized prior the factor holds `(W·Σₗ + diag(f))/(W + P₀)`,
+//! the decay and the row are its scale and a rotation, and the prior as
+//! factored, `f`, is moved back to its target by one factorization of each
+//! state when it drifts more than `τ = 1/16` from it ([`Stabilized`]).
 //! The rotations cost about 0.92 of a factorization at 13 features, 0.75
 //! at 20 and 0.5 at 32, and more than it below 13, which is why the form
 //! starts there.
