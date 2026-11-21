@@ -28,8 +28,15 @@ impl Bank {
     /// # Errors
     ///
     /// When no spec reads a clock: a row-count bank resumes at the next
-    /// row, which only the caller knows.
-    pub fn learned(&self) -> Result<Learned, String> {
+    /// row, which only the caller knows. And, unless `clock_runs_on`, when a
+    /// spec that reads a clock sets `session` or `restart_after_step_back`:
+    /// its group's clock may start again lower, so the last clock is not a
+    /// place in the stream (`ModelBank.skip_learned` refuses the same; review
+    /// fable2, Y2, the user's "refuse unless declared", 2026-11-20).
+    pub fn learned(&self, clock_runs_on: bool) -> Result<Learned, String> {
+        if !clock_runs_on {
+            refuse_a_clock_that_may_start_again(self.specs())?;
+        }
         let lasts: Vec<Option<HashMap<GroupKey, ClockValue>>> = self
             .specs()
             .iter()
@@ -57,6 +64,35 @@ impl Bank {
             lasts,
         })
     }
+}
+
+/// The first spec that reads a clock and lets its groups' clocks start again
+/// lower, refused with what to do.
+fn refuse_a_clock_that_may_start_again(specs: &[Spec]) -> Result<(), String> {
+    for spec in specs.iter().filter(|s| s.clock.is_some()) {
+        let (setting, how) = if let Some(session) = &spec.session {
+            (format!("session = {session:?}"), "a session change")
+        } else if spec.restart_after_step_back.is_some() {
+            (
+                "restart_after_step_back".to_string(),
+                "a step back larger than restart_after_step_back",
+            )
+        } else {
+            continue;
+        };
+        return Err(format!(
+            "config: skip_learned = true (--skip-learned), but spec {:?} sets {setting}, so a \
+             group's clock may start again lower at {how}, and then its last clock is not a \
+             place in the stream: the rows after it are not the rows the state has not \
+             learned. If, within each group, the clock never goes back (a timestamp that runs \
+             on across sessions), set clock_runs_on = true (--clock-runs-on). Otherwise remove \
+             the rows the saved state has learned from the input, by a column that orders the \
+             whole stream such as a date or a row number, and leave out skip_learned \
+             (--skip-learned).",
+            spec.name
+        ));
+    }
+    Ok(())
 }
 
 impl Learned {

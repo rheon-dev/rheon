@@ -495,6 +495,15 @@ def test_a_spec_that_leaves_targets_out_reads_the_hazard_column_it_names():
     assert a["p_change"].to_list() == b["p_change"].to_list()
 
 
+def test_a_missing_hazard_column_is_called_the_hazard_column():
+    """It rides in the targets slot, and a missing one was reported as a
+    missing "target column" (review fable2, Y7)."""
+    df = pl.DataFrame({"x0": normals(20, 3)})
+    spec = rp.spec.bocpd("b", features=["x0"], hazard_col="zz")
+    with pytest.raises(rp.ColumnNotFoundError, match=r'^spec "b": hazard column "zz" is not in'):
+        rp.ModelBank([spec]).fit_predict(df)
+
+
 def test_an_unusable_hazard_in_the_column_is_refused_naming_the_row():
     """A hazard is the expected rows between changepoints, so 1 or less is
     not one. Such a row used to report nulls and vanish from the posterior

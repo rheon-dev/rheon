@@ -255,8 +255,19 @@ struct Cli {
     /// input that overlaps it learns each row once, as Python's
     /// `ModelBank.skip_learned` does (sets the config's `skip_learned`).
     /// Needs `--load-state` or `load_state`, and a spec that reads a clock.
+    /// A row is kept when its clock is after its group's last one, so this is
+    /// right only where, within a group, the clock never goes back. Under a
+    /// spec with `session` or `restart_after_step_back` it is refused unless
+    /// `--clock-runs-on` says so.
     #[arg(long)]
     skip_learned: bool,
+
+    /// Declares, for `--skip-learned`, that within each group the clock never
+    /// goes back, across sessions and step backs included (sets the config's
+    /// `clock_runs_on`). Needed when a spec sets `session` or
+    /// `restart_after_step_back`.
+    #[arg(long)]
+    clock_runs_on: bool,
 
     /// Save the final state here (overrides the config's `save_state`).
     #[arg(long)]
@@ -474,6 +485,9 @@ fn run() -> Result<(), String> {
     }
     if cli.skip_learned {
         cfg.skip_learned = true;
+    }
+    if cli.clock_runs_on {
+        cfg.clock_runs_on = true;
     }
     if cli.predict {
         cfg.predict = true;

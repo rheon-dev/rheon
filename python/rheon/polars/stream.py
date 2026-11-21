@@ -1314,13 +1314,7 @@ def with_windows(
     # Before the empty frame below crosses to the extension, which cannot
     # take a `UInt128` column in.
     _refuse_uint128(in_schema, who, (policy.get("clock"),))
-    rows = chunk_size if chunk_size is not None else _native.default_chunk_size()
-    if rows < 1:
-        msg = (
-            f"{who}: chunk_size must be at least 1, but it is {rows}. Set chunk_size to 1 or "
-            "more, or leave it out."
-        )
-        raise ValueError(msg)
+    rows = _check_chunk_size(chunk_size, who) or _native.default_chunk_size()
     # The two plan checks a bank makes of its input, made here of this one's:
     # a bank after this sees only this source, and not the plan beneath it.
     plan_text = _plan_text(lazy)

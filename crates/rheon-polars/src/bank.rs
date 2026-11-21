@@ -493,7 +493,17 @@ fn extract(
             } else if let ModelKind::EwClass { classes, .. } = &spec.model {
                 label_column(chunk, spec, c, classes, layout)
             } else {
-                let v = f64_column(chunk, spec, "target", c, layout)?;
+                // `bocpd`'s hazard column rides in this slot and is not a
+                // target: a missing one is named as what it is (review
+                // fable2, Y7).
+                let role = match spec.model {
+                    ModelKind::Bocpd {
+                        hazard_col: Some(_),
+                        ..
+                    } => "hazard",
+                    _ => "target",
+                };
+                let v = f64_column(chunk, spec, role, c, layout)?;
                 // A `strict_binary` target is 0 or 1, and anything else is an
                 // error naming the row, as a label outside `ew_class`'s
                 // classes is -- checked here, before any stream is touched, so
@@ -4916,34 +4926,52 @@ impl Bank {
     ///
     /// `spec` out of range, or a frame the columns cannot make.
     pub fn closed_groups(&mut self, spec: Option<usize>, drop: bool) -> Result<DataFrame, String> {
+        if !drop {
+            return self.peek_closed_groups(spec);
+        }
+        // Before anything is taken: a frame the clock columns cannot make
+        // drains nothing.
+        let clock = self.closed_clock(spec)?;
+        let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.closed)
+            .into_iter()
+            .partition(|r| spec.is_none_or(|si| r.spec == si));
+        self.closed = rest;
+        closed_frame(&self.specs, &mine, clock.as_ref()).map_err(|e| e.to_string())
+    }
+
+    /// [`Self::closed_groups`] with `drop` false, on a shared borrow: a peek
+    /// changes nothing, so it can run beside other readers (`predict` on
+    /// other threads, which the Python binding allows).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::closed_groups`].
+    pub fn peek_closed_groups(&self, spec: Option<usize>) -> Result<DataFrame, String> {
+        let clock = self.closed_clock(spec)?;
+        let taken: Vec<ClosedRow> = self
+            .closed
+            .iter()
+            .filter(|r| spec.is_none_or(|si| r.spec == si))
+            .cloned()
+            .collect();
+        closed_frame(&self.specs, &taken, clock.as_ref()).map_err(|e| e.to_string())
+    }
+
+    /// The clock dtype the closed-group frame of `spec` (all closing specs
+    /// when `None`) is written in, after checking `spec` is in range.
+    fn closed_clock(&self, spec: Option<usize>) -> Result<Option<ClockDtype>, String> {
         if let Some(si) = spec
             && si >= self.specs.len()
         {
             return Err(spec_index_out_of_range(si, self.specs.len()));
         }
-        // Before anything is taken: a frame the clock columns cannot make
-        // drains nothing.
         let closing: Vec<usize> = match spec {
             Some(si) => vec![si],
             None => (0..self.specs.len())
                 .filter(|&si| self.specs[si].group_close.is_some())
                 .collect(),
         };
-        let clock = self.frame_clock(&closing)?.cloned();
-        let taken: Vec<ClosedRow> = if drop {
-            let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.closed)
-                .into_iter()
-                .partition(|r| spec.is_none_or(|si| r.spec == si));
-            self.closed = rest;
-            mine
-        } else {
-            self.closed
-                .iter()
-                .filter(|r| spec.is_none_or(|si| r.spec == si))
-                .cloned()
-                .collect()
-        };
-        closed_frame(&self.specs, &taken, clock.as_ref()).map_err(|e| e.to_string())
+        Ok(self.frame_clock(&closing)?.cloned())
     }
 
     /// The state as the struct every encoding writes. One builder, so the

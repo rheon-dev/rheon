@@ -269,3 +269,146 @@ def test_gram_subset_and_condition_refuse_a_column_named_twice(gram: dict, colum
         rp.gram.subset(gram, columns)
     with pytest.raises(ValueError, match="^rheon.gram.condition: features names column 'x0' twice"):
         rp.gram.condition(gram, features=columns)
+
+
+# --- review fable2, Y4: raw exceptions where the neighbours name the argument ----
+
+
+@pytest.mark.parametrize("keys", [None, 3])
+def test_drop_groups_names_keys_that_are_not_a_list(keys: object) -> None:
+    """`None` alone is how every reader names the null group, and here it was
+    iterated: Python's `'NoneType' object is not iterable`. The refusal says
+    to pass `[None]`."""
+    bank = rp.ModelBank([_spec(group="g")])
+    bank.fit_predict(_frame())
+    with pytest.raises(TypeError, match=r"^ModelBank.drop_groups: keys must be a list") as e:
+        bank.drop_groups(keys)  # type: ignore[arg-type]
+    assert "pass [None]" in str(e.value)
+    with pytest.raises(TypeError, match=r"^ModelBank.drop_groups: each key must be a string"):
+        bank.drop_groups([3])  # type: ignore[list-item]
+    assert bank.drop_groups([None, "ga"]) == 1
+
+
+def test_a_bank_of_no_list_or_of_a_set_names_it() -> None:
+    with pytest.raises(rp.WrongTypeError, match=r"^ModelBank: specs must be a list of specs"):
+        rp.ModelBank(None)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match=r'^spec "m": features takes no set.*Pass a list\.$'):
+        rp.ModelBank([{**_spec(), "features": {"x0", "x1"}}])
+
+
+@pytest.mark.parametrize("batches", [None, 3, {"x0": [1.0]}, "frame"])
+def test_fit_names_batches_that_are_no_frames(batches: object) -> None:
+    """`fit(None)` raised `'NoneType' object is not iterable`, and a dict of
+    columns was iterated by its keys, refused as "an object of type str"."""
+    bank = rp.ModelBank([_spec()])
+    for who, call in [
+        ("ModelBank.fit", lambda: bank.fit(batches)),  # type: ignore[arg-type]
+        ("ModelBank.fit_predict_batches", lambda: bank.fit_predict_batches(batches)),  # type: ignore[arg-type]
+    ]:
+        with pytest.raises(TypeError, match=f"^{who}: batches must be a LazyFrame, a DataFrame"):
+            call()
+    assert bank.rows_fed == 0
+
+
+def test_load_bytes_takes_a_bytes_like_and_names_the_rest() -> None:
+    """`load` took a `bytearray` or a `memoryview`; `load_bytes` refused them
+    in pyo3's words. It takes them now, and names anything else."""
+    bank = rp.ModelBank([_spec()])
+    bank.fit_predict(_frame())
+    data = bank.save_bytes()
+    for like in (bytearray(data), memoryview(data)):
+        assert rp.ModelBank.load_bytes(like).save_bytes() == data  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match=r"^ModelBank.load_bytes: data must be the bytes"):
+        rp.ModelBank.load_bytes("state")  # type: ignore[arg-type]
+
+
+def test_save_names_a_text_file() -> None:
+    import io
+
+    bank = rp.ModelBank([_spec()])
+    with pytest.raises(TypeError, match=r"^ModelBank.save: file is open for text"):
+        bank.save(io.StringIO())  # type: ignore[arg-type]
+
+
+def test_a_spec_named_as_an_input_column_has_no_polars_prefix() -> None:
+    """The bank's sentence led by polars' variant name, `duplicate: `, where a
+    missing column's `not found: ` was already stripped."""
+    df = _frame().with_columns(m=pl.lit(1.0))
+    with pytest.raises(ValueError, match=r'^spec "m": it has the same name as an input column'):
+        rp.ModelBank([_spec()]).fit_predict(df)
+
+
+# --- review fable2, Y5: rheon.corr's arguments ------------------------------------
+
+
+@pytest.mark.parametrize("sigma2", [-1.0, 0.0, float("nan"), float("inf")])
+def test_mp_edge_refuses_a_variance_not_above_zero(sigma2: float) -> None:
+    """A negative `sigma2` gave edges with the lower above the upper."""
+    for who, call in [
+        ("rheon.corr.mp_edge", lambda: corr.mp_edge(10, 5, sigma2)),
+        ("rheon.corr.mp_density", lambda: corr.mp_density(1.0, 10, 5, sigma2)),
+    ]:
+        with pytest.raises(ValueError, match=f"^{who}: sigma2 must be a finite number above 0"):
+            call()
+    lo, hi = corr.mp_edge(10, 5, 2.0)
+    assert 0.0 < lo < hi
+
+
+def _corr_matrix() -> np.ndarray:
+    return np.corrcoef(np.random.default_rng(0).normal(size=(200, 5)).T)
+
+
+@pytest.mark.parametrize("k", [True, 2.0, "2"])
+def test_absorption_refuses_a_count_that_is_not_a_whole_number(k: object) -> None:
+    """`True` ran as 1, and `2.0` failed in numpy's slicing."""
+    with pytest.raises(rp.WrongTypeError, match=r"^rheon.corr.absorption: k must be a whole"):
+        corr.absorption(_corr_matrix(), k)  # type: ignore[arg-type]
+    assert corr.absorption(_corr_matrix(), np.int64(2)) == corr.absorption(_corr_matrix(), 2)
+
+
+@pytest.mark.parametrize("tol", [-1.0, 0.0, float("nan")])
+def test_nearest_refuses_a_tol_not_above_zero(tol: float) -> None:
+    """A relative change is never below 0: a `tol` at or below it ran to
+    `max_iter` with nothing said."""
+    a = np.eye(3)
+    a[0, 1] = a[1, 0] = 0.99
+    a[0, 2] = a[2, 0] = -0.99
+    a[1, 2] = a[2, 1] = 0.99
+    with pytest.raises(ValueError, match=r"^rheon.corr.nearest: tol must be above 0"):
+        corr.nearest(a, tol=tol)
+    assert corr.nearest(a)[2] < 100
+
+
+# --- review fable2, Y6: the numpy half of rheon.gram checks a Gram's shapes -------
+
+
+def test_the_numpy_half_of_gram_checks_shapes_as_the_native_half_does(gram: dict) -> None:
+    """A `means` of one entry: `lars_path` refused it by name, while `merge`
+    broadcast it into a wrong fit and `solve` and `vif` ignored it. A 2 x 2
+    `comoments` raised numpy's own errors. Each now refuses as the native
+    half does, and a valid Gram, whole or packed, is untouched."""
+    from rheon import gram as G
+
+    short = {**gram, "means": gram["means"][:1]}
+    small = {**gram, "comoments": gram["comoments"][:2, :2]}
+    for bad, key in ((short, "means"), (small, "comoments")):
+        with pytest.raises(ValueError, match=f"^rheon.gram: the Gram's {key} has"):
+            G.lars_path(bad)
+        for name, call in [
+            ("merge", lambda b=bad: G.merge([b, gram])),
+            ("solve", lambda b=bad: G.solve(b)),
+            ("vif", lambda b=bad: G.vif(b)),
+            ("correlation", lambda b=bad: G.correlation(b)),
+            ("condition", lambda b=bad: G.condition(b)),
+            ("subset", lambda b=bad: G.subset(b, ["x0"])),
+            ("coef_stats", lambda b=bad: G.coef_stats(b, G.solve(gram))),
+        ]:
+            with pytest.raises(
+                ValueError,
+                match=f"^rheon.gram.{name}: the Gram's {key} has .* entries, but a Gram of 3 "
+                "columns and 1 targets has",
+            ):
+                call()
+    want = G.solve(gram)
+    np.testing.assert_array_equal(G.solve(G.merge([gram])), want)
+    assert G.solve(G.merge([gram, gram])) == pytest.approx(want, rel=1e-12)

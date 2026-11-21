@@ -142,7 +142,7 @@ minor release may reword.
 
 The TOML file names the input, the output, the run's settings and the
 specs. Every key but the specs and `keep_columns` has a flag that
-overrides it. `--predict` and `--skip-learned` can only turn their keys
+overrides it. `--predict`, `--skip-learned` and `--clock-runs-on` can only turn their keys
 on, and `--no-output` can only clear `output`. Every example
 on this page but the closed-groups one, which reads `blocks.toml`, runs
 against this configuration, saved as `job.toml`
@@ -180,7 +180,8 @@ A flag given on the command line wins over its key in the TOML file:
 | `--chunk-size` | `chunk_size` | rows per chunk; 100,000 by default |
 | `--threads` | `threads` | the threads the bank runs on, a whole number from 1 to 1,024, or to the machine's core count where that is larger; left out, the bank's default number of threads, which `RHEON_MAX_THREADS` sets. The output is the same at any count |
 | `--load-state` | `load_state` | start from a saved state |
-| `--skip-learned` | `skip_learned` | drop the input's rows the loaded state has learned, as `ModelBank.skip_learned` does; needs `--load-state` or `load_state`, and a spec that reads a clock. A run that keeps no row writes an output with no rows, and saves the state it loaded, byte for byte |
+| `--skip-learned` | `skip_learned` | drop the input's rows the loaded state has learned, as `ModelBank.skip_learned` does; needs `--load-state` or `load_state`, and a spec that reads a clock. It is right only where, within a group, the clock never goes back, so a spec with `session` or `restart_after_step_back` is refused unless `--clock-runs-on` is given. A run that keeps no row writes an output with no rows, and saves the state it loaded, byte for byte |
+| `--clock-runs-on` | `clock_runs_on` | declare, for `--skip-learned`, that within each group the clock never goes back, across sessions and step backs included; needs `--skip-learned` or `skip_learned` |
 | `--save-state` | `save_state` | save the state when the run ends, after the output is committed |
 | `--closed-groups` | `closed_groups` | write the groups that closed to a sidecar file; needs a spec with `group_close` |
 | `--predict` | `predict` | predict from the loaded state and learn nothing; needs `--load-state` or `load_state`, drops the TOML's `save_state` and `closed_groups`, and refuses `--save-state` and `--closed-groups` |

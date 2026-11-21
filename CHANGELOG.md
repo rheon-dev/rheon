@@ -46,6 +46,22 @@ model that only the new build has is listed as an addition and passes.
   the square root says so in `covariance_form`, written only there, and a
   state of 67 or earlier loads as the covariance form it is, to the bit.
 
+### Changed
+
+- **`ModelBank.skip_learned` and the command line's `--skip-learned` refuse a
+  spec with `session` or `restart_after_step_back` unless the caller
+  declares that the clock runs on,** by `skip_learned(frame,
+  clock_runs_on=True)`, `--clock-runs-on`, or the config key
+  `clock_runs_on = true`. They keep a row whose clock is after its group's
+  last one, which is right only where, within a group, the clock never goes
+  back. Those two settings let it start again lower, at a session change or
+  a large step back. On such a stream the rule dropped the next session's
+  unlearned rows (0 kept of 300 on three days whose clock restarts daily)
+  and kept learned ones, and the bank took them without a word. The input
+  and the state cannot tell that stream from one whose clock runs on across
+  sessions, where the rule is exactly right, so the caller says which. A
+  call that was right before, under those settings, now needs the argument.
+
 ### Fixed
 
 - **Under `label_clock`, a row of weight 0 is held and learned at its label
@@ -191,6 +207,45 @@ model that only the new build has is listed as an addition and passes.
   count moves: predictions, coefficients and every emitted column are as
   before, and a state saved by an earlier build continues to the bit except
   for it. Moves: `lasso.solve_failures`.
+- `lf.rheon.predict(bank)` runs from several threads at once on one bank, as
+  `bank.predict` does. Building the plan peeks at the bank's closed groups,
+  and the peek took the bank for itself, so it was refused with "the bank is
+  in use on another thread" while another thread was scoring: 9 of 20 lazy
+  predicts from four threads failed on py-polars 2.0, 16 of 20 on 1.37.
+  `bank.closed_groups(drop=False)` now reads beside a `predict` too; a drain
+  still needs the bank alone.
+- Refusals that came as Python's or pyo3's own words now name the call and
+  the argument, with what to pass: `ModelBank.drop_groups(None)` (pass
+  `[None]` for the null group) or a key that is not a string;
+  `ModelBank(None)`; a spec dict holding a set, by its key; `fit(None)`,
+  `fit_predict_batches(None)` and a dict of columns given in place of a
+  frame; `ModelBank.save` to a file opened for text. `ModelBank.load_bytes`
+  takes a `bytearray` or a `memoryview`, as `ModelBank.load` does, and
+  names anything else. A spec named as an input column is refused without
+  Polars' `duplicate: ` in front of the sentence.
+- `rheon.corr` checks three more arguments by name: `mp_edge` and
+  `mp_density` refuse a `sigma2` that is not a finite number above 0 (a
+  negative one gave a lower edge above the upper); `absorption` refuses a
+  `k` that is not a whole number, as `spectral` does (`True` ran as 1, and
+  `2.0` failed in numpy's slicing); `nearest` refuses a `tol` not above 0,
+  which no run can meet.
+- `rheon.gram`'s numpy functions (`merge`, `subset`, `correlation`,
+  `solve`, `coef_stats`, `vif`, `condition`) check that a Gram's arrays are
+  sized to its columns and targets, as `lars_path`, `lasso_path` and
+  `solve_subsets` already did, and refuse with the same message. A `means`
+  of one entry was broadcast by `merge` into a wrong fit with nothing said,
+  and ignored by `solve` and `vif`; a `comoments` too small raised numpy's
+  own errors. A Gram as `ModelBank.gram()` returns it, whole or packed, is
+  unchanged.
+- With only the old `POLARS_ONLINE_WARN_UNSTABLE=1` set, the
+  `UnstableWarning` said to set or unset `RHEON_WARN_UNSTABLE`, which was
+  not set; it names the variable the value was read from. And `bocpd`'s
+  `hazard_col`, missing from the input, is called the hazard column, not a
+  target column.
+- `rp.stream.with_windows` checks `chunk_size` as `refresh_time` and
+  `lf.rheon.fit_predict` do, while the plan is built: `True` ran in one-row
+  chunks, `2.5` failed only when the plan ran, and `"a"` raised Python's own
+  comparison error. Each is now a `WrongTypeError` naming `chunk_size`.
 
 ### Tests and documents
 

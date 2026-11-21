@@ -321,7 +321,8 @@ fn run_err(e: &PolarsError, filename: Option<&str>) -> PyErr {
 /// A bank's error as Python sees it: a column a spec reads that the frame
 /// has not got is `rheon.ColumnNotFoundError`, which is both
 /// Polars' `ColumnNotFoundError` and a `ValueError`, with the message alone
-/// (a `PolarsError`'s display puts `not found: ` in front of it); every
+/// (a `PolarsError`'s display puts `not found: ` in front of it, and
+/// `duplicate: ` in front of a spec named as an input column); every
 /// other refusal is the `ValueError` with the message (task 244, M-1),
 /// but for a value or a column of the wrong type
 /// ([`rheon_polars::is_wrong_type`]), which is
@@ -330,6 +331,9 @@ fn run_err(e: &PolarsError, filename: Option<&str>) -> PyErr {
 fn bank_err(e: &PolarsError) -> PyErr {
     match e {
         PolarsError::ColumnNotFound(msg) => column_not_found(msg.to_string()),
+        // A spec named as an input column: the display's `duplicate: ` is
+        // polars' variant name, not the bank's sentence (review fable2, Y4).
+        PolarsError::Duplicate(msg) => PyValueError::new_err(msg.to_string()),
         _ if rheon_polars::is_wrong_type(e) => wrong_type(e.to_string()),
         _ => PyValueError::new_err(e.to_string()),
     }
@@ -864,12 +868,16 @@ impl PyModelBank {
         spec: Option<usize>,
         drop: bool,
     ) -> PyResult<PyDataFrame> {
-        let mut this = slf.try_borrow_mut().map_err(|_| busy("closed_groups"))?;
-        Ok(PyDataFrame(
-            this.inner
-                .closed_groups(spec, drop)
-                .map_err(PyValueError::new_err)?,
-        ))
+        // A peek changes nothing, so it takes the shared borrow and runs
+        // beside `predict` on other threads; only a drain needs the bank alone.
+        let frame = if drop {
+            let mut this = slf.try_borrow_mut().map_err(|_| busy("closed_groups"))?;
+            this.inner.closed_groups(spec, true)
+        } else {
+            let this = slf.try_borrow().map_err(|_| busy("closed_groups"))?;
+            this.inner.peek_closed_groups(spec)
+        };
+        Ok(PyDataFrame(frame.map_err(PyValueError::new_err)?))
     }
 
     /// The pairs of a `marginal` spec (`Bank::marginal`), one row per

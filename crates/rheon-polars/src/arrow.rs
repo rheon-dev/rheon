@@ -844,6 +844,12 @@ fn wanted(specs: &[Spec]) -> Vec<(PlSmallStr, Want)> {
 fn spec_reads(s: &Spec) -> Vec<(&str, Want, &'static str)> {
     let (target_want, target_role) = match &s.model {
         ModelKind::EwClass { .. } => (Want::Text, "label"),
+        // `bocpd`'s hazard column rides in the targets slot, and is not a
+        // target (review fable2, Y7).
+        ModelKind::Bocpd {
+            hazard_col: Some(_),
+            ..
+        } => (Want::Number, "hazard"),
         _ => (Want::Number, "target"),
     };
     let mut reads: Vec<(&str, Want, &'static str)> = s
@@ -1330,6 +1336,10 @@ fn first_reader<'a>(specs: &'a [Spec], column: &str) -> Option<(&'a str, &'stati
         let name = s.name.as_str();
         let target_role = match &s.model {
             ModelKind::EwClass { .. } => "label",
+            ModelKind::Bocpd {
+                hazard_col: Some(_),
+                ..
+            } => "hazard",
             _ => "target",
         };
         let mut roles = s
@@ -1687,6 +1697,10 @@ fn role_of(specs: &[Spec], name: &str) -> &'static str {
             if t.value_column() == Some(name) {
                 return match &s.model {
                     ModelKind::EwClass { .. } => "label",
+                    ModelKind::Bocpd {
+                        hazard_col: Some(_),
+                        ..
+                    } => "hazard",
                     _ => "target",
                 };
             }

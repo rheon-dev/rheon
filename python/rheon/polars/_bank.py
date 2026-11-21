@@ -8,7 +8,7 @@ import numbers
 import operator
 import os
 import warnings
-from collections.abc import Collection, Iterable, Iterator
+from collections.abc import Collection, Iterable, Iterator, Mapping
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Any, Literal, NoReturn, overload
 
@@ -303,6 +303,12 @@ class ModelBank:
                 f"it is of type {type(specs).__name__}. Pass a list of specs."
             )
             raise WrongTypeError(msg)
+        if not isinstance(specs, Iterable):
+            msg = (
+                "ModelBank: specs must be a list of specs, such as [rheon.spec.ewridge(...)], but "
+                f"it is of type {type(specs).__name__}. Pass a list of specs."
+            )
+            raise WrongTypeError(msg)
         # A hand-written dict may put a window expression in `targets`, as
         # the builders take one; `_json` writes it as the builders would
         # (review R1 D8, R2 P5).
@@ -488,7 +494,8 @@ class ModelBank:
         .. rubric:: Raises
 
         ``TypeError``
-            A key is neither a string nor ``None``.
+            A key is neither a string nor ``None``, or ``keys`` is neither a
+            list of keys nor a string, such as ``None`` alone.
         ``KeyError``
             ``spec`` is a name the bank does not hold.
         ``IndexError``
@@ -519,16 +526,36 @@ class ModelBank:
         index = None if spec is None else self._spec_index(spec, "ModelBank.drop_groups")
         # A string alone is one key, not its characters: a group key is a
         # string, and Polars reads a lone name where it takes a list the same way.
+        who = "ModelBank.drop_groups"
+        if keys is None or not isinstance(keys, (str, Iterable)):
+            # `None` alone is how every reader names the null group, but here
+            # it would be read as no keys at all (review fable2, Y4).
+            msg = (
+                f"{who}: keys must be a list of group keys, or one key as a string, but it is "
+                f"{keys!r}. Pass a list of keys, as groups() writes them; to drop the null "
+                "group, pass [None]."
+            )
+            raise TypeError(msg)
         listed: list[str | None] = [keys] if isinstance(keys, str) else list(keys)
+        for key in listed:
+            if key is not None and not isinstance(key, str):
+                msg = (
+                    f"{who}: each key must be a string, or None for the null group, but one "
+                    f"is {key!r}, of type {type(key).__name__}. Pass the keys as groups() "
+                    "writes them in its group column."
+                )
+                raise TypeError(msg)
         return self._native.drop_groups(listed, index)
 
     @overload
-    def skip_learned(self, frame: pl.DataFrame) -> pl.DataFrame: ...
+    def skip_learned(self, frame: pl.DataFrame, *, clock_runs_on: bool = False) -> pl.DataFrame: ...
 
     @overload
-    def skip_learned(self, frame: pl.LazyFrame) -> pl.LazyFrame: ...
+    def skip_learned(self, frame: pl.LazyFrame, *, clock_runs_on: bool = False) -> pl.LazyFrame: ...
 
-    def skip_learned(self, frame: pl.DataFrame | pl.LazyFrame) -> pl.DataFrame | pl.LazyFrame:
+    def skip_learned(
+        self, frame: pl.DataFrame | pl.LazyFrame, *, clock_runs_on: bool = False
+    ) -> pl.DataFrame | pl.LazyFrame:
         """The rows of a frame or query that the bank has not learned.
 
         Use it to resume a saved bank on input that overlaps what the bank
@@ -539,11 +566,30 @@ class ModelBank:
         Without a clock in any spec, pass the bank only the rows after the
         last one it learned.
 
+        It finds the rows by each group's last clock, so it is right only
+        where, within a group, the clock never goes back. A spec with
+        ``session`` or ``restart_after_step_back`` lets a group's clock start
+        again lower, and on such a stream the last clock is not a place in
+        it: the rule would drop the next session's unlearned rows and keep
+        learned ones, and the bank would take them without a word. Nothing in
+        the frame or the state tells that stream from one whose clock runs on
+        across sessions, such as a timestamp with the day as the session, so
+        under those settings the call refuses unless ``clock_runs_on=True``
+        says the clock runs on.
+
         .. rubric:: Parameters
 
         ``frame``
             The input, a ``DataFrame`` or a ``LazyFrame``, holding each spec's
             clock column and ``group`` column.
+        ``clock_runs_on``
+            ``True`` declares that, within each group, the clock never goes
+            back, across sessions and step backs included. Needed when a spec
+            that reads a clock sets ``session`` or ``restart_after_step_back``;
+            accepted, and changing nothing, otherwise. Where the clock does
+            start again, do not set it: filter the input before the bank on a
+            column that orders the whole stream, such as a date or a row
+            number, instead.
 
         .. rubric:: Returns
 
@@ -558,7 +604,8 @@ class ModelBank:
 
         ``ValueError``
             No spec reads a clock, so there is no position on a clock to
-            resume from.
+            resume from; or a spec that reads a clock sets ``session`` or
+            ``restart_after_step_back`` and ``clock_runs_on`` is not ``True``.
         :class:`~rheon.WrongTypeError`
             A clock column is not a number, a ``Date``, a ``Datetime`` or a
             ``Duration``, or a clock is temporal in the frame and was numeric
@@ -569,7 +616,7 @@ class ModelBank:
             ``ValueError`` and Polars' ``ColumnNotFoundError``.
         ``TypeError``
             ``frame`` is neither a ``DataFrame`` nor a ``LazyFrame``, such as
-            a dict.
+            a dict, or ``clock_runs_on`` is not a bool.
 
         .. rubric:: Examples
 
@@ -614,6 +661,15 @@ class ModelBank:
                 f"is {type(frame).__name__}. Pass the input you would pass to fit_predict."
             )
             raise TypeError(msg)
+        if not isinstance(clock_runs_on, bool):
+            msg = (
+                "ModelBank.skip_learned: clock_runs_on must be a bool, but its type is "
+                f"{type(clock_runs_on).__name__}. Pass True only if, within each group, the "
+                "clock never goes back."
+            )
+            raise TypeError(msg)
+        if not clock_runs_on:
+            _refuse_a_clock_that_may_start_again(self.specs)
         schema = frame.lazy().collect_schema()
         keep: pl.Expr | None = None
         for spec, groups in zip(self.specs, self._native.last_clocks(), strict=True):
@@ -1196,7 +1252,9 @@ class ModelBank:
             ``chunk_size`` is not a whole number, such as ``2.5``. It is both
             a ``TypeError`` and a ``ValueError``.
         ``TypeError``
-            ``closed_groups`` is neither a string nor a path.
+            ``closed_groups`` is neither a string nor a path, or ``batches``
+            is neither a query, a frame nor an iterator of frames, such as
+            ``None`` or a dict of columns.
         ``ValueError``
             ``chunk_size`` is below 1, or ``closed_groups`` names no format
             by its extension, or names a file beside specs none of which sets
@@ -1291,6 +1349,18 @@ class ModelBank:
         )
 
         chunk_size = _check_chunk_size(chunk_size, f"ModelBank.{what}")
+        # Before anything is read: `None`, a dict of columns or a string was
+        # iterated and refused as Python's own `not iterable`, or, frame by
+        # frame, as "an object of type str" (review fable2, Y4).
+        if not isinstance(batches, (pl.LazyFrame, pl.DataFrame)) and (
+            not isinstance(batches, Iterable) or isinstance(batches, (str, bytes, Mapping))
+        ):
+            msg = (
+                f"ModelBank.{what}: batches must be a LazyFrame, a DataFrame or an iterator of "
+                f"DataFrames, but it is of type {type(batches).__name__}. Pass a query, a frame "
+                "(pl.DataFrame(...) of a dict of columns), or frames in a list or a generator."
+            )
+            raise TypeError(msg)
         path = _closed_path(closed_groups, self._specs, f"ModelBank.{what}")
         if path is not None:
             _check_closed_format(path, self.closed_groups(drop=False).clear(), f"ModelBank.{what}")
@@ -3562,7 +3632,8 @@ class ModelBank:
             ``PermissionError`` for one that cannot be written. A file that
             was there is left untouched.
         ``TypeError``
-            ``file`` is neither a path nor a binary file object.
+            ``file`` is neither a path nor a binary file object, such as a
+            file opened for text or an ``io.StringIO``.
         ``ValueError``
             A refused chunk left the bank unable to go on
             (:meth:`fit_predict`, Notes).
@@ -3619,6 +3690,12 @@ class ModelBank:
                 "ModelBank.save: file must be a path or a file object opened for binary "
                 f"writing, but it is of type {type(file).__name__}. Pass a path, or a file opened "
                 "with 'wb'."
+            )
+            raise TypeError(msg)
+        if isinstance(file, io.TextIOBase):
+            msg = (
+                "ModelBank.save: file is open for text, but a state is bytes. Open the file "
+                "with 'wb', pass an io.BytesIO, or pass a path."
             )
             raise TypeError(msg)
         self._warn_formula_form(stacklevel=5)
@@ -3945,7 +4022,8 @@ class ModelBank:
         .. rubric:: Parameters
 
         ``data``
-            The bytes :meth:`save_bytes` returned.
+            The bytes :meth:`save_bytes` returned, or a ``bytearray`` or
+            ``memoryview`` of them.
         ``specs``
             The specs you expect the bytes to hold, checked as :meth:`load`
             checks them. ``None``, the default, takes their specs unchecked.
@@ -3961,7 +4039,7 @@ class ModelBank:
         ``ValueError`` and ``TypeError``
             As :meth:`load` raises them, for bytes that are not a bank this
             build loads, and for a ``threads`` it refuses. ``TypeError`` also
-            when ``data`` is not ``bytes``.
+            when ``data`` is not ``bytes``, a ``bytearray`` or a ``memoryview``.
         :class:`~rheon.UnstableWarning`
             Under ``RHEON_WARN_UNSTABLE=1``, for bytes holding a
             formula target, as :meth:`save` says.
@@ -3988,6 +4066,17 @@ class ModelBank:
         - :meth:`save_bytes`, which gives the bytes.
         - :meth:`load`, which reads a file too.
         """
+        # Bytes-like, as `load` takes it; anything else named here, where
+        # pyo3's text named neither the call nor the argument (review fable2, Y4).
+        if isinstance(data, (bytearray, memoryview)):
+            data = bytes(data)
+        elif not isinstance(data, bytes):
+            msg = (
+                "ModelBank.load_bytes: data must be the bytes save_bytes gave, but it is of type "
+                f"{type(data).__name__}. Pass bytes, or pass a path or a file object to "
+                "ModelBank.load."
+            )
+            raise TypeError(msg)
         return cls._load_bytes(data, specs, stacklevel=4, threads=_check_threads(threads))
 
     @classmethod
@@ -4021,6 +4110,35 @@ class ModelBank:
 #: reads it (a ``Date`` counts days).
 _NANOS_PER = {"ms": 1_000_000, "us": 1_000, "ns": 1}
 _NANOS_PER_DAY = 86_400 * 1_000_000_000
+
+
+def _refuse_a_clock_that_may_start_again(specs: list[dict[str, Any]]) -> None:
+    """`skip_learned` places a row by its group's last clock, which is a place
+    in the stream only while a group's clock never goes back. Refuse the first
+    spec whose settings let it start again, unless the caller has declared
+    that this stream's clock runs on (the command line's `Bank::learned`
+    gives the same refusal)."""
+    for spec in specs:
+        if spec.get("clock") is None:
+            continue
+        if spec.get("session") is not None:
+            setting = f"session={spec['session']!r}"
+            how = "a session change"
+        elif spec.get("restart_after_step_back") is not None:
+            setting = "restart_after_step_back"
+            how = "a step back larger than restart_after_step_back"
+        else:
+            continue
+        name = spec["name"]
+        msg = (
+            f'ModelBank.skip_learned: spec "{name}" sets {setting}, so a group\'s clock '
+            f"may start again lower at {how}, and then its last clock is not a place in the "
+            "stream: the rows after it are not the rows the bank has not learned. If, within "
+            "each group, the clock never goes back (a timestamp that runs on across sessions), "
+            "pass clock_runs_on=True. Otherwise filter the input before the bank on a column "
+            "that orders the whole stream, such as a date or a row number."
+        )
+        raise ValueError(msg)
 
 
 def _unlearned(
