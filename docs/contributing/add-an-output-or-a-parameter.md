@@ -99,7 +99,10 @@ crate demands a set for every schema up to it. So take a layout change
 from schema `N` to `N + 1` in these steps, in both crates:
 
 1. Copy the current set, every `<case>.rs`, as it is to
-   `tests/state_fixtures/v<N>/`. The directory is the kept set.
+   `tests/state_fixtures/v<N>/`. The directory is the kept set. Add the
+   line `(N, <its count of files>)` to `KEPT_COUNTS` in the crate's
+   `tests/state_fixtures.rs`: a kept set is held to that count and to
+   every case of the set before it, so a file lost later fails the test.
 2. Set `SCHEMA_VERSION` (`crates/rheon-core/src/lib.rs`) to `N + 1`.
 3. Write the loader the change needs, where the moved layout is read. A
    model's state is read in the model's `Deserialize`, as `check_schema`'s
