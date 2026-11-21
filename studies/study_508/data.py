@@ -23,19 +23,23 @@ def level(kind: str, n: int, at: int, size: float, ramp: int) -> np.ndarray:
     raise ValueError(kind)
 
 
-def real(kind: str, n: int, seed: int, at: int = 0, size: float = 1.0, ramp: int = 500, sd: float = 1.0) -> np.ndarray:
+def real(
+    kind: str, n: int, seed: int, at: int = 0, size: float = 1.0, ramp: int = 500, sd: float = 1.0
+) -> np.ndarray:
     rng = np.random.default_rng([508, seed])
     return level(kind, n, at, size, ramp) + sd * rng.standard_normal(n)
 
 
-def binary(kind: str, n: int, seed: int, at: int = 0, p0: float = 0.1, p1: float = 0.3, ramp: int = 500) -> np.ndarray:
+def binary(
+    kind: str, n: int, seed: int, at: int = 0, p0: float = 0.1, p1: float = 0.3, ramp: int = 500
+) -> np.ndarray:
     rng = np.random.default_rng([5080, seed])
     p = p0 + level(kind, n, at, p1 - p0, ramp)
     return (rng.random(n) < p).astype(np.float64)
 
 
 def weights(n: int, seed: int, frac_zero: float = 0.2, first_zero: bool = True) -> np.ndarray:
-    """Positive weights (uniform on [0.2, 2]) with a share of exact zeros, the first row among them."""
+    """Weights uniform on [0.2, 2] with a share of exact zeros, the first row among them."""
     rng = np.random.default_rng([5081, seed])
     w = rng.uniform(0.2, 2.0, n)
     w[rng.random(n) < frac_zero] = 0.0

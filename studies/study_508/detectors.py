@@ -298,7 +298,10 @@ class Adwin:
             tot[i, : len(t)] = t
             var[i, : len(v)] = v
             cnt[i] = len(t)
-        scal = np.array([self.total, self.var, self.width, self.tick, self.n_detections, self.drift], dtype=np.float64)
+        scal = np.array(
+            [self.total, self.var, self.width, self.tick, self.n_detections, self.drift],
+            dtype=np.float64,
+        )
         return {"totals": tot, "variances": var, "counts": cnt, "scalars": scal}
 
 
@@ -442,7 +445,9 @@ class DDM:
             setattr(self, f, s[f])
 
     def state_arrays(self) -> dict[str, np.ndarray]:
-        fields = [f for f in self._FIELDS if f != ("errors" if self.mean_form == "recursive" else "p")]
+        fields = [
+            f for f in self._FIELDS if f != ("errors" if self.mean_form == "recursive" else "p")
+        ]
         return {"scalars": np.array([float(getattr(self, f)) for f in fields])}
 
 
@@ -538,7 +543,7 @@ def ks_pvalue_equal(r: int, h: int) -> float:
 
 
 def ks_h(a: list[float], b: list[float]) -> int:
-    """``r D`` for two samples of equal size ``r``: the largest gap in counts at or below a pooled value."""
+    """``r D`` for two samples of size ``r``: the largest count gap at or below a pooled value."""
     sa = sorted(a)
     sb = sorted(b)
     r = len(sa)
@@ -681,6 +686,6 @@ def run(det, xs, ws=None) -> np.ndarray:
         for i, x in enumerate(xs):
             out[i] = upd(x)
     else:
-        for i, (x, w) in enumerate(zip(xs, ws)):
+        for i, (x, w) in enumerate(zip(xs, ws, strict=False)):
             out[i] = upd(x, w)
     return out

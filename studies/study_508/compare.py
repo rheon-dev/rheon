@@ -24,8 +24,9 @@ from river.drift import binary as rbinary
 from scipy import stats as sstats
 
 sys.path.insert(0, str(Path(__file__).parent))
-import data  # noqa: E402
 from detectors import DDM, EDDM, KSWIN, Adwin, PageHinkley, ks_pvalue_equal, run  # noqa: E402
+
+import data  # noqa: E402
 
 
 def ulps(a: float, b: float) -> int:
@@ -49,9 +50,15 @@ def bits(a: float, b: float) -> bool:
 # ---------------------------------------------------------------------------
 # 1, 2. Flag for flag and bit for bit against river.
 
+
 # (name, ours, river's, stream, field pairs compared bit for bit)
 def _adwin_fields(m: Adwin, r) -> list[tuple[float, float]]:
-    return [(m.width, r.width), (m.total, r.total), (m.var, r.variance), (m.estimation, r.estimation)]
+    return [
+        (m.width, r.width),
+        (m.total, r.total),
+        (m.var, r.variance),
+        (m.estimation, r.estimation),
+    ]
 
 
 def _ph_fields(m: PageHinkley, r) -> list[tuple[float, float]]:
@@ -80,14 +87,49 @@ def _kswin_fields(m: KSWIN, r) -> list[tuple[float, float]]:
 PARITY_CASES = [
     # label, ours factory, river factory, stream kind, binary?, fields, warning?
     ("ADWIN", lambda: Adwin(), lambda: rdrift.ADWIN(), "real", _adwin_fields, False),
-    ("ADWIN clock=1, delta=0.05", lambda: Adwin(clock=1, delta=0.05), lambda: rdrift.ADWIN(clock=1, delta=0.05), "real", _adwin_fields, False),
-    ("ADWIN on bits, M=3", lambda: Adwin(max_buckets=3), lambda: rdrift.ADWIN(max_buckets=3), "binary", _adwin_fields, False),
-    ("Page-Hinkley, threshold 25", lambda: PageHinkley(threshold=25.0), lambda: rdrift.PageHinkley(threshold=25.0), "real", _ph_fields, False),
-    ("Page-Hinkley up, alpha=1", lambda: PageHinkley(threshold=25.0, alpha=1.0, mode="up"), lambda: rdrift.PageHinkley(threshold=25.0, alpha=1.0, mode="up"), "real", _ph_fields, False),
+    (
+        "ADWIN clock=1, delta=0.05",
+        lambda: Adwin(clock=1, delta=0.05),
+        lambda: rdrift.ADWIN(clock=1, delta=0.05),
+        "real",
+        _adwin_fields,
+        False,
+    ),
+    (
+        "ADWIN on bits, M=3",
+        lambda: Adwin(max_buckets=3),
+        lambda: rdrift.ADWIN(max_buckets=3),
+        "binary",
+        _adwin_fields,
+        False,
+    ),
+    (
+        "Page-Hinkley, threshold 25",
+        lambda: PageHinkley(threshold=25.0),
+        lambda: rdrift.PageHinkley(threshold=25.0),
+        "real",
+        _ph_fields,
+        False,
+    ),
+    (
+        "Page-Hinkley up, alpha=1",
+        lambda: PageHinkley(threshold=25.0, alpha=1.0, mode="up"),
+        lambda: rdrift.PageHinkley(threshold=25.0, alpha=1.0, mode="up"),
+        "real",
+        _ph_fields,
+        False,
+    ),
     ("DDM", lambda: DDM(), lambda: rbinary.DDM(), "binary", _ddm_fields, True),
     ("EDDM", lambda: EDDM(), lambda: rbinary.EDDM(), "binary", _eddm_fields, True),
     ("KSWIN", lambda: KSWIN(seed=7), lambda: rdrift.KSWIN(seed=7), "real", _kswin_fields, False),
-    ("KSWIN W=300, r=50", lambda: KSWIN(seed=7, window_size=300, stat_size=50), lambda: rdrift.KSWIN(seed=7, window_size=300, stat_size=50), "real", _kswin_fields, False),
+    (
+        "KSWIN W=300, r=50",
+        lambda: KSWIN(seed=7, window_size=300, stat_size=50),
+        lambda: rdrift.KSWIN(seed=7, window_size=300, stat_size=50),
+        "real",
+        _kswin_fields,
+        False,
+    ),
 ]
 
 KINDS = ("none", "step", "gradual")
@@ -101,13 +143,22 @@ def stream_for(kind: str, binary: bool, n: int, seed: int) -> np.ndarray:
 
 
 def parity(n: int = 10_000, seeds: int = 3) -> list[dict]:
-    """Each case on each stream kind and seed: flags and warnings row for row, fields bit for bit."""
+    """Each case on each stream kind and seed: flags and warnings row for row, fields to the bit."""
     out = []
     for label, mk, mkr, sk, fields, warn in PARITY_CASES:
         binary = sk == "binary"
         for kind in KINDS:
-            res = {"case": label, "kind": kind, "rows": 0, "ours": 0, "river": 0, "flag_rows_differ": 0,
-                   "warn_rows_differ": 0, "fields_not_bit_equal": 0, "max_ulps": 0}
+            res = {
+                "case": label,
+                "kind": kind,
+                "rows": 0,
+                "ours": 0,
+                "river": 0,
+                "flag_rows_differ": 0,
+                "warn_rows_differ": 0,
+                "fields_not_bit_equal": 0,
+                "max_ulps": 0,
+            }
             for seed in range(seeds):
                 xs = stream_for(kind, binary, n, seed)
                 m, r = mk(), mkr()
@@ -173,18 +224,27 @@ def paper_forms(n: int = 10_000, seeds: int = 5) -> list[dict]:
                     ia = np.flatnonzero(a[at:])
                     ib = np.flatnonzero(b[at:])
                     if len(ia):
-                        first_r.append(int(ia[0]) + 1)  # the change row is 1, as in the delay tables
+                        first_r.append(
+                            int(ia[0]) + 1
+                        )  # the change row is 1, as in the delay tables
                     if len(ib):
                         first_p.append(int(ib[0]) + 1)
-            out.append({
-                "form": label, "kind": kind, "river_flags": fr, "paper_flags": fp, "rows_differ": differ,
-                "delay_river": statistics.median(first_r) if first_r else None,
-                "delay_paper": statistics.median(first_p) if first_p else None,
-            })
+            out.append(
+                {
+                    "form": label,
+                    "kind": kind,
+                    "river_flags": fr,
+                    "paper_flags": fp,
+                    "rows_differ": differ,
+                    "delay_river": statistics.median(first_r) if first_r else None,
+                    "delay_paper": statistics.median(first_p) if first_p else None,
+                }
+            )
     return out
 
 
 # KSWIN's p-value: river (scipy's Horner evaluation) against the integer sum rounded once.
+
 
 def kswin_pvalues() -> list[dict]:
     out = []
@@ -205,15 +265,25 @@ def kswin_pvalues() -> list[dict]:
             u = ulps(exact, float(res.pvalue))
             if u > worst:
                 worst, worst_h = u, h
-        crit = min(h for h in range(1, r + 1) if ks_pvalue_equal(r, h) <= 0.005) if r >= 10 else None
-        out.append({"r": r, "max_ulps": worst, "at_h": worst_h, "h_crit(alpha=0.005)": crit,
-                    "size": ks_pvalue_equal(r, crit) if crit else None,
-                    "paper_h_crit": math.floor(r * math.sqrt(-math.log(0.005) / r)) + 1})
+        crit = (
+            min(h for h in range(1, r + 1) if ks_pvalue_equal(r, h) <= 0.005) if r >= 10 else None
+        )
+        out.append(
+            {
+                "r": r,
+                "max_ulps": worst,
+                "at_h": worst_h,
+                "h_crit(alpha=0.005)": crit,
+                "size": ks_pvalue_equal(r, crit) if crit else None,
+                "paper_h_crit": math.floor(r * math.sqrt(-math.log(0.005) / r)) + 1,
+            }
+        )
     return out
 
 
 # ---------------------------------------------------------------------------
 # 3. False alarms and delay over seeds.
+
 
 def _alarm_stats(make, gen, n: int, at: int | None, seeds: int, count_checks=None) -> dict:
     fa = 0
@@ -237,7 +307,9 @@ def _alarm_stats(make, gen, n: int, at: int | None, seeds: int, count_checks=Non
         if at is not None:
             after = np.flatnonzero(flags[at:])
             if len(after):
-                delays.append(int(after[0]) + 1)  # rows after the change, the change row counted as 1
+                delays.append(
+                    int(after[0]) + 1
+                )  # rows after the change, the change row counted as 1
             else:
                 missed += 1
     d = np.array(delays) if delays else np.array([np.nan])
@@ -266,7 +338,13 @@ ALARM_CASES = [
     ("ADWIN delta=0.002, clock=1", lambda: Adwin(clock=1), False, 1.0, _adwin_checks),
     ("ADWIN delta=0.1", lambda: Adwin(delta=0.1), False, 1.0, _adwin_checks),
     ("ADWIN delta=0.002, bits", lambda: Adwin(), True, None, _adwin_checks),
-    ("ADWIN Hoeffding, delta=0.002, bits", lambda: Adwin(bound="hoeffding"), True, None, _adwin_checks),
+    (
+        "ADWIN Hoeffding, delta=0.002, bits",
+        lambda: Adwin(bound="hoeffding"),
+        True,
+        None,
+        _adwin_checks,
+    ),
     ("Page-Hinkley lambda=25", lambda: PageHinkley(threshold=25.0), False, 1.0, None),
     ("Page-Hinkley lambda=50 (default)", lambda: PageHinkley(), False, 1.0, None),
     ("DDM", lambda: DDM(), True, None, None),
@@ -282,6 +360,7 @@ def alarms(seeds: int = 200, n: int = 10_000, labels: list[str] | None = None) -
         if labels and label not in labels:
             continue
         if binary:
+
             def null(s, n=n):
                 return data.binary("none", n, s, p0=0.1)
 
@@ -291,6 +370,7 @@ def alarms(seeds: int = 200, n: int = 10_000, labels: list[str] | None = None) -
             def grad(s, n=n):
                 return data.binary("gradual", n, s, at=at, p0=0.1, p1=0.25, ramp=1000)
         else:
+
             def null(s, n=n):
                 return data.real("none", n, s)
 
@@ -299,6 +379,7 @@ def alarms(seeds: int = 200, n: int = 10_000, labels: list[str] | None = None) -
 
             def grad(s, n=n, size=size):
                 return data.real("gradual", n, s, at=at, size=size, ramp=1000)
+
         t0 = time.time()
         r0 = _alarm_stats(mk, null, n, None, seeds, ck)
         r1 = _alarm_stats(mk, step, n, at, seeds)
@@ -332,16 +413,28 @@ def kswin_size(seeds: int = 200, n: int = 10_000, decimals: int | None = None) -
             alarm_tests += det.tested
     r = 30
     hc = min(h for h in range(1, r + 1) if ks_pvalue_equal(r, h) <= alpha)
-    return {"tests": tests, "rejects": rejects, "rate": rejects / tests, "exact_size": ks_pvalue_equal(r, hc),
-            "alpha": alpha, "decimals": decimals, "alarms": alarms, "alarm_tests": alarm_tests,
-            "alarms_per_row": alarms / (seeds * n)}
+    return {
+        "tests": tests,
+        "rejects": rejects,
+        "rate": rejects / tests,
+        "exact_size": ks_pvalue_equal(r, hc),
+        "alpha": alpha,
+        "decimals": decimals,
+        "alarms": alarms,
+        "alarm_tests": alarm_tests,
+        "alarms_per_row": alarms / (seeds * n),
+    }
 
 
 # ---------------------------------------------------------------------------
 # 4. State size.
 
+
 def adwin_levels_bound(width: float, M: int) -> int:
-    """Most levels a window of ``width`` rows can hold: the top level and ``M - 1`` buckets on each below it."""
+    """Most levels a window of ``width`` rows can hold.
+
+    The top level holds at least one bucket and each level below it at least ``M - 1``.
+    """
     # width >= M 2^(L-1) - (M - 1)  =>  L <= 1 + log2((width + M - 1) / M)
     return 1 + math.floor(math.log2((width + M - 1) / M))
 
@@ -351,16 +444,20 @@ def adwin_bytes(levels: int, M: int, compact: bool = False) -> int:
     return levels * per + 6 * 8
 
 
-def adwin_state(widths=(1_000, 10_000, 100_000, 1_000_000), M: int = 5, seed: int = 0) -> list[dict]:
-    """Grow an ADWIN on a stationary stream and record levels and buckets as the width passes each mark."""
+def adwin_state(
+    widths=(1_000, 10_000, 100_000, 1_000_000), M: int = 5, seed: int = 0
+) -> list[dict]:
+    """Grow an ADWIN on a stationary stream; record levels and buckets at each width mark."""
     out = []
     n = max(widths) + 1
     xs = data.real("none", n, seed)
-    det = Adwin(max_buckets=M, delta=1e-12)  # a tiny delta: no false cut, so the width is the row count
+    det = Adwin(
+        max_buckets=M, delta=1e-12
+    )  # a tiny delta: no false cut, so the width is the row count
     max_lv_seen = 0
     over_bound = 0
     marks = list(widths)
-    for i, x in enumerate(xs):
+    for _i, x in enumerate(xs):
         det.update(float(x))
         lv = len(det.levels)
         if lv > adwin_levels_bound(det.width, M):
@@ -369,13 +466,19 @@ def adwin_state(widths=(1_000, 10_000, 100_000, 1_000_000), M: int = 5, seed: in
         if marks and det.width == marks[0]:
             arr = det.state_arrays()
             counted = sum(a.nbytes for a in arr.values())
-            out.append({
-                "width": int(det.width), "levels": lv, "max_levels_so_far": max_lv_seen,
-                "levels_bound": adwin_levels_bound(det.width, M), "buckets": det.n_buckets(),
-                "bytes_counted": counted, "bytes_formula": adwin_bytes(lv, M),
-                "bytes_bound": adwin_bytes(adwin_levels_bound(det.width, M), M),
-                "rows_over_bound": over_bound,
-            })
+            out.append(
+                {
+                    "width": int(det.width),
+                    "levels": lv,
+                    "max_levels_so_far": max_lv_seen,
+                    "levels_bound": adwin_levels_bound(det.width, M),
+                    "buckets": det.n_buckets(),
+                    "bytes_counted": counted,
+                    "bytes_formula": adwin_bytes(lv, M),
+                    "bytes_bound": adwin_bytes(adwin_levels_bound(det.width, M), M),
+                    "rows_over_bound": over_bound,
+                }
+            )
             marks.pop(0)
     return out
 
@@ -389,8 +492,13 @@ def adwin_capped_state(cap: int, M: int = 5, rows: int = 50_000) -> dict:
         det.update(float(x))
         mx = max(mx, len(det.levels))
         mxw = max(mxw, det.width)
-    return {"cap": cap, "max_levels": mx, "max_width": mxw, "bound": adwin_levels_bound(cap, M),
-            "bytes_bound": adwin_bytes(adwin_levels_bound(cap, M), M)}
+    return {
+        "cap": cap,
+        "max_levels": mx,
+        "max_width": mxw,
+        "bound": adwin_levels_bound(cap, M),
+        "bytes_bound": adwin_bytes(adwin_levels_bound(cap, M), M),
+    }
 
 
 def river_adwin_pickle(width: int) -> int:
@@ -411,19 +519,31 @@ def small_states() -> list[dict]:
     ):
         run(det, s)
         arr = det.state_arrays()
-        rows.append({"detector": label, "bytes": sum(a.nbytes for a in arr.values()), "arrays": {k: a.shape for k, a in arr.items()}})
+        rows.append(
+            {
+                "detector": label,
+                "bytes": sum(a.nbytes for a in arr.values()),
+                "arrays": {k: a.shape for k, a in arr.items()},
+            }
+        )
     for W, r in ((100, 30), (1_000, 30), (10_000, 30)):
         for draw in ("random", "all"):
             det = KSWIN(window_size=W, stat_size=r, draw=draw)
             run(det, data.real("none", W + 5, 0))
             arr = det.state_arrays()
-            rows.append({"detector": f"KSWIN W={W}, r={r}, draw={draw}", "bytes": sum(a.nbytes for a in arr.values()),
-                         "arrays": {k: a.shape for k, a in arr.items()}})
+            rows.append(
+                {
+                    "detector": f"KSWIN W={W}, r={r}, draw={draw}",
+                    "bytes": sum(a.nbytes for a in arr.values()),
+                    "arrays": {k: a.shape for k, a in arr.items()},
+                }
+            )
     return rows
 
 
 # ---------------------------------------------------------------------------
 # 5. Cost.
+
 
 def _time_rows(det, xs) -> float:
     upd = det.update
@@ -452,9 +572,19 @@ def cost(timed: int = 20_000) -> list[dict]:
         for x in fill[:W]:
             rv.update(x)
         t_rv = _time_rows(rv, tail)
-        out.append({"detector": "ADWIN", "W": W, "ours_us": t_ours * 1e6, "ours_clock1_us": t_ours1 * 1e6, "river_us": t_rv * 1e6})
+        out.append(
+            {
+                "detector": "ADWIN",
+                "W": W,
+                "ours_us": t_ours * 1e6,
+                "ours_clock1_us": t_ours1 * 1e6,
+                "river_us": t_rv * 1e6,
+            }
+        )
         for r in (30, W // 10):
-            k = KSWIN(window_size=W, stat_size=r, seed=1, alpha=0.0)  # alpha 0: never flags, every row a test
+            k = KSWIN(
+                window_size=W, stat_size=r, seed=1, alpha=0.0
+            )  # alpha 0: never flags, every row a test
             for x in fill:
                 k.update(x)
             nt = 2_000 if r == 30 else max(100, 200_000 // W)
@@ -465,7 +595,15 @@ def cost(timed: int = 20_000) -> list[dict]:
                 for x in fill:
                     kr.update(x)
                 t_kr = _time_rows(kr, tail[:nt])
-            out.append({"detector": f"KSWIN r={r}", "W": W, "ours_us": t_k * 1e6, "ours_clock1_us": None, "river_us": t_kr * 1e6})
+            out.append(
+                {
+                    "detector": f"KSWIN r={r}",
+                    "W": W,
+                    "ours_us": t_k * 1e6,
+                    "ours_clock1_us": None,
+                    "river_us": t_kr * 1e6,
+                }
+            )
     xs = [float(v) for v in data.real("none", timed, 3)]
     bs = [float(v) for v in data.binary("none", timed, 3)]
     for label, ours, theirs, s, conv in (
@@ -476,7 +614,15 @@ def cost(timed: int = 20_000) -> list[dict]:
         t_o = _time_rows(ours, s)
         sc = [conv(v) for v in s]
         t_r = _time_rows(theirs, sc)
-        out.append({"detector": label, "W": None, "ours_us": t_o * 1e6, "ours_clock1_us": None, "river_us": t_r * 1e6})
+        out.append(
+            {
+                "detector": label,
+                "W": None,
+                "ours_us": t_o * 1e6,
+                "ours_clock1_us": None,
+                "river_us": t_r * 1e6,
+            }
+        )
     return out
 
 
@@ -485,7 +631,11 @@ def cost(timed: int = 20_000) -> list[dict]:
 
 FACTORIES = {
     "ADWIN": (lambda: Adwin(), lambda: rdrift.ADWIN(), False),
-    "Page-Hinkley": (lambda: PageHinkley(threshold=25.0), lambda: rdrift.PageHinkley(threshold=25.0), False),
+    "Page-Hinkley": (
+        lambda: PageHinkley(threshold=25.0),
+        lambda: rdrift.PageHinkley(threshold=25.0),
+        False,
+    ),
     "DDM": (lambda: DDM(), lambda: rbinary.DDM(), True),
     "EDDM": (lambda: EDDM(), lambda: rbinary.EDDM(), True),
     "KSWIN": (lambda: KSWIN(seed=5), lambda: rdrift.KSWIN(seed=5), False),
@@ -493,7 +643,7 @@ FACTORIES = {
 
 
 def zero_weights(n: int = 20_000, seed: int = 4) -> list[dict]:
-    """Ours with zero-weight rows (the first among them) against river on the stream without them."""
+    """With zero-weight rows (the first among them) against river on the stream without them."""
     out = []
     w = data.weights(n, seed)
     for label, (mk, mkr, binary) in FACTORIES.items():
@@ -501,7 +651,7 @@ def zero_weights(n: int = 20_000, seed: int = 4) -> list[dict]:
         det = mk()
         flags = np.zeros(n, dtype=bool)
         state_moved = 0
-        for i, (x, wi) in enumerate(zip(xs, w)):
+        for i, (x, wi) in enumerate(zip(xs, w, strict=False)):
             if wi == 0.0:
                 before = pickle.dumps(det.save())
             flags[i] = det.update(float(x), float(wi))
@@ -516,46 +666,58 @@ def zero_weights(n: int = 20_000, seed: int = 4) -> list[dict]:
                 r.update(bool(x) if binary else float(x))
                 rf.append(r.drift_detected)
         rf = np.array(rf)
-        out.append({
-            "detector": label, "rows": n, "zero_rows": int((~keep).sum()), "first_row_zero": bool(w[0] == 0.0),
-            "flags": int(flags.sum()), "kept_rows_differ": int((flags[keep] != rf).sum()),
-            "zero_rows_flagged": int(flags[~keep].sum()), "zero_rows_moving_state": state_moved,
-        })
+        out.append(
+            {
+                "detector": label,
+                "rows": n,
+                "zero_rows": int((~keep).sum()),
+                "first_row_zero": bool(w[0] == 0.0),
+                "flags": int(flags.sum()),
+                "kept_rows_differ": int((flags[keep] != rf).sum()),
+                "zero_rows_flagged": int(flags[~keep].sum()),
+                "zero_rows_moving_state": state_moved,
+            }
+        )
     return out
 
 
 def chunks(n: int = 20_000, seed: int = 6) -> list[dict]:
-    """One pass against random chunks with a save and a load into a fresh detector at every boundary."""
+    """One pass against random chunks, saved and loaded into a fresh detector at every boundary."""
     out = []
     rng = random.Random(seed)
     w = data.weights(n, seed, frac_zero=0.05)
     for label, (mk, _, binary) in FACTORIES.items():
         xs = stream_for("step", binary, n, seed)
         one = mk()
-        f1 = np.array([one.update(float(x), float(wi)) for x, wi in zip(xs, w)])
+        f1 = np.array([one.update(float(x), float(wi)) for x, wi in zip(xs, w, strict=False)])
         bounds = sorted(set(rng.sample(range(1, n), 200)))
         det = mk()
         f2 = []
         prev = 0
         n_chunks = 0
         for b in bounds + [n]:
-            for x, wi in zip(xs[prev:b], w[prev:b]):
+            for x, wi in zip(xs[prev:b], w[prev:b], strict=False):
                 f2.append(det.update(float(x), float(wi)))
             s = pickle.loads(pickle.dumps(det.save()))
             det = mk()
             det.load(s)
             prev = b
             n_chunks += 1
-        out.append({
-            "detector": label, "chunks": n_chunks, "flags": int(f1.sum()),
-            "rows_differ": int((f1 != np.array(f2)).sum()),
-            "final_state_equal": pickle.dumps(one.save()) == pickle.dumps(det.save()),
-        })
+        out.append(
+            {
+                "detector": label,
+                "chunks": n_chunks,
+                "flags": int(f1.sum()),
+                "rows_differ": int((f1 != np.array(f2)).sum()),
+                "final_state_equal": pickle.dumps(one.save()) == pickle.dumps(det.save()),
+            }
+        )
     return out
 
 
 # ---------------------------------------------------------------------------
 # 8. Numerical risk.
+
 
 def _window_exact(xs: list[float]) -> tuple[Fraction, Fraction]:
     s = sum(Fraction(x) for x in xs)
@@ -566,7 +728,10 @@ def _window_exact(xs: list[float]) -> tuple[Fraction, Fraction]:
 
 
 def adwin_drift_of_sums(offset: float, cap: int, rows: int, seed: int = 8) -> dict:
-    """ADWIN's running total and sum of squares against exact rationals over its window (a suffix of the stream)."""
+    """ADWIN's running total and sum of squares against exact rationals over its window.
+
+    The window is always a suffix of the stream (cuts and the cap drop the oldest rows).
+    """
     xs = [float(v) for v in data.real("none", rows, seed) + offset]
     det = Adwin(max_width=cap, delta=1e-12)
     for x in xs:
@@ -574,7 +739,10 @@ def adwin_drift_of_sums(offset: float, cap: int, rows: int, seed: int = 8) -> di
     w = int(det.width)
     s, v = _window_exact(xs[-w:])
     return {
-        "offset": offset, "cap": cap, "rows": rows, "width": w,
+        "offset": offset,
+        "cap": cap,
+        "rows": rows,
+        "width": w,
         "total_abs": float(abs(Fraction(det.total) - s)),
         "total_rel": float(abs(Fraction(det.total) - s) / abs(s)),
         "var_rel": float(abs(Fraction(det.var) - v) / v),
@@ -583,7 +751,7 @@ def adwin_drift_of_sums(offset: float, cap: int, rows: int, seed: int = 8) -> di
 
 
 def mean_forms(rows: int, offset: float, seed: int = 9) -> dict:
-    """The running mean as river keeps it, ``m += (x - m)/n``, and as ``sum/n``, against the exact mean.
+    """The running mean as river keeps it, ``m += (x - m)/n``, and as ``sum/n``, against exact.
 
     The reference is ``fsum`` of the prefix (the sum correctly rounded) divided in rationals and
     rounded: within one ulp of the exact mean, so gaps of a few ulps are at the reference's
@@ -631,7 +799,13 @@ def ph_sum_error(rows: int, seed: int = 10, alpha: float = 1.0) -> dict:
         if k in (10**3, 10**4, 10**5, 10**6) or k == rows:
             ref = math.fsum(devs + [-det.delta] * k) if alpha == 1.0 else float(ld)
             worst = max(worst, abs(det.s_inc - ref))
-    return {"rows": rows, "alpha": alpha, "final_m": det.s_inc, "worst_abs": worst, "rel_to_final": worst / abs(det.s_inc)}
+    return {
+        "rows": rows,
+        "alpha": alpha,
+        "final_m": det.s_inc,
+        "worst_abs": worst,
+        "rel_to_final": worst / abs(det.s_inc),
+    }
 
 
 def ddm_count_vs_recursive(rows: int = 1_000_000, seed: int = 12) -> dict:
@@ -650,8 +824,13 @@ def ddm_count_vs_recursive(rows: int = 1_000_000, seed: int = 12) -> dict:
 
 # The ADWIN delay the bound implies for a step at an exact split.
 
-def adwin_n1(delta: float, n0: int, dmu: float, sd0: float, bound: str, factor: float, L: float = 5.0) -> int:
-    """Smallest ``n1`` with ``|dmu| > factor * eps_cut`` for a split at the change (``n0`` rows before it).
+
+def adwin_n1(
+    delta: float, n0: int, dmu: float, sd0: float, bound: str, factor: float, L: float = 5.0
+) -> int:
+    """Smallest ``n1`` with ``|dmu| > factor * eps_cut`` at a split on the change.
+
+    ``n0`` rows precede the change.
 
     ``factor = 2`` is Theorem 3.1's false-negative statement (the window shrinks with probability at
     least ``1 - delta``); ``factor = 1`` is where the statistic's expected value first crosses the
@@ -676,6 +855,7 @@ def adwin_n1(delta: float, n0: int, dmu: float, sd0: float, bound: str, factor: 
 
 # How close ADWIN's cut test comes to a tie: a libm ``ln`` a few ulps off could flip only a test
 # whose margin is that small.
+
 
 class _MarginAdwin(Adwin):
     def __init__(self, **kw) -> None:
