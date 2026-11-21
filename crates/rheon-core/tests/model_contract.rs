@@ -992,6 +992,112 @@ fn ew_class_cfg() -> EwClassCfg {
     }
 }
 
+/// 60 rows a clock unit apart, each model's `n_eff` accessor read before
+/// every row against the `n_eff` that row's step reports; the last row's.
+fn accessor_is_the_step<M: OnlineModel>(
+    mut m: M,
+    targets: usize,
+    n_eff_of: &dyn Fn(&M) -> f64,
+) -> f64 {
+    let kind = m.state().model.kind();
+    let mut s = 20261121u64;
+    let mut last = 0.0;
+    for i in 0..60 {
+        let x: Vec<f64> = (0..K).map(|_| lcg(&mut s)).collect();
+        let y: Vec<Option<f64>> = (0..targets)
+            .map(|j| Some(j as f64 + x[0] - 0.5 * x[1]))
+            .collect();
+        let before = n_eff_of(&m);
+        let step = m.step(&x, &y, if i == 0 { 0.0 } else { 1.0 }, 1.0);
+        assert!(
+            (before - step.n_eff).abs() < 1e-12,
+            "{kind}, row {i}: the accessor said {before}, the step reported {}",
+            step.n_eff
+        );
+        last = step.n_eff;
+    }
+    last
+}
+
+/// Rule 8 under a window, for every model that keeps one: `n_eff` is the
+/// weight inside the window in the accessor as in the field the step
+/// emits (review S10: `Lasso::n_eff` reading the whole decayed weight
+/// passed every test, the contract running `lasso` unwindowed only). Each
+/// windowed run's weight is under the unwindowed run's, so the window acts.
+#[test]
+fn the_n_eff_accessor_is_the_steps_under_a_window() {
+    const WINDOW: f64 = 10.0;
+    let pair = |name: &str, windowed: f64, whole: f64| {
+        assert!(
+            windowed < whole - 1.0,
+            "{name}: the window held {windowed}, the whole stream {whole}: no window acted"
+        );
+    };
+    let ewridge = |window| {
+        EwRidge::new(EwRidgeCfg {
+            window,
+            ..ewridge_cfg()
+        })
+        .unwrap()
+    };
+    pair(
+        "ewridge",
+        accessor_is_the_step(ewridge(Some(WINDOW)), 2, &EwRidge::n_eff),
+        accessor_is_the_step(ewridge(None), 2, &EwRidge::n_eff),
+    );
+    let lasso = |window| {
+        Lasso::new(LassoCfg {
+            window,
+            ..lasso_cfg()
+        })
+        .unwrap()
+    };
+    pair(
+        "lasso",
+        accessor_is_the_step(lasso(Some(WINDOW)), 1, &Lasso::n_eff),
+        accessor_is_the_step(lasso(None), 1, &Lasso::n_eff),
+    );
+    let ew_class = |window| {
+        EwClass::new(EwClassCfg {
+            window,
+            ..ew_class_cfg()
+        })
+        .unwrap()
+    };
+    pair(
+        "ew_class",
+        accessor_is_the_step(ew_class(Some(WINDOW)), 0, &EwClass::n_eff),
+        accessor_is_the_step(ew_class(None), 0, &EwClass::n_eff),
+    );
+    let ew_cov = |window| {
+        // A hard window cuts no lagged co-moments, so it runs without lags.
+        EwCovModel::new(EwCovCfg {
+            window,
+            stats: vec![EwCovStat::Mean, EwCovStat::Var, EwCovStat::Corr],
+            lags: vec![],
+            ..ew_cov_model_cfg()
+        })
+        .unwrap()
+    };
+    pair(
+        "ew_cov",
+        accessor_is_the_step(ew_cov(Some(WINDOW)), 0, &EwCovModel::n_eff),
+        accessor_is_the_step(ew_cov(None), 0, &EwCovModel::n_eff),
+    );
+    let marginal = |window| {
+        Marginal::new(MarginalCfg {
+            window,
+            ..marginal_cfg()
+        })
+        .unwrap()
+    };
+    pair(
+        "marginal",
+        accessor_is_the_step(marginal(Some(WINDOW)), 2, &Marginal::n_eff),
+        accessor_is_the_step(marginal(None), 2, &Marginal::n_eff),
+    );
+}
+
 #[test]
 fn ew_class() {
     for covariance in [Covariance::Full, Covariance::Shared, Covariance::Diagonal] {
