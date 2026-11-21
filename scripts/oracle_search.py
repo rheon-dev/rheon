@@ -22,6 +22,8 @@ def check(fn):
 
 
 def ver(dist: str) -> str:
+    if dist.startswith("R "):
+        return ""
     try:
         return metadata.version(dist)
     except metadata.PackageNotFoundError:
@@ -639,6 +641,73 @@ def nb_hazard_candidate():
     got = nb(k, p, torch.arange(400)).numpy().astype(float)
     d = np.array([stats.nbinom.pmf(x + 1 - k, k, p) / stats.nbinom.sf(x - k, k, p) if x + 1 >= k else 0.0 for x in r])
     report("523", "negative-binomial run-length hazard", "bayesian-changepoint-detection", {"max |hazard - definition| (float32 output)": float(np.max(np.abs(got - d)))}, "k=3, p=0.02, run lengths 0..399; installed from GitHub master with torch")
+
+
+RLIB = "/home/user/Rlib"
+
+
+def run_r(code: str, **arrays) -> dict:
+    """Run R code (Rscript) with numeric vectors passed through a temp dir; the code prints `name value` lines."""
+    import os
+    import subprocess
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        pre = f'.libPaths(c("{RLIB}", .libPaths())); suppressMessages(library(xts))\n'
+        for k, v in arrays.items():
+            np.savetxt(os.path.join(d, k + ".txt"), np.asarray(v), fmt="%.17g")
+            pre += f'{k} <- scan("{d}/{k}.txt", quiet=TRUE)\n'
+        pre += 'f <- function(nm, v) cat(sprintf("%s %.17g\\n", nm, as.numeric(v)))\n'
+        res = subprocess.run(["Rscript", "-e", pre + code], capture_output=True, text=True)
+    out = {}
+    for line in res.stdout.splitlines():
+        parts = line.split()
+        if len(parts) == 2:
+            try:
+                out[parts[0]] = float(parts[1])
+            except ValueError:
+                pass
+    if not out:
+        raise RuntimeError("R produced no result: " + res.stderr[-300:])
+    return out
+
+
+def rver(pkg):
+    import subprocess
+
+    r = subprocess.run(["Rscript", "-e", f'.libPaths(c("{RLIB}", .libPaths())); cat(as.character(packageVersion("{pkg}")))'], capture_output=True, text=True)
+    return r.stdout.strip() or "?"
+
+
+@check
+def r_highfrequency():
+    rng = np.random.default_rng(1)
+    r = rng.standard_normal(500) * 1e-3
+    code = """
+n <- length(r); idx <- as.POSIXct("2020-01-02 09:30:00", tz="UTC") + (0:(n-1))*5
+x <- xts(r, idx); p <- xts(exp(cumsum(r)), idx)
+suppressMessages(library(highfrequency))
+f("RV", rRVar(x)); f("BPV", rBPCov(x)); f("MedRV", rMedRVar(x)); f("TPQ", rTPQuar(x))
+for (H in c(3,8)) f(paste0("RK",H), rKernelCov(x, kernelType="parzen", kernelParam=H, kernelDOFadj=FALSE))
+f("TSRV7", rTSCov(p, K=7, J=1))
+"""
+    R = run_r(code, r=r)
+    lr = r[1:]  # R's returns from the 500 prices are the last 499 increments
+    n = len(lr)
+    nbar = (n - 7 + 1) / 7
+    g = lambda h: float(np.sum(r[h:] * r[: len(r) - h]))
+    rk = lambda H: g(0) + 2 * sum(parzen((h - 1) / H) * g(h) for h in range(1, H + 1))
+    out = {
+        "RV": rel(R["RV"], rv_def(r)),
+        "BPV": rel(R["BPV"], bpv_def(r)),
+        "MedRV": rel(R["MedRV"], medrv_def(r)),
+        "TPQ (BNS 2006 with n/(n-2))": rel(R["TPQ"], tpq_def(r)),
+        "Parzen RK H=3, k((h-1)/H), dof off": rel(R["RK3"], rk(3)),
+        "Parzen RK H=8, k((h-1)/H), dof off": rel(R["RK8"], rk(8)),
+        "TSRV K=7 against the plain ZMA formula": rel(R["TSRV7"], tsrv_def(lr, 7)),
+        "TSRV K=7 against the ZMA formula / (1 - nbar/n)": rel(R["TSRV7"], tsrv_def(lr, 7) / (1 - nbar / n)),
+    }
+    report("499", "RV, BPV, MedRV, TPQ, Parzen RK, TSRV", f"R highfrequency {rver('highfrequency')} (GPL)", out, "500 returns / 500 prices; rel. gap to the definitions")
 
 
 def main(argv):
