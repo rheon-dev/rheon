@@ -32,7 +32,9 @@ HL = 100.0
 
 def stream(n: int = 700, seed: int = 0) -> pl.DataFrame:
     """Nulls, zero weights, a gap of five half-lives and a session change:
-    everything a held row has to carry into the merge."""
+    everything a held row has to carry into the merge. A row of weight 0 is
+    no row of the model's (hard rule 9), so the first 105 rows are 100 of
+    its, four into a block of 16."""
     rng = np.random.default_rng(seed)
     X = rng.standard_normal((n, K))
     y = X @ np.linspace(1.0, -1.0, K) + 0.5 + 0.1 * rng.standard_normal(n)
@@ -182,14 +184,14 @@ def test_a_save_mid_block_resumes_bit_for_bit(tmp_path):
     df = stream()
     whole, _ = run(df, 16)
     a = rp.ModelBank([spec(16)])
-    a.fit_predict(df.slice(0, 101))
+    a.fit_predict(df.slice(0, 105))
     assert ridge_state(a)["acc"]["grams"]["grams"][0]["pending"]["lam"], (
-        "row 101 should sit mid-block"
+        "row 105 should sit mid-block"
     )
     a.save(tmp_path / "blocked.state")
     b = rp.ModelBank.load(tmp_path / "blocked.state")
-    rest = fields(b.fit_predict(df.slice(101)))
-    assert rest.equals(whole.slice(101), null_equal=True)
+    rest = fields(b.fit_predict(df.slice(105)))
+    assert rest.equals(whole.slice(105), null_equal=True)
 
 
 class _Raw(bytes):
@@ -334,7 +336,7 @@ def test_a_state_written_before_the_field_loads_with_blocking_off(tmp_path):
     two apart -- loads, continues to the bit as the unblocked model, and
     re-saves carrying the key."""
     df = stream()
-    head, rest = df.slice(0, 101), df.slice(101)
+    head, rest = df.slice(0, 105), df.slice(105)
     whole, _ = run(df, None)
     _, bank = run(head, None)
     bank.save(tmp_path / "now.state")
@@ -356,7 +358,7 @@ def test_a_state_written_before_the_field_loads_with_blocking_off(tmp_path):
     (tmp_path / "before.state").write_bytes(before)
     old = rp.ModelBank.load(tmp_path / "before.state")
     assert old.specs[0]["model"].get("gram_block_rows") is None
-    assert fields(old.fit_predict(rest)).equals(whole.slice(101), null_equal=True)
+    assert fields(old.fit_predict(rest)).equals(whole.slice(105), null_equal=True)
     old.save(tmp_path / "again.state")
     assert b"gram_block_rows" in (tmp_path / "again.state").read_bytes()
 
@@ -365,7 +367,7 @@ def test_the_held_rows_are_in_the_json_and_legible():
     """A state saved mid-block carries the rows the matrix has not seen, as a
     `pending` block a reader can recognise; an unblocked fit carries nothing."""
     df = stream()
-    _, blocked = run(df.slice(0, 101), 16)
+    _, blocked = run(df.slice(0, 105), 16)
     held = ridge_state(blocked)["acc"]["grams"]["grams"][0]["pending"]
     assert held["block_rows"] == 16
     n = len(held["lam"])
@@ -373,7 +375,7 @@ def test_the_held_rows_are_in_the_json_and_legible():
     assert len(held["w"]) == n
     assert len(held["x"]) == n * (K + 1), "one z row per held row, the intercept slot included"
     assert held["w_open"] > 0
-    _, plain = run(df.slice(0, 101), 0)
+    _, plain = run(df.slice(0, 105), 0)
     assert "pending" not in ridge_state(plain)["acc"]["grams"]["grams"][0]
 
 
@@ -382,7 +384,7 @@ def test_gram_mid_block_reads_the_held_rows_and_moves_nothing():
     the unblocked model has at that row -- and reading it does not merge the
     model's own block: the stream after the read is the stream without it."""
     df = stream()
-    head, rest = df.slice(0, 101), df.slice(101)
+    head, rest = df.slice(0, 105), df.slice(105)
     _, plain = run(head, 0)
     _, read = run(head, 16)
     _, unread = run(head, 16)
@@ -402,11 +404,11 @@ def test_scoring_mid_block_is_the_plain_model_s_and_moves_nothing():
     for the block, so it scores as the per-row model does -- and, learning
     nothing, it leaves the held rows exactly where they were."""
     df = stream()
-    head, rest = df.slice(0, 101), df.slice(101)
+    head, rest = df.slice(0, 105), df.slice(105)
     _, plain = run(head, 0)
     _, blocked = run(head, 16)
     assert ridge_state(blocked)["acc"]["grams"]["grams"][0]["pending"]["lam"], (
-        "row 101 should sit mid-block"
+        "row 105 should sit mid-block"
     )
     before = blocked.save_bytes()
     assert_same_fit(fields(plain.predict(rest)), fields(blocked.predict(rest)))

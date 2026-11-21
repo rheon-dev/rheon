@@ -106,6 +106,47 @@ model that only the new build has is listed as an addition and passes.
 
 ### Changed
 
+- **A row of weight 0 counts in no clock, on every model** (hard rule 9;
+  the user, 2026-11-21: "the next row should decay as if they were not
+  present"). Such a row is still predicted, as `predict` predicts it from
+  the rows before it, but no model sees it: the next row steps from the
+  last row that weighed more than 0, so it is one step on a row clock, one
+  gap under `gap_cap`, and one session change or step back for the session
+  and step-back rules; no model, window, diagnostic, readiness wait, `coef`
+  cadence or row held under `embargo` or `label_clock` counts it, and
+  `weight_sum` does not decay over it. Before, the row was stepped at
+  weight 0 and every memory decayed over its step, which moved every later
+  row of every model that decays: on a row clock by a step of its own, on
+  a time clock by the rounding of `λ^a·λ^b` against `λ^(a+b)` where no cap,
+  session or window intervened, and by a whole capped step where one did.
+  A zero-weight row that steps back is no longer refused or restarted on,
+  and one at a session change takes no session's rule. Under `embargo` and
+  `label_clock` it releases the held rows whose wait it has seen out before
+  it is scored, and is held for nothing and counts in no `max_held_rows` or
+  `labels_missing`, where it was held and learned as a step. Without
+  `coef_every`, `coef` sits on the chunk's last row of positive weight. The
+  data summary still counts the row (`rows_processed`, `rows_zero_weight`,
+  the clock's range), and the window formula kinds, which take no weights,
+  read every row as Polars' `ewm_mean_by` and `rolling_*_by` do. `audit`
+  counts nothing of such a row, its clock step included, and `hawkes`
+  keeps no carry of its own (its state is 8 bytes shorter). Measured by
+  `scripts/compare_outputs.py` against the build before (arm64, polars
+  2.0.0; 20 kinds, 8,000 rows, 3 groups, chunks of 700, gaps past the cap,
+  a save and load): a stream with no row of weight 0 moves 0 ulps on every
+  field; with 0.5% of the rows at weight 0, each fit field moves where it
+  moves by a median 2 to 8 ulps and at most 5.8e-11 relative (`huber`), and
+  `weight_sum` and `settled_frac` by up to 0.15 relative where a zero-weight
+  row sat in a gap past the cap; `ewridge` and `rls` on the smoke stream by
+  up to 1.1e-2 and 7.8e-2. On a row clock the moves are of the order of the
+  weights themselves. A state saved by an earlier build after rows of
+  weight 0 loads and goes on under the new rule, from the clock those rows
+  left (rule 5's twenty-fifth exception: on a time clock its fits within
+  3.4e-15 of a fresh run and `weight_sum` within 0.30, on a row clock its
+  fits within 0.31). Moves: `bocpd.*`, `corrchange.*`, `deco.*`,
+  `ew_class.*`, `ew_cov.*`, `ewridge.*`, `ftrl.*`, `glm.*`, `hawkes.*`,
+  `hmm.*`, `holt.*`, `huber.*`, `kalman.*`, `kmeans.*`, `lasso.*`,
+  `marginal.*`, `micro.*`, `pa.*`, `quantile.*`, `rcov.*`, `rls.*`,
+  `sgd.*`.
 - **`hmm` under `covariance_type` `"full"` and `"diag"`, in a model that
   learns, forgets each state's covariance toward a prior,** where it kept a
   ridge that decayed with the state's data (stabilized forgetting, Kulhavý
@@ -146,23 +187,16 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
-- **Under `label_clock`, a row of weight 0 is held and learned at its label
-  time** (review P1), as `embargo` learns it: a step of the clock that
-  teaches nothing. It was scored and never held, so the clock of the labels
-  learned stepped over it, and the steps either side of it were one step,
-  capped once by `gap_cap` where `embargo` caps each; a zero-weight first
-  row did not start that clock. `embargo = d` and a label time of
-  `clock + d` now give the same numbers with zero weights, as they are
-  documented to. Likewise a stream whose first row is skipped (a null
-  feature) starts the clock of the labels learned at that row's label time,
+- **Under `label_clock`, a row of weight 0 steps the clock as under
+  `embargo`** (review P1; the step itself was taken away again by the
+  entry above, under which such a row counts in no clock under either).
+  `embargo = d` and a label time of `clock + d` now give the same numbers
+  with zero weights, as they are documented to. Likewise a stream whose
+  first row is skipped (a null feature) starts the clock of the labels
+  learned at that row's label time,
   as it starts `embargo`'s at its clock, so the first label learned steps
-  from it as under `embargo` (`rls`'s prior decayed over no step). A row
-  of weight 0 with a label time now counts against `max_held_rows`: under
-  `held_overflow="refuse"` a stream of many such rows can be refused where
-  it passed, under `"drop_oldest"` one can be dropped and counted in
-  `labels_dropped`, and `conformal_rate="auto"` counts it among the rows
-  waiting. To keep a row that is only to be predicted out of the held rows,
-  give it a null label time. Measured by `scripts/compare_outputs.py`
+  from it as under `embargo` (`rls`'s prior decayed over no step).
+  Measured by `scripts/compare_outputs.py`
   against the build before (arm64, polars 2.0.0; 12 models, 1 to 200
   groups, chunks of 7 to a whole stream, gaps, nulls, a save and load):
   outputs move only for weighted specs under `label_clock` whose stream has
@@ -192,8 +226,7 @@ model that only the new build has is listed as an addition and passes.
   `ew_class.p_*`, `ew_class.class`, `ew_class.coef`,
   `ew_class.weight_sum`, `ew_class.withheld_reason`.
 - **`audit` learns nothing from a row of weight 0** (hard rule 9; the
-  user's decision of 2026-11-21). Such a row advances the clock, and its
-  step is counted with the clock's as every row's is, but its values reach
+  user's decision of 2026-11-21). Such a row's values reach
   no count, moment, distinct-value counter, run, lag or pair, so every
   column and pair reads as the stream with that row left out; until now its
   values were counted like any other's. A bank's `audit` takes no `weight`

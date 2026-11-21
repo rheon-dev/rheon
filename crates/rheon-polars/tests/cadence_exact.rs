@@ -226,9 +226,19 @@ fn events(out: &DataFrame, event: Event) -> Vec<usize> {
                     })
                 })
                 .collect();
-            (0..coef.len())
-                .filter(|&i| coef[i].is_some() && (i == 0 || coef[i] != coef[i - 1]))
-                .collect()
+            // Against the last row that carries one: a row of weight 0
+            // carries no `coef` (hard rule 9).
+            let mut last: Option<&Vec<u64>> = None;
+            let mut fired = Vec::new();
+            for (i, c) in coef.iter().enumerate() {
+                if let Some(c) = c {
+                    if last != Some(c) {
+                        fired.push(i);
+                    }
+                    last = Some(c);
+                }
+            }
+            fired
         }
         Event::Loadings => {
             let cols: Vec<Vec<Option<u64>>> = ["pc0_loading_x", "pc0_loading_x2"]

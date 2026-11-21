@@ -698,23 +698,21 @@ class TestEdgeCases:
         for i in range(1, 400):
             assert out["cluster"][i] in labels_after[i - 1]
 
-    def test_a_zero_weight_row_advances_the_clock_and_learns_nothing(self):
+    def test_a_zero_weight_row_counts_in_no_clock_and_learns_nothing(self):
         X, _ = blobs(n=300, k=1, seed=22, scale=0.5)
-        df = frame(X).with_columns(w=pl.Series([0.0 if i in (0, 150) else 1.0 for i in range(300)]))
+        w = pl.Series([0.0 if i in (0, 150) else 1.0 for i in range(300)])
+        df = frame(X).with_columns(w=w)
         s = spec(eps=0.5, half_life=50.0, min_weight=1.0, weight="w", coef_every=1)
         out = unnested(rp.ModelBank([s]).fit_predict(df))
+        without = unnested(rp.ModelBank([s]).fit_predict(df.filter(w > 0.0)))
+        # Every row of weight 1 is the stream's without the rows of weight 0,
+        # to the bit (hard rule 9), and the next row decays as if row 150
+        # were not there: its weight is row 150's, read before either row.
+        assert out.filter(w > 0.0).equals(without)
         assert out["weight_sum"][1] == 0.0
-        # Tolerances on the weights (task 252 (b)): libm, Python's `pow`
-        # against the bank's `exp2`.
-        lam = 0.5 ** (1 / 50)
-        assert out["weight_sum"][151] == pytest.approx(out["weight_sum"][150] * lam, rel=1e-12)
-        # The summaries after row 150 are those after row 149, decayed once.
-        before = np.array(out["coef"][149]).reshape(-1, 6)
-        after = np.array(out["coef"][150]).reshape(-1, 6)
-        assert after[:, 0].tolist() == before[:, 0].tolist()
-        assert after[:, 2] == pytest.approx(before[:, 2] * lam, rel=1e-12)
-        # Exact (task 252 (b)): a decay moves no radius and no centre.
-        assert after[:, 3:].tolist() == before[:, 3:].tolist()
+        assert out["weight_sum"][151] == out["weight_sum"][150]
+        # A row of weight 0 carries no `coef`: it is no row of the cadence.
+        assert out["coef"][150] is None
         assert out["n_micro"][151] == out["n_micro"][150]
 
     def test_a_null_feature_row_is_skipped_and_the_clock_still_runs(self):
@@ -1166,19 +1164,21 @@ class TestTheCheckpointClock:
     @staticmethod
     def quiet_spell():
         """Two blobs a second apart for 300 rows, then two hours of rows of
-        weight zero a minute apart: the summaries fade, and nothing learned
-        arrives to count."""
+        weight zero a minute apart, which count in no clock (hard rule 9),
+        and two rows of weight 1 at the spell's end, the first of which
+        steps over the whole spell: the summaries fade, and next to nothing
+        learned arrives to count."""
         rng = np.random.default_rng(5)
         n, quiet = 300, 120
         centres = np.array([[0.0, 0.0], [3.0, 3.0]])
         X = centres[rng.integers(0, 2, n)] + 0.1 * rng.standard_normal((n, 2))
-        X = np.vstack([X, np.full((quiet, 2), 1.5)])
+        X = np.vstack([X, np.full((quiet + 1, 2), 1.5)])
         t0 = datetime(2024, 1, 2, 9, 30)
         ts = [t0 + timedelta(seconds=i) for i in range(n)]
         ts += [ts[-1] + timedelta(minutes=j + 1) for j in range(quiet)]
-        return pl.DataFrame(
-            {"ts": ts, "x0": X[:, 0], "x1": X[:, 1], "w": [1.0] * n + [0.0] * quiet}
-        )
+        ts += [ts[-1] + timedelta(seconds=1)]
+        w = [1.0] * n + [0.0] * (quiet - 1) + [1.0, 1.0]
+        return pl.DataFrame({"ts": ts, "x0": X[:, 0], "x1": X[:, 1], "w": w})
 
     @staticmethod
     def clocked(**kw):
@@ -1191,8 +1191,11 @@ class TestTheCheckpointClock:
         by_rows = unnested(rp.ModelBank([self.clocked()]).fit_predict(df))
         by_clock = unnested(rp.ModelBank([self.clocked(prune_every="5m")]).fit_predict(df))
         assert by_rows["n_micro"][299] >= 2 and by_clock["n_micro"][299] >= 2
-        # Learned rows alone never checkpoint again; the clock prunes the
-        # faded summaries within the spell.
+        # The rows of weight 0 move no clock, so nothing prunes during the
+        # spell; at its end, learned rows alone never checkpoint again, and
+        # the clock, stepped over the spell by the first row of weight 1,
+        # prunes the faded summaries.
+        assert by_clock["n_micro"][-3] == by_clock["n_micro"][300]
         assert by_rows["n_micro"][-1] == by_rows["n_micro"][300]
         assert by_clock["n_micro"][-1] == 0, by_clock["n_micro"].to_list()[300:]
 
@@ -1384,13 +1387,13 @@ class TestThePruneSchedule:
         assert self.checkpoints(df, prune_every=7) == [6, 13, 20, 27]
         assert self.checkpoints(df, max_rows_between_prunes=7) == [6, 13, 20, 27]
         assert self.checkpoints(df, prune_every=7, max_rows_between_prunes=7) == [6, 13, 20, 27]
-        # A zero-weight row in front is a row of the clock and none of the
-        # cap: the clock's first checkpoint comes a row before the cap's,
-        # and both then keep the same spacing.
+        # A zero-weight row in front is no row of the clock nor of the cap
+        # (hard rule 9): every checkpoint comes a row later, as the stream
+        # without it.
         lead = self.stream(n=30, lead=True)
-        assert self.checkpoints(lead, prune_every=7) == [6, 13, 20, 27]
+        assert self.checkpoints(lead, prune_every=7) == [7, 14, 21, 28]
         assert self.checkpoints(lead, max_rows_between_prunes=7) == [7, 14, 21, 28]
-        assert self.checkpoints(lead, prune_every=7, max_rows_between_prunes=7) == [6, 13, 20, 27]
+        assert self.checkpoints(lead, prune_every=7, max_rows_between_prunes=7) == [7, 14, 21, 28]
 
     def test_on_the_row_clock_prune_every_is_its_row_cap(self):
         df = self.stream()
@@ -1401,22 +1404,18 @@ class TestThePruneSchedule:
         # So prune_every=100 is the default, every 100 learned rows.
         assert _differ(self.run(df, prune_every=100), self.run(df)) == []
 
-    def test_a_leading_zero_weight_row_is_a_row_of_the_clock_alone(self):
+    def test_a_leading_zero_weight_row_counts_in_no_clock(self):
         plain, lead = self.stream(), self.stream(lead=True)
-        for n in (7, 100):
-            # On the cap, the stream with it is the stream without it, on
-            # the learned rows: the zero-weight row learns nothing and is no
-            # row of the cap. It is one clock unit of age, which
-            # `settled_frac` alone reads.
-            assert _differ(
-                self.run(plain, max_rows_between_prunes=n),
-                self.run(lead, max_rows_between_prunes=n).slice(1),
-            ) == ["settled_frac"], n
-            # On the clock it moves every checkpoint a row earlier.
-            moved = _differ(
-                self.run(lead, prune_every=n), self.run(lead, max_rows_between_prunes=n)
-            )
-            assert {"cluster", "micro_id", "n_micro"} <= set(moved), n
+        for kw in (
+            dict(max_rows_between_prunes=7),
+            dict(max_rows_between_prunes=100),
+            dict(prune_every=7),
+            dict(prune_every=100),
+        ):
+            # The stream with it is the stream without it, on the learned
+            # rows, on the cap and on the clock alike: the zero-weight row
+            # learns nothing and counts in no clock (hard rule 9).
+            assert _differ(self.run(plain, **kw), self.run(lead, **kw).slice(1)) == [], kw
 
     def test_every_row_two_ways_and_the_default_spelled_out(self):
         df = self.stream()

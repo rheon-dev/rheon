@@ -12,8 +12,11 @@ the oracle's arithmetic is exact:
   first row: each step capped at ``gap_cap``, the steps of a run of skipped
   rows folded into the next accepted row's and the total capped again;
   without a clock column it is the row's number, the first row being 1;
-- an accepted row -- one whose features and weight are usable, rows of
-  weight zero and rows with a null target included -- is a ``coef`` row when
+- a row of weight zero counts in no clock and carries no ``coef`` (hard rule
+  9): the rule is written over the rows that count (``counted``), and the
+  bank's output is read on them;
+- an accepted row -- one whose features and weight are usable, rows with a
+  null target included -- is a ``coef`` row when
   the clock is ``coef_every`` past the last ``coef`` row's (the group's
   first row's before the first), or when it is the ``max_rows_between_coefs``-th
   accepted row since; a reset of the clock starts the count over;
@@ -31,6 +34,7 @@ import numpy as np
 import polars as pl
 import pytest
 
+from counted import counted, counts
 from rheon import polars as rp
 from test_model_registry import MINIMAL
 
@@ -55,20 +59,23 @@ def irregular(n: int = 400, seed: int = 1) -> np.ndarray:
     return steps
 
 
-def frame(steps: np.ndarray, seed: int = 0, skipped: bool = True) -> pl.DataFrame:
+def frame(
+    steps: np.ndarray, seed: int = 0, skipped: bool = True, zeros: bool = True
+) -> pl.DataFrame:
     """Rows at those steps on a ``Datetime`` clock and on a number clock in
     seconds, in whole seconds so the clock's sums are exact; two features, a
     numeric, a binary and a label target, and weights. One row in eleven has a
     null feature, which skips it (but not the first, so every model has a
-    first row); one in seven a weight of zero and one in thirteen a null
-    target, which are accepted and counted."""
+    first row); one in seven a weight of zero (with ``zeros``), which counts
+    in no clock, and one in thirteen a null target, which is accepted and
+    counted."""
     rng = np.random.default_rng(seed)
     n = len(steps)
     seconds = np.cumsum(steps)
     x1, x2 = rng.standard_normal(n), rng.standard_normal(n)
     y = 0.5 + 2.0 * x1 - x2 + 0.1 * rng.standard_normal(n)
     w = rng.uniform(0.5, 1.5, n)
-    w[rng.random(n) < 1 / 7] = 0.0
+    w[(rng.random(n) < 1 / 7) & zeros] = 0.0
     df = pl.DataFrame(
         {
             "ts": [T0 + timedelta(seconds=int(s)) for s in seconds],
@@ -146,8 +153,18 @@ def temporal(name: str = "ewridge", **kw) -> dict:
     return kind(name, "30m", clock="ts", gap_cap="10m", **kw)
 
 
-def run(spec: dict, df: pl.DataFrame) -> pl.DataFrame:
+def run_all(spec: dict, df: pl.DataFrame) -> pl.DataFrame:
+    """The output on every row of ``df``."""
     return rp.ModelBank([spec]).fit_predict(df).unnest("m")
+
+
+def run(spec: dict, df: pl.DataFrame) -> pl.DataFrame:
+    """The output on the rows that count (hard rule 9), which the rule is
+    written over: a row of weight 0 is in no clock and carries no ``coef``."""
+    out = rp.ModelBank([spec]).fit_predict(df)
+    if "w" in df.columns:
+        out = out.filter(counts())
+    return out.unnest("m")
 
 
 def observed(out: pl.DataFrame) -> list[int]:
@@ -156,7 +173,9 @@ def observed(out: pl.DataFrame) -> list[int]:
 
 
 def accepted_rows(df: pl.DataFrame, spec: dict) -> list[bool]:
-    """Whether the stream accepts each row: its features and weight usable."""
+    """Whether the stream accepts each row that counts: its features and
+    weight usable."""
+    df = counted(df) if "w" in df.columns else df
     cols = [*spec["features"], *([spec["weight"]] if spec.get("weight") else [])]
     if not cols:
         return [True] * df.height
@@ -222,7 +241,8 @@ def rule(
 
 
 def seconds_of(df: pl.DataFrame) -> list[int]:
-    return [int(v) for v in df["t"]]
+    """The clock of each row that counts."""
+    return [int(v) for v in counted(df)["t"]]
 
 
 def where_fitted(spec: dict, df: pl.DataFrame, rows: list[int]) -> list[int]:
@@ -265,12 +285,12 @@ class TestTheRule:
         next comes five rows later, not at the gap."""
         steps = np.full(120, 60)
         steps[0] = 0
-        df0 = frame(steps, skipped=False)
+        df0 = frame(steps, skipped=False, zeros=False)
         before = observed(run(temporal(coef_every="15m"), df0))
         assert np.all(np.diff(before) == 15), before
         gap = before[1] + 1
         steps[gap] = 7200
-        df = frame(steps, skipped=False)
+        df = frame(steps, skipped=False, zeros=False)
         spec = temporal(coef_every="15m")
         acc = accepted_rows(df, spec)
         want = rule(decayed_clock(seconds_of(df), acc, GAP_CAP), acc, every=EVERY, cap=None)
@@ -282,8 +302,8 @@ class TestTheRule:
     @pytest.mark.parametrize("name", KINDS)
     def test_a_row_cap_writes_whatever_the_clock(self, name):
         """``max_rows_between_coefs`` counts accepted rows as ``coef_every``
-        counted them before task 178: rows of weight zero and rows with a null
-        target included, a skipped row not."""
+        counted them before task 178: rows with a null target included, a
+        skipped row and a row of weight zero (hard rule 9) not."""
         df = frame(irregular())
         spec = temporal(name, max_rows_between_coefs=25)
         acc = accepted_rows(df, spec)
@@ -296,15 +316,16 @@ class TestTheRule:
     @pytest.mark.parametrize("name", KINDS)
     def test_whichever_comes_first(self, name):
         df = frame(irregular())
-        # Fifteen rows average about fifteen minutes here, so each binds
-        # first somewhere.
-        spec = temporal(name, coef_every="15m", max_rows_between_coefs=15)
+        # Thirteen rows that count average about fifteen minutes here (a row
+        # of weight 0 is none of them, hard rule 9), so each binds first
+        # somewhere.
+        spec = temporal(name, coef_every="15m", max_rows_between_coefs=13)
         acc = accepted_rows(df, spec)
         clock = decayed_clock(seconds_of(df), acc, GAP_CAP)
-        want = rule(clock, acc, every=EVERY, cap=15)
+        want = rule(clock, acc, every=EVERY, cap=13)
         held_to_the_rule(spec, df, want)
         by_clock = rule(clock, acc, every=EVERY, cap=None)
-        by_rows = rule(clock, acc, every=None, cap=15)
+        by_rows = rule(clock, acc, every=None, cap=13)
         got = where_fitted(spec, df, want)
         assert got != where_fitted(spec, df, by_clock), "the clock must bind somewhere"
         assert got != where_fitted(spec, df, by_rows), "the rows must bind somewhere"
@@ -319,7 +340,7 @@ class TestTheRule:
         acc = accepted_rows(df, spec)
         got = observed(out)
         assert len(got) > df.height // 2, got
-        assert got == [i for i in range(got[0], df.height) if acc[i]]
+        assert got == [i for i in range(got[0], len(acc)) if acc[i]]
 
     def test_unset_writes_each_group_s_last_accepted_row_in_each_chunk(self):
         df = frame(irregular()).with_columns(
@@ -328,8 +349,10 @@ class TestTheRule:
         spec = temporal(group="g")
         parts = pl.concat(rp.ModelBank([spec]).fit_predict_batches(df, chunk_size=50))
         got = observed(parts.unnest("m"))
-        fitted = set(observed(run({**spec, "coef_every": 0}, df)))
-        acc = accepted_rows(df, spec)
+        fitted = set(observed(run_all({**spec, "coef_every": 0}, df)))
+        # A row of weight 0 carries no `coef` (hard rule 9), so it is no
+        # chunk's last row here.
+        acc = df.select(pl.col("x1").is_not_null() & (pl.col("w") != 0.0))[:, 0].to_list()
         want = []
         for start in range(0, df.height, 50):
             for g in ("a", "b"):
@@ -353,7 +376,7 @@ class TestTheRule:
         acc = accepted_rows(df, spec)
         want = rule(decayed_clock(None, acc, None), acc, every=7, cap=None)
         held_to_the_rule(spec, df, want)
-        clean = frame(irregular(), skipped=False)
+        clean = frame(irregular(), skipped=False, zeros=False)
         got = held_to_the_rule(spec, clean, list(range(6, clean.height, 7)))
         assert got[:3] == [6, 13, 20]
 
@@ -369,7 +392,7 @@ class TestTheRule:
         """The group's first three rows skipped: the clock still starts at
         its first row, the skipped rows' steps folded into the first accepted
         row's, and without a clock column a skipped row has its number too."""
-        df = frame(irregular()).with_columns(
+        df = frame(irregular(), zeros=False).with_columns(
             x1=pl.when(pl.int_range(pl.len()) < 3).then(None).otherwise(pl.col("x1"))
         )
         if clock == "ts":
@@ -397,7 +420,7 @@ class TestTheRule:
         df = frame(irregular()).with_columns(s=(pl.int_range(pl.len()) // 50).cast(pl.String))
         spec = temporal(coef_every="15m", session="s", session_gap="8m")
         acc = accepted_rows(df, spec)
-        sessions = df["s"].to_list()
+        sessions = counted(df)["s"].to_list()
         clk = decayed_clock(seconds_of(df), acc, GAP_CAP, sessions=sessions, session_gap=480)
         want = rule(clk, acc, every=EVERY, cap=None)
         held_to_the_rule(spec, df, want)
@@ -412,9 +435,10 @@ class TestTheRule:
         )
         spec = temporal(group="g", coef_every="15m", max_rows_between_coefs=10)
         want = []
+        rows = counted(df)
         for g in ("a", "b"):
-            idx = [i for i in range(df.height) if df["g"][i] == g]
-            sub = df[idx]
+            idx = [i for i in range(rows.height) if rows["g"][i] == g]
+            sub = rows[idx]
             acc = accepted_rows(sub, spec)
             mine = rule(decayed_clock(seconds_of(sub), acc, GAP_CAP), acc, every=EVERY, cap=10)
             want += [idx[r] for r in mine]
@@ -428,7 +452,7 @@ class TestTheRule:
         # The clock steps back at row 150, by 4,000 seconds: past the 3,600
         # that restarts.
         steps[150] = -4000
-        df = frame(steps)
+        df = frame(steps, zeros=False)
         spec = temporal(coef_every="15m", max_rows_between_coefs=40, restart_after_step_back="1h")
         acc = accepted_rows(df, spec)
         secs = seconds_of(df)
@@ -484,7 +508,7 @@ class TestChunkingAndResume:
     def test_a_save_between_coef_rows_resumes_where_the_unbroken_run_does(self, name):
         df = frame(irregular())
         spec = temporal(name, coef_every="15m", max_rows_between_coefs=40)
-        whole = run(spec, df)
+        whole = run_all(spec, df)
         rows = observed(whole)
         assert len(rows) > 8, rows
         for cut in (rows[3] + 2, rows[7] + 5):
@@ -620,7 +644,8 @@ class TestOnlyTheCoefficientsMove:
         whole = run(zero, df)
         assert whole.equals(run(one, df), null_equal=True)
         assert whole["coef"].null_count() < df.height // 2
-        parts = pl.concat(rp.ModelBank([one]).fit_predict_batches(df, chunk_size=37)).unnest("m")
+        parts = pl.concat(rp.ModelBank([one]).fit_predict_batches(df, chunk_size=37))
+        parts = parts.filter(counts()).unnest("m")
         assert parts.equals(whole, null_equal=True)
 
 

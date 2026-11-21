@@ -579,6 +579,28 @@ def _ridge_fit(xg, omg, xo, yo, omo, ridge, standardize, fit_intercept):
     return (ybar - mo @ b if fit_intercept else 0.0), b
 
 
+def _paths_score(i, z, fast, fast_t, T, Yr, t_last, within, fit, mp, floor, pred) -> float:
+    """``ewridge_paths_ref``'s score of row ``i`` before it is learned, seen
+    from the last accepted row: each target's prediction into ``pred`` where
+    its gates let it through, and ``weight_sum``, returned."""
+    m = pred.shape[1]
+    if fast:
+        inside = within(t_last - np.asarray(T))
+        om = np.where(inside, np.asarray(fast), 0.0)
+        total = float(om.sum())
+        wt = np.where(inside[:, None], np.asarray(fast_t), 0.0)
+        w_target = (wt * ~np.isnan(np.asarray(Yr))).sum(axis=0)
+    else:
+        total, w_target = 0.0, np.zeros(m)
+    for j in range(m):
+        gated = w_target[j] >= mp[j] and total >= floor
+        if fit is not None and w_target[j] > 0.0 and gated:
+            if np.isnan(fit[j]).any():
+                raise ValueError(f"row {i}, target {j} is scored with an unheld fit")
+            pred[i, j] = fit[j] @ z
+    return total
+
+
 def ewridge_paths_ref(
     X: np.ndarray,
     Y: np.ndarray,
@@ -740,6 +762,19 @@ def ewridge_paths_ref(
             pending += dclock[i]
             continue
         changed = session is not None and started and session[i] != prev_session
+        # A row of weight 0 counts in no clock (hard rule 9, task 539): it is
+        # scored as ``predict`` scores it -- from a fresh model where its
+        # session would start one -- and its step joins the next row's.
+        if not w[i] > 0.0:
+            if not (changed and session_gap == "reset"):
+                z = np.concatenate(([1.0], X[i])) if fit_intercept else X[i]
+                weight_sum[i] = _paths_score(
+                    i, z, fast, fast_t, T, Yr, t_last, within, fit, mp, floor, pred
+                )
+            else:
+                weight_sum[i] = 0.0
+            pending += dclock[i]
+            continue
         prev_session = None if session is None else session[i]
         if changed and session_gap == "reset":
             fast, slow, T, Xr, Yr, fit, since_clock, since_rows = restart()
@@ -767,20 +802,9 @@ def ewridge_paths_ref(
         z = np.concatenate(([1.0], X[i])) if fit_intercept else X[i]
 
         # ---- before the row, seen from the last accepted row ----
-        if fast:
-            inside = within(t_last - np.asarray(T))
-            om = np.where(inside, np.asarray(fast), 0.0)
-            weight_sum[i] = om.sum()
-            wt = np.where(inside[:, None], np.asarray(fast_t), 0.0)
-            w_target = (wt * ~np.isnan(np.asarray(Yr))).sum(axis=0)
-        else:
-            weight_sum[i], w_target = 0.0, np.zeros(m)
-        for j in range(m):
-            gated = w_target[j] >= mp[j] and weight_sum[i] >= floor
-            if fit is not None and w_target[j] > 0.0 and gated:
-                if np.isnan(fit[j]).any():
-                    raise ValueError(f"row {i}, target {j} is scored with an unheld fit")
-                pred[i, j] = fit[j] @ z
+        weight_sum[i] = _paths_score(
+            i, z, fast, fast_t, T, Yr, t_last, within, fit, mp, floor, pred
+        )
 
         # ---- learn: age every row by this row's step, then take it ----
         lam = factor(d, half_life)

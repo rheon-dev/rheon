@@ -409,7 +409,7 @@ def test_the_window_is_held_to_the_groups_state_cap():
         _spec(half_life=INF, window_events=2_000)
         _spec(half_life=INF, window_events=4_700, max_state_bytes=1 << 20)
     with pytest.raises(
-        ValueError, match="hold 848 bytes in each group, past max_state_bytes of 500"
+        ValueError, match="hold 840 bytes in each group, past max_state_bytes of 500"
     ):
         rp.ModelBank([_spec(half_life=INF, window_events=10, max_state_bytes=500)])
     with pytest.raises(ValueError, match="max_state_bytes must be above 0"):

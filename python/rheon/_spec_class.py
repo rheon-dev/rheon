@@ -253,7 +253,7 @@ def ew_class(
     moves ``pi_c``. ``weight_sum`` counts every row the model accepted,
     whatever its class, so ``min_weight`` means the same number of rows as
     in every other model. A row with a null feature is skipped and learns
-    nothing, and a row of weight 0 moves the clock alone.
+    nothing, and a row of weight 0 is predicted and moves no clock.
 
     **The prior scale.** ``s_c`` starts at 1 and shrinks by
     ``λ * n_c / (λ * n_c + w)`` on every row the class learns but its

@@ -161,7 +161,7 @@ print(f"{given.height} intervals given, {covered:.3f} of them held the delay tha
 |---|---|
 | the order of learning | by `label_clock` time, so a short flight landing first is learned before an earlier long one; rows with one such time in the order they arrived. Each is learned at its time: its step is the one from the time learned before it |
 | `resid` on a row | the target less the prediction the row was given |
-| a weight of 0 | the row is held like any other and learned at its `label_clock` time, where it moves the clock and the model learns nothing from it, as under `embargo`. It counts against `max_held_rows` |
+| a weight of 0 | the row is predicted from the labels known at its clock and never held: the model learns nothing from it, it moves no clock, and it takes no room under `max_held_rows`, as under `embargo` |
 | a null `label_clock` time | the row is predicted and never held: a target that never arrives, which `bank.summary()` counts in `labels_missing`. To keep a row that is only to be predicted out of the waiting rows, give it a null `label_clock` time |
 | a `label_clock` time before its row's clock | refused, naming the row: the column does not hold the times the targets are known |
 | how many rows wait | `max_held_rows` bounds them per group. Past it the chunk is refused, or with `held_overflow="drop_oldest"` the row that arrived first is dropped, counted in `labels_dropped` |

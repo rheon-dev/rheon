@@ -36,15 +36,17 @@ beside a weight of 0 and `predict`:
 | | the row is predicted | the clock advances | the fit moves | `weight_sum` | use it to |
 |---|---|---|---|---|---|
 | **a null target** | yes | yes | not that target's, except under `target_gaps="pairwise"` | counts the row. In a regression model the target's own weight only decays, so a long stretch of nulls can take that target below its `min_weight` | leave a target out |
-| **weight `0`** | yes | yes | no | keeps decaying, so a long stretch can fall below `min_weight` | keep a row's place in the stream |
+| **weight `0`** | yes | no | no | frozen | predict rows inside the stream without learning them |
 | **`predict`** | yes | no | no | frozen | serve ([Serve from a saved state](serve-from-a-saved-state.md)) |
 
-Choose the way by what the row should still do: move the clock, count in
-`weight_sum`, or neither.
+Choose the way by what the row should still do: move the clock and count in
+`weight_sum`, or neither. A row of weight 0 is predicted as `predict`
+predicts it, and the next row steps from the row before it, as if it were
+not there.
 
 1. **To leave a row's target out, make it null** with Polars'
    `with_columns` in the query before the bank.
-2. **To keep the row's place in the stream but learn nothing from it, give
+2. **To predict a row inside the stream but learn nothing from it, give
    it weight `0`:** make the weight column with `with_columns`, and name it
    in the spec's `weight`.
 3. **To [serve](../GLOSSARY.md#saving-and-serving) rows from a fitted
@@ -93,7 +95,7 @@ for way, frame in ways.items():
                predicted  clock fit moved weight_sum
 learned              yes    100       yes      72.89
 a null target        yes    100        no      72.89
-weight 0             yes    100        no      71.89
+weight 0             yes     99        no      72.39
 predict              yes     99        no      72.39
 ```
 
@@ -101,17 +103,18 @@ predict              yes     99        no      72.39
 
 **Compare each way's row with the run that learns it.** In the output of
 [Choose a way to hold a row back](#choose-a-way-to-hold-a-row-back), every
-way predicts row 100, and none moves the fit. A null target and weight `0`
-advance the clock to 100, where `predict` leaves it at 99. A null target
-leaves `weight_sum` as learning the row does, weight `0` leaves it a row
-lighter, and `predict` leaves it between the two.
+way predicts row 100, and none moves the fit. A null target advances the
+clock to 100, where weight `0` and `predict` leave it at 99. A null target
+leaves `weight_sum` as learning the row does, and weight `0` and `predict`
+leave it where it was, so row 101 reads it decayed over its one step from
+row 99.
 
 ## Keep a model from learning rows in a query
 
 **To keep a model from learning rows, give them weight `0` before the
 bank, in place of a filter:** make the column with `with_columns`, and name
-it in the spec's `weight`. The rows still come out predicted, and the clock
-advances through them, so no gap opens where they were.
+it in the spec's `weight`. The rows still come out predicted, and the rows
+learned decay across them as if they were not there.
 
 1. **Make a weight column of 1 on the rows to learn from, and 0 on the
    rest,** with `pl.when(...).then(1.0).otherwise(0.0)` in `with_columns`.

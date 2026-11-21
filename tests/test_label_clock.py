@@ -183,7 +183,9 @@ def fold(df, pred, coverage=0.9, rate=0.05, auto=False):
             cover[i] = cov
         if hit_w > 0.0:
             hit_rate[i] = hits / hit_w
-        if avail[i] is not None:
+        # A row of weight 0 is held for nothing: it counts in no clock, the
+        # clock of the labels learned included (hard rule 9).
+        if avail[i] is not None and w[i] > 0.0:
             held.append((avail[i], i, q))
     return {"sigma_y": sigma, "lo_y": lo, "hi_y": hi, "coverage_y": cover, "hit_rate_y": hit_rate}
 
@@ -340,7 +342,9 @@ class TestTheSurfaces:
         bank = rp.ModelBank([spec(max_held_rows=3, held_overflow="drop_oldest")])
         bank.fit_predict(df)
         row = bank.summary().row(0, named=True)
-        accepted = df.filter(pl.col("x").is_not_null())
+        # A row of weight 0 waits for no label (hard rule 9), so it is no
+        # label missing.
+        accepted = df.filter(pl.col("x").is_not_null() & (pl.col("w") != 0.0))
         assert row["labels_missing"] == accepted["avail"].null_count()
         assert row["labels_dropped"] > 0
 

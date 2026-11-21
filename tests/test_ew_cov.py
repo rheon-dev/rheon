@@ -485,7 +485,7 @@ class TestLaggedComoments:
         ``W_t`` and the means before each row ``m_{t-1}`` are summed directly
         from the rows at their decayed weights, ``x_{t-l}`` is the ``l``-th
         learned row before ``t``, and a row of weight 0 learns nothing and
-        is no one's lagged row."""
+        is no one's lagged row, nor a step of the clock."""
         rng = np.random.default_rng(11)
         n, lags, half_life = 700, [1, 3], 150.0
         e = rng.standard_normal((n, 3))
@@ -503,7 +503,10 @@ class TestLaggedComoments:
         g = bank.gram("c")[0]
         lam = 2.0 ** (-1.0 / half_life)
         t = np.arange(n)
-        decay = np.where(t[:, None] >= t[None, :], lam ** (t[:, None] - t[None, :]), 0.0)
+        # Ages count the rows of positive weight: a row of weight 0 is in no
+        # clock (hard rule 9).
+        c = np.cumsum(w > 0.0)
+        decay = np.where(t[:, None] >= t[None, :], lam ** (c[:, None] - c[None, :]), 0.0)
         W = decay @ w  # W[t]: the weight after row t
         m = (decay @ (w[:, None] * x)) / W[:, None]  # m[t]: the mean after row t
         learned = np.flatnonzero(w > 0.0)
@@ -516,7 +519,9 @@ class TestLaggedComoments:
                     continue
                 d = x[row] - m[row - 1]
                 e = x[before[-ell]] - m[row - 1]
-                total += lam ** (T - row) * lam * W[row - 1] * w[row] / W[row] * np.outer(d, e)
+                total += (
+                    lam ** (c[T] - c[row]) * lam * W[row - 1] * w[row] / W[row] * np.outer(d, e)
+                )
             np.testing.assert_allclose(g["lag_comoments"][i], total / W[T], rtol=1e-9, atol=1e-12)
             assert np.diag(total / W[T]).min() > 0.1, "nothing to compare"
 

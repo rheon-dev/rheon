@@ -24,6 +24,7 @@ The streams are ``tests/test_oracles_lasso_paths.py``'s for ``rls`` and
 import numpy as np
 import pytest
 
+from counted import counted, counts
 from data import synthetic
 from reference import kalman_ref
 from reference_paths import rls_paths_ref
@@ -71,7 +72,10 @@ class TestRls:
             coef_every=0,
             **kw,
         )
-        out = rp.ModelBank([spec]).fit_predict(df)["m"]
+        # A row of weight 0 counts in no clock (hard rule 9): the reference
+        # steps over the rows that count, and the bank's are held to it.
+        out = rp.ModelBank([spec]).fit_predict(df).filter(counts())["m"]
+        df = counted(df)
         n = df.height
         dc = np.zeros(n)
         dc[1:] = np.diff(df["t"].to_numpy())

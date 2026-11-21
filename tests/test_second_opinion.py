@@ -1890,6 +1890,10 @@ class TestAStandardizedKalmanIsFilterpy:
         assert np.isfinite(got[1:]).all() and np.isnan(got[:1]).all()
         # Task 97: coef after row i, applied to row i + 1, is row i + 1's pred.
         coef = out["coef"].to_list()
+        # A row of weight 0 carries no `coef` (hard rule 9): read the last.
+        for i in range(1, n):
+            if coef[i] is None:
+                coef[i] = coef[i - 1]
         via = np.array([np.dot(coef[i], [1.0, *x[i + 1]]) for i in range(n - 1)])
         # Bound (task 273): the dot product over three terms here, the
         # coefficients' reading-out to the original units (`b_i / s_i`, and
@@ -3613,7 +3617,15 @@ class TestFtrlIsVowpalWabbits:
         )
         out = rp.ModelBank([spec]).fit_predict(frame)["m"].struct
         pred = np.column_stack([out.field(f"pred_{t}").to_numpy() for t in self.TARGETS])
-        coef = np.array(out.field("coef").to_list(), dtype=float)
+        # A row of weight 0 carries no `coef` and moves none (hard rule 9):
+        # the weights after it are the row's before it.
+        rows = out.field("coef").to_list()
+        width = len(next(r for r in rows if r is not None))
+        for i in range(len(rows)):
+            if rows[i] is None:
+                # Before any row is learned, the weights are 0.
+                rows[i] = rows[i - 1] if i else [0.0] * width
+        coef = np.array(rows, dtype=float)
         return pred, coef.reshape(frame.height, len(self.TARGETS), -1)
 
     def vws(self, frame, target, loss, intercept, weighted, penalties, *, half=True):
@@ -4700,7 +4712,9 @@ class TestKalmansErrorInflationIsFilterpysPrior:
         if self.CASES[case]["standardize"]:
             remapped = _standardizer_moves(t, x, w, 30.0)[2]
         for i in range(n):
-            if posts[i] is None:
+            # A row of weight 0 carries no `se_coef`, being no row of the
+            # cadence (hard rule 9).
+            if posts[i] is None or w[i] == 0.0:
                 assert se[i] is None or all(v is None for v in se[i]), (i, se[i])
                 continue
             P = posts[i]

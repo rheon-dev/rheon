@@ -92,10 +92,13 @@ class TestCalibrationIsMincerZarnowitz:
         # Folded once the stream is 95% settled (task 232 (1)).
         ready = out["settled_frac"].to_numpy() >= 0.95
         checked = 0
+        # The rows that count, numbered: a row of weight 0 is in no clock
+        # (hard rule 9), so the age of a row is the count of such rows.
+        c = np.cumsum(w != 0.0)
         for t in (250, 400, 699):
             s = np.arange(t)
             # Row s folded at its weight, aged by every row after it up to t - 1.
-            omega = w[:t] * 0.5 ** ((t - 1 - s) / h_calib)
+            omega = w[:t] * 0.5 ** ((c[t - 1] - c[s]) / h_calib)
             ok = np.isfinite(pred[:t]) & (omega > 0) & ready[:t]
             X = sm.add_constant(pred[:t][ok])
             fit = sm.WLS(y[:t][ok], X, weights=omega[ok]).fit()
@@ -440,8 +443,11 @@ class TestRobustStandardErrorsAreTheSandwich:
         settled = out["settled_frac"].fill_null(1.0).fill_nan(1.0).to_numpy()
         ready = settled >= 0.95
         checked = 0
+        # A row of weight 0 is in no clock (hard rule 9): ages count the
+        # rows that count.
+        c = np.cumsum(w != 0.0)
         for t in (700, 800, 899):
-            age = t - np.arange(t + 1)
+            age = c[t] - c[: t + 1]
             omega = w[: t + 1] * (0.5 ** (age / half_life))
             keep = np.isfinite(resid[: t + 1]) & (omega > 0) & ready[: t + 1]
             Xk, ek, om = X[: t + 1][keep], resid[: t + 1][keep], omega[keep]
@@ -467,11 +473,13 @@ class TestRobustStandardErrorsAreTheSandwich:
         w = df["w"].to_numpy()
         X = sm.add_constant(df.select("x0", "x1").to_numpy())
         ready = out["settled_frac"].fill_null(0.0).fill_nan(0.0).to_numpy() >= 0.95
-        # 4.3 half-lives of the fit's 150 rows, not of the sandwich's 40.
-        assert 640 < int(np.argmax(ready)) < 660
+        # 4.3 half-lives of the fit's 150 rows, not of the sandwich's 40,
+        # counted in the rows of positive weight (hard rule 9).
+        assert 640 < int(np.cumsum(w != 0.0)[int(np.argmax(ready))]) < 660
         checked = 0
+        c = np.cumsum(w != 0.0)  # ages in the rows that count (hard rule 9)
         for t in (700, 800, 899):
-            omega = w[: t + 1] * 0.5 ** ((t - np.arange(t + 1)) / h_robust)
+            omega = w[: t + 1] * 0.5 ** ((c[t] - c[: t + 1]) / h_robust)
             keep = np.isfinite(resid[: t + 1]) & (omega > 0) & ready[: t + 1]
             Xk, ek, om = X[: t + 1][keep], resid[: t + 1][keep], omega[keep]
             bi = np.linalg.inv((Xk * om[:, None]).T @ Xk)
@@ -769,8 +777,9 @@ class TestTailsAreScipyAndJarqueBera:
         # Folded once the stream is 95% settled on the model's half-life
         # (task 232 (1)).
         ready = out["settled_frac"].to_numpy() >= 0.95
+        c = np.cumsum(w != 0.0)  # ages in the rows that count (hard rule 9)
         for t in (400, 1199):
-            om = w[:t] * 0.5 ** (((t - 1) - np.arange(t)) / h)
+            om = w[:t] * 0.5 ** ((c[t - 1] - c[:t]) / h)
             keep = np.isfinite(v[:t]) & (om > 0) & ready[:t]
             vt, ot = v[:t][keep], om[keep]
             mu = np.average(vt, weights=ot)
@@ -957,8 +966,9 @@ class TestFeatureHealthIsTwoWeightedMoments:
             emit_feature_health=True,
         )
         out = rp.ModelBank([spec]).fit_predict(df).unnest("m")
+        c = np.cumsum(w != 0.0)  # ages in the rows that count (hard rule 9)
         for t in (100, 560, 899):
-            age = (t - 1) - np.arange(t)
+            age = c[t - 1] - c[:t]
             fast = DescrStatsW(x[:t], weights=w[:t] * 0.5 ** (age / h), ddof=0)
             slow = DescrStatsW(x[:t], weights=w[:t] * 0.5 ** (age / (4 * h)), ddof=0)
             for i, f in enumerate(("x0", "x1")):
@@ -994,8 +1004,9 @@ class TestFeatureHealthIsTwoWeightedMoments:
             feature_health_half_life=h,
         )
         out = rp.ModelBank([spec]).fit_predict(df).unnest("m")
+        c = np.cumsum(w != 0.0)  # ages in the rows that count (hard rule 9)
         for t in (100, 560, 899):
-            age = (t - 1) - np.arange(t)
+            age = c[t - 1] - c[:t]
             fast = DescrStatsW(x[:t], weights=w[:t] * 0.5 ** (age / h), ddof=0)
             slow = DescrStatsW(x[:t], weights=w[:t] * 0.5 ** (age / (4 * h)), ddof=0)
             for i, f in enumerate(("x0", "x1")):

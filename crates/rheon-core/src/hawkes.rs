@@ -58,9 +58,8 @@
 //! ```
 //!
 //! So the state is `R` (`k`), `b` (`D p`), `Q` (symmetric, `D (D + 1) / 2`),
-//! `G₀₀`, the weight and the clock a zero-weight row left
-//! uncounted: `8 (k + D (1 + k) + D (D + 1) / 2 + 3)` bytes, whatever the stream's length, and a row
-//! costs `U` exponentials and `O(D k)` additions to learn. A read assembles `G`
+//! `G₀₀` and the weight: `8 (k + D (1 + k) + D (D + 1) / 2 + 2)` bytes,
+//! whatever the stream's length, and a row costs `U` exponentials and `O(D k)` additions to learn. A read assembles `G`
 //! in `O(k²)` and solves it by Cholesky in `O(p³)`, once a row, for the
 //! intensities the row reports. `γ` within 0.1% of a decay `β_u` or of a sum
 //! `β_u + β_v` is refused: those divisions lose about `log10(β / |β − γ|)`
@@ -79,11 +78,12 @@
 //! intensity, can be negative where the data say so.
 //!
 //! **The weight.** A row's weight decides only whether its events are
-//! learned: 0 learns nothing and counts in no clock (hard rule 9: the next
-//! row steps as if the zero-weight row were not there, from the last row
-//! that counted, and the row is in no window and none of `n_eff`; it is
-//! still read, as any row is), and any
-//! weight above 0 learns the row's events at their marks. An event's
+//! learned: 0 learns nothing and counts in no clock (hard rule 9: the
+//! stream reads such a row as `predict` does and hands it to no model, so
+//! the next row steps as if it were not there, from the last row that
+//! counted, and it is in no window and none of `n_eff`; a row of weight 0
+//! handed to the model directly ages the state over its step, as in every
+//! model), and any weight above 0 learns the row's events at their marks. An event's
 //! excitation is a fact of the process, not evidence to scale, and `G`'s
 //! event part is read from `b` only because the same marks build both.
 //! `weight_sum` is the decayed sum of the rows' weights, every row's, as in
@@ -436,14 +436,6 @@ pub struct Hawkes {
     /// `G₀₀ = ∫ w dt`.
     g0: f64,
     w_sum: f64,
-    /// The clock since the last counted row, which the zero-weight rows
-    /// since have stepped over: the next counted row steps by it and its
-    /// own step. 0 while the last row counted.
-    #[serde(default)]
-    carry: f64,
-    /// Whether a row has counted yet, or only zero-weight rows have come.
-    #[serde(default)]
-    seen: Seen,
     window: Option<EventWindow>,
     /// The bytes a clock window's next row would have taken the state to,
     /// past the cap: from then on no row's events are learned.
@@ -458,16 +450,6 @@ pub struct Hawkes {
     next: Option<Stamp>,
     #[serde(skip)]
     warning: Option<u64>,
-}
-
-/// What the rows so far have been: none, only rows of weight 0, or at least
-/// one that counted (positive weight, in a clock and a window).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-enum Seen {
-    #[default]
-    Nothing,
-    OnlyZero,
-    Counted,
 }
 
 /// The buffers a read assembles and solves its system in, one set a thread,
@@ -574,8 +556,6 @@ impl Hawkes {
             q: vec![0.0; n * (n + 1) / 2],
             g0: 0.0,
             w_sum: 0.0,
-            carry: 0.0,
-            seen: Seen::Nothing,
             window: (cfg.window_events.is_some() || cfg.window_clock.is_some())
                 .then(|| EventWindow::new(k, cfg.window_clock.is_some())),
             over: None,
@@ -597,9 +577,9 @@ impl Hawkes {
     }
 
     /// The numbers of the running sums, in bytes: `8 (k + D (1 + k) + D (D +
-    /// 1) / 2 + 3)`.
+    /// 1) / 2 + 2)`.
     fn sums_bytes(n: u64, k: u64) -> u64 {
-        8 * (k + n * (1 + k) + n * (n + 1) / 2 + 3)
+        8 * (k + n * (1 + k) + n * (n + 1) / 2 + 2)
     }
 
     /// The bytes of a window's rows: `8 (2 + D + k)` each, with the newer
@@ -610,7 +590,7 @@ impl Hawkes {
     }
 
     /// The bytes of the numbers a model of this shape holds at most: its
-    /// running sums, `8 (k + D (1 + k) + D (D + 1) / 2 + 3)`, and a full
+    /// running sums, `8 (k + D (1 + k) + D (D + 1) / 2 + 2)`, and a full
     /// window of `W` rows with an event, `8 W (2 + D + k)`, with its sum `B`,
     /// its clock and its weight, `8 (k + 2)`. The one part whose size the
     /// data could set is the window's rows, and `W` bounds it, so this is
@@ -1034,17 +1014,7 @@ impl Hawkes {
         }
     }
 
-    /// The clock since the last row that counted, for a row `d_clock` after
-    /// the last one stepped: the zero-weight rows' steps in between are
-    /// part of it.
-    fn since_counted(&self, d_clock: f64) -> f64 {
-        match self.seen {
-            Seen::Counted => self.carry + d_clock,
-            _ => d_clock,
-        }
-    }
-
-    /// What a row `d_clock` after the last row that counted reads, at the
+    /// What a row `d_clock` after the last row stepped reads, at the
     /// stamp `now` (none without a clock window): the state advanced on a
     /// copy, the state untouched.
     fn read_ahead(&self, d_clock: f64, now: Option<Stamp>) -> Step {
@@ -1118,28 +1088,6 @@ impl OnlineModel for Hawkes {
         }
         let n = self.cfg.n_targets;
         let handed = self.next.take();
-        // A row of weight 0 counts in no clock (hard rule 9): it is read as
-        // any row is, from the last row that counted, and leaves everything
-        // as it was but the clock it has stepped over, which the next row
-        // that counts steps by with its own.
-        if weight <= 0.0 {
-            let d = self.since_counted(d_clock);
-            *out = self.read_ahead(d, handed.or_else(|| self.stamp_ahead(d)));
-            match self.seen {
-                Seen::Counted => self.carry = d,
-                _ => self.seen = Seen::OnlyZero,
-            }
-            return;
-        }
-        // The first row to count after rows of weight 0 is the model's
-        // first: its clock is where the model starts.
-        let d_clock = match self.seen {
-            Seen::Counted => self.carry + d_clock,
-            Seen::OnlyZero => 0.0,
-            Seen::Nothing => d_clock,
-        };
-        self.carry = 0.0;
-        self.seen = Seen::Counted;
         let now = self.stamp_row(d_clock, handed);
         // Read before the row's own clock step, as every `n_eff` is (hard
         // rule 8): a row a clock window drops at this row still counts, as
@@ -1166,7 +1114,12 @@ impl OnlineModel for Hawkes {
         if self.window.is_none() {
             self.w_sum = f * self.w_sum + weight;
         }
-        if !y.iter().take(n).any(|v| Self::mark(*v) > 0.0) {
+        // A row of weight 0 learns none of its events: it ages the state
+        // over its step, as every model's does (`OnlineModel`). The stream
+        // never hands one over, since such a row counts in no clock (hard
+        // rule 9): it scores it with `predict` and steps the next row from
+        // the last that counted.
+        if weight <= 0.0 || !y.iter().take(n).any(|v| Self::mark(*v) > 0.0) {
             return;
         }
         // A clock window's next row that would take the state past its cap
@@ -1221,8 +1174,7 @@ impl OnlineModel for Hawkes {
     }
 
     fn predict(&self, _x: &[f64], d_clock: f64) -> Step {
-        let d = self.since_counted(d_clock);
-        self.read_ahead(d, self.stamp_ahead(d))
+        self.read_ahead(d_clock, self.stamp_ahead(d_clock))
     }
 
     /// A clock window learns its rows' stamps: they decide when each leaves.

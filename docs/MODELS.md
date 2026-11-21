@@ -2630,7 +2630,10 @@ a count of their own, and anything else is usable. A usable value enters
 the moments by Terriberry's update of the central sums `M2`, `M3` and `M4`,
 with `n` the usable values before it. Its value's counter adds one, and
 past `distinct_cap` distinct values the counters run as a Misra-Gries
-summary. Nothing decays, and a row's weight plays no part:
+summary. Nothing decays. A row of weight 0 reaches no count, moment,
+counter or pair, nor the clock's steps, as it counts in no clock of any
+model; a bank's `audit` takes no weight column, so every row it reads
+weighs 1 and counts:
 
 ```
 n' = n + 1      d = x − mean      e = d / n'      t = d·e·n
@@ -3716,7 +3719,7 @@ Gₐᵦ = (β_a b_j(a)[b] + β_b b_j(b)[a] + β_a β_b Q_j(a)j(b) − R_a R_b) /
 
 `θ_i` minimizes the least-squares contrast `Σ_i ∫ λ_i² dt − 2 ∫ λ_i dN_i`,
 each instant weighted by its decay. `G` is not kept, since it can be read
-from `b` and `Q`. The state is `8 (k + D (1 + k) + D (D + 1) / 2 + 3)` bytes
+from `b` and `Q`. The state is `8 (k + D (1 + k) + D (D + 1) / 2 + 2)` bytes
 for `D` nodes and `k = D U` excitations: 72 bytes for one node and two
 decays, 208 for two nodes and three.
 

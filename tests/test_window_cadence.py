@@ -19,9 +19,9 @@ the stream's own clock:
   weight, so a windowed mean is their weighted mean and a windowed ridge is
   scikit-learn's ``Ridge`` on them (``alpha = ridge * the weight``, as
   ``TestEwRidgeIsSklearnsRidge`` maps it);
-- a ridge solves after every row with weight, and a row of weight 0 never
-  solves (hard rule 9; docs/PLAN.md task 214), so a row after one reads the
-  fit the last row with weight left, on its window.
+- a row of weight 0 counts in no clock (hard rule 9): no model sees it, so
+  the definitions are written over the rows that count (``counted``) and the
+  bank's output is read on them; a ridge solves after every row.
 """
 
 from __future__ import annotations
@@ -36,6 +36,7 @@ import pytest
 from scipy.stats import multivariate_normal
 from sklearn.linear_model import Ridge
 
+from counted import counted, counts
 from reference_paths import WindowRing, window_starts
 from rheon import polars as rp
 
@@ -256,7 +257,22 @@ def ew_class(**kw):
 
 
 def run(spec, df: pl.DataFrame) -> pl.DataFrame:
+    """The output on the rows that count: a row of weight 0 is in no clock
+    (hard rule 9), and the definitions are written over the others."""
+    return rp.ModelBank([spec]).fit_predict(df).filter(counts()).unnest(spec["name"])
+
+
+def run_all(spec, df: pl.DataFrame) -> pl.DataFrame:
+    """The output on every row, a row of weight 0 included."""
     return rp.ModelBank([spec]).fit_predict(df).unnest(spec["name"])
+
+
+def counted_stream(df: pl.DataFrame) -> tuple[np.ndarray, pl.DataFrame]:
+    """The steps between the rows that count and those rows: a row of weight
+    0 is no row of the clock, so its time joins the next row's step."""
+    rows = counted(df)
+    t = rows["t"].to_numpy()
+    return np.concatenate([[0.0], np.diff(t)]), rows
 
 
 def floats(out: pl.DataFrame) -> list[str]:
@@ -269,6 +285,7 @@ class TestTheWindowIsTheDefinitions:
         steps = stream_steps()
         df = frame(steps)
         out = run(ew_cov(**cadence(every, cap)), df)
+        steps, df = counted_stream(df)
         clock = model_clock(steps)
         snaps = snapshot_rows(clock, every=spacing_of(every), cap=cap)
         w, x = df["w"].to_numpy(), df.select(FEATURES).to_numpy()
@@ -286,13 +303,14 @@ class TestTheWindowIsTheDefinitions:
                 means += 1
             elif want < 2.0 * (1 - 1e-9):
                 assert np.isnan(got_m[t]).all(), t
-        assert means > 600, means
+        assert means > 520, means
 
     @pytest.mark.parametrize(("every", "cap"), CADENCES, ids=IDS)
     def test_a_windowed_ridge_is_sklearns_ridge_on_the_rows_from_its_boundary_on(self, every, cap):
         steps = stream_steps()
         df = frame(steps)
         out = run(ridge(**cadence(every, cap)), df)
+        steps, df = counted_stream(df)
         clock = model_clock(steps)
         snaps = snapshot_rows(clock, every=spacing_of(every), cap=cap)
         w, x, y = df["w"].to_numpy(), df.select(FEATURES).to_numpy(), df["y"].to_numpy()
@@ -343,6 +361,7 @@ class TestTheWindowIsTheDefinitions:
         mib = 0.003
         cap_rows = capacity(ridge, df, mib)
         out = run(ridge(window_budget={"thin": mib}, **cadence(every, cap)), df)
+        steps, df = counted_stream(df)
         clock = model_clock(steps)
         ring = WindowRing(WINDOW, every=spacing_of(every), cap=cap, capacity=cap_rows)
         starts = np.array([ring.learn(i, c) for i, c in enumerate(clock)])
@@ -387,6 +406,7 @@ class TestTheWindowIsTheDefinitions:
         kw = dict(snapshot_every="1m", max_rows_between_snapshots=25, emit_sigma=True)
         out = run(ridge(**kw), df)
         own = run(ridge(**kw, max_error_inflation=float("inf")), df)
+        steps, df = counted_stream(df)
         clock = model_clock(steps)
         w, r = df["w"].to_numpy(), own["resid_y"].to_numpy()
 
@@ -419,6 +439,7 @@ class TestTheWindowIsTheDefinitions:
         steps = stream_steps()
         df = label(frame(steps))
         got = run(make(**cadence(every, cap)), df)["weight_sum"].to_numpy()
+        steps, df = counted_stream(df)
         clock, w = model_clock(steps), df["w"].to_numpy()
         tight = 0
         for t in range(1, len(steps)):
@@ -516,6 +537,7 @@ class TestEveryWindowedModelsRing:
         steps = coarse_steps()
         df = label(frame(steps))
         out = run(MODELS[name](closed=closed, **cadence(every, cap)), df)
+        steps, df = counted_stream(df)
         clock, w = model_clock(steps), df["w"].to_numpy()
         starts = window_starts(clock, WINDOW, every=spacing_of(every), cap=cap, closed=closed)
         want = ring_weights(clock, w, starts, HALF_LIFE)
@@ -529,8 +551,9 @@ class TestEveryWindowedModelsRing:
         moved = (np.abs(plain - want) > 1e-6).sum()
         edged = (np.abs(ring_weights(clock, w, edge, HALF_LIFE) - want) > 1e-6).sum()
         # Measured 2026-10-25 (every model to 1.7e-15 relative): the cadence
-        # moves 152-637 of the 700 rows' weights, and the edge 7-122.
-        assert moved > 100, moved
+        # moves 152-637 of the 700 rows' weights, and the edge 7-122; on the
+        # about 620 rows that count (task 539) the cadence moves 94 at least.
+        assert moved > 80, moved
         assert edged >= 5, edged
 
     @pytest.mark.parametrize(
@@ -552,6 +575,7 @@ class TestEveryWindowedModelsRing:
             half_life=float("inf"), precision_prior=prior, closed="both", **cadence(every, cap)
         )
         out = run(spec, df)
+        steps, df = counted_stream(df)
         clock = model_clock(steps)
         x, w = df.select(FEATURES).to_numpy(), df["w"].to_numpy()
         lab = df["cls"].to_numpy()
@@ -603,8 +627,9 @@ class TestEveryWindowedModelsRing:
         half_life)``. The stream ends at rows between snapshots, where the
         every-row table is another one (a row that takes a snapshot is read
         the same way under every cadence)."""
-        steps = coarse_steps()
-        df = label(frame(steps))
+        # The rows that count, fed to the bank as well: a row of weight 0 is
+        # in no clock (hard rule 9), so the bank's table is theirs.
+        steps, df = counted_stream(label(frame(coarse_steps())))
         clock = model_clock(steps)
         starts = window_starts(clock, WINDOW, every=spacing_of(every), cap=cap, closed="both")
         plain = window_starts(clock, WINDOW, closed="both")
@@ -670,6 +695,8 @@ class TestTheCadence:
         for f in floats(by_clock):
             a, b = by_clock[f].to_numpy(), by_rows[f].to_numpy()
             assert np.array_equal(a, b, equal_nan=True), f
+        # The row clock counts the rows that count (hard rule 9).
+        steps, df = counted_stream(df)
         rows = np.arange(len(steps), dtype=float)
         snaps = snapshot_rows(rows, every=5.0, cap=None, window=120.0)
         assert set(np.diff(snaps)) == {5}
@@ -702,7 +729,7 @@ class TestChunkingAndResume:
     def test_the_window_does_not_depend_on_the_chunking(self, make):
         df = frame(stream_steps())
         s = make(snapshot_every="1m", max_rows_between_snapshots=25)
-        whole = run(s, df)
+        whole = run_all(s, df)
         for rows in (1, 7, 37):
             parts = pl.concat(rp.ModelBank([s]).fit_predict_batches(df, chunk_size=rows))
             parts = parts.unnest(s["name"])
@@ -715,8 +742,9 @@ class TestChunkingAndResume:
         """Cut where the newest snapshot is part of a spacing behind the last
         row learned, so the resumed run must know the spacing and the clock it
         is measured from."""
-        steps = stream_steps()
-        df = frame(steps)
+        # Over the rows that count, so the cut is read on the clock the model
+        # keeps (a row of weight 0 is in no clock, hard rule 9).
+        steps, df = counted_stream(frame(stream_steps()))
         s = make(snapshot_every="1m", max_rows_between_snapshots=25)
         whole = run(s, df)
         clock = model_clock(steps)

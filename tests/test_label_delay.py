@@ -930,8 +930,13 @@ class TestEmbargoItself:
         s = spec(group="g", weight="_online_role_weight", gap_cap=5.0)
         out = stream.embargo(by_group, clock="t", delay=3.0)
         assert out.filter(pl.col("g") == "b")["t"].is_sorted() is False
-        with pytest.raises(ValueError, match="steps back"):
-            rp.ModelBank([s]).fit_predict(out)
+        # The rows out of order are the predict copies, of weight 0, which
+        # count in no step-back rule (hard rule 9): the learn copies are in
+        # order, and the bank takes the frame.
+        for g in ("a", "b"):
+            learn = out.filter((pl.col("g") == g) & (pl.col("_online_role_weight") != 0.0))
+            assert learn["t"].is_sorted(), g
+        assert rp.ModelBank([s]).fit_predict(out).height == 40
         fixed = stream.embargo(by_group.sort("t", maintain_order=True), clock="t", delay=3.0)
         for g in ("a", "b"):
             assert fixed.filter(pl.col("g") == g)["t"].is_sorted()
@@ -1488,8 +1493,10 @@ DOUBLED: dict[str, dict] = {
     "lasso": {},
     "marginal": {},
     "quantile": {},
-    # With no decay; at a half-life, `NOT_DOUBLED` says why not.
-    "rls": {"half_life": math.inf},
+    # At a half-life too: the doubled stream's predict rows weigh 0 and so
+    # start no clock (hard rule 9), and its first lesson starts it where the
+    # native run's first learned row does, so the prior decays alike.
+    "rls": {},
     # With the scaler off; on, `NOT_DOUBLED` says why not.
     "sgd": {"standardize": False},
     "pa": {"standardize": False},
@@ -1541,13 +1548,6 @@ NOT_DOUBLED: dict[str, tuple[str, dict, float, str]] = {
         5.0,
         "pred_y",
     ),
-    "rls-decayed": (
-        "its prior `delta I` decays with the clock from the stream's first row, and "
-        "the doubled stream's first lesson comes `delay` after that row",
-        {"half_life": 50.0},
-        5.0,
-        "pred_y",
-    ),
 }
 #: Left out for a reason no stream shows: `seqtest` takes no weight, so the
 #: doubled stream's predict rows, a weight of 0, cannot be written for it;
@@ -1568,14 +1568,33 @@ def doubled_against_native(kind: str, delay: float, **kw) -> tuple[pl.DataFrame,
     native = unnested(kind_spec(kind, clock="t", gap_cap=1e9, embargo=delay, **kw), df)
     frame_ = stream.embargo(df, clock="t", delay=delay)
     spec_ = kind_spec(kind, clock="t", gap_cap=1e9, weight=stream.ROLE + "_weight", **kw)
+    # A predict row weighs 0 and carries no `coef` (hard rule 9): the fields
+    # laid out like it are read from the last learn row before it, and the
+    # predict rows before the first learn row, which have none to read, are
+    # left out of them on both sides.
+    out = rp.ModelBank([spec_], threads=1).fit_predict(frame_)
+    oracle = out.select("m", stream.ROLE).unnest("m")
+    riding = [c for c in RIDES_COEF if c in oracle.columns]
+    learned = (pl.col(stream.ROLE) != "predict").cum_sum() > 0
     oracle = (
-        rp.ModelBank([spec_], threads=1)
-        .fit_predict(frame_)
+        oracle.with_columns(pl.col(c).forward_fill() for c in riding)
+        .with_columns(learned.alias("_learned"))
         .filter(pl.col(stream.ROLE) == "predict")
-        .select("m")
-        .unnest("m")
+        .drop(stream.ROLE)
+    )
+    seen = oracle["_learned"]
+    oracle = oracle.drop("_learned")
+    native = native.with_columns(
+        pl.when(seen).then(pl.col(c)).otherwise(None).alias(c) for c in riding
+    )
+    oracle = oracle.with_columns(
+        pl.when(seen).then(pl.col(c)).otherwise(None).alias(c) for c in riding
     )
     return native, oracle
+
+
+#: The fields laid out like ``coef``, written on a row that learns.
+RIDES_COEF = ("coef", "support_coef", "se_coef", "se_coef_hc0", "se_coef_hac")
 
 
 class TestTheDoubledStreamOnEveryKind:

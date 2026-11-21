@@ -502,8 +502,8 @@ def micro(
 
     A row of weight ``w`` is admitted where a row of the mean weight would
     be and absorbed with its full weight, so a constant multiple of every
-    weight moves nothing. A zero-weight row advances the clock and learns
-    nothing.
+    weight moves nothing. A zero-weight row is predicted, learns nothing
+    and moves no clock.
 
     .. rubric:: Example
 

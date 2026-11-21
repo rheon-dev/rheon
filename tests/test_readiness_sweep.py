@@ -895,13 +895,15 @@ def test_ewridge_min_weight_moves_neither_its_noise_nor_its_first_solve(variant:
     if variant != "rows":
         return
     # The definition, on the row clock: every row decays by `λ`, the first
-    # row's step being 0.
+    # row's step being 0, and a row of weight 0 is no row of it (hard rule
+    # 9), so the ages count the rows of positive weight.
     df = _frame("ewridge")
     w = df["w"].to_numpy()
     resid = base["resid_y"].to_numpy(allow_copy=True).astype(float)
     use = np.isfinite(resid) & (w > 0)
     lam = 0.5 ** (1.0 / HALF_LIFE)
-    v = np.where(use, w, 0.0) * lam ** np.arange(N - 1, -1, -1, dtype=float)
+    c = np.cumsum(w != 0.0)
+    v = np.where(use, w, 0.0) * lam ** (c[-1] - c).astype(float)
     wsig = float(v.sum())
     sig2 = float((v * np.where(use, resid, 0.0) ** 2).sum() / wsig)
     got_sig2, got_wsig = _ewridge_noise(state("ewridge", variant, free | {"min_weight": 30.0}))

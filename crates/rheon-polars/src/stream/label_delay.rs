@@ -344,6 +344,7 @@ impl Stream {
             buffered: false,
             parks: false,
             w: row.w,
+            zero: Weightless::No,
         };
         // The events of rows skipped since the last accepted one fall before
         // the next accepted row, so they wait with it, across a chunk
@@ -396,6 +397,38 @@ impl Stream {
                         _ => break,
                     }
                 }
+            }
+            // A row of weight 0 is held for nothing: it teaches nothing and
+            // its step joins no clock, the held rows' included (hard rule
+            // 9). It is scored as any row is, from the labels known at its
+            // clock: the held rows whose wait it has seen out are released
+            // first, as the next row would release them. What a restarted
+            // instance takes out of the held clock is kept for it, as for a
+            // held row.
+            if plan.weightless() {
+                if plan.accept {
+                    if let Some(lr) = labels.as_deref_mut() {
+                        Self::release_labels(lr, pending, &plan, (&mut released, &mut out));
+                    } else {
+                        let now = elapsed[plan.ri];
+                        while let Some(row) = pending.pop_front_if(|r| {
+                            r.resolved && embargo.is_none_or(|e| e.passed(now, r.arrived))
+                        }) {
+                            resolved = resolved.saturating_sub(1);
+                            released.push(row);
+                            out.push(replay(
+                                released.len() - 1,
+                                released.last().unwrap(),
+                                plan.ri,
+                            ));
+                        }
+                    }
+                }
+                if let Some(cuts) = front_cuts.as_deref_mut() {
+                    cuts[plan.ri] = pending.front().map(|r| r.d_clock - r.d_fresh);
+                }
+                out.push(plan);
+                continue;
             }
             if !plan.accept {
                 // A skipped row teaches nothing and waits for nothing; its
@@ -524,11 +557,11 @@ impl Stream {
     /// learned at its label time -- its step the one from the label time
     /// before it, on the clock of labels learned, capped as any step is --
     /// and then the row is scored and held, in label-time order, unless its
-    /// label time is null, which is counted. A row of weight 0 is held like
-    /// any other and its release is a step of that clock that teaches
-    /// nothing, as `embargo` replays it (review P1: not holding it merged
-    /// the steps either side of it into one, capped once, where `embargo`
-    /// caps each). A full buffer drops the row that arrived first, under
+    /// label time is null, which is counted. A row of weight 0 never comes
+    /// here: it counts in no clock (hard rule 9, which supersedes review
+    /// P1's holding of it), so the steps either side of it are one step of
+    /// the stream's clock, capped once, under `embargo` and `label_clock`
+    /// alike. A full buffer drops the row that arrived first, under
     /// `held_overflow = "drop_oldest"`; under `"refuse"` the bank refused
     /// the chunk before any stream ran ([`Self::check_labels`]).
     ///
@@ -549,55 +582,8 @@ impl Stream {
         targets: &[Vec<f64>],
         (released, out): (&mut Vec<PendingRow>, &mut Vec<RowPlan>),
     ) {
-        let now = plan.clock.expect("a label_clock spec reads a clock column");
         if !plan.reset {
-            while pending
-                .front()
-                .and_then(|r| r.label)
-                .is_some_and(|l| !now.is_before(l))
-            {
-                let row = pending.pop_front().expect("checked");
-                // Labels are released in time order, so one before the last
-                // is before a skipped first row's label time alone
-                // ([`Self::seed_labels`]): the clock starts over at it, a
-                // step of 0, not a step back.
-                if lr
-                    .learned
-                    .last_clock()
-                    .zip(row.label)
-                    .is_some_and(|(last, l)| l.is_before(last))
-                {
-                    *lr.learned = ClockState::new();
-                }
-                let adv = lr
-                    .learned
-                    .advance_stamped(&lr.cfg, &lr.caps, row.label, None, true);
-                released.push(row);
-                let row = released.last().expect("pushed");
-                out.push(RowPlan {
-                    ri: usize::MAX,
-                    i: usize::MAX,
-                    pending: released.len() - 1,
-                    d_clock: adv.d_clock,
-                    d_fresh: 0.0,
-                    elapsed_step: adv.d_clock,
-                    stamp: adv.stamp,
-                    clock: row.clock,
-                    reset: false,
-                    blend: false,
-                    session_changed: false,
-                    backwards: false,
-                    capped: adv.capped,
-                    accept: true,
-                    want_coef: false,
-                    emit: false,
-                    drift_ri: plan.ri,
-                    learn: true,
-                    buffered: false,
-                    parks: false,
-                    w: row.w,
-                });
-            }
+            Self::release_labels(lr, pending, plan, (released, out));
         }
         *held_break = HeldBreak::default();
         let i = plan.i;
@@ -613,7 +599,94 @@ impl Stream {
             });
             return;
         };
+        let now = plan.clock.expect("a label_clock spec reads a clock column");
         debug_assert!(!label.is_before(now), "refused by check_labels");
+        Self::hold_row(
+            lr,
+            pending,
+            (plan, quiet),
+            label,
+            elapsed,
+            features,
+            targets,
+            out,
+        );
+    }
+
+    /// Under `label_clock`, the held rows whose label time the clock of
+    /// `plan`, an accepted row, has reached: released in order of label time
+    /// and then arrival, each to be learned at its label time.
+    fn release_labels(
+        lr: &mut LabelRun<'_>,
+        pending: &mut VecDeque<PendingRow>,
+        plan: &RowPlan,
+        (released, out): (&mut Vec<PendingRow>, &mut Vec<RowPlan>),
+    ) {
+        let now = plan.clock.expect("a label_clock spec reads a clock column");
+        while pending
+            .front()
+            .and_then(|r| r.label)
+            .is_some_and(|l| !now.is_before(l))
+        {
+            let row = pending.pop_front().expect("checked");
+            // Labels are released in time order, so one before the last
+            // is before a skipped first row's label time alone
+            // ([`Self::seed_labels`]): the clock starts over at it, a
+            // step of 0, not a step back.
+            if lr
+                .learned
+                .last_clock()
+                .zip(row.label)
+                .is_some_and(|(last, l)| l.is_before(last))
+            {
+                *lr.learned = ClockState::new();
+            }
+            let adv = lr
+                .learned
+                .advance_stamped(&lr.cfg, &lr.caps, row.label, None, true);
+            released.push(row);
+            let row = released.last().expect("pushed");
+            out.push(RowPlan {
+                ri: usize::MAX,
+                i: usize::MAX,
+                pending: released.len() - 1,
+                d_clock: adv.d_clock,
+                d_fresh: 0.0,
+                elapsed_step: adv.d_clock,
+                stamp: adv.stamp,
+                clock: row.clock,
+                reset: false,
+                blend: false,
+                session_changed: false,
+                backwards: false,
+                capped: adv.capped,
+                accept: true,
+                want_coef: false,
+                emit: false,
+                drift_ri: plan.ri,
+                learn: true,
+                buffered: false,
+                parks: false,
+                w: row.w,
+                zero: Weightless::No,
+            });
+        }
+    }
+
+    /// Under `label_clock`, hold `plan`'s row until `label`, in label-time
+    /// order, and score it.
+    #[allow(clippy::too_many_arguments)]
+    fn hold_row(
+        lr: &mut LabelRun<'_>,
+        pending: &mut VecDeque<PendingRow>,
+        (plan, quiet): (&RowPlan, RowPlan),
+        label: ClockValue,
+        elapsed: &[Option<Stamp>],
+        features: &FeatureRows,
+        targets: &[Vec<f64>],
+        out: &mut Vec<RowPlan>,
+    ) {
+        let i = plan.i;
         let at = pending.partition_point(|r| r.label.is_some_and(|l| !label.is_before(l)));
         pending.insert(
             at,
@@ -732,6 +805,11 @@ impl Stream {
             let Some(now) = plan.clock else { continue };
             while held.front().is_some_and(|&l| !now.is_before(l)) {
                 held.pop_front();
+            }
+            // A row of weight 0 releases what its clock has reached and is
+            // held for nothing (hard rule 9).
+            if plan.weightless() {
+                continue;
             }
             let Some(l) = times.at(plan.i) else { continue };
             if l.is_before(now) {

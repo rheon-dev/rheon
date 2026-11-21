@@ -348,7 +348,8 @@ fixture's bytes (`v68/hmm_full_narrow`, 12 features). The current fixture
 `hmm_full` (13 features) is the factor form; every other fixture moved only
 its schema number.
 
-A twenty-first, the user's (2026-11-20, review P1: "Accept exception 21"):
+A twenty-first, the user's (2026-11-20, review P1: "Accept exception 21";
+its holding of a row of weight 0 superseded by the twenty-fifth):
 under `label_clock` a row of weight 0 with a label time is held and
 learned at that time as a zero-weight step of the clock of the labels
 learned, as `embargo` learns it, where a build before scored it and held
@@ -528,7 +529,8 @@ state goes on within 3e-3 of 1.3.0's continuation (8.1e-4 measured).
 
 A twenty-fourth, the user's (2026-11-21: "Accept exception 24"; hard
 rule 9 for `audit`): an `audit` learns nothing from a row of weight 0.
-Such a row's clock step is counted, as every row's is, but its values
+Such a row's clock step is counted, as every row's is (until the
+twenty-fifth, under which it is not), but its values
 reach no count, moment, distinct-value counter, digest, run, lag or
 pair, where they were counted like any other row's. The layout is
 unchanged and there is no schema bump of its own (it landed beside
@@ -554,3 +556,58 @@ pairs beside a weighted `ewridge` on streams with zero-weight rows, one
 saved and loaded at half): 0 ulps on every field, and the three audit
 tables hash the same on both builds. No released file holds a weighted
 `audit`, so `tests/test_released_state.py` meets none.
+
+A twenty-fifth, the user's (2026-11-21: "539 exception approved"; hard
+rule 9 as task 539 restates it, "the next row should decay as if they were
+not present"): a row of weight 0 counts in no clock. The stream scores it as
+`predict` scores a row and steps no model, window, diagnostic, held-row
+buffer or notice wait on it, so the next row steps from the last row that
+counted; it supersedes the twenty-first's holding of such a row under
+`label_clock`, and the twenty-fourth's counting of its clock step in
+`audit`. No bank layout changed and there is no schema bump. `hawkes` loses
+its own `carry` and `seen`, which no released or pushed build wrote, and its
+current fixtures were regenerated. A state saved by an earlier build after
+rows of weight 0 holds what they did: its clock stands at the last such
+row's clock (on a row clock, a row further on; its session that row's), its
+models' memories decayed over their steps, every diagnostic aged over them,
+under `embargo` and `label_clock` such rows held and waiting, and an
+`audit`'s clock counted their steps. No loader can tell those steps from
+the rest. It loads as it was and continues under the new rule, with no
+loader: the next row steps from the clock the state holds, a held row of
+weight 0 is released and replayed as the old build held it, and every row
+of weight 0 after the load counts in nothing. So it continues neither to its
+frozen continuation nor to a fresh run of this build. Measured on macOS
+arm64 (`continuation.py` of the task's scratch, 2026-11-21): 20 kinds
+weighted, 3% of the rows of weight 0 and the three rows before the save
+among them, a gap past the cap before the save, three groups, chunks of
+500, saved by a3554b27 at row 3,000 of 6,000 and continued by this build.
+On a number clock, every fit field (predictions, residuals, intervals,
+probabilities, distances, states) went on within 3.4e-15 of `1 + |x|` of
+both the old build's continuation and this build's uninterrupted run;
+`weight_sum` and `settled_frac` parted by up to 0.39 of `1 + |x|` from the
+old continuation and 0.30 from the fresh run, on the rows after the load,
+and the parting decays with the half-life; `hawkes`' intensities by 8.4e-2
+of either. On the row clock the fits parted by 2.8e-3 to 9.1e-2 from the
+old continuation and 1.6e-3 to 3.1e-2 from the fresh run (`quantile`'s
+residual 0.57 and 0.31, `hawkes` 0.19 and 2.9e-2), the weights by 0.15 and
+5.5e-2; `bocpd`, which steps on rows, by nothing; no null flipped anywhere.
+The kept bank sets of `rheon-polars` whose frames hold rows of weight 0
+(`bank`, `bank_gated`, `bank_label_clock` and `bank_conformal_auto`, `v61/`
+to `v70/`) are held by `ZERO_WEIGHT_CLOCK`
+(`crates/rheon-polars/tests/state_fixtures.rs`): each loads, re-saves bytes
+that load back the same, and continues within the measured bound of its
+frozen continuation, relative to `1 + |frozen|` over every number of every
+frame, with no other cell moved: `bank` 3.77e-2 (`int_clock`'s `pred_y`),
+`bank_gated` 1.67e-1, `bank_label_clock` 2.86e-3 for `v67/` and `v68/` and
+1.64e-1 for `v69/` and `v70/`, `bank_conformal_auto` 2.86e-3 and 4.53e-2,
+bounded at 0.04, 0.17, 0.17 and 0.05. The current fixtures `bank`,
+`bank_gated`, `bank_label_clock` and `bank_conformal_auto` of
+`rheon-polars` and `audit`, `audit_scaled`, `hawkes`, `hawkes_window` and
+`hawkes_clock_window` of `rheon-core` regenerated. `rheon-core`'s kept
+`audit` sets (`COUNTED_ZERO_WEIGHT`) match the current fixture outside their
+columns, pairs and now their clock, which counted the steps of the rows of
+weight 0 before the save, at least as many as the current one's. No bank's
+`audit` takes a weight, so no bank state of one moves. A stream with no row
+of weight 0 continues to the bit: every output of `scripts/compare_outputs.py`'s
+unweighted cases moved 0 ulps against a3554b27, and a bank state saved
+without one is the same bytes but for `hawkes`'.

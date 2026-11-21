@@ -812,8 +812,9 @@ class TestSettledWeight:
         -0.0256 ... Lower min_weight below -0.0256" (task 208's worker, on
         `test_production_hardening.py`'s all-null target). Its notice says
         the target has had no row with a value, with no figure and no advice
-        to lower the floor; a stream whose every row weighs 0 is the same
-        case, and read "tops out near 0.0000". The present target ``y`` beside
+        to lower the floor. A stream whose every row weighs 0, which read
+        "tops out near 0.0000", now says nothing: such rows count in no
+        clock, so no wait runs (hard rule 9). The present target ``y`` beside
         the null one reaches its floor and is not named, and the ordinary
         unreachable floor keeps its figure (the test above)."""
         df = frame(300).with_columns(z=pl.lit(None, dtype=pl.Float64), w=pl.lit(0.0))
@@ -821,6 +822,11 @@ class TestSettledWeight:
         named = '"z"' if absent == "null_target" else '"y"'
         s = spec(min_weight=5.0, max_error_inflation=math.inf, **kw)
         fitted = _fit_noting(rp.ModelBank([s]), df)
+        if absent == "zero_weights":
+            # Rows of weight 0 count in no clock (hard rule 9): no wait runs
+            # on them, and nothing is said.
+            assert fitted.notices == [], fitted.notices
+            return
         assert len(fitted.notices) == 1, fitted.notices
         msg = fitted.notices[0]
         assert "min_weight = 5" in msg and named in msg, msg
@@ -952,21 +958,15 @@ class TestSettledWeight:
             f"half_life above {math.ceil(need * 100) / 100}, as {READY} explains."
         ]
 
-    def test_a_row_of_weight_zero_is_given_no_ceiling(self):
-        """Task 350: every row weighs 0 from row 40, so the shared weight
-        decays with the target's, toward 0. The warning comes on a row of
-        weight 0, which adds nothing, so it cannot project where the weight
-        tops out; it read "tops out near 2.21"."""
+    def test_rows_of_weight_zero_run_no_wait(self):
+        """Task 350's stream, every row of weight 0 from row 40: such rows
+        count in no clock (hard rule 9), so the weight does not decay past
+        row 39, no wait runs and nothing is said. It said the floor was
+        unmet on a row of weight 0, after those rows had decayed the
+        weight."""
         s = spec(half_life=5.0, min_weight=5.0, weight="w", max_error_inflation=math.inf)
         fitted = _fit_noting(rp.ModelBank([s]), self._stopped(zero_from=40))
-        assert fitted.notices == [
-            'spec "m": min_weight = 5 has not been met for target "y" on any row for the last '
-            "half-life, with the model within 5% of its steady state, so predictions for target "
-            '"y" stay withheld until the weight the gate reads reaches 5. This warning comes on a '
-            "row of weight 0, which adds nothing to the weight, so it cannot say where the weight "
-            "tops out. Check that rows reach the model with a positive weight, lower min_weight, "
-            f"or increase half_life, as {READY} explains."
-        ]
+        assert fitted.notices == []
 
     def test_a_row_that_meets_the_floor_restarts_the_wait(self):
         """One heavy row at row 25, inside the wait that began at row 23,
@@ -1218,9 +1218,9 @@ class TestSettledWeight:
         row 12. Rows that keep coming at weight 1 get that ceiling, rounded
         down, and the half-life that lets the model fit, rounded up; it said
         "tops out near 3.4142" and "Raise the half_life above
-        7.272540897341715". Rows of weight 0 from row 3 leave ``weight_sum``
-        falling toward 0, and the warning, on a row of weight 0, gives no
-        figure; it said "tops out near 0.0997"."""
+        7.272540897341715". Rows of weight 0 from row 3 count in no clock
+        (hard rule 9): ``weight_sum`` stands, no wait runs, and nothing is
+        said; it said "tops out near 0.0997", then gave no figure."""
         k = 10
         df = frame(60, k=k).with_columns(
             w=pl.when(pl.int_range(pl.len()) < 3).then(1.0).otherwise(0.0)
@@ -1241,11 +1241,6 @@ class TestSettledWeight:
                 f"the rows carry more weight. Increase half_life above 7.28, as {READY} explains."
             )
         else:
-            want = (
-                f"{opening}. Predictions stay withheld, and error_inflation infinite, until "
-                f"weight_sum reaches {needs}, but this warning comes on a row of weight 0, which "
-                "adds nothing to the weight, so it cannot say where weight_sum tops out. Check "
-                "that rows reach the model with a positive weight, or increase half_life, as "
-                f"{READY} explains."
-            )
+            assert fitted.notices == []
+            return
         assert fitted.notices == [want]

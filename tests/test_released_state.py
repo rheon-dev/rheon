@@ -427,6 +427,24 @@ def _load(name: str):
 compare = _load("compare_release")
 probe = _load("release_probe")
 
+#: Rule 5's twenty-fifth exception (the user's, 2026-11-21: "539 exception
+#: approved"; hard rule 9): a row of weight 0 counts in no clock, so every
+#: weighted spec of the workload moved since 2.0.0, and a file of any
+#: release goes on under the new rule from the clock its zero-weight rows
+#: left. It is held to its release's own continuation on the rows that count
+#: (a row of weight 0 carries no `coef` now, and is scored from the state as
+#: it stands), within `ZERO_WEIGHT_WITHIN` of ``1 + |v|``.
+_WEIGHTED = {name for name, _, kw, _ in probe.WORKLOAD if kw.get("weight")}
+ZERO_WEIGHT_MOVED = _WEIGHTED | {
+    name for name, _, _, reads in probe.WORKLOAD if set(reads) & _WEIGHTED
+}
+DECLARED.update(
+    {
+        (name, "2.0.0"): "the next release, Changed: a row of weight 0 counts in no clock"
+        for name in ZERO_WEIGHT_MOVED
+    }
+)
+
 
 def _online() -> bool:
     """Whether PyPI answers. An HTTP error is an ``OSError``, and a 404 here
@@ -694,6 +712,14 @@ WITHIN: dict[tuple[str, str], float] = {
 }
 
 
+#: `ZERO_WEIGHT_MOVED`'s bound, relative to ``1 + |v|``. Measured 2026-11-21
+#: on every 1.x and 2.0.0 release, the probe's rows of weight 0 all in the
+#: first half: 4.2e-2 in `ridge_session`'s residuals (3.7e-2 in its
+#: predictions), whose saved session and clock a zero-weight row moved;
+#: every other spec 5.4e-11 at most (`enet`).
+ZERO_WEIGHT_WITHIN = 0.05
+
+
 def _within(name: str, version: str) -> float:
     """The widest tolerance `WITHIN` gives ``name`` for a file of ``version``."""
     found = [
@@ -949,6 +975,8 @@ def test_a_moved_spec_goes_on_as_its_release_did(resumed):
             else None
         )
         rule = dict(within=_within(name, version), young=young)
+        if name in ZERO_WEIGHT_MOVED:
+            rule["within"] = max(rule["within"], ZERO_WEIGHT_WITHIN)
         if (
             _version(version) <= _version("1.4.0")
             and (name, "1.4.0") in DECLARED
@@ -972,6 +1000,7 @@ def test_a_moved_spec_goes_on_as_its_release_did(resumed):
                 used["prior"] += 1
                 wrong[f"{name}.{table}"] = _under_the_prior(mine, want)
                 continue
+            left = np.ones(second.height, dtype=bool)
             if table == "rows" and name in RESETS:
                 after = _after_reset(mine, second, name, RESETS[name])
                 assert after.any(), f"{name}: no reset fired in the second half"
@@ -981,6 +1010,17 @@ def test_a_moved_spec_goes_on_as_its_release_did(resumed):
                     mine.filter(pl.Series(after)), fresh, against="a fresh bank's"
                 )
                 mine, want = mine.filter(pl.Series(~after)), want.filter(pl.Series(~after))
+                left = ~after
+            if table == "rows" and name in ZERO_WEIGHT_MOVED:
+                counts = (second["w"].is_null() | (second["w"] != 0.0)).to_numpy()
+                if "converted" in rule:
+                    rule["converted"] = rule["converted"][counts]
+                counts = counts[left]
+                mine, want = mine.filter(pl.Series(counts)), want.filter(pl.Series(counts))
+                # Which row of a chunk carries `coef` follows the rows that
+                # count; the coefficients themselves are the `coef` table's.
+                mine = _plain(mine).drop(f"{name}.coef", strict=False)
+                want = _plain(want).drop(f"{name}.coef", strict=False)
             held = rule if table == "rows" else {k: v for k, v in rule.items() if k != "converted"}
             wrong[f"{name}.{table}"] = _differences(mine, want, counted=used, **held)
         # The rows were compared: the release wrote them, all of them.

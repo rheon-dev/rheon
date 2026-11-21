@@ -16,6 +16,7 @@ import numpy as np
 import polars as pl
 import pytest
 
+from counted import counted, counts
 from rheon import polars as rp
 
 TIER = "essential"
@@ -175,8 +176,10 @@ class TestArithmetic:
         )
         s = spec(weight="w", clock="t", gap_cap=10.0, half_life=40.0, min_weight=5.0)
         bank = rp.ModelBank([s])
-        out = bank.fit_predict(df)
-        want, weight_sum = oracle(df, s)
+        # The oracle steps over the rows that count: a row of weight 0 is in
+        # no clock (hard rule 9), and the bank's other rows are its.
+        out = bank.fit_predict(df).filter(counts())
+        want, weight_sum = oracle(counted(df), s)
         got = bank.marginal("m")
         assert got.columns == COLUMNS
         assert got.height == 6
@@ -184,7 +187,8 @@ class TestArithmetic:
             pair = want[(row["feature"], row["target"])]
             for field in PAIR_FIELDS:
                 assert close(row[field], pair[field]), (row["feature"], row["target"], field)
-        # The struct's weight_sum is the weight before each row, every row.
+        # The struct's weight_sum is the weight before each row, every row
+        # that counts.
         struct = out["m"].struct.field("weight_sum").to_list()
         assert all(close(a, b) for a, b in zip(struct, weight_sum, strict=True))
         # And the target with nulls has less weight behind it than the other.

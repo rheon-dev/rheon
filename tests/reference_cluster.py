@@ -21,6 +21,7 @@ Conventions, shared with the core and the bank (docs/PLAN.md section 3):
 
 from __future__ import annotations
 
+import copy
 import math
 from dataclasses import dataclass, field
 
@@ -793,23 +794,36 @@ def kmeans_ref(
     p = len(rows[0])
     model = KMeansRef(p=p, k=k, **params)  # type: ignore[arg-type]
     out: dict[str, list] = {"cluster": [], "dist": [], "dist_second": [], "weight_sum": []}
-    pending = 0.0
+    pending, started = 0.0, False
     for i, row in enumerate(rows):
         w = 1.0 if weight is None else weight[i]
+        accept = all(_usable(v) for v in row) and _usable(w)
+        # A row of weight 0 counts in no clock (hard rule 9, task 539): on a
+        # clock column its time joins the next row's step, on the row clock
+        # it is no row, and it starts no clock; it is scored as ``predict``
+        # scores it, on a copy.
+        zero = _usable(w) and float(w) == 0.0  # type: ignore[arg-type]
         if clock is None:
-            d = 0.0 if i == 0 else 1.0
+            d = 1.0 if started else 0.0
         else:
             d = 0.0 if i == 0 else min(clock[i] - clock[i - 1], gap_cap)
-        pending += d
-        accept = all(_usable(v) for v in row) and _usable(w)
+        if zero and clock is None:
+            d = 0.0
+        if started:
+            pending += d
+        if not zero:
+            started = True
         if not accept:
             for key in out:
                 out[key].append(None)
             continue
         # The folded total is capped too (review 2026-09-12, S3).
         d_row = min(pending, gap_cap)
-        pred, weight_sum = model.step([float(v) for v in row], d_row, float(w))  # type: ignore[arg-type]
-        pending = 0.0
+        if zero:
+            pred, weight_sum = copy.deepcopy(model).step([float(v) for v in row], d_row, 0.0)  # type: ignore[arg-type]
+        else:
+            pred, weight_sum = model.step([float(v) for v in row], d_row, float(w))  # type: ignore[arg-type]
+            pending = 0.0
         out["cluster"].append(None if math.isnan(pred[0]) else int(pred[0]))
         out["dist"].append(None if math.isnan(pred[1]) else pred[1])
         out["dist_second"].append(None if math.isnan(pred[2]) else pred[2])
@@ -1145,23 +1159,36 @@ def micro_ref(
         # the checkpoint's clock before any row.
         model.clock_since = 1.0
     out: dict[str, list] = {key: [] for key in (*MICRO_FIELDS, "weight_sum")}
-    pending = 0.0
+    pending, started = 0.0, False
     for i, row in enumerate(rows):
         w = 1.0 if weight is None else weight[i]
+        accept = all(_usable(v) for v in row) and _usable(w)
+        # A row of weight 0 counts in no clock (hard rule 9, task 539): on a
+        # clock column its time joins the next row's step, on the row clock
+        # it is no row, and it starts no clock; it is scored as ``predict``
+        # scores it, on a copy.
+        zero = _usable(w) and float(w) == 0.0  # type: ignore[arg-type]
         if clock is None:
-            d = 0.0 if i == 0 else 1.0
+            d = 1.0 if started else 0.0
         else:
             d = 0.0 if i == 0 else min(clock[i] - clock[i - 1], gap_cap)
-        pending += d
-        accept = all(_usable(v) for v in row) and _usable(w)
+        if zero and clock is None:
+            d = 0.0
+        if started:
+            pending += d
+        if not zero:
+            started = True
         if not accept:
             for key in out:
                 out[key].append(None)
             continue
         # The folded total is capped too (review 2026-09-12, S3).
         d_row = min(pending, gap_cap)
-        pred, weight_sum = model.step([float(v) for v in row], d_row, float(w))  # type: ignore[arg-type]
-        pending = 0.0
+        if zero:
+            pred, weight_sum = copy.deepcopy(model).step([float(v) for v in row], d_row, 0.0)  # type: ignore[arg-type]
+        else:
+            pred, weight_sum = model.step([float(v) for v in row], d_row, float(w))  # type: ignore[arg-type]
+            pending = 0.0
         out["cluster"].append(None if math.isnan(pred[0]) else int(pred[0]))
         out["dist"].append(None if math.isnan(pred[1]) else pred[1])
         out["micro_id"].append(None if math.isnan(pred[2]) else int(pred[2]))

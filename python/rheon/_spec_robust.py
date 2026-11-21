@@ -301,8 +301,8 @@ def huber(
     whole level while the intercept is still near 0, widen it for as long as the
     decay keeps them.
 
-    Both scales age on every row the model sees, a row with no prediction or
-    with weight 0 included, so they forget across a gap as the clock says,
+    Both scales age on every row the model sees, a row with no prediction
+    included, so they forget across a gap as the clock says,
     and each learns a residual at the row's own weight, not at its Huber
     weight. Until a target has an ``s`` above 0, no row is down-weighted.
     That is before its first residual, or while every residual so far is
@@ -779,8 +779,8 @@ def quantile(
     ``(features + 10) * 8`` bytes a learned row. Each row's residual is
     kept beside it for the scale: a quantile fit's band is drawn in the
     MAD, which is read exactly from the held residuals while the refit
-    waits. A run of rows that only aged the target (its value null or its
-    weight 0) takes 32 bytes, and consecutive such rows at the same clock
+    waits. A run of rows that only aged the target (its value null) takes
+    32 bytes, and consecutive such rows at the same clock
     step are one run. Once its runs number more than 4 for each row of the
     count, as on a target present on fewer than about one row in five
     under an irregular clock, the target gives its refit up and keeps its

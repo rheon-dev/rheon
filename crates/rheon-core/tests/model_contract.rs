@@ -3035,7 +3035,7 @@ fn predict_is_the_step_without_the_step<M: OnlineModel + Clone>(
     // Of mixed signs, and all positive and all negative at a level of 1,000
     // (docs/PLAN.md task 209 (a)'s one-sided streams).
     for level in [0.0, 1e3, -1e3] {
-        zero_weight_rows_only_advance_the_clock(&build, targets, binary, kind, level);
+        zero_weight_rows_leave_no_nan(&build, targets, binary, kind, level);
     }
     a_zero_weight_row_past_the_underflow_forgets(&build, targets, binary, kind);
     unusable_values_are_refused(&build, targets, binary, kind);
@@ -3138,29 +3138,19 @@ fn a_zero_weight_row_past_the_underflow_forgets<M: OnlineModel>(
     }
 }
 
-/// Hard rules 8 and 9, together and without naming a decay: a zero-weight
-/// row advances the clock and teaches nothing, so the `n_eff` a stream
-/// reports after one must equal the `n_eff` of the same stream with that row
-/// *left out* and its clock delta carried into the next row. For an
-/// exponential decay `lam(a)·lam(b) = lam(a + b)`, so the two agree exactly
-/// whatever the half-life -- and a model that forgets to decay `n_eff` on the
-/// row it learns nothing from does not (docs/REVIEW-E54-E64.md H3/C2).
-///
-/// And every number the real rows report agrees too, to rounding (within
-/// 1e-9 of `1 + |value|`): each prediction, the fitted function -- what the
-/// model predicts at two fixed rows after each real row, which for a linear
-/// fit is its coefficients -- and the coefficients' variances where a model
-/// keeps them. `kalman` charged its process noise per row, `Q d²`, which is
-/// not additive over a split gap, and moved every prediction after a
-/// zero-weight row by up to 0.197 at `coef_half_life` 20 while this test,
-/// which compared `n_eff` and which predictions were null, passed
-/// (docs/PLAN.md task 211).
-///
-/// At a `level` other than 0 the stream is one-sided (docs/PLAN.md task 209
-/// (a)): each feature `v` reads `sign · |v| + level`, the targets follow on
-/// the same side, and so do the two probe rows; a label still reads the
-/// side of 0.5 the mixed-sign row fell on.
-fn zero_weight_rows_only_advance_the_clock<M: OnlineModel>(
+/// Hard rule 9 for a model handed a row of weight 0 directly: the row,
+/// the first with a prediction among them, divides no 0/0 and leaves no NaN
+/// behind, so every row the stream without it predicts, the stream with it
+/// predicts too, and its weight stays finite. The bank hands a model no such
+/// row: a row of weight 0 counts in no clock, and the next row steps from
+/// the last that counted, which `crates/rheon-polars/tests/zero_weight.rs`
+/// holds for every kind against the stream without such rows, to the bit
+/// on every OS (PLAN 539). The numbers themselves are therefore not held
+/// here: this stream carries the zero-weight row's step into the next as a
+/// sum, and a model's decay over two steps differs from its decay over
+/// their sum in the last bits, by more on some OSes (`glm` at a level of
+/// 1,000 parted by 1.5e-9 on Windows).
+fn zero_weight_rows_leave_no_nan<M: OnlineModel>(
     build: &impl Fn() -> M,
     targets: usize,
     binary: bool,
@@ -3224,12 +3214,9 @@ fn zero_weight_rows_only_advance_the_clock<M: OnlineModel>(
         let compare = carried == 0.0;
         carried = 0.0;
         assert!(
-            !compare || (a.n_eff - b.n_eff).abs() <= 1e-9 * b.n_eff.abs().max(1.0),
-            "{kind} at level {level}: row {i}: n_eff {} in the stream with a zero-weight row, \
-             {} in the one without it -- a zero-weight row must advance the clock and nothing \
-             else",
-            a.n_eff,
-            b.n_eff
+            a.n_eff.is_finite(),
+            "{kind} at level {level}: row {i}: n_eff {} after a zero-weight row",
+            a.n_eff
         );
         // Nor may it leave a NaN behind: a prediction the stream without it
         // makes, the stream with it makes too (hard rule 9).
@@ -3241,54 +3228,6 @@ fn zero_weight_rows_only_advance_the_clock<M: OnlineModel>(
             a.pred,
             b.pred
         );
-        // And the numbers themselves (docs/PLAN.md task 211): the
-        // predictions on the rows `n_eff` is compared on, and after every
-        // real row the fitted function at two fixed rows and the
-        // coefficients' variances. On the row that carries a skipped row's
-        // delta the prediction may differ by construction, as `n_eff` does:
-        // the stream with the zero-weight row has aged its moments by that
-        // row's delta before predicting, and a fit solved after that, with
-        // a penalty that does not age with them, is a fit solved after the
-        // decay; the other ages them inside the row. No model is exempt:
-        // `ftrl`, the last, dropped the penalty scale whose second clock a
-        // zero-weight row moved (docs/PLAN.md task 215).
-        let probes: [Vec<f64>; 2] = [
-            vec![side(0.7); K],
-            (0..K).map(|f| side(f as f64 - 0.4)).collect(),
-        ];
-        let mut theirs = Vec::new();
-        if compare {
-            theirs.push((String::from("pred"), a.pred.clone(), b.pred.clone()));
-        }
-        for (n, x) in probes.iter().enumerate() {
-            theirs.push((
-                format!("the fit at probe {n}"),
-                with.predict(x, 0.0).pred,
-                without.predict(x, 0.0).pred,
-            ));
-        }
-        let variances = |m: &M| match m.coef_variance() {
-            Some(CoefVariance::PerNoise(v) | CoefVariance::Absolute(v)) => {
-                v.into_iter().flatten().collect()
-            }
-            None => vec![],
-        };
-        theirs.push((
-            String::from("coef variance"),
-            variances(&with),
-            variances(&without),
-        ));
-        for (what, u, v) in theirs {
-            assert_eq!(u.len(), v.len(), "{kind} at level {level}: row {i}: {what}");
-            for (slot, (p, q)) in u.iter().zip(&v).enumerate() {
-                assert!(
-                    !(p.is_finite() && q.is_finite()) || (p - q).abs() <= 1e-9 * (1.0 + q.abs()),
-                    "{kind} at level {level}: row {i}: {what}, slot {slot}: {p} in the stream \
-                     with zero-weight rows, {q} in the one without them -- a zero-weight row \
-                     must advance the clock and teach nothing"
-                );
-            }
-        }
     }
 }
 
@@ -3602,7 +3541,7 @@ fn refuses_unusable_values<M: OnlineModel + Clone>(
 
 /// [`refuses_unusable_values`] at the head of a stream, at its fourth row
 /// (inside every warm-up the configurations here keep) and on a warm model
-/// at row 60: the stream of [`zero_weight_rows_only_advance_the_clock`],
+/// at row 60: the stream of [`zero_weight_rows_leave_no_nan`],
 /// with twelve rows after each checked one.
 fn unusable_values_are_refused<M: OnlineModel + Clone>(
     build: &impl Fn() -> M,
@@ -3932,14 +3871,14 @@ fn sgd_and_pa_zero_weight_rows_under_every_setting() {
         };
         let build = move || Sgd::new(cfg.clone()).unwrap();
         for &level in levels {
-            zero_weight_rows_only_advance_the_clock(&build, 2, binary, "sgd", level);
+            zero_weight_rows_leave_no_nan(&build, 2, binary, "sgd", level);
         }
         a_zero_weight_row_past_the_underflow_forgets(&build, 2, binary, "sgd");
     }
     for cfg in pa_settings() {
         let build = move || Pa::new(cfg.clone()).unwrap();
         for level in [0.0, 1e3, -1e3] {
-            zero_weight_rows_only_advance_the_clock(&build, 2, false, "pa", level);
+            zero_weight_rows_leave_no_nan(&build, 2, false, "pa", level);
         }
         a_zero_weight_row_past_the_underflow_forgets(&build, 2, false, "pa");
     }

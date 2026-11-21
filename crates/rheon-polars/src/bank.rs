@@ -4296,6 +4296,7 @@ impl Bank {
                         &cfgs[*si],
                         sc.clock.as_ref(),
                         sc.session.as_deref(),
+                        sc.weight.as_deref(),
                         idx,
                         *base,
                     )

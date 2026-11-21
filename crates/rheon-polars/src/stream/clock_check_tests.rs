@@ -66,7 +66,7 @@ fn both(
     rows: &[usize],
     base: usize,
 ) -> bool {
-    let got = s.check_clock(cfg, Some(clock), session, rows, base);
+    let got = s.check_clock(cfg, Some(clock), session, None, rows, base);
     let want = advanced(&s.persisted.clock, cfg, clock, session, rows, base);
     assert_eq!(
         format!("{got:?}"),
@@ -183,7 +183,7 @@ fn the_exact_cases_are_refused_as_the_whole_step_refused_them() {
     let ns = ClockCol::Ns(vec![t, t + 1, t + 2, t + 1, t + 3]);
     for cfg in [error, late(1e-9)] {
         assert!(both(&s, &cfg, &ns, None, &[0, 1, 2, 3, 4], 0));
-        let err = s.check_clock(&cfg, Some(&ns), None, &[0, 1, 2, 3, 4], 0);
+        let err = s.check_clock(&cfg, Some(&ns), None, None, &[0, 1, 2, 3, 4], 0);
         let r = err.unwrap_err();
         assert_eq!((r.row, r.back_ns, r.raw), (3, Some(1), -1e-9));
     }
@@ -198,7 +198,7 @@ fn the_exact_cases_are_refused_as_the_whole_step_refused_them() {
         );
         assert!(both(&s, &error, &int, None, &[0, 1, 2], 0));
         let r = s
-            .check_clock(&error, Some(&int), None, &[0, 1, 2], 0)
+            .check_clock(&error, Some(&int), None, None, &[0, 1, 2], 0)
             .unwrap_err();
         assert_eq!((r.row, r.back_int), (2, Some(i128::from(back))));
     }
@@ -210,7 +210,7 @@ fn the_exact_cases_are_refused_as_the_whole_step_refused_them() {
     let nan = ClockCol::F64(vec![5.0, f64::NAN, 4.0, 3.0]);
     assert!(both(&s, &error, &nan, None, &[0, 1, 2, 3], 0));
     let r = s
-        .check_clock(&error, Some(&nan), None, &[0, 1, 2, 3], 0)
+        .check_clock(&error, Some(&nan), None, None, &[0, 1, 2, 3], 0)
         .unwrap_err();
     assert_eq!(r.row, 1);
     assert!(r.raw.is_nan(), "{}", r.raw);
@@ -231,7 +231,7 @@ fn the_exact_cases_are_refused_as_the_whole_step_refused_them() {
     let bytes = rmp_serde::to_vec_named(&loaded.persisted.clock).unwrap();
     loaded.persisted.clock = rmp_serde::from_slice(&bytes).unwrap();
     let r = loaded
-        .check_clock(&error, Some(&ClockCol::F64(vec![9.5])), None, &[7], 0)
+        .check_clock(&error, Some(&ClockCol::F64(vec![9.5])), None, None, &[7], 0)
         .unwrap_err();
     assert_eq!((r.row, r.raw), (7, -0.5));
     assert!(both(

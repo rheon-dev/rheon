@@ -499,8 +499,9 @@ const READ_ANEW: &[(&str, f64)] = &[
 /// cannot be told apart from the rest, so it loads as it was: it continues
 /// to the bit (an audit's only output is `n_eff`, which never took such a
 /// row's weight), saves bytes that load back to the same, and differs from
-/// the current fixture's state in its columns' and pairs' counts alone
-/// ([`counted_zero_weight_rule`]).
+/// the current fixture's state in its columns' and pairs' counts and, since
+/// PLAN 539 (a zero-weight row counts in no clock), its clock's, which
+/// counted those rows' steps ([`counted_zero_weight_rule`]).
 const COUNTED_ZERO_WEIGHT: &[&str] = &["audit", "audit_exact", "audit_scaled"];
 
 /// How far a continuation may part from the one frozen, on a platform other
@@ -1072,9 +1073,10 @@ fn holds_for_a_refit(bytes: &[u8]) -> bool {
 /// buffer or histogram holds an `|e|` or deviations for a refit; and the
 /// state saves bytes that load back to the same.
 /// A kept `audit` state, converted (`saved`), against the current
-/// fixture's ([`COUNTED_ZERO_WEIGHT`]): the same but for its columns and
-/// pairs, which counted the rows of weight 0 the current state leaves out,
-/// so each column read at least as many rows.
+/// fixture's ([`COUNTED_ZERO_WEIGHT`]): the same but for its columns,
+/// pairs and clock, which counted the rows of weight 0 the current state
+/// leaves out, so each column read at least as many rows and the clock at
+/// least as many steps.
 fn counted_zero_weight_rule(saved: &[u8], current: &[u8], what: &str) {
     use rmpv::Value;
     fn audit(v: &Value) -> Option<&Vec<(Value, Value)>> {
@@ -1125,10 +1127,28 @@ fn counted_zero_weight_rule(saved: &[u8], current: &[u8], what: &str) {
     let (kept, now) = (audit(&kept).unwrap(), audit(&now).unwrap());
     assert_eq!(kept.len(), now.len(), "{what}: the fields");
     for ((k, a), (_, b)) in kept.iter().zip(now) {
-        if !matches!(k.as_str(), Some("columns" | "pairs")) {
+        if !matches!(k.as_str(), Some("columns" | "pairs" | "clock")) {
             assert_eq!(a, b, "{what}: {k}");
         }
     }
+    // And its clock, which counted the steps of the rows of weight 0 before
+    // the save (PLAN 539: such a row counts in no clock).
+    let steps = |m: &[(Value, Value)]| {
+        m.iter()
+            .find(|(k, _)| k.as_str() == Some("clock"))
+            .and_then(|(_, c)| match c {
+                Value::Map(c) => c
+                    .iter()
+                    .find(|(k, _)| k.as_str() == Some("steps"))
+                    .and_then(|(_, v)| v.as_u64()),
+                _ => None,
+            })
+    };
+    let (sa, sb) = (steps(kept), steps(now));
+    assert!(
+        sa >= sb,
+        "{what}: the kept clock counted {sa:?} steps, the current {sb:?}"
+    );
     let (a, b) = (rows(kept), rows(now));
     assert!(
         a.iter().zip(&b).all(|(a, b)| a >= b) && a != b,

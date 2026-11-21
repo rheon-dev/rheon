@@ -62,8 +62,9 @@ def stream(n: int = 400, seed: int = 7) -> pl.DataFrame:
     Two columns serve `HARD_PATHS` alone, derived from the others so no
     other column's draws move: `x1b`, `x1` stepped up by 4 from row 220, a
     break for `bocpd`'s fold to follow; and `ts_decade`, `ts` with each
-    group's first row (rows 0 to 2) a decade earlier, so each group's
-    temporal clock runs at a decade's age from its second row on."""
+    group's first row of positive weight a decade earlier, so each group's
+    temporal clock runs at a decade's age from its next row on. The rows of
+    weight 0 are all in the first half."""
     rng = np.random.default_rng(seed)
     t = np.cumsum(rng.choice([0.5, 1.0, 1.5, 2.0], size=n))
     # Two gaps past the cap. Raising rows 90 and 250 alone, as this did until
@@ -76,6 +77,11 @@ def stream(n: int = 400, seed: int = 7) -> pl.DataFrame:
     z = 0.2 * y + x[:, 2] + 0.3 * rng.standard_normal(n)
     w = rng.uniform(0.5, 1.5, n)
     w[rng.choice(n, 15, replace=False)] = 0.0
+    # Rows of weight 0 in the first half alone: a row of weight 0 counts in
+    # no clock since 539 (hard rule 9), so a release's own continuation of
+    # its saved half, over rows that all count, is the one this build's must
+    # meet, the state the release saved being the only difference.
+    w[HALF:][w[HALF:] == 0.0] = 1.0
     x0 = x[:, 0].copy()
     x0[[30, 31, 200]] = np.nan
     yy = y.copy()
@@ -110,12 +116,20 @@ def stream(n: int = 400, seed: int = 7) -> pl.DataFrame:
             x1b=pl.col("x1") + pl.when(pl.int_range(pl.len()) >= BREAK_AT).then(4.0).otherwise(0.0),
         )
         .with_columns(
+            # Each group's first row that counts in a clock (a row of
+            # weight 0 counts in none).
             ts_decade=pl.col("ts")
-            - pl.when(pl.int_range(pl.len()) < FIRST_ROWS)
-            .then(DECADE)
-            .otherwise(pl.duration(days=0)),
+            - pl.when(pl.Series(_first_counted(w, n))).then(DECADE).otherwise(pl.duration(days=0)),
         )
     )
+
+
+def _first_counted(w: np.ndarray, n: int) -> np.ndarray:
+    """True on each of the three groups' first row of weight other than 0."""
+    first = np.zeros(n, dtype=bool)
+    for g in range(3):
+        first[np.flatnonzero((np.arange(n) % 3 == g) & (w != 0.0))[0]] = True
+    return first
 
 
 #: The row from which `x1b` is `x1` stepped up by 4.
