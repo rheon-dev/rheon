@@ -22,10 +22,10 @@ rheon-polars = { path = "crates/rheon-polars", version = "2.0.0" }
 
 # Rust polars is hard-pinned and linked statically into the wheel, so it is
 # fixed at build time; py-polars is a runtime range in pyproject.toml
-# (>=1.37.0,<3), measured but not locked. The build/dev py-polars is 1.44.2
-# (tests/test_scaffold.py BUILT_AGAINST), which rust polars 0.55.2 is the
-# engine of; the aligned triple is rust 0.55.2 <-> py-polars 1.44.x <->
-# pyo3-polars 0.28.
+# (>=1.37.0,<3), measured but not locked. The build/dev py-polars is 2.1.0
+# (tests/test_scaffold.py BUILT_AGAINST); rust polars 0.55.2 and pyo3-polars
+# 0.28.0 are the newest crates (2026-11-21), and a py-polars major or minor
+# needs no change on this side: the wheel's copy and the user's never meet.
 # "object" is required because pyo3-polars/derive pulls polars-plan, which turns on
 # polars-core/object; without it polars-ops fails to compile (non-exhaustive DataType match).
 polars = { version = "=0.55.2", default-features = false, features = ["object", "dtype-i8", "dtype-u8", "dtype-i16", "dtype-u16", "dtype-i128", "dtype-decimal", "dtype-array"] }

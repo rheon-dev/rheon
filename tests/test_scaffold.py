@@ -19,13 +19,15 @@ def test_native_extension_loads() -> None:
 # polars =0.55.2, the newest crate on crates.io (2026-10-08): py-polars 2.0
 # is a Python-side major, and the wheel's own copy never meets the user's
 # (docs/explanation/polars-interfaces.md). `uv.lock` holds the dev environment to it.
+# Moved 2.0.0 -> 2.1.0 on 2026-11-21 (task 540): the suite passed on it, and
+# `docs/VALIDATION.md`, regenerated on it, changed only in its header and a timing.
 # Moved 1.44.1 -> 1.44.2 for 0.5.1: every golden file passed on it
 # unmodified, and `docs/VALIDATION.md`, regenerated on it, changed only in
 # its header and one timing. Moved 1.44.2 -> 2.0.0 on 2026-10-08 (review
 # round 4, D9), once the canary had passed on 2.0.0 final (run 37718689527
 # of 2026-10-08): the goldens passed unmodified again, and VALIDATION.md
 # changed only in its header and one timing.
-BUILT_AGAINST = "2.0.0"
+BUILT_AGAINST = "2.1.0"
 # Measured floor -- see the note in pyproject.toml, docs/VERSIONS.md's
 # *The floor*, and the matrix in docs/records/RELEASE-HISTORY.md. `LazyFrame.collect_batches`, which
 # `lf.rheon.fit_predict` reads with, arrived in 1.34.0 and first waits for
