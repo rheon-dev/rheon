@@ -12,6 +12,8 @@ import scipy
 
 from . import runs_bucket as rb
 from . import runs_ew as rew
+from . import runs_lag as rlag
+from .lag import Lag
 from .bucket import Bucketed, BucketSpec
 from .common import make_frame
 
@@ -315,6 +317,63 @@ def part2(quick: bool) -> None:
     table_e3()
 
 
+# ---------------------------------------------------------------------------
+# Part 3
+
+
+def table_l1(n: int) -> None:
+    print(f"### Table L1: the lag state against Polars, one pass ({n} rows, 5 groups, `over`)\n")
+    a = rlag.vs_polars(make_frame(n))
+    b = rlag.vs_polars(make_frame(n, nonfinite=True))
+    rows = [[*r, *q[1:]] for r, q in zip(a, b, strict=True)]
+    print(md(["output", "valid", "validity diff", "bit diff",
+              "valid (non-finite)", "validity diff", "bit diff"], rows))
+    print()
+    print("### Table L2: lag state bytes, saved form\n")
+    rows = []
+    for k in rlag.KS:
+        f = Lag.bytes_formula(k)
+        st = Lag("shift", k)
+        for x in range(1000):
+            st.step(float(x))
+        rows.append([k, "8 + 8k + ceil(k/8)", f, len(st.to_bytes()), 8 * k,
+                     f"{f * 10 * 1000 / 1e6:.2f} MB"])
+    print(md(["k", "bytes (formula)", "formula", "measured", "lower bound 8k",
+              "10 columns x 1000 groups"], rows))
+    print()
+
+
+def table_l3(n: int, mem: bool) -> None:
+    print(
+        f"### Table L3: the lag computed by the user with Polars before the bank, "
+        f"chunk by chunk ({n} rows, 5 groups)\n"
+    )
+    print(
+        "Rows that differ from one Polars pass of `shift(k).over(\"g\")`: each chunk "
+        "lagged alone, and each chunk lagged with the last k rows of each group carried "
+        "from the chunks before (the user holds them, not the bank).\n"
+    )
+    print(md(["k", "chunks", "rows wrong, no carry", "rows wrong, k rows carried",
+              "rows the user carries (k x groups)"], rlag.user_shift_chunked(make_frame(n))))
+    print()
+    if not mem:
+        return
+    print(
+        "### Table L4: what Polars' streaming engine holds for a lag "
+        "(`scan_parquet(...).select(g, t, y = expr).sink_parquet(engine = \"streaming\")`, "
+        "1000 groups, peak resident memory of the process)\n"
+    )
+    print(md(["rows", "copy x", "shift(1)", "shift(20)", "shift(1).over(g)", "shift(20).over(g)"],
+             rlag.streaming_memory()))
+    print()
+
+
+def part3(quick: bool) -> None:
+    n = 6000 if quick else 20000
+    table_l1(n)
+    table_l3(n, mem=not quick)
+
+
 def main(argv: list[str]) -> None:
     quick = "--quick" in argv
     parts = [a for a in argv if a.startswith("--part=")]
@@ -325,4 +384,6 @@ def main(argv: list[str]) -> None:
         part1(quick)
     if "2" in want:
         part2(quick)
+    if "3" in want:
+        part3(quick)
     print(f"(all tables: {time.time() - t0:.0f} s)", file=sys.stderr)
