@@ -1,7 +1,7 @@
 <!-- kind: reference -->
 # Models
 
-The reference entry of each of the twenty-two models a spec can name, by
+The reference entry of each of the twenty-three models a spec can name, by
 family, for a reader who knows which model they want to look up. A
 model's parameters, their defaults and its refusals are in its docstring,
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md).
@@ -28,7 +28,7 @@ which models keep each, and why.
 
 ## The models at a glance
 
-The twenty-two models fall into four families, and each family answers one
+The twenty-three models fall into four families, and each family answers one
 kind of question about a stream. Each name links its builder's reference
 page, which gives its keywords and their defaults, and *entry* links its
 entry on this page. [Choose a model](how-to/choose-a-model.md) says which
@@ -62,6 +62,7 @@ to start with for which question.
 | [`corrchange`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.corrchange) · [entry](#corrchange--has-the-correlation-structure-changed) | test | has the correlation structure changed: the Wied–Krämer–Dehling constancy test span by span, the Wied–Galeano detector row by row against a stable history, or the size of a change between two windows against a permutation null |
 | [`bocpd`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.bocpd) · [entry](#bocpd--how-long-has-this-regime-lasted) | filter | how long this regime has lasted: Adams & MacKay's run-length posterior, so the answer is the regime's age and not a flag |
 | [`hmm`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.hmm) · [entry](#hmm--which-regime-are-we-in) | filter | a Gaussian hidden Markov model, filtered as the stream runs: `ew_class` without the labels, with a transition matrix that can be learned |
+| [`hawkes`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.hawkes) · [entry](#hawkes--how-much-does-each-event-excite-the-next) | solve | a self-exciting point process: each node's event intensity before the row, and how much an event of each node raises the next, fitted exactly by least squares over exponential kernels |
 
 **How a model learns from a row decides whether, with decay off, its
 answer depends on the row order:**
@@ -2933,8 +2934,8 @@ share of rows it classes right.
 
 ## Sequential tests and regimes
 
-These models predict no target. Each reads its columns, or a target's
-sign, and answers, as the rows arrive, a question about the stream: whether
+These models predict no target. Each reads its columns, a target's sign
+or its events, and answers, as the rows arrive, a question about the stream: whether
 something holds, whether and when it changed, or which regime it is in now.
 
 ### `seqtest` — a sequential test of a sign, by betting
@@ -3552,3 +3553,119 @@ is. [Does `hmm` recover the stream that made
 it?](REGIMES.md#1-does-hmm-recover-the-stream-that-made-it)
 measures how often it puts a row in the state that generated it, seeded from
 the rows and given the true covariances.
+
+### `hawkes` — how much does each event excite the next?
+
+*API:* [`rheon.spec.hawkes`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.hawkes) — *Rust:* [`hawkes.rs`](../crates/rheon-core/src/hawkes.rs) — *Outputs:* [fields](OUTPUTS.md#hawkes)
+
+A self-exciting point process (Hawkes): a base rate for each node, and how
+many events of each node one event of each node causes.
+
+Use `hawkes` on a stream of events that come in bursts, where each event
+raises the chance of the next for a while: trades, messages, failures. Each
+target is a node, and a value above 0 on a row is an event of that node, of
+that mark (1 for an event, a count for several at once). Each row reports
+each node's intensity, its expected events per unit of the clock, read just
+before the row's events from the fit on the rows before them.
+
+Its parameters, their defaults and what each refuses are in its
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.hawkes),
+and the fields it writes in [OUTPUTS.md](OUTPUTS.md#hawkes). The parameters
+every spec takes are in [What every spec takes](#what-every-spec-takes),
+apart from `features`, which it refuses. A row's weight only decides whether
+its events are learned: 0 skips them, any weight above 0 learns them.
+
+#### The update
+
+With `R_ju` node `j`'s excitation at the kernel decay `β_u`, `φ = (1, R)`,
+the intensity `λ_i = θ_iᵀ φ`, and `f = λ` the row's decay over the clock
+step `d` (`γ = ln 2 / half_life`):
+
+```
+R_ju ← e^(−β_u d) R_ju      b ← f b      Q ← f Q      G₀₀ ← f G₀₀ + (1 − f) / γ
+each node j with an event of mark m_j, from R before the row's events:
+b_j ← b_j + m_j φ           Q_jl ← Q_jl + m_j m_l       R_ju ← R_ju + m_j β_u
+G₀ₐ = (β_a b_j(a)[0] − R_a) / (β_a − γ)
+Gₐᵦ = (β_a b_j(a)[b] + β_b b_j(b)[a] + β_a β_b Q_j(a)j(b) − R_a R_b) / (β_a + β_b − γ)
+θ_i = G⁻¹ b_i
+```
+
+`θ_i` minimizes the least-squares contrast `Σ_i ∫ λ_i² dt − 2 ∫ λ_i dN_i`,
+each instant weighted by its decay. `G` is not kept, since it can be read
+from `b` and `Q`, so the state is `8 (k + D (1 + k) + D (D + 1) / 2 + 2)`
+bytes for `D` nodes and `k = D U` excitations: 64 bytes for one node and
+two decays, 200 for two nodes and three.
+
+#### Example
+
+**It recovers the parameters of a process it did not see made.** This code
+simulates one node from a base rate of 0.5 and a kernel of `α = 0.6` at
+`β = 2`, by Ogata's thinning, and prints the fit:
+
+```python
+import numpy as np
+import polars as pl
+from rheon import polars as rp
+
+rng = np.random.default_rng(3)
+t, excite, times = 0.0, 0.0, []
+while t < 5_000.0:
+    bound = 0.5 + excite
+    step = rng.exponential(1 / bound)
+    excite *= np.exp(-2.0 * step)
+    t += step
+    if rng.uniform() * bound <= 0.5 + excite:
+        times.append(t)
+        excite += 0.6 * 2.0
+pl.DataFrame({"t": times, "event": 1.0}).write_parquet("events.parquet")
+
+model = rp.spec.hawkes(
+    "h", targets=["event"], kernel_decays=[2.0], clock="t", half_life=float("inf"), gap_cap=1e9
+)
+bank = rp.ModelBank([model])
+bank.fit(pl.scan_parquet("events.parquet"))
+coef = {r["term"]: r["coef"] for r in bank.coef().iter_rows(named=True)}
+print(f"mu: true 0.50, found {coef['mu']:.2f}")
+print(f"alpha: true 0.60, found {coef['alpha_event_beta2']:.2f}")
+```
+
+```text
+mu: true 0.50, found 0.51
+alpha: true 0.60, found 0.59
+```
+
+#### See also
+
+For the age of a burst rather than its intensity, or the evidence that one
+spec's events come faster than another's:
+
+- [`bocpd`](#bocpd--how-long-has-this-regime-lasted), how long the current
+  regime has lasted.
+- [`seqtest`](#seqtest--a-sequential-test-of-a-sign-by-betting), evidence
+  you can read at any row.
+
+#### Notes
+
+**Its fit is tick's least-squares minimiser.** tick's
+`ModelHawkesSumExpKernLeastSq` computes the same contrast, divided by the
+number of events, and the fit agrees with its minimiser to 4e-14 of the
+largest coefficient, over one to three nodes and one to three decays; a
+row's intensity agrees with tick refit on the rows before it, and a window's
+fit with tick refit on the window's events. The forgotten fit, which tick
+does not compute, is held to the contrast written out as sums over pairs of
+events.
+
+**A fit the events cannot identify is withheld.** Two nodes whose events
+fall on the same rows give `G` a condition number near `1e14`, and an exact
+solution of digits of rounding. Where a pivot of `G` scaled to a unit
+diagonal falls below `1e-10`, the row reports no intensity.
+
+**The window keeps its rows.** `window_events = W` fits the last `W` rows
+that carried an event, alone. Dropping the oldest takes back exactly what it
+added, through the sums of its excitation of the later rows; those are kept
+in two blocks so that no sum is rescaled by a growing exponential. The window
+holds `8 (1 + D + k)` bytes a row, 32 for one node and two decays, and
+`window_events` bounds its rows, so a group's whole state is known from the
+spec: a spec past `max_state_bytes` (256 KB by default, about 8,190 rows of
+one node and two decays, or 3,637 of two nodes and three) is refused, and one
+past half of it is warned of.

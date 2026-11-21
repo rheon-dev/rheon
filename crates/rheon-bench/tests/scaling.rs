@@ -405,6 +405,7 @@ const SURFACES: &[&[&str]] = &[
         "seqtest.",
         "bocpd.",
         "audit.",
+        "hawkes.",
     ],
     &["bank."],
     &["runner.", "windows.", "refresh.", "gbdt."],

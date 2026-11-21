@@ -518,3 +518,42 @@ fn a_fit_the_events_cannot_identify_is_not_reported() {
     }
     assert!(m.coefficients().concat().iter().all(|v| v.is_finite()));
 }
+
+/// The numbers a state holds, cfg aside, driven far past a full window:
+/// never more than `state_bytes` says, and exactly that once the window is
+/// full. The window's rows are the one part of the state the data could
+/// size, and `window_events` caps them.
+#[test]
+fn the_state_never_passes_the_bytes_its_settings_give() {
+    fn floats(v: &rmpv::Value) -> u64 {
+        match v {
+            rmpv::Value::Array(a) => a.iter().map(floats).sum(),
+            rmpv::Value::Map(m) => m
+                .iter()
+                .filter(|(k, _)| k.as_str() != Some("cfg"))
+                .map(|(_, v)| floats(v))
+                .sum(),
+            rmpv::Value::F64(_) => 1,
+            _ => 0,
+        }
+    }
+    for (n, betas, window) in [
+        (1usize, vec![1.0, 5.0], None),
+        (2, vec![0.7, 4.0, 15.0], None),
+        (1, vec![1.0, 5.0], Some(7usize)),
+        (3, vec![2.0, 9.0], Some(40)),
+    ] {
+        let mut c = cfg(n, &betas);
+        c.window_events = window;
+        let bound = Hawkes::state_bytes(n, betas.len(), window);
+        let mut m = Hawkes::new(c).unwrap();
+        let mut most = 0;
+        for (d, y) in stream(n, 3000, 41) {
+            m.step(&[], &y, d, 1.0);
+            let bytes = rmp_serde::to_vec_named(&m.state()).unwrap();
+            let v = rmpv::decode::read_value(&mut bytes.as_slice()).unwrap();
+            most = most.max(8 * floats(&v));
+        }
+        assert_eq!(most, bound, "{n} nodes, {betas:?}, window {window:?}");
+    }
+}

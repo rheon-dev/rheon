@@ -65,6 +65,8 @@ pub fn hawkes_cfg(spec: &Spec, decay: rheon_core::Decay) -> Result<rheon_core::H
     let ModelKind::Hawkes {
         kernel_decays,
         window_events,
+        // Checked by the spec, which knows the groups' cap.
+        max_state_bytes: _,
     } = &spec.model
     else {
         return Err(not_a(spec, "hawkes_cfg", "hawkes"));

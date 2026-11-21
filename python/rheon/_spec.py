@@ -265,7 +265,7 @@ def _got(v: Any) -> str:
 #: 2026-10-05, the TB5 leg). ``holt``'s ``trend`` is written only when off.
 _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
     "holt": frozenset({"trend"}),
-    "hawkes": frozenset({"window_events"}),
+    "hawkes": frozenset({"window_events", "max_state_bytes"}),
     "ewridge": frozenset({"gram_threads"}),
     "huber": frozenset(
         {

@@ -80,6 +80,9 @@ pub const MODEL_CASES: &[&str] = &[
     "ew_cov_lags",
     "corrchange_monitor_w2500",
     "corrchange_window_w100",
+    // One node, three kernels: its row's solve of a 4 x 4 system for the
+    // intensity it reports before the row's event (task 498).
+    "hawkes",
 ];
 
 /// The one model case that reports on a single row of its block:
@@ -469,6 +472,18 @@ fn case_spec(id: &str) -> (Value, Shape) {
             s["group"] = json!("g");
             (s, shape)
         }
+        "hawkes" => (
+            json!({
+                "name": "m",
+                "model": {"type": "hawkes", "kernel_decays": [0.5, 2.0, 8.0]},
+                "targets": ["y0"],
+                "features": [],
+                "clock": "t",
+                "half_life": 1000.0,
+                "gap_cap": 100.0,
+            }),
+            Shape::Linear,
+        ),
         "seqtest" | "bank_seqtest" => (
             json!({
                 "name": "m",

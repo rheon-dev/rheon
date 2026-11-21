@@ -106,9 +106,10 @@
 //! every factor at most 1. When the older block runs out, the newer becomes
 //! it, and `R`, `b` and `Q` are formed afresh from its rows, so their
 //! rounding is that of one window, not of every row the stream ever dropped.
-//! A row costs `O(D k)` amortised; the window holds `8 (1 + D)` bytes a row
-//! in the newer block and `8 (1 + D + k)` in the older, at most `8 W (1 + D +
-//! k)` beside the state. A window forgets by dropping, so it takes no decay.
+//! A row costs `O(D k)` amortised; the window holds `8 (1 + D + k)` bytes a
+//! row in either block (a newer row's `k` sums are 0 until its block becomes
+//! the older), `8 W (1 + D + k)` beside the state once full. A window forgets
+//! by dropping, so it takes no decay.
 
 use std::collections::VecDeque;
 
@@ -124,6 +125,10 @@ use crate::solve::{KEPT_ORDER, Solves, solve_definite_in};
 /// apart -- two nodes whose events fall on the same rows, or a decay the
 /// data cannot separate from another.
 const PIVOT_FLOOR: f64 = 1e-10;
+
+/// The bytes a group's state may hold by default, a spec's
+/// `max_state_bytes`: 256 KB.
+pub const MAX_STATE_BYTES: u64 = 256 * 1024;
 
 /// How near the forgetting rate may come to a kernel decay, or to a sum of
 /// two, relative to it: the read divides by `β − γ` and `β_u + β_v − γ`.
@@ -248,20 +253,23 @@ impl HawkesCfg {
     }
 }
 
-/// The rows a window keeps, in two blocks (see the module docs). Times are
-/// held relative to the newer block's start `t_m`, never as the clock's sum.
+/// The rows a window keeps, oldest first, in two blocks (see the module
+/// docs): the first `old` the older block, the rest the newer. Every row
+/// holds the same numbers -- its time, its `D` marks and its `k` forward
+/// sums, which a newer row holds at 0 until its block becomes the older --
+/// so the window's size is its rows' count times one figure, whatever the
+/// blocks' split. Times are held relative to the newer block's start `t_m`,
+/// never as the clock's sum: an older row's `t_m − t_r`, a newer row's `t_r
+/// − t_m`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct EventWindow {
     /// The clock since `t_m`, now.
     since: f64,
-    /// The older block, oldest first: each row's `t_m − t_r`, its `D` marks
-    /// and its `k` forward sums over the later rows of the block.
-    old_off: VecDeque<f64>,
-    old_marks: VecDeque<f64>,
-    old_fwd: VecDeque<f64>,
-    /// The newer block, oldest first: each row's `t_r − t_m` and its marks.
-    new_at: Vec<f64>,
-    new_marks: Vec<f64>,
+    /// The rows of the older block, at the front.
+    old: usize,
+    time: VecDeque<f64>,
+    marks: VecDeque<f64>,
+    fwd: VecDeque<f64>,
     /// `B[i, u] = Σ_newer m_l,i e^(−β_u (t_l − t_m))`, `k`.
     new_sum: Vec<f64>,
 }
@@ -270,27 +278,25 @@ impl EventWindow {
     fn new(k: usize) -> Self {
         Self {
             since: 0.0,
-            old_off: VecDeque::new(),
-            old_marks: VecDeque::new(),
-            old_fwd: VecDeque::new(),
-            new_at: Vec::new(),
-            new_marks: Vec::new(),
+            old: 0,
+            time: VecDeque::new(),
+            marks: VecDeque::new(),
+            fwd: VecDeque::new(),
             new_sum: vec![0.0; k],
         }
     }
 
     fn rows(&self) -> usize {
-        self.old_off.len() + self.new_at.len()
+        self.time.len()
     }
 
     fn has_shape(&self, n: usize, k: usize, cap: usize) -> bool {
-        let old = self.old_off.len();
-        let new = self.new_at.len();
-        self.old_marks.len() == old * n
-            && self.old_fwd.len() == old * k
-            && self.new_marks.len() == new * n
+        let rows = self.time.len();
+        self.marks.len() == rows * n
+            && self.fwd.len() == rows * k
             && self.new_sum.len() == k
-            && old + new <= cap
+            && self.old <= rows
+            && rows <= cap
     }
 }
 
@@ -425,6 +431,19 @@ impl Hawkes {
 
     pub fn n_eff(&self) -> f64 {
         self.w_sum
+    }
+
+    /// The bytes of the numbers a model of this shape holds at most: its
+    /// running sums, `8 (k + D (1 + k) + D (D + 1) / 2 + 2)`, and a full
+    /// window's rows, `8 W (1 + D + k)`, with its sum `B` and its clock, `8 (k
+    /// + 1)`. The one part
+    /// whose size the data could set is the window's rows, and `W` bounds it,
+    /// so this is known from the settings alone.
+    pub fn state_bytes(n_targets: usize, n_decays: usize, window_events: Option<usize>) -> u64 {
+        let (n, k) = (n_targets as u64, (n_targets * n_decays) as u64);
+        let sums = k + n * (1 + k) + n * (n + 1) / 2 + 2;
+        let window = window_events.map_or(0, |w| w as u64 * (1 + n + k) + k + 1);
+        8 * (sums + window)
     }
 
     /// The rows with an event the window holds; 0 without a window.
@@ -585,24 +604,24 @@ impl Hawkes {
         let Some(w) = self.window.as_mut() else {
             return;
         };
-        w.new_at.push(w.since);
+        w.time.push_back(w.since);
         for j in 0..n {
-            w.new_marks.push(Self::mark(y.get(j).copied().flatten()));
+            w.marks.push_back(Self::mark(y.get(j).copied().flatten()));
         }
-        let at = w.new_marks.len() - n;
+        w.fwd.extend(std::iter::repeat_n(0.0, k));
+        let at = w.marks.len() - n;
         for (u, beta) in betas.iter().enumerate() {
             let e = (-beta * w.since).exp();
             for i in 0..n {
-                let m = w.new_marks[at + i];
+                let m = w.marks[at + i];
                 if m > 0.0 {
                     w.new_sum[i * u_n + u] += m * e;
                 }
             }
         }
-        debug_assert_eq!(w.new_sum.len(), k);
         let cap = self.cfg.window_events.unwrap_or(usize::MAX);
         if w.rows() > cap {
-            if w.old_off.is_empty() {
+            if w.old == 0 {
                 self.form_old_block();
             } else {
                 self.drop_oldest();
@@ -616,67 +635,73 @@ impl Hawkes {
         let p = 1 + k;
         let betas = &self.cfg.kernel_decays;
         let w = self.window.as_mut().expect("windowed");
-        let off = w.old_off.pop_front().expect("an older row");
-        let marks: Vec<f64> = w.old_marks.drain(..n).collect();
-        let fwd: Vec<f64> = w.old_fwd.drain(..k).collect();
+        let off = w.time[0];
         for (u, &beta) in betas.iter().enumerate() {
             let to_block = (-beta * off).exp();
             let to_now = (-beta * (w.since + off)).exp();
-            for (j, &m) in marks.iter().enumerate() {
+            for j in 0..n {
+                let m = w.marks[j];
                 if m <= 0.0 {
                     continue;
                 }
                 let a = j * u_n + u;
                 self.r[a] -= m * beta * to_now;
                 for i in 0..n {
-                    let f = fwd[i * u_n + u] + to_block * w.new_sum[i * u_n + u];
+                    let f = w.fwd[i * u_n + u] + to_block * w.new_sum[i * u_n + u];
                     self.b[i * p + 1 + a] -= beta * m * f;
                 }
             }
         }
-        for (j, &m) in marks.iter().enumerate() {
-            if m > 0.0 {
-                self.b[j * p] -= m;
-                for (l, &ml) in marks.iter().enumerate().take(j + 1) {
-                    if ml > 0.0 {
-                        self.q[tri(j, l)] -= m * ml;
-                    }
+        for j in 0..n {
+            let m = w.marks[j];
+            if m <= 0.0 {
+                continue;
+            }
+            self.b[j * p] -= m;
+            for l in 0..=j {
+                let ml = w.marks[l];
+                if ml > 0.0 {
+                    self.q[tri(j, l)] -= m * ml;
                 }
             }
         }
         self.g0 = w.since + off;
+        w.time.pop_front();
+        w.marks.drain(..n);
+        w.fwd.drain(..k);
+        w.old -= 1;
     }
 
     /// The older block has run out: the newer becomes it, less its oldest
     /// row, which is the one to drop. Its forward sums by the backward
-    /// recursion, and `R`, `b` and `q` formed afresh from its rows.
+    /// recursion, and `R`, `b` and `Q` formed afresh from its rows; every
+    /// buffer is written in place.
     fn form_old_block(&mut self) {
         let (n, u_n, k) = self.cfg.dims();
         let betas = &self.cfg.kernel_decays;
         let w = self.window.as_mut().expect("windowed");
-        let at = std::mem::take(&mut w.new_at);
-        let marks = std::mem::take(&mut w.new_marks);
-        let rows = at.len();
+        let rows = w.time.len();
         let now = w.since;
-        // The kept rows are 1..rows; `fwd[t]` is row `t + 1`'s.
-        let kept = rows - 1;
-        let mut fwd = vec![0.0; kept * k];
-        for t in (0..kept.saturating_sub(1)).rev() {
-            let gap = at[t + 2] - at[t + 1];
+        // In place: a deque held in one piece reads as a slice.
+        let marks: &[f64] = w.marks.make_contiguous();
+        // Row `rows - 1` has no later row: its sums stay the 0 it was
+        // pushed with. Row 0 is dropped, so it needs none.
+        for r in (1..rows - 1).rev() {
+            let gap = w.time[r + 1] - w.time[r];
             for (u, beta) in betas.iter().enumerate() {
                 let e = (-beta * gap).exp();
                 for i in 0..n {
                     let a = i * u_n + u;
-                    fwd[t * k + a] = e * (marks[(t + 2) * n + i] + fwd[(t + 1) * k + a]);
+                    w.fwd[r * k + a] = e * (marks[(r + 1) * n + i] + w.fwd[(r + 1) * k + a]);
                 }
             }
         }
         self.r.fill(0.0);
         self.b.fill(0.0);
         self.q.fill(0.0);
-        for rr in 1..rows {
-            if rr > 1 {
-                let gap = at[rr] - at[rr - 1];
+        for r in 1..rows {
+            if r > 1 {
+                let gap = w.time[r] - w.time[r - 1];
                 for (u, beta) in betas.iter().enumerate() {
                     let e = (-beta * gap).exp();
                     for j in 0..n {
@@ -686,25 +711,27 @@ impl Hawkes {
             }
             Self::learn_marks(
                 betas,
-                &marks[rr * n..(rr + 1) * n],
+                &marks[r * n..(r + 1) * n],
                 &mut self.r,
                 &mut self.b,
                 &mut self.q,
             );
         }
-        let gap = now - at[rows - 1];
+        let gap = now - w.time[rows - 1];
         for (u, beta) in betas.iter().enumerate() {
             let e = (-beta * gap).exp();
             for j in 0..n {
                 self.r[j * u_n + u] *= e;
             }
         }
-        self.g0 = now - at[0];
-        w.old_off = at[1..].iter().map(|t| now - t).collect();
-        w.old_marks = marks[n..].iter().copied().collect();
-        w.old_fwd = fwd.into();
-        w.new_at = Vec::new();
-        w.new_marks = Vec::new();
+        self.g0 = now - w.time[0];
+        for t in w.time.iter_mut() {
+            *t = now - *t;
+        }
+        w.time.pop_front();
+        w.marks.drain(..n);
+        w.fwd.drain(..k);
+        w.old = rows - 1;
         w.new_sum.fill(0.0);
         w.since = 0.0;
     }

@@ -14,7 +14,7 @@ pages by the task you have in hand.
 
 | family | its features |
 |---|---|
-| [Models](#models) | the twenty-two models a spec can name |
+| [Models](#models) | the twenty-three models a spec can name |
 | [Running a bank](#running-a-bank) | a bank in a query, in a Python loop, and its output as Arrow |
 | [Saving, loading and serving](#saving-loading-and-serving) | a bank's state, written and read back |
 | [Reading a bank](#reading-a-bank) | what a bank holds, and the names of its output |
@@ -59,6 +59,7 @@ to start with.
 | [`rheon.spec.corrchange`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.corrchange) | tests of whether the correlations between the features have changed | [entry](MODELS.md#corrchange--has-the-correlation-structure-changed) · [detect a break](how-to/detect-a-break.md) |
 | [`rheon.spec.bocpd`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.bocpd) | Bayesian online changepoint detection: how long the current regime has lasted | [entry](MODELS.md#bocpd--how-long-has-this-regime-lasted) · [choose a changepoint hazard](how-to/choose-a-changepoint-hazard.md) |
 | [`rheon.spec.hmm`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.hmm) | a Gaussian hidden Markov model, filtered as the stream runs | [entry](MODELS.md#hmm--which-regime-are-we-in) · [keep its states on their regimes](how-to/keep-hmm-states-on-their-regimes.md) |
+| [`rheon.spec.hawkes`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.hawkes) | a self-exciting point process, fitted exactly by least squares | [entry](MODELS.md#hawkes--how-much-does-each-event-excite-the-next) |
 
 ## Running a bank
 

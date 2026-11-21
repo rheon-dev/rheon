@@ -6,10 +6,25 @@
 
 from __future__ import annotations
 
+import warnings
 from typing import Any, Unpack
 
 from rheon._kwargs import CommonKwargs
 from rheon._spec import TargetList, _checked, _common
+from rheon._warnings import RheonWarning, _user_stacklevel
+
+#: A group's state may hold this many bytes unless ``max_state_bytes`` says
+#: otherwise: 256 KB.
+MAX_STATE_BYTES = 256 * 1024
+
+
+def _state_bytes(d: int, u: int, window_events: int | None) -> int:
+    """The bytes a group's state holds at most, as the model counts them:
+    its running sums, and a full window's rows with its sum and clock."""
+    k = d * u
+    sums = k + d * (1 + k) + d * (d + 1) // 2 + 2
+    window = 0 if window_events is None else window_events * (1 + d + k) + k + 1
+    return 8 * (sums + window)
 
 
 @_checked
@@ -19,6 +34,7 @@ def hawkes(
     targets: TargetList,
     kernel_decays: list[float],
     window_events: int | None = None,
+    max_state_bytes: int | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """A self-exciting point process (Hawkes), fitted exactly by least squares.
@@ -56,8 +72,13 @@ def hawkes(
         Fit only the last this many rows that carried an event, observed
         from the clock of the row dropped last, in place of a decay: set
         ``half_life`` to ``inf`` beside it. The window keeps each of its
-        rows, at most ``8 * (1 + D + D * U)`` bytes each for ``D`` targets
-        and ``U`` decays. Default none.
+        rows, ``8 * (1 + D + D * U)`` bytes each for ``D`` targets and
+        ``U`` decays. Default none.
+    ``max_state_bytes``
+        The bytes a group's state may hold, a full window's rows included.
+        The settings fix the size, so it is checked here: a spec past it is
+        refused, and one past half of it is warned of
+        (:class:`rheon.RheonWarning`). Default 256 KB, ``262144``.
 
     .. rubric:: Output
 
@@ -193,8 +214,22 @@ def hawkes(
     each time a block turns over, so their rounding is that of one window.
     """
     model: dict[str, Any] = {"type": "hawkes", "kernel_decays": kernel_decays}
+    # Each absent when not given, as the Rust spec leaves it out, so a bank
+    # reports the dict this made (`ModelBank.specs`).
     if window_events is not None:
-        # Absent when not given, as the Rust spec leaves it out, so a bank
-        # reports the dict this made (`ModelBank.specs`).
         model["window_events"] = window_events
+    if max_state_bytes is not None:
+        model["max_state_bytes"] = max_state_bytes
+    cap = MAX_STATE_BYTES if max_state_bytes is None else max_state_bytes
+    if isinstance(kernel_decays, list) and isinstance(window_events, int) and cap > 0:
+        need = _state_bytes(len(targets), len(kernel_decays), window_events)
+        if cap // 2 < need <= cap:
+            warnings.warn(
+                RheonWarning(
+                    f"spec {name!r}: hawkes will hold {need} bytes in each group, past half of "
+                    f"max_state_bytes ({cap}): its window keeps {window_events} rows. Lower "
+                    "window_events, or raise max_state_bytes to keep this warning quiet."
+                ),
+                stacklevel=_user_stacklevel(),
+            )
     return _common(name, model, targets=targets, features=[], **common)

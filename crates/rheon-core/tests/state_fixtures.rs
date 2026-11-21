@@ -1206,7 +1206,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 63] = [
+    const FORMS: [(&str, &[&str]); 62] = [
         // Schema 70 (rule 5's twenty-second exception): the stabilized
         // prior's `ŝ` and `V` under `full` in each form and under `diag`,
         // the factor form's `f`, and a spec's own `prior_rows`.
@@ -1307,12 +1307,12 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         ("quantile", &["model", "Robust", "support"]),
         ("audit", &["model", "Audit", "pairs"]),
         ("audit", &["model", "Audit", "clock", "regular"]),
-        // A `hawkes` window in both of its blocks (task 498).
+        // A `hawkes` window in both of its blocks (task 498): the older's
+        // forward sums, the newer's sum `B`.
         ("hawkes", &["model", "Hawkes", "q"]),
-        ("hawkes_window", &["model", "Hawkes", "window", "old_off"]),
-        ("hawkes_window", &["model", "Hawkes", "window", "old_fwd"]),
-        ("hawkes_window", &["model", "Hawkes", "window", "new_at"]),
-        ("hawkes_window", &["model", "Hawkes", "window", "new_marks"]),
+        ("hawkes_window", &["model", "Hawkes", "window", "time"]),
+        ("hawkes_window", &["model", "Hawkes", "window", "fwd"]),
+        ("hawkes_window", &["model", "Hawkes", "window", "new_sum"]),
     ];
     for (name, path) in FORMS {
         let f = frozen::ALL

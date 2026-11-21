@@ -201,9 +201,7 @@ def test_the_window_is_tick_refit_on_its_events():
         kept = event_rows[event_rows <= row][-w:]
         dropped = event_rows[event_rows < kept[0]]
         start = t[dropped[-1]] if len(dropped) else 0.0
-        window = [
-            np.sort(t[kept][df[f"n{j}"].to_numpy()[kept] > 0]) - start for j in range(d)
-        ]
+        window = [np.sort(t[kept][df[f"n{j}"].to_numpy()[kept] > 0]) - start for j in range(d)]
         model = ModelHawkesSumExpKernLeastSq(decays=np.array(decays))
         model.fit(window, end_times=t[row] - start)
         want = _ticks_minimiser(model)

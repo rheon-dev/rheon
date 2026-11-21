@@ -210,6 +210,15 @@ pub const CELLS: &[Cell] = &[
     cell("audit.pairs", 4, 8, Pow(2), Pow(2)),
     cell("audit.distinct_cap", 32, 8, Const, Pow(1)),
     cell("audit.history", 1000, 8, Const, Log),
+    // A row solves a system of `p = 1 + D U` terms for its intensities,
+    // `O(p³)`, and the state holds `b` and `Q`, `O(D² U)`.
+    cell("hawkes.nodes", 1, 8, Pow(3), Pow(2)),
+    cell("hawkes.decays", 1, 8, Pow(3), Pow(1)),
+    // A row's removal from the window is `O(D k)`, its older block formed
+    // once every `W` rows, so a row's work does not grow with the window,
+    // and the window keeps its rows.
+    cell("hawkes.window", 100, 8, Const, Pow(1)),
+    cell("hawkes.history", 1000, 8, Const, Const),
     // --- the bank, `Bank::fit_predict` on a pool of one thread --------------
     cell("bank.groups_seen", 250, 8, Const, Pow(1)),
     // The same in calls of four rows, each to one group: what a call costs
@@ -1028,6 +1037,36 @@ fn model_case(id: &str, n: usize) -> ModelCase {
             });
             let c = ModelCase::new(s, lin);
             if dim == "history" { c.warm(n) } else { c }
+        }
+        ("hawkes", "nodes" | "decays" | "window" | "history") => {
+            let (d, u) = match dim {
+                "nodes" => (n, 2),
+                "decays" => (1, n),
+                _ => (2, 2),
+            };
+            let decays: Vec<f64> = (0..u).map(|i| 0.5 * 3f64.powi(i as i32)).collect();
+            let mut model = json!({"type": "hawkes", "kernel_decays": decays});
+            let half_life = if dim == "window" {
+                model["window_events"] = json!(n);
+                json!("inf")
+            } else {
+                json!(1000.0)
+            };
+            let s = json!({
+                "name": "m",
+                "model": model,
+                "targets": names("y", d),
+                "features": [],
+                "clock": "t",
+                "half_life": half_life,
+                "gap_cap": 100.0,
+            });
+            let c = ModelCase::new(s, lin);
+            match dim {
+                "history" => c.warm(n),
+                "window" => c.warm(4 * n + 2_000).block(200),
+                _ => c,
+            }
         }
         _ => panic!("no model cell {id:?}"),
     }

@@ -1257,6 +1257,11 @@ pub enum ModelKind {
         /// place of a decay. Skipped when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         window_events: Option<usize>,
+        /// The bytes a group's state may hold, its window's rows included,
+        /// checked here since the settings fix it. Default 256 KB. Skipped
+        /// when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
     },
 }
 
@@ -2926,7 +2931,12 @@ impl Spec {
                      or restart_after_step_back, to reset the test."
                 ));
             }
-        } else if let ModelKind::Hawkes { kernel_decays, .. } = &self.model {
+        } else if let ModelKind::Hawkes {
+            kernel_decays,
+            window_events,
+            max_state_bytes,
+        } = &self.model
+        {
             if !self.features.is_empty() {
                 no.refuse(format!(
                     "spec {name:?}: hawkes takes no features, but features lists {}: each of \
@@ -2940,6 +2950,28 @@ impl Spec {
                     "spec {name:?}: hawkes needs kernel_decays, but it is not set. Give the \
                      decay of each exponential kernel, per clock unit, such as [1.0, 5.0]."
                 ));
+            }
+            // The one part of the state the data could size is the window's
+            // rows, and `window_events` bounds it, so the whole is known here.
+            let cap = max_state_bytes.unwrap_or(rheon_core::HAWKES_MAX_STATE_BYTES);
+            if cap == 0 {
+                no.refuse(format!(
+                    "spec {name:?}: max_state_bytes must be above 0, but it is 0. Give the \
+                     bytes a group's state may hold, or leave it out for 256 KB."
+                ));
+            } else if let Some(u) = kernel_decays.as_ref().map(Vec::len) {
+                let bytes = rheon_core::Hawkes::state_bytes(self.targets.len(), u, *window_events);
+                if bytes > cap {
+                    no.refuse(format!(
+                        "spec {name:?}: hawkes would hold {bytes} bytes in each group, past \
+                         max_state_bytes of {cap}: its window keeps 8 * (1 + D + D * U) bytes \
+                         for each of its {} rows, with D = {} targets and U = {u} decays. \
+                         Lower window_events, raise max_state_bytes, or forget by half_life \
+                         in place of a window.",
+                        window_events.unwrap_or(0),
+                        self.targets.len(),
+                    ));
+                }
             }
         } else if self.features.is_empty() && !(columns_missing && self.model.is_unsupervised()) {
             columns_missing = true;

@@ -244,7 +244,9 @@ def test_names_match_the_realized_struct():
             declared = idx.filter(pl.col("field") == f.name)["dtype"].item()
             assert names.get(f.dtype, "enum") == declared, (f, declared)
     terms = rp.spec.coef_index(_spec(2))["term"].to_list()
-    assert terms == ["mu", "alpha_n0_beta1", "alpha_n0_beta4", "alpha_n1_beta1", "alpha_n1_beta4"] * 2
+    assert (
+        terms == ["mu", "alpha_n0_beta1", "alpha_n0_beta4", "alpha_n1_beta1", "alpha_n1_beta4"] * 2
+    )
 
 
 def test_two_nodes_on_the_same_rows_report_nothing():
@@ -282,10 +284,54 @@ def test_features_and_a_temporal_clock_are_refused():
     with pytest.raises(TypeError, match="features"):
         rp.spec.hawkes("h", targets=["y"], kernel_decays=[1.0], half_life=10.0, features=["x"])  # type: ignore[call-arg]
     df = pl.DataFrame(
-        {"ts": pl.datetime_range(pl.datetime(2026, 1, 1), pl.datetime(2026, 1, 2), "1h", eager=True)}
+        {
+            "ts": pl.datetime_range(
+                pl.datetime(2026, 1, 1), pl.datetime(2026, 1, 2), "1h", eager=True
+            )
+        }
     ).with_columns(pl.lit(1.0).alias("y"))
     with pytest.raises(ValueError, match="kernel_decays is a plain number"):
         spec = rp.spec.hawkes(
             "h", targets=["y"], kernel_decays=[1.0], clock="ts", gap_cap="1h", half_life="1d"
         )
         rp.ModelBank([spec]).fit_predict(df)
+
+
+def test_the_window_is_held_to_the_groups_state_cap():
+    """The window's rows are the one part of the state the data could size,
+    and ``window_events`` bounds them, so the cap is checked at the call: a
+    window past ``max_state_bytes`` (256 KB by default) is refused naming the
+    bytes, one past half of it warned of, and a stream far past the window
+    keeps the state at the bytes the settings give."""
+    import warnings
+
+    import rheon
+    from rheon._spec_point import _state_bytes
+
+    # Two nodes, two decays: 56 bytes a row, so 4,681 rows fill 256 KB.
+    assert _state_bytes(2, 2, 4_000) < 256 * 1024 < _state_bytes(2, 2, 4_700)
+    with pytest.raises(
+        ValueError, match=r"would hold \d+ bytes in each group, past max_state_bytes of 262144"
+    ):
+        rp.ModelBank([_spec(half_life=INF, window_events=4_700)])
+    with pytest.warns(rheon.RheonWarning, match="past half of max_state_bytes"):
+        _spec(half_life=INF, window_events=4_000)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _spec(half_life=INF, window_events=2_000)
+        _spec(half_life=INF, window_events=4_700, max_state_bytes=1 << 20)
+    with pytest.raises(
+        ValueError, match="hold 752 bytes in each group, past max_state_bytes of 500"
+    ):
+        rp.ModelBank([_spec(half_life=INF, window_events=10, max_state_bytes=500)])
+    with pytest.raises(ValueError, match="max_state_bytes must be above 0"):
+        rp.ModelBank([_spec(max_state_bytes=0)])
+    # Driven far past its window, the state holds what the settings say.
+    w = 30
+    bank = rp.ModelBank([_spec(group="g", half_life=INF, window_events=w)])
+    df = _stream(3_000, 2, 9)
+    sizes = []
+    for i in range(0, 3_000, 500):
+        bank.fit_predict(df.slice(i, 500))
+        sizes.append(len(bank.save_bytes()))
+    assert max(sizes[1:]) - min(sizes[1:]) < 200, sizes

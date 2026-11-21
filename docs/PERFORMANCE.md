@@ -519,7 +519,7 @@ in the table.
 
 ### The table
 
-**113 cells: 76 over the 22 model kinds' rows, 19 over the
+**117 cells: 80 over the 23 model kinds' rows, 19 over the
 bank, 3 over the command line, 9 over the window operators, 4 over
 `refresh_time` and 2 over the sample of an internal helper for
 gradient-boosted trees.** Each row is one cell: the
@@ -529,7 +529,8 @@ column has the four native ratios from large to small, as measured on
 2026-11-05 by a debug build: `SCALING_REPORT=1 cargo test -p rheon-bench
 --test scaling -- --nocapture` prints them. `bank.label_clock`'s were measured on
 2026-11-08, the same way, at a load of 5, and `windows.rows_held`'s on
-2026-11-20 by a release build (`--release`) at a load of 7. The two `.window` cells were
+2026-11-20 by a release build (`--release`) at a load of 7, and the four
+`hawkes` cells' on 2026-11-21 by a debug build at a load of 5. The two `.window` cells were
 measured again on 2026-11-06, once a window's snapshots were laid out
 flat. A row's time and allocations are per
 row; the saved state and the heap are the state's. `(CI)` marks the 25 cells
@@ -615,6 +616,10 @@ largest buffer at the smaller.
 | `audit.pairs` | columns c, pairs | 4 → 32 | O(n^2) | O(n^2) | every pair's moments, c² | 12.44 · 7.68 · 9.35 · 7.66 |
 | `audit.distinct_cap` | counter cap D | 32 → 256 | O(1) | O(n) | a value is a hash lookup; a table full empties in O(D) once per D new values; D counters held | 1.01 · 1.00 · 1.27 · 2.64 |
 | `audit.history` | rows already seen | 1,000 → 8,000 | O(1) | O(log n) | D counters at most; their counts' encodings lengthen as the counts grow, log in the rows | 0.86 · 0.93 · 1.26 · 1.24 |
+| `hawkes.nodes` | nodes D, two decays | 1 → 8 | O(n^3) | O(n^2) | a row solves its p = 1 + 2D terms, p³; the state holds b, D·p, and the nodes' pairs | 21.80 · 1.00 · 13.18 · 2.04 |
+| `hawkes.decays` | decays U, one node | 1 → 8 | O(n^3) | O(n) | a row solves its p = 1 + U terms, p³; the state holds 2U + 4 numbers | 15.03 · 1.00 · 2.75 · 1.12 |
+| `hawkes.window` | window W rows with an event, two nodes and decays | 100 → 800 | O(1) | O(n) | a dropped row is taken back in O(D k), its block's sums formed once every W rows; W rows held, 8 (1 + D + k) bytes each | 0.97 · 0.76 · 7.69 · 6.75 |
+| `hawkes.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | its running sums only | 1.00 · 1.00 · 1.00 · 1.00 |
 | `bank.groups_seen` (CI) | groups seen G (a block over 50 of them) | 250 → 2,000 | O(1) | O(n) | a row touches its group's state alone; a state a group | 1.03 · 1.00 · 7.99 · 7.14 |
 | `bank.groups_seen_per_call` (CI) | groups seen G, calls of four rows to one group each | 1,000 → 8,000 | O(1) | O(n) | a call finds each of its groups' state by key and takes only their notices; a state a group | 1.00 · 1.00 · 7.98 · 7.33 |
 | `bank.specs` (CI) | specs S, one set of columns | 1 → 8 | O(n) | O(n) | each spec steps its model, S | 8.28 · 7.67 · 7.80 · 7.23 |

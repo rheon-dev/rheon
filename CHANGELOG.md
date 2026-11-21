@@ -31,6 +31,19 @@ model that only the new build has is listed as an addition and passes.
 
 ### Added
 
+- **`hawkes`, a self-exciting point process** (task 498): each target a
+  node, a value above 0 on a row an event of that mark; exponential kernels
+  at the given `kernel_decays`. Each row reports every node's
+  `intensity_<t>` before the row's events, from the fit on the rows before;
+  `coef` holds each node's `mu` and `alpha_<j>_beta<β>`. The fit is the
+  least-squares contrast's minimiser exactly, read at each row from a state
+  of `8 (k + D (1 + k) + D (D + 1) / 2 + 2)` bytes (`G` read from `b` and
+  the node pairs' marks): tick's minimiser to 4e-14. Forgetting per unit of
+  the clock (`half_life`), or a window of the last `window_events` rows
+  with an event, removed exactly, the group's state held to
+  `max_state_bytes` (256 KB by default) at the call. A fit the events
+  cannot identify (a scaled pivot of `G` below `1e-10`) reports no
+  intensity. A row's weight gates its events and scales none.
 - **`kalman(covariance_form="square_root")`** (task 281 (3)): the filter
   holds its covariance as an upper-triangular factor, `P = C Cᵀ`, and
   updates the factor by Carlson's step, so a vague prior costs it no

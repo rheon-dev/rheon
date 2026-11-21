@@ -1162,3 +1162,51 @@ fn a_feature_named_intercept_beside_the_fits_own_is_refused() {
             .replace(r#""features": ["x0", "x1"]"#, features),
     );
 }
+
+/// `hawkes`' window is the one part of its state the data could size, and
+/// `window_events` bounds it, so its bytes are known at the call: past
+/// `max_state_bytes` (256 KB by default) the spec is refused naming them,
+/// at it the spec is taken, and features and a missing `kernel_decays`
+/// are refused by name.
+#[test]
+fn a_hawkes_window_past_its_state_cap_is_refused() {
+    let spec = |model: &str| {
+        format!(
+            r#"{{"name": "m", "model": {model}, "targets": ["a", "b"], "features": [],
+                "half_life": "inf"}}"#
+        )
+    };
+    // Two nodes, two decays: 8 * 7 = 56 bytes a row, 152 for the sums.
+    let at = |w: usize| rheon_polars::rheon_core::Hawkes::state_bytes(2, 2, Some(w));
+    assert_eq!(at(4_000), 8 * (19 + 4_000 * 7 + 5));
+    let cap = 256 * 1024;
+    let fits = ((cap - at(0)) / 56) as usize;
+    assert!(at(fits) <= cap && at(fits + 1) > cap);
+    accepted(&spec(&format!(
+        r#"{{"type": "hawkes", "kernel_decays": [1.0, 5.0], "window_events": {fits}}}"#
+    )));
+    refused(
+        &spec(&format!(
+            r#"{{"type": "hawkes", "kernel_decays": [1.0, 5.0], "window_events": {}}}"#,
+            fits + 1
+        )),
+        &[
+            &format!("hold {} bytes in each group", at(fits + 1)),
+            "max_state_bytes of 262144",
+        ],
+    );
+    accepted(&spec(
+        r#"{"type": "hawkes", "kernel_decays": [1.0, 5.0], "window_events": 100000,
+            "max_state_bytes": 8000000}"#,
+    ));
+    refused(
+        &spec(r#"{"type": "hawkes", "kernel_decays": [1.0, 5.0], "max_state_bytes": 0}"#),
+        &["max_state_bytes must be above 0"],
+    );
+    refused(&spec(r#"{"type": "hawkes"}"#), &["needs kernel_decays"]);
+    refused(
+        r#"{"name": "m", "model": {"type": "hawkes", "kernel_decays": [1.0]},
+            "targets": ["a"], "features": ["x"], "half_life": 10.0}"#,
+        &["hawkes takes no features"],
+    );
+}

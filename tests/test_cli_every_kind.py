@@ -615,6 +615,28 @@ CASES: list[Case] = [
         "rcov",
         {"features": F3, "group": "g", "group_close": "session", "session": "s", "kind": "plain"},
     ),
+    # `hit` and `y` as two nodes: a row's value above 0 is an event of that
+    # mark.
+    Case(
+        "hawkes",
+        "hawkes",
+        {**STREAM, **CLOSE, "targets": ["hit", "y"], "kernel_decays": [0.5, 2.0]},
+    ),
+    Case("hawkes2", "hawkes", {**STREAM2, "targets": ["hit", "y"], "kernel_decays": [0.5, 2.0]}),
+    Case(
+        "hawkes_window",
+        "hawkes",
+        {
+            "targets": ["hit"],
+            "kernel_decays": [1.0],
+            "clock": "t",
+            "gap_cap": 6.0,
+            "half_life": float("inf"),
+            "window_events": 20,
+            "max_rows_between_coefs": 7,
+            "max_state_bytes": 1 << 20,
+        },
+    ),
     Case(
         "audit",
         "audit",
