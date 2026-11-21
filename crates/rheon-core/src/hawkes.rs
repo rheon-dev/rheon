@@ -197,7 +197,7 @@ impl HawkesCfg {
         if sorted.windows(2).any(|w| w[0] == w[1]) {
             no.refuse(format!(
                 "hawkes: kernel_decays must be distinct, but {} lists one twice. Two equal \
-                 decays are one kernel, and their parameters cannot be told apart; list each \
+                 decays are one kernel, and their parameters cannot be told apart. List each \
                  decay once.",
                 crate::model::listed(&betas.iter().map(f64::to_string).collect::<Vec<_>>()),
             ));

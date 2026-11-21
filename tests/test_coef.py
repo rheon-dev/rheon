@@ -156,6 +156,8 @@ COEF_SPECS = [
     ),
     rp.spec.hmm("m", features=["x1", "x2"], half_life=30, n_components=2, precision_prior=0.1),
     rp.spec.deco("m", features=["x1", "x2"], half_life=30),
+    # Each of ``y``'s positive rows an event of its node.
+    rp.spec.hawkes("m", targets=["y", "y2"], kernel_decays=[1.0, 5.0], half_life=30),
 ]
 
 

@@ -147,7 +147,7 @@ regimes](../MODELS.md#sequential-tests-and-regimes).
 | have the correlations among these columns changed? | [`corrchange`](../MODELS.md#corrchange--has-the-correlation-structure-changed) | a test statistic, its critical value, and a flag where one passes the other |
 | how long has the current regime lasted? | [`bocpd`](../MODELS.md#bocpd--how-long-has-this-regime-lasted) | `run_mode`, the most likely number of rows since the regime began |
 | which regime is the stream in? | [`hmm`](../MODELS.md#hmm--which-regime-are-we-in) | the probability of each hidden state, and the most probable one |
-| how fast are events coming, and how much does each raise the next? | [`hawkes`](../MODELS.md#hawkes--how-much-does-each-event-excite-the-next) | each node's intensity before the row's events, and the fit in `coef` |
+| how fast are events coming, and how much does each add to the next? | [`hawkes`](../MODELS.md#hawkes--how-much-does-each-event-excite-the-next) | each node's intensity before the row's events, and the fit in `coef` |
 
 **Read a regime's age from `bocpd`'s `run_mode`.** Its alarm, `p_change`,
 scores each row on its own, so it barely moves when the spread grows 2.7

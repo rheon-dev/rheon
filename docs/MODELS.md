@@ -62,7 +62,7 @@ to start with for which question.
 | [`corrchange`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.corrchange) · [entry](#corrchange--has-the-correlation-structure-changed) | test | has the correlation structure changed: the Wied–Krämer–Dehling constancy test span by span, the Wied–Galeano detector row by row against a stable history, or the size of a change between two windows against a permutation null |
 | [`bocpd`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.bocpd) · [entry](#bocpd--how-long-has-this-regime-lasted) | filter | how long this regime has lasted: Adams & MacKay's run-length posterior, so the answer is the regime's age and not a flag |
 | [`hmm`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.hmm) · [entry](#hmm--which-regime-are-we-in) | filter | a Gaussian hidden Markov model, filtered as the stream runs: `ew_class` without the labels, with a transition matrix that can be learned |
-| [`hawkes`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.hawkes) · [entry](#hawkes--how-much-does-each-event-excite-the-next) | solve | a self-exciting point process: each node's event intensity before the row, and how much an event of each node raises the next, fitted exactly by least squares over exponential kernels |
+| [`hawkes`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.hawkes) · [entry](#hawkes--how-much-does-each-event-excite-the-next) | solve | a self-exciting point process: each node's event intensity before the row, and how much an event of each node adds to the next, fitted exactly by least squares over exponential kernels |
 
 **How a model learns from a row decides whether, with decay off, its
 answer depends on the row order:**
@@ -244,7 +244,7 @@ per target, give `min_weight` a list. The default depends on the model:
 | the feature count plus one (1 for `holt`) | `ew_cov`, `ew_class`, `kmeans`, `micro`, `holt` |
 | 3 | `marginal`, `deco` |
 | 1 | `bocpd` |
-| 0, each having a gate of its own or nothing to gate | `ewridge`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit` |
+| 0, each having a gate of its own or nothing to gate | `ewridge`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes` |
 
 **`min_settled_frac` is off by default.** Set it when the half-life was
 chosen to average over regimes or seasons that a shorter history would not
@@ -3562,7 +3562,7 @@ A self-exciting point process (Hawkes): a base rate for each node, and how
 many events of each node one event of each node causes.
 
 Use `hawkes` on a stream of events that come in bursts, where each event
-raises the chance of the next for a while: trades, messages, failures. Each
+makes the next likelier for a while: trades, messages, failures. Each
 target is a node, and a value above 0 on a row is an event of that node, of
 that mark (1 for an event, a count for several at once). Each row reports
 each node's intensity, its expected events per unit of the clock, read just
@@ -3592,9 +3592,9 @@ Gₐᵦ = (β_a b_j(a)[b] + β_b b_j(b)[a] + β_a β_b Q_j(a)j(b) − R_a R_b) /
 
 `θ_i` minimizes the least-squares contrast `Σ_i ∫ λ_i² dt − 2 ∫ λ_i dN_i`,
 each instant weighted by its decay. `G` is not kept, since it can be read
-from `b` and `Q`, so the state is `8 (k + D (1 + k) + D (D + 1) / 2 + 2)`
-bytes for `D` nodes and `k = D U` excitations: 64 bytes for one node and
-two decays, 200 for two nodes and three.
+from `b` and `Q`. The state is `8 (k + D (1 + k) + D (D + 1) / 2 + 2)` bytes
+for `D` nodes and `k = D U` excitations: 64 bytes for one node and two
+decays, 200 for two nodes and three.
 
 #### Example
 
@@ -3607,23 +3607,29 @@ import numpy as np
 import polars as pl
 from rheon import polars as rp
 
+# Simulate one node by thinning: propose from an upper bound, then accept.
 rng = np.random.default_rng(3)
 t, excite, times = 0.0, 0.0, []
 while t < 5_000.0:
+    # Propose the next time from the current intensity, which only decays.
     bound = 0.5 + excite
     step = rng.exponential(1 / bound)
     excite *= np.exp(-2.0 * step)
     t += step
+    # Accept it with the ratio of the intensity there to the bound.
     if rng.uniform() * bound <= 0.5 + excite:
         times.append(t)
         excite += 0.6 * 2.0
 pl.DataFrame({"t": times, "event": 1.0}).write_parquet("events.parquet")
 
+# Fit the kernel at its true decay, with no forgetting.
 model = rp.spec.hawkes(
     "h", targets=["event"], kernel_decays=[2.0], clock="t", half_life=float("inf"), gap_cap=1e9
 )
 bank = rp.ModelBank([model])
 bank.fit(pl.scan_parquet("events.parquet"))
+
+# Read the fit's terms by name and compare them with the truth.
 coef = {r["term"]: r["coef"] for r in bank.coef().iter_rows(named=True)}
 print(f"mu: true 0.50, found {coef['mu']:.2f}")
 print(f"alpha: true 0.60, found {coef['alpha_event_beta2']:.2f}")
@@ -3648,11 +3654,11 @@ spec's events come faster than another's:
 
 **Its fit is tick's least-squares minimiser.** tick's
 `ModelHawkesSumExpKernLeastSq` computes the same contrast, divided by the
-number of events, and the fit agrees with its minimiser to 4e-14 of the
-largest coefficient, over one to three nodes and one to three decays; a
-row's intensity agrees with tick refit on the rows before it, and a window's
-fit with tick refit on the window's events. The forgotten fit, which tick
-does not compute, is held to the contrast written out as sums over pairs of
+number of events. The fit agrees with its minimiser to 4e-14 of the largest
+coefficient, over one to three nodes and one to three decays. A row's
+intensity agrees with tick refit on the rows before it, and a window's fit
+with tick refit on the window's events. The forgotten fit, which tick does
+not compute, is held to the contrast written out as sums over pairs of
 events.
 
 **A fit the events cannot identify is withheld.** Two nodes whose events
@@ -3662,10 +3668,12 @@ diagonal falls below `1e-10`, the row reports no intensity.
 
 **The window keeps its rows.** `window_events = W` fits the last `W` rows
 that carried an event, alone. Dropping the oldest takes back exactly what it
-added, through the sums of its excitation of the later rows; those are kept
-in two blocks so that no sum is rescaled by a growing exponential. The window
-holds `8 (1 + D + k)` bytes a row, 32 for one node and two decays, and
-`window_events` bounds its rows, so a group's whole state is known from the
-spec: a spec past `max_state_bytes` (256 KB by default, about 8,190 rows of
-one node and two decays, or 3,637 of two nodes and three) is refused, and one
-past half of it is warned of.
+added, through the sums of its excitation of the later rows. Those are kept
+in two blocks, so that no sum is rescaled by a growing exponential.
+
+**The window's bytes are known from the spec.** The window holds
+`8 (1 + D + k)` bytes a row, 32 for one node and two decays, and
+`window_events` bounds its rows. So a group's whole state is known when the
+spec is built. A spec past `max_state_bytes` is refused, and one past half of
+it is warned of. At its default of 256 KB, that is about 8,190 rows of one
+node and two decays, or 3,637 of two nodes and three.

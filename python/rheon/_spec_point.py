@@ -37,16 +37,12 @@ def hawkes(
     max_state_bytes: int | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
-    """A self-exciting point process (Hawkes), fitted exactly by least squares.
+    """A self-exciting point process, fitted exactly by least squares.
 
-    Use it on a stream of events, where each event raises the chance of the
-    next for a while: trades, messages, failures, posts. Each target is a
-    node, and a value above 0 on a row is an event of that node, of that
-    size (its mark): 1 for one event, a count for that many at once. A
-    value of 0 or below, or a null, is no event, so a row can be a clock
-    tick alone. Every row reports each node's intensity, its expected
-    events per unit of the clock, read before the row's events from the fit
-    on every row before them.
+    Use it on a stream of events, where each event makes the next likelier
+    for a while: trades, messages, failures, posts. Each target is a node,
+    and a value above 0 on a row is an event of that node, of that size (its
+    mark): 1 for one event, a count for that many at once.
 
     .. rubric:: Parameters
 
@@ -82,8 +78,11 @@ def hawkes(
 
     .. rubric:: Output
 
-    One output column, named after the spec, whose value in each row is a
-    record of these fields. `docs/OUTPUTS.md#hawkes
+    A value of 0 or below, or a null, is no event, so a row can be a clock
+    tick alone. Every row reports each node's intensity, its expected events
+    per unit of the clock, read before the row's events from the fit on every
+    row before them. One output column, named after the spec, holds a record
+    of these fields in each row. `docs/OUTPUTS.md#hawkes
     <https://github.com/rheon-dev/rheon/blob/main/docs/OUTPUTS.md#hawkes>`_
     gives each field's type and when it is null:
 

@@ -111,6 +111,12 @@ KINDS = [
     "deco",
 ]
 
+#: The kinds with a coefficient whose rate parameters have no unit on a
+#: temporal clock (``hawkes``' ``kernel_decays``, per clock unit), so the
+#: ``"30m"`` sweeps cannot build them: ``TestARateKind`` holds theirs, on a
+#: numeric clock.
+RATE_KINDS = ["hawkes"]
+
 
 def kind(name: str, h: float | str, **common) -> dict:
     two = ["x1", "x2"]
@@ -614,6 +620,26 @@ class TestOnlyTheCoefficientsMove:
         assert parts.equals(whole, null_equal=True)
 
 
+class TestARateKind:
+    def test_hawkes_writes_coef_every_n_units_of_a_numeric_clock(self):
+        n = 60
+        df = pl.DataFrame(
+            {"t": np.arange(n, dtype=float), "y": (np.arange(n) % 3 == 0).astype(float)}
+        )
+        spec = rp.spec.hawkes(
+            "m",
+            targets=["y"],
+            kernel_decays=[1.0],
+            half_life=30.0,
+            coef_every=5.0,
+            clock="t",
+            gap_cap=10.0,
+        )
+        assert observed(run(spec, df)) == list(range(5, n, 5))
+        with pytest.raises(ValueError, match="coef_every is a duration"):
+            rp.spec.hawkes("m", targets=["y"], kernel_decays=[1.0], half_life=30.0, coef_every="5m")
+
+
 def test_every_kind_with_a_coef_is_swept():
     """A kind that gains a ``coef`` joins ``KINDS``, and so the sweeps."""
     with_coef = {
@@ -621,7 +647,7 @@ def test_every_kind_with_a_coef_is_swept():
         for k in MINIMAL
         if "coef" in rp.spec.output_fields(getattr(rp.spec, k)("m", **_minimal(k)))
     }
-    assert with_coef == set(KINDS), with_coef ^ set(KINDS)
+    assert with_coef == set(KINDS) | set(RATE_KINDS), with_coef ^ set(KINDS)
     assert set(SWEPT) - set(VARIANT_OF) == set(KINDS)
 
 

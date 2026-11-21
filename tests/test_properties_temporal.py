@@ -677,6 +677,12 @@ N_EFF_EXEMPT = {
     "audit": "which counts every row with no decay",
 }
 
+#: The kinds with a rate for a parameter (``hawkes``' ``kernel_decays``, per
+#: clock unit), which a temporal clock has no unit to read, so it refuses
+#: one by name (``test_hawkes.py::test_features_and_a_temporal_clock_are_refused``).
+#: Its ``weight_sum`` recursion is held on a numeric clock in `model_contract.rs`.
+N_EFF_RATES = frozenset({"hawkes"})
+
 #: What a kind needs on this file's frame besides `MINIMAL`'s arguments:
 #: `ew_class`'s labels are in ``lab``; `corrchange` takes a half-life only
 #: in its scalar form, where it parametrises the standardiser; and beside a
@@ -694,7 +700,7 @@ N_EFF_ARGS: dict[str, dict] = {
 N_EFF_MODELS = {
     name: {k: v for k, v in MINIMAL[name].items() if k != "half_life"} | N_EFF_ARGS.get(name, {})
     for name in sorted(MINIMAL)
-    if name not in N_EFF_EXEMPT
+    if name not in N_EFF_EXEMPT and name not in N_EFF_RATES
 }
 
 

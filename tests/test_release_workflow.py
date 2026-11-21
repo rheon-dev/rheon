@@ -670,6 +670,21 @@ def _promoted(root: Path) -> None:
         flags=re.M | re.S,
     )
     log.write_text(text, encoding="utf-8")
+    _release_day_tables(root)
+
+
+def _release_day_tables(root: Path) -> None:
+    """Release day leaves no table naming a later release: a model built
+    since the last release is entered under the next minor, and that is the
+    version this copy stands at when it is published."""
+    version = release_version.versions(root)["pyproject.toml"]
+    state = root / "tests/test_released_state.py"
+    body = state.read_text(encoding="utf-8")
+    for entries in release_version.introduced(root).values():
+        for first in entries.values():
+            if release_version._key(first) > release_version._key(version):
+                body = body.replace(f'"{first}"', f'"{version}"')
+    state.write_text(body, encoding="utf-8")
 
 
 def test_the_repository_agrees_with_itself():
@@ -1025,6 +1040,7 @@ def test_publishing_with_entries_left_under_unreleased_is_refused(copy):
         f"{head}## [Unreleased]\n\n### Fixed\n\n- **left behind.**\n\n{released}",
         encoding="utf-8",
     )
+    _release_day_tables(copy)
     (bad,) = release_version.problems(copy, publish=True, tag_exists=lambda t: False)
     assert "[Unreleased]" in bad, bad
     assert release_version.problems(copy, tag_exists=lambda t: False) == []

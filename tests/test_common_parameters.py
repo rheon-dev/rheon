@@ -97,7 +97,10 @@ DECAYING = tuple(
 #: The kinds that refuse a weight column.
 UNWEIGHTED = frozenset({"seqtest", "audit"})
 #: The kinds that read no features.
-NO_FEATURES = frozenset({"holt", "seqtest"})
+NO_FEATURES = frozenset({"holt", "seqtest", "hawkes"})
+#: The kinds whose clock parameters are rates, which have no unit on a
+#: temporal clock: ``hawkes``' ``kernel_decays`` is refused there, by name.
+RATES = frozenset({"hawkes"})
 #: A capped step is a break by design: ``corrchange`` abandons its span,
 #: ``rcov`` splits the block into stretches.
 CAP_IS_A_BREAK = frozenset({"corrchange", "corrchange_scalar", "rcov"})
@@ -580,7 +583,7 @@ def _as_duration(seconds: float) -> dt.timedelta:
     return dt.timedelta(seconds=seconds)
 
 
-@pytest.mark.parametrize("variant", _params(KINDS))
+@pytest.mark.parametrize("variant", _params([k for k in KINDS if k not in RATES]))
 def test_durations_are_numbers_of_seconds(variant: str):
     origin = dt.datetime(2024, 3, 1, 9, 30)
     when = STREAM.with_columns(

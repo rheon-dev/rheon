@@ -1506,6 +1506,14 @@ NOT_DOUBLED: dict[str, tuple[str, dict, float, str]] = {
         5.0,
         "pred_y",
     ),
+    "hawkes": (
+        "reads each event at the clock of the row that carries it, so a lesson that sits "
+        "`delay` late is an event `delay` late and its excitation has decayed `delay` less "
+        "at the next row",
+        {},
+        5.0,
+        "intensity_y",
+    ),
     "hmm": (
         "ages its transition counts over the clock from the last learned row",
         {},
@@ -1672,7 +1680,7 @@ class TestADelayShorterThanEveryStep:
     @pytest.mark.parametrize(
         "kind",
         kind_params(
-            [k for k in TAKE_EMBARGO if k not in ("holt", "seqtest", "kalman")],
+            [k for k in TAKE_EMBARGO if k not in ("holt", "seqtest", "kalman", "hawkes")],
             essential={"ewridge", "hmm"},
         ),
     )
@@ -1687,10 +1695,11 @@ class TestADelayShorterThanEveryStep:
         lesson row. Under a decay the
         step split at the lesson multiplies two decay factors where the
         undelayed run multiplies one, which agree to rounding only, and the
-        kinds `NOT_DOUBLED` names read the clock the lesson moved. Holt is the
-        one kind that parts with no decay: its lesson ``SHORT`` late forecasts
-        the next row ``SHORT`` short. `seqtest` takes no weight, and `kalman`
-        waits for its fix (`NOT_DOUBLED_AT_ALL`)."""
+        kinds `NOT_DOUBLED` names read the clock the lesson moved. Holt and
+        hawkes are the kinds that part with no decay: a lesson ``SHORT`` late
+        forecasts the next row ``SHORT`` short, or is an event ``SHORT`` late.
+        `seqtest` takes no weight, and `kalman` waits for its fix
+        (`NOT_DOUBLED_AT_ALL`)."""
         df = short_frame(kind)
         kw: dict[str, object] = {"clock": "t", "gap_cap": 1e9}
         if kind not in NO_HALF_LIFE:

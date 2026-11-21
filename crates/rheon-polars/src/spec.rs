@@ -2962,12 +2962,14 @@ impl Spec {
             } else if let Some(u) = kernel_decays.as_ref().map(Vec::len) {
                 let bytes = rheon_core::Hawkes::state_bytes(self.targets.len(), u, *window_events);
                 if bytes > cap {
+                    // One row of the window: its clock, the marks and the
+                    // excitation sums, 8 bytes each.
+                    let row = 8 * (1 + self.targets.len() * (1 + u));
                     no.refuse(format!(
                         "spec {name:?}: hawkes would hold {bytes} bytes in each group, past \
-                         max_state_bytes of {cap}: its window keeps 8 * (1 + D + D * U) bytes \
-                         for each of its {} rows, with D = {} targets and U = {u} decays. \
-                         Lower window_events, raise max_state_bytes, or forget by half_life \
-                         in place of a window.",
+                         max_state_bytes of {cap}: its window keeps {row} bytes for each of \
+                         its {} rows, with {} targets and {u} decays. Lower window_events, \
+                         raise max_state_bytes, or forget by half_life in place of a window.",
                         window_events.unwrap_or(0),
                         self.targets.len(),
                     ));
