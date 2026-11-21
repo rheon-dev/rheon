@@ -995,3 +995,49 @@ skew-t (the `lambda` coordinate would want `atanh`), GJR t and the targeted form
   GJR t, the targeted forms, GARCH(2,2) t; whether the metric projection should be the family's projection (part 3,
   question 2) now has one more case for it.
 * `docs/README.md` still needs this record's row at merge (not edited here).
+
+# Study 492, part 6: is GARCH(2,2)'s failure the weak identification of beta1 and beta2? (B12, part 1 of 2)
+
+Python and numpy only (`scripts/study_492_b12.py`, which imports `scripts/study_492_b11.py` and its `compare_g22`
+unchanged and swaps only the simulating truth); arch 9.0.0 the oracle; no Rust, no source change.
+`study_492_b12.py run TRUTH OUTDIR SEED...` and `summary OUTDIR` reproduce the figures (about 5 minutes for all
+150 fits on a 4-core VM, four shards). The question: part 5 attributed the misses to the `beta1`/`beta2` ridge,
+on one truth (`beta2` close to `beta1`). If that is the cause, a truth with the two lags well separated should pass.
+
+**Design.** Gaussian, 10,000 rows, seeds 0 to 49 (not part 1's 492000 range), the same rows and arch fit for both
+steps. Truths `(omega, alpha1, alpha2, beta1, beta2)`, `omega` set so the unconditional variance is 1:
+
+* (a) a strong second lag, `(0.20, 0.05, 0.00, 0.45, 0.30)`: `beta2 / beta1 = 0.67`, persistence 0.80.
+* (b) `alpha2` non-zero, `(0.15, 0.05, 0.05, 0.45, 0.30)`: the same betas, persistence 0.85.
+* (c) the reference truth of parts 1 and 5, `(0.03, 0.05, 0.05, 0.45, 0.42)`: persistence 0.97.
+
+Rule fixed in advance: if (a) and (b) are within 2 SE (on the parameters, all five) at 45 of 50 or more, identification
+is the cause; if they fail, go to part 2. The step headlined is part 5's PACF step; part 1's targeted step is beside it.
+
+**Results** (arch converged on all 150 fits):
+
+| truth | arch corr(b1, b2), median (weakest) | arch SE b1 / b2, median | PACF within 2 SE: all / without omega | targeted: all / without omega | PACF persistence / beta sum within 2 SE | PACF path gap, max over last 1000: median / worst seed | PACF ll gap median / worst |
+|---|---|---|---|---|---|---|---|
+| (a) `beta2 = 0.30`, `alpha2 = 0` | -0.937 (+0.347) | 0.364 / 0.239 | **29** / 30 | 28 / 28 | 47 / 47 | 14.6% / 52.8% (seed 8) | -3.0 / -47.8 |
+| (b) `beta2 = 0.30`, `alpha2 = 0.05` | -0.991 (-0.880) | 0.240 / 0.203 | **34** / 36 | 27 / 27 | 40 / 39 | 9.0% / 52.6% (seed 18) | -1.3 / -51.8 |
+| (c) reference | -0.998 (-0.943) | 0.213 / 0.196 | **30** / 33 | 25 / 31 | 39 / 38 | 8.9% / 115.1% (seed 12) | -1.4 / -241.7 |
+
+(Targeted step's path gap, median / worst: (a) 20.6% / 58.9%, (b) 12.6% / 95.4%, (c) 14.2% / 573%.)
+
+**Verdict: the rule fails.** (a) 29 of 50 and (b) 34 of 50, against the 45 needed. Reading:
+
+* Separating the lags does not identify them in arch's own fit. With `beta2 = 0.67 beta1` arch's correlation of the two
+  estimates is still -0.94 (median) and -0.99 with `alpha2 = 0.05`, and the SEs (0.36 and 0.24 for `beta1`, 0.24 and
+  0.20 for `beta2`) are as large as the parameters. The ridge is a property of the likelihood at 10,000 rows, not of
+  the reference truth's closeness of `beta1` and `beta2`.
+* The count is not lifted by separation: 29 / 34 / 30 across the three, the same band as part 5's 36 on the
+  492000 seeds (those are different seeds; the counts differ by seed noise of about +-7, a binomial SE).
+* The misses are not mainly on `beta1`/`beta2`: on (a) the PACF step has `beta1` within 2 SE on 46 seeds and `beta2` on 40,
+  and persistence on 47, so the identified combination is mostly right (47 of 50) while the count of 29 is held down
+  by the other parameters together (`omega` and `alpha2`, whose truth sits on arch's boundary at 0 in (a)).
+  Part 5's reading that the `beta1`/`beta2` split alone explains the misses is therefore not supported here;
+  something other than the split also separates the online estimate from arch.
+* Confound, stated: persistence falls from 0.97 (c) to 0.80 (a) as the truths change, so a lag-separation effect is
+  not isolated from a persistence effect. (a) and (b) share the betas and differ in `alpha2` and persistence only.
+
+**Part 2 is needed.** Not done here.
