@@ -994,12 +994,13 @@ seed is `a + b` at `1 − 1e-4`, or `a` or `b` at 0, in either run. The online
 on 41 of 50 seeds under t(5) (at most 139 steps) and 32 of 50 under normal
 noise (at most 37), in the early steps.
 
-**What fails.** Ten seeds under t(5); eight of them lie along the `a + b`
+**What fails.** Ten seeds under t(5); seven of them lie along the `a + b`
 ridge as in part 6 and §10 (online `a` low and `b` high, persistence within
-0.01 of the batch's): worst 485039 (batch `(0.0607, 0.9208)`, online
-`(0.0266, 0.9584)`, −9.55 / +7.95 SE) and 485007 (−9.49 / +7.77). Two drop
-the persistence instead: 485049 (online `(0.0608, 0.8742)` against
-`(0.0500, 0.9304)`, `b` −13.6 SE) and 485034. The Gaussian control passes
+0.007 of the batch's): worst 485039 (batch `(0.0607, 0.9208)`, online
+`(0.0266, 0.9584)`, −9.55 / +7.95 SE) and 485007 (−9.49 / +7.77). Three
+end with a lower persistence than the batch's (by 0.013 to 0.045): 485049
+(online `(0.0608, 0.8742)` against `(0.0500, 0.9304)`, `b` −13.6 SE),
+485034 and 485026. The Gaussian control passes
 with three seeds of headroom, so the failure comes with the heavy tails:
 the early steps, taken on a few large `z zᵀ`, push `(a, b)` off the batch
 point (the projection acts on 41 seeds, against 32), and the `1/(t + 100)`
