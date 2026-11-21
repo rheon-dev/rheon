@@ -6,7 +6,8 @@ seeds (§10), where the plain estimator fails the proposed criterion in the
 tail, and four mitigations on the same grid (§11), of which variance
 targeting and a 500-row batch start pass it. Part 4: ARMA(1,1) against
 statsmodels over the same seeds, with and without decay (§12). Part 5:
-ETS(A,A,N) against statsmodels' `ETSModel` (§13). Nothing in the package or the Rust crates was changed. The scan this
+ETS(A,A,N) against statsmodels' `ETSModel` (§13). Part 6: DCC(1,1) with
+GARCH(1,1) margins against a batch fit written from the definition (§14). Nothing in the package or the Rust crates was changed. The scan this
 builds on is `vm-tools/research/485-TIME-SERIES-SCAN.md` on branch
 `vm-tools/oracle-gap-scan` (written from `a5c4dcef`); its section numbers are
 cited as "scan §N".*
@@ -515,3 +516,96 @@ GARCH mitigations.
 **Not measured:** damped and seasonal forms, multiplicative forms, the
 half-life (decay) form rheon's `holt` uses, estimated or heuristic initial
 states, and the grid form over `(α, β)` (§3 (b)).
+
+## 14. Part 6: DCC(1,1) with GARCH(1,1) margins
+
+`scripts/study_485/dcc.py` (the simulation, both stages online, the batch
+oracle, the comparison and the grid in one file: `python dcc.py OUT.jsonl`,
+resumable, `--summary` for the table), `scripts/study_485/test_dcc.py`.
+
+**The truth** (the coordinator's for this part): two series, `k = 2`
+(§4's D1 had `k = 3`); DCC `(a, b) = (0.05, 0.90)` (D1 had `b = 0.93`);
+`Q̄` with off-diagonal 0.5; each margin GARCH(1,1) at G1's
+`(ω, α, β) = (0.02, 0.08, 0.90)`, Gaussian. Burn-in 1,000 rows. With two
+series `R_t` has one free entry and the composite likelihood over pairs is
+the full likelihood, so the two coincide here.
+
+**The online estimator, both stages.**
+
+- *Margins:* the online GARCH(1,1) of `garch.py` with variance targeting,
+  the variant that passed in part 3 (1a). Each row's standardized residual
+  uses the variance computed for that row before the row was read. Both
+  margins emit from row 76, so the DCC stage sees rows 76 onward.
+- *Correlation:* `Q̄` is the running mean of `z zᵀ` over earlier rows (the
+  scan's online targeting, form (b)); `Q_t` follows the DCC recursion and
+  `ρ_t = q₁₂/sqrt(q₁₁q₂₂)` is emitted before `z_t` is read. Then one
+  Fisher-scoring step on the row's second-stage log-likelihood: the score
+  `∂ℓ/∂ρ · ∇ρ`, with `∂Q/∂a` and `∂Q/∂b` carried by their own recursion, the
+  information `(1 + ρ²)/(1 − ρ²)² ∇ρ∇ρᵀ`, gain `1/(t + 100)`, projected onto
+  `a, b ≥ 0`, `a + b ≤ 1 − 1e-4`. The first 100 DCC rows build the
+  information with `(a, b)` held at `(0.03, 0.85)`. State past the two
+  margins (128 bytes each): 20 floats, 160 bytes.
+
+**What this changes against the batch fit, by construction.** The online
+and batch estimates differ in three places besides the step itself: the
+margins (targeted online GARCH against arch's unrestricted batch fit), the
+standardized residuals (out-of-sample variances against in-sample ones) and
+`Q̄` (the running mean of earlier rows against the whole sample's mean). The
+gaps below include all three.
+
+**The oracle**, written from the definition (Engle 2002): arch's GARCH(1,1)
+per margin (`arch_model(mean="Zero", vol="GARCH", p=1, q=1, dist="normal",
+rescale=False)`, as in part 1), `z` from its in-sample conditional
+volatility, `Q̄` the sample mean of `z zᵀ`, `Q₀ = Q̄`, and `(a, b)`
+maximizing the summed second-stage log-likelihood by
+`scipy.optimize.minimize(method="SLSQP")` from `(0.03, 0.85)` under
+`a, b ∈ [0, 1]`, `a + b ≤ 1 − 1e-4` (`ftol` 1e-12). The `Q` recursion is
+`scipy.signal.lfilter` on each entry. SLSQP reported success on all 100
+cases. **arch provides no DCC**: version 9.0.0 has no multivariate model
+(its `arch.covariance` is long-run kernel covariance), so no library's DCC
+output is used.
+
+**Whose standard errors: an approximation.** No library computes them here.
+They are the robust sandwich `H⁻¹ JᵀJ H⁻¹` of the second stage, with the
+Hessian `H` and the per-row scores `J` by statsmodels' numerical
+differentiation (`approx_hess`, `approx_fprime`) at the batch optimum. They
+ignore the first stage's estimation error (no two-step correction), so they
+understate the batch estimator's true spread. The robust and the classic
+(inverse-Hessian) SEs differ little: the median ratio for `a` is 0.99.
+
+**Checks** (`test_dcc.py`): the `lfilter` path equals the matrix recursion
+row by row to 1e-12; the row log-likelihood equals scipy's bivariate normal
+log density less the independent one's, to 1e-10; the online score equals
+statsmodels' numerical derivative of the row's log-likelihood with the
+parameters held (rtol 1e-4); out-of-sample; `(a, b)` admissible and `Q_t`
+positive definite after every row; scaling the returns by 37 leaves `(a, b)`
+and every `ρ_t` unmoved (rtol 1e-8).
+
+**The grid** (seeds 485000 to 485049; absolute gaps in the approximate SEs;
+"over 3" counts seeds; the criterion's count in bold):
+
+| rows | `a` in SE: median / max / over 3 | `b` | all within 2 SE | `ρ_t` gap to the batch path, second half (per-seed median): median / max |
+|---|---|---|---|---|
+| 2,000 | 0.392 / 2.52 / 0 | 0.688 / 6.01 / 3 | 40 | 0.0191 / 0.0785 |
+| 10,000 | 0.326 / 2.96 / 0 | 0.442 / 2.73 / 0 | **48** | 0.00645 / 0.0227 |
+
+Second-stage log-likelihood (on the batch `z`) at the online final `(a, b)`
+against the batch optimum: median 3.0e-5 per row (max 6.6e-4) at 10,000 rows,
+2.5e-4 (max 7.8e-3) at 2,000; never negative.
+
+The two seeds outside at 10,000 rows lie along the `a + b` ridge, as GARCH's
+did: 485001, batch `(0.0495, 0.8871)` against online `(0.0323, 0.9315)`
+(−2.96 and +2.73 SE); 485017, batch `(0.0458, 0.9113)` against online
+`(0.0337, 0.9295)` (−2.71 and +1.79 SE).
+
+**Against the criterion** (both parameters within 2 SEs on at least 45 of
+50 seeds at 10,000 rows): **passes, 48 of 50**, in approximate SEs that
+leave out the first stage's error (with that error included the SEs would
+be wider, and the count could only rise). The scan's proposed correlation
+tolerance (within 0.02 of the batch-parameter path after the burn-in) holds
+in the median (0.0065) but not on every seed (max 0.023).
+
+**Not measured:** `k > 2` and the composite likelihood proper (at `k = 2` it
+is the full one), ADCC, cDCC, Student-t, the grid form over `(a, b)`, a
+given `Q̄` (the scan's exact form (a)), plain or batch-started margins, and
+the first-stage-corrected SEs.
