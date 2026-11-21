@@ -47,9 +47,7 @@ def make_frame(
         x = np.where(bad & (kinds == 2), -np.inf, x)
     valid = rng.random(n) >= null_p
     w = np.where(rng.random(n) < zero_w_p, 0.0, rng.uniform(0.5, 2.0, n))
-    return pl.DataFrame(
-        {"g": g.astype(np.int64), "t": t, "x": x, "w": w}
-    ).with_columns(
+    return pl.DataFrame({"g": g.astype(np.int64), "t": t, "x": x, "w": w}).with_columns(
         x=pl.when(pl.Series(valid)).then(pl.col("x")),
     )
 

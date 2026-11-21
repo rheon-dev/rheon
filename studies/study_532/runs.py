@@ -3,8 +3,8 @@ and loaded between chunks, per group, and the state's bytes."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 import numpy as np
 import polars as pl
@@ -87,7 +87,9 @@ def _rolling_by(span: int, closed: str, min_samples: int, ddof: int = 1) -> Unit
     )
 
 
-def _ewm_mean(hl: float, adjust: bool = True, ignore_nulls: bool = False, min_samples: int = 1) -> Unit:
+def _ewm_mean(
+    hl: float, adjust: bool = True, ignore_nulls: bool = False, min_samples: int = 1
+) -> Unit:
     a = alpha_of_half_life(hl)
 
     def make() -> EwmMean:
@@ -104,12 +106,18 @@ def _ewm_mean(hl: float, adjust: bool = True, ignore_nulls: bool = False, min_sa
         make,
         load,
         (f"ewm_mean[{tag}]",),
-        (pl.col("xm").ewm_mean(half_life=hl, adjust=adjust, ignore_nulls=ignore_nulls, min_samples=min_samples),),
+        (
+            pl.col("xm").ewm_mean(
+                half_life=hl, adjust=adjust, ignore_nulls=ignore_nulls, min_samples=min_samples
+            ),
+        ),
         False,
     )
 
 
-def _ewm_var(hl: float, std: bool, adjust: bool = True, bias: bool = False, ignore_nulls: bool = False) -> Unit:
+def _ewm_var(
+    hl: float, std: bool, adjust: bool = True, bias: bool = False, ignore_nulls: bool = False
+) -> Unit:
     a = alpha_of_half_life(hl)
 
     def make() -> EwmVar:
@@ -127,7 +135,11 @@ def _ewm_var(hl: float, std: bool, adjust: bool = True, bias: bool = False, igno
         make,
         load,
         (f"{op}[{tag}]",),
-        (getattr(pl.col("xm"), op)(half_life=hl, adjust=adjust, bias=bias, ignore_nulls=ignore_nulls),),
+        (
+            getattr(pl.col("xm"), op)(
+                half_life=hl, adjust=adjust, bias=bias, ignore_nulls=ignore_nulls
+            ),
+        ),
         False,
     )
 
@@ -163,6 +175,9 @@ def units() -> list[Unit]:
         _rolling_by(30, "both", 2, ddof=0),
         _rolling_by(30, "none", 1),
         _rolling_by(12, "right", 4),  # often short of min_samples: skipped updates
+        _rolling_by(
+            3, "left", 0
+        ),  # rolling_sum_by's default min_samples: an empty window sums to 0
         _ewm_mean(10.0),
         _ewm_mean(10.0, adjust=False),
         _ewm_mean(4.0, ignore_nulls=True, min_samples=5),
@@ -179,7 +194,7 @@ def units() -> list[Unit]:
 def polars_outputs(df: pl.DataFrame, us: list[Unit], grouped: bool = True) -> dict[str, pl.Series]:
     exprs = []
     for u in us:
-        for lab, e in zip(u.labels, u.exprs):
+        for lab, e in zip(u.labels, u.exprs, strict=False):
             exprs.append((e.over("g") if grouped else e).alias(lab))
     out = df.select(exprs)
     return {c: out[c] for c in out.columns}
@@ -203,7 +218,7 @@ def stream(
     outs: dict[str, list[float | None]] = {lab: [] for u in us for lab in u.labels}
     lists = [[outs[lab] for lab in u.labels] for u in us]
     peak = {u.name: 0 for u in us}
-    for i, (x, t, g) in enumerate(zip(xs, ts, gs)):
+    for i, (x, t, g) in enumerate(zip(xs, ts, gs, strict=False)):
         if i in cutset:
             for j, u in enumerate(us):
                 for key, st in states[j].items():
@@ -218,7 +233,7 @@ def stream(
             if len(u.labels) == 1:
                 lists[j][0].append(r)
             else:
-                for lst, v in zip(lists[j], r):
+                for lst, v in zip(lists[j], r, strict=False):
                     lst.append(v)
     return outs, peak
 

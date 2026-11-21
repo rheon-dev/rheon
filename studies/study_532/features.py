@@ -25,8 +25,8 @@ from __future__ import annotations
 import math
 import struct
 from collections import deque
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import Callable, Iterable
 
 Value = float | None
 
@@ -229,7 +229,9 @@ def _insert_one(st: tuple[float, float, float], x: float) -> tuple[float, float,
     return (nw, nm, dp)
 
 
-def _combine(st: tuple[float, float, float], o: tuple[float, float, float]) -> tuple[float, float, float]:
+def _combine(
+    st: tuple[float, float, float], o: tuple[float, float, float]
+) -> tuple[float, float, float]:
     """``VarState::combine``."""
     ow, om, odp = o
     if ow == 0.0:
@@ -506,7 +508,9 @@ class Rolling:
             s = max(0, e - spec.rows)
         else:
             assert t is not None
-            if self.last_t is not None and (t < self.last_t or (t == self.last_t and not spec.asof_ties)):
+            if self.last_t is not None and (
+                t < self.last_t or (t == self.last_t and not spec.asof_ties)
+            ):
                 raise ClockError(f"time {t} after {self.last_t}")
             self.last_t = t
             self.times.append(t)
@@ -602,7 +606,9 @@ def alpha_of_half_life(half_life: float) -> float:
 class EwmMean:
     """``EwmMeanState``. Constant state: the mean, the weight, a count."""
 
-    def __init__(self, alpha: float, adjust: bool = True, min_samples: int = 1, ignore_nulls: bool = False) -> None:
+    def __init__(
+        self, alpha: float, adjust: bool = True, min_samples: int = 1, ignore_nulls: bool = False
+    ) -> None:
         self.alpha, self.adjust, self.ignore_nulls = alpha, adjust, ignore_nulls
         self.min_samples = max(min_samples, 1)
         self.mean = 0.0
@@ -645,7 +651,13 @@ class EwmVar:
         ignore_nulls: bool = False,
         std: bool = False,
     ) -> None:
-        self.alpha, self.adjust, self.bias, self.ignore_nulls, self.std = alpha, adjust, bias, ignore_nulls, std
+        self.alpha, self.adjust, self.bias, self.ignore_nulls, self.std = (
+            alpha,
+            adjust,
+            bias,
+            ignore_nulls,
+            std,
+        )
         self.min_samples = max(min_samples, 1)
         self.weight = self.mean = self.cov = self.wsum = self.wsq = 0.0
         self.count = 0
@@ -666,7 +678,10 @@ class EwmVar:
                 frac = ow / nw
                 d = x - self.mean
                 nm = self.mean + d * frac
-                cov = (self.weight * (self.cov + (self.mean - nm) * (self.mean - nm)) + ow * (x - nm) * (x - nm)) / nw
+                cov = (
+                    self.weight * (self.cov + (self.mean - nm) * (self.mean - nm))
+                    + ow * (x - nm) * (x - nm)
+                ) / nw
                 self.cov, self.weight, self.mean = cov, nw, nm
                 self.wsum += ow
                 self.wsq += ow * ow
@@ -687,10 +702,14 @@ class EwmVar:
         return math.sqrt(v) if self.std else v
 
     def to_bytes(self) -> bytes:
-        return struct.pack("<5dQ", self.weight, self.mean, self.cov, self.wsum, self.wsq, self.count)
+        return struct.pack(
+            "<5dQ", self.weight, self.mean, self.cov, self.wsum, self.wsq, self.count
+        )
 
     def load(self, data: bytes) -> None:
-        self.weight, self.mean, self.cov, self.wsum, self.wsq, self.count = struct.unpack("<5dQ", data)
+        self.weight, self.mean, self.cov, self.wsum, self.wsq, self.count = struct.unpack(
+            "<5dQ", data
+        )
 
 
 class EwmMeanBy:
@@ -726,7 +745,13 @@ class EwmMeanBy:
         return y
 
     def to_bytes(self) -> bytes:
-        return struct.pack("<qdq?", self.prev_t, self.prev, self.last_t if self.last_t is not None else -(1 << 63), self.started)
+        return struct.pack(
+            "<qdq?",
+            self.prev_t,
+            self.prev,
+            self.last_t if self.last_t is not None else -(1 << 63),
+            self.started,
+        )
 
     def load(self, data: bytes) -> None:
         self.prev_t, self.prev, lt, self.started = struct.unpack("<qdq?", data)
