@@ -96,6 +96,7 @@ KINDS: dict[str, Builder] = {
     # Counts: `_stream` gives its targets as the nearest whole numbers of
     # their magnitude.
     "glm": lambda **kw: rp.spec.glm("m", **kw),
+    "expectile": lambda **kw: rp.spec.expectile("m", expectile=0.8, **kw),
     # The trend at the level's half-life: at its default, four times it, the
     # trend settles past the stream's end, and every diagnostic that waits
     # for the fit to settle (calibration, breaks, specification, tails)

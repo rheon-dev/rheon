@@ -200,6 +200,7 @@ ledger.guard(
 )
 ledger.guard("sgd_poisson", lambda: guard_outputs("sgd:poisson"), oracles=["statsmodels"])
 ledger.guard("glm", lambda: guard_outputs("glm"), oracles=["statsmodels"])
+ledger.guard("expectile", lambda: guard_outputs("expectile"), oracles=["statsmodels"])
 ledger.guard("sgd_logistic", lambda: guard_outputs("sgd:logistic"), oracles=["statsmodels"])
 ledger.guard("sgd_huber", lambda: guard_outputs("sgd:huber"), oracles=["statsmodels"])
 ledger.guard("sgd_rates", guard_rates, oracles=["statsmodels"])
@@ -327,6 +328,11 @@ CONSISTENCY: dict[str, tuple[float, float | None]] = {
     # weights' bias falls about as 1/n. Measured 2026-11-21, 50 seeds:
     # 0.000476 (seed 3) at 32,000 rows and -0.67.
     "glm": (0.00075, -0.5),
+    # One pass after an exact refit of the first 200 rows, each row's side
+    # judged at the fit before it: the rows judged on the wrong side early
+    # are outweighed as 1/n. Measured 2026-11-21, 50 seeds: 0.000172 (seed
+    # 26) at 32,000 rows and -0.80.
+    "expectile": (0.0003, -0.6),
 }
 
 #: The cut a registration's rate is read from, where the first cut is not
@@ -454,6 +460,8 @@ START: dict[str, dict[float, float]] = {
     # they are outweighed. Measured 2026-11-21, 50 seeds: 0.00529 (seed 43)
     # at 3,200 rows, and 0.0345 (seed 35) at 32,000.
     "glm": {200.0: 0.008, cv.INF: 0.052},
+    # 0.00302 (seed 30; fresh 0.00237). Without decay, see START_RATE.
+    "expectile": {200.0: 0.005},
     # The batch fit on every row, the other regime's included: rounding, to
     # 8.6e-14 (ewridge), 2.3e-13 (rls) and 4.5e-11 (lasso).
     "ewridge": {200.0: 1e-11, cv.INF: 1e-11},
@@ -524,6 +532,12 @@ START_RATE: dict[str, float] = {
     # at the 500-row default: -1.54 (0.123 off the oracle on every row at
     # 32,000 rows, seed 20; 0.142 before the refit, seed 36).
     "quantile": -1.0,
+    # expectile without decay: the loaded state's rows keep the sides they
+    # were judged on in the one pass's sums, where the batch fit of every row
+    # judges them at its own fit (4.54 off it at 32,000 rows, seed 37); they
+    # leave as the rows after them outweigh them. Measured 2026-11-21: -0.52
+    # (40.7 to 4.72).
+    "expectile": -0.4,
     # A loaded state's refit has run, on the other regime's rows: the one
     # pass keeps those rows in its sums at the weights they were learned at,
     # where the batch fit of every row reads them as outliers, so the gap to
@@ -1181,6 +1195,16 @@ REBREAK: dict[str, dict[str, tuple[float, float]]] = {
     # A Newton step a row: back on the decayed batch fit within a few
     # half-lives. Measured 2026-11-21: 0.00167, 0.00242 and 0.0319 at 12.
     "glm": {"level": (12, 0.0025), "slope": (12, 0.0037), "regime": (12, 0.048)},
+    # One pass under decay: back on the decayed batch fit within a few
+    # half-lives, the rows judged against the old fit decaying with it.
+    # Measured 2026-11-21, 50 seeds: 0.00454 (level), 0.00483 (slope),
+    # 0.0193 (variance) and 0.0209 (regime) at 12.
+    "expectile": {
+        "level": (12, 0.007),
+        "slope": (12, 0.0075),
+        "variance": (12, 0.03),
+        "regime": (12, 0.032),
+    },
     "sgd:huber": {
         "level": (8, 0.038),
         "slope": (8, 0.037),

@@ -38,6 +38,7 @@ BUILDERS = [
     "sgd",
     "pa",
     "glm",
+    "expectile",
     "holt",
     "kmeans",
     "micro",

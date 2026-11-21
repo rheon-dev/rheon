@@ -91,7 +91,7 @@ FAMILIES: tuple[Family, ...] = (
             for m in ("ewridge", "rls", "lasso", "kalman", "sgd", "pa", "ftrl", "glm", "holt")
         ),
     ),
-    Family("robust", "spec", (f"{_SPEC}.huber", f"{_SPEC}.quantile")),
+    Family("robust", "spec", (f"{_SPEC}.huber", f"{_SPEC}.quantile", f"{_SPEC}.expectile")),
     Family(
         "covariance",
         "spec",

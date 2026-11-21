@@ -519,7 +519,7 @@ in the table.
 
 ### The table
 
-**120 cells: 83 over the 24 model kinds' rows, 19 over the
+**124 cells: 87 over the 25 model kinds' rows, 19 over the
 bank, 3 over the command line, 9 over the window operators, 4 over
 `refresh_time` and 2 over the sample of an internal helper for
 gradient-boosted trees.** Each row is one cell: the
@@ -530,7 +530,8 @@ column has the four native ratios from large to small, as measured on
 --test scaling -- --nocapture` prints them. `bank.label_clock`'s were measured on
 2026-11-08, the same way, at a load of 5, and `windows.rows_held`'s on
 2026-11-20 by a release build (`--release`) at a load of 7, and the four
-`hawkes` cells' on 2026-11-21 by a debug build at a load of 5. The two `.window` cells were
+`hawkes` cells' on 2026-11-21 by a debug build at a load of 5, and the four
+`expectile` cells' on 2026-11-21 the same way at a load of 14. The two `.window` cells were
 measured again on 2026-11-06, once a window's snapshots were laid out
 flat. A row's time and allocations are per
 row; the saved state and the heap are the state's. `(CI)` marks the 25 cells
@@ -575,6 +576,10 @@ largest buffer at the smaller.
 | `glm.k` | features k | 4 → 32 | O(n³) | O(n²) | a Cholesky of `G + R I` a row and target, `G` of k² | 57.97 · 1.00 · 18.71 · 8.03 |
 | `glm.targets` | targets T | 1 → 8 | O(n) | O(n) | a Gram and a solve a target | 8.02 · 1.00 · 6.92 · 2.31 |
 | `glm.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | the refit's buffer freed once it ran | 1.01 · 1.00 · 1.00 · 1.00 |
+| `expectile.k` | features k | 4 → 32 | O(n³) | O(n²) | a rank-one update of the mean-form Gram and its Cholesky a row and target, `G` of k² | 55.62 · 1.00 · 15.39 · 10.88 |
+| `expectile.targets` | targets T | 1 → 8 | O(n) | O(n) | a Gram and a solve a target | 7.75 · 1.00 · 6.84 · 1.17 |
+| `expectile.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | the refit's buffer freed once it ran | 1.00 · 1.00 · 1.00 · 1.00 |
+| `expectile.window` | `window_rows` N | 50 → 400 | O(n) | O(n) | each row refits the window's N rows exactly, a weighted least-squares solve over them a pass, warm-started so a pass or two | 7.54 · 0.97 · 7.55 · 5.97 |
 | `ftrl.k` | features k | 4 → 32 | O(n) | O(n) | per-coordinate running sums, k | 4.74 · 1.00 · 3.99 · 1.69 |
 | `ftrl.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | running sums only | 0.99 · 1.00 · 1.00 · 1.00 |
 | `holt.targets` | targets T | 1 → 8 | O(n) | O(n) | a level and trend a target | 4.95 · 1.00 · 4.99 · 1.35 |

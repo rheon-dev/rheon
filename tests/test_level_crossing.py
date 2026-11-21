@@ -39,6 +39,7 @@ MODELS = [
     ("ftrl", {"loss": "squared"}),
     ("sgd", {}),
     ("pa", {}),
+    ("expectile", {"expectile": 0.5}),
     ("holt", {"features": None}),  # no features keyword
 ]
 IDS = [m for m, _ in MODELS]

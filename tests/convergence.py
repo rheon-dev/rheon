@@ -322,6 +322,49 @@ def quantreg(q: float) -> Callable[[np.ndarray, np.ndarray, np.ndarray], np.ndar
     return fit
 
 
+def expectile_fit(tau: float) -> Callable[[np.ndarray, np.ndarray, np.ndarray], np.ndarray]:
+    """statsmodels' ``RLM`` with ``MQuantileNorm(tau, LeastSquares())``: the
+    expectile regression at ``tau`` ("expectiles are M-quantiles with the
+    LeastSquares as base norm"). It takes no weights; the asymmetric squared
+    loss is homogeneous of degree 2, so the weighted fit is ``RLM`` on the
+    rows scaled by the square roots of their weights."""
+    from statsmodels.robust.norms import LeastSquares, MQuantileNorm
+
+    def fit(X: np.ndarray, y: np.ndarray, v: np.ndarray) -> np.ndarray:
+        r = np.sqrt(v)
+        m = sm.RLM(r * y, r[:, None] * X, M=MQuantileNorm(tau, LeastSquares()))
+        return np.asarray(m.fit(tol=1e-13, maxiter=200).params)
+
+    return fit
+
+
+def normal_expectile(tau: float) -> float:
+    """The expectile of the standard normal at ``tau``: the root of
+    ``tau E(Y - e)+ = (1 - tau) E(e - Y)+``, with ``E(Y - e)+ = phi(e) - e (1 -
+    Phi(e))`` and ``E(e - Y)+ = e Phi(e) + phi(e)``, found by scipy."""
+    from scipy.optimize import brentq
+    from scipy.stats import norm
+
+    def gap(e: float) -> float:
+        above = norm.pdf(e) - e * norm.sf(e)
+        below = e * norm.cdf(e) + norm.pdf(e)
+        return tau * above - (1 - tau) * below
+
+    return float(brentq(gap, -10.0, 10.0, xtol=1e-15))
+
+
+#: The level `expectile`'s registration fits.
+EXPECTILE_TAU = 0.8
+
+
+def _expectile_stream(n: int, seed: int, **kw: object) -> Stream:
+    """``linear``'s normal stream, its truth the expectile's: the intercept
+    moved by the noise's own expectile at :data:`EXPECTILE_TAU`."""
+    s = linear(n, seed, **kw)  # type: ignore[arg-type]
+    shift = NOISE * normal_expectile(EXPECTILE_TAU)
+    return Stream(s.frame, s.truth + np.array([shift, 0.0, 0.0]))
+
+
 def insensitive(eps: float) -> Callable[[np.ndarray, np.ndarray, np.ndarray], np.ndarray]:
     """The epsilon-insensitive fit, ``min sum v max(0, |y - x b| - e)``, as
     the linear programme it is, solved by scipy's HiGHS. ``e`` is ``eps``
@@ -651,6 +694,18 @@ def _registrations() -> list[Registration]:
             "has no level to add",
             other=OTHER_POISSON,
             level=None,
+        ),
+        Registration(
+            key="expectile",
+            builder="expectile",
+            build=_spec("expectile", expectile=EXPECTILE_TAU),
+            stream=_expectile_stream,
+            oracle=expectile_fit(EXPECTILE_TAU),
+            classes=frozenset({1, 2, 5}),
+            limit="the expectile regression of every row at its weight (statsmodels RLM with "
+            "MQuantileNorm): one pass judges each row's side at the fit before it, after an "
+            "exact refit of the first rows, and the sides it judged wrong are outweighed",
+            other=OTHER_LINEAR,
         ),
         Registration(
             key="pa",

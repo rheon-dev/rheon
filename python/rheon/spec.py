@@ -95,9 +95,9 @@ shows them at work.
     converged, so it never reports a number it is not yet informed enough to
     give. What: the weight a model must have seen before its outputs stop being
     null; the model learns from every row either way. A list gives one
-    threshold per target. Twelve models keep a weight per target: ``ewridge``,
-    ``lasso``, ``kalman``, ``huber``, ``quantile``, ``holt``, ``sgd``, ``pa``,
-    ``ftrl``, ``rls``, ``glm`` and ``marginal``, whose table's ``corr``, ``beta`` and
+    threshold per target. Thirteen models keep a weight per target: ``ewridge``,
+    ``lasso``, ``kalman``, ``huber``, ``quantile``, ``expectile``, ``holt``, ``sgd``,
+    ``pa``, ``ftrl``, ``rls``, ``glm`` and ``marginal``, whose table's ``corr``, ``beta`` and
     ``t_stat`` are gated per target. Each checks a target's threshold against
     that target's own weight: the rows it was present on, at their raw weights,
     decayed, and inside the window under one. ``rls`` learns only from rows on
@@ -120,8 +120,8 @@ shows them at work.
          - models
        * - one per unknown: the features, and the intercept when there is
            one
-         - ``lasso``, ``kalman``, ``huber``, ``quantile``, ``rls``, ``sgd``,
-           ``pa``, ``ftrl``, ``glm``
+         - ``lasso``, ``kalman``, ``huber``, ``quantile``, ``expectile``,
+           ``rls``, ``sgd``, ``pa``, ``ftrl``, ``glm``
        * - the feature count plus one (1 for ``holt``)
          - ``ew_cov``, ``ew_class``, ``kmeans``, ``micro``, ``holt``
        * - 3
@@ -1043,6 +1043,7 @@ from rheon._spec import (
     ew_class,
     ew_cov,
     ewridge,
+    expectile,
     ftrl,
     glm,
     hawkes,
@@ -1069,6 +1070,7 @@ __all__ = [
     "ew_class",
     "ew_cov",
     "ewridge",
+    "expectile",
     "ftrl",
     "glm",
     "hawkes",

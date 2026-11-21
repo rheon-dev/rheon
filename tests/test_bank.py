@@ -394,6 +394,7 @@ class TestPerTargetMinPeriods:
             "sgd": lambda: rp.spec.sgd("m", features=["x0"], learning_rate=0.01, **common),
             "pa": lambda: rp.spec.pa("m", features=["x0"], **common),
             "glm": lambda: rp.spec.glm("m", features=["x0"], family="gamma", **common),
+            "expectile": lambda: rp.spec.expectile("m", features=["x0"], expectile=0.8, **common),
         }[kind]()
         if kind == "glm":
             # A Gamma amount is above 0.

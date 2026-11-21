@@ -33,6 +33,7 @@ MODELS = [
     ("sgd", {"learning_rate": 0.01}),
     ("pa", {}),
     ("glm", {}),
+    ("expectile", {"expectile": 0.8}),
     # Holt is the one model with no features, so it opts out of the shared set.
     ("holt", {"features": None}),  # no features keyword
 ]

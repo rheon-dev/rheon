@@ -269,6 +269,9 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
         {"kernel_half_lives", "window_events", "window_size", "closed", "max_state_bytes"}
     ),
     "ewridge": frozenset({"gram_threads"}),
+    "expectile": frozenset(
+        {"refit_rows", "window_rows", "window_size", "closed", "max_state_bytes", "refit_budget"}
+    ),
     "huber": frozenset(
         {
             "huber_scale",
@@ -762,6 +765,7 @@ __all__ = [
     "ew_class",
     "ew_cov",
     "ewridge",
+    "expectile",
     "ftrl",
     "glm",
     "hawkes",
@@ -5077,6 +5081,7 @@ from rheon._spec_audit import audit  # noqa: E402
 from rheon._spec_changepoint import bocpd, corrchange  # noqa: E402
 from rheon._spec_class import ew_class  # noqa: E402
 from rheon._spec_cluster import kmeans, micro  # noqa: E402
+from rheon._spec_expectile import expectile  # noqa: E402
 from rheon._spec_glm import glm  # noqa: E402
 from rheon._spec_gradient import sgd  # noqa: E402
 from rheon._spec_point import hawkes  # noqa: E402

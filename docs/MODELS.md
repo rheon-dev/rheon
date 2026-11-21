@@ -1,7 +1,7 @@
 <!-- kind: reference -->
 # Models
 
-The reference entry of each of the twenty-four models a spec can name, by
+The reference entry of each of the twenty-five models a spec can name, by
 family, for a reader who knows which model they want to look up. A
 model's parameters, their defaults and its refusals are in its docstring,
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md).
@@ -28,7 +28,7 @@ which models keep each, and why.
 
 ## The models at a glance
 
-The twenty-four models fall into four families, and each family answers one
+The twenty-five models fall into four families, and each family answers one
 kind of question about a stream. Each name links its builder's reference
 page, which gives its keywords and their defaults, and *entry* links its
 entry on this page. [Choose a model](how-to/choose-a-model.md) says which
@@ -43,6 +43,7 @@ to start with for which question.
 | [`kalman`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.kalman) · [entry](#kalman--random-walk-β-dynamic-linear-model) | filter | a Kalman filter whose coefficients drift as random walks |
 | [`huber`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.huber) · [entry](#huber--robust-regression) | reweight | Huber regression, which down-weights the rows a prediction misses by far |
 | [`quantile`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.quantile) · [entry](#quantile--robust-regression) | reweight | quantile regression, the fit that a share `tau` of the targets fall below |
+| [`expectile`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.expectile) · [entry](#expectile--expectile-regression) | reweight | expectile regression, the squared error with the rows above the fit weighed `tau` and those below `1 - tau`; exact over a window of rows or of the clock |
 | [`sgd`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.sgd) · [entry](#sgd--stochastic-gradient-descent) | step | stochastic gradient descent with squared, Huber, quantile, ε-insensitive, Poisson and logistic losses |
 | [`pa`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.pa) · [entry](#pa--passive-aggressive-regression) | step | passive-aggressive regression, with no learning rate to tune |
 | [`ftrl`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ftrl) · [entry](#ftrl--online-logistic-regression) | step | FTRL-proximal regression, logistic by default, with an L1 penalty that zeroes coefficients |
@@ -241,7 +242,7 @@ per target, give `min_weight` a list. The default depends on the model:
 
 | default | models |
 |---|---|
-| one per unknown: the features, and the intercept when there is one | `lasso`, `kalman`, `huber`, `quantile`, `rls`, `sgd`, `pa`, `ftrl`, `glm` |
+| one per unknown: the features, and the intercept when there is one | `lasso`, `kalman`, `huber`, `quantile`, `expectile`, `rls`, `sgd`, `pa`, `ftrl`, `glm` |
 | the feature count plus one (1 for `holt`) | `ew_cov`, `ew_class`, `kmeans`, `micro`, `holt` |
 | 3 | `marginal`, `deco` |
 | 1 | `bocpd` |
@@ -1288,6 +1289,120 @@ reasons:
 The docstring's Notes, under *Why a Newton step*, measure the step against
 `QuantReg` at the median of a skewed noise, and under *The scale*, the MAD
 against a root mean square.
+
+### `expectile` — expectile regression
+
+*API:* [`rheon.spec.expectile`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.expectile) — *Rust:* [`expectile.rs`](../crates/rheon-core/src/expectile.rs) — *Outputs:* [fields](OUTPUTS.md#expectile)
+
+Expectile regression, fitted one row at a time by reweighted least
+squares: the squared error with the rows above the fit weighed `tau` and
+those at or below it `1 - tau`.
+
+Use `expectile` for a tail that should weigh how far the rows past it
+lie, not only how many there are: the 0.9 expectile of a loss, a latency or
+a demand. `expectile=0.5` is the least-squares fit. Use
+[`quantile`](#quantile--robust-regression) for the level a share of the
+rows fall below, which no single row can move far.
+
+Its parameters, their defaults and what each refuses are in its
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.expectile),
+and the fields it writes in [OUTPUTS.md](OUTPUTS.md#expectile). One spec
+fits one level: each level weighs every row by its own sides, so two levels
+share no sums, and two specs cost what one spec of two levels would. The
+parameters every spec takes are in [What every spec
+takes](#what-every-spec-takes).
+
+#### The update
+
+`a(r)` is `tau` for a residual above 0 and `1 - tau` at or below it, and
+`z`, `w` are as in the [notation table](#models). Each target keeps a
+mean-form Gram `G`, a cross-moment `c` and the asymmetric weight `S`; `λ`
+is the decay over the clock since the last row that counted:
+
+```
+pred = zᵀβ                    r = y − pred       (before the update)
+a    = a(r), or ½ before the target's first fit
+S    = λ S + w a
+G    = G + (w a / S)(z zᵀ − G)
+c    = c + (w a / S)(z y − c)
+β    = G⁻¹ c                  once a row per coefficient is in
+```
+
+A row's own update cannot move its residual across zero, so one solve a
+row is the whole step. What one pass cannot do is judge an earlier row
+again once the fit has crossed it. Each target's first `refit_rows` rows
+are therefore fitted exactly once, and the sums rebuilt at the sides the
+exact fit gives them. A window, `window_rows` rows or `window_size` of the
+clock, instead refits the rows it holds on every row. The exact fit
+repeats a weighted least-squares solve at the current sides, judging every
+side again, until no side changes, halving a step that does not lower the
+loss.
+
+#### Example
+
+**`expectile=0.9` fits the line the large rows pull up.** Here the noise is
+an exponential of mean 1, whose 0.9 expectile is about 2.03, so the line is
+`1 + 2.03 + 0.5x`:
+
+```python
+import numpy as np
+import polars as pl
+from rheon import polars as rp
+
+rng = np.random.default_rng(7)
+x = rng.standard_normal(20_000)
+y = 1.0 + 0.5 * x + rng.exponential(1.0, 20_000)
+pl.DataFrame({"x": x, "y": y}).write_parquet("skewed.parquet")
+
+upper = rp.spec.expectile(
+    "upper", targets=["y"], features=["x"], half_life=float("inf"),
+    expectile=0.9,                                 # the level to fit
+)
+bank = rp.ModelBank([upper])
+bank.fit(pl.scan_parquet("skewed.parquet"))        # learn every row, keep no output
+c = {r["term"]: r["coef"] for r in bank.coef().iter_rows(named=True)}
+print(f"found: intercept {c['intercept']:.2f}, slope {c['x']:.2f}")
+```
+
+```text
+found: intercept 3.03, slope 0.51
+```
+
+#### See also
+
+When `expectile`'s fit is not the one you need:
+
+- [`quantile`](#quantile--robust-regression), the level a share of the rows
+  fall below.
+- [`ewridge`](#ewridge--exponentially-weighted-ridge-regression), the
+  least-squares fit, which `expectile=0.5` is, with its diagnostics.
+- [`huber`](#huber--robust-regression), a mean that outliers cannot pull.
+
+#### Notes
+
+**The fit is statsmodels' `RLM` with `MQuantileNorm(tau,
+LeastSquares())`.** The refit of the first rows and every row of a window
+match it on the same rows to 2.3e-14 and 7.6e-15 relative, and a window of
+the constant alone matches `scipy.stats.expectile` within 2 ulps of the
+largest target. At `tau = 0.5` the one pass is the decayed least-squares
+fit to rounding. Elsewhere the one pass is a statistical approximation:
+measured over 10 seeds with decay, the gap of its fitted values to the
+exact decayed fit was 0.02 to 0.4 times the batch fit's own sampling error
+on average, and 1.2 times it at worst (500 rows, `tau = 0.9`). Without
+decay, the refit of the first rows cut that gap fivefold at 500 rows.
+
+**The state is bounded by the spec.** The sums take `k(k+1)/2 + 2k + 4`
+numbers a target for `k` coefficients. A refit buffer takes `refit_rows ·
+(features + 2)` numbers a target until it runs, and `window_rows` rows of
+`8 (features + targets + 1) + targets` bytes each. Both are checked against
+`max_state_bytes`, 256 KB by default and at most 64 MiB, when the spec is
+built. A `window_size` window holds the rows its span has, which the data
+decides, so it is checked as the rows go in: a warning at half of the cap,
+once a group, and a refusal at it, each naming the group and the bytes.
+
+**A row of weight 0 counts in no clock.** It is predicted as any row is,
+and the next row decays as if it were not there, its gap taken once from
+the last row that counted. It is in no window, and in no `weight_sum`.
 
 ### `sgd` — stochastic gradient descent
 
