@@ -118,6 +118,9 @@ from schema `N` to `N + 1` in these steps, in both crates:
    PRINT_STATE_FIXTURES=1 cargo test -p rheon-polars --test state_fixtures
    ```
 
+   Each run fails once it has written the files, since it tests nothing:
+   run the two tests again without the variable.
+
 5. If the change adds a form a layout can take, add a case that writes it,
    and regenerate again. The model cases are in
    `crates/rheon-core/tests/cases/mod.rs`, and the bank's specs in

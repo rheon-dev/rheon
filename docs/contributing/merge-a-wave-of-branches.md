@@ -50,7 +50,9 @@ The steps run in the main checkout:
    --nocapture` prints Rust's as lines `GOLDEN <kind>: &[...];`. Copy each
    printed list into the constant that the test's `check("<kind>", …)`
    call passes, under the `// ---
-   generated` marker in `crates/rheon-core/tests/golden.rs`. `uv run python
+   generated` marker in `crates/rheon-core/tests/golden.rs`. Both
+   variables fail the run after writing or printing, since a run under
+   either tests nothing: run the tests again without them. `uv run python
    tests/test_golden_pipeline.py` prints Python's, to paste over `GOLDEN`
    and `SWITCHED_GOLDEN` in that file. A golden value that moved is a
    regression until a branch's change explains it, so find out why before

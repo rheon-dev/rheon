@@ -85,7 +85,9 @@ fn check(name: &str, got: &[f64], want: &[f64]) {
         // avoids clippy's excessive-precision lint on the embedded constants.
         let vals: Vec<String> = got.iter().map(|v| format!("{v:?}")).collect();
         println!("GOLDEN {name}: &[{}];", vals.join(", "));
-        return;
+        // A printing run compared nothing: it fails, so it never stands for
+        // a test run (review S20).
+        panic!("PRINT_GOLDEN=1 printed {name} and compared nothing; run again without it");
     }
     assert_eq!(got.len(), want.len(), "{name}: wrong signature length");
     for (i, (g, w)) in got.iter().zip(want).enumerate() {

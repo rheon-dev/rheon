@@ -2655,6 +2655,13 @@ fn regenerate_when_asked() {
         std::fs::write(dir.join(format!("{}.rs", case.name)), &text).unwrap();
         println!("wrote {}.rs ({} bytes)", case.name, text.len());
     }
+    // A run that rewrote the files tested nothing: the other tests return
+    // early under the variable. It fails, so it never stands for a test run
+    // (review S20: a broken build regenerated its fixtures and passed).
+    panic!(
+        "PRINT_STATE_FIXTURES=1 rewrote the current fixtures and tested nothing; run again \
+         without it to test them"
+    );
 }
 
 /// Where `got` is not `want` field for field -- the same map keys in the
