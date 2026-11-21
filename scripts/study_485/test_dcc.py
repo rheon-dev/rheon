@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 from scipy.stats import multivariate_normal
 from statsmodels.tools.numdiff import approx_fprime
 
@@ -122,3 +123,32 @@ def test_scale_equivariant():
     b, _, _ = dcc.online(37.0 * r)
     np.testing.assert_allclose(b.theta, a.theta, rtol=1e-8)
     np.testing.assert_allclose(b.pred, a.pred, rtol=1e-8, atol=1e-12)
+
+
+def test_chi2_and_huber_radius_are_scipys():
+    """Request A11, remedy (c): the numpy-free chi-squared CDF and the radius
+    at the univariate clip's tail probability."""
+    from scipy.stats import chi2, norm
+
+    for k in (1, 2, 3, 5):
+        for x in (0.3, 2.0, 8.0, 20.0):
+            assert dcc.chi2_cdf(x, k) == pytest.approx(chi2.cdf(x, k), rel=1e-12)
+        q = dcc.huber_radius(2.0, k)
+        assert q == pytest.approx(chi2.ppf(norm.cdf(2.0) - norm.cdf(-2.0), k), rel=1e-10)
+    assert dcc.huber_radius(2.0, 1) == pytest.approx(4.0, rel=1e-12)
+
+
+def test_robust_second_stage_out_of_sample_and_admissible():
+    r = dcc.simulate_k(1500, 41, 3, (0.05, 0.93), 0.5, nu=5.0)
+    rem = dcc.REMEDIES["huber2"]
+    est, _, z = dcc.online_k(r, rem["margins"], **rem["stage2"])
+    a, b = est.theta
+    assert a >= 0 and b >= 0 and a + b <= 1 - dcc.MARGIN_EPS + 1e-15
+    z2 = z.copy()
+    z2[1000] *= 30.0
+    other = dcc.OnlineDccK(k=3, **rem["stage2"])
+    for row in z2:
+        other.update(row)
+    head = zip(est.pred[:1001], other.pred[:1001], strict=True)
+    assert all(np.array_equal(x, y) for x, y in head)
+    assert not np.array_equal(est.pred[1001], other.pred[1001])

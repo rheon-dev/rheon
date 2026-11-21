@@ -36,6 +36,13 @@ the first phase only accumulates the lag-1 autocorrelation ``rho``; then
 accumulates ``R`` and ``s2`` with ``beta`` held. Steps start after ``2 warm``
 rows. Every row emits its prediction at the parameters it holds.
 
+Request A11, remedy (c), a robust score (``robust_c``; 0: off): the step's
+error is Huber-clipped in units of the running SD, ``e -> s * clip(e/s, -c, c)``
+with ``s = sqrt(s2_{t-1})``, and divided by the running fraction of rows not
+clipped (the clipped error's slope, so the step keeps Gauss-Newton's scale).
+``s2`` stays the mean of the unclipped ``e^2``. The clip is symmetric, so no
+centring is needed under symmetric noise.
+
 State per target: ``beta`` (2), ``R`` (3 distinct), ``psi`` (2), ``y_{t-1}``,
 ``ehat_{t-1}``, ``s2``, ``W``, the row count and the two sums of the first
 phase: 14 floats, 112 bytes.
@@ -98,6 +105,7 @@ class OnlineArma:
     half_life: float = math.inf
     warm: int = 50
     margin: float = 1e-2
+    robust_c: float = 0.0
 
     beta: np.ndarray = field(default_factory=lambda: np.zeros(2))
     R: np.ndarray = field(default_factory=lambda: np.zeros((2, 2)))
@@ -109,6 +117,8 @@ class OnlineArma:
     n_seen: int = 0
     syy: float = 0.0
     syy1: float = 0.0
+    rob_m: float = 0.0
+    rob_n: int = 0
     lam: float = field(init=False)
 
     pred: list[float] = field(default_factory=list)
@@ -135,12 +145,21 @@ class OnlineArma:
                 self.beta = np.array([min(max(rho, -cap), cap), 0.0])
             return
         psi = x - theta * self.psi
+        e_step = e
+        if self.robust_c > 0.0 and self.s2 > 0.0:
+            sd = math.sqrt(self.s2)
+            u = e / sd
+            self.rob_n += 1
+            self.rob_m += ((1.0 if abs(u) < self.robust_c else 0.0) - self.rob_m) / self.rob_n
+            e_step = sd * min(max(u, -self.robust_c), self.robust_c)
+            if self.rob_m > 0.0:
+                e_step /= self.rob_m
         self.W = self.lam * self.W + 1.0
         gamma = 1.0 / self.W
         self.R += gamma * (np.outer(psi, psi) - self.R)
         self.s2 += gamma * (e * e - self.s2)
         if self.n_seen > 2 * self.warm:
-            step = gamma * np.linalg.solve(self.R, psi * e)
+            step = gamma * np.linalg.solve(self.R, psi * e_step)
             cap = 1.0 - self.margin
             self.beta = np.clip(self.beta + step, -cap, cap)
         phi, theta = self.beta

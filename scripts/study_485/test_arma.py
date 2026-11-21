@@ -64,3 +64,23 @@ def test_no_decay_is_the_unweighted_fit():
     w = arma.weighted_css_fit(y, np.inf)
     e = lfilter([1.0, -w[0]], [1.0, w[1]], y)
     assert w[2] == pytest.approx(np.mean(e * e), rel=1e-12)
+
+
+def test_robust_score_out_of_sample_admissible_scale_equivariant():
+    """Request A11, remedy (c): the Huber-clipped step."""
+    y = arma.simulate(3000, 0.8, 0.3, 1.0, seed=26, nu=5.0)
+    a = arma.run(y, robust_c=2.0)
+    assert np.all(np.abs(a.beta) <= 1 - a.margin)
+    y2 = y.copy()
+    y2[2000] += 50.0
+    b = arma.run(y2, robust_c=2.0)
+    assert a.pred[:2001] == b.pred[:2001] and a.pred[2001] != b.pred[2001]
+    c = arma.run(37.0 * y, robust_c=2.0)
+    np.testing.assert_allclose(c.beta, a.beta, rtol=1e-9)
+    np.testing.assert_allclose(c.s2, 37.0**2 * a.s2, rtol=1e-9)
+
+
+def test_robust_default_is_the_plain_estimator():
+    y = arma.simulate(2000, *arma.TRUTH, seed=27)
+    plain, named = arma.run(y), arma.run(y, robust_c=0.0)
+    assert np.array_equal(plain.beta, named.beta) and plain.pred == named.pred

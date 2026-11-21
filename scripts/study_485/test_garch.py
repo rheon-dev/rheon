@@ -86,6 +86,8 @@ VARIANTS = [
     {"target": "running", "batch_start": True, "warm": 500, "t0": 500.0},
     {"target": "running", "gain": "offset", "gain_t0": 500.0},
     {"gain": "offset", "gain_t0": 2000.0},
+    {"target": "running", "robust_c": 2.0},
+    {"target": "running", "robust_c": 2.0, "robust_center": "gauss"},
 ]
 
 
@@ -144,3 +146,29 @@ def test_targeted_batch_start_starts_at_the_targeted_fit():
     assert est.n_steps == 0 and est.theta[1] == a and est.theta[2] == b
     assert est.theta[0] == pytest.approx(np.mean(r[:500] ** 2) * (1 - a - b), rel=1e-15)
     assert all(np.isnan(est.pred))
+
+
+def test_huber_constants_are_the_normal_moments():
+    from scipy.stats import norm
+
+    c = 2.0
+    kappa, slope = garch.huber_constants(c)
+    inside = norm.expect(lambda z: z * z, lb=-c, ub=c)
+    assert slope == pytest.approx(inside, rel=1e-12)
+    assert kappa == pytest.approx(inside + c * c * 2.0 * norm.sf(c), rel=1e-12)
+
+
+def test_robust_score_bounds_one_rows_move():
+    """Request A11, remedy (c): a return 1,000 times its predicted SD moves the
+    targeted estimate by at most the clipped score's step; the plain score's
+    step is hundreds of times larger."""
+    r = garch.simulate(3000, *TRUTH, seed=22)
+
+    def jump(**kw: object) -> float:
+        est = garch.run(r[:2000], target="running", **kw)
+        before = est.theta[1:].copy()
+        est.update(1000.0 * float(np.sqrt(est.sigma2)))
+        return float(np.max(np.abs(est.theta[1:] - before)))
+
+    robust, plain = jump(robust_c=2.0), jump()
+    assert robust < 0.01 and plain > 100 * robust

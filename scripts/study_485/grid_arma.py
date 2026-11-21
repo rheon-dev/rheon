@@ -29,6 +29,9 @@ CASES = {
     # their Gaussian controls: the same truths, normal innovations
     "n_phi080": [(10000, math.inf)],
     "n_phi095": [(10000, math.inf)],
+    # request A11, remedy (c): the robust score (arma.py, robust_c) on phi 0.8
+    "t5_phi080_huber2": [(10000, math.inf)],
+    "n_phi080_huber2": [(10000, math.inf)],
 }
 # the truth and the noise per grid; part 4's grids keep arma.TRUTH, Gaussian
 SETTINGS: dict[str, dict[str, object]] = {
@@ -36,6 +39,8 @@ SETTINGS: dict[str, dict[str, object]] = {
     "t5_phi095": {"truth": (0.95, 0.3, 1.0), "nu": 5.0},
     "n_phi080": {"truth": (0.8, 0.3, 1.0)},
     "n_phi095": {"truth": (0.95, 0.3, 1.0)},
+    "t5_phi080_huber2": {"truth": (0.8, 0.3, 1.0), "nu": 5.0, "robust_c": 2.0},
+    "n_phi080_huber2": {"truth": (0.8, 0.3, 1.0), "robust_c": 2.0},
 }
 
 

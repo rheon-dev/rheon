@@ -152,6 +152,17 @@ class OnlineGarch:
       fit is the targeted one (``vt_garch.vt_fit`` on the buffered rows) and
       ``omega`` starts at ``v_W (1 - alpha - beta)``, ``v_W`` the mean of the
       buffered rows' ``r^2``, which is that fit's own target.
+    - ``robust_c`` (request A11, remedy (c), a robust score; 0: off): the
+      Gauss-Newton step's standardized error is Huber-clipped. With
+      ``z_t = r_t / sigma_t`` the score's ``z^2 - 1`` becomes
+      ``(min(z^2, c^2) - kappa) / m``: ``z`` clipped at ``+-c`` before the
+      gradient, ``kappa`` the mean of ``min(z^2, c^2)`` (so the score is mean
+      zero at the truth) and ``m`` the mean of ``z^2 1[z^2 < c^2]`` (the clipped
+      score's slope in ``sigma^2``, so the step keeps Gauss-Newton's scale).
+      ``robust_center="running"`` takes both as running means over the rows
+      read (consistent for any symmetric noise); ``"gauss"`` takes their
+      standard normal values (``huber_constants``). One row moves the
+      parameters by at most a bounded amount, however large ``r_t``.
     - ``gain="offset"`` (request A11, remedy (b), a slower early gain): the
       parameter step's gain is ``1/(t + gain_t0)``, smaller than
       ``1/(t + t0)`` early and the same order late; the information matrix
@@ -170,6 +181,8 @@ class OnlineGarch:
     gain_floor: float = 1e-3
     gain_t0: float = 0.0
     batch_start: bool = False
+    robust_c: float = 0.0
+    robust_center: str = "running"
 
     theta: np.ndarray = field(init=False)
     H: np.ndarray = field(init=False)
@@ -181,6 +194,8 @@ class OnlineGarch:
     n_steps: int = 0
     buffer: list[float] = field(default_factory=list)
     started: bool = False
+    rob_kappa: float = 0.0
+    rob_slope: float = 0.0
 
     # what the run emits, row by row (NaN on the buffered rows)
     pred: list[float] = field(default_factory=list)
@@ -188,6 +203,7 @@ class OnlineGarch:
     def __post_init__(self) -> None:
         assert self.target in ("", "running", "warmup"), self.target
         assert self.gain in ("inv", "sqrt", "floor", "offset"), self.gain
+        assert self.robust_center in ("running", "gauss"), self.robust_center
         self.theta = np.array([math.nan, self.alpha0, self.beta0])
         k = 2 if self.target else 3
         self.H = np.zeros((k, k))
@@ -262,11 +278,23 @@ class OnlineGarch:
         else:
             dfree = d
         info = 0.5 * np.outer(dfree, dfree) / (s2 * s2)
+        resid = r2 / s2 - 1.0
+        if self.robust_c > 0.0:
+            c2 = self.robust_c * self.robust_c
+            z2 = r2 / s2
+            clipped = min(z2, c2)
+            self.rob_kappa += (clipped - self.rob_kappa) / self.n_seen
+            self.rob_slope += ((z2 if z2 < c2 else 0.0) - self.rob_slope) / self.n_seen
+            if self.robust_center == "gauss":
+                kappa, slope = huber_constants(self.robust_c)
+            else:
+                kappa, slope = self.rob_kappa, self.rob_slope
+            resid = (clipped - kappa) / slope if slope > 0.0 else clipped - kappa
         if step:
             self.n_steps += 1
             gamma = 1.0 / (self.n_steps + self.t0)
             self.H += gamma * (info - self.H)
-            g = 0.5 * (r2 / s2 - 1.0) * dfree / s2
+            g = 0.5 * resid * dfree / s2
             move = self._gain() * np.linalg.solve(self.H, g)
             free = self.theta[1:] if self.target else self.theta
             if self.step_cap > 0.0:
@@ -284,6 +312,14 @@ class OnlineGarch:
             # the buffered replay: an equal-weight mean of the information
             self.H += (info - self.H) / self.n_seen
         self.sigma2, self.d = self._advance(r2, s2, d)
+
+
+def huber_constants(c: float) -> tuple[float, float]:
+    """For ``z`` standard normal: ``E[min(z^2, c^2)]`` and ``E[z^2 1[|z| < c]]``
+    (the robust score's centring and slope, ``robust_center="gauss"``)."""
+    inside = math.erf(c / math.sqrt(2.0))
+    tail = 2.0 * c * math.exp(-0.5 * c * c) / math.sqrt(2.0 * math.pi)
+    return inside - tail + c * c * (1.0 - inside), inside - tail
 
 
 def run(r: np.ndarray, **kw: object) -> OnlineGarch:

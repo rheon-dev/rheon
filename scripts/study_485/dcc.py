@@ -334,6 +334,40 @@ def simulate_k(
     return out[burn:]
 
 
+def chi2_cdf(x: float, k: int) -> float:
+    """The chi-squared CDF, ``k`` degrees of freedom: the regularized lower
+    incomplete gamma ``P(k/2, x/2)`` by its series (numpy-free; the test holds
+    it to scipy's)."""
+    a, h = 0.5 * k, 0.5 * x
+    term = total = 1.0 / a
+    j = 0
+    while term > 1e-17 * total:
+        j += 1
+        term *= h / (a + j)
+        total += term
+    return total * math.exp(-h + a * math.log(h) - math.lgamma(a))
+
+
+def huber_radius(c: float, k: int) -> float:
+    """The squared Mahalanobis radius ``q`` with ``P(chi2_k > q)`` equal to
+    ``P(|z| > c)`` for one standard normal: the univariate clip at ``c``
+    carried to ``k`` dimensions at the same tail probability (``k = 1``:
+    ``q = c^2``)."""
+    p = math.erf(c / math.sqrt(2.0))
+    lo, hi = 0.0, 4.0 * c * c * k + 100.0
+    for _ in range(200):
+        mid = 0.5 * (lo + hi)
+        lo, hi = (mid, hi) if chi2_cdf(mid, k) < p else (lo, mid)
+    return 0.5 * (lo + hi)
+
+
+# request A11, remedy (c): the robust score, both stages or the second only
+REMEDIES: dict[str, dict[str, dict[str, object]]] = {
+    "huber2": {"stage2": {"robust_c": 2.0}, "margins": {"robust_c": 2.0}},
+    "huber2_s2": {"stage2": {"robust_c": 2.0}, "margins": {}},
+}
+
+
 def r_path_k(a: float, b: float, z: np.ndarray, qbar: np.ndarray) -> np.ndarray:
     """``R_t`` for every row, ``(n, k, k)``, ``Q_0 = Qbar``, by ``lfilter``."""
     from scipy.signal import lfilter
@@ -410,13 +444,25 @@ def batch_fit_k(r: np.ndarray) -> dict[str, object]:
 
 @dataclass
 class OnlineDccK:
-    """Stage two online, ``k`` series. ``update(z)`` takes one row."""
+    """Stage two online, ``k`` series. ``update(z)`` takes one row.
+
+    ``robust_c`` (request A11, remedy (c); 0: off): the score's ``u u'``,
+    ``u = R^{-1} z``, is Huber-weighted by ``w = min(1, q / s)``,
+    ``s = z' R^{-1} z`` the squared Mahalanobis distance and ``q =
+    huber_radius(robust_c, k)``, and ``R^{-1}`` is scaled by ``kappa``, the
+    running mean of ``min(s, q) / k``, so the score is mean zero at the truth
+    for any elliptical noise. The information matrix is not rescaled by the
+    clipped score's slope (unlike garch.py and arma.py, where it is a
+    univariate mean; here it was not derived)."""
 
     k: int = 3
     a0: float = 0.03
     b0: float = 0.85
     warm: int = 100
     t0: float = 100.0
+    robust_c: float = 0.0
+    rob_q: float = field(init=False)
+    rob_kappa: float = 0.0
 
     theta: np.ndarray = field(init=False)
     qbar: np.ndarray = field(init=False)
@@ -438,6 +484,7 @@ class OnlineDccK:
         self.dqa = np.zeros((k, k))
         self.dqb = np.zeros((k, k))
         self.prev_z = np.zeros(k)
+        self.rob_q = huber_radius(self.robust_c, k) if self.robust_c > 0.0 else math.inf
 
     def update(self, z: np.ndarray) -> None:
         a, b = self.theta
@@ -456,7 +503,13 @@ class OnlineDccK:
         self.pred.append(rmat[np.triu_indices(self.k, 1)])
         rinv = np.linalg.inv(rmat)
         u = rinv @ z
-        m = np.outer(u, u) - rinv
+        if self.robust_c > 0.0:
+            s = float(z @ u)
+            self.rob_kappa += (min(s, self.rob_q) / self.k - self.rob_kappa) / (self.n_seen + 1)
+            w = 1.0 if s <= self.rob_q else self.rob_q / s
+            m = w * np.outer(u, u) - self.rob_kappa * rinv
+        else:
+            m = np.outer(u, u) - rinv
         drs = []
         for dq in (self.dqa, self.dqb):
             lam = np.diag(dq) / dg
@@ -480,10 +533,14 @@ class OnlineDccK:
         self.prev_z = z.copy()
 
 
-def online_k(r: np.ndarray, **kw: object) -> tuple[OnlineDccK, np.ndarray, np.ndarray]:
-    """Both stages online, ``k`` series (``online``'s, with ``OnlineDccK``)."""
+def online_k(
+    r: np.ndarray, margins: dict[str, object] | None = None, **kw: object
+) -> tuple[OnlineDccK, np.ndarray, np.ndarray]:
+    """Both stages online, ``k`` series (``online``'s, with ``OnlineDccK``);
+    ``margins`` adds options to each margin's ``garch.OnlineGarch``."""
     k = r.shape[1]
-    s2 = np.column_stack([np.asarray(garch.run(r[:, i], target="running").pred) for i in range(k)])
+    mkw = {"target": "running", **(margins or {})}
+    s2 = np.column_stack([np.asarray(garch.run(r[:, i], **mkw).pred) for i in range(k)])
     rows = np.flatnonzero(np.all(np.isfinite(s2), axis=1))
     z = r[rows] / np.sqrt(s2[rows])
     est = OnlineDccK(k=k, **kw)  # type: ignore[arg-type]
@@ -493,12 +550,19 @@ def online_k(r: np.ndarray, **kw: object) -> tuple[OnlineDccK, np.ndarray, np.nd
 
 
 def compare_k(
-    n: int, seed: int, k: int, ab: tuple[float, float], rho_bar: float, nu: float | None
+    n: int,
+    seed: int,
+    k: int,
+    ab: tuple[float, float],
+    rho_bar: float,
+    nu: float | None,
+    remedy: str = "",
 ) -> dict[str, float]:
     r = simulate_k(n, seed, k, ab, rho_bar, nu=nu)
     bf = batch_fit_k(r)
     th_b, se = bf["theta"], bf["se"]
-    est, rows, _ = online_k(r)
+    rem = REMEDIES[remedy] if remedy else {"stage2": {}, "margins": {}}
+    est, rows, _ = online_k(r, rem["margins"], **rem["stage2"])
     th_o = est.theta
     z_b, qbar_b = bf["z"], bf["qbar"]
     iu = np.triu_indices(k, 1)
@@ -531,6 +595,8 @@ def compare_k(
         "rho_gap_p90_second_half": float(np.percentile(gap, 90)),
         "first_dcc_row": float(rows[0]),
     }
+    if remedy:
+        out["remedy"] = remedy  # type: ignore[assignment]
     for i, name in enumerate(NAMES):
         out[f"{name}_batch"] = float(th_b[i])
         out[f"{name}_online"] = float(th_o[i])
@@ -548,6 +614,7 @@ def grid_k(
     rho_bar: float,
     nu: float | None,
     shard: tuple[int, int] = (0, 1),
+    remedy: str = "",
 ) -> None:
     finished = {(int(r["seed"]), int(r["n"])) for r in load(out)}
     seeds = [s for i, s in enumerate(SEEDS) if i % shard[1] == shard[0]]
@@ -555,7 +622,7 @@ def grid_k(
         for seed in seeds:
             if (seed, n) in finished:
                 continue
-            f.write(json.dumps(compare_k(n, seed, k, ab, rho_bar, nu)) + "\n")
+            f.write(json.dumps(compare_k(n, seed, k, ab, rho_bar, nu, remedy)) + "\n")
             f.flush()
             print(f"dcc k {k}: n {n} seed {seed} done", flush=True)
 
@@ -666,6 +733,7 @@ if __name__ == "__main__":
     if "--k" in sys.argv:
         # the k-series path (request A10, part 4):
         #   dcc.py OUT.jsonl --k 3 [--a A --b B --rho-bar R --nu NU --rows N --shard I/K]
+        #     [--remedy NAME]   (request A11: an entry of REMEDIES)
         #   dcc.py OUT1.jsonl [OUT2.jsonl ...] --k 3 --summary
         if "--summary" in sys.argv:
             outs = []
@@ -685,6 +753,7 @@ if __name__ == "__main__":
                 float(str(_opt("--rho-bar", "0.5"))),
                 None if nu_s is None else float(nu_s),
                 (si, sk),
+                str(_opt("--remedy", "")),
             )
     elif sys.argv[1] == "--one":
         for k, v in compare(int(sys.argv[2]), int(sys.argv[3])).items():

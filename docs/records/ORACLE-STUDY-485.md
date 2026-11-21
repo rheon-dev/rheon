@@ -15,7 +15,8 @@ GARCH, ARMA(1,1) at two AR roots and ETS(A,A,N) at two smoothing levels (§18). 
 which supersede §15.2's grid assertions where they differ. Request A11, part 1: two
 remedies for the early transient, a bounded batch start and a slower early
 gain, on targeted GARCH at persistence 0.99 and ETS at `α` 0.6, with the 0.97
-control (§21). The request named the deliverable
+control (§21). Part 2: the third remedy, a Huber-clipped score, on targeted
+GARCH and three-series DCC under t(5), with ARMA as the control (§22). The request named the deliverable
 `STUDY-485-ESTIMATORS.md`; it is this record, kept under the name it was
 committed with (`ORACLE-STUDY-485.md`). Nothing in the package or the Rust crates was changed. The scan this
 builds on is `vm-tools/research/485-TIME-SERIES-SCAN.md` on branch
@@ -1237,3 +1238,113 @@ the ARMA `φ = 0.8` control; the sets that pass today under these remedies
 rows; a gain ramp of another shape than `1/(t + T)`; a batch start by the
 model's own optimizer rather than the library's; 2,000 rows and anything past
 10,000.
+
+The coordinator accepted part 1 (2026-11-21): the bounded batch start clears
+both sets; the slower gains fail, which stands as a finding; the 0.97
+control's rise to 50 is a note, not a failure.
+
+## 22. Request A11, part 2: a robust score
+
+Remedy (c), a Huber-clipped Gauss-Newton step, on set (3), targeted GARCH
+under t(5) against the Gaussian targeted fit (§18: 45, one stuck seed
+485009), and set (4), three-series DCC under t(5) (§19: 40), with ARMA(1,1)
+at `φ = 0.8` under normal and t(5) noise as the control (§18: 50 and 50).
+Two more controls were run because they cost seconds and say what the remedy
+costs where nothing fails: targeted GARCH with normal noise (§16, P 0.98: 47)
+and three-series DCC with normal noise (§19: 47). 10,000 rows, seeds 485000
+to 485049, every grid fresh, each set's own oracle and criterion (§18, §19;
+oracles untouched).
+
+**The step.** The standardized one-step error is clipped at `c = 2` before
+the gradient, so one row moves the parameters by a bounded amount however
+large it is (a test sends a return of 1,000 predicted SDs: the targeted
+estimate moves by under 0.01, the plain one by over 100 times that):
+
+| model | standardized error | clipped score | centring and slope |
+|---|---|---|---|
+| ARMA | `u = e_t / s`, `s = sqrt(s2_{t−1})` | `e → s·clip(u, −2, 2)` | none needed (symmetric); the step is divided by the running fraction of unclipped rows, the clipped error's slope |
+| targeted GARCH | `z = r_t / σ_t` | `z² − 1 → (min(z², 4) − κ) / m` | `κ` the running mean of `min(z², 4)` (the score is mean zero at the truth under any symmetric noise), `m` the running mean of `z² 1[z² < 4]` (its slope in `σ²`, so the step keeps Gauss-Newton's scale); variant `huber2_gauss` fixes both at their normal values, 0.9205 and 0.7385 |
+| DCC, second stage | `d² = zᵀR⁻¹z` | `uuᵀ → w uuᵀ`, `w = min(1, q/d²)`, `R⁻¹ → κ R⁻¹` | `q` = 8.025, the `χ²₃` quantile with the same tail as `|N(0,1)| > 2` (at `k = 1` it is 4); `κ` the running mean of `min(d², q)/3`; the information matrix is not rescaled (the slope was not derived for the matrix case) |
+
+**Why 2.** At the normal it clips 4.55% of rows and keeps 99.0% of the
+location score's efficiency (ARMA) and 88.5% of the variance score's (GARCH:
+`m²·2 / Var(min(z², 4))`); under t(5) at unit variance it clips 4.93% of rows,
+nearly the same share, so the clip acts on the tail's size, not its frequency.
+A smaller `c` (Huber's 1.345) would cost more at the normal; the request
+fixed 2, and only 2 was run. Under t(5) the centring constants move (`κ`
+0.788, `m` 0.591 against 0.921 and 0.739), which is why they are running
+means.
+
+**Options, not forks:** `garch.OnlineGarch(robust_c, robust_center)`,
+`arma.OnlineArma(robust_c)`, `dcc.OnlineDccK(robust_c)` with
+`dcc.huber_radius` (a numpy-free `χ²` CDF, held to scipy's to 1e-12),
+`online_k(margins=...)`; grids by `vt_garch.py --remedy huber2|huber2_gauss`,
+`dcc.py ... --k 3 --remedy huber2|huber2_s2` (both stages, or the second
+only) and `grid_arma.py OUTDIR t5_phi080_huber2|n_phi080_huber2`. Each
+default leaves the arithmetic as it was: a §19 DCC case was recomputed and
+its online fields matched to the bit (the oracle's arch-plus-SLSQP fit moved
+by about 1e-9 relative, as in §21); tests hold the ARMA default to the bit.
+57 study tests pass (10 new). Ten grids, about 4 minutes in four processes
+under nohup, resumable per seed.
+
+| set | remedy | within 2 | worst seed (SE) | medians (SE) | other |
+|---|---|---|---|---|---|
+| (3) GARCH targeted, t(5), against the Gaussian targeted fit | none (§18) | 45 | 485009: `β` −32.4 (`α` +3.41) | `α` 0.49, `β` 0.44 | path max 49% |
+| | `huber2` | **46** | 485023: `α` −4.35, `β` +2.46 | 0.79, 0.72 | 485009 at +1.20, −0.61; path max 13.8% |
+| | `huber2_gauss` | 31 | 485023: `α` −4.89, `β` +3.83 | 1.54, 0.81 | path median 6.5% |
+| (3), against arch's t fit (§18: not comparable) | `huber2` | 47 (§18: 35) | 485023: `α` −5.42, `β` +2.85 | — | — |
+| (4) DCC three series, t(5) | none (§19) | 40 | 485049: `b` −13.6 (`a` +3.32) | `a` 0.52, `b` 0.44 | projection on 41 seeds; worst-pair `ρ` gap max 0.075 |
+| | `huber2` (both stages) | **43** | 485039: `a` −10.8, `b` +7.09 | 0.70, 0.64 | projection on 28; `ρ` gap max 0.093 |
+| | `huber2_s2` (second stage only) | 42 | 485039: `a` −8.59, `b` +4.02 | 0.68, 0.70 | projection on 29; `ρ` gap max 0.079 |
+| ARMA `φ` 0.8, normal (control) | none (§18) | 50 | 485029: `θ` −0.56 | `φ` 0.071, `θ` 0.119, `σ²` 0.166 | RMS gap max 0.017 |
+| | `huber2` | 50 | 485015: `φ` −0.48 | 0.103, 0.147, 0.166 | 0.017 |
+| ARMA `φ` 0.8, t(5) (control) | none (§18) | 50 | 485025: `σ²` −1.02 | 0.076, 0.145, 0.286 | 0.019 |
+| | `huber2` | 50 | 485009: `σ²` +1.03 | 0.214, 0.265, 0.277 | 0.018 |
+| GARCH targeted, normal, P 0.98 (extra control) | none (§16) | 47 | 485027: `β` +2.70 (`α` −1.76) | 0.36, 0.35 | path max 4.1% |
+| | `huber2` | 47 | 485027: `α` −4.57, `β` +4.31 | 0.42, 0.44 | path max 5.9% |
+| DCC three series, normal (extra control) | none (§19) | 47 | 485045: `a` −2.85 | 0.34, 0.31 | `ρ` gap max 0.015 |
+| | `huber2` | 45 | 485007: `a` −3.60, `b` +2.40 | 0.51, 0.41 | `ρ` gap max 0.019 |
+
+arch converged on every GARCH fit, statsmodels on every ARMA fit and SLSQP on
+every DCC fit; the online parameters never out-scored a batch fit.
+
+**Reading.**
+
+- **(3): the stuck seed is freed, the count barely moves.** 485009, at
+  persistence 0.62 under the plain score, ends at `(0.087, 0.899)` against the
+  Gaussian fit's `(0.071, 0.907)`; one heavy row can no longer throw the start
+  off. But the medians rise (`α` 0.49 to 0.79 SE): under t(5) the clipped
+  score is a different estimator from the Gaussian quasi-likelihood, nearer
+  the t likelihood's point (47 within 2 of the t fit's SEs, against 35), so
+  measured against the Gaussian fit it trades one stuck seed for a wider
+  spread: 46, one seed of headroom. The `huber2_gauss` variant, centred at the
+  normal's constants, is biased under t(5) (`E[min(z², 4)]` is 0.788 there,
+  not 0.921) and fails (31): the running centring is what makes the clip
+  usable.
+- **(4): it helps and does not pass.** 43 (both stages) and 42 (second stage
+  only) against 40. The clip fixes the three low-persistence seeds (485049:
+  `b` −13.6 to +0.53 SE; 485026, 485034) and cuts the projected seeds from 41
+  to 28, but not the ridge seeds: 485039 and 485007 stay at 6 to 11 SE with
+  `a` low and `b` high, as in §19 and §17. The ridge is a start problem (§21's
+  batch start removed it for GARCH), which a bounded score does not touch.
+- **Controls.** ARMA keeps 50 of 50 under both noises, with every seed inside
+  §20.2's bounds (`φ, θ` ≤ 1 SE; `σ²` 1.03 SE on one t(5) seed, against the
+  bound's 1.5); its medians move up under t(5) (`φ` 0.08 to 0.21 SE) for the
+  same reason as (3): the clipped score is not the Gaussian fit's estimator.
+  The extra controls move down: targeted GARCH keeps 47 but its worst seed
+  goes from 2.70 to 4.57 SE (over §20.2's 3.5 bound on one seed) and its path
+  gap to 5.9% (over the 5% bound); DCC normal drops from 47 to 45, no
+  headroom. At the normal the clip costs efficiency (88.5% for the variance
+  score) and the information matrix is not rescaled for DCC, and both show.
+
+**Verdict.** The robust score is not a remedy on its own: it removes the
+heavy-row failures (GARCH 485009, DCC's low-persistence seeds) and leaves the
+ridge (DCC 485039, 485007), lifts (3) to 46 and (4) to 43, and costs the
+normal-noise sets their headroom. Against §21's bounded batch start, which
+cleared sets (1) and (2) at 50, it answers a different cause; the two were not
+run together.
+
+**Not verified:** remedies (a) and (b) on sets (3) and (4); (a) and (c)
+together; a clipping constant other than 2; the DCC information matrix
+rescaled by the clipped score's slope; the robust score's own standard
+errors (every gap is in the Gaussian fits' SEs); rows past 10,000.
