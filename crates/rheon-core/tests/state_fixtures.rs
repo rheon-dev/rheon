@@ -1295,7 +1295,7 @@ fn variants() -> Vec<String> {
 /// name here, and a fixture.
 #[test]
 fn the_variant_names_are_frozen() {
-    const FROZEN: [&str; 23] = [
+    const FROZEN: [&str; 24] = [
         "EwCov",
         "EwRidge",
         "Rls",
@@ -1319,6 +1319,7 @@ fn the_variant_names_are_frozen() {
         "Bocpd",
         "Audit",
         "Glm",
+        "Hawkes",
     ];
     assert_eq!(
         variants(),
@@ -1374,12 +1375,14 @@ fn at<'a>(v: &'a rmpv::Value, path: &[&str]) -> Option<&'a rmpv::Value> {
 }
 
 /// How much of a layout `v` holds: its finite, non-zero numbers, through
-/// any nesting. An empty layout writes an empty vector, a zero (`rls`'s
-/// `s2` before a row) or a NaN (a share no solve has fit).
+/// any nesting, and a non-zero 128-bit integer (a temporal [`Stamp`], which
+/// msgpack writes as 16 bytes). An empty layout writes an empty vector, a
+/// zero (`rls`'s `s2` before a row) or a NaN (a share no solve has fit).
 fn held(v: &rmpv::Value) -> usize {
     match v {
         rmpv::Value::Array(a) => a.iter().map(held).sum(),
         rmpv::Value::Map(m) => m.iter().map(|(_, v)| held(v)).sum(),
+        rmpv::Value::Binary(b) => usize::from(b.iter().any(|&x| x != 0)),
         v => usize::from(v.as_f64().is_some_and(|f| f.is_finite() && f != 0.0)),
     }
 }
@@ -1433,7 +1436,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 61] = [
+    const FORMS: [(&str, &[&str]); 68] = [
         // Schema 70 (rule 5's twenty-second exception): the stabilized
         // prior's `ŝ` and `V` under `full` in each form and under `diag`,
         // the factor form's `f`, and a spec's own `prior_rows`.
@@ -1537,6 +1540,23 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         ("glm_refit", &["model", "Glm", "refit"]),
         ("glm_refit_done", &["model", "Glm", "refit"]),
         ("glm_cap", &["model", "Glm", "gram"]),
+        // A `hawkes` window in both of its blocks (task 498): the older's
+        // forward sums, the newer's sum `B`.
+        ("hawkes", &["model", "Hawkes", "q"]),
+        ("hawkes_window", &["model", "Hawkes", "window", "time"]),
+        ("hawkes_window", &["model", "Hawkes", "window", "fwd"]),
+        ("hawkes_window", &["model", "Hawkes", "window", "new_sum"]),
+        ("hawkes_window", &["model", "Hawkes", "window", "weight"]),
+        // A window of clock units, its rows stamped: a stamp a row, and the
+        // stamp the clock was last handed.
+        (
+            "hawkes_clock_window",
+            &["model", "Hawkes", "window", "stamp"],
+        ),
+        (
+            "hawkes_clock_window",
+            &["model", "Hawkes", "window", "track", "last"],
+        ),
     ];
     for (name, path) in FORMS {
         let f = frozen::ALL

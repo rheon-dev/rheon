@@ -405,6 +405,18 @@ pub enum ModelClosed {
     Both,
 }
 
+impl ModelClosed {
+    /// The default edge, which a spec leaves out when it writes itself.
+    pub fn is_right(&self) -> bool {
+        *self == ModelClosed::Right
+    }
+
+    /// The edge a window keeps for it ([`rheon_core::WindowClosed`]).
+    pub fn edge(self) -> rheon_core::WindowClosed {
+        model_edge(self)
+    }
+}
+
 impl<'de> Deserialize<'de> for ModelClosed {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         struct V;

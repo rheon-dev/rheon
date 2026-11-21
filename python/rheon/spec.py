@@ -130,7 +130,7 @@ shows them at work.
          - ``bocpd``
        * - 0, each having a gate of its own or nothing to gate
          - ``ewridge``, ``seqtest``, ``rcov``, ``hmm``, ``corrchange``,
-           ``audit``
+           ``audit``, ``hawkes``
 ``min_settled_frac``
     Why: a history shorter than the half-life may not represent the process,
     such as regimes or seasons the half-life was chosen to average across.
@@ -352,7 +352,8 @@ and each diagnostic's own ``*_half_life`` below, and in the models
 ``snapshot_every``, ``solve_every``, ``ew_cov``'s ``pca_every``, ``micro``'s
 ``prune_every`` and the model half-lives: ``long_half_life``,
 ``select_half_life``, ``coef_half_life``,
-``revert_half_life``, ``trend_half_life`` and ``huber_scale_half_life``.
+``revert_half_life``, ``trend_half_life`` and ``huber_scale_half_life``,
+and ``hawkes``' ``kernel_half_lives``, a list of them.
 
 One parameter takes either form, with a meaning for each: ``bocpd``'s
 ``hazard``. A number, finite and above 1, is the expected rows between
@@ -366,8 +367,9 @@ chance of a break applies.
 Each mixture is refused, naming the column, the parameter and the fix: a
 temporal clock with a clock parameter given as a plain number, a numeric clock
 with a duration, and one spec that gives both. A rate per clock unit has no
-duration form, so a temporal clock refuses one too: ``lam``, and ``kalman``'s
-``q``. Give the half-life the rate stands for as a duration instead.
+duration form, so a temporal clock refuses one too: ``lam``, ``kalman``'s
+``q`` and ``hawkes``' ``kernel_decays``. Give the half-life the rate stands
+for as a duration instead.
 
 A temporal clock is read in its own integer nanoseconds, and a duration in
 seconds, so the column's own unit never reaches the fit. The same instants as
@@ -1043,6 +1045,7 @@ from rheon._spec import (
     ewridge,
     ftrl,
     glm,
+    hawkes,
     hmm,
     holt,
     huber,
@@ -1068,6 +1071,7 @@ __all__ = [
     "ewridge",
     "ftrl",
     "glm",
+    "hawkes",
     "hmm",
     "holt",
     "huber",

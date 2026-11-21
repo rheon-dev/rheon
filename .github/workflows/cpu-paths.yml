@@ -94,8 +94,9 @@ jobs:
       # fails when a module that does any of these is missing here.
       SDE_TESTS: >-
         audit:: bocpd:: breaks:: calibration:: cluster:: corrchange:: deco:: ewclass:: ewcov::
-        ewdiag:: ewridge:: gaps:: glm:: gramfit:: hmm:: holt:: huber_refit:: kalman:: lasso::
-        margbins:: oracle:: pieces:: rcov:: rls:: robust:: sandwich:: seqtest:: sgd:: solve::
+        ewdiag:: ewridge:: gaps:: glm:: gramfit:: hawkes:: hmm:: holt:: huber_refit::
+        kalman:: lasso:: margbins:: oracle:: pieces:: rcov:: rls:: robust:: sandwich::
+        seqtest:: sgd:: solve::
         specification:: window_moments::
       # A release build, ten or more times faster than the debug build CI
       # tests, which matters under an emulator; with the debug build's

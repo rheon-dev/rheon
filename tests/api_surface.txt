@@ -229,6 +229,16 @@
     step_cap = None
     refit_budget = None
     common
+  hawkes:
+    name
+    targets
+    kernel_decays = None
+    kernel_half_lives = None
+    window_events = None
+    window_size = None
+    closed = 'right'
+    max_state_bytes = None
+    common
   hmm:
     name
     features
@@ -652,6 +662,24 @@
     stream.robust_se_half_life = 50.0
     stream.specification_half_life = 50.0
     stream.tails_half_life = 50.0
+  hawkes(half_life=50.0, kernel_decays=[1.0, 5.0], targets=['y']):
+    model.closed = "right"
+    model.decay.Halflife = 50.0
+    model.kernel_decays = [1.0, 5.0]
+    model.max_state_bytes = null
+    model.min_weight = 0.0
+    model.n_targets = 1
+    model.window_clock = null
+    model.window_events = null
+    stream.breaks_half_life = 50.0
+    stream.calibration_half_life = 200.0
+    stream.feature_health_half_life = 50.0
+    stream.influence_half_life = 50.0
+    stream.max_error_inflation = "inf"
+    stream.min_weight = [0.0]
+    stream.robust_se_half_life = 50.0
+    stream.specification_half_life = 50.0
+    stream.tails_half_life = 50.0
   hmm(features=['x0', 'x1'], half_life=50.0, n_components=2, precision_prior=0.1):
     model.covariance = "full"
     model.covs = null
@@ -1032,6 +1060,29 @@
   glm(features=['x0'], half_life=50.0, refit_rows=0, targets=['y']), the lines that differ from glm's:
     model.refit_rows = 0
     model.step_cap = 1.0
+  hawkes(half_life=inf, kernel_decays=[1.0, 5.0], targets=['y'], window_events=20), the lines that differ from hawkes's:
+    model.decay.Halflife = "inf"
+    model.window_events = 20
+    stream.breaks_half_life = "inf"
+    stream.calibration_half_life = "inf"
+    stream.feature_health_half_life = "inf"
+    stream.influence_half_life = "inf"
+    stream.robust_se_half_life = "inf"
+    stream.specification_half_life = "inf"
+    stream.tails_half_life = "inf"
+  hawkes(closed='both', half_life=inf, kernel_decays=[1.0, 5.0], targets=['y'], window_size=30.0), the lines that differ from hawkes's:
+    model.closed = "both"
+    model.decay.Halflife = "inf"
+    model.window_clock = 30.0
+    stream.breaks_half_life = "inf"
+    stream.calibration_half_life = "inf"
+    stream.feature_health_half_life = "inf"
+    stream.influence_half_life = "inf"
+    stream.robust_se_half_life = "inf"
+    stream.specification_half_life = "inf"
+    stream.tails_half_life = "inf"
+  hawkes(half_life=50.0, kernel_half_lives=[0.5, 4.0], targets=['y']), the lines that differ from hawkes's:
+    model.kernel_decays = [1.38629436112, 0.17328679514]
 
 [ModelBank]  # name and signature: a parameter added or a default moved is a diff here
   __init__(self, specs: 'Iterable[dict[str, Any]]', *, threads: 'int | None' = None) -> 'None'
@@ -2166,6 +2217,13 @@
     coef: list[f64]
   audit minimal:
     weight_sum: f64
+  hawkes minimal:
+    intensity_y: f64
+    intensity_z: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
+    coef: list[f64]
   deco blocked:
     u_a: f64
     u_b: f64
@@ -2250,6 +2308,7 @@
     coef: List[Float64]
   ftrl: the shared columns only
   glm: the shared columns only
+  hawkes: the shared columns only
   hmm: the shared columns only
   holt: the shared columns only
   huber: the shared columns only
@@ -2446,6 +2505,7 @@
   ew_class.closed: both, right
   ew_cov.closed: both, right
   ewridge.closed: both, right
+  hawkes.closed: both, right
   lasso.closed: both, right
   marginal.closed: both, right
   ew_class.covariance_type: diag, full, tied
@@ -2595,6 +2655,7 @@
     ewridge: closed, coef_prior, feature_sets, gram_block_rows, gram_threads, long_half_life, max_rows_between_snapshots, max_rows_between_solves, ridge, ridge_scale, session_shrink, snapshot_every, solve_every, standardize, target_gaps, window_budget, window_size
     ftrl: alpha, beta, l1, l2, loss, strict_binary
     glm: family, link, refit_budget, refit_rows, ridge, step_cap, var_power
+    hawkes: closed, kernel_decays, kernel_half_lives, max_state_bytes, window_events, window_size
     hmm: covariance_type, covs, exog_tvtp, init, learn, means, n_components, precision_prior, prior_rows, seed, transition, transition_prior, tvtp_coef, warm_rows
     holt: trend, trend_half_life
     huber: emit_huber_scale, feature_sets, huber_delta, huber_refit_rows, huber_scale, huber_scale_half_life, max_rows_between_solves, refit_budget, ridge, ridge_scale, solve_every, standardize

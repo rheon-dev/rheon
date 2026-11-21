@@ -62,6 +62,40 @@ impl<M: OnlineModel> Run for Model<M> {
     }
 }
 
+/// A `hawkes` over a window of clock units, each row handed its stamp in
+/// integer nanoseconds as a stream hands it: so the state holds a stamp a
+/// row and the last stamp, the forms an unstamped run does not write.
+struct StampedHawkes {
+    model: Hawkes,
+    ns: i128,
+}
+
+impl Run for StampedHawkes {
+    fn step(&mut self, r: &Row) -> Out {
+        self.ns += ns_of_seconds(r.d).unwrap();
+        self.model.stamp_next(Stamp::Ns(self.ns));
+        let s = self.model.step(&r.x, &r.y, r.d, r.w);
+        Out {
+            pred: s.pred,
+            n_eff: s.n_eff,
+            extra: Vec::new(),
+        }
+    }
+
+    fn state(&self) -> State {
+        self.model.state()
+    }
+}
+
+fn restore_stamped_hawkes(s: &State) -> Result<Box<dyn Run>, String> {
+    let model = Hawkes::restore(s).map_err(|e| e.to_string())?;
+    let ns = match model.last_stamp() {
+        Some(Stamp::Ns(ns)) => ns,
+        other => return Err(format!("expected a temporal stamp, found {other:?}")),
+    };
+    Ok(Box::new(StampedHawkes { model, ns }))
+}
+
 /// The bare accumulator, which no model's state is and which a variant
 /// still names: stepped by its own `update`, its means and co-moments
 /// reported as the slots, the co-moments all `K²` of them row by row. The
@@ -2125,7 +2159,67 @@ pub fn all() -> Vec<Case> {
             Targets::None,
             40
         ),
+        // Two nodes and two kernels, decayed: `R`, `b`, `Q` and `G₀₀`.
+        case!(
+            "hawkes",
+            "Hawkes",
+            Hawkes,
+            Hawkes::new(hawkes_cfg(None)).unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        // In a window of six rows with an event, saved with rows in both
+        // blocks: the older block's offsets, marks and forward sums, the
+        // newer's clocks, marks and sums.
+        case!(
+            "hawkes_window",
+            "Hawkes",
+            Hawkes,
+            Hawkes::new(hawkes_cfg(Some(6))).unwrap(),
+            K,
+            Targets::Linear(2),
+            45
+        ),
+        // Over a span of the clock, rows stamped: the older block's rows with
+        // their stamps, the clock the model tracks and the last stamp.
+        Case {
+            name: "hawkes_clock_window",
+            variant: "Hawkes",
+            build: || {
+                Box::new(StampedHawkes {
+                    model: Hawkes::new(HawkesCfg {
+                        decay: Decay::Halflife(f64::INFINITY),
+                        window_clock: Some(6.0),
+                        ..hawkes_cfg(None)
+                    })
+                    .unwrap(),
+                    ns: 0,
+                })
+            },
+            restore: restore_stamped_hawkes,
+            n_features: K,
+            targets: Targets::Linear(2),
+            before: 45,
+        },
     ]
+}
+
+fn hawkes_cfg(window_events: Option<usize>) -> HawkesCfg {
+    HawkesCfg {
+        n_targets: 2,
+        kernel_decays: vec![0.8, 3.0],
+        decay: if window_events.is_some() {
+            Decay::Halflife(f64::INFINITY)
+        } else {
+            decay()
+        },
+        min_weight: 2.0,
+        window_events,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        max_state_bytes: None,
+    }
 }
 
 /// The case's model after its first part, and its rows.

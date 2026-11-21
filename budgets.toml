@@ -231,6 +231,9 @@ budget = 7787422
 what = "rcov, 4 features, kernel, the rows a block takes in: AnyModel::step_into, into one kept Step"
 budget = 24375035
 
+[instructions.hawkes]
+what = "hawkes, one node, three kernels: AnyModel::step_into, into one kept Step, a 4 x 4 solve a row; its budget is CI's first count"
+
 [instructions.audit_continuous]
 what = "audit, one continuous column, 256 counters: AnyModel::step_into, into one kept Step, past the cap on nearly every row"
 budget = 847018
@@ -1445,6 +1448,15 @@ studentized_hit = { budget = 8.125 }
 weight_sum = { budget = 8.125 }
 withheld_reason = { budget = 1.125 }
 zscore_hit = { budget = 8.125 }
+[memory.hawkes]
+coef = { budget = 89.25 }
+intensity_y = { budget = 8.125 }
+intensity_z = { budget = 8.125 }
+learned_clock = { budget = 8.125 }
+scored_clock = { budget = 8.0 }
+settled_frac = { budget = 8.0 }
+weight_sum = { budget = 8.0 }
+withheld_reason = { budget = 1.125 }
 
 # --- raises and sign-offs -------------------------------------------------------
 [[raised]]

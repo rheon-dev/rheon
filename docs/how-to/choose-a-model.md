@@ -42,7 +42,7 @@ checked against. That page opens with the notation the update equations share.
 | what will the target be? | [Linear models](../MODELS.md#linear-models) | `ewridge` | the coefficients drift (`kalman`); some targets are wild (`huber`, `quantile`); few features matter (`lasso`, `ftrl`); learning a row must take O(k) time for `k` features (`sgd`, `pa`); the target is a count, a positive amount or a proportion (`glm`, or `sgd` in O(k) time) or 0/1 (`ftrl`); you want a baseline with no features (`holt`) |
 | how do these columns vary and move together? | [Moments and correlation](../MODELS.md#moments-and-correlation) | `ew_cov` | there are thousands of columns (`marginal`); one correlation must stand for a whole matrix (`deco`); the prices are noisy ticks (`rcov`); you want to know what the columns hold (`audit`) |
 | which group does this row belong to? | [Clustering and classification](../MODELS.md#clustering-and-classification) | `kmeans` | the clusters have any shape (`micro`); each row's class is known, to learn from (`ew_class`, its `label=` column) |
-| has something held, or changed? | [Sequential tests and regimes](../MODELS.md#sequential-tests-and-regimes) | `seqtest` | the correlations may have changed (`corrchange`); you want the regime's age (`bocpd`) or which regime it is (`hmm`) |
+| has something held, or changed? | [Sequential tests and regimes](../MODELS.md#sequential-tests-and-regimes) | `seqtest` | the correlations may have changed (`corrchange`); you want the regime's age (`bocpd`) or which regime it is (`hmm`); the rows are events that come in bursts (`hawkes`) |
 
 A spec's clock, grouping and warm-up mean the same whichever model it
 names. Where a model takes a half-life, it is a half-life on the clock, as
@@ -147,6 +147,7 @@ regimes](../MODELS.md#sequential-tests-and-regimes).
 | have the correlations among these columns changed? | [`corrchange`](../MODELS.md#corrchange--has-the-correlation-structure-changed) | a test statistic, its critical value, and a flag where one passes the other |
 | how long has the current regime lasted? | [`bocpd`](../MODELS.md#bocpd--how-long-has-this-regime-lasted) | `run_mode`, the most likely number of rows since the regime began |
 | which regime is the stream in? | [`hmm`](../MODELS.md#hmm--which-regime-are-we-in) | the probability of each hidden state, and the most probable one |
+| how fast are events coming, and how much does each add to the next? | [`hawkes`](../MODELS.md#hawkes--how-much-does-each-event-excite-the-next) | each node's intensity before the row's events, and the fit in `coef` |
 
 **Read a regime's age from `bocpd`'s `run_mode`.** Its alarm, `p_change`,
 scores each row on its own, so it barely moves when the spread grows 2.7

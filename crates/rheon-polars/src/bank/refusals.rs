@@ -21,6 +21,44 @@ pub(super) fn over_budget(
     polars_err!(ComputeError: "{}", over_budget_message(spec, key, bytes, cadence, learned))
 }
 
+/// The error for a state the data sizes (`hawkes`' window of clock units)
+/// that a row would have taken past `max_state_bytes`: names the spec, the
+/// group and the bytes, and the ways out. Found as the rows go in, so the
+/// bank that raises it has learned part of the chunk, learning no event
+/// after the one before the cap, and marks itself `broken`.
+pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) -> PolarsError {
+    let group = key
+        .0
+        .as_deref()
+        .filter(|_| spec.group.is_some())
+        .map_or(String::new(), |g| format!(" group {g:?}"));
+    let given = match &spec.model {
+        ModelKind::Hawkes {
+            max_state_bytes: Some(_),
+            ..
+        } => format!("max_state_bytes of {cap}"),
+        _ => format!("the default max_state_bytes of {cap}, which a spec gets when it sets none"),
+    };
+    let (window, shorten) = match &spec.model {
+        ModelKind::Hawkes {
+            window_size: Some(w),
+            ..
+        } => (
+            format!("the events inside window_size = {w}"),
+            "Shorten window_size",
+        ),
+        _ => ("its window".to_string(), "Shorten the window"),
+    };
+    let text = format!(
+        "spec {:?}{group}: {window} would take its state to {bytes} bytes, above {given}, so the \
+         bank stopped after learning part of the chunk, and learned none of the events from the \
+         one that would have passed it. {shorten}, or raise max_state_bytes, then build the bank \
+         again and fit it from the start of its input.",
+        spec.name
+    );
+    polars_err!(ComputeError: "{}", text)
+}
+
 /// A clock spacing as the spec writes `snapshot_every`: its own text where the
 /// ring runs at it, otherwise in the same form -- a duration on a temporal
 /// spec, a number of clock units on any other.

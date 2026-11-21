@@ -88,6 +88,7 @@ mod glm;
 /// Fits read off an exported Gram, offline (docs/PLAN.md tasks 226-227).
 pub mod gramfit;
 mod hasher;
+mod hawkes;
 mod health;
 mod held_median;
 mod hmm;
@@ -169,6 +170,7 @@ pub use glm::{
     default_glm_refit_rows, default_glm_step_cap,
 };
 pub use hasher::{FixedHasher, FixedState};
+pub use hawkes::{Hawkes, HawkesCfg, MAX_STATE_BYTES as HAWKES_MAX_STATE_BYTES};
 pub use health::FeatureHealth;
 pub use hmm::{EwFactor, Hmm, HmmCfg, Stabilized};
 pub use holt::{Holt, HoltCfg};

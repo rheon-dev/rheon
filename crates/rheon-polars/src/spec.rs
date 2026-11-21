@@ -1274,6 +1274,51 @@ pub enum ModelKind {
         #[serde(default)]
         refit_budget: Option<Num>,
     },
+    /// A self-exciting point process (Hawkes) fitted online by least
+    /// squares, exactly: each target is a node, and a value above 0 on a row
+    /// is an event of that node, of that mark. Exponential kernels at the
+    /// given decays; one intensity a node per row, read before the row's
+    /// events, and the fit (`μ` and the `α`s) in `coef`. No features.
+    #[serde(rename = "hawkes")]
+    Hawkes {
+        /// The kernels' decays `β`, per clock unit: each node excites every
+        /// node through one kernel `α β e^(−β t)` per decay. A rate has no
+        /// duration form, so a temporal clock takes `kernel_half_lives`
+        /// instead. One of the two is required.
+        #[serde(default)]
+        kernel_decays: Option<Vec<f64>>,
+        /// The same kernels given by their half-lives, `β = ln 2 /
+        /// half-life` in the clock's unit (seconds on a temporal clock):
+        /// numbers of the clock's units, or durations on a temporal clock,
+        /// as `half_life` is. Beside `kernel_decays` it is refused. Skipped
+        /// when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kernel_half_lives: Option<SpanList>,
+        /// Fit the last this many rows that carried an event, alone, in
+        /// place of a decay. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window_events: Option<usize>,
+        /// Fit the events of the last this long on the clock, alone, in
+        /// place of a decay: a number of the clock column's units (rows
+        /// when the spec has no clock), or a duration on a temporal clock.
+        /// The data decides how many events that is, so the state's bytes
+        /// are checked as the rows go in. Beside `window_events` it is
+        /// refused. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window_size: Option<Span>,
+        /// Which edge of `window_size` holds the row exactly that old,
+        /// Polars' `closed`: `"right"`, the default, or `"both"`, which
+        /// needs `window_size`. Skipped when `"right"`.
+        #[serde(default, skip_serializing_if = "ModelClosed::is_right")]
+        closed: ModelClosed,
+        /// The bytes a group's state may hold, its window's rows included.
+        /// A `window_events` window is checked against it here, since the
+        /// settings fix its size; a `window_size` window as the rows go in:
+        /// a warning past half of it, once a group, and a refusal at it.
+        /// Default 256 KB. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
+    },
 }
 
 /// The two sides of a `seqtest` comparison, as [`ModelKind::compares`]
@@ -1298,6 +1343,39 @@ impl Compare<'_> {
 }
 
 impl ModelKind {
+    /// A `hawkes` spec's kernels, each as its decay `β` in the clock's unit
+    /// and the term's name in `coef` (`beta2`, or `h5m` for a half-life):
+    /// from `kernel_decays`, or `β = ln 2 / half-life` from
+    /// `kernel_half_lives`. Empty for another kind and while neither is
+    /// given.
+    pub fn hawkes_kernels(&self) -> Vec<(f64, String)> {
+        let ModelKind::Hawkes {
+            kernel_decays,
+            kernel_half_lives,
+            ..
+        } = self
+        else {
+            return Vec::new();
+        };
+        match (kernel_decays, kernel_half_lives) {
+            (Some(b), _) => b
+                .iter()
+                .map(|b| (*b, format!("beta{}", num_label(*b))))
+                .collect(),
+            (None, Some(h)) => h
+                .spans()
+                .iter()
+                .map(|h| {
+                    (
+                        std::f64::consts::LN_2 / h.value(),
+                        format!("h{}", h.label()),
+                    )
+                })
+                .collect(),
+            (None, None) => Vec::new(),
+        }
+    }
+
     /// Every model the bank can build, by the `type` a spec names it with,
     /// in declaration order. The registry the Python side and the tests
     /// check themselves against (docs/EXTENDING.md); `kinds_tests` holds it
@@ -1326,6 +1404,7 @@ impl ModelKind {
         "bocpd",
         "audit",
         "glm",
+        "hawkes",
     ];
 
     pub fn kind_name(&self) -> &'static str {
@@ -1353,6 +1432,7 @@ impl ModelKind {
             ModelKind::Bocpd { .. } => "bocpd",
             ModelKind::Audit { .. } => "audit",
             ModelKind::Glm { .. } => "glm",
+            ModelKind::Hawkes { .. } => "hawkes",
         }
     }
 
@@ -1667,7 +1747,10 @@ impl ModelKind {
         self.is_unsupervised()
             || matches!(
                 self,
-                ModelKind::EwClass { .. } | ModelKind::SeqTest { .. } | ModelKind::Marginal { .. }
+                ModelKind::EwClass { .. }
+                    | ModelKind::SeqTest { .. }
+                    | ModelKind::Marginal { .. }
+                    | ModelKind::Hawkes { .. }
             )
     }
 
@@ -2552,6 +2635,10 @@ impl Spec {
             ModelKind::Bocpd { .. } => 1.0,
             // Nothing is gated: `audit` reports nothing per row.
             ModelKind::Audit { .. } => 0.0,
+            // The fit is read where its system is definite and well posed,
+            // which is the gate: no row count says when the events have
+            // told its terms apart.
+            ModelKind::Hawkes { .. } => 0.0,
             // The noise gate is this model's readiness gate
             // (docs/WARMUP-AND-CONVERGENCE.md §2.1): `max_error_inflation`
             // tracks the model where a count of weight cannot, and the
@@ -2935,6 +3022,126 @@ impl Spec {
                      or restart_after_step_back, to reset the test."
                 ));
             }
+        } else if let ModelKind::Hawkes {
+            kernel_decays,
+            kernel_half_lives,
+            window_events,
+            window_size,
+            closed,
+            max_state_bytes,
+        } = &self.model
+        {
+            if !self.features.is_empty() {
+                no.refuse(format!(
+                    "spec {name:?}: hawkes takes no features, but features lists {}: each of \
+                     its targets is a node, whose values above 0 are its events. Put the event \
+                     columns in targets, and leave out features.",
+                    columns_counted(self.features.len())
+                ));
+            }
+            match (kernel_decays, kernel_half_lives) {
+                (None, None) => no.refuse(format!(
+                    "spec {name:?}: hawkes needs its kernels, but neither kernel_decays nor \
+                     kernel_half_lives is set. Give the decay of each exponential kernel, per \
+                     clock unit, such as kernel_decays = [1.0, 5.0], or its half-life, such as \
+                     kernel_half_lives = [\"1s\", \"10s\"] on a temporal clock."
+                )),
+                (Some(_), Some(_)) => no.refuse(format!(
+                    "spec {name:?}: kernel_decays and kernel_half_lives both set the kernels, a \
+                     decay as a rate and a half-life as a time (decay = ln 2 / half-life). Leave \
+                     one of them out."
+                )),
+                (None, Some(h)) => {
+                    let bad: Vec<String> = h
+                        .spans()
+                        .iter()
+                        .filter(|h| !(h.value().is_finite() && h.value() > 0.0))
+                        .map(Span::to_string)
+                        .collect();
+                    if h.spans().is_empty() || !bad.is_empty() {
+                        no.refuse(format!(
+                            "spec {name:?}: each of kernel_half_lives must be a finite span of \
+                             the clock above 0, but {}. Give each kernel's half-life as a \
+                             positive number of the clock's units, or a duration such as \
+                             \"10s\" on a temporal clock.",
+                            if bad.is_empty() {
+                                "it lists none".to_string()
+                            } else {
+                                format!(
+                                    "{} {}",
+                                    if bad.len() == 1 {
+                                        "one is"
+                                    } else {
+                                        "these are not:"
+                                    },
+                                    bad.join(", ")
+                                )
+                            }
+                        ));
+                    }
+                }
+                (Some(_), None) => {}
+            }
+            if let Some(w) = window_size {
+                if !(w.value().is_finite() && w.value() > 0.0) {
+                    no.refuse(format!(
+                        "spec {name:?}: window_size must be a finite span of the clock above 0, \
+                         but it is {w}. Give the span the fit keeps events of, or leave it out \
+                         for no window."
+                    ));
+                }
+                if window_events.is_some() {
+                    no.refuse(format!(
+                        "spec {name:?}: window_size (the events of the last stretch of the \
+                         clock) and window_events (the last rows with an event) are two \
+                         windows, and the fit holds one. Leave one of them out."
+                    ));
+                }
+            } else if *closed != ModelClosed::Right {
+                no.refuse(format!(
+                    "spec {name:?}: closed applies only under a window, where it says whether a \
+                     row exactly window_size old is kept, but window_size is not set. Set \
+                     window_size, or leave out closed."
+                ));
+            }
+            // A `window_events` window is bounded by its settings, so its
+            // whole state is known here. A `window_size` window holds the
+            // events the span has, which the data decides: only its fixed
+            // part is known, and the rest is checked as the rows go in.
+            let cap = max_state_bytes.unwrap_or(rheon_core::HAWKES_MAX_STATE_BYTES);
+            if cap == 0 {
+                no.refuse(format!(
+                    "spec {name:?}: max_state_bytes must be above 0, but it is 0. Give the \
+                     bytes a group's state may hold, or leave it out for 256 KB."
+                ));
+            } else if let Some(u) = Some(self.model.hawkes_kernels().len()).filter(|&u| u > 0) {
+                let (nodes, row) = (self.targets.len(), 8 * (2 + self.targets.len() * (1 + u)));
+                if window_size.is_some() {
+                    let bytes = rheon_core::Hawkes::clock_state_bytes(nodes, u, 0);
+                    if bytes > cap {
+                        no.refuse(format!(
+                            "spec {name:?}: hawkes would hold {bytes} bytes in each group with \
+                             no event in its window, past max_state_bytes of {cap}, with \
+                             {nodes} targets and {u} decays. Raise max_state_bytes, or give \
+                             fewer targets or decays."
+                        ));
+                    }
+                } else {
+                    let bytes = rheon_core::Hawkes::state_bytes(nodes, u, *window_events);
+                    if bytes > cap {
+                        // One row of the window: its clock, weight, marks
+                        // and excitation sums, 8 bytes each.
+                        no.refuse(format!(
+                            "spec {name:?}: hawkes would hold {bytes} bytes in each group, past \
+                             max_state_bytes of {cap}: its window keeps {row} bytes for each of \
+                             its {} rows, with {nodes} targets and {u} decays. Lower \
+                             window_events, raise max_state_bytes, or forget by half_life in \
+                             place of a window.",
+                            window_events.unwrap_or(0),
+                        ));
+                    }
+                }
+            }
         } else if self.features.is_empty() && !(columns_missing && self.model.is_unsupervised()) {
             columns_missing = true;
             no.refuse(format!(
@@ -3072,6 +3279,10 @@ impl Spec {
                 ModelKind::SeqTest { .. } => Some((
                     "tests the signs of its targets",
                     ", and name the columns whose signs are tested in targets",
+                )),
+                ModelKind::Hawkes { .. } => Some((
+                    "reads each target as a node's events",
+                    ", and name the columns whose values above 0 are the events in targets",
                 )),
                 ModelKind::Ftrl { loss, .. }
                     if loss.as_deref().unwrap_or("logistic") == "logistic" =>

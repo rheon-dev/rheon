@@ -60,6 +60,7 @@ to start with.
 | [`rheon.spec.corrchange`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.corrchange) | tests of whether the correlations between the features have changed | [entry](MODELS.md#corrchange--has-the-correlation-structure-changed) · [detect a break](how-to/detect-a-break.md) |
 | [`rheon.spec.bocpd`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.bocpd) | Bayesian online changepoint detection: how long the current regime has lasted | [entry](MODELS.md#bocpd--how-long-has-this-regime-lasted) · [choose a changepoint hazard](how-to/choose-a-changepoint-hazard.md) |
 | [`rheon.spec.hmm`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.hmm) | a Gaussian hidden Markov model, filtered as the stream runs | [entry](MODELS.md#hmm--which-regime-are-we-in) · [keep its states on their regimes](how-to/keep-hmm-states-on-their-regimes.md) |
+| [`rheon.spec.hawkes`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.hawkes) | a self-exciting point process, fitted exactly by least squares | [entry](MODELS.md#hawkes--how-much-does-each-event-excite-the-next) |
 
 ## Running a bank
 

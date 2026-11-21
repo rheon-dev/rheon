@@ -21,7 +21,7 @@ exact spec you built.
 | [Linear models](MODELS.md#linear-models) | [`ewridge`](#ewridge) · [`rls`](#rls) · [`lasso`](#lasso) · [`kalman`](#kalman) · [`huber`](#huber) · [`quantile`](#quantile) · [`sgd`](#sgd) · [`pa`](#pa) · [`ftrl`](#ftrl) · [`glm`](#glm) · [`holt`](#holt) |
 | [Moments and correlation](MODELS.md#moments-and-correlation) | [`ew_cov`](#ew_cov) · [`marginal`](#marginal) · [`deco`](#deco) · [`rcov`](#rcov) · [`audit`](#audit) |
 | [Clustering and classification](MODELS.md#clustering-and-classification) | [`kmeans`](#kmeans) · [`micro`](#micro) · [`ew_class`](#ew_class) |
-| [Sequential tests and regimes](MODELS.md#sequential-tests-and-regimes) | [`seqtest`](#seqtest) · [`corrchange`](#corrchange) · [`bocpd`](#bocpd) · [`hmm`](#hmm) |
+| [Sequential tests and regimes](MODELS.md#sequential-tests-and-regimes) | [`seqtest`](#seqtest) · [`corrchange`](#corrchange) · [`bocpd`](#bocpd) · [`hmm`](#hmm) · [`hawkes`](#hawkes) |
 
 ## The fields of your own spec
 
@@ -479,6 +479,18 @@ The fields of `po.spec.hmm("m", features=["x0", "x1"], half_life=50.0, n_compone
 | `predicted_state1` | `f64` | one-step-ahead probability of state `<j>` | while withheld, which includes the `warm_rows` learned rows (by default 1,000, or `n_components` where that is more) that seed the states |
 | `state` | `i64` | the most likely state for this row: the one with the largest `predicted_state<j>` | while withheld, which includes the `warm_rows` learned rows (by default 1,000, or `n_components` where that is more) that seed the states |
 | `loglik` | `f64` | log predictive density of the row, under the model as it stood before the row | while withheld, which includes the `warm_rows` learned rows (by default 1,000, or `n_components` where that is more) that seed the states |
+| `weight_sum` | `f64` | accumulated weight before the model learns this row, and before its own decay ([shared field](#fields-most-models-write)) | never |
+| `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
+| `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
+| `coef` | `list[f64]` | the numbers behind the fit as one list ([shared field](#fields-most-models-write)) | on every row but those `coef_every` or `max_rows_between_coefs` fills (by default, each group's last row not skipped in each chunk), and before the model has anything to report |
+
+## `hawkes`
+
+The fields of `po.spec.hawkes("m", targets=["y"], half_life=50.0, kernel_decays=[1.0, 5.0])`:
+
+| field | dtype | what it holds | also null |
+|---|---|---|---|
+| `intensity_y` | `f64` | node `<t>`'s intensity, its expected events per unit of the clock, just before this row's events, from the fit on the rows before | while withheld, and while the fit is not determined: before every node has had an event, and while two of its terms cannot be told apart |
 | `weight_sum` | `f64` | accumulated weight before the model learns this row, and before its own decay ([shared field](#fields-most-models-write)) | never |
 | `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
 | `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |

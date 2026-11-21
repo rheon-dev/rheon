@@ -708,6 +708,9 @@ impl Spec {
             // Checked above, with the features: its refusals come before the
             // shared checks so that `half_life` is named for what it is here.
             ModelKind::SeqTest { .. } => {}
+            // Its features and its kernels are checked above; every value
+            // is the model's own to check.
+            ModelKind::Hawkes { .. } => {}
             // The shared checks (non-empty features and targets, no column on
             // both sides, a decay, `min_weight` per target, no residual
             // diagnostics) and one of its own: given edges and the knobs for

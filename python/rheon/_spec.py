@@ -265,6 +265,9 @@ def _got(v: Any) -> str:
 #: 2026-10-05, the TB5 leg). ``holt``'s ``trend`` is written only when off.
 _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
     "holt": frozenset({"trend"}),
+    "hawkes": frozenset(
+        {"kernel_half_lives", "window_events", "window_size", "closed", "max_state_bytes"}
+    ),
     "ewridge": frozenset({"gram_threads"}),
     "huber": frozenset(
         {
@@ -496,6 +499,7 @@ _RENAMED = {
 _NO_FEATURES = {
     "holt": "it fits only each target's own level and trend",
     "seqtest": "it reads only its targets, or the residuals of the specs a and b name",
+    "hawkes": "each of its targets is a node, whose values above 0 are its events",
 }
 
 #: The parameters renamed in one builder, or whose old name another keeps
@@ -760,6 +764,7 @@ __all__ = [
     "ewridge",
     "ftrl",
     "glm",
+    "hawkes",
     "holt",
     "huber",
     "kalman",
@@ -5074,6 +5079,7 @@ from rheon._spec_class import ew_class  # noqa: E402
 from rheon._spec_cluster import kmeans, micro  # noqa: E402
 from rheon._spec_glm import glm  # noqa: E402
 from rheon._spec_gradient import sgd  # noqa: E402
+from rheon._spec_point import hawkes  # noqa: E402
 from rheon._spec_regimes import hmm, rcov  # noqa: E402
 from rheon._spec_robust import huber, quantile  # noqa: E402
 from rheon._spec_trend import holt  # noqa: E402

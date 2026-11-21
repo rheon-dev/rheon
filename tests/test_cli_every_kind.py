@@ -632,6 +632,52 @@ CASES: list[Case] = [
         "rcov",
         {"features": F3, "group": "g", "group_close": "session", "session": "s", "kind": "plain"},
     ),
+    # `hit` and `y` as two nodes: a row's value above 0 is an event of that
+    # mark.
+    Case(
+        "hawkes",
+        "hawkes",
+        {**STREAM, **CLOSE, "targets": ["hit", "y"], "kernel_decays": [0.5, 2.0]},
+    ),
+    Case("hawkes2", "hawkes", {**STREAM2, "targets": ["hit", "y"], "kernel_decays": [0.5, 2.0]}),
+    # The kernels by their half-lives, as a temporal clock gives them.
+    Case(
+        "hawkes_half_lives",
+        "hawkes",
+        {**STREAM2, "targets": ["hit", "y"], "kernel_half_lives": [0.5, 2.0]},
+    ),
+    Case(
+        "hawkes_window",
+        "hawkes",
+        {
+            "targets": ["hit"],
+            "kernel_decays": [1.0],
+            "clock": "t",
+            "gap_cap": 6.0,
+            "half_life": float("inf"),
+            "window_events": 20,
+            "max_rows_between_coefs": 7,
+            "max_state_bytes": 1 << 20,
+        },
+    ),
+    # A window of clock units, which the CLI reads from its TOML as a bank
+    # does from a spec: a span of the clock, its edge, and the cap its
+    # state is checked against as the rows go in.
+    Case(
+        "hawkes_clock_window",
+        "hawkes",
+        {
+            "targets": ["hit"],
+            "kernel_decays": [1.0],
+            "clock": "t",
+            "gap_cap": 6.0,
+            "half_life": float("inf"),
+            "window_size": 12.0,
+            "closed": "both",
+            "max_rows_between_coefs": 7,
+            "max_state_bytes": 1 << 20,
+        },
+    ),
     Case(
         "audit",
         "audit",
@@ -1024,6 +1070,46 @@ ESSENTIAL = {"ewridge"}
 )
 def test_the_cli_writes_what_the_bank_does(index, rheon_cli, tmp_path):
     check_the_cli_writes_what_the_bank_does(CASES[index], index, rheon_cli, tmp_path)
+
+
+@pytest.mark.extended(reason="a command-line run of a refusal")
+def test_the_cli_stops_at_a_clock_windows_state_cap(rheon_cli, tmp_path):
+    """A burst of events in one group, in a window of clock units, takes its
+    state past ``max_state_bytes`` as the rows go in: the command line stops
+    with the error naming the group and the bytes, as the bank does."""
+    n = 200
+    pl.DataFrame(
+        {"g": ["a"] * n, "t": [i * 0.01 for i in range(n)], "hit": [1.0] * n}
+    ).write_parquet(tmp_path / "in.parquet")
+    spec = rp.spec.hawkes(
+        "h",
+        targets=["hit"],
+        kernel_decays=[1.0],
+        clock="t",
+        gap_cap=6.0,
+        half_life=float("inf"),
+        window_size=1_000.0,
+        max_state_bytes=3_000,
+        group="g",
+    )
+    top = {
+        "input": (tmp_path / "in.parquet").as_posix(),
+        "output": (tmp_path / "out.parquet").as_posix(),
+        "chunk_size": 1_000,
+    }
+    lines = [f"{k} = {_toml_value(v)}" for k, v in top.items()]
+    cfg = tmp_path / "bank.toml"
+    cfg.write_text("\n".join([*lines, spec_toml(spec)]) + "\n", encoding="utf-8")
+    res = subprocess.run(
+        [str(rheon_cli), "--config", str(cfg), "--quiet"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    assert res.returncode != 0
+    assert 'spec "h" group "a"' in res.stderr, res.stderr
+    assert "above max_state_bytes of 3000" in res.stderr, res.stderr
 
 
 # ----------------------------------------------------------------- coverage

@@ -63,6 +63,7 @@ to start with for which question.
 | [`corrchange`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.corrchange) · [entry](#corrchange--has-the-correlation-structure-changed) | test | has the correlation structure changed: the Wied–Krämer–Dehling constancy test span by span, the Wied–Galeano detector row by row against a stable history, or the size of a change between two windows against a permutation null |
 | [`bocpd`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.bocpd) · [entry](#bocpd--how-long-has-this-regime-lasted) | filter | how long this regime has lasted: Adams & MacKay's run-length posterior, so the answer is the regime's age and not a flag |
 | [`hmm`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.hmm) · [entry](#hmm--which-regime-are-we-in) | filter | a Gaussian hidden Markov model, filtered as the stream runs: `ew_class` without the labels, with a transition matrix that can be learned |
+| [`hawkes`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.hawkes) · [entry](#hawkes--how-much-does-each-event-excite-the-next) | solve | a self-exciting point process: each node's event intensity before the row, and how much an event of each node adds to the next, fitted exactly by least squares over exponential kernels |
 
 **How a model learns from a row decides whether, with decay off, its
 answer depends on the row order:**
@@ -244,7 +245,7 @@ per target, give `min_weight` a list. The default depends on the model:
 | the feature count plus one (1 for `holt`) | `ew_cov`, `ew_class`, `kmeans`, `micro`, `holt` |
 | 3 | `marginal`, `deco` |
 | 1 | `bocpd` |
-| 0, each having a gate of its own or nothing to gate | `ewridge`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit` |
+| 0, each having a gate of its own or nothing to gate | `ewridge`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes` |
 
 **`min_settled_frac` is off by default.** Set it when the half-life was
 chosen to average over regimes or seasons that a shorter history would not
@@ -3054,8 +3055,8 @@ share of rows it classes right.
 
 ## Sequential tests and regimes
 
-These models predict no target. Each reads its columns, or a target's
-sign, and answers, as the rows arrive, a question about the stream: whether
+These models predict no target. Each reads its columns, a target's sign
+or its events, and answers, as the rows arrive, a question about the stream: whether
 something holds, whether and when it changed, or which regime it is in now.
 
 ### `seqtest` — a sequential test of a sign, by betting
@@ -3673,3 +3674,182 @@ is. [Does `hmm` recover the stream that made
 it?](REGIMES.md#1-does-hmm-recover-the-stream-that-made-it)
 measures how often it puts a row in the state that generated it, seeded from
 the rows and given the true covariances.
+
+### `hawkes` — how much does each event excite the next?
+
+*API:* [`rheon.spec.hawkes`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.hawkes) — *Rust:* [`hawkes.rs`](../crates/rheon-core/src/hawkes.rs) — *Outputs:* [fields](OUTPUTS.md#hawkes)
+
+A self-exciting point process (Hawkes): a base rate for each node, and how
+many events of each node one event of each node causes.
+
+Use `hawkes` on a stream of events that come in bursts, where each event
+makes the next likelier for a while: trades, messages, failures. Each
+target is a node, and a value above 0 on a row is an event of that node, of
+that mark (1 for an event, a count for several at once). Each row reports
+each node's intensity, its expected events per unit of the clock, read just
+before the row's events from the fit on the rows before them.
+
+Its parameters, their defaults and what each refuses are in its
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.hawkes),
+and the fields it writes in [OUTPUTS.md](OUTPUTS.md#hawkes). The parameters
+every spec takes are in [What every spec takes](#what-every-spec-takes),
+apart from `features`, which it refuses. A row's weight only decides whether
+its events are learned: 0 skips them, any weight above 0 learns them. A row
+of weight 0 also counts in no clock: the next row steps as if it were not
+there, it is in no window, and its weight is in no `weight_sum`; it is still
+read, from the last row that counted.
+
+#### The update
+
+With `R_ju` node `j`'s excitation at the kernel decay `β_u`, `φ = (1, R)`,
+the intensity `λ_i = θ_iᵀ φ`, and `f = λ` the row's decay over the clock
+step `d` (`γ = ln 2 / half_life`):
+
+```
+R_ju ← e^(−β_u d) R_ju      b ← f b      Q ← f Q      G₀₀ ← f G₀₀ + (1 − f) / γ
+each node j with an event of mark m_j, from R before the row's events:
+b_j ← b_j + m_j φ           Q_jl ← Q_jl + m_j m_l       R_ju ← R_ju + m_j β_u
+G₀ₐ = (β_a b_j(a)[0] − R_a) / (β_a − γ)
+Gₐᵦ = (β_a b_j(a)[b] + β_b b_j(b)[a] + β_a β_b Q_j(a)j(b) − R_a R_b) / (β_a + β_b − γ)
+θ_i = G⁻¹ b_i
+```
+
+`θ_i` minimizes the least-squares contrast `Σ_i ∫ λ_i² dt − 2 ∫ λ_i dN_i`,
+each instant weighted by its decay. `G` is not kept, since it can be read
+from `b` and `Q`. The state is `8 (k + D (1 + k) + D (D + 1) / 2 + 3)` bytes
+for `D` nodes and `k = D U` excitations: 72 bytes for one node and two
+decays, 208 for two nodes and three.
+
+#### The kernels, and a temporal clock
+
+The kernels are given by their decays, `kernel_decays=[1.0, 5.0]`, rates per
+unit of the clock, or by their half-lives, `kernel_half_lives=[0.5, 2.0]`,
+with `β = ln 2 / half-life` (give one of the two). A rate has no duration
+form, so on a temporal clock the kernels are given by their half-lives as
+durations, as `half_life` is: `kernel_half_lives=["500ms", "2s"]`,
+`window_size="5m"`, `gap_cap="1h"`. A temporal clock is read in its own
+integer nanoseconds, a duration is its seconds, and the model then runs in
+seconds. Take the same spec on a numeric clock of seconds, with the decays `ln
+2 / half-life` converted by hand. Its output is the same to the bit where a
+step's seconds are the same double on both clocks (quarter seconds, say), and
+within 1e-13 where they differ in the last bit of a step. **Quantities measured on a
+temporal clock reach the output in seconds**, as for `holt`'s trend: each
+node's `intensity` and the base rate `mu` in `coef` are events per second,
+and each `alpha`, a count of events, has no unit. A term's name carries the
+kernel as it was given: `alpha_<j>_beta2` for a decay, `alpha_<j>_h500ms`
+for a half-life.
+
+#### Example
+
+**It recovers the parameters of a process it did not see made.** This code
+simulates one node from a base rate of 0.5 and a kernel of `α = 0.6` at
+`β = 2`, by Ogata's thinning, and prints the fit:
+
+```python
+import numpy as np
+import polars as pl
+from rheon import polars as rp
+
+# Simulate one node by thinning: propose from an upper bound, then accept.
+rng = np.random.default_rng(3)
+t, excite, times = 0.0, 0.0, []
+while t < 5_000.0:
+    # Propose the next time from the current intensity, which only decays.
+    bound = 0.5 + excite
+    step = rng.exponential(1 / bound)
+    excite *= np.exp(-2.0 * step)
+    t += step
+    # Accept it with the ratio of the intensity there to the bound.
+    if rng.uniform() * bound <= 0.5 + excite:
+        times.append(t)
+        excite += 0.6 * 2.0
+pl.DataFrame({"t": times, "event": 1.0}).write_parquet("events.parquet")
+
+# Fit the kernel at its true decay, with no forgetting.
+model = rp.spec.hawkes(
+    "h", targets=["event"], kernel_decays=[2.0], clock="t", half_life=float("inf"), gap_cap=1e9
+)
+bank = rp.ModelBank([model])
+bank.fit(pl.scan_parquet("events.parquet"))
+
+# Read the fit's terms by name and compare them with the truth.
+coef = {r["term"]: r["coef"] for r in bank.coef().iter_rows(named=True)}
+print(f"mu: true 0.50, found {coef['mu']:.2f}")
+print(f"alpha: true 0.60, found {coef['alpha_event_beta2']:.2f}")
+```
+
+```text
+mu: true 0.50, found 0.51
+alpha: true 0.60, found 0.59
+```
+
+#### See also
+
+For the age of a burst rather than its intensity, or the evidence that one
+spec's events come faster than another's:
+
+- [`bocpd`](#bocpd--how-long-has-this-regime-lasted), how long the current
+  regime has lasted.
+- [`seqtest`](#seqtest--a-sequential-test-of-a-sign-by-betting), evidence
+  you can read at any row.
+
+#### Notes
+
+**Its fit is tick's least-squares minimiser.** tick's
+`ModelHawkesSumExpKernLeastSq` computes the same contrast, divided by the
+number of events. The fit agrees with its minimiser to 4e-14 of the largest
+coefficient, over one to three nodes and one to three decays. A row's
+intensity agrees with tick refit on the rows before it, and a window's fit
+with tick refit on the window's events. The forgotten fit, which tick does
+not compute, is held to the contrast written out as sums over pairs of
+events.
+
+**A fit the events cannot identify is withheld.** Two nodes whose events
+fall on the same rows give `G` a condition number near `1e14`, and an exact
+solution of digits of rounding. Where a pivot of `G` scaled to a unit
+diagonal falls below `1e-10`, the row reports no intensity.
+
+**The window keeps its rows, counted in events or in clock units.**
+`window_events = W` fits the last `W` rows that carried an event, alone.
+`window_size = D` fits the events of the last `D` clock units, alone, and
+observes the interval `(T − D, T]` (from the first row, until there are `D`
+units of it), so a stretch with no event in it is observed as one. Either
+way dropping a row takes back exactly what it added, through the sums of its
+excitation of the later rows, which are kept in two blocks so that no sum is
+rescaled by a growing exponential. A fit with `window_size` agrees with
+tick refit on the events inside the span to 1e-14 of the largest
+coefficient. Give one of the two: they are two windows, and the fit holds
+one. The span is a number of the clock's units, or of rows where the spec
+has no clock, or a duration on a temporal clock.
+
+**The window's edge.** A row leaves a `window_size` window at the first row
+that finds it `D` old, before that row's intensity is read, decided on the
+rows' exact stamps and not on a clock summed in doubles. The edge is that of
+the window operators and Polars' `rolling_*_by(closed=)`. `closed = "right"`
+(the default) keeps the rows less than `D` old, so a row exactly `D` old has
+left and the window is `(T − D, T]`. `closed = "both"` keeps it, `[T − D,
+T]`. `"left"` and `"none"` would leave out the row the window ends
+at, which a model cannot do, and are refused.
+
+**The weight under a window.** `weight_sum`, and the `min_weight` gate that
+reads it, count the weight of the rows with an event that the window holds,
+as the last row left them. A row that leaves at this row still counts in
+what the row reports, as weight a decay takes at this row is still
+undecayed in it. A row with no event is no part of the
+fit, and the model keeps no record of it, so its weight is not counted. Set
+`min_weight` at most the weight a window can hold.
+
+**The state's bytes are held to `max_state_bytes`.** The window holds `8 (2 + D
++ k)` bytes a row (its clock, its weight, its marks and its `k` sums), 40 for
+one node and two decays, and `window_events` bounds its rows, so a group's
+whole state is known when the spec is built. A spec past `max_state_bytes` is
+refused, and one past half of it is warned of. At its default of 256 KB, that
+is about 4,090 rows of one node and two decays, or 3,200 of two nodes and
+three. A `window_size` window holds as many events as its span does, which
+the data decides, so each row holds a stamp of 32 bytes more. The bytes are
+checked as the rows go in. The first row to take a group past half of
+`max_state_bytes` gives a warning, once for the group, naming the group and
+the bytes. The row that would take it past the cap is not learned, and the
+bank stops with an error naming the group and the bytes, having learned part
+of the chunk. A spec whose state without any event is already past the cap
+is refused when it is built.

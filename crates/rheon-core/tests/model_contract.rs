@@ -52,9 +52,31 @@ struct Report {
 /// the same number, and reporting two different ones would make `min_weight`
 /// mean something different from what a caller inspecting the model sees.
 fn probe_with<M: OnlineModel + Clone>(
+    m: M,
+    targets: usize,
+    n_eff_of: Option<&dyn Fn(&M) -> f64>,
+) -> Report {
+    probe_checked(m, targets, n_eff_of, true)
+}
+
+/// [`probe_with`] for a model run under a window, whose `n_eff` is the
+/// weight inside the window and so not rule 8's decayed recursion: the
+/// recursion's assertion is left to the caller, which holds the window's
+/// own numbers (and `the_n_eff_accessor_is_the_steps_under_a_window` holds
+/// the accessor to the step).
+fn probe_windowed<M: OnlineModel + Clone>(
+    m: M,
+    targets: usize,
+    n_eff_of: Option<&dyn Fn(&M) -> f64>,
+) -> Report {
+    probe_checked(m, targets, n_eff_of, false)
+}
+
+fn probe_checked<M: OnlineModel + Clone>(
     mut m: M,
     targets: usize,
     n_eff_of: Option<&dyn Fn(&M) -> f64>,
+    rule_8_recursion: bool,
 ) -> Report {
     let kind = m.state().model.kind();
     let mut n_eff = vec![];
@@ -139,7 +161,9 @@ fn probe_with<M: OnlineModel + Clone>(
     // the first row, 1 after one row of weight 1, `lam + 1` after two, and
     // a ten-half-life gap decays it by 2^-10 on the row after the gap. A
     // model that does not decay ([`NO_DECAY`]) sums the weights instead.
-    if NO_DECAY.contains(&kind) {
+    if !rule_8_recursion {
+        // A window's weight: the caller's assertions hold it.
+    } else if NO_DECAY.contains(&kind) {
         assert_eq!(n_eff[..3], [0.0, 1.0, 2.0], "{kind}: the weights summed");
         assert_eq!(after_gap, before_gap + 1.0, "{kind}: no decay over a gap");
     } else {
@@ -771,6 +795,7 @@ fn every_state_kind_is_distinct_and_named() {
         "bocpd",
         "audit",
         "glm",
+        "hawkes",
     ];
     let mut seen = std::collections::HashSet::new();
     for k in kinds {
@@ -804,6 +829,7 @@ fn every_state_kind_is_distinct_and_named() {
         Bocpd::new(bocpd_cfg()).unwrap().state(),
         Audit::new(audit_cfg()).unwrap().state(),
         Glm::new(glm_cfg()).unwrap().state(),
+        Hawkes::new(hawkes_cfg()).unwrap().state(),
     ];
     let from_states: Vec<&str> = states.iter().map(|s| s.model.kind()).collect();
     assert_eq!(from_states, kinds);
@@ -869,6 +895,7 @@ fn one_state_of_each_kind() -> Vec<State> {
         Bocpd::new(bocpd_cfg()).unwrap().state(),
         Audit::new(audit_cfg()).unwrap().state(),
         Glm::new(glm_cfg()).unwrap().state(),
+        Hawkes::new(hawkes_cfg()).unwrap().state(),
         State::new(ModelState::EwCov(Box::new(EwCov::new(1)))),
     ]
 }
@@ -982,6 +1009,8 @@ fn every_model_hands_back_its_configuration() {
     same(Audit::new(c.clone()).unwrap(), &c, Audit::cfg);
     let c = glm_cfg();
     same(Glm::new(c.clone()).unwrap(), &c, Glm::cfg);
+    let c = hawkes_cfg();
+    same(Hawkes::new(c.clone()).unwrap(), &c, Hawkes::cfg);
 }
 
 fn ew_class_cfg() -> EwClassCfg {
@@ -1101,6 +1130,23 @@ fn the_n_eff_accessor_is_the_steps_under_a_window() {
         "marginal",
         accessor_is_the_step(marginal(Some(WINDOW)), 2, &Marginal::n_eff),
         accessor_is_the_step(marginal(None), 2, &Marginal::n_eff),
+    );
+    // `hawkes` keeps two windows, of rows with an event and of clock units;
+    // each against its decayed run.
+    let whole = accessor_is_the_step(Hawkes::new(hawkes_cfg()).unwrap(), 2, &Hawkes::n_eff);
+    pair(
+        "hawkes, window_events",
+        accessor_is_the_step(
+            Hawkes::new(hawkes_windowed_cfg()).unwrap(),
+            2,
+            &Hawkes::n_eff,
+        ),
+        whole,
+    );
+    pair(
+        "hawkes, window_size",
+        accessor_is_the_step(Hawkes::new(hawkes_clock_cfg()).unwrap(), 2, &Hawkes::n_eff),
+        whole,
     );
 }
 
@@ -1517,7 +1563,7 @@ fn bocpd() {
 #[test]
 fn every_model_refuses_a_decay_it_cannot_run_on() {
     type Build<'a> = (&'a str, &'a dyn Fn(Decay) -> Result<(), String>);
-    let builds: [Build; 17] = [
+    let builds: [Build; 18] = [
         ("ewridge", &|decay| {
             EwRidge::new(EwRidgeCfg {
                 decay,
@@ -1619,6 +1665,13 @@ fn every_model_refuses_a_decay_it_cannot_run_on() {
             CorrChange::new(CorrChangeCfg {
                 decay,
                 ..corrchange_cfg()
+            })
+            .map(drop)
+        }),
+        ("hawkes", &|decay| {
+            Hawkes::new(HawkesCfg {
+                decay,
+                ..hawkes_cfg()
             })
             .map(drop)
         }),
@@ -1777,6 +1830,7 @@ fn every_model_refuses_at_restore_a_configuration_its_new_refuses() {
             "distinct_cap must be from 1 to",
         ),
         refused(Glm::new(glm_cfg()).unwrap(), "decay", zero(), h),
+        refused(Hawkes::new(hawkes_cfg()).unwrap(), "decay", zero(), h),
     ];
     // Every model's `restore`: the twenty-one kinds, `robust` under both
     // losses.
@@ -2190,6 +2244,7 @@ fn exactly_the_scheduled_solvers_report_a_solve_share() {
         ("bocpd", share(Bocpd::new(bocpd_cfg()).unwrap())),
         ("audit", share(Audit::new(audit_cfg()).unwrap())),
         ("glm", share(Glm::new(glm_cfg()).unwrap())),
+        ("hawkes", share(Hawkes::new(hawkes_cfg()).unwrap())),
     ];
     let reporting: Vec<&str> = shares
         .iter()
@@ -2235,6 +2290,7 @@ const PROBED: &[(&str, &str)] = &[
     ("Bocpd", "bocpd"),
     ("Audit", "audit"),
     ("Glm", "glm"),
+    ("Hawkes", "hawkes"),
 ];
 
 #[test]
@@ -3019,7 +3075,10 @@ fn a_zero_weight_row_past_the_underflow_forgets<M: OnlineModel>(
     binary: bool,
     kind: &'static str,
 ) {
-    const NOT_COMPARED: [&str; 4] = ["kalman", "holt", "ew_class", "hmm"];
+    // `hawkes` reads the clock without an event as evidence -- `G₀₀` is the
+    // time observed -- so where nothing decays (its window) a half-life more
+    // of gap is a longer quiet spell and a lower base rate.
+    const NOT_COMPARED: [&str; 5] = ["kalman", "holt", "ew_class", "hmm", "hawkes"];
     let row = |s: &mut u64| {
         let x: Vec<f64> = (0..K).map(|_| lcg(s) * 3.0).collect();
         let y: Vec<Option<f64>> = (0..targets)
@@ -4627,6 +4686,42 @@ fn glm_cfg() -> GlmCfg {
     }
 }
 
+fn hawkes_cfg() -> HawkesCfg {
+    HawkesCfg {
+        n_targets: 2,
+        kernel_decays: vec![1.0, 4.0],
+        decay: decay(),
+        min_weight: 10.0,
+        window_events: None,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        max_state_bytes: None,
+    }
+}
+
+/// A window of a few rows, so the probes run through its turnovers; a
+/// window takes no decay, and its `n_eff` is the weight inside it, at most
+/// the six rows', so a `min_weight` of 3.
+fn hawkes_windowed_cfg() -> HawkesCfg {
+    HawkesCfg {
+        decay: Decay::Halflife(f64::INFINITY),
+        window_events: Some(6),
+        min_weight: 3.0,
+        ..hawkes_cfg()
+    }
+}
+
+/// The same over a span of the clock: the probes' rows are a unit apart, so
+/// a window of 12.5 units holds thirteen rows.
+fn hawkes_clock_cfg() -> HawkesCfg {
+    HawkesCfg {
+        decay: Decay::Halflife(f64::INFINITY),
+        window_clock: Some(12.5),
+        min_weight: 3.0,
+        ..hawkes_cfg()
+    }
+}
+
 #[test]
 fn glm() {
     let r = probe_with(Glm::new(glm_cfg()).unwrap(), 2, Some(&Glm::n_eff));
@@ -4645,6 +4740,67 @@ fn glm() {
 #[test]
 fn glm_predict_is_the_step() {
     predict_is_the_step_without_the_step(|| Glm::new(glm_cfg()).unwrap(), 2, false);
+}
+
+#[test]
+fn hawkes() {
+    // A point process: one node per target, no features, one intensity a
+    // node, and `n_eff` every row's weight on the shared recursion.
+    let m = Hawkes::new(hawkes_cfg()).unwrap();
+    assert_eq!(m.n_features(), 0, "hawkes reads no features");
+    let r = probe_with(m, 2, Some(&Hawkes::n_eff));
+    assert_eq!(r.n_features, 0);
+    assert_eq!(r.kind, "hawkes");
+    assert_eq!(r.n_targets, 2);
+    assert_eq!(r.n_outputs, 2);
+    assert_eq!(r.pred_len, 2);
+    assert_eq!(r.n_eff[0], 0.0);
+    assert_eq!(r.n_eff[1], 1.0);
+    assert!((r.n_eff[2] - (0.5f64.powf(1.0 / HALFLIFE) + 1.0)).abs() < 1e-12);
+    assert!((r.after_gap - (r.before_gap * 0.5f64.powi(10) + 1.0)).abs() < 1e-9);
+    assert!(r.roundtrips);
+    // Under a window `n_eff` is the weight inside it (hard rule 8): the six
+    // rows' of a window of six, the thirteen of a span of 12.5 units a step
+    // apart (the clocks 28 to 40); and a gap neither decays it nor adds a row the window has not
+    // room for.
+    let r = probe_windowed(
+        Hawkes::new(hawkes_windowed_cfg()).unwrap(),
+        2,
+        Some(&Hawkes::n_eff),
+    );
+    assert_eq!(r.n_eff, vec![0.0, 1.0, 2.0, 6.0]);
+    assert_eq!(r.after_gap, r.before_gap, "a gap does not move the window");
+    assert!(r.roundtrips);
+    // A gap past the clock window's span takes every row out of it, at the
+    // row the gap ends on; only that row is in the weight the next reports.
+    let r = probe_windowed(
+        Hawkes::new(hawkes_clock_cfg()).unwrap(),
+        2,
+        Some(&Hawkes::n_eff),
+    );
+    assert_eq!(r.n_eff, vec![0.0, 1.0, 2.0, 13.0]);
+    assert_eq!(r.before_gap, 13.0);
+    assert_eq!(r.after_gap, 1.0, "the gap emptied the window");
+    assert!(r.roundtrips);
+}
+
+#[test]
+fn hawkes_predict_is_the_step() {
+    predict_is_the_step_without_the_step(|| Hawkes::new(hawkes_cfg()).unwrap(), 2, false);
+    predict_is_the_step_without_the_step(|| Hawkes::new(hawkes_windowed_cfg()).unwrap(), 2, false);
+    predict_is_the_step_without_the_step(|| Hawkes::new(hawkes_clock_cfg()).unwrap(), 2, false);
+}
+
+#[test]
+#[ignore = "extended: a second or more: 30,000 rows of recovery; the clause stays for the other models"]
+fn hawkes_recovers_from_bounded_extremes() {
+    // An event of mark 1e100 is one the decays forget: `R` at its kernels'
+    // rates, `b` and `Q` at the half-life.
+    recovers_from_bounded_extremes(
+        || Hawkes::new(hawkes_cfg()).unwrap(),
+        2,
+        Recovery::Twin(1e-9),
+    );
 }
 
 #[test]
@@ -4924,6 +5080,10 @@ fn every_model_refuses_a_state_without_the_low_parts() {
         (
             "glm",
             refuses_without_low_parts(|| Glm::new(glm_cfg()).unwrap(), &two),
+        ),
+        (
+            "hawkes",
+            refuses_without_low_parts(|| Hawkes::new(hawkes_cfg()).unwrap(), &two),
         ),
     ];
     // Each model that keeps a mean had parts to drop, so its refusal is of
@@ -5982,6 +6142,25 @@ mod generated {
         #[test]
         fn glm(rows in stream(2, false), split in 0usize..60) {
             contract(|| Glm::new(glm_cfg()).unwrap(), &rows, split)?;
+        }
+
+        #[test]
+        fn hawkes(rows in stream(2, false), split in 0usize..60) {
+            contract(|| Hawkes::new(hawkes_cfg()).unwrap(), &rows, split)?;
+        }
+
+        /// The window drops a row a row once full, and forms its older
+        /// block every few rows, so a split lands in either block.
+        #[test]
+        fn hawkes_windowed(rows in stream(2, false), split in 0usize..60) {
+            contract(|| Hawkes::new(hawkes_windowed_cfg()).unwrap(), &rows, split)?;
+        }
+
+        /// A window of clock units leaves rows at the steps' own, which the
+        /// stream's gaps and zero steps put on and off its edge.
+        #[test]
+        fn hawkes_clock_windowed(rows in stream(2, false), split in 0usize..60) {
+            contract(|| Hawkes::new(hawkes_clock_cfg()).unwrap(), &rows, split)?;
         }
     }
 }

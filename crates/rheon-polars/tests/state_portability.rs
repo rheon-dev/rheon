@@ -84,6 +84,11 @@ const SPECS: &[(&str, &str, &str)] = &[
         r#""targets": ["yb"], "features": ["x0", "x1"], "half_life": 50.0"#,
     ),
     (
+        "hawkes",
+        r#"{"type": "hawkes", "kernel_decays": [0.5, 2.0]}"#,
+        r#""targets": ["y", "x0"], "features": [], "half_life": 50.0"#,
+    ),
+    (
         "hmm",
         r#"{"type": "hmm", "n_components": 2, "covariance_type": "full", "precision_prior": 0.1, "learn": true}"#,
         r#""targets": ["x0"], "features": ["x0", "x1"], "half_life": 50.0"#,

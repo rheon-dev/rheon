@@ -489,6 +489,16 @@ def clock_specs(draw, model: str, step: int, cap: int):
             degrees_of_freedom_prior=2.0,
             covariance_prior=[1.0],
         )
+    elif model == "hawkes":
+        # Task 539: the kernels as durations, the window as a span with its
+        # edge, and zero-weight rows that count in no clock.
+        # No forgetting beside the window: a half-life within 0.1% of a
+        # kernel's is refused, and a drawn one could land there.
+        kw |= dict(targets=["y"], half_life=float("inf"))
+        kw["kernel_half_lives"] = [steps(1, 6), steps(7, 40)]
+        kw |= maybe("window_size", 1, 60)
+        if "window_size" in kw:
+            kw["closed"] = draw(st.sampled_from(["right", "both"]))
     else:
         assert model == "rls", model
         kw |= xy | maybe("embargo", 1, 5)
@@ -679,6 +689,12 @@ N_EFF_EXEMPT = {
     "audit": "which counts every row with no decay",
 }
 
+#: The kinds with a rate for a parameter (``hawkes``' ``kernel_decays``, per
+#: clock unit), which a temporal clock has no unit to read, so it refuses
+#: one by name (``test_hawkes.py::test_features_and_a_temporal_clock_are_refused``).
+#: Its ``weight_sum`` recursion is held on a numeric clock in `model_contract.rs`.
+N_EFF_RATES = frozenset({"hawkes"})
+
 #: What a kind needs on this file's frame besides `MINIMAL`'s arguments:
 #: `ew_class`'s labels are in ``lab``; `corrchange` takes a half-life only
 #: in its scalar form, where it parametrises the standardiser; and beside a
@@ -696,7 +712,7 @@ N_EFF_ARGS: dict[str, dict] = {
 N_EFF_MODELS = {
     name: {k: v for k, v in MINIMAL[name].items() if k != "half_life"} | N_EFF_ARGS.get(name, {})
     for name in sorted(MINIMAL)
-    if name not in N_EFF_EXEMPT
+    if name not in N_EFF_EXEMPT and name not in N_EFF_RATES
 }
 
 

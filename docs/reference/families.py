@@ -100,7 +100,7 @@ FAMILIES: tuple[Family, ...] = (
     Family(
         "sequential",
         "spec",
-        tuple(f"{_SPEC}.{m}" for m in ("seqtest", "corrchange", "bocpd")),
+        tuple(f"{_SPEC}.{m}" for m in ("seqtest", "corrchange", "bocpd", "hawkes")),
     ),
     Family(
         "clustering",

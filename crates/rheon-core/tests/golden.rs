@@ -793,6 +793,38 @@ fn audit_golden() {
     check("audit", &got, GOLDEN_AUDIT);
 }
 
+/// `hawkes` on the same stream: its one target an event of that mark on
+/// every row where it is above 0, two kernels, decayed and in a window of
+/// eight rows. The three rows' intensities, then the fit at the end: the
+/// recursion, the read of `G` from `b`, the window's removal and its
+/// rebuild all move these.
+#[test]
+fn hawkes_golden() {
+    let cfg = HawkesCfg {
+        n_targets: 1,
+        kernel_decays: vec![0.8, 3.0],
+        decay: Decay::Halflife(15.0),
+        min_weight: 0.0,
+        window_events: None,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        max_state_bytes: None,
+    };
+    let mut m = Hawkes::new(cfg.clone()).unwrap();
+    let mut got = signature_of(&mut m, 0, false);
+    got.extend(&m.coefficients()[0]);
+    check("hawkes", &got, GOLDEN_HAWKES);
+    let mut m = Hawkes::new(HawkesCfg {
+        decay: Decay::Halflife(f64::INFINITY),
+        window_events: Some(8),
+        ..cfg
+    })
+    .unwrap();
+    let mut got = signature_of(&mut m, 0, false);
+    got.extend(&m.coefficients()[0]);
+    check("hawkes_window", &got, GOLDEN_HAWKES_WINDOW);
+}
+
 /// The pre-averaged estimate on the same stream: the other arithmetic.
 #[test]
 fn rcov_preavg_golden() {
@@ -1595,6 +1627,22 @@ fn ew_class_windowed_golden() {
 // --- generated; see the module docs ---
 const GOLDEN_GLM: &[f64] = &[0.8190287944178032, 1.5909174698270316, 1.3226756023793542];
 const GOLDEN_GLM_CAP: &[f64] = &[0.8059966005129862, 2.2639186345702202, 1.0964813502655293];
+const GOLDEN_HAWKES: &[f64] = &[
+    0.5698035355306798,
+    0.3189638413584075,
+    0.4443771726681645,
+    0.4067008349412284,
+    0.17274161174942407,
+    -0.25623622092507065,
+];
+const GOLDEN_HAWKES_WINDOW: &[f64] = &[
+    0.6869138969117743,
+    0.28538342803512085,
+    0.4593991977177034,
+    0.5920678320322507,
+    -0.30485849466826326,
+    -0.18213030070959965,
+];
 // Frozen 2026-10-09 (docs/PLAN.md task 223 (b)); the moments, the lag
 // pairs and the median are held to their definitions in `audit/tests.rs`.
 const GOLDEN_AUDIT: &[f64] = &[

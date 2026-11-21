@@ -87,6 +87,7 @@ pub enum ModelState {
     Bocpd(Box<crate::Bocpd>),
     Audit(Box<crate::Audit>),
     Glm(Box<crate::Glm>),
+    Hawkes(Box<crate::Hawkes>),
 }
 
 #[derive(Debug, Error)]
@@ -206,6 +207,7 @@ impl ModelState {
             ModelState::Bocpd(_) => "bocpd",
             ModelState::Audit(_) => "audit",
             ModelState::Glm(_) => "glm",
+            ModelState::Hawkes(_) => "hawkes",
         }
     }
 }
@@ -997,6 +999,24 @@ pub trait OnlineModel: Sized {
     /// doubled by any thinning). `None` while under budget, and for a model
     /// without a window.
     fn window_over_budget(&self) -> Option<(usize, crate::Cadence)> {
+        None
+    }
+
+    /// The bytes of state this model holds past half of its cap, once, as a
+    /// pair `(bytes, cap)`, taken: the state's size is the data's where a
+    /// window spans a stretch of the clock and holds the events in it, so it
+    /// is read as the rows go in, and the first row to take it past half of
+    /// the cap is said (the caller makes a notice of it). `None` for a model
+    /// whose state the settings fix, and after it was taken.
+    fn take_state_warning(&mut self) -> Option<(u64, u64)> {
+        None
+    }
+
+    /// The bytes a row would have taken the state to, past its cap, as a
+    /// pair `(bytes, cap)`: the model learns no row after it, and the caller
+    /// refuses the run. `None` while under the cap, and for a model whose
+    /// state the settings fix.
+    fn state_over_cap(&self) -> Option<(u64, u64)> {
         None
     }
 

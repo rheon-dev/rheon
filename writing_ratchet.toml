@@ -625,6 +625,7 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [messages."crates/rheon-core/src/family.rs"]
 
 [messages."crates/rheon-core/src/glm.rs"]
+[messages."crates/rheon-core/src/hawkes.rs"]
 
 [messages."crates/rheon-core/src/kalman/forms.rs"]
 
@@ -641,6 +642,7 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [messages."python/rheon/polars/_clock.py"]
 
 [docstrings."python/rheon/_spec_glm.py"]
+[docstrings."python/rheon/_spec_point.py"]
 
 [docstrings."python/rheon/polars/_errors.py"]
 
@@ -649,6 +651,7 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."crates/rheon-core/src/family.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/glm.rs#messages"]
+[vocabulary."crates/rheon-core/src/hawkes.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/kalman/forms.rs#messages"]
 
@@ -659,6 +662,7 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."python/rheon/_spec_fields.py#messages"]
 
 [vocabulary."python/rheon/_spec_glm.py#docstrings"]
+[vocabulary."python/rheon/_spec_point.py#docstrings"]
 
 [vocabulary."python/rheon/polars/__init__.py#messages"]
 

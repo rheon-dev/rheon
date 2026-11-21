@@ -49,7 +49,7 @@ FAMILIES: dict[str, tuple[str, ...]] = {
     ),
     "Moments and correlation": ("ew_cov", "marginal", "deco", "rcov", "audit"),
     "Clustering and classification": ("kmeans", "micro", "ew_class"),
-    "Sequential tests and regimes": ("seqtest", "corrchange", "bocpd", "hmm"),
+    "Sequential tests and regimes": ("seqtest", "corrchange", "bocpd", "hmm", "hawkes"),
 }
 
 #: Where the four fields most models write are defined in full.
@@ -104,6 +104,10 @@ MEANING: dict[str, str] = {
     "log_e_neg_<t>": "log of the e-process betting it is negative",
     "n_pos_<t>": "learned rows whose `<t>` was positive",
     "n_neg_<t>": "learned rows whose `<t>` was negative",
+    "intensity_<t>": (
+        "node `<t>`'s intensity, its expected events per unit of the clock, just before this "
+        "row's events, from the fit on the rows before"
+    ),
     "u": (
         "the equicorrelation this row alone implies"
         " (Engle and Kelly's Lemma 2.3, from the standardized row)"
@@ -185,6 +189,10 @@ ALSO_NULL: dict[str, str] = {
     "log_e_neg_<t>": WITHHELD,
     "n_pos_<t>": WITHHELD,
     "n_neg_<t>": WITHHELD,
+    "intensity_<t>": (
+        "while withheld, and while the fit is not determined: before every node has had an "
+        "event, and while two of its terms cannot be told apart"
+    ),
     "u": (
         "while withheld, where fewer than two of the block's columns have a positive variance "
         "before the row, and where every standardized value is 0"
@@ -627,6 +635,7 @@ def stem(field: str, targets: tuple[str, ...], features: tuple[str, ...]) -> str
             "log_e_neg",
             "n_pos",
             "n_neg",
+            "intensity",
         ):
             if base == f"{pre}_{t}":
                 return f"{pre}_<t>"

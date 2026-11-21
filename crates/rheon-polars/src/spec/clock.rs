@@ -63,6 +63,7 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
     ("micro", &["prune_every"]),
     ("ew_class", &["window_size", "snapshot_every"]),
     ("marginal", &["window_size", "snapshot_every"]),
+    ("hawkes", &["window_size", "kernel_half_lives"]),
 ];
 
 /// The parameters that take a duration on a temporal clock or a number that
@@ -81,7 +82,11 @@ pub const DURATION_OR_UNIT_FREE_FIELDS: &[(&str, &[&str])] = &[("bocpd", &["haza
 /// (`lam`) and a variance per unit (`kalman`'s `q`). A rate has no duration
 /// form, so a temporal clock refuses one; the half-life it stands in for
 /// takes a duration instead.
-pub const CLOCK_RATES: &[(&str, &[&str])] = &[("*", &["lam"]), ("kalman", &["q"])];
+pub const CLOCK_RATES: &[(&str, &[&str])] = &[
+    ("*", &["lam"]),
+    ("kalman", &["q"]),
+    ("hawkes", &["kernel_decays"]),
+];
 
 /// What a spec's clock-unit parameters are written in, which decides the
 /// clock column it can read (docs/PLAN.md task 88).
@@ -421,6 +426,14 @@ impl Spec {
             } => {
                 put(&mut out, "trend_half_life", trend_half_life.as_ref());
             }
+            ModelKind::Hawkes {
+                window_size,
+                kernel_half_lives,
+                ..
+            } => {
+                put(&mut out, "window_size", window_size.as_ref());
+                put_list(&mut out, "kernel_half_lives", kernel_half_lives.as_ref());
+            }
             ModelKind::Micro { prune_every, .. } => {
                 put(&mut out, "prune_every", prune_every.as_ref());
             }
@@ -444,6 +457,10 @@ impl Spec {
         }
         match &self.model {
             ModelKind::Kalman { q: Some(q), .. } if q.iter().any(|v| v.0 != 0.0) => Some("q"),
+            ModelKind::Hawkes {
+                kernel_decays: Some(_),
+                ..
+            } => Some("kernel_decays"),
             _ => None,
         }
     }
@@ -480,6 +497,12 @@ impl Spec {
                 "spec {:?}: {d} is a duration, but lam is a decay over one clock unit, which a \
                  duration cannot give. Give half_life as a duration in place of lam, with a \
                  Datetime, Date or Duration clock.",
+                self.name
+            )),
+            (Some(d), Some("kernel_decays")) => Err(format!(
+                "spec {:?}: {d} is a duration, but kernel_decays are rates per clock unit, which \
+                 a duration cannot give. Give the kernels as kernel_half_lives, in durations \
+                 (a decay is ln 2 / half-life), and leave kernel_decays out.",
                 self.name
             )),
             (Some(d), Some("q")) => Err(format!(

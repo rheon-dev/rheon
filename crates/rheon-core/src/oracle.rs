@@ -853,6 +853,102 @@ pub(crate) fn assert_within(got: f64, want: f64, bound: f64, what: impl std::fmt
 /// condition numbers a Gram reaches (about 1e16, squared in `V`) leave
 /// 270 digits to spare. It shares no arithmetic with the code it checks:
 /// no Cholesky, no register block, no faer.
+/// A Hawkes process's least-squares system written from its definition, as
+/// double sums over pairs of events with each integral in closed form:
+/// `O(n²)`, sharing no recursion with `hawkes.rs`, which reads `G` from its
+/// linear terms. Each row is a clock and one mark per node (`> 0` is an
+/// event); the observation runs from `start` to `end`, every row inside it,
+/// each instant weighted `e^(−γ (end − t))`. An event excites the events of
+/// every later row, at the same clock or not, and none of its own row.
+/// Returns `G` (row-major `p × p`) and `b` (one row of `p` per node), with
+/// node-major features `a = j U + u`.
+pub(crate) fn hawkes_system(
+    rows: &[(f64, Vec<f64>)],
+    betas: &[f64],
+    gamma: f64,
+    start: f64,
+    end: f64,
+) -> (Vec<f64>, Vec<f64>) {
+    let n = rows.first().map_or(0, |r| r.1.len());
+    let u_n = betas.len();
+    let k = n * u_n;
+    let p = 1 + k;
+    // `∫_0^L e^(−γ (L − y)) e^(−c y) dy`, by its two exponentials.
+    let tail = |c: f64, l: f64| {
+        if gamma == 0.0 {
+            (1.0 - (-c * l).exp()) / c
+        } else {
+            ((-c * l).exp() - (-gamma * l).exp()) / (gamma - c)
+        }
+    };
+    let events: Vec<(usize, f64, usize, f64)> = rows
+        .iter()
+        .enumerate()
+        .flat_map(|(ri, (t, m))| {
+            m.iter()
+                .enumerate()
+                .filter(|(_, v)| **v > 0.0)
+                .map(move |(j, v)| (ri, *t, j, *v))
+        })
+        .collect();
+    let mut g = vec![0.0; p * p];
+    g[0] = if gamma == 0.0 {
+        end - start
+    } else {
+        (1.0 - (-gamma * (end - start)).exp()) / gamma
+    };
+    for a in 0..k {
+        let (ja, ba) = (a / u_n, betas[a % u_n]);
+        let mut s = 0.0;
+        for &(_, t, j, m) in &events {
+            if j == ja {
+                s += ba * m * tail(ba, end - t);
+            }
+        }
+        g[a + 1] = s;
+        g[(a + 1) * p] = s;
+        for c in 0..k {
+            let (jc, bc) = (c / u_n, betas[c % u_n]);
+            let mut s = 0.0;
+            for &(_, tk, j1, m1) in &events {
+                if j1 != ja {
+                    continue;
+                }
+                for &(_, tl, j2, m2) in &events {
+                    if j2 != jc {
+                        continue;
+                    }
+                    let at = tk.max(tl);
+                    s += ba
+                        * bc
+                        * m1
+                        * m2
+                        * (-ba * (at - tk)).exp()
+                        * (-bc * (at - tl)).exp()
+                        * tail(ba + bc, end - at);
+                }
+            }
+            g[(a + 1) * p + c + 1] = s;
+        }
+    }
+    let mut b = vec![0.0; n * p];
+    for &(rl, tl, i, ml) in &events {
+        let w = (-gamma * (end - tl)).exp();
+        b[i * p] += w * ml;
+        for a in 0..k {
+            let (ja, ba) = (a / u_n, betas[a % u_n]);
+            let mut excite = 0.0;
+            for &(rk, tk, j, mk) in &events {
+                if j == ja && rk < rl {
+                    excite += ba * mk * (-ba * (tl - tk)).exp();
+                }
+            }
+            b[i * p + 1 + a] += w * ml * excite;
+        }
+    }
+    (g, b)
+}
+
 pub(crate) mod exact {
     use dashu_float::FBig;
 

@@ -524,6 +524,15 @@ wheels = [
 ]
 
 [[package]]
+name = "dill"
+version = "0.4.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/81/e1/56027a71e31b02ddc53c7d65b01e68edf64dea2932122fe7746a516f75d5/dill-0.4.1.tar.gz", hash = "sha256:423092df4182177d4d8ba8290c8a5b640c66ab35ec7da59ccfa00f6fa3eea5fa", size = 187315, upload-time = "2026-01-19T02:36:56.85Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1e/77/dc8c558f7593132cf8fefec57c4f60c83b16941c574ac5f619abb3ae7933/dill-0.4.1-py3-none-any.whl", hash = "sha256:1e1ce33e978ae97fcfcff5638477032b801c46c7c65cf717f95fbc2248f79a9d", size = 120019, upload-time = "2026-01-19T02:36:55.663Z" },
+]
+
+[[package]]
 name = "docutils"
 version = "0.22.4"
 source = { registry = "https://pypi.org/simple" }
@@ -1551,6 +1560,18 @@ wheels = [
 ]
 
 [[package]]
+name = "numpydoc"
+version = "1.11.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "sphinx" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c4/2f/5e9bf8ed0a93587b8089242b4926dfd04d4b3b0b65f04345d219a1225f03/numpydoc-1.11.0.tar.gz", hash = "sha256:26db0adaac8087e98da05c86b11198defd962aef7c21f4dffd2703c8c6eb4187", size = 101575, upload-time = "2026-09-15T16:31:08.905Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fb/e5/f5c38d4899cd8edd5b522071c5658202077d113c3225484d779cf257970e/numpydoc-1.11.0-py3-none-any.whl", hash = "sha256:493ad2ce0d8275ca5da484ec37dbdbbc1334c3a6968dffd10ec729b51753e15e", size = 71464, upload-time = "2026-09-15T16:31:07.521Z" },
+]
+
+[[package]]
 name = "packaging"
 version = "26.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1977,6 +1998,7 @@ dev = [
     { name = "mypy" },
     { name = "numba" },
     { name = "numpy" },
+    { name = "numpydoc" },
     { name = "padasip" },
     { name = "pandas" },
     { name = "psutil" },
@@ -1990,8 +2012,10 @@ dev = [
     { name = "ruff" },
     { name = "scikit-learn" },
     { name = "scipy" },
+    { name = "six" },
     { name = "statsmodels" },
     { name = "threadpoolctl" },
+    { name = "tick" },
     { name = "vowpalwabbit" },
     { name = "xgboost", marker = "sys_platform == 'darwin'" },
     { name = "xgboost-cpu", marker = "sys_platform != 'darwin'" },
@@ -2026,6 +2050,7 @@ dev = [
     { name = "mypy", specifier = ">=1.14" },
     { name = "numba", specifier = ">=0.68.1" },
     { name = "numpy", specifier = ">=2.5.2" },
+    { name = "numpydoc", specifier = ">=1.9.0" },
     { name = "padasip", specifier = ">=1.2.2" },
     { name = "pandas", specifier = ">=3.0.5" },
     { name = "psutil", specifier = ">=5.9" },
@@ -2039,8 +2064,10 @@ dev = [
     { name = "ruff", specifier = ">=0.14" },
     { name = "scikit-learn", specifier = ">=1.9.1" },
     { name = "scipy", specifier = ">=1.18.1" },
+    { name = "six", specifier = ">=1.17.0" },
     { name = "statsmodels", specifier = ">=0.15" },
     { name = "threadpoolctl", specifier = ">=3.7.0" },
+    { name = "tick", specifier = ">=0.8.0.2" },
     { name = "vowpalwabbit", specifier = ">=9.11.9" },
     { name = "xgboost", marker = "sys_platform == 'darwin'", specifier = ">=3.4.1" },
     { name = "xgboost-cpu", marker = "sys_platform != 'darwin'", specifier = ">=3.4.1" },
@@ -2515,6 +2542,34 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/00/dc/6c58154c1c65f758ea979e7139cb76993a9cfc662d14e9be3c4a667cfb77/threadpoolctl-3.7.0.tar.gz", hash = "sha256:61348cfb77d53b9242e0017029244b559b810c142ced65b4e21eeca1843959a7", size = 31961, upload-time = "2026-09-15T15:46:20.263Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/43/3f/f88a53f60a472b46f4023f56d204dd7de33d34c5d2acbfa0d70a674e639e/threadpoolctl-3.7.0-py3-none-any.whl", hash = "sha256:cd8b60b5641b45c67bbf73c64c843235fc2d8a480c87389f52f5dbee893b86be", size = 26362, upload-time = "2026-09-15T15:46:19.168Z" },
+]
+
+[[package]]
+name = "tick"
+version = "0.8.0.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "dill" },
+    { name = "matplotlib" },
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "pandas" },
+    { name = "scikit-learn" },
+    { name = "scipy" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/53/2f/2c3b867c005f0a1c23d78b11fde2c70d6e536347578c51799adecfffb66d/tick-0.8.0.2-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:0b9b6057e23de2a1b46ef482b5be34acd1dead99fe1ff1348d26423db5da2bfc", size = 6742217, upload-time = "2026-05-04T15:02:11.091Z" },
+    { url = "https://files.pythonhosted.org/packages/46/8a/00aaeeff1a0bd64a1fd0f7139b5a7403ea683d39229b7be76812f84a41de/tick-0.8.0.2-cp312-cp312-macosx_11_0_x86_64.whl", hash = "sha256:e8416d012324282f7ab1f762b09e22964d84ad3e0443151635c710660281f78d", size = 7323616, upload-time = "2026-05-04T15:02:13.278Z" },
+    { url = "https://files.pythonhosted.org/packages/1d/b0/3de915d49fea778ea244e3585b644c760aa5b80e11b3e97566b8493f923a/tick-0.8.0.2-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:0a490d6d34118d257b3cd25a13c00c617ee63e23e175a22912543a072cf0169a", size = 7219909, upload-time = "2026-05-04T15:02:14.684Z" },
+    { url = "https://files.pythonhosted.org/packages/22/4d/7684063f910b53222c1f7c467e39366a04bb7f76dafe69bd6fd63a8b3b3b/tick-0.8.0.2-cp312-cp312-win_amd64.whl", hash = "sha256:fd26d6906c9804a5fee744bc4156db6ee32f3d8c4b08b13d34d5637e0ebec778", size = 5418748, upload-time = "2026-05-04T15:02:15.923Z" },
+    { url = "https://files.pythonhosted.org/packages/75/18/91954b0e6ea6dd3441af88e80e0926d6bc8598f085f9de840ec6f59ce70a/tick-0.8.0.2-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:d34794eaab75bb710e1f4f5d4c5ec627820061199060ef12230b29f6da9238b4", size = 6741476, upload-time = "2026-05-04T15:02:17.335Z" },
+    { url = "https://files.pythonhosted.org/packages/b2/c1/7094fc3efba6152ac8fcbf6a518c08a9b30fdd04600f2e9a1e87e3795291/tick-0.8.0.2-cp313-cp313-macosx_11_0_x86_64.whl", hash = "sha256:7dfefa68de01d35b67153b6512742a7b3d5993e426ee3be0e2150f4b242aaa61", size = 7324332, upload-time = "2026-05-04T15:02:19.112Z" },
+    { url = "https://files.pythonhosted.org/packages/b7/54/7825c1395ed018969213cc72e5594d0669d6f9344294a759020d3c6dfbe5/tick-0.8.0.2-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:11873300bb1cdf8ebc92731fb06c54874b3722f0abd07ebfdc63f4591a5a48c3", size = 7220451, upload-time = "2026-05-04T15:02:20.833Z" },
+    { url = "https://files.pythonhosted.org/packages/25/75/dd1a14efe0cc146a202250d7697824536a377b392e83d561458c25a14b5e/tick-0.8.0.2-cp313-cp313-win_amd64.whl", hash = "sha256:94c4fba07ea3329ea863795681d266d59bbe078accc5b6bf96f5153b10af43aa", size = 5418884, upload-time = "2026-05-04T15:02:22.086Z" },
+    { url = "https://files.pythonhosted.org/packages/b9/2b/c3b165a92f5a23da0be1741e7a09ea963bf5a4c4aa450fe9404510c67197/tick-0.8.0.2-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:c416ff928f8babc8ead6fd0a2b491c56d128722eb20c3c6c8e86c4aa46d34cd8", size = 6747392, upload-time = "2026-05-04T15:02:23.741Z" },
+    { url = "https://files.pythonhosted.org/packages/1d/2b/d9f275f6b78a5a701df356cf56cb7c9e6fcfdf3fe4da8b7046931bc2aac3/tick-0.8.0.2-cp314-cp314-macosx_11_0_x86_64.whl", hash = "sha256:2990f97f47c55c43be0050559ea03e597b4c17f6146c85040990304752696312", size = 7325855, upload-time = "2026-05-04T15:02:25.007Z" },
+    { url = "https://files.pythonhosted.org/packages/ab/6f/2fb6e5628d3e71f92c4a81fa9a646fa9f00d4f987969f2962dd6f148d7cb/tick-0.8.0.2-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:63da4341d251bba6fc3b6e8d6eab1a1ad1e791d61e35499f658d41c087670b75", size = 7223315, upload-time = "2026-05-04T15:02:26.653Z" },
+    { url = "https://files.pythonhosted.org/packages/4c/67/6db5db2045d9e1db2532bbda23fa1f5739916d7458e84123addef6b3180e/tick-0.8.0.2-cp314-cp314-win_amd64.whl", hash = "sha256:42761285cd8cdac78e1516cc0e04c7a8bc0d4b79be4d294c9c7c3ff34558e091", size = 5586047, upload-time = "2026-05-04T15:02:27.967Z" },
 ]
 
 [[package]]
