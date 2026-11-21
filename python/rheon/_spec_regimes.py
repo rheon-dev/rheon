@@ -35,6 +35,7 @@ def hmm(
     seed: int | None = None,
     exog_tvtp: str | None = None,
     tvtp_coef: list[list[float]] | None = None,
+    prior_rows: float | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """A Gaussian hidden Markov model of the features, filtered one row at a time.
@@ -62,9 +63,13 @@ def hmm(
         finite and above 0. It is required here as it is for
         :func:`ew_class`: a state's centered co-moments start at zero, a zero
         matrix has no density, and every row is predicted through each
-        state's inverse. Keep it small against the data's scale: with states given
-        and not learned, a ridge of 1.0 on data whose variance is about 1.0
-        halves every correlation.
+        state's inverse. Under ``covariance_type`` ``"full"`` or ``"diag"``
+        with ``learn = True`` each state's covariance forgets toward a prior
+        instead (``prior_rows``), and this ridge stands in for that prior only
+        where every feature's pooled variance is 0. Under ``"tied"``, and with
+        ``learn = False``, it is the ridge. Keep it small against the data's
+        scale: with states given and not learned, a ridge of 1.0 on data whose
+        variance is about 1.0 halves every correlation.
     ``covariance_type``
         ``"full"`` (the default, the one shape that sees a regime's
         correlation between features), ``"tied"`` or ``"diag"``, as for
@@ -89,11 +94,14 @@ def hmm(
         of features), both flattened row-major, finite, and given together.
         With them there is no warm-up. Each ``covs`` block must be symmetric
         and positive definite, and the pair enters at one row's weight. So
-        under ``learn = True`` the stream washes the given states out as it
+        under ``learn = True`` the stream washes the given means out as it
         would one row, within about one half-life, and under
-        ``learn = False`` they are held exactly. Pass them where the regimes
-        differ in their covariance alone (*A regime in the covariance alone*
-        in Notes).
+        ``learn = False`` the states are held exactly. Under ``"full"`` and
+        ``"diag"`` with ``learn = True`` the given covariances are also each
+        state's prior, worth ``prior_rows`` rows for as long as the model
+        runs (*The update* below). Pass them where the regimes differ in
+        their covariance alone (*A regime in the covariance alone* in
+        Notes).
     ``warm_rows``, ``init``, ``seed``
         Without given states, the first ``warm_rows`` learned rows (default
         1,000, or ``n_components`` where that is more, and at least
@@ -107,6 +115,16 @@ def hmm(
         ``withheld_reason`` and ``coef`` stays null. The held rows must hold every
         regime, several times over (*Seeding* in Notes). With ``means`` and
         ``covs`` given nothing is seeded, and the three are refused.
+    ``prior_rows``
+        How many rows of weight the prior each state's covariance forgets
+        toward is worth, under ``covariance_type`` ``"full"`` or ``"diag"``
+        with ``learn = True``: finite and above 0, by default the number of
+        features. The prior is the features' pooled within-state variance on
+        the diagonal, or, with ``covs`` given, each state's given covariance
+        (*The update* below). A larger value pulls every state's
+        covariance harder toward it, and a returning state's first rows read
+        it the more. Refused under ``"tied"`` and with ``learn = False``,
+        which take no prior.
     ``exog_tvtp``, ``tvtp_coef``
         A column named by this parameter, as ``weight`` is, which need not
         be in ``features``, whose value ``z_t`` drives the matrix instead: ``Pi_kl(t) =
@@ -163,9 +181,11 @@ def hmm(
     As every builder does (:mod:`rheon.spec`), ``TypeError`` for
     ``targets``, and ``ValueError`` naming the problem for:
 
-    - an ``n_components`` outside 2 to 1,024, a ``precision_prior`` not
-      finite or not above 0, and a ``transition_prior`` below 0 or not
-      finite;
+    - an ``n_components`` outside 2 to 1,024, a ``precision_prior`` or a
+      ``prior_rows`` not finite or not above 0, and a ``transition_prior``
+      below 0 or not finite;
+    - ``prior_rows`` under ``covariance_type = "tied"`` or with
+      ``learn = False``;
     - a ``covariance_type`` other than ``"full"``, ``"tied"`` or ``"diag"``,
       and an ``init`` other than its four words;
     - ``learn = False`` without states;
@@ -187,14 +207,13 @@ def hmm(
 
     Hamilton's filter, one row at a time. Before the row, from the filtered
     ``p`` the previous row left (uniform before the first), with ``mu_l`` and
-    ``Sigma_l`` state ``l``'s mean and covariance, ``omega_l`` its
-    ``precision_prior`` ridge as it has decayed, ``Pi`` the transition
-    matrix and ``x`` the row's features:
+    ``Sigma_l`` state ``l``'s mean and the covariance the row reads, ``Pi``
+    the transition matrix and ``x`` the row's features:
 
     .. code-block:: text
 
         p1_l   = sum_k p_k * Pi_kl                     the predicted state
-        f_l    = N(x | mu_l, Sigma_l + omega_l I)      the state's density
+        f_l    = N(x | mu_l, Sigma_l)                  the state's density
         loglik = log sum_l p1_l f_l                    the row's log-likelihood
         p_l   <- p1_l f_l / sum                        the filtered state
 
@@ -220,25 +239,90 @@ def hmm(
         xi_kl = p_k(t-1) Pi_kl f_l / sum over all pairs
         N_kl <- N_kl + w * xi_kl
 
-    Under ``covariance_type = "full"`` with 13 features or more, each state
-    keeps the Cholesky factor of ``M_l = Sigma_l + omega_l I`` in place of
-    its running co-moments, as ``s * L L'`` with the scalar ``s`` kept
-    between 1/4 and 1, and the row moves the factor by plane rotations, in
-    time ``d^2``, where the co-moments are factorized afresh, in time
-    ``d^3``. With ``W`` the state's weight before the row,
-    ``a = λW / (λW + w p_l)``, ``b = w p_l / (λW + w p_l)`` and ``delta``
+    Each state keeps its weight ``W_l``, its means and its mean-form
+    co-moments ``M_l``, which take the row as :func:`ew_cov`'s do, with
+    ``a = W_l / (W_l + w p_l)``, ``b = w p_l / (W_l + w p_l)`` and ``delta``
     the row's deviation from the state's mean before the row:
+    ``M_l <- a M_l + a b delta delta'``, ``W_l <- W_l + w p_l``.
+
+    Under ``"tied"``, and with ``learn = False``, the states' weights and
+    co-moments decay with the row before it is learned, and ``Sigma_l =
+    M_l + omega_l I``, with ``omega_l`` the ``precision_prior`` ridge as it
+    has decayed with the state's data (``"tied"`` pools the states' ``M_l``
+    by weight).
+
+    Under ``"full"`` and ``"diag"`` with ``learn = True``, each state's
+    covariance forgets toward a prior instead: stabilized forgetting
+    (Kulhavý and Zarrop, "On a general concept of forgetting", 1993), which
+    flattens the posterior toward a prior where exponential forgetting
+    flattens it toward nothing. With ``P0 = prior_rows`` and ``psi`` the
+    features' pooled within-state variance:
 
     .. code-block:: text
 
-        s'      = a * s
-        L' L''  = L L' + (b / s) * delta delta'        by plane rotations
-        M_l'    = s' L' L''  = a M_l + a b delta delta'
+        W_l    <- λ * W_l                              the row's decay, before the read
+        Sigma_l = (W_l M_l + P0 diag(psi)) / (W_l + P0)
+        W_l    <- W_l + w p_l,  M_l <- a M_l + a b delta delta'   the row learned
 
-    The two forms are the same matrix in exact arithmetic, and their
-    outputs part in the last digits: a posterior by at most about ``6e-12``
-    over 20,000 rows at 13 to 32 features. Below 13 features the
-    factorization is the faster, and is kept.
+    A prior worth ``P0`` rows stays worth ``P0`` rows, so a state that has
+    won no rows for a while reads a broad density near ``diag(psi)``, where
+    under the decaying ridge it collapsed onto its first row back. A zero
+    weight row and the gap it sits in read alike. With no decay ``Sigma_l``
+    is scikit-learn QDA's ``reg_param`` shrinkage toward ``diag(psi)``, with
+    ``reg_param = P0 / (W_l + P0)``. ``psi`` follows the rows' squared
+    deviations from the states' means before the row, weighted by the
+    filtered state, at ten times the half-life (``s`` starts at the seeded
+    states' variances pooled by weight, and ``V`` at their total weight):
+
+    .. code-block:: text
+
+        e_i   = sum_l p_l (x_i - mu_li)^2
+        V    <- λ^(1/10) V + w
+        s_i  <- s_i + (w / V) (e_i - s_i)
+        psi_i = max(s_i, 2^-100 max_j s_j)            precision_prior where every s_i is 0
+
+    With ``means`` and ``covs`` given, each state's prior is the covariance
+    it was given, ``G_l``, every feature rescaled by how far the rows have
+    moved from it:
+
+    .. code-block:: text
+
+        Sigma_l = (W_l M_l + P0 diag(sqrt(psi)) G_l diag(sqrt(psi))) / (W_l + P0)
+        e_i     = sum_l p_l (x_i - mu_li)^2 / G_l,ii    in units of the given variances
+
+    with ``s`` started at 1, so a state reads ``G_l`` on the first row, and
+    again, at the scale the rows have by then, when it has no data left.
+    Given covariances that are one diagonal matrix for every state are the
+    diagonal prior exactly. What they say about each regime's shape is
+    trusted at ``prior_rows`` rows for as long as the model runs, so given
+    covariances of the wrong shape cost a returning state its first rows.
+
+    Under ``"full"`` with 13 features or more, each state keeps the
+    Cholesky factor of ``Sigma_l`` in place of its co-moments, as
+    ``s * L L'`` with the scalar ``s`` kept between 1/4 and 1, and the row
+    moves the factor by plane rotations, in time ``d^2``, where the
+    co-moments are factorized afresh, in time ``d^3``. The prior's share of
+    ``Sigma_l`` changes with ``W_l``, a diagonal no rotation adds, so the
+    factor holds the prior as factored, ``f``, which decays with the data
+    and is moved back, every coordinate at once by one factorization of each
+    state, whenever any coordinate is more than 1/16 from its target. With
+    ``W'`` the weight after the row:
+
+    .. code-block:: text
+
+        Sigma_l = s L L' = (W_l M_l + diag(f)) / (W_l + P0)
+        f_i    <- λ f_i                                every row, with W_l
+        f_i    <- (1 + 1/32) P0 psi_i                  when any f_i leaves [15/16, 17/16] P0 psi_i
+        s'      = s (W_l + P0) / (W' + P0)             the row learned
+        L' L''  = L L' + (a w p_l) / ((W' + P0) s') delta delta'   by plane rotations
+
+    So the factor form reads ``Sigma_l`` within 1/16 of the prior's share
+    of it: a quadratic form within a factor ``16/15`` of the exact one's,
+    and the bound is reached only by a state with no data. Measured against
+    the exact recursion carried in 512 bits, at 13 and 20 features and
+    half-lives of 20 and 500 rows over 2,000 rows, a filtered posterior
+    parted from it by at most 0.009. Below 13 features the factorization is
+    the faster, and is kept, and reads the exact recursion.
 
     .. rubric:: Example
 
@@ -288,8 +372,10 @@ def hmm(
     state is hidden, and a transition matrix carries information from one
     row to the next. That is the difference between "which regime does this
     row look like" and "which regime are we in", and the second is usually
-    the question. The densities go through the path :func:`ew_class` uses,
-    with the same decaying ``precision_prior`` ridge.
+    the question. The densities are Gaussian, as :func:`ew_class`'s are;
+    under ``"tied"`` they carry the same decaying ``precision_prior`` ridge,
+    and under ``"full"`` and ``"diag"`` a stabilized prior in its place
+    (*The update*).
 
     **The clock.** ``Pi`` applies once per row whatever the clock between
     rows, so a weekend between two rows moves the chain one step. The counts
@@ -335,11 +421,13 @@ def hmm(
     nothing.
 
     **Limits.** A single extreme row can be captured by one state, moving its
-    mean far from the data. A state's running sums are weighted means, which
-    a row of zero responsibility leaves as they are, so a state that stops
-    winning never forgets, and the mixture is left short one state. To
-    guard against it, increase ``precision_prior``, give the states with
-    ``learn = False``, or clean the rows in the query before the bank.
+    mean far from the data. A state's means are weighted means, which a row
+    of zero responsibility leaves as they are, so a state that stops winning
+    keeps its mean, and its covariance broadens toward the prior as its
+    weight decays (under ``"tied"`` it keeps its spread too). To guard
+    against a captured state, raise ``prior_rows`` (``precision_prior``
+    under ``"tied"``), give the states with ``learn = False``, or clean the
+    rows in the query before the bank.
 
     **A regime in the covariance alone.** A regime that lives only in the
     covariance needs the covariances to start from. The default seeding is k-means over
@@ -348,7 +436,9 @@ def hmm(
     that stay in one of two zero-mean states, it puts 55% of the rows in the
     true state, the rows before seeding counted as right, and about half of
     the rows after seeding. The same filter given the true ``covs`` put 98%
-    there, and 95% when it went on learning (`docs/REGIMES.md
+    there, without learning and when it went on learning alike: each given
+    state forgets toward the covariance it was given, so a state that wins
+    no rows goes on reading its own regime (`docs/REGIMES.md
     <https://github.com/rheon-dev/rheon/blob/main/docs/REGIMES.md>`_
     §1). Pass ``means`` and ``covs``, or a feature in which the regime is a
     shift in location.
@@ -368,6 +458,7 @@ def hmm(
         "seed": seed,
         "exog_tvtp": exog_tvtp,
         "tvtp_coef": tvtp_coef,
+        "prior_rows": prior_rows,
     }
     mirror = _mirror_target(name, "hmm", features, common, "its hidden states are over")
     targets = [exog_tvtp] if exog_tvtp is not None else mirror

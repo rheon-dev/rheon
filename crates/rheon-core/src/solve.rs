@@ -146,6 +146,95 @@ fn factorize_ridged_into(
     None
 }
 
+/// [`factorize_ridged_into`] of `m·C + diag(add)`, `C` its lower triangle
+/// packed row by row: the matrix a state reads under stabilized forgetting
+/// ([`crate::hmm`]), its data's co-moments shrunk toward a diagonal prior.
+/// Each rung's entries are `m·c_ij` below the diagonal and `(m·c_ii +
+/// add_i) + jitter` on it, written straight into `l`.
+fn factorize_shrunk_into(
+    c: &[f64],
+    m: f64,
+    add: &[f64],
+    k: usize,
+    l: &mut Mat<f64>,
+    work: &mut CholWork,
+) -> Option<(u32, f64)> {
+    debug_assert_eq!(c.len(), crate::ewcov::row_at(k));
+    debug_assert_eq!(add.len(), k);
+    let diag = |i: usize| m * c[crate::ewcov::row_at(i) + i] + add[i];
+    let trace: f64 = (0..k).map(diag).sum();
+    let base = if trace > 0.0 { trace / k as f64 } else { 1.0 };
+    let threads = crate::pieces::degree();
+    if !(l.nrows() == k && l.ncols() == k) {
+        *l = Mat::zeros(k, k);
+    }
+    for (attempts, &eps) in JITTER.iter().enumerate() {
+        let jitter = base * eps;
+        for j in 0..k {
+            let col = l.col_as_slice_mut(j);
+            let (above, rest) = col.split_at_mut(j);
+            above.fill(0.0);
+            rest[0] = diag(j) + jitter;
+            let mut at = crate::ewcov::row_at(j + 1) + j;
+            for (i, v) in (j + 1..).zip(&mut rest[1..]) {
+                *v = m * c[at];
+                at += i + 1;
+            }
+        }
+        if cholesky_in_place(l.as_mut(), threads, (LEAF, TILE), Some(&mut *work)).is_ok() {
+            clear_upper(l);
+            return Some((attempts as u32, jitter));
+        }
+    }
+    None
+}
+
+/// [`factorize_shrunk_into`] toward a full matrix: `m·C + R·G·R`, `R =
+/// diag(r)`, with `C` and `G` each a lower triangle packed row by row. The
+/// matrix a state reads under stabilized forgetting toward a prior of its
+/// own shape `G` ([`crate::hmm`]): each rung's entries are `m·c_ij +
+/// (r_i·r_j)·g_ij`, the jitter added to the diagonal's last.
+fn factorize_shrunk_toward_into(
+    c: &[f64],
+    m: f64,
+    r: &[f64],
+    g: &[f64],
+    k: usize,
+    l: &mut Mat<f64>,
+    work: &mut CholWork,
+) -> Option<(u32, f64)> {
+    debug_assert_eq!(c.len(), crate::ewcov::row_at(k));
+    debug_assert_eq!(g.len(), crate::ewcov::row_at(k));
+    debug_assert_eq!(r.len(), k);
+    let entry = |i: usize, j: usize| {
+        let at = crate::ewcov::row_at(i) + j;
+        m * c[at] + (r[i] * r[j]) * g[at]
+    };
+    let trace: f64 = (0..k).map(|i| entry(i, i)).sum();
+    let base = if trace > 0.0 { trace / k as f64 } else { 1.0 };
+    let threads = crate::pieces::degree();
+    if !(l.nrows() == k && l.ncols() == k) {
+        *l = Mat::zeros(k, k);
+    }
+    for (attempts, &eps) in JITTER.iter().enumerate() {
+        let jitter = base * eps;
+        for j in 0..k {
+            let col = l.col_as_slice_mut(j);
+            let (above, rest) = col.split_at_mut(j);
+            above.fill(0.0);
+            rest[0] = entry(j, j) + jitter;
+            for (i, v) in (j + 1..).zip(&mut rest[1..]) {
+                *v = entry(i, j);
+            }
+        }
+        if cholesky_in_place(l.as_mut(), threads, (LEAF, TILE), Some(&mut *work)).is_ok() {
+            clear_upper(l);
+            return Some((attempts as u32, jitter));
+        }
+    }
+    None
+}
+
 /// The ladder [`factorize`] and [`factorize_into`] climb: the attempts so
 /// far and the jitter `eps · trace/k` (`trace/k` read as 1 where the trace
 /// is not positive) for each `eps` in [`JITTER`] in turn; each caller
@@ -257,6 +346,163 @@ impl FactorWork {
     pub(crate) fn factor_ridged(&mut self, c: &[f64], ridge: f64, k: usize) -> Option<SpdFactor> {
         let spare = self.spare(k);
         SpdFactor::of_ridged_in(c, ridge, k, spare, &mut self.chol)
+    }
+
+    /// [`Self::factor`] of `m·C + diag(add)`, `C` given as its lower
+    /// triangle packed row by row ([`factorize_shrunk_into`]).
+    #[inline(never)]
+    pub(crate) fn factor_shrunk(
+        &mut self,
+        c: &[f64],
+        m: f64,
+        add: &[f64],
+        k: usize,
+    ) -> Option<SpdFactor> {
+        let spare = self
+            .spares
+            .iter()
+            .position(|f| f.order() == k)
+            .map(|i| self.spares.swap_remove(i));
+        let mut l = spare.map_or_else(Mat::new, |f| f.l);
+        let (attempts, jitter) = factorize_shrunk_into(c, m, add, k, &mut l, &mut self.chol)?;
+        Some(SpdFactor {
+            l,
+            log_det: OnceLock::new(),
+            attempts,
+            jitter,
+            moves: 0,
+        })
+    }
+
+    /// [`Self::factor`] of `m·C + R·G·R`, `R = diag(r)`, `C` and `G` each a
+    /// lower triangle packed row by row ([`factorize_shrunk_toward_into`]).
+    #[inline(never)]
+    pub(crate) fn factor_shrunk_toward(
+        &mut self,
+        c: &[f64],
+        m: f64,
+        r: &[f64],
+        g: &[f64],
+        k: usize,
+    ) -> Option<SpdFactor> {
+        let mut l = self.spare(k).map_or_else(Mat::new, |f| f.l);
+        let (attempts, jitter) =
+            factorize_shrunk_toward_into(c, m, r, g, k, &mut l, &mut self.chol)?;
+        Some(SpdFactor {
+            l,
+            log_det: OnceLock::new(),
+            attempts,
+            jitter,
+            moves: 0,
+        })
+    }
+
+    /// `f` made the factor of its matrix with `diag(add)` added,
+    /// `L' L'ᵀ = L Lᵀ + diag(add)`: the lower triangle of `L Lᵀ` laid out
+    /// column by column (`k³/6` products, column `j`'s a run of
+    /// `out[j.., j] += L[j, t]·L[j.., t]` over contiguous entries for each
+    /// `t <= j`), the diagonal added, and that factorized in place (`k³/6`
+    /// more), in a
+    /// kept matrix that then changes places with `f`'s. A diagonal added
+    /// coordinate by coordinate, a rank-one update along each axis, costs
+    /// `2(k − j)²` products each, `2k³/3` in all, in rotations that do not
+    /// vectorize. `false`, with `f` unmoved, where the sum has a pivot that
+    /// is not a positive finite number (an `add` below what the matrix
+    /// holds on that coordinate), or an entry that is not finite.
+    #[inline(never)]
+    pub(crate) fn refactor_shifted(&mut self, f: &mut SpdFactor, add: &[f64]) -> bool {
+        if add.len() != f.order() {
+            return false;
+        }
+        self.refactor_with(f, |j, dst| dst[0] += add[j])
+    }
+
+    /// [`Self::refactor_shifted`] by a full symmetric matrix, `L' L'ᵀ =
+    /// L Lᵀ + A`, `A` given as its lower triangle packed row by row: the
+    /// same `k³/6` products and factorization, with `k²/2` sums for `A`
+    /// where the diagonal took `k`. `false`, with `f` unmoved, as there.
+    #[inline(never)]
+    pub(crate) fn refactor_shifted_full(&mut self, f: &mut SpdFactor, add: &[f64]) -> bool {
+        if add.len() != crate::ewcov::row_at(f.order()) {
+            return false;
+        }
+        self.refactor_with(f, |j, dst| {
+            // Entry `(i, j)` is at `row_at(i) + j`; row `i + 1` starts
+            // `i + 1` after row `i`.
+            let mut at = crate::ewcov::row_at(j) + j;
+            for (i, v) in (j..).zip(dst.iter_mut()) {
+                *v += add[at];
+                at += i + 1;
+            }
+        })
+    }
+
+    /// The body of [`Self::refactor_shifted`]: column `j` of `L Lᵀ` from
+    /// its diagonal down, then `shift(j, column)`, then the factorization.
+    #[inline(always)]
+    fn refactor_with(&mut self, f: &mut SpdFactor, shift: impl Fn(usize, &mut [f64])) -> bool {
+        let k = f.order();
+        let mut out = self.spare(k).map_or_else(Mat::new, |s| s.l);
+        if !(out.nrows() == k && out.ncols() == k) {
+            out = Mat::zeros(k, k);
+        }
+        // Column `j` of the sum from its diagonal down: `L`'s columns `t`
+        // up to `j`, each from row `j` down, by row `j`'s entry there; four
+        // columns a pass, so a pass over the column's short run does four
+        // columns' work. The products are added in the order of `t`, one at
+        // a time, and the diagonal's shift last.
+        for j in 0..k {
+            let n = k - j;
+            let col = out.col_as_slice_mut(j);
+            col.fill(0.0);
+            let dst = &mut col[j..][..n];
+            let mut t = 0;
+            while t + 4 <= j + 1 {
+                let c = [
+                    f.l[(j, t)],
+                    f.l[(j, t + 1)],
+                    f.l[(j, t + 2)],
+                    f.l[(j, t + 3)],
+                ];
+                let a0 = &f.l.col_as_slice(t)[j..][..n];
+                let a1 = &f.l.col_as_slice(t + 1)[j..][..n];
+                let a2 = &f.l.col_as_slice(t + 2)[j..][..n];
+                let a3 = &f.l.col_as_slice(t + 3)[j..][..n];
+                for i in 0..n {
+                    dst[i] = dst[i] + c[0] * a0[i] + c[1] * a1[i] + c[2] * a2[i] + c[3] * a3[i];
+                }
+                t += 4;
+            }
+            while t <= j {
+                let c = f.l[(j, t)];
+                let a = &f.l.col_as_slice(t)[j..][..n];
+                for i in 0..n {
+                    dst[i] += c * a[i];
+                }
+                t += 1;
+            }
+            shift(j, dst);
+        }
+        let threads = crate::pieces::degree();
+        let done =
+            cholesky_in_place(out.as_mut(), threads, (LEAF, TILE), Some(&mut self.chol)).is_ok();
+        let mut made = SpdFactor {
+            l: out,
+            log_det: OnceLock::new(),
+            attempts: 0,
+            jitter: 0.0,
+            moves: 0,
+        };
+        let ok = done && {
+            clear_upper(&mut made.l);
+            made.is_a_factor()
+        };
+        if ok {
+            std::mem::swap(&mut f.l, &mut made.l);
+            f.log_det = OnceLock::new();
+        }
+        self.spares.push(made);
+        ok
     }
 
     /// A copy of `f`, written over a kept factor of its order where there
@@ -1423,6 +1669,62 @@ impl SpdFactor {
         self.is_a_factor()
     }
 
+    /// [`Self::add_outer_in_place`], its bits, with the check that it left
+    /// a factor made as the rotations run rather than by reading `L` again:
+    /// each new pivot `√(d² + p²)` positive and finite, and each rotated
+    /// entry finite (summed as `l·0`, which is not a number exactly where
+    /// `l` is not finite). The pass that read `L` again was a fifth of a
+    /// stabilized `hmm` row at 13 features.
+    pub(crate) fn add_outer_in_place_fused(&mut self, v: &mut [f64]) -> bool {
+        let k = self.l.nrows();
+        if v.len() != k || !v.iter().all(|x| x.is_finite()) {
+            return false;
+        }
+        let (mut ok, mut chk) = (true, 0.0);
+        for j in 0..k {
+            let Some(col) = self.l.col_mut(j).try_as_col_major_mut() else {
+                return false;
+            };
+            let col = &mut col.as_slice_mut()[j..];
+            let (d, p) = (col[0], v[j]);
+            let big = d.abs().max(p.abs());
+            let (dd, pp) = (d / big, p / big);
+            let r = big * (dd * dd + pp * pp).sqrt();
+            ok &= r > 0.0 && r.is_finite();
+            let (cos, sin) = (d / r, p / r);
+            col[0] = r;
+            for (li, xi) in col[1..].iter_mut().zip(&mut v[j + 1..]) {
+                let l = *li;
+                *li = cos * l + sin * *xi;
+                *xi = cos * *xi - sin * l;
+                chk += *li * 0.0;
+            }
+        }
+        self.log_det = OnceLock::new();
+        ok && chk == 0.0
+    }
+
+    /// The factor of `diag(a)`, `√aᵢ` on the diagonal; `None` unless every
+    /// `aᵢ` is positive and finite.
+    pub(crate) fn diagonal(a: &[f64]) -> Option<Self> {
+        if !a.iter().all(|&x| x > 0.0 && x.is_finite()) {
+            return None;
+        }
+        let k = a.len();
+        let mut l = Mat::zeros(k, k);
+        for (i, &x) in a.iter().enumerate() {
+            l[(i, i)] = x.sqrt();
+        }
+        let f = Self {
+            l,
+            log_det: OnceLock::new(),
+            attempts: 0,
+            jitter: 0.0,
+            moves: 0,
+        };
+        f.is_a_factor().then_some(f)
+    }
+
     /// Every entry of `L` multiplied by `2⁻ᵉ`, `1 <= e <= 1022`: `L Lᵀ`
     /// scaled by `4⁻ᵉ`, exactly, short of an entry that leaves the normal
     /// range.
@@ -2072,6 +2374,230 @@ mod small_tests;
 mod tests {
     use super::*;
     use crate::oracle::CanonBits;
+
+    /// [`FactorWork::refactor_shifted`] leaves the factor of the matrix
+    /// with the diagonal added, of either sign: `L Lᵀ` within a few units
+    /// of rounding of it (carried in 512 bits, `crate::oracle::exact`), its
+    /// quadratic form and `ln det` faer's LU's of the sum (`crate::oracle`),
+    /// and where every step is up, the factor that one rank-one update along
+    /// each axis reaches ([`SpdFactor::add_outer_in_place`]), to rounding. Below 64 features and above, where the factorization goes
+    /// by blocks. A diagonal that takes more than a coordinate holds is
+    /// refused and moves nothing, and so is one of the wrong length.
+    #[test]
+    fn a_diagonal_added_by_one_factorization() {
+        let mut s = 29u64;
+        let mut next = || {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((s >> 11) as f64 / (1u64 << 53) as f64) - 0.5
+        };
+        let mut work = FactorWork::default();
+        for k in [1, 4, 13, 32, 70] {
+            let b: Vec<f64> = (0..k * k).map(|_| next()).collect();
+            let mut a = vec![0.0; k * k];
+            for i in 0..k {
+                for j in 0..k {
+                    a[i * k + j] = (0..k).map(|t| b[i * k + t] * b[j * k + t]).sum::<f64>()
+                        + if i == j { 0.5 } else { 0.0 };
+                }
+            }
+            let f0 = SpdFactor::of(&a, k).unwrap().into_state();
+            let llt = |f: &SpdFactor| {
+                let l = f.lower_rows();
+                let mut m = vec![0.0; k * k];
+                for r in 0..k {
+                    for c in 0..k {
+                        m[r * k + c] = (0..k).map(|t| l[r * k + t] * l[c * k + t]).sum();
+                    }
+                }
+                m
+            };
+            let held = llt(&f0);
+            for sign in [1.0, -1.0] {
+                // Up by as much as 2 a coordinate, or down by under the 0.5
+                // every coordinate holds beside a positive semidefinite part.
+                let add: Vec<f64> = (0..k)
+                    .map(|_| {
+                        let u = next() + 0.5;
+                        if sign > 0.0 { 2.0 * u } else { -0.45 * u }
+                    })
+                    .collect();
+                let mut f = f0.clone();
+                // Twice, so the second writes over the first's kept matrix.
+                for round in 0..2 {
+                    f = f0.clone();
+                    assert!(work.refactor_shifted(&mut f, &add), "{k} {sign} {round}");
+                }
+                let mut want = held.clone();
+                for (j, q) in add.iter().enumerate() {
+                    want[j * k + j] += q;
+                }
+                let off =
+                    crate::oracle::exact::Recursion::of(&want).off_factor(&f.lower_rows(), 1.0);
+                assert!(off < 64.0, "{k} {sign}: {off} units of rounding off");
+                let delta: Vec<f64> = (0..k).map(|_| next()).collect();
+                let (q, ld) = (
+                    crate::oracle::quad_form(&want, &delta),
+                    crate::oracle::log_det(&want),
+                );
+                let got = f.quad_form(&delta, &mut QuadWork::default());
+                assert!((got - q).abs() <= 1e-11 * q, "{k} {sign}: {got} {q}");
+                assert!((f.log_det() - ld).abs() <= 1e-11 * k as f64, "{k} {sign}");
+                assert_eq!((f.attempts(), f.jitter(), f.moves()), (0, 0.0, 0));
+                if sign > 0.0 {
+                    let mut axis = f0.clone();
+                    for (j, q) in add.iter().enumerate() {
+                        let mut e = vec![0.0; k];
+                        e[j] = q.sqrt();
+                        assert!(axis.add_outer_in_place(&mut e));
+                    }
+                    let (x, y) = (axis.lower_rows(), f.lower_rows());
+                    let apart = x
+                        .iter()
+                        .zip(&y)
+                        .map(|(p, q)| (p - q).abs())
+                        .fold(0.0, f64::max);
+                    assert!(apart < 1e-12 * (k as f64), "{k}: {apart:e}");
+                }
+            }
+            let mut f = f0.clone();
+            let mut too_much = vec![0.0; k];
+            too_much[k / 2] = -1.01 * a[(k / 2) * k + k / 2];
+            assert!(!work.refactor_shifted(&mut f, &too_much), "{k}");
+            assert_eq!(f, f0, "{k}: refused before moving");
+            assert!(!work.refactor_shifted(&mut f, &vec![0.0; k + 1]), "{k}");
+            let mut nan = vec![0.0; k];
+            nan[0] = f64::NAN;
+            assert!(!work.refactor_shifted(&mut f, &nan), "{k}");
+            assert_eq!(f, f0, "{k}: a NaN refused before moving");
+        }
+    }
+
+    /// [`FactorWork::refactor_shifted_full`] of a factor and a symmetric
+    /// matrix given as its packed lower triangle is the factor of the sum:
+    /// within 64 units of rounding of it (`crate::oracle::exact`'s 512-bit
+    /// matrix), its quadratic form and `ln det` faer's eigensolver's of the
+    /// sum (`crate::oracle`). A matrix that is a diagonal moves the factor
+    /// as [`FactorWork::refactor_shifted`] moves it, to the bit. Below 64
+    /// features and above. A sum that is not positive definite is refused
+    /// and moves nothing, and so is a triangle of the wrong length.
+    /// [`FactorWork::factor_shrunk_toward`] of `m·C + R·G·R` is
+    /// [`SpdFactor::of`] of that square, to the bit.
+    #[test]
+    fn a_matrix_added_by_one_factorization() {
+        let mut s = 31u64;
+        let mut next = || {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((s >> 11) as f64 / (1u64 << 53) as f64) - 0.5
+        };
+        let mut work = FactorWork::default();
+        for k in [1, 4, 13, 32, 70] {
+            let mut gram = |ridge: f64| {
+                let b: Vec<f64> = (0..k * k).map(|_| next()).collect();
+                let mut a = vec![0.0; k * k];
+                for i in 0..k {
+                    for j in 0..k {
+                        a[i * k + j] = (0..k).map(|t| b[i * k + t] * b[j * k + t]).sum::<f64>()
+                            + if i == j { ridge } else { 0.0 };
+                    }
+                }
+                a
+            };
+            let (a, g) = (gram(0.5), gram(0.25));
+            let pack = |m: &[f64], scale: f64| -> Vec<f64> {
+                (0..k)
+                    .flat_map(|i| (0..=i).map(move |j| (i, j)))
+                    .map(|(i, j)| scale * m[i * k + j])
+                    .collect()
+            };
+            let f0 = SpdFactor::of(&a, k).unwrap().into_state();
+            let l = f0.lower_rows();
+            let mut held = vec![0.0; k * k];
+            for r in 0..k {
+                for c in 0..k {
+                    held[r * k + c] = (0..k).map(|t| l[r * k + t] * l[c * k + t]).sum();
+                }
+            }
+            // Up by a positive definite matrix, and down by a part of what
+            // the factor holds.
+            for (what, add) in [("up", pack(&g, 1.0)), ("down", pack(&a, -0.4))] {
+                let mut f = f0.clone();
+                for round in 0..2 {
+                    f = f0.clone();
+                    assert!(
+                        work.refactor_shifted_full(&mut f, &add),
+                        "{k} {what} {round}"
+                    );
+                }
+                let mut want = held.clone();
+                let mut at = 0;
+                for i in 0..k {
+                    for j in 0..=i {
+                        want[i * k + j] += add[at];
+                        if i != j {
+                            want[j * k + i] += add[at];
+                        }
+                        at += 1;
+                    }
+                }
+                let off =
+                    crate::oracle::exact::Recursion::of(&want).off_factor(&f.lower_rows(), 1.0);
+                assert!(off < 64.0, "{k} {what}: {off} units of rounding off");
+                let delta: Vec<f64> = (0..k).map(|_| next()).collect();
+                let (q, ld) = (
+                    crate::oracle::quad_form(&want, &delta),
+                    crate::oracle::log_det(&want),
+                );
+                let got = f.quad_form(&delta, &mut QuadWork::default());
+                assert!((got - q).abs() <= 1e-10 * q, "{k} {what}: {got} {q}");
+                assert!((f.log_det() - ld).abs() <= 1e-11 * k as f64, "{k} {what}");
+                assert_eq!((f.attempts(), f.jitter(), f.moves()), (0, 0.0, 0));
+            }
+            // A diagonal, as the diagonal's own step adds it.
+            let diag: Vec<f64> = (0..k).map(|_| next() + 0.75).collect();
+            let mut full = vec![0.0; crate::ewcov::row_at(k)];
+            for (i, q) in diag.iter().enumerate() {
+                full[crate::ewcov::row_at(i) + i] = *q;
+            }
+            let (mut x, mut y) = (f0.clone(), f0.clone());
+            assert!(work.refactor_shifted(&mut x, &diag));
+            assert!(work.refactor_shifted_full(&mut y, &full));
+            assert_eq!(x, y, "{k}");
+            // Refused, the factor unmoved.
+            let mut f = f0.clone();
+            assert!(!work.refactor_shifted_full(&mut f, &pack(&a, -1.01)), "{k}");
+            assert_eq!(f, f0, "{k}: refused before moving");
+            let long = vec![0.0; crate::ewcov::row_at(k) + 1];
+            assert!(
+                !work.refactor_shifted_full(&mut f, &long),
+                "{k}: a wrong length"
+            );
+            let mut nan = pack(&g, 1.0);
+            nan[0] = f64::NAN;
+            assert!(!work.refactor_shifted_full(&mut f, &nan), "{k}");
+            assert_eq!(f, f0, "{k}: a NaN refused before moving");
+            // `m·C + R·G·R`, the square `SpdFactor::of` reads.
+            let (c, gp) = (pack(&a, 1.0), pack(&g, 1.0));
+            let r: Vec<f64> = (0..k).map(|_| next() + 1.0).collect();
+            let m = 0.375;
+            let mut square = vec![0.0; k * k];
+            for i in 0..k {
+                for j in 0..=i {
+                    square[i * k + j] = m * a[i * k + j] + (r[i] * r[j]) * g[i * k + j];
+                }
+            }
+            let want = SpdFactor::of(&square, k).unwrap();
+            for _ in 0..2 {
+                let got = work.factor_shrunk_toward(&c, m, &r, &gp, k).unwrap();
+                assert_eq!(got, want, "{k}");
+                assert_eq!((got.attempts(), got.jitter()), (0, 0.0));
+                work.give(got);
+            }
+        }
+    }
 
     /// [`SpdFactor::solve_into`] is [`SpdFactor::solve`] to the bit, in one
     /// kept matrix and one kept output across shapes it returns to, and the

@@ -53,7 +53,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::EwCov;
-use crate::solve::{QuadWork, SpdFactor};
+use crate::solve::{FactorWork, QuadWork, SpdFactor};
 
 /// The least `σ` a state keeps: below it, `L` is halved as many times as
 /// it takes and `σ` multiplied by 4 as many.
@@ -287,9 +287,12 @@ impl EwFactor {
             let mut sigma = self.sigma * a;
             if sigma.is_nan() || sigma < f64::MIN_POSITIVE {
                 // `a` past the normal range (a gap of over a thousand
-                // half-lives): what it keeps of `M` beyond the ridge is under
-                // `2⁻¹⁰²⁰` of it, so `M` starts at the ridge it has reached,
-                // `σ = 1`, and the row is added to that.
+                // half-lives): what it keeps of `M` is under `2⁻¹⁰²⁰` of it,
+                // and so is all of `M'`, which no double holds to 53 bits
+                // (the co-moments' `a·C` is rounded to multiples of
+                // `2⁻¹⁰⁷⁴`). `M` starts at the ridge it has reached, `σ = 1`,
+                // and the row is added to that; the next row whose `a` is
+                // normal outweighs what either form kept by `2¹⁰²⁰`.
                 self.restart_at_ridge(prior);
                 sigma = 1.0;
             }
@@ -314,6 +317,267 @@ impl EwFactor {
         // `λW + 0` is `λW`, and `a = λW / λW` is 1: the step moves neither
         // `M` nor the ridge's scale, and the decay alone ages `W` alike.
         self.w_sum *= lam;
+    }
+
+    /// The factor form of `cov` under stabilized forgetting
+    /// ([`super::stabilized`]), whose matrix `(W·C + F)/(W + P₀)` factors as
+    /// `l`: the same weight and means, `σ = 1`.
+    pub(crate) fn take_up_stabilized(cov: &EwCov, l: SpdFactor) -> Self {
+        let mut f = Self::take_up(cov, l);
+        f.precision_scale = 1.0;
+        f
+    }
+
+    /// A factor form held under the ridge, as a build before stabilized
+    /// forgetting left it, read back as its data's co-moments:
+    /// `C = σ·L Lᵀ − ridge·I`, its lower triangle packed row by row as an
+    /// accumulator packs it ([`crate::LowerTriangle::packed`]).
+    pub(crate) fn comoments_under(&self, ridge: f64) -> Vec<f64> {
+        let d = self.order();
+        let m = self.matrix();
+        let mut c = Vec::with_capacity(d * (d + 1) / 2);
+        for i in 0..d {
+            for j in 0..=i {
+                c.push(m[i * d + j] - if i == j { ridge } else { 0.0 });
+            }
+        }
+        c
+    }
+
+    /// The state taken up again under stabilized forgetting from its
+    /// co-moments `c` ([`Self::comoments_under`]): `m·C + diag(add)`
+    /// factorized, with `m = W/(W + P₀)` and `addᵢ = P₀ψᵢ/(W + P₀)`, the
+    /// weight and means as they were, `σ = 1`. Where that matrix has no
+    /// factor the state starts at its prior, `diag(add)`.
+    pub(crate) fn retake_stabilized(
+        &mut self,
+        c: &[f64],
+        m: f64,
+        add: &[f64],
+        work: &mut FactorWork,
+    ) {
+        match work.factor_shrunk(c, m, add, self.order()) {
+            Some(l) => {
+                self.l = l.into_state();
+                self.sigma = 1.0;
+            }
+            None => self.restart_at_prior(add, 1.0, None),
+        }
+        self.precision_scale = 1.0;
+    }
+
+    /// [`Self::retake_stabilized`] under a shape `g` (a lower triangle
+    /// packed row by row): `m·C + R·G·R` factorized, `R = diag(r)`, `rᵢ =
+    /// √(P₀ψᵢ/(W + P₀))`.
+    pub(crate) fn retake_stabilized_shaped(
+        &mut self,
+        c: &[f64],
+        m: f64,
+        r: &[f64],
+        g: &[f64],
+        work: &mut FactorWork,
+    ) {
+        match work.factor_shrunk_toward(c, m, r, g, self.order()) {
+            Some(l) => {
+                self.l = l.into_state();
+                self.sigma = 1.0;
+            }
+            None => {
+                let prior: Vec<f64> = r.iter().map(|r| r * r).collect();
+                self.restart_at_prior(&prior, 1.0, Some(g));
+            }
+        }
+        self.precision_scale = 1.0;
+    }
+
+    /// Whether [`Self::age_stabilized`] at `lam` leaves `σ` past the
+    /// normal range, where the state starts again at its prior.
+    pub(crate) fn ages_out(&self, lam: f64, prior_rows: f64) -> bool {
+        let alpha = lam * (self.w_sum + prior_rows) / (lam * self.w_sum + prior_rows);
+        let sigma = self.sigma * alpha;
+        sigma.is_nan() || sigma < f64::MIN_POSITIVE
+    }
+
+    /// A row's decay under stabilized forgetting: the data's weight decays,
+    /// `W ← λW`, the means stay, and the matrix the state reads,
+    /// `(W·M + F)/(W + P₀)`, holds `λ(W·M + F)` over the new total, so
+    /// `σ ← α·σ` with `α = λ(W + P₀)/(λW + P₀)`. The factored prior `F`
+    /// decays with it; the caller moves it ([`Self::shift_prior`]). Where
+    /// `α·σ` leaves the normal range ([`Self::ages_out`]) what is kept is
+    /// below `2⁻¹⁰²⁰` of the prior, and the state starts again at the prior
+    /// `P₀·diag(psi)` (under a `shape`, [`Self::restart_at_prior`]'s):
+    /// `true` where it did.
+    pub(crate) fn age_stabilized(
+        &mut self,
+        lam: f64,
+        prior_rows: f64,
+        psi: &[f64],
+        shape: Option<&[f64]>,
+    ) -> bool {
+        let t = self.w_sum + prior_rows;
+        // [`EwCov`]'s decay of the weight alone: `λW + 0`.
+        self.w_sum *= lam;
+        let t_new = self.w_sum + prior_rows;
+        let alpha = lam * t / t_new;
+        if alpha == 1.0 {
+            return false;
+        }
+        let sigma = self.sigma * alpha;
+        if sigma.is_nan() || sigma < f64::MIN_POSITIVE {
+            self.restart_at_prior(psi, prior_rows / t_new, shape);
+            true
+        } else {
+            self.sigma = sigma;
+            self.lift_sigma();
+            false
+        }
+    }
+
+    /// `diag(q)` of prior, in the units of `W·M + F`, added to the matrix
+    /// at once (each `qⱼ` of either sign): `L Lᵀ + diag(q)/(Tσ)` factorized
+    /// afresh ([`FactorWork::refactor_shifted`]), `σ` as it was. `false`,
+    /// the factor unmoved, where that left none. `add` is working space.
+    pub(crate) fn shift_prior(
+        &mut self,
+        q: &[f64],
+        prior_rows: f64,
+        add: &mut Vec<f64>,
+        work: &mut FactorWork,
+    ) -> bool {
+        let c = (self.w_sum + prior_rows) * self.sigma;
+        add.clear();
+        add.extend(q.iter().map(|q| q / c));
+        work.refactor_shifted(&mut self.l, add)
+    }
+
+    /// [`Self::shift_prior`] under a shape `g` (a lower triangle packed row
+    /// by row): the factored prior moved from `diag(old)·G·diag(old)` to
+    /// `diag(new)·G·diag(new)`, the difference over `Tσ` added to `L Lᵀ`
+    /// and that factorized afresh ([`FactorWork::refactor_shifted_full`]).
+    pub(crate) fn shift_prior_shaped(
+        &mut self,
+        (old, new): (&[f64], &[f64]),
+        g: &[f64],
+        prior_rows: f64,
+        add: &mut Vec<f64>,
+        work: &mut FactorWork,
+    ) -> bool {
+        let c = (self.w_sum + prior_rows) * self.sigma;
+        add.clear();
+        add.resize(g.len(), 0.0);
+        let mut at = 0;
+        for i in 0..old.len() {
+            let (ni, oi) = (new[i] / c, old[i] / c);
+            let row = add[at..=at + i].iter_mut().zip(&g[at..=at + i]);
+            for ((a, &gij), (&nj, &oj)) in row.zip(new.iter().zip(old)) {
+                *a = gij * (ni * nj - oi * oj);
+            }
+            at += i + 1;
+        }
+        work.refactor_shifted_full(&mut self.l, add)
+    }
+
+    /// The row `x` learned at weight `w` under stabilized forgetting, after
+    /// its decay ([`Self::age_stabilized`]): the accumulator's step at
+    /// `λ = 1`, `W' = W + w`, `a = W/W'`, `b = w/W'`, means as
+    /// [`EwCov::update`] moves them, and
+    ///
+    /// ```text
+    /// W'·M' + F = W·M + F + (W·w/W')·δδᵀ
+    /// σ' = σ·(W + P₀)/(W' + P₀)
+    /// L' L'ᵀ = L Lᵀ + (W·w/W')/((W' + P₀)·σ')·δδᵀ
+    /// ```
+    ///
+    /// `false` where the rotations left no factor; the state then starts
+    /// again at its prior as factored, `diag(held)` (under a `shape`,
+    /// [`Self::restart_at_prior`]'s), and the owner counts it. `v` is
+    /// working space.
+    pub(crate) fn update_stabilized(
+        &mut self,
+        x: &[f64],
+        w: f64,
+        prior_rows: f64,
+        (held, shape): (&[f64], Option<&[f64]>),
+        v: &mut Vec<f64>,
+    ) -> bool {
+        debug_assert_eq!(x.len(), self.order());
+        if w.is_nan() || w <= 0.0 {
+            return true;
+        }
+        let w_old = self.w_sum;
+        let w_new = w_old + w;
+        let (a, b) = (w_old / w_new, w / w_new);
+        let c = a * w;
+        v.clear();
+        v.extend(
+            x.iter()
+                .zip(&self.m)
+                .zip(&self.m_lo)
+                .map(|((&xi, &mi), &li)| crate::comp::dev(xi, mi, li)),
+        );
+        if b > 0.0 {
+            for ((mi, lo), &di) in self.m.iter_mut().zip(self.m_lo.iter_mut()).zip(v.iter()) {
+                crate::comp::add(mi, lo, b * di);
+            }
+        }
+        self.w_sum = w_new;
+        let t_new = w_new + prior_rows;
+        let alpha = (w_old + prior_rows) / t_new;
+        let mut sigma = self.sigma * alpha;
+        if sigma.is_nan() || sigma < f64::MIN_POSITIVE {
+            // A weight past the normal range of the rest: what the state
+            // held is below `2⁻¹⁰²⁰` of the row's share.
+            self.restart_at_prior(held, 1.0 / t_new, shape);
+            sigma = 1.0;
+        }
+        // `W·w/W'`, the step's weight in `W'·M' + F`.
+        if c == 0.0 {
+            self.sigma = sigma;
+            self.lift_sigma();
+            return true;
+        }
+        let root = (c / (t_new * sigma)).sqrt();
+        v.iter_mut().for_each(|x| *x *= root);
+        if self.l.add_outer_in_place_fused(v) {
+            self.sigma = sigma;
+            self.lift_sigma();
+            true
+        } else {
+            self.restart_at_prior(held, 1.0 / t_new, shape);
+            false
+        }
+    }
+
+    /// The matrix started again at `scale·diag(prior)`, `σ = 1`: the prior
+    /// alone, the data's share gone. Under a `shape` `g` (a lower triangle
+    /// packed row by row) at `scale·R·G·R`, `R = diag(√prior)`. A prior
+    /// that is no positive finite diagonal, or has no factor under its
+    /// shape, leaves `M` as it is.
+    pub(crate) fn restart_at_prior(&mut self, prior: &[f64], scale: f64, shape: Option<&[f64]>) {
+        let d: Vec<f64> = prior.iter().map(|p| p * scale).collect();
+        let l = match shape {
+            None => SpdFactor::diagonal(&d),
+            Some(g) => {
+                let k = d.len();
+                let r: Vec<f64> = d.iter().map(|v| v.sqrt()).collect();
+                let mut a = vec![0.0; k * k];
+                for i in 0..k {
+                    for j in 0..=i {
+                        a[i * k + j] = (r[i] * r[j]) * g[crate::ewcov::row_at(i) + j];
+                    }
+                }
+                d.iter()
+                    .all(|&x| x > 0.0 && x.is_finite())
+                    .then(|| SpdFactor::of(&a, k))
+                    .flatten()
+                    .filter(|f| f.attempts() == 0)
+                    .map(SpdFactor::into_state)
+            }
+        };
+        if let Some(l) = l {
+            self.l = l;
+            self.sigma = 1.0;
+        }
     }
 
     /// `M = ridge·I`, `σ = 1`: whether `ridge` is a positive finite number,
@@ -404,16 +668,25 @@ mod tests {
             let l = SpdFactor::of(&ridged(&cov, prior), d).unwrap();
             let mut f = EwFactor::take_up(&cov, l);
             let mut v = Vec::new();
-            let (mut lifted, mut restarted) = (0, 0);
+            let (mut lifted, mut restarted, mut subnormals) = (0, 0, 0);
             for i in 0..3000 {
                 let x: Vec<f64> = (0..d)
                     .map(|j| {
                         lcg(&mut seed) * (1.0 + j as f64) + if i % 50 < 25 { 3.0 } else { 0.0 }
                     })
                     .collect();
+                // `2⁻¹⁰⁶⁰` written as its bits: `2f64.powi(-1060)` is folded
+                // to them by an optimized build, but a dev build calls
+                // compiler-rt's `__powidf2`, which forms `1/2¹⁰⁶⁰ = 1/∞ =
+                // 0`, so the case past the normal range ran in release alone
+                // (and failed there). Once only: at row 533 the ridge the
+                // state has reached, `r·s·a`, underflows to 0, where the
+                // accumulator keeps a ridge scale of 0 and the factor, which
+                // cannot start at a zero matrix, takes the ridge at scale 1
+                // (`restart_at_ridge`), so the two forms part.
                 let lam = match i % 400 {
                     7 => 1e-3,
-                    133 => 2f64.powi(-1060),
+                    133 if i == 133 => f64::from_bits(1 << 14),
                     271 => 0.0,
                     _ => 0.99,
                 };
@@ -423,6 +696,9 @@ mod tests {
                     6 => 30.0,
                     _ => 1.0,
                 };
+                let w_new = lam * cov.n_eff() + w;
+                let a = lam * cov.n_eff() / w_new;
+                let subnormal = a > 0.0 && a < f64::MIN_POSITIVE;
                 let before = f.sigma;
                 assert!(f.update(&x, lam, w, prior, &mut v));
                 cov.update(&x, lam, w);
@@ -441,12 +717,22 @@ mod tests {
                     cov.precision_scale().to_bits(),
                     "{d}, row {i}"
                 );
-                let off = apart(&f.matrix(), &ridged(&cov, prior));
-                assert!(off < 1e-13, "{d}, row {i}: σ L Lᵀ {off:e} of its size off");
+                // Past the normal range of `a` the whole matrix is under
+                // `2⁻¹⁰²⁰`: the accumulator's `a·C` is rounded to multiples of
+                // `2⁻¹⁰⁷⁴`, a part in `10⁷` of it, and the factor starts again
+                // at the ridge it has reached with the row, dropping `a·C`.
+                // Neither holds 53 bits of a subnormal matrix, so that row is
+                // not compared; the next one, whose `a` is normal, outweighs
+                // what either kept by `2¹⁰²⁰` and agrees again.
+                subnormals += usize::from(subnormal);
+                if !subnormal {
+                    let off = apart(&f.matrix(), &ridged(&cov, prior));
+                    assert!(off < 1e-13, "{d}, row {i}: σ L Lᵀ {off:e} of its size off");
+                }
             }
             assert!(
-                lifted > 10 && restarted > 0,
-                "{d}: {lifted} lifts, {restarted} restarts"
+                lifted > 10 && restarted > 0 && subnormals > 0,
+                "{d}: {lifted} lifts, {restarted} restarts, {subnormals} subnormal steps"
             );
         }
     }

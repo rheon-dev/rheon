@@ -701,6 +701,7 @@ CASES: list[Case] = [
             "warm_rows": 40,
             "init": "first",
             "seed": 3,
+            "prior_rows": 1.5,
         },
     ),
     Case(

@@ -1046,7 +1046,9 @@ pub enum ModelKind {
         #[serde(default)]
         covariance_type: Option<String>,
         /// Ridge on every state covariance; **required**, since a state's
-        /// centred co-moments start at zero.
+        /// centred co-moments start at zero. Under `full` and `diag` with
+        /// `learn` on the states forget toward a prior instead, and it is the
+        /// ridge only where every feature's pooled variance is 0.
         precision_prior: f64,
         /// Update the states and the transition counts; default true.
         #[serde(default)]
@@ -1086,6 +1088,12 @@ pub enum ModelKind {
         /// `[A, B]`, each `K x K` row-major: `Π(t) = softmax(A + B·z)`.
         #[serde(default)]
         tvtp_coef: Option<Vec<Vec<f64>>>,
+        /// The rows of weight each state's prior covariance is worth under
+        /// `full` and `diag` with `learn` on (stabilized forgetting); default
+        /// the number of features. Refused under `tied` and with `learn`
+        /// off, which take no prior.
+        #[serde(default)]
+        prior_rows: Option<f64>,
     },
     /// Has the correlation structure changed? (docs/ENHANCEMENTS.md E59)
     ///

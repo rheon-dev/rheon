@@ -390,6 +390,90 @@ load back the same, and continues to the bit of its twin, a bank of this
 build fed the rows before the save with the zero-weight rows' label times
 null, `labels_missing` aside.
 
+A twenty-second, the user's (2026-11-20, review fable2's C4: stabilized
+forgetting "Bd" as `hmm`'s default for `covariance_type` `"full"` and
+`"diag"`, at `τ = 1/16`, in the deficit-triggered form; schema 70): an
+`hmm` under `"full"` or `"diag"` in a model that learns forgets each
+state's covariance toward a stabilized prior (Kulhavý and Zarrop, 1993),
+`Σ = (W·M + P₀·diag(ψ))/(W + P₀)` after the row's decay, with `P₀` the new
+spec option `prior_rows` (`d` by default) and `ψ` the features' pooled
+within-state variance `ŝ`, tracked at ten half-lives with weight `V`, where
+it kept a ridge that decayed with the state's data. At 13 features or more
+the factor form holds the prior as factored, `f`, decaying with the data
+and moved back to `(1 + τ/2)·P₀ψ` by one factorization of each state when
+any coordinate is more than `τ` from `P₀ψ`. The model keeps `ŝ`, `V` and
+`f` (`2d + 1` numbers a model in the factor form, `d + 1` under `"diag"`
+and under `"full"` below 13 features) in `stabilized`, its last field,
+written only where it has a prior; `factor_states` is no longer the last
+field and is written always; the configuration gains `prior_rows`. Where
+the states were given (`means` and `covs`) and are not one diagonal matrix
+for every state, each state's prior is the matrix it was given, `G_s`,
+rescaled, `diag(√ψ)·G_s·diag(√ψ)`, and `ŝ` is in units of the given
+variances (1 as given; a state of 69 or earlier loads with its variances
+over the given ones, pooled by weight); the given matrices are read from
+the configuration, so the layout is the same and nothing more is written
+(review fable2's C4-BD-GIVEN: under the diagonal prior a learning filter
+given two regimes that differ in correlation alone put 0.792 of the rows in
+the true state, where 0.948 were under the ridge; under each state's own
+matrix, 0.976). A state
+of schema 69 or earlier keeps none of them, and no loader can replay the
+rows it learned under the ridge. It loads as this build would continue
+from its moments: `prior_rows` absent (the default, `d`), `ŝ` its states'
+variances pooled by weight and `V` their total weight, as the seeding seeds
+them; a factor form of schema 69, held under the ridge, is read back as its
+co-moments, `σ·L Lᵀ` less the ridge it has reached, and taken up again from
+them under the prior with `f` at its target `P₀ψ`; a co-moment state of
+schema 68 or earlier at 13 features or more is taken up from its
+co-moments the same way (where the twentieth exception took it up under
+the ridge). From there it goes on under the prior: neither to the bit nor
+within rounding of the old build's continuation, nor as this build's own
+run from the same rows, whose prior acted from the seeding. Its
+`weight_sum` goes on to the bit, and its other fields are numbers wherever
+the old build's were. A state saved inside its warm-up holds no moments to
+seed from: it loads with the prior at nothing, seeds it at its seeding, and
+goes on to the bit of this build's run. `"tied"`, a model that does not
+learn, and every other model continue to the bit, and re-save the current
+fixture's bytes.
+Measured on macOS arm64: over 4 and 20 features under `"diag"` and 12,
+13, 20 and 32 under `"full"`, half-lives of 20 and 400 rows and none,
+2,000 rows a run saved after 60 (in the warm-up) and after 600, at schema
+68 and 69 (`a_state_before_schema_70_loads_under_the_prior_over_the_grid`,
+`crates/rheon-core/src/hmm/tests_stabilized.rs`; 27 runs saved seeded, 18
+of them in the factor form, and 27 in the warm-up), the converted `ŝ` is
+the states' variances pooled by weight within 1e-13 and `V` their weight
+to the bit, a factor form's matrix is `(W·C + P₀ψ)/(W + P₀)` within 1e-13
+of its largest entry, each state's `σ` 1 and `f` its target; the
+continuation keeps `weight_sum` to the bit and a number wherever the old
+build had one, and a state saved inside the warm-up continues to the bit
+of this build's run. The posteriors part from the old build's by up to the
+whole probability, and the reported `state` differs on 17% of the rows
+after the load: on these streams of three blobs the decaying ridge loses
+a state that the prior keeps. A state re-saves bytes that load back the
+same and continue to the bit. Measured by `scripts/compare_outputs.py`
+against `6a594f88` (arm64, polars 2.0.0; the smoke cases, and eight cases
+of 6,000 and 8,000 rows over 4 and 14 features, 2 and 3 groups, chunks of
+700 and 900 rows, gaps, a shift, nulls, a save and load at half, holding
+`hmm` under `"full"`, `"diag"`, `"tied"` and with `learn = False` beside
+every other kind but `seqtest` and `rcov`): only `hmm` under `"full"` and
+`"diag"` moved, in its posteriors, `state`, `loglik` and `coef`; its
+`weight_sum`, `settled_frac` and `withheld_reason`, the `"tied"` and
+not-learning `hmm`, and every other model moved 0 ulps. The current
+fixtures `hmm_diag`, `hmm_full` and `hmm_full_narrow` of `rheon-core`
+regenerated (their continuations are the prior's), `hmm` (`"tied"`) by
+its configuration's `prior_rows` and its empty factor list alone (its
+continuation to the bit), the new case `hmm_full_warming` (saved inside
+its warm-up with `prior_rows = 6.5`) written; every other fixture of
+both crates moved only its schema number, or, where a bank holds an
+`hmm` spec, by its `prior_rows` and its model's empty factor list. The
+kept `v69/` sets are the schema-69 build's; the kept `hmm_diag`,
+`hmm_full` and `hmm_full_narrow` of `v65/` to `v69/` are held by
+`UNDER_THE_PRIOR` (`crates/rheon-core/tests/state_fixtures.rs`): each
+loads, re-saves bytes that load back the same and hold the prior, keeps
+its frozen `weight_sum` to the bit and a number wherever the frozen
+continuation has one. A released file of `hmm` (the release comparison's
+workload holds one under `"full"`) is held the same way against its
+release's continuation (`UNDER_THE_PRIOR` in `tests/test_released_state.py`).
+
 A twenty-third, the user's (2026-11-20, review C1: "Accept exception 23";
 the twenty-second is `hmm`'s stabilized forgetting, written on its own
 branch): `sgd` and `pa` under `standardize` read each row in the stream's
@@ -428,7 +512,11 @@ continuation (the largest move of any number after the save, measured
 2026-11-20 on macOS arm64 over every kept set: 1.1e-4 to 1.9e-3 of
 `1 + |x|` for a held fit, from the third row after the save, and 3.1e-2 and
 8.6e-2 for `sgd_warming` and `pa_warming`, whose predictions read the
-moments, from the first; `sgd_unstable`'s outputs did not move). A
+moments, from the first; `sgd_unstable`'s outputs did not move). The
+kept `v69/` set of those cases, copied when the twenty-second exception
+bumped the schema to 70, holds this read's bytes at schema 69 (C1 changed
+no layout, and no release carried schema 69 before it), so it converts to
+the current fixture's bytes exactly and continues to the bit. A
 release's own files (`tests/test_released_state.py`) of the 14 `sgd` and
 `pa` specs of its probe, all on weighted rows, are declared moved since
 2.0.0 and held to the release's own continuation within `WITHIN`'s 0.06 of

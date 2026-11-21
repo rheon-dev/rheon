@@ -88,6 +88,7 @@ fn hmm_case(reps: usize) {
         seed_rule: SeedRule::First,
         seed: 7,
         tvtp: None,
+        prior_rows: None,
     };
     let (t, h) = best(reps, || {
         let mut m = Hmm::new(cfg.clone()).unwrap();

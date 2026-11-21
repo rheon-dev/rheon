@@ -363,7 +363,24 @@ DECLARED: dict[tuple[str, str], str] = {
         "each row in the stream's own unit of weight"
         for name in READ_ANEW
     },
+    # The next release's Changed (rule 5's twenty-second exception, the
+    # user's, 2026-11-20): `hmm` under `"full"` and `"diag"` that learns
+    # forgets its covariances toward a stabilized prior. A file of a release
+    # keeps no prior, loads with one seeded from its states' moments and goes
+    # on under it, neither as the release did nor as this build's own bank
+    # (`UNDER_THE_PRIOR`).
+    ("hmm", "2.0.0"): 'the next release, Changed: `hmm` under `"full"` and `"diag"` '
+    "forgets each state's covariance toward a prior",
 }
+
+#: The moved specs a release's file goes on in under a rule of this build's
+#: that the release never ran, by the newest release whose files it covers:
+#: `hmm`'s stabilized prior (rule 5's twenty-second exception), seeded from
+#: the file's states on its load. Such a file is held to the release's own
+#: continuation in `weight_sum` to the bit, in `withheld_reason` and in
+#: where each float is a number; the posteriors, `state`, `loglik` and
+#: `coef` go on under the prior.
+UNDER_THE_PRIOR: dict[str, str] = {"hmm": "2.0.0"}
 
 #: The fields of the conformal interval, which a release's file goes on in
 #: under this build's multiplier (`DECLARED`'s task 368 entry): each group's
@@ -912,7 +929,7 @@ def test_a_moved_spec_goes_on_as_its_release_did(resumed):
     work = {name: reads for name, _, _, reads in probe.WORKLOAD}
     second = probe.stream().slice(probe.HALF)
     wrong: dict[str, list[str]] = {}
-    used: dict[str, int] = {"young": 0, "reset": 0, "conformal": 0, "converted": 0}
+    used: dict[str, int] = {"young": 0, "reset": 0, "conformal": 0, "converted": 0, "prior": 0}
     for name in names:
         specs = [built[r] for r in work[name]] + [built[name]]
         bank = rp.ModelBank.load(states / f"{name}.state", specs=specs)
@@ -938,12 +955,17 @@ def test_a_moved_spec_goes_on_as_its_release_did(resumed):
             first[np.unique(groups, return_index=True)[1]] = True
             rule["converted"] = first
             used["conformal"] += 1
+        prior = _version(version) <= _version(UNDER_THE_PRIOR.get(name, "0.0.0"))
         for table in sorted(p.name.split(".")[-2] for p in out.glob(f"{name}.*.parquet")):
             want = pl.read_parquet(out / f"{name}.{table}.parquet")
             if table not in got:
                 wrong[f"{name}.{table}"] = ["not reported by this build"]
                 continue
             mine = got[table]
+            if prior:
+                used["prior"] += 1
+                wrong[f"{name}.{table}"] = _under_the_prior(mine, want)
+                continue
             if table == "rows" and name in RESETS:
                 after = _after_reset(mine, second, name, RESETS[name])
                 assert after.any(), f"{name}: no reset fired in the second half"
@@ -972,8 +994,41 @@ def test_a_moved_spec_goes_on_as_its_release_did(resumed):
     )
     assert used["conformal"] == radius and (used["converted"] > 0) == (radius > 0), used
     assert bool(used["young"]) == young_moved, used
+    under = [n for n in names if _version(version) <= _version(UNDER_THE_PRIOR.get(n, "0.0.0"))]
+    assert bool(used["prior"]) == bool(under), used
     wrong = {k: v for k, v in wrong.items() if v}
     assert not wrong, "\n".join(f"{k}: {line}" for k, v in sorted(wrong.items()) for line in v)
+
+
+def _under_the_prior(got: pl.DataFrame, want: pl.DataFrame) -> list[str]:
+    """Where a file that goes on under a rule the release never ran
+    (`UNDER_THE_PRIOR`) parts from the release's continuation in what that
+    rule leaves alone: `weight_sum` to the bit, `withheld_reason` by value,
+    and every float a number, null or NaN where the release's is."""
+    got, want = _plain(got), _plain(want)
+    if got.height != want.height:
+        return [f"{got.height} rows against the release's {want.height}"]
+    out = []
+    for c in want.columns:
+        if c not in got.columns:
+            out.append(f"the release's field {c} is gone")
+            continue
+        u, v = got[c], want[c]
+        field = c.split(".", 1)[-1]
+        if field == "weight_sum":
+            gap, exact = _gaps(u, v)
+            bad = ~exact
+        elif u.dtype.is_float() and v.dtype.is_float():
+            a, b = u.to_numpy(), v.to_numpy()
+            bad = np.isnan(a) != np.isnan(b)
+        elif isinstance(u.dtype, pl.List) or isinstance(v.dtype, pl.List):
+            bad = (u.is_null() != v.is_null()).to_numpy()
+        else:
+            bad = ~(u.eq_missing(v).to_numpy())
+        if bad.any():
+            row = int(np.flatnonzero(bad)[0])
+            out.append(f"{c} at row {row}: {u[row]!r} against the release's {v[row]!r}")
+    return out
 
 
 def test_a_young_field_parts_only_as_the_same_sum_at_a_younger_share():

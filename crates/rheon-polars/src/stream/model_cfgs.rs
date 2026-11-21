@@ -338,6 +338,7 @@ pub fn hmm_cfg(spec: &Spec) -> Result<HmmCfg, String> {
         seed,
         exog_tvtp,
         tvtp_coef,
+        prior_rows,
     } = &spec.model
     else {
         return Err(not_a(spec, "hmm_cfg", "hmm"));
@@ -426,6 +427,7 @@ pub fn hmm_cfg(spec: &Spec) -> Result<HmmCfg, String> {
         seed_rule: seed_rule?,
         seed: seed.unwrap_or(0),
         tvtp,
+        prior_rows: *prior_rows,
     })
 }
 

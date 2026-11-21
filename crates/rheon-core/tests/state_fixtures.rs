@@ -254,20 +254,35 @@ use rheon_core::{MIN_SCHEMA_VERSION, ModelState, SCHEMA_VERSION, State};
 /// a state is its weight, means and `M = σ·L Lᵀ`, written in
 /// `factor_states` only where it is not empty, and a learned row moves the
 /// factor by rotations. A 68 state of that width holds co-moments; it loads
-/// as their factor and goes on in the factor form, within [`TAKEN_UP`]'s
-/// bounds of its frozen continuation, not to the bit. The cases `hmm_full`
+/// as their factor and goes on in the factor form. The cases `hmm_full`
 /// (13 features) and `hmm_full_narrow` (12, which keeps the co-moments)
 /// were written into `v68/` by the schema-68 build, so the conversion and
-/// the width it starts at are held; every other kept case, the narrow one
-/// among them, converts to the current bytes exactly.
+/// the width it starts at are held. Since 70 both go on under the
+/// stabilized prior ([`UNDER_THE_PRIOR`]), where 69's build held the wide
+/// one within rounding of its frozen continuation.
+///
+/// 69 kept since 70 put each `full` and `diag` `hmm` state of a model that
+/// learns under a stabilized prior (rule 5's twenty-second exception, the
+/// user's, 2026-11-20): the model keeps `ŝ`, `V` and, in the factor form,
+/// `f`, in `stabilized`, written only where the model has a prior, and
+/// writes `factor_states` always, empty or not, since it is no longer the
+/// last field. A state of 69 or earlier holds no prior and loads with one
+/// seeded from its moments ([`UNDER_THE_PRIOR`]); the `tied` case `hmm`
+/// takes none, and converts to the current bytes exactly, as every other
+/// kept case does. The case `hmm_full_warming`, saved inside its warm-up
+/// with a `prior_rows` of its own, has no kept file.
 ///
 /// And since review C1 (rule 5's twenty-third exception, the user's,
 /// 2026-11-20), with no layout change and no schema bump, `sgd` and `pa`
 /// under `standardize` read a row in the stream's own unit of weight. Every
 /// kept `sgd_*` and `pa*` case is weighted, so the current set's were
-/// regenerated and a kept state of those cases continues by the new read,
-/// within [`READ_ANEW`]'s bounds of its frozen continuation, not to the
-/// bit; it saves bytes that load back to the same.
+/// regenerated and a kept state of those cases of 68 or earlier continues
+/// by the new read, within [`READ_ANEW`]'s bounds of its frozen
+/// continuation, not to the bit; it saves bytes that load back to the same.
+/// The kept `v69/` set of those cases was written by the schema-69 build
+/// with C1's read (no release carried 69 before C1), so it converts to the
+/// current bytes exactly and continues to the bit, as every other kept case
+/// does.
 ///
 /// The kept schemas, each a `v<N>/` directory found beside the current set.
 fn previous() -> Vec<u32> {
@@ -387,23 +402,21 @@ const CONTINUES_WITHIN: &[(&str, f64, std::ops::Range<usize>)] = &[
 ///   macOS arm64; the bound is 24 times that.
 const RENUMBERED: &[(&str, f64, std::ops::Range<usize>)] = &[("corrchange_window", 1e-14, 0..1)];
 
-/// The `hmm` cases of schema 68 or earlier that load in the factor form
-/// (rule 5's twentieth exception), each with two bounds. A kept state holds
-/// co-moments, which load as their factor, the one its next row read; the
-/// current fixture's factor was taken up at the seeding and moved by the
-/// rotations of every learned row since. So the converted state is the
-/// current fixture's field for field -- weights, means and ridge scales to
-/// the bit -- but for each state's `σ` and `L`, whose matrices `σ·L Lᵀ`
-/// part by at most the first bound of the largest diagonal entry
-/// ([`taken_up_rule`]); and its continuation parts from the frozen one,
-/// which the co-moments read, by at most the second, by [`agree`]'s
-/// measure.
-///
-/// - `hmm_full`: 13 features, 2 states, saved about 25 learned rows after
-///   the seeding. Measured 2026-11-20 on macOS arm64: the matrices
-///   4.7e-16 apart (two units in the last place), the continuation 5.3e-15
-///   (30 ulps, a posterior); the bounds are 21 and 19 times those.
-const TAKEN_UP: &[(&str, f64, f64)] = &[("hmm_full", 1e-14, 1e-13)];
+/// The `hmm` cases a kept set holds under `covariance_type` `"full"` and
+/// `"diag"` with `learn` on, which go on under the stabilized prior (schema
+/// 70; rule 5's twenty-second exception, the user's, 2026-11-20). A state
+/// of 69 or earlier keeps no prior: it loads with one seeded from its
+/// states' moments -- `ŝ` their variances pooled by weight, `V` their total
+/// weight -- and a factor form (`hmm_full`, 13 features, which a set before
+/// 69 keeps in co-moments) taken up again under it, at its target. So
+/// neither its continuation nor its converted state is the old build's, nor
+/// this build's from the same rows, whose prior acted from the seeding:
+/// each is held to loading, to saving bytes that load back the same and
+/// hold the prior ([`under_the_prior_rule`]), to the frozen continuation's
+/// `weight_sum` to the bit, and to a number wherever the frozen
+/// continuation has one. The `tied` case `hmm` takes no prior, and goes on
+/// to the bit.
+const UNDER_THE_PRIOR: &[&str] = &["hmm_diag", "hmm_full", "hmm_full_narrow"];
 
 /// The weighted `sgd` and `pa` cases under `standardize` (rule 5's
 /// twenty-third exception, the user's, 2026-11-20; review C1), each with
@@ -729,21 +742,19 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
             // starts, ten Lloyd passes): the rule since finds the same
             // centres in another order (the doc above `previous`).
             let reseeded = f.name == "kmeans_warming";
-            // A wide `full` `hmm` of 68 or earlier, in co-moments, loads
-            // in the factor form ([`TAKEN_UP`]).
-            let taken_up = TAKEN_UP
-                .iter()
-                .find(|(n, _, _)| *n == f.name && schema < 69)
-                .map(|&(_, m, c)| (m, c));
-            // A weighted `sgd` or `pa` under `standardize` reads its rows in
-            // the stream's own unit of weight since review C1 ([`READ_ANEW`]).
+            // A `full` or `diag` `hmm` of 69 or earlier goes on under the
+            // prior ([`UNDER_THE_PRIOR`]).
+            let under_prior = schema < 70 && UNDER_THE_PRIOR.contains(&f.name);
+            // A weighted `sgd` or `pa` under `standardize` of 68 or earlier
+            // reads its rows in the stream's own unit of weight since review
+            // C1 ([`READ_ANEW`]); a set of 69 was written by C1's read.
             let read_anew = READ_ANEW
                 .iter()
-                .find(|(n, _)| *n == f.name)
+                .find(|(n, _)| *n == f.name && schema < 69)
                 .map(|&(_, b)| b);
             let kept = rmpv::decode::read_value(&mut &f.bytes()[..]).unwrap();
             // A `holt` of 61-63 keeps no line fit (the doc above `previous`).
-            if let Some((bound, _)) = taken_up {
+            if under_prior {
                 let saved = named(&m.state());
                 let again = load(&case, &saved).unwrap_or_else(|e| panic!("{what}: {e}"));
                 assert!(
@@ -751,13 +762,7 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                     "{what}: saved, loaded, saved"
                 );
                 let decode = |b: &[u8]| rmpv::decode::read_value(&mut &b[..]).unwrap();
-                taken_up_rule(
-                    &kept,
-                    &decode(&saved),
-                    &decode(&current.bytes()),
-                    bound,
-                    &what,
-                );
+                under_the_prior_rule(&kept, &decode(&saved), &what);
             } else if f.name == "kmeans" || f.name == "holt" {
                 let saved = named(&m.state());
                 let again = load(&case, &saved).unwrap_or_else(|e| panic!("{what}: {e}"));
@@ -845,9 +850,19 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                     tol
                 };
                 let tol = moved.map_or(tol, |b| tol.max(b));
-                let tol = taken_up.map_or(tol, |(_, b)| tol.max(b));
                 let tol = read_anew.map_or(tol, |b| tol.max(b));
                 let got = m.step(row);
+                if under_prior {
+                    // `weight_sum` to the bit, and a number wherever the
+                    // frozen continuation has one.
+                    let what = format!("{what}, row {i} after the save");
+                    assert!(agree(got.n_eff, want.n_eff, tol), "{what}: weight_sum");
+                    assert_eq!(got.pred.len(), want.pred.len(), "{what}");
+                    for (g, w) in got.pred.iter().zip(&want.pred) {
+                        assert_eq!(g.is_nan(), w.is_nan(), "{what}: {g} against {w}");
+                    }
+                    continue;
+                }
                 if let Some((_, slots)) = &within {
                     assert!(
                         slots.end <= got.pred.len(),
@@ -1190,7 +1205,20 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 51] = [
+    const FORMS: [(&str, &[&str]); 58] = [
+        // Schema 70 (rule 5's twenty-second exception): the stabilized
+        // prior's `ŝ` and `V` under `full` in each form and under `diag`,
+        // the factor form's `f`, and a spec's own `prior_rows`.
+        ("hmm_full", &["model", "Hmm", "stabilized", "scale"]),
+        ("hmm_full", &["model", "Hmm", "stabilized", "scale_weight"]),
+        (
+            "hmm_full",
+            &["model", "Hmm", "stabilized", "factored_prior"],
+        ),
+        ("hmm_full_narrow", &["model", "Hmm", "stabilized", "scale"]),
+        ("hmm_diag", &["model", "Hmm", "stabilized", "scale"]),
+        ("hmm_diag", &["model", "Hmm", "stabilized", "scale_weight"]),
+        ("hmm_full_warming", &["model", "Hmm", "cfg", "prior_rows"]),
         // Schema 69 (task 479): a wide `full` state's factor.
         ("hmm_full", &["model", "Hmm", "factor_states"]),
         // Schema 66 (task 327): a diagonal shape's variances alone.
@@ -2193,8 +2221,10 @@ fn kalmans_square_root_is_written_as_its_factor() {
 /// (91 numbers, every pivot positive, an entry below one not 0), and no
 /// co-moments; the factor has moved since its take-up, so some `σ` is
 /// below 1, and its continuation keeps the form. `hmm_full_narrow`, 12
-/// features, and every other `hmm` case write no `factor_states`, which a
-/// state saved before 69 lacks.
+/// features, and every other `hmm` case write `factor_states` empty (since
+/// schema 70; a state saved before 69 lacks it). Under the prior the
+/// factor form's `f` has moved off its target, `P₀ψ`, by its decay and the
+/// moves since its take-up; the `tied` case `hmm` writes no prior.
 #[test]
 fn a_wide_full_hmm_is_written_as_its_factors() {
     if regenerating() {
@@ -2249,14 +2279,44 @@ fn a_wide_full_hmm_is_written_as_its_factors() {
     }
     let after = rmpv::decode::read_value(&mut named(&m.state()).as_slice()).unwrap();
     assert!(forms(&after).iter().all(factor), "the continuation");
+    // The factored prior has moved off its target since the take-up: the
+    // prior's moves and decay are in the state.
+    let list = |path: &[&str]| -> Vec<f64> {
+        at(&v, path)
+            .and_then(rmpv::Value::as_array)
+            .unwrap()
+            .iter()
+            .map(|x| x.as_f64().unwrap())
+            .collect()
+    };
+    let scale = list(&["model", "Hmm", "stabilized", "scale"]);
+    let prior = list(&["model", "Hmm", "stabilized", "factored_prior"]);
+    assert_eq!((scale.len(), prior.len()), (d, d));
+    let p0 = d as f64;
+    assert!(
+        scale
+            .iter()
+            .zip(&prior)
+            .any(|(s, f)| (f - p0 * s).abs() > 1e-9 * p0 * s),
+        "f at its target: {prior:?}"
+    );
     for f in frozen::ALL
         .iter()
         .filter(|f| f.variant == "Hmm" && f.name != "hmm_full")
     {
         let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
-        assert!(
-            at(&v, &["model", "Hmm", "factor_states"]).is_none(),
+        assert_eq!(
+            at(&v, &["model", "Hmm", "factor_states"])
+                .and_then(rmpv::Value::as_array)
+                .map(Vec::len),
+            Some(0),
             "{}",
+            f.name
+        );
+        assert_eq!(
+            at(&v, &["model", "Hmm", "stabilized"]).is_some(),
+            f.name != "hmm",
+            "{}: the prior",
             f.name
         );
     }
@@ -2856,100 +2916,54 @@ fn equal_infinities_agree_at_any_tolerance() {
     assert!(agree(1.0, 1.0 + 1e-15, 1e-12));
 }
 
-/// A kept wide `full` `hmm` state, in co-moments, converted to the factor
-/// form ([`TAKEN_UP`]): the kept state holds no factor and the converted
-/// one holds one a state and no co-moments; the converted state is the
-/// current fixture's field for field, every number to the bit, but for each
-/// state's `σ` and `L`, whose matrices are within `bound` of the largest
-/// diagonal entry ([`factor_matrices_apart`]).
-fn taken_up_rule(
-    kept: &rmpv::Value,
-    saved: &rmpv::Value,
-    current: &rmpv::Value,
-    bound: f64,
-    what: &str,
-) {
-    let factors = |v: &rmpv::Value| {
-        at(v, &["model", "Hmm", "factor_states"])
-            .and_then(rmpv::Value::as_array)
-            .map_or(0, Vec::len)
-    };
-    let states = |v: &rmpv::Value| {
-        at(v, &["model", "Hmm", "states"])
-            .and_then(rmpv::Value::as_array)
-            .map_or(0, Vec::len)
-    };
+/// A kept `full` or `diag` `hmm` state put under the prior
+/// ([`UNDER_THE_PRIOR`]): the kept state holds none, and the converted one
+/// holds `ŝ` and `V`, `ŝ` one number a feature, and `f` beside the factor
+/// form alone, one a feature; a seeded state's `ŝ` and `V` not 0, and a
+/// factor form's states each `σ = 1`, taken up again.
+fn under_the_prior_rule(kept: &rmpv::Value, saved: &rmpv::Value, what: &str) {
     assert!(
-        factors(kept) == 0 && states(kept) == 2,
-        "{what}: the kept state is in co-moments"
+        at(kept, &["model", "Hmm", "stabilized"]).is_none(),
+        "{what}: the kept state holds a prior"
     );
-    assert!(
-        factors(saved) == 2 && states(saved) == 0,
-        "{what}: loaded, in the factor form"
-    );
-    // Every number but each state's `σ` and `L` to the bit.
-    fn without_factor(v: &rmpv::Value) -> rmpv::Value {
-        match v {
-            rmpv::Value::Map(m) => rmpv::Value::Map(
-                m.iter()
-                    .filter(|(k, _)| !matches!(k.as_str(), Some("sigma" | "l")))
-                    .map(|(k, v)| (k.clone(), without_factor(v)))
-                    .collect(),
-            ),
-            rmpv::Value::Array(a) => rmpv::Value::Array(a.iter().map(without_factor).collect()),
-            v => v.clone(),
-        }
-    }
-    same_but_floats(&without_factor(saved), &without_factor(current), 0.0, what);
-    let apart = factor_matrices_apart(saved, current);
-    assert!(
-        apart <= bound,
-        "{what}: the converted matrices are {apart:e} of their size from the current fixture's"
-    );
-}
-
-/// The states' matrices `M = σ·L Lᵀ` of two saved `hmm` factor forms, each
-/// state's `L` its packed lower triangle column by column: the largest
-/// `|ΔMᵢⱼ|` over the largest `Mᵢᵢ`, over every state.
-fn factor_matrices_apart(got: &rmpv::Value, want: &rmpv::Value) -> f64 {
-    let states = |v: &rmpv::Value| -> Vec<Vec<f64>> {
-        at(v, &["model", "Hmm", "factor_states"])
+    let d = at(saved, &["model", "Hmm", "cfg", "n_features"])
+        .and_then(rmpv::Value::as_u64)
+        .unwrap() as usize;
+    let list = |path: &[&str]| -> Vec<f64> {
+        at(saved, path)
             .and_then(rmpv::Value::as_array)
-            .expect("factor_states")
+            .unwrap_or_else(|| panic!("{what}: no {}", path.join(".")))
             .iter()
-            .map(|f| {
-                let sigma = at(f, &["sigma"]).and_then(rmpv::Value::as_f64).unwrap();
-                let l: Vec<f64> = at(f, &["l"])
-                    .and_then(rmpv::Value::as_array)
-                    .unwrap()
-                    .iter()
-                    .map(|x| x.as_f64().unwrap())
-                    .collect();
-                let d = at(f, &["m"]).and_then(rmpv::Value::as_array).unwrap().len();
-                let col = |j: usize| j * d - j * j.saturating_sub(1) / 2;
-                let mut m = vec![0.0; d * d];
-                for i in 0..d {
-                    for j in 0..=i {
-                        let s: f64 = (0..=j).map(|t| l[col(t) + i - t] * l[col(t) + j - t]).sum();
-                        m[i * d + j] = sigma * s;
-                    }
-                }
-                m
-            })
+            .map(|x| x.as_f64().unwrap())
             .collect()
     };
-    let (g, w) = (states(got), states(want));
-    assert_eq!(g.len(), w.len(), "the number of states");
-    g.iter()
-        .zip(&w)
-        .map(|(a, b)| {
-            let d = (a.len() as f64).sqrt() as usize;
-            let scale = (0..d).map(|i| b[i * d + i]).fold(0.0, f64::max);
-            a.iter()
-                .zip(b)
-                .map(|(x, y)| (x - y).abs())
-                .fold(0.0, f64::max)
-                / scale
-        })
-        .fold(0.0, f64::max)
+    let scale = list(&["model", "Hmm", "stabilized", "scale"]);
+    let prior = list(&["model", "Hmm", "stabilized", "factored_prior"]);
+    let weight = at(saved, &["model", "Hmm", "stabilized", "scale_weight"])
+        .and_then(rmpv::Value::as_f64)
+        .unwrap();
+    let seeded = at(saved, &["model", "Hmm", "seeded"])
+        .and_then(rmpv::Value::as_bool)
+        .unwrap();
+    let factors = at(saved, &["model", "Hmm", "factor_states"])
+        .and_then(rmpv::Value::as_array)
+        .map_or(0, Vec::len);
+    assert_eq!(scale.len(), d, "{what}: ŝ");
+    assert_eq!(prior.len(), if factors > 0 { d } else { 0 }, "{what}: f");
+    assert_eq!(
+        seeded,
+        weight > 0.0 && scale.iter().all(|s| *s > 0.0),
+        "{what}: ŝ and V"
+    );
+    for f in at(saved, &["model", "Hmm", "factor_states"])
+        .and_then(rmpv::Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        assert_eq!(
+            at(f, &["sigma"]).and_then(rmpv::Value::as_f64),
+            Some(1.0),
+            "{what}: taken up again"
+        );
+    }
 }

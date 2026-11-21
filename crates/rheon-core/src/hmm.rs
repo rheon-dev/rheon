@@ -14,7 +14,7 @@
 //!
 //! ```text
 //! p̃ₗ = Σₖ pₖ·Πₖₗ                                   the predicted state
-//! fₗ = N(x | μₗ, Σₗ + rₗI)                          the state's density
+//! fₗ = N(x | μₗ, Sₗ)                                the state's density
 //! loglik = ln Σₗ p̃ₗ·fₗ                              the row's surprise
 //! pₗ ← p̃ₗ·fₗ / Σ                                    the filtered state
 //! ```
@@ -35,10 +35,23 @@
 //! covariance, and each variance's step reads no other entry, so the
 //! numbers are the ones a state keeping its whole matrix gave, to the bit.
 //! The densities go through the factorization, forms and softmax path
-//! `ew_class` uses (`quad_forms_logdet`'s, to the bit), with the same
-//! decaying `precision_prior` ridge -- which is **required** here as it is
-//! there: a state's centred co-moments start at zero, and a zero matrix has
-//! no density.
+//! `ew_class` uses (`quad_forms_logdet`'s, to the bit). `Sₗ`, the matrix a
+//! state reads, is its co-moments `Σₗ` and a prior, so that a state's
+//! centred co-moments, which start at zero, never leave it without a
+//! density:
+//!
+//! - under `tied`, and in a model that does not learn, the same decaying
+//!   `precision_prior` ridge as `ew_class`'s, `Sₗ = Σₗ + rₗI`, `rₗ` the
+//!   ridge's share of the state's weight;
+//! - under `full` and `diag` in a model that learns, a stabilized prior
+//!   worth `P₀` (`prior_rows`, `d` by default) rows at `diag(ψ)`, the
+//!   features' pooled within-state variance: with `W` the state's weight
+//!   after the row's decay, `Sₗ = (W·Σₗ + P₀·diag(ψ))/(W + P₀)`, and the
+//!   ridge only where every `ψ` is 0 ([`Stabilized`] has the recursion and
+//!   its factor form). Where the states were given, each state's prior is
+//!   the covariance it was given, `Gₗ`, rescaled feature by feature as the
+//!   rows have moved from it: `Sₗ = (W·Σₗ + P₀·diag(√ψ)·Gₗ·diag(√ψ))/(W +
+//!   P₀)`, `ψ` then in units of the given variances and 1 at the start.
 //!
 //! # Learning
 //!
@@ -70,15 +83,16 @@
 //!
 //! # The factor form
 //!
-//! A state's density reads `Mₗ = Σₗ + rₗI` through its Cholesky factor.
+//! A state's density reads `Mₗ = Sₗ` through its Cholesky factor.
 //! Below [`Hmm::FACTOR_FROM`] features (13) a state keeps its co-moments and
 //! the factor is made afresh, `O(d³)`, on the row after each learned one.
 //! Under `full` at 13 features or more, a seeded state keeps the factor
 //! itself as its state ([`EwFactor`]) and the learned row moves it, `O(d²)`.
 //! With `a = λW/(λW + w)` and `b = w/(λW + w)` the state's mean-form step
 //! (`W` its weight, `w = w_row·pₗ`) and `δ` the row's deviation from its
-//! means before the row, the accumulator's `M' = a·M + a·b·δδᵀ` (its ridge's
-//! scale decaying by the same `a`) is held as
+//! means before the row, under the ridge the accumulator's
+//! `M' = a·M + a·b·δδᵀ` (its ridge's scale decaying by the same `a`) is held
+//! as
 //!
 //! ```text
 //! M  = σ·L Lᵀ                   σ in [1/4, 1]
@@ -91,6 +105,10 @@
 //! The factor taken up at the seeding is the one the co-moments' read
 //! made, to the bit; from the first learned row the reads part from a
 //! refactorization's in their last bits (`hmm/factor.rs` has the rest).
+//! Under the stabilized prior the factor holds `(W·Σₗ + diag(f))/(W + P₀)`,
+//! the decay and the row are its scale and a rotation, and the prior as
+//! factored, `f`, is moved back to its target by one factorization of each
+//! state when it drifts more than `τ = 1/16` from it ([`Stabilized`]).
 //! The rotations cost about 0.92 of a factorization at 13 features, 0.75
 //! at 20 and 0.5 at 32, and more than it below 13, which is why the form
 //! starts there.
@@ -103,6 +121,9 @@ use crate::{Covariance, Decay, EwCov, EwCovDiag, SeedRule};
 
 mod factor;
 pub use factor::EwFactor;
+mod stabilized;
+use stabilized::Shape;
+pub use stabilized::Stabilized;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HmmCfg {
@@ -113,7 +134,10 @@ pub struct HmmCfg {
     pub covariance: Covariance,
     /// Ridge on every state covariance, finite and `> 0`; decays with the
     /// state's own data, as `ew_class`'s does. Required: a state's centred
-    /// co-moments start at zero.
+    /// co-moments start at zero. Under `full` and `diag` in a model that
+    /// learns, the states forget toward a prior instead ([`Stabilized`]),
+    /// and this is the ridge only where every feature's pooled variance is
+    /// 0.
     pub precision_prior: f64,
     pub min_weight: f64,
     /// Update the states and the transition counts. `false` filters with
@@ -128,11 +152,15 @@ pub struct HmmCfg {
     pub transition: Option<Vec<f64>>,
     /// State means, `K*d` row-major: given, there is no warm-up. The pair
     /// enters the accumulators at **weight 1** -- one row's worth -- so the
-    /// given states are a starting point that the stream washes out under
+    /// given means are a starting point that the stream washes out under
     /// `learn = true` -- within about one half-life under a finite one, since
     /// the pair weighs one row -- and are held exactly under `learn = false`.
     pub means: Option<Vec<f64>>,
-    /// State covariances, `K*d*d` row-major, beside `means`.
+    /// State covariances, `K*d*d` row-major, beside `means`. Under `full`
+    /// and `diag` in a model that learns they are also each state's prior,
+    /// worth `prior_rows` rows for as long as the model runs: a state reads
+    /// the matrix it was given on the first row, and again when it has no
+    /// data left ([`Stabilized`], "Given states").
     pub covs: Option<Vec<f64>>,
     /// Learned rows buffered before the states are seeded from them.
     pub warm_rows: usize,
@@ -142,9 +170,32 @@ pub struct HmmCfg {
     /// softmaxₗ(Aₖₗ + Bₖₗ·zₜ)` from an exogenous column and the counts are
     /// not learned.
     pub tvtp: Option<(Vec<f64>, Vec<f64>)>,
+    /// `P₀`, the rows of weight the stabilized prior of each `full` or
+    /// `diag` state's covariance is worth ([`Stabilized`]), finite and
+    /// `> 0`; `None` is `n_features`. Refused under `tied` and in a model
+    /// that does not learn, which take no prior. Absent from a state of
+    /// schema 69 or earlier, which loads with `None`.
+    #[serde(default)]
+    pub prior_rows: Option<f64>,
 }
 
 impl HmmCfg {
+    /// The shape of each state's prior under stabilized forgetting: the
+    /// given covariances, where they are given and are not one diagonal
+    /// matrix for every state ([`Stabilized`], "Given states").
+    fn prior_shape(&self) -> Option<Shape> {
+        // A test's stand-in for a build before the shape: the diagonal
+        // prior under given states too.
+        #[cfg(test)]
+        if tests_shape::NO_SHAPE.with(std::cell::Cell::get) {
+            return None;
+        }
+        let diagonal = matches!(self.covariance, Covariance::Diagonal);
+        self.covs
+            .as_deref()
+            .and_then(|c| Shape::of(c, self.k, self.n_features, diagonal))
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         let mut no = crate::Refusals::new();
         // The decay first: every model checks it in its own `new`, where only
@@ -174,6 +225,32 @@ impl HmmCfg {
                  precision_prior to a finite positive value.",
                 self.precision_prior
             ));
+        }
+        if let Some(p) = self.prior_rows {
+            if !(p.is_finite() && p > 0.0) {
+                no.refuse(format!(
+                    "hmm: prior_rows must be finite and above 0, but it is {p}: it is how many \
+                     rows of weight each state's prior covariance is worth. Set prior_rows to a \
+                     finite positive value, or leave it out for the number of features."
+                ));
+            }
+            if !self.learn || matches!(self.covariance, Covariance::Shared) {
+                no.refuse(format!(
+                    "hmm: prior_rows does not apply {}, which takes no prior: a state's \
+                     covariance forgets toward the prior only under covariance_type \"full\" or \
+                     \"diag\" with learn on. Leave prior_rows out{}.",
+                    if self.learn {
+                        "under covariance_type \"tied\""
+                    } else {
+                        "with learn off"
+                    },
+                    if self.learn {
+                        ", or set covariance_type to \"full\" or \"diag\""
+                    } else {
+                        ", or turn learn on"
+                    }
+                ));
+            }
         }
         if !(self.transition_prior.is_finite() && self.transition_prior >= 0.0) {
             no.refuse(format!(
@@ -439,6 +516,11 @@ impl Factors {
     /// factor is never read. The factors are kept for it to write over:
     /// as many as the cache held, so never more than one a state.
     fn clear(&mut self) {
+        // Nothing held (a `diag` model, or states that are their factors):
+        // the drain below, empty, was 7% of a stabilized `diag` row.
+        if self.held.is_empty() {
+            return;
+        }
         for f in self.held.drain(..).flatten() {
             self.work.give(f);
         }
@@ -478,12 +560,23 @@ pub struct Hmm {
     /// states are seeded: each state as its weight, means and the Cholesky
     /// factor of its matrix, moved by each learned row ([`EwFactor`]), and
     /// [`Self::states`] empty. Empty in every other shape and width, and
-    /// before the seeding, and then not written: it is the last field, the
-    /// one the compact encoding lets skip. A `full` state of schema 68 or
-    /// earlier at that width holds co-moments, and loads as their factor
-    /// (`restore`).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// before the seeding. Written always since schema 70, after the
+    /// fields it follows: the compact encoding is positional, and only a
+    /// last field may skip. A state of schema 69 wrote it only where it was
+    /// not empty, its last field then, and loads with it empty where it is
+    /// absent. A `full` state of schema 68 or earlier at that width holds
+    /// co-moments, and loads as their factor (`restore`).
+    #[serde(default)]
     factor_states: Vec<EwFactor>,
+    /// Stabilized forgetting of the states' covariances ([`Stabilized`]):
+    /// under `full` and `diag` in a model that learns, from its build on,
+    /// and `None` under `tied` and in a model that does not learn. Written
+    /// only where it is `Some`: the last field, the one the compact encoding
+    /// lets skip. A state of schema 69 or earlier has none, and loads with
+    /// one seeded from its states (`restore`; rule 5's twenty-second
+    /// exception).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stabilized: Option<Box<Stabilized>>,
 }
 
 impl Hmm {
@@ -520,7 +613,40 @@ impl Hmm {
         Ok(())
     }
 
+    /// A model of `cfg`. Under `full` and `diag`, in a model that learns,
+    /// each state's covariance forgets toward a prior worth `prior_rows`
+    /// rows, `d` by default ([`Stabilized`]).
     pub fn new(cfg: HmmCfg) -> Result<Self, String> {
+        let p0 = cfg.prior_rows.unwrap_or(cfg.n_features as f64);
+        // A test's stand-in for a build before stabilized forgetting.
+        #[cfg(test)]
+        if tests_stabilized::NO_PRIOR.with(std::cell::Cell::get) {
+            return Self::build(cfg, None);
+        }
+        Self::build(cfg, Some(p0))
+    }
+
+    /// [`Self::new`] read through co-moments at every width: the exact
+    /// recursion, `O(d³)` a row, which the factor form moves its prior
+    /// toward lazily; for the tests.
+    #[cfg(test)]
+    pub(crate) fn new_comoments(cfg: HmmCfg) -> Result<Self, String> {
+        let mut m = tests_factor::old(|| Self::new(cfg))?;
+        if let Some(st) = m.stabilized.as_deref_mut() {
+            st.comoments = true;
+        }
+        Ok(m)
+    }
+
+    /// The stabilized prior, where it is in force: set, the states seeded and
+    /// learned.
+    pub fn stabilized(&self) -> Option<&Stabilized> {
+        self.stabilized
+            .as_deref()
+            .filter(|_| self.seeded && self.cfg.learn)
+    }
+
+    fn build(cfg: HmmCfg, prior_rows: Option<f64>) -> Result<Self, String> {
         cfg.validate()?;
         let (k, d) = (cfg.k, cfg.n_features);
         // No window reads a run here, so none is kept (docs/PLAN.md task
@@ -562,8 +688,22 @@ impl Hmm {
             states,
             diag_states,
             factor_states: Vec::new(),
+            stabilized: None,
             cfg,
         };
+        let shape = matches!(m.cfg.covariance, Covariance::Full | Covariance::Diagonal);
+        if let Some(p0) = prior_rows.filter(|_| shape && m.cfg.learn) {
+            m.stabilized = Some(Box::new(Stabilized::new(
+                p0,
+                d,
+                m.cfg.decay,
+                m.cfg.precision_prior,
+                m.cfg.prior_shape(),
+            )));
+            if m.seeded {
+                m.seed_stabilized();
+            }
+        }
         m.take_up_factors();
         Ok(m)
     }
@@ -595,6 +735,49 @@ impl Hmm {
         }
         let d = self.cfg.n_features;
         let mut held = Vec::with_capacity(self.states.len());
+        if self
+            .stabilized
+            .as_deref()
+            .is_some_and(Stabilized::comoments)
+        {
+            return;
+        }
+        if let Some(st) = self.stabilized.as_deref_mut().filter(|_| self.cfg.learn) {
+            // `(W·C + P₀Ψ)/(W + P₀)`, every coordinate's prior topped up.
+            let p0 = st.prior_rows;
+            let mut add = vec![0.0; d];
+            for (s, cov) in self.states.iter().enumerate() {
+                let t = cov.n_eff() + p0;
+                let m = cov.n_eff() / t;
+                let c = cov.comoments().packed();
+                let work = &mut self.factors.work;
+                let f = match st.shape() {
+                    None => {
+                        for (a, &p) in add.iter_mut().zip(st.psi()) {
+                            *a = p0 * p / t;
+                        }
+                        work.factor_shrunk(c, m, &add, d)
+                    }
+                    // `(W·C + P₀·R·G·R)/(W + P₀)`, the state's own shape.
+                    Some(shape) => {
+                        for (a, &p) in add.iter_mut().zip(st.psi()) {
+                            *a = (p0 * p / t).sqrt();
+                        }
+                        work.factor_shrunk_toward(c, m, &add, shape.tri(s), d)
+                    }
+                };
+                match f {
+                    Some(f) => held.push(EwFactor::take_up_stabilized(cov, f)),
+                    None => return,
+                }
+            }
+            st.hold_all();
+            self.factors.clear();
+            self.factors.work.drop_spares();
+            self.states.clear();
+            self.factor_states = held;
+            return;
+        }
         for cov in &self.states {
             let r = self.cfg.precision_prior * cov.precision_scale();
             match self
@@ -820,6 +1003,32 @@ impl Hmm {
 
     /// [`Self::state_matrix`], written over `m`.
     fn state_matrix_into(&self, s: usize, m: &mut Vec<f64>) {
+        if let Some(st) = self.stabilized() {
+            let cov = &self.states[s];
+            let d = self.cfg.n_features;
+            let (scale, add) = st.shrink_of(cov.n_eff());
+            let c = cov.comoments().packed();
+            m.clear();
+            m.resize(d * d, 0.0);
+            for i in 0..d {
+                let at = crate::ewcov::row_at(i);
+                for j in 0..=i {
+                    m[i * d + j] = scale * c[at + j];
+                }
+                match st.shape() {
+                    None => m[i * d + i] += add(i),
+                    // `R·G·R`, as `factor_shrunk_toward` forms it.
+                    Some(shape) => {
+                        let g = shape.tri(s);
+                        let ri = add(i).sqrt();
+                        for j in 0..=i {
+                            m[i * d + j] += (ri * add(j).sqrt()) * g[at + j];
+                        }
+                    }
+                }
+            }
+            return;
+        }
         Self::matrix_of(&self.cfg, &self.states[s], m);
     }
 
@@ -841,12 +1050,19 @@ impl Hmm {
     #[cfg(test)]
     fn log_densities(&self, x: &[f64]) -> Option<Vec<f64>> {
         let mut work = RowWork::default();
-        self.log_densities_into(x, &mut work).then_some(work.logf)
+        let ok = if self.stabilized().is_some() {
+            self.log_densities_into::<true>(x, &mut work)
+        } else {
+            self.log_densities_into::<false>(x, &mut work)
+        };
+        ok.then_some(work.logf)
     }
 
     /// [`Self::log_densities`], written over the working space's `logf`:
-    /// whether there is a density.
-    fn log_densities_into(&self, x: &[f64], work: &mut RowWork) -> bool {
+    /// whether there is a density. `S`: under stabilized forgetting
+    /// ([`Self::stabilized`]); a constant, so today's build of it is
+    /// compiled as it was without that.
+    fn log_densities_into<const S: bool>(&self, x: &[f64], work: &mut RowWork) -> bool {
         let (k, d) = (self.cfg.k, self.cfg.n_features);
         let base = -0.5 * d as f64 * std::f64::consts::TAU.ln();
         let RowWork {
@@ -864,6 +1080,9 @@ impl Hmm {
         out.resize(k, f64::NEG_INFINITY);
         match self.cfg.covariance {
             Covariance::Diagonal => {
+                if let Some(st) = self.stabilized().filter(|_| S) {
+                    return Self::diag_stabilized(st, &self.diag_states, x, base, out);
+                }
                 for (s, (o, cov)) in out.iter_mut().zip(&self.diag_states).enumerate() {
                     let r = self.ridge(s);
                     let (mut log_det, mut q) = (0.0, 0.0);
@@ -986,13 +1205,19 @@ impl Hmm {
     /// from `predict`, which may not.
     fn read(&self, x: &[f64], exog: Option<f64>, lam: f64) -> Vec<f64> {
         let mut out = Vec::new();
-        self.read_into(x, exog, lam, &mut out, &mut RowWork::default());
+        let mut work = RowWork::default();
+        if self.stabilized().is_some() {
+            self.read_into::<true>(x, exog, lam, &mut out, &mut work);
+        } else {
+            self.read_into::<false>(x, exog, lam, &mut out, &mut work);
+        }
         out
     }
 
     /// [`Self::read`], the outputs written over `out`: whether `work` now
-    /// holds what the update needs ([`RowWork`]).
-    fn read_into(
+    /// holds what the update needs ([`RowWork`]). `S` as in
+    /// [`Self::log_densities_into`].
+    fn read_into<const S: bool>(
         &self,
         x: &[f64],
         exog: Option<f64>,
@@ -1010,7 +1235,7 @@ impl Hmm {
             return false;
         }
         self.transition_at_into(exog, lam, work);
-        if !self.log_densities_into(x, work) {
+        if !self.log_densities_into::<S>(x, work) {
             nan(out);
             return false;
         }
@@ -1108,6 +1333,9 @@ impl Hmm {
         }
         self.buffer.clear();
         self.seeded = true;
+        if self.stabilized.is_some() {
+            self.seed_stabilized();
+        }
         self.factors.clear();
         self.take_up_factors();
     }
@@ -1166,7 +1394,7 @@ impl Hmm {
         if self.cfg.learn {
             self.a.iter_mut().for_each(|v| *v *= lam);
         }
-        let read = self.read_into(x, self.exog_of(y), 1.0, &mut out.pred, work);
+        let read = self.read_into::<false>(x, self.exog_of(y), 1.0, &mut out.pred, work);
         out.n_eff = self.n_eff;
         out.extra = None;
         // The warm-up rows age as `n_eff` does, so the states the replay seeds
@@ -1277,6 +1505,516 @@ impl Hmm {
         // next row's buffer.
         std::mem::swap(&mut self.p, &mut work.post);
     }
+
+    /// [`Self::step_in`] under stabilized forgetting, the states seeded and
+    /// learned ([`Self::stabilized`]): they age before the read and learn
+    /// the row at `λ = 1` after it.
+    #[inline(never)]
+    fn step_in_stabilized(
+        &mut self,
+        x: &[f64],
+        y: &[Option<f64>],
+        d_clock: f64,
+        weight: f64,
+        out: &mut crate::Step,
+        work: &mut RowWork,
+    ) {
+        debug_assert!(self.seeded && self.cfg.learn && self.buffer.is_empty());
+        let lam = self.cfg.decay.factor(d_clock);
+        let saved = self.age_stabilized(lam, work, weight <= 0.0);
+        self.ensure_factors_stabilized();
+        // The chain as the row's clock leaves it: the counts decay over the
+        // clock since the last row before `Π` is read, on every row, so a
+        // zero-weight row ages them as the gap it sits in would and the next
+        // row reads what it would were that row not there (hard rule 9).
+        // The row read them before its own decay, and a zero-weight row's
+        // decay before the next one: against the Dirichlet pseudo-count,
+        // which does not decay, that moved the fit 1.2e-5 in the contract
+        // test (docs/PLAN.md task 214). The states need no such step: their
+        // means, co-moments and prior scale, all a density reads, do not
+        // move on a row that adds no weight.
+        if self.cfg.learn {
+            self.a.iter_mut().for_each(|v| *v *= lam);
+        }
+        let read = self.read_into::<true>(x, self.exog_of(y), 1.0, &mut out.pred, work);
+        if saved.is_some() {
+            self.restore_stabilized(saved);
+        }
+        out.n_eff = self.n_eff;
+        out.extra = None;
+        if weight <= 0.0 {
+            // Advance the clock and learn nothing: the counts have aged
+            // above, the accumulators age with them, `n_eff` decays with
+            // them -- hard rule 8, the same recursion in every model, which
+            // is what makes `min_weight` mean the same number of rows across
+            // a bank (docs/REVIEW-E54-E64.md H3) -- and `p` does not move.
+            self.n_eff *= lam;
+            self.observe_stabilized(d_clock, 0.0);
+            self.factors.clear();
+            return;
+        }
+        let before = self.n_eff;
+        self.n_eff = lam * before + weight;
+        if !read {
+            // A state's factorization failed, or a density was not finite --
+            // a quadratic form overflowing against a state of tiny spread --
+            // so the row cannot be scored or learned: a usable row that fails
+            // of its own, and so counted. It still happened, so it ages the
+            // clock like a zero-weight row --
+            // `n_eff`, the counts and the states all decay by `lam`, nothing
+            // is added -- rather than `n_eff` advancing on its own (review
+            // 2026-09-18).
+            self.solve_failures += 1;
+            self.n_eff = lam * before;
+            self.observe_stabilized(d_clock, 0.0);
+            self.factors.clear();
+            return;
+        }
+        if self.cfg.learn {
+            let k = self.cfg.k;
+            // The filtered joint of consecutive states, from the *pre-row*
+            // `p` and the `Π` the row read; the counts have decayed on the
+            // clock above, like every accumulator here.
+            if self.cfg.tvtp.is_none() {
+                // `Π` as the row read it: without `tvtp` that is
+                // `transition()`, the counts as they stand, which nothing
+                // has moved since the read (the frozen state fixtures
+                // continue to the bit through this update).
+                // About the largest density, not `logf[0]`: a state whose
+                // density is astronomically small makes `exp(logf[l] −
+                // logf[0])` overflow the other way, and the counts go to
+                // NaN. The reference cancels in the normalisation.
+                let RowWork {
+                    pi,
+                    logf,
+                    exps: scaled,
+                    joint,
+                    ..
+                } = &mut *work;
+                let top = logf.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                scaled.clear();
+                scaled.extend(logf.iter().map(|v| (v - top).exp()));
+                joint.clear();
+                joint.resize(k * k, 0.0);
+                let mut z = 0.0;
+                for kk in 0..k {
+                    for l in 0..k {
+                        let v = self.p[kk] * pi[kk * k + l] * scaled[l];
+                        joint[kk * k + l] = v;
+                        z += v;
+                    }
+                }
+                for (a, j) in self.a.iter_mut().zip(joint.iter()) {
+                    *a += if z > 0.0 { weight * j / z } else { 0.0 };
+                }
+            }
+            self.learn_stabilized(x, weight, d_clock, work);
+        }
+        // The posterior is the next row's `p`, and the `p` it replaces the
+        // next row's buffer.
+        std::mem::swap(&mut self.p, &mut work.post);
+    }
+}
+
+/// Stabilized forgetting's steps ([`Stabilized`]).
+impl Hmm {
+    /// `ŝ` from the states' variances, pooled by their weights, and `V`
+    /// their total weight. `comoments`: a factor form's states' co-moments
+    /// ([`EwFactor::comoments_under`]), read in place of states it does not
+    /// keep.
+    fn seed_stabilized_with(&mut self, comoments: &[Vec<f64>]) {
+        let d = self.cfg.n_features;
+        let mut pooled = vec![0.0; d];
+        let mut total = 0.0;
+        // Under a shape each variance is in units of its state's given one
+        // ([`Stabilized`], "Given states"): 1 for states as given.
+        let shape = self.stabilized.as_deref().and_then(Stabilized::shape);
+        let unit = |s: usize, i: usize, v: f64| match shape {
+            Some(g) => v / g.diag(s)[i],
+            None => v,
+        };
+        for s in 0..self.cfg.k {
+            let w = match (self.states.get(s), comoments.get(s)) {
+                (Some(c), _) => {
+                    for (p, i) in pooled.iter_mut().zip(0..d) {
+                        *p += c.n_eff() * unit(s, i, c.var(i));
+                    }
+                    c.n_eff()
+                }
+                (None, Some(c)) => {
+                    let w = self.factor_states[s].n_eff();
+                    for (p, i) in pooled.iter_mut().zip(0..d) {
+                        let v = crate::solve::clamp_rounding(c[crate::ewcov::row_at(i) + i]);
+                        *p += w * unit(s, i, v);
+                    }
+                    w
+                }
+                (None, None) => {
+                    let c = &self.diag_states[s];
+                    for (p, i) in pooled.iter_mut().zip(0..d) {
+                        *p += c.n_eff() * unit(s, i, c.var(i));
+                    }
+                    c.n_eff()
+                }
+            };
+            total += w;
+        }
+        if total > 0.0 {
+            pooled.iter_mut().for_each(|p| *p /= total);
+        }
+        if let Some(st) = self.stabilized.as_deref_mut() {
+            st.seed(&pooled, total);
+        }
+    }
+
+    /// [`Self::seed_stabilized_with`] from the states the model keeps.
+    fn seed_stabilized(&mut self) {
+        self.seed_stabilized_with(&[]);
+    }
+
+    /// A state of schema 69 or earlier under `full` or `diag` that learns,
+    /// which kept no prior, put under one worth `p0` rows: seeded from its
+    /// states as the seeding seeds it, where they are seeded. A factor form
+    /// held under the ridge is read back as its co-moments, `σ·L Lᵀ` less
+    /// the ridge it has reached, and taken up again under the prior, every
+    /// coordinate at its target.
+    fn stabilize_loaded(&mut self, p0: f64) {
+        let d = self.cfg.n_features;
+        self.stabilized = Some(Box::new(Stabilized::new(
+            p0,
+            d,
+            self.cfg.decay,
+            self.cfg.precision_prior,
+            self.cfg.prior_shape(),
+        )));
+        if !self.seeded {
+            return;
+        }
+        let prior = self.cfg.precision_prior;
+        let comoments: Vec<Vec<f64>> = self
+            .factor_states
+            .iter()
+            .map(|f| f.comoments_under(prior * f.precision_scale()))
+            .collect();
+        self.seed_stabilized_with(&comoments);
+        let Self {
+            factor_states,
+            stabilized,
+            factors,
+            ..
+        } = self;
+        let Some(st) = stabilized.as_deref_mut() else {
+            return;
+        };
+        if factor_states.is_empty() {
+            return;
+        }
+        st.hold_all();
+        let shaped = st.shape().is_some();
+        for (s, (f, c)) in factor_states.iter_mut().zip(&comoments).enumerate() {
+            match shaped.then_some(()) {
+                None => {
+                    let (m, add) = st.shrink(f.n_eff());
+                    f.retake_stabilized(c, m, add, &mut factors.work);
+                }
+                Some(_) => {
+                    let (m, r, g) = st.shrink_roots(f.n_eff(), s);
+                    f.retake_stabilized_shaped(c, m, r, g, &mut factors.work);
+                }
+            }
+        }
+        factors.work.drop_spares();
+    }
+
+    /// The row's decay, before its read: every state's weight by `λ`; in
+    /// the factor form each matrix's scale with it and the factored prior,
+    /// and, where any coordinate's prior is then more than `τ` from its
+    /// target, every coordinate moved to `1 + τ/2` of it in every state by
+    /// one factorization a state ([`EwFactor::shift_prior`]; to the target
+    /// itself where a state's scale left the normal range and it started
+    /// again at its prior).
+    ///
+    /// Where `transient` (a row of weight 0) the moves serve its read
+    /// alone: the states and `f` as they stood before them are handed back
+    /// for the caller to put back after the read, so a zero-weight row
+    /// leaves the factors as the gap it sits in would, to rounding (hard
+    /// rule 9). A row that starts a state again keeps them.
+    #[inline(never)]
+    fn age_stabilized(
+        &mut self,
+        lam: f64,
+        work: &mut RowWork,
+        transient: bool,
+    ) -> Option<(Vec<EwFactor>, Vec<f64>)> {
+        // `update(x, lam, 0)`'s numbers, to the bit, in `O(1)`: the weight
+        // ages and `a = λW/λW = 1` moves nothing else.
+        for s in self.states.iter_mut() {
+            s.decay(lam);
+        }
+        for s in self.diag_states.iter_mut() {
+            s.decay(lam);
+        }
+        self.factors.clear();
+        if !self.factored() {
+            return None;
+        }
+        let st = self.stabilized.as_deref_mut()?;
+        let p0 = st.prior_rows;
+        // A state that starts again at its prior holds all of it, so every
+        // coordinate is moved to its target in the others (rare: a gap of a
+        // thousand half-lives).
+        let all = self.factor_states.iter().any(|f| f.ages_out(lam, p0));
+        let restarts: Vec<bool> = self
+            .factor_states
+            .iter_mut()
+            .enumerate()
+            .map(|(s, f)| f.age_stabilized(lam, p0, st.psi(), st.shape().map(|g| g.tri(s))))
+            .filter(|_| all)
+            .collect();
+        let (all, due) = st.age(lam, all);
+        let saved =
+            (transient && !all && due).then(|| (self.factor_states.clone(), st.held.clone()));
+        // Every coordinate at once, by one factorization a state, whenever
+        // any is due.
+        if due {
+            st.settle_all(all);
+            for (s, f) in self.factor_states.iter_mut().enumerate() {
+                let restarted = restarts.get(s).copied().unwrap_or(false);
+                if restarted {
+                    continue;
+                }
+                let fw = &mut self.factors.work;
+                let shape = st.shape().map(|g| g.tri(s));
+                let moved = match shape {
+                    None => f.shift_prior(st.moves(), p0, &mut work.delta, fw),
+                    Some(g) => f.shift_prior_shaped(st.roots(), g, p0, &mut work.delta, fw),
+                };
+                if !moved {
+                    f.restart_at_prior(&st.held, 1.0 / (f.n_eff() + p0), shape);
+                    self.solve_failures += 1;
+                }
+            }
+        }
+        saved
+    }
+
+    /// What [`Self::age_stabilized`] handed back, put back.
+    #[inline(never)]
+    fn restore_stabilized(&mut self, saved: Option<(Vec<EwFactor>, Vec<f64>)>) {
+        if let (Some((f, held)), Some(st)) = (saved, self.stabilized.as_deref_mut()) {
+            self.factor_states = f;
+            st.held = held;
+        }
+    }
+
+    /// The `diag` states' log densities under stabilized forgetting, each
+    /// variance `(W·v + P₀ψ)/(W + P₀)`, into `out`: whether all are finite.
+    #[inline(never)]
+    fn diag_stabilized(
+        st: &Stabilized,
+        states: &[EwCovDiag],
+        x: &[f64],
+        base: f64,
+        out: &mut [f64],
+    ) -> bool {
+        let (p0, psi) = (st.prior_rows, st.psi());
+        if let Some(shape) = st.shape() {
+            // Each state's prior variance is its given one, rescaled.
+            for (s, (o, cov)) in out.iter_mut().zip(states).enumerate() {
+                let t = cov.n_eff() + p0;
+                let (m, a) = (cov.n_eff() / t, p0 / t);
+                let g = shape.diag(s);
+                let (mut log_det, mut q) = (0.0, 0.0);
+                for (i, xi) in x.iter().enumerate() {
+                    let v = m * cov.var(i) + a * (psi[i] * g[i]);
+                    let dv = cov.deviation(i, *xi);
+                    log_det += v.ln();
+                    q += dv * dv / v;
+                }
+                *o = base - 0.5 * log_det - 0.5 * q;
+            }
+            return out.iter().all(|v| v.is_finite());
+        }
+        for (o, cov) in out.iter_mut().zip(states) {
+            let t = cov.n_eff() + p0;
+            let (m, a) = (cov.n_eff() / t, p0 / t);
+            let (mut log_det, mut q) = (0.0, 0.0);
+            for (i, xi) in x.iter().enumerate() {
+                let v = m * cov.var(i) + a * psi[i];
+                let dv = cov.deviation(i, *xi);
+                log_det += v.ln();
+                q += dv * dv / v;
+            }
+            *o = base - 0.5 * log_det - 0.5 * q;
+        }
+        out.iter().all(|v| v.is_finite())
+    }
+
+    /// [`Self::ensure_factors`] under stabilized forgetting.
+    fn ensure_factors_stabilized(&mut self) {
+        if !self.seeded || !matches!(self.cfg.covariance, Covariance::Full) {
+            return;
+        }
+        self.take_up_factors();
+        if self.factored() {
+            return;
+        }
+        let (k, d) = (self.cfg.k, self.cfg.n_features);
+        let Self {
+            states,
+            factors,
+            stabilized,
+            ..
+        } = self;
+        if let Some(st) = stabilized.as_deref_mut() {
+            Self::factors_stabilized(st, states, factors, k, d);
+        }
+    }
+
+    /// The `full` states' factors in co-moments under stabilized
+    /// forgetting, each of `(W·C + P₀Ψ)/(W + P₀)`.
+    #[inline(never)]
+    fn factors_stabilized(
+        st: &mut Stabilized,
+        states: &[EwCov],
+        factors: &mut Factors,
+        k: usize,
+        d: usize,
+    ) {
+        if st.shape().is_some() {
+            return Self::factors_stabilized_shaped(st, states, factors, k, d);
+        }
+        for (s, cov) in states.iter().enumerate() {
+            if factors.peek(s).is_none() {
+                let (m, add) = st.shrink(cov.n_eff());
+                let f = factors
+                    .work
+                    .factor_shrunk(cov.comoments().packed(), m, add, d);
+                factors.set(s, k, f);
+            }
+        }
+    }
+
+    /// [`Self::factors_stabilized`] under a shape: each state's factor of
+    /// `(W·C + P₀·R·G_s·R)/(W + P₀)`, `R = diag(√ψ)`.
+    #[inline(never)]
+    fn factors_stabilized_shaped(
+        st: &mut Stabilized,
+        states: &[EwCov],
+        factors: &mut Factors,
+        k: usize,
+        d: usize,
+    ) {
+        for (s, cov) in states.iter().enumerate() {
+            if factors.peek(s).is_none() {
+                let c = cov.comoments().packed();
+                let (m, r, g) = st.shrink_roots(cov.n_eff(), s);
+                let f = factors.work.factor_shrunk_toward(c, m, r, g, d);
+                factors.set(s, k, f);
+            }
+        }
+    }
+
+    /// A row that teaches the states nothing: `V` decays.
+    fn observe_stabilized(&mut self, d_clock: f64, w: f64) {
+        if let Some(st) = self.stabilized.as_deref_mut() {
+            st.observe(d_clock, w, &[]);
+            debug_assert!(w == 0.0);
+        }
+    }
+
+    /// A learned row under stabilized forgetting, its states aged already
+    /// ([`Self::age_stabilized`]): each state learns it at `λ = 1` and
+    /// weight `w·pₗ`, and `ŝ` takes the row's squared deviations from the
+    /// means before it.
+    #[inline(never)]
+    fn learn_stabilized(&mut self, x: &[f64], weight: f64, d_clock: f64, work: &mut RowWork) {
+        let Some(mut st) = self.stabilized.take() else {
+            return;
+        };
+        let post = &work.post;
+        let mut e = std::mem::take(&mut st.e);
+        e.clear();
+        e.resize(x.len(), 0.0);
+        fn add(e: &mut [f64], x: &[f64], p: f64, dev: impl Fn(usize, f64) -> f64) {
+            for (i, (ei, &xi)) in e.iter_mut().zip(x).enumerate() {
+                let dv = dev(i, xi);
+                *ei += p * dv * dv;
+            }
+        }
+        match st.shape() {
+            None => {
+                for (s, &p) in post.iter().enumerate() {
+                    match (self.states.get(s), self.factor_states.get(s)) {
+                        (Some(c), _) => add(&mut e, x, p, |i, xi| c.deviation(i, xi)),
+                        (None, Some(f)) => add(&mut e, x, p, |i, xi| f.deviation(i, xi)),
+                        (None, None) => {
+                            let c = &self.diag_states[s];
+                            add(&mut e, x, p, |i, xi| c.deviation(i, xi))
+                        }
+                    }
+                }
+            }
+            // Under a shape, each state's squared deviations in units of
+            // its given variances.
+            Some(shape) => {
+                fn add_in(
+                    e: &mut [f64],
+                    x: &[f64],
+                    p: f64,
+                    g: &[f64],
+                    dev: impl Fn(usize, f64) -> f64,
+                ) {
+                    for (i, ((ei, &xi), &gi)) in e.iter_mut().zip(x).zip(g).enumerate() {
+                        let dv = dev(i, xi);
+                        *ei += p * (dv * dv / gi);
+                    }
+                }
+                for (s, &p) in post.iter().enumerate() {
+                    let g = shape.diag(s);
+                    match (self.states.get(s), self.factor_states.get(s)) {
+                        (Some(c), _) => add_in(&mut e, x, p, g, |i, xi| c.deviation(i, xi)),
+                        (None, Some(f)) => add_in(&mut e, x, p, g, |i, xi| f.deviation(i, xi)),
+                        (None, None) => {
+                            let c = &self.diag_states[s];
+                            add_in(&mut e, x, p, g, |i, xi| c.deviation(i, xi))
+                        }
+                    }
+                }
+            }
+        }
+        for (s, cov) in self.states.iter_mut().enumerate() {
+            cov.update(x, 1.0, weight * post[s]);
+        }
+        for (s, cov) in self.diag_states.iter_mut().enumerate() {
+            cov.update(x, 1.0, weight * post[s]);
+        }
+        let p0 = st.prior_rows;
+        for (s, f) in self.factor_states.iter_mut().enumerate() {
+            let prior = (&st.held[..], st.shape().map(|g| g.tri(s)));
+            if !f.update_stabilized(x, weight * post[s], p0, prior, &mut work.delta) {
+                self.solve_failures += 1;
+            }
+        }
+        st.observe(d_clock, weight, &e);
+        st.e = e;
+        self.stabilized = Some(st);
+        self.factors.clear();
+    }
+
+    /// `predict` under stabilized forgetting: the step's read, on a copy
+    /// aged as the step ages the states before it.
+    fn predict_stabilized(&self, x: &[f64], exog: Option<f64>, d_clock: f64) -> crate::Step {
+        let mut c = self.clone();
+        let lam = self.cfg.decay.factor(d_clock);
+        c.age_stabilized(lam, &mut RowWork::default(), false);
+        c.ensure_factors_stabilized();
+        crate::Step {
+            pred: c.read(x, exog, self.counts_lam(d_clock)),
+            n_eff: self.n_eff,
+            extra: None,
+        }
+    }
 }
 
 impl crate::OnlineModel for Hmm {
@@ -1297,7 +2035,13 @@ impl crate::OnlineModel for Hmm {
             return;
         }
         let mut work = self.factors.row.take().unwrap_or_default();
-        self.step_in(x, y, d_clock, weight, out, &mut work);
+        // Stabilized forgetting's own step, out of line, so today's is
+        // compiled as it was without it.
+        if self.stabilized().is_some() {
+            self.step_in_stabilized(x, y, d_clock, weight, out, &mut work);
+        } else {
+            self.step_in(x, y, d_clock, weight, out, &mut work);
+        }
         self.factors.row = Some(work);
     }
 
@@ -1306,6 +2050,9 @@ impl crate::OnlineModel for Hmm {
             return refused;
         }
         let exog = self.cfg.tvtp.as_ref().map(|_| 0.0);
+        if self.stabilized().is_some() {
+            return self.predict_stabilized(x, exog, d_clock);
+        }
         crate::Step {
             pred: self.read(x, exog, self.counts_lam(d_clock)),
             n_eff: self.n_eff,
@@ -1320,6 +2067,9 @@ impl crate::OnlineModel for Hmm {
     fn predict_with(&self, x: &[f64], y: &[Option<f64>], d_clock: f64) -> crate::Step {
         if let Some(refused) = crate::model::refused_predict_with(self, x, y, d_clock) {
             return refused;
+        }
+        if self.stabilized().is_some() {
+            return self.predict_stabilized(x, self.exog_of(y), d_clock);
         }
         crate::Step {
             pred: self.read(x, self.exog_of(y), self.counts_lam(d_clock)),
@@ -1387,12 +2137,47 @@ impl crate::OnlineModel for Hmm {
                 // No window reads a run here (review 2026-09-26, C3 and C4).
                 m.states.iter_mut().for_each(EwCov::set_runs_off);
                 m.diag_states.iter_mut().for_each(EwCovDiag::set_runs_off);
+                // Stabilized forgetting, under `full` and `diag` in a model
+                // that learns. A state of 70 or later holds its `ŝ`, `V` and
+                // `f`, and derives the rest from its configuration; one of
+                // 69 or earlier holds none, and loads as this build would
+                // continue from its moments: `ŝ` the states' variances
+                // pooled by weight, `V` their total weight, and a factor
+                // form taken up again from its co-moments (rule 5's
+                // twenty-second exception).
+                let wants = m.cfg.learn
+                    && matches!(m.cfg.covariance, Covariance::Full | Covariance::Diagonal);
+                let p0 = m.cfg.prior_rows.unwrap_or(d as f64);
+                let (decay, fallback) = (m.cfg.decay, m.cfg.precision_prior);
+                let factored = m.factored();
+                let fits = match (wants, m.stabilized.as_deref_mut()) {
+                    (true, Some(st)) => {
+                        s.schema_version >= 70
+                            && st.rebuild(p0, d, decay, fallback, m.cfg.prior_shape())
+                            && st.held.is_empty() != factored
+                    }
+                    (true, None) => {
+                        if s.schema_version >= 70 {
+                            false
+                        } else {
+                            m.stabilize_loaded(p0);
+                            true
+                        }
+                    }
+                    (false, st) => st.is_none(),
+                };
+                if !fits {
+                    return Err(crate::model::damaged(
+                        "hmm",
+                        "its saved prior does not fit its configuration",
+                    ));
+                }
                 // A `full` state of schema 68 or earlier at `FACTOR_FROM`
                 // features or more holds co-moments: it loads as their
-                // factor, the one its next row read, and goes on in the
-                // factor form (rule 5's twentieth exception). A state of 69
-                // still in co-moments there is one whose take-up failed,
-                // which its next row tries again.
+                // factor and goes on in the factor form (rule 5's twentieth
+                // exception), under its prior (the twenty-second). A state
+                // of 69 or later still in co-moments there is one whose
+                // take-up failed, which its next row tries again.
                 if s.schema_version < 69 && m.states.iter().all(|c| !c.has_pending()) {
                     m.take_up_factors();
                 }
@@ -1420,6 +2205,12 @@ impl crate::OnlineModel for Hmm {
 
 #[cfg(test)]
 mod tests_factor;
+
+#[cfg(test)]
+mod tests_stabilized;
+
+#[cfg(test)]
+mod tests_shape;
 
 #[cfg(test)]
 mod tests {
@@ -1479,6 +2270,8 @@ mod tests {
             let ModelState::Hmm(inner) = &mut s.model else {
                 unreachable!()
             };
+            // A state before schema 70 keeps no prior.
+            inner.stabilized = None;
             edit(inner);
             Hmm::restore(&s)
         };
@@ -1519,6 +2312,10 @@ mod tests {
         let full = Hmm::new(cfg(3, 2)).unwrap();
         let mut s = full.state();
         s.schema_version = 65;
+        let ModelState::Hmm(inner) = &mut s.model else {
+            unreachable!()
+        };
+        inner.stabilized = None;
         let back = Hmm::restore(&s).unwrap();
         assert!(back.diag_states.is_empty() && back.states.len() == 2);
     }
@@ -1570,7 +2367,12 @@ mod tests {
             crate::OnlineModel::step(&mut m, &vec![at; d], &[], 1.0, 1.0);
         }
         assert!(m.factored() && m.solve_failures == 0 && m.n_eff == 20.0);
-        let held = m.factor_states.clone();
+        // The row's decay and the prior's move before its read, which a
+        // row that fails to score keeps, as the next read would make them;
+        // nothing it learns.
+        let mut aged = m.clone();
+        aged.age_stabilized(1.0, &mut RowWork::default(), false);
+        let held = aged.factor_states.clone();
         let out = crate::OnlineModel::step(&mut m, &vec![1e90; d], &[], 1.0, 1.0);
         assert!(out.pred.iter().all(|v| v.is_nan()));
         assert_eq!(m.solve_failures, 1, "the row did not fail to score");
@@ -1632,6 +2434,7 @@ mod tests {
             seed_rule: SeedRule::First,
             seed: 7,
             tvtp: None,
+            prior_rows: None,
         }
     }
 
@@ -2218,7 +3021,8 @@ mod tests {
         };
         let tau = c.transition_prior;
         let mut m = Hmm::new(c.clone()).unwrap();
-        let rows = stream(200, 29, 12);
+        // Runs of 6 rows, so every count holds several switches' worth.
+        let rows = stream(200, 29, 6);
         for (i, (x, _)) in rows.iter().enumerate() {
             m.step(x, &[], if i == 0 { 0.0 } else { 1.0 }, 1.0);
         }
@@ -3310,7 +4114,8 @@ mod tests {
         let shown = format!("{kept:?}");
         assert!(shown.contains("factors: Factors(") && !shown.contains("FactorWork"));
         // The factor form (task 479) builds no factor: its kept working
-        // space is the row's, and a fresh one reads the same bits.
+        // space is the row's and the one matrix the prior's move factorizes
+        // in, and a fresh one reads the same bits.
         let d = 13;
         let mut kept = Hmm::new(tests_factor::wide(d, Decay::Halflife(30.0))).unwrap();
         let mut fresh = kept.clone();
@@ -3329,7 +4134,11 @@ mod tests {
             );
         }
         assert!(kept.factored() && kept.factors.held.is_empty());
-        assert_eq!(kept.factors.work.kept(), 0, "no factor kept to write over");
+        assert_eq!(
+            kept.factors.work.kept(),
+            1,
+            "the prior's move's matrix alone"
+        );
         assert_eq!(kept, fresh);
     }
 
@@ -3496,8 +4305,13 @@ mod tests {
                     let p = m.filtered().to_vec();
                     let x = rows[5].0.clone();
                     // The densities about the largest, which cancels in `ξ`'s
-                    // normalisation: a far state's own underflows to 0.
-                    let logf = m.log_densities(&x).unwrap();
+                    // normalisation: a far state's own underflows to 0. Read
+                    // after the row's decay, as the row reads them: under the
+                    // prior a state's matrix moves with its weight.
+                    let mut aged = m.clone();
+                    aged.age_stabilized(lam, &mut RowWork::default(), false);
+                    aged.ensure_factors_stabilized();
+                    let logf = aged.log_densities(&x).unwrap();
                     let top = logf.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
                     let f: Vec<f64> = logf.iter().map(|v| (v - top).exp()).collect();
                     let n_before = m.a.clone();

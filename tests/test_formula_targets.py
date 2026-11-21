@@ -1016,13 +1016,15 @@ def test_a_bank_state_from_before_the_windows_state_changed_is_refused_by_number
     taken, so 65 loads too; 67 since tasks 340 and 341, for a failed call's
     pending notices and the rows held for their label times, so 66 loads
     too; 68 since task 281 (3), for ``kalman``'s square root, so 67 loads
-    too."""
+    too; 69 since task 479, for ``hmm``'s factor form of a wide ``full``
+    state, so 68 loads too; 70 since ``hmm``'s stabilized prior under
+    ``"full"`` and ``"diag"``, so 69 loads too."""
     bank = rp.ModelBank([spec(fwd())])
     bank.fit_predict(stream(60, 50))
     state = bank.save_bytes()
     key = b"\xaeschema_version"
     i = state.index(key) + len(key)
-    assert state[i] == 69, state[i]
+    assert state[i] == 70, state[i]
     for before in range(25, 61):
         old = state[:i] + bytes([before]) + state[i + 1 :]
         with pytest.raises(

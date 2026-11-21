@@ -12,10 +12,24 @@ after ``t`` rows
     C_l = (lam^T (Sigma0_l + (mu0_l - mu_l)(mu0_l - mu_l)') +
            sum_s lam^(T - T_s) w_s p_l(s) (x_s - mu_l)(x_s - mu_l)') / W_l
 
-(``T`` the decayed clock, no decay before the first row) and the density
-reads ``C_l + r_l I`` with the ridge ``r_l = precision_prior lam^T / W_l``,
-the given pair's share of the state's weight. The transition counts are the
-decayed sum of the filtered joint of consecutive states,
+(``T`` the decayed clock, no decay before the first row). Under ``"tied"``
+the density reads ``C_l + r_l I`` with the ridge ``r_l = precision_prior
+lam^T / W_l``, the given pair's share of the state's weight. Under
+``"full"`` and ``"diag"`` it reads the stabilized prior instead,
+``(W C_l + P0 diag(psi)) / (W + P0)`` with ``W = lam W_l`` the state's
+weight after the row's own decay, ``P0`` the number of features, and
+``psi`` the pooled within-state variance: it starts at the given
+covariances' diagonals pooled by weight (each given pair at weight 1) with
+``V`` their total weight, and each learned row ``s`` moves it as
+``e_i = sum_l p_l(s) (x_si - mu_li)^2`` (the means before the row),
+``V <- lam^(1/10) V + w_s``, ``psi <- psi + (w_s / V) (e - psi)``, ``V``
+decaying alone on a row of weight 0. Where the given covariances
+``Sigma0_l`` are not one diagonal matrix for every state, each state's
+prior is its own given matrix rescaled, ``(W C_l + P0 diag(sqrt(psi))
+Sigma0_l diag(sqrt(psi))) / (W + P0)``, with ``psi`` started at 1 and
+moved by ``e_i = sum_l p_l(s) (x_si - mu_li)^2 / Sigma0_l,ii``. The
+transition counts are the decayed sum of the filtered joint of consecutive
+states,
 
     A_kl = sum_s lam^(T - T_s) w_s xi_kl(s)
     xi_kl(s) = p_k(s-1) Pi_kl f_l(x_s) / sum_k'l' p_k'(s-1) Pi_k'l' f_l'(x_s)
@@ -63,6 +77,7 @@ same parameters, with the tolerance derived below.
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 
 import numpy as np
@@ -83,6 +98,13 @@ SEEDS = range(50)
 #: default Dirichlet pseudo-count per cell (``transition_prior``).
 RIDGE = 1e-2
 TAU = 1.0
+
+
+def prior_shapes(cov: str) -> bool:
+    """Whether a learning model under ``cov`` reads the stabilized prior
+    (``"full"`` and ``"diag"``) rather than the ridge (``"tied"``)."""
+    return cov in ("full", "diag")
+
 
 #: The unit roundoff of a double, ``u = 2^-53``: every basic operation
 #: returns its exact result times ``1 + delta``, ``|delta| <= u`` (Higham,
@@ -127,11 +149,13 @@ EM_CASES = [
 ]
 
 
-def hmm_stream(seed: int, k: int, n: int = 300, d: int = 2) -> dict[str, Any]:
+def hmm_stream(seed: int, k: int, n: int = 300, d: int = 2, own: bool = False) -> dict[str, Any]:
     """A sticky chain over ``k`` states with random means and covariances,
     its rows, their weights (0.2 to 3, about one row in seven at 0, the
     second row among them) and a given start: the true means moved by about
-    half a unit, identity covariances."""
+    half a unit, identity covariances; with ``own``, each state's true
+    covariance times a factor between 0.7 and 1.4 of its own, drawn apart
+    from the stream, which is the same rows either way."""
     rng = np.random.default_rng(seed)
     pi = np.full((k, k), 0.1 / (k - 1))
     np.fill_diagonal(pi, 0.9)
@@ -148,12 +172,23 @@ def hmm_stream(seed: int, k: int, n: int = 300, d: int = 2) -> dict[str, Any]:
     w = rng.uniform(0.2, 3.0, n)
     w[rng.random(n) < 1 / 7] = 0.0
     w[1] = 0.0
-    return {
-        "x": means[state] + noise,
-        "w": w,
-        "m0": means + rng.normal(0.0, 0.5, (k, d)),
-        "c0": np.array([np.eye(d)] * k),
-    }
+    m0 = means + rng.normal(0.0, 0.5, (k, d))
+    c0 = np.array([np.eye(d)] * k)
+    if own:
+        c0 = covs * np.random.default_rng(10_000 + seed).uniform(0.7, 1.4, (k, 1, 1))
+    return {"x": means[state] + noise, "w": w, "m0": m0, "c0": c0}
+
+
+def given_shape(c0: np.ndarray, cov: str) -> np.ndarray | None:
+    """Each state's prior where the given covariances are not one diagonal
+    matrix for every state: the given matrices, their diagonals alone under
+    ``"diag"``. ``None`` where they are one diagonal matrix, whose prior is
+    the pooled variance on the diagonal, and under ``"tied"``."""
+    if not prior_shapes(cov):
+        return None
+    d = c0.shape[1]
+    g = c0 * np.eye(d) if cov == "diag" else c0
+    return None if np.array_equal(g, np.broadcast_to(g[0] * np.eye(d), g.shape)) else g
 
 
 def model_run(
@@ -234,6 +269,9 @@ def rule_from_scratch(s: dict[str, Any], half_life: float, cov: str) -> dict[str
         "moments": np.zeros((n + 1, k, d, d)),
         "totals": np.zeros((n + 1, k)),
         "ridges": np.zeros((n + 1, k)),
+        "psi": np.zeros((n + 1, d)),
+        "shrink": np.zeros((n + 1, k)),
+        "slow": np.zeros(n + 1),
         "sigma": np.zeros((n + 1, k, d, d)),
         "ordered": np.zeros((n + 1, k, d)),
         "ordered_w": np.zeros((n + 1, k)),
@@ -245,6 +283,15 @@ def rule_from_scratch(s: dict[str, Any], half_life: float, cov: str) -> dict[str
         "resp": np.zeros((n, k)),
         "joints": np.zeros((n, k, k)),
     }
+
+    # The stabilized prior's scale and its weight, and the row's own decay
+    # and the slow one at ten half-lives, as the model computes them.
+    shape = given_shape(c0, cov)
+    given_var = None if shape is None else np.diagonal(shape, axis1=1, axis2=2)
+    psi = np.mean(np.diagonal(c0, axis1=1, axis2=2), axis=0) if shape is None else np.ones(d)
+    v_slow = float(k)
+    lam_row = math.exp2(-1.0 / half_life)
+    lam_slow = math.exp2(-1.0 / (10.0 * half_life))
 
     def state_params(t: int) -> tuple[np.ndarray, np.ndarray]:
         ages = np.exp(clock[t] - clock[1 : t + 1])
@@ -269,6 +316,17 @@ def rule_from_scratch(s: dict[str, Any], half_life: float, cov: str) -> dict[str
             rows["dev1"][t, st] = share @ dev
             rows["dev2"][t, st] = np.einsum("s,si,sj->ij", share, dev, dev)
         rows["means"][t], rows["totals"][t] = means, totals
+        rows["psi"][t] = psi
+        if prior_shapes(cov):
+            # The row's own decay before its read; none on the first row.
+            w_read = totals * (lam_row if t else 1.0)
+            share = w_read / (w_read + d)
+            rows["shrink"][t] = share
+            root = np.sqrt(psi)
+            for st in range(k):
+                c = rows["moments"][t, st]
+                prior = np.diag(psi) if shape is None else np.outer(root, root) * shape[st]
+                covs[st] = share[st] * c + (1.0 - share[st]) * prior
         if cov == "diag":
             covs = covs * np.eye(d)
         elif cov == "tied":
@@ -282,6 +340,7 @@ def rule_from_scratch(s: dict[str, Any], half_life: float, cov: str) -> dict[str
     filtered, predicted, loglik = np.zeros((n, k)), np.zeros((n, k)), np.zeros(n)
     for t in range(n):
         means, covs = state_params(t)
+        slow = lam_slow if t else 1.0
         # The counts decayed over the row's own clock before it reads them.
         counts = np.einsum(
             "s,skl->kl", np.exp(clock[t + 1] - clock[1 : t + 1]), w[:t, None, None] * joints[:t]
@@ -302,6 +361,13 @@ def rule_from_scratch(s: dict[str, Any], half_life: float, cov: str) -> dict[str
             joints[t] = joint / joint.sum()
             resp[t] = hmm.predict_proba(x[t : t + 1])[0]
             p = resp[t]
+            if prior_shapes(cov):
+                e = resp[t] @ ((x[t] - means) ** 2 / (1.0 if given_var is None else given_var))
+                v_slow = slow * v_slow + w[t]
+                psi = psi + (w[t] / v_slow) * (e - psi)
+        elif prior_shapes(cov):
+            v_slow = slow * v_slow
+        rows["slow"][t + 1] = v_slow
     state_params(n)
     ages = np.exp(clock[n] - clock[1 : n + 1])
     learned = [
@@ -406,6 +472,18 @@ def rule_error_bound(
     (A + tau) / rowsum`` reads ``A``'s against the pseudo-count. The ridge
     ``r_l = precision_prior lam^T / W_l`` follows ``W_l``.
 
+    *Under the prior* (``"full"`` and ``"diag"``). The density reads
+    ``m C_l + a diag(psi)``, ``m = W / (W + P0)``, ``a = 1 - m``, with ``W``
+    the weight after the row's decay, so ``dSigma = m dC + m a (C - diag(psi))
+    dln W + a diag(dpsi)``. ``psi`` is carried in the state: a learned row
+    takes ``psi' = (1 - b) psi + b e``, ``b = w / V'``, ``e_i = sum_l post_l
+    (x_i - mu_li)^2``, so ``dpsi' = (1 - b) dpsi + b de + b (e - psi) dln b``
+    with ``de_i = sum_l post_l (x_i - mu_li)^2 dln post_l - 2 post_l (x_i -
+    mu_li) dmu_li``. ``V`` is each side's own recursion over the weights and
+    the slow decay's ``exp2``, ``t + 1`` steps of a few roundings: one symbol
+    a row on ``ln b``. The read's shrinkage rounds ``4 u`` of ``Sigma``, and
+    the row's own decay ``LIBM u`` of ``W``.
+
     *The ages.* The model decays by ``lam = exp2(-1 / h)`` once a row and
     the rebuild by ``exp((t - s) ln lam)``: one symbol for each platform
     call, ``LIBM u`` on ``lam`` and ``(LIBM + 1) u |ln lam|`` on ``ln
@@ -445,7 +523,10 @@ def rule_error_bound(
     o_r = o_w + k
     o_a = o_r + k
     o_p = o_a + k * k
-    z = o_p + k
+    # The stabilized prior's scale, under "full" and "diag".
+    o_s = o_p + k
+    z = o_s + d
+    prior = prior_shapes(cov)
 
     def i_mu(st: int, i: int) -> int:
         return o_mu + st * d + i
@@ -458,8 +539,9 @@ def rule_error_bound(
     # zeta (the stored posterior's own rounding, uncentred), e1..e4 (the
     # weight's product, the weight's add, the share's product and division,
     # the ridge's division), d of the mean's step, d^2 of the covariance's,
-    # and k^2 of the counts'.
-    per_row = k * (7 + d + d * d) + k * k
+    # and k^2 of the counts'; then d of the prior scale's step and one for
+    # its weight's.
+    per_row = k * (7 + d + d * d) + k * k + d + 1
     psi_parts = np.zeros((n, k, 4))
     big = 2 + n * per_row
     jac = np.zeros((z, big))
@@ -506,7 +588,9 @@ def rule_error_bound(
         s_e = new[3 * k : 7 * k].reshape(k, 4)
         s_mu = new[7 * k : 7 * k + k * d].reshape(k, d)
         s_c = new[7 * k + k * d : 7 * k + k * d + k * d * d].reshape(k, d, d)
-        s_a = new[7 * k + k * d + k * d * d :].reshape(k, k)
+        s_a = new[7 * k + k * d + k * d * d : 7 * k + k * d + k * d * d + k * k].reshape(k, k)
+        s_s = new[7 * k + k * d + k * d * d + k * k : per_row - 1]
+        s_v = new[per_row - 1]
         width = used + per_row
         aug = np.zeros((z + per_row, width))
         aug[:z, :used] = jac[:, :used]
@@ -534,7 +618,31 @@ def rule_error_bound(
         share = totals / totals.sum()
         sig_fun = np.zeros((k, d, d, z + per_row))
         sig_fresh = np.zeros((k, d, d))
+        psi = rows["psi"][t]
         for st in range(k):
+            if prior:
+                # `m C + a diag(psi)`, `m = W / (W + P0)`, `a = 1 - m`, `W`
+                # the weight after the row's decay: `dm = m a dln W`, `da =
+                # -dm`. The row's own decay is a platform's `exp2`, which
+                # either side may round off by `LIBM u` of it, as a fresh
+                # error of the row's read.
+                m_st = rows["shrink"][t, st]
+                a_st = 1.0 - m_st
+                for i in range(d):
+                    for j in range(d):
+                        if cov == "diag" and i != j:
+                            continue
+                        lean = m_st * a_st * (c[st, i, j] - (psi[i] if i == j else 0.0))
+                        sig_fun[st, i, j, i_c(st, i, j)] = m_st
+                        sig_fun[st, i, j, o_w + st] += lean
+                        sig_fresh[st, i, j] = (
+                            m_st * f_c[st, i, j]
+                            + 4.0 * U * abs(sigma[st, i, j])
+                            + (LIBM * U if t else 0.0) * abs(lean)
+                        )
+                    sig_fun[st, i, i, o_s + i] += a_st
+                    sig_fresh[st, i, i] += a_st * psi[i] * (f_w[st] + 3.0 * U)
+                continue
             for i in range(d):
                 for j in range(d):
                     if cov == "diag" and i != j:
@@ -644,6 +752,25 @@ def rule_error_bound(
                     mag[s_c[st, i, j]] = 7.0 * U * sh * abs(delta[i] * delta[j]) + 2.0 * U * min(
                         1.0, 4.0 * sh / U
                     ) * abs(c[st, i, j] + sh * delta[i] * delta[j])
+        if prior:
+            # The prior's scale takes the row: `e_i = sum_l post_l
+            # (x_i - mu_li)^2`, `psi' = (1 - b) psi + b e`, `b = w / V'`.
+            # Its weight `V` is each side's own recursion over the rows'
+            # weights and the slow decay's `exp2`, `t + 1` steps of a few
+            # roundings each: one symbol a row on `ln b`.
+            b = w[t] / rows["slow"][t + 1]
+            dev = x[t] - mu
+            e = post @ dev**2
+            mag[s_v] = (t + 1.0) * (LIBM + 3.0) * U
+            for i in range(d):
+                de = np.zeros(z + per_row)
+                for st in range(k):
+                    de += post[st] * dev[st, i] ** 2 * ln_post[st]
+                    de -= 2.0 * post[st] * dev[st, i] * unit[i_mu(st, i)]
+                step[o_s + i] = (1.0 - b) * unit[o_s + i] + b * de
+                step[o_s + i] += b * (e[i] - psi[i]) * fresh_rows[s_v - used]
+                step[o_s + i] += fresh_rows[s_s[i] - used]
+                mag[s_s[i]] = 4.0 * U * (abs(psi[i]) + b * abs(e[i])) + gamma(k + 2) * b * e[i]
         xi = rows["joints"][t]
         ln_xi = np.zeros((k, k, z + per_row))
         for kk in range(k):
@@ -673,7 +800,7 @@ def rule_error_bound(
             jac=jac[:, :used],
             mag=mag[:used],
             row=symbol_row[:used],
-            layout=(o_mu, o_c, o_w, o_r, o_a, o_p),
+            layout=(o_mu, o_c, o_w, o_r, o_a, o_p, o_s),
             psi_parts=psi_parts,
         )
     return out
@@ -764,6 +891,74 @@ class TestOnlineEmIsItsRuleRebuilt:
         ledger.record("hmm_online_em", "error_over_tolerance", worst, floor=0.05)
         assert min(r["moved"] for r in rows) > 0.1
         assert worst.max() <= 1.0
+
+
+#: (covariance, states, half-life) with the states given at covariances of
+#: their own: both shapes that take the prior, a short memory and a long one.
+GIVEN_CASES = [("full", 2, 30.0), ("full", 3, 300.0), ("diag", 3, 30.0), ("diag", 2, 300.0)]
+
+#: Every row's filtered and predicted probabilities, absolute; its
+#: log-likelihood and the learned means and covariances, relative to ``1 +
+#: |value|``; the learned counts, relative to the largest. Measured
+#: 2026-11-20 over five seeds of ``GIVEN_CASES`` (aarch64, macOS): the
+#: worst 7.4e-15 (the counts of ``"diag"`` at two states and a half-life of
+#: 300). The rule amplifies the two sides' rounding where a state's weight
+#: has decayed far below a row's (the module's docstring: the diagonal
+#: prior's rule measured 1e-11 on one platform and 4e-10 on another), so
+#: the bound leaves that for another platform's last bits.
+GIVEN_TOL = 2e-9
+
+
+def given_errors(seed: int, cov: str, k: int, half_life: float) -> dict[str, float]:
+    """:func:`em_errors` with the states given at covariances of their own
+    (``hmm_stream(own=True)``), each error as it is, not over a bound."""
+    s = hmm_stream(seed, k, own=True)
+    assert given_shape(s["c0"], cov) is not None
+    out, learned = model_run(s, half_life, cov)
+    want = rule_from_scratch(s, half_life, cov)
+
+    def rel(a: np.ndarray, b: np.ndarray) -> float:
+        return float((np.abs(a - b) / (1.0 + np.abs(b))).max())
+
+    covs = want["covs"] * np.eye(s["m0"].shape[1]) if cov == "diag" else want["covs"]
+    filtered = out.select(f"filtered_state{j}" for j in range(k)).to_numpy()
+    predicted = out.select(f"predicted_state{j}" for j in range(k)).to_numpy()
+    return {
+        "filtered": float(np.abs(filtered - want["filtered"]).max()),
+        "predicted": float(np.abs(predicted - want["predicted"]).max()),
+        "loglik": rel(out["loglik"].to_numpy(), want["loglik"]),
+        "means": rel(learned["means"], want["means"]),
+        "covs": rel(learned["covs"], covs),
+        "counts": float(np.abs(learned["counts"] - want["counts"]).max() / want["counts"].max()),
+        "moved": float(np.abs(learned["means"] - s["m0"]).max()),
+    }
+
+
+class TestGivenCovariancesAreEachStatesPrior:
+    """With the states given at covariances of their own, each state's
+    prior is the matrix it was given, rescaled by the tracked ``psi``: the
+    filter and what it learns are that rule rebuilt with hmmlearn, scipy
+    and numpy, row by row, as :class:`TestOnlineEmIsItsRuleRebuilt` rebuilds
+    the diagonal prior's."""
+
+    @pytest.mark.parametrize(("cov", "k", "half_life"), GIVEN_CASES)
+    def test_five_seeds(self, cov, k, half_life):
+        rows = [given_errors(seed, cov, k, half_life) for seed in range(5)]
+        worst = {key: max(r[key] for r in rows) for key in ERRORS}
+        print({key: f"{v:.3g}" for key, v in worst.items()})
+        assert min(r["moved"] for r in rows) > 0.1
+        assert max(worst.values()) <= GIVEN_TOL, worst
+
+    def test_the_diagonal_prior_is_another_rule(self):
+        """The check has teeth: the same rows against the rule with the
+        pooled variance on the diagonal for every state, the prior of a
+        model seeded from its rows, part by far more than the tolerance."""
+        s = hmm_stream(0, 2, own=True)
+        out, _ = model_run(s, 30.0, "full")
+        plain = dict(s, c0=np.array([np.eye(2)] * 2))
+        other = rule_from_scratch(plain, 30.0, "full")
+        filtered = out.select(f"filtered_state{j}" for j in range(2)).to_numpy()
+        assert np.abs(filtered - other["filtered"]).max() > 1e-3
 
 
 # --- the limit at half_life = inf against Baum-Welch ------------------------------

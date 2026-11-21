@@ -141,9 +141,9 @@ the streams switch.
 
 | how it was started | mean share in the true state | worst seed |
 |---|---|---|
-| seeded from the rows (`warm_rows`), learning | 0.553 | 0.506 |
+| seeded from the rows (`warm_rows`), learning | 0.553 | 0.505 |
 | true covariances, filter only | 0.979 | 0.966 |
-| true covariances, and go on learning | 0.948 | 0.897 |
+| true covariances, and go on learning | 0.976 | 0.961 |
 | true covariances, filter only, `precision_prior` = 1.0 | 0.580 | 0.521 |
 
 **Seeded from the rows, the filter splits zero-mean rows by direction.**
@@ -165,6 +165,17 @@ to 0.580. So keep `precision_prior` well below the data's variance, as
 [`hmm`'s entry in MODELS.md](MODELS.md#hmm--which-regime-are-we-in) says.
 `bocpd`'s `covariance_prior` fails the same way when set too large ([its
 entry](MODELS.md#bocpd--how-long-has-this-regime-lasted)).
+
+**Learning from the true covariances keeps the filter's share, because
+each state forgets toward the covariance it was given.** A learning model's
+states forget toward a prior worth `prior_rows` rows, by default the number
+of features, 2 here. With the states given, each state's prior is its own
+given covariance, rescaled as the rows' variances move
+([`hmm`'s entry in MODELS.md](MODELS.md#hmm--which-regime-are-we-in)). The
+state that wins no rows here, the one at correlation 0.8, goes on reading
+0.8, so the rows that fit neither state well do not teach it the present
+regime. The share learning keeps is 0.976 against the filter's 0.979, and
+0.961 in the worst seed against 0.966.
 
 The learned transition matrix is not read back through the public API, so
 what is scored is the state path, which is what a caller reads. The
@@ -190,17 +201,18 @@ which agrees with either state within a row or two.
 |---|---|---|---|---|---|
 | seeded from the rows (`warm_rows`), learning | 0.456 | 0.450 | - | - | 24 of 24 |
 | true covariances, filter only | 0.992 | 0.989 | 12 | 32 | 0 of 24 |
-| true covariances, and go on learning | 0.972 | 0.898 | 10 | 294 | 0 of 24 |
+| true covariances, and go on learning | 0.987 | 0.979 | 12 | 35 | 0 of 24 |
 
 **Seeded from the rows, it follows no switch.** It never holds either
 state for 20 rows running, because it splits the rows by direction, as in
 the table above. Its share is below a half because here the 500 rows before
 seeding count as misses.
 
-**Learning is slower on one switch in 24.** With learning on, the median
-switch is held within 10 rows, but one took 294, and that seed's share is
-0.898. Without learning, no switch took more than 32 rows, and no seed's
-share fell below 0.989.
+**Learning follows a switch about as fast.** With learning on, the median
+switch is held within 12 rows and the longest took 35, and the worst seed's
+share is 0.979. Without learning, no switch took more than 32 rows, and no
+seed's share fell below 0.989. A state whose regime is away for 1,200 rows
+reads the covariance it was given when the regime comes back.
 
 ## 2. Is the monitor the size its paper says?
 

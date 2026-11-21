@@ -55,6 +55,30 @@ model that only the new build has is listed as an addition and passes.
 
 ### Changed
 
+- **`hmm` under `covariance_type` `"full"` and `"diag"`, in a model that
+  learns, forgets each state's covariance toward a prior,** where it kept a
+  ridge that decayed with the state's data (stabilized forgetting, Kulhavý
+  and Zarrop, 1993): a state reads `(W·M + P₀·diag(ψ))/(W + P₀)` after the
+  row's decay, with `ψ` the features' pooled within-state variance and
+  `P₀` the new spec option `prior_rows`, the number of features by default.
+  A state that wins no rows for a while reads a broad density near
+  `diag(ψ)`, where it collapsed onto its first row back: on simulated
+  streams a regime absent 20 to 500 half-lives was recovered in 136 of 144
+  `full` runs where 60 were (`diag`: 136 where 108), and three ways the
+  ridge went NaN are gone (a constant feature, a feature that sticks, long
+  gaps at 13 features or more). With no decay it is scikit-learn QDA's
+  `reg_param = P₀/(W + P₀)` toward `diag(ψ)`. From 13 features the factor
+  form moves its prior back by one factorization when it drifts 1/16 from
+  its target (a posterior within 0.009 of the exact recursion). With
+  `means` and `covs` given, each state's prior is the covariance it was
+  given, rescaled as the rows' variances move: where the regimes differ in
+  correlation alone a learning filter's share in the true state is 0.976,
+  where it was 0.948.
+  `precision_prior` stays required: the ridge under `"tied"` and with
+  `learn = False`, and elsewhere only where every `ψ` is 0. Schema 70: a
+  state saved earlier loads with a prior seeded from its moments and goes
+  on under it, not as the old build would. Moves: `hmm.filtered_state*`,
+  `hmm.predicted_state*`, `hmm.state`, `hmm.loglik`, `hmm.coef`.
 - **`ModelBank.skip_learned` and the command line's `--skip-learned` refuse a
   spec with `session` or `restart_after_step_back` unless the caller
   declares that the clock runs on,** by `skip_learned(frame,
@@ -361,6 +385,15 @@ model that only the new build has is listed as an addition and passes.
 
 ### Performance
 
+- **`hmm`'s stabilized prior costs time under `"full"` below 13 features
+  and under `"diag"`, and little or none in the factor form.** On arm64,
+  two states, against the ridge it replaces: `"full"` at 13 to 32
+  features 0.95 to 0.98 of its time at a half-life of 500 rows and 1.10 to
+  1.20 at 50; `"full"` at 4 and 8 features 1.08 to 1.20; `"diag"` 1.19 to
+  1.29. The instruction case (`hmm`, 4 features, `"full"`) retires 1.15
+  times the instructions on arm64, and its budget rises with it. The
+  state grows by `2d + 1` numbers a model in the factor form, `d + 1`
+  elsewhere.
 - **`lasso`'s coordinate descent sweeps without a chain of dependent
   subtractions from 40 features.** Each coordinate's update subtracted the
   terms of the coefficients after it one at a time, each waiting for the
