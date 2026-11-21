@@ -438,7 +438,10 @@ def main() -> None:
     )
     r = compare.adwin_margins()
     table(
-        ["ADWIN cut tests (20 seeds x 3 streams)", "closest | |mu0 - mu1| / eps_cut - 1 |"],
+        [
+            "ADWIN cut tests (20 seeds x 3 streams)",
+            "closest relative distance of the mean gap from eps_cut",
+        ],
         [[r["tests"], r["min_rel_margin"]]],
     )
     print(f"total {time.time() - t0:.0f} s")

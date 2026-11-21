@@ -278,7 +278,7 @@ change row is 1), whatever caused it.
   16 flags for 5 changes on the step. River's reset avoids the repeats and
   discards the post-change rows already seen; the first flag is the same row.
 - **ADWIN at `clock = 1`** moves the first flag earlier, by up to 31 rows
-  (§3: a median of 33 rows against 56 at `clock = 32`), at 10 to 20 times the
+  (§3: a median of 33 rows against 56 at `clock = 32`), at 11 to 13 times the
   cost (§5).
 - **ADWIN's Hoeffding bound** (Theorem 3.1, for values in [0, 1]) is looser
   than the Bernstein bound on a stream whose variance is well below the
@@ -294,9 +294,41 @@ change row is 1), whatever caused it.
 
 ### 3. False alarms and delay
 
-TABLE3
+200 seeds of 10,000 rows for each stream. Real-valued: N(0, 1), a step of +1
+sd at row 5,000, or a ramp to +1 sd over 1,000 rows from row 5,000. Bits: an
+error rate of 0.10, a step to 0.25, or a ramp to 0.25. Delay: rows from the
+change to the first flag at or after it (the change row is 1). A false alarm
+is a flag on the null stream, or before the change. The prototype runs these
+(its flags are river's, §1); river would take about as long for all but
+KSWIN, whose scipy call makes it twenty times slower.
 
-TABLE3A
+| detector | null: alarms | per row | per check (ADWIN) | step: alarms before | step delay median | p10 | p90 | missed | ramp delay median | p90 | missed |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| ADWIN delta=0.002 | 0 | 0 | 0 | 0 | 56 | 24 | 56 | 0 | 408 | 475.200 | 0 |
+| ADWIN delta=0.002, clock=1 | 0 | 0 | 0 | 0 | 33 | 22 | 43.100 | 0 | 398 | 468.200 | 0 |
+| ADWIN delta=0.1 | 94 | 4.70e-05 | 1.51e-03 | 38 | 24 | 24 | 56 | 0 | 312 | 408 | 0 |
+| ADWIN delta=0.002, bits | 0 | 0 | 0 | 0 | 168 | 120 | 248 | 0 | 728 | 888 | 0 |
+| ADWIN Hoeffding, delta=0.002, bits | 0 | 0 | 0 | 0 | 408 | 248 | 568 | 0 | 1112 | 1304 | 0 |
+| Page-Hinkley lambda=25 | 5104 | 2.55e-03 | - | 2516 | 19 | 9 | 33.100 | 0 | 180 | 282.800 | 0 |
+| Page-Hinkley lambda=50 (default) | 1198 | 5.99e-04 | - | 547 | 39 | 16 | 58.200 | 0 | 276 | 394.300 | 0 |
+| DDM | 181 | 9.05e-05 | - | 179 | 361 | 172.500 | 1492.700 | 2 | 895.500 | 2156.800 | 2 |
+| EDDM | 3392 | 1.70e-03 | - | 1982 | 94 | 23 | 306 | 0 | 254.500 | 782.400 | 0 |
+| KSWIN alpha=0.005 | 2564 | 1.28e-03 | - | 1239 | 24 | 14 | 38.100 | 0 | 478 | 1404.500 | 0 |
+
+ADWIN against its bounds. Theorem 3.1 bounds the chance of a false cut at a
+check by `delta`; with no cut seen, the rule of three gives the 95% upper
+limit `3 / checks`. For the step, `n1` at factor 1 is where the expected mean
+gap first exceeds `eps_cut` at the split on the change (`n0 = 5,000`); at
+factor 2 the theorem promises a cut with probability at least `1 - delta`,
+plus the wait for the next check.
+
+| case | null checks | false cuts | per check | 95% upper (none seen) | delta | upper / delta | n1, factor 1 | step delay median | n1, factor 2 | step delay max | share within factor 2 + clock |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| ADWIN delta=0.002 | 62400 | 0 | 0 | 4.81e-05 | 2.00e-03 | 0.024 | 34 | 56 | 103 | 56 | 1 |
+| ADWIN delta=0.002, clock=1 | 1998000 | 0 | 0 | 1.50e-06 | 2.00e-03 | 7.51e-04 | 34 | 33 | 103 | 56 | 1 |
+| ADWIN delta=0.1 | 62400 | 94 | 1.51e-03 | - | 0.100 | 0.015 | 21 | 24 | 60 | 56 | 1 |
+| ADWIN delta=0.002, bits | 62400 | 0 | 0 | 4.81e-05 | 2.00e-03 | 0.024 | 151 | 168 | 490 | 344 | 1 |
+| ADWIN Hoeffding, delta=0.002, bits | 62400 | 0 | 0 | 4.81e-05 | 2.00e-03 | 0.024 | 388 | 408 | 2070 | 792 | 1 |
 
 - **ADWIN is far inside its bound.** No false cut in 62,400 checks at `delta =
   0.002`, Bernstein or Hoeffding, at either cadence: the 95% upper limit, 4.8e-5
@@ -330,19 +362,51 @@ TABLE3A
   with probability 2.5e-3 and, at river's `window_size = 100`, a fresh window
   is tested on every row once full. 3b has the test's size.
 
-TABLE3B
+| values rounded to | tests (no reset) | p <= alpha | rate | exact size (continuous) | z (as if independent) | alarms, river's reset | alarms per row |
+|---|---|---|---|---|---|---|---|
+| none | 1980200 | 5171 | 2.61e-03 | 2.53e-03 | 2.277 | 2554 | 1.28e-03 |
+| 1 decimals | 1980200 | 3298 | 1.67e-03 | 2.53e-03 | -24.218 | 1859 | 9.29e-04 |
+| 0 decimals | 1980200 | 510 | 2.58e-04 | 2.53e-03 | -63.657 | 378 | 1.89e-04 |
 
-Without resets each test rejects at the exact size (2.5e-3 measured, 2.53e-3
-exact); the tests overlap (each shares `r - 1` new rows and most of the old
+Without resets each test rejects at about the exact size (2.61e-3 measured,
+2.53e-3 exact); the tests overlap (each shares `r - 1` new rows and most of the old
 sample's pool with the next), so the `z` computed as if independent overstates
 the precision. River's reset turns each cluster of rejections into one alarm,
 so its alarms a row are fewer than its tests' size. With values rounded to
 one decimal or to integers (ties) the continuous tail is conservative: the
-rejection rate falls to RATE1 and RATE0.
+rejection rate falls to 1.67e-3 and 2.6e-4.
 
 ### 4. State size
 
-TABLE4
+| ADWIN width (M = 5) | levels | bound 1 + floor(log2((W + M - 1)/M)) | buckets | M x bound | bytes counted | bytes by formula | rows over the bound |
+|---|---|---|---|---|---|---|---|
+| 1000 | 8 | 8 | 35 | 40 | 880 | 880 | 0 |
+| 10000 | 11 | 11 | 49 | 55 | 1192 | 1192 | 0 |
+| 100000 | 15 | 15 | 63 | 75 | 1608 | 1608 | 0 |
+| 1000000 | 18 | 18 | 76 | 90 | 1920 | 1920 | 0 |
+
+| ADWIN max_width | largest width | most levels | bound | bytes at the bound |
+|---|---|---|---|---|
+| 1000 | 1000 | 8 | 8 | 880 |
+| 10000 | 10000 | 11 | 11 | 1192 |
+
+| width | river's pickled ADWIN (bytes) |
+|---|---|
+| 1000 | 1233 |
+| 10000 | 1617 |
+| 100000 | 2129 |
+
+| detector | bytes counted | arrays |
+|---|---|---|
+| Page-Hinkley | 56 | scalars (7,) |
+| DDM | 56 | scalars (7,) |
+| EDDM | 72 | scalars (9,) |
+| KSWIN W=100, r=30, draw=random | 3332 | window (100,), scalars (4,), rng (624,), rng_pos (1,) |
+| KSWIN W=100, r=30, draw=all | 832 | window (100,), scalars (4,) |
+| KSWIN W=1000, r=30, draw=random | 10532 | window (1000,), scalars (4,), rng (624,), rng_pos (1,) |
+| KSWIN W=1000, r=30, draw=all | 8032 | window (1000,), scalars (4,) |
+| KSWIN W=10000, r=30, draw=random | 82532 | window (10000,), scalars (4,), rng (624,), rng_pos (1,) |
+| KSWIN W=10000, r=30, draw=all | 80032 | window (10000,), scalars (4,) |
 
 **ADWIN**, in river's layout (each level a fixed `M + 1` totals and `M + 1`
 variances, and a count; six scalars):
@@ -374,23 +438,39 @@ bounds it.
 
 ### 5. Per-row cost
 
-TABLE5
+| detector | window | ours | ours, clock = 1 | river |
+|---|---|---|---|---|
+| ADWIN | 1000 | 1.053 | 11.306 | 0.084 |
+| KSWIN r=30 | 1000 | 21.553 | - | 429.715 |
+| KSWIN r=100 | 1000 | 73.155 | - | 490.136 |
+| ADWIN | 10000 | 1.261 | 16.973 | 0.084 |
+| KSWIN r=30 | 10000 | 23.038 | - | 515.008 |
+| KSWIN r=1000 | 10000 | 1262.632 | - | 1972.927 |
+| Page-Hinkley | - | 0.470 | - | 0.562 |
+| DDM | - | 0.433 | - | 0.464 |
+| EDDM | - | 0.195 | - | 0.184 |
 
 Pure Python against river (Rust for ADWIN; Python and scipy for the others),
 the means of 20,000 rows (KSWIN 2,000 or fewer) after the window is filled.
 These rank the work; they do not predict the Rust option's cost. ADWIN's row
 is `O(1)` amortized plus, every `clock` rows, a scan of its `O(M log W)`
 buckets: going from 1,000 to 10,000 rows adds three levels, and the cost
-grows by a tenth at `clock = 32`, by about half to double at `clock = 1`
+grows by a fifth at `clock = 32` and by half at `clock = 1`
 (the scan every row). KSWIN's row is the draw and two sorts, `O(r log r)`,
-independent of `W` at fixed `r` (24 to 26 us here); with `r = W / 10` it is
+independent of `W` at fixed `r` (22 to 23 us here); with `r = W / 10` it is
 `O(W log W)`. River's KSWIN spends about half a millisecond a test in
 `scipy.stats.ks_2samp`'s overhead. Page-Hinkley, DDM and EDDM are a few
 flops a row.
 
 ### 6. Zero-weight rows
 
-TABLE6
+| detector | rows | zero-weight rows | first row zero | flags | kept rows differing from river | zero rows flagged | zero rows that moved the state |
+|---|---|---|---|---|---|---|---|
+| ADWIN | 20000 | 4038 | yes | 1 | 0 | 0 | 0 |
+| Page-Hinkley | 20000 | 4038 | yes | 42 | 0 | 0 | 0 |
+| DDM | 20000 | 4038 | yes | 1 | 0 | 0 | 0 |
+| EDDM | 20000 | 4038 | yes | 43 | 0 | 0 | 0 |
+| KSWIN | 20000 | 4038 | yes | 16 | 0 | 0 | 0 |
 
 Every detector skips a zero-weight row entirely: its state's bytes before and
 after are equal (a pickle of `save()`), it flags nothing, and on the rows of
@@ -400,7 +480,13 @@ move (ADWIN's `tick`, KSWIN's draw).
 
 ### 7. Chunk invariance
 
-TABLE7
+| detector | chunks | flags | rows differing | final state bit-equal |
+|---|---|---|---|---|
+| ADWIN | 201 | 1 | 0 | yes |
+| Page-Hinkley | 201 | 55 | 0 | yes |
+| DDM | 201 | 5 | 0 | yes |
+| EDDM | 201 | 57 | 0 | yes |
+| KSWIN | 201 | 22 | 0 | yes |
 
 One pass against 201 chunks at random boundaries, the state saved (a pickled
 `save()`) and loaded into a fresh detector at every boundary, on a stream with
@@ -411,7 +497,42 @@ reset, KSWIN's random state) are in the saved state.
 
 ### 8. Numerical risk
 
-TABLE8
+| ADWIN: offset | max_width | rows | width | total abs gap | total rel gap | sum of squares rel gap |
+|---|---|---|---|---|---|---|
+| 0 | 1000 | 200000 | 960 | 9.97e-13 | 2.81e-14 | 2.32e-14 |
+| 10000 | 1000 | 200000 | 960 | 8.87e-09 | 9.24e-16 | 6.19e-13 |
+| 1.00e+08 | 1000 | 200000 | 960 | 1.37e-04 | 1.42e-15 | 5.91e-09 |
+| 0 | 10000 | 200000 | 9536 | 2.40e-12 | 7.06e-14 | 2.63e-14 |
+| 10000 | 10000 | 200000 | 9536 | 2.74e-09 | 2.87e-17 | 1.31e-12 |
+| 1.00e+08 | none | 200000 | 200000 | 0.034 | 1.70e-15 | 1.58e-09 |
+
+| running mean: offset | rows | ulps, (x - m)/n (river) | ulps, sum/n |
+|---|---|---|---|
+| 0 | 1000 | 14 | 6 |
+| 0 | 10000 | 52 | 86 |
+| 0 | 100000 | 111 | 94 |
+| 0 | 1000000 | 621 | 357 |
+| 1000 | 1000 | 4 | 9 |
+| 1000 | 10000 | 8 | 39 |
+| 1000 | 100000 | 82 | 54 |
+| 1000 | 1000000 | 68 | 227 |
+| 1000000 | 1000 | 9 | 1 |
+| 1000000 | 10000 | 7 | 8 |
+| 1000000 | 100000 | 42 | 51 |
+| 1000000 | 1000000 | 412 | 21 |
+
+| Page-Hinkley alpha | rows | m_t at the end | worst abs gap | relative to m_t |
+|---|---|---|---|---|
+| 1.0 | 1000000 | -4468.314 | 8.78e-08 | 1.96e-11 |
+| 0.9999 | 1000000 | 69.919 | 1.76e-11 | 2.52e-13 |
+
+| DDM rows | max ulps, recursive p vs errors/n | at the end |
+|---|---|---|
+| 1000000 | 265 | 75 |
+
+| ADWIN cut tests (20 seeds x 3 streams) | closest relative distance of the mean gap from eps_cut |
+|---|---|
+| 637520 | 6.59e-05 |
 
 **ADWIN's sums.** The window total `S` and sum of squares `V` are updated by
 addition on insert and subtraction on each dropped bucket, so their rounding
@@ -465,7 +586,7 @@ nearest neighbours either side of 0.005 at `r = 30` are 2.53e-3 and 6.55e-3.
 | KSWIN p-value | 16 ulps against scipy's `ks_2samp(method="exact")`; 0 against the integer sum rounded once | scipy's Horner evaluation was 2 to 11 ulps from the correctly rounded value for `r` from 10 to 300 (§1b); the decision `p <= alpha` never sat that close: the p-values are a discrete set and the nearest to 0.005 at `r = 30` is 2.53e-3 |
 | ADWIN false cuts on the null, per check | at most `delta`; the ledger's kind (statistical, tightening only) | measured 0 in 62,400 checks at `delta = 0.002` (95% upper limit 4.8e-5, 2.4% of `delta`) and 94 at `delta = 0.1` (1.5e-3, 1.5% of `delta`) (§3a) |
 | ADWIN step delay | every seed within Theorem 3.1's `n1` (factor 2) plus `clock - 1` | measured 200 of 200 seeds in every case (§3a) |
-| KSWIN test size, no reset | within 4 standard errors of the exact size, the standard error inflated by the tests' overlap (each window shares `r - 1` new rows with the next) | measured 2.5e-3 against the exact 2.53e-3 (§3b) |
+| KSWIN test size, no reset | within 4 standard errors of the exact size, the standard error inflated by the tests' overlap (each window shares `r - 1` new rows with the next) | measured 2.61e-3 against the exact 2.53e-3 (§3b), `z = 2.3` as if independent |
 | a zero-weight row (the first included): flags against river on the stream without it, the state before and after it | exact; bit-equal | measured 0 (§6) |
 | chunk invariance, save and load mid-stream | bit-equal flags and final state | rule 3; measured 0 over 201 chunks (§7) |
 
