@@ -127,3 +127,52 @@ longer exact, and the bank total counts `16 R` or `24 R` per group.
 
 **Changes a default: no.** Four new operators and one new decay option; the clock-decayed means are untouched.
 
+## 519. `kalman`: `coef_prior`, the innovation log-likelihood and the Mahalanobis distance
+
+Beside `kalman`'s recursion, in units of the noise (a random-walk-beta filter; per target the mean `b`,
+the covariance `P`, and the clock `D` since `P` last took an observation). A row of clock step `d`, weight `w`,
+features `z` (intercept first) does `D += d` (every row), and on a row that observes (`w > 0`)
+`P += q D^2 I`, `D = 0`, `s = z'Pz + 1/w`, `nu = y - z'b`, gain `Pz/s`, `b += (Pz/s) nu`, `P -= (Pz/s)(Pz)'`; the
+first observation is the exact diffuse step on the intercept (`b_0 += nu`, `P_00 = s`, `P_0i = -(Pz)_i`, the slopes' block
+unmoved). New, read on the out-of-sample innovation before the update:
+
+- **`coef_prior`**: the initial `b` (as `ewridge` and `rls` have it; for them it is also the ridge's centre).
+- **Innovation log-likelihood** `ll = -0.5 (ln 2 pi + ln(R s) + nu^2/(R s))`, `R` the model's noise estimate.
+- **Mahalanobis distance** `|nu| / sqrt(R s)` (the square root: C1's correction, filterpy's `mahalanobis` is `sqrt(y' S^-1 y)`;
+  rheon's `ew_cov` `mahal` is a distance too, so the two agree in kind; a squared form would be the `ll`'s quadratic).
+  It is not the existing `zscore`: that divides by the residual spread `sqrt(R)`, this by the innovation spread
+  `sqrt(R s)`, which carries the coefficients' own uncertainty `z'Pz`.
+
+Against filterpy `KalmanFilter` (`F = I`, `predict(Q = R q D^2 I)`, `update(z, R = R/w, H = z')`; `x`, `log_likelihood`,
+`mahalanobis`; `P` in absolute units `R P`), 10-20 seeds, k = 2 and 8, 200 rows:
+
+| case | coefficients | `pred` | `log_likelihood` | `mahalanobis` |
+|---|---|---|---|---|
+| no intercept, `coef_prior` on all, `q = 0`, unit weights | 8e-14 abs | 3.6e-13 abs | 2.7e-13 rel | 4.2e-13 rel |
+| `q = 1e-4`, weights in [.5, 2] | 3.0e-14 | 9.1e-14 | 8.9e-14 | 1.2e-13 |
+| `q = 1e-4`, weights, 10% zero-weight rows, zero first row | 2.6e-14 | 8.1e-14 | 6.9e-14 | 9.0e-14 |
+
+**Where the oracle is not exact: the diffuse intercept.** filterpy has no diffuse start; its stand-in is a large prior
+variance `kappa` on the intercept, which converges to the exact step as `1/kappa`: coefficient gap 3.2e-7, 3.2e-9, 3.2e-11, 3.2e-13
+at `kappa` = 1e4 / 1e6 / 1e8 / 1e10; the log-likelihood's relative gap 2.3e-3, 2.3e-5, 2.3e-7, 2.3e-9 (the mahalanobis 3.5e-3 to 3.5e-9).
+The comparison is therefore exact only for the no-intercept case (the table above) and a limit for the diffuse case. On the diffuse
+row itself the innovation variance is infinite in the limit: the log-likelihood and distance are **withheld on a target's first
+observed row** (the likelihood is the proper, non-diffuse part, as in Durbin and Koopman) and from the next row on they are the above.
+
+**`coef_prior` and the intercept.** Because the first observation takes the whole innovation into `b_0`, the intercept's prior
+mean is discarded: setting it to 123 against 0 moves the final coefficients by 1.1e-16. `coef_prior` is the slopes' prior, and for
+a diffuse intercept the entry for the intercept is moot: say so in the docstring, or refuse a non-zero one (a decision for the
+Rust side; it is not a default change, since `coef_prior` is new). With `q = 0` the filter is ridge toward the prior,
+`argmin sum w (y - z'b)^2 + (1/p0) |b_slopes - prior|^2` with the intercept unpenalized, to 2e-14, 8e-14, 8e-13 at `p0` = 0.5, 4, 100 (a
+second, closed-form oracle).
+
+Decay and zero weight: the clock `D` carries the decay (process noise `q D^2`); a zero-weight row only adds to `D` and has no
+innovation (its `s` is infinite), so the log-likelihood and distance are **null on a zero-weight row** (a decision to confirm: scoring a row at the weight
+it would have had is the other reading, and it would make the output depend on a weight the row does not carry). Against the same stream with the zero-weight rows' gaps folded into the next
+row (10% zero-weight rows, a zero-weight first row): `b` and `P` bit-equal (gap 0), since `D` is additive.
+
+**State added: 0 bytes.** `nu`, `s` and the noise estimate are computed by the step. `coef_prior` is configuration, `8 k_total`
+bytes per target if the state file carries it (k = 20: 168). Nothing grows with the stream; per group it adds 0 to the total cap.
+
+**Changes a default: no.** `coef_prior` defaults to none (zeros, as today); the two outputs are new.
+
