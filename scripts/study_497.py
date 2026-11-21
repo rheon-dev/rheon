@@ -333,7 +333,9 @@ def ulps(a, b):
 def gap(mine: dict, ref: dict) -> dict:
     """Largest differences, each relative to the reference's own size on that row:
     pred |a - r| / |r|; b max_j |a_j - r_j| / max_j |r_j|; P the same over P's
-    entries. "abs" is the plain largest |a - r|."""
+    entries. "rel_run" divides the largest |a - r| by the largest |r| of the run
+    (a b vector passing near 0 makes the per-row "rel" large for b); "abs" is the
+    plain largest |a - r|."""
     out = {}
     for key in ("pred", "b", "P"):
         if key not in ref:
@@ -351,6 +353,10 @@ def gap(mine: dict, ref: dict) -> dict:
         out[key] = {
             "abs": float(np.max(d)) if d.size else 0.0,
             "rel": float(np.max(rel)) if rel.size else 0.0,
+            # the largest difference over the largest reference value in the run
+            "rel_run": float(np.max(d) / max(float(np.max(np.abs(r[ok]))), 1e-300))
+            if d.size
+            else 0.0,
         }
     return out
 
@@ -494,6 +500,7 @@ def filterpy_ukf(
             if redraw:
                 Pex = P_post / lam**D if lam != 1.0 else P_post.copy()
                 Pex = Pex + (q * D * D) * np.eye(k)
+                Pex = 0.5 * (Pex + Pex.T)  # the numpy filter keeps P symmetric
                 ukf.x = x_post
                 ukf.P = Pex
                 ukf.sigmas_f = pts.sigma_points(x_post, Pex)
@@ -507,6 +514,118 @@ def filterpy_ukf(
             D = 0.0
         out["b"][t] = ukf.x
         out["P"][t] = ukf.P
+    return out
+
+
+# --------------------------------------------------------------------------- oracle 2
+
+
+def loglik(family: str, y: float, eta, phi: float):
+    """The row's log-likelihood in eta, up to terms free of eta (exponential-family form)."""
+    if family == "gaussian":
+        return -0.5 * (y - eta) ** 2 / phi
+    if family == "poisson":
+        return y * eta - np.exp(eta)
+    if family == "binomial":
+        return y * eta - np.logaddexp(0.0, eta)
+    if family == "gamma":
+        return (-y * np.exp(-eta) - eta) / phi
+    raise ValueError(family)
+
+
+def grid_filter(X, y, w, family, q, lam, phi, p0, lo, hi, n):
+    """The exact filter for k = 2 on an n x n grid over [lo_j, hi_j], written from
+    the definition: the forgetting as power discounting (density^(lam^D), which is
+    P / lam^D for a Gaussian), the random walk as a convolution with N(0, q D^2 I)
+    applied in Fourier space (exact for the grid's trigonometric interpolant), and
+    Bayes' rule with the row's likelihood raised to its weight. Emits, per row, the
+    posterior mean and covariance of beta and the predictive mean E[mu] under the
+    prior of the row (before its target is read)."""
+    g0 = np.linspace(lo[0], hi[0], n)
+    g1 = np.linspace(lo[1], hi[1], n)
+    h0, h1 = g0[1] - g0[0], g1[1] - g1[0]
+    B0, B1 = np.meshgrid(g0, g1, indexing="ij")
+    om0 = 2 * np.pi * np.fft.fftfreq(n, d=h0)
+    om1 = 2 * np.pi * np.fft.rfftfreq(n, d=h1)
+    O2 = om0[:, None] ** 2 + om1[None, :] ** 2
+    logd = -0.5 * (B0**2 + B1**2) / p0  # prior N(0, p0 I)
+    fam = FAMILIES[family]
+    T = len(y)
+    out = {"pred": np.empty(T), "b": np.empty((T, 2)), "P": np.empty((T, 2, 2))}
+    D = 0.0
+
+    def prior_density(D):
+        ld = logd * (lam**D) if lam != 1.0 else logd
+        dens = np.exp(ld - ld.max())
+        if q:
+            dens = np.fft.irfft2(np.fft.rfft2(dens) * np.exp(-0.5 * q * D * D * O2), s=(n, n))
+            dens = np.maximum(dens, 0.0)
+        return dens / dens.sum()
+
+    def moments(dens):
+        m0, m1 = (dens * B0).sum(), (dens * B1).sum()
+        c00 = (dens * (B0 - m0) ** 2).sum()
+        c11 = (dens * (B1 - m1) ** 2).sum()
+        c01 = (dens * (B0 - m0) * (B1 - m1)).sum()
+        return np.array([m0, m1]), np.array([[c00, c01], [c01, c11]])
+
+    cur_b, cur_P = moments(np.exp(logd - logd.max()) / np.exp(logd - logd.max()).sum())
+    for t in range(T):
+        D += 1.0
+        dens = prior_density(D)
+        eta = X[t, 0] * B0 + X[t, 1] * B1
+        out["pred"][t] = float((dens * fam.inv(eta)).sum())
+        if w[t] > 0:
+            ll = np.log(np.maximum(dens, 1e-320)) + w[t] * loglik(family, y[t], eta, phi)
+            logd = ll - ll.max()
+            post = np.exp(logd)
+            post /= post.sum()
+            cur_b, cur_P = moments(post)
+            D = 0.0
+        out["b"][t] = cur_b
+        out["P"][t] = cur_P
+    return out
+
+
+def particle_filter(X, y, w, family, q, phi, p0, N, seed):
+    """Bootstrap particle filter (random walk only, lam = 1), written from the
+    definition: particles from the prior N(0, p0 I); on each observing row the
+    particles move by N(0, q D^2 I), are weighted by the row's likelihood to the
+    power of its weight, and are resampled (systematic) when the effective sample
+    size falls under N / 2. Emits the weighted posterior mean and the predictive
+    mean of mu under the moved particles."""
+    rng = np.random.default_rng(seed)
+    T, k = X.shape
+    fam = FAMILIES[family]
+    parts = rng.standard_normal((N, k)) * math.sqrt(p0)
+    logw = np.zeros(N)
+    out = {"pred": np.empty(T), "b": np.empty((T, k)), "var": np.empty((T, k)), "ess_min": float(N)}
+    D = 0.0
+    wts = np.full(N, 1.0 / N)
+    for t in range(T):
+        D += 1.0
+        # the predictive mean at this row: the particles moved by the gap so far,
+        # drawn afresh for the prediction only when the row does not observe
+        moved = parts + rng.standard_normal((N, k)) * (math.sqrt(q) * D) if q else parts
+        eta = moved @ X[t]
+        out["pred"][t] = float(wts @ fam.inv(np.clip(eta, -700, 700)))
+        if w[t] > 0:
+            parts = moved
+            logw = np.log(np.maximum(wts, 1e-320)) + w[t] * loglik(family, y[t], eta, phi)
+            logw -= logw.max()
+            wts = np.exp(logw)
+            wts /= wts.sum()
+            ess = 1.0 / float(wts @ wts)
+            out["ess_min"] = min(out["ess_min"], ess)
+            if ess < N / 2:
+                u = (rng.random() + np.arange(N)) / N
+                idx = np.minimum(np.searchsorted(np.cumsum(wts), u), N - 1)
+                parts = parts[idx]
+                wts = np.full(N, 1.0 / N)
+            D = 0.0
+        m = wts @ parts
+        out["b"][t] = m
+        out["var"][t] = wts @ ((parts - m) ** 2)
     return out
 
 
@@ -650,17 +769,665 @@ def part1(args) -> dict:
     return res
 
 
+# --------------------------------------------------------------------------- part 2
+
+POINTS = {
+    "merwe(1,2,0)": ("merwe", 1.0, 2.0, 0.0),
+    "merwe(0.5,2,0)": ("merwe", 0.5, 2.0, 0.0),
+    "julier(1)": ("julier", 1.0),
+}
+PHI = {"gaussian": 0.5, "poisson": 1.0, "binomial": 1.0, "gamma": 0.5}
+
+
+def part2(args) -> dict:
+    """The UKF for every family and the EKF for binomial and Gamma, against filterpy."""
+    res: dict = {"ekf": [], "ukf": [], "ukf_vs_kf": []}
+    T = args.rows
+    for family in ("gaussian", "poisson", "binomial", "gamma"):
+        phi = PHI[family]
+        for k in (2, 5):
+            for q, lam in ((1e-4, 1.0), (0.0, 0.99), (1e-4, 0.995)):
+                for first_zero in (False, True):
+                    seed = 2000 + 10 * k + int(first_zero) + 100 * list(PHI).index(family)
+                    X, y, w, _ = make_data(
+                        family, k, T, seed, q_true=1e-4, phi=phi, first_zero=first_zero
+                    )
+                    p0 = p0_for(k, "calibrated")
+                    head = {"family": family, "k": k, "q": q, "lam": lam, "first_zero": first_zero}
+                    if family in ("binomial", "gamma"):
+
+                        def mk(form, k=k, q=q, lam=lam, p0=p0, phi=phi, family=family):
+                            return KalmanGLM(
+                                k, family=family, q=q, lam=lam, phi=phi, p0=p0, form=form
+                            )
+
+                        mine = run_filter(mk("joseph"), X, y, w)
+                        std = run_filter(mk("standard"), X, y, w)
+                        band = run_filter(perturbed(mk("joseph")), X, y, w)
+                        ref = filterpy_ekf(X, y, w, family, k, q, lam, phi, p0)
+                        res["ekf"].append(
+                            head
+                            | {
+                                "joseph_vs_filterpy": gap(mine, ref),
+                                "standard_vs_filterpy": gap(std, ref),
+                                "band": gap(band, mine),
+                                "clamped": _clamped(mine["pred"], family),
+                            }
+                        )
+                    for pname, pts in POINTS.items():
+                        r_forms = ("expected", "plugin") if family != "gaussian" else ("plugin",)
+                        if pname != "merwe(1,2,0)" and family in ("gaussian", "gamma"):
+                            continue
+                        for ukf_r in r_forms:
+
+                            def mk(
+                                k=k,
+                                q=q,
+                                lam=lam,
+                                p0=p0,
+                                phi=phi,
+                                family=family,
+                                pts=pts,
+                                ukf_r=ukf_r,
+                            ):
+                                return KalmanGLM(
+                                    k,
+                                    family=family,
+                                    filt="ukf",
+                                    q=q,
+                                    lam=lam,
+                                    phi=phi,
+                                    p0=p0,
+                                    points=pts,
+                                    ukf_r=ukf_r,
+                                )
+
+                            mine = run_filter(mk(), X, y, w)
+                            band = run_filter(perturbed(mk()), X, y, w)
+                            ref = filterpy_ukf(
+                                X, y, w, family, k, q, lam, phi, p0, points=pts, ukf_r=ukf_r
+                            )
+                            ref_rd = filterpy_ukf(
+                                X,
+                                y,
+                                w,
+                                family,
+                                k,
+                                q,
+                                lam,
+                                phi,
+                                p0,
+                                points=pts,
+                                ukf_r=ukf_r,
+                                redraw=True,
+                            )
+                            res["ukf"].append(
+                                head
+                                | {
+                                    "points": pname,
+                                    "R": ukf_r,
+                                    "vs_filterpy": gap(mine, ref),
+                                    "vs_filterpy_exact_prior": gap(mine, ref_rd),
+                                    "band": gap(band, mine),
+                                    "clamped": _clamped(mine["pred"], family),
+                                }
+                            )
+                            if family == "gaussian":
+                                kf = filterpy_kf(X, y, w, k, q, lam, phi, p0)
+                                res["ukf_vs_kf"].append(head | {"gap": gap(mine, kf)})
+    return res
+
+
+def _clamped(pred, family) -> int:
+    pred = np.asarray(pred)
+    if family in ("poisson", "gamma"):
+        return int(np.sum(np.abs(np.log(np.maximum(pred, 1e-300))) >= ETA_MAX_LOG - 1e-9))
+    if family == "binomial":
+        return int(np.sum((pred <= 1e-15) | (pred >= 1 - 1e-15)))
+    return 0
+
+
+def summarise2(res):
+    print("part 2 (largest relative gap over cases; 'band' is the 1-ulp self-perturbation)")
+    for fam in ("binomial", "gamma"):
+        for c in (0, 1):
+
+            def sel(r, fam=fam, c=c):
+                return r["family"] == fam and (r["clamped"] > 0) == bool(c)
+
+            n = sum(1 for r in res["ekf"] if sel(r))
+            if not n:
+                continue
+            tag = f"EKF {fam} [{'clamped' if c else 'unclamped'}, {n} cases]"
+            print(
+                f"  {tag} joseph vs filterpy:  ",
+                _worst(res["ekf"], "joseph_vs_filterpy", where=sel),
+            )
+            print(
+                f"  {tag} standard vs filterpy:",
+                _worst(res["ekf"], "standard_vs_filterpy", where=sel),
+            )
+            print(f"  {tag} band:                ", _worst(res["ekf"], "band", where=sel))
+    print(
+        "  UKF gaussian vs KalmanFilter (pred abs):",
+        _worst(res["ukf_vs_kf"], "gap"),
+        _worst(res["ukf_vs_kf"], "gap", "abs"),
+    )
+    for fam in ("gaussian", "poisson", "binomial", "gamma"):
+        for pname in POINTS:
+            for rf in ("expected", "plugin"):
+                for c in (0, 1):
+
+                    def sel(r, fam=fam, pname=pname, rf=rf, c=c):
+                        return (
+                            r["family"] == fam
+                            and r["points"] == pname
+                            and r["R"] == rf
+                            and (r["clamped"] > 0) == bool(c)
+                        )
+
+                    n = sum(1 for r in res["ukf"] if sel(r))
+                    if not n:
+                        continue
+                    tag = f"UKF {fam} {pname} R={rf} [{'clamped' if c else 'ok'} {n}]"
+                    print(
+                        f"  {tag}: vs filterpy",
+                        _worst(res["ukf"], "vs_filterpy", where=sel),
+                        " exact prior",
+                        _worst(res["ukf"], "vs_filterpy_exact_prior", where=sel),
+                        " band",
+                        _worst(res["ukf"], "band", where=sel),
+                    )
+
+
+# --------------------------------------------------------------------------- part 3
+
+
+def _sd_units(filt: dict, exact: dict, rows) -> dict:
+    """The filter's b against the exact posterior mean in the exact posterior's own
+    sd, its sd over the exact sd, and its pred against the exact predictive mean."""
+    sd = np.sqrt(np.einsum("tii->ti", exact["P"][rows]))
+    z = np.abs(filt["b"][rows] - exact["b"][rows]) / sd
+    ratio = np.sqrt(np.einsum("tii->ti", filt["P"][rows])) / sd
+    pr = np.abs(filt["pred"][rows] - exact["pred"][rows]) / np.abs(exact["pred"][rows])
+    return {
+        "z_max": float(z.max()),
+        "z_median": float(np.median(z)),
+        "z_last": float(z[-1].max()),
+        "sd_ratio_min": float(ratio.min()),
+        "sd_ratio_max": float(ratio.max()),
+        "sd_ratio_median": float(np.median(ratio)),
+        "pred_rel_median": float(np.median(pr)),
+        "pred_rel_max": float(pr.max()),
+        "pred_abs_max": float(np.max(np.abs(filt["pred"][rows] - exact["pred"][rows]))),
+    }
+
+
+def _grid_case(family, q, lam, T, seed, n_max):
+    phi = PHI[family]
+    k = 2
+    p0 = p0_for(k, "calibrated")
+    X, y, w, beta = make_data(family, k, T, seed, q_true=max(q, 1e-5), phi=phi, eta_scale=0.5)
+    ekf = run_filter(KalmanGLM(k, family=family, q=q, lam=lam, phi=phi, p0=p0), X, y, w)
+    ukf = run_filter(KalmanGLM(k, family=family, filt="ukf", q=q, lam=lam, phi=phi, p0=p0), X, y, w)
+    # the grid: wide enough for the prior, the truth and both filters (8 sd), fine
+    # enough for the narrowest posterior (UKF's sd / 6), at most n_max a side
+    lo, hi, sdmin = [], [], math.inf
+    for j in range(k):
+        cols = [beta[:, j], ekf["b"][:, j], ukf["b"][:, j]]
+        sdj = np.sqrt(ukf["P"][:, j, j])
+        sdmin = min(sdmin, float(sdj.min()))
+        lo.append(min(float(np.min(c)) for c in cols) - 8 * float(sdj.max()) - 0.5)
+        hi.append(max(float(np.max(c)) for c in cols) + 8 * float(sdj.max()) + 0.5)
+    lo[0] = min(lo[0], -6 * math.sqrt(p0))
+    lo[1] = min(lo[1], -6 * math.sqrt(p0))
+    hi[0] = max(hi[0], 6 * math.sqrt(p0))
+    hi[1] = max(hi[1], 6 * math.sqrt(p0))
+    span = max(hi[0] - lo[0], hi[1] - lo[1])
+    n = int(min(n_max, math.ceil(6 * span / sdmin)))
+    t0 = time.perf_counter()
+    grid = grid_filter(X, y, w, family, q, lam, phi, p0, lo, hi, n)
+    secs = time.perf_counter() - t0
+    coarse = grid_filter(X, y, w, family, q, lam, phi, p0, lo, hi, int(0.75 * n))
+    rows = np.arange(T)
+    out = {
+        "family": family,
+        "q": q,
+        "lam": lam,
+        "n": n,
+        "spacing_over_min_sd": span / n / sdmin,
+        "grid_seconds": secs,
+        "grid_band": _sd_units(coarse, grid, rows),
+        "ekf": _sd_units(ekf, grid, rows),
+        "ukf": _sd_units(ukf, grid, rows),
+    }
+    if family == "gaussian":
+        kf = filterpy_kf(X, y, w, k, q, lam, phi, p0)
+        out["grid_vs_KalmanFilter"] = _sd_units(grid, kf, rows)
+    return out
+
+
+def _pf_case(family, T, seed, N, reps):
+    phi = PHI[family]
+    k, q, lam = 5, 1e-4, 1.0
+    p0 = p0_for(k, "calibrated")
+    X, y, w, _ = make_data(family, k, T, seed, q_true=q, phi=phi)
+    ekf = run_filter(KalmanGLM(k, family=family, q=q, lam=lam, phi=phi, p0=p0), X, y, w)
+    ukf = run_filter(KalmanGLM(k, family=family, filt="ukf", q=q, lam=lam, phi=phi, p0=p0), X, y, w)
+    t0 = time.perf_counter()
+    runs = [particle_filter(X, y, w, family, q, phi, p0, N, seed=10_000 + r) for r in range(reps)]
+    secs = time.perf_counter() - t0
+    mean_b = np.mean([r["b"] for r in runs], axis=0)
+    mean_pred = np.mean([r["pred"] for r in runs], axis=0)
+    var_b = np.mean([r["var"] for r in runs], axis=0)
+    mc_sd = np.std([r["b"] for r in runs], axis=0, ddof=1) / math.sqrt(reps)
+    exact = {"b": mean_b, "P": np.array([np.diag(v) for v in var_b]), "pred": mean_pred}
+    rows = np.arange(min(50, T - 1), T)  # after the first 50 rows, where the PF settles
+    sd = np.sqrt(var_b[rows])
+    mc_sd = mc_sd[rows]
+    return {
+        "family": family,
+        "N": N,
+        "reps": reps,
+        "pf_seconds": secs,
+        "ess_min": min(r["ess_min"] for r in runs),
+        "pf_mc_sd_over_post_sd_max": float(np.max(mc_sd / sd)),
+        "pf_mc_sd_over_post_sd_median": float(np.median(mc_sd / sd)),
+        "ekf": _sd_units(ekf, exact, rows),
+        "ukf": _sd_units(ukf, exact, rows),
+    }
+
+
+def static_map(X, y, w, family, phi, p0):
+    """The posterior mode with q = 0, lam = 1: maximise statsmodels' GLM
+    log-likelihood (var_weights = w, scale = phi) minus |b|^2 / (2 p0) by Newton's
+    method on statsmodels' own score and observed Hessian. Returns the mode and the
+    Laplace covariance (the inverse of the negative Hessian there)."""
+    import statsmodels.api as sm
+
+    fams = {
+        "poisson": sm.families.Poisson(),
+        "binomial": sm.families.Binomial(),
+        "gamma": sm.families.Gamma(sm.families.links.Log()),
+        "gaussian": sm.families.Gaussian(),
+    }
+    keep = w > 0
+    model = sm.GLM(y[keep], X[keep], family=fams[family], var_weights=w[keep])
+    k = X.shape[1]
+    b = np.zeros(k)
+    for _ in range(100):
+        g = model.score(b, scale=phi) - b / p0
+        H = model.hessian(b, scale=phi, observed=True) - np.eye(k) / p0
+        step = np.linalg.solve(H, g)
+        b = b - step
+        if np.max(np.abs(step)) < 1e-14 * max(1.0, np.max(np.abs(b))):
+            break
+    H = model.hessian(b, scale=phi, observed=True) - np.eye(k) / p0
+    g = model.score(b, scale=phi) - b / p0
+    return b, np.linalg.inv(-H), float(np.max(np.abs(g)))
+
+
+def _static_case(family, k, T, seed, checkpoints):
+    phi = PHI[family]
+    p0 = p0_for(k, "calibrated")
+    X, y, w, _ = make_data(family, k, T, seed, q_true=0.0, phi=phi)
+    out = {"family": family, "k": k, "rows": {}}
+    filt = {
+        "ekf": run_filter(KalmanGLM(k, family=family, phi=phi, p0=p0), X, y, w),
+        "ukf": run_filter(KalmanGLM(k, family=family, filt="ukf", phi=phi, p0=p0), X, y, w),
+    }
+    for t in checkpoints:
+        b, C, grad = static_map(X[:t], y[:t], w[:t], family, phi, p0)
+        sd = np.sqrt(np.diag(C))
+        row = {"map_grad_max": grad}
+        for name, f in filt.items():
+            row[name] = {
+                "z_max": float(np.max(np.abs(f["b"][t - 1] - b) / sd)),
+                "sd_ratio_min": float(np.min(np.sqrt(np.diag(f["P"][t - 1])) / sd)),
+                "sd_ratio_max": float(np.max(np.sqrt(np.diag(f["P"][t - 1])) / sd)),
+            }
+        out["rows"][str(t)] = row
+    return out
+
+
+def _zero_lead(family, filt, k, lead=25, T=400, seed=31):
+    """A run of zero-weight rows at the start: b and P stay at the prior to the
+    bit, n_eff stays 0, nothing is NaN, and the run equals the stream with those
+    rows removed and their clock folded into the first observed row."""
+    phi = PHI[family]
+    p0 = p0_for(k, "calibrated")
+    X, y, w, _ = make_data(family, k, T, seed, phi=phi)
+    w[:lead] = 0.0
+    y[3] = np.nan  # a null target inside the run as well
+
+    def mk():
+        return KalmanGLM(k, family=family, filt=filt, q=1e-3, lam=0.99, phi=phi, p0=p0)
+
+    f = mk()
+    res = run_filter(f, X, y, w)
+    g = mk()
+    d = 0.0
+    bs = []
+    for t in range(T):
+        d += 1.0
+        if w[t] > 0:
+            g.step(X[t], y[t], w[t], d=d)
+            d = 0.0
+            bs.append(g.b.copy())
+    keep = w > 0
+    return {
+        "family": family,
+        "filt": filt,
+        "k": k,
+        "b_at_prior": bool(np.all(res["b"][:lead] == 0.0)),
+        "P_at_prior": bool(np.all(res["P"][:lead] == p0 * np.eye(k))),
+        "n_eff_zero": bool(np.all(res["n_eff"][: lead + 1] == 0.0)),
+        "all_finite": bool(np.all(np.isfinite(res["b"])) and np.all(np.isfinite(res["pred"]))),
+        "fold_max_abs_b": float(np.max(np.abs(res["b"][keep] - np.array(bs)))),
+    }
+
+
+def _sweep20(family, filt, T, seed):
+    phi = PHI[family]
+    k, q, lam = 20, 1e-4, 0.995
+    p0 = p0_for(k, "calibrated")
+    X, y, w, _ = make_data(family, k, T, seed, q_true=q, phi=phi, first_zero=True)
+
+    def mk():
+        if filt == "ekf":
+            return KalmanGLM(k, family=family, q=q, lam=lam, phi=phi, p0=p0, form="joseph")
+        return KalmanGLM(k, family=family, filt="ukf", q=q, lam=lam, phi=phi, p0=p0)
+
+    mine = run_filter(mk(), X, y, w)
+    band = run_filter(perturbed(mk()), X, y, w)
+    t0 = time.perf_counter()
+    if filt == "ekf":
+        ref = filterpy_ekf(X, y, w, family, k, q, lam, phi, p0)
+        ref_rd = None
+    else:
+        ref = filterpy_ukf(X, y, w, family, k, q, lam, phi, p0)
+        ref_rd = filterpy_ukf(X, y, w, family, k, q, lam, phi, p0, redraw=True)
+    secs = time.perf_counter() - t0
+    out = {
+        "family": family,
+        "filt": filt,
+        "k": k,
+        "vs_filterpy": gap(mine, ref),
+        "band": gap(band, mine),
+        "filterpy_seconds": secs,
+    }
+    if ref_rd is not None:
+        out["vs_filterpy_exact_prior"] = gap(mine, ref_rd)
+    return out
+
+
+def part3(args) -> dict:
+    res: dict = {"sweep20": [], "zero_lead": [], "grid": [], "pf": [], "static": []}
+    fams = ("poisson", "binomial", "gamma")
+    for i, family in enumerate(fams):
+        for filt in ("ekf", "ukf"):
+            res["sweep20"].append(_sweep20(family, filt, args.rows, 3000 + i))
+            for k in (2, 5, 20):
+                res["zero_lead"].append(_zero_lead(family, filt, k))
+    for i, family in enumerate(("gaussian",) + fams):
+        for q, lam in ((1e-4, 1.0), (0.0, 0.99), (1e-4, 0.995)):
+            res["grid"].append(_grid_case(family, q, lam, args.grid_rows, 4000 + i, args.grid_n))
+            print("grid", family, q, lam, file=sys.stderr, flush=True)
+    for i, family in enumerate(fams):
+        res["pf"].append(_pf_case(family, args.grid_rows, 5000 + i, args.particles, 4))
+        print("pf", family, file=sys.stderr, flush=True)
+    for i, family in enumerate(fams):
+        for k in (2, 5, 20):
+            res["static"].append(
+                _static_case(family, k, args.rows, 6000 + 10 * i + k, (200, args.rows))
+            )
+    return res
+
+
+# --------------------------------------------------------------------------- part 3: divergence
+
+
+def _run_safe(f: KalmanGLM, X, y, w) -> dict:
+    """run_filter that records the first row a filter fails on (a Cholesky of a
+    non-positive-definite P, a non-positive innovation variance, a non-finite b)
+    instead of raising."""
+    T = len(y)
+    out = {
+        "pred": np.full(T, np.nan),
+        "b": np.full((T, f.k), np.nan),
+        "P": np.full((T, f.k, f.k), np.nan),
+        "fail_row": None,
+        "fail": None,
+    }
+    for t in range(T):
+        try:
+            with np.errstate(all="ignore"):
+                r = f.step(X[t], y[t], w[t])
+        except np.linalg.LinAlgError as e:
+            out["fail_row"], out["fail"] = t, f"LinAlgError: {e}"
+            break
+        out["pred"][t], out["b"][t], out["P"][t] = r["pred"], f.b, f.P
+        if not (np.all(np.isfinite(f.b)) and np.all(np.isfinite(f.P))):
+            out["fail_row"], out["fail"] = t, "non-finite state"
+            break
+        if np.min(np.linalg.eigvalsh(f.P)) <= 0:
+            out["fail_row"], out["fail"] = t, "P not positive definite"
+            break
+    return out
+
+
+def _clamp_rows(f: KalmanGLM, X, b_path) -> int:
+    eta = np.einsum("tk,tk->t", X[1:], b_path[:-1])
+    return int(np.sum(np.abs(eta[np.isfinite(eta)]) >= f.fam.eta_max))
+
+
+def _lost(b, P, beta, z=4.0) -> bool:
+    """The last row's b more than z of its own sd from the truth in some coefficient."""
+    sd = np.sqrt(np.diag(P))
+    return bool(np.any(np.abs(b - beta) / sd > z))
+
+
+def divergence(args) -> dict:
+    res: dict = {"overshoot": [], "spike": [], "separation": [], "small_alpha": []}
+    T = args.div_rows
+    # D1: over seeds, how often each filter reaches the clamp, and how often it ends
+    # more than 4 of its own sd from the true coefficients
+    for family in ("poisson", "binomial", "gamma"):
+        phi = PHI[family]
+        for k in (2, 5):
+            for prior in ("calibrated", "wide"):
+                p0 = p0_for(k, prior)
+                for filt in ("ekf", "ukf"):
+                    clamped = lost = failed = 0
+                    for seed in range(args.seeds):
+                        X, y, w, beta = make_data(family, k, T, 7000 + seed, q_true=1e-4, phi=phi)
+                        f = KalmanGLM(k, family=family, filt=filt, q=1e-4, phi=phi, p0=p0)
+                        r = _run_safe(f, X, y, w)
+                        if r["fail_row"] is not None:
+                            failed += 1
+                            continue
+                        clamped += _clamp_rows(f, X, r["b"]) > 0
+                        lost += _lost(r["b"][-1], r["P"][-1], beta[-1])
+                    res["overshoot"].append(
+                        {
+                            "family": family,
+                            "k": k,
+                            "prior": prior,
+                            "filt": filt,
+                            "seeds": args.seeds,
+                            "reached_clamp": clamped,
+                            "lost_track": lost,
+                            "failed": failed,
+                        }
+                    )
+    # D2: feature spikes: beta = (1, 0.1) fixed, x1 = 60, 300 and 1000 on rows
+    # T/4, T/2 and 3T/4 (true eta 7, 31 and 101; there y is the true mean, rounded,
+    # past eta 30), a filter that has drifted (b1 starts at 0.4) at q = 1e-4 from
+    # the calibrated prior; with and without the clamp
+    rng = np.random.default_rng(77)
+    k = 2
+    X = np.column_stack([np.ones(T), rng.standard_normal(T)])
+    spikes = [T // 4, T // 2, 3 * T // 4]
+    X[spikes, 1] = (60.0, 300.0, 1000.0)
+    beta = np.array([1.0, 0.1])
+    eta_true = X @ beta
+    y = rng.poisson(np.exp(np.minimum(eta_true, 30.0))).astype(float)
+    big = eta_true > 30
+    y[big] = np.round(np.exp(eta_true[big]))
+    w = np.ones(T)
+    for filt in ("ekf", "ukf"):
+        for clamp in (True, False):
+            # a filter that has drifted: b1 starts 0.3 off, P0 calibrated
+            f = KalmanGLM(
+                k,
+                family="poisson",
+                filt=filt,
+                q=1e-4,
+                p0=p0_for(k, "calibrated"),
+                b0=np.array([1.0, 0.4]),
+                clamp=clamp,
+            )
+            r = _run_safe(f, X, y, w)
+            eta_spike = [float(X[s] @ r["b"][s - 1]) for s in spikes]
+            after = {}
+            for s in spikes:
+                if r["fail_row"] is not None and r["fail_row"] <= s:
+                    break
+                err = np.abs(r["b"][s:] - beta) / np.sqrt(np.einsum("tii->ti", r["P"][s:]))
+                back = np.where(np.all(err < 2, axis=1))[0]
+                after[str(s)] = {
+                    "b_after": r["b"][s].tolist(),
+                    "P11_after": float(r["P"][s][1, 1]),
+                    "rows_to_within_2sd": int(back[0]) if back.size else None,
+                }
+            res["spike"].append(
+                {
+                    "filt": filt,
+                    "clamp": clamp,
+                    "eta_at_spike": eta_spike,
+                    "fail_row": r["fail_row"],
+                    "fail": r["fail"],
+                    "after": after,
+                    "final_b": r["b"][-1].tolist() if r["fail_row"] is None else None,
+                }
+            )
+    # D3: separation, binomial logit: y = 1[x1 > 0], over 10 T rows
+    T = 10 * T
+    X = np.column_stack([np.ones(T), rng.standard_normal(T)])
+    y = (X[:, 1] > 0).astype(float)
+    w = np.ones(T)
+    for q, lam in ((0.0, 1.0), (1e-4, 1.0), (0.0, 0.99)):
+        for filt in ("ekf", "ukf"):
+            f = KalmanGLM(2, family="binomial", filt=filt, q=q, lam=lam, p0=p0_for(2, "calibrated"))
+            r = _run_safe(f, X, y, w)
+            marks = [t for t in (10, 100, 1000, T // 2, T - 1) if t < T]
+            res["separation"].append(
+                {
+                    "filt": filt,
+                    "q": q,
+                    "lam": lam,
+                    "fail_row": r["fail_row"],
+                    "fail": r["fail"],
+                    "b1": {str(t): float(r["b"][t][1]) for t in marks},
+                    "sd1": {str(t): float(math.sqrt(r["P"][t][1, 1])) for t in marks},
+                    "clamp_rows": _clamp_rows(f, X, r["b"]) if r["fail_row"] is None else None,
+                }
+            )
+    T = T // 10
+    # D4: the UKF with a small alpha has a negative centre weight; the expected R and
+    # the innovation variance can then go negative (binomial: V is not convex)
+    for alpha in (1.0, 0.5, 0.1, 1e-3):
+        for family in ("poisson", "binomial"):
+            fails = []
+            for seed in range(10):
+                X, y, w, beta = make_data(family, 5, T, 8000 + seed, q_true=1e-4)
+                f = KalmanGLM(
+                    5,
+                    family=family,
+                    filt="ukf",
+                    q=1e-4,
+                    p0=p0_for(5, "calibrated"),
+                    points=("merwe", alpha, 2.0, 0.0),
+                )
+                r = _run_safe(f, X, y, w)
+                fails.append(r["fail_row"])
+            res["small_alpha"].append(
+                {
+                    "alpha": alpha,
+                    "family": family,
+                    "w0_mean": float(merwe_weights(5, alpha, 2.0, 0.0)[1][0]),
+                    "failed": sum(x is not None for x in fails),
+                    "of": len(fails),
+                    "first_fail_rows": [x for x in fails if x is not None][:5],
+                }
+            )
+    return res
+
+
+def summarise_div(res):
+    print("divergence")
+    for r in res["overshoot"]:
+        print(
+            "  overshoot",
+            {
+                k: r[k]
+                for k in (
+                    "family",
+                    "k",
+                    "prior",
+                    "filt",
+                    "reached_clamp",
+                    "lost_track",
+                    "failed",
+                    "seeds",
+                )
+            },
+        )
+    for r in res["spike"]:
+        print(
+            "  spike",
+            r["filt"],
+            "clamp" if r["clamp"] else "no clamp",
+            "eta",
+            [round(e, 2) for e in r["eta_at_spike"]],
+            "fail",
+            r["fail_row"],
+            r["fail"],
+            {s: v["rows_to_within_2sd"] for s, v in r["after"].items()},
+        )
+    for r in res["separation"]:
+        print(
+            "  separation",
+            r["filt"],
+            r["q"],
+            r["lam"],
+            "b1",
+            r["b1"],
+            "sd1",
+            {k: round(v, 4) for k, v in r["sd1"].items()},
+            "fail",
+            r["fail_row"],
+            "clamp rows",
+            r["clamp_rows"],
+        )
+    for r in res["small_alpha"]:
+        print("  small alpha", r)
+
+
 # --------------------------------------------------------------------------- driver
 
 
-def _worst(rows: list, key: str, field_: str = "rel", where=None) -> dict:
+def _worst(rows: list, key: str, field_: str = "mixed", where=None) -> dict:
+    """The largest gap over the selected cases: "mixed" reads pred and P per row and
+    b against the run's largest value (gap's doc)."""
     out = {}
     for r in rows:
         if where is not None and not where(r):
             continue
         for q in ("pred", "b", "P"):
             if q in r[key]:
-                out[q] = max(out.get(q, 0.0), r[key][q][field_])
+                f = field_ if field_ != "mixed" else ("rel_run" if q == "b" else "rel")
+                out[q] = max(out.get(q, 0.0), r[key][q][f])
     return {q: float(f"{v:.3g}") for q, v in out.items()}
 
 
@@ -692,7 +1459,66 @@ def summarise1(res):
     print("  zero-weight rows:", res["zero_weight_rows_are_a_gap"])
 
 
-PARTS = {"part1": (part1, summarise1)}
+def summarise3(res):
+    print("part 3")
+    for r in res["sweep20"]:
+        extra = r.get("vs_filterpy_exact_prior")
+        print(
+            f"  k=20 {r['filt']} {r['family']}: vs filterpy",
+            _worst([r], "vs_filterpy"),
+            "exact prior",
+            _worst([r], "vs_filterpy_exact_prior") if extra else "-",
+            "band",
+            _worst([r], "band"),
+            f"filterpy {r['filterpy_seconds']:.1f}s",
+        )
+    bad = [
+        r
+        for r in res["zero_lead"]
+        if not (
+            r["b_at_prior"]
+            and r["P_at_prior"]
+            and r["n_eff_zero"]
+            and r["all_finite"]
+            and r["fold_max_abs_b"] == 0.0
+        )
+    ]
+    print(f"  zero-weight lead: {len(res['zero_lead'])} cases, failing: {bad}")
+    keys = (
+        "z_max",
+        "z_median",
+        "z_last",
+        "sd_ratio_min",
+        "sd_ratio_max",
+        "pred_rel_median",
+        "pred_rel_max",
+    )
+    for r in res["grid"]:
+        print(
+            f"  grid {r['family']} q={r['q']} lam={r['lam']} n={r['n']} "
+            f"h/sd={r['spacing_over_min_sd']:.2f} ({r['grid_seconds']:.0f}s)"
+        )
+        for name in ("grid_band", "ekf", "ukf", "grid_vs_KalmanFilter"):
+            if name in r:
+                print(f"     {name:22s}", {k: float(f"{r[name][k]:.3g}") for k in keys})
+    for r in res["pf"]:
+        print(
+            f"  pf {r['family']} N={r['N']}x{r['reps']} ess_min={r['ess_min']:.0f} "
+            f"mc_sd/sd max={r['pf_mc_sd_over_post_sd_max']:.3g} "
+            f"median={r['pf_mc_sd_over_post_sd_median']:.3g} ({r['pf_seconds']:.0f}s)"
+        )
+        for name in ("ekf", "ukf"):
+            print(f"     {name:22s}", {k: float(f"{r[name][k]:.3g}") for k in keys})
+    for r in res["static"]:
+        print(f"  static {r['family']} k={r['k']}:", json.dumps(r["rows"]))
+
+
+PARTS = {
+    "part1": (part1, summarise1),
+    "part2": (part2, summarise2),
+    "part3": (part3, summarise3),
+    "divergence": (divergence, summarise_div),
+}
 
 
 def main(argv=None):
@@ -700,6 +1526,11 @@ def main(argv=None):
     ap.add_argument("part", choices=sorted(PARTS))
     ap.add_argument("--out", default=os.path.join(".cache", "study_497"))
     ap.add_argument("--rows", type=int, default=2000)
+    ap.add_argument("--grid-rows", type=int, default=1000)
+    ap.add_argument("--grid-n", type=int, default=500)
+    ap.add_argument("--particles", type=int, default=50000)
+    ap.add_argument("--div-rows", type=int, default=1000)
+    ap.add_argument("--seeds", type=int, default=50)
     ap.add_argument("--force", action="store_true", help="recompute a part whose result exists")
     args = ap.parse_args(argv)
     os.makedirs(args.out, exist_ok=True)

@@ -3,7 +3,8 @@
 *Status, 2026-11-21: a record, in progress. Request A13, part 1: the recursions
 in numpy, the linear Gaussian case against filterpy's `KalmanFilter` and
 `ExtendedKalmanFilter`, and the Poisson EKF against filterpy's
-`ExtendedKalmanFilter` (§3, §4). Nothing in the package or the Rust crates was
+`ExtendedKalmanFilter` (§3, §4). Part 2: the UKF for every family and the EKF
+for binomial and Gamma against filterpy (§5). Nothing in the package or the Rust crates was
 changed. The scan this builds on is `vm-tools/research/494-MODELS-SCAN.md` on
 branch `vm-tools/oracle-gap-scan`, section 3 ("scan §3"). The runnable study is
 `scripts/study_497.py`.*
@@ -94,6 +95,22 @@ that observe their target, with the clock gathered as above.
   called, which is the prior mean (the linearisation point). filterpy's EKF
   updates `P` by the Joseph form; the numpy filter's `form="joseph"` is the
   same formula.
+- **UKF**: `hx(b) = g^{-1}(clamp(x'b))` with the row's `x`, the sigma points
+  `MerweScaledSigmaPoints(k, alpha, beta, kappa)` or `JulierSigmaPoints(k,
+  kappa)` with filterpy's default root (scipy's upper Cholesky of `c P`, whose
+  rows are the numpy filter's lower-Cholesky columns), and `R` passed to
+  `update` per row: `phi V(hx(x)) / w` ("plugin") or `phi sum Wm_i V(z_i) / w`
+  over filterpy's own `sigmas_f` ("expected"). filterpy 2.0's `predict` pushes
+  the points through `fx`, takes their weighted mean and covariance plus `Q` as
+  the prior, and **redraws** `sigmas_f` from that prior; `update` uses the
+  redrawn points. With `fx = I` that prior is `P + Q` up to rounding: the
+  unscented transform of `P`'s own points returns `P` exactly only in exact
+  arithmetic, and `x` comes back as `sum Wm_i chi_i`, not `b`. The "exact
+  prior" variant replaces `x`, `P` and `sigmas_f` after `predict` by the numpy
+  filter's `b`, `P^-` (symmetrised) and its sigma points, which isolates the
+  update from that rounding. Earlier filterpy versions (1.4) did not redraw
+  and used the points propagated from the previous posterior, which
+  ignores `Q` in the cross-covariance: a different filter for a random walk.
 
 ## 4. Part 1 results: the linear case and the Poisson EKF
 
@@ -101,24 +118,25 @@ Cases: `k` in {2, 5}; `(q, lam)` in {(1e-4, 1), (0, 0.99), (1e-4, 0.995)}; with
 and without a zero-weight first row; 2,000 rows each, 10% of rows at weight 0
 and 10% at a weight drawn from U(0.5, 2). Gaussian: `phi = 0.5`, `P0 = I`.
 Poisson: two priors, "calibrated" `P0 = (0.25/k) I` (an `eta` prior sd of about
-0.5) and "wide" `P0 = I`. Gaps are relative to the reference's own size on that
-row: `pred` as `|a - r| / |r|`, `b` as `max_j |a_j - r_j| / max_j |r_j|`, `P`
-the same over its entries. The **band** is the numpy filter against itself with
+0.5) and "wide" `P0 = I`. Gaps are relative: `pred` as `|a - r| / |r|` on each
+row; `P` as `max |a - r| / max |r|` over its entries on each row; `b` as the
+run's largest `|a_j - r_j|` over the run's largest `|r_j|` (a `b` that passes
+near 0 on some row makes a per-row ratio for `b` meaningless). The **band** is the numpy filter against itself with
 `P0` moved by one ulp: the stream's own amplification of a rounding
 difference, which a second implementation's gap is read against.
 
 | comparison | pred | b | P |
 |---|---|---|---|
-| Gaussian, numpy (Joseph) vs `KalmanFilter` (fading `alpha`) | 6.2e-15 abs | 2.2e-15 | 8.9e-15 |
-| Gaussian, numpy (Joseph) vs `ExtendedKalmanFilter` | 3.6e-15 abs | 1.5e-15 | 8.0e-15 |
-| Gaussian, numpy (standard) vs `KalmanFilter` | 6.2e-15 abs | 2.2e-15 | 9.0e-15 |
-| Gaussian band | | 5.7e-16 | 2.3e-15 |
-| Poisson EKF, 19 cases that never reach the clamp, Joseph vs filterpy | 6.0e-14 | 7.7e-15 | 3.3e-14 |
-| same, standard form vs filterpy | 1.1e-13 | 1.9e-14 | 3.8e-14 |
-| same, band | 9.8e-14 | 2.3e-14 | 3.8e-14 |
-| Poisson EKF, 5 cases that reach the clamp, Joseph vs filterpy | 2.1e-8 | 5.2e-10 | 9.2e-9 |
-| same, band | 1.9e-8 | 3.8e-10 | 8.8e-9 |
-| same, standard form vs filterpy (the wide prior) | 6.9e-6 | 2.0e-7 | 3.0e-6 |
+| Gaussian, numpy (Joseph) vs `KalmanFilter` (fading `alpha`) | 6.2e-15 abs | 1.2e-15 | 8.9e-15 |
+| Gaussian, numpy (Joseph) vs `ExtendedKalmanFilter` | 3.6e-15 abs | 1.0e-15 | 8.0e-15 |
+| Gaussian, numpy (standard) vs `KalmanFilter` | 6.2e-15 abs | 1.2e-15 | 9.0e-15 |
+| Gaussian band | | 4.4e-16 | 2.3e-15 |
+| Poisson EKF, 19 cases that never reach the clamp, Joseph vs filterpy | 6.0e-14 | 5.6e-15 | 3.3e-14 |
+| same, standard form vs filterpy | 1.1e-13 | 1.0e-14 | 3.8e-14 |
+| same, band | 9.8e-14 | 1.1e-14 | 3.8e-14 |
+| Poisson EKF, 5 cases that reach the clamp, Joseph vs filterpy | 2.1e-8 | 5.1e-10 | 9.2e-9 |
+| same, band | 1.9e-8 | 3.6e-10 | 8.8e-9 |
+| same, standard form vs filterpy (the wide prior) | 6.9e-6 | 1.9e-7 | 3.0e-6 |
 
 (The Gaussian `pred` gap is given in absolute terms: a prediction near 0 makes
 the relative one meaningless.)
@@ -129,12 +147,12 @@ Read:
    (with its own fading factor) and its `ExtendedKalmanFilter` (with the
    forgetting as `Q`) agree to 1e-14, within a few times the band.
 2. **The Poisson EKF matches filterpy to rounding wherever the stream is well
-   conditioned** (7.7e-15 on `b`). On the five streams where the EKF
+   conditioned** (5.6e-15 on `b`). On the five streams where the EKF
    overshoots to the clamp, both its gap to filterpy and the 1-ulp band grow
-   to 1e-10 on `b` together: the filterpy gap is between 0.3 and 6.3 times the
+   to 1e-10 on `b` together: the filterpy gap is between 0.3 and 2.0 times the
    band. The amplification is the stream's (an EKF that swings to `e^30` and
    back), not a difference between the implementations.
-3. **The standard and Joseph covariance forms part by up to 2e-7 on `b`** in
+3. **The standard and Joseph covariance forms part by up to 1.9e-7 on `b`** in
    those streams (a cancellation in `P^- - s K K'` at a large gain), 500 times
    the band. A Rust EKF matched against filterpy must use the Joseph form, or
    be held to the band of its own form; `kalman`'s covariance form today is the
@@ -155,3 +173,55 @@ clamp). Six of the twelve wide-prior Poisson streams reached a prediction of
 small `mu` and a large count the step in `eta` is about `x'P^-x · y`.
 
 Run: `.venv-497/bin/python scripts/study_497.py part1 --out <dir>` (10 s).
+
+## 5. Part 2 results: the UKF for every family, the EKF for binomial and Gamma
+
+The same twelve stream settings per family as §4 (`k` in {2, 5}, three `(q,
+lam)`, with and without a zero-weight first row), calibrated prior, 2,000
+rows. Binomial: Bernoulli rows; Gamma: `phi = 0.5` (shape 2). Sigma points:
+Merwe `(alpha, beta, kappa) = (1, 2, 0)` for every family, and also Merwe
+`(0.5, 2, 0)` (a negative centre weight `Wm_0 = -3`) and Julier `kappa = 1`
+for Poisson and binomial; each non-Gaussian family with both `R` forms. No
+stream in part 2 reached the clamp. Largest gap over the twelve streams of
+each row of the table (metrics as §4):
+
+| comparison | pred | b | P |
+|---|---|---|---|
+| EKF binomial, Joseph vs filterpy | 1.8e-14 | 6.1e-15 | 1.8e-14 |
+| EKF binomial, band | 3.0e-15 | 8.1e-16 | 2.5e-15 |
+| EKF Gamma, Joseph vs filterpy | 7.9e-15 | 1.3e-15 | 7.2e-15 |
+| EKF Gamma, band | 3.6e-15 | 3.9e-16 | 2.5e-15 |
+| UKF Gaussian, Merwe (1, 2, 0), vs filterpy `KalmanFilter` | 5.3e-15 abs | 1.9e-15 | 9.5e-15 |
+| UKF, every family, point set and `R` form, vs filterpy as it runs | 1.9e-13 | 5.1e-14 | 4.1e-14 |
+| same, vs filterpy with the exact prior | 7.4e-15 | 1.7e-15 | 7.2e-15 |
+| same, band | 9.8e-15 | 2.5e-15 | 9.7e-15 |
+
+By family, UKF against filterpy as it runs (`b`): Gaussian 7.0e-15, Poisson
+2.2e-14, binomial 5.1e-14, Gamma 7.1e-15; the largest are with the Merwe
+`alpha = 0.5` set, whose centre weight of -3 costs some digits in the weighted
+sums. With the exact prior every case is within 1.5 times its band (`b`) and
+within 1.0e-15 of it.
+
+Read:
+
+1. **The UKF is filterpy's UKF**, to 5e-14 as filterpy runs it, and to the
+   1-ulp band once filterpy is handed the same prior. The remaining 5e-14 is
+   filterpy's prior recomputed by the unscented transform (`sum Wc_i (chi_i -
+   xbar)(chi_i - xbar)'` for `P`, `sum Wm_i chi_i` for `b`), which a Rust UKF
+   need not copy: with `fx = I` the prior is `P / lam^D + q D^2 I` exactly.
+2. **On the linear case the UKF is the Kalman filter** (1.9e-15 on `b`): the
+   unscented transform of a linear function is exact.
+3. **Under forgetting without process noise, `P` must be kept symmetric.**
+   The "exact prior" variant first passed filterpy the numpy filter's `P^-`
+   unsymmetrised, and the gap grew steadily to 8.5e-7 on `P` by row 2,000 at
+   `lam = 0.99`, `q = 0`: the update `P^- - s K K'` leaves the antisymmetric
+   part of `P` (rounding) untouched, `1/lam^D` multiplies it every row
+   (`0.99^{-2000} = e^{20}`), and the Cholesky reads one triangle only. The
+   numpy filter symmetrises after each update; a packed (upper-triangle) store
+   in Rust is symmetric by construction. filterpy's own `predict` hides this,
+   since its prior is rebuilt symmetric from the points every row.
+4. The EKF results of §4 hold for binomial and Gamma: Joseph form against
+   filterpy at 6e-15 on `b`, a few times the band.
+
+Run: `.venv-497/bin/python scripts/study_497.py part2 --out <dir>` (about 200 s;
+filterpy's UKF is a Python loop over the sigma points).
