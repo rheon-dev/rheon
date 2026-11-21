@@ -336,3 +336,44 @@ def test_a_spec_named_as_an_input_column_has_no_polars_prefix() -> None:
     df = _frame().with_columns(m=pl.lit(1.0))
     with pytest.raises(ValueError, match=r'^spec "m": it has the same name as an input column'):
         rp.ModelBank([_spec()]).fit_predict(df)
+
+
+# --- review fable2, Y5: rheon.corr's arguments ------------------------------------
+
+
+@pytest.mark.parametrize("sigma2", [-1.0, 0.0, float("nan"), float("inf")])
+def test_mp_edge_refuses_a_variance_not_above_zero(sigma2: float) -> None:
+    """A negative `sigma2` gave edges with the lower above the upper."""
+    for who, call in [
+        ("rheon.corr.mp_edge", lambda: corr.mp_edge(10, 5, sigma2)),
+        ("rheon.corr.mp_density", lambda: corr.mp_density(1.0, 10, 5, sigma2)),
+    ]:
+        with pytest.raises(ValueError, match=f"^{who}: sigma2 must be a finite number above 0"):
+            call()
+    lo, hi = corr.mp_edge(10, 5, 2.0)
+    assert 0.0 < lo < hi
+
+
+def _corr_matrix() -> np.ndarray:
+    return np.corrcoef(np.random.default_rng(0).normal(size=(200, 5)).T)
+
+
+@pytest.mark.parametrize("k", [True, 2.0, "2"])
+def test_absorption_refuses_a_count_that_is_not_a_whole_number(k: object) -> None:
+    """`True` ran as 1, and `2.0` failed in numpy's slicing."""
+    with pytest.raises(rp.WrongTypeError, match=r"^rheon.corr.absorption: k must be a whole"):
+        corr.absorption(_corr_matrix(), k)  # type: ignore[arg-type]
+    assert corr.absorption(_corr_matrix(), np.int64(2)) == corr.absorption(_corr_matrix(), 2)
+
+
+@pytest.mark.parametrize("tol", [-1.0, 0.0, float("nan")])
+def test_nearest_refuses_a_tol_not_above_zero(tol: float) -> None:
+    """A relative change is never below 0: a `tol` at or below it ran to
+    `max_iter` with nothing said."""
+    a = np.eye(3)
+    a[0, 1] = a[1, 0] = 0.99
+    a[0, 2] = a[2, 0] = -0.99
+    a[1, 2] = a[2, 1] = 0.99
+    with pytest.raises(ValueError, match=r"^rheon.corr.nearest: tol must be above 0"):
+        corr.nearest(a, tol=tol)
+    assert corr.nearest(a)[2] < 100

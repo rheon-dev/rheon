@@ -92,6 +92,12 @@ model that only the new build has is listed as an addition and passes.
   takes a `bytearray` or a `memoryview`, as `ModelBank.load` does, and
   names anything else. A spec named as an input column is refused without
   Polars' `duplicate: ` in front of the sentence.
+- `rheon.corr` checks three more arguments by name: `mp_edge` and
+  `mp_density` refuse a `sigma2` that is not a finite number above 0 (a
+  negative one gave a lower edge above the upper); `absorption` refuses a
+  `k` that is not a whole number, as `spectral` does (`True` ran as 1, and
+  `2.0` failed in numpy's slicing); `nearest` refuses a `tol` not above 0,
+  which no run can meet.
 - `rp.stream.with_windows` checks `chunk_size` as `refresh_time` and
   `lf.rheon.fit_predict` do, while the plan is built: `True` ran in one-row
   chunks, `2.5` failed only when the plan ran, and `"a"` raised Python's own
