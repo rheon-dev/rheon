@@ -627,6 +627,20 @@ def chained_model_candidate():
     )
 
 
+@check
+def nb_hazard_candidate():
+    """GitHub master of bayesian_changepoint_detection (torch rewrite; the PyPI 0.2.dev1 has constant_hazard only).  H(r) = P(L = r+1) / P(L >= r+1), L = k + NegBin(k, p)."""
+    import torch
+    from scipy import stats
+    from bayesian_changepoint_detection.hazard_functions import negative_binomial_hazard as nb
+
+    k, p = 3, 0.02
+    r = np.arange(400)
+    got = nb(k, p, torch.arange(400)).numpy().astype(float)
+    d = np.array([stats.nbinom.pmf(x + 1 - k, k, p) / stats.nbinom.sf(x - k, k, p) if x + 1 >= k else 0.0 for x in r])
+    report("523", "negative-binomial run-length hazard", "bayesian-changepoint-detection", {"max |hazard - definition| (float32 output)": float(np.max(np.abs(got - d)))}, "k=3, p=0.02, run lengths 0..399; installed from GitHub master with torch")
+
+
 def main(argv):
     names = argv or list(CHECKS)
     for n in names:
