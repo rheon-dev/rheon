@@ -2823,17 +2823,21 @@ impl WindowsRun {
         // error (review P7): the panic is taken as the damage it reports.
         let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             IpcReader::new(Cursor::new(file.held)).finish()
-        }))
-        .unwrap_or_else(|_| {
-            Err(polars_err!(ComputeError: "the reader found its record batch out of spec"))
-        });
-        let held = read.map_err(|e| {
-            format!(
-                "{WHO}: the rows the state holds cannot be read ({e}), so it is damaged. \
-                 Load an undamaged copy of the state file, or leave out load_state to start \
-                 over."
-            )
-        })?;
+        }));
+        let held = match read {
+            Ok(read) => read.map_err(|e| {
+                format!(
+                    "{WHO}: the rows the state holds cannot be read ({e}), so it is damaged. \
+                     Load an undamaged copy of the state file, or leave out load_state to \
+                     start over."
+                )
+            }),
+            Err(_) => Err(format!(
+                "{WHO}: the rows the state holds cannot be read (a record batch is out of \
+                 spec), so it is damaged. Load an undamaged copy of the state file, or leave \
+                 out load_state to start over."
+            )),
+        }?;
         if held.height() != file.core.held() {
             return Err(format!(
                 "{WHO}: the state holds {} rows but counts {}, so it is damaged. Load an undamaged \

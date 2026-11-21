@@ -1355,8 +1355,9 @@ class ModelBank:
         if not isinstance(batches, (pl.LazyFrame, pl.DataFrame)) and (
             not isinstance(batches, Iterable) or isinstance(batches, (str, bytes, Mapping))
         ):
+            who = f"ModelBank.{what}"
             msg = (
-                f"ModelBank.{what}: batches must be a LazyFrame, a DataFrame or an iterator of "
+                f"{who}: batches must be a LazyFrame, a DataFrame or an iterator of "
                 f"DataFrames, but it is of type {type(batches).__name__}. Pass a query, a frame "
                 "(pl.DataFrame(...) of a dict of columns), or frames in a list or a generator."
             )
