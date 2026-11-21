@@ -305,7 +305,7 @@ noise), no decay:
 | IRF, orthogonal IRF, FEVD, IRF covariance | 1.2e-14 | 1e-12 | the same sums through a short matrix recursion |
 | Granger statistic (`f`, `wald`, single-equation forms) | 1.6e-13 | 1e-11 | a quadratic form in a small difference; 60x margin |
 | Granger p-value, relative | 4.6e-12 | 1e-10 | far-tail amplification (p down to 1e-177); or compare `log p` absolutely |
-| decay and weights against WLS | 2.8e-15 | 1e-12 | the same arithmetic as the fit |
+| decay and weights against WLS | 3.1e-15 | 1e-12 | the same arithmetic as the fit |
 | window, short stream | 2.0e-14 | 1e-12 | the add and remove each round once |
 | window, long stream near zero | 5.8e-13 (1e6 rows) | 1e-11 | drift grows about tenfold per hundredfold rows; at a level of 1e4 it is 3.2e-10, so a level needs the shifted reference |
 | level offsets | `level * 1e-16` | shifted reference | statsmodels' own error at a level is `level^2 * 1e-16` |
