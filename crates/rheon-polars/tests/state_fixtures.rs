@@ -3165,7 +3165,16 @@ fn first_difference(got: &rmpv::Value, want: &rmpv::Value, bound: f64, at: &str)
 /// platform's.
 fn differs_from_another_writer(kind: &Kind, f: &Fixture) -> Option<String> {
     let (bytes, input) = (kind.first)();
-    let decode = |b: &[u8]| rmpv::decode::read_value(&mut &b[..]).unwrap();
+    // The checksum hashes the other bytes, and a libm field's last bits may
+    // differ by OS, so the hash may too; the fields it covers are compared
+    // within the tolerance below, which is what the checksum stands for.
+    let decode = |b: &[u8]| {
+        let mut v = rmpv::decode::read_value(&mut &b[..]).unwrap();
+        if let rmpv::Value::Map(m) = &mut v {
+            m.retain(|(k, _)| k.as_str() != Some("checksum"));
+        }
+        v
+    };
     if let Some(d) = first_difference(&decode(&bytes), &decode(&unhex(f.state)), TOL, "state") {
         return Some(d);
     }
