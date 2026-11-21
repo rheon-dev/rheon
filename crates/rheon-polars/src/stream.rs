@@ -2499,9 +2499,10 @@ fn accepts(features: &FeatureRows, weight: Option<&[f64]>, i: usize) -> bool {
 }
 
 /// The last of a group's input rows `base..base + n` in the chunk that the
-/// stream accepts: where `coef` is written without a cadence (review round
-/// 4, PB2). `None` when every one is skipped, and the chunk writes no
-/// `coef` for the group.
+/// stream accepts and learns at a weight other than 0: where `coef` is
+/// written without a cadence (review round 4, PB2). `None` when every one
+/// is skipped or weighs 0, and the chunk writes no `coef` for the group: a
+/// row of weight 0 counts in nothing (hard rule 9).
 ///
 /// Read from the columns, a row at a time from the last: [`accepts`]'s test
 /// on the same values, before any run has copied them into rows.
@@ -2513,7 +2514,14 @@ pub fn last_accepted(
 ) -> Option<usize> {
     (base..base + n)
         .rev()
-        .find(|&i| features.usable_at(i) && weight.map(|w| usable(w[i])).unwrap_or(true))
+        .find(|&i| features.usable_at(i) && weight.map(|w| counts(w[i])).unwrap_or(true))
+}
+
+/// A usable weight other than 0: a row of weight 0 is scored and counts in
+/// nothing (hard rule 9), so it carries no `coef` either.
+#[inline]
+fn counts(w: f64) -> bool {
+    usable(w) && w != 0.0
 }
 
 /// True when this target has not reached its own warmup threshold yet.
@@ -3070,6 +3078,7 @@ impl Stream {
         cfg: &rheon_core::ClockCfg,
         clock: Option<&ClockCol>,
         session: Option<&[u64]>,
+        weight: Option<&[f64]>,
         rows: &[usize],
         base: usize,
     ) -> Result<(), ClockRefusal> {
@@ -3090,6 +3099,11 @@ impl Stream {
         let mut state = self.persisted.clock.clone();
         for (ri, &row) in rows.iter().enumerate() {
             let at = base + ri;
+            // A row of weight 0 is in no step-back rule (hard rule 9): the
+            // schedule never steps the clock on it.
+            if weight.is_some_and(|w| w[at] == 0.0) {
+                continue;
+            }
             // Whether the row is refused depends on the clock and session
             // alone: `refusal` moves only those, and decides as `advance`
             // does (task 250: the whole step here was a tenth of a row).
@@ -3157,6 +3171,74 @@ impl Stream {
             // counts (docs/PLAN.md task 223 (b)).
             let accept = spec.model.reads_every_row() || accepts(features, weight, i);
             let c = clock.map(|c| c.at(i));
+            // A row of weight 0 counts in no clock (hard rule 9; the user,
+            // 2026-11-21: "the next row should decay as if they were not
+            // present"): it is scored as `predict` scores a row, from the
+            // last row that counted over its step read on a copy of the
+            // clock, and the stream's clock, its rows, the `coef` cadence
+            // and the fresh fold stay where they were. So the next row
+            // steps from the last row that counted -- one step on a row
+            // clock, one gap under `gap_cap`, one session rule -- and no
+            // model, window, diagnostic or held-row buffer sees it.
+            if w == Some(0.0) {
+                let s = session.map(|s| s[i]);
+                let adv = clock_state.clone().advance_scoring(cfg, c, s);
+                let d_fresh = match restart_fold.as_ref() {
+                    Some(f) if fresh_steps => f.clone().advance_scoring(cfg, c, s).d_clock,
+                    _ => 0.0,
+                };
+                let zero = if adv.reset || (adv.session_changed && spec.closes_on_session()) {
+                    Weightless::Fresh
+                } else if adv.session_changed {
+                    Weightless::Blended
+                } else {
+                    Weightless::AsIs
+                };
+                // Processed, as every accepted row is: the count `settled`
+                // rounds by and `rows_processed` report it. A row of weight
+                // 0 whose features are not usable is skipped as well, and
+                // scored by nothing.
+                if accept {
+                    rows_seen = rows_seen.saturating_add(1);
+                }
+                plans.push(RowPlan {
+                    ri,
+                    i,
+                    pending: usize::MAX,
+                    d_clock: adv.d_clock,
+                    d_fresh,
+                    elapsed_step: adv.d_clock,
+                    stamp: None,
+                    // Without a clock column, the place the next row that
+                    // counts takes: a row clock counts no such row.
+                    clock: c.or(Some(ClockValue::F64(fed as f64))),
+                    reset: false,
+                    blend: false,
+                    session_changed: false,
+                    backwards: false,
+                    capped: false,
+                    accept,
+                    want_coef: false,
+                    emit: true,
+                    drift_ri: ri,
+                    learn: false,
+                    buffered: false,
+                    parks: false,
+                    w: 0.0,
+                    zero,
+                });
+                // Its place on the elapsed clock, which an `embargo` reads to
+                // release the held rows whose wait it has seen out.
+                if keep_elapsed {
+                    elapsed.push(
+                        clock_state
+                            .clone()
+                            .advance_stamped(cfg, &self.exact_caps, c, s, true)
+                            .elapsed_stamp,
+                    );
+                }
+                continue;
+            }
             // A clock below the previous row's, before the schedule decides
             // what to do about it; the summary counts them (task 35).
             let prev = clock_state.last_clock();
@@ -3236,6 +3318,7 @@ impl Stream {
                 buffered: false,
                 parks: false,
                 w: w.unwrap_or(1.0),
+                zero: Weightless::No,
             });
             if keep_elapsed {
                 elapsed.push(adv.elapsed_stamp);
@@ -3848,6 +3931,7 @@ impl Stream {
                 buffered: false,
                 parks: false,
                 w: 1.0,
+                zero: Weightless::No,
             };
             // Scored against the state as it stands, so the learned clock is
             // the fit's last learned row on every row (task 152).
@@ -4242,6 +4326,27 @@ struct RowPlan {
     /// row's does.
     parks: bool,
     w: f64,
+    /// A row of weight 0 (hard rule 9, the user, 2026-11-21: "the next row
+    /// should decay as if they were not present"), and the state it is
+    /// scored by. Such a row is scored and never learned, and moves no
+    /// clock: pass 1 reads its step on a copy of the clock, as `predict`
+    /// does, and leaves the stream's own where it was, so the next row
+    /// steps from the last row that counted (docs/PLAN.md task 539).
+    zero: Weightless,
+}
+
+/// Whether a row weighs 0, and if so which state it is scored by: the state
+/// as it stands, a fresh stream's (a session change that starts one), or a
+/// copy blended toward the long run (`session_shrink`) -- the three classes
+/// `predict` scores a row by ([`Stream::predict_chunk`]). The models are
+/// never touched: a fresh or blended state is a copy for the one row.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Weightless {
+    /// A row of positive weight, or one only replayed or scored.
+    No,
+    AsIs,
+    Fresh,
+    Blended,
 }
 
 impl RowPlan {
@@ -4249,6 +4354,13 @@ impl RowPlan {
     #[inline]
     fn direct(&self) -> bool {
         self.pending == usize::MAX
+    }
+
+    /// A row of weight 0: scored where it sits, in no clock and learned by
+    /// nothing.
+    #[inline]
+    fn weightless(&self) -> bool {
+        self.zero != Weightless::No
     }
 }
 
@@ -4586,6 +4698,23 @@ fn run_instance(
         if !plan.accept {
             continue;
         }
+        // A row of weight 0 that `predict` would score by a fresh stream (a
+        // session change that starts one) or by a copy blended toward the
+        // long run is scored by such a copy here, and the instance's own
+        // model is put back after the row: the row learns nothing and moves
+        // nothing (hard rule 9).
+        let kept_model = match plan.zero {
+            Weightless::Fresh => Some(std::mem::replace(
+                inst.model.get_mut(),
+                build_one(inst.spec, inst.decay).expect("spec was already validated"),
+            )),
+            Weightless::Blended => {
+                let mut copy = inst.model.get().clone();
+                copy.blend_toward_long_run();
+                Some(std::mem::replace(inst.model.get_mut(), copy))
+            }
+            Weightless::No | Weightless::AsIs => None,
+        };
         // The stream's accepted rows up to this one, which bounds the decay
         // steps any weight here has been carried through; a row replayed
         // out of the `embargo` buffer was counted where it arrived.
@@ -4869,7 +4998,10 @@ fn run_instance(
                     reason = REASON_MIN_PERIODS;
                 }
             }
+            // A row of weight 0 is in no clock, the waits included: it
+            // neither starts nor ends one (hard rule 9).
             if !inst.notified.unreachable
+                && !plan.weightless()
                 && inst.notified.floor_withheld_for(tj, below, judged, now) >= half
             {
                 let steps = rounding_steps(inst.steps, inst.notified);
@@ -4974,7 +5106,7 @@ fn run_instance(
         // and the projection to steady state here is Kish's, which `P`
         // does not follow (docs/PLAN.md task 116).
         let per_row_gate = matches!(inst.spec.model, ModelKind::Kalman { .. });
-        let waited = if per_row_gate || inst.notified.unreachable {
+        let waited = if per_row_gate || inst.notified.unreachable || plan.weightless() {
             f64::NAN
         } else {
             withheld_for(&mut inst.notified.gate_since, gate_withheld, judged, now)
@@ -5537,6 +5669,9 @@ fn run_instance(
                         .collect()
                 });
             }
+        }
+        if let Some(model) = kept_model {
+            *inst.model.get_mut() = model;
         }
         if reset_on_drift && row_drift {
             inst.reset();

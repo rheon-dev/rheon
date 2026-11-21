@@ -276,12 +276,15 @@ fn oracle(df: &DataFrame, s: &Spec, group: &str, reset_on: &str) -> Oracle {
         o.fed += 1;
         let accept = features.iter().all(|f| usable(f[i]))
             && weight.as_ref().map(|w| usable(w[i])).unwrap_or(true);
+        // A row of weight 0 counts in no clock and in no session rule (hard
+        // rule 9): its clock is in the range, and nothing else.
+        let zero = weight.as_ref().is_some_and(|w| w[i] == 0.0);
         let session_changed = match (s.session.as_deref(), prev_sess) {
-            (Some(_), Some(p)) => sess[i].as_deref() != Some(p),
+            (Some(_), Some(p)) => !zero && sess[i].as_deref() != Some(p),
             _ => false,
         };
         let below = match (clock.as_ref().map(|c| c[i]), prev_clock) {
-            (Some(c), Some(p)) => c < p,
+            (Some(c), Some(p)) => !zero && c < p,
             _ => false,
         };
         let backwards = below && !session_changed;
@@ -294,9 +297,11 @@ fn oracle(df: &DataFrame, s: &Spec, group: &str, reset_on: &str) -> Oracle {
         });
         if let Some(c) = clock.as_ref().map(|c| c[i]) {
             o.clock = Some(o.clock.map_or((c, c), |(lo, hi)| (lo.min(c), hi.max(c))));
-            prev_clock = Some(c);
+            if !zero {
+                prev_clock = Some(c);
+            }
         }
-        if s.session.is_some() {
+        if s.session.is_some() && !zero {
             prev_sess = sess[i].as_deref();
         }
         if accept {
@@ -1274,9 +1279,10 @@ fn weight_sum_settled_is_the_ceiling_and_an_unreachable_min_weight_is_named() {
 /// a weight of 0, and the ceiling's projection, `(0 − w₁(1 − s))/s`, made
 /// that a negative ceiling, with advice to lower the floor below it ("tops
 /// out near -0.0256"). Its notice says the target has had no such row, with
-/// no figure: a target never present beside one that is, and a stream whose
-/// every row weighs 0 (which read "tops out near 0.0000"). The present
-/// target meets its floor and is not named.
+/// no figure: a target never present beside one that is. The present
+/// target meets its floor and is not named. A stream whose every row weighs
+/// 0 (which read "tops out near 0.0000") says nothing now: such rows count
+/// in no clock (hard rule 9), so no wait passes.
 #[test]
 fn a_target_with_no_weighted_value_is_named_without_a_ceiling() {
     let n = 200usize;
@@ -1300,6 +1306,10 @@ fn a_target_with_no_weighted_value_is_named_without_a_ceiling() {
         let mut bank = Bank::new(vec![spec]).unwrap();
         bank.fit_predict(&df).unwrap();
         let said = bank.take_notices();
+        if !weight.is_empty() {
+            assert!(said.is_empty(), "{said:?}");
+            continue;
+        }
         assert_eq!(said.len(), 1, "{said:?}");
         let msg = &said[0];
         assert!(

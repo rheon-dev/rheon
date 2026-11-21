@@ -141,24 +141,17 @@ fn a_target_short_of_the_rows_is_given_the_rows_ceiling() {
     }
 }
 
-/// Every row weighs 0 from row 40, so the shared weight decays with the
-/// target's; the warning comes on a row of weight 0, which no regular stream
-/// of rows like it reads a positive weight from, so it gives no figure. It
-/// said "tops out near 2.21".
+/// Every row weighs 0 from row 40. Such a row counts in no clock (hard rule
+/// 9), so the weight does not decay past row 39, no wait runs and no
+/// warning comes, chunked or not. It said the floor was unmet on a row of
+/// weight 0, after the zero-weight rows had decayed the weight.
 #[test]
-fn a_row_of_weight_zero_is_given_no_ceiling() {
+fn rows_of_weight_zero_run_no_wait() {
     let df = frame(N, 40);
-    let want = format!(
-        "{}, so predictions for target \"y\" stay withheld until the weight the gate reads \
-         reaches 5. This warning comes on a row of weight 0, which adds nothing to the weight, so \
-         it cannot say where the weight tops out. Check that rows reach the model with a positive \
-         weight, lower min_weight, or increase half_life, as {READY} explains.",
-        unmet("5")
-    );
     for cuts in [&[][..], &[44, 48][..]] {
         assert_eq!(
             said(spec("rls", 5.0), &df, cuts),
-            vec![want.clone()],
+            Vec::<String>::new(),
             "{cuts:?}"
         );
     }
@@ -241,20 +234,14 @@ fn the_unsolved_noise_gate_gives_where_weight_sum_tops_out() {
     assert_eq!(unsolved(&[1.0; 40]), vec![want]);
 }
 
-/// Every row weighs 0 from row 3, so `weight_sum` falls toward 0 (0.0975
-/// before row 12); the warning comes on a row of weight 0 and gives no
-/// figure. It said "tops out near 0.0997", the falling weight over the
-/// settled fraction.
+/// Every row weighs 0 from row 3: such rows count in no clock (hard rule
+/// 9), so the noise gate's wait does not run on them and no warning comes.
+/// It said the gate was unmet on a row of weight 0, after the zero-weight
+/// rows had decayed `weight_sum` toward 0.
 #[test]
-fn the_unsolved_noise_gate_on_a_row_of_weight_zero_gives_no_figure() {
+fn the_unsolved_noise_gate_waits_on_no_row_of_weight_zero() {
     let w: Vec<f64> = (0..40).map(|i| if i < 3 { 1.0 } else { 0.0 }).collect();
-    let want = format!(
-        "{UNSOLVED}. Predictions stay withheld, and error_inflation infinite, until weight_sum \
-         reaches 11, one for each of the model's 11 coefficients, but this warning comes on a row of weight 0, which adds nothing to the \
-         weight, so it cannot say where weight_sum tops out. Check that rows reach the model with \
-         a positive weight, or increase half_life, as {READY} explains."
-    );
-    assert_eq!(unsolved(&w), vec![want]);
+    assert_eq!(unsolved(&w), Vec::<String>::new());
 }
 
 /// A row of weight 1,000 where the warning comes: read as the weight every

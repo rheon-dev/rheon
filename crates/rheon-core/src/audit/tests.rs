@@ -718,24 +718,22 @@ fn the_clock_counts_duplicates_gaps_and_regular_steps() {
 }
 
 /// Hard rule 9 (the user, 2026-11-21: an audit stops counting zero-weight
-/// rows): a row of weight 0, the first included, advances the clock and
-/// learns nothing. Its values reach no count, moment, counter, run, lag or
-/// pair: every column and pair reads as the stream with those rows left
-/// out, to the bit. Its clock step is the clock's, counted as every row's
-/// is, so the clock reads as the stream fed every row; and it adds nothing
-/// to `n_eff` and divides nothing by zero.
+/// rows, then "Zero weight rows should not count in the clock"): a row of
+/// weight 0, the first included, counts nothing. Its values reach no count,
+/// moment, counter, run, lag or pair, and its clock step no step: every
+/// column, pair and the clock read as the stream with those rows left out,
+/// to the bit, the row after a zero-weight first row being the first. The
+/// stream hands the row after it the step from the last row that counted,
+/// so the gap is counted once, whole. It adds nothing to `n_eff` and
+/// divides nothing by zero.
 #[test]
-fn a_zero_weight_row_advances_the_clock_and_counts_nothing() {
+fn a_zero_weight_row_counts_nothing_its_clock_step_included() {
     let cfg2 = AuditCfg {
         pairs: true,
         gap_cap: Some(4.0),
         ..cfg(2)
     };
-    let (mut with, mut without, mut every) = (
-        Audit::new(cfg2.clone()).unwrap(),
-        Audit::new(cfg2.clone()).unwrap(),
-        Audit::new(cfg2).unwrap(),
-    );
+    let (mut with, mut without) = (Audit::new(cfg2.clone()).unwrap(), Audit::new(cfg2).unwrap());
     let mut r = SplitMix64::new(921);
     let mut first_kept = true;
     for i in 0..300 {
@@ -758,7 +756,6 @@ fn a_zero_weight_row_advances_the_clock_and_counts_nothing() {
         let zero = i % 5 == 0;
         let s = with.step(&x, &[], d, if zero { 0.0 } else { 1.0 });
         assert_eq!(s.n_eff, without.n_eff(), "row {i}: n_eff is the kept rows'");
-        every.step(&x, &[], d, 1.0);
         if !zero {
             without.step(&x, &[], if first_kept { 0.0 } else { d }, 1.0);
             first_kept = false;
@@ -781,8 +778,11 @@ fn a_zero_weight_row_advances_the_clock_and_counts_nothing() {
         format!("{:?}", without.columns)
     );
     assert_eq!(format!("{:?}", with.pairs), format!("{:?}", without.pairs));
-    assert_eq!(with.clock, every.clock, "every row's step is the clock's");
-    assert_eq!(with.clock().unwrap().steps, 299);
+    assert_eq!(
+        with.clock, without.clock,
+        "no zero-weight row's step counts"
+    );
+    assert_eq!(with.clock().unwrap().steps, 239);
     assert_eq!(with.n_eff(), 240.0);
     let bytes = rmp_serde::to_vec(&with.state()).unwrap();
     let back: State = rmp_serde::from_slice(&bytes).unwrap();

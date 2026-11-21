@@ -259,8 +259,8 @@ fn a_gate_never_moves_the_residual_spread_or_what_reads_it() {
 
 /// `sigma` against its definition: before each row, the root of the EW
 /// mean of the squared residuals at each row's weight, `W' = λW + w`,
-/// `v' = (λWv + w r²)/W'` (a row with no residual only ages `W`), the
-/// decay a half-life's on the row clock. Under a gate, over the residuals
+/// `v' = (λWv + w r²)/W'` (a row with no residual only ages `W`, and a row
+/// of weight 0 is in no clock), the decay a half-life's on the row clock. Under a gate, over the residuals
 /// the same spec reports with no gate -- each slot's own prediction; in a
 /// state written before schema 64, over the residuals it reports itself.
 /// The two differ on this stream, which is what the gate moved.
@@ -309,6 +309,7 @@ fn sigma_is_the_ew_mean_square_of_each_slots_own_residual() {
             let sigma = floats(named(out, "sigma_y"));
             let (mut big_w, mut v) = (0.0f64, 0.0f64);
             let mut checked = 0;
+            let mut first = true;
             for i in 0..df.height() {
                 let want = (big_w > 0.0).then(|| v.max(0.0).sqrt());
                 match (sigma[i], want) {
@@ -322,7 +323,16 @@ fn sigma_is_the_ew_mean_square_of_each_slots_own_residual() {
                     (None, None) => {}
                     (g, h) => panic!("{model} {what}: row {i}: {g:?} vs {h:?}"),
                 }
-                let step = if i == 0 { 1.0 } else { lam };
+                // A row of weight 0 counts in no clock (hard rule 9): the
+                // next row steps from the last row that counted.
+                if w[i] == 0.0 {
+                    continue;
+                }
+                let step = if std::mem::replace(&mut first, false) {
+                    1.0
+                } else {
+                    lam
+                };
                 match resid[i].filter(|r| r.is_finite()) {
                     Some(r) => {
                         let w_new = step * big_w + w[i];
@@ -350,7 +360,7 @@ fn sigma_is_the_ew_mean_square_of_each_slots_own_residual() {
 /// The residual autocorrelation folds each residual at its row's weight
 /// (`EwAutoCorr::update_weighted`), and a state written before schema 64
 /// at 1 (`EwAutoCorr::update`), over the residuals the output reports, a
-/// row with none or of weight 0 only ageing it.
+/// row with none only ageing it and a row of weight 0 in no clock.
 #[test]
 fn the_residual_autocorrelation_weighs_each_residual_by_its_row() {
     let df = frame();
@@ -374,6 +384,7 @@ fn the_residual_autocorrelation_weighs_each_residual_by_its_row() {
         let got = floats(named(out, "autocorr_y"));
         let mut est = EwAutoCorr::new(2).unwrap();
         let mut checked = 0;
+        let mut first = true;
         for i in 0..df.height() {
             match (got[i], est.get()) {
                 (Some(g), Some(h)) => {
@@ -386,8 +397,16 @@ fn the_residual_autocorrelation_weighs_each_residual_by_its_row() {
                 (None, None) => {}
                 (g, h) => panic!("weighed {weighed}: row {i}: {g:?} vs {h:?}"),
             }
-            let step = if i == 0 { 1.0 } else { lam };
-            match resid[i].filter(|r| r.is_finite() && w[i] > 0.0) {
+            // A row of weight 0 counts in no clock (hard rule 9).
+            if w[i] == 0.0 {
+                continue;
+            }
+            let step = if std::mem::replace(&mut first, false) {
+                1.0
+            } else {
+                lam
+            };
+            match resid[i].filter(|r| r.is_finite()) {
                 Some(r) if weighed => est.update_weighted(r, w[i], step),
                 Some(r) => est.update(r, step),
                 None => est.age(step),

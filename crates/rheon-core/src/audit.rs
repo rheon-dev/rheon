@@ -1379,9 +1379,10 @@ impl Audit {
 
 impl OnlineModel for Audit {
     /// Count the row: every column's value, the pairs' and the clock's step.
-    /// A row of weight 0 counts its clock step alone; any other weight goes
-    /// into `n_eff` alone, and a value that is not usable is counted, not
-    /// refused (the module's doc).
+    /// A row of weight 0 counts nothing, its clock step included (hard rule
+    /// 9: it counts in no clock, and the stream steps the next row from the
+    /// last that counted); any other weight goes into `n_eff` alone, and a
+    /// value that is not usable is counted, not refused (the module's doc).
     fn step_into(
         &mut self,
         x: &[f64],
@@ -1395,15 +1396,15 @@ impl OnlineModel for Audit {
         out.n_eff = self.n_eff;
         out.extra = None;
         let cap = self.cfg.distinct_cap;
+        // Hard rule 9: a zero-weight row counts in no clock and learns
+        // nothing, so the row after it is the first if it was.
+        if weight == 0.0 {
+            return;
+        }
         if !self.fresh && d_clock.is_finite() && d_clock >= 0.0 {
             self.step_clock(d_clock);
         }
         self.fresh = false;
-        // Hard rule 9: a zero-weight row advances the clock, above, and
-        // learns nothing.
-        if weight == 0.0 {
-            return;
-        }
         for (c, &v) in self.columns.iter_mut().zip(x) {
             c.add(v, cap);
         }

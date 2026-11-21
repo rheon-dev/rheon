@@ -3716,7 +3716,7 @@ Gₐᵦ = (β_a b_j(a)[b] + β_b b_j(b)[a] + β_a β_b Q_j(a)j(b) − R_a R_b) /
 
 `θ_i` minimizes the least-squares contrast `Σ_i ∫ λ_i² dt − 2 ∫ λ_i dN_i`,
 each instant weighted by its decay. `G` is not kept, since it can be read
-from `b` and `Q`. The state is `8 (k + D (1 + k) + D (D + 1) / 2 + 3)` bytes
+from `b` and `Q`. The state is `8 (k + D (1 + k) + D (D + 1) / 2 + 2)` bytes
 for `D` nodes and `k = D U` excitations: 72 bytes for one node and two
 decays, 208 for two nodes and three.
 

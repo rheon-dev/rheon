@@ -743,8 +743,8 @@ fn the_clock_window_reads_its_edge_off_the_stamps() {
 
 /// Under a window `n_eff` is the weight inside it (hard rule 8): the weights
 /// of the event rows held as the last row left them, before the row's own
-/// clock step, for either kind of window. A row with no event, or of weight 0, is no part of the fit and
-/// adds none.
+/// clock step, for either kind of window. A row with no event, or of
+/// weight 0, is no part of the fit and adds none.
 #[test]
 fn under_a_window_n_eff_is_the_weight_inside_it() {
     let rows = grid_stream(2, 300, 59);
@@ -780,13 +780,12 @@ fn under_a_window_n_eff_is_the_weight_inside_it() {
                 "kind {kind} row {i}: {} against {want}",
                 s.n_eff
             );
-            // A row of weight 0 counts in no clock: it drops no row.
-            if weight(i) > 0.0 {
-                match kind {
-                    0 => {}
-                    1 => held.retain(|(t, _)| line[i].0 - t < 3.0),
-                    _ => held.retain(|(t, _)| line[i].0 - t <= 3.0),
-                }
+            // A row of weight 0 handed to the model ages it as any row
+            // does: the stream hands it none (hard rule 9).
+            match kind {
+                0 => {}
+                1 => held.retain(|(t, _)| line[i].0 - t < 3.0),
+                _ => held.retain(|(t, _)| line[i].0 - t <= 3.0),
             }
             if weight(i) > 0.0 && line[i].1.iter().any(|v| *v > 0.0) {
                 held.push_back((line[i].0, weight(i)));
@@ -1041,99 +1040,38 @@ fn the_clock_windows_settings_are_refused_where_they_conflict() {
     refuse(c, "past max_state_bytes of 10");
 }
 
-/// A row of weight 0 counts in no clock (hard rule 9): the stream with such
-/// rows among its rows gives every other row the output, to the bit, of the
-/// stream without them, whose next row steps by the zero-weight rows' steps
-/// and its own; the rows are in no window and none of `n_eff`, and the state
-/// at the end is the same; and each is read as any row is, from the last row
-/// that counted.
+/// A row of weight 0 counts in no clock (hard rule 9): the stream never
+/// hands one to a model, and steps the next row from the last that counted.
+/// That is held for `hawkes` under no window, a window of events and a
+/// window of clock units at either edge, to the bit against the stream
+/// without such rows, by `crates/rheon-polars/tests/zero_weight.rs`; here,
+/// a row of weight 0 handed over anyway ages the state over its step and
+/// reads what `predict` reads, as every model's does.
 #[test]
-fn a_zero_weight_row_counts_in_no_clock() {
-    const MS: i128 = 1_000_000;
-    let base = grid_stream(2, 260, 41);
-    let configs = [
+fn a_zero_weight_row_handed_over_reads_as_predict_and_ages_the_state() {
+    let base = grid_stream(2, 120, 41);
+    for config in [
         cfg(2, &[1.0, 4.0]),
-        HawkesCfg {
-            window_events: Some(11),
-            ..cfg(2, &[1.0, 4.0])
-        },
-        clock_cfg(2, &[1.0, 4.0], 3.0, WindowClosed::Right),
         clock_cfg(2, &[1.0, 4.0], 3.0, WindowClosed::Both),
-    ];
-    for (c, config) in configs.iter().enumerate() {
-        for stamped in [false, true] {
-            if stamped && config.window_clock.is_none() {
-                continue;
+    ] {
+        let mut a = Hawkes::new(config.clone()).unwrap();
+        let mut b = Hawkes::new(config).unwrap();
+        for (i, (d, y)) in base.iter().enumerate() {
+            let w = if i % 4 == 2 { 0.0 } else { 1.0 };
+            let ahead = a.predict(&[], *d);
+            let step = a.step(&[], y, *d, w);
+            assert_eq!(
+                step.pred.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                ahead.pred.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                "row {i}"
+            );
+            if w == 0.0 {
+                b.step(&[], &[None, None], *d, 1.0);
+            } else {
+                b.step(&[], y, *d, 1.0);
             }
-            // The stream with zero-weight rows: after some rows, one to
-            // three of them with events, steps of their own (some 0).
-            let mut with: Vec<(f64, Vec<Option<f64>>, f64)> = Vec::new();
-            let mut without: Vec<(f64, Vec<Option<f64>>, f64)> = Vec::new();
-            let mut s = 77u64 + c as u64;
-            for (i, (d, y)) in base.iter().enumerate() {
-                // Zero rows before the row `i`, if any: they carry their
-                // steps, summed as the model sums them.
-                let mut carried: Option<f64> = None;
-                if i % 4 == 2 || i == 0 {
-                    for _ in 0..1 + (lcg(&mut s) * 3.0) as usize {
-                        let dz = (lcg(&mut s) * 5.0).floor() * 0.25;
-                        let dz = if i == 0 { 0.0 } else { dz };
-                        with.push((dz, vec![Some(1.0), Some(2.0)], 0.0));
-                        carried = Some(carried.map_or(dz, |c| c + dz));
-                    }
-                }
-                let d_in = if i == 0 { 0.0 } else { *d };
-                with.push((d_in, y.clone(), 1.0));
-                let total = match carried {
-                    Some(cz) if i != 0 => cz + d_in,
-                    _ => d_in,
-                };
-                without.push((total, y.clone(), 1.0));
-            }
-            let mut a = Hawkes::new(config.clone()).unwrap();
-            let mut b = Hawkes::new(config.clone()).unwrap();
-            let (mut ns_a, mut ns_b) = (0i128, 0i128);
-            let mut outs_a = Vec::new();
-            let mut zero_reads = 0;
-            for (d, y, w) in &with {
-                ns_a += (d * 1000.0).round() as i128 * MS;
-                if stamped {
-                    a.stamp_next(Stamp::Ns(ns_a));
-                }
-                let before = a.clone();
-                let ahead = before.predict(&[], *d);
-                let step = a.step(&[], y, *d, *w);
-                if *w == 0.0 {
-                    zero_reads += 1;
-                    // Read as any row is: the read ahead of the state it left.
-                    assert_eq!(
-                        step.pred.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
-                        ahead.pred.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
-                    );
-                } else {
-                    outs_a.push((step.pred, step.n_eff));
-                }
-            }
-            for (k, (d, y, w)) in without.iter().enumerate() {
-                ns_b += (d * 1000.0).round() as i128 * MS;
-                if stamped {
-                    b.stamp_next(Stamp::Ns(ns_b));
-                }
-                let step = b.step(&[], y, *d, *w);
-                let (pa, na) = &outs_a[k];
-                assert_eq!(
-                    pa.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
-                    step.pred.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
-                    "config {c}, stamped {stamped}, row {k}"
-                );
-                assert_eq!(
-                    na.to_bits(),
-                    step.n_eff.to_bits(),
-                    "config {c}, row {k}: n_eff"
-                );
-            }
-            assert!(zero_reads > 40);
-            assert_eq!(a, b, "config {c}, stamped {stamped}: the state");
+            assert_eq!(a.r, b.r, "row {i}: R");
+            assert_eq!(a.g0.to_bits(), b.g0.to_bits(), "row {i}: G00");
         }
     }
 }

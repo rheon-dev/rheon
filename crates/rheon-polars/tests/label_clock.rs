@@ -288,7 +288,7 @@ fn weighted(name: &str, rest: &str) -> String {
 /// [`frame`] with label times `t + 6` and a weight of 0 on every seventh
 /// row, row 0 among them, and row 70 one of them set 8 after row 69 and 8
 /// before row 71: a gap whose two halves are each under the `gap_cap` of
-/// 10 and whose whole is over it.
+/// 10 and whose whole, the one step the row after it takes, is over it.
 fn zero_weight_frame(n: usize, seed: u64, reset_at: Option<usize>) -> DataFrame {
     let mut df = frame(n, seed, reset_at, &|_| Some(6));
     let old: Vec<i64> = df
@@ -332,14 +332,13 @@ fn skipped_first_frame(n: usize, seed: u64, reset_at: Option<usize>) -> DataFram
     df
 }
 
-/// A row of weight 0 is held and learned at its label time like any row,
-/// as `embargo` learns it a delay after its clock: a step of the clock
-/// that teaches nothing. So a gap it splits is two steps, each under the
-/// cap, not one over it, and a zero-weight first row starts the clock of
-/// the labels learned (rule 9). And a skipped first row's time starts that
-/// clock at its label time, as it starts `embargo`'s at its clock. Every
-/// kind, weighted, whole and in chunks of 13, with a clock reset or
-/// without.
+/// A row of weight 0 counts in no clock under either (hard rule 9; PLAN
+/// 539, which supersedes holding it): it is scored and held for nothing,
+/// so a gap it splits is one step, capped once, and a zero-weight first
+/// row starts no clock. And a skipped first row's time starts the clock of
+/// the labels learned at its label time, as it starts `embargo`'s at its
+/// clock. Every kind, weighted, whole and in chunks of 13, with a clock
+/// reset or without.
 #[test]
 fn a_zero_weight_row_and_a_skipped_first_row_step_the_clock_as_under_an_embargo() {
     for reset in [None, Some(260)] {
@@ -691,11 +690,12 @@ fn missing_and_dropped_labels_are_counted() {
     );
 }
 
+/// A row of weight 0 counts in no clock (hard rule 9; PLAN 539), so it is
+/// held for nothing and takes no room, where it was held and dropped.
 #[test]
-fn a_zero_weight_row_is_held_and_a_null_label_is_not() {
-    // Room for one row. Row 0 weighs 0 and is held; row 1 has no label
-    // time and is not; row 2 is held beside row 0, which arrived first and
-    // is dropped; row 3 releases row 2.
+fn neither_a_zero_weight_row_nor_a_null_label_is_held() {
+    // Room for one row. Row 0 weighs 0 and is not held; row 1 has no label
+    // time and is not; row 2 is held alone; row 3 releases row 2.
     let df =
         df!("t" => [0i64, 1, 2, 3], "x0" => [1.0, 2.0, 3.0, 4.0], "x1" => [0.5, 0.1, 0.3, 0.2],
                  "y" => [1.0, 2.0, 3.0, 4.0], "w" => [0.0, 1.0, 1.0, 1.0],
@@ -719,7 +719,7 @@ fn a_zero_weight_row_is_held_and_a_null_label_is_not() {
         .collect();
     assert_eq!(ws, [Some(0.0), Some(0.0), Some(0.0), Some(1.0)]);
     assert_eq!(summary_count(&bank, "labels_missing"), 1);
-    assert_eq!(summary_count(&bank, "labels_dropped"), 1);
+    assert_eq!(summary_count(&bank, "labels_dropped"), 0);
 }
 
 #[test]
@@ -762,13 +762,13 @@ fn a_full_buffer_is_refused_unless_it_drops_its_oldest() {
         "{err}"
     );
     assert_eq!(bank.save_bytes().unwrap(), before);
-    // Rows of weight 0 are held, so they fill it too.
+    // Rows of weight 0 are held for nothing (hard rule 9), so they fill
+    // nothing.
     let mut zero = df.clone();
     zero.with_column(Series::new("w".into(), vec![0.0; 60]).into_column())
         .unwrap();
-    let err = bank.fit_predict(&zero).unwrap_err().to_string();
-    assert!(err.contains("above max_held_rows = 5"), "{err}");
-    assert_eq!(bank.save_bytes().unwrap(), before);
+    bank.fit_predict(&zero).unwrap();
+    assert_eq!(summary_count(&bank, "labels_dropped"), 0);
 }
 
 #[test]

@@ -175,8 +175,9 @@ const REGENERATE: &str = "PRINT_STATE_FIXTURES=1 cargo test -p rheon-polars --te
 /// and held nothing. A state saved before holds none of its zero-weight
 /// rows, so the two kinds whose frame has them, `bank_label_clock` and
 /// `bank_conformal_auto`, continue by the new rule from the rows they hold,
-/// not to their frozen frames nor to the current fixture's
-/// ([`HELD_ZERO_WEIGHT`]); no layout changed.
+/// not to their frozen frames nor to the current fixture's; no layout
+/// changed. PLAN 539 then counts such a row in no clock, and holds it for
+/// nothing ([`ZERO_WEIGHT_CLOCK`]).
 ///
 /// 69 kept since 70 put `hmm` under `"full"` and `"diag"` that learns under
 /// a stabilized prior (rule 5's twenty-second exception, the user's,
@@ -185,8 +186,8 @@ const REGENERATE: &str = "PRINT_STATE_FIXTURES=1 cargo test -p rheon-polars --te
 /// `prior_rows`. The bank files hold one `hmm`, under `"tied"`, which takes
 /// no prior and goes on to the bit, so every kept kind converts to the
 /// current bytes exactly. The 69 set was written by the build that held the
-/// zero-weight rows, so its two label kinds convert exactly too
-/// ([`HELD_ZERO_WEIGHT_FROM`]).
+/// zero-weight rows, so its two label kinds converted exactly too, until
+/// PLAN 539 ([`ZERO_WEIGHT_CLOCK`]).
 ///
 /// 70 kept since 71 ended a bank file and a window run's state (version 11)
 /// with a checksum of their bytes (review P7). A kept file has none and
@@ -1949,13 +1950,8 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
             let what = format!("v{schema}/{}", f.name);
             assert_eq!(f.schema, schema, "{what}: a fixture of schema {}", f.schema);
             let kind = kind_of(f);
-            // A kept set the fix wrote (69's, kept since 70) converts as any
-            // other does.
-            if let Some(&(_, specs)) = HELD_ZERO_WEIGHT
-                .iter()
-                .find(|h| h.0 == f.name && schema < HELD_ZERO_WEIGHT_FROM)
-            {
-                held_zero_weight_rule(&kind, f, specs, &what);
+            if ZERO_WEIGHT_CLOCK.iter().any(|z| z.0 == f.name) {
+                zero_weight_clock_rule(&kind, f, &what);
                 continue;
             }
             let (again, frames) =
@@ -2047,103 +2043,130 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
     }
 }
 
-/// The kinds whose kept states hold none of the zero-weight rows their
-/// frames scored under `label_clock` (rule 5's twenty-first exception, the
-/// user's, 2026-11-20, "Accept exception 21"; review P1), each with the
-/// specs it builds. A build before this one scored such a row and held
-/// nothing, so a state it saved lacks the zero-weight rows whose label
-/// times had not passed at the save (`label_frame`'s row 37, label time 94,
-/// in flight at row 40), and the rows it holds, the rows a full buffer
-/// dropped among them (`max_held_rows = 2`), are those it chose without
-/// them. Nothing can restore the rows never written. Such a state loads and
-/// continues by the current rule from the rows it holds, every later
-/// zero-weight row held: so it continues as this build continues the same
-/// stream with the label times of the zero-weight rows before the save
-/// null (which this build, as the old one, scores and does not hold), to
-/// the bit, but for `labels_missing`, which counts those nulls
-/// ([`held_zero_weight_rule`]). Its continuation is not its frozen one, nor
-/// the current fixture's, and the state it re-saves is neither file's: it
-/// loads back the same. `labelled_ts`, unweighted, is unaffected.
-const HELD_ZERO_WEIGHT: &[(&str, SpecsOf)] = &[
-    ("bank_label_clock", label_specs),
-    ("bank_conformal_auto", auto_specs),
+/// The kinds whose frames hold rows of weight 0, which a build before PLAN
+/// 539 counted in the clock (a step of every clock, a row of the row clock,
+/// a gap of its own under `gap_cap`, a session's and a step back's rule,
+/// and held under `label_clock`), and which this build counts in none (hard
+/// rule 9; the user, 2026-11-21: "the next row should decay as if they
+/// were not present"). Whether a state saved by such a build continues
+/// under the new rule is the user's decision (PLAN 539, step 4), so the
+/// kept states are held to what was measured, not to a rule: each loads,
+/// saves bytes that load back the same, and its continuation parts from
+/// its frozen one, which the old rule wrote, by no more than the bound
+/// beside its kind, relative to `1 + |frozen|` over every number of every
+/// frame (`RHEON_PRINT_MOVES=1` prints each set's figure), and in no more
+/// than the count of other cells -- a null, a flag, a count -- beside it.
+/// Measured 2026-11-21 on macOS arm64. The moves are those of the
+/// continued rows' own zero-weight rows as much as the saved clock's: the
+/// old build counted both. The current fixtures were regenerated.
+const ZERO_WEIGHT_CLOCK: &[(&str, f64, usize)] = &[
+    // 3.77e-2, `int_clock`'s `pred_y`; `dated` 2.28e-3.
+    ("bank", 0.04, 0),
+    // 1.67e-1.
+    ("bank_gated", 0.17, 0),
+    // 2.86e-3 for `v67/` and `v68/`, 1.64e-1 for `v69/` and `v70/`.
+    ("bank_label_clock", 0.17, 0),
+    // 2.86e-3 for `v67/` and `v68/`, 4.53e-2 for `v69/` and `v70/`.
+    ("bank_conformal_auto", 0.05, 0),
 ];
 
-/// The first kept schema whose set the fix itself wrote: 69's set, kept
-/// since 70, was regenerated by the build that held the zero-weight rows, so
-/// it holds them, converts to the current bytes and continues to the bit.
-const HELD_ZERO_WEIGHT_FROM: u32 = 69;
-
-/// A kind's specs, as its `first` builds its bank.
-type SpecsOf = fn() -> Vec<Spec>;
-
-/// [`HELD_ZERO_WEIGHT`]'s rule for the kept fixture `f` of `kind`, whose
-/// banks `specs` builds: the kept state, loaded and continued, against its
-/// twin -- a bank of this build fed `label_frame`'s rows before the save
-/// with the label time `avail` null wherever the weight is 0, saved, loaded
-/// and continued on the same input -- frame for frame to the bit (the
-/// golden tolerance off the writer's platform), `labels_missing` aside,
-/// which the twin counts higher by the zero-weight rows it nulled; and the
-/// kept state's re-saved bytes load back the same.
-fn held_zero_weight_rule(kind: &Kind, f: &Fixture, specs: SpecsOf, what: &str) {
+/// [`ZERO_WEIGHT_CLOCK`]'s hold on the kept fixture `f` of `kind`.
+fn zero_weight_clock_rule(kind: &Kind, f: &Fixture, what: &str) {
     let input = from_ipc(f.input);
     let (again, frames) =
         (kind.run)(&unhex(f.state), &input).unwrap_or_else(|e| panic!("{what}: {e}"));
     let (resaved, _) = (kind.run)(&again, &input).unwrap_or_else(|e| panic!("{what}: {e}"));
     assert!(resaved == again, "{what}: saved, loaded, saved");
-    let mut df = label_frame();
-    let zero: Vec<bool> = df
-        .column("w")
-        .unwrap()
-        .f64()
-        .unwrap()
-        .into_no_null_iter()
-        .map(|w| w == 0.0)
-        .collect();
-    let avail: Vec<Option<i64>> = df
-        .column("avail")
-        .unwrap()
-        .i64()
-        .unwrap()
+    let &(_, bound, cells) = ZERO_WEIGHT_CLOCK
         .iter()
-        .zip(&zero)
-        .map(|(a, &z)| a.filter(|_| !z))
-        .collect();
-    let nulled = zero[..LABEL_SPLIT]
-        .iter()
-        .zip(df.column("avail").unwrap().i64().unwrap().iter())
-        .filter(|(z, a)| **z && a.is_some())
-        .count() as i64;
-    assert!(nulled > 0, "{what}: the frame has zero-weight rows to hold");
-    df.with_column(Series::new("avail".into(), avail).into_column())
-        .unwrap();
-    let mut twin = Bank::new(specs()).unwrap();
-    twin.fit_predict(&df.slice(0, LABEL_SPLIT)).unwrap();
-    let (_, want) = (kind.run)(&twin.save_bytes().unwrap(), &input)
-        .unwrap_or_else(|e| panic!("{what}: the twin: {e}"));
-    let tol = if f.writer == writer() { 0.0 } else { TOL };
-    assert_eq!(frames.len(), want.len(), "{what}");
-    for ((name, got), (twin_name, want)) in frames.iter().zip(&want) {
-        assert_eq!(name, twin_name, "{what}");
-        if name != "summary" {
-            same(&format!("{what}: {name}"), got, want, tol);
-            continue;
+        .find(|z| z.0 == f.name)
+        .expect("listed");
+    assert_eq!(frames.len(), f.output.len(), "{what}");
+    let (mut most, mut other, mut moved) = (0.0f64, 0usize, Vec::new());
+    for ((name, got), (frozen_name, want)) in frames.iter().zip(f.output) {
+        assert_eq!(name, frozen_name, "{what}");
+        let want = from_ipc(want);
+        for c in want.columns() {
+            let g = got
+                .column(c.name())
+                .unwrap_or_else(|_| panic!("{what}: {name}.{} is gone", c.name()));
+            let (m, o) = parted_by(g.as_materialized_series(), c.as_materialized_series());
+            if m > 0.0 || o > 0 {
+                moved.push(format!("{name}.{}: {m:.2e}, {o} other", c.name()));
+            }
+            most = most.max(m);
+            other += o;
         }
-        let missing = |d: &DataFrame| {
-            d.column("labels_missing")
-                .unwrap()
-                .i64()
-                .unwrap()
-                .get(0)
-                .unwrap()
-        };
-        assert_eq!(
-            missing(got) + nulled,
-            missing(want),
-            "{what}: labels_missing"
+    }
+    if std::env::var_os("RHEON_PRINT_MOVES").is_some() {
+        eprintln!(
+            "{what}: at most {most:.3e} of 1 + |frozen|, {other} other cells: {}",
+            moved.join("; ")
         );
-        let rest = |d: &DataFrame| d.drop("labels_missing").unwrap();
-        same(&format!("{what}: {name}"), &rest(got), &rest(want), tol);
+    }
+    assert!(
+        most <= bound && other <= cells,
+        "{what}: the continuation parts from its frozen one by {most:.3e} of 1 + |frozen| \
+         (bound {bound}) and in {other} other cells (bound {cells}): {}",
+        moved.join("; ")
+    );
+}
+
+/// How far `got` parts from `want`: the largest `|a − b| / (1 + |b|)` over
+/// the numbers both hold, and the count of other cells that differ (a null
+/// on one side, a NaN, a flag, a count, a label), a struct by its fields.
+fn parted_by(got: &Series, want: &Series) -> (f64, usize) {
+    if let (DataType::Struct(_), DataType::Struct(_)) = (got.dtype(), want.dtype()) {
+        let (g, w) = (got.struct_().unwrap(), want.struct_().unwrap());
+        return g
+            .fields_as_series()
+            .iter()
+            .zip(w.fields_as_series())
+            .map(|(a, b)| parted_by(a, &b))
+            .fold((0.0, 0), |(m, o), (a, b)| (m.max(a), o + b));
+    }
+    match (got.dtype(), want.dtype()) {
+        (DataType::Float64, DataType::Float64) => {
+            let (g, w) = (got.f64().unwrap(), want.f64().unwrap());
+            g.iter()
+                .zip(w.iter())
+                .fold((0.0, 0), |(m, o), (a, b)| match (a, b) {
+                    (Some(a), Some(b)) if a.is_finite() && b.is_finite() => {
+                        (m.max((a - b).abs() / (1.0 + b.abs())), o)
+                    }
+                    (Some(a), Some(b)) if a.to_bits() == b.to_bits() => (m, o),
+                    (Some(a), Some(b)) if a.is_nan() && b.is_nan() => (m, o),
+                    (None, None) => (m, o),
+                    _ => (m, o + 1),
+                })
+        }
+        (DataType::List(_), DataType::List(_)) => {
+            let (g, w) = (got.list().unwrap(), want.list().unwrap());
+            (0..want.len().min(got.len())).fold((0.0, 0), |(m, o), i| {
+                match (g.get_as_series(i), w.get_as_series(i)) {
+                    (Some(a), Some(b)) if a.len() == b.len() => {
+                        let (x, y) = parted_by(&a, &b);
+                        (m.max(x), o + y)
+                    }
+                    (None, None) => (m, o),
+                    _ => (m, o + 1),
+                }
+            })
+        }
+        _ => {
+            let (g, w) = (
+                got.cast(&DataType::String).unwrap(),
+                want.cast(&DataType::String).unwrap(),
+            );
+            let o = g
+                .str()
+                .unwrap()
+                .iter()
+                .zip(w.str().unwrap().iter())
+                .filter(|(a, b)| a != b)
+                .count();
+            (0.0, o)
+        }
     }
 }
 
@@ -3009,12 +3032,13 @@ fn a_label_buffer_is_frozen_out_of_arrival_order() {
     );
 }
 
-/// A row of weight 0 is held for its label time (review P1, rule 5's
-/// twenty-first exception), so a frozen buffer holds one at its save:
-/// `bank_conformal_auto`'s, whose buffer has no bound, holds
-/// `label_frame`'s row 37 (label time 94, in flight at row 40).
+/// A row of weight 0 is held for nothing (hard rule 9; PLAN 539, which
+/// supersedes review P1's holding of it), so a frozen buffer holds none:
+/// `bank_conformal_auto`'s, whose buffer has no bound, held `label_frame`'s
+/// row 37 (label time 94, in flight at row 40), and holds the rows of
+/// positive weight in flight alone.
 #[test]
-fn a_label_buffer_is_frozen_holding_a_zero_weight_row() {
+fn a_label_buffer_is_frozen_holding_no_zero_weight_row() {
     if regenerating() {
         return;
     }
@@ -3031,8 +3055,8 @@ fn a_label_buffer_is_frozen_holding_a_zero_weight_row() {
         .map(|(_, v)| v.as_f64().unwrap())
         .collect();
     assert!(
-        weights.len() > 2 && weights.contains(&0.0),
-        "no held row of weight 0: {weights:?}"
+        weights.len() > 2 && !weights.contains(&0.0),
+        "a held row of weight 0: {weights:?}"
     );
 }
 

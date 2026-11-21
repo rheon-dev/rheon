@@ -198,9 +198,8 @@ def hawkes(
         G₀ₐ = (β_a b_j(a)[0] - R_a) / (β_a - γ)
         Gₐᵦ = (β_a b_j(a)[b] + β_b b_j(b)[a] + β_a β_b Q_j(a)j(b) - R_a R_b) / (β_a + β_b - γ)
 
-    The state is ``R``, ``b``, ``Q``, ``G₀₀``, the weight and the clock a
-    zero-weight row left uncounted, ``8 * (k + D
-    * (1 + k) + D * (D + 1) / 2 + 3)`` bytes for ``k = D * U``, whatever the
+    The state is ``R``, ``b``, ``Q``, ``G₀₀`` and the weight, ``8 * (k + D
+    * (1 + k) + D * (D + 1) / 2 + 2)`` bytes for ``k = D * U``, whatever the
     stream's length.
 
     .. rubric:: Example
