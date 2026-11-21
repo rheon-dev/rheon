@@ -377,3 +377,38 @@ def test_nearest_refuses_a_tol_not_above_zero(tol: float) -> None:
     with pytest.raises(ValueError, match=r"^rheon.corr.nearest: tol must be above 0"):
         corr.nearest(a, tol=tol)
     assert corr.nearest(a)[2] < 100
+
+
+# --- review fable2, Y6: the numpy half of rheon.gram checks a Gram's shapes -------
+
+
+def test_the_numpy_half_of_gram_checks_shapes_as_the_native_half_does(gram: dict) -> None:
+    """A `means` of one entry: `lars_path` refused it by name, while `merge`
+    broadcast it into a wrong fit and `solve` and `vif` ignored it. A 2 x 2
+    `comoments` raised numpy's own errors. Each now refuses as the native
+    half does, and a valid Gram, whole or packed, is untouched."""
+    from rheon import gram as G
+
+    short = {**gram, "means": gram["means"][:1]}
+    small = {**gram, "comoments": gram["comoments"][:2, :2]}
+    for bad, key in ((short, "means"), (small, "comoments")):
+        with pytest.raises(ValueError, match=f"^rheon.gram: the Gram's {key} has"):
+            G.lars_path(bad)
+        for name, call in [
+            ("merge", lambda b=bad: G.merge([b, gram])),
+            ("solve", lambda b=bad: G.solve(b)),
+            ("vif", lambda b=bad: G.vif(b)),
+            ("correlation", lambda b=bad: G.correlation(b)),
+            ("condition", lambda b=bad: G.condition(b)),
+            ("subset", lambda b=bad: G.subset(b, ["x0"])),
+            ("coef_stats", lambda b=bad: G.coef_stats(b, G.solve(gram))),
+        ]:
+            with pytest.raises(
+                ValueError,
+                match=f"^rheon.gram.{name}: the Gram's {key} has .* entries, but a Gram of 3 "
+                "columns and 1 targets has",
+            ):
+                call()
+    want = G.solve(gram)
+    np.testing.assert_array_equal(G.solve(G.merge([gram])), want)
+    assert G.solve(G.merge([gram, gram])) == pytest.approx(want, rel=1e-12)

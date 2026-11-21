@@ -98,6 +98,14 @@ model that only the new build has is listed as an addition and passes.
   `k` that is not a whole number, as `spectral` does (`True` ran as 1, and
   `2.0` failed in numpy's slicing); `nearest` refuses a `tol` not above 0,
   which no run can meet.
+- `rheon.gram`'s numpy functions (`merge`, `subset`, `correlation`,
+  `solve`, `coef_stats`, `vif`, `condition`) check that a Gram's arrays are
+  sized to its columns and targets, as `lars_path`, `lasso_path` and
+  `solve_subsets` already did, and refuse with the same message. A `means`
+  of one entry was broadcast by `merge` into a wrong fit with nothing said,
+  and ignored by `solve` and `vif`; a `comoments` too small raised numpy's
+  own errors. A Gram as `ModelBank.gram()` returns it, whole or packed, is
+  unchanged.
 - `rp.stream.with_windows` checks `chunk_size` as `refresh_time` and
   `lf.rheon.fit_predict` do, while the plan is built: `True` ran in one-row
   chunks, `2.5` failed only when the plan ran, and `"a"` raised Python's own
