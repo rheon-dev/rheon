@@ -11,7 +11,7 @@ GARCH(1,1) margins against a batch fit written from the definition (§14).
 Part 7: the proposed tolerances (§15). Request A10, part 1: GARCH(1,1) variance
 targeting against a batch variance-targeting fit run by arch (§16). Part 2: the same at 100,000 rows and at
 persistence 0.97 and 0.99 (§17). Part 3: Student-t(5) noise for targeted
-GARCH, ARMA(1,1) at two AR roots and ETS(A,A,N) at two smoothing levels (§18). The request named the deliverable
+GARCH, ARMA(1,1) at two AR roots and ETS(A,A,N) at two smoothing levels (§18). Part 4: DCC(1,1) on three series with t(5) noise (§19). The request named the deliverable
 `STUDY-485-ESTIMATORS.md`; it is this record, kept under the name it was
 committed with (`ORACLE-STUDY-485.md`). Nothing in the package or the Rust crates was changed. The scan this
 builds on is `vm-tools/research/485-TIME-SERIES-SCAN.md` on branch
@@ -921,3 +921,90 @@ SE of arch's Gaussian fit on every case.
 targeted GARCH t-noise run at persistence 0.97 or 0.99 or past 10,000 rows;
 ETS at `α = 0.6` past 10,000 rows on the whole grid (one seed at 40,000);
 `σ²`'s SE under t for ETS (closed form is Gaussian) and robust SEs for ARMA.
+
+The coordinator accepted part 3 (2026-11-21) and keeps its three failures as
+findings: targeted GARCH against the t fit (a different estimator, so not
+comparable in its units) and ETS at `α = 0.6`, which fails with Gaussian
+noise too, so it is not the t noise.
+
+## 19. Request A10, part 4: DCC(1,1), three series, Student-t noise
+
+`dcc.py` gained a `k`-series path beside part 6's two-series one, which is
+unchanged (a part 6 case was recomputed and matched every field; its six
+tests pass): `simulate_k`, `r_path_k`, `loglik_rows_k`, `batch_fit_k`,
+`OnlineDccK`, `compare_k`, `grid_k`, `summary_k`, run as
+`dcc.py OUT --k 3 --a 0.05 --b 0.93 --rho-bar 0.5 --nu 5 --rows 10000
+--shard I/K` (one JSON line per seed, resumable) and
+`dcc.py OUT... --k 3 --summary`.
+
+**Truth.** `k = 3`; DCC `(a, b) = (0.05, 0.93)`; `Q̄` with every
+off-diagonal 0.5; each margin GARCH(1,1) at `(0.02, 0.08, 0.90)`. Noise:
+multivariate Student-t, `ν = 5`: `η_t = L_t x_t sqrt(3/w_t)`, `x_t`
+standard normal, `w_t ~ χ²(5)`, `L_t` the Cholesky factor of `R_t`, so the
+innovations have correlation `R_t` and each margin is t(5) at unit variance.
+Burn-in 1,000 rows; seeds 485000 to 485049; 10,000 rows. A Gaussian control
+(the same truth, `ν` absent) was run beside it.
+
+**Online**, part 6's, at `k` series: margins are `garch.py`'s targeted
+online GARCH (`ω` from the running variance, part 3's 1a), as in part 6;
+`Q̄` the running mean of `z zᵀ`; one Fisher-scoring step per row on the full
+Gaussian second-stage likelihood, with
+`∂ℓ = ½ tr((R⁻¹zzᵀR⁻¹ − R⁻¹) ∂R)` and the information
+`½ tr(R⁻¹∂R_i R⁻¹∂R_j)`, which at `k = 2` is part 6's
+`(1 + ρ²)/(1 − ρ²)² ∇ρ∇ρᵀ` (the `k`-path on two series reproduces part 6's
+`(a, b)` to the last digit printed and its `ρ_t` to 1.5e-15). Gain, start,
+warm-up and projection as part 6. Checks run for this part: the `k = 3` row
+likelihood equals scipy's `multivariate_normal` log density less the
+independent one's to 7e-15; the online score equals a central difference of
+the row's likelihood to 9 digits; the `lfilter` path at `k = 2` equals part
+6's to 1.1e-16.
+
+**Oracle**, part 6's written from the definition at `k = 3`: arch's
+Gaussian GARCH(1,1) per margin (quasi-likelihood under t noise), `z` from its
+in-sample volatility, `Q̄` the sample mean of `z zᵀ`, `Q₀ = Q̄`, and `(a, b)`
+maximizing the full Gaussian second-stage likelihood by scipy's SLSQP from
+`(0.03, 0.85)`, `a, b ∈ [0, 1]`, `a + b ≤ 1 − 1e-4`, `ftol` 1e-12. One change
+was needed at `k = 3`: SLSQP's line search and finite differences stepped
+outside `a + b < 1`, where `Q` loses its positive diagonal and the likelihood
+is NaN, which stopped the first launch (13 seeds written, discarded, the
+grid rerun from the start); the objective now returns 1e12 outside the
+admissible set, which cannot move an admissible optimum. Neither stage
+estimates `ν`: both the online and the batch fits are Gaussian
+quasi-likelihood, the same estimand. **Standard errors: the second-stage
+sandwich of part 6** (numerical, statsmodels' `approx_hess` and
+`approx_fprime`), leaving out the first stage's error; **accepted for DCC by
+the coordinator.** Under t(5) the sandwich is 1.58 times the inverse-Hessian
+SE (median, `a`); under normal noise 0.99.
+
+| run | within 2 SE | verdict | `a` in SE: median / p90 / max | `b` in SE: median / p90 / max | worst seed | `ρ` gap, per-seed median over pairs: median / max | §15.2: within 4 SE / worst-pair gap ≤ 0.03 / both |
+|---|---|---|---|---|---|---|---|
+| t(5) | **40** | **fails** | 0.52 / 2.70 / 9.55 | 0.44 / 2.90 / 13.6 | 485049: `a` +3.32, `b` −13.6 | 0.0098 / 0.070 | 46 / 44 / 43 |
+| normal (control) | 47 | passes | 0.34 / 1.10 / 2.85 | 0.31 / 1.29 / 2.34 | 485045: `a` −2.85, `b` +2.17 | 0.0036 / 0.013 | 50 / 50 / 50 |
+
+The `ρ` gap is `|ρ_t(online) − ρ_t(batch)|` over the second half, per seed
+the median over rows and the three pairs; the bound column uses the worst
+pair's median (t(5): median 0.011, max 0.075; normal: 0.0046, 0.015).
+SLSQP reported success on all 100 fits. Log-likelihood gap per row at the
+online final `(a, b)`: t(5) median 4.1e-4, max 0.023; normal 2.4e-5, max
+8.0e-4; never negative.
+
+**Constraints.** The batch second stage hit none at its solution: on no
+seed is `a + b` at `1 − 1e-4`, or `a` or `b` at 0, in either run. The online
+`(a, b)` ends inside on every seed, but its projection acts during the run:
+on 41 of 50 seeds under t(5) (at most 139 steps) and 32 of 50 under normal
+noise (at most 37), in the early steps.
+
+**What fails.** Ten seeds under t(5); eight of them lie along the `a + b`
+ridge as in part 6 and §10 (online `a` low and `b` high, persistence within
+0.01 of the batch's): worst 485039 (batch `(0.0607, 0.9208)`, online
+`(0.0266, 0.9584)`, −9.55 / +7.95 SE) and 485007 (−9.49 / +7.77). Two drop
+the persistence instead: 485049 (online `(0.0608, 0.8742)` against
+`(0.0500, 0.9304)`, `b` −13.6 SE) and 485034. The Gaussian control passes
+with three seeds of headroom, so the failure comes with the heavy tails:
+the early steps, taken on a few large `z zᵀ`, push `(a, b)` off the batch
+point (the projection acts on 41 seeds, against 32), and the `1/(t + 100)`
+gain does not bring it back in 10,000 rows, as with GARCH in §10 and §18.
+
+**Not verified:** a Student-t second stage or an online `ν`; first-stage-
+corrected SEs; more than 10,000 rows under t(5); the composite likelihood
+(at `k = 3` the full one is used, as the definition gives).
