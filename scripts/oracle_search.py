@@ -458,6 +458,59 @@ def bocpd_runlength_hazard():
     report("523", "BOCPD, run-length-dependent (logistic) hazard", "bayesian-changepoint-detection", {"max |R[:, t+1] - definition|": gap}, "same stream, logistic hazard centred at run length 50")
 
 
+def parzen(x):
+    return 1 - 6 * x**2 + 6 * x**3 if x <= 0.5 else 2 * (1 - x) ** 3
+
+
+def rk_def(r, H, dof=False, form="h/(H+1)"):
+    """Barndorff-Nielsen, Hansen, Lunde, Shephard 2008 eq. (2), Parzen kernel, k(h/(H+1)); optional n/(n-H) small-sample factor."""
+    n = len(r)
+    g = lambda h: float(np.sum(r[h:] * r[: n - h]))
+    arg = (lambda h: h / (H + 1)) if form == "h/(H+1)" else (lambda h: (h - 1) / H)  # second: BNHLS 2008 k((h-1)/H)
+    v = g(0) + 2 * sum(parzen(arg(h)) * g(h) for h in range(1, H + 1))
+    return v * (n / (n - H) if dof else 1.0)
+
+
+@check
+def realized_library_candidate():
+    import scipy.integrate as _si
+
+    if not hasattr(_si, "simps"):  # realized-library 0.1.2 imports the removed scipy.integrate.simps
+        _si.simps = _si.simpson
+    if not hasattr(_si, "trapz"):
+        _si.trapz = np.trapezoid
+    from realized_library.estimators.variance import (
+        bipower_variation as bpv,
+        med_rv,
+        multipower_variation as mpv,
+        realized_kernel as rk,
+        realized_variance as rv,
+    )
+
+    rng = np.random.default_rng(1)
+    r = rng.standard_normal(500) * 1e-3 + 0.3 * np.concatenate([[0], rng.standard_normal(499)]) * 1e-4  # mild serial structure
+    p = np.exp(np.concatenate([[0.0], np.cumsum(r)]))  # 501 prices -> 500 log returns
+    lr = np.diff(np.log(p))
+    n = len(lr)
+    out = {}
+    out["RV"] = rel(rv.compute(p), rv_def(lr))
+    out["BPV (default scaling)"] = rel(bpv.compute(p), bpv_def(lr))
+    out["BPV (correct_scaling_bias=False)"] = rel(bpv.compute(p, correct_scaling_bias=False), bpv_def(lr))
+    out["MedRV"] = rel(med_rv.compute(p), medrv_def(lr))
+    # tripower variation (BNS 2004): mu_{2/3}^-3 sum |r_i|^{2/3}|r_{i-1}|^{2/3}|r_{i-2}|^{2/3}
+    mu23 = 2 ** (1 / 3) * gamma(5 / 6) / gamma(0.5)
+    a = np.abs(lr) ** (2 / 3)
+    tpv = float(mu23**-3 * np.sum(a[2:] * a[1:-1] * a[:-2]))
+    for flag in (True, False):
+        out[f"TPV (m=3, r=2, correct_scaling_bias={flag})"] = rel(mpv.compute(p, m=3, r=2, correct_scaling_bias=flag), tpv)
+    for H in (3, 8):
+        for dof in (False, True):
+            out[f"Parzen RK H={H} dof_adjustment={dof}"] = rel(rk.compute(p, bandwidth=H, kernel="parzen", dof_adjustment=dof), rk_def(lr, H, dof))
+    for H in (3, 8):
+        out[f"Parzen RK H={H}, k((h-1)/H) form, no dof"] = rel(rk.compute(p, bandwidth=H, kernel="parzen", dof_adjustment=False), rk_def(lr, H, False, "(h-1)/H"))
+    report("499", "RV, BPV, MedRV, TPV, realized kernel", "realized-library", out, "500 log returns; rel. gap to the definitions (BNS 2004, ADS 2012, BNHLS 2008)")
+
+
 def main(argv):
     names = argv or list(CHECKS)
     for n in names:
