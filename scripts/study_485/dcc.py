@@ -376,6 +376,33 @@ REMEDIES: dict[str, dict[str, dict[str, object]]] = {
         "margins": {"batch_start": True, "warm": 500, "t0": 500.0, "robust_c": 2.0},
     },
     # request A12: the same with the core's batch optimizer in both stages
+    # request A12 part 2: the shared start (both stages fitted on the margins'
+    # 500 rows), with the Gaussian second stage, and with a Student-t one
+    # (nu fitted at the start, then held; the t score's own weights bound a
+    # row's influence, so the Huber clip is not applied to it)
+    "shared500core_huber2": {
+        "shared": True,
+        "stage2": {"warm": 500, "t0": 500.0, "robust_c": 2.0, "batch_opt": "core"},
+        "margins": {
+            "batch_start": True,
+            "warm": 500,
+            "t0": 500.0,
+            "robust_c": 2.0,
+            "batch_opt": "core",
+        },
+    },
+    "shared500core_t": {
+        "shared": True,
+        "stage2_t": True,
+        "stage2": {"warm": 500, "t0": 500.0, "batch_opt": "core"},
+        "margins": {
+            "batch_start": True,
+            "warm": 500,
+            "t0": 500.0,
+            "robust_c": 2.0,
+            "batch_opt": "core",
+        },
+    },
     "batch500core_huber2": {
         "stage2": {
             "batch_start": 500,
@@ -574,6 +601,15 @@ class OnlineDccK:
 
     def _start(self) -> None:
         zb = np.asarray(self.buffer)
+        self._fit_buffer(zb)
+        self.started = True
+        n0 = len(self.pred)
+        for x in zb:
+            self._update(x)
+        del self.pred[n0:]
+        self.buffer = []
+
+    def _fit_buffer(self, zb: np.ndarray) -> None:
         if self.batch_opt == "core":
             import batch_core
 
@@ -582,12 +618,18 @@ class OnlineDccK:
         else:
             fit = fit_second_stage(zb, zb.T @ zb / zb.shape[0])
             self.theta = np.array(project(*(float(x) for x in fit["theta"])))
+
+    def shared_start(self, zb: np.ndarray) -> None:
+        """Request A12 part 2: start from rows already read (the margins'
+        buffered rows, standardized by the margins' in-sample variances at
+        their start): fit them, replay them with ``(a, b)`` held, emit
+        nothing for them. Set ``warm = t0 = len(zb)``."""
+        self._fit_buffer(np.asarray(zb, dtype=float))
         self.started = True
         n0 = len(self.pred)
         for x in zb:
             self._update(x)
         del self.pred[n0:]
-        self.buffer = []
 
     def _score(
         self, z: np.ndarray, rmat: np.ndarray, d: np.ndarray, dg: np.ndarray
@@ -677,6 +719,103 @@ class OnlineDccCL(OnlineDccK):
         return g, info
 
 
+@dataclass
+class OnlineDccT(OnlineDccK):
+    """Stage two online with a multivariate Student-t likelihood (request A12
+    part 2). The row's log density is ``batch_core.dcc_t_row``'s; with ``nu``
+    held, the score in ``(a, b)`` is ``1/2 tr((w u u' - R^{-1}) dR)``,
+    ``w = (nu + k) / (nu - 2 + s)``, ``s = z' R^{-1} z``, which bounds one
+    row's influence by itself, and the information is the multivariate t's,
+    ``(nu + k)/(nu + k + 2) A_ij - tr(R^{-1} dR_i) tr(R^{-1} dR_j) /
+    (2 (nu + k + 2))``, ``A_ij = 1/2 tr(R^{-1} dR_i R^{-1} dR_j)``. ``nu`` is
+    fitted with ``(a, b)`` at the start (``batch_core.dcc_t_fit``) and held."""
+
+    nu: float = 8.0
+
+    def _fit_buffer(self, zb: np.ndarray) -> None:
+        import batch_core
+
+        assert self.batch_opt == "core" and self.robust_c == 0.0
+        self.batch_fit = batch_core.dcc_t_fit(zb)
+        a, b, nu = (float(x) for x in self.batch_fit.theta)
+        self.theta = np.array(project(a, b))
+        self.nu = nu
+
+    def _score(
+        self, z: np.ndarray, rmat: np.ndarray, d: np.ndarray, dg: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        k, nu = self.k, self.nu
+        rinv = np.linalg.inv(rmat)
+        u = rinv @ z
+        s = float(z @ u)
+        m = (nu + k) / (nu - 2.0 + s) * np.outer(u, u) - rinv
+        drs = []
+        for dq in (self.dqa, self.dqb):
+            lam = np.diag(dq) / dg
+            drs.append(dq * np.outer(d, d) - 0.5 * (lam[:, None] * rmat + rmat * lam[None, :]))
+        g = np.array([0.5 * float(np.sum(m * dr)) for dr in drs])
+        prods = [rinv @ dr for dr in drs]
+        A = np.array([[0.5 * float(np.sum(pi * pj.T)) for pj in prods] for pi in prods])
+        tr = np.array([float(np.trace(pi)) for pi in prods])
+        info = (nu + k) / (nu + k + 2.0) * A - np.outer(tr, tr) / (2.0 * (nu + k + 2.0))
+        return g, info
+
+
+def loglik_rows_t(rmat: np.ndarray, z: np.ndarray, nu: float) -> np.ndarray:
+    """The oracle's row log-likelihood with multivariate-t noise (the density
+    of ``batch_core.dcc_t_row``, vectorized; a test holds it to
+    ``scipy.stats.multivariate_t``)."""
+    k = z.shape[1]
+    _, logdet = np.linalg.slogdet(rmat)
+    s = np.einsum("ti,ti->t", z, np.linalg.solve(rmat, z[:, :, None])[:, :, 0])
+    h = 0.5 * (nu + k)
+    return (
+        math.lgamma(h)
+        - math.lgamma(0.5 * nu)
+        - 0.5 * k * math.log(math.pi * (nu - 2.0))
+        - 0.5 * logdet
+        - h * np.log1p(s / (nu - 2.0))
+    )
+
+
+def fit_second_stage_t(z: np.ndarray, qbar: np.ndarray) -> dict:
+    """The t oracle: ``(a, b, nu)`` maximizing ``loglik_rows_t`` on ``z`` by
+    scipy's SLSQP (the Gaussian oracle's settings, ``nu`` in ``[2.1, 200]``,
+    started at 8), and the sandwich SEs of all three."""
+    from scipy.optimize import minimize
+    from statsmodels.tools.numdiff import approx_fprime, approx_hess
+
+    def rows(theta: np.ndarray) -> np.ndarray:
+        return loglik_rows_t(r_path_k(theta[0], theta[1], z, qbar), z, float(theta[2]))
+
+    def neg(theta: np.ndarray) -> float:
+        a, b, nu = (float(x) for x in theta)
+        if a < 0.0 or b < 0.0 or a + b >= 1.0 or nu <= 2.0:
+            return INFEASIBLE
+        v = -float(np.sum(rows(theta)))
+        return v if math.isfinite(v) else INFEASIBLE
+
+    fit = minimize(
+        neg,
+        x0=np.array([0.03, 0.85, 8.0]),
+        method="SLSQP",
+        bounds=[(0.0, 1.0), (0.0, 1.0), (2.1, 200.0)],
+        constraints=[{"type": "ineq", "fun": lambda t: 1.0 - MARGIN_EPS - t[0] - t[1]}],
+        options={"ftol": 1e-12, "maxiter": 500},
+    )
+    theta = fit.x
+    hess = approx_hess(theta, lambda t: float(np.sum(rows(t))))
+    scores = approx_fprime(theta, rows)
+    hinv = np.linalg.inv(-hess)
+    cov = hinv @ (scores.T @ scores) @ hinv
+    return {
+        "theta": theta,
+        "se": np.sqrt(np.diag(cov)),
+        "success": bool(fit.success),
+        "llf": -float(fit.fun),
+    }
+
+
 def online_margin_z(
     r: np.ndarray, margins: dict[str, object] | None = None
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -715,15 +854,35 @@ def compare_k(
     bf = batch_fit_k(r)
     th_b, se = bf["theta"], bf["se"]
     rem = REMEDIES[remedy] if remedy else {"stage2": {}, "margins": {}}
-    est, rows, _ = online_k(r, rem["margins"], **rem["stage2"])
+    mkw = {"target": "running", **rem["margins"]}  # type: ignore[dict-item]
+    margin_est = [garch.run(r[:, i], **mkw) for i in range(k)]
+    s2 = np.column_stack([np.asarray(m.pred) for m in margin_est])
+    rows = np.flatnonzero(np.all(np.isfinite(s2), axis=1))
+    cls = OnlineDccT if rem.get("stage2_t") else OnlineDccK
+    est = cls(k=k, **rem["stage2"])  # type: ignore[arg-type]
+    if rem.get("shared"):
+        zbuf = np.column_stack(
+            [
+                r[: len(m.replay_sigma2), i] / np.sqrt(np.asarray(m.replay_sigma2))
+                for i, m in enumerate(margin_est)
+            ]
+        )
+        est.shared_start(zbuf)
+    for row in r[rows] / np.sqrt(s2[rows]):
+        est.update(row)
     reasons: dict[int, str] = {}
     if remedy:
         # request A12: the stated reason of every silent row of the output
-        mkw = {"target": "running", **rem["margins"]}
-        margin_est = [garch.run(r[:, i], **mkw) for i in range(k)]
         for i in range(n):
             why = [m.reasons[i] for m in margin_est if i in m.reasons]
-            if why:
+            if why and rem.get("shared"):
+                fitter = "the core's optimizer"
+                reasons[i] = (
+                    f"buffering {len(margin_est[0].replay_sigma2)} rows for the shared batch "
+                    f"start of the margins and the correlation (fitted by {fitter}); "
+                    "no parameters yet"
+                )
+            elif why:
                 reasons[i] = "a margin is silent: " + why[0]
         for j, why in est.reasons.items():
             reasons[int(rows[j])] = why
@@ -764,6 +923,20 @@ def compare_k(
 
         out["remedy"] = remedy  # type: ignore[assignment]
         out.update(vt_garch.silent_fields(pred[:, 0], reasons, est.batch_fit))
+        if rem.get("stage2_t"):
+            # the t oracle on the same z: the t stage's own estimand
+            tb = fit_second_stage_t(z_b, qbar_b)
+            out["t_batch_success"] = float(tb["success"])
+            out["t_nu_batch"] = float(tb["theta"][2])
+            out["t_nu_batch_se"] = float(tb["se"][2])
+            out["nu_online_start"] = float(est.nu)
+            rho_t = r_path_k(tb["theta"][0], tb["theta"][1], z_b, qbar_b)[:, iu[0], iu[1]]
+            gap_t = np.median(np.abs(pred[tail] - rho_t[tail]), axis=0)
+            out["t_rho_gap_worst_pair_median"] = float(gap_t.max())
+            for i, name in enumerate(NAMES):
+                out[f"t_{name}_batch"] = float(tb["theta"][i])
+                out[f"t_{name}_batch_se"] = float(tb["se"][i])
+                out[f"t_{name}_diff_in_se"] = float((th_o[i] - tb["theta"][i]) / tb["se"][i])
         fits = [m.batch_fit for m in margin_est if m.batch_fit is not None]
         if fits:
             out["margin_fit_stops"] = [f.stop for f in fits]  # type: ignore[assignment]

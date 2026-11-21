@@ -22,7 +22,8 @@ composite likelihood over pairs against the full one at three and five series
 (§23). Part 4: the adopted remedy per model and the final floors (§24), which
 supersede §20.2 and §20.3 where they differ. Request A12, part 1: the batch
 start fitted by an optimizer the core can hold, in place of the libraries
-(§25). The request named the deliverable
+(§25). Part 2: DCC's shared 500-row start and a Student-t second stage
+(§26). The request named the deliverable
 `STUDY-485-ESTIMATORS.md`; it is this record, kept under the name it was
 committed with (`ORACLE-STUDY-485.md`). Nothing in the package or the Rust crates was changed. The scan this
 builds on is `vm-tools/research/485-TIME-SERIES-SCAN.md` on branch
@@ -1743,3 +1744,118 @@ longer in the estimators' path for remedy (a); it stays the oracle.
 other DCC sizes (2, 5) and on the composite objective; its behaviour on a
 buffer with a flat or multimodal likelihood beyond the start grid (every
 fit here converged, none at the iteration cap); a Rust port of it.
+
+The coordinator accepted part 1 (2026-11-21): the core-held optimizer changes
+no count.
+
+## 26. Request A12, part 2: DCC, the shared start and a Student-t second stage
+
+The failing set of §24.3, three-series DCC under t(5) noise, with the adopted
+(a) + (c) and the core optimizer (§25), seeds 485000 to 485049, 10,000 rows,
+§19's Gaussian oracle and criterion. Four grids (`dcc.py ... --k 3 --remedy
+shared500core_huber2 | shared500core_t`, t(5) and normal noise), about 8
+minutes in four processes under nohup, resumable per seed.
+
+**(i) The shared start** (`shared500core_huber2`). Both stages fit on the
+margins' same 500 rows. Each margin buffers its 500 rows, fits them (core
+optimizer, §25) and replays them, now keeping each row's in-sample variance
+at its start parameters (`OnlineGarch.replay_sigma2`). Those rows'
+standardized residuals `z = r / σ` are the second stage's buffer:
+`OnlineDccK.shared_start` fits `(a, b)` on them (core optimizer, Gaussian
+likelihood), replays them with `(a, b)` held, and emits nothing for them.
+The second stage then steps (clipped score, `warm = t0 = 500`) from row 500,
+where §23 to §25's start was still buffering its own rows 500 to 999.
+
+**(ii) A Student-t second stage** (`shared500core_t`, `OnlineDccT`). The
+same shared start, with the correlation likelihood a multivariate Student-t
+with unit variances (scale matrix `R(ν − 2)/ν`):
+
+    ℓ_t = lnΓ((ν+k)/2) − lnΓ(ν/2) − (k/2) ln(π(ν−2)) − ½ ln|R_t| − ((ν+k)/2) ln(1 + s_t/(ν−2)),   s_t = zₜᵀR_t⁻¹zₜ
+
+- **Start:** `(a, b, ν)` are fitted together on the shared buffer by the
+  core optimizer (`batch_core.dcc_t_fit`; `ν` in `[2.1, 200]`, start grid
+  `ν ∈ {4, 8, 20}` × §25's `(a, b)` grid). The gradient in `ν` uses a
+  numpy-free digamma (absolute error at most about 1e-11; a test holds it to
+  scipy's); the fallback curvature is the rows' score outer product.
+- **Online:** `ν` is held at its start value. `(a, b)` step on the t score
+  `½ tr((w uuᵀ − R⁻¹) ∂R)`, `w = (ν + k)/(ν − 2 + s)`. That weight bounds one
+  row's influence by itself, so the Huber clip is not applied to this stage;
+  the margins keep (a) + (c).
+- **Information:** the multivariate t's,
+  `(ν + k)/(ν + k + 2) · ½ tr(R⁻¹∂R_i R⁻¹∂R_j) − tr(R⁻¹∂R_i) tr(R⁻¹∂R_j) / (2(ν + k + 2))`.
+- **Tests:** the density equals `scipy.stats.multivariate_t` to 1e-12; the
+  objective's gradient and the online score each equal central differences
+  of the log density to 1e-6.
+
+**Oracles.** Every count is against §19's Gaussian oracle, the set's own
+criterion. The t stage is also compared with a **t oracle** written the same
+way: arch's margins, `(a, b, ν)` maximizing `Σ ℓ_t` by scipy's SLSQP from
+`(0.03, 0.85, 8)`, `ν ∈ [2.1, 200]`, and sandwich SEs by statsmodels'
+numerical derivatives. On four seeds at 10,000 rows, three SLSQP starts plus
+a Nelder-Mead polish agreed with it to 1e-10 in log-likelihood. On a 500-row
+buffer it stopped 0.23 short while reporting success (a test asserts the core
+fit reaches at least its value). It converged on all 100 cases.
+
+**Silent rows.** Each case now has 500 silent rows, not 1,000, each with the
+one reason "buffering 500 rows for the shared batch start of the margins and
+the correlation (fitted by the core's optimizer); no parameters yet";
+`silent_unexplained` is 0 on every case. Every start fit converged (at most
+9 iterations), except three normal-noise t-stage fits. Those stopped on "no
+ascent" at a zero gradient with `ν` between 60 and 144, where the likelihood
+is flat in `ν` below rounding; their `(a, b)` lie within 0.0004 of the
+Gaussian start's. The online projection acted on no seed in any grid (§19:
+41 seeds under t(5)).
+
+| t(5), three series | within 2 SE | worst seed (SE) | §24.3 bounds: `a, b` ≤ 4 SE / worst-pair `ρ` gap ≤ 0.03 / `|Δ(a+b)|` ≤ 0.01 | median of the larger gap ≤ 1.2 |
+|---|---|---|---|---|
+| (a) + (c), library start (§23) | 43 | 485032: `a` −3.24, `b` +2.87 | 50 / 50 (max 0.021) / 50 (0.0054) | 0.80 |
+| (a) + (c), core, own start (§25) | 43 | 485032: `a` −3.24, `b` +2.87 | 50 / 50 (0.021) / 50 (0.0054) | 0.80 |
+| **(i) shared start, Gaussian stage** | **48** | 485031: `a` −2.85, `b` +1.79 | 50 / **49** (max 0.0306) / 50 (0.0050) | 0.68 |
+| **(ii) shared start, t stage** | **48** | 485031: `a` −2.69, `b` +1.89 | 50 / 50 (max 0.0283) / 50 (0.0061) | 0.56 |
+| (ii), against the t oracle | 47 | 485031: `a` −3.34, `b` +3.11 | 50 / 50 (0.0178) / 50 (0.0036) | 0.65 |
+
+| control: normal noise, three series | within 2 SE | worst seed (SE) | `ρ` gap max |
+|---|---|---|---|
+| (a) + (c), own start (§23, §25) | 50 | 485010: `b` +1.38 | 0.013 |
+| (i) shared start, Gaussian stage | **50** | 485031: `a` −1.33 | 0.013 |
+| (ii) shared start, t stage | **50** | 485031: `a` −1.17 | 0.013 (against the t oracle, also 50) |
+
+Under t(5) the started `ν` has median 5.31 (range 4.07 to 7.45) and the t
+oracle's 5.03 (4.64 to 5.33); under normal noise the start puts `ν` at the
+200 cap on most seeds (median 200, low 41), and the t stage then behaves as
+the Gaussian one.
+
+**Reading.**
+
+- **The shared start is what moves the count:** 43 to 48 with the same
+  Gaussian stage and clip, five seeds over the 45 floor, with every seed
+  within 2.85 SE. The measurement does not separate its two differences from
+  the own start: 500 more rows of online steps, and a buffer standardized by
+  the margins' in-sample variances at their start fit rather than by their
+  first online predictions. One seed's worst-pair `ρ` gap is 0.0306, just
+  over §24.3's 0.03.
+- **The t stage adds no count (48) but tightens the middle:** median larger
+  gap 0.56 against 0.68, every §24.3 bound held (`ρ` gap at most 0.0283),
+  and against its own t oracle 47 with every seed within 3.34 SE. It costs a
+  third start parameter, and its `ν` is fitted on 500 rows and then held
+  (range 4.07 to 7.45 under t(5)).
+- **The controls hold:** normal noise stays at 50 of 50 under both (the floor
+  needs 48).
+
+**So set (4) passes under the shared start.** A floor with two seeds of
+headroom, for either stage: **46 of 50** within 2 SE (measured 48 and 48),
+with per seed `a, b` ≤ 4 SE (2.85), worst-pair `ρ` gap ≤ 0.04 (0.0306) and
+`|Δ(a+b)|` ≤ 0.01 (0.0061). The normal-noise floor stays 48 (measured 50).
+Which stage to adopt is the coordinator's call (below).
+
+**Not verified:**
+- the shared start at two and five series, at buffers other than 500, and
+  for the composite likelihood;
+- `ν` estimated online rather than held;
+- the t stage's own SEs beyond the oracle's sandwich;
+- which of the shared start's two differences carries the gain.
+
+**Question for the coordinator.** Adopt the shared start with the Gaussian
+second stage (48; simpler, two parameters; one seed at 0.0306 on the `ρ`
+gap) or with the Student-t stage (48; every bound held, tighter medians; a
+third start parameter, `ν`, held after the start)?

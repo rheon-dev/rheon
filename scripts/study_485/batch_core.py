@@ -310,6 +310,24 @@ def arma_fit(y: np.ndarray, margin: float = 1e-2) -> Fit:
     return maximize(arma_objective(y), lambda th: np.clip(th, -cap, cap), ARMA_GRID)
 
 
+def digamma(x: float) -> float:
+    """``psi(x)`` for ``x > 0``: the recurrence up to 6, then the asymptotic
+        series through ``x^-10`` (absolute error at most about 1e-11, largest at
+    small ``x``: 8.8e-12 at ``x = 1``; a test holds it to scipy's within 2e-11).
+    It enters only the gradient in ``nu``."""
+    acc = 0.0
+    while x < 6.0:
+        acc -= 1.0 / x
+        x += 1.0
+    x2 = 1.0 / (x * x)
+    return (
+        acc
+        + math.log(x)
+        - 0.5 / x
+        - x2 * (1.0 / 12 - x2 * (1.0 / 120 - x2 * (1.0 / 252 - x2 * (1.0 / 240 - x2 / 132))))
+    )
+
+
 # ---- DCC(1,1) second stage, k series: (a, b), the full Gaussian likelihood
 
 DCC_GRID = [(a, b) for a in (0.01, 0.03, 0.05, 0.1) for b in (0.8, 0.85, 0.9, 0.95)]
@@ -362,6 +380,100 @@ def dcc_objective(z: np.ndarray, qbar: np.ndarray) -> Objective:
         return ll, g, H
 
     return f
+
+
+# ---- DCC(1,1) second stage with multivariate Student-t noise: (a, b, nu)
+
+NU_MIN, NU_MAX = 2.1, 200.0
+DCC_T_GRID = [(a, b, v) for a, b in DCC_GRID for v in (4.0, 8.0, 20.0)]
+
+
+def dcc_t_row(z: np.ndarray, rmat: np.ndarray, nu: float) -> tuple[float, float, float]:
+    """One row's multivariate-t log density with correlation ``rmat`` and unit
+    variances (scale matrix ``R (nu - 2) / nu``), its Mahalanobis ``s`` and
+    its derivative in ``nu``."""
+    k = z.shape[0]
+    sign, logdet = np.linalg.slogdet(rmat)
+    s = float(z @ np.linalg.solve(rmat, z))
+    h = 0.5 * (nu + k)
+    ll = (
+        math.lgamma(h)
+        - math.lgamma(0.5 * nu)
+        - 0.5 * k * math.log(math.pi * (nu - 2.0))
+        - 0.5 * logdet
+        - h * math.log1p(s / (nu - 2.0))
+    )
+    dnu = (
+        0.5 * digamma(h)
+        - 0.5 * digamma(0.5 * nu)
+        - 0.5 * k / (nu - 2.0)
+        - 0.5 * math.log1p(s / (nu - 2.0))
+        + h * s / ((nu - 2.0) * (nu - 2.0 + s))
+    )
+    return ll if sign > 0 else -math.inf, s, dnu
+
+
+def dcc_t_objective(z: np.ndarray, qbar: np.ndarray) -> Objective:
+    """The multivariate-t second-stage log-likelihood in ``(a, b, nu)``, ``Q``
+    as ``dcc_objective``. Score in ``(a, b)``: ``1/2 tr((w u u' - R^{-1}) dR)``
+    with ``w = (nu + k) / (nu - 2 + s)``; in ``nu``: ``dcc_t_row``'s. Its
+    Gauss-Newton fallback is the sum of the rows' score outer products."""
+    n, k = z.shape
+
+    def f(theta: np.ndarray, grad: bool) -> tuple[float, np.ndarray, np.ndarray]:
+        a, b, nu = (float(x) for x in theta)
+        q = qbar.copy()
+        dqa = np.zeros((k, k))
+        dqb = np.zeros((k, k))
+        ll = 0.0
+        g = np.zeros(3)
+        H = np.zeros((3, 3))
+        if not nu > 2.0:
+            return -math.inf, g, H
+        for t in range(n):
+            if t > 0:
+                zz = np.outer(z[t - 1], z[t - 1])
+                q_prev = q
+                q = (1.0 - a - b) * qbar + a * zz + b * q_prev
+                if grad:
+                    dqa = zz - qbar + b * dqa
+                    dqb = q_prev - qbar + b * dqb
+            dg = np.diag(q)
+            if not np.all(dg > 0.0):
+                return -math.inf, g, H
+            d = 1.0 / np.sqrt(dg)
+            rmat = q * np.outer(d, d)
+            lr, s, dnu = dcc_t_row(z[t], rmat, nu)
+            if not math.isfinite(lr):
+                return -math.inf, g, H
+            ll += lr
+            if grad:
+                rinv = np.linalg.inv(rmat)
+                u = rinv @ z[t]
+                m = (nu + k) / (nu - 2.0 + s) * np.outer(u, u) - rinv
+                row = np.empty(3)
+                for i, dq in enumerate((dqa, dqb)):
+                    lam = np.diag(dq) / dg
+                    dr = dq * np.outer(d, d) - 0.5 * (lam[:, None] * rmat + rmat * lam[None, :])
+                    row[i] = 0.5 * float(np.sum(m * dr))
+                row[2] = dnu
+                g += row
+                H += np.outer(row, row)
+        return ll, g, H
+
+    return f
+
+
+def dcc_t_fit(z: np.ndarray) -> Fit:
+    import dcc
+
+    qbar = z.T @ z / z.shape[0]
+
+    def proj(th: np.ndarray) -> np.ndarray:
+        a, b = dcc.project(float(th[0]), float(th[1]))
+        return np.array([a, b, min(max(float(th[2]), NU_MIN), NU_MAX)])
+
+    return maximize(dcc_t_objective(z, qbar), proj, DCC_T_GRID)
 
 
 def dcc_fit(z: np.ndarray) -> Fit:

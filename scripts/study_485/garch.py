@@ -204,6 +204,9 @@ class OnlineGarch:
     rob_slope: float = 0.0
     batch_fit: object = None
     reasons: dict[int, str] = field(default_factory=dict)
+    # request A12 part 2: the in-sample variance of each buffered row at the
+    # start's parameters, as the replay computes it (for DCC's shared start)
+    replay_sigma2: list[float] = field(default_factory=list)
 
     # what the run emits, row by row (NaN on the buffered rows)
     pred: list[float] = field(default_factory=list)
@@ -267,6 +270,7 @@ class OnlineGarch:
         self.started = True
         self.sigma2, self.d = self._advance(b, b, np.zeros(3))
         for x in rows:
+            self.replay_sigma2.append(self.sigma2)
             self._row(float(x), step=False)
         self.buffer = []
 
