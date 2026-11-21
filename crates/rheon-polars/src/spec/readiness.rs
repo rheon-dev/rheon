@@ -52,6 +52,10 @@ impl Spec {
                 "its prediction is a mean whose spread is its family's variance, not a \
                  least-squares fit's"
             }
+            ModelKind::Expectile { .. } => {
+                "an expectile fit weighs each row by the side its residual falls on, so a \
+                 least-squares fit's uncertainty does not hold for it"
+            }
             ModelKind::EwCov { .. }
             | ModelKind::Marginal { .. }
             | ModelKind::Deco { .. }
@@ -78,6 +82,10 @@ impl Spec {
             ModelKind::Glm { .. } => {
                 "a generalized linear fit's leverage is on its working response, not on its \
                  target"
+            }
+            ModelKind::Expectile { .. } => {
+                "an expectile fit's leverage is on its rows weighed by their sides, which \
+                 change with the fit"
             }
             ModelKind::Sgd { .. } | ModelKind::Pa { .. } | ModelKind::Ftrl { .. } => {
                 "a gradient fit keeps no second moments of the features to read one row's \

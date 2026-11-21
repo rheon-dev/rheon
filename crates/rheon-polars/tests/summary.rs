@@ -1099,6 +1099,14 @@ fn every_kind_refuses_or_loads_corruption(prefix_step: usize, flip_step: usize) 
             "[]",
             true,
         ),
+        // Its refit's buffer part full when the file is saved.
+        (
+            "expectile",
+            r#"{"type": "expectile", "expectile": 0.8, "refit_rows": 400}"#,
+            r#"["y"]"#,
+            r#"["x0", "x1"]"#,
+            true,
+        ),
     ];
     let mut seen = Vec::new();
     for &(kind, model, targets, features, half_life) in kinds {

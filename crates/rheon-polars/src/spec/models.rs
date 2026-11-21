@@ -1062,6 +1062,31 @@ impl Spec {
                     })
                 }));
             }
+            ModelKind::Expectile { refit_budget, .. } => {
+                no.take(check_refit_budget(&self.name, *refit_budget));
+                // The settings, here at the call: the model's own checks,
+                // among them the state's bytes against `max_state_bytes`
+                // where the settings fix them (a refit buffer, a window of
+                // rows). A decay refused is `decays`' to say.
+                if let Some((_, decay)) = self.decays().ok().and_then(|d| d.into_iter().next()) {
+                    no.take(
+                        crate::stream::expectile_cfg(self, decay)
+                            .and_then(|c| c.validate())
+                            .map_err(|e| {
+                                e.lines()
+                                    .map(|l| {
+                                        format!(
+                                            "spec {:?}: {}",
+                                            self.name,
+                                            l.trim_start_matches("expectile: ")
+                                        )
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            }),
+                    );
+                }
+            }
             ModelKind::Audit { .. } => {
                 if self.half_life.is_some() || self.lam.is_some() {
                     no.refuse(format!(

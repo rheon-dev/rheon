@@ -47,6 +47,9 @@ impl AnyModel {
             ModelState::Bocpd(_) => Ok(AnyModel::Bocpd(Box::new(Bocpd::restore(s)?))),
             ModelState::Audit(_) => Ok(AnyModel::Audit(Box::new(rheon_core::Audit::restore(s)?))),
             ModelState::Glm(_) => Ok(AnyModel::Glm(Box::new(rheon_core::Glm::restore(s)?))),
+            ModelState::Expectile(_) => Ok(AnyModel::Expectile(Box::new(
+                rheon_core::Expectile::restore(s)?,
+            ))),
             ModelState::Hawkes(_) => {
                 Ok(AnyModel::Hawkes(Box::new(rheon_core::Hawkes::restore(s)?)))
             }
