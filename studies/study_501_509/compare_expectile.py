@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import warnings
 
-import data as D
 import expectile as E
 import numpy as np
 import statsmodels.api as sm
 from scipy.stats import expectile as sp_expectile
 from statsmodels.robust.norms import LeastSquares, MQuantileNorm
+
+import data as D
 
 TAUS = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)
 
@@ -80,8 +81,8 @@ def scalar_vs_scipy(seeds=20):
                     worst = max(worst, abs(ours - ref) / unit)
                     worst_plain = max(worst_plain, abs(plain - ref) / unit)
             rows.append((n, wkind, lam, seeds * len(TAUS), worst, worst_plain))
-    hdr = ("n", "weights", "lam", "cases", "max gap, fsum (ulps of max|y|)",
-           "max gap, running sums (ulps of max|y|)")
+    hdr = ("n", "weights", "lam", "cases", "max gap, fsum (ulps of max abs y)",
+           "max gap, running sums (ulps of max abs y)")
     return hdr, rows
 
 
@@ -100,7 +101,7 @@ def scalar_online_vs_scipy(seeds=20):
                     sd = float(np.std(y))
                     gaps.append(abs(m - ref) / sd)
                 rows.append((lam, n, tau, float(np.mean(gaps)), float(np.max(gaps))))
-    return ("lam", "n", "tau", "mean |gap|/sd", "max |gap|/sd"), rows
+    return ("lam", "n", "tau", "mean abs gap / sd", "max abs gap / sd"), rows
 
 
 # ------------------------------------------------------------ regression

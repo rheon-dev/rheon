@@ -99,7 +99,7 @@ def avalanche(n: int = 4_096):
                                   for o in range(64)])
                 worst = max(worst, float(np.max(np.abs(share - 0.5))))
             rows.append((kind, name, n, worst))
-    return ("keys", "hash", "keys tested", "max |P(flip) - 1/2|"), rows
+    return ("keys", "hash", "keys tested", "max abs (P(flip) - 1/2)"), rows
 
 
 def error_band(trials: int = 200, mult: float = 20.0, kind: str = "random"):
@@ -235,10 +235,10 @@ def determinism():
     """The same registers in fresh processes under different PYTHONHASHSEEDs
     (Python's own hash is salted per process; this sketch uses none of it),
     and pinned hash values."""
-    code = ("import sys; sys.path.insert(0, %r); import hll, numpy as np, hashlib;"
+    here = os.path.dirname(os.path.abspath(H.__file__))
+    code = (f"import sys; sys.path.insert(0, {here!r}); import hll, numpy as np, hashlib;"
             "s = hll.HLL(12); s.update(np.random.default_rng(0).normal(size=50000));"
-            "print(hashlib.sha256(s.reg.tobytes()).hexdigest()[:16])") % os.path.dirname(
-                os.path.abspath(H.__file__))
+            "print(hashlib.sha256(s.reg.tobytes()).hexdigest()[:16])")
     digests = set()
     for seed in ("0", "1", "12345", "random"):
         env = dict(os.environ, PYTHONHASHSEED=seed)

@@ -1,7 +1,7 @@
 """Study 501 and 509: expectiles and HyperLogLog, every check, every table.
 
-    python scripts/study_501_509.py            # every table (about 4 minutes)
-    python scripts/study_501_509.py --quick    # fewer seeds and trials (about 40 seconds)
+    python scripts/study_501_509.py            # every table (about 3 minutes)
+    python scripts/study_501_509.py --quick    # fewer seeds and trials (about 1 minute)
     python scripts/study_501_509.py --only hll # one half: expectile or hll
 
 Any Python with numpy, scipy, statsmodels and datasketch runs it (datasketch

@@ -41,8 +41,9 @@ the rows, which the refit and the window keep.
 **Refit** (``irls``). Over kept rows with weights ``v``: start from sides at
 a given fit, solve the weighted least squares, re-judge every side, repeat
 until no side changes (an exact fixed point: the WLS fit of a self-consistent
-assignment is the loss's minimiser). At ``tau = 1/2`` one solve is the answer. A full Newton step can in principle
-cycle on a piecewise quadratic; a step that does not lower the loss is halved
+assignment is the loss's minimiser). At ``tau = 1/2`` one solve is the
+answer. A full Newton step can in principle cycle on a piecewise quadratic;
+a step that does not lower the loss is halved
 (the loss is convex, so a halving always helps). It also stops when the
 fitted values move by no more than ``tol`` of the residual scale or by no
 more than their own rounding (``8 eps max|fitted|``: rows whose residual is at
