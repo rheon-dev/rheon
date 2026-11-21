@@ -102,7 +102,8 @@ class EwMoments:
     def update(self, x, lam: float, w: float) -> None:
         Wo = lam * self.W
         W2 = Wo + w
-        self.Q = lam * lam * self.Q + w * w
+        # a negative weight retracts a row: its squared weight leaves `Q` where a row's enters
+        self.Q = lam * lam * self.Q + (-w * w if w < 0 else w * w)
         self.W = W2
         if W2 == 0.0:
             return

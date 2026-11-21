@@ -176,3 +176,59 @@ bytes per target if the state file carries it (k = 20: 168). Nothing grows with 
 
 **Changes a default: no.** `coef_prior` defaults to none (zeros, as today); the two outputs are new.
 
+## 520. Specification and influence tests
+
+Beside `specification.rs`: a test of what a fit is missing is an auxiliary regression read from EW centred moments of the out-of-sample
+residual `e` and regressors `phi`: `LM = n R^2` at Kish's `n = (sum w)^2 / sum w^2`, `R^2 = c' S_xx^-1 c / S_yy` from the centred `C` of the vector
+`(e^2, phi)`; a scored row (`w > 0`) enters once, a zero-weight row ages. Oracles are statsmodels 0.15.0 and MAPIE 1.6.0.
+
+- **ARCH LM** (`het_arch`): `phi` = the last `L` scored squared residuals (a ring of `8 L` bytes); a row enters once the ring is full. C1: `nlags` must be
+  passed (the default is `min(10, nobs // 5)`) and the result is a plain 4-tuple.
+- **White** (`het_white(resid, exog, interaction_terms)`, `exog` with a constant): `phi = (x_i, x_i x_j, i <= j)`, `q = k + k(k+1)/2` regressors (the constant's product with
+  `x_i` is `x_i`). **A correction to C1's note**: with `interaction_terms=False` statsmodels regresses `e^2` on the constant and the squares `x_i^2` **alone** (`exog = x**2`), so `q = k`, not `2k`.
+- **Spiegelhalter's z** (MAPIE `spiegelhalter_statistic`): `z = sum w (y-p)(1-2p) / sqrt(sum w^2 (1-2p)^2 p(1-p))`: three EW sums.
+  The squared weights in the denominator are a choice: at unit weights it is MAPIE's formula; under decay and weights it keeps `Var z = 1` (below).
+- **DFBETAS and Cook's distance** beside `influence`: the row's leverage `h = w x' G^-1 x` against the Gram `G` before it (the `error_inflation^2 - 1` the model already
+  computes), the out-of-sample residual `e`, `Delta b = G^-1 x w e / (1+h)` (the move the row makes, equal to `b - b_(i)` for the newest row), the recursive residual
+  `v^2 = w e^2/(1+h)` (what `influence` folds): `DFBETAS_j = Delta b_j / (s_(i) sqrt(((G + w x x')^-1)_jj))`, `(G + w x x')^-1_jj = (G^-1)_jj - w (G^-1 x)_j^2/(1+h)`,
+  `s_(i)^2 = Q_c/W_c` (the spread before the row, as `influence`), and `Cook = (w e^2 h/(1+h)) / (k s^2)` with `s^2 = (Q_c + v^2)/(W_c + w)` the full fit's.
+
+Against the corrected oracles (largest gap over 20 seeds; relative unless said):
+
+| case | gap |
+|---|---|
+| ARCH LM vs `het_arch(nlags=L)`, `lam = 1`, L = 1 / 4 / 10, 300 rows | 5.4e-15 / 6.4e-15 / 3.8e-15 |
+| ARCH LM over a window of 100 by retraction, L = 4, vs OLS on the window's rows (lags cross the window's edge, as in the stream) | 9.8e-13 |
+| ARCH LM under decay (half-life 40), weights, 10% zero-weight rows, zero first row, vs the two-pass weighted regression (statsmodels has no weights) | 3.9e-15 |
+| White vs `het_white`, `interaction_terms=True`, k = 2 / 4 / 8 | 3.2e-15 / 2.1e-15 / 2.4e-15 |
+| White vs `het_white`, `interaction_terms=False` (the squares only), k = 2 / 4 / 8 | 3.2e-15 / 5.7e-15 / 3.3e-15 |
+| White over a window of 80 by retraction vs `het_white` on the window, k = 3 | 7.2e-14 |
+| Spiegelhalter `z` vs MAPIE (calibrated and miscalibrated `p`, 400 rows) | 1.3e-15 |
+| one-sided `p = 1 - Phi(z)` vs MAPIE `spiegelhalter_p_value` (C1: one-sided); two-sided `2 sf(abs z)` vs the same on MAPIE's `z` | 4.4e-16 abs; 7.8e-16 abs |
+| DFBETAS / Cook's D of the newest row vs `OLSInfluence` on the prefix, `lam = 1`, unit weights, k = 3, rows 40, 79, 119 | 3.3e-12 (to the row's largest entry) / 3.3e-14 |
+| same, weights in [.5, 2] (divisor corrected, below) | 3.4e-12 / 5.2e-14 |
+| same, half-life 40, weights, 10% zero-weight rows (divisor corrected) | 7.0e-13 / 3.5e-14 |
+
+**Where the oracle is not exact.** (1) statsmodels' own WLS influence is not the weighted leverage, so the weighted rows are checked against `OLSInfluence` on the
+whitened rows (`sqrt(omega) x`, `sqrt(omega) y`), as in C10. (2) With weights or decay, statsmodels' `s^2` divides by `n - k` rows, where rheon's `influence` divides the recursive
+residuals' weighted sum by their weight sum `W_c` (rows, at unit weights: the same). The two differ by the known factor `n_full / W_c` for Cook's and `sqrt(n_ext / W_c,ext)` for DFBETAS;
+the table above is after that correction, so the **comparison is exact at unit weights and `lam = 1` and exact up to that stated divisor elsewhere**: rheon's convention stays the
+weighted mean square it already uses for `influence` (not a default change). (3) ARCH under a window: the lags of a row near the window's edge are the stream's, not
+the window's, so the windowed test equals OLS on the window's own rows, not `het_arch` on the window's residuals alone. (4) `OLSInfluence.dfbetas` is a leave-one-out loop on the final fit, so the per-row
+comparison is the prefix's newest row (the `influence` model's own oracle convention).
+
+**Size, and the choice on `w^2`.** Under H0 (iid homoskedastic residuals, k = 3, q = 9), half-life 100 rows, Kish `n`: White's test passed its 5% value on 4.7% of 300 streams (binomial sd 1.3%). Spiegelhalter's z
+under H0 (calibrated `p`, half-life 30 rows, weights 1 / 1.5 / 2, 300 streams of 500): sd 1.03 with the squared weights in the denominator (stderr of the sd 0.04), 0.93 with the unit-weight formula read
+naively (`sum w (1-2p)^2 p(1-p)`): conservative by the ratio `sum w^2 b / sum w b`. The squared form is proposed.
+
+Decay and zero weight: a zero-weight row is not scored (the ARCH ring takes scored residuals only, as Ljung-Box's lags do) and only ages the sums. Against the same stream with the zero-weight rows removed and their gaps folded: Spiegelhalter's
+`z` 1.4e-15; the ARCH and White accumulators inherit the accumulator's 7 ulps (517); a zero-weight first row leaves every sum zero and the tests withheld.
+
+**State added** (per slot, bytes): ARCH LM `8 ((L+1)(L+2)/2 + (L+1) + 2 + L)`: 64 / 208 / 712 / 4472 at L = 1 / 4 / 10 / 30; White's full form `8 ((q+1)(q+2)/2 + q + 3)` with `q = k + k(k+1)/2`: 2.0 KB at
+k = 5, 18 KB at k = 10, **216 KB at k = 20**, 259 KB at k = 21 (the 256 KiB cap, 262,144 bytes, is passed at k = 22; at 256,000 bytes, at k = 21): **White's full form is the quartic one, and the cap is
+`k <= 21`** (the task's "a cap on k"). `interaction_terms=False`: `8 ((k+1)(k+2)/2 + k + 3)`, 88 bytes at k = 2, 448 at k = 8. Spiegelhalter 24 bytes (three sums). DFBETAS and Cook's: `8 k` for the diagonal of the inverse Gram
+if refreshed with the solve (otherwise a per-row solve), and `W_c`, `Q_c` shared with `influence`. Nothing grows with the stream; each adds its bytes per group to the bank's total, and White's at k near 21 uses
+the whole per-group allowance by itself.
+
+**Changes a default: no.** All are new tests; `influence`'s convention (weighted mean square) is kept, and the weighted DFBETAS and Cook's are stated in it.
+
