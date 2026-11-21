@@ -48,7 +48,10 @@
 //!   features' pooled within-state variance: with `W` the state's weight
 //!   after the row's decay, `Sₗ = (W·Σₗ + P₀·diag(ψ))/(W + P₀)`, and the
 //!   ridge only where every `ψ` is 0 ([`Stabilized`] has the recursion and
-//!   its factor form).
+//!   its factor form). Where the states were given, each state's prior is
+//!   the covariance it was given, `Gₗ`, rescaled feature by feature as the
+//!   rows have moved from it: `Sₗ = (W·Σₗ + P₀·diag(√ψ)·Gₗ·diag(√ψ))/(W +
+//!   P₀)`, `ψ` then in units of the given variances and 1 at the start.
 //!
 //! # Learning
 //!
@@ -119,6 +122,7 @@ use crate::{Covariance, Decay, EwCov, EwCovDiag, SeedRule};
 mod factor;
 pub use factor::EwFactor;
 mod stabilized;
+use stabilized::Shape;
 pub use stabilized::Stabilized;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -148,11 +152,15 @@ pub struct HmmCfg {
     pub transition: Option<Vec<f64>>,
     /// State means, `K*d` row-major: given, there is no warm-up. The pair
     /// enters the accumulators at **weight 1** -- one row's worth -- so the
-    /// given states are a starting point that the stream washes out under
+    /// given means are a starting point that the stream washes out under
     /// `learn = true` -- within about one half-life under a finite one, since
     /// the pair weighs one row -- and are held exactly under `learn = false`.
     pub means: Option<Vec<f64>>,
-    /// State covariances, `K*d*d` row-major, beside `means`.
+    /// State covariances, `K*d*d` row-major, beside `means`. Under `full`
+    /// and `diag` in a model that learns they are also each state's prior,
+    /// worth `prior_rows` rows for as long as the model runs: a state reads
+    /// the matrix it was given on the first row, and again when it has no
+    /// data left ([`Stabilized`], "Given states").
     pub covs: Option<Vec<f64>>,
     /// Learned rows buffered before the states are seeded from them.
     pub warm_rows: usize,
@@ -172,6 +180,22 @@ pub struct HmmCfg {
 }
 
 impl HmmCfg {
+    /// The shape of each state's prior under stabilized forgetting: the
+    /// given covariances, where they are given and are not one diagonal
+    /// matrix for every state ([`Stabilized`], "Given states").
+    fn prior_shape(&self) -> Option<Shape> {
+        // A test's stand-in for a build before the shape: the diagonal
+        // prior under given states too.
+        #[cfg(test)]
+        if tests_shape::NO_SHAPE.with(std::cell::Cell::get) {
+            return None;
+        }
+        let diagonal = matches!(self.covariance, Covariance::Diagonal);
+        self.covs
+            .as_deref()
+            .and_then(|c| Shape::of(c, self.k, self.n_features, diagonal))
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         let mut no = crate::Refusals::new();
         // The decay first: every model checks it in its own `new`, where only
@@ -674,6 +698,7 @@ impl Hmm {
                 d,
                 m.cfg.decay,
                 m.cfg.precision_prior,
+                m.cfg.prior_shape(),
             )));
             if m.seeded {
                 m.seed_stabilized();
@@ -721,17 +746,27 @@ impl Hmm {
             // `(W·C + P₀Ψ)/(W + P₀)`, every coordinate's prior topped up.
             let p0 = st.prior_rows;
             let mut add = vec![0.0; d];
-            for cov in &self.states {
+            for (s, cov) in self.states.iter().enumerate() {
                 let t = cov.n_eff() + p0;
-                for (a, &p) in add.iter_mut().zip(st.psi()) {
-                    *a = p0 * p / t;
-                }
                 let m = cov.n_eff() / t;
-                match self
-                    .factors
-                    .work
-                    .factor_shrunk(cov.comoments().packed(), m, &add, d)
-                {
+                let c = cov.comoments().packed();
+                let work = &mut self.factors.work;
+                let f = match st.shape() {
+                    None => {
+                        for (a, &p) in add.iter_mut().zip(st.psi()) {
+                            *a = p0 * p / t;
+                        }
+                        work.factor_shrunk(c, m, &add, d)
+                    }
+                    // `(W·C + P₀·R·G·R)/(W + P₀)`, the state's own shape.
+                    Some(shape) => {
+                        for (a, &p) in add.iter_mut().zip(st.psi()) {
+                            *a = (p0 * p / t).sqrt();
+                        }
+                        work.factor_shrunk_toward(c, m, &add, shape.tri(s), d)
+                    }
+                };
+                match f {
                     Some(f) => held.push(EwFactor::take_up_stabilized(cov, f)),
                     None => return,
                 }
@@ -980,7 +1015,17 @@ impl Hmm {
                 for j in 0..=i {
                     m[i * d + j] = scale * c[at + j];
                 }
-                m[i * d + i] += add(i);
+                match st.shape() {
+                    None => m[i * d + i] += add(i),
+                    // `R·G·R`, as `factor_shrunk_toward` forms it.
+                    Some(shape) => {
+                        let g = shape.tri(s);
+                        let ri = add(i).sqrt();
+                        for j in 0..=i {
+                            m[i * d + j] += (ri * add(j).sqrt()) * g[at + j];
+                        }
+                    }
+                }
             }
             return;
         }
@@ -1581,11 +1626,18 @@ impl Hmm {
         let d = self.cfg.n_features;
         let mut pooled = vec![0.0; d];
         let mut total = 0.0;
+        // Under a shape each variance is in units of its state's given one
+        // ([`Stabilized`], "Given states"): 1 for states as given.
+        let shape = self.stabilized.as_deref().and_then(Stabilized::shape);
+        let unit = |s: usize, i: usize, v: f64| match shape {
+            Some(g) => v / g.diag(s)[i],
+            None => v,
+        };
         for s in 0..self.cfg.k {
             let w = match (self.states.get(s), comoments.get(s)) {
                 (Some(c), _) => {
                     for (p, i) in pooled.iter_mut().zip(0..d) {
-                        *p += c.n_eff() * c.var(i);
+                        *p += c.n_eff() * unit(s, i, c.var(i));
                     }
                     c.n_eff()
                 }
@@ -1593,14 +1645,14 @@ impl Hmm {
                     let w = self.factor_states[s].n_eff();
                     for (p, i) in pooled.iter_mut().zip(0..d) {
                         let v = crate::solve::clamp_rounding(c[crate::ewcov::row_at(i) + i]);
-                        *p += w * v;
+                        *p += w * unit(s, i, v);
                     }
                     w
                 }
                 (None, None) => {
                     let c = &self.diag_states[s];
                     for (p, i) in pooled.iter_mut().zip(0..d) {
-                        *p += c.n_eff() * c.var(i);
+                        *p += c.n_eff() * unit(s, i, c.var(i));
                     }
                     c.n_eff()
                 }
@@ -1633,6 +1685,7 @@ impl Hmm {
             d,
             self.cfg.decay,
             self.cfg.precision_prior,
+            self.cfg.prior_shape(),
         )));
         if !self.seeded {
             return;
@@ -1657,9 +1710,18 @@ impl Hmm {
             return;
         }
         st.hold_all();
-        for (f, c) in factor_states.iter_mut().zip(&comoments) {
-            let (m, add) = st.shrink(f.n_eff());
-            f.retake_stabilized(c, m, add, &mut factors.work);
+        let shaped = st.shape().is_some();
+        for (s, (f, c)) in factor_states.iter_mut().zip(&comoments).enumerate() {
+            match shaped.then_some(()) {
+                None => {
+                    let (m, add) = st.shrink(f.n_eff());
+                    f.retake_stabilized(c, m, add, &mut factors.work);
+                }
+                Some(_) => {
+                    let (m, r, g) = st.shrink_roots(f.n_eff(), s);
+                    f.retake_stabilized_shaped(c, m, r, g, &mut factors.work);
+                }
+            }
         }
         factors.work.drop_spares();
     }
@@ -1705,7 +1767,8 @@ impl Hmm {
         let restarts: Vec<bool> = self
             .factor_states
             .iter_mut()
-            .map(|f| f.age_stabilized(lam, p0, st.psi()))
+            .enumerate()
+            .map(|(s, f)| f.age_stabilized(lam, p0, st.psi(), st.shape().map(|g| g.tri(s))))
             .filter(|_| all)
             .collect();
         let (all, due) = st.age(lam, all);
@@ -1717,10 +1780,17 @@ impl Hmm {
             st.settle_all(all);
             for (s, f) in self.factor_states.iter_mut().enumerate() {
                 let restarted = restarts.get(s).copied().unwrap_or(false);
-                if !restarted
-                    && !f.shift_prior(st.moves(), p0, &mut work.delta, &mut self.factors.work)
-                {
-                    f.restart_at_prior(&st.held, 1.0 / (f.n_eff() + p0));
+                if restarted {
+                    continue;
+                }
+                let fw = &mut self.factors.work;
+                let shape = st.shape().map(|g| g.tri(s));
+                let moved = match shape {
+                    None => f.shift_prior(st.moves(), p0, &mut work.delta, fw),
+                    Some(g) => f.shift_prior_shaped(st.roots(), g, p0, &mut work.delta, fw),
+                };
+                if !moved {
+                    f.restart_at_prior(&st.held, 1.0 / (f.n_eff() + p0), shape);
                     self.solve_failures += 1;
                 }
             }
@@ -1748,6 +1818,23 @@ impl Hmm {
         out: &mut [f64],
     ) -> bool {
         let (p0, psi) = (st.prior_rows, st.psi());
+        if let Some(shape) = st.shape() {
+            // Each state's prior variance is its given one, rescaled.
+            for (s, (o, cov)) in out.iter_mut().zip(states).enumerate() {
+                let t = cov.n_eff() + p0;
+                let (m, a) = (cov.n_eff() / t, p0 / t);
+                let g = shape.diag(s);
+                let (mut log_det, mut q) = (0.0, 0.0);
+                for (i, xi) in x.iter().enumerate() {
+                    let v = m * cov.var(i) + a * (psi[i] * g[i]);
+                    let dv = cov.deviation(i, *xi);
+                    log_det += v.ln();
+                    q += dv * dv / v;
+                }
+                *o = base - 0.5 * log_det - 0.5 * q;
+            }
+            return out.iter().all(|v| v.is_finite());
+        }
         for (o, cov) in out.iter_mut().zip(states) {
             let t = cov.n_eff() + p0;
             let (m, a) = (cov.n_eff() / t, p0 / t);
@@ -1794,12 +1881,35 @@ impl Hmm {
         k: usize,
         d: usize,
     ) {
+        if st.shape().is_some() {
+            return Self::factors_stabilized_shaped(st, states, factors, k, d);
+        }
         for (s, cov) in states.iter().enumerate() {
             if factors.peek(s).is_none() {
                 let (m, add) = st.shrink(cov.n_eff());
                 let f = factors
                     .work
                     .factor_shrunk(cov.comoments().packed(), m, add, d);
+                factors.set(s, k, f);
+            }
+        }
+    }
+
+    /// [`Self::factors_stabilized`] under a shape: each state's factor of
+    /// `(W·C + P₀·R·G_s·R)/(W + P₀)`, `R = diag(√ψ)`.
+    #[inline(never)]
+    fn factors_stabilized_shaped(
+        st: &mut Stabilized,
+        states: &[EwCov],
+        factors: &mut Factors,
+        k: usize,
+        d: usize,
+    ) {
+        for (s, cov) in states.iter().enumerate() {
+            if factors.peek(s).is_none() {
+                let c = cov.comoments().packed();
+                let (m, r, g) = st.shrink_roots(cov.n_eff(), s);
+                let f = factors.work.factor_shrunk_toward(c, m, r, g, d);
                 factors.set(s, k, f);
             }
         }
@@ -1832,13 +1942,44 @@ impl Hmm {
                 *ei += p * dv * dv;
             }
         }
-        for (s, &p) in post.iter().enumerate() {
-            match (self.states.get(s), self.factor_states.get(s)) {
-                (Some(c), _) => add(&mut e, x, p, |i, xi| c.deviation(i, xi)),
-                (None, Some(f)) => add(&mut e, x, p, |i, xi| f.deviation(i, xi)),
-                (None, None) => {
-                    let c = &self.diag_states[s];
-                    add(&mut e, x, p, |i, xi| c.deviation(i, xi))
+        match st.shape() {
+            None => {
+                for (s, &p) in post.iter().enumerate() {
+                    match (self.states.get(s), self.factor_states.get(s)) {
+                        (Some(c), _) => add(&mut e, x, p, |i, xi| c.deviation(i, xi)),
+                        (None, Some(f)) => add(&mut e, x, p, |i, xi| f.deviation(i, xi)),
+                        (None, None) => {
+                            let c = &self.diag_states[s];
+                            add(&mut e, x, p, |i, xi| c.deviation(i, xi))
+                        }
+                    }
+                }
+            }
+            // Under a shape, each state's squared deviations in units of
+            // its given variances.
+            Some(shape) => {
+                fn add_in(
+                    e: &mut [f64],
+                    x: &[f64],
+                    p: f64,
+                    g: &[f64],
+                    dev: impl Fn(usize, f64) -> f64,
+                ) {
+                    for (i, ((ei, &xi), &gi)) in e.iter_mut().zip(x).zip(g).enumerate() {
+                        let dv = dev(i, xi);
+                        *ei += p * (dv * dv / gi);
+                    }
+                }
+                for (s, &p) in post.iter().enumerate() {
+                    let g = shape.diag(s);
+                    match (self.states.get(s), self.factor_states.get(s)) {
+                        (Some(c), _) => add_in(&mut e, x, p, g, |i, xi| c.deviation(i, xi)),
+                        (None, Some(f)) => add_in(&mut e, x, p, g, |i, xi| f.deviation(i, xi)),
+                        (None, None) => {
+                            let c = &self.diag_states[s];
+                            add_in(&mut e, x, p, g, |i, xi| c.deviation(i, xi))
+                        }
+                    }
                 }
             }
         }
@@ -1850,7 +1991,8 @@ impl Hmm {
         }
         let p0 = st.prior_rows;
         for (s, f) in self.factor_states.iter_mut().enumerate() {
-            if !f.update_stabilized(x, weight * post[s], p0, &st.held, &mut work.delta) {
+            let prior = (&st.held[..], st.shape().map(|g| g.tri(s)));
+            if !f.update_stabilized(x, weight * post[s], p0, prior, &mut work.delta) {
                 self.solve_failures += 1;
             }
         }
@@ -2011,7 +2153,7 @@ impl crate::OnlineModel for Hmm {
                 let fits = match (wants, m.stabilized.as_deref_mut()) {
                     (true, Some(st)) => {
                         s.schema_version >= 70
-                            && st.rebuild(p0, d, decay, fallback)
+                            && st.rebuild(p0, d, decay, fallback, m.cfg.prior_shape())
                             && st.held.is_empty() != factored
                     }
                     (true, None) => {
@@ -2066,6 +2208,9 @@ mod tests_factor;
 
 #[cfg(test)]
 mod tests_stabilized;
+
+#[cfg(test)]
+mod tests_shape;
 
 #[cfg(test)]
 mod tests {

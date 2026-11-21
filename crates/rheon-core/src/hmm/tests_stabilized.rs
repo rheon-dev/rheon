@@ -31,7 +31,7 @@ fn lcg(state: &mut u64) -> f64 {
 }
 
 /// The review's configuration: two states, seeded from the first 40 rows.
-fn cfg(d: usize, hl: f64, covariance: Covariance) -> HmmCfg {
+pub(super) fn cfg(d: usize, hl: f64, covariance: Covariance) -> HmmCfg {
     HmmCfg {
         n_features: d,
         k: 2,
@@ -57,7 +57,7 @@ fn cfg(d: usize, hl: f64, covariance: Covariance) -> HmmCfg {
 /// NaN rows among the last 500 and the solve failures, for the model as
 /// built (`stabilized`, at the default `P₀ = d`) or as a build before it,
 /// under the decaying ridge alone.
-fn run(
+pub(super) fn run(
     cfg: HmmCfg,
     stabilized: bool,
     n: usize,

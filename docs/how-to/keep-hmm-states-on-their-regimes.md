@@ -96,7 +96,7 @@ that mean, so the model is left one state short.
    |---|---|---|
    | clip the features with Polars' `clip()` in the query before the bank | in general | set the bounds where the clean rows do not reach |
    | give the states with `means` and `covs`, and freeze them with `learn=False` | you know the regimes in advance | the states no longer follow the stream |
-   | give a larger `prior_rows` (`precision_prior` under `"tied"`) | you cannot clip the rows | each state's covariance is pulled harder toward the features' pooled variance; keep `precision_prior` well below the data's variance: with the states held, a ridge of 1.0 on data of variance 1.0 halves every correlation |
+   | give a larger `prior_rows` (`precision_prior` under `"tied"`) | you cannot clip the rows | each state's covariance is pulled harder toward the features' pooled variance (toward the covariance it was given, with `covs`); keep `precision_prior` well below the data's variance: with the states held, a ridge of 1.0 on data of variance 1.0 halves every correlation |
 
 2. **Add the spec to the query with `online.fit_predict([hidden])`.**
 3. **Run the query with `collect()`.**

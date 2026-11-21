@@ -405,7 +405,17 @@ any coordinate is more than `τ` from `P₀ψ`. The model keeps `ŝ`, `V` and
 `f` (`2d + 1` numbers a model in the factor form, `d + 1` under `"diag"`
 and under `"full"` below 13 features) in `stabilized`, its last field,
 written only where it has a prior; `factor_states` is no longer the last
-field and is written always; the configuration gains `prior_rows`. A state
+field and is written always; the configuration gains `prior_rows`. Where
+the states were given (`means` and `covs`) and are not one diagonal matrix
+for every state, each state's prior is the matrix it was given, `G_s`,
+rescaled, `diag(√ψ)·G_s·diag(√ψ)`, and `ŝ` is in units of the given
+variances (1 as given; a state of 69 or earlier loads with its variances
+over the given ones, pooled by weight); the given matrices are read from
+the configuration, so the layout is the same and nothing more is written
+(review fable2's C4-BD-GIVEN: under the diagonal prior a learning filter
+given two regimes that differ in correlation alone put 0.792 of the rows in
+the true state, where 0.948 were under the ridge; under each state's own
+matrix, 0.976). A state
 of schema 69 or earlier keeps none of them, and no loader can replay the
 rows it learned under the ridge. It loads as this build would continue
 from its moments: `prior_rows` absent (the default, `d`), `ŝ` its states'

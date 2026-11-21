@@ -18,7 +18,7 @@ symbols beside its rule:
 | `S_j`, `η_j` | target `j`'s running means of `z zᵀ` and of `z·y_j`, which the least-squares fits solve from | `ewridge`, `huber`, `quantile` |
 | `e` | the row's residual: `y` less the prediction made before the row | `huber`, `quantile` |
 | `ω` | a ridge added to a covariance: `precision_prior`, fading as `ew_cov`'s prior does, so that a row's class or state can be predicted from the model's first row | `ew_class`, `hmm` under `"tied"` or `learn = False` |
-| `P₀`, `ψ` | a stabilized prior a covariance forgets toward: `prior_rows` rows of weight at the features' pooled within-state variance `ψ`, which does not fade | `hmm` under `"full"` and `"diag"` with `learn = True` |
+| `P₀`, `ψ` | a stabilized prior a covariance forgets toward: `prior_rows` rows of weight at the features' pooled within-state variance `ψ` (at each state's given covariance, where `covs` is given), which does not fade | `hmm` under `"full"` and `"diag"` with `learn = True` |
 
 Without a clock column, each row is one unit of clock. A model keeps its
 running sums as means, decayed sums or centered second moments, and [The
@@ -3415,6 +3415,38 @@ s_i ← s_i + (w/V)·(e_i − s_i)
 ψ_i  = max(s_i, 2⁻¹⁰⁰·max_j s_j)                 precision_prior where every s_i is 0
 ```
 
+**Where the states are given (`means` and `covs`), each state's prior is
+the covariance it was given.** With `G_l` state `l`'s given matrix:
+
+```
+Σ_l  = (W_l·M_l + P₀·diag(√ψ)·G_l·diag(√ψ)) / (W_l + P₀)
+e_i  = Σ_l p_l·(x_i − μ_li)² / G_l,ii             in units of the given variances
+```
+
+`s` follows `e` as above and starts at 1. So a state reads `G_l` on the
+first row, and for as long as the rows have the given variances, whatever
+share of the rows each state holds. `ψ` rescales each feature by how far
+the rows' variances have moved from the given ones, so given covariances
+off by a factor, or a stream whose scale drifts, are followed. A state with
+no data reads the regime it was given, at the scale the rows have now.
+
+The diagonal prior reads one matrix for every state. Under it, regimes that
+differ in correlation or in variance alone are told apart by their data
+alone, and a state absent for a while reads as the others do. Measured on
+streams of two zero-mean regimes at correlation 0.1 and 0.8, the states
+given at the truth: a learning filter put 0.79 of the rows in the true
+state under the diagonal prior, and 0.98 under each state's own
+([REGIMES.md](REGIMES.md#1-does-hmm-recover-the-stream-that-made-it)).
+
+What the given covariances say about each regime's shape is trusted at
+`prior_rows` rows for as long as the model runs. So given covariances of
+the wrong shape cost. With the two regimes' matrices given the wrong way
+round, a regime back from an absence kept the label it was given in 14 of
+24 simulated returns, against 24 under the diagonal prior. A steady
+stream's posteriors were 9% further from the exact filter's. Given
+covariances that are one diagonal matrix for every state are the diagonal
+prior exactly.
+
 The study behind it simulated two-state streams and scored each against
 the exact forward pass with the true parameters (hmmlearn). A regime absent
 for 20 to 500 half-lives and then back was recovered in 136 of 144 `full`
@@ -3448,7 +3480,10 @@ coordinate decays alike, so all fall due together, about every
 replaces, a row of the factor form costs 0.95 to 0.98 of its time at 13 to
 32 features and a half-life of 500 rows. At a half-life of 50 rows it costs
 1.1 to 1.2. A `"diag"` row costs 1.19 to 1.29 of its time, and a `"full"` row
-below 13 features 1.08 to 1.16.
+below 13 features 1.08 to 1.16. Under given states' own matrices the
+factor holds `diag(√f)·G_l·diag(√f)` in place of `diag(f)`, and a row costs
+1.00 to 1.05 of the diagonal prior's time at 4 to 32 features, in every
+form.
 
 #### Example
 

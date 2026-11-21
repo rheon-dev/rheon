@@ -361,7 +361,31 @@ impl EwFactor {
                 self.l = l.into_state();
                 self.sigma = 1.0;
             }
-            None => self.restart_at_prior(add, 1.0),
+            None => self.restart_at_prior(add, 1.0, None),
+        }
+        self.precision_scale = 1.0;
+    }
+
+    /// [`Self::retake_stabilized`] under a shape `g` (a lower triangle
+    /// packed row by row): `m·C + R·G·R` factorized, `R = diag(r)`, `rᵢ =
+    /// √(P₀ψᵢ/(W + P₀))`.
+    pub(crate) fn retake_stabilized_shaped(
+        &mut self,
+        c: &[f64],
+        m: f64,
+        r: &[f64],
+        g: &[f64],
+        work: &mut FactorWork,
+    ) {
+        match work.factor_shrunk_toward(c, m, r, g, self.order()) {
+            Some(l) => {
+                self.l = l.into_state();
+                self.sigma = 1.0;
+            }
+            None => {
+                let prior: Vec<f64> = r.iter().map(|r| r * r).collect();
+                self.restart_at_prior(&prior, 1.0, Some(g));
+            }
         }
         self.precision_scale = 1.0;
     }
@@ -381,8 +405,15 @@ impl EwFactor {
     /// decays with it; the caller moves it ([`Self::shift_prior`]). Where
     /// `α·σ` leaves the normal range ([`Self::ages_out`]) what is kept is
     /// below `2⁻¹⁰²⁰` of the prior, and the state starts again at the prior
-    /// `P₀·diag(psi)`: `true` where it did.
-    pub(crate) fn age_stabilized(&mut self, lam: f64, prior_rows: f64, psi: &[f64]) -> bool {
+    /// `P₀·diag(psi)` (under a `shape`, [`Self::restart_at_prior`]'s):
+    /// `true` where it did.
+    pub(crate) fn age_stabilized(
+        &mut self,
+        lam: f64,
+        prior_rows: f64,
+        psi: &[f64],
+        shape: Option<&[f64]>,
+    ) -> bool {
         let t = self.w_sum + prior_rows;
         // [`EwCov`]'s decay of the weight alone: `λW + 0`.
         self.w_sum *= lam;
@@ -393,7 +424,7 @@ impl EwFactor {
         }
         let sigma = self.sigma * alpha;
         if sigma.is_nan() || sigma < f64::MIN_POSITIVE {
-            self.restart_at_prior(psi, prior_rows / t_new);
+            self.restart_at_prior(psi, prior_rows / t_new, shape);
             true
         } else {
             self.sigma = sigma;
@@ -419,6 +450,33 @@ impl EwFactor {
         work.refactor_shifted(&mut self.l, add)
     }
 
+    /// [`Self::shift_prior`] under a shape `g` (a lower triangle packed row
+    /// by row): the factored prior moved from `diag(old)·G·diag(old)` to
+    /// `diag(new)·G·diag(new)`, the difference over `Tσ` added to `L Lᵀ`
+    /// and that factorized afresh ([`FactorWork::refactor_shifted_full`]).
+    pub(crate) fn shift_prior_shaped(
+        &mut self,
+        (old, new): (&[f64], &[f64]),
+        g: &[f64],
+        prior_rows: f64,
+        add: &mut Vec<f64>,
+        work: &mut FactorWork,
+    ) -> bool {
+        let c = (self.w_sum + prior_rows) * self.sigma;
+        add.clear();
+        add.resize(g.len(), 0.0);
+        let mut at = 0;
+        for i in 0..old.len() {
+            let (ni, oi) = (new[i] / c, old[i] / c);
+            let row = add[at..=at + i].iter_mut().zip(&g[at..=at + i]);
+            for ((a, &gij), (&nj, &oj)) in row.zip(new.iter().zip(old)) {
+                *a = gij * (ni * nj - oi * oj);
+            }
+            at += i + 1;
+        }
+        work.refactor_shifted_full(&mut self.l, add)
+    }
+
     /// The row `x` learned at weight `w` under stabilized forgetting, after
     /// its decay ([`Self::age_stabilized`]): the accumulator's step at
     /// `λ = 1`, `W' = W + w`, `a = W/W'`, `b = w/W'`, means as
@@ -431,14 +489,15 @@ impl EwFactor {
     /// ```
     ///
     /// `false` where the rotations left no factor; the state then starts
-    /// again at its prior as factored, `diag(held)`, and the owner counts
-    /// it. `v` is working space.
+    /// again at its prior as factored, `diag(held)` (under a `shape`,
+    /// [`Self::restart_at_prior`]'s), and the owner counts it. `v` is
+    /// working space.
     pub(crate) fn update_stabilized(
         &mut self,
         x: &[f64],
         w: f64,
         prior_rows: f64,
-        held: &[f64],
+        (held, shape): (&[f64], Option<&[f64]>),
         v: &mut Vec<f64>,
     ) -> bool {
         debug_assert_eq!(x.len(), self.order());
@@ -468,7 +527,7 @@ impl EwFactor {
         if sigma.is_nan() || sigma < f64::MIN_POSITIVE {
             // A weight past the normal range of the rest: what the state
             // held is below `2⁻¹⁰²⁰` of the row's share.
-            self.restart_at_prior(held, 1.0 / t_new);
+            self.restart_at_prior(held, 1.0 / t_new, shape);
             sigma = 1.0;
         }
         // `W·w/W'`, the step's weight in `W'·M' + F`.
@@ -484,17 +543,38 @@ impl EwFactor {
             self.lift_sigma();
             true
         } else {
-            self.restart_at_prior(held, 1.0 / t_new);
+            self.restart_at_prior(held, 1.0 / t_new, shape);
             false
         }
     }
 
     /// The matrix started again at `scale·diag(prior)`, `σ = 1`: the prior
-    /// alone, the data's share gone. A prior that is no positive finite
-    /// diagonal leaves `M` as it is.
-    pub(crate) fn restart_at_prior(&mut self, prior: &[f64], scale: f64) {
+    /// alone, the data's share gone. Under a `shape` `g` (a lower triangle
+    /// packed row by row) at `scale·R·G·R`, `R = diag(√prior)`. A prior
+    /// that is no positive finite diagonal, or has no factor under its
+    /// shape, leaves `M` as it is.
+    pub(crate) fn restart_at_prior(&mut self, prior: &[f64], scale: f64, shape: Option<&[f64]>) {
         let d: Vec<f64> = prior.iter().map(|p| p * scale).collect();
-        if let Some(l) = SpdFactor::diagonal(&d) {
+        let l = match shape {
+            None => SpdFactor::diagonal(&d),
+            Some(g) => {
+                let k = d.len();
+                let r: Vec<f64> = d.iter().map(|v| v.sqrt()).collect();
+                let mut a = vec![0.0; k * k];
+                for i in 0..k {
+                    for j in 0..=i {
+                        a[i * k + j] = (r[i] * r[j]) * g[crate::ewcov::row_at(i) + j];
+                    }
+                }
+                d.iter()
+                    .all(|&x| x > 0.0 && x.is_finite())
+                    .then(|| SpdFactor::of(&a, k))
+                    .flatten()
+                    .filter(|f| f.attempts() == 0)
+                    .map(SpdFactor::into_state)
+            }
+        };
+        if let Some(l) = l {
             self.l = l;
             self.sigma = 1.0;
         }

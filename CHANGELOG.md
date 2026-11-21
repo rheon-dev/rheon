@@ -62,10 +62,11 @@ model that only the new build has is listed as an addition and passes.
   gaps at 13 features or more). With no decay it is scikit-learn QDA's
   `reg_param = P₀/(W + P₀)` toward `diag(ψ)`. From 13 features the factor
   form moves its prior back by one factorization when it drifts 1/16 from
-  its target (a posterior within 0.009 of the exact recursion). One case
-  loses: given `means` and `covs` enter at one row's weight, so where the
-  regimes differ in correlation alone a learning filter's share in the
-  true state fell from 0.948 to 0.792; `prior_rows = 0.01` restores it.
+  its target (a posterior within 0.009 of the exact recursion). With
+  `means` and `covs` given, each state's prior is the covariance it was
+  given, rescaled as the rows' variances move: where the regimes differ in
+  correlation alone a learning filter's share in the true state is 0.976,
+  where it was 0.948.
   `precision_prior` stays required: the ridge under `"tied"` and with
   `learn = False`, and elsewhere only where every `ψ` is 0. Schema 70: a
   state saved earlier loads with a prior seeded from its moments and goes

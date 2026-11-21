@@ -94,11 +94,14 @@ def hmm(
         of features), both flattened row-major, finite, and given together.
         With them there is no warm-up. Each ``covs`` block must be symmetric
         and positive definite, and the pair enters at one row's weight. So
-        under ``learn = True`` the stream washes the given states out as it
+        under ``learn = True`` the stream washes the given means out as it
         would one row, within about one half-life, and under
-        ``learn = False`` they are held exactly. Pass them where the regimes
-        differ in their covariance alone (*A regime in the covariance alone*
-        in Notes).
+        ``learn = False`` the states are held exactly. Under ``"full"`` and
+        ``"diag"`` with ``learn = True`` the given covariances are also each
+        state's prior, worth ``prior_rows`` rows for as long as the model
+        runs (*The update* below). Pass them where the regimes differ in
+        their covariance alone (*A regime in the covariance alone* in
+        Notes).
     ``warm_rows``, ``init``, ``seed``
         Without given states, the first ``warm_rows`` learned rows (default
         1,000, or ``n_components`` where that is more, and at least
@@ -117,7 +120,8 @@ def hmm(
         toward is worth, under ``covariance_type`` ``"full"`` or ``"diag"``
         with ``learn = True``: finite and above 0, by default the number of
         features. The prior is the features' pooled within-state variance on
-        the diagonal (*The update* below). A larger value pulls every state's
+        the diagonal, or, with ``covs`` given, each state's given covariance
+        (*The update* below). A larger value pulls every state's
         covariance harder toward it, and a returning state's first rows read
         it the more. Refused under ``"tied"`` and with ``learn = False``,
         which take no prior.
@@ -277,6 +281,22 @@ def hmm(
         s_i  <- s_i + (w / V) (e_i - s_i)
         psi_i = max(s_i, 2^-100 max_j s_j)            precision_prior where every s_i is 0
 
+    With ``means`` and ``covs`` given, each state's prior is the covariance
+    it was given, ``G_l``, every feature rescaled by how far the rows have
+    moved from it:
+
+    .. code-block:: text
+
+        Sigma_l = (W_l M_l + P0 diag(sqrt(psi)) G_l diag(sqrt(psi))) / (W_l + P0)
+        e_i     = sum_l p_l (x_i - mu_li)^2 / G_l,ii    in units of the given variances
+
+    with ``s`` started at 1, so a state reads ``G_l`` on the first row, and
+    again, at the scale the rows have by then, when it has no data left.
+    Given covariances that are one diagonal matrix for every state are the
+    diagonal prior exactly. What they say about each regime's shape is
+    trusted at ``prior_rows`` rows for as long as the model runs, so given
+    covariances of the wrong shape cost a returning state its first rows.
+
     Under ``"full"`` with 13 features or more, each state keeps the
     Cholesky factor of ``Sigma_l`` in place of its co-moments, as
     ``s * L L'`` with the scalar ``s`` kept between 1/4 and 1, and the row
@@ -416,14 +436,12 @@ def hmm(
     that stay in one of two zero-mean states, it puts 55% of the rows in the
     true state, the rows before seeding counted as right, and about half of
     the rows after seeding. The same filter given the true ``covs`` put 98%
-    there without learning, and 79% when it went on learning: given states
-    enter at one row's weight, so on the first rows the prior, whose
-    covariance has no correlation, is two thirds of each state's matrix,
-    and the states can barely be told apart. With ``prior_rows = 0.01`` it
-    put 95% there (`docs/REGIMES.md
+    there, without learning and when it went on learning alike: each given
+    state forgets toward the covariance it was given, so a state that wins
+    no rows goes on reading its own regime (`docs/REGIMES.md
     <https://github.com/rheon-dev/rheon/blob/main/docs/REGIMES.md>`_
-    §1). Pass ``means`` and ``covs``, with ``learn = False`` or a small
-    ``prior_rows``, or a feature in which the regime is a shift in location.
+    §1). Pass ``means`` and ``covs``, or a feature in which the regime is a
+    shift in location.
     """
     model: dict[str, Any] = {
         "type": "hmm",

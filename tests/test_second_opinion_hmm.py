@@ -23,8 +23,13 @@ covariances' diagonals pooled by weight (each given pair at weight 1) with
 ``V`` their total weight, and each learned row ``s`` moves it as
 ``e_i = sum_l p_l(s) (x_si - mu_li)^2`` (the means before the row),
 ``V <- lam^(1/10) V + w_s``, ``psi <- psi + (w_s / V) (e - psi)``, ``V``
-decaying alone on a row of weight 0. The transition counts are the
-decayed sum of the filtered joint of consecutive states,
+decaying alone on a row of weight 0. Where the given covariances
+``Sigma0_l`` are not one diagonal matrix for every state, each state's
+prior is its own given matrix rescaled, ``(W C_l + P0 diag(sqrt(psi))
+Sigma0_l diag(sqrt(psi))) / (W + P0)``, with ``psi`` started at 1 and
+moved by ``e_i = sum_l p_l(s) (x_si - mu_li)^2 / Sigma0_l,ii``. The
+transition counts are the decayed sum of the filtered joint of consecutive
+states,
 
     A_kl = sum_s lam^(T - T_s) w_s xi_kl(s)
     xi_kl(s) = p_k(s-1) Pi_kl f_l(x_s) / sum_k'l' p_k'(s-1) Pi_k'l' f_l'(x_s)
@@ -144,11 +149,13 @@ EM_CASES = [
 ]
 
 
-def hmm_stream(seed: int, k: int, n: int = 300, d: int = 2) -> dict[str, Any]:
+def hmm_stream(seed: int, k: int, n: int = 300, d: int = 2, own: bool = False) -> dict[str, Any]:
     """A sticky chain over ``k`` states with random means and covariances,
     its rows, their weights (0.2 to 3, about one row in seven at 0, the
     second row among them) and a given start: the true means moved by about
-    half a unit, identity covariances."""
+    half a unit, identity covariances; with ``own``, each state's true
+    covariance times a factor between 0.7 and 1.4 of its own, drawn apart
+    from the stream, which is the same rows either way."""
     rng = np.random.default_rng(seed)
     pi = np.full((k, k), 0.1 / (k - 1))
     np.fill_diagonal(pi, 0.9)
@@ -165,12 +172,23 @@ def hmm_stream(seed: int, k: int, n: int = 300, d: int = 2) -> dict[str, Any]:
     w = rng.uniform(0.2, 3.0, n)
     w[rng.random(n) < 1 / 7] = 0.0
     w[1] = 0.0
-    return {
-        "x": means[state] + noise,
-        "w": w,
-        "m0": means + rng.normal(0.0, 0.5, (k, d)),
-        "c0": np.array([np.eye(d)] * k),
-    }
+    m0 = means + rng.normal(0.0, 0.5, (k, d))
+    c0 = np.array([np.eye(d)] * k)
+    if own:
+        c0 = covs * np.random.default_rng(10_000 + seed).uniform(0.7, 1.4, (k, 1, 1))
+    return {"x": means[state] + noise, "w": w, "m0": m0, "c0": c0}
+
+
+def given_shape(c0: np.ndarray, cov: str) -> np.ndarray | None:
+    """Each state's prior where the given covariances are not one diagonal
+    matrix for every state: the given matrices, their diagonals alone under
+    ``"diag"``. ``None`` where they are one diagonal matrix, whose prior is
+    the pooled variance on the diagonal, and under ``"tied"``."""
+    if not prior_shapes(cov):
+        return None
+    d = c0.shape[1]
+    g = c0 * np.eye(d) if cov == "diag" else c0
+    return None if np.array_equal(g, np.broadcast_to(g[0] * np.eye(d), g.shape)) else g
 
 
 def model_run(
@@ -268,7 +286,9 @@ def rule_from_scratch(s: dict[str, Any], half_life: float, cov: str) -> dict[str
 
     # The stabilized prior's scale and its weight, and the row's own decay
     # and the slow one at ten half-lives, as the model computes them.
-    psi = np.mean(np.diagonal(c0, axis1=1, axis2=2), axis=0)
+    shape = given_shape(c0, cov)
+    given_var = None if shape is None else np.diagonal(shape, axis1=1, axis2=2)
+    psi = np.mean(np.diagonal(c0, axis1=1, axis2=2), axis=0) if shape is None else np.ones(d)
     v_slow = float(k)
     lam_row = math.exp2(-1.0 / half_life)
     lam_slow = math.exp2(-1.0 / (10.0 * half_life))
@@ -302,9 +322,11 @@ def rule_from_scratch(s: dict[str, Any], half_life: float, cov: str) -> dict[str
             w_read = totals * (lam_row if t else 1.0)
             share = w_read / (w_read + d)
             rows["shrink"][t] = share
+            root = np.sqrt(psi)
             for st in range(k):
                 c = rows["moments"][t, st]
-                covs[st] = share[st] * c + (1.0 - share[st]) * np.diag(psi)
+                prior = np.diag(psi) if shape is None else np.outer(root, root) * shape[st]
+                covs[st] = share[st] * c + (1.0 - share[st]) * prior
         if cov == "diag":
             covs = covs * np.eye(d)
         elif cov == "tied":
@@ -340,7 +362,7 @@ def rule_from_scratch(s: dict[str, Any], half_life: float, cov: str) -> dict[str
             resp[t] = hmm.predict_proba(x[t : t + 1])[0]
             p = resp[t]
             if prior_shapes(cov):
-                e = resp[t] @ (x[t] - means) ** 2
+                e = resp[t] @ ((x[t] - means) ** 2 / (1.0 if given_var is None else given_var))
                 v_slow = slow * v_slow + w[t]
                 psi = psi + (w[t] / v_slow) * (e - psi)
         elif prior_shapes(cov):
@@ -869,6 +891,74 @@ class TestOnlineEmIsItsRuleRebuilt:
         ledger.record("hmm_online_em", "error_over_tolerance", worst, floor=0.05)
         assert min(r["moved"] for r in rows) > 0.1
         assert worst.max() <= 1.0
+
+
+#: (covariance, states, half-life) with the states given at covariances of
+#: their own: both shapes that take the prior, a short memory and a long one.
+GIVEN_CASES = [("full", 2, 30.0), ("full", 3, 300.0), ("diag", 3, 30.0), ("diag", 2, 300.0)]
+
+#: Every row's filtered and predicted probabilities, absolute; its
+#: log-likelihood and the learned means and covariances, relative to ``1 +
+#: |value|``; the learned counts, relative to the largest. Measured
+#: 2026-11-20 over five seeds of ``GIVEN_CASES`` (aarch64, macOS): the
+#: worst 7.4e-15 (the counts of ``"diag"`` at two states and a half-life of
+#: 300). The rule amplifies the two sides' rounding where a state's weight
+#: has decayed far below a row's (the module's docstring: the diagonal
+#: prior's rule measured 1e-11 on one platform and 4e-10 on another), so
+#: the bound leaves that for another platform's last bits.
+GIVEN_TOL = 2e-9
+
+
+def given_errors(seed: int, cov: str, k: int, half_life: float) -> dict[str, float]:
+    """:func:`em_errors` with the states given at covariances of their own
+    (``hmm_stream(own=True)``), each error as it is, not over a bound."""
+    s = hmm_stream(seed, k, own=True)
+    assert given_shape(s["c0"], cov) is not None
+    out, learned = model_run(s, half_life, cov)
+    want = rule_from_scratch(s, half_life, cov)
+
+    def rel(a: np.ndarray, b: np.ndarray) -> float:
+        return float((np.abs(a - b) / (1.0 + np.abs(b))).max())
+
+    covs = want["covs"] * np.eye(s["m0"].shape[1]) if cov == "diag" else want["covs"]
+    filtered = out.select(f"filtered_state{j}" for j in range(k)).to_numpy()
+    predicted = out.select(f"predicted_state{j}" for j in range(k)).to_numpy()
+    return {
+        "filtered": float(np.abs(filtered - want["filtered"]).max()),
+        "predicted": float(np.abs(predicted - want["predicted"]).max()),
+        "loglik": rel(out["loglik"].to_numpy(), want["loglik"]),
+        "means": rel(learned["means"], want["means"]),
+        "covs": rel(learned["covs"], covs),
+        "counts": float(np.abs(learned["counts"] - want["counts"]).max() / want["counts"].max()),
+        "moved": float(np.abs(learned["means"] - s["m0"]).max()),
+    }
+
+
+class TestGivenCovariancesAreEachStatesPrior:
+    """With the states given at covariances of their own, each state's
+    prior is the matrix it was given, rescaled by the tracked ``psi``: the
+    filter and what it learns are that rule rebuilt with hmmlearn, scipy
+    and numpy, row by row, as :class:`TestOnlineEmIsItsRuleRebuilt` rebuilds
+    the diagonal prior's."""
+
+    @pytest.mark.parametrize(("cov", "k", "half_life"), GIVEN_CASES)
+    def test_five_seeds(self, cov, k, half_life):
+        rows = [given_errors(seed, cov, k, half_life) for seed in range(5)]
+        worst = {key: max(r[key] for r in rows) for key in ERRORS}
+        print({key: f"{v:.3g}" for key, v in worst.items()})
+        assert min(r["moved"] for r in rows) > 0.1
+        assert max(worst.values()) <= GIVEN_TOL, worst
+
+    def test_the_diagonal_prior_is_another_rule(self):
+        """The check has teeth: the same rows against the rule with the
+        pooled variance on the diagonal for every state, the prior of a
+        model seeded from its rows, part by far more than the tolerance."""
+        s = hmm_stream(0, 2, own=True)
+        out, _ = model_run(s, 30.0, "full")
+        plain = dict(s, c0=np.array([np.eye(2)] * 2))
+        other = rule_from_scratch(plain, 30.0, "full")
+        filtered = out.select(f"filtered_state{j}" for j in range(2)).to_numpy()
+        assert np.abs(filtered - other["filtered"]).max() > 1e-3
 
 
 # --- the limit at half_life = inf against Baum-Welch ------------------------------

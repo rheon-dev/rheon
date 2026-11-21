@@ -78,9 +78,34 @@
 //! factor `1/(1 − τ)` of the exact recursion's and `ln det` within
 //! `d·ln(1 − τ)`, a bound reached only by a state with no data.
 //!
+//! **Given states** (`means` and `covs`) put the prior on what was given.
+//! With `G_s` the covariance given for state `s`, its prior is that matrix,
+//! each feature rescaled by how far the rows have moved from it:
+//!
+//! ```text
+//! Ψ_s = diag(√ψ)·G_s·diag(√ψ)
+//! eᵢ  = Σₛ pₛ·(xᵢ − μₛᵢ)²/G_s,ii        the row's squared deviations, each in
+//!                                        units of its state's given variance
+//! ```
+//!
+//! with `ŝ` tracked from `e` as above and started at 1, so `Ψ_s = G_s` on
+//! the first row and for as long as the rows have the given variances,
+//! whatever share of the rows each state holds. A state with no data reads
+//! the covariance it was given, at the scale the rows have now, where the
+//! diagonal prior read one matrix for every state: regimes that differ in
+//! correlation or in variance alone would be told apart by nothing but
+//! their data, and a state absent for a while was read as the others are.
+//! Given covariances that are one diagonal matrix for every state are the
+//! diagonal prior exactly (`ψᵢ·gᵢ` is the pooled variance), so no shape is
+//! kept for them ([`Shape::of`]). In the factor form the factor holds
+//! `W·M + diag(√f)·G_s·diag(√f)`, and a move adds the difference of two
+//! such matrices, `d²/2` sums a state beside the factorization's `d³/3`
+//! products; the prior as factored is the target with each feature's scale
+//! within `√(1 ± τ)` of it.
+//!
 //! The state is `ŝ`, `V` and, in the factor form, `f`: `2d + 1` numbers a
-//! model there, `d + 1` elsewhere. `ψ`, the slow decay and `P₀` are derived
-//! from `ŝ` and the configuration when a state is loaded.
+//! model there, `d + 1` elsewhere. `ψ`, the slow decay, `P₀` and the shape
+//! are derived from `ŝ` and the configuration when a state is loaded.
 
 use serde::{Deserialize, Serialize};
 
@@ -98,6 +123,62 @@ thread_local! {
     /// A test's switch: every coordinate topped up before every read, so
     /// the factor form holds the exact recursion, to rounding.
     pub(crate) static EAGER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The shape of each state's prior where the states were given: the given
+/// covariances (the module docs, "Given states"). Derived from the
+/// configuration, never written.
+#[derive(Clone, Debug)]
+pub(crate) struct Shape {
+    /// Each state's matrix, its lower triangle packed row by row
+    /// ([`crate::LowerTriangle::packed`]'s order); empty under `diag`, which
+    /// reads the diagonals alone.
+    tri: Vec<f64>,
+    /// Each state's diagonal, `K·d`.
+    diag: Vec<f64>,
+    d: usize,
+}
+
+impl Shape {
+    /// The shape `covs` gives (`K` matrices, each `d·d` row-major, positive
+    /// definite: the configuration's check), read as its diagonals alone
+    /// where `diagonal`. `None` where every state's matrix is the same
+    /// diagonal one: that is the diagonal prior exactly, which needs none.
+    pub(crate) fn of(covs: &[f64], k: usize, d: usize, diagonal: bool) -> Option<Self> {
+        debug_assert_eq!(covs.len(), k * d * d);
+        let at = |s: usize, i: usize, j: usize| covs[s * d * d + i * d + j];
+        let plain = (0..k).all(|s| {
+            (0..d).all(|i| {
+                at(s, i, i) == at(0, i, i) && (diagonal || (0..i).all(|j| at(s, i, j) == 0.0))
+            })
+        });
+        if plain {
+            return None;
+        }
+        let mut diag = Vec::with_capacity(k * d);
+        let mut tri = Vec::new();
+        for s in 0..k {
+            for i in 0..d {
+                diag.push(at(s, i, i));
+                if !diagonal {
+                    tri.extend((0..=i).map(|j| at(s, i, j)));
+                }
+            }
+        }
+        Some(Self { tri, diag, d })
+    }
+
+    /// State `s`'s matrix, its lower triangle packed row by row; empty
+    /// under `diag`, which keeps none.
+    pub(crate) fn tri(&self, s: usize) -> &[f64] {
+        let n = crate::ewcov::row_at(self.d);
+        self.tri.get(s * n..(s + 1) * n).unwrap_or(&[])
+    }
+
+    /// State `s`'s diagonal.
+    pub(crate) fn diag(&self, s: usize) -> &[f64] {
+        &self.diag[s * self.d..(s + 1) * self.d]
+    }
 }
 
 /// The model's part of stabilized forgetting; see the module docs. Written
@@ -122,10 +203,14 @@ pub struct Stabilized {
     slow_at: Option<(f64, f64)>,
     /// The ridge where every `ŝ` is 0 (derived: `precision_prior`).
     fallback: f64,
+    /// Each state's prior's shape, where the states were given (derived).
+    shape: Option<Shape>,
     /// Working space: the row's deviations, and every coordinate's move.
     pub(crate) e: Vec<f64>,
     add: Vec<f64>,
     moves: Vec<f64>,
+    /// Working space under a shape: `√f` before a move and after it.
+    roots: (Vec<f64>, Vec<f64>),
     /// A test's exact recursion: read through co-moments at every width.
     #[cfg(test)]
     pub(crate) comoments: bool,
@@ -162,9 +247,11 @@ impl From<Saved> for Stabilized {
             slow: Decay::Lam(1.0),
             slow_at: None,
             fallback: f64::NAN,
+            shape: None,
             e: Vec::new(),
             add: Vec::new(),
             moves: Vec::new(),
+            roots: (Vec::new(), Vec::new()),
             #[cfg(test)]
             comoments: false,
         }
@@ -203,7 +290,13 @@ fn slow_of(decay: Decay) -> Decay {
 }
 
 impl Stabilized {
-    pub(crate) fn new(prior_rows: f64, d: usize, decay: Decay, fallback: f64) -> Self {
+    pub(crate) fn new(
+        prior_rows: f64,
+        d: usize,
+        decay: Decay,
+        fallback: f64,
+        shape: Option<Shape>,
+    ) -> Self {
         Self {
             prior_rows,
             scale: vec![0.0; d],
@@ -213,16 +306,18 @@ impl Stabilized {
             slow: slow_of(decay),
             slow_at: None,
             fallback,
+            shape,
             e: Vec::with_capacity(d),
             add: Vec::with_capacity(d),
             moves: Vec::with_capacity(d),
+            roots: (Vec::new(), Vec::new()),
             #[cfg(test)]
             comoments: false,
         }
     }
 
     /// A loaded state's derived parts, from its configuration: `P₀`, the
-    /// slow decay, the fallback and `ψ`. `false` where what was read
+    /// slow decay, the fallback, the shape and `ψ`. `false` where what was read
     /// cannot be this model's: `ŝ` not `d` numbers, any of `ŝ`, `V` and `f`
     /// not finite or below 0, or `f` neither empty nor `d` long.
     pub(crate) fn rebuild(
@@ -231,6 +326,7 @@ impl Stabilized {
         d: usize,
         decay: Decay,
         fallback: f64,
+        shape: Option<Shape>,
     ) -> bool {
         let fine = |v: &f64| v.is_finite() && *v >= 0.0;
         if self.scale.len() != d
@@ -245,6 +341,7 @@ impl Stabilized {
         self.slow = slow_of(decay);
         self.slow_at = None;
         self.fallback = fallback;
+        self.shape = shape;
         self.psi = vec![fallback; d];
         self.refresh_psi();
         true
@@ -276,7 +373,27 @@ impl Stabilized {
         (w / t, move |i| self.prior_rows * self.psi[i] / t)
     }
 
-    /// `ŝ` and `V`.
+    /// The shape of each state's prior, where the states were given.
+    pub(crate) fn shape(&self) -> Option<&Shape> {
+        self.shape.as_ref()
+    }
+
+    /// [`Self::shrink`] under a shape: state `s`, of weight `w`, reads
+    /// `m·C + R·G·R`, `R = diag(r)`: `(m, r, G)`, with `m = w/(w + P₀)`,
+    /// `rᵢ = √(P₀ψᵢ/(w + P₀))` and `G` the state's shape, its lower triangle
+    /// packed row by row (empty with no shape).
+    pub(crate) fn shrink_roots(&mut self, w: f64, s: usize) -> (f64, &[f64], &[f64]) {
+        let t = w + self.prior_rows;
+        self.add.clear();
+        let p0 = self.prior_rows;
+        self.add
+            .extend(self.psi.iter().map(|p| (p0 * p / t).sqrt()));
+        let g = self.shape.as_ref().map_or(&[][..], |g| g.tri(s));
+        (w / t, &self.add, g)
+    }
+
+    /// `ŝ` and `V`. Where the states were given, `ŝ` is in units of each
+    /// state's given variance (the module docs, "Given states").
     pub fn scale(&self) -> (&[f64], f64) {
         (&self.scale, self.scale_w)
     }
@@ -379,12 +496,27 @@ impl Stabilized {
     /// moved by, of either sign, is [`Self::moves`].
     pub(crate) fn settle_all(&mut self, all: bool) {
         let lift = if all { 1.0 } else { 1.0 + 0.5 * TAU };
+        if self.shape.is_some() {
+            self.roots.0.clear();
+            self.roots.0.extend(self.held.iter().map(|h| h.sqrt()));
+        }
         self.moves.clear();
         for (h, p) in self.held.iter_mut().zip(&self.psi) {
             let goal = self.prior_rows * p * lift;
             self.moves.push(goal - *h);
             *h = goal;
         }
+        if self.shape.is_some() {
+            self.roots.1.clear();
+            self.roots.1.extend(self.held.iter().map(|h| h.sqrt()));
+        }
+    }
+
+    /// Under a shape, `√f` as [`Self::settle_all`] found it and as it left
+    /// it: a state's factored prior moved from `diag(old)·G·diag(old)` to
+    /// `diag(new)·G·diag(new)`.
+    pub(crate) fn roots(&self) -> (&[f64], &[f64]) {
+        (&self.roots.0, &self.roots.1)
     }
 
     /// What [`Self::settle_all`] moved each coordinate by.

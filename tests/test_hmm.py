@@ -176,6 +176,40 @@ def test_chunk_invariance_on_both_sides_of_the_factor_form(d, size):
             assert want.equals(pl.concat([head, tail])), at
 
 
+@pytest.mark.parametrize(("d", "cov"), [(2, "full"), (13, "full"), (4, "diag")])
+@pytest.mark.parametrize("size", [1, 37, 2000])
+def test_chunk_invariance_under_given_covariances_of_their_own(d, cov, size):
+    """With the states given at covariances of their own, each state forgets
+    toward the matrix it was given, in co-moments (2 features), in the
+    factor form (13) and under ``"diag"``: one chunk or many give the same
+    bits, and so does a save and load mid-stream. A half-life of 50 rows,
+    so the factor form's prior is moved back to its target every few rows."""
+    df = blobs(n=2000, run=100, seed=6, d=d)
+    features = [f"x{i}" for i in range(d)]
+    covs = np.zeros((2, d, d))
+    for s, (var, rho) in enumerate([(1.0, 0.3), (2.0, -0.4)]):
+        covs[s] = var * (np.eye(d) + rho * (np.eye(d, k=1) + np.eye(d, k=-1)))
+    kw = dict(
+        features=features,
+        covariance_type=cov,
+        half_life=50.0,
+        means=[-2.0] * d + [2.0] * d,
+        covs=covs.ravel().tolist(),
+    )
+    want = run(df, **kw).drop("coef")
+    assert want["loglik"].is_finite().all()
+    bank = rp.ModelBank([spec(**kw)])
+    parts = [bank.fit_predict(df[i : i + size]) for i in range(0, df.height, size)]
+    assert want.equals(pl.concat(parts)["h"].struct.unnest().drop("coef"))
+    if size == 2000:
+        s = spec(**kw)
+        bank = rp.ModelBank([s])
+        head = bank.fit_predict(df[:900])["h"].struct.unnest().drop("coef")
+        again = rp.ModelBank.load_bytes(bank.save_bytes(), [s])
+        tail = again.fit_predict(df[900:])["h"].struct.unnest().drop("coef")
+        assert want.equals(pl.concat([head, tail]))
+
+
 def test_save_load_mid_stream():
     df = blobs(n=1200, run=100, seed=7)
     s = spec(warm_rows=200)
