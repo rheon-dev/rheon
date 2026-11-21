@@ -6,6 +6,7 @@ from __future__ import annotations
 import math
 import warnings
 
+import numba
 import numpy as np
 from hfhd import hf
 
@@ -13,6 +14,7 @@ import data as D
 import estimators as E
 
 warnings.filterwarnings("ignore", module="numba")
+warnings.filterwarnings("ignore", category=numba.NumbaPerformanceWarning)
 
 
 def _indices_and_values(tick_series_list):
@@ -44,7 +46,6 @@ def rel(a, b) -> float:
 
 import time  # noqa: E402
 
-import numba  # noqa: E402
 import pandas as pd  # noqa: E402
 
 import streaming as S  # noqa: E402
@@ -165,7 +166,8 @@ def agreement(seeds) -> list[dict]:
                 h = h[:d, :d]
                 g = stream_gap(lambda: S.tsrc_new(d, KK, J), lambda st, x: S.tsrc_feed(st, x, KK, J),
                                lambda st: S.tsrc_close(st, KK, J), P, h)
-                put(("tsrc", f"J={J}, K={'default' if (J, KK) == (1, K) else KK}", label),
+                kname = {1: "K=None (int(N_p^(2/3)))", 2: "K = int(N_p^(2/3))", 5: "K = int(N_p^(2/3)) // 2"}[J]
+                put(("tsrc", f"J={J}, {kname}", label),
                     rel(E.tsrc(P, KK, J, "hfhd"), h), g[0], g[1], rel(E.tsrc(P, KK, J, "paper"), h), g[2])
             # multi scale
             Md = int(np.ceil((n + 1) ** 0.5))
