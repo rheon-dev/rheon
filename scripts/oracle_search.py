@@ -31,7 +31,10 @@ def ver(dist: str) -> str:
 def lic(dist: str) -> str:
     try:
         m = metadata.metadata(dist)
-        return m.get("License-Expression") or (m.get("License") or "").splitlines()[0][:30] or "see PyPI"
+        if m.get("License-Expression"):
+            return m["License-Expression"]
+        cl = [c.split("::")[-1].strip() for c in (m.get_all("Classifier") or []) if c.startswith("License ::")]
+        return cl[0] if cl else ((m.get("License") or "").splitlines() or ["see PyPI"])[0][:30]
     except metadata.PackageNotFoundError:
         return "?"
 
@@ -178,6 +181,108 @@ def lead_lag_hry():
             out["  rank-correlation of the two contrast curves"] = float(np.corrcoef(got, d)[0, 1])
             out["  lag of the largest gap (ms)"] = float(lags[np.argmax(np.abs(got - d))] * 1e3)
     report("499", "HRY time-shifted Hayashi-Yoshida lead-lag", "lead-lag", out, "400 and 350 ms ticks of one path, X ahead by 20 ms, lags -50..50 ms")
+
+
+def cusum_def(x, mu0, k):
+    """Page 1954, tabular form (Montgomery 6e, 9.1.2): C+_t = max(0, x - (mu0 + k) + C+_{t-1}); C-_t = max(0, (mu0 - k) - x + C-_{t-1})."""
+    cp = cm = 0.0
+    P, M = [], []
+    for v in x:
+        cp = max(0.0, v - (mu0 + k) + cp)
+        cm = max(0.0, (mu0 - k) - v + cm)
+        P.append(cp)
+        M.append(cm)
+    return np.array(P), np.array(M)
+
+
+def page_hinkley_def(x, delta, alpha):
+    """Page-Hinkley with a running mean and forgetting alpha (both directions), after Page 1954 / Hinkley 1971."""
+    inc = dec = 0.0
+    mn, mx = np.inf, -np.inf
+    mean = 0.0
+    ti, td = [], []
+    for n, v in enumerate(x, 1):
+        mean += (v - mean) / n
+        inc = alpha * inc + (v - mean) - delta
+        dec = alpha * dec + (v - mean) + delta
+        mn, mx = min(mn, inc), max(mx, dec)
+        ti.append(inc - mn)
+        td.append(mx - dec)
+    return np.array(ti), np.array(td)
+
+
+@check
+def cusum_candidates():
+    rng = np.random.default_rng(4)
+    x = np.concatenate([rng.standard_normal(150), 1.0 + rng.standard_normal(150)])  # mu0=0, sigma=1, shift 1 sigma at 150
+    k = 0.5
+    cp, cm = cusum_def(x, 0.0, k)
+    # (1) pyspc: fixed target, k = std/2 (the tabular CUSUM itself); its C- is stored negated
+    from pyspc import cusum as pcusum
+
+    (vals, *_rest) = pcusum(target=0.0, std=1.0).plot(x, 1)
+    g = {"C+": float(np.max(np.abs(np.array(vals[0]) - cp))), "C- (sign flipped)": float(np.max(np.abs(-np.array(vals[1]) - cm)))}
+    report("508", "tabular two-sided CUSUM, fixed target", "pyspc", g, "300 N(0,1) with a 1-sigma shift at 150, k=0.5; k is fixed at std/2 by pyspc")
+    # (2) river PageHinkley: running mean, both sides; read the private sums to compare the statistic
+    from river import drift
+
+    ph = drift.PageHinkley(min_instances=30, delta=0.005, threshold=1e9, alpha=1.0, mode="both")
+    ti, td = page_hinkley_def(x, 0.005, 1.0)
+    gi = gd = 0.0
+    for t, v in enumerate(x):
+        ph.update(float(v))
+        gi = max(gi, abs((ph._sum_increase - ph._min_increase) - ti[t]))
+        gd = max(gd, abs((ph._max_decrease - ph._sum_decrease) - td[t]))
+    report("508", "Page-Hinkley (running-mean reference, both sides)", "river", {"up statistic": gi, "down statistic": gd}, "same stream, delta=0.005, alpha=1; private fields read")
+    # (3) frouros CUSUM: running mean, upper side only, max(0, .)
+    from frouros.detectors.concept_drift import CUSUM, CUSUMConfig
+
+    det = CUSUM(config=CUSUMConfig(delta=0.005, lambda_=1e9, min_num_instances=30))
+    mean, c, gap = 0.0, 0.0, 0.0
+    for n, v in enumerate(x, 1):
+        det.update(value=float(v))
+        mean += (v - mean) / n
+        c = max(0.0, c + v - mean - 0.005)
+        gap = max(gap, abs(det.sum_ - c))
+    report("508", "one-sided CUSUM, running-mean reference", "frouros", {"upper sum": gap}, "same stream, delta=0.005")
+    # (4) the identity that ties the forms: with a fixed reference, C+_t = S_t - min_{s<=t} S_s
+    S = np.cumsum(x - k)
+    ident = np.max(np.abs(cp - (S - np.minimum.accumulate(np.minimum(S, 0.0)))))
+    print(f"[508] identity C+ = S_t - min(0, min_s S_s), fixed reference: max gap {ident:.3e} (self-check of the definition)")
+
+
+@check
+def expectile_candidates():
+    from scipy import optimize, stats
+
+    rng = np.random.default_rng(5)
+    n, tau = 400, 0.3
+    X = rng.standard_normal((n, 3))
+    y = 1.0 + X @ np.array([1.0, -2.0, 0.5]) + rng.standard_t(4, n)
+    A = np.column_stack([np.ones(n), X])
+
+    def loss(b):  # Newey & Powell 1987 asymmetric least squares
+        e = y - A @ b
+        return np.sum(np.where(e < 0, 1 - tau, tau) * e**2)
+
+    ref = optimize.minimize(loss, np.zeros(4), method="BFGS", options={"gtol": 1e-12}).x
+    # tight reference: IRLS to the fixed point (the loss is strictly convex and C1)
+    b = np.linalg.lstsq(A, y, rcond=None)[0]
+    for _ in range(200):
+        w = np.where(y - A @ b < 0, 1 - tau, tau)
+        b = np.linalg.solve(A.T @ (w[:, None] * A), A.T @ (w * y))
+    print(f"[501] definition: BFGS vs IRLS fixed point, max |gap| {np.max(np.abs(ref - b)):.3e}")
+    # (1) scipy.stats.expectile: location only (the intercept-only fit)
+    e = stats.expectile(y, alpha=tau)
+    bb = optimize.minimize(lambda m: np.sum(np.where(y - m[0] < 0, 1 - tau, tau) * (y - m[0]) ** 2), [0.0], tol=1e-14).x[0]
+    report("501", "expectile, intercept only", "scipy", {"|stats.expectile - minimiser|": float(abs(e - bb))}, "400 rows, tau=0.3")
+    # (2) pygam ExpectileGAM with linear terms (lam=0: no penalty)
+    from pygam import ExpectileGAM, l
+
+    gam = ExpectileGAM(l(0) + l(1) + l(2), expectile=tau, lam=0.0, max_iter=500, tol=1e-12).fit(X, y)
+    coef = np.asarray(gam.coef_)  # [term coefficients..., intercept]
+    got = np.concatenate([[coef[-1]], coef[:3]])
+    report("501", "expectile regression (linear terms)", "pygam", {"max |coef - definition|": float(np.max(np.abs(got - b)))}, "400 rows, 3 features, t(4) noise, tau=0.3, lam=0")
 
 
 def main(argv):
