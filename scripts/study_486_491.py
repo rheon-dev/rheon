@@ -28,13 +28,28 @@ Oracles: ``scipy.signal`` ``welch``, ``periodogram``, ``spectrogram`` (per-segme
 for the weighted mean) and ``lombscargle``; astropy ``LombScargle`` for the
 normalisation.
 
+Part 3 (order selection, task 486): ``OnlineAROrder`` keeps the least squares state
+at the largest order plus the decayed sum of squared targets, and reads the
+residual sum of squares of every order 0..pmax from one Cholesky factor of the
+Gram; AIC and BIC follow with the decayed weight sum as the sample size. Oracle:
+statsmodels ``ar_select_order`` (AutoReg's information-criterion selection) and,
+under decay, ``WLS`` per order.
+
 Every series is generated here from a seed; nothing is read from or written to
-disk. Run: ``.venv/bin/python scripts/study_486_491.py [ar] [spectral]``. Part 3
-(order selection) adds its section to this file.
+disk. One entry point:
+
+    .venv/bin/python scripts/study_486_491.py [ar|spectral|order|all] [--quick] [--seeds N]
+
+``all`` (the default) runs the three parts and then the tolerance table, which
+checks every recorded gap against the proposed tolerances and exits 1 on a breach.
+``--quick`` is the reduced grid (two seeds, the short streams, the smaller
+segments, no timing tables; under a minute). ``--seeds N`` uses seeds 0..N-1.
 """
 
 from __future__ import annotations
 
+import argparse
+import math
 import sys
 import time
 
@@ -42,12 +57,27 @@ import numpy as np
 import scipy.linalg
 import scipy.signal
 from statsmodels.regression.linear_model import WLS, yule_walker
-from statsmodels.tsa.ar_model import AutoReg
+from statsmodels.tsa.ar_model import AutoReg, ar_select_order
 from statsmodels.tsa.stattools import levinson_durbin
 
-SEEDS = (0, 1, 2, 3, 4)
+# The grid. ``configure`` rebinds these for --quick and --seeds.
+SEEDS: tuple[int, ...] = (0, 1, 2, 3, 4)
 ORDERS = (1, 5, 20)
-LENGTHS = (2000, 20000)
+LENGTHS: tuple[int, ...] = (2000, 20000)
+QUICK = False
+
+# The worst gap per tolerance key, filled by the sections, read by the table.
+LEDGER: dict[tuple, float] = {}
+
+
+RATES: set[tuple] = set()  # keys whose value is a rate (checked as >=), not a gap
+
+
+def record(key: tuple, value: float, worst=max) -> None:
+    """Keep the worst value per key: the largest gap, or (worst=min) the lowest rate."""
+    if worst is min:
+        RATES.add(key)
+    LEDGER[key] = worst(LEDGER[key], value) if key in LEDGER else value
 
 
 # --------------------------------------------------------------------------- data
@@ -349,6 +379,9 @@ def section_no_decay() -> None:
                 g_s = gap([np.sqrt(s2_m)], [sig_m])[1]
                 root = np.max(np.abs(np.roots(np.r_[1.0, -phi])))
                 worst = np.maximum(worst, [*g_ls, floor, *g_m, *g_a, g_s, np.linalg.cond(X), root])
+            record(("a", "least squares vs AutoReg", p, n), worst[0])
+            record(("a", "Yule-Walker mle vs yule_walker", p, n), worst[3])
+            record(("a", "Yule-Walker adjusted vs yule_walker", p, n), worst[5])
             print(
                 f"| {p} | {n} | "
                 + " | ".join(f"{v:.1e}" for v in worst[:8])
@@ -422,6 +455,8 @@ def section_decay() -> None:
                     worst = np.maximum(
                         worst, [*g, g_sm, *gap(phi_m, o_m), gap(phi_m, o_yw)[1], gap(phi_a, o_a)[1]]
                     )
+                record(("b", "least squares vs WLS", p, n), max(worst[1], worst[2]))
+                record(("b", "Yule-Walker mle vs tapered", p, n), max(worst[4], worst[5]))
                 print(f"| {lam} | {p} | {n} | " + " | ".join(f"{v:.1e}" for v in worst) + " |")
 
 
@@ -525,12 +560,15 @@ def section_cost() -> None:
 
 def part_ar() -> None:
     t0 = time.perf_counter()
+    print(f"\n# Part 1: AR(p) (seeds {SEEDS[0]}..{SEEDS[-1]}, N in {LENGTHS})")
     section_no_decay()
-    section_no_shift()
+    if not QUICK:
+        section_no_shift()
     section_prefix()
     section_decay()
     section_zero_weight()
-    section_cost()
+    if not QUICK:
+        section_cost()
     print(f"\n(part 1 ran in {time.perf_counter() - t0:.0f} s)")
 
 
@@ -538,8 +576,9 @@ def part_ar() -> None:
 # Task 491: streaming spectral estimates against scipy.signal.
 
 FS = 10.0
-SPEC_SEGMENTS = (256, 1024, 4096)
+SPEC_SEGMENTS: tuple[int, ...] = (256, 1024, 4096)
 SPEC_N = 32768
+WELCH_READS = 12
 
 
 def two_sines(n: int, seed: int, fs: float = FS) -> np.ndarray:
@@ -760,7 +799,7 @@ def spec_gap(a, b) -> tuple[float, float]:
 def section_welch() -> None:
     print("\n## Streaming Welch and the segment periodogram vs scipy.signal\n")
     print(
-        f"Signal: two sines + N(0,1) + 3, fs = {FS}, N = {SPEC_N}, seed 0; reads at 12 checkpoints (scipy welch on x[:t]).\n"
+        f"Signal: two sines + N(0,1) + 3, fs = {FS}, N = {SPEC_N}; reads at {WELCH_READS} checkpoints (scipy welch on x[:t]); worst of seeds {SEEDS[0]}..{SEEDS[-1]}.\n"
     )
     k = np.arange(4096)
     print(
@@ -770,60 +809,62 @@ def section_welch() -> None:
         "| nperseg | overlap | window | segments | welch abs | welch rel | periodogram abs | periodogram rel | EW (beta=0.9) vs spectrogram abs | rel |"
     )
     print("|---|---|---|---|---|---|---|---|---|---|")
-    x = two_sines(SPEC_N, 0)
-    worst = {}
+    xs_by_seed = {seed: two_sines(SPEC_N, seed) for seed in SEEDS}
     for nps in SPEC_SEGMENTS:
         for ov in (0, nps // 2):
             for wname in ("hann", "boxcar"):
-                m = StreamingWelch(nps, ov, wname)
-                checks = set(np.linspace(nps, SPEC_N, 12).astype(int)) | {SPEC_N}
                 g = np.zeros(6)
-                for i in range(SPEC_N):
-                    m.update(x[i])
-                    t = i + 1
-                    if t in checks:
-                        _, pw = scipy.signal.welch(
-                            x[:t],
-                            FS,
-                            window=wname,
-                            nperseg=nps,
-                            noverlap=ov,
-                            detrend="constant",
-                            scaling="density",
-                        )
-                        a, r = spec_gap(m.welch(), pw)
-                        g[0], g[1] = max(g[0], a), max(g[1], r)
-                        # the latest segment is x[s:s+nps], s the last segment start <= t - nps
-                        s0 = (t - nps) // m.hop * m.hop
-                        _, pp = scipy.signal.periodogram(
-                            x[s0 : s0 + nps],
-                            FS,
-                            window=wname,
-                            detrend="constant",
-                            scaling="density",
-                        )
-                        a, r = spec_gap(m.last, pp)
-                        g[2], g[3] = max(g[2], a), max(g[3], r)
-                        _, _, sx = scipy.signal.spectrogram(
-                            x[:t],
-                            FS,
-                            window=wname,
-                            nperseg=nps,
-                            noverlap=ov,
-                            detrend="constant",
-                            scaling="density",
-                            mode="psd",
-                        )
-                        k = sx.shape[1]
-                        wt = m.beta ** np.arange(k - 1, -1, -1)
-                        a, r = spec_gap(m.ew(), sx @ wt / wt.sum())
-                        g[4], g[5] = max(g[4], a), max(g[5], r)
-                worst[(nps, ov, wname)] = g
+                for seed in SEEDS:
+                    gs, segments = welch_gaps(xs_by_seed[seed], nps, ov, wname)
+                    g = np.maximum(g, gs)
+                record(("c", "Welch vs welch", nps), g[1])
+                record(("c", "segment vs periodogram", nps), g[3])
+                record(("c", "EW vs spectrogram", nps), g[5])
                 print(
-                    f"| {nps} | {ov} | {wname} | {m.m} | "
+                    f"| {nps} | {ov} | {wname} | {segments} | "
                     + " | ".join(f"{v:.1e}" for v in g)
                     + " |"
                 )
+
+
+def welch_gaps(x: np.ndarray, nps: int, ov: int, wname: str) -> tuple[np.ndarray, int]:
+    """Stream x through StreamingWelch; at WELCH_READS checkpoints compare the mean with
+    welch(x[:t]), the latest segment with periodogram, and the EW read with spectrogram
+    weighted by hand. Returns the worst (abs, rel) of each and the segment count."""
+    m = StreamingWelch(nps, ov, wname)
+    checks = set(np.linspace(nps, len(x), WELCH_READS).astype(int)) | {len(x)}
+    g = np.zeros(6)
+    for i in range(len(x)):
+        m.update(x[i])
+        t = i + 1
+        if t not in checks:
+            continue
+        _, pw = scipy.signal.welch(
+            x[:t], FS, window=wname, nperseg=nps, noverlap=ov, detrend="constant", scaling="density"
+        )
+        a, r = spec_gap(m.welch(), pw)
+        g[0], g[1] = max(g[0], a), max(g[1], r)
+        # the latest segment is x[s:s+nps], s the last segment start <= t - nps
+        s0 = (t - nps) // m.hop * m.hop
+        _, pp = scipy.signal.periodogram(
+            x[s0 : s0 + nps], FS, window=wname, detrend="constant", scaling="density"
+        )
+        a, r = spec_gap(m.last, pp)
+        g[2], g[3] = max(g[2], a), max(g[3], r)
+        _, _, sx = scipy.signal.spectrogram(
+            x[:t],
+            FS,
+            window=wname,
+            nperseg=nps,
+            noverlap=ov,
+            detrend="constant",
+            scaling="density",
+            mode="psd",
+        )
+        wt = m.beta ** np.arange(sx.shape[1] - 1, -1, -1)
+        a, r = spec_gap(m.ew(), sx @ wt / wt.sum())
+        g[4], g[5] = max(g[4], a), max(g[5], r)
+    return g, m.m
 
 
 def section_welch_zero_weight() -> None:
@@ -873,6 +914,7 @@ def section_welch_zero_weight() -> None:
             wts = np.array(wts)
             _, re = spec_gap(m.ew(), wts @ segs / wts.sum())
             nan = any(np.isnan(a).any() for a in (m.p_sum, m.p_ew, np.array([m.z])))
+            record(("c", "weighted Welch and EW vs periodogram", nps), max(rw, re))
             print(f"| {ov} | {wname} | {rw:.1e} | {re:.1e} | {nan} | {m.m} / {len(starts)} |")
     # w = 1 everywhere with weights passed: identical to the unweighted path, to the bit
     m1, m2 = StreamingWelch(nps, nps // 2, "hann"), StreamingWelch(nps, nps // 2, "hann")
@@ -890,6 +932,52 @@ def ls_oracle(t, y, w, om, normalize, floating_mean):
     return scipy.signal.lombscargle(
         t[live], y[live], om, normalize=normalize, weights=w[live], floating_mean=floating_mean
     )
+
+
+def ls_stream_gaps(om: np.ndarray, W: int, jit: float, seed: int) -> np.ndarray:
+    """One seed of the streaming Lomb-Scargle table: rows (recompute every W, never) of
+    (rel raw t, abs raw t, rel rebased, Nyquist rel, Nyquist rel vs written out)."""
+    dt = 1.0 / FS
+    n = 4 * W + 37
+    rng = np.random.default_rng(seed)
+    t = (np.arange(n) + rng.uniform(-jit, jit, n)) * dt
+    y = (
+        3.0
+        + np.sin(2 * np.pi * 0.73 * t)
+        + 0.5 * np.sin(2 * np.pi * 2.1 * t + 1.0)
+        + rng.standard_normal(n)
+    )
+    w = np.ones(n)
+    reads = set(np.linspace(W // 2, n, 9).astype(int))
+    res = []
+    for rec in (True, False):
+        m = StreamingLombScargle(om, W, recompute=rec)
+        g = np.zeros(5)
+        for i in range(n):
+            m.update(t[i], y[i], w[i])
+            if i + 1 not in reads:
+                continue
+            lo = max(0, i + 1 - W)
+            tw, yw, ww = t[lo : i + 1], y[lo : i + 1], w[lo : i + 1]
+            for sn in ("power", "normalize"):
+                for fm in (False, True):
+                    ours = m.power(sn, fm)
+                    ref = ls_oracle(tw, yw, ww, om, sn, fm)
+                    scale = np.max(np.abs(ref))
+                    d = np.abs(ours - ref)
+                    g[0], g[1] = max(g[0], d[:-1].max() / scale), max(g[1], d[:-1].max())
+                    ref2 = ls_oracle(tw - tw[0], yw, ww, om, sn, fm)
+                    g[2] = max(g[2], np.abs(ours - ref2)[:-1].max() / np.max(np.abs(ref2)))
+                    g[3] = max(g[3], d[-1] / scale)
+                    if jit == 0.0:  # the Nyquist written out: the cosine column alone, (-1)^i
+                        c, yy, sw = (-1.0) ** np.arange(lo, i + 1), yw.copy(), ww / ww.sum()
+                        if fm:
+                            c, yy = c - sw @ c, yy - sw @ yy
+                        q = (sw @ (yy * c)) ** 2 / (sw @ (c * c))
+                        ex = 0.5 * len(yw) * q if sn == "power" else q / (sw @ (yy * yy))
+                        g[4] = max(g[4], abs(ours[-1] - ex) / scale)
+        res.append(g)
+    return np.array(res)
 
 
 def section_lomb_scargle() -> None:
@@ -934,7 +1022,7 @@ def section_lomb_scargle() -> None:
         "\n## Streaming Lomb-Scargle over the last W rows vs scipy.signal.lombscargle on the window's rows\n"
     )
     print(
-        "Clock t_i = (i + u_i) / fs, u_i ~ U(-0.3, 0.3) (30% jitter), 64 frequencies 0.05..5 Hz; N = 4 W + 37 rows; 9 reads."
+        f"Clock t_i = (i + u_i) / fs, u_i ~ U(-0.3, 0.3) (30% jitter), 64 frequencies 0.05..5 Hz; N = 4 W + 37 rows; 9 reads; worst of seeds {SEEDS[0]}..{SEEDS[-1]}."
     )
     print(
         "Gap: worst over the reads and the four (normalize, floating_mean) forms. 'raw t' gives scipy the times as they"
@@ -949,57 +1037,13 @@ def section_lomb_scargle() -> None:
     print("|---|---|---|---|---|---|---|---|---|")
     for W in SPEC_SEGMENTS:
         for jit in (0.3, 0.0):
-            n = 4 * W + 37
-            rng = np.random.default_rng(11)
-            t = (np.arange(n) + rng.uniform(-jit, jit, n)) * dt
-            y = (
-                3.0
-                + np.sin(2 * np.pi * 0.73 * t)
-                + 0.5 * np.sin(2 * np.pi * 2.1 * t + 1.0)
-                + rng.standard_normal(n)
-            )
-            w = np.ones(n)
-            reads = set(np.linspace(W // 2, n, 9).astype(int))
-            res = []
-            for rec in (True, False):
-                m = StreamingLombScargle(om, W, recompute=rec)
-                g = np.zeros(5)
-                for i in range(n):
-                    m.update(t[i], y[i], w[i])
-                    if i + 1 in reads:
-                        lo = max(0, i + 1 - W)
-                        tw, yw, ww = t[lo : i + 1], y[lo : i + 1], w[lo : i + 1]
-                        for sn in ("power", "normalize"):
-                            for fm in (False, True):
-                                ours = m.power(sn, fm)
-                                ref = ls_oracle(tw, yw, ww, om, sn, fm)
-                                scale = np.max(np.abs(ref))
-                                d = np.abs(ours - ref)
-                                g[0], g[1] = (
-                                    max(g[0], d[:-1].max() / scale),
-                                    max(g[1], d[:-1].max()),
-                                )
-                                ref2 = ls_oracle(tw - tw[0], yw, ww, om, sn, fm)
-                                g[2] = max(
-                                    g[2], np.abs(ours - ref2)[:-1].max() / np.max(np.abs(ref2))
-                                )
-                                g[3] = max(g[3], d[-1] / scale)
-                                if (
-                                    jit == 0.0
-                                ):  # the Nyquist written out: the cosine column alone, (-1)^i
-                                    c, yy, sw = (
-                                        (-1.0) ** np.arange(lo, i + 1),
-                                        yw.copy(),
-                                        ww / ww.sum(),
-                                    )
-                                    if fm:
-                                        c, yy = c - sw @ c, yy - sw @ yy
-                                    q = (sw @ (yy * c)) ** 2 / (sw @ (c * c))
-                                    ex = (
-                                        0.5 * len(yw) * q if sn == "power" else q / (sw @ (yy * yy))
-                                    )
-                                    g[4] = max(g[4], abs(ours[-1] - ex) / scale)
-                res.append(g)
+            res = np.zeros((2, 5))
+            for seed in SEEDS:
+                res = np.maximum(res, ls_stream_gaps(om, W, jit, 11 + seed))
+            if jit > 0.0:  # an uneven clock has no special frequency: every column counts
+                record(("d", "streaming vs lombscargle, jitter 0.3", W), max(res[0][0], res[0][3]))
+            else:
+                record(("d", "streaming vs lombscargle, even clock, off Nyquist", W), res[0][0])
             nyq_ex = f"{res[0][4]:.1e}" if jit == 0.0 else "n/a"
             print(
                 f"| {W} | {jit} | yes | {res[0][0]:.1e} | {res[0][1]:.1e} | {res[0][2]:.1e} | {res[1][0]:.1e} | {res[0][3]:.1e} | {nyq_ex} |"
@@ -1038,6 +1082,8 @@ def section_lomb_scargle() -> None:
                                     ),
                                 )[1],
                             )
+        if rec:
+            record(("d", "long stream with weight-0 rows vs lombscargle", W), worst)
         print(
             f"- recompute={rec}: {n} rows, 10% weight 0 (half NaN), weights U(0.5, 1.5): worst rel vs scipy (weights=w on the w > 0 rows) {worst:.1e}; NaN in the sums: {nan_state}; a window of only weight-0 rows reads NaN (no fit): {empty_nan}."
         )
@@ -1091,16 +1137,398 @@ def section_spectral_cost() -> None:
 
 def part_spectral() -> None:
     t0 = time.perf_counter()
+    print(
+        f"\n# Part 2: spectral estimates (seeds {SEEDS[0]}..{SEEDS[-1]}, nperseg and W in {SPEC_SEGMENTS})"
+    )
     section_welch()
     section_welch_zero_weight()
     section_lomb_scargle()
-    section_spectral_cost()
+    if not QUICK:
+        section_spectral_cost()
     print(f"\n(part 2 ran in {time.perf_counter() - t0:.0f} s)")
 
 
-if __name__ == "__main__":
-    parts = sys.argv[1:] or ["ar"]
-    if "ar" in parts:
+# =========================================================================== part 3
+# Task 486, order selection: AIC and BIC of every order from the least squares state.
+
+ORDER_TRUE = (1, 3, 8)
+ORDER_MAX = 12
+ORDER_LENGTHS: tuple[int, ...] = (2000, 20000)
+ORDER_LAMS = (1.0, 0.9999, 0.999)
+
+
+class OnlineAROrder(OnlineARLS):
+    """OnlineARLS at the largest order pmax, plus two decayed scalars:
+
+        Q_t = lam Q_{t-1} + w_t (y_t - o)^2        the targets' sum of squares (about o)
+        V_t = lam^2 V_{t-1} + w_t^2                 for the Kish count (W^2 / V) only
+
+    The design's columns are nested (1, y_{t-1}, ..., y_{t-pmax}), so the leading
+    (q+1) x (q+1) block of G is order q's Gram and the leading q+1 entries of b its
+    cross term. With G = L L' and r = L^-1 b (one forward solve),
+
+        RSS_q = Q - sum_{i<=q} r_i^2                q = 0..pmax, one factorization
+
+    and on n = W (the decayed weight sum; at lam = 1 and unit weights the count of
+    learned rows, which is AutoReg's nobs with hold_back = pmax):
+
+        -2 llf_q = n (ln(2 pi RSS_q / n) + 1)
+        AIC_q = -2 llf_q + 2 (q + 1)        BIC_q = -2 llf_q + ln(n) (q + 1)
+
+    statsmodels' ar_select_order counts q + 1 parameters (the lags and the constant).
+    Every order is fitted on the same rows (those after the first pmax), as
+    ar_select_order does."""
+
+    def __init__(self, pmax: int, lam: float = 1.0):
+        super().__init__(pmax, lam, solve_every_row=False)
+        self.Q = 0.0
+        self.V = 0.0
+
+    def update(self, y: float, w: float) -> float:
+        full = self.ring.count >= self.p
+        pred = super().update(y, w)
+        if self.lam != 1.0:
+            self.Q *= self.lam
+            self.V *= self.lam * self.lam
+        if w > 0.0 and full:
+            ys = y - self.origin
+            self.Q += w * ys * ys
+            self.V += w * w
+        return pred
+
+    def rss(self) -> np.ndarray:
+        """RSS_q for q = 0..pmax (NaN before k rows were learned or if G is not PD)."""
+        if self.learned < self.k:
+            return np.full(self.k, np.nan)
+        try:
+            low = np.linalg.cholesky(self.G)
+        except np.linalg.LinAlgError:
+            return np.full(self.k, np.nan)
+        r = scipy.linalg.solve_triangular(low, self.b, lower=True)
+        return self.Q - np.cumsum(r * r)
+
+    def counts(self) -> dict[str, float]:
+        return {"W": self.W, "Kish": self.W * self.W / self.V, "rows": float(self.learned)}
+
+    def criteria(self, n: float | None = None) -> tuple[np.ndarray, np.ndarray]:
+        return information_criteria(self.rss(), self.W if n is None else n)
+
+    @property
+    def nbytes(self) -> int:
+        # beta is not needed for the criteria, but the class keeps it
+        return super().nbytes + 16
+
+
+def information_criteria(rss: np.ndarray, n: float) -> tuple[np.ndarray, np.ndarray]:
+    q = np.arange(len(rss))
+    m2llf = n * (np.log(2.0 * np.pi * rss / n) + 1.0)
+    return m2llf + 2.0 * (q + 1), m2llf + np.log(n) * (q + 1)
+
+
+def autoreg_selection(y: np.ndarray, pmax: int) -> dict[str, tuple[int, np.ndarray]]:
+    """ar_select_order with ic='aic' and ic='bic' (trend 'c', nested lags): the selected
+    order and the criterion of every order 0..pmax."""
+    out = {}
+    for ic in ("aic", "bic"):
+        sel = ar_select_order(y, maxlag=pmax, ic=ic, trend="c", glob=False)
+        table = sel.aic if ic == "aic" else sel.bic
+        vals = np.empty(pmax + 1)
+        for lags, v in table.items():
+            vals[0 if lags == 0 else len(lags)] = v
+        out[ic] = (len(sel.ar_lags) if sel.ar_lags else 0, vals)
+    return out
+
+
+def wls_criteria(y: np.ndarray, pmax: int, lam: float) -> tuple[np.ndarray, np.ndarray]:
+    """The decayed criteria written longhand: statsmodels WLS per order on the learned
+    rows with weights lam^age, its weighted ssr, n = the sum of those weights."""
+    X, t = lag_design(y, pmax)
+    n = len(y)
+    wt = lam ** (n - 1 - np.arange(pmax, n)).astype(float)
+    rss = np.array([WLS(t, X[:, : q + 1], weights=wt).fit().ssr for q in range(pmax + 1)])
+    return information_criteria(rss, float(wt.sum()))
+
+
+def section_order() -> None:
+    print(
+        f"\n## Order selection: AIC and BIC from the state vs ar_select_order (maxlag {ORDER_MAX}, trend 'c')\n"
+    )
+    print(
+        f"True orders {ORDER_TRUE}, N in {ORDER_LENGTHS}, seeds {SEEDS[0]}..{SEEDS[-1]}, unit weights. "
+        "Under decay the sample size is a choice; three are tried: W (the decayed weight sum), "
+        "Kish (W^2 / sum of squared weights) and the learned row count. 'last n' is ar_select_order "
+        "on the last round(n) + maxlag rows.\n"
+    )
+    conv = ("W", "Kish", "rows")
+    rows = []  # (lam, p, N, seed, ic, ours[conv], theirs_full, theirs_last[conv], wls, margin)
+    ic_gap = {"aic": 0.0, "bic": 0.0}
+    ic_rel = {"aic": 0.0, "bic": 0.0}
+    for lam in ORDER_LAMS:
+        for p in ORDER_TRUE:
+            for n in ORDER_LENGTHS:
+                for seed in SEEDS:
+                    y, _ = ar_series(p, n, seed)
+                    m = OnlineAROrder(ORDER_MAX, lam)
+                    for i in range(n):
+                        m.update(y[i], 1.0)
+                    full = autoreg_selection(y, ORDER_MAX)
+                    cnt = m.counts()
+                    rss = m.rss()
+                    crit = {c: information_criteria(rss, cnt[c]) for c in conv}
+                    last = {}
+                    for c in conv:
+                        keep = min(n, int(round(cnt[c])) + ORDER_MAX)
+                        last[c] = autoreg_selection(y[n - keep :], ORDER_MAX)
+                    wls = wls_criteria(y, ORDER_MAX, lam) if lam != 1.0 else None
+                    for j, ic in enumerate(("aic", "bic")):
+                        ours = {c: int(np.argmin(crit[c][j])) for c in conv}
+                        mine = crit["W"][j]
+                        # the values themselves: ar_select_order's at lam = 1, WLS's under decay
+                        ref = full[ic][1] if lam == 1.0 else wls[j]
+                        d = float(np.max(np.abs(mine - ref)))
+                        ic_gap[ic] = max(ic_gap[ic], d)
+                        ic_rel[ic] = max(ic_rel[ic], d / float(np.max(np.abs(ref))))
+                        record(
+                            ("e", "criterion values vs oracle, relative", ic),
+                            d / float(np.max(np.abs(ref))),
+                        )
+                        srt = np.sort(mine)
+                        rows.append(
+                            dict(
+                                lam=lam,
+                                p=p,
+                                n=n,
+                                seed=seed,
+                                ic=ic,
+                                ours=ours,
+                                full=full[ic][0],
+                                last={c: last[c][ic][0] for c in conv},
+                                oracle=int(np.argmin(ref)),
+                                margin=float(srt[1] - srt[0]),
+                                margin_full=float(
+                                    full[ic][1][ours["W"]] - full[ic][1][full[ic][0]]
+                                ),
+                            )
+                        )
+    print(
+        f"Criterion values, n = W: max |ours - oracle| (ar_select_order at lam = 1, WLS per order under decay): "
+        f"AIC {ic_gap['aic']:.1e} ({ic_rel['aic']:.1e} relative), BIC {ic_gap['bic']:.1e} ({ic_rel['bic']:.1e} relative).\n"
+    )
+    print(
+        "| lam | IC | cells | vs its own oracle (same rows, same weights) | n = W: vs AutoReg full | vs AutoReg last n | n = Kish: full | last n | n = rows: full | true p found (n = W) | AutoReg true p found |"
+    )
+    print("|---|---|---|---|---|---|---|---|---|---|---|")
+    for lam in ORDER_LAMS:
+        for ic in ("aic", "bic"):
+            rs = [r for r in rows if r["lam"] == lam and r["ic"] == ic]
+            k = len(rs)
+
+            def rate(f, rs=rs, k=k):
+                return sum(1 for r in rs if f(r)) / k
+
+            own = rate(lambda r: r["ours"]["W"] == r["oracle"])
+            cols = [
+                own,
+                rate(lambda r: r["ours"]["W"] == r["full"]),
+                rate(lambda r: r["ours"]["W"] == r["last"]["W"]),
+                rate(lambda r: r["ours"]["Kish"] == r["full"]),
+                rate(lambda r: r["ours"]["Kish"] == r["last"]["Kish"]),
+                rate(lambda r: r["ours"]["rows"] == r["full"]),
+                rate(lambda r: r["ours"]["W"] == r["p"]),
+                rate(lambda r: r["full"] == r["p"]),
+            ]
+            record(("e", f"{ic} vs its own oracle", lam), own, worst=min)
+            if lam == 1.0:
+                record(("e", f"{ic} vs ar_select_order", lam), cols[1], worst=min)
+            else:
+                record(
+                    ("e", f"{ic} (n = W) vs ar_select_order, full series", lam), cols[1], worst=min
+                )
+                record(
+                    ("e", f"{ic} (n = W) vs ar_select_order, last W rows", lam), cols[2], worst=min
+                )
+            print(f"| {lam} | {ic} | {k} | " + " | ".join(f"{v:.2f}" for v in cols) + " |")
+    print(
+        "\nBy cell, n = W against AutoReg on the full series (agreeing seeds / seeds; ours -> AutoReg where they differ):\n"
+    )
+    print("| lam | IC | p | N | agree | differ (ours->AutoReg) |")
+    print("|---|---|---|---|---|---|")
+    for lam in ORDER_LAMS:
+        for ic in ("aic", "bic"):
+            for p in ORDER_TRUE:
+                for n in ORDER_LENGTHS:
+                    rs = [
+                        r
+                        for r in rows
+                        if r["lam"] == lam and r["ic"] == ic and r["p"] == p and r["n"] == n
+                    ]
+                    diff = [
+                        f"{r['ours']['W']}->{r['full']}" for r in rs if r["ours"]["W"] != r["full"]
+                    ]
+                    agree = len(rs) - len(diff)
+                    print(
+                        f"| {lam} | {ic} | {p} | {n} | {agree}/{len(rs)} | {', '.join(diff) or '-'} |"
+                    )
+    no_decay = [r for r in rows if r["lam"] == 1.0]
+    mism = [r for r in no_decay if r["ours"]["W"] != r["full"]]
+    print(
+        f"\nAt lam = 1: {len(no_decay) - len(mism)}/{len(no_decay)} agree; the smallest gap between the best and the "
+        f"second-best criterion over those cells is {min(r['margin'] for r in no_decay):.2e}"
+        + (
+            "; disagreements: "
+            + "; ".join(
+                f"p={r['p']} N={r['n']} seed={r['seed']} {r['ic']} {r['ours']['W']} vs {r['full']} (margin {r['margin']:.1e})"
+                for r in mism
+            )
+            if mism
+            else "."
+        )
+    )
+    m = OnlineAROrder(ORDER_MAX)
+    print(
+        f"State: {m.nbytes} bytes at pmax = {ORDER_MAX} (OnlineARLS's {m.nbytes - 16} plus Q and V)."
+    )
+
+
+def part_order() -> None:
+    t0 = time.perf_counter()
+    print(f"\n# Part 3: order selection (seeds {SEEDS[0]}..{SEEDS[-1]}, N in {ORDER_LENGTHS})")
+    section_order()
+    print(f"\n(part 3 ran in {time.perf_counter() - t0:.0f} s)")
+
+
+# =========================================================================== tolerances
+# Proposed test tolerances. Gaps: (a) absolute on the coefficients, (b) to (d)
+# relative to the oracle's largest magnitude. (e) is a rate: the test expects at
+# least this fraction of cells to select the same order. The rule for (a) to (d):
+# 1.5 times the worst over 20 seeds, rounded up to a power of ten.
+# Not proposed: 'adjusted' Yule-Walker at p = 20 (its Toeplitz matrix is not positive
+# definite in 3 of 20 seeds, statsmodels' own included), and the decayed selection
+# against AutoReg's unweighted one (different estimators: reported, not checked).
+PROPOSED: dict[tuple, float] = {
+    ("a", "Yule-Walker adjusted vs yule_walker", 1, 2000): 1e-13,
+    ("a", "Yule-Walker adjusted vs yule_walker", 1, 20000): 1e-13,
+    ("a", "Yule-Walker adjusted vs yule_walker", 5, 2000): 1e-10,
+    ("a", "Yule-Walker adjusted vs yule_walker", 5, 20000): 1e-10,
+    ("a", "Yule-Walker mle vs yule_walker", 1, 2000): 1e-13,
+    ("a", "Yule-Walker mle vs yule_walker", 1, 20000): 1e-13,
+    ("a", "Yule-Walker mle vs yule_walker", 20, 2000): 1e-09,
+    ("a", "Yule-Walker mle vs yule_walker", 20, 20000): 1e-08,
+    ("a", "Yule-Walker mle vs yule_walker", 5, 2000): 1e-11,
+    ("a", "Yule-Walker mle vs yule_walker", 5, 20000): 1e-10,
+    ("a", "least squares vs AutoReg", 1, 2000): 1e-13,
+    ("a", "least squares vs AutoReg", 1, 20000): 1e-13,
+    ("a", "least squares vs AutoReg", 20, 2000): 1e-06,
+    ("a", "least squares vs AutoReg", 20, 20000): 1e-06,
+    ("a", "least squares vs AutoReg", 5, 2000): 1e-10,
+    ("a", "least squares vs AutoReg", 5, 20000): 1e-10,
+    ("b", "Yule-Walker mle vs tapered", 1, 2000): 1e-13,
+    ("b", "Yule-Walker mle vs tapered", 1, 20000): 1e-13,
+    ("b", "Yule-Walker mle vs tapered", 20, 2000): 1e-11,
+    ("b", "Yule-Walker mle vs tapered", 20, 20000): 1e-11,
+    ("b", "Yule-Walker mle vs tapered", 5, 2000): 1e-12,
+    ("b", "Yule-Walker mle vs tapered", 5, 20000): 1e-12,
+    ("b", "least squares vs WLS", 1, 2000): 1e-13,
+    ("b", "least squares vs WLS", 1, 20000): 1e-13,
+    ("b", "least squares vs WLS", 20, 2000): 1e-08,
+    ("b", "least squares vs WLS", 20, 20000): 1e-08,
+    ("b", "least squares vs WLS", 5, 2000): 1e-10,
+    ("b", "least squares vs WLS", 5, 20000): 1e-11,
+    ("c", "EW vs spectrogram", 1024): 1e-14,
+    ("c", "EW vs spectrogram", 256): 1e-14,
+    ("c", "EW vs spectrogram", 4096): 1e-15,
+    ("c", "Welch vs welch", 1024): 1e-14,
+    ("c", "Welch vs welch", 256): 1e-14,
+    ("c", "Welch vs welch", 4096): 1e-14,
+    ("c", "segment vs periodogram", 1024): 1e-14,
+    ("c", "segment vs periodogram", 256): 1e-14,
+    ("c", "segment vs periodogram", 4096): 1e-14,
+    ("c", "weighted Welch and EW vs periodogram", 256): 1e-15,
+    ("d", "long stream with weight-0 rows vs lombscargle", 256): 1e-11,
+    ("d", "streaming vs lombscargle, even clock, off Nyquist", 1024): 1e-11,
+    ("d", "streaming vs lombscargle, even clock, off Nyquist", 256): 1e-12,
+    ("d", "streaming vs lombscargle, even clock, off Nyquist", 4096): 1e-11,
+    ("d", "streaming vs lombscargle, jitter 0.3", 1024): 1e-11,
+    ("d", "streaming vs lombscargle, jitter 0.3", 256): 1e-12,
+    ("d", "streaming vs lombscargle, jitter 0.3", 4096): 1e-10,
+    ("e", "aic vs ar_select_order", 1.0): 0.95,
+    ("e", "aic vs its own oracle", 0.999): 0.95,
+    ("e", "aic vs its own oracle", 0.9999): 0.95,
+    ("e", "aic vs its own oracle", 1.0): 0.95,
+    ("e", "bic vs ar_select_order", 1.0): 0.95,
+    ("e", "bic vs its own oracle", 0.999): 0.95,
+    ("e", "bic vs its own oracle", 0.9999): 0.95,
+    ("e", "bic vs its own oracle", 1.0): 0.95,
+    ("e", "criterion values vs oracle, relative", "aic"): 1e-09,
+    ("e", "criterion values vs oracle, relative", "bic"): 1e-09,
+}
+
+
+def derived(worst: float) -> float:
+    return 10.0 ** math.ceil(math.log10(1.5 * worst)) if worst > 0 else 0.0
+
+
+def tolerance_table() -> bool:
+    print("\n# Tolerances\n")
+    print(
+        f"Worst over seeds {SEEDS[0]}..{SEEDS[-1]} ({len(SEEDS)} seeds). 'derived' = 1.5 x worst rounded up to a power of ten; "
+        "'proposed' is the constant the script checks against (from the 20-seed run).\n"
+    )
+    print("| item | measure | cell | worst | derived | proposed | ok |")
+    print("|---|---|---|---|---|---|---|")
+    ok_all = True
+    for key in sorted(LEDGER, key=lambda k: tuple(str(x) for x in k)):
+        item, what, *cell = key
+        v = LEDGER[key]
+        tol = PROPOSED.get(key)
+        if key in RATES:
+            ok = tol is None or v >= tol
+            d = "-"
+            vs = f"{v:.2f}"
+            ts = "-" if tol is None else f">= {tol:.2f}"
+        else:
+            ok = tol is None or (np.isfinite(v) and v <= tol)
+            d = f"{derived(v):.0e}" if np.isfinite(v) else "nan"
+            vs = f"{v:.1e}"
+            ts = "-" if tol is None else f"{tol:.0e}"
+        ok_all &= ok
+        cell_s = ", ".join(str(c) for c in cell)
+        print(f"| {item} | {what} | {cell_s} | {vs} | {d} | {ts} | {'yes' if ok else 'NO'} |")
+    print(f"\nAll recorded gaps within the proposed tolerances: {ok_all}")
+    return ok_all
+
+
+# =========================================================================== entry point
+
+
+def configure(quick: bool, seeds: int | None) -> None:
+    global SEEDS, LENGTHS, QUICK, SPEC_SEGMENTS, SPEC_N, WELCH_READS, ORDER_LENGTHS
+    QUICK = quick
+    if quick:
+        SEEDS, LENGTHS, ORDER_LENGTHS = (0, 1), (2000,), (2000,)
+        SPEC_SEGMENTS, SPEC_N, WELCH_READS = (256, 1024), 8192, 4
+    if seeds is not None:
+        SEEDS = tuple(range(seeds))
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("part", nargs="?", default="all", choices=("ar", "spectral", "order", "all"))
+    ap.add_argument("--quick", action="store_true", help="the reduced grid, under a minute")
+    ap.add_argument("--seeds", type=int, default=None, help="use seeds 0..N-1")
+    args = ap.parse_args(argv)
+    configure(args.quick, args.seeds)
+    t0 = time.perf_counter()
+    if args.part in ("ar", "all"):
         part_ar()
-    if "spectral" in parts:
+    if args.part in ("spectral", "all"):
         part_spectral()
+    if args.part in ("order", "all"):
+        part_order()
+    ok = tolerance_table()
+    print(f"\n(ran in {time.perf_counter() - t0:.0f} s)")
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
