@@ -247,15 +247,17 @@ const SPARSE_OUTPUT: &[&str] = &["corrchange"];
 /// The models whose `n_eff` is every row's weight summed, with no decay:
 /// `audit`, a record of the rows; `bocpd`, whose recursion over run lengths
 /// does not decay; `rcov`, a block estimator; `seqtest`, an e-process that
-/// would not be one if it forgot. `probe_with` holds them to the sum where
+/// would not be one if it forgot; `garch`, whose recursion is per
+/// observation and whose estimator weighs every row it learned. `probe_with` holds them to the sum where
 /// it holds every other model to rule 8's decayed recursion, so a model
 /// added here is a choice made in this file, not a default.
-const NO_DECAY: &[&str] = &["audit", "bocpd", "rcov", "seqtest"];
+const NO_DECAY: &[&str] = &["audit", "bocpd", "garch", "rcov", "seqtest"];
 
 /// Slots null by design except on a flag, which the ready count leaves out:
 /// `corrchange`'s `since_change` dates a change only where one is flagged
-/// (docs/PLAN.md task 114).
-const ONLY_ON_A_FLAG: &[(&str, usize)] = &[("corrchange", 4)];
+/// (docs/PLAN.md task 114); `garch`'s standardized residual is one only
+/// where the row has its residual.
+const ONLY_ON_A_FLAG: &[(&str, usize)] = &[("corrchange", 4), ("garch", 1)];
 
 fn check(r: &Report, kind: &str, targets: usize, combos: usize) {
     assert_eq!(r.kind, kind, "state kind");
@@ -796,6 +798,7 @@ fn every_state_kind_is_distinct_and_named() {
         "audit",
         "glm",
         "hawkes",
+        "garch",
     ];
     let mut seen = std::collections::HashSet::new();
     for k in kinds {
@@ -830,6 +833,7 @@ fn every_state_kind_is_distinct_and_named() {
         Audit::new(audit_cfg()).unwrap().state(),
         Glm::new(glm_cfg()).unwrap().state(),
         Hawkes::new(hawkes_cfg()).unwrap().state(),
+        Garch::new(garch_cfg()).unwrap().state(),
     ];
     let from_states: Vec<&str> = states.iter().map(|s| s.model.kind()).collect();
     assert_eq!(from_states, kinds);
@@ -896,6 +900,7 @@ fn one_state_of_each_kind() -> Vec<State> {
         Audit::new(audit_cfg()).unwrap().state(),
         Glm::new(glm_cfg()).unwrap().state(),
         Hawkes::new(hawkes_cfg()).unwrap().state(),
+        Garch::new(garch_cfg()).unwrap().state(),
         State::new(ModelState::EwCov(Box::new(EwCov::new(1)))),
     ]
 }
@@ -1011,6 +1016,8 @@ fn every_model_hands_back_its_configuration() {
     same(Glm::new(c.clone()).unwrap(), &c, Glm::cfg);
     let c = hawkes_cfg();
     same(Hawkes::new(c.clone()).unwrap(), &c, Hawkes::cfg);
+    let c = garch_cfg();
+    same(Garch::new(c.clone()).unwrap(), &c, Garch::cfg);
 }
 
 fn ew_class_cfg() -> EwClassCfg {
@@ -1831,6 +1838,12 @@ fn every_model_refuses_at_restore_a_configuration_its_new_refuses() {
         ),
         refused(Glm::new(glm_cfg()).unwrap(), "decay", zero(), h),
         refused(Hawkes::new(hawkes_cfg()).unwrap(), "decay", zero(), h),
+        refused(
+            Garch::new(garch_cfg()).unwrap(),
+            "horizon",
+            0.into(),
+            "horizon must be at least 1",
+        ),
     ];
     // Every model's `restore`: the twenty-one kinds, `robust` under both
     // losses.
@@ -2245,6 +2258,7 @@ fn exactly_the_scheduled_solvers_report_a_solve_share() {
         ("audit", share(Audit::new(audit_cfg()).unwrap())),
         ("glm", share(Glm::new(glm_cfg()).unwrap())),
         ("hawkes", share(Hawkes::new(hawkes_cfg()).unwrap())),
+        ("garch", share(Garch::new(garch_cfg()).unwrap())),
     ];
     let reporting: Vec<&str> = shares
         .iter()
@@ -2291,6 +2305,7 @@ const PROBED: &[(&str, &str)] = &[
     ("Audit", "audit"),
     ("Glm", "glm"),
     ("Hawkes", "hawkes"),
+    ("Garch", "garch"),
 ];
 
 #[test]
@@ -4782,6 +4797,98 @@ fn hawkes() {
     assert_eq!(r.before_gap, 13.0);
     assert_eq!(r.after_gap, 1.0, "the gap emptied the window");
     assert!(r.roundtrips);
+}
+
+/// One series after a start of 50 rows, with a forecast three rows ahead;
+/// a cap too small to double the start, so the stream reports from its 51st
+/// learned row.
+fn garch_cfg() -> GarchCfg {
+    GarchCfg {
+        n_targets: 1,
+        vol: GarchVol::Garch,
+        dist: GarchDist::Normal,
+        truncation: None,
+        variance_targeting: false,
+        start_rows: 50,
+        start_span: None,
+        horizon: 3,
+        min_weight: 0.0,
+        max_state_bytes: Some(1700),
+    }
+}
+
+#[test]
+fn garch() {
+    // A variance per target, no features: the variance, the standardized
+    // residual and the forecast a target, and `n_eff` every learned row's
+    // weight, summed (no decay: the recursion is per observation).
+    let m = Garch::new(garch_cfg()).unwrap();
+    assert_eq!(m.n_features(), 0, "garch reads no features");
+    let r = probe_with(m, 1, Some(&Garch::n_eff));
+    assert_eq!(r.kind, "garch");
+    assert_eq!(r.n_targets, 1);
+    assert_eq!(r.n_outputs, 3);
+    assert_eq!(r.pred_len, 3);
+    assert!(r.roundtrips);
+    for (vol, dist) in [
+        (GarchVol::Gjr, GarchDist::T),
+        (GarchVol::Garch, GarchDist::Skewt),
+        (GarchVol::Egarch, GarchDist::Normal),
+        (GarchVol::Figarch, GarchDist::Normal),
+    ] {
+        let c = GarchCfg {
+            vol,
+            dist,
+            horizon: if vol == GarchVol::Egarch { 1 } else { 3 },
+            truncation: (vol == GarchVol::Figarch).then_some(30),
+            start_rows: if vol == GarchVol::Figarch { 2000 } else { 50 },
+            n_targets: 2,
+            max_state_bytes: None,
+            ..garch_cfg()
+        };
+        let r = probe_with(Garch::new(c).unwrap(), 2, Some(&Garch::n_eff));
+        assert!(r.roundtrips, "{vol:?} {dist:?}");
+    }
+}
+
+#[test]
+fn garch_predict_is_the_step() {
+    predict_is_the_step_without_the_step(|| Garch::new(garch_cfg()).unwrap(), 1, false);
+    predict_is_the_step_without_the_step(
+        || {
+            Garch::new(GarchCfg {
+                vol: GarchVol::Gjr,
+                dist: GarchDist::T,
+                ..garch_cfg()
+            })
+            .unwrap()
+        },
+        1,
+        false,
+    );
+    predict_is_the_step_without_the_step(
+        || {
+            Garch::new(GarchCfg {
+                vol: GarchVol::Egarch,
+                horizon: 1,
+                ..garch_cfg()
+            })
+            .unwrap()
+        },
+        1,
+        false,
+    );
+    predict_is_the_step_without_the_step(
+        || {
+            Garch::new(GarchCfg {
+                variance_targeting: true,
+                ..garch_cfg()
+            })
+            .unwrap()
+        },
+        1,
+        false,
+    );
 }
 
 #[test]

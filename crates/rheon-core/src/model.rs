@@ -88,6 +88,7 @@ pub enum ModelState {
     Audit(Box<crate::Audit>),
     Glm(Box<crate::Glm>),
     Hawkes(Box<crate::Hawkes>),
+    Garch(Box<crate::Garch>),
 }
 
 #[derive(Debug, Error)]
@@ -208,6 +209,7 @@ impl ModelState {
             ModelState::Audit(_) => "audit",
             ModelState::Glm(_) => "glm",
             ModelState::Hawkes(_) => "hawkes",
+            ModelState::Garch(_) => "garch",
         }
     }
 }

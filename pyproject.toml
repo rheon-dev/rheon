@@ -228,6 +228,13 @@ dev = [
     "tick>=0.8.0.2",
     "numpydoc>=1.9.0",
     "six>=1.17.0",
+    # tests/test_second_opinion_garch.py: arch's batch fits (GARCH, GJR,
+    # EGARCH and FIGARCH; normal, Student-t and skew-t) are the oracle for
+    # `garch`'s variance filter at fixed parameters and for its online
+    # estimator over seeds, and arch's own `GARCH` subclassed to a
+    # targeted `omega` for the variance-targeted form. NCSA. The floor is
+    # the version measured.
+    "arch>=9.0.0",
 ]
 # The API reference: Sphinx over the docstrings, which are written in its
 # dialect (``:class:`` roles, ``::`` literal blocks). Its own group, so a

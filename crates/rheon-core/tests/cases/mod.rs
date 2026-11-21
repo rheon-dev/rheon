@@ -2202,7 +2202,110 @@ pub fn all() -> Vec<Case> {
             targets: Targets::Linear(2),
             before: 45,
         },
+        // Saved within its start: two series' buffers.
+        case!(
+            "garch",
+            "Garch",
+            Garch,
+            Garch::new(garch_cfg(GarchVol::Garch, GarchDist::Normal)).unwrap(),
+            0,
+            Targets::Linear(2),
+            40
+        ),
+        // Saved after the start: the parameters, the information matrix,
+        // the lags and their sensitivity, the running mean square.
+        case!(
+            "garch_started",
+            "Garch",
+            Garch,
+            Garch::new(garch_cfg(GarchVol::Garch, GarchDist::Normal)).unwrap(),
+            0,
+            Targets::Linear(2),
+            300
+        ),
+        // Variance targeting: the Huber score's centring and slope.
+        case!(
+            "garch_targeted",
+            "Garch",
+            Garch,
+            Garch::new(GarchCfg {
+                variance_targeting: true,
+                ..garch_cfg(GarchVol::Garch, GarchDist::Normal)
+            })
+            .unwrap(),
+            0,
+            Targets::Linear(2),
+            300
+        ),
+        // A GARCH with a skewed t: the shape beside the process.
+        case!(
+            "garch_skewt",
+            "Garch",
+            Garch,
+            Garch::new(garch_cfg(GarchVol::Garch, GarchDist::Skewt)).unwrap(),
+            0,
+            Targets::Linear(2),
+            300
+        ),
+        // An EGARCH: its `z` and `ln s` lags, the variance bounds' mean,
+        // and the running invertibility.
+        case!(
+            "garch_egarch",
+            "Garch",
+            Garch,
+            Garch::new(garch_cfg(GarchVol::Egarch, GarchDist::Normal)).unwrap(),
+            0,
+            Targets::Linear(2),
+            300
+        ),
+        // A FIGARCH of 20 lags: its ring of squared residuals.
+        case!(
+            "garch_figarch",
+            "Garch",
+            Garch,
+            Garch::new(GarchCfg {
+                truncation: Some(20),
+                start_rows: 2000,
+                // too small a cap to double its start: the fixture stays short
+                max_state_bytes: Some(90_000),
+                ..garch_cfg(GarchVol::Figarch, GarchDist::Normal)
+            })
+            .unwrap(),
+            0,
+            Targets::Linear(2),
+            2700
+        ),
+        // A start of a clock span, saved within it: the first row's stamp
+        // (the targets join at the fifth row, so it is not the clock's 0).
+        case!(
+            "garch_span",
+            "Garch",
+            Garch,
+            Garch::new(GarchCfg {
+                start_span: Some(80.0),
+                ..garch_cfg(GarchVol::Garch, GarchDist::T)
+            })
+            .unwrap(),
+            0,
+            Targets::Linear(2),
+            40
+        ),
     ]
+}
+
+fn garch_cfg(vol: GarchVol, dist: GarchDist) -> GarchCfg {
+    GarchCfg {
+        n_targets: 2,
+        vol,
+        dist,
+        truncation: None,
+        variance_targeting: false,
+        start_rows: 50,
+        start_span: None,
+        horizon: if vol == GarchVol::Egarch { 1 } else { 3 },
+        min_weight: 0.0,
+        max_state_bytes: None,
+    }
 }
 
 fn hawkes_cfg(window_events: Option<usize>) -> HawkesCfg {

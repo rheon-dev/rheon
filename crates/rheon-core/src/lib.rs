@@ -84,6 +84,7 @@ mod ewridge;
 mod family;
 mod ftrl;
 mod gaps;
+mod garch;
 mod glm;
 /// Fits read off an exported Gram, offline (docs/PLAN.md tasks 226-227).
 pub mod gramfit;
@@ -165,6 +166,10 @@ pub use ewridge::{EwRidge, EwRidgeCfg};
 pub use family::{ETA_CLIP, Family, GlmFamily, GlmLink, Working};
 pub use ftrl::{Ftrl, FtrlCfg, FtrlLoss};
 pub use gaps::{GramPart, TargetGaps};
+pub use garch::{
+    FIGARCH_TRUNCATION, GARCH_MAX_STATE_BYTES, GARCH_STATE_BYTES_CEILING, Garch, GarchCfg,
+    GarchDist, GarchVol, MIN_START_ROWS as GARCH_MIN_START_ROWS,
+};
 pub use glm::{
     DEFAULT_GLM_REFIT_ROWS, GLM_GROUP_REFIT_CAP, GLM_REFIT_PASSES, Glm, GlmCfg,
     default_glm_refit_rows, default_glm_step_cap,

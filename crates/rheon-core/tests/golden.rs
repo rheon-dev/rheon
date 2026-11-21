@@ -825,6 +825,83 @@ fn hawkes_golden() {
     check("hawkes_window", &got, GOLDEN_HAWKES_WINDOW);
 }
 
+/// `garch` on the stream run over and over (its start buffers 50 rows,
+/// FIGARCH's 2,000, so the 60 alone would leave it a few): the variance,
+/// the standardized residual and the forecast on three rows after the
+/// start, then the fit at the end. Each with a cap too small to double its
+/// start. The start's optimizer, the step, its projection in `H`'s metric
+/// and the process's own arithmetic move every one.
+fn garch_signature(vol: GarchVol, dist: GarchDist, targeting: bool) -> Vec<f64> {
+    let fig = vol == GarchVol::Figarch;
+    let mut m = Garch::new(GarchCfg {
+        n_targets: 1,
+        vol,
+        dist,
+        truncation: fig.then_some(20),
+        variance_targeting: targeting,
+        start_rows: if fig { 2000 } else { 50 },
+        start_span: None,
+        horizon: if vol == GarchVol::Egarch { 1 } else { 4 },
+        min_weight: 0.0,
+        max_state_bytes: Some(if fig { 40_000 } else { 1700 }),
+    })
+    .unwrap();
+    let rows = stream();
+    let n = if fig { 2700 } else { 180 };
+    let mut got = Vec::new();
+    for i in 0..n {
+        let (_, y, d, w) = rows[i % 60];
+        let step = m.step(&[], &y, d, w);
+        if [n - 110, n - 50, n - 1].contains(&i) {
+            got.extend(&step.pred);
+        }
+    }
+    got.extend(&m.coefficients()[0]);
+    got
+}
+
+/// The free GARCH(1,1).
+#[test]
+fn garch_golden() {
+    let got = garch_signature(GarchVol::Garch, GarchDist::Normal, false);
+    check("garch", &got, GOLDEN_GARCH);
+}
+
+/// The variance-targeted GARCH(1,1) and its Huber score.
+#[test]
+fn garch_targeted_golden() {
+    let got = garch_signature(GarchVol::Garch, GarchDist::Normal, true);
+    check("garch_targeted", &got, GOLDEN_GARCH_TARGETED);
+}
+
+/// A GJR with a Student t: the shape's step and the Schur metric.
+#[test]
+fn garch_gjr_t_golden() {
+    let got = garch_signature(GarchVol::Gjr, GarchDist::T, false);
+    check("garch_gjr_t", &got, GOLDEN_GARCH_GJR_T);
+}
+
+/// A GARCH with a skewed t.
+#[test]
+fn garch_skewt_golden() {
+    let got = garch_signature(GarchVol::Garch, GarchDist::Skewt, false);
+    check("garch_skewt", &got, GOLDEN_GARCH_SKEWT);
+}
+
+/// An EGARCH: its bounds and its invertibility guard.
+#[test]
+fn garch_egarch_golden() {
+    let got = garch_signature(GarchVol::Egarch, GarchDist::Normal, false);
+    check("garch_egarch", &got, GOLDEN_GARCH_EGARCH);
+}
+
+/// A FIGARCH of 20 lags after a start of 2,000 rows.
+#[test]
+fn garch_figarch_golden() {
+    let got = garch_signature(GarchVol::Figarch, GarchDist::Normal, false);
+    check("garch_figarch", &got, GOLDEN_GARCH_FIGARCH);
+}
+
 /// The pre-averaged estimate on the same stream: the other arithmetic.
 #[test]
 fn rcov_preavg_golden() {
@@ -2043,3 +2120,90 @@ const GOLDEN_MICRO_CLOCK: &[f64] = &[0.3004267420269594, 0.8769688913202294, 1.4
 const GOLDEN_MICRO_FLOOR: &[f64] = &[0.3004267420269594, 1.161118351411367, 0.8126582237424175];
 const GOLDEN_RCOV_PREAVG_PSD: &[f64] =
     &[11.307541539663788, -0.7389071190718174, 18.691806669414845];
+const GOLDEN_GARCH: &[f64] = &[
+    1.2108998802068602,
+    -0.47785740288782463,
+    1.2120885356982583,
+    1.212881609358623,
+    -0.4774668573167028,
+    1.2142919536890726,
+    1.2122601339010206,
+    -0.1346433457628595,
+    1.215023369448347,
+    1.140525065313368,
+    0.008633024030424888,
+    0.05212194327608843,
+];
+const GOLDEN_GARCH_TARGETED: &[f64] = &[
+    1.1117541656092444,
+    -0.4987099737962726,
+    1.1117064674442008,
+    1.1263210268610877,
+    -0.49547453710131417,
+    1.126298401302637,
+    1.1499536511966575,
+    -0.1382428371782492,
+    1.152823328312314,
+    1.131675265072415,
+    0.010115653704239613,
+    1.117672555172954e-18,
+];
+const GOLDEN_GARCH_GJR_T: &[f64] = &[
+    1.3440985440375537,
+    -0.4535622292768683,
+    1.6250756088191292,
+    1.4622740480348795,
+    -0.4348485741277296,
+    1.563119303285428,
+    1.3258174237423437,
+    -0.1287481346319567,
+    1.3360158620832077,
+    0.4931758931590168,
+    0.07903029035596922,
+    -0.06584522130067458,
+    0.5837856386352136,
+    4.371078462411805,
+];
+const GOLDEN_GARCH_SKEWT: &[f64] = &[
+    1.157436110003169,
+    -0.4887693034818385,
+    1.1493938060357132,
+    1.1575081905382825,
+    -0.48875408488480365,
+    1.15468199241209,
+    1.1554981937379303,
+    -0.13791076613134423,
+    1.1570973720966085,
+    1.1494165876436917,
+    0.0065193892017016315,
+    0.0,
+    157.86304931771843,
+    0.22802612444383585,
+];
+const GOLDEN_GARCH_EGARCH: &[f64] = &[
+    1.2168020481707231,
+    -0.4766970567574661,
+    1.1885899846010064,
+    -0.4823212576800497,
+    1.2029814959012277,
+    -0.13516160274670505,
+    0.14314124054795183,
+    0.031119759428991985,
+    -0.0018350926870580658,
+    0.2272917204422058,
+];
+const GOLDEN_GARCH_FIGARCH: &[f64] = &[
+    1.1435675635018685,
+    -0.49172413194548387,
+    1.1435703217368482,
+    1.143423850652333,
+    -0.49175503249728425,
+    1.1434277584347905,
+    1.144253004293067,
+    -0.1385867709473622,
+    1.1445351483908612,
+    0.6058692416900168,
+    0.4703691616694057,
+    7.253076774657642e-19,
+    0.4695558273481083,
+];
