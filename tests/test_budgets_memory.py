@@ -305,6 +305,20 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         dict(columns=["x0", "x1", "y"], group="g", pairs=True, clock="t", gap_cap=6.0),
         [],
     ),
+    (
+        "hawkes",
+        "hawkes",
+        dict(
+            targets=["y", "z"],
+            kernel_decays=[0.5, 2.0],
+            group="g",
+            half_life=25.0,
+            coef_every=0,
+            emit_clocks=True,
+            **CLOCK,
+        ),
+        [],
+    ),
 ]
 
 

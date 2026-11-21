@@ -212,6 +212,16 @@ dev = [
     # `numba.njit`. hfhd already pulls numba in; it is named here because the
     # test imports it. BSD-2-Clause. The floor is the version measured.
     "numba>=0.68.1",
+    # tests/test_second_opinion_hawkes.py: tick's least-squares Hawkes models
+    # (`ModelHawkesSumExpKernLeastSq`, `ModelHawkesExpKernLeastSq`) are the
+    # oracle for `hawkes`' contrast and its minimiser. BSD-3-Clause, wheels
+    # for CPython 3.11 to 3.14 on every platform this repo builds on. It
+    # imports numpydoc (its attribute registry is read from docstrings) and
+    # six (its learners' prox) without declaring them, so both are named
+    # here. The floors are the versions measured.
+    "tick>=0.8.0.2",
+    "numpydoc>=1.9.0",
+    "six>=1.17.0",
 ]
 # The API reference: Sphinx over the docstrings, which are written in its
 # dialect (``:class:`` roles, ``::`` literal blocks). Its own group, so a

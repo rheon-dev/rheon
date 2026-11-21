@@ -79,6 +79,7 @@ MINIMAL: dict[str, dict[str, object]] = {
         "block_rows": 100,
     },
     "audit": {"targets": None, "features": None, "half_life": None, "columns": ["x0", "x1"]},
+    "hawkes": {"features": None, "kernel_decays": [1.0, 5.0]},
 }
 
 #: The sweeps fit a numeric target, so the models that predict none --
@@ -87,7 +88,8 @@ MINIMAL: dict[str, dict[str, object]] = {
 #: moments, read from the state), ``deco`` (an equicorrelation), ``rcov``
 #: (a block's realised covariance, read at the group's close), ``hmm`` (a
 #: hidden state), ``corrchange`` (a test statistic), ``bocpd`` (a posterior
-#: over run lengths), ``audit`` (counts, read from the state) -- sit them out.
+#: over run lengths), ``audit`` (counts, read from the state), ``hawkes`` (an
+#: intensity of events, not a target's value) -- sit them out.
 REGRESSIONS = frozenset(MINIMAL) - {
     "ew_cov",
     "kmeans",
@@ -101,6 +103,7 @@ REGRESSIONS = frozenset(MINIMAL) - {
     "corrchange",
     "bocpd",
     "audit",
+    "hawkes",
 }
 
 
@@ -271,6 +274,7 @@ DIAGNOSTIC_READS: dict[str, set[str]] = {
             "hmm",
             "rcov",
             "audit",
+            "hawkes",
         )
     },
 }

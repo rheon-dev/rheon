@@ -21,6 +21,7 @@ TIER = "mixed"
 # Every model with a spec builder: what the parametrised test below covers.
 BUILDERS = [
     "audit",
+    "hawkes",
     "bocpd",
     "corrchange",
     "deco",

@@ -376,6 +376,14 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         dict(columns=["x0", "x1", "y"], group="g", pairs=True, clock="t", gap_cap=6.0),
         [],
     ),
+    # Each row where `y` is above 0 an event of that mark; the zero weights
+    # learn none of theirs.
+    (
+        "hawkes",
+        "hawkes",
+        dict(targets=["y"], kernel_decays=[0.5, 2.0], group="g", half_life=25.0, **CLOCK),
+        [],
+    ),
 ]
 
 #: The switches and paths the workload above never reached (review round 9,

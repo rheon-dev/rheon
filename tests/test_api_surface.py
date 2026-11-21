@@ -309,6 +309,7 @@ def describe_api(cli: Path | None = None) -> str:
         ),
         ("deco", dict(features=["x0", "x1", "x2"], half_life=100.0)),
         ("audit", dict(columns=["x0", "x1"], pairs=True)),
+        ("hawkes", dict(targets=["y", "z"], kernel_decays=[1.0, 5.0], half_life=100.0)),
         (
             "deco blocked",
             dict(
@@ -401,6 +402,7 @@ RESOLVED_VARIANTS: list[tuple[str, dict[str, object]]] = [
     ("corrchange", {"kind": "sequential"}),
     ("rcov", {"kind": "preavg"}),
     ("bocpd", {"robust_beta": 0.1}),
+    ("hawkes", {"half_life": float("inf"), "window_events": 20}),
 ]
 
 
