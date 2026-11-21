@@ -353,6 +353,42 @@ const MOVED: &[(&str, f64)] = &[
     ("corrchange_window", 0.25),
 ];
 
+/// The [`MOVED`] cases whose bound covers only some numbers, each with the
+/// output slots and the state keys it covers; every other number of the
+/// case is held as an unmoved case's is (review S5: `corrchange_window`'s
+/// 0.25, justified for the permutation critical value alone, covered every
+/// float of the converted state and every slot of the continuation, so a
+/// loader that mis-scaled the weight passed).
+///
+/// - `corrchange_window`: `crit`, slot 1 of `stat`, `crit`, `flag`,
+///   `since_flag`, `since_change`, and the state's `perm_crit`, both the
+///   draws'; the statistic, the flag, the counts, the weight and the rest
+///   of the state continue as an unmoved case's do.
+const MOVED_ONLY: &[(&str, std::ops::Range<usize>, &[&str])] =
+    &[("corrchange_window", 1..2, &["perm_crit"])];
+
+/// A [`MOVED`] case's bound at the state's field `path` (as
+/// [`same_but_floats`] names it): the whole bound, or under
+/// [`MOVED_ONLY`] the bound on its keys and 0 elsewhere.
+fn moved_bound_at(name: &str, bound: f64, path: &str) -> f64 {
+    match MOVED_ONLY.iter().find(|(n, _, _)| *n == name) {
+        None => bound,
+        Some((_, _, keys)) => {
+            let last = path.rsplit('.').next().unwrap_or(path).trim_matches('"');
+            if keys.contains(&last) { bound } else { 0.0 }
+        }
+    }
+}
+
+/// A [`MOVED`] case's bound at output slot `n`: the whole bound, or under
+/// [`MOVED_ONLY`] the bound on its slots and `base` elsewhere.
+fn moved_slot_bound(name: &str, bound: f64, base: f64, n: usize) -> f64 {
+    match MOVED_ONLY.iter().find(|(c, _, _)| *c == name) {
+        Some((_, slots, _)) if !slots.contains(&n) => base,
+        _ => base.max(bound),
+    }
+}
+
 /// The cases whose state converts exactly but whose continuation a later
 /// change moved, each with how far it may part from a previous set's
 /// frozen one by [`agree`]'s measure: unlike a [`MOVED`] case, its
@@ -873,12 +909,13 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                 // above, so a windowed case is not held field for field.
                 if let Some(bound) = moved.filter(|_| !windowed) {
                     let decode = |b: &[u8]| rmpv::decode::read_value(&mut &b[..]).unwrap();
+                    let at = |path: &str| moved_bound_at(f.name, bound, path);
                     if renumbered.is_some() {
                         // A schema-65 window's count is the ring's length
                         // ([`RENUMBERED`]), and its floats are within the bound.
-                        renumbered_rule(&case, &saved, &current.bytes(), bound, &what);
+                        renumbered_rule(&case, &saved, &current.bytes(), &at, &what);
                     } else {
-                        same_but_floats(&decode(&saved), &decode(&current.bytes()), bound, &what);
+                        same_but_floats(&decode(&saved), &decode(&current.bytes()), &at, &what);
                     }
                 }
             } else if read_anew.is_some() {
@@ -893,7 +930,7 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                 );
             } else if renumbered.is_some() {
                 assert_eq!(schema, 65, "{what}: RENUMBERED is for schema 65's windows");
-                renumbered_rule(&case, &named(&m.state()), &current.bytes(), 0.0, &what);
+                renumbered_rule(&case, &named(&m.state()), &current.bytes(), &|_| 0.0, &what);
             } else {
                 assert!(
                     named(&m.state()) == current.bytes(),
@@ -931,8 +968,8 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                 } else {
                     tol
                 };
-                let tol = moved.map_or(tol, |b| tol.max(b));
-                let tol = read_anew.map_or(tol, |b| tol.max(b));
+                let base = read_anew.map_or(tol, |b| tol.max(b));
+                let tol = moved.map_or(base, |b| base.max(b));
                 let got = m.step(row);
                 if under_prior {
                     // `weight_sum` to the bit, and a number wherever the
@@ -955,9 +992,14 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                     &format!("{what}, row {i} after the save"),
                     &got,
                     &want,
-                    |n| match &within {
-                        Some((b, slots)) if slots.contains(&n) => tol.max(*b),
-                        _ => tol,
+                    |n| {
+                        // A moved case's bound on the slots it covers
+                        // ([`MOVED_ONLY`]), the unmoved tolerance elsewhere.
+                        let tol = moved.map_or(tol, |b| moved_slot_bound(f.name, b, base, n));
+                        match &within {
+                            Some((b, slots)) if slots.contains(&n) => tol.max(*b),
+                            _ => tol,
+                        }
                     },
                 );
             }
@@ -1041,7 +1083,13 @@ fn kept_scale_rule(case: &Case, kept: &rmpv::Value, saved: &[u8], what: &str) {
 /// fixture's, `current`, exactly -- each float within `bound` of its twin
 /// by [`agree`]'s measure, 0 for the bit -- and the state saves bytes that
 /// load back to the same.
-fn renumbered_rule(case: &Case, saved: &[u8], current: &[u8], bound: f64, what: &str) {
+fn renumbered_rule(
+    case: &Case,
+    saved: &[u8],
+    current: &[u8],
+    bound: &dyn Fn(&str) -> f64,
+    what: &str,
+) {
     let decode = |b: &[u8]| rmpv::decode::read_value(&mut &b[..]).unwrap();
     let (got, want) = (decode(saved), decode(current));
     let model = ["model", "CorrChange"];
@@ -1061,7 +1109,12 @@ fn renumbered_rule(case: &Case, saved: &[u8], current: &[u8], bound: f64, what: 
         "{what}: the current fixture's ring has taken no more rows than it holds"
     );
     // The count aside, the converted state is the current one's.
-    fn same_but_count(got: &rmpv::Value, want: &rmpv::Value, bound: f64, what: &str) {
+    fn same_but_count(
+        got: &rmpv::Value,
+        want: &rmpv::Value,
+        bound: &dyn Fn(&str) -> f64,
+        what: &str,
+    ) {
         use rmpv::Value as V;
         match (got, want) {
             (V::Map(g), V::Map(w)) => {
@@ -1080,7 +1133,11 @@ fn renumbered_rule(case: &Case, saved: &[u8], current: &[u8], bound: f64, what: 
                 }
             }
             (V::F64(g), V::F64(w)) => {
-                assert!(agree(*g, *w, bound), "{what}: {g:e} against {w:e}");
+                let b = bound(what);
+                assert!(
+                    agree(*g, *w, b),
+                    "{what}: {g:e} against {w:e} (bound {b:e})"
+                );
             }
             _ => assert_eq!(got, want, "{what}"),
         }
@@ -1097,7 +1154,7 @@ fn renumbered_rule(case: &Case, saved: &[u8], current: &[u8], bound: f64, what: 
 /// the same array lengths, every value but a float equal -- and each float
 /// within `bound` of its twin by [`agree`]'s measure: a [`MOVED`] case's
 /// converted state beside the current fixture's.
-fn same_but_floats(got: &rmpv::Value, want: &rmpv::Value, bound: f64, what: &str) {
+fn same_but_floats(got: &rmpv::Value, want: &rmpv::Value, bound: &dyn Fn(&str) -> f64, what: &str) {
     use rmpv::Value as V;
     match (got, want) {
         (V::Map(g), V::Map(w)) => {
@@ -1114,7 +1171,11 @@ fn same_but_floats(got: &rmpv::Value, want: &rmpv::Value, bound: f64, what: &str
             }
         }
         (V::F64(g), V::F64(w)) => {
-            assert!(agree(*g, *w, bound), "{what}: {g:e} against {w:e}");
+            let b = bound(what);
+            assert!(
+                agree(*g, *w, b),
+                "{what}: {g:e} against {w:e} (bound {b:e})"
+            );
         }
         _ => assert_eq!(got, want, "{what}"),
     }
