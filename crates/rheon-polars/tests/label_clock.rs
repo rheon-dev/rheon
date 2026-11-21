@@ -462,8 +462,8 @@ fn doubled(df: &DataFrame) -> (DataFrame, Vec<(usize, usize)>) {
         .collect();
     // (time, row, 1 for a scored copy and 2 for a learned one)
     let mut events: Vec<(i64, usize, u8)> = (0..df.height()).map(|i| (t[i], i, 1)).collect();
-    for i in 0..df.height() {
-        if let Some(a) = avail[i] {
+    for (i, a) in avail.iter().enumerate() {
+        if let Some(a) = *a {
             events.push((a, i, 2));
         }
     }

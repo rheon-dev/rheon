@@ -1925,10 +1925,13 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
 /// ([`held_zero_weight_rule`]). Its continuation is not its frozen one, nor
 /// the current fixture's, and the state it re-saves is neither file's: it
 /// loads back the same. `labelled_ts`, unweighted, is unaffected.
-const HELD_ZERO_WEIGHT: &[(&str, fn() -> Vec<Spec>)] = &[
+const HELD_ZERO_WEIGHT: &[(&str, SpecsOf)] = &[
     ("bank_label_clock", label_specs),
     ("bank_conformal_auto", auto_specs),
 ];
+
+/// A kind's specs, as its `first` builds its bank.
+type SpecsOf = fn() -> Vec<Spec>;
 
 /// [`HELD_ZERO_WEIGHT`]'s rule for the kept fixture `f` of `kind`, whose
 /// banks `specs` builds: the kept state, loaded and continued, against its
@@ -1938,7 +1941,7 @@ const HELD_ZERO_WEIGHT: &[(&str, fn() -> Vec<Spec>)] = &[
 /// golden tolerance off the writer's platform), `labels_missing` aside,
 /// which the twin counts higher by the zero-weight rows it nulled; and the
 /// kept state's re-saved bytes load back the same.
-fn held_zero_weight_rule(kind: &Kind, f: &Fixture, specs: fn() -> Vec<Spec>, what: &str) {
+fn held_zero_weight_rule(kind: &Kind, f: &Fixture, specs: SpecsOf, what: &str) {
     let input = from_ipc(f.input);
     let (again, frames) =
         (kind.run)(&unhex(f.state), &input).unwrap_or_else(|e| panic!("{what}: {e}"));
