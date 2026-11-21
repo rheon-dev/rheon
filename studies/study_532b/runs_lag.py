@@ -76,8 +76,13 @@ def user_shift_chunked(df: pl.DataFrame) -> list[list]:
             c = pl.concat(carried)
             cp, cc = compare(p.to_list(), one), compare(c.to_list(), one)
             rows.append(
-                [k, chunks, cp["validity_diff"] + cp["bit_diff"], cc["validity_diff"] + cc["bit_diff"],
-                 tail.height]
+                [
+                    k,
+                    chunks,
+                    cp["validity_diff"] + cp["bit_diff"],
+                    cc["validity_diff"] + cc["bit_diff"],
+                    tail.height,
+                ]
             )
     return rows
 
@@ -97,8 +102,14 @@ def streaming_memory(sizes: tuple[int, ...] = (10_000_000, 20_000_000, 40_000_00
             row: list = [f"{n / 1e6:g}M"]
             for case in ("copy", "shift(1)", "shift(20)", "shift(1).over(g)", "shift(20).over(g)"):
                 r = subprocess.run(
-                    [sys.executable, "-m", "studies.study_532b.lag_memory", src, case,
-                     str(Path(d) / "out.parquet")],
+                    [
+                        sys.executable,
+                        "-m",
+                        "studies.study_532b.lag_memory",
+                        src,
+                        case,
+                        str(Path(d) / "out.parquet"),
+                    ],
                     check=True,
                     capture_output=True,
                     text=True,

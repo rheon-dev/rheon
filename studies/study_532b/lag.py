@@ -58,9 +58,7 @@ class Lag:
         self.seen, _ = struct.unpack_from("<II", data, 0)
         vals = struct.unpack_from(f"<{self.k}d", data, 8)
         bits = data[8 + 8 * self.k :]
-        self.ring = [
-            vals[j] if bits[j // 8] >> (j % 8) & 1 else None for j in range(self.k)
-        ]
+        self.ring = [vals[j] if bits[j // 8] >> (j % 8) & 1 else None for j in range(self.k)]
         self.pos = 0
 
     @staticmethod

@@ -13,9 +13,10 @@ import scipy
 from . import runs_bucket as rb
 from . import runs_ew as rew
 from . import runs_lag as rlag
-from .lag import Lag
+from . import runs_resume as rres
 from .bucket import Bucketed, BucketSpec
-from .common import make_frame
+from .common import make_frame, stream_values
+from .lag import Lag
 
 # (b, B): a span of 60 cut 60, 12 or 4 ways, and a span of 240 cut 12, 4 or 1 ways
 BUCKET_CONFIGS = ((1, 60), (5, 12), (15, 4), (20, 12), (60, 4), (240, 1))
@@ -80,14 +81,26 @@ def table_b1(n: int) -> None:
                 f"{r[s]['validity_diff']}/{r[s]['bit_diff']}/{r[s]['max_ulp']}" for s in rb.STATS
             ]
             rows.append(
-                ["yes" if nonfinite else "no", b, B, r["windows"], *cells,
-                 f"{r['empty_windows']} ({r['empty_polars_sum_nonzero']}, "
-                 f"{r['empty_polars_sum_maxabs']:.1e})"]
+                [
+                    "yes" if nonfinite else "no",
+                    b,
+                    B,
+                    r["windows"],
+                    *cells,
+                    f"{r['empty_windows']} ({r['empty_polars_sum_nonzero']}, "
+                    f"{r['empty_polars_sum_maxabs']:.1e})",
+                ]
             )
     print(
         md(
-            ["non-finite", "b", "B", "windows", *rb.STATS,
-             "windows with no value (Polars sum not 0, largest |sum|)"],
+            [
+                "non-finite",
+                "b",
+                "B",
+                "windows",
+                *rb.STATS,
+                "windows with no value (Polars sum not 0, largest |sum|)",
+            ],
             rows,
         )
     )
@@ -111,12 +124,23 @@ def table_b2(n: int) -> None:
         row = [b, B]
         for s in ("sum", "mean", "var"):
             o, p = r[s + "_ours_exact"], r[s + "_polars_exact"]
-            row += [f"{o['max_ulp']} ({o['median_ulp']:g})", f"{p['max_ulp']} ({p['median_ulp']:g})"]
+            row += [
+                f"{o['max_ulp']} ({o['median_ulp']:g})",
+                f"{p['max_ulp']} ({p['median_ulp']:g})",
+            ]
         rows.append(row)
     print(
         md(
-            ["b", "B", "sum: buckets", "sum: Polars", "mean: buckets", "mean: Polars",
-             "var: buckets", "var: Polars"],
+            [
+                "b",
+                "B",
+                "sum: buckets",
+                "sum: Polars",
+                "mean: buckets",
+                "mean: Polars",
+                "var: buckets",
+                "var: Polars",
+            ],
             rows,
         )
     )
@@ -126,8 +150,15 @@ def table_b2(n: int) -> None:
         r = rb.sumsq_vs_m2(make_frame(n, level=level), 20, 12)
         for form in ("m2", "sumsq"):
             c = r[form]
-            lv.append([f"{level:g}", "centred m2 (Chan merge)" if form == "m2" else "sum of squares",
-                       c["max_ulp"], f"{c['median_ulp']:g}", c["max_rel"]])
+            lv.append(
+                [
+                    f"{level:g}",
+                    "centred m2 (Chan merge)" if form == "m2" else "sum of squares",
+                    c["max_ulp"],
+                    f"{c['median_ulp']:g}",
+                    c["max_rel"],
+                ]
+            )
     print("The variance's two bucket forms against the exact value (b = 20, B = 12):\n")
     print(md(["level", "form", "max ulp", "median ulp", "max relative"], lv))
     print()
@@ -136,7 +167,7 @@ def table_b2(n: int) -> None:
 def table_b3(n: int) -> None:
     print(
         f"### Table B3: bucketed windows against `rolling_*_by(window_size = B b, "
-        f"closed = \"right\")` on the rows with `t mod b = b - 1` ({n} rows)\n"
+        f'closed = "right")` on the rows with `t mod b = b - 1` ({n} rows)\n'
     )
     print(
         "On these rows the B buckets are the span exactly. Cell: validity differences / "
@@ -147,8 +178,15 @@ def table_b3(n: int) -> None:
     for b, B in BUCKET_CONFIGS:
         r = rb.vs_rolling_aligned(df, b, B)
         rows.append(
-            [b, B, r["rows"],
-             *[f"{r[s]['validity_diff']}/{r[s]['bit_diff']}/{r[s]['max_ulp']}" for s in rb.STATS]]
+            [
+                b,
+                B,
+                r["rows"],
+                *[
+                    f"{r[s]['validity_diff']}/{r[s]['bit_diff']}/{r[s]['max_ulp']}"
+                    for s in rb.STATS
+                ],
+            ]
         )
     print(md(["b", "B", "rows", *rb.STATS], rows))
     print()
@@ -186,14 +224,39 @@ def table_b4(n: int) -> None:
                 if "min_differs" in x
                 else "-"
             )
-            rows.append([b, B, B * b, name, f"{pct:.1f}%", trip("count"), trip("mean"),
-                         trip("sd"), trip("min"), trip("max"), mm])
-        rows.append(["", "", "", "bracket violations", r["bracket_violations"], "", "", "", "",
-                     "", ""])
+            rows.append(
+                [
+                    b,
+                    B,
+                    B * b,
+                    name,
+                    f"{pct:.1f}%",
+                    trip("count"),
+                    trip("mean"),
+                    trip("sd"),
+                    trip("min"),
+                    trip("max"),
+                    mm,
+                ]
+            )
+        rows.append(
+            ["", "", "", "bracket violations", r["bracket_violations"], "", "", "", "", "", ""]
+        )
     print(
         md(
-            ["b", "B", "span", "read", "rows whose count differs", "count", "mean (sd units)",
-             "sd (relative)", "min (sd units)", "max (sd units)", "rows whose min / max differ"],
+            [
+                "b",
+                "B",
+                "span",
+                "read",
+                "rows whose count differs",
+                "count",
+                "mean (sd units)",
+                "sd (relative)",
+                "min (sd units)",
+                "max (sd units)",
+                "rows whose min / max differ",
+            ],
             rows,
         )
     )
@@ -210,11 +273,7 @@ def table_b5() -> None:
         "rows).\n"
     )
     rows = []
-    gs, ts, xs = [], [], []
-    df = make_frame(20000, groups=1)
-    from .common import stream_values
-
-    _, ts, xs = stream_values(df)
+    _, ts, xs = stream_values(make_frame(20000, groups=1))
     for B in (1, 4, 12, 60, 240):
         for keep in (False, True):
             spec = BucketSpec(width=5, buckets=B, keep_previous=keep)
@@ -230,8 +289,14 @@ def table_b5() -> None:
             rows.append(row)
     print(
         md(
-            ["B", "keeps bucket k-B (p)", "bytes, one column", "formula", "measured peak",
-             "10 columns, one shared id"],
+            [
+                "B",
+                "keeps bucket k-B (p)",
+                "bytes, one column",
+                "formula",
+                "measured peak",
+                "10 columns, one shared id",
+            ],
             rows,
         )
     )
@@ -264,10 +329,35 @@ def table_e1(n: int) -> None:
     b = rew.vs_polars(make_frame(n, nonfinite=True))
     rows = []
     for (name, r), (_, q) in zip(a, b, strict=True):
-        rows.append([name, r["valid"], r["validity_diff"], r["bit_diff"], r["max_ulp"],
-                     q["valid"], q["validity_diff"], q["bit_diff"], q["max_ulp"]])
-    print(md(["output", "valid", "validity diff", "bit diff", "max ulp",
-              "valid (non-finite)", "validity diff", "bit diff", "max ulp"], rows))
+        rows.append(
+            [
+                name,
+                r["valid"],
+                r["validity_diff"],
+                r["bit_diff"],
+                r["max_ulp"],
+                q["valid"],
+                q["validity_diff"],
+                q["bit_diff"],
+                q["max_ulp"],
+            ]
+        )
+    print(
+        md(
+            [
+                "output",
+                "valid",
+                "validity diff",
+                "bit diff",
+                "max ulp",
+                "valid (non-finite)",
+                "validity diff",
+                "bit diff",
+                "max ulp",
+            ],
+            rows,
+        )
+    )
     print()
 
 
@@ -281,8 +371,20 @@ def table_e2() -> None:
         "bytes (alpha carried), and with alpha recomputed by a libm that differs by "
         "one ulp, in alpha itself or in `exp(-ln 2 / hl)` (the libm result).\n"
     )
-    print(md(["feature", "saved bytes", "alpha carried", "alpha +1 ulp", "alpha -1 ulp",
-              "exp +1 ulp", "exp -1 ulp"], rew.carried_alpha()))
+    print(
+        md(
+            [
+                "feature",
+                "saved bytes",
+                "alpha carried",
+                "alpha +1 ulp",
+                "alpha -1 ulp",
+                "exp +1 ulp",
+                "exp -1 ulp",
+            ],
+            rew.carried_alpha(),
+        )
+    )
     print()
 
 
@@ -297,16 +399,34 @@ def table_e3() -> None:
         "mean gap to `rolling_min(w)`; the correlation of the max envelope with "
         "`rolling_max(w)`.\n"
     )
-    print(md(["series", "w", "half-life", "max: mean gap", "p5", "p95", "rows above",
-              "min: mean gap", "corr(max env, rolling_max)"], rew.envelope_bias()))
+    print(
+        md(
+            [
+                "series",
+                "w",
+                "half-life",
+                "max: mean gap",
+                "p5",
+                "p95",
+                "rows above",
+                "min: mean gap",
+                "corr(max env, rolling_max)",
+            ],
+            rew.envelope_bias(),
+        )
+    )
     print()
     print(
         "Cormode et al.'s decayed max `max(x, r y)` against `rolling_max(w)` (same "
         "units); the last column is the share of rows where it is just the current "
         "value:\n"
     )
-    print(md(["series", "w", "half-life", "mean gap", "p5", "p95", "rows equal to x"],
-             rew.decayed_max_rows()))
+    print(
+        md(
+            ["series", "w", "half-life", "mean gap", "p5", "p95", "rows equal to x"],
+            rew.decayed_max_rows(),
+        )
+    )
     print()
 
 
@@ -326,8 +446,20 @@ def table_l1(n: int) -> None:
     a = rlag.vs_polars(make_frame(n))
     b = rlag.vs_polars(make_frame(n, nonfinite=True))
     rows = [[*r, *q[1:]] for r, q in zip(a, b, strict=True)]
-    print(md(["output", "valid", "validity diff", "bit diff",
-              "valid (non-finite)", "validity diff", "bit diff"], rows))
+    print(
+        md(
+            [
+                "output",
+                "valid",
+                "validity diff",
+                "bit diff",
+                "valid (non-finite)",
+                "validity diff",
+                "bit diff",
+            ],
+            rows,
+        )
+    )
     print()
     print("### Table L2: lag state bytes, saved form\n")
     rows = []
@@ -336,10 +468,22 @@ def table_l1(n: int) -> None:
         st = Lag("shift", k)
         for x in range(1000):
             st.step(float(x))
-        rows.append([k, "8 + 8k + ceil(k/8)", f, len(st.to_bytes()), 8 * k,
-                     f"{f * 10 * 1000 / 1e6:.2f} MB"])
-    print(md(["k", "bytes (formula)", "formula", "measured", "lower bound 8k",
-              "10 columns x 1000 groups"], rows))
+        rows.append(
+            [k, "8 + 8k + ceil(k/8)", f, len(st.to_bytes()), 8 * k, f"{f * 10 * 1000 / 1e6:.2f} MB"]
+        )
+    print(
+        md(
+            [
+                "k",
+                "bytes (formula)",
+                "formula",
+                "measured",
+                "lower bound 8k",
+                "10 columns x 1000 groups",
+            ],
+            rows,
+        )
+    )
     print()
 
 
@@ -349,22 +493,36 @@ def table_l3(n: int, mem: bool) -> None:
         f"chunk by chunk ({n} rows, 5 groups)\n"
     )
     print(
-        "Rows that differ from one Polars pass of `shift(k).over(\"g\")`: each chunk "
+        'Rows that differ from one Polars pass of `shift(k).over("g")`: each chunk '
         "lagged alone, and each chunk lagged with the last k rows of each group carried "
         "from the chunks before (the user holds them, not the bank).\n"
     )
-    print(md(["k", "chunks", "rows wrong, no carry", "rows wrong, k rows carried",
-              "rows the user carries (k x groups)"], rlag.user_shift_chunked(make_frame(n))))
+    print(
+        md(
+            [
+                "k",
+                "chunks",
+                "rows wrong, no carry",
+                "rows wrong, k rows carried",
+                "rows the user carries (k x groups)",
+            ],
+            rlag.user_shift_chunked(make_frame(n)),
+        )
+    )
     print()
     if not mem:
         return
     print(
         "### Table L4: what Polars' streaming engine holds for a lag "
-        "(`scan_parquet(...).select(g, t, y = expr).sink_parquet(engine = \"streaming\")`, "
+        '(`scan_parquet(...).select(g, t, y = expr).sink_parquet(engine = "streaming")`, '
         "1000 groups, peak resident memory of the process)\n"
     )
-    print(md(["rows", "copy x", "shift(1)", "shift(20)", "shift(1).over(g)", "shift(20).over(g)"],
-             rlag.streaming_memory()))
+    print(
+        md(
+            ["rows", "copy x", "shift(1)", "shift(20)", "shift(1).over(g)", "shift(20).over(g)"],
+            rlag.streaming_memory(),
+        )
+    )
     print()
 
 
@@ -372,6 +530,63 @@ def part3(quick: bool) -> None:
     n = 6000 if quick else 20000
     table_l1(n)
     table_l3(n, mem=not quick)
+
+
+# ---------------------------------------------------------------------------
+# Part 4
+
+
+def table_r1(n: int) -> None:
+    print(
+        f"### Table R1: chunked, every state saved to bytes and loaded at every cut "
+        f"({n} rows, 5 groups)\n"
+    )
+    print(
+        "21 features: 3 bucketed windows (6 outputs each, 9 with the interpolated "
+        "read), 11 EW features, 3 envelopes, 4 lags. A cut saves every group's state "
+        "of every feature, drops it and loads it from the bytes; the EW states are "
+        "loaded into an object made with a wrong alpha (0.5), so the carried alpha "
+        "must be read back. Compared with the uncut stream (all 21, to the bit) and "
+        "with one Polars pass (the 11 EW features and 4 lags on every row; the "
+        "bucketed count, min and max on the rows where the buckets are the span "
+        "exactly).\n"
+    )
+    rows = []
+    for nonfinite in (False, True):
+        for r in rres.invariance(n, nonfinite):
+            rows.append(["NaN and infinities" if nonfinite else "nulls, zero weights", *r])
+    print(
+        md(
+            [
+                "frame",
+                "chunking",
+                "chunks",
+                "features",
+                "equal to the uncut stream",
+                "equal to Polars to the bit",
+                "seconds",
+            ],
+            rows,
+        )
+    )
+    print()
+
+
+def table_c1(quick: bool) -> None:
+    n_py, n_pl = (10_000, 200_000) if quick else (50_000, 1_000_000)
+    print(
+        f"### Table C1: cost per row (best of 3; the Python state machine over "
+        f"{n_py} rows of one group; Polars over {n_pl} rows of one group, the "
+        f"matching expression, or for the envelopes the nearest, `rolling_max(20)`; "
+        f"for the bucketed rows, the five `rolling_*_by` over the same span)\n"
+    )
+    print(md(["feature", "Python state, ns/row", "Polars, ns/row"], rres.cost(n_py, n_pl)))
+    print()
+
+
+def part4(quick: bool) -> None:
+    table_r1(2000 if quick else 5000)
+    table_c1(quick)
 
 
 def main(argv: list[str]) -> None:
@@ -386,4 +601,6 @@ def main(argv: list[str]) -> None:
         part2(quick)
     if "3" in want:
         part3(quick)
+    if "4" in want:
+        part4(quick)
     print(f"(all tables: {time.time() - t0:.0f} s)", file=sys.stderr)
