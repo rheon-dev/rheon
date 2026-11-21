@@ -23,7 +23,16 @@ no-op, and its scatter is 2 Y'Y = 2 C, so the components and the ratios are
 those of the weighted covariance C. scipy.linalg.eigh on np.cov(aweights=u) is
 the second oracle. No randomized solver is used anywhere.
 
-Run: uv run python scripts/study_505_502.py pca   (about 20 s)
+Part 2 (task 502): kernel recursive least squares with a capped dictionary
+(Engel, Mannor and Meir 2004, approximate linear dependence, with a ridge r),
+and the sliding-window KRLS. Oracles: sklearn KernelRidge on the dictionary
+atoms and on the window rows, and sklearn Nystroem(landmarks = the dictionary)
+then Ridge on every learned row (the subset-of-regressors fit KRLS runs).
+
+Run: uv run python scripts/study_505_502.py pca    (about 20 s)
+     uv run python scripts/study_505_502.py krls   (about 150 s; run with nohup)
+     uv run python scripts/study_505_502.py krls exact zero cost   (any subset of:
+         exact grid window zero numerics cost)
 """
 
 from __future__ import annotations
@@ -34,6 +43,9 @@ import time
 import numpy as np
 import scipy.linalg as sla
 from sklearn.decomposition import PCA, IncrementalPCA
+from sklearn.kernel_approximation import Nystroem
+from sklearn.kernel_ridge import KernelRidge
+from sklearn.linear_model import Ridge
 
 B = 200  # rows per block (cut on row counts, never on chunks)
 
@@ -518,9 +530,458 @@ def main_pca():
     print(f"\n(total {time.time() - t0:.1f} s)")
 
 
+# ==========================================================================
+# Part 2 (task 502): kernel recursive least squares
+# ==========================================================================
+
+R_RIDGE = 0.1  # the ridge r: KernelRidge(alpha=r), Ridge(alpha=r)
+NU = 1e-3  # the ALD threshold of the grid
+N_ROWS = 2000
+N_TEST = 500
+CAPS = (20, 50, 200)
+KDIMS = (2, 5)
+KERNELS = ("rbf", "poly")
+
+
+def kern(name: str, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """k(a_i, b_j), shape (len(a), len(b)); gamma = 1/k for both kernels.
+    rbf: exp(-gamma |x - y|^2).  poly: (gamma <x, y> + 1)^3 (scikit-learn's
+    'polynomial' with degree=3, coef0=1)."""
+    g = 1.0 / a.shape[1]
+    if name == "rbf":
+        d = ((a[:, None, :] - b[None, :, :]) ** 2).sum(-1)
+        return np.exp(-g * d)
+    return (g * (a @ b.T) + 1.0) ** 3
+
+
+def sk_kernel(name: str, k: int) -> dict:
+    if name == "rbf":
+        return {"kernel": "rbf", "gamma": 1.0 / k}
+    return {"kernel": "polynomial", "gamma": 1.0 / k, "degree": 3, "coef0": 1.0}
+
+
+def make_regression(seed: int, n: int, k: int):
+    """x ~ N(0, I_k); y = sin(1.5 x.u) + 0.3 (x.v)^2 + 0.1 eps, u and v seeded
+    unit vectors. The first n rows are the stream, the next N_TEST held out."""
+    rng = np.random.default_rng(500 + seed)
+    u = rng.standard_normal(k)
+    v = rng.standard_normal(k)
+    u /= np.linalg.norm(u)
+    v /= np.linalg.norm(v)
+    x = rng.standard_normal((n + N_TEST, k))
+    y = np.sin(1.5 * x @ u) + 0.3 * (x @ v) ** 2 + 0.1 * rng.standard_normal(n + N_TEST)
+    return x[:n], y[:n], x[n:], y[n:]
+
+
+class AldKrls:
+    """KRLS with an approximate-linear-dependence dictionary, a cap and a ridge.
+
+    State: D (m x k, the atoms), Kinv = K_D^-1 (m x m, for the ALD test),
+    P = (sum_s w_s kh_s kh_s' + r K_D)^-1 (m x m), alpha (m).  Per row x, y, w:
+        kv = k(D, x),  a = Kinv kv,  delta = k(x, x) - kv' a
+    admit when delta > nu and m < cap (the cap's rule: stop admitting, keep
+    learning every row on the frozen dictionary); admission extends
+        Kinv <- [[Kinv + a a'/delta, -a/delta], [-a'/delta, 1/delta]]
+        P    <- [[P + a a'/(r delta), -a/(r delta)], [-a'/(r delta), 1/(r delta)]]
+        alpha <- [alpha; 0],  kv <- [kv; k(x, x)]
+    (the past rows enter the new column by their projection on the old span);
+    then the weighted RLS step on the feature kv:
+        g = P kv / (1/w + kv' P kv),  alpha += g (y - kv' alpha),  P -= g (P kv)'.
+    w == 0 returns at once: no admission, no change.
+    atoms_only=True learns only from rows it admits (the KernelRidge-on-atoms
+    definition)."""
+
+    def __init__(self, kname: str, k: int, cap: int, nu: float, r: float, atoms_only=False):
+        self.kname, self.cap, self.nu, self.r = kname, cap, nu, r
+        self.atoms_only = atoms_only
+        self.d = np.zeros((0, k))
+        self.kinv = np.zeros((0, 0))
+        self.p = np.zeros((0, 0))
+        self.alpha = np.zeros(0)
+        self.admitted: list[int] = []
+        self.neg_delta = 0
+        self.min_delta_adm = np.inf
+
+    @staticmethod
+    def _grow(mat, a, s):
+        m = len(a)
+        out = np.empty((m + 1, m + 1))
+        out[:m, :m] = mat + np.outer(a, a) / s
+        out[:m, m] = -a / s
+        out[m, :m] = -a / s
+        out[m, m] = 1.0 / s
+        return out
+
+    def update(self, t: int, x: np.ndarray, y: float, w: float):
+        if w == 0.0:
+            return
+        xr = x[None, :]
+        kv = kern(self.kname, xr, self.d)[0]
+        knn = float(kern(self.kname, xr, xr)[0, 0])
+        a = self.kinv @ kv
+        delta = knn - kv @ a
+        if delta < 0.0:
+            self.neg_delta += 1
+        if delta > self.nu and len(self.d) < self.cap:
+            self.kinv = self._grow(self.kinv, a, delta)
+            self.p = self._grow(self.p, a, self.r * delta)
+            self.alpha = np.append(self.alpha, 0.0)
+            self.d = np.vstack([self.d, xr])
+            kv = np.append(kv, knn)
+            self.admitted.append(t)
+            self.min_delta_adm = min(self.min_delta_adm, delta)
+        elif self.atoms_only:
+            return
+        pk = self.p @ kv
+        g = pk / (1.0 / w + kv @ pk)
+        self.alpha = self.alpha + g * (y - kv @ self.alpha)
+        self.p = self.p - np.outer(g, pk)
+
+    def predict(self, x: np.ndarray) -> np.ndarray:
+        return kern(self.kname, x, self.d) @ self.alpha
+
+
+class WindowKrls:
+    """Sliding-window KRLS: every learned row of the last `width` rows is an
+    atom; Q = (K_W + c diag(1/w))^-1 over them.  Add (Schur complement
+    s = k(x, x) + c/w - kv' Q kv, qk = Q kv):
+        Q <- [[Q + qk qk'/s, -qk/s], [-qk'/s, 1/s]]
+    drop the oldest (e = Q_00, f = Q_1:,0):  Q <- Q_1:,1: - f f'/e.
+    alpha = Q y_W, so the fit is KernelRidge(alpha=c, sample_weight=w) on the
+    window rows by definition.  w == 0: the row only advances the clock (the
+    window is counted in rows), and is not an atom."""
+
+    def __init__(self, kname: str, k: int, width: int, c: float):
+        self.kname, self.width, self.c = kname, width, c
+        self.d = np.zeros((0, k))
+        self.y = np.zeros(0)
+        self.t = np.zeros(0, dtype=int)
+        self.q = np.zeros((0, 0))
+
+    def update(self, t: int, x: np.ndarray, y: float, w: float):
+        while len(self.t) and self.t[0] <= t - self.width:
+            e = self.q[0, 0]
+            f = self.q[1:, 0]
+            self.q = self.q[1:, 1:] - np.outer(f, f) / e
+            self.d, self.y, self.t = self.d[1:], self.y[1:], self.t[1:]
+        if w == 0.0:
+            return
+        xr = x[None, :]
+        kv = kern(self.kname, xr, self.d)[0]
+        knn = float(kern(self.kname, xr, xr)[0, 0])
+        qk = self.q @ kv
+        s = knn + self.c / w - kv @ qk
+        self.q = AldKrls._grow(self.q, qk, s)
+        self.d = np.vstack([self.d, xr])
+        self.y = np.append(self.y, y)
+        self.t = np.append(self.t, t)
+
+    def alpha(self) -> np.ndarray:
+        return self.q @ self.y
+
+    def predict(self, x: np.ndarray) -> np.ndarray:
+        return kern(self.kname, x, self.d) @ self.alpha()
+
+
+def run_ald(kname, x, y, w, cap, nu, r=R_RIDGE, atoms_only=False):
+    m = AldKrls(kname, x.shape[1], cap, nu, r, atoms_only)
+    for t in range(len(x)):
+        m.update(t, x[t], y[t], w[t])
+    return m
+
+
+def oracle_kr(kname, k, x, y, w, r=R_RIDGE):
+    keep = w > 0
+    return KernelRidge(alpha=r, **sk_kernel(kname, k)).fit(x[keep], y[keep], sample_weight=w[keep])
+
+
+def oracle_sor(kname, k, dic, x, y, w, r=R_RIDGE):
+    """Nystroem with every atom as a landmark (n_components = m, so its seeded
+    permutation only reorders them), then Ridge(alpha=r, no intercept) on every
+    learned row: min sum w (y - k(D, x)' alpha)^2 + r alpha' K_D alpha."""
+    keep = w > 0
+    ny = Nystroem(n_components=len(dic), random_state=0, **sk_kernel(kname, k)).fit(dic)
+    rd = Ridge(alpha=r, fit_intercept=False, solver="cholesky")
+    rd.fit(ny.transform(x[keep]), y[keep], sample_weight=w[keep])
+    return lambda z: rd.predict(ny.transform(z))
+
+
+def mse(a, b) -> float:
+    return float(np.mean((a - b) ** 2))
+
+
+def exp_krls_exact():
+    """Where the online fit and a library fit are the same definition."""
+    print("\n### Exact cases: the same definition, library oracle\n")
+    print(
+        "| kernel | k | case | rows learned | atoms | max abs pred gap (held-out) | "
+        "max abs coef gap / max abs coef |"
+    )
+    print("|---|---|---|---|---|---|---|")
+    worst = {}
+    for kname in KERNELS:
+        for k in KDIMS:
+            for case in (
+                "uncapped nu=0, first 150 rows",
+                "atoms only, nu=1e-3, M=50",
+                "nu=0, M=20, stop rule, all 2000 rows",
+            ):
+                pg = cg = 0.0
+                n_at = 0
+                n_rows = 0
+                for seed in SEEDS:
+                    x, y, xt, _ = make_regression(seed, N_ROWS, k)
+                    w = np.ones(N_ROWS)
+                    if case.startswith("uncapped"):
+                        n_rows = 150
+                        xs, ys, ws = x[:150], y[:150], w[:150]
+                        m = run_ald(kname, xs, ys, ws, cap=10**9, nu=0.0)
+                        ref = oracle_kr(kname, k, xs, ys, ws)
+                        coef_ok = len(m.d) == 150
+                    elif case.startswith("atoms"):
+                        n_rows = N_ROWS
+                        m = run_ald(kname, x, y, w, cap=50, nu=1e-3, atoms_only=True)
+                        idx = np.array(m.admitted)
+                        ref = oracle_kr(kname, k, x[idx], y[idx], w[idx])
+                        coef_ok = True
+                    else:
+                        n_rows = N_ROWS
+                        m = run_ald(kname, x, y, w, cap=20, nu=0.0)
+                        f = oracle_sor(kname, k, m.d, x, y, w)
+                        coef_ok = False
+                    n_at = max(n_at, len(m.d))
+                    pred = m.predict(xt)
+                    ref_pred = f(xt) if case[0] == "n" else ref.predict(xt)
+                    if coef_ok:
+                        cg = max(
+                            cg,
+                            float(
+                                np.max(np.abs(m.alpha - ref.dual_coef_))
+                                / np.max(np.abs(ref.dual_coef_))
+                            ),
+                        )
+                    pg = max(pg, float(np.max(np.abs(pred - ref_pred))))
+                worst[(kname, case)] = max(worst.get((kname, case), 0.0), pg)
+                cgs = fmt(cg) if case[0] != "n" else "n.a. (basis differs)"
+                if case.startswith("uncapped") and n_at < 150:
+                    cgs = f"n.a. (only {n_at} atoms: rank)"
+                print(f"| {kname} | {k} | {case} | {n_rows} | {n_at} | {fmt(pg)} | {cgs} |")
+    return worst
+
+
+def exp_krls_grid():
+    """nu = 1e-3, caps 20/50/200, N = 2000: growth, gaps, held-out error."""
+    print(f"\n### Grid: nu = {NU}, r = {R_RIDGE}, N = {N_ROWS}, 5 seeds (worst gap, mean MSE)\n")
+    print(
+        "| kernel | k | M | atoms in rows 1-1000 / 1001-2000 (mean) | uncapped ALD atoms (mean) | "
+        "pred gap: KRLS vs Nystroem+Ridge, same D, all rows | pred gap: atoms-only KRLS vs "
+        "KernelRidge on D | pred gap: KRLS vs KernelRidge on D | held-out MSE: KRLS / KR on D / "
+        "batch KR on all rows |"
+    )
+    print("|---|---|---|---|---|---|---|---|---|")
+    rows = []
+    for kname in KERNELS:
+        for k in KDIMS:
+            unc = []
+            for seed in SEEDS:
+                x, y, _, _ = make_regression(seed, N_ROWS, k)
+                unc.append(len(run_ald(kname, x, y, np.ones(N_ROWS), 10**9, NU).d))
+            for cap in CAPS:
+                g1 = g2 = g3 = 0.0
+                a1 = a2 = 0.0
+                e = np.zeros(3)
+                for seed in SEEDS:
+                    x, y, xt, yt = make_regression(seed, N_ROWS, k)
+                    w = np.ones(N_ROWS)
+                    m = run_ald(kname, x, y, w, cap, NU)
+                    adm = np.array(m.admitted)
+                    a1 += np.sum(adm < 1000) / len(SEEDS)
+                    a2 += np.sum(adm >= 1000) / len(SEEDS)
+                    pred = m.predict(xt)
+                    sor = oracle_sor(kname, k, m.d, x, y, w)(xt)
+                    mo = run_ald(kname, x, y, w, cap, NU, atoms_only=True)
+                    kr_d = oracle_kr(kname, k, x[mo.admitted], y[mo.admitted], w[mo.admitted])
+                    kr_pred = kr_d.predict(xt)
+                    g1 = max(g1, float(np.max(np.abs(pred - sor))))
+                    g2 = max(g2, float(np.max(np.abs(mo.predict(xt) - kr_pred))))
+                    g3 = max(g3, float(np.max(np.abs(pred - kr_pred))))
+                    batch = oracle_kr(kname, k, x, y, w).predict(xt)
+                    e += np.array([mse(pred, yt), mse(kr_pred, yt), mse(batch, yt)]) / len(SEEDS)
+                rows.append((kname, k, cap, a1, a2, g1, g2, g3, e))
+                print(
+                    f"| {kname} | {k} | {cap} | {a1:.1f} / {a2:.1f} | {np.mean(unc):.1f} | "
+                    f"{fmt(g1)} | {fmt(g2)} | {fmt(g3)} | "
+                    f"{e[0]:.4f} / {e[1]:.4f} / {e[2]:.4f} |"
+                )
+    print("\n(noise variance 0.0100: the floor for every held-out MSE)")
+    return rows
+
+
+def exp_krls_window():
+    """Sliding window of the last W rows against KernelRidge on those rows."""
+    print("\n### Window: last W rows, c = r = 0.1, against KernelRidge on the window rows\n")
+    print(
+        "| kernel | k | W | max abs pred gap (held-out, every 100 rows) | "
+        "max coef gap / max coef | held-out MSE at the end |"
+    )
+    print("|---|---|---|---|---|---|")
+    for kname in KERNELS:
+        for k in KDIMS:
+            for width in CAPS:
+                pg = cg = 0.0
+                em = 0.0
+                for seed in SEEDS:
+                    x, y, xt, yt = make_regression(seed, N_ROWS, k)
+                    w = np.ones(N_ROWS)
+                    m = WindowKrls(kname, k, width, R_RIDGE)
+                    for t in range(N_ROWS):
+                        m.update(t, x[t], y[t], w[t])
+                        if (t + 1) % 100 == 0 and t + 1 >= width:
+                            lo = t + 1 - width
+                            ref = oracle_kr(kname, k, x[lo : t + 1], y[lo : t + 1], w[lo : t + 1])
+                            pg = max(pg, float(np.max(np.abs(m.predict(xt) - ref.predict(xt)))))
+                            al = m.alpha()
+                            cg = max(
+                                cg,
+                                float(
+                                    np.max(np.abs(al - ref.dual_coef_))
+                                    / np.max(np.abs(ref.dual_coef_))
+                                ),
+                            )
+                    em += mse(m.predict(xt), yt) / len(SEEDS)
+                print(f"| {kname} | {k} | {width} | {fmt(pg)} | {fmt(cg)} | {em:.4f} |")
+
+
+def exp_krls_zero_weight():
+    print("\n### Zero-weight rows (first 50 rows, then one row in ten, at w = 0)\n")
+    k = 2
+    x, y, xt, _ = make_regression(3, N_ROWS, k)
+    rng = np.random.default_rng(77)
+    w = rng.uniform(0.5, 1.5, N_ROWS) * (rng.random(N_ROWS) >= 0.1)
+    w[:50] = 0.0
+    for kname in KERNELS:
+        ald = AldKrls(kname, k, 50, NU, R_RIDGE)
+        ald0 = AldKrls(kname, k, 20, 0.0, R_RIDGE)
+        win = WindowKrls(kname, k, 200, R_RIDGE)
+        unchanged = True
+        nan = False
+        for t in range(N_ROWS):
+            before = [(o.d.copy(), o.alpha.copy(), o.p.copy(), o.kinv.copy()) for o in (ald, ald0)]
+            wb = (win.d.copy(), win.q.copy(), win.y.copy())
+            for o in (ald, ald0, win):
+                o.update(t, x[t], y[t], w[t])
+            if w[t] == 0.0:
+                for o, b in zip((ald, ald0), before, strict=True):
+                    unchanged &= all(
+                        np.array_equal(u, v)
+                        for u, v in zip(b, (o.d, o.alpha, o.p, o.kinv), strict=True)
+                    )
+                # the window may only have dropped its oldest atom (the clock)
+                dropped = len(wb[2]) - len(win.y)
+                unchanged &= dropped in (0, 1) and np.array_equal(wb[2][dropped:], win.y)
+            nan |= not all(np.isfinite(a).all() for a in (ald.alpha, ald.p, ald0.p, win.q))
+        idx = np.array(ald0.admitted)
+        f = oracle_sor(kname, k, ald0.d, x, y, w)
+        lo = N_ROWS - 200
+        kr_w = oracle_kr(kname, k, x[lo:], y[lo:], w[lo:])
+        g_sor = float(np.max(np.abs(ald0.predict(xt) - f(xt))))
+        g_win = float(np.max(np.abs(win.predict(xt) - kr_w.predict(xt))))
+        print(
+            f"- {kname}: NaN in any state: {nan}; zero-weight rows leave the ALD states "
+            f"bit-identical and the window's only by its clock: {unchanged}; first atom at row "
+            f"{idx[0]}; nu = 0, M = 20 vs Nystroem+Ridge(sample_weight): {fmt(g_sor)}; window "
+            f"W = 200 vs KernelRidge(sample_weight): {fmt(g_win)}"
+        )
+
+
+def exp_krls_numerics():
+    """Positive definiteness of Kinv and P against nu, near the cap."""
+    print("\n### Numerical risk: Kinv and P against nu (k = 2, M = 200, N = 2000, seed 0)\n")
+    print(
+        "| kernel | nu | atoms | smallest admitted delta | delta < 0 seen | "
+        "min eig sym(Kinv) | rel err Kinv vs inv(K_D) | min eig sym(P) | cond K_D | "
+        "pred gap vs Nystroem+Ridge |"
+    )
+    print("|---|---|---|---|---|---|---|---|---|---|")
+    k = 2
+    x, y, xt, _ = make_regression(0, N_ROWS, k)
+    w = np.ones(N_ROWS)
+    for kname in KERNELS:
+        for nu in (1e-2, 1e-3, 1e-4, 1e-6, 1e-9, 0.0):
+            with np.errstate(all="ignore"):
+                m = run_ald(kname, x, y, w, 200, nu)
+                kd = kern(kname, m.d, m.d)
+                ki = 0.5 * (m.kinv + m.kinv.T)
+                ev_k = float(np.linalg.eigvalsh(ki)[0])
+                ev_p = float(np.linalg.eigvalsh(0.5 * (m.p + m.p.T))[0])
+                try:
+                    ref = np.linalg.inv(kd)
+                    rel = float(np.linalg.norm(m.kinv - ref) / np.linalg.norm(ref))
+                except np.linalg.LinAlgError:
+                    rel = float("nan")
+                cond = float(np.linalg.cond(kd))
+                gap = float(np.max(np.abs(m.predict(xt) - oracle_sor(kname, k, m.d, x, y, w)(xt))))
+            print(
+                f"| {kname} | {nu:g} | {len(m.d)} | {m.min_delta_adm:.1e} | {m.neg_delta} | "
+                f"{ev_k:.1e} | {rel:.1e} | {ev_p:.1e} | {cond:.1e} | {fmt(gap)} |"
+            )
+
+
+def exp_krls_cost():
+    print("\n### State bytes and per-row cost\n")
+    print(
+        "| M | k | ALD-KRLS: D + Kinv + P + alpha, dense | packed (two triangles) | "
+        "window: rows + y + t + Q, dense | flops per row, ALD (about 8 M^2) | "
+        "measured us/row (ALD, cap full) | measured us/row (window, full) |"
+    )
+    print("|---|---|---|---|---|---|---|---|")
+    for cap in CAPS:
+        for k in KDIMS:
+            dense = 8 * (cap * k + 2 * cap * cap + cap)
+            packed = 8 * (cap * k + cap * (cap + 1) + cap)
+            win = 8 * (cap * k + cap + cap + cap * cap)
+            x, y, _, _ = make_regression(0, 3 * cap + 400, k)
+            m = AldKrls("rbf", k, cap, -1.0, R_RIDGE)  # nu < 0: admit until full
+            wm = WindowKrls("rbf", k, cap, R_RIDGE)
+            for t in range(cap):
+                m.update(t, x[t], y[t], 1.0)
+                wm.update(t, x[t], y[t], 1.0)
+            t0 = time.perf_counter()
+            for t in range(cap, cap + 400):
+                m.update(t, x[t], y[t], 1.0)
+            t1 = time.perf_counter()
+            for t in range(cap, cap + 400):
+                wm.update(t, x[t], y[t], 1.0)
+            t2 = time.perf_counter()
+            print(
+                f"| {cap} | {k} | {dense:,} | {packed:,} | {win:,} | {8 * cap * cap:,} | "
+                f"{(t1 - t0) / 400 * 1e6:.0f} | {(t2 - t1) / 400 * 1e6:.0f} |"
+            )
+
+
+def main_krls(parts):
+    t0 = time.time()
+    parts = parts or ["exact", "grid", "window", "zero", "numerics", "cost"]
+    if "exact" in parts:
+        exp_krls_exact()
+    if "grid" in parts:
+        exp_krls_grid()
+    if "window" in parts:
+        exp_krls_window()
+    if "zero" in parts:
+        exp_krls_zero_weight()
+    if "numerics" in parts:
+        exp_krls_numerics()
+    if "cost" in parts:
+        exp_krls_cost()
+    print(f"\n(total {time.time() - t0:.1f} s)")
+
+
 if __name__ == "__main__":
     which = sys.argv[1] if len(sys.argv) > 1 else "pca"
     if which == "pca":
         main_pca()
+    elif which == "krls":
+        main_krls(sys.argv[2:])
     else:
-        raise SystemExit(f"unknown part {which!r}; part 1 has 'pca'")
+        raise SystemExit(f"unknown part {which!r}; parts: 'pca', 'krls'")
