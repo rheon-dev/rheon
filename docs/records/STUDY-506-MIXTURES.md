@@ -1,4 +1,4 @@
-# Study 506: Gaussian mixtures by online EM on `hmm` (parts 1 and 2 of 3)
+# Study 506: Gaussian mixtures by online EM on `hmm` (parts 1 to 3)
 
 Question: can a Gaussian mixture be fit by exponentially weighted online EM
 (Cappé and Moulines 2009, sufficient statistics), built as an `hmm` whose
@@ -6,16 +6,21 @@ transition rows are all equal, and does it reach scikit-learn's batch
 `GaussianMixture` on stationary data? Part 1: the recursion, the `hmm`
 mapping, and the stationary comparison at k = 2 features, K = 2 components.
 
-Script: `scripts/study_506.py` (numpy, scipy, scikit-learn 1.9.1; seeded
-generators, no data files). `python scripts/study_506.py` runs everything in
-about 80 s; `--quick` runs N = 2000 only in about 10 s. Notation: k features,
-K components (rheon's `k` is the feature count).
+Script: `scripts/study_506.py`, the one study script since part 3 (numpy
+2.5, scipy 1.18, scikit-learn 1.9.1; seeded generators, no data files).
+`python scripts/study_506.py --quick` runs every section shortened and
+checks each finding below (48 checks, about 80 s);
+`python scripts/study_506.py` runs every section in full (about 25 min; run
+it under `nohup`); naming sections runs only those (`compare`, `passes`,
+`zero`, `timing`, `decay`, `sklearn`, `collapse`, `state`, `tolerances`);
+`--cell full 20 8 20000` runs one cell of section 7. Seeds: 5 (0 to 4) in
+every table, as in the earlier studies; `--seeds 50` widens it. Notation: k
+features, K components (rheon's `k` is the feature count).
 
-Status: part 1 done; part 2 done (sections 6 to 11, script
-`scripts/study_506_part2.py`) except two cells of section 7 (full
-covariance, K = 8, N = 20000, k = 5 and 20), not finished in the time box:
-`python scripts/study_506_part2.py sklearn full 5` (and `full 20`) fills
-them. Part 3 is not started.
+Status: done. Parts 1 and 2 (sections 1 to 11) and part 3 (sections 12 to
+18: the two cells section 7 lacked, the script consolidated, the design in
+one place, the proposed test tolerances). The design summary a builder
+needs is section 13 onward; sections 1 to 11 are the evidence.
 
 ## 1. The model and the recursion
 
@@ -225,9 +230,9 @@ Per row: about 60 flops, 2 exp, 2 log, 2 sqrt (section 1).
 
 # Part 2: decay, larger k and K, collapse, zero-weight rows, state
 
-Script: `scripts/study_506_part2.py`, one subcommand per section (`decay`
-~70 s, `sklearn` ~6 min, `collapse` ~45 s, `zero` and `state` ~1 s; run the
-long ones under `nohup`). The recursion is part 1's sum form vectorised over
+Script: `scripts/study_506.py` (part 2 was a second script until part 3
+merged it), one section each (`decay` ~70 s, `sklearn` ~15 min with the two
+K = 8, N = 20000 full cells, `collapse` ~45 s, `zero` and `state` ~1 s). The recursion is part 1's sum form vectorised over
 components, with a diagonal option (S2ⱼ keeps the k squares only), and the
 mean form for the collapse case. Data: `make_mixture(k, K, seed)`, K
 components with covariance eigenvalues in [0.5, 1.5], means at least 4
@@ -304,16 +309,17 @@ in batch SE (n = N):
 | full | 5 | 4 | 4000 | 48 / 72, 105 / 154, 23 / 26 | **0.048 / 0.24, 0.12 / 0.27, 0.025 / 0.12** | 5/5 |
 | full | 5 | 4 | 20000 | 92 / 108, 204 / 255, 40 / 62 | **0.12 / 0.32, 0.15 / 0.39, 0.076 / 0.14** | 5/5 |
 | full | 5 | 8 | 4000 | 65 / 93, 134 / 247, 38 / 51 | **0.25 / 0.74, 0.39 / 1.0, 0.12 / 0.66** | 5/5 |
-| full | 5 | 8 | 20000 | not finished in the time box | — |
+| full | 5 | 8 | 20000 | 121 / 143, 265 / 332, 76 / 108 | 0.46 / 12, 0.59 / 7.3, 0.31 / 25 | 4/5 |
 | full | 20 | 2 | 4000 | 108 / 113, 389 / 484, 43 / 44 | **3e-13 / 4e-12, 2e-11 / 2e-11, 0 / 1e-12** | 5/5 |
 | full | 20 | 2 | 20000 | 3e-13 / 247, 8e-11 / 822, 0 / 100 | **5e-13 / 1e-11, 6e-11 / 9e-11, 3e-14 / 4e-12** | 5/5 |
 | full | 20 | 4 | 4000 | 126 / 144, 200 / 337, 58 / 91 | **2e-13 / 3e-12, 7e-12 / 1e-11, 7e-15 / 8e-13** | 5/5 |
 | full | 20 | 4 | 20000 | 219 / 311, 413 / 625, 122 / 202 | 3e-12 / 19, 4e-11 / 9.6, 8e-14 / 179 | 4/5 |
 | full | 20 | 8 | 4000 | 87 / 108, 149 / 202, 137 / 164 | **1e-7 / 0.0004, 3e-7 / 0.001, 3e-8 / 0.0002** | 5/5 |
-| full | 20 | 8 | 20000 | not finished in the time box | — |
+| full | 20 | 8 | 20000 | 198 / 253, 355 / 414, 284 / 407 | **2e-8 / 8e-6, 6e-8 / 2e-5, 4e-9 / 2e-7** | 5/5 |
 
 Python time a row (interpreter bound): diag 36 to 49 µs, full k = 5 66 to
-75 µs, full k = 20 85 µs (K = 2) to 129 µs (K = 8).
+75 µs, full k = 20 85 µs (K = 2) to 138 µs (K = 8). The two K = 8,
+N = 20000 full rows were filled in part 3 (section 12).
 
 Reading:
 
@@ -461,3 +467,347 @@ clock, as `hmm`'s Π does.
    `warm_rows` start should enter at its rows' weight, not at one row's.
 6. τ's default: 0.01 served here at n_eff 75 to 2000; in units of rows, it
    should be stated against `min_weight`.
+
+# Part 3: the missing cells, one script, the design in one place, tolerances
+
+Script: part 2's script merged into `scripts/study_506.py` (header). The
+recursion classes are part 2's vectorised ones (`Mix`, the sum form;
+`MixMean`, the mean form, now with the stabilised read too), so part 1's
+tables are re-run on them: every figure of sections 3, 6 and 7 came out
+the same to the digits printed (section 8's did not, and part 2's own
+script does not reproduce them either: section 12, corrections). `--quick` runs each section shortened
+(`compare` and `decay` at N = 2000; `sklearn` at k = 5, K = 2 and 4,
+N = 4000, without the best-of-5 fits; `collapse` at λ = 0.98 over 50,000
+rows, which reaches the subnormals in half the rows; `tolerances` at K = 2
+and 4 on seeds 0 and 1) and checks each finding as it goes; it exits
+non-zero if one fails. Seeds: 5 (0 to 4) throughout, as in parts 1 and 2;
+section 18 adds a 50-seed run of the tolerance cells, which changes the
+proposal.
+
+## 12. The two missing cells
+
+Section 7's format (W0 = 20K is 160 rows here), λ = 1, one pass, batch SE,
+median / max over 5 seeds:
+
+| cov | k | K | N | W0 = 1: means / cov / weights (median / max) | W0 = 20K: means / cov / weights (median / max) | best5 same |
+|---|---|---|---|---|---|---|
+| full | 5 | 8 | 20000 | 121 / 143, 265 / 332, 76 / 108 | 0.46 / 12, 0.59 / 7.3, 0.31 / 25 | 4/5 |
+| full | 20 | 8 | 20000 | 198 / 253, 355 / 414, 284 / 407 | **2e-8 / 8e-6, 6e-8 / 2e-5, 4e-9 / 2e-7** | 5/5 |
+
+They took 341 s and 292 s (5 seeds; almost all of it scikit-learn at
+tol = 1e-10 and its best-of-5 fits, not the online pass at 75 and 138 µs a
+row), which is why part 2's time box missed them. Both read as their
+neighbours: at k = 20 the responsibilities are hard and the fit equals
+scikit-learn's; at k = 5, K = 8 the median is within 0.6 SE and one seed
+(best5 4/5) sits 7 to 25 SE away, as in the diagonal K = 8 cells.
+
+That seed's kind, looked at for the first time here (diagonal, k = 5, K = 8,
+N = 20000, seed 0, the 33 / 96 / 140 SE seed of section 7): scikit-learn's
+fit from the shared start has a starved component (weight 0.005, true
+weights 0.083 to 0.167) and is not its best of five starts; the online fit
+shares that pair's weight 0.077 / 0.077. It is not a separate fixed point:
+batch EM restarted from the online fit returns to scikit-learn's fit, but
+in 4,224 iterations (2 to 9 on every other seed), a near-flat ridge of the
+likelihood (the online fit's mean log-likelihood is 0.0015 a row lower).
+So section 7's "one seed each at a different fixed point" should read: the
+shared start's batch fit there is a poor optimum on a flat ridge, and the
+online pass did not follow it onto the ridge. A test excludes such seeds by
+a criterion fixed in advance (section 18's regular seeds), not by the gap.
+
+**Corrections to section 8.** Re-run here, part 2's own script (as
+committed) and the merged one agree with each other, but not with section
+8's table: the sum form fails at row 96,749, not 93,835 (S0 4.0e-316 at the
+failing row, not 2.2e-321); the fading prior at 97,009; the reseed **never
+fires** (0 reseeds, not 2) and fails at the sum form's row, it does not
+revive; under the stabilised τ the missing component's least S0 is 0.058,
+not 6.9e-16 (it keeps taking a share of the tails during the gap, π 0.0077
+at the gap's end). The table was evidently from an earlier state of the
+script. What section 8 concluded stands, and is firmer for the reseed:
+the stabilised τ revives (π 0.391, mean within 0.14, as before), the mean
+form survives dead, the fading prior fails with no prior; the reseed is no
+remedy (section 16, risk 1, has the λ = 0.98 run as well).
+
+## 13. The recursion, complete
+
+Row t: features x, weight w ≥ 0, λ the decay over the row's clock. The
+parameters are read from the state before the row (the row's
+responsibilities and log-likelihood are out of sample).
+
+```text
+E:  log ρⱼ = log πⱼ − ½ (k log 2π + log det Σⱼ + (x − μⱼ)ᵀ Σⱼ⁻¹ (x − μⱼ))
+    rⱼ = exp(log ρⱼ − maxₗ log ρₗ) / Σₗ exp(log ρₗ − maxₗ log ρₗ)
+    (log Σₗ ρₗ, the same sum, is the row's predictive log-density)
+S:  S0ⱼ ← λ S0ⱼ + w rⱼ,   S1ⱼ ← λ S1ⱼ + w rⱼ x,   S2ⱼ ← λ S2ⱼ + w rⱼ x xᵀ
+M:  πⱼ = (S0ⱼ + τ) / (Σₗ S0ₗ + K τ)
+    μⱼ = (S1ⱼ + τ μ⁰ⱼ) / (S0ⱼ + τ)
+    Σⱼ = (S2ⱼ + τ (C⁰ⱼ + μ⁰ⱼ μ⁰ⱼᵀ)) / (S0ⱼ + τ) − μⱼ μⱼᵀ + reg · I
+```
+
+- The statistics are decayed sums: S0ⱼ = Σₛ λ^(t−s) wₛ rₛⱼ, so the fit at
+  row t is one EM step's M-step over the decay-weighted sample, each row's
+  responsibilities frozen at the parameters it was read with. At λ = 1 it
+  is Cappé and Moulines' online EM with step 1/t (a stochastic
+  approximation of batch EM); at λ < 1 a constant step 1 − λ.
+- n_eff = Σⱼ S0ⱼ follows the shared recursion n_eff ← λ n_eff + w (the
+  responsibilities sum to 1); read before the row, it is the weight before
+  the row's update and before its decay.
+- τ is the prior's weight in rows, **not decayed**: τ pseudo-rows per
+  component at μ⁰ⱼ, C⁰ⱼ (the start's parameters, or one shared μ⁰ and
+  d · I). With τ = 0 the read is part 1's, which then needs the guards
+  (S0ⱼ = 0 reads the start; Σ S0 = 0 reads the start's weights). With τ > 0
+  no read divides by less than τ and πⱼ ≥ τ / (n_eff + K τ).
+- The fading alternative, τ λ^t (how a prior fades in a model whose ridge
+  is scaled by the product of the mixing factors), is no floor: it decays
+  with the component it should hold up and fails with it (section 8).
+- The stabilised-forgetting alternative adds (1 − λ) τ · prior to the
+  statistics each row (S0 ← λ S0 + (1 − λ) τ + w r, and so on); its steady
+  state is the read above, but it has no floor at λ = 1 and its floor
+  builds up only over 1 / (1 − λ) rows. The read form is exact at every
+  λ, costs nothing in the per-row update, and leaves the statistics plain
+  sums (so zero-weight rows decay them exactly).
+- reg is a fixed floor on the diagonal, as scikit-learn's `reg_covar`.
+
+The form to build is the **mean form** (Wⱼ, μⱼ, Cⱼ), each component an
+exponentially weighted mean and covariance fed the row at weight w rⱼ
+(section 1), with the τ read in centred coordinates so that nothing
+cancels (T = Wⱼ + τ, d = μⱼ − μ⁰ⱼ):
+
+```text
+πⱼ = (Wⱼ + τ) / (Σ W + K τ)
+μ̂ⱼ = (Wⱼ μⱼ + τ μ⁰ⱼ) / T
+Σ̂ⱼ = (Wⱼ Cⱼ + τ C⁰ⱼ) / T + (Wⱼ τ / T²) d dᵀ + reg · I
+```
+
+This is the sum form's read rearranged (the pooled covariance of two
+groups); the script runs both through the collapse case and they agree to
+4e-14 (`collapse`, check "the stabilised read agrees").
+
+**Zero-weight rows** (a refused row is one: negative or non-finite weight,
+non-finite features): no E-step; the statistics (W) decay by λ and nothing
+is added. With τ = 0 the read does not move (the mean form's μ and C are
+untouched; the weights move by rounding). With τ > 0 the clock hands share
+back to the prior, by design (section 9). The first row of an empty state
+(W = 0) at weight 0 leaves every statistic exactly zero.
+
+## 14. The `hmm` mapping
+
+With every transition row equal to π:
+
+- **Exact: the posterior.** The predicted state probabilities p̃ₗ = Σₖ pₖ πₗ
+  = πₗ whatever the previous posterior, so `hmm`'s filtered posterior is
+  the mixture responsibility rₜₗ, and its predictive density is the
+  mixture's.
+- **Exact: the per-state statistics.** Each state's exponentially weighted
+  mean and covariance, fed the row at weight w · pₗ, is the mean form
+  above (6e-14 to 4e-13 against the sum form, section 1). The order (read
+  the densities, then update) and the zero-weight row (decay the weights,
+  move no mean or covariance) are the same.
+- **Not exact: the weights.** `hmm` learns the transition counts
+  Aₖₗ ← λ Aₖₗ + w pₖ(t−1) rₜₗ and normalises each row separately; under
+  equal rows the column sums of A are S0ₗ, but the K row reads differ and
+  none is π. The iid form keeps **no A** and reads πₗ = (Wₗ + τ) /
+  (n_eff + K τ) from the states' own weights. That drops K² counts and the
+  previous posterior (K) from the state, and the K² predict step from the
+  row.
+- **Not exact: the ridge.** `hmm` adds a prior precision scaled by the
+  product of the state's mixing factors, which fades like W₁ / W.
+  The iid form takes the fixed `reg` floor (scikit-learn's `reg_covar`,
+  which the oracle needs matched) plus the stabilised τ pseudo-rows of
+  section 13, which do the fading prior's job (a covariance from few rows
+  stays positive definite) without fading.
+- **Not exact: the start.** `hmm` enters a start (k-means over `warm_rows`
+  buffered rows, or given means and covariances) at one row's weight. The
+  mixture needs it entered at its rows' weight, at least 20 rows a
+  component (section 16, risk 3).
+
+So the iid form is `hmm`'s E-step and per-state statistics unchanged, a new
+weight read, a fixed ridge, the stabilised floor, and a heavier start.
+
+## 15. State and cost
+
+State, bytes: **8 · K · (1 + k + k(k+1)/2)** with full covariance (S0 or W,
+S1 or μ, the packed symmetric S2 or C), **8 · K · (1 + 2k)** diagonal. n_eff
+is Σ S0 and need not be stored. The prior μ⁰ⱼ, C⁰ⱼ adds 8 · K · (k +
+k(k+1)/2) full (8 · K · 2k diagonal), or 8 · (k + 1) for one shared μ⁰ and
+d · I. Bounded by the shape, never by the stream. The script checks the
+formula against the arrays the recursion holds (`state`).
+
+| k | K | full | full + prior | diag | diag + prior | `hmm` today (part 1's field list) |
+|---|---|---|---|---|---|---|
+| 2 | 2 | 96 | 176 | 80 | 144 | 200 |
+| 5 | 2 | 336 | 656 | 176 | 336 | 440 |
+| 5 | 4 | 672 | 1,312 | 352 | 672 | 936 |
+| 5 | 8 | 1,344 | 2,624 | 704 | 1,344 | 2,120 |
+| 20 | 2 | 3,696 | 7,376 | 656 | 1,296 | 3,800 |
+| 20 | 4 | 7,392 | 14,752 | 1,312 | 2,592 | 7,656 |
+| 20 | 8 | 14,784 | 29,504 | 2,624 | 5,184 | 15,560 |
+
+(`hmm` today: per state 4 scalars, the mean and the packed covariance, plus
+the posterior K, the counts K² and n_eff, before the encoding's framing.)
+A per-component prior doubles the full state; one shared μ⁰ and d · I
+costs k + 1 f64.
+
+Cost a row, flops: full E-step K (k³/3 + k² + 4k) refactoring each Σⱼ, or
+K (2k² + 4k) with held factors moved by rank-1 updates (`hmm`'s factor
+form); update K (k² + 3k); the τ read K (1 + k + k(k+1)/2) more; diagonal
+8Kk. Plus K exp, K log and a log-sum-exp. k = 5, K = 4: 504 (refactor) /
+440 (held); k = 20, K = 8: 28,848 / 10,720, diagonal 1,280. Python's time
+a row (38 to 138 µs) is interpreter overhead and says nothing about a
+compiled row.
+
+## 16. Numerical risks
+
+1. **Collapse, and the subnormal sticking.** Under decay a component that
+   stops being sampled loses S0 by λ a row, but S0 **never reaches 0**: below
+   about 0.5 / (1 − λ) subnormal units (50 at λ = 0.99, about 2.5e-322)
+   λ · S0 rounds back to S0, so it sticks near 1e-321 (the mean form's W
+   stuck at 2.4e-322) and an S0 = 0 guard never fires. In the sum form S1
+   and S2 sink with S0, S1 / S0 keeps a handful of bits, and S2 / S0 − μμᵀ
+   stops being positive definite before S0 sticks: the Cholesky refuses the
+   row 76,749 rows into the gap at λ = 0.99 (S0 4e-316) and 37,930 at
+   λ = 0.98 (the quick run). The fading prior fails 260 rows later at
+   λ = 0.99. The mean form survives, but the component is absorbed for good
+   (π = 0 to the print, takes no row on its return). **The stabilised τ**
+   prevents all of it: π ≥ τ / (n_eff + K τ), no division by less than τ,
+   and the component is taken up at once on its return (π 0.39 at λ = 0.99,
+   0.45 at λ = 0.98, true 0.44; mean within 0.14 and 0.20), in the sum form
+   and in the mean form's centred read alike. **The reseed** (a starved
+   component restarted on a row that is an outlier to every component) is
+   no substitute: at λ = 0.99 no such row came before the sum form's failure
+   (0 reseeds, the same failing row); at λ = 0.98 it fired once in the gap,
+   but the returning rows fell inside the χ² cut of a live component, which
+   took them, and the component stayed dead.
+2. **The sum form is not positive definite by construction.** S2 / S0 −
+   μμᵀ cancels: relative error about ε |μ|² / σ², harmless at the levels
+   run here (|μ| ≤ 9, σ² ≈ 1) until S0 goes subnormal, but it grows with the
+   data's level (|μ| / σ = 1e6 leaves about 1e-4 relative). The mean form
+   holds C as a convex combination of positive semi-definite terms and the
+   centred τ read adds only positive semi-definite terms: build that.
+3. **The start.** Entered at one row's weight (W0 = 1), the start fails from
+   K = 4 (and at k = 20 full from K = 2): the first rows a component takes
+   set its covariance alone and the stream settles into another
+   attribution, 20 to 400 SE from batch EM (section 7). Entered at 20 rows a
+   component, every cell's median is within 0.6 SE. A streaming start
+   (`warm_rows` k-means) should enter at its rows' weight; the study shared
+   a batch k-means start so the two fits differ in the EM alone.
+4. **S0 = 0 exactly** (a component given zero start weight): μ = 0/0 = NaN
+   at the first read without a guard, and every row after is NaN. The guard
+   or τ keeps it finite; the guard alone leaves it absorbing (π = 0, log π
+   = −∞).
+5. **Far rows.** The E-step in log space about the largest term gives a
+   finite posterior for a row far from every component (no 0/0).
+6. **Overlapping components** are a limit of online EM, not a numerical
+   fault (section 18).
+
+## 17. The oracles
+
+1. **scikit-learn's `GaussianMixture`** at λ = 1: `covariance_type`
+   matched ('full' or 'diag'), `reg_covar` = the online fit's reg (1e-6,
+   added to the diagonal by both), `tol` 1e-10 (1e-12 at k = 2),
+   `max_iter` 5000, and the shared start passed as `weights_init`,
+   `means_init`, `precisions_init` (the start's covariances plus reg,
+   inverted). Labels matched by the Hungarian assignment on squared mean
+   distances. Gaps in batch SE (section 3), max over components and
+   entries. A seed is well posed when the shared start's fit is also
+   scikit-learn's best of `n_init = 5` own starts (mean log-likelihood
+   within 1e-6). scikit-learn's `GaussianMixture` takes no sample weights,
+   so it cannot check decay.
+2. **The weighted EM longhand** under decay: batch EM over all N rows with
+   fixed weights vₜ = λ^(N−1−t), responsibilities recomputed each iteration,
+   run until no parameter moves by 1e-11. It equals scikit-learn's fit at
+   λ = 1 to 8.9e-16 (checked each run). SE units use the Kish size
+   (Σv)² / Σv² of the decay-weighted sample. No third-party library fits a
+   row-weighted mixture, so the definition is written by hand, as the
+   project's rule for oracles allows where no library computes the
+   quantity; at λ = 1 it is tied to the library.
+
+Largest gaps for separated components, well-posed seeds: against
+scikit-learn, one pass at N = 20000, k = 5, the start at 20 rows a
+component, regular seeds (section 18): 0.90 / 1.43 / 0.73 SE (means /
+covariances / weights, full, K = 8) over 5 seeds, 1.74 / 2.72 / 1.34 SE
+over 50; at K = 2, 0.06 / 0.10 / 0.04 over 5 seeds and 0.75 / 0.99 / 0.43
+over 50. Against the longhand at
+N = 20000, 0.22 / 0.31 / 0.12 SE (means / covariances / weights, k = 2,
+λ = 0.999), median 0.0003 to 0.13 SE.
+
+## 18. Proposed test tolerances
+
+Rule: 1.5 times the max over seeds, rounded up to 0.05, in batch SE (the
+earlier studies' rule); separated components (`make_mixture`, means 4 or
+more apart, 3.3 SD), k = 5, N = 20000, one pass at λ = 1, the start entered
+at 20 rows a component, against scikit-learn from the same start, over the
+**regular** seeds: well posed (the shared start's batch fit is scikit-learn's
+best of 5 own starts) and EM restarted from the online fit back at
+scikit-learn's in under 100 iterations. The split is stark: regular seeds
+come back in 2 to 22 iterations, the others in 550 to 5,000 (the online pass
+ended on a ridge of the likelihood, another attribution of rows to
+components). Seeds 0 to 4 as in parts 1 and 2, then 0 to 49
+(`tolerances --seeds 50`; about 45 min split over four processes):
+
+| cov | K | 5 seeds: max (means / cov / weights) | tolerance from 5 | 50 seeds: regular | median | max | **proposed tolerance** | regular seeds over the 5-seed tolerance |
+|---|---|---|---|---|---|---|---|---|
+| diag | 2 | 0.059 / 0.097 / 0.039 | 0.10 / 0.15 / 0.10 | 50 | 0.006 / 0.013 / 0.002 | 0.71 / 0.92 / 0.42 | **1.10 / 1.40 / 0.65** | 4 |
+| diag | 4 | 0.148 / 0.211 / 0.063 | 0.25 / 0.35 / 0.10 | 48 | 0.095 / 0.150 / 0.053 | 0.79 / 0.93 / 0.70 | **1.20 / 1.45 / 1.05** | 15 |
+| diag | 8 | 0.526 / 0.859 / 0.289 (seed 0 out) | 0.80 / 1.30 / 0.45 | 34 | 0.25 / 0.33 / 0.14 | 0.83 / 1.26 / 0.95 | **1.25 / 1.90 / 1.45** | 3 |
+| full | 2 | 0.061 / 0.092 / 0.032 | 0.10 / 0.15 / 0.05 | 50 | 0.011 / 0.021 / 0.005 | 0.75 / 0.99 / 0.43 | **1.15 / 1.50 / 0.70** | 7 |
+| full | 4 | 0.323 / 0.394 / 0.135 | 0.50 / 0.60 / 0.25 | 46 | 0.21 / 0.36 / 0.11 | 1.21 / 1.36 / 0.82 | **1.85 / 2.05 / 1.25** | 8 |
+| full | 8 | 0.897 / 1.426 / 0.725 (seed 2 out) | 1.35 / 2.15 / 1.10 | 35 | 0.38 / 0.55 / 0.23 | 1.74 / 2.72 / 1.34 | **2.65 / 4.10 / 2.05** | 1 |
+
+Reading:
+
+- **Five seeds understate the tail.** The gap is heavy-tailed: at K = 2 the
+  median is 0.01 SE and the 90th percentile 0.1, but one seed in 50 sits at
+  0.7 to 1 SE (diagonal seed 31, full seed 33: well-posed fits, EM back
+  in 8 and 12 iterations, so genuine tracking gaps, not another optimum),
+  and 3 or 4 seeds in 50 above 0.3 SE. Seeds 0
+  to 4 happen to miss it, and their tolerances would fail 1 to 15 of the 50
+  (last column). The proposed tolerances are therefore the 50-seed ones; the
+  5-seed column is kept to show the rule's sensitivity. A test with fixed
+  seeds passes either way, but only the 50-seed band survives a change of
+  generator or seed list.
+- **Not every seed is a test case.** The shared k-means start is itself a
+  poor optimum on 2 of 50 seeds at K = 4 diag, 3 at K = 4 full, 16 at K = 8
+  diag and 14 at K = 8 full (scikit-learn's best of 5 starts does better);
+  there the comparison is between two fits of a weakly posed batch problem.
+  And on 2 seeds of 300 (full K = 4 seed 7, full K = 8 seed 18) the batch fit
+  was well posed but the online pass ended elsewhere (246 and 227 SE, EM
+  back in 3,270 and 550 iterations): with K ≥ 4 a single pass occasionally
+  settles two components on one cluster. A test should fix regular seeds and
+  state the criterion; the script computes both.
+- The tolerances grow with K (closer components, more overlap at the
+  minimum spacing) and are about 1.3 to 1.5 times larger for full than for
+  diagonal covariance at K ≥ 4.
+- k = 20 needs no row: its responsibilities are hard and every regular cell
+  of section 7 is within 1e-3 SE; the k = 5 tolerances cover it.
+
+Under decay, against the longhand (N = 20000, K = 2, the start at one row,
+which has decayed away by then; 5 seeds):
+
+| k | λ | max means / cov / weights | tolerance |
+|---|---|---|---|
+| 2 | 0.999 | 0.218 / 0.307 / 0.117 | 0.35 / 0.50 / 0.20 |
+| 2 | 0.99 | 0.183 / 0.315 / 0.115 | 0.30 / 0.50 / 0.20 |
+| 5 | 0.999 | 0.038 / 0.060 / 0.019 | 0.10 / 0.10 / 0.05 |
+| 5 | 0.99 | 0.025 / 0.038 / 0.012 | 0.05 / 0.10 / 0.05 |
+
+And k = 2, K = 2 at a one-row start (part 1's table, N = 20000, max 0.74 /
+0.97 / 0.44): 1.15 / 1.50 / 0.70.
+
+**Overlapping components do not pass, and no tolerance is proposed for
+them.** At means one SD apart (k = 2, part 1) one pass sits 5 to 15 SE
+(median) from batch EM, the gap in SE units grows with N (6.7 at N = 2000,
+14 at 20000), and eight passes close little of it. Online EM's error after
+an early misattribution decays like t^−(1−ρ), ρ the EM map's contraction
+rate (the fraction of missing information), near 1 when components
+overlap, while the batch SE falls like t^−½: the ratio grows without
+bound. A band wide enough to pass would pass a wrong fit. It is a limit of
+the method to document, not a tolerance to set; a step-size schedule with
+averaging (open question 4) is the remedy to study if it matters.
+
+## Open questions (part 3)
+
+7. The τ default in rows and how it reads against `min_weight` (question 6)
+   stays open: the study ran τ = 0.01 only.
+8. Whether to keep a per-component prior (doubles the full state) or one
+   shared μ⁰, d · I (k + 1 f64): the collapse case was run with the start's
+   parameters per component.
