@@ -92,7 +92,9 @@ NO_BIN = np.iinfo(np.uint16).max
 RENORM_AT = 1e-50
 
 
-def edges_from(rule: str, n_bins: int, values: np.ndarray, weights: np.ndarray | None = None) -> np.ndarray:
+def edges_from(
+    rule: str, n_bins: int, values: np.ndarray, weights: np.ndarray | None = None
+) -> np.ndarray:
     """``margbins::edges_from``: strictly increasing finite edges from a warm-up sample."""
     v = np.asarray(values, float)
     w = np.ones_like(v) if weights is None else np.asarray(weights, float)
@@ -293,7 +295,7 @@ class RankWindow:
         self.held = np.full((2, k, t), np.nan)  # spearman, xi
 
     def _pairs(self, x: np.ndarray, y: np.ndarray, w: float, skip: int, sign: int) -> None:
-        """Add (``sign`` 1) or remove (-1) row ``(x, y, w)``'s pairs with every ring row but ``skip``."""
+        """Add (``sign`` 1) or remove (-1) the row's pairs with every ring row but ``skip``."""
         if not w > 0.0:
             return
         fx, fy = np.isfinite(x), np.isfinite(y)
@@ -344,7 +346,11 @@ class RankWindow:
         """Emit the numbers before this row, then learn it."""
         if self.rows % self.rank_every == 0:
             self.held = self.read_ranks()
-        out = {"spearman": self.held[0].copy(), "kendall": self.kendall(), "xi": self.held[1].copy()}
+        out = {
+            "spearman": self.held[0].copy(),
+            "kendall": self.kendall(),
+            "xi": self.held[1].copy(),
+        }
         self.learn(x, y, w)
         return out
 
@@ -361,14 +367,21 @@ class RankWindow:
 
     def state_arrays(self) -> dict[str, np.ndarray]:
         return {
-            "xr": self.xr, "yr": self.yr, "wr": self.wr,
-            "s": self.s, "n": self.n, "n1": self.n1, "n2": self.n2,
+            "xr": self.xr,
+            "yr": self.yr,
+            "wr": self.wr,
+            "s": self.s,
+            "n": self.n,
+            "n1": self.n1,
+            "n2": self.n2,
             "held": self.held,
             "scalars": np.array([self.head, self.rows], dtype=np.int64),
         }
 
 
-def run_ranks(rw: RankWindow, x: np.ndarray, y: np.ndarray, w: np.ndarray, chunks: int = 1) -> dict[str, np.ndarray]:
+def run_ranks(
+    rw: RankWindow, x: np.ndarray, y: np.ndarray, w: np.ndarray, chunks: int = 1
+) -> dict[str, np.ndarray]:
     """Feed the stream in ``chunks`` pieces; the emitted numbers, ``(n, k, T)`` each."""
     outs: dict[str, list[np.ndarray]] = {"spearman": [], "kendall": [], "xi": []}
     for piece in np.array_split(np.arange(len(w)), chunks):

@@ -74,7 +74,9 @@ def mm_longhand(a: np.ndarray, b: np.ndarray) -> float:
         h = -math.fsum((v / n) * math.log(v / n) for v in c.values())
         return h + (len(c) - 1) / (2 * n)
 
-    return h_mm(a.tolist()) + h_mm(b.tolist()) - h_mm(list(zip(a.tolist(), b.tolist(), strict=True)))
+    return (
+        h_mm(a.tolist()) + h_mm(b.tolist()) - h_mm(list(zip(a.tolist(), b.tolist(), strict=True)))
+    )
 
 
 def check_mi(rule, bx, by, window, n=4000, read_every=97, seed=3) -> dict[str, float]:
@@ -99,7 +101,9 @@ def check_mi(rule, bx, by, window, n=4000, read_every=97, seed=3) -> dict[str, f
                     mm = mm_longhand(a, b)
                     res["mm_def"] = max(res["mm_def"], abs(r["mi_mm"][j, t] - mm))
                     # The correction added, as the request wrote it, against the definition.
-                    plus = ref + (r["b_xy"][j, t] - r["b_x"][j, t] - r["b_y"][j, t] + 1) / (2 * len(xs))
+                    plus = ref + (r["b_xy"][j, t] - r["b_x"][j, t] - r["b_y"][j, t] + 1) / (
+                        2 * len(xs)
+                    )
                     res["mm_plus_sign"] = max(res["mm_plus_sign"], abs(plus - mm))
                     res["reads"] += 1
         m.update(x[i], y[i], w[i])
@@ -132,7 +136,9 @@ def binned_mi_population(p: np.ndarray) -> float:
     return float(np.sum(p[m] * np.log(p[m] / (pa * pb)[m])))
 
 
-def check_gaussian(rho: float, b: int, n: int = 20_000, seeds: int = 40, warm: int = 2000) -> dict[str, float]:
+def check_gaussian(
+    rho: float, b: int, n: int = 20_000, seeds: int = 40, warm: int = 2000
+) -> dict[str, float]:
     """Plug-in and Miller-Madow MI of a bivariate normal on ``b x b`` quantile bins learned
     from the first ``warm`` rows; the table of each seed's ``n`` rows is read by the
     model's own read (``mi_from_tables``), which check 1 holds to scikit-learn."""
@@ -152,8 +158,14 @@ def check_gaussian(rho: float, b: int, n: int = 20_000, seeds: int = 40, warm: i
     plug_a, mm_a = np.array(plug), np.array(mm)
     sd = float(mm_a.std(ddof=1))
     return {
-        "rho": rho, "bins": b, "I": i_true, "I_bin": i_bin, "loss": i_true - i_bin,
-        "plugin": float(plug_a.mean()), "mm": float(mm_a.mean()), "sd": sd,
+        "rho": rho,
+        "bins": b,
+        "I": i_true,
+        "I_bin": i_bin,
+        "loss": i_true - i_bin,
+        "plugin": float(plug_a.mean()),
+        "mm": float(mm_a.mean()),
+        "sd": sd,
         "bias_pred": (b - 1) ** 2 / (2 * n),
         "mm_z": float((mm_a.mean() - i_bin) / (sd / math.sqrt(seeds))),
         "mm_worst": float(np.max(np.abs(mm_a - i_bin))),
@@ -163,7 +175,9 @@ def check_gaussian(rho: float, b: int, n: int = 20_000, seeds: int = 40, warm: i
 # 4. Decay against a plain-Python longhand.
 
 
-def check_decay(half_life: float, n: int = 6000, seed: int = 4, bx: int = 8, by: int = 6) -> dict[str, float]:
+def check_decay(
+    half_life: float, n: int = 6000, seed: int = 4, bx: int = 8, by: int = 6
+) -> dict[str, float]:
     x, y, w = stream(n, 3, 2, seed=seed, weights="float")
     xe, ye = learn_edges(x, y, w, 400, bx, by, "quantile")
     m = BinnedMI(xe, ye, half_life=half_life)
@@ -206,15 +220,27 @@ def check_decay(half_life: float, n: int = 6000, seed: int = 4, bx: int = 8, by:
                     cb = [math.fsum(c[a][b] for a in range(nbx)) for b in range(nby)]
                     mi = math.fsum(
                         (c[a][b] / tot) * math.log(c[a][b] * tot / (ra[a] * cb[b]))
-                        for a in range(nbx) for b in range(nby) if c[a][b] > 0
+                        for a in range(nbx)
+                        for b in range(nby)
+                        if c[a][b] > 0
                     )
                     worst_mi = max(worst_mi, abs(r["mi"][j, tt] - mi))
                     # scipy's entropy on the weighted margins and joint (the scan's decayed oracle)
                     cj = np.array(c)
-                    ent = stats.entropy(cj.sum(1)) + stats.entropy(cj.sum(0)) - stats.entropy(cj.ravel())
+                    ent = (
+                        stats.entropy(cj.sum(1))
+                        + stats.entropy(cj.sum(0))
+                        - stats.entropy(cj.ravel())
+                    )
                     worst_ent = max(worst_ent, abs(r["mi"][j, tt] - ent))
-    return {"half_life": half_life, "rows": n, "folds": folds, "table_rel": worst_tab,
-            "mi_longhand": worst_mi, "mi_scipy_entropy": worst_ent}
+    return {
+        "half_life": half_life,
+        "rows": n,
+        "folds": folds,
+        "table_rel": worst_tab,
+        "mi_longhand": worst_mi,
+        "mi_scipy_entropy": worst_ent,
+    }
 
 
 # 5. The rings: exactly the rows they should hold.
@@ -222,8 +248,8 @@ def check_decay(half_life: float, n: int = 6000, seed: int = 4, bx: int = 8, by:
 
 def check_rings(window: int = 60, n: int = 2000, seed: int = 5) -> dict[str, float]:
     x, y, w = stream(n, 3, 2, seed=seed, first_zero=True)
-    w[300:300 + 2 * window] = 0.0  # a run of zero weights longer than the window
-    x[900:900 + window // 2] = np.nan  # a gap of half a window
+    w[300 : 300 + 2 * window] = 0.0  # a run of zero weights longer than the window
+    x[900 : 900 + window // 2] = np.nan  # a gap of half a window
     rw = RankWindow(3, 2, window, rank_every=1)
     xe, ye = learn_edges(x, y, np.where(w > 0, 1.0, 0.0), 200, 6, 5, "quantile")
     mi = BinnedMI(xe, ye, window=window)
@@ -251,8 +277,14 @@ def check_rings(window: int = 60, n: int = 2000, seed: int = 5) -> dict[str, flo
             empty_checked &= bool(np.all(rw.n == 0) and np.all(np.isnan(rw.kendall())))
         rw.learn(x[i], y[i], float(w[i]))
         mi.update(x[i], y[i], w[i])
-    return {"rows": n, "rank_mismatch": bad_rank, "kendall_pairs_mismatch": bad_pairs,
-            "mi_table_mismatch": bad_mi, "empty_window_ok": int(empty_checked), "first_row_zero": int(w[0] == 0)}
+    return {
+        "rows": n,
+        "rank_mismatch": bad_rank,
+        "kendall_pairs_mismatch": bad_pairs,
+        "mi_table_mismatch": bad_mi,
+        "empty_window_ok": int(empty_checked),
+        "first_row_zero": int(w[0] == 0),
+    }
 
 
 def check_window_float(window: int = 500, n: int = 100_000, seed: int = 6) -> dict[str, float]:
@@ -268,9 +300,21 @@ def check_window_float(window: int = 500, n: int = 100_000, seed: int = 6) -> di
     tab = m.tables()[0, 0]
     rr = mi_from_tables(ref)
     r = m.read()
-    return {"cell_residue": float(np.max(np.abs(tab - ref))), "false_nonzero": int(np.sum((tab != 0) & (ref == 0))),
-            "mi_gap": float(abs(r["mi"][0, 0] - rr["mi"])),
-            "mi_entropy_gap": float(abs(r["mi"][0, 0] - (stats.entropy(ref.sum(1)) + stats.entropy(ref.sum(0)) - stats.entropy(ref.ravel()))))}
+    return {
+        "cell_residue": float(np.max(np.abs(tab - ref))),
+        "false_nonzero": int(np.sum((tab != 0) & (ref == 0))),
+        "mi_gap": float(abs(r["mi"][0, 0] - rr["mi"])),
+        "mi_entropy_gap": float(
+            abs(
+                r["mi"][0, 0]
+                - (
+                    stats.entropy(ref.sum(1))
+                    + stats.entropy(ref.sum(0))
+                    - stats.entropy(ref.ravel())
+                )
+            )
+        ),
+    }
 
 
 # 6. Ranks against scipy.
@@ -288,13 +332,24 @@ def xi_longhand(xs: np.ndarray, ys: np.ndarray) -> float:
     return 1.0 - n * num / den
 
 
-def check_ranks(window: int, rank_every: int, n: int = 1500, seed: int = 7, chunks: int = 13) -> dict[str, float]:
+def check_ranks(
+    window: int, rank_every: int, n: int = 1500, seed: int = 7, chunks: int = 13
+) -> dict[str, float]:
     x, y, w = stream(n, 4, 2, seed=seed)
     out = run_ranks(RankWindow(4, 2, window, rank_every), x, y, w)
     same = run_ranks(RankWindow(4, 2, window, rank_every), x, y, w, chunks=chunks)
     chunk_ok = all(np.array_equal(out[key], same[key], equal_nan=True) for key in out)
-    res = {"spearman": 0.0, "kendall": 0.0, "xi_scipy": 0.0, "xi_longhand": 0.0,
-           "xi_cont": 0.0, "xi_scipy_tied_x": 0.0, "held_ok": 1, "chunks_ok": int(chunk_ok), "reads": 0}
+    res = {
+        "spearman": 0.0,
+        "kendall": 0.0,
+        "xi_scipy": 0.0,
+        "xi_longhand": 0.0,
+        "xi_cont": 0.0,
+        "xi_scipy_tied_x": 0.0,
+        "held_ok": 1,
+        "chunks_ok": int(chunk_ok),
+        "reads": 0,
+    }
     last_read = 0
     rw = RankWindow(4, 2, window, rank_every)
     for i in range(n):
@@ -309,7 +364,13 @@ def check_ranks(window: int, rank_every: int, n: int = 1500, seed: int = 7, chun
                     if np.isfinite(kt):
                         res["kendall"] = max(res["kendall"], abs(out["kendall"][i, j, t] - kt))
                 if not read:
-                    res["held_ok"] &= int(np.array_equal(out["spearman"][i, j, t], out["spearman"][last_read, j, t], equal_nan=True))
+                    res["held_ok"] &= int(
+                        np.array_equal(
+                            out["spearman"][i, j, t],
+                            out["spearman"][last_read, j, t],
+                            equal_nan=True,
+                        )
+                    )
                     continue
                 if len(xs) < 3:
                     continue
@@ -319,11 +380,17 @@ def check_ranks(window: int, rank_every: int, n: int = 1500, seed: int = 7, chun
                     res["spearman"] = max(res["spearman"], abs(out["spearman"][i, j, t] - sp))
                 xi = out["xi"][i, j, t]
                 if len(np.unique(xs)) == len(xs):
-                    res["xi_scipy"] = max(res["xi_scipy"], abs(xi - stats.chatterjeexi(xs, ys).statistic))
+                    res["xi_scipy"] = max(
+                        res["xi_scipy"], abs(xi - stats.chatterjeexi(xs, ys).statistic)
+                    )
                 else:
-                    res["xi_scipy_tied_x"] = max(res["xi_scipy_tied_x"], abs(xi - stats.chatterjeexi(xs, ys).statistic))
+                    res["xi_scipy_tied_x"] = max(
+                        res["xi_scipy_tied_x"], abs(xi - stats.chatterjeexi(xs, ys).statistic)
+                    )
                 if i % (7 * rank_every) == 0:
-                    res["xi_longhand"] = max(res["xi_longhand"], abs(xi - xi_longhand(xs.tolist(), ys.tolist())))
+                    res["xi_longhand"] = max(
+                        res["xi_longhand"], abs(xi - xi_longhand(xs.tolist(), ys.tolist()))
+                    )
         if read and i > 0:
             # y_continuous: the model's other form, on every pair at the read rows
             for j in range(4):
@@ -340,7 +407,9 @@ def check_ranks(window: int, rank_every: int, n: int = 1500, seed: int = 7, chun
 # 7. Cost.
 
 
-def time_ranks(window: int, k: int = 10, t: int = 1, rows: int = 200, reads: int = 5, seed: int = 8) -> dict[str, float]:
+def time_ranks(
+    window: int, k: int = 10, t: int = 1, rows: int = 200, reads: int = 5, seed: int = 8
+) -> dict[str, float]:
     x, y, w = stream(window + rows, k, t, seed=seed, gaps=False, ties=False, weights="ones")
     rw = RankWindow(k, t, window, rank_every=10**9)
     t0 = time.perf_counter()
@@ -359,11 +428,19 @@ def time_ranks(window: int, k: int = 10, t: int = 1, rows: int = 200, reads: int
     for _ in range(1000):
         rw.kendall()
     kendall_read = (time.perf_counter() - t0) / 1000
-    return {"W": window, "pairs": k * t, "fill_s": fill, "row_us": per_row * 1e6,
-            "read_ms": per_read * 1e3, "kendall_read_us": kendall_read * 1e6}
+    return {
+        "W": window,
+        "pairs": k * t,
+        "fill_s": fill,
+        "row_us": per_row * 1e6,
+        "read_ms": per_read * 1e3,
+        "kendall_read_us": kendall_read * 1e6,
+    }
 
 
-def time_mi(window: int | None, k: int = 10, t: int = 1, bins: int = 16, rows: int = 3000, seed: int = 9) -> dict[str, float]:
+def time_mi(
+    window: int | None, k: int = 10, t: int = 1, bins: int = 16, rows: int = 3000, seed: int = 9
+) -> dict[str, float]:
     fill = window or 0
     x, y, w = stream(fill + rows, k, t, seed=seed, gaps=False, ties=False, weights="ones")
     xe, ye = learn_edges(x, y, w, 500, bins, bins, "quantile")
@@ -378,7 +455,13 @@ def time_mi(window: int | None, k: int = 10, t: int = 1, bins: int = 16, rows: i
     for _ in range(200):
         m.read()
     per_read = (time.perf_counter() - t0) / 200
-    return {"W": window or 0, "pairs": k * t, "bins": bins, "row_us": per_row * 1e6, "read_us": per_read * 1e6}
+    return {
+        "W": window or 0,
+        "pairs": k * t,
+        "bins": bins,
+        "row_us": per_row * 1e6,
+        "read_us": per_read * 1e6,
+    }
 
 
 # 8. State size.
@@ -409,7 +492,9 @@ def check_state(k: int = 10, t: int = 1, bins: int = 16, window: int = 1000) -> 
             m.update(x[i], y[i], 1.0)
         counted = sum(a.nbytes for a in m.state_arrays().values())
         out["mi_" + ("window" if win else "decay")] = counted
-        out["mi_" + ("window" if win else "decay") + "_formula"] = mi_state_bytes(k, t, bins, bins, win)
+        out["mi_" + ("window" if win else "decay") + "_formula"] = mi_state_bytes(
+            k, t, bins, bins, win
+        )
     rw = RankWindow(k, t, window)
     for i in range(1200):
         rw.learn(x[i], y[i], 1.0)
@@ -436,6 +521,11 @@ def check_mi_precision(n: int = 200_000, bins: int = 32, seed: int = 12) -> dict
     m = cl > 0
     ref = (cl[m] / nl * np.log(cl[m] * nl / (pa * pb)[m])).sum()
     ent = stats.entropy(c.sum(1)) + stats.entropy(c.sum(0)) - stats.entropy(c.ravel())
-    return {"mi": r, "abs_gap": float(abs(r - ref)), "rel_gap": float(abs(r - ref) / ref),
-            "entropy_form_gap": float(abs(ent - ref)), "sklearn_gap": float(abs(mutual_info_score(a, b) - ref)),
-            "longdouble_eps": float(np.finfo(np.longdouble).eps)}
+    return {
+        "mi": r,
+        "abs_gap": float(abs(r - ref)),
+        "rel_gap": float(abs(r - ref) / ref),
+        "entropy_form_gap": float(abs(ent - ref)),
+        "sklearn_gap": float(abs(mutual_info_score(a, b) - ref)),
+        "longdouble_eps": float(np.finfo(np.longdouble).eps),
+    }

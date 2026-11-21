@@ -41,10 +41,7 @@ def stream(
     if ties:
         x[:, 1 % k] = np.round(x[:, 1 % k], 1)  # ties in a feature (about 40 values)
         y[:, t - 1] = np.round(y[:, t - 1], 1)  # ties in a target
-    if weights == "float":
-        w = rng.uniform(0.2, 2.0, n)
-    else:
-        w = np.ones(n)
+    w = rng.uniform(0.2, 2.0, n) if weights == "float" else np.ones(n)
     if gaps and weights != "ones":
         w[rng.random(n) < 0.05] = 0.0
         if first_zero:
