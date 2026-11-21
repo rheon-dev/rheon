@@ -2316,6 +2316,7 @@ fn expectile_cfg(refit_rows: u32) -> ExpectileCfg {
         fit_intercept: true,
         decay: decay(),
         expectile: 0.8,
+        ridge: 1e-6,
         min_weight: 2.0,
         refit_rows,
         window_rows: None,

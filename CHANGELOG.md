@@ -36,8 +36,10 @@ model that only the new build has is listed as an addition and passes.
   those at or below it `1 - tau`, one level a spec. Each row's side is
   judged at the fit before it and the row enters mean-form sums at weight
   `w·a`: `S = λS + wa`, `G += (wa/S)(zzᵀ − G)`, `c += (wa/S)(zy − c)`,
-  `β = G⁻¹c`; a row's own update cannot move its residual across zero, so
-  one solve a row is the whole step. Each target's first `max(200, 10k)`
+  `β = (G + r·(W/S)·D)⁻¹c`, `r` the `ridge` on the slopes (default 1e-6,
+  which keeps a constant or duplicated feature solvable from the first
+  row; 0 the exact fit); a row's own update cannot move its residual
+  across zero, so one solve a row is the whole step. Each target's first `max(200, 10k)`
   rows are refit exactly once (`refit_rows`, under `refit_budget`), the
   sums rebuilt at the sides the exact fit gives them; or a window of the
   last `window_rows` rows, or of the last `window_size` of the clock (a

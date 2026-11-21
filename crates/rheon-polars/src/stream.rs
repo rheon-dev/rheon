@@ -569,7 +569,8 @@ impl AnyModel {
             AnyModel::Sgd(m) => Some(m.coefficients()),
             AnyModel::Pa(m) => Some(m.coefficients().to_vec()),
             AnyModel::Glm(m) => Some(m.coefficients()),
-            AnyModel::Expectile(m) => Some(m.coefficients()),
+            // Absent until a target has a fit.
+            AnyModel::Expectile(m) => m.has_fit().then(|| m.coefficients()),
             AnyModel::Holt(m) => Some(m.coefficients()),
             // The centres, k rows of p; absent until seeded.
             AnyModel::KMeans(m) => m.coefficients(),

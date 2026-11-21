@@ -429,8 +429,16 @@ CASES: list[Case] = [
     Case(
         "expectile_rows",
         "expectile",
-        {**XY, "expectile": 0.6, "half_life": float("inf"), "window_rows": 30, "weight": "w"},
+        {
+            **XY,
+            "expectile": 0.6,
+            "half_life": float("inf"),
+            "window_rows": 30,
+            "weight": "w",
+            "max_rows_between_coefs": 7,
+        },
     ),
+    Case("expectile2", "expectile", full2(expectile=0.2, ridge=0.0)),
     Case(
         "ftrl",
         "ftrl",

@@ -180,7 +180,7 @@ _REGRESSIONS = frozenset(
 )
 #: The models whose fit reads a ridge in the features' squared units unless
 #: ``standardize``.
-_RIDGED = frozenset(["ewridge", "huber", "quantile"])
+_RIDGED = frozenset(["ewridge", "huber", "quantile", "expectile"])
 #: The models that keep a co-moment matrix ``gram()`` reports.
 _GRAMMED = frozenset(["ewridge", "lasso", "ew_cov"])
 

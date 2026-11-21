@@ -1325,6 +1325,11 @@ pub enum ModelKind {
     Expectile {
         /// The level `τ`, above 0 and below 1; required.
         expectile: f64,
+        /// The penalty on the slopes, on the mean-form Gram in the
+        /// features' squared units; absent is 1e-6, 0 the exact fit. Skipped
+        /// when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ridge: Option<f64>,
         /// Each target's first learned rows refit exactly, once: absent is
         /// `rheon_core::default_expectile_refit_rows`, 0 is off. Skipped
         /// when absent.

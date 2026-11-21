@@ -30,9 +30,18 @@
 //! f    = w a / S'               (no update where w a = 0)
 //! G'   = G + f (x̃x̃' − G)
 //! c'   = c + f (x̃ y − c)
-//! β'   = G'⁻¹ c'                once p rows of positive weight are in and G' is positive definite
-//! W'   = λ W + w                (n_eff, emitted as weight_sum: the raw weight, not S)
+//! W'   = λ W + w                (the raw weight of the target's rows; n_eff is every row's)
+//! β'   = (G' + r (W'/S') D)⁻¹ c'
 //! ```
+//!
+//! `D` is the slopes' diagonal (the intercept unpenalized) and `r` the
+//! `ridge`, so `β` minimises `Σ v a(r) r² + r W |β_s|²` at the sides judged:
+//! a penalty on the mean-form Gram, in the features' squared units, which
+//! keeps every solve defined from the first row, a constant or duplicated
+//! feature included. With `r = 0` the fit is the exact loss's, and waits for
+//! `p` rows of positive weight and a pivot of `G` above 1e-12 of its largest
+//! diagonal. The refits minimise the same penalized loss, `W` the weight of
+//! the rows they hold.
 //!
 //! A row's own update cannot move its residual across zero: `β' − β = w a
 //! (S'G')⁻¹ x̃ r`, so `r_after = r (1 − w a h)`, `h = x̃'(S'G')⁻¹x̃`, and `0 ≤ w
@@ -57,7 +66,7 @@
 //!
 //! **The exact refit**, of a buffer or a window: start from the sides at
 //! the fit before (warm) or from least squares (cold); a pass is one WLS
-//! solve at the current sides, then every side is judged again. A step that
+//! solve at the current sides, `(Σ v a x̃x̃' + r V D) β = Σ v a x̃ y`, then every side is judged again. A step that
 //! does not lower `L` is halved (the loss is convex, so a halving always
 //! helps). It stops when no side changes after a full step, which is the
 //! exact minimiser; when the fitted values moved by at most `max(1e-12 s, 8
@@ -170,6 +179,9 @@ pub struct ExpectileCfg {
     pub decay: Decay,
     /// `τ`, the level, in `(0, 1)`.
     pub expectile: f64,
+    /// `r`, the penalty `r V |β_s|²` on the slopes, `V` the rows' weight
+    /// (on the mean-form Gram, in the features' squared units): at least 0.
+    pub ridge: f64,
     #[serde(with = "crate::humanfloat::f64_or_tag")]
     pub min_weight: f64,
     /// Each target's first learned rows fitted exactly, once; 0 is off.
@@ -227,12 +239,21 @@ impl ExpectileCfg {
         no.take(crate::model::check_min_weight("expectile", self.min_weight));
         if !(self.expectile > 0.0 && self.expectile < 1.0) {
             no.refuse(format!(
-                "expectile: the level must be above 0 and below 1, but it is {}. Give the \
-                 level tau, such as 0.9 for an upper expectile or 0.5 for the mean.",
+                "expectile: expectile, the level tau, must be above 0 and below 1, but it is \
+                 {}. Give the level, such as 0.9 for an upper expectile or 0.5 for the \
+                 mean.",
                 self.expectile
             ));
         }
         let p = self.k_total();
+        if !(self.ridge >= 0.0 && self.ridge.is_finite()) {
+            no.refuse(format!(
+                "expectile: ridge must be finite and at least 0, but it is {}. Set ridge to a \
+                 small number, such as the default 1e-6, in the features' squared units, or \
+                 to 0 for the exact fit.",
+                self.ridge
+            ));
+        }
         if let Some(n) = self.window_rows
             && n < p.max(1)
         {
@@ -507,6 +528,8 @@ pub struct Expectile {
 #[derive(Debug, Clone, Default)]
 struct Work {
     x: Vec<f64>,
+    /// The system a one-pass solve factorizes: `G` and its ridge.
+    a: Vec<f64>,
     l: Vec<f64>,
     d: Vec<f64>,
     fit: Fit,
@@ -522,6 +545,10 @@ impl PartialEq for Work {
 /// `n × p`), their targets and weights, and the solve's scratch.
 #[derive(Debug, Clone, Default)]
 struct Fit {
+    /// The penalty `r V |β_s|²` and whether `β`'s first entry is the
+    /// intercept, which it spares.
+    ridge: f64,
+    icpt: bool,
     z: Vec<f64>,
     y: Vec<f64>,
     v: Vec<f64>,
@@ -610,12 +637,18 @@ impl Fit {
         self.v.clear();
     }
 
-    /// The asymmetric loss `Σ v a(r) r²` at `b`.
+    /// The asymmetric loss and its penalty, `Σ v a(r) r² + r V |β_s|²`, at
+    /// `b`.
     fn loss(&self, b: &[f64], p: usize, tau: f64) -> f64 {
         let mut f = 0.0;
         for i in 0..self.n() {
             let r = self.y[i] - dot(&self.z[i * p..(i + 1) * p], b);
             f += self.v[i] * side_weight(r, tau) * r * r;
+        }
+        if self.ridge > 0.0 {
+            let slopes = &b[usize::from(self.icpt)..];
+            let v: f64 = self.v.iter().sum();
+            f += self.ridge * v * slopes.iter().map(|x| x * x).sum::<f64>();
         }
         f
     }
@@ -647,7 +680,14 @@ impl Fit {
                 self.c[r] += cz * self.y[i];
             }
         }
-        counted >= p && chol_solve(&self.g, &self.c, p, &mut self.l, out)
+        if self.ridge > 0.0 {
+            let v: f64 = self.v.iter().sum();
+            for i in usize::from(self.icpt)..p {
+                self.g[at(i, i)] += self.ridge * v;
+            }
+        }
+        let enough = if self.ridge > 0.0 { 1 } else { p };
+        counted >= enough && chol_solve(&self.g, &self.c, p, &mut self.l, out)
     }
 
     /// The exact expectile regression of the rows held, warm-started at
@@ -825,6 +865,12 @@ impl Expectile {
                 }
             })
             .collect()
+    }
+
+    /// Whether any target has a fit: before one, there are no coefficients
+    /// to report.
+    pub fn has_fit(&self) -> bool {
+        self.fitted.iter().any(|&f| f)
     }
 
     /// The weight the fit is made of (hard rule 8): every row's, decayed,
@@ -1025,6 +1071,8 @@ impl Expectile {
             return;
         };
         let fit = &mut self.work.fit;
+        fit.ridge = self.cfg.ridge;
+        fit.icpt = icpt;
         for j in 0..m {
             fit.clear();
             for r in 0..w.rows() {
@@ -1076,16 +1124,27 @@ impl Expectile {
         self.solve(j);
     }
 
-    /// `β = G⁻¹ c` for target `j` once it has a row per coefficient; where
-    /// `G` is not positive definite -- a history forgotten to its last row
-    /// -- the fit before stands.
+    /// `β = (G + r (W/S) D)⁻¹ c` for target `j`, `W` its rows' raw weight
+    /// and `D` the slopes' diagonal, from its first row under a ridge and
+    /// once it has a row per coefficient without one; where the system is
+    /// not positive definite -- a history forgotten to its last row -- the
+    /// fit before stands.
     fn solve(&mut self, j: usize) {
         let k = self.cfg.k_total();
-        if self.rows[j] < k as u64 {
+        let ridge = self.cfg.ridge;
+        if ridge == 0.0 && self.rows[j] < k as u64 {
             return;
         }
-        let Work { l, d, .. } = &mut self.work;
-        if chol_solve(&self.gram[j], &self.cross[j], k, l, d) {
+        let Work { l, d, a, .. } = &mut self.work;
+        a.clear();
+        a.extend_from_slice(&self.gram[j]);
+        if ridge > 0.0 && self.s[j] > 0.0 {
+            let pen = ridge * self.w_target[j] / self.s[j];
+            for i in usize::from(self.cfg.fit_intercept)..k {
+                a[at(i, i)] += pen;
+            }
+        }
+        if chol_solve(a, &self.cross[j], k, l, d) {
             self.beta[j].copy_from_slice(d);
             self.fitted[j] = true;
         }
@@ -1099,6 +1158,8 @@ impl Expectile {
         let icpt = self.cfg.fit_intercept;
         let rows = std::mem::take(&mut self.refit[j].rows);
         let fit = &mut self.work.fit;
+        fit.ridge = self.cfg.ridge;
+        fit.icpt = icpt;
         fit.clear();
         for row in rows.chunks_exact(nf + 2) {
             if icpt {
@@ -1275,6 +1336,9 @@ impl Expectile {
         }
         self.read_into(x, floor, n_eff, out);
         let tau = self.cfg.expectile;
+        // The targets' weights first: a solve reads its rows' weight `W`
+        // with this row's in it, as `S` has it.
+        crate::model::age_target_weights(&mut self.w_target, |j| y[j].is_some(), lam, weight);
         for (j, &yj) in y.iter().enumerate().take(m) {
             let Some(t) = yj else {
                 // The sums age with the clock, whether or not the row
@@ -1308,7 +1372,6 @@ impl Expectile {
             }
         }
         self.w_sum = lam * self.w_sum + weight;
-        crate::model::age_target_weights(&mut self.w_target, |j| y[j].is_some(), lam, weight);
     }
 }
 

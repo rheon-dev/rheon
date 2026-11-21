@@ -43,6 +43,7 @@ fn cfg(k: usize, tau: f64) -> ExpectileCfg {
         fit_intercept: true,
         decay: Decay::Lam(1.0),
         expectile: tau,
+        ridge: 0.0,
         min_weight: 0.0,
         refit_rows: 0,
         window_rows: None,
@@ -387,8 +388,8 @@ fn the_settings_are_checked() {
         let e = Expectile::new(c).unwrap_err();
         assert!(e.contains(words), "{e}");
     };
-    refuse(cfg(2, 1.0), "the level must be above 0 and below 1");
-    refuse(cfg(2, 0.0), "the level must be above 0 and below 1");
+    refuse(cfg(2, 1.0), "must be above 0 and below 1");
+    refuse(cfg(2, 0.0), "must be above 0 and below 1");
     let mut c = cfg(2, 0.5);
     c.window_rows = Some(2);
     refuse(c, "at least one row per coefficient");
@@ -633,4 +634,47 @@ fn a_state_of_the_wrong_shape_is_refused() {
             assert!(Expectile::restore(&bad.state()).is_err());
         }
     }
+}
+
+/// Under a ridge `r`, the one pass at `τ = 1/2` solves `(Σ v z z'/2 + r W D)
+/// β = Σ v z y / 2`, `W = Σ v` and `D` the slopes' diagonal: the penalized
+/// loss `Σ v a r² + r W |β_s|²` at every side 1/2, by faer's LU. And the
+/// first rows' refit lands on the same penalized loss's minimiser, whose
+/// stationarity holds with the penalty's term.
+#[test]
+fn a_ridge_penalizes_the_slopes_on_the_rows_weight() {
+    let r = 0.05;
+    let mut c = cfg(2, 0.5);
+    c.ridge = r;
+    c.decay = Decay::Lam(0.99);
+    let mut m = Expectile::new(c).unwrap();
+    let mut kept: Vec<(Vec<f64>, f64, f64)> = Vec::new();
+    for (x, y) in stream(2, 300, 16) {
+        m.step(&x, &[Some(y)], 1.0, 1.0);
+        for row in kept.iter_mut() {
+            row.2 *= 0.99;
+        }
+        kept.push((z_of(&x), y, 1.0));
+    }
+    let w: f64 = kept.iter().map(|k| k.2).sum();
+    let (mut g, mut b) = (vec![0.0; 9], vec![0.0; 3]);
+    for (z, y, v) in &kept {
+        for i in 0..3 {
+            for j in 0..3 {
+                g[i * 3 + j] += 0.5 * v * z[i] * z[j];
+            }
+            b[i] += 0.5 * v * z[i] * y;
+        }
+    }
+    g[4] += r * w;
+    g[8] += r * w;
+    let want = oracle::solve(&g, &b);
+    assert!(rel(&m.coefficients()[0], &want) < 1e-12);
+    // A constant feature and a ridge: a fit from the first rows on.
+    let mut c = cfg(2, 0.9);
+    c.ridge = 1e-6;
+    let mut m = Expectile::new(c).unwrap();
+    m.step(&[0.0, 1.0], &[Some(2.0)], 0.0, 1.0);
+    let s = m.step(&[0.0, 2.0], &[Some(3.0)], 1.0, 1.0);
+    assert!(s.pred[0].is_finite());
 }

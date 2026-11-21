@@ -20,6 +20,7 @@ def expectile(
     targets: TargetList,
     features: list[str],
     expectile: float,
+    ridge: float | None = None,
     refit_rows: int | None = None,
     window_rows: int | None = None,
     window_size: float | Duration | None = None,
@@ -56,6 +57,13 @@ def expectile(
         several specs: each level weighs every row by its own sides, so they
         share no sums, and a spec per level costs what one spec of several
         would.
+    ``ridge``
+        The penalty ``ridge * W * |slopes|²`` beside the loss, ``W`` the
+        target's weight: a ridge on the mean-form Gram, in the features'
+        squared units, as :func:`quantile`'s. Default ``1e-6``, which keeps
+        every solve defined from the first row, a constant or duplicated
+        feature included; ``0`` is the exact fit, which waits for a row per
+        coefficient. Finite and at least 0.
     ``refit_rows``
         The learned rows (each of positive weight, with its target) after
         which each target's first rows are fitted exactly, once, and the
@@ -141,7 +149,8 @@ def expectile(
     As every builder does (:mod:`rheon.spec`), and ``ValueError``
     naming the problem for:
 
-    - an ``expectile`` not above 0 and below 1;
+    - an ``expectile`` not above 0 and below 1, and a ``ridge`` below 0 or
+      not finite;
     - a ``window_rows`` under one row per coefficient, a ``window_size`` not
       finite and above 0, the two together, ``closed="both"`` without
       ``window_size``, and a window beside a finite ``half_life`` or a
@@ -165,11 +174,14 @@ def expectile(
         S    = λ S + w a
         G    = G + (w a / S) (x̃x̃' - G)
         c    = c + (w a / S) (x̃ y - c)
-        β    = G⁻¹ c                   once a row per coefficient is in
+        W    = λ W + w
+        β    = (G + ridge (W / S) D)⁻¹ c
 
     ``G`` and ``c`` are per target, since each target's rows fall on their
-    own sides. Under a window, and at the refit, ``β`` is instead the exact
-    minimiser of ``Σ v a(r) r²`` over the rows held, ``v`` their weights:
+    own sides; ``D`` is the slopes' diagonal, the intercept unpenalized.
+    Under a window, and at the refit, ``β`` is instead the exact minimiser
+    of ``Σ v a(r) r² + ridge V |slopes|²`` over the rows held, ``v`` their
+    weights and ``V`` their sum:
     each pass solves the weighted least squares at the current sides and
     judges every side again, until no side changes.
 
@@ -245,6 +257,7 @@ def expectile(
     model: dict[str, Any] = {
         "type": "expectile",
         "expectile": expectile,
+        "ridge": ridge,
         "refit_rows": refit_rows,
         "window_rows": window_rows,
         "window_size": window_size,

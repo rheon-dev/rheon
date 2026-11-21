@@ -211,6 +211,7 @@
     targets
     features
     expectile
+    ridge = None
     refit_rows = None
     window_rows = None
     window_size = None
@@ -642,6 +643,7 @@
     model.n_features = 1
     model.n_targets = 1
     model.refit_rows = 200
+    model.ridge = 1e-06
     model.window_clock = null
     model.window_rows = null
     stream.breaks_half_life = 50.0
@@ -2718,7 +2720,7 @@
     ew_class: classes, closed, covariance_type, max_rows_between_snapshots, precision_prior, snapshot_every, window_budget, window_size
     ew_cov: bias, closed, gram_threads, lags, mahal_quantiles, max_rows_between_pcas, max_rows_between_snapshots, pca, pca_every, precision_prior, snapshot_every, stats, window_budget, window_size
     ewridge: closed, coef_prior, feature_sets, gram_block_rows, gram_threads, long_half_life, max_rows_between_snapshots, max_rows_between_solves, ridge, ridge_scale, session_shrink, snapshot_every, solve_every, standardize, target_gaps, window_budget, window_size
-    expectile: closed, expectile, max_state_bytes, refit_budget, refit_rows, window_rows, window_size
+    expectile: closed, expectile, max_state_bytes, refit_budget, refit_rows, ridge, window_rows, window_size
     ftrl: alpha, beta, l1, l2, loss, strict_binary
     glm: family, link, refit_budget, refit_rows, ridge, step_cap, var_power
     hawkes: closed, kernel_decays, kernel_half_lives, max_state_bytes, window_events, window_size

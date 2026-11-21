@@ -85,7 +85,7 @@ def rel(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def spec(k: int, tau: float, **kw: object) -> dict:
-    kw = {"half_life": float("inf"), "min_weight": 0.0, **kw}
+    kw = {"half_life": float("inf"), "min_weight": 0.0, "ridge": 0.0, **kw}
     return rp.spec.expectile(
         "m", targets=["y"], features=[f"x{j}" for j in range(1, k)], expectile=tau, **kw
     )
@@ -169,6 +169,7 @@ def test_a_window_of_the_constant_alone_is_scipys_expectile(tau):
         targets=["y"],
         features=["one"],
         expectile=tau,
+        ridge=0.0,
         fit_intercept=False,
         half_life=float("inf"),
         window_rows=w,

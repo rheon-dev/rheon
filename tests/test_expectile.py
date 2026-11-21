@@ -40,6 +40,7 @@ def _spec(**kw: object) -> dict:
         "targets": ["y"],
         "features": ["x0", "x1"],
         "expectile": 0.8,
+        "ridge": 0.0,
         "half_life": 50.0,
         "min_weight": 0.0,
         **kw,

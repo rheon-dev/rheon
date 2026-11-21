@@ -499,6 +499,15 @@ def clock_specs(draw, model: str, step: int, cap: int):
         kw |= maybe("window_size", 1, 60)
         if "window_size" in kw:
             kw["closed"] = draw(st.sampled_from(["right", "both"]))
+    elif model == "expectile":
+        # Task 501: a window of the clock, with its edge, and its zero-weight
+        # rows that count in no clock; or decay with the first rows' refit.
+        kw |= xy | dict(expectile=draw(st.sampled_from([0.2, 0.5, 0.9])))
+        if draw(st.booleans()):
+            kw |= dict(half_life=float("inf"), window_size=steps(1, 60))
+            kw["closed"] = draw(st.sampled_from(["right", "both"]))
+        else:
+            kw["refit_rows"] = draw(st.integers(0, 12))
     else:
         assert model == "rls", model
         kw |= xy | maybe("embargo", 1, 5)

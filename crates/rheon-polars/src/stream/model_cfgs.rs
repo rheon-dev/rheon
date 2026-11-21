@@ -101,6 +101,7 @@ pub fn expectile_cfg(
 ) -> Result<rheon_core::ExpectileCfg, String> {
     let ModelKind::Expectile {
         expectile,
+        ridge,
         refit_rows,
         window_rows,
         window_size,
@@ -119,6 +120,7 @@ pub fn expectile_cfg(
         fit_intercept: spec.fit_intercept,
         decay,
         expectile: *expectile,
+        ridge: ridge.unwrap_or(1e-6),
         min_weight: spec.min_periods_or_default(),
         refit_rows: refit_rows.unwrap_or_else(|| {
             rheon_core::default_expectile_refit_rows(

@@ -270,7 +270,15 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
     ),
     "ewridge": frozenset({"gram_threads"}),
     "expectile": frozenset(
-        {"refit_rows", "window_rows", "window_size", "closed", "max_state_bytes", "refit_budget"}
+        {
+            "ridge",
+            "refit_rows",
+            "window_rows",
+            "window_size",
+            "closed",
+            "max_state_bytes",
+            "refit_budget",
+        }
     ),
     "huber": frozenset(
         {

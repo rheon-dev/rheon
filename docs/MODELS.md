@@ -1323,10 +1323,16 @@ is the decay over the clock since the last row that counted:
 pred = zᵀβ                    r = y − pred       (before the update)
 a    = a(r), or ½ before the target's first fit
 S    = λ S + w a
+W    = λ W + w
 G    = G + (w a / S)(z zᵀ − G)
 c    = c + (w a / S)(z y − c)
-β    = G⁻¹ c                  once a row per coefficient is in
+β    = (G + ridge (W / S) D)⁻¹ c
 ```
+
+`D` is the slopes' diagonal, so `ridge` penalizes the slopes by the
+target's weight `W`, the intercept spared. Its default, 1e-6, keeps
+every solve defined from the first row; at 0 the fit is the exact
+loss's and waits for a row per coefficient.
 
 A row's own update cannot move its residual across zero, so one solve a
 row is the whole step. What one pass cannot do is judge an earlier row
@@ -1349,17 +1355,20 @@ import numpy as np
 import polars as pl
 from rheon import polars as rp
 
+# A line with skewed noise: its 0.9 expectile is about 3.03 + 0.5x.
 rng = np.random.default_rng(7)
 x = rng.standard_normal(20_000)
 y = 1.0 + 0.5 * x + rng.exponential(1.0, 20_000)
 pl.DataFrame({"x": x, "y": y}).write_parquet("skewed.parquet")
 
+# The 0.9 expectile, learned from every row.
 upper = rp.spec.expectile(
     "upper", targets=["y"], features=["x"], half_life=float("inf"),
     expectile=0.9,                                 # the level to fit
 )
 bank = rp.ModelBank([upper])
 bank.fit(pl.scan_parquet("skewed.parquet"))        # learn every row, keep no output
+# The line found.
 c = {r["term"]: r["coef"] for r in bank.coef().iter_rows(named=True)}
 print(f"found: intercept {c['intercept']:.2f}, slope {c['x']:.2f}")
 ```

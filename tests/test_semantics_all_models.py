@@ -54,6 +54,13 @@ IDS = [m for m, _ in MODELS] + [f"{m}-blocked" for m, _ in VARIANTS]
 #: one is not.
 BINARY = {"ftrl", "glm"}
 
+#: Models built to the rule that a row of weight 0 counts in no clock
+#: (docs/PLAN.md task 539): the next row decays once over both rows'
+#: steps, where a null target's row, of positive weight, counts and
+#: decays twice, `lam(a) lam(b)` against `lam(a + b)`. The two ways of
+#: learning nothing then agree to rounding, not to the bit.
+NO_CLOCK_AT_ZERO_WEIGHT = {"expectile"}
+
 #: Models that treat a null in *any* target as predict-only for all targets.
 SHARED_STATE_MODELS = {"rls"}
 
@@ -153,6 +160,13 @@ class TestNullPolicy:
         w[row] = 0.0
         zero = run(model, extra, df.with_columns(w=pl.Series(w, dtype=pl.Float64)), **CLOCKED)
         a, b = _fields(out).slice(row + 1), _fields(zero).slice(row + 1)
+        if model in NO_CLOCK_AT_ZERO_WEIGHT:
+            from polars.testing import assert_frame_equal
+
+            assert_frame_equal(
+                a.drop("weight_sum"), b.drop("weight_sum"), rel_tol=1e-9, abs_tol=1e-12
+            )
+            return
         assert a.drop("weight_sum").equals(b.drop("weight_sum"), null_equal=True)
         lam = 0.5 ** (1.0 / 200.0)  # the rows are one clock unit apart
         more = a["weight_sum"].to_numpy() - b["weight_sum"].to_numpy()
