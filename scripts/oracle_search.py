@@ -828,6 +828,31 @@ for (i in 1:3) f(paste0("c", i + 1), fit$coefficients[[i]][1, 1])
     report("501", "expectile regression (linear terms)", f"R expectreg {rver('expectreg')} (GPL)", {"max |coef - definition|": float(np.max(np.abs(got - b)))}, "same 400 rows as the pygam check, tau=0.3")
 
 
+@check
+def r_bns_jump_test():
+    """BNS 2006: ratio z = (RV/BV - 1) / sqrt(theta max(1, TQ/BV^2) / n); linear z = sqrt(n) (RV - BV) / sqrt(theta TQ)  (theta = (pi/2)^2 + pi - 5)."""
+    rng = np.random.default_rng(13)
+    n = 400
+    r = rng.standard_normal(n) * 1e-3
+    r[200] += 8e-3  # one jump
+    code = """
+suppressMessages(library(highfrequency))
+idx <- as.POSIXct("2020-01-02 09:30:00", tz="UTC") + (0:(length(r)-1))*5
+x <- xts(r, idx)
+f("lin", BNSjumpTest(x, IVestimator="BV", IQestimator="TP", type="linear")$ztest)
+f("rat", BNSjumpTest(x, IVestimator="BV", IQestimator="TP", type="ratio")$ztest)
+"""
+    R = run_r(code, r=r)
+    th = (pi / 2) ** 2 + pi - 5
+    bv, rv_, tq = bpv_def(r), rv_def(r), tpq_def(r)
+    lin = (rv_ - bv) / np.sqrt(th * tq / n) / np.sqrt(1) 
+    rat = (rv_ / bv - 1) / np.sqrt(th * max(1.0, tq / bv**2) / n)
+    out = {"R ratio z": R["rat"], "definition ratio z": float(rat), "R linear z": R["lin"], "definition linear z": float(lin)}
+    out["|ratio gap|"] = abs(R["rat"] - rat)
+    out["|linear gap|"] = abs(R["lin"] - lin)
+    report("499", "BNS jump test statistics", f"R highfrequency {rver('highfrequency')} (GPL)", out, "400 returns with one 8-sigma jump; theta=(pi/2)^2+pi-5")
+
+
 def main(argv):
     names = argv or list(CHECKS)
     for n in names:
