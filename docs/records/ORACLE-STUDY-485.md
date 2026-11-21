@@ -4,7 +4,8 @@
 for in request A9: the plan below, GARCH(1,1) on one series (§9), over fifty
 seeds (§10), where the plain estimator fails the proposed criterion in the
 tail, and four mitigations on the same grid (§11), of which variance
-targeting and a 500-row batch start pass it. Nothing in the package or the Rust crates was changed. The scan this
+targeting and a 500-row batch start pass it. Part 4: ARMA(1,1) against
+statsmodels over the same seeds, with and without decay (§12). Nothing in the package or the Rust crates was changed. The scan this
 builds on is `vm-tools/research/485-TIME-SERIES-SCAN.md` on branch
 `vm-tools/oracle-gap-scan` (written from `a5c4dcef`); its section numbers are
 cited as "scan §N".*
@@ -296,7 +297,8 @@ the last column is the criterion's count.
 | 4b gain floor 1e-3 | 10,000 | 2.12 / 61.5 / 17 | 1.18 / 10.7 / 9 | 1.72 / 14.1 / 10 | 0.000544 / 0.0945 | 2.7% / 94% | 21 | **17** |
 
 **Against the criterion** (all three parameters within 2 SEs on at least 45
-of 50 seeds at 10,000 rows): **1a passes at exactly 45, and 3 passes at 47.**
+of 50 seeds at 10,000 rows): **1a passes at the boundary (45 of 50), and 3
+passes at 47; each changes what is estimated or how it starts (below).**
 1b, 2a, 2b, 4a and 4b fail, each worse than the plain estimator except 4b at
 2,000 rows, where it equals it.
 
@@ -344,3 +346,96 @@ their passes with that in mind:
 **Not measured:** 1a and 3 together; a cap with an absolute floor; any of
 these under G2 to G4, Student-t returns, or past 10,000 rows. 1a passes at the
 boundary on one truth, so it needs the other generators before it is believed.
+
+## 12. Part 4: ARMA(1,1) against statsmodels
+
+`scripts/study_485/arma.py` (the estimator, the oracles and the comparison),
+`scripts/study_485/grid_arma.py` (the grids: `OUTDIR grid|decay`, resumable,
+`--summary` prints the tables below), `scripts/study_485/test_arma.py`.
+
+**The truth** is the coordinator's for this part, `(φ, θ, σ) = (0.6, 0.3,
+1.0)`, in place of §4's A1 (`φ = 0.5`); the AR root 0.6 and the MA root −0.3
+stay inside 0.8.
+
+**The estimator** (recursive prediction error, as in §3 and the module
+docstring). Each row predicts `ŷ_t = φ y_{t−1} + θ ê_{t−1}` before reading
+`y_t`, then takes one Gauss-Newton step on the squared one-step error with
+the filtered gradient `ψ_t = (y_{t−1}, ê_{t−1}) − θ ψ_{t−1}`, gain `1/W_t`
+with `W_t = λ W_{t−1} + 1` (`λ = 2^(−1/h)` under a half-life `h`, 1 without),
+and clips `|φ|, |θ|` to 0.99. The kept residual is the a-posteriori one. `σ²`
+is the weighted running mean of the squared one-step errors. The start needs
+care: at `(φ, θ) = (0, 0)` the two regressors are the same column and the
+Gauss-Newton matrix is singular, so the first 50 rows only accumulate the
+lag-1 autocorrelation `ρ`, the next 50 build the matrix at `(ρ, 0)`, and
+steps start at row 101. Nothing is buffered; every row emits. State: 14
+floats, 112 bytes.
+
+**The oracles.**
+
+- *Unweighted:* `statsmodels.tsa.statespace.sarimax.SARIMAX(y, order=(1, 0, 1),
+  trend="n")` with its defaults, `fit(disp=False)`: exact Gaussian likelihood
+  by the Kalman filter, initialization `"stationary"`, stationarity and
+  invertibility enforced, method `"lbfgs"`, `cov_type="opg"` for the standard
+  errors (statsmodels 0.15.0). It converged on all 250 cases. The online
+  estimator minimizes the conditional (zero-start) squared error, not the
+  exact likelihood; the two have the same limit.
+- *Weighted, for the decay study:* the definition written in `arma.py`, the
+  weighted conditional sum of squares `Σ λ^(T−1−t) e_t²` with zero start,
+  minimized by `scipy.optimize.minimize(method="L-BFGS-B")` over
+  `[−0.99, 0.99]²`, the residuals by `scipy.signal.lfilter`; `σ²` the
+  weighted mean of `e²`. No library computes its standard errors, so gaps
+  against it are in the unweighted SEs scaled by `sqrt(n/n_eff)`,
+  `n_eff = (Σw)²/Σw²` (1,443 at `h = 500`, 8,656 at `h = 5,000`): an
+  approximation, stated as such.
+- *Fixed parameters* (`test_arma.py`): the residual recursion equals
+  `lfilter` to 1e-12; its one-step predictions meet `SARIMAX.filter(params)`
+  after 300 rows to 3.2e-10 (the zero start's difference decays as `θ^t`).
+  Out-of-sample, scale equivariance (`σ²` by `c²`, `φ, θ` unmoved, rtol 1e-9,
+  with and without decay) and admissibility are held too.
+
+**The grid** (seeds 485000 to 485049; absolute gaps; "over 3" counts seeds;
+the last column is the criterion's count):
+
+| rows | `φ` in SE: median / max / over 3 | `θ` | `σ²` | all within 2 SE |
+|---|---|---|---|---|
+| 2,000 | 0.137 / 0.451 / 0 | 0.271 / 0.832 / 0 | 0.273 / 0.609 / 0 | 50 |
+| 10,000 | 0.0571 / 0.344 / 0 | 0.112 / 0.562 / 0 | 0.151 / 0.298 / 0 | **50** |
+
+One-step predictions over the second half, against the batch parameters'
+predictions on the same rows: RMS gap median 0.023 (max 0.048) at 2,000 rows
+and 0.0083 (max 0.016) at 10,000, on a unit innovation; the online MSE is
+1.0022 (max 1.0066) and 1.0005 (max 1.0010) times the batch parameters'.
+
+**Against the criterion** (all three within 2 batch SEs on at least 45 of 50
+seeds at 10,000 rows): **passes, 50 of 50**, with every gap under 0.6 SE.
+The scan's tighter proposal (0.5 SE at 5,000 rows) was not run at 5,000 rows;
+at 10,000 the largest gap is 0.34 SE on `φ` and 0.56 on `θ`. Nothing in
+this estimator needed the GARCH mitigations: the ARMA least-squares surface
+has no flat ridge at these roots.
+
+**Decay, 10,000 rows:**
+
+| half-life | against | `φ`: median / max / over 3 | `θ` | `σ²` | all within 2 |
+|---|---|---|---|---|---|
+| 500 | weighted fit, scaled SE | 0.0236 / 0.121 / 0 | 0.041 / 0.217 / 0 | 0.0735 / 0.0923 / 0 | **50** |
+| 500 | unweighted fit, its SE | 1.6 / 4.99 / 12 | 1.48 / 4.68 / 12 | 1.97 / 5.54 / 12 | 10 |
+| 500 | weighted against unweighted fit | 1.58 / 4.94 / 12 | 1.53 / 4.94 / 11 | 1.93 / 5.7 / 10 | 10 |
+| 5,000 | weighted fit, scaled SE | 0.0271 / 0.191 / 0 | 0.0463 / 0.297 / 0 | 0.0842 / 0.144 / 0 | **50** |
+| 5,000 | unweighted fit, its SE | 0.244 / 0.897 / 0 | 0.229 / 0.943 / 0 | 0.341 / 0.965 / 0 | 50 |
+| 5,000 | weighted against unweighted fit | 0.252 / 0.928 / 0 | 0.222 / 0.944 / 0 | 0.355 / 1.06 / 0 | 50 |
+| none | weighted fit, scaled SE | 0.0603 / 0.35 / 0 | 0.114 / 0.571 / 0 | 0.141 / 0.277 / 0 | **50** |
+| none | unweighted fit, its SE | 0.0571 / 0.344 / 0 | 0.112 / 0.562 / 0 | 0.151 / 0.298 / 0 | 50 |
+| none | weighted (CSS) against unweighted (exact) fit | 0.00606 / 0.0427 / 0 | 0.00548 / 0.0439 / 0 | 0.00521 / 0.0821 / 0 | 50 |
+
+The decayed estimator tracks the weighted fit of the same half-life closely
+(every gap under 0.3 scaled SE). Against the unweighted fit it is as far as
+the weighted fit itself is (at `h = 500`, 10 of 50 within 2 SE for both),
+which is the decay doing its job: it estimates the recent rows' fit, not the
+whole series'. The oracle under decay is therefore the weighted fit; the
+unweighted fit is the oracle only without decay. One-step prediction RMS
+gaps against the unweighted batch parameters: 0.034 (`h = 500`), 0.010
+(`h = 5,000`), 0.0083 (none), medians.
+
+**Not measured:** MA(2) (§4's A2), roots near 0.8 or beyond, heavy tails,
+uneven clocks, and the decayed estimator on a series whose parameters move
+(the case decay is for).
