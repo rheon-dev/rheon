@@ -528,22 +528,12 @@ fn extract(
                         spec.name, c, v[j], chunk.rows().at(source_row(layout, j))
                     );
                 }
-                // A Poisson fit takes counts, and a negative one is an error
-                // naming the row, as scikit-learn's `PoissonRegressor`
-                // refuses one and as `strict_binary` refuses a label (the
-                // user, 2026-10-08; docs/PLAN.md task 209 (e)). Taken as it
-                // stood, `p - y` drove the prediction to the link's clamp.
-                // `-0.0` is not below zero: it is the count 0.
-                if matches!(&spec.model, ModelKind::Sgd { loss, .. } if loss.as_deref() == Some("poisson"))
-                    && let Some(j) = v.iter().position(|&f| usable(f) && f < 0.0)
-                {
-                    polars_bail!(ComputeError:
-                        "spec {:?}: target column {:?} has the value {} at row {} (counting \
-                         from 0), but loss=\"poisson\" takes a count, which is never negative. \
-                         Set the target to null on rows the model should predict without \
-                         learning, or choose another loss.",
-                        spec.name, c, v[j], chunk.rows().at(source_row(layout, j))
-                    );
+                // A target outside its model's support (`refusals.rs`).
+                if let Some((j, why, other)) = outside_support(spec, &v) {
+                    polars_bail!(ComputeError: "spec {:?}: target column {:?} has the value {} at \
+                        row {} (counting from 0), but {why}. Set the target to null on rows the \
+                        model should predict without learning, or choose another {other}.",
+                        spec.name, c, v[j], chunk.rows().at(source_row(layout, j)));
                 }
                 // `bocpd`'s hazard column rides in the targets slot and is
                 // not a target: it is a parameter, and a value the model
@@ -1561,7 +1551,7 @@ use inline::{join_maybe_par, map_maybe_par, map_range_maybe_par, map_vec_maybe_p
 pub(crate) use refusals::clock_amount;
 #[cfg(test)]
 use refusals::over_budget_message;
-use refusals::{backwards_clock, non_finite_step, over_budget};
+use refusals::{backwards_clock, non_finite_step, outside_support, over_budget};
 
 /// Drop the streams a refused chunk materialized, `(spec index, key)` each.
 /// A new group's Huber refit buffers against its spec's `refit_budget`

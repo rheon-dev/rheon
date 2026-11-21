@@ -1031,6 +1031,34 @@ impl Spec {
                     let _ = no.stop_here();
                 }
             }
+            ModelKind::Glm {
+                family,
+                var_power,
+                refit_budget,
+                ..
+            } => {
+                no.take(check_refit_budget(&self.name, *refit_budget));
+                // The power is the Tweedie family's: refused where nothing
+                // reads it, as `pa`'s `c` is under mode="pa".
+                let family = family.as_deref().unwrap_or("poisson");
+                if var_power.is_some() && family != "tweedie" {
+                    no.refuse(format!(
+                        "spec {:?}: var_power is the Tweedie family's power, but family is \
+                         {family:?}, which reads none. Leave var_power out, or set \
+                         family=\"tweedie\".",
+                        self.name
+                    ));
+                }
+                // The words, the numbers being the model's own to check as
+                // it is built;
+                // and the refit's buffers against the group's cap, here at the
+                // call, where their size is known.
+                no.take(crate::stream::glm_cfg(self).and_then(|c| {
+                    c.check_refit_cap().map_err(|e| {
+                        format!("spec {:?}: {}", self.name, e.trim_start_matches("glm: "))
+                    })
+                }));
+            }
             ModelKind::Audit { .. } => {
                 if self.half_life.is_some() || self.lam.is_some() {
                     no.refuse(format!(

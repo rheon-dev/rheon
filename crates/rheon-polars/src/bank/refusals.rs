@@ -230,3 +230,34 @@ pub(crate) fn clock_amount(spec: &Spec, v: f64) -> String {
         crate::spec::num_label(v)
     }
 }
+
+/// The first target value of `v` outside the support of `spec`'s model, why,
+/// and the setting that would change it: a negative count under `sgd(loss="poisson")`, as
+/// scikit-learn's `PoissonRegressor` refuses one and as `strict_binary`
+/// refuses a label (the user, 2026-10-08; docs/PLAN.md task 209 (e)), taken
+/// as it stood `p - y` drove the prediction to the link's clamp; and under
+/// `glm` a value its family does not take (task 500), as glum refuses one,
+/// where the model would learn nothing from it with nothing said. `-0.0`
+/// is the count 0.
+pub(super) fn outside_support(spec: &Spec, v: &[f64]) -> Option<(usize, String, &'static str)> {
+    match &spec.model {
+        ModelKind::Sgd { loss, .. } if loss.as_deref() == Some("poisson") => {
+            let j = v.iter().position(|&f| usable(f) && f < 0.0)?;
+            Some((
+                j,
+                "loss=\"poisson\" takes a count, which is never negative".into(),
+                "loss",
+            ))
+        }
+        ModelKind::Glm { .. } => {
+            let fam = crate::stream::glm_cfg(spec).ok()?.family();
+            let j = v.iter().position(|&f| usable(f) && !fam.takes(f))?;
+            Some((
+                j,
+                format!("family={:?} takes {}", fam.family.name(), fam.support()),
+                "family",
+            ))
+        }
+        _ => None,
+    }
+}

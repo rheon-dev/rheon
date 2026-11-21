@@ -52,6 +52,10 @@ pub const MODEL_CASES: &[&str] = &[
     "sgd_huber",
     "sgd_huber_refit",
     "pa",
+    // A Poisson fit of the labels 0-2 as counts: a Newton step a row, the
+    // Cholesky of `G + R I` at 21 coefficients; the default refit of the
+    // first 210 rows runs in the warm-up.
+    "glm_k20",
     "seqtest",
     "bocpd",
     "kmeans",
@@ -453,6 +457,7 @@ fn case_spec(id: &str) -> (Value, Shape) {
             Shape::Linear,
         ),
         "pa" => (fit(json!({"type": "pa"}), 20), Shape::Linear),
+        "glm_k20" => (fit(json!({"type": "glm"}), 20), Shape::Labelled),
         // The penalty path's selection on every row and its solves on the
         // default cadence (docs/PLAN.md task 270, C-2); the path is
         // `scripts/wide_benchmark.py`'s.

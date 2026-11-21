@@ -48,6 +48,10 @@ impl Spec {
                 "a robust fit is not linear in its targets, so a least-squares fit's \
                  uncertainty does not hold for it"
             }
+            ModelKind::Glm { .. } => {
+                "its prediction is a mean whose spread is its family's variance, not a \
+                 least-squares fit's"
+            }
             ModelKind::EwCov { .. }
             | ModelKind::Marginal { .. }
             | ModelKind::Deco { .. }
@@ -70,6 +74,10 @@ impl Spec {
             ModelKind::Huber { .. } | ModelKind::Quantile { .. } => {
                 "a robust fit is not linear in its targets, so a least-squares leverage does \
                  not hold for it"
+            }
+            ModelKind::Glm { .. } => {
+                "a generalized linear fit's leverage is on its working response, not on its \
+                 target"
             }
             ModelKind::Sgd { .. } | ModelKind::Pa { .. } | ModelKind::Ftrl { .. } => {
                 "a gradient fit keeps no second moments of the features to read one row's \

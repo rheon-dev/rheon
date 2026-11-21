@@ -166,6 +166,9 @@ pub const CELLS: &[Cell] = &[
     cell("pa.k", 4, 8, Pow(1), Pow(1)),
     cell("pa.targets", 1, 8, Pow(1), Pow(1)),
     cell("pa.history", 1000, 8, Const, Const),
+    cell("glm.k", 4, 8, Pow(3), Pow(2)),
+    cell("glm.targets", 1, 8, Pow(1), Pow(1)),
+    cell("glm.history", 1000, 8, Const, Const),
     cell("ftrl.k", 4, 8, Pow(1), Pow(1)),
     cell("ftrl.history", 1000, 8, Const, Const),
     cell("holt.targets", 1, 8, Pow(1), Pow(1)),
@@ -765,6 +768,13 @@ fn model_case(id: &str, n: usize) -> ModelCase {
         ("pa", "k") => ModelCase::new(fit(json!({"type": "pa"}), n, 1), lin),
         ("pa", "targets") => ModelCase::new(fit(json!({"type": "pa"}), 8, n), lin),
         ("pa", "history") => ModelCase::new(fit(json!({"type": "pa"}), 8, 1), lin).warm(n),
+        // Counts, the labels 0-2: a Cholesky of `G + R I` a learned row and
+        // target, so `k³` a row, beside `G`'s `k²` numbers.
+        ("glm", "k") => ModelCase::new(fit(json!({"type": "glm"}), n, 1), Shape::Labelled),
+        ("glm", "targets") => ModelCase::new(fit(json!({"type": "glm"}), 8, n), Shape::Labelled),
+        ("glm", "history") => {
+            ModelCase::new(fit(json!({"type": "glm"}), 8, 1), Shape::Labelled).warm(n)
+        }
         ("ftrl", "k") => ModelCase::new(fit(json!({"type": "ftrl"}), n, 1), lin),
         ("ftrl", "history") => ModelCase::new(fit(json!({"type": "ftrl"}), 8, 1), lin).warm(n),
         ("holt", "targets" | "history") => {

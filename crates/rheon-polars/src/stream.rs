@@ -107,6 +107,7 @@ pub enum AnyModel {
     CorrChange(Box<CorrChange>),
     Bocpd(Box<Bocpd>),
     Audit(Box<rheon_core::Audit>),
+    Glm(Box<rheon_core::Glm>),
 }
 
 /// A flush's shards, run on whichever pool the caller is in: the bank's
@@ -153,6 +154,7 @@ macro_rules! dispatch {
             AnyModel::CorrChange($m) => $body,
             AnyModel::Bocpd($m) => $body,
             AnyModel::Audit($m) => $body,
+            AnyModel::Glm($m) => $body,
         }
     };
 }
@@ -243,6 +245,7 @@ impl AnyModel {
             AnyModel::Robust(m) => m.refit_reservation(),
             AnyModel::Sgd(m) => m.refit_reservation(),
             AnyModel::Marginal(m) => m.refit_reservation(),
+            AnyModel::Glm(m) => m.refit_reservation(),
             _ => 0,
         }
     }
@@ -254,6 +257,7 @@ impl AnyModel {
             AnyModel::Robust(m) => m.refit_give_up(),
             AnyModel::Sgd(m) => m.refit_give_up(),
             AnyModel::Marginal(m) => m.refit_give_up(),
+            AnyModel::Glm(m) => m.refit_give_up(),
             _ => {}
         }
     }
@@ -264,6 +268,7 @@ impl AnyModel {
             AnyModel::Robust(m) => m.refit_status(),
             AnyModel::Sgd(m) => m.refit_status(),
             AnyModel::Marginal(m) => m.refit_status(),
+            AnyModel::Glm(m) => m.refit_status(),
             _ => Vec::new(),
         }
     }
@@ -489,6 +494,7 @@ impl AnyModel {
             AnyModel::EwClass(m) => m.solve_failures,
             AnyModel::Hmm(m) => m.solve_failures,
             AnyModel::Bocpd(m) => m.solve_failures,
+            AnyModel::Glm(m) => m.solve_failures(),
             AnyModel::KMeans(m) => m.solve_failures,
             AnyModel::Sgd(m) => m.solve_failures(),
             AnyModel::Marginal(m) => m.solve_failures(),
@@ -540,6 +546,7 @@ impl AnyModel {
             AnyModel::EwCov(_) => None,
             AnyModel::Sgd(m) => Some(m.coefficients()),
             AnyModel::Pa(m) => Some(m.coefficients().to_vec()),
+            AnyModel::Glm(m) => Some(m.coefficients()),
             AnyModel::Holt(m) => Some(m.coefficients()),
             // The centres, k rows of p; absent until seeded.
             AnyModel::KMeans(m) => m.coefficients(),
@@ -1316,14 +1323,19 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         ModelKind::Audit { .. } => Ok(AnyModel::Audit(Box::new(rheon_core::Audit::new(
             audit_cfg(spec)?,
         )?))),
+        ModelKind::Glm { .. } => {
+            let mut cfg = glm_cfg(spec)?;
+            cfg.decay = decay;
+            Ok(AnyModel::Glm(Box::new(rheon_core::Glm::new(cfg)?)))
+        }
     }
 }
 
 mod model_cfgs;
 use model_cfgs::read_floor;
 pub use model_cfgs::{
-    audit_cfg, bocpd_cfg, corrchange_cfg, deco_block_names, deco_cfg, hmm_cfg, huber_model,
-    quantile_model, rcov_cfg, sgd_model,
+    audit_cfg, bocpd_cfg, corrchange_cfg, deco_block_names, deco_cfg, glm_cfg, hmm_cfg,
+    huber_model, quantile_model, rcov_cfg, sgd_model,
 };
 
 /// One grid combo: the rendered label plus the machine values it encodes, so
@@ -1425,7 +1437,8 @@ pub fn combos(spec: &Spec) -> Vec<Combo> {
         | ModelKind::Hmm { .. }
         | ModelKind::CorrChange { .. }
         | ModelKind::Bocpd { .. }
-        | ModelKind::Audit { .. } => vec![Combo::default()],
+        | ModelKind::Audit { .. }
+        | ModelKind::Glm { .. } => vec![Combo::default()],
         // `p` for the penalty, since `l` is a lag's (`lag_corr_l1_a_b`); and
         // no label for a path of one point, as a single ridge or half-life
         // writes none, while the machine value says which it is.

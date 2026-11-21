@@ -1242,6 +1242,38 @@ pub enum ModelKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         distinct_cap: Option<usize>,
     },
+    /// A generalized linear model by recursive IRLS: Poisson, Gamma,
+    /// binomial or Tweedie (`rheon_core::Glm`; docs/PLAN.md task 500).
+    Glm {
+        /// `"poisson"` (the default), `"gamma"`, `"binomial"` or
+        /// `"tweedie"`.
+        #[serde(default)]
+        family: Option<String>,
+        /// `"log"`, `"logit"`, `"inverse"` or `"power"`; absent is the
+        /// family's default, the logit for the binomial and the log for
+        /// the rest.
+        #[serde(default)]
+        link: Option<String>,
+        /// The Tweedie family's power; default 1.5, refused for the others.
+        #[serde(default)]
+        var_power: Option<f64>,
+        /// The penalty `R/2 |β|²` on the sum scale; default 1.
+        #[serde(default)]
+        ridge: Option<f64>,
+        /// Each target's first learned rows refit to convergence, once:
+        /// absent is `rheon_core::default_glm_refit_rows(k)`, 0 is off.
+        #[serde(default)]
+        refit_rows: Option<u32>,
+        /// The most a learned row may move its own linear predictor: absent
+        /// is off where the refit runs and 1 where it does not; `"inf"` is
+        /// no cap.
+        #[serde(default)]
+        step_cap: Option<Num>,
+        /// The MiB the refit buffers of all this spec's groups may reserve:
+        /// absent is [`REFIT_BUDGET_MIB`], `inf` no bound.
+        #[serde(default)]
+        refit_budget: Option<Num>,
+    },
 }
 
 /// The two sides of a `seqtest` comparison, as [`ModelKind::compares`]
@@ -1293,6 +1325,7 @@ impl ModelKind {
         "corrchange",
         "bocpd",
         "audit",
+        "glm",
     ];
 
     pub fn kind_name(&self) -> &'static str {
@@ -1319,6 +1352,7 @@ impl ModelKind {
             ModelKind::CorrChange { .. } => "corrchange",
             ModelKind::Bocpd { .. } => "bocpd",
             ModelKind::Audit { .. } => "audit",
+            ModelKind::Glm { .. } => "glm",
         }
     }
 
@@ -1443,9 +1477,9 @@ impl ModelKind {
     /// no bound (`inf`) or a kind without the refit.
     pub fn refit_budget_mib(&self) -> Option<f64> {
         let given = match self {
-            ModelKind::Huber { refit_budget, .. } | ModelKind::Quantile { refit_budget, .. } => {
-                refit_budget
-            }
+            ModelKind::Huber { refit_budget, .. }
+            | ModelKind::Quantile { refit_budget, .. }
+            | ModelKind::Glm { refit_budget, .. } => refit_budget,
             ModelKind::Sgd {
                 refit_budget, loss, ..
             } if loss.as_deref() == Some("huber") => refit_budget,
@@ -3209,6 +3243,10 @@ impl Spec {
                     "a robust fit's covariance needs a different formula from a least-squares \
                      fit's"
                 }
+                ModelKind::Glm { .. } => {
+                    "a generalized linear fit's covariance is its inverse Fisher information \
+                     times its family's dispersion, which it does not estimate"
+                }
                 ModelKind::Sgd { .. } | ModelKind::Pa { .. } | ModelKind::Ftrl { .. } => {
                     "a gradient fit keeps no second moments of the features to read a covariance \
                      from"
@@ -3246,6 +3284,10 @@ impl Spec {
                 }
                 ModelKind::Huber { .. } | ModelKind::Quantile { .. } => {
                     "a robust fit weighs each row by its loss, not as least squares does"
+                }
+                ModelKind::Glm { .. } => {
+                    "a generalized linear fit weighs each row by its family's variance, not as \
+                     least squares does"
                 }
                 ModelKind::Sgd { .. } | ModelKind::Pa { .. } | ModelKind::Ftrl { .. } => {
                     "a gradient fit is not a weighted least-squares fit"
