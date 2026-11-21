@@ -3,7 +3,8 @@
 *Status, 2026-11-21: a record, in progress for request A14. Part 1: the
 classifier written from the definitions and compared with river's, row by
 row, on both of river's code paths (§2, §3). Part 2: the regressor and its
-observers against river's (§4). Nothing in the package or the
+observers against river's (§4). Part 3: the state table, river's `max_size`,
+a cap a build can enforce and its accuracy cost (§5). Nothing in the package or the
 Rust crates was changed. The scan this builds on is
 `vm-tools/research/494-MODELS-SCAN.md` on branch `vm-tools/oracle-gap-scan`,
 section 9 ("scan §9"). The runnable study is `scripts/study_503.py`.*
@@ -315,3 +316,186 @@ with 256 bins, at up to 32 and 256 bins per observer (90 on average for 256).
 The Gaussian observer is the small one and the one river's Rust path has; the
 histogram is a later option, and its bytes are `24 n_bins` per class and
 feature.
+
+## 5. Part 3: state size, river's `max_size`, and a cap a build can enforce
+
+Run: `.venv-503/bin/python scripts/study_503.py part3 --out <dir>` (670 s, of
+which 330 s are river's uncapped Python-path runs).
+
+### 5.1 river's memory management
+
+river bounds a tree by `max_size` in MiB of **Python objects**
+(`calculate_object_size`, which walks the object graph), not by any layout a
+saved state has. Every `memory_estimate_period` learned weight (1,000,000 by
+default) it measures the active and inactive leaves, and when the tree is over
+`max_size` it ranks the leaves by promise (the classifier: the weight the
+majority class gets wrong; the regressor: minus the depth, so shallow leaves
+first), keeps as many active as the estimate allows and deactivates the rest
+(they keep their class weights or target statistics and stop feeding their
+observers, so they can no longer split; a classifier's inactive leaf predicts
+its majority class). Three consequences:
+
+* Until the first estimate the manager does nothing at all (§3.3), so with
+  the default period no tree is bounded before a million rows.
+* The Rust classifier, river's default, has no memory management.
+* Python object sizes are 9 to 80 times a packed layout (§5.2): river's tree
+  of 284 leaves over 50 features is 94.9 MB of objects and 1.15 MB packed. At
+  `max_size` = 1 MiB river kept 2 of 158 leaves active; at 256 KB and 64 KB
+  it kept none (9 leaves, all inactive), on the stream of §5.3.
+
+So river's number cannot be matched and should not be: the scan's advice
+holds (a cap in the build's own units, with river's management off and the
+cap not binding in the oracle runs).
+
+### 5.2 The state table
+
+The packed layout (`pack_clf`, `pack_reg` in the script; little-endian, no
+padding) is what a build would save. Its length equals the formula below on
+every tree measured (three classifiers, three regressors, all to the byte),
+and `unpack` of it continues to the bit (§6). `L` leaves, `B = L - 1`
+branches, `A` leaves holding observers, `k` features, `C` classes:
+
+| tree, observer | bytes | per active leaf, with its branch | per inactive leaf | bounded by |
+|---|---|---|---|---|
+| classifier, Gaussian | `40 + 8C + 36B + (8C + 27)L + 40kC A` | `40kC + 8C + 63` | `8C + 63` | the shape: E |
+| classifier, histogram (river's `HistogramSplitter`) | as above with `24 n_bins kC` per active leaf | | | `n_bins`: E |
+| regressor, QO, at most `S` slots a feature | `40 + 20B + 35L + sum over observers (2 + 36 slots)`, at most `... + k(2 + 36S) A` | up to `k(2 + 36S) + 55` | `55` | `S`: E (river's QO has no `S`: bounded by the feature's range over the radius) |
+| regressor, TE-BST | `... + sum (4 + 33 nodes)`, nodes <= distinct rounded values | | `55` | the feature's range times `10^digits` only |
+| regressor, E-BST | `... + sum (4 + 33 nodes)`, nodes = distinct values seen at the leaf | | `55` | **the stream: N** |
+
+The branch keeps its left and right weights in the classifier (river's Rust
+tree routes a missing value to the heavier side); the regressor's needs none
+here. A build's msgpack adds a type byte per float unless it stores the
+arrays as binary, about 12% more.
+
+Some numbers (packed, and river's Python-object size of river's tree grown on
+the same 20,000 rows, the same tree in every case):
+
+| tree | k | C | leaves | packed | river's objects | ratio |
+|---|---|---|---|---|---|---|
+| classifier | 5 | 2 | 32 | 14.5 KB | 1.07 MB | 73 |
+| classifier | 20 | 2 | 30 | 50.4 KB | 3.98 MB | 79 |
+| classifier | 20 | 5 | 6 | 24.7 KB | 1.91 MB | 77 |
+| regressor, QO 0.25 (mean 10, max 23 slots) | 10 | | 113 | 426 KB | 5.41 MB | 13 |
+| regressor, TE-BST 1 (mean 16, max 42 nodes) | 10 | | 123 | 606 KB | 5.21 MB | 9 |
+| regressor, E-BST (mean 44, max 190 nodes) | 10 | | 110 | 1.53 MB | 13.0 MB | 8.5 |
+
+The unit costs: a classifier's active leaf at `k = 20, C = 2` is 1.7 KB, at
+`k = 50, C = 2` 4.1 KB; a regressor's active leaf at `k = 20` with QO capped
+at 32 slots is up to 23 KB (16 slots: 11.6 KB). An inactive leaf is 55 to 103
+bytes. **Uncapped, the trees of §5.3 reached 1.1 MB (classifier, 284 leaves,
+200,000 rows, `k = 50`) and 10.6 to 11.5 MB (regressor, 1,545 to 1,806
+leaves, `k = 20`)** per group; the regression models' state today is `O(k^2)`
+doubles per target (3.2 KB for a 20 x 20 matrix), so even the classifier is
+two orders of magnitude above today's typical state, and the regressor three
+to four. That is the growth the user's rule says to raise first.
+
+### 5.3 The cap, and what it costs
+
+**The rule** (`set_cap` in the script). A per-group `max_state_bytes`
+counted in the packed layout above:
+
+1. A split is refused when the structure alone (every leaf inactive, `40 +
+   8C + 36B + (8C + 27)L` or `40 + 20B + 35L`) would pass the cap; the tree
+   then stops growing.
+2. After every split, and every 1,000 learned rows, the leaves are ranked by
+   promise and only as many keep observers as the bytes left by the structure
+   pay for **at their largest** (`40kC` for the Gaussian observers, `k(2 +
+   36S)` for QO with at most `S` slots); the rest are deactivated (observers
+   dropped, statistics kept). A leaf the cap deactivated is reactivated, with
+   empty observers, when it ranks back in; a leaf the algorithm deactivated
+   (a dominated or pre-pruned leaf) is not.
+3. Because observers are reserved at their largest, **the packed state never
+   passes the cap**, whatever the rows: checked every 2,000 rows and at the
+   end of every capped run below (worst 65,500 bytes under 64 KB, 262,111
+   under 256 KB, 476,853 under 1 MB). It is deterministic: the ranking is a
+   stable sort with ties in leaf order, and the recheck counts learned rows,
+   which are in the state.
+
+Promise: the classifier uses river's (the weight the majority class gets
+wrong); for the regressor river's (minus the depth) is compared with the
+leaf's sum of squared deviations `S` (the error a split could remove), which
+is better at every cap below.
+
+Prequential runs, 200,000 rows, accuracy (classifier) or MSE (regressor)
+over all rows and over the last 50,000; `grace_period` 50, `tau` 0.1 for the
+classifier, `grace_period` 50 for the regressor:
+
+**Classifier**, `k = 50`, two classes, Gaussian observers, `nba`:
+
+| stream | cap | accuracy (last 50k) | cost | leaves (active) | packed bytes at the end |
+|---|---|---|---|---|---|
+| random tree, depth 10, 5% noise | none | 0.6002 (0.6198) | | 284 (284) | 1,146,456 |
+| | 1 MB | 0.6002 (0.6198) | 0.0000 (0.0000) | 284 (256) | 1,046,456 |
+| | 256 KB | 0.6005 (0.6187) | +0.0002 (-0.0011) | 270 (60) | 261,350 |
+| | 64 KB | 0.5880 (0.5953) | -0.0122 (-0.0245) | 208 (12) | 64,452 |
+| | river `max_size` 1 MiB | 0.5647 (0.5707) | -0.0356 (-0.0491) | 158 (2) | (river: 0.88 MB of objects) |
+| | river 256 KB, 64 KB | 0.5406 (0.5401) | -0.0596 (-0.0797) | 9 (0) | |
+| hyperplane, 10 of 50 features informative, 5% noise | none | 0.8410 (0.8526) | | 281 (274) | 1,118,219 |
+| | 1 MB | 0.8410 (0.8528) | 0.0000 (+0.0002) | 281 (256) | 1,046,219 |
+| | 256 KB | 0.8365 (0.8422) | -0.0044 (-0.0104) | 215 (61) | 257,005 |
+| | 64 KB | 0.8123 (0.8104) | -0.0286 (-0.0422) | 119 (14) | 65,421 |
+| | river 1 MiB | 0.7802 (0.7862) | -0.0608 (-0.0664) | 108 (2) | |
+| | river 256 KB, 64 KB | 0.7023 (0.6987) | -0.1387 (-0.1540) | 6 (0) | |
+
+(River's uncapped run on the hyperplane differs from the tree here by
+0.0001: river's Python path ran it, which reactivates the 7 dominated leaves
+that the Rust path, followed here, keeps inactive; §3.3.)
+
+**Regressor**, `k = 20`, QO radius 0.25 with at most 32 slots a feature,
+`'mean'` leaves; cost is the MSE's rise over the uncapped tree:
+
+| stream | cap | promise | MSE (last 50k) | cost | leaves (active) | packed bytes, end (worst) |
+|---|---|---|---|---|---|---|
+| Friedman #1, 5 of 20 features informative | none | | 0.2499 (0.2142) | | 1,545 (1,545) | 10,619,919 |
+| | 1 MB | `S` | 0.2672 (0.2411) | +7% (+12%) | 551 (44) | 372,925 (476,853) |
+| | 1 MB | depth | 0.2979 (0.2826) | +19% (+32%) | 237 (44) | 397,303 |
+| | 256 KB | `S` | 0.2914 (0.2667) | +17% (+25%) | 298 (10) | 101,806 (119,019) |
+| | 256 KB | depth | 0.3593 (0.3460) | +44% (+62%) | 118 (11) | 97,454 |
+| | 64 KB | `S` | 0.3483 (0.3242) | +39% (+51%) | 119 (2) | 24,681 (30,799) |
+| | 64 KB | depth | 0.4040 (0.3774) | +62% (+76%) | 56 (2) | 15,672 |
+| | river 1 MiB | depth | 0.3230 (0.3097) | +29% (+45%) | 126 (10) | |
+| | river 256 KB | depth | 0.3404 (0.3277) | +36% (+53%) | 57 (1) | |
+| | river 64 KB | depth | 0.3486 (0.3408) | +39% (+59%) | 33 (0) | |
+| random tree, depth 10, noise sd 0.3 | none | | 1.0785 (1.0484) | | 1,806 (1,806) | 11,526,962 |
+| | 1 MB | `S` | 1.0966 (1.0781) | +1.7% (+2.8%) | 614 (43) | 365,226 |
+| | 256 KB | `S` | 1.1114 (1.0963) | +3.1% (+4.6%) | 309 (10) | 102,231 |
+| | 64 KB | `S` | 1.1399 (1.1298) | +5.7% (+7.8%) | 141 (2) | 18,327 |
+| | river 1 MiB, 256 KB, 64 KB | depth | 1.141 to 1.146 | +5.8% to +6.3% | 41 to 84 | |
+
+(The depth-10 random tree over 20 features is barely learnable by a mean
+tree in 200,000 rows, so its costs are small because its gains are; the
+Friedman stream is the informative one.)
+
+**What the numbers say.** For the classifier the cap is cheap: an active leaf
+is a few KB, inactive leaves keep predicting, and 1 MB cost nothing, 256 KB
+at most half a point of accuracy (one point on the last quarter), 64 KB one
+to three points. For the regressor it is expensive: an active QO leaf is tens
+of KB at `k = 20`, a leaf without observers can never split, and the tree
+that fits in 1 MB is a third of the uncapped one; the cost is 7% of MSE at 1
+MB and 17% at 256 KB with the `S` promise, worse with river's. The worst-case
+reservation is the price of the guarantee: the capped regressors used at most
+46% of their cap, because a leaf fills on average 10 of its 32 slots. A
+build could reserve less (count the slots in use and evict when a leaf's
+observers grow), at the cost of a rule that must handle a leaf growing past
+the budget mid-stream; the reservation here is the simple rule that cannot
+fail.
+
+### 5.4 The proposed per-group cap
+
+* **The unit is the packed state's bytes**, per group (and per target where a
+  spec has several), computed from counts the state holds; the docstring
+  states the formula of §5.2.
+* **The cap is a required spec setting with a default of 256 KB**, refused
+  above a ceiling (64 MiB, the order of the spec layer's other allocation
+  ceilings) and below the size of a one-leaf tree. At 256 KB the classifier
+  costs under one point of accuracy on these streams and the regressor 17%
+  of MSE; 1 MB is the setting to recommend for a regressor with `k >= 20`.
+* **The observers it enforces are bounded ones only**: Gaussian (classifier),
+  QO with a slot cap `S` (regressor; default 32), optionally the histogram
+  with `n_bins`. E-BST is refused (it grows with the stream); TE-BST is
+  bounded only for bounded features and is better left out.
+* **The bank's memory is groups times the cap**: 10,000 groups at 256 KB are
+  2.5 GB, at 1 MB 10 GB. The state is not preallocated (a tree grows into its
+  cap), so the figure is a ceiling, but it is the figure to raise with the
+  user: it is two to three orders of magnitude above today's per-group state.

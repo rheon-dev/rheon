@@ -592,10 +592,10 @@ class HTClassifier:
 
     # ---- learning
     def learn(self, x, y, w: float = 1.0) -> None:
-        c = self.class_index(y)
         self.weight_seen += w
         if w == 0.0 and self.zero_weight == "skip":
-            return
+            return  # learns nothing, not even the label
+        c = self.class_index(y)
         self.rows_learned += 1
         if self.cap is not None and self.rows_learned % self.recheck == 0:
             self._enforce_cap()
@@ -1459,8 +1459,15 @@ def v_get(v: list) -> float:
     return v[2] / (v[0] - 1) if v[0] > 1 else 0.0
 
 
+def _pow2(d: float) -> float:
+    return d**2  # river's `** 2` is C pow(d, 2.0): not always d * d (part 4)
+
+
+SQUARE = {"f": _pow2}
+
+
 def v_iadd(a: list, b: list) -> list:
-    S = a[2] + b[2] + (a[1] - b[1]) ** 2 * a[0] * b[0] / (a[0] + b[0])
+    S = a[2] + b[2] + SQUARE["f"](a[1] - b[1]) * a[0] * b[0] / (a[0] + b[0])
     old_n = a[0]
     a[0] += b[0]
     a[1] = (old_n * a[1] + b[0] * b[1]) / a[0]
@@ -1476,7 +1483,7 @@ def v_isub(a: list, b: list) -> list:
     else:
         a[0] = 0.0
         a[1] = 0.0
-    a[2] = a[2] - b[2] - (a[1] - b[1]) ** 2 * a[0] * b[0] / (a[0] + b[0])
+    a[2] = a[2] - b[2] - SQUARE["f"](a[1] - b[1]) * a[0] * b[0] / (a[0] + b[0])
     return a
 
 
@@ -2417,37 +2424,68 @@ def _state_table(seed: int) -> dict:
     return {"rows": rows}
 
 
+def hyperplane_stream(n: int, k: int, seed: int, informative: int = 10, noise: float = 0.05):
+    """y = 1[a'x > 0] with `informative` nonzero coefficients, labels redrawn
+    with probability `noise`: a boundary a tree approximates better with every
+    leaf it can afford."""
+    rng = np.random.default_rng(seed)
+    a = np.zeros(k)
+    a[:informative] = rng.standard_normal(informative)
+    X = rng.standard_normal((n, k))
+    y = (X @ a > 0).astype(int)
+    flip = rng.random(n) < noise
+    y = np.where(flip, rng.integers(0, 2, n), y)
+    return X, y, np.ones(n)
+
+
 def part3(args) -> dict:
     res = {"state": _state_table(300)}
     print("state table done", flush=True)
     n = args.cap_rows
     n_tail = n // 4
-    # classifier: k = 50 features, two classes, a depth-10 concept
-    X, y, _ = clf_stream(n, 50, 2, 301, depth=10, noise=0.05)
     tkw = {"grace_period": 50, "tau": 0.1}
-    res["clf"] = {"rows": n, "k": 50, "classes": 2, "tree": tkw, "mine": [], "river": []}
-    for cap in CAPS:
-        r = _run_capped_clf(X, y, tkw, cap, n_tail)
-        res["clf"]["mine"].append(r)
-        print("clf mine", json.dumps(r), flush=True)
-    for cap in CAPS:
-        r = _run_river_clf(X, y, tkw, cap, n_tail, args.mem_period)
-        res["clf"]["river"].append(r)
-        print("clf river", json.dumps(r), flush=True)
+    res["clf"] = []
+    for name, (X, y, _) in (
+        ("random tree, depth 10", clf_stream(n, 50, 2, 301, depth=10, noise=0.05)),
+        ("hyperplane, 10 of 50 informative", hyperplane_stream(n, 50, 303)),
+    ):
+        d = {"stream": name, "rows": n, "k": 50, "classes": 2, "tree": tkw, "mine": [], "river": []}
+        for cap in CAPS:
+            r = _run_capped_clf(X, y, tkw, cap, n_tail)
+            d["mine"].append(r)
+            print("clf mine", name, json.dumps(r), flush=True)
+        for cap in CAPS:
+            r = _run_river_clf(X, y, tkw, cap, n_tail, args.mem_period)
+            d["river"].append(r)
+            print("clf river", name, json.dumps(r), flush=True)
+        res["clf"].append(d)
     # regressor: k = 20, QO radius 0.25 at most 32 slots a feature
-    X, y, _ = reg_stream(n, 20, 302, kind="tree", depth=10)
-    tkw = {"grace_period": 50}
+    rkw = {"grace_period": 50}
     spl = ("qo", 0.25, 32)
-    res["reg"] = {"rows": n, "k": 20, "splitter": list(spl), "tree": tkw, "mine": [], "river": []}
-    for cap in CAPS:
-        for promise in ("river", "sse") if cap is not None else ("river",):
-            r = _run_capped_reg(X, y, tkw, spl, cap, promise, n_tail)
-            res["reg"]["mine"].append(r)
-            print("reg mine", json.dumps(r), flush=True)
-    for cap in CAPS:
-        r = _run_river_reg(X, y, tkw, 0.25, cap, n_tail, args.mem_period)
-        res["reg"]["river"].append(r)
-        print("reg river", json.dumps(r), flush=True)
+    res["reg"] = []
+    for name, (X, y, _) in (
+        ("random tree, depth 10", reg_stream(n, 20, 302, kind="tree", depth=10)),
+        ("Friedman #1, 5 of 20 informative", reg_stream(n, 20, 304, kind="friedman")),
+    ):
+        d = {
+            "stream": name,
+            "rows": n,
+            "k": 20,
+            "splitter": list(spl),
+            "tree": rkw,
+            "mine": [],
+            "river": [],
+        }
+        for cap in CAPS:
+            for promise in ("river", "sse") if cap is not None else ("river",):
+                r = _run_capped_reg(X, y, rkw, spl, cap, promise, n_tail)
+                d["mine"].append(r)
+                print("reg mine", name, json.dumps(r), flush=True)
+        for cap in CAPS:
+            r = _run_river_reg(X, y, rkw, 0.25, cap, n_tail, args.mem_period)
+            d["river"].append(r)
+            print("reg river", name, json.dumps(r), flush=True)
+        res["reg"].append(d)
     return res
 
 
@@ -2456,12 +2494,473 @@ def summarise3(res) -> None:
     for r in res["state"]["rows"]:
         print("  ", json.dumps(r))
     for kind in ("clf", "reg"):
-        d = res[kind]
-        print(f"{kind}: rows={d['rows']} k={d['k']} tree={d['tree']}")
-        for r in d["mine"]:
-            print("  mine ", json.dumps(r))
-        for r in d["river"]:
-            print("  river", json.dumps(r))
+        for d in res[kind]:
+            print(f"{kind}: {d['stream']} rows={d['rows']} k={d['k']} tree={d['tree']}")
+            for r in d["mine"]:
+                print("  mine ", json.dumps(r))
+            for r in d["river"]:
+                print("  river", json.dumps(r))
+
+
+# --------------------------------------------------------------------------- part 4
+
+
+def _chunks(n: int, n_chunks: int, rng) -> list:
+    """n_chunks chunk boundaries at random rows (1 chunk: the whole stream)."""
+    if n_chunks <= 1:
+        return [0, n]
+    cuts = np.sort(rng.choice(np.arange(1, n), size=n_chunks - 1, replace=False))
+    return [0, *cuts.tolist(), n]
+
+
+def _feed(make, pack, unpack, X, y, w, n_chunks: int, resume: bool, seed: int, reg: bool):
+    """Prequential over chunks; with `resume`, the state is packed to bytes and
+    a new tree unpacked from them at every chunk boundary."""
+    rng = np.random.default_rng(seed)
+    bounds = _chunks(len(X), n_chunks, rng)
+    t = make()
+    preds = []
+    for a, b in zip(bounds[:-1], bounds[1:], strict=True):
+        Xc, yc, wc = X[a:b].tolist(), y[a:b].tolist(), w[a:b].tolist()
+        for xi, yi, wi in zip(Xc, yc, wc, strict=True):
+            if reg:
+                preds.append(t.predict(xi))
+            else:
+                p = t.predict_proba(xi)
+                preds.append(tuple(sorted(p.items())))
+            t.learn(xi, yi if reg else int(yi), wi)
+        if resume:
+            t = unpack(pack(t))
+    return pack(t), preds
+
+
+def _determinism(n: int) -> dict:
+    out = {}
+    X, y, w = clf_stream(n, 8, 3, 401, depth=7, weights="uniform")
+    w[::17] = 0.0  # zero-weight rows among them
+    params = {"grace_period": 50, "tau": 0.1}
+
+    def mk_c(cap=None):
+        def make():
+            t = HTClassifier(8, 3, **params)
+            if cap:
+                t.set_cap(cap, recheck=500)
+            return t
+
+        def unpack(b):
+            t = unpack_clf(b, **params)
+            if cap:
+                t.cap, t.recheck, t.promise_kind = cap, 500, "river"
+            return t
+
+        return make, unpack
+
+    Xr, yr, wr = reg_stream(n, 8, 402, kind="friedman", weights="uniform")
+    wr[::17] = 0.0
+    wr[0] = 0.0  # a zero-weight first row
+    rparams = {"grace_period": 50}
+
+    def mk_r(spl, cap=None):
+        def make():
+            t = HTRegressor(8, splitter=spl, **rparams)
+            if cap:
+                t.set_cap(cap, recheck=500, promise="sse")
+            return t
+
+        def unpack(b):
+            t = unpack_reg(b, splitter=spl, **rparams)
+            if cap:
+                t.cap, t.recheck, t.promise_kind = cap, 500, "sse"
+            return t
+
+        return make, unpack
+
+    configs = {
+        "classifier": (*mk_c(), pack_clf, X, y, w, False),
+        "classifier, cap 3 KB": (*mk_c(3 << 10), pack_clf, X, y, w, False),
+        "regressor, TE-BST": (*mk_r(("tebst", 1)), pack_reg, Xr, yr, wr, True),
+        "regressor, E-BST": (*mk_r(("ebst",)), pack_reg, Xr, yr, wr, True),
+        "regressor, QO 32 slots, cap 64 KB": (
+            *mk_r(("qo", 0.25, 32), 64 << 10),
+            pack_reg,
+            Xr,
+            yr,
+            wr,
+            True,
+        ),
+    }
+    for name, (make, unpack, pack, Xs, ys, ws, reg) in configs.items():
+        ref_state, ref_pred = _feed(make, pack, unpack, Xs, ys, ws, 1, False, 0, reg)
+        rows = []
+        for n_chunks in (7, 1000):
+            for resume in (False, True):
+                st, pr = _feed(make, pack, unpack, Xs, ys, ws, n_chunks, resume, n_chunks, reg)
+                rows.append(
+                    {
+                        "chunks": n_chunks,
+                        "resume_each_chunk": resume,
+                        "state_identical": st == ref_state,
+                        "predictions_identical": pr == ref_pred,
+                    }
+                )
+        t_ref = make()
+        for xi, yi, wi in zip(Xs.tolist(), ys.tolist(), ws.tolist(), strict=True):
+            t_ref.learn(xi, yi if reg else int(yi), wi)
+        out[name] = {
+            "state_bytes": len(ref_state),
+            "leaves": len(t_ref.leaves),
+            "capped_leaves": sum(lf.capped for lf in t_ref.leaves),
+            "runs": rows,
+        }
+    return out
+
+
+def _river_resume(n: int) -> dict:
+    """river itself: pickled mid-stream, loaded, continued (its Rust and Python
+    classifier paths and its regressor)."""
+    import pickle
+
+    out = {}
+    X, y, w = clf_stream(n, 5, 2, 403, depth=6)
+    Xr, yr, _ = reg_stream(n, 5, 404)
+    for name, make, Xs, ys in (
+        ("classifier, Rust path", lambda: river_classifier(True, grace_period=50), X, y),
+        ("classifier, Python path", lambda: river_classifier(False, grace_period=50), X, y),
+        ("regressor, TE-BST", lambda: river_regressor(grace_period=50), Xr, yr),
+    ):
+        reg = name.startswith("regressor")
+
+        def run(cut, make=make, Xs=Xs, ys=ys, reg=reg):
+            m = make()
+            pr = []
+            for i in range(len(Xs)):
+                if i == cut:
+                    m = pickle.loads(pickle.dumps(m))
+                xi = dict(enumerate(Xs[i].tolist()))
+                pr.append(
+                    m.predict_one(xi) if reg else tuple(sorted(m.predict_proba_one(xi).items()))
+                )
+                m.learn_one(xi, float(ys[i]) if reg else int(ys[i]))
+            return pr
+
+        out[name] = {"rows": n, "cut": n // 2, "identical": run(None) == run(n // 2)}
+    return out
+
+
+def _zero_weight(n: int) -> dict:
+    """A zero-weight row learns nothing here; what it does in river."""
+    rng = np.random.default_rng(405)
+    out = {}
+    # the stream, and the same stream with zero-weight rows spliced in (first row too)
+    X, y, w = clf_stream(n, 5, 2, 406, depth=6)
+    n_zero = n // 10
+    Z = rng.standard_normal((n_zero, 5)) * 3.0  # wide values: they move a min or a max
+    zy = rng.integers(0, 2, n_zero)
+    pos = np.sort(rng.choice(np.arange(1, n), size=n_zero - 1, replace=False))
+    pos = np.concatenate([[0], pos])
+    Xz = np.insert(X, pos, Z, axis=0)
+    yz = np.insert(y, pos, zy)
+    wz = np.insert(w, pos, 0.0)
+    keep = wz > 0
+    tkw = {"grace_period": 50}
+    # the tree here: the spliced stream's state equals the plain stream's, to the byte
+    a = HTClassifier(5, 2, **tkw)
+    b = HTClassifier(5, 2, **tkw)
+    pa, pb = [], []
+    for i in range(len(X)):
+        pa.append(a.predict_proba(X[i].tolist()))
+        a.learn(X[i].tolist(), int(y[i]), 1.0)
+    for i in range(len(Xz)):
+        p = b.predict_proba(Xz[i].tolist())
+        if keep[i]:
+            pb.append(p)
+        b.learn(Xz[i].tolist(), int(yz[i]), float(wz[i]))
+    sa, sb = pack_clf(a), pack_clf(b)
+    out["mine_classifier"] = {
+        "zero_rows": n_zero,
+        "state_identical": sa == sb,
+        "predictions_identical": pa == pb,
+        "weight_seen_equal": a.weight_seen == b.weight_seen,
+    }
+    # river (Rust path): it refuses a zero weight
+    ra = river_classifier(True, **tkw)
+    qa = []
+    for i in range(len(X)):
+        xi = dict(enumerate(X[i].tolist()))
+        qa.append(ra.predict_proba_one(xi))
+        ra.learn_one(xi, int(y[i]), w=1.0)
+    ta = river_preorder(ra)
+    rb = river_classifier(True, **tkw)
+    for i in range(5):
+        rb.learn_one(dict(enumerate(X[i].tolist())), int(y[i]), w=1.0)
+    try:
+        rb.learn_one(dict(enumerate(X[5].tolist())), int(y[5]), w=0.0)
+        out["river_classifier_rust"] = "accepted"
+    except ValueError as e:
+        out["river_classifier_rust"] = f"ValueError: {e}"
+    # river's Python path on the spliced stream: a zero-weight row adds its class
+    # to the leaf's table with weight 0, whose naive Bayes vote is then 0.0
+    rp = river_classifier(False, **tkw)
+    qp = []
+    for i in range(len(Xz)):
+        xi = dict(enumerate(Xz[i].tolist()))
+        p = rp.predict_proba_one(xi)
+        if keep[i]:
+            qp.append(p)
+        rp.learn_one(xi, int(yz[i]), w=float(wz[i]))
+    out["river_classifier_python"] = {
+        "predictions_differ_from_plain": compare_rows(qa, qp)["rows_differ"],
+        "same_tree_as_plain": river_preorder(rp) == ta,
+    }
+    # river's regressor: a zero-weight first row, and later ones
+    Xr, yr, _ = reg_stream(2000, 3, 407)
+    res = {}
+    for name, spl in (("tebst", ("tebst", 1)), ("qo", ("qo", 0.25))):
+        m = river_regressor(splitter=river_splitter(spl))
+        try:
+            m.learn_one(dict(enumerate(Xr[0].tolist())), float(yr[0]), w=0.0)
+            res[f"{name}_first_row"] = "ok"
+        except ZeroDivisionError as e:
+            res[f"{name}_first_row"] = f"ZeroDivisionError: {e}"
+        m = river_regressor(splitter=river_splitter(spl))
+        err = None
+        for i in range(1, 1000):
+            m.learn_one(dict(enumerate(Xr[i].tolist())), float(yr[i]))
+        for i in range(1000, 2000):
+            try:
+                m.learn_one(dict(enumerate((Xr[i] * 4.0).tolist())), float(yr[i]), w=0.0)
+            except ZeroDivisionError as e:
+                err = f"row {i}: ZeroDivisionError: {e}"
+                break
+        res[f"{name}_later_rows"] = err or "ok"
+    # the adaptive leaf's faded errors move on a zero-weight row
+    m = river_regressor(leaf_prediction="adaptive", grace_period=100_000)
+    for i in range(1, 300):
+        m.learn_one(dict(enumerate(Xr[i].tolist())), float(yr[i]))
+    leaf = m._root if not hasattr(m._root, "children") else None
+    before = (leaf._fmse_mean, leaf._fmse_model) if leaf is not None else None
+    m.learn_one(dict(enumerate(Xr[400].tolist())), float(yr[400]) + 10.0, w=0.0)
+    after = (leaf._fmse_mean, leaf._fmse_model) if leaf is not None else None
+    res["adaptive_faded_errors"] = {"before": before, "after_zero_weight_row": after}
+    out["river_regressor"] = res
+    # the regressor here: zero-weight rows, first included, learn nothing
+    Xr2, yr2, _ = reg_stream(n, 5, 408, kind="friedman")
+    wr = np.ones(n)
+    wr[0] = 0.0
+    wr[rng.choice(np.arange(1, n), n // 10, replace=False)] = 0.0
+    for spl in (("tebst", 1), ("qo", 0.25, 32)):
+        a = HTRegressor(5, splitter=spl, grace_period=50)
+        b = HTRegressor(5, splitter=spl, grace_period=50)
+        for i in range(n):
+            if wr[i] > 0:
+                a.learn(Xr2[i].tolist(), float(yr2[i]), 1.0)
+            b.learn(Xr2[i].tolist(), float(yr2[i]), float(wr[i]))
+        out[f"mine_regressor_{spl[0]}"] = {"state_identical": pack_reg(a) == pack_reg(b)}
+    return out
+
+
+def _weights(n: int) -> dict:
+    """Integer weights against duplicated rows, and a rescaling of every weight."""
+    out = {}
+    X, y, _ = clf_stream(n, 5, 2, 409, depth=6)
+    rng = np.random.default_rng(410)
+    wi = rng.integers(1, 4, n).astype(float)
+    tkw = {"grace_period": 50}
+    a = HTClassifier(5, 2, **tkw)
+    for i in range(n):
+        a.learn(X[i].tolist(), int(y[i]), wi[i])
+    b = HTClassifier(5, 2, **tkw)
+    for i in range(n):
+        for _ in range(int(wi[i])):
+            b.learn(X[i].tolist(), int(y[i]), 1.0)
+    Xt, yt, _ = clf_stream(20_000, 5, 2, 409, depth=6)  # same concept (seed), new rows
+
+    def acc(t) -> float:  # on 5,000 rows of the same concept that were not learned
+        rows = zip(Xt[-5000:].tolist(), yt[-5000:], strict=True)
+        return float(np.mean([t.predict(r) == c for r, c in rows]))
+
+    out["integer_vs_duplicated"] = {
+        "rows": n,
+        "nodes_weighted": a.n_nodes(),
+        "nodes_duplicated": b.n_nodes(),
+        "same_tree": a.preorder() == b.preorder(),
+        "thresholds_max_ulps": compare_trees(a.preorder(), b.preorder())["threshold_max_ulps"],
+        "accuracy_weighted": acc(a),
+        "accuracy_duplicated": acc(b),
+    }
+    for scale in (0.5, 2.0, 10.0):
+        c = HTClassifier(5, 2, **tkw)
+        for i in range(n):
+            c.learn(X[i].tolist(), int(y[i]), scale)
+        d = HTClassifier(5, 2, grace_period=50 * scale)
+        for i in range(n):
+            d.learn(X[i].tolist(), int(y[i]), scale)
+        out[f"all_weights_x{scale}"] = {
+            "nodes": c.n_nodes(),
+            "nodes_at_weight_1": HTClassifier_nodes(X, y, tkw),
+            "nodes_with_grace_scaled": d.n_nodes(),
+            "same_tree_with_grace_scaled": d.preorder() == _plain_tree(X, y, tkw).preorder(),
+        }
+    return out
+
+
+def _plain_tree(X, y, tkw):
+    t = HTClassifier(X.shape[1], 2, **tkw)
+    for i in range(len(X)):
+        t.learn(X[i].tolist(), int(y[i]), 1.0)
+    return t
+
+
+def HTClassifier_nodes(X, y, tkw) -> int:  # noqa: N802
+    return _plain_tree(X, y, tkw).n_nodes()
+
+
+def _time_rows(fn, budget_s: float) -> float:
+    """Seconds per row of fn(i) over as many rows as fit the budget (at least 2,000)."""
+    t0 = time.perf_counter()
+    i = 0
+    while True:
+        fn(i)
+        i += 1
+        if i >= 2000 and time.perf_counter() - t0 > budget_s:
+            break
+    return (time.perf_counter() - t0) / i
+
+
+def _cost(budget_s: float) -> dict:
+    """Per row (predict, then learn) on a grown tree: river's Rust classifier,
+    river's Python paths, and the tree here (Python)."""
+    out = []
+    for k in (5, 20, 50):
+        X, y, _ = clf_stream(60_000, k, 2, 411 + k, depth=8, noise=0.02)
+        warm = 30_000
+        rows = {"k": k}
+        for name, make, mine in (
+            ("river_rust_classifier", lambda: river_classifier(True, grace_period=200), False),
+            ("river_python_classifier", lambda: river_classifier(False, grace_period=200), False),
+            ("here_classifier", lambda k=k: HTClassifier(k, 2, grace_period=200), True),
+        ):
+            m = make()
+            xs = [X[i].tolist() for i in range(len(X))]
+            xd = [dict(enumerate(r)) for r in xs]
+            for i in range(warm):
+                if mine:
+                    m.learn(xs[i], int(y[i]))
+                else:
+                    m.learn_one(xd[i], int(y[i]))
+
+            def step(i, m=m, mine=mine, xs=xs, xd=xd, y=y, warm=warm):
+                j = warm + i % (len(xs) - warm)
+                if mine:
+                    m.predict_proba(xs[j])
+                    m.learn(xs[j], int(y[j]))
+                else:
+                    m.predict_proba_one(xd[j])
+                    m.learn_one(xd[j], int(y[j]))
+
+            rows[name + "_us"] = 1e6 * _time_rows(step, budget_s)
+            rows[name + "_leaves"] = m.n_leaves if not mine else len(m.leaves)
+        out.append(rows)
+    # the regressor (river has only its Python path)
+    for k in (5, 20):
+        X, y, _ = reg_stream(60_000, k, 420 + k, kind="friedman")
+        warm = 30_000
+        rows = {"k": k}
+        for name, make, mine in (
+            ("river_python_regressor_tebst", lambda: river_regressor(), False),
+            (
+                "river_python_regressor_qo",
+                lambda: river_regressor(splitter=river_splitter(("qo", 0.25))),
+                False,
+            ),
+            ("here_regressor_qo32", lambda k=k: HTRegressor(k, splitter=("qo", 0.25, 32)), True),
+        ):
+            m = make()
+            xs = [X[i].tolist() for i in range(len(X))]
+            xd = [dict(enumerate(r)) for r in xs]
+            for i in range(warm):
+                if mine:
+                    m.learn(xs[i], float(y[i]))
+                else:
+                    m.learn_one(xd[i], float(y[i]))
+
+            def step(i, m=m, mine=mine, xs=xs, xd=xd, y=y, warm=warm):
+                j = warm + i % (len(xs) - warm)
+                if mine:
+                    m.predict(xs[j])
+                    m.learn(xs[j], float(y[j]))
+                else:
+                    m.predict_one(xd[j])
+                    m.learn_one(xd[j], float(y[j]))
+
+            rows[name + "_us"] = 1e6 * _time_rows(step, budget_s)
+        out.append(rows)
+    return {"rows": out}
+
+
+def _square_forms(n: int, n_rows: int) -> dict:
+    """How often C's pow(d, 2) differs from d * d, and what d * d in the
+    regressor's parallel variance formulas does to the comparison with river."""
+    rng = np.random.default_rng(412)
+    v = np.concatenate([rng.standard_normal(n), rng.standard_normal(n) * 1e3]).tolist()
+    out = {"values": len(v), "pow_ne_mul": int(sum((x**2) != (x * x) for x in v))}
+    cases = []
+    try:
+        SQUARE["f"] = lambda d: d * d
+        for i, (name, k, skw, tkw, spl) in enumerate(REG_CASES):
+            X, y, w = reg_stream(n_rows, k, 200 + i, **skw)
+            rv = river_regressor(splitter=river_splitter(spl), **tkw)
+            pr, nr, _ = run_prequential_reg(rv, X, y, w, mine=False)
+            m = HTRegressor(k, splitter=spl, **tkw)
+            pm, nm, _ = run_prequential_reg(m, X, y, w, mine=True)
+            cases.append(
+                {
+                    "case": name,
+                    "pred": compare_pred(pm, pr),
+                    "split_rows_same": split_rows(nm) == split_rows(nr),
+                    "tree": compare_trees(m.preorder(), river_preorder(rv)),
+                }
+            )
+    finally:
+        SQUARE["f"] = _pow2
+    out["regressor_with_mul"] = cases
+    return out
+
+
+def part4(args) -> dict:
+    res = {"determinism": _determinism(args.det_rows)}
+    print("determinism", json.dumps(res["determinism"]), flush=True)
+    res["river_resume"] = _river_resume(5000)
+    print("river resume", json.dumps(res["river_resume"]), flush=True)
+    res["zero_weight"] = _zero_weight(10_000)
+    print("zero weight", json.dumps(res["zero_weight"]), flush=True)
+    res["weights"] = _weights(10_000)
+    print("weights", json.dumps(res["weights"]), flush=True)
+    res["square"] = _square_forms(1_000_000, args.reg_rows)
+    print("square", json.dumps(res["square"]), flush=True)
+    res["cost"] = _cost(args.time_budget)
+    return res
+
+
+def summarise4(res) -> None:
+    for name, d in res["determinism"].items():
+        print(f"determinism, {name} ({d['state_bytes']} bytes):")
+        for r in d["runs"]:
+            print("   ", json.dumps(r))
+    print("river resume:", json.dumps(res["river_resume"]))
+    for name, d in res["zero_weight"].items():
+        print(f"zero weight, {name}:", json.dumps(d))
+    for name, d in res["weights"].items():
+        print(f"weights, {name}:", json.dumps(d))
+    sq = res["square"]
+    print(f"pow(d, 2) != d * d on {sq['pow_ne_mul']} of {sq['values']} values")
+    for r in sq["regressor_with_mul"]:
+        print("  regressor with d * d vs river:", json.dumps(r))
+    for r in res["cost"]["rows"]:
+        print(
+            "cost per row (us):",
+            json.dumps({a: round(b, 1) if isinstance(b, float) else b for a, b in r.items()}),
+        )
 
 
 # --------------------------------------------------------------------------- main
@@ -2470,6 +2969,7 @@ PARTS = {
     "part1": (part1, summarise1),
     "part2": (part2, summarise2),
     "part3": (part3, summarise3),
+    "part4": (part4, summarise4),
 }
 
 
@@ -2484,6 +2984,8 @@ def main(argv=None):
     ap.add_argument(
         "--mem-period", type=int, default=5000, help="river's memory_estimate_period in part 3"
     )
+    ap.add_argument("--det-rows", type=int, default=20_000)
+    ap.add_argument("--time-budget", type=float, default=3.0, help="seconds per timed case")
     ap.add_argument("--force", action="store_true", help="recompute a part whose result exists")
     args = ap.parse_args(argv)
     os.makedirs(args.out, exist_ok=True)
