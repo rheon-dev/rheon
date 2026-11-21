@@ -359,7 +359,7 @@ print("intercept, x0, x1, venue X:", [round(c, 2) for c in coded["by_venue"].str
 ```
 
 ```text
-duplicate: spec "x0": it has the same name as an input column, and its output column would replace that column. Rename the spec.
+spec "x0": it has the same name as an input column, and its output column would replace that column. Rename the spec.
 spec "by_venue": feature column "venue" must be a number, but it is String. Cast it, such as with pl.col("venue").cast(pl.Float64).
 intercept, x0, x1, venue X: [1.02, 1.99, -1.01, -0.05]
 ```

@@ -107,8 +107,12 @@ CSV's first rows. It opens the bank as the run would, loading
 `--load-state`'s state, and runs it on no rows of that schema. So it
 refuses a state that is not there or was saved from other specs. It
 refuses a column a spec reads that the input lacks, or that the TOML
-file's `keep_columns` (the input columns to keep) leaves out. And it
-refuses a formula target's embargo shorter than its window.
+file's `keep_columns` (the input columns to keep) leaves out. It
+refuses a formula target's embargo shorter than its window. It lays out
+the output as the run's writer would, so it refuses an input column named
+like a flattened field, such as `ridge.pred_y` beside spec `ridge` in a
+CSV. And it makes and removes a file beside the output, the state and
+the closed groups, so it refuses a directory the run could not write.
 
 ## Save the state for the next run
 

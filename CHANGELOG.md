@@ -53,8 +53,155 @@ model that only the new build has is listed as an addition and passes.
   where that product is not a normal double the two roots are taken apart,
   and the filter is 4.1e-15 off statsmodels at every scale.
 
+### Changed
+
+- **`ModelBank.skip_learned` and the command line's `--skip-learned` refuse a
+  spec with `session` or `restart_after_step_back` unless the caller
+  declares that the clock runs on,** by `skip_learned(frame,
+  clock_runs_on=True)`, `--clock-runs-on`, or the config key
+  `clock_runs_on = true`. They keep a row whose clock is after its group's
+  last one, which is right only where, within a group, the clock never goes
+  back. Those two settings let it start again lower, at a session change or
+  a large step back. On such a stream the rule dropped the next session's
+  unlearned rows (0 kept of 300 on three days whose clock restarts daily)
+  and kept learned ones, and the bank took them without a word. The input
+  and the state cannot tell that stream from one whose clock runs on across
+  sessions, where the rule is exactly right, so the caller says which. A
+  call that was right before, under those settings, now needs the argument.
+
 ### Fixed
 
+- **Under `label_clock`, a row of weight 0 is held and learned at its label
+  time** (review P1), as `embargo` learns it: a step of the clock that
+  teaches nothing. It was scored and never held, so the clock of the labels
+  learned stepped over it, and the steps either side of it were one step,
+  capped once by `gap_cap` where `embargo` caps each; a zero-weight first
+  row did not start that clock. `embargo = d` and a label time of
+  `clock + d` now give the same numbers with zero weights, as they are
+  documented to. Likewise a stream whose first row is skipped (a null
+  feature) starts the clock of the labels learned at that row's label time,
+  as it starts `embargo`'s at its clock, so the first label learned steps
+  from it as under `embargo` (`rls`'s prior decayed over no step). A row
+  of weight 0 with a label time now counts against `max_held_rows`: under
+  `held_overflow="refuse"` a stream of many such rows can be refused where
+  it passed, under `"drop_oldest"` one can be dropped and counted in
+  `labels_dropped`, and `conformal_rate="auto"` counts it among the rows
+  waiting. To keep a row that is only to be predicted out of the held rows,
+  give it a null label time. Measured by `scripts/compare_outputs.py`
+  against the build before (arm64, polars 2.0.0; 12 models, 1 to 200
+  groups, chunks of 7 to a whole stream, gaps, nulls, a save and load):
+  outputs move only for weighted specs under `label_clock` whose stream has
+  rows of weight 0, by up to the whole value (nulls appear and vanish where
+  `min_weight` reads the new weight), and for unweighted ones whose group's
+  first row is skipped (`rls`, `sgd`, `pa`); every spec under `embargo` or
+  no delay moves 0 ulps. A state saved by an earlier build loads and
+  continues by the new rule from the rows it holds, not to the bit of a
+  fresh run. Moves: `ewridge.pred_*`, `ewridge.resid_*`, `ewridge.coef`,
+  `ewridge.support_coef`, `ewridge.sigma_*`, `ewridge.lo_*`,
+  `ewridge.hi_*`, `ewridge.coverage_*`, `ewridge.hit_rate_*`,
+  `ewridge.ic_*`, `ewridge.r2_*`, `ewridge.drift_*`, `ewridge.weight_sum`,
+  `ewridge.withheld_reason`, `rls.pred_*`, `rls.resid_*`, `rls.coef`,
+  `rls.weight_sum`, `rls.withheld_reason`, `lasso.pred_*`,
+  `lasso.resid_*`, `lasso.coef`, `lasso.weight_sum`,
+  `lasso.withheld_reason`, `huber.pred_*`, `huber.resid_*`, `huber.coef`,
+  `huber.support_coef`, `huber.weight_sum`, `huber.withheld_reason`,
+  `quantile.pred_*`, `quantile.resid_*`, `quantile.coef`,
+  `quantile.support_coef`, `quantile.weight_sum`,
+  `quantile.withheld_reason`, `sgd.pred_*`, `sgd.resid_*`, `sgd.coef`,
+  `sgd.weight_sum`, `sgd.withheld_reason`, `pa.pred_*`, `pa.resid_*`,
+  `pa.coef`, `pa.weight_sum`, `pa.withheld_reason`, `ftrl.pred_*`,
+  `ftrl.resid_*`, `ftrl.coef`, `ftrl.weight_sum`, `ftrl.withheld_reason`,
+  `ew_cov.mean_*`, `ew_cov.std_*`, `ew_cov.corr_*`, `ew_cov.weight_sum`,
+  `ew_cov.withheld_reason`, `kmeans.dist`, `kmeans.dist_second`,
+  `kmeans.coef`, `kmeans.weight_sum`, `kmeans.withheld_reason`,
+  `ew_class.p_*`, `ew_class.class`, `ew_class.coef`,
+  `ew_class.weight_sum`, `ew_class.withheld_reason`.
+- **A query under `group_close` with nowhere to put the closed groups
+  keeps none of them** (review P8). `lf.rheon.fit_predict(specs)` with a
+  spec that closes groups, and neither `closed_groups=` nor `save_state=`,
+  kept every closed group's row, its Gram among it, in a bank nobody could
+  read, to the end of the query: about 4 KB a group at 20 features, 2.2 GB
+  at 400,000 groups. Each chunk's closed rows are now dropped after it.
+- **Three more kinds of damaged state file are refused at load, and a
+  fourth at the chunk that reads it** (review P7), where each loaded and
+  panicked at the first chunk: a residual window's later snapshot of the
+  wrong width (every snapshot is now checked, not the boundary alone); a
+  Huber state whose saved model emits a scale its spec does not; a
+  quantile window's row whose bucket its sketch does not hold; and a
+  formula target's held rows damaged where Polars' IPC reader unwraps a
+  field, now refused as damaged. Polars' reader trusts the lengths the
+  held rows state, so some damage there still asks for an allocation that
+  aborts the process.
+- **Two text group keys whose hashes collide are two groups** (review
+  P6). A chunk's rows were bucketed by a 64-bit FNV-1a hash of the key
+  alone, so two keys with one hash, which can be made at will, were one
+  group inside a chunk and two across chunks: one group's rows were learned
+  into the other's model, and the answer depended on the chunking. A hash
+  match is now confirmed by the keys' text, by their Arrow string views
+  first, which for a key of up to 12 bytes are the text itself. The saved
+  state is unchanged. Measured on arm64, `ew_cov` at k=4 over 400,000 rows
+  of 50 text groups, one thread: about 1% slower for 6-byte keys and 2%
+  for 23-byte ones; nothing measurable at 5,000 groups. Session values are
+  still told apart by their hash.
+- **A NUL character in a spec's name, a target's name or a `with_windows`
+  output's name is refused** (review P11) when the spec or the call is
+  checked, and so is a column so named in a frame handed to a bank or a
+  `with_windows`, `refresh_time` or plan surface, before it crosses. Each
+  panicked in the Arrow export, whose column names are C strings, the
+  names after the bank had learned the chunk.
+- **A feature named `intercept` beside `fit_intercept=True` is refused**
+  (review P14). The fit's own constant term is named `intercept` in
+  `coef`, the Gram and the bank's tables, so two coefficients shared one
+  name, and `unnest` refused the output with advice that could not work.
+  Rename the column, or set `fit_intercept=False`.
+- **A chunk of no rows built without dtypes no longer pins a clock's
+  type** (review P10). `pl.DataFrame({"t": [], ...})`, what a poll that
+  found nothing builds, has `Null` columns, and fed first it pinned the
+  clock to `Float64`, in the bank and in its saved state, so the first rows
+  of an integer clock were refused; fed mid-stream, it was refused itself.
+  A chunk that holds no value of the clock now says nothing of its type.
+- **A clock field shown in a coarser unit floors an instant before 1970**
+  (review P15). The clock fields keep the first chunk's unit, and a later
+  chunk's finer instant before 1970 was truncated toward 1970, to a time
+  after the row's own (`23:59:59.999` became `00:00:00.000`). It is
+  floored, as Polars' cast to the coarser unit floors it. The fit reads
+  nanoseconds and does not move.
+- **A command-line run under `group_close` keeps nothing of a closed
+  group** (review P5). Its closing lines kept an entry for every group it
+  ever saw, about 190 bytes each, so a `--no-output --closed-groups` run
+  over a stream of many groups grew with the groups it closed: 886 MB at
+  four million against 166 MB at a quarter million. A closed group's entry
+  now goes, and the closing lines count the groups still open. A run with
+  neither `closed_groups` nor `save_state` drops each closed group's row
+  after its chunk, where the bank kept it to the end for nobody.
+- **A `--skip-learned` error names the input's row** (review P12), where it
+  named the row's place among the rows kept: a step back at input row 800,
+  after 600 learned rows were skipped, was reported at row 200.
+- **The command line refuses two paths that name one file** (review P4):
+  of `input`, `output`, `load_state`, `save_state` and `closed_groups`,
+  any two naming one file, however spelled, are refused before the run,
+  where the run wrote one over the other (the state over the output or the
+  input, the output over the state the next run resumes from). `load_state`
+  and `save_state` may still be one file.
+- **An unwritable `save_state` directory is refused before the run**
+  (review P9), by the run and by `--dry-run`, which make and remove a
+  temporary beside the file; it was found by the save, after the output had
+  been published. The dry run checks the output's and `closed_groups`'
+  directories the same way.
+- **The command line's text and IPC outputs take every column Python's
+  do** (review P2, P3). An IPC output of a Categorical column failed at the
+  first chunk holding a category an earlier chunk did not, so the run
+  depended on `chunk_size`: Arrow's IPC file holds one dictionary a column
+  for all its batches. The IPC output now carries a Categorical column as
+  String, at any chunk size. A CSV output refused every `Date`, `Time` and
+  `Datetime` column, and a zoned `Datetime` failed as a group column and
+  panicked the NDJSON writer: the command line carries no time zone
+  database. Each is written as Polars writes it, a zoned instant in UTC
+  with the offset that says so (`+0000` in a CSV, `+00:00` in NDJSON), and
+  a zoned group column's key is its instant in UTC, as the bank's is.
+- **`--dry-run` lays out the output** (review P13), so an input column
+  named as a flattened field, such as `m.pred_y` beside spec `m`, is
+  refused by the dry run of a flat or CSV output, as the run refuses it.
 - `lasso`: under a `window_size`, `solve_failures` counts a coordinate
   descent that runs out of `max_iter` sweeps once rows have aged out of the
   window, where it excused one by the window's effective rows alone. A window
@@ -99,6 +246,45 @@ model that only the new build has is listed as an addition and passes.
   selection scores a row only where every path point's squared error is a
   number, so such a row cannot leave a point's error NaN or infinite for
   good. Moves: `lasso.*`.
+- `lf.rheon.predict(bank)` runs from several threads at once on one bank, as
+  `bank.predict` does. Building the plan peeks at the bank's closed groups,
+  and the peek took the bank for itself, so it was refused with "the bank is
+  in use on another thread" while another thread was scoring: 9 of 20 lazy
+  predicts from four threads failed on py-polars 2.0, 16 of 20 on 1.37.
+  `bank.closed_groups(drop=False)` now reads beside a `predict` too; a drain
+  still needs the bank alone.
+- Refusals that came as Python's or pyo3's own words now name the call and
+  the argument, with what to pass: `ModelBank.drop_groups(None)` (pass
+  `[None]` for the null group) or a key that is not a string;
+  `ModelBank(None)`; a spec dict holding a set, by its key; `fit(None)`,
+  `fit_predict_batches(None)` and a dict of columns given in place of a
+  frame; `ModelBank.save` to a file opened for text. `ModelBank.load_bytes`
+  takes a `bytearray` or a `memoryview`, as `ModelBank.load` does, and
+  names anything else. A spec named as an input column is refused without
+  Polars' `duplicate: ` in front of the sentence.
+- `rheon.corr` checks three more arguments by name: `mp_edge` and
+  `mp_density` refuse a `sigma2` that is not a finite number above 0 (a
+  negative one gave a lower edge above the upper); `absorption` refuses a
+  `k` that is not a whole number, as `spectral` does (`True` ran as 1, and
+  `2.0` failed in numpy's slicing); `nearest` refuses a `tol` not above 0,
+  which no run can meet.
+- `rheon.gram`'s numpy functions (`merge`, `subset`, `correlation`,
+  `solve`, `coef_stats`, `vif`, `condition`) check that a Gram's arrays are
+  sized to its columns and targets, as `lars_path`, `lasso_path` and
+  `solve_subsets` already did, and refuse with the same message. A `means`
+  of one entry was broadcast by `merge` into a wrong fit with nothing said,
+  and ignored by `solve` and `vif`; a `comoments` too small raised numpy's
+  own errors. A Gram as `ModelBank.gram()` returns it, whole or packed, is
+  unchanged.
+- With only the old `POLARS_ONLINE_WARN_UNSTABLE=1` set, the
+  `UnstableWarning` said to set or unset `RHEON_WARN_UNSTABLE`, which was
+  not set; it names the variable the value was read from. And `bocpd`'s
+  `hazard_col`, missing from the input, is called the hazard column, not a
+  target column.
+- `rp.stream.with_windows` checks `chunk_size` as `refresh_time` and
+  `lf.rheon.fit_predict` do, while the plan is built: `True` ran in one-row
+  chunks, `2.5` failed only when the plan ran, and `"a"` raised Python's own
+  comparison error. Each is now a `WrongTypeError` naming `chunk_size`.
 
 ### Tests and documents
 

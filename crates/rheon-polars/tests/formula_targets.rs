@@ -242,6 +242,7 @@ fn validate_refuses_a_short_embargo_where_the_run_would() {
         threads: None,
         load_state: None,
         skip_learned: false,
+        clock_runs_on: false,
         save_state: Some("bank.state".into()),
         keep_columns: vec![],
         predict: false,

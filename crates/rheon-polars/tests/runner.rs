@@ -113,6 +113,7 @@ fn config(input: &Path, output: &Path) -> RunConfig {
         threads: None,
         load_state: None,
         skip_learned: false,
+        clock_runs_on: false,
         save_state: None,
         keep_columns: vec![],
         predict: false,
@@ -863,6 +864,77 @@ fn a_dry_run_that_skips_what_was_learned_takes_the_positions_first() {
     cleanup(&[input, output, state]);
 }
 
+/// Under a spec whose group's clock may start again lower -- `session`, or
+/// `restart_after_step_back` -- the last clock is not a place in the stream,
+/// so `skip_learned` is refused, by the dry run as by the run, unless
+/// `clock_runs_on` declares the clock never goes back; and `clock_runs_on`
+/// alone is refused as meaning nothing (review fable2, Y2, the user's
+/// "refuse unless declared", 2026-11-20).
+#[test]
+fn skip_learned_refuses_a_clock_that_may_start_again_unless_declared() {
+    let input = tmp("restart-skip-in.parquet");
+    let output = tmp("restart-skip-out.parquet");
+    let state = tmp("restart-skip-state.bin");
+    write(&input, Format::Parquet, &stream(50));
+    let settings: [(&str, serde_json::Value, &str); 3] = [
+        (
+            "restart_after_step_back",
+            serde_json::json!({"restart_after_step_back": 5.0}),
+            "sets restart_after_step_back, so a",
+        ),
+        (
+            "session_gap",
+            serde_json::json!({"session": "group", "session_gap": 1.0}),
+            "sets session = \"group\", so a",
+        ),
+        (
+            "group_close",
+            serde_json::json!({"session": "group", "group_close": "session"}),
+            "sets session = \"group\", so a",
+        ),
+    ];
+    for (what, extra, says) in settings {
+        let mut json = serde_json::to_value(spec()).unwrap();
+        for (k, v) in extra.as_object().unwrap() {
+            json[k] = v.clone();
+        }
+        let mut cfg = config(&input, &output);
+        cfg.specs = vec![serde_json::from_value(json).unwrap()];
+        cfg.save_state = Some(state.clone());
+        run_config(&cfg, no_progress).unwrap();
+        let mut resumed = cfg.clone();
+        resumed.save_state = None;
+        resumed.load_state = Some(state.clone());
+        resumed.skip_learned = true;
+        for e in [
+            resumed.dry_run().unwrap_err().to_string(),
+            run_config(&resumed, no_progress).unwrap_err().to_string(),
+        ] {
+            assert!(
+                e.contains("config: skip_learned = true (--skip-learned), but spec \"ridge\" ")
+                    && e.contains(says)
+                    && e.contains("set clock_runs_on = true (--clock-runs-on)"),
+                "{what}: {e}"
+            );
+        }
+        resumed.clock_runs_on = true;
+        resumed.dry_run().unwrap();
+        run_config(&resumed, no_progress).unwrap();
+    }
+    let mut alone = config(&input, &output);
+    alone.clock_runs_on = true;
+    let e = alone.validate().unwrap_err();
+    assert!(
+        e.starts_with("config: clock_runs_on = true (--clock-runs-on) says how skip_learned")
+            && e.contains("leave out clock_runs_on"),
+        "{e}"
+    );
+    alone.skip_learned = true;
+    alone.load_state = Some(state.clone());
+    alone.validate().unwrap();
+    cleanup(&[input, output, state]);
+}
+
 /// The run's closing lines on readiness pass over a spec that writes no
 /// row -- an `audit` keeps its counts in the state, and emits no
 /// `withheld_reason` to count -- and speak of the spec that does.
@@ -944,4 +1016,385 @@ fn a_writer_that_cannot_create_its_file_ends_the_run_with_its_own_error() {
     }
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `stream(n)` with a Categorical column `venue` whose second category,
+/// `"B"`, first comes at row `late`.
+fn with_late_category(n: usize, late: usize) -> DataFrame {
+    let venue: Vec<&str> = (0..n).map(|i| if i < late { "A" } else { "B" }).collect();
+    let venue = Series::new("venue".into(), venue)
+        .cast(&DataType::from_categories(Categories::global()))
+        .unwrap();
+    let mut df = stream(n);
+    df.with_column(venue.into_column()).unwrap();
+    df
+}
+
+/// Review P2: an IPC output of a run over a Categorical column whose
+/// category first comes in a later chunk. Arrow's IPC file holds one
+/// dictionary a field for every batch, so the run failed at that chunk --
+/// at 10 rows a chunk -- where the same input as one chunk was written: the
+/// output depended on `chunk_size`. Now it is written at any chunk size,
+/// the same file each time.
+#[test]
+fn an_ipc_output_does_not_depend_on_when_a_category_first_comes() {
+    let df = with_late_category(100, 90);
+    let input = tmp("late-category-in.parquet");
+    write(&input, Format::Parquet, &df);
+    let mut got = Vec::new();
+    for chunk_size in [1000, 10, 7] {
+        let output = tmp(&format!("late-category-{chunk_size}.arrow"));
+        let mut cfg = config(&input, &output);
+        cfg.chunk_size = chunk_size;
+        let stats = run_config(&cfg, no_progress)
+            .unwrap_or_else(|e| panic!("chunk_size {chunk_size}: {e}"));
+        assert_eq!(stats.rows, 100);
+        got.push(read(&output, Format::Ipc));
+        cleanup(&[output]);
+    }
+    for g in &got[1..] {
+        assert!(g.equals_missing(&got[0]), "{g}\nvs\n{}", got[0]);
+    }
+    let venue: Vec<Option<String>> = got[0]
+        .column("venue")
+        .unwrap()
+        .cast(&DataType::String)
+        .unwrap()
+        .str()
+        .unwrap()
+        .iter()
+        .map(|v| v.map(str::to_string))
+        .collect();
+    assert_eq!(venue[89].as_deref(), Some("A"));
+    assert_eq!(venue[90].as_deref(), Some("B"));
+    assert_eq!(preds(&got[0]), bank_preds(&df));
+    cleanup(&[input]);
+}
+
+/// `stream(n)` with `day`, a Datetime in microseconds zoned to New York:
+/// midnight there on 1 January 2024 for the first half of the rows and on
+/// the 2nd for the second, which is 05:00 UTC.
+fn with_zoned_day(n: usize) -> DataFrame {
+    const US_PER_DAY: i64 = 86_400 * 1_000_000;
+    // 2024-01-01T05:00:00Z in microseconds.
+    let first = 1_704_085_200 * 1_000_000;
+    let day: Vec<i64> = (0..n)
+        .map(|i| first + if i < n / 2 { 0 } else { US_PER_DAY })
+        .collect();
+    let zone = TimeZone::opt_try_new(Some("America/New_York")).unwrap();
+    // Built on the integers: a cast to a zone drops it in a build without
+    // polars' time zones.
+    let day = Int64Chunked::from_vec("day".into(), day)
+        .into_datetime(TimeUnit::Microseconds, zone)
+        .into_series();
+    assert!(matches!(day.dtype(), DataType::Datetime(_, Some(_))));
+    let mut df = stream(n);
+    df.with_column(day.into_column()).unwrap();
+    df
+}
+
+/// Review P3: a zoned Datetime column failed as a group column (the
+/// closing lines cast it to text as a naive one), and in CSV and NDJSON
+/// output, which have no form for a zone in this build -- the NDJSON
+/// writer panicked. Python takes all three, and so does the run now: the
+/// group's key is its instant in UTC, as the bank's is, and the text
+/// formats write each instant in UTC, saying so.
+#[test]
+fn a_zoned_datetime_column_runs_as_a_group_and_into_every_format() {
+    let df = with_zoned_day(40);
+    let input = tmp("zoned-in.parquet");
+    write(&input, Format::Parquet, &df);
+    // As the group column, with every row withheld so the closing lines
+    // name each group.
+    let output = tmp("zoned-group.parquet");
+    let mut cfg = config(&input, &output);
+    cfg.specs[0].group = Some("day".into());
+    // Each of `stream`'s two groups has a clock of its own.
+    cfg.specs[0].clock = None;
+    cfg.specs[0].gap_cap = None;
+    cfg.specs[0].min_weight = Some(rheon_polars::FloatOrList::Float(rheon_polars::Num(1e9)));
+    let (stats, lines) = rheon_polars::run_config_reported(&cfg, no_progress).unwrap();
+    assert_eq!(stats.rows, 40);
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("2 groups whose last row was withheld")),
+        "{lines:?}"
+    );
+    cleanup(&[output]);
+    // Into each text format, the instant written in UTC.
+    for format in [Format::Csv, Format::Ndjson] {
+        let output = tmp(&format!("zoned-out.{}", ext(format)));
+        let cfg = config(&input, &output);
+        run_config(&cfg, no_progress).unwrap_or_else(|e| panic!("{format:?}: {e}"));
+        let text = std::fs::read_to_string(&output).unwrap();
+        // Polars' text for each format, the instant in UTC.
+        let (first, second) = match format {
+            Format::Csv => (
+                "2024-01-01T05:00:00.000000+0000",
+                "2024-01-02T05:00:00.000000+0000",
+            ),
+            _ => ("2024-01-01T05:00:00+00:00", "2024-01-02T05:00:00+00:00"),
+        };
+        assert!(
+            text.contains(first) && text.contains(second),
+            "{format:?}: {}",
+            &text[..text.len().min(400)]
+        );
+        cleanup(&[output]);
+    }
+    // A clock in the output's struct, zoned, is written the same way.
+    let mut zoned_clock = df.clone();
+    let zone = TimeZone::opt_try_new(Some("America/New_York")).unwrap();
+    let t = zoned_clock
+        .column("t")
+        .unwrap()
+        .cast(&DataType::Int64)
+        .unwrap()
+        .as_materialized_series()
+        .clone();
+    let t = (t * 1_000_000i64)
+        .i64()
+        .unwrap()
+        .clone()
+        .into_datetime(TimeUnit::Microseconds, zone)
+        .into_series();
+    zoned_clock.with_column(t.into_column()).unwrap();
+    let clocked = tmp("zoned-clock-in.parquet");
+    write(&clocked, Format::Parquet, &zoned_clock);
+    for format in [Format::Csv, Format::Ndjson] {
+        let output = tmp(&format!("zoned-clock-out.{}", ext(format)));
+        let mut cfg = config(&clocked, &output);
+        cfg.specs = vec![
+            serde_json::from_str(
+                r#"{"name": "ridge", "model": {"type": "ewridge"}, "targets": ["y"],
+                    "features": ["x0", "x1"], "clock": "t", "half_life": "50s",
+                    "gap_cap": "10s", "group": "group", "emit_clocks": true}"#,
+            )
+            .unwrap(),
+        ];
+        run_config(&cfg, no_progress).unwrap_or_else(|e| panic!("{format:?}: {e}"));
+        let text = std::fs::read_to_string(&output).unwrap();
+        let offset = if format == Format::Csv {
+            "+0000"
+        } else {
+            "+00:00"
+        };
+        assert!(text.contains(offset), "{format:?}: {}", &text[..400]);
+        cleanup(&[output]);
+    }
+    cleanup(&[input, clocked]);
+}
+
+/// Review P13: a dry run did not lay out the output, so an input column
+/// named as a flattened field of a spec -- `ridge.pred_y` -- passed it for
+/// a flat output and a CSV, and the run then failed on the duplicate name.
+#[test]
+fn a_dry_run_lays_out_the_output() {
+    let mut df = stream(20);
+    let clash = df
+        .column("y")
+        .unwrap()
+        .clone()
+        .with_name("ridge.pred_y".into());
+    df.with_column(clash).unwrap();
+    let input = tmp("dry-layout-in.parquet");
+    write(&input, Format::Parquet, &df);
+    let parquet = tmp("dry-layout-out.parquet");
+    let csv = tmp("dry-layout-out.csv");
+    config(&input, &parquet)
+        .dry_run()
+        .expect("the struct layout keeps the spec's fields in its column");
+    let mut flat = config(&input, &parquet);
+    flat.output_layout = rheon_polars::OutputLayout::Flat;
+    for (what, cfg) in [("flat", flat), ("csv", config(&input, &csv))] {
+        let dry = cfg.dry_run().map(|_| ()).unwrap_err().to_string();
+        let ran = run_config(&cfg, no_progress).unwrap_err().to_string();
+        assert!(dry.contains("ridge.pred_y"), "{what}: {dry}");
+        assert_eq!(dry, ran, "{what}: the dry run refuses as the run does");
+    }
+    cleanup(&[input, parquet, csv]);
+}
+
+/// Found beside review P3: this build's CSV writer has no form for a
+/// `Date`, a `Time` or a naive `Datetime` either, so a CSV output of an
+/// input with one was refused, where Python writes it. Each is written as
+/// Polars writes it.
+#[test]
+fn a_csv_output_writes_dates_and_times_as_polars_does() {
+    let mut df = stream(4);
+    // 2024-01-01 in days, at midnight in milliseconds, and 01:02:03.000004.
+    let day = Int32Chunked::from_vec("day".into(), vec![19_723; 4]).into_date();
+    let at = Int64Chunked::from_vec("at".into(), vec![1_704_067_200_000; 4])
+        .into_datetime(TimeUnit::Milliseconds, None);
+    let time = Int64Chunked::from_vec("time".into(), vec![3_723_000_004_000; 4]).into_time();
+    for s in [day.into_series(), at.into_series(), time.into_series()] {
+        df.with_column(s.into_column()).unwrap();
+    }
+    let input = tmp("temporal-csv-in.parquet");
+    let output = tmp("temporal-csv-out.csv");
+    write(&input, Format::Parquet, &df);
+    run_config(&config(&input, &output), no_progress).unwrap();
+    let text = std::fs::read_to_string(&output).unwrap();
+    let row = text.lines().nth(1).unwrap();
+    assert!(
+        row.contains(",2024-01-01,2024-01-01T00:00:00.000,01:02:03.000004000,"),
+        "{row}"
+    );
+    cleanup(&[input, output]);
+}
+
+/// Review P4: two of a run's paths naming one file were taken, and the run
+/// wrote one over the other -- the state over the output or the input, the
+/// output over the state the next run resumes from. Each pair is refused,
+/// however the path is spelled; `load_state` and `save_state` may be one.
+#[test]
+fn two_paths_naming_one_file_are_refused() {
+    let dir = tmp("one-file-dir");
+    std::fs::create_dir_all(&dir).unwrap();
+    let input = dir.join("in.parquet");
+    write(&input, Format::Parquet, &closing_stream());
+    // The same file through `..`, and a file that is not there yet.
+    let respelled = dir
+        .join("..")
+        .join(dir.file_name().unwrap())
+        .join("in.parquet");
+    let other = |name: &str| dir.join(name);
+    let base = || {
+        let mut cfg = config(&input, &other("out.parquet"));
+        cfg.specs = vec![closing_spec()];
+        cfg
+    };
+    type Set = fn(&mut RunConfig, PathBuf);
+    let roles: [(&str, Set); 5] = [
+        ("input", |c, p| c.input = p),
+        ("output", |c, p| c.output = p),
+        ("load_state", |c, p| c.load_state = Some(p)),
+        ("save_state", |c, p| c.save_state = Some(p)),
+        ("closed_groups", |c, p| c.closed_groups = Some(p)),
+    ];
+    for (i, (a, set_a)) in roles.iter().enumerate() {
+        for (b, set_b) in &roles[i + 1..] {
+            let mut cfg = base();
+            // A name with a format's extension serves every role.
+            let shared = if *a == "input" {
+                input.clone()
+            } else {
+                other("x.parquet")
+            };
+            let spelled = if *a == "input" {
+                respelled.clone()
+            } else {
+                shared.clone()
+            };
+            set_a(&mut cfg, shared);
+            set_b(&mut cfg, spelled);
+            let got = cfg.validate();
+            if (*a, *b) == ("load_state", "save_state") {
+                assert!(got.is_ok(), "{a} and {b}: {got:?}");
+                continue;
+            }
+            let e = got.unwrap_err();
+            assert!(
+                e.contains(&format!("config: {a} and {b} both name")),
+                "{a} and {b}: {e}"
+            );
+        }
+    }
+    // Distinct paths pass.
+    let mut cfg = base();
+    cfg.save_state = Some(other("s.state"));
+    cfg.closed_groups = Some(other("closed.parquet"));
+    cfg.validate().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Review P9: a `save_state` in a directory the process may not write
+/// passed the check before the run, which asked only whether the directory
+/// was there, and the save failed after the output was published -- and a
+/// dry run said the config was fine. Both refuse it before a row is read,
+/// and the output is not written.
+///
+/// Unix only, and skipped where the process may write past the mode bits,
+/// as `a_writer_that_cannot_create_its_file_ends_the_run_with_its_own_error`
+/// is.
+#[cfg(unix)]
+#[test]
+fn an_unwritable_state_directory_is_refused_before_the_run() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tmp("read-only-state-dir");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let probe = dir.join("probe");
+    if std::fs::File::create(&probe).is_ok() {
+        eprintln!(
+            "skipped: this process can create a file in a 0555 directory \
+             (running as root, or with CAP_DAC_OVERRIDE), so no save is refused"
+        );
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
+    let input = tmp("read-only-state-in.parquet");
+    let output = tmp("read-only-state-out.parquet");
+    write(&input, Format::Parquet, &stream(30));
+    let state = dir.join("s.state");
+    let mut cfg = config(&input, &output);
+    cfg.save_state = Some(state.clone());
+    let dry = cfg.dry_run().unwrap_err();
+    let ran = run_config(&cfg, no_progress).unwrap_err();
+    for e in [&dry, &ran] {
+        let msg = e.to_string();
+        assert!(
+            matches!(e, PolarsError::IO { .. })
+                && msg.contains(&format!("saving state {}", state.display())),
+            "{msg}"
+        );
+    }
+    assert!(!output.exists(), "the output is not written");
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    cleanup(&[input, output]);
+}
+
+/// Review P12: under `--skip-learned`, an error named a row by its place
+/// among the rows the run kept, not in the input: a step back at input row
+/// 800, after 600 learned rows were skipped, was reported at row 200. It
+/// names the input's row, as the same file does without a state.
+#[test]
+fn a_skip_learned_error_names_the_inputs_row() {
+    let n = 1000;
+    let t: Vec<f64> = (0..n)
+        .map(|i| if i == 800 { i as f64 - 50.0 } else { i as f64 })
+        .collect();
+    let x0: Vec<f64> = (0..n).map(|i| ((i * 7) % 11) as f64).collect();
+    let x1: Vec<f64> = (0..n).map(|i| ((i * 5) % 13) as f64).collect();
+    let y: Vec<f64> = (0..n).map(|i| ((i * 3) % 17) as f64).collect();
+    let df = df!(
+        "group" => vec!["g0"; n], "t" => t, "x0" => x0, "x1" => x1, "y" => y
+    )
+    .unwrap();
+    let first = tmp("skip-row-first.parquet");
+    let all = tmp("skip-row-all.parquet");
+    let output = tmp("skip-row-out.parquet");
+    let state = tmp("skip-row.state");
+    write(&first, Format::Parquet, &df.slice(0, 600));
+    write(&all, Format::Parquet, &df);
+    let mut learn = config(&first, &output);
+    learn.save_state = Some(state.clone());
+    run_config(&learn, no_progress).unwrap();
+    let plain = run_config(&config(&all, &output), no_progress)
+        .unwrap_err()
+        .to_string();
+    assert!(plain.contains("at row 800 "), "{plain}");
+    for chunk_size in [64, 1000, 7] {
+        let mut resumed = config(&all, &output);
+        resumed.chunk_size = chunk_size;
+        resumed.load_state = Some(state.clone());
+        resumed.skip_learned = true;
+        let e = run_config(&resumed, no_progress).unwrap_err().to_string();
+        assert!(e.contains("at row 800 "), "chunk_size {chunk_size}: {e}");
+    }
+    cleanup(&[first, all, output, state]);
 }

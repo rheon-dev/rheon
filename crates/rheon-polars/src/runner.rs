@@ -30,8 +30,9 @@ use polars::prelude::*;
 use polars_utils::pl_path::PlRefPath;
 use serde::{Deserialize, Serialize};
 
+use crate::arrow::InputRows;
 use crate::atomic::AtomicFile;
-use crate::bank::{Bank, Learned};
+use crate::bank::{Bank, GroupKey, Learned};
 use crate::spec::Spec;
 
 /// Writing the output through a temporary is filesystem work, and polars'
@@ -76,6 +77,36 @@ fn check_parent(what: &str, path: &Path) -> PolarsResult<()> {
         ),
     );
     Err(io_err(what, path, e))
+}
+
+/// [`check_parent`], and then that a file can be made beside `path`: a
+/// temporary sibling, as the writer at the end makes, created and removed
+/// at once. A directory the process may not write passed `check_parent`
+/// and was found by the save after the output had been published, the
+/// state lost (review P9).
+fn check_writable(what: &str, path: &Path) -> PolarsResult<()> {
+    check_parent(what, path)?;
+    AtomicFile::create(path)
+        .map(drop)
+        .map_err(|e| io_err(what, path, e))
+}
+
+/// The path `path` names, for telling whether two of a run's paths are one
+/// file: the file's own canonical path where it is there, its directory's
+/// with its name where only the directory is, and the path as given where
+/// neither is.
+fn file_identity(path: &Path) -> PathBuf {
+    if let Ok(p) = path.canonicalize() {
+        return p;
+    }
+    let parent = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
+    match (parent.canonicalize(), path.file_name()) {
+        (Ok(dir), Some(name)) => dir.join(name),
+        _ => path.to_path_buf(),
+    }
 }
 
 /// A file format the runner reads and writes.
@@ -307,9 +338,18 @@ pub struct RunConfig {
     /// reads a clock, a row is kept when its clock is after its group's last
     /// one, its group is new to the bank, or its clock is null
     /// (`ModelBank.skip_learned` in Python; docs/PLAN.md task 196, N26).
-    /// Requires `load_state` and a spec that reads a clock.
+    /// Requires `load_state` and a spec that reads a clock. Right only where,
+    /// within a group, the clock never goes back: under a spec with `session`
+    /// or `restart_after_step_back` it is refused unless `clock_runs_on`
+    /// declares that (review fable2, Y2).
     #[serde(default)]
     pub skip_learned: bool,
+    /// Declares, for `skip_learned`, that within each group the clock never
+    /// goes back, across sessions and step backs included
+    /// (`ModelBank.skip_learned(clock_runs_on=True)` in Python). Requires
+    /// `skip_learned`.
+    #[serde(default)]
+    pub clock_runs_on: bool,
     /// Save the bank state here after running.
     #[serde(default)]
     pub save_state: Option<PathBuf>,
@@ -483,6 +523,14 @@ impl RunConfig {
                     .into(),
             );
         }
+        if self.clock_runs_on && !self.skip_learned {
+            return Err(
+                "config: clock_runs_on = true (--clock-runs-on) says how skip_learned reads the \
+                 saved state's clocks, but skip_learned is not set, so nothing reads it. Set \
+                 skip_learned (--skip-learned), or leave out clock_runs_on."
+                    .into(),
+            );
+        }
         if self.predict {
             if self.load_state.is_none() {
                 return Err(
@@ -503,6 +551,7 @@ impl RunConfig {
         if !self.no_output() {
             self.output_format()?;
         }
+        self.check_distinct_paths()?;
         // Each spec's checks and the bank's -- a duplicate name, a `seqtest`
         // comparison naming a spec the bank has not got or a residual a side
         // does not emit -- so that a dry run reports them and not the first
@@ -518,6 +567,44 @@ impl RunConfig {
             && let Some(why) = bank.fit_predict_refusal()
         {
             return Err(why.to_string());
+        }
+        Ok(())
+    }
+
+    /// The refusal of two of the run's paths that name one file (review
+    /// P4): the input, the output, `load_state`, `save_state` and
+    /// `closed_groups` each its own, since whichever is written last would
+    /// replace the other -- a state saved over the output, an output over
+    /// its input or over the state the next run resumes from. `load_state`
+    /// and `save_state` may be one file: a run that goes on from a state
+    /// and saves it again.
+    fn check_distinct_paths(&self) -> Result<(), String> {
+        let named: Vec<(&str, &Path)> = [
+            ("input", Some(self.input.as_path())),
+            ("output", Some(self.output.as_path())),
+            ("load_state", self.load_state.as_deref()),
+            ("save_state", self.save_state.as_deref()),
+            ("closed_groups", self.closed_groups.as_deref()),
+        ]
+        .into_iter()
+        .filter_map(|(what, p)| p.filter(|p| !p.as_os_str().is_empty()).map(|p| (what, p)))
+        .collect();
+        let ids: Vec<PathBuf> = named.iter().map(|(_, p)| file_identity(p)).collect();
+        for i in 0..named.len() {
+            for j in i + 1..named.len() {
+                let pair = (named[i].0, named[j].0);
+                if pair == ("load_state", "save_state") || ids[i] != ids[j] {
+                    continue;
+                }
+                return Err(format!(
+                    "config: {} and {} both name {}, but each is a file of its own, and the run \
+                     would write one over the other. Give {} a path of its own.",
+                    pair.0,
+                    pair.1,
+                    named[j].1.display(),
+                    pair.1
+                ));
+            }
         }
         Ok(())
     }
@@ -611,11 +698,40 @@ impl RunConfig {
             // What the run takes before its first row: a bank with no clock
             // to resume by is refused here too.
             let learned = bank
-                .learned()
+                .learned(self.clock_runs_on)
                 .map_err(|e| polars_err!(ComputeError: "{}", e))?;
             learned.unlearned(&empty)?;
         }
-        augment(&mut bank, empty, self.predict, self.no_output(), 0).map(|_| ())
+        // The files the run writes, as it checks them before its first
+        // row; the output's and the sidecar's writers make their temporaries
+        // at the start, and the save its at the end (review P9).
+        if let Some(p) = &self.save_state {
+            check_writable("saving state", p)?;
+        }
+        if !self.no_output() {
+            check_writable("writing output", &self.output)?;
+        }
+        if let Some(p) = &self.closed_groups {
+            check_writable("writing closed groups", p)?;
+        }
+        let out = augment(
+            &mut bank,
+            empty,
+            self.predict,
+            self.no_output(),
+            InputRows::default(),
+        )?;
+        // And the output laid out as its writer lays it out: a flattened
+        // name that is already a column passed the dry run, and the run then
+        // failed on it (review P13).
+        if !self.no_output() {
+            let format = self
+                .output_format()
+                .map_err(|e| polars_err!(ComputeError: "{}", e))?;
+            let who = format!("config: output \"{}\"", self.output.display());
+            lay_out(out, format, self.output_layout, &who)?;
+        }
+        Ok(())
     }
 
     /// The bank this config starts from: loaded from `load_state`, or fresh.
@@ -819,7 +935,7 @@ pub fn run_config_on_reported(
         }
     };
     if let Some(p) = &cfg.save_state {
-        check_parent("saving state", p)?;
+        check_writable("saving state", p)?;
     }
     // The output directory too, so an unwritable one is refused before the
     // bank learns a chunk rather than by the writer thread mid-run (review
@@ -838,7 +954,7 @@ pub fn run_config_on_reported(
     // so every chunk is filtered against the same positions.
     let learned = if cfg.skip_learned {
         Some(
-            bank.learned()
+            bank.learned(cfg.clock_runs_on)
                 .map_err(|e| polars_err!(ComputeError: "{}", e))?,
         )
     } else {
@@ -863,11 +979,16 @@ pub fn run_config_on_reported(
     // always has the closed rows that go with it. A run in which nothing
     // closed writes an empty frame with the schema, as an empty output does.
     let mut last = LastReasons::default();
+    // A closed group's row goes to the sidecar, or into the saved state; a
+    // run with neither has no reader for it, and kept it in the bank to the
+    // end of the stream.
+    let discard_closed = closed_target.is_none() && cfg.save_state.is_none();
     let stats = run_with(
         &mut bank,
         input,
         out,
         closed_target,
+        discard_closed,
         learned.as_ref(),
         Some(&mut last),
         opts,
@@ -931,7 +1052,7 @@ pub fn run(
     opts: RunOptions,
     progress: impl FnMut(RunStats) -> PolarsResult<()>,
 ) -> PolarsResult<RunStats> {
-    run_with(bank, input, output, None, None, None, opts, progress)
+    run_with(bank, input, output, None, false, None, None, opts, progress)
 }
 
 /// [`run`], with the bank's closed groups (E54) drained after every chunk
@@ -944,13 +1065,16 @@ pub fn run(
 /// learned before the bank sees it (`--skip-learned`, docs/PLAN.md task
 /// 196), and a chunk with none left is not fed. With `last`, each chunk's
 /// output notes each spec's groups' last `withheld_reason` for the run's
-/// closing lines (docs/PLAN.md task 116, H).
+/// closing lines (docs/PLAN.md task 116, H). With `discard_closed`, the
+/// closed groups no file and no state will carry are drained after every
+/// chunk and dropped, rather than kept in the bank for nobody.
 #[allow(clippy::too_many_arguments)]
 fn run_with(
     bank: &mut Bank,
     input: Input<'_>,
     output: Output<'_>,
     closed: Option<(&Path, Format)>,
+    discard_closed: bool,
     skip: Option<&Learned>,
     mut last: Option<&mut LastReasons>,
     opts: RunOptions,
@@ -1023,6 +1147,7 @@ fn run_with(
         };
 
         let mut stats = RunStats::default();
+        let mut rows_read = 0usize;
         let run = || -> PolarsResult<()> {
             loop {
                 let t = Instant::now();
@@ -1041,28 +1166,47 @@ fn run_with(
                          message."
                     ),
                 };
-                let chunk = match skip {
+                // The input's rows before this chunk, so an error names the
+                // input's row (task 120): the rows read, which under `skip`
+                // are more than the rows fed, and each kept row is named by
+                // its own place among them (review P12).
+                let read_before = rows_read;
+                rows_read += chunk.height();
+                let (chunk, rows) = match skip {
                     Some(learned) => {
-                        let kept = chunk.filter(&learned.unlearned(&chunk)?)?;
+                        let mask = learned.unlearned(&chunk)?;
+                        let kept = chunk.filter(&mask)?;
                         if kept.height() == 0 {
                             continue;
                         }
-                        kept
+                        let places: Vec<usize> = mask
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, m)| *m == Some(true))
+                            .map(|(i, _)| read_before + i)
+                            .collect();
+                        (kept, InputRows::kept(places))
                     }
-                    None => chunk,
+                    None => (chunk, InputRows::from_base(read_before)),
                 };
                 let height = chunk.height();
                 let t = Instant::now();
-                // `stats.rows` is the rows fed before this chunk, so an
-                // error names the input's row (task 120).
-                let out = augment(bank, chunk, opts.predict, opts.learn_only, stats.rows)?;
+                let queued = bank.closed_queued();
+                let out = augment(bank, chunk, opts.predict, opts.learn_only, rows)?;
                 if let Some(last) = last.as_deref_mut() {
                     last.note(bank.specs(), &out)?;
+                    last.forget_closed(bank, queued);
                 }
                 t_bank += t.elapsed();
                 let t = Instant::now();
                 deliver(out)?;
                 t_deliver_wait += t.elapsed();
+                if discard_closed && bank.closed_queued() > 0 {
+                    // Nobody reads them: no sidecar and no state to save
+                    // them with (review P8's pile, on the command line).
+                    bank.closed_groups(None, true)
+                        .map_err(|e| polars_err!(ComputeError: "{}", e))?;
+                }
                 if closed_writer.is_some() {
                     let rows = bank
                         .closed_groups(None, true)
@@ -1087,7 +1231,13 @@ fn run_with(
                     Empty::Plan(lf) => lf.collect()?,
                     Empty::Frame(df) => df,
                 };
-                deliver(augment(bank, empty, opts.predict, opts.learn_only, 0)?)?;
+                deliver(augment(
+                    bank,
+                    empty,
+                    opts.predict,
+                    opts.learn_only,
+                    InputRows::default(),
+                )?)?;
             }
             if closed_writer.is_some() && !closed_sent {
                 // Nothing closed: the empty frame with the schema, as an
@@ -1164,17 +1314,22 @@ fn run_with(
     })
 }
 
-/// Each spec's groups' last `withheld_reason` in the run, as the output
-/// carried it (docs/PLAN.md task 116, H): the summary keeps no reason per
-/// group, so the runner reads it off each chunk it writes, `O(groups)`.
+/// Each spec's open groups' last `withheld_reason` in the run, as the
+/// output carried it (docs/PLAN.md task 116, H): the summary keeps no
+/// reason per group, so the runner reads it off each chunk it writes,
+/// `O(open groups)`. A group's entry goes when it closes
+/// ([`Self::forget_closed`]): kept, the map grew by a group for every group
+/// a `group_close` run ever closed, about 190 bytes each, so the memory of
+/// a stream of many groups grew with the stream (review P5).
 #[derive(Debug, Default)]
-struct LastReasons(Vec<std::collections::HashMap<String, Option<String>>>);
+struct LastReasons(Vec<std::collections::HashMap<GroupKey, Option<String>>>);
 
 impl LastReasons {
     /// Note `out`'s rows, the bank's columns among them, in row order: a
     /// group's last row in the chunk is the one kept. A spec writes its
-    /// first instance's `withheld_reason` first; a group is its key's text,
-    /// the null key "null", and a spec without a group one key, "".
+    /// first instance's `withheld_reason` first; a group is its key as the
+    /// bank keys it, the null key apart from every text, and a spec without
+    /// a group one key, [`GroupKey::ungrouped`].
     fn note(&mut self, specs: &[Spec], out: &DataFrame) -> PolarsResult<()> {
         if self.0.len() != specs.len() {
             self.0.resize_with(specs.len(), Default::default);
@@ -1195,12 +1350,13 @@ impl LastReasons {
             };
             let reasons = field.cast(&DataType::String)?;
             let reasons = reasons.str()?;
+            // The key's text as the bank reads it: a zoned Datetime's is its
+            // instant in UTC, which a plain cast to String could not write
+            // in this build (review P3).
             let keys = match &spec.group {
-                Some(g) => Some(
-                    out.column(g)?
-                        .as_materialized_series()
-                        .cast(&DataType::String)?,
-                ),
+                Some(g) => Some(crate::arrow::key_text(
+                    out.column(g)?.as_materialized_series(),
+                )?),
                 None => None,
             };
             let keys = keys.as_ref().map(|k| k.str()).transpose()?;
@@ -1208,15 +1364,31 @@ impl LastReasons {
             let mut seen = std::collections::HashSet::new();
             for i in (0..out.height()).rev() {
                 let key = match keys {
-                    Some(k) => k.get(i).unwrap_or("null"),
-                    None => "",
+                    Some(k) => k.get(i),
+                    None => Some(""),
                 };
                 if seen.insert(key) {
-                    map.insert(key.to_string(), reasons.get(i).map(str::to_string));
+                    map.insert(
+                        GroupKey(key.map(str::to_string)),
+                        reasons.get(i).map(str::to_string),
+                    );
                 }
             }
         }
         Ok(())
+    }
+
+    /// Drop the entry of each group the bank closed since its queue held
+    /// `queued` rows and holds no stream for now -- a session's close that
+    /// the same chunk reopened keeps its group, and its entry.
+    fn forget_closed(&mut self, bank: &Bank, queued: usize) {
+        for (si, key) in bank.closed_keys_from(queued) {
+            if let Some(map) = self.0.get_mut(si)
+                && !bank.has_group(si, key)
+            {
+                map.remove(key);
+            }
+        }
     }
 }
 
@@ -1271,14 +1443,14 @@ fn augment(
     chunk: DataFrame,
     predict: bool,
     learn_only: bool,
-    row_base: usize,
+    rows: InputRows,
 ) -> PolarsResult<DataFrame> {
     let cols = if predict {
-        bank.predict_from(&chunk, row_base)?
+        bank.predict_rows(&chunk, rows)?
     } else {
         // A run with no output keeps no prediction: `ModelBank.fit`'s
         // run, which takes any embargo (review R2, P4).
-        bank.fit_predict_from_with(&chunk, row_base, learn_only)?
+        bank.fit_predict_rows(&chunk, rows, learn_only)?
     };
     // A readiness notice is a line on stderr, once per (spec, group,
     // instance) -- under `group_close = "session"` once per span, which it
@@ -1482,12 +1654,9 @@ fn write_frames(
     rx: Receiver<Write_>,
     who: &str,
 ) -> PolarsResult<Duration> {
-    // Each frame as the layout has it, before the writer sees it; a CSV
-    // flattens its own (`csv_flat`).
-    let laid_out = |df: DataFrame| match layout {
-        OutputLayout::Flat if format != Format::Csv => unnest_structs(&df),
-        _ => Ok(df),
-    };
+    // Each frame as the layout and the format have it, before the writer
+    // sees it.
+    let laid_out = |df: DataFrame| lay_out(df, format, layout, who);
     let (file, pending) = AtomicFile::create(path)?;
     let mut buf = BufWriter::new(file);
     let mut busy = Duration::ZERO;
@@ -1502,7 +1671,7 @@ fn write_frames(
         Err(_) => return Ok(busy),
     };
     let t = Instant::now();
-    let mut writer = FormatWriter::open(format, &mut buf, &first, who)?;
+    let mut writer = FormatWriter::open(format, &mut buf, &first)?;
     writer.write(&first)?;
     busy += t.elapsed();
     let mut complete = false;
@@ -1538,15 +1707,16 @@ type Sink<'a> = &'a mut BufWriter<File>;
 enum FormatWriter<'a> {
     Parquet(Box<ParquetSink<'a>>),
     Ipc(polars::io::ipc::BatchedWriter<Sink<'a>>),
-    /// With the `who` its refusals name ([`csv_flat`]).
-    Csv(polars::io::csv::write::BatchedWriter<Sink<'a>>, String),
+    /// Over frames [`csv_flat`] has laid out ([`lay_out`]).
+    Csv(polars::io::csv::write::BatchedWriter<Sink<'a>>),
     /// The file itself: NDJSON has no header or footer (`ndjson_write`).
     Ndjson(Sink<'a>),
 }
 
 impl<'a> FormatWriter<'a> {
-    /// Open a writer for frames shaped like `first`.
-    fn open(format: Format, sink: Sink<'a>, first: &DataFrame, who: &str) -> PolarsResult<Self> {
+    /// Open a writer for frames shaped like `first`, which [`lay_out`] has
+    /// laid out for `format`.
+    fn open(format: Format, sink: Sink<'a>, first: &DataFrame) -> PolarsResult<Self> {
         Ok(match format {
             Format::Parquet => FormatWriter::Parquet(Box::new(ParquetSink::open(sink, first)?)),
             Format::Ipc => {
@@ -1555,13 +1725,7 @@ impl<'a> FormatWriter<'a> {
                 let fields = polars_arrow::io::ipc::write::default_ipc_fields(arrow.iter_values());
                 FormatWriter::Ipc(IpcWriter::new(sink).batched(schema, fields)?)
             }
-            Format::Csv => {
-                let flat = csv_flat(first, who)?;
-                FormatWriter::Csv(
-                    CsvWriter::new(sink).batched(flat.schema())?,
-                    who.to_string(),
-                )
-            }
+            Format::Csv => FormatWriter::Csv(CsvWriter::new(sink).batched(first.schema())?),
             Format::Ndjson => FormatWriter::Ndjson(sink),
         })
     }
@@ -1574,7 +1738,7 @@ impl<'a> FormatWriter<'a> {
         match self {
             FormatWriter::Parquet(w) => w.write(df),
             FormatWriter::Ipc(w) => w.write_batch(df),
-            FormatWriter::Csv(w, who) => w.write_batch(&csv_flat(df, who)?),
+            FormatWriter::Csv(w) => w.write_batch(df),
             FormatWriter::Ndjson(sink) => ndjson_write(sink, df),
         }
     }
@@ -1583,7 +1747,7 @@ impl<'a> FormatWriter<'a> {
         match self {
             FormatWriter::Parquet(w) => w.writer.finish().map(|_| ()),
             FormatWriter::Ipc(mut w) => w.finish(),
-            FormatWriter::Csv(mut w, _) => w.finish(),
+            FormatWriter::Csv(mut w) => w.finish(),
             FormatWriter::Ndjson(_) => Ok(()),
         }
     }
@@ -1707,6 +1871,10 @@ pub fn csv_flat(df: &DataFrame, who: &str) -> PolarsResult<DataFrame> {
     let mut flat = unnest_structs(df)?;
     for i in 0..flat.width() {
         let c = &flat.columns()[i];
+        if let Some(text) = temporal_text(c.as_materialized_series(), TextFormat::Csv)? {
+            flat.replace_column(i, text.into_column())?;
+            continue;
+        }
         match c.dtype() {
             DataType::List(inner) if inner.is_primitive_numeric() => {
                 let text = list_as_json(c)?;
@@ -1734,6 +1902,147 @@ pub fn csv_flat(df: &DataFrame, who: &str) -> PolarsResult<DataFrame> {
         }
     }
     Ok(flat)
+}
+
+/// `df` as the writer of `format` takes it under `layout`: a CSV flat with
+/// its lists and instants as text ([`csv_flat`]); any other format's
+/// structs taken apart under [`OutputLayout::Flat`]; an IPC file's
+/// Categorical columns as String, since Arrow's IPC file holds one
+/// dictionary a column for all its batches, and a category first seen in a
+/// later chunk would end the run there -- so the file would depend on the
+/// chunk size (review P2); and NDJSON's zoned instants as text in UTC
+/// ([`temporal_text`]). What the writer does to each frame and the dry run
+/// to its frame of no rows, so a layout the writer would refuse -- a
+/// flattened name that is already a column -- is refused by both alike.
+///
+/// # Errors
+///
+/// [`csv_flat`]'s, polars' refusal of a duplicate name, or a cast's.
+fn lay_out(
+    df: DataFrame,
+    format: Format,
+    layout: OutputLayout,
+    who: &str,
+) -> PolarsResult<DataFrame> {
+    if format == Format::Csv {
+        return csv_flat(&df, who);
+    }
+    let df = match layout {
+        OutputLayout::Flat => unnest_structs(&df)?,
+        OutputLayout::Struct => df,
+    };
+    let convert = |s: &Series| -> PolarsResult<Option<Series>> {
+        match format {
+            Format::Ipc => {
+                let want = without_categorical(s.dtype());
+                Ok((&want != s.dtype()).then(|| s.cast(&want)).transpose()?)
+            }
+            Format::Ndjson => temporal_text(s, TextFormat::Ndjson),
+            Format::Parquet | Format::Csv => Ok(None),
+        }
+    };
+    if format == Format::Parquet {
+        return Ok(df);
+    }
+    let height = df.height();
+    let mut columns = df.into_columns();
+    for c in columns.iter_mut() {
+        if let Some(s) = convert(c.as_materialized_series())? {
+            *c = s.into_column();
+        }
+    }
+    DataFrame::new(height, columns)
+}
+
+/// `dtype` with every Categorical in it, nested ones too, as String.
+fn without_categorical(dtype: &DataType) -> DataType {
+    match dtype {
+        DataType::Categorical(..) => DataType::String,
+        DataType::List(inner) => DataType::List(Box::new(without_categorical(inner))),
+        DataType::Array(inner, n) => DataType::Array(Box::new(without_categorical(inner)), *n),
+        DataType::Struct(fields) => DataType::Struct(
+            fields
+                .iter()
+                .map(|f| Field::new(f.name().clone(), without_categorical(f.dtype())))
+                .collect(),
+        ),
+        d => d.clone(),
+    }
+}
+
+/// Which text format [`temporal_text`] writes for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TextFormat {
+    Csv,
+    Ndjson,
+}
+
+/// A temporal column as text, the way Polars' writers write it, for the
+/// columns this build's writers cannot: a CSV's `Date`, `Time` and
+/// `Datetime`, and a zoned `Datetime` in either text format. `None` for a
+/// column the writer takes as it is; a struct's fields are each looked at.
+///
+/// The text is Polars' own, `2024-01-01`, `01:02:03.000004000`, and for a
+/// `Datetime` `2024-01-01T00:00:00.000` in a CSV, its unit's digits, and
+/// `2024-01-01T00:00:00+00:00` in NDJSON. An instant with a zone is written
+/// in UTC, with the offset that says so (`+0000` in a CSV, `+00:00` in
+/// NDJSON), where Polars writes the zone's own wall time and offset: the
+/// same instant, which every reader of the format reads back as one. Naming
+/// the zone's rules would link a time zone database into the command line,
+/// which it does not carry (review P3).
+///
+/// # Errors
+///
+/// A cast's or a format's, which the formats here do not give.
+fn temporal_text(s: &Series, format: TextFormat) -> PolarsResult<Option<Series>> {
+    let csv = format == TextFormat::Csv;
+    let text = match s.dtype() {
+        DataType::Datetime(unit, tz) if csv || tz.is_some() => {
+            let fraction = match (format, unit) {
+                (TextFormat::Ndjson, _) => "%.f",
+                (TextFormat::Csv, TimeUnit::Milliseconds) => "%.3f",
+                (TextFormat::Csv, TimeUnit::Microseconds) => "%.6f",
+                (TextFormat::Csv, TimeUnit::Nanoseconds) => "%.9f",
+            };
+            let offset = match (tz.is_some(), format) {
+                (false, _) => "",
+                (true, TextFormat::Csv) => "+0000",
+                (true, TextFormat::Ndjson) => "+00:00",
+            };
+            // A zoned column's values are UTC instants, which a cast to a
+            // naive one keeps as they are (`crate::arrow::key_text`).
+            let naive = s.cast(&DataType::Datetime(*unit, None))?;
+            naive
+                .datetime()?
+                .to_string(&format!("%Y-%m-%dT%H:%M:%S{fraction}{offset}"))?
+                .into_series()
+        }
+        DataType::Date if csv => s.date()?.to_string("%Y-%m-%d")?.into_series(),
+        DataType::Time if csv => s.time()?.to_string("%T%.9f").into_series(),
+        DataType::Struct(_) => {
+            let ca = s.struct_()?;
+            let fields = ca.fields_as_series();
+            let mut changed = false;
+            let mut out = Vec::with_capacity(fields.len());
+            for f in &fields {
+                match temporal_text(f, format)? {
+                    Some(t) => {
+                        changed = true;
+                        out.push(t);
+                    }
+                    None => out.push(f.clone()),
+                }
+            }
+            if !changed {
+                return Ok(None);
+            }
+            StructChunked::from_series(s.name().clone(), s.len(), out.iter())?
+                .with_outer_validity(ca.rechunk_validity())
+                .into_series()
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(text.with_name(s.name().clone())))
 }
 
 /// `df` with each struct column taken apart into `<name>.<field>` columns
@@ -1823,6 +2132,77 @@ mod tests {
     use polars::prelude::*;
 
     use super::{local_path, url_scheme, with_columns};
+
+    /// Review P5: under `group_close`, the closing lines' map kept an entry
+    /// for every group the run ever saw, closed ones too, so a run over a
+    /// stream of many groups grew with it. A closed group's entry goes; an
+    /// open group's, and one a session reopened in the same chunk, stays.
+    #[test]
+    fn the_closing_lines_keep_only_the_open_groups() {
+        use super::{Input, LastReasons, Output, RunOptions, run_with};
+        use crate::bank::{Bank, GroupKey};
+        // 200 groups of three rows each, in key order: under `monotone` a
+        // group closes when the next key comes, so one is open at the end.
+        let n = 600;
+        let g: Vec<i64> = (0..n).map(|i| i / 3).collect();
+        let x0: Vec<f64> = (0..n).map(|i| ((i * 7) % 11) as f64).collect();
+        let x1: Vec<f64> = (0..n).map(|i| ((i * 5) % 13) as f64).collect();
+        let df = df!("g" => g, "x0" => x0, "x1" => x1).expect("a frame");
+        let close = |how: &str, session: &str| -> crate::Spec {
+            serde_json::from_str(&format!(
+                r#"{{"name": "c", "model": {{"type": "ew_cov"}}, "features": ["x0", "x1"],
+                    "half_life": 40.0, "group": "g", "group_close": "{how}"{session}}}"#
+            ))
+            .expect("a spec")
+        };
+        let run = |spec: crate::Spec, df: DataFrame| -> (LastReasons, Bank) {
+            let mut bank = Bank::new(vec![spec]).expect("a bank");
+            let mut last = LastReasons::default();
+            let opts = RunOptions {
+                chunk_size: 50,
+                ..RunOptions::default()
+            };
+            run_with(
+                &mut bank,
+                Input::Lazy(df.lazy()),
+                Output::Discard,
+                None,
+                true,
+                None,
+                Some(&mut last),
+                opts,
+                |_| Ok(()),
+            )
+            .expect("the run");
+            (last, bank)
+        };
+        let (last, bank) = run(close("monotone", ""), df.clone());
+        assert_eq!(
+            last.0[0].len(),
+            1,
+            "{:?}",
+            last.0[0].keys().collect::<Vec<_>>()
+        );
+        assert!(last.0[0].contains_key(&GroupKey(Some("199".into()))));
+        assert_eq!(
+            bank.closed_queued(),
+            0,
+            "nobody reads them, so none is kept"
+        );
+        // Under `session`, a group whose session changes closes a span and
+        // goes on: it keeps its entry. One group, a session every 3 rows.
+        let mut one = df.clone();
+        one.with_column(Column::new("g".into(), vec![7i64; n as usize]))
+            .expect("a column");
+        one.with_column(Column::new(
+            "s".into(),
+            (0..n).map(|i| i / 3).collect::<Vec<i64>>(),
+        ))
+        .expect("a column");
+        let (last, _) = run(close("session", r#", "session": "s""#), one);
+        assert_eq!(last.0[0].len(), 1);
+        assert!(last.0[0].contains_key(&GroupKey(Some("7".into()))));
+    }
 
     /// `with_columns` against `DataFrame::with_column` called once a
     /// column, the loop it replaced: the same frame -- its columns, their

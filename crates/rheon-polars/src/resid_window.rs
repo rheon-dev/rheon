@@ -180,12 +180,16 @@ impl ResidWindow {
     }
 
     /// Whether this ring's snapshots and counts are `n_slots` wide: a file
-    /// written for another spec's slots is not restored into this one.
+    /// written for another spec's slots is not restored into this one. Every
+    /// snapshot, not the boundary alone: a later one becomes the boundary
+    /// as the window moves, and a damaged file whose later snapshot was
+    /// short loaded and panicked there (review P7).
     pub fn fits(&self, n_slots: usize) -> bool {
         (self.rows.is_empty() || self.rows.len() == n_slots)
-            && self.snaps.boundary().is_none_or(|(_, s)| {
-                s.w.len() == n_slots && s.var.len() == n_slots && s.n.len() == n_slots
-            })
+            && self
+                .snaps
+                .iter()
+                .all(|s| s.w.len() == n_slots && s.var.len() == n_slots && s.n.len() == n_slots)
     }
 
     /// The budget is configuration, which a state does not carry.
@@ -238,6 +242,38 @@ mod tests {
         let values = state.as_object().unwrap().values();
         let numbers: usize = values.map(|v| v.as_array().map_or(1, Vec::len)).sum();
         assert_eq!(snap.footprint(), numbers * std::mem::size_of::<f64>());
+    }
+
+    /// Review P7: a ring is held to its width at every snapshot, not the
+    /// boundary alone. A damaged file whose later snapshot was short passed
+    /// `fits` and panicked once the window moved onto it.
+    #[test]
+    fn a_ring_with_a_short_later_snapshot_does_not_fit() {
+        let mut ring =
+            ResidWindow::new(5.0, Cadence::EVERY_ROW, WindowClosed::Right, None).unwrap();
+        let (w, var) = (vec![1.0, 1.0], vec![0.5, 0.5]);
+        for i in 0..4 {
+            let d = if i == 0 { 0.0 } else { 1.0 };
+            ring.learn(d, None, 0.9, (&w, &var), (&[0.1, 0.2], 1.0));
+        }
+        assert!(
+            ring.snaps.iter().count() >= 2,
+            "the fixture: snapshots past the boundary"
+        );
+        assert!(ring.fits(2));
+        for which in [0, 1, 2] {
+            let mut damaged = ring.clone();
+            {
+                let mut edit = damaged.snaps.edit();
+                let last = edit.iter_mut().last().unwrap();
+                match which {
+                    0 => last.w.clear(),
+                    1 => last.var.pop().map(drop).unwrap_or(()),
+                    _ => last.n.push(0),
+                }
+            }
+            assert!(!damaged.fits(2), "a later snapshot's field {which} damaged");
+        }
     }
 
     /// **A window that holds none of a slot's residuals reads none**

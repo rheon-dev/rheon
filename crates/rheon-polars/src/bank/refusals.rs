@@ -128,10 +128,14 @@ pub(crate) const CLOCK_ORDER_HOW_TO: &str = "https://github.com/rheon-dev/rheon/
 /// clock is printed to three significant figures, and the setting to stay
 /// below it, rounded down, so the remedy holds; a step in integers or
 /// nanoseconds is exact.
-pub(super) fn backwards_clock(spec: &Spec, refusal: ClockRefusal, row_base: usize) -> PolarsError {
+pub(super) fn backwards_clock(
+    spec: &Spec,
+    refusal: ClockRefusal,
+    rows: &crate::arrow::InputRows,
+) -> PolarsError {
     use crate::figures::{Round, three_figures};
     let column = spec.clock.as_deref().unwrap_or("<row count>");
-    let row = row_base + refusal.row;
+    let row = rows.at(refusal.row);
     // The step exactly: in integer nanoseconds on a temporal clock, where the
     // double of seconds resolves more than a nanosecond above about 104 days;
     // in integers on an integer clock (task 200).
@@ -194,7 +198,11 @@ pub(super) fn backwards_clock(spec: &Spec, refusal: ClockRefusal, row_base: usiz
 /// values of a number clock whose difference is past the largest double
 /// (review 2026-10-06, PB7). Names the spec, the column, the two values and
 /// the row; the bank was not updated.
-pub(super) fn non_finite_step(spec: &Spec, refusal: StepRefusal, row_base: usize) -> PolarsError {
+pub(super) fn non_finite_step(
+    spec: &Spec,
+    refusal: StepRefusal,
+    rows: &crate::arrow::InputRows,
+) -> PolarsError {
     polars_err!(ComputeError:
         "spec {:?}: clock column {:?} steps from {} to {} at row {} (counting from 0), a \
          difference too large for a float, so the bank refused the chunk. Shift or rescale the \
@@ -203,7 +211,7 @@ pub(super) fn non_finite_step(spec: &Spec, refusal: StepRefusal, row_base: usize
         spec.clock.as_deref().unwrap_or("<row count>"),
         crate::spec::num_label(refusal.prev),
         crate::spec::num_label(refusal.now),
-        row_base + refusal.row
+        rows.at(refusal.row)
     )
 }
 

@@ -214,6 +214,25 @@ def test_warn_unstable_turns_the_label_on_under_either_name_and_the_new_one_wins
     assert issued() == []
 
 
+UNSTABLE_TEXT = """
+    import warnings
+    import numpy as np, rheon
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        rheon.corr.nearest(np.eye(2))
+    print(*[str(w.message) for w in caught if w.category.__name__ == "UnstableWarning"])
+"""
+
+
+def test_the_unstable_warning_names_the_variable_that_is_set():
+    """With the old name alone, the warning said to unset the new one, which
+    was not set, so following it silenced nothing (review fable2, Y7)."""
+    old = python(UNSTABLE_TEXT, POLARS_ONLINE_WARN_UNSTABLE="1").stdout
+    assert "Set POLARS_ONLINE_WARN_UNSTABLE=0, or unset it" in old, old
+    new = python(UNSTABLE_TEXT, RHEON_WARN_UNSTABLE="1", POLARS_ONLINE_WARN_UNSTABLE="0").stdout
+    assert "Set RHEON_WARN_UNSTABLE=0, or unset it" in new, new
+
+
 CPU = """
     import json, warnings
     import rheon

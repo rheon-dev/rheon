@@ -2698,6 +2698,12 @@ impl Spec {
                 "spec {name:?}: the spec's name must not be empty, since it names the spec's \
                  output column. Give the spec a name."
             ));
+        } else if self.name.contains('\0') {
+            no.refuse(format!(
+                "spec {name:?}: the spec's name holds a NUL character (\\0), which no column \
+                 name of an Arrow export can hold, and the name names the spec's output column. \
+                 Give the spec a name without one."
+            ));
         } else if self.name == "spec" || self.name == "group" {
             no.refuse(format!(
                 "spec {name:?}: the spec's name must not be \"spec\" or \"group\", which the \
@@ -2896,6 +2902,43 @@ impl Spec {
         }
         if columns_missing {
             no.stop_here()?;
+        }
+        // A target's name is in its output fields' names (`pred_<name>`),
+        // which the Arrow export carries as C strings: a NUL in one panicked
+        // there, after the bank had learned the chunk (review P11).
+        for t in self.targets.defs() {
+            if t.name.contains('\0') {
+                no.refuse(format!(
+                    "spec {name:?}: target {:?} has a name holding a NUL character (\\0), \
+                     which no column name of an Arrow export can hold, and the name is in its \
+                     output fields' names. Give the target a name without one.",
+                    t.name
+                ));
+            }
+        }
+        // The fit's own constant term is named "intercept" in `coef`, the
+        // Gram and the bank's tables: a feature of that name beside it gave
+        // two coefficients one name, which `unnest` then refused with advice
+        // that could not work (review P14).
+        let has_intercept_term = !matches!(
+            self.model,
+            ModelKind::EwCov { .. }
+                | ModelKind::KMeans { .. }
+                | ModelKind::Micro { .. }
+                | ModelKind::EwClass { .. }
+                | ModelKind::Holt { .. }
+                | ModelKind::Hmm { .. }
+        );
+        if self.fit_intercept
+            && has_intercept_term
+            && self.features.iter().any(|f| f == "intercept")
+        {
+            no.refuse(format!(
+                "spec {name:?}: features lists \"intercept\", but fit_intercept is on, and the \
+                 fit's own constant term is named \"intercept\" in coef, the Gram and the \
+                 bank's tables, so two coefficients would share one name. Rename the column, or \
+                 set fit_intercept to false to fit no constant of the model's own."
+            ));
         }
         // A duplicated column silently splits its coefficient across identical
         // slots on an exactly singular system (the jitter fallback rescues the

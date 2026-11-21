@@ -275,6 +275,134 @@ fn an_embargo_is_a_label_time_of_the_clock_plus_the_delay_for_every_kind() {
     }
 }
 
+/// `rest` with the weight column `w`, for a kind that reads none and takes
+/// one (`seqtest` counts each row as one trial and refuses a weight).
+fn weighted(name: &str, rest: &str) -> String {
+    if rest.contains(r#""weight""#) || name == "seqtest" {
+        rest.into()
+    } else {
+        format!(r#"{rest}, "weight": "w""#)
+    }
+}
+
+/// [`frame`] with label times `t + 6` and a weight of 0 on every seventh
+/// row, row 0 among them, and row 70 one of them set 8 after row 69 and 8
+/// before row 71: a gap whose two halves are each under the `gap_cap` of
+/// 10 and whose whole is over it.
+fn zero_weight_frame(n: usize, seed: u64, reset_at: Option<usize>) -> DataFrame {
+    let mut df = frame(n, seed, reset_at, &|_| Some(6));
+    let old: Vec<i64> = df
+        .column("t")
+        .unwrap()
+        .i64()
+        .unwrap()
+        .into_no_null_iter()
+        .collect();
+    let mut t = Vec::with_capacity(n);
+    for i in 0..n {
+        t.push(match i {
+            0 => old[0],
+            70 | 71 => t[i - 1] + 8,
+            _ => t[i - 1] + old[i] - old[i - 1],
+        });
+    }
+    let avail: Vec<i64> = t.iter().map(|v| v + 6).collect();
+    df.with_column(Series::new("t".into(), t).into_column())
+        .unwrap();
+    df.with_column(Series::new("avail".into(), avail).into_column())
+        .unwrap();
+    with_zero_weights(df)
+}
+
+/// [`frame`] with label times `t + 6` and `x0` null on row 0, so the
+/// stream's first row is skipped: its time still starts the clock.
+fn skipped_first_frame(n: usize, seed: u64, reset_at: Option<usize>) -> DataFrame {
+    let mut df = frame(n, seed, reset_at, &|_| Some(6));
+    let x0: Vec<Option<f64>> = df
+        .column("x0")
+        .unwrap()
+        .f64()
+        .unwrap()
+        .iter()
+        .enumerate()
+        .map(|(i, v)| v.filter(|_| i != 0))
+        .collect();
+    df.with_column(Series::new("x0".into(), x0).into_column())
+        .unwrap();
+    df
+}
+
+/// A row of weight 0 is held and learned at its label time like any row,
+/// as `embargo` learns it a delay after its clock: a step of the clock
+/// that teaches nothing. So a gap it splits is two steps, each under the
+/// cap, not one over it, and a zero-weight first row starts the clock of
+/// the labels learned (rule 9). And a skipped first row's time starts that
+/// clock at its label time, as it starts `embargo`'s at its clock. Every
+/// kind, weighted, whole and in chunks of 13, with a clock reset or
+/// without.
+#[test]
+fn a_zero_weight_row_and_a_skipped_first_row_step_the_clock_as_under_an_embargo() {
+    for reset in [None, Some(260)] {
+        for (what, df) in [
+            ("zero weights", zero_weight_frame(400, 7, reset)),
+            ("a skipped first row", skipped_first_frame(400, 7, reset)),
+        ] {
+            for (name, model, rest) in KINDS {
+                let rest = weighted(name, rest);
+                let embargo = kind_spec(model, &rest, r#""embargo": 6.0"#);
+                let label = kind_spec(model, &rest, r#""label_clock": "avail""#);
+                for size in [0, 13] {
+                    assert_same(
+                        &run(&embargo, &df, size),
+                        &run(&label, &df, size),
+                        &format!("{name}, {what}, reset {reset:?}, chunks of {size}"),
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// A skipped first row's label time starts the clock of the labels learned
+/// only while no label comes before it: a shorter delay that overtakes it
+/// is learned at a step of 0, as though the skipped row had no label time,
+/// and never as a step back, which `restart_after_step_back` would read as
+/// a restart and the default policy would refuse.
+#[test]
+fn a_label_that_overtakes_a_skipped_first_rows_starts_the_clock_at_its_own_time() {
+    let mut df = skipped_first_frame(120, 3, None);
+    let mut avail: Vec<Option<i64>> = df.column("avail").unwrap().i64().unwrap().iter().collect();
+    avail[0] = avail[0].map(|a| a + 40);
+    df.with_column(Series::new("avail".into(), avail.clone()).into_column())
+        .unwrap();
+    let mut none = df.clone();
+    avail[0] = None;
+    none.with_column(Series::new("avail".into(), avail).into_column())
+        .unwrap();
+    // `seqtest` reads no feature, so its first row is not skipped.
+    for (name, model, rest) in KINDS.iter().filter(|k| k.0 != "seqtest") {
+        for policy in ["", r#", "restart_after_step_back": 3.0"#] {
+            let spec = spec_of(&format!(
+                r#"{{"name": "m", "model": {model}, {rest}, "clock": "t", "gap_cap": 10.0,
+                    "label_clock": "avail"{policy}}}"#
+            ));
+            let (mut a, mut b) = (
+                Bank::new(vec![spec.clone()]).unwrap(),
+                Bank::new(vec![spec.clone()]).unwrap(),
+            );
+            assert_same(
+                &feed(&mut a, &none, 0),
+                &feed(&mut b, &df, 0),
+                &format!("{name}{policy}"),
+            );
+            assert!(
+                a.save_bytes().unwrap() == b.save_bytes().unwrap(),
+                "{name}{policy}: the saved states differ"
+            );
+        }
+    }
+}
+
 #[test]
 fn a_list_of_one_column_per_target_reads_as_the_column() {
     let df = frame(200, 3, None, &|i| Some((i % 9) as i64));
@@ -310,12 +438,13 @@ fn varied_spec(rest: &str) -> Spec {
 
 /// The doubled stream of `df`: a copy of each row at `t` with weight 0, to
 /// be scored, and a copy at its label time `avail` with its own weight, to
-/// be learned, for a row with a label time and a weight above 0; in order
-/// of time, and at one time in order of arrival, a row's learned copy after
-/// its own scored one: a row is scored before its label can be learned, and
-/// a label at a row's clock is learned before that row if it arrived
-/// earlier. Returns the frame and, for each scored copy, its row.
-fn doubled(df: &DataFrame) -> (DataFrame, Vec<usize>) {
+/// be learned, for a row with a label time, a weight of 0 among them (a
+/// step of the clock that teaches nothing); in order of time, and at one
+/// time in order of arrival, a row's learned copy after its own scored
+/// one: a row is scored before its label can be learned, and a label at a
+/// row's clock is learned before that row if it arrived earlier. Returns
+/// the frame and, for each scored copy, its place and its row.
+fn doubled(df: &DataFrame) -> (DataFrame, Vec<(usize, usize)>) {
     let t: Vec<i64> = df
         .column("t")
         .unwrap()
@@ -333,8 +462,8 @@ fn doubled(df: &DataFrame) -> (DataFrame, Vec<usize>) {
         .collect();
     // (time, row, 1 for a scored copy and 2 for a learned one)
     let mut events: Vec<(i64, usize, u8)> = (0..df.height()).map(|i| (t[i], i, 1)).collect();
-    for i in 0..df.height() {
-        if let Some(a) = avail[i].filter(|_| w[i] > 0.0) {
+    for (i, a) in avail.iter().enumerate() {
+        if let Some(a) = *a {
             events.push((a, i, 2));
         }
     }
@@ -350,8 +479,27 @@ fn doubled(df: &DataFrame) -> (DataFrame, Vec<usize>) {
         .unwrap();
     out.with_column(Series::new("w".into(), weights).into_column())
         .unwrap();
-    let scored = events.iter().filter(|e| e.2 == 1).map(|e| e.1).collect();
+    let scored = (0..events.len())
+        .filter(|&k| events[k].2 == 1)
+        .map(|k| (k, events[k].1))
+        .collect();
     (out, scored)
+}
+
+/// `df` with a weight of 0 on every seventh row, row 0 among them.
+fn with_zero_weights(mut df: DataFrame) -> DataFrame {
+    let w: Vec<f64> = df
+        .column("w")
+        .unwrap()
+        .f64()
+        .unwrap()
+        .into_no_null_iter()
+        .enumerate()
+        .map(|(i, w)| if i % 7 == 0 { 0.0 } else { w })
+        .collect();
+    df.with_column(Series::new("w".into(), w).into_column())
+        .unwrap();
+    df
 }
 
 fn preds(out: &DataFrame) -> Vec<u64> {
@@ -371,7 +519,7 @@ fn preds(out: &DataFrame) -> Vec<u64> {
 #[test]
 fn the_served_predictions_are_the_doubled_streams_scored_copies() {
     for half_life in ["\"inf\"", "1.0"] {
-        let df = frame(500, 11, None, &varied);
+        let df = with_zero_weights(frame(500, 11, None, &varied));
         // The noise gate off: on a half-life of one unit it withholds most
         // rows, and the oracle is for the predictions.
         let rest = format!(r#""half_life": {half_life}, "max_error_inflation": "inf""#);
@@ -386,12 +534,8 @@ fn the_served_predictions_are_the_doubled_streams_scored_copies() {
         let p = preds(&oracle);
         // The scored copies, back in row order.
         let mut want = vec![0u64; df.height()];
-        let mut k = 0;
-        for (pos, ev) in (0..twice.height()).zip(twice.column("w").unwrap().f64().unwrap().iter()) {
-            if ev == Some(0.0) {
-                want[scored[k]] = p[pos];
-                k += 1;
-            }
+        for &(pos, row) in &scored {
+            want[row] = p[pos];
         }
         let got = preds(&native);
         let served = got.iter().filter(|&&b| b != u64::MAX).count();
@@ -454,7 +598,7 @@ fn any_chunking_and_a_save_give_the_same_output_under_the_auto_step() {
 }
 
 fn chunkings_and_saves_agree(extra: &str) {
-    let df = frame(400, 5, Some(300), &varied);
+    let df = with_zero_weights(frame(400, 5, Some(300), &varied));
     let spec = varied_spec(&format!(
         r#""half_life": 30.0, "label_clock": "avail", "conformal": 0.9, "emit_metrics": true, "emit_sigma": true, "emit_drift": true, "drift_threshold": 20.0, "emit_calibration": true, "max_held_rows": 12, "held_overflow": "drop_oldest", "coef_every": 0{extra}"#,
     ));
@@ -548,14 +692,17 @@ fn missing_and_dropped_labels_are_counted() {
 }
 
 #[test]
-fn a_zero_weight_row_and_a_null_label_are_scored_and_never_held() {
+fn a_zero_weight_row_is_held_and_a_null_label_is_not() {
+    // Room for one row. Row 0 weighs 0 and is held; row 1 has no label
+    // time and is not; row 2 is held beside row 0, which arrived first and
+    // is dropped; row 3 releases row 2.
     let df =
         df!("t" => [0i64, 1, 2, 3], "x0" => [1.0, 2.0, 3.0, 4.0], "x1" => [0.5, 0.1, 0.3, 0.2],
                  "y" => [1.0, 2.0, 3.0, 4.0], "w" => [0.0, 1.0, 1.0, 1.0],
-                 "avail" => [Some(1i64), None, Some(2), Some(9)])
+                 "avail" => [Some(5i64), None, Some(2), Some(9)])
         .unwrap();
     let mut bank = Bank::new(vec![varied_spec(
-        r#""half_life": "inf", "label_clock": "avail""#,
+        r#""half_life": "inf", "label_clock": "avail", "max_held_rows": 1, "held_overflow": "drop_oldest""#,
     )])
     .unwrap();
     let out = feed(&mut bank, &df, 0);
@@ -570,10 +717,9 @@ fn a_zero_weight_row_and_a_null_label_are_scored_and_never_held() {
         .unwrap()
         .iter()
         .collect();
-    // Row 0 weighs 0 and row 1 has no label time: neither is held. Row 2
-    // is held at its own row, and released, and learned, at row 3.
     assert_eq!(ws, [Some(0.0), Some(0.0), Some(0.0), Some(1.0)]);
     assert_eq!(summary_count(&bank, "labels_missing"), 1);
+    assert_eq!(summary_count(&bank, "labels_dropped"), 1);
 }
 
 #[test]
@@ -615,6 +761,13 @@ fn a_full_buffer_is_refused_unless_it_drops_its_oldest() {
         ),
         "{err}"
     );
+    assert_eq!(bank.save_bytes().unwrap(), before);
+    // Rows of weight 0 are held, so they fill it too.
+    let mut zero = df.clone();
+    zero.with_column(Series::new("w".into(), vec![0.0; 60]).into_column())
+        .unwrap();
+    let err = bank.fit_predict(&zero).unwrap_err().to_string();
+    assert!(err.contains("above max_held_rows = 5"), "{err}");
     assert_eq!(bank.save_bytes().unwrap(), before);
 }
 

@@ -586,7 +586,7 @@ fn what_a_bank_has_learned_is_read_off_each_clock_type() {
         );
         let mut bank = Bank::new(vec![clocked, plain]).unwrap();
         bank.fit_predict(&df).unwrap();
-        bank.learned().unwrap()
+        bank.learned(false).unwrap()
     };
     let numbers = r#""gap_cap": 50.0, "half_life": 10.0"#;
     let probe = |clock: Series, groups: &[&str]| {

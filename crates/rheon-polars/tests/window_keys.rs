@@ -381,3 +381,24 @@ fn every_dtype_of_session_column_gives_the_windows_one_answer() {
         }
     }
 }
+
+/// Review P11: a `with_windows` output named with a NUL character panicked
+/// in the Arrow export; it is refused when the call is checked.
+#[test]
+fn a_nul_in_an_output_name_is_refused() {
+    let cfg: WindowsConfig = serde_json::from_value(json!({
+        "formulas": [{"name": "a\u{0}b", "tree": ["ewm_mean", ["col", "mid"], {"half_life": "5s"}]}],
+        "clock": "ts",
+        "gap_cap": "5m",
+    }))
+    .unwrap();
+    let schema = Schema::from_iter([
+        Field::new("ts".into(), DataType::Datetime(TimeUnit::Nanoseconds, None)),
+        Field::new("mid".into(), DataType::Float64),
+    ]);
+    let e = WindowsRun::new(cfg, &schema)
+        .map(|_| ())
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("hold a NUL character"), "{e}");
+}

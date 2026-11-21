@@ -231,3 +231,149 @@ def test_the_command_line_is_told_its_own_way_out(rheon_cli, tmp_path):
     name = specs[0]["name"]
     for f in ("pred_y", "weight_sum"):
         assert got[name].struct.field(f).equals(want[name].struct.field(f)), f
+
+
+# --- a clock that may start again (review fable2, Y2; the user, 2026-11-20:
+# "Refuse unless declared") -----------------------------------------------------
+
+# Each setting under which a group's clock may legally start again lower: a
+# session change (closing the group or not) or a large enough step back.
+RESTARTS = {
+    "session_gap=reset": dict(session="d", session_gap="reset"),
+    "session_gap=1": dict(session="d", session_gap=1.0),
+    "group_close=session": dict(session="d", group_close="session", group="g"),
+    "restart_after_step_back": dict(restart_after_step_back=5.0),
+}
+
+
+def days(runs_on: bool) -> pl.DataFrame:
+    """Three days of 150 rows, one group `g`. The clock starts again each day, or
+    runs on across them (a timestamp with the day as the session)."""
+    rng = np.random.default_rng(0)
+    n = 150
+    base = pl.DataFrame({"t": np.arange(float(n)), "x0": rng.normal(size=n)}).with_columns(
+        y=pl.col.x0 * 2 + 0.1
+    )
+    out = pl.concat([base.with_columns(d=pl.lit(k), g=pl.lit("a")) for k in (1, 2, 3)])
+    if runs_on:
+        out = out.with_columns(t=pl.col.t + (pl.col.d - 1) * 1000.0)
+    return out
+
+
+@pytest.mark.parametrize("setting", list(RESTARTS))
+def test_a_clock_that_may_start_again_is_refused_unless_declared(setting, tmp_path):
+    """Where the clock starts again, the last clock is not a place in the
+    stream: the rule both dropped every unlearned row of the next day (0 of
+    300 kept) and passed learned ones, and the bank took them in silence. The
+    frame and the state cannot tell such a stream from one whose clock runs
+    on, so the call refuses, naming the spec and the setting, until the
+    caller declares the clock runs on. A lazy frame is refused as it is built."""
+    df = days(runs_on=False)
+    bank = rp.ModelBank([spec(**RESTARTS[setting])])
+    bank.fit(df.head(150))
+    for frame_ in (df, df.lazy()):
+        with pytest.raises(ValueError) as refused:
+            bank.skip_learned(frame_)
+        text = str(refused.value)
+        assert text.startswith('ModelBank.skip_learned: spec "m"'), text
+        key = "restart_after_step_back" if setting == "restart_after_step_back" else "session"
+        assert key in text, text
+        assert "clock_runs_on=True" in text, text
+        assert "never goes back" in text, text
+
+
+@pytest.mark.parametrize("setting", list(RESTARTS))
+@pytest.mark.parametrize("learned", [150, 225])
+def test_a_declared_clock_keeps_exactly_the_rows_the_bank_accepts(setting, learned):
+    """Declared, on a stream whose clock runs on across sessions: the rows
+    kept are exactly those after the save, the bank accepts them, and the
+    resumed numbers are those of the stream fed without a break."""
+    df = days(runs_on=True)
+    specs = [spec(**RESTARTS[setting])]
+    whole = rp.ModelBank(specs).fit_predict(df)
+    bank = rp.ModelBank(specs)
+    bank.fit(df.head(learned))
+    kept = bank.skip_learned(df, clock_runs_on=True)
+    assert kept.equals(df.slice(learned))
+    lazy = bank.skip_learned(df.lazy(), clock_runs_on=True)
+    assert lazy.collect().equals(kept)
+    out = bank.fit_predict(kept)
+    assert out["m"].equals(whole["m"].slice(learned))
+
+
+def test_clock_runs_on_is_checked_and_needs_no_session():
+    """A spec with neither setting needs no declaration, and accepts one: it
+    states what such a spec already requires. The flag is a bool."""
+    df = frame()
+    bank = rp.ModelBank([spec(group="g")])
+    bank.fit_predict(df.head(200))
+    assert bank.skip_learned(df, clock_runs_on=True).equals(df.slice(200))
+    with pytest.raises(TypeError, match="clock_runs_on must be a bool"):
+        bank.skip_learned(df, clock_runs_on=1)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("how", ["flag", "key"])
+def test_the_command_line_refuses_unless_declared(rheon_cli, tmp_path, how):
+    """`--skip-learned` applies the same rule in Rust, so it refuses the same
+    specs, `--dry-run` included, until `--clock-runs-on` (or the config's
+    `clock_runs_on = true`) declares the clock runs on; then it keeps the rows
+    the Python call keeps, to the bit."""
+    from conftest import run_online
+
+    df = days(runs_on=True)
+    df.head(225).write_parquet(tmp_path / "first.parquet")
+    df.write_parquet(tmp_path / "rerun.parquet")
+    specs = [spec(**RESTARTS["session_gap=1"])]
+    state = tmp_path / "bank.state"
+    run_online(
+        rheon_cli,
+        tmp_path,
+        specs,
+        input=tmp_path / "first.parquet",
+        output=tmp_path / "first-out.parquet",
+        save_state=state,
+    )
+    resume = dict(input=tmp_path / "rerun.parquet", output=tmp_path / "rerun-out.parquet")
+    for extra in ([], ["--dry-run"]):
+        res = run_online(
+            rheon_cli,
+            tmp_path,
+            specs,
+            args=["--load-state", str(state), "--skip-learned", *extra],
+            check=False,
+            **resume,
+        )
+        assert res.returncode != 0, res.stderr
+        assert 'spec "m"' in res.stderr and "session" in res.stderr, res.stderr
+        assert "--clock-runs-on" in res.stderr and "clock_runs_on" in res.stderr, res.stderr
+    declared = (
+        dict(args=["--load-state", str(state), "--skip-learned", "--clock-runs-on"])
+        if how == "flag"
+        else dict(args=["--load-state", str(state), "--skip-learned"], clock_runs_on=True)
+    )
+    run_online(rheon_cli, tmp_path, specs, **resume, **declared)
+    got = pl.read_parquet(tmp_path / "rerun-out.parquet")
+    bank = rp.ModelBank.load(state)
+    want = bank.fit_predict(bank.skip_learned(df, clock_runs_on=True))
+    assert got.height == want.height == 225
+    for f in ("pred_y", "weight_sum"):
+        assert got["m"].struct.field(f).equals(want["m"].struct.field(f)), f
+
+
+def test_the_command_line_refuses_clock_runs_on_without_skip_learned(rheon_cli, tmp_path):
+    """`clock_runs_on` says how to read a saved state's clocks for
+    `skip_learned`, and means nothing without it."""
+    from conftest import run_online
+
+    frame().write_parquet(tmp_path / "in.parquet")
+    res = run_online(
+        rheon_cli,
+        tmp_path,
+        [spec()],
+        input=tmp_path / "in.parquet",
+        output=tmp_path / "out.parquet",
+        clock_runs_on=True,
+        check=False,
+    )
+    assert res.returncode != 0
+    assert "clock_runs_on" in res.stderr and "skip_learned" in res.stderr, res.stderr

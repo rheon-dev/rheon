@@ -738,6 +738,99 @@ def test_two_fit_predicts_in_series_hold_memory_flat_in_the_streams_length(tmp_p
     assert peaks[1] - peaks[0] < CHAIN_GROWTH_MIB, peaks
 
 
+#: A command-line run's peak resident memory, in MiB, sampled every 2 ms
+#: from the child's start: no baseline is taken, since both runs it is
+#: compared with start alike.
+def _cli_peak(cli: Path, *args: str) -> float:
+    import threading
+    import time
+
+    import psutil
+
+    proc = subprocess.Popen([str(cli), *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    peak = [0]
+    watched = psutil.Process(proc.pid)
+
+    def sample():
+        while proc.poll() is None:
+            try:
+                peak[0] = max(peak[0], watched.memory_info().rss)
+            except psutil.Error:
+                return
+            time.sleep(0.002)
+
+    sampler = threading.Thread(target=sample, daemon=True)
+    sampler.start()
+    out, err = proc.communicate(timeout=600)
+    sampler.join()
+    assert proc.returncode == 0, err.decode()[-3000:]
+    return peak[0] / 2**20
+
+
+#: The two streams of the closing run: groups of two rows, closed in key
+#: order, so one is open at a time.
+CLOSE_GROUPS = (250_000, 2_000_000)
+
+#: The most the closing run's growth from the shorter stream to the longer
+#: may exceed the control's, MiB. Each group closed was a map entry of its
+#: key and its reason, about 190 bytes by the review's measurement of the
+#: memory footprint. By this test's peak resident memory (2026-11-20, macOS,
+#: a debug build), 151 MiB over the control before the closed groups'
+#: entries were dropped, and under it after.
+CLOSE_EXCESS_MIB = 100.0
+
+
+def _closing_input(path: Path, groups: int) -> None:
+    """``groups`` groups of two rows, keyed by integers in key order."""
+    rng = np.random.default_rng(5)
+    n = 2 * groups
+    x = rng.normal(size=(3, n))
+    keys = np.repeat(np.arange(groups, dtype=np.int64), 2)
+    pl.DataFrame({"g": keys, "x0": x[0], "x1": x[1], "y": x[2]}).write_parquet(
+        path, row_group_size=100_000
+    )
+
+
+@pytest.mark.extended(reason="memory: four command-line runs, up to four million rows each")
+@pytest.mark.serial
+def test_a_closing_run_holds_memory_flat_in_the_groups_it_closes(tmp_path, rheon_cli):
+    """Review P5: a command-line run under ``group_close`` kept, for its
+    closing lines, an entry for every group it ever saw, the closed ones
+    too, so its memory grew with the groups the stream closed. ``ew_cov``
+    emits ``withheld_reason``, which the entries hold, and ``marginal``
+    does not, so its run is the control: whatever else grows with the
+    groups grows in both."""
+    growth = {}
+    for model in ("ew_cov", "marginal"):
+        config = tmp_path / f"{model}.toml"
+        targets = 'targets = ["y"]\n' if model == "marginal" else ""
+        config.write_text(
+            f'chunk_size = 20000\n[[specs]]\nname = "c"\nfeatures = ["x0", "x1"]\n{targets}'
+            'half_life = 500.0\ngroup = "g"\ngroup_close = "monotone"\n'
+            f'[specs.model]\ntype = "{model}"\n',
+            encoding="utf-8",
+        )
+        peaks = []
+        for groups in CLOSE_GROUPS:
+            src = tmp_path / f"close_{groups}.parquet"
+            if not src.exists():
+                _closing_input(src, groups)
+            peaks.append(
+                _cli_peak(
+                    rheon_cli,
+                    "--config",
+                    str(config),
+                    "--input",
+                    str(src),
+                    "--no-output",
+                    "--closed-groups",
+                    str(tmp_path / "closed.parquet"),
+                )  # fmt: skip
+            )
+        growth[model] = peaks[1] - peaks[0]
+    assert growth["ew_cov"] - growth["marginal"] < CLOSE_EXCESS_MIB, growth
+
+
 @pytest.mark.parametrize(
     ("floor", "image_held"), [(True, None), (True, "true"), (True, "false"), (False, None)]
 )
