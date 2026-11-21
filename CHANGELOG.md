@@ -422,6 +422,13 @@ model that only the new build has is listed as an addition and passes.
 
 ### Performance
 
+- **`sgd` and `pa` with `standardize` pay a division a row for reading each
+  row in the stream's own unit of weight.** The read that bounds a step
+  after a gap and makes the fit invariant to the scale of the weights costs
+  2.4% to 5.3% more instructions a row (Linux, 20 features: `sgd` 4.5%,
+  `sgd` with the Huber loss 2.4%, `pa` 5.3%); on arm64 the time is within
+  the run-to-run spread.
+
 - **`hmm`'s stabilized prior costs time under `"full"` below 13 features
   and under `"diag"`, and little or none in the factor form.** On arm64,
   two states, against the ridge it replaces: `"full"` at 13 to 32
