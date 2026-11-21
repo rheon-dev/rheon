@@ -57,9 +57,26 @@ def test_one_windows_leg_failing_fails_the_sha(capsys):
     assert "FAIL" in out and "windows (3.13)" in out
 
 
+_STAMP = "count\tUNKNOWN STEP\t2026-11-21T03:01:35.2130520Z "
+_EXIT = _STAMP + "##[error]Process completed with exit code 1."
+
+
+def _log(*errors):
+    """A failed Budgets job's log as ``gh run view --log-failed`` gives it:
+    a setup step's script echoed, the report's lines, then each ``::error::``
+    as the runner wrote it."""
+    echoed = _STAMP + '\x1b[36;1m  echo "::error::linux-build-prep runs on Linux only"\x1b[0m'
+    lines = [echoed] + [_STAMP + "- " + e for e in errors]
+    lines += [_STAMP + "##[error]" + e for e in errors]
+    return "\n".join([*lines, _EXIT])
+
+
 def test_a_budget_to_tighten_rides_but_a_budget_over_fails(capsys):
-    tighten = "x.y: 120 under its budget of 140: tighten the budget to 121"
-    over = tighten + "\nz.w: 160 over its budget of 140"
+    tighten = _log("x.y: 120 under its budget of 140: tighten the budget to 121")
+    over = _log(
+        "x.y: 120 under its budget of 140: tighten the budget to 121",
+        "z.w: 160 over its budget of 140",
+    )
     for log, want in ((tighten, 0), (over, 1)):
         gh = _gh([_run(1, "Budgets")], {1: [_job(10, "count", "failure")]}, {10: log})
         assert cs.check("abc", gh) == want
@@ -87,6 +104,27 @@ def test_the_latest_run_of_a_workflow_is_the_one_read():
     jobs = {1: [_job(10, "w", "failure")], 2: [_job(20, "w")], 3: [_job(30, "w", "failure")]}
     gh = _gh([old, new, dispatch], jobs)
     assert cs.check("abc", gh) == 1, "a dispatch on the sha is read beside the push"
+
+
+@pytest.mark.parametrize(
+    "other",
+    [
+        "scaling.ewridge.k: 1000000.000x from k=2 to k=4, past the 70.400x its growth allows",
+        "instructions.ewridge_k20: budgeted, and the run did not measure it",
+        "instructions.ew: the two runs disagree: 100 and 101",
+        "could not read the last release's baseline (HTTP 404)",
+    ],
+)
+def test_a_budgets_failure_beside_a_tighten_is_a_failure(other):
+    """Review S1: `budgets.py check` fails four more ways than over a budget,
+    none of them saying `over its budget`; each beside a budget to tighten
+    is still a failure, and a log with no error line is not a tighten."""
+    log = _log("x.y: 120 under its budget of 140: tighten the budget to 121", other)
+    assert not cs.only_tightens(log)
+    gh = _gh([_run(1, "Budgets")], {1: [_job(10, "count", "failure")]}, {10: log})
+    assert cs.check("abc", gh) == 1
+    assert not cs.only_tightens(_EXIT), "no error line is not a budget to tighten"
+    assert not cs.only_tightens("tighten the budget to 121 (not an error line)")
 
 
 @pytest.mark.parametrize("conclusion", ["timed_out", "startup_failure", "action_required"])

@@ -20,8 +20,8 @@ workflow's ``if:`` left out). Anything else fails the check:
 - no run at all on the sha: exit 2 (gh lists none until a push is seen).
 
 One failure is not counted: a Budgets job whose only complaint is that a
-budget can be tightened (``tighten the budget to``, and no ``over its
-budget``). That is a gain to keep, which rides with the next wave rather than
+budget can be tightened (every error line of its log says ``tighten the
+budget to``). That is a gain to keep, which rides with the next wave rather than
 blocking it; it is printed as ``TIGHTEN``. ``--strict`` counts it as a failure
 too. Where a workflow ran more than once on the sha (a push and a dispatch, or
 a re-run), the latest run of each workflow and event is the one read.
@@ -60,9 +60,36 @@ def latest_runs(runs: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(best.values(), key=lambda r: (r["workflowName"], r.get("event", "")))
 
 
+#: The mark the runner gives a step's ``::error::`` line in the job's log. A
+#: bare ``::error::`` there is a step's script echoed before it ran, not an
+#: error (a Budgets log echoes one from its setup action).
+_ERROR_MARK = "##[error]"
+#: The runner's own last line of a failed step, which says nothing of why.
+_STEP_EXIT = "Process completed with exit code"
+
+
+def error_lines(log: str) -> list[str]:
+    """The message of every error line in a job's log, the runner's closing
+    ``Process completed with exit code`` line left out."""
+    out = []
+    for line in log.splitlines():
+        at = line.find(_ERROR_MARK)
+        if at >= 0:
+            msg = line[at + len(_ERROR_MARK) :].strip()
+            if not msg.startswith(_STEP_EXIT):
+                out.append(msg)
+    return out
+
+
 def only_tightens(log: str) -> bool:
-    """A Budgets log whose failures are all budgets to tighten, none over."""
-    return "tighten the budget to" in log and "over its budget" not in log
+    """A Budgets log whose every error is a budget to tighten. A check that
+    failed for any other reason (over a budget, a scaling cell past its
+    growth, a budgeted case the run did not measure, two runs that
+    disagree, an unreadable baseline) prints an error line without those
+    words, and a log with no error line at all says nothing either way: both
+    are failures (review S1)."""
+    errors = error_lines(log)
+    return bool(errors) and all("tighten the budget to" in e for e in errors)
 
 
 def judge_job(workflow: str, job: dict[str, Any], log: Callable[[], str]) -> str:
