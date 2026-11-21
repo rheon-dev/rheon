@@ -40,7 +40,9 @@ import numpy as np
 import polars as pl
 import pytest
 from hmmlearn.hmm import GaussianHMM
-from scipy.stats import kstwobign
+from scipy.special import logsumexp
+from scipy.stats import kstwobign, multivariate_normal
+from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
 from statsmodels.tsa.regime_switching.markov_regression import MarkovRegression
 
 import ledger
@@ -244,6 +246,125 @@ class TestHmmIsHmmlearnsAtEveryShape:
         print(f"hmm: least move from uniform {moved:.3f}, from full {spread:.3f}, zeros {zeros}")
         assert moved > 0.2 and spread > 0.1 and zeros > 10
         assert worst[0] <= HMM_TOL, worst
+
+
+# --- hmm's stabilized prior against scikit-learn's QDA ---------------------------
+
+#: The prior's covariance, by the module's definition (``rheon.spec.hmm``,
+#: *The update*): ``s`` starts at the seeded states' variances pooled by
+#: weight and follows each later row's squared deviation from its state's
+#: mean before the row, every row at weight 1 under no decay. The states here
+#: are so far apart that each row's filtered state is 0 or 1 exactly.
+
+
+def prior_scale(x: np.ndarray, state: np.ndarray, warm: int) -> np.ndarray:
+    """``psi`` after the rows: the definition, by hand. The seeding reads the
+    warm-up rows' states; each later row's deviation is from its state's
+    running mean before it."""
+    k = int(state.max()) + 1
+    w = np.array([np.sum(state[:warm] == c) for c in range(k)], dtype=float)
+    mu = np.array([x[:warm][state[:warm] == c].mean(axis=0) for c in range(k)])
+    var = np.array([x[:warm][state[:warm] == c].var(axis=0) for c in range(k)])
+    s = (w[:, None] * var).sum(axis=0) / w.sum()
+    v = w.sum()
+    for t in range(warm, len(x)):
+        c = state[t]
+        e = (x[t] - mu[c]) ** 2
+        v += 1.0
+        s += (e - s) / v
+        w[c] += 1.0
+        mu[c] += (x[t] - mu[c]) / w[c]
+    return s
+
+
+class TestHmmPriorIsQdasShrinkage:
+    """``hmm`` under ``"full"`` and ``"diag"`` with ``learn = True`` reads each
+    state's covariance as ``(W M + P0 diag(psi)) / (W + P0)``: under no decay,
+    scikit-learn QDA's ``reg_param`` shrinkage with ``reg_param = P0 / (W +
+    P0)``, toward ``diag(psi)`` where QDA shrinks toward the identity. QDA
+    computes it here from the rows each state learned, in the coordinates
+    ``x / sqrt(psi)`` that make the two targets one (scikit-learn's QDA
+    shrinks the covariance over ``n``, the model's mean form). ``psi`` is the
+    module's own definition (:func:`prior_scale`); the rest is QDA's, and
+    scipy's density of it. Under ``"diag"`` the model reads QDA's diagonal.
+
+    Each probe row's ``loglik``, ``log sum_l p1_l N(x | mu_l, Sigma_l)`` with
+    ``p1`` the row's predicted state, is held to that density within 1e-10
+    of ``1 + |loglik|``. Below 13 features the model reads the exact
+    recursion; from 13 its factor form reads it within a band
+    (``tests_stabilized`` in the Rust core)."""
+
+    D = 3
+    ROWS = 240
+    WARM = 40
+
+    def _stream(self, seed: int) -> tuple[np.ndarray, np.ndarray]:
+        rng = np.random.default_rng(seed)
+        state = np.arange(self.ROWS) % 2
+        a = rng.normal(size=(2, self.D, self.D)) * 0.8
+        covs = a @ a.transpose(0, 2, 1) + 0.2 * np.eye(self.D)
+        noise = np.einsum(
+            "tij,tj->ti", np.linalg.cholesky(covs)[state], rng.normal(size=(self.ROWS, self.D))
+        )
+        means = np.array([[-40.0] * self.D, [40.0] * self.D])
+        return means[state] + noise, state
+
+    @pytest.mark.parametrize("cov", ["full", "diag"])
+    @pytest.mark.parametrize("seed", [0, 1])
+    def test_the_states_read_qdas_shrunk_covariances(self, cov: str, seed: int) -> None:
+        x, state = self._stream(seed)
+        features = [f"x{i}" for i in range(self.D)]
+        frame = pl.DataFrame({f: x[:, i] for i, f in enumerate(features)})
+        spec = rp.spec.hmm(
+            "h",
+            features=features,
+            n_components=2,
+            precision_prior=1e-3,
+            covariance_type=cov,
+            half_life=float("inf"),
+            warm_rows=self.WARM,
+            init="first",
+        )
+        bank = rp.ModelBank([spec])
+        bank.fit_predict(frame)
+        rng = np.random.default_rng(100 + seed)
+        probe = np.concatenate(
+            [
+                rng.normal(-40.0, 2.0, (4, self.D)),
+                rng.normal(40.0, 2.0, (4, self.D)),
+                rng.normal(0.0, 3.0, (2, self.D)),
+            ]
+        )
+        got = bank.predict(pl.DataFrame({f: probe[:, i] for i, f in enumerate(features)}))[
+            "h"
+        ].struct.unnest()
+        # The states' own labels: the seeding put state 0 on the first row's.
+        assert state[0] == 0
+        psi = prior_scale(x, state, self.WARM)
+        root = np.sqrt(psi)
+        p0 = float(self.D)
+        n = np.array([np.sum(state == c) for c in range(2)], dtype=float)
+        assert n[0] == n[1]
+        p1 = got.select("predicted_state0", "predicted_state1").to_numpy()
+
+        def mixture(reg_param: float) -> np.ndarray:
+            qda = QuadraticDiscriminantAnalysis(reg_param=reg_param, store_covariance=True)
+            qda.fit(x / root, state)
+            logf = np.empty((len(probe), 2))
+            for c in range(2):
+                sigma = qda.covariance_[c] * np.outer(root, root)
+                if cov == "diag":
+                    sigma = np.diag(np.diag(sigma))
+                logf[:, c] = multivariate_normal(mean=qda.means_[c] * root, cov=sigma).logpdf(probe)
+            return logsumexp(np.log(p1) + logf, axis=1)
+
+        want = mixture(p0 / (n[0] + p0))
+        loglik = got["loglik"].to_numpy()
+        assert np.all(np.isfinite(loglik))
+        scale = (1.0 + np.abs(want)).max()
+        np.testing.assert_allclose(loglik, want, rtol=0.0, atol=1e-10 * scale)
+        # The control: unshrunk, the states read another density.
+        assert np.abs(loglik - mixture(0.0)).max() > 1e-4 * scale
 
 
 # --- hmm's time-varying transitions against statsmodels' MarkovRegression ---------------

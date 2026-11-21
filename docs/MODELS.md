@@ -17,7 +17,8 @@ symbols beside its rule:
 | `λ` | the row's decay, `0.5 ** (Δclock / half_life)`, or `lam ** Δclock` when the spec gives `lam=`, with `Δclock` the clock's step since the last row the model did not skip, capped at `gap_cap` (or `session_gap` at a session change) ([Time and decay](explanation/time-and-decay.md)) | every model that decays |
 | `S_j`, `η_j` | target `j`'s running means of `z zᵀ` and of `z·y_j`, which the least-squares fits solve from | `ewridge`, `huber`, `quantile` |
 | `e` | the row's residual: `y` less the prediction made before the row | `huber`, `quantile` |
-| `ω` | a ridge added to a covariance: `precision_prior`, fading as `ew_cov`'s prior does, so that a row's class or state can be predicted from the model's first row | `ew_class`, `hmm` |
+| `ω` | a ridge added to a covariance: `precision_prior`, fading as `ew_cov`'s prior does, so that a row's class or state can be predicted from the model's first row | `ew_class`, `hmm` under `"tied"` or `learn = False` |
+| `P₀`, `ψ` | a stabilized prior a covariance forgets toward: `prior_rows` rows of weight at the features' pooled within-state variance `ψ`, which does not fade | `hmm` under `"full"` and `"diag"` with `learn = True` |
 
 Without a clock column, each row is one unit of clock. A model keeps its
 running sums as means, decayed sums or centered second moments, and [The
@@ -3348,13 +3349,12 @@ every spec takes are in [What every spec takes](#what-every-spec-takes).
 Here a hidden state means one of the `n_components` regimes, not the bank's
 saved state. The model runs Hamilton's filter one row at a time, from the
 filtered `p` the previous row left. Every output but `coef` is read before
-the row is learned. With `μ_l` and `Σ_l` state `l`'s mean and covariance,
-`ω_l` its `precision_prior` ridge as it has decayed, and `Π` the transition
-matrix:
+the row is learned. With `μ_l` and `Σ_l` state `l`'s mean and the
+covariance the row reads, and `Π` the transition matrix:
 
 ```
 p1_l   = Σ_k p_k·Π_kl                      the predicted state
-f_l    = N(x | μ_l, Σ_l + ω_l·I)           the state's density
+f_l    = N(x | μ_l, Σ_l)                   the state's density
 loglik = ln Σ_l p1_l·f_l                   the row's log-likelihood
 p_l   ← p1_l·f_l / Σ                       the filtered state
 ```
@@ -3373,24 +3373,82 @@ N_kl ← λ N_kl                                    before the row reads Π
 ξ_kl = p_k(t−1)·Π_kl·f_l / Σ                     N_kl ← N_kl + w·ξ_kl
 ```
 
-A state's density reads `M_l = Σ_l + ω_l·I` through its Cholesky factor.
-Under `covariance_type = "full"` with 13 features or more, each state keeps
-that factor itself, as `s·L·Lᵀ` with a scalar `s` between 1/4 and 1. The row
-moves it by plane rotations in time `d²`, where narrower states keep their
-co-moments and factorize them in time `d³`. With `W` the state's
-weight before the row, `a = λW / (λW + w·p_l)`, `b = w·p_l / (λW + w·p_l)`
-and `δ` the row's deviation from the state's mean before the row:
+Each state keeps its weight `W_l`, its means and its mean-form co-moments
+`M_l`, which take the row as `ew_cov`'s do. With `δ` the row's deviation
+from the state's mean before the row, `a = W_l / (W_l + w·p_l)` and
+`b = w·p_l / (W_l + w·p_l)`:
 
 ```
-s'     = a·s
-L'L'ᵀ  = L·Lᵀ + (b/s)·δδᵀ                       by plane rotations
-M_l'   = s'·L'L'ᵀ = a·M_l + a·b·δδᵀ
+M_l ← a·M_l + a·b·δδᵀ                            W_l ← W_l + w·p_l
 ```
 
-It is the same matrix in exact arithmetic, and the densities part from a
-refactorization's in their last digits. The rotations cost about 0.9 of a
-factorization's time at 13 features, 0.75 at 20 and half at 32, on arm64
-and x86-64 alike, and more than it below 13, where the factorization stays.
+**Under `"tied"`, and with `learn = False`,** `Σ_l = M_l + ω_l·I`, with
+`ω_l` the `precision_prior` ridge as it has decayed with the state's data.
+
+**Under `"full"` and `"diag"` with `learn = True`, each state's covariance
+forgets toward a prior** (stabilized forgetting: Kulhavý and Zarrop, "On a
+general concept of forgetting", Int. J. Control 58(4), 1993). Exponential
+forgetting flattens a state's posterior toward nothing: a state that wins no
+rows for a while keeps a ridge that decays with its weight, and on its first
+row back its matrix collapses onto that row, so a returning regime is not
+recognized. Stabilized forgetting flattens it toward a prior worth
+`P₀ = prior_rows` rows (the number of features by default), and a prior
+worth `P₀` rows stays worth `P₀` rows. With `ψ` the features' pooled
+within-state variance:
+
+```
+W_l ← λ·W_l                                      the row's decay, before the read
+Σ_l = (W_l·M_l + P₀·diag(ψ)) / (W_l + P₀)
+```
+
+With no data (`W_l → 0`) a state reads `diag(ψ)`, a broad density, never a
+collapsed one. With no decay it is scikit-learn QDA's `reg_param`
+shrinkage, `reg_param = P₀ / (W_l + P₀)`, toward `diag(ψ)`. `ψ` follows
+each row's squared deviations from the states' means before it, weighted
+by the filtered state, at ten times the half-life, from the seeded states'
+variances pooled by weight:
+
+```
+e_i  = Σ_l p_l·(x_i − μ_li)²
+V   ← λ^(1/10)·V + w
+s_i ← s_i + (w/V)·(e_i − s_i)
+ψ_i  = max(s_i, 2⁻¹⁰⁰·max_j s_j)                 precision_prior where every s_i is 0
+```
+
+The study behind it simulated two-state streams and scored each against
+the exact forward pass with the true parameters (hmmlearn). A regime absent
+for 20 to 500 half-lives and then back was recovered in 136 of 144 `full`
+runs under the prior, and in 60 under the decaying ridge; under `"diag"`,
+in 136 and 108. Steady and drifting streams were as well fitted or better.
+
+A state's density reads `Σ_l` through its Cholesky factor. Under
+`covariance_type = "full"` with 13 features or more, each state keeps that
+factor itself, as `s·L·Lᵀ` with a scalar `s` between 1/4 and 1. The row
+moves it by plane rotations in time `d²`. Narrower states keep their
+co-moments and factorize them in time `d³`. The prior's share of `Σ_l`
+changes with `W_l`, a diagonal of full rank that no rotation adds. So the
+factor holds the prior as factored, `f`, which decays with the data. One
+factorization of each state moves it back to its target whenever any
+coordinate has drifted more than 1/16 from it. With `W'` the weight after
+the row:
+
+```
+Σ_l    = s·L·Lᵀ = (W_l·M_l + diag(f)) / (W_l + P₀)
+f_i   ← λ·f_i                                     every row, with W_l
+f_i   ← (1 + 1/32)·P₀·ψ_i                         when any f_i leaves [15/16, 17/16]·P₀·ψ_i
+s'     = s·(W_l + P₀) / (W' + P₀)                 the row learned
+L'L'ᵀ  = L·Lᵀ + (a·w·p_l) / ((W' + P₀)·s')·δδᵀ    by plane rotations
+```
+
+So the factor form reads `Σ_l` within 1/16 of the prior's share of it: a
+quadratic form within a factor 16/15 of the exact recursion's. Every
+coordinate decays alike, so all fall due together, about every
+`1.5·(1/16)·h / ln 2` rows at a half-life of `h` rows (7 rows at 50, 68 at
+500). Measured on arm64 with two states, against the decaying ridge it
+replaces, a row of the factor form costs 0.95 to 0.98 of its time at 13 to
+32 features and a half-life of 500 rows. At a half-life of 50 rows it costs
+1.1 to 1.2. A `"diag"` row costs 1.19 to 1.29 of its time, and a `"full"` row
+below 13 features 1.08 to 1.16.
 
 #### Example
 

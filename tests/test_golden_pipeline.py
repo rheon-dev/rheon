@@ -589,6 +589,16 @@ def switched_signature() -> dict[str, float | str | None]:
 #: radius was stepped by ``rate·sigma`` from ``sigma·Φ⁻¹(1 − α/2)``;
 #: ``tests/test_conformal.py``'s replay, rewritten from the new docstring,
 #: holds every row of every model to the bit; nothing else moved.
+#: Stabilized forgetting (2026-11-20, the user's decision; rule 5's
+#: twenty-second exception) moved the 15 of ``hmm``, its posteriors and
+#: ``loglik``: under ``"full"`` with ``learn = True`` each state reads
+#: ``(W C + d diag(psi)) / (W + d)`` after the row's decay, where it read
+#: ``C`` plus the decaying ridge. ``tests/test_second_opinion_hmm.py``
+#: rebuilds that rule row by row with hmmlearn, scipy and numpy and holds
+#: every row to it within its derived bound, and
+#: ``tests/test_second_opinion_regimes.py`` the shrunk covariance to
+#: scikit-learn's QDA; ``weight_sum``, ``settled_frac``, ``state`` and every
+#: other spec kept their numbers within the tolerance.
 GOLDEN: dict[str, float | str | None] = {
     "ridge.pred_y0__r0.000001@25": -4.684371132566456,
     "ridge.pred_y0__r0.000001@60": -0.25563207972202284,
@@ -968,24 +978,24 @@ GOLDEN: dict[str, float | str | None] = {
     "corrchange.stat#1": 0.9841580801406815,
     "corrchange.stat#2": 0.8994078028569636,
     "corrchange.stat#3": 0.7926014051597302,
-    "hmm.filtered_state0@25": 0.0019483393849081434,
-    "hmm.filtered_state0@60": 0.7254094252352653,
-    "hmm.filtered_state0@119": 5.212548614325314e-07,
-    "hmm.filtered_state1@25": 0.998051660615092,
-    "hmm.filtered_state1@60": 0.27459057476473464,
-    "hmm.filtered_state1@119": 0.9999994787451386,
-    "hmm.predicted_state0@25": 0.2903686385954784,
-    "hmm.predicted_state0@60": 0.5296723733406385,
-    "hmm.predicted_state0@119": 0.21239138327086757,
-    "hmm.predicted_state1@25": 0.7096313614045219,
-    "hmm.predicted_state1@60": 0.47032762665936134,
-    "hmm.predicted_state1@119": 0.7876086167291326,
+    "hmm.filtered_state0@25": 0.0012857211925048136,
+    "hmm.filtered_state0@60": 0.8112978844060631,
+    "hmm.filtered_state0@119": 0.418165754278722,
+    "hmm.filtered_state1@25": 0.9987142788074951,
+    "hmm.filtered_state1@60": 0.188702115593937,
+    "hmm.filtered_state1@119": 0.581834245721278,
+    "hmm.predicted_state0@25": 0.21118422348851099,
+    "hmm.predicted_state0@60": 0.6689272181155315,
+    "hmm.predicted_state0@119": 0.46179870826203684,
+    "hmm.predicted_state1@25": 0.788815776511489,
+    "hmm.predicted_state1@60": 0.33107278188446865,
+    "hmm.predicted_state1@119": 0.538201291737963,
     "hmm.state@25": 1,
     "hmm.state@60": 0,
     "hmm.state@119": 1,
-    "hmm.loglik@25": -4.530186553195626,
-    "hmm.loglik@60": -5.874552868677731,
-    "hmm.loglik@119": -3.0788260908693825,
+    "hmm.loglik@25": -4.964233120207337,
+    "hmm.loglik@60": -4.995091508981325,
+    "hmm.loglik@119": -3.042105336113919,
     "hmm.weight_sum@25": 7.999488060097996,
     "hmm.weight_sum@60": 12.473100285951407,
     "hmm.weight_sum@119": 15.110060335371337,

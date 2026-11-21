@@ -17,7 +17,10 @@ These steps need the library, a stream and a spec:
   saved as a file in clock order, to read back with `pl.scan_parquet`.
 - An [`hmm`](../MODELS.md#hmm--which-regime-are-we-in) spec: the number
   of regimes in `n_components`, and a small `precision_prior`, a ridge on
-  each state's covariance in the features' squared units.
+  each state's covariance in the features' squared units. Under the default
+  `covariance_type = "full"`, and under `"diag"`, a model that learns reads
+  the ridge only where every feature's pooled variance is 0: each state's
+  covariance forgets toward a prior worth `prior_rows` rows instead.
 - A rough length for a regime, in rows.
 
 ## Tell the filter that regimes last
@@ -84,8 +87,8 @@ sticky: 93% of the rows in their true regime
 
 Use these steps when the stream can hold a row far outside the rest, such
 as a bad tick. Such a row can be captured by one state, moving that
-state's mean far from the data. A state that then stops winning rows never
-forgets, so the model is left one state short.
+state's mean far from the data. A state that then stops winning rows keeps
+that mean, so the model is left one state short.
 
 1. **Choose a guard:**
 
@@ -93,7 +96,7 @@ forgets, so the model is left one state short.
    |---|---|---|
    | clip the features with Polars' `clip()` in the query before the bank | in general | set the bounds where the clean rows do not reach |
    | give the states with `means` and `covs`, and freeze them with `learn=False` | you know the regimes in advance | the states no longer follow the stream |
-   | give a larger `precision_prior` | you cannot clip the rows | keep it well below the data's variance: with the states held, a ridge of 1.0 on data of variance 1.0 halves every correlation |
+   | give a larger `prior_rows` (`precision_prior` under `"tied"`) | you cannot clip the rows | each state's covariance is pulled harder toward the features' pooled variance; keep `precision_prior` well below the data's variance: with the states held, a ridge of 1.0 on data of variance 1.0 halves every correlation |
 
 2. **Add the spec to the query with `online.fit_predict([hidden])`.**
 3. **Run the query with `collect()`.**
@@ -149,7 +152,7 @@ regime you know, the share in their true state, as the recipes do.
 | what you see | what it means | what to do |
 |---|---|---|
 | few rows in their true regime, where a regime shows only over many rows, such as a spread that widens | one row says little about its regime, and the default prior does not say that regimes last | give a sticky `transition` and a `transition_prior` |
-| one state holds no rows over a long stretch | an extreme row captured it | clip the features before the bank, give the states with `learn=False`, or increase `precision_prior` |
+| one state holds no rows over a long stretch | an extreme row captured it | clip the features before the bank, give the states with `learn=False`, or increase `prior_rows` (`precision_prior` under `"tied"`) |
 | every field but `weight_sum`, `settled_frac`, `withheld_reason` and `coef` null | the group has not yet had `warm_rows` rows to seed its states from | read the rows after seeding, or give the states with `means` and `covs` |
 | the states split the rows by direction, and never by regime, under the default prior | the regimes differ in their covariance alone, which the default seeding by k-means cannot see | give a sticky `transition` and a `transition_prior` first, as the first recipe does; give `means` and `covs` where that does not suffice |
 

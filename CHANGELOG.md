@@ -48,6 +48,50 @@ model that only the new build has is listed as an addition and passes.
 
 ### Changed
 
+- **`hmm` under `covariance_type` `"full"` and `"diag"`, in a model that
+  learns, forgets each state's covariance toward a prior,** where it kept a
+  ridge that decayed with the state's data. This is stabilized forgetting
+  (Kulhavý and Zarrop, 1993): a state reads `(W·M + P₀·diag(ψ))/(W + P₀)`
+  after the row's decay, with `W` its weight, `M` its co-moments, `ψ` the
+  features' pooled within-state variance (tracked at ten times the
+  half-life) and `P₀` the new spec option `prior_rows`, the number of
+  features by default. A prior worth `P₀` rows stays worth `P₀` rows, so a
+  state that wins no rows for a while reads a broad density near `diag(ψ)`
+  where it collapsed onto its first row back, and a regime that returns is
+  recognized: on a simulated grid scored against the exact forward pass
+  with the true parameters, a regime absent for 20 to 500 half-lives and
+  then back was recovered in 136 of 144 `full` runs where 60 were, and 136
+  of 144 `diag` runs where 108 were, with steady and drifting streams as
+  well fitted or better. It also ends three ways the ridge failed: a
+  feature that never varies (every row NaN from about 1,065 half-lives
+  under `"diag"`), a feature that sticks and moves again, and a burst of
+  long gaps or a stuck feature at 13 features or more, where the factor
+  form's pivots fell to about `1e-170` and every later row was NaN. At no
+  decay the matrix is scikit-learn QDA's `reg_param` shrinkage,
+  `reg_param = P₀/(W + P₀)`, toward `diag(ψ)`. One case loses: states
+  given by `means` and `covs` enter at one row's weight, so on the first
+  rows the prior, which has no correlation, is two thirds of each state's
+  matrix; on streams whose regimes differ in correlation alone, the share
+  of rows a learning filter started from the true covariances puts in the
+  true state fell from 0.948 to 0.792 (0.972 to 0.856 through switches),
+  and `prior_rows = 0.01` brings it back to 0.95. From 13 features the
+  factor form holds the prior as factored and moves it back by one
+  factorization of each state whenever it drifts more than 1/16 from its
+  target, so it reads the exact recursion's matrix within 1/16 of the
+  prior's share of it (a posterior within 0.009 of it, measured against
+  that recursion in 512 bits). `precision_prior` stays required, and is
+  the ridge under `"tied"` and with `learn = False`; under `"full"` and
+  `"diag"` with `learn = True` it stands in for the prior only where every
+  feature's pooled variance is 0. `prior_rows` is refused under `"tied"`
+  and with `learn = False`, which take no prior. The state's schema is 70:
+  the model keeps `ŝ`, `V` and, at 13 features or more under `"full"`,
+  `f`, `2d + 1` numbers a model there and `d + 1` elsewhere. A state saved
+  by an earlier build loads with a prior seeded from its states' moments
+  and goes on under it, neither to the bit nor within rounding of the old
+  build's continuation; one saved inside its warm-up goes on as this
+  build's would. `"tied"`, a model that does not learn, and every other
+  model are unchanged to the bit. Moves: `hmm.filtered_state*`,
+  `hmm.predicted_state*`, `hmm.state`, `hmm.loglik`, `hmm.coef`.
 - **`ModelBank.skip_learned` and the command line's `--skip-learned` refuse a
   spec with `session` or `restart_after_step_back` unless the caller
   declares that the clock runs on,** by `skip_learned(frame,
@@ -266,6 +310,24 @@ model that only the new build has is listed as an addition and passes.
 
 ### Performance
 
+- **`hmm`'s stabilized prior costs time under `"full"` below 13 features
+  and under `"diag"`, and little or none in the factor form.** On arm64
+  (two states, 10,000 rows, the least of five rounds, under the default
+  and an aligned function layout), against the decaying ridge it replaces:
+  `"full"` at 13 to 32 features runs at 0.95 to 0.98 of its time at a
+  half-life of 500 rows, and at 1.10, 1.15 and 1.20 at 13, 20 and 32
+  features at a half-life of 50 rows, where the prior is moved back by a
+  factorization every 7 rows (against a ridge model that moves both its
+  states; on that stream the ridge model's fit failed at 20 and 32
+  features, one state at weight 0 and skipped, and against it the ratios
+  are 1.49 and 1.59); `"full"` at 4 and 8 features
+  1.08 to 1.20; `"diag"` at 4 to 32 features 1.19 to 1.29, more than half
+  of it the tracking of the prior's scale. The instruction-count case
+  (`hmm` at 4 features under `"full"`, two states, 1,000 rows) retires 1.15
+  times the instructions on arm64 (6.22 to 7.16 million a block, the mean
+  of 40 blocks), and its budget rises with it. The model keeps `2d + 1`
+  more numbers in the factor form and `d + 1` elsewhere, and one `d × d`
+  matrix of working space to factorize in (8 KB at 32 features).
 - **`lasso`'s coordinate descent sweeps without a chain of dependent
   subtractions from 40 features.** Each coordinate's update subtracted the
   terms of the coefficients after it one at a time, each waiting for the

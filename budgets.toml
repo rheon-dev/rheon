@@ -218,7 +218,7 @@ budget = 3006026
 
 [instructions.hmm]
 what = "hmm, 4 features, 2 states, full covariance, precision prior 1: AnyModel::step_into, into one kept Step"
-budget = 6764026
+budget = 7787422
 
 [instructions.rcov]
 what = "rcov, 4 features, kernel, the rows a block takes in: AnyModel::step_into, into one kept Step"
@@ -1605,6 +1605,14 @@ to = 13974889
 date = 2026-11-09
 reason = "tasks 371 and 374: the co-moment triangle is kept packed in the model, so a windowed snapshot copies it in one run and a windowed ew_class / ew_cov row runs 24-50% faster on x86-64; above 12 features the rank-one update walks the packed rows where it walked a square, +3.67% instructions in this 50-feature Gram against 32980bf6 under the frozen clock (the VM's count on 694e0f9d, V43), its time -0.5% / +4.4% (default / aligned layout), not slower in both. Set from main's CI count on 0d9e4356 (13,480,167) times that ratio"
 changelog = "A windowed model's ring holds its snapshots as runs of doubles"
+
+[[raised]]
+key = "instructions.hmm"
+from = 6764026
+to = 7787422
+date = 2026-11-20
+reason = "rule 5's twenty-second exception, the user's decision of 2026-11-20: hmm under full and diag forgets each state's covariance toward a stabilized prior (Kulhavy-Zarrop, P0 = d), which recovers a returning regime the decaying ridge lost (136 of 144 full runs against 60 on the study's grid) and ends three NaN faults; a row ages the states before its read, reads (W M + P0 diag(psi))/(W + P0), and tracks psi from the row's squared deviations. Measured on arm64 with this case's binary at both builds (main 6a594f88 against hmm-bd-default, bench profile, the mean of 40 blocks over three runs each): 6.217 to 7.158 million instructions a block, 1.1513 times; the budget is CI's 6,764,026 times that"
+changelog = "`hmm`'s stabilized prior costs time under"
 
 [[signoff]]
 key = "instructions.corrchange_window_w100"

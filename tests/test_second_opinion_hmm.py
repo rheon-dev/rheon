@@ -12,9 +12,18 @@ after ``t`` rows
     C_l = (lam^T (Sigma0_l + (mu0_l - mu_l)(mu0_l - mu_l)') +
            sum_s lam^(T - T_s) w_s p_l(s) (x_s - mu_l)(x_s - mu_l)') / W_l
 
-(``T`` the decayed clock, no decay before the first row) and the density
-reads ``C_l + r_l I`` with the ridge ``r_l = precision_prior lam^T / W_l``,
-the given pair's share of the state's weight. The transition counts are the
+(``T`` the decayed clock, no decay before the first row). Under ``"tied"``
+the density reads ``C_l + r_l I`` with the ridge ``r_l = precision_prior
+lam^T / W_l``, the given pair's share of the state's weight. Under
+``"full"`` and ``"diag"`` it reads the stabilized prior instead,
+``(W C_l + P0 diag(psi)) / (W + P0)`` with ``W = lam W_l`` the state's
+weight after the row's own decay, ``P0`` the number of features, and
+``psi`` the pooled within-state variance: it starts at the given
+covariances' diagonals pooled by weight (each given pair at weight 1) with
+``V`` their total weight, and each learned row ``s`` moves it as
+``e_i = sum_l p_l(s) (x_si - mu_li)^2`` (the means before the row),
+``V <- lam^(1/10) V + w_s``, ``psi <- psi + (w_s / V) (e - psi)``, ``V``
+decaying alone on a row of weight 0. The transition counts are the
 decayed sum of the filtered joint of consecutive states,
 
     A_kl = sum_s lam^(T - T_s) w_s xi_kl(s)
@@ -63,6 +72,7 @@ same parameters, with the tolerance derived below.
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 
 import numpy as np
@@ -83,6 +93,13 @@ SEEDS = range(50)
 #: default Dirichlet pseudo-count per cell (``transition_prior``).
 RIDGE = 1e-2
 TAU = 1.0
+
+
+def prior_shapes(cov: str) -> bool:
+    """Whether a learning model under ``cov`` reads the stabilized prior
+    (``"full"`` and ``"diag"``) rather than the ridge (``"tied"``)."""
+    return cov in ("full", "diag")
+
 
 #: The unit roundoff of a double, ``u = 2^-53``: every basic operation
 #: returns its exact result times ``1 + delta``, ``|delta| <= u`` (Higham,
@@ -234,6 +251,9 @@ def rule_from_scratch(s: dict[str, Any], half_life: float, cov: str) -> dict[str
         "moments": np.zeros((n + 1, k, d, d)),
         "totals": np.zeros((n + 1, k)),
         "ridges": np.zeros((n + 1, k)),
+        "psi": np.zeros((n + 1, d)),
+        "shrink": np.zeros((n + 1, k)),
+        "slow": np.zeros(n + 1),
         "sigma": np.zeros((n + 1, k, d, d)),
         "ordered": np.zeros((n + 1, k, d)),
         "ordered_w": np.zeros((n + 1, k)),
@@ -245,6 +265,13 @@ def rule_from_scratch(s: dict[str, Any], half_life: float, cov: str) -> dict[str
         "resp": np.zeros((n, k)),
         "joints": np.zeros((n, k, k)),
     }
+
+    # The stabilized prior's scale and its weight, and the row's own decay
+    # and the slow one at ten half-lives, as the model computes them.
+    psi = np.mean(np.diagonal(c0, axis1=1, axis2=2), axis=0)
+    v_slow = float(k)
+    lam_row = math.exp2(-1.0 / half_life)
+    lam_slow = math.exp2(-1.0 / (10.0 * half_life))
 
     def state_params(t: int) -> tuple[np.ndarray, np.ndarray]:
         ages = np.exp(clock[t] - clock[1 : t + 1])
@@ -269,6 +296,15 @@ def rule_from_scratch(s: dict[str, Any], half_life: float, cov: str) -> dict[str
             rows["dev1"][t, st] = share @ dev
             rows["dev2"][t, st] = np.einsum("s,si,sj->ij", share, dev, dev)
         rows["means"][t], rows["totals"][t] = means, totals
+        rows["psi"][t] = psi
+        if prior_shapes(cov):
+            # The row's own decay before its read; none on the first row.
+            w_read = totals * (lam_row if t else 1.0)
+            share = w_read / (w_read + d)
+            rows["shrink"][t] = share
+            for st in range(k):
+                c = rows["moments"][t, st]
+                covs[st] = share[st] * c + (1.0 - share[st]) * np.diag(psi)
         if cov == "diag":
             covs = covs * np.eye(d)
         elif cov == "tied":
@@ -282,6 +318,7 @@ def rule_from_scratch(s: dict[str, Any], half_life: float, cov: str) -> dict[str
     filtered, predicted, loglik = np.zeros((n, k)), np.zeros((n, k)), np.zeros(n)
     for t in range(n):
         means, covs = state_params(t)
+        slow = lam_slow if t else 1.0
         # The counts decayed over the row's own clock before it reads them.
         counts = np.einsum(
             "s,skl->kl", np.exp(clock[t + 1] - clock[1 : t + 1]), w[:t, None, None] * joints[:t]
@@ -302,6 +339,13 @@ def rule_from_scratch(s: dict[str, Any], half_life: float, cov: str) -> dict[str
             joints[t] = joint / joint.sum()
             resp[t] = hmm.predict_proba(x[t : t + 1])[0]
             p = resp[t]
+            if prior_shapes(cov):
+                e = resp[t] @ (x[t] - means) ** 2
+                v_slow = slow * v_slow + w[t]
+                psi = psi + (w[t] / v_slow) * (e - psi)
+        elif prior_shapes(cov):
+            v_slow = slow * v_slow
+        rows["slow"][t + 1] = v_slow
     state_params(n)
     ages = np.exp(clock[n] - clock[1 : n + 1])
     learned = [
@@ -406,6 +450,18 @@ def rule_error_bound(
     (A + tau) / rowsum`` reads ``A``'s against the pseudo-count. The ridge
     ``r_l = precision_prior lam^T / W_l`` follows ``W_l``.
 
+    *Under the prior* (``"full"`` and ``"diag"``). The density reads
+    ``m C_l + a diag(psi)``, ``m = W / (W + P0)``, ``a = 1 - m``, with ``W``
+    the weight after the row's decay, so ``dSigma = m dC + m a (C - diag(psi))
+    dln W + a diag(dpsi)``. ``psi`` is carried in the state: a learned row
+    takes ``psi' = (1 - b) psi + b e``, ``b = w / V'``, ``e_i = sum_l post_l
+    (x_i - mu_li)^2``, so ``dpsi' = (1 - b) dpsi + b de + b (e - psi) dln b``
+    with ``de_i = sum_l post_l (x_i - mu_li)^2 dln post_l - 2 post_l (x_i -
+    mu_li) dmu_li``. ``V`` is each side's own recursion over the weights and
+    the slow decay's ``exp2``, ``t + 1`` steps of a few roundings: one symbol
+    a row on ``ln b``. The read's shrinkage rounds ``4 u`` of ``Sigma``, and
+    the row's own decay ``LIBM u`` of ``W``.
+
     *The ages.* The model decays by ``lam = exp2(-1 / h)`` once a row and
     the rebuild by ``exp((t - s) ln lam)``: one symbol for each platform
     call, ``LIBM u`` on ``lam`` and ``(LIBM + 1) u |ln lam|`` on ``ln
@@ -445,7 +501,10 @@ def rule_error_bound(
     o_r = o_w + k
     o_a = o_r + k
     o_p = o_a + k * k
-    z = o_p + k
+    # The stabilized prior's scale, under "full" and "diag".
+    o_s = o_p + k
+    z = o_s + d
+    prior = prior_shapes(cov)
 
     def i_mu(st: int, i: int) -> int:
         return o_mu + st * d + i
@@ -458,8 +517,9 @@ def rule_error_bound(
     # zeta (the stored posterior's own rounding, uncentred), e1..e4 (the
     # weight's product, the weight's add, the share's product and division,
     # the ridge's division), d of the mean's step, d^2 of the covariance's,
-    # and k^2 of the counts'.
-    per_row = k * (7 + d + d * d) + k * k
+    # and k^2 of the counts'; then d of the prior scale's step and one for
+    # its weight's.
+    per_row = k * (7 + d + d * d) + k * k + d + 1
     psi_parts = np.zeros((n, k, 4))
     big = 2 + n * per_row
     jac = np.zeros((z, big))
@@ -506,7 +566,9 @@ def rule_error_bound(
         s_e = new[3 * k : 7 * k].reshape(k, 4)
         s_mu = new[7 * k : 7 * k + k * d].reshape(k, d)
         s_c = new[7 * k + k * d : 7 * k + k * d + k * d * d].reshape(k, d, d)
-        s_a = new[7 * k + k * d + k * d * d :].reshape(k, k)
+        s_a = new[7 * k + k * d + k * d * d : 7 * k + k * d + k * d * d + k * k].reshape(k, k)
+        s_s = new[7 * k + k * d + k * d * d + k * k : per_row - 1]
+        s_v = new[per_row - 1]
         width = used + per_row
         aug = np.zeros((z + per_row, width))
         aug[:z, :used] = jac[:, :used]
@@ -534,7 +596,31 @@ def rule_error_bound(
         share = totals / totals.sum()
         sig_fun = np.zeros((k, d, d, z + per_row))
         sig_fresh = np.zeros((k, d, d))
+        psi = rows["psi"][t]
         for st in range(k):
+            if prior:
+                # `m C + a diag(psi)`, `m = W / (W + P0)`, `a = 1 - m`, `W`
+                # the weight after the row's decay: `dm = m a dln W`, `da =
+                # -dm`. The row's own decay is a platform's `exp2`, which
+                # either side may round off by `LIBM u` of it, as a fresh
+                # error of the row's read.
+                m_st = rows["shrink"][t, st]
+                a_st = 1.0 - m_st
+                for i in range(d):
+                    for j in range(d):
+                        if cov == "diag" and i != j:
+                            continue
+                        lean = m_st * a_st * (c[st, i, j] - (psi[i] if i == j else 0.0))
+                        sig_fun[st, i, j, i_c(st, i, j)] = m_st
+                        sig_fun[st, i, j, o_w + st] += lean
+                        sig_fresh[st, i, j] = (
+                            m_st * f_c[st, i, j]
+                            + 4.0 * U * abs(sigma[st, i, j])
+                            + (LIBM * U if t else 0.0) * abs(lean)
+                        )
+                    sig_fun[st, i, i, o_s + i] += a_st
+                    sig_fresh[st, i, i] += a_st * psi[i] * (f_w[st] + 3.0 * U)
+                continue
             for i in range(d):
                 for j in range(d):
                     if cov == "diag" and i != j:
@@ -644,6 +730,25 @@ def rule_error_bound(
                     mag[s_c[st, i, j]] = 7.0 * U * sh * abs(delta[i] * delta[j]) + 2.0 * U * min(
                         1.0, 4.0 * sh / U
                     ) * abs(c[st, i, j] + sh * delta[i] * delta[j])
+        if prior:
+            # The prior's scale takes the row: `e_i = sum_l post_l
+            # (x_i - mu_li)^2`, `psi' = (1 - b) psi + b e`, `b = w / V'`.
+            # Its weight `V` is each side's own recursion over the rows'
+            # weights and the slow decay's `exp2`, `t + 1` steps of a few
+            # roundings each: one symbol a row on `ln b`.
+            b = w[t] / rows["slow"][t + 1]
+            dev = x[t] - mu
+            e = post @ dev**2
+            mag[s_v] = (t + 1.0) * (LIBM + 3.0) * U
+            for i in range(d):
+                de = np.zeros(z + per_row)
+                for st in range(k):
+                    de += post[st] * dev[st, i] ** 2 * ln_post[st]
+                    de -= 2.0 * post[st] * dev[st, i] * unit[i_mu(st, i)]
+                step[o_s + i] = (1.0 - b) * unit[o_s + i] + b * de
+                step[o_s + i] += b * (e[i] - psi[i]) * fresh_rows[s_v - used]
+                step[o_s + i] += fresh_rows[s_s[i] - used]
+                mag[s_s[i]] = 4.0 * U * (abs(psi[i]) + b * abs(e[i])) + gamma(k + 2) * b * e[i]
         xi = rows["joints"][t]
         ln_xi = np.zeros((k, k, z + per_row))
         for kk in range(k):
@@ -673,7 +778,7 @@ def rule_error_bound(
             jac=jac[:, :used],
             mag=mag[:used],
             row=symbol_row[:used],
-            layout=(o_mu, o_c, o_w, o_r, o_a, o_p),
+            layout=(o_mu, o_c, o_w, o_r, o_a, o_p, o_s),
             psi_parts=psi_parts,
         )
     return out
