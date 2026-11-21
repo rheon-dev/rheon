@@ -377,6 +377,87 @@ def bandit_candidates():
     report("504", "LinUCB (disjoint) posterior of the arms", "river", g, "same rounds; river's bonus is sigma of the predictive, 1/beta included")
 
 
+def _leaves(node):
+    if node.__class__.__name__ == "Leaf":
+        return 1
+    return _leaves(node.l) + _leaves(node.r)
+
+
+@check
+def rrcf_candidate():
+    """Guha, Mishra, Roy, Schrijvers 2016: CoDisp(x) = max over subtrees C containing x of |sibling(C)| / |C|, counted by hand."""
+    import rrcf
+
+    rng = np.random.default_rng(0)
+    tree = rrcf.RCTree()
+    pts = rng.standard_normal((60, 3))
+    for i, p in enumerate(pts):
+        tree.insert_point(p, index=i)
+    gap = 0.0
+    for i in range(60):
+        node, best = tree.leaves[i], 0.0
+        while node.u is not None:
+            sib = node.u.r if node is node.u.l else node.u.l
+            best = max(best, _leaves(sib) / _leaves(node))
+            node = node.u
+        gap = max(gap, abs(best - tree.codisp(i)))
+    # forest scoring is the mean over trees (their anomaly score) - check that the mean-of-trees API reproduces the same recursion
+    report("507", "robust random cut forest CoDisp (given the tree)", "rrcf", {"max |codisp - definition| over 60 points": float(gap)}, "one tree of 60 N(0,I3) points; the cut distribution itself is stochastic (not compared)")
+
+
+def bocpd_def(x, hazard, mu0=0.0, kappa0=1.0, alpha0=1.0, beta0=1.0):
+    """Adams & MacKay 2007, Algorithm 1, Gaussian with a normal-gamma prior (Murphy 2007, 3.5 predictive); returns P(r_t | x_1..t) per step."""
+    from scipy import stats
+
+    mu, kap, al, be = np.array([mu0]), np.array([kappa0]), np.array([alpha0]), np.array([beta0])
+    R = np.array([1.0])
+    out = []
+    for v in x:
+        pred = stats.t.pdf(v, df=2 * al, loc=mu, scale=np.sqrt(be * (kap + 1) / (al * kap)))
+        H = hazard(np.arange(len(R))) if callable(hazard) else hazard
+        growth = R * pred * (1 - H)
+        cp = np.sum(R * pred * H)
+        R = np.concatenate([[cp], growth])
+        R /= R.sum()
+        out.append(R)
+        be = np.concatenate([[beta0], be + kap * (v - mu) ** 2 / (2 * (kap + 1))])
+        mu = np.concatenate([[mu0], (kap * mu + v) / (kap + 1)])
+        kap = np.concatenate([[kappa0], kap + 1])
+        al = np.concatenate([[alpha0], al + 0.5])
+    return out
+
+
+@check
+def bocpd_candidates():
+    from bocd import BayesianOnlineChangePointDetection as B, ConstantHazard, StudentT
+
+    rng = np.random.default_rng(8)
+    x = np.concatenate([rng.standard_normal(60), 4 + rng.standard_normal(40)])
+    ref = bocpd_def(x, 1 / 100)
+    det = B(ConstantHazard(100), StudentT(mu=0, kappa=1, alpha=1, beta=1))
+    gap = 0.0
+    for t, v in enumerate(x):
+        det.update(v)
+        gap = max(gap, float(np.max(np.abs(det.belief - ref[t]))))
+    report("523", "BOCPD run-length posterior (constant hazard, Gaussian)", "bocd", {"max |belief - definition| over 100 steps": gap, "its beta update reads kappaT where Murphy has betaT": "see source distribution.py"}, "60 N(0,1) then 40 N(4,1), hazard 1/100, prior (0,1,1,1)")
+
+
+@check
+def bocpd_runlength_hazard():
+    """bayesian_changepoint_detection.online_changepoint_detection takes hazard_func(arange(t+1)): a run-length-dependent hazard."""
+    from functools import partial
+
+    from bayesian_changepoint_detection import online_changepoint_detection as o
+
+    rng = np.random.default_rng(8)
+    x = np.concatenate([rng.standard_normal(60), 4 + rng.standard_normal(40)])
+    haz = lambda r: 1 / (1 + np.exp(-(np.asarray(r, float) - 50) / 10))  # logistic in the run length
+    R, _ = o.online_changepoint_detection(x, haz, o.StudentT(alpha=1, beta=1, kappa=1, mu=0))
+    ref = bocpd_def(x, haz)
+    gap = max(float(np.max(np.abs(R[: t + 2, t + 1] - ref[t]))) for t in range(len(x)))
+    report("523", "BOCPD, run-length-dependent (logistic) hazard", "bayesian-changepoint-detection", {"max |R[:, t+1] - definition|": gap}, "same stream, logistic hazard centred at run length 50")
+
+
 def main(argv):
     names = argv or list(CHECKS)
     for n in names:
