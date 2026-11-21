@@ -356,3 +356,41 @@ cost of the filtered responsibilities, and a reason `params=` is useful (learn t
 
 **Changes a default: no.** Four options; `kappa = 1`, all letters, a full or diag covariance and no smoother remain what they are.
 
+## 523. `bocpd`: a run-length hazard and a known-variance emission
+
+Selected in part. C1: the reference is `bayesian-changepoint` 1.2.2 (formerly `bayesian_changepoint_detection`; PyTorch, `torch` 2.15.0+cpu here, its run-length state **float32**): `online_changepoint_detection(data, hazard_function, likelihood_model)`,
+`negative_binomial_hazard(k, p, r)` CONFIRMED, `NormalKnownVariance(variance, mu, prior_variance)` CONFIRMED. **Excluded, oracle MISSING (C1):** the **logistic hazard** (Turner et al. 2009; not in the library) and the **known-mean
+(variance-change) emission** (no library class). Both would have an exact definition-based oracle (the all-paths enumeration used in 523b below works for any hazard and emission), so they can be reopened on the coordinator's word; they were not built.
+
+Beside `bocpd.rs` (Adams and MacKay, per-row hazard, `r` the learned rows in a run before the row): growth `P(r+1) = P(r) pi(r) (1 - H(r))`, changepoint `P(0) = sum_r P(r) pi(r) H(r)`; today `H(r) = 1/hazard` for every `r`. New:
+
+- **Negative-binomial hazard**: `P(L = t) = C(t-1, k-1) p^k (1-p)^(t-k)`, `H(r) = P(L = r+1)/P(L >= r+1)`; 0 for `r + 1 < k` (a run shorter than `k` cannot end), `p` at `k = 1`, rising to `p` as the run grows. The recursion changes in one place: `H` is a vector read at each held run's `len`.
+- **Known-variance normal emission**: the segment mean `~ N(mu_0, tau^2)`, the observation variance `s2` known; a run keeps its mean (`bocpd.rs`'s `len`, `n`, mean and mean's low part) and no scatter; `v = 1/(1/tau^2 + n/s2)`,
+  `m = v (mu_0/tau^2 + n xbar/s2)`, predictive `N(m, v + s2)`.
+
+Against the oracles (hazard exactness in float64; the recursion against the library's float32 `R`):
+
+| check | gap |
+|---|---|
+| `H(r)` from scipy's `nbinom` pmf and survival vs the pmf ratio from a long cumulative sum, k = 1 / 3 / 5 / 10 | 2.8e-17 / 5.3e-16 / 9.4e-16 / 2e-18 abs |
+| same vs the library's `negative_binomial_hazard` table (float32) | 4.5e-10 / 1.9e-9 / 3.7e-9 / 5.7e-11 abs |
+| `H(r) = 0` for `r + 1 < k`; `H(0) - p` at `k = 1` | exactly 0; -1e-17 |
+| the recursion vs summing all `2^T` run-length paths from the definition (T = 10; constant `lam = 6`, NB (2, .3), NB (3, .2)) | 2.8e-16 / 1.1e-16 / 1.1e-16 abs in the posterior |
+| the whole run-length posterior `R[r, t]` vs `online_changepoint_detection` with `NormalKnownVariance(1, 0, 4)`, 160 rows with two level shifts; constant `lam = 100`, NB (3, .02), NB (10, .05) | 9.2e-7 / 1.3e-6 / 1.6e-6 abs; 0 MAP run-length mismatches |
+
+**Where the oracle is not exact:** the library keeps its run-length statistics in float32 (C1), so against it the posterior agrees to float32's 1e-6, not to bit level; the all-paths enumeration and scipy are the float64 oracles, and
+the recursion is exact against them. Library pruning (`BaseLikelihood.prune`) was off. A `torch` dependency would enter the test group only if the library were an oracle there; the enumeration needs none.
+
+**What the hazard buys** (60 streams: 100 rows `N(0, 1)` then a +2 shift for 100; known variance; `P(r <= 1) > 0.5` as an alarm): constant `lam = 100`: median delay 3 rows, 56/60 detected, 1/60 early alarm; NB(5, .05)
+(mean 100): median delay 2 rows, 58/60 detected, 1/60 early alarm. A small, honest gain on this stream: the NB hazard's value is in streams whose segments are rarely short.
+
+Decay and zero weight: a per-row hazard counts learned rows, so a zero-weight row is a **no-op** for the recursion: no run grows and no hazard applies; against the stream without those rows (20%) the posterior is bit-equal (gap 0). The NB hazard
+is therefore defined **per learned row**; a run-length hazard in *clock* units (`hazard_on_clock`'s sense) is not defined by this form and is not proposed. Row weights enter as `bocpd` already does, `w / w_bar` in the statistics and as the power on the predictive; not changed by either feature.
+
+**State added.** The NB hazard adds **no group state**: its table `H(r)`, `r < max_run`, is `8 max_run` bytes derived from `(k, p)` (80 KB at the default 10,000) and shared by every group of the spec; the 256 KB cap is for state, so count it once per spec at most. The known-variance emission
+needs `8 (3 + 2d)` bytes a held run (log-mass, `len`, `n`, mean, mean's low part) against `diag`'s `8 (3 + 3d)` (it drops the scatter): d = 1 / 5 / 20: 40 / 104 / 344 against 48 / 144 / 504; the runs the 256 KB per-group cap holds:
+6553 / 2520 / 762 against 5461 / 1820 / 520. **A pre-existing point to state**: the default `max_run` is 10,000, so a stationary stream that fills it holds 480 KB at `d = 1` under `diag`, over the per-group cap; the Rust doc measures far fewer runs held in practice
+(2,001 after 2,000 rows, 7,036 at most by 20,000 on a stationary stream, a few dozen after a shift), so what is capped is the worst case. Neither feature changes it; the cap, not the hazard, is what bounds `max_run`.
+
+**Changes a default: no.** `hazard` stays the constant per-row hazard; the NB hazard and the known-variance emission are options.
+
