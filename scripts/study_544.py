@@ -62,8 +62,12 @@ HEADER_BYTES = 40  # alpha, zero count, total weight, two store lengths: 5 f64 (
 BUCKET_BYTES = 16  # key (i64) + count (f64)
 OFFSET = 1 << 20
 # (name, side, q): the tail holds the fraction q of the mass; lower = smallest, upper = largest
-LEVELS = (("0.01 lower", "lower", 0.01), ("0.05 lower", "lower", 0.05),
-          ("0.95 upper", "upper", 0.05), ("0.99 upper", "upper", 0.01))
+LEVELS = (
+    ("0.01 lower", "lower", 0.01),
+    ("0.05 lower", "lower", 0.05),
+    ("0.95 upper", "upper", 0.05),
+    ("0.99 upper", "upper", 0.01),
+)
 
 # ------------------------------------------------------------------------- TOLERANCES
 # (a) P-squared against river: bit equality, in ulps.
@@ -196,7 +200,10 @@ def print_state() -> None:
     print("P-squared, bytes per quantile")
     for k, v in state_bytes().items():
         print(f"  {k:<28}{v}")
-    print(f"DDSketch histogram, bytes = live buckets * {BUCKET_BYTES} + {HEADER_BYTES} (header: an assumption)")
+    print(
+        f"DDSketch histogram, bytes = live buckets * {BUCKET_BYTES} + {HEADER_BYTES} "
+        "(header: an assumption)"
+    )
     for b in (227, 1292):
         print(f"  {b:>5} buckets -> {b * BUCKET_BYTES + HEADER_BYTES:>6} bytes")
     print("t-digest, bytes = centroids * 16 (mean, weight) [+ 24 for min, max, total if stored]")
@@ -352,7 +359,7 @@ def level_pair(x, w, side, q):
 
 
 class Agg:
-    """Largest relative gap of the ES to the exact ES, to the bound, of the VaR, of the full-bucket ES."""
+    """Largest relative ES gap, ES gap to its bound, VaR gap and whole-bucket ES gap."""
 
     def __init__(self) -> None:
         self.gap = self.ratio = self.var = self.full = 0.0
@@ -377,18 +384,24 @@ def es_check(fails: list[str], tag: str, dist: str, level: str, a: Agg) -> None:
         fails.append(f"{tag} {dist} {level}: gap/bound {a.ratio:.3f} > {tol}")
 
 
-HDR = (f"{'dist':<10} {'level':<11} {'runs':>5} {'max gap/ES':>11} {'gap/bound':>10} "
-       f"{'viol':>5} {'max VaR rel':>12} {'whole-bucket gap':>17}")
+HDR = (
+    f"{'dist':<10} {'level':<11} {'runs':>5} {'max gap/ES':>11} {'gap/bound':>10} "
+    f"{'viol':>5} {'max VaR rel':>12} {'whole-bucket gap':>17}"
+)
 
 
 def row(dist, level, a: Agg):
-    return (f"{dist:<10} {level:<11} {a.n:>5} {a.gap:>11.3e} {a.ratio:>10.3f} {a.viol:>5} "
-            f"{a.var:>12.3e} {a.full:>17.3e}")
+    return (
+        f"{dist:<10} {level:<11} {a.n:>5} {a.gap:>11.3e} {a.ratio:>10.3f} {a.viol:>5} "
+        f"{a.var:>12.3e} {a.full:>17.3e}"
+    )
 
 
 def run_es(seeds: int, ns=(10_000, 100_000)) -> list[str]:
     fails: list[str] = []
-    print(f"alpha={ALPHA!r} gamma={GAMMA!r} bound alpha*mean|x| (= alpha*|ES| for a one-signed tail)")
+    print(
+        f"alpha={ALPHA!r} gamma={GAMMA!r} bound alpha*mean|x| (= alpha*|ES| for a one-signed tail)"
+    )
     for n in ns:
         print(f"\nN = {n}, seeds = {seeds}")
         print(HDR)
@@ -408,8 +421,10 @@ def run_es(seeds: int, ns=(10_000, 100_000)) -> list[str]:
 
 def run_decay(seeds: int, lam: float = 0.999, ns=(10_000, 100_000)) -> list[str]:
     fails: list[str] = []
-    print(f"lambda = {lam}; weights lam^(N-1-t) on the row clock; exact = weighted tail mean, "
-          f"same fractional mass q*sum(w)")
+    print(
+        f"lambda = {lam}; weights lam^(N-1-t) on the row clock; exact = weighted tail mean, "
+        f"same fractional mass q*sum(w)"
+    )
     for n in ns:
         print(f"\nN = {n}, seeds = {seeds}, n_eff = {1 / (1 - lam):.0f}")
         print(HDR)
@@ -422,7 +437,9 @@ def run_decay(seeds: int, lam: float = 0.999, ns=(10_000, 100_000)) -> list[str]
                 print(row(dist, name, a))
                 es_check(fails, f"decay N={n}", dist, name, a)
     # the batch weights equal the streaming recursion c <- lam*c + onehot(bucket), up to rounding
-    print("\nstreaming recursion (every bucket times lambda per row, then +1) vs the batch weights,")
+    print(
+        "\nstreaming recursion (every bucket times lambda per row, then +1) vs the batch weights,"
+    )
     print("N = 10000, seed 0: largest |difference| / the bucket's weight")
     n = 10_000
     w = lam ** np.arange(n - 1, -1, -1, dtype=np.float64)
@@ -447,8 +464,10 @@ def inv_of(u: np.ndarray, k: np.ndarray) -> np.ndarray:
 
 def run_window(seeds: int, n: int = 100_000, wsize: int = 5000, step: int = 5000) -> list[str]:
     fails: list[str] = []
-    print(f"window W = {wsize}, N = {n}, query every {step} rows from the first full window; "
-          f"counts removed exactly (integer subtract); seeds = {seeds}")
+    print(
+        f"window W = {wsize}, N = {n}, query every {step} rows from the first full window; "
+        f"counts removed exactly (integer subtract); seeds = {seeds}"
+    )
     print(HDR + f" {'max live':>9}")
     for dist in DISTRIBUTIONS:
         aggs = {nm: Agg() for nm, _, _ in LEVELS}
@@ -483,14 +502,20 @@ def run_window(seeds: int, n: int = 100_000, wsize: int = 5000, step: int = 5000
                         es_s, var_s, full_s, _ = tail_from(rp[live], c[live], m)
                         es_e, var_e, mabs = exact_tail(y, None, m)
                         sg = 1.0 if side == "lower" else -1.0
-                        aggs[nm].add((sg * es_s, sg * var_s, sg * full_s), (sg * es_e, sg * var_e, mabs))
+                        aggs[nm].add(
+                            (sg * es_s, sg * var_s, sg * full_s), (sg * es_e, sg * var_e, mabs)
+                        )
         for nm, _, _ in LEVELS:
             print(row(dist, nm, aggs[nm]) + f" {live_max:>9}")
             es_check(fails, "window", dist, nm, aggs[nm])
-        print(f"  {dist}: windowed counts equal the bincount of the window at "
-              f"{exact_counts} of {checks} checks")
+        print(
+            f"  {dist}: windowed counts equal the bincount of the window at "
+            f"{exact_counts} of {checks} checks"
+        )
         if exact_counts != checks:  # tolerance (c): exact
-            fails.append(f"window {dist}: counts differ at {checks - exact_counts} of {checks} checks")
+            fails.append(
+                f"window {dist}: counts differ at {checks - exact_counts} of {checks} checks"
+            )
     return fails
 
 
@@ -509,11 +534,16 @@ def run_buckets(seeds: int, ns=(10_000, 100_000, 1_000_000), oracle_seeds: int =
     from ddsketch.store import DenseStore
 
     fails: list[str] = []
-    print("live buckets (positive + negative + zero) of one signed sketch; bytes = live*16 + "
-          f"{HEADER_BYTES} header")
+    print(
+        "live buckets (positive + negative + zero) of one signed sketch; bytes = live*16 + "
+        f"{HEADER_BYTES} header"
+    )
     for n in ns:
         print(f"\nN = {n}")
-        print(f"{'dist':<10} {'min':>5} {'mean':>7} {'max':>5} {'max bytes':>10} {'tail-0.99 buckets (mean)':>26}")
+        print(
+            f"{'dist':<10} {'min':>5} {'mean':>7} {'max':>5} {'max bytes':>10} "
+            f"{'tail-0.99 buckets (mean)':>26}"
+        )
         for dist in DISTRIBUTIONS:
             nb, tb = [], []
             for seed in range(seeds if n < 1_000_000 else 2):
@@ -523,10 +553,15 @@ def run_buckets(seeds: int, ns=(10_000, 100_000, 1_000_000), oracle_seeds: int =
                 # buckets that hold the top 1% of the mass
                 cum = np.cumsum(c[::-1])
                 tb.append(int(np.searchsorted(cum, 0.01 * n)) + 1)
-            print(f"{dist:<10} {min(nb):>5} {np.mean(nb):>7.1f} {max(nb):>5} "
-                  f"{max(nb) * BUCKET_BYTES + HEADER_BYTES:>10} {np.mean(tb):>26.1f}")
+            print(
+                f"{dist:<10} {min(nb):>5} {np.mean(nb):>7.1f} {max(nb):>5} "
+                f"{max(nb) * BUCKET_BYTES + HEADER_BYTES:>10} {np.mean(tb):>26.1f}"
+            )
     on = 100_000
-    print(f"\nddsketch {version('ddsketch')} oracle (LogarithmicMapping(alpha), unbounded DenseStore), N = {on}:")
+    print(
+        f"\nddsketch {version('ddsketch')} oracle (LogarithmicMapping(alpha), unbounded store), "
+        f"N = {on}:"
+    )
     print("  bucket counts compared with this module's, key by key; VaR within alpha of exact")
     mism = tot = 0
     worst = 0.0
@@ -538,7 +573,7 @@ def run_buckets(seeds: int, ns=(10_000, 100_000, 1_000_000), oracle_seeds: int =
                 s.add(v)
             mine = {}
             u, c = sketch_of(x)
-            for k, cc in zip(u.tolist(), c.tolist()):
+            for k, cc in zip(u.tolist(), c.tolist(), strict=True):
                 mine[(1 if k > 0 else -1, abs(k) - OFFSET)] = int(cc)
             theirs = oracle_bins(s)
             tot += len(mine)
@@ -546,8 +581,10 @@ def run_buckets(seeds: int, ns=(10_000, 100_000, 1_000_000), oracle_seeds: int =
             for p in (0.01, 0.05, 0.5, 0.95, 0.99):
                 ex = float(np.quantile(x, p, method="inverted_cdf"))
                 worst = max(worst, abs(s.get_quantile_value(p) - ex) / abs(ex))
-    print(f"  buckets compared {tot}, mismatching {mism}; largest ddsketch quantile rel. error "
-          f"vs inverted_cdf {worst:.3e} (alpha {ALPHA:.3e})")
+    print(
+        f"  buckets compared {tot}, mismatching {mism}; largest ddsketch quantile rel. error "
+        f"vs inverted_cdf {worst:.3e} (alpha {ALPHA:.3e})"
+    )
     if mism:
         fails.append(f"buckets: {mism} of {tot} bucket counts differ from ddsketch")
     if worst > ALPHA * (1 + 1e-9):
@@ -561,8 +598,11 @@ def run_tails(seeds: int, only: str | None, quick: bool) -> list[str]:
         "es": lambda: run_es(seeds, (10_000,) if quick else (10_000, 100_000)),
         "decay": lambda: run_decay(seeds, ns=(10_000,) if quick else (10_000, 100_000)),
         "window": lambda: run_window(seeds, n=20_000 if quick else 100_000),
-        "buckets": lambda: run_buckets(seeds, ns=(10_000, 100_000) if quick else (10_000, 100_000, 1_000_000),
-                                       oracle_seeds=1 if quick else 5),
+        "buckets": lambda: run_buckets(
+            seeds,
+            ns=(10_000, 100_000) if quick else (10_000, 100_000, 1_000_000),
+            oracle_seeds=1 if quick else 5,
+        ),
     }
     for name, fn in parts.items():
         if only in (None, name):
@@ -619,7 +659,7 @@ class MergingDigest:
         cum = 0.0
         qlim = self._q(self._k(0.0) + 1.0)
         cm, cw = m[0], w[0]
-        for mi, wi in zip(m[1:], w[1:]):
+        for mi, wi in zip(m[1:], w[1:], strict=True):
             if (cum + cw + wi) / total <= qlim:
                 cw += wi
                 cm += (mi - cm) * wi / cw
@@ -643,7 +683,11 @@ class MergingDigest:
             return float(self.lo + (m[0] - self.lo) * t / (w[0] / 2.0)) if w[0] > 1 else float(m[0])
         if t > total - w[-1] / 2.0:
             r = total - t
-            return float(self.hi - (self.hi - m[-1]) * r / (w[-1] / 2.0)) if w[-1] > 1 else float(m[-1])
+            return (
+                float(self.hi - (self.hi - m[-1]) * r / (w[-1] / 2.0))
+                if w[-1] > 1
+                else float(m[-1])
+            )
         centers = np.cumsum(w) - w / 2.0
         i = int(np.searchsorted(centers, t, side="right")) - 1
         f = (t - centers[i]) / (centers[i + 1] - centers[i])
@@ -665,7 +709,7 @@ def rank_of(sorted_x: np.ndarray, q: float) -> float:
 
 
 def k1_span(weights, delta: float) -> float:
-    """Largest k1-span (delta/(2 pi) asin(2q-1)) of a centroid list; the paper's size rule is span <= 1."""
+    """Largest k1-span (delta/(2 pi) asin(2q-1)) of a centroid list; the size rule is span <= 1."""
     w = np.asarray(weights, dtype=np.float64)
     c = np.concatenate([[0.0], np.cumsum(w)]) / w.sum()
     k = delta / (2.0 * math.pi) * np.arcsin(np.clip(2.0 * c - 1.0, -1.0, 1.0))
@@ -695,25 +739,35 @@ def td_unit(job):
         }
         ptc, crc = pt.get_centroids(), cr.centroids()
         cent = {"mine": len(md.means), "pytdigest": len(ptc), "crick": len(crc)}
-        span = {"mine": k1_span(md.weights, c), "pytdigest": k1_span(ptc[:, 1], c),
-                "crick": k1_span(crc["weight"], c)}
+        span = {
+            "mine": k1_span(md.weights, c),
+            "pytdigest": k1_span(ptc[:, 1], c),
+            "crick": k1_span(crc["weight"], c),
+        }
         if use_tdigest:  # the pure-Python oracle takes 3 to 6 s a stream
             td = tdigest.TDigest(delta=1.0 / c)
             td.batch_update(x)
             qs["tdigest"] = [td.percentile(100 * p) for p in PS]
             cent["tdigest"] = len(td)
             span["tdigest"] = k1_span([d["c"] for d in td.centroids_to_list()], c)
-        out[c] = {"rank": {im: [rank_of(sx, q) for q in v] for im, v in qs.items()},
-                  "cent": cent, "span": span}
+        out[c] = {
+            "rank": {im: [rank_of(sx, q) for q in v] for im, v in qs.items()},
+            "cent": cent,
+            "span": span,
+        }
     return dist, seed, out
 
 
 def run_tdigest(seeds: int, td_seeds: int, n: int = 100_000, workers: int = 4) -> list[str]:
-    print(f"rank error |F(q_hat) - p| with F the empirical CDF of the stream; N = {n}, seeds = {seeds}, "
-          f"tdigest on the first {td_seeds} seeds, workers = {workers}")
-    print("  mine = Dunning-Ertl merging digest, k1, buffer 8 delta (this module); "
-          f"pytdigest {version('pytdigest')}; crick {version('crick')}; tdigest {version('tdigest')} "
-          "with delta = 1/compression, K = 25 (an older, tree-based algorithm)")
+    print(
+        f"rank error |F(q_hat) - p|, F the empirical CDF of the stream; N = {n}, seeds = {seeds}, "
+        f"tdigest on the first {td_seeds} seeds, workers = {workers}"
+    )
+    print(
+        "  mine = Dunning-Ertl merging digest, k1, buffer 8 delta (this module); "
+        f"pytdigest {version('pytdigest')}; crick {version('crick')}; tdigest {version('tdigest')} "
+        "with delta = 1/compression, K = 25 (an older, tree-based algorithm)"
+    )
     jobs = [(d, s, n, s < td_seeds) for s in range(seeds) for d in DISTRIBUTIONS]
     t0 = time.time()
     if workers > 1:
@@ -738,31 +792,43 @@ def run_tdigest(seeds: int, td_seeds: int, n: int = 100_000, workers: int = 4) -
             for im, ranks in o["rank"].items():
                 cent[im].append(o["cent"][im])
                 span[im] = max(span[im], o["span"][im])
-                for p, r in zip(PS, ranks):
+                for p, r in zip(PS, ranks, strict=True):
                     e = abs(r - p)
                     err[im][p] = max(err[im][p], e)
                     perdist[im][dist] = max(perdist[im][dist], e)
             for a, b in PAIRS:
                 if a in o["rank"] and b in o["rank"]:
-                    d = max(abs(x - y) for x, y in zip(o["rank"][a], o["rank"][b]))
+                    d = max(abs(x - y) for x, y in zip(o["rank"][a], o["rank"][b], strict=True))
                     pair[(a, b)] = max(pair[(a, b)], d)
         print(f"\ncompression {c}: largest rank error over 4 distributions x seeds, by p")
-        print(f"{'impl':<10} " + " ".join(f"p={p:<6}" for p in PS)
-              + f" {'max':>9} {'centroids min/mean/max':>24} {'bytes (max)':>12} {'max k1-span':>12}")
+        print(
+            f"{'impl':<10} "
+            + " ".join(f"p={p:<6}" for p in PS)
+            + f" {'max':>9} {'centroids min/mean/max':>24} {'bytes (max)':>12} {'max k1-span':>12}"
+        )
         for im in IMPLS:
             mx = max(err[im].values())
             ce = cent[im]
-            print(f"{im:<10} " + " ".join(f"{err[im][p]:<8.2e}" for p in PS)
-                  + f" {mx:>9.2e} {min(ce):>7}/{np.mean(ce):>7.1f}/{max(ce):>7} {16 * max(ce):>12}"
-                  f" {span[im]:>12.2f}")
-        print("  largest rank difference between two implementations' quantile (same stream and p):")
+            print(
+                f"{im:<10} "
+                + " ".join(f"{err[im][p]:<8.2e}" for p in PS)
+                + f" {mx:>9.2e} {min(ce):>7}/{np.mean(ce):>7.1f}/{max(ce):>7} {16 * max(ce):>12}"
+                f" {span[im]:>12.2f}"
+            )
+        print(
+            "  largest rank difference between two implementations' quantile (same stream and p):"
+        )
         for (a, b), v in pair.items():
             print(f"    {a:<9} vs {b:<9} {v:.2e}")
-        print("  per distribution (largest over p):",
-              {d: {im: f"{perdist[im][d]:.1e}" for im in IMPLS} for d in DISTRIBUTIONS})
+        print(
+            "  per distribution (largest over p):",
+            {d: {im: f"{perdist[im][d]:.1e}" for im in IMPLS} for d in DISTRIBUTIONS},
+        )
         mx = max(err["mine"].values())
         if mx > TD_TOL[c]:
-            fails.append(f"tdigest compression {c}: rank error {mx:.2e} > tolerance {TD_TOL[c]:.2e}")
+            fails.append(
+                f"tdigest compression {c}: rank error {mx:.2e} > tolerance {TD_TOL[c]:.2e}"
+            )
     return fails
 
 
@@ -772,12 +838,25 @@ def run_tdigest(seeds: int, td_seeds: int, n: int = 100_000, workers: int = 4) -
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("what", choices=["psquared", "tails", "tdigest", "all", "oracles", "state"])
-    ap.add_argument("--quick", action="store_true", help="small streams, few seeds; checks the tolerances")
+    ap.add_argument(
+        "--quick", action="store_true", help="small streams, few seeds; checks the tolerances"
+    )
     ap.add_argument("--n", type=int, default=None, help="psquared stream length (default 1000)")
-    ap.add_argument("--seeds", type=int, default=None,
-                    help="seeds (psquared 50, tails 20, tdigest 20; quick 3, 2, 1)")
-    ap.add_argument("--td-seeds", type=int, default=None, help="seeds through the pure-Python tdigest (20; quick 1)")
-    ap.add_argument("--trajectory", action="store_true", help="psquared: compare after every update")
+    ap.add_argument(
+        "--seeds",
+        type=int,
+        default=None,
+        help="seeds (psquared 50, tails 20, tdigest 20; quick 3, 2, 1)",
+    )
+    ap.add_argument(
+        "--td-seeds",
+        type=int,
+        default=None,
+        help="seeds through the pure-Python tdigest (20; quick 1)",
+    )
+    ap.add_argument(
+        "--trajectory", action="store_true", help="psquared: compare after every update"
+    )
     ap.add_argument("--only", choices=["es", "decay", "window", "buckets"], default=None)
     ap.add_argument("--workers", type=int, default=None, help="tdigest processes (4)")
     a = ap.parse_args()
@@ -798,9 +877,12 @@ def main() -> int:
         fails += run_tails(a.seeds or (2 if q else 20), a.only, q)
     if a.what in ("tdigest", "all"):
         print("\n=== tdigest ===")
-        fails += run_tdigest(a.seeds or (1 if q else 20),
-                             a.td_seeds if a.td_seeds is not None else (1 if q else 20),
-                             n=100_000, workers=a.workers or 4)
+        fails += run_tdigest(
+            a.seeds or (1 if q else 20),
+            a.td_seeds if a.td_seeds is not None else (1 if q else 20),
+            n=100_000,
+            workers=a.workers or 4,
+        )
     print(f"\n{'FAIL' if fails else 'PASS'} ({time.time() - t0:.0f} s)")
     for f in fails:
         print("  FAILED:", f)
