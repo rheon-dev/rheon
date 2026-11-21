@@ -8,7 +8,8 @@ targeting and a 500-row batch start pass it. Part 4: ARMA(1,1) against
 statsmodels over the same seeds, with and without decay (§12). Part 5:
 ETS(A,A,N) against statsmodels' `ETSModel` (§13). Part 6: DCC(1,1) with
 GARCH(1,1) margins against a batch fit written from the definition (§14).
-Part 7: the proposed tolerances (§15). The request named the deliverable
+Part 7: the proposed tolerances (§15). Request A10, part 1: GARCH(1,1) variance
+targeting against a batch variance-targeting fit run by arch (§16). The request named the deliverable
 `STUDY-485-ESTIMATORS.md`; it is this record, kept under the name it was
 committed with (`ORACLE-STUDY-485.md`). Nothing in the package or the Rust crates was changed. The scan this
 builds on is `vm-tools/research/485-TIME-SERIES-SCAN.md` on branch
@@ -695,3 +696,75 @@ need the grid.
    be measured again.
 6. Not studied: uneven clocks, zero-weight rows, the grid forms, decay for
    GARCH, ETS and DCC, and anything past 10,000 rows.
+
+## 16. Request A10, part 1: GARCH(1,1) with variance targeting against a batch targeting fit
+
+`scripts/study_485/vt_garch.py` (one file: the oracle, the grid, its
+summary and `--check`). G1 (`ω = 0.02, α = 0.08, β = 0.90`), seeds 485000
+to 485049, 2,000 and 10,000 rows: 100 cases, about 2.5 minutes in one
+process, resumable as part 2's grid. arch converged on all 100.
+
+**arch has no `VarianceTargetingGARCH`.** The request named it; the
+installed arch 9.0.0 has no variance-targeting process or switch, and
+neither do the released wheels of 4.8.1, 4.13, 4.15, 4.17, 4.19, 5.6.0,
+6.3.0, 7.2.0 and 8.0.0 (their `univariate/volatility.py` searched for the
+class and for "targeting"). So the oracle is built from arch's pieces:
+
+| setting | value |
+|---|---|
+| estimator | `v_T = mean(r²)` over the whole fit sample; `ω = v_T(1 − α − β)`; `(α, β)` maximize the Gaussian likelihood with `ω` so tied |
+| process | arch's `GARCH(p=1, o=0, q=1)` subclassed with two parameters `(α, β)`: `compute_variance` builds `(ω, α, β)` as above and calls arch's compiled `garch_recursion`; bounds `[0, 1]` each, constraint `α + β ≤ 1`; starting values the best of arch's own `(α, persistence)` grid by the Gaussian likelihood |
+| model and fit | `arch_model(r, mean="Zero", dist="normal", rescale=False)` with that process; `fit(disp="off", cov_type="robust")`: arch's SLSQP, backcast (0.94-weighted mean of the first 75 `r²`) and variance bounds |
+| standard errors | **arch's own** robust (Bollerslev-Wooldridge) covariance of `(α, β)`. They hold `v_T` as known, so they leave out `v_T`'s own sampling error, which the targeted estimator's asymptotic variance carries (Francq, Horváth and Zakoïan 2011). `ω` has no arch SE; its column uses the delta method on arch's covariance, `v_T` fixed |
+| checks of the oracle | its variance path equals `garch.filter_variance` at `(v_T(1 − α − β), α, β)` to 0 relative; arch's conditional volatility equals that path to 2.2e-16 on every case; an independent fit (`scipy.optimize.minimize`, L-BFGS-B on persistence and α's share, filter by `scipy.signal.lfilter`, started at `(0.05, 0.90)`) lands within 0.001 SE of arch's on every case, its log-likelihood within 5e-7 |
+
+**The online estimator** is part 3's 1a, unchanged
+(`OnlineGarch(target="running")`): Gauss-Newton steps on `(α, β)` only,
+`ω = v̄_t(1 − α − β)` after every step, `v̄_t` the running mean of `r²` over
+the rows read so far (the backcast stands in until the 75 buffered rows are
+replayed). The full-sample `v_T` is not a stream estimator: it needs the
+last row before the first prediction. **The online-to-batch difference in
+`ω`:** at the last row `v̄_T` and arch's `v_T` are the same mean of the same
+rows, apart from rounding (incremental mean against `np.mean`: at most
+8.0e-15 relative), so `ω_online − ω_batch = −v_T(Δα + Δβ)`, measured to
+1.9e-16 on every case; along the stream the filter and the steps used
+`v̄_t`, which at half the rows is 5.6% from `v_T` at the median and 21% at
+worst (10,000 rows; 13% and 50% at 2,000). That is the cost of one pass,
+and it reaches the end only through `(α, β)`.
+
+Absolute gaps over the fifty seeds, in arch's SEs (`ω`: delta-method SE).
+
+| quantity | 2,000 rows: median | p90 | max | 10,000 rows: median | p90 | max |
+|---|---|---|---|---|---|---|
+| `α` gap in SE | 0.54 | 1.90 | 3.09 | 0.36 | 1.15 | 2.50 |
+| `β` gap in SE | 0.66 | 1.65 | 3.24 | 0.35 | 0.84 | 2.70 |
+| `ω` gap in delta-method SE | 0.58 | 2.14 | 6.08 | 0.62 | 1.70 | 3.77 |
+| `ω` gap, units | 0.0038 | 0.014 | 0.042 | 0.0018 | 0.0047 | 0.0099 |
+| log-likelihood gap per row | 3.5e-4 | 2.1e-3 | 5.3e-3 | 4.9e-5 | 2.5e-4 | 1.2e-3 |
+| median variance-path gap, second half | 3.2% | 8.2% | 13.3% | 1.3% | 3.2% | 4.1% |
+
+| count over the fifty seeds | 2,000 rows | 10,000 rows |
+|---|---|---|
+| `α` and `β` within 2 SE (the criterion) | 46 | **47** |
+| `α`, `β` and `ω` within 2 SE | 40 | 46 |
+| `α` or `β` over 3 SE | 2 | 0 |
+| variance-path gap over 5% | 11 | 0 |
+| the online parameters out-score the batch fit | 0 | 0 |
+
+Worst seeds at 10,000 rows: 485027 (`α` −1.76, `β` +2.70 SE), 485035
+(−2.49, +1.68), 485000 (−2.45, +1.95); in units, `α` at most 0.014 and `β`
+0.018 from the batch fit.
+
+**Verdict: passes**, 47 of 50 at 10,000 rows with `α` and `β` within 2 of
+arch's SEs: two seeds of headroom, against 45 of 50 (none) when the same
+online runs were held to arch's unrestricted fit (§11, 1a). Against its own
+estimand the gap is smaller: the targeted batch fit, not the unrestricted
+one, is what the online form converges to. One truth, Gaussian noise; the
+wider grid (persistence levels, Student-t, 100k rows) is request A10's
+later parts.
+
+**Not verified here:** the targeted estimator's full standard errors (with
+`v_T`'s sampling error; Francq, Horváth and Zakoïan's asymptotic variance,
+which needs a long-run variance of `r²`); a library's own targeting
+process, since none exists; arch's SLSQP is checked only against one other
+optimizer on the same likelihood.
