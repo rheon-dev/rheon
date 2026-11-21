@@ -106,6 +106,10 @@ class Spec:
         return self.p + self.q + self.P + self.Q
 
     @property
+    def label(self) -> str:
+        return f"SARIMA({self.p},{self.d},{self.q})({self.P},{self.D},{self.Q},{self.s})"
+
+    @property
     def names(self) -> list[str]:
         out = []
         out += ["ar.L1"] * self.p
@@ -758,10 +762,7 @@ def summarise_sarima(rows: list[dict], spec: Spec, pre: str = "") -> dict:
 
 
 def print_sarima(summ: dict, spec: Spec) -> None:
-    print(
-        f"== {spec.name}: SARIMA({spec.p},{spec.d},{spec.q})({spec.P},{spec.D},{spec.Q},{spec.s})"
-        f" [{summ.get('variant', 'plain.')[:-1]}]"
-    )
+    print(f"== {spec.name}: {spec.label} [{summ.get('variant', 'plain.')[:-1]}]")
     if not summ["cases"]:
         print("   no cases yet")
         return
@@ -996,6 +997,603 @@ def summarise1(res: dict) -> None:
         print_sarima(summ, SPECS[summ["spec"]])
 
 
+# --------------------------------------------------------------------------
+# 488: seasonal Holt-Winters ETS, additive error (Hyndman et al. 2008, Table 2.2)
+
+EPS = 1e-4  # statsmodels' margin on alpha, beta/alpha and gamma/(1 - alpha)
+PHI_BOUNDS = (0.8, 0.98)  # statsmodels' default bounds on the damping
+ETS_L0, ETS_B0 = 10.0, 0.1
+
+
+def ets_initial_seasonal(m: int) -> np.ndarray:
+    """The known initial seasonal states ``s_{-m}, ..., s_{-1}`` in time order:
+    a sine of amplitude 2 over the season (study 485's E3), summing to zero."""
+    j = np.arange(1, m + 1)
+    return 2.0 * np.sin(2.0 * math.pi * j / m)
+
+
+@dataclass(frozen=True)
+class EtsSpec:
+    """ETS(A,A,A) or ETS(A,Ad,A) with season ``m`` and its truth
+    ``(alpha, beta, gamma[, phi], sigma2)`` in ``ETSModel``'s parameterization
+    (``beta`` moves the trend by ``beta e``, not the classical ``beta* = beta/alpha``;
+    ``gamma`` moves the season by ``gamma e``)."""
+
+    name: str
+    damped: bool
+    m: int
+    truth: tuple[float, ...]
+    seasonal: str = "add"
+
+    @property
+    def n_params(self) -> int:
+        return 4 if self.damped else 3
+
+    @property
+    def label(self) -> str:
+        t = "Ad" if self.damped else "A"
+        s = "M" if self.seasonal == "mul" else "A"
+        return f"ETS(A,{t},{s}), m = {self.m}"
+
+    @property
+    def names(self) -> list[str]:
+        out = ["smoothing_level", "smoothing_trend", "smoothing_seasonal"]
+        if self.damped:
+            out.append("damping_trend")
+        return out + ["sigma2"]
+
+
+def ets_project(spec: EtsSpec, th: np.ndarray) -> np.ndarray:
+    """statsmodels' admissible box: ``alpha`` in ``[eps, 1 - eps]``,
+    ``beta/alpha`` and ``gamma/(1 - alpha)`` in ``[eps, 1 - eps]``, ``phi`` in
+    ``[0.8, 0.98]``."""
+    out = np.array(th, dtype=float)
+    a = min(max(out[0], EPS), 1.0 - EPS)
+    out[0] = a
+    out[1] = min(max(out[1], EPS * a), (1.0 - EPS) * a)
+    out[2] = min(max(out[2], EPS * (1.0 - a)), (1.0 - EPS) * (1.0 - a))
+    if spec.damped:
+        out[3] = min(max(out[3], PHI_BOUNDS[0]), PHI_BOUNDS[1])
+    return out
+
+
+def ets_state_floats(spec: EtsSpec) -> dict[str, int]:
+    """The estimator's state in floats: level, trend and the season ring,
+    their sensitivities to the ``k`` parameters, ``theta``, ``R`` (distinct),
+    ``s2``, ``W``, the row count and the ring position."""
+    k, m = spec.n_params, spec.m
+    return {
+        "level, trend": 2,
+        "season ring": m,
+        "sensitivities of level and trend": 2 * k,
+        "sensitivities of the season ring": m * k,
+        "theta": k,
+        "R (distinct)": k * (k + 1) // 2,
+        "scalars (s2, W, t, position)": 4,
+    }
+
+
+class OnlineEts:
+    """The recursive prediction-error estimator of ``(alpha, beta, gamma[,
+    phi])`` with the initial states known. ``update(y)`` returns row ``t``'s
+    prediction, made before ``y`` is read.
+
+    Additive seasonality::
+
+        yhat_t = l + phi b + s_{t-m},          e_t = y_t - yhat_t
+        l <- l + phi b + alpha e,   b <- phi b + beta e,   s_t = s_{t-m} + gamma e
+
+    ``phi = 1`` without damping. The sensitivities ``D. = d(.)/d theta`` at the
+    current parameters, with ``psi_t = d yhat_t / d theta = Dl + phi Db
+    + b u_phi + Ds_{t-m}`` (``u_x`` the unit vector of parameter ``x``)::
+
+        Dl <- Dl + phi Db + b u_phi + e u_alpha - alpha psi
+        Db <- phi Db + b u_phi + e u_beta - beta psi
+        Ds_t = Ds_{t-m} + e u_gamma - gamma psi
+
+    and one Gauss-Newton step per row, gain ``1/W``, projected onto
+    statsmodels' box (``ets_project``). The states move at the parameters held
+    before the step. Multiplicative seasonality (part 4) is in ``_row``.
+    """
+
+    def __init__(self, spec: EtsSpec, warm: int | None = None, batch_start: int = 0) -> None:
+        self.spec = spec
+        k, m = spec.n_params, spec.m
+        self.warm = warm if warm is not None else max(50, 2 * m)
+        self.batch_start = batch_start
+        self.started = not batch_start
+        self.buffer: list[float] = []
+        self.batch_fit = None
+        self.reasons: dict[int, str] = {}
+        self.l, self.b = ETS_L0, ETS_B0
+        self.s = ets_initial_seasonal_for(spec)
+        self.Dl = np.zeros(k)
+        self.Db = np.zeros(k)
+        self.Ds = np.zeros((m, k))
+        self.pos = 0
+        start = [0.1, 0.01, 0.01] + ([0.98] if spec.damped else [])
+        self.theta = ets_project(spec, np.array(start))  # statsmodels' default start
+        self.R = np.zeros((k, k))
+        self.s2 = 0.0
+        self.W = 0.0
+        self.t = 0
+
+    def _psi(self) -> np.ndarray:
+        sp = self.spec
+        phi = self.theta[3] if sp.damped else 1.0
+        if sp.seasonal == "mul":
+            sv = self.s[self.pos]
+            base = self.l + phi * self.b
+            psi = (self.Dl + phi * self.Db) * sv + base * self.Ds[self.pos]
+            if sp.damped:
+                psi[3] += self.b * sv
+            return psi
+        psi = self.Dl + phi * self.Db + self.Ds[self.pos]
+        if sp.damped:
+            psi[3] += self.b
+        return psi
+
+    def predict(self) -> float:
+        sp = self.spec
+        phi = self.theta[3] if sp.damped else 1.0
+        if sp.seasonal == "mul":
+            return (self.l + phi * self.b) * self.s[self.pos]
+        return self.l + phi * self.b + self.s[self.pos]
+
+    def update(self, y: float) -> float:
+        row = self.t
+        if not self.started:
+            self.t += 1
+            self.buffer.append(y)
+            self.reasons[row] = (
+                f"buffering {self.batch_start} rows for the batch start (fitted by "
+                "the core's optimizer); no parameters yet"
+            )
+            if len(self.buffer) == self.batch_start:
+                self._start()
+            return math.nan
+        pred = self.predict()
+        self._row(y, step=True)
+        return pred
+
+    def _start(self) -> None:
+        """Remedy (a) of study 485: fit the buffer by the core-held optimizer,
+        then replay it from the known initial states at the fitted parameters,
+        held, building the states, their sensitivities, ``R`` and ``s2``."""
+        rows = np.asarray(self.buffer)
+        self.batch_fit = ets_css_fit(self.spec, rows)
+        self.theta = ets_project(self.spec, self.batch_fit.theta)
+        for v in rows:
+            self._row(float(v), step=False, replay=True)
+        self.buffer = []
+        self.started = True
+
+    def _row(self, y: float, step: bool, replay: bool = False) -> None:
+        sp = self.spec
+        k = sp.n_params
+        th = self.theta
+        a, bt, g = th[0], th[1], th[2]
+        phi = th[3] if sp.damped else 1.0
+        yhat = self.predict()
+        psi = self._psi()
+        e = y - yhat
+        if not replay:
+            self.t += 1
+        if True:  # R and s2 accumulate on every row, the warm rows included
+            self.W += 1.0
+            w = 1.0 / self.W
+            self.R += w * (np.outer(psi, psi) - self.R)
+            self.s2 += w * (e * e - self.s2)
+        sv = self.s[self.pos]
+        Dsv = self.Ds[self.pos]
+        u = np.eye(k)
+        lb = self.l + phi * self.b
+        Dlb = self.Dl + phi * self.Db
+        if sp.damped:
+            Dlb = Dlb + self.b * u[3]
+        if sp.seasonal == "mul":
+            # e = y - (l + phi b) s;  l <- lb + alpha e / s;  b <- phi b + beta e / s;
+            # s_t = s_{t-m} + gamma e / (l + phi b)   (Hyndman et al. 2008, Table 2.2)
+            de = -psi
+            nl = lb + a * e / sv
+            Dnl = Dlb + (e / sv) * u[0] + a * (de / sv - e * Dsv / (sv * sv))
+            nb = phi * self.b + bt * e / sv
+            Dnb = phi * self.Db + (e / sv) * u[1] + bt * (de / sv - e * Dsv / (sv * sv))
+            if sp.damped:
+                Dnb = Dnb + self.b * u[3]
+            ns = sv + g * e / lb
+            Dns = Dsv + (e / lb) * u[2] + g * (de / lb - e * Dlb / (lb * lb))
+        else:
+            nl = lb + a * e
+            Dnl = Dlb + e * u[0] - a * psi
+            nb = phi * self.b + bt * e
+            Dnb = phi * self.Db + e * u[1] - bt * psi
+            if sp.damped:
+                Dnb = Dnb + self.b * u[3]
+            ns = sv + g * e
+            Dns = Dsv + e * u[2] - g * psi
+        self.l, self.b = nl, nb
+        self.Dl, self.Db = Dnl, Dnb
+        self.s[self.pos] = ns
+        self.Ds[self.pos] = Dns
+        self.pos = (self.pos + 1) % sp.m
+        if step and not self.batch_start and self.t <= self.warm:
+            return
+        if step:
+            stepv = (1.0 / self.W) * np.linalg.solve(self.R, psi * e)
+            self.theta = ets_project(sp, self.theta + stepv)
+
+    @property
+    def params(self) -> np.ndarray:
+        return np.concatenate([self.theta, [self.s2]])
+
+    def state_bytes(self) -> int:
+        return 8 * sum(ets_state_floats(self.spec).values())
+
+    def allocated_floats(self) -> int:
+        k = self.spec.n_params
+        return (
+            2 + self.s.size + self.Dl.size + self.Db.size + self.Ds.size + k + k * (k + 1) // 2 + 4
+        )
+
+
+def ets_initial_seasonal_for(spec: EtsSpec) -> np.ndarray:
+    s = ets_initial_seasonal(spec.m)
+    if spec.seasonal == "mul":
+        return 1.0 + 0.2 * s / 2.0  # factors 0.8 to 1.2, mean 1
+    return s
+
+
+def ets_fixed(spec: EtsSpec, theta: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """One-step predictions at fixed parameters from the known initial states."""
+    est = OnlineEts(spec)
+    est.theta = np.array(theta, dtype=float)
+    out = np.empty(y.shape[0])
+    for t, v in enumerate(y):
+        out[t] = est.predict()
+        est._row(float(v), step=False)
+    return out
+
+
+def ets_objective(spec: EtsSpec, y: np.ndarray):  # noqa: ANN201
+    """``-1/2 sum e_t^2`` over ``y`` from the known initial states, gradient
+    ``sum psi_t e_t``, Gauss-Newton ``sum psi_t psi_t'``: statsmodels'
+    concentrated likelihood of the additive-error forms is monotone in it."""
+
+    def f(theta: np.ndarray, grad: bool):  # noqa: ANN202
+        est = OnlineEts(spec)
+        est.theta = np.array(theta, dtype=float)
+        k = spec.n_params
+        g = np.zeros(k)
+        H = np.zeros((k, k))
+        sse = 0.0
+        for v in y:
+            yhat = est.predict()
+            e = float(v) - yhat
+            sse += e * e
+            if grad:
+                psi = est._psi()
+                g += psi * e
+                H += np.outer(psi, psi)
+            est._row(float(v), step=False)
+            if spec.seasonal == "mul" and not (est.l + est.b > 0.0 and est.s.min() > 0.0):
+                return -math.inf, g, H
+        if not math.isfinite(sse):
+            return -math.inf, g, H
+        return -0.5 * sse, g, H
+
+    return f
+
+
+def ets_grid(spec: EtsSpec) -> list[tuple]:
+    import itertools
+
+    pts = []
+    for a, bs, gs in itertools.product((0.1, 0.3, 0.6), (0.05, 0.3), (0.05, 0.3)):
+        base = (a, a * bs, (1.0 - a) * gs)
+        if spec.damped:
+            pts += [base + (phi,) for phi in (0.85, 0.95)]
+        else:
+            pts.append(base)
+    return pts
+
+
+def ets_css_fit(spec: EtsSpec, y: np.ndarray):  # noqa: ANN201
+    """The batch start's fit by ``batch_core.maximize`` (study 485's core-held
+    projected Newton), the projection ``ets_project``, the start grid
+    ``alpha in {0.1, 0.3, 0.6}`` x ``beta/alpha in {0.05, 0.3}`` x
+    ``gamma/(1 - alpha) in {0.05, 0.3}`` (x ``phi in {0.85, 0.95}``)."""
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "study_485"))
+    import batch_core
+
+    return batch_core.maximize(
+        ets_objective(spec, y), lambda th: ets_project(spec, th), ets_grid(spec)
+    )
+
+
+def simulate_ets(spec: EtsSpec, n: int, seed: int) -> np.ndarray:
+    """``n`` rows from the model at its truth, from the known initial states;
+    Gaussian errors (scaled by the level for nothing: additive error)."""
+    rng = np.random.default_rng(seed)
+    sigma = math.sqrt(spec.truth[-1])
+    est = OnlineEts(spec)
+    est.theta = np.array(spec.truth[:-1], dtype=float)
+    y = np.empty(n)
+    eps = sigma * rng.standard_normal(n)
+    for t in range(n):
+        y[t] = est.predict() + eps[t]
+        est._row(float(y[t]), step=False)
+    return y
+
+
+def etsmodel_fit(spec: EtsSpec, y: np.ndarray):  # noqa: ANN201
+    """The oracle: ``ETSModel(y, error="add", trend="add", damped_trend=...,
+    seasonal=..., seasonal_periods=m, initialization_method="known",
+    initial_level=10, initial_trend=0.1, initial_seasonal=...)``,
+    ``fit(disp=False)`` with its defaults (L-BFGS-B on the concentrated
+    likelihood, ``beta/alpha`` and ``gamma/(1 - alpha)`` fitted in
+    ``[1e-4, 1 - 1e-4]``, ``phi`` in ``[0.8, 0.98]``, 1,000 iterations at
+    most; ``bse`` from the numerical Hessian, ``cov_type="approx"``)."""
+    import warnings
+
+    from statsmodels.tsa.exponential_smoothing.ets import ETSModel
+
+    model = ETSModel(
+        y,
+        error="add",
+        trend="add",
+        damped_trend=spec.damped,
+        seasonal=spec.seasonal,
+        seasonal_periods=spec.m,
+        initialization_method="known",
+        initial_level=ETS_L0,
+        initial_trend=ETS_B0,
+        initial_seasonal=ets_initial_seasonal_for(spec),
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res = model.fit(disp=False)
+    return model, res
+
+
+def ets_window(spec: EtsSpec) -> int:
+    return max(500, 3 * spec.m)
+
+
+def ets_case(spec: EtsSpec, seed: int, n: int = N_ROWS) -> dict:
+    """One series: the plain and the batch start against ``ETSModel``. The
+    gaps of ``alpha, beta, gamma, phi`` are in ``ETSModel``'s own SEs; for
+    ``sigma2`` (concentrated out by statsmodels) in the Gaussian closed form
+    ``mse sqrt(2/n)`` around ``ETSResults.mse``."""
+    y = simulate_ets(spec, n, seed)
+    runs = {}
+    for pre, kw in (("", {}), ("batch.", {"batch_start": ets_window(spec)})):
+        t0 = time.perf_counter()
+        est = OnlineEts(spec, **kw)
+        pred = np.array([est.update(float(v)) for v in y])
+        runs[pre] = (est, pred, time.perf_counter() - t0)
+    t0 = time.perf_counter()
+    model, res = etsmodel_fit(spec, y)
+    t_batch = time.perf_counter() - t0
+    b = np.concatenate([np.asarray(res.params, dtype=float), [float(res.mse)]])
+    se = np.concatenate([np.asarray(res.bse, dtype=float), [float(res.mse) * math.sqrt(2.0 / n)]])
+    fitted = np.asarray(res.fittedvalues, dtype=float)
+    mine = ets_fixed(spec, b[:-1], y)
+    diff = np.abs(mine - fitted)
+    # in ulps of the largest |prediction| (a per-row ulp is meaningless where
+    # the seasonal prediction crosses zero)
+    ulps = diff / np.spacing(np.abs(fitted).max())
+    half = slice(n // 2, n)
+    out = {
+        "spec": spec.name,
+        "seed": seed,
+        "n": n,
+        "sm_converged": bool(res.mle_retvals.get("converged", False)),
+        "sm_iterations": int(res.mle_retvals.get("iterations", -1)),
+        "llf_batch": float(res.llf),
+        "fixed_gap_abs_max": float(diff.max()),
+        "fixed_gap_rel_max": float((diff / np.abs(fitted)).max()),
+        "fixed_gap_ulps_max": float(ulps.max()),
+        "fixed_gap_ulps_median": float(np.median(ulps)),
+        "abs_fitted_max": float(np.abs(fitted).max()),
+        "t_batch_s": t_batch,
+    }
+    for i, nm in enumerate(spec.names):
+        out[f"{nm}_batch"] = float(b[i])
+        out[f"{nm}_se"] = float(se[i])
+    for pre, (est, pred, t_online) in runs.items():
+        o = est.params
+        yh = pred[half]
+        out[pre + "silent_rows"] = int(np.sum(np.isnan(pred)))
+        out[pre + "silent_explained"] = int(
+            sum(1 for i in range(n) if math.isnan(pred[i]) and i in est.reasons)
+        )
+        out[pre + "llf_online_params"] = float(model.loglike(o[:-1]))
+        out[pre + "pred_rms_gap_second_half"] = float(np.sqrt(np.mean((yh - fitted[half]) ** 2)))
+        out[pre + "online_mse_second_half"] = float(np.mean((y[half] - yh) ** 2))
+        out[pre + "batch_mse_second_half"] = float(np.mean((y[half] - fitted[half]) ** 2))
+        out[pre + "t_online_s"] = t_online
+        out[pre + "state_bytes"] = est.state_bytes()
+        if est.batch_fit is not None:
+            out[pre + "start_fit_stop"] = est.batch_fit.stop
+            out[pre + "start_fit_iterations"] = est.batch_fit.iterations
+        for i, nm in enumerate(spec.names):
+            out[f"{pre}{nm}_online"] = float(o[i])
+            out[f"{pre}{nm}_gap_se"] = float((o[i] - b[i]) / se[i])
+        out[pre + "max_abs_gap_se"] = float(max(abs(out[f"{pre}{nm}_gap_se"]) for nm in spec.names))
+    return out
+
+
+ETS_TRUTHS = {
+    # A: study 485's alpha and beta with gamma 0.1; outside the admissible
+    # (forecastable) region at m = 24 and 168 (``ets_radius``)
+    "": ((0.3, 0.1, 0.1), 0.9),
+    # B: a smaller beta and gamma, inside the region at m = 7 and 24 and within
+    # 1e-5 of its edge at m = 168
+    "_b": ((0.3, 0.01, 0.05), 0.9),
+}
+ETS_SPECS: dict[str, EtsSpec] = {}
+for _suf, (_tr, _phi) in ETS_TRUTHS.items():
+    for _m in (7, 24, 168):
+        ETS_SPECS[f"aaa_m{_m}{_suf}"] = EtsSpec(f"aaa_m{_m}{_suf}", False, _m, _tr + (1.0,))
+        ETS_SPECS[f"aada_m{_m}{_suf}"] = EtsSpec(f"aada_m{_m}{_suf}", True, _m, _tr + (_phi, 1.0))
+
+
+def ets_discount(theta: tuple, m: int) -> np.ndarray:
+    """The discount matrix ``D = F - g w'`` of the additive-seasonal
+    error-correction form (Hyndman et al. 2008, ch. 3 and 10), state
+    ``(l, b, s_{t-1}, ..., s_{t-m})``; ``theta = (alpha, beta, gamma, phi)``."""
+    a, b, g, phi = theta
+    n = 2 + m
+    F = np.zeros((n, n))
+    F[0, 0], F[0, 1], F[1, 1] = 1.0, phi, phi
+    F[2, n - 1] = 1.0
+    for i in range(3, n):
+        F[i, i - 1] = 1.0
+    w = np.zeros(n)
+    w[0], w[1], w[n - 1] = 1.0, phi, 1.0
+    gv = np.zeros(n)
+    gv[0], gv[1], gv[2] = a, b, g
+    return F - np.outer(gv, w)
+
+
+def ets_radius(theta: tuple, m: int) -> float:
+    """The largest eigenvalue modulus of ``D`` after the one exact unit root
+    (the unobservable direction: level up by c, every seasonal state down by
+    c). Below 1 the model is forecastable (the admissible region); above 1 the
+    filter's sensitivities to its parameters, and its response to a wrong
+    start, grow without bound."""
+    ev = np.linalg.eigvals(ets_discount(theta, m))
+    ev = np.delete(ev, int(np.argmin(np.abs(ev - 1.0))))
+    return float(np.max(np.abs(ev)))
+
+
+def ets_checks(spec: EtsSpec, seed: int = 488) -> dict:
+    """Held on one series of 3,000 rows: the carried gradient against a central
+    difference of the sum of squares; the prediction of row t does not move
+    when row t changes; scale equivariance (additive forms: states and target
+    by 37, parameters unmoved, ``s2`` by ``37^2``) is not run, since the known
+    initial states would have to be scaled too; admissibility on every row;
+    the allocated floats against the state count."""
+    y = simulate_ets(spec, 3000, seed)
+    th = np.array(spec.truth[:-1]) * 0.9
+    f = ets_objective(spec, y)
+    _, g, _ = f(th, True)
+    num = np.zeros_like(g)
+    for j in range(spec.n_params):
+        h = 1e-6
+        tp, tm = th.copy(), th.copy()
+        tp[j] += h
+        tm[j] -= h
+        num[j] = (f(tp, False)[0] - f(tm, False)[0]) / (2 * h)
+    out = {
+        "spec": spec.name,
+        "gradient_rel_err": float(np.max(np.abs(g - num)) / np.max(np.abs(num))),
+    }
+    a, b2 = OnlineEts(spec), OnlineEts(spec)
+    moved = 0.0
+    worst_adm = 0.0
+    for t, v in enumerate(y):
+        pa = a.update(float(v))
+        pb = b2.update(float(v) + (100.0 if t == 1500 else 0.0))
+        if t <= 1500:
+            moved = max(moved, abs(pa - pb))
+        worst_adm = max(worst_adm, float(np.max(np.abs(ets_project(spec, a.theta) - a.theta))))
+    out["out_of_sample_max_move_up_to_changed_row"] = moved
+    out["projection_moves_on_any_row"] = worst_adm
+    out["allocated_floats"] = a.allocated_floats()
+    out["state_floats"] = sum(ets_state_floats(spec).values())
+    return out
+
+
+def ets_state_table(seasonal: str = "add") -> list[dict]:
+    out = []
+    for damped in (False, True):
+        for m in TABLE_S:
+            k = 4 if damped else 3
+            spec = EtsSpec("t", damped, m, tuple([0.1] * k + [1.0]), seasonal)
+            parts = ets_state_floats(spec)
+            assert OnlineEts(spec).allocated_floats() == sum(parts.values())
+            out.append(
+                {
+                    "form": spec.label.split(", m =")[0],
+                    "m": m,
+                    "state_bytes": 8 * sum(parts.values()),
+                    "fixed_filter_bytes": 8 * (2 + m),
+                    "batch_start_buffer_bytes": 8 * ets_window(spec),
+                }
+            )
+    return out
+
+
+P3_SPECS = tuple(
+    f"{f}_m{m}{suf}" for suf in ("", "_b") for m in (7, 24, 168) for f in ("aaa", "aada")
+)
+
+
+def part3(args) -> dict:  # noqa: ANN001
+    res: dict = {"seeds": [SEEDS[0], SEEDS[-1]], "n": N_ROWS}
+    res["checks"] = [ets_checks(ETS_SPECS[k]) for k in ("aaa_m7", "aada_m24")]
+    res["state_table"] = ets_state_table()
+    res["radius"] = {
+        k: ets_radius(
+            tuple(ETS_SPECS[k].truth[:3])
+            + ((ETS_SPECS[k].truth[3],) if ETS_SPECS[k].damped else (1.0,)),
+            ETS_SPECS[k].m,
+        )
+        - 1.0
+        for k in P3_SPECS
+    }
+    path = os.path.join(args.out, "ets.jsonl")
+    cases = [(ETS_SPECS[k], seed) for k in P3_SPECS for seed in SEEDS[: args.seeds]]
+    key = lambda x: (x["spec"], x["seed"]) if isinstance(x, dict) else (x[0].name, x[1])  # noqa: E731
+    rows = (
+        _load(path)
+        if args.no_run
+        else run_grid(path, ets_case, cases, key=key, workers=args.workers)
+    )
+    res["summary"] = [
+        summarise_ets(rows, ETS_SPECS[k], pre) for k in P3_SPECS for pre in ("", "batch.")
+    ]
+    have = {key(r) for r in rows}
+    res["complete"] = all(key(c) in have for c in cases)
+    return res
+
+
+def summarise_ets(rows: list[dict], spec: EtsSpec, pre: str) -> dict:
+    out = summarise_sarima(rows, spec, pre)  # type: ignore[arg-type]
+    rows = [r for r in rows if r["spec"] == spec.name and pre + "max_abs_gap_se" in r]
+    if rows:
+        for f in ("fixed_gap_abs_max", "fixed_gap_rel_max", "fixed_gap_ulps_max"):
+            v = np.array([r[f] for r in rows])
+            out[f] = {"median": float(np.median(v)), "max": float(np.max(v))}
+    return out
+
+
+def summarise3(res: dict) -> None:
+    for c in res["checks"]:
+        print("checks", c)
+    print("complete:", res["complete"])
+    print("truth's discount radius minus 1:", {k: f"{v:+.2e}" for k, v in res["radius"].items()})
+    print("state table (bytes):")
+    for row in res["state_table"]:
+        print(
+            f"   {row['form']:18s} m={row['m']:5d} {row['state_bytes']:9d} B; fixed filter "
+            f"{row['fixed_filter_bytes']:7d} B; start buffer {row['batch_start_buffer_bytes']:7d} B"
+        )
+    for summ in res["summary"]:
+        print_sarima(summ, ETS_SPECS[summ["spec"]])  # type: ignore[arg-type]
+        if summ.get("cases"):
+            fa, fr, fu = (
+                summ[k]["max"]
+                for k in ("fixed_gap_abs_max", "fixed_gap_rel_max", "fixed_gap_ulps_max")
+            )
+            print(
+                f"   fixed-parameter gap to fittedvalues: abs max {fa:.3g}, "
+                f"rel max {fr:.3g}, ulps of the largest |prediction| max {fu:.3g}"
+            )
+
+
 def versions() -> dict:
     out = {"python": sys.version.split()[0]}
     for mod in ("numpy", "scipy", "statsmodels", "pandas"):
@@ -1006,7 +1604,11 @@ def versions() -> dict:
     return out
 
 
-PARTS = {"part1": (part1, summarise1), "part2": (part2, summarise2)}
+PARTS = {
+    "part1": (part1, summarise1),
+    "part2": (part2, summarise2),
+    "part3": (part3, summarise3),
+}
 
 
 def main(argv=None) -> int:  # noqa: ANN001
