@@ -28,7 +28,30 @@ bank-level total state cap the coordinator relayed (a per-group cap of 256 KB by
 bank total, warning at half and refusing at the cap, infinity allowed; each feature's bytes per
 group feed that total, so each section states its contribution).
 
-SELECTION_PLACEHOLDER
+## Selection
+
+C1's verdicts for tasks 517 to 525, with the two tests: an oracle C1 did not find MISSING, and the feature adds an option or an output without changing a default.
+A task with a MISSING part is built for its other parts and the MISSING part is named.
+
+| task | C1 verdict | built | excluded, and why |
+|---|---|---|---|
+| 517 `ew_cov` outputs | sklearn `assume_centered`, scipy `logpdf` CONFIRMED; per-row `score_samples` MISSING | uncentered covariance, Gaussian log-likelihood (scipy `logpdf` per row; sklearn `score` on one row as second check) | a per-row sklearn `score_samples`: MISSING, replaced by `logpdf` as C1 says |
+| 518 window operators | Polars `rolling_*_by`, `ewm_mean` CONFIRMED | min, max, quantile (six interpolations), rank, count-weighted `ewm_mean` | `rolling_rank_by(method="random")` is not reproducible, not compared |
+| 519 `kalman` | filterpy CONFIRMED; `mahalanobis` is `sqrt` (CORRECTED) | `coef_prior`, innovation log-likelihood, Mahalanobis distance | none |
+| 520 specification and influence | statsmodels CONFIRMED; Spiegelhalter p-value one-sided (CORRECTED) | ARCH LM, White (both forms), Spiegelhalter, DFBETAS, Cook | none |
+| 521 forecast comparison | `dieboldmariano` CONFIRMED (t reference CORRECTED); `RiskMonitoring` CORRECTED; Giacomini-White as a library function MISSING | DM options (HLN, t, loss, one-sided), the anytime-valid mean-difference test (MAPIE's bound function), Giacomini-White (statsmodels' `S_hac_simple` and HAC Wald) | Giacomini-White as a library function: MISSING, so the exact oracle is statsmodels' HAC of the moment series |
+| 522 `hmm` | hmmlearn CONFIRMED | fixed-lag smoothing, spherical covariance, prior weights, `params=` | none (hmmlearn `params="c"` alone is broken, below) |
+| 523 `bocpd` | names CORRECTED; negative-binomial hazard, known variance CONFIRMED; logistic hazard, known-mean MISSING | negative-binomial hazard, known-variance emission | **logistic hazard** and **known-mean emission**: oracle MISSING |
+| 524 regression variants | `BayesianRidge`, `SGDRegressor(average)`, RLM norms, `positive`, VW `--invariant` CONFIRMED or CORRECTED; per-feature penalty weights MISSING | evidence-maximized ridge, averaged `sgd`/`pa`, `positive=True`, redescending norms, `sgd` elastic net with `optimal`, importance-invariant step | **per-feature penalty weights**: oracle MISSING; Huber's proposal-2 scale (oracle is not the same quantity); "several quantiles in one spec" (plumbing, no recursion) |
+| 525 smaller options | sklearn, statsmodels, river CONFIRMED or CORRECTED; `deco`'s `u` MISSING | `kmeans` given centres, `ew_class` priors / `reg_param` / `var_smoothing`, `holt` forecast and known start, Holm, window KS | **`deco`'s less biased `u`**: oracle MISSING; learning from given `kmeans` centres (no exact oracle) |
+
+**Defaults check: none of the built features changes an existing default or an existing output** (each is a new option or a new output column, off by default), so nothing is recorded as "changes a default: goes to the coordinator". The places where a default *could* be reached are named, not changed:
+(a) 521: HLN with the t reference keeps the size near 5% where today's normal reference passes 6.5% to 9.5% (a better default by the size table); offered as options only. (b) 524: the importance-invariant step agrees with the plain step only to first order, so making it the default would move outputs at large weights; an option here.
+(c) 524: the redescending norm is an option, because the one-pass fit needs a robust start (it failed at n = 400 with 15% outliers). Decisions the Rust side must take, none a default change: 519 withholds the log-likelihood and distance on a target's first (diffuse) row and on a zero-weight row, and the intercept's `coef_prior` entry is moot;
+520 keeps `influence`'s weighted-mean-square convention for DFBETAS and Cook's; 523 defines the negative-binomial hazard per learned row; 524 (d) leaves a zero robust weight's `n_eff` accounting open; 525 (c) turns the line-fit gain off under a known `holt` start.
+
+Findings that correct or add to C1's report (each in its section): sklearn 1.9.1's `BayesianRidge` uses `sum(sample_weight)`, not the row count, in its `alpha` update (524 (a)); QDA's svd solver divides by `n` not `n - 1` (525 (b)); `het_white(interaction_terms=False)` regresses on the squares alone, `q = k` (520);
+hmmlearn 0.3.3 `params="c"` alone diverges and a spherical `covars_` set as `(K,)` breaks EM (522); scikit-learn's `partial_fit` re-creates the L1 cumulative penalty on every call (524 (e)); `dieboldmariano`'s p-value tolerates only ~1e-11 (its own incomplete beta) (521).
 
 ## 517. `ew_cov` outputs: the uncentered covariance and a Gaussian log-likelihood
 
@@ -584,3 +607,79 @@ The last `r` values against the `window - r` before them in a ring, the Kolmogor
 (the source's rule, read from river 0.26), so it is not deterministic and the exact comparison is `scipy.stats.ks_2samp` on the same two samples. Statistic against `ks_2samp` (windows 100 / 300 / 1000 with recents 30 / 50 / 100, ties on half of the seeds): 1.1e-16 absolute in each. The p-value is `ks_2samp`'s (`exact` for small samples, asymptotic otherwise), a function of the statistic and the two sizes,
 so it needs no state. **State added:** a ring of `window` values, `8 window` bytes **per feature** (window 1000: 8 KB a feature; k = 20: 160 KB; the 256 KB per-group cap holds `window <= 32768 / k` values a feature, and the ring is the part to cap); cost `O(window log window)` a read, `O(log window)` with a sorted structure. A hard window, no decay; a zero-weight row enters no ring. **No default changes** (a new test).
 
+## Proposed tolerances (for the Rust ports' tests against the same oracles)
+
+| task | quantity | tolerance | observed worst |
+|---|---|---|---|
+| 517 | `R = C + m m'` vs sklearn `assume_centered`, two-pass weighted | 1e-12 rel; windowed 1e-10 | 2.6e-15; 2.1e-14 |
+| 517 | Gaussian log-likelihood and `q` vs scipy `logpdf` | 1e-9 rel | 1.3e-12; 4.2e-12 (the oracle's eigendecomposition) |
+| 518 | rolling min / max / quantile / rank vs Polars | equal (bit) | 0 |
+| 518 | count-weighted `ewm_mean`, `adjust=True` / `False` | equal / 1e-13 rel | 0 / 1.9e-15 |
+| 519 | coefficients, `pred`, log-likelihood, distance vs filterpy (no intercept) | 1e-10 | 8e-14 abs; 4.2e-13 rel |
+| 519 | diffuse intercept vs filterpy at a large `kappa` | `~ 3e-3 / kappa` (a limit, not equality) | 3.2e-13 at 1e10 |
+| 519 | `coef_prior` at `q = 0` vs the closed-form ridge | 1e-10 | 7.9e-13 |
+| 520 | ARCH LM, White vs statsmodels (expanding) | 1e-11 rel; windowed 1e-9 | 6.4e-15; 9.8e-13 |
+| 520 | Spiegelhalter `z` and p vs MAPIE | 1e-12 | 1.3e-15 |
+| 520 | DFBETAS, Cook's vs `OLSInfluence` (whitened rows, stated divisor) | 1e-9; 1e-11 | 3.3e-12; 5.2e-14 |
+| 521 | DM statistic vs `dm_test` (Bartlett, `h = lags + 1`) | 1e-12 rel | 8.8e-16 |
+| 521 | DM p-value, t reference, vs `dm_test` | 1e-9 abs (the oracle's incomplete beta) | 7.3e-11 |
+| 521 | CM-EB bounds vs MAPIE | equal (bit) | 0 |
+| 521 | Giacomini-White vs `S_hac_simple` | 1e-11 rel | 8e-14 |
+| 522 | filter loglik, filtered and fixed-lag smoothed `p` vs hmmlearn | 1e-12 rel; 1e-11 abs | 1.3e-15; 6.3e-14 |
+| 522 | spherical and prior-weighted M-step vs `_do_mstep` on the same responsibilities | 1e-12 rel | 4.5e-15 |
+| 522 | `params="t"` / `"m"` online vs EM | within 0.005 of EM's error | 0.0004; 0.0001 |
+| 523 | `H(r)` vs scipy / vs library float32 | 1e-14 abs / 1e-8 abs | 9.4e-16 / 3.7e-9 |
+| 523 | recursion vs all-paths enumeration; `R` vs the library | 1e-12 abs; 1e-5 abs (float32) | 2.8e-16; 1.6e-6 |
+| 524 | evidence ridge coef, `alpha_`, `lambda_`, `pred_std` vs `BayesianRidge` (`tol` 1e-14) | 1e-10 rel | 1.3e-13 |
+| 524 | averaged `sgd`/`pa` vs `SGDRegressor(average=True)` | 1e-12 abs | 5.8e-15 |
+| 524 | `positive=True` vs `Lasso`/`ElasticNet` (`tol` 1e-14) | 1e-9 | 3.0e-13 |
+| 524 | norm weight functions vs `statsmodels.robust.norms` | 1e-15 | 1.7e-16 |
+| 524 | `sgd` elastic net and schedules vs `SGDRegressor` (one `partial_fit` call) | 1e-12 abs | 6.2e-15 |
+| 524 | importance-invariant step vs VW `--sgd --invariant` | 1e-5 rel (float32 weights) | 9.4e-7 |
+| 524 | one-pass Tukey / Huber vs converged `RLM` | statistical: within 0.03 at n = 3000, none below | 0.025 / 0.018 |
+| 525 | kmeans distances, assignment, EW inertia vs `KMeans` | 1e-10 abs; equal; 1e-12 rel | 1.4e-13; 0; 9.7e-16 |
+| 525 | `ew_class` posteriors vs QDA / GaussianNB (`priors`, `reg_param`, `var_smoothing`) | 1e-10 abs | 3.0e-13 |
+| 525 | `holt` known start vs `Holt(..., optimized=False)` | 1e-11 abs | 4.3e-14 |
+| 525 | Holm rejections and adjusted p vs `multipletests` | equal | 0 |
+| 525 | window KS statistic vs `ks_2samp` | 1e-12 | 1.1e-16 |
+
+## State summary, against the caps
+
+Bytes added per group (per slot or accumulator where said); the settable bank-level total cap (warning at half, refusing at the cap, infinity allowed) is a check on the sum over groups of these plus the existing state, not a per-feature one;
+the per-group 256 KB (262,144 bytes) cap binds first where a part scales with a configured size. Nothing grows with the stream's length.
+
+| feature | adds | grows with | needs a cap |
+|---|---|---|---|
+| 517 uncentered covariance, log-likelihood | 0 | | no |
+| 518 min / max deque | `16 R` | rows in the window `R` | yes: `R <= 16384` |
+| 518 quantile / rank ring | `24 R` | `R` | yes: `R <= 10922` |
+| 518 count-weighted `ewm_mean` | `8 (1 + k)` (`adjust=False`: `16 k`) | | no |
+| 519 `coef_prior`, log-likelihood, distance | 0 (config `8 k_total`) | | no |
+| 520 ARCH LM | `8 ((L+1)(L+2)/2 + 2L + 3)` | lags `L` | at `L` in the thousands |
+| 520 White, full form | `8 ((q+1)(q+2)/2 + q + 3)`, `q = k + k(k+1)/2` | `k` (quartic) | **yes: `k <= 21`** (259 KB at 21) |
+| 520 White squares only | `8 ((k+1)(k+2)/2 + k + 3)` | `k` | no |
+| 520 Spiegelhalter; DFBETAS, Cook | 24; `8 k` | `k` | no |
+| 521 DM | `8 (5 L + 4)` | lags `L` | no |
+| 521 CM-EB, betting | 48; 32 | | no |
+| 521 Giacomini-White | `8 ((L+1) q^2 + q L + 2 q + 1)` | `q`, `L` | at `q = 8, L = 30`: 18 KB, no |
+| 522 fixed-lag smoother | `8 K (L + 2)` | lag `L`, states `K` | yes: `L <= 262144/(8K) - 2` |
+| 522 spherical state | 8 (replaces `8 d (d+1)/2`) | | reduces state |
+| 523 negative-binomial hazard | 0 per group (`8 max_run` shared, derived) | | shared |
+| 523 known-variance run | `8 (3 + 2d)` per held run (`diag`: `8 (3 + 3d)`) | held runs | `max_run` (existing default 10,000 exceeds the cap already) |
+| 524 evidence ridge | 16 (+ `8 k^2` derived scratch) | | no |
+| 524 averaged `sgd` / `pa` | `8 (k_total + 1)` | | no |
+| 524 `positive`, norms, invariant step | 0 | | no |
+| 524 `sgd` L1 / `optimal` | `8 (k + 2)`; 16 | | no |
+| 525 `kmeans` given centres, inertia | `8 K p` (config) + 16 | | no |
+| 525 `ew_class` priors, `reg_param`, `var_smoothing` | `8 n_classes + 16` (config) | | no |
+| 525 `holt` known start | 0 | | no |
+| 525 Holm | 0 | | no |
+| 525 window KS | `8 window` per feature | window | yes: `window <= 32768 / k` |
+
+The parts that scale with a configured size (the windows and rings of 518, the smoother of 522, the KS ring of 525, White at large `k`, the `bocpd` runs) add their formulas per group to the bank's total, and the per-group cap
+binds first for a rolling ring over 16384 (min / max) or 10922 (quantile / rank) rows, a smoother past `262144/(8K) - 2` lags, White past `k = 21`, and a KS window past `32768 / k` values a feature.
+
+## Notes for a restart
+
+Venv `/home/user/venv-c11` (Python 3.12; numpy 2.5.5, scipy 1.18.1, statsmodels 0.15.0, scikit-learn 1.9.1, MAPIE 1.6.0, polars 2.1.0, hmmlearn 0.3.3, filterpy 2.0.0, dieboldmariano 1.1.0, torch 2.15.0+cpu,
+bayesian-changepoint 1.2.2, vowpalwabbit 9.11.9, river 0.26). Worktree `/home/user/wt-c11`, branch `c11-511b` pushed to `vm/study-511b`. Each module's `report(seeds)` prints its tables; the long modules are 521 and 524 (a few minutes each at 20 seeds); run one with `--only`.
