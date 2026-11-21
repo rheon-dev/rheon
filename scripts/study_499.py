@@ -1,7 +1,7 @@
 """Study 499: realised-volatility estimators against hfhd, every table.
 
-    python scripts/study_499.py            # every table (about 6 minutes)
-    python scripts/study_499.py --quick    # fewer seeds (about 2 minutes)
+    python scripts/study_499.py            # every table (about 4 minutes)
+    python scripts/study_499.py --quick    # fewer seeds and days
 
 Any Python with numpy, scipy, pandas and hfhd (which brings numba) runs it.
 The definitions, the one-pass forms and the checks live in
