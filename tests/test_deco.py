@@ -402,6 +402,39 @@ def test_a_null_feature_skips_the_row_and_a_zero_weight_learns_nothing():
     assert z["rho"][100] == want["rho"][100]
 
 
+def test_a_zero_weight_row_is_the_row_deleted_on_the_clock():
+    """Rule 9: a zero-weight row advances the clock and learns nothing, so
+    every row after it is the stream with the row deleted, on a clock that
+    keeps the gap (review S16: the test above compares `rho` on the row
+    itself, read before the row is learned, so it held for a zero-weight
+    row that learned too). Within rounding, since one decay over two clock
+    units is not two decays of one in the last bit."""
+    n, at = 200, 100
+    df = frame(n=n).with_columns(w=pl.lit(1.0), t=pl.int_range(n).cast(pl.Float64))
+    kw = dict(features=cols(4), half_life=HALFLIFE, min_weight=0.0, weight="w")
+    spec = rp.spec.deco("d", clock="t", gap_cap=1e9, **kw)
+    zeroed = df.with_columns(
+        pl.when(pl.int_range(pl.len()) == at).then(0.0).otherwise(pl.col("w")).alias("w")
+    )
+    z = run(spec, zeroed)[at + 1 :]
+    deleted = run(spec, pl.concat([df[:at], df[at + 1 :]]))[at:]
+    learned = run(spec, df)[at + 1 :]
+    for field in ("u", "rho", "loglik", "weight_sum"):
+        got, want = z[field].to_numpy(), deleted[field].to_numpy()
+        assert np.isfinite(got).all(), field
+        if field == "weight_sum":
+            # Read before the row's own decay: the zero-weight row's decay is
+            # already in the next row's weight, and the deleted stream's
+            # comes with that row's.
+            lam = 2.0 ** (-1.0 / HALFLIFE)
+            np.testing.assert_allclose(got[0], lam * want[0], rtol=1e-12)
+            got, want = got[1:], want[1:]
+        np.testing.assert_allclose(got, want, rtol=1e-12, atol=0, err_msg=field)
+    assert not np.allclose(learned["rho"].to_numpy(), deleted["rho"].to_numpy(), rtol=1e-9), (
+        "the row, learned, moves what follows"
+    )
+
+
 def test_a_constant_column_is_left_out_and_every_other_value_learns():
     """A column without spread has no standardized value, and is left out of
     its block's sums (docs/PLAN.md task 115 (h), decided 2026-09-29). While

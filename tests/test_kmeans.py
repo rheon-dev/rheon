@@ -1283,12 +1283,19 @@ class TestEdgeCases:
             warm_rows=50,
             split_merge_every_rows=100,
             standardize=False,
+            coef_every=1,
         )
         plain = unnested(rp.ModelBank([s]).fit_predict(frame(X)))
         burst = unnested(rp.ModelBank([s]).fit_predict(frame(Y)))
-        # Same centre before and after the burst (coef on the update cadence).
-        assert burst["coef"][299] == plain["coef"][299]
-        assert burst["coef"][329] == plain["coef"][299]
+        # Same centre before and after the burst, read from the bank on every
+        # row (review S16: on the default cadence `coef` was null on both
+        # rows compared, so the bank's centre was never read).
+        centre = plain["coef"].to_list()
+        moved = burst["coef"].to_list()
+        assert centre[299] is not None
+        assert moved[299] == centre[299]
+        assert moved[329] == centre[299]
+        assert moved[329] != centre[329], "the plain stream's centre moved on"
         # The far rows are scored, at their distance, and weight_sum counts them
         # (it is the model's clock, not the clusters' weight).
         assert burst["cluster"][300:330].to_list() == [0] * 30
