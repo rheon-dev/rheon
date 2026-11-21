@@ -1767,6 +1767,95 @@ fn the_bank_fixtures_cover_the_schemas_a_bank_loads() {
     }
 }
 
+/// How many files each kept schema's set holds, frozen when the set was
+/// copied (review S4). The kept sets are the only test of an old schema's
+/// loader, and the check above holds only that a set has a bank file and
+/// that what was compiled in is what is on disk, so a deleted file or a
+/// partial copy passed. A new kept set adds its line here, with the count
+/// of the current set it was copied from.
+const KEPT_COUNTS: &[(u32, usize)] = &[
+    (61, 4),
+    (62, 6),
+    (63, 8),
+    (64, 11),
+    (65, 12),
+    (66, 15),
+    (67, 18),
+    (68, 18),
+    (69, 18),
+];
+
+/// The one place a set lacks a case of the set before it: the window
+/// runs' fixtures were not copied into `v64/` and `v65/` when those sets
+/// were kept, so `v63/`'s three are not in `v64/`; `v66/` has them again.
+/// Found by review S4's check; the states of schemas 64 and 65 cannot be
+/// written now, so the gap is named rather than filled.
+const KNOWN_GAPS: &[(&str, &str)] = &[
+    ("v63", "with_windows"),
+    ("v63", "with_windows_int"),
+    ("v63", "with_windows_quantile"),
+];
+
+/// The names one set holds that the next does not, each set given as a
+/// label and its fixtures' names, oldest first, less [`KNOWN_GAPS`]: a
+/// later set is copied from the current one, which only gains cases.
+fn names_dropped(sets: &[(String, Vec<&str>)], known: &[(&str, &str)]) -> Vec<String> {
+    let mut out = Vec::new();
+    for pair in sets.windows(2) {
+        let (old, new) = (&pair[0], &pair[1]);
+        for name in &old.1 {
+            if !new.1.contains(name) && !known.contains(&(old.0.as_str(), *name)) {
+                out.push(format!("{}/{name}.rs is not in {}", old.0, new.0));
+            }
+        }
+    }
+    out
+}
+
+/// Each kept set is whole: its count is the one frozen in [`KEPT_COUNTS`],
+/// and its names hold every name of the set before it (less
+/// [`KNOWN_GAPS`]), the current set every name of the newest kept one
+/// (review S4).
+#[test]
+fn every_kept_set_is_whole() {
+    if regenerating() {
+        return;
+    }
+    let sets = previous_sets();
+    let counts: Vec<(u32, usize)> = sets.iter().map(|(s, set)| (*s, set.len())).collect();
+    assert_eq!(
+        counts, KEPT_COUNTS,
+        "the kept sets' counts of files (schema, count) are not the frozen ones: a kept file \
+         was deleted or added. A new kept set adds its line to KEPT_COUNTS"
+    );
+    let names = |set: &[&Fixture]| set.iter().map(|f| f.name).collect::<Vec<&str>>();
+    let mut chain: Vec<(String, Vec<&str>)> = sets
+        .iter()
+        .map(|(s, set)| (format!("v{s}"), names(set)))
+        .collect();
+    chain.push(("the current set".to_owned(), names(frozen::ALL)));
+    let dropped = names_dropped(&chain, KNOWN_GAPS);
+    assert!(
+        dropped.is_empty(),
+        "each set holds every case of the set before it:\n{}",
+        dropped.join("\n")
+    );
+}
+
+/// The chain check on its own: a name the next set lacks is named, unless
+/// it is a known gap.
+#[test]
+fn a_set_missing_a_case_of_the_one_before_is_named() {
+    let set = |label: &str, names: &[&'static str]| (label.to_owned(), names.to_vec());
+    let partial = [
+        set("v1", &["a", "b"]),
+        set("v2", &["a", "c"]),
+        set("now", &["a", "c"]),
+    ];
+    assert_eq!(names_dropped(&partial, &[]), ["v1/b.rs is not in v2"]);
+    assert!(names_dropped(&partial, &[("v1", "b")]).is_empty());
+}
+
 /// The on-disk check behind the coverage test, proven on a directory of
 /// its own (review round 5, D2): a schema with no set, or an empty one, is
 /// refused; a set with fixtures passes and is counted.
