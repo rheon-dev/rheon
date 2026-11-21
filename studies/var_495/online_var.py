@@ -300,6 +300,136 @@ class OnlineVAR:
             return {"statistic": s, "pvalue": float(stats.chi2.sf(s, q)), "df": q}
         raise ValueError(f"kind {kind!r} not recognised")
 
+    # ------------------------------------------- impulse responses and FEVD
+    # Reads of the fit, not state: ``O(H p k^3)`` for ``H`` periods, nothing kept.
+    def coefs(self) -> np.ndarray:
+        """``(p, k, k)``: ``A_1, ..., A_p`` (statsmodels' ``coefs``)."""
+        b = self.slopes()
+        return np.stack([b[j * self.k : (j + 1) * self.k].T for j in range(self.p)])
+
+    def ma_rep(self, periods: int) -> np.ndarray:
+        """``Phi_0 = I``, ``Phi_i = sum_{j=1}^{min(i, p)} Phi_{i-j} A_j``.
+
+        ``(periods + 1, k, k)``, as ``VARResults.ma_rep`` and ``irf().irfs``.
+        """
+        a = self.coefs()
+        phi = np.zeros((periods + 1, self.k, self.k))
+        phi[0] = np.eye(self.k)
+        for i in range(1, periods + 1):
+            for j in range(1, min(i, self.p) + 1):
+                phi[i] += phi[i - j] @ a[j - 1]
+        return phi
+
+    def orth_ma_rep(self, periods: int) -> np.ndarray:
+        """``Theta_i = Phi_i P``, ``P`` the lower Cholesky factor of ``Sigma_u``."""
+        return self.ma_rep(periods) @ np.linalg.cholesky(self.sigma_u())
+
+    def fevd(self, periods: int) -> np.ndarray:
+        """``(k, periods, k)``: equation x horizon x shock, as ``VARResults.fevd().decomp``.
+
+        ``omega_{e j}(h) = sum_{i<h} Theta_i[e, j]^2 / MSE_h[e, e]``,
+        ``MSE_h = sum_{i<h} Phi_i Sigma_u Phi_i'``.
+        """
+        theta2 = np.cumsum(self.orth_ma_rep(periods)[:periods] ** 2, axis=0)
+        phi = self.ma_rep(periods)[:periods]
+        mse = np.cumsum(np.einsum("hij,jl,hml->him", phi, self.sigma_u(), phi), axis=0)
+        diag = np.diagonal(mse, axis1=1, axis2=2)  # (periods, k)
+        return (theta2 / diag[:, :, None]).swapaxes(0, 1)
+
+    def irf_cov(self, periods: int) -> np.ndarray:
+        """Asymptotic covariance of ``vec(Phi_i)``, ``G_i Sigma_alpha G_i'`` (Lutkepohl 3.7.5).
+
+        ``G_i = sum_{m<i} J (A')^{i-1-m} kron Phi_m`` with ``A`` the companion matrix
+        and ``J`` its first ``k`` rows; ``Sigma_alpha`` is ``cov_params`` without the
+        constant. ``(periods + 1, k^2, k^2)``, the first all zero.
+        """
+        k, m = self.k, self.m
+        comp = np.zeros((m, m))
+        comp[:k] = np.hstack(list(self.coefs()))
+        comp[k:, :-k] = np.eye(m - k)
+        phi = self.ma_rep(periods)
+        cov_a = self.cov_params()[k:, k:]
+        powers = [np.eye(m)]
+        for _ in range(periods):
+            powers.append(powers[-1] @ comp.T)
+        out = np.zeros((periods + 1, k * k, k * k))
+        for i in range(1, periods + 1):
+            g = sum(np.kron(powers[i - 1 - j][:k], phi[j]) for j in range(i))
+            out[i] = g @ cov_a @ g.T
+        return out
+
+
+@dataclass
+class WindowVAR(OnlineVAR):
+    """The VAR(p) on the last ``window`` rows of the stream only (no decay).
+
+    A target counts while it and its ``p`` lags are all inside the window, so the
+    fit is ``VAR(y[t - window + 1 : t + 1]).fit(p)``: ``window - p`` targets. Each
+    row is added as above, then the target that has just lost its oldest lag is
+    taken out by the reverse (down-dating) update, with ``W' = W - w``:
+
+        e = x - xbar,  xbar' = xbar - (w / W') e
+        Sxx' = Sxx - w (W / W') e e'        (and Sxy, Syy alike)
+
+    The stored rows are the window itself (``window x k`` values and ``window``
+    weights); the lag buffer is its last ``p`` rows, so the state is
+    ``8 (window k + window + m + k + m^2 + m k + k^2 + 4)`` bytes (one counter more).
+    """
+
+    window: int = 0
+    ys: np.ndarray = field(init=False)  # (window, k), oldest first
+    ws: np.ndarray = field(init=False)
+    n_pos: int = field(init=False, default=0)  # targets with w > 0 in the window
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.window <= self.p:
+            raise ValueError("window must exceed p")
+        if self.lam != 1.0:
+            raise ValueError("this study's window has no decay")
+        self.ys = np.full((self.window, self.k), np.nan)
+        self.ws = np.zeros(self.window)
+
+    def state_bytes(self) -> int:
+        m, k, n = self.m, self.k, self.window
+        return 8 * (n * k + n + m + k + m * m + m * k + k * k + 4)
+
+    def step(self, y: np.ndarray, w: float = 1.0) -> tuple[np.ndarray, float]:
+        y = np.asarray(y, dtype=float)
+        pred, weight_before = super().step(y, w)  # adds the row, updates ``lags``
+        if np.all(np.isfinite(y)) and self.n_seen > self.p and w > 0.0:
+            self.n_pos += 1
+        # The target whose oldest lag leaves now: ys[p] with lags ys[p-1], ..., ys[0].
+        old = self.ys[: self.p + 1]
+        if np.all(np.isfinite(old)):
+            self._unlearn(old[-2::-1].reshape(-1), old[-1], float(self.ws[self.p]))
+        self.ys[:-1] = self.ys[1:].copy()
+        self.ys[-1] = y
+        self.ws[:-1] = self.ws[1:].copy()
+        self.ws[-1] = w
+        return pred, weight_before
+
+    def _unlearn(self, x: np.ndarray, y: np.ndarray, w: float) -> None:
+        if w == 0.0:
+            return
+        self.n_pos -= 1
+        if self.n_pos == 0:  # empty of weight: reset exactly, no 0/0 and no residue
+            self.w_sum = self.w2_sum = 0.0
+            for name in ("xbar", "ybar", "sxx", "sxy", "syy"):
+                getattr(self, name)[...] = 0.0
+            return
+        w_old = self.w_sum
+        w_new = w_old - w
+        self.w2_sum -= w * w
+        ex, ey = x - self.xbar, y - self.ybar
+        self.xbar = self.xbar - (w / w_new) * ex
+        self.ybar = self.ybar - (w / w_new) * ey
+        g = w * w_old / w_new
+        self.sxx = self.sxx - g * np.outer(ex, ex)
+        self.sxy = self.sxy - g * np.outer(ex, ey)
+        self.syy = self.syy - g * np.outer(ey, ey)
+        self.w_sum = w_new
+
 
 def run(
     y: np.ndarray,

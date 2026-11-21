@@ -10,7 +10,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
 import compare  # noqa: E402
-from online_var import OnlineVAR, run  # noqa: E402
+from online_var import OnlineVAR, WindowVAR, run  # noqa: E402
 
 from data import simulate  # noqa: E402
 
@@ -87,3 +87,30 @@ def test_min_weight_withholds_the_fit() -> None:
 def test_state_is_bounded_by_shape() -> None:
     m = OnlineVAR(4, 4)
     assert m.state_bytes() == 8 * (16 + 16 + 4 + 256 + 64 + 16 + 3)
+
+
+@pytest.mark.parametrize(("t", "k", "p"), compare.SPEC_GRID)
+def test_spec_grid_equals_statsmodels(t: int, k: int, p: int) -> None:
+    """k = 2, 5, 10 by p = 1, 2, 5: fit, Granger, impulse responses and FEVD."""
+    res = {**compare.check_fit(t, k, p), **compare.check_irf(t, k, p)}
+    for name in ("params", "sigma_u", "sigma_u_mle", "cov_params", "irf", "orth_irf", "fevd"):
+        assert res[name] < 1e-12, (name, res[name])
+    assert res["irf_cov"] < 1e-12
+    assert res["granger_stat"] < 1e-11  # worst measured 1.6e-13 (k = 5, p = 1)
+    assert res["granger_pvalue"] < 1e-10
+
+
+def test_window_equals_statsmodels_on_the_window() -> None:
+    res = compare.check_window()
+    for name in ("pred", "params", "sigma_u", "cov_params", "granger_stat"):
+        assert res[name] < 1e-12, (name, res[name])
+    assert res["n_eff"] == 0.0
+
+
+def test_window_with_zero_weights_and_gaps_equals_wls() -> None:
+    assert compare.check_window_gaps() < 1e-12
+
+
+def test_window_state_size() -> None:
+    m = WindowVAR(3, 2, window=100)
+    assert m.state_bytes() == 8 * (300 + 100 + 6 + 3 + 36 + 18 + 9 + 4)

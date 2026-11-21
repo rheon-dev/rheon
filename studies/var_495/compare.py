@@ -18,7 +18,7 @@ from statsmodels.tsa.api import VAR
 from statsmodels.tsa.stattools import grangercausalitytests
 
 sys.path.insert(0, str(Path(__file__).parent))
-from online_var import run  # noqa: E402
+from online_var import WindowVAR, run  # noqa: E402
 
 from data import simulate  # noqa: E402
 
@@ -34,6 +34,9 @@ GRID = [
     (3000, 4, 4),
     (3000, 2, 8),
 ]
+
+# The coordinator's grid: k = 2, 5, 10 by p = 1, 2, 5, one stream of 400 rows each.
+SPEC_GRID = [(400, k, p) for k in (2, 5, 10) for p in (1, 2, 5)]
 
 
 def rel(a: np.ndarray, b: np.ndarray) -> float:
@@ -52,6 +55,24 @@ def subsets(k: int) -> list[list[int]]:
     return [list(c) for r in range(1, k) for c in itertools.combinations(range(k), r)]
 
 
+def causality_pairs(k: int) -> list[tuple[list[int], list[int]]]:
+    """(caused, causing) pairs: every disjoint pair of subsets up to k = 5; past it
+    (3^k of them) every single pair, each variable against all the others, and
+    two splits into halves and thirds."""
+    if k <= 5:
+        out = []
+        for caused in subsets(k):
+            rest = [i for i in range(k) if i not in caused]
+            sizes = range(1, len(rest) + 1)
+            out += [(caused, list(c)) for r in sizes for c in itertools.combinations(rest, r)]
+        return out
+    out = [([e], [j]) for e in range(k) for j in range(k) if j != e]
+    out += [([e], [j for j in range(k) if j != e]) for e in range(k)]
+    h, t3 = k // 2, k // 3
+    out += [(list(range(h)), list(range(h, k))), (list(range(t3)), list(range(t3, 2 * t3)))]
+    return out
+
+
 def check_fit(t: int, k: int, p: int, seed: int = 1, level: float = 0.0) -> dict[str, float]:
     """params, sigma_u, sigma_u_mle, cov_params and every Granger test, no decay."""
     y, _ = simulate(t, k, p, seed=seed, level=level)
@@ -64,17 +85,14 @@ def check_fit(t: int, k: int, p: int, seed: int = 1, level: float = 0.0) -> dict
         "cov_params": rel(m.cov_params(), r.cov_params()),
     }
     stat_err, p_err, n = 0.0, 0.0, 0
-    for caused in subsets(k):
-        rest = [i for i in range(k) if i not in caused]
-        sizes = range(1, len(rest) + 1)
-        for causing in [list(c) for r in sizes for c in itertools.combinations(rest, r)]:
-            for kind in ("f", "wald"):
-                a = m.test_causality(caused, causing, kind=kind)
-                b = r.test_causality(caused, causing, kind=kind)
-                assert a["df"] == b.df or tuple(a["df"]) == tuple(b.df)
-                stat_err = max(stat_err, abs(a["statistic"] / b.test_statistic - 1))
-                p_err = max(p_err, abs(a["pvalue"] / b.pvalue - 1) if b.pvalue > 0 else 0.0)
-                n += 1
+    for caused, causing in causality_pairs(k):
+        for kind in ("f", "wald"):
+            a = m.test_causality(caused, causing, kind=kind)
+            b = r.test_causality(caused, causing, kind=kind)
+            assert a["df"] == b.df or tuple(a["df"]) == tuple(b.df)
+            stat_err = max(stat_err, abs(a["statistic"] / b.test_statistic - 1))
+            p_err = max(p_err, abs(a["pvalue"] / b.pvalue - 1) if b.pvalue > 0 else 0.0)
+            n += 1
     out["granger_stat"] = stat_err
     out["granger_pvalue"] = p_err
     out["granger_tests"] = n
@@ -192,6 +210,95 @@ def check_bivariate(t: int = 60, p: int = 3) -> dict[str, float]:
         out[f"p_ssr_ftest_{1 - e}to{e}"] = g["ssr_ftest"][1]
         out[f"p_var_f_{1 - e}to{e}"] = var_f.pvalue
     return out
+
+
+def check_irf(t: int, k: int, p: int, periods: int = 10, seed: int = 1) -> dict[str, float]:
+    """Impulse responses, their asymptotic covariance and the FEVD, no decay."""
+    y, _ = simulate(t, k, p, seed=seed)
+    m, _, _ = run(y, p)
+    r = VAR(y).fit(p)
+    irf = r.irf(periods)
+    return {
+        "irf": rel(m.ma_rep(periods), irf.irfs),
+        "orth_irf": rel(m.orth_ma_rep(periods), irf.orth_irfs),
+        "irf_cov": rel(m.irf_cov(periods), irf.cov()),
+        "fevd": rel(m.fevd(periods), r.fevd(periods).decomp),
+    }
+
+
+def run_window(
+    y: np.ndarray, p: int, window: int, weights: np.ndarray | None = None
+) -> tuple[WindowVAR, np.ndarray]:
+    t, k = y.shape
+    model = WindowVAR(k, p, window=window)
+    w = np.ones(t) if weights is None else weights
+    preds = np.array([model.step(y[i], w[i])[0] for i in range(t)])
+    return model, preds
+
+
+def check_window(t: int = 700, k: int = 3, p: int = 2, window: int = 120) -> dict[str, float]:
+    """Every row's ``pred`` against ``VAR(y[i - window : i]).fit(p)``'s forecast, and
+    the final fit's params, sigma_u, cov_params and Granger tests on the last window."""
+    y, _ = simulate(t, k, p, seed=21)
+    model, pred = run_window(y, p, window)
+    first = window  # a full window: every check below is past the warm-up
+    pred_err = 0.0
+    for i in range(first, t):
+        f = VAR(y[i - window : i]).fit(p).forecast(y[i - p : i], 1)[0]
+        pred_err = max(pred_err, rel(pred[i], f))
+    r = VAR(y[t - window :]).fit(p)
+    g = max(
+        abs(model.test_causality(e, j)["statistic"] / r.test_causality(e, j).test_statistic - 1)
+        for e, j in causality_pairs(k)
+    )
+    return {
+        "pred": pred_err,
+        "params": rel(model.params(), r.params),
+        "sigma_u": rel(model.sigma_u(), r.sigma_u),
+        "cov_params": rel(model.cov_params(), r.cov_params()),
+        "granger_stat": g,
+        "n_eff": abs(model.n_eff() - (window - p)),
+    }
+
+
+def check_window_gaps(t: int = 900, k: int = 3, p: int = 2, window: int = 150) -> float:
+    """Zero weights (also the first target) and NaN rows inside the window: WLS on
+    the window's complete rows, at every 25th row past the first full window."""
+    y, _ = simulate(t, k, p, seed=22)
+    y[[300, 301, 600]] = np.nan
+    y[640, 2] = np.inf
+    rng = np.random.default_rng(23)
+    w = rng.uniform(0.0, 2.0, size=t)
+    w[rng.random(t) < 0.1] = 0.0
+    w[p] = 0.0
+    model = WindowVAR(k, p, window=window)
+    err = 0.0
+    for i in range(t):
+        model.step(y[i], w[i])
+        if i >= window and i % 25 == 0:
+            z, yy = lag_design(y[i + 1 - window : i + 1], p)
+            ww = w[i + 1 - window + p : i + 1]
+            ok = np.all(np.isfinite(z), axis=1) & np.all(np.isfinite(yy), axis=1) & (ww > 0)
+            b = np.column_stack([WLS(yy[ok, e], z[ok], ww[ok]).fit().params for e in range(k)])
+            err = max(err, rel(model.params(), b))
+    return err
+
+
+def check_window_drift(t: int, level: float = 0.0, k: int = 3, p: int = 2, window: int = 200):
+    """Down-dating's rounding over a long stream: the final fit against statsmodels on
+    the last window, shifted by ``level`` (exact; a VAR with a constant is shift-invariant)."""
+    y, _ = simulate(t, k, p, seed=24, level=level)
+    model = WindowVAR(k, p, window=window)
+    for i in range(t):
+        model.step(y[i])
+    r = VAR(y[t - window :] - level).fit(p)
+    j = list(range(1, k))
+    g_ref = r.test_causality(0, j).test_statistic
+    return {
+        "slopes": rel(model.params()[1:], r.params[1:]),
+        "sigma_u": rel(model.sigma_u(), r.sigma_u),
+        "granger_stat": abs(model.test_causality(0, j)["statistic"] / g_ref - 1),
+    }
 
 
 def statsmodels_causing_none_bug(t: int = 300, k: int = 3, p: int = 2) -> str:
