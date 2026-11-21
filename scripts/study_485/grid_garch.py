@@ -40,17 +40,19 @@ def done(out: Path) -> set[tuple[int, int]]:
     return keys
 
 
-def run(out: Path) -> None:
+def run(out: Path, kw: dict[str, object] | None = None) -> None:
+    """The grid for the estimator with options ``kw`` (none: the plain one)."""
+    kw = kw or {}
     finished = done(out)
     with out.open("a", encoding="utf-8") as f:
         for n in SIZES:
             for seed in SEEDS:
                 if (seed, n) in finished:
                     continue
-                rec = garch.compare(n, seed, TRUTH)
+                rec = garch.compare(n, seed, TRUTH, **kw)
                 f.write(json.dumps(rec) + "\n")
                 f.flush()
-                print(f"seed {seed} n {n} done", flush=True)
+                print(f"{out.stem}: seed {seed} n {n} done", flush=True)
 
 
 def summary(out: Path) -> None:
@@ -70,6 +72,23 @@ def summary(out: Path) -> None:
         neg = sum(r["llf_diff_per_row"] < 0 for r in rows)
         print(f"  seeds with any parameter over 3 SE: {either}; all within 2 SE: {within2}")
         print(f"  seeds where the online parameters out-score arch's fit: {neg}")
+        if n == max(SIZES):
+            verdict = "passes" if within2 >= 0.9 * len(rows) else "fails"
+            print(f"  criterion (90% of seeds all within 2 SE at {n} rows): {verdict}")
+
+
+def main(variants: dict[str, dict[str, object]]) -> None:
+    """A mitigation script's entry: ``OUTDIR [--summary]``, one JSON-lines
+    file per variant in ``OUTDIR``, run (resuming) or summarized in order."""
+    outdir = Path(sys.argv[1])
+    outdir.mkdir(parents=True, exist_ok=True)
+    for name, kw in variants.items():
+        out = outdir / f"{name}.jsonl"
+        if "--summary" in sys.argv[2:]:
+            print(f"== {name} {kw}")
+            summary(out)
+        else:
+            run(out, kw)
 
 
 if __name__ == "__main__":

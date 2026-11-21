@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 from arch.univariate import GARCH
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -72,3 +73,53 @@ def test_parameters_stay_admissible():
         if est.started:
             w, a, b = est.theta
             assert w > 0 and a >= 0 and b >= 0 and a + b <= 1 - est.margin + 1e-15
+
+
+VARIANTS = [
+    {"target": "running"},
+    {"target": "warmup"},
+    {"step_cap": 0.5},
+    {"gain": "sqrt"},
+    {"gain": "floor", "gain_floor": 1e-3},
+    {"batch_start": True, "warm": 500, "t0": 500.0},
+]
+
+
+@pytest.mark.parametrize("kw", VARIANTS, ids=str)
+def test_variants_out_of_sample_and_admissible(kw):
+    r = garch.simulate(1200, *TRUTH, seed=17)
+    est = garch.OnlineGarch(**kw)
+    for x in r:
+        est.update(float(x))
+        if est.started:
+            w, a, b = est.theta
+            assert w > 0 and a >= 0 and b >= 0 and a + b <= 1 - est.margin + 1e-15
+    r2 = r.copy()
+    r2[900] *= 10.0
+    other = garch.run(r2, **kw).pred
+    assert est.pred[:901] == other[:901]
+    assert est.pred[901] != other[901]
+
+
+@pytest.mark.parametrize("kw", VARIANTS[:5], ids=str)
+def test_variants_scale_equivariant(kw):
+    r = garch.simulate(2000, *TRUTH, seed=18)
+    c = 37.0
+    a, b = garch.run(r, **kw), garch.run(c * r, **kw)
+    np.testing.assert_allclose(b.theta[0], c * c * a.theta[0], rtol=1e-8)
+    np.testing.assert_allclose(b.theta[1:], a.theta[1:], rtol=1e-8, atol=1e-12)
+
+
+def test_targeting_holds_omega_to_the_running_variance():
+    r = garch.simulate(1000, *TRUTH, seed=19)
+    est = garch.run(r, target="running")
+    w, a, b = est.theta
+    assert w == pytest.approx(np.mean(r * r) * (1 - a - b), rel=1e-12)
+
+
+def test_defaults_are_the_plain_estimator():
+    """No option set: the arithmetic of part 2, to the bit."""
+    r = garch.simulate(1000, *TRUTH, seed=20)
+    plain = garch.run(r)
+    named = garch.run(r, target="", step_cap=0.0, gain="inv", batch_start=False)
+    assert np.array_equal(plain.theta, named.theta) and plain.pred == named.pred

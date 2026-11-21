@@ -1,9 +1,10 @@
 # Online estimators for GARCH, ARMA, ETS and DCC against their batch fits: a numpy study
 
-*Status, 2026-11-21: a record, in progress. Parts 1 and 2 of the study asked
-for in request A9: the plan below, GARCH(1,1) on one series (§9), and
-GARCH(1,1) over fifty seeds (§10), where the plain estimator fails the
-proposed criterion in the tail. Nothing in the package or the Rust crates was changed. The scan this
+*Status, 2026-11-21: a record, in progress. Parts 1 to 3 of the study asked
+for in request A9: the plan below, GARCH(1,1) on one series (§9), over fifty
+seeds (§10), where the plain estimator fails the proposed criterion in the
+tail, and four mitigations on the same grid (§11), of which variance
+targeting and a 500-row batch start pass it. Nothing in the package or the Rust crates was changed. The scan this
 builds on is `vm-tools/research/485-TIME-SERIES-SCAN.md` on branch
 `vm-tools/oracle-gap-scan` (written from `a5c4dcef`); its section numbers are
 cited as "scan §N".*
@@ -252,3 +253,94 @@ gain of `1/(t + 75)` the remaining steps are too small to walk back along the
 it lists are what part 3 should measure on the same grid: variance targeting,
 a cap on each step's size, a longer buffered batch fit as the start, and a
 gain that decays more slowly than `1/t`.
+
+## 11. Part 3: the four mitigations, on the same grid
+
+One script per mitigation, each running its variants through
+`grid_garch.py` (`python mitN_….py OUTDIR`, resumable; `OUTDIR --summary`
+prints part 2's table per variant). The options live in `garch.py`'s
+`OnlineGarch`; with none set the estimator is part 2's to the bit (a test
+holds it, and three of part 2's cases were recomputed and matched every
+field). Same truth, seeds 485000 to 485049, 2,000 and 10,000 rows; arch
+converged on every case. Seven variants, 700 cases, about 3 minutes in four
+parallel processes.
+
+| script | variant | what changes |
+|---|---|---|
+| `mit1_target.py` | 1a | variance targeting: `ω = v̄(1 − α − β)` after every step, `v̄` the running mean of `r²` over every row read; Gauss-Newton on `(α, β)` only, with the sensitivity `J d`, `J = [[−v̄, 1, 0], [−v̄, 0, 1]]` |
+| | 1b | the same with `v̄` fixed at the mean of `r²` over the 75 buffered rows (the warm-up) |
+| `mit2_stepcap.py` | 2a, 2b | each free parameter moves at most 0.5 (2a) or 0.1 (2b) of its own magnitude per step; the projection is kept |
+| `mit3_batchstart.py` | 3 | the first 500 rows are buffered and fitted by arch; the online steps start from that fit with the information matrix built on those rows and `t0 = 500`; the 500 rows emit nothing |
+| `mit4_gain.py` | 4a, 4b | the parameter step's gain is `1/sqrt(t + 75)` (4a) or `max(1/(t + 75), 1e-3)` (4b); the information matrix keeps its `1/(t + 75)` average |
+
+Absolute gaps over the fifty seeds; "SE" is arch's robust standard error;
+the last column is the criterion's count.
+
+| variant | rows | `ω` in SE: median / max / over 3 | `α` in SE | `β` in SE | log-lik. gap per row: median / max | path gap: median / max | any over 3 SE | all within 2 SE |
+|---|---|---|---|---|---|---|---|---|
+| plain (part 2) | 2,000 | 0.993 / 24 / 6 | 0.94 / 6.51 / 7 | 0.826 / 5.4 / 4 | 0.00128 / 0.157 | 7.1% / 137% | 12 | 31 |
+| plain (part 2) | 10,000 | 0.826 / 63.4 / 6 | 1.03 / 13.7 / 9 | 0.6 / 10.8 / 6 | 0.000177 / 0.108 | 2.6% / 102% | 12 | **34** |
+| 1a target, running mean | 2,000 | 0.541 / 6.01 / 3 | 0.482 / 2.63 / 0 | 0.669 / 3.24 / 2 | 0.000369 / 0.00536 | 3.4% / 13% | 4 | 40 |
+| 1a target, running mean | 10,000 | 0.619 / 3.82 / 2 | 0.365 / 2.35 / 0 | 0.355 / 2.71 / 0 | 5.28e-05 / 0.00119 | 1.4% / 4% | 2 | **45** |
+| 1b target, 75-row mean | 2,000 | 1.23 / 4.94 / 4 | 0.813 / 4.84 / 3 | 0.741 / 4.5 / 2 | 0.0031 / 0.1 | 10.0% / 99% | 7 | 33 |
+| 1b target, 75-row mean | 10,000 | 2.62 / 6.62 / 21 | 2.07 / 11.6 / 7 | 1.93 / 11 / 17 | 0.0026 / 0.072 | 8.4% / 77% | 24 | **16** |
+| 2a cap 0.5 | 2,000 | 3.37 / 109 / 32 | 6.23 / 83.7 / 42 | 29.7 / 91.1 / 46 | 0.202 / 335 | 48.6% / 100% | 47 | 3 |
+| 2a cap 0.5 | 10,000 | 6.75 / 231 / 44 | 13.4 / 147 / 45 | 14.8 / 161 / 45 | 0.1 / 108 | 37.1% / 100% | 45 | **5** |
+| 2b cap 0.1 | 2,000 | 47.9 / 98.8 / 47 | 5.47 / 8.2 / 37 | 55.4 / 91.1 / 48 | 0.341 / 306 | 57.9% / 100% | 49 | 1 |
+| 2b cap 0.1 | 10,000 | 115 / 310 / 48 | 12.6 / 16.1 / 42 | 117 / 161 / 48 | 0.273 / 152 | 47.6% / 100% | 48 | **2** |
+| 3 batch start, 500 rows | 2,000 | 0.214 / 3.57 / 1 | 0.269 / 2.61 / 0 | 0.219 / 2.01 / 0 | 4.87e-05 / 0.00404 | 2.2% / 12% | 1 | 48 |
+| 3 batch start, 500 rows | 10,000 | 0.142 / 2.77 / 0 | 0.226 / 4.05 / 1 | 0.201 / 3.17 / 1 | 6.98e-06 / 0.00274 | 0.9% / 10% | 1 | **47** |
+| 4a gain 1/sqrt(t+75) | 2,000 | 4.84e+03 / 2.04e+04 / 50 | 69.6 / 105 / 48 | 55.6 / 91.1 / 48 | 1.41 / 1.99 | 37× / 130× | 50 | 0 |
+| 4a gain 1/sqrt(t+75) | 10,000 | 3.22e+04 / 1.16e+05 / 50 | 158 / 199 / 49 | 123 / 161 / 50 | 1.88 / 2.39 | 101× / 283× | 50 | **0** |
+| 4b gain floor 1e-3 | 2,000 | 0.973 / 25.9 / 5 | 0.928 / 6.49 / 7 | 0.976 / 5.02 / 5 | 0.00131 / 0.156 | 7.2% / 137% | 11 | 31 |
+| 4b gain floor 1e-3 | 10,000 | 2.12 / 61.5 / 17 | 1.18 / 10.7 / 9 | 1.72 / 14.1 / 10 | 0.000544 / 0.0945 | 2.7% / 94% | 21 | **17** |
+
+**Against the criterion** (all three parameters within 2 SEs on at least 45
+of 50 seeds at 10,000 rows): **1a passes at exactly 45, and 3 passes at 47.**
+1b, 2a, 2b, 4a and 4b fail, each worse than the plain estimator except 4b at
+2,000 rows, where it equals it.
+
+**Two of the four change what is being estimated or how it starts.** Read
+their passes with that in mind:
+
+- **1a and 1b do not estimate `ω` by the likelihood.** `ω` is the moment
+  estimate `v̄(1 − α − β)`, and `(α, β)` maximize the likelihood with `ω` tied
+  to it: the variance-targeting estimator, whose limit equals the
+  quasi-likelihood's only when the model is right and whose standard errors
+  differ from the unrestricted fit's (Francq, Horváth and Zakoïan 2011,
+  (mem)). The table compares the implied `ω` and `(α, β)` against arch's
+  unrestricted fit, in that fit's SEs, which is the comparison asked for but
+  not the targeted estimator's own sampling error. arch's `GARCH` has no
+  targeting switch to compare against (scan §8). 1a's pass is at the
+  boundary (45 of 50).
+- **3 is not one-pass from the first row.** It buffers 500 rows, emits
+  nothing on them and runs a batch optimizer once; arch stands in for that
+  optimizer here, and in the core it would be an optimizer of the model's own
+  (scan §8 calls that a separate, larger piece). It also starts from arch's
+  own estimator, on a prefix of the same series. The 9,500 online steps after
+  it are what the 10,000-row figures measure, and they keep the estimate
+  inside the criterion. Its state after the buffer is part 1's 128 bytes; the
+  buffer is 500 floats (4 KB) until it is replayed.
+
+**Why the others fail.**
+
+- *1b:* a mean over 75 rows of a series with persistence 0.98 is far from the
+  stationary variance, and with `v̄` frozen `ω` cannot correct it; the error
+  grows with the row count as the SEs shrink (2.6 SEs median at 10,000).
+- *2a, 2b:* a cap relative to the parameter's own magnitude freezes any
+  parameter the projection sets to zero, since its cap is then zero. On seed
+  485001 the first 20 steps reach the corner `α + β = 1 − 1e-4`, the
+  projection sets `α` to 0, and `α` stays at 0 for the rest of the run (the
+  plain estimator reaches the same corner and leaves it by its 500th step). A cap needs an absolute
+  floor, which this study did not measure.
+- *4a:* a gain of `1/sqrt(t)` on a Gauss-Newton step whose per-row direction
+  has the variance of the inverse information diverges: `ω` has no upper
+  bound and runs off by four orders of magnitude.
+- *4b:* a constant gain `c` leaves a stationary noise of about
+  `sqrt(c·n/2)` batch SEs, 2.2 at `c = 1e-3` and 10,000 rows, which is the
+  median `ω` gap measured (2.1). It is a tracking gain, not an estimator of
+  the batch fit, and it does not touch the early-transient failure.
+
+**Not measured:** 1a and 3 together; a cap with an absolute floor; any of
+these under G2 to G4, Student-t returns, or past 10,000 rows. 1a passes at the
+boundary on one truth, so it needs the other generators before it is believed.

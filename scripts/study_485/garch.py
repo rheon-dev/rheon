@@ -117,7 +117,28 @@ def project(theta: np.ndarray, omega_floor: float, margin: float) -> np.ndarray:
 
 @dataclass
 class OnlineGarch:
-    """The recursive quasi-likelihood estimator. ``update(r)`` takes one row."""
+    """The recursive quasi-likelihood estimator. ``update(r)`` takes one row.
+
+    The defaults are the plain estimator of the module docstring. The options
+    are the mitigations measured in the record's part 3; each default leaves the
+    plain estimator's arithmetic unchanged:
+
+    - ``target``: ``"running"`` sets ``omega = v * (1 - alpha - beta)`` after
+      every step, ``v`` the running mean of ``r^2`` over every row read so far,
+      and steps ``(alpha, beta)`` only; ``"warmup"`` takes ``v`` as the mean of
+      ``r^2`` over the buffered rows, fixed from then on. The sensitivity of the
+      two free parameters is ``J d`` with ``J = [[-v, 1, 0], [-v, 0, 1]]``
+      (the chain rule through ``omega``), so no new recursion is carried.
+    - ``step_cap``: each free parameter moves by at most ``step_cap`` times its
+      own magnitude per step (0: no cap); the projection still follows.
+    - ``gain``: the parameter step's gain, ``"inv"`` ``1/(t + t0)``, ``"sqrt"``
+      ``1/sqrt(t + t0)``, ``"floor"`` ``max(1/(t + t0), gain_floor)``. The
+      information matrix is averaged at ``1/(t + t0)`` under every gain.
+    - ``batch_start``: the buffered rows (``warm`` of them) are fitted by
+      ``arch``'s batch fit, standing in for a batch fit the model would own,
+      and the parameters start there; the replay then builds the information
+      matrix at those parameters.
+    """
 
     alpha0: float = 0.05
     beta0: float = 0.90
@@ -125,13 +146,18 @@ class OnlineGarch:
     margin: float = 1e-4
     omega_floor_frac: float = 1e-6
     warm: int = BACKCAST_ROWS
+    target: str = ""
+    step_cap: float = 0.0
+    gain: str = "inv"
+    gain_floor: float = 1e-3
+    batch_start: bool = False
 
     theta: np.ndarray = field(init=False)
-    H: np.ndarray = field(default_factory=lambda: np.zeros((3, 3)))
+    H: np.ndarray = field(init=False)
     d: np.ndarray = field(default_factory=lambda: np.zeros(3))
     sigma2: float = math.nan
-    prev_r2: float = math.nan
     mean_r2: float = 0.0
+    vbar: float = math.nan
     n_seen: int = 0
     n_steps: int = 0
     buffer: list[float] = field(default_factory=list)
@@ -141,7 +167,11 @@ class OnlineGarch:
     pred: list[float] = field(default_factory=list)
 
     def __post_init__(self) -> None:
+        assert self.target in ("", "running", "warmup"), self.target
+        assert self.gain in ("inv", "sqrt", "floor"), self.gain
         self.theta = np.array([math.nan, self.alpha0, self.beta0])
+        k = 2 if self.target else 3
+        self.H = np.zeros((k, k))
 
     def update(self, r: float) -> None:
         if not self.started:
@@ -156,8 +186,17 @@ class OnlineGarch:
     def _start(self) -> None:
         rows = np.asarray(self.buffer)
         b = backcast(rows[:BACKCAST_ROWS] ** 2)
-        # omega from the start value at the initial persistence: theta0 targets b
-        self.theta[0] = b * (1.0 - self.alpha0 - self.beta0)
+        if self.batch_start:
+            _, res = arch_fit(rows)
+            self.theta = np.asarray(res.params, dtype=float).copy()
+        else:
+            # omega from the start value at the initial persistence: theta0 targets b
+            self.theta[0] = b * (1.0 - self.alpha0 - self.beta0)
+        if self.target == "warmup":
+            self.vbar = float(np.mean(rows * rows))
+        if self.target:
+            v = self.vbar if self.target == "warmup" else b
+            self.theta[0] = v * (1.0 - self.theta[1] - self.theta[2])
         self.started = True
         self.sigma2, self.d = self._advance(b, b, np.zeros(3))
         for x in rows:
@@ -172,30 +211,53 @@ class OnlineGarch:
         d = np.array([1.0, prev_r2, prev_s2]) + beta * prev_d
         return float(s2), d
 
+    def _v(self) -> float:
+        return self.mean_r2 if self.target == "running" else self.vbar
+
+    def _gain(self) -> float:
+        t = self.n_steps + self.t0
+        if self.gain == "sqrt":
+            return 1.0 / math.sqrt(t)
+        if self.gain == "floor":
+            return max(1.0 / t, self.gain_floor)
+        return 1.0 / t
+
     def _row(self, r: float, step: bool) -> None:
         r2 = r * r
         self.n_seen += 1
         self.mean_r2 += (r2 - self.mean_r2) / self.n_seen
         s2, d = self.sigma2, self.d
-        info = 0.5 * np.outer(d, d) / (s2 * s2)
+        if self.target:
+            v = self._v()
+            dfree = np.array([d[1] - v * d[0], d[2] - v * d[0]])
+        else:
+            dfree = d
+        info = 0.5 * np.outer(dfree, dfree) / (s2 * s2)
         if step:
             self.n_steps += 1
             gamma = 1.0 / (self.n_steps + self.t0)
             self.H += gamma * (info - self.H)
-            g = 0.5 * (r2 / s2 - 1.0) * d / s2
-            delta = np.linalg.solve(self.H, g)
-            self.theta = project(
-                self.theta + gamma * delta,
-                self.omega_floor_frac * self.mean_r2,
-                self.margin,
-            )
+            g = 0.5 * (r2 / s2 - 1.0) * dfree / s2
+            move = self._gain() * np.linalg.solve(self.H, g)
+            free = self.theta[1:] if self.target else self.theta
+            if self.step_cap > 0.0:
+                lim = self.step_cap * np.abs(free)
+                move = np.clip(move, -lim, lim)
+            proposal = self.theta.copy()
+            if self.target:
+                proposal[1:] += move
+            else:
+                proposal += move
+            self.theta = project(proposal, self.omega_floor_frac * self.mean_r2, self.margin)
+            if self.target:
+                self.theta[0] = self._v() * (1.0 - self.theta[1] - self.theta[2])
         else:
             # the buffered replay: an equal-weight mean of the information
             self.H += (info - self.H) / self.n_seen
         self.sigma2, self.d = self._advance(r2, s2, d)
 
 
-def run(r: np.ndarray, **kw: float) -> OnlineGarch:
+def run(r: np.ndarray, **kw: object) -> OnlineGarch:
     """Feed a series one row at a time."""
     est = OnlineGarch(**kw)  # type: ignore[arg-type]
     for x in r:
@@ -212,13 +274,13 @@ def arch_fit(r: np.ndarray):  # noqa: ANN201
     return am, am.fit(disp="off", cov_type="robust")
 
 
-def compare(n: int, seed: int, truth: tuple[float, float, float]) -> dict[str, float]:
-    """The online estimator against ``arch`` on one simulated series."""
+def compare(n: int, seed: int, truth: tuple[float, float, float], **kw: object) -> dict[str, float]:
+    """The online estimator (options ``kw``) against ``arch`` on one simulated series."""
     r = simulate(n, *truth, seed=seed)
     am, res = arch_fit(r)
     theta_b = np.asarray(res.params, dtype=float)
     se_b = np.asarray(res.std_err, dtype=float)
-    est = run(r)
+    est = run(r, **kw)
     theta_o = est.theta.copy()
 
     start = backcast(r[:BACKCAST_ROWS] ** 2)
@@ -229,6 +291,7 @@ def compare(n: int, seed: int, truth: tuple[float, float, float]) -> dict[str, f
 
     # the online run's own one-step predictions, against the batch-parameter path
     pred = np.asarray(est.pred)
+    emitted = np.isfinite(pred)
     tail = slice(n // 2, n)
     out = {
         "n": float(n),
@@ -244,8 +307,8 @@ def compare(n: int, seed: int, truth: tuple[float, float, float]) -> dict[str, f
         "llf_diff_per_row": (llf_b - llf_o) / n,
         # the same rows (the buffered ones emit nothing): the online run's
         # out-of-sample predictions against the batch fit's in-sample path
-        "online_prequential_llf": loglik(r[BACKCAST_ROWS:], pred[BACKCAST_ROWS:]),
-        "batch_llf_same_rows": loglik(r[BACKCAST_ROWS:], path_b[BACKCAST_ROWS:]),
+        "online_prequential_llf": loglik(r[emitted], pred[emitted]),
+        "batch_llf_same_rows": loglik(r[emitted], path_b[emitted]),
         "path_median_rel_final_params": float(np.median(np.abs(path_o / path_b - 1.0))),
         "pred_median_rel_second_half": float(np.median(np.abs(pred[tail] / path_b[tail] - 1.0))),
     }
