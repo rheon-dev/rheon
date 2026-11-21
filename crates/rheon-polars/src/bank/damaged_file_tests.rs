@@ -47,10 +47,13 @@ fn closing() -> (Spec, Vec<u8>) {
     (s, bank.save_bytes().unwrap())
 }
 
+/// The file with `edit` made, sealed again: the checksum would refuse any
+/// edit first, and these tests hold the checks behind it, which a file
+/// edited and sealed on purpose still meets.
 fn reencoded(bytes: &[u8], edit: impl FnOnce(&mut BankFile)) -> Vec<u8> {
     let mut file: BankFile = rmp_serde::from_slice(bytes).unwrap();
     edit(&mut file);
-    rmp_serde::to_vec_named(&file).unwrap()
+    crate::reseal(&rmp_serde::to_vec_named(&file).unwrap())
 }
 
 /// PA1: `states` holds one list per spec. One more panicked at load,
@@ -892,6 +895,7 @@ fn a_windowed_spreads_ring_of_another_width_is_refused() {
     rows.push(rmpv::Value::from(0u64));
     let mut b = Vec::new();
     rmpv::encode::write_value(&mut b, &v).unwrap();
+    let b = crate::reseal(&b);
     let err = Bank::load_bytes(&b, None).err().expect("loaded");
     assert!(
         err.contains("the residuals it keeps for a spread under a hard window do not match"),

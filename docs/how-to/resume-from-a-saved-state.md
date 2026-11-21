@@ -305,6 +305,7 @@ names what is wrong with the file:**
 | does not exist yet | `FileNotFoundError` | on a first run, build the bank from its specs with `rp.ModelBank(specs)`; otherwise, check the path |
 | is not a bank, or holds different specs from the `specs=` given | `ValueError` | check the path, and pass the specs the state was saved with |
 | holds a state that contradicts its own spec | `ValueError` | refit the bank from its input |
+| is damaged: a byte changed, or the file cut short | `ValueError`, saying the file is damaged | load an undamaged copy of the file, or refit the bank from its input |
 | was written under a newer state schema or file format than this version reads | `ValueError` | upgrade rheon to the version that wrote it, or a later one |
 | was saved by 0.13.0 or an earlier release | `ValueError`, saying a version of rheon older than this one wrote it | refit the bank from its input. `rheon.schema_version()` gives this version's schema |
 

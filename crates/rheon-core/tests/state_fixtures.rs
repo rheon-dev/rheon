@@ -493,6 +493,16 @@ const READ_ANEW: &[(&str, f64)] = &[
     ("pa_warming", 0.25),              // 8.6e-2
 ];
 
+/// The `audit` cases, whose kept states counted the values of the rows of
+/// weight 0 before the save (the user, 2026-11-21: an audit stops counting
+/// such rows, hard rule 9). No layout changed, and what a kept state counted
+/// cannot be told apart from the rest, so it loads as it was: it continues
+/// to the bit (an audit's only output is `n_eff`, which never took such a
+/// row's weight), saves bytes that load back to the same, and differs from
+/// the current fixture's state in its columns' and pairs' counts alone
+/// ([`counted_zero_weight_rule`]).
+const COUNTED_ZERO_WEIGHT: &[&str] = &["audit", "audit_exact", "audit_scaled"];
+
 /// How far a continuation may part from the one frozen, on a platform other
 /// than the writer's: the golden files' tolerance (`tests/golden.rs`).
 const TOL: f64 = 1e-12;
@@ -928,6 +938,14 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                     named(&again.state()) == saved,
                     "{what}: saved, loaded, saved"
                 );
+            } else if COUNTED_ZERO_WEIGHT.contains(&f.name) {
+                let saved = named(&m.state());
+                let again = load(&case, &saved).unwrap_or_else(|e| panic!("{what}: {e}"));
+                assert!(
+                    named(&again.state()) == saved,
+                    "{what}: saved, loaded, saved"
+                );
+                counted_zero_weight_rule(&saved, &current.bytes(), &what);
             } else if renumbered.is_some() {
                 assert_eq!(schema, 65, "{what}: RENUMBERED is for schema 65's windows");
                 renumbered_rule(&case, &named(&m.state()), &current.bytes(), &|_| 0.0, &what);
@@ -1052,6 +1070,71 @@ fn holds_for_a_refit(bytes: &[u8]) -> bool {
 /// marked to keep anchoring at its first value and nothing else is; no
 /// buffer or histogram holds an `|e|` or deviations for a refit; and the
 /// state saves bytes that load back to the same.
+/// A kept `audit` state, converted (`saved`), against the current
+/// fixture's ([`COUNTED_ZERO_WEIGHT`]): the same but for its columns and
+/// pairs, which counted the rows of weight 0 the current state leaves out,
+/// so each column read at least as many rows.
+fn counted_zero_weight_rule(saved: &[u8], current: &[u8], what: &str) {
+    use rmpv::Value;
+    fn audit(v: &Value) -> Option<&Vec<(Value, Value)>> {
+        match v {
+            Value::Map(m) if m.iter().any(|(k, _)| k.as_str() == Some("columns")) => Some(m),
+            Value::Map(m) => m.iter().find_map(|(_, v)| audit(v)),
+            Value::Array(a) => a.iter().find_map(audit),
+            _ => None,
+        }
+    }
+    fn rows(m: &[(Value, Value)]) -> Vec<u64> {
+        let (_, Value::Array(cols)) = m
+            .iter()
+            .find(|(k, _)| k.as_str() == Some("columns"))
+            .unwrap()
+        else {
+            panic!("columns are a list")
+        };
+        cols.iter()
+            .map(|c| {
+                let Value::Map(c) = c else {
+                    panic!("a column is a map")
+                };
+                let get = |k: &str| {
+                    c.iter()
+                        .find(|(n, _)| n.as_str() == Some(k))
+                        .map(|(_, v)| v)
+                        .unwrap_or_else(|| panic!("{k}"))
+                };
+                let Value::Map(moments) = get("moments") else {
+                    panic!("moments")
+                };
+                let n = moments
+                    .iter()
+                    .find(|(k, _)| k.as_str() == Some("n"))
+                    .and_then(|(_, v)| v.as_u64())
+                    .unwrap();
+                ["null", "nan", "pos_inf", "neg_inf", "beyond"]
+                    .iter()
+                    .map(|k| get(k).as_u64().unwrap())
+                    .sum::<u64>()
+                    + n
+            })
+            .collect()
+    }
+    let decode = |b: &[u8]| rmpv::decode::read_value(&mut &b[..]).unwrap();
+    let (kept, now) = (decode(saved), decode(current));
+    let (kept, now) = (audit(&kept).unwrap(), audit(&now).unwrap());
+    assert_eq!(kept.len(), now.len(), "{what}: the fields");
+    for ((k, a), (_, b)) in kept.iter().zip(now) {
+        if !matches!(k.as_str(), Some("columns" | "pairs")) {
+            assert_eq!(a, b, "{what}: {k}");
+        }
+    }
+    let (a, b) = (rows(kept), rows(now));
+    assert!(
+        a.iter().zip(&b).all(|(a, b)| a >= b) && a != b,
+        "{what}: the kept columns read {a:?} rows, the current {b:?}"
+    );
+}
+
 fn kept_scale_rule(case: &Case, kept: &rmpv::Value, saved: &[u8], what: &str) {
     const MARK: &str = "anchor_by_first_value";
     let converted = rmpv::decode::read_value(&mut &saved[..]).unwrap();

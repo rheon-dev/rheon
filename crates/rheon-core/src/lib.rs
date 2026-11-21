@@ -890,7 +890,15 @@ pub use window::{
 ///   that does not learn, and every other model keep their bits. Schema
 ///   69's fixtures are kept (`tests/state_fixtures/v69/`); the new form
 ///   saved inside the warm-up is the case `hmm_full_warming`.
-pub const SCHEMA_VERSION: u32 = 70;
+/// - 71 (2026-11-21, review P7): a bank file, and the window run's state
+///   it embeds per formula target (version 11), ends with `checksum`, the
+///   xxh3-64 of every byte before it, checked before anything is decoded,
+///   so a damaged file is refused as damaged rather than loading in
+///   silence, panicking at its next chunk or aborting the process. No
+///   model's own state moved. A bank file of 70 or earlier has none and
+///   loads as it did, to the bit, re-saving the current fixture's bytes.
+///   Schema 70's fixtures are kept (`tests/state_fixtures/v70/`).
+pub const SCHEMA_VERSION: u32 = 71;
 
 /// The default solve cadence of `ewridge`, `lasso`, `huber` and `quantile`
 /// (docs/PLAN.md task 115 (b)): a solve once the weight learned since the last

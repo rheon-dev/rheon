@@ -525,3 +525,32 @@ coefficients) and 0.25 for the two diagnosed specs (6.6e-2 and 8.0e-2, in a
 Jarque-Bera statistic and a hit rate), every release from 1.0.0 to 2.0.0,
 with no non-float field, null or withheld row moved; a 1.3.0 Huber `sgd`
 state goes on within 3e-3 of 1.3.0's continuation (8.1e-4 measured).
+
+A twenty-fourth, the user's (2026-11-21: "Accept exception 24"; hard
+rule 9 for `audit`): an `audit` learns nothing from a row of weight 0.
+Such a row's clock step is counted, as every row's is, but its values
+reach no count, moment, distinct-value counter, digest, run, lag or
+pair, where they were counted like any other row's. The layout is
+unchanged and there is no schema bump of its own (it landed beside
+schema 71's checksum). An `audit` state of schema 61 to 70 keeps the
+zero-weight values it already counted, which cannot be told apart from
+the rest. It loads as it was and continues to the bit: an audit's one
+output, `n_eff` (`weight_sum`), never took such a row's weight. From its
+load it counts no zero-weight row. It re-saves bytes that load back the
+same, which differ from the current fixture's in the columns' and pairs'
+counts alone; its `n_eff`, clock, configuration and other fields are the
+current fixture's. The current fixtures `audit`, `audit_exact` and
+`audit_scaled` of `rheon-core` regenerated, because their streams hold
+zero-weight rows before the save. The kept `v61/` to `v70/` sets of those
+cases are held by `COUNTED_ZERO_WEIGHT` (`counted_zero_weight_rule`,
+`crates/rheon-core/tests/state_fixtures.rs`): each loads, continues to
+the bit, re-saves bytes that load back the same, matches the current
+fixture outside its columns and pairs, and reads at least as many rows in
+each column, more in one at least. A bank's `audit` refuses a `weight`
+column, so every row it reads weighs 1 and no bank state, output or
+`ModelBank.audit()` table moves. Measured by `scripts/compare_outputs.py`
+against 2875e1f9 (arm64; the smoke cases, and two `audit` cases with
+pairs beside a weighted `ewridge` on streams with zero-weight rows, one
+saved and loaded at half): 0 ulps on every field, and the three audit
+tables hash the same on both builds. No released file holds a weighted
+`audit`, so `tests/test_released_state.py` meets none.

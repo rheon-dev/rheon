@@ -49,6 +49,10 @@ equivalent = "1.0"
 # (Cargo.lock: 2.14.1); nothing new is linked.
 indexmap = "2.14"
 rayon.workspace = true
+# The checksum a bank's and a window run's state file ends with (xxh3, 64
+# bits). The version and feature `polars-core` already links (Cargo.lock:
+# 0.8.18, `xxh3`), pure Rust; nothing new is linked (CLAUDE.md rule 12).
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
 rmp-serde.workspace = true
 serde.workspace = true
 serde_json.workspace = true

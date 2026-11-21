@@ -62,6 +62,69 @@ pub(super) fn json_is_faithful(file: &BankFile, text: &str) -> Result<(), String
     Ok(())
 }
 
+/// A bank file's decoding refused, past its header: the bytes are a bank
+/// file of a version this build reads, so the refusal is damage. A model's
+/// own refusal (a `try_from` of its saved form, which rmp-serde shows bare)
+/// already says what to do; any other is said with the remedy here, so the
+/// text has one.
+pub(super) fn damaged(e: rmp_serde::decode::Error) -> String {
+    use rmp_serde::decode::Error as De;
+    // The decoder's own failures in plain words: its text names
+    // MessagePack markers, a word of the code.
+    // serde's own refusals arrive as `Syntax` too, in its words.
+    const KIND: &str = "a value is not of the kind the file holds there";
+    const KNOWN: &str = "a value it must hold is missing, or it holds one this build \
+                             does not know";
+    let plain = match &e {
+        De::InvalidMarkerRead(_) | De::InvalidDataRead(_) => Some("it is cut short"),
+        De::TypeMismatch(_) | De::OutOfRange | De::LengthMismatch(_) | De::Uncategorized(_) => {
+            Some(KIND)
+        }
+        De::Utf8Error(_) => Some("a text value is not valid text"),
+        De::DepthLimitExceeded => Some("its values nest deeper than a state file's values ever do"),
+        De::Syntax(m)
+            if ["invalid type", "invalid value", "invalid length"]
+                .iter()
+                .any(|p| m.starts_with(p)) =>
+        {
+            Some(KIND)
+        }
+        De::Syntax(m)
+            if [
+                "missing field",
+                "unknown field",
+                "unknown variant",
+                "duplicate field",
+            ]
+            .iter()
+            .any(|p| m.starts_with(p)) =>
+        {
+            Some(KNOWN)
+        }
+        De::Syntax(_) => None,
+    };
+    if let Some(what) = plain {
+        return format!(
+            "state file: it is damaged ({what}). Load an undamaged copy of the state \
+                 file, or rebuild it from its input."
+        );
+    }
+    let body = e.to_string();
+    if body.ends_with("rebuild it from its input.") {
+        format!("state file: it is damaged: {body}")
+    } else {
+        // Its first sentence only: a refusal written for another
+        // reader, such as a formula's for the command line's TOML,
+        // ends with a remedy that cannot mend a state file.
+        let cut = [". ", "; "].iter().filter_map(|sep| body.find(sep)).min();
+        let what = cut.map_or_else(|| body.strip_suffix('.').unwrap_or(&body), |at| &body[..at]);
+        format!(
+            "state file: it is damaged ({what}). Load an undamaged copy of the state \
+                 file, or rebuild it from its input."
+        )
+    }
+}
+
 /// The groups' states, snapshotted one group at a time as they are encoded,
 /// rather than all at once beforehand: the file's bytes are the same, and a
 /// save holds one group's snapshot beside the bank instead of a copy of it.
@@ -181,7 +244,7 @@ mod tests {
     /// it was interrupted.
     #[test]
     fn a_retried_interruption_is_not_the_error_a_later_failure_is_reported_as() {
-        /// Writes `ok` buffers, interrupted once before the first, then fails.
+        /// Writes three times, interrupted once before the first, then fails.
         struct Interrupted {
             fail_with: ErrorKind,
             interrupts: u32,
@@ -197,7 +260,10 @@ mod tests {
                 if self.writes > 3 {
                     return Err(io::Error::new(self.fail_with, "the disk"));
                 }
-                Ok(buf.len())
+                // A few bytes at a time, as a pipe takes them: the checksum's
+                // writer hands a small file on in one block, so `write_all`
+                // calls this again for the rest.
+                Ok(buf.len().min(16))
             }
             fn flush(&mut self) -> io::Result<()> {
                 Ok(())

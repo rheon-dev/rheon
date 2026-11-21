@@ -20,7 +20,7 @@
   spec
   target(column: 'str', *, name: 'str | None' = None) -> 'Target'
   thread_pool_size(*, threads: 'int | None' = None) -> 'int'
-  schema_version = 70
+  schema_version = 71
 
 [rheon.polars]  # what `rheon.polars` adds to the names above, which it re-exports
   ConsumedSourceWarning

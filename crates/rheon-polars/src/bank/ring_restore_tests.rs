@@ -23,7 +23,7 @@ fn frame(n: usize, seed: usize) -> DataFrame {
 fn reencoded(bytes: &[u8], edit: impl FnOnce(&mut BankFile)) -> Vec<u8> {
     let mut file: BankFile = rmp_serde::from_slice(bytes).unwrap();
     edit(&mut file);
-    rmp_serde::to_vec_named(&file).unwrap()
+    crate::reseal(&rmp_serde::to_vec_named(&file).unwrap())
 }
 
 /// A named change to a ring held as JSON.

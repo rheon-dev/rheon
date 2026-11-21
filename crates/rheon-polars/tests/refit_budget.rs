@@ -246,6 +246,8 @@ fn a_bank_resumed_under_a_larger_budget_admits_only_new_groups() {
     budget.1 = rmpv::Value::F64(1.5);
     let mut bytes = Vec::new();
     rmpv::encode::write_value(&mut bytes, &file).unwrap();
+    // Edited on purpose, so sealed again (schema 71's checksum).
+    let bytes = rheon_polars::reseal(&bytes);
     let mut resumed = Bank::load_bytes(&bytes, Some(&[spec("1.5", 50)])).unwrap();
     assert_eq!(given_up(&resumed), before, "the load re-read no group");
     let got = feed(&mut resumed, &tail, tail.height());
@@ -407,7 +409,7 @@ fn a_damaged_reservation_is_refused() {
         f(entry);
         let mut out = Vec::new();
         rmpv::encode::write_value(&mut out, &v).unwrap();
-        out
+        rheon_polars::reseal(&out)
     };
     let specs = [spec("1.0", 50)];
     assert!(Bank::load_bytes(&with(&|_| {}), Some(&specs)).is_ok());

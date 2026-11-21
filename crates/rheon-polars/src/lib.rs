@@ -42,6 +42,7 @@ pub mod arrow;
 mod atomic;
 mod bank;
 mod checks;
+mod checksum;
 mod column;
 mod defaults;
 pub mod env;
@@ -71,6 +72,10 @@ pub use arrow::{
     ArrowChunk, ArrowCol, ClockArray, ClockCol, InputRows, NumArray, chunk_from_frame,
     chunk_from_frame_at, chunk_from_frame_rows, export_struct_to_c,
 };
+/// A state file's checksum computed again, for a test that edits a file on
+/// purpose (`checksum.rs` has the layout).
+#[doc(hidden)]
+pub use checksum::reseal;
 // The Arrow types an `ArrowChunk` is built from and a `fit_predict_arrow`
 // result is read as, plus the C Data Interface export a binding layer hands
 // to a consumer. Re-exported so that feeding the bank as Arrow needs no

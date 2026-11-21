@@ -96,6 +96,8 @@ fn run_kept(spec: &Spec, df: &DataFrame) -> Vec<Series> {
     assert!(found > 0, "a spec's stream sets the flags");
     let mut kept = Vec::new();
     rmpv::encode::write_value(&mut kept, &v).unwrap();
+    // Edited on purpose, so sealed again (schema 71's checksum).
+    let kept = rheon_polars::reseal(&kept);
     let mut bank = Bank::load_bytes(&kept, Some(std::slice::from_ref(spec))).unwrap();
     run_bank(&mut bank, df)
 }
