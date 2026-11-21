@@ -1,11 +1,16 @@
-# Study 528, part 1: an exact accumulator for shard invariance
+# Study 528: an exact accumulator for shard invariance
 
-Status as of 2026-11-21: **parts 1 and 2 of 3 done** (part 1: the three
-accumulators, their correctness against `math.fsum` and `Fraction`, shard
-invariance, state bytes; part 2, below: which state fields need one, and decay
-in shard merges). Part 3 is not in this record. Python only: no Rust was built.
-Script: `scripts/study_528.py` (seed 528, about 9 s; `--quick` about 1.5 s).
-Every input is generated from the seed; nothing is written to disk.
+Status as of 2026-11-21: **parts 1, 2 and 3 of 3 done; the study is complete**
+(part 1: the three accumulators, their correctness against `math.fsum` and
+`Fraction`, shard invariance, state bytes; part 2: which state fields need
+one, and decay in shard merges; part 3: one script, the operation and byte
+table, the oracle for each claim, the proposed tolerances and the
+recommendation). Python only: no Rust was built. One open question is the
+user's (part 3, section 5). Script: `scripts/study_528.py`, subcommands
+`accumulators` (part 1), `merge` (part 2), `costs` (part 3) and `all` (the
+default), with `--quick` (seed 528; `all` about 20 s, `--quick` about 5 s;
+it exits 1 if a proposed tolerance fails). Every input is generated from the
+seed; nothing is written to disk.
 
 **The question.** Task 528 merges the saved states of shards into the state of
 their union and wants the merged state bit-identical whatever the split and
@@ -43,8 +48,8 @@ its saved form must be canonicalised first and its live form is variable and
 can be large. Shewchuk's state is not canonical without an extra loop, and it
 cannot hold an intermediate above the f64 range.
 
-The per-add timings are CPython's and say nothing about Rust; part 2 or 3
-measures the real per-row cost against the scan's 4 to 15 times.
+The per-add timings are CPython's and say nothing about Rust; part 3 counts
+operations instead (its table), and no compiled timing was made.
 
 ## The math
 
@@ -239,14 +244,16 @@ when the data's exponents span little of the range.
 
 ### CPython time per add (relative only)
 
-Plain float 0.015 us; Shewchuk 0.99 us (65x); Kulisch 0.97 us (63x);
+(Part 1's run. The consolidated script no longer times anything: part 3
+counts operations instead.) Plain float 0.015 us; Shewchuk 0.99 us (65x); Kulisch 0.97 us (63x);
 superacc 0.55 us (36x). Interpreter overhead dominates all three; these
 numbers say nothing about Rust.
 
 # Part 2: which states need it, and decay in shard merges
 
-Script: `scripts/study_528_merge.py` (imports part 1's `Kulisch` unchanged;
-seed 528, about 8 s; `--quick` about 2 s). State fields read from
+Script: `scripts/study_528.py merge` (written as `scripts/study_528_merge.py`
+and folded into the one script in part 3, numbers unchanged; it uses part 1's
+`Kulisch` unchanged; seed 528, about 8 s; `--quick` about 2 s). State fields read from
 `origin/main` (`ewridge.rs`, `gaps.rs` `Acc`/`Cross`, `ewcov.rs` `EwCov`,
 `rls.rs` `Rls`): fields and update equations only.
 
@@ -395,8 +402,159 @@ Exact products (needed for an exact centred read, section 2) double the
 width to 67 limbs (536 B per field; 123,816 B for k = 20). Both are far above
 the state-size rule's "reasonable" for k = 20 and are the user's call.
 
-## What is missing (part 3)
+## What part 2 left open
 
 The per-row cost in a compiled implementation, whether the accumulator sits
 on the per-row path or only in the merge, how a raw-sum layout fits rule 5's
-fixtures, and the state-size question above.
+fixtures, and the state-size question above. Part 3 answers the cost in
+counted operations (not compiled timings) and states the state-size question
+for the user; the fixtures question follows whichever layout the user takes.
+
+# Part 3: operations and bytes, oracles, tolerances, recommendation
+
+Script: `scripts/study_528.py costs` (and `all`, which runs the three parts
+and then asserts every proposed tolerance below: 19 checks, 0 failed; `all`
+19.5 s, `all --quick` 4.6 s, exit 0). Parts 1 and 2 reproduce their numbers
+unchanged under the one script; part 3 added a `Fraction` oracle beside each
+earlier comparison against an unsharded run.
+
+## Answer
+
+- **The table** (section 2) counts operations per add, decayed add, merge,
+  save (canonical form) and `round_to_f64`, and the state bytes, per scalar
+  sum. No timing claims: Python times the interpreter, not the arithmetic.
+- **Every exact claim has 0 mismatches against its oracle** (section 3):
+  `math.fsum` and `float(Fraction(exact sum))` for one sum, 1,200 sums per
+  accumulator; the exact common-clock sum in `Fraction` for the decayed
+  merges.
+- **Tolerances** (section 4): zero, bit for bit, for every exact claim; **13
+  ulps** for a decayed merge across general clock offsets (the measured
+  worst over 320 splits); none for plain floats; the state bytes as exact
+  counts (Kulisch exactly 273 B per sum).
+- **Recommendation for a Rust port: the Kulisch accumulator** (section 5),
+  if any state adopts raw sums. Whether any should is open and is the
+  user's decision under the state rule.
+
+## 1. One script
+
+`scripts/study_528_merge.py` is folded into `scripts/study_528.py` and
+deleted. `python scripts/study_528.py [accumulators|merge|costs|all]
+[--quick]`; `all` is the default. Each claim registers a check (claim,
+oracle, measured, tolerance) and the run ends with the list and exits 1 if
+one fails. The CPython per-add timing of part 1 is dropped.
+
+## 2. Operations and bytes per scalar sum
+
+Units: an **fp op** is one f64 add, subtract, multiply or compare; a **word
+op** one integer operation on a 64-bit word (shift, mask, add, compare); a
+**limb op** one add or subtract with carry, negation step or nonzero test of
+a 64-bit limb (Kulisch) or of a 64-bit chunk holding 32 payload bits (the
+superaccumulator). Fixed word ops are read off each add path; every variable
+count (carry ripple, components, flushes, carry steps, scans) is counted
+while running the data: 6 generators x 30 sums of 1 to 1,000 values (180
+sums), shard merges of 1,000-value sets (2 to 16 shards, random tree), and a
+200,000-value stream for the amortized counts. "m" is the expansion's
+component count, "E" the superaccumulator's live large entries, "C" its
+chunks.
+
+| | add | decayed add (extra) | merge | to canonical form (save) | round_to_f64 | bytes, fixed | bytes, worst | bytes formula |
+|---|---|---|---|---|---|---|---|---|
+| plain float | 1 fp op | +1 fp multiply | 1 fp op | 0 | 0 | 8 | 8 | 8 |
+| Shewchuk expansion | m two-sums of 7 fp ops (3 add/sub, 3 for the magnitude compare, 1 zero test); measured mean 18.1, max 89 two-sums | +1 fp multiply | the other's components added one by one: mean 1,587, max 16,841 two-sums | greedy re-rounding: mean 340, max 2,006 two-sums | fsum's last step: mean 1.6, max 8 two-sums (at most m) | 2 (length, flags); no fixed part | canonical 322 (40 components); raw: no bound below the bit range (77 components, 618 B, seen) | 8m + 2 |
+| Kulisch, 34 limbs | 11 word ops + 2 limb ops + carry ripple: mean 2.24, max 34 limb ops on sums of <= 1,000; 2.009 on the 200,000 stream | +1 fp multiply | 34 limb ops + 1 flag OR, fixed | 0 (the limbs are canonical) | mean 25, max 69 limb ops; worst 103 (1 sign + 34 negate + 34 scan + 2 window + 32 sticky), plus about 10 word ops | **273** | **273** | 8 x 34 + 1 |
+| sparse superaccumulator | 10 word ops (a direct-indexed large level) + amortized flush of 10 word ops and <= 3 chunk ops per 1,024 adds to one entry: 0 chunk ops on sums of <= 1,000; 0.0024 on the 200,000 stream | +1 fp multiply | flush and carry both, C chunk adds, carry: mean 301, max 2,101 chunk ops | flush E entries, carry: mean 269, max 2,121 chunk ops | canonicalise + digit rounding: mean 284, max 2,193 chunk ops | 5 (two lengths, flags) | canonical 626 (C = 69); live 25,202 (E = 2,048) | canonical 9C + 5; live 12E + 9C + 5 |
+
+**Decayed add.** In the rows' common-clock form (the form that merges
+exactly, part 2) every accumulator adds `fl(p g)` with `p = lam^(T_ref - t)`:
+one extra fp multiply per field, and one libm power per row shared by every
+field (with the whole-half-life split, a divmod, a power and an `ldexp`).
+Decaying the state itself each row (`S <- lam^dt S + g`) is not exact for any
+of them: plain float 1 multiply; the expansion 1 multiply per component;
+Kulisch 34 limb x 53-bit multiplies and a rounding (a 34-limb shift when
+`lam^dt = 2^-n`); the superaccumulator one multiply per live entry and chunk.
+
+**Per Gram of k features** (1 + k + k(k+1)/2 summed fields: W, S1, S2;
+targets add fields at the same rate):
+
+| k | fields | plain float | Kulisch | superaccumulator, canonical worst |
+|---|---|---|---|---|
+| 2 | 6 | 48 B, 6 merge ops | 1,638 B, 204 merge limb ops | 3,756 B |
+| 5 | 21 | 168 B, 21 merge ops | 5,733 B, 714 merge limb ops | 13,146 B |
+| 20 | 231 | 1,848 B, 231 merge ops | 63,063 B, 7,854 merge limb ops | 144,606 B |
+
+Exact products (part 2, section 2) widen Kulisch to 67 limbs: 536 B per
+field (123,816 B for k = 20), and four register adds per entry per row.
+
+**Reading the table.** Kulisch's add costs about 2 limb ops on almost every
+row (a ripple past the two written limbs averaged 0.24 limb ops on short
+mixed sums and 0.009 on the long stream; its worst, a sign change, runs to
+the top), and its merge, save and size are fixed. The superaccumulator's add
+is cheapest (no limb op in the common path) but every merge and every save
+first flushes and carries, hundreds of chunk ops on these data, and its live
+working set is large (a dense large level is 2,048 entries). The expansion's
+add grows with its length and its merge with the product of the two lengths.
+
+## 3. Oracles, claim by claim
+
+| claim | oracle | trials | largest gap |
+|---|---|---|---|
+| one sum, each accumulator, rounded | `math.fsum` where it returns, and `float(Fraction(exact sum))` | 1,200 sums per accumulator (Shewchuk: 1,011 compared; it raises on the 189 near-overflow sums on which `fsum` raises) | 0 mismatches, each |
+| special values | the stated flag policy (part 1) | 10 cases x 3 | 0 |
+| shard merge, no decay, rounded | `float(Fraction(exact sum of the set))`, and the unsharded run | 288 splits per accumulator | 0, each |
+| shard merge, no decay, saved state | the unsharded run's canonical state, byte for byte | 288 per accumulator | 0, each (raw expansion partials: 288 differ) |
+| raw Gram sums, no decay, every field | `float(Fraction(exact sum of the per-row terms))`; limbs against the unsharded run | 192 splits; 576 (k = 2) + 2,016 (k = 5) field values | 0 |
+| decayed sums, unsharded register | `float(Fraction(exact sum of every row's fl(fl(lam^(T_end - t)) g)))`, one common clock | 1,188 field references | 0 |
+| decayed merge, common clock or whole-half-life offsets | the same | 256 splits (4 cases x k = 2, 5 x 32) | 0 |
+| decayed merge, general clock offsets, with the register | the same | 320 splits (5 cases x k = 2, 5 x 4 sets x 8 splits), 194 off | 13 ulps (k = 2: 5; k = 5: 13) |
+| the counted limb-wise rounding (section 2) | `round_to_f64` and `float(Fraction(exact sum))` | 180 sums x 3 | 0 |
+| centred covariance from exact sums of exact products | `Fraction` over the data | 1 set, offset 1e8 | 0 ulps |
+
+The decayed oracle cannot be the decayed sum with exact powers (`lam^d` is
+irrational); it is the exact sum of what each row contributes on the common
+clock, `fl(fl(lam^(T_end - t)) g)`, which `Fraction` holds exactly.
+
+## 4. Proposed tolerances
+
+- **An exact accumulator: zero.** One sum, a shard merge without decay, and
+  a decayed merge on one common clock or across whole-half-life offsets
+  (with the split power) are bit-identical to the oracle: a test compares
+  `to_bits()` for equality and says the tolerance is zero, not a small ulp
+  count. The saved state is byte-identical too, for Kulisch's limbs and the
+  superaccumulator's canonical form (never for raw expansion partials).
+- **A decayed merge across general clock offsets: 13 ulps**, the measured
+  worst (an integer, so no rounding up), over 320 splits (5 accumulator
+  cases x k = 2 and 5 x 4 sets x 8 splits). It grows with k (5 at k = 2, 13
+  at k = 5) and was measured on this generator only, so it holds for k <= 5
+  here and must be re-measured for larger k. It is above the 5-ulp line the
+  project uses for output-moving changes, so a test that adopts it is the
+  user's call.
+- **Plain floats: none.** They are the contrast (every split differs).
+- **State size, exact counts per scalar sum:** plain float 8 B; **Kulisch
+  exactly 273 B** (an equality test); superaccumulator canonical exactly
+  9C + 5 B for its C chunks, at most 626 B (608 B seen), live at most
+  12E + 9C + 5 = 25,202 B; expansion canonical exactly 8c + 2 B for its c
+  components, at most 322 B (314 B reached); raw expansion: no tolerance (its
+  length depends on the adds).
+
+## 5. Recommendation, and the open question
+
+**A Rust port should use the Kulisch accumulator.** Its state is one fixed
+layout, 273 B per sum, canonical with no save step, so merged states re-save
+byte for byte and one fixture shape covers every case; its merge is 34 limb
+ops whatever the data; its add is 11 word ops and about 2 limb ops; its
+rounding is at most 103 limb ops, once per read. The superaccumulator adds
+more cheaply but pays hundreds of chunk ops at every merge and save, keeps a
+large live working set, and its saved size varies (59 to 608 B seen, 626 B
+worst, above Kulisch's 273 B). The expansion's cost grows with its length,
+its raw state is not canonical, and it cannot hold an intermediate above
+the f64 range.
+
+**Open: does any state need it?** None holds raw sums today. The three model
+families that keep a Gram or a factor (part 2, section 1) would need the
+accumulator only if their states were changed to raw weighted sums. That
+change multiplies each summed field from 8 B to 273 B (34 times; 536 B with
+exact products), for example 63,063 B against 1,848 B per Gram at k = 20,
+bounded by k, not by the stream; and with decay it is exact only on a common
+clock or whole-half-life offsets, which changes the per-row update as well as
+the merge. Under the state rule a growth of that size is raised with the user
+before it lands. This study does not decide it.
