@@ -46,7 +46,7 @@ def refresh_time(times: list[np.ndarray], prices: list[np.ndarray]):
         tau = max(nxt)
     stamps = np.asarray(out_t, dtype=np.int64)
     vals = np.empty((len(stamps), k))
-    for j, (t, p) in enumerate(zip(times, prices)):
+    for j, (t, p) in enumerate(zip(times, prices, strict=True)):
         vals[:, j] = p[np.searchsorted(t, stamps, side="right") - 1]
     return stamps, vals
 
@@ -114,7 +114,7 @@ def msrc(p: np.ndarray, M: int, N: int, edge: bool = True, n_conv: str = "hfhd")
     Ks, a = msrc_weights(M, N)
     n = p.shape[0] if n_conv == "hfhd" else p.shape[0] - 1
     s = np.zeros((p.shape[1], p.shape[1]))
-    for K, ai in zip(Ks.astype(int), a):
+    for K, ai in zip(Ks.astype(int), a, strict=True):
         s += ai * avg_rv(p, K)
     if edge:
         zeta = (M + N) * (N + 1) / ((n + 1) * (M - 1))
@@ -257,7 +257,9 @@ def gamma(x: np.ndarray, h: int) -> np.ndarray:
     return x[h:].T @ x[:-h]
 
 
-def krvm(p: np.ndarray, H: float, kernel: str = "parzen", m: int = 1, form: str = "bnhls", lags=None):
+def krvm(
+    p: np.ndarray, H: float, kernel: str = "parzen", m: int = 1, form: str = "bnhls", lags=None
+):
     """The multivariate realised kernel.
 
     ``form = "bnhls"`` (BNHLS 2011, Eq. 2): ``sum_{h=-n}^{n} k(h/(H+1)) Gamma_h``

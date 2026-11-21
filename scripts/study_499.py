@@ -18,13 +18,14 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "studies" / "study_499"))
+from importlib.metadata import version  # noqa: E402
+
 import compare as C  # noqa: E402
 import hfhd  # noqa: E402,F401
 import numba  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import scipy  # noqa: E402
-from importlib.metadata import version  # noqa: E402
 
 
 def cell(c: object) -> str:
@@ -73,48 +74,98 @@ def main() -> None:
     table(
         f"Agreement with hfhd (largest gap over seeds {agree_seeds.start}-{agree_seeds.stop - 1}, "
         "relative to the largest entry of hfhd's matrix)",
-        [("estimator", "estimator"), ("hfhd setting", "setting"), ("grid", "grid"),
-         ("batch, hfhd convention", "hf"), ("one pass", "st"), ("1 = 997 chunks", "inv"),
-         ("paper's form vs hfhd", "paper"), ("state bytes", "bytes")],
+        [
+            ("estimator", "estimator"),
+            ("hfhd setting", "setting"),
+            ("grid", "grid"),
+            ("batch, hfhd convention", "hf"),
+            ("one pass", "st"),
+            ("1 = 997 chunks", "inv"),
+            ("paper's form vs hfhd", "paper"),
+            ("state bytes", "bytes"),
+        ],
         C.agreement(agree_seeds),
     )
     table(
-        "Bias-corrected MRC (theta 0.4): each step from hfhd's convention to the paper's, alone (seed 0)",
+        "Bias-corrected MRC (theta 0.4): each step from hfhd's convention to the paper's, "
+        "alone (seed 0)",
         [("grid", "grid"), ("k", "k"), ("change", "flag"), ("moves the estimate by", "gap")],
         C.mrc_flags(0),
     )
     table(
-        f"Pre-averaged Hayashi-Yoshida: the paper's windows against hfhd's (seeds 0-{gap_seeds.stop - 1}; "
+        "Pre-averaged Hayashi-Yoshida: the paper's windows against hfhd's "
+        f"(seeds 0-{gap_seeds.stop - 1}; "
         "estimate / true covariance)",
-        [("theta", "theta"), ("k", "k"), ("hfhd mean", "hfhd_mean"), ("paper mean", "paper_mean"),
-         ("paper, exact psi", "paper_exact_psi_mean"), ("paper - hfhd, mean", "gap_mean"),
-         ("paper - hfhd, sd", "gap_sd"), ("hfhd's own sd", "est_sd")],
+        [
+            ("theta", "theta"),
+            ("k", "k"),
+            ("hfhd mean", "hfhd_mean"),
+            ("paper mean", "paper_mean"),
+            ("paper, exact psi", "paper_exact_psi_mean"),
+            ("paper - hfhd, mean", "gap_mean"),
+            ("paper - hfhd, sd", "gap_sd"),
+            ("hfhd's own sd", "est_sd"),
+        ],
         C.hy_preavg_gaps(gap_seeds),
     )
     table(
-        "Bandwidth: hfhd's get_bandwidth against BNHLS's rule (seed 0, asset A's noise and variance)",
-        [("grid", "grid"), ("kernel", "kernel"), ("n", "n"), ("xi^2", "xi2"), ("c* hfhd", "c_hfhd"),
-         ("c* exact", "c_exact"), ("H hfhd", "H_hfhd"), ("H exact", "H_exact"), ("ceil", "H_ceil"),
-         ("BNHLS estimate moves", "estimate_moves")],
+        "Bandwidth: hfhd's get_bandwidth against BNHLS's rule "
+        "(seed 0, asset A's noise and variance)",
+        [
+            ("grid", "grid"),
+            ("kernel", "kernel"),
+            ("n", "n"),
+            ("xi^2", "xi2"),
+            ("c* hfhd", "c_hfhd"),
+            ("c* exact", "c_exact"),
+            ("H hfhd", "H_hfhd"),
+            ("H exact", "H_exact"),
+            ("ceil", "H_ceil"),
+            ("BNHLS estimate moves", "estimate_moves"),
+        ],
         C.bandwidths(0),
     )
     table(
         "Quadratic spectral cut at L lags against every lag (seed 0)",
-        [("grid", "grid"), ("form", "form"), ("H", "H"), ("L / H", "L/H"), ("L", "L"),
-         ("gap", "gap"), ("state bytes, d = 2", "state_bytes")],
+        [
+            ("grid", "grid"),
+            ("form", "form"),
+            ("H", "H"),
+            ("L / H", "L/H"),
+            ("L", "L"),
+            ("gap", "gap"),
+            ("state bytes, d = 2", "state_bytes"),
+        ],
         C.qs_truncation(0),
     )
     table(
-        f"Against the truth (seeds 0-{acc_seeds.stop - 1}): mean of estimate / true - 1, and its root mean square",
-        [("grid", "grid"), ("estimator", "estimator"), ("variance A, bias", "var_bias"),
-         ("variance A, rmse", "var_rmse"), ("covariance, bias", "cov_bias"), ("covariance, rmse", "cov_rmse")],
+        f"Against the truth (seeds 0-{acc_seeds.stop - 1}): "
+        "mean of estimate / true - 1, and its root mean square",
+        [
+            ("grid", "grid"),
+            ("estimator", "estimator"),
+            ("variance A, bias", "var_bias"),
+            ("variance A, rmse", "var_rmse"),
+            ("covariance, bias", "cov_bias"),
+            ("covariance, rmse", "cov_rmse"),
+        ],
         C.accuracy(acc_seeds),
     )
     table(
-        "State and cost per tick (ns; best of 3; hfhd and numpy are batch, the one pass is numba-compiled)",
-        [("estimator", "estimator"), ("setting", "setting"), ("d", "d"), ("rows", "n"),
-         ("state formula", "formula"), ("bytes by formula", "bytes_formula"), ("bytes counted", "bytes_counted"),
-         ("hfhd", "ns_hfhd"), ("numpy", "ns_numpy"), ("one pass", "ns_one_pass")],
+        "State and cost per tick (ns; best of 3; hfhd and numpy are batch, "
+        "the one pass is numba-compiled)",
+        [
+            ("estimator", "estimator"),
+            ("setting", "setting"),
+            ("d", "d"),
+            ("rows", "n"),
+            ("state formula", "formula"),
+            ("bytes by formula", "bytes_formula"),
+            ("bytes counted", "bytes_counted"),
+            ("hfhd", "ns_hfhd"),
+            ("numpy", "ns_numpy"),
+            ("one pass", "ns_one_pass"),
+        ],
         C.state_and_cost((2, 10)),
     )
     print(f"\n(all tables in {time.time() - t0:.0f} s)")

@@ -10,24 +10,25 @@ one-pass forms, `compare.py` the checks). Machine: x86_64 Linux, 4 cores.*
 
 Every estimator the task names is reproduced from its paper and checked
 against hfhd 0.1.4 on the same ticks. Where hfhd's conventions are written
-in, the two agree to floating precision: the largest gap is 1.2e-13 of the
-estimate's largest entry (the realised kernel, whose sum cancels a noise
-term about 35 times the estimate), and every other gap is 5e-15 or less.
-The refresh-time grid and the pre-averaged Hayashi-Yoshida (with hfhd's
-window convention) agree to the bit. Where hfhd departs from its paper the
+in, the two agree to floating precision: the largest gap is 3.0e-13 of the
+estimate's largest entry (the realised kernel on the one-second grid, whose
+sum cancels a noise term about 36 times the estimate), and every other gap
+is 8.4e-15 or less.
+The refresh-time grid agrees to the bit, and the pre-averaged
+Hayashi-Yoshida with hfhd's window convention to 6e-16. Where hfhd departs from its paper the
 study sets the paper's form beside it and measures the difference
 (Section 4).
 
 | estimator | hfhd function | largest gap to hfhd (hfhd's convention) | paper's form vs hfhd | one pass? | state (bytes; d assets) | at hfhd's defaults, n = 23,400, d = 2 | one pass, ns a tick (d = 2 / 10) |
 |---|---|---|---|---|---|---|---|
 | refresh time | `refresh_time` | identical stamps and values | same definition | yes (one stamp of look-ahead) | `8 (3 + d) + d` | 42 | 7.7 / - |
-| two scales | `tsrc(J, K)` | 0 to 1.7e-16 | 2e-7 (hfhd counts prices for `n`) | yes | `8 (K d + 2 d^2 + 1)` | 13,160 (K = 818) | 30 / 97 |
-| multi scale | `msrc(M, N, pairwise)` | 4.2e-15 | 2e-6 (the edge term's `n`) | yes | `8 ((N + M) d + 3 d^2 + 1)` | 5,000 (M = N = 153) | 1,210 / 6,900 |
-| pre-averaged (MRC) | `mrc(theta, bias_correction, pairwise)` | 5.0e-15 | 2.5e-3 to 7.5e-3 with the bias term, 3e-4 without | yes | `8 ((k - 1) d + d + 2 d^2 + 2)` | 1,072 (k = 62) | 220 / 374 |
-| realised kernel, Parzen | `krvm(H, kernel=parzen_kernel)`, `get_bandwidth` | 1.2e-13 | a different weight function (Section 4.5) | yes at a fixed H; with H chosen at close, a ring of `H_max` | `8 (H d + d + d^2 + 1)`; `8 (H_max d + d + (H_max + 1) d^2 + 1)` | 936; 70,616 (H_max = 1,470) | 910 / 5,040; 34,400 / 74,300 |
-| realised kernel, quadratic spectral | `krvm(H, kernel=quadratic_spectral_kernel)` | 1.2e-13 | as Parzen | **no**: every lag carries weight; cut at `L` lags it is one pass | `8 (L d + d + d^2 + 1)` | 1,176 (L = 10 H = 70; gap 1.1% to all lags) | 1,290 / 6,470 |
-| Hayashi-Yoshida | `hayashi_yoshida(theta=None)` | 1.5e-15 | same definition | yes, on a long frame | `8 * 18 + 2` a pair | 146 | 4.6 |
-| Hayashi-Yoshida, pre-averaged | `hayashi_yoshida(theta)` | 0 (bit for bit) | 4% and 10% on one day (an edge and window convention, zero-mean over days) | one pass, but its pending queue is bounded only by the ratio of the two assets' tick rates | not bounded by the shape | - | not built (batch numpy 959) |
+| two scales | `tsrc(J, K)` | 5.3e-16 | 2e-7 (hfhd counts prices for `n`) | yes | `8 (K d + 2 d^2 + 1)` | 13,160 (K = 818) | 30 / 97 |
+| multi scale | `msrc(M, N, pairwise)` | 4.9e-15 | 2e-6 (the edge term's `n`) | yes | `8 ((N + M) d + 3 d^2 + 1)` | 5,000 (M = N = 153) | 1,210 / 6,900 |
+| pre-averaged (MRC) | `mrc(theta, bias_correction, pairwise)` | 8.4e-15 | 1e-3 to 1e-2 with the bias term, 4e-4 to 4e-3 without | yes | `8 ((k - 1) d + d + 2 d^2 + 2)` | 1,072 (k = 62) | 220 / 374 |
+| realised kernel, Parzen | `krvm(H, kernel=parzen_kernel)`, `get_bandwidth` | 3.0e-13 | a different weight function: 4% to 7% (Section 4) | yes at a fixed H; with H chosen at close, a ring of `H_max` | `8 (H d + d + d^2 + 1)`; `8 (H_max d + d + (H_max + 1) d^2 + 1)` | 936; 70,616 (H_max = 1,470) | 910 / 5,040; 34,400 / 74,300 |
+| realised kernel, quadratic spectral | `krvm(H, kernel=quadratic_spectral_kernel)` | 3.0e-13 | as Parzen | **no**: every lag carries weight; cut at `L` lags it is one pass | `8 (L d + d + d^2 + 1)` | 1,176 (L = 10 H = 70; gap 1.1% to all lags) | 1,290 / 6,470 |
+| Hayashi-Yoshida | `hayashi_yoshida(theta=None)` | 2.7e-15 | same definition | yes, on a long frame | `8 * 18 + 2` a pair | 146 | 4.6 |
+| Hayashi-Yoshida, pre-averaged | `hayashi_yoshida(theta)` | 6.3e-16 | up to 10% on a day (which pairs of windows meet at the edges; 2% to 3% of the truth on average over 40 days, beside the estimator's own 26% to 32%) | one pass, but its pending queue is bounded only by the ratio of the two assets' tick rates | not bounded by the shape | - | not built (batch numpy 959) |
 
 Two passes are needed only where a choice needs the block's own length
 before its first row: `K = n^(2/3)`, `M = N = sqrt(n)`, `k = theta sqrt(n)`
@@ -195,12 +196,13 @@ and gives hfhd's number to the bit.
 Reading it:
 
 * **Floating precision** holds everywhere hfhd's convention is written
-  in. The kernels' 1e-13 is the cancellation: `Gamma_0` is about 36 times
+  in. The kernels' 3e-13 is the cancellation: `Gamma_0` is about 36 times
   the estimate on the one-second grid, so a summation order that differs
   in the last bit of `Gamma_0` shows at 1e-13 of the estimate; on the
-  refresh-time grid (fewer, noisier returns but `Gamma_0` 7 times the
-  estimate) it is 1e-14.
-* **The one-pass forms** agree with hfhd to 7e-14 or better and give the
+  refresh-time grid (`Gamma_0` 7 times the estimate) it is 2e-14, and on
+  one asset's own ticks, where both sides run the same one-dimensional
+  arithmetic, 4e-16 or exactly 0.
+* **The one-pass forms** agree with hfhd to 8.3e-14 or better and give the
   same bits at 1 chunk and 997 chunks for every estimator: the state
   carries everything (the ring, the accumulators, the counts, and for the
   tick-level ones the open stamp).
@@ -210,9 +212,10 @@ Reading it:
 
 {{MRCFLAGS}}
 
-The largest of hfhd's four departures is the window count; `psi_1`'s
-missing term and the missing rescale each move the estimate by 1e-4 to
-1e-3. `rcov(kind="preavg", psd=False)` is the paper's form (`tests/
+Each of hfhd's four departures moves the estimate by 3e-4 to 9e-3 alone;
+the largest is the missing rescale on the refresh-time grid, where the
+window is short (`k` = 26) and the bias term's share of the integrated
+covariance, `psi_1 / (2 psi_2 k^2)`, is larger. They partly cancel. `rcov(kind="preavg", psd=False)` is the paper's form (`tests/
 test_rcov.py::test_the_preaveraged_estimate_is_its_definition`); its
 `psd = true` default, which has no bias term, matches hfhd's
 `bias_correction=False` to 3e-15 once hfhd's first window is mapped (the
@@ -220,14 +223,15 @@ existing `test_the_default_preaveraged_estimate_is_hfhds_mrc`).
 
 {{HYGAPS}}
 
-The paper's windows and hfhd's give different numbers on a day (4% at
-theta 0.4, 10% at 0.6 on seed 0) because the boundary pairs differ: each
+The paper's windows and hfhd's give different numbers on a day (up to 10%
+over five days) because the boundary pairs differ: each
 window's interval carries one zero-weight return, at the front in hfhd's
 form and at the back in the paper's, so the two sets of pairs differ by
 pairs whose weighted returns do not overlap in time. Those products have
-mean zero; over the seeds the mean difference is small beside the
-estimator's own spread, and the `psi_HY` choice (limit or exact) moves the
-mean by about 0.1%.
+mean zero; over 40 days the mean difference is 2% to 3% of the truth, a
+fifth of a standard error of it, beside the estimator's own spread of 26%
+to 32%, and the `psi_HY` choice (limit or exact) moves the mean by about
+0.1%.
 
 {{BANDWIDTH}}
 
@@ -237,11 +241,15 @@ int_0^inf k(x)^2 dx`, is 3.5117 for Parzen (`k_.^{0,0}` = 151/560 =
 `k_.^{0,0} = 3 pi / 5`). hfhd rounds them to 3.51 and 0.46 and
 truncates `H` to an integer; `rcov` uses 0.269 for `k_.^{0,0}`, so
 3.5134, and rounds `H` up. Changing `H` by those amounts moves an estimate
-by about a part in a hundred (the table's last column): the bandwidth is
-a statistical choice, and an oracle test should pass `H` explicitly.
+by 0.2% to 2% (the table's last column): the bandwidth is a statistical
+choice, and an oracle test should pass `H` explicitly. The noise ratio
+`xi^2` the rule reads is itself estimated: the 20-return grid's realised
+variance still carries `2 (n/20) omega^2` of noise here, so `xi^2` comes
+out at 2.8e-4 against the true 7.5e-4 and `H` about a third smaller than
+the truth would give.
 
 **Flat-top against BNHLS.** At the same `H` they differ by 4% to 7% on
-one day (the agreement table's "paper's form" column for `krvm`). They are
+a day (the agreement table's "paper's form" column for `krvm`). They are
 different estimators, not a convention: `rcov(kind="kernel")` is BNHLS's,
 with the jitter, and its oracle is hfhd's `krvm` with the weights passed
 in, as the existing test does. hfhd's default kernel is the quadratic
@@ -261,16 +269,29 @@ oscillation, so the gap does not fall evenly with `L`.
 
 {{ACCURACY}}
 
-On this day's noise (`xi^2` = 7.5e-4) the plain realised variance is 36
-times the truth on the one-second grid and 7 times on the refresh-time
-grid, and every noise-robust estimator removes that. The pre-averaged and
-kernel estimators are within a few percent with a root mean square of 6%
-to 12% for the variance; two and multi scales have 3 to 4 times their
-root mean square at hfhd's default scales, which are tuned for larger
-samples. The covariance is harder: refresh time throws away ticks, and
-every refresh-time estimator is biased towards zero by 10% to 50% here
-(the Epps effect the refresh grid does not wholly remove at these tick
-rates), while the plain Hayashi-Yoshida on all the ticks is unbiased.
+On this design's noise (`xi^2` = 7.5e-4) the plain realised variance is
+36 times the truth on the one-second grid and 7 times on the refresh-time
+grid; every noise-robust estimator removes that. Over 40 days:
+
+* The bias-corrected pre-averaged estimate and the flat-top kernels are
+  unbiased within 2% with a root mean square of 5% (one-second grid) and
+  10% (refresh time) for the variance, 8% to 17% for the covariance.
+* BNHLS's kernel with the jitter, at the bandwidth from the rule, is 2% to
+  7% high for the variance (the price of a positive semi-definite kernel,
+  whose bias in the noise falls as `1/H^2`), with a root mean square of 7%
+  to 11%.
+* Two and multi scales at hfhd's default scales have 4 to 5 times that
+  root mean square (22% to 34%), and on the refresh-time grid, about 4,150
+  returns, are 13% to 17% low: their scales `n^(2/3)` and `sqrt(n)` leave
+  few subsamples at that length.
+* `rcov`'s default pre-averaged form (`psd = true`: `theta` 1, the longer
+  window `n^0.6`, no bias term) has 3.4 times the bias-corrected form's
+  root mean square for the variance (18% against 5% on the one-second
+  grid): positive semi-definiteness is bought at that price here.
+* The plain Hayashi-Yoshida on all the ticks has a root mean square of 22%
+  for the covariance; pre-averaging it (theta 0.4) does not improve on
+  that at this noise.
+
 These are one design's numbers, a yardstick for a future test's
 statistical bands, not a ranking.
 
@@ -351,14 +372,14 @@ spectral kernel, 0.9 seconds a call.
 | check | tolerance (relative to the largest entry) | basis |
 |---|---|---|
 | refresh time | equal (stamps and values) | measured equal |
-| `tsrc`, `msrc` (hfhd's `n`) | 1e-13 | measured at most 7.4e-14 (one pass) and 4.2e-15 (batch) |
-| `mrc` with hfhd's four conventions mapped | 1e-13 | measured at most 6.9e-15 |
-| `krvm`, either form, explicit `H` | 1e-12 | measured at most 1.2e-13: the noise cancellation amplifies rounding by `Gamma_0 / K`, about 36 here; a noisier day needs more, so scale the bound by that ratio |
-| `hayashi_yoshida`, `k = 1` | 1e-13 | measured at most 1.5e-15 |
-| pre-averaged HY, hfhd's indexing | 1e-13 | measured 0 to 2e-16 |
+| `tsrc`, `msrc` (hfhd's `n`) | 1e-13 (1e-12 for a one-pass `msrc` at large `M`) | measured at most 7.4e-14 (one pass, whose `M` scales are summed row by row) and 4.9e-15 (batch) |
+| `mrc` with hfhd's four conventions mapped | 1e-13 | measured at most 1.2e-14 |
+| `krvm`, either form, explicit `H` | 1e-12 | measured at most 3.0e-13: the noise cancellation amplifies rounding by `Gamma_0 / K`, about 36 here; a noisier day needs more, so scale the bound by that ratio |
+| `hayashi_yoshida`, `k = 1` | 1e-13 | measured at most 2.8e-15 |
+| pre-averaged HY, hfhd's indexing | 1e-13 | measured at most 6.3e-16 |
 | any form against the paper where hfhd differs | not an oracle: state the convention and map it (as `tests/test_rcov.py` maps `mrc`'s first window) | Section 4 |
 
-`rcov`'s existing bounds (`KRVM_TOL` 1e-13, `HFHD_TOL` 1e-13) fit these.
+`rcov`'s existing bounds (`KRVM_TOL` and `HFHD_TOL`, both 1e-13) hold for its own tests, which run 400 to 1,000 returns with milder cancellation (measured 1.5e-15 and 2.0e-15 there); a kernel test at this study's length and noise needs 1e-12.
 For a covariance, take the bound relative to the matrix's largest entry,
 not to the entry itself, which can be near zero.
 

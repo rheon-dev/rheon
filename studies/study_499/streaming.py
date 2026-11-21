@@ -13,10 +13,9 @@ from __future__ import annotations
 
 import math
 
+import estimators as E
 import numba
 import numpy as np
-
-import estimators as E
 
 
 def nbytes(state: dict) -> int:
@@ -30,7 +29,7 @@ def chunks(n: int, parts: int, seed: int = 0):
     rng = np.random.default_rng(seed)
     cuts = np.sort(rng.choice(np.arange(1, n), size=min(parts - 1, n - 1), replace=False))
     edges = np.concatenate([[0], cuts, [n]])
-    return [slice(int(a), int(b)) for a, b in zip(edges[:-1], edges[1:])]
+    return [slice(int(a), int(b)) for a, b in zip(edges[:-1], edges[1:], strict=True)]
 
 
 # --------------------------------------------------------------------------
@@ -71,7 +70,9 @@ def tsrc_new(d: int, K: int, J: int = 1) -> dict:
 
 def tsrc_feed(st: dict, prices: np.ndarray, K: int, J: int = 1) -> None:
     lags = np.array([K, J], np.int64)
-    _lags_feed(st["ring"], st["cnt"], st["acc"], prices, lags, np.ones(2), np.array([0, 1], np.int64))
+    _lags_feed(
+        st["ring"], st["cnt"], st["acc"], prices, lags, np.ones(2), np.array([0, 1], np.int64)
+    )
 
 
 def tsrc_close(st: dict, K: int, J: int = 1, n_conv: str = "hfhd") -> np.ndarray:
@@ -143,10 +144,10 @@ def _mrc_feed(ring, last, cnt, acc, prices, w, first):
                 if win >= first:
                     for u in range(d):
                         ybar[u] = 0.0
-                    for l in range(km1):
-                        q = ring[(win + l) % km1]
+                    for li in range(km1):
+                        q = ring[(win + li) % km1]
                         for u in range(d):
-                            ybar[u] += w[l] * q[u]
+                            ybar[u] += w[li] * q[u]
                     for u in range(d):
                         for v in range(d):
                             acc[0, u, v] += ybar[u] * ybar[v]
@@ -167,7 +168,9 @@ def mrc_new(d: int, k: int) -> dict:
 
 def mrc_feed(st: dict, prices: np.ndarray, k: int, windows: str = "paper") -> None:
     w = E.g_min(np.arange(1, k) / k)
-    _mrc_feed(st["ring"], st["last"], st["cnt"], st["acc"], prices, w, 0 if windows == "paper" else 1)
+    _mrc_feed(
+        st["ring"], st["last"], st["cnt"], st["acc"], prices, w, 0 if windows == "paper" else 1
+    )
 
 
 def mrc_close(st, k, bias_correction, psi1_upto_k=True, rescale=True, theta=None):
@@ -327,7 +330,18 @@ def rt_run(t, a, p, k, parts=1):
     out_v = np.zeros((len(t), k))
     sl = chunks(len(t), parts)
     for i, s in enumerate(sl):
-        _rt_feed(st["grp"], st["last"], st["seen"], out_t, out_v, st["n_out"], t[s], a[s], p[s], i == len(sl) - 1)
+        _rt_feed(
+            st["grp"],
+            st["last"],
+            st["seen"],
+            out_t,
+            out_v,
+            st["n_out"],
+            t[s],
+            a[s],
+            p[s],
+            i == len(sl) - 1,
+        )
     n = int(st["n_out"][0])
     return out_t[:n], out_v[:n], st
 
