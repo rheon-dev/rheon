@@ -375,6 +375,23 @@ REMEDIES: dict[str, dict[str, dict[str, object]]] = {
         "stage2": {"batch_start": 500, "warm": 500, "t0": 500.0, "robust_c": 2.0},
         "margins": {"batch_start": True, "warm": 500, "t0": 500.0, "robust_c": 2.0},
     },
+    # request A12: the same with the core's batch optimizer in both stages
+    "batch500core_huber2": {
+        "stage2": {
+            "batch_start": 500,
+            "warm": 500,
+            "t0": 500.0,
+            "robust_c": 2.0,
+            "batch_opt": "core",
+        },
+        "margins": {
+            "batch_start": True,
+            "warm": 500,
+            "t0": 500.0,
+            "robust_c": 2.0,
+            "batch_opt": "core",
+        },
+    },
 }
 
 
@@ -499,7 +516,10 @@ class OnlineDccK:
     SLSQP, standing in for a batch fit the model would own) fits ``(a, b)`` on
     them with ``Qbar`` their mean ``z z'``; the rows are replayed with
     ``(a, b)`` held, building ``Q``, its derivatives, ``Qbar`` and ``H``
-    (set ``warm = t0 = W``)."""
+    (set ``warm = t0 = W``). ``batch_opt = "core"`` (request A12) fits it by
+    ``batch_core.dcc_fit`` (projected Gauss-Newton in numpy) in place of
+    SLSQP; ``reasons`` gives each silent row's stated reason (indices into the
+    rows this stage reads)."""
 
     k: int = 3
     a0: float = 0.03
@@ -512,6 +532,9 @@ class OnlineDccK:
     batch_start: int = 0
     started: bool = False
     buffer: list[np.ndarray] = field(default_factory=list)
+    batch_opt: str = "library"
+    batch_fit: object = None
+    reasons: dict[int, str] = field(default_factory=dict)
 
     theta: np.ndarray = field(init=False)
     qbar: np.ndarray = field(init=False)
@@ -538,6 +561,11 @@ class OnlineDccK:
     def update(self, z: np.ndarray) -> None:
         if self.batch_start and not self.started:
             self.buffer.append(np.asarray(z, dtype=float).copy())
+            fitter = "the core's optimizer" if self.batch_opt == "core" else "SLSQP"
+            self.reasons[len(self.pred)] = (
+                f"buffering {self.batch_start} rows of z for the correlation batch start "
+                f"(fitted by {fitter}); no correlation parameters yet"
+            )
             self.pred.append(np.full(self.k * (self.k - 1) // 2, np.nan))
             if len(self.buffer) == self.batch_start:
                 self._start()
@@ -546,8 +574,14 @@ class OnlineDccK:
 
     def _start(self) -> None:
         zb = np.asarray(self.buffer)
-        fit = fit_second_stage(zb, zb.T @ zb / zb.shape[0])
-        self.theta = np.array(project(*(float(x) for x in fit["theta"])))
+        if self.batch_opt == "core":
+            import batch_core
+
+            self.batch_fit = batch_core.dcc_fit(zb)
+            self.theta = np.array(project(*(float(x) for x in self.batch_fit.theta)))
+        else:
+            fit = fit_second_stage(zb, zb.T @ zb / zb.shape[0])
+            self.theta = np.array(project(*(float(x) for x in fit["theta"])))
         self.started = True
         n0 = len(self.pred)
         for x in zb:
@@ -682,6 +716,17 @@ def compare_k(
     th_b, se = bf["theta"], bf["se"]
     rem = REMEDIES[remedy] if remedy else {"stage2": {}, "margins": {}}
     est, rows, _ = online_k(r, rem["margins"], **rem["stage2"])
+    reasons: dict[int, str] = {}
+    if remedy:
+        # request A12: the stated reason of every silent row of the output
+        mkw = {"target": "running", **rem["margins"]}
+        margin_est = [garch.run(r[:, i], **mkw) for i in range(k)]
+        for i in range(n):
+            why = [m.reasons[i] for m in margin_est if i in m.reasons]
+            if why:
+                reasons[i] = "a margin is silent: " + why[0]
+        for j, why in est.reasons.items():
+            reasons[int(rows[j])] = why
     th_o = est.theta
     z_b, qbar_b = bf["z"], bf["qbar"]
     iu = np.triu_indices(k, 1)
@@ -715,7 +760,14 @@ def compare_k(
         "first_dcc_row": float(rows[0]),
     }
     if remedy:
+        import vt_garch
+
         out["remedy"] = remedy  # type: ignore[assignment]
+        out.update(vt_garch.silent_fields(pred[:, 0], reasons, est.batch_fit))
+        fits = [m.batch_fit for m in margin_est if m.batch_fit is not None]
+        if fits:
+            out["margin_fit_stops"] = [f.stop for f in fits]  # type: ignore[assignment]
+            out["margin_fit_iterations"] = [f.iterations for f in fits]  # type: ignore[assignment]
     for i, name in enumerate(NAMES):
         out[f"{name}_batch"] = float(th_b[i])
         out[f"{name}_online"] = float(th_o[i])

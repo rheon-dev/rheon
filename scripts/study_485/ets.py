@@ -49,6 +49,9 @@ default leaves the arithmetic above unchanged) and of the grid
   are replayed at it with ``theta`` held, building ``R``, ``s2``, the states
   and their sensitivities; the steps then go on at gain ``1/t``, ``t`` counting
   the buffered rows.
+- ``batch_opt = "core"`` (request A12): the batch start's fit is
+  ``batch_core.ets_fit`` (projected Gauss-Newton in numpy) in place of
+  statsmodels'; ``reasons`` gives each silent row's stated reason.
 - ``gain_t0 = T`` (remedy (b), a slower early gain): the step's gain is
   ``1/(t + T)`` in place of ``1/t``; ``R`` and ``s2`` keep their ``1/t`` means.
 """
@@ -73,6 +76,7 @@ REMEDIES: dict[str, dict[str, object]] = {
     "batch500": {"batch_start": 500},
     "gain500": {"gain_t0": 500.0},
     "gain2000": {"gain_t0": 2000.0},
+    "batch500core": {"batch_start": 500, "batch_opt": "core"},
 }
 
 
@@ -123,6 +127,7 @@ class OnlineEts:
     warm: int = 50
     batch_start: int = 0
     gain_t0: float = 0.0
+    batch_opt: str = "library"
 
     lev: float = field(init=False)
     tr: float = field(init=False)
@@ -134,6 +139,8 @@ class OnlineEts:
     n_seen: int = 0
     pred: list[float] = field(default_factory=list)
     buffer: list[float] = field(default_factory=list)
+    batch_fit: object = None
+    reasons: dict[int, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.lev, self.tr = self.l0, self.b0
@@ -142,6 +149,11 @@ class OnlineEts:
     def update(self, y: float) -> None:
         if self.batch_start and self.n_seen == 0:
             self.buffer.append(y)
+            fitter = "the core's optimizer" if self.batch_opt == "core" else "statsmodels"
+            self.reasons[len(self.pred)] = (
+                f"buffering {self.batch_start} rows for the batch start (fitted by "
+                f"{fitter}); no parameters yet"
+            )
             self.pred.append(math.nan)
             if len(self.buffer) == self.batch_start:
                 self._start()
@@ -150,8 +162,14 @@ class OnlineEts:
 
     def _start(self) -> None:
         rows = np.asarray(self.buffer)
-        _, res = ets_fit(rows, self.l0, self.b0)
-        ab = np.asarray(res.params, dtype=float)
+        if self.batch_opt == "core":
+            import batch_core
+
+            self.batch_fit = batch_core.ets_fit(rows, self.l0, self.b0)
+            ab = self.batch_fit.theta
+        else:
+            _, res = ets_fit(rows, self.l0, self.b0)
+            ab = np.asarray(res.params, dtype=float)
         self.theta = np.array(project(float(ab[0]), float(ab[1])))
         for v in rows:
             self._row(float(v), step=False)
@@ -233,6 +251,11 @@ def compare(
     se = np.array([ab_se[0], ab_se[1], s2_b * math.sqrt(2.0 / n)])
     est = run(y, **(REMEDIES[remedy] if remedy else {}))
     o = est.params
+    silent: dict = {}
+    if remedy:
+        import vt_garch
+
+        silent = vt_garch.silent_fields(np.asarray(est.pred), est.reasons, est.batch_fit)
     pred = np.asarray(est.pred)
     tail = slice(n // 2, n)
     out: dict[str, float] = {
@@ -245,6 +268,7 @@ def compare(
         "batch_mse_second_half": float(np.mean(e_b[tail] ** 2)),
         "pred_rms_gap_second_half": float(np.sqrt(np.mean((pred[tail] - yhat_b[tail]) ** 2))),
     }
+    out.update(silent)
     for i, name in enumerate(NAMES):
         out[f"{name}_batch"] = float(b[i])
         out[f"{name}_online"] = float(o[i])

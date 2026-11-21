@@ -71,7 +71,9 @@ nothing). ``gain500``, ``gain2000``: remedy (b), the step's gain
 remedy (c), the robust score, the standardized error clipped at 2 with
 running centring and slope; ``huber2_gauss``: the same with their standard
 normal values (garch.py, ``robust_c``). ``batch500_huber2`` (part 3): both,
-the 500-row targeted batch start and the robust score.
+the 500-row targeted batch start and the robust score. ``batch500core`` and
+``batch500core_huber2`` (request A12): the same with the batch start fitted
+by the core's optimizer (``batch_core``) in place of arch.
 """
 
 from __future__ import annotations
@@ -105,6 +107,15 @@ REMEDIES: dict[str, dict[str, object]] = {
         "warm": 500,
         "t0": 500.0,
         "robust_c": 2.0,
+    },
+    "batch500core": {**ONLINE, "batch_start": True, "warm": 500, "t0": 500.0, "batch_opt": "core"},
+    "batch500core_huber2": {
+        **ONLINE,
+        "batch_start": True,
+        "warm": 500,
+        "t0": 500.0,
+        "robust_c": 2.0,
+        "batch_opt": "core",
     },
 }
 
@@ -308,6 +319,7 @@ def compare(
     }
     if remedy:
         out["remedy"] = remedy  # type: ignore[assignment]
+        out.update(silent_fields(pred, est.reasons, est.batch_fit))  # type: ignore[arg-type]
     out.update(_gaps("", res, v_T, theta_o, path_args))
     if nu:
         out["nu_true"] = float(nu)
@@ -318,6 +330,25 @@ def compare(
         out[f"{name}_true"] = truth[i + 1]
         out[f"{name}_online"] = float(theta_o[i + 1])
         out[f"cross_{name}_in_se"] = float((ab_s[i] - ab_q[i]) / se_q[i])
+    return out
+
+
+def silent_fields(pred: np.ndarray, reasons: dict[int, str], fit: object) -> dict:
+    """Request A12: every silent row (NaN emitted) with its stated reason,
+    counted by reason, and the core batch fit's iterations and stopping rule."""
+    silent = [i for i in range(pred.shape[0]) if not np.all(np.isfinite(pred[i]))]
+    counts: dict[str, int] = {}
+    for i in silent:
+        key = reasons.get(i, "")
+        counts[key] = counts.get(key, 0) + 1
+    out: dict = {
+        "silent_rows": len(silent),
+        "silent_unexplained": counts.pop("", 0),
+        "silent_reasons": counts,
+    }
+    if fit is not None:
+        out["batch_fit_iterations"] = fit.iterations  # type: ignore[attr-defined]
+        out["batch_fit_stop"] = fit.stop  # type: ignore[attr-defined]
     return out
 
 

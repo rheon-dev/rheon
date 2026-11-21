@@ -163,6 +163,11 @@ class OnlineGarch:
       read (consistent for any symmetric noise); ``"gauss"`` takes their
       standard normal values (``huber_constants``). One row moves the
       parameters by at most a bounded amount, however large ``r_t``.
+    - ``batch_opt="core"`` (request A12): the targeted batch start's fit is
+      ``batch_core.garch_vt_fit`` (projected Gauss-Newton in numpy) on the
+      buffered rows, in place of arch's; the fit is kept in ``batch_fit``.
+    - ``reasons`` maps each silent row (a buffered row, which emits NaN) to
+      its stated reason.
     - ``gain="offset"`` (request A11, remedy (b), a slower early gain): the
       parameter step's gain is ``1/(t + gain_t0)``, smaller than
       ``1/(t + t0)`` early and the same order late; the information matrix
@@ -183,6 +188,7 @@ class OnlineGarch:
     batch_start: bool = False
     robust_c: float = 0.0
     robust_center: str = "running"
+    batch_opt: str = "library"
 
     theta: np.ndarray = field(init=False)
     H: np.ndarray = field(init=False)
@@ -196,6 +202,8 @@ class OnlineGarch:
     started: bool = False
     rob_kappa: float = 0.0
     rob_slope: float = 0.0
+    batch_fit: object = None
+    reasons: dict[int, str] = field(default_factory=dict)
 
     # what the run emits, row by row (NaN on the buffered rows)
     pred: list[float] = field(default_factory=list)
@@ -211,6 +219,7 @@ class OnlineGarch:
     def update(self, r: float) -> None:
         if not self.started:
             self.buffer.append(r)
+            self.reasons[len(self.pred)] = self._silent_reason()
             self.pred.append(math.nan)
             if len(self.buffer) == self.warm:
                 self._start()
@@ -218,10 +227,25 @@ class OnlineGarch:
         self.pred.append(self.sigma2)
         self._row(r, step=True)
 
+    def _silent_reason(self) -> str:
+        if self.batch_start:
+            fitter = "the core's optimizer" if self.batch_opt == "core" else "arch"
+            return (
+                f"buffering {self.warm} rows for the batch start (fitted by {fitter}); "
+                "no parameters yet"
+            )
+        return f"buffering {self.warm} rows for the backcast start; no variance yet"
+
     def _start(self) -> None:
         rows = np.asarray(self.buffer)
         b = backcast(rows[:BACKCAST_ROWS] ** 2)
-        if self.batch_start and self.target:
+        if self.batch_start and self.target and self.batch_opt == "core":
+            import batch_core
+
+            self.batch_fit = batch_core.garch_vt_fit(rows, b, self.margin)
+            a, bb = (float(x) for x in self.batch_fit.theta)
+            self.theta = np.array([math.nan, a, bb])
+        elif self.batch_start and self.target:
             import vt_garch  # the targeted batch fit (lazy: vt_garch imports this module)
 
             _, res = vt_garch.vt_fit(rows)

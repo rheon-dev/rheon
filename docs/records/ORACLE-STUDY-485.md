@@ -20,7 +20,9 @@ GARCH and three-series DCC under t(5), with ARMA as the control (§22). Part 3:
 the batch start and the robust score together on those two sets, and DCC's
 composite likelihood over pairs against the full one at three and five series
 (§23). Part 4: the adopted remedy per model and the final floors (§24), which
-supersede §20.2 and §20.3 where they differ. The request named the deliverable
+supersede §20.2 and §20.3 where they differ. Request A12, part 1: the batch
+start fitted by an optimizer the core can hold, in place of the libraries
+(§25). The request named the deliverable
 `STUDY-485-ESTIMATORS.md`; it is this record, kept under the name it was
 committed with (`ORACLE-STUDY-485.md`). Nothing in the package or the Rust crates was changed. The scan this
 builds on is `vm-tools/research/485-TIME-SERIES-SCAN.md` on branch
@@ -1633,3 +1635,111 @@ of the libraries'.
 3. Does the DCC t(5) assertion of §24.3 (per-seed 4 SE and 0.03 `ρ` gap, no
    count) stand in for a floor, or should the study try a further remedy
    (for example a Student-t second stage) first?
+
+The coordinator accepted request A11 (2026-11-21) and answered §24.4 in
+request A12: (1) the bounded batch start may stay, but its optimizer must be
+one the core can hold itself, not a library's, and silent rows are fine if
+each emits a stated reason; (2) measure a shared 500-row start for DCC (both
+stages on the margins' same 500 rows); (3) try a Student-t second stage for
+DCC first. Part 1 below answers (1); (2) and (3) are later parts.
+
+## 25. Request A12, part 1: the batch start by a core-held optimizer
+
+`scripts/study_485/batch_core.py` (the optimizer and four objectives, numpy
+only), `test_batch_core.py` (10 checks). The estimators gained one option,
+`batch_opt="core"` (default `"library"`, the earlier runs to the bit), and a
+`reasons` map; the grids run it as `vt_garch.py --remedy batch500core |
+batch500core_huber2`, `ets.py --remedy batch500core`, `dcc.py ... --k 3
+--remedy batch500core_huber2` and `grid_arma.py OUTDIR
+t5_phi080_batch500core_huber2 | n_phi080_batch500core_huber2`.
+
+**The optimizer.** Projected Newton with Armijo backtracking on the
+500-row buffer, maximizing the same objective the library maximized there:
+
+| model | objective on the buffer | parameters and region | start grid |
+|---|---|---|---|
+| targeted GARCH | Gaussian log-likelihood, `ω = v_W(1 − α − β)`, `v_W` the buffer's mean `r²`, filter from the backcast (§16's estimator) | `(α, β)`, `α, β ≥ 0`, `α + β ≤ 1 − 1e-4` (the online projection) | arch's own 16 `(α, persistence)` pairs |
+| ETS(A,A,N) | `−½ Σ e²` with the initial states known (statsmodels' concentrated likelihood is monotone in it) | `(α, β)`, `α ∈ [1e-4, 1 − 1e-4]`, `β/α ∈ [1e-4, 1 − 1e-4]` (statsmodels' box) | `α ∈ {0.1, …, 0.9}` × `β/α ∈ {0.05, 0.2, 0.5}` |
+| ARMA(1,1) | conditional least squares from a zero start (statsmodels' exact likelihood has the same limit; the online estimator minimizes this one) | `(φ, θ)`, each in `[−0.99, 0.99]` | `φ ∈ {−0.5, 0, 0.5, 0.9}` × `θ ∈ {−0.5, 0, 0.5}` |
+| DCC second stage, `k = 3` | full Gaussian second-stage log-likelihood, `Q̄` the buffer's mean `zzᵀ`, `Q₀ = Q̄` (§19's oracle) | `(a, b)`, `a, b ≥ 0`, `a + b ≤ 1 − 1e-4` | `a ∈ {0.01, 0.03, 0.05, 0.1}` × `b ∈ {0.8, 0.85, 0.9, 0.95}` |
+
+Gradient: each model's own sensitivity recursion (the one its online
+estimator carries), run over the buffer at fixed parameters; a test holds
+the GARCH gradient to a central difference to 1e-6 relative. Curvature: minus
+the central difference of that analytic gradient (step `1e-5 max(|θ_j|,
+0.01)`), symmetrized, with the Gauss-Newton (Fisher) matrix as fallback when
+it is not positive definite. Direction `(M + 1e-10 tr(M)/2 · I)⁻¹ g`, projected,
+step halved up to 30 times until `f(θ') ≥ f + 1e-4 gᵀ(θ' − θ)`; if no step
+passes, the reduced Newton step on the coordinates the projection does not
+block, then the gradient scaled by `1/diag(M)`. **Stopping rule:** after
+the iteration that moves every parameter by at most 1e-8 and `f` by at most
+`1e-10 (1 + |f|)` ("converged"); when no direction gives an Armijo step ("no
+ascent"); or at 50 iterations ("iteration cap"). State: the buffer and a
+few floats.
+
+**Two fixes found on the way, both in the method above.** (i) Gauss-Newton
+alone (the Fisher matrix) zigzagged along the `a + b` ridge on a DCC buffer
+under t(5), where the expected information is mis-scaled against the
+likelihood's curvature, at a linear rate near 0.86, and met the 50-iteration
+cap; the observed curvature converges in 5 to 9 iterations. (ii) On 2 of 150
+t(5) margin buffers the maximum has `α = 0`: the full Newton direction points
+out of the region, its projection is no ascent, and the fit stopped 0.03 and
+0.015 below arch's log-likelihood; the reduced step reaches it (both cases
+are tests). The DCC t(5) grid, the only one with a fit that stopped that way,
+was rerun after the fix: those two seeds moved; no count did.
+
+**Against the libraries on the same buffers** (tests): GARCH reaches arch's
+maximum (log-likelihood equal to 1e-6 or above it, parameters within 2e-4);
+ETS equals `ETSModel` to 1e-5; ARMA reaches scipy's minimum of the same
+conditional least squares (its value at or above scipy's, parameters within
+1e-5; SARIMAX's exact likelihood is a different objective, 0.002 to 0.005
+away in `(φ, θ)` on 500 rows); DCC equals SLSQP's maximum to 1e-5 in
+`(a, b)`. Cost per fit, median, numpy: GARCH 0.10 s, ETS 0.10 s, ARMA 0.07 s,
+DCC (`k = 3`) 1.5 s.
+
+**Silent rows.** Every row that emits NaN carries its stated reason, kept
+per row by the estimator and counted by reason in each grid line
+(`silent_rows`, `silent_reasons`, `silent_unexplained`):
+
+- GARCH, ETS, ARMA: 500 rows, "buffering 500 rows for the batch start
+  (fitted by the core's optimizer); no parameters yet";
+- DCC: 500 rows "a margin is silent: buffering 500 rows for the batch start
+  (fitted by the core's optimizer); no parameters yet", then 500 rows
+  "buffering 500 rows of z for the correlation batch start (fitted by the
+  core's optimizer); no correlation parameters yet".
+
+On every case of every grid below, `silent_unexplained` is 0.
+
+**Results** (10,000 rows, seeds 485000 to 485049; each set's own oracle and
+criterion as in §21 to §24; the library column is the earlier run):
+
+| set | remedy | library start: within 2, worst seed (SE) | core start: within 2, worst seed (SE) | core fits |
+|---|---|---|---|---|
+| (1) targeted GARCH, P 0.99 | (a) | 50; 485038 `α` −1.41 (§21) | **50**; 485038 `α` −1.41 | 50 converged, ≤ 9 iterations |
+| (1) targeted GARCH, P 0.99 | (a) + (c), adopted | 50; 485038 `α` −1.54 (§24) | **50**; 485038 `α` −1.54 | 50 converged, ≤ 9 |
+| (3) targeted GARCH, t(5), against the Gaussian fit | (a) + (c), adopted | 48; 485003 `β` +2.23 (§23) | **48**; 485003 `β` +2.23 | 50 converged, ≤ 7 |
+| (2) ETS `α` 0.6, normal | (a), adopted | 50; 485042 `β` −0.42 (§21) | **50**; 485042 `β` −0.42 | 50 converged, ≤ 6 |
+| (2) ETS `α` 0.6, t(5) | (a), adopted | 50; 485014 `β` +0.42 (§21) | **50**; 485014 `β` +0.41 | 50 converged, ≤ 6 |
+| (4) DCC three series, t(5) | (a) + (c), adopted | 43; 485032 `a` −3.24, `b` +2.87; `ρ` gap max 0.021 (§23) | **43**; 485032 `a` −3.24, `b` +2.87; `ρ` gap max 0.021; every seed within 4 SE | 150 margin and 50 second-stage fits converged, ≤ 8 |
+| control: targeted GARCH, P 0.97 | (a) | 50; 485006 `α` −1.48 (§21) | **50**; 485006 `α` −1.48 | 50 converged, ≤ 7 |
+| control: targeted GARCH, P 0.97 | (a) + (c) | 50; 485015 `β` −1.31 (§24) | **50**; 485015 `β` −1.31 | 50 converged, ≤ 7 |
+| control: targeted GARCH, P 0.98, normal | (a) + (c) | 50; 485048 `α` −1.28 (§23) | **50**; 485048 `α` −1.28 | 50 converged, ≤ 7 |
+| control: ARMA `φ` 0.8, normal | (a) + (c) | 50; 485013 `φ` −0.32 (§23) | **50**; 485013 `φ` −0.30 | 50 converged, ≤ 5 |
+| control: ARMA `φ` 0.8, t(5) | (a) + (c) | 50; 485026 `θ` +0.74 (§23) | **50**; 485026 `θ` +0.75 | 50 converged, ≤ 6 |
+| control: DCC three series, normal | (a) + (c) | 50; 485010 `b` +1.38 (§23) | **50**; 485010 `b` +1.38 | 200 fits converged |
+
+arch, statsmodels and SLSQP (the oracles, on all 10,000 rows) converged on
+every case.
+
+**Reading.** The core-held optimizer changes nothing measured: every count,
+every worst seed and every per-seed figure of §24's floors is the library
+start's, to the two digits printed (GARCH, ETS and DCC reach the same
+maximum on the buffer; ARMA's start moves by its objective's difference from
+SARIMAX's, and its figures by 0.02 SE at most). So §24's adopted remedies and
+floors stand with the batch start fitted in the core. The library is no
+longer in the estimators' path for remedy (a); it stays the oracle.
+
+**Not verified:** buffers other than 500 rows; the core optimizer on the
+other DCC sizes (2, 5) and on the composite objective; its behaviour on a
+buffer with a flat or multimodal likelihood beyond the start grid (every
+fit here converged, none at the iteration cap); a Rust port of it.

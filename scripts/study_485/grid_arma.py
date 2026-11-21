@@ -35,6 +35,9 @@ CASES = {
     # request A11, part 3: the bounded batch start with the robust score (a + c)
     "t5_phi080_batch500_huber2": [(10000, math.inf)],
     "n_phi080_batch500_huber2": [(10000, math.inf)],
+    # request A12, part 1: the same with the core's batch optimizer
+    "t5_phi080_batch500core_huber2": [(10000, math.inf)],
+    "n_phi080_batch500core_huber2": [(10000, math.inf)],
 }
 # the truth and the noise per grid; part 4's grids keep arma.TRUTH, Gaussian
 SETTINGS: dict[str, dict[str, object]] = {
@@ -51,6 +54,19 @@ SETTINGS: dict[str, dict[str, object]] = {
         "batch_start": 500,
     },
     "n_phi080_batch500_huber2": {"truth": (0.8, 0.3, 1.0), "robust_c": 2.0, "batch_start": 500},
+    "t5_phi080_batch500core_huber2": {
+        "truth": (0.8, 0.3, 1.0),
+        "nu": 5.0,
+        "robust_c": 2.0,
+        "batch_start": 500,
+        "batch_opt": "core",
+    },
+    "n_phi080_batch500core_huber2": {
+        "truth": (0.8, 0.3, 1.0),
+        "robust_c": 2.0,
+        "batch_start": 500,
+        "batch_opt": "core",
+    },
 }
 
 

@@ -48,7 +48,10 @@ the first ``W`` rows are buffered and emit nothing; statsmodels' ``SARIMAX``
 fits them (standing in for a batch fit the model would own), ``beta`` starts
 at that fit, and the rows are replayed with ``beta`` held (the two warm-up
 phases are skipped), building ``R``, ``s2``, ``psi`` and the kept residual;
-steps follow at gain ``1/t``, ``t`` counting the buffer.
+steps follow at gain ``1/t``, ``t`` counting the buffer. ``batch_opt = "core"``
+(request A12) fits the buffer by ``batch_core.arma_fit`` (conditional least
+squares by projected Gauss-Newton in numpy) in place of ``SARIMAX``;
+``reasons`` gives each silent row's stated reason.
 
 State per target: ``beta`` (2), ``R`` (3 distinct), ``psi`` (2), ``y_{t-1}``,
 ``ehat_{t-1}``, ``s2``, ``W``, the row count and the two sums of the first
@@ -114,6 +117,7 @@ class OnlineArma:
     margin: float = 1e-2
     robust_c: float = 0.0
     batch_start: int = 0
+    batch_opt: str = "library"
 
     beta: np.ndarray = field(default_factory=lambda: np.zeros(2))
     R: np.ndarray = field(default_factory=lambda: np.zeros((2, 2)))
@@ -130,6 +134,8 @@ class OnlineArma:
     started: bool = False
     replaying: bool = False
     buffer: list[float] = field(default_factory=list)
+    batch_fit: object = None
+    reasons: dict[int, str] = field(default_factory=dict)
     lam: float = field(init=False)
 
     pred: list[float] = field(default_factory=list)
@@ -140,6 +146,11 @@ class OnlineArma:
     def update(self, y: float) -> None:
         if self.batch_start and not self.started:
             self.buffer.append(y)
+            fitter = "the core's optimizer" if self.batch_opt == "core" else "statsmodels"
+            self.reasons[len(self.pred)] = (
+                f"buffering {self.batch_start} rows for the batch start (fitted by "
+                f"{fitter}); no parameters yet"
+            )
             self.pred.append(math.nan)
             if len(self.buffer) == self.batch_start:
                 self._start()
@@ -148,9 +159,15 @@ class OnlineArma:
 
     def _start(self) -> None:
         rows = np.asarray(self.buffer)
-        _, res = sarimax_fit(rows)
         cap = 1.0 - self.margin
-        self.beta = np.clip(np.asarray(res.params, dtype=float)[:2], -cap, cap)
+        if self.batch_opt == "core":
+            import batch_core
+
+            self.batch_fit = batch_core.arma_fit(rows, self.margin)
+            self.beta = np.clip(self.batch_fit.theta, -cap, cap)
+        else:
+            _, res = sarimax_fit(rows)
+            self.beta = np.clip(np.asarray(res.params, dtype=float)[:2], -cap, cap)
         self.started = self.replaying = True
         for v in rows:
             self._row(float(v))
@@ -292,6 +309,10 @@ def compare(
         "batch_mse_second_half": float(np.mean(e_b[tail] ** 2)),
         "pred_rms_gap_second_half": float(np.sqrt(np.mean((pred[tail] - yhat_b[tail]) ** 2))),
     }
+    if est.batch_start:
+        import vt_garch
+
+        out.update(vt_garch.silent_fields(pred, est.reasons, est.batch_fit))
     for i, name in enumerate(NAMES):
         out[f"{name}_batch"] = float(b[i])
         out[f"{name}_online"] = float(o[i])
