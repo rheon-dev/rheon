@@ -287,9 +287,12 @@ impl EwFactor {
             let mut sigma = self.sigma * a;
             if sigma.is_nan() || sigma < f64::MIN_POSITIVE {
                 // `a` past the normal range (a gap of over a thousand
-                // half-lives): what it keeps of `M` beyond the ridge is under
-                // `2⁻¹⁰²⁰` of it, so `M` starts at the ridge it has reached,
-                // `σ = 1`, and the row is added to that.
+                // half-lives): what it keeps of `M` is under `2⁻¹⁰²⁰` of it,
+                // and so is all of `M'`, which no double holds to 53 bits
+                // (the co-moments' `a·C` is rounded to multiples of
+                // `2⁻¹⁰⁷⁴`). `M` starts at the ridge it has reached, `σ = 1`,
+                // and the row is added to that; the next row whose `a` is
+                // normal outweighs what either form kept by `2¹⁰²⁰`.
                 self.restart_at_ridge(prior);
                 sigma = 1.0;
             }
@@ -404,16 +407,25 @@ mod tests {
             let l = SpdFactor::of(&ridged(&cov, prior), d).unwrap();
             let mut f = EwFactor::take_up(&cov, l);
             let mut v = Vec::new();
-            let (mut lifted, mut restarted) = (0, 0);
+            let (mut lifted, mut restarted, mut subnormals) = (0, 0, 0);
             for i in 0..3000 {
                 let x: Vec<f64> = (0..d)
                     .map(|j| {
                         lcg(&mut seed) * (1.0 + j as f64) + if i % 50 < 25 { 3.0 } else { 0.0 }
                     })
                     .collect();
+                // `2⁻¹⁰⁶⁰` written as its bits: `2f64.powi(-1060)` is folded
+                // to them by an optimized build, but a dev build calls
+                // compiler-rt's `__powidf2`, which forms `1/2¹⁰⁶⁰ = 1/∞ =
+                // 0`, so the case past the normal range ran in release alone
+                // (and failed there). Once only: at row 533 the ridge the
+                // state has reached, `r·s·a`, underflows to 0, where the
+                // accumulator keeps a ridge scale of 0 and the factor, which
+                // cannot start at a zero matrix, takes the ridge at scale 1
+                // (`restart_at_ridge`), so the two forms part.
                 let lam = match i % 400 {
                     7 => 1e-3,
-                    133 => 2f64.powi(-1060),
+                    133 if i == 133 => f64::from_bits(1 << 14),
                     271 => 0.0,
                     _ => 0.99,
                 };
@@ -423,6 +435,9 @@ mod tests {
                     6 => 30.0,
                     _ => 1.0,
                 };
+                let w_new = lam * cov.n_eff() + w;
+                let a = lam * cov.n_eff() / w_new;
+                let subnormal = a > 0.0 && a < f64::MIN_POSITIVE;
                 let before = f.sigma;
                 assert!(f.update(&x, lam, w, prior, &mut v));
                 cov.update(&x, lam, w);
@@ -441,12 +456,22 @@ mod tests {
                     cov.precision_scale().to_bits(),
                     "{d}, row {i}"
                 );
-                let off = apart(&f.matrix(), &ridged(&cov, prior));
-                assert!(off < 1e-13, "{d}, row {i}: σ L Lᵀ {off:e} of its size off");
+                // Past the normal range of `a` the whole matrix is under
+                // `2⁻¹⁰²⁰`: the accumulator's `a·C` is rounded to multiples of
+                // `2⁻¹⁰⁷⁴`, a part in `10⁷` of it, and the factor starts again
+                // at the ridge it has reached with the row, dropping `a·C`.
+                // Neither holds 53 bits of a subnormal matrix, so that row is
+                // not compared; the next one, whose `a` is normal, outweighs
+                // what either kept by `2¹⁰²⁰` and agrees again.
+                subnormals += usize::from(subnormal);
+                if !subnormal {
+                    let off = apart(&f.matrix(), &ridged(&cov, prior));
+                    assert!(off < 1e-13, "{d}, row {i}: σ L Lᵀ {off:e} of its size off");
+                }
             }
             assert!(
-                lifted > 10 && restarted > 0,
-                "{d}: {lifted} lifts, {restarted} restarts"
+                lifted > 10 && restarted > 0 && subnormals > 0,
+                "{d}: {lifted} lifts, {restarted} restarts, {subnormals} subnormal steps"
             );
         }
     }
