@@ -56,12 +56,23 @@ BACKCAST_DECAY = 0.94
 
 
 def simulate(
-    n: int, omega: float, alpha: float, beta: float, seed: int, burn: int = 1000
+    n: int,
+    omega: float,
+    alpha: float,
+    beta: float,
+    seed: int,
+    burn: int = 1000,
+    nu: float | None = None,
 ) -> np.ndarray:
     """A zero-mean Gaussian GARCH(1,1) series of ``n`` rows, after ``burn``
-    discarded rows started at the unconditional variance."""
+    discarded rows started at the unconditional variance. With ``nu``, the
+    noise is Student-t with ``nu`` degrees of freedom scaled to unit variance."""
     rng = np.random.default_rng(seed)
-    z = rng.standard_normal(n + burn)
+    z = (
+        rng.standard_normal(n + burn)
+        if nu is None
+        else (rng.standard_t(nu, n + burn) * math.sqrt((nu - 2.0) / nu))
+    )
     r = np.empty(n + burn)
     s2 = omega / (1.0 - alpha - beta)
     prev_r2 = s2

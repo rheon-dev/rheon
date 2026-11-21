@@ -57,7 +57,9 @@ by ``(1 - P, 0.08, P - 0.08)``: alpha stays 0.08, beta takes the rest of the
 persistence and omega is set so the unconditional variance
 ``omega / (1 - alpha - beta)`` is 1.0, as G1's is; ``--shard I/K`` runs only
 the seeds whose index in 485000..485049 is I modulo K, so K processes can share
-a grid, each appending to its own file.
+a grid, each appending to its own file. ``--nu NU`` (part 3) draws Student-t
+noise with ``NU`` degrees of freedom, scaled to unit variance, and makes arch's
+``dist="t"`` fit (``nu`` estimated) the primary oracle (``compare``).
 """
 
 from __future__ import annotations
@@ -137,11 +139,13 @@ def vt_process():  # noqa: ANN201
     return VTGarch()
 
 
-def vt_fit(r: np.ndarray):  # noqa: ANN201
-    """The oracle: arch's fit of the targeted process (module docstring)."""
+def vt_fit(r: np.ndarray, dist: str = "normal"):  # noqa: ANN201
+    """The oracle: arch's fit of the targeted process (module docstring), with
+    arch's ``dist`` option: ``"normal"``, or ``"t"``, arch's ``StudentsT``,
+    which estimates the degrees of freedom ``nu`` beside ``(alpha, beta)``."""
     from arch import arch_model
 
-    am = arch_model(r, mean="Zero", vol="GARCH", dist="normal", rescale=False)
+    am = arch_model(r, mean="Zero", vol="GARCH", dist=dist, rescale=False)
     am.volatility = vt_process()
     return am, am.fit(disp="off", cov_type="robust")
 
@@ -184,51 +188,30 @@ def scipy_vt_fit(r: np.ndarray, x0: np.ndarray) -> tuple[np.ndarray, float]:
     return np.array(ab(res.x)), -float(res.fun)
 
 
-def compare(n: int, seed: int, truth: tuple[float, float, float] = TRUTH) -> dict[str, float]:
-    r = garch.simulate(n, *truth, seed=seed)
-    r2 = r * r
-    am, res = vt_fit(r)
-    vt = am.volatility
-    ab_b = np.asarray(res.params, dtype=float)
-    se_b = np.asarray(res.std_err, dtype=float)
-    cov_b = np.asarray(res.param_cov, dtype=float)
-    v_T = vt.target(r)
+def _gaps(
+    prefix: str,
+    res,  # noqa: ANN001
+    v_T: float,
+    theta_o: np.ndarray,
+    path_args: tuple[np.ndarray, float, np.ndarray, slice],
+) -> dict[str, float]:
+    """The online parameters against one batch fit, in its robust SEs."""
+    r, start, pred, tail = path_args
+    ab_b = np.asarray(res.params, dtype=float)[:2]
+    se_b = np.asarray(res.std_err, dtype=float)[:2]
+    cov_b = np.asarray(res.param_cov, dtype=float)[:2, :2]
     omega_b = v_T * (1.0 - ab_b[0] - ab_b[1])
     # omega's SE by the delta method on arch's covariance, v_T held fixed
     grad = np.array([-v_T, -v_T])
     omega_se_b = float(math.sqrt(grad @ cov_b @ grad))
-
-    est = garch.run(r, target="running")
-    theta_o = est.theta.copy()
-    start = garch.backcast(r2[: garch.BACKCAST_ROWS])
     path_b = garch.filter_variance(np.array([omega_b, *ab_b]), r, start)
-    pred = np.asarray(est.pred)
-    tail = slice(n // 2, n)
-
-    ab_s, llf_s = scipy_vt_fit(r, CROSS_START)
-    llf_b = float(res.loglikelihood)
     out = {
-        "n": float(n),
-        "seed": float(seed),
         "arch_converged": float(res.convergence_flag),
-        "v_T": v_T,
-        "vbar_rel_rounding": est.mean_r2 / v_T - 1.0,
-        "vbar_half_rel": float(np.mean(r2[: n // 2])) / v_T - 1.0,
         "arch_path_vs_filter_max_rel": float(
             np.max(np.abs(path_b / res.conditional_volatility**2 - 1.0))
         ),
-        "llf_batch": llf_b,
-        "llf_online_params": garch.loglik(
-            r,
-            garch.filter_variance(
-                np.array([v_T * (1 - theta_o[1] - theta_o[2]), *theta_o[1:]]), r, start
-            ),
-        ),
         "pred_median_rel_second_half": float(np.median(np.abs(pred[tail] / path_b[tail] - 1.0))),
-        "cross_llf_scipy_minus_arch": llf_s - llf_b,
-        "omega_true": truth[0],
         "omega_batch": omega_b,
-        "omega_online": float(theta_o[0]),
         "omega_diff": float(theta_o[0] - omega_b),
         "omega_diff_from_persistence": float(
             -v_T * ((theta_o[1] - ab_b[0]) + (theta_o[2] - ab_b[1]))
@@ -236,15 +219,71 @@ def compare(n: int, seed: int, truth: tuple[float, float, float] = TRUTH) -> dic
         "omega_batch_se_delta": omega_se_b,
         "omega_diff_in_se": float((theta_o[0] - omega_b) / omega_se_b),
     }
-    out["llf_diff_per_row"] = (llf_b - out["llf_online_params"]) / n
     for i, name in enumerate(PARAMS):
-        out[f"{name}_true"] = truth[i + 1]
         out[f"{name}_batch"] = float(ab_b[i])
-        out[f"{name}_online"] = float(theta_o[i + 1])
         out[f"{name}_diff"] = float(theta_o[i + 1] - ab_b[i])
         out[f"{name}_batch_se"] = float(se_b[i])
         out[f"{name}_diff_in_se"] = float((theta_o[i + 1] - ab_b[i]) / se_b[i])
-        out[f"cross_{name}_in_se"] = float((ab_s[i] - ab_b[i]) / se_b[i])
+    return {prefix + k: v for k, v in out.items()}
+
+
+def compare(
+    n: int, seed: int, truth: tuple[float, float, float] = TRUTH, nu: float | None = None
+) -> dict[str, float]:
+    """The online estimator against the batch targeting fit on one series.
+
+    With ``nu`` the noise is Student-t with ``nu`` degrees of freedom scaled to
+    unit variance, and the primary oracle is arch's fit with ``dist="t"``,
+    estimating ``nu`` as arch does; the Gaussian quasi-likelihood fit, the
+    online estimator's own estimand, is reported beside it (``qml_`` fields).
+    Without ``nu`` the fields are part 1's, unchanged."""
+    r = garch.simulate(n, *truth, seed=seed, nu=nu)
+    r2 = r * r
+    am, res = vt_fit(r, "t" if nu else "normal")
+    v_T = am.volatility.target(r)
+
+    est = garch.run(r, target="running")
+    theta_o = est.theta.copy()
+    start = garch.backcast(r2[: garch.BACKCAST_ROWS])
+    pred = np.asarray(est.pred)
+    path_args = (r, start, pred, slice(n // 2, n))
+    ab_o = theta_o[1:]
+    llf_b = float(res.loglikelihood)
+    if nu:
+        nu_b = float(np.asarray(res.params)[2])
+        llf_o = float(am.fix(np.array([*ab_o, nu_b])).loglikelihood)
+        am_q, res_q = vt_fit(r, "normal")
+    else:
+        llf_o = garch.loglik(
+            r, garch.filter_variance(np.array([v_T * (1 - ab_o[0] - ab_o[1]), *ab_o]), r, start)
+        )
+        res_q = res
+    ab_s, llf_s = scipy_vt_fit(r, CROSS_START)
+    ab_q = np.asarray(res_q.params, dtype=float)[:2]
+    se_q = np.asarray(res_q.std_err, dtype=float)[:2]
+    out = {
+        "n": float(n),
+        "seed": float(seed),
+        "v_T": v_T,
+        "vbar_rel_rounding": est.mean_r2 / v_T - 1.0,
+        "vbar_half_rel": float(np.mean(r2[: n // 2])) / v_T - 1.0,
+        "llf_batch": llf_b,
+        "llf_online_params": llf_o,
+        "llf_diff_per_row": (llf_b - llf_o) / n,
+        "cross_llf_scipy_minus_arch": llf_s - float(res_q.loglikelihood),
+        "omega_true": truth[0],
+        "omega_online": float(theta_o[0]),
+    }
+    out.update(_gaps("", res, v_T, theta_o, path_args))
+    if nu:
+        out["nu_true"] = float(nu)
+        out["nu_batch"] = nu_b
+        out["nu_batch_se"] = float(np.asarray(res.std_err)[2])
+        out.update(_gaps("qml_", res_q, v_T, theta_o, path_args))
+    for i, name in enumerate(PARAMS):
+        out[f"{name}_true"] = truth[i + 1]
+        out[f"{name}_online"] = float(theta_o[i + 1])
+        out[f"cross_{name}_in_se"] = float((ab_s[i] - ab_q[i]) / se_q[i])
     return out
 
 
@@ -291,6 +330,7 @@ def run(
     sizes: tuple[int, ...] = SIZES,
     truth: tuple[float, float, float] = TRUTH,
     shard: tuple[int, int] = (0, 1),
+    nu: float | None = None,
 ) -> None:
     finished = done(out)
     seeds = [s for i, s in enumerate(SEEDS) if i % shard[1] == shard[0]]
@@ -299,7 +339,7 @@ def run(
             for seed in seeds:
                 if (seed, n) in finished:
                     continue
-                f.write(json.dumps(compare(n, seed, truth)) + "\n")
+                f.write(json.dumps(compare(n, seed, truth, nu)) + "\n")
                 f.flush()
                 print(f"vt: seed {seed} n {n} done", flush=True)
 
@@ -348,6 +388,39 @@ def summary(outs: list[Path]) -> None:
             )
         verdict = "passes" if ab >= 0.9 * len(rows) else "fails"
         print(f"  criterion (90% of seeds with alpha, beta within 2 SE at {n} rows): {verdict}")
+        for pre in ("", "qml_") if "qml_alpha_diff_in_se" in rows[0] else ("",):
+            bounds(rows, pre)
+        if "nu_batch" in rows[0]:
+            nus = np.array([r["nu_batch"] for r in rows])
+            lo, mid, hi = nus.min(), np.median(nus), nus.max()
+            print(f"  arch's nu: median {mid:.3g}, range {lo:.3g} to {hi:.3g}")
+
+
+def bounds(rows: list[dict], pre: str) -> None:
+    """The per-seed bounds the record's section 15.2 proposed for the targeted
+    form: omega within 5 SE, alpha and beta within 3.5, path gap at most 5%."""
+
+    def ok(r: dict, k: str, b: float) -> bool:
+        return abs(r[f"{pre}{k}"]) <= b
+
+    within2 = sum(ok(r, "alpha_diff_in_se", 2) and ok(r, "beta_diff_in_se", 2) for r in rows)
+    om = sum(ok(r, "omega_diff_in_se", 5) for r in rows)
+    ab = sum(ok(r, "alpha_diff_in_se", 3.5) and ok(r, "beta_diff_in_se", 3.5) for r in rows)
+    path = sum(ok(r, "pred_median_rel_second_half", 0.05) for r in rows)
+    every = sum(
+        ok(r, "omega_diff_in_se", 5)
+        and ok(r, "alpha_diff_in_se", 3.5)
+        and ok(r, "beta_diff_in_se", 3.5)
+        and ok(r, "pred_median_rel_second_half", 0.05)
+        for r in rows
+    )
+    worst = max(rows, key=lambda r: max(abs(r[f"{pre}{p}_diff_in_se"]) for p in PARAMS))
+    print(
+        f"  [{pre or 'primary'}] within 2 SE {within2}; 15.2 bounds: omega <= 5 SE {om}, "
+        f"alpha, beta <= 3.5 SE {ab}, path <= 5% {path}, all {every}; worst seed "
+        f"{int(worst['seed'])} alpha {worst[pre + 'alpha_diff_in_se']:+.3g} "
+        f"beta {worst[pre + 'beta_diff_in_se']:+.3g} SE"
+    )
 
 
 def main() -> None:
@@ -360,12 +433,13 @@ def main() -> None:
     ap.add_argument("--rows", nargs="+", type=int, default=list(SIZES))
     ap.add_argument("--persistence", type=float, default=None)
     ap.add_argument("--shard", default="0/1")
+    ap.add_argument("--nu", type=float, default=None)
     a = ap.parse_args()
     if a.summary:
         summary(a.out)
         return
     i, k = (int(x) for x in a.shard.split("/"))
-    run(a.out[0], tuple(a.rows), truth_at(a.persistence), (i, k))
+    run(a.out[0], tuple(a.rows), truth_at(a.persistence), (i, k), a.nu)
 
 
 if __name__ == "__main__":

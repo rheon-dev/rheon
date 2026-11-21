@@ -23,6 +23,19 @@ SEEDS = range(485000, 485050)
 CASES = {
     "grid": [(n, math.inf) for n in (2000, 10000)],
     "decay": [(10000, h) for h in (500.0, 5000.0, math.inf)],
+    # request A10, part 3: Student-t(5) innovations, unit SD, two AR roots
+    "t5_phi080": [(10000, math.inf)],
+    "t5_phi095": [(10000, math.inf)],
+    # their Gaussian controls: the same truths, normal innovations
+    "n_phi080": [(10000, math.inf)],
+    "n_phi095": [(10000, math.inf)],
+}
+# the truth and the noise per grid; part 4's grids keep arma.TRUTH, Gaussian
+SETTINGS: dict[str, dict[str, object]] = {
+    "t5_phi080": {"truth": (0.8, 0.3, 1.0), "nu": 5.0},
+    "t5_phi095": {"truth": (0.95, 0.3, 1.0), "nu": 5.0},
+    "n_phi080": {"truth": (0.8, 0.3, 1.0)},
+    "n_phi095": {"truth": (0.95, 0.3, 1.0)},
 }
 
 
@@ -36,14 +49,15 @@ def load(out: Path) -> list[dict]:
     return [json.loads(x) for x in out.read_text(encoding="utf-8").splitlines() if x.strip()]
 
 
-def run(out: Path, cases: list[tuple[int, float]]) -> None:
+def run(out: Path, cases: list[tuple[int, float]], settings: dict[str, object]) -> None:
     finished = {(int(r["seed"]), int(r["n"]), r["half_life"]) for r in load(out)}
     with out.open("a", encoding="utf-8") as f:
         for n, h in cases:
             for seed in SEEDS:
                 if (seed, *key(n, h)) in finished:
                     continue
-                f.write(json.dumps(arma.compare(n, seed, half_life=h)) + "\n")
+                rec = arma.compare(n, seed, half_life=h, **settings)  # type: ignore[arg-type]
+                f.write(json.dumps(rec) + "\n")
                 f.flush()
                 print(f"{out.stem}: n {n} half-life {h} seed {seed} done", flush=True)
 
@@ -84,6 +98,21 @@ def summary(out: Path, cases: list[tuple[int, float]]) -> None:
             f"{np.median(gap):.3g} max {gap.max():.3g}; mse ratio median "
             f"{np.median(ratio):.4f} max {ratio.max():.4f} -->"
         )
+        # the per-seed bounds proposed in the record's section 15.2
+        se_ok = sum(all(abs(r[f"{k}_diff_in_se"]) <= 1.0 for k in arma.NAMES) for r in rows)
+        rms_ok = int((gap <= 0.025).sum())
+        both = sum(
+            all(abs(r[f"{k}_diff_in_se"]) <= 1.0 for k in arma.NAMES)
+            and r["pred_rms_gap_second_half"] <= 0.025
+            for r in rows
+        )
+        worst = max(rows, key=lambda r: max(abs(r[f"{k}_diff_in_se"]) for k in arma.NAMES))
+        wk = max(arma.NAMES, key=lambda k: abs(worst[f"{k}_diff_in_se"]))
+        print(
+            f"<!-- n {n} h {hl}: section 15.2 bounds: all within 1 SE {se_ok}; rms gap "
+            f"<= 0.025 {rms_ok}; both {both}; worst seed {int(worst['seed'])} {wk} "
+            f"{worst[f'{wk}_diff_in_se']:+.3g} SE -->"
+        )
 
 
 if __name__ == "__main__":
@@ -93,4 +122,4 @@ if __name__ == "__main__":
     if "--summary" in sys.argv[3:]:
         summary(out, CASES[which])
     else:
-        run(out, CASES[which])
+        run(out, CASES[which], SETTINGS.get(which, {}))

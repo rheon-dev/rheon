@@ -10,7 +10,8 @@ ETS(A,A,N) against statsmodels' `ETSModel` (§13). Part 6: DCC(1,1) with
 GARCH(1,1) margins against a batch fit written from the definition (§14).
 Part 7: the proposed tolerances (§15). Request A10, part 1: GARCH(1,1) variance
 targeting against a batch variance-targeting fit run by arch (§16). Part 2: the same at 100,000 rows and at
-persistence 0.97 and 0.99 (§17). The request named the deliverable
+persistence 0.97 and 0.99 (§17). Part 3: Student-t(5) noise for targeted
+GARCH, ARMA(1,1) at two AR roots and ETS(A,A,N) at two smoothing levels (§18). The request named the deliverable
 `STUDY-485-ESTIMATORS.md`; it is this record, kept under the name it was
 committed with (`ORACLE-STUDY-485.md`). Nothing in the package or the Rust crates was changed. The scan this
 builds on is `vm-tools/research/485-TIME-SERIES-SCAN.md` on branch
@@ -825,3 +826,98 @@ Absolute gaps over the fifty seeds, in arch's SEs (`ω`: delta-method SE,
 passes is two or three seeds. Rows past 10,000 at P = 0.99 were not run;
 whether 0.99 passes at 100,000 is open. Not run here: Student-t noise and
 three-series DCC (request A10's later parts).
+
+## 18. Request A10, part 3: Student-t noise
+
+All runs fresh, at 10,000 rows on seeds 485000 to 485049, Student-t with
+`ν = 5` scaled to unit variance (`t·sqrt(3/5)`), drawn by the same
+`default_rng(seed)` in place of the normal draws (so the series are not
+part 1 to 5's). The scripts gained options, not forks: `garch.simulate`,
+`arma.simulate` and `ets.simulate` take `nu` (default None leaves every
+earlier series and field as it was: a part 1, a part 4 and a part 5 case
+were recomputed and matched every field; the 36 study tests pass);
+`vt_garch.py --nu`, `grid_arma.py OUTDIR t5_phi080|t5_phi095` (and the
+Gaussian controls `n_phi080|n_phi095`), `ets.py OUT --alpha A [--nu NU]
+--rows N` (truth `(A, A/3, 1)`). Each grid appends a JSON line per seed and
+resumes after the last; each ran under nohup with a log, about a minute
+each, five at a time. The §15.2 per-seed bounds are applied as written there.
+
+The 0.99-persistence failure of §17 stands as a finding, with its ridge
+explanation; what it means for the floors is the coordinator's decision.
+
+**Oracles and SEs.**
+
+- Targeted GARCH, truth `(0.02, 0.08, 0.90)`: the primary oracle is §16's
+  process with arch's `dist="t"` (`StudentsT`): arch estimates `ν` beside
+  `(α, β)` by maximum likelihood, robust SEs, as arch does for any `ν`
+  (median fitted `ν` 5.14, range 4.43 to 6.04). The online estimator is the
+  Gaussian quasi-likelihood one and estimates no `ν`, so its own estimand is
+  the Gaussian targeted fit (`dist="normal"`, robust SEs), reported beside it.
+  The t fit's SEs are about 1.3 times smaller (median ratio 1.28 for `α`,
+  1.30 for `β`), and the two batch fits differ by 0.75 t-fit SEs in `α` at
+  the median.
+- ARMA(1,1), `θ = 0.3` (part 4's MA term), `φ = 0.8` and `0.95`, `σ = 1`:
+  statsmodels' `SARIMAX` as in part 4. It has no Student-t likelihood, so
+  the oracle stays the Gaussian likelihood (quasi-ML under t noise) with its
+  default OPG SEs; `ν` is not estimated.
+- ETS(A,A,N), `α = 0.1, β = 0.1/3` and `α = 0.6, β = 0.2` (`β/α = 1/3`, as
+  part 5), `σ = 1`: `ETSModel` as in part 5, Gaussian likelihood, its own
+  SEs for `α, β`; `σ²`'s SE is part 5's Gaussian closed form
+  `σ̂² sqrt(2/n)`, which under t(5) (kurtosis 9) understates `σ̂²`'s spread
+  by about 2, so the `σ²` gaps below are in a scale about half the true one.
+
+**Results.** "Within 2" is the criterion's count (every parameter within 2
+SE). §15.2 bounds: targeted GARCH `ω` ≤ 5 SE, `α, β` ≤ 3.5 SE, path gap ≤ 5%;
+ARMA every parameter ≤ 1 SE, prediction RMS gap ≤ 0.025; ETS every parameter
+≤ 2.5 SE, RMS gap ≤ 0.05. The Gaussian controls (same truth, normal noise)
+were run for this part, except targeted GARCH's, which is part 1's (§16),
+reused.
+
+| set | noise | within 2 | verdict | worst seed, in SE | §15.2 bounds: SE / path or RMS / both |
+|---|---|---|---|---|---|
+| targeted GARCH, against the t fit (`ν` estimated) | t(5) | 35 | **fails** | 485009, `β` −55.3 (`α` +5.38) | `ω` 47, `α, β` 45 / 38 / 37 |
+| targeted GARCH, against the Gaussian fit | t(5) | 45 | passes, no headroom | 485009, `β` −32.4 | `ω` 49, `α, β` 48 / 43 / 43 |
+| targeted GARCH, control (§16, reused) | normal | 47 | passes | 485027, `β` +2.70 | — |
+| ARMA `φ = 0.8` | t(5) | 50 | passes | 485025, `σ²` −1.02 | 48 / 50 / 48 |
+| ARMA `φ = 0.8`, control | normal | 50 | passes | 485029, `θ` −0.56 | 50 / 50 / 50 |
+| ARMA `φ = 0.95` | t(5) | 49 | passes | 485009, `σ²` +2.18 | 46 / 48 / 45 |
+| ARMA `φ = 0.95`, control | normal | 49 | passes | 485021, `σ²` +3.95 | 48 / 48 / 47 |
+| ETS `α = 0.1` | t(5) | 49 | passes | 485020, `σ²` +2.32 | 50 / 50 / 50 |
+| ETS `α = 0.1`, control | normal | 50 | passes | 485033, `α` +0.93 | 50 / 50 / 50 |
+| ETS `α = 0.6` | t(5) | 6 | **fails** | 485006, `β` −13.1 | 12 / 23 / 12 |
+| ETS `α = 0.6`, control | normal | 6 | **fails** | 485017, `β` −9.98 | 8 / 18 / 8 |
+
+Largest gaps by parameter: ARMA `φ = 0.95`, t(5): `φ` 1.46, `θ` 1.80, `σ²`
+2.18 SE (prediction RMS gap max 0.032); ARMA `φ = 0.8`, t(5): 0.53, 0.47,
+1.02 (RMS max 0.019); ETS `α = 0.1`, t(5): `α` 2.05, `β` 0.83, `σ²` 2.32
+(RMS max 0.042); ETS `α = 0.6`, t(5): 6.26, 13.1, 4.83 (RMS max 0.19).
+statsmodels converged on every case except one ETS `α = 0.6` control;
+arch converged on all 100 GARCH fits; the scipy cross-fit was within 0.0004
+SE of arch's Gaussian fit on every case.
+
+**What fails, and why.**
+
+- *Targeted GARCH under t(5).* Two causes, measured apart. Against its own
+  estimand (the Gaussian fit) it is at the boundary, 45 of 50, with one
+  stuck seed: 485009 ends at `(α, β) = (0.116, 0.501)` against the Gaussian
+  fit's `(0.071, 0.907)`, the early-transient failure of §10 brought back by
+  heavy-tailed early rows (path gap 49%). Against the t fit it fails, 35 of
+  50, because the t fit is a different, more efficient estimator: its SEs
+  are 1.3 times smaller and its point differs from the Gaussian fit's by
+  about 0.75 of them, so a Gaussian online estimator cannot meet a 2-SE
+  criterion in the t fit's units. Estimating `ν` online was not studied.
+- *ETS at `α = 0.6`.* Not the noise: the Gaussian control fails the same
+  way (6 of 50). The online estimate is biased along one direction: `β` low
+  and `α` high (median online `β` 0.173 against the batch 0.200; median
+  signed gaps `α` +2.0, `β` −5.1 SE). It is a slow approach from the start
+  `(0.5, 0.05)` under the `1/t` gain, not a wrong limit: on seed 485006 the
+  `β` gap is −4.4, −4.0 and −2.6 SE at 2,000, 10,000 and 40,000 rows. At
+  `α = 0.1` and part 5's `α = 0.3` the same estimator passes.
+- *ARMA* passes the criterion at both roots under t(5), and the `φ = 0.95`
+  set falls below the §15.2 per-seed bound (1 SE on every seed) on four
+  seeds under t(5) and two under normal noise, mostly through `σ²`.
+
+**Not verified:** a Student-t online likelihood or an online `ν`; the
+targeted GARCH t-noise run at persistence 0.97 or 0.99 or past 10,000 rows;
+ETS at `α = 0.6` past 10,000 rows on the whole grid (one seed at 40,000);
+`σ²`'s SE under t for ETS (closed form is Gaussian) and robust SEs for ARMA.

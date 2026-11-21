@@ -54,11 +54,24 @@ import numpy as np
 TRUTH = (0.6, 0.3, 1.0)  # phi, theta, sigma
 
 
-def simulate(n: int, phi: float, theta: float, sigma: float, seed: int, burn: int = 1000):
+def simulate(
+    n: int,
+    phi: float,
+    theta: float,
+    sigma: float,
+    seed: int,
+    burn: int = 1000,
+    nu: float | None = None,
+):
     """A zero-mean Gaussian ARMA(1,1) series of ``n`` rows after ``burn``
-    discarded rows started at zero."""
+    discarded rows started at zero. With ``nu``, the innovations are Student-t
+    with ``nu`` degrees of freedom scaled to standard deviation ``sigma``."""
     rng = np.random.default_rng(seed)
-    e = sigma * rng.standard_normal(n + burn)
+    e = sigma * (
+        rng.standard_normal(n + burn)
+        if nu is None
+        else rng.standard_t(nu, n + burn) * math.sqrt((nu - 2.0) / nu)
+    )
     y = np.empty(n + burn)
     prev_y = 0.0
     prev_e = 0.0
@@ -185,15 +198,23 @@ def weighted_css_fit(y: np.ndarray, half_life: float) -> np.ndarray:
 NAMES = ("phi", "theta", "sigma2")
 
 
-def compare(n: int, seed: int, half_life: float = math.inf, **kw: object) -> dict[str, float]:
+def compare(
+    n: int,
+    seed: int,
+    half_life: float = math.inf,
+    truth: tuple[float, float, float] = TRUTH,
+    nu: float | None = None,
+    **kw: object,
+) -> dict[str, float]:
     """The online estimator against the batch fits on one simulated series.
 
     Gaps are in statsmodels' standard errors. Under decay they are also given
     against the weighted fit, in the unweighted SEs scaled by ``sqrt(n/n_eff)``,
     ``n_eff = (sum w)^2 / sum w^2``: an approximation to the weighted fit's own
-    SEs, which no library computes."""
-    phi, theta, sigma = TRUTH
-    y = simulate(n, phi, theta, sigma, seed)
+    SEs, which no library computes. ``truth`` and ``nu`` (Student-t noise)
+    default to part 4's Gaussian series."""
+    phi, theta, sigma = truth
+    y = simulate(n, phi, theta, sigma, seed, nu=nu)
     _, res = sarimax_fit(y)
     b = np.asarray(res.params, dtype=float)
     se = np.asarray(res.bse, dtype=float)

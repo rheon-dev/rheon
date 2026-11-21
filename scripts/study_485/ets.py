@@ -57,11 +57,17 @@ BOUND = 1e-4  # statsmodels' default margin on alpha and beta/alpha
 NAMES = ("alpha", "beta", "sigma2")
 
 
-def simulate(n: int, alpha: float, beta: float, sigma: float, seed: int) -> np.ndarray:
+def simulate(
+    n: int, alpha: float, beta: float, sigma: float, seed: int, nu: float | None = None
+) -> np.ndarray:
     """``n`` rows of ETS(A,A,N) from the given initial states. A local linear
-    trend has no stationary distribution, so there is no burn-in."""
+    trend has no stationary distribution, so there is no burn-in. With ``nu``,
+    the errors are Student-t with ``nu`` degrees of freedom scaled to standard
+    deviation ``sigma``."""
     rng = np.random.default_rng(seed)
-    e = sigma * rng.standard_normal(n)
+    e = sigma * (
+        rng.standard_normal(n) if nu is None else rng.standard_t(nu, n) * math.sqrt((nu - 2.0) / nu)
+    )
     y = np.empty(n)
     lev, tr = L0, B0
     for t in range(n):
@@ -161,12 +167,15 @@ def ets_fit(y: np.ndarray, l0: float = L0, b0: float = B0):  # noqa: ANN201
     return model, model.fit(disp=False)
 
 
-def compare(n: int, seed: int) -> dict[str, float]:
+def compare(
+    n: int, seed: int, truth: tuple[float, float, float] = TRUTH, nu: float | None = None
+) -> dict[str, float]:
     """The online estimator against the batch fit on one simulated series.
     ``alpha`` and ``beta`` gaps are in statsmodels' own standard errors;
     statsmodels gives none for ``sigma2`` (it is concentrated out), so its gap
-    is in the Gaussian closed form ``sigma2 * sqrt(2/n)``."""
-    y = simulate(n, *TRUTH, seed=seed)
+    is in the Gaussian closed form ``sigma2 * sqrt(2/n)``. ``truth`` and ``nu``
+    (Student-t errors) default to part 5's Gaussian series."""
+    y = simulate(n, *truth, seed=seed, nu=nu)
     _, res = ets_fit(y)
     ab = np.asarray(res.params, dtype=float)
     ab_se = np.asarray(res.bse, dtype=float)
@@ -203,14 +212,21 @@ def load(out: Path) -> list[dict]:
     return [json.loads(x) for x in out.read_text(encoding="utf-8").splitlines() if x.strip()]
 
 
-def grid(out: Path) -> None:
+def grid(
+    out: Path,
+    sizes: tuple[int, ...] = SIZES,
+    truth: tuple[float, float, float] = TRUTH,
+    nu: float | None = None,
+) -> None:
     finished = {(int(r["seed"]), int(r["n"])) for r in load(out)}
     with out.open("a", encoding="utf-8") as f:
-        for n in SIZES:
+        for n in sizes:
             for seed in SEEDS:
                 if (seed, n) in finished:
                     continue
-                f.write(json.dumps(compare(n, seed)) + "\n")
+                rec = compare(n, seed, truth, nu)
+                rec.update(alpha_true=truth[0], beta_true=truth[1], nu=nu or -1.0)
+                f.write(json.dumps(rec) + "\n")
                 f.flush()
                 print(f"ets: n {n} seed {seed} done", flush=True)
 
@@ -219,7 +235,7 @@ def summary(out: Path) -> None:
     recs = load(out)
     print("| rows | alpha: median / max / over 3 | beta | sigma2 | all within 2 SE |")
     print("|---|---|---|---|---|")
-    for n in SIZES:
+    for n in sorted({int(r["n"]) for r in recs}):
         rows = [r for r in recs if int(r["n"]) == n]
         cells = []
         for name in NAMES:
@@ -241,13 +257,39 @@ def summary(out: Path) -> None:
             f"fittedvalues max gap {fv:.2g}; mse gap {mse:.2g}; "
             f"online beta at its bound {at_bound} -->"
         )
+        # the per-seed bounds proposed in the record's section 15.2
+        se_ok = sum(all(abs(r[f"{k}_diff_in_se"]) <= 2.5 for k in NAMES) for r in rows)
+        rms_ok = sum(r["pred_rms_gap_second_half"] <= 0.05 for r in rows)
+        both = sum(
+            all(abs(r[f"{k}_diff_in_se"]) <= 2.5 for k in NAMES)
+            and r["pred_rms_gap_second_half"] <= 0.05
+            for r in rows
+        )
+        worst = max(rows, key=lambda r: max(abs(r[f"{k}_diff_in_se"]) for k in NAMES))
+        wk = max(NAMES, key=lambda k: abs(worst[f"{k}_diff_in_se"]))
+        print(
+            f"<!-- n {n}: section 15.2 bounds: all within 2.5 SE {se_ok}; rms gap <= 0.05 "
+            f"{rms_ok}; both {both}; worst seed {int(worst['seed'])} {wk} "
+            f"{worst[f'{wk}_diff_in_se']:+.3g} SE -->"
+        )
+
+
+def _opt(name: str) -> float | None:
+    """``--name VALUE`` from the command line, or None."""
+    return float(sys.argv[sys.argv.index(name) + 1]) if name in sys.argv else None
 
 
 if __name__ == "__main__":
+    # options (request A10, part 3): --alpha A sets the truth to (A, A/3, 1.0),
+    # keeping part 5's beta/alpha of 1/3; --nu NU gives Student-t errors;
+    # --rows N runs that one row count
+    alpha_opt, nu_opt, rows_opt = _opt("--alpha"), _opt("--nu"), _opt("--rows")
+    truth_opt = TRUTH if alpha_opt is None else (alpha_opt, alpha_opt / 3.0, 1.0)
+    sizes_opt = SIZES if rows_opt is None else (int(rows_opt),)
     if sys.argv[1] == "--one":
-        for k, v in compare(int(sys.argv[2]), int(sys.argv[3])).items():
+        for k, v in compare(int(sys.argv[2]), int(sys.argv[3]), truth_opt, nu_opt).items():
             print(f"{k:34s} {v: .10g}")
     elif "--summary" in sys.argv[2:]:
         summary(Path(sys.argv[1]))
     else:
-        grid(Path(sys.argv[1]))
+        grid(Path(sys.argv[1]), sizes_opt, truth_opt, nu_opt)
