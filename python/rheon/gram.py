@@ -378,9 +378,10 @@ def _check_shapes(np: Any, g: Gram, who: str) -> None:
     3-column Gram raised numpy's own index error (review fable2, Y6).
 
     `k` is the number of `columns` and `m` of `targets`. `comoments` is
-    `k x k`, or the packed upper triangle of `k (k + 1) / 2`; a key the
-    functions fill when it is absent (`means_by_target`, `cross_centered`,
-    each target moment) is checked only when given."""
+    `k x k`, or the packed upper triangle of `k (k + 1) / 2`. A key is
+    checked only when given: `correlation` reads a mapping of `columns` and
+    `comoments` alone, and the functions fill `means_by_target`,
+    `cross_centered` and the target moments when they are absent."""
     k = len(_columns(g, who))
     m = len(g.get("targets") or ())
     como = g.get("comoments")
@@ -401,7 +402,9 @@ def _check_shapes(np: Any, g: Gram, who: str) -> None:
     if g.get("target_within_parts") is not None:
         shapes.append(("target_within_parts", g.get("target_within_parts"), m))
     for key, v, want in shapes:
-        got = 0 if v is None else int(np.size(v))
+        if v is None:
+            continue
+        got = int(np.size(v))
         square = key != "comoments" or packed or np.ndim(v) == 2
         if got != want or not square:
             msg = (
