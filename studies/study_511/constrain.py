@@ -161,8 +161,8 @@ def report(seeds: int = 20) -> None:
         early = max(v for i, v in g.items() if i < 12)
         late = max(v for i, v in g.items() if i >= 12)
         rows.append([name, early, late, max(g.values())])
-    table("516c: row-by-row vs RecursiveLS(constraints=(R, q)).filtered, aligned on the same row (absolute gap; rows 5-11 and 12-119; the filter is diffusely initialised and imposes constraints as fake observations)",
-          ["constraint", "rows 5-11", "rows 12-119", "max"], rows)
+    table("516c: row-by-row vs RecursiveLS(constraints=(R, q)).filtered, aligned on the same row (absolute gap; row indices 7-11 and 12-119; the filter is diffusely initialised and imposes constraints as fake observations)",
+          ["constraint", "rows 7-11", "rows 12-119", "max"], rows)
 
     # (d) first row weight zero and zero-weight rows interleaved == gaps folded forward
     J1, J2 = EwJoint(k), EwJoint(k)

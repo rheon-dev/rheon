@@ -145,7 +145,7 @@ leverage):
 - **Statistical only against the final fit** (C1: out-of-sample residuals at each row's fit,
   not the final fit's; a ratio band). SE ratio rheon type / statsmodels same type, 20 seeds,
   k = 3, unit weights, no decay, meat starting after 20 rows, homoskedastic (heteroskedastic
-  within 0.5 point of it):
+  within 1 point of it):
 
 | n | HC0* | HC1* | HC2* | HC3* (= existing) |
 |---|---|---|---|---|
@@ -169,8 +169,8 @@ Decay and zero weight: the leverage and residual identities hold under decay and
 nothing. Each additional distinct meat (`hc2`, `hc3`) is `8 d^2` bytes, `d = k + 1`, and
 `8 (d^2 (L+1) + d L)` with `L` HAC lags: `d = 4`: 128 bytes per extra type (928 at `L = 5`);
 `d = 21`: 3.5 KB (22 KB); `d = 101`: 82 KB (494 KB). Bounded by `k` and `L`, per slot
-(targets x combos). At `k = 100` with `L = 5` a third type nearly fills 256 KB beside the
-existing sandwich: that combination should be refused or flagged under the per-group cap.
+(targets x combos). At `k = 100` with `L = 5` even one extra type (494 KB) is over the 256 KB per-group cap, and
+at `L = 0` three extra types (245 KB) nearly fill it: those combinations are for the cap to refuse.
 
 ## 513. Scores for intervals and losses
 
@@ -204,7 +204,7 @@ coverage on 5% crossed rows. Un-crossing is what the Winkler score does; coverag
   (gap 4e-16). Over the stream the null can only be a running quantile (8 bytes, step = rate x EW
   mean absolute deviation), a different quantity: against sklearn's whole-stream D2, on a
   stationary stream, mean gap 0.085 (n = 2000, rate .02) falling to 8e-4 (n = 20000), max 0.16
-  to 0.013; on a stream whose mean wanders the gap is -0.25 to -1.0 (the quantities differ, not
+  to 0.013; on a stream whose mean wanders the gap runs from -1.0 to +0.2 (the quantities differ, not
   only the estimate). So: pinball is exact and streaming; D2 is exact only over a window.
 
 **State added:** one `f64` per score plus a shared weight, `8 n + 8` bytes (7 scores: 64).
@@ -219,7 +219,7 @@ one pair of **signed** trackers per level `alpha_l`, each a quantile tracker of 
 scaled residual `s = r/sigma` at tail level `alpha_l/2` (MAPIE `AbsoluteConformityScore(sym=False)`, `beta = alpha/2`):
 `m_hi' = m_hi + eta rel (1{s > m_hi} - alpha_l/2)`, `m_lo' = m_lo + eta rel (1{-s > m_lo} - alpha_l/2)`,
 interval `[pred - m_lo sigma, pred + m_hi sigma]`, no clamp at 0, both starting at
-`Phi^-1(1 - alpha_l/2)`. Levels are independent recursions, so nested levels can cross (2.2%
+`Phi^-1(1 - alpha_l/2)`. Levels are independent recursions, so nested levels can cross (2.4%
 of rows at rate .05, 0.03% at .02, none at .005 for levels .8/.9/.95); sort at read, no state.
 **The per-row conformal p-value** (crepes `predict_p_online`, `smoothing=False`):
 `p_t = (sum_i omega_i 1{a_i >= a_t} + 1)/(sum_i omega_i + 1)` over a ring of the last `W`
@@ -271,7 +271,7 @@ two rows), 20 seeds, n = 400, k = 4: relative gap 1e-12 at `lam = 1` and 4e-13 a
 in [.5,2] and zero-weight rows (first row included); `|R beta - r|` at most 3e-14. With a ridge
 penalty (0, .05, 2) against a second derivation, the KKT block system: 9e-14, 2e-14, 6e-15. Row
 by row against `RecursiveLS(constraints=(R, q)).filtered` (expanding, unit weights, ridge 0, rows
-aligned on the same row, 8 seeds, rows 5-119): absolute gap 1e-12 to 5e-12 for one constraint,
+aligned on the same row, 8 seeds, row indices 7-119): absolute gap 1e-13 to 5e-12 for one constraint,
 1.8e-10 for two (C1: the filter imposes constraints as fake observations; 1e-8 plausible, 1e-12 not).
 A statsmodels 0.15 defect met: `RecursiveLS(constraints=...)` with a numpy 1-D `endog` raises
 `IndexError` (it indexes `endog[:, 1:]`); the study passes `endog` with its `q` constraint columns,
@@ -296,7 +296,7 @@ state file carries it (k = 20, q = 5: 840 bytes); the `k x q` solve scratch is n
 | 515 | telescoping identity | 1e-9 abs | 8e-12 |
 | 515 | p-value vs crepes (exact), expanding or window | 1e-12 abs | 0 |
 | 516 | final fit vs `GLM.fit_constrained` | 1e-10 rel | 1e-12 |
-| 516 | row by row vs `RecursiveLS` (from row k + 8) | 1e-8 abs | 1.8e-10 |
+| 516 | row by row vs `RecursiveLS` (from row index k + 3) | 1e-8 abs | 1.8e-10 |
 
 ## State summary, against the caps
 
@@ -304,7 +304,7 @@ state file carries it (k = 20, q = 5: 840 bytes); the `k x q` solve scratch is n
 |---|---|---|---|
 | 511 OAS / Shrunk | 0 | | no |
 | 511 LW | `8 (k+1)`; windowed `8 (k+1) S` | `S <= window/spacing + 2` | yes, on `S` |
-| 512 HC types | `8 d^2` per extra distinct meat (`8(d^2(L+1)+dL)` with lags) | `k`, `L` | flag `k = 100`, `L = 5` |
+| 512 HC types | `8 d^2` per extra distinct meat (`8(d^2(L+1)+dL)` with lags) | `k`, `L` | yes at `k` = 100 with lags |
 | 513 means | `8 n + 8` | | no |
 | 513 SSC, D2 windows | `40 W` | window `W` | yes, on `W` |
 | 515 signed trackers | `24 L + 24` | levels | no |
