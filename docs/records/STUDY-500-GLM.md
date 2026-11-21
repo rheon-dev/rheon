@@ -1,16 +1,21 @@
 # Study 500: online GLMs by recursive IRLS
 
-**Status (2026-11-21): parts 1 and 2 of 3 done; part 3 missing.** Part 1
-(sections 1 to 6): Poisson and Gamma, log link, no decay, no window, 10 seeds.
-Part 2 (section 7): the log-link binomial and separation, decay, a rolling
-window, zero-weight rows and zero counts, and a step cap in place of the
-refit. Missing, for part 3: the row-by-row exact oracle through statsmodels'
-family objects, 50 seeds, and a sweep of `refit_rows` and the ridge. The
-scripts are `scripts/study_500.py` (part 1) and `scripts/study_500_part2.py`
-(part 2, which imports part 1's generator); both generate their own data from
-seeded numpy generators and read nothing from disk. The proposal is task 500
-in the models scan (branch `vm-tools/oracle-gap-scan`,
-`vm-tools/research/494-MODELS-SCAN.md`, section 6).
+**Status (2026-11-21): complete (parts 1 to 3).** Part 1 (sections 1 to 6):
+Poisson and Gamma, log link, no decay, no window, 10 seeds. Part 2 (section
+7): the log-link binomial and separation, decay, a rolling window, zero-weight
+rows and zero counts, and a step cap in place of the refit. Part 3 (section
+8): Tweedie (p = 1.5), a periodic refit of a stored window, Newton sweeps per
+row, the row-by-row oracle through statsmodels' family objects, 50 seeds, and
+section 9, which collects the recursion of every variant, the state sizes, the
+numerical risks, the oracles and the **proposed test tolerances**. Not done:
+a sweep of `refit_rows` and of the ridge (part 1's open question).
+
+One script, `scripts/study_500.py`, runs every variant and check (parts 1 and
+2's scripts are merged into it; `--quick` runs every section on short streams
+in about 30 seconds). It generates its own data from seeded numpy generators
+and reads nothing from disk. The proposal is task 500 in the models scan
+(branch `vm-tools/oracle-gap-scan`, `vm-tools/research/494-MODELS-SCAN.md`,
+section 6).
 
 Environment: `~/rheon/.venv` with numpy, scipy, statsmodels 0.15.0, glum
 3.5.0 (glum installed without trouble).
@@ -196,6 +201,10 @@ batch fit at 100k rows: its excess over the batch fit's own error is under
 
 ## 6. Open questions (for parts 2 and 3)
 
+(Answered since: the cap, 7.6 and 8.6; decay, 7.3; the row-by-row oracle,
+8.5; 50 seeds, section 8; the batch reference's precision, 7 and 8. Still
+open: how small `refit_rows` can be, and a sweep of the ridge.)
+
 - How small can `refit_rows` be? 200 rows for k = 20 worked on 10 seeds;
   is `10 k` enough, and does the failure probability with no refit fall
   with a smarter start (intercept at `log(mean y)`, which needs a buffer
@@ -216,8 +225,10 @@ batch fit at 100k rows: its excess over the batch fit's own error is under
 ## 7. Part 2: binomial, separation, decay, window, zero weights, step cap
 
 **Baseline: variant C of part 1** (`R = 1`, `refit_rows = 200`) throughout,
-except in 7.6, which asks whether a step cap can replace the refit. Run:
-`.venv/bin/python scripts/study_500_part2.py checks binomial separation --out a.json`
+except in 7.6, which asks whether a step cap can replace the refit. Run (part
+2 ran these as `scripts/study_500_part2.py`, now merged into
+`scripts/study_500.py` with the same functions and seeds):
+`.venv/bin/python scripts/study_500.py checks binomial separation --out a.json`
 (about 1 minute) and `... decay window --procs 2` (3 minutes), `... cap
 --procs 2` (7 minutes), each with `nohup`. Each job is about 550 MB at its
 peak; four workers in parallel were killed for memory once, so the long runs
@@ -488,3 +499,443 @@ Harness note: one long-lived Python process that ran the failing (overflowing)
 seeds one after another grew to 12 GB; one process per job stays at 0.7 to
 1.4 GB. The cause was not chased (the online state is `O(k^2)`); runs of the
 script should use `--procs 2` at most or a process per job.
+
+The script now runs one job per worker process (`max_tasks_per_child=1`): in
+part 3 a pool worker that had run about 20 jobs at 100k rows had grown to
+5 GB and was killed by the memory limit. Each result is also appended to
+`<out>.partial.jsonl` as it arrives.
+
+## 8. Part 3: Tweedie, a periodic window refit, Newton sweeps, 50 seeds
+
+**Baseline: variant C** (`R = 1`, refit of the first 200 rows) throughout.
+Run (each under `nohup`):
+`.venv/bin/python scripts/study_500.py variants --seeds 50 --procs 3 --variants C periodic replace sweeps --out v50.json`
+(43 minutes on 3 cores), `... variants --seeds 10 --families tweedie
+--variants A B`,
+`... dispersion` (5 seeds), `... cap --seeds 50 --procs 1`, `... checks`.
+
+**Seeds: 50** (0 to 49) for every family, k (5, 20) and variant in 8.1 to
+8.4, and for the cap (8.6); 10 for Tweedie's A and B; 5 for the dispersion
+check. Part 1's 10-seed values for C are reproduced (Poisson k = 20 at 100k,
+seeds 0 to 9: 0.137 / 0.164 SE, as in 4.2).
+
+**The references at each checkpoint** (all on the same rows, all weights 1):
+
+- `ref`: penalised IRLS with step halving, sum form, ridge `R`, tolerance
+  1e-13 (the refit's solver);
+- statsmodels `GLM(freq_weights=1).fit(method="IRLS", tol=1e-12)`,
+  unpenalised: its `params` ("statsmodels, unpenalised") and its `bse`, the SE
+  unit of every gap below (Pearson scale for Gamma and Tweedie);
+- statsmodels' ridge path, `fit_regularized(alpha=R/n, L1_wt=0)` (BFGS),
+  with the model's `loglike` replaced by `-deviance/2` from statsmodels' own
+  family object (Gamma's `loglike` profiles the scale, Tweedie's is a series
+  evaluation of the density) and `score` at scale 1 ("statsmodels"; started
+  at the unpenalised fit);
+- glum, `GeneralizedLinearRegressor(family, link="log", alpha=R/n,
+  l1_ratio=0, fit_intercept=False, gradient_tol=1e-10)`, Tweedie as
+  `TweedieDistribution(1.5)`.
+
+Floors over the 50 seeds: glum against `ref` at most 1.1e-05 SE; the
+statsmodels ridge path against `ref` at most 3.7e-03 SE (BFGS stops at a
+gradient of 1e-5, as in part 1); statsmodels unpenalised against `ref` at
+most 0.038 SE (the ridge itself, largest at 1k rows). So "statsmodels"
+and "glum" below are interchangeable to the third decimal of an SE.
+
+Gap = `max_j |beta_online_j - beta_batch_j| / bse_j`; "mean / max" over seeds.
+
+### 8.1 Tweedie, p = 1.5, log link
+
+`V(mu) = mu^1.5`, so `W = mu^(2-p) = mu^0.5`, `z = eta + (y - mu)/mu` (as for
+every log link), the score `W (z - eta) = (y - mu) mu^(-0.5)`, and the half
+deviance up to a term free of beta `-y mu^(1-p)/(1-p) + mu^(2-p)/(2-p) =
+2 y mu^(-1/2) + 2 mu^(1/2)`. Data: the same design and seeds as Poisson and
+Gamma (generator `[500, seed, k, 2]`), `y` compound Poisson-Gamma: `N ~
+Poisson(mu^(2-p) / (phi (2-p)))` amounts, each `Gamma(shape (2-p)/(p-1) = 1,
+scale phi (p-1) mu^(p-1))`, `phi = 2`, so `E y = mu`, `Var y = phi mu^1.5`,
+and 27 to 28% of `y` are exactly 0. `y = 0` is legal (`z = eta - 1`).
+
+Variant C, 50 seeds:
+
+| k | n | abs, max | SE mean / max | statsmodels unpenalised, SE max | glum, SE mean / max |
+|---|---|---|---|---|---|
+| 5 | 1k | 1.10e-02 | 0.154 / 0.270 | 0.263 | 0.154 / 0.270 |
+| 5 | 10k | 2.10e-03 | 0.113 / 0.166 | 0.163 | 0.113 / 0.166 |
+| 5 | 100k | 3.89e-04 | 0.057 / 0.097 | 0.097 | 0.057 / 0.098 |
+| 20 | 1k | 3.74e-02 | 0.644 / 0.950 | 0.942 | 0.644 / 0.950 |
+| 20 | 10k | 7.67e-03 | 0.486 / 0.609 | 0.606 | 0.486 / 0.609 |
+| 20 | 100k | 1.25e-03 | 0.241 / 0.311 | 0.311 | 0.242 / 0.312 |
+
+**A and B (10 seeds)**: with `R = 1` (A), 2 of 10 seeds at k = 5 end above 10
+SE at 100k rows (stuck, without a clip; the other 8: 1.5 / 6.4 SE mean / max)
+and 9 of 10 at k = 20 (in 7 the fit runs away within the first rows, clipping
+77 to 108 rows, and stays about 23 abs away; 2 are stuck without a clip); with
+`R = 10` (B), k = 5 converges on all 10 (0.16 / 0.80 SE) and k = 20 sticks on
+2 of 10 (the other 8: 0.82 / 2.15 SE). So Tweedie has both failures, the Gamma
+runaway and the Poisson stick. Tweedie's step is `(y - mu) mu^(-1/2) x`, which
+for a row scored at a very negative `eta` is of order `y e^(|eta|/2)`: the same
+runaway as Gamma's `y e^(|eta|)`, half as steep. Variant C's refit also
+rescues every Tweedie seed: in 43 of 50 seeds at k = 20 some rows clip
+(`|eta| = 30`) before the refit replaces the state, and all 50 converge.
+
+**Dispersion.** Tweedie's gap is about 1.7 times Poisson's at k = 20. It is
+the dispersion: with `phi` = 0.5 / 2 / 8 (1%, 28%, 72% zeros), variant C's gap
+at 100k rows, k = 20, 5 seeds, is 0.119 / 0.241 / 0.527 SE mean (0.156 /
+0.264 / 0.606 max): doubling per factor 4 in `phi`, i.e. the gap in SE grows
+like `sqrt(phi)`. The frozen-weight error is a bias of order `phi / n`
+(the early fits' errors are of order `sqrt(phi / i)` and enter squared),
+while the SE is of order `sqrt(phi / n)`. Across families the dispersion
+is not the only factor: Gamma (`phi = 0.5`, `W = 1`) has 0.143 SE and Poisson (1) 0.137 at
+k = 20, against 0.119 for Tweedie at `phi = 0.5`. **A test tolerance in SE
+therefore holds for a stated dispersion**, and scales by `sqrt(phi / phi_0)`.
+
+### 8.2 Periodic refit of a stored window (W = 2000, every M = 1000 rows)
+
+Two versions, both on top of C:
+
+- **replace** (the literal one): every 1000 rows, fit the last 2000 rows alone
+  (penalised IRLS from the online estimate) and **replace** beta by it (`G`
+  kept, `h = (G + R I) beta`). The estimate is then a 2000-row fit, whose SE is
+  `sqrt(n / 2000)` times the full fit's: 7.1 at 100k rows. Measured at 100k
+  rows, SE mean / max: Poisson 11.4 / 20.6 (k = 5) and 15.7 / 24.0 (k = 20),
+  Gamma 11.5 / 18.4 and 15.4 / 22.2, Tweedie 10.9 / 21.0 and 15.1 / 23.4 (the
+  max over coefficients of a 2000-row fit's error in units of the 100k-row
+  SE, as expected). **It makes the gap far
+  worse**; it estimates a different thing (the last 2000 rows), which is what a
+  window is for (section 7.4), not a remedy for the full-stream fit.
+- **periodic** (re-score the window): the rows that have left the window are
+  kept only as their frozen quadratic (`G_out`, `h_out`); every 1000 rows,
+  Newton with step halving from the online estimate minimises
+  `F(b) = 1/2 b'G_out b - h_out'b + sum_window w_i halfdev_i(b) + R/2 |b|^2`
+  to convergence (mean 2.1 to 4.4 iterations a refit), and every window row is
+  re-scored at that fit: `G = G_out + sum_window w W_i(b) x x'`, `h = (G + R I)
+  b`. Between refits the plain recursion runs. A row's quadratic is thus
+  frozen at the fit of the last refit while it was in the window, 1000 to 2000
+  rows after it arrived, instead of at the fit before it.
+
+### 8.3 Newton sweeps on the last 200 rows
+
+**sweeps**: after C's start-up, every row: the row leaving the 200-row window is
+frozen at the current fit (added to `G_out`, `h_out`), then 2 Newton steps
+with step halving on the same `F(b)` over the last 200 rows. No `G` beyond
+`G_out` and no per-row recursion step: the row's information enters through
+its exact half deviance.
+
+### 8.4 Results: gap at 1k, 10k and 100k rows, 50 seeds
+
+SE gap to statsmodels' ridge path, mean / max over 50 seeds, glum's max in
+brackets; 99.5k is half-way between two window refits (the refits fall on
+multiples of 1000, so the 1k, 10k and 100k checkpoints see the state just
+after one; at 1k the window holds every row and periodic and replace equal the
+batch fit). Last column: the numpy online pass, seconds for 100k rows (a
+Python loop; mean over seeds).
+
+| family | k | variant | 1k | 10k | 99.5k | 100k | numpy, s |
+|---|---|---|---|---|---|---|---|
+| Poisson | 5 | C | 0.085 / 0.245 (0.245) | 0.065 / 0.144 (0.145) | 0.032 / 0.057 (0.058) | 0.032 / 0.057 (0.058) | 1.4 |
+| Poisson | 5 | periodic | 0.000 / 0.000 (0.000) | 0.017 / 0.038 (0.038) | 0.017 / 0.035 (0.036) | 0.017 / 0.034 (0.035) | 1.9 |
+| Poisson | 5 | sweeps | 0.040 / 0.150 (0.150) | 0.047 / 0.104 (0.104) | 0.027 / 0.050 (0.050) | 0.027 / 0.049 (0.050) | 13.8 |
+| Poisson | 20 | C | 0.389 / 0.945 (0.945) | 0.278 / 0.466 (0.467) | 0.137 / 0.198 (0.199) | 0.137 / 0.198 (0.199) | 1.8 |
+| Poisson | 20 | periodic | 0.000 / 0.000 (0.000) | 0.068 / 0.115 (0.115) | 0.066 / 0.105 (0.106) | 0.066 / 0.107 (0.107) | 2.4 |
+| Poisson | 20 | sweeps | 0.180 / 0.414 (0.414) | 0.199 / 0.321 (0.322) | 0.111 / 0.174 (0.174) | 0.111 / 0.173 (0.174) | 16.1 |
+| Gamma | 5 | C | 0.111 / 0.305 (0.305) | 0.071 / 0.116 (0.116) | 0.033 / 0.043 (0.043) | 0.033 / 0.043 (0.043) | 1.4 |
+| Gamma | 5 | periodic | 0.000 / 0.000 (0.000) | 0.025 / 0.047 (0.047) | 0.020 / 0.028 (0.029) | 0.020 / 0.029 (0.030) | 1.9 |
+| Gamma | 5 | sweeps | 0.066 / 0.159 (0.159) | 0.053 / 0.085 (0.085) | 0.031 / 0.042 (0.041) | 0.031 / 0.042 (0.041) | 14.4 |
+| Gamma | 20 | C | 0.405 / 0.492 (0.491) | 0.296 / 0.330 (0.330) | 0.144 / 0.157 (0.159) | 0.143 / 0.157 (0.159) | 1.8 |
+| Gamma | 20 | periodic | 0.000 / 0.000 (0.000) | 0.079 / 0.115 (0.114) | 0.074 / 0.091 (0.089) | 0.074 / 0.091 (0.089) | 2.5 |
+| Gamma | 20 | sweeps | 0.206 / 0.325 (0.325) | 0.207 / 0.252 (0.252) | 0.118 / 0.134 (0.132) | 0.118 / 0.134 (0.132) | 17.0 |
+| Tweedie | 5 | C | 0.154 / 0.270 (0.270) | 0.113 / 0.166 (0.166) | 0.057 / 0.097 (0.098) | 0.057 / 0.097 (0.098) | 1.4 |
+| Tweedie | 5 | periodic | 0.000 / 0.000 (0.000) | 0.020 / 0.051 (0.051) | 0.013 / 0.037 (0.037) | 0.013 / 0.037 (0.037) | 1.8 |
+| Tweedie | 5 | sweeps | 0.058 / 0.157 (0.157) | 0.036 / 0.108 (0.108) | 0.017 / 0.051 (0.051) | 0.017 / 0.051 (0.051) | 15.5 |
+| Tweedie | 20 | C | 0.644 / 0.950 (0.950) | 0.486 / 0.609 (0.609) | 0.242 / 0.313 (0.314) | 0.241 / 0.311 (0.312) | 1.8 |
+| Tweedie | 20 | periodic | 0.000 / 0.000 (0.000) | 0.063 / 0.109 (0.109) | 0.034 / 0.068 (0.068) | 0.034 / 0.067 (0.068) | 2.5 |
+| Tweedie | 20 | sweeps | 0.159 / 0.268 (0.268) | 0.102 / 0.159 (0.159) | 0.043 / 0.077 (0.077) | 0.043 / 0.076 (0.076) | 18.1 |
+
+Gap to the truth at 100k rows (max over coefficients in batch SE, mean over
+seeds), online C, periodic, sweeps and the batch fit: Poisson 1.54, 1.54,
+1.54, 1.54 (k = 5) and 2.17 for all four (k = 20); Gamma 1.58, 1.58, 1.59,
+1.58 and 2.19, 2.18, 2.19, 2.18; Tweedie 1.69, 1.69, 1.69, 1.68 and 2.25,
+2.24, 2.24, 2.23. Every variant but replace is statistically as good as the batch fit.
+
+**Does the periodic refit close the gap?** It cuts it, does not close it.
+At 100k rows, k = 20: Poisson 0.137 to 0.066 (mean; max 0.198 to 0.107),
+Gamma 0.143 to 0.074 (max 0.157 to 0.091), Tweedie 0.241 to 0.034 (max 0.311
+to 0.067): to a half for Poisson and Gamma, to a seventh for Tweedie. At k = 5:
+Poisson 0.032 to 0.017, Gamma 0.033 to 0.020, Tweedie 0.057 to 0.013. It is
+the same just after a refit and half-way between two
+(99.5k), so what remains is not the rows since the last refit. What remains
+is the rows frozen at the early refits: a row is frozen at a fit 1000 to 2000
+rows later, and for the first few thousand rows that fit is itself poor. In SE
+the remaining gap is flat from 10k to 100k (Poisson k = 20: 0.068, 0.066),
+while C's halves (0.278, 0.137): at a few million rows C would catch up.
+
+**Cost of the periodic refit.** State: the window's rows `(x, y, w)` and each
+one's last scoring `(W_i, z_i)`, `(k + 4) W` floats, plus `G_out` and `h_out`
+beside C's `G`, `h`, `beta`: 144 KB at k = 5 and 388 KB at k = 20 (C: 216 B and
+2 KB), bounded by the window. Work: a refit costs about `(I + 1) W k(k+1)/2`
+multiply-adds for the Grams (I = Newton iterations, on average 2.1 for
+Poisson and 3.6 to 4.4 for Gamma and Tweedie; the +1 is the re-scoring) and
+`3 I W k` for `eta`, scores and objective values: 1.5M (Poisson) to 2.8M
+multiply-adds per refit at k = 20. Amortised over M = 1000 rows, `2(I + 1)
+k(k+1)/2 + 6 I k`: 1,550 to 2,800 a row at k = 20 against C's 2,000 (one
+Cholesky of `G + R I`, `k^3/6`, two triangular solves, the rank-one `G`
+update), so 1.8 to 2.4 times C's per-row arithmetic in total; at k = 5, 160
+to 250 a row against 70, 3.2 to 4.5 times. The numpy pass takes 1.3 to 1.4
+times C's (a Python loop's overhead hides the arithmetic). The work comes as
+a spike: the row that triggers a refit does 1000 rows' worth of it.
+
+**Do the sweeps close it?** No, except for Tweedie. At 100k rows, k = 20:
+Poisson 0.137 to 0.111, Gamma 0.143 to 0.118 (about a fifth less), Tweedie
+0.241 to 0.043 (under a fifth of it); at 10k rows the Poisson k = 20 sweeps
+gap (0.199) is still seven tenths of C's. A row's quadratic is frozen 200 rows after it
+arrives, which for Poisson and Gamma moves the fit it is frozen at too little;
+Tweedie, whose gap is dispersion-driven early noise, gains most. **Cost**:
+2 Newton steps on 200 rows per row, `2 (200 k(k+1)/2 + 3 * 200 k + k^3/6)`
+multiply-adds: about 111,000 a row at k = 20 (56 times C) and 12,000 at k = 5
+(170 times C); the numpy pass about 10 times C's (14 to 18 s per 100k rows
+against 1.4 to 1.8). State: `(k + 2) 200` floats for the window plus `G_out`,
+`h_out`, `beta` (37 KB at k = 20, 11 KB at k = 5).
+
+So for Poisson and Gamma neither remedy takes the gap much below half of C's,
+the periodic refit is the cheaper and the better of the two, and both buy a
+fraction of an SE that is already statistically invisible (8.4's gap to the
+truth). For Tweedie at `phi = 2` the periodic refit removes six sevenths of a
+gap that is the largest of the three.
+
+### 8.5 The row-by-row oracle through statsmodels' family objects
+
+The same recursion (with C's refit) with `W` and `z` taken from statsmodels'
+family objects instead of the closed forms: `W = family.weights(mu) = 1 /
+(g'(mu)^2 V(mu))`, `z = eta + (y - mu) g'(mu)` with `g' = link.deriv`. Over
+2000 rows, k = 5, max `|dbeta|` along the path: Poisson 2.9e-15, Gamma
+8.3e-16, Tweedie 7.2e-14 (`checks`). The sums form against the increment
+form (500 rows, no refit): 2.3e-15, 1.0e-15 and 4.0e-15 (Tweedie on seed 997,
+because seed 998 overflows without the refit). The zero-weight checks of 7.5
+pass for Tweedie too (bit-identical to the stream with the rows dropped, plain
+and with the refit; decay 500 gap 0.10 SE, window 1000 gap 0.12 SE; 28% zeros
+in `y`).
+
+### 8.6 The step cap at 50 seeds (repeat of 7.6, k = 20, no refit)
+
+Failure: gap above 10 SE to the ridge-matched (decay-weighted) batch fit at
+100k rows; gap of the other seeds, mean / max, in SE; rows capped per seed.
+
+| family | variant | seeds failed (of 50) | gap, SE mean / max | rows capped |
+|---|---|---|---|---|
+| Poisson | A, no cap (control) | 23 | 2.09 / 8.08 | 0 |
+| Poisson | cap 1 | **0** | 0.239 / 0.578 | 6 to 18 |
+| Poisson | cap 2 | **0** | 0.612 / 4.19 | 1 to 11 |
+| Poisson | decay 5000, no cap | 5 | 0.626 / 8.52 | 0 |
+| Poisson | cap 1, decay 5000 | **0** | 0.039 / 0.065 | 6 to 18 |
+| Poisson | C (8.4) | 0 | 0.137 / 0.198 | |
+| Gamma | A, no cap (control) | 34 | 1.22 / 9.27 | 0 |
+| Gamma | cap 1 | **0** | 0.208 / 0.284 | 5 to 15 |
+| Gamma | cap 2 | **0** | 0.285 / 0.388 | 1 to 8 |
+| Gamma | decay 5000, no cap | 32 | 0.083 / 0.084 | 0 |
+| Gamma | cap 1, decay 5000 | **0** | 0.083 / 0.084 | 5 to 15 |
+| Gamma | C (8.4) | 0 | 0.143 / 0.157 | |
+
+Part 2's 10 seeds understated the plain recursion's failure rate (6 and 5 of
+10; now 23 and 34 of 50, i.e. 46% and 68%). **Cap 1 fails on none of the 50
+seeds** in either family, with or without decay: the 95% upper bound on its
+failure rate is now 6% (3 / 50), against 26% after part 2. Its cost without
+decay is larger in the tail than 10 seeds showed: Poisson max 0.578 SE
+against C's 0.198 (2.9 times), Gamma 0.284 against 0.157 (1.8 times). Cap 2
+leaves one Poisson seed at 4.2 SE: cap 1 is the cap. With decay (half-life
+5000) cap 1 costs nothing (the capped rows decay away) and equals C's decay
+figures of 7.3.
+
+### 8.7 Findings for part 3
+
+1. **Tweedie** (`p = 1.5`, `phi = 2`) behaves as Poisson and Gamma do: the
+   plain recursion fails (2 of 10 seeds at k = 5, 9 of 10 at k = 20, by both the
+   Gamma runaway and the Poisson stick); variant C converges on all 50 seeds;
+   its gap at 100k rows is at most 0.311 SE to statsmodels and 0.312 SE to
+   glum (k = 20; 0.097 / 0.098 at k = 5), the largest of the three families
+   because the gap in SE grows like `sqrt(phi)`.
+2. **The largest gap at 100k rows** (C, 50 seeds, k = 20), statsmodels /
+   glum: Poisson 0.198 / 0.199, Gamma 0.157 / 0.159, Tweedie 0.311 / 0.312
+   SE. At 10k: 0.466 / 0.467, 0.330 / 0.330, 0.609 / 0.609. Every variant's
+   error against the truth equals the batch fit's to 0.01 SE on average.
+3. **A periodic refit of the last 2000 rows that replaces beta** is 15 SE off
+   at 100k rows (it is a 2000-row fit): not a remedy.
+4. **The periodic refit that re-scores the window** (2000 rows, every 1000,
+   from the online estimate) halves the gap for Poisson and Gamma and cuts
+   Tweedie's by seven (k = 20 at 100k, max: 0.107, 0.091, 0.068 SE); it does
+   not close it, and its gap is flat in SE from 10k rows on. Cost: 388 KB of
+   state at k = 20 (144 KB at k = 5) against C's 2 KB, and 1.8 to 2.4 times C's
+   per-row arithmetic at k = 20 (3 to 4.5 times at k = 5), paid as a spike every
+   1000 rows.
+5. **Two Newton sweeps per row on the last 200 rows** cut the gap by a fifth
+   for Poisson and Gamma and by four fifths for Tweedie, at 56 times C's
+   per-row arithmetic at k = 20 (170 times at k = 5; about 10 times in numpy)
+   and 37 KB of state: dominated by the periodic refit everywhere.
+6. **The cap** (part 2's alternative to the refit) holds on 50 seeds: cap 1
+   fails on none in either family (the no-cap control fails on 46% and 68%),
+   at up to 2.9 times C's gap without decay and none with it.
+7. **The recursion is exact against statsmodels' own family objects**
+   (max `|dbeta|` 7.2e-14 over 2000 rows, Tweedie) and against its increment
+   form (4e-15); zero-weight rows stay bit-identical for Tweedie too.
+8. **Proposed tolerances** (9.5): Poisson 0.75 / 0.30 SE, Gamma 0.50 / 0.25,
+   Tweedie 0.95 / 0.50 at 10k / 100k rows, for k up to 20 at the stated
+   dispersions.
+
+## 9. For an implementation and its tests
+
+### 9.1 The recursion, per variant (log link)
+
+Per family: `W(mu) = mu` (Poisson), `1` (Gamma), `mu^(2-p)` (Tweedie);
+`z = eta + (y - mu)/mu` for all three; score `s = W (z - eta)`. Row `t`:
+`eta_t = x_t' beta_{t-1}` (clipped to `|eta| <= 30`), `mu_t = exp(eta_t)`,
+`pred_t = mu_t` emitted first.
+
+- **A** (`R = 1`) / **B** (`R = 10`): `G_t = lambda G_{t-1} + w_t W_t x_t x_t'`,
+  `h_t = lambda h_{t-1} + w_t W_t z_t x_t`, `beta_t = (G_t + R I)^{-1} h_t`
+  (equivalently `beta_t = beta_{t-1} + (G_t + R I)^{-1} w_t s_t x_t`).
+  `lambda = 1` without decay; a zero-weight row only decays.
+- **C** (baseline): A until 200 weighted rows have arrived; then `b* =
+  argmin sum_{i<=200} w_i halfdev_i(b) + R/2 |b|^2` (penalised IRLS with step
+  halving, from `b_0 = (log ybar, 0, ...)`), `G = sum_{i<=200} w_i W_i(b*) x_i x_i'`
+  (times `lambda^age` under decay), `h = (G + R I) b*`, `beta = b*`; the buffer
+  is dropped and A continues.
+- **periodic** (`W = 2000`, `M = 1000`): C, plus the window; when a row leaves
+  the window, `G_out += w W_i x x'`, `h_out += w W_i z_i x` at its stored
+  scoring; every `M` rows `b* = argmin F(b)` (Newton, step halving, from
+  `beta`), each window row re-scored at `b*`, `G = G_out + sum_window w W_i(b*)
+  x x'`, `h = (G + R I) b*`, `beta = b*`.
+- **replace**: C, plus the window; every `M` rows `beta = argmin
+  sum_window w halfdev + R/2 |b|^2`, `h = (G + R I) beta`.
+- **sweeps** (window 200): C until its refit; then per row: the leaving row
+  frozen at `beta` (`G_out`, `h_out` += its quadratic scored at `beta`), the
+  new row stored, then `beta <- beta + t d` twice, `d = (G_out + sum_window
+  w W_i(beta) x x' + R I)^{-1} grad`, `grad = h_out - G_out beta + sum_window w
+  s_i(beta) x - R beta`, `t` halved until `F` does not rise.
+- **cap c** (7.6): A, and if `|x_t'(beta_t - beta_{t-1})| > c` the step is
+  scaled to `c` and `h = (G + R I) beta_t`.
+
+### 9.2 State, in bytes (8-byte floats, symmetric matrices packed)
+
+| variant | floats | k = 5 | k = 20 |
+|---|---|---|---|
+| A, B, C after the start-up | `k(k+1)/2 + 2k + 2` (`G`, `h`, `beta`, `weight_sum`, `R`) | 216 B | 2.0 KB |
+| C during the start-up | plus the buffer `200 (k + 2)` | +11.2 KB | +35.2 KB |
+| decay | as C | | |
+| exact window `W` (7.4) | C plus `(k + 4) W` (`x`, `y`, `w`, `W_i`, `z_i`) | +144 KB at W = 2000 | +384 KB |
+| periodic (`W` = 2000) | C plus `G_out`, `h_out` plus `(k + 4) W` | 144 KB | 388 KB |
+| replace (`W` = 2000) | C plus `(k + 2) W` | 112 KB | 354 KB |
+| sweeps (window 200) | `G_out`, `h_out`, `beta`, plus `(k + 2) 200` | 11.4 KB | 37 KB |
+
+Per target: `W` depends on the target, so `T` targets keep `T` copies. All of
+it is bounded by `k` and the window, none by the stream's length.
+
+### 9.3 Numerical risks
+
+- **Overflow of the Gamma (and Tweedie) recursion at start-up.** Before `k`
+  weighted rows the fit is underdetermined and one row can move `eta` by tens;
+  a later row scored at a very negative `eta` has a score of order
+  `y e^(|eta|)` (Gamma) or `y e^(|eta|/2)` (Tweedie), the next step is
+  enormous, `eta` hits the clip and the fit never returns (34 of 50 Gamma
+    seeds at k = 20 with `R = 1` and no remedy, 8.6; Tweedie 9 of 10, 8.1).
+  Remedy: C's refit (no failure in 50
+  seeds of any family) or the cap (7.6, 8.6). Keep the `|eta|` clip as a
+  guard, and count it.
+- **The stuck Poisson case.** A row scored at a too-large `mu` enters `G` with
+  `W = mu` frozen at that fit; without decay that direction's curvature is
+  never corrected and the fit stops moving along it (23 of 50 seeds at
+    k = 20, 8.6; up to 894 SE in part 1). Same remedies; decay alone recovers
+  most but not all
+  (7.6).
+- **Separation.** Poisson with a zero-count indicator: the MLE is at minus
+  infinity; the online fit stays finite, bounded by its ridge, and trails the
+  ridge-matched fit (7.2). statsmodels reports convergence with no warning and
+  glum warns nothing; a test must not use a separated design against an
+  unpenalised oracle.
+- **Domain.** `y < 0` for any of the three, `y = 0` for Gamma: reject
+  (statsmodels accepts a Gamma `y = 0` silently, glum raises). The log-link
+  binomial is out of scope (7.1).
+- **Zero weights.** A zero-weight row (first included) must not divide: `R >
+  0` keeps `G + R I` positive definite (7.5).
+- **The frozen weights are a bias, not noise**: of order `phi / n` in beta,
+  so `sqrt(phi / n)` in SE; it does not wash out without decay, and grows with
+  the dispersion (8.1).
+- **Window subtraction drift** (7.4): an exact window subtracts each row's own
+  contribution; a periodic rebuild from the stored rows (which the periodic
+  variant does at every refit) bounds the rounding.
+
+### 9.4 The oracles
+
+| oracle | what it checks | agreement measured |
+|---|---|---|
+| the same recursion with statsmodels' family objects (`weights`, `link.deriv`) | the per-row `W`, `z` and the recursion, exactly | largest change in beta 7.2e-14 over 2000 rows (8.5) |
+| the increment form `beta += (G + R I)^{-1} w s x` | the sums form | 4.0e-15 (8.5) |
+| the stream with zero-weight rows dropped | zero weights | bit-identical (7.5, 8.5) |
+| penalised IRLS, tolerance 1e-13 (`ref`) | the batch target `argmin sum w halfdev + R/2 b'b` | glum within 1.1e-05 SE |
+| glum, `alpha = R / sum w` | the batch target, third party | the reference for a ledger: within 1.1e-5 SE of `ref` |
+| statsmodels `GLM(freq_weights)` IRLS | `bse` (the SE unit; Pearson scale), the unpenalised fit | `freq_weights`, not `var_weights` (7.3) |
+| statsmodels `fit_regularized(L1_wt=0)` with `-deviance/2` | the batch target, second third party | within 3.7e-03 SE of `ref` (BFGS stops at gradient 1e-5) |
+
+A Rust test cannot call these; it can carry the batch target as a penalised
+IRLS through `crate::oracle`'s LU (as `ref` does here) and check it once
+against glum in Python (`tests/test_second_opinion.py`).
+
+### 9.5 Proposed test tolerances
+
+What a test checks: variant C (`R = 1`, 200-row refit, no decay), the design
+of section 3 (intercept plus `k - 1` standard normal features, `eta` sd 0.5
+around 0.5), `max_j |beta_online_j - beta_batch_j| / bse_j <= tol` at a
+stated row count, where `beta_batch` is the ridge-matched batch fit (`alpha =
+R / n`) and `bse` statsmodels' unpenalised `GLM(freq_weights)` SE (Pearson
+scale for Gamma and Tweedie). The data's dispersion is fixed: Poisson 1,
+Gamma 0.5 (shape 2), Tweedie `p = 1.5`, `phi = 2`.
+
+The measured basis (C, 50 seeds, k = 5 and 20; the max is at k = 20 in every
+cell), in SE:
+
+| family | n | statsmodels, max | unpenalised, max | glum, max | glum, mean / sd (k = 20) | mean + 4 sd |
+|---|---|---|---|---|---|---|
+| Poisson | 10k | 0.466 | 0.464 | 0.467 | 0.279 / 0.054 | 0.494 |
+| Poisson | 100k | 0.198 | 0.198 | 0.199 | 0.138 / 0.022 | 0.225 |
+| Gamma | 10k | 0.330 | 0.323 | 0.330 | 0.296 / 0.017 | 0.364 |
+| Gamma | 100k | 0.157 | 0.157 | 0.159 | 0.146 / 0.006 | 0.168 |
+| Tweedie | 10k | 0.609 | 0.606 | 0.609 | 0.486 / 0.053 | 0.699 |
+| Tweedie | 100k | 0.311 | 0.311 | 0.312 | 0.242 / 0.024 | 0.340 |
+
+The proposed tolerance is **1.5 times the max over 50 seeds, rounded up to
+0.05 SE**, for any k up to 20:
+
+| family (dispersion) | tolerance at 10k rows | at 100k rows |
+|---|---|---|
+| Poisson (1) | **0.75 SE** (max 0.467) | **0.30 SE** (max 0.199) |
+| Gamma (0.5) | **0.50 SE** (max 0.330) | **0.25 SE** (max 0.159) |
+| Tweedie (2) | **0.95 SE** (max 0.609) | **0.50 SE** (max 0.312) |
+
+The margin, and why 1.5:
+- **The seed tail.** The gap is a bias, not a noise: its spread over seeds is
+  narrow (standard deviation 0.006 to 0.054 SE at k = 20), so mean + 4 sd
+  (the last column; about 1 seed in 30,000 would pass it if the spread were
+  normal) is only 1.05 to 1.15 times the 50-seed max. The tail is heavier than
+  normal in places (Poisson at 10k: the worst seed is 3.5 sd above the mean,
+  0.467 against the next 0.373), so the margin is set on the max, not on
+  the sd: 1.5 times the max is 7.8 sd above the mean in the widest cell
+  (Poisson, 10k) and covers the unseen seeds with room.
+- **The batch reference.** glum and `ref` agree within 1.1e-5 SE and
+  statsmodels' ridge path within 3.7e-3 SE, a negligible share of any tolerance; the
+  unpenalised fit differs from the ridge-matched one by at most 0.04 SE at 1k
+  rows, 0.012 at 10k: a test should compare with the ridge-matched fit.
+- **The implementation.** A different solver order (Cholesky against LU,
+  another summation order) moves `beta` by about 1e-14 relative: nothing.
+- **What 1.5 does not cover**: a larger dispersion (the gap in SE grows like
+  `sqrt(phi)`: at Tweedie `phi = 8` the max was 0.61 SE at 100k, over the
+  Tweedie tolerance), a larger `k` (k = 20 is 3 to 4 times k = 5), a stronger
+  signal (`eta` with sd above 0.5 means wider swings of `W`), or no refit. A test
+  outside these must be re-measured, not extrapolated. A k = 5 test can carry
+  its own, by the same rule (1.5 times the k = 5 max, rounded up to 0.05):
+  Poisson 0.25 / 0.10, Gamma 0.20 / 0.10, Tweedie 0.25 / 0.15 SE at 10k /
+  100k (maxima 0.145 / 0.058, 0.116 / 0.043, 0.166 / 0.098).
+- **The periodic refit**, if it is built, gets its own by the same rule:
+  Poisson 0.20 / 0.20, Gamma 0.20 / 0.15, Tweedie 0.20 / 0.15 SE at 10k /
+  100k (maxima 0.115 / 0.107, 0.115 / 0.091, 0.109 / 0.068).
+
+A test at 1k rows is not proposed: at 1k rows, k = 20, the max over seeds is
+0.49 (Gamma) to 0.95 SE (Poisson, Tweedie) and the worst Poisson seed is 2.4
+times the mean; the spread is too wide for a tolerance that would catch a
+real defect. 10k is the first count at which the bias dominates the spread.
