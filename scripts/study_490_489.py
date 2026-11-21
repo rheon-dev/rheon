@@ -292,7 +292,7 @@ def part1(args):
         sm = Fourier(period, order).in_sample(pd.RangeIndex(nrows)).to_numpy()
         mine = fourier_clock(t, t0, P, order)
         red = fourier_reduced(t, t0, P, order)
-        d_ns = (t - t0)
+        d_ns = t - t0
         exact_rows = d_ns < TWO53
         neq = np.any(mine.view(np.int64) != sm.view(np.int64), axis=1)
         first_neq = int(np.argmax(neq)) if neq.any() else None
@@ -320,7 +320,10 @@ def part1(args):
 
     mp.mp.dps = 50
     acc = []
-    for period, order, step, nrows in [(24.0, 6, 3600 * NS, 200_000), (1440.0, 8, 60 * NS, 525_600)]:
+    for period, order, step, nrows in [
+        (24.0, 6, 3600 * NS, 200_000),
+        (1440.0, 8, 60 * NS, 525_600),
+    ]:
         P = int(period * step)
         t0 = 1_767_225_600 * NS
         idx = np.unique(np.r_[np.linspace(0, nrows - 1, 400).astype(np.int64), nrows - 1])
@@ -440,7 +443,9 @@ def part1(args):
     for freq in ("D", "ME", "YE"):
         s_, e_ = calendar_bounds(t, "ns", freq)
         r2 = (t - s_).astype(np.float64) / (e_ - s_).astype(np.float64)
-        exact = np.array([int(a) / int(b) for a, b in zip(t - s_, e_ - s_)])  # int / int: RN
+        exact = np.array(
+            [int(a) / int(b) for a, b in zip(t - s_, e_ - s_, strict=True)]
+        )  # int / int: RN
         cr.append({"freq": freq, "ratio_vs_correctly_rounded": gap_stats(r2, exact)})
     res["calendar"] = cal
     res["calendar_unit"] = unit_cmp
@@ -448,7 +453,9 @@ def part1(args):
     # a time zone: statsmodels' ratio subtracts a naive period start from the index
     tz = {}
     try:
-        idx = pd.DatetimeIndex(["2024-03-30 12:00", "2024-03-31 12:00"]).tz_localize("Europe/London")
+        idx = pd.DatetimeIndex(["2024-03-30 12:00", "2024-03-31 12:00"]).tz_localize(
+            "Europe/London"
+        )
         CalendarFourier("D", 1).in_sample(idx)
         tz["tz_aware"] = "ran"
     except Exception as exc:  # noqa: BLE001 - recorded as the finding
@@ -478,8 +485,18 @@ def part1(args):
     scenarios = [
         {"name": "1 min rows, daily period", "step_ns": 60 * NS, "period_ns": day, "t0_ns": T0},
         {"name": "1 s rows, daily period", "step_ns": NS, "period_ns": day, "t0_ns": T0},
-        {"name": "1 h rows, weekly period", "step_ns": 3600 * NS, "period_ns": 7 * day, "t0_ns": T0},
-        {"name": "1 day rows, 365.2425-day period", "step_ns": day, "period_ns": 31_556_952 * NS, "t0_ns": T0},
+        {
+            "name": "1 h rows, weekly period",
+            "step_ns": 3600 * NS,
+            "period_ns": 7 * day,
+            "t0_ns": T0,
+        },
+        {
+            "name": "1 day rows, 365.2425-day period",
+            "step_ns": day,
+            "period_ns": 31_556_952 * NS,
+            "t0_ns": T0,
+        },
         {"name": "1 ms rows, 1 s period", "step_ns": 1_000_000, "period_ns": NS, "t0_ns": T0},
         {"name": "1 us rows, 1 ms period", "step_ns": 1000, "period_ns": 1_000_000, "t0_ns": T0},
     ]
@@ -502,9 +519,11 @@ def summarise1(res):
     print("== accuracy against mpmath")
     for r in res["accuracy"]:
         print(
-            f"  period {r['period_rows']} rows {r['rows']}: statsmodels max {r['sm_vs_exact']['max_abs']:.2e}"
+            f"  period {r['period_rows']} rows {r['rows']}:"
+            f" statsmodels max {r['sm_vs_exact']['max_abs']:.2e}"
             f" ({r['sm_vs_exact']['max_ulps_of_1']:.0f} ulps of 1); reduced max"
-            f" {r['reduced_vs_exact']['max_abs']:.2e} ({r['reduced_vs_exact']['max_ulps_of_1']:.1f} ulps of 1)"
+            f" {r['reduced_vs_exact']['max_abs']:.2e}"
+            f" ({r['reduced_vs_exact']['max_ulps_of_1']:.1f} ulps of 1)"
         )
     print("== irregular clocks")
     for r in res["irregular"]:
@@ -517,28 +536,42 @@ def summarise1(res):
         if "reduced_vs_sm_get_terms" in r:
             extra = f"; reduced vs sm max {r['reduced_vs_sm_get_terms']['max_abs']:.2e}"
         print(
-            f"  grid {r['grid']} period {r.get('period_rows', r.get('period_ns'))} order {r['order']}:"
+            f"  grid {r['grid']} period"
+            f" {r.get('period_rows', r.get('period_ns'))} order {r['order']}:"
             f" bit-equal {c['bit_equal']}/{c['n']} max {c['max_abs']:.2e}{extra}"
         )
     print("== CalendarFourier")
     for r in res["calendar"]:
         print(
             f"  {r['unit']} {r['freq']:>2} ({r['pandas_freq']}) rows {r['rows']}: ratio bit-equal"
-            f" {r['ratio']['bit_equal']}/{r['ratio']['n']}, terms bit-equal {r['terms']['bit_equal']}/"
+            f" {r['ratio']['bit_equal']}/{r['ratio']['n']},"
+            f" terms bit-equal {r['terms']['bit_equal']}/"
             f"{r['terms']['n']} max {r['terms']['max_abs']:.2e}"
         )
     for r in res["calendar_unit"]:
         c = r["ns_vs_us_index"]
-        print(f"  same instants, ns vs us index, {r['freq']}: bit-equal {c['bit_equal']}/{c['n']} max ulps {c['max_ulps']:.1f}")
+        print(
+            f"  same instants, ns vs us index, {r['freq']}: bit-equal"
+            f" {c['bit_equal']}/{c['n']} max ulps {c['max_ulps']:.1f}"
+        )
     for r in res["calendar_ratio_rounding"]:
         c = r["ratio_vs_correctly_rounded"]
-        print(f"  ratio vs correctly rounded, ns, {r['freq']}: bit-equal {c['bit_equal']}/{c['n']} max ulps {c['max_ulps']:.1f}")
+        print(
+            f"  ratio vs correctly rounded, ns, {r['freq']}: bit-equal"
+            f" {c['bit_equal']}/{c['n']} max ulps {c['max_ulps']:.1f}"
+        )
     print("  time zone:", res["time_zone"])
-    print("== numpy vs libm:", {k: (v["bit_equal"], v["n"], v["max_ulps"]) for k, v in res["numpy_vs_libm"].items()})
+    print(
+        "== numpy vs libm:",
+        {k: (v["bit_equal"], v["n"], v["max_ulps"]) for k, v in res["numpy_vs_libm"].items()},
+    )
     print("== drift: argument error of harmonic 1, radians")
     print("  " + " ".join(f"{k:>20}" for k in ["scenario/rows"] + REPS))
     for r in res["drift"]:
-        print(f"  {r['scenario'][:14]:>14} 1e{r['decade']:<2}-1e{r['decade'] + 1:<2}" + " ".join(f"{r[k]:>20.2e}" for k in REPS))
+        print(
+            f"  {r['scenario'][:14]:>14} 1e{r['decade']:<2}-1e{r['decade'] + 1:<2}"
+            + " ".join(f"{r[k]:>20.2e}" for k in REPS)
+        )
 
 
 # =========================================================================== 490
@@ -590,11 +623,8 @@ class LoessPlan:
         self.idx = np.where(self.mask, j - 1, 0)
         self.jf = np.where(self.mask, j, 0).astype(np.float64)
         h = np.maximum(xs - nleft, nright - xs).astype(np.float64)
-        if q > n:
-            if rule != "paper":
-                h = h + float((q - n) // 2)
-            else:
-                h = h * (q / n)
+        if q > n:  # the Fortran adds floor((q - n) / 2); the paper scales by q / n
+            h = h + float((q - n) // 2) if rule != "paper" else h * (q / n)
         self.h = h
         self.xs = xs
         r = np.abs(self.jf - xs[:, None])
@@ -773,9 +803,21 @@ class STLPort:
     so the reported rho is the one the last inner loop used.
     """
 
-    def __init__(self, n, period, seasonal=7, trend=None, low_pass=None, seasonal_deg=1,
-                 trend_deg=1, low_pass_deg=1, seasonal_jump=1, trend_jump=1, low_pass_jump=1,
-                 rule="fortran"):
+    def __init__(
+        self,
+        n,
+        period,
+        seasonal=7,
+        trend=None,
+        low_pass=None,
+        seasonal_deg=1,
+        trend_deg=1,
+        low_pass_deg=1,
+        seasonal_jump=1,
+        trend_jump=1,
+        low_pass_jump=1,
+        rule="fortran",
+    ):
         if trend is None:
             trend = int(np.ceil(1.5 * period / (1 - 1.5 / seasonal)))
             trend += (trend % 2) == 0
@@ -783,9 +825,18 @@ class STLPort:
             low_pass = period + 1
             low_pass += (low_pass % 2) == 0
         self.n, self.period = n, period
-        self.cfg = dict(period=period, seasonal=seasonal, trend=trend, low_pass=low_pass,
-                        seasonal_deg=seasonal_deg, trend_deg=trend_deg, low_pass_deg=low_pass_deg,
-                        seasonal_jump=seasonal_jump, trend_jump=trend_jump, low_pass_jump=low_pass_jump)
+        self.cfg = dict(
+            period=period,
+            seasonal=seasonal,
+            trend=trend,
+            low_pass=low_pass,
+            seasonal_deg=seasonal_deg,
+            trend_deg=trend_deg,
+            low_pass_deg=low_pass_deg,
+            seasonal_jump=seasonal_jump,
+            trend_jump=trend_jump,
+            low_pass_jump=low_pass_jump,
+        )
         self.rule = rule
         # cycle-subseries plans, one per phase j
         self.sub = []
@@ -793,7 +844,9 @@ class STLPort:
             k = (n - (j + 1)) // period + 1
             ess = Ess(k, seasonal, seasonal_deg, seasonal_jump, rule)
             left = LoessPlan(k, seasonal, seasonal_deg, [0], [1], [min(seasonal, k)], rule)
-            right = LoessPlan(k, seasonal, seasonal_deg, [k + 1], [max(1, k - seasonal + 1)], [k], rule)
+            right = LoessPlan(
+                k, seasonal, seasonal_deg, [k + 1], [max(1, k - seasonal + 1)], [k], rule
+            )
             self.sub.append((j, k, ess, left, right))
         self.lowpass = Ess(n, low_pass, low_pass_deg, low_pass_jump, rule)
         self.trendess = Ess(n, trend, trend_deg, trend_jump, rule)
@@ -847,8 +900,12 @@ class STLPort:
                 break
             assert Y.ndim == 1, "the robust fit is not linear"
             rw = robustness_weights(Y - (T + S), self.rule)
-        return {"seasonal": S, "trend": T, "resid": Y - S - T,
-                "weights": np.ones(self.n) if rw is None else rw}
+        return {
+            "seasonal": S,
+            "trend": T,
+            "resid": Y - S - T,
+            "weights": np.ones(self.n) if rw is None else rw,
+        }
 
     def operator(self, inner=5):
         """The linear maps y -> S and y -> T (no robustness): n x n each."""
@@ -872,8 +929,17 @@ def robustness_weights(R, rule="fortran"):
     return np.where(u < 1.0, (1.0 - u**2) ** 2, 0.0)
 
 
-def mstl_port(y, periods, windows, iterate=2, stl_kwargs=None, ports=None, inner=None, outer=None,
-              robust=False):
+def mstl_port(
+    y,
+    periods,
+    windows,
+    iterate=2,
+    stl_kwargs=None,
+    ports=None,
+    inner=None,
+    outer=None,
+    robust=False,
+):
     """MSTL from Bandara et al. (2021): seasons in ascending period; for each
     pass and each season i, add S_i back, run STL with period_i and seasonal
     window_i, take its seasonal as the new S_i and remove it. One pass when
@@ -885,7 +951,9 @@ def mstl_port(y, periods, windows, iterate=2, stl_kwargs=None, ports=None, inner
     periods = [periods[i] for i in order]
     windows = [windows[i] for i in order]
     if ports is None:
-        ports = [STLPort(n, p, seasonal=w, **stl_kwargs) for p, w in zip(periods, windows)]
+        ports = [
+            STLPort(n, p, seasonal=w, **stl_kwargs) for p, w in zip(periods, windows, strict=True)
+        ]
     seasonal = [np.zeros_like(y, dtype=np.float64) for _ in periods]
     deseas = np.asarray(y, np.float64)
     its = 1 if len(periods) == 1 else iterate
@@ -896,8 +964,14 @@ def mstl_port(y, periods, windows, iterate=2, stl_kwargs=None, ports=None, inner
             fit = ports[i].fit(deseas, inner=inner, outer=outer, robust=robust)
             seasonal[i] = fit["seasonal"]
             deseas = deseas - seasonal[i]
-    return {"seasonal": seasonal, "trend": fit["trend"], "resid": deseas - fit["trend"],
-            "weights": fit["weights"], "periods": periods, "windows": windows}
+    return {
+        "seasonal": seasonal,
+        "trend": fit["trend"],
+        "resid": deseas - fit["trend"],
+        "weights": fit["weights"],
+        "periods": periods,
+        "windows": windows,
+    }
 
 
 class OnlineSTL:
@@ -959,8 +1033,12 @@ def _sm_stl(win, period, kw, robust=False, inner=None, outer=None):
     from statsmodels.tsa.seasonal import STL
 
     r = STL(win, period=period, robust=robust, **kw).fit(inner_iter=inner, outer_iter=outer)
-    return {"seasonal": np.asarray(r.seasonal), "trend": np.asarray(r.trend),
-            "resid": np.asarray(r.resid), "weights": np.asarray(r.weights)}
+    return {
+        "seasonal": np.asarray(r.seasonal),
+        "trend": np.asarray(r.trend),
+        "resid": np.asarray(r.resid),
+        "weights": np.asarray(r.weights),
+    }
 
 
 def _cmp_fit(mine, oracle, comps=("seasonal", "trend", "resid")):
@@ -1031,7 +1109,10 @@ def part2(args):
             p = W - 1 - h
             same = all(e[c] == orc[c][p] for c in ("seasonal", "trend", "resid"))
             emitted_equal += same
-            g = {c: gap_stats(np.array([ek[c]]), orc[c][p : p + 1], scale) for c in ("seasonal", "trend")}
+            g = {
+                c: gap_stats(np.array([ek[c]]), orc[c][p : p + 1], scale)
+                for c in ("seasonal", "trend")
+            }
             _merge(acc["kernel_at_embargo"], g)
         # no lookahead: rewriting every row after t leaves row t's emission unchanged
         t_chk = W + rows_after // 2
@@ -1078,9 +1159,15 @@ def part2(args):
             {
                 "name": name,
                 "W": W,
-                "port_ms": _time(lambda: port.fit(y), args.time_budget) * 1e3,
-                "statsmodels_ms": _time(lambda: _sm_stl(y, period, kw), args.time_budget) * 1e3,
-                "kernel_two_dots_us": _time(lambda: (ks @ y, kt @ y), args.time_budget) * 1e6,
+                "port_ms": _time(lambda port=port, y=y: port.fit(y), args.time_budget) * 1e3,
+                "statsmodels_ms": _time(
+                    lambda y=y, p_=period, kw=kw: _sm_stl(y, p_, kw), args.time_budget
+                )
+                * 1e3,
+                "kernel_two_dots_us": _time(
+                    lambda ks=ks, kt=kt, y=y: (ks @ y, kt @ y), args.time_budget
+                )
+                * 1e6,
             }
         )
     out["timing"] = timing
@@ -1114,7 +1201,8 @@ def summarise2(res):
     for c in res["cases"]:
         cfg = c["cfg"]
         print(
-            f"== {c['name']}: W {c['W']}, {c['windows']} windows, h {c['embargo_h']}, k {c['subseries_points_k']},"
+            f"== {c['name']}: W {c['W']}, {c['windows']} windows,"
+            f" h {c['embargo_h']}, k {c['subseries_points_k']},"
             f" seasonal {cfg['seasonal']} trend {cfg['trend']} low_pass {cfg['low_pass']}"
             f" degs {cfg['seasonal_deg']}/{cfg['trend_deg']}/{cfg['low_pass_deg']}"
             f" jumps {cfg['seasonal_jump']}/{cfg['trend_jump']}/{cfg['low_pass_jump']}"
@@ -1125,12 +1213,14 @@ def summarise2(res):
         line("cube as x*x*x", c["fortran_mul_vs_sm"])
         line("paper's rule", c["paper_vs_sm"])
         print(
-            f"    online: {c['online_emitted_bit_equal_sm']}/{c['online_emitted']} emissions bit-equal;"
+            f"    online: {c['online_emitted_bit_equal_sm']}/{c['online_emitted']}"
+            f" emissions bit-equal;"
             f" no lookahead {c['no_lookahead']}"
         )
     for t in res["timing"]:
         print(
-            f"  cost {t['name']}: port {t['port_ms']:.2f} ms, statsmodels {t['statsmodels_ms']:.2f} ms,"
+            f"  cost {t['name']}: port {t['port_ms']:.2f}"
+            f" ms, statsmodels {t['statsmodels_ms']:.2f} ms,"
             f" kernel two dots {t['kernel_two_dots_us']:.2f} us"
         )
 
@@ -1189,8 +1279,15 @@ def part3(args):
             )
         best = min(per_h, key=lambda r: r["seasonal_rms"] + r["trend_rms"])
         emb.append({"m": m, "W": W, "per_h": per_h, "best_h": best["h"]})
-    out["embargo"] = {"period": period, "N": N, "trend": nt, "seasonal_amp_sd": amp,
-                      "rows_compared": [lo, hi], "windows": emb, "trend_step_sd": trend_sd}
+    out["embargo"] = {
+        "period": period,
+        "N": N,
+        "trend": nt,
+        "seasonal_amp_sd": amp,
+        "rows_compared": [lo, hi],
+        "windows": emb,
+        "trend_step_sd": trend_sd,
+    }
 
     # influence reach of one row on another in the full fit (n = 480), central row
     n = 20 * period
@@ -1216,7 +1313,14 @@ def part3(args):
     for label, W, kw, robust, inner, outer in [
         ("robust defaults (inner 2, outer 15)", 96, {}, True, None, None),
         ("robust inner 1 outer 5, seasonal 13", 168, {"seasonal": 13}, True, 1, 5),
-        ("robust, jumps 3/5/4", 120, {"seasonal_jump": 3, "trend_jump": 5, "low_pass_jump": 4}, True, None, None),
+        (
+            "robust, jumps 3/5/4",
+            120,
+            {"seasonal_jump": 3, "trend_jump": 5, "low_pass_jump": 4},
+            True,
+            None,
+            None,
+        ),
         ("not robust, outer 3 (weights used)", 96, {}, False, 5, 3),
         ("inner 1", 96, {}, False, 1, None),
         ("inner 2", 96, {}, False, 2, None),
@@ -1231,15 +1335,34 @@ def part3(args):
             mine = port.fit(win, inner=inner, outer=outer, robust=robust)
             _merge(acc, _cmp_fit(mine, orc, ("seasonal", "trend", "resid", "weights")))
             nwin += 1
-        rob.append({"label": label, "W": W, "windows": nwin, "vs_sm": acc,
-                    "port_ms": _time(lambda: port.fit(win, inner=inner, outer=outer, robust=robust), args.time_budget) * 1e3,
-                    "statsmodels_ms": _time(lambda: _sm_stl(win, 24, kw, robust, inner, outer), args.time_budget) * 1e3})
+        rob.append(
+            {
+                "label": label,
+                "W": W,
+                "windows": nwin,
+                "vs_sm": acc,
+                "port_ms": _time(
+                    lambda a=(port, win, inner, outer, robust): a[0].fit(
+                        a[1], inner=a[2], outer=a[3], robust=a[4]
+                    ),
+                    args.time_budget,
+                )
+                * 1e3,
+                "statsmodels_ms": _time(
+                    lambda a=(win, kw, robust, inner, outer): _sm_stl(a[0], 24, *a[1:]),
+                    args.time_budget,
+                )
+                * 1e3,
+            }
+        )
     out["robust"] = rob
     # how far the inner loop is from converged: inner 5 against inner 50, one window
     win = y[:96]
     p5 = STLPort(96, 24).fit(win, inner=5)
     p50 = STLPort(96, 24).fit(win, inner=50)
-    out["inner_convergence"] = {c: float(np.max(np.abs(p5[c] - p50[c]))) for c in ("seasonal", "trend")}
+    out["inner_convergence"] = {
+        c: float(np.max(np.abs(p5[c] - p50[c]))) for c in ("seasonal", "trend")
+    }
     out["inner_convergence"]["seasonal_sd"] = float(np.std(p50["seasonal"]))
 
     # state size
@@ -1253,22 +1376,29 @@ def state_table():
     for p in (7, 12, 24, 52, 168, 288, 1440):
         for m in (4, 7, 10):
             W = m * p
-            rows.append({
-                "period": p, "m": m, "W": W,
-                # ring of W doubles + head + count + the last clock (a break empties the ring)
-                "ring_bytes_per_group": 8 * W + 24,
-                # kernels: seasonal and trend rows at one lag, shared by every group of a spec
-                "kernel_bytes_per_spec_one_lag": 2 * 8 * W,
-                # robust: statsmodels' scratch for one fit, freed after (not state)
-                "robust_scratch_bytes": 8 * (7 * (W + 2 * p) + 3 * W),
-            })
+            rows.append(
+                {
+                    "period": p,
+                    "m": m,
+                    "W": W,
+                    # ring of W doubles + head + count + the last clock (a break empties the ring)
+                    "ring_bytes_per_group": 8 * W + 24,
+                    # kernels: seasonal and trend rows at one lag, shared by every group of a spec
+                    "kernel_bytes_per_spec_one_lag": 2 * 8 * W,
+                    # robust: statsmodels' scratch for one fit, freed after (not state)
+                    "robust_scratch_bytes": 8 * (7 * (W + 2 * p) + 3 * W),
+                }
+            )
     return rows
 
 
 def summarise3(res):
     e = res["embargo"]
-    print(f"== embargo: period {e['period']}, trend {e['trend']}, seasonal sd {e['seasonal_amp_sd']:.3f},"
-          f" rows {e['rows_compared']}")
+    print(
+        f"== embargo: period {e['period']}, trend"
+        f" {e['trend']}, seasonal sd {e['seasonal_amp_sd']:.3f},"
+        f" rows {e['rows_compared']}"
+    )
     nt = e["trend"]
     for w in e["windows"]:
         W = w["W"]
@@ -1276,19 +1406,256 @@ def summarise3(res):
         print(f"  W {W} ({w['m']} periods), best h {w['best_h']}:")
         for h in hs:
             r = w["per_h"][h]
-            print(f"    h {h:>4}: seasonal rms {r['seasonal_rms']:.2e} max {r['seasonal_max']:.2e};"
-                  f" trend rms {r['trend_rms']:.2e} max {r['trend_max']:.2e}; revision rms {r['seasonal_revision_rms']:.2e}")
+            print(
+                f"    h {h:>4}: seasonal rms {r['seasonal_rms']:.2e} max {r['seasonal_max']:.2e};"
+                f" trend rms {r['trend_rms']:.2e} max {r['trend_max']:.2e};"
+                f" revision rms {r['seasonal_revision_rms']:.2e}"
+            )
     r = res["reach"]
     print(f"== reach (n {r['n']}, row {r['row']}):", {k: r[k] for k in ("seasonal", "trend")})
     for x in res["robust"]:
-        parts = [f"{c[:5]} {a['bit_equal']}/{a['n']} max {a['max_abs']:.1e}" for c, a in x["vs_sm"].items()]
-        print(f"  {x['label']:<38} W {x['W']} windows {x['windows']}: " + "; ".join(parts)
-              + f"; port {x['port_ms']:.1f} ms, sm {x['statsmodels_ms']:.2f} ms")
+        parts = [
+            f"{c[:5]} {a['bit_equal']}/{a['n']} max {a['max_abs']:.1e}"
+            for c, a in x["vs_sm"].items()
+        ]
+        print(
+            f"  {x['label']:<38} W {x['W']} windows {x['windows']}: "
+            + "; ".join(parts)
+            + f"; port {x['port_ms']:.1f} ms, sm {x['statsmodels_ms']:.2f} ms"
+        )
     print("  inner 5 vs inner 50:", res["inner_convergence"])
     for s_ in res["state"]:
         if s_["m"] == 4:
-            print(f"  p {s_['period']:>5} W {s_['W']:>5}: ring {s_['ring_bytes_per_group']} B, kernels {s_['kernel_bytes_per_spec_one_lag']} B,"
-                  f" robust scratch {s_['robust_scratch_bytes']} B")
+            print(
+                f"  p {s_['period']:>5} W {s_['W']:>5}: ring {s_['ring_bytes_per_group']}"
+                f" B, kernels {s_['kernel_bytes_per_spec_one_lag']} B,"
+                f" robust scratch {s_['robust_scratch_bytes']} B"
+            )
+
+
+def _sm_mstl(win, periods, windows, iterate=2, stl_kwargs=None, lmbda=None):
+    from statsmodels.tsa.seasonal import MSTL
+
+    r = MSTL(
+        win,
+        periods=periods,
+        windows=windows,
+        iterate=iterate,
+        lmbda=lmbda,
+        stl_kwargs=dict(stl_kwargs or {}),
+    ).fit()
+    seas = np.asarray(r.seasonal)
+    if seas.ndim == 1:
+        seas = seas[:, None]
+    return {
+        "seasonal": [seas[:, i] for i in range(seas.shape[1])],
+        "trend": np.asarray(r.trend),
+        "resid": np.asarray(r.resid),
+        "weights": np.asarray(r.weights),
+    }
+
+
+def boxcox(y, lmbda):
+    """(y^lambda - 1) / lambda, written as expm1(lambda log y) / lambda; log y at 0."""
+    y = np.asarray(y, np.float64)
+    if lmbda == 0:
+        return np.log(y)
+    return np.expm1(lmbda * np.log(y)) / lmbda
+
+
+MSTL_CASES = [
+    # name, periods, windows, W, iterate, stl kwargs (with inner/outer), lmbda, rows after, stride
+    ("hourly: 24 and 168, defaults", (24, 168), None, 504, 2, {}, None, 48, 4),
+    ("12 and 60, windows 7/11, iterate 3", (12, 60), (7, 11), 240, 3, {}, None, 120, 2),
+    (
+        "12 and 60, robust (inner 2, outer 15)",
+        (12, 60),
+        (7, 11),
+        240,
+        2,
+        {"robust": True},
+        None,
+        60,
+        4,
+    ),
+    ("12 and 60, Box-Cox 0.5", (12, 60), None, 240, 2, {}, 0.5, 60, 2),
+    (
+        "12 and 60, seasonal_deg 0, inner 3",
+        (12, 60),
+        (9, 13),
+        240,
+        2,
+        {"seasonal_deg": 0, "inner_iter": 3},
+        None,
+        60,
+        2,
+    ),
+]
+
+
+def _mstl_port_fit(y, periods, windows, iterate, kw, lmbda, n):
+    kw = dict(kw)
+    inner = kw.pop("inner_iter", None)
+    outer = kw.pop("outer_iter", None)
+    robust = kw.pop("robust", False)
+    if windows is None:
+        windows = tuple(7 + 4 * i for i in range(1, len(periods) + 1))
+    yy = y if lmbda is None else boxcox(y, lmbda)
+    return mstl_port(
+        yy,
+        list(periods),
+        list(windows),
+        iterate=iterate,
+        stl_kwargs=kw,
+        inner=inner,
+        outer=outer,
+        robust=robust,
+    )
+
+
+def part4(args):
+    out = {"versions": _versions(), "cases": []}
+    for ci, (name, periods, windows, W, iterate, kw, lmbda, after, stride) in enumerate(MSTL_CASES):
+        N = W + after
+        y = make_series(
+            N, list(periods), seed=4910 + ci, outliers=0.03 if kw.get("robust") else 0.0
+        )
+        if lmbda is not None:
+            y = y - y.min() + 1.0
+        scale = float(np.std(y))
+        acc = {}
+        kacc = {}
+        nwin = 0
+        kern = None
+        if not kw.get("robust") and lmbda is None:
+            ops = _mstl_port_fit(np.eye(W), periods, windows, iterate, kw, None, W)
+            kern = ops
+        t_port = t_sm = 0.0
+        for t in range(W - 1, N, stride):
+            win = y[t - W + 1 : t + 1]
+            a = time.perf_counter()
+            orc = _sm_mstl(win, periods, windows, iterate, kw, lmbda)
+            b = time.perf_counter()
+            mine = _mstl_port_fit(win, periods, windows, iterate, kw, lmbda, W)
+            c = time.perf_counter()
+            t_sm += b - a
+            t_port += c - b
+            g = {
+                f"seasonal_{p}": gap_stats(mine["seasonal"][i], orc["seasonal"][i])
+                for i, p in enumerate(sorted(periods))
+            }
+            g["trend"] = gap_stats(mine["trend"], orc["trend"])
+            g["resid"] = gap_stats(mine["resid"], orc["resid"])
+            g["weights"] = gap_stats(mine["weights"], orc["weights"])
+            _merge(acc, g)
+            if kern is not None:
+                kg = {
+                    f"seasonal_{p}": gap_stats(kern["seasonal"][i] @ win, orc["seasonal"][i], scale)
+                    for i, p in enumerate(sorted(periods))
+                }
+                kg["trend"] = gap_stats(kern["trend"] @ win, orc["trend"], scale)
+                _merge(kacc, kg)
+            nwin += 1
+        out["cases"].append(
+            {
+                "name": name,
+                "periods": list(periods),
+                "windows": windows,
+                "W": W,
+                "iterate": iterate,
+                "stl_kwargs": kw,
+                "lmbda": lmbda,
+                "fits": nwin,
+                "scale_sd": scale,
+                "port_vs_sm": acc,
+                "kernel_vs_sm": kacc,
+                "port_ms": 1e3 * t_port / nwin,
+                "statsmodels_ms": 1e3 * t_sm / nwin,
+            }
+        )
+    # the embargo for two seasons: window values against the whole history's
+    periods, windows = (12, 60), (7, 11)
+    N = 2400
+    y = make_series(N, list(periods), seed=4920)
+    full = _sm_mstl(y, periods, windows, 2)
+    lo, hi = 720, N - 720
+    emb = []
+    for W in (240, 480, 720, 1440):
+        ops = _mstl_port_fit(np.eye(W), periods, windows, 2, {}, None, W)
+        Y = _windows_matrix(y, W)
+        comps = {
+            "seasonal_12": ops["seasonal"][0] @ Y,
+            "seasonal_60": ops["seasonal"][1] @ Y,
+            "trend": ops["trend"] @ Y,
+        }
+        ref = {
+            "seasonal_12": full["seasonal"][0],
+            "seasonal_60": full["seasonal"][1],
+            "trend": full["trend"],
+        }
+        ends = np.arange(W - 1, N)
+        rows_ = []
+        for h in sorted({0, 5, 29, 30, 59, 60, 300, W // 2} & set(range(W))):
+            rows = ends - h
+            sel = (rows >= lo) & (rows < hi)
+            r = {"h": h}
+            for k in comps:
+                d = comps[k][W - 1 - h, sel] - ref[k][rows[sel]]
+                r[k] = float(np.sqrt(np.mean(d**2)))
+            rows_.append(r)
+        emb.append({"W": W, "per_h": rows_})
+    out["embargo"] = {
+        "periods": periods,
+        "windows": windows,
+        "N": N,
+        "sd": {
+            k: float(np.std(v))
+            for k, v in (("seasonal_12", full["seasonal"][0]), ("seasonal_60", full["seasonal"][1]))
+        },
+        "rows_compared": [lo, hi],
+        "per_W": emb,
+    }
+    # statsmodels drops a period of at least half the window
+    import warnings
+
+    with warnings.catch_warnings(record=True) as wlist:
+        warnings.simplefilter("always")
+        r = _sm_mstl(y[:300], (12, 168), None, 2)
+    out["drop_long_period"] = {
+        "W": 300,
+        "periods": [12, 168],
+        "seasonal_columns": len(r["seasonal"]),
+        "warning": str(wlist[0].message) if wlist else None,
+    }
+    return out
+
+
+def summarise4(res):
+    for c in res["cases"]:
+        print(
+            f"== {c['name']}: W {c['W']}, fits {c['fits']},"
+            f" iterate {c['iterate']}, kwargs {c['stl_kwargs']},"
+            f" lmbda {c['lmbda']}; port {c['port_ms']:.0f} ms, sm {c['statsmodels_ms']:.1f} ms"
+        )
+        for k, a in c["port_vs_sm"].items():
+            print(
+                f"    port   {k:<12} bit-equal {a['bit_equal']}/{a['n']}"
+                f" max {a['max_abs']:.1e} ({a['max_ulps']:.0f} ulps)"
+            )
+        for k, a in c["kernel_vs_sm"].items():
+            print(
+                f"    kernel {k:<12} bit-equal {a['bit_equal']}/{a['n']}"
+                f" max {a['max_abs']:.1e} ({a['max_rel_scale']:.1e} sd)"
+            )
+    e = res["embargo"]
+    print(f"== MSTL embargo {e['periods']} windows {e['windows']}, sd {e['sd']}")
+    for w in e["per_W"]:
+        for r in w["per_h"]:
+            print(
+                f"  W {w['W']:>5} h {r['h']:>4}: s12 {r['seasonal_12']:.2e}"
+                f" s60 {r['seasonal_60']:.2e} trend {r['trend']:.2e}"
+            )
+    print("  drop:", res["drop_long_period"])
 
 
 # ------------------------------------------------------------------------- data
@@ -1330,6 +1697,7 @@ PARTS = {
     "part1": (part1, summarise1),
     "part2": (part2, summarise2),
     "part3": (part3, summarise3),
+    "part4": (part4, summarise4),
 }
 
 
