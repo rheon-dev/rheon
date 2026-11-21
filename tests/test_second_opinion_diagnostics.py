@@ -1169,3 +1169,35 @@ class TestNestedComparisonsAreTheirPapers:
                 test(out, half_life=float("inf"), **sides)
         with pytest.raises(ValueError, match="names no residual"):
             rp.eval.diebold_mariano(out, a="big", b="small", targets=["nope"])
+
+
+def test_the_weighted_binary_accuracy_is_sklearns():
+    """``accuracy`` from :func:`sums` and :func:`from_sums` under a
+    weight, against scikit-learn's ``accuracy_score(sample_weight=)``
+    (review S9: the weighted binary path had no test, so a hit counted
+    at 1.5 times its weight passed)."""
+    from sklearn.metrics import accuracy_score
+
+    rng = np.random.default_rng(23)
+    n = 3000
+    x0, x1 = rng.standard_normal(n), rng.standard_normal(n)
+    label = (rng.random(n) < 1.0 / (1.0 + np.exp(-(1.2 * x0 - 0.8 * x1)))).astype(float)
+    w = rng.choice([0.0, 0.5, 1.0, 3.0], size=n)
+    df = pl.DataFrame({"x0": x0, "x1": x1, "y": label, "w": w})
+    spec = rp.spec.sgd(
+        "m",
+        targets=["y"],
+        features=["x0", "x1"],
+        loss="logistic",
+        learning_rate=0.05,
+        half_life=float("inf"),
+        min_weight=50.0,
+    )
+    out = rp.ModelBank([spec]).fit_predict(df)
+    s = rp.eval.sums(out, spec, weight="w", binary=True)
+    got = rp.eval.from_sums(s, min_samples=1, binary=True).row(0, named=True)
+    scored = out.with_columns(pred=pl.col("m").struct.field("pred_y")).drop_nulls("pred")
+    y, p, w = scored["y"].to_numpy(), scored["pred"].to_numpy(), scored["w"].to_numpy()
+    want = accuracy_score(y, p > 0.5, sample_weight=w)
+    assert got["accuracy"] == pytest.approx(want, rel=1e-12)
+    assert want != pytest.approx(accuracy_score(y, p > 0.5), rel=1e-6), "the weight moves it"
