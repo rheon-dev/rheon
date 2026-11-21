@@ -1339,6 +1339,41 @@ pub(crate) fn solve_kept(b: &[f64], k: usize, m: usize, work: &mut SolveWork, ou
     }
 }
 
+/// [`solve_spd_in`] for a caller that reads a system exactly or not at
+/// all: `false`, and `out` untouched, where `A` needs a jitter to factorize
+/// or where a pivot of the factor of `A` scaled to a unit diagonal, `L_ii² /
+/// A_ii`, is below `floor`. A pivot is at least the scaled matrix's least
+/// eigenvalue, whose greatest is at least 1, so a pivot below `floor` means
+/// a condition number above `1 / floor`: two terms the data cannot tell
+/// apart. A system past [`KEPT_ORDER`] is factorized in space of its own.
+pub(crate) fn solve_definite_in(
+    solves: &mut Solves,
+    a: &[f64],
+    b: &[f64],
+    k: usize,
+    m: usize,
+    floor: f64,
+    out: &mut Vec<f64>,
+) -> bool {
+    let mut own = None;
+    let work = if k > KEPT_ORDER {
+        own.insert(SolveWork::default())
+    } else {
+        kept_work(solves, k, m)
+    };
+    if factorize_kept(a, k, work) != Some(0) {
+        return false;
+    }
+    let definite = (0..k).all(|i| {
+        let l = work.l[(i, i)];
+        l * l >= floor * a[i * k + i]
+    });
+    if definite {
+        solve_kept(b, k, m, work, out);
+    }
+    definite
+}
+
 /// The solves' working spaces, one for each shape `(order, columns)` a
 /// reader solves (a distance's, a statistic's).
 pub(crate) type Solves = Vec<(usize, usize, SolveWork)>;

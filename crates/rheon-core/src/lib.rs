@@ -86,6 +86,7 @@ mod gaps;
 /// Fits read off an exported Gram, offline (docs/PLAN.md tasks 226-227).
 pub mod gramfit;
 mod hasher;
+mod hawkes;
 mod health;
 mod held_median;
 mod hmm;
@@ -162,6 +163,7 @@ pub use ewridge::{EwRidge, EwRidgeCfg};
 pub use ftrl::{Ftrl, FtrlCfg, FtrlLoss};
 pub use gaps::{GramPart, TargetGaps};
 pub use hasher::{FixedHasher, FixedState};
+pub use hawkes::{Hawkes, HawkesCfg};
 pub use health::FeatureHealth;
 pub use hmm::{EwFactor, Hmm, HmmCfg, Stabilized};
 pub use holt::{Holt, HoltCfg};

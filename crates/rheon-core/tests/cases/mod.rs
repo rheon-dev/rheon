@@ -2062,7 +2062,43 @@ pub fn all() -> Vec<Case> {
             Targets::None,
             40
         ),
+        // Two nodes and two kernels, decayed: `R`, `b`, `Q` and `G₀₀`.
+        case!(
+            "hawkes",
+            "Hawkes",
+            Hawkes,
+            Hawkes::new(hawkes_cfg(None)).unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        // In a window of six rows with an event, saved with rows in both
+        // blocks: the older block's offsets, marks and forward sums, the
+        // newer's clocks, marks and sums.
+        case!(
+            "hawkes_window",
+            "Hawkes",
+            Hawkes,
+            Hawkes::new(hawkes_cfg(Some(6))).unwrap(),
+            K,
+            Targets::Linear(2),
+            45
+        ),
     ]
+}
+
+fn hawkes_cfg(window_events: Option<usize>) -> HawkesCfg {
+    HawkesCfg {
+        n_targets: 2,
+        kernel_decays: vec![0.8, 3.0],
+        decay: if window_events.is_some() {
+            Decay::Halflife(f64::INFINITY)
+        } else {
+            decay()
+        },
+        min_weight: 2.0,
+        window_events,
+    }
 }
 
 /// The case's model after its first part, and its rows.

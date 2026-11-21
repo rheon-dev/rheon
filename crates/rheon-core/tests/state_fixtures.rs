@@ -1068,7 +1068,7 @@ fn variants() -> Vec<String> {
 /// name here, and a fixture.
 #[test]
 fn the_variant_names_are_frozen() {
-    const FROZEN: [&str; 22] = [
+    const FROZEN: [&str; 23] = [
         "EwCov",
         "EwRidge",
         "Rls",
@@ -1091,6 +1091,7 @@ fn the_variant_names_are_frozen() {
         "CorrChange",
         "Bocpd",
         "Audit",
+        "Hawkes",
     ];
     assert_eq!(
         variants(),
@@ -1205,7 +1206,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 58] = [
+    const FORMS: [(&str, &[&str]); 63] = [
         // Schema 70 (rule 5's twenty-second exception): the stabilized
         // prior's `ŝ` and `V` under `full` in each form and under `diag`,
         // the factor form's `f`, and a spec's own `prior_rows`.
@@ -1306,6 +1307,12 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         ("quantile", &["model", "Robust", "support"]),
         ("audit", &["model", "Audit", "pairs"]),
         ("audit", &["model", "Audit", "clock", "regular"]),
+        // A `hawkes` window in both of its blocks (task 498).
+        ("hawkes", &["model", "Hawkes", "q"]),
+        ("hawkes_window", &["model", "Hawkes", "window", "old_off"]),
+        ("hawkes_window", &["model", "Hawkes", "window", "old_fwd"]),
+        ("hawkes_window", &["model", "Hawkes", "window", "new_at"]),
+        ("hawkes_window", &["model", "Hawkes", "window", "new_marks"]),
     ];
     for (name, path) in FORMS {
         let f = frozen::ALL

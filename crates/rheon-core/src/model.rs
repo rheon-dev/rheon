@@ -86,6 +86,7 @@ pub enum ModelState {
     CorrChange(Box<crate::CorrChange>),
     Bocpd(Box<crate::Bocpd>),
     Audit(Box<crate::Audit>),
+    Hawkes(Box<crate::Hawkes>),
 }
 
 #[derive(Debug, Error)]
@@ -204,6 +205,7 @@ impl ModelState {
             ModelState::CorrChange(_) => "corrchange",
             ModelState::Bocpd(_) => "bocpd",
             ModelState::Audit(_) => "audit",
+            ModelState::Hawkes(_) => "hawkes",
         }
     }
 }
