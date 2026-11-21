@@ -1,10 +1,12 @@
 # Hoeffding trees against river under a memory cap: a numpy study (PLAN task 503)
 
-*Status, 2026-11-21: a record, in progress for request A14. Part 1: the
+*Status, 2026-11-21: a record, complete for request A14. Part 1: the
 classifier written from the definitions and compared with river's, row by
 row, on both of river's code paths (§2, §3). Part 2: the regressor and its
 observers against river's (§4). Part 3: the state table, river's `max_size`,
-a cap a build can enforce and its accuracy cost (§5). Nothing in the package or the
+a cap a build can enforce and its accuracy cost (§5). Part 4: determinism,
+resume, zero-weight rows, weights and cost (§6), the proposed tolerances (§7)
+and the conclusions (§8). Nothing in the package or the
 Rust crates was changed. The scan this builds on is
 `vm-tools/research/494-MODELS-SCAN.md` on branch `vm-tools/oracle-gap-scan`,
 section 9 ("scan §9"). The runnable study is `scripts/study_503.py`.*
@@ -499,3 +501,205 @@ fail.
   2.5 GB, at 1 MB 10 GB. The state is not preallocated (a tree grows into its
   cap), so the figure is a ceiling, but it is the figure to raise with the
   user: it is two to three orders of magnitude above today's per-group state.
+
+## 6. Part 4: determinism, resume, zero-weight rows, weights and cost
+
+Run: `.venv-503/bin/python scripts/study_503.py part4 --out <dir>` (160 s; each
+timed case 3 s).
+
+### 6.1 Chunks and resume
+
+The plain trees draw nothing at random: given the rows in order, the tree is
+a function of them. Checked on 20,000 rows (weights U(0.2, 3), every 17th
+row of weight 0, the regressor's first row of weight 0) for five
+configurations: the classifier (8 features, 3 classes), the classifier under
+a 3 KB cap (17 of its 18 leaves capped at the end), the regressor with
+TE-BST, with E-BST, and with QO (32 slots) under a 64 KB cap (80 of 86 leaves
+capped). Each was fed as one chunk, as 7 and as 1,000 chunks at random
+boundaries, and the same with the state packed to bytes and a new tree
+unpacked from them at every chunk boundary:
+
+| configuration | packed bytes | 7 chunks | 7, resumed at each | 1,000 chunks | 1,000, resumed at each |
+|---|---|---|---|---|---|
+| classifier | 20,968 | identical | identical | identical | identical |
+| classifier, 3 KB cap | 2,554 | identical | identical | identical | identical |
+| regressor, TE-BST | 609,791 | identical | identical | identical | identical |
+| regressor, E-BST | 1,126,583 | identical | identical | identical | identical |
+| regressor, QO, 64 KB cap | 17,122 | identical | identical | identical | identical |
+
+"Identical" is the final state to the byte and every prediction to the bit.
+Two things make the cap resumable: its recheck counts learned rows, which
+the state holds, and the capped flag is in the state (a leaf the cap
+deactivated can be reactivated; one the algorithm deactivated cannot).
+river itself, pickled at row 2,500 of 5,000 and continued, gave the same
+predictions as the uninterrupted run, on its Rust classifier, its Python
+classifier and its regressor.
+
+### 6.2 Zero-weight rows
+
+**Here** a zero-weight row learns nothing, not even its label: 1,000
+zero-weight rows (features drawn three times wider than the stream's, so
+that any min or max they touched would move) spliced into 10,000, the first
+row among them, left the classifier's packed state identical to the byte to
+the plain stream's, every prediction on the plain rows identical, and the
+weight seen equal; the same for the regressor (TE-BST and QO, a zero-weight
+first row and 10% of rows at weight 0). This is rule 9 for a tree: no
+division by a zero weight anywhere (a new leaf, observer, slot or node is
+only made by a positive-weight row).
+
+**river** does not do this:
+
+* its Rust classifier refuses the row: `ValueError: sample weights must be
+  finite and greater than zero`;
+* its Python classifier accepts it and lets it move the Gaussian observers'
+  min and max (and add its class, at weight 0, to the leaf's table): on the
+  spliced stream 9,697 of the 10,000 plain rows' probabilities differ from
+  the plain run, and the tree is different;
+* its regressor raises `ZeroDivisionError` on a zero-weight first row (TE-BST
+  and QO: `Mean.update` divides by the weight, 0), and on any later
+  zero-weight row whose rounded value or slot is new (first at row 1,000);
+* its adaptive leaf updates its faded errors without the weight: one
+  zero-weight row moved them from (15.9, 13.8) to (81.6, 95.8).
+
+So a build cannot be compared with river on zero-weight rows; its oracle is
+the folded stream (the same rows without them), to the byte.
+
+### 6.3 Weights
+
+river's weights are frequency weights, and the tree uses them as counts in
+three places: `grace_period` is weight, the Hoeffding bound's `n` is the
+leaf's weight, and the Gaussian observer's variance divides by `W - 1`. So
+the tree is not invariant to the weights' scale. On 10,000 rows (5 features,
+`grace_period` 50), the same rows with every weight 1 grew 11 nodes; with
+every weight 0.5, 5; 2, 15; 10, 417. Scaling `grace_period` with the weights
+does not undo it (5, 15 and 79 nodes), because the bound and the `W - 1` do
+not scale. And a row of integer weight is not its duplicates: weights drawn
+from {1, 2, 3} grew 21 nodes, the duplicated rows 19, because the grace check
+and the split attempt see a weight-2 row once (accuracy on 5,000 unseen rows
+0.654 and 0.690). The docstring should say the weights are frequency
+weights and that `grace_period` and the bound are in weight units.
+
+`n_eff` (rule 8) is the weight seen before the row; `min_weight` gates the
+tree's prediction on it. A leaf's own weight is a different number (the
+weight that reached that leaf), and a tree has no decay, so `n_eff` never
+falls; a tree has no forgetting but a drift detector (the adaptive trees),
+which the scan leaves for after task 508.
+
+### 6.4 Cost per row
+
+Per row, predict then learn, on a tree grown on 30,000 rows and still
+learning (leaves at the end in brackets: the rows learned differ with each
+implementation's speed in the time budget):
+
+| tree | k | river, Rust | river, Python | here, Python |
+|---|---|---|---|---|
+| classifier, Gaussian, `nba` | 5 | 2.2 µs (432) | 31.5 µs (66) | 12.3 µs (126) |
+| | 20 | 3.7 µs (322) | 50.9 µs (32) | 37.7 µs (37) |
+| | 50 | 7.4 µs (169) | 100.3 µs (19) | 94.7 µs (20) |
+| regressor, `'mean'` | 5 | | TE-BST 46.5 µs, QO 24.5 µs | QO (32 slots) 7.7 µs |
+| | 20 | | TE-BST 247 µs, QO 91.6 µs | 34.2 µs |
+
+river's Rust classifier is the realistic figure for a Rust build: 2 to 8 µs
+a row at 5 to 50 features, and that includes river's Python call and its
+dict-to-vector mapping per row. The work per row is a descent of `depth`
+comparisons, `k` Gaussian updates (about 10 flops each) and, for `nba`, two
+naive Bayes evaluations of `k C` log densities (one to score the leaf's two
+predictors before the row is learned, one for the prediction); a split
+attempt every `grace_period` of weight costs `k n_splits C` CDFs (an `erf`
+each) and `2 k n_splits` entropies. The regressor's per-row work is `k`
+observer updates (QO: a floor and a hash lookup; TE-BST: a tree descent);
+its split attempt walks `k` observers. None of this was measured in Rust.
+
+## 7. Proposed tolerances
+
+| check | proposed | measured | note |
+|---|---|---|---|
+| classifier vs river's Rust classifier, numeric features, positive weights, a build using the `libm` crate's `erf` (river's, already in the workspace through faer) and `std`'s `ln`, `log2`, `exp`, on the same OS as river's wheel | to the bit: probabilities, labels, split rows, features, thresholds | 0 differences, 9 cases x 20,000 rows | |
+| the same with another `erf` (1 ulp of `erf` on 1.5% of arguments) | structure to the bit; probabilities 1e-14 absolute | structure identical; probabilities 1.3e-15 | 7x margin, on these streams; a near-tie can still flip a split |
+| classifier, Hellinger, `max_depth`, near-pure leaves | against this study's tree (`nb_form='native'`), to the bit; not against river, whose paths disagree there (§3.3) | | river's Rust path has no Hellinger |
+| regressor vs river, TE-BST or E-BST, `'mean'` leaves | to the bit: predictions, split rows, thresholds | 0 differences, 5 cases x 20,000 rows | also 0 with `d * d` in place of river's `d ** 2` (C `pow`, which differs from `d * d` on 1,565 of 2,000,000 values) |
+| regressor with QO | against this study's definition (`river_quirks=False`), to the bit; river's QO only with its two quirks reproduced | 0 differences with the quirks, 2 cases | §4.2 |
+| TE-BST rounding | pin `round(x, digits)` (Python's, correctly rounded decimal) and test decimal ties | `floor(abs(x) 10^d + 0.5) / 10^d` with the sign: 0 differences on 200,000 values | different at ties |
+| chunks (1, 7, 1,000) and resume at every boundary | state to the byte, predictions to the bit | identical, 5 configurations | |
+| zero-weight rows, first row included | state to the byte equal to the folded stream's | identical | river cannot be the oracle here (§6.2) |
+| the cap | packed bytes <= cap after every row | never over in 18 capped runs (checked every 2,000 rows and at the end) | a Rust test checks every row |
+
+**Across OSes.** The CDF goes into the state (the class weights each child
+starts with), and `ln`, `log2` and `exp` decide splits (the merits) and the
+`nba` counters (which predictor scored a row). A last-bit difference there is
+not a field off by an ulp but a decision that can go the other way at a
+near-tie, and then the trees differ by a node. The rule for libm results in
+the state does not fit that. Two ways out, for the user: **(a)** compute
+`erf`, `ln`, `log2` and `exp` in the tree with the `libm` crate (pure Rust,
+the same bits on macOS, Windows and Linux, already linked), so that the
+state and every decision are bit-exact across OSes and the river test above
+holds with "probabilities 1e-14" in place of "to the bit" (`ln` and `log2`
+then differ from glibc's in the last bit sometimes; this study measured only
+`erf`'s effect, none on structure); or **(b)** keep `std` and accept that two
+OSes can grow different trees from the same rows. (a) is the recommendation.
+
+## 8. Conclusions, and what was not verified
+
+1. **A Hoeffding tree written from the definitions is river's tree, to the
+   bit**, with river's choices taken where they are choices: the classifier
+   against river's Rust classifier on every probability, label, split row and
+   threshold in nine cases; the regressor against river's on every
+   prediction, split row, threshold and observer size in seven cases with
+   three observers. Getting there needed river's `erf` (msun's, ported) and,
+   for river's Python path, seven more of its forms (§3.2).
+2. **Where river departs from the definitions**, a build should follow the
+   definition and say so: the null split's merit (`-inf`, so a tree with one
+   usable feature splits at every attempt), QO's off-by-one partition and its
+   left child's statistics (fixing both lowered the MSE 5% to 20%), the
+   Python path's reactivation of deactivated leaves, and zero-weight rows
+   (refused, crashing, or moving the observers).
+3. **The state is bounded only with bounded observers and a cap.** Uncapped,
+   a classifier reached 1.1 MB and a regressor 11.5 MB per group in 200,000
+   rows; E-BST grows with the stream and is out. The cap of §5.3, in packed
+   bytes, with observers reserved at their largest, never passed, is
+   deterministic and resumes to the byte. At 1 MB, 256 KB and 64 KB it cost
+   the classifier 0.0000, up to 0.0044 and up to 0.0286 of accuracy
+   (none, 0.0104 and 0.0422 at most on the last quarter), and the regressor 7%, 17%
+   and 39% of MSE on Friedman #1 (2%, 3%, 6% on a barely learnable stream).
+   river's own `max_size`, at the same nominal sizes, cost 0.036 to 0.139 of
+   accuracy, because it counts Python objects.
+4. **The proposal for the user**: a per-group `max_state_bytes`, default 256
+   KB (1 MB recommended for a regressor with 20 or more features), refused
+   above 64 MiB; Gaussian observers for the classifier and QO with a slot cap
+   (32) for the regressor; and the statement that the bank's memory is
+   groups times the cap, two to three orders of magnitude above today's
+   per-group state.
+
+**Not verified.** river's leaf models (`'model'`, `'adaptive'`: its SGD
+`LinearRegression` per leaf) were not reproduced or compared, only the
+splits they share with `'mean'`. Nominal features, missing values (river's
+Rust tree routes them to the heavier side), more than three classes,
+`binary_split=False` multiway splits, `remove_poor_attrs`,
+`stop_mem_management` and the histogram observer were not implemented here
+(the histogram's accuracy is river's own, §4.4). Everything ran on Linux
+(x86-64, glibc) with river 0.27.0 from PyPI; no other OS, so the cross-OS
+statement of §7 is from the source, not a run, and the effect of the `libm`
+crate's `ln` and `log2` against glibc's was not measured. The streams are
+synthetic (random axis-aligned trees, a hyperplane, Friedman #1); no real
+data. River's memory manager was run with `memory_estimate_period` 5,000,
+not its default (with which it does nothing before a million rows). The
+cost table is Python and river's Rust through Python on a 4-core VM; no Rust
+build was timed. The msgpack overhead (about 12%) is an estimate. Adaptive
+trees, ensembles and forests (the rest of scan §9) are out of scope.
+
+## 9. How to rerun
+
+The study's venv, kept beside the repository and ignored by git:
+`uv venv .venv-503 --python 3.12`, then `uv pip install numpy river` (river
+0.27.0, numpy 2.5.5, scipy 1.18.1). river's Rust source (`rust_src/` in its
+sdist) and the `libm` crate (0.2.16, in the cargo registry) were read for
+§2 and §3; nothing is downloaded at run time. Each part writes
+`<dir>/<part>.json` (default `.cache/study_503/`), and a rerun prints the
+cached result unless `--force` is given:
+
+```text
+.venv-503/bin/python scripts/study_503.py part1 --out <dir>    # 30 s
+.venv-503/bin/python scripts/study_503.py part2 --out <dir>    # 50 s
+.venv-503/bin/python scripts/study_503.py part3 --out <dir>    # 670 s
+.venv-503/bin/python scripts/study_503.py part4 --out <dir>    # 160 s
+```
