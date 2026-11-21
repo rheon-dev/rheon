@@ -4194,9 +4194,9 @@ struct RowPlan {
     /// Pushed into the `embargo` buffer as it was scored: its prediction
     /// is kept for the diagnostics to fold when it matures (C21).
     buffered: bool,
-    /// Under `label_clock`, a row only scored and never held -- its weight
-    /// 0, or its label time null -- whose step still joins the held rows'
-    /// clock, as a held row's does.
+    /// Under `label_clock`, a row only scored and never held -- its label
+    /// time null -- whose step still joins the held rows' clock, as a held
+    /// row's does.
     parks: bool,
     w: f64,
 }

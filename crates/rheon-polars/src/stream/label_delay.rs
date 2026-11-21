@@ -401,6 +401,9 @@ impl Stream {
                 // A skipped row teaches nothing and waits for nothing; its
                 // time passes on the elapsed clock, which the next accepted
                 // row's place carries, and its events wait with that row.
+                if let Some(lr) = labels.as_deref_mut() {
+                    Self::seed_labels(lr, pending, &plan);
+                }
                 held_break.session_changed |= plan.session_changed;
                 held_break.blend |= plan.blend;
                 held_break.capped |= plan.capped;
@@ -520,9 +523,12 @@ impl Stream {
     /// reached are released, in order of label time and then arrival, each
     /// learned at its label time -- its step the one from the label time
     /// before it, on the clock of labels learned, capped as any step is --
-    /// and then the row is scored and held, in label-time order, unless it
-    /// has nothing to teach: a weight of 0, or a null label time, which is
-    /// counted. A full buffer drops the row that arrived first, under
+    /// and then the row is scored and held, in label-time order, unless its
+    /// label time is null, which is counted. A row of weight 0 is held like
+    /// any other and its release is a step of that clock that teaches
+    /// nothing, as `embargo` replays it (review P1: not holding it merged
+    /// the steps either side of it into one, capped once, where `embargo`
+    /// caps each). A full buffer drops the row that arrived first, under
     /// `held_overflow = "drop_oldest"`; under `"refuse"` the bank refused
     /// the chunk before any stream ran ([`Self::check_labels`]).
     ///
@@ -551,6 +557,18 @@ impl Stream {
                 .is_some_and(|l| !now.is_before(l))
             {
                 let row = pending.pop_front().expect("checked");
+                // Labels are released in time order, so one before the last
+                // is before a skipped first row's label time alone
+                // ([`Self::seed_labels`]): the clock starts over at it, a
+                // step of 0, not a step back.
+                if lr
+                    .learned
+                    .last_clock()
+                    .zip(row.label)
+                    .is_some_and(|(last, l)| l.is_before(last))
+                {
+                    *lr.learned = ClockState::new();
+                }
                 let adv = lr
                     .learned
                     .advance_stamped(&lr.cfg, &lr.caps, row.label, None, true);
@@ -587,7 +605,7 @@ impl Stream {
         if label.is_none() {
             *lr.missing = lr.missing.saturating_add(1);
         }
-        let Some(label) = label.filter(|_| plan.w > 0.0) else {
+        let Some(label) = label else {
             out.push(RowPlan {
                 learn: false,
                 parks: true,
@@ -633,6 +651,27 @@ impl Stream {
             buffered: true,
             ..quiet
         });
+    }
+
+    /// Under `label_clock`, a skipped row that is the first the clock of the
+    /// labels learned sees (review P1b): nothing is held and no label has
+    /// been learned, so its label time starts that clock, as its clock
+    /// starts the stream's, and the first label learned steps from it, as
+    /// the first row learned under `embargo` steps from the skipped row's
+    /// clock. A null label time, or one before its row's clock, starts
+    /// nothing. A label released before it (a shorter delay overtaking)
+    /// starts the clock over at its own time ([`Self::hold_for_label`]).
+    fn seed_labels(lr: &mut LabelRun<'_>, pending: &VecDeque<PendingRow>, plan: &RowPlan) {
+        if !pending.is_empty() || lr.learned.started() {
+            return;
+        }
+        let (Some(now), Some(label)) = (plan.clock, lr.times.at(plan.i)) else {
+            return;
+        };
+        if !label.is_before(now) {
+            lr.learned
+                .advance_stamped(&lr.cfg, &lr.caps, Some(label), None, false);
+        }
     }
 
     /// Under `label_clock`, whether the chunk's rows of this stream can be
@@ -701,9 +740,6 @@ impl Stream {
                     label: l,
                     clock: now,
                 });
-            }
-            if plan.w <= 0.0 {
-                continue;
             }
             let Some(max) = bound else { continue };
             let at = held.partition_point(|&h| !l.is_before(h));
