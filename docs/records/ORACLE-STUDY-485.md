@@ -19,7 +19,8 @@ control (§21). Part 2: the third remedy, a Huber-clipped score, on targeted
 GARCH and three-series DCC under t(5), with ARMA as the control (§22). Part 3:
 the batch start and the robust score together on those two sets, and DCC's
 composite likelihood over pairs against the full one at three and five series
-(§23). The request named the deliverable
+(§23). Part 4: the adopted remedy per model and the final floors (§24), which
+supersede §20.2 and §20.3 where they differ. The request named the deliverable
 `STUDY-485-ESTIMATORS.md`; it is this record, kept under the name it was
 committed with (`ORACLE-STUDY-485.md`). Nothing in the package or the Rust crates was changed. The scan this
 builds on is `vm-tools/research/485-TIME-SERIES-SCAN.md` on branch
@@ -1530,3 +1531,105 @@ port):
 **Not verified:** `k` above 5; contiguous-pair or subsampled-pair composites;
 the composite under §23.1's remedies; first-stage-corrected SEs for either
 objective; timings without concurrent load, or in Rust.
+
+The coordinator accepted part 3 (2026-11-21).
+
+## 24. Request A11, part 4: the adopted remedies and the final floors
+
+This section supersedes §20.2 and §20.3 where they differ; §15.2's
+fixed-parameter (class E) tolerances stand. Every figure is at 10,000 rows on
+seeds 485000 to 485049, against each set's own oracle, as in §16 to §23.
+Five grids were added for it, because a floor needed their numbers (about a
+minute, under nohup, resumable): the adopted targeted-GARCH remedy at
+persistence 0.97 and 0.99, and the adopted ETS remedy at `α` 0.1 (normal and
+t(5)) and 0.3 (normal). A floor is the count a grid test asserts; it is set
+at least two seeds below every set it covers. Per-seed bounds are the worst
+measured seed across the sets times about 1.2 to 1.6, rounded.
+
+### 24.1 The adopted remedy per model
+
+| model | adopted | why |
+|---|---|---|
+| GARCH(1,1), `ω` targeted at the running variance | **(a) + (c)**: the 500-row batch start (the targeted batch fit of the first 500 rows) and the Huber-clipped score at `c = 2` with running centring and slope | the only remedy measured that keeps every control: 50 of 50 at persistence 0.97, 0.98 and 0.99 with normal noise, and 48 of 50 under t(5) against the Gaussian targeted fit, every seed within 2.23 SE. (a) alone keeps the t(5) stuck seed (485009 at 29 SE); (c) alone reaches 46 under t(5) and costs the normal control its worst seed (4.57 SE) |
+| GARCH(1,1), unrestricted `ω` | none: not shipped as an estimator (§20.3) | the early transient sticks on the `α + β` ridge (§10); its remedies were measured only on the targeted form |
+| ARMA(1,1) | **none** (plain) | passes 50 of 50 on every set without a remedy (§12, §18); (a) + (c) was measured as a control at `φ` 0.8 and also passes 50 of 50 under both noises, every seed within 1 SE, so it would be safe, but it buys nothing |
+| ETS(A,A,N) | **(a)**: the 500-row batch start (`ETSModel` on the first 500 rows, known initial states) | 50 of 50 at `α` 0.1, 0.3 and 0.6 with normal noise and at 0.1 and 0.6 with t(5); the plain estimator failed `α` 0.6 (6 of 50) as a slow approach from its start. A slower gain made it worse (0 of 50, §21) |
+| DCC(1,1), three series | **(a) + (c)** in both stages (the margins as targeted GARCH above; the second stage started from a batch fit of its first 500 rows, with the clipped score) | normal noise: 50 of 50, every seed within 1.38 SE; t(5): still fails the count (below), but no seed is stuck. (a) alone meets the t(5) count (47) with one stuck seed (485012 at 10.4 SE, on the ridge), which no per-seed bound would catch without admitting it |
+| DCC likelihood | **the full likelihood** | the composite over pairs matches it on accuracy and does not change any verdict at three or five series (§23.2): 47 against 45 and 40 against 39 at three; 50 and 50, 37 against 39 at five; the same failing seeds. Its estimates lie within 2.0 of the full fit's SEs of the full fit's, with SEs 8% to 24% wider, and it is not cheaper online at `k ≤ 5` |
+
+**The batch start's caveats, which every adopted (a) carries.** It is not
+one pass from the first row: the first 500 rows are buffered and emit nothing
+(for DCC, whose second stage buffers its own first 500 rows of `z` after the
+margins', 1,000 rows emit no correlation). It runs one batch optimization on
+those rows, and a library's optimizer stood in for it throughout (arch for
+GARCH, statsmodels' `ETSModel` for ETS, scipy's SLSQP for DCC's second
+stage); rheon's core has no batch optimizer, and the start was the oracle's
+own estimator on a prefix of the same series. A port must supply its own and
+be measured again. The buffer is 500 floats per series (4 KB), bounded by
+the window, not the stream; after it the state is as before. The robust
+score (c) changes the estimator under heavy tails: under t(5) it lies nearer
+the t likelihood's point than the Gaussian fit's (§22), so its gaps, read in
+the Gaussian fit's SEs, widen at the median; the Gaussian fit stays the
+oracle.
+
+### 24.2 Final floors (each a grid test of 50 seeds at 10,000 rows)
+
+| family and form (sets covered) | count floor (measured) | per-seed bounds (worst measured) | oracle |
+|---|---|---|---|
+| targeted GARCH, (a) + (c), normal noise (P 0.97, 0.98, 0.99) | **48 of 50** within 2 SE on `α, β` (50, 50, 50) | `α, β` ≤ 2.5 SE (1.54); `ω` ≤ 5 delta-method SE (4.02); median variance-path gap ≤ 5% (3.4%); `α + β` within 0.015 of the batch (0.0084) | §16's targeted batch fit (arch's GARCH subclassed, `ω = v_T(1 − α − β)`), its robust SEs |
+| targeted GARCH, (a) + (c), t(5), against the Gaussian targeted fit | **46 of 50** (48) | `α, β` ≤ 3.5 SE (2.23); `ω` ≤ 5 delta-method SE (3.88); path gap ≤ 12% (8.6%); `α + β` within 0.02 (0.0135) | the same fit with `dist="normal"` (quasi-likelihood): the online estimator's estimand family; arch's t fit is not comparable (§18) |
+| ARMA(1,1), plain, `φ` ≤ 0.8 (0.6, 0.8; normal and t(5)) | **47 of 50** (50, 50, 50), unchanged from §20.2 | as §20.2: `φ, θ` ≤ 1 SE (0.56); `σ²` ≤ 1.5 SE (1.02); RMS gap ≤ 0.025 (0.019) | statsmodels `SARIMAX`, OPG SEs |
+| ARMA(1,1), plain, `φ` = 0.95 | **47 of 50** (49, 49), unchanged | as §20.2: every parameter ≤ 5 SE (3.95); RMS gap ≤ 0.08 (0.067) | as above |
+| ETS(A,A,N), (a) (`α` 0.1, 0.3, 0.6 normal; 0.1, 0.6 t(5)) | **48 of 50** (50 on all five) | `α, β` ≤ 2.5 SE (1.61); `σ²` ≤ 0.3 closed-form SE (0.19); prediction RMS gap ≤ 0.04 (0.027); online MSE over the second half ≤ 1.005 times the batch parameters' (1.0017) | `ETSModel`, known initial states, its SEs for `α, β`; `σ²`'s Gaussian closed-form SE |
+| DCC(1,1), three series, (a) + (c), full likelihood, normal noise | **48 of 50** (50) | `a, b` ≤ 2 sandwich SE (1.38); worst-pair median `ρ` gap ≤ 0.02 (0.013); `a + b` within 0.006 (0.0035) | §19's: arch's margins, second-stage SLSQP on the full likelihood, sandwich SEs |
+
+The ETS floor rises from §20.2's 47 for `α` ≤ 0.3 to 48, and now covers
+`α` 0.6, which §20.2 left out. The targeted GARCH floor moves from 45 (with
+`α, β` ≤ 3.5 SE) to 48 with ≤ 2.5 SE, and covers 0.99, which §20.2 left out.
+
+### 24.3 The set that still fails
+
+**DCC(1,1), three series, t(5) noise** fails the count under every remedy
+measured: plain 40 (§19), (b) not run on it, (c) 43 (both stages) and 42
+(second stage only) (§22), (a) **47** with the stuck seed 485012 at
+`a` −10.4, `b` +9.23 SE (online persistence 0.993 against 0.981), and
+(a) + (c) **43**, with no seed past 3.24 SE (§23.1). The full likelihood
+and the composite fail alike at three and five series (§23.2). Under (a) + (c)
+the count is lost in the middle of the distribution, not the tail (median of
+the larger `a, b` gap 0.80 SE against 0.63 under (a) alone): the clipped
+score is a different estimator under t(5), read in the Gaussian fit's SEs.
+
+**What rheon's test should assert for it** (the adopted (a) + (c), 50 seeds at
+10,000 rows; no count): on every seed,
+
+- `|a_online − a_batch|` and `|b_online − b_batch|` each at most **4** of the
+  oracle's sandwich SEs (§19's second-stage sandwich) (measured worst 3.24,
+  seed 485032);
+- the worst pair's median `|ρ_t(online) − ρ_t(batch)|` over the second half
+  of the rows at most **0.03**, in correlation units (measured 0.0207);
+- `|(a + b)_online − (a + b)_batch|` at most **0.01** (measured 0.0054);
+
+and over the seeds, the median of the larger `a, b` gap at most **1.2** SE
+(measured 0.80). These replace §20.3's 0.10 `ρ` bound, which had to admit the
+plain estimator's 0.075. Under (a) alone a per-seed bound would have to admit
+10.4 SE and would catch nothing; that is why (a) + (c) is adopted though its
+count is lower.
+
+**Not measured for the floors above:** the adopted remedies at two and five
+DCC series, at 100,000 rows, at ETS `α` 0.3 under t(5), at ARMA `φ` 0.95;
+batch windows other than 500 rows; the models' own batch optimizers in place
+of the libraries'.
+
+### 24.4 Questions for the coordinator
+
+1. The adopted batch start needs a batch optimizer in the core for the
+   targeted GARCH, ETS and DCC second-stage likelihoods, run once on a
+   500-row buffer (4 KB per series, bounded by the window). Is that new piece
+   accepted, and are 500 rows with no output (1,000 for DCC's correlation)
+   acceptable at the start of a stream?
+2. Should DCC's second stage start on the margins' same 500 rows (from the
+   margins' batch volatilities) instead of its own next 500, halving the
+   silent rows? Not measured.
+3. Does the DCC t(5) assertion of §24.3 (per-seed 4 SE and 0.03 `ρ` gap, no
+   count) stand in for a floor, or should the study try a further remedy
+   (for example a Student-t second stage) first?
