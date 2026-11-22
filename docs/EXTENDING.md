@@ -338,6 +338,13 @@ only, assert in the test that the model found it (the cluster, the run
 length, the correlation, the parameters the simulation used), and then pin
 the signature. Regenerate one test at a time with `PRINT_GOLDEN=1`.
 
+**An option whose point is a structure the fixed stream lacks** (a ridge on
+an ill-conditioned pair, a penalty that selects, a coefficient that drifts, a
+sparse design, a rate that decays over many rows) is pinned in
+`tests/golden_options.rs` the same way: a stream with the structure, an
+assertion that the option did what it is for (and that the option off did
+not), then the signature.
+
 ## The bank — `crates/rheon-polars`
 
 The bank in `crates/rheon-polars` turns a spec into a model, steps it over

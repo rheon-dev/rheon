@@ -94,7 +94,7 @@ realistic test and nothing is left to add.
 
 | model | kind | tests | class | missing |
 |---|---|---|---|---|
-| `ewridge` | G | 5 (`ewridge`, `_standardized`, `_windowed`, `_origin_standardized`, `_paths`) | R\* | 60 rows at a signal-to-noise of about 300: the fit is exact to the noise; no ill-conditioned or correlated pair of features |
+| `ewridge` | G | 5 (`ewridge`, `_standardized`, `_windowed`, `_origin_standardized`, `_paths`) | R\*; R (`golden_options.rs`'s `ewridge_conditioning`) | none |
 | | F | 7 (`ewridge`, `_window`, `_leverage`, `_output_only`, `_first_period`, `_never`, `_blocked`), 2 targets | R\* | forms only; none |
 | | O | `convergence.ewridge` (19 cases, 50 seeds: scikit-learn Ridge, statsmodels WLS), `convergence_conditioning.nist_ewridge_rls_gram` (41, NIST StRD), `test_second_opinion` (32 specs: sklearn Ridge, statsmodels WLS, ridge and elastic net), `_diagnostics`, `_grids`, `_restarts`, `_windows`, `test_oracles_ewridge_paths` | R | none |
 | | C | Rust probe D (noiseless line); proptest D; sweeps D (noiseless, 40 rows); `test_bank` chunk invariance and `test_predict` on `synthetic` R | D / R | none for the contract; sigma, `r2` and `se_coef` at a nonzero noise are in O |
@@ -102,11 +102,11 @@ realistic test and nothing is left to add.
 | | F | 1 (`rls`) | R\* | none |
 | | O | `convergence.rls` (19, statsmodels RLS, sklearn), `nist_ewridge_rls_gram`, `test_second_opinion_rls_errors` (leverage, sandwich), `test_oracles_rls_kalman_paths` | R | none |
 | | C | as `ewridge` | D / R | none |
-| `lasso` | G | 2 (`lasso`, `_windowed`) | R\* | two features: no stretch where the penalty path selects among many; no collinear pair |
+| `lasso` | G | 2 (`lasso`, `_windowed`) | R\*; R (`golden_options.rs`'s `lasso_selection`) | none (no collinear pair: the correlated-feature selection is in the oracle files) |
 | | F | 4 (`lasso`, `_window`, `_floor`, `_first_period`) | R\* | none |
 | | O | `convergence.lasso` (18, sklearn Lasso), `convergence_iterations.lasso_descent`, `test_oracles` (KKT), `test_oracles_lasso_paths`, `test_second_opinion_gram` (`lars_path`, `enet_path`) | R | none |
 | | C | as `ewridge` | D / R | none |
-| `kalman` | G | 4 (`kalman_plain`, `kalman`, `_revert`, `_noise`) | R\* | the truth is a constant coefficient; the filter is never run on a drifting one |
+| `kalman` | G | 4 (`kalman_plain`, `kalman`, `_revert`, `_noise`) | R\*; R (`golden_options.rs`'s `kalman_drift`) | none |
 | | F | 5 (`kalman`, `_gap`, `_noise_units` (3 rows before), `_output_only`, `_square_root`) | R\*; `_noise_units` D (3 rows: shorter than the filter's start) | none (the 3-row case freezes the form before the start, on purpose) |
 | | O | `convergence.kalman` (19, statsmodels), `long_run.kalman_p`, `test_second_opinion` (10: filterpy, statsmodels exact diffuse), `_extremes`, `_grids`, `test_river` | R | none |
 | | C | as `ewridge` | D / R | none |
@@ -118,7 +118,7 @@ realistic test and nothing is left to add.
 | | F | 5 (`quantile`, `_mad`, `_refit`, `_refit_done`, `_refit_span`) | R\* | none |
 | | O | `convergence.quantile` (26, statsmodels QuantReg), `quantile_robust_sets`, `oracles.quantile_eps`, `_huge_ridge`, `_mixed_scales`, `test_second_opinion` (QuantReg, skewed noise), `test_quantile_refit` | R | none; the solve cadence is also held: blocks of 100 rows read off the predictions, each block's coefficients within 0.009 of statsmodels' `QuantReg` on the rows before it (`test_second_opinion_huber_options.py`) |
 | | C | as `ewridge` | D / R | none |
-| `sgd` | G | 3 (`sgd`, `_squared`, `_simplex`) | R\* | losses other than squared and the default, run for 60 rows: the learning-rate schedule has barely left its start |
+| `sgd` | G | 3 (`sgd`, `_squared`, `_simplex`) | R\*; R (`golden_options.rs`'s `sgd_later_rows`, a squared loss over 4,000 rows) | none for the schedule; the other losses' later rows are in the oracle grids |
 | | F | 14 (`sgd`, `_warming` (20 rows), `_huber`, `_huber_mad`, `_huber_mad_anchored`, `_huber_refit`, `_huber_refit_done`, `_huber_refit_span`, `_spread`, `_spread_adagrad`, `_unstable`, `_resting` (300), `_eps`, `_logistic`) | R\*; `_unstable` D (a step size past stability, by design) | none |
 | | O | `convergence.sgd_squared` (18), `_huber` (26), `_quantile` (8), `_epsilon_insensitive` (8, scipy), `_logistic` (6), `_poisson` (6), `_rates`, `learning_rate.*` (15, scikit-learn), `test_oracles_gradient_paths` (10), `test_river`, `test_second_opinion_gradient` | R | none for `sgd`: `standardize=True` is the default under every grid in `convergence.py`, and `TestSgdUnderAConstraintSettlesOnScipysProjection` holds a simplex (non-negative, summing to 1, binding on a correlated stream, unit and unequal feature scales) to `scipy.optimize.minimize` (SLSQP) on 100,000 rows, 0.0025 off; `pa`'s projection has no converged limit to hold to a library (its step is not a descent on the loss), so it stays a replay |
 | | C | as `ewridge`; `sgd_unstable` is D by design | D / R | none |
@@ -126,7 +126,7 @@ realistic test and nothing is left to add.
 | | F | 2 (`pa`, `_warming`) | R\* | none |
 | | O | `convergence.pa` (18, statsmodels), `learning_rate.pa_noisy` (sklearn PassiveAggressive), `test_oracles_gradient_paths` (4), `test_second_opinion_gradient` | R | `standardize=True` and the constraints, as `sgd` |
 | | C | as `ewridge` | D / R | none |
-| `ftrl` | G | 2 (`ftrl`, `_squared`) | R\* | the sparse regime the model exists for: two dense features, no irrelevant ones |
+| `ftrl` | G | 2 (`ftrl`, `_squared`) | R\*; R (`golden_options.rs`'s `ftrl_sparse`) | none |
 | | F | 1 | R\* | none |
 | | O | `convergence.ftrl_logistic` (7), `ftrl_squared` (9) (statsmodels), `learning_rate` (3), `test_oracles_gradient_paths` (2), `test_second_opinion` | R | a finite half-life: `ftrl_ref` only (no library forgets) |
 | | C | as `ewridge` | D / R | none |
@@ -304,11 +304,9 @@ Left: `pa`'s projection (no converged limit to hold to a library: its step
 is not a descent on the loss), `deco`'s estimate
 (no library computes it; the longhand stays), and the rows of section 3
 whose "missing" cell is not in section 5: the state fixtures of `glm`, `holt`
-and `hawkes` on streams drawn from their family (a fixture freezes a form, not
-a fit; a new case there means a new set under every schema's directory, which
-this part did not take on), and the option-level cells of the other regression
-goldens (`ewridge`'s conditioning, `lasso`'s selection, `kalman`'s drift,
-`sgd`'s and `ftrl`'s later rows, `ftrl`'s sparse regime).
+and `hawkes` and the option-level cells of the other regression goldens
+(`ewridge`'s conditioning, `lasso`'s selection, `kalman`'s drift, `sgd`'s later
+rows, `ftrl`'s sparse regime), both done in part 4 (section 7).
 
 ## 7. Part 4: corrections, and the early-data guards
 
@@ -354,3 +352,19 @@ walks the files a kept set has. The three files were written on
 reads them within the golden tolerance, and a regeneration on the macOS
 machine writes them there. The existing 114 fixtures are unchanged to the
 byte: the new streams draw after the old ones' numbers, so no old stream moves.
+
+Option-level goldens (`crates/rheon-core/tests/golden_options.rs`, one
+realistic golden a model beside the degenerate ones, each asserting the
+structure before it pins the numbers; the option on against off where there
+is an off):
+
+| model | commit | the stream and what is asserted |
+|---|---|---|
+| `ewridge` (conditioning) | this part | two features at a correlation of 0.995, `y = x0 + x1`: with a ridge of 0.05 the slopes split 0.97 / 1.02, with one of 1e-9 0.73 / 1.31; both sum to 2 within 0.15 |
+| `lasso` (selection) | this part | six independent features, two in the target: at a penalty of 0.25 and of 0.05 exactly those two are active (shrunk by 0.25 at the first), at 0 all six |
+| `kalman` (drift) | this part | one slope drifting 1 to 4 over 400 rows: a random walk on it ends at 3.69 (pinned filter 2.62) and its squared prediction error is a fifth of the pinned filter's, over the rows both predict (the model's own readiness, no row count) |
+| `ftrl` (sparse regime) | this part | 30 binary indicators, three active a row, three relevant: with an L1 of 30 the three weights have the right signs and all 27 others are exactly 0; with an L1 of 0 none is |
+| `sgd` (later rows) | this part | 4,000 rows: a decaying rate (`0.1 / (1 + n)^0.5`) ends within 0.05 of the truth and its squared error over the last quarter is 1/40 of a constant rate's |
+
+`ewridge`'s `ridge` is in the mean form (the features' variance), so a ridge
+of 20 on unit-variance features removes the fit; the first try used it.
