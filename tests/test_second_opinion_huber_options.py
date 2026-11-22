@@ -17,9 +17,10 @@ what a library fits on the same rows:
   of its own, at the converged weights, the loop of ``convergence.huber_oracle``
   around it);
 - under a solve schedule of ``k`` rows the coefficients hold for ``k`` rows and
-  each block's are the batch fit of the rows before it: ``RLM`` for ``huber``.
-  The blocks are read off the predictions (inside a block they are one linear
-  function of the features, to rounding), not assumed.
+  each block's are the batch fit of the rows before it: ``RLM`` for ``huber``,
+  ``QuantReg`` for ``quantile``. The blocks are read off the predictions
+  (inside a block they are one linear function of the features, to rounding),
+  not assumed.
 """
 
 from __future__ import annotations
@@ -205,3 +206,32 @@ class TestTheSolveSchedule:
         for start, b in blocks[::4]:
             rlm = sm.RLM(y[:start], _design(x[:start]), M=HuberT(1.345)).fit()
             assert np.max(np.abs(b - np.asarray(rlm.params))) < 0.01, (start, b, rlm.params)
+
+    def test_quantile_holds_each_blocks_coefficients_to_quantreg_on_the_rows_before_it(self):
+        rng = np.random.default_rng(12)
+        n = 8000
+        x = rng.standard_normal((n, 3))
+        # Skewed noise, so that the 0.75 quantile's line and the mean's part.
+        y = LEVEL + x @ BETA + rng.exponential(1.0, n)
+        spec = rp.spec.quantile(
+            "m",
+            targets=["y"],
+            features=FEATURES,
+            quantile=0.75,
+            half_life=float("inf"),
+            solve_every=float("inf"),
+            max_rows_between_solves=self.K,
+            min_weight=5.0,
+        )
+        pred = _pred(spec, _frame(x, y))
+        blocks = _blocks(pred, x, self.K, 7000, 8000)
+        assert len(blocks) >= 9
+        assert not np.allclose(blocks[0][1], blocks[1][1], atol=1e-9)
+        for start, b in blocks[::4]:
+            want = np.asarray(sm.QuantReg(y[:start], _design(x[:start])).fit(q=0.75).params)
+            assert np.max(np.abs(b - want)) < 0.03, (start, b, want)
+        # The 0.75 quantile of Exp(1) is ln 4 = 1.386 above the mean's 1.
+        assert abs(blocks[-1][1][0] - (LEVEL + np.log(4.0))) < 0.15
+        # The control: the least-squares line is not any block's.
+        ols = np.linalg.lstsq(_design(x[: blocks[-1][0]]), y[: blocks[-1][0]], rcond=None)[0]
+        assert np.max(np.abs(blocks[-1][1] - ols)) > 0.2

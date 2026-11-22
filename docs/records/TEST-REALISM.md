@@ -111,7 +111,7 @@ realistic test and nothing is left to add.
 | | C | as `ewridge`; the robust contamination sweep (`test_convergence_soak`, soak tier) is R | D / R | none |
 | `quantile` | G | 1 | R\* | the stream's noise is uniform, symmetric: the median and the mean coincide, so a quantile at 0.5 reads the same as least squares; no skewed noise |
 | | F | 5 (`quantile`, `_mad`, `_refit`, `_refit_done`, `_refit_span`) | R\* | none |
-| | O | `convergence.quantile` (26, statsmodels QuantReg), `quantile_robust_sets`, `oracles.quantile_eps`, `_huge_ridge`, `_mixed_scales`, `test_second_opinion` (QuantReg, skewed noise), `test_quantile_refit` | R | none |
+| | O | `convergence.quantile` (26, statsmodels QuantReg), `quantile_robust_sets`, `oracles.quantile_eps`, `_huge_ridge`, `_mixed_scales`, `test_second_opinion` (QuantReg, skewed noise), `test_quantile_refit` | R | none; the solve cadence is also held: blocks of 100 rows read off the predictions, each block's coefficients within 0.009 of statsmodels' `QuantReg` on the rows before it (`test_second_opinion_huber_options.py`) |
 | | C | as `ewridge` | D / R | none |
 | `sgd` | G | 3 (`sgd`, `_squared`, `_simplex`) | R\* | losses other than squared and the default, run for 60 rows: the learning-rate schedule has barely left its start |
 | | F | 14 (`sgd`, `_warming` (20 rows), `_huber`, `_huber_mad`, `_huber_mad_anchored`, `_huber_refit`, `_huber_refit_done`, `_huber_refit_span`, `_spread`, `_spread_adagrad`, `_unstable`, `_resting` (300), `_eps`, `_logistic`) | R\*; `_unstable` D (a step size past stability, by design) | none |
