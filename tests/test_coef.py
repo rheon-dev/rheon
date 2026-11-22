@@ -161,6 +161,8 @@ COEF_SPECS = [
     # Each of ``y``'s positive rows an event of its node.
     rp.spec.hawkes("m", targets=["y", "y2"], kernel_decays=[1.0, 5.0], half_life=30),
     rp.spec.garch("m", targets=["y", "y2"], vol="gjr", dist="t", start_rows=50),
+    # Each target on its own lags, the features beside them.
+    rp.spec.ar("m", targets=["y", "y2"], features=["x1", "x2"], lags=[1, 3], half_life=30),
 ]
 
 

@@ -24,8 +24,8 @@
 //! pred_t = [1, z_t] · β_{t−1}                 out of sample: before the update
 //! W'     = lam W + w                          (n_eff, before the row: W)
 //! W_j'   = lam W_j + w                        (a learned row of target j only)
-//! S_j'   = (lam W_j S_j + w z z')  / W_j'     (EW mean of z z', kept centred)
-//! r_j'   = (lam W_j r_j + w z y_j) / W_j'     (EW mean of z y_j, kept centred)
+//! S_j'   = (lam W_j S_j + w z z')  / W_j'     (EW mean of z z', kept centered)
+//! r_j'   = (lam W_j r_j + w z y_j) / W_j'     (EW mean of z y_j, kept centered)
 //! β_j    = (S_j + ridge D)⁻¹ r_j              solved after every learned row
 //! ```
 //!
@@ -199,7 +199,10 @@ impl ArCfg {
             coef_prior: None,
             session_shrink: None,
             long_half_life: None,
-            min_weight: self.min_weight,
+            // The gate is `Ar`'s own (`Ar::gate`): a fit that withheld its
+            // predictions would age its residual variance on them alone, and
+            // a floor, which withholds output only, would move the state.
+            min_weight: 0.0,
             solve_every: 0.0,
             max_rows_between_solves: 1,
             solve_share: None,
@@ -268,7 +271,11 @@ impl Ar {
         let mut out = Vec::with_capacity(self.fits.len());
         let mut any = false;
         for fit in &self.fits {
-            match fit.coefficients() {
+            // A fit solved on no learned row is NaN throughout: no fit.
+            match fit
+                .coefficients()
+                .filter(|c| c[0].iter().any(|v| !v.is_nan()))
+            {
                 Some(c) => {
                     any = true;
                     out.push(c[0].clone());
@@ -313,9 +320,17 @@ impl Ar {
         z.extend_from_slice(x);
     }
 
+    /// `pred` withheld, every target's, while the weight before the row is
+    /// below `floor` (`min_weight`), as `ewridge` gates on its shared weight.
+    fn gate(pred: &mut [f64], n_eff: f64, floor: f64) {
+        if n_eff < floor {
+            pred.fill(f64::NAN);
+        }
+    }
+
     /// The row's report, the state untouched: target `j`'s prediction from
-    /// its fit, or NaN while its ring is short.
-    fn read(&self, x: &[f64], d_clock: f64, floor: Option<f64>, out: &mut Step) {
+    /// its fit, or NaN while its ring is short, gated at `floor`.
+    fn read(&self, x: &[f64], d_clock: f64, floor: f64, out: &mut Step) {
         let depth = self.cfg.max_lag();
         let mut z = Vec::with_capacity(self.cfg.n_regressors());
         out.pred.clear();
@@ -327,16 +342,9 @@ impl Ar {
                 continue;
             }
             Self::design_into(&self.cfg.lags, &self.rings[j], depth, x, &mut z);
-            let one = match floor {
-                // `predict_with_floor` sets the floor for the read and puts
-                // it back: a clone stands in for `&mut`.
-                Some(f) => self.fits[j]
-                    .clone()
-                    .predict_with_floor(&z, &[None], d_clock, f),
-                None => self.fits[j].predict(&z, d_clock),
-            };
-            out.pred[j] = one.pred[0];
+            out.pred[j] = self.fits[j].predict(&z, d_clock).pred[0];
         }
+        Self::gate(&mut out.pred, out.n_eff, floor);
     }
 }
 
@@ -383,6 +391,7 @@ impl OnlineModel for Ar {
                 ring.push_back(v);
             }
         }
+        Self::gate(&mut out.pred, out.n_eff, self.cfg.min_weight);
     }
 
     fn predict(&self, x: &[f64], d_clock: f64) -> Step {
@@ -390,7 +399,7 @@ impl OnlineModel for Ar {
             return refused;
         }
         let mut out = Step::default();
-        self.read(x, d_clock, None, &mut out);
+        self.read(x, d_clock, self.cfg.min_weight, &mut out);
         out
     }
 
@@ -406,7 +415,7 @@ impl OnlineModel for Ar {
             return refused;
         }
         let mut out = Step::default();
-        self.read(x, d_clock, Some(floor), &mut out);
+        self.read(x, d_clock, floor, &mut out);
         out
     }
 

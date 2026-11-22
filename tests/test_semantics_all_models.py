@@ -38,7 +38,7 @@ MODELS = [
     # Holt is the one model with no features, so it opts out of the shared set.
     ("holt", {"features": None}),  # no features keyword
     # The features as exogenous regressors beside two lags of the target.
-    ("ar", {"lags": 2}),
+    ("ar", {"lags": 1, "ridge": 1e-3}),
 ]
 
 #: A second configuration of a model above, swept through the same
@@ -96,6 +96,14 @@ def run(model, extra, df, **kw):
 #: without it rather than skipped.
 WITH_FEATURES = [(m, e) for m, e in SWEEP if m != "holt"]
 WITH_FEATURES_IDS = [i for (m, _), i in zip(SWEEP, IDS, strict=True) if m != "holt"]
+
+
+#: The rows a model learns nothing from before its first learned row:
+#: ``ar``'s first ``max(lags)`` values of a target are only lags (one, at
+#: the sweep's ``lags=1``), so the target's own weight, which its
+#: ``min_weight`` reads (hard rule 8), starts that many rows later than
+#: ``weight_sum``.
+HOLD_BACK = {"ar": 1}
 
 
 @pytest.mark.parametrize(("model", "extra"), WITH_FEATURES, ids=WITH_FEATURES_IDS)
@@ -224,7 +232,7 @@ class TestWarmup:
         preds = slot(out, "pred_", model)
         neff = slot(out, "weight_sum", model)
         first = next((i for i, p in enumerate(preds) if p is not None), None)
-        assert first == 13, f"{model}: first prediction on row {first}"
+        assert first == 13 + HOLD_BACK.get(model, 0), f"{model}: first prediction on row {first}"
         assert neff[first] > 12.0, "weight_sum counts every row, the null-target ones too"
 
     def test_coef_is_null_or_complete_never_empty(self, model, extra):
@@ -287,10 +295,12 @@ class TestWarmup:
         np.testing.assert_allclose(neff[:4], [0.0, 1.0, 1.0 + lam, 1.0 + lam + lam**2], rtol=1e-12)
         why = slot(out, "withheld_reason", model)
         below = [r == "below_min_weight" for r in why[:4]]
-        assert below == [True, True, False, False], f"{model}: {why[:4]}, weight_sum {neff[:4]}"
+        opens = 2 + HOLD_BACK.get(model, 0)
+        want = [i < opens for i in range(4)]
+        assert below == want, f"{model}: {why[:4]}, weight_sum {neff[:4]}"
         preds = slot(out, "pred_", model)
         if model not in ("huber", "quantile"):
-            assert preds[2] is not None, f"{model}: no prediction on row 2"
+            assert preds[opens] is not None, f"{model}: no prediction on row {opens}"
 
 
 @pytest.mark.parametrize(("model", "extra"), SWEEP, ids=IDS)

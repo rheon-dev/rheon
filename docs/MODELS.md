@@ -49,7 +49,7 @@ to start with for which question.
 | [`ftrl`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ftrl) · [entry](#ftrl--online-logistic-regression) | step | FTRL-proximal regression, logistic by default, with an L1 penalty that zeroes coefficients |
 | [`glm`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.glm) · [entry](#glm--generalized-linear-models-poisson-gamma-binomial-tweedie) | step | Poisson, Gamma, binomial and Tweedie regression, a Newton step a row on the likelihood, for counts, positive amounts, proportions and amounts with an exact zero |
 | [`holt`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.holt) · [entry](#holt--holts-linear-trend) | step | Holt's linear trend, the baseline that uses no features |
-| [`ar`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ar) · [entry](#ar--an-autoregression-on-the-targets-own-past) | solve | an autoregression for each target, AR(p), by least squares on lags the model keeps itself, with the features as exogenous regressors; `AutoReg`'s fit with no decay |
+| [`ar`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ar) · [entry](#ar--an-autoregression-on-the-targets-own-past) | solve | an autoregression for each target, AR(p), by least squares on lags the model keeps itself, with the features as further inputs, and `AutoReg`'s fit with no decay |
 | **[Moments and correlation](#moments-and-correlation)** | | track the running moments and correlations of the columns you name |
 | [`ew_cov`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ew_cov) · [entry](#ew_cov--exponentially-weighted-moments) | accumulate | running mean, variance, covariance, correlation, partial correlation, Mahalanobis distance and principal components |
 | [`marginal`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.marginal) · [entry](#marginal--every-pairs-moments-kept-in-the-state) | accumulate | every (feature, target) pair's running mean, variance, covariance, correlation, slope and t, for a wide set of columns, kept in the state and read back as a table; optionally at a set of lags, and with binned target moments for the relations a correlation cannot see |
@@ -264,6 +264,7 @@ per target, give `min_weight` a list. The default depends on the model:
 | default | models |
 |---|---|
 | one per unknown: the features, and the intercept when there is one | `lasso`, `kalman`, `huber`, `quantile`, `expectile`, `rls`, `sgd`, `pa`, `ftrl`, `glm` |
+| one per coefficient: the lags, the features, and the intercept when there is one | `ar` |
 | the feature count plus one (1 for `holt`) | `ew_cov`, `ew_class`, `kmeans`, `micro`, `holt` |
 | 3 | `marginal`, `deco` |
 | 1 | `bocpd` |
@@ -2160,7 +2161,7 @@ every spec takes are in [What every spec takes](#what-every-spec-takes);
 For lags `ℓ_1 < … < ℓ_q`, row `t`'s design is
 `z_t = (y_{t−ℓ_1}, …, y_{t−ℓ_q}, x_t)`, its lags read from the target's last
 learned values. `W_y` is the target's own weight, and `S`, `r` its running
-means of `z zᵀ` and `z·y`, kept centred:
+means of `z zᵀ` and `z·y`, kept centered:
 
 ```
 pred_t = c + β·z_t                       from the fit before the row
@@ -2209,6 +2210,8 @@ lag2: -0.309
 The fit lands within sampling error of `(2, 0.6, −0.3)` after 20,000 rows.
 
 #### See also
+
+When the lags are not of the target, or the question is not its value:
 
 - [`ewridge`](#ewridge--exponentially-weighted-ridge-regression), the same
   least squares on lag columns made in the query, for lags across columns.

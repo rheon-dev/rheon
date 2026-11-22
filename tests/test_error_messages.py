@@ -606,6 +606,7 @@ BUILDERS = {
     rp.spec.audit: dict(columns=["x0", "y"], features=None, targets=None, half_life=None),
     rp.spec.hawkes: dict(features=None, kernel_decays=[1.0, 5.0]),
     rp.spec.garch: dict(features=None, half_life=None),
+    rp.spec.ar: dict(lags=2),
 }
 
 

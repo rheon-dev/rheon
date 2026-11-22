@@ -350,6 +350,11 @@ def assert_rows_agree(base: pl.DataFrame, gated: pl.DataFrame, what: str) -> Non
 # min_weight: nesting, the boundary, and off
 
 
+#: The rows before a target's first learned row: ``ar``'s ``max(lags)``,
+#: two in ``MINIMAL``.
+HOLD_BACK = {"ar": 2}
+
+
 @pytest.mark.parametrize(
     ("kind", "variant"),
     [
@@ -371,11 +376,17 @@ def test_min_weight_withholds_exactly_the_rows_below_it_and_they_nest(kind: str,
         ws = out["weight_sum"].to_list()
         bar = max(m, floor)
         below = {i for i, w in enumerate(ws) if w < bar}
+        # `ar`'s first `max(lags)` values of the target are only lags: its
+        # own weight, which the gate reads (hard rule 8), is `weight_sum`
+        # less theirs, decayed, so at most the weight before row `max(lags)`
+        # below it.
+        slack = ws[HOLD_BACK[kind]] if kind in HOLD_BACK else 0.0
+        own_below = {i for i, w in enumerate(ws) if w < bar + slack}
         named, held = _named(out, "below_min_weight"), _withheld(out)
         what = f"{kind} on {variant}, min_weight={m}"
         print(f"{what}: {len(below)} rows below, {len(named)} named, {len(held)} withheld")
-        assert named <= below, (
-            f"{what}: named at or above the floor on rows {sorted(named - below)[:5]}"
+        assert named <= own_below, (
+            f"{what}: named at or above the floor on rows {sorted(named - own_below)[:5]}"
         )
         assert below <= held, f"{what}: rows below the floor reported: {sorted(below - held)[:5]}"
         values = [c for c in out.columns if c not in ("withheld_reason",) and not _learned(c)]

@@ -284,6 +284,7 @@ DIAGNOSTIC_READS: dict[str, set[str]] = {
             "audit",
             "hawkes",
             "garch",
+            "ar",
         )
     },
 }

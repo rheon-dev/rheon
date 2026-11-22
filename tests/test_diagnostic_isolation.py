@@ -105,6 +105,8 @@ KINDS: dict[str, Builder] = {
     # With the refit of their first rows, on by default (task 277).
     "huber": lambda **kw: rp.spec.huber("m", **kw),
     "sgd_huber": lambda **kw: rp.spec.sgd("m", loss="huber", learning_rate=0.02, **kw),
+    # One lag of the target beside the features.
+    "ar": lambda **kw: rp.spec.ar("m", lags=1, **kw),
 }
 
 ESSENTIAL_KINDS = ("ewridge", "sgd", "holt")

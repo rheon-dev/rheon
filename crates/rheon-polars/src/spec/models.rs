@@ -753,6 +753,18 @@ impl Spec {
             // where the state's size against its cap is known too; the
             // decay is checked with the spec's others.
             ModelKind::Ar { .. } => {
+                // A late target joins the lags late: a row learned under an
+                // embargo reads lags one row back, but a row predicted reads
+                // the last values learned, the embargo's span back, so the
+                // fit and its predictions would not be the same regression.
+                if self.embargo.is_some() {
+                    no.refuse(format!(
+                        "spec {:?}: embargo does not apply to ar, whose lags are the target's \
+                     last values: under a delay the rows it predicts would read older lags \
+                     than the rows it learns from. Leave embargo out.",
+                        self.name
+                    ));
+                }
                 no.take(
                     crate::stream::ar_cfg(self, rheon_core::Decay::Halflife(f64::INFINITY))
                         .map(|_| ())

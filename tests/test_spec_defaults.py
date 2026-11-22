@@ -34,6 +34,10 @@ RULES = {
     "one per unknown: the features, and the intercept when there is one": (
         lambda k, intercept: k + intercept
     ),
+    # `MINIMAL`'s `ar` has two lags.
+    "one per coefficient: the lags, the features, and the intercept when there is one": (
+        lambda k, intercept: 2 + k + intercept
+    ),
     "the feature count plus one (1 for `holt`)": lambda k, intercept: k + 1,
     "3": lambda k, intercept: 3,
     "1": lambda k, intercept: 1,
@@ -92,11 +96,11 @@ def test_the_readme_min_weight_table_is_what_the_bank_resolves():
                 got = resolved(spec)["stream"]["min_weight"]
                 assert got == [want] * len(got) and got, (name, k, intercept, got, want)
                 checked += 1
-    # 10 models by the first rule at 2 counts x 2 intercepts, 11 others at
+    # 10 models by the first rule at 2 counts x 2 intercepts, 12 others at
     # 2 counts, and `holt`, `seqtest`, `audit`, `hawkes` and `garch`, which
     # take no features (an audit's are its `columns`; a hawkes node's events
     # and a garch's returns are its targets), at one.
-    assert checked == 10 * 4 + 11 * 2 + 5
+    assert checked == 10 * 4 + 12 * 2 + 5
 
 
 def test_the_readme_readiness_gate_defaults_are_what_the_bank_resolves():

@@ -60,7 +60,7 @@ MODELS = [
     ("glm", {}),
     ("expectile", {"expectile": 0.8}),
     ("holt", {"features": None}),  # no features keyword
-    ("ar", {"lags": 2}),
+    ("ar", {"lags": 1, "ridge": 1e-3}),
 ]
 IDS = [m[0] for m in MODELS]
 
@@ -636,6 +636,10 @@ class TestUniversalProperties:
         base run scored."""
         compared = []
         kw = {"max_error_inflation": float("inf")} if model == "ewridge" else {}
+        # `ar` learns from a row only once its lag is there, so its default
+        # gate waits past the warm rows; its ridge defines the early fits.
+        if model == "ar":
+            kw = {"min_weight": 0.0}
 
         def check(df, data):
             df = binarize(df, model)

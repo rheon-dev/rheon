@@ -22,18 +22,14 @@ def ar(
     max_state_bytes: int | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
-    """An autoregression for each target, AR(p): the target regressed on its
-    own last values, and on the features if any, by exponentially weighted
-    least squares.
+    """An autoregression for each target, fitted by exponentially weighted
+    least squares on the target's own last values.
 
-    Use it to forecast a series from its own recent past: the next value of
-    a load, a price change or a sensor reading, one row ahead. The model
-    keeps each target's last values itself, so the input needs no lag
-    columns. With no decay its coefficients are those of ordinary least
-    squares on the lag design, statsmodels' ``AutoReg`` on the same rows;
-    with a ``half_life`` it follows a series whose dynamics drift. Each
-    target is its own series, with its own lags and fit; the features, if
-    any, are exogenous regressors shared by every target.
+    Use it to predict a series one row ahead from its own recent past, such
+    as the next value of a load or a sensor reading. The model keeps each
+    target's last values itself, so the input needs no lag columns. With no
+    decay its coefficients are statsmodels' ``AutoReg``'s on the same rows:
+    an AR(p), or any list of lags.
 
     .. rubric:: Parameters
 
@@ -46,7 +42,9 @@ def ar(
     its evidence. A row of weight 0, or whose target is null, is not a lag:
     the target's series is its learned values, so the next row's lags are
     the ones before it, as if it were not there, which is statsmodels'
-    ``missing="drop"``. It is still predicted.
+    ``missing="drop"``. It is still predicted. ``embargo`` is refused: under
+    a delay the rows it predicts would read older lags than the rows it
+    learns from.
 
     This model's own parameters:
 
@@ -60,8 +58,9 @@ def ar(
         side are no longer adjacent; the fit is kept, and the target's next
         ``max(lags)`` values refill them before it learns again.
     ``features``
-        Exogenous regressors, the same for every target: their coefficients
-        follow the lags'. Default none, a pure autoregression.
+        Exogenous inputs, the same for every target: their coefficients
+        follow the lags'. Each target is its own series, with its own lags
+        and fit. Default none, a pure autoregression.
     ``ridge``
         A ridge penalty on the lag and feature coefficients, on the scale of
         the weighted mean of ``z zᵀ``; never on the constant. Default 0,
@@ -118,8 +117,8 @@ def ar(
         pred_t = c + β · z_t                   from the fit before the row
         W'     = λ W + w                       weight_sum reads W
         W_y'   = λ W_y + w                     a learned row of the target only
-        S'     = (λ W_y S + w z zᵀ) / W_y'     the weighted mean of z zᵀ, centred
-        r'     = (λ W_y r + w z y) / W_y'      the weighted mean of z y, centred
+        S'     = (λ W_y S + w z zᵀ) / W_y'     the weighted mean of z zᵀ, centered
+        r'     = (λ W_y r + w z y) / W_y'      the weighted mean of z y, centered
         β      = (S + ridge I)⁻¹ r             solved after every learned row
         c      = ȳ - β · z̄                     the weighted means
 
@@ -127,7 +126,7 @@ def ar(
     present. It is appended to the target's last values; it enters ``S``
     and ``r`` only once ``max(lags)`` values precede it, since before that
     its lags do not exist (statsmodels' ``hold_back``). Every other row only
-    ages the fit by ``λ``. The moments are kept centred, so a series far
+    ages the fit by ``λ``. The moments are kept centered, so a series far
     from zero loses nothing to its level.
 
     .. rubric:: Example
