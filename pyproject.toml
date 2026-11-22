@@ -117,6 +117,10 @@ dev = [
     # on, so the policy that bounds the CI bill is enforced, not just commented.
     "pyyaml>=6.0",
     "river>=0.26.1",
+    # tests/test_tdigest.py: the `tdigest` package (Dunning's 2013 t-digest,
+    # pure Python, MIT), a second t-digest the merging digest's quantiles
+    # are held against on the same streams. The floor is the version measured.
+    "tdigest>=0.5.2.2",
     # Second opinions for the code review of 2026-09-12
     # (tests/test_second_opinion.py, docs/REVIEW-2026-09-12-PROGRESS.md):
     # statsmodels for Holt / exponential smoothing, the autocorrelation and

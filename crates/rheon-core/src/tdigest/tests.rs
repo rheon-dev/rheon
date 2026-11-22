@@ -327,3 +327,19 @@ fn a_misshapen_state_is_refused() {
     bad.hi = bad.lo;
     assert!(!bad.has_shape());
 }
+
+/// PLAN 544, part 3, the coordinator's option (C): a plain digest (no span)
+/// builds; a decayed or windowed one is refused, naming the field and the
+/// windowed DDSketch as the form that forgets.
+#[test]
+fn a_span_is_refused_naming_the_windowed_ddsketch() {
+    assert_eq!(TDigest::check_no_span(None), Ok(()));
+    assert!(TDigest::new(100.0).is_ok());
+    for field in ["half_life", "window_size", "span"] {
+        let err = TDigest::check_no_span(Some(field)).unwrap_err();
+        assert!(err.contains(field), "{err}");
+        assert!(err.contains("never forgets"), "{err}");
+        assert!(err.contains("windowed DDSketch"), "{err}");
+        assert!(err.contains("ewm_quantile with a window_size"), "{err}");
+    }
+}

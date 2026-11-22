@@ -153,6 +153,23 @@ impl TDigest {
         Ok(())
     }
 
+    /// Refuse a span: `given` names the field a spec set (a half-life, a
+    /// window), `None` when it set none. A merging digest folds a row into
+    /// a centroid's mean and cannot take it out again, so it has no decayed
+    /// or windowed form: run once at spec build, before any row.
+    pub fn check_no_span(given: Option<&str>) -> Result<(), String> {
+        match given {
+            None => Ok(()),
+            Some(field) => Err(format!(
+                "TDigest: {field} is not allowed. A merging t-digest folds each row into a \
+                 centroid's mean and cannot take it out again, so it never forgets a row and \
+                 takes no span, half-life or window. For a quantile that forgets, use the \
+                 windowed DDSketch (ewm_quantile with a window_size), whose buckets drop a row \
+                 as it leaves the window."
+            )),
+        }
+    }
+
     /// The total weight seen.
     pub fn weight(&self) -> f64 {
         self.centroids.iter().chain(&self.buffer).map(|c| c.1).sum()

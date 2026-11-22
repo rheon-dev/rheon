@@ -1376,6 +1376,24 @@ fn psquared_reads(values: Vec<f64>, levels: Vec<f64>) -> PyResult<Vec<Vec<Option
     Ok(out)
 }
 
+/// The merging t-digest's estimate at each of `levels` after every one of
+/// `values` (each of weight 1) at `compression`: the core's digest itself,
+/// with no clock, weight or group, which the agreement test with the
+/// `tdigest` package reads.
+#[pyfunction]
+fn tdigest_quantiles(
+    values: Vec<f64>,
+    compression: f64,
+    levels: Vec<f64>,
+) -> PyResult<Vec<Option<f64>>> {
+    let mut est =
+        rheon_polars::rheon_core::TDigest::new(compression).map_err(PyValueError::new_err)?;
+    for v in values {
+        est.update(v, 1.0);
+    }
+    Ok(est.quantiles(&levels))
+}
+
 /// The parameters measured in clock units, which take a duration under a
 /// temporal clock, keyed `"*"` for the shared ones and by model `type` for
 /// the rest; the rates per clock unit, which a temporal clock refuses
@@ -1571,6 +1589,7 @@ fn _rheon(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(validate_spec, m)?)?;
     m.add_function(wrap_pyfunction!(parse_duration, m)?)?;
     m.add_function(wrap_pyfunction!(psquared_reads, m)?)?;
+    m.add_function(wrap_pyfunction!(tdigest_quantiles, m)?)?;
     m.add_function(wrap_pyfunction!(format_duration, m)?)?;
     m.add_function(wrap_pyfunction!(spec_clock_fields, m)?)?;
     m.add_function(wrap_pyfunction!(format_of_path, m)?)?;
