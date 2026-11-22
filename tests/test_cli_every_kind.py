@@ -735,6 +735,35 @@ CASES: list[Case] = [
             "max_state_bytes": 1 << 20,
         },
     ),
+    # Streaming components, each method and every key.
+    Case(
+        "pca",
+        "pca",
+        {**NOCOEF, "features": F3, "n_components": 2, "max_state_bytes": 1 << 16},
+    ),
+    Case(
+        "pca_oja",
+        "pca",
+        {
+            **NOCOEF2,
+            "features": ["x1", "x2"],
+            "n_components": 1,
+            "method": "oja",
+            "learning_rate": 3.0,
+        },
+    ),
+    Case(
+        "pca_ccipca",
+        "pca",
+        {
+            **CLOSE,
+            "features": F3,
+            "method": "ccipca",
+            "clock": "t",
+            "gap_cap": 6.0,
+            "half_life": 25.0,
+        },
+    ),
     # The other stream keys, and variance targeting.
     Case(
         "garch_targeted",

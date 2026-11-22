@@ -265,6 +265,24 @@ model that only the new build has is listed as an addition and passes.
   to `arch`'s path a median 0.9 of its expected size and at most 2.6 times
   it; at 100,000 rows the median gap 0.04 to 0.14 standard errors. GARCH(2,2)
   is left out: its two `β`s are not yet held to a tolerance.
+
+- **`pca`, principal components learned one row at a time** (task 505):
+  the top `n_components` directions of the decayed covariance of the
+  features, in state of `8 (2 + 3k + qk + q)` bytes for `k` features and
+  `q` kept directions (one more than written), checked against
+  `max_state_bytes` when the spec is built. Three methods: `"svd"`, the
+  incremental SVD (scikit-learn's `IncrementalPCA` update, a row at a time,
+  under decay and weights; exact while the data's rank is at most `q`),
+  `"ccipca"` and `"oja"` (a gain, `learning_rate`, default 4). Per
+  component its variance, its share, its loadings and the row's score, read
+  before the row; a component is withheld until the test of the equality of
+  its eigenvalue with a neighbour's passes at 1% at Kish's effective size,
+  with a new `withheld_reason`, `"not_separated"`: every model's
+  `withheld_reason` enum gains the category after the six before it, and
+  no value moves. Checked against
+  `IncrementalPCA` (7.0e-13 rad), `PCA` and `eigh` on the weighted rows
+  (1.4e-14 rad), and, for the stochastic two, their definitions and their
+  convergence to `PCA`. No window: none of the three can remove a row.
 - **`hawkes`, a self-exciting point process** (task 498): each target a
   node, a value above 0 on a row an event of that mark; exponential kernels
   at the given `kernel_decays`. Each row reports every node's
