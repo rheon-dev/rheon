@@ -52,6 +52,7 @@ mod figures;
 mod formula;
 pub mod gbdt;
 pub mod gramfit;
+mod merge;
 mod pool;
 mod refresh;
 mod resid_window;
@@ -100,6 +101,7 @@ pub use checkpoint::{
 pub use defaults::resolved_defaults;
 pub use envelope::Kind as StateKind;
 pub use formula::{Formula, Literal, Node, OpNode};
+pub use merge::{Merge, MergeConfig};
 /// The Rust Polars this crate is built against, which the command line's
 /// `--version` names.
 pub use polars::VERSION as POLARS_VERSION;

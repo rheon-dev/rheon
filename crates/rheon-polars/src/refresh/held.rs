@@ -32,7 +32,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 /// Bytes written as one msgpack binary rather than an array of integers,
 /// with `serde`'s own `serialize_bytes`.
 #[derive(Debug, Clone, PartialEq)]
-pub(super) struct Bin(pub(super) Vec<u8>);
+pub(crate) struct Bin(pub(crate) Vec<u8>);
 
 impl Serialize for Bin {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {

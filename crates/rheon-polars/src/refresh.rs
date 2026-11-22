@@ -63,6 +63,7 @@ use crate::stream::usable;
 mod held;
 #[cfg(test)]
 mod held_tests;
+pub(crate) use held::Bin;
 use held::Held;
 
 /// One series' state within a group: its last value, whether it has ticked
