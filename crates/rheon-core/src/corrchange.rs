@@ -5212,7 +5212,13 @@ mod tests {
                 ..cfg(2, CorrChangeKind::Monitor)
             },
             seq_cfg(2, 8, 10, 0.0),
-            seq_cfg(2, 20, 2, 0.0),
+            // Four monitored rows between pairs, the first with information
+            // on Fisher's scale; two under `scalar`.
+            seq_cfg(2, 20, 4, 0.0),
+            CorrChangeCfg {
+                scalar: true,
+                ..seq_cfg(2, 20, 2, 0.0)
+            },
             CorrChangeCfg {
                 span_rows: 3,
                 ..cfg(2, CorrChangeKind::Window)
