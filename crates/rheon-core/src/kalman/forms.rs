@@ -439,3 +439,40 @@ pub(super) fn factor_remap(
     }
     finite
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `unsized_of` reads the entries that hold the covariance's size: the
+    /// diagonal, or on the factor `C` every entry of the lower triangle. A
+    /// lone nonzero entry at any of those makes it sized; one anywhere else,
+    /// which the factor never reads, does not.
+    #[test]
+    fn a_covariance_is_unsized_by_the_entries_the_form_reads() {
+        for k in 1..=4usize {
+            let at = |r: usize, c: usize| {
+                let mut p = vec![0.0; k * k];
+                p[r * k + c] = 1.5;
+                p
+            };
+            assert!(unsized_of::<true>(&vec![0.0; k * k], k));
+            assert!(unsized_of::<false>(&vec![0.0; k * k], k));
+            for r in 0..k {
+                for c in 0..k {
+                    let p = at(r, c);
+                    assert_eq!(
+                        unsized_of::<true>(&p, k),
+                        c > r,
+                        "factor, entry ({r}, {c}) of {k}"
+                    );
+                    assert_eq!(
+                        unsized_of::<false>(&p, k),
+                        r != c,
+                        "covariance, entry ({r}, {c}) of {k}"
+                    );
+                }
+            }
+        }
+    }
+}

@@ -787,3 +787,333 @@ fn a_state_before_schema_70_loads_under_the_prior_over_the_grid() {
         "{out:?}"
     );
 }
+
+// ---- the pieces of the read and the factor form, one at a time ----
+
+/// A model of `cfg` fed `n` rows of blobs, in the form its width gives it.
+fn fed(cfg: HmmCfg, n: usize) -> Hmm {
+    let d = cfg.n_features;
+    let mut m = Hmm::new(cfg).unwrap();
+    for (x, dt) in &super::tests_factor::blobs(d, n, 17) {
+        m.step(x, &[], *dt, 1.0);
+    }
+    m
+}
+
+/// Two states given with different shapes: the first `var·I`, the second
+/// `var` on the diagonal and `var/20` beside it.
+fn shaped_cfg(d: usize, var: f64) -> HmmCfg {
+    let mut covs = vec![0.0; 2 * d * d];
+    for i in 0..d {
+        for j in 0..d {
+            covs[i * d + j] = if i == j { var } else { 0.0 };
+            covs[d * d + i * d + j] = if i == j { var } else { var / 20.0 };
+        }
+    }
+    HmmCfg {
+        means: Some([vec![-3.0; d], vec![3.0; d]].concat()),
+        covs: Some(covs),
+        ..super::tests_factor::wide(d, Decay::Halflife(50.0))
+    }
+}
+
+/// `(W·C + P₀Ψ)/(W + P₀)` for state `s`'s co-moments `c` (row-major), its
+/// weight, `ψ` and, under a shape, the matrix `G` given for it: row-major.
+fn stabilized_matrix(c: &[f64], w: f64, p0: f64, psi: &[f64], g: Option<&[f64]>) -> Vec<f64> {
+    let d = psi.len();
+    let mut out = vec![0.0; d * d];
+    for i in 0..d {
+        for j in 0..d {
+            let prior = match g {
+                Some(g) => p0 * (psi[i] * psi[j]).sqrt() * g[i * d + j],
+                None if i == j => p0 * psi[i],
+                None => 0.0,
+            };
+            out[i * d + j] = (w * c[i * d + j] + prior) / (w + p0);
+        }
+    }
+    out
+}
+
+fn assert_close(got: &[f64], want: &[f64], what: &str) {
+    let top = want.iter().fold(0.0f64, |a, b| a.max(b.abs()));
+    for (i, (g, w)) in got.iter().zip(want).enumerate() {
+        assert!(
+            (g - w).abs() <= 1e-12 * top,
+            "{what}, entry {i}: {g} against {w}"
+        );
+    }
+}
+
+/// The matrix a state reads, in the co-moment form, is `(W·C + P₀Ψ)/(W +
+/// P₀)`: its lower triangle, entry by entry, under the diagonal prior and
+/// under each state's own shape, at a width where the entries' places in the
+/// row-major square tell apart.
+#[test]
+fn the_state_matrix_is_the_comoments_beside_the_prior() {
+    let d = 3;
+    // The diagonal prior.
+    let m = fed(super::tests_stabilized::cfg(d, 20.0, Covariance::Full), 120);
+    assert!(m.seeded && !m.factored());
+    let st = m.stabilized().unwrap();
+    for s in 0..2 {
+        let cov = &m.states[s];
+        let got = m.state_matrix(s);
+        assert_eq!(got.len(), d * d);
+        let want = stabilized_matrix(
+            &cov.comoments().to_full(),
+            cov.n_eff(),
+            st.prior_rows,
+            st.psi(),
+            None,
+        );
+        for i in 0..d {
+            for j in 0..d {
+                if j <= i {
+                    assert_close(&got[i * d + j..][..1], &want[i * d + j..][..1], "lower");
+                } else {
+                    assert_eq!(got[i * d + j], 0.0, "the upper triangle is not written");
+                }
+            }
+        }
+    }
+    // Each state's own shape.
+    let cfg = shaped_cfg(d, 0.5);
+    let covs = cfg.covs.clone().unwrap();
+    let m = fed(cfg, 60);
+    let st = m.stabilized().unwrap();
+    assert!(st.shape().is_some());
+    for s in 0..2 {
+        let cov = &m.states[s];
+        let got = m.state_matrix(s);
+        let g = &covs[s * d * d..(s + 1) * d * d];
+        let want = stabilized_matrix(
+            &cov.comoments().to_full(),
+            cov.n_eff(),
+            st.prior_rows,
+            st.psi(),
+            Some(g),
+        );
+        for i in 0..d {
+            for j in 0..=i {
+                assert_close(
+                    &got[i * d + j..][..1],
+                    &want[i * d + j..][..1],
+                    "shaped lower",
+                );
+            }
+        }
+    }
+}
+
+/// The factors a model takes up are `(W·C + P₀Ψ)/(W + P₀)` of the
+/// co-moments they were made from, at the prior's scale `ψ` it holds then:
+/// under the diagonal prior and under a shape.
+#[test]
+fn the_factors_taken_up_read_the_prior_beside_the_comoments() {
+    use super::tests_factor::old;
+    let d = 13;
+    let cases: [(&str, HmmCfg); 2] = [
+        (
+            "diagonal",
+            super::tests_factor::wide(d, Decay::Halflife(50.0)),
+        ),
+        ("shaped", shaped_cfg(d, 0.5)),
+    ];
+    for (what, cfg) in cases {
+        let covs = cfg.covs.clone();
+        let mut a = old(|| fed(cfg, 150));
+        assert!(a.seeded && !a.factored(), "{what}");
+        // A scale of the prior that is not 1, so that `ψ` and `1/ψ` differ.
+        a.stabilized
+            .as_deref_mut()
+            .unwrap()
+            .seed(&vec![2.0; d], 5.0);
+        let mut b = a.clone();
+        b.take_up_factors();
+        assert!(b.factored(), "{what}");
+        let st = a.stabilized().unwrap();
+        for s in 0..2 {
+            let cov = &a.states[s];
+            let g = covs.as_ref().map(|c| &c[s * d * d..(s + 1) * d * d]);
+            let want = stabilized_matrix(
+                &cov.comoments().to_full(),
+                cov.n_eff(),
+                st.prior_rows,
+                st.psi(),
+                g,
+            );
+            assert_close(&b.factor_states[s].matrix(), &want, what);
+        }
+    }
+}
+
+/// The factors a co-moment model caches are made for each state at its
+/// first read, under a shape too: a cache entry each, the factor of the
+/// matrix the state reads.
+#[test]
+fn the_cached_factors_are_made_under_the_diagonal_prior_and_a_shape() {
+    let d = 3;
+    let cfgs: [(&str, HmmCfg); 2] = [
+        (
+            "diagonal",
+            super::tests_stabilized::cfg(d, 20.0, Covariance::Full),
+        ),
+        ("shaped", shaped_cfg(d, 0.5)),
+    ];
+    for (what, cfg) in cfgs {
+        let mut m = fed(cfg, 120);
+        assert!(m.seeded && !m.factored(), "{what}");
+        m.factors.clear();
+        assert!(m.factors.peek(0).is_none() && m.factors.peek(1).is_none());
+        m.ensure_factors_stabilized();
+        for s in 0..2 {
+            let f = m
+                .factors
+                .peek(s)
+                .unwrap_or_else(|| panic!("{what}: state {s}"));
+            // Its `ln det` is that of the matrix the state reads.
+            let sq = m.state_matrix(s);
+            let mut full = sq.clone();
+            for i in 0..d {
+                for j in 0..i {
+                    full[j * d + i] = sq[i * d + j];
+                }
+            }
+            let want = crate::oracle::log_det(&full);
+            assert!(
+                (f.log_det() - want).abs() <= 1e-10,
+                "{what}: {} {want}",
+                f.log_det()
+            );
+        }
+    }
+    // A model still in its warm-up builds none, and so does one that keeps
+    // no full covariance.
+    let mut m = Hmm::new(super::tests_stabilized::cfg(d, 20.0, Covariance::Full)).unwrap();
+    for (x, dt) in super::tests_factor::blobs(d, 10, 17) {
+        m.step(&x, &[], dt, 1.0);
+    }
+    assert!(!m.seeded);
+    m.factors.clear();
+    m.ensure_factors_stabilized();
+    assert!(m.factors.peek(0).is_none() && m.factors.peek(1).is_none());
+}
+
+/// A factored prior moved where a state's factor cannot take the move starts
+/// that state again at the prior, as factored, over its weight and the
+/// prior's, and counts the failure.
+#[test]
+fn a_move_of_the_prior_that_leaves_no_factor_restarts_the_state_and_counts_it() {
+    let d = 13;
+    let mut m = fed(super::tests_factor::wide(d, Decay::Halflife(50.0)), 200);
+    assert!(m.factored());
+    let before = m.solve_failures;
+    // A prior held a billion times its target: bringing it back takes more
+    // from the matrix than the matrix holds.
+    let st = m.stabilized.as_deref_mut().unwrap();
+    st.held.iter_mut().for_each(|h| *h *= 1e9);
+    let saved = m.age_stabilized(0.99, &mut RowWork::default(), false);
+    assert!(saved.is_none());
+    assert_eq!(m.solve_failures, before + 2, "a failure a state");
+    let st = m.stabilized().unwrap();
+    let p0 = st.prior_rows;
+    for s in 0..2 {
+        let f = &m.factor_states[s];
+        let got = f.matrix();
+        for i in 0..d {
+            for j in 0..d {
+                let want = if i == j {
+                    st.held[i] / (f.n_eff() + p0)
+                } else {
+                    0.0
+                };
+                assert!(
+                    (got[i * d + j] - want).abs() <= 1e-12 * want.max(1e-300).max(got[0].abs()),
+                    "state {s}, ({i}, {j}): {} against {want}",
+                    got[i * d + j]
+                );
+            }
+        }
+    }
+}
+
+/// A learned row whose rotation leaves a state no factor counts the failure
+/// and starts that state again at its prior; the others learn the row.
+#[test]
+fn a_row_that_leaves_a_state_no_factor_is_counted() {
+    #[derive(serde::Serialize)]
+    struct Raw {
+        w_sum: f64,
+        m: Vec<f64>,
+        m_lo: Vec<f64>,
+        precision_scale: f64,
+        sigma: f64,
+        l: Vec<f64>,
+    }
+    let d = 13;
+    let mut m = fed(super::tests_factor::wide(d, Decay::Halflife(50.0)), 200);
+    assert!(m.factored());
+    let real = &m.factor_states[0];
+    // A factor with a pivot of 1e-300 over an entry and a pivot of the
+    // largest double: rotating a row through the first leaves the second no
+    // finite pivot.
+    let mut l = Vec::new();
+    for j in 0..d {
+        for i in j..d {
+            l.push(match (i, j) {
+                (0, 0) => 1e-300,
+                (1, 0) => f64::MAX,
+                (1, 1) => f64::MAX,
+                (a, b) if a == b => 1.0,
+                _ => 0.0,
+            });
+        }
+    }
+    let raw = Raw {
+        w_sum: real.n_eff(),
+        m: real.means().to_vec(),
+        m_lo: vec![0.0; d],
+        precision_scale: 1.0,
+        sigma: 1.0,
+        l,
+    };
+    let bytes = rmp_serde::to_vec_named(&raw).unwrap();
+    m.factor_states[0] = rmp_serde::from_slice(&bytes).unwrap();
+    let before = m.solve_failures;
+    let x: Vec<f64> = m.factor_states[0].means().iter().map(|v| v + 1.0).collect();
+    let mut work = RowWork {
+        post: vec![0.5, 0.5],
+        ..Default::default()
+    };
+    m.learn_stabilized(&x, 1.0, 1.0, &mut work);
+    assert_eq!(m.solve_failures, before + 1);
+    // That state is started again at the prior it holds, its share of the
+    // weight `1/(W' + P₀)`.
+    let f = &m.factor_states[0];
+    let st = m.stabilized().unwrap();
+    let want = st.held[0] / (f.n_eff() + st.prior_rows);
+    assert!(
+        (f.matrix()[0] - want).abs() <= 1e-12 * want,
+        "{} {want}",
+        f.matrix()[0]
+    );
+}
+
+/// A saved prior that holds a factored prior where the states hold none is
+/// refused, though the rest of it is as a state of this build writes it.
+#[test]
+fn a_saved_prior_that_does_not_fit_its_states_is_refused() {
+    let m = fed(super::tests_stabilized::cfg(3, 20.0, Covariance::Full), 120);
+    assert!(!m.factored());
+    let state = m.state();
+    assert!(Hmm::restore(&state).is_ok());
+    let mut bad = state.clone();
+    if let crate::ModelState::Hmm(h) = &mut bad.model {
+        h.stabilized.as_deref_mut().unwrap().held = vec![1.0; 3];
+    } else {
+        panic!("an hmm state");
+    }
+    let e = Hmm::restore(&bad).unwrap_err();
+    assert!(e.to_string().contains("saved prior does not fit"), "{e}");
+}

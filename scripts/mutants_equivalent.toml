@@ -3770,3 +3770,206 @@ line_has = "Some(n) if prior_scale < 1.0 =>"
 why = """at `prior_scale = 1` the mutant's limit is `n * 2 / 0`, ±inf (NaN for \
 `n = 0`); `warming_up` reads a non-finite size as not warming, so `young` \
 returns true, as the guard's other arm does"""
+
+# The survivors of CI's changed-lines pass on W6 (2875e1f9) that no test can
+# catch, each with the reason; the rest were killed by tests (the W6 section of
+# .claude/coord/mutants/LEDGER.md).
+
+[[equivalent]]
+file = "crates/rheon-core/src/clock.rs"
+function = "Decay::past_half_life"
+mutation = "replace < with <="
+line_has = "Decay::Lam(l) => l < 1.0 && d_clock * l.log2() < -1.0,"
+columns = [32]
+why = """at `l = 1`, `log2(l)` is 0, so `d_clock · 0 < −1` is false (a NaN for an \
+infinite `d_clock`, also false): the `&&` returns false there either way"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/warmup.rs"
+function = "Warmup::row_weight"
+mutation = "replace > with >="
+line_has = "if self.w > 0.0 && self.w2 > 0.0 {"
+columns = [19]
+why = """`w` is a sum of weights, none below 0 (a model refuses a negative weight \
+before its scaler), so `w = 0` means every weight was 0 and `w2 = 0` with it, and \
+the second test returns 1 there as the first does"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/lasso.rs"
+function = "<impl OnlineModel for Lasso>::step_into"
+mutation = "replace - with +"
+line_has = "let scored = |yj: &f64| row.iter().all(|p| ((yj - p) * (yj - p)).is_finite());"
+columns = [61, 72]
+why = """`(y + p)·(y − p)` overflows exactly where `(y − p)²` does: a target is at \
+most 1e100 (`INPUT_BOUND`), and a prediction beyond 1e139 or so has `fl(p ± y) = \
+p`, so the two products are the same double, while below it neither overflows \
+(squares of values under 1.3e154); the other `-` is the same product with its \
+factors swapped"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/hmm.rs"
+function = "Hmm::seed_stabilized_with"
+mutation = "replace > with >="
+line_has = "if total > 0.0 {"
+why = """at `total = 0` the pooled variances become 0/0 = NaN, which `Stabilized::seed` \
+never reads: it copies them only where the weight is above 0, and floors `ψ` from \
+the `ŝ` it holds"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/hmm/stabilized.rs"
+function = "Stabilized::observe"
+mutation = "replace match guard at.to_bits() == d_clock.to_bits() with false"
+line_has = "Some((at, lam)) if at.to_bits() == d_clock.to_bits() => lam,"
+why = """the guard is a memo: `lam` is `self.slow.factor(d_clock)` for the step it \
+was computed at, and `slow` changes only in `rebuild`, which clears the memo, so \
+recomputing it each row gives the same double"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/hmm/stabilized.rs"
+function = "Stabilized::observe"
+mutation = "replace > with >="
+line_has = "if v > 0.0 && w > 0.0 {"
+columns = [14]
+why = """`v = λ·V + w` with `V ≥ 0` is at least `w`, so `v = 0` only where `w = 0`, \
+which the second test refuses"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/hmm/factor.rs"
+function = "EwFactor::restart_at_prior"
+mutation = "replace > with >="
+line_has = ".all(|&x| x > 0.0 && x.is_finite())"
+columns = [33]
+why = """a prior entry of 0 makes a zero row and column in `R·G·R`, which only a \
+jittered factorization reaches, and the `attempts() == 0` filter below refuses it \
+as it refuses a prior that fails this test"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/hmm/factor.rs"
+function = "EwFactor::restart_at_prior"
+mutation = "replace && with ||"
+line_has = ".all(|&x| x > 0.0 && x.is_finite())"
+columns = [39]
+why = """let through, an entry below 0 gives a NaN root and an infinite one an infinite \
+matrix; neither factorizes (`SpdFactor::of` is `None`), so the state is left as it \
+is, as the guard leaves it"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/solve.rs"
+function = "FactorWork::refactor_with"
+mutation = "replace == with !="
+line_has = "if !(out.nrows() == k && out.ncols() == k) {"
+columns = [26, 46]
+why = """`out` is a kept factor taken by its order, so it is `k × k` already and the \
+branch, which would make a zero matrix of that size, never runs; run, it changes \
+nothing, since every entry of each column is written (`col.fill(0.0)` and the \
+sums) before the factorization reads it"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/solve.rs"
+function = "FactorWork::refactor_with"
+mutation = "replace && with ||"
+line_has = "if !(out.nrows() == k && out.ncols() == k) {"
+why = """as the `==` mutants of this line: `out` has the order `k` in both its sides, \
+or is the empty matrix, of which a zero matrix of order `k` is the same fresh start \
+(and at `k = 0` the same matrix)"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/solve.rs"
+function = "FactorWork::refactor_with"
+mutation = "replace + with *"
+line_has = "while t + 4 <= j + 1 {"
+columns = [30]
+why = """the mutant runs fewer blocks of four columns and the tail loop the rest; \
+each adds its column's product to `dst` one at a time, in the order of `t`, with no \
+fused multiply-add, so the sums are the same doubles in the same order"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/solve.rs"
+function = "FactorWork::refactor_with"
+mutation = "replace && with ||"
+line_has = "let ok = done && {"
+why = """the factorization reports an error for a pivot that is not positive and \
+finite (a shift to infinity, or a NaN, is refused by it: `a_shift_to_infinity_is_refused_and_moves_nothing`), \
+and an entry below a finite pivot cannot be beyond the doubles (`|a_ij| ≤ √(a_ii·a_jj)`), so \
+`is_a_factor` after a success has nothing left to refuse: a redundant guard, kept as a check"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/solve.rs"
+function = "SpdFactor::add_outer_in_place_fused"
+mutation = "replace > with >="
+line_has = "ok &= r > 0.0 && r.is_finite();"
+columns = [21]
+why = """`r = big·√(dd² + pp²)` with `big` the larger of two finite numbers is 0 only \
+where `big = 0`, and then `dd` and `pp` are 0/0 = NaN, so `r` is NaN and neither \
+test passes"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/solve.rs"
+function = "SpdFactor::add_outer_in_place_fused"
+mutation = "replace += with *="
+line_has = "chk += *li * 0.0;"
+why = """`chk` is only compared with 0: it is 0 or NaN, and stays NaN once it is one, \
+under `*=` (`NaN·x`, and `0·0`) as under `+=`"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/solve.rs"
+function = "SpdFactor::add_outer_in_place_fused"
+mutation = "replace += with -="
+line_has = "chk += *li * 0.0;"
+why = """`chk` is only compared with 0: `0 − 0` is 0 and `0 − NaN` is NaN, as the sum \
+gives; the sign of a zero is not read"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/solve.rs"
+function = "SpdFactor::diagonal"
+mutation = "replace > with >="
+line_has = "if !a.iter().all(|&x| x > 0.0 && x.is_finite()) {"
+columns = [33]
+why = """the guard is redundant: the factor made below goes through `is_a_factor`, \
+which refuses a pivot that is not positive and finite, so a 0 is refused there"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/solve.rs"
+function = "SpdFactor::diagonal"
+mutation = "replace && with ||"
+line_has = "if !a.iter().all(|&x| x > 0.0 && x.is_finite()) {"
+columns = [39]
+why = """as the `>=` mutant: `is_a_factor` refuses what the guard would have, \
+whatever the guard passes (a negative entry gives a NaN root, an infinite one an \
+infinite pivot)"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/sgd.rs"
+function = "<impl pulp::WithSimd for StandardizeLanes<'_>>::with_simd"
+mutation = "replace + with -"
+line_has = "let s = if crate::variance_is_usable(v, v + h2 * h2) {"
+why = """`variance_is_usable(var, _raw_second_moment)` reads only its first \
+argument (`var > 0.0 && var.is_finite()`), so no change to the second \
+argument's arithmetic can move the result"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/sgd.rs"
+function = "<impl pulp::WithSimd for StandardizeLanes<'_>>::with_simd"
+mutation = "replace + with *"
+line_has = "let s = if crate::variance_is_usable(v, v + h2 * h2) {"
+why = """`variance_is_usable(var, _raw_second_moment)` reads only its first \
+argument (`var > 0.0 && var.is_finite()`), so no change to the second \
+argument's arithmetic can move the result"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/sgd.rs"
+function = "<impl pulp::WithSimd for StandardizeLanes<'_>>::with_simd"
+mutation = "replace * with +"
+line_has = "let s = if crate::variance_is_usable(v, v + h2 * h2) {"
+why = """`variance_is_usable(var, _raw_second_moment)` reads only its first \
+argument (`var > 0.0 && var.is_finite()`), so no change to the second \
+argument's arithmetic can move the result"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/sgd.rs"
+function = "<impl pulp::WithSimd for StandardizeLanes<'_>>::with_simd"
+mutation = "replace * with /"
+line_has = "let s = if crate::variance_is_usable(v, v + h2 * h2) {"
+why = """`variance_is_usable(var, _raw_second_moment)` reads only its first \
+argument (`var > 0.0 && var.is_finite()`), so no change to the second \
+argument's arithmetic can move the result"""

@@ -1838,6 +1838,11 @@ mod tests {
         let mut m = Holt::new(cfg(20.0, 80.0)).unwrap();
         m.step(&[], &[Some(3.0)], 0.0, 1e-300);
         assert_eq!(m.level(), &[3.0]);
+        // The smallest normal weight is the first that is learned.
+        let mut m = Holt::new(cfg(20.0, 80.0)).unwrap();
+        m.step(&[], &[Some(3.0)], 0.0, f64::MIN_POSITIVE);
+        assert_eq!(m.level(), &[3.0]);
+        assert_eq!(m.n_eff(), f64::MIN_POSITIVE);
     }
 
     /// The line fit's spread of ages `Q` below `2⁻¹⁰²⁴`, where its

@@ -1710,6 +1710,40 @@ mod tests {
         }
     }
 
+    /// `past_half_life` is `factor(d_clock) < 1/2` read from the clock: a step
+    /// of exactly one half-life is not past it (the factor is 1/2), and one
+    /// either side of it is decided as the factor is, under both spellings of
+    /// the decay.
+    #[test]
+    fn past_half_life_is_the_strict_factor_below_one_half() {
+        let h = Decay::Halflife(2.0);
+        assert!(!h.past_half_life(2.0));
+        assert!(h.past_half_life(2.0 + 1e-9));
+        assert!(!h.past_half_life(1.0));
+        assert!(!Decay::Halflife(f64::INFINITY).past_half_life(1e300));
+        // lam = 1/2: a half-life of one unit.
+        let l = Decay::Lam(0.5);
+        assert_eq!(l.factor(1.0), 0.5);
+        assert!(!l.past_half_life(1.0));
+        assert!(!l.past_half_life(0.5));
+        assert!(l.past_half_life(2.0));
+        assert!(l.past_half_life(1.0 + 1e-9));
+        assert!(!l.past_half_life(0.0));
+        // lam = 1 is no decay, however long the step.
+        assert!(!Decay::Lam(1.0).past_half_life(1e300));
+        // Each verdict agrees with the factor itself away from the tie.
+        for &lam in &[0.1, 0.5, 0.9, 0.99] {
+            for &d in &[0.25, 0.7, 3.0, 40.0] {
+                let dec = Decay::Lam(lam);
+                assert_eq!(
+                    dec.past_half_life(d),
+                    dec.factor(d) < 0.5,
+                    "lam {lam} d {d}"
+                );
+            }
+        }
+    }
+
     /// A row-count clock has no last clock value to show a row was seen, so
     /// `started` does, from the first row on, whether or not it was accepted.
     #[test]
