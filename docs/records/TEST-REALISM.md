@@ -110,11 +110,11 @@ realistic test and nothing is left to add.
 | | F | 5 (`kalman`, `_gap`, `_noise_units` (3 rows before), `_output_only`, `_square_root`) | R\*; `_noise_units` D (3 rows: shorter than the filter's start) | none (the 3-row case freezes the form before the start, on purpose) |
 | | O | `convergence.kalman` (19, statsmodels), `long_run.kalman_p`, `test_second_opinion` (10: filterpy, statsmodels exact diffuse), `_extremes`, `_grids`, `test_river` | R | none |
 | | C | as `ewridge` | D / R | none |
-| `huber` | G | 2 (`huber`, `_origin_standardized`), and `golden_structured.rs`'s `huber_contaminated` (300 rows with +4 outliers on 8%, a cut of 1.5 in the MAD scale, no forgetting: the mean error over the last 100 rows is held under a third of least squares') | R\*, but the stream has no outlier; R (the added test) | none |
+| `huber` | G | 2 (`huber`, `_origin_standardized`), and `golden_structured.rs`'s `huber_contaminated` (300 rows with +4 outliers on 8%, a cut of 1.5 in the MAD scale, no forgetting: the mean error over the rows on which the fit's sampling error is under 0.05 is held under a third of least squares') | R\*, but the stream has no outlier; R (the added test) | none |
 | | F | 13 (`huber`, `_first_period`, `_joining`, `_mad`, `_mad_anchored`, `_mad_awaiting`, `_mad_awaiting_first_value`, `_sets`, `_sum`, `_refit`, `_refit_first_value`, `_refit_done`, `_refit_span`) | R\*; the two `_awaiting` cases (2 rows before) D, on purpose | none |
 | | O | `convergence.huber` (26, statsmodels RLM, contaminated streams), `huber_scale.huber_sgd_cuts`, `test_second_opinion` (4: `HuberRegressor`, MAD), `test_huber_options` | R | none for `feature_sets=` and `ridge_scale="sum"`: `test_second_opinion_huber_options.py` holds a smaller set to statsmodels' `WLS` at the largest set's converged `RLM` weights (0.003 off) and the sum-scale ridge to scikit-learn's `Ridge` inside the converged Huber loop on 8,000 rows with 6% outliers (the two ridge forms 2.5 apart there, the model 0.05 from the library); the solve cadence for `huber` is read off the predictions in blocks of 100 rows, each block's coefficients within 0.001 of `RLM` on the rows before it |
 | | C | as `ewridge`; the robust contamination sweep (`test_convergence_soak`, soak tier) is R | D / R | none |
-| `quantile` | G | 1, and `golden_structured.rs`'s `quantile_skewed` (noise `Exp(1) - 1`, a quantile of 0.7: the fit's shift above the mean's line is held to the noise's quantile, 0.16 expected, 0.26 measured, tolerance 0.15) | R\*; R (the added test) | none |
+| `quantile` | G | 1, and `golden_structured.rs`'s `quantile_skewed` (noise `Exp(1) - 1`, a quantile of 0.7: the fit's shift above the mean's line is held to the noise's quantile, 0.16 expected, 0.23 measured over the settled rows of 2,000, tolerance 0.15) | R\*; R (the added test) | none |
 | | F | 5 (`quantile`, `_mad`, `_refit`, `_refit_done`, `_refit_span`) | R\* | none |
 | | O | `convergence.quantile` (26, statsmodels QuantReg), `quantile_robust_sets`, `oracles.quantile_eps`, `_huge_ridge`, `_mixed_scales`, `test_second_opinion` (QuantReg, skewed noise), `test_quantile_refit` | R | none; the solve cadence is also held: blocks of 100 rows read off the predictions, each block's coefficients within 0.009 of statsmodels' `QuantReg` on the rows before it (`test_second_opinion_huber_options.py`) |
 | | C | as `ewridge` | D / R | none |
@@ -171,13 +171,13 @@ realistic test and nothing is left to add.
 | | F | 1 | R\* | none |
 | | O | `test_seqtest`: `seqtest_ref` (a scalar replay), the closed form `2^n B(n_pos + 1/2, n_neg + 1/2) / pi` through `math.lgamma`, Type I error over 20,000 fair-coin and 20,000 dependent-null streams, power at 60% and 55% | R, **no third-party library** (confseq does not build) | none: the closed form through `scipy.special.betaln` on a 70%-positive, unpatterned stream of 500 signs whose positives never fall behind (so the clip never binds), with the counts |
 | | C | Rust probe D (no sign structure by design); `test_seqtest` edge cases | D | none |
-| `deco` | G | 2 (`deco`, `_loglik`) on iid uniform features (D: a true equicorrelation of 0, nothing to track), and `golden_structured.rs`'s `deco_factor` (150 rows of one factor at a correlation of 0.6: `rho` under linear dynamics and `loglik` under `ew` at three rows). The row estimate is the paper's Lemma 2.3 `u`, biased below the correlation: for two unit normals it averages `(1 - sqrt(1 - r^2)) / r`, 1/3 at 0.6, and both dynamics' mean `rho` over the last 50 rows is asserted there, not at 0.6 | D and R | none |
+| `deco` | G | 2 (`deco`, `_loglik`) on iid uniform features (D: a true equicorrelation of 0, nothing to track), and `golden_structured.rs`'s `deco_factor` (150 rows of one factor at a correlation of 0.6: the row estimate `u` at three rows; `rho` and `loglik` are not pinned, because the level's dynamics are being replaced and `u` (the paper's Lemma 2.3, eq. 20) stays). `u` is biased below the correlation: for two unit normals it averages `(1 - sqrt(1 - r^2)) / r`, 1/3 at 0.6, and its mean over the rows once the diag's weight has reached 95% of its steady state is asserted there (0.31), not at 0.6 | D and R | none |
 | | F | 1 | R\* | none |
 | | O | `test_deco` (longhand pair sum, `ew_cov`'s mean form to the bit, scipy `multivariate_normal` for `loglik`, dense and blocked: a one-factor stream of 800 rows at a given rho), `truth_recovery.deco_level` (50 seeds) | R, **third party only for `loglik`** | the estimate and its dynamics: a longhand (no library computes DECO's `u`; `dccmidas` runs another model) |
 | | C | Rust probe D | D | none |
-| `corrchange` | G | 2 (`corrchange`, `_sequential`) on a stream with no break (D: the detector reports a null statistic), and `golden_structured.rs`'s `corrchange_break` (300 rows, a correlation of +0.9 reversed to -0.9 half way through the third span of 100: the statistic, the critical value and the flag at the three span ends, the first two quiet and the third flagged) | D and R | none (`monitor` only; `perm_block=` and `change_action="reset"` stay as section 5 item 5 says) |
+| `corrchange` | G | 2 (`corrchange`, `_sequential`) on a stream with no break (D: the detector reports a null statistic), and `golden_structured.rs`'s `corrchange_break` (300 rows, a correlation of +0.5 reversed to -0.5 half way through the third span of 100: the statistic, the critical value and the flag at the three span ends, the first two quiet and the third flagged; it was +-0.9, where a stable span of 100 rows flags 25% of the time over 40 seeds, the monitor statistic's over-size, not the 5% it is set for, against 7.5% at +-0.5 and the break flagged in 38 of 40; kept minimal, the monitor and sequential statistics being replaced) | D and R | none (`monitor` only; `change_action="reset"` stays as section 5 item 5 says) |
 | | F | 4 (`_monitor`, `_window`, `_permute_every`, `_sequential`) | R\* (two regimes) | none |
-| | O | `truth_recovery.corrchange_break` (50 seeds: size and power), `test_family_f_grids` (4), `test_corrchange` (statsmodels `S_hac_simple` for `bandwidth`), `corrchange.n_perm` (numpy), `second_opinion_regimes` | R | `perm_block=` and `change_action="reset"`: a limit and self-comparison only |
+| | O | `truth_recovery.corrchange_break` (50 seeds: size and power), `test_family_f_grids` (4), `test_corrchange` (statsmodels `S_hac_simple` for `bandwidth`), `corrchange.n_perm` (numpy), `second_opinion_regimes` | R | `change_action="reset"`: a limit and self-comparison only. `perm_block=` has a third-party oracle: `test_second_opinion_corrchange_blocks.py` holds the critical value to `scipy.stats.permutation_test` over block numbers (a window of three blocks of ten rows, 20 splits enumerated exactly), to 1e-12 at three seeds and three levels |
 | | C | Rust probe D | D | none |
 | `bocpd` | G | 3 (`bocpd`, `_on_the_clock`, `_emissions`) on a stream with no change point (D), and `golden_structured.rs`'s `bocpd_shift` and `bocpd_shift_on_the_clock` (a shift of six standard deviations at row 30: `p_change` and the run length around it, a change called within three rows and the run length 29 at row 59 asserted; on the clock the shift's own step is 20) | D and R\* | none |
 | | F | 3 (`bocpd`, `_warming` (6), `_warm_span` (6)) | R\*; the warming cases D on purpose | none |
@@ -240,8 +240,10 @@ realistic test is not an oracle:
    and `quantile`: held by reduction only.
 4. **`sgd` and `pa` with `standardize=True` or constraints**: `sgd_ref` and
    one projection.
-5. **`seqtest`'s closed form through scipy**, **`deco`'s estimate**,
-   **`corrchange(perm_block=)`**: no library found; a longhand stays.
+5. **`seqtest`'s closed form through scipy**, **`deco`'s estimate**: no
+   library found for `deco`'s; a longhand stays. (`corrchange(perm_block=)`
+   was listed here and has one: `scipy.stats.permutation_test` over block
+   numbers, added in part 4.)
 6. **A noisy contract line**: the contract probe's rows with noise, beside
    the noiseless line, so the spread outputs are read at a nonzero value
    (added, section 6).
@@ -262,7 +264,7 @@ model, the structure asserted found before the signature is pinned).
 | `micro` | `66efac4` | the same blobs; the default linkage reads three far-apart summaries as one shape, a given link keeps three |
 | `hmm` | `07cf4c0` | two regimes of 15 rows at -1.5 and +1.5 |
 | `bocpd` | `6948c45` | a shift of six standard deviations at row 30, per row and on the clock |
-| `corrchange` | `a2211c5` | a correlation of +0.9 reversed to -0.9 inside a span of 100 |
+| `corrchange` | `a2211c5` | a correlation of +0.9 reversed to -0.9 inside a span of 100 (moved to +-0.5 in part 4, below) |
 | `deco` | `ec63cd6` | one factor at a correlation of 0.6; the estimate averages 1/3 there |
 | `rcov` | `aa4f216` | 300 returns at a correlation of 0.7 |
 | `hawkes` | `ea277c7` | 300 events of a simulated process (baseline 0.4, branching 0.5) |
@@ -299,8 +301,8 @@ golden stream had none for the option or family that the model is for
 | `holt` | `d75c0fd` | `10 + 0.5 t` and noise |
 
 Left: `pa`'s projection (no converged limit to hold to a library: its step
-is not a descent on the loss), `deco`'s estimate and `corrchange(perm_block=)`
-(no library computes them; the longhand stays), and the rows of section 3
+is not a descent on the loss), `deco`'s estimate
+(no library computes it; the longhand stays), and the rows of section 3
 whose "missing" cell is not in section 5: the state fixtures of `glm`, `holt`
 and `hawkes` on streams drawn from their family (a fixture freezes a form, not
 a fit; a new case there means a new set under every schema's directory, which
@@ -308,3 +310,27 @@ this part did not take on), and the option-level cells of the other regression
 goldens (`ewridge`'s conditioning, `lasso`'s selection, `kalman`'s drift,
 `sgd`'s and `ftrl`'s later rows, `ftrl`'s sparse regime).
 
+## 7. Part 4: corrections, and the early-data guards
+
+Corrections to the parts above:
+
+| item | commit | what changed |
+|---|---|---|
+| `corrchange(perm_block=)` | this part | it has a third-party oracle after all: `scipy.stats.permutation_test` over block numbers (`tests/test_second_opinion_corrchange_blocks.py`; a window of three blocks of ten rows, so 20 splits enumerated exactly, against a model critical value drawn from 4,000 of them: equal to 1e-12 at alpha 0.05, 0.15 and 0.25 and three seeds). The record's "no library" was wrong |
+| `corrchange` golden | this part | the stable spans move from +-0.9 to +-0.5: the monitor statistic over-sizes (a stable span of 100 rows flags 25% of the time at 0.9, 7.5% at 0.5, over 40 seeds; the comment said 5%), and the break is still flagged (38 of 40 seeds at 0.5). The golden stays minimal because the monitor and sequential statistics are being replaced |
+| `deco` golden | this part | pins `u` (Lemma 2.3, eq. 20: stays) at three rows and no longer pins `rho` or `loglik`, which the level's replacement moves |
+
+No fixed row count as the fix for an early-data problem. Where a test of
+this task guarded early data with a count, it now uses the condition:
+
+| where | was | now |
+|---|---|---|
+| `deco_factor` | the mean of `u` over rows 100 to 149 | the rows whose diag weight has reached 95% of its steady state `1 / (1 - lambda)` |
+| `huber_contaminated` | the mean error over rows 200 on | the rows on which the fit's sampling error, 0.21 over the root of its `n_eff`, is under 0.05 (half the tolerance) |
+| `quantile_skewed`, `expectile_skewed` | the mean error over rows 300 on, of 600 | the rows on which 1.22 (quantile) or 1.56 (expectile) over the root of `n_eff` is under 0.075 or 0.05; the stream is 2,000 rows so that the condition is reached; the first three probes are unchanged |
+
+Left as counts, and why: the probe rows (`BLOB_AT`, rows 100/200/299 and the
+like) only choose where a number is pinned, not what is read as converged;
+`kmeans`' and `hmm`'s `warm_rows` are the models' own settings under test;
+`holt_trend` asserts the forecast at three rows as pins of a model with
+half-lives of 10 and 40, not as a guard.
