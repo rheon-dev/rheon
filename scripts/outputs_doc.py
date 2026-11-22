@@ -209,12 +209,15 @@ ALSO_NULL: dict[str, str] = {
     "rho": "while withheld, and until the row after the first `u`",
     "stat": "while withheld, and on every row but those a test is due on",
     "crit": "where `stat` is",
-    "flag": "where `stat` is",
+    "flag": (
+        'where `stat` is; and on a `"monitor"` span past `crit` whose two columns\' scale ratio '
+        "moved inside it (`withheld_reason` `scale_ratio_moved`)"
+    ),
     "since_flag": "where `stat` is",
     "since_change": (
         'on every row but a flag\'s; and on a `"sequential"` flag of the test between pairs '
-        "(without `scalar`) that has fewer than two monitored rows before it, or where either "
-        "column of the flagged pair is constant over those rows"
+        "(without `scalar`) where either column of the flagged pair is constant over the "
+        "monitored rows before it"
     ),
     "p_change": WITHHELD,
     "run_mode": WITHHELD,
@@ -345,9 +348,9 @@ SHARED_FIELDS: list[tuple[str, str, str]] = [
     (
         "withheld_reason",
         "why the row's predictions are null: `below_min_settled_frac`, `below_min_weight`, "
-        "`above_max_error_inflation`, `below_warm_rows`, `ill_conditioned`, `unstable_rate` or "
-        "`not_identified`. That order is their precedence, so the first that applies is the one "
-        "named. `below_warm_rows` is the model's own warm-up, the rows `kmeans`, `hmm` and "
+        "`above_max_error_inflation`, `below_warm_rows`, `ill_conditioned`, `unstable_rate`, "
+        "`not_identified` or `scale_ratio_moved`. That order is their precedence, so the first "
+        "that applies is the one named. `below_warm_rows` is the model's own warm-up, the rows `kmeans`, `hmm` and "
         "`bocpd` hold to seed themselves from, the rows `garch` buffers for a target's start, "
         "and, in a `kalman` fit standardized with no intercept, the rows before any of a "
         "target's coefficients is sized. `ill_conditioned` is an `ewridge` "
@@ -355,7 +358,9 @@ SHARED_FIELDS: list[tuple[str, str, str]] = [
         "`unstable_rate` is an `sgd` target whose learning rate is past its stability bound: its "
         "recent steps' gains have a mean square above twice their mean, so each step grows its "
         "own row's residual and the fit diverges. `not_identified` is a `garch` start whose rows "
-        "do not yet tell its variance process from a constant variance, so it buffers more",
+        "do not yet tell its variance process from a constant variance, so it buffers more. "
+        "`scale_ratio_moved` is a `corrchange` span past its critical value whose two columns' "
+        "scale ratio moved inside it, so its `flag` is null",
         "where nothing was withheld",
     ),
     (

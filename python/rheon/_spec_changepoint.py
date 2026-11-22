@@ -544,6 +544,9 @@ def corrchange(
     monitor_rows: int | None = None,
     boundary_gamma: float | None = None,
     permute_every: float | Duration | None = None,
+    window_size: float | Duration | None = None,
+    monitor_span: float | Duration | None = None,
+    max_state_bytes: int | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Tests of whether the correlations between the feature columns have changed, by
@@ -937,8 +940,14 @@ def corrchange(
         "monitor_rows": monitor_rows,
         "boundary_gamma": boundary_gamma,
     }
-    # Written only when given, as the Rust spec leaves it out when absent.
-    if permute_every is not None:
-        model["permute_every"] = permute_every
+    # Written only when given, as the Rust spec leaves them out when absent.
+    for key, value in (
+        ("permute_every", permute_every),
+        ("window_size", window_size),
+        ("monitor_span", monitor_span),
+        ("max_state_bytes", max_state_bytes),
+    ):
+        if value is not None:
+            model[key] = value
     targets = _mirror_target(name, "corrchange", features, common, "its test is of")
     return _common(name, model, targets=targets, features=features, **common)

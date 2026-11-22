@@ -506,10 +506,24 @@ impl CorrChangeCfg {
                         self.span_rows
                     ));
                 }
-                if self.monitor_clock.is_none() && self.monitor_rows < 2 {
+                // A period with no row the detector can read reports nothing,
+                // ever: a pair's Fisher `z` carries the information `k − 3`,
+                // none before the fourth monitored row; `scalar`'s mean needs
+                // a second row to differ from the first.
+                if self.monitor_clock.is_none() && !self.scalar && self.monitor_rows < 4 {
+                    no.refuse(format!(
+                        "corrchange: kind=\"sequential\" needs monitor_rows of at least 4, but it \
+                         is {}: each pair's monitored correlation is compared on Fisher's scale, \
+                         where k rows carry the information k - 3, so a period of fewer than four \
+                         rows reports nothing. Set monitor_rows to 4 or more.",
+                        self.monitor_rows
+                    ));
+                }
+                if self.monitor_clock.is_none() && self.scalar && self.monitor_rows < 2 {
                     no.refuse(format!(
                         "corrchange: kind=\"sequential\" needs monitor_rows of at least 2, but it \
-                         is {}: a correlation needs two rows. Set monitor_rows to 2 or more.",
+                         is {}: the monitored mean is compared from its second row. Set \
+                         monitor_rows to 2 or more.",
                         self.monitor_rows
                     ));
                 }
@@ -5097,7 +5111,14 @@ mod tests {
             assert!(e.contains(msg), "{e}");
         };
         bad(seq_cfg(2, 7, 10, 0.0), "window_rows of at least 8");
-        bad(seq_cfg(2, 20, 1, 0.0), "monitor_rows of at least 2");
+        bad(seq_cfg(2, 20, 3, 0.0), "monitor_rows of at least 4");
+        assert!(CorrChange::new(seq_cfg(2, 20, 4, 0.0)).is_ok());
+        let scalar = |k: usize| CorrChangeCfg {
+            scalar: true,
+            ..seq_cfg(2, 20, k, 0.0)
+        };
+        bad(scalar(1), "monitor_rows of at least 2");
+        assert!(CorrChange::new(scalar(2)).is_ok());
         for g in [0.5, -0.1, f64::NAN, f64::INFINITY] {
             bad(
                 seq_cfg(2, 20, 10, g),

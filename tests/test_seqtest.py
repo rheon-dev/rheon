@@ -828,6 +828,7 @@ class TestEdgeCases:
                         "ill_conditioned",
                         "unstable_rate",
                         "not_identified",
+                        "scale_ratio_moved",
                     ]
                 ),
             }
