@@ -26,6 +26,10 @@
 
 use rheon_core::*;
 
+#[path = "garch_series/mod.rs"]
+mod garch_series;
+use garch_series::Innovations;
+
 /// Deterministic pseudo-random stream, no external rng dependency.
 fn lcg(state: &mut u64) -> f64 {
     *state = state
@@ -83,7 +87,16 @@ fn check(name: &str, got: &[f64], want: &[f64]) {
     if std::env::var("PRINT_GOLDEN").is_ok_and(|v| v == "1") {
         // `{v:?}` prints the shortest representation that round-trips, which
         // avoids clippy's excessive-precision lint on the embedded constants.
-        let vals: Vec<String> = got.iter().map(|v| format!("{v:?}")).collect();
+        let vals: Vec<String> = got
+            .iter()
+            .map(|v| {
+                if v.is_nan() {
+                    "f64::NAN".to_owned()
+                } else {
+                    format!("{v:?}")
+                }
+            })
+            .collect();
         println!("GOLDEN {name}: &[{}];", vals.join(", "));
         // A printing run compared nothing: it fails, so it never stands for
         // a test run (review S20).
@@ -91,8 +104,9 @@ fn check(name: &str, got: &[f64], want: &[f64]) {
     }
     assert_eq!(got.len(), want.len(), "{name}: wrong signature length");
     for (i, (g, w)) in got.iter().zip(want).enumerate() {
+        // a number withheld is pinned as withheld
         assert!(
-            (g - w).abs() <= 1e-12 * (1.0 + w.abs()),
+            (g.is_nan() && w.is_nan()) || (g - w).abs() <= 1e-12 * (1.0 + w.abs()),
             "{name}[{i}]: got {g:.17e}, want {w:.17e}"
         );
     }
@@ -909,8 +923,12 @@ fn expectile_window_golden() {
 /// FIGARCH's 2,000, so the 60 alone would leave it a few): the variance,
 /// the standardized residual and the forecast on three rows after the
 /// start, then the fit at the end. Each with a cap too small to double its
-/// start. The start's optimizer, the step, its projection in `H`'s metric
-/// and the process's own arithmetic move every one.
+/// start. A degenerate case, kept as an edge test (PLAN 550): the stream is
+/// a linear target with no conditional variance, so the start's
+/// likelihood-ratio statistic against constant variance is under its cut,
+/// every start is withheld and buffered afresh, and every number is
+/// withheld (PLAN 548). The realistic cases below pin the start's
+/// optimizer, the step and its projection.
 fn garch_signature(vol: GarchVol, dist: GarchDist, targeting: bool) -> Vec<f64> {
     let fig = vol == GarchVol::Figarch;
     let mut m = Garch::new(GarchCfg {
@@ -980,6 +998,123 @@ fn garch_egarch_golden() {
 fn garch_figarch_golden() {
     let got = garch_signature(GarchVol::Figarch, GarchDist::Normal, false);
     check_bits("garch_figarch", &got, GOLDEN_GARCH_FIGARCH);
+}
+
+/// `garch` on a series of the process it models, at the truth `arch` is
+/// held to (`tests/test_second_opinion_garch.py`): 2,500 rows, the default
+/// start of 2,000 rows, unit weights (PLAN 550's realistic case beside the
+/// degenerate one above, whose start has no conditional variance to find
+/// and now waits). The variance, the standardized residual and the forecast
+/// (four rows past, but EGARCH's one) on rows 2,100, 2,300 and 2,499, then
+/// the parameters at the end. The series calls no platform math library
+/// (`garch_series`), so these are the same bits on every platform.
+fn garch_realistic(vol: GarchVol, dist: GarchDist, targeting: bool, ys: &[f64]) -> Vec<f64> {
+    let mut m = Garch::new(GarchCfg {
+        n_targets: 1,
+        vol,
+        dist,
+        truncation: None,
+        variance_targeting: targeting,
+        start_rows: 2000,
+        start_span: None,
+        horizon: if vol == GarchVol::Egarch { 1 } else { 5 },
+        min_weight: 0.0,
+        max_state_bytes: None,
+    })
+    .unwrap();
+    let mut got = Vec::new();
+    for (i, y) in ys.iter().enumerate() {
+        let step = m.step(&[], &[Some(*y)], 1.0, 1.0);
+        if [2100, 2300, 2499].contains(&i) {
+            got.extend(&step.pred);
+        }
+    }
+    assert!(m.started()[0], "the start's rows identify the process");
+    got.extend(&m.coefficients()[0]);
+    got
+}
+
+const GARCH_TRUTH: [f64; 4] = [0.05, 0.08, 0.0, 0.90];
+const GJR_TRUTH: [f64; 4] = [0.03, 0.05, 0.10, 0.87];
+
+#[test]
+fn garch_realistic_golden() {
+    let ys = garch_series::gjr(GARCH_TRUTH, Innovations::Normal, 2500, 1);
+    let got = garch_realistic(GarchVol::Garch, GarchDist::Normal, false, &ys);
+    check_bits("garch_realistic", &got, GOLDEN_GARCH_REALISTIC);
+}
+
+#[test]
+fn garch_targeted_realistic_golden() {
+    let ys = garch_series::gjr([0.02, 0.08, 0.0, 0.90], Innovations::Normal, 2500, 2);
+    let got = garch_realistic(GarchVol::Garch, GarchDist::Normal, true, &ys);
+    check_bits(
+        "garch_targeted_realistic",
+        &got,
+        GOLDEN_GARCH_TARGETED_REALISTIC,
+    );
+}
+
+#[test]
+fn garch_gjr_realistic_golden() {
+    let ys = garch_series::gjr(GJR_TRUTH, Innovations::Normal, 2500, 3);
+    let got = garch_realistic(GarchVol::Gjr, GarchDist::Normal, false, &ys);
+    check_bits("garch_gjr_realistic", &got, GOLDEN_GARCH_GJR_REALISTIC);
+}
+
+#[test]
+fn garch_egarch_realistic_golden() {
+    let ys = garch_series::egarch([0.0, 0.15, -0.08, 0.97], 2500, 4);
+    let got = garch_realistic(GarchVol::Egarch, GarchDist::Normal, false, &ys);
+    check_bits(
+        "garch_egarch_realistic",
+        &got,
+        GOLDEN_GARCH_EGARCH_REALISTIC,
+    );
+}
+
+#[test]
+fn garch_figarch_realistic_golden() {
+    let ys = garch_series::figarch([0.03, 0.2, 0.4, 0.5], 1000, 2500, 5);
+    let got = garch_realistic(GarchVol::Figarch, GarchDist::Normal, false, &ys);
+    check_bits(
+        "garch_figarch_realistic",
+        &got,
+        GOLDEN_GARCH_FIGARCH_REALISTIC,
+    );
+}
+
+#[test]
+fn garch_t_realistic_golden() {
+    let ys = garch_series::gjr(GARCH_TRUTH, Innovations::T6, 2500, 6);
+    let got = garch_realistic(GarchVol::Garch, GarchDist::T, false, &ys);
+    check_bits("garch_t_realistic", &got, GOLDEN_GARCH_T_REALISTIC);
+}
+
+/// The t at persistence 0.90, `(0.1, 0.1, 0.8)`.
+#[test]
+fn garch_t_low_persistence_golden() {
+    let ys = garch_series::gjr([0.1, 0.1, 0.0, 0.8], Innovations::T6, 2500, 7);
+    let got = garch_realistic(GarchVol::Garch, GarchDist::T, false, &ys);
+    check_bits(
+        "garch_t_low_persistence",
+        &got,
+        GOLDEN_GARCH_T_LOW_PERSISTENCE,
+    );
+}
+
+#[test]
+fn garch_skewt_realistic_golden() {
+    let ys = garch_series::gjr(GARCH_TRUTH, Innovations::SkewT6(-0.2), 2500, 8);
+    let got = garch_realistic(GarchVol::Garch, GarchDist::Skewt, false, &ys);
+    check_bits("garch_skewt_realistic", &got, GOLDEN_GARCH_SKEWT_REALISTIC);
+}
+
+#[test]
+fn garch_gjr_t_realistic_golden() {
+    let ys = garch_series::gjr(GJR_TRUTH, Innovations::T6, 2500, 9);
+    let got = garch_realistic(GarchVol::Gjr, GarchDist::T, false, &ys);
+    check_bits("garch_gjr_t_realistic", &got, GOLDEN_GARCH_GJR_T_REALISTIC);
 }
 
 /// The pre-averaged estimate on the same stream: the other arithmetic.
@@ -2223,89 +2358,221 @@ const GOLDEN_MICRO_FLOOR: &[f64] = &[0.3004267420269594, 1.161118351411367, 0.81
 const GOLDEN_RCOV_PREAVG_PSD: &[f64] =
     &[11.307541539663788, -0.7389071190718174, 18.691806669414845];
 const GOLDEN_GARCH: &[f64] = &[
-    1.2108998802068602,
-    -0.47785740288782463,
-    1.2120885356982583,
-    1.212881609358623,
-    -0.4774668573167028,
-    1.2142919536890726,
-    1.2122601339010206,
-    -0.1346433457628595,
-    1.215023369448347,
-    1.140525065313368,
-    0.008633024030424888,
-    0.05212194327608843,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
 ];
 const GOLDEN_GARCH_TARGETED: &[f64] = &[
-    1.1117541656092444,
-    -0.4987099737962726,
-    1.1117064674442008,
-    1.1263210268610877,
-    -0.49547453710131417,
-    1.126298401302637,
-    1.1499536511966575,
-    -0.1382428371782492,
-    1.152823328312314,
-    1.131675265072415,
-    0.010115653704239613,
-    1.117672555172954e-18,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
 ];
 const GOLDEN_GARCH_GJR_T: &[f64] = &[
-    1.3440985440375877,
-    -0.45356222927686257,
-    1.625075608819203,
-    1.4622740480349048,
-    -0.4348485741277257,
-    1.5631193032854673,
-    1.3258174237423648,
-    -0.1287481346319557,
-    1.336015862083225,
-    0.49317589315899235,
-    0.07903029035596597,
-    -0.06584522130067265,
-    0.5837856386352385,
-    4.37107846241176,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
 ];
 const GOLDEN_GARCH_SKEWT: &[f64] = &[
-    1.1574361104270534,
-    -0.4887693033923383,
-    1.149393806442804,
-    1.1575081906389688,
-    -0.4887540848635464,
-    1.1546819926141083,
-    1.1554981938647124,
-    -0.1379107661237784,
-    1.1570973722492008,
-    1.149416587740333,
-    0.0065193892498572855,
-    0.0,
-    157.86305407187004,
-    0.22802612393924798,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
 ];
 const GOLDEN_GARCH_EGARCH: &[f64] = &[
-    1.216802049743502,
-    -0.47669705644938837,
-    1.183382764085924,
-    -0.48338126818516286,
-    1.203152391672448,
-    -0.13515200322847765,
-    0.1671016306446541,
-    0.0275083618210369,
-    -0.0019494464700335386,
-    0.10095928577172958,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
 ];
 const GOLDEN_GARCH_FIGARCH: &[f64] = &[
-    1.1435675635018685,
-    -0.49172413194548387,
-    1.1435703217368482,
-    1.143423850652333,
-    -0.49175503249728425,
-    1.1434277584347905,
-    1.144253004293067,
-    -0.1385867709473622,
-    1.1445351483908612,
-    0.6058692416900168,
-    0.4703691616694057,
-    7.253076774657642e-19,
-    0.4695558273481083,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+];
+const GOLDEN_GARCH_REALISTIC: &[f64] = &[
+    2.2399589474984163,
+    -0.727664650290237,
+    2.2219621790100286,
+    1.6963910313546728,
+    0.03311181645164273,
+    1.7450322055127563,
+    1.6821436824777916,
+    1.3101133530662716,
+    1.7283180776263207,
+    0.06204666892870737,
+    0.06647116055943113,
+    0.9038518417965252,
+];
+const GOLDEN_GARCH_TARGETED_REALISTIC: &[f64] = &[
+    0.9949557097392965,
+    0.6697869730267316,
+    0.9869391845608312,
+    0.5845801290178484,
+    1.4824140245744857,
+    0.6076356166942833,
+    1.5989122167611232,
+    0.1674656286367991,
+    1.546284265907806,
+    0.017697936123760687,
+    0.07901947063002264,
+    0.9014151625116107,
+];
+const GOLDEN_GARCH_GJR_REALISTIC: &[f64] = &[
+    0.6957581299499292,
+    -0.7765016170142898,
+    0.7440189323922475,
+    1.6647155976298975,
+    -0.34741537159647373,
+    1.5891310258171312,
+    1.329196214346552,
+    0.5278220056374964,
+    1.2914196310249186,
+    0.03867863132859658,
+    0.07031250265564645,
+    0.09628848609412849,
+    0.8448664387362972,
+];
+const GOLDEN_GARCH_EGARCH_REALISTIC: &[f64] = &[
+    0.5335048315756751,
+    -0.0945140560276713,
+    1.3526435148288876,
+    -1.4297205226217766,
+    2.6581900669492162,
+    0.44762947637609185,
+    -0.005263731925161575,
+    0.14292607726452722,
+    -0.09394030945738703,
+    0.9685660216164435,
+];
+const GOLDEN_GARCH_FIGARCH_REALISTIC: &[f64] = &[
+    0.39857348364694856,
+    -1.026908584366157,
+    0.3999136067672373,
+    0.428903421965956,
+    -0.5086366140567313,
+    0.44168157307532596,
+    0.24858950048201273,
+    0.06590265675494203,
+    0.29325100332608156,
+    0.0323399409875803,
+    0.2393473448668678,
+    0.3265372342419699,
+    0.4587686140715305,
+];
+const GOLDEN_GARCH_T_REALISTIC: &[f64] = &[
+    2.2885496942968775,
+    0.1603749979725027,
+    2.297274104176434,
+    1.0120613568512764,
+    0.19068359152910785,
+    1.156773710662873,
+    2.6129661337355947,
+    0.4844816887283076,
+    2.56087583115259,
+    0.06900346251738707,
+    0.088405421257835,
+    0.8798915769497312,
+    7.3123446077751915,
+];
+const GOLDEN_GARCH_T_LOW_PERSISTENCE: &[f64] = &[
+    0.7759270295334134,
+    -0.4709311869580696,
+    0.8559123344287154,
+    0.6851240521286311,
+    -0.5758610993529932,
+    0.782619621277854,
+    1.0028983182918356,
+    -0.23741988745156573,
+    0.9828288037937298,
+    0.08466421653019822,
+    0.10798964854289916,
+    0.8016825284821371,
+    6.774316512544334,
+];
+const GOLDEN_GARCH_SKEWT_REALISTIC: &[f64] = &[
+    2.8167569753019492,
+    -0.6190502808173738,
+    2.6825102611870455,
+    1.2468102828207452,
+    -0.3600732663796168,
+    1.2983459614253783,
+    1.3185241083003951,
+    -1.79375181690488,
+    1.3637097264676832,
+    0.04402310635217727,
+    0.06254476813741976,
+    0.9129694209409008,
+    6.926672507282499,
+    -0.20847350554841632,
+];
+const GOLDEN_GARCH_GJR_T_REALISTIC: &[f64] = &[
+    1.2758366452078276,
+    -0.9848155860088434,
+    1.2192427614221337,
+    0.7389351386485398,
+    0.9455510641880728,
+    0.7401976431214408,
+    0.3534741623503383,
+    -3.315999459195701,
+    0.4015018694337203,
+    0.024661551390733224,
+    0.035612763820360764,
+    0.12241777500356756,
+    0.8699205611467933,
+    7.114105652321648,
 ];

@@ -98,7 +98,9 @@ def main() -> None:
                 (50, 500, 2000),
                 "iid",
             )
-    (OUT / "manifest.csv").write_text("name,vol,dist,start,set\n" + "\n".join(rows) + "\n")
+    (OUT / "manifest.csv").write_text(
+        "name,vol,dist,start,set\n" + "\n".join(rows) + "\n", encoding="utf-8"
+    )
     print(len(rows), "runs")
 
 

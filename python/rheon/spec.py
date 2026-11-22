@@ -439,13 +439,14 @@ releases none. A regression writes, with ``<t>`` a target:
 ``withheld_reason``
     Which gate withheld the row's predictions, as an ``Enum``, and null where
     no gate did. ``below_min_settled_frac``, ``below_min_weight``,
-    ``above_max_error_inflation``, ``below_warm_rows``, ``ill_conditioned``
-    and ``unstable_rate`` are named in that order, the first that withheld
-    anything.
+    ``above_max_error_inflation``, ``below_warm_rows``, ``ill_conditioned``,
+    ``unstable_rate`` and ``not_identified`` are named in that order, the
+    first that withheld anything.
     ``below_warm_rows`` is the model's own warm-up: the rows ``kmeans``,
     ``hmm`` and ``bocpd`` hold to seed their centres, states or prior from
-    (``warm_rows``), a count of rows, where ``min_weight`` is a weight, and
-    the rows ``kalman`` takes a target's prior from before it is sized.
+    (``warm_rows``), a count of rows, where ``min_weight`` is a weight, the
+    rows ``kalman`` takes a target's prior from before it is sized, and the
+    rows ``garch`` buffers for a target's start.
     ``ill_conditioned`` is an ``ewridge`` fit withheld because its normal
     equations are past the condition at which a solve keeps a digit: its
     ``coef`` and ``support_coef`` are null too, and the solve is counted in
@@ -454,7 +455,10 @@ releases none. A regression writes, with ``<t>`` a target:
     learning rate is past its stability bound: its recent steps' gains
     ``q`` have a mean square above twice their mean, so each step grows its
     own row's residual in mean square, and the fit diverges; the ``sgd``
-    builder's docstring has the gain. Fields null for another reason,
+    builder's docstring has the gain. ``not_identified`` is a ``garch``
+    start whose rows do not yet tell its variance process from a constant
+    variance, so it buffers more rows before it reports; the ``garch``
+    builder's docstring has the test. Fields null for another reason,
     such as a skipped row or a statistic not yet due, leave it null. An
     ``Enum`` rather than a string, because a string column costs sixteen
     bytes a row even when every value is null.

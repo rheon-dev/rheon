@@ -76,11 +76,16 @@ def garch(
         running mean the whole stream shares. Default False.
     ``start_rows``
         The rows the start buffers and fits, each target's own; they report
-        nothing. Default 2,000, at least 50, and at least 2,000 for
-        ``vol="figarch"``. A start whose fit does not converge, or sits on a
-        bound of the process's parameters, waits for twice the rows and
-        refits, at most twice, while ``max_state_bytes`` holds the doubled
-        buffer. Refused beside ``start_span``.
+        nothing (``withheld_reason`` ``below_warm_rows``). Default 2,000, at
+        least 50, and at least 2,000 for ``vol="figarch"``. A start whose
+        rows do not tell its process from a constant variance, by the test
+        under "The start" below, waits for twice the rows and refits, at
+        most twice, while ``max_state_bytes`` holds the doubled buffer, and
+        then buffers afresh, reporting nothing (``not_identified``) until a
+        start passes. A start that passes but whose fit is not at its
+        optimum, or sits on a bound of the process's parameters, waits and
+        refits the same way, and with no doubling left is stepped from.
+        Refused beside ``start_span``.
     ``start_span``
         The start as a span of the clock in place of ``start_rows``, in
         clock units: a number of the clock column's units, or a duration
@@ -236,11 +241,30 @@ def garch(
     ``β``); projected in ``H``'s own metric it is.
 
     **The start.** Its rows report nothing, and its fit is made by the
-    model's own projected Newton on their likelihood, from a small grid.
-    2,000 rows keep a series from starting far enough off that the
-    ``1/W`` gain takes the rest of the stream to recover; a FIGARCH needs
-    them for its ring of 1,000 lags to hold returns rather than the
-    backcast.
+    model's own projected Newton on their likelihood, from a small grid,
+    run until a step is at the parameters' rounding: where a step's gain is
+    under the likelihood's own rounding, whether it is taken is read from
+    the slopes at its two ends, not from the likelihood's last bits. A fit
+    is at its optimum when its Newton decrement ``½ gᵀ M⁻¹ g`` (``M`` the
+    observed curvature) is at most ``10⁻⁶`` nats. 2,000 rows keep a series
+    from starting far enough off that the ``1/W`` gain takes the rest of
+    the stream to recover; a FIGARCH needs them for its ring of 1,000 lags
+    to hold returns rather than the backcast.
+
+    **The test before a start reports.** A series with no conditional
+    variance to find leaves the likelihood flat along a ridge, where ``β``
+    is not identified once ``α`` is 0, and any fit there is noise. So the
+    start's fit is stepped from only when its likelihood-ratio statistic
+    against a constant variance (the normal's, or the t's with its own
+    shape fitted), ``2 (l_fit - l_const)``, reaches χ² at 0.999 for the
+    restrictions a constant variance puts on the process: 13.8 for
+    ``garch`` and the variance-targeted GARCH (``α = β = 0``), 16.3 for
+    ``gjr`` and ``egarch`` (``α = γ = β = 0``) and ``figarch`` (``d = 0``,
+    ``φ = β``). The weights enter at Kish's count, the statistic read as
+    ``2 (l_fit - l_const) Σw / Σw²``, so scaling every weight changes
+    nothing. On simulated series of persistence 0.97 to 0.985, and of
+    0.90, it passed every 2,000-row start; on returns with no conditional
+    variance it passed none, at starts of 500 to 2,000 rows.
     """
     model: dict[str, Any] = {"type": "garch"}
     # Each absent when not given, as the Rust spec leaves it out, so a bank

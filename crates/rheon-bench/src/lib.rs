@@ -227,6 +227,12 @@ enum Shape {
     /// classes `c` with `j % classes == c` (a class past the features has
     /// none raised, and its rows still carry its label).
     Classes(usize),
+    /// Each target a series of returns of a GARCH(1,1) at `(0.05, 0.15,
+    /// 0.8)`, normal innovations (twelve uniforms less six), its variance
+    /// started at its long-run level: what `garch` is for. A start on
+    /// returns with no conditional variance waits, so on `Linear` targets a
+    /// `garch` case would time its start's buffer, not its step (PLAN 548).
+    Garch,
 }
 
 /// Rows in the layout a model steps them: features row-major, targets
@@ -249,6 +255,8 @@ impl Rows {
         let (mut x, mut y) = (Vec::with_capacity(n * k), Vec::with_capacity(n * m));
         let (mut d, mut t) = (Vec::with_capacity(n), Vec::with_capacity(n));
         let mut clock = 1_000.0;
+        // each target's variance and last return, for `Shape::Garch`
+        let mut garch: Vec<(f64, f64)> = vec![(1.0, 0.0); m];
         for i in 0..n {
             let row = x.len();
             match shape {
@@ -267,6 +275,15 @@ impl Rows {
                     x.extend((0..k).map(|j| g.signed() + if j % c == label { 2.0 } else { 0.0 }));
                     y.extend((0..m).map(|_| Some(label as f64)));
                 }
+                Shape::Garch => {
+                    x.extend((0..k).map(|_| g.signed()));
+                    for (s, e) in garch.iter_mut() {
+                        *s = 0.05 + 0.15 * *e * *e + 0.8 * *s;
+                        let z = (0..12).map(|_| g.next()).sum::<f64>() - 6.0;
+                        *e = (*s).sqrt() * z;
+                        y.push(Some(*e));
+                    }
+                }
             }
             let fit: f64 = x[row..]
                 .iter()
@@ -276,7 +293,7 @@ impl Rows {
             // With no features, a column whose sign a sequential test
             // watches: either sign, a small drift up.
             let (level, noise) = if k == 0 { (0.05, 1.0) } else { (0.5, 0.3) };
-            if !matches!(shape, Shape::Labelled | Shape::Classes(_)) {
+            if !matches!(shape, Shape::Labelled | Shape::Classes(_) | Shape::Garch) {
                 y.extend((0..m).map(|j| Some(level + fit + j as f64 + noise * g.signed())));
             }
             let step = if i == 0 { 0.0 } else { step_of(g.next()) };
@@ -502,7 +519,8 @@ fn case_spec(id: &str) -> (Value, Shape) {
             (s, shape)
         }
         // The start's rows fit within the warm-up (500, doubled at most
-        // twice); FIGARCH's 2,000 under a cap that holds no doubling.
+        // twice); FIGARCH's 2,000 under a cap that holds no doubling. Each
+        // on a GARCH series, whose start tells it from a constant variance.
         "garch" => (
             json!({
                 "name": "m",
@@ -510,7 +528,7 @@ fn case_spec(id: &str) -> (Value, Shape) {
                 "targets": ["y0"],
                 "features": [],
             }),
-            Shape::Linear,
+            Shape::Garch,
         ),
         "garch_figarch" => (
             json!({
@@ -519,7 +537,7 @@ fn case_spec(id: &str) -> (Value, Shape) {
                 "targets": ["y0"],
                 "features": [],
             }),
-            Shape::Linear,
+            Shape::Garch,
         ),
         "hawkes" => (
             json!({

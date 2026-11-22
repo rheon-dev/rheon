@@ -2743,8 +2743,11 @@ fn new_after_load(
         .iter()
         .map(|k| {
             let n = now.column(k.name()).unwrap();
+            // A kept frame's `withheld_reason` names are a prefix of today's
+            // (`same_series`): read in today's dtype, as its values are.
+            let k = k.as_materialized_series().cast(n.dtype()).unwrap();
             n.as_materialized_series()
-                .zip_with(&new, k.as_materialized_series())
+                .zip_with(&new, &k)
                 .unwrap()
                 .into_column()
         })

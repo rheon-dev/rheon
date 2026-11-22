@@ -1119,7 +1119,9 @@ fn model_case(id: &str, n: usize) -> ModelCase {
                 "targets": names("y", if dim == "targets" { n } else { 1 }),
                 "features": [],
             });
-            let c = ModelCase::new(s, lin);
+            // a GARCH series a target: on returns with no conditional
+            // variance a start waits, and the rows timed would be its buffer
+            let c = ModelCase::new(s, Shape::Garch);
             // every start fitted, its refits included, before the rows timed
             match dim {
                 "history" => c.warm(n.max(1000)),

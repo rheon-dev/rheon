@@ -1465,7 +1465,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 115] = [
+    const FORMS: [(&str, &[&str]); 117] = [
         // Schema 70 (rule 5's twenty-second exception): the stabilized
         // prior's `ŝ` and `V` under `full` in each form and under `diag`,
         // the factor form's `f`, and a spec's own `prior_rows`.
@@ -1607,25 +1607,35 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         // start's buffer, then each process's lags once started, the
         // targeted GARCH's Huber score, a skewed t's shape, EGARCH's
         // binned residuals and FIGARCH's ring, and a start of a clock span's
-        // stamp.
+        // stamp. Started on realistic series (PLAN 550): the degenerate
+        // cases' starts now wait (PLAN 548), and `garch_started` holds the
+        // fit such a wait withheld.
         ("garch", &["model", "Garch", "series", "1", "buffer"]),
-        ("garch_started", &["model", "Garch", "series", "0", "h"]),
+        ("garch_started", &["model", "Garch", "series", "0", "theta"]),
+        ("garch_realistic", &["model", "Garch", "series", "0", "h"]),
         (
-            "garch_started",
+            "garch_realistic",
             &["model", "Garch", "series", "0", "filter", "sens"],
         ),
+        ("garch_t_realistic", &["model", "Garch", "series", "1", "h"]),
         (
-            "garch_targeted",
+            "garch_targeted_realistic",
             &["model", "Garch", "series", "0", "kappa"],
         ),
         (
-            "garch_targeted",
+            "garch_targeted_realistic",
             &["model", "Garch", "series", "0", "slope"],
         ),
-        ("garch_skewt", &["model", "Garch", "series", "0", "theta"]),
-        ("garch_egarch", &["model", "Garch", "series", "0", "zbins"]),
         (
-            "garch_figarch",
+            "garch_skewt_realistic",
+            &["model", "Garch", "series", "0", "theta"],
+        ),
+        (
+            "garch_egarch_realistic",
+            &["model", "Garch", "series", "0", "zbins"],
+        ),
+        (
+            "garch_figarch_realistic",
             &["model", "Garch", "series", "0", "filter", "ring"],
         ),
         ("garch_span", &["model", "Garch", "series", "0", "buffer"]),

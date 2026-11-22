@@ -45,6 +45,7 @@ REASONS = {
     "below_warm_rows",
     "ill_conditioned",
     "unstable_rate",
+    "not_identified",
 }
 
 

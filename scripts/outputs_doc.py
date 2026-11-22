@@ -345,15 +345,17 @@ SHARED_FIELDS: list[tuple[str, str, str]] = [
     (
         "withheld_reason",
         "why the row's predictions are null: `below_min_settled_frac`, `below_min_weight`, "
-        "`above_max_error_inflation`, `below_warm_rows`, `ill_conditioned` or `unstable_rate`. "
-        "That order is their precedence, so the first that applies is the one named. "
-        "`below_warm_rows` is the model's own warm-up, the rows `kmeans`, `hmm` and `bocpd` hold "
-        "to seed themselves from, and, in a `kalman` fit standardized with no intercept, the "
-        "rows before any of a target's coefficients is sized. `ill_conditioned` is an `ewridge` "
+        "`above_max_error_inflation`, `below_warm_rows`, `ill_conditioned`, `unstable_rate` or "
+        "`not_identified`. That order is their precedence, so the first that applies is the one "
+        "named. `below_warm_rows` is the model's own warm-up, the rows `kmeans`, `hmm` and "
+        "`bocpd` hold to seed themselves from, the rows `garch` buffers for a target's start, "
+        "and, in a `kalman` fit standardized with no intercept, the rows before any of a "
+        "target's coefficients is sized. `ill_conditioned` is an `ewridge` "
         "fit whose normal equations are too nearly singular for a solve to keep a digit. "
         "`unstable_rate` is an `sgd` target whose learning rate is past its stability bound: its "
         "recent steps' gains have a mean square above twice their mean, so each step grows its "
-        "own row's residual and the fit diverges",
+        "own row's residual and the fit diverges. `not_identified` is a `garch` start whose rows "
+        "do not yet tell its variance process from a constant variance, so it buffers more",
         "where nothing was withheld",
     ),
     (

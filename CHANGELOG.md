@@ -438,6 +438,52 @@ model that only the new build has is listed as an addition and passes.
   13% slower and `egarch`'s 14%, on arm64, where the crate's `ln` is 1.4
   times Apple's and its `exp` 1.8 times. Moves: `garch.*`.
 
+- **`garch` reports only a process its start's rows identify, and its
+  start is judged by where it is, not by how it stopped** (PLAN 548, from
+  the study of PLAN 549). Three changes to the start. (1) A start's fit is
+  at its optimum when its Newton decrement `½ gᵀ M⁻¹ g` is at most 1e-6
+  nats (the weights at Kish's count). Before, a fit was sound only if the
+  iteration stopped by its step-size test; at an optimum it could as well
+  stop for want of an ascent, its decrement at most 1.6e-12 nats, and that
+  coin, tossed by `ln`'s last bits, doubled the start in 25 of 25 path
+  switches between two math libraries on realistic series. Where such a
+  stop was not an optimum its decrement was 0.07 nats or more, so the cut
+  sits six orders above the one and five below the other. (2) The Newton
+  runs to its rounding: a step whose gain is under the likelihood's own
+  rounding (`1e-10 (1 + |f|)`) stands when the slopes at its two ends say
+  the likelihood did not fall, as `glm`'s refit does, and the fit stops
+  once a step is at the parameters' rounding. (3) **A start waits for a
+  real GARCH effect**: its fit is withheld until its likelihood-ratio
+  statistic against constant variance, `2 (f − f₀) Σw/Σw²`, reaches
+  chi-squared at 0.999 for the restrictions constant variance puts on the
+  process, 13.8 for `garch` and the targeted form (2) and 16.3 for `gjr`,
+  `egarch` and `figarch` (3); a t's shape is fitted in both. A withheld
+  start doubles its rows at most twice, as an unsound one does, then
+  buffers afresh; its rows report nothing, named `not_identified`, a new
+  `withheld_reason` (after `unstable_rate`), and the start's own rows are
+  now named `below_warm_rows`, where they were named nothing. On returns
+  with no conditional variance it withheld every first start of 500, 1,000
+  and 2,000 rows (900 series) and 899 of 900 series for all 10,000 of
+  their rows; on realistic series (persistence 0.97 to 0.985, and 0.90) no
+  start of 2,000 rows, 15 of 650 of 1,000 rows and 122 of 650 of 500 rows,
+  each of which started on twice or four times the rows. Against `arch`
+  on each start's own rows (50 seeds of 13 truths): no start of 1,000 or
+  2,000 rows short of `arch`'s fit by more than 9.1e-13 nats (1.8e-12
+  before), and of 500 rows 2 short by more than 0.01 (4 before), local
+  maxima the grid's best point chose; starting from the three best grid
+  points as well fixed one of the two at 2.5 times the start's cost, and
+  was not taken. At 10,000 rows against `arch`'s batch fit, every form
+  holds 50 of 50 within 2 SE and the same 90th-percentile D and excess;
+  one skewed-t series took another start (D 0.002 to 0.061), and every
+  other number moved by under 1e-4. The degenerate goldens and state
+  fixtures, whose start's rows are a linear target, now withhold; goldens
+  and fixtures of every form on its `arch` truth are added beside them. A
+  start's fit costs 1.13 to 1.20 times what it did under the normal, and
+  1.9 to 2.6 times with a t, which fits the constant-variance null's shape
+  too (2,000 rows: 2.2 ms for `garch`, 70 ms with a t, 144 with a skewed
+  t, once a start, on arm64); a row after the start costs what it did.
+  Moves: `garch.*`.
+
 - **`glm`'s refit gives the same fit on every platform** (W9's CI on
   1819e678: the committed `glm_refit_done` state fixture failed on Windows
   and the golden pipeline's `glm.pred_y0_sq` on Linux x86-64, 2.1e-8 from
