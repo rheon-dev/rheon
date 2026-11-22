@@ -1185,6 +1185,12 @@ pub enum ModelKind {
         /// default 0.
         #[serde(default)]
         boundary_gamma: Option<f64>,
+        /// `"window"`: the critical value redrawn every this long on the
+        /// clock, beside `permute_every_rows`' count of reports, whichever
+        /// comes first (docs/PLAN.md task 538); the count's default is then
+        /// none. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        permute_every: Option<Span>,
     },
     /// Bayesian online changepoint detection (docs/ENHANCEMENTS.md E61): a
     /// posterior over how long the current run has lasted, updated one row
@@ -1931,10 +1937,8 @@ pub const RENAMED: &[(&str, &str)] = &[
     ("cd_tol", "tol"),
     ("reset", "change_action"),
     // Task 196 (docs/PLAN.md §18, N14): a count of rows says so, so that a
-    // clock form can come later under the plain name.
-    ("update_every", "update_every_rows"),
-    ("split_merge_every", "split_merge_every_rows"),
-    ("permute_every", "permute_every_rows"),
+    // clock form could come later under the plain name; task 538 gave
+    // `update_every`, `split_merge_every` and `permute_every` theirs.
     // N16: holt's level takes the spec's `half_life`, one knob under one
     // name.
     ("level_half_life", "half_life"),

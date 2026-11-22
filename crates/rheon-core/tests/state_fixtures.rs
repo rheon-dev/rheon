@@ -1465,7 +1465,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 103] = [
+    const FORMS: [(&str, &[&str]); 105] = [
         // Schema 70 (rule 5's twenty-second exception): the stabilized
         // prior's `ŝ` and `V` under `full` in each form and under `diag`,
         // the factor form's `f`, and a spec's own `prior_rows`.
@@ -1659,6 +1659,14 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         ("bocpd_warm_span", &["model", "Bocpd", "cfg", "warm_clock"]),
         ("bocpd_warm_span", &["model", "Bocpd", "place"]),
         ("bocpd_warm_span", &["model", "Bocpd", "warm"]),
+        (
+            "corrchange_permute_every",
+            &["model", "CorrChange", "cfg", "permute_every"],
+        ),
+        (
+            "corrchange_permute_every",
+            &["model", "CorrChange", "since_draw"],
+        ),
     ];
     // Each refit's first stamp, written only under a span (task 538): in
     // glm on the summed clock, in expectile an integer stamp.

@@ -56,12 +56,9 @@ RENAMED = {
     "max_cd_iters": "max_iter",
     "cd_tol": "tol",
     "reset": "change_action",
-    # Task 196 (docs/PLAN.md §18, N14 and N16): the row counts say so, and
-    # holt's level takes the spec's `half_life`, which `level_halflife`
-    # now names directly.
-    "update_every": "update_every_rows",
-    "split_merge_every": "split_merge_every_rows",
-    "permute_every": "permute_every_rows",
+    # Task 196 (docs/PLAN.md §18, N16): holt's level takes the spec's
+    # `half_life`, which `level_halflife` now names directly. Its row counts
+    # (N14) left their plain names to the clock forms task 538 gave them.
     "level_half_life": "half_life",
 }
 
@@ -77,15 +74,12 @@ def test_the_builders_table_is_the_plans():
 #: names the new parameter only to a builder that takes it.
 _TAKES_THE_NEW_NAME = {
     "reset": "corrchange",
-    "permute_every": "corrchange",
     "trend_halflife": "holt",
     "revert_halflife": "kalman",
     "coef_halflife": "kalman",
     "select_halflife": "lasso",
     "max_cd_iters": "lasso",
     "cd_tol": "lasso",
-    "update_every": "kmeans",
-    "split_merge_every": "kmeans",
 }
 _KW = {
     "corrchange": {"features": ["x0", "x1"]},
@@ -366,9 +360,6 @@ def test_with_windows_takes_an_old_spec_parameter_name_as_an_output_name(name):
 #: The parameters task 196 renamed or dropped (docs/PLAN.md §18, N14 N16):
 #: old name -> new name.
 RENAMED_196 = {
-    "update_every": "update_every_rows",
-    "split_merge_every": "split_merge_every_rows",
-    "permute_every": "permute_every_rows",
     "level_half_life": "half_life",
 }
 
@@ -382,9 +373,6 @@ def test_the_task_196_renames_are_in_the_builders_table():
 @pytest.mark.parametrize(
     ("builder", "kw", "old"),
     [
-        (rp.spec.kmeans, dict(features=["x0", "x1"], n_clusters=2), "update_every"),
-        (rp.spec.kmeans, dict(features=["x0", "x1"], n_clusters=2), "split_merge_every"),
-        (rp.spec.corrchange, dict(features=["x0", "x1"], kind="window"), "permute_every"),
         (rp.spec.holt, dict(targets=["y"], half_life=None), "level_half_life"),
     ],
 )
@@ -396,18 +384,6 @@ def test_a_task_196_parameter_is_refused_by_its_own_builder_naming_the_new_one(b
 @pytest.mark.parametrize(
     ("model", "old"),
     [
-        (
-            {"type": "kmeans", "n_clusters": 2, "update_every": 1},
-            "update_every was renamed update_every_rows",
-        ),
-        (
-            {"type": "kmeans", "n_clusters": 2, "split_merge_every": 10},
-            "split_merge_every was renamed split_merge_every_rows",
-        ),
-        (
-            {"type": "corrchange", "kind": "window", "window_rows": 20, "permute_every": 10},
-            "permute_every was renamed permute_every_rows",
-        ),
         ({"type": "holt", "level_half_life": 10.0}, "level_half_life was renamed half_life"),
         ({"type": "ew_ridge"}, "ew_ridge was renamed ewridge"),
     ],

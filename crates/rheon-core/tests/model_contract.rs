@@ -1512,6 +1512,7 @@ fn corrchange_cfg() -> CorrChangeCfg {
         reset: false,
         monitor_rows: 0,
         boundary_gamma: 0.0,
+        permute_every: None,
     }
 }
 

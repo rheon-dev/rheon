@@ -67,6 +67,7 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
     ),
     ("hmm", &["warm_span"]),
     ("bocpd", &["warm_span"]),
+    ("corrchange", &["permute_every"]),
     ("ew_class", &["window_size", "snapshot_every"]),
     ("marginal", &["window_size", "snapshot_every"]),
     ("hawkes", &["window_size", "kernel_half_lives"]),
@@ -456,6 +457,9 @@ impl Spec {
             }
             ModelKind::Micro { prune_every, .. } => {
                 put(&mut out, "prune_every", prune_every.as_ref());
+            }
+            ModelKind::CorrChange { permute_every, .. } => {
+                put(&mut out, "permute_every", permute_every.as_ref());
             }
             ModelKind::Hmm { warm_span, .. } => {
                 put(&mut out, "warm_span", warm_span.as_ref());

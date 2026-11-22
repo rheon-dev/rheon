@@ -631,6 +631,7 @@ fn corrchange_cfg(kind: CorrChangeKind) -> CorrChangeCfg {
         reset: false,
         monitor_rows: 15,
         boundary_gamma: 0.0,
+        permute_every: None,
     }
 }
 
@@ -2177,6 +2178,22 @@ pub fn all() -> Vec<Case> {
             Targets::None,
             40
         ),
+        // Task 538: the window's redraw on the clock, saved between draws.
+        case!(
+            "corrchange_permute_every",
+            "CorrChange",
+            CorrChange,
+            CorrChange::new(CorrChangeCfg {
+                span_rows: 16,
+                permute_every_rows: usize::MAX,
+                permute_every: Some(6.0),
+                ..corrchange_cfg(CorrChangeKind::Window)
+            })
+            .unwrap(),
+            K,
+            Targets::None,
+            40
+        ),
         case!(
             "corrchange_sequential",
             "CorrChange",
@@ -2186,8 +2203,6 @@ pub fn all() -> Vec<Case> {
             Targets::None,
             40
         ),
-        // Saved with its warm-up buffer still filling: 10 learned rows
-        // wanted, 5 held (schema 40's `WarmRow`), as `kmeans_warming` is.
         // Task 538: a warm-up over a span of the clock, saved inside it.
         case!(
             "bocpd_warm_span",
@@ -2203,6 +2218,8 @@ pub fn all() -> Vec<Case> {
             Targets::None,
             6
         ),
+        // Saved with its warm-up buffer still filling: 10 learned rows
+        // wanted, 5 held (schema 40's `WarmRow`), as `kmeans_warming` is.
         case!(
             "bocpd_warming",
             "Bocpd",

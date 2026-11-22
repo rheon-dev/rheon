@@ -332,6 +332,7 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
     "kmeans": frozenset({"warm_span", "update_every", "split_merge_every"}),
     "hmm": frozenset({"warm_span"}),
     "bocpd": frozenset({"warm_span"}),
+    "corrchange": frozenset({"permute_every"}),
 }
 
 
@@ -513,11 +514,11 @@ _RENAMED = {
     "max_cd_iters": "max_iter",
     "cd_tol": "tol",
     "reset": "change_action",
-    # Task 196 (docs/PLAN.md §18, N14 and N16): a count of rows says so, and
-    # holt's level takes the spec's `half_life`, one knob under one name.
-    "update_every": "update_every_rows",
-    "split_merge_every": "split_merge_every_rows",
-    "permute_every": "permute_every_rows",
+    # Task 196 (docs/PLAN.md §18, N16): holt's level takes the spec's
+    # `half_life`, one knob under one name. Its counts of rows (N14) took
+    # their `_rows` names so that a clock form could come later under the
+    # plain name: task 538 gave `update_every`, `split_merge_every` and
+    # `permute_every` those clock forms.
     "level_half_life": "half_life",
 }
 

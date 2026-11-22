@@ -948,6 +948,19 @@ CASES: list[Case] = [
             "bandwidth": 3,
         },
     ),
+    # Task 538: the window's redraw on the clock.
+    Case(
+        "corrchange_window_span",
+        "corrchange",
+        {
+            **NODECAY,
+            "features": F3,
+            "kind": "window",
+            "window_rows": 20,
+            "n_perm": 30,
+            "permute_every": 8.0,
+        },
+    ),
     Case(
         "corrchange_seq",
         "corrchange",

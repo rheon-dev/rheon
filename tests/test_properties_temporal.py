@@ -473,6 +473,13 @@ def clock_specs(draw, model: str, step: int, cap: int):
         kw |= maybe("huber_scale_half_life", 1, 60)
     elif model == "marginal":
         kw |= xy | maybe("window_size", 1, 60)
+    elif model == "corrchange":
+        # Task 538: the window's redraw on the clock, or a count of reports.
+        kw |= dict(features=["x0", "x1"], kind="window", window_rows=4, n_perm=20)
+        if draw(st.booleans()):
+            kw["permute_every"] = steps(0, 6)
+        else:
+            kw["permute_every_rows"] = draw(st.integers(1, 4))
     elif model == "hmm":
         # Task 538: the warm-up over a span, or a count of rows.
         kw |= dict(features=["x0", "x1"], n_components=2, half_life=steps(1, 30))

@@ -688,6 +688,7 @@ fn corrchange_golden() {
         reset: false,
         monitor_rows: 0,
         boundary_gamma: 0.0,
+        permute_every: None,
     })
     .unwrap();
     let mut out = Vec::new();
@@ -1585,6 +1586,7 @@ fn corrchange_sequential_golden() {
         reset: false,
         monitor_rows: 20,
         boundary_gamma: 0.25,
+        permute_every: None,
     })
     .unwrap();
     let mut out = Vec::new();

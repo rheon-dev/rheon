@@ -91,6 +91,7 @@ use std::collections::VecDeque;
 
 use serde::{Deserialize, Serialize};
 
+use crate::since::Since;
 use crate::window_moments::WindowSums;
 use crate::{Decay, EwDiag, SplitMix64};
 
@@ -287,6 +288,12 @@ pub struct CorrChangeCfg {
     /// solve's work grows as `1/(1/2 − γ)`.
     #[serde(default)]
     pub boundary_gamma: f64,
+    /// `window`: the permutation critical value redrawn every this many
+    /// clock units as well as every `permute_every_rows` reports, whichever
+    /// comes first (docs/PLAN.md task 538); `0` is every report. Last, and
+    /// written only when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permute_every: Option<f64>,
 }
 
 /// The largest `boundary_gamma` a configuration may give. W&G's boundary
@@ -550,6 +557,15 @@ impl CorrChangeCfg {
                          permute_every_rows to 1 or more.",
                     );
                 }
+                if let Some(d) = self.permute_every
+                    && (d.is_nan() || d < 0.0)
+                {
+                    no.refuse(format!(
+                        "corrchange: permute_every must be at least 0 clock units, but it is \
+                         {d}. Set permute_every to a span of the clock, 0 for every report, or \
+                         leave it out."
+                    ));
+                }
                 if self.scalar {
                     no.refuse(
                         "corrchange: scalar applies only under kind=\"monitor\" or \
@@ -667,6 +683,10 @@ pub struct CorrChange {
     /// `window`: the step's buffers between rows ([`Work`]).
     #[serde(skip)]
     work: Work,
+    /// `window` under `permute_every` (task 538): the clock since the
+    /// critical value was drawn. Written only where it is kept, last.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    since_draw: Option<Since>,
 }
 
 /// `window`'s buffers between rows, so a row allocates nothing (task 335,
@@ -813,8 +833,20 @@ impl CorrChange {
             ring_rows: 0,
             sums,
             work: Work::default(),
+            since_draw: cfg.permute_every.map(|_| Since::default()),
             cfg,
         })
+    }
+
+    /// Whether the critical value in force is due to be drawn again: every
+    /// `permute_every_rows` reports, or `permute_every` clock units since
+    /// it was drawn (task 538).
+    fn redraw_due(&self) -> bool {
+        let by_clock = match (&self.since_draw, self.cfg.permute_every) {
+            (Some(s), Some(every)) => every <= 0.0 || s.reached(every),
+            _ => false,
+        };
+        self.since_perm >= self.cfg.permute_every_rows || by_clock
     }
 
     /// `window`'s merged sums, or `None` where its windows are read whole:
@@ -1856,6 +1888,9 @@ impl crate::OnlineModel for CorrChange {
         out.n_eff = self.n_eff;
         out.extra = None;
         let lam = self.cfg.decay.factor(d_clock);
+        if let Some(s) = self.since_draw.as_mut() {
+            s.step(d_clock);
+        }
         if weight <= 0.0 {
             // Hard rule 8: `n_eff` is the accumulated weight before the
             // row's update and before its own decay, and a zero-weight row
@@ -1914,13 +1949,31 @@ impl crate::OnlineModel for CorrChange {
                     // for one more, and `1` redrew every other row (review
                     // 2026-10-06, CD11; docs/PLAN.md task 196, S1).
                     self.since_perm = self.since_perm.saturating_add(1);
-                    if self.perm_crit.is_none() || self.since_perm >= self.cfg.permute_every_rows {
+                    if self.perm_crit.is_none() || self.redraw_due() {
                         self.perm_crit = self.permutation_crit();
                         self.since_perm = 0;
+                        if let Some(s) = self.since_draw.as_mut() {
+                            s.restart();
+                        }
                     }
                 }
                 self.ready_sums();
             }
+        }
+    }
+
+    /// The redraw's clock reads the row's stamp (task 538).
+    fn stamp_next(&mut self, stamp: crate::Stamp) {
+        if let Some(s) = self.since_draw.as_mut() {
+            s.stamp_next(stamp);
+        }
+    }
+
+    /// On the row clock the redraw's clock counts from a row before the
+    /// first, as every cadence does.
+    fn stamp_next_on_rows(&mut self, stamp: crate::Stamp) {
+        if let Some(s) = self.since_draw.as_mut() {
+            s.stamp_next_on_rows(stamp);
         }
     }
 
@@ -2021,6 +2074,10 @@ impl crate::OnlineModel for CorrChange {
         Self::n_outputs_for()
     }
 }
+
+#[cfg(test)]
+#[path = "corrchange_span_tests.rs"]
+mod span_tests;
 
 #[cfg(test)]
 mod tests {
@@ -2278,6 +2335,7 @@ mod tests {
             reset: false,
             monitor_rows: 0,
             boundary_gamma: 0.0,
+            permute_every: None,
         }
     }
 

@@ -650,8 +650,8 @@ Per row, in order:
 5. If not yet seeded, append the row to the buffer; when it is full, seed (§6.3)
    and stop.
 6. Otherwise apply §6.1 to the nearest center.
-7. Every `update_every` learned rows, a checkpoint (a no-op at 1); every
-   `split_merge_every` learned rows, the split–merge move.
+7. Every `update_every_rows` learned rows, a checkpoint (a no-op at 1); every
+   `split_merge_every_rows` learned rows, the split–merge move.
 
 **The split–merge move** is the one non-obvious piece and the one that earns
 its place. At a checkpoint, compute the pairwise center distances (O(k²)) and
@@ -822,7 +822,7 @@ reset-on-aggregate, which is a simplification, not a compromise.
 
 | model | doubles of state | for `k=5, p=4` |
 |---|---|---|
-| `kmeans` | `k(p + 2) + 2p + 4` (+ `k(p+2)` when `update_every > 1`) | 42 |
+| `kmeans` | `k(p + 2) + 2p + 4` (+ `k(p+2)` when `update_every_rows > 1`) | 42 |
 | `gmm` | `k(p + 1) + k·{1, p, p²} + 2p + 4` | 57 diag, 117 full |
 | `dpmeans` | `M(p + 3) + 2p + 4` | 362 at `M = 50` |
 | `micro` | `M(p + 5) + 2p + 4` | 1 812 at `M = 200` |
@@ -836,12 +836,12 @@ All of it is preallocated at construction, which is the existing rule.
 ### 6.8 Parallelism
 
 The same trick that made the boosted trees parallel applies, and for the same
-reason: with `update_every > 1` the centers are frozen between checkpoints, so
+reason: with `update_every_rows > 1` the centers are frozen between checkpoints, so
 the rows of a segment are independent and their contributions are plain weighted
 sums (`S_j`, `W_j`, `Q_j` per cluster) that add across threads in any order.
 The checkpoint schedule counts learned rows, never chunks, so it is invariant.
 Measured cost of the coarser grain: **none worth reporting** — ARI 0.998 at
-`update_every` 1, 10, 100 and 1 000 (§7.5). Unlike boosting, though, the per-row
+`update_every_rows` 1, 10, 100 and 1 000 (§7.5). Unlike boosting, though, the per-row
 work here is `O(k·p)` and tiny, so the parallel form is a convenience rather
 than a necessity.
 
@@ -1027,7 +1027,7 @@ perpetual-motion machine (3 901 moves in 20 000 rows) and ends up worse than
 leaving the duplicate alone. The failure the move exists to fix is not fully
 eliminated — 1 stream in 20 still misses — so it is a mitigation, not a proof.
 
-**`update_every`** (the data-parallel form): ARI 0.998–1.000 at 1, 10, 100 and
+**`update_every_rows`** (the data-parallel form): ARI 0.998–1.000 at 1, 10, 100 and
 1 000. The coarser grain costs nothing measurable.
 
 **DP-means radius** (in σ), on the drifting stream — clusters found against a
@@ -1310,8 +1310,8 @@ one behind a static schema.
 **Parameters**, mapped onto names the library already uses:
 `halflife`, `min_periods`, the per-model `standardize` flag (`spec.rs:358` and
 its siblings — but read as a metric here, §6.1), `coef_every`, plus per model
-`k`, `warm_rows`, `seed_rule`, `seed`, `update_every`, `split_merge`,
-`split_merge_every`, and for the variable-`k` models `radius` / `eps`, `beta_mu`,
+`k`, `warm_rows`, `seed_rule`, `seed`, `update_every_rows`, `split_merge`,
+`split_merge_every_rows`, and for the variable-`k` models `radius` / `eps`, `beta_mu`,
 `max_clusters`, `prune_every`.
 
 **Metrics.** ARI needs only the contingency table and is streamable

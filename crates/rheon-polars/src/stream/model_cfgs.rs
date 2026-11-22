@@ -301,6 +301,7 @@ pub fn corrchange_cfg(spec: &Spec) -> Result<CorrChangeCfg, String> {
         change_action,
         monitor_rows,
         boundary_gamma,
+        permute_every,
     } = &spec.model
     else {
         return Err(not_a(spec, "corrchange_cfg", "corrchange"));
@@ -397,6 +398,7 @@ pub fn corrchange_cfg(spec: &Spec) -> Result<CorrChangeCfg, String> {
             "",
         );
         refuse(perm_block.is_some(), "perm_block", "\"window\"", "");
+        refuse(permute_every.is_some(), "permute_every", "\"window\"", "");
         refuse(seed.is_some(), "seed", "\"window\"", "");
         refuse(norm != ChangeNorm::L1, "norm", "\"window\"", "");
         refuse(
@@ -454,7 +456,12 @@ pub fn corrchange_cfg(spec: &Spec) -> Result<CorrChangeCfg, String> {
         n_perm: n_perm.unwrap_or(200),
         // One critical value in force for one shift of the windows: the
         // draws then cost `n_perm · k²` a row whatever `window_rows` is.
-        permute_every_rows: permute_every_rows.unwrap_or(span_rows),
+        // A clock cadence alone has no count of reports.
+        permute_every_rows: permute_every_rows.unwrap_or(if permute_every.is_some() {
+            usize::MAX
+        } else {
+            span_rows
+        }),
         perm_block: perm_block.unwrap_or(1),
         norm,
         seed: seed.unwrap_or(0),
@@ -466,6 +473,7 @@ pub fn corrchange_cfg(spec: &Spec) -> Result<CorrChangeCfg, String> {
             0
         },
         boundary_gamma: boundary_gamma.unwrap_or(0.0),
+        permute_every: permute_every.as_ref().map(Span::value),
     })
 }
 

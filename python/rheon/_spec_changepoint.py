@@ -519,6 +519,7 @@ def corrchange(
     change_action: Literal["flag", "reset"] = "flag",
     monitor_rows: int | None = None,
     boundary_gamma: float | None = None,
+    permute_every: float | Duration | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Tests of whether the correlations between the feature columns have changed, by
@@ -589,6 +590,14 @@ def corrchange(
         1``), redrawn every ``permute_every_rows`` rows (default ``window_rows``, at
         least 1), in blocks of ``perm_block`` rows (default 1, from 1 to
         ``window_rows``). *The window test* in Notes gives the cost and the size.
+    ``permute_every``
+        ``"window"``: the same redraw on the clock, every this long as well
+        as every ``permute_every_rows`` reports, whichever comes first; given
+        alone, the count beside it is none. A number of the clock's units
+        (rows where the spec has no clock) or a duration such as ``"10m"``
+        on a temporal clock, at least 0, ``0`` every report. On a clock of
+        one unit a row, ``permute_every = n`` is ``permute_every_rows = n``,
+        to the bit.
     ``norm``
         ``"window"``: ``"l1"`` (the default) or ``"linf"``.
     ``seed``
@@ -904,5 +913,8 @@ def corrchange(
         "monitor_rows": monitor_rows,
         "boundary_gamma": boundary_gamma,
     }
+    # Written only when given, as the Rust spec leaves it out when absent.
+    if permute_every is not None:
+        model["permute_every"] = permute_every
     targets = _mirror_target(name, "corrchange", features, common, "its test is of")
     return _common(name, model, targets=targets, features=features, **common)

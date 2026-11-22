@@ -117,6 +117,14 @@ ITEMS: dict[str, Item] = {
         lambda v: dict(warm_span=v),
         start=True,
     ),
+    "corrchange.permute_every": Item(
+        "corrchange",
+        dict(features=["x0", "x1"], kind="window", window_rows=20, n_perm=30),
+        lambda n: dict(permute_every_rows=n),
+        lambda v: dict(permute_every=v),
+        start=False,
+        spans=(1, 6),
+    ),
     # Four centers on three blobs: two share one, and merge once the fourth
     # blob appears.
     "kmeans.split_merge_every": Item(
