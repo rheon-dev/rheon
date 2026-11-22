@@ -162,6 +162,25 @@ time however densely the rows arrive.** The clock parameters are
 half-lives. A few things still count rows, such as `warm_rows` and the
 caps named `max_rows_between_*`, and each model's docstring names its own.
 
+**A count of rows takes a clock form beside it, wherever the count has a
+meaning on the clock.** The warm-ups are `warm_span`, beside `kmeans`',
+`hmm`'s and `bocpd`'s `warm_rows`. The first rows' refits are `refit_span`
+beside `glm`'s and `expectile`'s `refit_rows`, and `huber_refit_span` and
+`quantile_refit_span` beside theirs. The cadences are `kmeans`'
+`update_every` and `split_merge_every`, and `corrchange`'s `permute_every`.
+Each takes a number of the clock's units or a duration, and is refused
+beside its count. A start or a refit over a span holds a target's rows
+from its first learned row through the first row at least the span after
+it, read off the rows' exact stamps; a cadence fires every span since its
+last event. A row of weight 0 is in no span. On a clock of one unit a row,
+a span of `D` is the count `D + 1` for a start and `D` for a cadence, to
+the bit. The data decides how many rows a span holds, so its rows are held
+to a cap as they come. Past half of it comes a warning, once a group, and
+the row that would pass it stops the run with an error naming the group
+and the bytes. A count that is a lag of a series of observations, a
+detector's count of observations or a bound on the state has no clock
+form, and its docstring says so.
+
 **Quantities measured on a temporal clock reach the output in seconds.**
 `holt`'s trend, for one, is per second. The clocks themselves keep the
 clock column's own type: `emit_clocks` ([Learn targets known

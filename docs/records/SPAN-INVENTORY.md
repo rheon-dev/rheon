@@ -77,18 +77,18 @@ duration) and, where noted, a row-count sibling.
 | `kalman` | `coef_half_life`, `revert_half_life` | number, duration (a list) | no | both |
 | | `q` | a variance per clock unit | no | no duration form (a rate): refused on a temporal clock, whose form is `coef_half_life` |
 | `huber` | `huber_scale_half_life`, `solve_every` / `max_rows_between_solves` | number, duration / rows | no | both |
-| | `huber_refit_rows` | rows | the first rows, allocated at full size at the first row | **open**: a `refit_span` as `glm`'s, its buffer then grown as it fills and checked against a cap as it runs |
+| | `huber_refit_rows` / **`huber_refit_span`** | rows / number, duration | the first rows; a count's buffer held at full size from the first row, a span's grown as it fills | **both, from part 2**: the span's buffers held to 256 KB a group as they grow |
 | `quantile` | `solve_every` / `max_rows_between_solves` | number, duration / rows | no | both |
-| | `quantile_refit_rows` | rows | as `huber`'s | **open**, as `huber_refit_rows` |
+| | `quantile_refit_rows` / **`quantile_refit_span`** | rows / number, duration | as `huber`'s | **both, from part 2**, at least three rows a coefficient |
 | `sgd` | `huber_scale_half_life` | number, duration | no | both |
-| | `huber_refit_rows` | rows | as `huber`'s | **open**, as `huber`'s |
+| | `huber_refit_rows` / **`huber_refit_span`** | rows / number, duration | as `huber`'s | **both, from part 2** |
 | | `schedule`, `power`, `learning_rate` | a step count | no | rows: a stochastic-approximation schedule `η_t` is over steps |
 | `ftrl`, `pa`, `rls`, `seqtest` | none | | | |
 | `ew_cov` | `pca_every` / `max_rows_between_pcas`, `window_size`, `snapshot_every` / `max_rows_between_snapshots` | number, duration / rows | snapshots | both |
 | | `lags` | rows | a ring | rows; a clock lag is task 536's (above) |
 | `holt` | `trend_half_life` | number, duration | no | both |
-| `kmeans` | `warm_rows` | rows | the seeding rows, capped at 256 MiB | **open**: a `warm_span`, its rows checked as they come |
-| | `update_every_rows`, `split_merge_every_rows` | rows | no (a mini-batch is sums a center) | **open**: a cadence of the clock, as `solve_every` beside `max_rows_between_solves` |
+| `kmeans` | `warm_rows` / **`warm_span`** | rows / number, duration | the seeding rows, capped at 256 MiB | **both, from part 2**: the span's rows checked against the 256 MiB as they come |
+| | `update_every_rows` / **`update_every`**, `split_merge_every_rows` / **`split_merge_every`** | rows / number, duration | no (a mini-batch is sums a center) | **both, from part 2**: the cadences on the shared `Since`, counted from the seeding |
 | `micro` | `prune_every` / `max_rows_between_prunes` | number, duration / rows | no | both |
 | | `max_clusters` | count | is the cap | a bound on state |
 | `ew_class` | `window_size`, `snapshot_every` / `max_rows_between_snapshots` | number, duration / rows | snapshots | both |
@@ -98,14 +98,14 @@ duration) and, where noted, a row-count sibling.
 | | `bin_refit_rows` | rows | the first rows under `"huber"` | **open**, as `huber_refit_rows` |
 | `deco` | `alpha`, `beta` | per observation | no | rows: DCC's recursion is per observation, with no continuous-time form |
 | `rcov` | `bandwidth`, `jitter`, `block_rows`, `max_bandwidth`, `preavg_rows`, `noise_stride`, `iv_stride` | rows | a ring sized from `block_rows` | rows: the realized kernel's and pre-averaging's lags and windows are counts of returns, in tick time by their definition; the block itself is closed on the clock, by `group_close` |
-| `hmm` | `warm_rows` | rows | the seeding rows | **open**: a `warm_span`, as `kmeans`' |
+| `hmm` | `warm_rows` / **`warm_span`** | rows / number, duration | the seeding rows | **both, from part 2**, held to `kmeans`' 256 MiB (the count has no limit of its own: a 537 point) |
 | | `transition`, `transition_prior`, `prior_rows` | per row; a pseudo-count | no | rows: the transition matrix is per observation (a continuous-time chain needs a generator, which no option offers); `prior_rows` is a weight, not a span |
 | `corr_change` | `window_rows`, `monitor_rows` | rows | a ring of rows | **open**: a clock window (`window_size`), its rows checked as they come; Wied's and Dette's statistics are defined over the rows of a span, so the clock form is the same test over a data-sized count |
-| | `permute_every_rows` | rows | no | **open**: a cadence of the clock |
+| | `permute_every_rows` / **`permute_every`** | rows / number, duration | no | **both, from part 2** (window kind) |
 | | `bandwidth`, `perm_block`, `n_perm` | rows; a count | no | rows: Bartlett lags and a block bootstrap's block are counts of observations |
 | `bocpd` | `hazard` | a number of rows on every clock, or a duration | no | both forms, but a number is rows on a numeric clock too, where every other `Span` is clock units: **the coordinator's decision** (below) |
 | | `max_run` | rows | is the cap | a bound on state (run lengths are counted in rows) |
-| | `warm_rows` | rows | the prior's rows | **open**: a `warm_span` |
+| | `warm_rows` / **`warm_span`** | rows / number, duration | the prior's rows | **both, from part 2**, held to its 256 MiB |
 | `audit` | `distinct_cap` | count | is the cap | a bound on state |
 | `glm` | `refit_rows` / **`refit_span`** | rows / number, duration | the first rows | **both, from this task**: checked as it fills against 256 KB a group |
 | | `step_cap` | a bound on a step | no | not a span |
@@ -150,6 +150,53 @@ duration) and, where noted, a row-count sibling.
   features under the default refit: `glm` 1826 base against 1821 ns,
   `expectile` 1838 against 1821 ns, load 6-10).
 
+## Part 2 (2026-11-22)
+
+- **Shared**: `clock_span::start_due` (a start's end, its first stamp the
+  first row's, and its least rows) and `clock_span::Place` (a model's place
+  on the clock: the stamp handed, or the clock summed from the steps for a
+  caller that hands none), beside `span_reached` and `HeldCap`. The cadences
+  use the existing `since::Since`, as `solve_every` and `prune_every` do.
+  The refit buffer shared by `huber`, `quantile` and `sgd` takes an `OPEN`
+  cap under a span: not reserved at a count's size, grown as rows come,
+  sized by `held_bytes` against `SPAN_REFIT_CAP` (256 KB a group).
+- **Gained**: `kmeans` `warm_span`, `update_every`, `split_merge_every`;
+  `hmm` and `bocpd` `warm_span`; `corrchange` `permute_every`; `huber` and
+  `sgd` `huber_refit_span`; `quantile` `quantile_refit_span`. Each: core
+  tests (`D + 1` or `D` rows on the row clock and a 1 s temporal clock to
+  the bit, both sides of the end to the nanosecond, the wait for the least
+  rows, the cap's warning and refusal, a state through the named encoding,
+  the refusals, a state without the form writing none of its keys), an entry
+  in `tests/test_rows_and_clock.py` (the Polars datetime oracle for the
+  starts, a duration against its seconds on a number clock, zero-weight
+  rows, chunking, a save and load inside the span, the refusals), the
+  sweeps (CLI, temporal clock, temporal property streams), a fixture.
+- **Released names**: task 196 renamed `update_every`, `split_merge_every`
+  and `permute_every` to `_rows` "so that a clock form can come later under
+  the plain name"; the plain names are now those clock forms, out of
+  `RENAMED` and `test_renames.py`.
+- **Cost**: the count's paths are unchanged (still reserved at full size);
+  per row level (arm64 release, best of 7, 20 features, refit 500: `huber`
+  179.8 against 179.0 ns, `sgd` 134.1 against 131.6 ns).
+- **Not built, and why**:
+  - `marginal`'s `bin_warm_rows` and `bin_refit_rows`: one held list serves
+    the warm-up and then the refit (the refit runs at the freeze when its
+    count is the warm-up's or less), the sharded path defers rows, and the
+    hold's bound is the spec's `bin_budget` (256 MiB by default) where the
+    refit's reservation against `refit_budget` is a count's. A span form
+    needs a cap and a reservation that agree (256 MiB a group would spend
+    the default `refit_budget` of 320 MiB on one group); that choice is
+    the coordinator's before it is built.
+  - `corrchange`'s `window_rows` and `monitor_rows`: the statistics are
+    defined over a span's row count `T` (the Bartlett bandwidth `⌊ln T⌋`,
+    Wied and Galeano's simulated critical value for a history of `m` rows
+    and a monitoring period, the permutation null over two windows of
+    equal rows). A clock span gives each span its own `T`, so the sequential
+    kind's critical value would be solved again per cycle (seconds each at
+    `boundary_gamma` near its bound), and the window kind's two windows
+    would differ in size. Whether to build a clock form, and with which of
+    those, is a design question, not a missing parameter.
+
 ## Open, for the coordinator
 
 1. **`bocpd`'s `hazard` as a number on a numeric clock** is a count of rows,
@@ -158,13 +205,15 @@ duration) and, where noted, a row-count sibling.
    number, so it is the user's call: keep it (and say in the docs that a
    number is rows on every clock, a duration time), or move it with a
    CHANGELOG entry.
-2. **The open gaps above**, each the same build as `refit_span` (a clock
-   sibling of a count, its rows checked as they come through `HeldCap`, its
-   end through `span_reached`): the robust refits (`huber_refit_rows`,
-   `quantile_refit_rows`, `sgd`'s, `marginal`'s `bin_refit_rows`, whose
-   buffers are allocated at full size today and would grow instead); the
-   warm-ups (`kmeans`, `hmm`, `bocpd` `warm_rows`, `marginal`'s
-   `bin_warm_rows`); the cadences (`kmeans`' two, `corr_change`'s
-   `permute_every_rows`), which hold no rows; and `corr_change`'s windows.
-   The lags (`ew_cov`, `marginal`, the diagnostics' and `horizon_rows`) are
-   task 536's exact clock lags.
+   The coordinator, 2026-11-22: left as it is for now, taken to the user.
+2. **What remains** (part 2's "Not built, and why"): `marginal`'s
+   `bin_warm_rows` and `bin_refit_rows` (a cap and a refit reservation that
+   agree), and `corrchange`'s `window_rows` and `monitor_rows` (statistics
+   defined over a span's row count). The lags (`ew_cov`, `marginal`, the
+   diagnostics' and `horizon_rows`) are task 536's exact clock lags.
+3. **The robust and `glm` span caps are fixed at 256 KB a group**, which no
+   setting raises: `huber`, `quantile`, `sgd` and `glm` have no
+   `max_state_bytes`. A count may hold up to 2^20 rows (40 MiB a target)
+   under `refit_budget`; a span of an hour at a second a row (3,600 rows at
+   20 features) is refused. Whether these kinds should take a
+   `max_state_bytes` is a choice for task 537.
