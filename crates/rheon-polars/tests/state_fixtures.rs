@@ -3513,12 +3513,49 @@ fn regenerate_when_asked() {
     );
 }
 
+/// A value that holds a whole state file of the envelope (a checkpoint's
+/// stage, a bank's formula core: msgpack bytes, stored as `bin` or as an
+/// array of byte values) opened into the value it encodes, its `checksum`
+/// stripped, as the top level of a file is for a cross-OS comparison. `None`
+/// for anything else; it is tried only on bytes that begin as the envelope
+/// does, so a list of numbers that is not a file is never decoded.
+fn embedded_state(v: &rmpv::Value) -> Option<rmpv::Value> {
+    const HEAD: &[u8] = b"\xa5magic\xabrheon-state";
+    let bytes: Vec<u8> = match v {
+        rmpv::Value::Binary(b) => b.clone(),
+        rmpv::Value::Array(a) if a.len() > HEAD.len() + 3 => a
+            .iter()
+            .map(|x| x.as_u64().and_then(|n| u8::try_from(n).ok()))
+            .collect::<Option<_>>()?,
+        _ => return None,
+    };
+    // A map header of one byte (up to 15 entries) or of three (`map 16`).
+    let at = match bytes.first()? {
+        0x80..=0x8f => 1,
+        0xde => 3,
+        _ => return None,
+    };
+    bytes[at..].starts_with(HEAD).then_some(())?;
+    let mut opened = rmpv::decode::read_value(&mut &bytes[..]).ok()?;
+    if let rmpv::Value::Map(m) = &mut opened {
+        m.retain(|(k, _)| k.as_str() != Some("checksum"));
+    }
+    Some(opened)
+}
+
 /// Where `got` is not `want` field for field -- the same map keys in the
 /// same order, the same array lengths, every value but a float equal, and
 /// each float within `bound` of its twin relative to `1 + |want|` (a NaN
-/// on both sides agrees) -- the first place it is not.
+/// on both sides agrees) -- the first place it is not. A state file held
+/// inside the value (a checkpoint's stage, a bank's formula core) is opened
+/// and compared the same way, its own checksum left out: its bytes carry
+/// the libm fields' last bits and the hash over them, which differ by OS
+/// as the outer file's do.
 fn first_difference(got: &rmpv::Value, want: &rmpv::Value, bound: f64, at: &str) -> Option<String> {
     use rmpv::Value as V;
+    if let (Some(g), Some(w)) = (embedded_state(got), embedded_state(want)) {
+        return first_difference(&g, &w, bound, &format!("{at}(state)"));
+    }
     match (got, want) {
         (V::Map(g), V::Map(w)) => {
             if g.len() != w.len() {
@@ -3635,6 +3672,83 @@ fn the_committed_fixtures_are_what_this_build_writes() {
         stale.len(),
         stale.join("; ")
     );
+}
+
+/// A checkpoint's stage is a whole state file stored as bytes, so another
+/// OS's checkpoint differs from this one's in the stage's libm fields' last
+/// bit and in the stage's own checksum, bytes that a plain comparison reads as
+/// a different file (the CI failure of `checkpoint.rs` on Linux and Windows:
+/// nine floats of the window run's queues (`front.vals`, `front.sums`) and
+/// `held_values`, each within 3 ulps of the macOS-written one, read from the
+/// Linux bytes in the failed run; the comparison's bound, 1e-12, is the
+/// golden tolerance the outer files already use).
+/// The stage is opened and held to the golden tolerance like the outer
+/// file: a last-bit difference in a float passes, a larger one and any other
+/// field's difference does not.
+#[test]
+fn a_checkpoint_stage_is_compared_as_a_state_not_as_bytes() {
+    if regenerating() {
+        return;
+    }
+    let f = frozen::ALL
+        .iter()
+        .find(|f| f.name == "checkpoint")
+        .expect("the checkpoint fixture");
+    let file = rmpv::decode::read_value(&mut &unhex(f.state)[..]).unwrap();
+    fn entry<'a>(v: &'a mut rmpv::Value, key: &str) -> &'a mut rmpv::Value {
+        match v {
+            rmpv::Value::Map(m) => {
+                &mut m
+                    .iter_mut()
+                    .find(|(k, _)| k.as_str() == Some(key))
+                    .unwrap()
+                    .1
+            }
+            _ => panic!("a map holds {key}"),
+        }
+    }
+    fn items(v: &mut rmpv::Value) -> &mut Vec<rmpv::Value> {
+        match v {
+            rmpv::Value::Array(a) => a,
+            _ => panic!("an array"),
+        }
+    }
+    // The file with its second stage's float `held_values[2]` moved by
+    // `nudge` and, where asked, its `held_values` one entry short.
+    let with_stage_changed = |nudge: f64, short: bool| {
+        let mut file = file.clone();
+        let stage = &mut items(entry(&mut file, "stages"))[1];
+        let state = entry(stage, "state");
+        let mut inner = embedded_state(state).expect("the stage is a state file");
+        let h = items(entry(entry(&mut inner, "core"), "held_values"));
+        let x = h[2].as_f64().expect("a float");
+        h[2] = rmpv::Value::F64(x + nudge * (1.0 + x.abs()));
+        if short {
+            h.pop();
+        }
+        let mut bytes = Vec::new();
+        rmpv::encode::write_value(&mut bytes, &inner).unwrap();
+        // Stored as the checkpoint stores it, bytes as an array of values.
+        *state = rmpv::Value::Array(bytes.iter().map(|&b| rmpv::Value::from(b)).collect());
+        file
+    };
+    let at = "state";
+    // Unchanged (the stage's checksum is gone from the copy, so its bytes
+    // differ from the original's): the same.
+    assert_eq!(
+        first_difference(&with_stage_changed(0.0, false), &file, TOL, at),
+        None
+    );
+    // A last-bit difference: within the tolerance.
+    assert_eq!(
+        first_difference(&with_stage_changed(1e-15, false), &file, TOL, at),
+        None
+    );
+    // A real difference in a float, and in the shape of a field.
+    let d = first_difference(&with_stage_changed(1e-6, false), &file, TOL, at).expect("a float");
+    assert!(d.contains("\"held_values\"[2]"), "{d}");
+    let d = first_difference(&with_stage_changed(0.0, true), &file, TOL, at).expect("a length");
+    assert!(d.contains("held_values"), "{d}");
 }
 
 /// The two crates discover their fixtures with one `build.rs`, kept as a
