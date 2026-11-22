@@ -439,6 +439,13 @@ impl Realized {
         self.window.as_ref().map_or(self.w_sum, Window::weight)
     }
 
+    /// The stamp of the newest row a clock window holds, `None` before one
+    /// and without a clock window: where a caller that stamps its rows
+    /// resumes from a restored state.
+    pub fn last_stamp(&self) -> Option<Stamp> {
+        self.window.as_ref()?.rows.back()?.stamp
+    }
+
     /// The rows a window holds; 0 without one.
     pub fn window_len(&self) -> usize {
         self.window.as_ref().map_or(0, |w| w.rows.len())

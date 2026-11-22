@@ -856,6 +856,47 @@ fn hawkes_golden() {
     check("hawkes_window", &got, GOLDEN_HAWKES_WINDOW);
 }
 
+/// `realized` on the same stream, its one target read as a return series:
+/// every output (`rv`, `bv`, `tv`, `tq`, `bns`, `lm`, `lm_jump`) at the
+/// three rows, under a decay with Lee and Mykland's own window of 10, then
+/// in a window of 12 rows; the null target and the gap move both. The window
+/// calls no platform math library (its cube roots and logarithms are the
+/// `libm` crate's, and nothing decays), so it is pinned to the bit.
+#[test]
+fn realized_golden() {
+    let all = |m: &mut Realized| {
+        let mut out = Vec::new();
+        for (i, (_, y, d, w)) in stream().into_iter().enumerate() {
+            let step = m.step(&[], &y, d, w);
+            if matches!(i, 20 | 45 | 59) {
+                out.extend(&step.pred);
+            }
+        }
+        out
+    };
+    let cfg = RealizedCfg {
+        n_targets: 1,
+        decay: Decay::Halflife(15.0),
+        min_weight: 0.0,
+        window_rows: None,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        lm_window: Some(10),
+        lm_beta: 0.99,
+        max_state_bytes: None,
+    };
+    let got = all(&mut Realized::new(cfg.clone()).unwrap());
+    check("realized", &got, GOLDEN_REALIZED);
+    let got = all(&mut Realized::new(RealizedCfg {
+        decay: Decay::Halflife(f64::INFINITY),
+        window_rows: Some(12),
+        lm_window: None,
+        ..cfg
+    })
+    .unwrap());
+    check_bits("realized_window", &got, GOLDEN_REALIZED_WINDOW);
+}
+
 /// `expectile` on the same stream: an upper expectile under decay whose
 /// first 15 learned rows are refit, then the fit at the end.
 #[test]
@@ -1788,6 +1829,52 @@ fn ew_class_windowed_golden() {
 }
 
 // --- generated; see the module docs ---
+const GOLDEN_REALIZED: &[f64] = &[
+    20.301763088150093,
+    14.524981482223351,
+    15.210767597581253,
+    152.5427122837151,
+    1.317422519241867,
+    0.26175973848626405,
+    0.0,
+    10.459155766645733,
+    10.642877740344339,
+    11.845985890132823,
+    97.82724355929129,
+    -0.07007494516533759,
+    2.354413313024124,
+    0.0,
+    15.904128496397625,
+    18.06313225979898,
+    19.541166883965733,
+    266.2749803565534,
+    -0.6799515243980105,
+    -0.18028949568691144,
+    0.0,
+];
+const GOLDEN_REALIZED_WINDOW: &[f64] = &[
+    23.20165621168584,
+    13.363161652229811,
+    14.77767677736757,
+    146.95773760815013,
+    1.8823217750918082,
+    0.2768024645607887,
+    0.0,
+    12.833685109912663,
+    13.473997818648956,
+    13.546309083923113,
+    188.87998695368736,
+    -0.21713430704374923,
+    2.6349174735544527,
+    0.0,
+    11.7484856053016,
+    13.10735007891979,
+    12.579384454213699,
+    131.7993766981005,
+    -0.5134267112449369,
+    -0.1662952885840179,
+    0.0,
+];
 const GOLDEN_GLM: &[f64] = &[0.8190287945803094, 1.5909174696403168, 1.3226756022889994];
 const GOLDEN_GLM_CAP: &[f64] = &[0.8059966005129862, 2.2639186345702202, 1.0964813502655293];
 const GOLDEN_EXPECTILE: &[f64] = &[

@@ -1318,7 +1318,7 @@ fn variants() -> Vec<String> {
 /// name here, and a fixture.
 #[test]
 fn the_variant_names_are_frozen() {
-    const FROZEN: [&str; 26] = [
+    const FROZEN: [&str; 27] = [
         "EwCov",
         "EwRidge",
         "Rls",
@@ -1345,6 +1345,7 @@ fn the_variant_names_are_frozen() {
         "Hawkes",
         "Expectile",
         "Garch",
+        "Realized",
     ];
     assert_eq!(
         variants(),
@@ -1465,7 +1466,32 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 115] = [
+    const FORMS: [(&str, &[&str]); 122] = [
+        // `realized` (task 499): the sums and the last returns, Lee and
+        // Mykland's ring of products, a window's terms and rows, a clock
+        // window's stamps and clock, and a cap's warning and overrun.
+        ("realized", &["model", "Realized", "series", "1", "hi"]),
+        (
+            "realized",
+            &["model", "Realized", "series", "1", "lm", "products"],
+        ),
+        (
+            "realized_window",
+            &["model", "Realized", "series", "0", "held"],
+        ),
+        (
+            "realized_window",
+            &["model", "Realized", "series", "1", "held"],
+        ),
+        ("realized_window", &["model", "Realized", "window", "rows"]),
+        (
+            "realized_clock_window",
+            &["model", "Realized", "window", "rows", "0", "stamp"],
+        ),
+        (
+            "realized_clock_window",
+            &["model", "Realized", "window", "place"],
+        ),
         // Schema 70 (rule 5's twenty-second exception): the stabilized
         // prior's `ŝ` and `V` under `full` in each form and under `diag`,
         // the factor form's `f`, and a spec's own `prior_rows`.
@@ -1734,6 +1760,17 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
     let first = at(&v, &["model", "Garch", "series", "0", "first"]).expect("a first stamp");
     assert!(!first.is_nil(), "garch_span: no first stamp");
+    // A clock window's cap (task 499): the bytes of the row that would have
+    // passed it, an integer, and the warning raised.
+    let f = frozen::ALL
+        .iter()
+        .find(|f| f.name == "realized_clock_capped")
+        .expect("realized_clock_capped");
+    let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+    let over = at(&v, &["model", "Realized", "over"]).expect("the overrun");
+    assert!(over.as_u64().is_some_and(|b| b > 1_500), "{over}");
+    let warned = at(&v, &["model", "Realized", "warned"]).and_then(rmpv::Value::as_bool);
+    assert_eq!(warned, Some(true));
     for (name, path) in FORMS {
         let f = frozen::ALL
             .iter()
