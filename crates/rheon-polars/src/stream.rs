@@ -1843,6 +1843,7 @@ mod weightless;
 use notified::span_name;
 pub use notified::{Notice, Notified};
 use pre_row_sigma::pre_row_sigma;
+pub(crate) use state_cap::cap_words;
 use state_cap::state_cap_notice;
 use unmet_floor::{
     Projection, inflation_notice, unmet_floor_notice, unsolved_notice, unstable_rate_notice,

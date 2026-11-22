@@ -64,7 +64,8 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
     ("ew_class", &["window_size", "snapshot_every"]),
     ("marginal", &["window_size", "snapshot_every"]),
     ("hawkes", &["window_size", "kernel_half_lives"]),
-    ("expectile", &["window_size"]),
+    ("expectile", &["window_size", "refit_span"]),
+    ("glm", &["refit_span"]),
     ("garch", &["start_span"]),
 ];
 
@@ -436,8 +437,16 @@ impl Spec {
                 put(&mut out, "window_size", window_size.as_ref());
                 put_list(&mut out, "kernel_half_lives", kernel_half_lives.as_ref());
             }
-            ModelKind::Expectile { window_size, .. } => {
+            ModelKind::Expectile {
+                window_size,
+                refit_span,
+                ..
+            } => {
                 put(&mut out, "window_size", window_size.as_ref());
+                put(&mut out, "refit_span", refit_span.as_ref());
+            }
+            ModelKind::Glm { refit_span, .. } => {
+                put(&mut out, "refit_span", refit_span.as_ref());
             }
             ModelKind::Micro { prune_every, .. } => {
                 put(&mut out, "prune_every", prune_every.as_ref());

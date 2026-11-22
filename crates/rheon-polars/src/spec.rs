@@ -1266,6 +1266,15 @@ pub enum ModelKind {
         /// absent is `rheon_core::default_glm_refit_rows(k)`, 0 is off.
         #[serde(default)]
         refit_rows: Option<u32>,
+        /// The same refit over a span of the clock (docs/PLAN.md task 538):
+        /// a target's rows from its first learned row through the first at
+        /// least this long after it, a number of the clock's units (rows
+        /// where the spec has no clock) or a duration on a temporal clock.
+        /// The data decides how many rows that is, so the buffers are
+        /// checked as they fill. Refused beside `refit_rows`. Skipped when
+        /// absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refit_span: Option<Span>,
         /// The most a learned row may move its own linear predictor: absent
         /// is off where the refit runs and 1 where it does not; `"inf"` is
         /// no cap.
@@ -1337,6 +1346,12 @@ pub enum ModelKind {
         /// when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         refit_rows: Option<u32>,
+        /// The same refit over a span of the clock (docs/PLAN.md task 538),
+        /// as `glm`'s `refit_span`: the rows it holds are checked against
+        /// `max_state_bytes` as they come. Refused beside `refit_rows` and
+        /// a window. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refit_span: Option<Span>,
         /// Fit the last this many rows of positive weight alone, refit
         /// exactly on every row, in place of a decay. Skipped when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -103,6 +103,7 @@ pub fn expectile_cfg(
         expectile,
         ridge,
         refit_rows,
+        refit_span,
         window_rows,
         window_size,
         closed,
@@ -122,7 +123,12 @@ pub fn expectile_cfg(
         expectile: *expectile,
         ridge: ridge.unwrap_or(1e-6),
         min_weight: spec.min_periods_or_default(),
+        // A span in place of the count: the count's default is off beside
+        // it, and one given is the model's to refuse.
         refit_rows: refit_rows.unwrap_or_else(|| {
+            if refit_span.is_some() {
+                return 0;
+            }
             rheon_core::default_expectile_refit_rows(
                 spec.k(),
                 spec.m(),
@@ -131,7 +137,7 @@ pub fn expectile_cfg(
                 cap,
             )
         }),
-        refit_clock: None,
+        refit_clock: refit_span.as_ref().map(Span::value),
         window_rows: *window_rows,
         window_clock: window_size.as_ref().map(Span::value),
         closed: closed.edge(),
@@ -1176,6 +1182,7 @@ pub fn glm_cfg(spec: &Spec) -> Result<rheon_core::GlmCfg, String> {
         var_power,
         ridge,
         refit_rows,
+        refit_span,
         step_cap,
         ..
     } = &spec.model
@@ -1200,8 +1207,15 @@ pub fn glm_cfg(spec: &Spec) -> Result<rheon_core::GlmCfg, String> {
         Some("power") => GlmLink::Power,
         Some(other) => return Err(words("link", &GLM_LINKS, other)),
     };
-    let refit_rows =
-        refit_rows.unwrap_or_else(|| rheon_core::default_glm_refit_rows(spec.k(), spec.m()));
+    // A span in place of the count: the count's default is off beside it,
+    // and one given is the model's to refuse.
+    let refit_rows = refit_rows.unwrap_or_else(|| {
+        if refit_span.is_some() {
+            0
+        } else {
+            rheon_core::default_glm_refit_rows(spec.k(), spec.m())
+        }
+    });
     Ok(rheon_core::GlmCfg {
         n_features: spec.k(),
         n_targets: spec.m(),
@@ -1213,8 +1227,11 @@ pub fn glm_cfg(spec: &Spec) -> Result<rheon_core::GlmCfg, String> {
         ridge: ridge.unwrap_or(1.0),
         min_weight: spec.min_periods_or_default(),
         refit_rows,
-        refit_clock: None,
-        step_cap: step_cap.map_or_else(|| rheon_core::default_glm_step_cap(refit_rows), |n| n.0),
+        refit_clock: refit_span.as_ref().map(Span::value),
+        step_cap: step_cap.map_or_else(
+            || rheon_core::default_glm_step_cap(refit_rows.max(u32::from(refit_span.is_some()))),
+            |n| n.0,
+        ),
     })
 }
 

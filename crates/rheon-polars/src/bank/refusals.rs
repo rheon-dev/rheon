@@ -45,6 +45,7 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
             max_state_bytes: Some(_),
             ..
         } => format!("max_state_bytes of {cap}"),
+        ModelKind::Glm { .. } => format!("the {cap} bytes (256 KB) a group's refit buffers may hold"),
         _ => format!("the default max_state_bytes of {cap}, which a spec gets when it sets none"),
     };
     let (window, shorten) = match &spec.model {
@@ -69,13 +70,25 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
             format!("the rows of its start inside start_span = {s}"),
             "Shorten start_span",
         ),
+        ModelKind::Expectile {
+            refit_span: Some(s),
+            ..
+        }
+        | ModelKind::Glm {
+            refit_span: Some(s),
+            ..
+        } => (
+            format!("the rows of its refit inside refit_span = {s}"),
+            "Shorten refit_span, or give refit_rows",
+        ),
         _ => ("its window".to_string(), "Shorten the window"),
     };
+    let (_, raise) = crate::stream::cap_words(spec);
     let text = format!(
         "spec {:?}{group}: {window} would take its state to {bytes} bytes, above {given}, so the \
          bank stopped after learning part of the chunk, and learned none of the events from the \
-         one that would have passed it. {shorten}, or raise max_state_bytes, then build the bank \
-         again and fit it from the start of its input.",
+         one that would have passed it. {shorten}{raise}, then build the bank again and fit it \
+         from the start of its input.",
         spec.name
     );
     polars_err!(ComputeError: "{}", text)

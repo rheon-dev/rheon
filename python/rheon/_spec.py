@@ -285,6 +285,7 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
         {
             "ridge",
             "refit_rows",
+            "refit_span",
             "window_rows",
             "window_size",
             "closed",
@@ -327,6 +328,7 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
     ),
     "audit": frozenset({"pairs", "distinct_cap"}),
     "kalman": frozenset({"covariance_form"}),
+    "glm": frozenset({"refit_span"}),
 }
 
 

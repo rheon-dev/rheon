@@ -25,7 +25,28 @@ fn window_words(spec: &Spec) -> (String, &'static str, &'static str) {
             start_span: Some(s),
             ..
         } => (format!("start_span = {s}"), "Shorten start_span", "rows"),
+        ModelKind::Expectile {
+            refit_span: Some(s),
+            ..
+        }
+        | ModelKind::Glm {
+            refit_span: Some(s),
+            ..
+        } => (
+            format!("refit_span = {s}"),
+            "Shorten refit_span, or give refit_rows",
+            "rows",
+        ),
         _ => ("its window".to_string(), "Shorten the window", "events"),
+    }
+}
+
+/// What a spec's cap is called, and the way out by raising it: `glm`'s
+/// refit buffers have a fixed cap a group, which no setting raises.
+pub(crate) fn cap_words(spec: &Spec) -> (&'static str, &'static str) {
+    match &spec.model {
+        ModelKind::Glm { .. } => ("the cap a group's refit buffers may hold", ""),
+        _ => ("max_state_bytes", ", or raise max_state_bytes"),
     }
 }
 
@@ -34,9 +55,10 @@ fn window_words(spec: &Spec) -> (String, &'static str, &'static str) {
 /// it; the bank prefixes the spec and the group.
 pub(super) fn state_cap_notice(spec: &Spec, bytes: u64, cap: u64) -> String {
     let (window, shorten, what) = window_words(spec);
+    let (called, raise) = cap_words(spec);
     format!(
-        "the state holds {bytes} bytes, past half of max_state_bytes ({cap}), and it grows with \
-         the {what} inside {window}. At {cap} bytes the bank stops and refuses the run. \
-         {shorten}, or raise max_state_bytes, to stay clear of it."
+        "the state holds {bytes} bytes, past half of {called} ({cap}), and it grows with the \
+         {what} inside {window}. At {cap} bytes the bank stops and refuses the run. \
+         {shorten}{raise}, to stay clear of it."
     )
 }
