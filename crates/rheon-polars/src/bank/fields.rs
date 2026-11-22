@@ -376,6 +376,15 @@ pub fn coef_fields(spec: &Spec) -> Vec<CoefField> {
             .chain(cfg.dist.names())
             .map(|n| n.to_string())
             .collect()
+    } else if let crate::ModelKind::Ar { lags, .. } = &spec.model {
+        // The constant, each lag, then the features: `Ar::coefficients`.
+        let mut t = Vec::with_capacity(spec.features.len() + 1);
+        if spec.fit_intercept {
+            t.push("intercept".to_string());
+        }
+        t.extend(lags.lags().iter().map(|l| format!("lag{l}")));
+        t.extend(spec.features.iter().cloned());
+        t
     } else if matches!(
         spec.model,
         crate::ModelKind::KMeans { .. }

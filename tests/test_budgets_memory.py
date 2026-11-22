@@ -154,6 +154,7 @@ EXCEPT = {
     "glm": ONE_SLOT | NOT_LEAST_SQUARES,
     "expectile": ONE_SLOT | NOT_LEAST_SQUARES,
     "holt": ONE_SLOT | NOT_LEAST_SQUARES | {"emit_feature_health"},
+    "ar": ONE_SLOT | NOT_LEAST_SQUARES,
 }
 
 
@@ -181,6 +182,7 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
     ("glm", "glm", fullest("glm", **dict(FIT, targets=["hit"])), []),
     ("expectile", "expectile", fullest("expectile", **FIT, expectile=0.8), []),
     ("holt", "holt", fullest("holt", targets=["y"], group="g", half_life=25.0, **CLOCK), []),
+    ("ar", "ar", fullest("ar", **FIT, lags=[1, 3]), []),
     (
         "ew_cov",
         "ew_cov",

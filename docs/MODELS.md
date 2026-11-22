@@ -1,7 +1,7 @@
 <!-- kind: reference -->
 # Models
 
-The reference entry of each of the twenty-six models a spec can name, by
+The reference entry of each of the twenty-seven models a spec can name, by
 family, for a reader who knows which model they want to look up. A
 model's parameters, their defaults and its refusals are in its docstring,
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md).
@@ -28,7 +28,7 @@ which models keep each, and why.
 
 ## The models at a glance
 
-The twenty-six models fall into four families, and each family answers one
+The twenty-seven models fall into four families, and each family answers one
 kind of question about a stream. Each name links its builder's reference
 page, which gives its keywords and their defaults, and *entry* links its
 entry on this page. [Choose a model](how-to/choose-a-model.md) says which
@@ -49,6 +49,7 @@ to start with for which question.
 | [`ftrl`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ftrl) · [entry](#ftrl--online-logistic-regression) | step | FTRL-proximal regression, logistic by default, with an L1 penalty that zeroes coefficients |
 | [`glm`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.glm) · [entry](#glm--generalized-linear-models-poisson-gamma-binomial-tweedie) | step | Poisson, Gamma, binomial and Tweedie regression, a Newton step a row on the likelihood, for counts, positive amounts, proportions and amounts with an exact zero |
 | [`holt`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.holt) · [entry](#holt--holts-linear-trend) | step | Holt's linear trend, the baseline that uses no features |
+| [`ar`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ar) · [entry](#ar--an-autoregression-on-the-targets-own-past) | solve | an autoregression for each target, AR(p), by least squares on lags the model keeps itself, with the features as exogenous regressors; `AutoReg`'s fit with no decay |
 | **[Moments and correlation](#moments-and-correlation)** | | track the running moments and correlations of the columns you name |
 | [`ew_cov`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ew_cov) · [entry](#ew_cov--exponentially-weighted-moments) | accumulate | running mean, variance, covariance, correlation, partial correlation, Mahalanobis distance and principal components |
 | [`marginal`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.marginal) · [entry](#marginal--every-pairs-moments-kept-in-the-state) | accumulate | every (feature, target) pair's running mean, variance, covariance, correlation, slope and t, for a wide set of columns, kept in the state and read back as a table; optionally at a set of lags, and with binned target moments for the relations a correlation cannot see |
@@ -457,8 +458,9 @@ first prediction at t = 30: weight_sum 27.18, settled_frac 0.182
 
 ## Linear models
 
-Eleven models predict a numeric target. Ten regress it on features, and
-`holt`, a baseline, uses none. Several of them take the same parameters:
+Thirteen models predict a numeric target. Eleven regress it on features,
+`holt`, a baseline, uses none, and `ar` regresses it on its own last
+values, and on features where they are given. Several of them take the same parameters:
 
 | parameters | taken by | explained under |
 |---|---|---|
@@ -484,6 +486,7 @@ What `half_life` decays differs by model:
 | `ftrl` | its per-coordinate sums, but not its penalties, so a shorter half-life shrinks the fit more |
 | `glm` | each target's Gram `G`, and its ridge with the rows, so a row of weight 0 moves no coefficient |
 | `holt` | the level, and the trend at `trend_half_life`, four times `half_life` by default |
+| `ar` | each target's running sums, which its fit is solved from; not its lags, which count learned rows |
 
 ### `ewridge` — exponentially weighted ridge regression
 
@@ -2131,6 +2134,94 @@ half-life, every row takes the textbook's gains after a warm-up of a few
 half-lives (from row 745 at half-lives of 6 and 25). From row 1,000 in
 that run, where the textbook gains have reached statsmodels' fixed
 ones to 1e-12, the fit is statsmodels' `Holt` to 1e-12.
+
+### `ar` — an autoregression on the target's own past
+
+*API:* [`rheon.spec.ar`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ar) — *Rust:* [`ar.rs`](../crates/rheon-core/src/ar.rs) — *Outputs:* [fields](OUTPUTS.md#ar)
+
+An autoregression for each target, AR(p): the target regressed on its own
+last values, and on the features where they are given, by exponentially
+weighted least squares.
+
+Use `ar` to forecast a series one row ahead from its recent past, without
+building lag columns in the query: the model keeps each target's last
+values itself. With no decay its coefficients are statsmodels' `AutoReg`'s
+on the same rows; with a `half_life` it follows dynamics that drift. Each
+target is its own series, with its own lags and fit.
+
+Its parameters, their defaults and what each refuses are in its
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ar),
+and the fields it writes in [OUTPUTS.md](OUTPUTS.md#ar). The parameters
+every spec takes are in [What every spec takes](#what-every-spec-takes);
+`features` is optional.
+
+#### The update
+
+For lags `ℓ_1 < … < ℓ_q`, row `t`'s design is
+`z_t = (y_{t−ℓ_1}, …, y_{t−ℓ_q}, x_t)`, its lags read from the target's last
+learned values. `W_y` is the target's own weight, and `S`, `r` its running
+means of `z zᵀ` and `z·y`, kept centred:
+
+```
+pred_t = c + β·z_t                       from the fit before the row
+W_y'   = λ·W_y + w                       a learned row of the target only
+S'     = (λ·W_y·S + w·z zᵀ)/W_y'          r' = (λ·W_y·r + w·z·y)/W_y'
+β      = (S + ridge·I)⁻¹ r                c = ȳ − β·z̄     after every learned row
+```
+
+A learned row of a target has a weight above 0 and the target present. It
+joins the target's last values, and enters `S` and `r` once `max(lags)`
+values precede it. A row of weight 0, or with the target null, is not a
+lag: the next row's lags are those before it. A lag counts learned rows,
+not clock units, and a session change or a gap past `gap_cap` empties the
+lags, keeping the fit.
+
+#### Example
+
+**An AR(2) found from the series alone.** Here `y` follows
+`2 + 0.6·y₋₁ − 0.3·y₋₂` plus noise:
+
+```python
+import numpy as np
+import polars as pl
+from rheon import polars as rp
+
+# y = 2 + 0.6 y[-1] - 0.3 y[-2] + noise, one row a clock unit.
+rng = np.random.default_rng(3)
+y = [5.0, 5.0]
+for e in rng.standard_normal(20_000):
+    y.append(2.0 + 0.6 * y[-1] - 0.3 * y[-2] + e)
+pl.DataFrame({"y": y}).write_parquet("series.parquet")
+
+# Two lags and a constant, from the whole history.
+bank = rp.ModelBank([rp.spec.ar("a", targets=["y"], lags=2, half_life=float("inf"))])
+bank.fit(pl.scan_parquet("series.parquet"))
+for row in bank.coef().iter_rows(named=True):
+    print(f"{row['term']}: {row['coef']:.3f}")
+```
+
+```text
+EXAMPLE_OUTPUT
+```
+
+#### See also
+
+- [`ewridge`](#ewridge--exponentially-weighted-ridge-regression), the same
+  least squares on lag columns made in the query, for lags across columns.
+- [`holt`](#holt--holts-linear-trend), a level and a trend rather than a
+  regression on lags.
+- [`garch`](#garch--how-large-will-the-next-return-be), for the variance
+  of a series rather than its value.
+
+#### Notes
+
+**With no decay, `ar` is `AutoReg`.** Its coefficients are least squares on
+the rows after the first `max(lags)`, which is what
+`AutoReg(y, lags, trend="c", exog=x).fit()` computes: within 1e-9 relative
+over 5,000 rows, at orders 2 to 5 and at lags `[1, 2, 12]`. A null target
+is `AutoReg(missing="drop")`. Under a half-life the coefficients are
+statsmodels' `WLS` on the lag design, each row weighted
+`w·0.5^(age/half_life)` on the clock, within 1e-9 as well.
 
 ## Moments and correlation
 

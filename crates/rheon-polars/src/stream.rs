@@ -111,6 +111,7 @@ pub enum AnyModel {
     Expectile(Box<rheon_core::Expectile>),
     Hawkes(Box<rheon_core::Hawkes>),
     Garch(Box<rheon_core::Garch>),
+    Ar(Box<rheon_core::Ar>),
 }
 
 /// A flush's shards, run on whichever pool the caller is in: the bank's
@@ -161,6 +162,7 @@ macro_rules! dispatch {
             AnyModel::Expectile($m) => $body,
             AnyModel::Hawkes($m) => $body,
             AnyModel::Garch($m) => $body,
+            AnyModel::Ar($m) => $body,
         }
     };
 }
@@ -534,7 +536,9 @@ impl AnyModel {
             | AnyModel::Audit(_)
             // Every read it withholds is a row's, not a failure.
             | AnyModel::Hawkes(_)
-            | AnyModel::Garch(_) => 0,
+            | AnyModel::Garch(_)
+            // Each fit counts its own; none withholds a row as a failure.
+            | AnyModel::Ar(_) => 0,
         }
     }
 
@@ -608,6 +612,9 @@ impl AnyModel {
             AnyModel::Hawkes(m) => Some(m.coefficients()),
             // Each target's process parameters, then its shape.
             AnyModel::Garch(m) => Some(m.coefficients()),
+            // The constant, the lags, then the features, one row per
+            // target; absent until a target has a fit.
+            AnyModel::Ar(m) => m.coefficients(),
         }
     }
 
@@ -631,8 +638,8 @@ use build::{build_one, constraint, huber_scale_of, resid_window};
 mod model_cfgs;
 use model_cfgs::read_floor;
 pub use model_cfgs::{
-    audit_cfg, bocpd_cfg, corrchange_cfg, deco_block_names, deco_cfg, expectile_cfg, garch_cfg,
-    glm_cfg, hawkes_cfg, hmm_cfg, huber_model, quantile_model, rcov_cfg, sgd_model,
+    ar_cfg, audit_cfg, bocpd_cfg, corrchange_cfg, deco_block_names, deco_cfg, expectile_cfg,
+    garch_cfg, glm_cfg, hawkes_cfg, hmm_cfg, huber_model, quantile_model, rcov_cfg, sgd_model,
 };
 
 /// One grid combo: the rendered label plus the machine values it encodes, so
@@ -738,7 +745,8 @@ pub fn combos(spec: &Spec) -> Vec<Combo> {
         | ModelKind::Glm { .. }
         | ModelKind::Hawkes { .. }
         | ModelKind::Expectile { .. }
-        | ModelKind::Garch { .. } => vec![Combo::default()],
+        | ModelKind::Garch { .. }
+        | ModelKind::Ar { .. } => vec![Combo::default()],
         // `p` for the penalty, since `l` is a lag's (`lag_corr_l1_a_b`); and
         // no label for a path of one point, as a single ridge or half-life
         // writes none, while the machine value says which it is.

@@ -83,6 +83,7 @@ MINIMAL: dict[str, dict[str, object]] = {
     "audit": {"targets": None, "features": None, "half_life": None, "columns": ["x0", "x1"]},
     "hawkes": {"features": None, "kernel_decays": [1.0, 5.0]},
     "garch": {"features": None, "half_life": None, "start_rows": 50},
+    "ar": {"lags": 2},
 }
 
 #: The sweeps fit a numeric target, so the models that predict none --

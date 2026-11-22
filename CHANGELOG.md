@@ -66,6 +66,21 @@ model that only the new build has is listed as an addition and passes.
 
 ### Added
 
+- **`ar`, an autoregression for each target** (task 486): AR(p), or any
+  list of lags, by exponentially weighted least squares on lags the model
+  keeps itself, with the features as exogenous regressors and the constant
+  under `fit_intercept` (statsmodels' `trend="c"` or `"n"`). Each target is
+  its own series: a ring of its last `max(lags)` learned values and a fit of
+  its own, solved after every learned row. With no decay its coefficients are
+  `AutoReg`'s on the same rows, within 1e-9; under decay, weighted least
+  squares with the weights on the clock. A row of weight 0 or a null target
+  is not a lag (`AutoReg(missing="drop")`), a session change or a capped gap
+  empties the lags and keeps the fit, and the state, `8 max(lags)` plus at
+  most `8 (4k² + 16k + 64)` bytes a target, is held to `max_state_bytes`
+  when the spec is built. Spans: the half-life in rows or on the clock; the
+  lags count learned rows only, since a value `ℓ` rows back has no meaning
+  on a clock. New in the state at schema 72 (unreleased): the `Ar` variant,
+  with its frozen fixtures.
 - **Clock forms for the remaining counts of rows** (task 538, part 2), each
   beside its count and refused with it, each a number of the clock's units
   (rows without a clock) or a duration on a temporal clock, read off the

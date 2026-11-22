@@ -99,6 +99,9 @@ pub const MODEL_CASES: &[&str] = &[
     // (task 492); and FIGARCH, its O(M) pass of 1,000 lags a row.
     "garch",
     "garch_figarch",
+    // An AR(5) with no features: a row's ring, design, rank-one update of a
+    // 6 x 6 Gram and its Cholesky.
+    "ar",
 ];
 
 /// The one model case that reports on a single row of its block:
@@ -604,6 +607,11 @@ fn case_spec(id: &str) -> (Value, Shape) {
             Shape::Linear,
         ),
         "ftrl" => (fit(json!({"type": "ftrl"}), 20), Shape::Linear),
+        "ar" => {
+            let mut s = fit(json!({"type": "ar", "lags": 5}), 0);
+            s.as_object_mut().expect("an object").remove("min_weight");
+            (s, Shape::Linear)
+        }
         // Level and trend of one column, no features.
         "holt" => {
             let mut s = fit(json!({"type": "holt"}), 0);

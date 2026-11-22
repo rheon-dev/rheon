@@ -177,6 +177,13 @@ impl Clock {
 /// `v` clock units ([`Clock::span`]), `#clock` the clock entry on `t` /
 /// `ts`, and `#back` the one on the clock that steps back.
 const SPECS: &[(&str, &str, &str, &[Clock])] = &[
+    // Its lags count learned rows: a row of weight 0 is none of them.
+    (
+        "ar",
+        r#"{"type": "ar", "lags": [1, 3], "ridge": 0.01}"#,
+        r#""targets": ["y"], "features": ["x0"], "half_life": @50"#,
+        ALL,
+    ),
     (
         "bocpd",
         r#"{"type": "bocpd", "hazard": 250, "covariance_type": "diag"}"#,

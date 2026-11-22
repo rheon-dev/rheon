@@ -749,6 +749,18 @@ impl Spec {
                     format!("spec {:?}: {}", self.name, e.trim_start_matches("garch: "))
                 }));
             }
+            // Every value is the model's own to check, here at the call,
+            // where the state's size against its cap is known too; the
+            // decay is checked with the spec's others.
+            ModelKind::Ar { .. } => {
+                no.take(
+                    crate::stream::ar_cfg(self, rheon_core::Decay::Halflife(f64::INFINITY))
+                        .map(|_| ())
+                        .map_err(|e| {
+                            format!("spec {:?}: {}", self.name, e.trim_start_matches("ar: "))
+                        }),
+                );
+            }
             // The shared checks (non-empty features and targets, no column on
             // both sides, a decay, `min_weight` per target, no residual
             // diagnostics) and one of its own: given edges and the knobs for

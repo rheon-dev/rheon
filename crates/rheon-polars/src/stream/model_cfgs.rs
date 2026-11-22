@@ -148,6 +148,32 @@ pub fn expectile_cfg(
 /// A `garch` spec's [`rheon_core::GarchCfg`]: one series a target, the
 /// start 2,000 rows unless the spec gives rows or a span. Every value is
 /// the model's own to check.
+/// An `ar` spec's [`rheon_core::ArCfg`] under `decay`: its series are the
+/// spec's targets and its exogenous regressors the features; every
+/// parameter check is the model's.
+pub fn ar_cfg(spec: &Spec, decay: rheon_core::Decay) -> Result<rheon_core::ArCfg, String> {
+    let ModelKind::Ar {
+        lags,
+        ridge,
+        max_state_bytes,
+    } = &spec.model
+    else {
+        return Err(not_a(spec, "ar_cfg", "ar"));
+    };
+    let cfg = rheon_core::ArCfg {
+        n_targets: spec.m(),
+        n_features: spec.k(),
+        lags: lags.lags(),
+        fit_intercept: spec.fit_intercept,
+        decay,
+        ridge: ridge.unwrap_or(0.0),
+        min_weight: spec.min_periods_or_default(),
+        max_state_bytes: *max_state_bytes,
+    };
+    cfg.validate()?;
+    Ok(cfg)
+}
+
 pub fn garch_cfg(spec: &Spec) -> Result<rheon_core::GarchCfg, String> {
     use rheon_core::{GarchDist, GarchVol};
     let ModelKind::Garch {

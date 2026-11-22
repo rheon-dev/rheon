@@ -281,6 +281,7 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
         }
     ),
     "ewridge": frozenset({"gram_threads"}),
+    "ar": frozenset({"ridge", "max_state_bytes"}),
     "expectile": frozenset(
         {
             "ridge",
@@ -793,6 +794,7 @@ def _checked[**P, R](fn: Callable[P, R]) -> Callable[P, R]:
 
 
 __all__ = [
+    "ar",
     "audit",
     "bocpd",
     "corrchange",
@@ -5121,6 +5123,7 @@ def deco(
 # (the 250 KB cap); read back here,
 # after everything they use, for `__all__`, the key tables below and
 # `rheon.spec`.
+from rheon._spec_ar import ar  # noqa: E402
 from rheon._spec_audit import audit  # noqa: E402
 from rheon._spec_changepoint import bocpd, corrchange  # noqa: E402
 from rheon._spec_class import ew_class  # noqa: E402

@@ -402,6 +402,7 @@ const SURFACES: &[&[&str]] = &[
         "pa.",
         "ftrl.",
         "holt.",
+        "ar.",
         "glm.",
         "expectile.",
     ],

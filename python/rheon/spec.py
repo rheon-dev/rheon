@@ -122,6 +122,9 @@ shows them at work.
            one
          - ``lasso``, ``kalman``, ``huber``, ``quantile``, ``expectile``,
            ``rls``, ``sgd``, ``pa``, ``ftrl``, ``glm``
+       * - one per coefficient: the lags, the features, and the intercept
+           when there is one
+         - ``ar``
        * - the feature count plus one (1 for ``holt``)
          - ``ew_cov``, ``ew_class``, ``kmeans``, ``micro``, ``holt``
        * - 3
@@ -1107,6 +1110,7 @@ config each fill its defaults and build its models.
 """
 
 from rheon._spec import (
+    ar,
     audit,
     bocpd,
     coef_fields,
@@ -1140,6 +1144,7 @@ from rheon._spec import (
 )
 
 __all__ = [
+    "ar",
     "audit",
     "ew_class",
     "ew_cov",

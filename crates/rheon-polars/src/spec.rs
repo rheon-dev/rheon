@@ -1495,6 +1495,43 @@ pub enum ModelKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_state_bytes: Option<u64>,
     },
+    /// An autoregression per target, AR(p), by exponentially weighted least
+    /// squares on lags of the target the model keeps itself, with the
+    /// features as exogenous regressors (`rheon_core::Ar`). Per target, the
+    /// prediction from its own last values; the constant, the lags and the
+    /// features in `coef`.
+    #[serde(rename = "ar")]
+    Ar {
+        /// The order `p`, for lags `1..=p`, or a list of lags in learned
+        /// rows, strictly increasing.
+        lags: ArLags,
+        /// The ridge on the lag and feature coefficients; absent is 0,
+        /// least squares.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ridge: Option<f64>,
+        /// The bytes a group's state may hold, its lags and fits. Default
+        /// 256 KB, at most 64 MiB.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
+    },
+}
+
+/// `ar`'s lags: the order `p`, for `1..=p`, or the lags themselves.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ArLags {
+    Order(usize),
+    List(Vec<usize>),
+}
+
+impl ArLags {
+    /// The lags, `1..=p` for an order.
+    pub fn lags(&self) -> Vec<usize> {
+        match self {
+            ArLags::Order(p) => (1..=*p).collect(),
+            ArLags::List(l) => l.clone(),
+        }
+    }
 }
 
 /// The two sides of a `seqtest` comparison, as [`ModelKind::compares`]
@@ -1583,6 +1620,7 @@ impl ModelKind {
         "hawkes",
         "expectile",
         "garch",
+        "ar",
     ];
 
     pub fn kind_name(&self) -> &'static str {
@@ -1613,6 +1651,7 @@ impl ModelKind {
             ModelKind::Hawkes { .. } => "hawkes",
             ModelKind::Expectile { .. } => "expectile",
             ModelKind::Garch { .. } => "garch",
+            ModelKind::Ar { .. } => "ar",
         }
     }
 
@@ -2835,6 +2874,11 @@ impl Spec {
             ModelKind::Hawkes { .. } => 0.0,
             // The start is the gate: nothing is reported before it is fitted.
             ModelKind::Garch { .. } => 0.0,
+            // Each fit's coefficients, the constant, the lags and the
+            // features, one row of weight each.
+            ModelKind::Ar { ref lags, .. } => {
+                (lags.lags().len() + self.k() + usize::from(self.fit_intercept)) as f64
+            }
             // The noise gate is this model's readiness gate
             // (docs/WARMUP-AND-CONVERGENCE.md §2.1): `max_error_inflation`
             // tracks the model where a count of weight cannot, and the
@@ -3353,6 +3397,8 @@ impl Spec {
                     columns_counted(self.features.len())
                 ));
             }
+        } else if matches!(self.model, ModelKind::Ar { .. }) {
+            // Features are optional: a pure autoregression has none.
         } else if self.features.is_empty() && !(columns_missing && self.model.is_unsupervised()) {
             columns_missing = true;
             no.refuse(format!(

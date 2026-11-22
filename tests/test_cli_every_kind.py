@@ -720,6 +720,21 @@ CASES: list[Case] = [
             "max_state_bytes": 1 << 20,
         },
     ),
+    # Two series, each on its own lags, with an exogenous feature; and a pure
+    # AR on the other stream keys.
+    Case(
+        "ar",
+        "ar",
+        {
+            **STREAM,
+            "targets": ["y", "x1"],
+            "features": ["x0"],
+            "lags": [1, 3],
+            "ridge": 0.01,
+            "max_state_bytes": 1 << 20,
+        },
+    ),
+    Case("ar_pure", "ar", {**STREAM2, "targets": ["y"], "lags": 2}),
     # Each target a return series; no half-life (the recursion is per
     # observation), so no gate on settling toward one either.
     Case(

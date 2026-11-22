@@ -177,6 +177,12 @@ pub const CELLS: &[Cell] = &[
     cell("ftrl.history", 1000, 8, Const, Const),
     cell("holt.targets", 1, 8, Pow(1), Pow(1)),
     cell("holt.history", 1000, 8, Const, Const),
+    // A rank-one update of each target's Gram and its Cholesky a learned
+    // row, `k³` a row beside `k²` numbers, `k` the lags and the features;
+    // each target is its own fit; its lags are a ring of `max(lags)`.
+    cell("ar.lags", 4, 8, Pow(3), Pow(2)),
+    cell("ar.targets", 1, 8, Pow(1), Pow(1)),
+    cell("ar.history", 1000, 8, Const, Const),
     cell("ew_cov.k", 4, 8, Pow(2), Pow(2)),
     cell("ew_cov.lags", 1, 8, Pow(1), Pow(1)),
     cell("ew_cov.window", 500, 8, Const, Pow(1)),
@@ -812,6 +818,11 @@ fn model_case(id: &str, n: usize) -> ModelCase {
             let mut s = fit(expectile(Some(n)), 4, 1);
             s["half_life"] = json!("inf");
             ModelCase::new(s, lin)
+        }
+        ("ar", "lags") => ModelCase::new(fit(json!({"type": "ar", "lags": n}), 0, 1), lin),
+        ("ar", "targets") => ModelCase::new(fit(json!({"type": "ar", "lags": 8}), 0, n), lin),
+        ("ar", "history") => {
+            ModelCase::new(fit(json!({"type": "ar", "lags": 8}), 0, 1), lin).warm(n)
         }
         ("ftrl", "k") => ModelCase::new(fit(json!({"type": "ftrl"}), n, 1), lin),
         ("ftrl", "history") => ModelCase::new(fit(json!({"type": "ftrl"}), 8, 1), lin).warm(n),
