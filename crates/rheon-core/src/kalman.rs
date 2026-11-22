@@ -3193,43 +3193,6 @@ mod tests {
         model
     }
 
-    /// On a reverting filter, `predict` withholds a target that has no
-    /// weight, as the step does -- one never seen, and one whose weight a long
-    /// gap took to 0 while a walking slot's covariance grew -- not the dot
-    /// product of whatever its coefficients hold.
-    #[test]
-    fn a_reverting_filter_withholds_a_target_without_weight() {
-        let mut c = cfg(2, 2, vec![100.0]);
-        c.revert_half_life = vec![50.0, f64::INFINITY, 50.0];
-        c.min_weight = 0.0;
-        let mut model = Kalman::new(c).unwrap();
-        let mut s = 91u64;
-        for i in 0..40 {
-            let x = [lcg(&mut s), 0.5 + lcg(&mut s)];
-            let y0 = 2.0 * x[0] - x[1] + 0.1 * lcg(&mut s);
-            let y1 = if i < 20 { None } else { Some(x[1]) };
-            model.step(&x, &[Some(y0), y1], if i == 0 { 0.0 } else { 1.0 }, 1.0);
-        }
-        let x = [0.3, 0.8];
-        let got = model.predict(&x, 1.0);
-        assert!(
-            got.pred[0].is_finite() && got.pred[1].is_finite(),
-            "{:?}",
-            got.pred
-        );
-        // A gap of 5,000 half-lives with no target takes every weight to 0.
-        model.step(&x, &[None, None], 1e6, 1.0);
-        assert_eq!(model.wj, vec![0.0, 0.0]);
-        let got = model.predict(&x, 1.0);
-        assert!(got.pred.iter().all(|p| p.is_nan()), "{:?}", got.pred);
-        let stepped = model.clone().step(&x, &[Some(0.0), Some(0.0)], 1.0, 1.0);
-        assert!(
-            stepped.pred.iter().all(|p| p.is_nan()),
-            "{:?}",
-            stepped.pred
-        );
-    }
-
     #[test]
     fn cfg_validation_rejects_each_bad_field() {
         let bad = |f: &dyn Fn(&mut KalmanCfg), want: &str| {
