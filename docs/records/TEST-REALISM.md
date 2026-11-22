@@ -150,7 +150,7 @@ realistic test and nothing is left to add.
 | | F | 10 (`marginal_lags`, `_bins`, `_bins_huber`, `_bins_refit`, `_bins_refit_done`, `_bins_refit_first_value`, `_bins_refit_first_value_frozen` (8 and 16 rows before), `_bins_huber_anchored`, `_window`, `_window_lags`) | R\* | none |
 | | O | `test_second_opinion` (7: pandas pairwise, numpy window and decay, `binned_statistic`), `_grids.marglag_acf` (5) and `marglag_ccf` (statsmodels `acf`, `ccf`), `marginal_bin_huber`, `marginal_bin_refit` (statsmodels) | R (`y = 0.7 x + noise`, 600 rows) | `serial_rule="geometric"` and the bin edge rule: a longhand only (no library places edges this way) |
 | | C | Rust probe D; sweeps D | D | none |
-| `kmeans` | G | 2 (`kmeans`, `_seeding_and_metric`) | D: iid uniform features, no clusters (a flat objective) | a stream of separated blobs |
+| `kmeans` | G | 2 (`kmeans`, `_seeding_and_metric`) on iid uniform features (D: no clusters, a flat objective), and `golden_structured.rs`'s `kmeans_blobs` (three blobs of 60 rows, the cluster and the distance at six rows, the blobs asserted found) | D and R\* | none |
 | | F | 4 (`kmeans`, `_warming` (6 rows), `kmeans_spans`, `_spans_warming` (6)) | R\* (two regimes shifted by 2.0 are separated); the warming cases D on purpose | none |
 | | O | `truth_recovery.kmeans_blobs` (50 seeds: sklearn `KMeans` inertia), `kmeans_franti` (7 sets, Fränti's A and S), `second_opinion_seeding.seeding_kmeanspp` (sklearn `kmeans_plusplus`), `convergence_iterations.kmeans_lloyd` | R | `init="farthest"`: no library has it |
 | | C | Rust probe D (no structure); proptest D; a three-blob Lloyd test in `model_contract.rs` R | D / R | none |
