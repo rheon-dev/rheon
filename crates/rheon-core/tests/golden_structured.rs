@@ -192,6 +192,51 @@ fn micro_blobs_linked_golden() {
     check("micro_blobs_linked", &got, GOLDEN_MICRO_BLOBS_LINKED);
 }
 
+/// Two regimes of 15 rows, round and round: row `i` is from regime
+/// `(i / 15) % 2`, a cloud of standard deviation 0.5 at -1.5 or at +1.5 in
+/// both features.
+fn regime_rows() -> Vec<Row> {
+    rows(60, 7771, |i, s| {
+        let m = if (i / 15) % 2 == 0 { -1.5 } else { 1.5 };
+        [m + 0.5 * gauss(s), m + 0.5 * gauss(s)]
+    })
+}
+
+/// `hmm` with two states told only roughly where they are (means at +-1,
+/// unit covariance, as a starting guess) and left to learn: the state it
+/// reports (slot 4) and the log-likelihood of the row (slot 5), at rows
+/// 10 and 40 (regime 0), 20 and 55 (regime 1).
+#[test]
+fn hmm_regimes_golden() {
+    let mut m = Hmm::new(HmmCfg {
+        n_features: 2,
+        k: 2,
+        decay: Decay::Halflife(20.0),
+        covariance: Covariance::Full,
+        precision_prior: 1e-2,
+        min_weight: 3.0,
+        learn: true,
+        transition_prior: 1.0,
+        transition: Some(vec![0.9, 0.1, 0.1, 0.9]),
+        means: Some(vec![-1.0, -1.0, 1.0, 1.0]),
+        covs: Some(vec![1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0]),
+        warm_rows: 10,
+        seed_rule: SeedRule::First,
+        seed: 1,
+        tvtp: None,
+        prior_rows: None,
+        warm_clock: None,
+    })
+    .unwrap();
+    let got = probe(&mut m, &regime_rows(), &[4, 5], &[10, 20, 40, 55]);
+    // The state follows the regime, one row at a time out of sample.
+    let state = |r: usize| got[2 * r];
+    assert_eq!(state(0), state(2), "regime 0 is one state");
+    assert_eq!(state(1), state(3), "regime 1 is one state");
+    assert_ne!(state(0), state(1), "the regimes are two states");
+    check("hmm_regimes", &got, GOLDEN_HMM_REGIMES);
+}
+
 // --- generated; see the module docs ---
 const GOLDEN_KMEANS_BLOBS: &[f64] = &[
     2.0,
@@ -228,3 +273,13 @@ const GOLDEN_MICRO_BLOBS: &[f64] = &[
     2.0,
 ];
 const GOLDEN_MICRO_BLOBS_LINKED: &[f64] = &[0.0, 1.0, 2.0, 0.0, 1.0, 2.0];
+const GOLDEN_HMM_REGIMES: &[f64] = &[
+    0.0,
+    -2.033795937365689,
+    1.0,
+    -0.9740368513225234,
+    0.0,
+    -1.711628768195652,
+    1.0,
+    -2.8097398706368955,
+];

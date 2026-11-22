@@ -178,7 +178,7 @@ realistic test and nothing is left to add.
 | | F | 3 (`bocpd`, `_warming` (6), `_warm_span` (6)) | R\*; the warming cases D on purpose | none |
 | | O | `second_opinion_bocpd.bocpd_pruning`, `second_opinion_regimes.bocpd_priors` (bayesian-changepoint-detection), `truth_recovery.bocpd_shift`, `bocpd_tcpd`, `bocpd_tcpdbench`, `_robust` (TCPDBench's published F1), `test_bocpd` (scipy `multivariate_t` for `covariance_type="full"`) | R | `max_run` fold (no library truncates this way) |
 | | C | Rust probe D | D | none |
-| `hmm` | G | 2 (`hmm`, `_tvtp`) | D: one Gaussian cloud, two states with a flat likelihood, `warm_rows = 10` | a two-regime stream |
+| `hmm` | G | 2 (`hmm`, `_tvtp`) on one Gaussian cloud (D: two states with a flat likelihood), and `golden_structured.rs`'s `hmm_regimes` (two regimes of 15 rows at -1.5 and +1.5, started at +-1, learning: the state and the log-likelihood at four rows, the state asserted to follow the regime) | D and R\* | none |
 | | F | 6 (`hmm`, `_diag`, `_full`, `_full_narrow`, `_full_warming`, `_warm_span` (8)) | R\* (two regimes of 12 rows); `_warm_span` D on purpose | none |
 | | O | `second_opinion_hmm` (hmmlearn: filter, loglik, batch limit, online EM), `second_opinion_regimes.hmm_tvtp` (statsmodels `MarkovRegression`), `truth_recovery.hmm_regimes` (50 seeds), `test_family_f_grids` | R | none (overlapping states converge slowly; documented, not a gap) |
 | | C | Rust probe D | D | none |
