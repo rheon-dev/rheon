@@ -672,6 +672,9 @@ fn corrchange_cfg(kind: CorrChangeKind) -> CorrChangeCfg {
         monitor_rows: 15,
         boundary_gamma: 0.0,
         permute_every: None,
+        span_clock: None,
+        monitor_clock: None,
+        max_state_bytes: None,
     }
 }
 

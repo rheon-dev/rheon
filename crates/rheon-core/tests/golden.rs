@@ -728,6 +728,9 @@ fn corrchange_golden() {
         monitor_rows: 0,
         boundary_gamma: 0.0,
         permute_every: None,
+        span_clock: None,
+        monitor_clock: None,
+        max_state_bytes: None,
     })
     .unwrap();
     let mut out = Vec::new();
@@ -1747,6 +1750,9 @@ fn corrchange_sequential_golden() {
         monitor_rows: 20,
         boundary_gamma: 0.25,
         permute_every: None,
+        span_clock: None,
+        monitor_clock: None,
+        max_state_bytes: None,
     })
     .unwrap();
     let mut out = Vec::new();
@@ -1995,7 +2001,7 @@ const GOLDEN_BOCPD_ON_THE_CLOCK: &[f64] = &[
 // Regenerated 2026-09-28 (docs/PLAN.md task 114): the long-run variance's
 // kernel is WKD's `1 − l/γ`, where it was Newey–West's `1 − l/(γ+1)`
 // (0.8418929529846794, 0.7933802263147072, 0.787701333637405).
-const GOLDEN_CORRCHANGE: &[f64] = &[0.8103851544234802, 0.764942538158755, 0.6621041576121629];
+const GOLDEN_CORRCHANGE: &[f64] = &[0.6469993250907099, 0.6637003325160533, 0.5067551764605898];
 // Re-frozen 2026-09-06: `hmm`'s `min_weight` used to withhold a row from
 // the *update* as well as from the report, so the first rows of this stream
 // (`min_weight = 3`) never reached the filter. It now gates the report
@@ -2247,25 +2253,23 @@ const GOLDEN_BOCPD_GAUSSIAN: &[f64] = &[
 ];
 const GOLDEN_BOCPD_ROBUST: &[f64] = &[0.05647515197223256, 0.05942243315748, 0.05285901703185968];
 const GOLDEN_CORRCHANGE_SEQUENTIAL: &[f64] = &[
-    0.8316281190223411,
-    0.6909945046453919,
-    0.8717864537157914,
-    1.088107497209456,
-    1.122362938000111,
-    0.8341873826345729,
-    0.8805008348308133,
-    0.9496344256708152,
-    0.32833736423817417,
-    0.07921916384339617,
-    0.2074817753847168,
-    0.30015612602690156,
-    0.49240780002347756,
-    0.5101683171994119,
-    0.5007703521180233,
-    0.755536012901163,
-    0.8179783419406013,
-    1.073767937120612,
-    0.7304393221230613,
+    0.4521205301189889,
+    0.8383825456783482,
+    0.9650674372722438,
+    0.68881947719374,
+    0.7687384238767587,
+    0.8665169652644557,
+    0.2804127989270904,
+    0.06733939091874662,
+    0.18234031021031075,
+    0.26903161489029487,
+    0.4527772374571688,
+    0.47343163795422794,
+    0.4672185819282127,
+    0.724875551702304,
+    0.7923589035682767,
+    1.072890953651047,
+    0.7050611338478604,
 ];
 const GOLDEN_EW_CLASS_WINDOWED: &[f64] = &[0.7905217777831282, 1.0, 0.8827845147955854];
 const GOLDEN_EW_COV_LAGS: &[f64] = &[
