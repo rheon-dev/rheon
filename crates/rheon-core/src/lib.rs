@@ -124,6 +124,7 @@ mod sgd;
 mod since;
 mod solve;
 mod specification;
+mod spectral;
 mod spread;
 mod stats;
 mod tails;
@@ -224,6 +225,7 @@ pub use seqtest::{SLOTS as SEQTEST_SLOTS, SeqTest, SeqTestCfg};
 pub use sgd::{LearningRate, Sgd, SgdCfg, SgdLoss};
 pub use solve::{SpdFactor, quad_forms_logdet, solve_spd};
 pub use specification::Specification;
+pub use spectral::{MAX_FREQUENCIES, Spectral, SpectralCfg, SpectralScaling};
 pub use stats::{
     EW_QUANTILE_ALPHA, EwAutoCorr, EwQuantile, HitTest, MAX_BAND_OCTAVES, SlotMetrics,
 };
