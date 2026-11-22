@@ -343,3 +343,54 @@ fn a_level_outside_zero_and_one_is_refused() {
     six.first = vec![0.0; 6];
     assert!(!six.has_shape());
 }
+
+/// PLAN 544, part 2: any positive weight counts as one value, the same value
+/// unweighted; a weight of 0 changes nothing, at the start or later.
+#[test]
+fn a_positive_weight_is_one_row_and_a_zero_weight_is_none() {
+    for (seed, xs) in streams(11, 400).into_iter().enumerate() {
+        let levels = [0.05, 0.5, 0.95];
+        let mut plain = PSquared::new(&levels).unwrap();
+        let mut weighted = PSquared::new(&levels).unwrap();
+        let mut s = 31 + seed as u64;
+        for &x in &xs {
+            // A zero-weight row before every row, the first included: none seen.
+            weighted.update_weighted(x * 1e3 + 7.0, 0.0);
+            weighted.update_weighted(-x, -1.0);
+            weighted.update_weighted(x, f64::NAN);
+            // Both sides of the threshold: the smallest positive weight counts.
+            let w =
+                [f64::MIN_POSITIVE, 1e-300, 0.25, 1.0, 3.5, 1e300][(lcg(&mut s) * 6.0) as usize];
+            weighted.update_weighted(x, w);
+            plain.update(x);
+            assert_eq!(
+                rmp_serde::to_vec(&weighted).unwrap(),
+                rmp_serde::to_vec(&plain).unwrap()
+            );
+        }
+        assert_eq!(weighted.count(), xs.len() as f64);
+    }
+    let mut only_zero = PSquared::new(&[0.5]).unwrap();
+    for x in [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0] {
+        only_zero.update_weighted(x, 0.0);
+    }
+    assert_eq!(only_zero, PSquared::new(&[0.5]).unwrap());
+    assert_eq!(only_zero.get(0), None);
+    assert_eq!(only_zero.count(), 0.0);
+}
+
+/// PLAN 544, part 2: P² takes no span; a spec that gives one is refused,
+/// naming the forms that forget. No span passes.
+#[test]
+fn a_span_is_refused_naming_the_forms_that_forget() {
+    assert_eq!(PSquared::check_no_span(None), Ok(()));
+    for field in ["half_life", "window_size", "span"] {
+        let err = PSquared::check_no_span(Some(field)).unwrap_err();
+        assert!(err.contains(field), "{err}");
+        assert!(err.contains("never forgets"), "{err}");
+        assert!(
+            err.contains("decayed form") && err.contains("windowed form"),
+            "{err}"
+        );
+    }
+}

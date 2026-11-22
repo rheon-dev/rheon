@@ -45,9 +45,17 @@
 //! followed is that of its last pure-Python version, and the agreement is
 //! measured, on every row of seeded streams, by the tests.
 //!
+//! **Weights.** P² has no weighted form: its positions count values. A row
+//! of any positive weight counts as one value, as river's estimators and the
+//! drift detectors take a row; a row of weight 0 (or a weight that is not a
+//! positive number) is not seen, moves no marker and counts in no clock
+//! ([`PSquared::update_weighted`]).
+//!
 //! P² has no error bound: the markers are a heuristic, and nothing limits
 //! how far `q_3` strays from the quantile on a stream that is not
-//! stationary. It never forgets a row. Its state is fixed by the levels: per
+//! stationary. It never forgets a row, so it takes no span: a spec that
+//! gives it a half-life, a window or another span is refused when it is
+//! built ([`PSquared::check_no_span`]), naming the quantiles that forget. Its state is fixed by the levels: per
 //! level the 15 numbers above (`p` aside, 128 bytes), and up to five values
 //! before the sixth arrives.
 
@@ -182,6 +190,29 @@ impl PSquared {
         }
         for (m, &p) in self.markers.iter_mut().zip(&self.levels) {
             m.update(x, p);
+        }
+    }
+
+    /// One row `x` of weight `w`: any positive weight counts as one value
+    /// (P² counts values and has no weighted form), and a weight of 0, or
+    /// one that is not a positive number, leaves the estimate as it was.
+    pub fn update_weighted(&mut self, x: f64, w: f64) {
+        if w > 0.0 {
+            self.update(x);
+        }
+    }
+
+    /// Refuse a span given to P², which never forgets a row: `given` names
+    /// the span's field as the spec wrote it (`half_life`, `window_size`, a
+    /// rows-or-clock span), or `None` when the spec gives none.
+    pub fn check_no_span(given: Option<&str>) -> Result<(), String> {
+        match given {
+            None => Ok(()),
+            Some(field) => Err(format!(
+                "PSquared: {field} is not allowed. P-squared never forgets a row, so it takes no \
+                 span, half-life or window. For a quantile that forgets, use the decayed form \
+                 (a half_life) or the windowed form (a window) instead."
+            )),
         }
     }
 

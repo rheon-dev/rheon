@@ -127,6 +127,7 @@ mod specification;
 mod spread;
 mod stats;
 mod tails;
+mod tdigest;
 /// The thread pools of the tests that run one computation at several pool
 /// sizes, held within what a Windows runner can commit.
 #[cfg(test)]
@@ -228,6 +229,7 @@ pub use stats::{
     EW_QUANTILE_ALPHA, EwAutoCorr, EwQuantile, HitTest, MAX_BAND_OCTAVES, SlotMetrics,
 };
 pub use tails::Tails;
+pub use tdigest::TDigest;
 pub use warmup::{WARMUP_ROWS, Warmup};
 pub use window::{
     At, Bytes, Cadence, DiagMoments, Edit, Footprint, Moments, Offer, Pack, Packer, Snapshots,
