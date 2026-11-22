@@ -817,7 +817,9 @@ impl Merge {
                 }
             }
         }
-        if want.is_none() && hold && all_ended {
+        // Every input ended and every row out but the ones held: not a pull
+        // that stopped at its limit with rows still to go.
+        if want.is_none() && hold && all_ended && picks.len() < budget {
             self.held_end = true;
         }
         let out = self.assemble(parts, &picks)?;
