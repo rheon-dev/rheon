@@ -1226,14 +1226,14 @@ fn a_garch_past_its_state_cap_or_its_forms_is_refused() {
     accepted(&spec(
         r#"{"type": "garch", "vol": "figarch", "truncation": 15000}"#,
     ));
-    // two targets of FIGARCH: 2 (224 + 8 M) + 16 bytes, 256,464 at 16,000
-    // lags and 272,464 at 17,000
+    // two targets of FIGARCH: 2 (216 + 8 M) + 16 bytes, 256,448 at 16,000
+    // lags and 272,448 at 17,000
     accepted(&spec(
         r#"{"type": "garch", "vol": "figarch", "truncation": 16000}"#,
     ));
     refused(
         &spec(r#"{"type": "garch", "vol": "figarch", "truncation": 17000}"#),
-        &["272464 bytes", "max_state_bytes of 262144", "truncation"],
+        &["272448 bytes", "max_state_bytes of 262144", "truncation"],
     );
     accepted(&spec(
         r#"{"type": "garch", "vol": "figarch", "truncation": 17000, "max_state_bytes": 300000}"#,

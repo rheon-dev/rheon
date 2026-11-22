@@ -269,7 +269,8 @@ def test_a_clock_span_start_is_warned_of_once_and_refused_at_the_cap():
     row to take a group past half of ``max_state_bytes`` warns, once,
     naming the group; the row that would take it past the cap stops the run
     with an error naming the group and the bytes."""
-    cap = 176 + 16 + 16 * 300
+    # the state of 300 buffered rows: 168 fixed, 16 the model's, 16 a row
+    cap = 168 + 16 + 16 * 300
     s = rp.spec.garch(
         "m", targets=["y"], group="g", clock="t", gap_cap=1e9, start_span=1e9, max_state_bytes=cap
     )
