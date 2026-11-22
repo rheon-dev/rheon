@@ -196,11 +196,10 @@ stream processor that commits its input's offsets after the saves has no
 one point to resume from. `rp.stream.save_checkpoint(path, stages)` takes
 each stage's state by a name, as a bank, the bytes of a state or the path of
 a state file, and writes them as one file of the kind `"checkpoint"`. Each
-stage keeps its state file byte for byte, so `rp.stream.load_checkpoint`
-gives back each one's bytes by name, in order, and each loads through its
-own kind's loader: a bank's with `ModelBank.load_bytes`, and a window run's
-or a grid's as that call's `load_state`, which takes bytes as well as a
-path.
+stage keeps its state file byte for byte, and `rp.stream.load_checkpoint`
+gives back each one's bytes by name, in order. Each loads where it was
+saved: a bank's with `ModelBank.load_bytes`, and a window run's or a grid's
+as that call's `load_state`, which takes bytes as well as a path.
 
 | what is guaranteed | how |
 |---|---|

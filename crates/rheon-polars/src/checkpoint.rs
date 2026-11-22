@@ -293,11 +293,16 @@ pub fn load_checkpoint(bytes: &[u8]) -> Result<Vec<Stage>, String> {
     }
     if version < CHECKPOINT_VERSION {
         return Err(format!(
-            "{WHO}: the file is damaged (its version {version} was never written). {REMEDY}"
+            "{WHO}: the file is damaged (its version {version} was never written). Load an \
+             undamaged copy of the checkpoint, or save it again."
         ));
     }
-    let file: FileIn = rmp_serde::from_slice(bytes)
-        .map_err(|e| format!("{WHO}: the file is damaged (it cannot be read: {e}). {REMEDY}"))?;
+    let file: FileIn = rmp_serde::from_slice(bytes).map_err(|e| {
+        format!(
+            "{WHO}: the file is damaged (it cannot be read: {e}). Load an undamaged copy of \
+                 the checkpoint, or save it again."
+        )
+    })?;
     let views: Vec<(&str, &[u8])> = file
         .stages
         .iter()

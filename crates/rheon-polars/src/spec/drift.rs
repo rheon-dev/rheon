@@ -364,7 +364,7 @@ impl Spec {
                     no.refuse(format!(
                         "spec {name:?}: drift_options' max_buckets must be at most 64, but it \
                          is {m}: each level of the window holds that many buckets, and past \
-                         64 a level is a list to scan rather than a summary. Set max_buckets \
+                         64 a level is too long a list to stay a summary. Set max_buckets \
                          to 64 or fewer, such as 5."
                     ));
                 }

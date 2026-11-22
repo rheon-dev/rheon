@@ -492,7 +492,8 @@ impl RefreshTime {
                 if (old.version == REFRESH_VERSION_HELD) != old.held.is_some() {
                     return Err(format!(
                         "{WHO}: the state is damaged: its contents do not match its version, \
-                         {}. {START_OVER}",
+                         {}. Load an undamaged copy of the state file, or leave out load_state \
+                         to start over.",
                         old.version
                     ));
                 }
