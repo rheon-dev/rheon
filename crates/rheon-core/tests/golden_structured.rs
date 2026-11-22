@@ -758,6 +758,50 @@ fn expectile_skewed_golden() {
     check("expectile_skewed", &got, GOLDEN_EXPECTILE_SKEWED);
 }
 
+/// A Gamma amount of shape 4 and mean `exp(0.5 + 0.8 x0 - 0.4 x1)`: the
+/// mean times half the sum of eight squared normals over 4.
+fn gamma_rows() -> Vec<Row> {
+    target_rows(500, 4040, |_, s| {
+        let x = [lcg(s), lcg(s)];
+        let mean = (0.5 + 0.8 * x[0] - 0.4 * x[1]).exp();
+        let chi: f64 = (0..8).map(|_| gauss(s).powi(2)).sum();
+        (x, mean * chi / 8.0)
+    })
+}
+
+/// A Gamma `glm` with a log link on draws from that family, no forgetting
+/// and a small ridge: the mean at three rows and the coefficients, which are
+/// held to the truth within the sampling error of 500 rows (shape 4).
+#[test]
+fn glm_gamma_golden() {
+    let mut m = Glm::new(GlmCfg {
+        n_features: 2,
+        n_targets: 1,
+        fit_intercept: true,
+        decay: Decay::Halflife(f64::INFINITY),
+        family: GlmFamily::Gamma,
+        link: GlmLink::Log,
+        var_power: 1.5,
+        ridge: 1e-3,
+        min_weight: 3.0,
+        refit_rows: 15,
+        refit_clock: None,
+        step_cap: f64::INFINITY,
+        max_state_bytes: None,
+    })
+    .unwrap();
+    let mut got = probe(&mut m, &gamma_rows(), &[0], &[200, 400, 499]);
+    let coef = m.coefficients()[0].clone();
+    for (c, t) in coef.iter().zip([0.5, 0.8, -0.4]) {
+        assert!(
+            (c - t).abs() < 0.15,
+            "coefficients {coef:?}, truth (0.5, 0.8, -0.4)"
+        );
+    }
+    got.extend(&coef);
+    check("glm_gamma", &got, GOLDEN_GLM_GAMMA);
+}
+
 // --- generated; see the module docs ---
 const GOLDEN_KMEANS_BLOBS: &[f64] = &[
     2.0,
@@ -889,4 +933,12 @@ const GOLDEN_EXPECTILE_SKEWED: &[f64] = &[
     0.23346226377963325,
     1.0415184309502417,
     0.6527315437575731,
+];
+const GOLDEN_GLM_GAMMA: &[f64] = &[
+    1.3208673785014653,
+    0.8341742966636372,
+    1.8477776311924323,
+    0.5019867023301244,
+    0.742887826853017,
+    -0.43220700417823393,
 ];

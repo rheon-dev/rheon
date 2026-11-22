@@ -134,7 +134,7 @@ realistic test and nothing is left to add.
 | | F | 2 (`holt`, `_inf`) | D: same stream, no trend | a trending series; the fixtures freeze forms only |
 | | O | `convergence.holt` (8, statsmodels), `test_second_opinion` (4: statsmodels Holt, missing rows, row after a gap) | R | none |
 | | C | as `ewridge` (`holt` takes no features) | D / R | none |
-| `glm` | G | 2 (`glm` Gamma/log under decay, `glm_cap` Tweedie) | D: a positive target `y^2 + 0.1` of a linear index, not drawn from the family, so the dispersion is near 0 and the working response is exact | a Gamma or Poisson draw with a known mean |
+| `glm` | G | 2 (`glm` Gamma/log under decay, `glm_cap` Tweedie), and `golden_structured.rs`'s `glm_gamma` (500 draws of a Gamma of shape 4 at a log-linear mean, no forgetting: the coefficients held within 0.15 of the truth, 0.02 to 0.04 measured) | D ( a positive target `y^2 + 0.1` of a linear index, not drawn from the family, so the dispersion is near 0 and the working response is exact; R (the added test) | none |
 | | F | 4 (`glm_refit`, `_refit_done`, `_refit_clock`, `glm_cap`) | D: same stream | none for forms |
 | | O | `convergence.glm` (6, statsmodels), `test_second_opinion_glm` (statsmodels `GLM` with `freq_weights`, glum; 5 coefficients at 10,000 rows, 20 at 10,000 and 100,000) | R | none |
 | | C | as `ewridge` | D / R | none |
