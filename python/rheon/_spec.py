@@ -527,11 +527,8 @@ _RENAMED = {
     "max_cd_iters": "max_iter",
     "cd_tol": "tol",
     "reset": "change_action",
-    # Task 196 (docs/PLAN.md §18, N16): holt's level takes the spec's
-    # `half_life`, one knob under one name. Its counts of rows (N14) took
-    # their `_rows` names so that a clock form could come later under the
-    # plain name: task 538 gave `update_every`, `split_merge_every` and
-    # `permute_every` those clock forms.
+    # Task 196 (N16): holt's level takes the spec's `half_life`. Its N14
+    # names are task 538's clock forms now.
     "level_half_life": "half_life",
 }
 
