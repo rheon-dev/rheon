@@ -95,6 +95,7 @@ INTRODUCED = {
     "hawkes": "2.1.0",
     "expectile": "2.1.0",
     "garch": "2.1.0",
+    "pca": "2.1.0",
 }
 
 #: The workload's specs that need a parameter newer than a release, by the

@@ -313,6 +313,7 @@ def describe_api(cli: Path | None = None) -> str:
         ("audit", dict(columns=["x0", "x1"], pairs=True)),
         ("hawkes", dict(targets=["y", "z"], kernel_decays=[1.0, 5.0], half_life=100.0)),
         ("garch", dict(targets=["y", "z"], vol="gjr", dist="t", horizon=3)),
+        ("pca", dict(features=["x0", "x1", "x2"], n_components=2, half_life=100.0)),
         (
             "deco blocked",
             dict(
@@ -702,6 +703,7 @@ ENUM_PROBES: list[
     ("lasso.closed", "lasso", {"window_size": 100.0}, "model.closed", "word"),
     ("garch.vol", "garch", {"start_rows": 2000}, "model.vol", "word"),
     ("garch.dist", "garch", {}, "model.dist", "word"),
+    ("pca.method", "pca", {}, "model.method", "word"),
     ("marginal.closed", "marginal", {"window_size": 100.0}, "model.closed", "word"),
     ("ew_class.covariance_type", "ew_class", {}, "model.covariance_type", "word"),
     ("ew_class.window_budget", "ew_class", {"window_size": 100.0}, "model.window_budget", "key"),

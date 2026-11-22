@@ -1,7 +1,7 @@
 <!-- kind: reference -->
 # Models
 
-The reference entry of each of the twenty-six models a spec can name, by
+The reference entry of each of the twenty-seven models a spec can name, by
 family, for a reader who knows which model they want to look up. A
 model's parameters, their defaults and its refusals are in its docstring,
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md).
@@ -28,7 +28,7 @@ which models keep each, and why.
 
 ## The models at a glance
 
-The twenty-six models fall into four families, and each family answers one
+The twenty-seven models fall into four families, and each family answers one
 kind of question about a stream. Each name links its builder's reference
 page, which gives its keywords and their defaults, and *entry* links its
 entry on this page. [Choose a model](how-to/choose-a-model.md) says which
@@ -51,6 +51,7 @@ to start with for which question.
 | [`holt`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.holt) · [entry](#holt--holts-linear-trend) | step | Holt's linear trend, the baseline that uses no features |
 | **[Moments and correlation](#moments-and-correlation)** | | track the running moments and correlations of the columns you name |
 | [`ew_cov`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ew_cov) · [entry](#ew_cov--exponentially-weighted-moments) | accumulate | running mean, variance, covariance, correlation, partial correlation, Mahalanobis distance and principal components |
+| [`pca`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.pca) · [entry](#pca--streaming-principal-components) | step | principal components learned a row at a time in state that grows with the components times the columns, not the columns squared: the incremental SVD, CCIPCA or Oja's rule, each component withheld until the data tells it apart from its neighbours |
 | [`marginal`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.marginal) · [entry](#marginal--every-pairs-moments-kept-in-the-state) | accumulate | every (feature, target) pair's running mean, variance, covariance, correlation, slope and t, for a wide set of columns, kept in the state and read back as a table; optionally at a set of lags, and with binned target moments for the relations a correlation cannot see |
 | [`deco`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.deco) · [entry](#deco--one-correlation-for-the-whole-matrix) | accumulate | one correlation for the whole matrix: Engle & Kelly's equicorrelation, or one per block and per pair of blocks |
 | [`rcov`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.rcov) · [entry](#rcov--a-blocks-realized-covariance-robust-to-noise) | accumulate | a block's realized covariance, robust to microstructure noise: the Barndorff-Nielsen–Hansen–Lunde–Shephard kernel or Christensen–Kinnebrock–Podolskij pre-averaging, reported when a group closes |
@@ -297,7 +298,7 @@ readiness fields:
 | field | on | what it holds |
 |---|---|---|
 | `settled_frac` | every model but `marginal`, `rcov` and `audit` | how far the model has come toward its steady state under decay |
-| `withheld_reason` | every model but `marginal`, `rcov` and `audit` | why `pred_y` is null, or null when it is not: `below_min_settled_frac`, `below_min_weight`, `above_max_error_inflation`, `below_warm_rows` (the rows `kmeans`, `hmm` and `bocpd` hold to seed themselves from, and the rows before `kalman` has sized any of a target's coefficients, standardized with no intercept), `ill_conditioned` (an `ewridge` fit whose normal equations are too nearly singular to keep a digit) or `unstable_rate` (an `sgd` target whose learning rate is past its stability bound, so the fit diverges), in that order of precedence |
+| `withheld_reason` | every model but `marginal`, `rcov` and `audit` | why `pred_y` is null, or null when it is not: `below_min_settled_frac`, `below_min_weight`, `above_max_error_inflation`, `below_warm_rows` (the rows `kmeans`, `hmm` and `bocpd` hold to seed themselves from, and the rows before `kalman` has sized any of a target's coefficients, standardized with no intercept), `ill_conditioned` (an `ewridge` fit whose normal equations are too nearly singular to keep a digit) `unstable_rate` (an `sgd` target whose learning rate is past its stability bound, so the fit diverges) or `not_separated` (a `pca` component the data does not yet tell apart from a neighbour), in that order of precedence |
 | `error_inflation_y` | `ewridge`, `rls`, `kalman`, under `emit_error_inflation` | the row's own estimation variance over the noise: high on a row leaning on a direction the data never showed, at one triangular solve a row |
 | `support_coef` | `ewridge`, `huber`, `quantile`, beside `coef` | each coefficient's data share, `1 - ridge * (S^-1)_jj` on the system the solve inverts. A duplicated pair of features reads 0.5 each |
 | `se_coef` | `ewridge`, `rls`, `kalman`, under `emit_se_coef`, beside `coef` | each coefficient's standard error in its own units: `sigma` times the fit's own covariance, `kalman`'s posterior exactly. A report, not a gate; it errs large in warm-up and under a ridge |
@@ -2280,6 +2281,71 @@ with `n`. Measured, the spec ran 24 times as fast at a 74-row
 window and 1,100 times at a 4,680-row one. So use the spec for a stream, a
 state to save, or speed. The docstring's Notes, under *Against Polars*,
 give how to weight the rows.
+
+### `pca` — streaming principal components
+
+*API:* [`rheon.spec.pca`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.pca) — *Rust:* [`streampca.rs`](../crates/rheon-core/src/streampca.rs) — *Outputs:* [fields](OUTPUTS.md#pca)
+
+Principal components of the feature columns, learned one row at a time.
+
+Use `pca` for the leading directions of a stream's columns, the variance
+along each and each row's scores, where the columns are too many for a
+`k x k` covariance to be kept per group. Its state is `8 (2 + 3k + qk + q)`
+bytes for `k` columns and `q` kept directions (one more than the components
+written, where there is room), so 2,000 columns and 12 components hold
+256,120 bytes where `ew_cov`'s covariance would hold 16 MB. For a few
+hundred columns or fewer, [`ew_cov`](#ew_cov--exponentially-weighted-moments)'s
+`pca` gives the exact components of the same decayed covariance, and of a
+hard window too.
+
+Its parameters, their defaults and what each refuses are in its
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.pca), and
+the fields it writes in [OUTPUTS.md](OUTPUTS.md#pca).
+
+#### The update
+
+Each method keeps the weight `W`, the sum of squared weights `Q`, the mean
+`m` and the trace `tr` of the decayed covariance `C`, never `C` itself.
+With `a = λW / W'`, `b = w / W'` and `d = x - m`, `C' = a C + a b d d'`.
+
+- **`svd`** (the default), the incremental SVD that scikit-learn's
+  `IncrementalPCA` runs, here a row at a time and under the decay: the `q`
+  directions scaled by `sqrt(a)` times their singular values, with
+  `sqrt(a b) d` beside them, are rotated in pairs until orthogonal, and the
+  `q` longest kept. Exact while the data's rank is at most `q`.
+- **`ccipca`**, candid covariance-free incremental PCA: each direction is
+  kept as its variance times its unit vector, `v' = a v + a b (u . e) u`,
+  and the row deflated by each direction in turn.
+- **`oja`**, Oja's rule: the directions move by `eta (V d) d'`, `eta =
+  learning_rate b / tr'`, and are kept orthonormal in order.
+
+#### When a component is written
+
+A component whose eigenvalue equals a neighbour's is not identified: any
+rotation of the two fits as well. So component `j` is written while the
+likelihood-ratio test of the equality of two eigenvalues (Anderson 1963),
+`(n - 1) ln(((l + m)/2)^2 / (l m))` at Kish's effective size `n`, passes
+the chi-squared 99th percentile with two degrees of freedom, 9.21, against
+the component above it and the one below. No count of rows enters: the
+first rows are withheld because `n` is small, and a tie is withheld for as
+long as it lasts, its rows' `withheld_reason` reading `"not_separated"`.
+
+#### Checked against
+
+- scikit-learn's `IncrementalPCA.partial_fit`, row by row at no decay: the
+  components, `explained_variance_` and `explained_variance_ratio_`, within
+  7.0e-13 rad and 5.4e-13.
+- scikit-learn's `PCA` and scipy's `eigh` on the decay-weighted rows, every
+  direction kept: within 1.4e-14 rad and 3.3e-13.
+- CCIPCA and Oja's rule against their definitions written out in numpy, to
+  rounding, and against `PCA`'s subspace over ten seeds of 20,000 rows:
+  within 0.0045 rad without decay and 0.0082 under a half-life of 2,000
+  rows (the worst seed).
+
+#### See also
+
+- [`ew_cov`](#ew_cov--exponentially-weighted-moments)'s `pca`, the exact
+  components, and of a hard window.
 
 ### `marginal` — every pair's moments, kept in the state
 

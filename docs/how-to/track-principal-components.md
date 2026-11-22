@@ -5,7 +5,10 @@ This how-to is for anyone who wants the main direction several columns of
 a stream move in together, as it stands at each row. It reads the
 direction's loadings, its share of the variance and each row's coordinate
 along it. It uses
-`ew_cov`'s principal components, refreshed on a schedule.
+`ew_cov`'s principal components, refreshed on a schedule. For more columns
+than a `k x k` covariance can be kept for, [`pca`](../MODELS.md#pca--streaming-principal-components)
+learns the components a row at a time in state of the components times the
+columns.
 
 ## Prerequisites
 
