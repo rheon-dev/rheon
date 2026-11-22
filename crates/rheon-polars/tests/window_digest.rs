@@ -35,8 +35,12 @@ const MASKS: u64 = 0x7d9052681ddf16a6;
 /// 0x162b1609e20133e2 until windows state 11 (review P7) ended each state
 /// with its checksum; the same digest, with each state read back to its
 /// version-10 form (the entry cut, the version 10), gave 0x162b1609e20133e2
+/// again, so no output bit and no other state byte moved. 0xf19d9c9140f82a7e
+/// until windows state 12 (PLAN 542) wrote each state in the envelope; the
+/// same digest, with each state read back to its version-11 form (the old
+/// magic, no `kind`, the version 11, resealed), gave 0xf19d9c9140f82a7e
 /// again, so no output bit and no other state byte moved.
-const BITS: u64 = 0xf19d9c9140f82a7e;
+const BITS: u64 = 0x9c369b3e00245758;
 /// Rows a case runs over.
 const ROWS: usize = 2000;
 
