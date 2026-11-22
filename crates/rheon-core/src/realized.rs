@@ -31,7 +31,7 @@
 //! of the latest row in it:
 //!
 //! ```text
-//! n ← f n + w                       the return weight, the papers' n
+//! W ← f W + w        V ← f² V + w²  the returns' weight and squared weights
 //! s_rv ← f s_rv + w r_j²
 //! s_bv ← f s_bv + w a_j a_{j−1}     p ← f p + w      (from the second return on)
 //! s_tv ← f s_tv + w (c_j c_{j−1} c_{j−2})²            c = a^(1/3)
@@ -40,18 +40,22 @@
 //!
 //! and a row reads `RV = s_rv`, `BV = (π/2) s_bv`, `TV = μ_{2/3}^-3 s_tv`,
 //! `TQ = n μ_{4/3}^-3 s_tq`, `Z` with `n` for the papers' count, and `σ_i² =
-//! s_bv / p`, the weighted mean of the products before the row. With no
-//! decay (`half_life = inf`) and unit weights these are the papers' values
-//! on the returns so far, `n − 1` products and `n − 2` triples. A weight
-//! counts returns: the estimators are sums, so they scale with it, and `n`
-//! is a count of returns at unit weight.
+//! s_bv / p`, the weighted mean of the products before the row. `n`, the
+//! count of returns the estimators are of, is Kish's effective count `W² /
+//! V` of the returns' decayed weights, and under a window the count of the
+//! target's returns it holds: the count of returns at equal weights without
+//! a decay, and under a decay the count the weights are worth, `TQ`, `Z` and
+//! the flag all reading the same `n`. With no decay (`half_life = inf`) and
+//! unit weights these are the papers' values on the returns so far, `n − 1`
+//! products and `n − 2` triples. A weight counts returns: the estimators are
+//! sums, so they scale with it.
 //!
 //! **Out of sample** (hard rule 2): a row reports from the state before its
 //! own return and before its own decay, so the variations are those of the
 //! returns before it, and `L_i` is the row's return against their
 //! volatility. `weight_sum` is the weight of every row, and each target's
-//! own `n` the weight of its returns, both before the row's update and
-//! before its decay (hard rule 8); a target reports `NaN` while its `n` is
+//! own weight `W` that of its returns, both before the row's update and
+//! before its decay (hard rule 8); a target reports `NaN` while its `W` is
 //! under `min_weight`, the test where `RV` or `BV` is 0, and `L_i` where
 //! `σ_i` is 0 or the row has no return for it.
 //!
@@ -77,10 +81,11 @@
 //! ```
 //!
 //! `β` the test's confidence, `P(ξ ≤ β*) = β` for the standard Gumbel `ξ`
-//! (`lm_beta`, 0.99 by default: `β* = 4.6001`). `n` is the target's own
-//! weight of returns, the `n` of the other estimators, so the threshold is
-//! that of the stretch they are measured over; the flag is `NaN` where `L_i`
-//! is, or where `n ≤ 1`.
+//! (`lm_beta`, 0.99 by default, a test at 1%: `β* = 4.6001`). `n` is the
+//! target's own count of returns, the `n` of the other estimators (above),
+//! so the threshold is that of the stretch they are measured over; the flag
+//! is `NaN` where `L_i` is, or where `n ≤ 1`, where `C_n` has no value (`ln
+//! ln n`).
 //!
 //! **A window** (`window_rows = W`, or `window_clock = D`) in place of a
 //! decay: the estimators of the returns of the last `W` rows of positive
@@ -105,9 +110,9 @@
 //! paper's `K` does, so it has no form in clock units. Without it `σ_i` is
 //! read from the estimators' own sums.
 //!
-//! **The state.** Per target, `16` numbers (six compensated sums, the last
+//! **The state.** Per target, `18` numbers (seven compensated sums, the last
 //! return's size, the last two cube roots and how many returns are
-//! remembered) and the shared weight: `8 + 128 m` bytes for `m` targets
+//! remembered) and the shared weight: `8 + 144 m` bytes for `m` targets
 //! under a decay, whatever the stream's length. `lm_window` adds `16 (K − 2)
 //! + 32` bytes a target. A window adds `32` bytes, and a row it holds `16`
 //! (its sequence and weight; under `window_clock` a stamp of 32 more) and `56`
@@ -275,7 +280,7 @@ impl RealizedCfg {
     /// largest window that fits where a window is what passes it.
     fn past_the_cap(&self, bytes: u64, cap: u64) -> String {
         let m = self.n_targets as u64;
-        let base = Realized::state_bytes(self.n_targets, self.lm_window, None, false);
+        let base = Realized::state_bytes(self.n_targets, self.lm_window, Some(0), false);
         let row = Realized::window_row_bytes(self.n_targets, false);
         match self.window_rows {
             Some(w) if base <= cap => format!(
@@ -416,7 +421,7 @@ impl Realized {
     }
 
     /// The bytes of the numbers a model of `n_targets` series holds: `8 +
-    /// 128 m` under a decay; with `lm_window = K`, `16 (K − 2) + 32` more a
+    /// 144 m` under a decay; with `lm_window = K`, `16 (K − 2) + 32` more a
     /// target; with a window holding `rows` rows, its fixed `32` and
     /// [`Self::window_row_bytes`] a row, every target's return there.
     pub fn state_bytes(
@@ -470,6 +475,7 @@ impl Realized {
                 y.get(j).copied().flatten(),
                 self.cfg.min_weight,
                 self.cfg.lm_beta,
+                self.window.is_some(),
                 pred,
             );
         }

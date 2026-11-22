@@ -23,6 +23,7 @@ BUILDERS = [
     "audit",
     "hawkes",
     "garch",
+    "realized",
     "bocpd",
     "corrchange",
     "deco",

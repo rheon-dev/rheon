@@ -322,8 +322,9 @@ fn irregular(r: &[f64], seed: u64) -> Vec<Row> {
 /// Under a decay the online sums are the definition's weighted sums, each
 /// term decayed by its own age taken in one power: half-lives of 50 and 500
 /// clock units, an irregular clock and unequal weights. The products are
-/// of consecutive returns, each at the weight of its later row; `n` is the
-/// returns' weight. The online form multiplies a factor a row, so its gap
+/// of consecutive returns, each at the weight of its later row; `n`, which
+/// `TQ` and `Z` read, is Kish's effective count of the decayed weights
+/// (`(Σ λw)² / Σ (λw)²`). The online form multiplies a factor a row, so its gap
 /// grows with the rows a half-life holds. Measured (ulps): RV 21, BV 17, TV
 /// 14, TQ 32, `Z` 6.6 in units of `cond · ε`, `L` 7, the weight 11.
 #[test]
@@ -580,13 +581,13 @@ fn min_weight_gates_each_series_on_its_own_weight() {
     }
 }
 
-/// The state is `8 + 128 m` bytes whatever the stream's length, and the
+/// The state is `8 + 144 m` bytes whatever the stream's length, and the
 /// settings refuse what they must, each naming the setting: no target, a
 /// bad decay or floor, and a cap of 0, past 64 MiB, or below the state.
 #[test]
 fn the_state_is_a_few_numbers_a_series_and_the_settings_are_checked() {
-    assert_eq!(Realized::state_bytes(1, None, None, false), 136);
-    assert_eq!(Realized::state_bytes(4, None, None, false), 520);
+    assert_eq!(Realized::state_bytes(1, None, None, false), 152);
+    assert_eq!(Realized::state_bytes(4, None, None, false), 584);
     let mut m = Realized::new(cfg(3, 10.0)).unwrap();
     let r = sv_day(23_400, 15, true);
     let rows: Vec<Row> = r.iter().map(|&x| (1.0, vec![Some(x); 3], 1.0)).collect();
@@ -609,14 +610,14 @@ fn the_state_is_a_few_numbers_a_series_and_the_settings_are_checked() {
     for (cap, says) in [
         (0, "must be above 0"),
         ((64 << 20) + 1, "at most"),
-        (135, "would hold 136 bytes"),
+        (151, "would hold 152 bytes"),
     ] {
         let mut c = cfg(1, 10.0);
         c.max_state_bytes = Some(cap);
         refuse(c, says);
     }
     let mut c = cfg(1, 10.0);
-    c.max_state_bytes = Some(136);
+    c.max_state_bytes = Some(152);
     assert!(Realized::new(c).is_ok(), "the cap itself holds");
 }
 
@@ -630,4 +631,38 @@ fn a_state_of_the_wrong_shape_is_refused() {
     let mut m = Realized::new(cfg(1, 10.0)).unwrap();
     m.series[0].seen = 3;
     assert!(Realized::restore(&m.state()).is_err());
+}
+
+/// The count of returns `n` that `TQ`, `Z` and the flag read: without a
+/// decay and at equal weights the count itself, exactly; under a decay
+/// Kish's effective count `(Σ λw)² / Σ (λw)²`, the count the decayed
+/// weights are worth (at unit weights near `(1 + λ)/(1 − λ)`, about twice
+/// their sum); and unmoved by the scale of the weights, as a count is.
+#[test]
+fn n_is_the_count_of_returns_and_kish_under_a_decay() {
+    let r = sv_day(3_000, 16, false);
+    let mut m = Realized::new(cfg(1, f64::INFINITY)).unwrap();
+    run(&mut m, &unit_rows(&r));
+    assert_eq!(m.series[0].count(false), 3_000.0);
+    let h = 100.0;
+    let mut m = Realized::new(cfg(1, h)).unwrap();
+    run(&mut m, &unit_rows(&r));
+    let (w, n) = (m.series[0].weight(), m.series[0].count(false));
+    let lam = (-1.0 / h).exp2();
+    // The geometric sums of 3,000 unit weights, by their closed forms.
+    let big_n = lam.powi(3_000);
+    let w_sum = (1.0 - big_n) / (1.0 - lam);
+    let w2_sum = (1.0 - big_n * big_n) / (1.0 - lam * lam);
+    let n_want = w_sum * w_sum / w2_sum;
+    assert!((w - w_sum).abs() < 1e-11 * w_sum, "{w} {w_sum}");
+    assert!((n - n_want).abs() < 1e-11 * n_want, "{n} {n_want}");
+    assert!(
+        n > w,
+        "Kish's count of equal weights decayed is {n}, above their sum {w}"
+    );
+    let heavy: Vec<Row> = r.iter().map(|&x| (1.0, vec![Some(x)], 7.0)).collect();
+    let mut m7 = Realized::new(cfg(1, h)).unwrap();
+    run(&mut m7, &heavy);
+    let n7 = m7.series[0].count(false);
+    assert!((n7 - n).abs() < 1e-12 * n, "{n7} {n}");
 }

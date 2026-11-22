@@ -545,6 +545,15 @@ def clock_specs(draw, model: str, step: int, cap: int):
             kw["refit_span"] = steps(1, 30)
         else:
             kw["refit_rows"] = draw(st.integers(0, 12))
+    elif model == "realized":
+        # Task 499: the measures over a window of the clock, with its edge,
+        # or under a decay beside Lee and Mykland's own window of returns.
+        kw |= dict(targets=["y"])
+        if draw(st.booleans()):
+            kw |= dict(half_life=float("inf"), window_size=steps(1, 60))
+            kw["closed"] = draw(st.sampled_from(["right", "both"]))
+        else:
+            kw |= dict(half_life=steps(1, 30), lm_window=draw(st.integers(3, 12)))
     elif model == "garch":
         # Task 492: the start as a span of the clock, or of rows; no decay.
         kw |= dict(targets=["y"])

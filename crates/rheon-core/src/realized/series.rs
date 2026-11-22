@@ -27,7 +27,10 @@ const BV: usize = 2;
 const TV: usize = 3;
 const TQ: usize = 4;
 const PW: usize = 5;
-pub(super) const SUMS: usize = 6;
+/// The returns' squared weights, decayed twice over: with `n`'s weight,
+/// Kish's effective count `n² / Σw²`.
+const W2: usize = 6;
+pub(super) const SUMS: usize = 7;
 
 /// One row's terms of a series in a window, each at the row's weight, and
 /// how many of its products were taken: 1 for its product with the return
@@ -102,7 +105,7 @@ impl LmRing {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(super) struct Series {
-    /// The sums' high parts, `[n, rv, bv, tv, tq, p]`.
+    /// The sums' high parts, `[n, rv, bv, tv, tq, p, Σw²]`.
     pub(super) hi: [f64; SUMS],
     /// What each high part leaves out ([`add`]).
     pub(super) lo: [f64; SUMS],
@@ -142,7 +145,7 @@ pub(super) fn lm_jump(l: f64, n: f64, beta: f64) -> f64 {
 impl Series {
     /// The numbers a series holds outside a window and `lm_window`, in
     /// bytes: 16 of 8.
-    pub(super) const BYTES: u64 = 8 * 16;
+    pub(super) const BYTES: u64 = 8 * 18;
 
     pub(super) fn new(lm_window: Option<usize>) -> Self {
         Self {
@@ -166,12 +169,31 @@ impl Series {
         self.sum(NW)
     }
 
-    /// Every sum aged by the factor `f`.
+    /// Every sum aged by the factor `f`, the squared weights by `f²`.
     pub(super) fn decay(&mut self, f: f64) {
         if f != 1.0 {
             for v in self.hi.iter_mut().chain(self.lo.iter_mut()) {
                 *v *= f;
             }
+            self.hi[W2] *= f;
+            self.lo[W2] *= f;
+        }
+    }
+
+    /// The count of returns the estimators are of, the papers' `n`: the
+    /// returns a window holds, or Kish's effective count of the returns'
+    /// decayed weights, `(Σw)² / Σw²`, which is the count of returns at
+    /// equal weights without a decay. 0 before a return.
+    pub(super) fn count(&self, windowed: bool) -> f64 {
+        if windowed {
+            return self.held.len() as f64;
+        }
+        let w2 = self.sum(W2);
+        if w2 > 0.0 {
+            let w = self.sum(NW);
+            w * w / w2
+        } else {
+            0.0
         }
     }
 
@@ -201,6 +223,7 @@ impl Series {
             None => self.seen,
         };
         self.add(NW, w);
+        self.add(W2, w * w);
         self.add(RV, rv);
         if links >= 1 {
             self.add(BV, bv);
@@ -242,6 +265,7 @@ impl Series {
             return;
         };
         self.add(NW, -e.w);
+        self.add(W2, -(e.w * e.w));
         self.add(RV, -e.rv);
         if let Some(f) = self.held.front().filter(|f| f.links >= 1) {
             let (bv, w) = (f.bv, f.w);
@@ -288,12 +312,19 @@ impl Series {
 
     /// The series' outputs into `out`, from its state as it stands, for a
     /// row whose return is `r` (none where the row has none).
-    pub(super) fn read(&self, r: Option<f64>, min_weight: f64, beta: f64, out: &mut Vec<f64>) {
-        let n = self.sum(NW);
-        if n < min_weight {
+    pub(super) fn read(
+        &self,
+        r: Option<f64>,
+        min_weight: f64,
+        beta: f64,
+        windowed: bool,
+        out: &mut Vec<f64>,
+    ) {
+        if self.sum(NW) < min_weight {
             out.extend([f64::NAN; OUTPUTS_PER_TARGET]);
             return;
         }
+        let n = self.count(windowed);
         let rv = self.sum(RV);
         let s_bv = self.sum(BV);
         let bv = BV_SCALE * s_bv;

@@ -720,6 +720,40 @@ CASES: list[Case] = [
             "max_state_bytes": 1 << 20,
         },
     ),
+    # Each target a return series: decayed, with Lee and Mykland's own window
+    # and confidence, its groups run to a close; the other stream keys; a
+    # window of rows; and a window of clock units, its edge and its cap.
+    Case(
+        "realized",
+        "realized",
+        {**NOCOEF, **CLOSE, "targets": ["y", "x0"], "lm_window": 30, "lm_beta": 0.95},
+    ),
+    Case("realized2", "realized", {**NOCOEF2, "targets": ["y", "x0"]}),
+    Case(
+        "realized_window",
+        "realized",
+        {
+            "targets": ["y"],
+            "clock": "t",
+            "gap_cap": 6.0,
+            "half_life": float("inf"),
+            "window_rows": 40,
+            "max_state_bytes": 1 << 20,
+        },
+    ),
+    Case(
+        "realized_clock_window",
+        "realized",
+        {
+            "targets": ["y", "x0"],
+            "clock": "t",
+            "gap_cap": 6.0,
+            "half_life": float("inf"),
+            "window_size": 12.0,
+            "closed": "both",
+            "max_state_bytes": 1 << 20,
+        },
+    ),
     # Each target a return series; no half-life (the recursion is per
     # observation), so no gate on settling toward one either.
     Case(

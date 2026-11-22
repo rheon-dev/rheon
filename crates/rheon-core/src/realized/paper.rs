@@ -109,15 +109,29 @@ pub fn lee_mykland(r: &[f64], k: usize) -> Vec<f64> {
 /// (`(t_j, r_j, w_j)` the rows that learned a return, oldest first, `t`
 /// their clock, ages read from the last row's clock), written out term by
 /// term with each factor `2^(−age / half_life)` taken directly, not as the
-/// online form's product of each row's factor. `n` is the weight of the
-/// returns, and the second value `σ²`, the weighted mean of the products.
+/// online form's product of each row's factor. The count `n` that `TQ`
+/// and `Z` read is Kish's effective count `(Σ λw)² / Σ (λw)²` of the decayed
+/// weights, or `count` where it is given (a window's count of returns). The
+/// second value is the returns' weight, the third `σ²`, the weighted mean of
+/// the products.
 pub fn weighted(rows: &[(f64, f64, f64)], half_life: f64) -> (Measures, f64, f64) {
+    weighted_counted(rows, half_life, None)
+}
+
+/// [`weighted`] with the count of returns given.
+pub fn weighted_counted(
+    rows: &[(f64, f64, f64)],
+    half_life: f64,
+    count: Option<f64>,
+) -> (Measures, f64, f64) {
     let Some(&(now, _, _)) = rows.last() else {
         return (measures(&[]), 0.0, f64::NAN);
     };
     let lam = |t: f64| (-((now - t) / half_life)).exp2();
     let a = |j: usize| rows[j].1.abs();
     let nw = sum(rows.iter().map(|&(t, _, w)| lam(t) * w));
+    let w2 = sum(rows.iter().map(|&(t, _, w)| (lam(t) * w) * (lam(t) * w)));
+    let n = count.unwrap_or(nw * nw / w2);
     let rv = sum(rows.iter().map(|&(t, r, w)| lam(t) * w * (r * r)));
     let s_bv = sum((1..rows.len()).map(|j| lam(rows[j].0) * rows[j].2 * (a(j) * a(j - 1))));
     let p = sum((1..rows.len()).map(|j| lam(rows[j].0) * rows[j].2));
@@ -128,8 +142,8 @@ pub fn weighted(rows: &[(f64, f64, f64)], half_life: f64) -> (Measures, f64, f64
     let s_tq = sum((2..rows.len()).map(|j| triple(j, 4.0 / 3.0)));
     let bv = BV_SCALE * s_bv;
     let tv = TV_SCALE * s_tv;
-    let tq = nw * (TQ_SCALE * s_tq);
-    let z = nw.sqrt() * (1.0 - bv / rv) / (BNS_THETA * (tq / (bv * bv)).max(1.0)).sqrt();
+    let tq = n * (TQ_SCALE * s_tq);
+    let z = n.sqrt() * (1.0 - bv / rv) / (BNS_THETA * (tq / (bv * bv)).max(1.0)).sqrt();
     let m = Measures {
         n: rows.len(),
         rv,

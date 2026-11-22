@@ -1554,6 +1554,27 @@ variance_z = { budget = 8.125 }
 weight_sum = { budget = 8.0 }
 withheld_reason = { budget = 1.125 }
 
+[memory.realized]
+bns_y = { budget = 8.125 }
+bns_z = { budget = 8.125 }
+bv_y = { budget = 8.0 }
+bv_z = { budget = 8.0 }
+learned_clock = { budget = 8.125 }
+lm_jump_y = { budget = 0.25 }
+lm_jump_z = { budget = 0.25 }
+lm_y = { budget = 8.125 }
+lm_z = { budget = 8.125 }
+rv_y = { budget = 8.0 }
+rv_z = { budget = 8.0 }
+scored_clock = { budget = 8.0 }
+settled_frac = { budget = 8.0 }
+tq_y = { budget = 8.0 }
+tq_z = { budget = 8.0 }
+tv_y = { budget = 8.0 }
+tv_z = { budget = 8.0 }
+weight_sum = { budget = 8.0 }
+withheld_reason = { budget = 1.125 }
+
 # --- raises and sign-offs -------------------------------------------------------
 [[raised]]
 key = "tolerance.rss"

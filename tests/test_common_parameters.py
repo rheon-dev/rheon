@@ -97,13 +97,14 @@ DECAYING = tuple(
 #: The kinds that refuse a weight column.
 UNWEIGHTED = frozenset({"seqtest", "audit"})
 #: The kinds that read no features.
-NO_FEATURES = frozenset({"holt", "seqtest", "hawkes", "garch"})
+NO_FEATURES = frozenset({"holt", "seqtest", "hawkes", "garch", "realized"})
 #: The kinds whose clock parameters are rates, which have no unit on a
 #: temporal clock: ``hawkes``' ``kernel_decays`` is refused there, by name.
 RATES = frozenset({"hawkes"})
 #: A capped step is a break by design: ``corrchange`` abandons its span,
-#: ``rcov`` splits the block into stretches.
-CAP_IS_A_BREAK = frozenset({"corrchange", "corrchange_scalar", "rcov"})
+#: ``rcov`` splits the block into stretches, ``realized`` forms no product
+#: of returns across it.
+CAP_IS_A_BREAK = frozenset({"corrchange", "corrchange_scalar", "rcov", "realized"})
 #: The kinds that sum weight as a count, with what makes it exact: the
 #: ewridge readiness gate reads Kish's effective count, which copies change,
 #: and its default solve cadence counts rows; kalman's learned noise reads a

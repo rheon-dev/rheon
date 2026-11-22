@@ -185,7 +185,9 @@ fn a_window_weighs_its_rows_and_skips_an_absent_return() {
                 .filter(|&j| keep(j))
                 .map(|j| (j as f64, rs[j], w[j]))
                 .collect();
-            paper::weighted(&held, f64::INFINITY)
+            // A window's `n` is its count of returns.
+            let count = held.len() as f64;
+            paper::weighted_counted(&held, f64::INFINITY, Some(count))
         };
         let (p0, n0, _) = defn(&r0, &|_| true);
         let (p1, n1, _) = defn(&r1, &present);
