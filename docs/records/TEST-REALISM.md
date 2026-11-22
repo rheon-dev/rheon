@@ -182,7 +182,7 @@ realistic test and nothing is left to add.
 | | F | 6 (`hmm`, `_diag`, `_full`, `_full_narrow`, `_full_warming`, `_warm_span` (8)) | R\* (two regimes of 12 rows); `_warm_span` D on purpose | none |
 | | O | `second_opinion_hmm` (hmmlearn: filter, loglik, batch limit, online EM), `second_opinion_regimes.hmm_tvtp` (statsmodels `MarkovRegression`), `truth_recovery.hmm_regimes` (50 seeds), `test_family_f_grids` | R | none (overlapping states converge slowly; documented, not a gap) |
 | | C | Rust probe D | D | none |
-| `rcov` | G | 3 (`rcov`, `_preavg`, `_psd`) | D: iid uniform returns, nothing to estimate but a diagonal | none beyond a correlated tick stream |
+| `rcov` | G | 3 (`rcov`, `_preavg`, `_psd`) on iid uniform returns (D: nothing to estimate but a diagonal), and `golden_structured.rs`'s `rcov_returns` (300 returns of variance 1 at a correlation of 0.7: the kernel and pre-averaged blocks' three entries and the correlation, the correlation and the variance asserted near the truth) | D and R | none |
 | | F | 1 | R\* | none |
 | | O | `test_rcov` (hfhd `mrc` for `preavg`, `krvm` for the kernel at every jitter; numpy for the plain block), `truth_recovery.rcov_plain` | R | the subsampled and two-scale noise and IV estimates: a longhand |
 | | C | Rust probe D | D | none |

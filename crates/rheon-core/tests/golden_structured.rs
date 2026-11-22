@@ -416,6 +416,59 @@ fn deco_factor_golden() {
     check("deco_factor", &got, GOLDEN_DECO_FACTOR);
 }
 
+/// Returns with variances 1 and a correlation of 0.7: 300 ticks.
+fn return_rows() -> Vec<Row> {
+    rows(300, 555, |_, s| {
+        let (a, b) = (gauss(s), gauss(s));
+        [a, 0.7 * a + (1.0f64 - 0.49).sqrt() * b]
+    })
+}
+
+/// `rcov`'s kernel and pre-averaged estimates over one block of the return
+/// stream: the three distinct entries of each, and the correlation.
+#[test]
+fn rcov_returns_golden() {
+    let cfg = |kind, kernel_bw, preavg| RcovCfg {
+        n_features: 2,
+        kind,
+        kernel: "parzen".into(),
+        bandwidth: kernel_bw,
+        jitter: 2,
+        theta: 1.0,
+        psd: false,
+        block_rows: Some(300),
+        max_bandwidth: None,
+        preavg_rows: preavg,
+        noise_stride: 1,
+        iv_stride: 20,
+    };
+    let mut got = Vec::new();
+    for c in [
+        cfg(RcovKind::Kernel, Some(3), None),
+        cfg(RcovKind::Preavg, None, Some(6)),
+    ] {
+        let mut m = Rcov::new(c).unwrap();
+        for (x, y, d, w) in return_rows() {
+            m.step(&x, &y, d, w);
+        }
+        let est = m.estimate();
+        let cov = est.rcov.expect("a block");
+        assert!(
+            (cov[0] / 300.0 - 1.0).abs() < 0.3,
+            "variance {}",
+            cov[0] / 300.0
+        );
+        let corr = est.rcorr.expect("a block");
+        assert!(
+            (corr[1] - 0.7).abs() < 0.12,
+            "correlation {}, true 0.7",
+            corr[1]
+        );
+        got.extend([cov[0], cov[1], cov[3], corr[1]]);
+    }
+    check("rcov_returns", &got, GOLDEN_RCOV_RETURNS);
+}
+
 // --- generated; see the module docs ---
 const GOLDEN_KMEANS_BLOBS: &[f64] = &[
     2.0,
@@ -506,4 +559,14 @@ const GOLDEN_DECO_FACTOR: &[f64] = &[
     -7.633940013970986,
     -2.629961732725814,
     -2.1077895811748193,
+];
+const GOLDEN_RCOV_RETURNS: &[f64] = &[
+    324.1450477074828,
+    270.7530496893218,
+    358.2524549213687,
+    0.7945277573015966,
+    352.2796004452549,
+    283.81883050579927,
+    362.2519795198528,
+    0.7944966584471378,
 ];
