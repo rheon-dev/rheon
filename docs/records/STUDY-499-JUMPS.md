@@ -1,15 +1,16 @@
 # Bipower variation and the jump tests against third-party oracles (PLAN task 499, request A19)
 
 *Status, 2026-11-21: a record, in progress for request A19 (branch
-`vm/study-499b`). Parts 1 and 2 are done: the oracle search (§2), the paper's
+`vm/study-499b`). Parts 1, 2 and 3 are done: the oracle search (§2), the paper's
 definitions (§3), bipower variation and tripower quarticity against every
-candidate that computes them (§4), and the Barndorff-Nielsen and Shephard
-tests and the Lee and Mykland statistic against theirs, with and without
-planted jumps and on the Binance data (§5). Parts 3 (the online forms and
-their state) and 4 (the `tick` Hawkes check, the proposed tolerances, the
-conclusions) are not yet run; their sections say so. Nothing in the package or
-the Rust crates was changed. The runnable study is `scripts/study_499_jumps.py`
-(`part1`, `part2`); it is Python, plus R through rpy2. This is not the realized-kernel study of the same task number on
+candidate that computes them (§4), the Barndorff-Nielsen and Shephard tests and
+the Lee and Mykland statistic against theirs, with and without planted jumps and
+on the Binance data (§5), and the online forms of all four with their state in
+bytes and their agreement with the batch oracles (§6). Part 4 (the `tick` Hawkes
+check, the proposed tolerances, the conclusions) is not yet run; its sections say
+so. Nothing in the package or the Rust crates was changed. The runnable study is
+`scripts/study_499_jumps.py` (`part1`, `part2`, `part3`); it is Python, plus R
+through rpy2. This is not the realized-kernel study of the same task number on
 branch `vm/study-499`; the two share nothing but the task.*
 
 ## 1. The question
@@ -514,7 +515,253 @@ its null.
 
 ## 6. The online forms and their state (part 3)
 
-Not yet run.
+*Run: `scripts/study_499_jumps.py part3` (21 s: four series, 23,400 rows at the
+longest; the four every table below uses: synthetic with five jumps at
+n = 23,400 ("J23400"), synthetic without at n = 2,340 ("N2340"), BTCUSDT 1 minute
+of 2024-01-05 ("BTC", 1,439 rows) and the ETCUSDT trades of 2024-01-02 in 10
+seconds ("ETC10s", 8,639 rows)). The engines are `JumpEngine` (bipower variation,
+tripower and quadpower quarticity, realized variance and the BNS ratio as one row
+machine) and `LeeMyklandEngine` in the script; they are Python prototypes of the
+arithmetic, so nothing here is said of speed.*
+
+### 6.1 The forms
+
+A row is a clock `c`, a return `r` and a weight `w >= 0`. The rules, which the
+tests of §6.5 hold:
+
+* **Out of sample, and `weight` as everywhere.** The outputs of a row are read
+  from the state *before* its update; `weight` (the emitted `weight_sum`) is the
+  accumulated weight before the row's update and before its own decay, and
+  under a window the weight inside the window.
+* **A row of weight 0, or a return that is not finite, advances the clock and
+  learns nothing.** The sums decay by the clock step and the window edge moves; no
+  sum takes a term; the memory of the last returns is not touched, so the row is
+  as if absent, a product reaching across it to the last row that was observed.
+  It takes no snapshot and enters no ring. A stream that opens with such rows
+  leaves the state free of NaN.
+* **Sums.** With `a = |r|`, `b = a^(4/3)`, a term taking the weight `w` of the
+  *later* row of its product and the decay `lam^(clock age)`:
+  `nw = sum w`, `rv = sum w r^2`, `bv = sum w a_j a_{j-1}`,
+  `tq = sum w b_j b_{j-1} b_{j-2}`, `qp = sum w a_j a_{j-1} a_{j-2} a_{j-3}`.
+  Outputs `BV = (pi/2) bv`, `TQ = nw tq / mu_{4/3}^3`, `QP = nw qp (pi/2)^2` and
+  the adjusted ratio `Z = sqrt(nw)(1 - BV/rv) / sqrt(vartheta max(1, TQ/BV^2))` of
+  §5.1. The paper's `n` becomes the weight `nw`. With `lam = 1`, no window and
+  unit weights they are §3's `BV`, `TQ`, `QP` and §5's `Z` on the rows so far
+  (§6.3 checks this against the oracles).
+* **A hard window** of `W` clock units, closed on the right (a row exactly `W`
+  old has no weight; as in the repo's windows). It holds a term for every row in
+  it, the first one's with its predecessor outside the window: **W returns, W
+  products**, one product more than the paper's batch formula on `W` returns, which
+  has `W - 1`. The batch oracle for the window is the paper's formula on the `W + 1`
+  returns that end at the row (§6.4).
+* **Lee and Mykland.** The window of `K` rows is the paper's (the `K - 2` products
+  before the row, §5.1); the decay form is the exponentially weighted mean
+  `sigma^2 = sum lam^age w p / sum lam^age w`; the clock form the mean over the
+  products of the rows within `W` clock units. `L` is read before the row's update,
+  so the statistic is out of sample by construction. `T = (max |L| - C_n)/S_n` is
+  the running maximum over the rows tested so far; `n` is the count of rows
+  tested, or a fixed `n_ref` (the tests below use the batch's `n`, which the
+  paper's flags need: with the running count the early rows get a smaller `C_n`
+  and more flags).
+
+### 6.2 State in bytes
+
+Every number held is 8 bytes (f64 sums, `|r|`s, i64 clock and counts). Measured
+on the engines (`state_bytes` counts the numbers held, as the repo's `Footprint`
+does), and equal to the formulas over 23,400 rows:
+
+| Form | Bytes, as a function of the window or decay |
+|---|---|
+| BNS engine, one pass or any decay (5 sums, 3 returns, clock, count) | **89**, whatever `lam`, `n` or the half-life |
+| the same with Neumaier-compensated sums | **137** (the compensations, 48 more) |
+| BNS engine, hard window, **snapshot ring** (the repo's design: a snapshot of the 5 sums, the clock and the count a row) | **89 + 56 (rows in the window + 1)**: 5,745 at 100 rows, 56,145 at 1,000, 560,145 at 10,000 |
+| BNS engine, hard window, **term ring** (each row's clock and 5 terms, compensated running sums) | **137 + 48 (rows in the window)**: 4,937 at 100 rows, 48,137 at 1,000, 480,137 at 10,000 |
+| the snapshot ring with a snapshot every `W/20` clock units | at most `W/s + 1 = 21` snapshots: 1,265 bytes whatever `W` |
+| Lee-Mykland, decay | **80** |
+| Lee-Mykland, window of `K` rows, Neumaier-compensated sum (a ring of `K - 2` products) | **8 K + 48**: 848 at `K` = 100, 2,448 at 300 |
+| the same with a plain running sum / two stacks / differences of cumulative sums | `8 K + 40` / `16 K + 24` (1,624 at 100, 4,824 at 300) / `8 K + 48` |
+| Lee-Mykland, clock window (ring of clock, product and weight; compensated sums) | **80 + 24 (rows in the window)** |
+
+Each output needs fewer numbers than the engine that serves all of them
+(formulas, not measured): bipower variation alone 32 bytes and 16 per row in a
+ring; tripower quarticity 48 and 24; the BNS ratio with the tripower 64 and 40, with
+the quadpower 72 and 40; Lee-Mykland over `K` rows 48 and 8 per row. A **clock**
+window holds as many rows as its clock units contain, which no window length
+bounds: on the irregular clock of this study (exponential gaps, mean 1) a window
+of 100 units held up to 126 rows and one of 1,000 up to 1,035. So a clock window
+needs a cap on its rows (the repo's `window_budget` and `max_rows_between_snapshots`
+are that). Over 23,400 rows the rings stayed at exactly the sizes above (checked
+at every 1,000th row) and did not grow.
+
+**To raise before it lands** (the rule on state growth): a window of `W` rows
+holds 48 to 56 bytes a row per group, 480 to 560 KB a group at `W` = 10,000,
+480 to 560 MB at 1,000 groups, against 89 to 137 bytes a group without a window.
+A snapshot cadence bounds the snapshot ring at `W/s + 1` snapshots (1.3 KB at
+`s = W/20`), at the price of an edge that is `s` wide (a window of 1,000 units
+held 1,113 rows when sampled). The Lee-Mykland window is small: 848 bytes at the
+paper-like `K` = 100.
+
+### 6.3 One pass and decay, against the exact values and the oracles
+
+References: for the one pass, decay and windows, each term in float64 summed
+exactly (`fsum`), with the outputs formed in 40 digits; its own error is the
+rounding of the terms, about one ulp. `Z` is a difference, so its gap is in
+units of `cond x 2^-52`, `cond = (RV + BV)/|RV - BV|`.
+
+*One pass, 25 prefixes of each of the four series (largest gap, ulps):*
+
+| Sums | BV | TQ | QP | RV | `weight` | `Z` (cond units) |
+|---|---|---|---|---|---|---|
+| plain running sums (89 bytes) | 40.3 | 132 | 32.2 | 30 | 0 | 29.6 |
+| Neumaier-compensated (137 bytes) | 0.7 | 5.1 | 1.4 | 0 | 0 | 1.5 |
+
+The plain sum's error grows with the rows (a random walk of the rounding of each
+add: 40 to 130 ulps at 23,400 rows, 5 to 17 at 1,439); the compensated sum stays
+within the rounding of the terms.
+
+*Against the oracles of §4 and §5 on the whole series* (the online value is the
+paper's, so the gap is the sum's): BV against `hfvol` and R `rBPCov`: 22 ulps
+plain, 0 compensated (largest over the four series); TQ against `rTPQuar` with
+its `n/(n-2)` divided out: 41 plain, 10 compensated (the oracle's own error is
+17 to 24 ulps, §4.2); `Z` (adjusted, tripower) against `yuima` `bns.test` ratio
+with `r = rep(4/3, 3)` and `adj = TRUE`, its `sqrt(n+1)` divided out, and against
+R `highfrequency` `BNSjumpTest` ratio with `max = TRUE`, its `n/(n-2)` on the
+quarticity applied to the online sums: relative 2.6e-13 plain, 6.5e-16 and
+8.7e-16 compensated.
+
+*Decay* (half-lives of 50 and 500 per clock unit, on the row clock and on an
+irregular clock, weights in [0.5, 1.5], 25 prefixes of J23400 and BTC), largest
+gap in ulps: plain BV 23, TQ 31, QP 45, RV 17, `weight` 15, `Z` 16 (cond units);
+compensated 20, 27, 30, 19, 14, 7. The compensation does not help the decay,
+whose error is the rounding of the decay multiplication at every step (about 15
+ulps for a 500-unit half-life); state stays at 89 or 137 bytes.
+
+### 6.4 The hard window
+
+References as §6.3, with the window's terms as defined in §6.1 (so the window
+holds `W` products). Largest gap in ulps over J23400 and BTC, windows of 100 and
+1,000 units, on the row clock and on the irregular clock, 25 prefixes each:
+
+| Window | no decay: BV | TQ | RV | `Z` (cond) | decay, half-life `W/4`: BV | TQ | RV | `Z` |
+|---|---|---|---|---|---|---|---|---|
+| snapshot ring, every row (rows / clock) | 2,118 / 1,871 | 14,245 / 23,799 | 2,487 / 2,504 | 2,739 / 2,414 | 18 / 24 | 244 / 103 | 19 / 12 | 11 / 10 |
+| snapshot ring, every `W/20` (clock) | 1,678 | 26,696 | 2,377 | 2,114 | 22 | 93 | 12 | 9 |
+| term ring, compensated (rows / clock) | 0.8 / 0.8 | 4.8 / 5.2 | 0 / 0 | 0.7 / 0.7 | 13 / 12 | 88 / 161 | 11 / 18 | 6 / 7 |
+
+**The snapshot ring without a decay loses 3 to 4 digits** because the window is
+the difference of two cumulative sums that have grown with the stream: the error
+is about the rounding times rows so far over window (234 for the 100-row window
+on J23400's 23,400 rows; BTC at `W` = 100 gives 152 ulps for BV and 13,000 for
+TQ). With a decay the live sums are bounded and the gap falls to a few tens of
+ulps (TQ 100 to 250). **The term ring with compensated sums has no such growth**:
+0.8 ulps for BV and 5 for TQ in the undecayed window, the rounding of the terms.
+With a decay the term ring is bounded by the decay's multiplication and by
+subtracting the expired term decayed by its `lam^age`, which does not reproduce
+the live product of the per-row factors bit for bit: BV 12 to 13, TQ 88 to 161
+ulps.
+
+*Against the batch oracles, a window of `W` rows, no decay* (`hfvol`, R `rBPCov` on
+the `W + 1` returns ending at the row; R `rTPQuar` on the `W + 2`, its `N N/(N-2)`
+rescaled to `W`; every 997th row; ulps):
+
+| Window | `hfvol` BV | `rBPCov` BV | `rTPQuar` TQ |
+|---|---|---|---|
+| snapshot ring, J23400, W = 100 / 1,000 | 2,168 / 495 | 2,169 / 495 | 5,479 / 4,207 |
+| snapshot ring, BTC, W = 100 / 1,000 | 15 / 0 | 15 / 0 | 635 / 0 |
+| term ring, J23400, W = 100 / 1,000 | 1 / 1 | 0 / 0 | 12 / 13 |
+| term ring, BTC, W = 100 / 1,000 | 0 / 0 | 0 / 0 | 10 / 0 |
+
+*The edge.* With a snapshot or a term per row, the rows in the window are exactly
+the rows whose clock is above `c - W`, on the row clock and the irregular clock
+(checked every 331st row, all true). With a snapshot every `W/20`, the window is
+the rows after the snapshot at or below the cut, between `W` and `W + W/20`
+clock units; the engine reports the cut and the reference uses it.
+
+### 6.5 Zero-weight rows
+
+A stream of the real rows with a third as many zero-weight rows inserted at
+random, each carrying garbage in its return (NaN, infinity, +-1e300, 0.37,
+-1e-300), against the same real rows without them (N2340: 2,340 real rows, 780
+zero-weight; BTC: 1,439 and 479):
+
+| Form | the zero-weight row | result |
+|---|---|---|
+| `lam = 1`, no window | at its neighbour's clock | outputs **bit for bit** those of the stream without (both series); 5.1 and 6.5 ulps to the exact |
+| decay, `lam = 0.5^(1/100)` | half a clock unit later | within 14 (N2340) and 44 (BTC) ulps of the stream without, whose one decay of a unit and a half became two (`lam^0.5`, `lam^1`); 22 and 51 ulps to the exact |
+| window of 200 units, snapshot ring | half a unit later | **bit for bit**; 16 and 844 ulps to the exact (the ring's difference, §6.4) |
+| window of 200 units, term ring | half a unit later | **bit for bit**; 3.0 and 3.4 ulps to the exact |
+
+The state is finite at every row in all of them, and a stream whose first 5 rows
+have weight 0 leaves a finite state and finite outputs (no division is made
+before a positive weight).
+
+### 6.6 Lee and Mykland online
+
+The window of `K` rows with four running sums of the products (24 runs: J23400 at
+`K` = 100 and 300, N2340 and BTC at 30 and 100, `n_ref` the batch's `n`):
+
+| Running sum | `L` against the paper's batch `L`, largest, ulps | `T` against the paper's | flags | bytes at `K` = 100 / 300 |
+|---|---|---|---|---|
+| Neumaier-compensated ring | **3** | 0 | identical to the paper's in all | 848 / 2,448 |
+| two stacks | 7 | 4e-14 | identical | 1,624 / 4,824 |
+| plain running sum (add the new, subtract the old) | 62 | 1.6e-13 | identical | 840 / 2,440 |
+| differences of cumulative sums (the snapshot form) | 2,312 | 1.3e-12 | identical | 848 / 2,448 |
+
+(The paper's own `L` in float64 agrees with R `highfrequency`'s to 4 ulps, §5.4, so
+the online `L` with the compensated or two-stack sum is at the oracle's floor.)
+When an outlier leaves the window, the relative error of its sum (`K` = 100, an
+outlier of `m` standard deviations at row 500, read from row 700 on):
+
+| `m` | Neumaier | two stacks | plain running sum | cumulative differences |
+|---|---|---|---|---|
+| 1 | 0 | 5e-16 | 6e-15 | 2e-14 |
+| 1e3 | 0 | 5e-16 | 5e-14 | 1e-13 |
+| 1e6 | 0 | 5e-16 | 4e-10 | 1e-10 |
+| 1e9 | 0 | 5e-16 | 1.5e-7 | 1.9e-7 |
+
+The plain running sum is fine for returns without absurd outliers and wrong after
+a price glitch of 1e6 standard deviations (4e-10 relative, kept after the glitch
+has left the window); the compensated ring is exact in all four and half the bytes of
+the two stacks. The decay form agrees with the exact weighted mean to 3.0 eps
+(J23400) and 2.2 (BTC); the clock form (term ring) to 0.8 and 0.3.
+
+### 6.7 State is bounded, and a save at a chunk edge changes no bit
+
+Over the 23,400 rows of J23400 the snapshot ring held 101 and 1,001 snapshots at
+`W` = 100 and 1,000, the term ring 100 and 1,000 rows, the bytes at every 1,000th
+row between the empty state's (145 / 185) and the formula's (5,745 / 56,145;
+4,937 / 48,137) and never above. Each of eight forms (the BNS engine one pass,
+decay, snapshot window, term window, decay and window; Lee and Mykland over `K`
+rows, clock window, decay) was saved, loaded and continued at a third and two
+thirds of 2,340 rows: the outputs of every row are bit for bit those of the
+uninterrupted run (a Python object round trip: it shows the state is complete, not
+that a Rust layout is stable).
+
+### 6.8 What part 3 settles
+
+1. **The forms exist, in the state sizes of §6.2, and agree with the batch oracles
+   to the rounding of the sums:** BV and TQ to 0 to 10 ulps and `Z` to 1e-15
+   relative with compensated sums on a whole series (22, 41 ulps and 2.6e-13 with
+   plain ones at 23,400 rows); the Lee and Mykland `L` to 3 ulps and its flags
+   identical to the paper's.
+2. **Choices that matter, which part 4's tolerances depend on:** compensated sums
+   cost 48 bytes and take the one-pass error from a random walk in the rows to the
+   rounding of the terms; for a hard window, the repo's snapshot ring loses 3 to 4
+   digits without a decay (an error growing with rows over window) where a term ring
+   with compensated sums costs 8 bytes a row less and keeps 1 to 5 ulps; the Lee
+   and Mykland window's best sum is the compensated ring (8 K + 48 bytes, 3 ulps).
+   A window in clock time needs a cap on its rows.
+3. **Conventions to fix before any Rust:** the windowed bipower variation has `W`
+   products over `W` returns, not the paper's `W - 1`; the term of a product takes
+   the weight of its later row; a zero-weight row advances the clock and is
+   otherwise absent.
+4. **Not done:** speed and memory traffic (the prototypes are Python); a bucketed
+   ring (a window held as `W/s` buckets of compensated sums, which would bound the
+   bytes and not lose the digits; not built, so not measured); non-unit weights
+   inside a hard window, `min_weight`, many groups; Lee and Mykland's `T` as the
+   maximum over a moving set of rows (a monotone deque, bounded by the window; not
+   built); `weight` and `min_weight` across a bank (rule 8 is implemented, not
+   tested against the other models).
 
 ## 7. Hawkes intensity against `tick` (part 4)
 

@@ -1366,13 +1366,1091 @@ def print_part2(res: dict) -> None:
         print(m)
 
 
+# --------------------------------------------------------------------------
+# Part 3: the online forms
+# --------------------------------------------------------------------------
+#
+# A row is (clock c, return r, weight w).  A row that observes nothing (w = 0, or a return that
+# is not finite) advances the clock and learns nothing: the sums decay and the window edge
+# moves, no sum takes a term, and the memory of the last returns is not touched, so the row
+# is as if absent.  Outputs of a row are read from the state BEFORE its update (out of sample),
+# and ``weight`` is the accumulated weight before the row's update and before its own decay.
+#
+# Sums (a_j = |r_j|, b_j = a_j^(4/3), w the row's weight, weights decayed by lam^(clock age),
+# a term takes the weight of the LATER row of its product):
+#   nw = sum w            rv = sum w r^2
+#   bv = sum w a_j a_{j-1}              tq = sum w b_j b_{j-1} b_{j-2}
+#   qp = sum w a_j a_{j-1} a_{j-2} a_{j-3}
+# Outputs: BV = bv / mu_1^2, TQ = nw tq / mu_{4/3}^3, QP = nw qp / mu_1^4, and the BNS adjusted
+# ratio Z = sqrt(nw) (1 - BV/rv) / sqrt(vartheta max(1, TQ/BV^2)).  With lam = 1, no window and
+# unit weights they are the paper's BV, TQ, QP and J on the rows so far.
+# A hard window of `window` clock units (closed on the right: a row exactly `window` old has no
+# weight) keeps the rows whose clock is above the clock of the latest snapshot at or below the
+# cut; the sums are the live sums minus that snapshot decayed to now (the repo's snapshot ring).
+# The window therefore holds a term for every row in it, the first one's with its predecessor
+# outside the window: W returns, W products.
+
+
+class JumpEngine:
+    """BV, TQ, QP and the BNS ratio as one row machine (decay, hard window, zero-weight rows).
+
+    window_kind "snapshot": the live sums minus the snapshot at the cut (the repo's ring of
+    snapshots: 7 numbers a row).  window_kind "terms": a ring of each row's weighted terms
+    (clock and 5 terms, 6 numbers a row) with Neumaier-compensated running sums, from which an
+    expired row's term is subtracted.  compensate: the live sums are Neumaier-compensated (5 more
+    numbers of state).
+    """
+
+    NSUM = 5  # nw, rv, bv, tq, qp
+
+    def __init__(
+        self,
+        lam: float = 1.0,
+        window: float | None = None,
+        snapshot_every: float = 0.0,
+        window_kind: str = "snapshot",
+        compensate: bool = False,
+    ):
+        from collections import deque
+
+        self.lam = float(lam)
+        self.window = window
+        self.every = float(snapshot_every)
+        self.kind = window_kind
+        self.comp = bool(compensate) or (window is not None and window_kind == "terms")
+        self.s = [0.0] * self.NSUM
+        self.c = [0.0] * self.NSUM  # the compensation, used when self.comp
+        self.prev: list[float] = []  # |r| of the last up to 3 observed rows, newest first
+        self.count = 0  # observed rows so far
+        self.expired = 0  # observed rows that have left the window (terms kind)
+        self.clock: float | None = None
+        self.ring: deque = deque()
+        self.last_snap: float | None = None
+        self.win = list(self.s)
+        self.cut_count = 0
+        self.cut_clock = float("-inf")
+        self.max_ring = 0
+
+    # -- the row ---------------------------------------------------------
+    def step(self, c: float, r: float, w: float = 1.0) -> dict:
+        out = self.read()
+        self.update(c, r, w)
+        return out
+
+    def _add(self, i: int, x: float) -> None:
+        s = self.s[i]
+        t = s + x
+        if abs(s) >= abs(x):
+            self.c[i] += (s - t) + x
+        else:
+            self.c[i] += (x - t) + s
+        self.s[i] = t
+
+    def update(self, c: float, r: float, w: float = 1.0) -> None:
+        if self.clock is not None and c < self.clock:
+            raise ValueError("the clock went backwards")
+        if self.clock is not None and c > self.clock and self.lam < 1.0:
+            f = self.lam ** (c - self.clock)
+            self.s = [x * f for x in self.s]
+            self.c = [x * f for x in self.c]
+        self.clock = c
+        observed = w > 0.0 and math.isfinite(r) and math.isfinite(w)
+        if observed:
+            a = abs(r)
+            p = self.prev
+            terms = [
+                w,
+                w * r * r,
+                w * a * p[0] if len(p) >= 1 else 0.0,
+                w * a ** (4 / 3) * p[0] ** (4 / 3) * p[1] ** (4 / 3) if len(p) >= 2 else 0.0,
+                w * a * p[0] * p[1] * p[2] if len(p) >= 3 else 0.0,
+            ]
+            if self.comp:
+                for i in range(self.NSUM):
+                    self._add(i, terms[i])
+            else:
+                for i in range(self.NSUM):
+                    self.s[i] += terms[i]
+            self.prev = [a] + p[:2]
+            self.count += 1
+            if self.window is not None:
+                if self.kind == "terms":
+                    self.ring.append((c, terms))
+                elif self.last_snap is None or c - self.last_snap >= self.every:
+                    self.ring.append((c, self.count, *self.s))
+                    self.last_snap = c
+        if self.window is None:
+            self.win = [x + y for x, y in zip(self.s, self.c, strict=True)]
+            return
+        cutoff = c - self.window
+        ring = self.ring
+        if self.kind == "terms":
+            while ring and ring[0][0] <= cutoff:
+                ck, tm = ring.popleft()
+                f = self.lam ** (c - ck) if self.lam < 1.0 else 1.0
+                for i in range(self.NSUM):
+                    self._add(i, -f * tm[i])
+                self.expired += 1
+            self.win = [x + y for x, y in zip(self.s, self.c, strict=True)]
+            self.cut_count, self.cut_clock = self.expired, cutoff
+            self.max_ring = max(self.max_ring, len(ring))
+            return
+        while len(ring) >= 2 and ring[1][0] <= cutoff:
+            ring.popleft()
+        if ring and ring[0][0] <= cutoff:
+            snap = ring[0]
+            f = self.lam ** (c - snap[0]) if self.lam < 1.0 else 1.0
+            self.win = [x - f * y for x, y in zip(self.s, snap[2:], strict=True)]
+            self.cut_clock, self.cut_count = snap[0], snap[1]
+        else:
+            self.win = list(self.s)
+            self.cut_clock, self.cut_count = float("-inf"), 0
+        self.max_ring = max(self.max_ring, len(ring))
+
+    # -- the outputs, from the state as it stands -----------------------
+    def read(self) -> dict:
+        nw, rv, bv, tq, qp = self.win
+        nan = float("nan")
+        bvv = bv * (math.pi / 2)
+        out = {"weight": nw, "rv": rv, "bv": bvv if bv > 0 else nan}
+        out["tpq"] = nw * tq / mu_p(4 / 3) ** 3 if tq > 0 else nan
+        out["qpq"] = nw * qp * (math.pi / 2) ** 2 if qp > 0 else nan
+        if nw > 0 and rv > 0 and bv > 0 and tq > 0:
+            avar = max(1.0, out["tpq"] / bvv**2)
+            out["z_bns"] = math.sqrt(nw) * (1 - bvv / rv) / math.sqrt(THETA * avar)
+        else:
+            out["z_bns"] = nan
+        return out
+
+    # -- the state ---------------------------------------------------------
+    def state_bytes(self) -> int:
+        """Bytes of the numbers held: 8 each (f64 sums and |r|, i64 clock and counts)."""
+        fixed = self.NSUM * 8 + 3 * 8 + 1 + 8 + 8 + 8  # sums, |r|s, n prev, clock, last snap, count
+        if self.comp:
+            fixed += self.NSUM * 8 + 8  # the compensations and the expired count
+        per = (1 + self.NSUM) * 8 if self.kind == "terms" else (2 + self.NSUM) * 8
+        return fixed + len(self.ring) * per
+
+
+# -- the sliding sum of the Lee and Mykland window, four ways -----------------------------------
+
+
+class _WinNaive:
+    """Ring of the last cap terms and a running sum that adds the new term and subtracts the old."""
+
+    def __init__(self, cap):
+        from collections import deque
+
+        self.cap, self.q, self.s = cap, deque(), 0.0
+
+    def push(self, x):
+        self.q.append(x)
+        self.s += x
+        if len(self.q) > self.cap:
+            self.s -= self.q.popleft()
+
+    def total(self):
+        return self.s if len(self.q) == self.cap else float("nan")
+
+    def nbytes(self):
+        return 8 * (self.cap + 1)
+
+
+class _WinNeumaier(_WinNaive):
+    """The same with Neumaier compensation on the addition and on the subtraction."""
+
+    def __init__(self, cap):
+        super().__init__(cap)
+        self.c = 0.0
+
+    def _add(self, x):
+        t = self.s + x
+        if abs(self.s) >= abs(x):
+            self.c += (self.s - t) + x
+        else:
+            self.c += (x - t) + self.s
+        self.s = t
+
+    def push(self, x):
+        self.q.append(x)
+        self._add(x)
+        if len(self.q) > self.cap:
+            self._add(-self.q.popleft())
+
+    def total(self):
+        return self.s + self.c if len(self.q) == self.cap else float("nan")
+
+    def nbytes(self):
+        return 8 * (self.cap + 2)
+
+
+class _WinTwoStack:
+    """Two stacks: pushes go on the back (running sum), pops come off a front of suffix sums."""
+
+    def __init__(self, cap):
+        self.cap, self.back, self.bsum, self.front, self.n = (
+            cap,
+            [],
+            0.0,
+            [],
+            0,
+        )  # front: (x, suffix)
+        self.peak = 0
+
+    def push(self, x):
+        self.back.append(x)
+        self.bsum += x
+        self.n += 1
+        if self.n > self.cap:
+            if not self.front:  # flip: front holds the suffix sums of the back, oldest on top
+                acc = 0.0
+                for v in reversed(self.back):
+                    acc += v
+                    self.front.append((v, acc))
+                self.back, self.bsum = [], 0.0
+            self.front.pop()
+            self.n -= 1
+        self.peak = max(self.peak, len(self.back) + 2 * len(self.front))
+
+    def total(self):
+        if self.n < self.cap:
+            return float("nan")
+        return (self.front[-1][1] if self.front else 0.0) + self.bsum
+
+    def nbytes(self):
+        return 8 * (
+            2 * self.cap + 1
+        )  # worst case: every term once in the back or twice in the front
+
+
+class _WinSnapshot:
+    """Cumulative sums, one per row, and the window as the difference of two of them."""
+
+    def __init__(self, cap):
+        from collections import deque
+
+        self.cap, self.cum, self.n = cap, deque([0.0]), 0
+        self.s = 0.0
+
+    def push(self, x):
+        self.s += x
+        self.cum.append(self.s)
+        self.n += 1
+        if len(self.cum) > self.cap + 1:
+            self.cum.popleft()
+
+    def total(self):
+        return self.s - self.cum[0] if self.n >= self.cap else float("nan")
+
+    def nbytes(self):
+        return 8 * (self.cap + 2)
+
+
+WINDOW_SUMS = {
+    "naive": _WinNaive,
+    "neumaier": _WinNeumaier,
+    "two-stack": _WinTwoStack,
+    "snapshot": _WinSnapshot,
+}
+
+
+class LeeMyklandEngine:
+    """The Lee and Mykland statistic as a row machine.
+
+    sigma^2 of a row is read from the rows before it: the mean of the products |r_j||r_{j-1}| of
+      rows    the last K-2 products (the paper's window), a ring and one of four running sums
+      decay   an exponentially weighted mean, sum(lam^age w p) / sum(lam^age w)
+      clock   the products of the rows within `window` clock units: a ring of (clock, p, w) with
+              Neumaier-compensated sums, an expired row subtracted as it left
+    and L = |r| / sigma; the test statistic T = (max |L| - C_n) / S_n over the rows tested so far
+    (n = the count, or n_ref where it is fixed), and a row is flagged when |L| > C_n + S_n beta*.
+    """
+
+    def __init__(
+        self,
+        mode: str,
+        K: int | None = None,
+        sum_kind: str = "two-stack",
+        lam: float = 1.0,
+        window: float | None = None,
+        n_ref: int | None = None,
+        alpha: float = 0.05,
+    ):
+        from collections import deque
+
+        self.mode, self.K, self.lam, self.window, self.n_ref = mode, K, lam, window, n_ref
+        self.beta = -math.log(-math.log(1 - alpha))
+        self.prev: float | None = None  # |r| of the last observed row
+        self.clock: float | None = None
+        self.sum = WINDOW_SUMS[sum_kind](K - 2) if mode == "rows" else None
+        self.sp = [0.0, 0.0]  # decayed sum of products and of weights, and their compensations
+        self.sw = [0.0, 0.0]
+        self.ring: deque = deque()  # clock mode: (clock, p, w)
+        self.count = 0
+        self.tests = 0
+        self.maxabs = 0.0
+        self.max_ring = 0
+
+    @staticmethod
+    def _nadd(acc, x):
+        s = acc[0]
+        t = s + x
+        if abs(s) >= abs(x):
+            acc[1] += (s - t) + x
+        else:
+            acc[1] += (x - t) + s
+        acc[0] = t
+
+    def step(self, c: float, r: float, w: float = 1.0) -> dict:
+        out = {"L": float("nan"), "T": float("nan"), "flag": False}
+        if self.clock is not None and c < self.clock:
+            raise ValueError("the clock went backwards")
+        if self.mode != "rows" and self.clock is not None and c > self.clock and self.lam < 1.0:
+            f = self.lam ** (c - self.clock)
+            self.sp = [x * f for x in self.sp]
+            self.sw = [x * f for x in self.sw]
+        self.clock = c
+        if self.mode == "clock":
+            self._expire(c)
+        observed = w > 0.0 and math.isfinite(r) and math.isfinite(w)
+        if not observed:
+            return out
+        a = abs(r)
+        sig2 = self._sigma2()
+        if sig2 == sig2 and sig2 > 0:  # a test: the row has a volatility estimate
+            L = a / math.sqrt(sig2)
+            self.tests += 1
+            self.maxabs = max(self.maxabs, L)
+            n = self.n_ref or self.tests
+            out["L"] = L
+            if n >= 3:  # C_n and S_n need log log n
+                cn, sn = lm_cn_sn(n)
+                out.update(T=(self.maxabs - cn) / sn, flag=cn + sn * self.beta < L)
+        if self.prev is not None:
+            p = a * self.prev
+            if self.mode == "rows":
+                self.sum.push(p)
+            else:
+                self._nadd(self.sp, w * p)
+                self._nadd(self.sw, w)
+                if self.mode == "clock":
+                    self.ring.append((c, w * p, w))
+                    self.max_ring = max(self.max_ring, len(self.ring))
+        self.prev = a
+        self.count += 1
+        return out
+
+    def _expire(self, c):
+        cutoff = c - self.window
+        ring = self.ring
+        while ring and ring[0][0] <= cutoff:
+            ck, wp, w = ring.popleft()
+            f = self.lam ** (c - ck) if self.lam < 1.0 else 1.0
+            self._nadd(self.sp, -f * wp)
+            self._nadd(self.sw, -f * w)
+
+    def _sigma2(self):
+        if self.mode == "rows":
+            return self.sum.total() / (self.K - 2)
+        sw = self.sw[0] + self.sw[1]
+        return (self.sp[0] + self.sp[1]) / sw if sw > 0 else float("nan")
+
+    def state_bytes(self) -> int:
+        base = 8 + 8 + 8 + 8 + 8 + 8  # prev, clock, count, tests, max |L|, spare
+        if self.mode == "rows":
+            return base + self.sum.nbytes()
+        if self.mode == "decay":
+            return base + 32  # sp, sw and their compensations
+        return base + 32 + len(self.ring) * 24
+
+
+def lm_cn_sn(n: int):
+    c = math.sqrt(2 / math.pi)
+    ln = math.log(n)
+    cn = math.sqrt(2 * ln) / c - (math.log(math.pi) + math.log(ln)) / (2 * c * math.sqrt(2 * ln))
+    return cn, 1 / (c * math.sqrt(2 * ln))
+
+
+def state_table() -> list[dict]:
+    """State in bytes of the online forms: measured on the engines, and the minimal formulas."""
+    rows = []
+
+    def measured(name, make, drive):
+        e1, e2 = make(10), make(100)
+        drive(e1, 10)
+        drive(e2, 100)
+        n1, n2 = (
+            len(e1.ring) if hasattr(e1, "ring") else 0,
+            len(e2.ring) if hasattr(e2, "ring") else 0,
+        )
+        if n2 != n1:
+            per = (e2.state_bytes() - e1.state_bytes()) / (n2 - n1)
+            fixed = e1.state_bytes() - per * n1
+        else:
+            per, fixed = 0.0, float(e1.state_bytes())
+        rows.append({"form": name, "fixed_bytes": fixed, "per_row_bytes": per})
+
+    rng = np.random.default_rng(1)
+    x = (rng.standard_normal(2000) * 1e-3).tolist()
+
+    def drive_j(e, W):
+        for i in range(400):
+            e.update(float(i), x[i], 1.0)
+
+    def drive_lm(e, K):
+        for i in range(400):
+            e.step(float(i), x[i], 1.0)
+
+    measured("BNS engine, one pass / decay", lambda W: JumpEngine(), drive_j)
+    measured("BNS engine, compensated sums", lambda W: JumpEngine(compensate=True), drive_j)
+    measured(
+        "BNS engine, hard window, snapshot ring",
+        lambda W: JumpEngine(window=float(W), window_kind="snapshot"),
+        drive_j,
+    )
+    measured(
+        "BNS engine, hard window, term ring (compensated)",
+        lambda W: JumpEngine(window=float(W), window_kind="terms"),
+        drive_j,
+    )
+    measured("Lee-Mykland, decay", lambda K: LeeMyklandEngine("decay", lam=0.99), drive_lm)
+    measured(
+        "Lee-Mykland, clock window, term ring (compensated)",
+        lambda W: LeeMyklandEngine("clock", window=float(W)),
+        drive_lm,
+    )
+    for kind in WINDOW_SUMS:
+        e1, e2 = (
+            LeeMyklandEngine("rows", K=10, sum_kind=kind),
+            LeeMyklandEngine("rows", K=110, sum_kind=kind),
+        )
+        per = (e2.state_bytes() - e1.state_bytes()) / 100
+        rows.append(
+            {
+                "form": f"Lee-Mykland, window of K rows, {kind} sum",
+                "fixed_bytes": e1.state_bytes() - per * 10,
+                "per_row_bytes": per,
+            }
+        )
+    return rows
+
+
+def minimal_table() -> list[dict]:
+    """The numbers each output needs, at 8 bytes each (formulas, not measured)."""
+    f = 8
+    return [
+        {
+            "output": "bipower variation",
+            "constant": (1 + 1 + 2) * f,
+            "ring_per_row_in_window": 2 * f,
+            "numbers": "1 sum, last |r|, clock, count; ring: clock + 1 term",
+        },
+        {
+            "output": "tripower quarticity",
+            "constant": (2 + 2 + 2) * f,
+            "ring_per_row_in_window": 3 * f,
+            "numbers": "weight and 1 sum, last 2 |r|, clock, count; ring: clock + 2 terms",
+        },
+        {
+            "output": "BNS ratio, TQ",
+            "constant": (4 + 2 + 2) * f,
+            "ring_per_row_in_window": 5 * f,
+            "numbers": "4 sums, last 2 |r|, clock, count; ring: clock + 4 terms",
+        },
+        {
+            "output": "BNS ratio, QP",
+            "constant": (4 + 3 + 2) * f,
+            "ring_per_row_in_window": 5 * f,
+            "numbers": "4 sums, last 3 |r|, clock, count; ring: clock + 4 terms",
+        },
+        {
+            "output": "Lee-Mykland, K rows",
+            "constant": 6 * f,
+            "ring_per_row_in_window": f,
+            "numbers": "prev, clock, count, tests, max, 1 sum; ring: one product per window row",
+        },
+    ]
+
+
+def _obs(clocks, r, weights):
+    """The observed rows as arrays (clock, |r|, w, r)."""
+    r = np.asarray(r, dtype=float)
+    return (np.asarray(clocks, dtype=float), np.abs(r), np.asarray(weights, dtype=float), r)
+
+
+def _exact_sums(obs, lam, T, after_count):
+    """The sums of the observed rows after_count..T at the clock of row T, as mpmath numbers.
+
+    The reference for the decayed and windowed forms: each term in float64 (the weight
+    lam**age by pow, the product of the |r|), summed exactly with fsum.  Its own error is the
+    rounding of the terms, about one ulp and no more; what it leaves out is the accumulation
+    of the running sums, which is what the gaps measure.  The terms use the observed
+    predecessors wherever they are, so the window's first row keeps its product.
+    """
+    import mpmath as mp
+
+    c, a, w, r = obs
+    j = np.arange(after_count, T + 1)
+    f = lam ** (c[T] - c[j]) if lam < 1.0 else np.ones(len(j))
+    wa = w[j] * f
+    b = a ** (4 / 3)
+    jm = [np.maximum(j - i, 0) for i in range(4)]
+    t2 = np.where(j >= 1, a[j] * a[jm[1]], 0.0)
+    t3 = np.where(j >= 2, b[j] * b[jm[1]] * b[jm[2]], 0.0)
+    t4 = np.where(j >= 3, a[j] * a[jm[1]] * a[jm[2]] * a[jm[3]], 0.0)
+    mp.mp.dps = 40
+    return tuple(mp.mpf(math.fsum(x)) for x in (wa, wa * r[j] ** 2, wa * t2, wa * t3, wa * t4))
+
+
+def _exact_outputs(sums):
+    import mpmath as mp
+
+    nw, rv, bv, tq, qp = sums
+    mu1sq = 2 / mp.pi
+    mu43 = mp.mpf(2) ** (mp.mpf(2) / 3) * mp.gamma(mp.mpf(7) / 6) / mp.gamma(mp.mpf(1) / 2)
+    BV = bv / mu1sq
+    TQ = nw * tq / mu43**3
+    QP = nw * qp / mu1sq**2
+    theta = mp.pi**2 / 4 + mp.pi - 5
+    Z = mp.sqrt(nw) * (1 - BV / rv) / mp.sqrt(theta * max(mp.mpf(1), TQ / BV**2))
+    return {"weight": nw, "rv": rv, "bv": BV, "tpq": TQ, "qpq": QP, "z_bns": Z}
+
+
+def _ulp_gap(v, ref) -> float:
+    import mpmath as mp
+
+    if v != v:
+        return float("inf")
+    f = float(ref)
+    return float(abs(mp.mpf(v) - ref) / mp.mpf(math.ulp(f))) if f != 0 else float(abs(v))
+
+
+def _cond_gap(v, ref, kappa) -> float:
+    """|v - ref| in units of kappa 2^-52 (a difference is amplified by kappa)."""
+    import mpmath as mp
+
+    return float(abs(mp.mpf(v) - ref)) / (kappa * 2.0**-52) if v == v else float("inf")
+
+
+def _kappa(sums) -> float:
+    import mpmath as mp
+
+    return float((sums[1] + sums[2] * mp.pi / 2) / abs(sums[1] - sums[2] * mp.pi / 2))
+
+
+def _row_gaps(eng, obs, lam, i, gaps, cut=None):
+    """Update gaps (max) with the engine's outputs at row i against the exact ones."""
+    sums = _exact_sums(obs, lam, i, eng.cut_count if cut is None else cut)
+    ex = _exact_outputs(sums)
+    got = eng.read()
+    for k in gaps:
+        g = _ulp_gap(got[k], ex[k]) if k != "z_bns" else _cond_gap(got[k], ex[k], _kappa(sums))
+        gaps[k] = max(gaps[k], g)
+
+
+def _samples(n, lo, count=25):
+    return set(range(lo, n, max(1, (n - lo) // count))) | {n - 1}
+
+
+def part3(force: bool) -> None:
+    import itertools
+
+    out = CACHE / "part3.json"
+    if out.exists() and not force:
+        print(f"{out} exists; not recomputing (use --force)")
+        return
+    t0 = time.time()
+    res: dict = {"state_measured": state_table(), "state_minimal": minimal_table()}
+    series = {s["label"]: s for s in build_series()}
+    pick = {
+        "synthetic, 5 jumps n=23400 seed=0": "J23400",
+        "synthetic, no jumps n=2340 seed=0": "N2340",
+        "BTCUSDT 1m 2024-01-05": "BTC",
+        "ETCUSDT trades 10 s 2024-01-02": "ETC10s",
+    }
+    S = {tag: series[lab] for lab, tag in pick.items()}
+    fields = ("bv", "tpq", "qpq", "rv", "z_bns", "weight")
+
+    # ---- one pass, every sampled prefix against the exact paper values
+    onepass = []
+    for comp, (tag, s) in itertools.product((False, True), S.items()):
+        r, n = s["r"], len(s["r"])
+        eng = JumpEngine(compensate=comp)
+        obs = _obs(np.arange(n, dtype=float), r, np.ones(n))
+        gaps = dict.fromkeys(fields, 0.0)
+        smp = _samples(n, 10)
+        for i in range(n):
+            eng.update(float(i), float(r[i]), 1.0)
+            if i in smp:
+                _row_gaps(eng, obs, 1.0, i, gaps, cut=0)
+        onepass.append(
+            {
+                "series": tag,
+                "n": n,
+                "compensated": comp,
+                "max_gap": gaps,
+                "state_bytes": eng.state_bytes(),
+                "final": eng.read(),
+            }
+        )
+    res["onepass"] = onepass
+    print(f"one pass {time.time() - t0:.1f} s")
+
+    # ---- one pass against the oracles of parts 1 and 2 on the whole series
+    _shim_scipy()
+    import hfvol
+
+    ro = _r()
+    fv = ro.FloatVector
+    rbp, rtp = ro.r["rBPCov"], ro.r["rTPQuar"]
+    yu = ro.r(
+        "function(lp, r, type, adj) yuima::bns.test(yuima::setData(zoo::zoo(lp)), r = r,"
+        " type = type, adj = adj)[[1]]$statistic"
+    )
+    hfb = ro.r(
+        "function(x, type, mx, iq) highfrequency::BNSjumpTest(x, type = type, max = mx,"
+        " IQestimator = iq)$ztest"
+    )
+    vs = []
+    for comp, (tag, s) in itertools.product((False, True), S.items()):
+        r, p = s["r"], s["p"]
+        n = len(r)
+        eng = JumpEngine(compensate=comp)
+        for i in range(n):
+            eng.update(float(i), float(r[i]), 1.0)
+        o = eng.read()
+        bv_hfvol = hfvol.bipower_variation(r)
+        bv_r = float(rbp(fv(r))[0])
+        tq_r = float(rtp(fv(r))[0]) * (n - 2) / n  # highfrequency's n/(n-2) divided out
+        z_yu = float(yu(fv(np.log(p)), fv([4 / 3] * 3), "ratio", ro.BoolVector([True]))[0])
+        z_yu *= math.sqrt(n / (n + 1))  # yuima's sqrt(n+1) prices divided out
+        z_hf = float(hfb(fv(r), "ratio", ro.BoolVector([True]), "TP")[0])
+        nw, rv, bvs, tqs, _ = eng.win
+        bvv = bvs * math.pi / 2
+        tqv = o["tpq"] * n / (n - 2)  # highfrequency's tripower carries n/(n-2)
+        z_hf_online = math.sqrt(n) * (1 - bvv / rv) / math.sqrt(THETA * max(1.0, tqv / bvv**2))
+        vs.append(
+            {
+                "series": tag,
+                "n": n,
+                "compensated": comp,
+                "bv_vs_hfvol_ulps": abs(o["bv"] - bv_hfvol) / math.ulp(bv_hfvol),
+                "bv_vs_rBPCov_ulps": abs(o["bv"] - bv_r) / math.ulp(bv_r),
+                "tpq_vs_rTPQuar_over_factor_ulps": abs(o["tpq"] - tq_r) / math.ulp(tq_r),
+                "z_vs_yuima_TP_rel": abs(o["z_bns"] - z_yu) / abs(z_yu),
+                "z_vs_highfrequency_J_rel": abs(z_hf_online - z_hf) / abs(z_hf),
+            }
+        )
+    res["vs_oracles"] = vs
+    print(f"oracles {time.time() - t0:.1f} s")
+
+    # ---- decay: lam per clock unit, row clock and an irregular clock, weights not all 1
+    decay = []
+    for comp, tag in itertools.product((False, True), ("J23400", "BTC")):
+        r, n = S[tag]["r"], len(S[tag]["r"])
+        g = np.random.default_rng(7)
+        clocks_irr = np.cumsum(g.exponential(1.0, n))
+        for kind, clocks in (
+            ("row clock", np.arange(n, dtype=float)),
+            ("irregular clock", clocks_irr),
+        ):
+            for hl in (50.0, 500.0):
+                lam = 0.5 ** (1.0 / hl)
+                weights = 0.5 + g.random(n)
+                eng = JumpEngine(lam=lam, compensate=comp)
+                obs = _obs(clocks, r, weights)
+                gaps = dict.fromkeys(fields, 0.0)
+                smp = _samples(n, 10)
+                for i in range(n):
+                    eng.update(float(clocks[i]), float(r[i]), float(weights[i]))
+                    if i in smp:
+                        _row_gaps(eng, obs, lam, i, gaps, cut=0)
+                decay.append(
+                    {
+                        "series": tag,
+                        "clock": kind,
+                        "half_life": hl,
+                        "compensated": comp,
+                        "n": n,
+                        "max_gap": gaps,
+                        "state_bytes": eng.state_bytes(),
+                    }
+                )
+    res["decay"] = decay
+    print(f"decay {time.time() - t0:.1f} s")
+
+    # ---- hard window, in rows and in clock time, with and without a decay
+    windows = []
+    for tag in ("J23400", "BTC"):
+        r, n = S[tag]["r"], len(S[tag]["r"])
+        g = np.random.default_rng(11)
+        clocks_irr = np.cumsum(g.exponential(1.0, n))
+        rowc = np.arange(n, dtype=float)
+        for kind, clocks, wk, every_div in (
+            ("rows", rowc, "snapshot", 0),
+            ("rows", rowc, "terms", 0),
+            ("clock", clocks_irr, "snapshot", 0),
+            ("clock", clocks_irr, "terms", 0),
+            ("clock, snapshot every window/20", clocks_irr, "snapshot", 20),
+        ):
+            for W in (100.0, 1000.0):
+                for lam in (1.0, 0.5 ** (1.0 / (W / 4))):
+                    every = W / every_div if every_div else 0.0
+                    eng = JumpEngine(lam=lam, window=W, snapshot_every=every, window_kind=wk)
+                    obs = _obs(clocks, r, np.ones(n))
+                    gaps = dict.fromkeys(fields, 0.0)
+                    smp = _samples(n, int(W) + 5)
+                    rows_in = 0
+                    edge_ok = True
+                    for i in range(n):
+                        eng.update(float(clocks[i]), float(r[i]), 1.0)
+                        if i in smp:
+                            _row_gaps(eng, obs, lam, i, gaps)
+                            rows_in = max(rows_in, i + 1 - eng.cut_count)
+                        if every == 0.0 and i % 331 == 0:
+                            edge_ok &= (i + 1 - eng.cut_count) == int(
+                                np.sum(clocks[: i + 1] > clocks[i] - W)
+                            )
+                    per = 7 * 8 if wk == "snapshot" else 6 * 8
+                    windows.append(
+                        {
+                            "series": tag,
+                            "kind": kind,
+                            "window_kind": wk,
+                            "W": W,
+                            "lam": lam,
+                            "n": n,
+                            "max_gap": gaps,
+                            "max_ring": eng.max_ring,
+                            "max_rows_in_window_sampled": rows_in,
+                            "bytes_at_max_ring": JumpEngine(window=W, window_kind=wk).state_bytes()
+                            + eng.max_ring * per,
+                            "edge_is_exact": edge_ok if every == 0.0 else None,
+                        }
+                    )
+    res["windows"] = windows
+    print(f"windows {time.time() - t0:.1f} s")
+
+    # ---- the windowed forms against the batch oracles (a window of W rows, no decay)
+    batch = []
+    for tag, wk in itertools.product(("J23400", "BTC"), ("snapshot", "terms")):
+        r, n = S[tag]["r"], len(S[tag]["r"])
+        for W in (100, 1000):
+            eng = JumpEngine(window=float(W), window_kind=wk)
+            worst = [0.0, 0.0, 0.0]
+            for i in range(n):
+                eng.update(float(i), float(r[i]), 1.0)
+                if i >= W + 2 and i % 997 == 0:
+                    o = eng.read()
+                    seg = r[i - W : i + 1]  # W + 1 returns, W products
+                    bvh, bvr = hfvol.bipower_variation(seg), float(rbp(fv(seg))[0])
+                    seg3 = r[i - W - 1 : i + 1]  # W + 2 returns, W triple products
+                    N = len(seg3)
+                    tqh = float(rtp(fv(seg3))[0]) * W**2 / N**2  # N N/(N-2) -> W
+                    worst[0] = max(worst[0], abs(o["bv"] - bvh) / math.ulp(bvh))
+                    worst[1] = max(worst[1], abs(o["bv"] - bvr) / math.ulp(bvr))
+                    worst[2] = max(worst[2], abs(o["tpq"] - tqh) / math.ulp(tqh))
+            batch.append(
+                {
+                    "series": tag,
+                    "window_kind": wk,
+                    "W": W,
+                    "bv_vs_hfvol_ulps": worst[0],
+                    "bv_vs_rBPCov_ulps": worst[1],
+                    "tpq_vs_rTPQuar_scaled_ulps": worst[2],
+                }
+            )
+    res["windows_vs_batch"] = batch
+    print(f"batch {time.time() - t0:.1f} s")
+
+    # ---- zero-weight rows learn nothing
+    zero = []
+    garbage = [float("nan"), float("inf"), 1e300, -1e300, 0.37, -1e-300]
+    for tag in ("N2340", "BTC"):
+        r, n = S[tag]["r"], len(S[tag]["r"])
+        zrng = np.random.default_rng(5)
+        for lam, W, wk, mode, shift in (
+            (
+                1.0,
+                None,
+                "snapshot",
+                "lam = 1, no window; zero-weight row at its neighbour's clock",
+                0.0,
+            ),
+            (
+                0.5 ** (1 / 100),
+                None,
+                "snapshot",
+                "decay; zero-weight row half a clock unit later",
+                0.5,
+            ),
+            (
+                1.0,
+                200.0,
+                "snapshot",
+                "window of 200 clock units, snapshot ring; zero-weight row half a unit later",
+                0.5,
+            ),
+            (
+                1.0,
+                200.0,
+                "terms",
+                "window of 200 clock units, term ring; zero-weight row half a unit later",
+                0.5,
+            ),
+        ):
+            ext = set(zrng.choice(n - 1, n // 3, replace=False).tolist())
+            c = 0.0
+            stream, oc, orr = [], [], []
+            for i in range(n):
+                c += 1.0
+                stream.append((c, float(r[i]), 1.0))
+                oc.append(c)
+                orr.append(float(r[i]))
+                if i in ext:
+                    stream.append((c + shift, garbage[int(zrng.integers(0, len(garbage)))], 0.0))
+                    c += shift
+            eng_a = JumpEngine(lam=lam, window=W, window_kind=wk)
+            eng_b = JumpEngine(lam=lam, window=W, window_kind=wk)
+            poison = False
+            for cc, rr, ww in stream:
+                eng_a.update(cc, rr, ww)
+                poison |= not all(math.isfinite(x) for x in eng_a.s)
+            for cc, rr in zip(oc, orr, strict=True):
+                eng_b.update(cc, rr, 1.0)
+            oa, ob = eng_a.read(), eng_b.read()
+            bitwise = all(oa[k] == ob[k] for k in oa)
+            gap_ab = max(abs(oa[k] - ob[k]) / math.ulp(ob[k]) for k in oa if k != "z_bns")
+            obs = _obs(oc, orr, np.ones(len(oc)))
+            gaps = dict.fromkeys(fields, 0.0)
+            _row_gaps(eng_a, obs, lam, len(oc) - 1, gaps)
+            zero.append(
+                {
+                    "series": tag,
+                    "mode": mode,
+                    "n_obs": len(oc),
+                    "n_zero_weight": len(stream) - len(oc),
+                    "bitwise_equal_to_stream_without": bool(bitwise),
+                    "max_ulps_to_stream_without": gap_ab,
+                    "max_ulps_to_exact": max(v for k, v in gaps.items() if k != "z_bns"),
+                    "state_has_nan_or_inf": bool(poison),
+                }
+            )
+    e = JumpEngine(lam=0.99)
+    for i in range(5):
+        e.update(float(i), float("nan") if i % 2 else 3.0, 0.0)
+    for i in range(5, 40):
+        e.update(float(i), 1e-3 * (1 + (i % 3)), 1.0)
+    zero.append(
+        {
+            "series": "the first 5 rows have weight 0",
+            "mode": "decay",
+            "n_obs": 35,
+            "n_zero_weight": 5,
+            "state_has_nan_or_inf": not all(math.isfinite(x) for x in e.s),
+            "output_finite": all(math.isfinite(v) for v in e.read().values()),
+        }
+    )
+    res["zero_weight"] = zero
+    print(f"zero weight {time.time() - t0:.1f} s")
+
+    # ---- Lee and Mykland: the window of K rows, four running sums
+    lm = []
+    for tag, Ks in (("J23400", (100, 300)), ("N2340", (30, 100)), ("BTC", (30, 100))):
+        r, n = S[tag]["r"], len(S[tag]["r"])
+        for K in Ks:
+            L, T, cn, sn = lm_paper(r, K)
+            beta = -math.log(-math.log(1 - 0.05))
+            flags_paper = (np.flatnonzero(cn + sn * beta < L) + K - 1).tolist()
+            for kind in WINDOW_SUMS:
+                eng = LeeMyklandEngine("rows", K=K, sum_kind=kind, n_ref=n)
+                Ls = np.full(n, np.nan)
+                flags = []
+                for i in range(n):
+                    o = eng.step(float(i), float(r[i]), 1.0)
+                    Ls[i] = o["L"]
+                    if o["flag"]:
+                        flags.append(i)
+                lm.append(
+                    {
+                        "series": tag,
+                        "n": n,
+                        "K": K,
+                        "sum": kind,
+                        "L_vs_paper_float_max_ulps": float(
+                            np.nanmax(np.abs(Ls[K - 1 :] - L) / np.spacing(L))
+                        ),
+                        "T_online": float((np.nanmax(Ls) - cn) / sn),
+                        "T_paper": T,
+                        "flags_equal_paper": flags == flags_paper,
+                        "n_flags": len(flags),
+                        "state_bytes": eng.state_bytes(),
+                        "peak_terms_two_stack": eng.sum.peak if kind == "two-stack" else None,
+                    }
+                )
+    res["lm_rows"] = lm
+
+    # the four sums when an outlier leaves the window (relative error of the window sum)
+    cancel = []
+    base = S["N2340"]["r"].copy()
+    K = 100
+    for amp in (1.0, 1e3, 1e6, 1e9):
+        r = base.copy()
+        r[500] = amp * float(np.std(base))
+        a = np.abs(r)
+        pr = a[1:] * a[:-1]
+        wnd = {k: WINDOW_SUMS[k](K - 2) for k in WINDOW_SUMS}
+        worst = dict.fromkeys(WINDOW_SUMS, 0.0)
+        for i in range(len(pr)):
+            for k in wnd:
+                wnd[k].push(float(pr[i]))
+            if i >= 700 and i % 17 == 0:  # after the outlier has left the window
+                ex = math.fsum(pr[i - (K - 3) : i + 1])
+                for k in wnd:
+                    worst[k] = max(worst[k], abs(wnd[k].total() - ex) / ex)
+        cancel.append({"outlier_sd": amp, **{f"rel_err_{k}": v for k, v in worst.items()}})
+    res["window_sum_outlier"] = cancel
+
+    # decay and clock-time forms of Lee and Mykland against the exact weighted mean
+    import mpmath as mp
+
+    lm2 = []
+    for tag in ("J23400", "BTC"):
+        r, n = S[tag]["r"], len(S[tag]["r"])
+        g = np.random.default_rng(3)
+        clocks_irr = np.cumsum(g.exponential(1.0, n))
+        for mode, kw in (("decay", {"lam": 0.5 ** (1 / 100)}), ("clock", {"window": 100.0})):
+            eng = LeeMyklandEngine(mode, n_ref=n, **kw)
+            lam = kw.get("lam", 1.0)
+            a = np.abs(r)
+            worst = 0.0
+            for i in range(n):
+                o = eng.step(float(clocks_irr[i]), float(r[i]), 1.0)
+                if i > 300 and i % 733 == 0 and o["L"] == o["L"]:
+                    mp.mp.dps = 40
+                    cut = float(clocks_irr[i]) - kw.get("window", math.inf)
+                    num = den = mp.mpf(0)
+                    for j in range(1, i):
+                        if mode == "clock" and clocks_irr[j] <= cut:
+                            continue
+                        f = (
+                            mp.power(
+                                mp.mpf(lam),
+                                mp.mpf(float(clocks_irr[i])) - mp.mpf(float(clocks_irr[j])),
+                            )
+                            if mode == "decay"
+                            else 1
+                        )
+                        num += f * mp.mpf(float(a[j])) * mp.mpf(float(a[j - 1]))
+                        den += f
+                    Lex = mp.mpf(float(a[i])) / mp.sqrt(num / den)
+                    worst = max(worst, float(abs(mp.mpf(o["L"]) - Lex) / (Lex * mp.mpf(2.0**-52))))
+            lm2.append(
+                {
+                    "series": tag,
+                    "mode": mode,
+                    "max_rel_gap_in_eps": worst,
+                    "max_ring": eng.max_ring,
+                    "state_bytes": eng.state_bytes(),
+                }
+            )
+    res["lm_other"] = lm2
+    print(f"LM {time.time() - t0:.1f} s")
+
+    # ---- the state is bounded: the ring and the bytes stay put over many windows of rows
+    bound = []
+    r = S["J23400"]["r"]
+    for wk, W in itertools.product(("snapshot", "terms"), (100, 1000)):
+        eng = JumpEngine(window=float(W), window_kind=wk)
+        sizes = []
+        for i in range(len(r)):
+            eng.update(float(i), float(r[i]), 1.0)
+            if i % 1000 == 0:
+                sizes.append(eng.state_bytes())
+        per = 7 * 8 if wk == "snapshot" else 6 * 8
+        bound.append(
+            {
+                "window_kind": wk,
+                "W": W,
+                "rows": len(r),
+                "max_ring": eng.max_ring,
+                "bytes_over_checkpoints": [min(sizes), max(sizes)],
+                "formula_bytes": JumpEngine(window=float(W), window_kind=wk).state_bytes()
+                + (W + (1 if wk == "snapshot" else 0)) * per,
+            }
+        )
+    res["bounded"] = bound
+
+    # ---- chunks and resume: saving the state at a chunk edge and loading it changes no bit
+    import copy
+    import pickle
+
+    resume = []
+    r = S["N2340"]["r"]
+    n = len(r)
+    clocks = np.cumsum(np.random.default_rng(2).exponential(1.0, n))
+    makers = {
+        "BNS one pass": lambda: JumpEngine(),
+        "BNS decay": lambda: JumpEngine(lam=0.99),
+        "BNS window, snapshot ring": lambda: JumpEngine(window=100.0),
+        "BNS window, term ring": lambda: JumpEngine(window=100.0, window_kind="terms"),
+        "BNS decay and window": lambda: JumpEngine(lam=0.99, window=100.0, window_kind="terms"),
+        "LM K rows, Neumaier": lambda: LeeMyklandEngine("rows", K=30, sum_kind="neumaier"),
+        "LM clock window": lambda: LeeMyklandEngine("clock", window=100.0),
+        "LM decay": lambda: LeeMyklandEngine("decay", lam=0.99),
+    }
+    for name, make in makers.items():
+        whole = make()
+        outs_whole = []
+        for i in range(n):
+            outs_whole.append(whole.step(float(clocks[i]), float(r[i]), 1.0))
+        a = make()
+        outs = []
+        for i in range(n):
+            if i in (n // 3, 2 * n // 3):  # a chunk edge: save, load, go on
+                a = pickle.loads(pickle.dumps(copy.deepcopy(a)))
+            outs.append(a.step(float(clocks[i]), float(r[i]), 1.0))
+        same = all(
+            all((x[k] == y[k]) or (x[k] != x[k] and y[k] != y[k]) for k in x)
+            for x, y in zip(outs, outs_whole, strict=True)
+        )
+        resume.append({"form": name, "rows": n, "bitwise_after_save_and_load": bool(same)})
+    res["resume"] = resume
+    res["summary"] = {"seconds": time.time() - t0}
+    CACHE.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(res, indent=1, default=str))
+    print(f"part3 done in {time.time() - t0:.1f} s -> {out}")
+    print_part3(res)
+
+
+def print_part3(res: dict) -> None:
+    for k in (
+        "state_measured",
+        "state_minimal",
+        "onepass",
+        "vs_oracles",
+        "decay",
+        "windows",
+        "windows_vs_batch",
+        "zero_weight",
+        "lm_rows",
+        "window_sum_outlier",
+        "lm_other",
+        "bounded",
+        "resume",
+    ):
+        print(f"\n## {k}")
+        for row in res[k]:
+            print(json.dumps(row, default=str))
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("part", choices=["part1", "part2"])
+    ap.add_argument("part", choices=["part1", "part2", "part3"])
     ap.add_argument("--force", action="store_true")
     a = ap.parse_args(argv)
     CACHE.mkdir(parents=True, exist_ok=True)
-    {"part1": part1, "part2": part2}[a.part](a.force)
+    {"part1": part1, "part2": part2, "part3": part3}[a.part](a.force)
     return 0
 
 
