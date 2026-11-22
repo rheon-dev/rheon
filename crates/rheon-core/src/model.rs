@@ -91,6 +91,7 @@ pub enum ModelState {
     Expectile(Box<crate::Expectile>),
     Garch(Box<crate::Garch>),
     Realized(Box<crate::Realized>),
+    PowerVariation(Box<crate::PowerVariation>),
 }
 
 #[derive(Debug, Error)]
@@ -214,6 +215,7 @@ impl ModelState {
             ModelState::Expectile(_) => "expectile",
             ModelState::Garch(_) => "garch",
             ModelState::Realized(_) => "realized",
+            ModelState::PowerVariation(_) => "power_variation",
         }
     }
 }
