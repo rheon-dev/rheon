@@ -358,7 +358,7 @@ and each diagnostic's own ``*_half_life`` below, and in the models
 ``start_span``, ``glm``'s and ``expectile``'s ``refit_span``, and
 ``kmeans``' ``warm_span``, ``update_every`` and ``split_merge_every``,
 ``hmm``'s and ``bocpd``'s ``warm_span``, ``bocpd``'s ``hazard``,
-``corrchange``'s ``permute_every``, ``huber``'s and ``sgd``'s
+``corrchange``'s ``permute_every`` and ``monitor_span``, ``huber``'s and ``sgd``'s
 ``huber_refit_span`` and ``quantile``'s ``quantile_refit_span``. Each that
 counts rows where the quantity has a meaning on the clock has its count
 beside it, such as ``warm_rows`` beside ``warm_span`` and ``bocpd``'s

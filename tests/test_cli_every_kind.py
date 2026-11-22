@@ -974,6 +974,19 @@ CASES: list[Case] = [
             "permute_every": 8.0,
         },
     ),
+    # Task 553: each kind's span on the clock, the rows they hold capped.
+    Case(
+        "corrchange_seq_span",
+        "corrchange",
+        {
+            **NODECAY,
+            "features": F3,
+            "kind": "sequential",
+            "window_size": 29.0,
+            "monitor_span": 39.0,
+            "max_state_bytes": 1_000_000,
+        },
+    ),
     Case(
         "corrchange_seq",
         "corrchange",
