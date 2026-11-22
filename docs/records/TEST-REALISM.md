@@ -166,7 +166,7 @@ realistic test and nothing is left to add.
 | | F | 1 | R\* | none |
 | | O | `test_seqtest`: `seqtest_ref` (a scalar replay), the closed form `2^n B(n_pos + 1/2, n_neg + 1/2) / pi` through `math.lgamma`, Type I error over 20,000 fair-coin and 20,000 dependent-null streams, power at 60% and 55% | R, **no third-party library** (confseq does not build) | the KT closed form through `scipy.special.betaln` instead of `math.lgamma`, on a realistic residual-sign stream |
 | | C | Rust probe D (no sign structure by design); `test_seqtest` edge cases | D | none |
-| `deco` | G | 2 (`deco`, `_loglik`) | D: iid uniform features, a true equicorrelation of 0 (no correlation to track) | a one-factor stream at a nonzero level |
+| `deco` | G | 2 (`deco`, `_loglik`) on iid uniform features (D: a true equicorrelation of 0, nothing to track), and `golden_structured.rs`'s `deco_factor` (150 rows of one factor at a correlation of 0.6: `rho` under linear dynamics and `loglik` under `ew` at three rows). The row estimate is the paper's Lemma 2.3 `u`, biased below the correlation: for two unit normals it averages `(1 - sqrt(1 - r^2)) / r`, 1/3 at 0.6, and both dynamics' mean `rho` over the last 50 rows is asserted there, not at 0.6 | D and R | none |
 | | F | 1 | R\* | none |
 | | O | `test_deco` (longhand pair sum, `ew_cov`'s mean form to the bit, scipy `multivariate_normal` for `loglik`, dense and blocked: a one-factor stream of 800 rows at a given rho), `truth_recovery.deco_level` (50 seeds) | R, **third party only for `loglik`** | the estimate and its dynamics: a longhand (no library computes DECO's `u`; `dccmidas` runs another model) |
 | | C | Rust probe D | D | none |

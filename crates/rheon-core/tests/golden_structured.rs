@@ -350,6 +350,72 @@ fn corrchange_break_golden() {
     check("corrchange_break", &got, GOLDEN_CORRCHANGE_BREAK);
 }
 
+/// One factor: `x_i = sqrt(rho) f + sqrt(1 - rho) e_i` for `rho = 0.6`, so
+/// every pair of features has a correlation of 0.6.
+fn factor_rows(n: usize) -> Vec<Row> {
+    rows(n, 99, |_, s| {
+        let f = gauss(s);
+        let (a, b) = (gauss(s), gauss(s));
+        let (lo, hi) = (0.6f64.sqrt(), 0.4f64.sqrt());
+        [lo * f + hi * a, lo * f + hi * b]
+    })
+}
+
+/// `deco` on the factor stream, 150 rows: `rho` (slot 1) from the busier
+/// `"linear"` dynamics and `loglik` (slot 2) from `"ew"`, at rows 100, 125
+/// and 149; the mean `rho` over the last 50 rows is held to the value the
+/// estimator has on this stream (below).
+#[test]
+fn deco_factor_golden() {
+    let cfg = |dynamics, alpha, beta| DecoCfg {
+        n_features: 2,
+        decay: Decay::Halflife(20.0),
+        dynamics,
+        alpha,
+        beta,
+        blocks: Vec::new(),
+        min_weight: 3.0,
+    };
+    let data = factor_rows(150);
+    let mut m = Deco::new(cfg(DecoDynamics::Linear, Some(0.05), Some(0.9))).unwrap();
+    let mut rho_tail = 0.0;
+    let mut got = Vec::new();
+    for (i, (x, y, d, w)) in data.iter().enumerate() {
+        let step = m.step(x, y, *d, *w);
+        if i >= 100 {
+            rho_tail += step.pred[1] / 50.0;
+        }
+        if matches!(i, 100 | 125 | 149) {
+            got.push(step.pred[1]);
+        }
+    }
+    let mut m = Deco::new(cfg(DecoDynamics::Ew, None, None)).unwrap();
+    let mut ew_tail = 0.0;
+    for (i, (x, y, d, w)) in data.iter().enumerate() {
+        let step = m.step(x, y, *d, *w);
+        if i >= 100 {
+            ew_tail += step.pred[1] / 50.0;
+        }
+    }
+    // `rho` is the average of the row estimate `u = 2 r0 r1 / (r0^2 +
+    // r1^2)` of the paper's Lemma 2.3, which is biased below the correlation
+    // (the paper says so): for two unit normals of correlation `r` it
+    // averages `(1 - sqrt(1 - r^2)) / r`, 1/3 at 0.6. Both dynamics sit
+    // there, within the sampling error of an average over about 29 rows.
+    let biased = (1.0 - (1.0f64 - 0.36).sqrt()) / 0.6;
+    assert!(
+        (rho_tail - biased).abs() < 0.1,
+        "linear: mean rho {rho_tail}, expected {biased}"
+    );
+    assert!(
+        (ew_tail - biased).abs() < 0.1,
+        "ew: mean rho {ew_tail}, expected {biased}"
+    );
+    let mut m = Deco::new(cfg(DecoDynamics::Ew, None, None)).unwrap();
+    got.extend(probe(&mut m, &data, &[2], &[100, 125, 149]));
+    check("deco_factor", &got, GOLDEN_DECO_FACTOR);
+}
+
 // --- generated; see the module docs ---
 const GOLDEN_KMEANS_BLOBS: &[f64] = &[
     2.0,
@@ -432,4 +498,12 @@ const GOLDEN_CORRCHANGE_BREAK: &[f64] = &[
     1.5528196731668689,
     1.35809863932255,
     1.0,
+];
+const GOLDEN_DECO_FACTOR: &[f64] = &[
+    0.3839818221187832,
+    0.39547411226222373,
+    0.2576146788192692,
+    -7.633940013970986,
+    -2.629961732725814,
+    -2.1077895811748193,
 ];
