@@ -671,6 +671,40 @@ fn chol_solve(a: &[f64], b: &[f64], k: usize, l: &mut Vec<f64>, x: &mut Vec<f64>
     x.iter().all(|v| v.is_finite())
 }
 
+/// The ridged system solved about the features' means, where the raw one
+/// failed its pivot floor: `G` is the mean-form Gram over `[1, x]`, so its
+/// first row holds the means `m` and `G_xx − m m'` is the features'
+/// covariance; the slopes solve `(G_xx − m m' + pen I) β_s = c_x − m c_0`
+/// and the intercept is `c_0 − m'β_s`, the same minimiser of the same
+/// penalized loss, the intercept being unpenalized. The floor is then read
+/// against the covariance's largest diagonal, the features' spread, where
+/// the raw system's was their squared level: a feature constant at -1000
+/// left a pivot of the ridge alone, 1e-6, below 1e-12 of a diagonal of 1e6,
+/// and the model never fitted (docs/PLAN.md task 538, the property stream
+/// `test_expectile_collinear.py` pins). Reached only where the raw solve
+/// fails, so every stream it fitted keeps its bits.
+fn centred_solve(g: &[f64], c: &[f64], k: usize, pen: f64) -> Option<Vec<f64>> {
+    let p = k.checked_sub(1).filter(|&p| p > 0)?;
+    let m: Vec<f64> = (0..p).map(|i| g[at(i + 1, 0)]).collect();
+    let mut a = vec![0.0; p * (p + 1) / 2];
+    for i in 0..p {
+        for t in 0..=i {
+            a[at(i, t)] = g[at(i + 1, t + 1)] - m[i] * m[t];
+        }
+        a[at(i, i)] += pen;
+    }
+    let b: Vec<f64> = (0..p).map(|i| c[i + 1] - m[i] * c[0]).collect();
+    let (mut l, mut x) = (Vec::new(), Vec::new());
+    if !chol_solve(&a, &b, p, &mut l, &mut x) {
+        return None;
+    }
+    let intercept = c[0] - m.iter().zip(&x).map(|(mi, xi)| mi * xi).sum::<f64>();
+    let mut beta = Vec::with_capacity(k);
+    beta.push(intercept);
+    beta.extend_from_slice(&x);
+    beta.iter().all(|v| v.is_finite()).then_some(beta)
+}
+
 /// What an exact refit found: the fit, the passes it took, and whether it
 /// stopped by a rule rather than at the cap.
 #[derive(Debug, Clone, PartialEq)]
@@ -1229,6 +1263,18 @@ impl Expectile {
         }
         if chol_solve(a, &self.cross[j], k, l, d) {
             self.beta[j].copy_from_slice(d);
+            self.fitted[j] = true;
+        } else if ridge > 0.0
+            && self.cfg.fit_intercept
+            && self.s[j] > 0.0
+            && let Some(beta) = centred_solve(
+                &self.gram[j],
+                &self.cross[j],
+                k,
+                ridge * self.w_target[j] / self.s[j],
+            )
+        {
+            self.beta[j].copy_from_slice(&beta);
             self.fitted[j] = true;
         }
     }

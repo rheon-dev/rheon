@@ -206,3 +206,68 @@ fn the_span_is_checked() {
     c.window_rows = Some(10);
     refuse(c, "but refit_span is set");
 }
+
+/// The fallback solve about the features' means is the raw system's
+/// minimiser where both solve (to rounding), and solves where a constant
+/// feature at a level of 1e3 leaves the raw system's pivot below its floor
+/// (task 538's property stream).
+#[test]
+fn the_centred_solve_is_the_raw_minimiser_and_solves_a_constant_feature() {
+    let mut s = 3u64;
+    let mut u = || {
+        s = s
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (s >> 11) as f64 / (1u64 << 53) as f64 - 0.5
+    };
+    let rows: Vec<[f64; 3]> = (0..40)
+        .map(|_| [5.0 + u(), -2.0 + 3.0 * u(), u()])
+        .collect();
+    let gram_of = |rows: &[[f64; 3]]| {
+        let (k, n) = (3, rows.len() as f64);
+        let (mut g, mut c) = (vec![0.0; k * (k + 1) / 2], vec![0.0; k]);
+        for r in rows {
+            let z = [1.0, r[0], r[1]];
+            for i in 0..k {
+                for t in 0..=i {
+                    g[at(i, t)] += z[i] * z[t] / n;
+                }
+                c[i] += z[i] * r[2] / n;
+            }
+        }
+        (g, c)
+    };
+    let (g, c) = gram_of(&rows);
+    let pen = 1e-3;
+    let mut a = g.clone();
+    for i in 1..3 {
+        a[at(i, i)] += pen;
+    }
+    let (mut l, mut raw) = (Vec::new(), Vec::new());
+    assert!(chol_solve(&a, &c, 3, &mut l, &mut raw));
+    let centred = centred_solve(&g, &c, 3, pen).unwrap();
+    for (p, q) in raw.iter().zip(&centred) {
+        assert!(
+            (p - q).abs() <= 1e-10 * (1.0 + p.abs()),
+            "{raw:?} {centred:?}"
+        );
+    }
+    // A feature constant at -1000 beside one that moves.
+    let flat: Vec<[f64; 3]> = rows
+        .iter()
+        .map(|r| [-1000.0, -1000.0 + 700.0 * r[1], -1001.0])
+        .collect();
+    let (g, c) = gram_of(&flat);
+    let pen = 1e-6;
+    let mut a = g.clone();
+    for i in 1..3 {
+        a[at(i, i)] += pen;
+    }
+    assert!(
+        !chol_solve(&a, &c, 3, &mut l, &mut raw),
+        "the raw floor refuses it"
+    );
+    let b = centred_solve(&g, &c, 3, pen).expect("solved about the means");
+    let fitted = b[0] - 1000.0 * b[1] + flat[0][1] * b[2];
+    assert!((fitted + 1001.0).abs() < 1e-9 * 1001.0, "{b:?}");
+}
