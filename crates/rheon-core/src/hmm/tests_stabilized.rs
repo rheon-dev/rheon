@@ -1019,8 +1019,7 @@ fn a_move_of_the_prior_that_leaves_no_factor_restarts_the_state_and_counts_it() 
     assert_eq!(m.solve_failures, before + 2, "a failure a state");
     let st = m.stabilized().unwrap();
     let p0 = st.prior_rows;
-    for s in 0..2 {
-        let f = &m.factor_states[s];
+    for (s, f) in m.factor_states.iter().enumerate().take(2) {
         let got = f.matrix();
         for i in 0..d {
             for j in 0..d {
