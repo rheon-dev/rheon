@@ -14,7 +14,9 @@ beside a bank. They share three rules:
   :func:`with_windows` allows, one unit is one row.
 - **A stateful transform resumes** with ``load_state`` and ``save_state``, and
   takes ``chunk_size``, as a bank does. :func:`embargo` is a plain Polars query
-  with nothing to save, and takes neither.
+  with nothing to save, and takes neither. :func:`save_checkpoint` saves the
+  states of several stages, a bank's among them, as one file written in full
+  or not at all, and :func:`load_checkpoint` gives each back.
 
 .. list-table::
    :header-rows: 1
@@ -41,6 +43,10 @@ beside a bank. They share three rules:
        Barndorff-Nielsen, Hansen, Lunde & Shephard's refresh-time rule: a
        grid point wherever every series has ticked at least once since the
        last one
+   * - :func:`save_checkpoint`, :func:`load_checkpoint`
+     - save the states of a run's stages, such as a grid, a window run and a
+       bank, as one file that a crash leaves whole, old or new, and read each
+       stage's state back to load where it was saved
 
 Each streams: :func:`embargo` merges two sorted copies of the same input with
 Polars' ``merge_sorted``, and the other two run as an operator of the Rust core
@@ -54,7 +60,7 @@ import math
 import numbers
 import os
 import warnings
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from typing import Any, overload
 
 import polars as pl
@@ -64,9 +70,9 @@ from rheon import _rheon as _native
 from rheon._duration import Duration, duration_text
 from rheon._errors import RefusedValueError, WrongTypeError
 from rheon._spec import _RENAMED, _RENAMED_KEYWORDS, _renamed_keywords
-from rheon._warnings import _user_stacklevel, warn_unstable
+from rheon._warnings import _user_stacklevel
 from rheon.polars import _formula
-from rheon.polars._bank import _refuse_uint128
+from rheon.polars._bank import ModelBank, _refuse_uint128
 from rheon.polars._clock import clock_nanoseconds
 from rheon.polars._errors import ColumnNotFoundError
 from rheon.polars._frame import (
@@ -85,7 +91,14 @@ from rheon.polars._frame import (
     _warn_if_order_unspecified,
 )
 
-__all__ = ["ROLE", "embargo", "refresh_time", "with_windows"]
+__all__ = [
+    "ROLE",
+    "embargo",
+    "load_checkpoint",
+    "refresh_time",
+    "save_checkpoint",
+    "with_windows",
+]
 
 #: Column :func:`embargo` adds to say which copy of a row this is.
 ROLE = "_online_role"
@@ -467,7 +480,7 @@ def refresh_time(
     pairs: bool = False,
     keep: Sequence[str] = (),
     chunk_size: int | None = None,
-    load_state: State | None = None,
+    load_state: State | bytes | None = None,
     save_state: State | None = None,
 ) -> pl.LazyFrame: ...
 
@@ -484,7 +497,7 @@ def refresh_time(
     pairs: bool = False,
     keep: Sequence[str] = (),
     chunk_size: int | None = None,
-    load_state: State | None = None,
+    load_state: State | bytes | None = None,
     save_state: State | None = None,
 ) -> pl.DataFrame: ...
 
@@ -501,7 +514,7 @@ def refresh_time(
     pairs: bool = False,
     keep: Sequence[str] = (),
     chunk_size: int | None = None,
-    load_state: State | None = None,
+    load_state: State | bytes | None = None,
     save_state: State | None = None,
 ) -> pl.LazyFrame | pl.DataFrame:
     """Put series that tick at their own times on a common grid of refresh times.
@@ -553,7 +566,8 @@ def refresh_time(
         The rows read at a time, at least 1. The default, ``None``, is the
         library's default chunk size. It changes no output.
     ``load_state``
-        The path of a state :func:`refresh_time` saved, to go on from. It is
+        The path of a state :func:`refresh_time` saved, to go on from, or the
+        state's bytes, such as a stage :func:`load_checkpoint` gives back. It is
         read when the query is built. It must have been saved with the same
         ``names`` and ``pairs``, on the same kind of clock (a temporal state
         resumes on any unit). Default ``None``: start with no state loaded.
@@ -912,7 +926,7 @@ def with_windows(
     group: str | None = None,
     like: dict[str, Any] | None = None,
     chunk_size: int | None = None,
-    load_state: State | None = None,
+    load_state: State | bytes | None = None,
     save_state: State | None = None,
     **named: pl.Expr,
 ) -> pl.LazyFrame: ...
@@ -930,7 +944,7 @@ def with_windows(
     group: str | None = None,
     like: dict[str, Any] | None = None,
     chunk_size: int | None = None,
-    load_state: State | None = None,
+    load_state: State | bytes | None = None,
     save_state: State | None = None,
     **named: pl.Expr,
 ) -> pl.DataFrame: ...
@@ -947,7 +961,7 @@ def with_windows(
     group: str | None = None,
     like: dict[str, Any] | None = None,
     chunk_size: int | None = None,
-    load_state: State | None = None,
+    load_state: State | bytes | None = None,
     save_state: State | None = None,
     **named: pl.Expr,
 ) -> pl.LazyFrame | pl.DataFrame:
@@ -999,8 +1013,9 @@ def with_windows(
         The rows read at a time, at least 1. The default, ``None``, is the
         library's default chunk size. It changes no output.
     ``load_state``
-        The path of a state this call saved, to go on from. It is read when the
-        query is built. Default ``None``: start with no state loaded.
+        The path of a state this call saved, to go on from, or the state's
+        bytes, such as a stage :func:`load_checkpoint` gives back. It is read
+        when the query is built. Default ``None``: start with no state loaded.
     ``save_state``
         The path of a file to save the state to once the input is fed, or the
         slice of the output is. Default ``None``: save nothing (Notes).
@@ -1068,9 +1083,6 @@ def with_windows(
         ``save_state`` is a folder, on every system. A ``load_state`` that is
         a folder raises it too on macOS and Linux, and ``PermissionError`` on
         Windows, where opening a folder fails that way.
-    :class:`~rheon.UnstableWarning`
-        A warning, under ``RHEON_WARN_UNSTABLE=1``: a call with
-        ``load_state`` or ``save_state``, whose file format is unstable.
     :class:`~rheon.polars.OrderNotGuaranteedWarning`
         A warning: the query before this call does not keep its rows in order,
         while a window is taken over rows in row order.
@@ -1199,13 +1211,9 @@ def with_windows(
     out twice. So cut a stream into files between stamps. Without a clock
     column there is no stamp to compare, and a repeated row is not caught.
 
-    .. warning::
-        The state file's format is considered **unstable**: it may change in
-        any release without that counting as a breaking change, and a state one
-        release saved need not load in the next. So is the formula tree it
-        holds. Under ``RHEON_WARN_UNSTABLE=1``, a call with
-        ``load_state`` or ``save_state`` issues
-        :class:`rheon.UnstableWarning`.
+    A state one release saves loads in every later release, as a bank's
+    does, the formula tree it holds included: its file names its version, and
+    each later layout ships a loader for the one before.
 
     Under a slice of the output (``.head(n)``) the input is read only up to the
     row that resolved the *n*-th row, and the state records how many rows of
@@ -1322,8 +1330,6 @@ def with_windows(
         lazy, who, plan_text, reads="a window is taken over rows in row order", before="the windows"
     )
     python_scan = _is_python_scan(lazy, plan_text)
-    if load_state is not None or save_state is not None:
-        warn_unstable(f"{who}'s state file (load_state, save_state)")
     # Read now, as a bank's `load_state` is: a plan collected twice goes on
     # from the same state, whatever the file holds by then.
     loaded = _read_state(load_state) if load_state is not None else None
@@ -1418,3 +1424,130 @@ def with_windows(
         **_explain_named(f"with_windows: {len(formulas)} formula(s)"),
     )
     return plan if isinstance(lf, pl.LazyFrame) else plan.collect()
+
+
+def save_checkpoint(
+    path: str | os.PathLike[str], stages: Mapping[str, ModelBank | bytes | str | os.PathLike[str]]
+) -> None:
+    """Save the states of a run's stages as one file, written in full or not at all.
+
+    A run that chains stateful stages, such as :func:`refresh_time`, then
+    :func:`with_windows`, then a bank, keeps a state for each. Saved as
+    separate files, a crash between two saves leaves stages that stopped at
+    different rows, and a stream processor that commits its input's offsets
+    after the saves has no single point to resume from. A checkpoint holds every
+    stage's state in one file. The file is written beside ``path`` under
+    another name, flushed to the disk, and renamed over ``path``, so a reader
+    finds the old checkpoint or the new one and never a part of either. Once
+    the call returns, the new one survives a power loss. Commit the offsets
+    after it returns.
+
+    .. rubric:: Parameters
+
+    ``path``
+        The file to write. Its folder must exist.
+    ``stages``
+        Each stage's state by a name of your choosing, in the order to keep
+        them: a :class:`~rheon.polars.ModelBank`, whose state is saved; the
+        bytes of a state, such as ``bank.save_bytes()``; or the path of a
+        state file a stage wrote, such as ``with_windows(save_state=...)``.
+        At least one, and no name twice.
+
+    .. rubric:: Returns
+
+    ``None``. :func:`load_checkpoint` reads the stages back.
+
+    .. rubric:: Raises
+
+    ``ValueError``
+        No stage is given, a name is empty or given twice, or a state is not
+        one this version of rheon saves, is damaged, or is itself a
+        checkpoint. The file at ``path`` is left as it was.
+    ``FileNotFoundError``
+        The folder of ``path`` is not there, or a stage's path is not.
+    ``IsADirectoryError``
+        ``path`` is a folder.
+    ``OSError``
+        The file cannot be written; the file at ``path`` is left as it was.
+
+    .. rubric:: Examples
+
+    .. code-block:: python
+
+        import tempfile, os
+        spec = rp.spec.ewridge("m", targets=["y"], features=["x"], half_life=50.0)
+        df = pl.DataFrame({"x": [0.0, 1.0, 2.0, 3.0], "y": [0.1, 1.9, 4.2, 5.8]})
+        bank = rp.ModelBank([spec])
+        bank.fit_predict(df)
+        path = os.path.join(tempfile.mkdtemp(), "run.checkpoint")
+        rp.stream.save_checkpoint(path, {"bank": bank})
+        stages = rp.stream.load_checkpoint(path)
+        print(list(stages))
+        print(rp.ModelBank.load_bytes(stages["bank"]).coef().height > 0)
+
+    .. code-block:: text
+
+        ['bank']
+        True
+    """
+    who = "rp.stream.save_checkpoint"
+    target = os.fspath(path)
+    _save_path(target, who)
+    if not isinstance(stages, Mapping):
+        msg = (
+            f"{who}: stages must map each stage's name to its state, but it is a "
+            f"{type(stages).__name__}. Pass a dict, such as {{'bank': bank}}."
+        )
+        raise WrongTypeError(msg)
+    pairs: list[tuple[str, bytes]] = []
+    for name, state in stages.items():
+        if not isinstance(name, str):
+            msg = f"{who}: a stage's name must be text, but one is {name!r}. Name it with a str."
+            raise WrongTypeError(msg)
+        if isinstance(state, ModelBank):
+            data = state.save_bytes()
+        elif isinstance(state, bytes | bytearray | memoryview):
+            data = bytes(state)
+        elif isinstance(state, str | os.PathLike):
+            data = _read_state(state)
+        else:
+            msg = (
+                f"{who}: the stage {name!r} is a {type(state).__name__}, not a state. Give a "
+                "ModelBank, a state's bytes or the path of a state file."
+            )
+            raise WrongTypeError(msg)
+        pairs.append((name, data))
+    _native.save_checkpoint(target, pairs)
+
+
+def load_checkpoint(source: str | os.PathLike[str] | bytes) -> dict[str, bytes]:
+    """Read back the stages of a checkpoint :func:`save_checkpoint` wrote.
+
+    Each stage's state comes back as the bytes it was saved as, under its
+    name and in the order it was saved. Hand each to the stage that saved
+    it: a bank's to :meth:`ModelBank.load_bytes <rheon.polars.ModelBank.load_bytes>`,
+    and a window run's or a grid's to that call's ``load_state``. Each loads
+    there as a state file of its own would, in this release and every later
+    one.
+
+    .. rubric:: Parameters
+
+    ``source``
+        The checkpoint's path, or its bytes.
+
+    .. rubric:: Returns
+
+    A ``dict`` of each stage's name to its state's bytes.
+
+    .. rubric:: Raises
+
+    ``ValueError``
+        The file is not a checkpoint (another state is named for what it is),
+        is damaged, or was written by a newer version of rheon.
+    ``FileNotFoundError``
+        ``source`` is a path that is not there.
+    """
+    data = (
+        bytes(source) if isinstance(source, bytes | bytearray | memoryview) else _read_state(source)
+    )
+    return {name: state for name, _kind, state in _native.load_checkpoint(data)}

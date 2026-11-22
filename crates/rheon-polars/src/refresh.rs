@@ -228,10 +228,13 @@ impl Instant {
 }
 
 /// What [`RefreshTime::save_bytes`] writes: the sampler's state, and what
-/// it was built from, which a load must match.
+/// it was built from, which a load must match. In the envelope every state
+/// file shares (`envelope.rs`), from version 3: the envelope's `magic`,
+/// `kind` and `version` first, `checksum` last.
 #[derive(Serialize, Deserialize)]
 struct RefreshFile {
     magic: String,
+    kind: String,
     version: u32,
     names: Vec<String>,
     pairs: bool,
@@ -239,14 +242,36 @@ struct RefreshFile {
     /// one key `""`, which a grouped input never checks against.
     grouped: bool,
     /// The kind of clock the state was fed, once a row was: the other kind
-    /// cannot be ordered against it.
-    kind: Option<ClockKind>,
+    /// cannot be ordered against it. `kind` before the envelope, whose own
+    /// `kind` names the file's.
+    clock_kind: Option<ClockKind>,
     /// Sorted by key, so one state is one file, byte for byte.
     states: Vec<(GroupKey, Vec<GridState>)>,
     last_time: Vec<(GroupKey, Instant)>,
-    /// The points a limited feed held back: absent when there are none, and
-    /// the file then version 1, the bytes of a build that holds none.
+    /// The points a limited feed held back: absent when there are none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    held: Option<Held>,
+    /// The xxh3-64 of every byte before it (`checksum.rs`), last; read from
+    /// the file's last bytes, never by serde.
+    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
+    checksum: Option<crate::checksum::Trailer>,
+}
+
+/// A state of version 1 or 2, written before the envelope: the same body
+/// with the clock's kind named `kind`, no envelope kind and no checksum.
+/// Its loader reads it as [`RefreshFile`].
+#[derive(Deserialize)]
+struct LegacyRefreshFile {
+    magic: String,
+    version: u32,
+    names: Vec<String>,
+    pairs: bool,
+    grouped: bool,
+    kind: Option<ClockKind>,
+    states: Vec<(GroupKey, Vec<GridState>)>,
+    last_time: Vec<(GroupKey, Instant)>,
+    /// Present in version 2 alone.
+    #[serde(default)]
     held: Option<Held>,
 }
 
@@ -271,11 +296,18 @@ fn py_bool(b: bool) -> &'static str {
     if b { "True" } else { "False" }
 }
 
+/// The magic a state began with before the envelope, versions 1 and 2.
 const REFRESH_MAGIC: &str = "polars-online refresh_time";
-const REFRESH_VERSION: u32 = 1;
-/// A state holding points a limited feed held back: a build that reads only
-/// version 1 refuses it rather than dropping them.
+/// Version 1, before the envelope: a state holding no point held back.
+const REFRESH_VERSION_PLAIN: u32 = 1;
+/// Version 2, before the envelope: a state holding points a limited feed
+/// held back, so that a build that read only version 1 refused it rather
+/// than dropping them.
 const REFRESH_VERSION_HELD: u32 = 2;
+/// Version 3 since PLAN 542: the state is written in the envelope every
+/// state file shares (`envelope.rs`), held points or none, and ends with a
+/// checksum of its bytes; the clock's kind is `clock_kind`.
+const REFRESH_VERSION: u32 = 3;
 
 /// One completed grid point, as the scan collects it: the group it belongs
 /// to, which pair (0 for the joint grid), the row of the completing tick,
@@ -361,21 +393,21 @@ impl RefreshTime {
             .collect();
         last_time.sort_by(|a, b| a.0.cmp(&b.0));
         let file = RefreshFile {
-            magic: REFRESH_MAGIC.into(),
-            version: if self.held.is_some() {
-                REFRESH_VERSION_HELD
-            } else {
-                REFRESH_VERSION
-            },
+            magic: crate::envelope::MAGIC.into(),
+            kind: crate::envelope::Kind::RefreshTime.tag().into(),
+            version: REFRESH_VERSION,
             names: self.names.clone(),
             pairs: !self.pairs.is_empty(),
             grouped: self.grouped.unwrap_or(false),
-            kind: self.kind,
+            clock_kind: self.kind,
             states,
             last_time,
             held: self.held.clone(),
+            checksum: Some(crate::checksum::Trailer::Patched),
         };
-        rmp_serde::to_vec_named(&file).map_err(|e| e.to_string())
+        let mut out = rmp_serde::to_vec_named(&file).map_err(|e| e.to_string())?;
+        crate::checksum::seal(&mut out);
+        Ok(out)
     }
 
     /// [`Self::save_bytes`] to `path`, replacing it whole or not at all.
@@ -400,37 +432,85 @@ impl RefreshTime {
         pairs: bool,
         grouped: bool,
     ) -> Result<Self, String> {
-        let file: RefreshFile = rmp_serde::from_slice(bytes).map_err(|e| {
+        const WHO: &str = "rp.stream.refresh_time";
+        const START_OVER: &str = "Load an undamaged copy of the state file, or leave out \
+                                  load_state to start over.";
+        let unread = |e: rmp_serde::decode::Error| {
             format!(
-                "rp.stream.refresh_time: the state cannot be read ({e}), so it is damaged or \
-                     was not saved by refresh_time. Pass a state file a refresh_time run saved, \
-                     or leave out load_state to start over."
+                "{WHO}: the state cannot be read ({e}), so it is damaged or was not saved by \
+                 refresh_time. Pass a state file a refresh_time run saved, or leave out \
+                 load_state to start over."
             )
-        })?;
-        if file.magic != REFRESH_MAGIC {
-            return Err(
-                "rp.stream.refresh_time: the state was not saved by refresh_time. Pass a state \
-                 file a refresh_time run saved, or leave out load_state to start over."
-                    .into(),
-            );
-        }
-        if file.version != REFRESH_VERSION && file.version != REFRESH_VERSION_HELD {
-            return Err(format!(
-                "rp.stream.refresh_time: the state's version is {}, but this version of \
-                 rheon reads versions {REFRESH_VERSION} and {REFRESH_VERSION_HELD}. Load \
-                 the state with the version of rheon that saved it, or leave out \
-                 load_state to start over.",
-                file.version
-            ));
-        }
-        if (file.version == REFRESH_VERSION_HELD) != file.held.is_some() {
-            return Err(format!(
-                "rp.stream.refresh_time: the state is damaged: its contents do not match its \
-                 version, {}. Load an undamaged copy of the state file, or leave out \
-                 load_state to start over.",
-                file.version
-            ));
-        }
+        };
+        let wrong_version = |version: u32| {
+            format!(
+                "{WHO}: the state's version is {version}, but this version of rheon reads \
+                 versions {REFRESH_VERSION_PLAIN} to {REFRESH_VERSION}. Load the state with the \
+                 version of rheon that saved it, or leave out load_state to start over."
+            )
+        };
+        // The checksum first, then the envelope's head, before a byte is
+        // decoded.
+        let opened =
+            crate::envelope::open(bytes, crate::envelope::Kind::RefreshTime).map_err(|r| {
+                use crate::envelope::{Kind, Refused};
+                match r {
+                    Refused::Damaged | Refused::Unsealed => {
+                        format!("{WHO}: the state is {}. {START_OVER}", r.what())
+                    }
+                    Refused::OtherKind(Kind::Checkpoint) => format!(
+                        "{WHO}: the state is a pipeline checkpoint, not a refresh_time run's \
+                         state. Read its stages with rheon.polars.stream.load_checkpoint and \
+                         pass the refresh_time run's stage as load_state."
+                    ),
+                    Refused::OtherKind(_) | Refused::UnknownKind(_) => format!(
+                        "{WHO}: the state is {}, not a refresh_time run's. Pass a state file a \
+                         refresh_time run saved, or leave out load_state to start over.",
+                        r.what()
+                    ),
+                }
+            })?;
+        let file: RefreshFile = match opened {
+            crate::envelope::Opened::Enveloped { version } => {
+                if version != REFRESH_VERSION {
+                    return Err(wrong_version(version));
+                }
+                rmp_serde::from_slice(bytes).map_err(unread)?
+            }
+            // The loader of versions 1 and 2, written before the envelope.
+            crate::envelope::Opened::Legacy { .. } => {
+                let old: LegacyRefreshFile = rmp_serde::from_slice(bytes).map_err(unread)?;
+                if old.magic != REFRESH_MAGIC {
+                    return Err(format!(
+                        "{WHO}: the state was not saved by refresh_time. Pass a state file a \
+                         refresh_time run saved, or leave out load_state to start over."
+                    ));
+                }
+                if old.version != REFRESH_VERSION_PLAIN && old.version != REFRESH_VERSION_HELD {
+                    return Err(wrong_version(old.version));
+                }
+                if (old.version == REFRESH_VERSION_HELD) != old.held.is_some() {
+                    return Err(format!(
+                        "{WHO}: the state is damaged: its contents do not match its version, \
+                         {}. {START_OVER}",
+                        old.version
+                    ));
+                }
+                RefreshFile {
+                    magic: old.magic,
+                    kind: crate::envelope::Kind::RefreshTime.tag().into(),
+                    version: old.version,
+                    names: old.names,
+                    pairs: old.pairs,
+                    grouped: old.grouped,
+                    clock_kind: old.kind,
+                    states: old.states,
+                    last_time: old.last_time,
+                    held: old.held,
+                    checksum: None,
+                }
+            }
+        };
         if file.names != names || file.pairs != pairs {
             return Err(format!(
                 "rp.stream.refresh_time: the state was saved with names = {:?} and pairs = {}, \
@@ -482,7 +562,7 @@ impl RefreshTime {
         rt.states = file.states.into_iter().collect();
         rt.last_time = file.last_time.into_iter().collect();
         rt.grouped = Some(grouped);
-        rt.kind = file.kind;
+        rt.kind = file.clock_kind;
         if let Some(h) = &file.held {
             // At least one point, each of a grid this sampler runs, with a
             // count and a value per series of that grid.
@@ -1625,7 +1705,7 @@ mod tests {
                 .unwrap();
             let mut file: RefreshFile = rmp_serde::from_slice(&rt.save_bytes().unwrap()).unwrap();
             edit(&mut file);
-            rmp_serde::to_vec_named(&file).unwrap()
+            crate::reseal(&rmp_serde::to_vec_named(&file).unwrap())
         };
         let joint: Vec<Case> = vec![
             ("a grid one series wide", &|f| {
@@ -1960,12 +2040,25 @@ mod tests {
     }
 
     /// Task 252: bytes that decode as a state but carry another magic or
-    /// another version are refused by what they are.
+    /// another version are refused by what they are; a state written before
+    /// the envelope (versions 1 and 2) loads through its loader and saves
+    /// the enveloped state (PLAN 542).
     #[test]
     fn a_state_of_another_kind_or_version_is_refused() {
+        #[derive(Serialize)]
+        struct Legacy<'a> {
+            magic: &'a str,
+            version: u32,
+            names: Vec<String>,
+            pairs: bool,
+            grouped: bool,
+            kind: Option<ClockKind>,
+            states: Vec<(GroupKey, Vec<GridState>)>,
+            last_time: Vec<(GroupKey, Instant)>,
+        }
         let file = |magic: &str, version: u32| {
-            rmp_serde::to_vec_named(&RefreshFile {
-                magic: magic.into(),
+            rmp_serde::to_vec_named(&Legacy {
+                magic,
                 version,
                 names: ab(),
                 pairs: false,
@@ -1973,28 +2066,27 @@ mod tests {
                 kind: None,
                 states: Vec::new(),
                 last_time: Vec::new(),
-                held: None,
             })
             .unwrap()
         };
         let load = |b: &[u8]| RefreshTime::load_bytes(b, ab(), false, false);
         assert_eq!(
-            load(&file("polars-online windows", REFRESH_VERSION)).err(),
+            load(&file("polars-online windows", REFRESH_VERSION_PLAIN)).err(),
             Some(
                 "rp.stream.refresh_time: the state was not saved by refresh_time. Pass a state \
                  file a refresh_time run saved, or leave out load_state to start over."
                     .to_string()
             )
         );
+        let newer = format!(
+            "rp.stream.refresh_time: the state's version is {}, but this version of \
+             rheon reads versions 1 to 3. Load the state with the version of rheon that \
+             saved it, or leave out load_state to start over.",
+            REFRESH_VERSION_HELD + 1
+        );
         assert_eq!(
             load(&file(REFRESH_MAGIC, REFRESH_VERSION_HELD + 1)).err(),
-            Some(format!(
-                "rp.stream.refresh_time: the state's version is {}, but this version of \
-                 rheon reads versions {REFRESH_VERSION} and {REFRESH_VERSION_HELD}. Load \
-                 the state with the version of rheon that saved it, or leave out \
-                 load_state to start over.",
-                REFRESH_VERSION_HELD + 1
-            ))
+            Some(newer)
         );
         assert_eq!(
             load(&file(REFRESH_MAGIC, REFRESH_VERSION_HELD)).err(),
@@ -2005,6 +2097,50 @@ mod tests {
                     .to_string()
             )
         );
-        assert!(load(&file(REFRESH_MAGIC, REFRESH_VERSION)).is_ok());
+        let old = load(&file(REFRESH_MAGIC, REFRESH_VERSION_PLAIN)).unwrap();
+        let now = RefreshTime::new(ab(), false).unwrap().save_bytes().unwrap();
+        let mut fresh = RefreshTime::new(ab(), false).unwrap();
+        fresh.grouped = Some(false);
+        assert_eq!(old.save_bytes().unwrap(), fresh.save_bytes().unwrap());
+        assert!(crate::envelope::head(&now).is_some());
+        // The enveloped state of a newer version, and of another kind.
+        let mut v: rmpv::Value = rmpv::decode::read_value(&mut &now[..]).unwrap();
+        if let rmpv::Value::Map(m) = &mut v {
+            m[2].1 = 4.into();
+        }
+        let mut b = Vec::new();
+        rmpv::encode::write_value(&mut b, &v).unwrap();
+        let err = load(&crate::reseal(&b)).unwrap_err();
+        assert!(err.contains("the state's version is 4, but"), "{err}");
+        if let rmpv::Value::Map(m) = &mut v {
+            m[1].1 = "bank".into();
+            m[2].1 = 3.into();
+        }
+        let mut b = Vec::new();
+        rmpv::encode::write_value(&mut b, &v).unwrap();
+        let err = load(&crate::reseal(&b)).unwrap_err();
+        assert!(
+            err.starts_with("rp.stream.refresh_time: the state is a model bank's state, not"),
+            "{err}"
+        );
+        // Damage the checksum would see, and the checksum cut.
+        let mut damaged = now.clone();
+        damaged[30] ^= 1;
+        assert!(
+            load(&damaged)
+                .unwrap_err()
+                .contains("is damaged (its bytes do not match")
+        );
+        let mut cut = rmpv::decode::read_value(&mut &now[..]).unwrap();
+        if let rmpv::Value::Map(m) = &mut cut {
+            m.pop();
+        }
+        let mut b = Vec::new();
+        rmpv::encode::write_value(&mut b, &cut).unwrap();
+        assert!(
+            load(&b)
+                .unwrap_err()
+                .contains("checksum it ends with is missing or cut")
+        );
     }
 }

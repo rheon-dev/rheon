@@ -997,7 +997,7 @@ fn skip_learned_keeps_a_nan_clock_for_the_bank_to_refuse() {
 }
 
 /// Task 198 (D5): a formula target's written form -- its tree in the TOML
-/// file and in a saved state -- is labelled unstable. Under
+/// file -- is labelled unstable (in a saved state no longer, PLAN 542). Under
 /// `RHEON_WARN_UNSTABLE=1` the command line says so on stderr, as
 /// Polars' `POLARS_WARN_UNSTABLE` does; without it, or for a config with no
 /// formula target, it says nothing.
@@ -1045,7 +1045,7 @@ fn a_formula_target_is_labelled_unstable_under_the_variable() {
         warned.lines().collect::<Vec<_>>(),
         [
             "rheon: warning: a formula target's written form -- its tree in the TOML \
-             file and in a saved state -- is considered unstable, so it may change in any \
+             file -- is considered unstable, so it may change in any \
              release without that being considered a breaking change. Set \
              RHEON_WARN_UNSTABLE=0, or unset it, to silence this warning."
         ],

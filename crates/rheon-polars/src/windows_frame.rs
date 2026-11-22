@@ -94,7 +94,18 @@ impl WindowsConfig {
 }
 
 const WHO: &str = "with_windows";
-const WINDOWS_MAGIC: &str = "polars-online windows";
+/// The envelope's magic (`envelope.rs`), the first entry of a state of
+/// version 12 or later, and its kind.
+const WINDOWS_MAGIC: &str = crate::envelope::MAGIC;
+const WINDOWS_KIND: &str = crate::envelope::Kind::Windows.tag();
+/// The magic a state began with before the envelope, version 11 and
+/// earlier.
+const LEGACY_WINDOWS_MAGIC: &str = "polars-online windows";
+/// 12 since PLAN 542: the state is written in the envelope every state
+/// file of this library shares (`envelope.rs`): its first entries are the
+/// envelope's `magic`, `kind` (`"windows"`) and `version`, and the body is
+/// 11's. A state of 9 to 11 begins with [`LEGACY_WINDOWS_MAGIC`] and loads
+/// as it did ([`LAST_LEGACY_VERSION`]);
 /// 11 since review P7: the state ends with `checksum`, the xxh3-64 of
 /// every byte before it (`checksum.rs`), checked before anything is
 /// decoded; a version-10 state has none and loads as one
@@ -122,7 +133,10 @@ const WINDOWS_MAGIC: &str = "polars-online windows";
 /// task 143: formulas over operators, where 1 held descriptions. An older
 /// state would load with defaults and misbehave. The bank's schema moves
 /// with this number (review R4, A2; R6, D5).
-const WINDOWS_VERSION: u32 = 11;
+const WINDOWS_VERSION: u32 = 12;
+
+/// The last version written before the envelope.
+const LAST_LEGACY_VERSION: u32 = 11;
 
 /// The first version whose state ends with a checksum: a state of this
 /// version or later without one is damaged.
@@ -139,6 +153,7 @@ const MIN_WINDOWS_VERSION: u32 = 9;
 #[derive(Serialize)]
 struct FileOut<'a> {
     magic: &'a str,
+    kind: &'a str,
     version: u32,
     config: &'a WindowsConfig,
     core: &'a Windows,
@@ -2676,6 +2691,7 @@ impl WindowsRun {
         }
         let mut out = rmp_serde::to_vec_named(&FileOut {
             magic: WINDOWS_MAGIC,
+            kind: WINDOWS_KIND,
             version: WINDOWS_VERSION,
             config: &self.k.config,
             core: &self.core,
@@ -2736,45 +2752,66 @@ impl WindowsRun {
         config: WindowsConfig,
         input: &Schema,
     ) -> Result<Self, Refused> {
-        // The checksum first, before a byte is decoded: damage that decodes
-        // would load in silence, or panic or abort further in.
-        let sealed = match crate::checksum::check(bytes) {
-            crate::checksum::Seal::Broken => {
-                return Err(format!(
-                    "{WHO}: the state is damaged (its bytes do not match the checksum it was \
-                     saved with). Load an undamaged copy of the state file, or leave out \
-                     load_state to start over."
-                )
-                .into());
-            }
-            crate::checksum::Seal::Holds => true,
-            crate::checksum::Seal::Absent => false,
-        };
-        let header: Header = rmp_serde::from_slice(bytes).map_err(|e| {
-            format!(
-                "{WHO}: the state cannot be read ({e}), so it is damaged or was not saved by a \
-                 window run. Pass a state file a window run saved, or leave out load_state to \
-                 start over."
-            )
+        // The checksum first, then the envelope's head, before a byte is
+        // decoded: damage that decodes would load in silence, or panic or
+        // abort further in.
+        const START_OVER: &str = "Load an undamaged copy of the state file, or leave out \
+                                  load_state to start over.";
+        let opened = crate::envelope::open(bytes, crate::envelope::Kind::Windows).map_err(|r| {
+            use crate::envelope::Refused as Why;
+            Refused::from(match r {
+                Why::Damaged | Why::Unsealed => {
+                    format!("{WHO}: the state is {}. {START_OVER}", r.what())
+                }
+                Why::OtherKind(crate::envelope::Kind::Checkpoint) => format!(
+                    "{WHO}: the state is a pipeline checkpoint, not a window run's state. \
+                         Read its stages with rheon.polars.stream.load_checkpoint and pass the \
+                         window run's stage as load_state."
+                ),
+                Why::OtherKind(_) | Why::UnknownKind(_) => format!(
+                    "{WHO}: the state is {}, not a window run's. Pass a state file a \
+                         window run saved, or leave out load_state to start over.",
+                    r.what()
+                ),
+            })
         })?;
-        if header.magic != WINDOWS_MAGIC {
+        let (version, sealed, enveloped) = match opened {
+            crate::envelope::Opened::Enveloped { version } => (version, true, true),
+            crate::envelope::Opened::Legacy { sealed } => {
+                let header: Header = rmp_serde::from_slice(bytes).map_err(|e| {
+                    format!(
+                        "{WHO}: the state cannot be read ({e}), so it is damaged or was not \
+                         saved by a window run. Pass a state file a window run saved, or leave \
+                         out load_state to start over."
+                    )
+                })?;
+                if header.magic != LEGACY_WINDOWS_MAGIC {
+                    return Err(format!(
+                        "{WHO}: the state was not saved by a window run. Pass a state file a \
+                         window run saved, or leave out load_state to start over."
+                    )
+                    .into());
+                }
+                (header.version, sealed, false)
+            }
+        };
+        // A version the envelope was never written at, or one written
+        // before it with its head, is refused as any version this build
+        // does not read.
+        let reads = if enveloped {
+            LAST_LEGACY_VERSION + 1..=WINDOWS_VERSION
+        } else {
+            MIN_WINDOWS_VERSION..=LAST_LEGACY_VERSION
+        };
+        if !reads.contains(&version) {
             return Err(format!(
-                "{WHO}: the state was not saved by a window run. Pass a state file a window run \
-                 saved, or leave out load_state to start over."
-            )
-            .into());
-        }
-        if !(MIN_WINDOWS_VERSION..=WINDOWS_VERSION).contains(&header.version) {
-            return Err(format!(
-                "{WHO}: the state's version is {}, but this version of rheon reads \
+                "{WHO}: the state's version is {version}, but this version of rheon reads \
                  versions {MIN_WINDOWS_VERSION} to {WINDOWS_VERSION}. Load the state with the \
-                 version of rheon that saved it, or leave out load_state to start \
-                 over.",
-                header.version
+                 version of rheon that saved it, or leave out load_state to start over."
             )
             .into());
         }
-        if header.version >= SEALED_FROM_VERSION && !sealed {
+        if version >= SEALED_FROM_VERSION && !sealed {
             return Err(format!(
                 "{WHO}: the state is damaged (the checksum it ends with is missing or cut). Load \
                  an undamaged copy of the state file, or leave out load_state to start over."
@@ -4071,7 +4108,7 @@ mod tests {
         }
         let input = frame(&[0.0]).schema().clone();
         let old = rmp_serde::to_vec_named(&Old {
-            magic: WINDOWS_MAGIC,
+            magic: LEGACY_WINDOWS_MAGIC,
             version: 2,
         })
         .unwrap();
@@ -4081,13 +4118,40 @@ mod tests {
         assert!(
             err.contains(
                 "the state's version is 2, but this version of rheon reads versions 9 \
-                 to 11"
+                 to 12"
             ),
             "{err}"
         );
+        // A newer enveloped state, and an enveloped one at a version only
+        // written before the envelope, are refused by their number.
+        let mut run = WindowsRun::new(config(FORWARD), &input).unwrap();
+        run.feed(&frame(&[0.0]), None).unwrap();
+        let now = run.save_bytes().unwrap();
+        for version in [WINDOWS_VERSION + 1, LAST_LEGACY_VERSION] {
+            let mut v = rmpv::decode::read_value(&mut &now[..]).unwrap();
+            if let rmpv::Value::Map(m) = &mut v {
+                m[2].1 = version.into();
+            }
+            let mut b = Vec::new();
+            rmpv::encode::write_value(&mut b, &v).unwrap();
+            let err = WindowsRun::load_bytes(&crate::reseal(&b), config(FORWARD), &input)
+                .err()
+                .expect("refused");
+            assert!(
+                err.contains(&format!("the state's version is {version}, but")),
+                "{err}"
+            );
+        }
+        // Each version written before the envelope loads, and saves the
+        // enveloped state.
+        for version in [10, 11] {
+            let old = crate::envelope::legacy::windows(&now, version);
+            let back = WindowsRun::load_bytes(&old, config(FORWARD), &input).unwrap();
+            assert_eq!(back.save_bytes().unwrap(), now, "{version}");
+        }
         let other = rmp_serde::to_vec_named(&Old {
             magic: "something else",
-            version: WINDOWS_VERSION,
+            version: LAST_LEGACY_VERSION,
         })
         .unwrap();
         let err = WindowsRun::load_bytes(&other, config(FORWARD), &input)
@@ -4213,8 +4277,10 @@ mod tests {
         // `full` `hmm` state, whose loader reads 68: unchanged too. 70 for
         // `hmm`'s stabilized prior, whose loader reads 69: unchanged too.
         // 71 with windows state 11 (review P7): both end with a checksum;
-        // a 70 bank's 10 cores have none and load as they did.
-        assert_eq!((WINDOWS_VERSION, rheon_core::SCHEMA_VERSION), (11, 71));
+        // a 70 bank's 10 cores have none and load as they did. 72 with
+        // windows state 12 (PLAN 542): both written in the envelope every
+        // state file shares; a 71 bank's 11 cores load as they did.
+        assert_eq!((WINDOWS_VERSION, rheon_core::SCHEMA_VERSION), (12, 72));
         assert_eq!(MIN_WINDOWS_VERSION, 9);
     }
 
@@ -4667,6 +4733,7 @@ mod tests {
         let file: FileIn = rmp_serde::from_slice(&state).unwrap();
         let stripped = rmp_serde::to_vec_named(&FileOut {
             magic: WINDOWS_MAGIC,
+            kind: WINDOWS_KIND,
             version: WINDOWS_VERSION,
             config: &file.config,
             core: &file.core,
@@ -4715,6 +4782,7 @@ mod tests {
             core.damage(what);
             let damaged = rmp_serde::to_vec_named(&FileOut {
                 magic: WINDOWS_MAGIC,
+                kind: WINDOWS_KIND,
                 version: WINDOWS_VERSION,
                 config: &file.config,
                 core: &core,
@@ -5158,8 +5226,8 @@ mod tests {
             version: u32,
         }
         let header = rmp_serde::to_vec_named(&Only {
-            magic: WINDOWS_MAGIC,
-            version: WINDOWS_VERSION,
+            magic: LEGACY_WINDOWS_MAGIC,
+            version: LAST_LEGACY_VERSION,
         })
         .unwrap();
         // Unsealed, it is refused as damaged before it is decoded; sealed,
@@ -5177,6 +5245,7 @@ mod tests {
         let encode = |core: &Windows, held: &[u8]| {
             rmp_serde::to_vec_named(&FileOut {
                 magic: WINDOWS_MAGIC,
+                kind: WINDOWS_KIND,
                 version: WINDOWS_VERSION,
                 config: &file.config,
                 core,

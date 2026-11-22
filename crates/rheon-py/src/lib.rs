@@ -1494,6 +1494,42 @@ fn model_kinds() -> Vec<&'static str> {
     rheon_polars::ModelKind::KINDS.to_vec()
 }
 
+/// The stages, each `(name, state)`, as one pipeline checkpoint at `path`,
+/// written whole or not at all (`rheon_polars::save_checkpoint`). A stage
+/// refused -- no stage, an empty or repeated name, a state that is not one
+/// -- is a `ValueError`; the filesystem's own failure an `OSError`, the old
+/// file left as it was.
+#[pyfunction]
+fn save_checkpoint(
+    py: Python<'_>,
+    path: &str,
+    stages: Vec<(String, pyo3::pybacked::PyBackedBytes)>,
+) -> PyResult<()> {
+    let views: Vec<(&str, &[u8])> = stages.iter().map(|(n, b)| (n.as_str(), &b[..])).collect();
+    py.detach(|| rheon_polars::save_checkpoint(std::path::Path::new(path), &views))
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::InvalidInput => PyValueError::new_err(e.to_string()),
+            _ => save_err(path, e),
+        })
+}
+
+/// The stages of a pipeline checkpoint's bytes, in order, each `(name,
+/// kind, state)`; a refusal is a `ValueError` with its reason.
+#[pyfunction]
+fn load_checkpoint(
+    py: Python<'_>,
+    data: &[u8],
+) -> PyResult<Vec<(String, &'static str, Py<pyo3::types::PyBytes>)>> {
+    let stages = rheon_polars::load_checkpoint(data).map_err(PyValueError::new_err)?;
+    Ok(stages
+        .into_iter()
+        .map(|s| {
+            let state = pyo3::types::PyBytes::new(py, &s.state).unbind();
+            (s.name, s.kind.tag(), state)
+        })
+        .collect())
+}
+
 #[pymodule]
 fn _rheon(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyModelBank>()?;
@@ -1525,5 +1561,7 @@ fn _rheon(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(spec_output_index, m)?)?;
     m.add_function(wrap_pyfunction!(spec_coef_fields, m)?)?;
     m.add_function(wrap_pyfunction!(resolved_defaults, m)?)?;
+    m.add_function(wrap_pyfunction!(save_checkpoint, m)?)?;
+    m.add_function(wrap_pyfunction!(load_checkpoint, m)?)?;
     Ok(())
 }

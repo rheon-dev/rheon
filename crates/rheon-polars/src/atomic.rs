@@ -18,11 +18,13 @@
 //! Three limits, said here rather than found (review 2026-09-12, S12). On
 //! Windows the rename fails while another process holds the destination
 //! open without `FILE_SHARE_DELETE` -- a Python `open(path, "rb")`, a
-//! viewer, an indexer -- and the save reports that error rather than
-//! waiting; Rust's own `File` shares delete, so two writers in this library
-//! never meet it. The rename is not flushed to its directory, so on POSIX a
-//! power loss just after it can leave the old file: "old or new" holds, and
-//! "new" is durable once the directory is. And a process killed between
+//! viewer, an indexer -- and the save reports that error once the rename
+//! has been tried for about a second (`rename_over`); Rust's own `File`
+//! shares delete, so two writers in this library never meet it. The rename
+//! is not flushed to its directory, so on POSIX a power loss just after it
+//! can leave the old file: "old or new" holds, and "new" is durable once the
+//! directory is, which `AtomicFile::commit_durable` waits for (a pipeline
+//! checkpoint's save). And a process killed between
 //! creating the temporary and renaming it leaves `.name.tmpPID-seq` beside
 //! the destination, which nothing removes.
 //!
@@ -112,9 +114,104 @@ impl AtomicFile {
     pub(crate) fn commit(mut self) -> io::Result<()> {
         File::options().write(true).open(&self.tmp)?.sync_all()?;
         keep_mode(&self.dest, &self.tmp)?;
-        fs::rename(&self.tmp, &self.dest)?;
+        rename_over(&self.tmp, &self.dest)?;
         self.pending = false;
         Ok(())
+    }
+
+    /// [`Self::commit`], and the rename made durable as well: on Unix the
+    /// directory is synced after it, so a power loss just after the call
+    /// returns cannot bring the old file back. A pipeline checkpoint needs
+    /// this, since the caller commits its input's offsets once the call
+    /// returns, and an old checkpoint under new offsets would skip the rows
+    /// between. It costs a second sync: on macOS arm64 a directory's
+    /// `sync_all` (`F_FULLFSYNC`) took 4.0 ms, as a small file's did (PLAN
+    /// 542, the median of 21 after a small write); on Windows
+    /// the standard library cannot sync a directory, so there the rename is
+    /// durable once the filesystem writes its log, and a power loss before
+    /// that brings back the old file, whole.
+    pub(crate) fn commit_durable(self) -> io::Result<()> {
+        let dir = self
+            .dest
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+        self.commit()?;
+        sync_dir(&dir)
+    }
+}
+
+/// Sync a directory, so a rename inside it is on the disk.
+#[cfg(unix)]
+fn sync_dir(dir: &Path) -> io::Result<()> {
+    File::open(dir)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_dir(_dir: &Path) -> io::Result<()> {
+    Ok(())
+}
+
+/// How many times a rename that Windows refused for a moment is tried, and
+/// the pause before the first retry, doubled after each: about 0.8 s in
+/// all.
+#[cfg_attr(not(windows), allow(dead_code))]
+const RENAME_TRIES: u32 = 7;
+#[cfg_attr(not(windows), allow(dead_code))]
+const RENAME_PAUSE: std::time::Duration = std::time::Duration::from_millis(12);
+
+/// Rename `tmp` over `dest`, replacing it.
+///
+/// On Unix `rename` replaces the destination atomically, and its failures
+/// are not passing, so it is tried once. On Windows std's `rename`
+/// replaces it too (`MoveFileExW` with `MOVEFILE_REPLACE_EXISTING`, or a
+/// POSIX-semantics rename where the filesystem has one), but fails with an
+/// access-denied or sharing-violation error while another process holds
+/// the destination open without sharing delete: a virus scanner or a
+/// search indexer that opens each new file for a moment, as much as a
+/// reader that keeps it. So there it is tried again, a few times over
+/// about a second, before the error is returned. The temporary stays
+/// whole meanwhile; the destination is never removed first, which would
+/// leave no file at all if the process died between the two steps.
+fn rename_over(tmp: &Path, dest: &Path) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        retry_while_held(|| fs::rename(tmp, dest), std::thread::sleep)
+    }
+    #[cfg(not(windows))]
+    {
+        fs::rename(tmp, dest)
+    }
+}
+
+/// Whether a failed rename is Windows refusing it while another process
+/// holds the destination: `ERROR_ACCESS_DENIED` (5) or
+/// `ERROR_SHARING_VIOLATION` (32).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn held_by_another(e: &io::Error) -> bool {
+    matches!(e.raw_os_error(), Some(5 | 32))
+}
+
+/// `rename` tried until it succeeds, fails otherwise than
+/// [`held_by_another`], or has been tried [`RENAME_TRIES`] times, with
+/// `pause` between the tries. Generic in both, so the rule is tested on
+/// every platform.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn retry_while_held(
+    mut rename: impl FnMut() -> io::Result<()>,
+    mut pause: impl FnMut(std::time::Duration),
+) -> io::Result<()> {
+    let mut wait = RENAME_PAUSE;
+    let mut tries = 1;
+    loop {
+        match rename() {
+            Err(e) if held_by_another(&e) && tries < RENAME_TRIES => {
+                pause(wait);
+                wait *= 2;
+                tries += 1;
+            }
+            other => return other,
+        }
     }
 }
 
@@ -175,6 +272,69 @@ fn resolve_symlink(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The retry Windows takes: a held destination is tried again, with
+    /// the pause doubled, until the rename succeeds or the tries run out;
+    /// any other error is returned at once.
+    #[test]
+    fn a_rename_refused_while_held_is_tried_again() {
+        let held = || io::Error::from_raw_os_error(32);
+        let mut pauses = Vec::new();
+        let mut left = 3;
+        let r = retry_while_held(
+            || {
+                if left > 0 {
+                    left -= 1;
+                    Err(held())
+                } else {
+                    Ok(())
+                }
+            },
+            |d| pauses.push(d.as_millis()),
+        );
+        assert!(r.is_ok());
+        assert_eq!(pauses, [12, 24, 48]);
+
+        let mut tries = 0;
+        let mut pauses = 0;
+        let r = retry_while_held(
+            || {
+                tries += 1;
+                Err(io::Error::from_raw_os_error(5))
+            },
+            |_| pauses += 1,
+        );
+        assert_eq!(r.unwrap_err().raw_os_error(), Some(5));
+        assert_eq!((tries, pauses), (RENAME_TRIES, RENAME_TRIES - 1));
+
+        let mut tries = 0;
+        let r = retry_while_held(
+            || {
+                tries += 1;
+                Err(io::Error::from(io::ErrorKind::NotFound))
+            },
+            |_| panic!("no pause for another error"),
+        );
+        assert_eq!(r.unwrap_err().kind(), io::ErrorKind::NotFound);
+        assert_eq!(tries, 1);
+    }
+
+    /// A durable commit replaces the file as a plain one does, in a
+    /// directory named or in the working one.
+    #[test]
+    fn a_durable_commit_replaces_the_file() {
+        let dir = std::env::temp_dir().join(format!("rheon-atomic-durable-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let dest = dir.join("checkpoint");
+        fs::write(&dest, b"old").unwrap();
+        let (mut f, pending) = AtomicFile::create(&dest).unwrap();
+        f.write_all(b"new").unwrap();
+        drop(f);
+        pending.commit_durable().unwrap();
+        assert_eq!(fs::read(&dest).unwrap(), b"new");
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+        fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn a_failed_write_leaves_the_destination_alone() {

@@ -3,12 +3,14 @@ round 4, D5, N23, AP12, DA4 and YB11): a docstring admonition, and an
 ``UnstableWarning`` raised only under ``RHEON_WARN_UNSTABLE=1``, as
 Polars raises its own under ``POLARS_WARN_UNSTABLE``.
 
-The surfaces: the ``with_windows`` state file's format, the formula tree's
-written form (a formula target in a TOML file -- the command line's, in
-``crates/rheon-cli/tests/run.rs`` -- and in a saved state),
-``fit_predict_arrow``, ``predict_arrow`` and ``ArrowStruct``, and the modules
-``rp.sim``, ``rheon.corr`` and ``rheon.polars._gbdt``. Each emits under the variable and is
-silent without it.
+The surfaces: the formula tree's written form in a TOML file (the command
+line's, in ``crates/rheon-cli/tests/run.rs``), ``fit_predict_arrow``,
+``predict_arrow`` and ``ArrowStruct``, and the modules ``rp.sim``,
+``rheon.corr`` and ``rheon.polars._gbdt``. Each emits under the variable and
+is silent without it. A ``with_windows`` state and a formula target inside a
+bank's state were labelled too until PLAN 542 put every state file under one
+envelope, versioned with a loader for each layout: they are promised now,
+and :func:`test_a_promised_surface_never_warns` holds them silent.
 """
 
 from __future__ import annotations
@@ -67,36 +69,7 @@ def unstable_calls(tmp_path) -> dict[str, Callable[[], object]]:
     """One call of each labelled surface."""
     df = frame()
     corr = np.array([[1.0, 0.5], [0.5, 1.0]])
-    held = rp.ModelBank([formula_spec()])
-    held.fit_predict(df)
-    saved = tmp_path / "held.state"
-
-    def windows_state() -> object:
-        out = rp.stream.with_windows(
-            df,
-            level=rp.ewm_mean("mid", half_life=5.0, window_size=10.0),
-            clock="t",
-            gap_cap=50.0,
-            save_state=tmp_path / "windows.state",
-        )
-        return out
-
-    def save_formula() -> object:
-        held.save(saved)
-        return saved
-
-    def load_formula() -> object:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", rp.UnstableWarning)
-            held.save(saved)
-        return rp.ModelBank.load(saved)
-
     return {
-        "with_windows state": windows_state,
-        "save a formula target": save_formula,
-        "save_bytes a formula target": held.save_bytes,
-        "write_json a formula target": held.write_json,
-        "load a formula target": load_formula,
         "fit_predict_arrow": lambda: rp.ModelBank([ridge()]).fit_predict_arrow(df),
         "predict_arrow": lambda: rp.ModelBank([ridge()]).predict_arrow(df),
         "rp.sim.regimes": lambda: rp.sim.regimes(
@@ -118,11 +91,6 @@ def calls(tmp_path, monkeypatch):
 
 
 SURFACES = [
-    "with_windows state",
-    "save a formula target",
-    "save_bytes a formula target",
-    "write_json a formula target",
-    "load a formula target",
     "fit_predict_arrow",
     "predict_arrow",
     "rp.sim.regimes",
@@ -173,6 +141,31 @@ def test_a_promised_surface_never_warns(monkeypatch, tmp_path):
             df, level=rp.ewm_mean("mid", half_life=5.0, window_size=10.0), clock="t", gap_cap=50.0
         )
         rp.eval.metrics(out, "m")
+        # A window run's state and a formula target inside a bank's state
+        # (PLAN 542), saved, loaded and checkpointed.
+        windows = tmp_path / "windows.state"
+        rp.stream.with_windows(
+            df,
+            level=rp.ewm_mean("mid", half_life=5.0, window_size=10.0),
+            clock="t",
+            gap_cap=50.0,
+            save_state=windows,
+        )
+        rp.stream.with_windows(
+            df.with_columns(pl.col("t") + 1000.0),
+            level=rp.ewm_mean("mid", half_life=5.0, window_size=10.0),
+            clock="t",
+            gap_cap=50.0,
+            load_state=windows,
+        )
+        held = rp.ModelBank([formula_spec()])
+        held.fit_predict(df)
+        held.save(tmp_path / "held.state")
+        rp.ModelBank.load(tmp_path / "held.state")
+        held.write_json()
+        rp.ModelBank.load_bytes(held.save_bytes())
+        rp.stream.save_checkpoint(tmp_path / "run.checkpoint", {"windows": windows, "bank": held})
+        rp.stream.load_checkpoint(tmp_path / "run.checkpoint")
 
 
 def test_a_corr_call_that_runs_others_warns_once(monkeypatch):
@@ -202,11 +195,22 @@ def test_every_corr_function_is_labelled():
         rp.ArrowStruct,
         rp.ModelBank.fit_predict_arrow,
         rp.ModelBank.predict_arrow,
-        rp.ModelBank.save,
-        rp.stream.with_windows,
     ],
     ids=lambda o: getattr(o, "__qualname__", getattr(o, "__name__", str(o))),
 )
 def test_each_surface_says_so_in_its_docstring(obj):
     doc = inspect.getdoc(obj) or ""
     assert ".. warning::" in doc and "**unstable**" in doc, doc[-600:]
+
+
+@pytest.mark.parametrize(
+    "obj",
+    [rp.ModelBank.save, rp.stream.with_windows],
+    ids=lambda o: o.__qualname__,
+)
+def test_a_state_surface_no_longer_says_it_is_unstable(obj):
+    """A window run's state and a formula target inside a bank's state
+    are promised since PLAN 542: neither docstring labels them."""
+    doc = inspect.getdoc(obj) or ""
+    assert "**unstable**" not in doc
+    assert "every later" in doc

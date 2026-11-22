@@ -122,6 +122,11 @@ FAMILIES: tuple[Family, ...] = (
         tuple(f"{_RP}.stream.{m}" for m in ("with_windows", "embargo", "refresh_time")),
     ),
     Family(
+        "stream-checkpoint",
+        "stream",
+        tuple(f"{_RP}.stream.{m}" for m in ("save_checkpoint", "load_checkpoint")),
+    ),
+    Family(
         "ops",
         "ops",
         tuple(

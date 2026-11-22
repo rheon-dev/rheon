@@ -219,15 +219,15 @@ in any minor release:
 | | what it covers |
 |---|---|
 | **stable** | everything in `rheon.__all__` and `rheon.polars.__all__`; the `rheon.spec` constructors, their keywords and their defaults; the functions of the helper modules `rp.eval`, `rheon.gram`, `rp.ops` and `rp.stream`; the `.rheon` namespace; the [output field names](how-to/find-an-output-field.md); the columns, and their types, of the frames a bank and `rheon.spec` return, and of the closed-groups frame; the words each string-valued parameter takes; the TOML config keys; the command line's flags, its exit status and the files it writes; and the environment variables the package reads |
-| **unstable** | the file format of a window run's state (`with_windows(save_state=...)`); the written form of a formula target, in a TOML config or inside a bank's state; the Arrow export: `fit_predict_arrow`, `predict_arrow` and `ArrowStruct`; and the modules `rp.sim` and `rheon.corr`. Each says so in its docstring, and warns with `UnstableWarning` when used with `RHEON_WARN_UNSTABLE=1` set |
+| **unstable** | the written form of a formula target in a TOML config; the Arrow export: `fit_predict_arrow`, `predict_arrow` and `ArrowStruct`; and the modules `rp.sim` and `rheon.corr`. Each says so in its docstring, and warns with `UnstableWarning` when used with `RHEON_WARN_UNSTABLE=1` set |
 | **not stable** | any name that starts with an underscore, apart from the two columns `rp.stream.embargo` adds, `_online_role` and `_online_role_weight`, which are stable; the Rust crates (`rheon-core`, `rheon-polars`, `rheon-cli` and `rheon-py`), which are not published to crates.io, so nothing outside this repository builds against them; a model's numbers within the 1e-12 tolerance its stored reference results are held to, which depend on the platform and the Polars version; and the text the command line prints (its summary, readiness warnings and errors) and the timing lines `RHEON_TIMING=1` asks for, which are written for a person and may be reworded in a minor release |
 
 **Each unstable part is unstable for a reason that a promise would make
-costly.** The window run's state reached version 11 in under eight weeks
-(2026-09-30 to 2026-11-21): versions 2 to 9 in the first nine days, 10 by
-2026-10-24, and 11, a checksum of the file's bytes, on 2026-11-21. The
-formula tree is read from `expr.meta.serialize`, whose form Polars calls
-unstable across its versions. The Arrow export's input side still arrives
+costly.** The formula tree is read from `expr.meta.serialize`, whose form
+Polars calls unstable across its versions, so the tree a TOML config spells
+out may have to follow it. Once saved in a state, the tree is held to the
+state's promise: every state file, a window run's and a pipeline
+checkpoint included, loads in every later release. The Arrow export's input side still arrives
 as a Polars frame, and its import is not built. `rp.sim` and `rheon.corr`
 stand beside the bank: neither reads its outputs, as `rp.eval` and
 `rheon.gram` do. `rp.sim`'s frames also rest on NumPy's `Generator`, which
@@ -250,8 +250,9 @@ change to one shows as a diff in the snapshot:
 loads.** `rheon.schema_version()` gives the installed release's, which moves
 with every change to a state's layout. A release refuses a file whose
 schema is older than the oldest it loads, by that version. A window run's
-state and a `rp.stream.refresh_time` state each carry a version of their
-own.
+state, a `rp.stream.refresh_time` state and a pipeline checkpoint each carry
+a version of their own, beside their kind, at the head of the file, and
+each loads in every later release as a bank's state does.
 
 ### What each kind of release may change
 
@@ -507,8 +508,8 @@ the change, or in this list:
 | 1.5.0 or earlier | a window run's state, or a window formula inside a bank's state | it loads and saves back the same bytes, and continues within 1e-12 relative, not to the bit, once a row after the load has a gap of a hundredth of a half-life or more (a row's held mass is taken from the discount's own `exp2` from there up). A gap below that, and `ewm_sum`, `ewm_rate` and `ewm_quantile`, are as before |
 | 1.5.0 or earlier | a window run's state, or a window formula inside a bank's state, whose call has an `ewm_sum` with the default `min_samples` | it is refused as another call, since the default of a sum is now 0 and the state's call says 1. An expression that says `min_samples=1` resumes it, with its nulls where a window holds no value |
 
-**The two unstable formats are outside that promise:** a window run's
-state, and a formula target inside a bank's state.
+**A window run's state, a `refresh_time` state and a pipeline checkpoint
+are held to the same promise,** a formula target inside a bank's state too.
 
 **The state files of every release on PyPI are checked against each new
 release before it ships.** The 1.x releases are read from PyPI, so a

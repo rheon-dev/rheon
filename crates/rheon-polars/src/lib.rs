@@ -41,11 +41,13 @@
 pub mod arrow;
 mod atomic;
 mod bank;
+mod checkpoint;
 mod checks;
 mod checksum;
 mod column;
 mod defaults;
 pub mod env;
+mod envelope;
 mod figures;
 mod formula;
 pub mod gbdt;
@@ -92,7 +94,11 @@ pub use bank::{
     PAR_MIN_ROWS, coef_fields, coef_fields_frame, output_fields, output_index, output_index_frame,
     vech,
 };
+pub use checkpoint::{
+    CHECKPOINT_VERSION, Stage, checkpoint_bytes, load_checkpoint, save_checkpoint,
+};
 pub use defaults::resolved_defaults;
+pub use envelope::Kind as StateKind;
 pub use formula::{Formula, Literal, Node, OpNode};
 /// The Rust Polars this crate is built against, which the command line's
 /// `--version` names.

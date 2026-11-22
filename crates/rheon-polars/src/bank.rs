@@ -1850,16 +1850,25 @@ pub struct CoefField {
     pub term: String,
 }
 
-const BANK_MAGIC: &str = "polars-online-bank";
+/// The magic string a bank file began with before the envelope
+/// (`envelope.rs`), schema 71 and earlier.
+const LEGACY_BANK_MAGIC: &str = "polars-online-bank";
+
+/// The last schema written before the envelope: a file of it or an earlier
+/// one begins with [`LEGACY_BANK_MAGIC`], and one of a later schema with the
+/// envelope's head.
+const LAST_LEGACY_SCHEMA: u32 = 71;
 
 /// The first schema whose bank file ends with a checksum of its bytes
 /// (`checksum.rs`): a file of this schema or later without one is damaged,
 /// and a file of an earlier one loads without it.
 const SEALED_FROM_SCHEMA: u32 = 71;
 
-/// The envelope of a [`BankFile`], read on its own first: a file from a newer
-/// build may carry keys this build's [`Spec`] refuses, and the version check
-/// has to run before that refusal can be mistaken for "not a bank file".
+/// The head of a bank file written before the envelope, read on its own
+/// first: a file from a newer build may carry keys this build's [`Spec`]
+/// refuses, and the version check has to run before that refusal can be
+/// mistaken for "not a bank file". An enveloped file's head is read from
+/// its first bytes instead (`envelope::head`).
 #[derive(Deserialize)]
 struct BankHeader {
     magic: String,
@@ -1878,12 +1887,20 @@ type FileStates = Vec<Vec<(GroupKey, StreamState)>>;
 
 #[derive(Serialize, Deserialize)]
 struct BankFile<S = FileStates> {
+    /// The envelope's magic (`envelope.rs`); [`LEGACY_BANK_MAGIC`] in a file
+    /// of schema 71 or earlier.
     magic: String,
+    /// The envelope's kind, `"bank"`; absent before the envelope.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    kind: String,
+    /// Model state layout (`rheon_core::SCHEMA_VERSION`): the envelope's
+    /// `version`, which a file of schema 71 or earlier names
+    /// `schema_version`, after `format_version`.
+    #[serde(rename = "version", alias = "schema_version")]
+    schema_version: u32,
     /// Bank file layout (see [`BANK_FORMAT_VERSION`]). Absent in v1 files.
     #[serde(default = "default_format_version")]
     format_version: u32,
-    /// Model state layout (`rheon_core::SCHEMA_VERSION`).
-    schema_version: u32,
     package_version: String,
     specs: Vec<Spec>,
     /// Per spec: (group key, stream state) pairs.
@@ -4241,7 +4258,8 @@ impl Bank {
                 .filter(|(_, b)| **b > 0.0)
                 .map(|(si, b)| (si, *b))
                 .collect(),
-            magic: BANK_MAGIC.to_string(),
+            magic: crate::envelope::MAGIC.to_string(),
+            kind: crate::envelope::Kind::Bank.tag().to_string(),
             format_version: format_version_for(&self.specs),
             rows_fed: self.rows_fed,
             schema_version: rheon_core::SCHEMA_VERSION,
@@ -4371,45 +4389,84 @@ impl Bank {
     /// differ from the file's -- the state would not be the state of the bank
     /// the caller has in mind.
     pub fn load_bytes(bytes: &[u8], expected_specs: Option<&[Spec]>) -> Result<Self, String> {
-        // The checksum first, before a byte is decoded: damage that decodes
-        // would load in silence, or panic or abort further in.
-        let sealed = match crate::checksum::check(bytes) {
-            crate::checksum::Seal::Broken => {
-                return Err(
-                    "state file: it is damaged (its bytes do not match the checksum it was \
-                     saved with). Load an undamaged copy of the state file, or rebuild it from \
-                     its input."
-                        .into(),
-                );
+        // The checksum first, then the envelope's head, before a byte is
+        // decoded: damage that decodes would load in silence, or panic or
+        // abort further in.
+        const DAMAGED_REMEDY: &str =
+            "Load an undamaged copy of the state file, or rebuild it from its input.";
+        let opened = crate::envelope::open(bytes, crate::envelope::Kind::Bank).map_err(|r| {
+            use crate::envelope::Refused;
+            match r {
+                Refused::Damaged | Refused::Unsealed => {
+                    format!("state file: it is {}. {DAMAGED_REMEDY}", r.what())
+                }
+                Refused::OtherKind(crate::envelope::Kind::Checkpoint) => {
+                    "state file: these bytes are a pipeline checkpoint, not a model bank's \
+                     state. Read its stages with rheon.polars.stream.load_checkpoint and load \
+                     the bank's stage."
+                        .to_string()
+                }
+                Refused::OtherKind(_) | Refused::UnknownKind(_) => format!(
+                    "state file: these bytes are {}, not a model bank's state. Load a file \
+                     that ModelBank.save or the command line's save_state wrote.",
+                    r.what()
+                ),
             }
-            crate::checksum::Seal::Holds => true,
-            crate::checksum::Seal::Absent => false,
-        };
-        // The decoder's own text names the file's fields and MessagePack
-        // markers, words of the code: the header's failure is said whole.
-        let header: BankHeader = rmp_serde::from_slice(bytes).map_err(|_| {
-            "state file: these bytes are not a rheon bank state file, or the file is \
-             cut short. Load a whole file that ModelBank.save or the command line's save_state \
-             wrote."
-                .to_string()
         })?;
-        if header.magic != BANK_MAGIC {
-            return Err(
-                "state file: these bytes are not a rheon bank state file. Load a \
-                        file that ModelBank.save or the command line's save_state wrote."
-                    .into(),
-            );
-        }
-        if header.format_version > BANK_FORMAT_VERSION {
-            return Err(format!(
-                "state file: its format version is {}, newer than the {} this build of \
-                 rheon reads. Upgrade rheon to load it.",
-                header.format_version, BANK_FORMAT_VERSION
-            ));
+        let (found, format_version) = match opened {
+            // The body's own layout version is read with the body: every
+            // later layout moves the schema, which is checked first.
+            crate::envelope::Opened::Enveloped { version } => (version, None),
+            crate::envelope::Opened::Legacy { sealed } => {
+                // The decoder's own text names the file's fields and
+                // MessagePack markers, words of the code: the header's
+                // failure is said whole.
+                let header: BankHeader = rmp_serde::from_slice(bytes).map_err(|_| {
+                    "state file: these bytes are not a rheon bank state file, or the file is \
+                     cut short. Load a whole file that ModelBank.save or the command line's \
+                     save_state wrote."
+                        .to_string()
+                })?;
+                if header.magic != LEGACY_BANK_MAGIC {
+                    return Err(
+                        "state file: these bytes are not a rheon bank state file. Load a \
+                         file that ModelBank.save or the command line's save_state wrote."
+                            .into(),
+                    );
+                }
+                if header.schema_version > LAST_LEGACY_SCHEMA {
+                    // A newer build writes the envelope; this head is no
+                    // build's.
+                    return Err(format!(
+                        "state file: it is damaged (its schema {} was never written without \
+                         the envelope). {DAMAGED_REMEDY}",
+                        header.schema_version
+                    ));
+                }
+                if header.schema_version >= SEALED_FROM_SCHEMA && !sealed {
+                    return Err(format!(
+                        "state file: it is damaged (the checksum it ends with is missing or \
+                         cut). {DAMAGED_REMEDY}"
+                    ));
+                }
+                (header.schema_version, Some(header.format_version))
+            }
+        };
+        let check_format = |format_version: u32| {
+            if format_version > BANK_FORMAT_VERSION {
+                Err(format!(
+                    "state file: its format version is {format_version}, newer than the \
+                     {BANK_FORMAT_VERSION} this build of rheon reads. Upgrade rheon to load it."
+                ))
+            } else {
+                Ok(())
+            }
+        };
+        if let Some(f) = format_version {
+            check_format(f)?;
         }
         // A newer build's file is told to upgrade, not to refit (PA2).
-        let (found, reads) = (header.schema_version, rheon_core::SCHEMA_VERSION);
-        if found > reads {
+        if found > rheon_core::SCHEMA_VERSION {
             return Err(
                 "state file: it was written by a newer version of rheon than \
                  this one reads. Upgrade rheon to load it."
@@ -4424,15 +4481,18 @@ impl Bank {
                     .into(),
             );
         }
-        if found >= SEALED_FROM_SCHEMA && !sealed {
-            return Err(
-                "state file: it is damaged (the checksum it ends with is missing or cut). Load \
-                 an undamaged copy of the state file, or rebuild it from its input."
-                    .into(),
-            );
+        if format_version.is_none() && found <= LAST_LEGACY_SCHEMA {
+            // No build wrote the envelope at a schema before it.
+            return Err(format!(
+                "state file: it is damaged (its version {found} is not one the envelope was \
+                 written at). {DAMAGED_REMEDY}"
+            ));
         }
         // Past the header a refusal is damage (`file_encoding::damaged`).
         let mut file: BankFile = rmp_serde::from_slice(bytes).map_err(file_encoding::damaged)?;
+        if format_version.is_none() {
+            check_format(file.format_version)?;
+        }
         if let Some(exp) = expected_specs {
             // Both sides filled, since filling is what a bank does to its
             // specs before it runs them: a caller who wrote the spec in TOML

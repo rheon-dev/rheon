@@ -330,13 +330,14 @@ fn model_key(doc: &toml::Table, msg: &str) -> Option<String> {
 /// `RHEON_WARN_UNSTABLE=1` (`rheon_polars::env::WARN_UNSTABLE`), which turns
 /// the unstable label's warning on as `POLARS_WARN_UNSTABLE` does Polars' own:
 /// `1` and nothing else (docs/PLAN.md task 198, D5):
-/// its tree is read from the TOML file and written into the state, and that
-/// written form is not promised.
+/// its tree is read from the TOML file, and that written form is not
+/// promised. A saved state holds it under the state's own promise (it loads
+/// in every later release, PLAN 542).
 /// Worded as Python's `UnstableWarning` is. Each line ends in a `\`, which
 /// drops the next line's indentation: without them the notice kept six
 /// spaces inside each sentence (task 244, C-4).
 const FORMULA_UNSTABLE: &str = "warning: a formula target's written form -- its tree in the TOML \
-     file and in a saved state -- is considered unstable, so it may change in any release \
+     file -- is considered unstable, so it may change in any release \
      without that being considered a breaking change. Set RHEON_WARN_UNSTABLE=0, or \
      unset it, to silence this warning.";
 

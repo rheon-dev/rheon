@@ -205,7 +205,9 @@ fn a_bank_of_schema_66_loads_its_streams_with_no_pending_notice() {
     arm(&mut bank);
     assert!(bank.fit_predict(&rows(1, 19, 1)).is_err());
     assert!(reached(&bank));
-    let bytes = bank.save_bytes().unwrap();
+    // A file of 66 begins with the magic before the envelope, and ends
+    // with no checksum (schema 71's).
+    let bytes = crate::envelope::legacy::bank(&bank.save_bytes().unwrap(), 66);
     fn strip(v: &mut rmpv::Value, pending: &mut usize, schema: &mut usize) {
         match v {
             rmpv::Value::Map(m) => {
@@ -229,14 +231,10 @@ fn a_bank_of_schema_66_loads_its_streams_with_no_pending_notice() {
     let mut v = rmpv::decode::read_value(&mut &bytes[..]).unwrap();
     let (mut pending, mut schema) = (0, 0);
     strip(&mut v, &mut pending, &mut schema);
-    // A file of 66 ends with no checksum (schema 71's).
-    if let rmpv::Value::Map(m) = &mut v {
-        m.retain(|(k, _)| k.as_str() != Some("checksum"));
-    }
     assert_eq!(
         (pending, schema),
-        (1, 2),
-        "one pending list; the header's schema and the one model state's"
+        (1, 1),
+        "one pending list; the one model state's schema (the header's is 66 already)"
     );
     let mut old = Vec::new();
     rmpv::encode::write_value(&mut old, &v).unwrap();
