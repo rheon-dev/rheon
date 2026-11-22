@@ -626,6 +626,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [messages."crates/rheon-core/src/family.rs"]
 
+[messages."crates/rheon-core/src/garch.rs"]
+
 [messages."crates/rheon-core/src/glm.rs"]
 
 [messages."crates/rheon-core/src/hawkes.rs"]
@@ -651,6 +653,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [docstrings."python/rheon/_spec_expectile.py"]
 
+[docstrings."python/rheon/_spec_garch.py"]
+
 [docstrings."python/rheon/_spec_glm.py"]
 
 [docstrings."python/rheon/_spec_point.py"]
@@ -662,6 +666,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."crates/rheon-core/src/expectile.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/family.rs#messages"]
+
+[vocabulary."crates/rheon-core/src/garch.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/glm.rs#messages"]
 
@@ -680,6 +686,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."python/rheon/_spec_expectile.py#docstrings"]
 
 [vocabulary."python/rheon/_spec_fields.py#messages"]
+
+[vocabulary."python/rheon/_spec_garch.py#docstrings"]
 
 [vocabulary."python/rheon/_spec_glm.py#docstrings"]
 

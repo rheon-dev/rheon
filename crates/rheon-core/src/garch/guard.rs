@@ -1,0 +1,174 @@
+//! EGARCH's guard, in one place: what keeps the filter that runs
+//! contracting.
+//!
+//! EGARCH's log-variance recursion, inverted to run on the returns, steps
+//! `ln s_{t+1}` by the multiplier `μ_t = β − (α |z_t| + γ z_t)/2` of `ln
+//! s_t` (`∂ ln s_{t+1}/∂ ln s_t`, the factor the sensitivity recursion
+//! carries). The filter forgets its start, and a small error in it dies
+//! out, while the mean of `ln |μ_t|` over the rows -- the recursion's
+//! Lyapunov exponent -- is below 0. The guard holds:
+//!
+//! - the box `α ≥ |γ|`, `α ≤ 1`, `0 ≤ β ≤ 1 − 10⁻⁴` (the set the step is
+//!   projected onto, [`super::fit::egarch_set`]);
+//! - the variance within `arch`'s bounds ([`super::filter`]);
+//! - the mean of `ln |μ_t|` below 0, at the parameters as they stand, over
+//!   the standardized residuals the filter has met: their distribution is
+//!   kept as weighted counts in [`BINS`] bins of `z` over `[−8, 8]` (a
+//!   residual past the edge counted in the edge bin), 8 bytes a bin, so the
+//!   mean is read at any parameters in `O(BINS)` without the rows. A step
+//!   that would take it to 0 or above is cut back along the step to where
+//!   it is just below; a step is never refused outright, since a refusal
+//!   on a mean of each past row at the parameters of its time ratchets:
+//!   once that mean crosses 0, every step one way is refused and every
+//!   step the other taken.
+//!
+//! The guard keeps the running filter contracting, and agrees with `arch`'s
+//! fit wherever that fit's own filter contracts; it carries no proof that
+//! the estimate it guards is consistent. (Wintenberger's (2013) stable
+//! likelihood, which has one, bounds the recursion at the smallest
+//! variance it can reach, and so excludes persistent processes, `β` near 1,
+//! that `arch` fits and whose filter does contract.)
+
+/// The bins of `z` the guard keeps.
+pub(super) const BINS: usize = 64;
+const Z_EDGE: f64 = 8.0;
+/// The guard's bound on the mean of `ln |μ|`: just below 0.
+const BOUND: f64 = -1e-6;
+
+/// The bin a standardized residual falls in.
+pub(super) fn bin(z: f64) -> usize {
+    let w = 2.0 * Z_EDGE / BINS as f64;
+    (((z + Z_EDGE) / w).floor().max(0.0) as usize).min(BINS - 1)
+}
+
+/// The centre of bin `b`.
+fn centre(b: usize) -> f64 {
+    let w = 2.0 * Z_EDGE / BINS as f64;
+    -Z_EDGE + (b as f64 + 0.5) * w
+}
+
+/// `ln |β − (α |z| + γ z)/2|`, floored where `μ` is 0.
+pub(super) fn log_mu(theta: &[f64], z: f64) -> f64 {
+    let mu = theta[3] - 0.5 * (theta[1] * z.abs() + theta[2] * z);
+    mu.abs().max(f64::MIN_POSITIVE).ln()
+}
+
+/// The mean of `ln |μ|` at `theta` over the residuals `counts` holds; 0 with
+/// none counted.
+pub(super) fn mean_log_mu(theta: &[f64], counts: &[f64]) -> f64 {
+    let (mut s, mut w) = (0.0, 0.0);
+    for (b, &c) in counts.iter().enumerate() {
+        if c > 0.0 {
+            s += c * log_mu(theta, centre(b));
+            w += c;
+        }
+    }
+    if w > 0.0 { s / w } else { 0.0 }
+}
+
+/// Whether `theta` keeps the filter contracting on `counts`.
+pub(super) fn admits(theta: &[f64], counts: &[f64]) -> bool {
+    mean_log_mu(theta, counts) <= BOUND
+}
+
+/// The step from `from` to `to` (both in the box) cut back, where `to`
+/// breaks the guard, to the furthest point along it that keeps it: by
+/// bisection, to `10⁻¹²` of the step. Where `from` breaks it too (the
+/// residuals moved under it), `β` alone is lowered from `to`'s to the
+/// largest that keeps it, `β = 0` the floor.
+pub(super) fn cut(from: &[f64], to: &[f64], counts: &[f64]) -> Vec<f64> {
+    if admits(to, counts) {
+        return to.to_vec();
+    }
+    let at = |t: f64| -> Vec<f64> { from.iter().zip(to).map(|(a, b)| a + t * (b - a)).collect() };
+    if admits(from, counts) {
+        let (mut lo, mut hi) = (0.0, 1.0);
+        while hi - lo > 1e-12 {
+            let mid = 0.5 * (lo + hi);
+            if admits(&at(mid), counts) {
+                lo = mid
+            } else {
+                hi = mid
+            }
+        }
+        return at(lo);
+    }
+    let with_beta = |b: f64| -> Vec<f64> {
+        let mut t = to.to_vec();
+        t[3] = b;
+        t
+    };
+    let (mut lo, mut hi) = (0.0, to[3]);
+    if !admits(&with_beta(lo), counts) {
+        return with_beta(0.0);
+    }
+    while hi - lo > 1e-12 {
+        let mid = 0.5 * (lo + hi);
+        if admits(&with_beta(mid), counts) {
+            lo = mid
+        } else {
+            hi = mid
+        }
+    }
+    with_beta(lo)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_mean_is_the_definition_over_the_bins_and_a_cut_keeps_it() {
+        // residuals of a standard normal, binned
+        let mut counts = vec![0.0; BINS];
+        let mut s = 7u64;
+        let mut draws = Vec::new();
+        for _ in 0..20_000 {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let u = ((s >> 11) as f64 + 0.5) / (1u64 << 53) as f64;
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let v = ((s >> 11) as f64 + 0.5) / (1u64 << 53) as f64;
+            let z = (-2.0 * u.ln()).sqrt() * (std::f64::consts::TAU * v).cos();
+            counts[bin(z)] += 1.0;
+            draws.push(z);
+        }
+        // the binned mean is the mean over the draws to within the bins'
+        // width: at the study's truth, where μ stays away from 0, closely;
+        // near the box's edge, where μ crosses 0 and ln |μ| is singular
+        // there, to a tenth
+        for (th, tol) in [
+            ([0.0, 0.15, -0.08, 0.97], 0.01),
+            ([0.0, 0.9, -0.5, 0.2], 0.1),
+        ] {
+            let exact: f64 =
+                draws.iter().map(|&z| log_mu(&th, z)).sum::<f64>() / draws.len() as f64;
+            assert!((mean_log_mu(&th, &counts) - exact).abs() < tol, "{th:?}");
+        }
+        // a persistent truth contracts, within the box, on normal residuals
+        let from = [0.0, 0.15, -0.08, 0.97];
+        assert!(admits(&from, &counts));
+        assert!(admits(&[0.0, 1.0, -1.0, 0.9999], &counts));
+        // on residuals of 6, a large news term does not: |μ| = 5.1 at
+        // (α, γ) = (1, 1); the step there is cut to the guard's edge
+        let mut tail = vec![0.0; BINS];
+        tail[bin(6.0)] = 1.0;
+        let from = [0.0, 0.1, 0.0, 0.9];
+        let to = [0.0, 1.0, 1.0, 0.9];
+        assert!(admits(&from, &tail) && !admits(&to, &tail));
+        let got = cut(&from, &to, &tail);
+        assert!(admits(&got, &tail));
+        assert!(got[1] > from[1] && got[1] < to[1], "{got:?}");
+        assert!((mean_log_mu(&got, &tail) - BOUND).abs() < 1e-6);
+        // from a point that breaks it too, β alone is lowered: here no β
+        // keeps it, and the floor, 0, is taken
+        let got = cut(&to, &to, &tail);
+        assert!(got[3] == 0.0 && got[1] == to[1], "{got:?}");
+        let near = [0.0, 0.1, 0.1, 0.9];
+        let got = cut(&near, &[0.0, 0.3, 0.3, 0.9], &tail);
+        assert!(admits(&got, &tail), "{got:?}");
+    }
+}

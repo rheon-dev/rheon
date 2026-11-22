@@ -312,6 +312,7 @@ def describe_api(cli: Path | None = None) -> str:
         ("deco", dict(features=["x0", "x1", "x2"], half_life=100.0)),
         ("audit", dict(columns=["x0", "x1"], pairs=True)),
         ("hawkes", dict(targets=["y", "z"], kernel_decays=[1.0, 5.0], half_life=100.0)),
+        ("garch", dict(targets=["y", "z"], vol="gjr", dist="t", horizon=3)),
         (
             "deco blocked",
             dict(
@@ -411,6 +412,9 @@ RESOLVED_VARIANTS: list[tuple[str, dict[str, object]]] = [
     ("hawkes", {"half_life": float("inf"), "window_events": 20}),
     ("hawkes", {"half_life": float("inf"), "window_size": 30.0, "closed": "both"}),
     ("hawkes", {"kernel_decays": None, "kernel_half_lives": [0.5, 4.0]}),
+    ("garch", {"vol": "figarch", "start_rows": 2000}),
+    ("garch", {"variance_targeting": True, "horizon": 5}),
+    ("garch", {"start_rows": None, "start_span": 500.0}),
 ]
 
 
@@ -684,6 +688,8 @@ ENUM_PROBES: list[
         "word",
     ),
     ("lasso.closed", "lasso", {"window_size": 100.0}, "model.closed", "word"),
+    ("garch.vol", "garch", {"start_rows": 2000}, "model.vol", "word"),
+    ("garch.dist", "garch", {}, "model.dist", "word"),
     ("marginal.closed", "marginal", {"window_size": 100.0}, "model.closed", "word"),
     ("ew_class.covariance_type", "ew_class", {}, "model.covariance_type", "word"),
     ("ew_class.window_budget", "ew_class", {"window_size": 100.0}, "model.window_budget", "key"),

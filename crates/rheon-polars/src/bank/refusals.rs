@@ -40,6 +40,10 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
         | ModelKind::Expectile {
             max_state_bytes: Some(_),
             ..
+        }
+        | ModelKind::Garch {
+            max_state_bytes: Some(_),
+            ..
         } => format!("max_state_bytes of {cap}"),
         _ => format!("the default max_state_bytes of {cap}, which a spec gets when it sets none"),
     };
@@ -57,6 +61,13 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
         } => (
             format!("the rows inside window_size = {w}"),
             "Shorten window_size",
+        ),
+        ModelKind::Garch {
+            start_span: Some(s),
+            ..
+        } => (
+            format!("the rows of its start inside start_span = {s}"),
+            "Shorten start_span",
         ),
         _ => ("its window".to_string(), "Shorten the window"),
     };

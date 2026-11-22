@@ -1315,7 +1315,7 @@ fn variants() -> Vec<String> {
 /// name here, and a fixture.
 #[test]
 fn the_variant_names_are_frozen() {
-    const FROZEN: [&str; 25] = [
+    const FROZEN: [&str; 26] = [
         "EwCov",
         "EwRidge",
         "Rls",
@@ -1341,6 +1341,7 @@ fn the_variant_names_are_frozen() {
         "Glm",
         "Hawkes",
         "Expectile",
+        "Garch",
     ];
     assert_eq!(
         variants(),
@@ -1387,12 +1388,16 @@ fn every_variant_and_every_case_has_a_fixture() {
 
 /// `v` at a path of map keys, or `None` where a key is absent.
 fn at<'a>(v: &'a rmpv::Value, path: &[&str]) -> Option<&'a rmpv::Value> {
-    path.iter().try_fold(v, |v, key| {
-        v.as_map()?
-            .iter()
-            .find(|(k, _)| k.as_str() == Some(key))
-            .map(|(_, v)| v)
-    })
+    path.iter()
+        .try_fold(v, |v, key| match (v, key.parse::<usize>()) {
+            // a number steps into a list
+            (rmpv::Value::Array(a), Ok(i)) => a.get(i),
+            _ => v
+                .as_map()?
+                .iter()
+                .find(|(k, _)| k.as_str() == Some(key))
+                .map(|(_, v)| v),
+        })
 }
 
 /// How much of a layout `v` holds: its finite, non-zero numbers, through
@@ -1457,7 +1462,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 76] = [
+    const FORMS: [(&str, &[&str]); 85] = [
         // Schema 70 (rule 5's twenty-second exception): the stabilized
         // prior's `ŝ` and `V` under `full` in each form and under `diag`,
         // the factor form's `f`, and a spec's own `prior_rows`.
@@ -1595,7 +1600,42 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
             "expectile_clock_window",
             &["model", "Expectile", "clock", "last"],
         ),
+        // `garch`'s series (task 492), a path into the list by index: its
+        // start's buffer, then each process's lags once started, the
+        // targeted GARCH's Huber score, a skewed t's shape, EGARCH's
+        // binned residuals and FIGARCH's ring, and a start of a clock span's
+        // stamp.
+        ("garch", &["model", "Garch", "series", "1", "buffer"]),
+        ("garch_started", &["model", "Garch", "series", "0", "h"]),
+        (
+            "garch_started",
+            &["model", "Garch", "series", "0", "filter", "sens"],
+        ),
+        (
+            "garch_targeted",
+            &["model", "Garch", "series", "0", "kappa"],
+        ),
+        (
+            "garch_targeted",
+            &["model", "Garch", "series", "0", "slope"],
+        ),
+        ("garch_skewt", &["model", "Garch", "series", "0", "theta"]),
+        ("garch_egarch", &["model", "Garch", "series", "0", "zbins"]),
+        (
+            "garch_figarch",
+            &["model", "Garch", "series", "0", "filter", "ring"],
+        ),
+        ("garch_span", &["model", "Garch", "series", "0", "buffer"]),
     ];
+    // The span's first stamp, an integer stamp msgpack writes as integers
+    // (which `held` does not count): present, not nil.
+    let f = frozen::ALL
+        .iter()
+        .find(|f| f.name == "garch_span")
+        .expect("garch_span");
+    let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+    let first = at(&v, &["model", "Garch", "series", "0", "first"]).expect("a first stamp");
+    assert!(!first.is_nil(), "garch_span: no first stamp");
     for (name, path) in FORMS {
         let f = frozen::ALL
             .iter()

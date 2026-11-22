@@ -508,6 +508,13 @@ def clock_specs(draw, model: str, step: int, cap: int):
             kw["closed"] = draw(st.sampled_from(["right", "both"]))
         else:
             kw["refit_rows"] = draw(st.integers(0, 12))
+    elif model == "garch":
+        # Task 492: the start as a span of the clock, or of rows; no decay.
+        kw |= dict(targets=["y"])
+        if draw(st.booleans()):
+            kw["start_span"] = steps(1, 30)
+        else:
+            kw["start_rows"] = draw(st.integers(50, 60))
     else:
         assert model == "rls", model
         kw |= xy | maybe("embargo", 1, 5)
@@ -696,6 +703,10 @@ N_EFF_EXEMPT = {
     "bocpd": "which forgets at each break, at the rate hazard sets",
     "rcov": "whose covariance is a sum over each block that group_close ends, with no decay",
     "audit": "which counts every row with no decay",
+    "garch": (
+        "whose variance recursion is per observation and whose estimate weighs every row it has "
+        "learned"
+    ),
 }
 
 #: The kinds with a rate for a parameter (``hawkes``' ``kernel_decays``, per

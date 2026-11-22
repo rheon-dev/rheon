@@ -242,6 +242,12 @@ budget = 24375035
 [instructions.hawkes]
 what = "hawkes, one node, three kernels: AnyModel::step_into, into one kept Step, a 4 x 4 solve a row; its budget is CI's first count"
 
+[instructions.garch]
+what = "garch, one series after its start: AnyModel::step_into, into one kept Step, a 3 x 3 step a row; its budget is CI's first count"
+
+[instructions.garch_figarch]
+what = "garch, FIGARCH of 1,000 lags after its start: AnyModel::step_into, its O(M) pass of the weights and their derivatives a row; its budget is CI's first count"
+
 [instructions.audit_continuous]
 what = "audit, one continuous column, 256 counters: AnyModel::step_into, into one kept Step, past the cap on nearly every row"
 budget = 847018
@@ -1534,6 +1540,19 @@ weight_sum = { budget = 8.125 }
 withheld_reason = { budget = 1.125 }
 zscore_y = { budget = 8.125 }
 zscore_z = { budget = 8.125 }
+[memory.garch]
+coef = { budget = 89.25 }
+forecast_y = { budget = 8.125 }
+forecast_z = { budget = 8.125 }
+learned_clock = { budget = 8.125 }
+scored_clock = { budget = 8.0 }
+settled_frac = { budget = 8.125 }
+std_resid_y = { budget = 8.125 }
+std_resid_z = { budget = 8.125 }
+variance_y = { budget = 8.125 }
+variance_z = { budget = 8.125 }
+weight_sum = { budget = 8.0 }
+withheld_reason = { budget = 1.125 }
 
 # --- raises and sign-offs -------------------------------------------------------
 [[raised]]

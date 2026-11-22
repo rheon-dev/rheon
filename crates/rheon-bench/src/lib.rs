@@ -95,6 +95,10 @@ pub const MODEL_CASES: &[&str] = &[
     // One node, three kernels: its row's solve of a 4 x 4 system for the
     // intensity it reports before the row's event (task 498).
     "hawkes",
+    // One series after its start: a row's variance, score and 3 x 3 step
+    // (task 492); and FIGARCH, its O(M) pass of 1,000 lags a row.
+    "garch",
+    "garch_figarch",
 ];
 
 /// The one model case that reports on a single row of its block:
@@ -497,6 +501,26 @@ fn case_spec(id: &str) -> (Value, Shape) {
             s["group"] = json!("g");
             (s, shape)
         }
+        // The start's rows fit within the warm-up (500, doubled at most
+        // twice); FIGARCH's 2,000 under a cap that holds no doubling.
+        "garch" => (
+            json!({
+                "name": "m",
+                "model": {"type": "garch", "start_rows": 500},
+                "targets": ["y0"],
+                "features": [],
+            }),
+            Shape::Linear,
+        ),
+        "garch_figarch" => (
+            json!({
+                "name": "m",
+                "model": {"type": "garch", "vol": "figarch", "max_state_bytes": 40000},
+                "targets": ["y0"],
+                "features": [],
+            }),
+            Shape::Linear,
+        ),
         "hawkes" => (
             json!({
                 "name": "m",

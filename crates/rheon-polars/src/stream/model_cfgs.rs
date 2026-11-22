@@ -138,6 +138,66 @@ pub fn expectile_cfg(
     })
 }
 
+/// A `garch` spec's [`rheon_core::GarchCfg`]: one series a target, the
+/// start 2,000 rows unless the spec gives rows or a span. Every value is
+/// the model's own to check.
+pub fn garch_cfg(spec: &Spec) -> Result<rheon_core::GarchCfg, String> {
+    use rheon_core::{GarchDist, GarchVol};
+    let ModelKind::Garch {
+        vol,
+        dist,
+        truncation,
+        variance_targeting,
+        start_rows,
+        start_span,
+        horizon,
+        max_state_bytes,
+    } = &spec.model
+    else {
+        return Err(not_a(spec, "garch_cfg", "garch"));
+    };
+    let vol = match vol.as_deref().unwrap_or("garch") {
+        "garch" => GarchVol::Garch,
+        "gjr" => GarchVol::Gjr,
+        "egarch" => GarchVol::Egarch,
+        "figarch" => GarchVol::Figarch,
+        other => {
+            return Err(format!(
+                "garch: vol must be \"garch\", \"gjr\", \"egarch\" or \"figarch\", but it \
+                 is {other:?}. Use one of those words."
+            ));
+        }
+    };
+    let dist = match dist.as_deref().unwrap_or("normal") {
+        "normal" => GarchDist::Normal,
+        "t" => GarchDist::T,
+        "skewt" => GarchDist::Skewt,
+        other => {
+            return Err(format!(
+                "garch: dist must be \"normal\", \"t\" or \"skewt\", but it is {other:?}. Use \
+                 one of those words."
+            ));
+        }
+    };
+    let cfg = rheon_core::GarchCfg {
+        n_targets: spec.m(),
+        vol,
+        dist,
+        truncation: *truncation,
+        variance_targeting: variance_targeting.unwrap_or(false),
+        start_rows: start_rows.unwrap_or(GARCH_START_ROWS),
+        start_span: start_span.as_ref().map(Span::value),
+        horizon: horizon.unwrap_or(1),
+        min_weight: spec.min_periods_or_default(),
+        max_state_bytes: *max_state_bytes,
+    };
+    cfg.validate()?;
+    Ok(cfg)
+}
+
+/// A `garch` spec's start, in rows, when it gives neither rows nor a span.
+pub const GARCH_START_ROWS: usize = 2000;
+
 /// A `bocpd` spec's [`BocpdCfg`]; every parameter check is the model's.
 pub fn bocpd_cfg(spec: &Spec) -> Result<BocpdCfg, String> {
     let ModelKind::Bocpd {

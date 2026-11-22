@@ -112,6 +112,7 @@ KINDS = [
     "pa",
     "glm",
     "expectile",
+    "garch",
     "holt",
     "kmeans",
     "micro",
@@ -147,8 +148,11 @@ def kind(name: str, h: float | str, **common) -> dict:
         "ew_class": dict(label="c", classes=["a", "b"], features=two, precision_prior=1.0),
         "hmm": dict(features=two, n_components=2, precision_prior=0.1),
         "deco": dict(features=two),
+        # No half-life: the recursion is per observation.
+        "garch": dict(targets=["y"], start_rows=50),
     }[name]
-    return getattr(rp.spec, name)("m", half_life=h, weight="w", **own, **common)
+    decay = {} if name == "garch" else {"half_life": h}
+    return getattr(rp.spec, name)("m", weight="w", **decay, **own, **common)
 
 
 def temporal(name: str = "ewridge", **kw) -> dict:

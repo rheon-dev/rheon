@@ -1362,6 +1362,43 @@ pub enum ModelKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         refit_budget: Option<Num>,
     },
+    /// The GARCH family: a conditional variance for each target, a
+    /// zero-mean return series, its parameters estimated online by recursive
+    /// quasi-maximum likelihood after a start fitted by batch likelihood
+    /// (`rheon_core::Garch`). Per target, the variance, the standardized
+    /// residual and, with `horizon`, the forecast; the parameters in `coef`.
+    /// No features.
+    #[serde(rename = "garch")]
+    Garch {
+        /// The process: `"garch"` (the default), `"gjr"`, `"egarch"` or
+        /// `"figarch"`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        vol: Option<String>,
+        /// The innovations: `"normal"` (the default), `"t"` or `"skewt"`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dist: Option<String>,
+        /// FIGARCH's lags; absent is 1,000.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        truncation: Option<usize>,
+        /// `ω` set by the running mean square, with a Huber-clipped score:
+        /// `garch` with normal innovations only. Absent is false.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        variance_targeting: Option<bool>,
+        /// The rows the start fits; absent is 2,000.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start_rows: Option<usize>,
+        /// The start's span of the clock in place of `start_rows`: a number
+        /// of the clock column's units, or a duration on a temporal clock.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start_span: Option<Span>,
+        /// The forecast's rows ahead; absent is 1, the variance alone.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        horizon: Option<usize>,
+        /// The bytes a group's state may hold, the start's buffer included.
+        /// Default 256 KB, at most 64 MiB.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
+    },
 }
 
 /// The two sides of a `seqtest` comparison, as [`ModelKind::compares`]
@@ -1449,6 +1486,7 @@ impl ModelKind {
         "glm",
         "hawkes",
         "expectile",
+        "garch",
     ];
 
     pub fn kind_name(&self) -> &'static str {
@@ -1478,6 +1516,7 @@ impl ModelKind {
             ModelKind::Glm { .. } => "glm",
             ModelKind::Hawkes { .. } => "hawkes",
             ModelKind::Expectile { .. } => "expectile",
+            ModelKind::Garch { .. } => "garch",
         }
     }
 
@@ -1797,6 +1836,7 @@ impl ModelKind {
                     | ModelKind::SeqTest { .. }
                     | ModelKind::Marginal { .. }
                     | ModelKind::Hawkes { .. }
+                    | ModelKind::Garch { .. }
             )
     }
 
@@ -2482,7 +2522,8 @@ impl Spec {
             ModelKind::SeqTest { .. }
             | ModelKind::Rcov { .. }
             | ModelKind::Bocpd { .. }
-            | ModelKind::Audit { .. } => true,
+            | ModelKind::Audit { .. }
+            | ModelKind::Garch { .. } => true,
             ModelKind::CorrChange { scalar, .. } => !scalar.unwrap_or(false),
             _ => false,
         };
@@ -2685,6 +2726,8 @@ impl Spec {
             // which is the gate: no row count says when the events have
             // told its terms apart.
             ModelKind::Hawkes { .. } => 0.0,
+            // The start is the gate: nothing is reported before it is fitted.
+            ModelKind::Garch { .. } => 0.0,
             // The noise gate is this model's readiness gate
             // (docs/WARMUP-AND-CONVERGENCE.md §2.1): `max_error_inflation`
             // tracks the model where a count of weight cannot, and the
@@ -3187,6 +3230,15 @@ impl Spec {
                         ));
                     }
                 }
+            }
+        } else if let ModelKind::Garch { .. } = &self.model {
+            if !self.features.is_empty() {
+                no.refuse(format!(
+                    "spec {name:?}: garch takes no features, but features lists {}: each of \
+                     its targets is a return series whose variance it models. Put the return \
+                     columns in targets, and leave out features.",
+                    columns_counted(self.features.len())
+                ));
             }
         } else if self.features.is_empty() && !(columns_missing && self.model.is_unsupervised()) {
             columns_missing = true;

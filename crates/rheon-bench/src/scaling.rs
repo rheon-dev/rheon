@@ -226,6 +226,11 @@ pub const CELLS: &[Cell] = &[
     // and the window keeps its rows.
     cell("hawkes.window", 100, 8, Const, Pow(1)),
     cell("hawkes.history", 1000, 8, Const, Const),
+    // A row steps each target's own series, `O(1)` each; FIGARCH's row is one
+    // pass of its `M` lags, and its ring holds them.
+    cell("garch.targets", 1, 8, Pow(1), Pow(1)),
+    cell("garch.truncation", 100, 8, Pow(1), Pow(1)),
+    cell("garch.history", 1000, 8, Const, Const),
     // --- the bank, `Bank::fit_predict` on a pool of one thread --------------
     cell("bank.groups_seen", 250, 8, Const, Pow(1)),
     // The same in calls of four rows, each to one group: what a call costs
@@ -1100,6 +1105,26 @@ fn model_case(id: &str, n: usize) -> ModelCase {
                 "history" => c.warm(n),
                 "window" => c.warm(4 * n + 2_000).block(200),
                 _ => c,
+            }
+        }
+        ("garch", "targets" | "truncation" | "history") => {
+            let figarch = dim == "truncation";
+            let mut model = json!({"type": "garch", "start_rows": 50});
+            if figarch {
+                model = json!({"type": "garch", "vol": "figarch", "truncation": n});
+            }
+            let s = json!({
+                "name": "m",
+                "model": model,
+                "targets": names("y", if dim == "targets" { n } else { 1 }),
+                "features": [],
+            });
+            let c = ModelCase::new(s, lin);
+            // every start fitted, its refits included, before the rows timed
+            match dim {
+                "history" => c.warm(n.max(1000)),
+                "truncation" => c.warm(9_000),
+                _ => c.warm(1_000),
             }
         }
         _ => panic!("no model cell {id:?}"),

@@ -321,6 +321,18 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
         ALL,
     ),
     (
+        "garch",
+        r#"{"type": "garch", "start_rows": 50, "horizon": 2}"#,
+        r#""targets": ["y"], "features": []"#,
+        ALL,
+    ),
+    (
+        "garch_span",
+        r#"{"type": "garch", "start_span": @20}"#,
+        r#""targets": ["y"], "features": []"#,
+        ALL,
+    ),
+    (
         "glm",
         r#"{"type": "glm", "refit_rows": 60}"#,
         r#""targets": ["yb"], "features": ["x0", "x1"], "half_life": @50"#,

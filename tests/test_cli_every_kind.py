@@ -709,6 +709,48 @@ CASES: list[Case] = [
             "max_state_bytes": 1 << 20,
         },
     ),
+    # Each target a return series; no half-life (the recursion is per
+    # observation), so no gate on settling toward one either.
+    Case(
+        "garch",
+        "garch",
+        {
+            **{k: v for k, v in STREAM.items() if k not in ("half_life", "min_settled_frac")},
+            "targets": ["y", "x0"],
+            "vol": "gjr",
+            "dist": "t",
+            "start_rows": 50,
+            "horizon": 3,
+            "max_state_bytes": 1 << 20,
+        },
+    ),
+    # The other stream keys, and variance targeting.
+    Case(
+        "garch_targeted",
+        "garch",
+        {
+            **{k: v for k, v in STREAM2.items() if k != "lam"},
+            "targets": ["y"],
+            "variance_targeting": True,
+            "start_rows": 60,
+        },
+    ),
+    # FIGARCH, its start a span of the clock, checked as the rows go in, its
+    # groups run to a close.
+    Case(
+        "garch_figarch_span",
+        "garch",
+        {
+            **CLOSE,
+            "targets": ["y"],
+            "vol": "figarch",
+            "truncation": 50,
+            "start_span": 40.0,
+            "clock": "t",
+            "gap_cap": 6.0,
+            "max_rows_between_coefs": 7,
+        },
+    ),
     Case(
         "audit",
         "audit",

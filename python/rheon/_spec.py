@@ -268,6 +268,18 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
     "hawkes": frozenset(
         {"kernel_half_lives", "window_events", "window_size", "closed", "max_state_bytes"}
     ),
+    "garch": frozenset(
+        {
+            "vol",
+            "dist",
+            "truncation",
+            "variance_targeting",
+            "start_rows",
+            "start_span",
+            "horizon",
+            "max_state_bytes",
+        }
+    ),
     "ewridge": frozenset({"gram_threads"}),
     "expectile": frozenset(
         {
@@ -511,6 +523,7 @@ _NO_FEATURES = {
     "holt": "it fits only each target's own level and trend",
     "seqtest": "it reads only its targets, or the residuals of the specs a and b name",
     "hawkes": "each of its targets is a node, whose values above 0 are its events",
+    "garch": "each of its targets is a return series whose variance it models",
 }
 
 #: The parameters renamed in one builder, or whose old name another keeps
@@ -775,6 +788,7 @@ __all__ = [
     "ewridge",
     "expectile",
     "ftrl",
+    "garch",
     "glm",
     "hawkes",
     "holt",
@@ -5090,6 +5104,7 @@ from rheon._spec_changepoint import bocpd, corrchange  # noqa: E402
 from rheon._spec_class import ew_class  # noqa: E402
 from rheon._spec_cluster import kmeans, micro  # noqa: E402
 from rheon._spec_expectile import expectile  # noqa: E402
+from rheon._spec_garch import garch  # noqa: E402
 from rheon._spec_glm import glm  # noqa: E402
 from rheon._spec_gradient import sgd  # noqa: E402
 from rheon._spec_point import hawkes  # noqa: E402

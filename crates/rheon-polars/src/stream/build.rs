@@ -746,5 +746,9 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         ModelKind::Expectile { .. } => Ok(AnyModel::Expectile(Box::new(
             rheon_core::Expectile::new(expectile_cfg(spec, decay)?)?,
         ))),
+        // No decay: the recursion is per observation.
+        ModelKind::Garch { .. } => Ok(AnyModel::Garch(Box::new(rheon_core::Garch::new(
+            garch_cfg(spec)?,
+        )?))),
     }
 }

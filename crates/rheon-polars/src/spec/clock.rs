@@ -65,6 +65,7 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
     ("marginal", &["window_size", "snapshot_every"]),
     ("hawkes", &["window_size", "kernel_half_lives"]),
     ("expectile", &["window_size"]),
+    ("garch", &["start_span"]),
 ];
 
 /// The parameters that take a duration on a temporal clock or a number that
@@ -440,6 +441,9 @@ impl Spec {
             }
             ModelKind::Micro { prune_every, .. } => {
                 put(&mut out, "prune_every", prune_every.as_ref());
+            }
+            ModelKind::Garch { start_span, .. } => {
+                put(&mut out, "start_span", start_span.as_ref());
             }
             // A number of rows binds to no clock unit
             // ([`DURATION_OR_UNIT_FREE_FIELDS`]).

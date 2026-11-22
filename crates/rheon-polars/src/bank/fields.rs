@@ -367,6 +367,15 @@ pub fn coef_fields(spec: &Spec) -> Vec<CoefField> {
                     .map(move |(_, label)| format!("alpha_{src}_{label}"))
             }))
             .collect()
+    } else if matches!(spec.model, crate::ModelKind::Garch { .. }) {
+        // The process's parameters, then the shape: `Garch::coefficients`.
+        let cfg = crate::stream::garch_cfg(spec).expect("validated");
+        cfg.vol
+            .names()
+            .iter()
+            .chain(cfg.dist.names())
+            .map(|n| n.to_string())
+            .collect()
     } else if matches!(
         spec.model,
         crate::ModelKind::KMeans { .. }
@@ -1137,6 +1146,52 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                         .target(t)
                         .src(Source::Stat(mi * m + t_i)),
                 );
+            }
+            fields.push(
+                FieldMeta::new(format!("weight_sum{suffix}"), "weight_sum")
+                    .decay(suffix, d)
+                    .src(Source::NEff(mi)),
+            );
+            fields.push(
+                FieldMeta::new(format!("coef{suffix}"), "coef")
+                    .decay(suffix, d)
+                    .src(Source::Coef(mi)),
+            );
+        }
+        return fields;
+    }
+    // garch predicts no target's value: per target, the variance and the
+    // standardized residual (read before the row is learned) and, with a
+    // horizon past one row, the forecast; then `n_eff` and the parameters as
+    // `coef`. One undecayed instance.
+    if matches!(spec.model, crate::ModelKind::Garch { .. }) {
+        let forecast = crate::stream::garch_cfg(spec).is_ok_and(|c| c.horizon > 1);
+        let n_slots = 2 + usize::from(forecast);
+        let mut fields = Vec::new();
+        for (mi, (suffix, d)) in decays.iter().enumerate() {
+            let base = mi * spec.targets.len() * n_slots;
+            for (t_i, t) in spec.targets.iter().enumerate() {
+                let at = |slot: usize| base + t_i * n_slots + slot;
+                fields.push(
+                    FieldMeta::new(format!("variance_{t}{suffix}"), "variance")
+                        .decay(suffix, d)
+                        .target(t)
+                        .src(Source::Stat(at(0))),
+                );
+                fields.push(
+                    FieldMeta::new(format!("std_resid_{t}{suffix}"), "std_resid")
+                        .decay(suffix, d)
+                        .target(t)
+                        .src(Source::Stat(at(1))),
+                );
+                if forecast {
+                    fields.push(
+                        FieldMeta::new(format!("forecast_{t}{suffix}"), "forecast")
+                            .decay(suffix, d)
+                            .target(t)
+                            .src(Source::Stat(at(2))),
+                    );
+                }
             }
             fields.push(
                 FieldMeta::new(format!("weight_sum{suffix}"), "weight_sum")

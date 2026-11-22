@@ -1212,6 +1212,63 @@ fn a_hawkes_window_past_its_state_cap_is_refused() {
     );
 }
 
+/// `garch`'s start and its FIGARCH ring are its state's size, known from
+/// its settings at the call: past `max_state_bytes` (256 KB by default) the
+/// spec is refused naming the bytes, and a decay, features, a start given
+/// both ways, an unknown word and a t on a process that takes none are
+/// refused by name.
+#[test]
+fn a_garch_past_its_state_cap_or_its_forms_is_refused() {
+    let spec = |model: &str| {
+        format!(r#"{{"name": "m", "model": {model}, "targets": ["a", "b"], "features": []}}"#)
+    };
+    accepted(&spec(r#"{"type": "garch"}"#));
+    accepted(&spec(
+        r#"{"type": "garch", "vol": "figarch", "truncation": 15000}"#,
+    ));
+    // two targets of FIGARCH: 2 (216 + 8 M) + 16 bytes, 256,448 at 16,000
+    // lags and 272,448 at 17,000
+    accepted(&spec(
+        r#"{"type": "garch", "vol": "figarch", "truncation": 16000}"#,
+    ));
+    refused(
+        &spec(r#"{"type": "garch", "vol": "figarch", "truncation": 17000}"#),
+        &["272448 bytes", "max_state_bytes of 262144", "truncation"],
+    );
+    accepted(&spec(
+        r#"{"type": "garch", "vol": "figarch", "truncation": 17000, "max_state_bytes": 300000}"#,
+    ));
+    refused(
+        &spec(r#"{"type": "garch", "max_state_bytes": 67108865}"#),
+        &["at most 67108864"],
+    );
+    refused(
+        &spec(r#"{"type": "garch", "vol": "arch"}"#),
+        &["vol must be"],
+    );
+    refused(
+        &spec(r#"{"type": "garch", "dist": "ged"}"#),
+        &["dist must be"],
+    );
+    refused(
+        &spec(r#"{"type": "garch", "vol": "gjr", "dist": "skewt"}"#),
+        &["does not take vol = \"gjr\""],
+    );
+    refused(
+        &spec(r#"{"type": "garch", "start_rows": 100, "start_span": 50.0}"#),
+        &["Leave one of them out"],
+    );
+    refused(
+        r#"{"name": "m", "model": {"type": "garch"}, "targets": ["a"], "features": [],
+            "half_life": 10.0}"#,
+        &["half_life does not apply to garch"],
+    );
+    refused(
+        r#"{"name": "m", "model": {"type": "garch"}, "targets": ["a"], "features": ["x"]}"#,
+        &["garch takes no features"],
+    );
+}
+
 /// `hawkes`' window of clock units: a span above 0, beside no other window,
 /// with `closed` only under it, a number where the kernels' decays are
 /// rates, and a state whose fixed part alone fits `max_state_bytes`; what

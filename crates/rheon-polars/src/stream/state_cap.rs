@@ -1,4 +1,5 @@
-//! The words for a state the data sizes (`hawkes`' window of clock units),
+//! The words for a state the data sizes (`hawkes`' window of clock units,
+//! `garch`'s start over a span of the clock),
 //! which the settings cannot bound at the call: the notice that it is past
 //! half of its cap, and what the bank says when a row would pass the cap.
 
@@ -20,6 +21,10 @@ fn window_words(spec: &Spec) -> (String, &'static str, &'static str) {
             window_size: Some(w),
             ..
         } => (format!("window_size = {w}"), "Shorten window_size", "rows"),
+        ModelKind::Garch {
+            start_span: Some(s),
+            ..
+        } => (format!("start_span = {s}"), "Shorten start_span", "rows"),
         _ => ("its window".to_string(), "Shorten the window", "events"),
     }
 }
