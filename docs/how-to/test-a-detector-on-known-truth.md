@@ -123,11 +123,11 @@ print(f"false alarms: {len(false)}")
 ```
 
 ```text
-planted at row 1000: found at row 1115, 115 rows later
-planted at row 2000: found at row 2156, 156 rows later
-planted at row 3000: found at row 3223, 223 rows later
-planted at row 4000: found at row 4129, 129 rows later
-planted at row 5000: found at row 5222, 222 rows later
+planted at row 1000: found at row 1116, 116 rows later
+planted at row 2000: found at row 2183, 183 rows later
+planted at row 3000: found at row 3186, 186 rows later
+planted at row 4000: found at row 4161, 161 rows later
+planted at row 5000: found at row 5210, 210 rows later
 false alarms: 0
 ```
 

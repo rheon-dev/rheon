@@ -506,30 +506,6 @@ const READ_ANEW: &[(&str, f64)] = &[
 /// none, and converts to the current bytes exactly.
 const COUNTED_ZERO_WEIGHT: &[&str] = &["audit", "audit_exact", "audit_scaled"];
 
-/// The `corrchange` cases whose statistics were replaced (PLAN 553, the
-/// user's, 2026-11-22: `monitor` the linear CUSUM, `sequential` the
-/// Fisher-`z` detector), with no layout changed. **Proposed, pending the
-/// user's word on rule 5**: this hold is not one of the numbered
-/// exceptions. A kept state holds no number the old statistics computed --
-/// its rows, the history's correlation and long-run deviation, the
-/// monitored rows' sums -- so it loads as it was and goes on under the new
-/// statistics. What it keeps of the old ones is where they flagged: the
-/// count since the last flag, and a `sequential` cycle's start, which a
-/// flag ends.
-///
-/// - `corrchange_monitor`: no span of these rows flagged under either
-///   statistic before the save, so the kept state is the current fixture's
-///   to the byte, and it continues to the current fixture's frozen
-///   continuation to the bit: the state goes on as this build goes on from
-///   the same rows. Its own frozen continuation is the old statistic's.
-/// - `corrchange_sequential`: the old detector last flagged 8 learned rows
-///   before the save, the new one 19, so the kept state's cycle began where
-///   the old flag ended one, and it is not the current fixture's. It is held to saving
-///   bytes that load back to the same and to its frozen continuation's
-///   `weight_sum`; its reports are the new detector's over a cycle the
-///   old one began, which no build reaches from these rows.
-const RESTATED: &[&str] = &["corrchange_monitor", "corrchange_sequential"];
-
 /// How far a continuation may part from the one frozen, on a platform other
 /// than the writer's: the golden files' tolerance (`tests/golden.rs`).
 const TOL: f64 = 1e-12;
@@ -975,14 +951,6 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                     "{what}: saved, loaded, saved"
                 );
                 counted_zero_weight_rule(&saved, &current.bytes(), &what);
-            } else if RESTATED.contains(&f.name) && named(&m.state()) != current.bytes() {
-                let saved = named(&m.state());
-                let again = load(&case, &saved).unwrap_or_else(|e| panic!("{what}: {e}"));
-                assert!(
-                    named(&again.state()) == saved,
-                    "{what}: saved, loaded, saved"
-                );
-                assert_eq!(f.name, "corrchange_sequential", "{what}: converts exactly");
             } else if renumbered.is_some() {
                 assert_eq!(schema, 65, "{what}: RENUMBERED is for schema 65's windows");
                 renumbered_rule(&case, &named(&m.state()), &current.bytes(), &|_| 0.0, &what);
@@ -996,24 +964,7 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
             }
             let tol = if f.writer == writer() { 0.0 } else { TOL };
             let mut relabel: Vec<(u64, u64)> = Vec::new();
-            // A restated case ([`RESTATED`]) whose state converts to the
-            // current fixture's goes on as that fixture does; one that does
-            // not, by its frozen `weight_sum` alone.
-            let restated = RESTATED.contains(&f.name);
-            let exact = restated && named(&m.state()) == current.bytes();
-            let current_outs = current.outs();
             for (i, (row, want)) in f.rows().iter().zip(f.outs()).enumerate() {
-                if restated {
-                    let got = m.step(row);
-                    let what = format!("{what}, row {i} after the save");
-                    if exact {
-                        let tol = if current.writer == writer() { 0.0 } else { TOL };
-                        same_out(&what, &got, &current_outs[i], tol);
-                    } else {
-                        assert!(agree(got.n_eff, want.n_eff, tol), "{what}: weight_sum");
-                    }
-                    continue;
-                }
                 if reseeded {
                     let got = m.step(row);
                     let (g, w) = (got.pred[0], want.pred[0]);
