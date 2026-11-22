@@ -206,6 +206,36 @@ class TestOracle:
         # And it is evidence: 800 of 1200 rows on one side is far past 1/0.01.
         assert u[f"log_e_{side}_d0"][-1] > LN100 + 50
 
+    def test_the_closed_form_through_scipy_on_a_biased_noisy_stream(self):
+        """The same wealth on a stream that looks like a residual's signs: 70%
+        positive, in no pattern, of sizes that vary, with the leading side
+        never behind (a prefix of the stream at which the negatives lead would
+        clip the stake, and the closed form is only the unclipped one). The
+        stream is the first seeded draw with that property, found here and
+        not by hand. ``scipy.special.betaln`` is the Beta function, so the
+        comparison is the published formula by a library, not by
+        ``math.lgamma``, and it reads the counts the model reports as well as
+        the log e-value."""
+        from scipy.special import betaln
+
+        n = 500
+        for seed in range(200):
+            d = signs(n, p=0.7, seed=seed)
+            lead = np.cumsum(np.where(d > 0, 1, -1))
+            if lead.min() >= 0:
+                break
+        else:
+            pytest.fail("no seed in 200 keeps the positives ahead")
+        assert (d < 0).sum() > 100, "a stream with only a few negatives is not noisy"
+        u = unnested(rp.ModelBank([spec()]).fit_predict(pl.DataFrame({"d0": d})))
+        n_pos = np.concatenate([[0], np.cumsum(d > 0)])[:-1]
+        n_neg = np.concatenate([[0], np.cumsum(d < 0)])[:-1]
+        want = (n_pos + n_neg) * math.log(2.0) + betaln(n_pos + 0.5, n_neg + 0.5) - betaln(0.5, 0.5)
+        np.testing.assert_allclose(u["log_e_pos_d0"].to_numpy(), want, rtol=1e-10, atol=1e-10)
+        np.testing.assert_array_equal(u["n_pos_d0"].to_numpy(), n_pos)
+        np.testing.assert_array_equal(u["n_neg_d0"].to_numpy(), n_neg)
+        assert u["log_e_pos_d0"][-1] > LN100, "a 70% bias in 500 signs is evidence"
+
     def test_the_two_sided_e_value_is_the_average(self):
         # (E_pos + E_neg) / 2 is itself an e-value; where one side never
         # bets its E is 1, so the average is (E + 1) / 2.

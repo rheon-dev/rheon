@@ -164,7 +164,7 @@ realistic test and nothing is left to add.
 | | C | Rust probe D; sweeps use a coin-flip label (D: no signal) | D | none |
 | `seqtest` | G | 1 (both slots) | R\* | none |
 | | F | 1 | R\* | none |
-| | O | `test_seqtest`: `seqtest_ref` (a scalar replay), the closed form `2^n B(n_pos + 1/2, n_neg + 1/2) / pi` through `math.lgamma`, Type I error over 20,000 fair-coin and 20,000 dependent-null streams, power at 60% and 55% | R, **no third-party library** (confseq does not build) | the KT closed form through `scipy.special.betaln` instead of `math.lgamma`, on a realistic residual-sign stream |
+| | O | `test_seqtest`: `seqtest_ref` (a scalar replay), the closed form `2^n B(n_pos + 1/2, n_neg + 1/2) / pi` through `math.lgamma`, Type I error over 20,000 fair-coin and 20,000 dependent-null streams, power at 60% and 55% | R, **no third-party library** (confseq does not build) | none: the closed form through `scipy.special.betaln` on a 70%-positive, unpatterned stream of 500 signs whose positives never fall behind (so the clip never binds), with the counts |
 | | C | Rust probe D (no sign structure by design); `test_seqtest` edge cases | D | none |
 | `deco` | G | 2 (`deco`, `_loglik`) on iid uniform features (D: a true equicorrelation of 0, nothing to track), and `golden_structured.rs`'s `deco_factor` (150 rows of one factor at a correlation of 0.6: `rho` under linear dynamics and `loglik` under `ew` at three rows). The row estimate is the paper's Lemma 2.3 `u`, biased below the correlation: for two unit normals it averages `(1 - sqrt(1 - r^2)) / r`, 1/3 at 0.6, and both dynamics' mean `rho` over the last 50 rows is asserted there, not at 0.6 | D and R | none |
 | | F | 1 | R\* | none |
