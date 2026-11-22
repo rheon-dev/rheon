@@ -483,6 +483,18 @@ impl AnyModel {
         }
     }
 
+    /// Whether the row's own report withheld part of what it reports, read
+    /// from the step's predictions: `corrchange`'s flag, withheld where
+    /// every pair over the critical value is one whose two columns' scale
+    /// ratio moved inside the span (`rheon_core::CorrChange::flag_withheld`).
+    /// Every other model withholds no part of a report by the row itself.
+    pub fn withheld_by_its_row(&self, pred: &[f64]) -> bool {
+        match self {
+            AnyModel::CorrChange(_) => rheon_core::CorrChange::flag_withheld(pred),
+            _ => false,
+        }
+    }
+
     /// Whether a slot's fit is withheld because the system it was solved
     /// from is past the condition at which a solve keeps a digit:
     /// `ewridge`'s, whose normal equations can factorize past it
@@ -1329,8 +1341,11 @@ pub enum OwnWait {
 /// `unstable_rate` after it (task 278, D8), `sgd`'s gate, which no model
 /// with an earlier reason of its own has; `not_identified` after that (PLAN
 /// 548), `garch`'s wait for a start whose rows tell its variance process
-/// from a constant one, which comes after its own warm-up.
-pub const WITHHELD_REASONS: [&str; 7] = [
+/// from a constant one, which comes after its own warm-up;
+/// `scale_ratio_moved` last (PLAN 553), `corrchange`'s flag withheld where
+/// the correlation's CUSUM is off its null law because the two columns'
+/// scale ratio moved, which no model with an earlier reason has.
+pub const WITHHELD_REASONS: [&str; 8] = [
     "below_min_settled_frac",
     "below_min_weight",
     "above_max_error_inflation",
@@ -1338,6 +1353,7 @@ pub const WITHHELD_REASONS: [&str; 7] = [
     "ill_conditioned",
     "unstable_rate",
     "not_identified",
+    "scale_ratio_moved",
 ];
 const REASON_SETTLED: u8 = 1;
 const REASON_MIN_PERIODS: u8 = 2;
@@ -1346,6 +1362,7 @@ const REASON_WARM_ROWS: u8 = 4;
 const REASON_ILL_CONDITIONED: u8 = 5;
 const REASON_UNSTABLE_RATE: u8 = 6;
 const REASON_NOT_IDENTIFIED: u8 = 7;
+const REASON_SCALE_RATIO: u8 = 8;
 
 /// The settled fraction at which a readiness notice judges a stream
 /// (docs/WARMUP-AND-CONVERGENCE.md §3): the one rule all three notices
@@ -4195,6 +4212,8 @@ fn run_instance(
             inst.model.get().predict_into(xs, &sc.ys, score_d, step);
         }
         let n_slots = step.pred.len();
+        // Read from the step's own report, before a gate below nulls it.
+        let ratio_moved = inst.model.get().withheld_by_its_row(&step.pred);
         // `ew_cov` has no targets; its slots are statistics, so every one
         // maps to "target 0" for the warmup check. Slot `s` belongs to target
         // `s / nc`; the passes below walk the slots in groups of `nc` rather
@@ -4361,6 +4380,11 @@ fn run_instance(
         // waiting for rows that tell its process from a constant variance.
         if reason == 0 && wait == OwnWait::NotIdentified {
             reason = REASON_NOT_IDENTIFIED;
+        }
+        // A `corrchange` flag withheld because the two columns' scale ratio
+        // moved inside the span, where no gate above has withheld the row.
+        if reason == 0 && ratio_moved {
+            reason = REASON_SCALE_RATIO;
         }
         // The noise gate has not been met: the stream has all but settled,
         // the gate has withheld every row for a further half-life, and the

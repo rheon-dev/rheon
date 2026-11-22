@@ -1233,6 +1233,22 @@ pub enum ModelKind {
         /// none. Skipped when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         permute_every: Option<Span>,
+        /// `window_rows` on the clock (docs/PLAN.md task 553): the span
+        /// `"monitor"` tests, the history `"sequential"` monitors against,
+        /// or each of `"window"`'s two windows, as a span of the clock in
+        /// place of a count of rows. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window_size: Option<Span>,
+        /// `"sequential"` under `window_size`: the monitoring period as a
+        /// span of the clock, in place of `monitor_rows`; default
+        /// `window_size`. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        monitor_span: Option<Span>,
+        /// Under `window_size`, the bytes a group's state may hold: the rows
+        /// a span of the clock holds are the data's to number. Default 256
+        /// KB, at most 64 MiB. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
     },
     /// Bayesian online changepoint detection (docs/ENHANCEMENTS.md E61): a
     /// posterior over how long the current run has lasted, updated one row

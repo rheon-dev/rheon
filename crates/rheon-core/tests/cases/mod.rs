@@ -2296,6 +2296,57 @@ pub fn all() -> Vec<Case> {
             Targets::None,
             40
         ),
+        // Task 553: each kind's span on the clock (`window_size`), saved
+        // inside it: the clock, the span's first stamp, a window's keys and
+        // the counts its held value was drawn over, a cycle's own history
+        // and period, and a cap of the state's bytes.
+        case!(
+            "corrchange_monitor_clock",
+            "CorrChange",
+            CorrChange,
+            CorrChange::new(CorrChangeCfg {
+                span_rows: 0,
+                span_clock: Some(7.0),
+                max_state_bytes: Some(1 << 20),
+                ..corrchange_cfg(CorrChangeKind::Monitor)
+            })
+            .unwrap(),
+            K,
+            Targets::None,
+            40
+        ),
+        case!(
+            "corrchange_sequential_clock",
+            "CorrChange",
+            CorrChange,
+            CorrChange::new(CorrChangeCfg {
+                span_rows: 0,
+                monitor_rows: 0,
+                span_clock: Some(9.0),
+                monitor_clock: Some(14.0),
+                ..corrchange_cfg(CorrChangeKind::Sequential)
+            })
+            .unwrap(),
+            K,
+            Targets::None,
+            40
+        ),
+        case!(
+            "corrchange_window_clock",
+            "CorrChange",
+            CorrChange,
+            CorrChange::new(CorrChangeCfg {
+                span_rows: 0,
+                span_clock: Some(8.0),
+                permute_every_rows: usize::MAX,
+                permute_every: Some(5.0),
+                ..corrchange_cfg(CorrChangeKind::Window)
+            })
+            .unwrap(),
+            K,
+            Targets::None,
+            40
+        ),
         // Task 538: a warm-up over a span of the clock, saved inside it.
         case!(
             "bocpd_warm_span",

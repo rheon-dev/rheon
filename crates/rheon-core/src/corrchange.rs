@@ -1252,6 +1252,19 @@ impl CorrChange {
         5
     }
 
+    /// Whether a report withheld its flag: a `monitor` report whose
+    /// statistic and critical value are numbers and whose flag is not, the
+    /// one report that is, because every pair over the critical value is one
+    /// whose two columns' scale ratio moved inside the span
+    /// ([`Self::monitor_pair`]). Every other report flags 0 or 1 wherever its
+    /// statistic and critical value are numbers.
+    pub fn flag_withheld(pred: &[f64]) -> bool {
+        pred.len() == Self::n_outputs_for()
+            && pred[0].is_finite()
+            && pred[1].is_finite()
+            && pred[2].is_nan()
+    }
+
     /// The sample correlation of `rows[..n]` for the pair `(a, b)`.
     fn corr_of<R: AsRef<[f64]>>(rows: &[R], n: usize, a: usize, b: usize) -> f64 {
         if n < 2 {
@@ -2707,6 +2720,10 @@ impl crate::OnlineModel for CorrChange {
 #[cfg(test)]
 #[path = "corrchange_span_tests.rs"]
 mod span_tests;
+
+#[cfg(test)]
+#[path = "corrchange_clock_tests.rs"]
+mod clock_tests;
 
 #[cfg(test)]
 mod tests {
