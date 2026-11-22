@@ -356,7 +356,7 @@ impl StreamPca {
         out.clear();
         out.resize(self.cfg.n_outputs(), f64::NAN);
         let w = self.moments.n_eff();
-        if !(w >= self.cfg.min_weight) {
+        if w < self.cfg.min_weight {
             return;
         }
         let tr = self.trace();
@@ -473,7 +473,7 @@ impl StreamPca {
                 // Not started: the residual left by the directions before,
                 // where it is more than their rounding.
                 let u2 = dot(u, u);
-                if !(u2 > started_floor(d2, k)) {
+                if u2 <= started_floor(d2, k) {
                     continue;
                 }
                 let nu = u2.sqrt();
@@ -737,7 +737,7 @@ impl OnlineModel for StreamPca {
         self.scratch.d = d;
         self.moments.update(x, lam, weight);
         self.q_sum = lam * lam * self.q_sum + weight * weight;
-        if !(w_new > 0.0) {
+        if w_new <= 0.0 {
             // Nothing carried and nothing added: no share to take, and
             // nothing moves but the weight, which the update decayed.
             return;
