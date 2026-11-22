@@ -53,6 +53,7 @@ from rheon import polars as rp
 def at(second):                                        # a time on the morning of 2 May 2024
     return datetime(2024, 5, 2, 9, 30, second)
 
+# Write the quotes and the trades to files of their own.
 pl.DataFrame({                                         # quotes, in clock order
     "symbol": ["AAA", "BBB", "AAA", "BBB", "AAA"],
     "ts": [at(0), at(1), at(3), at(3), at(6)],
@@ -65,8 +66,10 @@ pl.DataFrame({                                         # trades, in clock order
     "size": [100, 50, 200],
 }).write_parquet("trades.parquet")
 
+# Merge them by the clock, the rows of each symbol checked together.
 streams = {"quotes": pl.scan_parquet("quotes.parquet"), "trades": pl.scan_parquet("trades.parquet")}
 merged = rp.stream.merge(streams, clock="ts", by="symbol")    # 1. and 2.: a query
+# Read the merged stream.
 out = merged.collect()
 print(out.columns)                                             # 3.
 for ts, symbol, source, bid, price in out.select("ts", "symbol", "source", "bid", "price").rows():
