@@ -3937,3 +3937,39 @@ columns = [39]
 why = """as the `>=` mutant: `is_a_factor` refuses what the guard would have, \
 whatever the guard passes (a negative entry gives a NaN root, an infinite one an \
 infinite pivot)"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/sgd.rs"
+function = "<impl WithSimd for StandardizeLanes<'_>>::with_simd"
+mutation = "replace + with -"
+line_has = "let s = if crate::variance_is_usable(v, v + h2 * h2) {"
+why = """`variance_is_usable(var, _raw_second_moment)` reads only its first \
+argument (`var > 0.0 && var.is_finite()`), so no change to the second \
+argument's arithmetic can move the result"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/sgd.rs"
+function = "<impl WithSimd for StandardizeLanes<'_>>::with_simd"
+mutation = "replace + with *"
+line_has = "let s = if crate::variance_is_usable(v, v + h2 * h2) {"
+why = """`variance_is_usable(var, _raw_second_moment)` reads only its first \
+argument (`var > 0.0 && var.is_finite()`), so no change to the second \
+argument's arithmetic can move the result"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/sgd.rs"
+function = "<impl WithSimd for StandardizeLanes<'_>>::with_simd"
+mutation = "replace * with +"
+line_has = "let s = if crate::variance_is_usable(v, v + h2 * h2) {"
+why = """`variance_is_usable(var, _raw_second_moment)` reads only its first \
+argument (`var > 0.0 && var.is_finite()`), so no change to the second \
+argument's arithmetic can move the result"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/sgd.rs"
+function = "<impl WithSimd for StandardizeLanes<'_>>::with_simd"
+mutation = "replace * with /"
+line_has = "let s = if crate::variance_is_usable(v, v + h2 * h2) {"
+why = """`variance_is_usable(var, _raw_second_moment)` reads only its first \
+argument (`var > 0.0 && var.is_finite()`), so no change to the second \
+argument's arithmetic can move the result"""
