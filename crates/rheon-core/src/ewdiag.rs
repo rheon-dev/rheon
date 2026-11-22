@@ -737,6 +737,97 @@ mod tests {
         assert_eq!(inc.moments(1, -3.0), (-3.0, 0.0, 0.0));
     }
 
+    /// `update_keeping` takes the floor only where there is a history, the
+    /// row has a weight and the floor is strictly above the carried weight:
+    /// at the head of a stream, at weight 0 and at the tie it is `update`, to
+    /// the bit, and says it did not bind; above the tie it reads the old
+    /// statistics at the floor's share, and keeps the plain weight.
+    #[test]
+    fn update_keeping_binds_only_above_the_carried_weight() {
+        let x = [1.5, -2.0];
+        // No history: the floor has nothing to hold up.
+        let mut kept = EwDiag::new(2);
+        let mut plain = EwDiag::new(2);
+        assert!(!kept.update_keeping(&x, 0.9, 1.0, 5.0));
+        plain.update(&x, 0.9, 1.0);
+        assert_eq!(kept, plain);
+
+        let mut base = EwDiag::new(2);
+        base.update(&[0.25, 4.0], 1.0, 1.0);
+        base.update(&[1.0, 3.0], 1.0, 1.0);
+        assert_eq!(base.n_eff(), 2.0);
+
+        // A row of no weight: nothing to learn, so nothing to keep.
+        let (mut kept, mut plain) = (base.clone(), base.clone());
+        assert!(!kept.update_keeping(&x, 0.5, 0.0, 9.0));
+        plain.update(&x, 0.5, 0.0);
+        assert_eq!(kept, plain);
+
+        // The tie: lam * W is 1 and so is the floor.
+        let (mut kept, mut plain) = (base.clone(), base.clone());
+        assert!(!kept.update_keeping(&x, 0.5, 1.0, 1.0));
+        plain.update(&x, 0.5, 1.0);
+        assert_eq!(kept, plain);
+
+        // Below the tie the floor does not bind either.
+        let (mut kept, mut plain) = (base.clone(), base.clone());
+        assert!(!kept.update_keeping(&x, 0.5, 1.0, 0.5));
+        plain.update(&x, 0.5, 1.0);
+        assert_eq!(kept, plain);
+
+        // Above it: the old statistics take the share floor / (floor + w),
+        // and the weight kept is lam * W + w, the plain recursion's.
+        let (floor, w, lam) = (3.0, 1.0, 0.5);
+        let mut kept = base.clone();
+        assert!(kept.update_keeping(&x, lam, w, floor));
+        let (a, b) = (floor / (floor + w), w / (floor + w));
+        for i in 0..2 {
+            let d = x[i] - base.mean(i);
+            let want_mean = base.mean(i) + b * d;
+            let want_c = a * base.var(i) + a * b * d * d;
+            assert!((kept.mean(i) - want_mean).abs() < 1e-14, "mean {i}");
+            assert!(
+                (kept.var(i) - want_c).abs() < 1e-12,
+                "var {i}: {} vs {want_c}",
+                kept.var(i)
+            );
+        }
+        assert_eq!(kept.n_eff(), lam * base.n_eff() + w);
+    }
+
+    /// The deviation is read as `a·d` where the history's share is strictly
+    /// below `SMALL_SHARE`, and as the pair's at the share itself: with a
+    /// history of weight 1 and a row of weight 1023, `a` is `2⁻¹⁰` exactly.
+    #[test]
+    fn the_small_share_switch_is_strict() {
+        let mut found_a_difference = false;
+        for &(m0, x) in &[
+            (0.1, 0.3),
+            (0.7, 0.1),
+            (1.0 / 3.0, 0.9),
+            (2.2, 0.37),
+            (0.6, 0.15),
+        ] {
+            let mut d = EwDiag::new(1);
+            d.update(&[m0], 1.0, 1.0);
+            let inc = d.including_at(1.0, 1023.0);
+            assert_eq!(inc.a, SMALL_SHARE);
+            let (hi, lo, _c) = (d.m[0], d.m_lo[0], d.c[0]);
+            let pre = crate::comp::dev(x, hi, lo);
+            let (_, _, dev) = inc.moments(0, x);
+            // The mean the row leaves, from the same recursion.
+            let (mut h2, mut l2) = (hi, lo);
+            crate::comp::add(&mut h2, &mut l2, inc.b * pre);
+            let pair = crate::comp::dev(x, h2, l2);
+            assert_eq!(dev.to_bits(), pair.to_bits(), "at the share: the pair's");
+            found_a_difference |= pair.to_bits() != (inc.a * pre).to_bits();
+        }
+        assert!(
+            found_a_difference,
+            "no case told the two forms apart, so the test holds nothing"
+        );
+    }
+
     #[test]
     fn a_zero_weight_first_row_and_a_negative_weight_change_nothing() {
         let mut d = EwDiag::new(2);

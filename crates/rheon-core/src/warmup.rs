@@ -238,6 +238,26 @@ mod tests {
             assert!(!w.learn(1e-200));
         }
         assert_eq!(w.count(), 0.0);
+        // The history holds weight but its squares are 0: one row's weight is
+        // not 0 / 1e-198, it is the 1 of a scaler with nothing to weigh by.
+        assert!(w.w > 0.0 && w.w2 == 0.0);
+        assert_eq!(w.row_weight(), 1.0);
+        assert_eq!(Warmup::default().row_weight(), 1.0);
+    }
+
+    /// One row's weight is `Σw² / Σw`: 1 at unit weights, and the stream's
+    /// own unit where its weights are scaled.
+    #[test]
+    fn a_rows_weight_is_the_ratio_of_the_sums() {
+        let mut w = Warmup::default();
+        for _ in 0..5 {
+            w.learn(1.0);
+        }
+        assert_eq!(w.row_weight(), 1.0);
+        let mut w = Warmup::default();
+        w.learn(2.0);
+        w.learn(4.0);
+        assert_eq!(w.row_weight(), 20.0 / 6.0);
     }
 
     #[test]

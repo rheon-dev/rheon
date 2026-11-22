@@ -3193,6 +3193,30 @@ mod tests {
         model
     }
 
+    /// On a reverting filter, `predict` reads a target the filter has never
+    /// seen a value for as the step does: withheld (NaN), not the 0 of its
+    /// untouched coefficients, whatever the shared covariance's size.
+    #[test]
+    fn a_reverting_filter_withholds_a_target_it_has_not_seen() {
+        let mut c = cfg(2, 2, vec![100.0]);
+        c.revert_half_life = vec![50.0];
+        let mut model = Kalman::new(c).unwrap();
+        let mut s = 91u64;
+        for i in 0..40 {
+            let x = [lcg(&mut s), 0.5 + lcg(&mut s)];
+            let y0 = 2.0 * x[0] - x[1] + 0.1 * lcg(&mut s);
+            model.step(&x, &[Some(y0), None], if i == 0 { 0.0 } else { 1.0 }, 1.0);
+        }
+        let x = [0.3, 0.8];
+        let got = model.predict(&x, 1.0);
+        assert!(got.pred[0].is_finite(), "{:?}", got.pred);
+        assert!(got.pred[1].is_nan(), "{:?}", got.pred);
+        // The step says the same of its own prediction.
+        let stepped = model.clone().step(&x, &[Some(0.0), None], 1.0, 1.0);
+        assert!(stepped.pred[1].is_nan());
+        assert_eq!(stepped.pred[0].to_bits(), got.pred[0].to_bits());
+    }
+
     #[test]
     fn cfg_validation_rejects_each_bad_field() {
         let bad = |f: &dyn Fn(&mut KalmanCfg), want: &str| {
