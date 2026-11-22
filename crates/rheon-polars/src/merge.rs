@@ -240,6 +240,8 @@ pub struct Merge {
     held_end: bool,
     /// The greatest (restarts, key) read, of every input.
     max_read: Option<(u64, i64)>,
+    /// The inputs' names, by index, for the `source` column.
+    names: StringChunked,
 }
 
 /// A column a dtype refusal names, in Polars' words.
@@ -364,7 +366,7 @@ impl Merge {
             }
         }
         out_schema.insert(cfg.source.as_str().into(), DataType::String);
-        let inputs = names
+        let inputs: Vec<Input> = names
             .into_iter()
             .zip(schemas)
             .map(|(name, schema)| Input {
@@ -378,6 +380,10 @@ impl Merge {
             })
             .collect();
         let grouped = cfg.by.is_some();
+        let names = StringChunked::from_iter_values(
+            "".into(),
+            inputs.iter().map(|i: &Input| i.name.as_str()),
+        );
         Ok(Self {
             cfg,
             mode,
@@ -395,6 +401,7 @@ impl Merge {
             heap: BinaryHeap::new(),
             held_end: false,
             max_read: None,
+            names,
         })
     }
 
@@ -497,7 +504,7 @@ impl Merge {
                         polars_err!(ComputeError:
                             "{WHO}: input {name:?}: clock column {:?} is {x} at row {} (counting \
                              from 0), past the largest Int64, {}, which an integer clock is held \
-                             in. Subtract an origin from the clock, or cast it to Float64.",
+                             in. Cast the clock to Float64, or subtract an origin from it.",
                             self.cfg.clock, base + row as u64, i64::MAX
                         )
                     }),
@@ -522,9 +529,9 @@ impl Merge {
                 if back.refused {
                     polars_bail!(ComputeError:
                         "{WHO}: input {name:?}: clock column {:?} steps back by {} at row {} \
-                         (counting from 0), {}. Each input must be in clock order across all its \
-                         rows, its groups included, for the merge to hold one chunk of it at a \
-                         time. Sort the input by the clock, or set restart_after_step_back below \
+                         (counting from 0), {}, and the merge holds one chunk of each input, so \
+                         it needs each in clock order across all its rows, its groups included. \
+                         Sort the input by the clock, or set restart_after_step_back below \
                          {} to start the input again at such a step back (0 starts it again at \
                          every one). See {CLOCK_ORDER_HOW_TO} for which to choose.",
                         self.cfg.clock, back.text, base + row as u64, self.why(), back.text
@@ -585,11 +592,15 @@ impl Merge {
     pub fn push(&mut self, i: usize, df: DataFrame) -> PolarsResult<()> {
         let input = &self.inputs[i];
         if input.ended {
-            polars_bail!(ComputeError: "{WHO}: input {:?} was fed after its end", input.name);
+            polars_bail!(ComputeError:
+                "{WHO}: input {:?} was fed after its end. Give each input its chunks before its end.",
+                input.name
+            );
         }
         if df.schema().as_ref() != &input.schema {
             polars_bail!(SchemaMismatch:
-                "{WHO}: a chunk of input {:?} has the columns {:?}, not the input's {:?}.",
+                "{WHO}: a chunk of input {:?} has the columns {:?}, not the input's {:?}. Give \
+                 each input chunks of its own columns.",
                 input.name, df.schema(), input.schema
             );
         }
@@ -637,47 +648,40 @@ impl Merge {
             .position(|inp| !inp.ended && inp.queue.is_empty())
     }
 
-    /// Check row `row` of `block` of input `i` against its group's merged
-    /// rows, and take it as that group's last.
-    fn check_group(&mut self, i: usize, gid: u32, key: i64, row: Option<u64>) -> PolarsResult<()> {
-        let g = gid as usize;
-        if let Some(last) = self.group_last[g]
-            && key < last
-        {
-            let back = self.back(last, key);
-            if back.refused {
-                let at = match row {
-                    Some(r) => format!(
-                        "input {:?}'s row {r} (counting from 0)",
-                        self.inputs[i].name
-                    ),
-                    None => format!("a row of input {:?} the state held", self.inputs[i].name),
-                };
-                let whose = match (&self.cfg.by, &self.group_keys[g]) {
-                    (None, _) => "the merged rows step".to_string(),
-                    (Some(by), Some(k)) => format!("the merged rows of {by} = {k:?} step"),
-                    (Some(by), None) => format!("the merged rows of the null {by} step"),
-                };
-                polars_bail!(ComputeError:
-                    "{WHO}: {whose} back by {} at {at}, {}, as a bank reading the merged rows \
-                     would refuse it. Each input is in clock order, so this is a run resumed on \
-                     inputs cut at different clocks, or an input that did not start again where \
-                     the others did. Cut every input at the same clock, start every input again \
-                     at the same step back, or set restart_after_step_back below {}. See \
-                     {CLOCK_ORDER_HOW_TO} for which to choose.",
-                    back.text, self.why(), back.text
-                );
-            }
-        }
-        self.group_last[g] = Some(key);
-        Ok(())
+    /// The refusal of a step back in a group's merged rows, at row `row` of
+    /// input `i` (`None` for a row a state held).
+    #[cold]
+    fn group_refusal(&self, i: usize, gid: usize, back: &Back, row: Option<u64>) -> PolarsError {
+        let at = match row {
+            Some(r) => format!(
+                "input {:?}'s row {r} (counting from 0)",
+                self.inputs[i].name
+            ),
+            None => format!("a row of input {:?} the state held", self.inputs[i].name),
+        };
+        let whose = match (&self.cfg.by, &self.group_keys[gid]) {
+            (None, _) => "the merged rows step".to_string(),
+            (Some(by), Some(k)) => format!("the merged rows of {by} = {k:?} step"),
+            (Some(by), None) => format!("the merged rows of the null {by} step"),
+        };
+        polars_err!(ComputeError:
+            "{WHO}: {whose} back by {} at {at}, {}, as a bank reading the merged rows would \
+             refuse it: a run resumed on inputs cut at different clocks, or an input that did not \
+             start again where the others did. Cut \
+             every input at the same clock, start every input again at the same step back, or \
+             set restart_after_step_back below {}. See {CLOCK_ORDER_HOW_TO} for which to \
+             choose.",
+            back.text, self.why(), back.text
+        )
     }
 
     /// Merged rows: at most `limit`, stopping where an input's next chunk is
-    /// needed, whose index comes back beside them. `None` beside them means
-    /// every input has ended and its rows are out -- but, with `hold`, the
-    /// rows at the last clock, which a state saved then holds for the next
-    /// run.
+    /// needed, whose index comes back beside them. `None` beside fewer than
+    /// `limit` rows means every input has ended and its rows are out -- but,
+    /// with `hold`, the rows at the last clock, which a state saved then
+    /// holds for the next run; beside `limit` rows, call again for more. A
+    /// caller that takes a chunk's rows a pull holds one chunk of output
+    /// beside one chunk of each input.
     ///
     /// # Errors
     ///
@@ -717,38 +721,78 @@ impl Merge {
                 break;
             }
             self.heap.pop();
-            // Input `i`'s rows, while its head stays the least.
+            // The least head of the other inputs, which stays put while input
+            // `i`'s rows go out below it.
+            let bound = self.heap.peek().map(|&Reverse(b)| b);
+            // Input `i`'s rows, block by block, while its head stays the least.
             loop {
                 let input = &mut self.inputs[i];
                 let block = input.queue.front_mut().expect("a head on the heap");
-                let row = block.pos;
-                let key = block.keys[row];
-                let gid = block.gids.get(row).copied().unwrap_or(0);
-                let number = block.first_row.map(|f| f + row as u64);
-                let restarts = block.restarts;
                 let p = match open[i] {
                     Some(p) => p,
                     None => {
                         parts.push(Part {
                             input: i,
                             df: block.df.clone(),
-                            start: row,
-                            end: row,
+                            start: block.pos,
+                            end: block.pos,
                         });
                         open[i] = Some(parts.len() - 1);
                         parts.len() - 1
                     }
                 };
-                self.check_group(i, gid, key, number)?;
-                let input = &mut self.inputs[i];
-                if number.is_some() {
-                    input.taken = Some((key, restarts));
+                let start = parts[p].start;
+                let from = block.pos;
+                let mut last_out = (0, 0);
+                // A step back in a group's merged rows, for the rule to judge.
+                let mut stepped: Option<(usize, i64, i64)> = None;
+                // Whether the rows stopped inside the block, its head no
+                // longer the least.
+                let mut stopped = false;
+                loop {
+                    let row = block.pos;
+                    let key = block.keys[row];
+                    let gid = block.gids.get(row).map_or(0, |&g| g as usize);
+                    let last = &mut self.group_last[gid];
+                    if let Some(l) = *last
+                        && key < l
+                    {
+                        stepped = Some((gid, l, key));
+                        break;
+                    }
+                    *last = Some(key);
+                    last_out = (key, block.restarts);
+                    picks.push((p as u32, (row - start) as u32));
+                    if !block.advance() {
+                        break;
+                    }
+                    let head = block.head();
+                    if picks.len() >= budget
+                        || hold_at.is_some_and(|h| head >= h)
+                        || bound.is_some_and(|b| (head.0, head.1, i) > b)
+                    {
+                        stopped = true;
+                        break;
+                    }
                 }
-                let part = &mut parts[p];
-                picks.push((p as u32, (row - part.start) as u32));
-                part.end = row + 1;
-                let block = input.queue.front_mut().expect("still there");
-                if !block.advance() {
+                let used_up = !stopped && stepped.is_none();
+                parts[p].end = block.pos;
+                let row_number = block.first_row.map(|f| f + block.pos as u64);
+                if block.first_row.is_some() && block.pos > from {
+                    input.taken = Some(last_out);
+                }
+                if let Some((gid, l, key)) = stepped {
+                    let back = self.back(l, key);
+                    if back.refused {
+                        return Err(self.group_refusal(i, gid, &back, row_number));
+                    }
+                    // A step back past the setting: the group starts again,
+                    // as a bank's would; the row goes out on the next turn.
+                    self.group_last[gid] = Some(key);
+                    continue;
+                }
+                let input = &mut self.inputs[i];
+                if used_up {
                     input.queue.pop_front();
                     open[i] = None;
                 }
@@ -760,11 +804,11 @@ impl Merge {
                     }
                     break;
                 };
-                let least = self
-                    .heap
-                    .peek()
-                    .is_none_or(|&Reverse((r2, k2, j))| (head.0, head.1, i) < (r2, k2, j));
-                if picks.len() >= budget || !least || hold_at.is_some_and(|h| head >= h) {
+                if stopped
+                    || picks.len() >= budget
+                    || hold_at.is_some_and(|h| head >= h)
+                    || bound.is_some_and(|b| (head.0, head.1, i) > b)
+                {
                     self.heap.push(Reverse((head.0, head.1, i)));
                     if picks.len() >= budget {
                         break 'merge;
@@ -789,13 +833,11 @@ impl Merge {
         let source = PlSmallStr::from(self.cfg.source.as_str());
         let mut base = Vec::with_capacity(parts.len());
         let mut stacked: Option<DataFrame> = None;
-        let mut names: Vec<&str> = Vec::with_capacity(parts.len());
         let mut total = 0usize;
         for part in &parts {
             let len = part.end - part.start;
             base.push(total as IdxSize);
             total += len;
-            names.push(self.inputs[part.input].name.as_str());
             let cols: Vec<Column> = self
                 .out_schema
                 .iter()
@@ -820,6 +862,8 @@ impl Merge {
             .iter()
             .enumerate()
             .all(|(n, &(p, r))| base[p as usize] + r == n as IdxSize);
+        // One copy of the rows, the gather's: the parts are slices of the
+        // inputs' chunks, stacked without a copy.
         let mut out = if in_order {
             stacked
         } else {
@@ -829,11 +873,15 @@ impl Merge {
             );
             stacked.take(&idx)?
         };
-        out.rechunk_mut();
-        let src: StringChunked = picks
-            .iter()
-            .map(|&(p, _)| Some(names[p as usize]))
-            .collect();
+        // Each row's input's name, gathered from the names, one each.
+        let which = IdxCa::from_vec(
+            "".into(),
+            picks
+                .iter()
+                .map(|&(p, _)| parts[p as usize].input as IdxSize)
+                .collect(),
+        );
+        let src = self.names.take(&which)?;
         out.with_column(src.with_name(source).into_column())?;
         Ok(out)
     }

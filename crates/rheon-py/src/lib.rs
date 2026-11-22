@@ -1191,7 +1191,7 @@ impl PyMerge {
     fn push(slf: &Bound<'_, Self>, i: usize, df: PyDataFrame) -> PyResult<()> {
         let mut this = slf.try_borrow_mut().map_err(|_| merge_busy())?;
         if i >= this.inner.len() {
-            return Err(PyValueError::new_err(format!("no input {i}")));
+            return Err(no_input(i));
         }
         let df = df.0;
         let inner = &mut this.inner;
@@ -1204,7 +1204,7 @@ impl PyMerge {
     fn end(slf: &Bound<'_, Self>, i: usize) -> PyResult<()> {
         let mut this = slf.try_borrow_mut().map_err(|_| merge_busy())?;
         if i >= this.inner.len() {
-            return Err(PyValueError::new_err(format!("no input {i}")));
+            return Err(no_input(i));
         }
         this.inner.end(i);
         Ok(())
@@ -1241,6 +1241,13 @@ impl PyMerge {
             .save(std::path::Path::new(path))
             .map_err(|e| save_err(path, e))
     }
+}
+
+/// The error for an input index past the merge's inputs.
+fn no_input(i: usize) -> PyErr {
+    PyValueError::new_err(format!(
+        "rp.stream.merge: there is no input {i}. Give the index of an input the merge was built with."
+    ))
 }
 
 /// The error for a merge reached from a second thread while a call is on

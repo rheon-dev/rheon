@@ -365,7 +365,6 @@ fn an_input_started_again_merges_after_every_row_before_it() {
     // setting, where its input's clock stepped back past it, is caught in
     // the merged rows, as a bank grouped by it would refuse it.
     let d = df!("g" => ["A", "B", "A"], "t" => [10.0, 20.0, 9.5], "x" => [0i64, 1, 2]).unwrap();
-    let mut c = c;
     c.by = Some("g".into());
     let mut m = merge_of(std::slice::from_ref(&d), c);
     m.push(0, d).unwrap();
@@ -601,10 +600,17 @@ fn a_state_loads_only_into_the_merge_it_holds() {
     assert!(e.contains("not a rheon state"), "{e}");
     // Another kind's loader names it; a checkpoint carries it as a stage of
     // its kind, and gives it back to load.
-    let e = crate::Bank::load_bytes(&state, None).err().expect("refused");
+    let e = crate::Bank::load_bytes(&state, None)
+        .err()
+        .expect("refused");
     assert!(e.contains("these bytes are a merge run's state"), "{e}");
     let checkpoint = crate::checkpoint_bytes(&[("merge", &state[..])]).unwrap();
-    let e = err(Merge::load_bytes(&checkpoint, names(2), schemas(), cfg("t")));
+    let e = err(Merge::load_bytes(
+        &checkpoint,
+        names(2),
+        schemas(),
+        cfg("t"),
+    ));
     assert!(e.contains("load_checkpoint"), "{e}");
     let stages = crate::load_checkpoint(&checkpoint).unwrap();
     assert_eq!(stages[0].kind, crate::StateKind::Merge);

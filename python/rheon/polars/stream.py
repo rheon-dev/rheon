@@ -38,6 +38,10 @@ beside a bank. They share three rules:
        or ahead, and variances looking back, each with an optional hard
        cutoff), any number in one pass, each row out once every window over
        it has closed
+   * - :func:`merge`
+     - merges streams that each run in clock order into one stream in clock
+       order, every row kept and tagged with its stream, holding one chunk
+       of each
    * - :func:`refresh_time`
      - puts series that tick at their own times on a common grid by
        Barndorff-Nielsen, Hansen, Lunde & Shephard's refresh-time rule: a
@@ -49,8 +53,8 @@ beside a bank. They share three rules:
        stage's state back to load where it was saved
 
 Each streams: :func:`embargo` merges two sorted copies of the same input with
-Polars' ``merge_sorted``, and the other two run as an operator of the Rust core
-fed one chunk at a time, read as a lazy source.
+Polars' ``merge_sorted``, and the other three run as an operator of the Rust
+core fed one chunk at a time, read as a lazy source.
 """
 
 from __future__ import annotations
@@ -854,7 +858,7 @@ def merge(
 
 @overload
 def merge(
-    *frames: _Frame | Mapping[str, _Frame],
+    *frames: pl.LazyFrame | pl.DataFrame | Mapping[str, pl.LazyFrame | pl.DataFrame],
     clock: str,
     source: str = "source",
     by: str | None = None,
@@ -866,7 +870,7 @@ def merge(
 
 
 def merge(
-    *frames: _Frame | Mapping[str, _Frame],
+    *frames: pl.LazyFrame | pl.DataFrame | Mapping[str, pl.LazyFrame | pl.DataFrame],
     clock: str,
     source: str = "source",
     by: str | None = None,
@@ -1010,7 +1014,7 @@ def merge(
     ``pl.concat(frames, how="diagonal").sort(clock, maintain_order=True)``,
     computed a chunk of each stream at a time. Under
     ``restart_after_step_back`` a stream that starts again sorts after every
-    row before its restart: the rows of each stream's second day come after
+    row before it starts again: the rows of each stream's second day come after
     the first day's rows of every stream, as their own day's. So every stream
     must start again at the same places, each day in each stream.
 
@@ -1018,7 +1022,9 @@ def merge(
     its head, so the least head of all the streams is the next row out. The
     merge keeps the streams' heads in a heap, takes the least, and reads a
     stream's next chunk when its current one is used up. It holds one chunk
-    of each stream, and the output is the same however the chunks fall. A
+    of each stream and one chunk of output, and the output is the same
+    however the chunks fall. Each stream is read by a Polars query of its
+    own, whose reader keeps buffers of its own beside the merge's. A
     stream that steps back would put a row of its own after rows of the
     others that should follow it, so the order is checked in each stream,
     across its groups, as it is read.
@@ -1118,12 +1124,17 @@ def merge(
             return out
 
         while n_rows is None or seen < n_rows:
-            out, want = m.pull(None if n_rows is None else n_rows - seen, hold)
+            # At most a chunk's rows a pull: the output is a chunk at a time
+            # beside the one chunk of each stream the merge holds.
+            cap = rows if n_rows is None else min(rows, n_rows - seen)
+            out, want = m.pull(cap, hold)
             seen += out.height
             if out.height:
                 yield from _in_morsels(emit(out))
-            if want is None:
+            if want is None and out.height < cap:
                 break
+            if want is None:
+                continue
             if batches[want] is None:
                 batches[want] = lazies[want].collect_batches(chunk_size=rows, maintain_order=True)
             chunk = next(batches[want], None)  # type: ignore[arg-type]
@@ -1196,7 +1207,10 @@ def _restart_setting(
         except ValueError as e:
             raise ValueError(f"{who}: {key} {e}") from None
         if ns < 0:
-            raise ValueError(f"{who}: {key} must be 0 or more, but it is {text}.")
+            raise ValueError(
+                f"{who}: {key} must be 0 or more, but it is {text}. Set it to a duration of 0 or "
+                "more, or leave it out."
+            )
         return float(ns), str(text)
     if duration:
         raise ValueError(
