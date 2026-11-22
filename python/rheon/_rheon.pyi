@@ -34,6 +34,37 @@ class RefreshTime:
     def save(self, path: str) -> None: ...
     def feed(self, df: pl.DataFrame, limit: int | None = None) -> pl.DataFrame: ...
 
+class Merge:
+    """``rp.stream.merge``, fed each input's chunks in order."""
+
+    def __init__(
+        self,
+        names: list[str],
+        frames: list[pl.DataFrame],
+        clock: str,
+        source: str,
+        by: str | None = None,
+        restart: float | None = None,
+        restart_text: str | None = None,
+    ) -> None: ...
+    @staticmethod
+    def load_bytes(
+        state: bytes,
+        names: list[str],
+        frames: list[pl.DataFrame],
+        clock: str,
+        source: str,
+        by: str | None = None,
+        restart: float | None = None,
+        restart_text: str | None = None,
+    ) -> Merge: ...
+    def empty(self) -> pl.DataFrame: ...
+    def push(self, i: int, df: pl.DataFrame) -> None: ...
+    def end(self, i: int) -> None: ...
+    def pull(self, limit: int | None = None, hold: bool = False) -> tuple[pl.DataFrame, int | None]: ...
+    def save_bytes(self) -> bytes: ...
+    def save(self, path: str) -> None: ...
+
 class Windows:
     """``rp.stream.with_windows``, fed a stream's chunks in order."""
 
