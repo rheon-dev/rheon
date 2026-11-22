@@ -117,7 +117,7 @@ pub fn garch_cfg(spec: &Spec) -> Result<rheon_core::GarchCfg, String> {
         other => {
             return Err(format!(
                 "garch: vol must be \"garch\", \"gjr\", \"egarch\" or \"figarch\", but it \
-                 is {other:?}. Set vol to one of them, or leave it out for \"garch\"."
+                 is {other:?}. Use one of those words."
             ));
         }
     };
@@ -127,8 +127,8 @@ pub fn garch_cfg(spec: &Spec) -> Result<rheon_core::GarchCfg, String> {
         "skewt" => GarchDist::Skewt,
         other => {
             return Err(format!(
-                "garch: dist must be \"normal\", \"t\" or \"skewt\", but it is {other:?}. Set \
-                 dist to one of them, or leave it out for \"normal\"."
+                "garch: dist must be \"normal\", \"t\" or \"skewt\", but it is {other:?}. Use \
+                 one of those words."
             ));
         }
     };

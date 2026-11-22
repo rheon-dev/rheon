@@ -1148,6 +1148,9 @@ STATE_READS: dict[str, frozenset[str]] = {
     "corrchange": frozenset({"crit", "since_flag"}),
     "deco": frozenset({"rho"}),
     "ew_cov": frozenset({"mean_x0", "mean_x1", "std_x0", "std_x1", "corr_x0_x1"}),
+    # A variance and its forecast read the state alone; the standardized
+    # residual reads the row's own target.
+    "garch": frozenset({"variance_y"}),
     "hmm": frozenset(
         {"filtered_state0", "filtered_state1", "predicted_state0", "predicted_state1", "state"}
     ),

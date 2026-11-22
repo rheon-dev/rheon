@@ -405,10 +405,12 @@ def evidence(
 
 
 #: The kinds whose output reads no clock step, at any size: ``seqtest``'s
-#: e-process does not forget, and ``bocpd``'s hazard counts rows unless it is
-#: a duration (``test_bocpd_duration_hazard_reads_the_session_gap``). The
-#: gap's only trace on them is the session counted.
-STEP_BLIND: frozenset[str] = frozenset({"bocpd", "seqtest"})
+#: e-process does not forget, ``bocpd``'s hazard counts rows unless it is
+#: a duration (``test_bocpd_duration_hazard_reads_the_session_gap``), and
+#: ``garch``'s recursion is per observation (its start counts rows unless it
+#: is a span of the clock). The gap's only trace on them is the session
+#: counted.
+STEP_BLIND: frozenset[str] = frozenset({"bocpd", "seqtest", "garch"})
 #: The kinds a session change breaks whatever its gap, as a gap past
 #: ``gap_cap`` does: ``rcov``'s block is split there (no product pairs two
 #: returns across it), and ``corrchange`` abandons its span, windows or cycle.

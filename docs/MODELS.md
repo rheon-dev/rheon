@@ -2838,6 +2838,7 @@ import numpy as np
 import polars as pl
 from rheon import polars as rp
 
+# Simulate the process: each row's variance from the row before.
 rng = np.random.default_rng(7)
 e, s, r = 0.0, 2.5, []
 for z in rng.standard_normal(20_000):
@@ -2846,9 +2847,12 @@ for z in rng.standard_normal(20_000):
     r.append(e)
 pl.DataFrame({"r": r}).write_parquet("returns.parquet")
 
+# Fit it, a row at a time after the start of 2,000 rows.
 model = rp.spec.garch("g", targets=["r"])
 bank = rp.ModelBank([model])
 bank.fit(pl.scan_parquet("returns.parquet"))
+
+# Read the fit's terms by name and compare them with the truth.
 coef = {row["term"]: row["coef"] for row in bank.coef().iter_rows(named=True)}
 print(f"alpha: true 0.08, found {coef['alpha']:.2f}")
 print(f"beta: true 0.90, found {coef['beta']:.2f}")
