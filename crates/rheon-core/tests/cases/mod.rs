@@ -235,6 +235,12 @@ pub enum Targets {
     /// is held to, each its own draw: a process a start of 2,000 rows
     /// identifies.
     Garch(usize, Process),
+    /// None, and the first two features a correlated pair in place of the
+    /// independent ones: correlation 0.3 before the row given and 0.85
+    /// from it, each feature an Irwin-Hall draw (twelve uniforms less 6,
+    /// near-Gaussian with arithmetic alone): a correlation to test, and a
+    /// change in it (PLAN 550's realistic case for `corrchange`).
+    Correlated(usize),
 }
 
 /// The process of a [`Targets::Garch`] stream.
@@ -302,7 +308,18 @@ impl Case {
         (0..n)
             .map(|i| {
                 let shift = if (i / 12) % 2 == 1 { 2.0 } else { 0.0 };
-                let x: Vec<f64> = (0..self.n_features).map(|_| shift + lcg(&mut s)).collect();
+                let x: Vec<f64> = match self.targets {
+                    Targets::Correlated(at) => {
+                        let mut normal =
+                            || (0..12).map(|_| lcg(&mut s) / 2.0 + 0.5).sum::<f64>() - 6.0;
+                        let rho: f64 = if i < at { 0.3 } else { 0.85 };
+                        let (z1, z2) = (normal(), normal());
+                        let mut x = vec![z1, rho * z1 + (1.0 - rho * rho).sqrt() * z2];
+                        x.extend((2..self.n_features).map(|_| normal()));
+                        x
+                    }
+                    _ => (0..self.n_features).map(|_| shift + lcg(&mut s)).collect(),
+                };
                 let x0 = x.first().copied().unwrap_or(0.0);
                 let x1 = x.get(1).copied().unwrap_or(0.0);
                 let signal = 1.5 * x0 - 0.75 * x1 + 0.25;
@@ -337,7 +354,7 @@ impl Case {
                         let label = ((signal + noise + 2.0).max(0.0) as usize).min(c - 1);
                         vec![(!null).then_some(label as f64)]
                     }
-                    Targets::None => Vec::new(),
+                    Targets::None | Targets::Correlated(_) => Vec::new(),
                     Targets::Garch(..) => returns.iter().map(|r| (!null).then_some(r[i])).collect(),
                 };
                 let d = match i {
@@ -2295,6 +2312,37 @@ pub fn all() -> Vec<Case> {
             K,
             Targets::None,
             40
+        ),
+        // PLAN 550 and 553: the monitor and the sequential detector on a
+        // correlated pair whose correlation moves from 0.3 to 0.85 at row
+        // 150, saved inside a span and inside a monitoring period.
+        case!(
+            "corrchange_monitor_realistic",
+            "CorrChange",
+            CorrChange,
+            CorrChange::new(CorrChangeCfg {
+                span_rows: 60,
+                ..corrchange_cfg(CorrChangeKind::Monitor)
+            })
+            .unwrap(),
+            K,
+            Targets::Correlated(150),
+            200
+        ),
+        case!(
+            "corrchange_sequential_realistic",
+            "CorrChange",
+            CorrChange,
+            CorrChange::new(CorrChangeCfg {
+                span_rows: 50,
+                monitor_rows: 60,
+                boundary_gamma: 0.25,
+                ..corrchange_cfg(CorrChangeKind::Sequential)
+            })
+            .unwrap(),
+            K,
+            Targets::Correlated(150),
+            200
         ),
         // Task 553: each kind's span on the clock (`window_size`), saved
         // inside it: the clock, the span's first stamp, a window's keys and
