@@ -630,6 +630,11 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [messages."crates/rheon-core/src/kalman/forms.rs"]
 
+[messages."crates/rheon-polars/src/bank/closed_rows.rs"]
+
+[messages."crates/rheon-polars/src/stream/build.rs"]
+"where" = 3
+
 [messages."python/rheon/_cpu_check.py"]
 "remedy" = 2
 "where" = 2
@@ -657,6 +662,10 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."crates/rheon-core/src/hawkes.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/kalman/forms.rs#messages"]
+
+[vocabulary."crates/rheon-polars/src/bank/closed_rows.rs#messages"]
+
+[vocabulary."crates/rheon-polars/src/stream/build.rs#messages"]
 
 [vocabulary."python/rheon/_cpu_check.py#messages"]
 
