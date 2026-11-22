@@ -223,4 +223,8 @@ _INF_OK: dict[str, frozenset[str]] = {
     "expectile": frozenset({"refit_budget"}),
     # No bound on the bins' memory (docs/PLAN.md task 131).
     "marginal": frozenset({"bin_budget", "bin_huber_delta", "refit_budget"}),
+    # A cadence on the clock at `inf` never comes due by the clock: its count
+    # alone fires it (task 538).
+    "kmeans": frozenset({"update_every", "split_merge_every"}),
+    "corrchange": frozenset({"permute_every"}),
 }
