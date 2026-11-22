@@ -394,6 +394,18 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
         ALL,
     ),
     (
+        "pca",
+        r#"{"type": "pca", "n_components": 1}"#,
+        r#""targets": ["x0"], "features": ["x0", "x1"], "half_life": @50"#,
+        ALL,
+    ),
+    (
+        "pca_oja",
+        r#"{"type": "pca", "method": "oja", "n_components": 2}"#,
+        r#""targets": ["x0"], "features": ["x0", "x1"], "half_life": @50"#,
+        ALL,
+    ),
+    (
         "glm",
         r#"{"type": "glm", "refit_rows": 60}"#,
         r#""targets": ["yb"], "features": ["x0", "x1"], "half_life": @50"#,

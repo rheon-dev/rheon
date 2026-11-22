@@ -265,6 +265,7 @@ pub fn coef_fields(spec: &Spec) -> Vec<CoefField> {
             | crate::ModelKind::CorrChange { .. }
             | crate::ModelKind::Bocpd { .. }
             | crate::ModelKind::Audit { .. }
+            | crate::ModelKind::Pca { .. }
     ) {
         return Vec::new();
     }
@@ -871,6 +872,42 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                 m.quantile = *q;
                 m.lag = *lag;
                 m.component = *component;
+                fields.push(m);
+            }
+            fields.push(
+                FieldMeta::new(format!("weight_sum{suffix}"), "weight_sum")
+                    .decay(suffix, d)
+                    .src(Source::NEff(mi)),
+            );
+        }
+        return fields;
+    }
+    // pca is not a regression: per component its variance, its share, its
+    // loadings and the row's score, named as `ew_cov`'s components are, and
+    // `n_eff`; no targets or coefficients.
+    if matches!(spec.model, crate::ModelKind::Pca { .. }) {
+        let r = crate::stream::pca_cfg(spec, rheon_core::Decay::Halflife(f64::INFINITY))
+            .map_or(0, |c| c.n_components);
+        let all = spec.features.clone();
+        let labels = rheon_core::EwCovModel::labels(&spec.features, &[], &[], r, &[]);
+        let mut meta: Vec<(&str, Vec<String>, usize)> = Vec::new();
+        for j in 0..r {
+            meta.push(("pc_var", all.clone(), j));
+            meta.push(("pc_share", all.clone(), j));
+            for col in &spec.features {
+                meta.push(("pc_loading", vec![col.clone()], j));
+            }
+            meta.push(("pc_score", all.clone(), j));
+        }
+        let n_slots = labels.len();
+        let mut fields = Vec::new();
+        for (mi, (suffix, d)) in decays.iter().enumerate() {
+            for (slot, (l, (kind, cols, j))) in labels.iter().zip(&meta).enumerate() {
+                let mut m = FieldMeta::new(format!("{l}{suffix}"), kind)
+                    .decay(suffix, d)
+                    .src(Source::Stat(mi * n_slots + slot));
+                m.columns = Some(cols.clone());
+                m.component = Some(*j);
                 fields.push(m);
             }
             fields.push(

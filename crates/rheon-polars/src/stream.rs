@@ -111,6 +111,7 @@ pub enum AnyModel {
     Expectile(Box<rheon_core::Expectile>),
     Hawkes(Box<rheon_core::Hawkes>),
     Garch(Box<rheon_core::Garch>),
+    Pca(Box<rheon_core::StreamPca>),
 }
 
 /// A flush's shards, run on whichever pool the caller is in: the bank's
@@ -161,6 +162,7 @@ macro_rules! dispatch {
             AnyModel::Expectile($m) => $body,
             AnyModel::Hawkes($m) => $body,
             AnyModel::Garch($m) => $body,
+            AnyModel::Pca($m) => $body,
         }
     };
 }
@@ -534,7 +536,10 @@ impl AnyModel {
             | AnyModel::Audit(_)
             // Every read it withholds is a row's, not a failure.
             | AnyModel::Hawkes(_)
-            | AnyModel::Garch(_) => 0,
+            | AnyModel::Garch(_)
+            // The components are withheld, never failed: the rotation has no
+            // factorization to fail.
+            | AnyModel::Pca(_) => 0,
         }
     }
 
@@ -608,6 +613,8 @@ impl AnyModel {
             AnyModel::Hawkes(m) => Some(m.coefficients()),
             // Each target's process parameters, then its shape.
             AnyModel::Garch(m) => Some(m.coefficients()),
+            // pca has none: its components are its output fields.
+            AnyModel::Pca(_) => None,
         }
     }
 
@@ -632,7 +639,7 @@ mod model_cfgs;
 use model_cfgs::read_floor;
 pub use model_cfgs::{
     audit_cfg, bocpd_cfg, corrchange_cfg, deco_block_names, deco_cfg, expectile_cfg, garch_cfg,
-    glm_cfg, hawkes_cfg, hmm_cfg, huber_model, quantile_model, rcov_cfg, sgd_model,
+    glm_cfg, hawkes_cfg, hmm_cfg, huber_model, pca_cfg, quantile_model, rcov_cfg, sgd_model,
 };
 
 /// One grid combo: the rendered label plus the machine values it encodes, so
@@ -738,7 +745,8 @@ pub fn combos(spec: &Spec) -> Vec<Combo> {
         | ModelKind::Glm { .. }
         | ModelKind::Hawkes { .. }
         | ModelKind::Expectile { .. }
-        | ModelKind::Garch { .. } => vec![Combo::default()],
+        | ModelKind::Garch { .. }
+        | ModelKind::Pca { .. } => vec![Combo::default()],
         // `p` for the penalty, since `l` is a lag's (`lag_corr_l1_a_b`); and
         // no label for a path of one point, as a single ridge or half-life
         // writes none, while the machine value says which it is.
@@ -1306,13 +1314,14 @@ pub fn settled_weight(weight: f64, first: f64, settled: f64, steps: f64) -> f64 
 /// condition as not a number, so it never names that fit in its place;
 /// `unstable_rate` after it (task 278, D8), `sgd`'s gate, which no model
 /// with an earlier reason of its own has.
-pub const WITHHELD_REASONS: [&str; 6] = [
+pub const WITHHELD_REASONS: [&str; 7] = [
     "below_min_settled_frac",
     "below_min_weight",
     "above_max_error_inflation",
     "below_warm_rows",
     "ill_conditioned",
     "unstable_rate",
+    "not_separated",
 ];
 const REASON_SETTLED: u8 = 1;
 const REASON_MIN_PERIODS: u8 = 2;
@@ -1320,6 +1329,7 @@ const REASON_INFLATION: u8 = 3;
 const REASON_WARM_ROWS: u8 = 4;
 const REASON_ILL_CONDITIONED: u8 = 5;
 const REASON_UNSTABLE_RATE: u8 = 6;
+const REASON_NOT_SEPARATED: u8 = 7;
 
 /// The settled fraction at which a readiness notice judges a stream
 /// (docs/WARMUP-AND-CONVERGENCE.md §3): the one rule all three notices
@@ -4315,6 +4325,16 @@ fn run_instance(
         // claim it; the model's own null is then named for what it is.
         if reason == 0 && ill {
             reason = REASON_ILL_CONDITIONED;
+        }
+        // A `pca` component its model withheld because the data does not
+        // yet tell it apart from a neighbour, where no gate above has
+        // withheld the row: such a component is the only null a `pca` row
+        // writes past its floor.
+        if reason == 0
+            && matches!(inst.spec.model, ModelKind::Pca { .. })
+            && step.pred.iter().any(|p| p.is_nan())
+        {
+            reason = REASON_NOT_SEPARATED;
         }
         // A target withheld because its learning rate is past its stability
         // bound, where no gate above has withheld the row; said once an

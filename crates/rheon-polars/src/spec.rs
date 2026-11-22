@@ -1495,6 +1495,30 @@ pub enum ModelKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_state_bytes: Option<u64>,
     },
+    /// Streaming principal components (`rheon_core::StreamPca`): the top
+    /// `n_components` directions of the decayed covariance of the features,
+    /// in `O(n_components x features)` state, by the incremental SVD, CCIPCA
+    /// or Oja's rule. Per component its variance, its share of the total
+    /// variance, its loadings and the row's score, each withheld while the
+    /// component is within its sampling error of a neighbour's. No targets.
+    #[serde(rename = "pca")]
+    Pca {
+        /// Components emitted, `1..=features`; absent is 2 (or 1 for one
+        /// feature).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        n_components: Option<usize>,
+        /// `"svd"` (the default), `"ccipca"` or `"oja"`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        method: Option<String>,
+        /// `oja`'s gain on its rate; absent is
+        /// [`rheon_core::OJA_DEFAULT_LEARNING_RATE`]. Refused for the others.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        learning_rate: Option<f64>,
+        /// The bytes a group's state may hold, checked at the call: the
+        /// state's size is the shape's. Default 256 KB, at most 64 MiB.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
+    },
 }
 
 /// The two sides of a `seqtest` comparison, as [`ModelKind::compares`]
@@ -1583,6 +1607,7 @@ impl ModelKind {
         "hawkes",
         "expectile",
         "garch",
+        "pca",
     ];
 
     pub fn kind_name(&self) -> &'static str {
@@ -1613,6 +1638,7 @@ impl ModelKind {
             ModelKind::Hawkes { .. } => "hawkes",
             ModelKind::Expectile { .. } => "expectile",
             ModelKind::Garch { .. } => "garch",
+            ModelKind::Pca { .. } => "pca",
         }
     }
 
@@ -1650,6 +1676,7 @@ impl ModelKind {
                 | ModelKind::CorrChange { .. }
                 | ModelKind::Bocpd { .. }
                 | ModelKind::Audit { .. }
+                | ModelKind::Pca { .. }
         )
     }
 
@@ -1911,6 +1938,7 @@ impl ModelKind {
                 | ModelKind::CorrChange { .. }
                 | ModelKind::Bocpd { .. }
                 | ModelKind::Audit { .. }
+                | ModelKind::Pca { .. }
         )
     }
 
@@ -2835,6 +2863,10 @@ impl Spec {
             ModelKind::Hawkes { .. } => 0.0,
             // The start is the gate: nothing is reported before it is fitted.
             ModelKind::Garch { .. } => 0.0,
+            // The components' own gate is the eigengap against the sampling
+            // error at Kish's effective rows: no count of rows says when the
+            // data has told a component apart from its neighbours.
+            ModelKind::Pca { .. } => 0.0,
             // The noise gate is this model's readiness gate
             // (docs/WARMUP-AND-CONVERGENCE.md §2.1): `max_error_inflation`
             // tracks the model where a count of weight cannot, and the

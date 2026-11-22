@@ -1120,6 +1120,14 @@ fn every_kind_refuses_or_loads_corruption(prefix_step: usize, flip_step: usize) 
             "[]",
             false,
         ),
+        // Its directions started, the last kept one beside the emitted.
+        (
+            "pca",
+            r#"{"type": "pca", "n_components": 1}"#,
+            r#"["x0"]"#,
+            r#"["x0", "x1"]"#,
+            true,
+        ),
     ];
     let mut seen = Vec::new();
     for &(kind, model, targets, features, half_life) in kinds {

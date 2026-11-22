@@ -1364,3 +1364,40 @@ mod refit_tests {
         }
     }
 }
+
+/// A `pca` spec's [`rheon_core::StreamPcaCfg`]: the features its columns,
+/// two components unless the spec gives a count (one for one feature),
+/// the incremental SVD unless it names a method. Every value is the model's
+/// own to check.
+pub fn pca_cfg(spec: &Spec, decay: Decay) -> Result<rheon_core::StreamPcaCfg, String> {
+    use rheon_core::PcaMethod;
+    let ModelKind::Pca {
+        n_components,
+        method,
+        learning_rate,
+        max_state_bytes,
+    } = &spec.model
+    else {
+        return Err(not_a(spec, "pca_cfg", "pca"));
+    };
+    let method = match method.as_deref().unwrap_or("svd") {
+        "svd" => PcaMethod::Svd,
+        "ccipca" => PcaMethod::Ccipca,
+        "oja" => PcaMethod::Oja,
+        other => {
+            return Err(format!(
+                "pca: method must be \"svd\", \"ccipca\" or \"oja\", but it is {other:?}. \
+                 Use one of those words."
+            ));
+        }
+    };
+    Ok(rheon_core::StreamPcaCfg {
+        n_features: spec.k(),
+        n_components: n_components.unwrap_or(spec.k().min(2)),
+        method,
+        decay,
+        min_weight: spec.min_periods_or_default(),
+        learning_rate: *learning_rate,
+        max_state_bytes: *max_state_bytes,
+    })
+}
