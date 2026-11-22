@@ -139,7 +139,7 @@ impl PcaMethod {
 }
 
 /// `oja`'s gain where a spec sets none.
-pub const OJA_DEFAULT_LEARNING_RATE: f64 = 2.0;
+pub const OJA_DEFAULT_LEARNING_RATE: f64 = 4.0;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StreamPcaCfg {

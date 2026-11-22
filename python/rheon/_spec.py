@@ -816,6 +816,7 @@ __all__ = [
     "micro",
     "output_fields",
     "pa",
+    "pca",
     "quantile",
     "rls",
     "seqtest",
@@ -5129,13 +5130,14 @@ from rheon._spec_expectile import expectile  # noqa: E402
 from rheon._spec_garch import garch  # noqa: E402
 from rheon._spec_glm import glm  # noqa: E402
 from rheon._spec_gradient import sgd  # noqa: E402
+from rheon._spec_pca import pca  # noqa: E402
 from rheon._spec_point import hawkes  # noqa: E402
 from rheon._spec_regimes import hmm, rcov  # noqa: E402
 from rheon._spec_robust import huber, quantile  # noqa: E402
 from rheon._spec_trend import holt  # noqa: E402
 
 UNSUPERVISED = frozenset(
-    {"ew_cov", "kmeans", "micro", "deco", "rcov", "hmm", "corrchange", "bocpd", "audit"}
+    {"ew_cov", "kmeans", "micro", "deco", "rcov", "hmm", "corrchange", "bocpd", "audit", "pca"}
 )
 
 _NUMERIC_KEYS = _numeric_keys()
