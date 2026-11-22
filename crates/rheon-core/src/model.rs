@@ -1444,4 +1444,23 @@ mod tests {
             path
         );
     }
+
+    /// A model whose state the settings fix has no warning to take and no
+    /// cap to pass: the trait's defaults say `None` (`holt` keeps them).
+    #[test]
+    fn a_model_of_fixed_state_has_no_warning_and_no_overrun() {
+        let mut m = crate::Holt::new(crate::HoltCfg {
+            n_targets: 1,
+            level_half_life: 10.0,
+            trend_half_life: 20.0,
+            min_weight: 0.0,
+            trend: true,
+        })
+        .unwrap();
+        for i in 0..5 {
+            m.step(&[], &[Some(i as f64)], 1.0, 1.0);
+            assert_eq!(m.take_state_warning(), None);
+            assert_eq!(m.state_over_cap(), None);
+        }
+    }
 }

@@ -333,15 +333,15 @@ hazard](choose-a-changepoint-hazard.md) sets how often it expects a
 break.
 
 **Date a break from `run_mode`, since `p_change` moves on one row's
-evidence.** Under a number `hazard`, `p_change` is `P(r ≤ 1)` given the
-row, and under a duration the chance that the row began a run. A break
+evidence.** Under `hazard_rows`, `p_change` is `P(r ≤ 1)` given the
+row, and under `hazard`, a clock time, the chance that the row began a run. A break
 that takes several rows to show barely lifts it: 0.02 at most in the 50 rows after the spread quadruples in the example in
 [`bocpd` in MODELS.md](../MODELS.md#bocpd--how-long-has-this-regime-lasted).
 [`rheon.spec.bocpd`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.bocpd)'s
 Notes, under *Reading p_change and run_mode*, measure three kinds of
 break.
 
-1. **Build a `bocpd` spec on the columns, with a `hazard`.** Give
+1. **Build a `bocpd` spec on the columns, with a hazard.** Give
    `group=` for one model per series.
 2. **Run the query.** Each row gains `run_mode` and `p_change`.
 3. **Read the regime's age from `run_mode`,** the most likely run length
@@ -373,7 +373,7 @@ for stock, at in breaks.items():
 pl.concat(frames).sort("i", "stock").write_parquet("regimes.parquet")
 
 # 1 and 2. One bocpd per stock, a break expected every 500 of its rows, and the query run.
-runs = rp.spec.bocpd("regime", features=["ret"], group="stock", hazard=500.0)
+runs = rp.spec.bocpd("regime", features=["ret"], group="stock", hazard_rows=500.0)
 out = pl.scan_parquet("regimes.parquet").rheon.fit_predict([runs]).rheon.unnest([runs]).collect()
 # 3 and 4. The row each current run began on, in the stock's own rows and in the stream's.
 out = out.with_columns(

@@ -45,7 +45,7 @@ const SPECS: &[(&str, &str, &str)] = &[
     ),
     (
         "bocpd",
-        r#"{"type": "bocpd", "hazard": 250.0, "covariance_type": "diag"}"#,
+        r#"{"type": "bocpd", "hazard_rows": 250.0, "covariance_type": "diag"}"#,
         r#""targets": ["x0"], "features": ["x0", "x1"]"#,
     ),
     (

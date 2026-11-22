@@ -103,7 +103,7 @@ duration) and, where noted, a row-count sibling.
 | `corr_change` | `window_rows`, `monitor_rows` | rows | a ring of rows | **open**: a clock window (`window_size`), its rows checked as they come; Wied's and Dette's statistics are defined over the rows of a span, so the clock form is the same test over a data-sized count |
 | | `permute_every_rows` / **`permute_every`** | rows / number, duration | no | **both, from part 2** (window kind) |
 | | `bandwidth`, `perm_block`, `n_perm` | rows; a count | no | rows: Bartlett lags and a block bootstrap's block are counts of observations |
-| `bocpd` | `hazard` | a number of rows on every clock, or a duration | no | both forms, but a number is rows on a numeric clock too, where every other `Span` is clock units: **the coordinator's decision** (below) |
+| `bocpd` | `hazard_rows` / **`hazard`** | rows (any clock) / number, duration | no | **both, from task 547**: `hazard_rows` the per-row hazard `1/hazard_rows` after each row (Adams and MacKay's, the default); `hazard` a `Span` like every other, the step's chance `1 − exp(−dt/τ)` before the row on every clock, rows without one. A number `hazard` read as rows on every clock before 547 |
 | | `max_run` | rows | is the cap | a bound on state (run lengths are counted in rows) |
 | | `warm_rows` / **`warm_span`** | rows / number, duration | the prior's rows | **both, from part 2**, held to its 256 MiB |
 | `audit` | `distinct_cap` | count | is the cap | a bound on state |
@@ -199,13 +199,13 @@ duration) and, where noted, a row-count sibling.
 
 ## Open, for the coordinator
 
-1. **`bocpd`'s `hazard` as a number on a numeric clock** is a count of rows,
-   where every other `Span` is the clock's units there. Making it clock
-   units would move every output of a numeric-clock `bocpd` that gives a
-   number, so it is the user's call: keep it (and say in the docs that a
-   number is rows on every clock, a duration time), or move it with a
-   CHANGELOG entry.
-   The coordinator, 2026-11-22: left as it is for now, taken to the user.
+1. **`bocpd`'s `hazard` as a number on a numeric clock** was a count of
+   rows, where every other `Span` is the clock's units there. The
+   coordinator, 2026-11-22: left as it is for now, taken to the user. The
+   user, 2026-11-22: "Allow both" (STUDY-549 part (b)). **Settled by task
+   547**: `hazard_rows` is the count, `hazard` the clock form on every
+   clock; a number `hazard` without a clock or on a numeric one moves, with
+   a CHANGELOG `Moves:` line.
 2. **What remains** (part 2's "Not built, and why"): `marginal`'s
    `bin_warm_rows` and `bin_refit_rows` (a cap and a refit reservation that
    agree), and `corrchange`'s `window_rows` and `monitor_rows` (statistics

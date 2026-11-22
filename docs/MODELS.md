@@ -298,7 +298,7 @@ readiness fields:
 | field | on | what it holds |
 |---|---|---|
 | `settled_frac` | every model but `marginal`, `rcov` and `audit` | how far the model has come toward its steady state under decay |
-| `withheld_reason` | every model but `marginal`, `rcov` and `audit` | why `pred_y` is null, or null when it is not: `below_min_settled_frac`, `below_min_weight`, `above_max_error_inflation`, `below_warm_rows` (the rows `kmeans`, `hmm` and `bocpd` hold to seed themselves from, and the rows before `kalman` has sized any of a target's coefficients, standardized with no intercept), `ill_conditioned` (an `ewridge` fit whose normal equations are too nearly singular to keep a digit) or `unstable_rate` (an `sgd` target whose learning rate is past its stability bound, so the fit diverges), in that order of precedence |
+| `withheld_reason` | every model but `marginal`, `rcov` and `audit` | why `pred_y` is null, or null when it is not: `below_min_settled_frac`, `below_min_weight`, `above_max_error_inflation`, `below_warm_rows` (the rows `kmeans`, `hmm` and `bocpd` hold to seed themselves from, the rows `garch` buffers for a target's start, and the rows before `kalman` has sized any of a target's coefficients, standardized with no intercept), `ill_conditioned` (an `ewridge` fit whose normal equations are too nearly singular to keep a digit), `unstable_rate` (an `sgd` target whose learning rate is past its stability bound, so the fit diverges) or `not_identified` (a `garch` start whose rows do not tell its variance process from a constant variance), in that order of precedence |
 | `error_inflation_y` | `ewridge`, `rls`, `kalman`, under `emit_error_inflation` | the row's own estimation variance over the noise: high on a row leaning on a direction the data never showed, at one triangular solve a row |
 | `support_coef` | `ewridge`, `huber`, `quantile`, beside `coef` | each coefficient's data share, `1 - ridge * (S^-1)_jj` on the system the solve inverts. A duplicated pair of features reads 0.5 each |
 | `se_coef` | `ewridge`, `rls`, `kalman`, under `emit_se_coef`, beside `coef` | each coefficient's standard error in its own units: `sigma` times the fit's own covariance, `kalman`'s posterior exactly. A report, not a gate; it errs large in warm-up and under a ridge |
@@ -2956,9 +2956,24 @@ near 1) whose filter does contract.
 **The start.** The first `start_rows` rows of a target, or the rows of the
 first `start_span` of the clock, are fitted by the model's own projected
 Newton on their likelihood, from a small grid, and replayed at the fit to
-build `H`. A fit that does not converge, or sits on a bound of the
-process's parameters, waits for twice the rows and refits, at most twice,
-while `max_state_bytes` holds the doubled buffer.
+build `H`. They report nothing, as `below_warm_rows`. The Newton runs until
+a step is at the parameters' rounding, so where it stops is not a matter of
+`ln`'s last bits. A fit is at its optimum when its Newton decrement, `½ gᵀ
+M⁻¹ g` with `M` the observed curvature, is at most `10⁻⁶` nats.
+
+**It reports only a process its rows identify.** On returns with no
+conditional variance the likelihood is flat along a ridge, where `β` is not
+identified once `α` is 0, and any fit there is noise. So a start's fit is
+stepped from only when its likelihood-ratio statistic against a constant
+variance, `2 (l_fit − l_const)` with the weights at Kish's count, reaches
+χ² at 0.999 for the restrictions a constant variance puts on the process.
+That is 13.8 for `garch` (`α = β = 0`), and 16.3 for `gjr`, `egarch` and
+`figarch` (three each). Until one does, the start waits for twice the rows and
+refits, at most twice, while `max_state_bytes` holds the doubled buffer,
+and then buffers afresh; its rows are withheld as `not_identified`. A fit
+that passes but is not at its optimum, or sits on a bound of the process's
+parameters, waits and refits the same way, and with no doubling left is
+stepped from.
 
 **Variance targeting** (`variance_targeting=True`, `vol="garch"` with
 normal innovations) sets the level by the running mean square, `ω = v̄ (1 −
@@ -3864,11 +3879,12 @@ Its parameters, their defaults and what each refuses are in its
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md#bocpd). The parameters
 every spec takes are in [What every spec takes](#what-every-spec-takes),
 apart from `half_life` and `lam`, which it refuses: the run-length posterior
-does the forgetting, and `hazard`, the expected run length, sets how fast.
+does the forgetting, and the hazard, the expected run length, sets how fast:
+`hazard_rows` in rows, or `hazard` in clock time.
 
 #### The update
 
-With `H = 1/hazard` the chance of a break after each row, and `π_r` the
+With `H = 1/hazard_rows` the chance of a break after each row, and `π_r` the
 posterior predictive of run length `r` for this row, the model runs their
 Algorithm 1:
 
@@ -3877,12 +3893,21 @@ growth:      P(r_t = r+1, x_{1:t}) = P(r_{t−1} = r, x_{1:t−1})·π_r·(1 −
 changepoint: P(r_t = 0,   x_{1:t}) = Σ_r P(r_{t−1} = r, x_{1:t−1})·π_r·H
 ```
 
-Under a duration `hazard`, such as `"1h"`, the duration is `τ`, the
-expected time between changepoints. The step of `d` into a row then carries
-the chance `h = 1 − exp(−d/τ)` that a break fell inside it. That
-chance belongs before the row, so `h` of every run's mass moves to the
-empty run before the row is read. Algorithm 1 then runs with
-`H = 0`, since no time has passed since the row.
+Under `hazard`, `τ` is the expected clock time between changepoints: a
+number of the clock's units, rows without a clock, or a duration such as
+`"1h"` on a temporal clock. The step of `d` into a row carries the chance
+`h = 1 − exp(−d/τ)` that a break fell inside it. That chance belongs before
+the row, so `h` of every run's mass moves to the empty run before the row
+is read. Algorithm 1 then runs with `H = 0`, since no time has passed since
+the row.
+
+`hazard_rows` is Adams and MacKay's hazard, one step an observation: a break
+is as likely after any row, however far apart the rows fall. `hazard` says
+breaks come in time, so a long gap makes one near certain and a row that
+shares the last row's stamp cannot begin a run. On steps of one unit the
+two are one model at `hazard_rows = 1/(1 − e^{−1/τ})`, every output the
+same but `p_change`, which the per-row form reads with `H` at `r = 0`:
+`p_rows = H + (1 − H)·p_clock`.
 
 #### Example
 
@@ -3902,7 +3927,7 @@ scale = np.where(np.arange(n) < 1000, 1.0, 4.0)               # the truth: the s
 pl.DataFrame({"x": rng.standard_normal(n) * scale}).write_parquet("spread.parquet")
 
 # Fit, and date each row's current run from run_mode.
-runs = rp.spec.bocpd("runs", features=["x"], hazard=500.0)    # a break expected every 500 rows
+runs = rp.spec.bocpd("runs", features=["x"], hazard_rows=500.0)    # a break expected every 500 rows
 out = pl.scan_parquet("spread.parquet").rheon.fit_predict([runs]).collect().unnest("runs")
 out = out.with_row_index("row").with_columns(began=pl.col("row") - pl.col("run_mode"))   # the row the current run began on
 # The dating of the break, and how little p_change moved.
@@ -3969,7 +3994,7 @@ affected.
 **It flags a step up in the spread at once, and dates a step down by the
 run length.** Adams and MacKay's own finance example (a = 1, b = 1e-4,
 hazard = 250) is `degrees_of_freedom_prior=2.0`, `covariance_prior=[2e-4]`
-and `hazard=250.0`. Under it, with `max_run=600`, a tenfold step up in the
+and `hazard_rows=250.0`. Under it, with `max_run=600`, a tenfold step up in the
 spread lifts `p_change` above 0.5 within ten rows, and `run_mode` dates it
 to its row. The step back down is dated within one row.
 

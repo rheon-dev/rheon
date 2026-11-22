@@ -42,6 +42,20 @@ most 6. It owes no shrinkage with the rows.
 The t truths have `nu = 6`, so the returns' fourth moment is finite and the
 standard errors exist. EGARCH is held at the study's truth, `beta = 0.97`,
 and at `beta = 0.985`, where the stricter invertibility guards bind.
+
+**The start itself** (PLAN 548, STUDY-549) is held to `arch` on its own
+rows: its fit scored by `arch`'s likelihood (`am.fix`) against the best of
+`arch`'s fits from its default start and from the start's fit, at starts of
+500, 1,000 and 2,000 rows, on these truths and on persistence-0.90 ones
+(`LO`). At 1,000 and 2,000 rows no start may be short of `arch` by more
+than 1e-6 nats (measured 9.1e-13 at most, 1,350 starts); at 500 rows a
+start can converge to a lower local maximum the grid's best point chose
+(2 of 650 short by more than 0.01 nats, at most one a cell), held at two a
+cell. A start waits until its likelihood-ratio statistic against constant
+variance reaches chi-squared at 0.999 for its restrictions (2 for
+`garch`, 3 for `gjr`, `egarch` and `figarch`); that wait is held to
+`arch`'s own test, its GARCH fit against its `ConstantVariance` fit, and
+withholds no 2,000-row start of these truths.
 """
 
 from __future__ import annotations
@@ -78,6 +92,19 @@ FORMS = {
     "figarch": ("figarch", "normal", (0.03, 0.2, 0.4, 0.5), 4),
 }
 SHAPE = {"normal": (), "t": (6.0,), "skewt": (6.0, -0.2)}
+#: The persistence-0.90 truths: (vol, dist, the truth).
+LO = {
+    "garch": ("garch", "normal", (0.10, 0.10, 0.80)),
+    "gjr": ("gjr", "normal", (0.10, 0.05, 0.10, 0.80)),
+    "egarch": ("egarch", "normal", (0.0, 0.20, -0.10, 0.90)),
+    "garch_t": ("garch", "t", (0.10, 0.10, 0.80)),
+    "garch_skewt": ("garch", "skewt", (0.10, 0.10, 0.80)),
+    "gjr_t": ("gjr", "t", (0.10, 0.05, 0.10, 0.80)),
+}
+#: The likelihood-ratio statistic's cut, chi-squared at 0.999 for the
+#: restrictions constant variance puts on each process.
+LR_CUT = {"garch": float(chi2.ppf(0.999, 2)), "gjr": float(chi2.ppf(0.999, 3))}
+LR_CUT["egarch"] = LR_CUT["figarch"] = LR_CUT["gjr"]
 ABS_Z = math.sqrt(2.0 / math.pi)
 
 
@@ -122,6 +149,30 @@ def simulate(form: str, n: int, seed: int) -> np.ndarray:
             e = math.sqrt(s) * z[t]
             out[t] = e
     return out[burn:]
+
+
+def simulate_lo(form: str, n: int, seed: int) -> np.ndarray:
+    """A persistence-0.90 truth (`LO`), after 1,000 rows discarded, its
+    innovations seeded by the form and the seed."""
+    vol, dist, th = LO[form]
+    rng = np.random.default_rng([549, sorted(LO).index(form), seed])
+    z = innovations(dist, n + 1000, rng)
+    out = np.empty(n + 1000)
+    if vol == "egarch":
+        om, a, g, b = th
+        lv, zp = om / (1.0 - b), 0.0
+        for t in range(n + 1000):
+            lv = om + a * (abs(zp) - ABS_Z) + g * zp + b * lv
+            out[t] = math.exp(0.5 * lv) * z[t]
+            zp = z[t]
+    else:
+        om, a, g, b = th if vol == "gjr" else (th[0], th[1], 0.0, th[2])
+        s, e = om / (1.0 - a - 0.5 * g - b), 0.0
+        for t in range(n + 1000):
+            s = om + (a + (g if e < 0 else 0.0)) * e * e + b * s
+            e = math.sqrt(s) * z[t]
+            out[t] = e
+    return out[1000:]
 
 
 def arch_model_of(form: str, r: np.ndarray):  # noqa: ANN201
@@ -408,3 +459,160 @@ def test_fifty_seeds_of_the_targeted_form():
     assert np.percentile(d, 90) <= 3.0, np.percentile(d, 90)
     assert np.median(over) <= 1.0, np.median(over)
     assert over.max() <= 6.0, over.max()
+
+
+# --- the start against arch on its own rows (PLAN 548) -----------------------
+
+
+def vol_dist(truth: str, form: str) -> tuple[str, str]:
+    return FORMS[form][:2] if truth == "hi" else LO[form][:2]
+
+
+def series_of(truth: str, form: str, n: int, seed: int) -> np.ndarray:
+    return simulate(form, n, seed) if truth == "hi" else simulate_lo(form, n, seed)
+
+
+def start_of(truth: str, form: str, r: np.ndarray, start: int) -> dict:
+    """The bank's start on `r` with `start_rows=start`: the reason its first
+    fit gave the row after it, the row it first reported on, and, where it
+    reported, its fit against `arch`'s on the start's own rows -- `short`,
+    the best of `arch`'s fits from its default start and from the start's
+    fit, less the start's fit, both by `arch`'s likelihood."""
+    vol, dist = vol_dist(truth, form)
+    spec = rp.spec.garch("g", targets=["r"], vol=vol, dist=dist, start_rows=start, coef_every=0)
+    out = rp.ModelBank([spec]).fit_predict(pl.DataFrame({"r": r})).unnest("g")
+    var = out["variance_r"].to_numpy().astype(float)
+    reason = out["withheld_reason"].cast(pl.String).to_list()
+    got = {"first": reason[start], "n0": None, "short": None}
+    if not np.isfinite(var).any():
+        return got
+    n0 = int(np.argmax(np.isfinite(var)))
+    # a start's buffer doubles in place, or is buffered afresh at four times
+    rows = r[:n0] if n0 in (start, 2 * start, 4 * start) else r[n0 - 4 * start : n0]
+    theta = np.asarray(out["coef"].to_list()[n0 - 1], dtype=float)
+    am = arch_model_of(form, rows) if truth == "hi" else lo_model(form, rows)
+    ours = float(am.fix(theta).loglikelihood)
+    best = max(
+        float(am.fit(disp="off", starting_values=sv, options={"maxiter": 1000}).loglikelihood)
+        for sv in (None, theta)
+    )
+    got.update(n0=n0, short=best - ours)
+    return got
+
+
+def lo_model(form: str, r: np.ndarray):  # noqa: ANN201
+    vol, dist, _ = LO[form]
+    kw = {"garch": dict(vol="GARCH", p=1, o=0, q=1), "gjr": dict(vol="GARCH", p=1, o=1, q=1)}.get(
+        vol, dict(vol="EGARCH", p=1, o=1, q=1)
+    )
+    return arch_model(r, mean="Zero", dist=dist, rescale=False, **kw)
+
+
+#: Every truth a start is held on: (the truth set, the form).
+STARTS = [("hi", f) for f in sorted(FORMS)] + [("lo", f) for f in sorted(LO)]
+
+
+@pytest.mark.parametrize(("truth", "form"), STARTS)
+def test_the_default_start_is_arch_fit_of_its_rows(truth, form):
+    """Seed 0 of each truth at the default start of 2,000 rows: its first fit
+    does not wait on the evidence, and the fit it reports from (the first,
+    or a refit of twice or four times the rows where a fit sat on a bound)
+    is short of `arch` by at most 1e-6 nats."""
+    got = start_of(truth, form, series_of(truth, form, 8001, 0), 2000)
+    assert got["first"] != "not_identified", (truth, form)
+    assert got["short"] is not None and got["short"] <= 1e-6, (truth, form, got)
+
+
+#: Each truth at each start; FIGARCH's start is 2,000 rows at least.
+START_CELLS = [
+    (truth, form, start)
+    for truth, form in STARTS
+    for start in (500, 1000, 2000)
+    if start == 2000 or FORMS.get(form, ("",))[0] != "figarch"
+]
+
+
+@pytest.mark.extended(reason="50 seeds a truth and a start, a bank and two arch fits each")
+@pytest.mark.parametrize(("truth", "form", "start"), START_CELLS)
+def test_no_start_is_short_of_arch(truth, form, start):
+    gots = [start_of(truth, form, series_of(truth, form, 10_000, s), start) for s in SEEDS]
+    shorts = np.array([g["short"] for g in gots if g["short"] is not None])
+    assert len(shorts) == len(gots), "every realistic series starts within 10,000 rows"
+    if start >= 1000:
+        assert shorts.max() <= 1e-6, (truth, form, start, shorts.max())
+    else:
+        assert (shorts > 0.01).sum() <= 2, (truth, form, np.sort(shorts)[-3:])
+    if start == 2000:
+        waits = sum(g["first"] == "not_identified" for g in gots)
+        assert waits == 0, (truth, form, waits)
+
+
+def arch_lr(vol: str, dist: str, r: np.ndarray) -> tuple[float, np.ndarray]:
+    """`arch`'s likelihood-ratio statistic: its GARCH-family fit against its
+    `ConstantVariance` fit, with the same innovations, on the same rows; and
+    the fit's process parameters."""
+    kw = {"garch": dict(vol="GARCH", p=1, o=0, q=1), "gjr": dict(vol="GARCH", p=1, o=1, q=1)}.get(
+        vol, dict(vol="EGARCH", p=1, o=1, q=1)
+    )
+    full = arch_model(r, mean="Zero", dist=dist, rescale=False, **kw)
+    const = arch_model(r, mean="Zero", vol="Constant", dist=dist, rescale=False)
+    res = full.fit(disp="off", options={"maxiter": 1000})
+    lc = const.fit(disp="off", options={"maxiter": 1000}).loglikelihood
+    k = 3 if vol == "garch" else 4
+    return 2.0 * float(res.loglikelihood - lc), np.asarray(res.params)[:k]
+
+
+def in_our_set(vol: str, theta: np.ndarray) -> bool:
+    """Whether `arch`'s fit is in the set the bank fits over: EGARCH's box,
+    `alpha >= |gamma|`, which `arch` leaves free (a negative news term, whose
+    filter need not contract); the others' persistence within the bank's
+    margin, `1 - 1e-4`."""
+    if vol == "egarch":
+        return bool(theta[1] >= abs(theta[2]) and theta[1] <= 1.0 and theta[3] <= 1.0 - 1e-4)
+    persistence = theta[1] + theta[2] if vol == "garch" else theta[1] + theta[2] / 2 + theta[3]
+    return bool(persistence <= 1.0 - 1e-4)
+
+
+def lr_cases(seeds: range) -> list[tuple[str, str, int]]:
+    return [(t, f, s) for t, f in STARTS if FORMS.get(f, ("",))[0] != "figarch" for s in seeds] + [
+        ("iid", f, s) for f in sorted(LO) for s in seeds
+    ]
+
+
+def lr_agreement(cases: list[tuple[str, str, int]]) -> tuple[int, int, list]:
+    """Of the 500-row starts, how many `arch`'s test decides clearly (its
+    statistic 0.5 or more from the cut, beyond its optimizer's reach, and
+    its fit in the bank's set), and those where the bank's wait and `arch`'s
+    test differ."""
+    clear, differ = 0, []
+    for truth, form, seed in cases:
+        if truth == "iid":
+            vol, dist, _ = LO[form]
+            rng = np.random.default_rng([5490, sorted(LO).index(form), seed])
+            r = innovations(dist, 600, rng)
+        else:
+            vol, dist = vol_dist(truth, form)
+            r = series_of(truth, form, 600, seed)
+        lr, theta = arch_lr(vol, dist, r[:500])
+        if abs(lr - LR_CUT[vol]) < 0.5 or not in_our_set(vol, theta):
+            continue
+        clear += 1
+        got = start_of(truth, form, r, 500)
+        if (got["first"] == "not_identified") != (lr < LR_CUT[vol]):
+            differ.append((truth, form, seed, lr, got["first"]))
+    return clear, len(cases), differ
+
+
+def test_the_wait_is_arch_likelihood_ratio_test():
+    """Two seeds of every truth and of returns with no conditional variance,
+    at a start of 500 rows, where both sides of the cut are common: the
+    bank's first fit waits (`not_identified`) exactly where `arch`'s
+    statistic is under the cut."""
+    clear, n, differ = lr_agreement(lr_cases(range(2)))
+    assert clear >= n // 2 and not differ, (clear, n, differ)
+
+
+@pytest.mark.extended(reason="20 seeds of 19 truths at 500 rows, two arch fits each")
+def test_the_wait_is_arch_likelihood_ratio_test_on_twenty_seeds():
+    clear, n, differ = lr_agreement(lr_cases(range(20)))
+    assert clear >= n * 3 // 4 and not differ, (clear, n, differ)

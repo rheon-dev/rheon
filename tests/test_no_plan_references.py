@@ -152,6 +152,7 @@ FILES: list[str] = [
     "docs/how-to/track-the-average-correlation.md",
     "docs/how-to/estimate-a-blocks-covariance-from-ticks.md",
     "docs/how-to/align-series-that-tick-at-their-own-times.md",
+    "docs/how-to/merge-streams-by-the-clock.md",
     "docs/how-to/keep-kmeans-centers-on-the-data.md",
     "docs/how-to/choose-micro-eps.md",
     "docs/how-to/choose-a-covariance-type.md",

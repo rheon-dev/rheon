@@ -69,12 +69,14 @@ def test_the_variance_is_the_recursion_at_the_reported_parameters(kw):
     """Each row's variance is the recursion from the row before, at the
     parameters the bank reported after that row, to rounding."""
     gamma = 0.1 if "vol" in kw else 0.0
-    df = pl.DataFrame({"y": _returns(800, 3, gamma)})
+    # a series whose start of 100 rows, doubled at most twice, tells its
+    # process from a constant variance (a start that does not waits)
+    df = pl.DataFrame({"y": _returns(1200, 9, gamma)})
     out = _out(_spec(coef_every=0, **kw), df)
     y, s = df["y"].to_numpy(), out["variance_y"].to_numpy()
     coef = out["coef"].to_list()
     checked = 0
-    for t in range(200, 799):
+    for t in range(200, 1199):
         th = coef[t]
         if th is None or not np.isfinite(s[t]):
             continue
@@ -85,7 +87,7 @@ def test_the_variance_is_the_recursion_at_the_reported_parameters(kw):
             want = th[0] + (th[1] + (th[2] if y[t] < 0 else 0.0)) * e2 + th[3] * s[t]
         assert abs(s[t + 1] - want) <= 1e-13 * want, (t, s[t + 1], want)
         checked += 1
-    assert checked > 500
+    assert checked > 700
 
 
 def test_figarch_is_its_weights_over_the_squared_returns():
@@ -110,7 +112,7 @@ def test_a_rows_variance_is_read_before_the_row():
     """The variance a row reports does not read the row's return: changing
     it moves the row's standardized residual, and the variance of the next
     row, alone."""
-    df = pl.DataFrame({"y": _returns(400, 5)})
+    df = pl.DataFrame({"y": _returns(400, 9)})
     s = _spec()
     a = _out(s, df)
     b = _out(
@@ -122,7 +124,10 @@ def test_a_rows_variance_is_read_before_the_row():
     assert a["variance_y"][:301].equals(b["variance_y"][:301])
     assert a["std_resid_y"][300] != b["std_resid_y"][300]
     assert a["variance_y"][301] != b["variance_y"][301]
-    assert a["variance_y"][:100].is_null().all() and a["variance_y"][100:].is_not_null().all()
+    # nothing before the start, a number on every row from it
+    n0 = int(np.argmax(a["variance_y"].is_not_null().to_numpy()))
+    assert 100 <= n0 <= 300, n0
+    assert a["variance_y"][:n0].is_null().all() and a["variance_y"][n0:].is_not_null().all()
 
 
 @pytest.mark.parametrize("kw", [{}, {"vol": "egarch"}, {"vol": "gjr", "dist": "t", "horizon": 4}])
@@ -156,7 +161,7 @@ def test_a_zero_weight_row_steps_no_recursion(kw):
     gives every other row, to the bit, the output of the stream without
     them: the recursion is per observation, and such a row is none. They
     are still read."""
-    n = 2600 if "vol" in kw else 600
+    n = 2600 if "vol" in kw else 900
     df = _frame(n, 8).drop("g")
     df = df.with_columns(
         pl.when(pl.int_range(n) % 17 == 5).then(None).otherwise(pl.col("y")).alias("y")
@@ -289,3 +294,44 @@ def test_a_clock_span_start_is_warned_of_once_and_refused_at_the_cap():
     with pytest.raises(Exception, match=r'group "a".*start_span.*above max_state_bytes of') as e:
         bank.fit_predict(rows("a", 200, 230))
     assert str(cap) in str(e.value)
+
+
+def test_a_realistic_series_at_the_default_start():
+    """A GARCH(1,1) at ``arch``'s oracle truth, ``(0.05, 0.08, 0.9)``, at the
+    default start of 2,000 rows: the start's rows are withheld as the
+    model's warm-up, ``below_warm_rows``, with no coefficients; from the next
+    row every variance is a number and the recursion at the parameters
+    reported after the row before, and nothing is withheld."""
+    df = pl.DataFrame({"y": _returns(2600, 21)})
+    out = _out(rp.spec.garch("m", targets=["y"], coef_every=0), df)
+    s, y, coef = out["variance_y"].to_numpy(), df["y"].to_numpy(), out["coef"].to_list()
+    reason = out["withheld_reason"].cast(pl.String).to_list()
+    assert np.isnan(s[:2000]).all() and np.isfinite(s[2000:]).all()
+    assert reason[:2000] == ["below_warm_rows"] * 2000 and reason[2000:] == [None] * 600
+
+    def numbers(c) -> bool:  # noqa: ANN001
+        return c is not None and all(v is not None for v in c)
+
+    assert not any(numbers(c) for c in coef[:1999]) and all(numbers(c) for c in coef[1999:])
+    for t in range(1999, 2599):
+        om, a, b = coef[t]
+        want = om + a * y[t] ** 2 + b * s[t] if t >= 2000 else s[t + 1]
+        assert abs(s[t + 1] - want) <= 1e-13 * want, t
+    om, a, b = coef[-1]
+    assert 0.0 < a < 0.3 and 0.6 < b < 1.0 and a + b < 1.0, coef[-1]
+
+
+@pytest.mark.parametrize("kw", [{}, {"vol": "gjr", "dist": "t"}])
+def test_returns_with_no_variance_process_wait_and_say_so(kw):
+    """Returns with no conditional variance: no start's likelihood-ratio
+    statistic against a constant variance reaches its cut, so no row
+    reports and no coefficient is written. The first start's rows are the
+    warm-up, ``below_warm_rows``; every row after its fit is withheld as
+    ``not_identified``, the doubled and the fresh buffers alike."""
+    y = np.random.default_rng(22).standard_normal(5000)
+    out = _out(rp.spec.garch("m", targets=["y"], start_rows=500, **kw), pl.DataFrame({"y": y}))
+    reason = out["withheld_reason"].cast(pl.String).to_list()
+    assert out["variance_y"].is_null().all()
+    assert out["coef"].explode().is_null().all(), "a withheld fit is no coefficient"
+    assert reason[:500] == ["below_warm_rows"] * 500
+    assert reason[500:] == ["not_identified"] * 4500

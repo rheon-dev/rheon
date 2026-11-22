@@ -2,7 +2,7 @@
 # Choose a changepoint hazard
 
 This how-to is for anyone who fits `bocpd` and wants to choose its
-`hazard`, the expected run between breaks, and its priors, from the
+hazard, the expected run between breaks, and its priors, from the
 stream's own out-of-sample log-likelihood with `rp.eval.grid_search`. It
 also tempers the model against single outlying rows with `robust_beta`.
 
@@ -30,14 +30,16 @@ The Notes of [`rp.eval.grid_search`'s
 docstring](https://rheon-dev.github.io/rheon/eval.html#rheon.polars.eval.grid_search),
 under *What is scored*, say so.
 
-1. **Decide whether breaks follow rows or time.** A number `hazard` says
-   breaks follow the row rate, so on irregular rows a weekend counts as one
-   row. On a temporal clock, give `hazard` as a duration, such as
-   `hazard="1h"`, the expected time between breaks. The docstring
+1. **Decide whether breaks follow rows or time.** `hazard_rows`, the
+   expected rows between breaks, says breaks follow the row rate, so on
+   irregular rows a weekend counts as one row. `hazard`, the expected clock
+   time between breaks, says they come in time: a number of the clock's
+   units on a numeric clock, or a duration such as `hazard="1h"` on a
+   temporal one. A long gap then makes a break near certain. The docstring
    gives the rules at a gap and at a step of 0, under its `hazard` entry
-   and under *A duration hazard* in its Notes.
+   and under *A clock hazard* in its Notes.
 2. **Build a `bocpd` spec builder with `functools.partial`,** giving it
-   the keywords every spec shares. `hazard` takes one value a spec.
+   the keywords every spec shares. Each hazard takes one value a spec.
 3. **Pass the query, the builder and a `param_grid` of hazards to
    `rp.eval.grid_search`, with `scoring="loglik"`.** It returns a row per
    hazard with its `loglik` a row, highest best, and a row for the choice.
@@ -67,10 +69,10 @@ bocpd = functools.partial(
     mean_precision_prior=0.25, degrees_of_freedom_prior=2.0,   # a level's variance of 4: the noise's 1 over 0.25
 )
 # 3. Every hazard, scored by its log-likelihood in one pass.
-table = rp.eval.grid_search(pl.scan_parquet("jumps.parquet"), bocpd, {"hazard": [20.0, 60.0, 200.0, 600.0, 2_000.0]}, scoring="loglik")
+table = rp.eval.grid_search(pl.scan_parquet("jumps.parquet"), bocpd, {"hazard_rows": [20.0, 60.0, 200.0, 600.0, 2_000.0]}, scoring="loglik")
 
 # 4 and 5. Each hazard's score and rank, and what choosing from earlier rows earned.
-for hazard, loglik, rank in table.filter(kind="candidate").select("hazard", "loglik", "rank").iter_rows():
+for hazard, loglik, rank in table.filter(kind="candidate").select("hazard_rows", "loglik", "rank").iter_rows():
     print(f"hazard {hazard:>5g}: loglik {loglik:.4f} a row, rank {rank}")
 print(f"chosen from earlier rows: loglik {table.filter(kind='choice')['loglik'].item():.4f} a row")
 ```
@@ -114,7 +116,7 @@ pl.DataFrame({"x": x}).write_parquet("small.parquet")
 
 # 1 and 2. The prior left to the first rows, then given at four scales.
 for prior in (None, [1e-6], [1e-3], [1.0], [100.0]):
-    cp = rp.spec.bocpd("cp", features=["x"], hazard=250.0, degrees_of_freedom_prior=2.0, covariance_prior=prior)
+    cp = rp.spec.bocpd("cp", features=["x"], hazard_rows=250.0, degrees_of_freedom_prior=2.0, covariance_prior=prior)
     out = pl.scan_parquet("small.parquet").rheon.fit_predict([cp]).collect().unnest("cp")
     print(f"covariance_prior {prior}: at row 299 the regime began at row {299 - out['run_mode'][299]}")
 ```
@@ -154,7 +156,7 @@ bocpd = functools.partial(
     mean_precision_prior=0.25, degrees_of_freedom_prior=2.0,
 )
 # 2. Each value a list of one number, for the one feature.
-grid = {"hazard": [200.0], "covariance_prior": [[0.01], [0.1], [1.0], [10.0]]}
+grid = {"hazard_rows": [200.0], "covariance_prior": [[0.01], [0.1], [1.0], [10.0]]}
 # 3. Every pair, scored by its log-likelihood in one pass.
 table = rp.eval.grid_search(pl.scan_parquet("jumps.parquet"), bocpd, grid, scoring="loglik")
 # 4. Each prior's score and rank.
@@ -213,7 +215,7 @@ pl.DataFrame({"x": x}).write_parquet("outlier.parquet")
 
 # 1 and 3. The diagonal predictive, untempered and at two powers.
 for beta in (None, 0.1, 0.3):
-    cp = rp.spec.bocpd("cp", features=["x"], hazard=250.0, covariance_type="diag", robust_beta=beta)
+    cp = rp.spec.bocpd("cp", features=["x"], hazard_rows=250.0, covariance_type="diag", robust_beta=beta)
     out = pl.scan_parquet("outlier.parquet").rheon.fit_predict([cp]).collect().unnest("cp")
     began = [row - out["run_mode"][row] for row in (399, 599)]   # the row each current regime began on
     print(f"robust_beta {beta}: p_change {out['p_change'][200]:.2f} on the outlier; "

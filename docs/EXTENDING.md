@@ -432,7 +432,7 @@ state), say why in the docstring. Each goes into the tables of
 |---|---|
 | measured in clock units | **`CLOCK_FIELDS`**, under the model's `type`, and the match in **`Spec::clock_spans`**, which the bank uses to refuse a number on a temporal clock and a duration on a numeric one |
 | a rate *per* clock unit, such as `kalman`'s `q`, which has no duration form | `CLOCK_RATES` and `Spec::clock_rate` |
-| a number that means something other than clock units, whose duration is a clock parameter: `bocpd`'s `hazard`, rows or a duration | `DURATION_OR_UNIT_FREE_FIELDS`. `clock_spans` reads it only when it is a duration |
+| a count of rows beside a clock form of the same quantity, such as `warm_rows` beside `warm_span` or `bocpd`'s `hazard_rows` beside `hazard` | a plain field, in no table; the spec refuses the two together |
 
 **Check:** `clock_fields_are_exactly_the_fields_that_take_a_duration`
 walks every field serde knows. It fails on a `Span` missing from the table,

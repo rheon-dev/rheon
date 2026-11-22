@@ -11,24 +11,50 @@
 //! ```
 //!
 //! When no step length passes along `d`, or the projection takes the step
-//! back to `θ` itself, two more directions are tried in turn: Newton on the coordinates the projection does not block (one is
-//! blocked when a small move along `d` in it alone is cut by more than
-//! half), then the gradient scaled by `1/diag M`. It stops after the
-//! iteration that moves every parameter by at most `10⁻⁸` of its unit and
-//! `f` by at most `10⁻¹⁰ (1 + |f|)`, when no direction ascends, or at 50
-//! iterations. The start is the best point of a small fixed grid. The unit
-//! of the variance level is the buffer's mean square, of every other
-//! parameter 1, so the differences and the stopping rule scale with the
-//! series.
+//! back to `θ` itself, two more directions are tried in turn: Newton on the
+//! coordinates the projection does not block (one is blocked when a small
+//! move along `d` in it alone is cut by more than half), then the gradient
+//! scaled by `1/diag M`. The start is the best point of a small fixed grid.
+//! The unit of the variance level is the buffer's mean square, of every
+//! other parameter 1, so the differences and the stopping rule scale with
+//! the series.
+//!
+//! **It runs to its rounding.** Near the optimum a step changes `f` by less
+//! than `f`'s own rounding (its terms are far larger than their sum), so a
+//! comparison of `f` there is decided by the last bits of `ln` and `exp`,
+//! and a stop at a fixed step size leaves the fit wherever the iteration
+//! happened to be. Two rules take those decisions away from the rounding:
+//!
+//! - **a change too small for `f` to show is read from the slopes.** Where
+//!   the quadratic model's gain `gᵀΔ − ½ ΔᵀMΔ` of a step `Δ` is under
+//!   `10⁻¹⁰ (1 + |f|)`, the step stands when the trapezoid rule on the
+//!   slopes at its two ends, exact for a quadratic, says `f` did not fall:
+//!   `g(θ)ᵀΔ + g(θ')ᵀΔ ≥ 0`.
+//! - **it stops at the rounding floor:** once the full Newton step, or a
+//!   step taken, moves every parameter by at most `4ε (1 + max |θ|)` in
+//!   their units; or a step taken moves them by at most `10⁻¹¹ (1 + max
+//!   |θ|)` and no less than the step before (an iteration that has stopped
+//!   contracting is at its rounding); or when no direction ascends, or at
+//!   50 iterations.
+//!
+//! **The fit reports its Newton decrement**, `½ gᵀ M⁻¹ g` at the point it
+//! stopped: the gain a full Newton step from there predicts, in the
+//! objective's own units. At an optimum it is the rounding's, at most
+//! `10⁻¹²` nats on 2,000 rows; whether a fit is one to step from is read
+//! from it ([`super::fit`]), never from how the iteration stopped.
 
 use super::linalg::{cholesky, lu_solve, ridged};
 
 pub(super) const MAX_ITER: u32 = 50;
 const MAX_HALVINGS: u32 = 30;
 const ARMIJO: f64 = 1e-4;
-const TOL_X: f64 = 1e-8;
-const TOL_F: f64 = 1e-10;
 const RIDGE: f64 = 1e-10;
+/// How small a gain, relative to `1 + |f|`, the line search reads from the
+/// slopes rather than from `f` itself.
+const UNSEEN: f64 = 1e-10;
+/// A step under this, relative to `1 + max |θ|` in the parameters' units,
+/// that is no smaller than the step before ends the fit.
+const STALLED: f64 = 1e-11;
 
 /// An objective's value, gradient and Gauss-Newton matrix (row-major).
 pub(super) struct Eval {
@@ -63,6 +89,11 @@ pub(super) struct Fit {
     pub iterations: u32,
     #[cfg_attr(not(test), allow(dead_code))]
     pub stop: Stop,
+    /// The objective at `theta`.
+    pub f: f64,
+    /// The Newton decrement `½ gᵀ M⁻¹ g` at `theta`, in the objective's
+    /// units: infinite where `M` gives no step.
+    pub decrement: f64,
 }
 
 fn dot(a: &[f64], b: &[f64]) -> f64 {
@@ -162,6 +193,7 @@ pub(super) fn maximize(
     let mut e = obj(&theta, true);
     let mut stop = Stop::IterationCap;
     let mut it = 0;
+    let mut last = f64::INFINITY;
     while it < MAX_ITER {
         it += 1;
         let m = curvature(obj, &theta, units).unwrap_or_else(|| e.h.clone());
@@ -169,6 +201,18 @@ pub(super) fn maximize(
             stop = Stop::NoAscent;
             break;
         };
+        let scaled = |v: f64, u: &f64| (v / u).abs();
+        let size = theta
+            .iter()
+            .zip(units)
+            .fold(0.0_f64, |a, (t, u)| a.max(scaled(*t, u)));
+        let floor = 4.0 * f64::EPSILON * (1.0 + size);
+        // a full Newton step at the rounding: nothing left to take
+        if d.iter().zip(units).all(|(d, u)| scaled(*d, u) <= floor) {
+            stop = Stop::Converged;
+            break;
+        }
+        let unseen = UNSEEN * (1.0 + e.f.abs());
         let mut accepted = None;
         'dirs: for dir in directions(d, &e.g, &m, &theta, project) {
             let mut s = 1.0;
@@ -180,37 +224,75 @@ pub(super) fn maximize(
                 if cand == theta {
                     break;
                 }
-                let fc = obj(&cand, false).f;
                 let delta: Vec<f64> = cand.iter().zip(&theta).map(|(c, t)| c - t).collect();
-                if fc.is_finite() && fc >= e.f + ARMIJO * dot(&e.g, &delta) {
-                    accepted = Some((cand, fc));
-                    break 'dirs;
+                let slope = dot(&e.g, &delta);
+                if slope - 0.5 * quad(&m, &delta) > unseen {
+                    let fc = obj(&cand, false).f;
+                    if fc.is_finite() && fc >= e.f + ARMIJO * slope {
+                        accepted = Some((cand, None));
+                        break 'dirs;
+                    }
+                } else {
+                    // a gain under f's rounding: the slopes at both ends
+                    let ec = obj(&cand, true);
+                    if ec.f.is_finite() && slope + dot(&ec.g, &delta) >= 0.0 {
+                        accepted = Some((cand, Some(ec)));
+                        break 'dirs;
+                    }
                 }
                 s *= 0.5;
             }
         }
-        let Some((cand, fc)) = accepted else {
+        let Some((cand, at)) = accepted else {
             stop = Stop::NoAscent;
             break;
         };
-        let small = cand
+        let step = cand
             .iter()
             .zip(&theta)
             .zip(units)
-            .all(|((c, t), u)| (c - t).abs() <= TOL_X * u);
-        let df = (fc - e.f).abs();
+            .fold(0.0_f64, |a, ((c, t), u)| a.max(scaled(c - t, u)));
         theta = cand;
-        e = obj(&theta, true);
-        if small && df <= TOL_F * (1.0 + e.f.abs()) {
+        e = at.unwrap_or_else(|| obj(&theta, true));
+        if step <= floor || (step <= STALLED * (1.0 + size) && step >= last) {
             stop = Stop::Converged;
             break;
         }
+        last = step;
     }
+    let decrement = decrement(obj, &theta, &e, units);
     Some(Fit {
         theta,
         iterations: it,
         stop,
+        f: e.f,
+        decrement,
     })
+}
+
+/// `xᵀ M x` for a row-major `M`.
+fn quad(m: &[f64], x: &[f64]) -> f64 {
+    let p = x.len();
+    (0..p)
+        .map(|i| x[i] * (0..p).map(|j| m[i * p + j] * x[j]).sum::<f64>())
+        .sum()
+}
+
+/// The Newton decrement `½ gᵀ M⁻¹ g` at `theta`, `e` the objective there:
+/// the gain a full Newton step predicts, with `M` the curvature the
+/// iteration reads (the Gauss-Newton matrix where the observed one is not
+/// positive definite). Infinite where neither gives a step, or `f` is not a
+/// number.
+fn decrement(obj: &dyn Fn(&[f64], bool) -> Eval, theta: &[f64], e: &Eval, units: &[f64]) -> f64 {
+    if !e.f.is_finite() {
+        return f64::INFINITY;
+    }
+    let p = theta.len();
+    let m = curvature(obj, theta, units).unwrap_or_else(|| e.h.clone());
+    lu_solve(&ridged(&m, p, RIDGE), p, &e.g)
+        .map(|d| 0.5 * dot(&e.g, &d))
+        .filter(|v| v.is_finite())
+        .map_or(f64::INFINITY, f64::abs)
 }
 
 #[cfg(test)]
@@ -249,5 +331,60 @@ mod tests {
         // the best grid point is the start; no finite one, no fit
         let bad = |_: &[f64], _: bool| Eval::bad(2);
         assert!(maximize(&bad, &project, &[vec![0.0, 0.0]], &[1.0, 1.0]).is_none());
+    }
+
+    /// The decrement is the gain a full Newton step predicts, `½ gᵀ M⁻¹ g`:
+    /// on a quadratic, exactly the climb left to its maximum, `½ cᵀ A c`
+    /// from 0, and at the maximum the fit reports none.
+    #[test]
+    fn the_decrement_is_the_newton_steps_predicted_gain() {
+        let (a, c) = ([2.0, 0.5, 0.5, 1.0], [0.3, 0.5]);
+        let obj = quadratic(a, c);
+        let at = [0.0, 0.0];
+        let want = 0.5 * (c[0] * (a[0] * c[0] + a[1] * c[1]) + c[1] * (a[2] * c[0] + a[3] * c[1]));
+        let got = decrement(&obj, &at, &obj(&at, true), &[1.0, 1.0]);
+        // within the 1e-10 ridge on M's diagonal (measured 2.5e-10)
+        assert!((got - want).abs() < 1e-9 * want, "{got} against {want}");
+        let free = |x: &[f64]| x.to_vec();
+        let fit = maximize(&obj, &free, &[at.to_vec()], &[1.0, 1.0]).unwrap();
+        assert!(fit.decrement < 1e-24, "{}", fit.decrement);
+        assert!(fit.f.abs() < 1e-24, "{}", fit.f);
+        // a probe that is not finite, and no other matrix: no step, an
+        // infinite decrement; a value that is not a number, the same
+        let flat = |_: &[f64], _: bool| Eval {
+            f: 1.0,
+            g: vec![1.0, 0.0],
+            h: vec![0.0; 4],
+        };
+        assert_eq!(
+            decrement(&flat, &at, &flat(&at, true), &[1.0, 1.0]),
+            f64::INFINITY
+        );
+        assert_eq!(
+            decrement(&obj, &at, &Eval::bad(2), &[1.0, 1.0]),
+            f64::INFINITY
+        );
+    }
+
+    /// On an objective whose value is far larger than the climb left (here
+    /// 1e6 against 1e-7), every step's gain is under the `1e-10 (1 + |f|)`
+    /// the line search reads `f` to: the slopes at its two ends decide it,
+    /// and the fit lands on the maximum to the parameters' rounding.
+    #[test]
+    fn a_gain_under_the_rounding_is_read_from_the_slopes() {
+        let base = quadratic([2.0, 0.5, 0.5, 1.0], [0.3, 0.5]);
+        let obj = move |x: &[f64], g: bool| {
+            let mut e = base(x, g);
+            // the curvature is 1e-6 of the offset's scale: steps of 1e-3
+            // gain about 1e-12, under the 1e-10 relative rounding read
+            e.f = 1e6 + 1e-6 * e.f;
+            e.g.iter_mut().for_each(|v| *v *= 1e-6);
+            e.h.iter_mut().for_each(|v| *v *= 1e-6);
+            e
+        };
+        let free = |x: &[f64]| x.to_vec();
+        let fit = maximize(&obj, &free, &[vec![0.0, 0.0]], &[1.0, 1.0]).unwrap();
+        assert_eq!(fit.stop, Stop::Converged);
+        assert!((fit.theta[0] - 0.3).abs() < 1e-12 && (fit.theta[1] - 0.5).abs() < 1e-12);
     }
 }

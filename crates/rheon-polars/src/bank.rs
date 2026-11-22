@@ -1583,9 +1583,9 @@ pub(crate) use closed_rows::instance_decay;
 pub use closed_rows::{ClosedRow, Gram, PairRow, vech};
 use closed_rows::{check_closed_row, closed_frame, gram_of, spec_bins, spec_cross_lags, spec_lags};
 use inline::{join_maybe_par, map_maybe_par, map_range_maybe_par, map_vec_maybe_par, par};
-pub(crate) use refusals::clock_amount;
 #[cfg(test)]
 use refusals::over_budget_message;
+pub(crate) use refusals::{CLOCK_ORDER_HOW_TO, clock_amount};
 use refusals::{backwards_clock, non_finite_step, outside_support, over_budget, over_state_cap};
 
 /// Drop the streams a refused chunk materialized, `(spec index, key)` each.
@@ -1863,6 +1863,36 @@ const LAST_LEGACY_SCHEMA: u32 = 71;
 /// (`checksum.rs`): a file of this schema or later without one is damaged,
 /// and a file of an earlier one loads without it.
 const SEALED_FROM_SCHEMA: u32 = 71;
+
+/// The first schema whose `bocpd` spec reads a number `hazard` as clock
+/// units (docs/PLAN.md task 547): in a file of an earlier one a number
+/// `hazard` is the expected rows between changepoints, which this build
+/// calls `hazard_rows`, and the loader says so. Every release wrote an
+/// earlier schema. Schema 72 was written by development builds on both
+/// sides of the change and never released; its files read as this build's.
+const HAZARD_ON_THE_CLOCK_SCHEMA: u32 = 72;
+
+/// A file's `bocpd` specs in this build's words: a number `hazard` from a
+/// schema before [`HAZARD_ON_THE_CLOCK_SCHEMA`] counted rows on every
+/// clock, as `hazard_rows` does now. Its models carry the per-row hazard in
+/// their own configuration, so they go on as they were; the spec says so,
+/// so a group that first appears after the load runs the same model.
+fn hazard_in_rows(specs: &mut [Spec], schema: u32) {
+    if schema >= HAZARD_ON_THE_CLOCK_SCHEMA {
+        return;
+    }
+    for spec in specs {
+        if let ModelKind::Bocpd {
+            hazard,
+            hazard_rows,
+            ..
+        } = &mut spec.model
+            && let Some(h) = hazard.take_if(|h| !h.is_duration())
+        {
+            *hazard_rows = Some(h.value());
+        }
+    }
+}
 
 /// The head of a bank file written before the envelope, read on its own
 /// first: a file from a newer build may carry keys this build's [`Spec`]
@@ -4497,6 +4527,7 @@ impl Bank {
         if format_version.is_none() {
             check_format(file.format_version)?;
         }
+        hazard_in_rows(&mut file.specs, found);
         if let Some(exp) = expected_specs {
             // Both sides filled, since filling is what a bank does to its
             // specs before it runs them: a caller who wrote the spec in TOML
@@ -4516,11 +4547,21 @@ impl Bank {
             // resume under another count). `gram_threads` is the same kind of
             // setting (task 225: the same bits at every count), and was
             // compared until review 6 (D-1).
+            // `bocpd`'s `hazard_rows` at its default is the default: a file
+            // that said `hazard = 250` before task 547 says `hazard_rows =
+            // 250` now, and the builder's default writes neither.
             let unsharded = |mut s: Spec| {
                 match &mut s.model {
                     ModelKind::Marginal { shards, .. } => *shards = None,
                     ModelKind::EwRidge { gram_threads, .. }
                     | ModelKind::EwCov { gram_threads, .. } => *gram_threads = None,
+                    ModelKind::Bocpd {
+                        hazard: None,
+                        hazard_rows,
+                        ..
+                    } if *hazard_rows == Some(crate::stream::BOCPD_HAZARD_ROWS) => {
+                        *hazard_rows = None;
+                    }
                     _ => {}
                 }
                 s

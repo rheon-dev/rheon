@@ -1014,7 +1014,10 @@ impl Spec {
             // CLI and the bank get the same messages; only
             // the block *names* are resolved here, where the feature list is.
             ModelKind::Bocpd {
-                hazard, hazard_col, ..
+                hazard,
+                hazard_col,
+                hazard_rows,
+                ..
             } => {
                 // The model reads `targets[0]` as the hazard whatever the name
                 // here says, so the two must be one column (review
@@ -1036,22 +1039,34 @@ impl Spec {
                 if self.half_life.is_some() || self.lam.is_some() {
                     no.refuse(format!(
                         "spec {:?}: {} does not apply to bocpd, which forgets at each break, at \
-                     the rate hazard sets. Leave {} out, and set hazard instead.",
+                     the rate hazard_rows or hazard sets. Leave {} out, and set hazard_rows \
+                     or hazard instead.",
                         self.name, decay_key, decay_key
                     ));
                 }
-                // A column's value is the chance of a break after its row,
-                // and a duration's the chance of the step before each row:
-                // a null falling back to the duration would put both on one
-                // boundary (task 179).
-                if let (Some(h), Some(d)) =
-                    (hazard_col, hazard.as_ref().filter(|d| d.is_duration()))
-                {
+                // Two readings of one chance, refused together as every pair
+                // of a count and a span is (task 547): `hazard_rows` the
+                // chance after each row, `hazard` the chance over each clock
+                // step before the row.
+                if let (Some(h), Some(r)) = (hazard, hazard_rows) {
                     no.refuse(format!(
-                        "spec {:?}: hazard_col {h:?} and a hazard given as a duration ({d}) \
-                     cannot both be set: the column gives a chance of a break after each \
-                     row, and the duration a chance over each clock step. Give hazard as a \
-                     number of rows, or leave out hazard_col.",
+                        "spec {:?}: hazard ({h}) and hazard_rows ({r}) cannot both be set: \
+                     hazard_rows is the expected rows between changepoints, a chance of a \
+                     break after each row, and hazard the expected clock time between them, \
+                     a chance over each clock step. Give one.",
+                        self.name
+                    ));
+                }
+                // A column's value is the chance of a break after its row, and
+                // `hazard`'s the chance of the step before each row: a null
+                // falling back to it would put both on one boundary (task
+                // 179). A column falls back to `hazard_rows`.
+                if let (Some(c), Some(h)) = (hazard_col, hazard) {
+                    no.refuse(format!(
+                        "spec {:?}: hazard_col {c:?} and hazard ({h}) cannot both be set: the \
+                     column gives a chance of a break after each row, and hazard a chance \
+                     over each clock step. Give the column's fallback as hazard_rows, or \
+                     leave out hazard_col.",
                         self.name
                     ));
                 }

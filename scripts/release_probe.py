@@ -647,6 +647,21 @@ CLOCKED = [
 #: spec on the first rows of each group at zero weight and null, and saved,
 #: loaded and continued mid-stream.
 HARD_PATHS: list[tuple[str, str, dict, list[str]]] = [
+    # A number `hazard` on a number clock, the clock form since PLAN 547
+    # (rows before it, a declared move), and the count it read as before,
+    # `hazard_rows`, which the earlier builds refuse (an addition).
+    (
+        "bocpd_hazard_clock",
+        "bocpd",
+        dict(features=["x1", "x2"], covariance_prior=[1.0], hazard=40.0, **CLOCK),
+        [],
+    ),
+    (
+        "bocpd_hazard_rows",
+        "bocpd",
+        dict(features=["x1", "x2"], covariance_prior=[1.0], hazard_rows=40.0, **CLOCK),
+        [],
+    ),
     # Pruning that drops runs from the middle of the vector, and a cap the
     # runs reach, over a break at `BREAK_AT`: the fold keeps the run
     # carrying the mass, before the break and after it.

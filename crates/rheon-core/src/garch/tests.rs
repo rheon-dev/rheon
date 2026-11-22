@@ -368,8 +368,20 @@ fn a_row_is_predicted_before_it_is_learned() {
 /// every row they share, to the bit, and end in the same state.
 #[test]
 fn a_zero_weight_row_steps_no_recursion() {
-    for c in every_cfg() {
-        let ys = series_of(&c, start(&c) + 400, 12);
+    // a realistic series, and returns with no variance process, whose
+    // start waits and buffers afresh: a zero-weight row counts in neither
+    let iid = |n: usize| {
+        let mut s = 99;
+        (0..n).map(|_| normal(&mut s)).collect::<Vec<f64>>()
+    };
+    let cases = every_cfg()
+        .into_iter()
+        .map(|c| (series_of(&c, start(&c) + 400, 12), c))
+        .chain(
+            [GarchVol::Garch, GarchVol::Gjr]
+                .map(|v| (iid(2 * 2000 + 50), cfg(v, GarchDist::Normal))),
+        );
+    for (ys, c) in cases {
         let mut plain = Garch::new(c.clone()).unwrap();
         let mut gappy = Garch::new(c.clone()).unwrap();
         // a zero-weight row first, then one every 7 rows (before, inside
@@ -384,6 +396,14 @@ fn a_zero_weight_row_steps_no_recursion() {
             let a = plain.step(&[], &[Some(*y)], 1.0, 1.0);
             let b = gappy.step(&[], &[Some(*y)], 1.0, 1.0);
             assert_eq!(bits(&[a.pred]), bits(&[b.pred]), "{c:?} row {t}");
+            assert_eq!(plain.no_effect(), gappy.no_effect(), "{c:?} row {t}");
+            assert_eq!(plain.starting(), gappy.starting(), "{c:?} row {t}");
+        }
+        if ys.len() == 2 * 2000 + 50 {
+            assert!(
+                plain.no_effect() && gappy.no_effect(),
+                "{c:?}: the wait ran"
+            );
         }
         assert_eq!(state_bits(&plain).len(), state_bits(&gappy).len(), "{c:?}");
         let (p, g) = (plain.series.clone(), gappy.series.clone());
@@ -533,16 +553,15 @@ fn egarch_stays_invertible() {
     assert!(m.invertibility()[0].is_finite());
 }
 
-/// A start that does not settle -- here every residual the same size, so
-/// the fit's `α` sits on its bound at 0 -- doubles its rows and refits,
-/// twice, then steps from its last fit and says so.
+/// A start whose fit sits on a bound of the process's set -- here a GJR
+/// whose `α` is 0, the fit's `α` at its bound -- doubles its rows and
+/// refits, twice, then steps from its last fit and says so. The process is
+/// real (`γ` carries it), so its likelihood-ratio statistic passes.
 #[test]
 fn a_start_on_a_bound_doubles_and_refits() {
     let c = cfg(GarchVol::Gjr, GarchDist::Normal);
     let n0 = c.start_rows;
-    let ys: Vec<f64> = (0..4 * n0 + 10)
-        .map(|t| if t % 2 == 0 { 1.0 } else { -1.0 })
-        .collect();
+    let ys = gjr_series([0.05, 0.0, 0.15, 0.88], 4 * n0 + 10, 1, 1.0);
     let mut m = Garch::new(c).unwrap();
     for (t, y) in ys.iter().enumerate() {
         m.step(&[], &[Some(*y)], 1.0, 1.0);
@@ -554,10 +573,53 @@ fn a_start_on_a_bound_doubles_and_refits() {
         } else {
             2
         };
-        assert_eq!(refits, want.min(2), "{t}");
+        assert_eq!(refits, want, "{t}");
         assert_eq!(m.started()[0], t + 1 >= 4 * n0, "{t}");
+        assert!(!m.no_effect(), "{t}");
     }
     assert_eq!(m.start_report()[0], (2, false));
+}
+
+/// A start whose rows hold no variance process -- every residual the same
+/// size, so a constant variance fits them exactly and the likelihood-ratio
+/// statistic is 0 -- is withheld: it doubles its rows twice, then buffers
+/// afresh at four times the rows, again and again, reporting nothing and
+/// saying why; the fit it withheld is no coefficient.
+#[test]
+fn a_start_with_no_variance_process_waits() {
+    let c = cfg(GarchVol::Gjr, GarchDist::Normal);
+    let n0 = c.start_rows;
+    let ys: Vec<f64> = (0..15 * n0)
+        .map(|t| if t % 2 == 0 { 1.0 } else { -1.0 })
+        .collect();
+    let mut m = Garch::new(c).unwrap();
+    for (t, y) in ys.iter().enumerate() {
+        let out = m.step(&[], &[Some(*y)], 1.0, 1.0);
+        assert!(out.pred.iter().all(|v| v.is_nan()), "{t}");
+        let (refits, sound) = m.start_report()[0];
+        let want = if t + 1 < n0 {
+            0
+        } else if t + 1 < 2 * n0 {
+            1
+        } else {
+            2
+        };
+        assert_eq!((refits, sound), (want, false), "{t}");
+        assert!(!m.started()[0], "{t}");
+        // waiting on the evidence from the first fit on, buffering before it
+        assert_eq!(m.no_effect(), t + 1 >= n0, "{t}");
+        assert_eq!(m.starting(), t + 1 < n0, "{t}");
+        assert!(m.coefficients()[0].iter().all(|v| v.is_nan()), "{t}");
+        // the buffer: fitted at n0 and 2 n0, which double it, and at 4 n0,
+        // which cannot, so emptied there and at every 4 n0 rows after
+        let held = m.series[0].buffer.len();
+        let want = if t + 1 < 4 * n0 {
+            t + 1
+        } else {
+            (t + 1 - 4 * n0) % (4 * n0)
+        };
+        assert_eq!(held, want, "{t}");
+    }
 }
 
 /// A row a million standard deviations out, and a run of zero residuals,
@@ -702,32 +764,51 @@ fn a_clock_span_start_is_warned_of_at_half_the_cap_and_stopped_at_it() {
 
 /// A start of a clock span closes at the first row at or past the span
 /// from its first, once it holds 50 rows, on the stamps handed; a refit
-/// waits for twice the span.
+/// waits for twice the span from the same first row, and a start buffered
+/// afresh (its fit withheld with no doubling left) measures the span from
+/// its own first row.
 #[test]
 fn a_clock_span_start_closes_at_its_span() {
-    let ys = gjr_series([0.05, 0.08, 0.0, 0.9], 1000, 21, 1.0);
-    // (rows apart, the span): the rows a fit is made on, at each refit
-    for (apart, span, want) in [(2.0, 100.0, [51, 101, 201]), (5.0, 100.0, [50, 51, 81])] {
+    let ys = gjr_series([0.05, 0.08, 0.0, 0.9], 1500, 21, 1.0);
+    for (apart, span) in [(2.0, 100.0), (5.0, 100.0)] {
         let mut c = cfg(GarchVol::Garch, GarchDist::Normal);
         c.start_span = Some(span);
         let mut m = Garch::new(c).unwrap();
+        // (the row a fit closed at, the buffer's first row, its refits)
         let mut fits = Vec::new();
+        let (mut first, mut held) = (0, 0);
         let mut last = (0, false);
         for (t, y) in ys.iter().enumerate() {
             m.stamp_next(Stamp::from(apart * t as f64));
             m.step(&[], &[Some(*y)], apart, 1.0);
             let now = (m.start_report()[0].0, m.started()[0]);
-            if now != last {
-                fits.push(t + 1);
+            let buffered = m.series[0].buffer.len();
+            if now != last || buffered < held + 1 {
+                fits.push((t, first, last.0));
                 last = now;
             }
+            if buffered < held + 1 {
+                first = t + 1;
+            }
+            held = buffered;
             if now.1 {
                 break;
             }
         }
-        // every decision falls at a span or its 50th row, whichever is later
-        let n = fits.len();
-        assert_eq!(fits[..], want[..n], "{apart}: {fits:?}");
+        assert!(fits.len() >= 4, "{apart}: {fits:?}");
+        // every decision falls at the span, doubled for each refit, or at
+        // the start's 50th row, whichever is later: the first row after the
+        // decision before it at which both hold
+        let mut before = 0;
+        for &(t, from, refits) in &fits {
+            let reached = |t: usize| {
+                t + 1 - from >= MIN_START_ROWS
+                    && apart * (t - from) as f64 >= span * f64::from(1u32 << refits)
+            };
+            assert!(reached(t), "{apart}: {fits:?}");
+            assert!(t == before || !reached(t - 1), "{apart}: {fits:?}");
+            before = t + 1;
+        }
     }
 }
 
@@ -886,4 +967,171 @@ fn no_platform_math_library_is_called() {
             );
         }
     }
+}
+
+/// The likelihood-ratio cut is χ² at 0.999 for the restrictions constant
+/// variance puts on each form: the survival function of χ²₂, `e^{−x/2}`,
+/// and of χ²₃, `erfc(√(x/2)) + √(2x/π) e^{−x/2}`, are 0.001 there, to
+/// rounding. A statistic at the cut passes, one a hair under it, or not a
+/// number, does not.
+#[test]
+fn the_lr_cut_is_chi_squared_at_its_restrictions() {
+    use super::fit::{identified, lr_cut, restrictions};
+    let survival = |df: usize, x: f64| match df {
+        2 => libm::exp(-0.5 * x),
+        3 => {
+            libm::erfc(libm::sqrt(0.5 * x))
+                + libm::sqrt(2.0 * x / std::f64::consts::PI) * libm::exp(-0.5 * x)
+        }
+        _ => unreachable!(),
+    };
+    for vol in [
+        GarchVol::Garch,
+        GarchVol::Gjr,
+        GarchVol::Egarch,
+        GarchVol::Figarch,
+    ] {
+        let df = restrictions(vol);
+        assert_eq!(df, if vol == GarchVol::Garch { 2 } else { 3 }, "{vol:?}");
+        let cut = lr_cut(vol);
+        assert!((survival(df, cut) - 0.001).abs() < 1e-15, "{vol:?}: {cut}");
+        assert!(identified(vol, cut), "{vol:?}");
+        assert!(!identified(vol, cut.next_down()), "{vol:?}");
+        assert!(!identified(vol, f64::NAN), "{vol:?}");
+    }
+}
+
+/// A fit is one to step from when its Newton decrement, at Kish's scale, is
+/// at most 1e-6 nats and it sits on no bound: at the cut it is, a hair over
+/// it it is not, whatever way the iteration stopped; the statistic is
+/// `2 (f − f₀)` at the same scale.
+#[test]
+fn soundness_is_the_decrement_at_its_cut() {
+    use super::fit::{SOUND_DECREMENT, StartFit};
+    use super::optim::{Fit, Stop};
+    let fit = |decrement: f64, stop: Stop| Fit {
+        theta: vec![1.0, 0.1, 0.8],
+        iterations: 3,
+        stop,
+        f: -10.0,
+        decrement,
+    };
+    for stop in [Stop::Converged, Stop::NoAscent, Stop::IterationCap] {
+        for scale in [1.0, 0.25, 3.0] {
+            let at = SOUND_DECREMENT / scale;
+            let theta = vec![1.0, 0.1, 0.8];
+            let ok = StartFit::of(fit(at, stop), theta.clone(), false, -17.0, scale);
+            assert!(ok.sound, "{stop:?} {scale}");
+            assert_eq!(ok.lr, 14.0 * scale);
+            let over = StartFit::of(fit(at.next_up(), stop), theta.clone(), false, -17.0, scale);
+            assert!(!over.sound, "{stop:?} {scale}");
+            let bounded = StartFit::of(fit(0.0, stop), theta.clone(), true, -17.0, scale);
+            assert!(!bounded.sound, "{stop:?} {scale}");
+            let lost = StartFit::of(fit(f64::INFINITY, stop), theta, false, -17.0, scale);
+            assert!(!lost.sound, "{stop:?} {scale}");
+        }
+    }
+}
+
+/// The statistic: the normal's constant-variance likelihood in closed form
+/// is the GARCH filter's at `(v, 0, 0)`; with a t, the fitted constant
+/// variance is at least its likelihood at the grid's shapes; Kish's scale is
+/// 1 at unit weights and takes a common factor of every weight out of the
+/// statistic and the decrement.
+#[test]
+fn the_lr_statistic_is_twice_the_gain_at_kish_scale() {
+    use super::fit::{fit, kish_scale, lr_cut};
+    let ys = gjr_series([0.05, 0.08, 0.0, 0.9], 800, 5, 1.0);
+    let unit: Vec<[f64; 2]> = ys.iter().map(|&e| [e, 1.0]).collect();
+    assert_eq!(kish_scale(&unit), 1.0);
+    let bc = backcast(&unit);
+    let v = ys.iter().map(|e| e * e).sum::<f64>() / ys.len() as f64;
+    for (vol, dist) in [
+        (GarchVol::Garch, GarchDist::Normal),
+        (GarchVol::Gjr, GarchDist::Normal),
+        (GarchVol::Garch, GarchDist::T),
+    ] {
+        let got = fit(vol, dist, false, 0, &unit, bc, v).unwrap();
+        // f₀ by the definition: every row's variance the constant
+        let k = vol.k();
+        let m = dist.shape_len();
+        let at = |theta: &[f64]| {
+            let (mut f, mut filter) = (0.0, Filter::new(vol, k, 0, bc));
+            let mut dl = [0.0; 4];
+            for &e in &ys {
+                let s = filter.predict(vol, &theta[..k], &mut dl[..k]);
+                f += match m {
+                    0 => -0.5 * (libm::log(std::f64::consts::TAU) + libm::log(s) + e * e / s),
+                    _ => super::dist::log_density(e / s.sqrt(), theta[k], 0.0) - 0.5 * libm::log(s),
+                };
+                filter.push(vol, e, s, &dl[..k]);
+            }
+            f
+        };
+        let f = at(&got.theta);
+        let mut null = vec![v, 0.0, 0.0];
+        if vol == GarchVol::Gjr {
+            null.push(0.0);
+        }
+        let f0 = if m == 0 {
+            at(&null)
+        } else {
+            // the fitted null beats each shape at the mean square
+            let best = [5.0, 6.0, 10.0]
+                .iter()
+                .map(|&nu| {
+                    let mut x = null.clone();
+                    x.push(nu);
+                    at(&x)
+                })
+                .fold(f64::NEG_INFINITY, f64::max);
+            assert!(f - 0.5 * got.lr >= best - 1e-9, "{vol:?} {dist:?}");
+            f - 0.5 * got.lr
+        };
+        assert!(
+            (got.lr - 2.0 * (f - f0)).abs() < 1e-8 * (1.0 + got.lr),
+            "{vol:?} {dist:?}"
+        );
+        assert!(got.lr > 2.0 * lr_cut(vol), "{vol:?} {dist:?}: {}", got.lr);
+        // every weight scaled by 3: the same fit, the same statistic
+        let tripled: Vec<[f64; 2]> = ys.iter().map(|&e| [e, 3.0]).collect();
+        let same = fit(vol, dist, false, 0, &tripled, bc, v).unwrap();
+        assert!((same.lr - got.lr).abs() < 1e-9 * got.lr, "{vol:?} {dist:?}");
+        assert_eq!(same.sound, got.sound, "{vol:?} {dist:?}");
+    }
+}
+
+/// End to end, both sides of the cut: starts of more and more rows of one
+/// GARCH series, each too large for its cap to double, so the first fit
+/// decides. Where its statistic is under the cut the series waits, says
+/// so and reports nothing; at or over it, it starts and reports from the
+/// next row. Both happen.
+#[test]
+fn a_start_waits_under_the_lr_cut_and_starts_over_it() {
+    use super::fit::{fit, identified};
+    let ys = gjr_series([0.05, 0.08, 0.0, 0.9], 1201, 8, 1.0);
+    let mut sides = [0, 0];
+    for vol in [GarchVol::Garch, GarchVol::Gjr] {
+        for n in (60..=1200).step_by(60) {
+            let rows: Vec<[f64; 2]> = ys[..n].iter().map(|&e| [e, 1.0]).collect();
+            let v = ys[..n].iter().map(|e| e * e).sum::<f64>() / n as f64;
+            let lr = fit(vol, GarchDist::Normal, false, 0, &rows, backcast(&rows), v)
+                .unwrap()
+                .lr;
+            let c = GarchCfg {
+                start_rows: n,
+                max_state_bytes: Some(Garch::state_bytes(&cfg(vol, GarchDist::Normal), n)),
+                ..cfg(vol, GarchDist::Normal)
+            };
+            let mut m = Garch::new(c).unwrap();
+            let out = run(&mut m, &ys[..=n], &vec![1.0; n + 1]);
+            let pass = identified(vol, lr);
+            sides[usize::from(pass)] += 1;
+            assert_eq!(m.started()[0], pass, "{vol:?} {n}: {lr}");
+            assert_eq!(m.no_effect(), !pass, "{vol:?} {n}: {lr}");
+            assert_eq!(out[n][0].is_finite(), pass, "{vol:?} {n}: {lr}");
+            assert!(out[..n].iter().all(|r| r[0].is_nan()), "{vol:?} {n}");
+        }
+    }
+    assert!(sides[0] > 0 && sides[1] > 0, "{sides:?}");
 }

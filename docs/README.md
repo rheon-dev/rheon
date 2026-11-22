@@ -66,6 +66,7 @@ mechanism.
 | [how-to/scale-a-feature-by-its-spread.md](how-to/scale-a-feature-by-its-spread.md) | you want a coefficient per current standard deviation of a feature, from its z-score against its own recent spread |
 | [how-to/weight-rows-by-a-robust-scale.md](how-to/weight-rows-by-a-robust-scale.md) | you want each row to count by a robust scale of its target, without reading targets not yet known |
 | [how-to/align-series-that-tick-at-their-own-times.md](how-to/align-series-that-tick-at-their-own-times.md) | you have series observed at instants of their own — how to put them on one refresh grid with `rp.stream.refresh_time` and fit on its changes |
+| [how-to/merge-streams-by-the-clock.md](how-to/merge-streams-by-the-clock.md) | you have several streams, such as quotes and trades, each in clock order — how to merge them into one stream in clock order with `rp.stream.merge`, and resume the merge when they arrive in parts |
 | [how-to/fit-on-factor-residuals.md](how-to/fit-on-factor-residuals.md) | you fit factor ridges and want their out-of-sample residuals as features of a second ridge with a target that looks ahead |
 | **How-tos: saving, resuming and serving** | |
 | [how-to/save-a-state.md](how-to/save-a-state.md) | you want to keep what a bank learned in a file, from a bank object, a query or the command line — how to save it and load it back |

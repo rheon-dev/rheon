@@ -120,7 +120,7 @@ FAMILIES: tuple[Family, ...] = (
     Family(
         "stream",
         "stream",
-        tuple(f"{_RP}.stream.{m}" for m in ("with_windows", "embargo", "refresh_time")),
+        tuple(f"{_RP}.stream.{m}" for m in ("with_windows", "embargo", "refresh_time", "merge")),
     ),
     Family(
         "stream-checkpoint",

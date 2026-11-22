@@ -240,9 +240,12 @@ const KEEPS_LAGS: &[&str] = &["rcov", "corrchange", "ew_cov", "marginal"];
 const COUNTS_UNUSABLE: &[&str] = &["audit"];
 
 /// Models that report on some rows and not others by design -- a span-based
-/// test writes its statistic where the span closes -- so the predict-parity
-/// helper cannot ask for 300 rows with every slot ready.
-const SPARSE_OUTPUT: &[&str] = &["corrchange"];
+/// test writes its statistic where the span closes, and `garch`'s start of 50
+/// rows (a cap too small to double it) waits until a buffer's rows tell its
+/// variance process from a constant one (PLAN 548), so it reports from some
+/// buffer after the first -- so the predict-parity helper cannot ask for 300
+/// rows with every slot ready.
+const SPARSE_OUTPUT: &[&str] = &["corrchange", "garch"];
 
 /// The models whose `n_eff` is every row's weight summed, with no decay:
 /// `audit`, a record of the rows; `bocpd`, whose recursion over run lengths
@@ -3044,12 +3047,23 @@ fn predict_is_the_step_without_the_step<M: OnlineModel + Clone>(
     let mut kept = Step::default();
     let mut s = 20260902u64;
     let mut ready = 0usize;
+    // `garch` models a variance, and its start waits on a target with none
+    // (PLAN 548): its targets are each a GARCH(1,1)'s returns at (0.05,
+    // 0.6, 0.35), each row's variance and return kept here.
+    let mut returns = vec![(1.0f64, 0.0f64); targets];
     for i in 0..400 {
         let x: Vec<f64> = (0..K).map(|_| lcg(&mut s) * 3.0).collect();
         let y: Vec<Option<f64>> = (0..targets)
             .map(|j| {
                 if lcg(&mut s) > 0.8 {
                     return None;
+                }
+                if kind == "garch" {
+                    let (v, e) = &mut returns[j];
+                    *v = 0.05 + 0.6 * *e * *e + 0.35 * *v;
+                    let z = (0..12).map(|_| 0.5 * lcg(&mut s)).sum::<f64>();
+                    *e = v.sqrt() * z;
+                    return Some(*e);
                 }
                 let lin = 0.5 * (j as f64 + 1.0) + x[0] - 0.5 * x[1] + 0.1 * lcg(&mut s);
                 Some(if binary { f64::from(lin > 0.5) } else { lin })
@@ -3373,12 +3387,23 @@ fn step_into_is_step_on_a_stream<M: OnlineModel>(
     let mut kept = Step::default();
     let mut s = 20260902u64;
     let mut ready = 0usize;
+    // `garch` models a variance, and its start waits on a target with none
+    // (PLAN 548): its targets are each a GARCH(1,1)'s returns at (0.05,
+    // 0.3, 0.65), each row's variance and return kept here.
+    let mut returns = vec![(1.0f64, 0.0f64); targets];
     for i in 0..400 {
         let x: Vec<f64> = (0..K).map(|_| lcg(&mut s) * 3.0).collect();
         let y: Vec<Option<f64>> = (0..targets)
             .map(|j| {
                 if lcg(&mut s) > 0.8 {
                     return None;
+                }
+                if kind == "garch" {
+                    let (v, e) = &mut returns[j];
+                    *v = 0.05 + 0.3 * *e * *e + 0.65 * *v;
+                    let z = (0..12).map(|_| 0.5 * lcg(&mut s)).sum::<f64>();
+                    *e = v.sqrt() * z;
+                    return Some(*e);
                 }
                 let lin = 0.5 * (j as f64 + 1.0) + x[0] - 0.5 * x[1] + 0.1 * lcg(&mut s);
                 Some(if binary { f64::from(lin > 0.5) } else { lin })

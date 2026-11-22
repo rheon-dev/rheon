@@ -38,6 +38,10 @@ beside a bank. They share three rules:
        or ahead, and variances looking back, each with an optional hard
        cutoff), any number in one pass, each row out once every window over
        it has closed
+   * - :func:`merge`
+     - merges streams that each run in clock order into one stream in clock
+       order, every row kept and tagged with its stream, holding one chunk
+       of each
    * - :func:`refresh_time`
      - puts series that tick at their own times on a common grid by
        Barndorff-Nielsen, Hansen, Lunde & Shephard's refresh-time rule: a
@@ -49,8 +53,8 @@ beside a bank. They share three rules:
        stage's state back to load where it was saved
 
 Each streams: :func:`embargo` merges two sorted copies of the same input with
-Polars' ``merge_sorted``, and the other two run as an operator of the Rust core
-fed one chunk at a time, read as a lazy source.
+Polars' ``merge_sorted``, and the other three run as an operator of the Rust
+core fed one chunk at a time, read as a lazy source.
 """
 
 from __future__ import annotations
@@ -61,6 +65,7 @@ import numbers
 import os
 import warnings
 from collections.abc import Iterator, Mapping, Sequence
+from datetime import timedelta
 from typing import Any, overload
 
 import polars as pl
@@ -69,6 +74,7 @@ from polars.io.plugins import register_io_source
 from rheon import _rheon as _native
 from rheon._duration import Duration, duration_text
 from rheon._errors import RefusedValueError, WrongTypeError
+from rheon._rheon import parse_duration
 from rheon._spec import _RENAMED, _RENAMED_KEYWORDS, _renamed_keywords
 from rheon._warnings import _user_stacklevel
 from rheon.polars import _formula
@@ -95,6 +101,7 @@ __all__ = [
     "ROLE",
     "embargo",
     "load_checkpoint",
+    "merge",
     "refresh_time",
     "save_checkpoint",
     "with_windows",
@@ -829,6 +836,401 @@ def refresh_time(
 
     plan = register_io_source(source, schema=schema, validate_schema=True)
     return plan if isinstance(lf, pl.LazyFrame) else plan.collect()
+
+
+#: What :func:`merge` takes as its inputs: frames by position, or one mapping
+#: of each input's name to its frame.
+_Frame = pl.LazyFrame | pl.DataFrame
+
+
+@overload
+def merge(
+    *frames: pl.DataFrame,
+    clock: str,
+    source: str = "source",
+    by: str | None = None,
+    restart_after_step_back: float | Duration | None = None,
+    chunk_size: int | None = None,
+    load_state: State | bytes | None = None,
+    save_state: State | None = None,
+) -> pl.DataFrame: ...
+
+
+@overload
+def merge(
+    *frames: pl.LazyFrame | pl.DataFrame | Mapping[str, pl.LazyFrame | pl.DataFrame],
+    clock: str,
+    source: str = "source",
+    by: str | None = None,
+    restart_after_step_back: float | Duration | None = None,
+    chunk_size: int | None = None,
+    load_state: State | bytes | None = None,
+    save_state: State | None = None,
+) -> pl.LazyFrame | pl.DataFrame: ...
+
+
+def merge(
+    *frames: pl.LazyFrame | pl.DataFrame | Mapping[str, pl.LazyFrame | pl.DataFrame],
+    clock: str,
+    source: str = "source",
+    by: str | None = None,
+    restart_after_step_back: float | Duration | None = None,
+    chunk_size: int | None = None,
+    load_state: State | bytes | None = None,
+    save_state: State | None = None,
+) -> pl.LazyFrame | pl.DataFrame:
+    """Merge streams that each run in clock order into one stream in clock
+    order, every row kept.
+
+    Use it to feed one bank, or one :func:`with_windows` run, from several
+    streams that tick at their own times, such as quotes, trades and news,
+    each read from a file of its own. Each row comes out once, at its own
+    clock, tagged with the stream it came from, and nothing is filled in or
+    dropped. To put such series on a common grid instead, one row per
+    instant that every series has ticked by, use :func:`refresh_time`.
+
+    .. rubric:: Parameters
+
+    ``*frames``
+        The streams, each a ``LazyFrame`` or a ``DataFrame`` in ``clock``
+        order across all its rows, its groups included. Pass them by
+        position, named ``"0"``, ``"1"`` and on in that order, or pass one
+        ``dict`` of each stream's name to its frame. The order they are
+        given in breaks a tie (Notes).
+    ``clock``
+        The clock column, in every stream, of one dtype across them: an
+        integer, a float, a ``Datetime``, a ``Date`` or a ``Duration``, with
+        one unit and one time zone. A temporal clock is compared exactly, in
+        its integer steps.
+    ``source``
+        The name of the column added to name each row's stream. Default
+        ``"source"``.
+    ``by``
+        The column a bank reading the merged stream groups by, in every
+        stream. The merged rows of each of its groups are then checked as
+        that bank checks them (Notes). Default ``None``: the merged rows are
+        checked as one stream.
+    ``restart_after_step_back``
+        By default a step back of a stream's clock is refused, as a spec
+        refuses one. If it is set, a step back larger than it starts that
+        stream again, as a new day's rows start a clock again, and one no
+        larger is still refused. A number of clock units, or a duration on a
+        temporal clock (``"1h"``, a ``timedelta`` or ``pl.duration(hours=1)``),
+        at least 0.
+    ``chunk_size``
+        The rows read from each stream at a time, at least 1. The default,
+        ``None``, is the library's default chunk size. It changes no output.
+    ``load_state``
+        The path of a state :func:`merge` saved, to go on from, or the
+        state's bytes, such as a stage :func:`load_checkpoint` gives back. It
+        is read when the query is built. It must have been saved merging
+        streams of the same names, in the same order, on the same ``clock``
+        and ``by``, and a clock of the same dtype. Default ``None``: start
+        with no state loaded.
+    ``save_state``
+        The path of a file to save the state to once the streams are read,
+        or the slice of the output is. Default ``None``: save nothing
+        (Notes).
+
+    .. rubric:: Returns
+
+    A ``DataFrame`` when every stream is a ``DataFrame``, and otherwise a
+    ``LazyFrame``, with every row of every stream in clock order. Its columns
+    are the streams' columns, matched by name in the order they first appear,
+    then ``source``. A column a stream does not have is null on that
+    stream's rows.
+
+    .. rubric:: Raises
+
+    :class:`~rheon.ColumnNotFoundError`
+        A stream has no ``clock`` or ``by`` column of that name. It is both
+        a ``ValueError`` and Polars' ``ColumnNotFoundError``.
+    :class:`~rheon.WrongTypeError`
+        The ``clock`` column is not an integer, a float or a temporal
+        column, or its dtype, unit or time zone differ between two streams,
+        which are named; a column of one name has two dtypes in two streams,
+        which are named; or a column, read or not, is ``UInt128``, which
+        rheon cannot read. It is both a ``TypeError`` and a ``ValueError``.
+    ``ValueError``
+        When the query is built: no stream is given, or a name twice; a
+        stream already has a column named ``source``; ``chunk_size`` is
+        below 1; ``restart_after_step_back`` is below 0, or a duration on a
+        numeric clock, or a number on a temporal one; ``load_state`` is not
+        such a state, or was saved with other streams, ``clock``, ``by`` or
+        clock dtype. And when the query runs: a clock that is null, NaN or
+        infinite, or one that steps back where the rule above refuses it,
+        each naming the stream and its row, counted from 0 in that stream;
+        or a step back in the merged rows of a group (Notes). Under py-polars
+        1.x these arrive inside Polars' ``ComputeError``, since the merge
+        runs as a Polars source, for a ``DataFrame`` too. Under 2.0 each is
+        the ``ValueError`` itself.
+    ``TypeError``
+        A stream is neither a ``LazyFrame`` nor a ``DataFrame``, or a name
+        in a ``dict`` is not text.
+    ``FileNotFoundError``
+        ``load_state`` is not there, or the folder of ``save_state`` is not.
+    ``IsADirectoryError``
+        ``save_state`` is a folder, on every system. A ``load_state`` that is
+        a folder raises it too on macOS and Linux, and ``PermissionError`` on
+        Windows, where opening a folder fails that way.
+    :class:`~rheon.polars.OrderNotGuaranteedWarning`
+        A warning: the query before this call does not keep a stream's rows
+        in order, which the merge reads them in.
+
+    .. rubric:: Examples
+
+    .. code-block:: python
+
+        quotes = pl.DataFrame({"t": [1.0, 2.0, 4.0], "bid": [9.9, 10.0, 10.1]})
+        trades = pl.DataFrame({"t": [2.0, 3.0], "price": [10.05, 10.2]})
+        merged = rp.stream.merge({"quotes": quotes, "trades": trades}, clock="t")
+        for row in merged.rows():          # (t, bid, price, source)
+            print(row)
+
+    .. code-block:: text
+
+        (1.0, 9.9, None, 'quotes')
+        (2.0, 10.0, None, 'quotes')
+        (2.0, None, 10.05, 'trades')
+        (3.0, None, 10.2, 'trades')
+        (4.0, 10.1, None, 'quotes')
+
+    .. rubric:: See also
+
+    - :func:`refresh_time`, which samples series on a common grid rather
+      than interleaving their rows.
+    - Polars' ``merge_sorted``, which merges two frames sorted on one key.
+    -
+      `Merge streams by the clock
+      <https://github.com/rheon-dev/rheon/blob/main/docs/how-to/merge-streams-by-the-clock.md>`_,
+      the how-to.
+
+    .. rubric:: Notes
+
+    **The order.** Rows come out by their clock. At one clock value the
+    stream given first comes first, and a stream's own rows keep their
+    order, so the output is what sorting the streams' rows, concatenated in
+    the order given, by the clock with a stable sort gives:
+    ``pl.concat(frames, how="diagonal").sort(clock, maintain_order=True)``,
+    computed a chunk of each stream at a time. Under
+    ``restart_after_step_back`` a stream that starts again sorts after every
+    row before it starts again: the rows of each stream's second day come after
+    the first day's rows of every stream, as their own day's. So every stream
+    must start again at the same places, each day in each stream.
+
+    **Memory.** A stream in clock order has its least row still to come at
+    its head, so the least head of all the streams is the next row out. The
+    merge keeps the streams' heads in a heap, takes the least, and reads a
+    stream's next chunk when its current one is used up. It holds one chunk
+    of each stream and one chunk of output, and the output is the same
+    however the chunks fall. Each stream is read by a Polars query of its
+    own, whose reader keeps buffers of its own beside the merge's. A
+    stream that steps back would put a row of its own after rows of the
+    others that should follow it, so the order is checked in each stream,
+    across its groups, as it is read.
+
+    **The merged rows.** With ``by``, the merged rows of each group are read
+    as a bank grouped by ``by`` reads them, under the same
+    ``restart_after_step_back``: a group whose rows step back where that bank
+    would refuse it is refused here, naming the stream and its row. Each
+    stream in clock order gives merged rows in clock order, so in one run
+    this catches only a group that steps back by little where its stream
+    started again. Across runs it catches streams cut at different clocks:
+    a resumed run whose rows belong before rows the last run returned.
+    Without ``by`` the merged rows are checked as one group.
+
+    **It resumes.** ``save_state`` writes each stream's last row read, how
+    many times it started again, and the merged rows' last clock in each
+    group. The state is written in full or not at all. A run resumed with
+    ``load_state`` on the next part of every stream goes on where the last
+    stopped, so feeding the streams in two runs gives the rows one run
+    gives, when every stream is cut at the same clock. A part may end inside
+    a tie: a stream's next part can bring more rows at the clock the last
+    part ended on, which belong before the rows of the streams after it. So
+    a run that saves its state holds back the rows at the last clock it
+    read, saves them in the state, and the resumed run returns them in
+    their place. The rows held are those of one clock value, and the memory
+    they take is one tie's rows. A zero-weight row is a row like any other:
+    the merge carries no weights.
+
+    Under a slice of the output (``.head(n)``) each stream is read only up
+    to its last row returned, and nothing is held: the state saved is the
+    state after the rows returned, whatever the chunk size. Resume on each
+    stream after its rows the slice returned, which the ``source`` column
+    counts.
+    """
+    who = "rp.stream.merge"
+    named = _merge_inputs(frames, who)
+    names = [n for n, _ in named]
+    lazies = [f.lazy() for _, f in named]
+    schemas = [lz.collect_schema() for lz in lazies]
+    for schema in schemas:
+        # Every column of a chunk crosses to the extension, which cannot
+        # take a `UInt128` one in.
+        _refuse_uint128(schema, who, (clock,))
+    restart, restart_text = _restart_setting(
+        restart_after_step_back, next((s[clock] for s in schemas if clock in s), None), who, clock
+    )
+    rows = _check_chunk_size(chunk_size, who) or _native.default_chunk_size()
+    # Read now, as a bank's `load_state` is: a plan collected twice goes on
+    # from the same state, whatever the file holds by then.
+    loaded = _read_state(load_state) if load_state is not None else None
+    save_path = _save_path(save_state, who)
+    empties = [pl.DataFrame(schema=s) for s in schemas]
+    settings = (clock, source, by, restart, restart_text)
+
+    def build() -> _native.Merge:
+        if loaded is not None:
+            return _native.Merge.load_bytes(loaded, names, empties, *settings)
+        return _native.Merge(names, empties, *settings)
+
+    # Built once now, so a stream without the clock, two clocks that do not
+    # compare and a state that does not fit are reported while the plan is
+    # built, as polars reports its own schema errors.
+    schema = build().empty().schema
+    for name, lz in zip(names, lazies, strict=True):
+        _warn_if_order_unspecified(
+            lz,
+            f"{who} (stream {name!r})",
+            _plan_text(lz),
+            reads="the merge reads each stream in row order",
+            before="the merge",
+        )
+
+    def source_fn(
+        with_columns: list[str] | None,
+        predicate: pl.Expr | None,
+        n_rows: int | None,
+        batch_size: int | None,
+    ) -> Iterator[pl.DataFrame]:
+        # Polars does not re-apply the three pushdowns after a Python
+        # source, so each is honoured here (`_frame.py` explains the order).
+        # The slice counts *output* rows, and the merge reads each stream
+        # only up to its last row returned, so a state saved there is the
+        # state after the rows returned, whatever the chunk size.
+        m = build()
+        # A run that saves its state holds the rows at the last clock it
+        # read, for the next part of the streams; a slice holds nothing, so
+        # each stream resumes after its rows the slice returned.
+        hold = save_path is not None and n_rows is None
+        batches: list[Iterator[pl.DataFrame] | None] = [None] * len(lazies)
+        seen = 0
+
+        def emit(out: pl.DataFrame) -> pl.DataFrame:
+            if predicate is not None:
+                out = out.filter(predicate)
+            if with_columns is not None:
+                out = out.select(with_columns)
+            return out
+
+        while n_rows is None or seen < n_rows:
+            # At most a chunk's rows a pull: the output is a chunk at a time
+            # beside the one chunk of each stream the merge holds.
+            cap = rows if n_rows is None else min(rows, n_rows - seen)
+            out, want = m.pull(cap, hold)
+            seen += out.height
+            if out.height:
+                yield from _in_morsels(emit(out))
+            if want is None and out.height < cap:
+                break
+            if want is None:
+                continue
+            if batches[want] is None:
+                batches[want] = lazies[want].collect_batches(chunk_size=rows, maintain_order=True)
+            chunk = next(batches[want], None)  # type: ignore[arg-type]
+            if chunk is None:
+                m.end(want)
+            else:
+                m.push(want, chunk)
+        # Reached once the streams are read, or the slice is: not on a run
+        # the caller abandons, nor one the merge ended with an error.
+        if save_path is not None:
+            m.save(save_path)
+
+    plan = register_io_source(
+        source_fn,
+        schema=schema,
+        validate_schema=True,
+        is_pure=save_path is None,
+        **_explain_named(f"merge: {len(names)} stream(s)"),
+    )
+    every_frame = all(isinstance(f, pl.DataFrame) for _, f in named)
+    return plan.collect() if every_frame else plan
+
+
+def _merge_inputs(frames: tuple[Any, ...], who: str) -> list[tuple[str, _Frame]]:
+    """:func:`merge`'s streams, each with its name: one mapping's items, or
+    the frames by position, named by it."""
+    if len(frames) == 1 and isinstance(frames[0], Mapping):
+        items = list(frames[0].items())
+        for name, _ in items:
+            if not isinstance(name, str):
+                raise WrongTypeError(
+                    f"{who}: a stream's name must be text, but one is {name!r}. Name each "
+                    "stream with a str, as in {'quotes': quotes, 'trades': trades}."
+                )
+    else:
+        items = [(str(i), f) for i, f in enumerate(frames)]
+    for name, f in items:
+        if not isinstance(f, pl.LazyFrame | pl.DataFrame):
+            raise WrongTypeError(
+                f"{who}: stream {name!r} is a {type(f).__name__}, not a frame. Pass each stream "
+                "as a LazyFrame or a DataFrame, by position or in one dict of name to frame."
+            )
+    return items
+
+
+def _restart_setting(
+    value: Any, dtype: pl.DataType | None, who: str, clock: str
+) -> tuple[float | None, str | None]:
+    """``restart_after_step_back`` in the clock's units, integer nanoseconds
+    on a temporal clock, and as the message names it; ``(None, None)``
+    left out."""
+    key = "restart_after_step_back"
+    if value is None:
+        return None, None
+    if dtype is not None and isinstance(dtype, pl.Time):
+        # Said by the extension, with the rest of the clock's refusals.
+        return None, None
+    temporal = dtype is not None and dtype.is_temporal()
+    duration = isinstance(value, timedelta | str | pl.Expr)
+    if temporal:
+        if not duration:
+            raise ValueError(
+                f"{who}: clock column {clock!r} is {dtype}, a temporal clock, so {key} must be a "
+                f'duration, but it is {value!r}. Give {key} as a duration, such as "1h", '
+                "timedelta(hours=1) or pl.duration(hours=1)."
+            )
+        text = duration_text(value, who, key)
+        try:
+            ns = parse_duration(text)
+        except ValueError as e:
+            raise ValueError(f"{who}: {key} {e}") from None
+        if ns < 0:
+            raise ValueError(
+                f"{who}: {key} must be 0 or more, but it is {text}. Set it to a duration of 0 or "
+                "more, or leave it out."
+            )
+        return float(ns), str(text)
+    if duration:
+        raise ValueError(
+            f"{who}: {key} is a duration, but clock column {clock!r} is "
+            f"{dtype if dtype is not None else 'not there'}, which has no unit to measure it in. "
+            f"Give {key} as a number of the clock's units, or use a temporal clock."
+        )
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        raise WrongTypeError(
+            f"{who}: {key} must be a number on numeric clock column {clock!r}, but its type is "
+            f"{type(value).__name__}. Set it to the smallest step back that starts a stream "
+            "again, such as 3600."
+        )
+    x = float(value)
+    if math.isnan(x) or x < 0:
+        raise ValueError(
+            f"{who}: {key} must be 0 or more, but it is {value!r}. Set it to the smallest step "
+            "back that starts a stream again, or leave it out to refuse every step back."
+        )
+    return x, ("inf" if math.isinf(x) else repr(value) if isinstance(value, float) else str(value))
 
 
 #: The clock keywords ``like=`` takes from a spec, and refuses beside it.

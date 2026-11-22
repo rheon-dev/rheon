@@ -431,7 +431,9 @@ def test_the_window_permutation_size_is_its_exact_level(n_perm, perm_block):
 # shift whose run began within 5 rows of it.
 
 BP_SEEDS = range(50)
-BP_KW = dict(hazard=250.0, mean_prior=[0.0], covariance_prior=[1.0], degrees_of_freedom_prior=2.0)
+BP_KW = dict(
+    hazard_rows=250.0, mean_prior=[0.0], covariance_prior=[1.0], degrees_of_freedom_prior=2.0
+)
 BP_H = 1.0 / 250.0
 
 

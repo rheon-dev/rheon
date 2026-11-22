@@ -7,7 +7,7 @@ out-of-sample errors with `rp.eval.grid_search`, and to report what that
 choice earned. A model's settings say how long it remembers (`half_life`),
 how hard it shrinks (`ridge`), how fast its coefficients may move
 (`coef_half_life`, `learning_rate`) and how often it expects a regime to
-end (`hazard`).
+end (`hazard_rows`, `hazard`).
 
 ## Prerequisites
 
@@ -123,7 +123,7 @@ To make the same choice by hand from an output frame you already have, see
 Use this for a setting a spec does not take as a list, such as `kalman`'s
 `coef_half_life` (where a list gives one value per coefficient, not a
 grid), `sgd`'s `learning_rate`, `holt`'s `trend_half_life` and `bocpd`'s
-`hazard`.
+`hazard_rows` and `hazard`.
 
 1. **Build a spec builder with `functools.partial`,** giving it the
    keywords every spec shares.
@@ -177,7 +177,7 @@ recipe that searches them, and sets each from what it means instead.
 | `q` | `kalman` | one spec per value | [Set the process noise outright](how-to/choose-a-kalman-drift-speed.md#set-the-process-noise-outright) |
 | `learning_rate` | `sgd` | one spec per value | [Choose a learning rate](how-to/choose-a-learning-rate.md#search-the-rate-from-the-streams-own-errors) |
 | `half_life` and `trend_half_life` | `holt` | one spec per `trend_half_life`, each with a list of `half_life` | [Choose Holt's smoothing](how-to/choose-holts-smoothing.md#choose-the-half-lives-from-the-streams-own-errors) |
-| `hazard` and the priors | `bocpd` | one spec per value, scored by `loglik` | [Choose a changepoint hazard](how-to/choose-a-changepoint-hazard.md) |
+| `hazard_rows` or `hazard`, and the priors | `bocpd` | one spec per value, scored by `loglik` | [Choose a changepoint hazard](how-to/choose-a-changepoint-hazard.md) |
 | `n_clusters`, `n_components`, `huber_delta` | `kmeans`, `hmm`, the robust losses | not by this pattern | [What this cannot choose](#what-this-cannot-choose) |
 
 ## What this cannot choose

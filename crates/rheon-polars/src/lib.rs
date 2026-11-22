@@ -52,6 +52,7 @@ mod figures;
 mod formula;
 pub mod gbdt;
 pub mod gramfit;
+mod merge;
 mod pool;
 mod refresh;
 mod resid_window;
@@ -100,6 +101,7 @@ pub use checkpoint::{
 pub use defaults::resolved_defaults;
 pub use envelope::Kind as StateKind;
 pub use formula::{Formula, Literal, Node, OpNode};
+pub use merge::{Merge, MergeConfig};
 /// The Rust Polars this crate is built against, which the command line's
 /// `--version` names.
 pub use polars::VERSION as POLARS_VERSION;
@@ -117,10 +119,9 @@ pub use runner::{
 };
 pub use span::{Span, SpanList, format_duration, parse_duration, seconds_of};
 pub use spec::{
-    CLOCK_FIELDS, CLOCK_RATES, ClockScale, Compare, CountOrAuto, DURATION_OR_UNIT_FREE_FIELDS,
-    FloatOrList, GramThreads, INIT_WORDS, ModelKind, Num, RENAMED, RENAMED_VALUES, RidgeScale,
-    SessionGapSpec, ShardSpec, Spec, name_renamed, spec_words_refusal, word_refusal_body,
-    words_body, words_refusal,
+    CLOCK_FIELDS, CLOCK_RATES, ClockScale, Compare, CountOrAuto, FloatOrList, GramThreads,
+    INIT_WORDS, ModelKind, Num, RENAMED, RENAMED_VALUES, RidgeScale, SessionGapSpec, ShardSpec,
+    Spec, name_renamed, spec_words_refusal, word_refusal_body, words_body, words_refusal,
 };
 pub use stream::{
     AnyModel, ChunkOut, LastRow, Stream, StreamState, build_models, combo_labels, marginal_shards,

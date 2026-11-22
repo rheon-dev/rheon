@@ -1107,6 +1107,159 @@ fn refresh_busy(what: &str) -> PyErr {
     )
 }
 
+/// `rp.stream.merge` (`rheon_polars::Merge`, docs/PLAN.md task 541): fed
+/// chunks of each input, it gives the merged rows in clock order and says
+/// which input's next chunk it needs.
+#[pyclass(name = "Merge", module = "rheon._rheon")]
+struct PyMerge {
+    inner: rheon_polars::Merge,
+}
+
+/// The settings `Merge` and `Merge.load_bytes` take, and the schemas of
+/// `frames`, empty frames of each input's columns.
+fn merge_parts(
+    frames: Vec<PyDataFrame>,
+    clock: String,
+    source: String,
+    by: Option<String>,
+    restart: Option<f64>,
+    restart_text: Option<String>,
+) -> (Vec<polars::prelude::Schema>, rheon_polars::MergeConfig) {
+    let schemas = frames
+        .into_iter()
+        .map(|f| f.0.schema().as_ref().clone())
+        .collect();
+    let cfg = rheon_polars::MergeConfig {
+        clock,
+        source,
+        by,
+        restart,
+        restart_text,
+    };
+    (schemas, cfg)
+}
+
+#[pymethods]
+impl PyMerge {
+    #[new]
+    #[pyo3(signature = (names, frames, clock, source, by=None, restart=None, restart_text=None))]
+    fn new(
+        names: Vec<String>,
+        frames: Vec<PyDataFrame>,
+        clock: String,
+        source: String,
+        by: Option<String>,
+        restart: Option<f64>,
+        restart_text: Option<String>,
+    ) -> PyResult<Self> {
+        let (schemas, cfg) = merge_parts(frames, clock, source, by, restart, restart_text);
+        Ok(Self {
+            inner: rheon_polars::Merge::new(names, schemas, cfg).map_err(|e| run_err(&e, None))?,
+        })
+    }
+
+    /// A merge that goes on from a saved state (`Merge::load_bytes`).
+    #[staticmethod]
+    #[pyo3(signature = (state, names, frames, clock, source, by=None, restart=None, restart_text=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn load_bytes(
+        state: &[u8],
+        names: Vec<String>,
+        frames: Vec<PyDataFrame>,
+        clock: String,
+        source: String,
+        by: Option<String>,
+        restart: Option<f64>,
+        restart_text: Option<String>,
+    ) -> PyResult<Self> {
+        let (schemas, cfg) = merge_parts(frames, clock, source, by, restart, restart_text);
+        Ok(Self {
+            inner: rheon_polars::Merge::load_bytes(state, names, schemas, cfg)
+                .map_err(|e| run_err(&e, None))?,
+        })
+    }
+
+    /// An empty frame of the merged rows' columns.
+    fn empty(slf: &Bound<'_, Self>) -> PyResult<PyDataFrame> {
+        let this = slf.try_borrow().map_err(|_| merge_busy())?;
+        Ok(PyDataFrame(polars::prelude::DataFrame::empty_with_schema(
+            this.inner.schema(),
+        )))
+    }
+
+    /// The next chunk of input `i`.
+    fn push(slf: &Bound<'_, Self>, i: usize, df: PyDataFrame) -> PyResult<()> {
+        let mut this = slf.try_borrow_mut().map_err(|_| merge_busy())?;
+        if i >= this.inner.len() {
+            return Err(no_input(i));
+        }
+        let df = df.0;
+        let inner = &mut this.inner;
+        slf.py()
+            .detach(|| inner.push(i, df))
+            .map_err(|e| run_err(&e, None))
+    }
+
+    /// Input `i` has no more rows in this run.
+    fn end(slf: &Bound<'_, Self>, i: usize) -> PyResult<()> {
+        let mut this = slf.try_borrow_mut().map_err(|_| merge_busy())?;
+        if i >= this.inner.len() {
+            return Err(no_input(i));
+        }
+        this.inner.end(i);
+        Ok(())
+    }
+
+    /// Merged rows, at most `limit`, and the input whose next chunk is
+    /// needed, or `None` once every input's rows are out (`Merge::pull`).
+    /// The GIL is released for the merge, as `RefreshTime.feed` releases it.
+    #[pyo3(signature = (limit=None, hold=false))]
+    fn pull(
+        slf: &Bound<'_, Self>,
+        limit: Option<usize>,
+        hold: bool,
+    ) -> PyResult<(PyDataFrame, Option<usize>)> {
+        let mut this = slf.try_borrow_mut().map_err(|_| merge_busy())?;
+        let inner = &mut this.inner;
+        let (df, want) = slf
+            .py()
+            .detach(|| inner.pull(limit, hold))
+            .map_err(|e| run_err(&e, None))?;
+        Ok((PyDataFrame(df), want))
+    }
+
+    /// The state's bytes.
+    fn save_bytes(slf: &Bound<'_, Self>) -> PyResult<Vec<u8>> {
+        let this = slf.try_borrow().map_err(|_| merge_busy())?;
+        this.inner.save_bytes().map_err(PyValueError::new_err)
+    }
+
+    /// The state, written to `path` whole or not at all ([`save_err`]).
+    fn save(slf: &Bound<'_, Self>, path: &str) -> PyResult<()> {
+        let this = slf.try_borrow().map_err(|_| merge_busy())?;
+        this.inner
+            .save(std::path::Path::new(path))
+            .map_err(|e| save_err(path, e))
+    }
+}
+
+/// The error for an input index past the merge's inputs.
+fn no_input(i: usize) -> PyErr {
+    PyValueError::new_err(format!(
+        "rp.stream.merge: there is no input {i}. Give the index of an input the merge was built with."
+    ))
+}
+
+/// The error for a merge reached from a second thread while a call is on
+/// the first (`push` and `pull` release the GIL).
+fn merge_busy() -> PyErr {
+    PyRuntimeError::new_err(
+        "rp.stream.merge: a run of rp.stream.merge is one ordered stream, and this one is in \
+         use on another thread, so it cannot be fed from two places at once. Wait for the call \
+         to return, or call rp.stream.merge once in each thread.",
+    )
+}
+
 /// `rp.stream.with_windows` (`rheon_polars::WindowsRun`, docs/PLAN.md task 78):
 /// fed a stream's chunks in order, it returns the rows each chunk resolved,
 /// with every window's columns beside them. The rows a forward window holds
@@ -1359,13 +1512,11 @@ fn format_duration(ns: i64) -> String {
 
 /// The parameters measured in clock units, which take a duration under a
 /// temporal clock, keyed `"*"` for the shared ones and by model `type` for
-/// the rest; the rates per clock unit, which a temporal clock refuses
-/// (docs/PLAN.md task 88); and the parameters that take a duration or a
-/// number bound to no clock unit, `bocpd`'s `hazard` (task 179).
+/// the rest; and the rates per clock unit, which a temporal clock refuses
+/// (docs/PLAN.md task 88).
 #[pyfunction]
 #[allow(clippy::type_complexity)]
 fn spec_clock_fields() -> (
-    Vec<(&'static str, Vec<&'static str>)>,
     Vec<(&'static str, Vec<&'static str>)>,
     Vec<(&'static str, Vec<&'static str>)>,
 ) {
@@ -1377,7 +1528,6 @@ fn spec_clock_fields() -> (
     (
         table(rheon_polars::CLOCK_FIELDS),
         table(rheon_polars::CLOCK_RATES),
-        table(rheon_polars::DURATION_OR_UNIT_FREE_FIELDS),
     )
 }
 
@@ -1535,6 +1685,7 @@ fn _rheon(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyModelBank>()?;
     m.add_class::<PyArrowStruct>()?;
     m.add_class::<PyRefreshTime>()?;
+    m.add_class::<PyMerge>()?;
     m.add_class::<PyWindows>()?;
     gbdt::register(m)?;
     m.add_function(wrap_pyfunction!(gramfit::gram_lars_paths, m)?)?;

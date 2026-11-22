@@ -355,7 +355,7 @@ number of rows from row 1000 to the first alarm at or after it.
 | detector | settings | what counts as its alarm |
 |---|---|---|
 | `corrchange(kind="window")` | `kind="window"`, `window_rows=100`, `n_perm=100`, `permute_every_rows=100`, `alpha=0.05`, `seed=0` | `flag`: the change between two adjacent 100-row windows is above a permutation quantile |
-| `bocpd` | `covariance_type="full"`, `hazard=500`, `degrees_of_freedom_prior=5`, `covariance_prior=[0.1]`, `mean_prior` left out (the first 5 rows' mean), `prune_below=1e-8`, `max_run=1200` | its own alarm, `p_change`, cannot see this break, so here: the row that `t - run_mode` names as the current run's start jumps forward by more than 50 |
+| `bocpd` | `covariance_type="full"`, `hazard_rows=500`, `degrees_of_freedom_prior=5`, `covariance_prior=[0.1]`, `mean_prior` left out (the first 5 rows' mean), `prune_below=1e-8`, `max_run=1200` | its own alarm, `p_change`, cannot see this break, so here: the row that `t - run_mode` names as the current run's start jumps forward by more than 50 |
 
 **`bocpd` is measured with `covariance_type="full"`, not its default
 `"diag"`.** The default models each feature on its own, and only the

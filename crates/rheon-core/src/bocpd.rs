@@ -150,15 +150,18 @@
 //! What the row reports, `P(r ≤ 1)` among it, is read as a row of the mean
 //! weight, which is what `predict`, never told a weight, can say.
 //!
-//! # The hazard on the clock (docs/PLAN.md task 179)
+//! # The hazard in rows or on the clock (docs/PLAN.md tasks 179 and 547)
 //!
-//! By default `hazard` is the expected rows between changepoints. `H =
-//! 1/hazard`, the same on every row, enters at the end of each row's step,
-//! in the changepoint branch above. It is the chance of a break **after**
-//! the row, which is why the mass at `r = 0` is exactly `H`.
+//! By default `hazard` is the expected rows between changepoints (a spec's
+//! `hazard_rows`). `H = 1/hazard`, the same on every row, enters at the end
+//! of each row's step, in the changepoint branch above. It is the chance of
+//! a break **after** the row, which is why the mass at `r = 0` is exactly
+//! `H`: Adams and MacKay's hazard, one step an observation.
 //!
-//! With `hazard_on_clock` it is `τ`, the expected time between changepoints
-//! in clock units. Breaks then arrive in time at rate `1/τ`, so the step of
+//! With `hazard_on_clock` (a spec's `hazard`, on any clock: rows without a
+//! clock column, the column's units on a numeric one, seconds on a temporal
+//! one) it is `τ`, the expected time between changepoints in clock units.
+//! Breaks then arrive in time at rate `1/τ`, so the step of
 //! `d` clock units into a row carries the chance `h = 1 − exp(−d/τ)` that a
 //! break fell inside it. That chance belongs to the boundary **before** the
 //! row, and a stream cannot know the step after a row until the next row
@@ -277,8 +280,9 @@ pub enum BocpdEmission {
 pub struct BocpdCfg {
     pub n_features: usize,
     /// Expected rows between changepoints, `H = 1/hazard` the chance of a
-    /// break after each row; under `hazard_on_clock`, the expected clock
-    /// time between them, `τ`.
+    /// break after each row (a spec's `hazard_rows`); under
+    /// `hazard_on_clock`, the expected clock time between them, `τ` (a
+    /// spec's `hazard`).
     pub hazard: f64,
     /// Read the hazard from the row instead (it rides in `y[0]`, the way
     /// `ew_class`'s label does), falling back to `hazard` where the value
@@ -419,23 +423,23 @@ impl BocpdCfg {
             // chance of one, and that is the step's business, not `τ`'s.
             if !(self.hazard > 0.0 && self.hazard.is_finite()) {
                 no.refuse(format!(
-                    "bocpd: hazard, given as a duration, must be finite and above 0, but it is {} \
-                     seconds. Set hazard to the expected time between breaks, such as \"1h\".",
+                    "bocpd: hazard must be finite and above 0, but it is {} clock units (seconds \
+                     on a temporal clock). Set hazard to the expected clock time between breaks, \
+                     such as \"1h\", or hazard_rows to the expected rows between them.",
                     self.hazard
                 ));
             }
             if self.hazard_from_row {
                 no.refuse(
-                    "bocpd: hazard_col and a hazard given as a duration cannot both be set: the \
-                     column gives a chance of a break after each row, and the duration a chance \
-                     over each clock step. Give hazard as a number of rows, or leave out \
-                     hazard_col.",
+                    "bocpd: hazard_col and hazard cannot both be set: the column gives a chance \
+                     of a break after each row, and hazard a chance over each clock step. Give \
+                     the column's fallback as hazard_rows, or leave out hazard_col.",
                 );
             }
         } else if !(self.hazard > 1.0 && self.hazard.is_finite()) {
             no.refuse(format!(
-                "bocpd: hazard must be finite and above 1, but it is {}. Set hazard to the \
-                 expected number of rows between breaks, such as the default 250.",
+                "bocpd: hazard_rows must be finite and above 1, but it is {}. Set hazard_rows to \
+                 the expected number of rows between breaks, such as the default 250.",
                 self.hazard
             ));
         }
@@ -1130,7 +1134,9 @@ pub struct Bocpd {
     /// One per kept run length, shortest first (`runs[0]` is `r = 0`).
     runs: Vec<Run>,
     /// `ln P(rₜ = r, x₁:ₜ)`, aligned with `runs`. Unnormalised; see
-    /// [`Bocpd::prune`] for why it is left that way.
+    /// [`Bocpd::prune`] for why it is left that way. A hazard on the clock
+    /// leaves `−∞` at `r = 0` after every row, which JSON writes by tag.
+    #[serde(with = "crate::humanfloat::vec_f64_or_tag")]
     logjoint: Vec<f64>,
     n_eff: f64,
     /// The mean weight of the rows learned from, and their count: a row
@@ -3533,7 +3539,7 @@ mod tests {
                 hazard: 1.0,
                 ..cfg(1)
             },
-            "hazard must be finite and above 1, but it is 1.",
+            "hazard_rows must be finite and above 1, but it is 1.",
         );
         bad(
             BocpdCfg {
@@ -4856,7 +4862,7 @@ mod tests {
         for tau in [0.0, -1.0, f64::NAN, f64::INFINITY] {
             let e = Bocpd::new(on_clock(1, tau)).unwrap_err();
             assert!(
-                e.contains("hazard, given as a duration, must be finite and above 0"),
+                e.contains("hazard must be finite and above 0"),
                 "{tau}: {e}"
             );
         }
@@ -4867,7 +4873,7 @@ mod tests {
         })
         .unwrap_err();
         assert!(
-            e.contains("hazard_col and a hazard given as a duration cannot both be set"),
+            e.contains("hazard_col and hazard cannot both be set"),
             "{e}"
         );
     }

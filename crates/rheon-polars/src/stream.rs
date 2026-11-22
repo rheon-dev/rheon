@@ -459,17 +459,30 @@ impl AnyModel {
         }
     }
 
-    /// Whether the model is still holding its first rows to seed itself
-    /// from, its `warm_rows`, and so reports nothing: `kmeans`' centres,
-    /// `hmm`'s states, `bocpd`'s prior, `kalman`'s unsized priors.
-    pub fn seeding(&self) -> bool {
-        match self {
+    /// The model's own wait, if it is in one, and so reports nothing:
+    /// [`OwnWait::Seeding`] while it holds its first rows to seed itself
+    /// from, its `warm_rows` -- `kmeans`' centres, `hmm`'s states, `bocpd`'s
+    /// prior, `kalman`'s unsized priors, and the rows `garch`'s start
+    /// buffers for a target; [`OwnWait::NotIdentified`] while a fit is
+    /// withheld because its rows do not identify the model -- `garch`'s
+    /// start, whose likelihood did not tell the variance process from a
+    /// constant variance, so it buffers more rows. One dispatch a row
+    /// answers both.
+    pub fn own_wait(&self) -> OwnWait {
+        let seeding = match self {
             AnyModel::KMeans(m) => !m.seeded(),
             AnyModel::Hmm(m) => !m.seeded(),
             AnyModel::Bocpd(m) => m.warming(),
             AnyModel::Dcc(m) => !m.started(),
             AnyModel::Kalman(m) => m.sizing(),
+            AnyModel::Garch(m) if m.starting() => true,
+            AnyModel::Garch(m) if m.no_effect() => return OwnWait::NotIdentified,
             _ => false,
+        };
+        if seeding {
+            OwnWait::Seeding
+        } else {
+            OwnWait::None
         }
     }
 
@@ -638,8 +651,9 @@ use build::{build_one, constraint, huber_scale_of, resid_window};
 mod model_cfgs;
 use model_cfgs::read_floor;
 pub use model_cfgs::{
-    audit_cfg, bocpd_cfg, corrchange_cfg, dcc_cfg, deco_block_names, deco_cfg, expectile_cfg,
-    garch_cfg, glm_cfg, hawkes_cfg, hmm_cfg, huber_model, quantile_model, rcov_cfg, sgd_model,
+    BOCPD_HAZARD_ROWS, audit_cfg, bocpd_cfg, corrchange_cfg, dcc_cfg, deco_block_names, deco_cfg,
+    expectile_cfg, garch_cfg, glm_cfg, hawkes_cfg, hmm_cfg, huber_model, quantile_model, rcov_cfg,
+    sgd_model,
 };
 
 /// One grid combo: the rendered label plus the machine values it encodes, so
@@ -1304,6 +1318,14 @@ pub fn settled_weight(weight: f64, first: f64, settled: f64, steps: f64) -> f64 
     }
 }
 
+/// A model's own wait ([`AnyModel::own_wait`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OwnWait {
+    None,
+    Seeding,
+    NotIdentified,
+}
+
 /// The reasons a row's predictions are withheld, as `withheld_reason`
 /// spells them: the code the row buffer carries (0 for none) and the name
 /// the output shows. The order is the precedence when several apply. A
@@ -1313,14 +1335,17 @@ pub fn settled_weight(weight: f64, first: f64, settled: f64, steps: f64) -> f64 
 /// (task 278, D4), and the noise gate reads a fit withheld for its
 /// condition as not a number, so it never names that fit in its place;
 /// `unstable_rate` after it (task 278, D8), `sgd`'s gate, which no model
-/// with an earlier reason of its own has.
-pub const WITHHELD_REASONS: [&str; 6] = [
+/// with an earlier reason of its own has; `not_identified` after that (PLAN
+/// 548), `garch`'s wait for a start whose rows tell its variance process
+/// from a constant one, which comes after its own warm-up.
+pub const WITHHELD_REASONS: [&str; 7] = [
     "below_min_settled_frac",
     "below_min_weight",
     "above_max_error_inflation",
     "below_warm_rows",
     "ill_conditioned",
     "unstable_rate",
+    "not_identified",
 ];
 const REASON_SETTLED: u8 = 1;
 const REASON_MIN_PERIODS: u8 = 2;
@@ -1328,6 +1353,7 @@ const REASON_INFLATION: u8 = 3;
 const REASON_WARM_ROWS: u8 = 4;
 const REASON_ILL_CONDITIONED: u8 = 5;
 const REASON_UNSTABLE_RATE: u8 = 6;
+const REASON_NOT_IDENTIFIED: u8 = 7;
 
 /// The settled fraction at which a readiness notice judges a stream
 /// (docs/WARMUP-AND-CONVERGENCE.md §3): the one rule all three notices
@@ -4087,10 +4113,11 @@ fn run_instance(
             let fit = settled_frac(inst.check_cfg.ready(), *inst.decay_time);
             !inst.model.get().scaler_warming() && (fit.is_nan() || settled_enough(fit))
         };
-        // Read before the step, which may seed the model on this row: the
-        // row itself was still read by the unseeded model, and reports
-        // nothing.
-        let seeding = inst.model.get().seeding();
+        // Read before the step, which may seed the model on this row, or
+        // fit a start that waited on its evidence: the row itself was still
+        // read by the unseeded model, and reports nothing.
+        let wait = inst.model.get().own_wait();
+        let seeding = wait == OwnWait::Seeding;
         // So, for the same reason, is whether the fit this row is predicted
         // from was withheld as too ill-conditioned to carry a digit: the
         // step may solve again on this row, and the reason names the fit
@@ -4344,6 +4371,12 @@ fn run_instance(
                 let target = inst.spec.targets.get(tj).map_or("", String::as_str);
                 inst.notified.raise(unstable_rate_notice(inst.spec, target));
             }
+        }
+        // A fit withheld because the rows so far do not identify it, where
+        // no gate or wait above has withheld the row: `garch`'s start
+        // waiting for rows that tell its process from a constant variance.
+        if reason == 0 && wait == OwnWait::NotIdentified {
+            reason = REASON_NOT_IDENTIFIED;
         }
         // The noise gate has not been met: the stream has all but settled,
         // the gate has withheld every row for a further half-life, and the

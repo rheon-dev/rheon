@@ -31,6 +31,31 @@ model that only the new build has is listed as an addition and passes.
 
 ### Changed
 
+- **`bocpd` takes its hazard in rows or on the clock** (PLAN 547).
+  `hazard_rows` is the expected rows between changepoints, `H =
+  1/hazard_rows` the chance of a break after each row of positive weight on
+  any clock: Adams and MacKay's hazard, per observation, and the default
+  (250) where neither is given. `hazard` is now a clock parameter like every
+  other: the expected clock time `τ` between changepoints, rows without a
+  clock, the column's units on a numeric clock, a duration on a temporal
+  one, the step of `dt` into each row carrying the chance `1 − exp(−dt/τ)`
+  of a break before the row is read, a row of weight 0 in no step. A
+  duration `hazard` reads as it did. A number `hazard` read as rows on
+  every clock; for that reading, give `hazard_rows` (the builder's default
+  now writes neither, so a spec that gave no hazard is unchanged). A number
+  `hazard` without a clock or on a numeric one is now the clock form: on
+  steps of one unit it is the per-row form at `hazard_rows = 1/(1 −
+  e^{−1/τ})`, `run_mode` the same, `run_mean`, `loglik` and the predictive
+  means to rounding (5e-14 measured), and `p_change` read without the mass
+  the per-row form leaves at `r = 0`, `p_rows = H + (1 − H)·p_clock`; on
+  irregular steps the gaps enter. A number `hazard` on a temporal clock is
+  refused as every clock parameter's plain number is, and `hazard` beside
+  `hazard_rows` or `hazard_col` is refused (a column falls back to
+  `hazard_rows`). A state file a release wrote reads its number `hazard`
+  as `hazard_rows`, which it meant, and loads beside the builder's default
+  spec as before. Moves: `bocpd.p_change`, `bocpd.run_mode`,
+  `bocpd.run_mean`, `bocpd.loglik`, `bocpd.pred_*`.
+
 - **Every state file is written in one envelope** (PLAN 542). A bank's
   state, a window run's, a `rp.stream.refresh_time` run's and the new
   pipeline checkpoint are each a MessagePack map whose first three entries
@@ -102,6 +127,39 @@ model that only the new build has is listed as an addition and passes.
   series, 1.0 to 1.3 µs at five and 5.0 to 6.5 µs at ten, learned, about
   half that with the parameters given, and 1.7 µs at three series with
   GARCH margins; a learned row allocates nothing.
+
+- **`rp.stream.merge`: streams that each run in clock order, merged into one
+  stream in clock order** (PLAN 541). It takes any number of frames or
+  queries, by position or in a dict of name to frame, and gives every row
+  once, at its own clock, with a `source` column naming its stream; columns
+  are matched by name, and one a stream lacks is null on its rows. A tie goes
+  to the stream given first, then to each stream's own order, so the output
+  is `pl.concat(frames, how="diagonal").sort(clock, maintain_order=True)`,
+  and eager `merge_sorted` chained from the first stream, to the bit
+  (`tests/test_stream_merge.py`, over Hypothesis-drawn streams, clock dtypes
+  and chunkings). Clocks must be of one dtype, unit and time zone, and are
+  refused otherwise naming the two streams. It runs as an operator of the
+  Rust core read as a lazy source, an N-way heap over the heads of one chunk
+  of each stream, so its output is the same for any chunking. Each stream's
+  clock is read as a bank reads a group's: a step back is refused naming the
+  stream and its row, or, past `restart_after_step_back`, starts that stream
+  again, its later rows sorting after every row before; with `by`, the
+  merged rows of each group are checked as a bank grouped by it checks them.
+  `save_state` and `load_state` resume it on the next part of every stream,
+  cut at one clock, with the rows at the last clock held in the state; under
+  a slice nothing is held, and each stream resumes after its rows the slice
+  returned. The state is a new kind of the state envelope, `"merge"` version
+  1, with frozen fixtures of each form it takes, and a stage of a pipeline
+  checkpoint. A zero-weight row passes through like any row. Its cost on
+  arm64 (M4 Pro, 4M rows of three float columns, best of 5, load 6-9): 20,
+  28 and 42 ns a row for 2, 8 and 64 streams, against 6 to 10 ns for Polars'
+  sort of the concatenation on 14 threads (13 to 34 ns on one) and 29, 90
+  and 546 ns for chained `merge_sorted`. Its own memory was measured at its
+  bound, one chunk of each stream and one of output (22, 65 and 468 MB at
+  the default 100,000-row chunk over 8M rows of 72 bytes); the process's
+  peak, with Polars' row-group prefetch at 1, was 142, 535 and 751 MB, where
+  Polars' readers of the same streams alone, read in turn, peaked at 104,
+  199 and 731 MB and Polars' sort of the concatenation at 949 to 1,148 MB.
 
 - **Clock forms for the remaining counts of rows** (task 538, part 2), each
   beside its count and refused with it, each a number of the clock's units
@@ -441,6 +499,13 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **`ModelBank.write_json` of a `bocpd` with its hazard on the clock**
+  (PLAN 547). Under a clock hazard the empty run's log joint is `-inf`
+  after every row, which JSON has no number for: the export wrote it as
+  null, failed its own read-back and raised, for a duration `hazard` too.
+  It is now written `"-inf"`, as every other non-finite value in a state's
+  JSON is. The state file's bytes are unchanged.
+
 - **`garch` gives the same numbers on every platform** (W10's CI on
   f1aa0fe0, run 44991677911: the `garch_egarch` and `garch_skewt` goldens
   failed on Linux x86-64 and Windows, `garch_gjr_t` on Windows, and the
@@ -474,6 +539,52 @@ model that only the new build has is listed as an addition and passes.
   neither function on a row or too few to show; the skewed t's is 4% to
   13% slower and `egarch`'s 14%, on arm64, where the crate's `ln` is 1.4
   times Apple's and its `exp` 1.8 times. Moves: `garch.*`.
+
+- **`garch` reports only a process its start's rows identify, and its
+  start is judged by where it is, not by how it stopped** (PLAN 548, from
+  the study of PLAN 549). Three changes to the start. (1) A start's fit is
+  at its optimum when its Newton decrement `½ gᵀ M⁻¹ g` is at most 1e-6
+  nats (the weights at Kish's count). Before, a fit was sound only if the
+  iteration stopped by its step-size test; at an optimum it could as well
+  stop for want of an ascent, its decrement at most 1.6e-12 nats, and that
+  coin, tossed by `ln`'s last bits, doubled the start in 25 of 25 path
+  switches between two math libraries on realistic series. Where such a
+  stop was not an optimum its decrement was 0.07 nats or more, so the cut
+  sits six orders above the one and five below the other. (2) The Newton
+  runs to its rounding: a step whose gain is under the likelihood's own
+  rounding (`1e-10 (1 + |f|)`) stands when the slopes at its two ends say
+  the likelihood did not fall, as `glm`'s refit does, and the fit stops
+  once a step is at the parameters' rounding. (3) **A start waits for a
+  real GARCH effect**: its fit is withheld until its likelihood-ratio
+  statistic against constant variance, `2 (f − f₀) Σw/Σw²`, reaches
+  chi-squared at 0.999 for the restrictions constant variance puts on the
+  process, 13.8 for `garch` and the targeted form (2) and 16.3 for `gjr`,
+  `egarch` and `figarch` (3); a t's shape is fitted in both. A withheld
+  start doubles its rows at most twice, as an unsound one does, then
+  buffers afresh; its rows report nothing, named `not_identified`, a new
+  `withheld_reason` (after `unstable_rate`), and the start's own rows are
+  now named `below_warm_rows`, where they were named nothing. On returns
+  with no conditional variance it withheld every first start of 500, 1,000
+  and 2,000 rows (900 series) and 899 of 900 series for all 10,000 of
+  their rows; on realistic series (persistence 0.97 to 0.985, and 0.90) no
+  start of 2,000 rows, 15 of 650 of 1,000 rows and 122 of 650 of 500 rows,
+  each of which started on twice or four times the rows. Against `arch`
+  on each start's own rows (50 seeds of 13 truths): no start of 1,000 or
+  2,000 rows short of `arch`'s fit by more than 9.1e-13 nats (1.8e-12
+  before), and of 500 rows 2 short by more than 0.01 (4 before), local
+  maxima the grid's best point chose; starting from the three best grid
+  points as well fixed one of the two at 2.5 times the start's cost, and
+  was not taken. At 10,000 rows against `arch`'s batch fit, every form
+  holds 50 of 50 within 2 SE and the same 90th-percentile D and excess;
+  one skewed-t series took another start (D 0.002 to 0.061), and every
+  other number moved by under 1e-4. The degenerate goldens and state
+  fixtures, whose start's rows are a linear target, now withhold; goldens
+  and fixtures of every form on its `arch` truth are added beside them. A
+  start's fit costs 1.13 to 1.20 times what it did under the normal, and
+  1.9 to 2.6 times with a t, which fits the constant-variance null's shape
+  too (2,000 rows: 2.2 ms for `garch`, 70 ms with a t, 144 with a skewed
+  t, once a start, on arm64); a row after the start costs what it did.
+  Moves: `garch.*`.
 
 - **`glm`'s refit gives the same fit on every platform** (W9's CI on
   1819e678: the committed `glm_refit_done` state fixture failed on Windows

@@ -249,7 +249,7 @@ def specs() -> list[dict]:
         rp.spec.bocpd(
             "bocpd",
             features=["x0", "x1"],
-            hazard=40.0,
+            hazard_rows=40.0,
             covariance_type="diag",
             covariance_prior=[1.0],
             prune_below=1e-8,
@@ -289,6 +289,9 @@ def specs() -> list[dict]:
         ),
         # Two return series, GJR with a t after a start of 50 rows (a cap
         # too small to double it), a forecast three rows ahead; no decay.
+        # The columns hold no conditional variance, so every start waits
+        # (`below_warm_rows`, then `not_identified`; PLAN 548): a degenerate
+        # case, kept; `garch`'s realistic ones are its goldens in Rust.
         rp.spec.garch(
             "garch",
             targets=["y0", "x0"],
@@ -1220,22 +1223,22 @@ GOLDEN: dict[str, float | str | None] = {
     "garch.forecast_y0@119": None,
     "garch.variance_x0@25": None,
     "garch.variance_x0@60": None,
-    "garch.variance_x0@119": 0.9758331221821295,
+    "garch.variance_x0@119": None,
     "garch.std_resid_x0@25": None,
     "garch.std_resid_x0@60": None,
-    "garch.std_resid_x0@119": -0.3488067430259736,
+    "garch.std_resid_x0@119": None,
     "garch.forecast_x0@25": None,
     "garch.forecast_x0@60": None,
-    "garch.forecast_x0@119": 0.9772258685384795,
+    "garch.forecast_x0@119": None,
     "garch.weight_sum@25": 12.0,
     "garch.weight_sum@60": 30.0,
     "garch.weight_sum@119": 58.5,
     "garch.settled_frac@25": None,
     "garch.settled_frac@60": None,
     "garch.settled_frac@119": None,
-    "garch.withheld_reason@25": None,
-    "garch.withheld_reason@60": None,
-    "garch.withheld_reason@119": None,
+    "garch.withheld_reason@25": "below_warm_rows",
+    "garch.withheld_reason@60": "below_warm_rows",
+    "garch.withheld_reason@119": "not_identified",
     "dcc.corr_y0_x0@25": None,
     "dcc.corr_y0_x0@60": None,
     "dcc.corr_y0_x0@119": 0.28679254353662686,

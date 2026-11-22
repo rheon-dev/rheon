@@ -1128,7 +1128,7 @@ pub struct WindowsRun {
 /// writer writes every buffer the array has: the command line saved 19
 /// bytes more than `ModelBank.fit_predict` of the same rows. The values,
 /// and so every number the state holds, are unchanged.
-fn compact_views(rows: &mut DataFrame) -> PolarsResult<()> {
+pub(crate) fn compact_views(rows: &mut DataFrame) -> PolarsResult<()> {
     let names: Vec<PlSmallStr> = rows.get_column_names_owned();
     for name in names {
         let col = rows.column(&name)?;

@@ -72,7 +72,8 @@ ROWS = 20_000
 def stream(n: int = ROWS, seed: int = 7) -> pl.DataFrame:
     """Three interleaved groups on an irregular clock with two gaps past the
     cap, a session change halfway, null features and targets, zero weights,
-    a 0/1 label, a class label, and a block key that only increases."""
+    a 0/1 label, a class label, a block key that only increases, and two
+    GARCH(1,1) return series, each group its own run of each."""
     rng = np.random.default_rng(seed)
     t = np.cumsum(rng.choice([0.5, 1.0, 1.5, 2.0], size=n))
     t[n // 4 :] += 40.0
@@ -86,6 +87,17 @@ def stream(n: int = ROWS, seed: int = 7) -> pl.DataFrame:
     x0[rng.choice(n, n // 100, replace=False)] = np.nan
     yy = y.copy()
     yy[rng.choice(n, n // 100, replace=False)] = np.nan
+    # `garch`'s targets: its start waits on returns with no conditional
+    # variance, so a linear target would leave it at its emptiest
+    rets = np.empty((n, 2))
+    for col in range(2):
+        for grp in range(3):
+            rows = np.arange(grp, n, 3)
+            s, e = 1.0, 0.0
+            for i, z in zip(rows, rng.standard_normal(len(rows)), strict=True):
+                s = 0.05 + 0.15 * e * e + 0.8 * s
+                e = np.sqrt(s) * z
+                rets[i, col] = e
     return pl.DataFrame(
         {
             "t": t,
@@ -100,6 +112,8 @@ def stream(n: int = ROWS, seed: int = 7) -> pl.DataFrame:
             "w": w,
             "hit": (y > 0.5).astype(float),
             "lab": np.where(y > 0.5, "up", "down"),
+            "ry": rets[:, 0],
+            "rz": rets[:, 1],
         }
     ).with_columns(pl.col("x0", "y").fill_nan(None))
 
@@ -310,7 +324,8 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         [],
     ),
     # Each target a series of returns, after a start of 50 rows; GJR with a
-    # t, a forecast three rows ahead: every field it has.
+    # t, a forecast three rows ahead: every field it has. Its `y` and `z`
+    # are the stream's GARCH returns (`GARCH_TARGETS`).
     (
         "garch",
         "garch",
@@ -362,16 +377,22 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
 ]
 
 
+#: The specs whose `y` and `z` are the stream's GARCH returns, `ry` and `rz`.
+GARCH_TARGETS = {"garch"}
+
+
 def measure_fields() -> dict[str, float]:
     """Bytes per row of every output field of every spec in ``WORKLOAD``,
     keyed ``memory.<spec>.<field>``."""
-    df = stream()
+    frame = stream()
+    returns = frame.with_columns(y=pl.col("ry"), z=pl.col("rz"))
     built: dict[str, dict] = {}
     out: dict[str, float] = {}
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", rp.ReadinessWarning)
         for name, builder, kw, reads in WORKLOAD:
             built[name] = getattr(rp.spec, builder)(name, **kw)
+            df = returns if name in GARCH_TARGETS else frame
             result = rp.ModelBank([built[r] for r in reads] + [built[name]]).fit_predict(df)
             col = result[name]
             for field in col.struct.fields:

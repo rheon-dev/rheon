@@ -1089,6 +1089,17 @@ def kind_frame(kind: str, *, n: int = 400, steps=None, seed: int = 5) -> pl.Data
         df = df.with_columns(y=pl.col("y").abs().round())
     if kind == "ew_class":
         df = df.with_columns(y=pl.when(pl.col("y") > 1).then(pl.lit("a")).otherwise(pl.lit("b")))
+    if kind == "garch":
+        # returns with a conditional variance, a GARCH(1,1) at (0.05, 0.5,
+        # 0.45): on the linear target `garch`'s start waits on every row
+        # (PLAN 548), and its fields would carry no number
+        g = np.random.default_rng([548, seed])
+        s, e, ret = 1.0, 0.0, np.empty(n)
+        for i, z in enumerate(g.standard_normal(n)):
+            s = 0.05 + 0.5 * e * e + 0.45 * s
+            e = math.sqrt(s) * z
+            ret[i] = e
+        df = df.with_columns(y=ret)
     return df
 
 

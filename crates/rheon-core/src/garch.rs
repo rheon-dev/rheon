@@ -82,13 +82,30 @@
 //! at least 2,000 for FIGARCH), or the rows of the first `start_span` of
 //! the clock (at least 50, up to and including the first at or past the
 //! span), are buffered and report nothing; then the model's own optimizer
-//! (projected Newton, `garch::optim`) fits them by the form's likelihood
-//! from a small grid, and the buffer is replayed at the fit to build `H`
-//! and the running means. A fit that did not converge, or sits on a bound
-//! of the process's set, waits for twice the rows and refits, at most
-//! twice, while the state's cap holds the doubled buffer; the last fit is
-//! stepped from either way. Steps run from the next row. The buffer is 16
-//! bytes a row; after the start it is gone.
+//! (projected Newton run to its rounding, `garch::optim`) fits them by the
+//! form's likelihood from a small grid, and the buffer is replayed at the
+//! fit to build `H` and the running means. Steps run from the next row. The
+//! buffer is 16 bytes a row; after the start it is gone.
+//!
+//! **A start reports only a process its rows identify.** With no
+//! conditional variance to find, the likelihood is flat along a ridge (`β`
+//! is not identified once `α` is 0) and the fit is noise. So the fit is
+//! withheld unless its likelihood-ratio statistic against constant
+//! variance, `2 (f − f₀) Σw/Σw²` (`f₀` the normal's at the mean square, or
+//! the t's with its shape fitted; the weights at Kish's count, so scaling
+//! them changes nothing), reaches χ² at 0.999 for the restrictions
+//! constant variance puts on the process: 2 for GARCH(1,1), free or
+//! targeted (`α = β = 0`), 13.8; 3 for GJR and EGARCH (`α = γ = β = 0`)
+//! and FIGARCH (`d = 0`, `φ = β`), 16.3. A withheld start waits for twice
+//! the rows and refits, at most twice, while the state's cap holds the
+//! doubled buffer, then buffers afresh (`withheld_reason` names the wait,
+//! `not_identified`). A fit that passes but is not at its optimum -- its
+//! Newton decrement `½ gᵀ M⁻¹ g` over `10⁻⁶` nats at Kish's count -- or
+//! sits on a bound of the process's set waits and refits the same way, and
+//! with no doubling left is stepped from. How the iteration stopped decides
+//! nothing: a stop for want of an ascent at an optimum (decrement at the
+//! rounding, `10⁻¹²` or less) once doubled a start on one platform and not
+//! another.
 //!
 //! **What a row reports**, per target, all before the row is learned
 //! (hard rule 2): the variance `s_t`; the standardized residual `z_t =
@@ -543,9 +560,32 @@ impl Garch {
 
     /// Each target's parameters, the process's then the shape's (the
     /// names of [`GarchVol::names`] and [`GarchDist::names`]); not a number
-    /// before its start.
+    /// before its start, a fit the start withheld included.
     pub fn coefficients(&self) -> Vec<Vec<f64>> {
-        self.series.iter().map(|s| s.theta.clone()).collect()
+        self.series
+            .iter()
+            .map(|s| {
+                if s.started {
+                    s.theta.clone()
+                } else {
+                    vec![f64::NAN; s.theta.len()]
+                }
+            })
+            .collect()
+    }
+
+    /// Whether a target's series is buffering its start's rows, the model's
+    /// own warm-up, and not waiting on [`Self::no_effect`].
+    pub fn starting(&self) -> bool {
+        self.series.iter().any(|s| !s.started && !s.no_effect())
+    }
+
+    /// Whether a target's series waits because its start's fit did not tell
+    /// its variance process from a constant variance: the likelihood-ratio
+    /// statistic was under χ² of the restrictions at 0.999, so the rows did
+    /// not identify the process, and it buffers more.
+    pub fn no_effect(&self) -> bool {
+        self.series.iter().any(|s| s.no_effect())
     }
 
     /// Target `j`'s Student-t degrees of freedom `ν` as they stand, where

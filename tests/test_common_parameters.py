@@ -189,7 +189,23 @@ def frame(variant: str, df: pl.DataFrame | None = None) -> pl.DataFrame:
         df = df.with_columns(y=pl.col("y").abs().round())
     if kind == "ew_class":
         df = df.with_columns(y=pl.when(pl.col("y") > 1).then(pl.lit("a")).otherwise(pl.lit("b")))
+    if kind == "garch":
+        df = df.with_columns(y=garch_returns(df.height))
     return df
+
+
+@functools.cache
+def garch_returns(n: int) -> pl.Series:
+    """`garch`'s target: a GARCH(1,1) at (0.05, 0.5, 0.45), a variance its
+    start identifies. On the linear target, which has none, its start waits
+    on every row (PLAN 548) and no field would carry a number."""
+    rng = np.random.default_rng([548, n])
+    s, e, out = 1.0, 0.0, np.empty(n)
+    for i, z in enumerate(rng.standard_normal(n)):
+        s = 0.05 + 0.5 * e * e + 0.45 * s
+        e = float(np.sqrt(s)) * z
+        out[i] = e
+    return pl.Series("y", out)
 
 
 def spec(variant: str, **kw: Any) -> dict:

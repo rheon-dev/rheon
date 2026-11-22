@@ -14,6 +14,9 @@
 
 use rheon_core::*;
 
+#[path = "../garch_series/mod.rs"]
+mod garch_series;
+
 /// One row: features, targets, clock step, weight.
 #[derive(Debug, Clone)]
 pub struct Row {
@@ -234,6 +237,22 @@ pub enum Targets {
     /// `dcc`, whose parameters it identifies. Arithmetic and `sqrt` alone,
     /// so it is the same bits on every platform.
     Correlated(usize, bool),
+    /// `n` series of returns of a GARCH-family process at a truth `arch`
+    /// is held to, each its own draw: a process a start of 2,000 rows
+    /// identifies.
+    Garch(usize, Process),
+}
+
+/// The process of a [`Targets::Garch`] stream.
+#[derive(Debug, Clone, Copy)]
+pub enum Process {
+    /// GARCH(1,1) at `(0.05, 0.08, 0.9)` with these innovations.
+    Garch(garch_series::Innovations),
+    /// EGARCH at `(0, 0.15, −0.08, 0.97)`, normal innovations.
+    Egarch,
+    /// FIGARCH(1, d, 1) at `(0.03, 0.2, 0.4, 0.5)` cut at 20 lags, the
+    /// truncation its fixture's model keeps.
+    Figarch,
 }
 
 /// [`Targets::Correlated`]'s stream: `n` rows of `k` series after 200
@@ -333,6 +352,21 @@ impl Case {
             Targets::Correlated(k, garch) => correlated(k, n, garch, s),
             _ => Vec::new(),
         };
+        let returns: Vec<Vec<f64>> = match self.targets {
+            Targets::Garch(t, process) => (0..t)
+                .map(|j| {
+                    let seed = s ^ j as u64;
+                    match process {
+                        Process::Garch(z) => garch_series::gjr([0.05, 0.08, 0.0, 0.9], z, n, seed),
+                        Process::Egarch => garch_series::egarch([0.0, 0.15, -0.08, 0.97], n, seed),
+                        Process::Figarch => {
+                            garch_series::figarch([0.03, 0.2, 0.4, 0.5], 20, n, seed)
+                        }
+                    }
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
         (0..n)
             .map(|i| {
                 let shift = if (i / 12) % 2 == 1 { 2.0 } else { 0.0 };
@@ -375,6 +409,7 @@ impl Case {
                     Targets::Correlated(..) => {
                         series[i].iter().map(|v| (!null).then_some(*v)).collect()
                     }
+                    Targets::Garch(..) => returns.iter().map(|r| (!null).then_some(r[i])).collect(),
                 };
                 let d = match i {
                     0 => 0.0,
@@ -2648,6 +2683,77 @@ pub fn all() -> Vec<Case> {
             targets: Targets::Linear(2),
             before: 40,
         },
+        // Realistic (PLAN 550): each form on a series of its process, its
+        // 2,000-row start fitted (about row 2,480, the rows of weight 0 and
+        // the nulls not counted) and stepped about 260 learned rows past
+        // it: the parameters, `H`, the lags and their sensitivity, the
+        // targeted Huber score, a skewed t's shape, EGARCH's bins and
+        // FIGARCH's ring on a process the start identifies. The cases above
+        // are degenerate, their start's rows a linear target with no
+        // conditional variance, and kept as edge tests: those saved past
+        // their start now wait.
+        case!(
+            "garch_realistic",
+            "Garch",
+            Garch,
+            Garch::new(realistic(GarchVol::Garch, GarchDist::Normal)).unwrap(),
+            0,
+            Targets::Garch(2, Process::Garch(garch_series::Innovations::Normal)),
+            2800
+        ),
+        case!(
+            "garch_t_realistic",
+            "Garch",
+            Garch,
+            Garch::new(realistic(GarchVol::Garch, GarchDist::T)).unwrap(),
+            0,
+            Targets::Garch(2, Process::Garch(garch_series::Innovations::T6)),
+            2800
+        ),
+        case!(
+            "garch_targeted_realistic",
+            "Garch",
+            Garch,
+            Garch::new(GarchCfg {
+                variance_targeting: true,
+                ..realistic(GarchVol::Garch, GarchDist::Normal)
+            })
+            .unwrap(),
+            0,
+            Targets::Garch(2, Process::Garch(garch_series::Innovations::Normal)),
+            2800
+        ),
+        case!(
+            "garch_skewt_realistic",
+            "Garch",
+            Garch,
+            Garch::new(realistic(GarchVol::Garch, GarchDist::Skewt)).unwrap(),
+            0,
+            Targets::Garch(2, Process::Garch(garch_series::Innovations::SkewT6(-0.2))),
+            2800
+        ),
+        case!(
+            "garch_egarch_realistic",
+            "Garch",
+            Garch,
+            Garch::new(realistic(GarchVol::Egarch, GarchDist::Normal)).unwrap(),
+            0,
+            Targets::Garch(2, Process::Egarch),
+            2800
+        ),
+        case!(
+            "garch_figarch_realistic",
+            "Garch",
+            Garch,
+            Garch::new(GarchCfg {
+                truncation: Some(20),
+                ..realistic(GarchVol::Figarch, GarchDist::Normal)
+            })
+            .unwrap(),
+            0,
+            Targets::Garch(2, Process::Figarch),
+            2800
+        ),
         // A start of a clock span, saved within it: the first row's stamp
         // (the targets join at the fifth row, so it is not the clock's 0).
         case!(
@@ -2788,6 +2894,14 @@ fn garch_cfg(vol: GarchVol, dist: GarchDist) -> GarchCfg {
         horizon: if vol == GarchVol::Egarch { 1 } else { 3 },
         min_weight: 0.0,
         max_state_bytes: None,
+    }
+}
+
+/// [`garch_cfg`] at the default start of 2,000 rows, for a realistic case.
+fn realistic(vol: GarchVol, dist: GarchDist) -> GarchCfg {
+    GarchCfg {
+        start_rows: 2000,
+        ..garch_cfg(vol, dist)
     }
 }
 

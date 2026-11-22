@@ -112,7 +112,8 @@
   bocpd:
     name
     features
-    hazard = 250.0
+    hazard_rows = None
+    hazard = None
     hazard_col = None
     covariance_type = 'diag'
     mean_prior = None
@@ -1363,7 +1364,7 @@
     resid_y: Float64
     weight_sum: Float64
     settled_frac: Float64
-    withheld_reason: Enum[below_min_settled_frac, below_min_weight, above_max_error_inflation, below_warm_rows, ill_conditioned, unstable_rate]
+    withheld_reason: Enum[below_min_settled_frac, below_min_weight, above_max_error_inflation, below_warm_rows, ill_conditioned, unstable_rate, not_identified]
     coef: List[Float64]
     support_coef: List[Float64]
   ModelBank.marginal():
@@ -1640,6 +1641,7 @@
     ROLE
     embargo(lf: 'pl.LazyFrame | pl.DataFrame', *, clock: 'str', delay: 'float | Duration', weight: 'str | None' = None, role: 'str' = '_online_role') -> 'pl.LazyFrame | pl.DataFrame'
     load_checkpoint(source: 'str | os.PathLike[str] | bytes') -> 'dict[str, bytes]'
+    merge(*frames: 'pl.LazyFrame | pl.DataFrame | Mapping[str, pl.LazyFrame | pl.DataFrame]', clock: 'str', source: 'str' = 'source', by: 'str | None' = None, restart_after_step_back: 'float | Duration | None' = None, chunk_size: 'int | None' = None, load_state: 'State | bytes | None' = None, save_state: 'State | None' = None) -> 'pl.LazyFrame | pl.DataFrame'
     refresh_time(lf: 'pl.LazyFrame | pl.DataFrame', *, series: 'str', names: 'Sequence[str]', clock: 'str', value: 'str', group: 'str | None' = None, pairs: 'bool' = False, keep: 'Sequence[str]' = (), chunk_size: 'int | None' = None, load_state: 'State | bytes | None' = None, save_state: 'State | None' = None) -> 'pl.LazyFrame | pl.DataFrame'
     save_checkpoint(path: 'str | os.PathLike[str]', stages: 'Mapping[str, ModelBank | bytes | str | os.PathLike[str]]') -> 'None'
     with_windows(lf: 'pl.LazyFrame | pl.DataFrame', *exprs: 'pl.Expr', clock: 'str | None' = None, gap_cap: 'float | Duration | None' = None, restart_after_step_back: 'float | Duration | None' = None, session: 'str | None' = None, session_gap: 'float | Duration | None' = None, group: 'str | None' = None, like: 'dict[str, Any] | None' = None, chunk_size: 'int | None' = None, load_state: 'State | bytes | None' = None, save_state: 'State | None' = None, **named: 'pl.Expr') -> 'pl.LazyFrame | pl.DataFrame'
@@ -2773,7 +2775,7 @@
   rp.ewm_rate(reverse=True).partial: drop, keep, null
   rp.ewm_sum(reverse=True).closed: both, left, none, right
   rp.ewm_sum(reverse=True).partial: drop, keep, null
-  withheld_reason, in precedence order: below_min_settled_frac, below_min_weight, above_max_error_inflation, below_warm_rows, ill_conditioned, unstable_rate
+  withheld_reason, in precedence order: below_min_settled_frac, below_min_weight, above_max_error_inflation, below_warm_rows, ill_conditioned, unstable_rate, not_identified
   toml.input_format: csv, ipc, ndjson, parquet
   toml.output_format: csv, ipc, ndjson, parquet
   toml.output_layout: flat, struct
@@ -2862,7 +2864,7 @@
     weight
   [specs.model], by type:
     audit: distinct_cap, pairs
-    bocpd: covariance_prior, covariance_type, degrees_of_freedom_prior, hazard, hazard_col, max_run, mean_precision_prior, mean_prior, prune_below, robust_beta, warm_rows, warm_span
+    bocpd: covariance_prior, covariance_type, degrees_of_freedom_prior, hazard, hazard_col, hazard_rows, max_run, mean_precision_prior, mean_prior, prune_below, robust_beta, warm_rows, warm_span
     corrchange: alpha, alpha_adjust, bandwidth, boundary_gamma, change_action, crit, kind, monitor_rows, n_perm, norm, perm_block, permute_every, permute_every_rows, scalar, seed, window_rows
     dcc: a, asymmetric, b, dist, g, margin_start_rows, margin_start_span, margins, max_state_bytes, start_rows, start_span, truncation, variance_targeting, vol
     deco: alpha, beta, blocks, dynamics

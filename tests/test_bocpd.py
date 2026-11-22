@@ -101,7 +101,7 @@ def test_the_posterior_is_the_longhand_algorithm_one():
     x = np.concatenate([normals(60, 1), normals(60, 2, loc=3.0)])
     out = run(
         x,
-        hazard=50.0,
+        hazard_rows=50.0,
         mean_prior=[0.0],
         degrees_of_freedom_prior=2.0,
         covariance_prior=[1.0],
@@ -190,7 +190,7 @@ def test_the_gaussian_emission_is_the_longhand_at_three_features():
         ]
     )
     common = dict(
-        hazard=50.0,
+        hazard_rows=50.0,
         prune_below=0.0,
         mean_prior=[0.0] * 3,
         covariance_prior=[1.0],
@@ -226,7 +226,7 @@ def test_two_features_are_a_product_of_student_ts():
     x = np.column_stack([rng.normal(0, 1, 80), rng.normal(0, 2, 80)])
     out = run(
         x,
-        hazard=40.0,
+        hazard_rows=40.0,
         mean_prior=[0.0] * 2,
         degrees_of_freedom_prior=2.0,
         covariance_prior=[1.0],
@@ -252,7 +252,7 @@ def test_a_variance_step_is_found():
     )
     out = run(
         x,
-        hazard=250.0,
+        hazard_rows=250.0,
         degrees_of_freedom_prior=2.0,
         covariance_prior=[2e-4],
         prune_below=1e-6,
@@ -283,7 +283,7 @@ def test_the_run_mode_says_where_it_broke():
     predictive is not much better at explaining one four-sigma row than the
     old run is."""
     x = np.concatenate([normals(200, 7), normals(200, 8, loc=4.0)])
-    out = run(x, hazard=250.0, covariance_prior=[1.0], degrees_of_freedom_prior=2.0)
+    out = run(x, hazard_rows=250.0, covariance_prior=[1.0], degrees_of_freedom_prior=2.0)
     mode = out["run_mode"].to_list()
     assert mode[199] == 199, "before: one run, as old as the stream"
     assert mode[202] < 20, "after: the old run is abandoned two rows in"
@@ -296,7 +296,7 @@ def test_the_run_mode_says_where_it_broke():
 
 def test_the_predictive_mean_follows_the_regime():
     x = np.concatenate([normals(150, 9), normals(150, 10, loc=5.0)])
-    out = run(x, hazard=100.0, covariance_prior=[1.0], degrees_of_freedom_prior=2.0)
+    out = run(x, hazard_rows=100.0, covariance_prior=[1.0], degrees_of_freedom_prior=2.0)
     pred = out["pred_x0"].to_list()
     assert abs(pred[149]) < 0.3, "the old regime's mean"
     assert abs(pred[190] - 5.0) < 0.6, "the new one's, 40 rows later"
@@ -306,8 +306,8 @@ def test_the_log_score_prefers_the_model_that_saw_the_break():
     """The point of the run-length posterior: a model that can restart
     scores the second regime better than one that cannot (`hazard` huge)."""
     x = np.concatenate([normals(150, 12), normals(150, 13, loc=6.0)])
-    quick = run(x, hazard=50.0, covariance_prior=[1.0], degrees_of_freedom_prior=2.0)
-    stuck = run(x, hazard=1e9, covariance_prior=[1.0], degrees_of_freedom_prior=2.0)
+    quick = run(x, hazard_rows=50.0, covariance_prior=[1.0], degrees_of_freedom_prior=2.0)
+    stuck = run(x, hazard_rows=1e9, covariance_prior=[1.0], degrees_of_freedom_prior=2.0)
     # Right after the break, where it matters: 16 nats over 50 rows. Give it
     # long enough and the stuck model's single run drags itself over to the
     # new mean too, and the gap closes.
@@ -321,7 +321,7 @@ def test_the_log_score_prefers_the_model_that_saw_the_break():
 def test_truncation_changes_little_and_max_run_caps_the_state():
     x = np.concatenate([normals(200, 14), normals(200, 15, loc=3.0)])
     base = dict(
-        hazard=100.0, mean_prior=[0.0], covariance_prior=[1.0], degrees_of_freedom_prior=2.0
+        hazard_rows=100.0, mean_prior=[0.0], covariance_prior=[1.0], degrees_of_freedom_prior=2.0
     )
     exact = run(x, prune_below=0.0, **base)
     cut = run(x, prune_below=1e-4, **base)
@@ -357,7 +357,7 @@ def test_max_run_caps_the_run_length_under_pruning(prune_below):
             mean_prior=[0.0],
             covariance_prior=[1.0],
             min_weight=0.0,
-            hazard=200.0,
+            hazard_rows=200.0,
         )
         assert out["run_mode"].max() == 19, out["run_mode"].max()
         assert out["run_mean"].max() <= 19.0
@@ -373,7 +373,7 @@ def test_the_cap_keeps_the_dominant_runs_memory_under_heavy_pruning():
     once. Scaled in place, it sums to 7.09 beside the 7.11 of the whole
     posterior (``max_run = 10_000``, ``prune_below = 0``), one row reads 0.5
     or more in each, and ``run_mode`` sits at the cap on 581 rows."""
-    kw = dict(mean_prior=[0.0], covariance_prior=[1.0], min_weight=0.0, hazard=200.0)
+    kw = dict(mean_prior=[0.0], covariance_prior=[1.0], min_weight=0.0, hazard_rows=200.0)
     x = normals(600, 0)
     capped = run(x, max_run=20, prune_below=1e-2, **kw)
     whole = run(x, max_run=10_000, prune_below=0.0, **kw)
@@ -405,7 +405,7 @@ def test_the_fold_after_a_break_keeps_the_run_carrying_the_mass():
         return [int(i) for i in np.where(np.diff(start) > 10)[0] + 1]
 
     kw = dict(
-        hazard=250.0, mean_prior=[0.0], covariance_prior=[1.0], min_weight=0.0, prune_below=0.0
+        hazard_rows=250.0, mean_prior=[0.0], covariance_prior=[1.0], min_weight=0.0, prune_below=0.0
     )
     found, worse = 0, []
     for seed in range(20):
@@ -430,13 +430,13 @@ def test_the_prior_scale_sets_what_counts_as_surprising():
     1e-6 and a four-sigma break at row 150; a `covariance_prior` of 1e-6 dates it
     to the row, and 1e-3 and up never see it at all."""
     x = np.concatenate([normals(150, 16, scale=1e-3), normals(150, 17, loc=4e-3, scale=1e-3)])
-    fitting = run(x, hazard=250.0, degrees_of_freedom_prior=2.0, covariance_prior=[1e-6])
+    fitting = run(x, hazard_rows=250.0, degrees_of_freedom_prior=2.0, covariance_prior=[1e-6])
     mode = fitting["run_mode"].to_list()
     found = next(t for t in range(150, 300) if mode[t] < 20)
     assert found <= 152 and found - mode[found] == 150
     assert max(fitting["p_change"].to_list()[150:200]) > 0.5
     for scale in (1e-3, 1.0, 100.0):
-        blind = run(x, hazard=250.0, degrees_of_freedom_prior=2.0, covariance_prior=[scale])
+        blind = run(x, hazard_rows=250.0, degrees_of_freedom_prior=2.0, covariance_prior=[scale])
         assert min(blind["run_mode"].to_list()[151:]) > 20, f"{scale} saw it"
         assert max(blind["p_change"].to_list()[150:200]) < 0.05
 
@@ -462,7 +462,7 @@ def test_the_hazard_can_be_read_from_a_column():
         covariance_prior=[1.0],
         degrees_of_freedom_prior=2.0,
     )
-    plain = run(x, hazard=40.0, covariance_prior=[1.0], degrees_of_freedom_prior=2.0)
+    plain = run(x, hazard_rows=40.0, covariance_prior=[1.0], degrees_of_freedom_prior=2.0)
     # Exact (task 252 (b)): the same hazard, read from the row or the spec,
     # is the same double into the same arithmetic.
     assert flat["p_change"].to_list()[1:] == plain["p_change"].to_list()[1:]
@@ -524,13 +524,13 @@ def test_an_unusable_hazard_in_the_column_is_refused_naming_the_row():
     spec = rp.spec.bocpd(
         "b",
         features=["x0"],
-        hazard=40.0,
+        hazard_rows=40.0,
         hazard_col="h",
         covariance_prior=[1.0],
         degrees_of_freedom_prior=2.0,
     )
     got = rp.ModelBank([spec]).fit_predict(df)["b"].struct.unnest()
-    want = run(x, hazard=40.0, covariance_prior=[1.0], degrees_of_freedom_prior=2.0)
+    want = run(x, hazard_rows=40.0, covariance_prior=[1.0], degrees_of_freedom_prior=2.0)
     # Exact (task 252 (b)): the fallback is the spec's hazard, the same
     # double into the same arithmetic.
     assert got["p_change"].to_list()[1:] == want["p_change"].to_list()[1:]
@@ -546,7 +546,7 @@ def test_predict_reads_the_hazard_column():
     spec = rp.spec.bocpd(
         "b",
         features=["x0"],
-        hazard=50.0,
+        hazard_rows=50.0,
         hazard_col="h",
         covariance_prior=[1.0],
         degrees_of_freedom_prior=2.0,
@@ -566,10 +566,10 @@ def test_a_zero_weight_row_advances_nothing():
     w = np.ones(60)
     w[30] = 0.0
     kept = run(
-        x, hazard=50.0, covariance_prior=[1.0], degrees_of_freedom_prior=2.0, weight="w", w=w
+        x, hazard_rows=50.0, covariance_prior=[1.0], degrees_of_freedom_prior=2.0, weight="w", w=w
     )
     dropped = run(
-        np.delete(x, 30), hazard=50.0, covariance_prior=[1.0], degrees_of_freedom_prior=2.0
+        np.delete(x, 30), hazard_rows=50.0, covariance_prior=[1.0], degrees_of_freedom_prior=2.0
     )
     assert kept["run_mode"].to_list()[31:] == dropped["run_mode"].to_list()[30:]
     assert kept["weight_sum"][31] == 30.0
@@ -580,7 +580,7 @@ def test_the_first_row_of_every_group_is_silent():
     g = ["a"] * 20 + ["b"] * 20
     out = run(
         x,
-        hazard=50.0,
+        hazard_rows=50.0,
         mean_prior=[0.0],
         covariance_prior=[1.0],
         degrees_of_freedom_prior=2.0,
@@ -606,7 +606,7 @@ def test_the_robust_emission_refuses_to_learn_an_outlier():
     nothing moves: not the posterior, not the statistics."""
     x = normals(200, 21)
     x[100] = 20.0
-    base = dict(hazard=250.0, covariance_prior=[1.0], degrees_of_freedom_prior=2.0)
+    base = dict(hazard_rows=250.0, covariance_prior=[1.0], degrees_of_freedom_prior=2.0)
     plain = run(x, **base)
     robust = run(x, robust_beta=0.1, **base)
     assert plain["p_change"][100] > 0.5 and plain["run_mode"][101] == 1
@@ -627,7 +627,7 @@ def test_a_real_shift_survives_a_small_robust_beta(beta):
     out = run(
         x,
         robust_beta=beta,
-        hazard=250.0,
+        hazard_rows=250.0,
         mean_prior=[0.0],
         covariance_prior=[1.0],
         degrees_of_freedom_prior=2.0,
@@ -641,7 +641,7 @@ def test_a_real_shift_survives_a_small_robust_beta(beta):
 def test_too_much_tempering_detects_nothing():
     x = np.concatenate([normals(150, 22), normals(150, 23, loc=4.0)])
     out = run(
-        x, robust_beta=0.5, hazard=250.0, covariance_prior=[1.0], degrees_of_freedom_prior=2.0
+        x, robust_beta=0.5, hazard_rows=250.0, covariance_prior=[1.0], degrees_of_freedom_prior=2.0
     )
     assert min(out["run_mode"].to_list()[151:]) > 20, "the note in the docstring is stale"
 
@@ -660,7 +660,7 @@ def test_the_gaussian_emission_sees_the_correlation_the_diagonal_one_cannot():
     r = 0.95
     after = np.sqrt(r) * f + np.sqrt(1 - r) * rng.standard_normal((200, 2))
     x = np.vstack([before, after])
-    base = dict(hazard=250.0, mean_prior=[0.0, 0.0], covariance_prior=[1.0], prune_below=1e-8)
+    base = dict(hazard_rows=250.0, mean_prior=[0.0, 0.0], covariance_prior=[1.0], prune_below=1e-8)
     full = run(x, covariance_type="full", degrees_of_freedom_prior=4.0, **base)
     diag = run(x, covariance_type="diag", degrees_of_freedom_prior=2.0, **base)
     assert full["run_mode"][260] < 100, "the full one abandoned the old run"
@@ -675,7 +675,7 @@ def test_the_gaussian_emission_sees_the_correlation_the_diagonal_one_cannot():
 def test_chunks_and_a_reload_do_not_move_it():
     x = np.concatenate([normals(120, 25), normals(120, 26, loc=2.0)])
     df = pl.DataFrame({"x0": x})
-    spec = rp.spec.bocpd("b", features=["x0"], hazard=60.0, covariance_prior=[1.0])
+    spec = rp.spec.bocpd("b", features=["x0"], hazard_rows=60.0, covariance_prior=[1.0])
     whole = rp.ModelBank([spec]).fit_predict(df)
     bank = rp.ModelBank([spec])
     parts = [bank.fit_predict(df[i : i + 7]) for i in range(0, 240, 7)]
@@ -706,7 +706,12 @@ def test_chunks_and_a_reload_do_not_move_it():
             "covariance_prior must be one number or a 1 by 1 matrix",
         ),
         (dict(mean_prior=[0.0, 0.0]), "mean_prior must hold one value for each of the 1 features"),
-        (dict(hazard=0.5), "hazard"),
+        (dict(hazard_rows=0.5), "hazard_rows must be finite and above 1, but it is 0.5"),
+        (dict(hazard=0.0), "hazard must be finite and above 0, but it is 0 clock units"),
+        (
+            dict(hazard=40.0, hazard_rows=40.0),
+            'spec "b": hazard \\(40\\) and hazard_rows \\(40\\) cannot both be set',
+        ),
         (dict(mean_precision_prior=0.0), "mean_precision_prior"),
         (dict(prune_below=1.0), "prune_below must be at least 0 and below 1, but it is 1"),
         (dict(max_run=0), "max_run"),
@@ -746,7 +751,7 @@ def test_three_features_are_a_product_of_student_ts():
     x = np.column_stack([rng.normal(0, 1, 80), rng.normal(0, 2, 80), rng.normal(0, 0.5, 80)])
     out = run(
         x,
-        hazard=40.0,
+        hazard_rows=40.0,
         mean_prior=[0.0] * 3,
         degrees_of_freedom_prior=2.0,
         covariance_prior=[1.0],
@@ -1011,16 +1016,12 @@ def test_a_hazard_on_the_clock_is_the_model_it_states(case):
         assert a[1] > 0.9, "three hours before row two"
 
 
-def test_a_number_hazard_on_a_temporal_clock_is_still_per_row():
-    """A plain number keeps its meaning on any spec: the expected rows
-    between changepoints, whatever the clock says. The same stream with and
-    without a temporal clock reads the same."""
+def test_hazard_rows_on_a_temporal_clock_counts_rows():
+    """``hazard_rows`` is the expected rows between changepoints on any spec,
+    whatever the clock says. The same stream with and without a temporal
+    clock reads the same."""
     x, secs, _, _, _ = _irregular_case()
-    with_clock = run_clock(x, secs, 50.0)
-    spec = rp.spec.bocpd(
-        "b",
-        features=["x0"],
-        hazard=50.0,
+    kw = dict(
         mean_prior=[0.0],
         degrees_of_freedom_prior=2.0,
         covariance_prior=[1.0],
@@ -1028,8 +1029,107 @@ def test_a_number_hazard_on_a_temporal_clock_is_still_per_row():
         max_run=10_000,
         min_weight=0.0,
     )
+    clocked = rp.spec.bocpd("b", features=["x0"], hazard_rows=50.0, clock="t", gap_cap="1d", **kw)
+    with_clock = rp.ModelBank([clocked]).fit_predict(_clock_frame(x, secs))["b"].struct.unnest()
+    spec = rp.spec.bocpd("b", features=["x0"], hazard_rows=50.0, **kw)
     without = rp.ModelBank([spec]).fit_predict(_clock_frame(x, secs))["b"].struct.unnest()
     assert with_clock.equals(without)
+
+
+def _number_clock(x, secs, w=None) -> pl.DataFrame:
+    """``x0`` on a number clock ``n``, in seconds from the first row."""
+    df = pl.DataFrame({"n": np.asarray(secs, dtype=float) - secs[0], "x0": x})
+    return df if w is None else df.with_columns(pl.Series("w", np.asarray(w, dtype=float)))
+
+
+def _run_number(df: pl.DataFrame, clock: str | None, **kw) -> pl.DataFrame:
+    """The bank over ``df`` with the oracle's prior, nothing pruned and every
+    row reported, on the number clock ``n`` or on none."""
+    if "w" in df.columns:
+        kw["weight"] = "w"
+    if clock is not None:
+        kw.update(clock=clock, gap_cap=1e9)
+    spec = rp.spec.bocpd(
+        "b",
+        features=["x0"],
+        mean_prior=[0.0],
+        degrees_of_freedom_prior=2.0,
+        covariance_prior=[1.0],
+        prune_below=0.0,
+        max_run=10_000,
+        min_weight=0.0,
+        **kw,
+    )
+    return rp.ModelBank([spec]).fit_predict(df)["b"].struct.unnest()
+
+
+@pytest.mark.parametrize("case", list(CLOCK_CASES))
+def test_a_number_hazard_is_the_model_it_states_on_a_number_clock(case):
+    """A number ``hazard`` is clock units, as every other clock parameter's
+    (task 547): on a number clock in seconds, ``tau`` seconds is the
+    duration ``tau`` on the temporal clock, against the same enumeration,
+    to the same bounds; and the duration's outputs to rounding."""
+    x, secs, w, text, tau = CLOCK_CASES[case]()
+    out = _run_number(_number_clock(x, secs, w), "n", hazard=tau)
+    a, b, m = clock_oracle(x, secs, tau, w)
+    # Tolerances: as the temporal clock's test above, the same oracle.
+    assert out["p_change"].to_numpy() == pytest.approx(a, abs=1e-13, rel=0)
+    assert out["run_mean"].to_numpy() == pytest.approx(b, abs=1e-12, rel=0)
+    assert out["run_mode"].to_list() == m.tolist()
+    temporal = run_clock(x, secs, text, w, gap_cap="1000d")
+    # Exact: the same seconds, the same steps, the same arithmetic.
+    assert out.equals(temporal)
+
+
+def test_a_number_hazard_without_a_clock_counts_each_learned_row_as_a_step():
+    """Without a clock a number ``hazard`` is rows, each row of positive
+    weight a step of 1 and a row of weight 0 no step at all (hard rule 9):
+    the enumeration at the stamps that count the learned rows before each
+    row. Rows of weight 0 here, and a level that moves."""
+    rng = np.random.default_rng(5471)
+    n = 14
+    x = np.concatenate([rng.normal(0, 1, 7), rng.normal(3, 1, 7)])
+    w = np.ones(n)
+    w[[3, 9, 10]] = 0.0
+    tau = 6.0
+    learned_before = np.concatenate([[0], np.cumsum(w > 0)[:-1]]).astype(float)
+    out = _run_number(pl.DataFrame({"x0": x, "w": w}), None, hazard=tau)
+    a, b, m = clock_oracle(x, learned_before, tau, w)
+    assert out["p_change"].to_numpy() == pytest.approx(a, abs=1e-13, rel=0)
+    assert out["run_mean"].to_numpy() == pytest.approx(b, abs=1e-12, rel=0)
+    assert out["run_mode"].to_list() == m.tolist()
+    # And it is the number clock that counts those rows, to the bit.
+    counted = pl.DataFrame({"n": learned_before, "x0": x, "w": w})
+    assert out.equals(_run_number(counted, "n", hazard=tau))
+
+
+@pytest.mark.parametrize("clock", [None, "n"])
+@pytest.mark.parametrize("tau", [3.0, 40.0, 400.0])
+def test_a_clock_hazard_on_unit_steps_is_hazard_rows_at_the_matching_rate(clock, tau):
+    """On a clock of one unit a row, and on rows without a clock, ``hazard =
+    tau`` is the per-row form at ``hazard_rows = 1 / (1 - exp(-1 / tau))``:
+    the per-row form puts ``H`` on the boundary after each row and the clock
+    form on the boundary before the next, so every row is read against the
+    same posterior. ``run_mode`` agrees exactly, ``run_mean``, the predictive
+    means and the log score to rounding; ``p_change`` is read with and
+    without the mass ``H`` the per-row form leaves at ``r = 0``: ``p_rows = H
+    + (1 - H) p_clock``, held to rounding on every row."""
+    rng = np.random.default_rng(int(tau))
+    n = 400
+    x = np.where(np.arange(n) < 200, rng.normal(0, 1, n), rng.normal(2.5, 1, n))
+    df = pl.DataFrame({"n": np.arange(n, dtype=float), "x0": x})
+    big_h = -expm1(-1.0 / tau)
+    clocked = _run_number(df, clock, hazard=tau)
+    rows = _run_number(df, clock, hazard_rows=1.0 / big_h)
+    assert clocked["run_mode"].to_list() == rows["run_mode"].to_list()
+    # Tolerances (task 252 (b)): equal in exact arithmetic, `1/H` from
+    # `expm1` against the clock form's own `ln` and `exp` of the step.
+    for col in ("run_mean", "pred_x0", "loglik"):
+        np.testing.assert_allclose(clocked[col], rows[col], rtol=1e-11, atol=1e-11, err_msg=col)
+    p_clock, p_rows = clocked["p_change"].to_numpy(), rows["p_change"].to_numpy()
+    np.testing.assert_allclose(p_rows, big_h + (1.0 - big_h) * p_clock, rtol=0, atol=1e-13)
+    assert (np.abs(p_rows - p_clock - big_h) <= big_h * p_clock + 1e-13).all()
+    assert p_clock.max() > 0.5, "the shift was a break"
 
 
 def test_each_way_of_writing_a_duration_is_the_same_hazard():
@@ -1087,6 +1187,11 @@ def test_a_hazard_on_the_clock_is_chunk_invariant_and_resumes():
         first = warm.fit_predict(df[:at])
         second = rp.ModelBank.load_bytes(warm.save_bytes()).fit_predict(df[at:])
         assert pl.concat([first, second]).equals(whole), at
+        # The JSON export reads back as the state (it checks itself): the
+        # empty run's log joint after a row is -inf on the clock, which JSON
+        # has no number for (task 547's release probe found it written null).
+        text = warm.write_json()
+        assert at < 10 or '"-inf"' in text, at  # past the warm-up
     # The stream did what it is here for: rows that could not begin a run
     # (a stamp shared with the row before), and a break found.
     p = whole["b"].struct.field("p_change")
@@ -1104,19 +1209,27 @@ def test_a_hazard_on_the_clock_is_chunk_invariant_and_resumes():
         ),
         (
             dict(hazard="0s", clock="t", gap_cap="1h"),
-            "hazard, given as a duration, must be finite and above 0, but it is 0 seconds",
+            "hazard must be finite and above 0, but it is 0 clock units",
         ),
         (
             dict(hazard="-5m", clock="t", gap_cap="1h"),
-            "hazard, given as a duration, must be finite and above 0, but it is -300 seconds",
+            "hazard must be finite and above 0, but it is -300 clock units",
         ),
         (
             dict(hazard=timedelta(hours=1), hazard_col="h", clock="t", gap_cap="1h"),
-            'hazard_col "h" and a hazard given as a duration \\(1h\\) cannot both be set',
+            'hazard_col "h" and hazard \\(1h\\) cannot both be set',
         ),
+        (
+            dict(hazard=40.0, hazard_col="h"),
+            'hazard_col "h" and hazard \\(40\\) cannot both be set',
+        ),
+        # A number on a temporal clock would be counted in the column's
+        # storage unit: refused as every clock parameter's is.
+        (dict(hazard=3600.0, clock="t", gap_cap="1h"), "hazard is a plain number"),
+        (dict(hazard="1h", hazard_rows=40.0, clock="t", gap_cap="1h"), "cannot both be set"),
     ],
 )
-def test_a_duration_hazard_is_refused_where_it_cannot_run(kwargs, message):
+def test_a_clock_hazard_is_refused_where_it_cannot_run(kwargs, message):
     with pytest.raises(ValueError, match=message):
         rp.spec.bocpd("b", features=["x0"], **kwargs)
 
@@ -1166,10 +1279,10 @@ def test_the_prior_from_the_first_rows_finds_the_same_breaks_at_any_level(emissi
     differs from run to run, so its
     posterior moves with the scale whatever the prior (reported beside task
     195, not changed by it)."""
-    unit = run(stepping(0.0, 1.0), **emission, hazard=250.0)
+    unit = run(stepping(0.0, 1.0), **emission, hazard_rows=250.0)
     assert all(any(abs(b - e) <= 1 for b in breaks(unit)) for e in (200, 400)), breaks(unit)
     if "robust_beta" not in emission:
-        scaled = run(stepping(1e4, 1e-2), **emission, hazard=250.0)
+        scaled = run(stepping(1e4, 1e-2), **emission, hazard_rows=250.0)
         assert breaks(scaled) == breaks(unit)
         gap = (unit["p_change"] - scaled["p_change"]).abs().max()
         # Tolerance (task 252 (b)): the two streams are other numbers, the
@@ -1222,7 +1335,7 @@ def test_a_constant_feature_does_not_break_the_prior():
         x = np.column_stack(
             [np.full(n, level), np.where(np.arange(n) < 200, 0.0, 6.0) + rng.normal(size=n)]
         )
-        out = run(x, hazard=250.0)
+        out = run(x, hazard_rows=250.0)
         assert out["p_change"][10:].null_count() == 0, level
         assert any(abs(b - 200) <= 1 for b in breaks(out)), level
 
@@ -1249,7 +1362,7 @@ def test_the_mean_precision_prior_is_the_longhand_at_any_weight(k0):
     ``p_change`` from the default."""
     x = np.concatenate([normals(60, 1), normals(60, 2, loc=3.0)])
     kw = dict(
-        hazard=50.0,
+        hazard_rows=50.0,
         mean_prior=[0.0],
         degrees_of_freedom_prior=2.0,
         covariance_prior=[1.0],
@@ -1273,7 +1386,9 @@ def test_a_vanishing_robust_beta_is_the_plain_posterior():
     2.05, 2.05 and 2.04 at 1e-12, 1e-9, 1e-6 and 1e-3; ``loglik``'s 10.6 at
     each; ``run_mode`` identical throughout."""
     x = np.concatenate([normals(150, 3), normals(150, 4, loc=3.0)])
-    kw = dict(mean_prior=[0.0], covariance_prior=[1.0], degrees_of_freedom_prior=3.0, hazard=100.0)
+    kw = dict(
+        mean_prior=[0.0], covariance_prior=[1.0], degrees_of_freedom_prior=3.0, hazard_rows=100.0
+    )
     plain = run(x, **kw)
 
     def gap(beta, col):
@@ -1298,7 +1413,7 @@ def test_a_scalar_covariance_prior_is_that_multiple_of_the_identity():
             np.concatenate([rng.normal(0, 1, 150), rng.normal(-2, 2, 150)]),
         ]
     )
-    kw = dict(mean_prior=[0.0, 0.0], degrees_of_freedom_prior=5.0, hazard=100.0)
+    kw = dict(mean_prior=[0.0, 0.0], degrees_of_freedom_prior=5.0, hazard_rows=100.0)
     for emission in ("full", "diag"):
         scalar = run(x, covariance_type=emission, covariance_prior=[2.0], **kw)
         matrix = run(x, covariance_type=emission, covariance_prior=[2.0, 0.0, 0.0, 2.0], **kw)
@@ -1319,8 +1434,8 @@ def test_at_one_feature_full_is_diag():
     hundreds, so 1e-12 relative is the bound."""
     x = np.concatenate([normals(150, 3), normals(150, 4, loc=3.0)])
     for kw in (dict(mean_prior=[0.0], covariance_prior=[1.0]), {}):
-        a = run(x, covariance_type="diag", hazard=100.0, prune_below=0.0, **kw)
-        b = run(x, covariance_type="full", hazard=100.0, prune_below=0.0, **kw)
+        a = run(x, covariance_type="diag", hazard_rows=100.0, prune_below=0.0, **kw)
+        b = run(x, covariance_type="full", hazard_rows=100.0, prune_below=0.0, **kw)
         assert a["run_mode"].equals(b["run_mode"])
         for col in ("p_change", "run_mean", "pred_x0", "loglik"):
             got, want = b[col].to_numpy(), a[col].to_numpy()
@@ -1337,7 +1452,7 @@ def test_the_default_degrees_of_freedom_are_the_smallest_with_a_mean():
     x0 = np.concatenate([normals(150, 3), normals(150, 4, loc=3.0)])
     for d in (1, 2, 3):
         x = np.column_stack([x0] + [normals(300, 10 + i) for i in range(d - 1)])
-        kw = dict(mean_prior=[0.0] * d, covariance_prior=[1.0], hazard=100.0)
+        kw = dict(mean_prior=[0.0] * d, covariance_prior=[1.0], hazard_rows=100.0)
         for emission, nu in (("diag", 3.0), ("full", d + 2.0)):
             left_out = run(x, covariance_type=emission, **kw)
             written = run(x, covariance_type=emission, degrees_of_freedom_prior=nu, **kw)
@@ -1351,7 +1466,9 @@ def test_a_prune_below_of_zero_is_the_smallest_prune():
     share of the mass a run of 300 rows reaches: the same run to the bit. The
     default ``1e-6`` drops some."""
     x = np.concatenate([normals(150, 3), normals(150, 4, loc=3.0)])
-    kw = dict(mean_prior=[0.0], covariance_prior=[1.0], degrees_of_freedom_prior=3.0, hazard=100.0)
+    kw = dict(
+        mean_prior=[0.0], covariance_prior=[1.0], degrees_of_freedom_prior=3.0, hazard_rows=100.0
+    )
     exact = run(x, prune_below=0.0, **kw)
     assert _differ(exact, run(x, prune_below=1e-300, **kw)) == []
     assert "p_change" in _differ(exact, run(x, prune_below=1e-6, **kw))
@@ -1368,7 +1485,7 @@ def test_a_max_run_past_the_stream_is_no_cap():
         mean_prior=[0.0],
         covariance_prior=[1.0],
         degrees_of_freedom_prior=3.0,
-        hazard=100.0,
+        hazard_rows=100.0,
         prune_below=0.0,
     )
     huge = run(x, max_run=10**9, **kw)

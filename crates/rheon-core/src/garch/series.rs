@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use super::dist;
 use super::filter::Filter;
 use super::fit::OMEGA_FLOOR_FRAC;
-use super::fit::{ab_set, backcast, clip_shape, fit, set_of};
+use super::fit::{ab_set, backcast, clip_shape, fit, identified, set_of};
 use super::guard;
 use super::linalg::{HalfSpaces, backward, chol_solve, cholesky, forward, tri, unpack};
 use super::math;
@@ -38,8 +38,10 @@ pub(super) struct Series {
     pub sound: bool,
     /// The weight this target has learned, the start's rows included.
     pub w_sum: f64,
-    /// The process's parameters, then the shape (`ν`, then `λ`); not a
-    /// number before the start.
+    /// The process's parameters, then the shape (`ν`, then `λ`). Before
+    /// the start, the last fit withheld because its rows did not tell its
+    /// process from a constant variance ([`Series::no_effect`]), or not a
+    /// number while no fit has been.
     pub theta: Vec<f64>,
     /// The information matrix of the stepped coordinates, packed.
     pub h: Vec<f64>,
@@ -122,13 +124,25 @@ impl Series {
         self.filter.variance(cfg.vol, &self.theta[..k], k)
     }
 
-    /// Fit the buffered rows. A fit that did not converge, or sits on a
-    /// bound of the process's set, doubles the buffer and waits for its
-    /// rows (`may_double`: the cap holds the doubled buffer), at most
-    /// [`MAX_REFITS`] times. Otherwise the buffer is replayed at the fit:
-    /// the filter from the backcast, the information matrix and the
-    /// running means built as equal-weight means over it, the parameters
-    /// held.
+    /// Whether the series waits because its last start's fit did not tell
+    /// its process from a constant variance: not started, and holding that
+    /// withheld fit.
+    pub fn no_effect(&self) -> bool {
+        !self.started && self.theta.iter().all(|v| v.is_finite())
+    }
+
+    /// Fit the buffered rows. A fit whose likelihood-ratio statistic
+    /// against constant variance is under the form's cut
+    /// ([`super::fit::identified`]) is withheld: the buffer doubles and waits
+    /// for its rows (`may_double`: the cap holds the doubled buffer), at
+    /// most [`MAX_REFITS`] times, and with no doubling left the series
+    /// buffers afresh; the fit is kept in `theta` to say why it waits. A
+    /// fit that passes, but is not at its optimum by its Newton decrement
+    /// or sits on a bound of the process's set, doubles the same way, and
+    /// with no doubling left is stepped from. Otherwise the buffer is
+    /// replayed at the fit: the filter from the backcast, the information
+    /// matrix and the running means built as equal-weight means over it,
+    /// the parameters held.
     pub fn start(&mut self, cfg: &GarchCfg, may_double: bool) {
         let bc = backcast(&self.buffer);
         let wsum: f64 = self.buffer.iter().map(|r| r[1]).sum();
@@ -144,18 +158,26 @@ impl Series {
         )
         .filter(|f| f.theta.iter().all(|v| v.is_finite()));
         let doubles = self.refits < MAX_REFITS && may_double;
-        let Some(got) = got.filter(|f| f.sound || !doubles) else {
-            // No fit with a finite likelihood (a buffer of zeros), or one
-            // that did not settle: the series waits for twice the rows, or
-            // with no doubling left reports nothing and buffers afresh.
+        let wait = |series: &mut Self, withheld: Option<Vec<f64>>| {
+            series.theta = withheld.unwrap_or_else(|| vec![f64::NAN; cfg.n_params()]);
             if doubles {
-                self.refits += 1;
+                series.refits += 1;
             } else {
-                self.buffer.clear();
-                self.first = None;
-                self.w_sum = 0.0;
+                series.buffer.clear();
+                series.first = None;
+                series.w_sum = 0.0;
             }
-            return;
+        };
+        let got = match got {
+            // No fit with a finite likelihood (a buffer of zeros): the
+            // series waits for twice the rows, or with no doubling left
+            // reports nothing and buffers afresh.
+            None => return wait(self, None),
+            // No evidence of a variance process: withheld, the same way.
+            Some(f) if !identified(cfg.vol, f.lr) => return wait(self, Some(f.theta)),
+            // Not settled: twice the rows while they may double.
+            Some(f) if !f.sound && doubles => return wait(self, None),
+            Some(f) => f,
         };
         let rows = std::mem::take(&mut self.buffer);
         let k = cfg.vol.k();

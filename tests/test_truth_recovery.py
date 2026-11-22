@@ -507,8 +507,8 @@ def bocpd_break(seed: int, delta: float) -> tuple[int | None, int | None, int]:
     sd, seed 30's dates it from 501, then from row 0 for 25 rows, then from
     487."""
     x, quiet = bocpd_streams(seed, delta)
-    alarms, began = bocpd_starts(x, hazard=250.0)
-    false = sum(1 for a in alarms if a < 500) + len(bocpd_starts(quiet, hazard=250.0)[0])
+    alarms, began = bocpd_starts(x, hazard_rows=250.0)
+    false = sum(1 for a in alarms if a < 500) + len(bocpd_starts(quiet, hazard_rows=250.0)[0])
     after = [a for a in alarms if a >= 500]
     if not after:
         return None, None, false
@@ -538,7 +538,7 @@ BOCPD_BOUNDS = {1.0: (100, 30, 0.95), 2.0: (20, 4, 1.0), 3.0: (12, 3, 1.0)}
 ledger.guard(
     "bocpd_shift",
     lambda: [
-        bocpd_out(x, hazard=250.0)
+        bocpd_out(x, hazard_rows=250.0)
         for d in sorted(BOCPD_BOUNDS)
         for s in range(3)
         for x in bocpd_streams(s, d)
@@ -596,7 +596,7 @@ TCPD = {
 #: each series' F1 as measured.
 ledger.guard(
     "bocpd_tcpd",
-    lambda: [bocpd_out(tcpd_or_skip(name)[0], hazard=250.0) for name in sorted(TCPD)],
+    lambda: [bocpd_out(tcpd_or_skip(name)[0], hazard_rows=250.0) for name in sorted(TCPD)],
     dataset="tcpd:" + ",".join(sorted(TCPD)),
 )
 
@@ -605,7 +605,7 @@ ledger.guard(
 @pytest.mark.parametrize("name", sorted(TCPD))
 def test_bocpd_on_tcpd_series(name):
     x, annotations = tcpd_or_skip(name)
-    alarms, began = bocpd_starts(x, hazard=250.0)
+    alarms, began = bocpd_starts(x, hazard_rows=250.0)
     found = sorted({began[a] for a in alarms if began[a] is not None})
     score = f_measure(annotations, found)
     print(f"{name}: F1 {score:.3f}, found {found}")
@@ -635,7 +635,7 @@ TCPDBENCH_BOCPD_F1 = {
 #: which moved no change point on these series; nothing is pruned here,
 #: so the posterior is the whole one.
 TCPDBENCH_BOCPD = {
-    "hazard": 100.0,
+    "hazard_rows": 100.0,
     "mean_prior": [0.0],
     "mean_precision_prior": 1.0,
     "degrees_of_freedom_prior": 2.0,
