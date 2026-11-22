@@ -686,6 +686,9 @@ fn kmeans_cfg() -> KMeansCfg {
         dead_frac: 0.05,
         standardize: true,
         scale_floor: 0.1,
+        warm_clock: None,
+        update_every: None,
+        split_merge_every: None,
     }
 }
 

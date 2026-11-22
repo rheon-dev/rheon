@@ -483,8 +483,17 @@ impl Spec {
                 dead_frac,
                 standardize,
                 scale_floor,
+                warm_rows,
+                warm_span,
                 ..
             } => {
+                if warm_rows.is_some() && warm_span.is_some() {
+                    no.refuse(format!(
+                        "spec {:?}: warm_span and warm_rows are two warm-ups, and the centers \
+                         are seeded once. Leave one of them out.",
+                        self.name
+                    ));
+                }
                 if *k == 0 {
                     no.refuse(format!(
                         "spec {:?}: n_clusters must be at least 1, but it is 0. Set n_clusters \

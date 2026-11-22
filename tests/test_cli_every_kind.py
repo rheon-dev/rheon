@@ -800,6 +800,19 @@ CASES: list[Case] = [
             "scale_floor": 1e-3,
         },
     ),
+    # Task 538: the warm-up and both cadences on the clock.
+    Case(
+        "kmeans3",
+        "kmeans",
+        {
+            **STREAM,
+            "features": ["x1", "x2"],
+            "n_clusters": 3,
+            "warm_span": 25.0,
+            "update_every": 2.0,
+            "split_merge_every": 40.0,
+        },
+    ),
     Case(
         "micro",
         "micro",

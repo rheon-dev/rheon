@@ -1465,7 +1465,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 90] = [
+    const FORMS: [(&str, &[&str]); 97] = [
         // Schema 70 (rule 5's twenty-second exception): the stabilized
         // prior's `ŝ` and `V` under `full` in each form and under `diag`,
         // the factor form's `f`, and a spec's own `prior_rows`.
@@ -1642,6 +1642,17 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
             "expectile_refit_clock",
             &["model", "Expectile", "refit", "0", "rows"],
         ),
+        // Task 538, part 2: kmeans' warm-up over a span and its cadences.
+        ("kmeans_spans_warming", &["model", "KMeans", "place"]),
+        ("kmeans_spans_warming", &["model", "KMeans", "buf"]),
+        ("kmeans_spans", &["model", "KMeans", "cfg", "warm_clock"]),
+        ("kmeans_spans", &["model", "KMeans", "cfg", "update_every"]),
+        (
+            "kmeans_spans",
+            &["model", "KMeans", "cfg", "split_merge_every"],
+        ),
+        ("kmeans_spans", &["model", "KMeans", "since_update"]),
+        ("kmeans_spans", &["model", "KMeans", "since_split"]),
     ];
     // Each refit's first stamp, written only under a span (task 538): in
     // glm on the summed clock, in expectile an integer stamp.
@@ -1657,6 +1668,14 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         let first = at(&v, &["model", variant, "refit", "0", "first"]).expect("a first stamp");
         assert!(!first.is_nil(), "{name}: no first stamp");
     }
+    // kmeans' warm-up's first stamp (task 538, part 2), the first row's.
+    let f = frozen::ALL
+        .iter()
+        .find(|f| f.name == "kmeans_spans_warming")
+        .expect("kmeans_spans_warming");
+    let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+    let first = at(&v, &["model", "KMeans", "warm_first"]).expect("a warm-up's first stamp");
+    assert!(!first.is_nil(), "kmeans_spans_warming: no first stamp");
     // The span's first stamp, an integer stamp msgpack writes as integers
     // (which `held` does not count): present, not nil.
     let f = frozen::ALL

@@ -682,6 +682,21 @@ pub enum ModelKind {
         /// variance alone.
         #[serde(default)]
         scale_floor: Option<f64>,
+        /// The warm-up over a span of the clock in place of `warm_rows`
+        /// (docs/PLAN.md task 538): the learned rows from the first through
+        /// the first at least this long after it, once they are at least
+        /// `n_clusters`. Refused beside `warm_rows`. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        warm_span: Option<Span>,
+        /// A checkpoint every this long on the clock, beside
+        /// `update_every_rows`' count, whichever comes first; the count's
+        /// default is then none. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        update_every: Option<Span>,
+        /// A split-merge check every this long on the clock, beside
+        /// `split_merge_every_rows`. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        split_merge_every: Option<Span>,
     },
     /// DenStream-style micro-clusters with a linkage macro step
     /// (docs/CLUSTERING.md §6.5; PLAN §11a, task 24). No targets: the

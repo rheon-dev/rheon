@@ -1290,6 +1290,9 @@ fn kmeans_reports_the_seeding_runs_its_cap_stopped() {
         dead_frac: 0.0,
         standardize: false,
         scale_floor: 0.0,
+        warm_clock: None,
+        update_every: None,
+        split_merge_every: None,
     })
     .unwrap();
     let of = |m: KMeans| {

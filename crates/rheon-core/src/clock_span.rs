@@ -24,6 +24,8 @@
 
 use std::cmp::Ordering;
 
+use serde::{Deserialize, Serialize};
+
 use crate::Stamp;
 
 /// Whether a span that began at the row stamped `first` has run its length
@@ -31,6 +33,51 @@ use crate::Stamp;
 /// `first`, decided on the exact stamps (the module docs).
 pub(crate) fn span_reached(now: Stamp, first: Stamp, span: f64) -> bool {
     now.cmp_span(first, span) != Ordering::Less
+}
+
+/// Whether a start of `span` clock units (a warm-up, a refit of the first
+/// rows) has closed at the row stamped `now`, `rows` rows in it counting
+/// this one: the row's stamp is the start's first where none is held yet,
+/// and the start closes once it has run its length and holds `least` rows
+/// (the module docs).
+pub(crate) fn start_due(
+    first: &mut Option<Stamp>,
+    now: Stamp,
+    span: f64,
+    rows: usize,
+    least: usize,
+) -> bool {
+    let first = *first.get_or_insert(now);
+    rows >= least && span_reached(now, first, span)
+}
+
+/// A model's place on the clock for its spans: the stamp the caller hands
+/// for the next row ([`crate::OnlineModel::stamp_next`]), or, for a caller
+/// that hands none, the clock summed from the rows' steps, which is state.
+/// Kept only by a model with a span of the clock, as an `Option`, so a
+/// model without one writes nothing of it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub(crate) struct Place {
+    /// The clock summed from every step.
+    #[serde(with = "crate::humanfloat::f64_or_tag")]
+    own: f64,
+    /// The next row's stamp, taken by [`Self::step`]. Never state.
+    #[serde(skip)]
+    next: Option<Stamp>,
+}
+
+impl Place {
+    /// The next row's stamp.
+    pub fn hand(&mut self, stamp: Stamp) {
+        self.next = Some(stamp);
+    }
+
+    /// One row stepped `d_clock` after the last: its place, the stamp handed
+    /// or the summed clock.
+    pub fn step(&mut self, d_clock: f64) -> Stamp {
+        self.own += d_clock;
+        self.next.take().unwrap_or(Stamp::from(self.own))
+    }
 }
 
 /// The run-time check of a state whose size the data decides (the module
@@ -94,6 +141,29 @@ mod tests {
         ));
         assert!(span_reached(Stamp::Int(7, 0.0), Stamp::Int(4, 0.0), 3.0));
         assert!(!span_reached(Stamp::Int(6, 0.0), Stamp::Int(4, 0.0), 3.0));
+    }
+
+    /// A start closes at its length with its least rows, and not before
+    /// either; its first stamp is the first row's.
+    #[test]
+    fn a_start_closes_at_its_length_once_it_holds_its_rows() {
+        let mut first = None;
+        assert!(!start_due(&mut first, Stamp::from(1.0), 3.0, 1, 2));
+        assert_eq!(first, Some(Stamp::from(1.0)));
+        assert!(!start_due(&mut first, Stamp::from(3.9), 3.0, 2, 2));
+        assert!(!start_due(&mut first, Stamp::from(4.0), 3.0, 1, 2));
+        assert!(start_due(&mut first, Stamp::from(4.0), 3.0, 2, 2));
+        assert_eq!(first, Some(Stamp::from(1.0)));
+    }
+
+    /// A place is the stamp handed, or the clock summed where none is.
+    #[test]
+    fn a_place_is_the_stamp_handed_or_the_summed_clock() {
+        let mut p = Place::default();
+        assert_eq!(p.step(2.0), Stamp::from(2.0));
+        p.hand(Stamp::Ns(7));
+        assert_eq!(p.step(1.0), Stamp::Ns(7));
+        assert_eq!(p.step(0.5), Stamp::from(3.5));
     }
 
     /// The cap: under it a row is taken, at it too, past it not, and after

@@ -355,7 +355,8 @@ and each diagnostic's own ``*_half_life`` below, and in the models
 ``select_half_life``, ``coef_half_life``,
 ``revert_half_life``, ``trend_half_life`` and ``huber_scale_half_life``,
 ``hawkes``' ``kernel_half_lives``, a list of them, ``garch``'s
-``start_span``, and ``glm``'s and ``expectile``'s ``refit_span``.
+``start_span``, ``glm``'s and ``expectile``'s ``refit_span``, and
+``kmeans``' ``warm_span``, ``update_every`` and ``split_merge_every``.
 
 One parameter takes either form, with a meaning for each: ``bocpd``'s
 ``hazard``. A number, finite and above 1, is the expected rows between

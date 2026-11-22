@@ -524,6 +524,9 @@ fn kmeans_cfg() -> KMeansCfg {
         dead_frac: 0.05,
         standardize: true,
         scale_floor: 0.1,
+        warm_clock: None,
+        update_every: None,
+        split_merge_every: None,
     }
 }
 
@@ -1628,6 +1631,44 @@ pub fn all() -> Vec<Case> {
             "KMeans",
             KMeans,
             KMeans::new(kmeans_cfg()).unwrap(),
+            K,
+            Targets::None,
+            40
+        ),
+        // Task 538: a warm-up over a span of the clock and both cadences
+        // on the clock, saved inside the warm-up and after the seeding.
+        case!(
+            "kmeans_spans_warming",
+            "KMeans",
+            KMeans,
+            KMeans::new(KMeansCfg {
+                warm_rows: 3,
+                warm_clock: Some(12.0),
+                update_every_rows: u32::MAX,
+                update_every: Some(3.0),
+                split_merge_every_rows: u32::MAX,
+                split_merge_every: Some(15.0),
+                ..kmeans_cfg()
+            })
+            .unwrap(),
+            K,
+            Targets::None,
+            6
+        ),
+        case!(
+            "kmeans_spans",
+            "KMeans",
+            KMeans,
+            KMeans::new(KMeansCfg {
+                warm_rows: 3,
+                warm_clock: Some(12.0),
+                update_every_rows: u32::MAX,
+                update_every: Some(7.5),
+                split_merge_every_rows: u32::MAX,
+                split_merge_every: Some(15.0),
+                ..kmeans_cfg()
+            })
+            .unwrap(),
             K,
             Targets::None,
             40

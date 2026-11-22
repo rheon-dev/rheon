@@ -5,9 +5,46 @@
 
 use super::*;
 
+/// A span of the clock that holds rows, of a kind with a fixed cap a group
+/// (docs/PLAN.md task 538): the parameter as the spec writes it, what it
+/// holds, the way to hold fewer, and the cap's name, which no setting
+/// raises.
+pub(crate) struct FixedSpan {
+    pub span: String,
+    pub holds: &'static str,
+    pub shorten: &'static str,
+    pub cap: &'static str,
+}
+
+/// The [`FixedSpan`] of a spec, if it has one.
+pub(crate) fn fixed_span(spec: &Spec) -> Option<FixedSpan> {
+    let it = |span: String, holds, shorten, cap| {
+        Some(FixedSpan {
+            span,
+            holds,
+            shorten,
+            cap,
+        })
+    };
+    match &spec.model {
+        ModelKind::KMeans {
+            warm_span: Some(s), ..
+        } => it(
+            format!("warm_span = {s}"),
+            "rows of its warm-up",
+            "Shorten warm_span, or give warm_rows",
+            "the 256 MiB a warm-up may hold",
+        ),
+        _ => None,
+    }
+}
+
 /// What a spec's window is, in its own words, and the ways to hold fewer
 /// events: `window_size = 5m`, shortened.
 fn window_words(spec: &Spec) -> (String, &'static str, &'static str) {
+    if let Some(f) = fixed_span(spec) {
+        return (f.span, f.shorten, "rows");
+    }
     match &spec.model {
         ModelKind::Hawkes {
             window_size: Some(w),
@@ -44,6 +81,9 @@ fn window_words(spec: &Spec) -> (String, &'static str, &'static str) {
 /// What a spec's cap is called, and the way out by raising it: `glm`'s
 /// refit buffers have a fixed cap a group, which no setting raises.
 pub(crate) fn cap_words(spec: &Spec) -> (&'static str, &'static str) {
+    if let Some(f) = fixed_span(spec) {
+        return (f.cap, "");
+    }
     match &spec.model {
         ModelKind::Glm { .. } => ("the cap a group's refit buffers may hold", ""),
         _ => ("max_state_bytes", ", or raise max_state_bytes"),

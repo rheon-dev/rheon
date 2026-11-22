@@ -501,6 +501,9 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
             dead_frac,
             standardize,
             scale_floor,
+            warm_span,
+            update_every,
+            split_merge_every,
         } => {
             let seed_rule = crate::stream::init_rule(init.as_deref())?;
             let cfg = KMeansCfg {
@@ -513,17 +516,39 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
                 // At least `k`: a smaller one given is refused, and left out
                 // it is the buffer `max(warm_rows, k)` always was (review
                 // 2026-10-06, PC8).
-                warm_rows: warm_rows.unwrap_or_else(|| (*k).max(500)),
+                // Under a span the buffer holds the span's rows, at least
+                // `k`; a count beside it is the spec's to refuse.
+                warm_rows: warm_rows.unwrap_or_else(|| {
+                    if warm_span.is_some() {
+                        *k
+                    } else {
+                        (*k).max(500)
+                    }
+                }),
                 seed_rule,
                 seed: seed.unwrap_or(0),
-                update_every_rows: update_every_rows.unwrap_or(1),
+                // A clock cadence alone has no row cap.
+                update_every_rows: update_every_rows.unwrap_or(if update_every.is_some() {
+                    u32::MAX
+                } else {
+                    1
+                }),
                 split_merge: split_merge.unwrap_or(0.5),
-                split_merge_every_rows: split_merge_every_rows.unwrap_or(100),
+                split_merge_every_rows: split_merge_every_rows.unwrap_or(
+                    if split_merge_every.is_some() {
+                        u32::MAX
+                    } else {
+                        100
+                    },
+                ),
                 // The dead rule runs at a split-merge check, so with none it
                 // is 0, where a value above 0 is refused (CF6).
                 dead_frac: dead_frac.unwrap_or(if *split_merge == Some(0.0) { 0.0 } else { 0.05 }),
                 standardize: standardize.unwrap_or(true),
                 scale_floor: scale_floor.unwrap_or(0.1),
+                warm_clock: warm_span.as_ref().map(Span::value),
+                update_every: update_every.as_ref().map(Span::value),
+                split_merge_every: split_merge_every.as_ref().map(Span::value),
             };
             Ok(AnyModel::KMeans(Box::new(KMeans::new(cfg)?)))
         }

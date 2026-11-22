@@ -32,7 +32,9 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
         .as_deref()
         .filter(|_| spec.group.is_some())
         .map_or(String::new(), |g| format!(" group {g:?}"));
+    let fixed = crate::stream::fixed_span(spec);
     let given = match &spec.model {
+        _ if fixed.is_some() => format!("{cap} bytes, {}", fixed.as_ref().map_or("", |f| f.cap)),
         ModelKind::Hawkes {
             max_state_bytes: Some(_),
             ..
@@ -50,40 +52,43 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
         }
         _ => format!("the default max_state_bytes of {cap}, which a spec gets when it sets none"),
     };
-    let (window, shorten) = match &spec.model {
-        ModelKind::Hawkes {
-            window_size: Some(w),
-            ..
-        } => (
-            format!("the events inside window_size = {w}"),
-            "Shorten window_size",
-        ),
-        ModelKind::Expectile {
-            window_size: Some(w),
-            ..
-        } => (
-            format!("the rows inside window_size = {w}"),
-            "Shorten window_size",
-        ),
-        ModelKind::Garch {
-            start_span: Some(s),
-            ..
-        } => (
-            format!("the rows of its start inside start_span = {s}"),
-            "Shorten start_span",
-        ),
-        ModelKind::Expectile {
-            refit_span: Some(s),
-            ..
-        }
-        | ModelKind::Glm {
-            refit_span: Some(s),
-            ..
-        } => (
-            format!("the rows of its refit inside refit_span = {s}"),
-            "Shorten refit_span, or give refit_rows",
-        ),
-        _ => ("its window".to_string(), "Shorten the window"),
+    let (window, shorten) = match (&spec.model, fixed) {
+        (_, Some(f)) => (format!("the {} inside {}", f.holds, f.span), f.shorten),
+        (model, None) => match model {
+            ModelKind::Hawkes {
+                window_size: Some(w),
+                ..
+            } => (
+                format!("the events inside window_size = {w}"),
+                "Shorten window_size",
+            ),
+            ModelKind::Expectile {
+                window_size: Some(w),
+                ..
+            } => (
+                format!("the rows inside window_size = {w}"),
+                "Shorten window_size",
+            ),
+            ModelKind::Garch {
+                start_span: Some(s),
+                ..
+            } => (
+                format!("the rows of its start inside start_span = {s}"),
+                "Shorten start_span",
+            ),
+            ModelKind::Expectile {
+                refit_span: Some(s),
+                ..
+            }
+            | ModelKind::Glm {
+                refit_span: Some(s),
+                ..
+            } => (
+                format!("the rows of its refit inside refit_span = {s}"),
+                "Shorten refit_span, or give refit_rows",
+            ),
+            _ => ("its window".to_string(), "Shorten the window"),
+        },
     };
     let (_, raise) = crate::stream::cap_words(spec);
     let text = format!(

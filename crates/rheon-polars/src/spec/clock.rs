@@ -61,6 +61,10 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
     ("holt", &["trend_half_life"]),
     ("sgd", &["huber_scale_half_life"]),
     ("micro", &["prune_every"]),
+    (
+        "kmeans",
+        &["warm_span", "update_every", "split_merge_every"],
+    ),
     ("ew_class", &["window_size", "snapshot_every"]),
     ("marginal", &["window_size", "snapshot_every"]),
     ("hawkes", &["window_size", "kernel_half_lives"]),
@@ -450,6 +454,16 @@ impl Spec {
             }
             ModelKind::Micro { prune_every, .. } => {
                 put(&mut out, "prune_every", prune_every.as_ref());
+            }
+            ModelKind::KMeans {
+                warm_span,
+                update_every,
+                split_merge_every,
+                ..
+            } => {
+                put(&mut out, "warm_span", warm_span.as_ref());
+                put(&mut out, "update_every", update_every.as_ref());
+                put(&mut out, "split_merge_every", split_merge_every.as_ref());
             }
             ModelKind::Garch { start_span, .. } => {
                 put(&mut out, "start_span", start_span.as_ref());

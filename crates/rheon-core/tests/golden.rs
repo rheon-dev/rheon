@@ -1089,6 +1089,9 @@ fn kmeans_cfg(rule: SeedRule) -> KMeansCfg {
         dead_frac: 0.05,
         standardize: true,
         scale_floor: 0.0,
+        warm_clock: None,
+        update_every: None,
+        split_merge_every: None,
     }
 }
 
