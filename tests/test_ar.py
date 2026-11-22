@@ -156,7 +156,13 @@ def test_a_zero_weight_row_counts_in_no_clock():
         pl.when(pl.Series(zero)).then(1e6).otherwise(pl.col("y")).alias("y"),
     )
     spec = rp.spec.ar(
-        "a", targets=["y"], lags=2, features=["x"], clock="t", gap_cap=10.0, weight="w",
+        "a",
+        targets=["y"],
+        lags=2,
+        features=["x"],
+        clock="t",
+        gap_cap=10.0,
+        weight="w",
         half_life=60.0,
         coef_every=0,
     )
@@ -177,7 +183,14 @@ def test_a_session_change_empties_the_lags_and_keeps_the_fit():
         pl.Series("t", np.arange(1200, dtype=float)),
     )
     spec = rp.spec.ar(
-        "a", targets=["y"], lags=2, features=["x"], clock="t", gap_cap=10.0, session="s", session_gap=1.0,
+        "a",
+        targets=["y"],
+        lags=2,
+        features=["x"],
+        clock="t",
+        gap_cap=10.0,
+        session="s",
+        session_gap=1.0,
         half_life=float("inf"),
     )
     out = _out(spec, df)
