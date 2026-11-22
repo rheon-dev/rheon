@@ -54,6 +54,8 @@ fn sgd(loss: SgdLoss, fit_intercept: bool, constraint: Option<Constraint>) -> Sg
         min_weight_holds_learning: true,
         target_spread: false,
         mad_anchor: false,
+        refit_clock: None,
+        max_state_bytes: None,
     }
 }
 

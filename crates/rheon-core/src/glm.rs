@@ -54,7 +54,15 @@
 //!   While the buffer fills, the recursion runs held to a step cap of 1
 //!   ([`WAITING_CAP`]), so the predictions before the refit are the capped
 //!   recursion's rather than a runaway's; the refit then replaces all it
-//!   left;
+//!   left. `refit_clock = D` is the same refit over a span of the clock
+//!   (docs/PLAN.md task 538): a target's rows from its first learned row
+//!   through the first at least `D` clock units after it, once they hold a
+//!   row per coefficient, `D` read off the rows' exact stamps
+//!   ([`crate::clock_span::span_reached`]), `D + 1` rows on the row clock.
+//!   How many rows that is the data decides, so the buffers are checked
+//!   against [`GLM_GROUP_REFIT_CAP`] as they fill: a warning past half of
+//!   it, once, and the row that would pass it learned by no target, nor any
+//!   row after it ([`OnlineModel::state_over_cap`]);
 //! - **the step cap** (`step_cap`): a learned row whose own `η` would move
 //!   by more than `c`, `|x̃'(β_t − β_{t−1})| > c`, has its step scaled to
 //!   `c`. No buffer; without decay its gap was 2.9
@@ -85,8 +93,10 @@ use serde::{Deserialize, Serialize};
 use crate::family::{Family, GlmFamily, GlmLink};
 use crate::model::{ModelState, OnlineModel, State, StateError, Step, check_schema};
 use crate::solve::dot_aug;
-use crate::{Decay, RefitStatus};
+use crate::{Decay, RefitStatus, Stamp};
 
+#[cfg(test)]
+mod refit_clock_tests;
 #[cfg(test)]
 mod tests;
 
@@ -123,11 +133,18 @@ pub const GLM_GROUP_REFIT_CAP: usize = 256 * 1024;
 /// rows costs seconds a target, or where the cap holds fewer than `2 k`
 /// rows, too few to determine the fit.
 pub fn default_glm_refit_rows(n_features: usize, n_targets: usize) -> u32 {
+    default_glm_refit_rows_within(n_features, n_targets, GLM_GROUP_REFIT_CAP as u64)
+}
+
+/// [`default_glm_refit_rows`] held to a group's `max_state_bytes` of `cap`
+/// in place of [`GLM_GROUP_REFIT_CAP`] (docs/PLAN.md task 538).
+pub fn default_glm_refit_rows_within(n_features: usize, n_targets: usize, cap: u64) -> u32 {
     if n_features > crate::DEFAULT_REFIT_MAX_FEATURES {
         return 0;
     }
     let k = n_features as u32 + 1;
-    let fits = GLM_GROUP_REFIT_CAP / (8 * n_targets.max(1) * (n_features + 2));
+    let fits =
+        usize::try_from(cap).unwrap_or(usize::MAX) / (8 * n_targets.max(1) * (n_features + 2));
     let rows = DEFAULT_GLM_REFIT_ROWS
         .max(10 * k)
         .min(u32::try_from(fits).unwrap_or(u32::MAX));
@@ -163,11 +180,36 @@ pub struct GlmCfg {
     /// The most a learned row may move its own `η`; `inf` is no cap.
     #[serde(with = "crate::humanfloat::f64_or_tag")]
     pub step_cap: f64,
+    /// The refit over a span of the clock in place of a count of rows: each
+    /// target's rows from its first learned row through the first at least
+    /// this many clock units after it (seconds on a temporal clock), once
+    /// they hold a row per coefficient. `refit_rows` is 0 beside it.
+    /// Last, and written only when set, so a state without it keeps its
+    /// bytes and the array form its order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refit_clock: Option<f64>,
+    /// The bytes a group's refit buffers may hold, a count's checked as the
+    /// model is built and a span's as they fill: `None` is
+    /// [`GLM_GROUP_REFIT_CAP`], at most 64 MiB (docs/PLAN.md task 538). Last,
+    /// and written only when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_state_bytes: Option<u64>,
 }
 
 impl GlmCfg {
     pub fn k_total(&self) -> usize {
         self.n_features + usize::from(self.fit_intercept)
+    }
+
+    /// Whether the first rows are refit, after a count or a span.
+    pub fn refits(&self) -> bool {
+        self.refit_rows > 0 || self.refit_clock.is_some()
+    }
+
+    /// The bytes a group's refit buffers may hold: `max_state_bytes`, or
+    /// [`GLM_GROUP_REFIT_CAP`], 256 KB.
+    pub fn cap(&self) -> u64 {
+        self.max_state_bytes.unwrap_or(GLM_GROUP_REFIT_CAP as u64)
     }
 
     /// The most bytes one group's refit buffers hold: `refit_rows` rows of
@@ -182,20 +224,21 @@ impl GlmCfg {
     /// Whether one group's refit buffers fit [`GLM_GROUP_REFIT_CAP`]: the
     /// refusal names the bytes and the most `refit_rows` that fits.
     pub fn check_refit_cap(&self) -> Result<(), String> {
-        if self.refit_bytes() <= GLM_GROUP_REFIT_CAP {
+        let cap = usize::try_from(self.cap()).unwrap_or(usize::MAX);
+        if self.refit_bytes() <= cap {
             return Ok(());
         }
-        let fits = GLM_GROUP_REFIT_CAP / (8 * self.n_targets.max(1) * (self.n_features + 2));
+        let fits = cap / (8 * self.n_targets.max(1) * (self.n_features + 2));
         Err(format!(
             "glm: refit_rows = {} holds {} rows of {} numbers for each of {}, {} bytes \
-                 a group, past the cap of {} bytes (256 KB) a group's refit may hold. Set \
-                 refit_rows to at most {fits}, or to 0 for the step cap alone.",
+                 a group, past the cap of {cap} bytes a group's refit may hold \
+                 (max_state_bytes). Set refit_rows to at most {fits}, to 0 for the step cap \
+                 alone, or raise max_state_bytes.",
             self.refit_rows,
             self.refit_rows,
             self.n_features + 2,
             crate::model::count(self.n_targets, "target"),
             self.refit_bytes(),
-            GLM_GROUP_REFIT_CAP,
         ))
     }
 
@@ -232,8 +275,28 @@ impl GlmCfg {
                 self.step_cap
             ));
         }
+        no.take(crate::clock_span::check_max_state_bytes(
+            "glm",
+            self.max_state_bytes,
+        ));
         no.take(self.check_refit_cap());
-        if !self.link.defined_at_zero() && (self.refit_rows == 0 || !self.fit_intercept) {
+        if let Some(d) = self.refit_clock {
+            if !(d.is_finite() && d > 0.0) {
+                no.refuse(format!(
+                    "glm: refit_span must be a finite number of clock units above 0, but it is \
+                     {d}. Give the span of clock whose rows the refit fits, or leave it out \
+                     for refit_rows."
+                ));
+            }
+            if self.refit_rows > 0 {
+                no.refuse(format!(
+                    "glm: refit_span and refit_rows = {} are two refits of the first rows, \
+                     and a target is refit once. Leave one of them out.",
+                    self.refit_rows
+                ));
+            }
+        }
+        if !self.link.defined_at_zero() && (!self.refits() || !self.fit_intercept) {
             no.refuse(format!(
                 "glm: the {} link needs refit_rows above 0 and fit_intercept, but {}. Its \
                  mean is positive only where η is above 0, so the \
@@ -241,7 +304,7 @@ impl GlmCfg {
                  from the intercept at the link of the targets' mean. Keep the refit and \
                  the intercept, or use the log link.",
                 self.link.name(),
-                if self.refit_rows == 0 {
+                if !self.refits() {
                     "refit_rows is 0"
                 } else {
                     "fit_intercept is off"
@@ -263,6 +326,10 @@ struct GlmRefit {
     passes: u32,
     failed: bool,
     over_budget: bool,
+    /// Under a refit over a span of the clock, the stamp of the target's
+    /// first learned row, from which the span runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    first: Option<Stamp>,
 }
 
 impl GlmRefit {
@@ -274,6 +341,7 @@ impl GlmRefit {
             passes: 0,
             failed: false,
             over_budget: false,
+            first: None,
         }
     }
 
@@ -289,10 +357,13 @@ impl GlmRefit {
     }
 
     /// Whether the buffer's shape is its count's: `learned` rows of `width`
-    /// numbers while it waits, none once it is done.
-    fn fits(&self, width: usize, refit_rows: u32) -> bool {
+    /// numbers while it waits, fewer than a count of them, none once it is
+    /// done (a span of the clock holds the rows its span has).
+    fn fits(&self, width: usize, refit_rows: u32, clocked: bool) -> bool {
         let n = if self.done { 0 } else { self.learned as usize };
-        self.rows.len() == n * width && (self.done || self.learned < refit_rows.max(1))
+        self.rows.len() == n * width
+            && (self.done || clocked || self.learned < refit_rows.max(1))
+            && (clocked || self.first.is_none())
     }
 }
 
@@ -311,8 +382,33 @@ pub struct Glm {
     /// Solves that failed (`G + R I` not positive definite in floating
     /// point), and refits that failed or ran to their pass cap.
     pub(crate) solve_failures: u64,
+    /// Under a refit over a span of the clock: the clock summed from the
+    /// rows' steps, a row's place where no stamp is handed.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    own: f64,
+    /// The bytes a row would have taken the refit buffers to, past
+    /// [`GLM_GROUP_REFIT_CAP`]: from then on no row is learned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    over: Option<u64>,
+    /// The half-of-the-cap warning has been raised (once a group).
+    #[serde(default, skip_serializing_if = "is_false")]
+    warned: bool,
+    /// The next row's stamp, and a warning raised and not yet taken. Never
+    /// state.
+    #[serde(skip)]
+    next: Option<Stamp>,
+    #[serde(skip)]
+    warning: Option<u64>,
     #[serde(skip)]
     work: Work,
+}
+
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
+}
+
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 /// The scratch a row writes: not state.
@@ -402,12 +498,17 @@ impl Glm {
             w_target: vec![0.0; m],
             gram: vec![vec![0.0; k * (k + 1) / 2]; m],
             beta: vec![vec![0.0; k]; m],
-            refit: if cfg.refit_rows > 0 {
+            refit: if cfg.refits() {
                 vec![GlmRefit::new(); m]
             } else {
                 Vec::new()
             },
             solve_failures: 0,
+            own: 0.0,
+            over: None,
+            warned: false,
+            next: None,
+            warning: None,
             work: Work::default(),
             cfg,
         })
@@ -442,12 +543,35 @@ impl Glm {
     }
 
     /// The bytes this model's refit buffers can hold at most: `refit_rows`
-    /// rows of `n_features + 2` numbers a target; 0 with the refit off.
+    /// rows of `n_features + 2` numbers a target, under a span of the clock
+    /// [`GLM_GROUP_REFIT_CAP`]; 0 with the refit off.
     pub fn refit_reservation(&self) -> usize {
         if self.refit.is_empty() {
             return 0;
         }
+        if self.cfg.refit_clock.is_some() {
+            return usize::try_from(self.cfg.cap()).unwrap_or(usize::MAX);
+        }
         self.cfg.n_targets * 8 * self.cfg.refit_rows as usize * (self.cfg.n_features + 2)
+    }
+
+    /// The bytes the refit buffers hold, with `extra` more rows: each row's
+    /// `n_features + 2` numbers, and under a span of the clock each
+    /// target's first stamp.
+    pub fn refit_held_bytes(&self, extra: usize) -> u64 {
+        let held: usize = self.refit.iter().map(|r| r.rows.len()).sum();
+        let stamps = self.refit.len() * std::mem::size_of::<Option<Stamp>>();
+        (8 * (held + extra * (self.cfg.n_features + 2)) + stamps) as u64
+    }
+
+    /// The run-time check of a refit over a span of the clock, over this
+    /// model's fields ([`crate::clock_span::HeldCap`]).
+    fn held_cap(&mut self) -> crate::clock_span::HeldCap<'_> {
+        crate::clock_span::HeldCap {
+            over: &mut self.over,
+            warned: &mut self.warned,
+            warning: &mut self.warning,
+        }
     }
 
     /// Give every target's refit up before it begins, past a spec's refit
@@ -756,6 +880,36 @@ impl OnlineModel for Glm {
         let n_eff = self.w_sum;
         out.pred.clear();
         out.pred.resize(m, f64::NAN);
+        // A refit over a span of the clock: the row's place on it, the
+        // stamp handed or the clock summed from the steps; and the rows it
+        // would add to the buffers, checked against the cap before any is
+        // learned.
+        let handed = self.next.take();
+        let now = self.cfg.refit_clock.map(|_| {
+            self.own += d_clock;
+            handed.unwrap_or(Stamp::from(self.own))
+        });
+        if now.is_some() && weight > 0.0 {
+            let joining = self
+                .refit
+                .iter()
+                .zip(y)
+                .filter(|(r, t)| !r.done && t.is_some_and(|t| fam.takes(t)))
+                .count();
+            let with = self.refit_held_bytes(joining);
+            let cap = self.cfg.cap();
+            if !self.held_cap().admit(with, cap) {
+                for (j, p) in out.pred.iter_mut().enumerate() {
+                    if self.w_target[j] >= self.cfg.min_weight {
+                        *p = self.mean_of(j, x);
+                    }
+                }
+                out.n_eff = n_eff;
+                out.extra = None;
+                return;
+            }
+        }
+        let p = self.cfg.k_total();
         for (j, &yj) in y.iter().enumerate().take(m) {
             let eta = dot_aug(&self.beta[j], x, self.cfg.fit_intercept);
             if self.w_target[j] >= self.cfg.min_weight {
@@ -785,7 +939,15 @@ impl OnlineModel for Glm {
                     r.rows.push(t);
                     r.rows.push(weight);
                     r.learned += 1;
-                    if r.learned >= self.cfg.refit_rows {
+                    let due = match (self.cfg.refit_clock, now) {
+                        (Some(span), Some(now)) => {
+                            let first = *r.first.get_or_insert(now);
+                            r.learned as usize >= p.max(1)
+                                && crate::clock_span::span_reached(now, first, span)
+                        }
+                        _ => r.learned >= self.cfg.refit_rows,
+                    };
+                    if due {
                         self.run_refit(j);
                     }
                 }
@@ -800,6 +962,27 @@ impl OnlineModel for Glm {
         );
         out.n_eff = n_eff;
         out.extra = None;
+        if now.is_some() {
+            let with = self.refit_held_bytes(0);
+            let cap = self.cfg.cap();
+            self.held_cap().note(with, cap);
+        }
+    }
+
+    /// A refit over a span of the clock learns its rows' stamps: they
+    /// decide where it closes.
+    fn stamp_next(&mut self, stamp: Stamp) {
+        if self.cfg.refit_clock.is_some() {
+            self.next = Some(stamp);
+        }
+    }
+
+    fn take_state_warning(&mut self) -> Option<(u64, u64)> {
+        self.warning.take().map(|bytes| (bytes, self.cfg.cap()))
+    }
+
+    fn state_over_cap(&self) -> Option<(u64, u64)> {
+        self.over.map(|bytes| (bytes, self.cfg.cap()))
     }
 
     fn predict_with_floor(
@@ -852,8 +1035,10 @@ impl OnlineModel for Glm {
                     && m.gram.iter().all(|g| g.len() == k * (k + 1) / 2)
                     && m.beta.len() == n
                     && m.beta.iter().all(|b| b.len() == k)
-                    && m.refit.len() == if m.cfg.refit_rows > 0 { n } else { 0 }
-                    && m.refit.iter().all(|r| r.fits(width, m.cfg.refit_rows));
+                    && m.refit.len() == if m.cfg.refits() { n } else { 0 }
+                    && m.refit
+                        .iter()
+                        .all(|r| r.fits(width, m.cfg.refit_rows, m.cfg.refit_clock.is_some()));
                 if !shaped {
                     return Err(crate::model::damaged(
                         "glm",

@@ -60,8 +60,19 @@ fn cfg(family: GlmFamily, nf: usize, refit_rows: u32) -> GlmCfg {
         ridge: 1.0,
         min_weight: 0.0,
         refit_rows,
+        refit_clock: None,
         step_cap: f64::INFINITY,
+        max_state_bytes: None,
     }
+}
+
+/// [`cfg`] and [`stream`], for the clock refit's tests beside these.
+pub(super) fn cfg_of(family: GlmFamily, nf: usize, refit_rows: u32) -> GlmCfg {
+    cfg(family, nf, refit_rows)
+}
+
+pub(super) fn stream_of(family: GlmFamily, k: usize, n: usize, seed: u64) -> Vec<(Vec<f64>, f64)> {
+    stream(family, k, n, seed)
 }
 
 fn run(m: &mut Glm, rows: &[(Vec<f64>, f64)], w: impl Fn(usize) -> f64) -> Vec<f64> {
@@ -439,6 +450,7 @@ fn cfg_validation_refuses_each_bad_field() {
     refused(
         GlmCfg {
             refit_rows: crate::MAX_REFIT_ROWS + 1,
+            refit_clock: None,
             ..base.clone()
         },
         "past the cap of 262144 bytes",
@@ -448,6 +460,7 @@ fn cfg_validation_refuses_each_bad_field() {
             family: GlmFamily::Gamma,
             link: GlmLink::Inverse,
             refit_rows: 0,
+            refit_clock: None,
             ..base.clone()
         },
         "needs refit_rows above 0",

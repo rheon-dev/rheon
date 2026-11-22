@@ -153,6 +153,9 @@ fn with_duration(owner: &str, field: &str) -> Spec {
                 "expectile" => r#", "expectile": 0.5"#,
                 "ew_class" => r#", "classes": ["a", "b"], "precision_prior": 1.0"#,
                 "micro" => r#", "eps": 0.3"#,
+                "kmeans" => r#", "n_clusters": 2"#,
+                "hmm" => r#", "n_components": 2, "precision_prior": 1.0"#,
+                "corrchange" => r#", "kind": "window", "window_rows": 20"#,
                 _ => "",
             };
             format!(r#"{{"type": "{kind}", "{field}": "10m"{required}}}"#)

@@ -402,6 +402,8 @@ fn a_standardized_huber_keeps_the_slope_it_learned() {
         refit_rows: 0,
         mad_anchor: false,
         min_weight_holds_learning: false,
+        refit_clock: None,
+        max_state_bytes: None,
     };
     holds(
         "huber",
@@ -480,6 +482,8 @@ fn sgd_predicts_the_same_at_every_level() {
         min_weight_holds_learning: false,
         target_spread: false,
         mad_anchor: false,
+        refit_clock: None,
+        max_state_bytes: None,
     };
     holds(
         "sgd",
@@ -696,6 +700,8 @@ fn a_held_target_leaves_no_slope_on_a_moving_feature() {
         refit_rows: 0,
         mad_anchor: false,
         min_weight_holds_learning: false,
+        refit_clock: None,
+        max_state_bytes: None,
     };
     slopes_decay(
         "huber",
@@ -819,6 +825,8 @@ fn without_decay_a_stopped_feature_keeps_its_slope() {
         min_weight_holds_learning: false,
         target_spread: false,
         mad_anchor: false,
+        refit_clock: None,
+        max_state_bytes: None,
     };
     let (base, _) = run_on(
         Sgd::new(cfg.clone()).unwrap(),
@@ -931,6 +939,8 @@ fn a_state_saved_mid_hold_resumes_to_the_bit() {
             refit_rows: 0,
             mad_anchor: false,
             min_weight_holds_learning: false,
+            refit_clock: None,
+            max_state_bytes: None,
         })
         .unwrap()
     });
@@ -974,6 +984,8 @@ fn a_state_saved_mid_hold_resumes_to_the_bit() {
             min_weight_holds_learning: false,
             target_spread: false,
             mad_anchor: false,
+            refit_clock: None,
+            max_state_bytes: None,
         })
         .unwrap()
     });
@@ -1159,6 +1171,8 @@ fn a_row_of_no_weight_moves_no_mean() {
             refit_rows: 0,
             mad_anchor: false,
             min_weight_holds_learning: false,
+            refit_clock: None,
+            max_state_bytes: None,
         })
         .unwrap()
     });
@@ -1202,6 +1216,8 @@ fn a_row_of_no_weight_moves_no_mean() {
             min_weight_holds_learning: false,
             target_spread: false,
             mad_anchor: false,
+            refit_clock: None,
+            max_state_bytes: None,
         })
         .unwrap()
     });
@@ -1366,6 +1382,7 @@ fn hmm_filters_the_same_at_every_level_at(width: usize) {
             seed: 3,
             tvtp: None,
             prior_rows: None,
+            warm_clock: None,
         })
         .unwrap()
     };
@@ -1524,6 +1541,7 @@ fn bocpd_held(on_clock: bool) -> Bocpd {
         min_weight: 0.0,
         warm_rows: None,
         hazard_on_clock: on_clock,
+        warm_clock: None,
     })
     .unwrap()
 }
@@ -1625,6 +1643,7 @@ fn a_row_of_no_weight_moves_nothing_without_a_target() {
             seed: 3,
             tvtp: None,
             prior_rows: None,
+            warm_clock: None,
         })
         .unwrap()
     });
@@ -1743,6 +1762,8 @@ fn quantile_cfg() -> RobustCfg {
         refit_rows: 0,
         mad_anchor: false,
         min_weight_holds_learning: false,
+        refit_clock: None,
+        max_state_bytes: None,
     }
 }
 
@@ -2159,6 +2180,9 @@ fn kmeans_cfg() -> KMeansCfg {
         dead_frac: 0.05,
         standardize: true,
         scale_floor: 0.1,
+        warm_clock: None,
+        update_every: None,
+        split_merge_every: None,
     }
 }
 
@@ -2197,6 +2221,7 @@ fn corrchange_cfg() -> CorrChangeCfg {
         reset: false,
         monitor_rows: 0,
         boundary_gamma: 0.0,
+        permute_every: None,
     }
 }
 
@@ -2318,6 +2343,7 @@ fn bocpd_at_a_level() -> Bocpd {
         min_weight: 0.0,
         warm_rows: None,
         hazard_on_clock: false,
+        warm_clock: None,
     })
     .unwrap()
 }

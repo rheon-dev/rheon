@@ -470,6 +470,8 @@ fn robust_cfg(loss: RobustLoss) -> RobustCfg {
         refit_rows: 0,
         mad_anchor: false,
         min_weight_holds_learning: false,
+        refit_clock: None,
+        max_state_bytes: None,
     }
 }
 
@@ -544,6 +546,8 @@ fn sgd_cfg() -> SgdCfg {
         min_weight_holds_learning: false,
         target_spread: false,
         mad_anchor: false,
+        refit_clock: None,
+        max_state_bytes: None,
     }
 }
 
@@ -686,6 +690,9 @@ fn kmeans_cfg() -> KMeansCfg {
         dead_frac: 0.05,
         standardize: true,
         scale_floor: 0.1,
+        warm_clock: None,
+        update_every: None,
+        split_merge_every: None,
     }
 }
 
@@ -1466,6 +1473,7 @@ fn hmm_cfg() -> HmmCfg {
         seed: 1,
         tvtp: None,
         prior_rows: None,
+        warm_clock: None,
     }
 }
 
@@ -1508,6 +1516,7 @@ fn corrchange_cfg() -> CorrChangeCfg {
         reset: false,
         monitor_rows: 0,
         boundary_gamma: 0.0,
+        permute_every: None,
     }
 }
 
@@ -1558,6 +1567,7 @@ fn bocpd_cfg() -> BocpdCfg {
         min_weight: 0.0,
         warm_rows: None,
         hazard_on_clock: false,
+        warm_clock: None,
     }
 }
 
@@ -4676,7 +4686,9 @@ fn glm_cfg() -> GlmCfg {
         ridge: 1.0,
         min_weight: 3.0,
         refit_rows: 10,
+        refit_clock: None,
         step_cap: f64::INFINITY,
+        max_state_bytes: None,
     }
 }
 
@@ -4749,6 +4761,7 @@ fn expectile_cfg() -> ExpectileCfg {
         ridge: 1e-6,
         min_weight: 3.0,
         refit_rows: 10,
+        refit_clock: None,
         window_rows: None,
         window_clock: None,
         closed: WindowClosed::Right,

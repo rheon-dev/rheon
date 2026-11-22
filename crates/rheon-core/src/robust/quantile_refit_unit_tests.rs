@@ -163,6 +163,8 @@ fn cfg(ridge: f64) -> RobustCfg {
         refit_rows: 0,
         mad_anchor: true,
         min_weight_holds_learning: false,
+        refit_clock: None,
+        max_state_bytes: None,
     }
 }
 

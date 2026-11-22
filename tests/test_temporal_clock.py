@@ -56,6 +56,8 @@ def _frame(n: int = 400, seed: int = 3) -> pl.DataFrame:
             "y": y,
             "s": np.where(np.arange(n) < n // 2, "am", "pm"),
             "lab": np.where(y > 0.5, "a", "b"),
+            # A count for `glm`, whose families take no negative target.
+            "c": np.abs(np.round(y)),
         }
     )
 
@@ -523,6 +525,8 @@ class TestEveryClockParameterTakesADuration:
             # A rate per clock unit has no duration: the kernels are half-lives.
             kw.pop("kernel_decays", None)
             kw["kernel_half_lives"] = ["30s", "2m"]
+        if builder == "glm":
+            kw["targets"] = ["c"]
         if builder in ("hawkes", "expectile"):
             # A window takes no decay beside it: the parameter under test
             # sets its own half_life where it is that one.
@@ -542,6 +546,13 @@ class TestEveryClockParameterTakesADuration:
         "window_size": ("30m", {}),
         "kernel_half_lives": (["20s", "10m"], {}),
         "start_span": ("30m", {"start_rows": None}),
+        "refit_span": ("30m", {"refit_rows": None}),
+        "warm_span": ("30m", {"warm_rows": None}),
+        "update_every": ("10m", {}),
+        "split_merge_every": ("1h", {}),
+        "permute_every": ("10m", {"kind": "window", "window_rows": 20}),
+        "huber_refit_span": ("30m", {}),
+        "quantile_refit_span": ("30m", {}),
         "select_half_life": ("1h", {}),
         "coef_half_life": ("2m", {}),
         "revert_half_life": ("1h", {}),
@@ -586,6 +597,13 @@ class TestEveryClockParameterTakesADuration:
         "revert_half_life": float("inf"),
         "window_size": None,
         "start_span": None,
+        "refit_span": None,
+        "warm_span": None,
+        "update_every": None,
+        "split_merge_every": None,
+        "permute_every": None,
+        "huber_refit_span": None,
+        "quantile_refit_span": None,
         "solve_every": None,
         "embargo": None,
         "restart_after_step_back": None,

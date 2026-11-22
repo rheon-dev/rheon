@@ -354,6 +354,7 @@ fn hmm_full_cfg(d: usize) -> HmmCfg {
         seed: 1,
         tvtp: None,
         prior_rows: None,
+        warm_clock: None,
     }
 }
 
@@ -450,6 +451,8 @@ fn robust_cfg(loss: RobustLoss) -> RobustCfg {
         // held learning back then (docs/PLAN.md task 278, D10). The form
         // since is the refit cases' and `quantile_mad`'s.
         min_weight_holds_learning: true,
+        refit_clock: None,
+        max_state_bytes: None,
     }
 }
 
@@ -524,6 +527,9 @@ fn kmeans_cfg() -> KMeansCfg {
         dead_frac: 0.05,
         standardize: true,
         scale_floor: 0.1,
+        warm_clock: None,
+        update_every: None,
+        split_merge_every: None,
     }
 }
 
@@ -551,6 +557,8 @@ fn sgd_cfg(loss: SgdLoss, n_targets: usize) -> SgdCfg {
         min_weight_holds_learning: true,
         target_spread: false,
         mad_anchor: false,
+        refit_clock: None,
+        max_state_bytes: None,
     }
 }
 
@@ -568,7 +576,9 @@ fn glm_cfg(refit_rows: u32) -> GlmCfg {
         ridge: 1.0,
         min_weight: 3.0,
         refit_rows,
+        refit_clock: None,
         step_cap: f64::INFINITY,
+        max_state_bytes: None,
     }
 }
 
@@ -603,6 +613,7 @@ fn bocpd_cfg() -> BocpdCfg {
         min_weight: 0.0,
         warm_rows: None,
         hazard_on_clock: true,
+        warm_clock: None,
     }
 }
 
@@ -625,6 +636,7 @@ fn corrchange_cfg(kind: CorrChangeKind) -> CorrChangeCfg {
         reset: false,
         monitor_rows: 15,
         boundary_gamma: 0.0,
+        permute_every: None,
     }
 }
 
@@ -1160,6 +1172,56 @@ pub fn all() -> Vec<Case> {
         // the continuation, and saved after it, the buffers freed and the
         // scale rebuilt from the converged residuals (the MAD's sketch in
         // the first, the RMS in the second).
+        // Task 538: the refit over a span of the clock, saved inside it.
+        case!(
+            "huber_refit_span",
+            "Robust",
+            Robust,
+            Robust::new(RobustCfg {
+                huber_scale: rheon_core::HuberScale::Mad,
+                refit_clock: Some(60.0),
+                max_state_bytes: Some(200_000),
+                min_weight_holds_learning: false,
+                ..robust_cfg(RobustLoss::Huber { delta: 1.5 })
+            })
+            .unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        case!(
+            "quantile_refit_span",
+            "Robust",
+            Robust,
+            Robust::new(RobustCfg {
+                huber_scale: rheon_core::HuberScale::Mad,
+                refit_clock: Some(60.0),
+                max_state_bytes: Some(200_000),
+                min_weight_holds_learning: false,
+                mad_anchor: true,
+                ..robust_cfg(RobustLoss::Quantile { tau: 0.75 })
+            })
+            .unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        case!(
+            "sgd_huber_refit_span",
+            "Sgd",
+            Sgd,
+            Sgd::new(SgdCfg {
+                huber_scale: rheon_core::HuberScale::Mad,
+                refit_clock: Some(60.0),
+                max_state_bytes: Some(200_000),
+                min_weight_holds_learning: false,
+                ..sgd_cfg(SgdLoss::Huber { delta: 1.5 }, 2)
+            })
+            .unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
         case!(
             "huber_refit",
             "Robust",
@@ -1568,6 +1630,7 @@ pub fn all() -> Vec<Case> {
             Glm::new(GlmCfg {
                 family: GlmFamily::Tweedie,
                 refit_rows: 0,
+                refit_clock: None,
                 step_cap: 1.0,
                 ..glm_cfg(0)
             })
@@ -1626,6 +1689,44 @@ pub fn all() -> Vec<Case> {
             "KMeans",
             KMeans,
             KMeans::new(kmeans_cfg()).unwrap(),
+            K,
+            Targets::None,
+            40
+        ),
+        // Task 538: a warm-up over a span of the clock and both cadences
+        // on the clock, saved inside the warm-up and after the seeding.
+        case!(
+            "kmeans_spans_warming",
+            "KMeans",
+            KMeans,
+            KMeans::new(KMeansCfg {
+                warm_rows: 3,
+                warm_clock: Some(12.0),
+                update_every_rows: u32::MAX,
+                update_every: Some(3.0),
+                split_merge_every_rows: u32::MAX,
+                split_merge_every: Some(15.0),
+                ..kmeans_cfg()
+            })
+            .unwrap(),
+            K,
+            Targets::None,
+            6
+        ),
+        case!(
+            "kmeans_spans",
+            "KMeans",
+            KMeans,
+            KMeans::new(KMeansCfg {
+                warm_rows: 3,
+                warm_clock: Some(12.0),
+                update_every_rows: u32::MAX,
+                update_every: Some(7.5),
+                split_merge_every_rows: u32::MAX,
+                split_merge_every: Some(15.0),
+                ..kmeans_cfg()
+            })
+            .unwrap(),
             K,
             Targets::None,
             40
@@ -2000,11 +2101,41 @@ pub fn all() -> Vec<Case> {
                 seed: 1,
                 tvtp: None,
                 prior_rows: None,
+                warm_clock: None,
             })
             .unwrap(),
             K,
             Targets::None,
             40
+        ),
+        // Task 538: a warm-up over a span of the clock, saved inside it.
+        case!(
+            "hmm_warm_span",
+            "Hmm",
+            Hmm,
+            Hmm::new(HmmCfg {
+                n_features: K,
+                k: 2,
+                decay: decay(),
+                covariance: Covariance::Diagonal,
+                precision_prior: 1e-2,
+                min_weight: 0.0,
+                learn: true,
+                transition_prior: 1.0,
+                transition: None,
+                means: None,
+                covs: None,
+                warm_rows: 2,
+                seed_rule: SeedRule::Lloyd,
+                seed: 1,
+                tvtp: None,
+                prior_rows: None,
+                warm_clock: Some(15.0),
+            })
+            .unwrap(),
+            K,
+            Targets::None,
+            8
         ),
         // The diagonal shape, which keeps each state's variances alone
         // (schema 66, task 327).
@@ -2029,6 +2160,7 @@ pub fn all() -> Vec<Case> {
                 seed: 1,
                 tvtp: None,
                 prior_rows: None,
+                warm_clock: None,
             })
             .unwrap(),
             K,
@@ -2101,6 +2233,22 @@ pub fn all() -> Vec<Case> {
             Targets::None,
             40
         ),
+        // Task 538: the window's redraw on the clock, saved between draws.
+        case!(
+            "corrchange_permute_every",
+            "CorrChange",
+            CorrChange,
+            CorrChange::new(CorrChangeCfg {
+                span_rows: 16,
+                permute_every_rows: usize::MAX,
+                permute_every: Some(6.0),
+                ..corrchange_cfg(CorrChangeKind::Window)
+            })
+            .unwrap(),
+            K,
+            Targets::None,
+            40
+        ),
         case!(
             "corrchange_sequential",
             "CorrChange",
@@ -2109,6 +2257,21 @@ pub fn all() -> Vec<Case> {
             K,
             Targets::None,
             40
+        ),
+        // Task 538: a warm-up over a span of the clock, saved inside it.
+        case!(
+            "bocpd_warm_span",
+            "Bocpd",
+            Bocpd,
+            Bocpd::new(BocpdCfg {
+                warm_rows: None,
+                warm_clock: Some(15.0),
+                ..bocpd_cfg()
+            })
+            .unwrap(),
+            K,
+            Targets::None,
+            6
         ),
         // Saved with its warm-up buffer still filling: 10 learned rows
         // wanted, 5 held (schema 40's `WarmRow`), as `kmeans_warming` is.
@@ -2377,6 +2540,43 @@ pub fn all() -> Vec<Case> {
             Targets::Linear(2),
             2700
         ),
+        // A refit over a span of the clock (task 538), saved within the
+        // span: each target's first stamp, on the clock summed from the
+        // steps, which is state.
+        case!(
+            "glm_refit_clock",
+            "Glm",
+            Glm,
+            Glm::new(GlmCfg {
+                refit_rows: 0,
+                refit_clock: Some(60.0),
+                max_state_bytes: Some(200_000),
+                ..glm_cfg(0)
+            })
+            .unwrap(),
+            K,
+            Targets::Positive(2),
+            40
+        ),
+        // The same in `expectile`, each row stamped in nanoseconds.
+        Case {
+            name: "expectile_refit_clock",
+            variant: "Expectile",
+            build: || {
+                Box::new(StampedExpectile {
+                    model: Expectile::new(ExpectileCfg {
+                        refit_clock: Some(60.0),
+                        ..expectile_cfg(0)
+                    })
+                    .unwrap(),
+                    ns: 0,
+                })
+            },
+            restore: restore_stamped_expectile,
+            n_features: K,
+            targets: Targets::Linear(2),
+            before: 40,
+        },
         // A start of a clock span, saved within it: the first row's stamp
         // (the targets join at the fifth row, so it is not the clock's 0).
         case!(
@@ -2407,6 +2607,7 @@ fn expectile_cfg(refit_rows: u32) -> ExpectileCfg {
         ridge: 1e-6,
         min_weight: 2.0,
         refit_rows,
+        refit_clock: None,
         window_rows: None,
         window_clock: None,
         closed: WindowClosed::Right,

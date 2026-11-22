@@ -36,6 +36,8 @@ fn huber(k: usize, m: usize) -> RobustCfg {
         refit_rows: 0,
         mad_anchor: false,
         min_weight_holds_learning: false,
+        refit_clock: None,
+        max_state_bytes: None,
     }
 }
 

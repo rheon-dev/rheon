@@ -38,6 +38,8 @@ fn cfg(scale: crate::HuberScale, refit_rows: u32, holds: bool) -> SgdCfg {
         // builds them: the scale's learning composes with both.
         target_spread: true,
         mad_anchor: false,
+        refit_clock: None,
+        max_state_bytes: None,
     }
 }
 

@@ -889,6 +889,52 @@ fn drift_kinds_run(bytes: &[u8], input: &DataFrame) -> Ran {
     bank_run_of(&drift_kinds_specs(), bytes, input)
 }
 
+/// The specs of `bank_refit_span` (PLAN 538): `glm` and `expectile`, each
+/// refitting a target's first rows over a span of the clock, grouped on
+/// `bank_refit`'s stream. Saved at its split, inside every group's span,
+/// so each buffer holds rows and its first stamp; the continuation closes
+/// the spans of `a` and `b`.
+fn refit_span_specs() -> Vec<Spec> {
+    [
+        r#"{"name": "counts", "model": {"type": "glm", "refit_span": 60.0, "max_state_bytes": 200000}, "targets": ["c"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 10.0, "half_life": "inf", "group": "g"}"#,
+        r#"{"name": "upper", "model": {"type": "expectile", "expectile": 0.8, "refit_span": 60.0}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 10.0, "half_life": "inf", "group": "g"}"#,
+    ]
+    .iter()
+    .map(|text| serde_json::from_str(text).unwrap_or_else(|e| panic!("{text}: {e}")))
+    .collect()
+}
+
+/// `bank_refit`'s stream with a count beside its target, `|y|` rounded,
+/// for the `glm`.
+fn refit_span_frame() -> DataFrame {
+    let df = refit_frame();
+    let c: Vec<f64> = df
+        .column("y")
+        .unwrap()
+        .f64()
+        .unwrap()
+        .into_no_null_iter()
+        .map(|v| v.abs().round())
+        .collect();
+    let mut df = df;
+    df.with_column(Column::new("c".into(), c)).unwrap();
+    df
+}
+
+fn refit_span_first() -> (Vec<u8>, DataFrame) {
+    let df = refit_span_frame();
+    let mut bank = Bank::new(refit_span_specs()).unwrap();
+    bank.fit_predict(&df.slice(0, REFIT_SPLIT)).unwrap();
+    (
+        bank.save_bytes().unwrap(),
+        df.slice(REFIT_SPLIT as i64, REFIT_N - REFIT_SPLIT),
+    )
+}
+
+fn refit_span_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    bank_run_of(&refit_span_specs(), bytes, input)
+}
+
 /// The specs of the fifth bank file, `bank_refit`: `huber` and
 /// `sgd(loss = "huber")` grouped, each refitting a target's first 20 rows
 /// (docs/PLAN.md task 277, schema 64). `huber`'s `refit_budget` holds two
@@ -1655,6 +1701,11 @@ fn kinds() -> Vec<Kind> {
             run: drift_kinds_run,
         },
         Kind {
+            name: "bank_refit_span",
+            first: refit_span_first,
+            run: refit_span_run,
+        },
+        Kind {
             name: "with_windows",
             first: windows_first,
             run: windows_run,
@@ -2120,7 +2171,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
     assert_eq!(
         kinds.into_iter().collect::<Vec<_>>(),
         [
-            ("bank", 14),
+            ("bank", 15),
             ("checkpoint", 1),
             ("refresh_time", 3),
             ("windows", 3)
@@ -2892,6 +2943,25 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
         ("bank_gated", "ewridge's output-only floor", |p, v| {
             p.ends_with(".min_weight_output_only") && v.as_bool() == Some(true)
         }),
+        // PLAN 538: a refit over a span of the clock, in a spec and in each
+        // model's buffer, with its first stamp.
+        ("bank_refit_span", "a spec's max_state_bytes", |p, v| {
+            p.ends_with(".max_state_bytes") && v.as_u64() == Some(200_000)
+        }),
+        ("bank_refit_span", "a spec's refit_span", |p, v| {
+            p.ends_with(".refit_span") && v.as_f64() == Some(60.0)
+        }),
+        ("bank_refit_span", "a model's refit_clock", |p, v| {
+            p.ends_with(".cfg.refit_clock") && v.as_f64() == Some(60.0)
+        }),
+        ("bank_refit_span", "a glm buffer's first stamp", |p, v| {
+            p.contains(".Glm.refit.") && p.contains(".first.") && !v.is_nil()
+        }),
+        (
+            "bank_refit_span",
+            "an expectile buffer's first stamp",
+            |p, v| p.contains(".Expectile.refit.") && p.contains(".first.") && !v.is_nil(),
+        ),
         // PLAN 508: each drift detector other than Page-Hinkley, under its
         // name, each holding what its kind keeps.
         ("bank_drift_kinds", "a CUSUM's sums", |p, v| {

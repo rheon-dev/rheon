@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 from typing import Any, Literal, Unpack
 
+from rheon._duration import Duration
 from rheon._kwargs import CommonKwargs
 from rheon._spec import _checked, _common, _mirror_target, _who
 
@@ -36,6 +37,7 @@ def hmm(
     exog_tvtp: str | None = None,
     tvtp_coef: list[list[float]] | None = None,
     prior_rows: float | None = None,
+    warm_span: float | Duration | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """A Gaussian hidden Markov model of the features, filtered one row at a time.
@@ -115,6 +117,20 @@ def hmm(
         ``withheld_reason`` and ``coef`` stays null. The held rows must hold every
         regime, several times over (*Seeding* in Notes). With ``means`` and
         ``covs`` given nothing is seeded, and the three are refused.
+    ``warm_span``
+        The warm-up over a span of the clock in place of ``warm_rows``: the
+        learned rows from the first through the first row at least
+        ``warm_span`` after it, once they are at least ``n_components``. A
+        number of the clock's units, or of rows where the spec has no
+        clock, or a duration such as ``"1h"`` on a temporal clock; finite
+        and above 0. The span is read off the rows' exact stamps, and a row
+        of weight 0 is no row of it, so on a clock of one unit a row it holds
+        ``warm_span + 1`` rows: the seeding of ``warm_rows = warm_span + 1``,
+        to the bit. The data decides how many rows that is, so they are held
+        to 256 MiB as they come: past half of it a warning, once a group,
+        and the row that would pass it stops the run with an error naming the
+        group and the bytes. Refused beside ``warm_rows`` and beside given
+        states.
     ``prior_rows``
         How many rows of weight the prior each state's covariance forgets
         toward is worth, under ``covariance_type`` ``"full"`` or ``"diag"``
@@ -460,6 +476,9 @@ def hmm(
         "tvtp_coef": tvtp_coef,
         "prior_rows": prior_rows,
     }
+    # Written only when given, as the Rust spec leaves it out when absent.
+    if warm_span is not None:
+        model["warm_span"] = warm_span
     mirror = _mirror_target(name, "hmm", features, common, "its hidden states are over")
     targets = [exog_tvtp] if exog_tvtp is not None else mirror
     return _common(name, model, targets=targets, features=features, **common)

@@ -162,6 +162,25 @@ time however densely the rows arrive.** The clock parameters are
 half-lives. A few things still count rows, such as `warm_rows` and the
 caps named `max_rows_between_*`, and each model's docstring names its own.
 
+**A count of rows takes a clock form beside it, wherever the count has a
+meaning on the clock.** The warm-ups are `warm_span`, beside `kmeans`',
+`hmm`'s and `bocpd`'s `warm_rows`. The first rows' refits are `refit_span`
+beside `glm`'s and `expectile`'s `refit_rows`, and `huber_refit_span` and
+`quantile_refit_span` beside theirs. The cadences are `kmeans`'
+`update_every` and `split_merge_every`, and `corrchange`'s `permute_every`.
+Each takes a number of the clock's units or a duration, and is refused
+beside its count. A start or a refit over a span holds a target's rows
+from its first learned row through the first row at least the span after
+it, read off the rows' exact stamps; a cadence fires every span since its
+last event. A row of weight 0 is in no span. On a clock of one unit a row,
+a span of `D` is the count `D + 1` for a start and `D` for a cadence, to
+the bit. The data decides how many rows a span holds, so its rows are held
+to a cap as they come. Past half of it comes a warning, once a group, and
+the row that would pass it stops the run with an error naming the group
+and the bytes. A count that is a lag of a series of observations, a
+detector's count of observations or a bound on the state has no clock
+form, and its docstring says so.
+
 **Quantities measured on a temporal clock reach the output in seconds.**
 `holt`'s trend, for one, is per second. The clocks themselves keep the
 clock column's own type: `emit_clocks` ([Learn targets known
@@ -1339,7 +1358,10 @@ A row's own update cannot move its residual across zero, so one solve a
 row is the whole step. What one pass cannot do is judge an earlier row
 again once the fit has crossed it. Each target's first `refit_rows` rows
 are therefore fitted exactly once, and the sums rebuilt at the sides the
-exact fit gives them. A window, `window_rows` rows or `window_size` of the
+exact fit gives them. `refit_span` is the same refit over a span of the
+clock from the target's first learned row, the row that reaches the span its
+last. Its rows are checked against `max_state_bytes` as they come. A
+window, `window_rows` rows or `window_size` of the
 clock, instead refits the rows it holds on every row. The exact fit
 repeats a weighted least-squares solve at the current sides, judging every
 side again, until no side changes, halving a step that does not lower the
@@ -1905,11 +1927,19 @@ the predictions before the refit are sound. `step_cap` instead holds each
 row's own step in `η` to a bound, with no buffer, at a larger bias without
 decay.
 
-**The spans.** `half_life` and `gap_cap` take a number (rows, with no clock)
-or a clock duration, as every spec's do. `refit_rows` counts rows and has no clock
-form: the buffer's size must be known when the spec is built, to be held
-to its cap, and a span of the clock holds a number of rows that depends on
-the data.
+**The spans.** `half_life`, `gap_cap` and `refit_span` take a number (rows,
+with no clock) or a clock duration, as every spec's do. `refit_rows` counts
+rows of positive weight. `refit_span` is the same refit over a span of the
+clock: a target's rows from its first learned row through the first row at
+least `refit_span` after it, once they hold a row per coefficient. The span
+is read off the rows' exact stamps. On a clock of one unit a row that is
+`refit_span + 1` rows, the refit of `refit_rows = refit_span + 1` to the
+bit. Both are held to `max_state_bytes`, 256 KB a group by default and at
+most 64 MiB. A count's buffer has a size known when the spec is built, and
+is refused there past it. A span's holds the rows the data puts in it, so
+it is held to it as the rows come. A group past half of it gets a warning,
+once, and the row that would pass it stops the run with an error naming
+the group and the bytes.
 
 #### Example
 
@@ -1963,8 +1993,9 @@ standard errors on average.
 **The state is bounded by the spec.** A target keeps `k(k+1)/2 + k + 1`
 numbers, and until its refit runs a buffer of `refit_rows·(features + 2)`,
 the one part whose size is not the model's shape. A group's buffers are
-held to 256 KB when the spec is built: a `refit_rows` past it is refused,
-naming the bytes, and the default shrinks to fit.
+held to `max_state_bytes` (256 KB by default) when the spec is built: a
+`refit_rows` past it is refused, naming the bytes, and the default shrinks
+to fit.
 
 **There is no window.** A row's contribution to `G` is its weight at the
 fit that scored it, so removing a row exactly needs the row itself. A

@@ -416,6 +416,8 @@ fn sgd_past_the_switch_steps_and_projects_as_written() {
                 min_weight_holds_learning: false,
                 target_spread: false,
                 mad_anchor: false,
+                refit_clock: None,
+                max_state_bytes: None,
             })
             .unwrap();
             let what = format!("sgd, intercept {fit_intercept}, {name}");

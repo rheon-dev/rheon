@@ -470,6 +470,20 @@ pub struct SgdCfg {
     /// on as it was.
     #[serde(default)]
     pub mad_anchor: bool,
+    /// The refit of the first rows over a span of the clock in place of
+    /// `refit_rows` (docs/PLAN.md task 538), as
+    /// [`crate::RobustCfg::refit_clock`]: a target's rows from its first
+    /// learned row through the first at least this many clock units after
+    /// it, once they hold a row per coefficient, its buffers held to
+    /// `max_state_bytes` a group as they grow. Last,
+    /// and written only when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refit_clock: Option<f64>,
+    /// The bytes a group's refit buffers may hold under a span of the
+    /// clock: `None` is 256 KB, at most 64 MiB (docs/PLAN.md task 538).
+    /// Last, and written only when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_state_bytes: Option<u64>,
 }
 
 /// The memory of the step gains' means ([`StepGain`]): `2^(-1/100)` a
@@ -788,12 +802,32 @@ impl SgdCfg {
             if let Some(d) = self.huber_scale_decay {
                 no.take(crate::model::check_scale_decay("sgd", d));
             }
-            if self.refit_rows > 0 && delta == f64::INFINITY {
+            if (self.refit_rows > 0 || self.refit_clock.is_some()) && delta == f64::INFINITY {
                 no.refuse(
                     "sgd: huber_refit_rows refits a target's first rows to a Huber fit, but \
                      huber_delta is inf, which makes that fit least squares. Set huber_delta \
-                     to a finite cut, or leave huber_refit_rows out.",
+                     to a finite cut, or leave the refit out.",
                 );
+            }
+            no.take(crate::clock_span::check_max_state_bytes(
+                "sgd",
+                self.max_state_bytes,
+            ));
+            if let Some(d) = self.refit_clock {
+                if !(d.is_finite() && d > 0.0) {
+                    no.refuse(format!(
+                        "sgd: huber_refit_span must be a finite number of clock units above 0, \
+                         but it is {d}. Give the span of clock whose rows the refit fits, or \
+                         leave it out for huber_refit_rows."
+                    ));
+                }
+                if self.refit_rows > 0 {
+                    no.refuse(format!(
+                        "sgd: huber_refit_span and huber_refit_rows = {} are two refits of the \
+                         first rows, and a target is refit once. Leave one of them out.",
+                        self.refit_rows
+                    ));
+                }
             }
         } else {
             // Each one the reader set, by name.
@@ -801,6 +835,8 @@ impl SgdCfg {
                 ("huber_scale", self.huber_scale != crate::HuberScale::Rms),
                 ("huber_scale_half_life", self.huber_scale_decay.is_some()),
                 ("huber_refit_rows", self.refit_rows > 0),
+                ("huber_refit_span", self.refit_clock.is_some()),
+                ("max_state_bytes", self.max_state_bytes.is_some()),
             ]
             .into_iter()
             .filter(|(_, set)| *set)
@@ -912,6 +948,23 @@ pub struct Sgd {
     /// the row and put back, so that a row allocates nothing for it.
     #[serde(skip)]
     taught: Vec<Option<(f64, f64)>>,
+    /// Under a refit over a span of the clock (task 538): the model's place
+    /// on the clock and the buffers' cap, each written only when it holds
+    /// something, last.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    place: Option<crate::clock_span::Place>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    over: Option<u64>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    warned: bool,
+    #[serde(skip)]
+    warning: Option<u64>,
+    #[serde(skip)]
+    cap_for_test: Option<u64>,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// The layout `Sgd` loads, checked on the way in: what the cfg asks for,
@@ -939,6 +992,12 @@ struct SgdV3 {
     gain: Vec<StepGain>,
     #[serde(default)]
     level: Vec<Level>,
+    #[serde(default)]
+    place: Option<crate::clock_span::Place>,
+    #[serde(default)]
+    over: Option<u64>,
+    #[serde(default)]
+    warned: bool,
 }
 
 impl TryFrom<SgdV3> for Sgd {
@@ -949,6 +1008,7 @@ impl TryFrom<SgdV3> for Sgd {
         let (sig2, wsig, mad, spread) = (v.sig2, v.wsig, v.mad, v.spread);
         let (w_target, warmup, refit, gain) = (v.w_target, v.warmup, v.refit, v.gain);
         let level = v.level;
+        let (place, over, warned) = (v.place, v.over, v.warned);
         let k = cfg.k_total();
         let m = cfg.n_targets;
         // What the cfg asks for, the state carries, and nothing else: a
@@ -1042,18 +1102,18 @@ impl TryFrom<SgdV3> for Sgd {
         }
         // The refit's buffers, one per target exactly when it is on, each
         // one this configuration writes.
-        let refit_fits = if cfg.refit_rows == 0 {
+        let refit_fits = if cfg.refit_rows == 0 && cfg.refit_clock.is_none() {
             refit.is_empty()
         } else {
             refit.len() == m
                 && refit.iter().all(|b| {
                     b.fits(
                         cfg.n_features,
-                        cfg.refit_rows,
+                        cfg.refit_cap(),
                         huber_scale == crate::HuberScale::Mad,
                     )
                 })
-        };
+        } && place.is_some() == cfg.refit_clock.is_some();
         if !refit_fits {
             return Err(
                 "sgd: the rows it saved for its refit do not match its huber_refit_rows \
@@ -1101,6 +1161,11 @@ impl TryFrom<SgdV3> for Sgd {
             pbuf: crate::constraint::Scratch::default(),
             learned: Vec::new(),
             taught: Vec::new(),
+            place,
+            over,
+            warned,
+            warning: None,
+            cap_for_test: None,
         })
     }
 }
@@ -1149,7 +1214,16 @@ impl Sgd {
             } else {
                 TargetSpread::none()
             },
-            refit: RefitBuf::per_target(cfg.refit_rows, m, keeps_resid),
+            refit: RefitBuf::per_target(
+                cfg.refit_rows.max(u32::from(cfg.refit_clock.is_some())),
+                m,
+                keeps_resid,
+            ),
+            place: cfg.refit_clock.map(|_| crate::clock_span::Place::default()),
+            over: None,
+            warned: false,
+            warning: None,
+            cap_for_test: None,
             gain,
             level,
             zbuf: vec![0.0; k],
@@ -1270,10 +1344,19 @@ impl Sgd {
     }
 
     /// The bytes this model's refit buffers can hold at most
-    /// ([`crate::refit_reservation`] a target), 0 with the refit off.
+    /// ([`crate::refit_reservation`] a target), 0 with the refit off; under
+    /// a refit over a span of the clock, the group's cap.
     pub fn refit_reservation(&self) -> usize {
         if self.refit.is_empty() {
             return 0;
+        }
+        if self.cfg.refit_clock.is_some() {
+            return usize::try_from(
+                self.cfg
+                    .max_state_bytes
+                    .unwrap_or(crate::clock_span::DEFAULT_STATE_BYTES),
+            )
+            .unwrap_or(usize::MAX);
         }
         self.cfg.n_targets
             * crate::refit_reservation(
@@ -2200,7 +2283,50 @@ fn dot(beta: &[f64], off: usize, z: &[f64]) -> f64 {
     if off == 1 { beta[0] + s } else { s }
 }
 
+impl SgdCfg {
+    /// The count a refit buffer fills at, or [`crate::huber_refit::OPEN`]
+    /// under a refit over a span of the clock.
+    fn refit_cap(&self) -> u32 {
+        if self.refit_clock.is_some() {
+            crate::huber_refit::OPEN
+        } else {
+            self.refit_rows
+        }
+    }
+}
+
+impl Sgd {
+    /// The bytes a refit over a span of the clock may hold a group.
+    fn span_cap(&self) -> u64 {
+        self.cap_for_test
+            .or(self.cfg.max_state_bytes)
+            .unwrap_or(crate::clock_span::DEFAULT_STATE_BYTES)
+    }
+
+    /// Hold a span's buffers to `bytes` in place of their cap, for a test.
+    #[cfg(test)]
+    pub(crate) fn set_cap_for_test(&mut self, bytes: u64) {
+        self.cap_for_test = Some(bytes);
+    }
+}
+
 impl OnlineModel for Sgd {
+    /// A refit over a span of the clock reads the row's stamp (task 538).
+    fn stamp_next(&mut self, stamp: crate::Stamp) {
+        if let Some(p) = self.place.as_mut() {
+            p.hand(stamp);
+        }
+    }
+
+    fn take_state_warning(&mut self) -> Option<(u64, u64)> {
+        let cap = self.span_cap();
+        self.warning.take().map(|b| (b, cap))
+    }
+
+    fn state_over_cap(&self) -> Option<(u64, u64)> {
+        self.over.map(|b| (b, self.span_cap()))
+    }
+
     /// Each target's own weight, the rows that carried it, for the bank's
     /// per-target `min_weight` gate: without it the bank checked a list of
     /// thresholds against the shared `n_eff` (task 158, E14).
@@ -2229,6 +2355,8 @@ impl OnlineModel for Sgd {
         let m = self.cfg.n_targets;
         let off = usize::from(self.cfg.fit_intercept);
         let lam = self.cfg.decay.factor(d_clock);
+        // The row's place, for a refit over a span of the clock (task 538).
+        let now = self.place.as_mut().map(|p| p.step(d_clock));
         // The Huber scale's own clock (`huber_scale_decay`), the model's
         // unless given: the same factor, to the bit, where it is not.
         let lam_scale = self
@@ -2693,12 +2821,37 @@ impl OnlineModel for Sgd {
         // The refit's buffers take the row, a learned one or an ageing, and
         // a target whose buffer it fills is refit, after the row's own
         // prediction, step and scale (hard rule 2).
-        if !taught.is_empty() {
-            let cap = self.cfg.refit_rows;
+        if !taught.is_empty() && self.over.is_none() {
+            let cap = self.cfg.refit_cap();
+            let span = self.cfg.refit_clock.zip(now);
+            let least = self.cfg.k_total().max(1);
             for (j, t) in taught.iter().enumerate() {
+                // Under a span of the clock the buffers grow with the data:
+                // a row that would take them past the cap is buffered by no
+                // target, nor any row after it (task 538).
+                if span.is_some() && t.is_some() && self.refit[j].open() {
+                    let held: u64 = self.refit.iter().map(RefitBuf::held_bytes).sum();
+                    let row = 8 * (x.len() + 4) as u64 + 48 * u64::from(!self.mad.is_empty());
+                    let limit = self.span_cap();
+                    let mut guard = crate::clock_span::HeldCap {
+                        over: &mut self.over,
+                        warned: &mut self.warned,
+                        warning: &mut self.warning,
+                    };
+                    if !guard.admit(held + row, limit) {
+                        break;
+                    }
+                    guard.note(held + row, limit);
+                }
                 let b = &mut self.refit[j];
                 let full = match t {
-                    Some((yj, e)) => b.learn_scored(x, *yj, *e, weight, lam, lam_scale, cap),
+                    Some((yj, e)) => {
+                        let full = b.learn_scored(x, *yj, *e, weight, lam, lam_scale, cap);
+                        match span {
+                            Some((d, now)) => b.span_due(now, d, least),
+                            None => full,
+                        }
+                    }
                     None => {
                         if let Some(held) = b.age(lam, lam_scale, cap) {
                             self.scale_from_held(j, &held);
@@ -3058,6 +3211,8 @@ mod tests {
             min_weight_holds_learning: false,
             target_spread: false,
             mad_anchor: false,
+            refit_clock: None,
+            max_state_bytes: None,
         }
     }
 
@@ -5307,6 +5462,10 @@ mod tests {
 #[cfg(test)]
 #[path = "sgd/refit_tests.rs"]
 mod refit_tests;
+
+#[cfg(test)]
+#[path = "sgd/span_tests.rs"]
+mod span_tests;
 
 #[cfg(test)]
 #[path = "sgd/gate_tests.rs"]

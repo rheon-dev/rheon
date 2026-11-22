@@ -333,6 +333,20 @@ pub enum ModelKind {
         /// written before it serializes as it did.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         huber_refit_rows: Option<u32>,
+        /// The same refit over a span of the clock (docs/PLAN.md task 538): a
+        /// target's rows from its first learned row through the first at
+        /// least this long after it, a number of the clock's units (rows
+        /// where the spec has no clock) or a duration. Its buffers grow with
+        /// the data, held to 256 KB a group as they come. Refused beside the
+        /// count. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        huber_refit_span: Option<Span>,
+        /// The bytes a group's refit buffers may hold (docs/PLAN.md task
+        /// 538, 537's rule): a span's checked as they fill, a warning past
+        /// half and a refusal at the cap. Default 256 KB, at most
+        /// 64 MiB. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
         /// The MiB the refit buffers of all this spec's groups may reserve
         /// (`Bank`, docs/PLAN.md task 277): absent is 256, `inf` no bound.
         /// Skipped when absent.
@@ -365,6 +379,20 @@ pub enum ModelKind {
         /// when absent, so a spec written before it serializes as it did.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         quantile_refit_rows: Option<u32>,
+        /// The same refit over a span of the clock (docs/PLAN.md task 538): a
+        /// target's rows from its first learned row through the first at
+        /// least this long after it, a number of the clock's units (rows
+        /// where the spec has no clock) or a duration. Its buffers grow with
+        /// the data, held to 256 KB a group as they come. Refused beside the
+        /// count. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        quantile_refit_span: Option<Span>,
+        /// The bytes a group's refit buffers may hold (docs/PLAN.md task
+        /// 538, 537's rule): a span's checked as they fill, a warning past
+        /// half and a refusal at the cap. Default 256 KB, at most
+        /// 64 MiB. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
         /// `huber`'s `refit_budget`, for the quantile refit's buffers.
         /// Skipped when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -502,6 +530,20 @@ pub enum ModelKind {
         /// is off. Refused under any other loss. Skipped when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         huber_refit_rows: Option<u32>,
+        /// The same refit over a span of the clock (docs/PLAN.md task 538): a
+        /// target's rows from its first learned row through the first at
+        /// least this long after it, a number of the clock's units (rows
+        /// where the spec has no clock) or a duration. Its buffers grow with
+        /// the data, held to 256 KB a group as they come. Refused beside the
+        /// count. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        huber_refit_span: Option<Span>,
+        /// The bytes a group's refit buffers may hold (docs/PLAN.md task
+        /// 538, 537's rule): a span's checked as they fill, a warning past
+        /// half and a refusal at the cap. Default 256 KB, at most
+        /// 64 MiB. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
         /// `huber`'s `refit_budget`, under `loss = "huber"`; refused under
         /// any other loss. Skipped when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -682,6 +724,21 @@ pub enum ModelKind {
         /// variance alone.
         #[serde(default)]
         scale_floor: Option<f64>,
+        /// The warm-up over a span of the clock in place of `warm_rows`
+        /// (docs/PLAN.md task 538): the learned rows from the first through
+        /// the first at least this long after it, once they are at least
+        /// `n_clusters`. Refused beside `warm_rows`. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        warm_span: Option<Span>,
+        /// A checkpoint every this long on the clock, beside
+        /// `update_every_rows`' count, whichever comes first; the count's
+        /// default is then none. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        update_every: Option<Span>,
+        /// A split-merge check every this long on the clock, beside
+        /// `split_merge_every_rows`. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        split_merge_every: Option<Span>,
     },
     /// DenStream-style micro-clusters with a linkage macro step
     /// (docs/CLUSTERING.md §6.5; PLAN §11a, task 24). No targets: the
@@ -1096,6 +1153,11 @@ pub enum ModelKind {
         /// off, which take no prior.
         #[serde(default)]
         prior_rows: Option<f64>,
+        /// The warm-up over a span of the clock in place of `warm_rows`
+        /// (docs/PLAN.md task 538), as `kmeans`' `warm_span`. Refused beside
+        /// `warm_rows` and beside given states. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        warm_span: Option<Span>,
     },
     /// Has the correlation structure changed? (docs/ENHANCEMENTS.md E59)
     ///
@@ -1165,6 +1227,12 @@ pub enum ModelKind {
         /// default 0.
         #[serde(default)]
         boundary_gamma: Option<f64>,
+        /// `"window"`: the critical value redrawn every this long on the
+        /// clock, beside `permute_every_rows`' count of reports, whichever
+        /// comes first (docs/PLAN.md task 538); the count's default is then
+        /// none. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        permute_every: Option<Span>,
     },
     /// Bayesian online changepoint detection (docs/ENHANCEMENTS.md E61): a
     /// posterior over how long the current run has lasted, updated one row
@@ -1221,6 +1289,11 @@ pub enum ModelKind {
         /// `covariance_prior` (task 195, U4).
         #[serde(default)]
         warm_rows: Option<usize>,
+        /// The warm-up over a span of the clock in place of `warm_rows`
+        /// (docs/PLAN.md task 538), as `kmeans`' `warm_span`; at least two
+        /// rows. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        warm_span: Option<Span>,
     },
     /// What a stream's columns hold, read in one pass (docs/PLAN.md task
     /// 223 (b)): per column the nulls, NaNs, infinities and values past
@@ -1266,6 +1339,21 @@ pub enum ModelKind {
         /// absent is `rheon_core::default_glm_refit_rows(k)`, 0 is off.
         #[serde(default)]
         refit_rows: Option<u32>,
+        /// The same refit over a span of the clock (docs/PLAN.md task 538):
+        /// a target's rows from its first learned row through the first at
+        /// least this long after it, a number of the clock's units (rows
+        /// where the spec has no clock) or a duration on a temporal clock.
+        /// The data decides how many rows that is, so the buffers are
+        /// checked as they fill. Refused beside `refit_rows`. Skipped when
+        /// absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refit_span: Option<Span>,
+        /// The bytes a group's refit buffers may hold (docs/PLAN.md task
+        /// 538, 537's rule): a span's checked as they fill, a warning past
+        /// half and a refusal at the cap; a count's at the call. Default 256 KB, at most
+        /// 64 MiB. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
         /// The most a learned row may move its own linear predictor: absent
         /// is off where the refit runs and 1 where it does not; `"inf"` is
         /// no cap.
@@ -1337,6 +1425,12 @@ pub enum ModelKind {
         /// when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         refit_rows: Option<u32>,
+        /// The same refit over a span of the clock (docs/PLAN.md task 538),
+        /// as `glm`'s `refit_span`: the rows it holds are checked against
+        /// `max_state_bytes` as they come. Refused beside `refit_rows` and
+        /// a window. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refit_span: Option<Span>,
         /// Fit the last this many rows of positive weight alone, refit
         /// exactly on every row, in place of a decay. Skipped when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1891,10 +1985,8 @@ pub const RENAMED: &[(&str, &str)] = &[
     ("cd_tol", "tol"),
     ("reset", "change_action"),
     // Task 196 (docs/PLAN.md §18, N14): a count of rows says so, so that a
-    // clock form can come later under the plain name.
-    ("update_every", "update_every_rows"),
-    ("split_merge_every", "split_merge_every_rows"),
-    ("permute_every", "permute_every_rows"),
+    // clock form could come later under the plain name; task 538 gave
+    // `update_every`, `split_merge_every` and `permute_every` theirs.
     // N16: holt's level takes the spec's `half_life`, one knob under one
     // name.
     ("level_half_life", "half_life"),

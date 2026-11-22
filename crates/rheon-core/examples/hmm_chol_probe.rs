@@ -89,6 +89,7 @@ fn hmm_case(reps: usize) {
         seed: 7,
         tvtp: None,
         prior_rows: None,
+        warm_clock: None,
     };
     let (t, h) = best(reps, || {
         let mut m = Hmm::new(cfg.clone()).unwrap();

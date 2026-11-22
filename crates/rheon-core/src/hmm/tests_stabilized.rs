@@ -49,6 +49,7 @@ pub(super) fn cfg(d: usize, hl: f64, covariance: Covariance) -> HmmCfg {
         seed: 7,
         tvtp: None,
         prior_rows: None,
+        warm_clock: None,
     }
 }
 

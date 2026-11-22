@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, Unpack
 
+from rheon._duration import Duration
 from rheon._kwargs import CommonKwargs
 from rheon._spec import TargetList, _checked, _common
 
@@ -23,6 +24,8 @@ def glm(
     var_power: float | None = None,
     ridge: float | None = None,
     refit_rows: int | None = None,
+    refit_span: float | Duration | None = None,
+    max_state_bytes: int | None = None,
     step_cap: float | None = None,
     refit_budget: float | None = None,
     **common: Unpack[CommonKwargs],
@@ -86,7 +89,30 @@ def glm(
         above 100 features or where the cap holds fewer than ``2 * k``
         rows. ``0`` turns the refit off. A group's buffers hold ``8 *
         targets * refit_rows * (features + 2)`` bytes until the refit runs,
-        at most 256 KB: a count past that is refused, naming the bytes.
+        at most ``max_state_bytes``: a count past that is refused, naming the
+        bytes.
+    ``refit_span``
+        The same refit over a span of the clock in place of a count of rows:
+        each target's rows from its first learned row through the first row
+        at least ``refit_span`` after it, once they hold a row per
+        coefficient. A number of the clock's units, or of rows where the
+        spec has no clock, or a duration such as ``"1h"`` on a temporal
+        clock; finite and above 0. The span is read off the rows' exact
+        stamps (integer nanoseconds on a temporal clock), and a row of
+        weight 0 is no row of it, so on a clock of one unit a row it holds
+        ``refit_span + 1`` rows: the refit of ``refit_rows = refit_span +
+        1``, to the bit. How many rows a span holds the data decides, so the
+        buffers are checked against ``max_state_bytes`` as they fill.
+        Refused beside ``refit_rows``. Default none.
+    ``max_state_bytes``
+        The bytes a group's refit buffers may hold, a count's when the spec is built. Under
+        ``refit_span`` the data decides how many rows the buffers hold, so they
+        are checked as they fill: the first row to take a group past half of
+        it raises a warning, once for the group, naming the group and the
+        bytes, and the row that would take it past the cap stops the run
+        with an error naming the group and the bytes, the bank having
+        learned part of the chunk. Default 256 KB, ``262144``; at most
+        64 MiB, ``67108864``.
     ``step_cap``
         The most one learned row may move its own ``η``, above
         0, or ``inf`` for no cap. Default: none where the refit runs, and 1
@@ -136,9 +162,12 @@ def glm(
     - a ``var_power`` not above 1, or of 2, and one given for a family other
       than the Tweedie;
     - a ``ridge`` not above 0 or not finite, and a ``step_cap`` not above 0;
-    - a ``refit_rows`` whose buffers would pass 256 KB a group, and the
+    - a ``refit_rows`` whose buffers would pass ``max_state_bytes``, and the
       inverse or power link with
-      ``refit_rows=0`` or ``fit_intercept=False``;
+      ``refit_rows=0`` (and no ``refit_span``) or ``fit_intercept=False``;
+    - a ``refit_span`` not finite and above 0, and one beside ``refit_rows``;
+    - a ``max_state_bytes`` of 0 or above 64 MiB, and a ``refit_span``
+      whose rows pass it, as the rows go in;
     - a ``refit_budget`` not above 0;
     - a target value outside the family's range, as the chunk is read.
 
@@ -233,15 +262,16 @@ def glm(
     **The state** is ``k(k+1)/2 + k + 1`` numbers a target and, until its
     refit runs, ``refit_rows (features + 2)`` more: 35 KB a target at 20
     features. The buffers are the one part whose size is not the model's
-    shape, and a group's are held to 256 KB when the spec is built. There is
+    shape, and a group's are held to ``max_state_bytes`` (256 KB by default). There is
     no window: removing a row exactly would need each row in the window,
     stored with the weight it was scored at.
 
-    **The spans.** ``half_life`` and ``gap_cap`` take a number (rows, with
-    no clock) or a clock duration, as every spec's do. ``refit_rows`` counts
-    rows and has no clock form: the buffer's size must be known when the
-    spec is built, to be held to its cap, and a span of the clock holds a
-    number of rows that depends on the data.
+    **The spans.** ``half_life``, ``gap_cap`` and ``refit_span`` take a
+    number (rows, with no clock) or a clock duration, as every spec's do.
+    ``refit_rows`` counts rows of positive weight. A count's buffer has a
+    size known when the spec is built, and is held to its cap there; a
+    span's holds the rows the data puts in it, and is held to the cap as
+    they come.
     """
     model: dict[str, Any] = {
         "type": "glm",
@@ -253,4 +283,9 @@ def glm(
         "step_cap": step_cap,
         "refit_budget": refit_budget,
     }
+    # Written only when given, as the Rust spec leaves them out when absent.
+    if refit_span is not None:
+        model["refit_span"] = refit_span
+    if max_state_bytes is not None:
+        model["max_state_bytes"] = max_state_bytes
     return _common(name, model, targets=targets, features=features, **common)

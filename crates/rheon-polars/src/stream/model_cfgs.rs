@@ -103,6 +103,7 @@ pub fn expectile_cfg(
         expectile,
         ridge,
         refit_rows,
+        refit_span,
         window_rows,
         window_size,
         closed,
@@ -122,7 +123,12 @@ pub fn expectile_cfg(
         expectile: *expectile,
         ridge: ridge.unwrap_or(1e-6),
         min_weight: spec.min_periods_or_default(),
+        // A span in place of the count: the count's default is off beside
+        // it, and one given is the model's to refuse.
         refit_rows: refit_rows.unwrap_or_else(|| {
+            if refit_span.is_some() {
+                return 0;
+            }
             rheon_core::default_expectile_refit_rows(
                 spec.k(),
                 spec.m(),
@@ -131,6 +137,7 @@ pub fn expectile_cfg(
                 cap,
             )
         }),
+        refit_clock: refit_span.as_ref().map(Span::value),
         window_rows: *window_rows,
         window_clock: window_size.as_ref().map(Span::value),
         closed: closed.edge(),
@@ -212,6 +219,7 @@ pub fn bocpd_cfg(spec: &Spec) -> Result<BocpdCfg, String> {
         prune_below,
         max_run,
         warm_rows,
+        warm_span,
     } = &spec.model
     else {
         return Err(not_a(spec, "bocpd_cfg", "bocpd"));
@@ -270,6 +278,7 @@ pub fn bocpd_cfg(spec: &Spec) -> Result<BocpdCfg, String> {
         min_weight: spec.min_periods_or_default(),
         warm_rows: *warm_rows,
         hazard_on_clock: hazard.as_ref().is_some_and(Span::is_duration),
+        warm_clock: warm_span.as_ref().map(Span::value),
     })
 }
 
@@ -292,6 +301,7 @@ pub fn corrchange_cfg(spec: &Spec) -> Result<CorrChangeCfg, String> {
         change_action,
         monitor_rows,
         boundary_gamma,
+        permute_every,
     } = &spec.model
     else {
         return Err(not_a(spec, "corrchange_cfg", "corrchange"));
@@ -388,6 +398,7 @@ pub fn corrchange_cfg(spec: &Spec) -> Result<CorrChangeCfg, String> {
             "",
         );
         refuse(perm_block.is_some(), "perm_block", "\"window\"", "");
+        refuse(permute_every.is_some(), "permute_every", "\"window\"", "");
         refuse(seed.is_some(), "seed", "\"window\"", "");
         refuse(norm != ChangeNorm::L1, "norm", "\"window\"", "");
         refuse(
@@ -445,7 +456,12 @@ pub fn corrchange_cfg(spec: &Spec) -> Result<CorrChangeCfg, String> {
         n_perm: n_perm.unwrap_or(200),
         // One critical value in force for one shift of the windows: the
         // draws then cost `n_perm · k²` a row whatever `window_rows` is.
-        permute_every_rows: permute_every_rows.unwrap_or(span_rows),
+        // A clock cadence alone has no count of reports.
+        permute_every_rows: permute_every_rows.unwrap_or(if permute_every.is_some() {
+            usize::MAX
+        } else {
+            span_rows
+        }),
         perm_block: perm_block.unwrap_or(1),
         norm,
         seed: seed.unwrap_or(0),
@@ -457,6 +473,7 @@ pub fn corrchange_cfg(spec: &Spec) -> Result<CorrChangeCfg, String> {
             0
         },
         boundary_gamma: boundary_gamma.unwrap_or(0.0),
+        permute_every: permute_every.as_ref().map(Span::value),
     })
 }
 
@@ -478,6 +495,7 @@ pub fn hmm_cfg(spec: &Spec) -> Result<HmmCfg, String> {
         exog_tvtp,
         tvtp_coef,
         prior_rows,
+        warm_span,
     } = &spec.model
     else {
         return Err(not_a(spec, "hmm_cfg", "hmm"));
@@ -527,8 +545,15 @@ pub fn hmm_cfg(spec: &Spec) -> Result<HmmCfg, String> {
             ));
         }
     }
+    if warm_rows.is_some() && warm_span.is_some() {
+        no.refuse(
+            "hmm: warm_span and warm_rows are two warm-ups, and the states are seeded once. \
+             Leave one of them out.",
+        );
+    }
     for (param, given) in [
         ("warm_rows", warm_rows.is_some()),
+        ("warm_span", warm_span.is_some()),
         ("init", init.is_some()),
         ("seed", seed.is_some()),
     ] {
@@ -562,11 +587,19 @@ pub fn hmm_cfg(spec: &Spec) -> Result<HmmCfg, String> {
         // 1,000 rows, or `k` where that is more: the buffer must hold every
         // regime several times over for the seeding to place a state on each
         // (task 278, D9: at 50, regimes lasting 50 rows were never found).
-        warm_rows: warm_rows.unwrap_or_else(|| (*k).max(1000)),
+        // Under a span the buffer holds the span's rows, at least `k`.
+        warm_rows: warm_rows.unwrap_or_else(|| {
+            if warm_span.is_some() {
+                *k
+            } else {
+                (*k).max(1000)
+            }
+        }),
         seed_rule: seed_rule?,
         seed: seed.unwrap_or(0),
         tvtp,
         prior_rows: *prior_rows,
+        warm_clock: warm_span.as_ref().map(Span::value),
     })
 }
 
@@ -859,6 +892,8 @@ pub fn huber_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         ridge_scale: _,
         emit_huber_scale,
         huber_refit_rows,
+        huber_refit_span,
+        max_state_bytes,
         refit_budget: _,
     } = &spec.model
     else {
@@ -895,7 +930,10 @@ pub fn huber_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         // outliers to refit for (`RobustCfg::refit_rows`): there it is off
         // unless asked for, and asked for it is refused.
         refit_rows: huber_refit_rows.unwrap_or(
-            if huber_ridge_scale_sum(spec) || huber_delta.is_some_and(|d| d.0.is_infinite()) {
+            if huber_refit_span.is_some()
+                || huber_ridge_scale_sum(spec)
+                || huber_delta.is_some_and(|d| d.0.is_infinite())
+            {
                 0
             } else {
                 rheon_core::default_refit_rows(spec.k())
@@ -906,6 +944,8 @@ pub fn huber_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         // without it loads with it off.
         mad_anchor: true,
         min_weight_holds_learning: false,
+        refit_clock: huber_refit_span.as_ref().map(Span::value),
+        max_state_bytes: *max_state_bytes,
     };
     let mut m = Robust::new(cfg)?;
     // Each target's own threshold, for its own first solve (S9b).
@@ -956,6 +996,8 @@ pub fn quantile_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         max_rows_between_solves,
         quantile_eps,
         quantile_refit_rows,
+        quantile_refit_span,
+        max_state_bytes,
         refit_budget: _,
     } = &spec.model
     else {
@@ -987,10 +1029,18 @@ pub fn quantile_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         // On by default, at `huber`'s count: the rows the warm-up took as
         // least squares and the first bands held refit to the converged
         // fit, once (task 278, D-Q2).
-        refit_rows: quantile_refit_rows.unwrap_or_else(|| rheon_core::default_refit_rows(spec.k())),
+        refit_rows: quantile_refit_rows.unwrap_or_else(|| {
+            if quantile_refit_span.is_some() {
+                0
+            } else {
+                rheon_core::default_refit_rows(spec.k())
+            }
+        }),
         // No sketch under the RMS band; anchored once a sketch is kept.
         mad_anchor: true,
         min_weight_holds_learning: false,
+        refit_clock: quantile_refit_span.as_ref().map(Span::value),
+        max_state_bytes: *max_state_bytes,
     };
     let mut m = Robust::new(cfg)?;
     // Each target's own threshold, for its own first solve (S9b).
@@ -1006,6 +1056,8 @@ pub fn sgd_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         huber_scale,
         huber_scale_half_life,
         huber_refit_rows,
+        huber_refit_span,
+        max_state_bytes,
         refit_budget: _,
         quantile,
         eps,
@@ -1115,7 +1167,13 @@ pub fn sgd_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         // refit for.
         refit_rows: match loss {
             SgdLoss::Huber { delta } if delta.is_finite() => {
-                huber_refit_rows.unwrap_or_else(|| rheon_core::default_refit_rows(spec.k()))
+                huber_refit_rows.unwrap_or_else(|| {
+                    if huber_refit_span.is_some() {
+                        0
+                    } else {
+                        rheon_core::default_refit_rows(spec.k())
+                    }
+                })
             }
             SgdLoss::Huber { .. } => huber_refit_rows.unwrap_or(0),
             _ => 0,
@@ -1127,6 +1185,8 @@ pub fn sgd_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         target_spread: true,
         // `huber`'s anchored MAD sketch under the Huber loss.
         mad_anchor: true,
+        refit_clock: huber_refit_span.as_ref().map(Span::value),
+        max_state_bytes: *max_state_bytes,
     };
     Ok(AnyModel::Sgd(Box::new(Sgd::new(cfg)?)))
 }
@@ -1175,6 +1235,8 @@ pub fn glm_cfg(spec: &Spec) -> Result<rheon_core::GlmCfg, String> {
         var_power,
         ridge,
         refit_rows,
+        refit_span,
+        max_state_bytes,
         step_cap,
         ..
     } = &spec.model
@@ -1199,8 +1261,19 @@ pub fn glm_cfg(spec: &Spec) -> Result<rheon_core::GlmCfg, String> {
         Some("power") => GlmLink::Power,
         Some(other) => return Err(words("link", &GLM_LINKS, other)),
     };
-    let refit_rows =
-        refit_rows.unwrap_or_else(|| rheon_core::default_glm_refit_rows(spec.k(), spec.m()));
+    // A span in place of the count: the count's default is off beside it,
+    // and one given is the model's to refuse.
+    let refit_rows = refit_rows.unwrap_or_else(|| {
+        if refit_span.is_some() {
+            0
+        } else {
+            rheon_core::default_glm_refit_rows_within(
+                spec.k(),
+                spec.m(),
+                max_state_bytes.unwrap_or(rheon_core::GLM_GROUP_REFIT_CAP as u64),
+            )
+        }
+    });
     Ok(rheon_core::GlmCfg {
         n_features: spec.k(),
         n_targets: spec.m(),
@@ -1212,7 +1285,12 @@ pub fn glm_cfg(spec: &Spec) -> Result<rheon_core::GlmCfg, String> {
         ridge: ridge.unwrap_or(1.0),
         min_weight: spec.min_periods_or_default(),
         refit_rows,
-        step_cap: step_cap.map_or_else(|| rheon_core::default_glm_step_cap(refit_rows), |n| n.0),
+        refit_clock: refit_span.as_ref().map(Span::value),
+        max_state_bytes: *max_state_bytes,
+        step_cap: step_cap.map_or_else(
+            || rheon_core::default_glm_step_cap(refit_rows.max(u32::from(refit_span.is_some()))),
+            |n| n.0,
+        ),
     })
 }
 

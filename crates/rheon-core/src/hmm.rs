@@ -115,6 +115,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::clock_span::{HeldCap, Place, start_due};
 use crate::cluster::kmeans::seed_centres;
 use crate::solve::{FactorWork, QuadWork, SpdFactor};
 use crate::{Covariance, Decay, EwCov, EwCovDiag, SeedRule};
@@ -177,6 +178,14 @@ pub struct HmmCfg {
     /// schema 69 or earlier, which loads with `None`.
     #[serde(default)]
     pub prior_rows: Option<f64>,
+    /// The warm-up over a span of the clock in place of `warm_rows`
+    /// (docs/PLAN.md task 538): the learned rows from the first through
+    /// the first at least this many clock units after it, once they are at
+    /// least `k` ([`crate::clock_span::start_due`]), held to
+    /// [`crate::KMeans::WARM_BUDGET_MIB`] as they come. Last, and written
+    /// only when set, so a state without it keeps its bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warm_clock: Option<f64>,
 }
 
 impl HmmCfg {
@@ -367,6 +376,15 @@ impl HmmCfg {
                          neither is given. Give means and covs, or turn learn on so the model \
                          seeds its states.",
                     );
+                }
+                if let Some(d) = self.warm_clock
+                    && !(d.is_finite() && d > 0.0)
+                {
+                    no.refuse(format!(
+                        "hmm: warm_span must be a finite number of clock units above 0, but it \
+                         is {d}. Give the span of clock whose rows seed the states, or leave it \
+                         out for warm_rows."
+                    ));
                 }
                 if self.warm_rows < k {
                     no.refuse(format!(
@@ -577,9 +595,58 @@ pub struct Hmm {
     /// exception).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     stabilized: Option<Box<Stabilized>>,
+    /// Under a warm-up over a span of the clock (task 538): the model's
+    /// place on the clock, the warm-up's first stamp and its cap, each
+    /// written only when it holds something.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    place: Option<Place>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    warm_first: Option<crate::Stamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    over: Option<u64>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    warned: bool,
+    /// The row's place, from [`OnlineModel::step_into`] to the step, a
+    /// warning not yet taken, and a test's smaller cap. Never state.
+    #[serde(skip)]
+    row_stamp: Option<crate::Stamp>,
+    #[serde(skip)]
+    warning: Option<u64>,
+    #[serde(skip)]
+    cap_for_test: Option<u64>,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl Hmm {
+    /// The bytes of the warm-up buffer at `rows` rows, as `kmeans` counts
+    /// its own ([`crate::KMeans::warm_mib`]).
+    fn warm_bytes(&self, rows: usize) -> u64 {
+        (crate::KMeans::warm_mib(rows, self.cfg.n_features) * f64::from(1 << 20)) as u64
+    }
+
+    /// A warm-up's cap in bytes: `kmeans`' ([`crate::KMeans::WARM_BUDGET_MIB`]).
+    fn warm_cap(&self) -> u64 {
+        self.cap_for_test
+            .unwrap_or((crate::KMeans::WARM_BUDGET_MIB * f64::from(1 << 20)) as u64)
+    }
+
+    /// Hold the warm-up to `bytes` in place of its cap, for a test.
+    #[cfg(test)]
+    pub(crate) fn set_cap_for_test(&mut self, bytes: u64) {
+        self.cap_for_test = Some(bytes);
+    }
+
+    fn held_cap(&mut self) -> HeldCap<'_> {
+        HeldCap {
+            over: &mut self.over,
+            warned: &mut self.warned,
+            warning: &mut self.warning,
+        }
+    }
+
     /// The most hidden states. `k` sizes what is built before the first
     /// row -- the transition matrix and its counts, `k²` cells each, and a
     /// state's accumulators `k` times -- so a `k` past this is a spec's
@@ -689,6 +756,13 @@ impl Hmm {
             diag_states,
             factor_states: Vec::new(),
             stabilized: None,
+            place: cfg.warm_clock.map(|_| Place::default()),
+            warm_first: None,
+            over: None,
+            warned: false,
+            row_stamp: None,
+            warning: None,
+            cap_for_test: None,
             cfg,
         };
         let shape = matches!(m.cfg.covariance, Covariance::Full | Covariance::Diagonal);
@@ -1418,6 +1492,18 @@ impl Hmm {
             }
             return;
         }
+        // A warm-up over a span of the clock holds the rows the data puts
+        // in it (task 538): a row that would take it past its cap is not
+        // learned, nor any after it, and ages the model as a row of no
+        // weight does.
+        let span = self.cfg.warm_clock.zip(self.row_stamp);
+        if !self.seeded && span.is_some() {
+            let (with, cap) = (self.warm_bytes(self.buffer.len() + 1), self.warm_cap());
+            if !self.held_cap().admit(with, cap) {
+                self.n_eff *= lam;
+                return;
+            }
+        }
         let before = self.n_eff;
         self.n_eff = lam * before + weight;
         // Every row buffered here is usable: one holding a NaN was replayed
@@ -1425,8 +1511,18 @@ impl Hmm {
         // 182); it is refused before it gets here (task 183).
         if !self.seeded {
             self.buffer.push((x.to_vec(), weight));
-            if self.buffer.len() >= self.cfg.warm_rows {
+            let due = match span {
+                Some((d, now)) => {
+                    start_due(&mut self.warm_first, now, d, self.buffer.len(), self.cfg.k)
+                }
+                None => self.buffer.len() >= self.cfg.warm_rows,
+            };
+            if due {
                 self.seed();
+            }
+            if span.is_some() {
+                let (bytes, cap) = (self.warm_bytes(self.buffer.len()), self.warm_cap());
+                self.held_cap().note(bytes, cap);
             }
             return;
         }
@@ -2034,6 +2130,8 @@ impl crate::OnlineModel for Hmm {
             *out = refused;
             return;
         }
+        // The row's place, for a warm-up over a span of the clock.
+        self.row_stamp = self.place.as_mut().map(|p| p.step(d_clock));
         let mut work = self.factors.row.take().unwrap_or_default();
         // Stabilized forgetting's own step, out of line, so today's is
         // compiled as it was without it.
@@ -2043,6 +2141,21 @@ impl crate::OnlineModel for Hmm {
             self.step_in(x, y, d_clock, weight, out, &mut work);
         }
         self.factors.row = Some(work);
+    }
+
+    /// A warm-up over a span of the clock reads the row's stamp (task 538).
+    fn stamp_next(&mut self, stamp: crate::Stamp) {
+        if let Some(p) = self.place.as_mut() {
+            p.hand(stamp);
+        }
+    }
+
+    fn take_state_warning(&mut self) -> Option<(u64, u64)> {
+        self.warning.take().map(|b| (b, self.warm_cap()))
+    }
+
+    fn state_over_cap(&self) -> Option<(u64, u64)> {
+        self.over.map(|b| (b, self.warm_cap()))
     }
 
     fn predict(&self, x: &[f64], d_clock: f64) -> crate::Step {
@@ -2211,6 +2324,9 @@ mod tests_stabilized;
 
 #[cfg(test)]
 mod tests_shape;
+
+#[cfg(test)]
+mod tests_span;
 
 #[cfg(test)]
 mod tests {
@@ -2435,6 +2551,7 @@ mod tests {
             seed: 7,
             tvtp: None,
             prior_rows: None,
+            warm_clock: None,
         }
     }
 

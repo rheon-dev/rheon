@@ -85,8 +85,11 @@
 use serde::{Deserialize, Serialize};
 
 use super::summary::{ClusterSummary, FeatureMoments, SplitMix64, StepFactors, dist2};
+use crate::Stamp;
 use crate::clock::Decay;
+use crate::clock_span::{HeldCap, Place, start_due};
 use crate::model::{ModelState, OnlineModel, State, StateError, Step, check_schema};
+use crate::since::Since;
 
 /// A row's nearest centre and runner-up: `(j*, d²_j*, d²_second, j_second)`
 /// ([`KMeans::nearest2`]).
@@ -159,6 +162,24 @@ pub struct KMeansCfg {
     /// with (docs/PLAN.md task 102).
     #[serde(default)]
     pub scale_floor: f64,
+    /// The warm-up over a span of the clock in place of `warm_rows`
+    /// (docs/PLAN.md task 538): the learned rows from the first through
+    /// the first at least this many clock units after it, once they are at
+    /// least `k` ([`crate::clock_span::start_due`]). The rows it holds are
+    /// checked against [`KMeans::WARM_BUDGET_MIB`] as they come. The three
+    /// spans are last, and written only when set, so a state without them
+    /// keeps its bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warm_clock: Option<f64>,
+    /// A checkpoint every this many clock units as well as every
+    /// `update_every_rows` learned rows, whichever comes first; `0` is
+    /// every row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_every: Option<f64>,
+    /// A split-merge check every this many clock units as well as every
+    /// `split_merge_every_rows` learned rows, at a checkpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub split_merge_every: Option<f64>,
 }
 
 impl KMeansCfg {
@@ -235,6 +256,28 @@ impl KMeansCfg {
                  a positive weight.",
                 self.min_weight
             ));
+        }
+        if let Some(d) = self.warm_clock
+            && !(d.is_finite() && d > 0.0)
+        {
+            no.refuse(format!(
+                "kmeans: warm_span must be a finite number of clock units above 0, but it is {d}. \
+                 Give the span of clock whose rows seed the centers, or leave it out for \
+                 warm_rows."
+            ));
+        }
+        for (name, v) in [
+            ("update_every", self.update_every),
+            ("split_merge_every", self.split_merge_every),
+        ] {
+            if let Some(d) = v
+                && (d.is_nan() || d < 0.0)
+            {
+                no.refuse(format!(
+                    "kmeans: {name} must be at least 0 clock units, but it is {d}. Set {name} to \
+                     a span of the clock, 0 for every row, or leave it out."
+                ));
+            }
         }
         if self.update_every_rows == 0 {
             no.refuse(
@@ -375,6 +418,31 @@ pub struct KMeans {
     /// field anywhere but the end would shift the fields after it.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub solve_failures: u64,
+    /// Under a span of the clock (task 538), the model's place on it, the
+    /// warm-up's first stamp, each cadence's clock, and the warm-up's cap:
+    /// each written only when it holds something, after the fields above.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    place: Option<Place>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    warm_first: Option<Stamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    since_update: Option<Since>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    since_split: Option<Since>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    over: Option<u64>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    warned: bool,
+    #[serde(skip)]
+    warning: Option<u64>,
+    /// A smaller warm-up cap than [`Self::WARM_BUDGET_MIB`], for a test to
+    /// reach it in a few rows. Never state.
+    #[serde(skip)]
+    cap_for_test: Option<u64>,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// Whether a count is zero: what `solve_failures` is left out of a state at.
@@ -457,8 +525,41 @@ impl KMeans {
             n_merges: 0,
             n_dead: 0,
             solve_failures: 0,
+            place: cfg.warm_clock.map(|_| Place::default()),
+            warm_first: None,
+            since_update: cfg.update_every.map(|_| Since::default()),
+            since_split: cfg.split_merge_every.map(|_| Since::default()),
+            over: None,
+            warned: false,
+            warning: None,
+            cap_for_test: None,
             cfg,
         })
+    }
+
+    /// Hold the warm-up to `bytes` in place of its cap, for a test.
+    #[cfg(test)]
+    pub(crate) fn set_cap_for_test(&mut self, bytes: u64) {
+        self.cap_for_test = Some(bytes);
+    }
+
+    /// The bytes of the warm-up buffer at `rows` rows ([`Self::warm_mib`]).
+    fn warm_bytes(&self, rows: usize) -> u64 {
+        (Self::warm_mib(rows, self.cfg.n_features) * f64::from(1 << 20)) as u64
+    }
+
+    /// The warm-up's cap in bytes ([`Self::WARM_BUDGET_MIB`]).
+    fn warm_cap(&self) -> u64 {
+        self.cap_for_test
+            .unwrap_or((Self::WARM_BUDGET_MIB * f64::from(1 << 20)) as u64)
+    }
+
+    fn held_cap(&mut self) -> HeldCap<'_> {
+        HeldCap {
+            over: &mut self.over,
+            warned: &mut self.warned,
+            warning: &mut self.warning,
+        }
     }
 
     pub fn cfg(&self) -> &KMeansCfg {
@@ -617,7 +718,11 @@ impl KMeans {
         self.absorb(j, x, w, d2, far);
         self.since += 1;
         self.since_sm += 1;
-        if self.since >= self.cfg.update_every_rows {
+        let by_clock = match (&self.since_update, self.cfg.update_every) {
+            (Some(s), Some(every)) => every <= 0.0 || s.reached(every),
+            _ => false,
+        };
+        if self.since >= self.cfg.update_every_rows || by_clock {
             self.checkpoint();
         }
     }
@@ -671,10 +776,20 @@ impl KMeans {
             }
         }
         self.since = 0;
+        if let Some(s) = self.since_update.as_mut() {
+            s.restart();
+        }
         if self.cfg.split_merge > 0.0 {
             self.refresh_far_cut();
-            if self.since_sm >= self.cfg.split_merge_every_rows {
+            let by_clock = match (&self.since_split, self.cfg.split_merge_every) {
+                (Some(s), Some(every)) => every <= 0.0 || s.reached(every),
+                _ => false,
+            };
+            if self.since_sm >= self.cfg.split_merge_every_rows || by_clock {
                 self.since_sm = 0;
+                if let Some(s) = self.since_split.as_mut() {
+                    s.restart();
+                }
                 self.winsorize_radii();
                 self.refresh_far_cut();
                 self.split_merge_check();
@@ -855,9 +970,19 @@ impl KMeans {
     /// buffer's far cut, when at least `k` are — then replay the whole
     /// buffer through the frozen seeds so the centres start as the means of
     /// their rows, the rows beyond the cut as far rows.
-    fn try_seed(&mut self) {
+    fn try_seed(&mut self, now: Option<Stamp>) {
         let k = self.cfg.k;
-        let target = self.cfg.warm_rows.max(k);
+        // Under a span of the clock the buffer holds the rows the span has
+        // (task 538): it is full at the row that closes it.
+        let target = match (self.cfg.warm_clock, now) {
+            (Some(span), Some(now)) => {
+                if !start_due(&mut self.warm_first, now, span, self.buf.len(), k) {
+                    return;
+                }
+                self.buf.len()
+            }
+            _ => self.cfg.warm_rows.max(k),
+        };
         if self.buf.len() < target {
             return;
         }
@@ -927,6 +1052,14 @@ impl KMeans {
         }
         if self.cfg.split_merge > 0.0 {
             self.refresh_far_cut();
+        }
+        // The cadences' clocks run from the seeding, as their counts do.
+        for s in self
+            .since_update
+            .iter_mut()
+            .chain(self.since_split.iter_mut())
+        {
+            s.restart();
         }
     }
 }
@@ -1203,7 +1336,25 @@ impl OnlineModel for KMeans {
         let (lam, lam_long) = self.factors.of(self.cfg.decay, d_clock);
         let n_before = self.moments.w;
         let valid = x.iter().all(|v| v.is_finite());
-        let learn = weight > 0.0 && weight.is_finite() && valid;
+        let mut learn = weight > 0.0 && weight.is_finite() && valid;
+        // The spans' clocks (task 538): the row's place, and each cadence's.
+        let now = self.place.as_mut().map(|p| p.step(d_clock));
+        for s in self
+            .since_update
+            .iter_mut()
+            .chain(self.since_split.iter_mut())
+        {
+            s.step(d_clock);
+        }
+        // A warm-up over a span of the clock holds the rows the data puts in
+        // it: a row that would take it past its cap is not learned, nor any
+        // after it.
+        if learn && self.clusters.is_empty() && now.is_some() {
+            let (with, cap) = (self.warm_bytes(self.buf.len() + 1), self.warm_cap());
+            if !self.held_cap().admit(with, cap) {
+                learn = false;
+            }
+        }
 
         // The clock passes for everything the model holds.
         self.moments.decay(lam, lam_long);
@@ -1234,13 +1385,55 @@ impl OnlineModel for KMeans {
             } else {
                 self.buf.push(x.to_vec());
                 self.buf_w.push(weight);
-                self.try_seed();
+                self.try_seed(now);
+                if now.is_some() {
+                    let (bytes, cap) = (self.warm_bytes(self.buf.len()), self.warm_cap());
+                    self.held_cap().note(bytes, cap);
+                }
             }
         }
         self.moments
             .metric(self.cfg.standardize, self.cfg.scale_floor, &mut self.mw);
         out.n_eff = n_before;
         out.extra = None;
+    }
+
+    /// The spans of the clock read the row's stamp (task 538).
+    fn stamp_next(&mut self, stamp: Stamp) {
+        if let Some(p) = self.place.as_mut() {
+            p.hand(stamp);
+        }
+        for s in self
+            .since_update
+            .iter_mut()
+            .chain(self.since_split.iter_mut())
+        {
+            s.stamp_next(stamp);
+        }
+    }
+
+    /// On the row clock a cadence counts from a row before the first, as
+    /// `micro`'s `prune_every` does, so `update_every = n` is
+    /// `update_every_rows = n`.
+    fn stamp_next_on_rows(&mut self, stamp: Stamp) {
+        if let Some(p) = self.place.as_mut() {
+            p.hand(stamp);
+        }
+        for s in self
+            .since_update
+            .iter_mut()
+            .chain(self.since_split.iter_mut())
+        {
+            s.stamp_next_on_rows(stamp);
+        }
+    }
+
+    fn take_state_warning(&mut self) -> Option<(u64, u64)> {
+        self.warning.take().map(|b| (b, self.warm_cap()))
+    }
+
+    fn state_over_cap(&self) -> Option<(u64, u64)> {
+        self.over.map(|b| (b, self.warm_cap()))
     }
 
     fn predict(&self, x: &[f64], d_clock: f64) -> Step {
@@ -1283,6 +1476,9 @@ impl OnlineModel for KMeans {
                     || m.far_rows.len() != count
                     || m.buf_w.len() != m.buf.len()
                     || m.buf.iter().any(|z| z.len() != p)
+                    || m.place.is_some() != m.cfg.warm_clock.is_some()
+                    || m.since_update.is_some() != m.cfg.update_every.is_some()
+                    || m.since_split.is_some() != m.cfg.split_merge_every.is_some()
                 {
                     return Err(crate::model::damaged(
                         "kmeans",
@@ -1312,6 +1508,10 @@ impl OnlineModel for KMeans {
         3
     }
 }
+
+#[cfg(test)]
+#[path = "kmeans_span_tests.rs"]
+mod span_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1504,6 +1704,9 @@ mod tests {
             dead_frac: 0.0,
             standardize: false,
             scale_floor: 0.0,
+            warm_clock: None,
+            update_every: None,
+            split_merge_every: None,
         }
     }
 

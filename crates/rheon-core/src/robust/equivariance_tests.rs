@@ -41,6 +41,8 @@ fn cfg(loss: RobustLoss, refit_rows: u32) -> RobustCfg {
         refit_rows,
         mad_anchor: true,
         min_weight_holds_learning: false,
+        refit_clock: None,
+        max_state_bytes: None,
     }
 }
 

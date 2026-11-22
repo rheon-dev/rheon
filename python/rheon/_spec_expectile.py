@@ -22,6 +22,7 @@ def expectile(
     expectile: float,
     ridge: float | None = None,
     refit_rows: int | None = None,
+    refit_span: float | Duration | None = None,
     window_rows: int | None = None,
     window_size: float | Duration | None = None,
     closed: Literal["right", "both"] = "right",
@@ -75,6 +76,20 @@ def expectile(
         ``0`` turns the refit off. A group's buffers hold ``8 * targets *
         refit_rows * (features + 2)`` bytes until the refit runs: a count
         past ``max_state_bytes`` is refused, naming the bytes.
+    ``refit_span``
+        The same refit over a span of the clock in place of a count of rows:
+        each target's rows from its first learned row through the first row
+        at least ``refit_span`` after it, once they hold a row per
+        coefficient. A number of the clock's units, or of rows where the
+        spec has no clock, or a duration such as ``"1h"`` on a temporal
+        clock; finite and above 0. The span is read off the rows' exact
+        stamps (integer nanoseconds on a temporal clock), and a row of
+        weight 0 is no row of it, so on a clock of one unit a row it holds
+        ``refit_span + 1`` rows: the refit of ``refit_rows = refit_span +
+        1``, to the bit. How many rows that is the data decides, so they
+        are checked against ``max_state_bytes`` as they come, as a
+        ``window_size`` window's are. Refused beside ``refit_rows`` and
+        beside a window. Default none.
     ``window_rows``
         Fit only the last this many rows of positive weight, refit exactly
         on every row, in place of a decay: set ``half_life`` to ``inf``
@@ -153,13 +168,15 @@ def expectile(
       not finite;
     - a ``window_rows`` under one row per coefficient, a ``window_size`` not
       finite and above 0, the two together, ``closed="both"`` without
-      ``window_size``, and a window beside a finite ``half_life`` or a
-      ``refit_rows`` above 0;
+      ``window_size``, and a window beside a finite ``half_life``, a
+      ``refit_rows`` above 0 or a ``refit_span``;
+    - a ``refit_span`` not finite and above 0, and one beside
+      ``refit_rows``;
     - a ``max_state_bytes`` of 0 or above 64 MiB, and a refit buffer or a
       ``window_rows`` window that would hold more than it;
     - a ``refit_budget`` not above 0;
-    - a ``window_size`` window that passes ``max_state_bytes``, as the rows
-      go in.
+    - a ``window_size`` window or a ``refit_span`` refit that passes
+      ``max_state_bytes``, as the rows go in.
 
     .. rubric:: The update
 
@@ -250,15 +267,17 @@ def expectile(
     row: about ``passes * rows * k²`` work a row, the passes 1 to 2 on
     average warm-started at the fit before and at most 10 on awkward data.
 
-    **The spans.** ``half_life``, ``gap_cap`` and ``window_size`` take a
-    number (rows, with no clock) or a clock duration, as every spec's do.
-    ``window_rows`` and ``refit_rows`` count rows of positive weight.
+    **The spans.** ``half_life``, ``gap_cap``, ``window_size`` and
+    ``refit_span`` take a number (rows, with no clock) or a clock duration,
+    as every spec's do. ``window_rows`` and ``refit_rows`` count rows of
+    positive weight.
     """
     model: dict[str, Any] = {
         "type": "expectile",
         "expectile": expectile,
         "ridge": ridge,
         "refit_rows": refit_rows,
+        "refit_span": refit_span,
         "window_rows": window_rows,
         "window_size": window_size,
         "closed": None if closed == "right" else closed,

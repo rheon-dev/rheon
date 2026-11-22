@@ -145,6 +145,8 @@ fn robust_cfg(loss: RobustLoss, standardize: bool) -> RobustCfg {
         refit_rows: 0,
         mad_anchor: false,
         min_weight_holds_learning: false,
+        refit_clock: None,
+        max_state_bytes: None,
     }
 }
 
@@ -405,6 +407,8 @@ fn sgd_golden() {
         min_weight_holds_learning: false,
         target_spread: false,
         mad_anchor: false,
+        refit_clock: None,
+        max_state_bytes: None,
     })
     .unwrap();
     check("sgd", &signature(&mut m, 0), GOLDEN_SGD);
@@ -433,6 +437,8 @@ fn sgd_squared_golden() {
         min_weight_holds_learning: false,
         target_spread: false,
         mad_anchor: false,
+        refit_clock: None,
+        max_state_bytes: None,
     })
     .unwrap();
     check("sgd_squared", &signature(&mut m, 0), GOLDEN_SGD_SQUARED);
@@ -485,7 +491,9 @@ fn glm_golden() {
         ridge: 1.0,
         min_weight: 3.0,
         refit_rows: 15,
+        refit_clock: None,
         step_cap: f64::INFINITY,
+        max_state_bytes: None,
     })
     .unwrap();
     check("glm", &glm_signature(&mut m), GOLDEN_GLM);
@@ -506,7 +514,9 @@ fn glm_cap_golden() {
         ridge: 1.0,
         min_weight: 3.0,
         refit_rows: 0,
+        refit_clock: None,
         step_cap: 0.5,
+        max_state_bytes: None,
     })
     .unwrap();
     check("glm_cap", &glm_signature(&mut m), GOLDEN_GLM_CAP);
@@ -541,6 +551,8 @@ fn sgd_simplex_golden() {
         min_weight_holds_learning: false,
         target_spread: false,
         mad_anchor: false,
+        refit_clock: None,
+        max_state_bytes: None,
     })
     .unwrap();
     check("sgd_simplex", &signature(&mut m, 0), GOLDEN_SGD_SIMPLEX);
@@ -625,6 +637,7 @@ fn bocpd_golden() {
         min_weight: 0.0,
         warm_rows: None,
         hazard_on_clock: false,
+        warm_clock: None,
     })
     .unwrap();
     check("bocpd", &signature(&mut m, 0), GOLDEN_BOCPD);
@@ -653,6 +666,7 @@ fn bocpd_on_the_clock_golden() {
         min_weight: 0.0,
         warm_rows: None,
         hazard_on_clock: true,
+        warm_clock: None,
     })
     .unwrap();
     check(
@@ -684,6 +698,7 @@ fn corrchange_golden() {
         reset: false,
         monitor_rows: 0,
         boundary_gamma: 0.0,
+        permute_every: None,
     })
     .unwrap();
     let mut out = Vec::new();
@@ -717,6 +732,7 @@ fn hmm_golden() {
         seed: 1,
         tvtp: None,
         prior_rows: None,
+        warm_clock: None,
     })
     .unwrap();
     check("hmm", &signature(&mut m, 5), GOLDEN_HMM);
@@ -838,6 +854,7 @@ fn expectile_golden() {
         ridge: 1e-6,
         min_weight: 3.0,
         refit_rows: 15,
+        refit_clock: None,
         window_rows: None,
         window_clock: None,
         closed: WindowClosed::Right,
@@ -864,6 +881,7 @@ fn expectile_window_golden() {
         expectile: 0.2,
         ridge: 1e-6,
         refit_rows: 0,
+        refit_clock: None,
         window_rows: Some(12),
     })
     .unwrap();
@@ -1085,6 +1103,9 @@ fn kmeans_cfg(rule: SeedRule) -> KMeansCfg {
         dead_frac: 0.05,
         standardize: true,
         scale_floor: 0.0,
+        warm_clock: None,
+        update_every: None,
+        split_merge_every: None,
     }
 }
 
@@ -1515,6 +1536,7 @@ fn hmm_tvtp_golden() {
         seed: 1,
         tvtp: Some((vec![2.0, 0.0, 0.0, 2.0], vec![0.0, 1.5, -1.0, 0.0])),
         prior_rows: None,
+        warm_clock: None,
     })
     .unwrap();
     check("hmm_tvtp", &signature(&mut m, 5), GOLDEN_HMM_TVTP);
@@ -1539,6 +1561,7 @@ fn bocpd_emissions_golden() {
         min_weight: 0.0,
         warm_rows: None,
         hazard_on_clock: false,
+        warm_clock: None,
     };
     let mut m = Bocpd::new(cfg(BocpdEmission::Gaussian, 0.0)).unwrap();
     check(
@@ -1573,6 +1596,7 @@ fn corrchange_sequential_golden() {
         reset: false,
         monitor_rows: 20,
         boundary_gamma: 0.25,
+        permute_every: None,
     })
     .unwrap();
     let mut out = Vec::new();

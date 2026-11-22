@@ -42,6 +42,8 @@ fn cfg(loss: SgdLoss, schedule: LearningRate, learning_rate: f64) -> SgdCfg {
         target_spread: true,
         mad_anchor: false,
         min_weight_holds_learning: false,
+        refit_clock: None,
+        max_state_bytes: None,
     }
 }
 

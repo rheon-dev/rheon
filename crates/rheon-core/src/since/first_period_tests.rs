@@ -120,6 +120,8 @@ fn model(kind: &str, min_weight: f64, every: f64, cap: u32) -> Model {
                 refit_rows: 0,
                 min_weight_holds_learning: false,
                 mad_anchor: false,
+                refit_clock: None,
+                max_state_bytes: None,
             })
             .unwrap(),
         ),

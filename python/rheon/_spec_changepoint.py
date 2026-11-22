@@ -29,6 +29,7 @@ def bocpd(
     prune_below: float | None = None,
     max_run: int | None = None,
     warm_rows: int | None = None,
+    warm_span: float | Duration | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Bayesian online changepoint detection, a posterior over how long the current
@@ -181,6 +182,19 @@ def bocpd(
         Where the first rows are not representative and rows are to spare,
         pass a ``warm_rows`` of tens, all from one regime (*The prior* in
         Notes).
+    ``warm_span``
+        The warm-up over a span of the clock in place of ``warm_rows``: the
+        learned rows from the first through the first row at least
+        ``warm_span`` after it, once they are at least two. A number of the
+        clock's units, or of rows where the spec has no clock, or a duration
+        such as ``"1h"`` on a temporal clock; finite and above 0. The span is
+        read off the rows' exact stamps, and a row of weight 0 is no row of
+        it, so on a clock of one unit a row it holds ``warm_span + 1`` rows:
+        the prior of ``warm_rows = warm_span + 1``, to the bit. The data
+        decides how many rows that is, so they are held to 256 MiB as they
+        come: past half of it a warning, once a group, and the row that would
+        pass it stops the run with an error naming the group and the bytes.
+        Refused beside ``warm_rows`` and beside both priors.
 
     .. rubric:: Output
 
@@ -477,6 +491,9 @@ def bocpd(
         "max_run": max_run,
         "warm_rows": warm_rows,
     }
+    # Written only when given, as the Rust spec leaves it out when absent.
+    if warm_span is not None:
+        model["warm_span"] = warm_span
     mirror = _mirror_target(name, "bocpd", features, common, "its change points are in")
     targets = [hazard_col] if hazard_col is not None else mirror
     return _common(name, model, targets=targets, features=features, **common)
@@ -502,6 +519,7 @@ def corrchange(
     change_action: Literal["flag", "reset"] = "flag",
     monitor_rows: int | None = None,
     boundary_gamma: float | None = None,
+    permute_every: float | Duration | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Tests of whether the correlations between the feature columns have changed, by
@@ -572,6 +590,14 @@ def corrchange(
         1``), redrawn every ``permute_every_rows`` rows (default ``window_rows``, at
         least 1), in blocks of ``perm_block`` rows (default 1, from 1 to
         ``window_rows``). *The window test* in Notes gives the cost and the size.
+    ``permute_every``
+        ``"window"``: the same redraw on the clock, every this long as well
+        as every ``permute_every_rows`` reports, whichever comes first; given
+        alone, the count beside it is none. A number of the clock's units
+        (rows where the spec has no clock) or a duration such as ``"10m"``
+        on a temporal clock, at least 0, ``0`` every report. On a clock of
+        one unit a row, ``permute_every = n`` is ``permute_every_rows = n``,
+        to the bit.
     ``norm``
         ``"window"``: ``"l1"`` (the default) or ``"linf"``.
     ``seed``
@@ -887,5 +913,8 @@ def corrchange(
         "monitor_rows": monitor_rows,
         "boundary_gamma": boundary_gamma,
     }
+    # Written only when given, as the Rust spec leaves it out when absent.
+    if permute_every is not None:
+        model["permute_every"] = permute_every
     targets = _mirror_target(name, "corrchange", features, common, "its test is of")
     return _common(name, model, targets=targets, features=features, **common)

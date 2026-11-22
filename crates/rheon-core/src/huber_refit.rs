@@ -140,6 +140,13 @@ pub fn default_bin_refit_rows(bins: usize) -> u32 {
     DEFAULT_REFIT_ROWS.max(u32::try_from(per).unwrap_or(u32::MAX))
 }
 
+/// The `cap` a buffer is handed under a refit over a span of the clock
+/// (docs/PLAN.md task 538): no count fills it, so it is never held at a full
+/// size ahead of its rows, and grows as they come; the span decides when it
+/// runs ([`RefitBuf::span_due`]), and its bytes are checked against
+/// the model's `max_state_bytes` as it grows ([`RefitBuf::held_bytes`]).
+pub const OPEN: u32 = u32::MAX;
+
 /// A buffer holds at most this many ageing runs per learned row its refit
 /// waits for (`refit_rows`): past it the refit of that target is given up
 /// ([`RefitBuf::age`]). Under a regular clock repeated ageings are one run,
@@ -238,6 +245,10 @@ pub(crate) struct RefitBuf {
     /// encodings.
     #[serde(default)]
     resid: Option<Vec<f64>>,
+    /// Under a refit over a span of the clock, the stamp of the target's
+    /// first learned row (task 538). Last, and written only when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    first: Option<crate::Stamp>,
     /// The `|e|` held, in a tree by size at the weights the scale's decays
     /// leave them, where the buffer keeps them: built from the rows, not
     /// state ([`Self::rebuild_median`], as the buffer is read).
@@ -286,6 +297,8 @@ struct RefitBufFile {
     over_budget: bool,
     #[serde(default)]
     resid: Option<Vec<f64>>,
+    #[serde(default)]
+    first: Option<crate::Stamp>,
 }
 
 impl From<RefitBufFile> for RefitBuf {
@@ -304,6 +317,7 @@ impl From<RefitBufFile> for RefitBuf {
             failed: f.failed,
             over_budget: f.over_budget,
             resid: f.resid,
+            first: f.first,
             median: HeldMedian::new(1),
             reserved: Reserved(false),
         };
@@ -375,6 +389,7 @@ impl RefitBuf {
             failed: false,
             over_budget: false,
             resid: None,
+            first: None,
             median: HeldMedian::new(1),
             reserved: Reserved(false),
         }
@@ -537,7 +552,7 @@ impl RefitBuf {
         // what a bank reserves for it ([`refit_reservation`]); and from the
         // first row after a restore or a copy, whose vectors hold only their
         // rows (task 335, F6). A flag a row on every other.
-        if !self.reserved.0 {
+        if !self.reserved.0 && cap != OPEN {
             self.reserve_full(x.len(), cap as usize);
         }
         self.rows.extend_from_slice(x);
@@ -606,11 +621,35 @@ impl RefitBuf {
             self.median.begin_run();
             self.median.run(lam_s, 1);
         }
-        if self.ages.len() / 4 > (REFIT_RUNS_PER_ROW * cap) as usize {
+        if self.ages.len() / 4 > REFIT_RUNS_PER_ROW as usize * cap as usize {
             self.abandoned = true;
             return Some(self.take());
         }
         None
+    }
+
+    /// Under a refit over a span of the clock, whether it has run its span
+    /// at the row stamped `now` with at least `least` rows learned
+    /// ([`crate::clock_span::start_due`]); its first stamp is its first
+    /// learned row's.
+    pub(crate) fn span_due(&mut self, now: crate::Stamp, span: f64, least: usize) -> bool {
+        !self.done
+            && crate::clock_span::start_due(
+                &mut self.first,
+                now,
+                span,
+                self.learned as usize,
+                least,
+            )
+    }
+
+    /// The bytes the buffer holds: its rows and runs, 8 each, and under the
+    /// MAD each row's `|e|` and its node in the tree, as
+    /// [`refit_reservation`] counts them; and its first stamp.
+    pub(crate) fn held_bytes(&self) -> u64 {
+        let e = self.resid.as_ref().map_or(0, Vec::len);
+        (8 * (self.rows.len() + self.ages.len()) + 48 * e) as u64
+            + std::mem::size_of::<Option<crate::Stamp>>() as u64
     }
 
     /// The rows, runs and `|e|`, taken: the buffer is done and holds none
@@ -652,7 +691,7 @@ impl RefitBuf {
             });
         let mut last = 1.0;
         let ages_fit = self.ages.len().is_multiple_of(4)
-            && self.ages.len() / 4 <= (REFIT_RUNS_PER_ROW * cap) as usize
+            && self.ages.len() / 4 <= REFIT_RUNS_PER_ROW as usize * cap as usize
             && self.ages.as_chunks::<4>().0.iter().all(|a| {
                 let ok = factor(a[0])
                     && factor(a[1])

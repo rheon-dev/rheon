@@ -291,6 +291,11 @@ CASES: list[Case] = [
     # The refit of each target's first rows at a count of its own, inside a
     # budget, and a budget below one group's buffer, every refit given up.
     Case("quantile3", "quantile", full(quantile=0.6, quantile_refit_rows=40, refit_budget=8)),
+    Case(
+        "quantile_span",
+        "quantile",
+        full(quantile=0.6, quantile_refit_span=40.0, max_state_bytes=200_000),
+    ),
     Case("quantile4", "quantile", full2(quantile=0.5, quantile_refit_rows=50, refit_budget=0.001)),
     Case(
         "rls",
@@ -375,6 +380,7 @@ CASES: list[Case] = [
         "sgd",
         {**full(loss="logistic", learning_rate=0.05, strict_binary=True), "targets": ["hit"]},
     ),
+    Case("sgd_span", "sgd", full(loss="huber", huber_refit_span=40.0, max_state_bytes=200_000)),
     Case("sgd_poisson", "sgd", {**full(loss="poisson", learning_rate=0.01), "targets": ["hit"]}),
     Case(
         "pa",
@@ -408,6 +414,11 @@ CASES: list[Case] = [
         },
     ),
     Case("glm2", "glm", {**full2(refit_rows=0, step_cap=0.5), "targets": ["hit"]}),
+    # The first rows' refit over a span of the clock (task 538).
+    Case(
+        "glm_span", "glm", {**full2(refit_span=40.0, max_state_bytes=200_000), "targets": ["hit"]}
+    ),
+    Case("expectile_span", "expectile", full2(expectile=0.7, refit_span=40.0)),
     Case("expectile", "expectile", full(**CLOSE, expectile=0.8, refit_rows=30, refit_budget=64.0)),
     # A window of clock units and one of rows, refit exactly on every row: a
     # window takes no decay.
@@ -797,6 +808,19 @@ CASES: list[Case] = [
             "scale_floor": 1e-3,
         },
     ),
+    # Task 538: the warm-up and both cadences on the clock.
+    Case(
+        "kmeans3",
+        "kmeans",
+        {
+            **STREAM,
+            "features": ["x1", "x2"],
+            "n_clusters": 3,
+            "warm_span": 25.0,
+            "update_every": 2.0,
+            "split_merge_every": 40.0,
+        },
+    ),
     Case(
         "micro",
         "micro",
@@ -838,6 +862,19 @@ CASES: list[Case] = [
             "init": "first",
             "seed": 3,
             "prior_rows": 1.5,
+        },
+    ),
+    # Task 538: the warm-up over a span of the clock.
+    Case(
+        "hmm_span",
+        "hmm",
+        {
+            **STREAM,
+            "features": ["x1", "x2"],
+            "n_components": 2,
+            "covariance_type": "diag",
+            "precision_prior": 0.1,
+            "warm_span": 30.0,
         },
     ),
     Case(
@@ -900,6 +937,12 @@ CASES: list[Case] = [
         },
     ),
     Case("bocpd2", "bocpd", {**NODECAY2, "features": ["x1", "x2"], "hazard_col": "h"}),
+    # Task 538: the warm-up over a span of the clock.
+    Case(
+        "bocpd_span",
+        "bocpd",
+        {**NODECAY, "features": ["x1", "x2"], "covariance_type": "diag", "warm_span": 20.0},
+    ),
     Case(
         "corrchange",
         "corrchange",
@@ -911,6 +954,19 @@ CASES: list[Case] = [
             "alpha": 0.01,
             "alpha_adjust": "none",
             "bandwidth": 3,
+        },
+    ),
+    # Task 538: the window's redraw on the clock.
+    Case(
+        "corrchange_window_span",
+        "corrchange",
+        {
+            **NODECAY,
+            "features": F3,
+            "kind": "window",
+            "window_rows": 20,
+            "n_perm": 30,
+            "permute_every": 8.0,
         },
     ),
     Case(
@@ -971,6 +1027,8 @@ CASES += [
     Case("huber2", "huber", full2(max_rows_between_solves=4, ridge_scale="sum")),
     # The refit is refused beside ridge_scale "sum", so a case of its own.
     Case("huber3", "huber", full(huber_refit_rows=40, refit_budget=8)),
+    # Task 538: the refit over a span of the clock.
+    Case("huber_span", "huber", full(huber_refit_span=40.0, max_state_bytes=200_000)),
     # A budget below one group's buffer: every refit is given up.
     Case("huber4", "huber", full2(huber_refit_rows=50, refit_budget=0.001)),
     Case(

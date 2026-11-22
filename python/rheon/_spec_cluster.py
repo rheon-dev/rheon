@@ -28,6 +28,9 @@ def kmeans(
     dead_frac: float | None = None,
     standardize: bool = True,
     scale_floor: float | None = None,
+    warm_span: float | Duration | None = None,
+    update_every: float | Duration | None = None,
+    split_merge_every: float | Duration | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Exponentially weighted k-means over the feature columns.
@@ -91,6 +94,28 @@ def kmeans(
         center's batch, before it moves the centers by them, at least 1.
         Default 1, plain sequential k-means. Set it above 1 for mini-batch
         k-means: the centers then move once every that many rows.
+    ``warm_span``
+        The warm-up over a span of the clock in place of ``warm_rows``: the
+        learned rows from the first through the first row at least
+        ``warm_span`` after it, once they are at least ``n_clusters``. A
+        number of the clock's units, or of rows where the spec has no
+        clock, or a duration such as ``"1h"`` on a temporal clock; finite
+        and above 0. The span is read off the rows' exact stamps, and a row
+        of weight 0 is no row of it, so on a clock of one unit a row it holds
+        ``warm_span + 1`` rows: the seeding of ``warm_rows = warm_span + 1``,
+        to the bit. The data decides how many rows that is, so they are held
+        to 256 MiB as they come: past half of it a warning, once a group,
+        and the row that would pass it stops the run with an error naming the
+        group and the bytes. Refused beside ``warm_rows``.
+    ``update_every``, ``split_merge_every``
+        The same two cadences on the clock: the centers move, or the
+        split-merge check runs, every this long, as well as every
+        ``update_every_rows`` or ``split_merge_every_rows`` learned rows,
+        whichever comes first, counted from the seeding. Each is a number of
+        the clock's units (rows where the spec has no clock) or a duration,
+        at least 0, ``0`` every row. Given alone, the count beside it is
+        none. On a clock of one unit a row, ``update_every = n`` is
+        ``update_every_rows = n`` to the bit.
     ``split_merge``, ``split_merge_every_rows``
         Move a center to a cluster that appears after seeding. Every
         ``split_merge_every_rows`` learned rows (default 100, at least 1),
@@ -171,7 +196,9 @@ def kmeans(
     - an ``n_clusters`` of 0 or past 2^16, a ``warm_rows`` below
       ``n_clusters``, and held rows past 256 MiB;
     - an ``init`` not in the list, and a ``seed`` below 0;
-    - an ``update_every_rows`` or ``split_merge_every_rows`` of 0;
+    - an ``update_every_rows`` or ``split_merge_every_rows`` of 0, an
+      ``update_every`` or ``split_merge_every`` below 0, a ``warm_span`` not
+      finite and above 0, and a ``warm_span`` beside ``warm_rows``;
     - a ``split_merge``, ``dead_frac`` or ``scale_floor`` below 0 or not
       finite, a ``dead_frac`` of 0.5 or more, a ``dead_frac`` above 0
       beside ``split_merge = 0``, and ``scale_floor`` beside
@@ -302,6 +329,14 @@ def kmeans(
         "standardize": standardize,
         "scale_floor": scale_floor,
     }
+    # Written only when given, as the Rust spec leaves them out when absent.
+    for key, value in [
+        ("warm_span", warm_span),
+        ("update_every", update_every),
+        ("split_merge_every", split_merge_every),
+    ]:
+        if value is not None:
+            model[key] = value
     targets = _mirror_target(name, "kmeans", features, common, "its clusters are over")
     return _common(name, model, targets=targets, features=features, **common)
 

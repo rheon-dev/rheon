@@ -473,6 +473,31 @@ def clock_specs(draw, model: str, step: int, cap: int):
         kw |= maybe("huber_scale_half_life", 1, 60)
     elif model == "marginal":
         kw |= xy | maybe("window_size", 1, 60)
+    elif model == "corrchange":
+        # Task 538: the window's redraw on the clock, or a count of reports.
+        kw |= dict(features=["x0", "x1"], kind="window", window_rows=4, n_perm=20)
+        if draw(st.booleans()):
+            kw["permute_every"] = steps(0, 6)
+        else:
+            kw["permute_every_rows"] = draw(st.integers(1, 4))
+    elif model == "hmm":
+        # Task 538: the warm-up over a span, or a count of rows.
+        kw |= dict(features=["x0", "x1"], n_components=2, half_life=steps(1, 30))
+        kw |= dict(covariance_type="diag", precision_prior=0.1)
+        if draw(st.booleans()):
+            kw["warm_span"] = steps(1, 10)
+        else:
+            kw["warm_rows"] = draw(st.integers(2, 8))
+    elif model == "kmeans":
+        # Task 538: the warm-up over a span and the cadences on the clock,
+        # or their counts.
+        kw |= dict(features=["x0", "x1"], n_clusters=2, half_life=steps(1, 30))
+        if draw(st.booleans()):
+            kw["warm_span"] = steps(1, 10)
+        else:
+            kw["warm_rows"] = draw(st.integers(2, 8))
+        kw |= maybe("update_every", 0, 6)
+        kw |= maybe("split_merge_every", 1, 20)
     elif model == "micro":
         # Task 163: the checkpoint on the clock, the learned rows, or both.
         kw |= dict(features=["x0", "x1"], eps=0.5, half_life=steps(1, 30))
@@ -487,8 +512,12 @@ def clock_specs(draw, model: str, step: int, cap: int):
             features=["x0", "x1"],
             hazard=steps(1, 60),
             degrees_of_freedom_prior=2.0,
-            covariance_prior=[1.0],
         )
+        # Task 538: the prior's scale from a warm-up over a span, or given.
+        if draw(st.booleans()):
+            kw["warm_span"] = steps(1, 10)
+        else:
+            kw["covariance_prior"] = [1.0]
     elif model == "hawkes":
         # Task 539: the kernels as durations, the window as a span with its
         # edge, and zero-weight rows that count in no clock.
@@ -506,6 +535,14 @@ def clock_specs(draw, model: str, step: int, cap: int):
         if draw(st.booleans()):
             kw |= dict(half_life=float("inf"), window_size=steps(1, 60))
             kw["closed"] = draw(st.sampled_from(["right", "both"]))
+        else:
+            kw["refit_rows"] = draw(st.integers(0, 12))
+    elif model == "glm":
+        # Task 538: the first rows' refit over a span of the clock, or of
+        # rows, on a count the stream derives from its target.
+        kw |= xy | dict(targets=["c"])
+        if draw(st.booleans()):
+            kw["refit_span"] = steps(1, 30)
         else:
             kw["refit_rows"] = draw(st.integers(0, 12))
     elif model == "garch":
@@ -563,6 +600,9 @@ def temporal_streams(draw, model: str, min_rows=1, max_rows=40):
         schema_overrides={c: pl.Float64 for c in ("x0", "x1", "y", "w")},
     ).with_columns(lab=pl.when(pl.col("y") > 0.5).then(pl.lit("a")).otherwise(pl.lit("b")))
     df = df.with_columns(lab=pl.when(pl.col("y").is_null()).then(None).otherwise(pl.col("lab")))
+    # A count for `glm`, from the target: no draw, so every other stream is
+    # the one it was.
+    df = df.with_columns(c=pl.col("y").abs().round(0))
     spec = draw(clock_specs(model, step, cap), label="spec")
     return df, spec
 

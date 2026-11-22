@@ -285,6 +285,7 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
         {
             "ridge",
             "refit_rows",
+            "refit_span",
             "window_rows",
             "window_size",
             "closed",
@@ -300,11 +301,24 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
             "ridge_scale",
             "emit_huber_scale",
             "huber_refit_rows",
+            "huber_refit_span",
+            "max_state_bytes",
             "refit_budget",
         }
     ),
-    "sgd": frozenset({"huber_scale", "huber_scale_half_life", "huber_refit_rows", "refit_budget"}),
-    "quantile": frozenset({"quantile_refit_rows", "refit_budget"}),
+    "sgd": frozenset(
+        {
+            "huber_scale",
+            "huber_scale_half_life",
+            "huber_refit_rows",
+            "huber_refit_span",
+            "max_state_bytes",
+            "refit_budget",
+        }
+    ),
+    "quantile": frozenset(
+        {"quantile_refit_rows", "quantile_refit_span", "max_state_bytes", "refit_budget"}
+    ),
     "ew_cov": frozenset({"gram_threads"}),
     "marginal": frozenset(
         {
@@ -327,6 +341,11 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
     ),
     "audit": frozenset({"pairs", "distinct_cap"}),
     "kalman": frozenset({"covariance_form"}),
+    "glm": frozenset({"refit_span", "max_state_bytes"}),
+    "kmeans": frozenset({"warm_span", "update_every", "split_merge_every"}),
+    "hmm": frozenset({"warm_span"}),
+    "bocpd": frozenset({"warm_span"}),
+    "corrchange": frozenset({"permute_every"}),
 }
 
 
@@ -508,11 +527,8 @@ _RENAMED = {
     "max_cd_iters": "max_iter",
     "cd_tol": "tol",
     "reset": "change_action",
-    # Task 196 (docs/PLAN.md §18, N14 and N16): a count of rows says so, and
-    # holt's level takes the spec's `half_life`, one knob under one name.
-    "update_every": "update_every_rows",
-    "split_merge_every": "split_merge_every_rows",
-    "permute_every": "permute_every_rows",
+    # Task 196 (N16): holt's level takes the spec's `half_life`. Its N14
+    # names are task 538's clock forms now.
     "level_half_life": "half_life",
 }
 

@@ -66,6 +66,61 @@ model that only the new build has is listed as an addition and passes.
 
 ### Added
 
+- **Clock forms for the remaining counts of rows** (task 538, part 2), each
+  beside its count and refused with it, each a number of the clock's units
+  (rows without a clock) or a duration on a temporal clock, read off the
+  rows' exact stamps, a row of weight 0 in none: `warm_span` for `kmeans`,
+  `hmm` and `bocpd` (held to their 256 MiB warm-up limit as the rows come);
+  `huber_refit_span` for `huber` and `sgd(loss="huber")` and
+  `quantile_refit_span` for `quantile` (their buffers grow with the rows
+  rather than being held at a count's full size, and are held to
+  `max_state_bytes`, which `glm`, `huber`, `quantile` and `sgd` now take as
+  every model with a state the data sizes does: 256 KB a group by default,
+  at most 64 MiB, a warning past half and a refusal at the cap naming the
+  group and the bytes; `glm`'s count is held to it too, its default
+  unchanged); and the cadences `update_every` and `split_merge_every` for
+  `kmeans` and `permute_every` for `corrchange`'s window, which fire every
+  span since their last event as well as at their count. On a clock of one
+  unit a row a start's span `D` is its count `D + 1`, and a cadence's `D`
+  its count `D`, to the bit (`tests/test_rows_and_clock.py`, which also
+  holds a start to the rows Polars' own datetime arithmetic gives on an
+  irregular clock, a duration to its seconds on a number clock, zero-weight
+  rows, chunking and a saved state for every entry). `update_every`,
+  `split_merge_every` and `permute_every` were renamed to their `_rows`
+  names before 1.0 so that the plain names could later take a clock form;
+  they now do, and are no longer refused as old names. No output moves and
+  no state file moves a byte where a spec gives what it gave before; per row
+  `huber` and `sgd` with their default refit are level (arm64 release, best
+  of 7, 20 features: 179.8 against 179.0 ns and 134.1 against 131.6 ns).
+  `marginal`'s `bin_warm_rows` and `bin_refit_rows`, and `corrchange`'s
+  `window_rows` and `monitor_rows`, take no clock form yet.
+
+- **`refit_span` for `glm` and `expectile`: the first rows' refit over a span
+  of the clock** (task 538), beside `refit_rows`' count, so a temporal
+  clock takes `refit_span="1h"` as it takes `half_life="1h"`. A target's
+  rows from its first learned row through the first row at least the span
+  after it are refit once they hold a row per coefficient, the span read off
+  the rows' exact stamps (integer nanoseconds on a temporal clock) and a row
+  of weight 0 no row of it. On a clock of one unit a row a span of `D` is
+  `refit_rows = D + 1`, to the bit; on an irregular clock it is the count
+  Polars' own datetime arithmetic gives (`tests/test_refit_span.py`). How
+  many rows a span holds the data decides, so its buffers are checked as
+  they fill, as `hawkes`' and `expectile`'s clock windows and `garch`'s
+  `start_span` are: a warning past half of the cap, once a group, and an
+  error naming the group and the bytes at the row that would pass it
+  (`expectile`'s and `glm`'s `max_state_bytes`). Refused beside
+  `refit_rows`, and in `expectile` beside a window. Every span of the clock
+  that holds rows now decides its end and checks its cap in one place
+  (`rheon_core`'s `clock_span`), `garch`'s start and the two clock windows
+  included, to the bit. The audit of every span parameter in every kind,
+  diagnostic and option, with the form each takes and why, is
+  `docs/records/SPAN-INVENTORY.md`. No output moves where a spec gives what
+  it gave before, and no state file moves a byte: the new fields are
+  written only when set. Per row, `glm` and `expectile` at 20 features
+  under the default refit run at the same speed (arm64, release, best of
+  7: `glm` 1826 against 1821 ns, `expectile` 1838 against 1821 ns, load
+  6-10).
+
 - **Five more drift detectors for `emit_drift`** (task 508), chosen by
   `drift_kind` in place of Page-Hinkley, each still one flag a slot,
   `drift_<slot>`, and each honouring `drift_action = "reset"`:

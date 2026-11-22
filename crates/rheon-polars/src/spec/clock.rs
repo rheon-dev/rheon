@@ -55,16 +55,27 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
         ],
     ),
     ("kalman", &["coef_half_life", "revert_half_life"]),
-    ("huber", &["solve_every", "huber_scale_half_life"]),
-    ("quantile", &["solve_every"]),
+    (
+        "huber",
+        &["solve_every", "huber_scale_half_life", "huber_refit_span"],
+    ),
+    ("quantile", &["solve_every", "quantile_refit_span"]),
     ("ew_cov", &["pca_every", "window_size", "snapshot_every"]),
     ("holt", &["trend_half_life"]),
-    ("sgd", &["huber_scale_half_life"]),
+    ("sgd", &["huber_scale_half_life", "huber_refit_span"]),
     ("micro", &["prune_every"]),
+    (
+        "kmeans",
+        &["warm_span", "update_every", "split_merge_every"],
+    ),
+    ("hmm", &["warm_span"]),
+    ("bocpd", &["warm_span"]),
+    ("corrchange", &["permute_every"]),
     ("ew_class", &["window_size", "snapshot_every"]),
     ("marginal", &["window_size", "snapshot_every"]),
     ("hawkes", &["window_size", "kernel_half_lives"]),
-    ("expectile", &["window_size"]),
+    ("expectile", &["window_size", "refit_span"]),
+    ("glm", &["refit_span"]),
     ("garch", &["start_span"]),
 ];
 
@@ -378,6 +389,7 @@ impl Spec {
             ModelKind::Huber {
                 solve_every,
                 huber_scale_half_life,
+                huber_refit_span,
                 ..
             } => {
                 put(&mut out, "solve_every", solve_every.as_ref());
@@ -386,12 +398,23 @@ impl Spec {
                     "huber_scale_half_life",
                     huber_scale_half_life.as_ref(),
                 );
+                put(&mut out, "huber_refit_span", huber_refit_span.as_ref());
             }
-            ModelKind::Quantile { solve_every, .. } => {
+            ModelKind::Quantile {
+                solve_every,
+                quantile_refit_span,
+                ..
+            } => {
                 put(&mut out, "solve_every", solve_every.as_ref());
+                put(
+                    &mut out,
+                    "quantile_refit_span",
+                    quantile_refit_span.as_ref(),
+                );
             }
             ModelKind::Sgd {
                 huber_scale_half_life,
+                huber_refit_span,
                 ..
             } => {
                 put(
@@ -399,6 +422,7 @@ impl Spec {
                     "huber_scale_half_life",
                     huber_scale_half_life.as_ref(),
                 );
+                put(&mut out, "huber_refit_span", huber_refit_span.as_ref());
             }
             ModelKind::EwCov {
                 pca_every,
@@ -436,11 +460,35 @@ impl Spec {
                 put(&mut out, "window_size", window_size.as_ref());
                 put_list(&mut out, "kernel_half_lives", kernel_half_lives.as_ref());
             }
-            ModelKind::Expectile { window_size, .. } => {
+            ModelKind::Expectile {
+                window_size,
+                refit_span,
+                ..
+            } => {
                 put(&mut out, "window_size", window_size.as_ref());
+                put(&mut out, "refit_span", refit_span.as_ref());
+            }
+            ModelKind::Glm { refit_span, .. } => {
+                put(&mut out, "refit_span", refit_span.as_ref());
             }
             ModelKind::Micro { prune_every, .. } => {
                 put(&mut out, "prune_every", prune_every.as_ref());
+            }
+            ModelKind::CorrChange { permute_every, .. } => {
+                put(&mut out, "permute_every", permute_every.as_ref());
+            }
+            ModelKind::Hmm { warm_span, .. } => {
+                put(&mut out, "warm_span", warm_span.as_ref());
+            }
+            ModelKind::KMeans {
+                warm_span,
+                update_every,
+                split_merge_every,
+                ..
+            } => {
+                put(&mut out, "warm_span", warm_span.as_ref());
+                put(&mut out, "update_every", update_every.as_ref());
+                put(&mut out, "split_merge_every", split_merge_every.as_ref());
             }
             ModelKind::Garch { start_span, .. } => {
                 put(&mut out, "start_span", start_span.as_ref());
@@ -448,9 +496,12 @@ impl Spec {
             // A number of rows binds to no clock unit
             // ([`DURATION_OR_UNIT_FREE_FIELDS`]).
             ModelKind::Bocpd {
-                hazard: Some(h), ..
-            } if h.is_duration() => {
-                put(&mut out, "hazard", Some(h));
+                hazard, warm_span, ..
+            } => {
+                if let Some(h) = hazard.as_ref().filter(|h| h.is_duration()) {
+                    put(&mut out, "hazard", Some(h));
+                }
+                put(&mut out, "warm_span", warm_span.as_ref());
             }
             _ => {}
         }

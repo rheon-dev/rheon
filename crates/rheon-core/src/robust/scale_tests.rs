@@ -35,6 +35,8 @@ fn base(loss: RobustLoss) -> RobustCfg {
         refit_rows: 0,
         mad_anchor: false,
         min_weight_holds_learning: false,
+        refit_clock: None,
+        max_state_bytes: None,
     }
 }
 
@@ -251,6 +253,8 @@ fn sgd_cfg(loss: crate::SgdLoss, scale: HuberScale) -> crate::SgdCfg {
         min_weight_holds_learning: false,
         target_spread: false,
         mad_anchor: false,
+        refit_clock: None,
+        max_state_bytes: None,
     }
 }
 
