@@ -70,6 +70,11 @@ data constructor.
    `test_semantics_all_models.py`), so every residual-scale, likelihood or
    significance output is read at a zero spread there. The realistic reading
    of those outputs is held in the oracle files, not beside the contract.
+   Now a noisy line stands beside the noiseless one in both: `model_contract.rs`'s
+   `a_noisy_line_meets_the_same_contract` (every regression model, noise of
+   0.2) and `test_semantics_all_models.py`'s `TestANoisyLine` (chunk
+   invariance, a save in the middle, and a positive `sigma` once ready, at a
+   noise of 0.5, with `emit_sigma` on).
 5. **Option-level gaps** (an option held by a reduction or a longhand only,
    or by a degenerate stream), the ones task 550's realistic cases start
    from, are ranked in section 5.
@@ -238,7 +243,8 @@ realistic test is not an oracle:
 5. **`seqtest`'s closed form through scipy**, **`deco`'s estimate**,
    **`corrchange(perm_block=)`**: no library found; a longhand stays.
 6. **A noisy contract line**: the contract probe's rows with noise, beside
-   the noiseless line, so the spread outputs are read at a nonzero value.
+   the noiseless line, so the spread outputs are read at a nonzero value
+   (added, section 6).
 
 ## 6. Cases added
 

@@ -79,10 +79,14 @@ def slot(out, prefix, model):
     return out["m"].struct.field(fields[0]).to_list()
 
 
-def frame(n=40, seed=0, binary=False):
+def frame(n=40, seed=0, binary=False, noise=0.0):
+    """``y0 = 2 x0 - x1`` plus ``noise`` times a standard normal (none by
+    default: the line every sweep above reads at a spread of zero)."""
     rng = np.random.default_rng(seed)
     x0, x1 = rng.standard_normal(n), rng.standard_normal(n)
     y = (rng.random(n) < 0.5).astype(float) if binary else x0 * 2.0 - x1
+    if noise and not binary:
+        y = y + noise * rng.standard_normal(n)
     return pl.DataFrame({"x0": x0, "x1": x1, "y0": y, "t": np.arange(float(n)), "w": np.ones(n)})
 
 
@@ -416,3 +420,56 @@ class TestUniversalInvariants:
                 dtype=float,
             )
             assert np.isfinite(vals).all(), f"{model}: {f.name} produced a non-finite value"
+
+
+@pytest.mark.parametrize(("model", "extra"), SWEEP, ids=IDS)
+class TestANoisyLine:
+    """The sweeps above feed a target that is a line with no noise, so every
+    residual-scale output is read at a spread of 0. The same invariants on
+    ``y = 2 x0 - x1 + 0.5 e``, with the residual scale switched on, where a
+    spread is a number: chunking and a save in the middle change none of
+    it, the groups do not share it, and it is positive once the model is
+    ready."""
+
+    NOISE = 0.5
+
+    def _spec(self, model, extra, **kw):
+        return build(model, extra, emit_sigma=True, **kw)
+
+    def test_chunk_invariance(self, model, extra):
+        df = frame(n=240, seed=13, binary=model in BINARY, noise=self.NOISE)
+        spec = self._spec(model, extra, group=None)
+        one = rp.ModelBank([spec]).fit_predict(df).select("m").unnest("m")
+        bank = rp.ModelBank([spec])
+        many = (
+            pl.concat([bank.fit_predict(df.slice(i, 17)) for i in range(0, df.height, 17)])
+            .select("m")
+            .unnest("m")
+        )
+        keep = [c for c in one.columns if not c.startswith(("coef", "support_coef"))]
+        assert one.select(keep).equals(many.select(keep), null_equal=True)
+
+    def test_save_load_mid_stream(self, model, extra, tmp_path):
+        df = frame(n=240, seed=14, binary=model in BINARY, noise=self.NOISE)
+        spec = self._spec(model, extra)
+        a = rp.ModelBank([spec])
+        a.fit_predict(df.slice(0, 120))
+        p = tmp_path / f"{model}.state"
+        a.save(p)
+        b = rp.ModelBank.load(p, specs=[spec])
+        second = df.slice(120, 120)
+        ra = a.fit_predict(second).select("m").unnest("m")
+        rb = b.fit_predict(second).select("m").unnest("m")
+        assert ra.equals(rb, null_equal=True)
+
+    def test_the_spread_is_a_positive_number_once_ready(self, model, extra):
+        if model in BINARY:
+            pytest.skip("a 0/1 target has no line to put noise on")
+        df = frame(n=240, seed=15, noise=self.NOISE)
+        out = run(model, extra, df, emit_sigma=True).select("m").unnest("m")
+        sigma = [c for c in out.columns if c.startswith("sigma")]
+        assert sigma, f"{model}: emit_sigma emits no sigma field"
+        for c in sigma:
+            tail = out[c].drop_nulls().to_numpy()[-100:]
+            assert len(tail) == 100, f"{model}: {c} is null late in the stream"
+            assert (tail > 0.0).all() and np.isfinite(tail).all(), f"{model}: {c}"

@@ -56,7 +56,26 @@ fn probe_with<M: OnlineModel + Clone>(
     targets: usize,
     n_eff_of: Option<&dyn Fn(&M) -> f64>,
 ) -> Report {
-    probe_checked(m, targets, n_eff_of, true)
+    probe_checked(m, targets, n_eff_of, true, 0.0)
+}
+
+/// The spread of the noise [`probe_noisy`] adds to each target: the line's
+/// slopes are 1 and -0.5 on features of spread about 0.58, so the noise is
+/// about a fifth of the signal's spread, a spread every residual-scale output
+/// reads as a number and not as 0.
+const NOISE: f64 = 0.2;
+
+/// [`probe_with`] on a target that is the same line plus noise of
+/// [`NOISE`] (uniform, from the same generator): every check of the contract
+/// -- the weights, the gap, the round trip, `clear_lags` -- on a stream whose
+/// residuals are not 0. The noiseless line stays beside it: it is the one
+/// whose exact answer the tests of each model hold.
+fn probe_noisy<M: OnlineModel + Clone>(
+    m: M,
+    targets: usize,
+    n_eff_of: Option<&dyn Fn(&M) -> f64>,
+) -> Report {
+    probe_checked(m, targets, n_eff_of, true, NOISE)
 }
 
 /// [`probe_with`] for a model run under a window, whose `n_eff` is the
@@ -69,7 +88,7 @@ fn probe_windowed<M: OnlineModel + Clone>(
     targets: usize,
     n_eff_of: Option<&dyn Fn(&M) -> f64>,
 ) -> Report {
-    probe_checked(m, targets, n_eff_of, false)
+    probe_checked(m, targets, n_eff_of, false, 0.0)
 }
 
 fn probe_checked<M: OnlineModel + Clone>(
@@ -77,6 +96,7 @@ fn probe_checked<M: OnlineModel + Clone>(
     targets: usize,
     n_eff_of: Option<&dyn Fn(&M) -> f64>,
     rule_8_recursion: bool,
+    noise: f64,
 ) -> Report {
     let kind = m.state().model.kind();
     let mut n_eff = vec![];
@@ -86,7 +106,10 @@ fn probe_checked<M: OnlineModel + Clone>(
     let row = |m: &mut M, s: &mut u64, d: f64| -> Step {
         let x: Vec<f64> = (0..K).map(|_| lcg(s)).collect();
         let y: Vec<Option<f64>> = (0..targets)
-            .map(|j| Some(0.5 * (j as f64 + 1.0) + x[0] - 0.5 * x[1]))
+            .map(|j| {
+                let e = if noise == 0.0 { 0.0 } else { noise * lcg(s) };
+                Some(0.5 * (j as f64 + 1.0) + x[0] - 0.5 * x[1] + e)
+            })
             .collect();
         m.step(&x, &y, d, 1.0)
     };
@@ -117,7 +140,14 @@ fn probe_checked<M: OnlineModel + Clone>(
         .map(|_| {
             let x: Vec<f64> = (0..K).map(|_| lcg(&mut s4)).collect();
             let y = (0..targets)
-                .map(|j| Some(0.5 * (j as f64 + 1.0) + x[0] - 0.5 * x[1]))
+                .map(|j| {
+                    let e = if noise == 0.0 {
+                        0.0
+                    } else {
+                        noise * lcg(&mut s4)
+                    };
+                    Some(0.5 * (j as f64 + 1.0) + x[0] - 0.5 * x[1] + e)
+                })
                 .collect();
             (x, y, 1.0)
         })
@@ -623,6 +653,48 @@ fn holt() {
     assert!((r.n_eff[2] - (0.5f64.powf(1.0 / HALFLIFE) + 1.0)).abs() < 1e-12);
     assert!((r.after_gap - (r.before_gap * 0.5f64.powi(10) + 1.0)).abs() < 1e-9);
     assert!(r.roundtrips);
+}
+
+/// The contract on a noisy line (`probe_noisy`): the regression models above
+/// on a target whose residuals are not 0, so a weight, a gap, a round trip or
+/// a state that holds only where every residual vanishes (a scale of 0, a
+/// zero gradient, a gain that never has to move) fails here and not only in
+/// the field.
+#[test]
+fn a_noisy_line_meets_the_same_contract() {
+    let r = probe_noisy(
+        EwRidge::new(ewridge_cfg()).unwrap(),
+        2,
+        Some(&EwRidge::n_eff),
+    );
+    check(&r, "ewridge", 2, 2);
+    let r = probe_noisy(Rls::new(rls_cfg()).unwrap(), 2, Some(&Rls::n_eff));
+    check(&r, "rls", 2, 1);
+    let r = probe_noisy(Lasso::new(lasso_cfg()).unwrap(), 1, Some(&Lasso::n_eff));
+    check(&r, "lasso", 1, 2);
+    for cfg in [kalman_cfg(), kalman_revert_cfg()] {
+        let r = probe_noisy(Kalman::new(cfg).unwrap(), 2, Some(&Kalman::n_eff));
+        check(&r, "kalman", 2, 1);
+    }
+    for cfg in ROBUST_LOSSES
+        .map(robust_cfg)
+        .into_iter()
+        .chain([huber_mad_cfg()])
+    {
+        let r = probe_noisy(Robust::new(cfg).unwrap(), 2, Some(&Robust::n_eff));
+        check(&r, "robust", 2, 1);
+    }
+    let r = probe_noisy(Ftrl::new(ftrl_cfg()).unwrap(), 2, Some(&Ftrl::n_eff));
+    check(&r, "ftrl", 2, 1);
+    for cfg in [sgd_cfg()].into_iter().chain(sgd_huber_cfgs()) {
+        let r = probe_noisy(Sgd::new(cfg).unwrap(), 2, Some(&Sgd::n_eff));
+        check(&r, "sgd", 2, 1);
+    }
+    let r = probe_noisy(Pa::new(pa_cfg()).unwrap(), 2, Some(&Pa::n_eff));
+    check(&r, "pa", 2, 1);
+    let r = probe_noisy(Holt::new(holt_cfg()).unwrap(), 2, Some(&Holt::n_eff));
+    assert!(r.roundtrips && r.n_eff[..3] == [0.0, 1.0, 0.5f64.powf(1.0 / HALFLIFE) + 1.0]);
+    assert!((r.after_gap - (r.before_gap * 0.5f64.powi(10) + 1.0)).abs() < 1e-9);
 }
 
 fn ew_cov_model_cfg() -> EwCovCfg {
