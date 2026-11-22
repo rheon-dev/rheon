@@ -66,6 +66,32 @@ model that only the new build has is listed as an addition and passes.
 
 ### Added
 
+- **`refit_span` for `glm` and `expectile`: the first rows' refit over a span
+  of the clock** (task 538), beside `refit_rows`' count, so a temporal
+  clock takes `refit_span="1h"` as it takes `half_life="1h"`. A target's
+  rows from its first learned row through the first row at least the span
+  after it are refit once they hold a row per coefficient, the span read off
+  the rows' exact stamps (integer nanoseconds on a temporal clock) and a row
+  of weight 0 no row of it. On a clock of one unit a row a span of `D` is
+  `refit_rows = D + 1`, to the bit; on an irregular clock it is the count
+  Polars' own datetime arithmetic gives (`tests/test_refit_span.py`). How
+  many rows a span holds the data decides, so its buffers are checked as
+  they fill, as `hawkes`' and `expectile`'s clock windows and `garch`'s
+  `start_span` are: a warning past half of the cap, once a group, and an
+  error naming the group and the bytes at the row that would pass it
+  (`expectile`'s `max_state_bytes`; `glm`'s 256 KB a group). Refused beside
+  `refit_rows`, and in `expectile` beside a window. Every span of the clock
+  that holds rows now decides its end and checks its cap in one place
+  (`rheon_core`'s `clock_span`), `garch`'s start and the two clock windows
+  included, to the bit. The audit of every span parameter in every kind,
+  diagnostic and option, with the form each takes and why, is
+  `docs/records/SPAN-INVENTORY.md`. No output moves where a spec gives what
+  it gave before, and no state file moves a byte: the new fields are
+  written only when set. Per row, `glm` and `expectile` at 20 features
+  under the default refit run at the same speed (arm64, release, best of
+  7: `glm` 1826 against 1821 ns, `expectile` 1838 against 1821 ns, load
+  6-10).
+
 - **Five more drift detectors for `emit_drift`** (task 508), chosen by
   `drift_kind` in place of Page-Hinkley, each still one flag a slot,
   `drift_<slot>`, and each honouring `drift_action = "reset"`:
