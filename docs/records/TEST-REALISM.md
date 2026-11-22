@@ -314,16 +314,16 @@ Corrections to the parts above:
 
 | item | commit | what changed |
 |---|---|---|
-| `corrchange(perm_block=)` | this part | it has a third-party oracle after all: `scipy.stats.permutation_test` over block numbers (`tests/test_second_opinion_corrchange_blocks.py`; a window of three blocks of ten rows, so 20 splits enumerated exactly, against a model critical value drawn from 4,000 of them: equal to 1e-12 at alpha 0.05, 0.15 and 0.25 and three seeds). The record's "no library" was wrong |
-| `corrchange` golden | this part | the stable spans move from +-0.9 to +-0.5: the monitor statistic over-sizes (a stable span of 100 rows flags 25% of the time at 0.9, 7.5% at 0.5, over 40 seeds; the comment said 5%), and the break is still flagged (38 of 40 seeds at 0.5). The golden stays minimal because the monitor and sequential statistics are being replaced |
-| `deco` golden | this part | pins `u` (Lemma 2.3, eq. 20: stays) at three rows and no longer pins `rho` or `loglik`, which the level's replacement moves |
+| `corrchange(perm_block=)` | `dc2b768` | it has a third-party oracle after all: `scipy.stats.permutation_test` over block numbers (`tests/test_second_opinion_corrchange_blocks.py`; a window of three blocks of ten rows, so 20 splits enumerated exactly, against a model critical value drawn from 4,000 of them: equal to 1e-12 at alpha 0.05, 0.15 and 0.25 and three seeds). The record's "no library" was wrong |
+| `corrchange` golden | `dc2b768` | the stable spans move from +-0.9 to +-0.5: the monitor statistic over-sizes (a stable span of 100 rows flags 25% of the time at 0.9, 7.5% at 0.5, over 40 seeds; the comment said 5%), and the break is still flagged (38 of 40 seeds at 0.5). The golden stays minimal because the monitor and sequential statistics are being replaced |
+| `deco` golden | `dc2b768` | pins `u` (Lemma 2.3, eq. 20: stays) at three rows and no longer pins `rho` or `loglik`, which the level's replacement moves |
 
 No fixed row count as the fix for an early-data problem. Where a test of
 this task guarded early data with a count, it now uses the condition:
 
 | where | was | now |
 |---|---|---|
-| `deco_factor` | the mean of `u` over rows 100 to 149 | the rows whose diag weight has reached 95% of its steady state `1 / (1 - lambda)` |
+| `deco_factor` (`dc2b768`) | the mean of `u` over rows 100 to 149 | the rows whose diag weight has reached 95% of its steady state `1 / (1 - lambda)` |
 | `huber_contaminated` | the mean error over rows 200 on | the rows on which the fit's sampling error, 0.21 over the root of its `n_eff`, is under 0.05 (half the tolerance) |
 | `quantile_skewed`, `expectile_skewed` | the mean error over rows 300 on, of 600 | the rows on which 1.22 (quantile) or 1.56 (expectile) over the root of `n_eff` is under 0.075 or 0.05; the stream is 2,000 rows so that the condition is reached; the first three probes are unchanged |
 
@@ -340,9 +340,9 @@ set, schema 72 unreleased, no layout change, no bump):
 
 | case | commit | the stream |
 |---|---|---|
-| `glm_gamma_draws` | this part | Gamma draws of shape 4 (eight squared normals over 8) at `(2 + 0.8 x0 - 0.4 x1)(1 + j)`, two targets, a refit of 15 rows done by the save at 120 |
-| `holt_trending` | this part | `10 (1 + j) + (0.5 + 0.25 j) t + noise` with `t` the clock, a gap moving the line by its length, 80 rows |
-| `hawkes_excited` | this part | two nodes, an event with probability `0.1 + 0.25 R_j + 0.05 R_other` (at most 0.9), `R` the decayed events (0.6 a row), 120 rows |
+| `glm_gamma_draws` | `dc160ba` | Gamma draws of shape 4 (eight squared normals over 8) at `(2 + 0.8 x0 - 0.4 x1)(1 + j)`, two targets, a refit of 15 rows done by the save at 120 |
+| `holt_trending` | `dc160ba` | `10 (1 + j) + (0.5 + 0.25 j) t + noise` with `t` the clock, a gap moving the line by its length, 80 rows |
+| `hawkes_excited` | `dc160ba` | two nodes, an event with probability `0.1 + 0.25 R_j + 0.05 R_other` (at most 0.9), `R` the decayed events (0.6 a row), 120 rows |
 
 No earlier schema's directory gets a copy: a kept set is the files that
 existed when its schema was current (the `expectile`, `garch`, `glm_refit` and
@@ -360,11 +360,11 @@ is an off):
 
 | model | commit | the stream and what is asserted |
 |---|---|---|
-| `ewridge` (conditioning) | this part | two features at a correlation of 0.995, `y = x0 + x1`: with a ridge of 0.05 the slopes split 0.97 / 1.02, with one of 1e-9 0.73 / 1.31; both sum to 2 within 0.15 |
-| `lasso` (selection) | this part | six independent features, two in the target: at a penalty of 0.25 and of 0.05 exactly those two are active (shrunk by 0.25 at the first), at 0 all six |
-| `kalman` (drift) | this part | one slope drifting 1 to 4 over 400 rows: a random walk on it ends at 3.69 (pinned filter 2.62) and its squared prediction error is a fifth of the pinned filter's, over the rows both predict (the model's own readiness, no row count) |
-| `ftrl` (sparse regime) | this part | 30 binary indicators, three active a row, three relevant: with an L1 of 30 the three weights have the right signs and all 27 others are exactly 0; with an L1 of 0 none is |
-| `sgd` (later rows) | this part | 4,000 rows: a decaying rate (`0.1 / (1 + n)^0.5`) ends within 0.05 of the truth and its squared error over the last quarter is 1/40 of a constant rate's |
+| `ewridge` (conditioning) | `5c23e2a` | two features at a correlation of 0.995, `y = x0 + x1`: with a ridge of 0.05 the slopes split 0.97 / 1.02, with one of 1e-9 0.73 / 1.31; both sum to 2 within 0.15 |
+| `lasso` (selection) | `5c23e2a` | six independent features, two in the target: at a penalty of 0.25 and of 0.05 exactly those two are active (shrunk by 0.25 at the first), at 0 all six |
+| `kalman` (drift) | `5c23e2a` | one slope drifting 1 to 4 over 400 rows: a random walk on it ends at 3.69 (pinned filter 2.62) and its squared prediction error is a fifth of the pinned filter's, over the rows both predict (the model's own readiness, no row count) |
+| `ftrl` (sparse regime) | `5c23e2a` | 30 binary indicators, three active a row, three relevant: with an L1 of 30 the three weights have the right signs and all 27 others are exactly 0; with an L1 of 0 none is |
+| `sgd` (later rows) | `5c23e2a` | 4,000 rows: a decaying rate (`0.1 / (1 + n)^0.5`) ends within 0.05 of the truth and its squared error over the last quarter is 1/40 of a constant rate's |
 
 `ewridge`'s `ridge` is in the mean form (the features' variance), so a ridge
 of 20 on unit-variance features removes the fit; the first try used it.
