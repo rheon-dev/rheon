@@ -2883,7 +2883,9 @@ mod tests {
     fn the_small_share_is_chosen_alike_by_the_lanes_and_the_loop() {
         let same = |a: f64, b: f64| a.to_bits() == b.to_bits();
         let mut checked = 0usize;
-        let mut told_apart = 0usize;
+        // Per share: the cases in which the two forms of the deviation part
+        // in a bit of `z`, at a lane and at a feature past the last one.
+        let mut told_apart = std::collections::BTreeMap::<u64, (usize, usize)>::new();
         // (history weight, row weight admitted): the share is
         // `lam·W / (lam·W + w)`, `lam` 1: 0, 1e-6, 1/1024 exactly, a hair
         // above it, and ordinary.
@@ -2940,16 +2942,38 @@ mod tests {
                         checked += 1;
                         // Where the two forms of the deviation differ in a
                         // bit, which the lanes could mistake for each other.
-                        if off == 1 && hist > 0.0 {
+                        if off == 1 {
                             let d = crate::comp::dev(x[i], hi[off + i], lo[off + i]);
-                            told_apart += usize::from(!same(a * d / s2[i], z2[i]));
+                            let b = admit / (hist + admit);
+                            let (mut h2, mut l2) = (hi[off + i], lo[off + i]);
+                            crate::comp::add(&mut h2, &mut l2, b * d);
+                            let pair = crate::comp::dev(x[i], h2, l2);
+                            if !same(a * d, pair) {
+                                let e = told_apart.entry(a.to_bits()).or_default();
+                                if i >= k - k % 4 {
+                                    e.1 += 1;
+                                } else {
+                                    e.0 += 1;
+                                }
+                            }
                         }
                     }
                 }
             }
         }
         assert_eq!(checked, 5 * 2 * (12 + 13 + 15 + 16 + 19 + 24));
-        assert!(told_apart > 0, "no case told the two forms apart");
+        // Each share that decides the form is one the forms part at, in a lane
+        // and past the last, so that the lanes' choice is held at each.
+        for share in [0.0f64, 1.0 / 1024.0, 1.0 / (1.0 + 1e6)] {
+            let (lane, tail) = told_apart
+                .get(&share.to_bits())
+                .copied()
+                .unwrap_or_default();
+            assert!(
+                lane > 0 && tail > 0,
+                "share {share:e}: {lane} lanes, {tail} tails"
+            );
+        }
     }
 
     /// On an x86-64 CPU with AVX2 the lanes run from `LANES_FROM` features;

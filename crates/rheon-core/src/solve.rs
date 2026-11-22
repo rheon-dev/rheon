@@ -2793,7 +2793,8 @@ mod tests {
         let a = [4.0, 1.0, 0.5, 1.0, 3.0, 0.25, 0.5, 0.25, 2.0];
         let f0 = SpdFactor::of(&a, k).unwrap();
         let mut work = FactorWork::default();
-        for inf in [f64::INFINITY] {
+        {
+            let inf = f64::INFINITY;
             let mut f = f0.clone();
             assert!(!work.refactor_shifted(&mut f, &[0.0, inf, 0.0]));
             assert_eq!(f, f0);

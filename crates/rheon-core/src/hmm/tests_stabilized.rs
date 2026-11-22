@@ -1082,8 +1082,10 @@ fn a_row_that_leaves_a_state_no_factor_is_counted() {
     m.factor_states[0] = rmp_serde::from_slice(&bytes).unwrap();
     let before = m.solve_failures;
     let x: Vec<f64> = m.factor_states[0].means().iter().map(|v| v + 1.0).collect();
-    let mut work = RowWork::default();
-    work.post = vec![0.5, 0.5];
+    let mut work = RowWork {
+        post: vec![0.5, 0.5],
+        ..Default::default()
+    };
     m.learn_stabilized(&x, 1.0, 1.0, &mut work);
     assert_eq!(m.solve_failures, before + 1);
     // That state is started again at the prior it holds, its share of the

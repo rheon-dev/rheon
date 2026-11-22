@@ -781,8 +781,8 @@ mod tests {
         let mut kept = base.clone();
         assert!(kept.update_keeping(&x, lam, w, floor));
         let (a, b) = (floor / (floor + w), w / (floor + w));
-        for i in 0..2 {
-            let d = x[i] - base.mean(i);
+        for (i, xi) in x.iter().enumerate() {
+            let d = xi - base.mean(i);
             let want_mean = base.mean(i) + b * d;
             let want_c = a * base.var(i) + a * b * d * d;
             assert!((kept.mean(i) - want_mean).abs() < 1e-14, "mean {i}");
