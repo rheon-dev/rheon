@@ -100,7 +100,7 @@ duration) and, where noted, a row-count sibling.
 | `rcov` | `bandwidth`, `jitter`, `block_rows`, `max_bandwidth`, `preavg_rows`, `noise_stride`, `iv_stride` | rows | a ring sized from `block_rows` | rows: the realized kernel's and pre-averaging's lags and windows are counts of returns, in tick time by their definition; the block itself is closed on the clock, by `group_close` |
 | `hmm` | `warm_rows` / **`warm_span`** | rows / number, duration | the seeding rows | **both, from part 2**, held to `kmeans`' 256 MiB (the count has no limit of its own: a 537 point) |
 | | `transition`, `transition_prior`, `prior_rows` | per row; a pseudo-count | no | rows: the transition matrix is per observation (a continuous-time chain needs a generator, which no option offers); `prior_rows` is a weight, not a span |
-| `corr_change` | `window_rows`, `monitor_rows` | rows | a ring of rows | **open**: a clock window (`window_size`), its rows checked as they come; Wied's and Dette's statistics are defined over the rows of a span, so the clock form is the same test over a data-sized count |
+| `corr_change` | `window_rows` / **`window_size`**, `monitor_rows` / **`monitor_span`** | rows / number, duration | a ring of rows | **both, from task 553**: each span, history, period and pair of windows is tested at the rows it holds, with no least count, checked against `max_state_bytes` as they come (the reasons below) |
 | | `permute_every_rows` / **`permute_every`** | rows / number, duration | no | **both, from part 2** (window kind) |
 | | `bandwidth`, `perm_block`, `n_perm` | rows; a count | no | rows: Bartlett lags and a block bootstrap's block are counts of observations |
 | `bocpd` | `hazard_rows` / **`hazard`** | rows (any clock) / number, duration | no | **both, from task 547**: `hazard_rows` the per-row hazard `1/hazard_rows` after each row (Adams and MacKay's, the default); `hazard` a `Span` like every other, the step's chance `1 − exp(−dt/τ)` before the row on every clock, rows without one. A number `hazard` read as rows on every clock before 547 |
@@ -187,15 +187,29 @@ duration) and, where noted, a row-count sibling.
     needs a cap and a reservation that agree (256 MiB a group would spend
     the default `refit_budget` of 320 MiB on one group); that choice is
     the coordinator's before it is built.
-  - `corrchange`'s `window_rows` and `monitor_rows`: the statistics are
-    defined over a span's row count `T` (the Bartlett bandwidth `⌊ln T⌋`,
-    Wied and Galeano's simulated critical value for a history of `m` rows
-    and a monitoring period, the permutation null over two windows of
-    equal rows). A clock span gives each span its own `T`, so the sequential
-    kind's critical value would be solved again per cycle (seconds each at
-    `boundary_gamma` near its bound), and the window kind's two windows
-    would differ in size. Whether to build a clock form, and with which of
-    those, is a design question, not a missing parameter.
+  - `corrchange`'s `window_rows` and `monitor_rows`: built by task 553. The
+    three reasons recorded here were checked by the review of 2026-11-22
+    (PLAN 553) and were not
+    obstacles. (1) The Bartlett bandwidth `⌊ln T⌋` is read from the rows a
+    span or history holds, one `ln` a span. (2) The sequential critical
+    value is not solved again per cycle: the solve is the boundary's
+    quantile, keyed on `alpha` and `γ` and cached for the process, and a
+    cycle's `m` and `K` enter in closed form, one `powf` a cycle (measured:
+    3.0 s for the first value at `γ = 0.49`, then under 1.5 ms for each
+    further ratio, equal to the bit to the closed form). (3) A permutation
+    test needs no equal windows: on exchangeable rows every assignment of
+    the `n₁ + n₂` pooled rows to windows of `n₁` and `n₂` is equally likely.
+    What the clock does need: the window kind's held value rescaled by
+    `√((1/n₁ + 1/n₂)/(1/n₁⁰ + 1/n₂⁰))` to each report's counts (held as
+    drawn while the rows come at half the rate it is too small by `√2`, 5%
+    turning into 17%), and a sequential period planned as `K = ⌊m·
+    monitor_span/window_size⌋` rows and ended at the first of those and its
+    own span, so its size holds however the rows arrive. No floor on the
+    rows: the statistics task 553 put in place are valid at every count
+    (the monitor's CUSUM cannot flag a span too short to carry a verdict,
+    by its own bound; Fisher's `z` weighs each side by its information `n −
+    3`). A clock window reads both windows whole, `p²` times its rows a
+    report, where `window_rows` merges block summaries.
 
 ## Open, for the coordinator
 
@@ -208,8 +222,8 @@ duration) and, where noted, a row-count sibling.
    a CHANGELOG `Moves:` line.
 2. **What remains** (part 2's "Not built, and why"): `marginal`'s
    `bin_warm_rows` and `bin_refit_rows` (a cap and a refit reservation that
-   agree), and `corrchange`'s `window_rows` and `monitor_rows` (statistics
-   defined over a span's row count). The lags (`ew_cov`, `marginal`, the
+   agree). `corrchange`'s `window_rows` and `monitor_rows` were built by task
+   553 (the reasons above). The lags (`ew_cov`, `marginal`, the
    diagnostics' and `horizon_rows`) are task 536's exact clock lags.
 3. **Settled (the coordinator, 2026-11-22):** `glm`, `huber`, `quantile`
    and `sgd` take `max_state_bytes` under 537's rule (256 KB a group by

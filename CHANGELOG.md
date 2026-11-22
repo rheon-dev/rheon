@@ -31,6 +31,50 @@ model that only the new build has is listed as an addition and passes.
 
 ### Changed
 
+- **`corrchange`'s monitor and sequential tests hold their level at every
+  span length and correlation** (PLAN 553). Both papers' statistics compare
+  a correlation of a span's or a period's first few rows with a reference,
+  and a correlation of two rows is `±1` whatever the data: Wied, Krämer and
+  Dehling's monitor flagged 26% of stable spans of 100 rows at a
+  correlation of 0.9 and 41% of spans of 8 rows at 0, and Wied and
+  Galeano's detector 23% to 33% of stable cycles at `boundary_gamma = 0.45`
+  and a correlation of 0.6, at every history up to 1,000 rows, each at a
+  nominal 0.05. (1) `kind="monitor"` is the linear form of the same test,
+  the CUSUM `max_j |Σ_{t≤j} ξ_t| / (√T·D̂)` of the delta-method series `ξ`
+  their proof reduces the statistic to, against the Kolmogorov quantile
+  less `0.5826/√T` (a maximum over `T` rows, where the quantile is of a
+  supremum): measured at 0.006 to 0.046 of stable spans in every cell of 8
+  to 1,000 rows, Gaussian, `t_5`, GARCH and both scales doubling, and power
+  0.42 / 0.83 for a jump from 0.5 to 0.7 at 200 / 500 rows. The same CUSUM
+  of `x̃² − ỹ²` is read beside it: where the two columns' scale ratio
+  moved, which takes `ξ` off its null law (0.93 of spans of 1,000 rows
+  flagged at 0.9 with one scale doubling, nothing else moving), the flag
+  is withheld, null, and `withheld_reason` names it `scale_ratio_moved`, a
+  new reason, last in precedence. (2) `kind="sequential"` compares the
+  monitored rows' correlation with the history's on Fisher's scale, each
+  at its own variance: `((k − 3)/√(m − 3))·|atanh ρ̂_k − atanh ρ̂_h|·(1 −
+  ρ̂_h²)/D̂` against Wied and Galeano's boundary at `b = (k − 3)/(m − 3)`,
+  and their critical value at the period's information `(K − 3)/(m − 3)`
+  (unchanged where `monitor_rows = window_rows`): 0.047 to 0.083 of stable
+  cycles at every `boundary_gamma`, histories of 50 to 1,000 rows, Gaussian
+  and GARCH; heavy tails at a short history are left, 0.121 at 50 rows of
+  `t_5`. The first three monitored rows report nothing, as the first did;
+  `monitor_rows` is at least 4 between pairs (2 under `scalar`), since a
+  shorter period could report nothing. (3) No least count of rows is
+  added: a span or history too short for a verdict is tested and cannot
+  flag, by the statistic's own bound. Every number is held against its
+  third-party pieces: statsmodels' `breaks_cusumolsresid` and
+  `S_hac_simple`, numpy's `arctanh` and the information scipy's `pearsonr`
+  puts on Fisher's `z`, and scipy's exact `permutation_test` for the window
+  kind's `perm_block`. A state saved by an earlier build loads as it was
+  and goes on under the new statistics; what it keeps of the old ones is
+  where they flagged (the count since the last flag, and a sequential
+  cycle's start). The new reason is a new category of every model's
+  `withheld_reason` Enum, every value as it was. Moves: `corrchange.stat`,
+  `corrchange.crit`, `corrchange.flag`, `corrchange.since_flag`,
+  `corrchange.since_change`, `corrchange.withheld_reason`,
+  `seqtest.withheld_reason`.
+
 - **`bocpd` takes its hazard in rows or on the clock** (PLAN 547).
   `hazard_rows` is the expected rows between changepoints, `H =
   1/hazard_rows` the chance of a break after each row of positive weight on
@@ -90,6 +134,20 @@ model that only the new build has is listed as an addition and passes.
   of Polars never meets the user's. `docs/VALIDATION.md` is regenerated on it.
 
 ### Added
+
+- **`corrchange` on the clock: `window_size` and `monitor_span`** (PLAN
+  553), in place of `window_rows` and `monitor_rows`, a number of the
+  clock's units or a duration. A `"monitor"` span and a `"sequential"`
+  history run from their first row through the first at least
+  `window_size` after it (on a clock of one unit a row, `window_size = n`
+  is `window_rows = n + 1` to the bit); a period ends at the first of
+  `monitor_span` and `⌊m·monitor_span/window_size⌋` rows, its critical
+  value read at its own `m`; `"window"`'s two windows are `(t − 2D, t − D]`
+  and `(t − D, t]`, its held permutation value rescaled to each report's
+  counts by `√((1/n₁ + 1/n₂)/(1/n₁⁰ + 1/n₂⁰))`. Each is tested at the rows
+  it holds, checked against `max_state_bytes` (256 KB by default) as they
+  come. A clock window reads both windows whole, `p²` times its rows a
+  report.
 
 - **`rp.stream.merge`: streams that each run in clock order, merged into one
   stream in clock order** (PLAN 541). It takes any number of frames or
@@ -892,6 +950,19 @@ model that only the new build has is listed as an addition and passes.
   416 specs, against 1,296 of 74. Against 2.0.0 every field is identical.
 
 ### Performance
+
+- **`corrchange(kind="sequential")` costs one `atanh` a pair a row more**
+  (PLAN 553): the Fisher-`z` detector takes `atanh` of each pair's
+  monitored correlation, from the `libm` crate so its bits are the same on
+  every platform. Measured on arm64 (release, best of 7, 60,000 rows, a
+  critical value no row reaches so both builds monitor the same rows, load
+  5-8): one pair 87 to 99 ns a row, six pairs 121 to 150 ns. With the
+  detector's own critical value the cycles differ (the old one flagged
+  stable cycles in their first rows and spent more rows in history), 85 to
+  111 and 119 to 160 ns. `kind="monitor"` is level (one pair 34 against 34
+  ns, six pairs over spans of 2,500 rows 94 against 97 ns): the CUSUM forms
+  no prefix correlations, where the check on the scale ratio adds one
+  series a pair. `kind="window"` is unchanged.
 
 - **A state loads faster in the envelope, and its size moves by a few
   bytes** (PLAN 542). A load reads the file's kind and version from its

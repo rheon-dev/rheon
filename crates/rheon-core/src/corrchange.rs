@@ -3,50 +3,74 @@
 //!
 //! Two tests, because there are two questions.
 //!
-//! # `monitor`: the constancy test of Wied, Krämer & Dehling (2012)
+//! # `monitor`: the constancy test of Wied, Krämer & Dehling (2012), linear
 //!
 //! A **closed-sample** fluctuation test, run span by span. Over a span of
-//! `T` rows, per pair:
+//! `T` rows, per pair (docs/PLAN.md task 553, after the review of
+//! 2026-11-22):
 //!
 //! ```text
-//! Q = max_{2≤j≤T} (j/√T)·|ρ̂ⱼ − ρ̂_T| / D̂
+//! ξₜ   = x̃ₜỹₜ − (ρ̂/2)(x̃ₜ² + ỹₜ²)
+//! Q    = max_{1≤j≤T} |Σ_{t≤j} ξₜ| / (√T·D̂)
+//! crit = q(1 − α) − 0.5826/√T
 //! ```
 //!
-//! `ρ̂ⱼ` is the sample correlation of the span's first `j` rows and `D̂` is
-//! the delta-method long-run standard deviation of `ρ̂`: the five raw
-//! moments `Uₜ = (x², y², x, y, xy)` centred at their span means, their
-//! Bartlett long-run covariance `Σ̂` at bandwidth `γ_T = ⌊ln T⌋`, mapped to
-//! `(σ_x², σ_y², σ_xy)` by `D₂` and to `ρ` by `D₃`, so `D̂² = D₃D₂Σ̂D₂'D₃'`.
-//! It is computed on the span centred at its means and scaled by its
-//! standard deviations, which leaves `ρ̂` and `D̂` where they were (the
-//! shifted moments are an affine image of the raw ones, and the Jacobians
-//! cancel) and puts the arithmetic at the spread's scale rather than the
-//! level's: there `m_x = m_y = 0` and both variances are 1, so `D₃D₂ =
-//! (−ρ̂/2, −ρ̂/2, 0, 0, 1)` and `D̂²` is the Bartlett long-run variance of
-//! the one series `ξₜ = x̃ₜỹₜ − (ρ̂/2)(x̃ₜ² + ỹₜ²)`. Formed from the raw
-//! moments, `σ_x² = E[x²] − E[x]²` lost the level's digits: 1.2e-5 of `D̂`
-//! at a level of 1e5, and NaN at 1e8 (docs/PLAN.md task 103).
+//! `x̃`, `ỹ` are the span's rows centred at its means and scaled by its
+//! standard deviations, `ρ̂` their correlation, and `D̂` the delta-method
+//! long-run standard deviation of `ρ̂`: the five raw moments `Uₜ = (x², y²,
+//! x, y, xy)` centred at their span means, their Bartlett long-run
+//! covariance `Σ̂` at bandwidth `γ_T = ⌊ln T⌋`, mapped to `(σ_x², σ_y², σ_xy)`
+//! by `D₂` and to `ρ` by `D₃`, so `D̂² = D₃D₂Σ̂D₂'D₃'`. On the standardised
+//! span `m_x = m_y = 0` and both variances are 1, so `D₃D₂ = (−ρ̂/2, −ρ̂/2,
+//! 0, 0, 1)` and `D̂²` is the Bartlett long-run variance of the one series
+//! `ξ`, exactly. Formed from the raw moments, `σ_x² = E[x²] − E[x]²` lost the
+//! level's digits: 1.2e-5 of `D̂` at a level of 1e5, and NaN at 1e8
+//! (docs/PLAN.md task 103).
+//!
+//! WKD's statistic is `max_{2≤j≤T} (j/√T)·|ρ̂ⱼ − ρ̂_T| / D̂`; their proof
+//! reduces `j(ρ̂ⱼ − ρ̂_T)` to `Σ_{t≤j} ξₜ` plus a delta-method remainder, and
+//! the limit `sup|B|` is the law of the sum. The remainder over-rejected:
+//! `ρ̂ⱼ` of a few rows is `±1` at two rows whatever the data, so at `ρ =
+//! 0.9` and `T = 100` a quarter of stable spans flagged, most on their first
+//! rows. The sum has no remainder, so its level holds at every `T` and `ρ`
+//! (0.008 to 0.049 measured, every cell). `crit` is the Kolmogorov
+//! quantile less `GRID_SHIFT/√T`, the shift between a bridge's maximum over
+//! `T` points and its supremum.
 //!
 //! The kernel is WKD's: `D̂₁ = ΣₜΣᵤ k((t−u)/γ_T)VₜVᵤ'` with `k(x) = 1 − |x|`
 //! (their Appendix A.1), so lag `l` is weighted `1 − l/γ` and lag `γ` not at
 //! all. Until docs/PLAN.md task 114 (the user's decision, 2026-09-28) it
-//! was Newey–West's `1 − l/(γ+1)` over lags `0..=γ`; measured at WKD's Table
-//! 1 and 2 settings, the change moved the size by at most 0.0008 and the
-//! power by 0.003. At `bandwidth = 1` only lag 0 is left.
+//! was Newey–West's `1 − l/(γ+1)` over lags `0..=γ`. At `bandwidth = 1` only
+//! lag 0 is left, and `Q` is statsmodels' `breaks_cusumolsresid(ξ)`.
 //!
-//! Under the null `Q →_d sup|B|`, a Brownian bridge, whose quantiles are
-//! the Kolmogorov distribution -- computed from the series here rather than
-//! pinned, so a test can check it reproduces 1.3581 at 5 %.
+//! The one condition the sum does not remove: with the correlation constant
+//! and the columns' scales at `r_x`, `r_y` times their span values, `E[ξ] =
+//! −(ρ/2)(r_x − r_y)²`. So the same CUSUM of `x̃² − ỹ²`, which has the same
+//! limit while the scale ratio holds, is read beside it, and a pair whose
+//! ratio CUSUM passes `crit` withholds its flag ([`CorrChange::monitor_pair`]).
 //!
-//! The paper's own form is *sequential*, with a boundary function, in Wied
-//! & Galeano (2013), read from their SFB 823 preprint (Discussion Paper
-//! 12/2012) on 2026-09-28, docs/PLAN.md task 114: the detector
-//! `V_k = D̂·(k/√m)·(ρ̂^{m+k}_{m+1} − ρ̂^m_1)` against `c·w(k/m)`, `w(b) =
-//! (1 + b)(b/(1 + b))^γ`, with `D̂` from the `m` historical rows and `c`
-//! simulated. What ships is the closed test run over consecutive spans of
-//! `horizon` rows. The cost is a delay of at most `horizon` rows and the
-//! benefit is a null with published tables -- which is the whole point of
-//! the exercise.
+//! # `sequential`: Wied & Galeano (2013), on Fisher's scale
+//!
+//! The paper's own form of the monitor, with a boundary function, read from
+//! their SFB 823 preprint (Discussion Paper 12/2012) on 2026-09-28,
+//! docs/PLAN.md task 114: a history of `m` rows taken as stable, then each
+//! monitored row tested against it, against `c·w(b)`, `w(b) = (1 + b)(b/(1 +
+//! b))^γ`, `c` solved (`crate::boundary`). The detector compares the
+//! monitored rows' correlation with the history's on Fisher's scale, each at
+//! its own finite-sample variance (task 553): `V_k = ((k − 3)/√(m − 3))·
+//! |atanh ρ̂_k − atanh ρ̂_h|·(1 − ρ̂_h²)/σ̂` at `b = (k − 3)/(m − 3)`, whose
+//! variance is `b + b²` exactly ([`CorrChange::sequential_stat`]).
+//!
+//! # On the clock
+//!
+//! `span_clock` (`window_size`) puts each kind's span on the clock: a
+//! `monitor` span and a `sequential` history from their first row through
+//! the first at least `window_size` after it ([`crate::clock_span`]); a
+//! period through `monitor_clock` or `⌊m·monitor_span/window_size⌋` rows,
+//! the first of the two; the two windows `(t − 2D, t − D]` and `(t − D, t]`,
+//! the held permutation value rescaled to each report's `(n₁, n₂)`. Each is
+//! tested at the rows it holds, with no least count; their bytes are held
+//! to `max_state_bytes` as they come.
 //!
 //! # `window`: two adjacent windows
 //!
@@ -4072,9 +4096,11 @@ mod tests {
     /// is 5000 replications of i.i.d. bivariate innovations at the 5 %
     /// level and reads `.040 / .035 / .041` at `T = 500` for `ρ = −0.5 / 0
     /// / 0.5`. This runs fewer draws and a Gaussian pair, so the band is
-    /// the binomial one around those numbers; **`|ρ| ≤ 0.5` only**, because
-    /// the test over-rejects badly at `|ρ| = 0.9` for `T ≤ 500` (`.142` in
-    /// their own table) and that is the paper's finding, not a bug here.
+    /// the binomial one around those numbers. Their statistic over-rejected
+    /// at `|ρ| = 0.9` (`.142` in their own table at `T = 200`, 0.064 at
+    /// 500, 0.26 measured at 100); the linear form here does not, which
+    /// `tests/test_corrchange.py`'s extended grid holds at `ρ` of 0 and 0.9
+    /// from 8 rows to 1,000 (docs/PLAN.md task 553).
     #[test]
     #[ignore = "extended: a paper's simulation (2.0 s)"]
     fn the_size_is_the_papers() {
@@ -4108,9 +4134,12 @@ mod tests {
     }
 
     /// Power against their Table 2: a `0.5 → 0.7` break at `T/2` rejects
-    /// `.587` of the time at `T = 500` and `.830` at `T = 1000`. The break
-    /// is what the test exists to find, so the assertion is one-sided --
-    /// power at least the paper's, less the sampling band.
+    /// `.587` of the time at `T = 500` and `.830` at `T = 1000`, figures
+    /// that are size-adjusted (each against its own null's 95% point) where
+    /// this is the raw rate at the model's critical value. The break is what
+    /// the test exists to find, so the assertion is one-sided -- power at
+    /// least the paper's, less the sampling band -- and passes for the right
+    /// reason: on Gaussian pairs the raw rate is well above their figure.
     #[test]
     #[ignore = "extended: a paper's simulation (2.1 s)"]
     fn the_power_is_at_least_the_papers() {

@@ -3540,7 +3540,7 @@ Each kind answers its own question:
 | `kind` | the question | reports | against | a change is found |
 |---|---|---|---|---|
 | `"monitor"` | was the correlation constant over a span? | on a span's last row | the span's own correlation | at the span's end, up to `window_rows` rows late, and reliably only where it falls well inside a span |
-| `"sequential"` | has it left the level a stable history set? | on each row tested against the history, from the second on | a history of `window_rows` rows | as soon as it crosses a boundary |
+| `"sequential"` | has it left the level a stable history set? | on each row tested against the history, from the fourth on | a history of `window_rows` rows | as soon as it crosses a boundary |
 | `"window"` | how big is the change? | on every row once both windows are full, `2·window_rows` rows in | the window before | as soon as the two windows differ |
 
 Under `"monitor"` and `"sequential"`, the statistic is the largest over the
@@ -3548,28 +3548,50 @@ pairs, and the level `alpha` (0.05 by default) is spread over the pairs as
 `alpha / npairs` unless `alpha_adjust="none"`.
 
 `kind="monitor"` is the closed-sample constancy test of Wied, Krämer and
-Dehling (2012). With `m = window_rows`, `ρ̂_j` the correlation of the span's
-first `j` rows, and `D̂` the delta-method long-run standard deviation of
-`ρ̂`, the last row of a span reports, per pair:
+Dehling (2012) in its linear form. With `T = window_rows`, `x̃`, `ỹ` the
+span's rows centered at its means and scaled by its standard deviations,
+`ρ̂` their correlation, and `D̂` the Bartlett long-run standard deviation of
+`ξ`, the delta-method deviation of `ρ̂`, the last row of a span reports, per
+pair:
 
 ```
-Q = max_{2≤j≤m} (j/√m)·|ρ̂_j − ρ̂_m| / D̂
+ξ_t  = x̃_t ỹ_t − (ρ̂/2)(x̃_t² + ỹ_t²)
+Q    = max_{1≤j≤T} |Σ_{t≤j} ξ_t| / (√T·D̂)
+crit = q(1 − α) − 0.5826/√T                q the Kolmogorov quantile, 1.3581 at 5%
 ```
+
+The paper's own statistic, `max_j (j/√T)·|ρ̂_j − ρ̂_T| / D̂`, compares the
+correlation of the span's first few rows, `±1` at two rows whatever the data,
+with the span's: it flagged 26% of stable spans of 100 rows at a correlation
+of 0.9. The partial sums of `ξ`, to which their proof reduces it, form no
+such correlation and have the same limit. A pair flags where the same CUSUM
+of `x̃² − ỹ²`, which moves only when the two columns' scale ratio moves, does
+not pass `crit`; where it does, the flag is withheld, named
+`scale_ratio_moved`.
 
 `kind="sequential"` is the monitoring procedure of Wied and Galeano (2013).
 A cycle is `window_rows` rows of history, taken as stable, then up to
 `monitor_rows` rows, each tested against the history as it arrives. A flag,
 or the cycle's last monitored row, ends the cycle, and the row after it
 starts a new history. From the history it reads each pair's correlation
-`ρ̂_h` and its `D̂`. The `k`-th monitored row then reports
+`ρ̂_h` and its `D̂`. The `k`-th monitored row then reports, on Fisher's scale,
+each side at its own finite-sample variance
 
 ```
-V_k  = (k/√m)·(ρ̂_k − ρ̂_h) / D̂           m = window_rows, ρ̂_k over the k monitored rows
-stat = max over pairs of |V_k| / w(k/m)
+V_k  = ((k−3)/√(m−3))·|atanh ρ̂_k − atanh ρ̂_h|·(1 − ρ̂_h²) / D̂     m = window_rows
+stat = max over pairs of V_k / w((k−3)/(m−3))
 w(b) = (1 + b)·(b/(1 + b))^γ               γ = boundary_gamma, 0 ≤ γ ≤ 0.49
 ```
 
-and flags where `stat` passes `crit`.
+and flags where `stat` passes `crit`. The paper's own detector, `(k/√m)·|ρ̂_k
+− ρ̂_h| / D̂` from the second row, flagged a quarter to a third of the
+cycles in their first rows at `γ = 0.45` with nothing changed; this one
+holds 0.05 to 0.07 on Gaussian pairs at every `γ`.
+
+Every kind takes its span on the clock too, as `window_size` in place of
+`window_rows` (and `monitor_span` in place of `monitor_rows`): each span,
+history or pair of windows is then tested at the rows it holds, the window
+kind's held critical value rescaled to each report's two windows.
 
 `kind="window"` reports `‖vech(R_pre − R_post)‖₁` (under `norm="linf"`, its
 largest absolute entry instead) over two adjacent windows of `window_rows` rows each. `R_pre` and `R_post` are the windows'
@@ -3612,11 +3634,11 @@ for r in out.with_row_index("row").filter(pl.col("flag")).iter_rows(named=True):
 ```
 
 ```text
-flag at row 2285: stat 1.84 past crit 1.83
+flag at row 2284: stat 1.83 past crit 1.83
 ```
 
 The break falls in the second cycle's monitored rows, which start at row
-2,000, and the flag comes 85 rows after it. No row of the first cycle, or of
+2,000, and the flag comes 84 rows after it. No row of the first cycle, or of
 the second cycle before the break, is flagged.
 
 #### See also
@@ -3661,16 +3683,17 @@ whatever the window. Each value is held for `permute_every_rows` reports, so
 a report is compared with draws from windows up to
 `permute_every_rows − 1` rows older than its own.
 
-**The monitor's size and power are close to Wied, Krämer and Dehling's
-tables,** on the `t_5` design of their own paper ([Is the monitor the size
+**The monitor's size is at or under the nominal 5% at every span length and
+correlation,** where the paper's statistic was not ([Is the monitor the size
 its paper says?](REGIMES.md#2-is-the-monitor-the-size-its-paper-says) and
 [And is it the power its paper says?](REGIMES.md#3-and-is-it-the-power-its-paper-says)). The sequential
-detector's size is within two standard errors of Wied and Galeano's Table 2
-in every cell ([The sequential detector against its
+detector's size on Wied and Galeano's own design is 0.05 to 0.07 at every
+`boundary_gamma`, where their Table 2 reads up to 0.174 at 0.45 ([The
+sequential detector against its
 paper](REGIMES.md#9-the-sequential-detector-against-its-paper)). Its critical
-values are within 0.03 of their Table 1. Over 200 streams of independent
-rows, the window kind flagged 4.8% to 5.2% of non-overlapping spans at
-`alpha` 0.05, as the docstring's Notes give under *The window test*.
+values are within 0.03 of their Table 1. The window kind flags `alpha` of its
+reports, and a stretch of a window's length of reports holds a flag about a
+third of the time, as the docstring's Notes give under *The window test*.
 
 ### `bocpd` — how long has this regime lasted?
 
