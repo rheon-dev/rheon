@@ -172,7 +172,7 @@ budget = 218029
 
 [instructions.bank_seqtest]
 what = "Bank::fit_predict of one frame, seqtest: every per-row step of the bank around the cheapest model"
-budget = 2031959
+budget = 2119655
 
 [instructions.bank_ewridge_k5]
 what = "Bank::fit_predict of one frame, ewridge with 5 features"
@@ -180,7 +180,7 @@ budget = 5201744
 
 [instructions.bank_seqtest_groups]
 what = "Bank::fit_predict of one frame of 1,000 groups, one row each, seqtest, on a pool of one thread: what a (spec, group) task costs whatever its rows"
-budget = 9608553
+budget = 9901589
 
 [instructions.bank_ewridge_k5_groups]
 what = "Bank::fit_predict of one frame of 1,000 groups, one row each, ewridge with 5 features and a solve every 4 rows, on a pool of one thread"
@@ -1695,6 +1695,22 @@ to = 2254570
 date = 2026-11-21
 reason = "review C1 (rule 5's twenty-third exception, the user's decision of 2026-11-20): sgd and pa read each row in the stream's own unit of weight (Kish's w_hat from the warm-up sums) and keep one row's weight of history, which bounds every step after a gap by sqrt(2) times the rate and makes the fit invariant to the scale of the weights; the row's read takes one more division and the floor a comparison and a division where it binds. CI's count on 2875e1f9 (run 44883272342)"
 changelog = "`sgd` and `pa` with `standardize` pay a division a row"
+
+[[raised]]
+key = "instructions.bank_seqtest"
+from = 2031959
+to = 2119655
+date = 2026-11-21
+reason = "PLAN 539, hard rule 9: a row of weight 0 counts in no clock, so the stream's planning pass tests each row's weight and plans such a row on copies of the clock, a model kept aside for a fresh or blended scoring is put back after the row, and each group's step and clock checks take the weights and refuse at the first row in the input. CI's count on 1819e678 (W9): 2,031,959 to 2,119,655, +4.32%. Traced natively on arm64 (retired instructions of the block, median of 15) at the commits of the change, and ablated: the planning pass's branch and the kept model carry the whole of the first case's +2.4% (the branch out of line and the kept model boxed return about 1% of it), the groups' +2.2% lies in the bank's per-group path and was not attributed to one piece (the step and clock checks, the first-refused-row reduction and the planning pass each ablated to no change). Set to CI's count"
+changelog = "A row of weight 0 counting in no clock costs the bank's cheapest case"
+
+[[raised]]
+key = "instructions.bank_seqtest_groups"
+from = 9608553
+to = 9901589
+date = 2026-11-21
+reason = "PLAN 539, hard rule 9: a row of weight 0 counts in no clock, so the stream's planning pass tests each row's weight and plans such a row on copies of the clock, a model kept aside for a fresh or blended scoring is put back after the row, and each group's step and clock checks take the weights and refuse at the first row in the input. CI's count on 1819e678 (W9): 9,608,553 to 9,901,589, +3.05%. Traced natively on arm64 (retired instructions of the block, median of 15) at the commits of the change, and ablated: the planning pass's branch and the kept model carry the whole of the first case's +2.4% (the branch out of line and the kept model boxed return about 1% of it), the groups' +2.2% lies in the bank's per-group path and was not attributed to one piece (the step and clock checks, the first-refused-row reduction and the planning pass each ablated to no change). Set to CI's count"
+changelog = "A row of weight 0 counting in no clock costs the bank's cheapest case"
 
 [[signoff]]
 key = "instructions.clock_temporal"

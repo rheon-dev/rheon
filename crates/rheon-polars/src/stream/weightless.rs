@@ -33,6 +33,8 @@ impl Stream {
     /// session rule -- and no model, window, diagnostic or held-row buffer
     /// sees the row. Its clock, without a clock column, is the place the
     /// next row that counts takes: a row clock counts no such row.
+    #[cold]
+    #[inline(never)]
     pub(super) fn weightless_plan(
         &self,
         spec: &Spec,

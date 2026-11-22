@@ -581,6 +581,25 @@ model that only the new build has is listed as an addition and passes.
 
 ### Performance
 
+- **A row of weight 0 counting in no clock costs the bank's cheapest case
+  about 2% to 4% a row.** The schedule that leaves such a row out of every
+  clock adds a test of each row's weight to the stream's planning pass, a
+  place for a model kept aside to be put back in its scoring pass, and,
+  for every group of a chunk, a weight argument to the step and clock checks
+  and the first-refused-row rule across them. On a stream with no zero
+  weight none of it runs, but the code around the loops moved. Counted on
+  Linux by CI (`bank_seqtest`, 1,000 rows of `seqtest` through the bank):
+  2,031,959 to 2,119,655 instructions (+4.32%); `bank_seqtest_groups`, 1,000
+  groups of one row: 9,608,553 to 9,901,589 (+3.05%). On arm64, retired
+  instructions of the block (median of 15, one process): 1.902 to 1.949
+  million (+2.4%) and 8.795 to 8.986 million (+2.2%), bisected to the
+  commits that built the schedule (+2.2% and +0.65% of it) and the one
+  that made the first refused row the same under every chunking (+0.7% of
+  the groups'). Taking the plan's zero-weight branch out of line and boxing
+  the model kept aside, which a row with no weight now meets as a null
+  check, returns about 1% of the first case on arm64; the rest is the
+  rule's price, which the two budgets rise by. Outputs are unchanged.
+
 - **`sgd` and `pa` with `standardize` pay a division a row for reading each
   row in the stream's own unit of weight.** The read that bounds a step
   after a gap and makes the fit invariant to the scale of the weights costs

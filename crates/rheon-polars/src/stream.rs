@@ -3929,16 +3929,17 @@ fn run_instance(
         }
         // A row of weight 0 that `predict` would score by a fresh or a
         // blended model is scored by such a copy, the instance's own put
-        // back after the row (hard rule 9).
+        // back after the row (hard rule 9). Boxed, so that every row that
+        // keeps none pays a null check and not a model's drop.
         let kept_model = match plan.zero {
-            Weightless::Fresh => Some(std::mem::replace(
+            Weightless::Fresh => Some(Box::new(std::mem::replace(
                 inst.model.get_mut(),
                 build_one(inst.spec, inst.decay).expect("spec was already validated"),
-            )),
+            ))),
             Weightless::Blended => {
                 let mut copy = inst.model.get().clone();
                 copy.blend_toward_long_run();
-                Some(std::mem::replace(inst.model.get_mut(), copy))
+                Some(Box::new(std::mem::replace(inst.model.get_mut(), copy)))
             }
             Weightless::No | Weightless::AsIs => None,
         };
@@ -4898,7 +4899,7 @@ fn run_instance(
             }
         }
         if let Some(model) = kept_model {
-            *inst.model.get_mut() = model;
+            *inst.model.get_mut() = *model;
         }
         if reset_on_drift && row_drift {
             inst.reset();
