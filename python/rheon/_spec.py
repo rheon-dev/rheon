@@ -330,6 +330,7 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
     "kalman": frozenset({"covariance_form"}),
     "glm": frozenset({"refit_span"}),
     "kmeans": frozenset({"warm_span", "update_every", "split_merge_every"}),
+    "hmm": frozenset({"warm_span"}),
 }
 
 

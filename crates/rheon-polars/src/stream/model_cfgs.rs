@@ -485,6 +485,7 @@ pub fn hmm_cfg(spec: &Spec) -> Result<HmmCfg, String> {
         exog_tvtp,
         tvtp_coef,
         prior_rows,
+        warm_span,
     } = &spec.model
     else {
         return Err(not_a(spec, "hmm_cfg", "hmm"));
@@ -534,8 +535,15 @@ pub fn hmm_cfg(spec: &Spec) -> Result<HmmCfg, String> {
             ));
         }
     }
+    if warm_rows.is_some() && warm_span.is_some() {
+        no.refuse(
+            "hmm: warm_span and warm_rows are two warm-ups, and the states are seeded once. \
+             Leave one of them out.",
+        );
+    }
     for (param, given) in [
         ("warm_rows", warm_rows.is_some()),
+        ("warm_span", warm_span.is_some()),
         ("init", init.is_some()),
         ("seed", seed.is_some()),
     ] {
@@ -569,11 +577,19 @@ pub fn hmm_cfg(spec: &Spec) -> Result<HmmCfg, String> {
         // 1,000 rows, or `k` where that is more: the buffer must hold every
         // regime several times over for the seeding to place a state on each
         // (task 278, D9: at 50, regimes lasting 50 rows were never found).
-        warm_rows: warm_rows.unwrap_or_else(|| (*k).max(1000)),
+        // Under a span the buffer holds the span's rows, at least `k`.
+        warm_rows: warm_rows.unwrap_or_else(|| {
+            if warm_span.is_some() {
+                *k
+            } else {
+                (*k).max(1000)
+            }
+        }),
         seed_rule: seed_rule?,
         seed: seed.unwrap_or(0),
         tvtp,
         prior_rows: *prior_rows,
+        warm_clock: warm_span.as_ref().map(Span::value),
     })
 }
 

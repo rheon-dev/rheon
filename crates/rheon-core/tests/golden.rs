@@ -719,6 +719,7 @@ fn hmm_golden() {
         seed: 1,
         tvtp: None,
         prior_rows: None,
+        warm_clock: None,
     })
     .unwrap();
     check("hmm", &signature(&mut m, 5), GOLDEN_HMM);
@@ -1522,6 +1523,7 @@ fn hmm_tvtp_golden() {
         seed: 1,
         tvtp: Some((vec![2.0, 0.0, 0.0, 2.0], vec![0.0, 1.5, -1.0, 0.0])),
         prior_rows: None,
+        warm_clock: None,
     })
     .unwrap();
     check("hmm_tvtp", &signature(&mut m, 5), GOLDEN_HMM_TVTP);

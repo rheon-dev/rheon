@@ -97,6 +97,19 @@ ITEMS: dict[str, Item] = {
         start=False,
         spans=(3, 7),
     ),
+    "hmm.warm_span": Item(
+        "hmm",
+        dict(
+            features=["x0", "x1"],
+            n_components=2,
+            half_life=300.0,
+            covariance_type="diag",
+            precision_prior=0.1,
+        ),
+        lambda n: dict(warm_rows=n),
+        lambda v: dict(warm_span=v),
+        start=True,
+    ),
     # Four centers on three blobs: two share one, and merge once the fourth
     # blob appears.
     "kmeans.split_merge_every": Item(

@@ -65,6 +65,7 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
         "kmeans",
         &["warm_span", "update_every", "split_merge_every"],
     ),
+    ("hmm", &["warm_span"]),
     ("ew_class", &["window_size", "snapshot_every"]),
     ("marginal", &["window_size", "snapshot_every"]),
     ("hawkes", &["window_size", "kernel_half_lives"]),
@@ -454,6 +455,9 @@ impl Spec {
             }
             ModelKind::Micro { prune_every, .. } => {
                 put(&mut out, "prune_every", prune_every.as_ref());
+            }
+            ModelKind::Hmm { warm_span, .. } => {
+                put(&mut out, "warm_span", warm_span.as_ref());
             }
             ModelKind::KMeans {
                 warm_span,

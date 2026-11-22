@@ -473,6 +473,14 @@ def clock_specs(draw, model: str, step: int, cap: int):
         kw |= maybe("huber_scale_half_life", 1, 60)
     elif model == "marginal":
         kw |= xy | maybe("window_size", 1, 60)
+    elif model == "hmm":
+        # Task 538: the warm-up over a span, or a count of rows.
+        kw |= dict(features=["x0", "x1"], n_components=2, half_life=steps(1, 30))
+        kw |= dict(covariance_type="diag", precision_prior=0.1)
+        if draw(st.booleans()):
+            kw["warm_span"] = steps(1, 10)
+        else:
+            kw["warm_rows"] = draw(st.integers(2, 8))
     elif model == "kmeans":
         # Task 538: the warm-up over a span and the cadences on the clock,
         # or their counts.

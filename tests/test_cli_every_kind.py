@@ -856,6 +856,19 @@ CASES: list[Case] = [
             "prior_rows": 1.5,
         },
     ),
+    # Task 538: the warm-up over a span of the clock.
+    Case(
+        "hmm_span",
+        "hmm",
+        {
+            **STREAM,
+            "features": ["x1", "x2"],
+            "n_components": 2,
+            "covariance_type": "diag",
+            "precision_prior": 0.1,
+            "warm_span": 30.0,
+        },
+    ),
     Case(
         "hmm_given",
         "hmm",

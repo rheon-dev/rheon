@@ -1111,6 +1111,11 @@ pub enum ModelKind {
         /// off, which take no prior.
         #[serde(default)]
         prior_rows: Option<f64>,
+        /// The warm-up over a span of the clock in place of `warm_rows`
+        /// (docs/PLAN.md task 538), as `kmeans`' `warm_span`. Refused beside
+        /// `warm_rows` and beside given states. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        warm_span: Option<Span>,
     },
     /// Has the correlation structure changed? (docs/ENHANCEMENTS.md E59)
     ///

@@ -354,6 +354,7 @@ fn hmm_full_cfg(d: usize) -> HmmCfg {
         seed: 1,
         tvtp: None,
         prior_rows: None,
+        warm_clock: None,
     }
 }
 
@@ -2043,11 +2044,41 @@ pub fn all() -> Vec<Case> {
                 seed: 1,
                 tvtp: None,
                 prior_rows: None,
+                warm_clock: None,
             })
             .unwrap(),
             K,
             Targets::None,
             40
+        ),
+        // Task 538: a warm-up over a span of the clock, saved inside it.
+        case!(
+            "hmm_warm_span",
+            "Hmm",
+            Hmm,
+            Hmm::new(HmmCfg {
+                n_features: K,
+                k: 2,
+                decay: decay(),
+                covariance: Covariance::Diagonal,
+                precision_prior: 1e-2,
+                min_weight: 0.0,
+                learn: true,
+                transition_prior: 1.0,
+                transition: None,
+                means: None,
+                covs: None,
+                warm_rows: 2,
+                seed_rule: SeedRule::Lloyd,
+                seed: 1,
+                tvtp: None,
+                prior_rows: None,
+                warm_clock: Some(15.0),
+            })
+            .unwrap(),
+            K,
+            Targets::None,
+            8
         ),
         // The diagonal shape, which keeps each state's variances alone
         // (schema 66, task 327).
@@ -2072,6 +2103,7 @@ pub fn all() -> Vec<Case> {
                 seed: 1,
                 tvtp: None,
                 prior_rows: None,
+                warm_clock: None,
             })
             .unwrap(),
             K,

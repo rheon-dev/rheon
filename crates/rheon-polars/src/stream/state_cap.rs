@@ -35,6 +35,14 @@ pub(crate) fn fixed_span(spec: &Spec) -> Option<FixedSpan> {
             "Shorten warm_span, or give warm_rows",
             "the 256 MiB a warm-up may hold",
         ),
+        ModelKind::Hmm {
+            warm_span: Some(s), ..
+        } => it(
+            format!("warm_span = {s}"),
+            "rows of its warm-up",
+            "Shorten warm_span, or give warm_rows",
+            "the 256 MiB a warm-up may hold",
+        ),
         _ => None,
     }
 }

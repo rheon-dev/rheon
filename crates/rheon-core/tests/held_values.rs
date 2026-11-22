@@ -1366,6 +1366,7 @@ fn hmm_filters_the_same_at_every_level_at(width: usize) {
             seed: 3,
             tvtp: None,
             prior_rows: None,
+            warm_clock: None,
         })
         .unwrap()
     };
@@ -1625,6 +1626,7 @@ fn a_row_of_no_weight_moves_nothing_without_a_target() {
             seed: 3,
             tvtp: None,
             prior_rows: None,
+            warm_clock: None,
         })
         .unwrap()
     });

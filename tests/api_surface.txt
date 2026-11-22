@@ -285,6 +285,7 @@
     exog_tvtp = None
     tvtp_coef = None
     prior_rows = None
+    warm_span = None
     common
   holt:
     name
@@ -2791,7 +2792,7 @@
     garch: dist, horizon, max_state_bytes, start_rows, start_span, truncation, variance_targeting, vol
     glm: family, link, refit_budget, refit_rows, refit_span, ridge, step_cap, var_power
     hawkes: closed, kernel_decays, kernel_half_lives, max_state_bytes, window_events, window_size
-    hmm: covariance_type, covs, exog_tvtp, init, learn, means, n_components, precision_prior, prior_rows, seed, transition, transition_prior, tvtp_coef, warm_rows
+    hmm: covariance_type, covs, exog_tvtp, init, learn, means, n_components, precision_prior, prior_rows, seed, transition, transition_prior, tvtp_coef, warm_rows, warm_span
     holt: trend, trend_half_life
     huber: emit_huber_scale, feature_sets, huber_delta, huber_refit_rows, huber_scale, huber_scale_half_life, max_rows_between_solves, refit_budget, ridge, ridge_scale, solve_every, standardize
     kalman: coef_half_life, covariance_form, obs_var, p0, q, revert_half_life, share_p, standardize

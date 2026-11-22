@@ -1469,6 +1469,7 @@ fn hmm_cfg() -> HmmCfg {
         seed: 1,
         tvtp: None,
         prior_rows: None,
+        warm_clock: None,
     }
 }
 
