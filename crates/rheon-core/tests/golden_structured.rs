@@ -531,6 +531,149 @@ fn hawkes_process_golden() {
     check("hawkes_process", &got, GOLDEN_HAWKES_PROCESS);
 }
 
+/// `n` rows of unit weight on a unit clock with a target: `draw` gives the
+/// features and the target of row `i`.
+fn target_rows(
+    n: usize,
+    seed: u64,
+    mut draw: impl FnMut(usize, &mut u64) -> ([f64; 2], f64),
+) -> Vec<Row> {
+    let mut s = seed;
+    (0..n)
+        .map(|i| {
+            let (x, y) = draw(i, &mut s);
+            (x, [Some(y)], if i == 0 { 0.0 } else { 1.0 }, 1.0)
+        })
+        .collect()
+}
+
+/// The mean of `pred[0]` minus `truth(x)` over the rows from `from` on, with
+/// the target never read before it is predicted.
+fn mean_error<M: OnlineModel>(
+    model: &mut M,
+    rows: &[Row],
+    truth: impl Fn(&[f64; 2]) -> f64,
+    from: usize,
+) -> f64 {
+    let mut sum = 0.0;
+    for (i, (x, y, d, w)) in rows.iter().enumerate() {
+        let step = model.step(x, y, *d, *w);
+        if i >= from {
+            sum += step.pred[0] - truth(x);
+        }
+    }
+    sum / (rows.len() - from) as f64
+}
+
+fn line(x: &[f64; 2]) -> f64 {
+    1.5 * x[0] - 0.75 * x[1] + 0.25
+}
+
+fn robust_cfg(loss: RobustLoss, standardize: bool, decay: Decay) -> RobustCfg {
+    robust_cfg_scaled(loss, standardize, decay, rheon_core::HuberScale::Rms)
+}
+
+fn robust_cfg_scaled(
+    loss: RobustLoss,
+    standardize: bool,
+    decay: Decay,
+    huber_scale: rheon_core::HuberScale,
+) -> RobustCfg {
+    RobustCfg {
+        n_features: 2,
+        n_targets: 1,
+        fit_intercept: true,
+        decay,
+        loss,
+        ridge: 1e-4,
+        standardize,
+        min_weight: 3.0,
+        solve_every: 0.0,
+        max_rows_between_solves: 1,
+        solve_share: None,
+        quantile_eps: 1e-3,
+        huber_scale,
+        huber_scale_decay: None,
+        feature_sets: Vec::new(),
+        ridge_scale: false,
+        emit_scale: false,
+        refit_rows: 0,
+        mad_anchor: false,
+        min_weight_holds_learning: false,
+        refit_clock: None,
+        max_state_bytes: None,
+    }
+}
+
+/// The line with noise of 0.2 and, on 8% of the rows, a one-sided outlier of
+/// +4 (twenty standard deviations).
+fn contaminated_rows() -> Vec<Row> {
+    target_rows(300, 6151, |_, s| {
+        let x = [lcg(s), lcg(s)];
+        let mut y = line(&x) + 0.2 * gauss(s);
+        if (lcg(s) + 1.0) / 2.0 < 0.08 {
+            y += 4.0;
+        }
+        (x, y)
+    })
+}
+
+/// `huber` on the contaminated line, the golden's cut of 1.5 and no
+/// forgetting: the predictions at rows 100, 200 and 299, and the mean error
+/// over the last 100 rows, which is held under a third of the mean error of
+/// a least-squares fit on the same rows (the outliers shift it by their
+/// share of the shift, 0.32; a Huber fit's cut leaves 0.05 or so).
+#[test]
+fn huber_contaminated_golden() {
+    let cfg = || {
+        robust_cfg_scaled(
+            RobustLoss::Huber { delta: 1.5 },
+            false,
+            Decay::Halflife(f64::INFINITY),
+            rheon_core::HuberScale::Mad,
+        )
+    };
+    let rows = contaminated_rows();
+    let mut m = Robust::new(cfg()).unwrap();
+    let mut got = probe(&mut m, &rows, &[0], &[100, 200, 299]);
+    let robust = mean_error(&mut Robust::new(cfg()).unwrap(), &rows, line, 200);
+    let ols = mean_error(&mut ols_model(), &rows, line, 200);
+    assert!(ols > 0.2, "the outliers move least squares: {ols}");
+    assert!(
+        robust.abs() < ols / 3.0,
+        "huber {robust}, least squares {ols}"
+    );
+    got.push(robust);
+    check("huber_contaminated", &got, GOLDEN_HUBER_CONTAMINATED);
+}
+
+/// Least squares over the same rows: `ewridge` with no forgetting.
+fn ols_model() -> EwRidge {
+    EwRidge::new(EwRidgeCfg {
+        n_features: 2,
+        n_targets: 1,
+        fit_intercept: true,
+        decay: Decay::Halflife(f64::INFINITY),
+        ridge: vec![1e-6],
+        feature_sets: vec![],
+        standardize: false,
+        ridge_scale: false,
+        session_shrink: None,
+        long_half_life: None,
+        coef_prior: None,
+        min_weight: 3.0,
+        solve_every: 0.0,
+        max_rows_between_solves: 1,
+        solve_share: None,
+        gram_block_rows: 0,
+        target_gaps: rheon_core::TargetGaps::OwnRows,
+        window: None,
+        window_every: None,
+        max_rows_between_snapshots: None,
+    })
+    .unwrap()
+}
+
 // --- generated; see the module docs ---
 const GOLDEN_KMEANS_BLOBS: &[f64] = &[
     2.0,
@@ -644,4 +787,10 @@ const GOLDEN_HAWKES_PROCESS: &[f64] = &[
     0.47986354169547724,
     0.32679293101720874,
     0.15354451470316674,
+];
+const GOLDEN_HUBER_CONTAMINATED: &[f64] = &[
+    -0.0673238035897995,
+    0.301095749294845,
+    0.22378708973246048,
+    0.04014623471851346,
 ];
