@@ -145,7 +145,7 @@ by_volume = rp.spec.ewridge("by_volume", clock="cum_volume", half_life=[200_000.
 # A plain ridge on the four planted factors whose break_wald_<target> field tests for moved coefficients.
 breaks = rp.spec.ewridge("breaks", targets=["ret_a", "ret_b"], features=["f0", "f1", "f3", "f4"],
                          half_life="30m", emit_breaks=True, **on_time)
-regime = rp.spec.bocpd("regime", features=factors[:5], hazard=20_000.0)   # a prior of one change in 20,000 rows
+regime = rp.spec.bocpd("regime", features=factors[:5], hazard_rows=20_000.0)   # a prior of one change in 20,000 rows
 
 # 4. One streaming query over every file: the bank's output, with the readings to count, written to a file.
 field = lambda spec, name: pl.col(spec).struct.field(name)   # each spec writes one column of fields, named after it

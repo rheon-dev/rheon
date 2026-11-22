@@ -936,7 +936,12 @@ CASES: list[Case] = [
             "warm_rows": 20,
         },
     ),
-    Case("bocpd2", "bocpd", {**NODECAY2, "features": ["x1", "x2"], "hazard_col": "h"}),
+    # The column's fallback is the per-row count (task 547).
+    Case(
+        "bocpd2",
+        "bocpd",
+        {**NODECAY2, "features": ["x1", "x2"], "hazard_col": "h", "hazard_rows": 80.0},
+    ),
     # Task 538: the warm-up over a span of the clock.
     Case(
         "bocpd_span",

@@ -18,7 +18,8 @@ def bocpd(
     name: str,
     *,
     features: list[str],
-    hazard: float | Duration = 250.0,
+    hazard_rows: float | None = None,
+    hazard: float | Duration | None = None,
     hazard_col: str | None = None,
     covariance_type: Literal["full", "diag"] = "diag",
     mean_prior: list[float] | None = None,
@@ -49,45 +50,60 @@ def bocpd(
     ``gap_cap``, ``min_weight`` and ``group``, are in
     :mod:`rheon.spec`. This model takes ``features`` and no
     ``targets``. ``half_life`` and ``lam`` are refused, since the run-length
-    posterior is what forgets, and ``hazard`` is how fast.
+    posterior is what forgets, and the hazard is how fast.
     ``fit_intercept`` has nothing to act on, as there is no regression.
     ``min_weight`` withholds what is reported, never what is learned. No
     diagnostic that reads residuals applies. This model's own:
 
-    ``hazard``
-        How likely a break is, in one of two forms:
+    ``hazard_rows``, ``hazard``
+        How likely a break is, per row or per unit of clock time:
 
         .. list-table::
            :header-rows: 1
-           :widths: 26 36 38
+           :widths: 18 40 42
 
-           * - ``hazard``
+           * - parameter
              - what it is
              - the chance of a break
-           * - a number, 250 by default
+           * - ``hazard_rows``, 250 by default
              - the expected rows between breaks, on any clock
-             - ``1 / hazard`` after every row
-           * - a duration, such as ``"1h"``
-             - ``tau``, the expected time between breaks, on a temporal
-               clock
-             - ``1 - exp(-dt / tau)`` for the step of ``dt`` into each row,
-               before the row is read
+             - ``H = 1 / hazard_rows`` after every row
+           * - ``hazard``
+             - ``tau``, the expected clock time between breaks: a number of
+               the clock's units, or of rows where the spec has no clock, or
+               a duration such as ``"1h"`` on a temporal clock
+             - ``h = 1 - exp(-dt / tau)`` for the step of ``dt`` into each
+               row, before the row is read
 
-        A number is finite and above 1. A duration is a clock parameter like
-        ``half_life``. It is refused without a temporal clock, beside a clock
-        parameter given as a plain number, and at 0 or below. ``dt`` is the
-        step decay reads, so a gap past ``gap_cap`` counts as the cap.
-        *A duration hazard* in Notes gives the rules at a step of 0.
+        Choose ``hazard_rows`` where a break is as likely after any row,
+        however far apart the rows fall: Adams and MacKay's hazard, one step
+        an observation. Choose ``hazard`` where breaks come in time, so a
+        long gap makes a break near certain and a row sharing the last
+        row's stamp cannot begin a run. On regular steps the two are the
+        same model at ``hazard_rows = 1 / (1 - exp(-dt / tau))``: every
+        output agrees but ``p_change``, which the per-row form reads with
+        ``H`` of the mass at ``r = 0`` after the row, ``p_rows = H + (1 -
+        H) * p_clock`` (*Reading p_change and run_mode* in Notes). On data
+        with irregular steps, each form fits best where breaks come as it
+        assumes, so the choice is a model of where breaks come from.
+
+        ``hazard_rows`` is finite and above 1. ``hazard`` is a clock
+        parameter like ``half_life``: a plain number is refused on a
+        temporal clock, a duration without one, and either beside a clock
+        parameter written the other way. It is finite and above 0. ``dt`` is
+        the step decay reads, so a gap past ``gap_cap`` counts as the cap
+        and a row of weight 0 is in no step. The two are refused together.
+        *A clock hazard* in Notes gives the rules at a step of 0.
     ``hazard_col``
         Read a per-row hazard from this column instead, which the bank reads beside
         the features as it reads a weight column. The value at a row is the expected
         rows between breaks as of that row: ``1 / value`` is the chance of a break
         after the row, between it and the next. A null, NaN, ±inf or magnitude above
-        ``1e100`` falls back to ``hazard``, and any other value of 1 or less
-        is refused by every call that reads the column,
+        ``1e100`` falls back to ``hazard_rows``, and any other value of 1 or
+        less is refused by every call that reads the column,
         :meth:`rheon.polars.ModelBank.predict` included, naming the row.
-        Default none. A duration ``hazard`` puts its chance before each row,
-        so the two are refused together.
+        Default none. ``hazard`` puts its chance before each row, so the two
+        are refused together.
     ``covariance_type``
         The covariance each run's predictive keeps, in scikit-learn's words,
         both exact conjugate updates:
@@ -237,8 +253,8 @@ def bocpd(
 
     A row whose predictive cannot be evaluated reports nulls and is counted
     in :meth:`rheon.polars.ModelBank.solve_failures`. It leaves the
-    posterior where it stands, except for a duration ``hazard``'s chance of
-    a break over its step, which time passing applies.
+    posterior where it stands, except for ``hazard``'s chance of a break
+    over its step, which time passing applies.
 
     .. rubric:: Raises
 
@@ -248,9 +264,11 @@ def bocpd(
 
     - an empty ``features``, any ``half_life`` or ``lam``, and a
       ``covariance_type`` other than ``"full"`` or ``"diag"``;
-    - a number ``hazard`` of 1 or less or not finite, and a duration
-      ``hazard`` with no clock, beside a plain-number clock parameter, at 0
-      or below, or beside ``hazard_col``;
+    - a ``hazard_rows`` of 1 or less or not finite; a ``hazard`` at 0 or
+      below or not finite, a duration ``hazard`` with no clock or beside a
+      plain-number clock parameter, and a number ``hazard`` on a temporal
+      clock or beside a duration; ``hazard`` beside ``hazard_rows`` or
+      ``hazard_col``;
     - a ``mean_prior`` of the wrong length or holding a value that is not
       finite, a ``covariance_prior`` holding a value that is not finite, a
       ``mean_precision_prior`` not
@@ -272,7 +290,7 @@ def bocpd(
     .. rubric:: The update
 
     Adams and MacKay's Algorithm 1, in log space. ``r`` is a run length,
-    ``H = 1 / hazard`` the chance of a break after the row, and ``pi_r`` run
+    ``H = 1 / hazard_rows`` the chance of a break after the row, and ``pi_r`` run
     ``r``'s posterior predictive for this row:
 
     .. code-block:: text
@@ -280,8 +298,8 @@ def bocpd(
         growth:      P(r_t = r+1, x_1:t) = P(r_t-1 = r, x_1:t-1) pi_r (1 - H)
         changepoint: P(r_t = 0,   x_1:t) = sum_r P(r_t-1 = r, x_1:t-1) pi_r H
 
-    Under a duration ``hazard``, the chance ``h = 1 - exp(-dt / tau)`` that a
-    break fell inside the step belongs before the row. So ``h`` of every
+    Under ``hazard``, the chance ``h = 1 - exp(-dt / tau)`` that a break
+    fell inside the step belongs before the row. So ``h`` of every
     run's mass moves to the empty run before the row is read, and the
     recursion above runs with ``H = 0``, since no time has passed since the
     row:
@@ -315,7 +333,7 @@ def bocpd(
         x[600:] += 4.0                                # the level steps up at row 600
         pl.DataFrame({"x": x}).write_parquet("step.parquet")
 
-        b = rp.spec.bocpd("regime", features=["x"], hazard=250.0)
+        b = rp.spec.bocpd("regime", features=["x"], hazard_rows=250.0)
         out = pl.scan_parquet("step.parquet").rheon.fit_predict([b]).collect()
         out = out.unnest("regime")
         for row in [599, 650, 999]:
@@ -339,13 +357,16 @@ def bocpd(
 
     .. rubric:: Notes
 
-    **Reading p_change and run_mode.** Under a number ``hazard``,
+    **Reading p_change and run_mode.** Under ``hazard_rows``,
     ``p_change`` is ``P(r <= 1)`` and not ``P(r = 0)``: the changepoint
     branch and the growth branch share the same predictive, which makes the
     normalized mass at ``r = 0`` exactly ``H`` on every row whatever the
-    data. Under a duration ``hazard``, the chance of a break is applied
+    data. Under ``hazard``, the chance of a break is applied
     before the row, so no mass sits at ``r = 0`` after it, and ``p_change``
-    is the chance that this row began a run. There, a row whose clock step
+    is the chance that this row began a run. On regular steps of ``dt`` the
+    two forms read every row against the same posterior, and ``p_rows = H +
+    (1 - H) * p_clock`` with ``H = 1 - exp(-dt / tau)``: about ``H`` apart
+    on a quiet row. There, under ``hazard``, a row whose clock step
     is 0 (a stamp shared with the last row the model did not skip) reports
     0, apart from a run's first row: a group's first row, and its first
     after a reset. With ``mean_prior`` and ``covariance_prior`` both
@@ -377,12 +398,13 @@ def bocpd(
          - never found under ``"diag"``; under ``"full"``, found a median
            of 121 rows after the break
 
-    **A duration hazard.** A step of 0 has no chance of a break: a row that
+    **A clock hazard.** A step of 0 has no chance of a break: a row that
     shares the previous row's stamp cannot begin a run. A row of weight 0
-    applies its step's chance, since time passed, and learns nothing, so
-    two steps with nothing learned between them read as one step of their
-    sum. Under ``prune_below = 0`` each step of 0 leaves one run of no mass
-    among the runs kept, until ``max_run`` folds it.
+    counts in no clock, so the next row's step runs from the last row that
+    counted, one step of the time since. Without a clock column each row of
+    positive weight is a step of 1. Under ``prune_below = 0`` each step of
+    0 leaves one run of no mass among the runs kept, until ``max_run``
+    folds it.
 
     **Tempering.** Untempered, a single 20-sigma row reads ``p_change``
     0.91, and its run carries the outlier in its mean. Tempered, an
@@ -390,7 +412,7 @@ def bocpd(
     every tempered likelihood is about 1, and nothing moves. A whole new
     regime is a run of individually forgiven rows, which is why a larger
     power finds a real shift later. Over 50 streams with a four-sigma shift
-    at ``hazard=250``, a shift counts as found once ``run_mode`` dates it to
+    at ``hazard_rows=250``, a shift counts as found once ``run_mode`` dates it to
     within 5 rows, inside 150 rows:
 
     .. list-table::
@@ -436,7 +458,7 @@ def bocpd(
     given there is no warm-up. ``degrees_of_freedom_prior`` and
     ``covariance_prior`` are ``2a`` and ``2b`` in the gamma
     parametrization, which is how Adams and MacKay give their own finance
-    example (``a = 1``, ``b = 1e-4``, ``hazard = 250``: in this model's
+    example (``a = 1``, ``b = 1e-4``, ``hazard_rows = 250``: in this model's
     terms ``degrees_of_freedom_prior=2.0`` and ``covariance_prior=[2e-4]``).
 
     The prior is set once from the ``warm_rows`` rows and kept for the
@@ -494,6 +516,8 @@ def bocpd(
     # Written only when given, as the Rust spec leaves it out when absent.
     if warm_span is not None:
         model["warm_span"] = warm_span
+    if hazard_rows is not None:
+        model["hazard_rows"] = hazard_rows
     mirror = _mirror_target(name, "bocpd", features, common, "its change points are in")
     targets = [hazard_col] if hazard_col is not None else mirror
     return _common(name, model, targets=targets, features=features, **common)

@@ -601,14 +601,14 @@ def test_loglik_over_specs_of_different_columns_is_refused():
     df = pl.DataFrame({"y": rng.standard_normal(300), "big": 1000 * rng.standard_normal(300),
                        "x0": rng.standard_normal(300)})  # fmt: skip
     specs = [rp.spec.bocpd("on_y", features=["y"]), rp.spec.bocpd("on_big", features=["big"]),
-             rp.spec.bocpd("on_y_too", features=["y"], hazard=50.0)]  # fmt: skip
+             rp.spec.bocpd("on_y_too", features=["y"], hazard_rows=50.0)]  # fmt: skip
     with pytest.raises(
         ValueError, match=r"rp.eval.grid_search: scoring=\"loglik\" .*\['on_big'\] model \['big'\]"
     ):
         rp.eval.grid_search(df, specs, scoring="loglik", n_splits=2)
     both = [
         rp.spec.bocpd("a", features=["y", "x0"]),
-        rp.spec.bocpd("b", features=["x0", "y"], hazard=50.0),
+        rp.spec.bocpd("b", features=["x0", "y"], hazard_rows=50.0),
     ]
     assert rp.eval.grid_search(df, both, scoring="loglik", n_splits=2).height == 3
 

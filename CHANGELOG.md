@@ -31,6 +31,31 @@ model that only the new build has is listed as an addition and passes.
 
 ### Changed
 
+- **`bocpd` takes its hazard in rows or on the clock** (PLAN 547).
+  `hazard_rows` is the expected rows between changepoints, `H =
+  1/hazard_rows` the chance of a break after each row of positive weight on
+  any clock: Adams and MacKay's hazard, per observation, and the default
+  (250) where neither is given. `hazard` is now a clock parameter like every
+  other: the expected clock time `τ` between changepoints, rows without a
+  clock, the column's units on a numeric clock, a duration on a temporal
+  one, the step of `dt` into each row carrying the chance `1 − exp(−dt/τ)`
+  of a break before the row is read, a row of weight 0 in no step. A
+  duration `hazard` reads as it did. A number `hazard` read as rows on
+  every clock; for that reading, give `hazard_rows` (the builder's default
+  now writes neither, so a spec that gave no hazard is unchanged). A number
+  `hazard` without a clock or on a numeric one is now the clock form: on
+  steps of one unit it is the per-row form at `hazard_rows = 1/(1 −
+  e^{−1/τ})`, `run_mode` the same, `run_mean`, `loglik` and the predictive
+  means to rounding (5e-14 measured), and `p_change` read without the mass
+  the per-row form leaves at `r = 0`, `p_rows = H + (1 − H)·p_clock`; on
+  irregular steps the gaps enter. A number `hazard` on a temporal clock is
+  refused as every clock parameter's plain number is, and `hazard` beside
+  `hazard_rows` or `hazard_col` is refused (a column falls back to
+  `hazard_rows`). A state file a release wrote reads its number `hazard`
+  as `hazard_rows`, which it meant, and loads beside the builder's default
+  spec as before. Moves: `bocpd.p_change`, `bocpd.run_mode`,
+  `bocpd.run_mean`, `bocpd.loglik`, `bocpd.pred_*`.
+
 - **Every state file is written in one envelope** (PLAN 542). A bank's
   state, a window run's, a `rp.stream.refresh_time` run's and the new
   pipeline checkpoint are each a MessagePack map whose first three entries
@@ -403,6 +428,13 @@ model that only the new build has is listed as an addition and passes.
   call that was right before, under those settings, now needs the argument.
 
 ### Fixed
+
+- **`ModelBank.write_json` of a `bocpd` with its hazard on the clock**
+  (PLAN 547). Under a clock hazard the empty run's log joint is `-inf`
+  after every row, which JSON has no number for: the export wrote it as
+  null, failed its own read-back and raised, for a duration `hazard` too.
+  It is now written `"-inf"`, as every other non-finite value in a state's
+  JSON is. The state file's bytes are unchanged.
 
 - **`garch` gives the same numbers on every platform** (W10's CI on
   f1aa0fe0, run 44991677911: the `garch_egarch` and `garch_skewt` goldens

@@ -3677,11 +3677,12 @@ Its parameters, their defaults and what each refuses are in its
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md#bocpd). The parameters
 every spec takes are in [What every spec takes](#what-every-spec-takes),
 apart from `half_life` and `lam`, which it refuses: the run-length posterior
-does the forgetting, and `hazard`, the expected run length, sets how fast.
+does the forgetting, and the hazard, the expected run length, sets how fast:
+`hazard_rows` in rows, or `hazard` in clock time.
 
 #### The update
 
-With `H = 1/hazard` the chance of a break after each row, and `π_r` the
+With `H = 1/hazard_rows` the chance of a break after each row, and `π_r` the
 posterior predictive of run length `r` for this row, the model runs their
 Algorithm 1:
 
@@ -3690,12 +3691,21 @@ growth:      P(r_t = r+1, x_{1:t}) = P(r_{t−1} = r, x_{1:t−1})·π_r·(1 −
 changepoint: P(r_t = 0,   x_{1:t}) = Σ_r P(r_{t−1} = r, x_{1:t−1})·π_r·H
 ```
 
-Under a duration `hazard`, such as `"1h"`, the duration is `τ`, the
-expected time between changepoints. The step of `d` into a row then carries
-the chance `h = 1 − exp(−d/τ)` that a break fell inside it. That
-chance belongs before the row, so `h` of every run's mass moves to the
-empty run before the row is read. Algorithm 1 then runs with
-`H = 0`, since no time has passed since the row.
+Under `hazard`, `τ` is the expected clock time between changepoints: a
+number of the clock's units, rows without a clock, or a duration such as
+`"1h"` on a temporal clock. The step of `d` into a row carries the chance
+`h = 1 − exp(−d/τ)` that a break fell inside it. That chance belongs before
+the row, so `h` of every run's mass moves to the empty run before the row
+is read. Algorithm 1 then runs with `H = 0`, since no time has passed since
+the row.
+
+`hazard_rows` is Adams and MacKay's hazard, one step an observation: a break
+is as likely after any row, however far apart the rows fall. `hazard` says
+breaks come in time, so a long gap makes one near certain and a row that
+shares the last row's stamp cannot begin a run. On steps of one unit the
+two are one model at `hazard_rows = 1/(1 − e^{−1/τ})`, every output the
+same but `p_change`, which the per-row form reads with `H` at `r = 0`:
+`p_rows = H + (1 − H)·p_clock`.
 
 #### Example
 
@@ -3715,7 +3725,7 @@ scale = np.where(np.arange(n) < 1000, 1.0, 4.0)               # the truth: the s
 pl.DataFrame({"x": rng.standard_normal(n) * scale}).write_parquet("spread.parquet")
 
 # Fit, and date each row's current run from run_mode.
-runs = rp.spec.bocpd("runs", features=["x"], hazard=500.0)    # a break expected every 500 rows
+runs = rp.spec.bocpd("runs", features=["x"], hazard_rows=500.0)    # a break expected every 500 rows
 out = pl.scan_parquet("spread.parquet").rheon.fit_predict([runs]).collect().unnest("runs")
 out = out.with_row_index("row").with_columns(began=pl.col("row") - pl.col("run_mode"))   # the row the current run began on
 # The dating of the break, and how little p_change moved.
@@ -3782,7 +3792,7 @@ affected.
 **It flags a step up in the spread at once, and dates a step down by the
 run length.** Adams and MacKay's own finance example (a = 1, b = 1e-4,
 hazard = 250) is `degrees_of_freedom_prior=2.0`, `covariance_prior=[2e-4]`
-and `hazard=250.0`. Under it, with `max_run=600`, a tenfold step up in the
+and `hazard_rows=250.0`. Under it, with `max_run=600`, a tenfold step up in the
 spread lifts `p_change` above 0.5 within ten rows, and `run_mode` dates it
 to its row. The step back down is dated within one row.
 

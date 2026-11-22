@@ -1239,17 +1239,17 @@ pub enum ModelKind {
     /// at a time.
     #[serde(rename = "bocpd")]
     Bocpd {
-        /// A number: the expected rows between changepoints, `H = 1/hazard`
-        /// the chance of a break after each row, on any clock. A duration,
-        /// which only a temporal clock reads: the expected time between
-        /// them, the step of `d` into each row carrying the chance `1 −
-        /// exp(−d/hazard)`, applied before the row is read (task 179).
-        /// Default 250 rows. In [`DURATION_OR_UNIT_FREE_FIELDS`].
+        /// The expected clock time between changepoints, `τ`, a clock
+        /// parameter like every other (rows without a clock, the column's
+        /// units on a numeric clock, a duration on a temporal one): the
+        /// step of `d` into each row carries the chance `1 − exp(−d/τ)` of
+        /// a break, applied before the row is read (tasks 179 and 547).
+        /// Refused beside `hazard_rows` and `hazard_col`.
         #[serde(default)]
         hazard: Option<Span>,
         /// A column carrying a per-row hazard instead of one number: the
-        /// chance of a break after its row. Refused beside a duration
-        /// `hazard`.
+        /// chance of a break after its row, falling back to `hazard_rows`.
+        /// Refused beside `hazard`.
         #[serde(default)]
         hazard_col: Option<String>,
         /// `"full"`, a normal-inverse-Wishart over all the features, or
@@ -1294,6 +1294,13 @@ pub enum ModelKind {
         /// rows. Skipped when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         warm_span: Option<Span>,
+        /// The expected rows between changepoints, `H = 1/hazard_rows` the
+        /// chance of a break after each row of positive weight, on any
+        /// clock: Adams and MacKay's hazard, per observation (docs/PLAN.md
+        /// task 547). The default, 250, where neither it nor `hazard` is
+        /// given. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hazard_rows: Option<f64>,
     },
     /// What a stream's columns hold, read in one pass (docs/PLAN.md task
     /// 223 (b)): per column the nulls, NaNs, infinities and values past

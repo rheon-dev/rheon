@@ -181,7 +181,7 @@ sim["rows"].join(truth, on="t").write_parquet("regimes.parquet")
 returns = pl.scan_parquet("regimes.parquet").with_columns(pl.col("x_1", "x_2").diff())   # from the levels
 
 # One model dates each switch, the other names the regime.
-age = rp.spec.bocpd("age", features=["x_1", "x_2"], hazard=500.0)   # how long has this regime lasted?
+age = rp.spec.bocpd("age", features=["x_1", "x_2"], hazard_rows=500.0)   # how long has this regime lasted?
 which = rp.spec.hmm(                                          # which regime is this row in?
     "which", features=["x_1", "x_2"], n_components=2, half_life=float("inf"),
     precision_prior=1e-2, warm_rows=500,

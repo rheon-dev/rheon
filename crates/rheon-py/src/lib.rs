@@ -1359,13 +1359,11 @@ fn format_duration(ns: i64) -> String {
 
 /// The parameters measured in clock units, which take a duration under a
 /// temporal clock, keyed `"*"` for the shared ones and by model `type` for
-/// the rest; the rates per clock unit, which a temporal clock refuses
-/// (docs/PLAN.md task 88); and the parameters that take a duration or a
-/// number bound to no clock unit, `bocpd`'s `hazard` (task 179).
+/// the rest; and the rates per clock unit, which a temporal clock refuses
+/// (docs/PLAN.md task 88).
 #[pyfunction]
 #[allow(clippy::type_complexity)]
 fn spec_clock_fields() -> (
-    Vec<(&'static str, Vec<&'static str>)>,
     Vec<(&'static str, Vec<&'static str>)>,
     Vec<(&'static str, Vec<&'static str>)>,
 ) {
@@ -1377,7 +1375,6 @@ fn spec_clock_fields() -> (
     (
         table(rheon_polars::CLOCK_FIELDS),
         table(rheon_polars::CLOCK_RATES),
-        table(rheon_polars::DURATION_OR_UNIT_FREE_FIELDS),
     )
 }
 

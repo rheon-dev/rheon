@@ -1655,7 +1655,7 @@ class TestBocpdAtALevel:
         spec = rp.spec.bocpd(
             "b",
             features=["x"],
-            hazard=hazard,
+            hazard_rows=hazard,
             covariance_type="diag",
             mean_prior=[offset],
             mean_precision_prior=kappa0,

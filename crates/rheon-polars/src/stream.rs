@@ -631,8 +631,9 @@ use build::{build_one, constraint, huber_scale_of, resid_window};
 mod model_cfgs;
 use model_cfgs::read_floor;
 pub use model_cfgs::{
-    audit_cfg, bocpd_cfg, corrchange_cfg, deco_block_names, deco_cfg, expectile_cfg, garch_cfg,
-    glm_cfg, hawkes_cfg, hmm_cfg, huber_model, quantile_model, rcov_cfg, sgd_model,
+    BOCPD_HAZARD_ROWS, audit_cfg, bocpd_cfg, corrchange_cfg, deco_block_names, deco_cfg,
+    expectile_cfg, garch_cfg, glm_cfg, hawkes_cfg, hmm_cfg, huber_model, quantile_model, rcov_cfg,
+    sgd_model,
 };
 
 /// One grid combo: the rendered label plus the machine values it encodes, so

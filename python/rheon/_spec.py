@@ -344,7 +344,7 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
     "glm": frozenset({"refit_span", "max_state_bytes"}),
     "kmeans": frozenset({"warm_span", "update_every", "split_merge_every"}),
     "hmm": frozenset({"warm_span"}),
-    "bocpd": frozenset({"warm_span"}),
+    "bocpd": frozenset({"warm_span", "hazard_rows"}),
     "corrchange": frozenset({"permute_every"}),
 }
 

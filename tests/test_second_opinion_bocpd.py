@@ -122,7 +122,7 @@ def spec(**kw: Any) -> dict[str, Any]:
     return rp.spec.bocpd(
         "b",
         features=["x"],
-        hazard=HAZARD,
+        hazard_rows=HAZARD,
         covariance_type="diag",
         mean_prior=[0.0],
         mean_precision_prior=KAPPA0,
@@ -319,6 +319,66 @@ def test_the_fold_leaves_every_run_below_the_cap_the_packages():
     assert error <= IDENTITY_TOL
 
 
+# --- a hazard on the clock, through the package's hazard function --------------------
+
+
+def test_a_clock_hazard_on_irregular_steps_is_the_packages_with_each_steps_chance():
+    """``hazard = tau`` on a number clock puts the chance ``h = 1 - exp(-dt /
+    tau)`` of the step into a row before the row (task 547). The package
+    applies its hazard after the row it is called on, so a hazard function
+    that returns the *next* step's chance makes its ``R[:, c]``, the
+    posterior before row ``c``, the clock form's: the model's ``run_mode``
+    and ``run_mean`` read it and its ``loglik`` is that posterior's
+    predictive. The clock form's ``p_change`` is the chance row ``c`` began
+    a run with no break after it yet, ``R[1, c + 1] / (1 - h_{c + 1})``,
+    whatever the chance the function gave after the last row. Irregular
+    steps in seconds, shared stamps among them (no chance at all), nothing
+    pruned, and a level that moves twice."""
+    rng = np.random.default_rng(547)
+    n, tau = 300, 40.0
+    gaps = rng.exponential(10.0, n).round(1)
+    gaps[0] = 0.0
+    gaps[rng.random(n) < 0.05] = 0.0
+    secs = np.cumsum(gaps)
+    level = np.where(np.arange(n) < 100, 0.0, np.where(np.arange(n) < 220, 3.0, -1.0))
+    x = level + rng.normal(0.0, 1.0, n)
+    # The chance of the step after row c, and an arbitrary one after the last.
+    after = np.concatenate([-np.expm1(-np.diff(secs) / tau), [0.5]])
+    calls = iter(range(n))
+
+    def hazard_function(r: np.ndarray) -> np.ndarray:
+        return np.full(r.shape, after[next(calls)])
+
+    model = Recording(NU0 / 2.0, PSI0 / 2.0, KAPPA0, 0.0)
+    r, maxes = bcd.online_changepoint_detection(x, hazard_function, model)
+    loglik = np.log([r[: c + 1, c] @ model.densities[c] for c in range(n)])
+    clock = rp.spec.bocpd(
+        "b",
+        features=["x"],
+        hazard=tau,
+        clock="t",
+        gap_cap=1e9,
+        covariance_type="diag",
+        mean_prior=[0.0],
+        mean_precision_prior=KAPPA0,
+        covariance_prior=[PSI0],
+        prune_below=0.0,
+        max_run=n + 2,
+        min_weight=0.0,
+    )
+    out = rp.ModelBank([clock]).fit_predict(pl.DataFrame({"t": secs, "x": x})).unnest("b")
+    # Tolerances: ``TestBocpdAtALevel``'s at level 0, one recursion against
+    # another through libm.
+    np.testing.assert_allclose(out["p_change"], r[1, 1:] / (1.0 - after), rtol=0, atol=P_TOL)
+    np.testing.assert_allclose(out["run_mean"], np.arange(n + 1) @ r[:, :n], rtol=1e-9)
+    np.testing.assert_allclose(out["loglik"], loglik, rtol=1e-9, atol=1e-9)
+    np.testing.assert_array_equal(out["run_mode"], maxes[:n])
+    # The steps acted: a stamp shared with the row before begins no run.
+    shared = np.flatnonzero(gaps[1:] == 0.0) + 1
+    assert len(shared) > 5 and (out["p_change"].to_numpy()[shared] == 0.0).all()
+    assert out["p_change"].max() > 0.5
+
+
 # --- the robust emission against its definition ---------------------------------------
 
 #: The robust emission's prior: two features, each the normal-inverse-gamma
@@ -344,7 +404,7 @@ def robust_model(x: np.ndarray, beta: float | None) -> pl.DataFrame:
     spec = rp.spec.bocpd(
         "b",
         features=features,
-        hazard=ROBUST_HAZARD,
+        hazard_rows=ROBUST_HAZARD,
         covariance_type="diag",
         robust_beta=beta,
         mean_prior=[0.0] * x.shape[1],
