@@ -2211,6 +2211,56 @@ lag2: -0.309
 
 The fit lands within sampling error of `(2, 0.6, −0.3)` after 20,000 rows.
 
+**A trend or a season comes in as features.** `ar` has no `trend` or
+`seasonal` parameter of its own: a model sees the clock with every gap past
+`gap_cap` shortened, so a time or a phase read from it would drift after
+each long gap. Make them as columns in the query, from the clock column as
+it is, and pass them in `features`. Here an hourly series has a slow trend
+and a daily cycle on top of its AR(1) noise:
+
+```python
+import numpy as np
+import polars as pl
+from rheon import polars as rp
+
+# y = 10 + 0.001 t + 2 sin(2 pi t / 24) + e, e an AR(1) of 0.6, one row an hour.
+rng = np.random.default_rng(5)
+n = 24 * 400
+t = np.arange(n, dtype=float)
+e = np.zeros(n)
+for i in range(1, n):
+    e[i] = 0.6 * e[i - 1] + rng.standard_normal()
+y = 10.0 + 0.001 * t + 2.0 * np.sin(2 * np.pi * t / 24) + e
+pl.DataFrame({"t": t, "y": y}).write_parquet("hourly.parquet")
+
+# The time and the day's phase, made in the query.
+phase = 2 * np.pi * pl.col("t") / 24
+lf = pl.scan_parquet("hourly.parquet").with_columns(
+    trend=pl.col("t"), day_sin=phase.sin(), day_cos=phase.cos()
+)
+spec = rp.spec.ar(
+    "a", targets=["y"], lags=1, features=["trend", "day_sin", "day_cos"],
+    clock="t", gap_cap=24.0, half_life=float("inf"),
+)
+bank = rp.ModelBank([spec])
+bank.fit(lf)
+for row in bank.coef().iter_rows(named=True):
+    print(f"{row['term']}: {row['coef']:.4g}")
+```
+
+```text
+intercept: 3.983
+lag1: 0.6042
+trend: 0.0003951
+day_sin: 0.8368
+day_cos: 0.3044
+```
+
+The lag of `y` carries part of the trend and the cycle, so their
+coefficients are the generating ones seen through it. The trend's is
+`0.001 · (1 − 0.6)`. The cycle's are `2 (1 − 0.6 cos(2π/24))` and
+`2 · 0.6 sin(2π/24)`, about 0.84 and 0.31.
+
 #### See also
 
 When the lags are not of the target, or the question is not its value:

@@ -323,22 +323,13 @@ class TestWindowedSpread:
         return pl.DataFrame({"x0": x[:, 0], "x1": x[:, 1], "y": y})
 
     def _spec(self, kind, **kw):
-        common = dict(
-            targets=["y"],
-            features=["x0", "x1"],
-            half_life=self.H,
-            window_size=self.W,
-            emit_sigma=True,
-            emit_zscore=True,
-            **kw,
-        )
+        common = dict(targets=["y"], features=["x0", "x1"], half_life=self.H, **kw)
+        common |= dict(window_size=self.W, emit_sigma=True, emit_zscore=True)
         if kind == "ar":
-            # Its own lag beside the features; it solves on every row.
             return rp.spec.ar("m", lags=1, **common)
-        common["solve_every"] = 1e-9
         if kind == "lasso":
-            return rp.spec.lasso("m", penalties=[0.01], **common)
-        return rp.spec.ewridge("m", **common)
+            return rp.spec.lasso("m", penalties=[0.01], solve_every=1e-9, **common)
+        return rp.spec.ewridge("m", solve_every=1e-9, **common)
 
     @staticmethod
     def _field(out, spec, prefix):

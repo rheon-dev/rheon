@@ -552,6 +552,14 @@ def clock_specs(draw, model: str, step: int, cap: int):
             kw["start_span"] = steps(1, 30)
         else:
             kw["start_rows"] = draw(st.integers(50, 60))
+    elif model == "ar":
+        # Task 486: its lags beside the features, a window of the clock with
+        # its edge, and the zero-weight rows that count in no clock. No
+        # embargo: `ar` refuses one.
+        kw |= xy | dict(lags=draw(st.integers(1, 3)), ridge=1e-6)
+        kw |= maybe("window_size", 1, 60)
+        if "window_size" in kw:
+            kw["closed"] = draw(st.sampled_from(["right", "both"]))
     else:
         assert model == "rls", model
         kw |= xy | maybe("embargo", 1, 5)

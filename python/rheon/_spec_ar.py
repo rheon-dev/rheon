@@ -218,6 +218,14 @@ def ar(
     copies a lag it never opens. ``min_weight`` defaults to 0, with this
     gate in its place.
 
+    **A trend or a season.** There is no ``trend`` or ``seasonal``
+    parameter: a model sees the clock with every gap past ``gap_cap``
+    shortened, so a time or a phase read from it would drift after each
+    long gap. Make them as columns in the query from the clock column, such
+    as ``pl.col("t")`` for a trend and the sine and cosine of
+    ``2 * math.pi * pl.col("t") / 24`` for a daily cycle on an hourly clock,
+    and pass them in ``features``.
+
     **Standard errors.** ``emit_se_coef`` reports each coefficient's
     standard error as :func:`ewridge` does, from the same fit: the
     coefficients' variance over the noise, from the fit's own factor, times
