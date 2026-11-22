@@ -131,11 +131,11 @@ realistic test and nothing is left to add.
 | | O | `convergence.ftrl_logistic` (7), `ftrl_squared` (9) (statsmodels), `learning_rate` (3), `test_oracles_gradient_paths` (2), `test_second_opinion` | R | a finite half-life: `ftrl_ref` only (no library forgets) |
 | | C | as `ewridge` | D / R | none |
 | `holt` | G | 1, and `golden_structured.rs`'s `holt_trend` (`10 + 0.5 t` and noise: the forecast within 2 of the line, the trend within 0.15 of 0.5, measured 0.0001) | R\*; R (the added test) | none |
-| | F | 2 (`holt`, `_inf`) | D: same stream, no trend | a trending series; the fixtures freeze forms only |
+| | F | 3 (`holt`, `_inf`, `holt_trending`) | D: same stream, no trend; R (`holt_trending`: `10 (1 + j) + (0.5 + 0.25 j) t` on the clock, 80 rows) | none |
 | | O | `convergence.holt` (8, statsmodels), `test_second_opinion` (4: statsmodels Holt, missing rows, row after a gap) | R | none |
 | | C | as `ewridge` (`holt` takes no features) | D / R | none |
 | `glm` | G | 2 (`glm` Gamma/log under decay, `glm_cap` Tweedie), and `golden_structured.rs`'s `glm_gamma` (500 draws of a Gamma of shape 4 at a log-linear mean, no forgetting: the coefficients held within 0.15 of the truth, 0.02 to 0.04 measured) | D ( a positive target `y^2 + 0.1` of a linear index, not drawn from the family, so the dispersion is near 0 and the working response is exact; R (the added test) | none |
-| | F | 4 (`glm_refit`, `_refit_done`, `_refit_clock`, `glm_cap`) | D: same stream | none for forms |
+| | F | 5 (`glm_refit`, `_refit_done`, `_refit_clock`, `glm_cap`, `glm_gamma_draws`) | D: same stream; R (`glm_gamma_draws`: Gamma draws of shape 4 at a mean linear in the features, 120 rows, refit done) | none |
 | | O | `convergence.glm` (6, statsmodels), `test_second_opinion_glm` (statsmodels `GLM` with `freq_weights`, glum; 5 coefficients at 10,000 rows, 20 at 10,000 and 100,000) | R | none |
 | | C | as `ewridge` | D / R | none |
 | `expectile` | G | 2 (`expectile`, `_window`), and `golden_structured.rs`'s `expectile_skewed` (the same noise at 0.85: the shift is held to the expectile of `Exp(1)` found by bisection, 0.7) | R\*; R (the added test) | none |
@@ -196,7 +196,7 @@ realistic test and nothing is left to add.
 | | O | `test_second_opinion_audit` (numpy `corrcoef` and `==` over the rows both columns hold: 3,000 dirty rows), `test_second_opinion` (scipy moments, statsmodels Dickey-Fuller, numpy median and MAD from exact counts), `test_audit` | R | none |
 | | C | Rust probe D | D | none |
 | `hawkes` | G | 1 (+ a window case) on events on a unit lattice (D: no self-excitation), and `golden_structured.rs`'s `hawkes_process` (300 events of a process simulated by thinning at a baseline of 0.4, a branching ratio of 0.5 and a kernel decay of 1.5: the intensity and the fit at the true decay, the baseline and excitation asserted near the truth, then two kernels under forgetting) | D and R | none |
-| | F | 3 (`hawkes` (40), `_window` (45), `_clock_window`) | D: same stream | none for forms |
+| | F | 4 (`hawkes` (40), `_window` (45), `_clock_window`, `hawkes_excited`) | D: same stream; R (`hawkes_excited`: two nodes of a discrete-time self-exciting process, 120 rows) | none |
 | | O | `test_second_opinion_hawkes` (tick's least-squares contrast on tick-simulated streams, 3.9e-14) | R | the weighted fit: tick takes no weights, so the decay form is a longhand |
 | | C | Rust probe D | D | none |
 | `garch` | G | 6 (`garch`, `_targeted`, `_gjr_t`, `_skewt`, `_egarch`, `_figarch`) | D: the 60-row stream repeated, not a variance process | task 548 |
@@ -334,3 +334,23 @@ like) only choose where a number is pinned, not what is read as converged;
 `kmeans`' and `hmm`'s `warm_rows` are the models' own settings under test;
 `holt_trend` asserts the forecast at three rows as pins of a model with
 half-lives of 10 and 40, not as a guard.
+
+State fixtures of the three models whose streams were not drawn from their
+family (`cases/mod.rs`, three new `Targets`, a stream each from the case's
+own integer generator and arithmetic, no libm; each a new file in the current
+set, schema 72 unreleased, no layout change, no bump):
+
+| case | commit | the stream |
+|---|---|---|
+| `glm_gamma_draws` | this part | Gamma draws of shape 4 (eight squared normals over 8) at `(2 + 0.8 x0 - 0.4 x1)(1 + j)`, two targets, a refit of 15 rows done by the save at 120 |
+| `holt_trending` | this part | `10 (1 + j) + (0.5 + 0.25 j) t + noise` with `t` the clock, a gap moving the line by its length, 80 rows |
+| `hawkes_excited` | this part | two nodes, an event with probability `0.1 + 0.25 R_j + 0.05 R_other` (at most 0.9), `R` the decayed events (0.6 a row), 120 rows |
+
+No earlier schema's directory gets a copy: a kept set is the files that
+existed when its schema was current (the `expectile`, `garch`, `glm_refit` and
+`hawkes` cases are in no `v<N>/` either), and `every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes`
+walks the files a kept set has. The three files were written on
+`linux-x86_64` (the others on `macos-aarch64`); the check on another platform
+reads them within the golden tolerance, and a regeneration on the macOS
+machine writes them there. The existing 114 fixtures are unchanged to the
+byte: the new streams draw after the old ones' numbers, so no old stream moves.
