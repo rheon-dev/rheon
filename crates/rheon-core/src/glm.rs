@@ -91,8 +91,12 @@ use crate::{Decay, RefitStatus};
 mod tests;
 
 /// The most IRLS passes a refit takes; one that takes them all is counted
-/// in the model's `solve_failures`. The study's refits converged in under
-/// 20 passes on every seed.
+/// in the model's `solve_failures`. Run to its rounding ([`refit_fit`]),
+/// a refit of the default 210 rows at 20 features took at most 7 passes
+/// for the Poisson, 33 for the Tweedie at `p = 1.5` and 75 for the Gamma
+/// under the log link, whose Fisher scoring converges only linearly (50
+/// seeds each, 2026-11-22; 9, 24 and 41 while it stopped at a step of
+/// 1e-11).
 pub const GLM_REFIT_PASSES: u32 = 100;
 
 /// The step cap a target's rows are held to while its refit waits, below
@@ -585,12 +589,58 @@ fn objective(cfg: &GlmCfg, fam: &Family, rows: &[f64], nf: usize, b: &[f64]) -> 
     f + 0.5 * cfg.ridge * b.iter().map(|v| v * v).sum::<f64>()
 }
 
+/// `score(b)·d`, the score `Σ v W (z − η) x̃ − R b` at `b` read along
+/// `d`: the objective's slope along `−d`. `None` where a row's `η` gives
+/// no mean.
+fn score_along(
+    cfg: &GlmCfg,
+    fam: &Family,
+    rows: &[f64],
+    nf: usize,
+    b: &[f64],
+    d: &[f64],
+) -> Option<f64> {
+    let mut s = -cfg.ridge * b.iter().zip(d).map(|(u, v)| u * v).sum::<f64>();
+    for row in rows.chunks_exact(nf + 2) {
+        let eta = dot_aug(b, &row[..nf], cfg.fit_intercept);
+        let wk = fam.working(eta, row[nf])?;
+        s += row[nf + 1] * wk.w * (wk.z - wk.eta) * dot_aug(d, &row[..nf], cfg.fit_intercept);
+    }
+    Some(s)
+}
+
+/// How small a change of the objective, relative to `1 + |F|`, the line
+/// search reads from the slopes rather than from `F` itself (the
+/// [`refit_fit`] docs).
+const UNSEEN: f64 = 1e-10;
+
 /// A buffer's rows fitted by penalized IRLS with step halving, from the
 /// intercept at the link of the targets' weighted mean: the fit, the
-/// passes it took, and whether it converged -- the Newton step under
-/// `1e-11 (1 + max|b|)` in every coefficient and the objective still to
-/// `1e-12` relative, or no step that does not raise it. `None` where the
-/// start or a pass is not finite.
+/// passes it took, and whether it converged. `None` where the start or a
+/// pass is not finite.
+///
+/// Each pass solves `(G + R I) d = s` for the Fisher step `d` (`s` the
+/// score) and halves `t` from 1 until `b + t d` does not raise the
+/// objective `F`. Two things keep the answer the same on every platform,
+/// whose `exp`, `ln` and `powf` differ in their last bits:
+///
+/// - **a change too small for `F` to show is read from the slopes.** Where
+///   the step's predicted fall `t s'd (1 − t/2)` is under `1e-10 (1 + |F|)`,
+///   `F`'s own rounding (its terms are far larger than their sum near the
+///   fit) can hide or invert it, and a comparison of `F` would decide the
+///   step by its last bits. There the step stands when the trapezoid rule
+///   on the slopes at its two ends, exact for a quadratic, says `F` did not
+///   rise: `s(b)'d + s(b + t d)'d ≥ 0`.
+/// - **the fit runs to its rounding.** Fisher scoring converges only
+///   linearly where the link is not the family's canonical one (the Gamma's
+///   log link, 0.6 a pass in a fixture here), so a stop at a fixed step size
+///   leaves the fit that step's multiple from its fixed point, and which
+///   pass first passes the test is a last-bit matter: on 2026-11-21 such a
+///   stop moved a Gamma fit's prediction by 2e-8 between macOS and x86-64.
+///   It converges once the full step is at the fit's rounding, `4ε (1 +
+///   max|b|)`; or under `1e-11 (1 + max|b|)` and no smaller than the pass
+///   before's, which a contracting iteration reaches only at its rounding;
+///   or once no step does not raise `F`.
 fn refit_fit(cfg: &GlmCfg, rows: &[f64], nf: usize) -> Option<(Vec<f64>, u32, bool)> {
     let fam = cfg.family();
     let k = cfg.k_total();
@@ -616,6 +666,7 @@ fn refit_fit(cfg: &GlmCfg, rows: &[f64], nf: usize) -> Option<(Vec<f64>, u32, bo
     );
     let mut x = vec![1.0; k];
     let mut trial = vec![0.0; k];
+    let mut last = f64::INFINITY;
     for pass in 1..=GLM_REFIT_PASSES {
         hess.fill(0.0);
         for (g, bi) in grad.iter_mut().zip(&b) {
@@ -637,6 +688,16 @@ fn refit_fit(cfg: &GlmCfg, rows: &[f64], nf: usize) -> Option<(Vec<f64>, u32, bo
         if !solve_ridged(&hess, cfg.ridge, &grad, k, &mut l, &mut d) {
             return None;
         }
+        let size = b.iter().fold(0.0_f64, |a, v| a.max(v.abs()));
+        let full = d.iter().fold(0.0_f64, |a, v| a.max(v.abs()));
+        let floor = full <= 4.0 * f64::EPSILON * (1.0 + size);
+        if floor || (full <= 1e-11 * (1.0 + size) && full >= last) {
+            return Some((b, pass, true));
+        }
+        last = full;
+        // `s'd = d'(G + R I)d`: the objective's fall along `d` at `t = 0`.
+        let slope: f64 = grad.iter().zip(&d).map(|(g, v)| g * v).sum();
+        let unseen = UNSEEN * (1.0 + f.abs());
         let mut t = 1.0;
         let mut fresh = f;
         let mut fell = false;
@@ -645,8 +706,14 @@ fn refit_fit(cfg: &GlmCfg, rows: &[f64], nf: usize) -> Option<(Vec<f64>, u32, bo
                 trial[i] = b[i] + t * d[i];
             }
             fresh = objective(cfg, &fam, rows, nf, &trial);
-            if fresh <= f {
-                fell = true;
+            fell = if t * slope * (1.0 - 0.5 * t) > unseen {
+                fresh <= f
+            } else {
+                fresh.is_finite()
+                    && score_along(cfg, &fam, rows, nf, &trial, &d)
+                        .is_some_and(|at_t| slope + at_t >= 0.0)
+            };
+            if fell {
                 break;
             }
             t *= 0.5;
@@ -655,11 +722,6 @@ fn refit_fit(cfg: &GlmCfg, rows: &[f64], nf: usize) -> Option<(Vec<f64>, u32, bo
             return Some((b, pass, true));
         }
         b.copy_from_slice(&trial);
-        let size = b.iter().fold(0.0_f64, |a, v| a.max(v.abs()));
-        let step = d.iter().fold(0.0_f64, |a, v| a.max((t * v).abs()));
-        if step <= 1e-11 * (1.0 + size) && (f - fresh).abs() <= 1e-12 * (1.0 + f.abs()) {
-            return Some((b, pass, true));
-        }
         f = fresh;
     }
     Some((b, GLM_REFIT_PASSES, false))

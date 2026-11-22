@@ -269,6 +269,31 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **`glm`'s refit gives the same fit on every platform** (W9's CI on
+  1819e678: the committed `glm_refit_done` state fixture failed on Windows
+  and the golden pipeline's `glm.pred_y0_sq` on Linux x86-64, 2.1e-8 from
+  macOS's). The refit's Fisher scoring converges only linearly where the
+  link is not the family's canonical one (0.6 a pass for the Gamma's log
+  link in the fixture), and its last passes compared objectives below
+  their own rounding: which step halving stood, and which pass first met
+  the stop at a step of 1e-11, were decided by the last bit of `exp` and
+  `ln`, which differ between macOS, glibc and Windows. A change the
+  objective cannot show is now read from the slopes at the step's two ends
+  (the trapezoid rule, exact for a quadratic), and the refit runs on until
+  its step stops shrinking at its rounding, so a last-bit difference moves
+  the fit by rounding only. Measured on macOS arm64 with the `libm` crate's
+  `exp`, `ln` and `pow` in the family's place, as another platform's: the
+  refit moved by up to 1.05e-9 before and 1.1e-16 after (one ulp in every
+  target: 7.7e-9 and 2.2e-16); the state fixtures then pass the
+  cross-platform comparison, the Rust golden differs in one value by 1 ulp
+  and the golden pipeline's `glm` fields not at all (3.0e-9 before). The fit itself
+  moves on every platform by up to 4e-9 (a Tweedie fit of order 1; 9e-11
+  for the Gamma, 5e-12 for the Poisson); the golden pipeline's `glm`
+  predictions by 2.4e-11 relative. A refit under a non-canonical link takes
+  about 1.7 times the passes (at most 75 of its 100 for the Gamma's log
+  link at 20 features over 50 seeds, 41 before); the Poisson's are
+  unchanged. Moves: `glm.pred_*`, `glm.resid_*`, `glm.coef`.
+
 - **Under `label_clock`, a row of weight 0 steps the clock as under
   `embargo`** (review P1; the step itself was taken away again by the
   entry above, under which such a row counts in no clock under either).

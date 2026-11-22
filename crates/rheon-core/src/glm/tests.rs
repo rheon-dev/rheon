@@ -73,7 +73,9 @@ fn run(m: &mut Glm, rows: &[(Vec<f64>, f64)], w: impl Fn(usize) -> f64) -> Vec<f
 
 /// The batch target, `argmin Σ v d(y, μ)/2 + R/2 |b|²`, by Newton with step
 /// halving on full square systems solved by the oracle's LU (no arithmetic
-/// of the model's Cholesky), from 0, to a step of 1e-14.
+/// of the model's Cholesky), from 0, for 200 passes: a step under 1e-6
+/// is taken whole, since the objective's rounding can hide what it changes
+/// and step halving would then stop short of the fit.
 fn batch(c: &GlmCfg, rows: &[(Vec<f64>, f64)], v: &[f64]) -> Vec<f64> {
     let fam = c.family();
     let k = c.k_total();
@@ -103,17 +105,16 @@ fn batch(c: &GlmCfg, rows: &[(Vec<f64>, f64)], v: &[f64]) -> Vec<f64> {
             }
         }
         let d = oracle::solve(&hess, &g);
-        let f0 = obj(&b);
         let mut t = 1.0;
         let mut nb: Vec<f64> = b.iter().zip(&d).map(|(a, e)| a + e).collect();
-        while obj(&nb) > f0 && t > 1e-14 {
-            t *= 0.5;
-            nb = b.iter().zip(&d).map(|(a, e)| a + t * e).collect();
+        if d.iter().any(|e| e.abs() > 1e-6) {
+            let f0 = obj(&b);
+            while obj(&nb) > f0 && t > 1e-14 {
+                t *= 0.5;
+                nb = b.iter().zip(&d).map(|(a, e)| a + t * e).collect();
+            }
         }
         b = nb;
-        if d.iter().all(|e| (t * e).abs() < 1e-14) {
-            break;
-        }
     }
     b
 }
@@ -184,11 +185,11 @@ fn the_increment_form_is_the_sums_form() {
 }
 
 /// With the buffer as long as the stream, the refit's answer is the batch
-/// target itself: Newton by the oracle's LU from 0 agrees to 4e-9 (the two
-/// stop at steps of 1e-11 and 1e-14 of a fit of order 1, and the Gamma fit's
-/// conditioning carries the refit's stop to 1.02e-9 on Linux and Windows
-/// x86-64, whose `exp` differs from macOS's in the last bits; 1e-9 held on
-/// macOS arm64 only).
+/// target itself: Newton by the oracle's LU from 0 agrees to 1e-13 (measured
+/// 1.2e-15 for the Gamma and 1.1e-16 for the Poisson on macOS arm64, with
+/// the platform's `exp` and `ln` and with the `libm` crate's in their
+/// place). Both run to their rounding; while the refit stopped at a step of
+/// 1e-11 that its last bits decided, the gap was 1.02e-9 on x86-64.
 #[test]
 fn the_refit_is_the_batch_fit_of_its_rows() {
     for family in [GlmFamily::Poisson, GlmFamily::Gamma] {
@@ -204,7 +205,7 @@ fn the_refit_is_the_batch_fit_of_its_rows() {
         let want = batch(&c, &rows, &vec![1.0; rows.len()]);
         let got = &m.coefficients()[0];
         assert!(
-            max_gap(got, &want) < 4e-9,
+            max_gap(got, &want) < 1e-13,
             "{family:?}: {got:?} vs {want:?}"
         );
         assert_eq!(m.solve_failures(), 0);
@@ -213,7 +214,7 @@ fn the_refit_is_the_batch_fit_of_its_rows() {
 
 /// Under decay the refit weights each buffered row by the decays since it
 /// and a row of weight 0 only ages the buffer: the batch target at those
-/// weights, to 1e-9.
+/// weights, to 1e-13 (measured 1.1e-16).
 #[test]
 fn the_refit_reads_the_decayed_weights() {
     let rows = stream(GlmFamily::Poisson, 3, 300, 11);
@@ -245,7 +246,7 @@ fn the_refit_reads_the_decayed_weights() {
         .map(|i| w(i) * lam.powi((n - 1 - i) as i32))
         .collect();
     let want = batch(&c, &rows[..n], &v);
-    assert!(max_gap(&m.coefficients()[0], &want) < 1e-9);
+    assert!(max_gap(&m.coefficients()[0], &want) < 1e-13);
 }
 
 /// The online fit after the refit tracks the batch fit of every row: at
@@ -585,4 +586,65 @@ fn the_refit_buffer_is_held_to_the_groups_cap() {
         "the buffer filled to one row short"
     );
     assert!(m.refit.iter().all(|r| r.done && r.rows.is_empty()));
+}
+
+/// **The refit's answer does not hang on its inputs' last bits.** Another
+/// platform's `exp`, `ln` and `powf` differ from this one's in the last
+/// bit, which moves each row's working weight and response as a target one
+/// ulp away does. Every target here is moved one ulp up, and the refit's
+/// fit must move by rounding only, `1e-13 (1 + max|b|)`: measured at most
+/// 2.2e-16 over these families, links and seeds. While the refit's last
+/// passes were decided by comparing objectives below their rounding and it
+/// stopped at a step of 1e-11, the same nudge moved the fit by up to
+/// 5.5e-11 (Poisson), 2.0e-9 (Gamma, log), 3.6e-9 (Gamma, inverse), 7.7e-9
+/// (Tweedie, log) and 1.3e-11 (Tweedie, power), and the committed state
+/// fixture and golden pipeline failed on x86-64.
+#[test]
+fn the_refit_does_not_hang_on_the_last_bit() {
+    let pairs = [
+        (GlmFamily::Poisson, GlmLink::Log, GlmFamily::Poisson),
+        (GlmFamily::Gamma, GlmLink::Log, GlmFamily::Gamma),
+        (GlmFamily::Gamma, GlmLink::Inverse, GlmFamily::Gamma),
+        (GlmFamily::Tweedie, GlmLink::Log, GlmFamily::Gamma),
+        (GlmFamily::Tweedie, GlmLink::Power, GlmFamily::Gamma),
+    ];
+    for (family, link, draws) in pairs {
+        for seed in 1..=8u64 {
+            let (k, n) = (3 + (seed % 3) as usize, 20 + 15 * seed as usize);
+            let c = GlmCfg {
+                link,
+                ..cfg(family, k - 1, n as u32)
+            };
+            let rows = stream(draws, k, n, seed);
+            let buffer = |up: bool| -> Vec<f64> {
+                let mut out = Vec::new();
+                for (i, (x, y)) in rows.iter().enumerate() {
+                    out.extend_from_slice(x);
+                    // A target of 0 (a Poisson count) has no ulp to move
+                    // by that a family's deviance reads the same way.
+                    let y = if up && *y > 0.0 {
+                        f64::from_bits(y.to_bits() + 1)
+                    } else {
+                        *y
+                    };
+                    out.push(y);
+                    out.push(0.5 + 0.25 * (i % 4) as f64);
+                }
+                out
+            };
+            let (a, pa, ca) = refit_fit(&c, &buffer(false), k - 1).unwrap();
+            let (b, _, cb) = refit_fit(&c, &buffer(true), k - 1).unwrap();
+            assert!(
+                ca && cb && pa < GLM_REFIT_PASSES,
+                "{family:?} {link:?} {seed}"
+            );
+            let size = a.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+            let gap = max_gap(&a, &b);
+            assert!(
+                gap <= 1e-13 * (1.0 + size),
+                "{family:?} {link:?} seed {seed}: one ulp in the targets moved the fit by \
+                 {gap:e}: {a:?} vs {b:?}"
+            );
+        }
+    }
 }
