@@ -929,6 +929,12 @@ CASES: list[Case] = [
         },
     ),
     Case("bocpd2", "bocpd", {**NODECAY2, "features": ["x1", "x2"], "hazard_col": "h"}),
+    # Task 538: the warm-up over a span of the clock.
+    Case(
+        "bocpd_span",
+        "bocpd",
+        {**NODECAY, "features": ["x1", "x2"], "covariance_type": "diag", "warm_span": 20.0},
+    ),
     Case(
         "corrchange",
         "corrchange",

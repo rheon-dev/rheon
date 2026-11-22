@@ -1241,6 +1241,11 @@ pub enum ModelKind {
         /// `covariance_prior` (task 195, U4).
         #[serde(default)]
         warm_rows: Option<usize>,
+        /// The warm-up over a span of the clock in place of `warm_rows`
+        /// (docs/PLAN.md task 538), as `kmeans`' `warm_span`; at least two
+        /// rows. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        warm_span: Option<Span>,
     },
     /// What a stream's columns hold, read in one pass (docs/PLAN.md task
     /// 223 (b)): per column the nulls, NaNs, infinities and values past

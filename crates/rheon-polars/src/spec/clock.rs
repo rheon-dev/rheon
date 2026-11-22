@@ -66,6 +66,7 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
         &["warm_span", "update_every", "split_merge_every"],
     ),
     ("hmm", &["warm_span"]),
+    ("bocpd", &["warm_span"]),
     ("ew_class", &["window_size", "snapshot_every"]),
     ("marginal", &["window_size", "snapshot_every"]),
     ("hawkes", &["window_size", "kernel_half_lives"]),
@@ -475,9 +476,12 @@ impl Spec {
             // A number of rows binds to no clock unit
             // ([`DURATION_OR_UNIT_FREE_FIELDS`]).
             ModelKind::Bocpd {
-                hazard: Some(h), ..
-            } if h.is_duration() => {
-                put(&mut out, "hazard", Some(h));
+                hazard, warm_span, ..
+            } => {
+                if let Some(h) = hazard.as_ref().filter(|h| h.is_duration()) {
+                    put(&mut out, "hazard", Some(h));
+                }
+                put(&mut out, "warm_span", warm_span.as_ref());
             }
             _ => {}
         }

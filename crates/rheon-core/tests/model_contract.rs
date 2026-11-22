@@ -1562,6 +1562,7 @@ fn bocpd_cfg() -> BocpdCfg {
         min_weight: 0.0,
         warm_rows: None,
         hazard_on_clock: false,
+        warm_clock: None,
     }
 }
 

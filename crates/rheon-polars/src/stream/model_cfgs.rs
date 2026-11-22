@@ -219,6 +219,7 @@ pub fn bocpd_cfg(spec: &Spec) -> Result<BocpdCfg, String> {
         prune_below,
         max_run,
         warm_rows,
+        warm_span,
     } = &spec.model
     else {
         return Err(not_a(spec, "bocpd_cfg", "bocpd"));
@@ -277,6 +278,7 @@ pub fn bocpd_cfg(spec: &Spec) -> Result<BocpdCfg, String> {
         min_weight: spec.min_periods_or_default(),
         warm_rows: *warm_rows,
         hazard_on_clock: hazard.as_ref().is_some_and(Span::is_duration),
+        warm_clock: warm_span.as_ref().map(Span::value),
     })
 }
 

@@ -1525,6 +1525,7 @@ fn bocpd_held(on_clock: bool) -> Bocpd {
         min_weight: 0.0,
         warm_rows: None,
         hazard_on_clock: on_clock,
+        warm_clock: None,
     })
     .unwrap()
 }
@@ -2323,6 +2324,7 @@ fn bocpd_at_a_level() -> Bocpd {
         min_weight: 0.0,
         warm_rows: None,
         hazard_on_clock: false,
+        warm_clock: None,
     })
     .unwrap()
 }

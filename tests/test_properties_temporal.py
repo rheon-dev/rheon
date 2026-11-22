@@ -505,8 +505,12 @@ def clock_specs(draw, model: str, step: int, cap: int):
             features=["x0", "x1"],
             hazard=steps(1, 60),
             degrees_of_freedom_prior=2.0,
-            covariance_prior=[1.0],
         )
+        # Task 538: the prior's scale from a warm-up over a span, or given.
+        if draw(st.booleans()):
+            kw["warm_span"] = steps(1, 10)
+        else:
+            kw["covariance_prior"] = [1.0]
     elif model == "hawkes":
         # Task 539: the kernels as durations, the window as a span with its
         # edge, and zero-weight rows that count in no clock.

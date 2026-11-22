@@ -608,6 +608,7 @@ fn bocpd_cfg() -> BocpdCfg {
         min_weight: 0.0,
         warm_rows: None,
         hazard_on_clock: true,
+        warm_clock: None,
     }
 }
 
@@ -2187,6 +2188,21 @@ pub fn all() -> Vec<Case> {
         ),
         // Saved with its warm-up buffer still filling: 10 learned rows
         // wanted, 5 held (schema 40's `WarmRow`), as `kmeans_warming` is.
+        // Task 538: a warm-up over a span of the clock, saved inside it.
+        case!(
+            "bocpd_warm_span",
+            "Bocpd",
+            Bocpd,
+            Bocpd::new(BocpdCfg {
+                warm_rows: None,
+                warm_clock: Some(15.0),
+                ..bocpd_cfg()
+            })
+            .unwrap(),
+            K,
+            Targets::None,
+            6
+        ),
         case!(
             "bocpd_warming",
             "Bocpd",

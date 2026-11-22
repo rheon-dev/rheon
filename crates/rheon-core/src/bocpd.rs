@@ -215,11 +215,14 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::clock_span::{HeldCap, Place, start_due};
 use crate::solve::{FactorWork, QuadWork, SpdFactor};
 
 mod held;
 #[cfg(test)]
 mod product_tests;
+#[cfg(test)]
+mod tests_span;
 use held::{GaussWork, HeldBranches, HeldPrior, HeldZ, LengthTerms, prune_band, prune_keeps};
 
 /// **Why the reported changepoint probability is `P(r ≤ 1)` and not
@@ -335,6 +338,13 @@ pub struct BocpdCfg {
     /// it reads as a per-row hazard, which it was.
     #[serde(default, skip_serializing_if = "is_false")]
     pub hazard_on_clock: bool,
+    /// The warm-up over a span of the clock in place of `warm_rows`
+    /// (docs/PLAN.md task 538): the learned rows from the first through the
+    /// first at least this many clock units after it, once they are at
+    /// least two ([`crate::clock_span::start_due`]), held to
+    /// [`WARM_BUDGET_MIB`] as they come. Last, and written only when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warm_clock: Option<f64>,
 }
 
 /// The most rows the warm-up buffers, MiB: `kmeans`' budget for its own.
@@ -580,6 +590,28 @@ impl BocpdCfg {
                  a positive weight.",
                 self.min_weight
             ));
+        }
+        if let Some(d) = self.warm_clock {
+            if !(d.is_finite() && d > 0.0) {
+                no.refuse(format!(
+                    "bocpd: warm_span must be a finite number of clock units above 0, but it \
+                     is {d}. Give the span of clock whose rows set the prior, or leave it out \
+                     for warm_rows."
+                ));
+            }
+            if !self.warms_up() {
+                no.refuse(
+                    "bocpd: warm_span sets the prior from the first rows, but mean_prior and \
+                     covariance_prior are both given, so it has nothing to set. Leave out \
+                     warm_span, or one of the two priors.",
+                );
+            }
+            if self.warm_rows.is_some() {
+                no.refuse(
+                    "bocpd: warm_span and warm_rows are two warm-ups, and the prior is set \
+                     once. Leave one of them out.",
+                );
+            }
         }
         if let Some(n) = self.warm_rows {
             if !self.warms_up() {
@@ -1166,6 +1198,25 @@ pub struct Bocpd {
     /// row's `log_sum_exp` read it (task 419). Not state.
     #[serde(skip)]
     joint_z: HeldZ,
+    /// Under a warm-up over a span of the clock (task 538): the model's
+    /// place on the clock, the warm-up's first stamp and its cap, each
+    /// written only when it holds something.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    place: Option<Place>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    warm_first: Option<crate::Stamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    over: Option<u64>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    warned: bool,
+    /// The row's place, a warning not yet taken, a test's smaller cap. Never
+    /// state.
+    #[serde(skip)]
+    row_stamp: Option<crate::Stamp>,
+    #[serde(skip)]
+    warning: Option<u64>,
+    #[serde(skip)]
+    cap_for_test: Option<u64>,
 }
 
 /// The Student-t predictive's gamma terms, `ln Γ((ν+a)/2) − ln Γ(ν/2)`:
@@ -1195,8 +1246,41 @@ impl Bocpd {
             data_prior: None,
             warm: Vec::new(),
             warm_gap: 0.0,
+            place: cfg.warm_clock.map(|_| Place::default()),
+            warm_first: None,
+            over: None,
+            warned: false,
+            row_stamp: None,
+            warning: None,
+            cap_for_test: None,
             cfg,
         })
+    }
+
+    /// The bytes of the warm-up's rows at `rows` rows, `(d + 4) · 8` a row,
+    /// as the limit counts them.
+    fn warm_bytes(&self, rows: usize) -> u64 {
+        rows as u64 * (self.cfg.n_features as u64 + 4) * 8
+    }
+
+    /// The warm-up's cap in bytes ([`WARM_BUDGET_MIB`]).
+    fn warm_cap(&self) -> u64 {
+        self.cap_for_test
+            .unwrap_or((WARM_BUDGET_MIB * f64::from(1 << 20)) as u64)
+    }
+
+    /// Hold the warm-up to `bytes` in place of its cap, for a test.
+    #[cfg(test)]
+    pub(crate) fn set_cap_for_test(&mut self, bytes: u64) {
+        self.cap_for_test = Some(bytes);
+    }
+
+    fn held_cap(&mut self) -> HeldCap<'_> {
+        HeldCap {
+            over: &mut self.over,
+            warned: &mut self.warned,
+            warning: &mut self.warning,
+        }
     }
 
     /// Whether rows are still being held for the prior (the warm-up), so
@@ -1271,6 +1355,16 @@ impl Bocpd {
             self.warm_gap += d_clock;
             return;
         }
+        // A warm-up over a span of the clock holds the rows the data puts
+        // in it (task 538): a row that would take it past its cap is not
+        // learned, nor any after it.
+        let span = self.cfg.warm_clock.zip(self.row_stamp);
+        if span.is_some() {
+            let (with, cap) = (self.warm_bytes(self.warm.len() + 1), self.warm_cap());
+            if !self.held_cap().admit(with, cap) {
+                return;
+            }
+        }
         self.warm.push(WarmRow {
             x: x.to_vec(),
             hazard: if self.cfg.hazard_from_row {
@@ -1283,7 +1377,15 @@ impl Bocpd {
         });
         self.warm_gap = 0.0;
         self.n_eff += weight;
-        if self.warm.len() >= self.cfg.warm_rows_or_default() {
+        let due = match span {
+            Some((d, now)) => start_due(&mut self.warm_first, now, d, self.warm.len(), 2),
+            None => self.warm.len() >= self.cfg.warm_rows_or_default(),
+        };
+        if span.is_some() {
+            let (bytes, cap) = (self.warm_bytes(self.warm.len()), self.warm_cap());
+            self.held_cap().note(bytes, cap);
+        }
+        if due {
             let full = self.full();
             self.data_prior = Some(DataPrior::of(&self.warm, self.cfg.n_features, full));
             let rows = std::mem::take(&mut self.warm);
@@ -1932,10 +2034,27 @@ impl crate::OnlineModel for Bocpd {
             *out = refused;
             return;
         }
+        // The row's place, for a warm-up over a span of the clock.
+        self.row_stamp = self.place.as_mut().map(|p| p.step(d_clock));
         if self.warming() {
             return self.hold(x, y, d_clock, weight, out);
         }
         self.learn(x, y, d_clock, weight, out);
+    }
+
+    /// A warm-up over a span of the clock reads the row's stamp (task 538).
+    fn stamp_next(&mut self, stamp: crate::Stamp) {
+        if let Some(p) = self.place.as_mut() {
+            p.hand(stamp);
+        }
+    }
+
+    fn take_state_warning(&mut self) -> Option<(u64, u64)> {
+        self.warning.take().map(|b| (b, self.warm_cap()))
+    }
+
+    fn state_over_cap(&self) -> Option<(u64, u64)> {
+        self.over.map(|b| (b, self.warm_cap()))
     }
 
     /// Never told the row's hazard column, so a per-row hazard read from
@@ -2000,7 +2119,8 @@ impl crate::OnlineModel for Bocpd {
                     || !prior_ok
                     || m.warm.iter().any(|r| r.x.len() != d)
                     || (m.data_prior.is_some() && !m.warm.is_empty())
-                    || m.warm.len() >= m.cfg.warm_rows_or_default()
+                    || (m.cfg.warm_clock.is_none() && m.warm.len() >= m.cfg.warm_rows_or_default())
+                    || m.place.is_some() != m.cfg.warm_clock.is_some()
                 {
                     return Err(crate::model::damaged(
                         "bocpd",
@@ -2401,6 +2521,7 @@ mod tests {
             min_weight: 0.0,
             warm_rows: None,
             hazard_on_clock: false,
+            warm_clock: None,
         }
     }
 

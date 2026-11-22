@@ -110,6 +110,13 @@ ITEMS: dict[str, Item] = {
         lambda v: dict(warm_span=v),
         start=True,
     ),
+    "bocpd.warm_span": Item(
+        "bocpd",
+        dict(features=["x0", "x1"], hazard=50.0, covariance_type="diag"),
+        lambda n: dict(warm_rows=n),
+        lambda v: dict(warm_span=v),
+        start=True,
+    ),
     # Four centers on three blobs: two share one, and merge once the fourth
     # blob appears.
     "kmeans.split_merge_every": Item(

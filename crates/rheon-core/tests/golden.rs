@@ -627,6 +627,7 @@ fn bocpd_golden() {
         min_weight: 0.0,
         warm_rows: None,
         hazard_on_clock: false,
+        warm_clock: None,
     })
     .unwrap();
     check("bocpd", &signature(&mut m, 0), GOLDEN_BOCPD);
@@ -655,6 +656,7 @@ fn bocpd_on_the_clock_golden() {
         min_weight: 0.0,
         warm_rows: None,
         hazard_on_clock: true,
+        warm_clock: None,
     })
     .unwrap();
     check(
@@ -1548,6 +1550,7 @@ fn bocpd_emissions_golden() {
         min_weight: 0.0,
         warm_rows: None,
         hazard_on_clock: false,
+        warm_clock: None,
     };
     let mut m = Bocpd::new(cfg(BocpdEmission::Gaussian, 0.0)).unwrap();
     check(

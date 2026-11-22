@@ -29,6 +29,7 @@ def bocpd(
     prune_below: float | None = None,
     max_run: int | None = None,
     warm_rows: int | None = None,
+    warm_span: float | Duration | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Bayesian online changepoint detection, a posterior over how long the current
@@ -181,6 +182,19 @@ def bocpd(
         Where the first rows are not representative and rows are to spare,
         pass a ``warm_rows`` of tens, all from one regime (*The prior* in
         Notes).
+    ``warm_span``
+        The warm-up over a span of the clock in place of ``warm_rows``: the
+        learned rows from the first through the first row at least
+        ``warm_span`` after it, once they are at least two. A number of the
+        clock's units, or of rows where the spec has no clock, or a duration
+        such as ``"1h"`` on a temporal clock; finite and above 0. The span is
+        read off the rows' exact stamps, and a row of weight 0 is no row of
+        it, so on a clock of one unit a row it holds ``warm_span + 1`` rows:
+        the prior of ``warm_rows = warm_span + 1``, to the bit. The data
+        decides how many rows that is, so they are held to 256 MiB as they
+        come: past half of it a warning, once a group, and the row that would
+        pass it stops the run with an error naming the group and the bytes.
+        Refused beside ``warm_rows`` and beside both priors.
 
     .. rubric:: Output
 
@@ -477,6 +491,9 @@ def bocpd(
         "max_run": max_run,
         "warm_rows": warm_rows,
     }
+    # Written only when given, as the Rust spec leaves it out when absent.
+    if warm_span is not None:
+        model["warm_span"] = warm_span
     mirror = _mirror_target(name, "bocpd", features, common, "its change points are in")
     targets = [hazard_col] if hazard_col is not None else mirror
     return _common(name, model, targets=targets, features=features, **common)
