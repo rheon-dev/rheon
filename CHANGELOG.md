@@ -38,6 +38,40 @@ model that only the new build has is listed as an addition and passes.
 
 ### Added
 
+- **Five more drift detectors for `emit_drift`** (task 508), chosen by
+  `drift_kind` in place of Page-Hinkley, each still one flag a slot,
+  `drift_<slot>`, and each honouring `drift_action = "reset"`:
+  `"cusum"`, Page's (1954) tabular two-sided CUSUM on `resid / sigma`,
+  `C± = max(0, C± + d(±z − k))` over the clock, `k` the `drift_delta` and
+  `h` the `drift_threshold` (default 5 without a clock); `"adwin"`,
+  Bifet and Gavaldà's adaptive window on `|resid|`; `"ddm"` and `"eddm"`,
+  Gama's and Baena-García's error-rate detectors on `|resid| >
+  error_above`, which they require (0.5 on a probability of a 0/1 target
+  counts misclassifications); and `"kswin"`, Raab's windowed
+  Kolmogorov-Smirnov test on `|resid|`, its older sample drawn from a
+  seeded SplitMix64 by Floyd's algorithm so a stream draws the same in any
+  chunks, flagging where the exact two-sided p-value is at most `alpha` and
+  `D > 0.1`. Their settings go in `drift_options` by river's names and
+  defaults. ADWIN gains `max_width` (default 1,000,000), so its window is
+  bounded, and ADWIN and KSWIN take `restart = false`, the papers' form
+  that keeps what a flag left; their state is checked at the call against
+  `max_state_bytes` (256 KB a group, every slot together): ADWIN's
+  `104 · levels + 104` bytes at `max_buckets = 5` (1,976 at a million
+  rows), KSWIN's `8 · window_size + 48`. Held flag for flag to river 0.26.1
+  (`drift.ADWIN`, `drift.binary.DDM`, `drift.binary.EDDM`) on a bank's
+  residuals, KSWIN to `scipy.stats.ks_2samp(method="exact")` on the samples
+  it draws, CUSUM to Page's recursion and, in Rust, to the published
+  average run lengths at `k = 0.5` (168 rows at `h = 4`, 465 at `h = 5`).
+  ADWIN, DDM, EDDM and KSWIN count rows of positive weight, not clock; a
+  zero-weight row reaches none of them. A Page-Hinkley detector's state
+  file is the bytes it was; the new kinds are written under their names
+  (`Adwin`, `Ddm`, `Eddm`, `Kswin`, `Cusum`), frozen by the
+  `bank_drift_kinds` fixture. *Performance*, a detector's own update per
+  slot and row on arm64 (release, load 5): Page-Hinkley 11 ns (as before),
+  CUSUM 4.5, DDM 8, EDDM 2, ADWIN 16 at `clock = 32` and 210 at
+  `clock = 1`, KSWIN 0.7 µs at `window_size = 100, stat_size = 30` and
+  2.5 µs at 1,000 and 100. Nothing moves for a spec without `drift_kind`.
+
 - **A weekly check for yanked locked versions** (task 540):
   `.github/workflows/yanks.yml` runs `scripts/yanks.py`, which looks every
   registry package of `Cargo.lock` up in crates.io's index and of `uv.lock`

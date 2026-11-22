@@ -1,5 +1,7 @@
 //! Page-Hinkley drift detection (docs/ENHANCEMENTS.md E20), on the model's
-//! clock (docs/PLAN.md task 146).
+//! clock (docs/PLAN.md task 146), and the other detectors a stream can keep
+//! in its place (docs/PLAN.md task 508): ADWIN, DDM, EDDM, KSWIN and Page's
+//! tabular CUSUM, each in its own file, and [`DriftDetector`], any of them.
 //!
 //! Decay and drift detection answer different questions. A half-life forgets
 //! *smoothly and always*, which is right when the world moves gradually; it is
@@ -30,6 +32,20 @@
 //! fitting.
 
 use serde::{Deserialize, Serialize};
+
+mod adwin;
+mod cusum;
+mod ddm;
+mod detector;
+mod eddm;
+mod kswin;
+
+pub use adwin::{Adwin, AdwinCfg};
+pub use cusum::Cusum;
+pub use ddm::Ddm;
+pub use detector::{DriftDetector, ErrorRate};
+pub use eddm::Eddm;
+pub use kswin::{Kswin, KswinCfg, ks_critical_h, ks_equal_tail};
 
 /// Page-Hinkley state for one monitored signal.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

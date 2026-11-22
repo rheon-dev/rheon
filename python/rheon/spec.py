@@ -256,7 +256,8 @@ the diagnostics
     ``emit_averaged`` with ``average_eta``, ``emit_metrics``, ``conformal``
     with ``conformal_rate`` (default 0.05, or ``"auto"``), ``resid_quantiles``,
     ``emit_autocorr`` with ``resid_autocorr_lag``, ``emit_drift`` with
-    ``drift_delta``, ``drift_threshold`` and ``drift_action``,
+    ``drift_delta``, ``drift_threshold``, ``drift_action``, ``drift_kind``
+    and ``drift_options``,
     ``emit_calibration`` with ``calibration_half_life``, ``emit_breaks`` with
     ``breaks_half_life``, ``emit_robust_se`` with ``robust_se_half_life`` and
     ``robust_se_lags``, ``emit_specification`` with ``specification_half_life``
@@ -728,6 +729,69 @@ The diagnostics add, per slot:
        gate withholds output only, so no ``min_weight``,
        ``min_settled_frac`` or ``max_error_inflation`` hides a break, or
        moves the restart a reset makes there.
+
+       ``drift_kind`` keeps another detector in its place; each starts
+       again after a flag, and ``drift_action`` applies to each:
+
+       - ``"cusum"``, Page's (1954) tabular two-sided CUSUM on the
+         residual over ``sigma``, ``z``: ``C+ = max(0, C+ + d * (z - k))``
+         and ``C- = max(0, C- + d * (-z - k))``, ``d`` the row's clock
+         step, a break where either passes ``h``. ``k`` is ``drift_delta``
+         (default 0.5) and ``h`` is ``drift_threshold``, a clock parameter
+         as above, default 5 without a clock column. At ``k = 0.5`` on a
+         row clock its average run on standard normal errors is about 168
+         rows at ``h = 4`` and 465 at ``h = 5``.
+       - ``"adwin"``, Bifet and Gavaldà's (2007) adaptive window on
+         ``|resid|``, flag for flag river's ``drift.ADWIN``: an exponential
+         histogram of the last rows (``max_buckets`` buckets of each size,
+         default 5), scanned every ``clock`` rows (32) once it holds more
+         than ``grace_period`` (10), and cut where some split into ``n0``
+         older and ``n1`` newer rows, each at least
+         ``min_window_length`` (5), has means further apart than
+         ``sqrt(2 * (1/m) * (V/n) * c) + (2/3) * c * (1/m)``, with
+         ``V/n`` the window's variance, ``c = ln(2 * ln(n) / delta)``
+         (``delta`` default 0.002) and
+         ``1/m = 1/(n0 - L + 1) + 1/(n1 - L + 1)``, ``L`` the
+         ``min_window_length``. A break where it cuts. ``max_width``
+         (default 1,000,000) bounds the window, river's has no bound.
+       - ``"ddm"`` and ``"eddm"`` count errors: a row is one where
+         ``|resid|`` passes ``error_above``, which they require, in the
+         target's units (0.5 for a probability of a 0/1 target makes an
+         error a misclassification). DDM (Gama et al. 2004) flags past
+         ``warm_start`` rows (default 30) where ``p + s`` passes
+         ``p_min + drift_threshold * s_min`` (default 3), ``p`` the error
+         rate, ``s = sqrt(p * (1 - p) / n)``, and ``(p_min, s_min)`` the
+         pair where ``p + s`` was least. EDDM (Baena-García et al. 2006)
+         keeps the mean ``p'`` and sample deviation ``s'`` of the rows
+         between errors and flags, past ``warm_start`` rows and errors,
+         where ``(p' + 2 * s')`` falls under ``beta`` (default 0.9) times
+         its largest value. Each is river's ``drift.binary`` detector,
+         flag for flag; river's warning levels are not kept.
+       - ``"kswin"``, Raab et al.'s (2020) windowed Kolmogorov-Smirnov
+         test on ``|resid|``: a ring of the last ``window_size`` rows
+         (default 100), each row drawing ``stat_size`` (30) of the older
+         ones and comparing them with the newest ``stat_size`` by the
+         two-sample statistic ``D``; a break where its exact p-value is at
+         most ``alpha`` (0.005) and ``D > 0.1``, river's rule. The draw is
+         seeded (``seed``, default 0; SplitMix64 taken by Floyd's
+         algorithm), so a stream draws the same samples however it is
+         chunked, and river's own draw is not reproduced.
+
+       Their settings go in ``drift_options``, by river's names; a key the
+       kind does not read is refused, and so are ``drift_delta`` and
+       ``drift_threshold`` beside a kind that does not read them. ADWIN,
+       DDM, EDDM and KSWIN count rows, not clock: each statistic is defined
+       on a number of observations (ADWIN's bound on its parts' rows, DDM's
+       binomial deviation, KSWIN's exact null on two samples of
+       ``stat_size``), so a span of the clock has no meaning for them; any
+       weight above 0 is one row. After a flag ADWIN and KSWIN start again
+       empty, as river does; ``restart = False`` keeps what the flag left,
+       the papers' form, where ADWIN flags a change again as the old rows
+       left in its window are found. ADWIN's window and KSWIN's ring are
+       held at the call to ``max_state_bytes`` (default 256 KB a group,
+       every slot together, at most 64 MiB): ADWIN's at its ``max_width``,
+       ``104 * levels + 104`` bytes at ``max_buckets = 5``, under 2 KB at a
+       million rows; KSWIN's ``8 * window_size + 48``.
    * - ``emit_calibration``
      - ``calibration_slope_<slot>``, ``calibration_intercept_<slot>``,
        ``calibration_wald_<slot>``
@@ -974,7 +1038,11 @@ value the model refuses:
 - ``group_close`` without ``group``, beside ``embargo`` or beside a window
   target, and ``group_close = "session"`` without ``session`` or beside
   ``session_gap``;
-- ``emit_drift`` with a ``clock`` and no ``drift_threshold``;
+- ``emit_drift`` with a ``clock`` and no ``drift_threshold``, under
+  ``drift_kind`` ``"page_hinkley"`` or ``"cusum"``;
+- a ``drift_options`` key the ``drift_kind`` does not read, ``drift_delta``
+  or ``drift_threshold`` beside a kind that does not read them, and a
+  ``"ddm"`` or ``"eddm"`` without ``error_above``;
 - a window target beside ``group`` without ``clock``;
 - a column listed twice, or as both target and feature;
 - a ``min_weight`` list whose length is not the number of targets, and a
@@ -987,8 +1055,8 @@ value the model refuses:
 
 A parameter whose switch is off is refused rather than ignored:
 
-- ``drift_delta``, ``drift_threshold`` or ``drift_action = "reset"`` without
-  ``emit_drift``;
+- ``drift_delta``, ``drift_threshold``, ``drift_kind``, ``drift_options``
+  or ``drift_action = "reset"`` without ``emit_drift``;
 - ``average_eta`` without ``emit_averaged``;
 - ``resid_autocorr_lag`` without ``emit_autocorr``;
 - a diagnostic's ``*_half_life``, or its lags (``robust_se_lags``,

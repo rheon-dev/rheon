@@ -409,7 +409,7 @@ widens their spread only until the fit catches up.
 | `cusum_<t>` | the weighted sum of the studentized residuals before the row, standardized: `Σωz / sqrt(r Σω²)` | a mean in the residuals: an intercept shift | `N(0, 1)` |
 | `cusum_sq_<t>` | the weighted sum of `z² − 1`, standardized by its measured spread: `Σω(z² − 1) / sqrt(r₂ (m₄ − 1) Σω²)`, `m₄` the mean of `z⁴` at four times the memory | a change in the residuals' spread | `N(0, 1)`, whatever the tails |
 | `break_wald_<t>` | the Wald distance between two least-squares fits of the target on the slot's features, one at the memory and one at four times it, over the exact variance of their difference; null run once | a coefficient that moved, the slope's or the intercept's | `chi2(k)`, with `k` the coefficients |
-| `drift_<t>` | true on the row a Page-Hinkley detector (Page 1954; Hinkley 1971) on `\|resid\| / sigma` climbs `drift_threshold` above its lowest point | a rise in the residuals' level, beyond `drift_delta` sigmas | false |
+| `drift_<t>` | true on the row a Page-Hinkley detector (Page 1954; Hinkley 1971) on `\|resid\| / sigma` climbs `drift_threshold` above its lowest point; or, under `drift_kind`, Page's two-sided CUSUM on `resid / sigma`, ADWIN or KSWIN on `\|resid\|`, or DDM or EDDM on the rate of residuals past `error_above` | a rise in the residuals' level, beyond `drift_delta` sigmas; under the others, a shift either way (CUSUM), a change in the errors' mean (ADWIN) or distribution (KSWIN), or a rise in the error rate (DDM, EDDM) | false |
 
 `ω` is each row's weight times its decay at `breaks_half_life`, the
 fit's memory by default. `r` and `r₂` are 1 run once, and windowed they

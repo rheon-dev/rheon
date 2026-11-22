@@ -153,6 +153,13 @@ fn stream_settings(spec: &Spec, stream: &Stream, model: &AnyModel) -> Value {
         number(spec.max_error_inflation_or_default()),
     );
     s.insert("drift_action".into(), json!(spec.drift_action));
+    s.insert(
+        "drift_kind".into(),
+        json!(
+            spec.drift_kind_or_default()
+                .map(crate::spec::DriftKind::name)
+        ),
+    );
     s.insert("drift_delta".into(), number(spec.drift_delta_or_default()));
     s.insert(
         "drift_threshold".into(),

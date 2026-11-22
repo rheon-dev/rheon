@@ -30,7 +30,7 @@ would show nothing and leave a typo to be found when the call runs. A
 # a string the TypedDict machinery does not look inside, so every key would
 # be optional at runtime and the test could not see the required ones.
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Literal, TypedDict
 
 from rheon._duration import Duration
@@ -76,6 +76,8 @@ class CommonKwargs(TypedDict, total=False):
     drift_delta: float | None
     drift_threshold: float | Duration | None
     drift_action: Literal["flag", "reset"]
+    drift_kind: Literal["page_hinkley", "cusum", "adwin", "ddm", "eddm", "kswin"] | None
+    drift_options: Mapping[str, float | int | bool] | None
     emit_calibration: bool
     calibration_half_life: float | Duration | None
     emit_breaks: bool

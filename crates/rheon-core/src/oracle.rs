@@ -1342,6 +1342,41 @@ pub(crate) mod exact {
     }
 }
 
+/// `P(D_{r,r} ≥ h/r)`, the two-sample Kolmogorov-Smirnov statistic's exact
+/// two-sided null tail for samples of `r` each (the Gnedenko-Korolyuk sum,
+/// `2 Σ_{j≥1} (−1)^(j+1) C(2r, r − jh) / C(2r, r)`), in integers: its binomial
+/// coefficients exact in `u128` up to `r = 60`, the sum exact, and their
+/// ratio taken to 512 bits by `dashu` and rounded once. No double enters
+/// before the last step, where `drift::kswin` builds the ratios as products
+/// of doubles.
+pub fn ks_equal_tail(r: usize, h: usize) -> f64 {
+    use dashu_float::FBig;
+    assert!(r <= 60, "C(2r, r) is exact in u128 only to r = 60");
+    if h == 0 {
+        return 1.0;
+    }
+    let choose = |n: u128, k: u128| -> u128 {
+        let mut c = 1u128;
+        for i in 0..k {
+            c = c * (n - i) / (i + 1);
+        }
+        c
+    };
+    let (two_r, r) = (2 * r as u128, r as u128);
+    let mut num: i128 = 0;
+    let mut j = 1u128;
+    while j * (h as u128) <= r {
+        let term = choose(two_r, r - j * h as u128) as i128;
+        num += if j % 2 == 1 { term } else { -term };
+        j += 1;
+    }
+    let den = choose(two_r, r);
+    type Near = FBig<dashu_float::round::mode::HalfEven>;
+    let precise = |x: u128| Near::from(x).with_precision(512).value();
+    let p = precise(2 * num as u128) / precise(den);
+    p.to_f64().value()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

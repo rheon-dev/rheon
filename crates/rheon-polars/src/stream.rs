@@ -6,12 +6,12 @@ use std::collections::VecDeque;
 use rheon_core::{
     Bocpd, BocpdCfg, BocpdEmission, ChangeNorm, ClockState, Conformal, Constraint, CorrChange,
     CorrChangeCfg, CorrChangeKind, Covariance, Decay, Deco, DecoCfg, DecoDynamics, Disorder,
-    EwAutoCorr, EwClass, EwClassCfg, EwCovCfg, EwCovModel, EwCovStat, EwQuantile, EwRidge,
-    EwRidgeCfg, Ftrl, FtrlCfg, FtrlLoss, HitTest, Hmm, HmmCfg, Holt, HoltCfg, HuberScale, KMeans,
-    KMeansCfg, Kalman, KalmanCfg, Lasso, LassoCfg, LearningRate, Marginal, MarginalCfg, Micro,
-    MicroCfg, OnlineModel, Pa, PaCfg, PaMode, PageHinkley, Rcov, RcovCfg, RcovKind, Rls, RlsCfg,
-    Robust, RobustCfg, RobustLoss, SeedRule, SeqTest, SeqTestCfg, Sgd, SgdCfg, SgdLoss,
-    SlotMetrics, State, WindowShadow,
+    DriftDetector, EwAutoCorr, EwClass, EwClassCfg, EwCovCfg, EwCovModel, EwCovStat, EwQuantile,
+    EwRidge, EwRidgeCfg, Ftrl, FtrlCfg, FtrlLoss, HitTest, Hmm, HmmCfg, Holt, HoltCfg, HuberScale,
+    KMeans, KMeansCfg, Kalman, KalmanCfg, Lasso, LassoCfg, LearningRate, Marginal, MarginalCfg,
+    Micro, MicroCfg, OnlineModel, Pa, PaCfg, PaMode, Rcov, RcovCfg, RcovKind, Rls, RlsCfg, Robust,
+    RobustCfg, RobustLoss, SeedRule, SeqTest, SeqTestCfg, Sgd, SgdCfg, SgdLoss, SlotMetrics, State,
+    WindowShadow,
 };
 use rheon_core::{ClockValue, CoefVariance, ExactCaps, Stamp};
 use serde::{Deserialize, Serialize};
@@ -989,8 +989,11 @@ pub struct Persisted {
     pub resid_var: Vec<Vec<f64>>,
     #[serde(default)]
     pub resid_w: Vec<Vec<f64>>,
+    /// Per model instance, each slot's drift detector under `emit_drift`:
+    /// a Page-Hinkley detector written as its fields alone, as before task
+    /// 508, any other kind under its name (`rheon_core::DriftDetector`).
     #[serde(default)]
-    pub drift: Vec<Vec<PageHinkley>>,
+    pub drift: Vec<Vec<DriftDetector>>,
     #[serde(default)]
     pub resid_q: Vec<Vec<EwQuantile>>,
     #[serde(default)]
@@ -1852,16 +1855,12 @@ impl Stream {
         let decays: Vec<Decay> = spec.decays()?.into_iter().map(|(_, d)| d).collect();
         let check_cfgs = decays.iter().map(|&d| CheckCfg::of(spec, d)).collect();
         let slots: Vec<usize> = models.iter().map(|(_, m)| m.n_outputs()).collect();
-        let drift = if spec.emit_drift {
-            // 20 only without a clock, where a row is one unit: the spec
-            // requires a threshold with a clock (task 168).
-            let d = PageHinkley::new(
-                spec.drift_delta_or_default(),
-                spec.drift_threshold_or_default(),
-            );
-            slots.iter().map(|&n| vec![d.clone(); n]).collect()
-        } else {
-            Vec::new()
+        // A threshold's default (20, or a CUSUM's 5) only without a clock,
+        // where a row is one unit: the spec requires one with a clock (task
+        // 168).
+        let drift = match spec.drift_detector() {
+            Some(d) => slots.iter().map(|&n| vec![d.clone(); n]).collect(),
+            None => Vec::new(),
         };
         let resid_win = models
             .iter()
@@ -2153,7 +2152,15 @@ impl Stream {
         if p.drift.len() != fresh.drift.len() {
             p.ungated_drift = fresh.ungated_drift;
         }
-        take_diag("drift detectors", &mut p.drift, &fresh.drift, |_, _| true)?;
+        // A detector is held to its spec's kind and to a shape its rows run
+        // on (an ADWIN with a level to put a row in, a KSWIN whose ring
+        // holds its samples): a file that says otherwise is damaged.
+        take_diag(
+            "drift detectors",
+            &mut p.drift,
+            &fresh.drift,
+            |saved, fresh| saved.restores_as(fresh),
+        )?;
         // A sketch is held to its own shape too, as `ew_cov`'s is: the next
         // residual indexes its buckets by its pointers (review 2026-10-06,
         // CB2's class).
@@ -3440,7 +3447,7 @@ impl SpreadRef<'_> {
 struct Diagnostics<'a> {
     resid_var: &'a mut [Vec<f64>],
     resid_w: &'a mut [Vec<f64>],
-    drift: &'a mut [Vec<PageHinkley>],
+    drift: &'a mut [Vec<DriftDetector>],
     resid_q: &'a mut [Vec<EwQuantile>],
     autocorr: &'a mut [Vec<EwAutoCorr>],
     metrics: &'a mut [Vec<SlotMetrics>],
@@ -3645,7 +3652,7 @@ struct Instance<'a> {
     residuals: bool,
     resid_var: &'a mut Vec<f64>,
     resid_w: &'a mut Vec<f64>,
-    drift: Option<&'a mut Vec<PageHinkley>>,
+    drift: Option<&'a mut Vec<DriftDetector>>,
     resid_q: Option<&'a mut Vec<EwQuantile>>,
     autocorr: Option<&'a mut Vec<EwAutoCorr>>,
     metrics: Option<&'a mut Vec<SlotMetrics>>,
@@ -3776,7 +3783,7 @@ impl Instance<'_> {
                 .expect("the spec that built the ring keeps one");
         }
         if let Some(d) = self.drift.as_deref_mut() {
-            d.iter_mut().for_each(PageHinkley::reset);
+            d.iter_mut().for_each(DriftDetector::reset);
         }
         // Residual diagnostics restart with the model they describe.
         if let Some(q) = self.resid_q.as_deref_mut() {
@@ -4606,9 +4613,12 @@ fn run_instance(
                 &sc.r
             };
             for (slot, &rv) in drift_r.iter().enumerate() {
-                let scale = sc.sig[slot];
-                if w > 0.0 && rv.is_finite() && scale.is_finite() && scale > 0.0 {
-                    let flag = dets[slot].update(rv.abs() / scale, d_clock, lam);
+                // Each kind reads what it needs of the row
+                // (`DriftDetector::update`): Page-Hinkley and CUSUM the
+                // residual over its scale, a row without one ageing
+                // Page-Hinkley's mean; the others the residual alone.
+                if w > 0.0 && rv.is_finite() {
+                    let flag = dets[slot].update(rv, sc.sig[slot], d_clock, lam);
                     // On the row being output: this one, or under an
                     // embargo the row releasing this one (task 160, PB1).
                     // Set, never cleared: one row may release several.
