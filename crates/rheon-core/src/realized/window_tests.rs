@@ -432,24 +432,6 @@ fn a_burst_in_a_clock_window_is_warned_of_at_half_the_cap_and_stopped_at_it() {
     assert_eq!(m.window_len() as u64, cap, "nothing learned past the cap");
 }
 
-/// A session's edge or a capped gap clears the last returns: no product
-/// reaches across it, and nothing else moves.
-#[test]
-fn clearing_the_lags_leaves_no_product_across_the_edge() {
-    let r = sv_day(600, 95, true);
-    let mut m = Realized::new(cfg(1)).unwrap();
-    run(&mut m, &unit_rows(&r[..300]));
-    let before = m.clone();
-    m.clear_lags();
-    let p = m.predict(&[], 1.0);
-    assert_eq!(bits(&p.pred), bits(&before.predict(&[], 1.0).pred));
-    run(&mut m, &unit_rows(&r[300..]));
-    let o = m.predict(&[], 1.0).pred;
-    let (a, b) = (paper::measures(&r[..300]), paper::measures(&r[300..]));
-    assert!(ulps(o[1], a.bv + b.bv) <= 4.0, "{} {}", o[1], a.bv + b.bv);
-    assert!(ulps(o[0], a.rv + b.rv) <= 4.0);
-}
-
 /// What the settings refuse about the windows, each naming the setting.
 #[test]
 fn the_window_settings_are_checked() {

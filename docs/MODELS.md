@@ -3076,8 +3076,9 @@ parameters every spec takes are in [What every spec takes](#what-every-spec-take
 apart from `features`, which it refuses. A row's weight counts its return
 that many times. A row of weight 0 counts in no clock, and its return is in
 no product. A null return is that target's alone, and its products reach
-across the row to its last return. A gap past `gap_cap` and a session's
-edge end the products: none reaches across one.
+across the row to its last return. A gap past `gap_cap` or a session's
+edge is a step of the clock like any other, its products reaching across
+it; `session_gap="reset"` measures each session on its own.
 
 #### The measures
 

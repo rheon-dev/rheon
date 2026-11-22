@@ -121,9 +121,13 @@ A row of weight 0 counts in no clock (hard rule 9): the stream hands it to
 no model, so it is in no product, no window and no weight, and the next row
 steps from the last that counted; it is still read. A null return is that
 target's alone, its products reaching across the row to its last return. A
-gap past `gap_cap` and a session's edge clear the last returns
-(`clear_lags`), so no product reaches across them; the sums and windows
-stay.
+gap past `gap_cap` or a session's edge is a step of the clock like any
+other, its products reaching across it, so a session's gap is the clock
+rewritten and a capped gap is the step cut to the cap, as for every kind
+whose outputs are not a block; `session_gap="reset"` measures each
+session on its own. (A first build cleared the last returns at those two
+events, `clear_lags`; that broke both identities, which the bank's
+session and cap tests hold every kind to, and was dropped.)
 
 ## The oracles and their gaps
 

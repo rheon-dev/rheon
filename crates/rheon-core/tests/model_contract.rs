@@ -231,7 +231,7 @@ fn probe_checked<M: OnlineModel + Clone>(
 /// move under `clear_lags`. Everything else must not: `clear_lags` is not a
 /// reset, and a model that quietly threw away a mean here would look like a
 /// decay bug three chunks later (docs/PLAN.md task 47).
-const KEEPS_LAGS: &[&str] = &["rcov", "corrchange", "ew_cov", "marginal", "realized"];
+const KEEPS_LAGS: &[&str] = &["rcov", "corrchange", "ew_cov", "marginal"];
 
 /// The model that counts a value that is not usable rather than refusing
 /// it: `audit`, whose counts of nulls, NaNs and infinities are what it is for
@@ -6428,7 +6428,7 @@ fn realized_clock_cfg() -> RealizedCfg {
 fn realized() {
     // Realized volatility: one return series per target, no features, seven
     // outputs a series, and `n_eff` every row's weight on the shared
-    // recursion; `clear_lags` forgets the last returns, which are lags.
+    // recursion.
     let m = Realized::new(realized_cfg()).unwrap();
     assert_eq!(m.n_features(), 0, "realized reads no features");
     let r = probe_with(m, 2, Some(&Realized::n_eff));

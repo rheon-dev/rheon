@@ -201,11 +201,6 @@ impl Series {
         add(&mut self.hi[k], &mut self.lo[k], x);
     }
 
-    /// No product reaches back past here: the next return is a first one.
-    pub(super) fn forget_last(&mut self) {
-        (self.a1, self.c1, self.c2, self.seen) = (0.0, 0.0, 0.0, 0);
-    }
-
     /// The return `r` learned at the weight `w > 0`, a window's row `seq`
     /// where there is a window.
     pub(super) fn learn(&mut self, r: f64, w: f64, seq: Option<u64>, lm_window: Option<usize>) {

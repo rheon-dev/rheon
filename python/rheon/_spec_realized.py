@@ -50,8 +50,9 @@ def realized(
     in no window, its return is in no product, and its weight is in no
     ``weight_sum``; it is still read. A null target is that target's absent
     return: its products reach across the row to its last return. A gap
-    past ``gap_cap`` and a session's edge are breaks: no product or triple
-    reaches across one, and the sums and windows are kept.
+    past ``gap_cap`` or a session's edge is a step of the clock like any
+    other, its products reaching across it; to measure each session on its
+    own, set ``session_gap="reset"``.
 
     This model's own parameters:
 

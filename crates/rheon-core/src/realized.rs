@@ -626,15 +626,6 @@ impl OnlineModel for Realized {
         }
     }
 
-    /// The last returns are lags: no product reaches across a session's
-    /// edge or a capped gap. The sums, a window and `lm_window`'s products
-    /// stay.
-    fn clear_lags(&mut self) {
-        for s in &mut self.series {
-            s.forget_last();
-        }
-    }
-
     /// A clock window learns its rows' stamps: they decide when each leaves.
     fn stamp_next(&mut self, stamp: Stamp) {
         if let Some(p) = self.window.as_mut().and_then(|w| w.place.as_mut()) {
