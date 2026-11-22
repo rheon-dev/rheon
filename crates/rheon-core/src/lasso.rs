@@ -3962,6 +3962,110 @@ mod tests {
     /// failure, and the output looked like a fit -- the intercept at the
     /// mean and every slope 0 (review 2026-10-05, PB7). One sweep is
     /// accepted.
+    /// A row counts in the selection's error where every path point's
+    /// squared error is a number, and the selection's weight then grows by
+    /// the recursion `W <- lam W + w`; where one is not, the weight only
+    /// ages. The three ways a point can fail or pass it:
+    /// - a point predicting exactly 0 (the heaviest penalty, with no
+    ///   intercept) passes, whatever the target;
+    /// - a prediction so large that the error's square overflows fails it,
+    ///   though the prediction is a finite number;
+    /// - one target's withheld (NaN) predictions do not decide another's.
+    #[test]
+    fn the_selection_scores_a_row_where_every_squared_error_is_a_number() {
+        let lam = Decay::Halflife(20.0).factor(1.0);
+        let draw = |s: &mut u64| lcg(s);
+
+        // A prediction of exactly 0 is scored: the row's weight is counted.
+        let mut c = cfg(1, 1, vec![10.0, 0.0]);
+        c.fit_intercept = false;
+        c.decay = Decay::Halflife(20.0);
+        let mut m = Lasso::new(c).unwrap();
+        let mut s = 5u64;
+        let mut want = 0.0;
+        let mut zero_scored = 0;
+        for i in 0..12 {
+            let x = [draw(&mut s)];
+            let y = 2.0 * x[0] + 3.0;
+            let st = m.step(&x, &[Some(y)], if i == 0 { 0.0 } else { 1.0 }, 1.0);
+            if i >= 1 {
+                want = lam * want + 1.0;
+            }
+            if st.pred[0] == 0.0 {
+                zero_scored += 1;
+            }
+            assert_eq!(m.sel_w[0], want, "row {i}");
+        }
+        assert!(
+            zero_scored >= 5,
+            "the heavy point predicted 0: {zero_scored}"
+        );
+
+        // Another target's withheld predictions decide nothing here: target
+        // 1's weight grows as if it were alone, target 0 (never seen) has
+        // none.
+        let mut c = cfg(1, 2, vec![0.1, 0.0]);
+        c.decay = Decay::Halflife(20.0);
+        let mut m = Lasso::new(c).unwrap();
+        let mut s = 5u64;
+        let mut seen = 0;
+        for i in 0..12 {
+            let x = [draw(&mut s)];
+            let y = 2.0 * x[0] + 3.0;
+            let st = m.step(&x, &[None, Some(y)], if i == 0 { 0.0 } else { 1.0 }, 1.0);
+            assert!(st.pred[..2].iter().all(|p| p.is_nan()));
+            if st.pred[2..].iter().all(|p| p.is_finite()) {
+                seen += 1;
+            }
+            assert_eq!(m.sel_w[0], 0.0);
+            assert!(m.sel_err[0].iter().all(|e| *e == 0.0));
+            if i >= 2 {
+                assert!(m.sel_w[1] > 0.0, "row {i}: {:?}", m.sel_w);
+            }
+        }
+        assert!(seen >= 5);
+
+        // A finite prediction whose error's square is beyond the doubles
+        // adds nothing, whatever the stream before it: the weight is the
+        // old one aged, not grown. The streams are ill-conditioned on
+        // purpose (features of 1e100 beside ones of 1), so a coefficient
+        // reaches 1e193 and more.
+        let mut overflowed = 0;
+        for seed in 1..=20u64 {
+            let mut s = seed * 7919 + 1;
+            let mut c = cfg(2, 1, vec![0.1, 0.0]);
+            c.decay = Decay::Halflife(20.0);
+            c.min_weight = 3.0;
+            let mut m = Lasso::new(c).unwrap();
+            let pick = |s: &mut u64| match ((lcg(s).abs() * 1e4) as u32) % 4 {
+                0 => 1e100 * lcg(s),
+                1 => 1000.0 * lcg(s),
+                2 => -1000.0 + 1e-3 * lcg(s),
+                _ => lcg(s),
+            };
+            for i in 0..30 {
+                let x = [pick(&mut s), pick(&mut s)];
+                let y = pick(&mut s);
+                let before = m.sel_w[0];
+                let st = m.step(&x, &[Some(y)], if i == 0 { 0.0 } else { 1.0 }, 1.0);
+                if st
+                    .pred
+                    .iter()
+                    .any(|p| p.is_finite() && (y - p).abs() > 1.5e154)
+                {
+                    overflowed += 1;
+                    assert_eq!(
+                        m.sel_w[0].to_bits(),
+                        (lam * before).to_bits(),
+                        "seed {seed} row {i}: {:?}",
+                        st.pred
+                    );
+                }
+            }
+        }
+        assert!(overflowed >= 5, "{overflowed} rows reached an overflow");
+    }
+
     #[test]
     fn cfg_validation_refuses_a_descent_of_no_sweeps() {
         let with = |max_iter: u32| {
