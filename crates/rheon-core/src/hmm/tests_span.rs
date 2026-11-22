@@ -40,7 +40,7 @@ fn stream(n: usize, seed: u64, run: usize) -> Vec<Vec<f64>> {
     };
     (0..n)
         .map(|i| {
-            let c = if (i / run) % 2 == 0 { -3.0 } else { 3.0 };
+            let c = if (i / run).is_multiple_of(2) { -3.0 } else { 3.0 };
             vec![c + u(), c + u()]
         })
         .collect()
