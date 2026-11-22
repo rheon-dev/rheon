@@ -1296,10 +1296,27 @@ impl CorrChange {
     /// span's means and scaled by its standard deviations (the module docs
     /// derive it from the five raw moments).
     fn long_run_sd<R: AsRef<[f64]>>(rows: &[R], a: usize, b: usize, gamma: usize) -> f64 {
-        match Self::influence(rows, a, b, false) {
-            Some((xi, _)) => Self::bartlett_sd(&xi, gamma),
-            None => f64::NAN,
+        let mut buf = Vec::new();
+        if Self::influence_into(rows, a, b, false, &mut buf) {
+            Self::bartlett_sd(&buf, gamma)
+        } else {
+            f64::NAN
         }
+    }
+
+    /// [`Self::influence_into`] into vectors of their own.
+    #[cfg(test)]
+    fn influence<R: AsRef<[f64]>>(
+        rows: &[R],
+        a: usize,
+        b: usize,
+        ratio: bool,
+    ) -> Option<(Vec<f64>, Vec<f64>)> {
+        let mut buf = Vec::new();
+        Self::influence_into(rows, a, b, ratio, &mut buf).then(|| {
+            let d = buf.split_off(rows.len());
+            (buf, d)
+        })
     }
 
     /// The span's pair `(a, b)` as the two series the `monitor` kind sums:
@@ -1309,15 +1326,18 @@ impl CorrChange {
     /// `x̃`, `ỹ` the rows centred at the span's means and scaled by its
     /// standard deviations. Both sum to 0 over the span by construction
     /// (`E[x̃ỹ] = ρ̂`, `E[x̃²] = E[ỹ²] = 1` over the same rows), so neither is
-    /// centred again. `None` where the pair has no correlation to test: a
-    /// column without spread, or `|ρ̂|` within rounding of 1, where the delta
-    /// method's variance `(1 − ρ²)²·(…)` is 0.
-    fn influence<R: AsRef<[f64]>>(
+    /// centred again. Written over `buf`, `ξ` then `d`, one buffer for the
+    /// pairs of a span: `false`, and `buf` not read, where the pair has no
+    /// correlation to test: a column without spread, or `|ρ̂|` within
+    /// rounding of 1, where the delta method's variance `(1 − ρ²)²·(…)` is
+    /// 0.
+    fn influence_into<R: AsRef<[f64]>>(
         rows: &[R],
         a: usize,
         b: usize,
         ratio: bool,
-    ) -> Option<(Vec<f64>, Vec<f64>)> {
+        buf: &mut Vec<f64>,
+    ) -> bool {
         // No count of rows is asked for: a span too short to carry a
         // correlation is one whose column has no spread, or whose two rows
         // are collinear, and both are refused below; and a short span that
@@ -1361,7 +1381,7 @@ impl CorrChange {
         }
         let (sx2, sy2, sxy) = (sx2 / tf, sy2 / tf, sxy / tf);
         if !(sx2 > 0.0 && sy2 > 0.0) {
-            return None;
+            return false;
         }
         let (sx, sy) = (sx2.sqrt(), sy2.sqrt());
         let rho = sxy / (sx * sy);
@@ -1373,19 +1393,20 @@ impl CorrChange {
         // 3` (review 2026-09-25). NaN is no verdict, as for a constant
         // column.
         if 1.0 - rho * rho <= 64.0 * f64::EPSILON {
-            return None;
+            return false;
         }
-        let mut xi = Vec::with_capacity(t);
-        let mut d = Vec::with_capacity(if ratio { t } else { 0 });
-        for r in rows {
+        buf.clear();
+        buf.resize(if ratio { 2 * t } else { t }, 0.0);
+        let (xi, d) = buf.split_at_mut(t);
+        for (i, r) in rows.iter().enumerate() {
             let (dx, dy) = dev(r);
             let (u, v) = (dx / sx, dy / sy);
-            xi.push(u * v - 0.5 * rho * (u * u + v * v));
+            xi[i] = u * v - 0.5 * rho * (u * u + v * v);
             if ratio {
-                d.push(u * u - v * v);
+                d[i] = u * u - v * v;
             }
         }
-        Some((xi, d))
+        true
     }
 
     /// The Bartlett long-run standard deviation of a series whose mean is 0
@@ -1493,13 +1514,13 @@ impl CorrChange {
     /// The `monitor` statistic for one pair over the span in the ring.
     #[cfg(test)]
     fn monitor_stat(&self, rows: &[Vec<f64>], a: usize, b: usize) -> f64 {
-        self.monitor_pair(rows, a, b).stat
+        self.monitor_pair(rows, a, b, &mut Vec::new()).stat
     }
 
     /// [`Self::monitor_stat`], and the `j` its maximum is attained at.
     #[cfg(test)]
     fn monitor_stat_at<R: AsRef<[f64]>>(&self, rows: &[R], a: usize, b: usize) -> (f64, usize) {
-        let p = self.monitor_pair(rows, a, b);
+        let p = self.monitor_pair(rows, a, b, &mut Vec::new());
         (p.stat, p.at)
     }
 
@@ -1529,19 +1550,27 @@ impl CorrChange {
     /// its zero mean, and the limit law holds, exactly when the ratio of the
     /// two scales does not move (or `ρ = 0`). `d`'s CUSUM has the same limit
     /// when that ratio is constant, and grows with `√T` when it moves.
-    fn monitor_pair<R: AsRef<[f64]>>(&self, rows: &[R], a: usize, b: usize) -> PairStat {
+    /// `buf` is the span's working space, one buffer for its pairs.
+    fn monitor_pair<R: AsRef<[f64]>>(
+        &self,
+        rows: &[R],
+        a: usize,
+        b: usize,
+        buf: &mut Vec<f64>,
+    ) -> PairStat {
         let t = rows.len();
         let gamma = self
             .cfg
             .bandwidth
             .unwrap_or_else(|| ((t as f64).ln().floor() as usize).max(1));
-        let Some((xi, d)) = Self::influence(rows, a, b, true) else {
+        if !Self::influence_into(rows, a, b, true, buf) {
             return PairStat::NONE;
-        };
-        let (stat, at) = Self::cusum(&xi, Self::bartlett_sd(&xi, gamma));
+        }
+        let (xi, d) = buf.split_at(t);
+        let (stat, at) = Self::cusum(xi, Self::bartlett_sd(xi, gamma));
         // A ratio with no long-run spread is one that cannot have moved:
         // `|x̃| = |ỹ|` on every row (NaN, which never withholds).
-        let (ratio, _) = Self::cusum(&d, Self::bartlett_sd(&d, gamma));
+        let (ratio, _) = Self::cusum(d, Self::bartlett_sd(d, gamma));
         PairStat { stat, at, ratio }
     }
 
@@ -2291,6 +2320,7 @@ impl CorrChange {
                 // is one whose ratio moved, since there the correlation's
                 // CUSUM is not on its null law ([`Self::monitor_pair`]).
                 let (mut stat, mut flagged, mut at, mut held) = (f64::NAN, f64::NAN, 0, false);
+                let mut work = Vec::new();
                 if self.cfg.scalar {
                     let (q, j) = self.scalar_stat_at(&rows);
                     stat = q;
@@ -2300,7 +2330,7 @@ impl CorrChange {
                 } else {
                     for a in 0..self.cfg.n_features {
                         for b in (a + 1)..self.cfg.n_features {
-                            let p = self.monitor_pair(&rows, a, b);
+                            let p = self.monitor_pair(&rows, a, b, &mut work);
                             if p.stat.is_finite() && (stat.is_nan() || p.stat > stat) {
                                 stat = p.stat;
                             }
