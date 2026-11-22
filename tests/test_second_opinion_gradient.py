@@ -225,3 +225,62 @@ class TestSgdPoissonAndAdaGradAreRivers:
             off = optim.RMSProp(self.LR * slip * np.sqrt(1.0 - lam), rho=lam, eps=1e-300)
         far, _ = self.rivers(frame, target, weighted, off, river_loss)
         assert np.max(np.abs(far - got_p) / (1.0 + np.abs(far))) > 1e-6
+
+
+class TestSgdUnderAConstraintSettlesOnScipysProjection:
+    """``sgd``'s box and sum constraints are projected after each step, so on
+    a stationary stream under a schedule that decays the steps the fit
+    settles on the constrained least-squares minimum, which
+    ``scipy.optimize.minimize`` (SLSQP) finds on the rows directly. The other
+    tests of the constraints hold a row-by-row replay (``sgd_ref``) of the
+    same projection, which a wrong projection shares; this is the answer a
+    library gives. The features are correlated (0.5) and of unequal scales, and
+    the least-squares fit lies outside the simplex (a negative slope), so the
+    constraint binds and the unconstrained fit is far from the answer."""
+
+    # The first steps of the schedule, a rate of 2 at the first row, are past a
+    # constant rate's bound and say so; the schedule is what brings them down.
+    @pytest.mark.filterwarnings("ignore:.*past its stability bound")
+    @pytest.mark.parametrize("scales", [(1.0, 1.0, 1.0), (1.0, 3.0, 0.5)], ids=["unit", "scaled"])
+    def test_simplex(self, scales):
+        from scipy.optimize import minimize
+
+        rng = np.random.default_rng(5)
+        n = 100_000
+        common = rng.normal(0.0, 1.0, (n, 1))
+        z = np.sqrt(0.5) * common + np.sqrt(0.5) * rng.normal(0.0, 1.0, (n, 3))
+        x = z * np.array(scales)
+        truth = np.array([0.8, 0.5, -0.2])
+        # `y` is a line in `z`, so the slopes on `x` are `truth / scales`.
+        y = 2.0 + (z @ truth) + rng.normal(0.0, 0.5, n)
+        spec = rp.spec.sgd(
+            "m",
+            targets=["y"],
+            features=["x0", "x1", "x2"],
+            coef_min=0.0,
+            coef_sum=1.0,
+            schedule="inv_scaling",
+            power=1.0,
+            learning_rate=2.0,
+            half_life=float("inf"),
+        )
+        bank = rp.ModelBank([spec])
+        bank.fit_predict(pl.DataFrame({"x0": x[:, 0], "x1": x[:, 1], "x2": x[:, 2], "y": y}))
+        got = bank.coef("m")["coef"].to_numpy()
+
+        def loss(b: np.ndarray) -> float:
+            return float(np.mean((y - b[0] - x @ b[1:]) ** 2))
+
+        res = minimize(
+            loss,
+            np.array([y.mean(), 0.4, 0.3, 0.3]),
+            method="SLSQP",
+            bounds=[(None, None)] + [(0.0, None)] * 3,
+            constraints=[{"type": "eq", "fun": lambda b: b[1:].sum() - 1.0}],
+            options={"ftol": 1e-14, "maxiter": 500},
+        )
+        assert res.success, res.message
+        assert abs(got[1:].sum() - 1.0) < 1e-9 and (got[1:] >= 0.0).all()
+        free = np.linalg.lstsq(np.column_stack([np.ones(n), x]), y, rcond=None)[0]
+        assert free[1:].min() < -0.05 or free[1:].sum() > 1.05, "the constraint does not bind"
+        assert np.max(np.abs(got - res.x)) < 0.02, (got, res.x)
