@@ -154,7 +154,7 @@ realistic test and nothing is left to add.
 | | F | 4 (`kmeans`, `_warming` (6 rows), `kmeans_spans`, `_spans_warming` (6)) | R\* (two regimes shifted by 2.0 are separated); the warming cases D on purpose | none |
 | | O | `truth_recovery.kmeans_blobs` (50 seeds: sklearn `KMeans` inertia), `kmeans_franti` (7 sets, Fränti's A and S), `second_opinion_seeding.seeding_kmeanspp` (sklearn `kmeans_plusplus`), `convergence_iterations.kmeans_lloyd` | R | `init="farthest"`: no library has it |
 | | C | Rust probe D (no structure); proptest D; a three-blob Lloyd test in `model_contract.rs` R | D / R | none |
-| `micro` | G | 2 (`micro`, `_on_the_clock`) | D: iid uniform, so every row is its own micro-cluster or none | blobs and a dense core |
+| `micro` | G | 2 (`micro`, `_on_the_clock`) on iid uniform rows (D: every row its own micro-cluster or none), and `golden_structured.rs`'s `micro_blobs` and `micro_blobs_linked` (the three blobs: label, distance and id; one summary a blob, three labels under a given link) | D and R\* | none (a dense core inside a blob is not added: the blobs hold the macro step) |
 | | F | 1 | R\* | none |
 | | O | `truth_recovery.micro_blobs` (50 seeds, sklearn ARI), `micro_franti` (S1), `test_micro` (scipy hierarchy, `csgraph`, `spatial` for the macro step) | R | none |
 | | C | Rust probe D | D | none |

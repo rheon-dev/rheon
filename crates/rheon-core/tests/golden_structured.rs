@@ -137,6 +137,61 @@ fn kmeans_blobs_golden() {
     check("kmeans_blobs", &got, GOLDEN_KMEANS_BLOBS);
 }
 
+fn micro_cfg() -> MicroCfg {
+    MicroCfg {
+        n_features: 2,
+        decay: Decay::Halflife(20.0),
+        min_weight: 3.0,
+        eps: 0.35,
+        beta_mu: 2.0,
+        max_clusters: 8,
+        prune_every: f64::INFINITY,
+        max_rows_between_prunes: 7,
+        macro_link: None,
+        standardize: true,
+        scale_floor: 0.0,
+    }
+}
+
+/// `micro` on the same blobs: the macro label (slot 0), the distance to the
+/// nearest potential summary (slot 1) and its id (slot 2).
+#[test]
+fn micro_blobs_golden() {
+    let mut m = Micro::new(micro_cfg()).unwrap();
+    let got = probe(&mut m, &blob_rows(), &[0, 1, 2], &BLOB_AT);
+    // Three blobs, three micro-clusters: the ids of a visit differ and the
+    // next visit finds the same ones.
+    let id = |r: usize| got[3 * r + 2];
+    assert!(id(0) != id(1) && id(1) != id(2) && id(0) != id(2));
+    for r in 0..3 {
+        assert_eq!(id(r), id(r + 3), "blob {r} changed summary");
+    }
+    for r in 0..6 {
+        let dist = got[3 * r + 1];
+        assert!(dist > 0.0 && dist < 1.0, "row {r}: {dist}");
+    }
+    check("micro_blobs", &got, GOLDEN_MICRO_BLOBS);
+}
+
+/// `micro_blobs_golden` with the macro step's threshold given.
+#[test]
+fn micro_blobs_linked_golden() {
+    // The linkage threshold derived from the spacing of the summaries reads
+    // three summaries that are all far apart as one shape, and labels them
+    // alike (slot 0 above is 0 throughout); a threshold of 2 (in units of
+    // `eps sqrt(p)`, 1.0 in the metric, short of the 2.3 between blobs)
+    // keeps them three clusters.
+    let mut m = Micro::new(MicroCfg {
+        macro_link: Some(2.0),
+        ..micro_cfg()
+    })
+    .unwrap();
+    let got = probe(&mut m, &blob_rows(), &[0], &BLOB_AT);
+    assert!(got[0] != got[1] && got[1] != got[2] && got[0] != got[2]);
+    assert_eq!(got[..3], got[3..], "a blob changed label");
+    check("micro_blobs_linked", &got, GOLDEN_MICRO_BLOBS_LINKED);
+}
+
 // --- generated; see the module docs ---
 const GOLDEN_KMEANS_BLOBS: &[f64] = &[
     2.0,
@@ -152,3 +207,24 @@ const GOLDEN_KMEANS_BLOBS: &[f64] = &[
     1.0,
     0.3482570523632956,
 ];
+const GOLDEN_MICRO_BLOBS: &[f64] = &[
+    0.0,
+    0.4647144589082067,
+    0.0,
+    0.0,
+    0.4554685388493479,
+    1.0,
+    0.0,
+    0.16493811854175303,
+    2.0,
+    0.0,
+    0.06422529915535434,
+    0.0,
+    0.0,
+    0.11622676448637301,
+    1.0,
+    0.0,
+    0.3482570523632956,
+    2.0,
+];
+const GOLDEN_MICRO_BLOBS_LINKED: &[f64] = &[0.0, 1.0, 2.0, 0.0, 1.0, 2.0];
