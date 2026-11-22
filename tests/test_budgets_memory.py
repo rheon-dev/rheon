@@ -327,6 +327,24 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         ),
         [],
     ),
+    # Three return series through GARCH margins, the asymmetric model
+    # estimated after both starts of 50 rows: every field it has.
+    (
+        "dcc",
+        "dcc",
+        dict(
+            targets=["y", "z", "x0"],
+            asymmetric=True,
+            margin_start_rows=50,
+            start_rows=50,
+            half_life=50.0,
+            group="g",
+            coef_every=0,
+            emit_clocks=True,
+            **CLOCK,
+        ),
+        [],
+    ),
     (
         "hawkes",
         "hawkes",

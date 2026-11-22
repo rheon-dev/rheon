@@ -540,6 +540,7 @@ _NO_FEATURES = {
     "seqtest": "it reads only its targets, or the residuals of the specs a and b name",
     "hawkes": "each of its targets is a node, whose values above 0 are its events",
     "garch": "each of its targets is a return series whose variance it models",
+    "dcc": "its targets are the return series whose correlation it models",
 }
 
 #: The parameters renamed in one builder, or whose old name another keeps
@@ -796,6 +797,7 @@ __all__ = [
     "audit",
     "bocpd",
     "corrchange",
+    "dcc",
     "deco",
     "hmm",
     "rcov",
@@ -5125,6 +5127,7 @@ from rheon._spec_audit import audit  # noqa: E402
 from rheon._spec_changepoint import bocpd, corrchange  # noqa: E402
 from rheon._spec_class import ew_class  # noqa: E402
 from rheon._spec_cluster import kmeans, micro  # noqa: E402
+from rheon._spec_dcc import dcc  # noqa: E402
 from rheon._spec_expectile import expectile  # noqa: E402
 from rheon._spec_garch import garch  # noqa: E402
 from rheon._spec_glm import glm  # noqa: E402

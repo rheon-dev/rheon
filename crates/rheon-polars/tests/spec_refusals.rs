@@ -1269,6 +1269,72 @@ fn a_garch_past_its_state_cap_or_its_forms_is_refused() {
     );
 }
 
+/// `dcc`'s starts are its state's size, known from its settings at the
+/// call: the margins' 2,000 rows a series hold eight series under the
+/// default 256 KB and not nine. Its parameters are given all together or
+/// not at all, its margins are a GARCH or none, and a start is given one
+/// way; each refused by name.
+#[test]
+fn a_dcc_past_its_state_cap_or_its_forms_is_refused() {
+    let spec = |model: &str, k: usize| {
+        let targets: Vec<String> = (0..k).map(|i| format!("\"s{i}\"")).collect();
+        format!(
+            r#"{{"name": "m", "model": {model}, "targets": [{}], "features": [],
+                "half_life": "inf"}}"#,
+            targets.join(", ")
+        )
+    };
+    accepted(&spec(r#"{"type": "dcc"}"#, 2));
+    accepted(&spec(r#"{"type": "dcc"}"#, 8));
+    refused(
+        &spec(r#"{"type": "dcc"}"#, 9),
+        &["past max_state_bytes of 262144", "margins' start_rows"],
+    );
+    accepted(&spec(r#"{"type": "dcc", "max_state_bytes": 400000}"#, 9));
+    accepted(&spec(r#"{"type": "dcc", "a": 0.05, "b": 0.9}"#, 3));
+    accepted(&spec(
+        r#"{"type": "dcc", "asymmetric": true, "a": 0.03, "b": 0.9, "g": 0.04}"#,
+        3,
+    ));
+    refused(
+        &spec(r#"{"type": "dcc", "a": 0.05}"#, 3),
+        &["Give a and b, or leave every one out"],
+    );
+    refused(
+        &spec(r#"{"type": "dcc", "a": 0.05, "b": 0.9, "g": 0.01}"#, 3),
+        &["set asymmetric to true"],
+    );
+    refused(
+        &spec(r#"{"type": "dcc", "a": 0.5, "b": 0.5}"#, 3),
+        &["a + b must be at most 1 - 1e-4"],
+    );
+    refused(
+        &spec(r#"{"type": "dcc", "margins": "arch"}"#, 2),
+        &["margins must be \"garch\" or \"none\""],
+    );
+    refused(
+        &spec(r#"{"type": "dcc", "margins": "none", "dist": "t"}"#, 2),
+        &["runs no GARCH margin"],
+    );
+    refused(
+        &spec(
+            r#"{"type": "dcc", "start_rows": 100, "start_span": 50.0}"#,
+            2,
+        ),
+        &["Leave one of them out"],
+    );
+    refused(
+        &spec(r#"{"type": "dcc", "start_rows": 49}"#, 2),
+        &["start_rows must be at least 50"],
+    );
+    refused(&spec(r#"{"type": "dcc"}"#, 1), &["at least two targets"]);
+    refused(
+        r#"{"name": "m", "model": {"type": "dcc"}, "targets": ["a", "b"], "features": ["x"],
+            "half_life": "inf"}"#,
+        &["dcc takes no features"],
+    );
+}
+
 /// `hawkes`' window of clock units: a span above 0, beside no other window,
 /// with `closed` only under it, a number where the kernels' decays are
 /// rates, and a state whose fixed part alone fits `max_state_bytes`; what

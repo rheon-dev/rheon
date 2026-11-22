@@ -548,6 +548,17 @@ impl Garch {
         self.series.iter().map(|s| s.theta.clone()).collect()
     }
 
+    /// Target `j`'s Student-t degrees of freedom `ν` as they stand, where
+    /// its innovations are a t or a skewed t and its start has been
+    /// fitted; `None` otherwise. Read without forming
+    /// [`Self::coefficients`].
+    pub fn nu(&self, j: usize) -> Option<f64> {
+        let s = self.series.get(j)?;
+        (self.cfg.dist != GarchDist::Normal && s.started)
+            .then(|| s.theta.get(self.cfg.vol.k()).copied())
+            .flatten()
+    }
+
     /// Whether each target's start has been fitted.
     pub fn started(&self) -> Vec<bool> {
         self.series.iter().map(|s| s.started).collect()

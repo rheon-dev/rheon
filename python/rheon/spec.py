@@ -130,7 +130,7 @@ shows them at work.
          - ``bocpd``
        * - 0, each having a gate of its own or nothing to gate
          - ``ewridge``, ``seqtest``, ``rcov``, ``hmm``, ``corrchange``,
-           ``audit``, ``hawkes``, ``garch``
+           ``audit``, ``hawkes``, ``garch``, ``dcc``
 ``min_settled_frac``
     Why: a history shorter than the half-life may not represent the process,
     such as regimes or seasons the half-life was chosen to average across.
@@ -355,7 +355,8 @@ and each diagnostic's own ``*_half_life`` below, and in the models
 ``select_half_life``, ``coef_half_life``,
 ``revert_half_life``, ``trend_half_life`` and ``huber_scale_half_life``,
 ``hawkes``' ``kernel_half_lives``, a list of them, ``garch``'s
-``start_span``, ``glm``'s and ``expectile``'s ``refit_span``, and
+``start_span``, ``dcc``'s ``start_span`` and ``margin_start_span``,
+``glm``'s and ``expectile``'s ``refit_span``, and
 ``kmeans``' ``warm_span``, ``update_every`` and ``split_merge_every``,
 ``hmm``'s and ``bocpd``'s ``warm_span``, ``corrchange``'s
 ``permute_every``, ``huber``'s and ``sgd``'s ``huber_refit_span`` and
@@ -1112,6 +1113,7 @@ from rheon._spec import (
     coef_fields,
     coef_index,
     corrchange,
+    dcc,
     deco,
     ew_class,
     ew_cov,
@@ -1157,6 +1159,7 @@ __all__ = [
     "lasso",
     "bocpd",
     "corrchange",
+    "dcc",
     "deco",
     "marginal",
     "rcov",

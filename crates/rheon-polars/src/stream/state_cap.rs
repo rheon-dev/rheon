@@ -77,7 +77,19 @@ fn window_words(spec: &Spec) -> (String, &'static str, &'static str) {
         ModelKind::Garch {
             start_span: Some(s),
             ..
+        }
+        | ModelKind::Dcc {
+            start_span: Some(s),
+            ..
         } => (format!("start_span = {s}"), "Shorten start_span", "rows"),
+        ModelKind::Dcc {
+            margin_start_span: Some(s),
+            ..
+        } => (
+            format!("margin_start_span = {s}"),
+            "Shorten margin_start_span",
+            "rows",
+        ),
         ModelKind::Expectile {
             refit_span: Some(s),
             ..

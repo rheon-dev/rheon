@@ -231,6 +231,11 @@ pub const CELLS: &[Cell] = &[
     cell("garch.targets", 1, 8, Pow(1), Pow(1)),
     cell("garch.truncation", 100, 8, Pow(1), Pow(1)),
     cell("garch.history", 1000, 8, Const, Const),
+    // A row of `dcc` factors and inverts `R` and forms `R⁻¹ ∂R` for each
+    // parameter, `O(k³)`, and keeps `Q`, its targets and sensitivities,
+    // `O(k²)`.
+    cell("dcc.series", 2, 8, Pow(3), Pow(2)),
+    cell("dcc.history", 1000, 8, Const, Const),
     // --- the bank, `Bank::fit_predict` on a pool of one thread --------------
     cell("bank.groups_seen", 250, 8, Const, Pow(1)),
     // The same in calls of four rows, each to one group: what a call costs
@@ -1124,6 +1129,20 @@ fn model_case(id: &str, n: usize) -> ModelCase {
             match dim {
                 "history" => c.warm(n.max(1000)),
                 "truncation" => c.warm(9_000),
+                _ => c.warm(1_000),
+            }
+        }
+        ("dcc", "series" | "history") => {
+            let s = json!({
+                "name": "m",
+                "model": {"type": "dcc", "margins": "none", "asymmetric": true, "start_rows": 50},
+                "targets": names("y", if dim == "series" { n } else { 2 }),
+                "features": [],
+                "half_life": "inf",
+            });
+            let c = ModelCase::new(s, lin);
+            match dim {
+                "history" => c.warm(n.max(1000)),
                 _ => c.warm(1_000),
             }
         }

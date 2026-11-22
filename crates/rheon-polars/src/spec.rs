@@ -1495,6 +1495,62 @@ pub enum ModelKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_state_bytes: Option<u64>,
     },
+    /// Dynamic conditional correlation (Engle 2002) and its asymmetric form
+    /// (Cappiello, Engle and Sheppard 2006): the full correlation matrix of
+    /// the targets, return series standardized by a GARCH margin each, its
+    /// `(a, b[, g])` given or estimated online by recursive
+    /// quasi-likelihood after a start fitted by batch quasi-likelihood
+    /// (`rheon_core::Dcc`). Per target its variance, per pair its
+    /// correlation, and the row's log-density; the parameters in `coef`.
+    /// No features.
+    #[serde(rename = "dcc")]
+    Dcc {
+        /// The asymmetric model (ADCC), with `g`. Absent is false.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        asymmetric: Option<bool>,
+        /// `"garch"` (the default): a GARCH margin a target standardizes
+        /// its returns; `"none"`: the targets are standardized residuals
+        /// already.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        margins: Option<String>,
+        /// The margins' process, as `garch`'s `vol`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        vol: Option<String>,
+        /// The margins' innovations, as `garch`'s `dist`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dist: Option<String>,
+        /// The margins' FIGARCH lags, as `garch`'s `truncation`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        truncation: Option<usize>,
+        /// The margins' variance targeting, as `garch`'s.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        variance_targeting: Option<bool>,
+        /// The rows the margins' start fits; absent is 2,000.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        margin_start_rows: Option<usize>,
+        /// The margins' start as a span of the clock.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        margin_start_span: Option<Span>,
+        /// `a`, given: held rather than estimated, with `b` (and `g`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        a: Option<f64>,
+        /// `b`, given.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        b: Option<f64>,
+        /// `g`, given, the asymmetric model's.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        g: Option<f64>,
+        /// The rows the correlation's start fits; absent is 500.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start_rows: Option<usize>,
+        /// The correlation's start as a span of the clock.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start_span: Option<Span>,
+        /// The bytes a group's state may hold, the starts' buffers
+        /// included. Default 256 KB, at most 64 MiB.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
+    },
 }
 
 /// The two sides of a `seqtest` comparison, as [`ModelKind::compares`]
@@ -1583,6 +1639,7 @@ impl ModelKind {
         "hawkes",
         "expectile",
         "garch",
+        "dcc",
     ];
 
     pub fn kind_name(&self) -> &'static str {
@@ -1613,6 +1670,7 @@ impl ModelKind {
             ModelKind::Hawkes { .. } => "hawkes",
             ModelKind::Expectile { .. } => "expectile",
             ModelKind::Garch { .. } => "garch",
+            ModelKind::Dcc { .. } => "dcc",
         }
     }
 
@@ -1933,6 +1991,7 @@ impl ModelKind {
                     | ModelKind::Marginal { .. }
                     | ModelKind::Hawkes { .. }
                     | ModelKind::Garch { .. }
+                    | ModelKind::Dcc { .. }
             )
     }
 
@@ -2834,7 +2893,7 @@ impl Spec {
             // told its terms apart.
             ModelKind::Hawkes { .. } => 0.0,
             // The start is the gate: nothing is reported before it is fitted.
-            ModelKind::Garch { .. } => 0.0,
+            ModelKind::Garch { .. } | ModelKind::Dcc { .. } => 0.0,
             // The noise gate is this model's readiness gate
             // (docs/WARMUP-AND-CONVERGENCE.md §2.1): `max_error_inflation`
             // tracks the model where a count of weight cannot, and the
@@ -3350,6 +3409,15 @@ impl Spec {
                     "spec {name:?}: garch takes no features, but features lists {}: each of \
                      its targets is a return series whose variance it models. Put the return \
                      columns in targets, and leave out features.",
+                    columns_counted(self.features.len())
+                ));
+            }
+        } else if let ModelKind::Dcc { .. } = &self.model {
+            if !self.features.is_empty() {
+                no.refuse(format!(
+                    "spec {name:?}: dcc takes no features, but features lists {}: its targets \
+                     are the return series whose correlation it models. Put the return columns \
+                     in targets, and leave out features.",
                     columns_counted(self.features.len())
                 ));
             }

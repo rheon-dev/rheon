@@ -749,6 +749,48 @@ impl Spec {
                     format!("spec {:?}: {}", self.name, e.trim_start_matches("garch: "))
                 }));
             }
+            // Its features are checked above. A decay is legal: it acts on
+            // the targets, the weight and the estimator's gain. Each start
+            // is rows or a span of the clock, not both; every other value is
+            // the model's own to check, at the call, where the state's size
+            // against its cap is known too.
+            ModelKind::Dcc {
+                start_rows,
+                start_span,
+                margin_start_rows,
+                margin_start_span,
+                ..
+            } => {
+                for (rows, span, r, sp) in [
+                    (
+                        start_rows.is_some(),
+                        start_span.is_some(),
+                        "start_rows",
+                        "start_span",
+                    ),
+                    (
+                        margin_start_rows.is_some(),
+                        margin_start_span.is_some(),
+                        "margin_start_rows",
+                        "margin_start_span",
+                    ),
+                ] {
+                    if rows && span {
+                        no.refuse(format!(
+                            "spec {:?}: {r} (a count of rows) and {sp} (a span of the clock) \
+                             both say where the start closes. Leave one of them out.",
+                            self.name
+                        ));
+                    }
+                }
+                no.take(
+                    crate::stream::dcc_cfg(self, Decay::Halflife(f64::INFINITY))
+                        .map(|_| ())
+                        .map_err(|e| {
+                            format!("spec {:?}: {}", self.name, e.trim_start_matches("dcc: "))
+                        }),
+                );
+            }
             // The shared checks (non-empty features and targets, no column on
             // both sides, a decay, `min_weight` per target, no residual
             // diagnostics) and one of its own: given edges and the knobs for

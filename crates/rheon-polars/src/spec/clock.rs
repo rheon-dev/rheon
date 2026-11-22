@@ -77,6 +77,7 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
     ("expectile", &["window_size", "refit_span"]),
     ("glm", &["refit_span"]),
     ("garch", &["start_span"]),
+    ("dcc", &["start_span", "margin_start_span"]),
 ];
 
 /// The parameters that take a duration on a temporal clock or a number that
@@ -492,6 +493,14 @@ impl Spec {
             }
             ModelKind::Garch { start_span, .. } => {
                 put(&mut out, "start_span", start_span.as_ref());
+            }
+            ModelKind::Dcc {
+                start_span,
+                margin_start_span,
+                ..
+            } => {
+                put(&mut out, "start_span", start_span.as_ref());
+                put(&mut out, "margin_start_span", margin_start_span.as_ref());
             }
             // A number of rows binds to no clock unit
             // ([`DURATION_OR_UNIT_FREE_FIELDS`]).

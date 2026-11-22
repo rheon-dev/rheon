@@ -1,0 +1,747 @@
+use super::*;
+use crate::{GarchVol, oracle};
+
+fn lcg(s: &mut u64) -> f64 {
+    *s = s
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
+    ((*s >> 11) as f64 + 0.5) / (1u64 << 53) as f64
+}
+
+fn normal(s: &mut u64) -> f64 {
+    let (u, v) = (lcg(s), lcg(s));
+    (-2.0 * u.ln()).sqrt() * (std::f64::consts::TAU * v).cos()
+}
+
+/// A realistic (A)DCC stream of standardized residuals, `n` rows after
+/// 1,000 discarded: `k` series, every target correlation `rho`, the truth
+/// `(a, b, g)`, innovations `L_t x_t` with `x` standard normal (or a
+/// Student-t of `nu` degrees of freedom at unit variance), `L_t` the
+/// Cholesky factor of `R_t`. `N` is held at the independent-normal orthant
+/// value scaled by the target, which keeps the truth's intercept positive
+/// definite at these parameters.
+fn adcc_stream(
+    k: usize,
+    n: usize,
+    theta: [f64; 3],
+    rho: f64,
+    nu: Option<f64>,
+    seed: u64,
+) -> Vec<Vec<f64>> {
+    let mut s = seed;
+    let kk = k * k;
+    let mut qbar = vec![rho; kk];
+    for i in 0..k {
+        qbar[i * k + i] = 1.0;
+    }
+    let nbar: Vec<f64> = qbar.iter().map(|v| 0.5 * v).collect();
+    let (a, b, g) = (theta[0], theta[1], theta[2]);
+    let mut q = qbar.clone();
+    let mut out = Vec::with_capacity(n);
+    let mut l = vec![0.0; kk];
+    for t in 0..n + 1000 {
+        let mut r = vec![0.0; kk];
+        for i in 0..k {
+            for j in 0..k {
+                r[i * k + j] = q[i * k + j] / (q[i * k + i] * q[j * k + j]).sqrt();
+            }
+        }
+        assert!(mat::cholesky(&r, k, &mut l));
+        let scale = match nu {
+            Some(nu) => {
+                let chi: f64 = (0..nu as usize).map(|_| normal(&mut s).powi(2)).sum();
+                ((nu - 2.0) / chi).sqrt()
+            }
+            None => 1.0,
+        };
+        let x: Vec<f64> = (0..k).map(|_| normal(&mut s) * scale).collect();
+        let z: Vec<f64> = (0..k)
+            .map(|i| (0..=i).map(|j| l[i * k + j] * x[j]).sum())
+            .collect();
+        let neg: Vec<f64> = z.iter().map(|v| v.min(0.0)).collect();
+        for i in 0..k {
+            for j in 0..k {
+                let ij = i * k + j;
+                q[ij] = (1.0 - a - b) * qbar[ij] - g * nbar[ij]
+                    + a * z[i] * z[j]
+                    + g * neg[i] * neg[j]
+                    + b * q[ij];
+            }
+        }
+        if t >= 1000 {
+            out.push(z);
+        }
+    }
+    out
+}
+
+fn cfg(k: usize, asymmetric: bool, params: Option<Vec<f64>>) -> DccCfg {
+    DccCfg {
+        n_targets: k,
+        asymmetric,
+        margins: None,
+        params,
+        decay: Decay::Halflife(f64::INFINITY),
+        start_rows: DCC_START_ROWS,
+        start_span: None,
+        min_weight: 0.0,
+        max_state_bytes: None,
+    }
+}
+
+fn ys(z: &[f64]) -> Vec<Option<f64>> {
+    z.iter().map(|v| Some(*v)).collect()
+}
+
+fn run(m: &mut Dcc, rows: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    rows.iter()
+        .map(|z| m.step(&[], &ys(z), 1.0, 1.0).pred)
+        .collect()
+}
+
+/// The recursion of the module docs written longhand, from the targets of
+/// the start's rows, with the running means after it, against the model's
+/// reported correlations and log-densities: DCC and ADCC with given
+/// parameters on a realistic stream.
+#[test]
+fn the_reported_correlation_is_the_recursion_written_longhand() {
+    for (asym, params) in [(false, vec![0.05, 0.9]), (true, vec![0.03, 0.93, 0.03])] {
+        let k = 3;
+        let rows = adcc_stream(
+            k,
+            1200,
+            [0.03, 0.93, if asym { 0.03 } else { 0.0 }],
+            0.5,
+            None,
+            7,
+        );
+        let mut m = Dcc::new(cfg(k, asym, Some(params.clone()))).unwrap();
+        let got = run(&mut m, &rows);
+        // longhand
+        let n0 = DCC_START_ROWS;
+        let mean = |f: &dyn Fn(&[f64], usize, usize) -> f64, upto: usize| -> Vec<f64> {
+            let mut out = vec![0.0; k * k];
+            for i in 0..k {
+                for j in 0..k {
+                    out[i * k + j] =
+                        rows[..upto].iter().map(|z| f(z, i, j)).sum::<f64>() / upto as f64;
+                }
+            }
+            out
+        };
+        let zz = |z: &[f64], i: usize, j: usize| z[i] * z[j];
+        let nn = |z: &[f64], i: usize, j: usize| z[i].min(0.0) * z[j].min(0.0);
+        let (qb0, nb0) = (mean(&zz, n0), mean(&nn, n0));
+        let g = if asym { params[2] } else { 0.0 };
+        let step = |q: &mut Vec<f64>, z: &[f64], qb: &[f64], nb: &[f64]| {
+            let old = q.clone();
+            for i in 0..k {
+                for j in 0..k {
+                    let ij = i * k + j;
+                    q[ij] = (1.0 - params[0] - params[1]) * qb[ij] - g * nb[ij]
+                        + params[0] * z[i] * z[j]
+                        + g * z[i].min(0.0) * z[j].min(0.0)
+                        + params[1] * old[ij];
+                }
+            }
+        };
+        let mut q = qb0.clone();
+        for z in &rows[..n0] {
+            step(&mut q, z, &qb0, &nb0);
+        }
+        for t in n0..rows.len() {
+            let r: Vec<f64> = (0..k * k)
+                .map(|ij| q[ij] / (q[(ij / k) * k + ij / k] * q[(ij % k) * k + ij % k]).sqrt())
+                .collect();
+            let mut at = 0;
+            for i in 0..k {
+                for j in (i + 1)..k {
+                    assert!((got[t][at] - r[i * k + j]).abs() < 1e-12, "row {t}");
+                    at += 1;
+                }
+            }
+            let dens = oracle::gaussian_log_density(&r, &rows[t]);
+            assert!(
+                (got[t][at] - dens).abs() < 1e-10,
+                "row {t}: {} {dens}",
+                got[t][at]
+            );
+            let (qb, nb) = (mean(&zz, t + 1), mean(&nn, t + 1));
+            step(&mut q, &rows[t], &qb, &nb);
+        }
+        // nothing before the start
+        assert!(got[..n0].iter().all(|r| r.iter().all(|v| v.is_nan())));
+        // the given parameters, inside the set, stand as given
+        assert_eq!(m.coefficients(), params);
+    }
+}
+
+/// Out of sample: a row's value moves no report at or before it.
+#[test]
+fn a_rows_value_moves_no_report_up_to_it() {
+    let rows = adcc_stream(2, 900, [0.04, 0.92, 0.0], 0.4, None, 3);
+    let mut a = Dcc::new(cfg(2, false, None)).unwrap();
+    let base = run(&mut a, &rows);
+    let mut moved = rows.clone();
+    moved[700][0] += 5.0;
+    let mut b = Dcc::new(cfg(2, false, None)).unwrap();
+    let other = run(&mut b, &moved);
+    let bits = |r: &[f64]| r.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+    for t in 0..700 {
+        assert_eq!(bits(&base[t][..1]), bits(&other[t][..1]));
+    }
+    assert_eq!(base[700][0].to_bits(), other[700][0].to_bits());
+    assert_ne!(base[700][1].to_bits(), other[700][1].to_bits());
+    assert_ne!(base[701][0].to_bits(), other[701][0].to_bits());
+}
+
+/// The start's batch fit is a maximum of the likelihood over the set: the
+/// buffer's likelihood computed by faer's Gaussian density (`crate::oracle`,
+/// which shares nothing with the model's Cholesky) is no higher at any
+/// feasible point a small step away.
+#[test]
+fn the_start_fit_maximizes_the_likelihood() {
+    for (asym, seed) in [(false, 11), (true, 12)] {
+        let k = 3;
+        let rows = adcc_stream(
+            k,
+            2000,
+            [0.04, 0.92, if asym { 0.04 } else { 0.0 }],
+            0.5,
+            None,
+            seed,
+        );
+        let z: Vec<f64> = rows.iter().flatten().copied().collect();
+        let w = vec![1.0; rows.len()];
+        let kk = k * k;
+        let mut qbar = vec![0.0; kk];
+        let mut nbar = vec![0.0; if asym { kk } else { 0 }];
+        for (t, zt) in rows.iter().enumerate() {
+            update_targets(&mut qbar, &mut nbar, zt, 1.0 / (t + 1) as f64, k);
+        }
+        let mut work = Vec::new();
+        let dlt = if asym {
+            region::delta(&qbar, &nbar, k, &mut work).unwrap()
+        } else {
+            0.0
+        };
+        let p = if asym { 3 } else { 2 };
+        let r = fit::Rows {
+            z: &z,
+            w: &w,
+            k,
+            qbar: &qbar,
+            nbar: &nbar,
+        };
+        let got = crate::scratch::with_borrow_mut(&WORK, |wk| fit::fit(&r, p, dlt, wk)).unwrap();
+        assert!(got.sound, "{got:?}");
+        let lik = |th: &[f64]| -> f64 {
+            let mut q = qbar.clone();
+            let mut s = 0.0;
+            for zt in &rows {
+                let rr: Vec<f64> = (0..kk)
+                    .map(|ij| q[ij] / (q[(ij / k) * k + ij / k] * q[(ij % k) * k + ij % k]).sqrt())
+                    .collect();
+                s += oracle::gaussian_log_density(&rr, zt);
+                advance(th, &qbar, &nbar, zt, k, &mut q, &mut []);
+            }
+            s
+        };
+        let best = lik(&got.theta);
+        let c = fit::coefs(p, dlt);
+        for i in 0..p {
+            for h in [1e-4, -1e-4] {
+                let mut th = got.theta.clone();
+                th[i] += h;
+                let s: f64 = c.iter().zip(&th).map(|(a, b)| a * b).sum();
+                if th.iter().all(|v| *v >= 0.0) && s <= PERSISTENCE_CAP {
+                    assert!(lik(&th) <= best + 1e-9, "{i} {h}: {} > {best}", lik(&th));
+                }
+            }
+        }
+        // and near the truth, on 2,000 rows
+        assert!(
+            (got.theta[0] - 0.04).abs() < 0.03 && (got.theta[1] - 0.92).abs() < 0.06,
+            "{got:?}"
+        );
+    }
+}
+
+/// The online estimate on a realistic stream, normal and Student-t(6)
+/// innovations: inside the set at every row, `Q` positive definite, and
+/// at 20,000 rows near the truth (the Python oracle tests hold it to the
+/// batch fit's standard errors).
+#[test]
+fn the_online_estimate_stays_in_the_set_and_finds_the_truth() {
+    for (asym, nu, seed) in [(false, None, 21), (true, None, 22), (true, Some(6.0), 23)] {
+        let k = 3;
+        let truth = [0.04, 0.92, if asym { 0.04 } else { 0.0 }];
+        let rows = adcc_stream(k, 20000, truth, 0.5, nu, seed);
+        let mut m = Dcc::new(cfg(k, asym, None)).unwrap();
+        for z in &rows {
+            m.step(&[], &ys(z), 1.0, 1.0);
+            if m.started() {
+                assert!(m.persistence() <= PERSISTENCE_CAP + 1e-15);
+                assert!(m.coefficients().iter().all(|v| *v >= 0.0));
+            }
+        }
+        let th = m.coefficients();
+        assert!((th[0] - truth[0]).abs() < 0.015, "{th:?}");
+        assert!((th[1] - truth[1]).abs() < 0.03, "{th:?}");
+        if asym {
+            assert!((th[2] - truth[2]).abs() < 0.03, "{th:?}");
+        }
+        assert_eq!(m.repairs(), 0);
+        assert!(m.start_sound());
+    }
+}
+
+/// Given parameters the targets leave outside the set are projected back
+/// at every row, and return once the targets do: `Q` stays positive
+/// definite. Both sides of the cap at the call.
+#[test]
+fn given_parameters_are_held_in_the_set() {
+    let k = 2;
+    // g large enough that a + b + δ g passes the cap on these targets
+    let rows = adcc_stream(k, 1500, [0.03, 0.93, 0.03], 0.3, None, 5);
+    let mut m = Dcc::new(cfg(k, true, Some(vec![0.03, 0.9, 0.5]))).unwrap();
+    for z in &rows {
+        let was = m.started();
+        let out = m.step(&[], &ys(z), 1.0, 1.0);
+        if was {
+            assert!(m.persistence() <= PERSISTENCE_CAP + 1e-15);
+            assert!(out.pred[0].is_finite());
+        }
+    }
+    let th = m.coefficients();
+    assert!(th[2] < 0.5, "{th:?}");
+    assert!((m.persistence() - PERSISTENCE_CAP).abs() < 1e-12);
+    assert_eq!(m.repairs(), 0);
+    // the call: a + b at the cap and past it
+    assert!(
+        cfg(2, false, Some(vec![0.5, PERSISTENCE_CAP - 0.5]))
+            .validate()
+            .is_ok()
+    );
+    let past = cfg(2, false, Some(vec![0.5, PERSISTENCE_CAP - 0.5 + 1e-12])).validate();
+    assert!(past.unwrap_err().contains("a + b must be at most"));
+    assert!(
+        cfg(2, true, Some(vec![0.1, 0.8]))
+            .validate()
+            .unwrap_err()
+            .contains("must hold 3")
+    );
+    assert!(cfg(2, false, Some(vec![-0.1, 0.8])).validate().is_err());
+}
+
+/// The asymmetric model with `g` given as 0 is the symmetric one, to the
+/// bit.
+#[test]
+fn adcc_at_g_zero_is_dcc() {
+    let rows = adcc_stream(3, 800, [0.05, 0.9, 0.0], 0.5, None, 9);
+    let mut a = Dcc::new(cfg(3, false, Some(vec![0.05, 0.9]))).unwrap();
+    let mut b = Dcc::new(cfg(3, true, Some(vec![0.05, 0.9, 0.0]))).unwrap();
+    for z in &rows {
+        let (x, y) = (a.step(&[], &ys(z), 1.0, 1.0), b.step(&[], &ys(z), 1.0, 1.0));
+        assert_eq!(
+            x.pred.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            y.pred.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
+        );
+    }
+}
+
+/// The start fires on its row, not one before; `start_rows` at its least
+/// and one under; `min_weight` either side.
+#[test]
+fn the_start_and_the_floor_hold_at_their_edges() {
+    let rows = adcc_stream(2, 200, [0.04, 0.92, 0.0], 0.4, None, 4);
+    let mut c = cfg(2, false, None);
+    c.start_rows = DCC_MIN_START_ROWS;
+    let mut m = Dcc::new(c.clone()).unwrap();
+    let out = run(&mut m, &rows);
+    assert!(out[DCC_MIN_START_ROWS - 1][0].is_nan());
+    assert!(out[DCC_MIN_START_ROWS][0].is_finite());
+    c.start_rows = DCC_MIN_START_ROWS - 1;
+    assert!(
+        c.validate()
+            .unwrap_err()
+            .contains("start_rows must be at least 50")
+    );
+    // min_weight: the row whose weight before it is the floor reports, the
+    // one before it does not
+    let mut c = cfg(2, false, None);
+    c.start_rows = 50;
+    c.min_weight = 60.0;
+    let mut m = Dcc::new(c).unwrap();
+    let out = run(&mut m, &rows);
+    assert!(out[59].iter().all(|v| v.is_nan()));
+    assert!(out[60][0].is_finite());
+}
+
+/// The state's bytes are the docs' formula, the call refuses past the cap
+/// and takes the cap exactly.
+#[test]
+fn the_state_is_bounded_by_its_formula_and_the_cap() {
+    for (asym, params, per) in [
+        (false, None, (32, 96)),
+        (true, None, (48, 144)),
+        (false, Some(vec![0.05, 0.9]), (16, 64)),
+        (true, Some(vec![0.03, 0.9, 0.03]), (24, 72)),
+    ] {
+        for k in [2, 3, 10] {
+            let c = cfg(k, asym, params.clone());
+            let k = k as u64;
+            assert_eq!(c.stage_bytes(), per.0 * k * k + per.1, "{asym} {k}");
+            let m = Dcc::new(c.clone()).unwrap();
+            assert_eq!(m.bytes(), c.stage_bytes() + 32);
+            assert_eq!(c.peak_bytes(), c.stage_bytes() + 32 + 500 * 8 * (k + 2));
+        }
+    }
+    let mut c = cfg(3, true, None);
+    let peak = c.peak_bytes();
+    c.max_state_bytes = Some(peak);
+    assert!(c.validate().is_ok());
+    c.max_state_bytes = Some(peak - 1);
+    assert!(c.validate().unwrap_err().contains("past max_state_bytes"));
+    // the buffer is gone after the start
+    let rows = adcc_stream(3, 600, [0.04, 0.92, 0.04], 0.5, None, 8);
+    let mut m = Dcc::new(cfg(3, true, None)).unwrap();
+    for (t, z) in rows.iter().enumerate() {
+        m.step(&[], &ys(z), 1.0, 1.0);
+        let want = if t + 1 < DCC_START_ROWS {
+            (t as u64 + 1) * 8 * 5
+        } else {
+            0
+        };
+        assert_eq!(m.bytes(), m.cfg().stage_bytes() + 32 + want, "{t}");
+    }
+}
+
+/// A save at every phase (in the start's buffer, at the start, after it)
+/// loads and continues to the bit, with GARCH margins and without.
+#[test]
+fn a_save_and_load_continues_to_the_bit() {
+    let rows = adcc_stream(2, 2900, [0.04, 0.92, 0.03], 0.4, None, 13);
+    let mut with = cfg(2, true, None);
+    with.margins = Some(GarchCfg {
+        n_targets: 2,
+        vol: GarchVol::Garch,
+        dist: GarchDist::Normal,
+        truncation: None,
+        variance_targeting: false,
+        start_rows: 2000,
+        start_span: None,
+        horizon: 1,
+        min_weight: 0.0,
+        max_state_bytes: None,
+    });
+    for c in [cfg(2, true, None), with] {
+        for cut in [100, 499, 500, 1200, 2400, 2600] {
+            let mut a = Dcc::new(c.clone()).unwrap();
+            let (head, tail) = rows.split_at(cut);
+            run(&mut a, head);
+            let bytes = rmp_serde::to_vec(&a.state()).unwrap();
+            let s: State = rmp_serde::from_slice(&bytes).unwrap();
+            let mut b = Dcc::restore(&s).unwrap();
+            let (x, y) = (run(&mut a, tail), run(&mut b, tail));
+            for (p, q) in x.iter().zip(&y) {
+                assert_eq!(
+                    p.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                    q.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
+                );
+            }
+            assert_eq!(
+                rmp_serde::to_vec(&a.state()).unwrap(),
+                rmp_serde::to_vec(&b.state()).unwrap()
+            );
+        }
+    }
+}
+
+/// The margins are the `garch` model's: its variances and standardized
+/// residuals to the bit, run beside it on the same returns.
+#[test]
+fn the_margins_are_the_garch_models() {
+    let mut s = 31;
+    let k = 2;
+    let z = adcc_stream(k, 3000, [0.04, 0.92, 0.0], 0.5, None, 17);
+    // GARCH(1,1) returns around the correlated innovations
+    let mut v = [1.0; 2];
+    let mut e: [f64; 2] = [0.0; 2];
+    let ret: Vec<Vec<f64>> = z
+        .iter()
+        .map(|zt| {
+            for i in 0..k {
+                v[i] = 0.05 + 0.08 * e[i] * e[i] + 0.9 * v[i];
+                e[i] = v[i].sqrt() * zt[i];
+            }
+            let _ = lcg(&mut s);
+            e.to_vec()
+        })
+        .collect();
+    let gcfg = GarchCfg {
+        n_targets: k,
+        vol: GarchVol::Garch,
+        dist: GarchDist::Normal,
+        truncation: None,
+        variance_targeting: false,
+        start_rows: 1000,
+        start_span: None,
+        horizon: 1,
+        min_weight: 0.0,
+        max_state_bytes: None,
+    };
+    let mut c = cfg(k, false, None);
+    c.margins = Some(gcfg.clone());
+    let mut m = Dcc::new(c).unwrap();
+    let mut g = Garch::new(gcfg).unwrap();
+    let mut rho_from = None;
+    for (t, r) in ret.iter().enumerate() {
+        let a = m.step(&[], &ys(r), 1.0, 1.0);
+        let b = g.step(&[], &ys(r), 1.0, 1.0);
+        assert_eq!(a.pred[0].to_bits(), b.pred[0].to_bits());
+        assert_eq!(a.pred[1].to_bits(), b.pred[2].to_bits());
+        if rho_from.is_none() && a.pred[2].is_finite() {
+            rho_from = Some(t);
+        }
+    }
+    // the correlation from the margins' start and the stage's
+    assert_eq!(rho_from, Some(1000 + DCC_START_ROWS));
+    assert!((m.coefficients()[1] - 0.92).abs() < 0.1);
+}
+
+/// A margin whose fitted ν is at most 4 is said once; one above it is
+/// not.
+#[test]
+fn a_margin_with_no_fourth_moment_is_said_once() {
+    let k = 2;
+    let mut s = 5;
+    let t3 = |s: &mut u64| {
+        let chi: f64 = (0..3).map(|_| normal(s).powi(2)).sum();
+        normal(s) / (chi / 3.0).sqrt() / 3f64.sqrt()
+    };
+    let mut gcfg = GarchCfg {
+        n_targets: k,
+        vol: GarchVol::Garch,
+        dist: GarchDist::T,
+        truncation: None,
+        variance_targeting: false,
+        start_rows: 2000,
+        start_span: None,
+        horizon: 1,
+        min_weight: 0.0,
+        max_state_bytes: None,
+    };
+    let mut c = cfg(k, false, None);
+    c.margins = Some(gcfg.clone());
+    let mut m = Dcc::new(c).unwrap();
+    let mut said = 0;
+    for _ in 0..2300 {
+        let r: Vec<f64> = (0..k).map(|_| t3(&mut s)).collect();
+        m.step(&[], &ys(&r), 1.0, 1.0);
+        if let Some((_, nu)) = m.take_heavy_tail() {
+            assert!(nu <= 4.0);
+            said += 1;
+        }
+    }
+    assert_eq!(said, 1);
+    // t(10): not said
+    gcfg.start_rows = 2000;
+    let mut c = cfg(k, false, None);
+    c.margins = Some(gcfg);
+    let mut m = Dcc::new(c).unwrap();
+    for _ in 0..2300 {
+        let r: Vec<f64> = (0..k)
+            .map(|_| {
+                let chi: f64 = (0..10).map(|_| normal(&mut s).powi(2)).sum();
+                normal(&mut s) / (chi / 10.0).sqrt()
+            })
+            .collect();
+        m.step(&[], &ys(&r), 1.0, 1.0);
+        assert!(m.take_heavy_tail().is_none());
+    }
+}
+
+/// A row of weight 0, or with a residual absent, steps nothing and leaves
+/// no NaN: the next row reports as if it were not there, its clock step
+/// decaying the weight alone.
+#[test]
+fn a_row_of_no_weight_or_a_missing_series_steps_nothing() {
+    let rows = adcc_stream(2, 800, [0.04, 0.92, 0.03], 0.4, None, 6);
+    let mut c = cfg(2, true, None);
+    c.decay = Decay::Halflife(5000.0);
+    let mut a = Dcc::new(c.clone()).unwrap();
+    let mut b = Dcc::new(c).unwrap();
+    for (t, z) in rows.iter().enumerate() {
+        if t == 650 {
+            b.step(&[], &ys(z), 0.0, 0.0);
+            b.step(&[], &[Some(z[0]), None], 0.0, 1.0);
+        }
+        let (x, y) = (a.step(&[], &ys(z), 1.0, 1.0), b.step(&[], &ys(z), 1.0, 1.0));
+        assert_eq!(
+            x.pred.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            y.pred.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            "{t}"
+        );
+    }
+    // the weight a row of weight 0 leaves: decayed, not grown
+    let mut m = Dcc::new(cfg(2, false, None)).unwrap();
+    let first = m.step(&[], &ys(&rows[0]), 1.0, 0.0);
+    assert_eq!(first.n_eff, 0.0);
+    assert_eq!(m.n_eff(), 0.0);
+    assert!(m.stage.qbar.iter().all(|v| *v == 0.0));
+}
+
+/// Under a decay the targets forget: a stream whose correlation turns
+/// from 0.6 to -0.3 is read near -0.3 a few half-lives later, on
+/// average over its last 1,000 rows,, and the gain
+/// floors at `1 − λ`.
+#[test]
+fn a_decay_tracks_a_moving_correlation() {
+    let mut s = 41;
+    let k = 2;
+    let mut c = cfg(k, false, Some(vec![0.03, 0.95]));
+    c.decay = Decay::Halflife(200.0);
+    let mut m = Dcc::new(c).unwrap();
+    let mut last = 0.0;
+    for t in 0..4000 {
+        let rho: f64 = if t < 2000 { 0.6 } else { -0.3 };
+        let (x, y) = (normal(&mut s), normal(&mut s));
+        let z = [x, rho * x + (1.0 - rho * rho).sqrt() * y];
+        if t >= 3000 {
+            last += m.step(&[], &ys(&z), 1.0, 1.0).pred[0] / 1000.0;
+        } else {
+            m.step(&[], &ys(&z), 1.0, 1.0);
+        }
+    }
+    // the mean correlation read over the last 1,000 rows
+    assert!((last + 0.3).abs() < 0.1, "{last}");
+    let (qbar, _) = m.targets();
+    assert!((qbar[1] + 0.3).abs() < 0.2, "{qbar:?}");
+    // the weight at its ceiling, 1 / (1 − λ)
+    let lam = 0.5_f64.powf(1.0 / 200.0);
+    assert!((m.stage.w - 1.0 / (1.0 - lam)).abs() < 2e-6 / (1.0 - lam));
+}
+
+/// A start over a span of the clock closes at its length with at least 50
+/// rows, on the rows' stamps; its buffer is checked against the cap as
+/// rows come, warned of once past half and stopped at the cap.
+#[test]
+fn a_start_on_the_clock_closes_at_its_span_and_holds_the_cap() {
+    let rows = adcc_stream(2, 400, [0.04, 0.92, 0.0], 0.4, None, 2);
+    let mut c = cfg(2, false, None);
+    c.start_span = Some(99.5);
+    let mut m = Dcc::new(c.clone()).unwrap();
+    let mut opened = None;
+    for (t, z) in rows.iter().enumerate() {
+        m.stamp_next(Stamp::from(t as f64 * 0.5));
+        let out = m.step(&[], &ys(z), 0.5, 1.0);
+        if opened.is_none() && out.pred[0].is_finite() {
+            opened = Some(t);
+        }
+    }
+    // row 199 is the first at or past 99.5 after row 0
+    assert_eq!(opened, Some(200));
+    // the cap: past half warned once, past the cap stopped
+    let fixed = c.stage_bytes() + 32;
+    c.max_state_bytes = Some(fixed + 100 * c.row_bytes());
+    c.start_span = Some(1e9);
+    let mut m = Dcc::new(c).unwrap();
+    let mut warned = 0;
+    for (t, z) in rows.iter().enumerate() {
+        m.stamp_next(Stamp::from(t as f64));
+        m.step(&[], &ys(z), 1.0, 1.0);
+        if m.take_state_warning().is_some() {
+            warned += 1;
+            // the first row whose bytes pass half the cap
+            assert!(2 * m.bytes() > m.cfg().max_state_bytes.unwrap());
+            assert!(2 * (m.bytes() - m.cfg().row_bytes()) <= m.cfg().max_state_bytes.unwrap());
+        }
+        if t < 100 {
+            assert!(m.state_over_cap().is_none(), "{t}");
+        }
+    }
+    assert_eq!(warned, 1);
+    assert!(m.state_over_cap().is_some());
+    assert_eq!(m.stage.rows(m.cfg()), 100);
+}
+
+/// Scaling every weight changes nothing but `weight_sum`.
+#[test]
+fn a_weights_scale_changes_only_the_weight() {
+    let rows = adcc_stream(2, 900, [0.04, 0.92, 0.03], 0.4, None, 19);
+    let mut a = Dcc::new(cfg(2, true, None)).unwrap();
+    let mut b = Dcc::new(cfg(2, true, None)).unwrap();
+    for z in &rows {
+        let x = a.step(&[], &ys(z), 1.0, 1.0);
+        let y = b.step(&[], &ys(z), 1.0, 4.0);
+        for (p, q) in x.pred.iter().zip(&y.pred) {
+            assert!((p - q).abs() <= 1e-12 * (1.0 + p.abs()) || (p.is_nan() && q.is_nan()));
+        }
+        assert_eq!(4.0 * x.n_eff, y.n_eff);
+    }
+}
+
+/// A buffer whose target is not positive definite (one series constant)
+/// is dropped and the start begins again; nothing is reported, no NaN is
+/// left in the state.
+#[test]
+fn a_degenerate_start_begins_again() {
+    let mut m = Dcc::new({
+        let mut c = cfg(2, false, None);
+        c.start_rows = 50;
+        c
+    })
+    .unwrap();
+    for t in 0..120 {
+        let v = if t % 2 == 0 { 1.0 } else { -1.0 };
+        let out = m.step(&[], &[Some(v), Some(v)], 1.0, 1.0);
+        assert!(out.pred[0].is_nan());
+    }
+    assert_eq!(m.restarts(), 2);
+    assert!(!m.started());
+}
+
+/// With GARCH margins, `predict_with` is the step without the step, to the
+/// bit, on rows with a series absent and of weight 0 among them; `predict`
+/// with no residuals the same but for the log-density.
+#[test]
+fn with_margins_predict_is_the_step() {
+    let rows = adcc_stream(2, 1400, [0.04, 0.92, 0.0], 0.5, None, 29);
+    let mut c = cfg(2, false, None);
+    c.start_rows = 60;
+    c.margins = Some(GarchCfg {
+        n_targets: 2,
+        vol: GarchVol::Gjr,
+        dist: GarchDist::T,
+        truncation: None,
+        variance_targeting: false,
+        start_rows: 200,
+        start_span: None,
+        horizon: 1,
+        min_weight: 0.0,
+        max_state_bytes: Some(20_000),
+    });
+    let mut m = Dcc::new(c).unwrap();
+    let mut ready = 0;
+    for (t, z) in rows.iter().enumerate() {
+        let y: Vec<Option<f64>> = z
+            .iter()
+            .enumerate()
+            .map(|(j, v)| (!(t % 13 == 5 && j == 1)).then_some(v * (1.0 + 0.3 * (t % 7) as f64)))
+            .collect();
+        let w = if t % 17 == 3 { 0.0 } else { 1.0 };
+        let p = m.predict_with(&[], &y, 1.0);
+        let q = m.predict(&[], 1.0);
+        let s = m.step(&[], &y, 1.0, w);
+        let bits = |r: &[f64]| r.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+        assert_eq!(bits(&p.pred), bits(&s.pred), "{t}");
+        let n = s.pred.len();
+        assert_eq!(bits(&q.pred[..n - 1]), bits(&s.pred[..n - 1]), "{t}");
+        assert_eq!(p.n_eff, s.n_eff);
+        if s.pred.iter().all(|v| v.is_finite()) {
+            ready += 1;
+        }
+    }
+    assert!(ready > 300, "{ready}");
+}

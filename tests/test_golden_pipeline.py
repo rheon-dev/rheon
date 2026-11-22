@@ -302,6 +302,20 @@ def specs() -> list[dict]:
             weight="w",
             group="g",
         ),
+        # Two series' correlation, the asymmetric model estimated after a
+        # start of 50 rows, on the targets as they stand (no margins).
+        rp.spec.dcc(
+            "dcc",
+            targets=["y0", "x0"],
+            margins="none",
+            asymmetric=True,
+            start_rows=50,
+            clock="t",
+            gap_cap=6.0,
+            half_life=25.0,
+            weight="w",
+            group="g",
+        ),
         # The two-phase bank: reads the ridge grid's `resid_y0__r0.5` and
         # kalman's `resid_y0` from the structs assembled above it.
         rp.spec.seqtest(
@@ -1222,6 +1236,21 @@ GOLDEN: dict[str, float | str | None] = {
     "garch.withheld_reason@25": None,
     "garch.withheld_reason@60": None,
     "garch.withheld_reason@119": None,
+    "dcc.corr_y0_x0@25": None,
+    "dcc.corr_y0_x0@60": None,
+    "dcc.corr_y0_x0@119": 0.28679254353662686,
+    "dcc.loglik@25": None,
+    "dcc.loglik@60": None,
+    "dcc.loglik@119": -1.8555864252494063,
+    "dcc.weight_sum@25": 8.573837237596514,
+    "dcc.weight_sum@60": 13.244185655943454,
+    "dcc.weight_sum@119": 15.09397614533663,
+    "dcc.settled_frac@25": 0.5136725262938573,
+    "dcc.settled_frac@60": 0.8564127056253706,
+    "dcc.settled_frac@119": 0.9793826888941736,
+    "dcc.withheld_reason@25": "below_warm_rows",
+    "dcc.withheld_reason@60": "below_warm_rows",
+    "dcc.withheld_reason@119": None,
     "audit.weight_sum@25": 12.0,
     "audit.weight_sum@60": 30.0,
     "audit.weight_sum@119": 59.0,

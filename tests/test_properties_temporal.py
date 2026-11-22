@@ -552,6 +552,18 @@ def clock_specs(draw, model: str, step: int, cap: int):
             kw["start_span"] = steps(1, 30)
         else:
             kw["start_rows"] = draw(st.integers(50, 60))
+    elif model == "dcc":
+        # Task 493: each start a span of the clock, or of rows; a decay on
+        # the clock.
+        kw |= dict(targets=["y", "x0"], half_life=steps(1, 30))
+        if draw(st.booleans()):
+            kw["start_span"] = steps(1, 30)
+        else:
+            kw["start_rows"] = draw(st.integers(50, 60))
+        if draw(st.booleans()):
+            kw["margin_start_span"] = steps(1, 30)
+        else:
+            kw["margin_start_rows"] = draw(st.integers(50, 60))
     else:
         assert model == "rls", model
         kw |= xy | maybe("embargo", 1, 5)

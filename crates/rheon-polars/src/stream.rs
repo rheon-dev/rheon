@@ -111,6 +111,7 @@ pub enum AnyModel {
     Expectile(Box<rheon_core::Expectile>),
     Hawkes(Box<rheon_core::Hawkes>),
     Garch(Box<rheon_core::Garch>),
+    Dcc(Box<rheon_core::Dcc>),
 }
 
 /// A flush's shards, run on whichever pool the caller is in: the bank's
@@ -161,6 +162,7 @@ macro_rules! dispatch {
             AnyModel::Expectile($m) => $body,
             AnyModel::Hawkes($m) => $body,
             AnyModel::Garch($m) => $body,
+            AnyModel::Dcc($m) => $body,
         }
     };
 }
@@ -465,6 +467,7 @@ impl AnyModel {
             AnyModel::KMeans(m) => !m.seeded(),
             AnyModel::Hmm(m) => !m.seeded(),
             AnyModel::Bocpd(m) => m.warming(),
+            AnyModel::Dcc(m) => !m.started(),
             AnyModel::Kalman(m) => m.sizing(),
             _ => false,
         }
@@ -534,7 +537,8 @@ impl AnyModel {
             | AnyModel::Audit(_)
             // Every read it withholds is a row's, not a failure.
             | AnyModel::Hawkes(_)
-            | AnyModel::Garch(_) => 0,
+            | AnyModel::Garch(_)
+            | AnyModel::Dcc(_) => 0,
         }
     }
 
@@ -608,6 +612,9 @@ impl AnyModel {
             AnyModel::Hawkes(m) => Some(m.coefficients()),
             // Each target's process parameters, then its shape.
             AnyModel::Garch(m) => Some(m.coefficients()),
+            // `a`, `b` and the asymmetric model's `g`, one row; not a number
+            // before a learned model's start.
+            AnyModel::Dcc(m) => Some(vec![m.coefficients()]),
         }
     }
 
@@ -631,8 +638,8 @@ use build::{build_one, constraint, huber_scale_of, resid_window};
 mod model_cfgs;
 use model_cfgs::read_floor;
 pub use model_cfgs::{
-    audit_cfg, bocpd_cfg, corrchange_cfg, deco_block_names, deco_cfg, expectile_cfg, garch_cfg,
-    glm_cfg, hawkes_cfg, hmm_cfg, huber_model, quantile_model, rcov_cfg, sgd_model,
+    audit_cfg, bocpd_cfg, corrchange_cfg, dcc_cfg, deco_block_names, deco_cfg, expectile_cfg,
+    garch_cfg, glm_cfg, hawkes_cfg, hmm_cfg, huber_model, quantile_model, rcov_cfg, sgd_model,
 };
 
 /// One grid combo: the rendered label plus the machine values it encodes, so
@@ -738,7 +745,8 @@ pub fn combos(spec: &Spec) -> Vec<Combo> {
         | ModelKind::Glm { .. }
         | ModelKind::Hawkes { .. }
         | ModelKind::Expectile { .. }
-        | ModelKind::Garch { .. } => vec![Combo::default()],
+        | ModelKind::Garch { .. }
+        | ModelKind::Dcc { .. } => vec![Combo::default()],
         // `p` for the penalty, since `l` is a lag's (`lag_corr_l1_a_b`); and
         // no label for a path of one point, as a single ridge or half-life
         // writes none, while the machine value says which it is.
@@ -1834,6 +1842,7 @@ mod last_row;
 pub use last_row::LastRow;
 
 mod conformal_rows;
+mod heavy_tail;
 mod notified;
 mod pre_row_sigma;
 mod stack_line;
@@ -4163,6 +4172,13 @@ fn run_instance(
             // said once, with the group, by the bank.
             if let Some((bytes, cap)) = inst.model.get_mut().take_state_warning() {
                 inst.notified.raise(state_cap_notice(inst.spec, bytes, cap));
+            }
+            // A dcc margin with no fourth moment: said once, by the bank.
+            if let AnyModel::Dcc(m) = inst.model.get_mut()
+                && let Some((j, nu)) = m.take_heavy_tail()
+            {
+                inst.notified
+                    .raise(heavy_tail::heavy_tail_notice(inst.spec, j, nu));
             }
         } else {
             inst.model.get().predict_into(xs, &sc.ys, score_d, step);

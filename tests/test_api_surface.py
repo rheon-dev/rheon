@@ -313,6 +313,7 @@ def describe_api(cli: Path | None = None) -> str:
         ("audit", dict(columns=["x0", "x1"], pairs=True)),
         ("hawkes", dict(targets=["y", "z"], kernel_decays=[1.0, 5.0], half_life=100.0)),
         ("garch", dict(targets=["y", "z"], vol="gjr", dist="t", horizon=3)),
+        ("dcc", dict(targets=["y", "z", "w"], asymmetric=True, half_life=float("inf"))),
         (
             "deco blocked",
             dict(
@@ -415,6 +416,12 @@ RESOLVED_VARIANTS: list[tuple[str, dict[str, object]]] = [
     ("garch", {"vol": "figarch", "start_rows": 2000}),
     ("garch", {"variance_targeting": True, "horizon": 5}),
     ("garch", {"start_rows": None, "start_span": 500.0}),
+    ("dcc", {"asymmetric": True, "a": 0.03, "b": 0.9, "g": 0.04}),
+    (
+        "dcc",
+        {"margins": "none", "margin_start_rows": None, "start_rows": None, "start_span": 500.0},
+    ),
+    ("dcc", {"vol": "gjr", "dist": "t", "margin_start_rows": None, "margin_start_span": 900.0}),
 ]
 
 
@@ -702,6 +709,18 @@ ENUM_PROBES: list[
     ("lasso.closed", "lasso", {"window_size": 100.0}, "model.closed", "word"),
     ("garch.vol", "garch", {"start_rows": 2000}, "model.vol", "word"),
     ("garch.dist", "garch", {}, "model.dist", "word"),
+    # `"none"` runs no margin, so the margins' start is dropped for it.
+    (
+        "dcc.margins",
+        "dcc",
+        {},
+        "model.margins",
+        "word",
+        {"none": {"margin_start_rows": None}},
+    ),
+    # FIGARCH's margins need a start of 2,000 rows.
+    ("dcc.vol", "dcc", {}, "model.vol", "word", {"figarch": {"margin_start_rows": 2000}}),
+    ("dcc.dist", "dcc", {}, "model.dist", "word"),
     ("marginal.closed", "marginal", {"window_size": 100.0}, "model.closed", "word"),
     ("ew_class.covariance_type", "ew_class", {}, "model.covariance_type", "word"),
     ("ew_class.window_budget", "ew_class", {"window_size": 100.0}, "model.window_budget", "key"),

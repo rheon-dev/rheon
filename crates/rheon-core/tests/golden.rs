@@ -982,6 +982,156 @@ fn garch_figarch_golden() {
     check_bits("garch_figarch", &got, GOLDEN_GARCH_FIGARCH);
 }
 
+/// A realistic asymmetric DCC stream for `dcc` (`(a, b, g) = (0.04, 0.92,
+/// 0.03)`, every target correlation 0.5), each series scaled by its own
+/// GARCH(1,1) volatility where asked: arithmetic and `sqrt` alone,
+/// innovations by Irwin and Hall's sum of twelve uniforms, so the same bits
+/// on every platform. Every 97th row has its second series absent, every
+/// 89th weighs 0.
+fn dcc_stream(k: usize, n: usize, garch: bool) -> Vec<(Vec<Option<f64>>, f64)> {
+    let mut s = 20261122u64;
+    let kk = k * k;
+    let mut qbar = vec![0.5_f64; kk];
+    for i in 0..k {
+        qbar[i * k + i] = 1.0;
+    }
+    let (a, b, g) = (0.04, 0.92, 0.03);
+    let mut q = qbar.clone();
+    let mut v = vec![1.0_f64; k];
+    let mut e = vec![0.0_f64; k];
+    let mut out = Vec::with_capacity(n);
+    for t in 0..n + 200 {
+        let mut l = vec![0.0_f64; kk];
+        for i in 0..k {
+            for j in 0..=i {
+                let r: f64 = q[i * k + j] / (q[i * k + i] * q[j * k + j]).sqrt();
+                let mut acc: f64 = if i == j { 1.0 } else { r };
+                for m in 0..j {
+                    acc -= l[i * k + m] * l[j * k + m];
+                }
+                l[i * k + j] = if i == j {
+                    acc.sqrt()
+                } else {
+                    acc / l[j * k + j]
+                };
+            }
+        }
+        let x: Vec<f64> = (0..k)
+            .map(|_| (0..12).map(|_| 0.5 * (lcg(&mut s) + 1.0)).sum::<f64>() - 6.0)
+            .collect();
+        let z: Vec<f64> = (0..k)
+            .map(|i| (0..=i).map(|j| l[i * k + j] * x[j]).sum())
+            .collect();
+        for i in 0..k {
+            for j in 0..k {
+                let ij = i * k + j;
+                q[ij] = (1.0 - a - b) * qbar[ij] - g * 0.5 * qbar[ij]
+                    + a * z[i] * z[j]
+                    + g * z[i].min(0.0) * z[j].min(0.0)
+                    + b * q[ij];
+            }
+        }
+        for i in 0..k {
+            v[i] = 0.05 + 0.08 * e[i] * e[i] + 0.9 * v[i];
+            e[i] = if garch { v[i].sqrt() * z[i] } else { z[i] };
+        }
+        if t >= 200 {
+            let row = t - 200;
+            let y = (0..k)
+                .map(|i| (!(i == 1 && row % 97 == 50)).then_some(e[i]))
+                .collect();
+            out.push((y, if row % 89 == 40 { 0.0 } else { 1.0 }));
+        }
+    }
+    out
+}
+
+/// `dcc` on [`dcc_stream`]: every slot on three rows after the start, and
+/// the parameters at the end. It calls no platform math library (`ln` is
+/// the `libm` crate's, and a decay by `lam` at unit steps takes no power),
+/// so its numbers are the same bits everywhere.
+fn dcc_signature(
+    asymmetric: bool,
+    params: Option<Vec<f64>>,
+    margins: bool,
+    decay: Decay,
+) -> Vec<f64> {
+    let k = 3;
+    let mut m = Dcc::new(DccCfg {
+        n_targets: k,
+        asymmetric,
+        margins: margins.then_some(GarchCfg {
+            n_targets: k,
+            vol: GarchVol::Garch,
+            dist: GarchDist::Normal,
+            truncation: None,
+            variance_targeting: false,
+            start_rows: 300,
+            start_span: None,
+            horizon: 1,
+            min_weight: 0.0,
+            max_state_bytes: None,
+        }),
+        params,
+        decay,
+        start_rows: 200,
+        start_span: None,
+        min_weight: 0.0,
+        max_state_bytes: None,
+    })
+    .unwrap();
+    let n = 1500;
+    let mut got = Vec::new();
+    for (i, (y, w)) in dcc_stream(k, n, margins).iter().enumerate() {
+        let step = m.step(&[], y, 1.0, *w);
+        if [n - 700, n - 300, n - 1].contains(&i) {
+            got.extend(&step.pred);
+        }
+    }
+    got.extend(m.coefficients());
+    got
+}
+
+/// DCC(1,1), estimated, on standardized residuals.
+#[test]
+fn dcc_golden() {
+    let got = dcc_signature(false, None, false, Decay::Halflife(f64::INFINITY));
+    check_bits("dcc", &got, GOLDEN_DCC);
+}
+
+/// ADCC, estimated: `g`, `N̄` and `δ`'s projection.
+#[test]
+fn dcc_adcc_golden() {
+    let got = dcc_signature(true, None, false, Decay::Halflife(f64::INFINITY));
+    check_bits("dcc_adcc", &got, GOLDEN_DCC_ADCC);
+}
+
+/// ADCC with its parameters given.
+#[test]
+fn dcc_given_golden() {
+    let got = dcc_signature(
+        true,
+        Some(vec![0.04, 0.92, 0.03]),
+        false,
+        Decay::Halflife(f64::INFINITY),
+    );
+    check_bits("dcc_given", &got, GOLDEN_DCC_GIVEN);
+}
+
+/// DCC on returns, through GARCH margins.
+#[test]
+fn dcc_margins_golden() {
+    let got = dcc_signature(false, None, true, Decay::Halflife(f64::INFINITY));
+    check_bits("dcc_margins", &got, GOLDEN_DCC_MARGINS);
+}
+
+/// ADCC under a decay: the targets', the weight's and the gain's.
+#[test]
+fn dcc_decayed_golden() {
+    let got = dcc_signature(true, None, false, Decay::Lam(0.999));
+    check_bits("dcc_decayed", &got, GOLDEN_DCC_DECAYED);
+}
+
 /// The pre-averaged estimate on the same stream: the other arithmetic.
 #[test]
 fn rcov_preavg_golden() {
@@ -2308,4 +2458,97 @@ const GOLDEN_GARCH_FIGARCH: &[f64] = &[
     0.4703691616694057,
     7.253076774657642e-19,
     0.4695558273481083,
+];
+
+const GOLDEN_DCC: &[f64] = &[
+    0.4216697420204392,
+    0.6055964471125684,
+    0.2859670112718223,
+    -3.795021351205922,
+    0.2684439336023098,
+    0.48636422294792064,
+    0.375329282737137,
+    -2.845248454618631,
+    0.5520171066959044,
+    0.6812200797821474,
+    0.6311388472156019,
+    -4.408185679220951,
+    0.05467343442893686,
+    0.9161988765212059,
+];
+const GOLDEN_DCC_ADCC: &[f64] = &[
+    0.47089909645017,
+    0.5878363061295959,
+    0.3166241402170934,
+    -3.844509836229518,
+    0.25643263767868746,
+    0.4369831262570483,
+    0.32668208317065556,
+    -2.897233596702532,
+    0.5914633888793798,
+    0.6970703998635792,
+    0.657904152713324,
+    -4.445685653802423,
+    0.03399728037967834,
+    0.9269196331353008,
+    0.04096596603895608,
+];
+const GOLDEN_DCC_GIVEN: &[f64] = &[
+    0.45993520774557745,
+    0.6023139356915606,
+    0.2741706822578032,
+    -3.8370129133266566,
+    0.27395386337185373,
+    0.46173822016843463,
+    0.3474341578277121,
+    -2.8728544091338266,
+    0.5769915893060064,
+    0.6921182452910445,
+    0.6510327833777574,
+    -4.424814565121372,
+    0.04,
+    0.92,
+    0.03,
+];
+const GOLDEN_DCC_MARGINS: &[f64] = &[
+    1.6104712615872612,
+    1.6130389388363788,
+    3.119290393504543,
+    0.42315715377587393,
+    0.5877339987398745,
+    0.39839202451280753,
+    -3.746760240514066,
+    1.1740531767395248,
+    1.642863259435476,
+    0.9385254085000607,
+    0.27353451966607917,
+    0.5031666218000107,
+    0.34779115191311755,
+    -2.8395367249423806,
+    2.1556558447197958,
+    1.9748154475166262,
+    4.908019459058437,
+    0.5616207205483755,
+    0.6943829312177835,
+    0.6337283623199459,
+    -4.354485383046189,
+    0.05905343111238218,
+    0.9094072176004102,
+];
+const GOLDEN_DCC_DECAYED: &[f64] = &[
+    0.45959585224745997,
+    0.5951098780369265,
+    0.3146527102840806,
+    -3.8283387955433996,
+    0.26467725611056236,
+    0.4518675538882838,
+    0.31779145116883223,
+    -2.8946826645974384,
+    0.594493071911341,
+    0.698102902326485,
+    0.6586406335574652,
+    -4.451451704265882,
+    0.039348525007343364,
+    0.9198124305009382,
+    0.03696942222733725,
 ];

@@ -99,6 +99,11 @@ pub const MODEL_CASES: &[&str] = &[
     // (task 492); and FIGARCH, its O(M) pass of 1,000 lags a row.
     "garch",
     "garch_figarch",
+    // Three series' correlation, the asymmetric model learned after its
+    // start: a row's 3 x 3 factor, inverse and three R⁻¹ ∂R (task 493); and
+    // the same through GARCH margins.
+    "dcc",
+    "dcc_margins",
 ];
 
 /// The one model case that reports on a single row of its block:
@@ -518,6 +523,28 @@ fn case_spec(id: &str) -> (Value, Shape) {
                 "model": {"type": "garch", "vol": "figarch", "max_state_bytes": 40000},
                 "targets": ["y0"],
                 "features": [],
+            }),
+            Shape::Linear,
+        ),
+        // Both starts within the warm-up: the correlation's 500 rows, after
+        // the margins' 300 (doubled at most twice) where it has them.
+        "dcc" => (
+            json!({
+                "name": "m",
+                "model": {"type": "dcc", "margins": "none", "asymmetric": true},
+                "targets": ["y0", "y1", "y2"],
+                "features": [],
+                "half_life": "inf",
+            }),
+            Shape::Linear,
+        ),
+        "dcc_margins" => (
+            json!({
+                "name": "m",
+                "model": {"type": "dcc", "asymmetric": true, "margin_start_rows": 300},
+                "targets": ["y0", "y1", "y2"],
+                "features": [],
+                "half_life": "inf",
             }),
             Shape::Linear,
         ),

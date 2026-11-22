@@ -228,6 +228,70 @@ pub enum Targets {
     Class(usize),
     /// None: the model reads only its features.
     None,
+    /// `n` series of an asymmetric DCC process (`(a, b, g) = (0.04, 0.92,
+    /// 0.03)`, every target correlation 0.5), each scaled by its own
+    /// GARCH(1,1) volatility where the flag is set: a realistic stream for
+    /// `dcc`, whose parameters it identifies. Arithmetic and `sqrt` alone,
+    /// so it is the same bits on every platform.
+    Correlated(usize, bool),
+}
+
+/// [`Targets::Correlated`]'s stream: `n` rows of `k` series after 200
+/// discarded, innovations by Irwin and Hall's sum of twelve uniforms.
+pub fn correlated(k: usize, n: usize, garch: bool, seed: u64) -> Vec<Vec<f64>> {
+    let mut s = seed;
+    let kk = k * k;
+    let mut qbar = vec![0.5_f64; kk];
+    for i in 0..k {
+        qbar[i * k + i] = 1.0;
+    }
+    let (a, b, g) = (0.04, 0.92, 0.03);
+    let mut q = qbar.clone();
+    let mut v = vec![1.0_f64; k];
+    let mut e = vec![0.0_f64; k];
+    let mut out = Vec::with_capacity(n);
+    for t in 0..n + 200 {
+        // R and its Cholesky factor
+        let mut l = vec![0.0_f64; kk];
+        for i in 0..k {
+            for j in 0..=i {
+                let r: f64 = q[i * k + j] / (q[i * k + i] * q[j * k + j]).sqrt();
+                let mut acc: f64 = if i == j { 1.0 } else { r };
+                for m in 0..j {
+                    acc -= l[i * k + m] * l[j * k + m];
+                }
+                l[i * k + j] = if i == j {
+                    acc.sqrt()
+                } else {
+                    acc / l[j * k + j]
+                };
+            }
+        }
+        let x: Vec<f64> = (0..k)
+            .map(|_| (0..12).map(|_| 0.5 * (lcg(&mut s) + 1.0)).sum::<f64>() - 6.0)
+            .collect();
+        let z: Vec<f64> = (0..k)
+            .map(|i| (0..=i).map(|j| l[i * k + j] * x[j]).sum())
+            .collect();
+        for i in 0..k {
+            for j in 0..k {
+                let ij = i * k + j;
+                let (ni, nj) = (z[i].min(0.0), z[j].min(0.0));
+                q[ij] = (1.0 - a - b) * qbar[ij] - g * 0.5 * qbar[ij]
+                    + a * z[i] * z[j]
+                    + g * ni * nj
+                    + b * q[ij];
+            }
+        }
+        for i in 0..k {
+            v[i] = 0.05 + 0.08 * e[i] * e[i] + 0.9 * v[i];
+            e[i] = if garch { v[i].sqrt() * z[i] } else { z[i] };
+        }
+        if t >= 200 {
+            out.push(e.clone());
+        }
+    }
+    out
 }
 
 /// One case: a model, configured, and its stream.
@@ -265,6 +329,10 @@ impl Case {
             s = s.wrapping_mul(31).wrapping_add(u64::from(b));
         }
         let n = self.before + CONTINUATION;
+        let series = match self.targets {
+            Targets::Correlated(k, garch) => correlated(k, n, garch, s),
+            _ => Vec::new(),
+        };
         (0..n)
             .map(|i| {
                 let shift = if (i / 12) % 2 == 1 { 2.0 } else { 0.0 };
@@ -304,6 +372,9 @@ impl Case {
                         vec![(!null).then_some(label as f64)]
                     }
                     Targets::None => Vec::new(),
+                    Targets::Correlated(..) => {
+                        series[i].iter().map(|v| (!null).then_some(*v)).collect()
+                    }
                 };
                 let d = match i {
                     0 => 0.0,
@@ -2592,7 +2663,97 @@ pub fn all() -> Vec<Case> {
             Targets::Linear(2),
             40
         ),
+        // `dcc` (task 493) on a realistic ADCC stream, its parameters
+        // estimated: saved within the start, its buffer of residuals.
+        case!(
+            "dcc",
+            "Dcc",
+            Dcc,
+            Dcc::new(dcc_cfg(3, true, None)).unwrap(),
+            0,
+            Targets::Correlated(3, false),
+            40
+        ),
+        // Saved after the start: the targets Q̄ and N̄, Q, its sensitivities,
+        // the information and the estimate, under a decay.
+        case!(
+            "dcc_started",
+            "Dcc",
+            Dcc,
+            Dcc::new(DccCfg {
+                decay: Decay::Halflife(400.0),
+                ..dcc_cfg(3, true, None)
+            })
+            .unwrap(),
+            0,
+            Targets::Correlated(3, false),
+            300
+        ),
+        // Given parameters, the symmetric model: no sensitivities.
+        case!(
+            "dcc_given",
+            "Dcc",
+            Dcc,
+            Dcc::new(dcc_cfg(2, false, Some(vec![0.05, 0.9]))).unwrap(),
+            0,
+            Targets::Correlated(2, false),
+            120
+        ),
+        // GARCH margins on returns: the margins started, the stage's own
+        // start buffering their residuals.
+        case!(
+            "dcc_margins",
+            "Dcc",
+            Dcc,
+            Dcc::new(DccCfg {
+                margins: Some(GarchCfg {
+                    horizon: 1,
+                    ..garch_cfg(GarchVol::Garch, GarchDist::Normal)
+                }),
+                ..dcc_cfg(2, false, None)
+            })
+            .unwrap(),
+            0,
+            Targets::Correlated(2, true),
+            // the margins' start doubles its rows and refits while it has
+            // not converged, so it may take 200 rows of each series
+            CASE_DCC_MARGINS_BEFORE
+        ),
+        // A start over a span of the clock, saved within it: its first
+        // stamp and the summed clock.
+        case!(
+            "dcc_span",
+            "Dcc",
+            Dcc,
+            Dcc::new(DccCfg {
+                start_span: Some(80.0),
+                ..dcc_cfg(2, true, None)
+            })
+            .unwrap(),
+            0,
+            Targets::Correlated(2, false),
+            40
+        ),
     ]
+}
+
+/// Rows before `dcc_margins`' save: past its margins' start, within the
+/// stage's.
+const CASE_DCC_MARGINS_BEFORE: usize = 300;
+
+/// `dcc` of the case's series, the start 50 rows, no margins.
+fn dcc_cfg(k: usize, asymmetric: bool, params: Option<Vec<f64>>) -> DccCfg {
+    DccCfg {
+        n_targets: k,
+        asymmetric,
+        margins: None,
+        params,
+        decay: Decay::Halflife(f64::INFINITY),
+        start_rows: 50,
+        start_span: None,
+        min_weight: 0.0,
+        max_state_bytes: None,
+    }
 }
 
 /// An upper `expectile` of two targets under decay, its first rows' refit

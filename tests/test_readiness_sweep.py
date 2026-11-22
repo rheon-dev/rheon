@@ -100,6 +100,10 @@ KINDS = sorted(set(MINIMAL) - {"audit"})
 EXTRA: dict[str, dict[str, Any]] = {
     "hmm": {"warm_rows": 20},
     "kmeans": {"warm_rows": 20},
+    # `dcc` reports from its start, 50 rows of its own (no margins), and at a
+    # half-life of 25 rows its weight there is about 27, so a floor of 30
+    # withholds rows past the start, until the weight passes it.
+    "dcc": {"margins": "none", "margin_start_rows": None, "half_life": 25.0},
 }
 #: The kinds that write no row of their own: they report through the state
 #: (``marginal``'s table, ``rcov``'s closed blocks).
@@ -178,10 +182,29 @@ def _weight_column(kind: str) -> str | None:
     return "w01" if kind == "rcov" else "w"
 
 
+#: Per kind and gate, keywords beyond ``EXTRA`` so that gate shows past the
+#: model's own warm-up: ``dcc``'s start of 50 rows is past half of a
+#: half-life of 25 rows, so its settling gate needs one of 100.
+GATE_EXTRA: dict[tuple[str, str], dict[str, Any]] = {
+    ("dcc", "min_settled_frac"): {"half_life": 100.0},
+}
+
+
+def _base(kind: str, gate: dict[str, Any]) -> dict[str, Any]:
+    """The run a gate is compared with: no gate, under the gate's
+    ``GATE_EXTRA``."""
+    out: dict[str, Any] = {}
+    for key in gate:
+        out |= GATE_EXTRA.get((kind, key), {})
+    return out
+
+
 def _spec(kind: str, variant: str, gate: dict[str, Any]) -> dict:
     kw: dict[str, Any] = dict(targets=["y"], features=["x0", "x1"], half_life=HALF_LIFE)
     kw |= MINIMAL[kind]
     kw |= EXTRA.get(kind, {})
+    for key in gate:
+        kw |= GATE_EXTRA.get((kind, key), {})
     kw["weight"] = _weight_column(kind)
     kw["coef_every"] = None if kind in NO_COEF else 0
     kw |= VARIANTS[variant]
@@ -475,14 +498,14 @@ def _gate_of(kind: str, name: str) -> dict[str, Any]:
 def _evidence(kind: str, variant: str, gate: dict[str, Any], what: str) -> None:
     """The gate withheld something the ungated run reports."""
     if kind in TABLE_KINDS:
-        a, b = table(kind, variant, {}), table(kind, variant, gate)
+        a, b = table(kind, variant, _base(kind, gate)), table(kind, variant, gate)
         moved = [c for c in a.columns if _bits(a[c]) != _bits(b[c])]
         print(f"{what}: the table's columns the gate nulled: {moved}")
         assert moved, f"{what}: the gate nulled nothing, so the comparison proves nothing"
         for c in moved:
             assert b[c].null_count() > a[c].null_count(), f"{what}: {c} moved, and not to null"
         return
-    a, b = _withheld(run(kind, variant, {})), _withheld(run(kind, variant, gate))
+    a, b = _withheld(run(kind, variant, _base(kind, gate))), _withheld(run(kind, variant, gate))
     print(f"{what}: withheld {len(a)} rows without the gate, {len(b)} with it")
     assert a != b, f"{what}: the gate withheld the same rows, so the comparison proves nothing"
 
@@ -497,7 +520,7 @@ def test_a_gate_never_moves_the_state(kind: str, variant: str, name: str):
     what = f"{kind} on {variant}, {name}"
     _evidence(kind, variant, gate, what)
     assert_the_state_is_the_same(
-        state(kind, variant, {}), state(kind, variant, gate), what, OUTPUT_RECORDS
+        state(kind, variant, _base(kind, gate)), state(kind, variant, gate), what, OUTPUT_RECORDS
     )
 
 
@@ -511,7 +534,7 @@ def test_a_gate_never_moves_the_rows(kind: str, variant: str, name: str):
     gate = _gate_of(kind, name)
     what = f"{kind} on {variant}, {name}"
     _evidence(kind, variant, gate, what)
-    assert_rows_agree(run(kind, variant, {}), run(kind, variant, gate), what)
+    assert_rows_agree(run(kind, variant, _base(kind, gate)), run(kind, variant, gate), what)
 
 
 # ---------------------------------------------------------------------------
