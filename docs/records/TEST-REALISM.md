@@ -144,7 +144,7 @@ realistic test and nothing is left to add.
 |---|---|---|---|---|
 | `ew_cov` | G | 2 (`ew_cov`, `_paths`) | R\* | the two features are independent: no correlation to estimate away from 0 |
 | | F | 3 (`ew_cov`, `_window`, `ew_cov_accumulator`) | R\* | none |
-| | O | `test_second_opinion` (7: pandas `ewm` mean, var, cov, corr, bias both ways, offset 1e8, 400 rows; irregular clock with `times=`; numpy weighted cov; statsmodels `ccf`/`acf` for `lags=`; scipy for `mahal`), `test_river` (2) | R, but the pandas comparison draws two independent features (true correlation 0) | a correlated, weighted stream with a gap held to numpy at nonzero cov and corr, on the clock |
+| | O | `test_second_opinion` (7: pandas `ewm` mean, var, cov, corr, bias both ways, offset 1e8, 400 rows; irregular clock with `times=`; numpy weighted cov; statsmodels `ccf`/`acf` for `lags=`; scipy for `mahal`), `test_river` (2) | R, but the pandas comparison draws two independent features (true correlation 0) | none: `TestTheEwMomentsAreNumpyOnAWeightedGappedStream` holds mean, var, cov and corr to numpy's weighted statistics on a stream at a correlation of 0.6, weights from 0.2 to 3 with three zeros, and two long gaps, with the gap uncapped and capped at 5 (a zero-weight row is skipped, so the cap meets the joined step) |
 | | C | Rust probe D; sweeps D | D | none |
 | `marginal` | G | 2 (`marginal`, `_paths`) | R\* | none |
 | | F | 10 (`marginal_lags`, `_bins`, `_bins_huber`, `_bins_refit`, `_bins_refit_done`, `_bins_refit_first_value`, `_bins_refit_first_value_frozen` (8 and 16 rows before), `_bins_huber_anchored`, `_window`, `_window_lags`) | R\* | none |
