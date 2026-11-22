@@ -1318,7 +1318,7 @@ fn variants() -> Vec<String> {
 /// name here, and a fixture.
 #[test]
 fn the_variant_names_are_frozen() {
-    const FROZEN: [&str; 26] = [
+    const FROZEN: [&str; 27] = [
         "EwCov",
         "EwRidge",
         "Rls",
@@ -1345,6 +1345,7 @@ fn the_variant_names_are_frozen() {
         "Hawkes",
         "Expectile",
         "Garch",
+        "Ar",
     ];
     assert_eq!(
         variants(),
@@ -1465,7 +1466,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 115] = [
+    const FORMS: [(&str, &[&str]); 120] = [
         // Schema 70 (rule 5's twenty-second exception): the stabilized
         // prior's `ŝ` and `V` under `full` in each form and under `diag`,
         // the factor form's `f`, and a spec's own `prior_rows`.
@@ -1702,6 +1703,13 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
             "sgd_huber_refit_span",
             &["model", "Sgd", "cfg", "max_state_bytes"],
         ),
+        // `ar` (task 486): each target's ring of lags, full and filling,
+        // and its fit, solved and not yet.
+        ("ar", &["model", "Ar", "rings", "1"]),
+        ("ar", &["model", "Ar", "fits", "1", "beta"]),
+        ("ar", &["model", "Ar", "cfg", "lags"]),
+        ("ar_filling", &["model", "Ar", "rings", "0"]),
+        ("ar_filling", &["model", "Ar", "fits", "0", "acc"]),
     ];
     // Each refit's first stamp, written only under a span (task 538): in
     // glm on the summed clock, in expectile an integer stamp.

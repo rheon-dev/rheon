@@ -2592,7 +2592,43 @@ pub fn all() -> Vec<Case> {
             Targets::Linear(2),
             40
         ),
+        // An AR of lags 1 and 3 over two targets with the features as
+        // exogenous regressors: each target's full ring of lags and its fit.
+        case!(
+            "ar",
+            "Ar",
+            Ar,
+            Ar::new(ar_cfg()).unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        // Saved two rows in: rings still filling, no fit yet.
+        case!(
+            "ar_filling",
+            "Ar",
+            Ar,
+            Ar::new(ar_cfg()).unwrap(),
+            K,
+            Targets::Linear(2),
+            2
+        ),
     ]
+}
+
+/// An AR of lags 1 and 3 under decay, its two targets' fits with a small
+/// ridge.
+fn ar_cfg() -> ArCfg {
+    ArCfg {
+        n_targets: 2,
+        n_features: K,
+        lags: vec![1, 3],
+        fit_intercept: true,
+        decay: decay(),
+        ridge: 0.01,
+        min_weight: 2.0,
+        max_state_bytes: None,
+    }
 }
 
 /// An upper `expectile` of two targets under decay, its first rows' refit

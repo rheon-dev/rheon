@@ -856,6 +856,28 @@ fn hawkes_golden() {
     check("hawkes_window", &got, GOLDEN_HAWKES_WINDOW);
 }
 
+/// `ar` on the same stream: an AR(2) under decay with the two features as
+/// exogenous regressors, then its coefficients at the end. The ring (its
+/// null target and its gap), the design read from it and the fit all move
+/// these.
+#[test]
+fn ar_golden() {
+    let mut m = Ar::new(ArCfg {
+        n_targets: 1,
+        n_features: 2,
+        lags: vec![1, 2],
+        fit_intercept: true,
+        decay: Decay::Halflife(15.0),
+        ridge: 1e-6,
+        min_weight: 2.0,
+        max_state_bytes: None,
+    })
+    .unwrap();
+    let mut got = signature(&mut m, 0);
+    got.extend(&m.coefficients().unwrap()[0]);
+    check("ar", &got, GOLDEN_AR);
+}
+
 /// `expectile` on the same stream: an upper expectile under decay whose
 /// first 15 learned rows are refit, then the fit at the end.
 #[test]
@@ -2066,6 +2088,16 @@ const GOLDEN_PA_BOX: &[f64] = &[0.5262123538733023, 1.6796740252199436, 0.156626
 // Regenerated for task 278 (D-H, 2026-10-26): a row takes the larger of the
 // weighted line fit's gains and the textbook's, so the warm-up is the line
 // fit, where the weighted means pinned the trend to the first observation.
+const GOLDEN_AR: &[f64] = &[
+    0.20651737786601188,
+    2.183823230103924,
+    -0.061890170712155385,
+    0.2507806385801581,
+    0.0023940696647469463,
+    0.006207809809043063,
+    1.5217126158114949,
+    -0.7726238396515506,
+];
 const GOLDEN_HOLT: &[f64] = &[1.510543784944197, 0.05346222911849938, 0.1063893470704486];
 const GOLDEN_SEQTEST: &[f64] = &[-0.6443570163905132, -1.086393303225433, -0.9577414997686987];
 const GOLDEN_SEQTEST_NEG: &[f64] = &[

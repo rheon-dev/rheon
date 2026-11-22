@@ -231,7 +231,7 @@ fn probe_checked<M: OnlineModel + Clone>(
 /// move under `clear_lags`. Everything else must not: `clear_lags` is not a
 /// reset, and a model that quietly threw away a mean here would look like a
 /// decay bug three chunks later (docs/PLAN.md task 47).
-const KEEPS_LAGS: &[&str] = &["rcov", "corrchange", "ew_cov", "marginal"];
+const KEEPS_LAGS: &[&str] = &["rcov", "corrchange", "ew_cov", "marginal", "ar"];
 
 /// The model that counts a value that is not usable rather than refusing
 /// it: `audit`, whose counts of nulls, NaNs and infinities are what it is for
@@ -807,6 +807,7 @@ fn every_state_kind_is_distinct_and_named() {
         "hawkes",
         "expectile",
         "garch",
+        "ar",
     ];
     let mut seen = std::collections::HashSet::new();
     for k in kinds {
@@ -843,6 +844,7 @@ fn every_state_kind_is_distinct_and_named() {
         Hawkes::new(hawkes_cfg()).unwrap().state(),
         Expectile::new(expectile_cfg()).unwrap().state(),
         Garch::new(garch_cfg()).unwrap().state(),
+        Ar::new(ar_cfg()).unwrap().state(),
     ];
     let from_states: Vec<&str> = states.iter().map(|s| s.model.kind()).collect();
     assert_eq!(from_states, kinds);
@@ -911,6 +913,7 @@ fn one_state_of_each_kind() -> Vec<State> {
         Hawkes::new(hawkes_cfg()).unwrap().state(),
         Expectile::new(expectile_cfg()).unwrap().state(),
         Garch::new(garch_cfg()).unwrap().state(),
+        Ar::new(ar_cfg()).unwrap().state(),
         State::new(ModelState::EwCov(Box::new(EwCov::new(1)))),
     ]
 }
@@ -1031,6 +1034,8 @@ fn every_model_hands_back_its_configuration() {
     same(Expectile::new(c.clone()).unwrap(), &c, Expectile::cfg);
     let c = garch_cfg();
     same(Garch::new(c.clone()).unwrap(), &c, Garch::cfg);
+    let c = ar_cfg();
+    same(Ar::new(c.clone()).unwrap(), &c, Ar::cfg);
 }
 
 fn ew_class_cfg() -> EwClassCfg {
@@ -1892,6 +1897,7 @@ fn every_model_refuses_at_restore_a_configuration_its_new_refuses() {
             0.into(),
             "horizon must be at least 1",
         ),
+        refused(Ar::new(ar_cfg()).unwrap(), "decay", zero(), h),
     ];
     // Every model's `restore`: the twenty-one kinds, `robust` under both
     // losses.
@@ -2308,6 +2314,7 @@ fn exactly_the_scheduled_solvers_report_a_solve_share() {
         ("hawkes", share(Hawkes::new(hawkes_cfg()).unwrap())),
         ("expectile", share(Expectile::new(expectile_cfg()).unwrap())),
         ("garch", share(Garch::new(garch_cfg()).unwrap())),
+        ("ar", share(Ar::new(ar_cfg()).unwrap())),
     ];
     let reporting: Vec<&str> = shares
         .iter()
@@ -2356,6 +2363,7 @@ const PROBED: &[(&str, &str)] = &[
     ("Hawkes", "hawkes"),
     ("Expectile", "expectile"),
     ("Garch", "garch"),
+    ("Ar", "ar"),
 ];
 
 #[test]
@@ -6350,4 +6358,59 @@ mod generated {
             contract(|| Hawkes::new(hawkes_clock_cfg()).unwrap(), &rows, split)?;
         }
     }
+}
+
+/// An AR(2) with the probe's two features as exogenous regressors, over
+/// two targets, the probes' half-life. A small ridge, as `ewridge_cfg`
+/// has: the probes' streams predict from the first rows, where five
+/// coefficients have fewer learned rows than that and least squares alone
+/// is singular.
+fn ar_cfg() -> ArCfg {
+    ArCfg {
+        n_targets: 2,
+        n_features: K,
+        lags: vec![1, 2],
+        fit_intercept: true,
+        decay: Decay::Halflife(HALFLIFE),
+        ridge: 0.01,
+        min_weight: 3.0,
+        max_state_bytes: None,
+    }
+}
+
+#[test]
+fn ar() {
+    // A prediction per target from its own lags and the shared feature;
+    // `n_eff` every row's weight, decayed (rule 8), each fit taking every
+    // row; the lag rings are what `clear_lags` empties.
+    let r = probe_with(Ar::new(ar_cfg()).unwrap(), 2, Some(&Ar::n_eff));
+    assert_eq!(r.kind, "ar");
+    assert_eq!(r.n_targets, 2);
+    assert_eq!(r.n_outputs, 2);
+    assert_eq!(r.pred_len, 2);
+    assert!(r.roundtrips);
+    assert!(!r.lags_are_a_no_op);
+    let pure = ArCfg {
+        lags: vec![1, 4],
+        fit_intercept: false,
+        ridge: 0.5,
+        ..ar_cfg()
+    };
+    assert!(probe_with(Ar::new(pure).unwrap(), 2, Some(&Ar::n_eff)).roundtrips);
+}
+
+#[test]
+fn ar_predict_is_the_step() {
+    predict_is_the_step_without_the_step(|| Ar::new(ar_cfg()).unwrap(), 2, false);
+    predict_is_the_step_without_the_step(
+        || {
+            Ar::new(ArCfg {
+                min_weight: 6.0,
+                ..ar_cfg()
+            })
+            .unwrap()
+        },
+        2,
+        false,
+    );
 }
