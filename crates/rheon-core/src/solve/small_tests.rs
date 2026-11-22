@@ -818,3 +818,61 @@ fn the_column_loop_is_taken_from_13_to_64() {
         );
     }
 }
+
+/// A system past `KEPT_ORDER` is solved in space of its own and one up to
+/// it in the thread's kept space, at the threshold itself; a pivot is read
+/// against the diagonal it belongs to: `[[4, 1], [1, 4]]` has second pivot
+/// `4 − 1/4 = 3.75`, 0.9375 of its diagonal, so a floor of 0.9 passes it
+/// and one of 0.95 does not.
+#[test]
+fn a_definite_solve_keeps_its_space_to_the_kept_order_and_reads_each_pivot_at_its_diagonal() {
+    let mut out = Vec::new();
+    let mut solves = Solves::new();
+    let a = [4.0, 1.0, 1.0, 4.0];
+    assert!(solve_definite_in(
+        &mut solves,
+        &a,
+        &[1.0, 2.0],
+        2,
+        1,
+        0.9,
+        &mut out
+    ));
+    // x = A⁻¹ b = (1/15) [[4, −1], [−1, 4]] (1, 2).
+    assert!((out[0] - 2.0 / 15.0).abs() < 1e-15 && (out[1] - 7.0 / 15.0).abs() < 1e-15);
+    assert_eq!(solves.len(), 1, "an order of 2 is kept");
+    out.clear();
+    assert!(!solve_definite_in(
+        &mut solves,
+        &a,
+        &[1.0, 2.0],
+        2,
+        1,
+        0.95,
+        &mut out
+    ));
+    assert!(out.is_empty(), "a refused solve leaves `out` alone");
+    for k in [KEPT_ORDER, KEPT_ORDER + 1] {
+        let a: Vec<f64> = (0..k * k)
+            .map(|n| {
+                if n / k == n % k {
+                    2.0 + (n / k) as f64
+                } else {
+                    0.1
+                }
+            })
+            .collect();
+        let mut solves = Solves::new();
+        assert!(solve_definite_in(
+            &mut solves,
+            &a,
+            &vec![1.0; k],
+            k,
+            1,
+            1e-10,
+            &mut out
+        ));
+        let want = usize::from(k <= KEPT_ORDER);
+        assert_eq!(solves.len(), want, "order {k}");
+    }
+}

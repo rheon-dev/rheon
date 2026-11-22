@@ -507,4 +507,162 @@ mod tests {
         let g = fam(GlmFamily::Gamma, GlmLink::Inverse, 0.0);
         assert_eq!(g.start_eta(4.0), 0.25);
     }
+
+    /// The family's default link is the logit for the binomial and the log
+    /// for each of the others.
+    #[test]
+    fn the_default_link_is_the_canonical_one_for_the_binomial_alone() {
+        assert_eq!(GlmFamily::Binomial.default_link(), GlmLink::Logit);
+        for f in [GlmFamily::Poisson, GlmFamily::Gamma, GlmFamily::Tweedie] {
+            assert_eq!(f.default_link(), GlmLink::Log, "{f:?}");
+        }
+    }
+
+    /// The words a refusal gives for a target outside the support, by
+    /// family, and for a Tweedie power either side of 2.
+    #[test]
+    fn the_support_is_said_in_the_familys_words() {
+        let say = |family, link, p| fam(family, link, p).support();
+        assert_eq!(
+            say(GlmFamily::Poisson, GlmLink::Log, 0.0),
+            "a count, which is never negative"
+        );
+        assert_eq!(
+            say(GlmFamily::Gamma, GlmLink::Log, 0.0),
+            "a positive amount, above 0"
+        );
+        assert_eq!(
+            say(GlmFamily::Binomial, GlmLink::Logit, 0.0),
+            "a proportion, from 0 to 1"
+        );
+        assert_eq!(
+            say(GlmFamily::Tweedie, GlmLink::Log, 1.5),
+            "an amount, which is never negative"
+        );
+        assert_eq!(
+            say(GlmFamily::Tweedie, GlmLink::Log, 2.5),
+            "a positive amount, above 0, at a var_power above 2"
+        );
+        assert_eq!(
+            say(GlmFamily::Tweedie, GlmLink::Power, 3.0),
+            "a positive amount, above 0, at a var_power above 2"
+        );
+    }
+
+    /// A mean is a positive, finite number or none: the inverse link's
+    /// `1/η` is infinite at a subnormal `η`, and the power link's `η^(1/(1
+    /// − p))` underflows to 0 at a huge one (`p = 1.5`: `η⁻²`); neither is
+    /// a mean, beside the ordinary `η` that gives one.
+    #[test]
+    fn a_mean_that_is_infinite_or_zero_is_none() {
+        let inv = fam(GlmFamily::Gamma, GlmLink::Inverse, 0.0);
+        assert_eq!(inv.mean(0.5), Some((0.5, 2.0)));
+        assert!(
+            (1.0 / std::hint::black_box(1e-320_f64)).is_infinite(),
+            "the premise: 1/η overflows"
+        );
+        assert!(inv.mean(1e-320).is_none());
+        let pow = fam(GlmFamily::Tweedie, GlmLink::Power, 1.5);
+        assert_eq!(pow.mean(2.0), Some((2.0, 0.25)));
+        assert_eq!(1e200_f64.powf(-2.0), 0.0, "the premise: η⁻² underflows");
+        assert!(pow.mean(1e200).is_none());
+    }
+
+    /// Each pair's closed form is the table in [`Family::working`]'s docs,
+    /// to the bit: the same arithmetic, not the general form's, whose
+    /// divisions round differently.
+    #[test]
+    fn each_closed_form_is_its_tables_row() {
+        for &eta in &[0.05_f64, 0.3, 1.2, 2.5] {
+            let (y, e): (f64, f64) = (1.7, eta - 0.6);
+            let f = fam(GlmFamily::Poisson, GlmLink::Log, 0.0);
+            let mu = e.exp();
+            let wk = f.working(e, y).unwrap();
+            assert_eq!(wk.w.to_bits(), mu.to_bits(), "Poisson W at {e}");
+            assert_eq!(wk.z.to_bits(), (e + (y - mu) / mu).to_bits(), "Poisson z");
+
+            let f = fam(GlmFamily::Gamma, GlmLink::Log, 0.0);
+            let wk = f.working(e, y).unwrap();
+            assert_eq!(wk.w, 1.0, "Gamma log W");
+            assert_eq!(wk.z.to_bits(), (e + (y - mu) / mu).to_bits(), "Gamma z");
+
+            let f = fam(GlmFamily::Gamma, GlmLink::Inverse, 0.0);
+            let mu = 1.0 / eta;
+            let wk = f.working(eta, y).unwrap();
+            assert_eq!(wk.w.to_bits(), (mu * mu).to_bits(), "Gamma inverse W");
+            assert_eq!(
+                wk.z.to_bits(),
+                (eta - (y - mu) / (mu * mu)).to_bits(),
+                "Gamma inverse z at {eta}"
+            );
+
+            let f = fam(GlmFamily::Binomial, GlmLink::Logit, 0.0);
+            let mu = 1.0 / (1.0 + (-e).exp());
+            let v = mu * (1.0 - mu);
+            let wk = f.working(e, 0.3).unwrap();
+            assert_eq!(wk.w.to_bits(), v.to_bits(), "binomial W");
+            assert_eq!(wk.z.to_bits(), (e + (0.3 - mu) / v).to_bits(), "binomial z");
+
+            let p = 1.5;
+            let f = fam(GlmFamily::Tweedie, GlmLink::Log, p);
+            let mu = e.exp();
+            let wk = f.working(e, y).unwrap();
+            assert_eq!(wk.w.to_bits(), mu.powf(2.0 - p).to_bits(), "Tweedie log W");
+            assert_eq!(wk.z.to_bits(), (e + (y - mu) / mu).to_bits(), "Tweedie z");
+
+            let f = fam(GlmFamily::Tweedie, GlmLink::Power, p);
+            let (q, mu) = (1.0 - p, eta.powf(1.0 / (1.0 - p)));
+            let wk = f.working(eta, y).unwrap();
+            assert_eq!(wk.w.to_bits(), (mu.powf(p) / (q * q)).to_bits(), "power W");
+            assert_eq!(
+                wk.z.to_bits(),
+                (eta + (y - mu) * q * mu.powf(q - 1.0)).to_bits(),
+                "power z at {eta}"
+            );
+        }
+    }
+
+    /// A pair `check` refuses (here a Poisson family under the inverse
+    /// link, built as a literal) gets the general form `W = 1/(g'² V)`,
+    /// `z = η + (y − μ) g'`. At `η = 1/2`, `μ = 2`, `g' = −1/4`, `V = 2`:
+    /// `W = 8`, and `z = 1/2 − 1/4` at `y = 3`; every number is exact.
+    #[test]
+    fn a_pair_the_family_refuses_gets_the_general_form() {
+        let f = Family {
+            family: GlmFamily::Poisson,
+            link: GlmLink::Inverse,
+            power: 0.0,
+        };
+        let wk = f.working(0.5, 3.0).unwrap();
+        assert_eq!((wk.mu, wk.w, wk.z, wk.eta), (2.0, 8.0, 0.25, 0.5));
+    }
+
+    /// A weight that is 0, infinite or not a number, or a response that is
+    /// not finite, gives no working pair, where the mean itself is fine:
+    /// the Tweedie family at `p = 100` has `W = μ⁻⁹⁸`, which underflows at
+    /// `η = 30` and overflows at `η = −30`, with the response finite.
+    #[test]
+    fn a_weight_or_response_that_is_not_a_number_to_learn_from_is_none() {
+        let t = fam(GlmFamily::Tweedie, GlmLink::Log, 100.0);
+        for eta in [30.0, -30.0] {
+            let mu = t.mean(eta).unwrap().1;
+            let w = mu.powf(2.0 - 100.0);
+            let z = eta + (1.0 - mu) / mu;
+            assert!(z.is_finite() && !(w.is_finite() && w > 0.0), "η {eta}: {w}");
+            assert!(t.working(eta, 1.0).is_none(), "η {eta}");
+        }
+        let p = fam(GlmFamily::Poisson, GlmLink::Log, 0.0);
+        assert!(p.working(0.4, 2.0).is_some());
+        assert!(p.working(0.4, f64::INFINITY).is_none());
+        assert!(p.working(0.4, f64::NAN).is_none());
+    }
+
+    /// The Tweedie deviance's first term is 0 at `y = 0`, the convention
+    /// `0 · ln 0 = 0` carries over: at `p = 3`, `μ = 2` the deviance is
+    /// `2 μ^(2−p)/(2−p) = −1`, not the infinity `0^(2−p)` would give.
+    #[test]
+    fn the_tweedie_deviance_drops_its_first_term_at_zero() {
+        let t = fam(GlmFamily::Tweedie, GlmLink::Log, 3.0);
+        assert_eq!(t.unit_deviance(0.0, 2.0), -1.0);
+    }
 }
