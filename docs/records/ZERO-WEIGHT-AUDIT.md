@@ -129,6 +129,28 @@ it, so the equality holds to the bit on every OS. The three clocks agree: `a_num
 runs each spec on the number clock and on the `Datetime` clock with every
 span a duration, to the bit.
 
+## After the merge: the chunk's checks and the session close (W9)
+
+The full gate's property test found what the 106 cases, all on one chunking
+of 37 rows, did not: three chunk-level readers of the clock still saw a row
+of weight 0. `Stream::check_steps` (a step too large for a float) read each
+step from the row before, where the stream's clock holds the last row that
+counts; `session_bounds` under `group_close = "session"` made such a row a
+session boundary; and `last_session`, the closed row's session, was the
+span's last row whatever it weighed. Each now reads the last row that
+counts, so a row of weight 0 is no boundary and the step past it is the
+one the schedule takes; it is still checked over its own step, which it is
+scored over. Beside them, the chunk was refused at whichever refusal a
+stream or the pool found first; it is now refused at its first refused
+input row. The tests: `zero_weight.rs`'s five `under_every_cutting` cases,
+which fail on the merged build, and `test_properties.py`'s
+`test_chunking_never_changes_the_outcome_behind_zero_weight_rows` and
+`test_a_step_back_behind_zero_weight_rows_is_refused_at_one_row_whatever_the_chunking`.
+The failure itself was the test's: its streams stepped back by
+`MINIMUM + 2` from the row before, which past rows of weight 0 can be
+`MINIMUM` or less from the last row that counts, and the bank refused such
+a stream at the same row under every chunking.
+
 ## What the audit leaves as it was
 
 - **The window formula kinds** (`rp.ewm_mean` and the rest, and a formula

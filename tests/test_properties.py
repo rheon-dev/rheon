@@ -246,18 +246,48 @@ def _streams(model: str, sign: str, **kw) -> st.SearchStrategy:
 MINIMUM = 5.0
 
 
+def _clear_of_the_minimum(clocks: list[float], groups: list, weights: list) -> list[float]:
+    """``clocks`` with every step back past `MINIMUM` on the clock the
+    step-back rule reads. A row of weight 0 counts in no clock (hard rule 9;
+    PLAN 539): a row that counts is compared with its group's last row that
+    counts, so zero-weight rows between them can turn a step back of
+    ``MINIMUM + 2`` from the row before into one of ``MINIMUM`` or less from
+    the row compared with, which the bank refuses. Such a row is moved to
+    ``MINIMUM + 2`` behind the earlier of the two, and its group's later rows
+    keep their steps. A null, NaN or out-of-bound weight counts: the row is
+    skipped, and a skipped row moves the clock."""
+    out, prev, counted, shift = [], {}, {}, {}
+    for t, g, w in zip(clocks, groups, weights, strict=True):
+        t += shift.get(g, 0.0)
+        if w != 0.0:
+            c = counted.get(g)
+            if c is not None and 0.0 < c - t <= MINIMUM:
+                moved = min(c, prev[g]) - (MINIMUM + 2.0)
+                shift[g] = shift.get(g, 0.0) + (moved - t)
+                t = moved
+            counted[g] = t
+        prev[g] = t
+        out.append(t)
+    return out
+
+
 @st.composite
-def stepping_back_streams(draw, min_rows=2, max_rows=40, max_groups=3, **signs):
+def stepping_back_streams(draw, min_rows=2, max_rows=40, max_groups=3, clear=True, **signs):
     """`streams`, with each group's clock stepping back now and then -- by more
     than `MINIMUM`, so that under `"reset_state"` every step back starts the
-    group over and none is refused (task 120). ``signs`` are `streams`'s
-    ``sign``, ``offset`` and ``columns``."""
+    group over and none is refused (task 120). With ``clear`` false the
+    steps are drawn as they are, so a step back measured past zero-weight rows
+    can fall to `MINIMUM` or less and be refused (`_clear_of_the_minimum`).
+    ``signs`` are `streams`'s ``sign``, ``offset`` and ``columns``."""
     df = draw(streams(min_rows=min_rows, max_rows=max_rows, max_groups=max_groups, **signs))
     clocks, last = [], {}
-    for g in df["g"].to_list():
+    groups = df["g"].to_list()
+    for g in groups:
         step = draw(st.sampled_from([0.0, 0.5, 1.0, 7.0, 1e4, -(MINIMUM + 2.0), -1e4]))
         last[g] = last.get(g, 0.0) + step if g in last else 0.0
         clocks.append(last[g])
+    if clear:
+        clocks = _clear_of_the_minimum(clocks, groups, df["w"].to_list())
     return df.with_columns(t=pl.Series(clocks, dtype=pl.Float64))
 
 
@@ -349,6 +379,76 @@ def unnested(out):
     return out.select("m").unnest("m").select(keep)
 
 
+def _outcome(run: Callable[[], pl.DataFrame]) -> tuple[pl.DataFrame | None, str | None]:
+    """What ``run`` gave: its frame, `unnested`, or the message of the
+    refusal it raised."""
+    try:
+        return unnested(run()), None
+    except ValueError as e:
+        return None, str(e)
+
+
+def _behind_zero_weight_rows() -> pl.DataFrame:
+    """The stream Hypothesis found after PLAN 539 (W9): one group whose clock
+    steps 0, 1, 2, then back to -5, the rows at 1 and 2 of weight 0, so the
+    step back is 5 from the last row that counts -- row 12, at 0, whose
+    weight is null -- and not 7 from the row before. Rows of weight 0 or null
+    throughout, nulls in every column."""
+    n, k = None, 1000.0
+    return pl.DataFrame(
+        {
+            "g": ["g0"] * 22,
+            "t": [0.0] * 14 + [1.0, 2.0] + [-5.0] * 6,
+            "x0": [k] * 9 + [n, k, n, k, k, n, n, n, k, k, k, k, k],
+            "x1": [k] * 4 + [n, k, k, k, n, k, k, n, n, n, k, k, n, k, k, n, k, k],
+            "y0": [k] * 3 + [n, k, k, k, k, k, k, n, k, n, k, k, n, n, n, k, n, k, k],
+            "w": [0.0] * 4 + [n, 0.0, 0.0, 0.0, n, 0.0, n, 0.0, n] + [0.0] * 3 + [n, n] + [0.0] * 4,
+            "s": ["s0"] * 22,
+        },
+        schema_overrides={c: pl.Float64 for c in ("t", "x0", "x1", "y0", "w")},
+    )
+
+
+@pytest.mark.parametrize(("model", "extra"), MODELS, ids=IDS)
+def test_a_step_back_behind_zero_weight_rows_is_refused_at_one_row_whatever_the_chunking(
+    model, extra
+):
+    """A zero-weight row counts in no clock, so it is neither the row that
+    steps back nor the row a step back is measured from; a null weight skips
+    its row, and a skipped row moves the clock as it always has. Row 16 (null
+    weight) steps back by 5 from row 12 (null weight, clock 0), past rows 14
+    and 15 at clocks 1 and 2 of weight 0: no more than the minimum, so the
+    bank refuses it, at input row 16 under every chunking. The property test
+    drew it with the chunked run expected to agree with a whole run that it
+    assumed would not refuse."""
+    df = binarize(_behind_zero_weight_rows(), model)
+    spec = build(model, extra, restart_after_step_back=MINIMUM)
+    says = re.escape(
+        'clock column "t" steps back by 5 at row 16 (counting from 0), no more than '
+        "restart_after_step_back = 5"
+    )
+    with pytest.raises(ValueError, match=says):
+        rp.ModelBank([spec]).fit_predict(df)
+    for chunk in range(1, df.height + 1):
+        chunks = [df.slice(i, chunk) for i in range(0, df.height, chunk)]
+        with pytest.raises(ValueError, match=says):
+            list(rp.ModelBank([spec]).fit_predict_batches(iter(chunks)))
+    # Without the rows of weight 0 the stream steps 0 -> -5 directly, and
+    # refuses at the same row of what is left.
+    kept = df.filter(pl.col("w").is_null() | (pl.col("w") != 0.0))
+    row = kept.with_row_index().filter(pl.col("t") == -5.0)["index"][0]
+    with pytest.raises(ValueError, match=f"steps back by 5 at row {row} "):
+        rp.ModelBank([spec]).fit_predict(kept)
+    # Moved one unit further back, the step is past the minimum: every
+    # chunking restarts the group there and gives the same numbers.
+    df = df.with_columns(t=pl.when(pl.col("t") < 0).then(-6.0).otherwise("t"))
+    one = unnested(rp.ModelBank([spec]).fit_predict(df))
+    for chunk in range(1, df.height + 1):
+        bank = rp.ModelBank([spec])
+        parts = [bank.fit_predict(df.slice(i, chunk)) for i in range(0, df.height, chunk)]
+        assert one.equals(unnested(pl.concat(parts)), null_equal=True), f"{chunk}-row chunks"
+
+
 @pytest.mark.parametrize("sign", list(SIGNS))
 @pytest.mark.parametrize(("model", "extra"), MODELS, ids=IDS)
 class TestUniversalProperties:
@@ -382,6 +482,28 @@ class TestUniversalProperties:
 
         signs = {**SIGNS[sign], "columns": _signed_columns(model)}
         _given(sign, prop, df=stepping_back_streams(**signs), chunk=CHUNKS)
+
+    def test_chunking_never_changes_the_outcome_behind_zero_weight_rows(self, model, extra, sign):
+        """Hard rule 3 where zero-weight rows sit between a step back and the
+        row it is measured from: such a row counts in no clock, so the step
+        back is read from the last row that counts, whichever chunk that row
+        or the zero-weight rows fell in. Every chunking refuses at the same
+        input row, with the same message, or gives the same numbers."""
+
+        def prop(df, chunk):
+            df = binarize(df, model)
+            spec = build(model, extra, restart_after_step_back=MINIMUM)
+            chunks = [df.slice(i, chunk) for i in range(0, df.height, chunk)]
+            one = _outcome(lambda: rp.ModelBank([spec]).fit_predict(df))
+            many = _outcome(
+                lambda: pl.concat(list(rp.ModelBank([spec]).fit_predict_batches(iter(chunks))))
+            )
+            assert one[1] == many[1]
+            if one[0] is not None:
+                assert one[0].equals(many[0], null_equal=True)
+
+        signs = {**SIGNS[sign], "columns": _signed_columns(model)}
+        _given(sign, prop, df=stepping_back_streams(clear=False, **signs), chunk=CHUNKS)
 
     def test_a_late_row_is_refused_at_its_input_row_whatever_the_chunking(self, model, extra, sign):
         """A row stepped back by no more than the minimum is a late row: the
@@ -1193,7 +1315,8 @@ _RCOV_WEIGHTS = st.sampled_from(
 @st.composite
 def cut_streams(draw, kind: str, sign: float | None = None, offset: float = 0.0):
     """`kind_streams`, with a clock ``t`` that steps forward by 0 to 1e4 and
-    back by more than `MINIMUM` now and then, so a clocked run restarts; a
+    back by more than `MINIMUM` now and then, measured from the last row that
+    counts in the clock (`_clear_of_the_minimum`), so a clocked run restarts; a
     weight ``w`` drawn as `streams` draws it; and a session ``s`` that
     changes now and then. The group key ``g`` only grows, and `rcov` closes
     each group as the next opens; a step back across a close is the next
@@ -1208,10 +1331,14 @@ def cut_streams(draw, kind: str, sign: float | None = None, offset: float = 0.0)
         )
     )
     flips = draw(st.lists(st.booleans(), min_size=n, max_size=n))
-    weights = _RCOV_WEIGHTS if kind == "rcov" else _weights
+    weights = draw(st.lists(_RCOV_WEIGHTS if kind == "rcov" else _weights, min_size=n, max_size=n))
+    # One stream, whatever the groups: a kind with no group reads every row
+    # as one, and `rcov`'s groups follow each other, so a step back clear of
+    # the minimum across the whole stream is clear within each group.
+    clocks = [float(t) for t in np.cumsum([0.0, *steps[1:]])]
     return df.with_columns(
-        t=pl.Series(np.cumsum([0.0, *steps[1:]]), dtype=pl.Float64),
-        w=pl.Series(draw(st.lists(weights, min_size=n, max_size=n)), dtype=pl.Float64),
+        t=pl.Series(_clear_of_the_minimum(clocks, [0] * n, weights), dtype=pl.Float64),
+        w=pl.Series(weights, dtype=pl.Float64),
         s=pl.Series([f"s{k}" for k in np.cumsum(flips)]),
     )
 

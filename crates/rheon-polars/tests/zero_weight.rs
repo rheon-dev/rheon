@@ -856,3 +856,187 @@ fn a_zero_weight_row_is_scored_as_predict_scores_it() {
         assert!(checked > 40);
     }
 }
+
+// --- what a chunk's refusal and a session close read (W9) ---
+//
+// The property test drew a stream whose rows of weight 0 sat between a step
+// back and the row it is measured from. These hold the outcome to every
+// cutting of a short stream: the same refusal at the same input row, or the
+// same outputs and state.
+
+/// Every cutting of `n` rows worth a look: chunks of each length, and each
+/// single cut.
+fn cuttings(n: usize) -> Vec<Vec<usize>> {
+    let mut all: Vec<Vec<usize>> = (1..=n).map(|k| vec![k; n.div_ceil(k)]).collect();
+    all.extend((1..n).map(|cut| vec![cut, n - cut]));
+    all
+}
+
+/// The outcome of `spec` over `df` under every cutting: they all agree, and
+/// this is it.
+fn under_every_cutting(spec: &Spec, df: &DataFrame) -> Result<(DataFrame, Value), String> {
+    let whole = try_run(spec, df, &[df.height()]);
+    for lens in cuttings(df.height()) {
+        let cut = try_run(spec, df, &lens);
+        match (&whole, &cut) {
+            (Err(a), Err(b)) => assert_eq!(a, b, "{lens:?}"),
+            (Ok((a, sa)), Ok((b, sb))) => {
+                let (a, b) = (
+                    a.drop_many(["coef", "support_coef"]),
+                    b.drop_many(["coef", "support_coef"]),
+                );
+                for c in a.columns() {
+                    let (x, y) = (cells(c), cells(b.column(c.name()).unwrap()));
+                    assert_eq!(x, y, "{lens:?}: {}", c.name());
+                }
+                assert_eq!(a.width(), b.width(), "{lens:?}");
+                assert_eq!(first_difference(sa, sb, ""), None, "{lens:?}");
+            }
+            _ => panic!("{lens:?}: {:?} against {:?}", whole.is_ok(), cut.is_ok()),
+        }
+    }
+    whole
+}
+
+fn small_spec(rest: &str) -> Spec {
+    spec_of(&format!(
+        r#"{{"name": "m", "model": {{"type": "ewridge"}}, "targets": ["y"], "features": ["x"],
+            "clock": "t", "gap_cap": 100.0, "half_life": 5.0, "weight": "w" {rest}}}"#
+    ))
+}
+
+/// The falsifying stream, cut down: the clock steps 0, 1, 2 and back to -5,
+/// the rows at 1 and 2 of weight 0. The step back is 5 from row 1, the last
+/// that counts, not 7 from the row before: no more than the minimum, so
+/// every cutting refuses at row 4. A null weight skips its row, and a
+/// skipped row still moves the clock, so row 1 counts and row 4 steps.
+#[test]
+fn a_step_back_past_zero_weight_rows_is_measured_from_the_last_row_that_counts() {
+    let df = df!(
+        "t" => [0.0, 0.0, 1.0, 2.0, -5.0, -5.0],
+        "x" => [1.0, 2.0, 3.0, 1.0, 2.0, 3.0],
+        "y" => [1.0, 2.0, 1.0, 3.0, 2.0, 1.0],
+        "w" => [Some(1.0), None, Some(0.0), Some(0.0), None, Some(1.0)],
+    )
+    .unwrap();
+    let spec = small_spec(r#", "restart_after_step_back": 5.0"#);
+    let err = under_every_cutting(&spec, &df).unwrap_err();
+    assert!(err.contains("steps back by 5 at row 4 "), "{err}");
+    // One unit further back the step is past the minimum, and every
+    // cutting restarts the stream there alike.
+    let df = df
+        .lazy()
+        .with_column(
+            when(col("t").lt(lit(0.0)))
+                .then(lit(-6.0))
+                .otherwise(col("t"))
+                .alias("t"),
+        )
+        .collect()
+        .unwrap();
+    under_every_cutting(&spec, &df).unwrap();
+}
+
+/// A step that is not a number of clock units is read from the last row
+/// that counts, too: a row of weight 0 at 0 between -1e308 and 1e308 does
+/// not halve it. Every cutting refuses at row 2 as a step too large for a
+/// float, where one chunk let it through to the step-back check, which
+/// named a step of infinity a step back. A row of weight 0 is still scored
+/// over its own step, so that step is refused on it (row 1 of the second
+/// stream).
+#[test]
+fn a_step_too_large_for_a_float_is_read_past_zero_weight_rows() {
+    let spec = small_spec("");
+    for (t, w, row) in [
+        ([-1e308, 0.0, 1e308], [1.0, 0.0, 1.0], 2),
+        ([-1e308, 1e308, -1e308], [1.0, 0.0, 1.0], 1),
+    ] {
+        let df = df!("t" => t, "x" => [1.0, 2.0, 3.0], "y" => [1.0, 2.0, 1.0], "w" => w).unwrap();
+        let err = under_every_cutting(&spec, &df).unwrap_err();
+        assert!(err.contains(&format!("at row {row} ")), "{err}");
+        assert!(err.contains("a difference too large for a float"), "{err}");
+    }
+}
+
+/// Two groups that each step back: the chunk is refused at the first such
+/// row in the input, whichever group's check ran first. The longer group,
+/// `b`, steps back at row 7, the shorter, `a`, at row 4 behind its row of
+/// weight 0 at row 2, and a cut anywhere before row 7 names row 4, so one
+/// chunk does too.
+#[test]
+fn a_chunk_is_refused_at_its_first_refused_row() {
+    let df = df!(
+        "g" => ["a", "b", "a", "b", "a", "b", "b", "b"],
+        "t" => [0.0, 0.0, 3.0, 1.0, -2.0, 2.0, 3.0, 1.0],
+        "x" => [1.0, 2.0, 3.0, 1.0, 2.0, 3.0, 1.0, 2.0],
+        "y" => [1.0, 2.0, 1.0, 3.0, 2.0, 1.0, 2.0, 1.0],
+        "w" => [1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+    )
+    .unwrap();
+    let spec = small_spec(r#", "group": "g", "restart_after_step_back": 5.0"#);
+    let err = under_every_cutting(&spec, &df).unwrap_err();
+    assert!(err.contains("steps back by 2 at row 4 "), "{err}");
+}
+
+/// Under `label_clock`, a label time before its row is refused at its row
+/// though the clock steps back later in the chunk: the label check reads
+/// the rows before the refused step, where it once read none.
+#[test]
+fn a_label_refused_before_a_step_back_is_the_one_named() {
+    let df = df!(
+        "t" => [0.0, 1.0, 2.0, 3.0, 1.0],
+        "lt" => [0.5, 0.5, 2.5, 3.5, 1.5],
+        "x" => [1.0, 2.0, 3.0, 1.0, 2.0],
+        "y" => [1.0, 2.0, 1.0, 3.0, 2.0],
+        "w" => [1.0, 1.0, 0.0, 1.0, 1.0],
+    )
+    .unwrap();
+    let spec = small_spec(r#", "label_clock": "lt""#);
+    let err = under_every_cutting(&spec, &df).unwrap_err();
+    assert!(err.contains("before clock column \"t\" at row 1 "), "{err}");
+}
+
+/// Under `group_close = "session"`, a row of weight 0 of another session is
+/// no session boundary (hard rule 9: it counts in no session rule): the
+/// span goes on past it, and the row after it, of the span's session, is
+/// learned on the span's state. It once closed the span twice in one chunk
+/// and once where a chunk ended after it, so the closed groups and the
+/// group's row count parted with the cutting. A row of weight 0 opens no
+/// span either: alone in a new session at a chunk's end, it closes nothing.
+#[test]
+fn a_zero_weight_row_of_another_session_closes_no_span() {
+    let df = df!(
+        "g" => [0i64; 7],
+        "s" => [0i64, 0, 1, 0, 0, 2, 2],
+        "t" => [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        "x" => [1.0, 2.0, 3.0, 1.0, 2.0, 3.0, 1.0],
+        "y" => [1.0, 2.0, 1.0, 3.0, 2.0, 1.0, 2.0],
+        "w" => [1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 0.0],
+    )
+    .unwrap();
+    let spec = small_spec(r#", "group": "g", "session": "s", "group_close": "session""#);
+    let (out, _) = under_every_cutting(&spec, &df).unwrap();
+    // Row 3 is learned on the span rows 0 and 1 began: its weight before
+    // the row is theirs, decayed, and not a fresh stream's 0.
+    let w = out.column("weight_sum").unwrap().f64().unwrap();
+    assert!(w.get(3).unwrap() > 1.0, "{out}");
+    // Row 5 opens session 2, a fresh span; row 6, of weight 0, ends it.
+    assert_eq!(w.get(5), Some(0.0), "{out}");
+    let closed = |lens: &[usize]| {
+        let mut bank = Bank::new(vec![spec.clone()]).unwrap();
+        let mut at = 0;
+        for &len in lens {
+            let len = len.min(df.height() - at);
+            bank.fit_predict_from(&df.slice(at as i64, len), at)
+                .unwrap();
+            at += len;
+        }
+        bank.closed_groups(None, true).unwrap()
+    };
+    let one = closed(&[df.height()]);
+    // One span closed, session 0's, at row 5.
+    assert_eq!(one.height(), 1, "{one}");
+    for lens in cuttings(df.height()) {
+        assert!(closed(&lens).equals_missing(&one), "{lens:?}");
+    }
+}

@@ -3040,9 +3040,20 @@ impl Stream {
     /// clock's steps are integer nanoseconds and always finite. The bank runs
     /// it beside [`Self::check_clock`], before any stream is touched, so the
     /// refusal is the chunk's, as a clock value that is not a number is.
+    ///
+    /// A row of weight 0 counts in no clock (hard rule 9), so it is never the
+    /// row another row steps from: each step is read from the last row that
+    /// counts, the one the stream's own clock holds when the chunk starts,
+    /// wherever a chunk ends. Such a row is still scored over its own step
+    /// from that row, so a step that is not a number is refused on it too.
+    /// Read from the previous row, as it once was, a zero-weight row at 0
+    /// between rows at -1e308 and 1e308 let both steps through in one chunk,
+    /// and `check_clock` then named the step of infinity a step back; cut
+    /// after it, the step was refused here (PLAN 539).
     pub fn check_steps(
         &self,
         clock: Option<&ClockCol>,
+        weight: Option<&[f64]>,
         rows: &[usize],
         base: usize,
     ) -> Result<(), StepRefusal> {
@@ -3054,13 +3065,16 @@ impl Stream {
             _ => None,
         };
         for (ri, &row) in rows.iter().enumerate() {
-            let now = values[base + ri];
+            let at = base + ri;
+            let now = values[at];
             if let Some(p) = prev
                 && !(now - p).is_finite()
             {
                 return Err(StepRefusal { row, prev: p, now });
             }
-            prev = Some(now);
+            if !weight.is_some_and(|w| w[at] == 0.0) {
+                prev = Some(now);
+            }
         }
         Ok(())
     }

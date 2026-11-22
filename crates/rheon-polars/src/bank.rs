@@ -1119,11 +1119,27 @@ fn check_monotone(
 ///
 /// Read from the session hashes the columns already carry and the stream's
 /// own last hash, in row order: a boundary is a property of two consecutive
-/// rows, which is what makes the split chunk-invariant.
-fn session_bounds(stream: &Stream, sess: &[u64], n: usize, base: usize) -> Vec<usize> {
+/// rows that count in the clock, which is what makes the split
+/// chunk-invariant. A row of weight 0 counts in no session rule (hard rule
+/// 9): it is never a boundary, nor the row the next one is compared with,
+/// as the stream's clock, which holds the last such row's session across a
+/// chunk's end, never steps on it. It is scored inside the span it falls
+/// in, as a fresh stream where its session differs (`Weightless::Fresh`).
+/// Read from every row, such a row split the span twice in one chunk and
+/// once where a chunk ended after it (PLAN 539).
+fn session_bounds(
+    stream: &Stream,
+    sess: &[u64],
+    weight: Option<&[f64]>,
+    n: usize,
+    base: usize,
+) -> Vec<usize> {
     let mut prev = stream.persisted.clock.prev_session();
     let mut bounds = Vec::new();
     for ri in 0..n {
+        if weight.is_some_and(|w| w[base + ri] == 0.0) {
+            continue;
+        }
         let h = sess[base + ri];
         if prev.is_some_and(|p| p != h) {
             bounds.push(ri);
@@ -1239,7 +1255,9 @@ fn process<'s>(
             // segment gets its own buffers, exactly as the cache-sized runs
             // below do, so nothing else in the chunk path changes.
             let bounds = match (spec.closes_on_session(), sc.session.as_deref()) {
-                (true, Some(sess)) => session_bounds(stream, sess, idx.len(), base),
+                (true, Some(sess)) => {
+                    session_bounds(stream, sess, sc.weight.as_deref(), idx.len(), base)
+                }
                 _ => Vec::new(),
             };
             // The group's last accepted row in the chunk, which `coef` rides
@@ -1345,9 +1363,16 @@ fn process<'s>(
                         }
                     }
                 }
-                // The span's session value, for the row it will close with.
-                if end > start && sc.session_str.is_some() {
-                    stream.persisted.last_session = session_of(idx[end - 1]);
+                // The span's session value, for the row it will close with:
+                // its last row that counts in the clock, as `session_bounds`
+                // reads it. A row of weight 0 is in no session rule, so a
+                // span may end on one of another session (PLAN 539).
+                let counted =
+                    |&k: &usize| !sc.weight.as_deref().is_some_and(|w| w[base + k] == 0.0);
+                if sc.session_str.is_some()
+                    && let Some(k) = (start..end).rev().find(counted)
+                {
+                    stream.persisted.last_session = session_of(idx[k]);
                 }
             }
             // The readiness shares of the chunk's last solves, once the
@@ -4283,32 +4308,61 @@ impl Bank {
         // `groups()` lists what the bank has learned from -- and the corrected
         // chunk can be fed. A no-op where nothing can refuse: a row-count
         // clock, or `"reset_state"` with a minimum of 0.
-        let check =
-            |(si, _, idx, base, stream): &(usize, &GroupKey, &[usize], usize, &mut Stream)| {
-                let sc = &cols[*si];
-                // A step that is not a number of clock units, refused by row as
-                // a clock value that is not a number is (review 2026-10-06, PB7).
-                stream
-                    .check_steps(sc.clock.as_ref(), idx, *base)
-                    .map_err(|refusal| non_finite_step(&specs[*si], refusal, chunk.rows()))?;
-                stream
-                    .check_clock(
-                        &cfgs[*si],
-                        sc.clock.as_ref(),
-                        sc.session.as_deref(),
-                        sc.weight.as_deref(),
-                        idx,
-                        *base,
-                    )
-                    .map_err(|refusal| backwards_clock(&specs[*si], refusal, chunk.rows()))?;
-                // Under `label_clock`, a label time before its row, or a buffer
-                // past its bound (task 341). Asked only of a spec with one: the
-                // call is ten arguments a group (task 375, P32).
-                if specs[*si].label_clock.is_none() {
-                    return Ok(());
-                }
-                stream
-                    .check_labels(
+        //
+        // Where several rows would be refused, the chunk is refused at the
+        // first of them in the input, whichever stream, spec or check finds
+        // it: that is the row a run cut anywhere before it refuses at, so
+        // every chunking names the same row (hard rule 3). The first a
+        // stream's checks or the pool's tasks happened to find was a group's
+        // longest-first order, or a race, and a cut that left the later row
+        // in the next chunk named the earlier one (PLAN 539: the property
+        // test drew two groups each stepping back past rows of weight 0).
+        // Each check is the row it refuses and its error, the spec's index
+        // breaking a tie on one row.
+        type Refused = (usize, usize, PolarsError);
+        let check = |(si, _, idx, base, stream): &(
+            usize,
+            &GroupKey,
+            &[usize],
+            usize,
+            &mut Stream,
+        )|
+         -> Option<Refused> {
+            let sc = &cols[*si];
+            // A step that is not a number of clock units, refused by row as
+            // a clock value that is not a number is (review 2026-10-06, PB7).
+            let steps = stream
+                .check_steps(sc.clock.as_ref(), sc.weight.as_deref(), idx, *base)
+                .err()
+                .map(|r| (r.row, *si, non_finite_step(&specs[*si], r, chunk.rows())));
+            let clock = stream
+                .check_clock(
+                    &cfgs[*si],
+                    sc.clock.as_ref(),
+                    sc.session.as_deref(),
+                    sc.weight.as_deref(),
+                    idx,
+                    *base,
+                )
+                .err()
+                .map(|r| (r.row, *si, backwards_clock(&specs[*si], r, chunk.rows())));
+            // Under `label_clock`, a label time before its row, or a buffer
+            // past its bound (task 341). Asked only of a spec with one: the
+            // call is ten arguments a group (task 375, P32). Asked of the
+            // rows before a refused step alone: its schedule stops at one,
+            // and a label refused before it is the first.
+            let before = [&steps, &clock]
+                .into_iter()
+                .flatten()
+                .map(|r| r.0)
+                .min()
+                .map_or(idx.len(), |row| idx.partition_point(|&i| i < row));
+            let idx = &idx[..before];
+            let labels = specs[*si]
+                .label_clock
+                .is_some()
+                .then(|| {
+                    stream.check_labels(
                         &specs[*si],
                         &cfgs[*si],
                         &sc.features,
@@ -4319,14 +4373,28 @@ impl Bank {
                         idx,
                         *base,
                     )
-                    .map_err(
-                        |r| polars_err!(ComputeError: "{}", r.message(&specs[*si], chunk.rows())),
-                    )
-            };
+                })
+                .and_then(Result::err)
+                .map(|r| {
+                    let message = r.message(&specs[*si], chunk.rows());
+                    (r.row(), *si, polars_err!(ComputeError: "{}", message))
+                });
+            // In this order on one row: a step that is not a number is what
+            // the clock check would misread.
+            [steps, clock, labels]
+                .into_iter()
+                .flatten()
+                .min_by_key(|r| (r.0, r.1))
+        };
+        let first = |a: Refused, b: Refused| if (b.0, b.1) < (a.0, a.1) { b } else { a };
         let checked = if par() {
-            work.par_iter().try_for_each(check)
+            work.par_iter().filter_map(check).reduce_with(first)
         } else {
-            work.iter().try_for_each(check)
+            work.iter().filter_map(check).reduce(first)
+        };
+        let checked = match checked {
+            Some((_, _, e)) => Err(e),
+            None => Ok(()),
         };
         if let Err(e) = checked {
             drop(work);
@@ -4460,7 +4528,9 @@ impl Bank {
             )| {
                 let (spec, sc) = (&specs[*si], &cols[*si]);
                 let bounds = match (spec.closes_on_session(), sc.session.as_deref()) {
-                    (true, Some(sess)) => session_bounds(stream, sess, idx.len(), *base),
+                    (true, Some(sess)) => {
+                        session_bounds(stream, sess, sc.weight.as_deref(), idx.len(), *base)
+                    }
                     _ => Vec::new(),
                 };
                 let mut starts = vec![0];

@@ -153,6 +153,13 @@ fn oldest(pending: &VecDeque<PendingRow>) -> usize {
 }
 
 impl LabelRefusal {
+    /// The row it refuses, by its place in the chunk.
+    pub fn row(&self) -> usize {
+        match *self {
+            LabelRefusal::Before { row, .. } | LabelRefusal::Full { row, .. } => row,
+        }
+    }
+
     /// The refusal as the bank says it, naming the spec, the column and the
     /// row of the frame.
     pub fn message(&self, spec: &Spec, rows: &crate::arrow::InputRows) -> String {
