@@ -11,6 +11,7 @@
 use super::dist::{self, LAM_LIM, NU_HI, NU_LO};
 use super::filter::{Filter, figarch_weights};
 use super::linalg::HalfSpaces;
+use super::math;
 use super::optim::{Eval, Stop, maximize};
 use super::{GarchDist, GarchVol};
 
@@ -189,7 +190,7 @@ fn likelihood(
             return Eval::bad(p);
         }
         if m == 0 {
-            e.f -= 0.5 * w * (LN_2PI + s.ln() + y * y / s);
+            e.f -= 0.5 * w * (LN_2PI + math::ln(s) + y * y / s);
             if grad {
                 let res = y * y / s - 1.0;
                 for i in 0..k {
@@ -201,7 +202,7 @@ fn likelihood(
             }
         } else {
             let z = y / s.sqrt();
-            e.f += w * (dist::log_density(z, nu, lam) - 0.5 * s.ln());
+            e.f += w * (dist::log_density(z, nu, lam) - 0.5 * math::ln(s));
             if grad {
                 let (wt, s_nu, s_lam) = dist::scores(z, nu, lam, skew);
                 for i in 0..k {
@@ -269,7 +270,7 @@ fn figarch_likelihood(rows: &[[f64; 2]], bc: f64, m: usize, theta: &[f64], grad:
             return Eval::bad(4);
         }
         let (y2, w) = (r[0] * r[0], r[1]);
-        e.f -= 0.5 * w * (LN_2PI + h.ln() + y2 / h);
+        e.f -= 0.5 * w * (LN_2PI + math::ln(h) + y2 / h);
         if grad {
             let dl = [
                 1.0 / one_b / h,
@@ -411,7 +412,7 @@ pub(super) fn fit(
     match vol {
         GarchVol::Egarch => {
             let set = egarch_set();
-            let lv = v.ln();
+            let lv = math::ln(v);
             let mut grid = Vec::new();
             for a in [0.05, 0.1, 0.2] {
                 for g in [-0.1, 0.0] {

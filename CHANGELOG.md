@@ -404,6 +404,40 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **`garch` gives the same numbers on every platform** (W10's CI on
+  f1aa0fe0, run 44991677911: the `garch_egarch` and `garch_skewt` goldens
+  failed on Linux x86-64 and Windows, `garch_gjr_t` on Windows, and the
+  committed `garch_skewt` and `garch_egarch` state fixtures on both, a
+  skewed t's fitted `ω` 29.6 on Linux and 20.5 on Windows against macOS's
+  28.3). The start's optimizer compares likelihoods and step sizes, and
+  where the likelihood is flat along a ridge (a short start with no GARCH
+  effect, or a t's shape the rows barely tell) those comparisons sit at the
+  rounding, so the last bits of the platform's `ln` and `exp` chose the
+  path the fit took, and its stop. That is not confined to short starts:
+  with the `libm` crate's functions in place of Apple's, 3 to 6 of 50
+  series of 10,000 rows with t innovations, started on 2,000 rows, fitted
+  another start. No ordering of the comparisons fixes a climb whose end
+  the rounding decides, and the step after the start then carries a
+  difference through a nearly singular information matrix (5e-12 within
+  20 rows with only the fit made the same). `garch` now reads `ln`, `exp`
+  and `ln_1p` from the `libm` crate, compiled from source and the same
+  bits everywhere, in its fit and its step alike, and calls no platform
+  math library, so every output and state is the same bits on every
+  platform; its goldens and state fixtures are now held to the bit on all
+  three. Against `arch` over 50 seeds a form at 10,000 rows the agreement
+  holds: the same 50 of 50 within 2 SE, the same worst excess, gap and
+  90th-percentile D in every form; the means of D move with the series
+  that took another path (`garch` t 0.0968 to 0.0977, skewed t 0.1069 to
+  0.1059, `gjr` t 0.1121 to 0.1137) and the normal forms' by under 2e-6
+  relative. On macOS the golden signatures move by up to 1.8e-7 of `1 +
+  |value|` (`egarch`), 3.0e-8 (skewed t) and 2.8e-14 (`gjr` t), and not at
+  all for `garch`, the targeted form and `figarch`; the two fixtures' fits
+  move as far as the platforms' did. A row's step costs the same for
+  `garch` and `gjr` under the normal or the t and for `figarch`, which call
+  neither function on a row or too few to show; the skewed t's is 4% to
+  13% slower and `egarch`'s 14%, on arm64, where the crate's `ln` is 1.4
+  times Apple's and its `exp` 1.8 times. Moves: `garch.*`.
+
 - **`glm`'s refit gives the same fit on every platform** (W9's CI on
   1819e678: the committed `glm_refit_done` state fixture failed on Windows
   and the golden pipeline's `glm.pred_y0_sq` on Linux x86-64, 2.1e-8 from

@@ -35,6 +35,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::GarchVol;
+use super::math;
 
 /// `E|z|` of a standard normal, EGARCH's centring of `|z|` (`arch` keeps it
 /// for every distribution).
@@ -111,7 +112,7 @@ impl Filter {
                 head: 0,
             },
             GarchVol::Egarch => Self {
-                lag: [0.0, b.ln(), b],
+                lag: [0.0, math::ln(b), b],
                 sens: vec![0.0; k],
                 fresh: true,
                 ring: Vec::new(),
@@ -188,11 +189,11 @@ impl Filter {
                 // 0.94-weighted mean of `e²` over the rows before, above it
                 // only logarithmically. Where one binds, the variance does
                 // not move with the parameters.
-                let s = lt.min(LN_S_MAX).exp();
+                let s = math::exp(lt.min(LN_S_MAX));
                 let (lo, hi) = (self.lag[2] / 1e6, self.lag[2] * 1e6);
                 if s < lo || s > hi {
                     dl.fill(0.0);
-                    return if s < lo { lo } else { hi + (s / hi).ln() };
+                    return if s < lo { lo } else { hi + math::ln(s / hi) };
                 }
                 s
             }
@@ -241,7 +242,7 @@ impl Filter {
                 }
             }
             GarchVol::Egarch => {
-                self.lag = [e / s.sqrt(), s.ln(), 0.94 * self.lag[2] + 0.06 * e2];
+                self.lag = [e / s.sqrt(), math::ln(s), 0.94 * self.lag[2] + 0.06 * e2];
                 self.sens.copy_from_slice(dl);
                 self.fresh = false;
             }

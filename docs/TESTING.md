@@ -988,7 +988,15 @@ treats the math library's last bits its own way.** `exp`, `ln`, `exp2` and
 Windows build's `ucrtbase.dll`. rheon-core calls the platform's own. A
 pure-Rust copy, the `libm` crate, would give the same bits everywhere, but
 measured 1.4 times as slow for `exp` and `exp2` and 3.5 to 4.5 times for
-`powf`, and was declined. So a test is one of three kinds:
+`powf`, and was declined. `garch` alone calls the `libm` crate's `ln`,
+`exp` and `ln_1p` and no platform's: its start's optimizer, on a short
+start whose likelihood is flat along a ridge, stops where its last
+comparisons at the rounding left it, so another platform's last bits gave
+another fit, up to 28% away, and its steps after the start carry a
+difference through a nearly singular information matrix. Its goldens and
+state fixtures are held to the bit on every platform, and
+`no_platform_math_library_is_called` finds a platform call in its code.
+So a test is one of three kinds:
 
 | kind | what it compares | how it is held |
 |---|---|---|

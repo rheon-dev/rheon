@@ -29,6 +29,8 @@
 //! variance it can reach, and so excludes persistent processes, `β` near 1,
 //! that `arch` fits and whose filter does contract.)
 
+use super::math;
+
 /// The bins of `z` the guard keeps.
 pub(super) const BINS: usize = 64;
 const Z_EDGE: f64 = 8.0;
@@ -50,7 +52,7 @@ fn centre(b: usize) -> f64 {
 /// `ln |β − (α |z| + γ z)/2|`, floored where `μ` is 0.
 pub(super) fn log_mu(theta: &[f64], z: f64) -> f64 {
     let mu = theta[3] - 0.5 * (theta[1] * z.abs() + theta[2] * z);
-    mu.abs().max(f64::MIN_POSITIVE).ln()
+    math::ln(mu.abs().max(f64::MIN_POSITIVE))
 }
 
 /// The mean of `ln |μ|` at `theta` over the residuals `counts` holds; 0 with
