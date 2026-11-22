@@ -40,7 +40,8 @@
 //! detrend=False, scaling=…)` there.
 //!
 //! The cost is `O(F)` a row for `F` frequencies, one `sin` and one `cos`
-//! each (none where the clock's step is the last one's), and the state
+//! each (none where the clock's step is the last one's), from the `libm`
+//! crate so the state is the same bits on every OS ([`rotation`]), and the state
 //! `8 (4F + 3)` bytes a target, bounded by the frequencies, never by the
 //! stream.
 //!
@@ -54,13 +55,18 @@ use serde::{Deserialize, Serialize};
 use crate::Decay;
 use crate::model::{ModelState, OnlineModel, State, StateError, Step, check_schema};
 
-/// `[cos θ, sin θ]`: the one place the transform takes its trigonometry
-/// from, so where it comes from (the platform's library, or a correctly
-/// rounded one that gives the same bits on every OS) is decided here alone.
+/// `[cos θ, sin θ]`, the one place the transform takes its trigonometry
+/// from: the `libm` crate's, the same bits on every OS, as `garch` takes
+/// its `ln` and `exp`. A platform's library may differ in the last bit, and
+/// a rotation applied on every row compounds that bit: one ulp in it moved
+/// the power by up to 140,089 ulps over 20,000 rows with no decay (1,260 at
+/// a half-life of 300), measured. On x86-64 the crate's `sin` and `cos`
+/// cost no more than glibc's within the run's noise: 187 to 257 ns a row at
+/// 16 frequencies on an uneven clock against 212 to 230, 651 to 681 at 64
+/// against 666 to 747. An even clock takes them once, not once a row.
 #[inline]
 pub(crate) fn rotation(theta: f64) -> [f64; 2] {
-    let (s, c) = theta.sin_cos();
-    [c, s]
+    [libm::cos(theta), libm::sin(theta)]
 }
 
 /// What a [`Spectral`] reports at each frequency: scipy's `scaling`.

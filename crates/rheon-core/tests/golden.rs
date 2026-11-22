@@ -899,7 +899,8 @@ fn spectral_golden() {
     .unwrap();
     let mut got = signature_of(&mut m, 1, false);
     got.extend(&m.powers()[0]);
-    check("spectral", &got, GOLDEN_SPECTRAL);
+    // Its trigonometry is the `libm` crate's: the same bits everywhere.
+    check_bits("spectral", &got, GOLDEN_SPECTRAL);
 }
 
 /// `expectile` on the same stream: an upper expectile under decay whose

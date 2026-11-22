@@ -81,10 +81,6 @@ fn platform(t: f64) -> (f64, f64) {
     (s, c)
 }
 
-fn correctly_rounded(t: f64) -> (f64, f64) {
-    (libm::sin(t), libm::cos(t))
-}
-
 /// The recursion is the definition, on an even clock and on an uneven one
 /// with weights, under decay and without, both scalings, at the DC, at
 /// frequencies on and off the cycles and at the Nyquist frequency.
@@ -162,87 +158,22 @@ fn the_cycles_stand_out() {
     assert!(p[2] > 5.0 * p[0] && p[2] > 5.0 * p[3], "{p:?}");
 }
 
-/// How far the platform's `sin` and `cos` can move the power, measured:
-/// every rotation nudged by one ulp, the direction drawn row by row, as
-/// another platform's last bit may differ; and the platform against the
-/// correctly rounded `libm`, through the longhand. The worst gap, in ulps
-/// of the power, over the frequencies but the DC, under decay and
-/// without, is the cross-OS tolerance the state's power is compared at.
+/// The transform's trigonometry is the `libm` crate's, so its state is the
+/// same bits on every OS. The platform's last bit was measured to move the
+/// power by up to 140,089 ulps over 20,000 rows with no decay (a one-ulp
+/// offset in the rotation on every row of an even clock), so no platform
+/// library may creep back in.
 #[test]
-fn a_last_bit_of_trig_moves_the_power_by_a_few_ulps() {
-    let n = 20_000;
-    let x = signal(n, 11);
-    let freqs = vec![0.0, 0.05, 0.125, 1.0 / 3.2, 0.4, 0.5];
-    let ulps = |a: f64, b: f64| (a - b).abs() / (b.abs() * f64::EPSILON);
-    let mut worst: f64 = 0.0;
-    for h in [f64::INFINITY, 300.0] {
-        let mut a = Spectral::new(cfg(freqs.clone(), Decay::Halflife(h))).unwrap();
-        let mut b = a.clone();
-        let lam = Decay::Halflife(h).factor(1.0);
-        let rot = a.rotations(1.0);
-        // On an even clock one rotation serves every row: another
-        // platform's last bit would be the same offset on every row.
-        let fixed: Vec<[f64; 2]> = rot
-            .iter()
-            .map(|[c, si]| [c + c.abs() * f64::EPSILON, si - si.abs() * f64::EPSILON])
-            .collect();
-        let mut c = a.clone();
-        let mut s = 13;
-        for v in &x {
-            c.learn(&[Some(*v)], lam, 1.0, &fixed);
-            a.learn(&[Some(*v)], lam, 1.0, &rot);
-            let nudged: Vec<[f64; 2]> = rot
-                .iter()
-                .map(|[c, si]| {
-                    let mut up = |v: f64, d: f64| {
-                        if lcg(&mut s) < 0.5 {
-                            v
-                        } else {
-                            v + d * v.abs() * f64::EPSILON
-                        }
-                    };
-                    [up(*c, 1.0), up(*si, -1.0)]
-                })
-                .collect();
-            b.learn(&[Some(*v)], lam, 1.0, &nudged);
-        }
-        let (pa, pb) = (&a.powers()[0], &b.powers()[0]);
-        let pc = &c.powers()[0];
-        // Not the DC: with the mean removed its power is 0 but for rounding.
-        for k in 1..freqs.len() {
-            println!(
-                "h {h} f {}: fixed offset {:.1} ulps",
-                freqs[k],
-                ulps(pc[k], pa[k])
-            );
-            worst = worst.max(ulps(pc[k], pa[k]));
-            println!(
-                "h {h} f {}: nudged {:.1} ulps",
-                freqs[k],
-                ulps(pb[k], pa[k])
-            );
-            worst = worst.max(ulps(pb[k], pa[k]));
-        }
-        let tau: Vec<f64> = (0..n).map(|i| i as f64).collect();
-        let w = vec![1.0; n];
-        for f in &freqs[1..] {
-            let p = longhand(*f, &x, &tau, &w, h, 1.0, SpectralScaling::Density, platform);
-            let c = longhand(
-                *f,
-                &x,
-                &tau,
-                &w,
-                h,
-                1.0,
-                SpectralScaling::Density,
-                correctly_rounded,
-            );
-            println!("h {h} f {f}: platform against libm {:.1} ulps", ulps(p, c));
-            worst = worst.max(ulps(p, c));
-        }
+fn the_trigonometry_is_libms() {
+    let mut s = 21;
+    for _ in 0..10_000 {
+        let th = (lcg(&mut s) - 0.5) * 1e3;
+        let [c, si] = rotation(th);
+        assert_eq!(
+            (c.to_bits(), si.to_bits()),
+            (libm::cos(th).to_bits(), libm::sin(th).to_bits())
+        );
     }
-    println!("SPECTRAL_TRIG_ULPS {worst:.1}");
-    assert!(worst < 1e6, "{worst}");
 }
 
 /// A break empties the sums, the weight stays; a row of weight 0 learns
