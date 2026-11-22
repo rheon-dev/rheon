@@ -112,7 +112,8 @@
   bocpd:
     name
     features
-    hazard = 250.0
+    hazard_rows = None
+    hazard = None
     hazard_col = None
     covariance_type = 'diag'
     mean_prior = None
@@ -2791,7 +2792,7 @@
     weight
   [specs.model], by type:
     audit: distinct_cap, pairs
-    bocpd: covariance_prior, covariance_type, degrees_of_freedom_prior, hazard, hazard_col, max_run, mean_precision_prior, mean_prior, prune_below, robust_beta, warm_rows, warm_span
+    bocpd: covariance_prior, covariance_type, degrees_of_freedom_prior, hazard, hazard_col, hazard_rows, max_run, mean_precision_prior, mean_prior, prune_below, robust_beta, warm_rows, warm_span
     corrchange: alpha, alpha_adjust, bandwidth, boundary_gamma, change_action, crit, kind, monitor_rows, n_perm, norm, perm_block, permute_every, permute_every_rows, scalar, seed, window_rows
     deco: alpha, beta, blocks, dynamics
     ew_class: classes, closed, covariance_type, max_rows_between_snapshots, precision_prior, snapshot_every, window_budget, window_size

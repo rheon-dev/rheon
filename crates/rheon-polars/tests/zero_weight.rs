@@ -177,19 +177,19 @@ impl Clock {
 /// `v` clock units ([`Clock::span`]), `#clock` the clock entry on `t` /
 /// `ts`, and `#back` the one on the clock that steps back.
 const SPECS: &[(&str, &str, &str, &[Clock])] = &[
+    // `hazard_rows`, a count of rows on every clock; `hazard`, the clock
+    // time between changepoints on every clock, rows without one (task 547).
     (
         "bocpd",
-        r#"{"type": "bocpd", "hazard": 250, "covariance_type": "diag"}"#,
+        r#"{"type": "bocpd", "hazard_rows": 250, "covariance_type": "diag"}"#,
         r#""targets": ["x0"], "features": ["x0", "x1"]"#,
         ALL,
     ),
-    // A duration `hazard` is time between changepoints, which a number
-    // clock cannot say: its number is a count of rows on every clock.
     (
         "bocpd_timed",
         r#"{"type": "bocpd", "hazard": @250, "covariance_type": "diag"}"#,
         r#""targets": ["x0"], "features": ["x0", "x1"]"#,
-        &[Clock::Temporal],
+        ALL,
     ),
     (
         "corrchange",

@@ -242,9 +242,9 @@ def test_the_spec_module_states_each_standardize_default():
 def test_the_spec_module_lists_every_clock_parameter():
     """Task 239: *Clock units* lists the parameters measured in clock units.
     Each one a builder's annotation lets take a duration is there, and
-    nothing else, but for ``bocpd``'s ``hazard``, which the next paragraph
-    gives its own two forms, and the diagnostics' memories, which the list
-    names as ``*_half_life``."""
+    nothing else, but for the diagnostics' memories, which the list names as
+    ``*_half_life``, and the counts the paragraph names beside their clock
+    forms (``warm_rows``, ``hazard_rows``)."""
     doc = _spec_module_doc()
     para = doc[doc.index("The clock parameters are") :].split("\n\n", 1)[0]
     named = set(re.findall(r"``([a-z_*]+)``", para)) - set(MINIMAL)
@@ -252,4 +252,5 @@ def test_the_spec_module_lists_every_clock_parameter():
     diagnostics = {k for k in _spec._CLOCK_KEYS if k.endswith("_half_life")} & set(
         _spec._common.__code__.co_varnames
     ) - {"half_life"}
-    assert named - {"*_half_life"} == _spec._CLOCK_KEYS - diagnostics - {"hazard"}
+    counts = {"warm_rows", "hazard_rows"}
+    assert named - {"*_half_life"} - counts == _spec._CLOCK_KEYS - diagnostics

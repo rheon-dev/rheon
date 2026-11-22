@@ -939,6 +939,34 @@ fn refit_span_run(bytes: &[u8], input: &DataFrame) -> Ran {
     bank_run_of(&refit_span_specs(), bytes, input)
 }
 
+/// The specs of `bank_bocpd_hazard` (PLAN 547): `bocpd`'s two hazards,
+/// grouped on `bank_refit`'s stream and number clock, the per-row count
+/// `hazard_rows` and a number `hazard`, clock units, which a number clock
+/// reads as the step's chance of a break before each row.
+fn bocpd_hazard_specs() -> Vec<Spec> {
+    [
+        r#"{"name": "per_row", "model": {"type": "bocpd", "hazard_rows": 30.0, "mean_prior": [0.0, 0.0], "covariance_prior": [1.0]}, "features": ["x0", "x1"], "clock": "t", "gap_cap": 10.0, "group": "g", "min_weight": 0.0}"#,
+        r#"{"name": "on_clock", "model": {"type": "bocpd", "hazard": 20.0, "mean_prior": [0.0, 0.0], "covariance_prior": [1.0]}, "features": ["x0", "x1"], "clock": "t", "gap_cap": 10.0, "group": "g", "min_weight": 0.0}"#,
+    ]
+    .iter()
+    .map(|text| serde_json::from_str(text).unwrap_or_else(|e| panic!("{text}: {e}")))
+    .collect()
+}
+
+fn bocpd_hazard_first() -> (Vec<u8>, DataFrame) {
+    let df = refit_frame();
+    let mut bank = Bank::new(bocpd_hazard_specs()).unwrap();
+    bank.fit_predict(&df.slice(0, REFIT_SPLIT)).unwrap();
+    (
+        bank.save_bytes().unwrap(),
+        df.slice(REFIT_SPLIT as i64, REFIT_N - REFIT_SPLIT),
+    )
+}
+
+fn bocpd_hazard_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    bank_run_of(&bocpd_hazard_specs(), bytes, input)
+}
+
 /// The specs of the fifth bank file, `bank_refit`: `huber` and
 /// `sgd(loss = "huber")` grouped, each refitting a target's first 20 rows
 /// (docs/PLAN.md task 277, schema 64). `huber`'s `refit_budget` holds two
@@ -1966,6 +1994,11 @@ fn kinds() -> Vec<Kind> {
             run: refit_span_run,
         },
         Kind {
+            name: "bank_bocpd_hazard",
+            first: bocpd_hazard_first,
+            run: bocpd_hazard_run,
+        },
+        Kind {
             name: "with_windows",
             first: windows_first,
             run: windows_run,
@@ -2443,7 +2476,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
     assert_eq!(
         kinds.into_iter().collect::<Vec<_>>(),
         [
-            ("bank", 15),
+            ("bank", 16),
             ("checkpoint", 1),
             ("merge", 2),
             ("refresh_time", 3),
@@ -3220,6 +3253,16 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
         ("bank_gated", "ewridge's output-only floor", |p, v| {
             p.ends_with(".min_weight_output_only") && v.as_bool() == Some(true)
         }),
+        // PLAN 547: `bocpd`'s per-row count in a spec, and a number hazard
+        // on a number clock read on the clock.
+        ("bank_bocpd_hazard", "a spec's hazard_rows", |p, v| {
+            p.ends_with(".hazard_rows") && v.as_f64() == Some(30.0)
+        }),
+        (
+            "bank_bocpd_hazard",
+            "a number hazard on the clock",
+            |p, v| p.ends_with(".cfg.hazard_on_clock") && v.as_bool() == Some(true),
+        ),
         // PLAN 538: a refit over a span of the clock, in a spec and in each
         // model's buffer, with its first stamp.
         ("bank_refit_span", "a spec's max_state_bytes", |p, v| {

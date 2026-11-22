@@ -357,18 +357,12 @@ and each diagnostic's own ``*_half_life`` below, and in the models
 ``hawkes``' ``kernel_half_lives``, a list of them, ``garch``'s
 ``start_span``, ``glm``'s and ``expectile``'s ``refit_span``, and
 ``kmeans``' ``warm_span``, ``update_every`` and ``split_merge_every``,
-``hmm``'s and ``bocpd``'s ``warm_span``, ``corrchange``'s
-``permute_every``, ``huber``'s and ``sgd``'s ``huber_refit_span`` and
-``quantile``'s ``quantile_refit_span``.
-
-One parameter takes either form, with a meaning for each: ``bocpd``'s
-``hazard``. A number, finite and above 1, is the expected rows between
-changepoints, on any clock.
-It binds to no clock unit, so it stands beside durations on a temporal clock.
-A duration is the expected time between changepoints. It is a clock
-parameter like the rest, so it needs a temporal clock and refuses a plain
-number beside it. :func:`rheon.spec.bocpd` says when each form's
-chance of a break applies.
+``hmm``'s and ``bocpd``'s ``warm_span``, ``bocpd``'s ``hazard``,
+``corrchange``'s ``permute_every``, ``huber``'s and ``sgd``'s
+``huber_refit_span`` and ``quantile``'s ``quantile_refit_span``. Each that
+counts rows where the quantity has a meaning on the clock has its count
+beside it, such as ``warm_rows`` beside ``warm_span`` and ``bocpd``'s
+``hazard_rows`` beside ``hazard``, and the two are refused together.
 
 Each mixture is refused, naming the column, the parameter and the fix: a
 temporal clock with a clock parameter given as a plain number, a numeric clock

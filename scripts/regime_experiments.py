@@ -522,7 +522,7 @@ def delay(seeds: int = 20) -> None:
     boc = rp.spec.bocpd(
         "b",
         features=["x0", "x1", "x2"],
-        hazard=500.0,
+        hazard_rows=500.0,
         covariance_type="full",
         degrees_of_freedom_prior=5.0,
         covariance_prior=[0.1],

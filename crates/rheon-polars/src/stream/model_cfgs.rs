@@ -205,6 +205,10 @@ pub fn garch_cfg(spec: &Spec) -> Result<rheon_core::GarchCfg, String> {
 /// A `garch` spec's start, in rows, when it gives neither rows nor a span.
 pub const GARCH_START_ROWS: usize = 2000;
 
+/// A `bocpd` spec's expected rows between changepoints, where it gives
+/// neither `hazard_rows` nor `hazard`.
+pub const BOCPD_HAZARD_ROWS: f64 = 250.0;
+
 /// A `bocpd` spec's [`BocpdCfg`]; every parameter check is the model's.
 pub fn bocpd_cfg(spec: &Spec) -> Result<BocpdCfg, String> {
     let ModelKind::Bocpd {
@@ -220,6 +224,7 @@ pub fn bocpd_cfg(spec: &Spec) -> Result<BocpdCfg, String> {
         max_run,
         warm_rows,
         warm_span,
+        hazard_rows,
     } = &spec.model
     else {
         return Err(not_a(spec, "bocpd_cfg", "bocpd"));
@@ -259,10 +264,16 @@ pub fn bocpd_cfg(spec: &Spec) -> Result<BocpdCfg, String> {
     };
     Ok(BocpdCfg {
         n_features: spec.k(),
-        // A number is the expected rows between changepoints; a duration,
-        // which only a temporal clock reads (`Spec::clock_scale`), the
-        // expected time between them, in the clock's seconds (task 179).
-        hazard: hazard.as_ref().map_or(250.0, Span::value),
+        // `hazard` is the expected clock time between changepoints, in clock
+        // units: rows without a clock, the column's units on a number clock,
+        // seconds on a temporal one (tasks 179 and 547). `hazard_rows`, or
+        // neither, the expected rows between them; `Spec::validate` refuses
+        // both.
+        hazard: hazard
+            .as_ref()
+            .map(Span::value)
+            .or(*hazard_rows)
+            .unwrap_or(BOCPD_HAZARD_ROWS),
         hazard_from_row: hazard_col.is_some(),
         // The covariance's words and the tempering, which `emission` once
         // said in one word: `"gaussian"` was `"full"`, `"robust"` the
@@ -277,7 +288,7 @@ pub fn bocpd_cfg(spec: &Spec) -> Result<BocpdCfg, String> {
         max_run: max_run.unwrap_or(10_000),
         min_weight: spec.min_periods_or_default(),
         warm_rows: *warm_rows,
-        hazard_on_clock: hazard.as_ref().is_some_and(Span::is_duration),
+        hazard_on_clock: hazard.is_some(),
         warm_clock: warm_span.as_ref().map(Span::value),
     })
 }

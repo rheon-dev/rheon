@@ -412,13 +412,9 @@ def _instants(step: int):
 #: every kind the Rust side's tables list (``spec_clock_fields``, which
 #: `test_temporal_clock.py` holds to the builders), so a kind that gains one
 #: is drawn here the day it does -- `marginal`'s ``window_size`` was missed
-#: from a list written by hand (review 2026-10-05, TB5). The second table's
-#: kinds too, a duration or a number of rows (``bocpd``'s ``hazard``, task
-#: 179). And `rls`, which has none of its own, for the shared ``embargo`` the
-#: strategy draws for it.
-CLOCK_MODELS = sorted(
-    {b for b in MINIMAL if _kind(b) in _tables()[0] or _kind(b) in _tables()[2]} | {"rls"}
-)
+#: from a list written by hand (review 2026-10-05, TB5). And `rls`, which
+#: has none of its own, for the shared ``embargo`` the strategy draws for it.
+CLOCK_MODELS = sorted({b for b in MINIMAL if _kind(b) in _tables()[0]} | {"rls"})
 
 
 @st.composite
@@ -507,12 +503,13 @@ def clock_specs(draw, model: str, step: int, cap: int):
     elif model == "bocpd":
         # Task 179: the hazard on the clock, each step's chance of a break
         # applied before the row it leads into, ties and capped gaps among
-        # the steps drawn.
-        kw |= dict(
-            features=["x0", "x1"],
-            hazard=steps(1, 60),
-            degrees_of_freedom_prior=2.0,
-        )
+        # the steps drawn; or (task 547) the per-row count, beside the
+        # clock's durations.
+        kw |= dict(features=["x0", "x1"], degrees_of_freedom_prior=2.0)
+        if draw(st.booleans()):
+            kw["hazard"] = steps(1, 60)
+        else:
+            kw["hazard_rows"] = draw(st.floats(1.5, 200.0))
         # Task 538: the prior's scale from a warm-up over a span, or given.
         if draw(st.booleans()):
             kw["warm_span"] = steps(1, 10)
@@ -740,7 +737,7 @@ class TestADelayedLabel:
 #: reason to the builder's refusal.
 N_EFF_EXEMPT = {
     "seqtest": "whose test does not forget",
-    "bocpd": "which forgets at each break, at the rate hazard sets",
+    "bocpd": "which forgets at each break, at the rate hazard_rows or hazard sets",
     "rcov": "whose covariance is a sum over each block that group_close ends, with no decay",
     "audit": "which counts every row with no decay",
     "garch": (

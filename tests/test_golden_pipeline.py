@@ -249,7 +249,7 @@ def specs() -> list[dict]:
         rp.spec.bocpd(
             "bocpd",
             features=["x0", "x1"],
-            hazard=40.0,
+            hazard_rows=40.0,
             covariance_type="diag",
             covariance_prior=[1.0],
             prune_below=1e-8,

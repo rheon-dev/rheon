@@ -584,7 +584,7 @@ def bocpd_run(x: np.ndarray, w: np.ndarray, kappa0: float, offset: float) -> pl.
     spec = rp.spec.bocpd(
         "b",
         features=["x"],
-        hazard=BOCPD_HAZARD,
+        hazard_rows=BOCPD_HAZARD,
         covariance_type="diag",
         mean_prior=[offset],
         mean_precision_prior=kappa0,

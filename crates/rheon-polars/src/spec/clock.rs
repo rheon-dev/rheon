@@ -69,7 +69,7 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
         &["warm_span", "update_every", "split_merge_every"],
     ),
     ("hmm", &["warm_span"]),
-    ("bocpd", &["warm_span"]),
+    ("bocpd", &["hazard", "warm_span"]),
     ("corrchange", &["permute_every"]),
     ("ew_class", &["window_size", "snapshot_every"]),
     ("marginal", &["window_size", "snapshot_every"]),
@@ -78,18 +78,6 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
     ("glm", &["refit_span"]),
     ("garch", &["start_span"]),
 ];
-
-/// The parameters that take a duration on a temporal clock or a number that
-/// binds to no clock unit, each meaning something of its own: `bocpd`'s
-/// `hazard`, a number of rows between changepoints on any spec, or a
-/// duration, the expected time between them (docs/PLAN.md task 179). A
-/// number here is legal beside durations, so these are not
-/// [`CLOCK_FIELDS`]; [`Spec::clock_spans`] reads one only when it is a
-/// duration, which then meets every rule a clock parameter does.
-/// `clock_fields_are_exactly_the_fields_that_take_a_duration` holds the two
-/// tables together to the types, and `a_duration_or_a_count_is_read_only_
-/// as_a_duration` holds this one to `clock_spans`.
-pub const DURATION_OR_UNIT_FREE_FIELDS: &[(&str, &[&str])] = &[("bocpd", &["hazard"])];
 
 /// The parameters that are a rate *per* clock unit: a decay factor per unit
 /// (`lam`) and a variance per unit (`kalman`'s `q`). A rate has no duration
@@ -493,14 +481,12 @@ impl Spec {
             ModelKind::Garch { start_span, .. } => {
                 put(&mut out, "start_span", start_span.as_ref());
             }
-            // A number of rows binds to no clock unit
-            // ([`DURATION_OR_UNIT_FREE_FIELDS`]).
+            // A number is clock units, rows without a clock, as every other
+            // span's (task 547); the count of rows is `hazard_rows`.
             ModelKind::Bocpd {
                 hazard, warm_span, ..
             } => {
-                if let Some(h) = hazard.as_ref().filter(|h| h.is_duration()) {
-                    put(&mut out, "hazard", Some(h));
-                }
+                put(&mut out, "hazard", hazard.as_ref());
                 put(&mut out, "warm_span", warm_span.as_ref());
             }
             _ => {}

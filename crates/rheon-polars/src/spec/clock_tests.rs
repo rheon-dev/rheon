@@ -2,7 +2,7 @@
 //! repository's 250 KB cap for a source file (`tests/test_repo_hygiene.py`)
 //! with task 223 (b)'s `audit`.
 
-use super::{CLOCK_FIELDS, ClockScale, DURATION_OR_UNIT_FREE_FIELDS, ModelKind, Spec};
+use super::{CLOCK_FIELDS, ClockScale, ModelKind, Spec};
 use crate::span::Span;
 use std::collections::BTreeSet;
 
@@ -57,88 +57,71 @@ fn clock_fields_are_exactly_the_fields_that_take_a_duration() {
             .flat_map(|(owner, fields)| fields.iter().map(|f| (owner.to_string(), f.to_string())))
             .collect()
     };
-    // Two tables: a clock parameter, and one that takes a duration or a
-    // number bound to no clock unit (task 179). A field is in one.
-    let (clock, either) = (table(CLOCK_FIELDS), table(DURATION_OR_UNIT_FREE_FIELDS));
-    assert!(
-        clock.is_disjoint(&either),
-        "{:?}",
-        clock.intersection(&either)
-    );
+    let clock = table(CLOCK_FIELDS);
     assert!(
         found.len() > 15,
         "the walk found too little to mean anything: {found:?}"
     );
     assert_eq!(
-        found,
-        &clock | &either,
-        "CLOCK_FIELDS and DURATION_OR_UNIT_FREE_FIELDS against the fields that take a duration"
+        found, clock,
+        "CLOCK_FIELDS against the fields that take a duration"
     );
 }
 
-/// A field of [`DURATION_OR_UNIT_FREE_FIELDS`] is read by `clock_spans`
-/// as a duration and not at all as a number (task 179): `bocpd`'s
-/// `hazard` of `"1h"` binds the spec to a temporal clock, and one of 250
-/// rows binds it to nothing, so it stands beside durations. A duration
-/// there meets every rule a clock parameter does: refused without a
-/// clock, and beside a plain number.
+/// `bocpd`'s two hazards (task 547): `hazard` is a clock parameter like
+/// every other -- a number is clock units, rows without a clock, so it
+/// binds a spec to a number clock and is refused beside a duration -- and
+/// `hazard_rows` is a count of rows, which binds the spec to no clock and
+/// stands beside durations. Task 179 read a number `hazard` as rows on
+/// every clock; that reading is `hazard_rows` now.
 #[test]
-fn a_duration_or_a_count_is_read_only_as_a_duration() {
-    // Filled, as a bank fills a spec before it runs it: the model with
-    // no target takes `features[0]` for its targets slot.
-    let build = |owner: &str, field: &str, value: &str, rest: &str| -> Spec {
+fn bocpds_hazard_is_a_clock_parameter_and_hazard_rows_a_count() {
+    let build = |model: &str, rest: &str| -> Spec {
         let mut spec: Spec = serde_json::from_str(&format!(
-            r#"{{"name": "m", "model": {{"type": "{owner}", "{field}": {value}}},
-                "features": ["x"]{rest}}}"#
+            r#"{{"name": "m", "model": {{"type": "bocpd", {model}}}, "features": ["x"]{rest}}}"#
         ))
-        .unwrap_or_else(|e| panic!("{owner}.{field} = {value}: {e}"));
+        .unwrap_or_else(|e| panic!("{model}: {e}"));
         spec.fill_defaults();
         spec
     };
-    let mut walked = 0;
-    for (owner, fields) in DURATION_OR_UNIT_FREE_FIELDS {
-        for &field in *fields {
-            let clock = r#", "clock": "t", "gap_cap": "1h""#;
-            let duration = build(owner, field, r#""10m""#, clock);
-            assert!(
-                duration
-                    .clock_spans()
-                    .iter()
-                    .any(|(f, s)| *f == field && s.is_duration()),
-                "{owner}.{field}: a duration is not read"
-            );
-            duration.validate().unwrap();
-            let number = build(owner, field, "250", clock);
-            assert!(
-                number.clock_spans().iter().all(|(f, _)| *f != field),
-                "{owner}.{field}: a number is read as clock units"
-            );
-            assert_eq!(number.clock_scale(), Ok(ClockScale::Durations("gap_cap")));
-            number.validate().unwrap();
-            // Nor does a number bind a spec with no clock at all.
-            assert_eq!(
-                build(owner, field, "250", "").clock_scale(),
-                Ok(ClockScale::Free)
-            );
-            let err = build(owner, field, r#""10m""#, "").validate().unwrap_err();
-            assert!(
-                err.contains(&format!("{field} is a duration, but the spec has no clock")),
-                "{err}"
-            );
-            let mixed = r#", "clock": "t", "gap_cap": 300"#;
-            let err = build(owner, field, r#""10m""#, mixed)
-                .validate()
-                .unwrap_err();
-            assert!(
-                err.contains(&format!(
-                    "{field} is a duration but gap_cap is a plain number"
-                )),
-                "{err}"
-            );
-            walked += 1;
-        }
+    let temporal = r#", "clock": "t", "gap_cap": "1h""#;
+    let number = r#", "clock": "t", "gap_cap": 300"#;
+    let read = |s: &Spec| -> Vec<(&'static str, Span)> {
+        s.clock_spans()
+            .into_iter()
+            .filter(|(f, _)| *f == "hazard")
+            .collect()
+    };
+    // A duration: read, and bound to a temporal clock.
+    let d = build(r#""hazard": "10m""#, temporal);
+    assert!(read(&d).iter().all(|(_, s)| s.is_duration()) && read(&d).len() == 1);
+    d.validate().unwrap();
+    // A number: read as clock units, so it binds the spec to numbers.
+    let n = build(r#""hazard": 250"#, number);
+    assert_eq!(read(&n).len(), 1);
+    assert_eq!(n.clock_scale(), Ok(ClockScale::Numbers("gap_cap")));
+    n.validate().unwrap();
+    assert_eq!(
+        build(r#""hazard": 250"#, "").clock_scale(),
+        Ok(ClockScale::Numbers("hazard"))
+    );
+    let err = build(r#""hazard": 250"#, temporal).validate().unwrap_err();
+    assert!(err.contains("hazard is a plain number"), "{err}");
+    let err = build(r#""hazard": "10m""#, "").validate().unwrap_err();
+    assert!(
+        err.contains("hazard is a duration, but the spec has no clock"),
+        "{err}"
+    );
+    // A count of rows binds nothing: beside durations, numbers, or none.
+    for rest in [temporal, number, ""] {
+        let rows = build(r#""hazard_rows": 250"#, rest);
+        assert!(read(&rows).is_empty(), "{rest}");
+        rows.validate().unwrap_or_else(|e| panic!("{rest}: {e}"));
     }
-    assert_eq!(walked, 1);
+    assert_eq!(
+        build(r#""hazard_rows": 250"#, temporal).clock_scale(),
+        Ok(ClockScale::Durations("gap_cap"))
+    );
 }
 
 /// A spec whose one clock parameter under test is a duration.

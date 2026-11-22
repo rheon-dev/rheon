@@ -85,7 +85,7 @@ what it holds](../how-to/find-an-output-field.md).
 **Some settings take a list that is not a grid, and some take no list.**
 `kalman`'s `coef_half_life`, its drift speed, takes one value per
 coefficient. `sgd`'s `learning_rate`, `holt`'s `trend_half_life` and
-`bocpd`'s `hazard` take a single value. For each of them, give the bank
+`bocpd`'s `hazard_rows` and `hazard` take a single value. For each of them, give the bank
 one spec per value, which `rp.eval.grid_search` builds from its
 `param_grid`.
 The bank still reads the stream once for all of them. [Choose a setting that takes no list](../CALIBRATION.md#choose-a-setting-that-takes-no-list)

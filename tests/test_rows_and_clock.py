@@ -112,7 +112,7 @@ ITEMS: dict[str, Item] = {
     ),
     "bocpd.warm_span": Item(
         "bocpd",
-        dict(features=["x0", "x1"], hazard=50.0, covariance_type="diag"),
+        dict(features=["x0", "x1"], hazard_rows=50.0, covariance_type="diag"),
         lambda n: dict(warm_rows=n),
         lambda v: dict(warm_span=v),
         start=True,
