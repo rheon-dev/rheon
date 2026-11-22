@@ -60,6 +60,7 @@ MODELS = [
     ("glm", {}),
     ("expectile", {"expectile": 0.8}),
     ("holt", {"features": None}),  # no features keyword
+    ("ar", {"lags": 2}),
 ]
 IDS = [m[0] for m in MODELS]
 

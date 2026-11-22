@@ -44,7 +44,8 @@ def _out(spec: dict, df: pl.DataFrame) -> pl.DataFrame:
 
 
 def _last_coef(out: pl.DataFrame) -> np.ndarray:
-    return np.asarray(out["coef"][-1][0])
+    """The coefficients after the last row: one target's, flat."""
+    return np.asarray(out["coef"][-1].to_list())
 
 
 def _rel(got, want) -> float:
@@ -98,7 +99,7 @@ def test_decay_is_weighted_least_squares_on_the_clock():
         pl.Series("w", rng.uniform(0.5, 1.5, n)),
     )
     spec = rp.spec.ar(
-        "a", targets=["y"], lags=2, features=["x"], clock="t", weight="w", half_life=h
+        "a", targets=["y"], lags=2, features=["x"], clock="t", gap_cap=10.0, weight="w", half_life=h
     )
     got = _last_coef(_out(spec, df))
     y, x, t, w = (df[c].to_numpy() for c in ("y", "x", "t", "w"))
@@ -155,7 +156,8 @@ def test_a_zero_weight_row_counts_in_no_clock():
         pl.when(pl.Series(zero)).then(1e6).otherwise(pl.col("y")).alias("y"),
     )
     spec = rp.spec.ar(
-        "a", targets=["y"], lags=2, features=["x"], clock="t", weight="w", half_life=60.0,
+        "a", targets=["y"], lags=2, features=["x"], clock="t", gap_cap=10.0, weight="w",
+        half_life=60.0,
         coef_every=0,
     )
     full = _out(spec, df)
@@ -175,7 +177,7 @@ def test_a_session_change_empties_the_lags_and_keeps_the_fit():
         pl.Series("t", np.arange(1200, dtype=float)),
     )
     spec = rp.spec.ar(
-        "a", targets=["y"], lags=2, features=["x"], clock="t", session="s",
+        "a", targets=["y"], lags=2, features=["x"], clock="t", gap_cap=10.0, session="s", session_gap=1.0,
         half_life=float("inf"),
     )
     out = _out(spec, df)
@@ -202,11 +204,12 @@ def test_each_target_is_its_own_series():
     for j, t in enumerate(("y", "z")):
         one = _out(rp.spec.ar("a", targets=[t], **kw), df)
         assert both[f"pred_{t}"].equals(one[f"pred_{t}"], null_equal=True)
-        coef = both["coef"].list.get(j)
-        assert coef.equals(one["coef"].list.get(0), null_equal=True)
+        # four coefficients a target: the intercept, two lags, the feature
+        coef = both["coef"].list.slice(4 * j, 4)
+        assert coef.equals(one["coef"], null_equal=True)
 
 
-@pytest.mark.parametrize("kw", [{}, {"half_life": 50.0, "weight": "w"}])
+@pytest.mark.parametrize("kw", [{"half_life": float("inf")}, {"half_life": 50.0, "weight": "w"}])
 def test_chunk_invariance(kw):
     df = _series(700, 10).with_columns(
         pl.Series("g", np.where(np.arange(700) % 3 == 0, "a", "b")),
@@ -249,10 +252,12 @@ def test_a_weight_scales_nothing_but_the_weight():
 def test_names_match_the_realized_struct():
     df = _series(200, 13).with_columns(pl.col("y").alias("z"))
     for kw in ({}, {"features": ["x"]}, {"fit_intercept": False}):
-        spec = rp.spec.ar("a", targets=["y", "z"], lags=[1, 3], **kw)
+        spec = rp.spec.ar("a", targets=["y", "z"], lags=[1, 3], half_life=50.0, **kw)
         out = rp.ModelBank([spec]).fit_predict(df)
         assert [f.name for f in out.schema["a"].fields] == rp.spec.output_fields(spec)
-    terms = rp.spec.coef_index(rp.spec.ar("a", targets=["y"], lags=[1, 3], features=["x"]))
+    terms = rp.spec.coef_index(
+        rp.spec.ar("a", targets=["y"], lags=[1, 3], features=["x"], half_life=50.0)
+    )
     assert terms["term"].to_list() == ["intercept", "lag1", "lag3", "x"]
 
 
@@ -260,10 +265,10 @@ def test_the_state_cap_on_both_sides():
     """An AR(3) of one target and no features holds at most
     ``8·3 + 8(4·4² + 16·4 + 64)`` = 1,560 bytes: taken at that cap, refused
     a byte under it."""
-    ok = rp.spec.ar("a", targets=["y"], lags=3, max_state_bytes=1560)
-    rp.ModelBank([ok])
+    kw = dict(targets=["y"], lags=3, half_life=50.0)
+    rp.ModelBank([rp.spec.ar("a", max_state_bytes=1560, **kw)])
     with pytest.raises(ValueError, match="past max_state_bytes of 1559"):
-        rp.ModelBank([rp.spec.ar("a", targets=["y"], lags=3, max_state_bytes=1559)])
+        rp.spec.ar("a", max_state_bytes=1559, **kw)
 
 
 @pytest.mark.parametrize(
@@ -281,4 +286,4 @@ def test_the_state_cap_on_both_sides():
 )
 def test_refusals(kw, says):
     with pytest.raises(ValueError, match=says):
-        rp.ModelBank([rp.spec.ar("a", targets=["y"], **kw)])
+        rp.spec.ar("a", targets=["y"], half_life=50.0, **kw)

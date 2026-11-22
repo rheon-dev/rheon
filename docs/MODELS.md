@@ -2201,8 +2201,12 @@ for row in bank.coef().iter_rows(named=True):
 ```
 
 ```text
-EXAMPLE_OUTPUT
+intercept: 2.022
+lag1: 0.603
+lag2: -0.309
 ```
+
+The fit lands within sampling error of `(2, 0.6, −0.3)` after 20,000 rows.
 
 #### See also
 

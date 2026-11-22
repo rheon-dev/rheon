@@ -313,6 +313,7 @@ def describe_api(cli: Path | None = None) -> str:
         ("audit", dict(columns=["x0", "x1"], pairs=True)),
         ("hawkes", dict(targets=["y", "z"], kernel_decays=[1.0, 5.0], half_life=100.0)),
         ("garch", dict(targets=["y", "z"], vol="gjr", dist="t", horizon=3)),
+        ("ar", dict(targets=["y", "z"], features=["x0"], lags=[1, 3], half_life=100.0)),
         (
             "deco blocked",
             dict(

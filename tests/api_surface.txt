@@ -103,6 +103,14 @@
   group_close = None
 
 [spec constructors]  # keyword names AND defaults are API
+  ar:
+    name
+    targets
+    lags
+    features = None
+    ridge = None
+    max_state_bytes = None
+    common
   audit:
     name
     columns
@@ -505,6 +513,24 @@
     stream.resid_autocorr_lag = 1
     stream.robust_se_lags = 0
     stream.window_budget = null
+  ar(features=['x0'], half_life=50.0, lags=2, targets=['y']):
+    model.decay.Halflife = 50.0
+    model.fit_intercept = true
+    model.lags = [1, 2]
+    model.max_state_bytes = null
+    model.min_weight = 4.0
+    model.n_features = 1
+    model.n_targets = 1
+    model.ridge = 0.0
+    stream.breaks_half_life = 50.0
+    stream.calibration_half_life = 200.0
+    stream.feature_health_half_life = 50.0
+    stream.influence_half_life = 50.0
+    stream.max_error_inflation = "inf"
+    stream.min_weight = [4.0]
+    stream.robust_se_half_life = 50.0
+    stream.specification_half_life = 50.0
+    stream.tails_half_life = 50.0
   audit(columns=['x0', 'x1']):
     model.distinct_cap = 256
     model.gap_cap = null
@@ -2359,6 +2385,15 @@
     settled_frac: f64
     withheld_reason: enum
     coef: list[f64]
+  ar minimal:
+    pred_y: f64
+    resid_y: f64
+    pred_z: f64
+    resid_z: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
+    coef: list[f64]
   deco blocked:
     u_a: f64
     u_b: f64
@@ -2387,6 +2422,7 @@
     clock_min: Float64
     clock_max: Float64
     coef: List[Float64]
+  ar: the shared columns only
   bocpd: the shared columns only
   corrchange: the shared columns only
   deco: the shared columns only
@@ -2789,6 +2825,7 @@
     targets
     weight
   [specs.model], by type:
+    ar: lags, max_state_bytes, ridge
     audit: distinct_cap, pairs
     bocpd: covariance_prior, covariance_type, degrees_of_freedom_prior, hazard, hazard_col, max_run, mean_precision_prior, mean_prior, prune_below, robust_beta, warm_rows, warm_span
     corrchange: alpha, alpha_adjust, bandwidth, boundary_gamma, change_action, crit, kind, monitor_rows, n_perm, norm, perm_block, permute_every, permute_every_rows, scalar, seed, window_rows

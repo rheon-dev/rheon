@@ -409,6 +409,20 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         dict(targets=["y", "z"], start_rows=50, horizon=3, group="g", **CLOCK),
         [],
     ),
+    # Each target on its own lags, the features beside them.
+    (
+        "ar",
+        "ar",
+        dict(
+            targets=["y", "z"],
+            features=["x0", "x1"],
+            lags=[1, 2],
+            group="g",
+            half_life=25.0,
+            **CLOCK,
+        ),
+        [],
+    ),
     (
         "hawkes",
         "hawkes",

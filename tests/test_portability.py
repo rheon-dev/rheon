@@ -377,6 +377,7 @@ class TestOutputSchemaStability:
         ("glm", {"features": ["x0", "x1"]}),
         ("expectile", {"features": ["x0", "x1"], "expectile": 0.8}),
         ("holt", {}),
+        ("ar", {"features": ["x0", "x1"], "lags": 2}),
     ]
 
     @pytest.mark.parametrize(("model", "kw"), _ALL_MODELS, ids=[m for m, _ in _ALL_MODELS])

@@ -145,7 +145,7 @@ def ar(
             y.append(2.0 + 0.6 * y[-1] - 0.3 * y[-2] + e)
         pl.DataFrame({"y": y}).write_parquet("series.parquet")
 
-        model = rp.spec.ar("a", targets=["y"], lags=2)
+        model = rp.spec.ar("a", targets=["y"], lags=2, half_life=float("inf"))
         bank = rp.ModelBank([model])
         bank.fit(pl.scan_parquet("series.parquet"))
         coef = {row["term"]: row["coef"] for row in bank.coef().iter_rows(named=True)}
@@ -155,7 +155,7 @@ def ar(
     .. code-block:: text
 
         lag1: true 0.6, found 0.60
-        lag2: true -0.3, found -0.30
+        lag2: true -0.3, found -0.31
 
     .. rubric:: See also
 

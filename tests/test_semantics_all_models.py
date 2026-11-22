@@ -37,6 +37,8 @@ MODELS = [
     ("expectile", {"expectile": 0.8}),
     # Holt is the one model with no features, so it opts out of the shared set.
     ("holt", {"features": None}),  # no features keyword
+    # The features as exogenous regressors beside two lags of the target.
+    ("ar", {"lags": 2}),
 ]
 
 #: A second configuration of a model above, swept through the same
