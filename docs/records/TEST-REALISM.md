@@ -174,7 +174,7 @@ realistic test and nothing is left to add.
 | | F | 4 (`_monitor`, `_window`, `_permute_every`, `_sequential`) | R\* (two regimes) | none |
 | | O | `truth_recovery.corrchange_break` (50 seeds: size and power), `test_family_f_grids` (4), `test_corrchange` (statsmodels `S_hac_simple` for `bandwidth`), `corrchange.n_perm` (numpy), `second_opinion_regimes` | R | `perm_block=` and `change_action="reset"`: a limit and self-comparison only |
 | | C | Rust probe D | D | none |
-| `bocpd` | G | 3 (`bocpd`, `_on_the_clock`, `_emissions`) | D: no change point in the stream | a stream with a level shift |
+| `bocpd` | G | 3 (`bocpd`, `_on_the_clock`, `_emissions`) on a stream with no change point (D), and `golden_structured.rs`'s `bocpd_shift` and `bocpd_shift_on_the_clock` (a shift of six standard deviations at row 30: `p_change` and the run length around it, a change called within three rows and the run length 29 at row 59 asserted; on the clock the shift's own step is 20) | D and R\* | none |
 | | F | 3 (`bocpd`, `_warming` (6), `_warm_span` (6)) | R\*; the warming cases D on purpose | none |
 | | O | `second_opinion_bocpd.bocpd_pruning`, `second_opinion_regimes.bocpd_priors` (bayesian-changepoint-detection), `truth_recovery.bocpd_shift`, `bocpd_tcpd`, `bocpd_tcpdbench`, `_robust` (TCPDBench's published F1), `test_bocpd` (scipy `multivariate_t` for `covariance_type="full"`) | R | `max_run` fold (no library truncates this way) |
 | | C | Rust probe D | D | none |

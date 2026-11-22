@@ -237,6 +237,68 @@ fn hmm_regimes_golden() {
     check("hmm_regimes", &got, GOLDEN_HMM_REGIMES);
 }
 
+/// A level shift of five standard deviations at row 30: both features from
+/// N(0, 0.5^2) before, from N((3, -3), 0.5^2) after.
+fn shift_rows() -> Vec<Row> {
+    rows(60, 31337, |i, s| {
+        let (a, b) = if i < 30 { (0.0, 0.0) } else { (3.0, -3.0) };
+        [a + 0.5 * gauss(s), b + 0.5 * gauss(s)]
+    })
+}
+
+fn bocpd_cfg(on_the_clock: bool) -> BocpdCfg {
+    BocpdCfg {
+        n_features: 2,
+        hazard: 30.0,
+        hazard_from_row: false,
+        emission: BocpdEmission::Diag,
+        prior_mean: Some(vec![0.0, 0.0]),
+        prior_kappa: 1.0,
+        prior_nu: Some(2.0),
+        prior_scale: Some(vec![1.0]),
+        robust_beta: 0.0,
+        prune_below: 1e-8,
+        max_run: 100,
+        min_weight: 0.0,
+        warm_rows: None,
+        hazard_on_clock: on_the_clock,
+        warm_clock: None,
+    }
+}
+
+/// `bocpd` on the shift: `p_change` (slot 0) and the most likely run
+/// length (slot 1) at rows 20 and 29 (before), 30, 31, 32 (the shift) and
+/// 59 (a run of 30 after it).
+#[test]
+fn bocpd_shift_golden() {
+    let mut m = Bocpd::new(bocpd_cfg(false)).unwrap();
+    let at = [20, 29, 30, 31, 32, 59];
+    let got = probe(&mut m, &shift_rows(), &[0, 1], &at);
+    let p = |r: usize| got[2 * r];
+    let run = |r: usize| got[2 * r + 1];
+    // Quiet before the shift, a change called within three rows of it, and
+    // a run that counts from it after it.
+    assert!(
+        p(0) < 0.2 && p(1) < 0.2,
+        "a change called in a quiet stretch"
+    );
+    assert!(p(2).max(p(3)).max(p(4)) > 0.5, "the shift is not called");
+    assert!((run(5) - 29.0).abs() <= 3.0, "run length {} at 59", run(5));
+    check("bocpd_shift", &got, GOLDEN_BOCPD_SHIFT);
+}
+
+/// The same shift with the hazard on the clock, and the shift's own step
+/// the long one: a row 20 clock units after its predecessor is likelier to
+/// be a change than one 1 unit after.
+#[test]
+fn bocpd_shift_on_the_clock_golden() {
+    let mut rows = shift_rows();
+    rows[30].2 = 20.0;
+    let mut m = Bocpd::new(bocpd_cfg(true)).unwrap();
+    let got = probe(&mut m, &rows, &[0, 1], &[29, 30, 31, 32, 59]);
+    check("bocpd_shift_clock", &got, GOLDEN_BOCPD_SHIFT_CLOCK);
+}
+
 // --- generated; see the module docs ---
 const GOLDEN_KMEANS_BLOBS: &[f64] = &[
     2.0,
@@ -282,4 +344,30 @@ const GOLDEN_HMM_REGIMES: &[f64] = &[
     -1.711628768195652,
     1.0,
     -2.8097398706368955,
+];
+const GOLDEN_BOCPD_SHIFT: &[f64] = &[
+    0.04203844949534123,
+    20.0,
+    0.04068620572104181,
+    29.0,
+    0.9701692473882619,
+    30.0,
+    0.03480958907139815,
+    1.0,
+    0.03413359878751515,
+    2.0,
+    0.033404090060154275,
+    29.0,
+];
+const GOLDEN_BOCPD_SHIFT_CLOCK: &[f64] = &[
+    0.007475332411326339,
+    29.0,
+    0.9988627220765844,
+    0.0,
+    0.0014787730019219837,
+    1.0,
+    0.0008086697940238442,
+    2.0,
+    7.194893573234455e-5,
+    29.0,
 ];
