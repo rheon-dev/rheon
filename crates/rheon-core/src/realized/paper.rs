@@ -97,9 +97,46 @@ pub fn lee_mykland(r: &[f64], k: usize) -> Vec<f64> {
             if i < k - 1 {
                 return f64::NAN;
             }
-            let before = &r[i + 1 - (k - 1)..i];
+            let before = &r[i - (k - 1)..i];
             let s = multipower(before, 2, 1.0) / (k - 2) as f64;
             r[i] / s.sqrt()
         })
         .collect()
+}
+
+/// The measures of learned returns at their weights, each term decayed by
+/// the age of its latest row: the definition the online form keeps
+/// (`(t_j, r_j, w_j)` the rows that learned a return, oldest first, `t`
+/// their clock, ages read from the last row's clock), written out term by
+/// term with each factor `2^(−age / half_life)` taken directly, not as the
+/// online form's product of each row's factor. `n` is the weight of the
+/// returns, and the second value `σ²`, the weighted mean of the products.
+pub fn weighted(rows: &[(f64, f64, f64)], half_life: f64) -> (Measures, f64, f64) {
+    let Some(&(now, _, _)) = rows.last() else {
+        return (measures(&[]), 0.0, f64::NAN);
+    };
+    let lam = |t: f64| (-((now - t) / half_life)).exp2();
+    let a = |j: usize| rows[j].1.abs();
+    let nw = sum(rows.iter().map(|&(t, _, w)| lam(t) * w));
+    let rv = sum(rows.iter().map(|&(t, r, w)| lam(t) * w * (r * r)));
+    let s_bv = sum((1..rows.len()).map(|j| lam(rows[j].0) * rows[j].2 * (a(j) * a(j - 1))));
+    let p = sum((1..rows.len()).map(|j| lam(rows[j].0) * rows[j].2));
+    let triple = |j: usize, q: f64| {
+        a(j).powf(q) * a(j - 1).powf(q) * a(j - 2).powf(q) * lam(rows[j].0) * rows[j].2
+    };
+    let s_tv = sum((2..rows.len()).map(|j| triple(j, 2.0 / 3.0)));
+    let s_tq = sum((2..rows.len()).map(|j| triple(j, 4.0 / 3.0)));
+    let bv = BV_SCALE * s_bv;
+    let tv = TV_SCALE * s_tv;
+    let tq = nw * (TQ_SCALE * s_tq);
+    let z = nw.sqrt() * (1.0 - bv / rv) / (BNS_THETA * (tq / (bv * bv)).max(1.0)).sqrt();
+    let m = Measures {
+        n: rows.len(),
+        rv,
+        bv,
+        tv,
+        tq,
+        z,
+    };
+    (m, nw, s_bv / p)
 }

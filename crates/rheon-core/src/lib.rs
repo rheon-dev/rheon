@@ -214,7 +214,7 @@ pub use rcov::{
     Rcov, RcovCfg, RcovEstimate, RcovKind, parzen, parzen_c_star, phi_11, phi_12, phi_22, preavg_g,
     psi1, psi2,
 };
-pub use realized::{BNS_THETA, BV_SCALE, TQ_SCALE, TV_SCALE};
+pub use realized::{BNS_THETA, BV_SCALE, Realized, RealizedCfg, TQ_SCALE, TV_SCALE};
 pub use refusals::{Refusals, STOPPED, STOPPED_MANY};
 pub use rls::{Rls, RlsCfg};
 pub use robust::{HuberScale, MAD_BAND_OCTAVES, NORMAL_Q3, Robust, RobustCfg, RobustLoss};

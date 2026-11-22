@@ -221,3 +221,405 @@ fn the_per_return_statistic_finds_the_planted_jumps() {
     let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
     assert_eq!(bits(&lm[..1_000]), bits(&l[..1_000]));
 }
+
+// --- the online form: one pass and decay (docs/PLAN.md task 499, part 2) ---
+
+/// A row as the model takes it: clock step, returns, weight.
+type Row = (f64, Vec<Option<f64>>, f64);
+
+fn cfg(n: usize, half_life: f64) -> RealizedCfg {
+    RealizedCfg {
+        n_targets: n,
+        decay: Decay::Halflife(half_life),
+        min_weight: 0.0,
+        max_state_bytes: None,
+    }
+}
+
+fn run(m: &mut Realized, rows: &[Row]) -> Vec<Step> {
+    rows.iter()
+        .map(|(d, y, w)| m.step(&[], y, *d, *w))
+        .collect()
+}
+
+fn unit_rows(r: &[f64]) -> Vec<Row> {
+    r.iter().map(|&x| (1.0, vec![Some(x)], 1.0)).collect()
+}
+
+fn bits(v: &[f64]) -> Vec<u64> {
+    v.iter().map(|x| x.to_bits()).collect()
+}
+
+/// `|a − b|` in units of `cond · ε`, `cond = (RV + BV)/|RV − BV|`: the
+/// test statistic is a difference of the two, so its rounding is theirs
+/// amplified by that much.
+fn z_gap(a: f64, b: f64, rv: f64, bv: f64) -> f64 {
+    let cond = (rv + bv) / (rv - bv).abs();
+    (a - b).abs() / (cond * f64::EPSILON * b.abs().max(1.0))
+}
+
+/// Without decay and at unit weights the online measures of every prefix
+/// are the papers' on the returns before the row, `n − 1` products and `n
+/// − 2` triples, to the rounding of the terms: on realistic days of 2,340
+/// and 23,400 returns, with and without jumps. The largest gaps measured
+/// (ulps): RV 1, BV 2, TV 10, TQ 20 (the cube roots against the papers'
+/// powers), `Z` 0.5 in units of `cond · ε`, `L` 0.
+#[test]
+fn one_pass_is_the_papers_measures_on_every_prefix() {
+    let mut worst = [0.0f64; 6];
+    for (n, seed, jumps) in [(23_400, 1, true), (23_400, 2, false), (2_340, 3, true)] {
+        let r = sv_day(n, seed, jumps);
+        let mut m = Realized::new(cfg(1, f64::INFINITY)).unwrap();
+        let steps = run(&mut m, &unit_rows(&r));
+        for i in (3..n).step_by(97).chain([n - 1]) {
+            let p = paper::measures(&r[..i]);
+            let o = &steps[i].pred;
+            let g = [
+                ulps(o[0], p.rv),
+                ulps(o[1], p.bv),
+                ulps(o[2], p.tv),
+                ulps(o[3], p.tq),
+                z_gap(o[4], p.z, p.rv, p.bv),
+            ];
+            for (w, v) in worst.iter_mut().zip(g) {
+                *w = w.max(v);
+            }
+            assert_eq!(steps[i].n_eff, i as f64);
+            if i % 997 == 3 || i == n - 1 {
+                let l = paper::lee_mykland(&r[..=i], i + 1)[i];
+                worst[5] = worst[5].max(ulps(o[5], l));
+            }
+        }
+        // The final state's own weight is every return's.
+        let mut own = Vec::new();
+        assert!(m.target_n_eff_into(&mut own));
+        assert_eq!(own, vec![n as f64]);
+    }
+    let bound = [2.0, 4.0, 16.0, 32.0, 8.0, 8.0];
+    for (k, (w, b)) in worst.iter().zip(bound).enumerate() {
+        assert!(w <= &b, "output {k}: {w} ulps, bound {b} ({worst:?})");
+    }
+}
+
+/// An irregular clock, steps of 1/64 to 4 units in 64ths so that their
+/// sums are exact and the definition's ages carry no rounding of their
+/// own, and weights in [0.5, 1.5].
+fn irregular(r: &[f64], seed: u64) -> Vec<Row> {
+    let mut s = seed;
+    r.iter()
+        .map(|&x| {
+            let d = (1.0 + (lcg(&mut s) * 256.0).floor()) / 64.0;
+            (d, vec![Some(x)], 0.5 + lcg(&mut s))
+        })
+        .collect()
+}
+
+/// Under a decay the online sums are the definition's weighted sums, each
+/// term decayed by its own age taken in one power: half-lives of 50 and 500
+/// clock units, an irregular clock and unequal weights. The products are
+/// of consecutive returns, each at the weight of its later row; `n` is the
+/// returns' weight. The online form multiplies a factor a row, so its gap
+/// grows with the rows a half-life holds. Measured (ulps): RV 18, BV 19, TV
+/// 14, TQ 30, `Z` 6.2 in units of `cond · ε`, `L` 7, the weight 11.
+#[test]
+fn decay_is_the_weighted_definition() {
+    let r = sv_day(5_000, 11, true);
+    let rows = irregular(&r, 5);
+    let mut worst = [0.0f64; 7];
+    for h in [50.0, 500.0] {
+        let mut m = Realized::new(cfg(1, h)).unwrap();
+        let steps = run(&mut m, &rows);
+        let mut t = 0.0;
+        let learned: Vec<(f64, f64, f64)> = rows
+            .iter()
+            .map(|(d, y, w)| {
+                t += d;
+                (t, y[0].unwrap(), *w)
+            })
+            .collect();
+        for i in (3..rows.len()).step_by(251) {
+            let (p, _, s2) = paper::weighted(&learned[..i], h);
+            let o = &steps[i].pred;
+            let l = learned[i].1 / s2.sqrt();
+            let g = [
+                ulps(o[0], p.rv),
+                ulps(o[1], p.bv),
+                ulps(o[2], p.tv),
+                ulps(o[3], p.tq),
+                z_gap(o[4], p.z, p.rv, p.bv),
+                ulps(o[5], l),
+                ulps(steps[i].n_eff, sum_of_weights(&rows[..i], h)),
+            ];
+            for (w, v) in worst.iter_mut().zip(g) {
+                *w = w.max(v);
+            }
+        }
+        let (_, nw, _) = paper::weighted(&learned, h);
+        let mut own = Vec::new();
+        m.target_n_eff_into(&mut own);
+        assert!(
+            ulps(own[0], nw) <= 64.0,
+            "h {h}: {} {nw} w_sum {} all {} worst {worst:?}",
+            own[0],
+            m.n_eff(),
+            sum_of_weights(&rows, h)
+        );
+    }
+    let bound = [32.0, 32.0, 32.0, 64.0, 16.0, 16.0, 32.0];
+    for (k, (w, b)) in worst.iter().zip(bound).enumerate() {
+        assert!(w <= &b, "output {k}: {w} ulps, bound {b} ({worst:?})");
+    }
+}
+
+/// Every row's weight, each decayed by its age from the last row.
+fn sum_of_weights(rows: &[Row], h: f64) -> f64 {
+    let mut t = 0.0;
+    let ts: Vec<f64> = rows
+        .iter()
+        .map(|(d, _, _)| {
+            t += d;
+            t
+        })
+        .collect();
+    paper::sum(
+        rows.iter()
+            .zip(&ts)
+            .map(|((_, _, w), ti)| (-((t - ti) / h)).exp2() * w),
+    )
+}
+
+/// Rows of weight 0, each carrying a return that is not a number, an
+/// infinity, 1e300 or an ordinary value, learn nothing: without decay
+/// the real rows report what they report without them, to the bit, `L`
+/// included, since the products reach across them to the last return
+/// learned. Under a decay a row of weight 0 handed to the model directly
+/// ages the sums over its step, so splitting a step in two moves the
+/// result only by the rounding of the two factors against the one: the same
+/// rounding taken every third row and held for the rows a half-life of 100
+/// keeps, within 256 ulps (the stream does not hand such rows over, which is
+/// what keeps the bank's result to the bit). A stream that opens with such
+/// rows leaves no NaN.
+#[test]
+fn a_row_of_weight_zero_learns_nothing() {
+    let r = sv_day(2_340, 4, true);
+    let junk = [f64::NAN, f64::INFINITY, 1e300, 0.37, -1e-300];
+    for h in [f64::INFINITY, 100.0] {
+        let clean = unit_rows(&r);
+        let mut with = Vec::new();
+        let mut at = Vec::new();
+        for (i, row) in clean.iter().enumerate() {
+            if i % 3 == 0 {
+                with.push((0.5, vec![Some(junk[i % junk.len()])], 0.0));
+                with.push((0.5, row.1.clone(), 1.0));
+            } else {
+                with.push(row.clone());
+            }
+            at.push(with.len() - 1);
+        }
+        let a = run(&mut Realized::new(cfg(1, h)).unwrap(), &clean);
+        let b = run(&mut Realized::new(cfg(1, h)).unwrap(), &with);
+        for (i, &j) in at.iter().enumerate() {
+            // Under a decay the row of weight 0 just before a row has aged
+            // the sums half a step early; compare the rows after a real row.
+            if !h.is_infinite() && i % 3 == 0 {
+                continue;
+            }
+            if h.is_infinite() {
+                assert_eq!(bits(&a[i].pred), bits(&b[j].pred), "row {i}");
+            } else {
+                let (x, y) = (&a[i].pred, &b[j].pred);
+                for k in [0, 1, 2, 3, 5] {
+                    assert!(
+                        (y[k].is_nan() && x[k].is_nan()) || ulps(y[k], x[k]) <= 256.0,
+                        "row {i} output {k}: {x:?} {y:?}"
+                    );
+                }
+                assert!(
+                    (y[4].is_nan() && x[4].is_nan()) || z_gap(y[4], x[4], x[0], x[1]) <= 64.0,
+                    "row {i}: {x:?} {y:?}"
+                );
+            }
+        }
+    }
+    // A stream that opens with rows of weight 0: nothing learned, nothing
+    // NaN in the state, and the first returns then learned as a fresh
+    // stream's.
+    let mut m = Realized::new(cfg(1, 50.0)).unwrap();
+    for v in junk {
+        m.step(&[], &[Some(v)], 1.0, 0.0);
+    }
+    let s = &m.series[0];
+    assert!(s.hi.iter().chain(&s.lo).all(|v| *v == 0.0) && s.seen == 0);
+    assert_eq!(m.n_eff(), 0.0);
+    let first = m.step(&[], &[Some(0.01)], 1.0, 1.0);
+    assert!(first.pred[..4].iter().all(|v| *v == 0.0));
+    assert!(first.pred[4].is_nan() && first.pred[5].is_nan());
+}
+
+/// A target absent on a row has no return there: its products reach across
+/// the gap to its last return, and the other target is untouched, to the
+/// bit of the same series alone.
+#[test]
+fn an_absent_return_is_skipped_by_its_own_series_alone() {
+    let (r0, r1) = (sv_day(2_340, 8, true), sv_day(2_340, 9, false));
+    let rows: Vec<Row> = (0..r0.len())
+        .map(|i| (1.0, vec![Some(r0[i]), (i % 3 != 1).then_some(r1[i])], 1.0))
+        .collect();
+    let mut both = Realized::new(cfg(2, f64::INFINITY)).unwrap();
+    let steps = run(&mut both, &rows);
+    let alone = run(
+        &mut Realized::new(cfg(1, f64::INFINITY)).unwrap(),
+        &unit_rows(&r0),
+    );
+    let present: Vec<f64> = (0..r1.len())
+        .filter(|i| i % 3 != 1)
+        .map(|i| r1[i])
+        .collect();
+    for i in 0..rows.len() {
+        assert_eq!(
+            bits(&steps[i].pred[..6]),
+            bits(&alone[i].pred),
+            "row {i} {:?} {:?}",
+            &steps[i].pred[..6],
+            alone[i].pred
+        );
+    }
+    for i in (5..rows.len()).step_by(113) {
+        let before = (0..i).filter(|j| j % 3 != 1).count();
+        let p = paper::measures(&present[..before]);
+        let o = &steps[i].pred[6..];
+        assert!(
+            ulps(o[1], p.bv) <= 4.0 && ulps(o[3], p.tq) <= 32.0,
+            "row {i} {o:?} {p:?}"
+        );
+        assert_eq!(o[5].is_nan(), i % 3 == 1, "no return, no statistic");
+    }
+    let mut own = Vec::new();
+    both.target_n_eff_into(&mut own);
+    assert_eq!(own, vec![2_340.0, present.len() as f64]);
+}
+
+/// A save at any point, the first rows included, goes on to the bit, under
+/// a decay, with two targets and an absent return.
+#[test]
+fn a_saved_state_goes_on_to_the_bit() {
+    let (r0, r1) = (sv_day(600, 12, true), sv_day(600, 13, true));
+    let mut s = 3;
+    let rows: Vec<Row> = (0..r0.len())
+        .map(|i| {
+            let d = -lcg(&mut s).ln();
+            (
+                d,
+                vec![Some(r0[i]), (i % 7 != 2).then_some(r1[i])],
+                0.5 + lcg(&mut s),
+            )
+        })
+        .collect();
+    for cut in [0, 1, 2, 3, 4, 97, 450] {
+        let mut m = Realized::new(cfg(2, 40.0)).unwrap();
+        run(&mut m, &rows[..cut]);
+        let bytes = rmp_serde::to_vec(&m.state()).unwrap();
+        let mut back = Realized::restore(&rmp_serde::from_slice(&bytes).unwrap()).unwrap();
+        assert_eq!(m, back);
+        for (d, y, w) in &rows[cut..] {
+            let a = m.step(&[], y, *d, *w);
+            let b = back.step(&[], y, *d, *w);
+            assert_eq!(bits(&a.pred), bits(&b.pred), "cut {cut}");
+            assert_eq!(a.n_eff.to_bits(), b.n_eff.to_bits());
+        }
+        assert_eq!(m, back, "cut {cut}");
+    }
+}
+
+/// Out of sample: a row's own return moves none of its outputs but its own
+/// statistic `L`, which it scales; the next row's outputs move.
+/// `predict_with` is the step without the step.
+#[test]
+fn a_row_reports_from_the_returns_before_it() {
+    let r = sv_day(500, 14, false);
+    let mut m = Realized::new(cfg(1, 200.0)).unwrap();
+    run(&mut m, &unit_rows(&r[..400]));
+    let ahead = m.predict_with(&[], &[Some(r[400])], 1.0);
+    let mut twin = m.clone();
+    let a = m.step(&[], &[Some(r[400])], 1.0, 1.0);
+    let b = twin.step(&[], &[Some(3.0 * r[400])], 1.0, 1.0);
+    assert_eq!(bits(&a.pred), bits(&ahead.pred));
+    assert_eq!(a.n_eff, ahead.n_eff);
+    assert_eq!(bits(&a.pred[..5]), bits(&b.pred[..5]));
+    assert!(ulps(b.pred[5], 3.0 * a.pred[5]) <= 1.0);
+    let (na, nb) = (
+        m.step(&[], &[Some(r[401])], 1.0, 1.0),
+        twin.step(&[], &[Some(r[401])], 1.0, 1.0),
+    );
+    assert!(nb.pred[0] > na.pred[0] && nb.pred[1] > na.pred[1]);
+    // `predict` has no return, so no statistic, and the rest as the step.
+    let p = m.predict(&[], 1.0);
+    let s = m.clone().step(&[], &[Some(r[402])], 1.0, 1.0);
+    assert_eq!(bits(&p.pred[..5]), bits(&s.pred[..5]));
+    assert!(p.pred[5].is_nan());
+}
+
+/// `min_weight` gates each target on its own returns' weight, from both
+/// sides: a target reports once its weight reaches the floor, not a row
+/// before.
+#[test]
+fn min_weight_gates_each_series_on_its_own_weight() {
+    let mut c = cfg(2, f64::INFINITY);
+    c.min_weight = 3.0;
+    let mut m = Realized::new(c).unwrap();
+    let y = |i: usize| vec![Some(0.01 * (i as f64 + 1.0)), (i >= 2).then_some(-0.02)];
+    let steps: Vec<Step> = (0..6).map(|i| m.step(&[], &y(i), 1.0, 1.0)).collect();
+    for (i, s) in steps.iter().enumerate() {
+        assert_eq!(s.pred[0].is_nan(), i < 3, "row {i}");
+        assert_eq!(s.pred[6].is_nan(), i < 5, "row {i}");
+    }
+}
+
+/// The state is `8 + 128 m` bytes whatever the stream's length, and the
+/// settings refuse what they must, each naming the setting: no target, a
+/// bad decay or floor, and a cap of 0, past 64 MiB, or below the state.
+#[test]
+fn the_state_is_a_few_numbers_a_series_and_the_settings_are_checked() {
+    assert_eq!(Realized::state_bytes(1), 136);
+    assert_eq!(Realized::state_bytes(4), 520);
+    let mut m = Realized::new(cfg(3, 10.0)).unwrap();
+    let r = sv_day(23_400, 15, true);
+    let rows: Vec<Row> = r.iter().map(|&x| (1.0, vec![Some(x); 3], 1.0)).collect();
+    run(&mut m, &rows);
+    assert_eq!(m.series.len(), 3);
+    let numbers = 1 + m.series.len() * (2 * SUMS + 4);
+    assert_eq!(8 * numbers as u64, Realized::state_bytes(3));
+    let refuse = |c: RealizedCfg, says: &str| {
+        let e = Realized::new(c).unwrap_err();
+        assert!(e.contains(says), "{e}");
+    };
+    refuse(cfg(0, 10.0), "at least one target");
+    refuse(cfg(1, 0.0), "half_life must be above 0");
+    let mut c = cfg(1, 10.0);
+    c.min_weight = -1.0;
+    refuse(c, "min_weight must be at least 0");
+    for (cap, says) in [
+        (0, "must be above 0"),
+        ((64 << 20) + 1, "at most"),
+        (135, "would hold 136 bytes"),
+    ] {
+        let mut c = cfg(1, 10.0);
+        c.max_state_bytes = Some(cap);
+        refuse(c, says);
+    }
+    let mut c = cfg(1, 10.0);
+    c.max_state_bytes = Some(136);
+    assert!(Realized::new(c).is_ok(), "the cap itself holds");
+}
+
+/// A restored state of the wrong shape is refused as damaged.
+#[test]
+fn a_state_of_the_wrong_shape_is_refused() {
+    let mut m = Realized::new(cfg(2, 10.0)).unwrap();
+    m.series.pop();
+    let e = Realized::restore(&m.state()).unwrap_err().to_string();
+    assert!(e.contains("damaged"), "{e}");
+    let mut m = Realized::new(cfg(1, 10.0)).unwrap();
+    m.series[0].seen = 3;
+    assert!(Realized::restore(&m.state()).is_err());
+}
