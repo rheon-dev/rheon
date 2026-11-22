@@ -42,6 +42,7 @@ fn cfg(lags: Vec<usize>, n_features: usize, decay: Decay) -> ArCfg {
         ridge: 0.0,
         min_weight: 0.0,
         max_state_bytes: None,
+        select: None,
     }
 }
 
@@ -388,12 +389,14 @@ fn the_state_is_bounded_by_its_settings_and_capped() {
     assert!(
         Ar::new(ArCfg {
             max_state_bytes: Some(bytes),
+            select: None,
             ..c.clone()
         })
         .is_ok()
     );
     let err = Ar::new(ArCfg {
         max_state_bytes: Some(bytes - 1),
+        select: None,
         ..c.clone()
     })
     .unwrap_err();
@@ -460,6 +463,7 @@ fn it_refuses_its_settings_by_name() {
     assert!(
         err(ArCfg {
             max_state_bytes: Some(0),
+            select: None,
             ..base.clone()
         })
         .contains("max_state_bytes")
@@ -490,6 +494,7 @@ fn it_refuses_its_settings_by_name() {
         Ar::new(ArCfg {
             lags: vec![1 << 20],
             max_state_bytes: Some(64 << 20),
+            select: None,
             ..base
         })
         .is_ok()
@@ -601,4 +606,134 @@ fn the_early_rows_are_guarded_by_definiteness() {
         assert!(s.pred[0].is_nan(), "row {t}");
     }
     assert!(m.coefficients().is_none());
+}
+
+/// Each order's weighted least squares on the rows after the first `pmax`
+/// values, by faer's LU (`crate::oracle`): its coefficients in `Ar`'s layout
+/// (zeros past the order) and its weighted residual sum of squares.
+fn order_fit(q: usize, pmax: usize, x: &[f64], y: &[f64], v: &[f64]) -> (Vec<f64>, f64) {
+    let rows: Vec<(Vec<f64>, f64, f64)> = (pmax..y.len())
+        .map(|t| {
+            let mut z = vec![1.0];
+            z.extend((1..=q).map(|l| y[t - l]));
+            z.push(x[t]);
+            (z, y[t], v[t])
+        })
+        .collect();
+    let k = q + 2;
+    let mut a = vec![0.0; k * k];
+    let mut b = vec![0.0; k];
+    for i in 0..k {
+        for j in 0..k {
+            a[i * k + j] = oracle::sum(rows.iter().map(|(z, _, w)| w * z[i] * z[j]));
+        }
+        b[i] = oracle::sum(rows.iter().map(|(z, y, w)| w * z[i] * y));
+    }
+    let beta = oracle::solve(&a, &b);
+    let rss = oracle::sum(rows.iter().map(|(z, y, w)| {
+        let e = y - z.iter().zip(&beta).map(|(a, b)| a * b).sum::<f64>();
+        w * e * e
+    }));
+    let mut out = vec![0.0; pmax + 2];
+    out[0] = beta[0];
+    out[1..=q].copy_from_slice(&beta[1..=q]);
+    out[pmax + 1] = beta[q + 1];
+    (out, rss)
+}
+
+/// Order selection is, at every order, the weighted least squares of the
+/// same rows: the order chosen minimizes `n ln RSS + penalty` with Kish's
+/// `n = (Σv)² / Σv²`, and the coefficients reported are that order's fit.
+/// No decay and decay with uneven weights, AIC and BIC, on an AR(2) with a
+/// feature fitted up to order 6.
+#[test]
+fn select_is_the_weighted_least_squares_of_each_order() {
+    let (x, y) = series(1500, 47);
+    let mut s = 9;
+    let ws: Vec<f64> = (0..y.len()).map(|_| 0.5 + lcg(&mut s)).collect();
+    for (decay, weighted) in [(f64::INFINITY, false), (300.0, true)] {
+        for ic in [ArSelect::Aic, ArSelect::Bic] {
+            let mut m = Ar::new(ArCfg {
+                select: Some(ic),
+                ..cfg((1..=6).collect(), 1, Decay::Halflife(decay))
+            })
+            .unwrap();
+            let w: Vec<f64> = if weighted {
+                ws.clone()
+            } else {
+                vec![1.0; y.len()]
+            };
+            for t in 0..y.len() {
+                m.step(&[x[t]], &[Some(y[t])], 1.0, w[t]);
+            }
+            let n = y.len();
+            let v: Vec<f64> = (0..n)
+                .map(|t| w[t] * (-((n - 1 - t) as f64) / decay).exp2())
+                .collect();
+            let tail = &v[6..];
+            let kish = tail.iter().sum::<f64>().powi(2) / tail.iter().map(|a| a * a).sum::<f64>();
+            let pen = |k: usize| match ic {
+                ArSelect::Aic => 2.0 * k as f64,
+                ArSelect::Bic => kish.ln() * k as f64,
+            };
+            let fits: Vec<(Vec<f64>, f64)> = (0..=6).map(|q| order_fit(q, 6, &x, &y, &v)).collect();
+            let crit: Vec<f64> = fits
+                .iter()
+                .enumerate()
+                .map(|(q, (_, rss))| kish * rss.ln() + pen(q + 2))
+                .collect();
+            let best = (0..=6)
+                .min_by(|&a, &b| crit[a].total_cmp(&crit[b]))
+                .unwrap();
+            let got = &m.coefficients().unwrap()[0];
+            let chosen = (1..=6).rev().find(|&l| got[l] != 0.0).unwrap_or(0);
+            assert_eq!(chosen, best, "{ic:?} at half-life {decay}: {crit:?}");
+            assert!(
+                rel_gap(got, &fits[best].0) < 1e-9,
+                "{got:?} vs {:?}",
+                fits[best].0
+            );
+            assert_eq!(best, 2, "the series' own order, found");
+        }
+    }
+}
+
+/// `select` takes lags 1 to its largest order and no ridge, each refused
+/// beside it by name; and both are taken without it.
+#[test]
+fn select_refuses_gapped_lags_and_a_ridge() {
+    let base = ArCfg {
+        select: Some(ArSelect::Bic),
+        ..cfg(vec![1, 2, 3], 1, Decay::Halflife(10.0))
+    };
+    assert!(Ar::new(base.clone()).is_ok());
+    let gapped = ArCfg {
+        lags: vec![1, 3],
+        ..base.clone()
+    };
+    assert!(
+        Ar::new(gapped.clone())
+            .unwrap_err()
+            .contains("lags must be 1 to the largest")
+    );
+    assert!(
+        Ar::new(ArCfg {
+            select: None,
+            ..gapped
+        })
+        .is_ok()
+    );
+    let ridged = ArCfg { ridge: 0.1, ..base };
+    assert!(
+        Ar::new(ridged.clone())
+            .unwrap_err()
+            .contains("Set ridge to 0")
+    );
+    assert!(
+        Ar::new(ArCfg {
+            select: None,
+            ..ridged
+        })
+        .is_ok()
+    );
 }

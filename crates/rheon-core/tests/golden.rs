@@ -871,6 +871,7 @@ fn ar_golden() {
         ridge: 1e-6,
         min_weight: 2.0,
         max_state_bytes: None,
+        select: None,
     })
     .unwrap();
     let mut got = signature(&mut m, 0);

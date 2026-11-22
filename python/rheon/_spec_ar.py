@@ -5,7 +5,7 @@ Import it from :mod:`rheon.spec`.
 
 from __future__ import annotations
 
-from typing import Any, Unpack
+from typing import Any, Literal, Unpack
 
 from rheon._kwargs import CommonKwargs
 from rheon._spec import TargetList, _checked, _common
@@ -20,6 +20,7 @@ def ar(
     features: list[str] | None = None,
     ridge: float | None = None,
     max_state_bytes: int | None = None,
+    select: Literal["aic", "bic"] | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """An autoregression for each target, fitted by exponentially weighted
@@ -67,10 +68,21 @@ def ar(
         least squares.
     ``max_state_bytes``
         The bytes a group's state may hold: per target ``8 max(lags)`` for
-        its lags and at most ``8 (4k² + 16k + 64)`` for its fit, ``k`` the
+        its lags and at most ``8 (4k² + 17k + 64)`` for its fit, ``k`` the
         coefficients a target has. The state's size is fixed by these
         settings, never by the stream's length, so a spec past it is
         refused when it is built. Default 256 KB, ``262144``; at most 64 MiB.
+    ``select``
+        Choose each target's order after every learned row: ``"aic"`` or
+        ``"bic"`` picks the ``q`` in ``0, ..., p`` whose lags ``1, ..., q``
+        (with the features) minimize the criterion, and the prediction and
+        ``coef`` are that order's, its lags past ``q`` reported as 0. Every
+        order is fitted on the same rows, those after the first ``p``
+        values, as statsmodels' ``ar_select_order`` fits them. The count
+        in the criterion is Kish's effective number of rows, ``(Σw)² /
+        Σw²`` over the target's learned rows at their decayed weights: the
+        row count with no decay and unit weights. Needs ``lags`` as an order
+        and ``ridge`` 0. Default none, every lag.
 
     .. rubric:: Output
 
@@ -102,7 +114,8 @@ def ar(
 
     As every builder does (:mod:`rheon.spec`); and ``ValueError`` naming the
     problem for ``lags`` empty, holding a 0, not strictly increasing or past
-    ``2**20``, a ``ridge`` below 0 or not finite, and a state past
+    ``2**20``, a ``ridge`` below 0 or not finite, ``select`` beside lags that
+    are not ``1`` to an order or beside a ridge, and a state past
     ``max_state_bytes``, or a ``max_state_bytes`` of 0 or past 64 MiB.
 
     .. rubric:: The update
@@ -194,4 +207,6 @@ def ar(
         model["ridge"] = ridge
     if max_state_bytes is not None:
         model["max_state_bytes"] = max_state_bytes
+    if select is not None:
+        model["select"] = select
     return _common(name, model, targets=targets, features=features or [], **common)

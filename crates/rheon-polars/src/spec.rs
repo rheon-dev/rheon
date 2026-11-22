@@ -1513,6 +1513,10 @@ pub enum ModelKind {
         /// 256 KB, at most 64 MiB.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_state_bytes: Option<u64>,
+        /// Choose the order, lags `1..=q`, by `"aic"` or `"bic"` after every
+        /// learned row, with Kish's effective count. Absent fits every lag.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        select: Option<String>,
     },
 }
 

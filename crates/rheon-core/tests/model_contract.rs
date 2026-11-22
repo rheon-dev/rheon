@@ -6375,6 +6375,7 @@ fn ar_cfg() -> ArCfg {
         ridge: 0.01,
         min_weight: 3.0,
         max_state_bytes: None,
+        select: None,
     }
 }
 
@@ -6397,11 +6398,31 @@ fn ar() {
         ..ar_cfg()
     };
     assert!(probe_with(Ar::new(pure).unwrap(), 2, Some(&Ar::n_eff)).roundtrips);
+    let chosen = ArCfg {
+        lags: vec![1, 2, 3],
+        ridge: 0.0,
+        select: Some(ArSelect::Aic),
+        ..ar_cfg()
+    };
+    assert!(probe_with(Ar::new(chosen).unwrap(), 2, Some(&Ar::n_eff)).roundtrips);
 }
 
 #[test]
 fn ar_predict_is_the_step() {
     predict_is_the_step_without_the_step(|| Ar::new(ar_cfg()).unwrap(), 2, false);
+    predict_is_the_step_without_the_step(
+        || {
+            Ar::new(ArCfg {
+                lags: vec![1, 2, 3],
+                ridge: 0.0,
+                select: Some(ArSelect::Bic),
+                ..ar_cfg()
+            })
+            .unwrap()
+        },
+        2,
+        false,
+    );
     predict_is_the_step_without_the_step(
         || {
             Ar::new(ArCfg {

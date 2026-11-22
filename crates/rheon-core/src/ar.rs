@@ -119,6 +119,24 @@ pub struct ArCfg {
     /// settings, so it is checked once, when the model is built.
     #[serde(default)]
     pub max_state_bytes: Option<u64>,
+    /// Choose the order by an information criterion after every learned
+    /// row: lags `1..=q` for the `q` in `0..=max(lags)` that minimizes it,
+    /// every order fitted on the same rows, the features in each. `None`
+    /// fits every lag given.
+    #[serde(default)]
+    pub select: Option<ArSelect>,
+}
+
+/// The criterion an [`Ar`] chooses its order by, with Kish's effective
+/// count `n = W² / Σ w²` of the target's learned rows, decayed: for
+/// `p` parameters and residual sum of squares `RSS` (on the weights),
+/// `n ln(RSS) + 2p` (AIC) or `n ln(RSS) + p ln(n)` (BIC), each less the
+/// constants every order shares.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArSelect {
+    Aic,
+    Bic,
 }
 
 impl ArCfg {
@@ -168,6 +186,23 @@ impl ArCfg {
             "ar",
             self.max_state_bytes,
         ));
+        if self.select.is_some() {
+            if self.lags.iter().enumerate().any(|(i, &l)| l != i + 1) {
+                no.refuse(format!(
+                    "ar: select chooses an order, lags 1 to q, so lags must be 1 to the largest \
+                     order to try, but it is {:?}. Give lags as the largest order, or leave out \
+                     select.",
+                    self.lags
+                ));
+            }
+            if self.ridge != 0.0 {
+                no.refuse(format!(
+                    "ar: select compares the orders' least-squares residuals, which a ridge of \
+                     {} would not be. Set ridge to 0, or leave out select.",
+                    self.ridge
+                ));
+            }
+        }
         no.stop_here()?;
         let bytes = Ar::state_bytes(self);
         if bytes > self.cap() {
@@ -228,6 +263,10 @@ pub struct Ar {
     /// Once set it stays: decay scales a Gram and a row adds to it, and
     /// neither takes a definite one back to singular.
     defined: Vec<bool>,
+    /// Under `select`, each target's coefficients at the order chosen
+    /// after its last learned row, in [`Ar::coefficients`]' layout (zeros
+    /// past the order); empty without `select`, or before a fit.
+    chosen: Vec<Vec<f64>>,
     /// The row's design, kept so a row allocates nothing: not state.
     #[serde(skip)]
     z: Vec<f64>,
@@ -249,6 +288,7 @@ impl Ar {
             z: Vec::with_capacity(cfg.n_regressors()),
             one: Step::default(),
             defined: vec![false; cfg.n_targets],
+            chosen: vec![Vec::new(); cfg.n_targets],
             cfg,
         })
     }
@@ -311,19 +351,140 @@ impl Ar {
         }
     }
 
+    /// Target `j`'s prediction at its chosen order for the design `z`
+    /// (lags, then features); NaN before a choice.
+    fn chosen_pred(&self, j: usize, z: &[f64]) -> f64 {
+        let c = &self.chosen[j];
+        if c.is_empty() {
+            return f64::NAN;
+        }
+        let i0 = usize::from(self.cfg.fit_intercept);
+        let base = if i0 == 1 { c[0] } else { 0.0 };
+        base + c[i0..].iter().zip(z).map(|(b, v)| b * v).sum::<f64>()
+    }
+
+    /// The order the criterion `ic` chooses from `fit`'s moments, and its
+    /// coefficients in [`Self::coefficients`]' layout.
+    ///
+    /// The fit holds the system at the largest order `P`. With the features
+    /// put first and the lags after them in order, the system of order `q`
+    /// is its leading block of `e + q` rows (`e` features), and the
+    /// Cholesky factor of a leading block is the leading block of the
+    /// factor. So one factor `S = L Lᵀ` and one forward solve `r = L⁻¹ c`
+    /// give every order's residual mean square, `s_yy − Σ_{i < e+q} r_i²`,
+    /// on the same rows (the learned rows past the first `P` values), and
+    /// its coefficients by one back solve. `S`, `c` and `s_yy` are centred
+    /// with an intercept and raw without one. `None` where the system is
+    /// not definite or the target has no weight.
+    pub(crate) fn select_order(fit: &EwRidge, cfg: &ArCfg, ic: ArSelect) -> Option<Vec<f64>> {
+        let (parts, tm) = fit.gram_parts();
+        let (part, tm) = (parts.first()?, tm?);
+        let (e, p) = (cfg.n_features, cfg.lags.len());
+        let n = e + p;
+        let c = &part.cov;
+        let off = c.k().checked_sub(n)?;
+        let intercept = cfg.fit_intercept;
+        // The reordered index: the features first, then the lags.
+        let orig = |i: usize| if i < e { p + i } else { i - e };
+        let rhs_all = if intercept {
+            &part.cross_centred[0]
+        } else {
+            &part.cross_moments[0]
+        };
+        let roff = rhs_all.len().checked_sub(n)?;
+        let mut l = vec![0.0; n * n];
+        for i in 0..n {
+            for jj in 0..=i {
+                let (a, b) = (off + orig(i), off + orig(jj));
+                let m = if intercept { c.cov(a, b) } else { c.raw(a, b) };
+                let s: f64 = (0..jj).map(|k| l[i * n + k] * l[jj * n + k]).sum();
+                let v = m - s;
+                if i == jj {
+                    // Not above 0, NaN included: no definite system.
+                    if v.is_nan() || v <= 0.0 {
+                        return None;
+                    }
+                    l[i * n + i] = v.sqrt();
+                } else {
+                    l[i * n + jj] = v / l[jj * n + jj];
+                }
+            }
+        }
+        let mut r = vec![0.0; n];
+        for i in 0..n {
+            let s: f64 = (0..i).map(|k| l[i * n + k] * r[k]).sum();
+            r[i] = (rhs_all[roff + orig(i)] - s) / l[i * n + i];
+        }
+        let (mean_y, var_y) = (tm.means()[0], tm.vars()[0]);
+        let syy = if intercept {
+            var_y
+        } else {
+            var_y + mean_y * mean_y
+        };
+        let w = fit.target_weights()[0];
+        let kish = tm.n_kish(&[w])[0]?;
+        if !(w > 0.0 && kish > 0.0) {
+            return None;
+        }
+        let mut best: Option<(f64, usize)> = None;
+        let mut explained = r[..e].iter().map(|v| v * v).sum::<f64>();
+        for q in 0..=p {
+            if q > 0 {
+                explained += r[e + q - 1] * r[e + q - 1];
+            }
+            let rss = w * (syy - explained);
+            let k = (e + q + usize::from(intercept)) as f64;
+            let pen = match ic {
+                ArSelect::Aic => 2.0,
+                ArSelect::Bic => kish.ln(),
+            };
+            // An order that fits exactly, its residual rounding at or below
+            // 0, is the best there is: the first such wins.
+            let value = if rss > 0.0 {
+                kish * rss.ln() + pen * k
+            } else {
+                f64::NEG_INFINITY
+            };
+            if best.is_none_or(|(b, _)| value < b) {
+                best = Some((value, q));
+            }
+        }
+        let (_, q) = best?;
+        // The back solve of the leading block of order q.
+        let m = e + q;
+        let mut beta = vec![0.0; m];
+        for i in (0..m).rev() {
+            let s: f64 = (i + 1..m).map(|k| l[k * n + i] * beta[k]).sum();
+            beta[i] = (r[i] - s) / l[i * n + i];
+        }
+        let i0 = usize::from(intercept);
+        let mut out = vec![0.0; cfg.k_total()];
+        for (i, b) in beta.iter().enumerate() {
+            out[i0 + orig(i)] = *b;
+        }
+        if intercept {
+            let means = &part.means_by_target[0];
+            let moff = means.len() - n;
+            let at_means: f64 = (0..m).map(|i| beta[i] * means[moff + orig(i)]).sum();
+            out[0] = mean_y - at_means;
+        }
+        Some(out)
+    }
+
     pub fn cfg(&self) -> &ArCfg {
         &self.cfg
     }
 
     /// The bytes the state holds at most, by its settings: per target the
-    /// ring, `8 max(lags)`, and the fit's arrays, at most `8 (4k² + 16k +
+    /// ring, `8 max(lags)`, and the fit's arrays, at most `8 (4k² + 17k +
     /// 64)` for `k = k_total` (its centred Gram and the factor it solves
-    /// with, the means, cross-moments and coefficients, and its scalars).
+    /// with, the means, cross-moments and coefficients, the coefficients at
+    /// the order `select` chose, and its scalars).
     /// `tests` holds this above the bytes a state writes, fresh and after a
     /// stream.
     pub fn state_bytes(cfg: &ArCfg) -> u64 {
         let k = cfg.k_total() as u64;
-        let per = 8 * cfg.max_lag() as u64 + 8 * (4 * k * k + 16 * k + 64);
+        let per = 8 * cfg.max_lag() as u64 + 8 * (4 * k * k + 17 * k + 64);
         per.saturating_mul(cfg.n_targets as u64)
     }
 
@@ -334,7 +495,16 @@ impl Ar {
         let k = self.cfg.k_total();
         let mut out = Vec::with_capacity(self.fits.len());
         let mut any = false;
-        for (fit, &defined) in self.fits.iter().zip(&self.defined) {
+        for (j, (fit, &defined)) in self.fits.iter().zip(&self.defined).enumerate() {
+            if self.cfg.select.is_some() {
+                if defined && !self.chosen[j].is_empty() {
+                    any = true;
+                    out.push(self.chosen[j].clone());
+                } else {
+                    out.push(vec![f64::NAN; k]);
+                }
+                continue;
+            }
             // A fit not yet defined reports none.
             match fit.coefficients().filter(|_| defined) {
                 Some(c) => {
@@ -403,7 +573,10 @@ impl Ar {
                 continue;
             }
             Self::design_into(&self.cfg.lags, &self.rings[j], depth, x, &mut z);
-            out.pred[j] = self.fits[j].predict(&z, d_clock).pred[0];
+            out.pred[j] = match self.cfg.select {
+                Some(_) => self.chosen_pred(j, &z),
+                None => self.fits[j].predict(&z, d_clock).pred[0],
+            };
         }
         Self::gate(&mut out.pred, out.n_eff, floor);
     }
@@ -442,7 +615,10 @@ impl OnlineModel for Ar {
                 out.n_eff = self.one.n_eff;
             }
             if full && self.defined[j] {
-                out.pred[j] = self.one.pred[0];
+                out.pred[j] = match self.cfg.select {
+                    Some(_) => self.chosen_pred(j, &self.z),
+                    None => self.one.pred[0],
+                };
             }
             // The fit a learned row taught, checked until it is defined.
             if taught.is_some() && !self.defined[j] {
@@ -452,6 +628,10 @@ impl OnlineModel for Ar {
                     self.cfg.n_regressors(),
                     self.cfg.ridge,
                 );
+            }
+            if let (Some(ic), true, true) = (self.cfg.select, taught.is_some(), self.defined[j]) {
+                self.chosen[j] =
+                    Self::select_order(&self.fits[j], &self.cfg, ic).unwrap_or_default();
             }
             if let Some(v) = yj {
                 let ring = &mut self.rings[j];
@@ -537,6 +717,10 @@ impl OnlineModel for Ar {
                 let want = m.cfg.ridge_cfg();
                 let shaped = m.fits.len() == m.cfg.n_targets
                     && m.defined.len() == m.cfg.n_targets
+                    && m.chosen.len() == m.cfg.n_targets
+                    && m.chosen
+                        .iter()
+                        .all(|c| c.is_empty() || c.len() == m.cfg.k_total())
                     && m.rings.len() == m.cfg.n_targets
                     && m.rings.iter().all(|r| r.len() <= depth)
                     && m.fits.iter().all(|f| *f.cfg() == want);

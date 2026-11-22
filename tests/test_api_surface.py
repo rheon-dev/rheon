@@ -703,6 +703,7 @@ ENUM_PROBES: list[
     ("lasso.closed", "lasso", {"window_size": 100.0}, "model.closed", "word"),
     ("garch.vol", "garch", {"start_rows": 2000}, "model.vol", "word"),
     ("garch.dist", "garch", {}, "model.dist", "word"),
+    ("ar.select", "ar", {"lags": 3}, "model.select", "word"),
     ("marginal.closed", "marginal", {"window_size": 100.0}, "model.closed", "word"),
     ("ew_class.covariance_type", "ew_class", {}, "model.covariance_type", "word"),
     ("ew_class.window_budget", "ew_class", {"window_size": 100.0}, "model.window_budget", "key"),

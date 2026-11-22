@@ -281,7 +281,7 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
         }
     ),
     "ewridge": frozenset({"gram_threads"}),
-    "ar": frozenset({"ridge", "max_state_bytes"}),
+    "ar": frozenset({"ridge", "max_state_bytes", "select"}),
     "expectile": frozenset(
         {
             "ridge",

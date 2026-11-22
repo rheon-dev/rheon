@@ -156,6 +156,7 @@ pub fn ar_cfg(spec: &Spec, decay: rheon_core::Decay) -> Result<rheon_core::ArCfg
         lags,
         ridge,
         max_state_bytes,
+        select,
     } = &spec.model
     else {
         return Err(not_a(spec, "ar_cfg", "ar"));
@@ -169,6 +170,17 @@ pub fn ar_cfg(spec: &Spec, decay: rheon_core::Decay) -> Result<rheon_core::ArCfg
         ridge: ridge.unwrap_or(0.0),
         min_weight: spec.min_periods_or_default(),
         max_state_bytes: *max_state_bytes,
+        select: match select.as_deref() {
+            None => None,
+            Some("aic") => Some(rheon_core::ArSelect::Aic),
+            Some("bic") => Some(rheon_core::ArSelect::Bic),
+            Some(other) => {
+                return Err(format!(
+                    "ar: select must be \"aic\" or \"bic\", but it is {other:?}. Use one of \
+                     those words, or leave out select to fit every lag."
+                ));
+            }
+        },
     };
     cfg.validate()?;
     Ok(cfg)

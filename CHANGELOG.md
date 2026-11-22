@@ -79,9 +79,11 @@ model that only the new build has is listed as an addition and passes.
   make the lags older for the rows predicted than for the rows learned), a
   target predicts once its Gram is positive definite (no count of rows
   guards the early fits; `min_weight` defaults to 0), `emit_se_coef` is
-  `ewridge`'s standard error of each target's fit,
+  `ewridge`'s standard error of each target's fit, `select="aic"` or
+  `"bic"` chooses the order after every learned row with Kish's effective
+  count (`ar_select_order`'s choice with no decay),
   and the state, `8 max(lags)` plus at
-  most `8 (4k² + 16k + 64)` bytes a target, is held to `max_state_bytes`
+  most `8 (4k² + 17k + 64)` bytes a target, is held to `max_state_bytes`
   when the spec is built. Spans: the half-life in rows or on the clock; the
   lags count learned rows only, since a value `ℓ` rows back has no meaning
   on a clock. New in the state at schema 72 (unreleased): the `Ar` variant,

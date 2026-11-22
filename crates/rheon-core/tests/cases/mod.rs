@@ -2603,6 +2603,23 @@ pub fn all() -> Vec<Case> {
             Targets::Linear(2),
             40
         ),
+        // Its order chosen by BIC after every learned row: the chosen
+        // coefficients beside the fit at the largest order.
+        case!(
+            "ar_select",
+            "Ar",
+            Ar,
+            Ar::new(ArCfg {
+                lags: vec![1, 2, 3],
+                ridge: 0.0,
+                select: Some(ArSelect::Bic),
+                ..ar_cfg()
+            })
+            .unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
         // Saved two rows in: rings still filling, no fit yet.
         case!(
             "ar_filling",
@@ -2628,6 +2645,7 @@ fn ar_cfg() -> ArCfg {
         ridge: 0.01,
         min_weight: 2.0,
         max_state_bytes: None,
+        select: None,
     }
 }
 

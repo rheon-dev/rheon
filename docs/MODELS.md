@@ -2232,6 +2232,16 @@ is `AutoReg(missing="drop")`. Under a half-life the coefficients are
 statsmodels' `WLS` on the lag design, each row weighted
 `w·0.5^(age/half_life)` on the clock, within 1e-9 as well.
 
+**`select` chooses the order as `ar_select_order` does.** Every order is
+read from the one fit at the largest: with the features first and the lags
+after, an order's system is a leading block of the largest one's, so one
+Cholesky factor gives every order's residuals. The count in AIC and BIC is
+Kish's effective number of rows, the row count with no decay. With no decay it
+chose `ar_select_order`'s order on all twelve series of true orders 1 to 4
+it was checked on, by AIC and by BIC, with a feature and without. Under
+decay it chose the order that minimizes the criterion over statsmodels'
+`WLS` per order, on all six series checked.
+
 ## Moments and correlation
 
 These models measure the columns you name without fitting a target: their

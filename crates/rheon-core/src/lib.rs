@@ -135,7 +135,7 @@ mod warmup;
 mod window;
 mod window_moments;
 
-pub use ar::{Ar, ArCfg, check_lags as check_ar_lags};
+pub use ar::{Ar, ArCfg, ArSelect, check_lags as check_ar_lags};
 pub use audit::{
     Audit, AuditCfg, ClockReport as AuditClock, ColumnReport as AuditColumn, DISTINCT_CAP,
     MAX_DISTINCT_CAP, NULL, PairReport as AuditPair, is_null,

@@ -18,7 +18,7 @@ import numpy as np
 import polars as pl
 import pytest
 from statsmodels.regression.linear_model import OLS, WLS
-from statsmodels.tsa.ar_model import AutoReg
+from statsmodels.tsa.ar_model import AutoReg, ar_select_order
 from statsmodels.tsa.tsatools import lagmat
 
 from rheon import polars as rp
@@ -278,12 +278,12 @@ def test_names_match_the_realized_struct():
 
 def test_the_state_cap_on_both_sides():
     """An AR(3) of one target and no features holds at most
-    ``8·3 + 8(4·4² + 16·4 + 64)`` = 1,560 bytes: taken at that cap, refused
+    ``8·3 + 8(4·4² + 17·4 + 64)`` = 1,592 bytes: taken at that cap, refused
     a byte under it."""
     kw = dict(targets=["y"], lags=3, half_life=50.0)
-    rp.ModelBank([rp.spec.ar("a", max_state_bytes=1560, **kw)])
-    with pytest.raises(ValueError, match="past max_state_bytes of 1559"):
-        rp.spec.ar("a", max_state_bytes=1559, **kw)
+    rp.ModelBank([rp.spec.ar("a", max_state_bytes=1592, **kw)])
+    with pytest.raises(ValueError, match="past max_state_bytes of 1591"):
+        rp.spec.ar("a", max_state_bytes=1591, **kw)
 
 
 @pytest.mark.parametrize(
@@ -325,3 +325,76 @@ def test_se_coef_is_ewridges_least_squares_covariance():
     design = np.column_stack([np.ones(len(y) - 2), lagmat(y, 2, trim="both"), x[2:]])
     want = np.diag(OLS(y[2:], design).fit().normalized_cov_params)
     np.testing.assert_allclose(se**2 / sigma**2, want, rtol=1e-6)
+
+
+def _chosen(out: pl.DataFrame, p: int, exog: int) -> int:
+    """The order the last row's ``coef`` reports: its last nonzero lag."""
+    c = _last_coef(out)
+    lags = c[1 : 1 + p]
+    nz = np.flatnonzero(lags)
+    return int(nz[-1]) + 1 if nz.size else 0
+
+
+@pytest.mark.parametrize("ic", ["aic", "bic"])
+@pytest.mark.parametrize("exog", [False, True])
+def test_select_is_ar_select_order_with_no_decay(ic, exog):
+    """With no decay ``select`` chooses ``ar_select_order``'s order, every
+    order fitted on the rows after the first ``maxlag``, on each of twelve
+    series whose true orders run 1 to 4; and the fit is ``AutoReg`` at that
+    order on the same rows."""
+    agree = 0
+    for seed in range(12):
+        phi = [(0.6,), (0.5, -0.3), (0.4, 0.2, -0.25), (0.3, 0.2, 0.1, -0.2)][seed % 4]
+        df = _series(1500, 100 + seed, phi=phi)
+        kw = dict(features=["x"]) if exog else {}
+        spec = rp.spec.ar("a", targets=["y"], lags=8, select=ic, half_life=float("inf"), **kw)
+        out = _out(spec, df)
+        y = df["y"].to_numpy()
+        x = df["x"].to_numpy()[:, None] if exog else None
+        lib = ar_select_order(y, 8, ic=ic, trend="c", exog=x)
+        want = max(lib.ar_lags) if lib.ar_lags else 0
+        got = _chosen(out, 8, int(exog))
+        agree += got == want
+        if got == want and want:
+            # AutoReg at that order, on the rows after the first 8.
+            fit = AutoReg(y, lags=want, trend="c", exog=x, hold_back=8).fit().params
+            c = _last_coef(out)
+            ours = np.r_[c[: 1 + want], c[9:]]
+            assert _rel(ours, fit) < 1e-8, (seed, ours, fit)
+    assert agree == 12, f"{ic}: {agree} of 12 orders agree"
+
+
+@pytest.mark.parametrize("ic", ["aic", "bic"])
+def test_select_under_decay_is_weighted_least_squares_per_order(ic):
+    """Under decay and weights, the order is the argmin over WLS fits per
+    order (statsmodels) of ``n ln RSS + penalty``, ``n`` Kish's count of the
+    decayed weights; checked on six series."""
+    h = 300.0
+    for seed in range(6):
+        df = _series(1200, 200 + seed, phi=(0.5, -0.3))
+        rng = np.random.default_rng(seed)
+        w = rng.uniform(0.5, 1.5, df.height)
+        df = df.with_columns(pl.Series("w", w))
+        spec = rp.spec.ar("a", targets=["y"], lags=6, select=ic, weight="w", half_life=h)
+        got = _chosen(_out(spec, df), 6, 0)
+        y = df["y"].to_numpy()
+        n = len(y)
+        v = w[6:] * 0.5 ** ((n - 1 - np.arange(6, n)) / h)
+        kish = v.sum() ** 2 / (v**2).sum()
+        lagged = lagmat(y, 6, trim="both")
+        crit = []
+        for q in range(7):
+            design = np.column_stack([np.ones(n - 6), lagged[:, :q]])
+            rss = WLS(y[6:], design, weights=v).fit().ssr
+            pen = 2.0 if ic == "aic" else np.log(kish)
+            crit.append(kish * np.log(rss) + pen * (q + 1))
+        assert got == int(np.argmin(crit)), (seed, got, crit)
+
+
+def test_select_refusals():
+    with pytest.raises(ValueError, match="lags must be 1 to the largest"):
+        rp.spec.ar("a", targets=["y"], lags=[1, 3], select="bic", half_life=10.0)
+    with pytest.raises(ValueError, match="Set ridge to 0"):
+        rp.spec.ar("a", targets=["y"], lags=3, select="bic", ridge=0.1, half_life=10.0)
+    with pytest.raises(ValueError, match="select"):
+        rp.spec.ar("a", targets=["y"], lags=3, select="hqic", half_life=10.0)  # type: ignore[arg-type]
