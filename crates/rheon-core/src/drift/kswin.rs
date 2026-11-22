@@ -185,6 +185,17 @@ impl Kswin {
         &self.window
     }
 
+    /// Whether a restored state keeps the shape every row relies on: samples
+    /// of at least one row, a ring that holds twice that, no more values
+    /// than it holds, and a level in range.
+    pub fn sound(&self) -> bool {
+        self.stat_size >= 1
+            && self.window_size >= 2 * self.stat_size
+            && self.window.len() <= self.window_size
+            && self.alpha > 0.0
+            && self.alpha < 1.0
+    }
+
     pub fn reset(&mut self) {
         self.window.clear();
         self.rng = SplitMix64::new(self.seed);

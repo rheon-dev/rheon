@@ -2152,7 +2152,15 @@ impl Stream {
         if p.drift.len() != fresh.drift.len() {
             p.ungated_drift = fresh.ungated_drift;
         }
-        take_diag("drift detectors", &mut p.drift, &fresh.drift, |_, _| true)?;
+        // A detector is held to its spec's kind and to a shape its rows run
+        // on (an ADWIN with a level to put a row in, a KSWIN whose ring
+        // holds its samples): a file that says otherwise is damaged.
+        take_diag(
+            "drift detectors",
+            &mut p.drift,
+            &fresh.drift,
+            |saved, fresh| saved.restores_as(fresh),
+        )?;
         // A sketch is held to its own shape too, as `ew_cov`'s is: the next
         // residual indexes its buckets by its pointers (review 2026-10-06,
         // CB2's class).

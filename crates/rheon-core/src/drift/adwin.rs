@@ -191,6 +191,27 @@ impl Adwin {
         self.levels.len()
     }
 
+    /// Whether a restored state keeps the shape every row relies on: a level
+    /// to put a row in, no level past `M` buckets, settings in range, and a
+    /// width that is the rows its buckets hold.
+    pub fn sound(&self) -> bool {
+        let held: f64 = self
+            .levels
+            .iter()
+            .enumerate()
+            .map(|(i, l)| (l.len() as f64) * 2f64.powi(i as i32))
+            .sum();
+        !self.levels.is_empty()
+            && self.levels.len() < 64
+            && self.levels.iter().all(|l| l.len() <= self.max_buckets)
+            && self.delta > 0.0
+            && self.delta < 1.0
+            && self.clock >= 1
+            && self.max_buckets >= 1
+            && self.max_width >= 1
+            && held == self.width
+    }
+
     pub fn reset(&mut self) {
         self.total = 0.0;
         self.var = 0.0;

@@ -81,6 +81,18 @@ impl DriftDetector {
         }
     }
 
+    /// Whether a restored detector is of `fresh`'s kind and keeps the shape
+    /// its rows rely on: a file that says otherwise is damaged, and is
+    /// refused rather than run.
+    pub fn restores_as(&self, fresh: &Self) -> bool {
+        std::mem::discriminant(self) == std::mem::discriminant(fresh)
+            && match self {
+                Self::Adwin(a) => a.sound(),
+                Self::Kswin(k) => k.sound(),
+                _ => true,
+            }
+    }
+
     /// Start again from nothing seen.
     pub fn reset(&mut self) {
         match self {
@@ -203,6 +215,59 @@ mod tests {
             rmp_serde::to_vec_named(&DriftDetector::PageHinkley(ph.clone())).unwrap(),
             rmp_serde::to_vec_named(&ph).unwrap(),
             "the file's form of a Page-Hinkley detector is unchanged"
+        );
+    }
+
+    /// A restored detector of another kind, or of a shape its rows cannot
+    /// run on, is refused; one saved mid-stream restores.
+    #[test]
+    fn a_restored_detector_is_held_to_its_kind_and_shape() {
+        let kinds = every_kind();
+        for (i, a) in kinds.iter().enumerate() {
+            for (j, b) in kinds.iter().enumerate() {
+                assert_eq!(a.restores_as(b), i == j, "{a:?} as {b:?}");
+            }
+        }
+        let fresh = DriftDetector::Adwin(Adwin::new(AdwinCfg::default()));
+        let mut a = fresh.clone();
+        let mut s = 5u64;
+        for _ in 0..500 {
+            a.update(lcg(&mut s), 1.0, 1.0, 1.0);
+        }
+        assert!(a.restores_as(&fresh));
+        let damaged = |edit: &dyn Fn(&mut serde_json::Value)| {
+            let mut v = serde_json::to_value(&a).unwrap();
+            edit(&mut v);
+            serde_json::from_value::<DriftDetector>(v).unwrap()
+        };
+        for edit in [
+            &(|v: &mut serde_json::Value| v["Adwin"]["levels"] = serde_json::json!([]))
+                as &dyn Fn(&mut serde_json::Value),
+            &|v| v["Adwin"]["width"] = serde_json::json!(3.0),
+            &|v| v["Adwin"]["clock"] = serde_json::json!(0),
+            &|v| v["Adwin"]["max_buckets"] = serde_json::json!(1),
+        ] {
+            assert!(!damaged(edit).restores_as(&fresh));
+        }
+        let fresh = DriftDetector::Kswin(Kswin::new(KswinCfg::default()));
+        let mut k = fresh.clone();
+        for _ in 0..150 {
+            k.update(lcg(&mut s), 1.0, 1.0, 1.0);
+        }
+        assert!(k.restores_as(&fresh));
+        let mut v = serde_json::to_value(&k).unwrap();
+        v["Kswin"]["stat_size"] = serde_json::json!(60);
+        assert!(
+            !serde_json::from_value::<DriftDetector>(v)
+                .unwrap()
+                .restores_as(&fresh)
+        );
+        let mut v = serde_json::to_value(&k).unwrap();
+        v["Kswin"]["window_size"] = serde_json::json!(50);
+        assert!(
+            !serde_json::from_value::<DriftDetector>(v)
+                .unwrap()
+                .restores_as(&fresh)
         );
     }
 
