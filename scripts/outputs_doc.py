@@ -374,7 +374,7 @@ SHARED_FIELDS: list[tuple[str, str, str]] = [
         "`unstable_rate` is an `sgd` target whose learning rate is past its stability bound: its "
         "recent steps' gains have a mean square above twice their mean, so each step grows its "
         "own row's residual and the fit diverges. `not_separated` is a `pca` component the data "
-        "does not yet tell apart from a neighbour: the test of the equality of their two "
+        "does not yet tell apart from a neighbor: the test of the equality of their two "
         "eigenvalues does not pass",
         "where nothing was withheld",
     ),

@@ -56,9 +56,9 @@ The user's rule of 2026-11-22: no fixed row count against early data. A
 component is written while the likelihood-ratio test of the equality of
 two eigenvalues (Anderson 1963), `(n - 1) ln(((l + m)/2)^2 / (l m))` at
 Kish's `n`, passes 9.2103 (chi-squared, 2 df, at 1%) against both
-neighbours. A neighbour of no variance is told apart once `n` exceeds the
+neighbors. A neighbor of no variance is told apart once `n` exceeds the
 rows that could leave it at none. The extra kept direction gives the last
-emitted component its neighbour. `min_weight` defaults to 0. The rows a
+emitted component its neighbor. `min_weight` defaults to 0. The rows a
 component is withheld on read `withheld_reason = "not_separated"`, a new
 seventh category of the shared enum.
 

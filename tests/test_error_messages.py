@@ -606,6 +606,7 @@ BUILDERS = {
     rp.spec.audit: dict(columns=["x0", "y"], features=None, targets=None, half_life=None),
     rp.spec.hawkes: dict(features=None, kernel_decays=[1.0, 5.0]),
     rp.spec.garch: dict(features=None, half_life=None),
+    rp.spec.pca: dict(features=["x0", "y"], targets=None),
 }
 
 
@@ -620,6 +621,7 @@ NO_TARGET = [
     rp.spec.corrchange,
     rp.spec.hmm,
     rp.spec.rcov,
+    rp.spec.pca,
 ]
 
 

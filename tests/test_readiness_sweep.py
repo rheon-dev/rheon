@@ -169,7 +169,7 @@ def _frame(kind: str) -> pl.DataFrame:
 
 #: The kinds that report no coefficients, so take no ``coef_every``; the
 #: rest write ``coef`` on every row, so the fit is compared on every row.
-NO_COEF = frozenset({"seqtest", "bocpd", "corrchange", "ew_cov", "marginal", "rcov"})
+NO_COEF = frozenset({"seqtest", "bocpd", "corrchange", "ew_cov", "marginal", "rcov", "pca"})
 
 
 def _weight_column(kind: str) -> str | None:

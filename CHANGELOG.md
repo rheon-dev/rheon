@@ -276,7 +276,7 @@ model that only the new build has is listed as an addition and passes.
   `"ccipca"` and `"oja"` (a gain, `learning_rate`, default 4). Per
   component its variance, its share, its loadings and the row's score, read
   before the row; a component is withheld until the test of the equality of
-  its eigenvalue with a neighbour's passes at 1% at Kish's effective size,
+  its eigenvalue with a neighbor's passes at 1% at Kish's effective size,
   with a new `withheld_reason`, `"not_separated"`: every model's
   `withheld_reason` enum gains the category after the six before it, and
   no value moves. Checked against

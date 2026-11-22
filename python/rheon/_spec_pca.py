@@ -51,7 +51,7 @@ def pca(
     ``n_components``
         The components to write, at least 1 and at most the number of
         features. Default 2, or 1 for a single feature. One direction more
-        is kept where there is room, as the last component's neighbour.
+        is kept where there is room, as the last component's neighbor.
     ``method``
         How the components are learned (*The update*): ``"svd"`` (the
         default), the incremental singular value decomposition, exact while
@@ -98,7 +98,7 @@ def pca(
     ``withheld_reason``
         Why a component was withheld, null where none was:
         ``"not_separated"`` where the data does not yet tell a component
-        apart from a neighbour, ``"below_min_weight"`` under
+        apart from a neighbor, ``"below_min_weight"`` under
         ``min_weight``.
 
     A component's four fields are null together while it is withheld.
@@ -213,7 +213,7 @@ def pca(
     at the 1% level: ``(n - 1) * ln(((l + m) / 2)**2 / (l * m))`` above
     9.21, the 99th percentile of a chi-squared with two degrees of freedom,
     where ``l`` and ``m`` are the two variances and ``n`` is Kish's
-    effective size ``W**2 / Q``. A neighbour of no variance is told apart
+    effective size ``W**2 / Q``. A neighbor of no variance is told apart
     once ``n`` passes the rows that could leave it at none. So no count of
     rows gates the first rows: they are withheld while ``n`` is too small
     for the test, and a stream with tied components is withheld at the tie

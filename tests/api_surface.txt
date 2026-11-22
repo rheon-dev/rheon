@@ -982,7 +982,7 @@
     stream.robust_se_half_life = 50.0
     stream.specification_half_life = 50.0
     stream.tails_half_life = 50.0
-  pca(features=['x0', 'x1'], half_life=50.0):
+  pca(features=['x0', 'y'], half_life=50.0):
     model.decay.Halflife = 50.0
     model.learning_rate = null
     model.max_state_bytes = null

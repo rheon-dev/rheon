@@ -160,7 +160,7 @@ def test_the_stochastic_methods_are_their_definitions(method, lam):
 def test_the_gate_is_the_test_of_equal_eigenvalues():
     """The two sides of the threshold, read off the bank's own fields: a
     component is written exactly where ``(n - 1) ln(((l + m)/2)^2 / (l m))``
-    passes 9.21 against both neighbours, with ``l`` and ``m`` the variances
+    passes 9.21 against both neighbors, with ``l`` and ``m`` the variances
     the full SVD keeps (every direction: three columns, three components)."""
     df = stream(400, [25.0, 4.0, 1.0], seed=3)
     out = run(df, spec(3, n_components=3))

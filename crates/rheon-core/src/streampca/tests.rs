@@ -274,20 +274,20 @@ fn the_eigengap_gate_holds_on_both_sides_of_its_threshold() {
     assert!(!separated(&[4.0, 1.0], 1, 21.0, tr, 2));
     assert!(separated(&[4.0, 1.0], 0, 22.0, tr, 2));
     assert!(separated(&[4.0, 1.0], 1, 22.0, tr, 2));
-    // A middle component needs both neighbours: apart from the one above
+    // A middle component needs both neighbors: apart from the one above
     // but not the one below.
     assert!(!separated(&[16.0, 4.0, 3.5], 1, 22.0, tr, 3));
     assert!(separated(&[16.0, 4.0, 1.0], 1, 22.0, tr, 3));
-    // The last kept direction has no neighbour below.
+    // The last kept direction has no neighbor below.
     assert!(separated(&[16.0, 4.0], 1, 22.0, tr, 2));
-    // A neighbour of no variance is told apart once the rows could have
+    // A neighbor of no variance is told apart once the rows could have
     // given it some: at index 1, `N > 2`.
     assert!(!separated(&[4.0, 0.0], 0, 2.0, tr, 2));
     assert!(separated(&[4.0, 0.0], 0, 2.5, tr, 2));
     assert!(!separated(&[4.0, 2.0, 0.0], 1, 3.0, tr, 3));
     assert!(separated(&[400.0, 2.0, 0.0], 1, 3.5, tr, 3));
     // A variance at the trace's rounding is no direction; one just above
-    // it is, and is a neighbour of some variance.
+    // it is, and is a neighbor of some variance.
     let floor = tr * f64::EPSILON * 2.0;
     assert!(!separated(&[4.0, floor], 1, 1e6, tr, 2));
     assert!(separated(&[4.0, floor * 2.0], 1, 1e6, tr, 2));

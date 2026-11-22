@@ -4327,7 +4327,7 @@ fn run_instance(
             reason = REASON_ILL_CONDITIONED;
         }
         // A `pca` component its model withheld because the data does not
-        // yet tell it apart from a neighbour, where no gate above has
+        // yet tell it apart from a neighbor, where no gate above has
         // withheld the row: such a component is the only null a `pca` row
         // writes past its floor.
         if reason == 0

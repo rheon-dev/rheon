@@ -64,7 +64,7 @@
 //! started ones, as `ccipca`'s does.
 //!
 //! **Which components are emitted, and when.** Component `j` is emitted
-//! while the data tells it apart from its neighbours: two components whose
+//! while the data tells it apart from its neighbors: two components whose
 //! eigenvalues are equal are not identified, any rotation of the two being
 //! as good, and two whose sample eigenvalues differ by no more than their
 //! sampling error may be equal. The test is the likelihood ratio for the
@@ -77,15 +77,15 @@
 //! ```
 //!
 //! for `j` and the component above it, and for `j` and the one below. A
-//! neighbour of no variance (below the trace's rounding) is told apart once
+//! neighbor of no variance (below the trace's rounding) is told apart once
 //! `N` exceeds the rows that could leave it at none, `N > i + 1` for the
-//! neighbour at index `i`, since `N` rows span at most `N - 1` dimensions.
+//! neighbor at index `i`, since `N` rows span at most `N - 1` dimensions.
 //! `j` itself needs a variance above the trace's rounding. One direction
 //! more than `n_components` is kept so the last emitted component has a
-//! neighbour to be told apart from. No count of rows enters: the first rows
+//! neighbor to be told apart from. No count of rows enters: the first rows
 //! are withheld because `N` is small, and a stream whose spectrum has a tie
 //! is withheld at the tie for as long as the test cannot tell it apart.
-//! Under `svd` truncated below the data's rank the kept neighbour's
+//! Under `svd` truncated below the data's rank the kept neighbor's
 //! variance is an underestimate, so the gap reads wider than it is.
 //!
 //! **Order and sign.** `svd` emits its components by variance, largest
@@ -145,7 +145,7 @@ pub const OJA_DEFAULT_LEARNING_RATE: f64 = 4.0;
 pub struct StreamPcaCfg {
     pub n_features: usize,
     /// Components emitted, `1..=n_features`; one more direction is kept
-    /// where there is room, as the last one's neighbour (the module docs).
+    /// where there is room, as the last one's neighbor (the module docs).
     pub n_components: usize,
     #[serde(default)]
     pub method: PcaMethod,
@@ -336,7 +336,7 @@ impl StreamPca {
         (&self.rows, &self.vals)
     }
 
-    /// Whether component `j` is told apart from its neighbours (the module
+    /// Whether component `j` is told apart from its neighbors (the module
     /// docs' rule), from the state as it stands.
     pub fn separated(&self, j: usize) -> bool {
         separated(
@@ -588,7 +588,7 @@ impl StreamPca {
 pub const PCA_GAP_CRITICAL: f64 = 9.210_340_371_976_184;
 
 /// Whether component `j` of the variances `vals` is told apart from its
-/// neighbours at Kish's `n` and the trace `tr` (the module docs' rule).
+/// neighbors at Kish's `n` and the trace `tr` (the module docs' rule).
 fn separated(vals: &[f64], j: usize, n: f64, tr: f64, k: usize) -> bool {
     let lj = vals[j];
     // Above the trace's rounding: a direction of no variance, or of
@@ -597,7 +597,7 @@ fn separated(vals: &[f64], j: usize, n: f64, tr: f64, k: usize) -> bool {
     if !(n > 1.0 && lj.is_finite() && floor.is_finite() && lj > floor) {
         return false;
     }
-    // Two eigenvalues told apart (the module docs): a neighbour of no
+    // Two eigenvalues told apart (the module docs): a neighbor of no
     // variance is told apart once the rows could have given it some, past
     // the dimensions the rows so far span; two of some variance by the test
     // of their equality, `(n - 1) ln(((l + m) / 2)^2 / (l m))` past the

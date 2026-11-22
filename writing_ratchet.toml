@@ -638,6 +638,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [messages."crates/rheon-core/src/kalman/forms.rs"]
 
+[messages."crates/rheon-core/src/streampca.rs"]
+
 [messages."crates/rheon-polars/src/bank/closed_rows.rs"]
 
 [messages."crates/rheon-polars/src/checkpoint.rs"]
@@ -669,6 +671,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [docstrings."python/rheon/_spec_glm.py"]
 
+[docstrings."python/rheon/_spec_pca.py"]
+
 [docstrings."python/rheon/_spec_point.py"]
 
 [docstrings."python/rheon/polars/_errors.py"]
@@ -691,6 +695,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [vocabulary."crates/rheon-core/src/kalman/forms.rs#messages"]
 
+[vocabulary."crates/rheon-core/src/streampca.rs#messages"]
+
 [vocabulary."crates/rheon-polars/src/bank/closed_rows.rs#messages"]
 
 [vocabulary."crates/rheon-polars/src/checkpoint.rs#messages"]
@@ -712,6 +718,9 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."python/rheon/_spec_garch.py#docstrings"]
 
 [vocabulary."python/rheon/_spec_glm.py#docstrings"]
+
+[vocabulary."python/rheon/_spec_pca.py#docstrings"]
+"retired" = 1
 
 [vocabulary."python/rheon/_spec_point.py#docstrings"]
 
