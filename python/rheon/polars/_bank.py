@@ -3607,13 +3607,11 @@ class ModelBank:
         serve from it. For the bytes without a file, use :meth:`save_bytes`,
         and to read a state outside this library, use :meth:`write_json`.
 
-        .. warning::
-            A spec's formula target (an expression in ``targets`` holding a
-            window operator of :mod:`rheon.polars.ops` that looks ahead) is
-            written into the file in a form that is
-            **unstable**: it may change in any release without that counting
-            as a breaking change. The rest of the file's form is kept from
-            release to release.
+        The file loads in this release and every later one, a spec's formula
+        target (an expression in ``targets`` holding a window operator of
+        :mod:`rheon.polars.ops` that looks ahead) and the rows its windows
+        hold included: the file names its version, and each later layout
+        ships a loader for the one before.
 
         .. rubric:: Parameters
 
@@ -3640,10 +3638,6 @@ class ModelBank:
             (:meth:`fit_predict`, Notes).
         ``RuntimeError``
             A call that learns is in flight on another thread.
-        :class:`~rheon.UnstableWarning`
-            A warning, not an error, issued only under
-            ``RHEON_WARN_UNSTABLE=1``: a spec holds a formula target,
-            whose written form is unstable.
 
         .. rubric:: Examples
 
@@ -3682,8 +3676,6 @@ class ModelBank:
         dominated by the sync, and a save after every hundredth chunk is not.
         """
         if isinstance(file, (str, os.PathLike)):
-            # One frame more than `save_bytes`: the keyword forwarding's.
-            self._warn_formula_form(stacklevel=5)
             self._native.save(os.fspath(file))
             return
         if not callable(getattr(file, "write", None)):
@@ -3699,20 +3691,7 @@ class ModelBank:
                 "with 'wb', pass an io.BytesIO, or pass a path."
             )
             raise TypeError(msg)
-        self._warn_formula_form(stacklevel=5)
         file.write(bytes(self._native.save_bytes()))
-
-    def _warn_formula_form(self, stacklevel: int = 4) -> None:
-        """:class:`~rheon.UnstableWarning` for a bank whose specs hold a
-        formula target, whose written form is not promised (docs/PLAN.md task
-        198, D5). ``stacklevel`` 4 is the caller's caller, the user's line under
-        a method that calls this; a method under a decorator passes 5."""
-        if any(
-            isinstance(t, dict) and "formula" in t
-            for spec in self._specs
-            for t in spec.get("targets") or ()
-        ):
-            warn_unstable("a formula target's written form in a state file", stacklevel=stacklevel)
 
     def save_bytes(self) -> bytes:
         """The bytes :meth:`save` writes, for a store that is not a file.
@@ -3758,7 +3737,6 @@ class ModelBank:
         - :meth:`load_bytes`, which reads the bytes back.
         - :meth:`save`, which writes them to a file.
         """
-        self._warn_formula_form()
         return bytes(self._native.save_bytes())
 
     @overload
@@ -3849,7 +3827,6 @@ class ModelBank:
         ``ValueError`` naming the problem, so the export is never a file that
         is wrong without saying so.
         """
-        self._warn_formula_form()
         text = str(self._native.save_json_string(pretty))
         if file is None:
             return text
@@ -4005,7 +3982,7 @@ class ModelBank:
             )
             raise TypeError(msg)
         # One frame more than `load_bytes`: the keyword forwarding's.
-        return cls._load_bytes(data, specs, stacklevel=5, threads=threads)
+        return cls._load_bytes(data, specs, threads=threads)
 
     @classmethod
     def load_bytes(
@@ -4078,24 +4055,19 @@ class ModelBank:
                 "ModelBank.load."
             )
             raise TypeError(msg)
-        return cls._load_bytes(data, specs, stacklevel=4, threads=_check_threads(threads))
+        return cls._load_bytes(data, specs, threads=_check_threads(threads))
 
     @classmethod
     def _load_bytes(
         cls,
         data: bytes,
         specs: Iterable[dict[str, Any]] | None,
-        stacklevel: int,
         threads: int | None = None,
     ) -> ModelBank:
-        """:meth:`load_bytes`, with the formula form's warning pointed
-        ``stacklevel`` frames up from :meth:`_warn_formula_form`, so a public
-        method's caller is named however many frames it adds."""
+        """:meth:`load_bytes`, for each public method that loads."""
         specs_json = _json(list(specs)) if specs is not None else None
         native = _native.ModelBank.load_bytes(data, specs_json, threads)
-        bank = cls._wrap(native)
-        bank._warn_formula_form(stacklevel=stacklevel + 1)
-        return bank
+        return cls._wrap(native)
 
     @classmethod
     def _wrap(cls, native: Any) -> ModelBank:

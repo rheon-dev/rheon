@@ -451,8 +451,8 @@ impl RefreshTime {
         };
         // The checksum first, then the envelope's head, before a byte is
         // decoded.
-        let opened = crate::envelope::open(bytes, crate::envelope::Kind::RefreshTime).map_err(
-            |r| {
+        let opened =
+            crate::envelope::open(bytes, crate::envelope::Kind::RefreshTime).map_err(|r| {
                 use crate::envelope::{Kind, Refused};
                 match r {
                     Refused::Damaged | Refused::Unsealed => {
@@ -469,8 +469,7 @@ impl RefreshTime {
                         r.what()
                     ),
                 }
-            },
-        )?;
+            })?;
         let file: RefreshFile = match opened {
             crate::envelope::Opened::Enveloped { version } => {
                 if version != REFRESH_VERSION {
@@ -2127,13 +2126,21 @@ mod tests {
         // Damage the checksum would see, and the checksum cut.
         let mut damaged = now.clone();
         damaged[30] ^= 1;
-        assert!(load(&damaged).unwrap_err().contains("is damaged (its bytes do not match"));
+        assert!(
+            load(&damaged)
+                .unwrap_err()
+                .contains("is damaged (its bytes do not match")
+        );
         let mut cut = rmpv::decode::read_value(&mut &now[..]).unwrap();
         if let rmpv::Value::Map(m) = &mut cut {
             m.pop();
         }
         let mut b = Vec::new();
         rmpv::encode::write_value(&mut b, &cut).unwrap();
-        assert!(load(&b).unwrap_err().contains("checksum it ends with is missing or cut"));
+        assert!(
+            load(&b)
+                .unwrap_err()
+                .contains("checksum it ends with is missing or cut")
+        );
     }
 }

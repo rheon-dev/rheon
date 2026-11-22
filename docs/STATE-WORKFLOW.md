@@ -103,18 +103,30 @@ predictions, so it refuses an embargo shorter than the target's window.
 `ModelBank.fit` and `rheon --no-output` keep none, so they take any
 embargo.
 
-**A damaged state file is refused before any of it is read.** A bank's
-state file and a window run's end with a checksum, the 64-bit xxh3 hash of
-every byte before it, and a load checks it first. A changed byte or a file
-cut short is refused as damaged, where some such damage used to load in
-silence and change the output, and some made the next chunk fail or the
-process abort. A file saved before the checksum (bank schema 70 or earlier,
-windows state 10 or earlier) has none and loads as it did.
+**Every state file has the same envelope, and a damaged one is refused
+before any of it is read.** A bank's state, a window run's, a
+`rp.stream.refresh_time` run's and a pipeline checkpoint are each one
+MessagePack map. Its first three entries name the file: `magic`, always
+`"rheon-state"`, `kind` (`"bank"`, `"windows"`, `"refresh_time"` or
+`"checkpoint"`) and `version`, the layout of that kind. Its last entry is
+`checksum`, the 64-bit xxh3 hash of every byte before it. A load checks
+the checksum first and reads the three entries from the file's first bytes,
+whatever its size, before it decodes anything else. So a changed byte or
+a file cut short is refused as damaged, where some such damage used to load
+in silence and change the output, and some made the next chunk fail or the
+process abort. A file of another kind is refused by name, such as a window
+run's state handed to `ModelBank.load`, and a file of a newer version is
+refused by its number. A bank file's `version` is the schema
+`rheon.schema_version()` gives. Each kind's file saved before the envelope
+began with a magic string of its own (`polars-online-bank`,
+`polars-online windows` and `polars-online refresh_time`) and loads as it
+did. A bank file of schema 70 or earlier and a window run's state of
+version 10 or earlier have no checksum, nor has a `refresh_time` state of
+version 1 or 2.
 
 **A build refuses a bank file whose schema it does not read.** From 1.0,
-every later 1.x build loads a 1.x file, apart from a formula target's
-written form and a window run's state, whose formats may change in a minor
-release. A 0.x file is refused: refit the
+every later build loads a file of 1.0 or later, a formula target and the
+rows its windows hold included. A 0.x file is refused: refit the
 bank from its input ([Why a state loads in later
 versions](explanation/state-and-resuming.md#why-a-state-loads-in-later-versions)).
 A file this build saved goes on as one run to the bit, as the recipes
@@ -149,11 +161,14 @@ refusal. Here is what each rule guarantees, and the test that holds it:
 | without a clock column, an input that does not begin with a new session | refused: a row-count clock steps forward at every row | `test_without_a_clock_the_next_file_begins_with_a_new_session` |
 | a state of another version, or a damaged file | refused by its version, or reported as damaged | `test_a_windows_state_of_another_version_is_refused_by_its_version`, `test_a_damaged_windows_state_says_so` |
 
-The windows state is version 11, and this build reads 9 and 10 too: 10's
-layout is 11's without the checksum, and 9's is 10's without a quantile
-operator. A bank file carries a windows state
-for each formula target, and a Rust test pairs the two version numbers, so
-a change to the windows state cannot pass the bank unseen. A state
+The windows state is version 12, and this build reads 9 to 11 too: 12 is
+11 in the envelope, 11's layout is 10's with the checksum, and 9's is 10's
+without a quantile operator. A state one release saves loads in every later
+release, the formula tree it holds included, as a bank's state does: each
+later layout ships a loader for the one before, held by frozen states of
+every version. A bank file carries a windows state for each formula target,
+and a Rust test pairs the two version numbers, so a change to the windows
+state cannot pass the bank unseen. A state
 resumes only the call that saved it (`test_a_state_resumes_only_its_own_call`).
 `with_windows`' docstring states two limits. A clock that starts over at
 the same stamp each day needs a session column. And an input whose rows
@@ -167,7 +182,36 @@ the last point returned, so its state is the same whatever the chunk size.
 With `pairs=True`, one tick can complete several pairs' points. A slice
 that ends among them keeps the rest in its state, and the run resumed after
 that tick returns them first, so the two runs give the one run's grid. A
-row before a group's saved clock is refused as any step back is.
+row before a group's saved clock is refused as any step back is. The state
+is version 3, in the envelope with its checksum; this build reads versions
+1 and 2, saved before the envelope, too.
+
+## A pipeline checkpoint
+
+**A run of several stateful stages saves their states as one file, written
+in full or not at all.** A pipeline that runs `refresh_time`, then
+`with_windows`, then a bank keeps three states. Saved as three files, a
+crash between two saves leaves stages that stopped at different rows, and a
+stream processor that commits its input's offsets after the saves has no
+one point to resume from. `rp.stream.save_checkpoint(path, stages)` takes
+each stage's state by a name, as a bank, the bytes of a state or the path of
+a state file, and writes them as one file of the kind `"checkpoint"`. Each
+stage keeps its state file byte for byte, so `rp.stream.load_checkpoint`
+gives back each one's bytes by name, in order, and each loads through its
+own kind's loader: a bank's with `ModelBank.load_bytes`, and a window run's
+or a grid's as that call's `load_state`, which takes bytes as well as a
+path.
+
+| what is guaranteed | how |
+|---|---|
+| a reader finds the old checkpoint or the new one, never a part | the file is written beside `path` under another name, flushed to the disk and renamed over `path`; a rename replaces the file in one step |
+| on macOS and Linux, once the call returns, the new checkpoint survives a power loss, so the offsets can be committed after it | the folder is flushed to the disk after the rename, so the rename itself is on the disk. Windows has no call that flushes a folder: the rename is on the disk once the filesystem writes its log of changes, and a power loss before that brings back the old checkpoint, never a part of one |
+| a failed save leaves the old checkpoint as it was | the destination is never removed before the rename; a refused stage (no stage, a name given twice, a state that is not one or is damaged) is refused before anything is written |
+| on Windows, a save does not fail because another program opened the file for a moment | Windows refuses a rename over a file that another process holds open without sharing its deletion, as a virus scanner or a search indexer may for a moment; the rename is tried again for about a second before the save reports the error |
+| a stage loads as its own state file would, in this release and every later one | each stage is its kind's state file byte for byte, read by that kind's loader |
+
+A checkpoint holds every kind of state the library saves, and a kind added
+later is one more stage, with no change to the checkpoint's layout.
 
 ## The rules, and the evidence for each
 

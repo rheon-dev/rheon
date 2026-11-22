@@ -124,8 +124,9 @@ impl AtomicFile {
     /// returns cannot bring the old file back. A pipeline checkpoint needs
     /// this, since the caller commits its input's offsets once the call
     /// returns, and an old checkpoint under new offsets would skip the rows
-    /// between. It costs a second sync (measured on macOS arm64 with the
-    /// drive's cache flushed: about as much as the file's own); on Windows
+    /// between. It costs a second sync: on macOS arm64 a directory's
+    /// `sync_all` (`F_FULLFSYNC`) took 4.0 ms, as a small file's did (PLAN
+    /// 542, the median of 21 after a small write); on Windows
     /// the standard library cannot sync a directory, so there the rename is
     /// durable once the filesystem writes its log, and a power loss before
     /// that brings back the old file, whole.

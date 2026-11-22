@@ -1472,7 +1472,10 @@ fn formula_first() -> (Vec<u8>, DataFrame) {
     let df = formula_input(&frame());
     let mut bank = Bank::new(formula_specs()).unwrap();
     bank.fit_predict(&df.slice(0, SPLIT)).unwrap();
-    (bank.save_bytes().unwrap(), df.slice(SPLIT as i64, N - SPLIT))
+    (
+        bank.save_bytes().unwrap(),
+        df.slice(SPLIT as i64, N - SPLIT),
+    )
 }
 
 fn formula_run(bytes: &[u8], input: &DataFrame) -> Ran {
@@ -1489,7 +1492,10 @@ fn checkpoint_first() -> (Vec<u8>, DataFrame) {
     let (grid, _) = refresh_first();
     let (windows, _) = windows_first();
     let (bank, input) = formula_first();
-    let stages: Vec<(&str, &[u8])> = STAGES.into_iter().zip([&grid[..], &windows, &bank]).collect();
+    let stages: Vec<(&str, &[u8])> = STAGES
+        .into_iter()
+        .zip([&grid[..], &windows, &bank])
+        .collect();
     (checkpoint_bytes(&stages).unwrap(), input)
 }
 
@@ -1511,7 +1517,10 @@ fn checkpoint_run(bytes: &[u8], input: &DataFrame) -> Ran {
             &stages[0].state,
             &ticks.slice(half as i64, ticks.height() - half),
         )?,
-        windows_run(&stages[1].state, &window_input(&frame()).slice(SPLIT as i64, N - SPLIT))?,
+        windows_run(
+            &stages[1].state,
+            &window_input(&frame()).slice(SPLIT as i64, N - SPLIT),
+        )?,
         formula_run(&stages[2].state, input)?,
     ];
     let again: Vec<(&str, &[u8])> = STAGES
@@ -2058,7 +2067,12 @@ fn every_current_fixture_is_written_in_the_envelope() {
     }
     assert_eq!(
         kinds.into_iter().collect::<Vec<_>>(),
-        [("bank", 13), ("checkpoint", 1), ("refresh_time", 3), ("windows", 3)]
+        [
+            ("bank", 13),
+            ("checkpoint", 1),
+            ("refresh_time", 3),
+            ("windows", 3)
+        ]
     );
     // A checkpoint's stages, each a whole state of its kind; and the bank's
     // formula target's cores inside its bank stage, each a window run's.
@@ -2076,7 +2090,10 @@ fn every_current_fixture_is_written_in_the_envelope() {
             s.name
         );
     }
-    let f = frozen::ALL.iter().find(|f| f.name == "bank_formula").unwrap();
+    let f = frozen::ALL
+        .iter()
+        .find(|f| f.name == "bank_formula")
+        .unwrap();
     let v = rmpv::decode::read_value(&mut &unhex(f.state)[..]).unwrap();
     let resolvers = v
         .as_map()
@@ -2914,9 +2931,11 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
         ("refresh_time", "a number clock's clock_kind", |p, v| {
             p == ".clock_kind" && v.as_str() == Some("Numeric")
         }),
-        ("refresh_time_held", "a temporal clock's clock_kind", |p, v| {
-            p == ".clock_kind" && v.as_str() == Some("Temporal")
-        }),
+        (
+            "refresh_time_held",
+            "a temporal clock's clock_kind",
+            |p, v| p == ".clock_kind" && v.as_str() == Some("Temporal"),
+        ),
         ("refresh_time_held", "a held point", |p, v| {
             p.starts_with(".held.points.0.2.") && v.as_f64().is_some()
         }),

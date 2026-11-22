@@ -151,15 +151,15 @@ may differ by at most `1e-12 × (1 + |value|)`.
 
 ## Why a state loads in later versions
 
-**A state file names the version of its format, and a build loads every
-version from 1.0's to its own, apart from two parts whose formats may
-change in a minor release.** So from 1.0, a state a 1.x build saved loads
-in every later 1.x build. The two parts outside that promise are the
-written form of a formula target (its expression, a column computation
-such as `pl.col("x") + 1`) inside a bank's state,
-and a
+**A state file names its kind and the version of its format, and a build
+loads every version from 1.0's to its own.** So from 1.0, a state a 1.x
+build saved loads in every later build. That holds for a bank's state, a
+formula target (its expression, a column computation such as
+`pl.col("x") + 1`) inside it included, for a
 [window run](../GLOSSARY.md#fitting-a-model)'s state ([Resume a window
-run](../how-to/resume-a-window-run.md)). A state
+run](../how-to/resume-a-window-run.md)), a `rp.stream.refresh_time`
+state and a pipeline checkpoint, which holds several of them as one file
+([Saved states](../STATE-WORKFLOW.md#a-pipeline-checkpoint)). A state
 saved by 0.13.0 or an earlier release does not load: refit the bank from
 its input. A build refuses a state whose version it cannot read, such as
 one saved in a newer format, before it reads a row.

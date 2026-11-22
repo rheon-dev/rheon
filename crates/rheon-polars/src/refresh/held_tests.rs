@@ -365,8 +365,8 @@ fn a_state_holding_points_is_checked_on_load() {
     assert!(load(&file).is_ok());
     let good = file.held.clone();
     let old = |version| crate::envelope::legacy::refresh(&bytes, version);
-    let two = RefreshTime::load_bytes(&old(super::REFRESH_VERSION_HELD), names(), true, false)
-        .unwrap();
+    let two =
+        RefreshTime::load_bytes(&old(super::REFRESH_VERSION_HELD), names(), true, false).unwrap();
     assert_eq!(two.save_bytes().unwrap(), bytes);
     assert_eq!(
         RefreshTime::load_bytes(&old(super::REFRESH_VERSION_PLAIN), names(), true, false)

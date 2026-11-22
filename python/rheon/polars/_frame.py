@@ -156,7 +156,10 @@ def _in_chunks(
     return pl.concat(outs)
 
 
-def _read_state(state: State) -> bytes:
+def _read_state(state: State | bytes) -> bytes:
+    """A state's bytes: read from its path, or as given."""
+    if isinstance(state, bytes | bytearray | memoryview):
+        return bytes(state)
     with open(os.fspath(state), "rb") as f:
         return f.read()
 
@@ -1782,7 +1785,7 @@ class LazyFrameRheonNamespace:
         group: str | None = None,
         like: dict[str, Any] | None = None,
         chunk_size: int | None = None,
-        load_state: State | None = None,
+        load_state: State | bytes | None = None,
         save_state: State | None = None,
         **named: pl.Expr,
     ) -> pl.LazyFrame:
@@ -2114,7 +2117,7 @@ class DataFrameRheonNamespace:
         group: str | None = None,
         like: dict[str, Any] | None = None,
         chunk_size: int | None = None,
-        load_state: State | None = None,
+        load_state: State | bytes | None = None,
         save_state: State | None = None,
         **named: pl.Expr,
     ) -> pl.DataFrame:

@@ -2757,25 +2757,24 @@ impl WindowsRun {
         // abort further in.
         const START_OVER: &str = "Load an undamaged copy of the state file, or leave out \
                                   load_state to start over.";
-        let opened =
-            crate::envelope::open(bytes, crate::envelope::Kind::Windows).map_err(|r| {
-                use crate::envelope::Refused as Why;
-                Refused::from(match r {
-                    Why::Damaged | Why::Unsealed => {
-                        format!("{WHO}: the state is {}. {START_OVER}", r.what())
-                    }
-                    Why::OtherKind(crate::envelope::Kind::Checkpoint) => format!(
-                        "{WHO}: the state is a pipeline checkpoint, not a window run's state. \
+        let opened = crate::envelope::open(bytes, crate::envelope::Kind::Windows).map_err(|r| {
+            use crate::envelope::Refused as Why;
+            Refused::from(match r {
+                Why::Damaged | Why::Unsealed => {
+                    format!("{WHO}: the state is {}. {START_OVER}", r.what())
+                }
+                Why::OtherKind(crate::envelope::Kind::Checkpoint) => format!(
+                    "{WHO}: the state is a pipeline checkpoint, not a window run's state. \
                          Read its stages with rheon.polars.stream.load_checkpoint and pass the \
                          window run's stage as load_state."
-                    ),
-                    Why::OtherKind(_) | Why::UnknownKind(_) => format!(
-                        "{WHO}: the state is {}, not a window run's. Pass a state file a \
+                ),
+                Why::OtherKind(_) | Why::UnknownKind(_) => format!(
+                    "{WHO}: the state is {}, not a window run's. Pass a state file a \
                          window run saved, or leave out load_state to start over.",
-                        r.what()
-                    ),
-                })
-            })?;
+                    r.what()
+                ),
+            })
+        })?;
         let (version, sealed, enveloped) = match opened {
             crate::envelope::Opened::Enveloped { version } => (version, true, true),
             crate::envelope::Opened::Legacy { sealed } => {

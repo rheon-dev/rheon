@@ -394,10 +394,7 @@ mod tests {
                 }),
                 "{version}"
             );
-            assert_eq!(
-                open(&bytes, Kind::Bank),
-                Ok(Opened::Enveloped { version })
-            );
+            assert_eq!(open(&bytes, Kind::Bank), Ok(Opened::Enveloped { version }));
         }
     }
 

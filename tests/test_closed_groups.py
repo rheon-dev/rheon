@@ -1063,7 +1063,7 @@ def test_schema_version_is_current():
     ``"full"`` and ``"diag"`` (rule 5's twenty-second exception), and 71 for
     the checksum a bank's and a window run's file ends with (no layout of a
     model moved, so 70 loads too)."""
-    assert rp.schema_version() == 71
+    assert rp.schema_version() == 72
 
 
 def test_an_integer_key_used_as_both_session_and_group_orders_numerically():

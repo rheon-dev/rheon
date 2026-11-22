@@ -31,12 +31,58 @@ model that only the new build has is listed as an addition and passes.
 
 ### Changed
 
+- **Every state file is written in one envelope** (PLAN 542). A bank's
+  state, a window run's, a `rp.stream.refresh_time` run's and the new
+  pipeline checkpoint are each a MessagePack map whose first three entries
+  are `magic` (`"rheon-state"`), `kind` (`"bank"`, `"windows"`,
+  `"refresh_time"` or `"checkpoint"`) and `version`, and whose last is the
+  xxh3 checksum of every byte before it. A load reads the three from the
+  file's first bytes before decoding anything, so a file of another kind is
+  refused by name ("these bytes are a with_windows run's state, not a model
+  bank's state") and a newer one by its number. The schema moves 71 -> 72
+  (`rheon.schema_version()`; no model's state moved), a window run's state
+  11 -> 12, and a `refresh_time` state 1 and 2 -> 3, which gains the
+  checksum and names its clock's kind `clock_kind`. Every file saved before
+  loads as it did, to the bit, and saves the new form: a bank file of schema
+  61 to 71, a window run's state of version 9 to 11, and a `refresh_time`
+  state of version 1 or 2. A bank's JSON export (`write_json`) carries the
+  same head: its `magic` reads `rheon-state` where it read
+  `polars-online-bank`, and `schema_version` is `version`.
+
+- **A window run's state is no longer unstable** (PLAN 542). Its file loads
+  in every later release, as a bank's does, with frozen states of every
+  version held to their loaders; the formula tree inside a window run's
+  state or a bank's is promised with it. `with_windows` with `load_state`
+  or `save_state`, and `ModelBank.save`, `save_bytes`, `write_json`, `load`
+  and `load_bytes` of a bank holding a formula target, no longer issue
+  `UnstableWarning` under `RHEON_WARN_UNSTABLE=1`. A formula target's
+  written form in a TOML config stays unstable, and the command line's
+  notice now names the TOML file alone.
+
 - **The build and development py-polars moves 2.0.0 -> 2.1.0** (task 540).
   The declared range `>=1.37.0,<3` is unchanged: rust `polars` 0.55.2 and
   `pyo3-polars` 0.28.0 are still the newest crates, and the wheel's own copy
   of Polars never meets the user's. `docs/VALIDATION.md` is regenerated on it.
 
 ### Added
+
+- **A pipeline checkpoint: the states of a run's stages as one file,
+  written in full or not at all** (PLAN 542).
+  `rp.stream.save_checkpoint(path, {"grid": ..., "windows": ..., "bank":
+  bank})` takes each stage's state as a `ModelBank`, a state's bytes or a
+  state file's path, and `rp.stream.load_checkpoint(path)` gives each back
+  as bytes, by name and in order, to load where it was saved; `with_windows`
+  and `refresh_time` now take a state's bytes as `load_state` as well as a
+  path. Each stage is its kind's own state file byte for byte, so it loads
+  through that kind's loader at any version, and a kind added later is one
+  more stage. The file is written to a temporary beside `path` through the
+  hashing writer, flushed to the disk, renamed over `path`, and on macOS and
+  Linux the folder is flushed after the rename, so once the call returns a
+  stream processor can commit its offsets. On Windows a rename refused
+  because another process holds the old file open (a virus scanner or an
+  indexer, for a moment) is tried again for about 0.8 s before the save
+  fails; the old file is never removed first, so a crash leaves the old
+  checkpoint or the new one.
 
 - **A weekly check for yanked locked versions** (task 540):
   `.github/workflows/yanks.yml` runs `scripts/yanks.py`, which looks every
@@ -612,6 +658,25 @@ model that only the new build has is listed as an addition and passes.
   416 specs, against 1,296 of 74. Against 2.0.0 every field is identical.
 
 ### Performance
+
+- **A state loads faster in the envelope, and its size moves by a few
+  bytes** (PLAN 542). A load reads the file's kind and version from its
+  first bytes, where it walked the whole MessagePack map once to find them
+  before decoding it again. Measured on macOS arm64 with one binary loading
+  the same state in both layouts (the median of 61 alternated runs, load
+  5-6): a bank of 1,000 groups of `ewridge` over 4 features, 2.75 MB, 10.77
+  -> 8.69 ms (0.81); a window run's state of 1,000 groups and 1,000 rows
+  held, 0.96 MB, 3.03 -> 2.05 ms (0.68); a `refresh_time` state of 1,000
+  groups, which was read in one pass already, 0.301 -> 0.305 ms (1.01, the
+  checksum's hash). Sizes: the bank file 4 bytes smaller, the window run's
+  3 bytes larger, the `refresh_time` state 28 bytes larger (its checksum
+  entry and the head). Saving is the same encoding but for the head, and
+  was not timed against the build before. A checkpoint of those three
+  states adds 140 bytes to their 3.84 MB; `save_checkpoint` with the stages'
+  bytes in hand took 10.1 ms, against 24.9 ms for the three stages' own
+  saves to three files, and includes a second sync, of the folder, which
+  took 4.0 ms (`F_FULLFSYNC`), as a file's does. No budget moved: none
+  times a load or a save.
 
 - **A row of weight 0 counting in no clock costs the bank's cheapest case
   about 2% to 4% a row.** The schedule that leaves such a row out of every

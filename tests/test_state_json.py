@@ -192,7 +192,8 @@ def test_the_export_is_the_state_and_not_a_summary():
     bank.fit_predict(_df())
     doc = json.loads(bank.write_json())
 
-    assert doc["schema_version"] == rp.schema_version()
+    assert (doc["magic"], doc["kind"]) == ("rheon-state", "bank")
+    assert doc["version"] == rp.schema_version()
     assert doc["specs"] == json.loads(json.dumps(bank.specs))
     assert doc["rows_fed"] == bank.rows_fed
     assert len(doc["states"]) == len(specs), "one block per spec"

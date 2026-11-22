@@ -191,7 +191,10 @@ fn check_stages(stages: &[(&str, &[u8])]) -> Result<Vec<Kind>, String> {
     Ok(kinds)
 }
 
-fn file_out<'a>(stages: &'a [(&'a str, &'a [u8])], checksum: crate::checksum::Trailer) -> FileOut<'a> {
+fn file_out<'a>(
+    stages: &'a [(&'a str, &'a [u8])],
+    checksum: crate::checksum::Trailer,
+) -> FileOut<'a> {
     FileOut {
         magic: envelope::MAGIC,
         kind: Kind::Checkpoint.tag(),
@@ -293,9 +296,8 @@ pub fn load_checkpoint(bytes: &[u8]) -> Result<Vec<Stage>, String> {
             "{WHO}: the file is damaged (its version {version} was never written). {REMEDY}"
         ));
     }
-    let file: FileIn = rmp_serde::from_slice(bytes).map_err(|e| {
-        format!("{WHO}: the file is damaged (it cannot be read: {e}). {REMEDY}")
-    })?;
+    let file: FileIn = rmp_serde::from_slice(bytes)
+        .map_err(|e| format!("{WHO}: the file is damaged (it cannot be read: {e}). {REMEDY}"))?;
     let views: Vec<(&str, &[u8])> = file
         .stages
         .iter()
@@ -375,7 +377,12 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
         // Replaced whole, and no temporary left beside it.
         save_checkpoint(&path, &stages[..1]).unwrap();
-        assert_eq!(load_checkpoint(&std::fs::read(&path).unwrap()).unwrap().len(), 1);
+        assert_eq!(
+            load_checkpoint(&std::fs::read(&path).unwrap())
+                .unwrap()
+                .len(),
+            1
+        );
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -392,7 +399,8 @@ mod tests {
         let before = std::fs::read(&path).unwrap();
         let mut broken = a.clone();
         broken[10] ^= 1;
-        let cases: [(&[(&str, &[u8])], &str); 5] = [
+        type Stages<'a> = &'a [(&'a str, &'a [u8])];
+        let cases: [(Stages, &str); 5] = [
             (&[], "no stage is given"),
             (&[("", &a)], "name is empty"),
             (&[("bank", &a), ("bank", &a)], "is given twice"),
@@ -422,7 +430,10 @@ mod tests {
             assert!(load_checkpoint(&b).is_err(), "byte {i}");
         }
         let err = load_checkpoint(&a).unwrap_err();
-        assert!(err.contains("a model bank's state, not a pipeline checkpoint"), "{err}");
+        assert!(
+            err.contains("a model bank's state, not a pipeline checkpoint"),
+            "{err}"
+        );
         let future = state(Kind::Checkpoint, 0);
         let mut v: rmpv::Value = rmpv::decode::read_value(&mut &future[..]).unwrap();
         if let rmpv::Value::Map(m) = &mut v {

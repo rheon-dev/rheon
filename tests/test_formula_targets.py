@@ -975,6 +975,17 @@ def _unsealed(state: bytes) -> bytes:
     return bytes(body)
 
 
+def _before_the_envelope(state: bytes) -> bytes:
+    """A bank file's head as a writer before the envelope (schema 72) wrote
+    it: the magic ``polars-online-bank``, no ``kind``, and the version named
+    ``schema_version`` (its number left as it was, for the caller to set)."""
+    head = b"\xa5magic\xabrheon-state\xa4kind\xa4bank\xa7version"
+    assert state[1 : 1 + len(head)] == head, "the file does not begin with the envelope"
+    assert 0x80 < state[0] <= 0x8F, "the bank file's map is a fixmap"
+    old = b"\xa5magic\xb2polars-online-bank\xaeschema_version"
+    return bytes([state[0] - 1]) + old + state[1 + len(head) :]
+
+
 def test_a_bank_state_from_before_the_windows_state_changed_is_refused_by_number() -> None:
     """R4-A2, then R6-D5: a bank file carries each formula target's window
     core in the windows state's own form, which went to version 3 in round
@@ -1031,15 +1042,17 @@ def test_a_bank_state_from_before_the_windows_state_changed_is_refused_by_number
     too; 69 since task 479, for ``hmm``'s factor form of a wide ``full``
     state, so 68 loads too; 70 since ``hmm``'s stabilized prior under
     ``"full"`` and ``"diag"``, so 69 loads too; 71 since the checksum a file
-    ends with, so 70 loads too. A file before 71 has no checksum entry, so
-    the files here drop it as well as naming an older number: a 71 file
-    whose number was edited would be refused as damaged instead."""
+    ends with, so 70 loads too; 72 since the envelope every state file is
+    written in, so 71 loads too. A file before 71 has no checksum entry and
+    a file before 72 begins with the bank's old magic, so the files here
+    drop the one and rewrite the other as well as naming an older number: a
+    71 file whose number was edited would be refused as damaged instead."""
     bank = rp.ModelBank([spec(fwd())])
     bank.fit_predict(stream(60, 50))
-    state = _unsealed(bank.save_bytes())
+    state = _before_the_envelope(_unsealed(bank.save_bytes()))
     key = b"\xaeschema_version"
     i = state.index(key) + len(key)
-    assert state[i] == 71, state[i]
+    assert state[i] == 72, state[i]
     for before in range(25, 61):
         old = state[:i] + bytes([before]) + state[i + 1 :]
         with pytest.raises(

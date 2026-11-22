@@ -57,14 +57,17 @@ print(f"{state['magic']}: half_life {half_life!r}, as a number {float(half_life)
 ```
 
 ```text
-polars-online-bank: half_life 'inf', as a number inf
+rheon-state: half_life 'inf', as a number inf
 ```
 
 ## Check that it worked
 
-**The export's `magic` field reads `polars-online-bank`,** as the example
-prints, and each number your program reads matches the bank's. The field
-keeps the package's name from before 2.0, so a state saved by any 1.x
-release reads the same way. For the
+**The export's `magic` field reads `rheon-state`,** as the example
+prints, its `kind` field `bank`, and each number your program reads matches
+the bank's. `version` is the layout's version, the number
+`rheon.schema_version()` gives. A state saved before rheon wrote every
+state file in one envelope reads `polars-online-bank` there, the package's
+name before 2.0, and names its version `schema_version`; every other field
+reads the same way. For the
 coefficients, compare with `bank.coef()` ([Read the
 coefficients](read-the-coefficients.md)).

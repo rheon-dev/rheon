@@ -215,11 +215,23 @@ fn legacy(bytes: &[u8], magic: &str, version_key: &str, version: u64, sealed: bo
 }
 
 fn legacy_bank(bytes: &[u8], schema: u64) -> Vec<u8> {
-    legacy(bytes, "polars-online-bank", "schema_version", schema, schema >= 71)
+    legacy(
+        bytes,
+        "polars-online-bank",
+        "schema_version",
+        schema,
+        schema >= 71,
+    )
 }
 
 fn legacy_windows(bytes: &[u8], version: u64) -> Vec<u8> {
-    legacy(bytes, "polars-online windows", "version", version, version >= 11)
+    legacy(
+        bytes,
+        "polars-online windows",
+        "version",
+        version,
+        version >= 11,
+    )
 }
 
 /// A file of the sealed schema without its checksum is damaged, enveloped
@@ -264,9 +276,8 @@ fn a_file_of_the_sealed_schema_without_its_checksum_is_damaged() {
         assert_eq!(err, missing);
     }
     for version in [10, 11] {
-        let run =
-            WindowsRun::load_bytes(&legacy_windows(&w, version), windows_config(), &schema)
-                .unwrap();
+        let run = WindowsRun::load_bytes(&legacy_windows(&w, version), windows_config(), &schema)
+            .unwrap();
         assert_eq!(run.save_bytes().unwrap(), w, "{version}");
     }
 }
@@ -294,7 +305,10 @@ fn a_state_of_another_kind_is_named_for_what_it_is() {
     );
     let checkpoint = rheon_polars::checkpoint_bytes(&[("bank", &bytes), ("windows", &w)]).unwrap();
     let err = Bank::load_bytes(&checkpoint, None).err().expect("refused");
-    assert!(err.contains("a pipeline checkpoint, not a model bank's state"), "{err}");
+    assert!(
+        err.contains("a pipeline checkpoint, not a model bank's state"),
+        "{err}"
+    );
     let schema = windows_input().schema().clone();
     let err = WindowsRun::load_bytes(&bytes, windows_config(), &schema)
         .err()
@@ -358,8 +372,7 @@ fn a_bank_written_before_the_envelope_with_its_cores_goes_on_to_the_bit() {
     bank.fit_predict(&df.slice(0, 40)).unwrap();
     let bytes = bank.save_bytes().unwrap();
     for (schema, core_version) in [(70, 10), (71, 11)] {
-        let mut v =
-            rmpv::decode::read_value(&mut &legacy_bank(&bytes, schema)[..]).unwrap();
+        let mut v = rmpv::decode::read_value(&mut &legacy_bank(&bytes, schema)[..]).unwrap();
         let rmpv::Value::Map(m) = &mut v else {
             panic!("a bank file is a map")
         };
@@ -379,9 +392,7 @@ fn a_bank_written_before_the_envelope_with_its_cores_goes_on_to_the_bit() {
                 let held = &mut list(group)[1];
                 let core: Vec<u8> = match held {
                     rmpv::Value::Binary(b) => b.clone(),
-                    rmpv::Value::Array(a) => {
-                        a.iter().map(|x| x.as_u64().unwrap() as u8).collect()
-                    }
+                    rmpv::Value::Array(a) => a.iter().map(|x| x.as_u64().unwrap() as u8).collect(),
                     other => panic!("a core is bytes, not {other}"),
                 };
                 let old = legacy_windows(&core, core_version);

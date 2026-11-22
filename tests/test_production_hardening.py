@@ -459,9 +459,9 @@ class TestSerializationRobustness:
         # The one region that MUST always detect: the magic string. (The
         # first-64-bytes region also holds `package_version`, which is
         # deliberately informational, so it is not a valid target.)
-        magic = blob.find(b"polars-online-bank")
+        magic = blob.find(b"rheon-state")
         assert magic >= 0
-        for i in range(magic, magic + len(b"polars-online-bank")):
+        for i in range(magic, magic + len(b"rheon-state")):
             old = blob[i]
             new = int(rng.integers(0, 256))
             blob[i] = (new + 1) % 256 if new == old else new

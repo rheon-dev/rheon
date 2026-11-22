@@ -25,10 +25,9 @@ makes the windows:
 - The stream cut into parts between stamps (clock values): a part that
   starts at the last stamp of the part before it is refused, as
   [Check the result](#check-the-result) says.
-- The same rheon release for every part. The format of a window
-  run's state is not promised, so a state one release saved need not load
-  in the next, and a build refuses a state it cannot read, naming its
-  version.
+- A rheon release no older than the one that saved the state. A state one
+  release saves loads in every later release, and a build refuses a state
+  of a newer version than it reads, naming its version.
 
 A [formula target](../GLOSSARY.md#fitting-a-model), a window
 expression a spec holds in its `targets`, is saved with its

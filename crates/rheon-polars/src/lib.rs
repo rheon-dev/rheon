@@ -94,7 +94,9 @@ pub use bank::{
     PAR_MIN_ROWS, coef_fields, coef_fields_frame, output_fields, output_index, output_index_frame,
     vech,
 };
-pub use checkpoint::{CHECKPOINT_VERSION, Stage, checkpoint_bytes, load_checkpoint, save_checkpoint};
+pub use checkpoint::{
+    CHECKPOINT_VERSION, Stage, checkpoint_bytes, load_checkpoint, save_checkpoint,
+};
 pub use defaults::resolved_defaults;
 pub use envelope::Kind as StateKind;
 pub use formula::{Formula, Literal, Node, OpNode};
