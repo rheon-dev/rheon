@@ -1112,6 +1112,14 @@ fn every_kind_refuses_or_loads_corruption(prefix_step: usize, flip_step: usize) 
             r#"["x0", "x1"]"#,
             true,
         ),
+        // Lee and Mykland's ring part full when the file is saved.
+        (
+            "realized",
+            r#"{"type": "realized", "lm_window": 600}"#,
+            r#"["y"]"#,
+            "[]",
+            true,
+        ),
         // Saved after its start, a t's shape beside the process.
         (
             "garch",

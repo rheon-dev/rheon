@@ -1212,6 +1212,74 @@ fn a_hawkes_window_past_its_state_cap_is_refused() {
     );
 }
 
+/// `realized`'s window of rows and Lee and Mykland's window are the parts of
+/// its state its settings size, so their bytes are known at the call: past
+/// `max_state_bytes` (256 KB by default) the spec is refused naming the
+/// largest window that fits, which is taken; a window of clock units, a
+/// window beside a decay, features and a confidence out of range are
+/// refused by name.
+#[test]
+fn a_realized_window_past_its_state_cap_is_refused() {
+    let spec = |model: &str, half_life: &str| {
+        format!(
+            r#"{{"name": "m", "model": {model}, "targets": ["a", "b"], "features": [],
+                "half_life": {half_life}}}"#
+        )
+    };
+    let at = |w: usize| rheon_polars::rheon_core::Realized::state_bytes(2, None, Some(w), false);
+    let cap = 256 * 1024;
+    let fits = (1..).find(|&w| at(w + 1) > cap).unwrap();
+    accepted(&spec(
+        &format!(r#"{{"type": "realized", "window_rows": {fits}}}"#),
+        r#""inf""#,
+    ));
+    refused(
+        &spec(
+            &format!(r#"{{"type": "realized", "window_rows": {}}}"#, fits + 1),
+            r#""inf""#,
+        ),
+        &[
+            &format!("would hold {} bytes a group", at(fits + 1)),
+            "max_state_bytes of 262144",
+            &format!("The largest window_rows that fits is {fits}"),
+        ],
+    );
+    accepted(&spec(
+        r#"{"type": "realized", "window_rows": 100000, "max_state_bytes": 30000000}"#,
+        r#""inf""#,
+    ));
+    accepted(&spec(r#"{"type": "realized", "lm_window": 300}"#, "50.0"));
+    accepted(&spec(
+        r#"{"type": "realized", "window_size": 20.0, "closed": "both"}"#,
+        r#""inf""#,
+    ));
+    refused(
+        &spec(r#"{"type": "realized", "window_rows": 50}"#, "50.0"),
+        &["a window forgets by dropping the oldest rows, so it takes no decay"],
+    );
+    refused(
+        &spec(r#"{"type": "realized", "window_size": 0.0}"#, r#""inf""#),
+        &["window_size must be a finite span of the clock above 0"],
+    );
+    refused(
+        &spec(r#"{"type": "realized", "lm_window": 2}"#, "50.0"),
+        &["lm_window must be at least 3"],
+    );
+    refused(
+        &spec(r#"{"type": "realized", "lm_beta": 1.0}"#, "50.0"),
+        &["lm_beta must be above 0 and below 1"],
+    );
+    refused(
+        &spec(r#"{"type": "realized", "closed": "both"}"#, "50.0"),
+        &["there is no clock window"],
+    );
+    refused(
+        r#"{"name": "m", "model": {"type": "realized"},
+            "targets": ["a"], "features": ["x"], "half_life": 10.0}"#,
+        &["realized takes no features"],
+    );
+}
+
 /// `garch`'s start and its FIGARCH ring are its state's size, known from
 /// its settings at the call: past `max_state_bytes` (256 KB by default) the
 /// spec is refused naming the bytes, and a decay, features, a start given

@@ -1495,6 +1495,47 @@ pub enum ModelKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_state_bytes: Option<u64>,
     },
+    /// Realized volatility and the jump tests on it (`rheon_core::Realized`):
+    /// each target a return series; per target, realized variance, bipower
+    /// and tripower variation, tripower quarticity, Barndorff-Nielsen and
+    /// Shephard's adjusted ratio test, Lee and Mykland's statistic of the
+    /// row's return and its flag, each read before the row is learned. No
+    /// features, no `coef`.
+    #[serde(rename = "realized")]
+    Realized {
+        /// The estimators of the last this many rows of positive weight
+        /// alone, in place of a decay (`half_life` "inf"). Skipped when
+        /// absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window_rows: Option<usize>,
+        /// The estimators of the rows of the last this long on the clock
+        /// alone: a number of the clock column's units (rows when the spec
+        /// has no clock), or a duration on a temporal clock. The data
+        /// decides how many rows that is, so the state's bytes are checked
+        /// as the rows go in. Beside `window_rows` it is refused. Skipped
+        /// when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window_size: Option<Span>,
+        /// Which edge of `window_size` holds the row exactly that old:
+        /// `"right"`, the default, or `"both"`. Skipped when `"right"`.
+        #[serde(default, skip_serializing_if = "ModelClosed::is_right")]
+        closed: ModelClosed,
+        /// Lee and Mykland's `K`, a count of returns: the volatility of a
+        /// row's return from the `K - 1` returns before it alone. Absent,
+        /// it is read from the estimators' own window or decay. Skipped when
+        /// absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lm_window: Option<usize>,
+        /// The confidence of Lee and Mykland's flag, above 0 and below 1;
+        /// absent is 0.99. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lm_beta: Option<f64>,
+        /// The bytes a group's state may hold, a window's rows included:
+        /// `window_rows` is checked against it here, `window_size` as the
+        /// rows go in. Default 256 KB, at most 64 MiB. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
+    },
 }
 
 /// The two sides of a `seqtest` comparison, as [`ModelKind::compares`]
@@ -1583,6 +1624,7 @@ impl ModelKind {
         "hawkes",
         "expectile",
         "garch",
+        "realized",
     ];
 
     pub fn kind_name(&self) -> &'static str {
@@ -1613,6 +1655,7 @@ impl ModelKind {
             ModelKind::Hawkes { .. } => "hawkes",
             ModelKind::Expectile { .. } => "expectile",
             ModelKind::Garch { .. } => "garch",
+            ModelKind::Realized { .. } => "realized",
         }
     }
 
@@ -1933,6 +1976,7 @@ impl ModelKind {
                     | ModelKind::Marginal { .. }
                     | ModelKind::Hawkes { .. }
                     | ModelKind::Garch { .. }
+                    | ModelKind::Realized { .. }
             )
     }
 
@@ -2835,6 +2879,10 @@ impl Spec {
             ModelKind::Hawkes { .. } => 0.0,
             // The start is the gate: nothing is reported before it is fitted.
             ModelKind::Garch { .. } => 0.0,
+            // Each estimator is defined from its first returns (a sum of
+            // none is 0, and a test or a statistic whose sums are 0 is
+            // `NaN`): no count of weight is the gate.
+            ModelKind::Realized { .. } => 0.0,
             // The noise gate is this model's readiness gate
             // (docs/WARMUP-AND-CONVERGENCE.md §2.1): `max_error_inflation`
             // tracks the model where a count of weight cannot, and the
@@ -3350,6 +3398,15 @@ impl Spec {
                     "spec {name:?}: garch takes no features, but features lists {}: each of \
                      its targets is a return series whose variance it models. Put the return \
                      columns in targets, and leave out features.",
+                    columns_counted(self.features.len())
+                ));
+            }
+        } else if let ModelKind::Realized { .. } = &self.model {
+            if !self.features.is_empty() {
+                no.refuse(format!(
+                    "spec {name:?}: realized takes no features, but features lists {}: each \
+                     of its targets is a return series it measures. Put the return columns in \
+                     targets, and leave out features.",
                     columns_counted(self.features.len())
                 ));
             }

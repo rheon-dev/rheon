@@ -77,6 +77,7 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
     ("expectile", &["window_size", "refit_span"]),
     ("glm", &["refit_span"]),
     ("garch", &["start_span"]),
+    ("realized", &["window_size"]),
 ];
 
 /// The parameters that take a duration on a temporal clock or a number that
@@ -470,6 +471,9 @@ impl Spec {
             }
             ModelKind::Glm { refit_span, .. } => {
                 put(&mut out, "refit_span", refit_span.as_ref());
+            }
+            ModelKind::Realized { window_size, .. } => {
+                put(&mut out, "window_size", window_size.as_ref());
             }
             ModelKind::Micro { prune_every, .. } => {
                 put(&mut out, "prune_every", prune_every.as_ref());

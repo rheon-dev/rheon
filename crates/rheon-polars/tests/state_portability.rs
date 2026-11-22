@@ -104,6 +104,11 @@ const SPECS: &[(&str, &str, &str)] = &[
         r#""targets": ["x0"], "features": ["x0", "x1"], "half_life": 50.0"#,
     ),
     (
+        "realized",
+        r#"{"type": "realized", "window_rows": 30, "lm_window": 20}"#,
+        r#""targets": ["y", "x0"], "features": [], "half_life": "inf""#,
+    ),
+    (
         "holt",
         r#"{"type": "holt"}"#,
         r#""targets": ["y"], "features": [], "half_life": 50.0"#,

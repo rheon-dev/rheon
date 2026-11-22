@@ -941,15 +941,19 @@ fn only_models_that_predict_a_target_have_residual_fields() {
         r#"{"type": "hawkes", "kernel_decays": [1.0, 5.0]}"#,
         r#"{"type": "expectile", "expectile": 0.9}"#,
         r#"{"type": "garch"}"#,
+        r#"{"type": "realized"}"#,
     ];
     let mut seen = Vec::new();
     for model in kinds {
-        let features =
-            if model.contains("holt") || model.contains("hawkes") || model.contains("garch") {
-                "[]"
-            } else {
-                r#"["x0", "x1"]"#
-            };
+        let features = if model.contains("holt")
+            || model.contains("hawkes")
+            || model.contains("garch")
+            || model.contains("realized")
+        {
+            "[]"
+        } else {
+            r#"["x0", "x1"]"#
+        };
         let spec: Spec = serde_json::from_str(&format!(
             r#"{{"name": "s", "model": {model}, "targets": ["y"], "features": {features},
                 "half_life": 50.0, "min_weight": 2.0}}"#
