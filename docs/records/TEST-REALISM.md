@@ -138,7 +138,7 @@ realistic test and nothing is left to add.
 | | F | 4 (`glm_refit`, `_refit_done`, `_refit_clock`, `glm_cap`) | D: same stream | none for forms |
 | | O | `convergence.glm` (6, statsmodels), `test_second_opinion_glm` (statsmodels `GLM` with `freq_weights`, glum; 5 coefficients at 10,000 rows, 20 at 10,000 and 100,000) | R | none |
 | | C | as `ewridge` | D / R | none |
-| `expectile` | G | 2 (`expectile`, `_window`) | R\* | skewed noise: with symmetric noise an expectile at 0.8 is a small shift of the mean |
+| `expectile` | G | 2 (`expectile`, `_window`), and `golden_structured.rs`'s `expectile_skewed` (the same noise at 0.85: the shift is held to the expectile of `Exp(1)` found by bisection, 0.7) | R\*; R (the added test) | none |
 | | F | 6 (`expectile`, `_window`, `_clock_window`, `_refit`, `_refit_done`, `_refit_clock`) | R\* | none |
 | | O | `convergence.expectile` (8, statsmodels), `test_second_opinion_expectile` (8: statsmodels, scipy `expectile`) | R | none |
 | | C | as `ewridge` | D / R | none |

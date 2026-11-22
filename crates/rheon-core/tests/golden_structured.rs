@@ -714,6 +714,50 @@ fn quantile_skewed_golden() {
     check("quantile_skewed", &got, GOLDEN_QUANTILE_SKEWED);
 }
 
+/// `expectile` at 0.85 on the same noise, no forgetting: the fit sits above
+/// the mean's line by the noise's 0.85 expectile, the root `e` of `0.85
+/// exp(-e) = 0.15 (e - 1 + exp(-e))` for `Exp(1)`, less 1, times 0.8, found
+/// here by bisection.
+#[test]
+fn expectile_skewed_golden() {
+    let rows = skewed_rows();
+    let cfg = ExpectileCfg {
+        n_features: 2,
+        n_targets: 1,
+        fit_intercept: true,
+        decay: Decay::Halflife(f64::INFINITY),
+        expectile: 0.85,
+        ridge: 1e-6,
+        min_weight: 3.0,
+        refit_rows: 0,
+        refit_clock: None,
+        window_rows: None,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        max_state_bytes: None,
+    };
+    let mut m = Expectile::new(cfg.clone()).unwrap();
+    let mut got = probe(&mut m, &rows, &[0], &[200, 400, 599]);
+    let shift = mean_error(&mut Expectile::new(cfg).unwrap(), &rows, line, 300);
+    let balance = |e: f64| 0.85 * (-e).exp() - 0.15 * (e - 1.0 + (-e).exp());
+    let (mut lo, mut hi) = (0.0f64, 10.0f64);
+    for _ in 0..100 {
+        let mid = 0.5 * (lo + hi);
+        if balance(mid) > 0.0 {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    let want = 0.8 * (lo - 1.0);
+    assert!(
+        (shift - want).abs() < 0.1,
+        "shift {shift}, the expectile's {want}"
+    );
+    got.push(shift);
+    check("expectile_skewed", &got, GOLDEN_EXPECTILE_SKEWED);
+}
+
 // --- generated; see the module docs ---
 const GOLDEN_KMEANS_BLOBS: &[f64] = &[
     2.0,
@@ -839,4 +883,10 @@ const GOLDEN_QUANTILE_SKEWED: &[f64] = &[
     -0.14877383228171126,
     0.6511296088025674,
     0.2649190652119157,
+];
+const GOLDEN_EXPECTILE_SKEWED: &[f64] = &[
+    0.48561188197826677,
+    0.23346226377963325,
+    1.0415184309502417,
+    0.6527315437575731,
 ];
