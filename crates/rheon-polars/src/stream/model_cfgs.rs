@@ -157,6 +157,10 @@ pub fn ar_cfg(spec: &Spec, decay: rheon_core::Decay) -> Result<rheon_core::ArCfg
         ridge,
         max_state_bytes,
         select,
+        window_size,
+        snapshot_every,
+        max_rows_between_snapshots,
+        ..
     } = &spec.model
     else {
         return Err(not_a(spec, "ar_cfg", "ar"));
@@ -181,6 +185,9 @@ pub fn ar_cfg(spec: &Spec, decay: rheon_core::Decay) -> Result<rheon_core::ArCfg
                 ));
             }
         },
+        window: window_size.as_ref().map(Span::value),
+        window_every: snapshot_every.as_ref().map(Span::value),
+        max_rows_between_snapshots: max_rows_between_snapshots.map(|r| r as usize),
     };
     cfg.validate()?;
     Ok(cfg)

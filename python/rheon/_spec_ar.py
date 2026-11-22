@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, Unpack
 
+from rheon._duration import Duration
 from rheon._kwargs import CommonKwargs
 from rheon._spec import TargetList, _checked, _common
 
@@ -21,6 +22,11 @@ def ar(
     ridge: float | None = None,
     max_state_bytes: int | None = None,
     select: Literal["aic", "bic"] | None = None,
+    window_size: float | Duration | None = None,
+    closed: Literal["right", "both"] = "right",
+    snapshot_every: float | Duration | None = None,
+    max_rows_between_snapshots: int | None = None,
+    window_budget: dict[Literal["thin", "refuse"], float] | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """An autoregression for each target, fitted by exponentially weighted
@@ -83,6 +89,23 @@ def ar(
         Σw²`` over the target's learned rows at their decayed weights: the
         row count with no decay and unit weights. Needs ``lags`` as an order
         and ``ridge`` 0. Default none, every lag.
+    ``window_size``
+        Clock units of history each target's fit is read from, a hard
+        cutoff: a row older than this is in no fit, as :func:`ewridge`'s
+        ``window_size`` (a number of the clock's units, or a duration on a
+        temporal clock). Under decay the rows inside are still weighted by
+        it. The lags a row reads may be older than the window: a row's lags
+        are part of the row. As rows leave, a fit can lose the spread it
+        needs, so under a window each target's definiteness is checked on
+        every row, and its predictions are withheld while it does not hold.
+        Default none.
+    ``closed``, ``snapshot_every``, ``max_rows_between_snapshots``
+        The window's edge and the cadence of the snapshots it is cut from,
+        as :func:`ewridge`'s.
+    ``window_budget``
+        The MiB a group's snapshots may take, every target's together, each
+        target's fit a share of it; past it they thin or refuse the run, as
+        :func:`ewridge`'s. Default ``{"refuse": 256}``.
 
     .. rubric:: Output
 
@@ -200,7 +223,15 @@ def ar(
     coefficients' variance over the noise, from the fit's own factor, times
     the residual variance the bank keeps.
     """
-    model: dict[str, Any] = {"type": "ar", "lags": lags}
+    model: dict[str, Any] = {
+        "type": "ar",
+        "lags": lags,
+        "window_size": window_size,
+        "closed": closed,
+        "snapshot_every": snapshot_every,
+        "max_rows_between_snapshots": max_rows_between_snapshots,
+        "window_budget": window_budget,
+    }
     # Each absent when not given, as the Rust spec leaves it out, so a bank
     # reports the dict this made (`ModelBank.specs`).
     if ridge is not None:

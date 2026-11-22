@@ -220,6 +220,7 @@ WINDOWED = {
         "m", features=["x0"], label="c", classes=["a", "b"], precision_prior=1.0, **kw
     ),
     "marginal": lambda **kw: rp.spec.marginal("m", targets=["y"], features=["x0"], **kw),
+    "ar": lambda **kw: rp.spec.ar("m", targets=["y"], features=["x0"], lags=2, **kw),
 }
 
 

@@ -1466,7 +1466,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 122] = [
+    const FORMS: [(&str, &[&str]); 123] = [
         // Schema 70 (rule 5's twenty-second exception): the stabilized
         // prior's `ŝ` and `V` under `full` in each form and under `diag`,
         // the factor form's `f`, and a spec's own `prior_rows`.
@@ -1710,6 +1710,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         ("ar", &["model", "Ar", "cfg", "lags"]),
         ("ar_select", &["model", "Ar", "chosen", "1"]),
         ("ar_select", &["model", "Ar", "chosen", "0"]),
+        ("ar_window", &["model", "Ar", "fits", "0", "win"]),
         ("ar_filling", &["model", "Ar", "rings", "0"]),
         ("ar_filling", &["model", "Ar", "fits", "0", "acc"]),
     ];

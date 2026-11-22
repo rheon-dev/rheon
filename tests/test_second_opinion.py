@@ -328,11 +328,14 @@ class TestWindowedSpread:
             features=["x0", "x1"],
             half_life=self.H,
             window_size=self.W,
-            solve_every=1e-9,
             emit_sigma=True,
             emit_zscore=True,
             **kw,
         )
+        if kind == "ar":
+            # Its own lag beside the features; it solves on every row.
+            return rp.spec.ar("m", lags=1, **common)
+        common["solve_every"] = 1e-9
         if kind == "lasso":
             return rp.spec.lasso("m", penalties=[0.01], **common)
         return rp.spec.ewridge("m", **common)
@@ -342,7 +345,7 @@ class TestWindowedSpread:
         name = next(n for n in rp.spec.output_fields(spec) if n.startswith(prefix))
         return out["m"].struct.field(name).to_numpy().astype(float)
 
-    @pytest.mark.parametrize("kind", ["ewridge", "lasso"])
+    @pytest.mark.parametrize("kind", ["ewridge", "lasso", "ar"])
     def test_sigma_is_the_spread_of_the_residuals_inside_the_window(self, kind):
         df = self._frame()
         spec = self._spec(kind)

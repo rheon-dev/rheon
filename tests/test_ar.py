@@ -398,3 +398,70 @@ def test_select_refusals():
         rp.spec.ar("a", targets=["y"], lags=3, select="bic", ridge=0.1, half_life=10.0)
     with pytest.raises(ValueError, match="select"):
         rp.spec.ar("a", targets=["y"], lags=3, select="hqic", half_life=10.0)  # type: ignore[arg-type]
+
+
+def test_a_window_is_least_squares_on_its_rows():
+    """Under ``window_size`` with no decay the fit is least squares on the
+    rows less than ``window_size`` old on the clock, each with its lags,
+    which may be older than the window: at three rows of an uneven clock."""
+    n, w = 1500, 120.0
+    df = _series(n, 15)
+    rng = np.random.default_rng(16)
+    df = df.with_columns(pl.Series("t", np.cumsum(rng.uniform(0.5, 1.5, n))))
+    spec = rp.spec.ar(
+        "a",
+        targets=["y"],
+        lags=2,
+        features=["x"],
+        clock="t",
+        gap_cap=10.0,
+        half_life=float("inf"),
+        window_size=w,
+        coef_every=0,
+    )
+    out = _out(spec, df)
+    y, x, t = (df[c].to_numpy() for c in ("y", "x", "t"))
+    for end in (400, 901, n - 1):
+        rows = [s for s in range(2, end + 1) if t[end] - t[s] < w]
+        design = np.column_stack(
+            [np.ones(len(rows)), y[np.array(rows) - 1], y[np.array(rows) - 2], x[rows]]
+        )
+        want = np.linalg.lstsq(design, y[rows], rcond=None)[0]
+        assert _rel(np.asarray(out["coef"][end].to_list()), want) < 1e-9, end
+
+
+@pytest.mark.parametrize("cut", [7, 300, 777])
+def test_a_window_saves_and_chunks_to_the_bit(cut):
+    df = _series(900, 17).with_columns(pl.Series("g", np.where(np.arange(900) % 2 == 0, "a", "b")))
+    s = rp.spec.ar(
+        "a",
+        targets=["y"],
+        lags=3,
+        features=["x"],
+        group="g",
+        half_life=80.0,
+        window_size=50.0,
+        coef_every=0,
+    )
+    one = rp.ModelBank([s]).fit_predict(df)
+    a = rp.ModelBank([s])
+    first = a.fit_predict(df.slice(0, cut))
+    buf = io.BytesIO()
+    a.save(buf)
+    b = rp.ModelBank.load_bytes(buf.getvalue(), specs=[s])
+    rest = df.slice(cut)
+    got_a, got_b = a.fit_predict(rest), b.fit_predict(rest)
+    assert got_a.equals(got_b, null_equal=True)
+    assert pl.concat([first, got_a]).equals(one, null_equal=True)
+
+
+def test_the_window_budget_is_one_for_the_group():
+    """Two targets share one budget: a budget the one-target spec runs under
+    is refused where two targets' snapshots together pass it."""
+    df = _series(600, 18).with_columns(pl.col("y").alias("z"))
+    kw = dict(lags=2, half_life=float("inf"), window_size=100.0)
+    one = rp.spec.ar("a", targets=["y"], window_budget={"refuse": 0.04}, **kw)
+    rp.ModelBank([one]).fit_predict(df)
+    two = rp.spec.ar("a", targets=["y", "z"], window_budget={"refuse": 0.04}, **kw)
+    with pytest.raises(Exception, match="window_budget"):
+        rp.ModelBank([two]).fit_predict(df)

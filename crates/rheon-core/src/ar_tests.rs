@@ -43,6 +43,9 @@ fn cfg(lags: Vec<usize>, n_features: usize, decay: Decay) -> ArCfg {
         min_weight: 0.0,
         max_state_bytes: None,
         select: None,
+        window: None,
+        window_every: None,
+        max_rows_between_snapshots: None,
     }
 }
 
@@ -736,4 +739,69 @@ fn select_refuses_gapped_lags_and_a_ridge() {
         })
         .is_ok()
     );
+}
+
+/// Under a hard window of `w` clock units, with no decay, the fit is least
+/// squares on the learned rows less than `w` old (a row exactly `w` old
+/// out, the default edge), each with its lags, which may be older than the
+/// window: faer's LU on those rows, at several ends of the stream.
+#[test]
+fn a_window_is_least_squares_on_its_rows() {
+    let (x, y) = series(400, 53);
+    let w = 60.0;
+    let mut m = Ar::new(ArCfg {
+        window: Some(w),
+        ..cfg(vec![1, 2], 1, Decay::Halflife(f64::INFINITY))
+    })
+    .unwrap();
+    let xs: Vec<Vec<f64>> = x.iter().map(|v| vec![*v]).collect();
+    for t in 0..y.len() {
+        m.step(&[x[t]], &[Some(y[t])], 1.0, 1.0);
+        if matches!(t, 150 | 271 | 399) {
+            // rows s with t - s < w, past the two the ring fills on
+            let from = (t + 1 - w as usize).max(2);
+            let (a, b) = wls_rows(&[1, 2], &xs, &y, (from - 2)..(t + 1));
+            let want = oracle::solve(&a, &b);
+            let got = &m.coefficients().unwrap()[0];
+            assert!(rel_gap(got, &want) < 1e-9, "row {t}: {got:?} vs {want:?}");
+        }
+    }
+}
+
+/// Under a window a fit can lose its spread: here the feature varies, then
+/// holds one value for longer than the window, so the window's system
+/// stops being definite and the target stops predicting; once the feature
+/// varies again inside the window, it predicts again. Without a window the
+/// old rows keep it definite throughout.
+#[test]
+fn under_a_window_definiteness_is_checked_on_every_row() {
+    let (x0, y) = series(300, 59);
+    let x: Vec<f64> = (0..y.len())
+        .map(|t| if (100..200).contains(&t) { 1.0 } else { x0[t] })
+        .collect();
+    let run = |window: Option<f64>| {
+        let mut m = Ar::new(ArCfg {
+            window,
+            ..cfg(vec![1], 1, Decay::Halflife(f64::INFINITY))
+        })
+        .unwrap();
+        (0..y.len())
+            .map(|t| m.step(&[x[t]], &[Some(y[t])], 1.0, 1.0).pred[0].is_finite())
+            .collect::<Vec<bool>>()
+    };
+    let windowed = run(Some(30.0));
+    assert!(windowed[90], "predicts while the feature varies");
+    assert!(
+        !windowed[150],
+        "withheld once the window holds one value of it"
+    );
+    assert!(
+        windowed[160 - 31],
+        "and not before the window has lost the spread"
+    );
+    assert!(
+        windowed[260],
+        "predicts again once it varies inside the window"
+    );
+    assert!(run(None)[150], "no window: the old rows keep it definite");
 }

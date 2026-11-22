@@ -125,6 +125,19 @@ pub struct ArCfg {
     /// fits every lag given.
     #[serde(default)]
     pub select: Option<ArSelect>,
+    /// Clock units of history each fit is computed from, a hard cutoff
+    /// (`ewridge`'s `window`): a row older than this is in no Gram. Under
+    /// a window a fit can lose its spread as rows leave, so its
+    /// definiteness is checked on every row.
+    #[serde(default)]
+    pub window: Option<f64>,
+    /// Clock units between the window's snapshots (`ewridge`'s
+    /// `window_every`).
+    #[serde(default)]
+    pub window_every: Option<f64>,
+    /// At most this many rows between the window's snapshots.
+    #[serde(default)]
+    pub max_rows_between_snapshots: Option<usize>,
 }
 
 /// The criterion an [`Ar`] chooses its order by, with Kish's effective
@@ -204,6 +217,13 @@ impl ArCfg {
             }
         }
         no.stop_here()?;
+        // The window's own settings, in the words its fits refuse them by.
+        no.take(
+            self.ridge_cfg()
+                .validate()
+                .map_err(|e| e.replace("ewridge: ", "ar: ")),
+        );
+        no.stop_here()?;
         let bytes = Ar::state_bytes(self);
         if bytes > self.cap() {
             no.refuse(format!(
@@ -243,9 +263,9 @@ impl ArCfg {
             solve_share: None,
             gram_block_rows: 0,
             target_gaps: TargetGaps::OwnRows,
-            window: None,
-            window_every: None,
-            max_rows_between_snapshots: None,
+            window: self.window,
+            window_every: self.window_every,
+            max_rows_between_snapshots: self.max_rows_between_snapshots,
         }
     }
 }
@@ -620,8 +640,9 @@ impl OnlineModel for Ar {
                     None => self.one.pred[0],
                 };
             }
-            // The fit a learned row taught, checked until it is defined.
-            if taught.is_some() && !self.defined[j] {
+            // The fit a learned row taught, checked until it is defined;
+            // under a window, on every row, as rows leave it.
+            if (taught.is_some() && !self.defined[j]) || (self.cfg.window.is_some() && full) {
                 self.defined[j] = Self::definite(
                     &self.fits[j],
                     self.cfg.fit_intercept,
@@ -629,7 +650,8 @@ impl OnlineModel for Ar {
                     self.cfg.ridge,
                 );
             }
-            if let (Some(ic), true, true) = (self.cfg.select, taught.is_some(), self.defined[j]) {
+            let moved = taught.is_some() || self.cfg.window.is_some();
+            if let (Some(ic), true, true) = (self.cfg.select, moved, self.defined[j]) {
                 self.chosen[j] =
                     Self::select_order(&self.fits[j], &self.cfg, ic).unwrap_or_default();
             }
@@ -699,8 +721,63 @@ impl OnlineModel for Ar {
 
     fn target_n_eff_into(&self, out: &mut Vec<f64>) -> bool {
         out.clear();
-        out.extend(self.fits.iter().map(|f| f.target_weights()[0]));
+        let mut one = Vec::with_capacity(1);
+        for fit in &self.fits {
+            // The fit's own: inside the window under one.
+            fit.target_n_eff_into(&mut one);
+            out.push(one[0]);
+        }
         true
+    }
+
+    fn stamp_next(&mut self, stamp: crate::Stamp) {
+        for fit in &mut self.fits {
+            fit.stamp_next(stamp);
+        }
+    }
+
+    fn stamp_next_on_rows(&mut self, stamp: crate::Stamp) {
+        for fit in &mut self.fits {
+            fit.stamp_next_on_rows(stamp);
+        }
+    }
+
+    /// One budget for the group: each target's fit takes its share, so
+    /// their snapshots together stay under it.
+    fn set_window_budget(&mut self, budget: Option<crate::WindowBudget>) {
+        let n = self.fits.len().max(1) as f64;
+        let share = budget.map(|b| match b {
+            crate::WindowBudget::Thin(m) => crate::WindowBudget::Thin(m / n),
+            crate::WindowBudget::Refuse(m) => crate::WindowBudget::Refuse(m / n),
+        });
+        for fit in &mut self.fits {
+            fit.set_window_budget(share);
+        }
+    }
+
+    fn set_window_closed(&mut self, closed: crate::WindowClosed) {
+        for fit in &mut self.fits {
+            fit.set_window_closed(closed);
+        }
+    }
+
+    /// Any fit's window past its share, its bytes counted for the group:
+    /// every fit takes the same rows on the same stamps, so their rings
+    /// hold alike.
+    fn window_over_budget(&self) -> Option<(usize, crate::Cadence)> {
+        let n = self.fits.len();
+        self.fits
+            .iter()
+            .find_map(|f| f.window_over_budget())
+            .map(|(bytes, cadence)| (bytes * n, cadence))
+    }
+
+    fn window_shadow(&self) -> Option<crate::WindowShadow> {
+        self.fits.first().and_then(|f| f.window_shadow())
+    }
+
+    fn window_could_refuse(&self, rows: usize) -> bool {
+        self.fits.iter().any(|f| f.window_could_refuse(rows))
     }
 
     fn state(&self) -> State {

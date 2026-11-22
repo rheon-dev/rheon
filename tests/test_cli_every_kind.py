@@ -728,6 +728,19 @@ CASES: list[Case] = [
         "ar",
         full(**CLOSE, lags=[1, 3], ridge=0.01, max_state_bytes=1 << 20, emit_se_coef=True),
     ),
+    # Under a hard window, its cadence, its edge and its budget.
+    Case(
+        "ar_window",
+        "ar",
+        full(
+            lags=2,
+            window_size=40.0,
+            closed="both",
+            snapshot_every=2.0,
+            max_rows_between_snapshots=3,
+            window_budget={"thin": 64.0},
+        ),
+    ),
     # Without the embargo, which `ar` refuses.
     Case(
         "ar_pure",

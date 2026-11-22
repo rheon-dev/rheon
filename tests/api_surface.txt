@@ -111,6 +111,11 @@
     ridge = None
     max_state_bytes = None
     select = None
+    window_size = None
+    closed = 'right'
+    snapshot_every = None
+    max_rows_between_snapshots = None
+    window_budget = None
     common
   audit:
     name
@@ -518,12 +523,15 @@
     model.decay.Halflife = 50.0
     model.fit_intercept = true
     model.lags = [1, 2]
+    model.max_rows_between_snapshots = null
     model.max_state_bytes = null
     model.min_weight = 0.0
     model.n_features = 1
     model.n_targets = 1
     model.ridge = 0.0
     model.select = null
+    model.window = null
+    model.window_every = null
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
     stream.feature_health_half_life = 50.0
@@ -2687,6 +2695,8 @@
   garch.vol: egarch, figarch, garch, gjr
   garch.dist: normal, skewt, t
   ar.select: aic, bic
+  ar.closed: both, right
+  ar.window_budget: refuse, thin
   marginal.closed: both, right
   ew_class.covariance_type: diag, full, tied
   ew_class.window_budget: refuse, thin
@@ -2828,7 +2838,7 @@
     targets
     weight
   [specs.model], by type:
-    ar: lags, max_state_bytes, ridge, select
+    ar: closed, lags, max_rows_between_snapshots, max_state_bytes, ridge, select, snapshot_every, window_budget, window_size
     audit: distinct_cap, pairs
     bocpd: covariance_prior, covariance_type, degrees_of_freedom_prior, hazard, hazard_col, max_run, mean_precision_prior, mean_prior, prune_below, robust_beta, warm_rows, warm_span
     corrchange: alpha, alpha_adjust, bandwidth, boundary_gamma, change_action, crit, kind, monitor_rows, n_perm, norm, perm_block, permute_every, permute_every_rows, scalar, seed, window_rows

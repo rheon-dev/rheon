@@ -168,6 +168,25 @@ fn ewridge(k: usize, t: usize) -> EwRidge {
     .unwrap()
 }
 
+/// An AR of two lags with `k` features, one target: one fit's window.
+fn ar(k: usize) -> Ar {
+    Ar::new(ArCfg {
+        n_targets: 1,
+        n_features: k,
+        lags: vec![1, 2],
+        fit_intercept: true,
+        decay: Decay::Halflife(1e6),
+        ridge: 1e-6,
+        min_weight: 0.0,
+        max_state_bytes: Some(64 << 20),
+        select: None,
+        window: Some(WINDOW),
+        window_every: None,
+        max_rows_between_snapshots: None,
+    })
+    .unwrap()
+}
+
 fn lasso(k: usize, t: usize) -> Lasso {
     Lasso::new(LassoCfg {
         min_weight_holds_learning: false,
@@ -263,6 +282,9 @@ fn cases(rows: usize) -> Vec<(String, Measured)> {
             format!("marginal k={k} t={t}"),
             measure(|| marginal(k, t, vec![]), k, t, None, rows),
         ));
+    }
+    for k in [3, 30] {
+        out.push((format!("ar k={k} t=1"), measure(|| ar(k), k, 1, None, rows)));
     }
     out.push((
         "marginal k=3 t=1 lags=[1, 2]".into(),

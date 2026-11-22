@@ -6376,6 +6376,9 @@ fn ar_cfg() -> ArCfg {
         min_weight: 3.0,
         max_state_bytes: None,
         select: None,
+        window: None,
+        window_every: None,
+        max_rows_between_snapshots: None,
     }
 }
 
@@ -6405,6 +6408,13 @@ fn ar() {
         ..ar_cfg()
     };
     assert!(probe_with(Ar::new(chosen).unwrap(), 2, Some(&Ar::n_eff)).roundtrips);
+    // Under a hard window its weight is the window's, read by the caller.
+    let windowed = ArCfg {
+        window: Some(15.0),
+        ..ar_cfg()
+    };
+    let r = probe_windowed(Ar::new(windowed).unwrap(), 2, Some(&Ar::n_eff));
+    assert!(r.roundtrips && !r.lags_are_a_no_op);
 }
 
 #[test]
@@ -6416,6 +6426,17 @@ fn ar_predict_is_the_step() {
                 lags: vec![1, 2, 3],
                 ridge: 0.0,
                 select: Some(ArSelect::Bic),
+                ..ar_cfg()
+            })
+            .unwrap()
+        },
+        2,
+        false,
+    );
+    predict_is_the_step_without_the_step(
+        || {
+            Ar::new(ArCfg {
+                window: Some(25.0),
                 ..ar_cfg()
             })
             .unwrap()

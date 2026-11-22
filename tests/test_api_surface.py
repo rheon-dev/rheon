@@ -704,6 +704,8 @@ ENUM_PROBES: list[
     ("garch.vol", "garch", {"start_rows": 2000}, "model.vol", "word"),
     ("garch.dist", "garch", {}, "model.dist", "word"),
     ("ar.select", "ar", {"lags": 3}, "model.select", "word"),
+    ("ar.closed", "ar", {"lags": 2, "window_size": 100.0}, "model.closed", "word"),
+    ("ar.window_budget", "ar", {"lags": 2, "window_size": 100.0}, "model.window_budget", "key"),
     ("marginal.closed", "marginal", {"window_size": 100.0}, "model.closed", "word"),
     ("ew_class.covariance_type", "ew_class", {}, "model.covariance_type", "word"),
     ("ew_class.window_budget", "ew_class", {"window_size": 100.0}, "model.window_budget", "key"),

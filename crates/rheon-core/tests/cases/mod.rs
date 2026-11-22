@@ -2620,6 +2620,20 @@ pub fn all() -> Vec<Case> {
             Targets::Linear(2),
             40
         ),
+        // Under a hard window of 15 clock units: each fit's snapshots.
+        case!(
+            "ar_window",
+            "Ar",
+            Ar,
+            Ar::new(ArCfg {
+                window: Some(15.0),
+                ..ar_cfg()
+            })
+            .unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
         // Saved two rows in: rings still filling, no fit yet.
         case!(
             "ar_filling",
@@ -2646,6 +2660,9 @@ fn ar_cfg() -> ArCfg {
         min_weight: 2.0,
         max_state_bytes: None,
         select: None,
+        window: None,
+        window_every: None,
+        max_rows_between_snapshots: None,
     }
 }
 

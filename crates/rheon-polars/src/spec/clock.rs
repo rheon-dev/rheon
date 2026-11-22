@@ -77,6 +77,7 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
     ("expectile", &["window_size", "refit_span"]),
     ("glm", &["refit_span"]),
     ("garch", &["start_span"]),
+    ("ar", &["window_size", "snapshot_every"]),
 ];
 
 /// The parameters that take a duration on a temporal clock or a number that
@@ -489,6 +490,14 @@ impl Spec {
                 put(&mut out, "warm_span", warm_span.as_ref());
                 put(&mut out, "update_every", update_every.as_ref());
                 put(&mut out, "split_merge_every", split_merge_every.as_ref());
+            }
+            ModelKind::Ar {
+                window_size,
+                snapshot_every,
+                ..
+            } => {
+                put(&mut out, "window_size", window_size.as_ref());
+                put(&mut out, "snapshot_every", snapshot_every.as_ref());
             }
             ModelKind::Garch { start_span, .. } => {
                 put(&mut out, "start_span", start_span.as_ref());

@@ -81,7 +81,10 @@ model that only the new build has is listed as an addition and passes.
   guards the early fits; `min_weight` defaults to 0), `emit_se_coef` is
   `ewridge`'s standard error of each target's fit, `select="aic"` or
   `"bic"` chooses the order after every learned row with Kish's effective
-  count (`ar_select_order`'s choice with no decay),
+  count (`ar_select_order`'s choice with no decay), `window_size` cuts each
+  target's fit at a span of the clock under one `window_budget` for the
+  group (each target's fit a share), its definiteness checked on every row
+  under a window,
   and the state, `8 max(lags)` plus at
   most `8 (4k² + 17k + 64)` bytes a target, is held to `max_state_bytes`
   when the spec is built. Spans: the half-life in rows or on the clock; the

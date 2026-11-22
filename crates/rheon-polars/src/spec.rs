@@ -1517,6 +1517,24 @@ pub enum ModelKind {
         /// learned row, with Kish's effective count. Absent fits every lag.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         select: Option<String>,
+        /// Clock units of history each target's fit sees, a hard cutoff,
+        /// as `ewridge`'s `window_size`.
+        #[serde(default)]
+        window_size: Option<Span>,
+        /// Which edge holds a row exactly `window_size` old.
+        #[serde(default)]
+        closed: ModelClosed,
+        /// Clock units between the window's snapshots.
+        #[serde(default)]
+        snapshot_every: Option<Span>,
+        /// At most this many rows between the window's snapshots.
+        #[serde(default)]
+        max_rows_between_snapshots: Option<u32>,
+        /// Past this many MiB the group's snapshots thin or refuse, every
+        /// target's together: one budget a group, each target's fit a
+        /// share of it.
+        #[serde(default)]
+        window_budget: Option<WindowBudgetSpec>,
     },
 }
 
@@ -1770,6 +1788,11 @@ impl ModelKind {
                 window_size: window,
                 window_budget,
                 ..
+            }
+            | ModelKind::Ar {
+                window_size: window,
+                window_budget,
+                ..
             } => Some((window.as_ref().map(Span::value), *window_budget)),
             _ => None,
         }
@@ -1835,6 +1858,11 @@ impl ModelKind {
                 snapshot_every,
                 max_rows_between_snapshots,
                 ..
+            }
+            | ModelKind::Ar {
+                snapshot_every,
+                max_rows_between_snapshots,
+                ..
             } => Some((snapshot_every.as_ref(), *max_rows_between_snapshots)),
             _ => None,
         }
@@ -1848,7 +1876,8 @@ impl ModelKind {
             | ModelKind::Lasso { closed, .. }
             | ModelKind::EwCov { closed, .. }
             | ModelKind::EwClass { closed, .. }
-            | ModelKind::Marginal { closed, .. } => Some(*closed),
+            | ModelKind::Marginal { closed, .. }
+            | ModelKind::Ar { closed, .. } => Some(*closed),
             _ => None,
         }
     }
@@ -1931,6 +1960,10 @@ impl ModelKind {
                 ..
             }
             | ModelKind::Lasso {
+                window_size: Some(w),
+                ..
+            }
+            | ModelKind::Ar {
                 window_size: Some(w),
                 ..
             } => Some((w.value(), self.snapshot_cadence()?)),
