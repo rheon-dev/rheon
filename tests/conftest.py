@@ -51,6 +51,23 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.oracle)
 
 
+def r_oracles_selected(markexpr: str) -> bool:
+    """Whether a run's ``-m`` asks for the R oracles: it names ``r_oracle``
+    and does not negate it. Only then are ``tests/r_oracle/``'s modules
+    collected, since they import rpy2, which needs R and the ``r-oracles``
+    group that one Linux job installs (pyproject.toml)."""
+    expr = " ".join(markexpr.split())
+    return "r_oracle" in expr and "not r_oracle" not in expr
+
+
+def pytest_ignore_collect(collection_path, config):
+    if "r_oracle" in collection_path.parts and not r_oracles_selected(
+        config.getoption("markexpr") or ""
+    ):
+        return True
+    return None
+
+
 def pytest_addoption(parser):
     parser.addoption(
         "--oracle-shard",

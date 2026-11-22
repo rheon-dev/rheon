@@ -187,7 +187,9 @@ pub struct RealizedCfg {
     #[serde(default)]
     pub closed: WindowClosed,
     /// Lee and Mykland's `K`: `σ_i` from the target's `K − 1` returns
-    /// before the row alone. Without it, from the estimators' sums.
+    /// before the row alone. At least 3 by the statistic's definition, the
+    /// mean of `K − 2` products; before `K − 1` returns, the mean of those
+    /// there are. Without it, from the estimators' sums.
     #[serde(default)]
     pub lm_window: Option<usize>,
     /// The confidence `β` of Lee and Mykland's flag, above 0 and below 1.

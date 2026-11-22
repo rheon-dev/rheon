@@ -84,8 +84,11 @@ def realized(
         before it alone, their ``K - 2`` products, whatever the window or
         decay of the other measures. It counts returns, as the paper's
         ``K`` does, so it has no form on the clock. ``16 (K - 2) + 32``
-        bytes a target. At least 3. Default none: the volatility is read
-        from the measures' own window or decay.
+        bytes a target. At least 3, by the statistic's definition: its
+        volatility is the mean of ``K - 2`` products, and a window of fewer
+        than 3 returns holds none. It is no warm-up: before ``K - 1``
+        returns the mean is of the products there are. Default none: the
+        volatility is read from the measures' own window or decay.
     ``lm_beta``
         The confidence of Lee and Mykland's jump flag, above 0 and below 1.
         Default 0.99.
