@@ -35,6 +35,28 @@ pub(crate) fn fixed_span(spec: &Spec) -> Option<FixedSpan> {
             "Shorten warm_span, or give warm_rows",
             "the 256 MiB a warm-up may hold",
         ),
+        ModelKind::Huber {
+            huber_refit_span: Some(s),
+            ..
+        }
+        | ModelKind::Sgd {
+            huber_refit_span: Some(s),
+            ..
+        } => it(
+            format!("huber_refit_span = {s}"),
+            "rows of its refit",
+            "Shorten huber_refit_span, or give huber_refit_rows",
+            "the 256 KB a group's refit buffers may hold",
+        ),
+        ModelKind::Quantile {
+            quantile_refit_span: Some(s),
+            ..
+        } => it(
+            format!("quantile_refit_span = {s}"),
+            "rows of its refit",
+            "Shorten quantile_refit_span, or give quantile_refit_rows",
+            "the 256 KB a group's refit buffers may hold",
+        ),
         ModelKind::Bocpd {
             warm_span: Some(s), ..
         } => it(

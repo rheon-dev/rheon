@@ -892,6 +892,7 @@ pub fn huber_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         ridge_scale: _,
         emit_huber_scale,
         huber_refit_rows,
+        huber_refit_span,
         refit_budget: _,
     } = &spec.model
     else {
@@ -928,7 +929,10 @@ pub fn huber_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         // outliers to refit for (`RobustCfg::refit_rows`): there it is off
         // unless asked for, and asked for it is refused.
         refit_rows: huber_refit_rows.unwrap_or(
-            if huber_ridge_scale_sum(spec) || huber_delta.is_some_and(|d| d.0.is_infinite()) {
+            if huber_refit_span.is_some()
+                || huber_ridge_scale_sum(spec)
+                || huber_delta.is_some_and(|d| d.0.is_infinite())
+            {
                 0
             } else {
                 rheon_core::default_refit_rows(spec.k())
@@ -939,6 +943,7 @@ pub fn huber_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         // without it loads with it off.
         mad_anchor: true,
         min_weight_holds_learning: false,
+        refit_clock: huber_refit_span.as_ref().map(Span::value),
     };
     let mut m = Robust::new(cfg)?;
     // Each target's own threshold, for its own first solve (S9b).
@@ -989,6 +994,7 @@ pub fn quantile_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         max_rows_between_solves,
         quantile_eps,
         quantile_refit_rows,
+        quantile_refit_span,
         refit_budget: _,
     } = &spec.model
     else {
@@ -1020,10 +1026,17 @@ pub fn quantile_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         // On by default, at `huber`'s count: the rows the warm-up took as
         // least squares and the first bands held refit to the converged
         // fit, once (task 278, D-Q2).
-        refit_rows: quantile_refit_rows.unwrap_or_else(|| rheon_core::default_refit_rows(spec.k())),
+        refit_rows: quantile_refit_rows.unwrap_or_else(|| {
+            if quantile_refit_span.is_some() {
+                0
+            } else {
+                rheon_core::default_refit_rows(spec.k())
+            }
+        }),
         // No sketch under the RMS band; anchored once a sketch is kept.
         mad_anchor: true,
         min_weight_holds_learning: false,
+        refit_clock: quantile_refit_span.as_ref().map(Span::value),
     };
     let mut m = Robust::new(cfg)?;
     // Each target's own threshold, for its own first solve (S9b).
@@ -1039,6 +1052,7 @@ pub fn sgd_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         huber_scale,
         huber_scale_half_life,
         huber_refit_rows,
+        huber_refit_span,
         refit_budget: _,
         quantile,
         eps,
@@ -1148,7 +1162,13 @@ pub fn sgd_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         // refit for.
         refit_rows: match loss {
             SgdLoss::Huber { delta } if delta.is_finite() => {
-                huber_refit_rows.unwrap_or_else(|| rheon_core::default_refit_rows(spec.k()))
+                huber_refit_rows.unwrap_or_else(|| {
+                    if huber_refit_span.is_some() {
+                        0
+                    } else {
+                        rheon_core::default_refit_rows(spec.k())
+                    }
+                })
             }
             SgdLoss::Huber { .. } => huber_refit_rows.unwrap_or(0),
             _ => 0,
@@ -1160,6 +1180,7 @@ pub fn sgd_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         target_spread: true,
         // `huber`'s anchored MAD sketch under the Huber loss.
         mad_anchor: true,
+        refit_clock: huber_refit_span.as_ref().map(Span::value),
     };
     Ok(AnyModel::Sgd(Box::new(Sgd::new(cfg)?)))
 }

@@ -310,6 +310,7 @@
     ridge_scale = 'mean'
     emit_huber_scale = False
     huber_refit_rows = None
+    huber_refit_span = None
     refit_budget = None
     common
   kalman:
@@ -424,6 +425,7 @@
     max_rows_between_solves = None
     quantile_eps = None
     quantile_refit_rows = None
+    quantile_refit_span = None
     refit_budget = None
     common
   rcov:
@@ -465,6 +467,7 @@
     huber_scale = None
     huber_scale_half_life = None
     huber_refit_rows = None
+    huber_refit_span = None
     refit_budget = None
     quantile = None
     eps = None
@@ -2796,18 +2799,18 @@
     hawkes: closed, kernel_decays, kernel_half_lives, max_state_bytes, window_events, window_size
     hmm: covariance_type, covs, exog_tvtp, init, learn, means, n_components, precision_prior, prior_rows, seed, transition, transition_prior, tvtp_coef, warm_rows, warm_span
     holt: trend, trend_half_life
-    huber: emit_huber_scale, feature_sets, huber_delta, huber_refit_rows, huber_scale, huber_scale_half_life, max_rows_between_solves, refit_budget, ridge, ridge_scale, solve_every, standardize
+    huber: emit_huber_scale, feature_sets, huber_delta, huber_refit_rows, huber_refit_span, huber_scale, huber_scale_half_life, max_rows_between_solves, refit_budget, ridge, ridge_scale, solve_every, standardize
     kalman: coef_half_life, covariance_form, obs_var, p0, q, revert_half_life, share_p, standardize
     kmeans: dead_frac, init, n_clusters, scale_floor, seed, split_merge, split_merge_every, split_merge_every_rows, standardize, update_every, update_every_rows, warm_rows, warm_span
     lasso: closed, l1_ratio, max_iter, max_rows_between_snapshots, max_rows_between_solves, penalties, select_half_life, snapshot_every, solve_every, target_gaps, tol, window_budget, window_size
     marginal: bin_budget, bin_edges, bin_huber_delta, bin_refit_rows, bin_rule, bin_stat, bin_warm_rows, bins, closed, cross_lags, feature_moments, lags, max_rows_between_snapshots, refit_budget, serial_rule, shards, snapshot_every, window_budget, window_lags, window_size
     micro: beta_mu, eps, macro_link, max_clusters, max_rows_between_prunes, prune_every, scale_floor, standardize
     pa: c, coef_max, coef_min, coef_sum, eps, mode, standardize
-    quantile: max_rows_between_solves, quantile, quantile_eps, quantile_refit_rows, refit_budget, ridge, solve_every, standardize
+    quantile: max_rows_between_solves, quantile, quantile_eps, quantile_refit_rows, quantile_refit_span, refit_budget, ridge, solve_every, standardize
     rcov: bandwidth, block_rows, iv_stride, jitter, kernel, kind, max_bandwidth, noise_stride, preavg_rows, psd, theta
     rls: coef_prior, delta
     seqtest: a, a_suffix, b, b_suffix
-    sgd: clip_gradient, coef_max, coef_min, coef_sum, eps, huber_delta, huber_refit_rows, huber_scale, huber_scale_half_life, l2, learning_rate, loss, power, quantile, refit_budget, schedule, standardize, strict_binary
+    sgd: clip_gradient, coef_max, coef_min, coef_sum, eps, huber_delta, huber_refit_rows, huber_refit_span, huber_scale, huber_scale_half_life, l2, learning_rate, loss, power, quantile, refit_budget, schedule, standardize, strict_binary
 
 [cli flags]  # `rheon --help`: a flag added, renamed or removed, or one that starts or stops taking a value, is a diff here
   Usage: rheon [OPTIONS] --config <CONFIG>

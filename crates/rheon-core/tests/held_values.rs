@@ -402,6 +402,7 @@ fn a_standardized_huber_keeps_the_slope_it_learned() {
         refit_rows: 0,
         mad_anchor: false,
         min_weight_holds_learning: false,
+        refit_clock: None,
     };
     holds(
         "huber",
@@ -480,6 +481,7 @@ fn sgd_predicts_the_same_at_every_level() {
         min_weight_holds_learning: false,
         target_spread: false,
         mad_anchor: false,
+        refit_clock: None,
     };
     holds(
         "sgd",
@@ -696,6 +698,7 @@ fn a_held_target_leaves_no_slope_on_a_moving_feature() {
         refit_rows: 0,
         mad_anchor: false,
         min_weight_holds_learning: false,
+        refit_clock: None,
     };
     slopes_decay(
         "huber",
@@ -819,6 +822,7 @@ fn without_decay_a_stopped_feature_keeps_its_slope() {
         min_weight_holds_learning: false,
         target_spread: false,
         mad_anchor: false,
+        refit_clock: None,
     };
     let (base, _) = run_on(
         Sgd::new(cfg.clone()).unwrap(),
@@ -931,6 +935,7 @@ fn a_state_saved_mid_hold_resumes_to_the_bit() {
             refit_rows: 0,
             mad_anchor: false,
             min_weight_holds_learning: false,
+            refit_clock: None,
         })
         .unwrap()
     });
@@ -974,6 +979,7 @@ fn a_state_saved_mid_hold_resumes_to_the_bit() {
             min_weight_holds_learning: false,
             target_spread: false,
             mad_anchor: false,
+            refit_clock: None,
         })
         .unwrap()
     });
@@ -1159,6 +1165,7 @@ fn a_row_of_no_weight_moves_no_mean() {
             refit_rows: 0,
             mad_anchor: false,
             min_weight_holds_learning: false,
+            refit_clock: None,
         })
         .unwrap()
     });
@@ -1202,6 +1209,7 @@ fn a_row_of_no_weight_moves_no_mean() {
             min_weight_holds_learning: false,
             target_spread: false,
             mad_anchor: false,
+            refit_clock: None,
         })
         .unwrap()
     });
@@ -1746,6 +1754,7 @@ fn quantile_cfg() -> RobustCfg {
         refit_rows: 0,
         mad_anchor: false,
         min_weight_holds_learning: false,
+        refit_clock: None,
     }
 }
 

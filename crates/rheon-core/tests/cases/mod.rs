@@ -451,6 +451,7 @@ fn robust_cfg(loss: RobustLoss) -> RobustCfg {
         // held learning back then (docs/PLAN.md task 278, D10). The form
         // since is the refit cases' and `quantile_mad`'s.
         min_weight_holds_learning: true,
+        refit_clock: None,
     }
 }
 
@@ -555,6 +556,7 @@ fn sgd_cfg(loss: SgdLoss, n_targets: usize) -> SgdCfg {
         min_weight_holds_learning: true,
         target_spread: false,
         mad_anchor: false,
+        refit_clock: None,
     }
 }
 
@@ -1167,6 +1169,53 @@ pub fn all() -> Vec<Case> {
         // the continuation, and saved after it, the buffers freed and the
         // scale rebuilt from the converged residuals (the MAD's sketch in
         // the first, the RMS in the second).
+        // Task 538: the refit over a span of the clock, saved inside it.
+        case!(
+            "huber_refit_span",
+            "Robust",
+            Robust,
+            Robust::new(RobustCfg {
+                huber_scale: rheon_core::HuberScale::Mad,
+                refit_clock: Some(60.0),
+                min_weight_holds_learning: false,
+                ..robust_cfg(RobustLoss::Huber { delta: 1.5 })
+            })
+            .unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        case!(
+            "quantile_refit_span",
+            "Robust",
+            Robust,
+            Robust::new(RobustCfg {
+                huber_scale: rheon_core::HuberScale::Mad,
+                refit_clock: Some(60.0),
+                min_weight_holds_learning: false,
+                mad_anchor: true,
+                ..robust_cfg(RobustLoss::Quantile { tau: 0.75 })
+            })
+            .unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        case!(
+            "sgd_huber_refit_span",
+            "Sgd",
+            Sgd,
+            Sgd::new(SgdCfg {
+                huber_scale: rheon_core::HuberScale::Mad,
+                refit_clock: Some(60.0),
+                min_weight_holds_learning: false,
+                ..sgd_cfg(SgdLoss::Huber { delta: 1.5 }, 2)
+            })
+            .unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
         case!(
             "huber_refit",
             "Robust",

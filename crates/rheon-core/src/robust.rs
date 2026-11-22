@@ -433,6 +433,14 @@ pub struct RobustCfg {
     /// ([`RobustCfg::gate_held_learning_before_64`]).
     #[serde(default = "RobustCfg::gate_held_learning_before_64")]
     pub min_weight_holds_learning: bool,
+    /// The refit of the first rows over a span of the clock in place of
+    /// `refit_rows` (docs/PLAN.md task 538): a target's rows from its first
+    /// learned row through the first at least this many clock units after
+    /// it, once they hold [`Self::span_refit_least`] rows. Its buffers grow
+    /// as the rows come, held to [`crate::huber_refit::SPAN_REFIT_CAP`] a
+    /// group. Last, and written only when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refit_clock: Option<f64>,
 }
 
 /// A target's band system as a solve factorizes it -- `A`, the band Gram
@@ -618,14 +626,30 @@ impl RobustCfg {
         ));
         // The refit's key names the kind's: a quantile state's message
         // named huber's (review round 10, S2-5).
-        if self.refit_rows > 0 {
+        if let Some(d) = self.refit_clock {
+            if !(d.is_finite() && d > 0.0) {
+                no.refuse(format!(
+                    "{kind}: {kind}_refit_span must be a finite number of clock units above 0, \
+                     but it is {d}. Give the span of clock whose rows the refit fits, or leave \
+                     it out for {kind}_refit_rows."
+                ));
+            }
+            if self.refit_rows > 0 {
+                no.refuse(format!(
+                    "{kind}: {kind}_refit_span and {kind}_refit_rows = {} are two refits of the \
+                     first rows, and a target is refit once. Leave one of them out.",
+                    self.refit_rows
+                ));
+            }
+        }
+        if self.refit_rows > 0 || self.refit_clock.is_some() {
             if let RobustLoss::Huber { delta } = self.loss
                 && delta == f64::INFINITY
             {
                 no.refuse(format!(
                     "{kind}: huber_refit_rows refits a target's first rows to a Huber fit, \
                      but huber_delta is {delta}, which makes that fit least squares. Set \
-                     huber_delta to a finite cut, or leave huber_refit_rows out."
+                     huber_delta to a finite cut, or leave the refit out."
                 ));
             }
             if self.ridge_scale {
@@ -870,6 +894,23 @@ pub struct Robust {
     /// A solve's working space ([`SolveScratch`]). Not state.
     #[serde(skip)]
     scratch: SolveScratch,
+    /// Under a refit over a span of the clock (task 538): the model's place
+    /// on the clock, and the buffers' cap, each written only when it holds
+    /// something, last.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    place: Option<crate::clock_span::Place>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    over: Option<u64>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    warned: bool,
+    #[serde(skip)]
+    warning: Option<u64>,
+    #[serde(skip)]
+    cap_for_test: Option<u64>,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// Every field as `derive(Debug)` writes it, but the solves' working space,
@@ -906,6 +947,11 @@ impl std::fmt::Debug for Robust {
             zbuf,
             nudge,
             scratch: _,
+            place,
+            over,
+            warned,
+            warning: _,
+            cap_for_test: _,
         } = self;
         f.debug_struct("Robust")
             .field("cfg", cfg)
@@ -931,6 +977,9 @@ impl std::fmt::Debug for Robust {
             .field("refit", refit)
             .field("seen", seen)
             .field("first_period_by_share", first_period_by_share)
+            .field("place", place)
+            .field("over", over)
+            .field("warned", warned)
             .field("zbuf", zbuf)
             .field("nudge", nudge)
             .finish()
@@ -1205,7 +1254,16 @@ impl Robust {
             mad: mad_sketches(cfg.huber_scale, cfg.mad_anchor, m),
             nudge: NudgeScratch::default(),
             scratch: SolveScratch::default(),
-            refit: RefitBuf::per_target(cfg.refit_rows, m, cfg.huber_scale == HuberScale::Mad),
+            refit: RefitBuf::per_target(
+                cfg.refit_rows.max(u32::from(cfg.refit_clock.is_some())),
+                m,
+                cfg.huber_scale == HuberScale::Mad,
+            ),
+            place: cfg.refit_clock.map(|_| crate::clock_span::Place::default()),
+            over: None,
+            warned: false,
+            warning: None,
+            cap_for_test: None,
             seen: if cfg.min_weight_holds_learning {
                 Vec::new()
             } else {
@@ -1411,10 +1469,14 @@ impl Robust {
     }
 
     /// The bytes this model's refit buffers can hold at most
-    /// ([`crate::refit_reservation`] a target), 0 with the refit off.
+    /// ([`crate::refit_reservation`] a target), 0 with the refit off; under a
+    /// refit over a span of the clock, the group's cap.
     pub fn refit_reservation(&self) -> usize {
         if self.refit.is_empty() {
             return 0;
+        }
+        if self.cfg.refit_clock.is_some() {
+            return crate::huber_refit::SPAN_REFIT_CAP as usize;
         }
         self.cfg.n_targets
             * crate::refit_reservation(
@@ -1638,12 +1700,95 @@ impl Robust {
     /// buffer it gives up hands its rows to the target's sketch
     /// ([`Self::scale_from_held`]).
     fn age_refit(&mut self, j: usize, lam: f64, lam_scale: f64) {
+        // Past a span's cap the buffers take nothing more.
+        if self.over.is_some() {
+            return;
+        }
+        let cap = self.refit_cap();
         if let Some(t) = self
             .refit
             .get_mut(j)
-            .and_then(|b| b.age(lam, lam_scale, self.cfg.refit_rows))
+            .and_then(|b| b.age(lam, lam_scale, cap))
         {
             self.scale_from_held(j, &t);
+        }
+    }
+
+    /// The count a buffer fills at, or [`crate::huber_refit::OPEN`] under a
+    /// refit over a span of the clock.
+    fn refit_cap(&self) -> u32 {
+        if self.cfg.refit_clock.is_some() {
+            crate::huber_refit::OPEN
+        } else {
+            self.cfg.refit_rows
+        }
+    }
+
+    /// The bytes a refit over a span of the clock may hold a group.
+    fn span_cap(&self) -> u64 {
+        self.cap_for_test
+            .unwrap_or(crate::huber_refit::SPAN_REFIT_CAP)
+    }
+
+    /// Hold a span's buffers to `bytes` in place of their cap, for a test.
+    #[cfg(test)]
+    pub(crate) fn set_cap_for_test(&mut self, bytes: u64) {
+        self.cap_for_test = Some(bytes);
+    }
+
+    /// Target `j`'s buffer takes the learned row, under a refit over a span
+    /// of the clock checked against the cap first: true where its refit is
+    /// due ([`RefitBuf::learn_scored`], [`RefitBuf::span_due`]).
+    #[allow(clippy::too_many_arguments)]
+    fn buffer_row(
+        &mut self,
+        j: usize,
+        x: &[f64],
+        yj: f64,
+        e_abs: f64,
+        weight: f64,
+        lam: f64,
+        lam_scale: f64,
+        now: Option<crate::Stamp>,
+    ) -> bool {
+        let (span, cap) = (self.cfg.refit_clock, self.refit_cap());
+        if span.is_some() {
+            if self.over.is_some() || !self.refit.get(j).is_some_and(RefitBuf::open) {
+                return false;
+            }
+            let held: u64 = self.refit.iter().map(RefitBuf::held_bytes).sum();
+            let row =
+                8 * (x.len() + 4) as u64 + 48 * u64::from(self.cfg.huber_scale == HuberScale::Mad);
+            let limit = self.span_cap();
+            let mut guard = crate::clock_span::HeldCap {
+                over: &mut self.over,
+                warned: &mut self.warned,
+                warning: &mut self.warning,
+            };
+            if !guard.admit(held + row, limit) {
+                return false;
+            }
+            guard.note(held + row, limit);
+        }
+        let least = self.span_refit_least();
+        let Some(b) = self.refit.get_mut(j) else {
+            return false;
+        };
+        let full = b.learn_scored(x, yj, e_abs, weight, lam, lam_scale, cap);
+        match (span, now) {
+            (Some(d), Some(now)) => b.span_due(now, d, least),
+            _ => full,
+        }
+    }
+
+    /// The rows a refit over a span of the clock holds at least: a row per
+    /// coefficient, and under the quantile loss three, the rows its
+    /// warm-up takes as least squares.
+    fn span_refit_least(&self) -> usize {
+        let k = self.cfg.k_total();
+        match self.cfg.loss {
+            RobustLoss::Quantile { .. } => (WARM_ROWS * k as f64) as usize,
+            _ => k.max(1),
         }
     }
 
@@ -2473,15 +2618,31 @@ impl OnlineModel for Robust {
         self.cfg.solve_share
     }
 
-    /// The solve cadence measures its clock by the row's stamp (task 180).
+    /// The solve cadence measures its clock by the row's stamp (task 180),
+    /// and a refit over a span of the clock its span (task 538).
     fn stamp_next(&mut self, stamp: crate::Stamp) {
         self.since_solve.stamp_next(stamp);
+        if let Some(p) = self.place.as_mut() {
+            p.hand(stamp);
+        }
     }
 
     /// On the row clock the solve cadence counts from a row before the
     /// first, as `max_rows_between_solves` does (task 278, D13).
     fn stamp_next_on_rows(&mut self, stamp: crate::Stamp) {
         self.since_solve.stamp_next_on_rows(stamp);
+        if let Some(p) = self.place.as_mut() {
+            p.hand(stamp);
+        }
+    }
+
+    fn take_state_warning(&mut self) -> Option<(u64, u64)> {
+        let cap = self.span_cap();
+        self.warning.take().map(|b| (b, cap))
+    }
+
+    fn state_over_cap(&self) -> Option<(u64, u64)> {
+        self.over.map(|b| (b, self.span_cap()))
     }
 
     /// Each coefficient's data share from the last solve, per target
@@ -2570,6 +2731,8 @@ impl OnlineModel for Robust {
         self.w_raw = lam * self.w_raw + weight;
         // The clock since the last solve, on the row's stamp (task 180).
         self.since_solve.step(d_clock);
+        // The row's place, for a refit over a span of the clock (task 538).
+        let now = self.place.as_mut().map(|p| p.step(d_clock));
         // A zero-weight row is clock alone (hard rule 9): no row of the row
         // cap, and never a solve. One the clock or the weight's share brings
         // due on it is due on the next row with weight too, so it waits for
@@ -2729,9 +2892,7 @@ impl OnlineModel for Robust {
                     self.cov[j].update(&self.zbuf, lam_t, w);
                     self.wj[j] = wj_new;
                     self.move_band_system(j, a, step);
-                    if let Some(b) = self.refit.get_mut(j)
-                        && b.learn_scored(x, yj, e_abs, weight, lam, lam_scale, self.cfg.refit_rows)
-                    {
+                    if self.buffer_row(j, x, yj, e_abs, weight, lam, lam_scale, now) {
                         refits.push(j);
                     }
                 }
@@ -2754,9 +2915,7 @@ impl OnlineModel for Robust {
                         self.age_refit(j, lam, lam_scale);
                         continue;
                     }
-                    if let Some(b) = self.refit.get_mut(j)
-                        && b.learn_scored(x, yj, e_abs, weight, lam, lam_scale, self.cfg.refit_rows)
-                    {
+                    if self.buffer_row(j, x, yj, e_abs, weight, lam, lam_scale, now) {
                         refits.push(j);
                     }
                     if nudge.is_finite() && aged > 0.0 {
@@ -2948,14 +3107,14 @@ impl OnlineModel for Robust {
                 // The refit's buffers (`RobustCfg::refit_rows`): one per
                 // target when it is on, each one this configuration writes,
                 // and none when it is off.
-                let refit_fits = if m.cfg.refit_rows == 0 {
+                let refit_fits = if m.cfg.refit_rows == 0 && m.cfg.refit_clock.is_none() {
                     m.refit.is_empty()
                 } else {
                     m.refit.len() == n
                         && m.refit.iter().all(|b| {
                             b.fits(
                                 m.cfg.n_features,
-                                m.cfg.refit_rows,
+                                m.refit_cap(),
                                 m.cfg.huber_scale == HuberScale::Mad,
                             )
                         })
@@ -3025,6 +3184,10 @@ mod options_tests;
 #[cfg(test)]
 #[path = "robust/refit_tests.rs"]
 mod refit_tests;
+
+#[cfg(test)]
+#[path = "robust/span_tests.rs"]
+mod span_tests;
 
 #[cfg(test)]
 #[path = "robust/gate_tests.rs"]

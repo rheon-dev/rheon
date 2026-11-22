@@ -291,6 +291,7 @@ CASES: list[Case] = [
     # The refit of each target's first rows at a count of its own, inside a
     # budget, and a budget below one group's buffer, every refit given up.
     Case("quantile3", "quantile", full(quantile=0.6, quantile_refit_rows=40, refit_budget=8)),
+    Case("quantile_span", "quantile", full(quantile=0.6, quantile_refit_span=40.0)),
     Case("quantile4", "quantile", full2(quantile=0.5, quantile_refit_rows=50, refit_budget=0.001)),
     Case(
         "rls",
@@ -375,6 +376,7 @@ CASES: list[Case] = [
         "sgd",
         {**full(loss="logistic", learning_rate=0.05, strict_binary=True), "targets": ["hit"]},
     ),
+    Case("sgd_span", "sgd", full(loss="huber", huber_refit_span=40.0)),
     Case("sgd_poisson", "sgd", {**full(loss="poisson", learning_rate=0.01), "targets": ["hit"]}),
     Case(
         "pa",
@@ -1019,6 +1021,8 @@ CASES += [
     Case("huber2", "huber", full2(max_rows_between_solves=4, ridge_scale="sum")),
     # The refit is refused beside ridge_scale "sum", so a case of its own.
     Case("huber3", "huber", full(huber_refit_rows=40, refit_budget=8)),
+    # Task 538: the refit over a span of the clock.
+    Case("huber_span", "huber", full(huber_refit_span=40.0)),
     # A budget below one group's buffer: every refit is given up.
     Case("huber4", "huber", full2(huber_refit_rows=50, refit_budget=0.001)),
     Case(

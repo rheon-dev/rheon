@@ -55,11 +55,14 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
         ],
     ),
     ("kalman", &["coef_half_life", "revert_half_life"]),
-    ("huber", &["solve_every", "huber_scale_half_life"]),
-    ("quantile", &["solve_every"]),
+    (
+        "huber",
+        &["solve_every", "huber_scale_half_life", "huber_refit_span"],
+    ),
+    ("quantile", &["solve_every", "quantile_refit_span"]),
     ("ew_cov", &["pca_every", "window_size", "snapshot_every"]),
     ("holt", &["trend_half_life"]),
-    ("sgd", &["huber_scale_half_life"]),
+    ("sgd", &["huber_scale_half_life", "huber_refit_span"]),
     ("micro", &["prune_every"]),
     (
         "kmeans",
@@ -386,6 +389,7 @@ impl Spec {
             ModelKind::Huber {
                 solve_every,
                 huber_scale_half_life,
+                huber_refit_span,
                 ..
             } => {
                 put(&mut out, "solve_every", solve_every.as_ref());
@@ -394,12 +398,23 @@ impl Spec {
                     "huber_scale_half_life",
                     huber_scale_half_life.as_ref(),
                 );
+                put(&mut out, "huber_refit_span", huber_refit_span.as_ref());
             }
-            ModelKind::Quantile { solve_every, .. } => {
+            ModelKind::Quantile {
+                solve_every,
+                quantile_refit_span,
+                ..
+            } => {
                 put(&mut out, "solve_every", solve_every.as_ref());
+                put(
+                    &mut out,
+                    "quantile_refit_span",
+                    quantile_refit_span.as_ref(),
+                );
             }
             ModelKind::Sgd {
                 huber_scale_half_life,
+                huber_refit_span,
                 ..
             } => {
                 put(
@@ -407,6 +422,7 @@ impl Spec {
                     "huber_scale_half_life",
                     huber_scale_half_life.as_ref(),
                 );
+                put(&mut out, "huber_refit_span", huber_refit_span.as_ref());
             }
             ModelKind::EwCov {
                 pca_every,

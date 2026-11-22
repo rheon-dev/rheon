@@ -27,6 +27,7 @@ def sgd(
     huber_scale: Literal["mad", "rms"] | None = None,
     huber_scale_half_life: float | Duration | None = None,
     huber_refit_rows: int | None = None,
+    huber_refit_span: float | Duration | None = None,
     refit_budget: float | None = None,
     quantile: float | None = None,
     eps: float | None = None,
@@ -106,6 +107,23 @@ def sgd(
         gives its refit up, are in *The refit's memory* in Notes. Beside an
         infinite ``huber_delta``, the squared loss, the refit is off by
         default and a count above 0 is refused.
+        ``loss = "huber"`` only, and refused beside another loss.
+    ``huber_refit_span``
+        The same refit over a span of the clock in place of a count of rows:
+        each target's rows from its first learned row through the first row
+        at least ``huber_refit_span`` after it, once they hold a row per coefficient
+        (three a coefficient under the quantile loss). A number of the
+        clock's units, or of rows where the spec has no clock, or a
+        duration such as ``"1h"`` on a temporal clock; finite and above 0.
+        The span is read off the rows' exact stamps, and a row of weight 0
+        is no row of it, so on a clock of one unit a row it holds
+        ``huber_refit_span + 1`` rows: the refit of
+        ``huber_refit_rows = huber_refit_span + 1``, to the bit.
+        Its buffers grow as the rows come rather than being held at a
+        count's full size, and are held to 256 KB a group: past half of it
+        a warning, once a group, and the row that would pass it stops the
+        run with an error naming the group and the bytes. Refused beside
+        ``huber_refit_rows``.
         ``loss = "huber"`` only, and refused beside another loss.
     ``refit_budget``
         A bound in MiB on the refit buffers of all the spec's groups
@@ -764,6 +782,7 @@ def sgd(
         "huber_scale": huber_scale,
         "huber_scale_half_life": huber_scale_half_life,
         "huber_refit_rows": huber_refit_rows,
+        "huber_refit_span": huber_refit_span,
         "refit_budget": refit_budget,
         "quantile": quantile,
         "eps": eps,

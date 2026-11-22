@@ -35,6 +35,7 @@ fn cfg(refit_rows: u32, standardize: bool, schedule: LearningRate, decay: Decay)
         min_weight_holds_learning: false,
         target_spread: false,
         mad_anchor: false,
+        refit_clock: None,
     }
 }
 

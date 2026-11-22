@@ -333,6 +333,14 @@ pub enum ModelKind {
         /// written before it serializes as it did.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         huber_refit_rows: Option<u32>,
+        /// The same refit over a span of the clock (docs/PLAN.md task 538): a
+        /// target's rows from its first learned row through the first at
+        /// least this long after it, a number of the clock's units (rows
+        /// where the spec has no clock) or a duration. Its buffers grow with
+        /// the data, held to 256 KB a group as they come. Refused beside the
+        /// count. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        huber_refit_span: Option<Span>,
         /// The MiB the refit buffers of all this spec's groups may reserve
         /// (`Bank`, docs/PLAN.md task 277): absent is 256, `inf` no bound.
         /// Skipped when absent.
@@ -365,6 +373,14 @@ pub enum ModelKind {
         /// when absent, so a spec written before it serializes as it did.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         quantile_refit_rows: Option<u32>,
+        /// The same refit over a span of the clock (docs/PLAN.md task 538): a
+        /// target's rows from its first learned row through the first at
+        /// least this long after it, a number of the clock's units (rows
+        /// where the spec has no clock) or a duration. Its buffers grow with
+        /// the data, held to 256 KB a group as they come. Refused beside the
+        /// count. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        quantile_refit_span: Option<Span>,
         /// `huber`'s `refit_budget`, for the quantile refit's buffers.
         /// Skipped when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -502,6 +518,14 @@ pub enum ModelKind {
         /// is off. Refused under any other loss. Skipped when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         huber_refit_rows: Option<u32>,
+        /// The same refit over a span of the clock (docs/PLAN.md task 538): a
+        /// target's rows from its first learned row through the first at
+        /// least this long after it, a number of the clock's units (rows
+        /// where the spec has no clock) or a duration. Its buffers grow with
+        /// the data, held to 256 KB a group as they come. Refused beside the
+        /// count. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        huber_refit_span: Option<Span>,
         /// `huber`'s `refit_budget`, under `loss = "huber"`; refused under
         /// any other loss. Skipped when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]

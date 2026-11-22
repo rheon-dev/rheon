@@ -357,8 +357,9 @@ and each diagnostic's own ``*_half_life`` below, and in the models
 ``hawkes``' ``kernel_half_lives``, a list of them, ``garch``'s
 ``start_span``, ``glm``'s and ``expectile``'s ``refit_span``, and
 ``kmeans``' ``warm_span``, ``update_every`` and ``split_merge_every``,
-``hmm``'s and ``bocpd``'s ``warm_span``, and ``corrchange``'s
-``permute_every``.
+``hmm``'s and ``bocpd``'s ``warm_span``, ``corrchange``'s
+``permute_every``, ``huber``'s and ``sgd``'s ``huber_refit_span`` and
+``quantile``'s ``quantile_refit_span``.
 
 One parameter takes either form, with a meaning for each: ``bocpd``'s
 ``hazard``. A number, finite and above 1, is the expected rows between

@@ -125,6 +125,28 @@ ITEMS: dict[str, Item] = {
         start=False,
         spans=(1, 6),
     ),
+    "huber.huber_refit_span": Item(
+        "huber",
+        dict(targets=["y"], features=["x0", "x1"], half_life=400.0),
+        lambda n: dict(huber_refit_rows=n),
+        lambda v: dict(huber_refit_span=v),
+        start=True,
+    ),
+    "quantile.quantile_refit_span": Item(
+        "quantile",
+        dict(targets=["y"], features=["x0", "x1"], half_life=400.0, quantile=0.7),
+        lambda n: dict(quantile_refit_rows=n),
+        lambda v: dict(quantile_refit_span=v),
+        start=True,
+        spans=(10, 40),
+    ),
+    "sgd.huber_refit_span": Item(
+        "sgd",
+        dict(targets=["y"], features=["x0", "x1"], half_life=400.0, loss="huber"),
+        lambda n: dict(huber_refit_rows=n),
+        lambda v: dict(huber_refit_span=v),
+        start=True,
+    ),
     # Four centers on three blobs: two share one, and merge once the fourth
     # blob appears.
     "kmeans.split_merge_every": Item(
@@ -151,9 +173,10 @@ def make(item: Item, clock: str | None, **kw: Any) -> dict:
 
 
 def fields(out: pl.DataFrame) -> pl.DataFrame:
-    """Every field but ``coef``, which a chunk's last row writes by design."""
+    """Every field but ``coef`` and ``support_coef``, which a chunk's last
+    row writes by design."""
     cols = out.select(pl.col("m").struct.unnest())
-    return cols.drop("coef") if "coef" in cols.columns else cols
+    return cols.drop([c for c in ("coef", "support_coef") if c in cols.columns])
 
 
 def run(spec: dict, df: pl.DataFrame, chunks: int = 1) -> pl.DataFrame:
