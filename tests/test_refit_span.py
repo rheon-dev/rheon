@@ -161,11 +161,53 @@ def test_glm_warns_past_half_of_its_cap_and_stops_at_it():
         bank.fit_predict(df.head(5000))
     assert len(seen) == 1
     msg = str(seen[0].message)
-    assert "past half of the cap a group's refit buffers may hold (262144)" in msg
+    assert "past half of max_state_bytes (262144)" in msg
     assert "the rows inside refit_span = 30d" in msg
-    with pytest.raises(Exception, match=r'group "a".*to \d+ bytes, above the 262144 bytes') as e:
+    with pytest.raises(
+        Exception, match=r'group "a".*to \d+ bytes, above the default max_state_bytes of 262144'
+    ) as e:
         bank.fit_predict(df.tail(n - 5000))
-    assert "Shorten refit_span, or give refit_rows" in str(e.value)
+    assert "Shorten refit_span, or give refit_rows, or raise max_state_bytes" in str(e.value)
+
+
+@pytest.mark.parametrize(
+    ("builder", "kw"),
+    [
+        ("glm", dict(refit_span="30d")),
+        ("huber", dict(huber_refit_span="30d")),
+        ("quantile", dict(quantile=0.7, quantile_refit_span="30d")),
+        ("sgd", dict(loss="huber", huber_refit_span="30d")),
+    ],
+)
+def test_a_spans_buffers_are_held_to_a_max_state_bytes_given(builder, kw):
+    """`glm`, `huber`, `quantile` and `sgd` take `max_state_bytes` as every
+    model with a state the data sizes does: past half of it a warning, once,
+    naming the group and the bytes; at it the run stops, naming them."""
+    cap = 20_000
+    df = frame(1500, seed=7).with_columns(g=pl.lit("a"))
+    d: dict = dict(targets=["y"], features=["x0", "x1"], half_life=INF, clock="t")
+    d |= dict(gap_cap="1000d", group="g", max_state_bytes=cap, **kw)
+    s = getattr(rp.spec, builder)("m", **d)
+    bank = rp.ModelBank([s])
+    # Past half of the cap and short of it: glm's rows are 32 bytes, the
+    # others' 96 under the MAD.
+    half = 400 if builder == "glm" else 150
+    with pytest.warns(rheon.RheonWarning, match=r'group "a": the state holds \d+ bytes') as seen:
+        bank.fit_predict(df.head(half))
+    assert len(seen) == 1
+    assert f"past half of max_state_bytes ({cap})" in str(seen[0].message)
+    with pytest.raises(Exception, match=r"above max_state_bytes of 20000") as e:
+        bank.fit_predict(df.tail(df.height - half))
+    assert "raise max_state_bytes" in str(e.value)
+
+
+@pytest.mark.parametrize("builder", ["glm", "huber", "quantile", "sgd"])
+@pytest.mark.parametrize(("cap", "words"), [(0, "must be above 0"), ((64 << 20) + 1, "64 MiB")])
+def test_max_state_bytes_is_checked(builder, cap, words):
+    kw: dict = dict(targets=["y"], features=["x0", "x1"], half_life=INF, max_state_bytes=cap)
+    kw |= {"quantile": dict(quantile=0.5), "sgd": dict(loss="huber")}.get(builder, {})
+    with pytest.raises(Exception, match=words):
+        rp.ModelBank([getattr(rp.spec, builder)("m", **kw)]).fit_predict(frame(20))
 
 
 def test_expectile_warns_past_half_of_max_state_bytes_and_stops_at_it():

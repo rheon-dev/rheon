@@ -341,6 +341,12 @@ pub enum ModelKind {
         /// count. Skipped when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         huber_refit_span: Option<Span>,
+        /// The bytes a group's refit buffers may hold (docs/PLAN.md task
+        /// 538, 537's rule): a span's checked as they fill, a warning past
+        /// half and a refusal at the cap. Default 256 KB, at most
+        /// 64 MiB. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
         /// The MiB the refit buffers of all this spec's groups may reserve
         /// (`Bank`, docs/PLAN.md task 277): absent is 256, `inf` no bound.
         /// Skipped when absent.
@@ -381,6 +387,12 @@ pub enum ModelKind {
         /// count. Skipped when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         quantile_refit_span: Option<Span>,
+        /// The bytes a group's refit buffers may hold (docs/PLAN.md task
+        /// 538, 537's rule): a span's checked as they fill, a warning past
+        /// half and a refusal at the cap. Default 256 KB, at most
+        /// 64 MiB. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
         /// `huber`'s `refit_budget`, for the quantile refit's buffers.
         /// Skipped when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -526,6 +538,12 @@ pub enum ModelKind {
         /// count. Skipped when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         huber_refit_span: Option<Span>,
+        /// The bytes a group's refit buffers may hold (docs/PLAN.md task
+        /// 538, 537's rule): a span's checked as they fill, a warning past
+        /// half and a refusal at the cap. Default 256 KB, at most
+        /// 64 MiB. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
         /// `huber`'s `refit_budget`, under `loss = "huber"`; refused under
         /// any other loss. Skipped when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1330,6 +1348,12 @@ pub enum ModelKind {
         /// absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         refit_span: Option<Span>,
+        /// The bytes a group's refit buffers may hold (docs/PLAN.md task
+        /// 538, 537's rule): a span's checked as they fill, a warning past
+        /// half and a refusal at the cap; a count's at the call. Default 256 KB, at most
+        /// 64 MiB. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
         /// The most a learned row may move its own linear predictor: absent
         /// is off where the refit runs and 1 where it does not; `"inf"` is
         /// no cap.

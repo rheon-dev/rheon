@@ -59,6 +59,7 @@ pub(super) fn cfg(k: usize, lr: f64, schedule: LearningRate) -> SgdCfg {
         target_spread: true,
         mad_anchor: false,
         refit_clock: None,
+        max_state_bytes: None,
     }
 }
 

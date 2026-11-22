@@ -471,6 +471,7 @@ fn robust_cfg(loss: RobustLoss) -> RobustCfg {
         mad_anchor: false,
         min_weight_holds_learning: false,
         refit_clock: None,
+        max_state_bytes: None,
     }
 }
 
@@ -546,6 +547,7 @@ fn sgd_cfg() -> SgdCfg {
         target_spread: false,
         mad_anchor: false,
         refit_clock: None,
+        max_state_bytes: None,
     }
 }
 
@@ -4686,6 +4688,7 @@ fn glm_cfg() -> GlmCfg {
         refit_rows: 10,
         refit_clock: None,
         step_cap: f64::INFINITY,
+        max_state_bytes: None,
     }
 }
 

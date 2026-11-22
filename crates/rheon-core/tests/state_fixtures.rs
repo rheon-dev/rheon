@@ -1465,7 +1465,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 112] = [
+    const FORMS: [(&str, &[&str]); 115] = [
         // Schema 70 (rule 5's twenty-second exception): the stabilized
         // prior's `ŝ` and `V` under `full` in each form and under `diag`,
         // the factor form's `f`, and a spec's own `prior_rows`.
@@ -1688,6 +1688,19 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         (
             "sgd_huber_refit_span",
             &["model", "Sgd", "refit", "0", "rows"],
+        ),
+        // Task 538: the span's cap, settable (537's rule).
+        (
+            "glm_refit_clock",
+            &["model", "Glm", "cfg", "max_state_bytes"],
+        ),
+        (
+            "huber_refit_span",
+            &["model", "Robust", "cfg", "max_state_bytes"],
+        ),
+        (
+            "sgd_huber_refit_span",
+            &["model", "Sgd", "cfg", "max_state_bytes"],
         ),
     ];
     // Each refit's first stamp, written only under a span (task 538): in

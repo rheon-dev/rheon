@@ -30,6 +30,7 @@ fn cfg(standardize: bool) -> SgdCfg {
         target_spread: false,
         mad_anchor: false,
         refit_clock: None,
+        max_state_bytes: None,
     }
 }
 

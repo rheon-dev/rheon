@@ -133,11 +133,18 @@ pub const GLM_GROUP_REFIT_CAP: usize = 256 * 1024;
 /// rows costs seconds a target, or where the cap holds fewer than `2 k`
 /// rows, too few to determine the fit.
 pub fn default_glm_refit_rows(n_features: usize, n_targets: usize) -> u32 {
+    default_glm_refit_rows_within(n_features, n_targets, GLM_GROUP_REFIT_CAP as u64)
+}
+
+/// [`default_glm_refit_rows`] held to a group's `max_state_bytes` of `cap`
+/// in place of [`GLM_GROUP_REFIT_CAP`] (docs/PLAN.md task 538).
+pub fn default_glm_refit_rows_within(n_features: usize, n_targets: usize, cap: u64) -> u32 {
     if n_features > crate::DEFAULT_REFIT_MAX_FEATURES {
         return 0;
     }
     let k = n_features as u32 + 1;
-    let fits = GLM_GROUP_REFIT_CAP / (8 * n_targets.max(1) * (n_features + 2));
+    let fits =
+        usize::try_from(cap).unwrap_or(usize::MAX) / (8 * n_targets.max(1) * (n_features + 2));
     let rows = DEFAULT_GLM_REFIT_ROWS
         .max(10 * k)
         .min(u32::try_from(fits).unwrap_or(u32::MAX));
@@ -181,6 +188,12 @@ pub struct GlmCfg {
     /// bytes and the array form its order.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refit_clock: Option<f64>,
+    /// The bytes a group's refit buffers may hold, a count's checked as the
+    /// model is built and a span's as they fill: `None` is
+    /// [`GLM_GROUP_REFIT_CAP`], at most 64 MiB (docs/PLAN.md task 538). Last,
+    /// and written only when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_state_bytes: Option<u64>,
 }
 
 impl GlmCfg {
@@ -191,6 +204,12 @@ impl GlmCfg {
     /// Whether the first rows are refit, after a count or a span.
     pub fn refits(&self) -> bool {
         self.refit_rows > 0 || self.refit_clock.is_some()
+    }
+
+    /// The bytes a group's refit buffers may hold: `max_state_bytes`, or
+    /// [`GLM_GROUP_REFIT_CAP`], 256 KB.
+    pub fn cap(&self) -> u64 {
+        self.max_state_bytes.unwrap_or(GLM_GROUP_REFIT_CAP as u64)
     }
 
     /// The most bytes one group's refit buffers hold: `refit_rows` rows of
@@ -205,20 +224,21 @@ impl GlmCfg {
     /// Whether one group's refit buffers fit [`GLM_GROUP_REFIT_CAP`]: the
     /// refusal names the bytes and the most `refit_rows` that fits.
     pub fn check_refit_cap(&self) -> Result<(), String> {
-        if self.refit_bytes() <= GLM_GROUP_REFIT_CAP {
+        let cap = usize::try_from(self.cap()).unwrap_or(usize::MAX);
+        if self.refit_bytes() <= cap {
             return Ok(());
         }
-        let fits = GLM_GROUP_REFIT_CAP / (8 * self.n_targets.max(1) * (self.n_features + 2));
+        let fits = cap / (8 * self.n_targets.max(1) * (self.n_features + 2));
         Err(format!(
             "glm: refit_rows = {} holds {} rows of {} numbers for each of {}, {} bytes \
-                 a group, past the cap of {} bytes (256 KB) a group's refit may hold. Set \
-                 refit_rows to at most {fits}, or to 0 for the step cap alone.",
+                 a group, past the cap of {cap} bytes a group's refit may hold \
+                 (max_state_bytes). Set refit_rows to at most {fits}, to 0 for the step cap \
+                 alone, or raise max_state_bytes.",
             self.refit_rows,
             self.refit_rows,
             self.n_features + 2,
             crate::model::count(self.n_targets, "target"),
             self.refit_bytes(),
-            GLM_GROUP_REFIT_CAP,
         ))
     }
 
@@ -255,6 +275,10 @@ impl GlmCfg {
                 self.step_cap
             ));
         }
+        no.take(crate::clock_span::check_max_state_bytes(
+            "glm",
+            self.max_state_bytes,
+        ));
         no.take(self.check_refit_cap());
         if let Some(d) = self.refit_clock {
             if !(d.is_finite() && d > 0.0) {
@@ -526,7 +550,7 @@ impl Glm {
             return 0;
         }
         if self.cfg.refit_clock.is_some() {
-            return GLM_GROUP_REFIT_CAP;
+            return usize::try_from(self.cfg.cap()).unwrap_or(usize::MAX);
         }
         self.cfg.n_targets * 8 * self.cfg.refit_rows as usize * (self.cfg.n_features + 2)
     }
@@ -873,7 +897,8 @@ impl OnlineModel for Glm {
                 .filter(|(r, t)| !r.done && t.is_some_and(|t| fam.takes(t)))
                 .count();
             let with = self.refit_held_bytes(joining);
-            if !self.held_cap().admit(with, GLM_GROUP_REFIT_CAP as u64) {
+            let cap = self.cfg.cap();
+            if !self.held_cap().admit(with, cap) {
                 for (j, p) in out.pred.iter_mut().enumerate() {
                     if self.w_target[j] >= self.cfg.min_weight {
                         *p = self.mean_of(j, x);
@@ -939,7 +964,8 @@ impl OnlineModel for Glm {
         out.extra = None;
         if now.is_some() {
             let with = self.refit_held_bytes(0);
-            self.held_cap().note(with, GLM_GROUP_REFIT_CAP as u64);
+            let cap = self.cfg.cap();
+            self.held_cap().note(with, cap);
         }
     }
 
@@ -952,13 +978,11 @@ impl OnlineModel for Glm {
     }
 
     fn take_state_warning(&mut self) -> Option<(u64, u64)> {
-        self.warning
-            .take()
-            .map(|bytes| (bytes, GLM_GROUP_REFIT_CAP as u64))
+        self.warning.take().map(|bytes| (bytes, self.cfg.cap()))
     }
 
     fn state_over_cap(&self) -> Option<(u64, u64)> {
-        self.over.map(|bytes| (bytes, GLM_GROUP_REFIT_CAP as u64))
+        self.over.map(|bytes| (bytes, self.cfg.cap()))
     }
 
     fn predict_with_floor(

@@ -893,6 +893,7 @@ pub fn huber_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         emit_huber_scale,
         huber_refit_rows,
         huber_refit_span,
+        max_state_bytes,
         refit_budget: _,
     } = &spec.model
     else {
@@ -944,6 +945,7 @@ pub fn huber_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         mad_anchor: true,
         min_weight_holds_learning: false,
         refit_clock: huber_refit_span.as_ref().map(Span::value),
+        max_state_bytes: *max_state_bytes,
     };
     let mut m = Robust::new(cfg)?;
     // Each target's own threshold, for its own first solve (S9b).
@@ -995,6 +997,7 @@ pub fn quantile_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         quantile_eps,
         quantile_refit_rows,
         quantile_refit_span,
+        max_state_bytes,
         refit_budget: _,
     } = &spec.model
     else {
@@ -1037,6 +1040,7 @@ pub fn quantile_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         mad_anchor: true,
         min_weight_holds_learning: false,
         refit_clock: quantile_refit_span.as_ref().map(Span::value),
+        max_state_bytes: *max_state_bytes,
     };
     let mut m = Robust::new(cfg)?;
     // Each target's own threshold, for its own first solve (S9b).
@@ -1053,6 +1057,7 @@ pub fn sgd_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         huber_scale_half_life,
         huber_refit_rows,
         huber_refit_span,
+        max_state_bytes,
         refit_budget: _,
         quantile,
         eps,
@@ -1181,6 +1186,7 @@ pub fn sgd_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         // `huber`'s anchored MAD sketch under the Huber loss.
         mad_anchor: true,
         refit_clock: huber_refit_span.as_ref().map(Span::value),
+        max_state_bytes: *max_state_bytes,
     };
     Ok(AnyModel::Sgd(Box::new(Sgd::new(cfg)?)))
 }
@@ -1230,6 +1236,7 @@ pub fn glm_cfg(spec: &Spec) -> Result<rheon_core::GlmCfg, String> {
         ridge,
         refit_rows,
         refit_span,
+        max_state_bytes,
         step_cap,
         ..
     } = &spec.model
@@ -1260,7 +1267,11 @@ pub fn glm_cfg(spec: &Spec) -> Result<rheon_core::GlmCfg, String> {
         if refit_span.is_some() {
             0
         } else {
-            rheon_core::default_glm_refit_rows(spec.k(), spec.m())
+            rheon_core::default_glm_refit_rows_within(
+                spec.k(),
+                spec.m(),
+                max_state_bytes.unwrap_or(rheon_core::GLM_GROUP_REFIT_CAP as u64),
+            )
         }
     });
     Ok(rheon_core::GlmCfg {
@@ -1275,6 +1286,7 @@ pub fn glm_cfg(spec: &Spec) -> Result<rheon_core::GlmCfg, String> {
         min_weight: spec.min_periods_or_default(),
         refit_rows,
         refit_clock: refit_span.as_ref().map(Span::value),
+        max_state_bytes: *max_state_bytes,
         step_cap: step_cap.map_or_else(
             || rheon_core::default_glm_step_cap(refit_rows.max(u32::from(refit_span.is_some()))),
             |n| n.0,

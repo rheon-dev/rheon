@@ -39,6 +39,7 @@ fn cfg(scale: crate::HuberScale, refit_rows: u32, holds: bool) -> SgdCfg {
         target_spread: true,
         mad_anchor: false,
         refit_clock: None,
+        max_state_bytes: None,
     }
 }
 

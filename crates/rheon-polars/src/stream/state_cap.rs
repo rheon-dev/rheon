@@ -35,28 +35,6 @@ pub(crate) fn fixed_span(spec: &Spec) -> Option<FixedSpan> {
             "Shorten warm_span, or give warm_rows",
             "the 256 MiB a warm-up may hold",
         ),
-        ModelKind::Huber {
-            huber_refit_span: Some(s),
-            ..
-        }
-        | ModelKind::Sgd {
-            huber_refit_span: Some(s),
-            ..
-        } => it(
-            format!("huber_refit_span = {s}"),
-            "rows of its refit",
-            "Shorten huber_refit_span, or give huber_refit_rows",
-            "the 256 KB a group's refit buffers may hold",
-        ),
-        ModelKind::Quantile {
-            quantile_refit_span: Some(s),
-            ..
-        } => it(
-            format!("quantile_refit_span = {s}"),
-            "rows of its refit",
-            "Shorten quantile_refit_span, or give quantile_refit_rows",
-            "the 256 KB a group's refit buffers may hold",
-        ),
         ModelKind::Bocpd {
             warm_span: Some(s), ..
         } => it(
@@ -112,20 +90,37 @@ fn window_words(spec: &Spec) -> (String, &'static str, &'static str) {
             "Shorten refit_span, or give refit_rows",
             "rows",
         ),
+        ModelKind::Huber {
+            huber_refit_span: Some(s),
+            ..
+        }
+        | ModelKind::Sgd {
+            huber_refit_span: Some(s),
+            ..
+        } => (
+            format!("huber_refit_span = {s}"),
+            "Shorten huber_refit_span, or give huber_refit_rows",
+            "rows",
+        ),
+        ModelKind::Quantile {
+            quantile_refit_span: Some(s),
+            ..
+        } => (
+            format!("quantile_refit_span = {s}"),
+            "Shorten quantile_refit_span, or give quantile_refit_rows",
+            "rows",
+        ),
         _ => ("its window".to_string(), "Shorten the window", "events"),
     }
 }
 
-/// What a spec's cap is called, and the way out by raising it: `glm`'s
-/// refit buffers have a fixed cap a group, which no setting raises.
+/// What a spec's cap is called, and the way out by raising it: a warm-up's
+/// fixed limit, which no setting raises, or `max_state_bytes`.
 pub(crate) fn cap_words(spec: &Spec) -> (&'static str, &'static str) {
     if let Some(f) = fixed_span(spec) {
         return (f.cap, "");
     }
-    match &spec.model {
-        ModelKind::Glm { .. } => ("the cap a group's refit buffers may hold", ""),
-        _ => ("max_state_bytes", ", or raise max_state_bytes"),
-    }
+    ("max_state_bytes", ", or raise max_state_bytes")
 }
 
 /// A group's state is past half of `max_state_bytes`: the model holds `bytes`

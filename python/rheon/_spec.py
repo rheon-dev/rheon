@@ -302,6 +302,7 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
             "emit_huber_scale",
             "huber_refit_rows",
             "huber_refit_span",
+            "max_state_bytes",
             "refit_budget",
         }
     ),
@@ -311,10 +312,13 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
             "huber_scale_half_life",
             "huber_refit_rows",
             "huber_refit_span",
+            "max_state_bytes",
             "refit_budget",
         }
     ),
-    "quantile": frozenset({"quantile_refit_rows", "quantile_refit_span", "refit_budget"}),
+    "quantile": frozenset(
+        {"quantile_refit_rows", "quantile_refit_span", "max_state_bytes", "refit_budget"}
+    ),
     "ew_cov": frozenset({"gram_threads"}),
     "marginal": frozenset(
         {
@@ -337,7 +341,7 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
     ),
     "audit": frozenset({"pairs", "distinct_cap"}),
     "kalman": frozenset({"covariance_form"}),
-    "glm": frozenset({"refit_span"}),
+    "glm": frozenset({"refit_span", "max_state_bytes"}),
     "kmeans": frozenset({"warm_span", "update_every", "split_merge_every"}),
     "hmm": frozenset({"warm_span"}),
     "bocpd": frozenset({"warm_span"}),

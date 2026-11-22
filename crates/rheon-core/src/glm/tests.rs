@@ -62,6 +62,7 @@ fn cfg(family: GlmFamily, nf: usize, refit_rows: u32) -> GlmCfg {
         refit_rows,
         refit_clock: None,
         step_cap: f64::INFINITY,
+        max_state_bytes: None,
     }
 }
 

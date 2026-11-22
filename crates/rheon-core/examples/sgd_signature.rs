@@ -72,6 +72,7 @@ fn main() {
                             target_spread: false,
                             mad_anchor: false,
                             refit_clock: None,
+                            max_state_bytes: None,
                         };
                         let mut model = Sgd::new(cfg).unwrap();
                         let mut acc = 0u64;

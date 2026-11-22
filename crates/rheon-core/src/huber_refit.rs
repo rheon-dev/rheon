@@ -144,12 +144,8 @@ pub fn default_bin_refit_rows(bins: usize) -> u32 {
 /// (docs/PLAN.md task 538): no count fills it, so it is never held at a full
 /// size ahead of its rows, and grows as they come; the span decides when it
 /// runs ([`RefitBuf::span_due`]), and its bytes are checked against
-/// [`SPAN_REFIT_CAP`] as it grows ([`RefitBuf::held_bytes`]).
+/// the model's `max_state_bytes` as it grows ([`RefitBuf::held_bytes`]).
 pub const OPEN: u32 = u32::MAX;
-
-/// The most bytes one group's refit buffers may hold under a refit over a
-/// span of the clock, all its targets together: 256 KB, as `glm`'s.
-pub const SPAN_REFIT_CAP: u64 = 256 * 1024;
 
 /// A buffer holds at most this many ageing runs per learned row its refit
 /// waits for (`refit_rows`): past it the refit of that target is given up

@@ -437,10 +437,15 @@ pub struct RobustCfg {
     /// `refit_rows` (docs/PLAN.md task 538): a target's rows from its first
     /// learned row through the first at least this many clock units after
     /// it, once they hold [`Self::span_refit_least`] rows. Its buffers grow
-    /// as the rows come, held to [`crate::huber_refit::SPAN_REFIT_CAP`] a
+    /// as the rows come, held to `max_state_bytes` a
     /// group. Last, and written only when set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refit_clock: Option<f64>,
+    /// The bytes a group's refit buffers may hold under a span of the
+    /// clock: `None` is 256 KB, at most 64 MiB (docs/PLAN.md task 538).
+    /// Last, and written only when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_state_bytes: Option<u64>,
 }
 
 /// A target's band system as a solve factorizes it -- `A`, the band Gram
@@ -626,6 +631,10 @@ impl RobustCfg {
         ));
         // The refit's key names the kind's: a quantile state's message
         // named huber's (review round 10, S2-5).
+        no.take(crate::clock_span::check_max_state_bytes(
+            kind,
+            self.max_state_bytes,
+        ));
         if let Some(d) = self.refit_clock {
             if !(d.is_finite() && d > 0.0) {
                 no.refuse(format!(
@@ -1476,7 +1485,12 @@ impl Robust {
             return 0;
         }
         if self.cfg.refit_clock.is_some() {
-            return crate::huber_refit::SPAN_REFIT_CAP as usize;
+            return usize::try_from(
+                self.cfg
+                    .max_state_bytes
+                    .unwrap_or(crate::clock_span::DEFAULT_STATE_BYTES),
+            )
+            .unwrap_or(usize::MAX);
         }
         self.cfg.n_targets
             * crate::refit_reservation(
@@ -1727,7 +1741,8 @@ impl Robust {
     /// The bytes a refit over a span of the clock may hold a group.
     fn span_cap(&self) -> u64 {
         self.cap_for_test
-            .unwrap_or(crate::huber_refit::SPAN_REFIT_CAP)
+            .or(self.cfg.max_state_bytes)
+            .unwrap_or(crate::clock_span::DEFAULT_STATE_BYTES)
     }
 
     /// Hold a span's buffers to `bytes` in place of their cap, for a test.

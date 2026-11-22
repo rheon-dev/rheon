@@ -1934,11 +1934,12 @@ clock: a target's rows from its first learned row through the first row at
 least `refit_span` after it, once they hold a row per coefficient. The span
 is read off the rows' exact stamps. On a clock of one unit a row that is
 `refit_span + 1` rows, the refit of `refit_rows = refit_span + 1` to the
-bit. A count's buffer has a size known when the spec is built, and is
-refused there past 256 KB a group. A span's holds the rows the data puts in
-it, so it is held to 256 KB as the rows come. A group past half of it gets
-a warning, once, and the row that would pass it stops the run with an error
-naming the group and the bytes.
+bit. Both are held to `max_state_bytes`, 256 KB a group by default and at
+most 64 MiB. A count's buffer has a size known when the spec is built, and
+is refused there past it. A span's holds the rows the data puts in it, so
+it is held to it as the rows come. A group past half of it gets a warning,
+once, and the row that would pass it stops the run with an error naming
+the group and the bytes.
 
 #### Example
 
@@ -1992,8 +1993,9 @@ standard errors on average.
 **The state is bounded by the spec.** A target keeps `k(k+1)/2 + k + 1`
 numbers, and until its refit runs a buffer of `refit_rows·(features + 2)`,
 the one part whose size is not the model's shape. A group's buffers are
-held to 256 KB when the spec is built: a `refit_rows` past it is refused,
-naming the bytes, and the default shrinks to fit.
+held to `max_state_bytes` (256 KB by default) when the spec is built: a
+`refit_rows` past it is refused, naming the bytes, and the default shrinks
+to fit.
 
 **There is no window.** A row's contribution to `G` is its weight at the
 fit that scored it, so removing a row exactly needs the row itself. A

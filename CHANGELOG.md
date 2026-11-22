@@ -73,8 +73,12 @@ model that only the new build has is listed as an addition and passes.
   `hmm` and `bocpd` (held to their 256 MiB warm-up limit as the rows come);
   `huber_refit_span` for `huber` and `sgd(loss="huber")` and
   `quantile_refit_span` for `quantile` (their buffers grow with the rows
-  rather than being held at a count's full size, and are held to 256 KB a
-  group); and the cadences `update_every` and `split_merge_every` for
+  rather than being held at a count's full size, and are held to
+  `max_state_bytes`, which `glm`, `huber`, `quantile` and `sgd` now take as
+  every model with a state the data sizes does: 256 KB a group by default,
+  at most 64 MiB, a warning past half and a refusal at the cap naming the
+  group and the bytes; `glm`'s count is held to it too, its default
+  unchanged); and the cadences `update_every` and `split_merge_every` for
   `kmeans` and `permute_every` for `corrchange`'s window, which fire every
   span since their last event as well as at their count. On a clock of one
   unit a row a start's span `D` is its count `D + 1`, and a cadence's `D`
@@ -104,7 +108,7 @@ model that only the new build has is listed as an addition and passes.
   they fill, as `hawkes`' and `expectile`'s clock windows and `garch`'s
   `start_span` are: a warning past half of the cap, once a group, and an
   error naming the group and the bytes at the row that would pass it
-  (`expectile`'s `max_state_bytes`; `glm`'s 256 KB a group). Refused beside
+  (`expectile`'s and `glm`'s `max_state_bytes`). Refused beside
   `refit_rows`, and in `expectile` beside a window. Every span of the clock
   that holds rows now decides its end and checks its cap in one place
   (`rheon_core`'s `clock_span`), `garch`'s start and the two clock windows

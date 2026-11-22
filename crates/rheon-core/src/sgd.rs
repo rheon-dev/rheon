@@ -475,10 +475,15 @@ pub struct SgdCfg {
     /// [`crate::RobustCfg::refit_clock`]: a target's rows from its first
     /// learned row through the first at least this many clock units after
     /// it, once they hold a row per coefficient, its buffers held to
-    /// [`crate::huber_refit::SPAN_REFIT_CAP`] a group as they grow. Last,
+    /// `max_state_bytes` a group as they grow. Last,
     /// and written only when set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refit_clock: Option<f64>,
+    /// The bytes a group's refit buffers may hold under a span of the
+    /// clock: `None` is 256 KB, at most 64 MiB (docs/PLAN.md task 538).
+    /// Last, and written only when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_state_bytes: Option<u64>,
 }
 
 /// The memory of the step gains' means ([`StepGain`]): `2^(-1/100)` a
@@ -804,6 +809,10 @@ impl SgdCfg {
                      to a finite cut, or leave the refit out.",
                 );
             }
+            no.take(crate::clock_span::check_max_state_bytes(
+                "sgd",
+                self.max_state_bytes,
+            ));
             if let Some(d) = self.refit_clock {
                 if !(d.is_finite() && d > 0.0) {
                     no.refuse(format!(
@@ -827,6 +836,7 @@ impl SgdCfg {
                 ("huber_scale_half_life", self.huber_scale_decay.is_some()),
                 ("huber_refit_rows", self.refit_rows > 0),
                 ("huber_refit_span", self.refit_clock.is_some()),
+                ("max_state_bytes", self.max_state_bytes.is_some()),
             ]
             .into_iter()
             .filter(|(_, set)| *set)
@@ -1341,7 +1351,12 @@ impl Sgd {
             return 0;
         }
         if self.cfg.refit_clock.is_some() {
-            return crate::huber_refit::SPAN_REFIT_CAP as usize;
+            return usize::try_from(
+                self.cfg
+                    .max_state_bytes
+                    .unwrap_or(crate::clock_span::DEFAULT_STATE_BYTES),
+            )
+            .unwrap_or(usize::MAX);
         }
         self.cfg.n_targets
             * crate::refit_reservation(
@@ -2284,7 +2299,8 @@ impl Sgd {
     /// The bytes a refit over a span of the clock may hold a group.
     fn span_cap(&self) -> u64 {
         self.cap_for_test
-            .unwrap_or(crate::huber_refit::SPAN_REFIT_CAP)
+            .or(self.cfg.max_state_bytes)
+            .unwrap_or(crate::clock_span::DEFAULT_STATE_BYTES)
     }
 
     /// Hold a span's buffers to `bytes` in place of their cap, for a test.
@@ -3196,6 +3212,7 @@ mod tests {
             target_spread: false,
             mad_anchor: false,
             refit_clock: None,
+            max_state_bytes: None,
         }
     }
 

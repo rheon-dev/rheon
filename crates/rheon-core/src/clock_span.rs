@@ -28,6 +28,31 @@ use serde::{Deserialize, Serialize};
 
 use crate::Stamp;
 
+/// A group's `max_state_bytes` where a spec sets none: 256 KB, every
+/// model's default cap on a state the data sizes (docs/PLAN.md task 537).
+pub const DEFAULT_STATE_BYTES: u64 = 256 * 1024;
+
+/// The most `max_state_bytes` may be set to: 64 MiB a group, as every
+/// model's.
+pub const STATE_BYTES_CEILING: u64 = 64 << 20;
+
+/// `kind`'s `max_state_bytes`, as every model words it: above 0 and at most
+/// [`STATE_BYTES_CEILING`].
+pub(crate) fn check_max_state_bytes(kind: &str, cap: Option<u64>) -> Result<(), String> {
+    match cap {
+        Some(0) => Err(format!(
+            "{kind}: max_state_bytes must be above 0, but it is 0. Give the bytes a group's \
+             state may hold, or leave it out for 256 KB."
+        )),
+        Some(c) if c > STATE_BYTES_CEILING => Err(format!(
+            "{kind}: max_state_bytes may be at most {STATE_BYTES_CEILING} (64 MiB) a group, but \
+             it is {c}. Lower it: a group's state is held in memory beside every other \
+             group's."
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// Whether a span that began at the row stamped `first` has run its length
 /// `span` (clock units) by the row stamped `now`: `now` at least `span` past
 /// `first`, decided on the exact stamps (the module docs).

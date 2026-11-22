@@ -452,6 +452,7 @@ fn robust_cfg(loss: RobustLoss) -> RobustCfg {
         // since is the refit cases' and `quantile_mad`'s.
         min_weight_holds_learning: true,
         refit_clock: None,
+        max_state_bytes: None,
     }
 }
 
@@ -557,6 +558,7 @@ fn sgd_cfg(loss: SgdLoss, n_targets: usize) -> SgdCfg {
         target_spread: false,
         mad_anchor: false,
         refit_clock: None,
+        max_state_bytes: None,
     }
 }
 
@@ -576,6 +578,7 @@ fn glm_cfg(refit_rows: u32) -> GlmCfg {
         refit_rows,
         refit_clock: None,
         step_cap: f64::INFINITY,
+        max_state_bytes: None,
     }
 }
 
@@ -1177,6 +1180,7 @@ pub fn all() -> Vec<Case> {
             Robust::new(RobustCfg {
                 huber_scale: rheon_core::HuberScale::Mad,
                 refit_clock: Some(60.0),
+                max_state_bytes: Some(200_000),
                 min_weight_holds_learning: false,
                 ..robust_cfg(RobustLoss::Huber { delta: 1.5 })
             })
@@ -1192,6 +1196,7 @@ pub fn all() -> Vec<Case> {
             Robust::new(RobustCfg {
                 huber_scale: rheon_core::HuberScale::Mad,
                 refit_clock: Some(60.0),
+                max_state_bytes: Some(200_000),
                 min_weight_holds_learning: false,
                 mad_anchor: true,
                 ..robust_cfg(RobustLoss::Quantile { tau: 0.75 })
@@ -1208,6 +1213,7 @@ pub fn all() -> Vec<Case> {
             Sgd::new(SgdCfg {
                 huber_scale: rheon_core::HuberScale::Mad,
                 refit_clock: Some(60.0),
+                max_state_bytes: Some(200_000),
                 min_weight_holds_learning: false,
                 ..sgd_cfg(SgdLoss::Huber { delta: 1.5 }, 2)
             })
@@ -2544,6 +2550,7 @@ pub fn all() -> Vec<Case> {
             Glm::new(GlmCfg {
                 refit_rows: 0,
                 refit_clock: Some(60.0),
+                max_state_bytes: Some(200_000),
                 ..glm_cfg(0)
             })
             .unwrap(),

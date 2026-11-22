@@ -105,6 +105,7 @@ fn cfg(k: usize, m: usize, loss: RobustLoss) -> RobustCfg {
         min_weight_holds_learning: false,
         mad_anchor: false,
         refit_clock: None,
+        max_state_bytes: None,
     }
 }
 

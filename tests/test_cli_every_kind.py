@@ -291,7 +291,11 @@ CASES: list[Case] = [
     # The refit of each target's first rows at a count of its own, inside a
     # budget, and a budget below one group's buffer, every refit given up.
     Case("quantile3", "quantile", full(quantile=0.6, quantile_refit_rows=40, refit_budget=8)),
-    Case("quantile_span", "quantile", full(quantile=0.6, quantile_refit_span=40.0)),
+    Case(
+        "quantile_span",
+        "quantile",
+        full(quantile=0.6, quantile_refit_span=40.0, max_state_bytes=200_000),
+    ),
     Case("quantile4", "quantile", full2(quantile=0.5, quantile_refit_rows=50, refit_budget=0.001)),
     Case(
         "rls",
@@ -376,7 +380,7 @@ CASES: list[Case] = [
         "sgd",
         {**full(loss="logistic", learning_rate=0.05, strict_binary=True), "targets": ["hit"]},
     ),
-    Case("sgd_span", "sgd", full(loss="huber", huber_refit_span=40.0)),
+    Case("sgd_span", "sgd", full(loss="huber", huber_refit_span=40.0, max_state_bytes=200_000)),
     Case("sgd_poisson", "sgd", {**full(loss="poisson", learning_rate=0.01), "targets": ["hit"]}),
     Case(
         "pa",
@@ -411,7 +415,9 @@ CASES: list[Case] = [
     ),
     Case("glm2", "glm", {**full2(refit_rows=0, step_cap=0.5), "targets": ["hit"]}),
     # The first rows' refit over a span of the clock (task 538).
-    Case("glm_span", "glm", {**full2(refit_span=40.0), "targets": ["hit"]}),
+    Case(
+        "glm_span", "glm", {**full2(refit_span=40.0, max_state_bytes=200_000), "targets": ["hit"]}
+    ),
     Case("expectile_span", "expectile", full2(expectile=0.7, refit_span=40.0)),
     Case("expectile", "expectile", full(**CLOSE, expectile=0.8, refit_rows=30, refit_budget=64.0)),
     # A window of clock units and one of rows, refit exactly on every row: a
@@ -1022,7 +1028,7 @@ CASES += [
     # The refit is refused beside ridge_scale "sum", so a case of its own.
     Case("huber3", "huber", full(huber_refit_rows=40, refit_budget=8)),
     # Task 538: the refit over a span of the clock.
-    Case("huber_span", "huber", full(huber_refit_span=40.0)),
+    Case("huber_span", "huber", full(huber_refit_span=40.0, max_state_bytes=200_000)),
     # A budget below one group's buffer: every refit is given up.
     Case("huber4", "huber", full2(huber_refit_rows=50, refit_budget=0.001)),
     Case(

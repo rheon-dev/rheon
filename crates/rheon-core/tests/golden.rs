@@ -146,6 +146,7 @@ fn robust_cfg(loss: RobustLoss, standardize: bool) -> RobustCfg {
         mad_anchor: false,
         min_weight_holds_learning: false,
         refit_clock: None,
+        max_state_bytes: None,
     }
 }
 
@@ -407,6 +408,7 @@ fn sgd_golden() {
         target_spread: false,
         mad_anchor: false,
         refit_clock: None,
+        max_state_bytes: None,
     })
     .unwrap();
     check("sgd", &signature(&mut m, 0), GOLDEN_SGD);
@@ -436,6 +438,7 @@ fn sgd_squared_golden() {
         target_spread: false,
         mad_anchor: false,
         refit_clock: None,
+        max_state_bytes: None,
     })
     .unwrap();
     check("sgd_squared", &signature(&mut m, 0), GOLDEN_SGD_SQUARED);
@@ -490,6 +493,7 @@ fn glm_golden() {
         refit_rows: 15,
         refit_clock: None,
         step_cap: f64::INFINITY,
+        max_state_bytes: None,
     })
     .unwrap();
     check("glm", &glm_signature(&mut m), GOLDEN_GLM);
@@ -512,6 +516,7 @@ fn glm_cap_golden() {
         refit_rows: 0,
         refit_clock: None,
         step_cap: 0.5,
+        max_state_bytes: None,
     })
     .unwrap();
     check("glm_cap", &glm_signature(&mut m), GOLDEN_GLM_CAP);
@@ -547,6 +552,7 @@ fn sgd_simplex_golden() {
         target_spread: false,
         mad_anchor: false,
         refit_clock: None,
+        max_state_bytes: None,
     })
     .unwrap();
     check("sgd_simplex", &signature(&mut m, 0), GOLDEN_SGD_SIMPLEX);

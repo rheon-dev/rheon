@@ -624,6 +624,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [messages."crates/rheon-core/src/bocpd/span.rs"]
 
+[messages."crates/rheon-core/src/clock_span.rs"]
+
 [messages."crates/rheon-core/src/expectile.rs"]
 
 [messages."crates/rheon-core/src/family.rs"]
@@ -674,6 +676,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [docstrings."python/rheon/polars/_warnings.py"]
 
 [vocabulary."crates/rheon-core/src/bocpd/span.rs#messages"]
+
+[vocabulary."crates/rheon-core/src/clock_span.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/expectile.rs#messages"]
 

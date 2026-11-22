@@ -211,9 +211,8 @@ duration) and, where noted, a row-count sibling.
    agree), and `corrchange`'s `window_rows` and `monitor_rows` (statistics
    defined over a span's row count). The lags (`ew_cov`, `marginal`, the
    diagnostics' and `horizon_rows`) are task 536's exact clock lags.
-3. **The robust and `glm` span caps are fixed at 256 KB a group**, which no
-   setting raises: `huber`, `quantile`, `sgd` and `glm` have no
-   `max_state_bytes`. A count may hold up to 2^20 rows (40 MiB a target)
-   under `refit_budget`; a span of an hour at a second a row (3,600 rows at
-   20 features) is refused. Whether these kinds should take a
-   `max_state_bytes` is a choice for task 537.
+3. **Settled (the coordinator, 2026-11-22):** `glm`, `huber`, `quantile`
+   and `sgd` take `max_state_bytes` under 537's rule (256 KB a group by
+   default, at most 64 MiB, warned of at half and refused at the cap),
+   replacing the fixed span cap; `glm`'s count is held to it too, its
+   default count unchanged at the default cap.

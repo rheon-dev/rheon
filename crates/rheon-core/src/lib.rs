@@ -181,7 +181,7 @@ pub use garch::{
 };
 pub use glm::{
     DEFAULT_GLM_REFIT_ROWS, GLM_GROUP_REFIT_CAP, GLM_REFIT_PASSES, Glm, GlmCfg,
-    default_glm_refit_rows, default_glm_step_cap,
+    default_glm_refit_rows, default_glm_refit_rows_within, default_glm_step_cap,
 };
 pub use hasher::{FixedHasher, FixedState};
 pub use hawkes::{Hawkes, HawkesCfg, MAX_STATE_BYTES as HAWKES_MAX_STATE_BYTES};

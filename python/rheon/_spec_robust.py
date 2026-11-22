@@ -31,6 +31,7 @@ def huber(
     emit_huber_scale: bool = False,
     huber_refit_rows: int | None = None,
     huber_refit_span: float | Duration | None = None,
+    max_state_bytes: int | None = None,
     refit_budget: float | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
@@ -136,10 +137,17 @@ def huber(
         ``huber_refit_span + 1`` rows: the refit of
         ``huber_refit_rows = huber_refit_span + 1``, to the bit.
         Its buffers grow as the rows come rather than being held at a
-        count's full size, and are held to 256 KB a group: past half of it
-        a warning, once a group, and the row that would pass it stops the
-        run with an error naming the group and the bytes. Refused beside
-        ``huber_refit_rows``.
+        count's full size, and are held to ``max_state_bytes`` as they
+        fill. Refused beside ``huber_refit_rows``.
+    ``max_state_bytes``
+        The bytes a group's refit buffers may hold. Under
+        ``huber_refit_span`` the data decides how many rows the buffers hold, so they
+        are checked as they fill: the first row to take a group past half of
+        it raises a warning, once for the group, naming the group and the
+        bytes, and the row that would take it past the cap stops the run
+        with an error naming the group and the bytes, the bank having
+        learned part of the chunk. Default 256 KB, ``262144``; at most
+        64 MiB, ``67108864``.
     ``refit_budget``
         A bound in MiB on the refit buffers of all the spec's groups
         together, above 0, or ``inf`` for none. Default 320. Each new group
@@ -487,6 +495,7 @@ def huber(
         "emit_huber_scale": True if emit_huber_scale else None,
         "huber_refit_rows": huber_refit_rows,
         "huber_refit_span": huber_refit_span,
+        "max_state_bytes": max_state_bytes,
         "refit_budget": refit_budget,
     }
     # Written only when given: the Rust spec skips them when absent.
@@ -509,6 +518,7 @@ def quantile(
     quantile_eps: float | None = None,
     quantile_refit_rows: int | None = None,
     quantile_refit_span: float | Duration | None = None,
+    max_state_bytes: int | None = None,
     refit_budget: float | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
@@ -565,10 +575,17 @@ def quantile(
         ``quantile_refit_span + 1`` rows: the refit of
         ``quantile_refit_rows = quantile_refit_span + 1``, to the bit.
         Its buffers grow as the rows come rather than being held at a
-        count's full size, and are held to 256 KB a group: past half of it
-        a warning, once a group, and the row that would pass it stops the
-        run with an error naming the group and the bytes. Refused beside
-        ``quantile_refit_rows``.
+        count's full size, and are held to ``max_state_bytes`` as they
+        fill. Refused beside ``quantile_refit_rows``.
+    ``max_state_bytes``
+        The bytes a group's refit buffers may hold. Under
+        ``quantile_refit_span`` the data decides how many rows the buffers hold, so they
+        are checked as they fill: the first row to take a group past half of
+        it raises a warning, once for the group, naming the group and the
+        bytes, and the row that would take it past the cap stops the run
+        with an error naming the group and the bytes, the bank having
+        learned part of the chunk. Default 256 KB, ``262144``; at most
+        64 MiB, ``67108864``.
     ``refit_budget``
         A bound in MiB on the refit buffers of all the spec's groups together, above
         0, or ``inf`` for none. Default 320. As for :func:`huber`: each new group
@@ -837,6 +854,7 @@ def quantile(
         "quantile_eps": quantile_eps,
         "quantile_refit_rows": quantile_refit_rows,
         "quantile_refit_span": quantile_refit_span,
+        "max_state_bytes": max_state_bytes,
         "refit_budget": refit_budget,
     }
     # Written only when given: the Rust spec skips them when absent.

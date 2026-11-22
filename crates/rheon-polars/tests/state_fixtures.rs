@@ -896,7 +896,7 @@ fn drift_kinds_run(bytes: &[u8], input: &DataFrame) -> Ran {
 /// the spans of `a` and `b`.
 fn refit_span_specs() -> Vec<Spec> {
     [
-        r#"{"name": "counts", "model": {"type": "glm", "refit_span": 60.0}, "targets": ["c"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 10.0, "half_life": "inf", "group": "g"}"#,
+        r#"{"name": "counts", "model": {"type": "glm", "refit_span": 60.0, "max_state_bytes": 200000}, "targets": ["c"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 10.0, "half_life": "inf", "group": "g"}"#,
         r#"{"name": "upper", "model": {"type": "expectile", "expectile": 0.8, "refit_span": 60.0}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 10.0, "half_life": "inf", "group": "g"}"#,
     ]
     .iter()
@@ -2945,6 +2945,9 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
         }),
         // PLAN 538: a refit over a span of the clock, in a spec and in each
         // model's buffer, with its first stamp.
+        ("bank_refit_span", "a spec's max_state_bytes", |p, v| {
+            p.ends_with(".max_state_bytes") && v.as_u64() == Some(200_000)
+        }),
         ("bank_refit_span", "a spec's refit_span", |p, v| {
             p.ends_with(".refit_span") && v.as_f64() == Some(60.0)
         }),

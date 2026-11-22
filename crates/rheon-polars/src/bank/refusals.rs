@@ -46,10 +46,23 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
         | ModelKind::Garch {
             max_state_bytes: Some(_),
             ..
-        } => format!("max_state_bytes of {cap}"),
-        ModelKind::Glm { .. } => {
-            format!("the {cap} bytes (256 KB) a group's refit buffers may hold")
         }
+        | ModelKind::Glm {
+            max_state_bytes: Some(_),
+            ..
+        }
+        | ModelKind::Huber {
+            max_state_bytes: Some(_),
+            ..
+        }
+        | ModelKind::Quantile {
+            max_state_bytes: Some(_),
+            ..
+        }
+        | ModelKind::Sgd {
+            max_state_bytes: Some(_),
+            ..
+        } => format!("max_state_bytes of {cap}"),
         _ => format!("the default max_state_bytes of {cap}, which a spec gets when it sets none"),
     };
     let (window, shorten) = match (&spec.model, fixed) {
@@ -86,6 +99,24 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
             } => (
                 format!("the rows of its refit inside refit_span = {s}"),
                 "Shorten refit_span, or give refit_rows",
+            ),
+            ModelKind::Huber {
+                huber_refit_span: Some(s),
+                ..
+            }
+            | ModelKind::Sgd {
+                huber_refit_span: Some(s),
+                ..
+            } => (
+                format!("the rows of its refit inside huber_refit_span = {s}"),
+                "Shorten huber_refit_span, or give huber_refit_rows",
+            ),
+            ModelKind::Quantile {
+                quantile_refit_span: Some(s),
+                ..
+            } => (
+                format!("the rows of its refit inside quantile_refit_span = {s}"),
+                "Shorten quantile_refit_span, or give quantile_refit_rows",
             ),
             _ => ("its window".to_string(), "Shorten the window"),
         },
