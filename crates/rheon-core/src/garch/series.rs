@@ -9,6 +9,7 @@ use super::fit::OMEGA_FLOOR_FRAC;
 use super::fit::{ab_set, backcast, clip_shape, fit, set_of};
 use super::guard;
 use super::linalg::{HalfSpaces, backward, chol_solve, cholesky, forward, tri, unpack};
+use super::math;
 use super::{GarchCfg, GarchDist, GarchVol};
 use crate::Stamp;
 
@@ -273,7 +274,7 @@ impl Series {
             if nf > k {
                 // a t: the shape's step, ν − 2 ← (ν − 2) e^{Δs} (and λ), with
                 // the move the projection gave it on top
-                prop[k] = 2.0 + (th[k] - 2.0) * (mv[k] + shift[0]).min(700.0).exp();
+                prop[k] = 2.0 + (th[k] - 2.0) * math::exp((mv[k] + shift[0]).min(700.0));
                 if nf > k + 1 {
                     prop[k + 1] = th[k + 1] + mv[k + 1] + shift[1];
                 }

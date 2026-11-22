@@ -849,3 +849,41 @@ fn min_weight_gates_each_target_on_its_own_weight() {
     assert!(m.target_n_eff_into(&mut w));
     assert_eq!(w, vec![800.0, 400.0]);
 }
+
+/// `garch` calls no platform math library: every `ln`, `exp` and `ln_1p`
+/// in its code is the `libm` crate's, through `garch::math`, and it calls
+/// no other transcendental. The platforms' libraries differ in their last
+/// bits, and the start's optimizer once turned that into fits 28% apart
+/// between macOS and Windows; with none called, its goldens and state
+/// fixtures are held to the bit on every platform. This finds a call that
+/// would bring one back on the platform the change is made on, before
+/// another platform's CI does.
+#[test]
+fn no_platform_math_library_is_called() {
+    let files = [
+        ("garch.rs", include_str!("../garch.rs")),
+        ("dist.rs", include_str!("dist.rs")),
+        ("filter.rs", include_str!("filter.rs")),
+        ("fit.rs", include_str!("fit.rs")),
+        ("guard.rs", include_str!("guard.rs")),
+        ("linalg.rs", include_str!("linalg.rs")),
+        ("math.rs", include_str!("math.rs")),
+        ("optim.rs", include_str!("optim.rs")),
+        ("series.rs", include_str!("series.rs")),
+    ];
+    let platform = [
+        ".ln(", ".ln_1p(", ".log(", ".log2(", ".log10(", ".exp(", ".exp2(", ".exp_m1(", ".powf(",
+        ".powi(", ".sin(", ".cos(", ".tan(", ".sinh(", ".cosh(", ".tanh(", ".asin(", ".acos(",
+        ".atan(", ".atan2(", ".cbrt(", ".hypot(", "f64::ln", "f64::exp", "f64::pow",
+    ];
+    for (name, src) in files {
+        // the library's code: each file's own tests come after this mark
+        let code = src.split("#[cfg(test)]").next().unwrap();
+        for call in platform {
+            assert!(
+                !code.contains(call),
+                "{name} calls `{call}`: route it through `garch::math`"
+            );
+        }
+    }
+}

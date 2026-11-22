@@ -98,6 +98,21 @@ fn check(name: &str, got: &[f64], want: &[f64]) {
     }
 }
 
+/// [`check`] to the bit: for a model that calls no platform math library
+/// (`garch` reads `ln`, `exp` and `ln_1p` from the `libm` crate), whose
+/// numbers are therefore the same bits on every platform, so a platform
+/// whose library crept back into it fails here on that platform's CI.
+fn check_bits(name: &str, got: &[f64], want: &[f64]) {
+    check(name, got, want);
+    for (i, (g, w)) in got.iter().zip(want).enumerate() {
+        assert_eq!(
+            g.to_bits(),
+            w.to_bits(),
+            "{name}[{i}]: got {g:.17e}, want {w:.17e}, the same bits on every platform"
+        );
+    }
+}
+
 fn ewridge_cfg(standardize: bool, ridge: f64) -> EwRidgeCfg {
     EwRidgeCfg {
         n_features: 2,
@@ -911,42 +926,42 @@ fn garch_signature(vol: GarchVol, dist: GarchDist, targeting: bool) -> Vec<f64> 
 #[test]
 fn garch_golden() {
     let got = garch_signature(GarchVol::Garch, GarchDist::Normal, false);
-    check("garch", &got, GOLDEN_GARCH);
+    check_bits("garch", &got, GOLDEN_GARCH);
 }
 
 /// The variance-targeted GARCH(1,1) and its Huber score.
 #[test]
 fn garch_targeted_golden() {
     let got = garch_signature(GarchVol::Garch, GarchDist::Normal, true);
-    check("garch_targeted", &got, GOLDEN_GARCH_TARGETED);
+    check_bits("garch_targeted", &got, GOLDEN_GARCH_TARGETED);
 }
 
 /// A GJR with a Student t: the shape's step and the Schur metric.
 #[test]
 fn garch_gjr_t_golden() {
     let got = garch_signature(GarchVol::Gjr, GarchDist::T, false);
-    check("garch_gjr_t", &got, GOLDEN_GARCH_GJR_T);
+    check_bits("garch_gjr_t", &got, GOLDEN_GARCH_GJR_T);
 }
 
 /// A GARCH with a skewed t.
 #[test]
 fn garch_skewt_golden() {
     let got = garch_signature(GarchVol::Garch, GarchDist::Skewt, false);
-    check("garch_skewt", &got, GOLDEN_GARCH_SKEWT);
+    check_bits("garch_skewt", &got, GOLDEN_GARCH_SKEWT);
 }
 
 /// An EGARCH: its bounds and its invertibility guard.
 #[test]
 fn garch_egarch_golden() {
     let got = garch_signature(GarchVol::Egarch, GarchDist::Normal, false);
-    check("garch_egarch", &got, GOLDEN_GARCH_EGARCH);
+    check_bits("garch_egarch", &got, GOLDEN_GARCH_EGARCH);
 }
 
 /// A FIGARCH of 20 lags after a start of 2,000 rows.
 #[test]
 fn garch_figarch_golden() {
     let got = garch_signature(GarchVol::Figarch, GarchDist::Normal, false);
-    check("garch_figarch", &got, GOLDEN_GARCH_FIGARCH);
+    check_bits("garch_figarch", &got, GOLDEN_GARCH_FIGARCH);
 }
 
 /// The pre-averaged estimate on the same stream: the other arithmetic.
@@ -2212,48 +2227,48 @@ const GOLDEN_GARCH_TARGETED: &[f64] = &[
     1.117672555172954e-18,
 ];
 const GOLDEN_GARCH_GJR_T: &[f64] = &[
-    1.3440985440375537,
-    -0.4535622292768683,
-    1.6250756088191292,
-    1.4622740480348795,
-    -0.4348485741277296,
-    1.563119303285428,
-    1.3258174237423437,
-    -0.1287481346319567,
-    1.3360158620832077,
-    0.4931758931590168,
-    0.07903029035596922,
-    -0.06584522130067458,
-    0.5837856386352136,
-    4.371078462411805,
+    1.3440985440375877,
+    -0.45356222927686257,
+    1.625075608819203,
+    1.4622740480349048,
+    -0.4348485741277257,
+    1.5631193032854673,
+    1.3258174237423648,
+    -0.1287481346319557,
+    1.336015862083225,
+    0.49317589315899235,
+    0.07903029035596597,
+    -0.06584522130067265,
+    0.5837856386352385,
+    4.37107846241176,
 ];
 const GOLDEN_GARCH_SKEWT: &[f64] = &[
-    1.157436110003169,
-    -0.4887693034818385,
-    1.1493938060357132,
-    1.1575081905382825,
-    -0.48875408488480365,
-    1.15468199241209,
-    1.1554981937379303,
-    -0.13791076613134423,
-    1.1570973720966085,
-    1.1494165876436917,
-    0.0065193892017016315,
+    1.1574361104270534,
+    -0.4887693033923383,
+    1.149393806442804,
+    1.1575081906389688,
+    -0.4887540848635464,
+    1.1546819926141083,
+    1.1554981938647124,
+    -0.1379107661237784,
+    1.1570973722492008,
+    1.149416587740333,
+    0.0065193892498572855,
     0.0,
-    157.86304931771843,
-    0.22802612444383585,
+    157.86305407187004,
+    0.22802612393924798,
 ];
 const GOLDEN_GARCH_EGARCH: &[f64] = &[
-    1.2168020481707231,
-    -0.4766970567574661,
-    1.1833827733202142,
-    -0.4833812662991785,
-    1.2031523899560927,
-    -0.13515200332487812,
-    0.16710159154594698,
-    0.027508367682055716,
-    -0.0019494461595324962,
-    0.10095948595483875,
+    1.216802049743502,
+    -0.47669705644938837,
+    1.183382764085924,
+    -0.48338126818516286,
+    1.203152391672448,
+    -0.13515200322847765,
+    0.1671016306446541,
+    0.0275083618210369,
+    -0.0019494464700335386,
+    0.10095928577172958,
 ];
 const GOLDEN_GARCH_FIGARCH: &[f64] = &[
     1.1435675635018685,

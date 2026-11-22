@@ -2893,13 +2893,17 @@ fn first_difference(got: &rmpv::Value, want: &rmpv::Value, bound: f64, at: &str)
 /// numbers within the golden files' tolerance, the continuation's inputs
 /// to the bit and its reports within the same tolerance. A decay or a
 /// log-likelihood runs through libm, whose last bit is the platform's.
+/// `garch` calls no platform library (its `ln`, `exp` and `ln_1p` are the
+/// `libm` crate's), so its cases are held to the bit: a start fitted on
+/// another platform's last bits once took another path, 28% away.
 fn differs_from_another_writer(case: &Case, f: &Fixture) -> Option<String> {
+    let tol = if f.variant == "Garch" { 0.0 } else { TOL };
     let (mut m, rows) = saved(case);
     let decode = |b: &[u8]| rmpv::decode::read_value(&mut &b[..]).unwrap();
     let state = first_difference(
         &decode(&named(&m.state())),
         &decode(&f.bytes()),
-        TOL,
+        tol,
         "state",
     );
     if state.is_some() {
@@ -2934,7 +2938,7 @@ fn differs_from_another_writer(case: &Case, f: &Fixture) -> Option<String> {
                 .collect::<Vec<_>>()
         };
         let (g, w) = (numbers(&got), numbers(&want));
-        if g.len() != w.len() || g.iter().zip(&w).any(|(a, b)| !agree(*a, *b, TOL)) {
+        if g.len() != w.len() || g.iter().zip(&w).any(|(a, b)| !agree(*a, *b, tol)) {
             return Some(format!("row {i} after the save: another report"));
         }
     }

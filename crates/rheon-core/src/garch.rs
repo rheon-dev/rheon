@@ -115,6 +115,15 @@
 //! before the row, and each target's own weight gates it (hard rule 8);
 //! there is no decay.
 //!
+//! **The same numbers on every platform.** `ln`, `exp` and `ln_1p` are the
+//! `libm` crate's, compiled from source, not the platform's math library,
+//! whose last bits differ between macOS, glibc and Windows: the start's
+//! optimizer, on a short start whose likelihood is flat along a ridge,
+//! ends where its comparisons at the rounding left it, so those bits chose
+//! the fit (`garch::math`). Every other operation is IEEE arithmetic in a
+//! fixed order, so a row's outputs and the state are the same bits
+//! everywhere.
+//!
 //! **State**, per target, in bytes: `8 (2k + m + n(n + 1)/2 + 9)` for `k`
 //! process parameters, `m` shape parameters and `n` stepped coordinates,
 //! EGARCH's 64 bins of `z` (512) beside them, plus the larger of the start's
@@ -138,6 +147,7 @@ mod filter;
 mod fit;
 mod guard;
 mod linalg;
+mod math;
 mod optim;
 mod series;
 

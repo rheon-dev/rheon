@@ -31,6 +31,8 @@
 //! recurrence to an argument of at least 20 and read from its asymptotic
 //! series there, whose first term left out is below `1e-17` there.
 
+use super::math;
+
 /// `ν`'s bounds, `arch`'s: 2.05 to 300.
 pub(super) const NU_LO: f64 = 2.05;
 pub(super) const NU_HI: f64 = 300.0;
@@ -43,7 +45,7 @@ const LN_SQRT_2PI: f64 = 0.918_938_533_204_672_7;
 pub(super) fn ln_gamma(mut x: f64) -> f64 {
     let mut shift = 0.0;
     while x < 20.0 {
-        shift += x.ln();
+        shift += math::ln(x);
         x += 1.0;
     }
     let r = 1.0 / x;
@@ -52,7 +54,7 @@ pub(super) fn ln_gamma(mut x: f64) -> f64 {
         * (1.0 / 12.0
             + r2 * (-1.0 / 360.0
                 + r2 * (1.0 / 1260.0 + r2 * (-1.0 / 1680.0 + r2 * (1.0 / 1188.0)))));
-    (x - 0.5) * x.ln() - x + LN_SQRT_2PI + series - shift
+    (x - 0.5) * math::ln(x) - x + LN_SQRT_2PI + series - shift
 }
 
 /// The digamma function `ψ(x) = d ln Γ(x)/dx` for `x > 0`.
@@ -67,12 +69,12 @@ pub(super) fn digamma(mut x: f64) -> f64 {
     let series = r2
         * (1.0 / 12.0
             - r2 * (1.0 / 120.0 - r2 * (1.0 / 252.0 - r2 * (1.0 / 240.0 - r2 * (1.0 / 132.0)))));
-    x.ln() - 0.5 * r - series - shift
+    math::ln(x) - 0.5 * r - series - shift
 }
 
 /// `(a, b, c)` of the density at `(ν, λ)`.
 fn consts(nu: f64, lam: f64) -> (f64, f64, f64) {
-    let c = (ln_gamma((nu + 1.0) / 2.0) - ln_gamma(nu / 2.0)).exp()
+    let c = math::exp(ln_gamma((nu + 1.0) / 2.0) - ln_gamma(nu / 2.0))
         / (std::f64::consts::PI * (nu - 2.0)).sqrt();
     let a = 4.0 * lam * c * (nu - 2.0) / (nu - 1.0);
     let b = (1.0 + 3.0 * lam * lam - a * a).sqrt();
@@ -84,7 +86,7 @@ pub(super) fn log_density(z: f64, nu: f64, lam: f64) -> f64 {
     let (a, b, c) = consts(nu, lam);
     let sg = if z > -a / b { 1.0 } else { -1.0 };
     let m = (b * z + a) / (1.0 + sg * lam);
-    b.ln() + c.ln() - 0.5 * (nu + 1.0) * (m * m / (nu - 2.0)).ln_1p()
+    math::ln(b) + math::ln(c) - 0.5 * (nu + 1.0) * math::ln_1p(m * m / (nu - 2.0))
 }
 
 /// The scores of one row's `z`: `w`, the factor of the variance
@@ -96,7 +98,7 @@ pub(super) fn scores(z: f64, nu: f64, lam: f64, skew: bool) -> (f64, f64, f64) {
     if !skew {
         let q = z * z;
         let w = (nu + 1.0) * q / (n2 + q) - 1.0;
-        let s_nu = dlnc - 0.5 * (q / n2).ln_1p() + (nu + 1.0) * q / (2.0 * n2 * (n2 + q));
+        let s_nu = dlnc - 0.5 * math::ln_1p(q / n2) + (nu + 1.0) * q / (2.0 * n2 * (n2 + q));
         return (w, s_nu, 0.0);
     }
     let (a, b, c) = consts(nu, lam);
@@ -112,7 +114,7 @@ pub(super) fn scores(z: f64, nu: f64, lam: f64, skew: bool) -> (f64, f64, f64) {
     let m_nu = (b_nu * z + a_nu) / q;
     let m_lam = (b_lam * z + a_lam) / q - sg * m / q;
     let s_nu = b_nu / b + dlnc
-        - 0.5 * (m * m / n2).ln_1p()
+        - 0.5 * math::ln_1p(m * m / n2)
         - (nu + 1.0) * (2.0 * m * m_nu * n2 - m * m) / (2.0 * n2 * dd);
     let s_lam = b_lam / b - (nu + 1.0) * m * m_lam / dd;
     (w, s_nu, s_lam)

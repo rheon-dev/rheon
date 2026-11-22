@@ -26,7 +26,9 @@ faer.workspace = true
 # workspace Cargo.toml, task 258). All four are faer's own dependencies,
 # already linked; nothing new is linked (CLAUDE.md rule 12). A test names
 # `libm` for a stream that is the same bits on every platform (task 273,
-# `gramfit/lars_tie_tests.rs`); the library calls none of it. `pulp` is
+# `gramfit/lars_tie_tests.rs`), and `garch` calls its `log`, `exp` and
+# `log1p` in place of the platform's (`garch/math.rs`: its start's fit
+# took another path on another platform's last bits). `pulp` is
 # named too, by `sgd::standardize_row`'s AVX2 lanes on x86-64 (task 290).
 faer-traits.workspace = true
 pulp.workspace = true
