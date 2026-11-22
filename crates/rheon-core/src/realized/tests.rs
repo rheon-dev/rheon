@@ -232,6 +232,11 @@ fn cfg(n: usize, half_life: f64) -> RealizedCfg {
         n_targets: n,
         decay: Decay::Halflife(half_life),
         min_weight: 0.0,
+        window_rows: None,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        lm_window: None,
+        lm_beta: DEFAULT_LM_BETA,
         max_state_bytes: None,
     }
 }
@@ -262,8 +267,8 @@ fn z_gap(a: f64, b: f64, rv: f64, bv: f64) -> f64 {
 /// are the papers' on the returns before the row, `n − 1` products and `n
 /// − 2` triples, to the rounding of the terms: on realistic days of 2,340
 /// and 23,400 returns, with and without jumps. The largest gaps measured
-/// (ulps): RV 1, BV 2, TV 10, TQ 20 (the cube roots against the papers'
-/// powers), `Z` 0.5 in units of `cond · ε`, `L` 0.
+/// (ulps): RV 0, BV 0, TV 10, TQ 20 (the cube roots against the papers'
+/// powers), `Z` 0.3 in units of `cond · ε`, `L` 0.
 #[test]
 fn one_pass_is_the_papers_measures_on_every_prefix() {
     let mut worst = [0.0f64; 6];
@@ -319,8 +324,8 @@ fn irregular(r: &[f64], seed: u64) -> Vec<Row> {
 /// clock units, an irregular clock and unequal weights. The products are
 /// of consecutive returns, each at the weight of its later row; `n` is the
 /// returns' weight. The online form multiplies a factor a row, so its gap
-/// grows with the rows a half-life holds. Measured (ulps): RV 18, BV 19, TV
-/// 14, TQ 30, `Z` 6.2 in units of `cond · ε`, `L` 7, the weight 11.
+/// grows with the rows a half-life holds. Measured (ulps): RV 21, BV 17, TV
+/// 14, TQ 32, `Z` 6.6 in units of `cond · ε`, `L` 7, the weight 11.
 #[test]
 fn decay_is_the_weighted_definition() {
     let r = sv_day(5_000, 11, true);
@@ -477,17 +482,17 @@ fn an_absent_return_is_skipped_by_its_own_series_alone() {
         .collect();
     for i in 0..rows.len() {
         assert_eq!(
-            bits(&steps[i].pred[..6]),
+            bits(&steps[i].pred[..7]),
             bits(&alone[i].pred),
             "row {i} {:?} {:?}",
-            &steps[i].pred[..6],
+            &steps[i].pred[..7],
             alone[i].pred
         );
     }
     for i in (5..rows.len()).step_by(113) {
         let before = (0..i).filter(|j| j % 3 != 1).count();
         let p = paper::measures(&present[..before]);
-        let o = &steps[i].pred[6..];
+        let o = &steps[i].pred[7..];
         assert!(
             ulps(o[1], p.bv) <= 4.0 && ulps(o[3], p.tq) <= 32.0,
             "row {i} {o:?} {p:?}"
@@ -571,7 +576,7 @@ fn min_weight_gates_each_series_on_its_own_weight() {
     let steps: Vec<Step> = (0..6).map(|i| m.step(&[], &y(i), 1.0, 1.0)).collect();
     for (i, s) in steps.iter().enumerate() {
         assert_eq!(s.pred[0].is_nan(), i < 3, "row {i}");
-        assert_eq!(s.pred[6].is_nan(), i < 5, "row {i}");
+        assert_eq!(s.pred[7].is_nan(), i < 5, "row {i}");
     }
 }
 
@@ -580,15 +585,18 @@ fn min_weight_gates_each_series_on_its_own_weight() {
 /// bad decay or floor, and a cap of 0, past 64 MiB, or below the state.
 #[test]
 fn the_state_is_a_few_numbers_a_series_and_the_settings_are_checked() {
-    assert_eq!(Realized::state_bytes(1), 136);
-    assert_eq!(Realized::state_bytes(4), 520);
+    assert_eq!(Realized::state_bytes(1, None, None, false), 136);
+    assert_eq!(Realized::state_bytes(4, None, None, false), 520);
     let mut m = Realized::new(cfg(3, 10.0)).unwrap();
     let r = sv_day(23_400, 15, true);
     let rows: Vec<Row> = r.iter().map(|&x| (1.0, vec![Some(x); 3], 1.0)).collect();
     run(&mut m, &rows);
     assert_eq!(m.series.len(), 3);
     let numbers = 1 + m.series.len() * (2 * SUMS + 4);
-    assert_eq!(8 * numbers as u64, Realized::state_bytes(3));
+    assert_eq!(
+        8 * numbers as u64,
+        Realized::state_bytes(3, None, None, false)
+    );
     let refuse = |c: RealizedCfg, says: &str| {
         let e = Realized::new(c).unwrap_err();
         assert!(e.contains(says), "{e}");

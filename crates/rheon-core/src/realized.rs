@@ -23,7 +23,6 @@
 //! small-sample factor such as `n/(n − 1)`: the papers' estimators have none.
 //! A window of `W` returns holds the `W − 1` products of its consecutive
 //! returns, and the `W − 2` triples, as the papers' sums over `W` returns do.
-
 //!
 //! **The online form.** A row is a clock step, one return per target (a
 //! target absent on a row has no return there) and a weight `w ≥ 0`. Per
@@ -62,21 +61,78 @@
 //! it counts in no clock; handed one directly, the model ages its sums over
 //! the row's step, as every model does.
 //!
-//! **The sums are compensated**: each is a pair (`crate::comp`), its high
+//! **The sums are compensated**: each is a pair (TwoSum), its high
 //! part and what that leaves out, so a sum over a day of 23,400 returns
 //! keeps the rounding of its terms rather than a random walk of 23,400
 //! roundings (40 to 130 units in the last place, measured, against 0 to 5).
 //! The cube roots are the `libm` crate's, the same bits on every platform.
 //!
-//! **The state** is `16` numbers a target (six sums and their low parts,
-//! the last return's size, the last two cube roots and how many returns
-//! are remembered) and the shared weight: `8 + 128 m` bytes for `m`
-//! targets, whatever the stream's length or the half-life.
+//! **Lee and Mykland's flag.** With `c = √(2/π)`, `c L_i` is N(0, 1) under
+//! no jump, so `c · lm` is read as a z-score. The paper tests the largest
+//! `|L_i|` of `n` returns against the Gumbel law of its maximum,
+//!
+//! ```text
+//! C_n = √(2 ln n)/c − (ln π + ln ln n) / (2 c √(2 ln n))     S_n = 1 / (c √(2 ln n))
+//! jump at i  ⇔  (|L_i| − C_n) / S_n > β*,   β* = −ln(−ln β)
+//! ```
+//!
+//! `β` the test's confidence, `P(ξ ≤ β*) = β` for the standard Gumbel `ξ`
+//! (`lm_beta`, 0.99 by default: `β* = 4.6001`). `n` is the target's own
+//! weight of returns, the `n` of the other estimators, so the threshold is
+//! that of the stretch they are measured over; the flag is `NaN` where `L_i`
+//! is, or where `n ≤ 1`.
+//!
+//! **A window** (`window_rows = W`, or `window_clock = D`) in place of a
+//! decay: the estimators of the returns of the last `W` rows of positive
+//! weight, or of the rows of the last `D` clock units, alone. A product or a
+//! triple is in the window when every return in it is: `W` returns hold `W −
+//! 1` products and `W − 2` triples, as the papers' sums over `W` returns do.
+//! Each row's terms are held in a ring, a target's apart, and taken back as
+//! its oldest return leaves, with the products and triples that reached it;
+//! the sums are compensated, and set to exactly 0 when a target's ring
+//! empties, so their rounding is of the window, not of every row the stream
+//! dropped. `D` is read on the rows' exact stamps ([`crate::Stamp`]) under
+//! `closed`: `Right`, the default, drops a row exactly `D` old, `Both` keeps
+//! it. As under a decay, a row reports from the window as it stood after
+//! the row before; the rows that have left by its own clock leave after it
+//! reports. A window forgets by dropping, so it takes no decay. `weight_sum`
+//! and each target's `n` are then the weights inside the window (hard rule
+//! 8).
+//!
+//! **`lm_window = K`**, Lee and Mykland's window, takes `σ_i` from the `K −
+//! 1` returns of the target before row `i` alone, their `K − 2` products,
+//! whatever the estimators' window or decay. It counts returns, as the
+//! paper's `K` does, so it has no form in clock units. Without it `σ_i` is
+//! read from the estimators' own sums.
+//!
+//! **The state.** Per target, `16` numbers (six compensated sums, the last
+//! return's size, the last two cube roots and how many returns are
+//! remembered) and the shared weight: `8 + 128 m` bytes for `m` targets
+//! under a decay, whatever the stream's length. `lm_window` adds `16 (K − 2)
+//! + 32` bytes a target. A window adds `32` bytes, and a row it holds `16`
+//! (its sequence and weight; under `window_clock` a stamp of 32 more) and `56`
+//! a target with a return there (its sequence, weight, four terms and how
+//! many of its products were taken). `window_rows` is checked against
+//! `max_state_bytes` when the model is built, and refused naming the
+//! largest window that fits; `window_clock` holds as many rows as its span
+//! has, which the data decides, so it is checked as the rows go in: the
+//! first row to take the state past half of `max_state_bytes` raises a
+//! warning, once, and a row that would take it past the cap is not learned,
+//! nor any after it ([`OnlineModel::state_over_cap`]).
+
+use std::collections::VecDeque;
 
 use serde::{Deserialize, Serialize};
 
+use crate::clock_span::Place;
 use crate::model::{ModelState, OnlineModel, State, StateError, Step, check_schema};
-use crate::{Decay, comp};
+use crate::{Decay, Stamp, WindowClosed};
+
+mod series;
+
+#[cfg(test)]
+use series::SUMS;
+use series::{Entry, LmRing, Series};
 
 /// `μ_1^-2 = π/2`, the scale of bipower variation.
 pub const BV_SCALE: f64 = std::f64::consts::FRAC_PI_2;
@@ -94,17 +150,15 @@ pub const TQ_SCALE: f64 = 1.743_472_074_531_984_5;
 pub const BNS_THETA: f64 = 0.608_993_753_862_133;
 
 /// The outputs a target reports, in order: `rv`, `bv`, `tv`, `tq`, `bns`,
-/// `lm`.
-pub const OUTPUTS_PER_TARGET: usize = 6;
+/// `lm`, `lm_jump`.
+pub const OUTPUTS_PER_TARGET: usize = 7;
 
-/// The sums a target keeps, as indices into its pairs.
-const NW: usize = 0;
-const RV: usize = 1;
-const BV: usize = 2;
-const TV: usize = 3;
-const TQ: usize = 4;
-const PW: usize = 5;
-const SUMS: usize = 6;
+/// Lee and Mykland's confidence `β` where none is set.
+pub const DEFAULT_LM_BETA: f64 = 0.99;
+
+fn default_lm_beta() -> f64 {
+    DEFAULT_LM_BETA
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RealizedCfg {
@@ -114,8 +168,28 @@ pub struct RealizedCfg {
     pub decay: Decay,
     /// The weight of a target's returns before it reports.
     pub min_weight: f64,
-    /// The bytes a group's state may hold; the default is
-    /// [`crate::clock_span::DEFAULT_STATE_BYTES`].
+    /// The estimators of the last this many rows of positive weight alone,
+    /// in place of a decay.
+    #[serde(default)]
+    pub window_rows: Option<usize>,
+    /// The estimators of the rows of the last this many clock units alone
+    /// (seconds on a temporal clock), in place of a decay. How many rows
+    /// that is, the data decides.
+    #[serde(default)]
+    pub window_clock: Option<f64>,
+    /// Which edge of a clock window holds the row exactly `window_clock`
+    /// old: `Right`, the default, drops it, `Both` keeps it.
+    #[serde(default)]
+    pub closed: WindowClosed,
+    /// Lee and Mykland's `K`: `σ_i` from the target's `K − 1` returns
+    /// before the row alone. Without it, from the estimators' sums.
+    #[serde(default)]
+    pub lm_window: Option<usize>,
+    /// The confidence `β` of Lee and Mykland's flag, above 0 and below 1.
+    #[serde(default = "default_lm_beta")]
+    pub lm_beta: f64,
+    /// The bytes a group's state may hold, a window's rows included; the
+    /// default is [`crate::clock_span::DEFAULT_STATE_BYTES`].
     #[serde(default)]
     pub max_state_bytes: Option<u64>,
 }
@@ -133,22 +207,117 @@ impl RealizedCfg {
             no.refuse(format!("realized: {e}"));
         }
         no.take(crate::model::check_min_weight("realized", self.min_weight));
+        if self.window_rows == Some(0) {
+            no.refuse(
+                "realized: window_rows must be at least 1, but it is 0. Give the number of \
+                 rows the estimators are measured over, or leave it out for no window.",
+            );
+        }
+        if let Some(d) = self.window_clock {
+            if !(d.is_finite() && d > 0.0) {
+                no.refuse(format!(
+                    "realized: the clock window must be a finite number of clock units above \
+                     0, but it is {d}. Give the span of clock the estimators are measured \
+                     over, or leave it out for no window."
+                ));
+            }
+            if self.window_rows.is_some() {
+                no.refuse(
+                    "realized: a window of clock units and window_rows are two windows, and \
+                     the estimators hold one. Leave one of them out.",
+                );
+            }
+        } else if self.closed != WindowClosed::Right {
+            no.refuse(
+                "realized: closed = \"both\" says which edge of a clock window keeps the row \
+                 exactly its span old, but there is no clock window. Give the window's span, \
+                 or leave closed out.",
+            );
+        }
+        if self.windowed() && self.decay.check().is_ok() && self.decay.factor(1.0) != 1.0 {
+            no.refuse(
+                "realized: a window forgets by dropping the oldest rows, so it takes no decay, \
+                 but half_life (or lam) decays too. Set half_life to inf, or leave out the \
+                 window.",
+            );
+        }
+        if let Some(k) = self.lm_window
+            && k < 3
+        {
+            no.refuse(format!(
+                "realized: lm_window must be at least 3, but it is {k}: Lee and Mykland's \
+                 volatility is the mean of the K - 2 products of the K - 1 returns before a \
+                 row. Give K of 3 or more, or leave it out to read it from the estimators."
+            ));
+        }
+        if !(self.lm_beta > 0.0 && self.lm_beta < 1.0) {
+            no.refuse(format!(
+                "realized: lm_beta must be above 0 and below 1, but it is {}. Give the \
+                 confidence of Lee and Mykland's test, such as 0.99, or leave it out for \
+                 0.99.",
+                self.lm_beta
+            ));
+        }
         match crate::clock_span::check_max_state_bytes("realized", self.max_state_bytes) {
             Err(e) => no.refuse(e),
-            Ok(()) => {
-                let (bytes, cap) = (Realized::state_bytes(self.n_targets), self.cap());
-                if self.n_targets > 0 && bytes > cap {
-                    no.refuse(format!(
-                        "realized: its state would hold {bytes} bytes a group, past \
-                         max_state_bytes of {cap}: {} bytes for each of {}. Give fewer \
-                         targets a spec, or raise max_state_bytes.",
-                        Series::BYTES,
-                        crate::model::count(self.n_targets, "target"),
-                    ));
+            Ok(()) if self.n_targets > 0 => {
+                let (bytes, cap) = (self.fixed_bytes(), self.cap());
+                if bytes > cap {
+                    no.refuse(self.past_the_cap(bytes, cap));
                 }
             }
+            Ok(()) => {}
         }
         no.finish()
+    }
+
+    /// The refusal of settings whose fixed state passes the cap, naming the
+    /// largest window that fits where a window is what passes it.
+    fn past_the_cap(&self, bytes: u64, cap: u64) -> String {
+        let m = self.n_targets as u64;
+        let base = Realized::state_bytes(self.n_targets, self.lm_window, None, false);
+        let row = Realized::window_row_bytes(self.n_targets, false);
+        match self.window_rows {
+            Some(w) if base <= cap => format!(
+                "realized: its state would hold {bytes} bytes a group, past max_state_bytes of \
+                 {cap}: a window of {w} rows keeps {row} bytes a row for {}. The largest \
+                 window_rows that fits is {}. Lower window_rows, or raise max_state_bytes.",
+                crate::model::count(self.n_targets, "target"),
+                (cap - base) / row,
+            ),
+            _ => format!(
+                "realized: its state would hold {bytes} bytes a group, past max_state_bytes of \
+                 {cap}: {} bytes for each of {}{}. Give fewer targets a spec, {}or raise \
+                 max_state_bytes.",
+                bytes / m.max(1),
+                crate::model::count(self.n_targets, "target"),
+                if self.lm_window.is_some() {
+                    ", lm_window's products included"
+                } else {
+                    ""
+                },
+                if self.lm_window.is_some() {
+                    "lower lm_window, "
+                } else {
+                    ""
+                },
+            ),
+        }
+    }
+
+    fn windowed(&self) -> bool {
+        self.window_rows.is_some() || self.window_clock.is_some()
+    }
+
+    /// The bytes the settings fix: the state with a full `window_rows`
+    /// window, or with an empty clock window.
+    fn fixed_bytes(&self) -> u64 {
+        Realized::state_bytes(
+            self.n_targets,
+            self.lm_window,
+            self.window_rows.or(self.window_clock.map(|_| 0)),
+            self.window_clock.is_some(),
+        )
     }
 
     /// The bytes a group's state may hold.
@@ -158,101 +327,41 @@ impl RealizedCfg {
     }
 }
 
-/// One return series: its compensated sums and the last returns it has
-/// learned, which the next products are formed with.
+/// A row a window holds: its place in the stream, its weight and, in a
+/// window of clock units, its stamp.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-struct Series {
-    /// The sums' high parts, `[n, rv, bv, tv, tq, p]`.
-    hi: [f64; SUMS],
-    /// What each high part leaves out ([`comp::add`]).
-    lo: [f64; SUMS],
-    /// `|r|` of the last return learned.
-    a1: f64,
-    /// `|r|^(1/3)` of the last two returns learned, the latest first.
-    c1: f64,
-    c2: f64,
-    /// How many returns are remembered: 0, 1, or 2 for two or more.
-    seen: u8,
+struct Held {
+    seq: u64,
+    w: f64,
+    #[serde(default)]
+    stamp: Option<Stamp>,
 }
 
-impl Series {
-    /// The numbers a series holds, in bytes: 16 of 8 bytes.
-    const BYTES: u64 = 8 * 16;
+/// The rows a window holds, oldest first, the weight inside it, the next
+/// row's sequence and, in a window of clock units, the clock.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct Window {
+    rows: VecDeque<Held>,
+    w_hi: f64,
+    w_lo: f64,
+    next_seq: u64,
+    #[serde(default)]
+    place: Option<Place>,
+}
 
-    fn new() -> Self {
+impl Window {
+    fn new(clocked: bool) -> Self {
         Self {
-            hi: [0.0; SUMS],
-            lo: [0.0; SUMS],
-            a1: 0.0,
-            c1: 0.0,
-            c2: 0.0,
-            seen: 0,
+            rows: VecDeque::new(),
+            w_hi: 0.0,
+            w_lo: 0.0,
+            next_seq: 0,
+            place: clocked.then(Place::default),
         }
     }
 
-    fn sum(&self, k: usize) -> f64 {
-        self.hi[k] + self.lo[k]
-    }
-
-    /// Every sum aged by the factor `f`.
-    fn decay(&mut self, f: f64) {
-        if f != 1.0 {
-            for v in self.hi.iter_mut().chain(self.lo.iter_mut()) {
-                *v *= f;
-            }
-        }
-    }
-
-    fn add(&mut self, k: usize, x: f64) {
-        comp::add(&mut self.hi[k], &mut self.lo[k], x);
-    }
-
-    /// The return `r` learned at the weight `w > 0`.
-    fn learn(&mut self, r: f64, w: f64) {
-        let a = r.abs();
-        let c = libm::cbrt(a);
-        self.add(NW, w);
-        self.add(RV, w * (r * r));
-        if self.seen >= 1 {
-            self.add(BV, w * (a * self.a1));
-            self.add(PW, w);
-        }
-        if self.seen >= 2 {
-            let t = c * self.c1 * self.c2;
-            let t2 = t * t;
-            self.add(TV, w * t2);
-            self.add(TQ, w * (t2 * t2));
-        }
-        self.c2 = self.c1;
-        self.c1 = c;
-        self.a1 = a;
-        self.seen = (self.seen + 1).min(2);
-    }
-
-    /// The series' six outputs into `out`, from its state as it stands,
-    /// for a row whose return is `r` (none where the row has none).
-    fn read(&self, r: Option<f64>, min_weight: f64, out: &mut Vec<f64>) {
-        let n = self.sum(NW);
-        if n < min_weight {
-            out.extend([f64::NAN; OUTPUTS_PER_TARGET]);
-            return;
-        }
-        let rv = self.sum(RV);
-        let s_bv = self.sum(BV);
-        let bv = BV_SCALE * s_bv;
-        let tv = TV_SCALE * self.sum(TV);
-        let tq = n * (TQ_SCALE * self.sum(TQ));
-        let z = if rv > 0.0 && bv > 0.0 {
-            n.sqrt() * (1.0 - bv / rv) / (BNS_THETA * (tq / (bv * bv)).max(1.0)).sqrt()
-        } else {
-            f64::NAN
-        };
-        let p = self.sum(PW);
-        let lm = match r {
-            Some(r) if p > 0.0 && s_bv > 0.0 => r / (s_bv / p).sqrt(),
-            _ => f64::NAN,
-        };
-        out.extend([rv, bv, tv, tq, z, lm]);
+    fn weight(&self) -> f64 {
+        self.w_hi + self.w_lo
     }
 }
 
@@ -260,16 +369,33 @@ impl Series {
 pub struct Realized {
     cfg: RealizedCfg,
     series: Vec<Series>,
-    /// Every row's weight, decayed: the emitted `weight_sum`.
+    /// Every row's weight, decayed: the emitted `weight_sum` under a decay.
     w_sum: f64,
+    window: Option<Window>,
+    /// The bytes a clock window's next row would have taken the state to,
+    /// past the cap: from then on no row is learned.
+    #[serde(default)]
+    over: Option<u64>,
+    /// The half-of-the-cap warning has been raised (once a group).
+    #[serde(default)]
+    warned: bool,
+    /// The warning raised and not yet taken. Never state.
+    #[serde(skip)]
+    warning: Option<u64>,
 }
 
 impl Realized {
     pub fn new(cfg: RealizedCfg) -> Result<Self, String> {
         cfg.validate()?;
         Ok(Self {
-            series: vec![Series::new(); cfg.n_targets],
+            series: vec![Series::new(cfg.lm_window); cfg.n_targets],
             w_sum: 0.0,
+            window: cfg
+                .windowed()
+                .then(|| Window::new(cfg.window_clock.is_some())),
+            over: None,
+            warned: false,
+            warning: None,
             cfg,
         })
     }
@@ -278,15 +404,54 @@ impl Realized {
         &self.cfg
     }
 
-    /// The bytes of the numbers a model of `n_targets` series holds: `8 +
-    /// 128 m`, whatever the stream's length or the decay.
-    pub fn state_bytes(n_targets: usize) -> u64 {
-        8 + Series::BYTES * n_targets as u64
+    /// The bytes a window keeps a row it holds: its sequence and weight, a
+    /// stamp under a clock window, and an [`Entry`] for each target.
+    pub fn window_row_bytes(n_targets: usize, clocked: bool) -> u64 {
+        let stamp = if clocked {
+            std::mem::size_of::<Stamp>() as u64
+        } else {
+            0
+        };
+        16 + stamp + Entry::BYTES * n_targets as u64
     }
 
-    /// The weight of every row, decayed (hard rule 8).
+    /// The bytes of the numbers a model of `n_targets` series holds: `8 +
+    /// 128 m` under a decay; with `lm_window = K`, `16 (K − 2) + 32` more a
+    /// target; with a window holding `rows` rows, its fixed `32` and
+    /// [`Self::window_row_bytes`] a row, every target's return there.
+    pub fn state_bytes(
+        n_targets: usize,
+        lm_window: Option<usize>,
+        rows: Option<usize>,
+        clocked: bool,
+    ) -> u64 {
+        let m = n_targets as u64;
+        let lm = lm_window.map_or(0, LmRing::bytes);
+        8 + (Series::BYTES + lm) * m
+            + rows.map_or(0, |r| {
+                32 + r as u64 * Self::window_row_bytes(n_targets, clocked)
+            })
+    }
+
+    /// The weight the estimators are of (hard rule 8): every row's, decayed,
+    /// or the weight inside the window.
     pub fn n_eff(&self) -> f64 {
-        self.w_sum
+        self.window.as_ref().map_or(self.w_sum, Window::weight)
+    }
+
+    /// The rows a window holds; 0 without one.
+    pub fn window_len(&self) -> usize {
+        self.window.as_ref().map_or(0, |w| w.rows.len())
+    }
+
+    /// The bytes the state holds now, a window's rows as they are.
+    fn bytes_with(&self, extra: usize) -> u64 {
+        Self::state_bytes(
+            self.cfg.n_targets,
+            self.cfg.lm_window,
+            self.window.as_ref().map(|w| w.rows.len() + extra),
+            self.cfg.window_clock.is_some(),
+        )
     }
 
     /// Each target's outputs into `pred`, from the state as it stands, for
@@ -294,7 +459,56 @@ impl Realized {
     fn read_into(&self, y: &[Option<f64>], pred: &mut Vec<f64>) {
         pred.clear();
         for (j, s) in self.series.iter().enumerate() {
-            s.read(y.get(j).copied().flatten(), self.cfg.min_weight, pred);
+            s.read(
+                y.get(j).copied().flatten(),
+                self.cfg.min_weight,
+                self.cfg.lm_beta,
+                pred,
+            );
+        }
+    }
+
+    /// The run-time check of a clock window's rows, over this model's
+    /// fields ([`crate::clock_span::HeldCap`]).
+    fn held_cap(&mut self) -> crate::clock_span::HeldCap<'_> {
+        crate::clock_span::HeldCap {
+            over: &mut self.over,
+            warned: &mut self.warned,
+            warning: &mut self.warning,
+        }
+    }
+
+    /// The oldest row out of the window, and each target's terms that
+    /// reached it.
+    fn drop_oldest(&mut self) {
+        let Some(w) = self.window.as_mut() else {
+            return;
+        };
+        let Some(old) = w.rows.pop_front() else {
+            return;
+        };
+        series::add(&mut w.w_hi, &mut w.w_lo, -old.w);
+        if w.rows.is_empty() {
+            (w.w_hi, w.w_lo) = (0.0, 0.0);
+        }
+        for s in &mut self.series {
+            s.drop_front(old.seq);
+        }
+    }
+
+    /// The rows of a clock window that have left at `now`, oldest first.
+    fn trim(&mut self, now: Stamp) {
+        let (Some(span), closed) = (self.cfg.window_clock, self.cfg.closed) else {
+            return;
+        };
+        while self
+            .window
+            .as_ref()
+            .and_then(|w| w.rows.front())
+            .and_then(|h| h.stamp)
+            .is_some_and(|s| closed.has_left(now, s, span))
+        {
+            self.drop_oldest();
         }
     }
 }
@@ -315,22 +529,66 @@ impl OnlineModel for Realized {
             *out = refused;
             return;
         }
-        // Read before the row's return and before its decay (hard rules 2
-        // and 8).
+        // Read before the row's return and before its decay, or before the
+        // rows that leave a window at this row have left (hard rules 2 and
+        // 8).
         self.read_into(y, &mut out.pred);
-        out.n_eff = self.w_sum;
+        out.n_eff = self.n_eff();
         out.extra = None;
         let f = self.cfg.decay.factor(d_clock);
         self.w_sum = f * self.w_sum + weight;
-        for (j, s) in self.series.iter_mut().enumerate() {
+        for s in &mut self.series {
             s.decay(f);
-            // A row of weight 0 learns nothing, and keeps the last returns
-            // as they are (hard rule 9).
-            if weight > 0.0
-                && let Some(r) = y.get(j).copied().flatten()
-            {
-                s.learn(r, weight);
+        }
+        let now = self
+            .window
+            .as_mut()
+            .and_then(|w| w.place.as_mut())
+            .map(|p| p.step(d_clock));
+        if let Some(now) = now {
+            self.trim(now);
+        }
+        // A row of weight 0 learns nothing, and keeps the last returns as
+        // they are (hard rule 9).
+        if weight <= 0.0 {
+            return;
+        }
+        // A clock window's next row that would take the state past its cap
+        // is not learned, nor any after it: the overrun is reported.
+        if now.is_some() {
+            let (bytes, cap) = (self.bytes_with(1), self.cfg.cap());
+            if !self.held_cap().admit(bytes, cap) {
+                return;
             }
+        }
+        let seq = match self.window.as_mut() {
+            Some(w) => {
+                let seq = w.next_seq;
+                w.next_seq += 1;
+                w.rows.push_back(Held {
+                    seq,
+                    w: weight,
+                    stamp: now,
+                });
+                series::add(&mut w.w_hi, &mut w.w_lo, weight);
+                Some(seq)
+            }
+            None => None,
+        };
+        let lm_window = self.cfg.lm_window;
+        for (j, s) in self.series.iter_mut().enumerate() {
+            if let Some(r) = y.get(j).copied().flatten() {
+                s.learn(r, weight, seq, lm_window);
+            }
+        }
+        if let Some(cap) = self.cfg.window_rows {
+            while self.window_len() > cap {
+                self.drop_oldest();
+            }
+        }
+        if now.is_some() {
+            let (bytes, cap) = (self.bytes_with(0), self.cfg.cap());
+            self.held_cap().note(bytes, cap);
         }
     }
 
@@ -338,8 +596,8 @@ impl OnlineModel for Realized {
         self.predict_with(x, &[], d_clock)
     }
 
-    /// The row's returns are read for `lm`, the row's own statistic; every
-    /// other output is of the returns before the row.
+    /// The row's returns are read for `lm` and its flag, the row's own
+    /// statistic; every other output is of the returns before the row.
     fn predict_with(&self, _x: &[f64], y: &[Option<f64>], d_clock: f64) -> Step {
         if let Some(refused) = crate::model::refused_predict_with(self, &[], y, d_clock) {
             return refused;
@@ -348,14 +606,38 @@ impl OnlineModel for Realized {
         self.read_into(y, &mut pred);
         Step {
             pred,
-            n_eff: self.w_sum,
+            n_eff: self.n_eff(),
             extra: None,
         }
     }
 
+    /// The last returns are lags: no product reaches across a session's
+    /// edge or a capped gap. The sums, a window and `lm_window`'s products
+    /// stay.
+    fn clear_lags(&mut self) {
+        for s in &mut self.series {
+            s.forget_last();
+        }
+    }
+
+    /// A clock window learns its rows' stamps: they decide when each leaves.
+    fn stamp_next(&mut self, stamp: Stamp) {
+        if let Some(p) = self.window.as_mut().and_then(|w| w.place.as_mut()) {
+            p.hand(stamp);
+        }
+    }
+
+    fn take_state_warning(&mut self) -> Option<(u64, u64)> {
+        self.warning.take().map(|bytes| (bytes, self.cfg.cap()))
+    }
+
+    fn state_over_cap(&self) -> Option<(u64, u64)> {
+        self.over.map(|bytes| (bytes, self.cfg.cap()))
+    }
+
     fn target_n_eff_into(&self, out: &mut Vec<f64>) -> bool {
         out.clear();
-        out.extend(self.series.iter().map(|s| s.sum(NW)));
+        out.extend(self.series.iter().map(Series::weight));
         true
     }
 
@@ -369,7 +651,22 @@ impl OnlineModel for Realized {
             ModelState::Realized(m) => {
                 let m = (**m).clone();
                 crate::model::check_cfg("realized", m.cfg.validate())?;
-                if m.series.len() != m.cfg.n_targets || m.series.iter().any(|s| s.seen > 2) {
+                let rows = m.window.as_ref().map(|w| &w.rows);
+                let shaped = m.series.len() == m.cfg.n_targets
+                    && m.series.iter().all(|s| s.has_shape(m.cfg.lm_window, rows))
+                    && match (&m.window, m.cfg.windowed()) {
+                        (None, false) => true,
+                        (Some(w), true) => {
+                            w.place.is_some() == m.cfg.window_clock.is_some()
+                                && w.rows.iter().all(|h| {
+                                    h.stamp.is_some() == m.cfg.window_clock.is_some()
+                                        && h.seq < w.next_seq
+                                })
+                                && m.cfg.window_rows.is_none_or(|c| w.rows.len() <= c)
+                        }
+                        _ => false,
+                    };
+                if !shaped {
                     return Err(crate::model::damaged(
                         "realized",
                         "its running sums have the wrong shape",
@@ -402,3 +699,5 @@ impl OnlineModel for Realized {
 mod paper;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod window_tests;
