@@ -34,10 +34,6 @@ RULES = {
     "one per unknown: the features, and the intercept when there is one": (
         lambda k, intercept: k + intercept
     ),
-    # `MINIMAL`'s `ar` has two lags.
-    "one per coefficient: the lags, the features, and the intercept when there is one": (
-        lambda k, intercept: 2 + k + intercept
-    ),
     "the feature count plus one (1 for `holt`)": lambda k, intercept: k + 1,
     "3": lambda k, intercept: 3,
     "1": lambda k, intercept: 1,

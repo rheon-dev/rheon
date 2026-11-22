@@ -726,7 +726,7 @@ CASES: list[Case] = [
     Case(
         "ar",
         "ar",
-        full(**CLOSE, lags=[1, 3], ridge=0.01, max_state_bytes=1 << 20),
+        full(**CLOSE, lags=[1, 3], ridge=0.01, max_state_bytes=1 << 20, emit_se_coef=True),
     ),
     # Without the embargo, which `ar` refuses.
     Case(

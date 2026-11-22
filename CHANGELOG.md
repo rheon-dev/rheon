@@ -76,7 +76,10 @@ model that only the new build has is listed as an addition and passes.
   squares with the weights on the clock. A row of weight 0 or a null target
   is not a lag (`AutoReg(missing="drop")`), a session change or a capped gap
   empties the lags and keeps the fit, `embargo` is refused (a delay would
-  make the lags older for the rows predicted than for the rows learned),
+  make the lags older for the rows predicted than for the rows learned), a
+  target predicts once its Gram is positive definite (no count of rows
+  guards the early fits; `min_weight` defaults to 0), `emit_se_coef` is
+  `ewridge`'s standard error of each target's fit,
   and the state, `8 max(lags)` plus at
   most `8 (4k² + 16k + 64)` bytes a target, is held to `max_state_bytes`
   when the spec is built. Spans: the half-life in rows or on the clock; the

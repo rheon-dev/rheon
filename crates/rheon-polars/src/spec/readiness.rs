@@ -97,12 +97,16 @@ impl Spec {
 
     /// Whether this spec's model reports its coefficients' sampling
     /// variances ([`rheon_core::OnlineModel::coef_variance`]), the field
-    /// `emit_se_coef` writes: `ewridge`, `rls` and `kalman` (docs/PLAN.md
+    /// `emit_se_coef` writes: `ewridge`, `rls`, `kalman` and `ar`, whose
+    /// fits are `ewridge`'s (docs/PLAN.md
     /// task 116, F).
     pub fn has_se_coef(&self) -> bool {
         matches!(
             self.model,
-            ModelKind::EwRidge { .. } | ModelKind::Rls { .. } | ModelKind::Kalman { .. }
+            ModelKind::EwRidge { .. }
+                | ModelKind::Rls { .. }
+                | ModelKind::Kalman { .. }
+                | ModelKind::Ar { .. }
         )
     }
 

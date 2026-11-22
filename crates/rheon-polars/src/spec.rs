@@ -2877,11 +2877,10 @@ impl Spec {
             ModelKind::Hawkes { .. } => 0.0,
             // The start is the gate: nothing is reported before it is fitted.
             ModelKind::Garch { .. } => 0.0,
-            // Each fit's coefficients, the constant, the lags and the
-            // features, one row of weight each.
-            ModelKind::Ar { ref lags, .. } => {
-                (lags.lags().len() + self.k() + usize::from(self.fit_intercept)) as f64
-            }
+            // The fit's definiteness is the gate (`rheon_core::Ar`): a
+            // target predicts once its lags and features span every
+            // direction, which no count of rows says.
+            ModelKind::Ar { .. } => 0.0,
             // The noise gate is this model's readiness gate
             // (docs/WARMUP-AND-CONVERGENCE.md §2.1): `max_error_inflation`
             // tracks the model where a count of weight cannot, and the

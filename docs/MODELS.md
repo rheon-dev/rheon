@@ -264,11 +264,10 @@ per target, give `min_weight` a list. The default depends on the model:
 | default | models |
 |---|---|
 | one per unknown: the features, and the intercept when there is one | `lasso`, `kalman`, `huber`, `quantile`, `expectile`, `rls`, `sgd`, `pa`, `ftrl`, `glm` |
-| one per coefficient: the lags, the features, and the intercept when there is one | `ar` |
 | the feature count plus one (1 for `holt`) | `ew_cov`, `ew_class`, `kmeans`, `micro`, `holt` |
 | 3 | `marginal`, `deco` |
 | 1 | `bocpd` |
-| 0, each having a gate of its own or nothing to gate | `ewridge`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes`, `garch` |
+| 0, each having a gate of its own or nothing to gate | `ewridge`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes`, `garch`, `ar` |
 
 **`min_settled_frac` is off by default.** Set it when the half-life was
 chosen to average over regimes or seasons that a shorter history would not
@@ -2175,7 +2174,10 @@ joins the target's last values, and enters `S` and `r` once `max(lags)`
 values precede it. A row of weight 0, or with the target null, is not a
 lag: the next row's lags are those before it. A lag counts learned rows,
 not clock units, and a session change or a gap past `gap_cap` empties the
-lags, keeping the fit.
+lags, keeping the fit. A target predicts once its Gram plus the ridge
+is positive definite, every Cholesky pivot above `1e-10` of its diagonal: the guard on
+the early rows is that condition, not a count of rows, and `min_weight`
+defaults to 0.
 
 #### Example
 

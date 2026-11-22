@@ -1624,6 +1624,7 @@ weight_sum = { budget = 8.125 }
 withheld_reason = { budget = 1.125 }
 zscore_y = { budget = 8.125 }
 zscore_z = { budget = 8.125 }
+se_coef = { budget = 100.6623 }
 
 # --- raises and sign-offs -------------------------------------------------------
 [[raised]]

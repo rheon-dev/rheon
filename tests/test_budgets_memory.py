@@ -154,7 +154,7 @@ EXCEPT = {
     "glm": ONE_SLOT | NOT_LEAST_SQUARES,
     "expectile": ONE_SLOT | NOT_LEAST_SQUARES,
     "holt": ONE_SLOT | NOT_LEAST_SQUARES | {"emit_feature_health"},
-    "ar": ONE_SLOT | NOT_LEAST_SQUARES,
+    "ar": ONE_SLOT | (NOT_LEAST_SQUARES - {"emit_se_coef"}),
 }
 
 

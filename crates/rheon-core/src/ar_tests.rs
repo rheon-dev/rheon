@@ -544,3 +544,61 @@ fn without_an_intercept_the_fit_is_through_the_origin() {
     assert_eq!(got.len(), 2);
     assert!(rel_gap(got, &want) < 1e-10, "{got:?} vs {want:?}");
 }
+
+/// The guard on the early rows is the fit's definiteness, not a count of
+/// rows: a target predicts from the first row after its centred lag-and-
+/// feature design spans every direction, which the design's own smallest
+/// eigenvalue (faer's eigensolver, through `crate::oracle`) says, and a row
+/// after the one it is still singular on. Both sides, on a realistic AR(2)
+/// with a feature, and on a feature collinear with the lag, which never
+/// defines a fit.
+#[test]
+fn the_early_rows_are_guarded_by_definiteness() {
+    let (x, y) = series(40, 43);
+    let inf = Decay::Halflife(f64::INFINITY);
+    let mut m = Ar::new(cfg(vec![1, 2], 1, inf)).unwrap();
+    let mut first = None;
+    for t in 0..y.len() {
+        let s = m.step(&[x[t]], &[Some(y[t])], 1.0, 1.0);
+        if first.is_none() && s.pred[0].is_finite() {
+            first = Some(t);
+        }
+    }
+    // The centred design over the learned rows 2..t, by the oracle.
+    let spans = |t: usize| {
+        let rows: Vec<[f64; 3]> = (2..t).map(|s| [y[s - 1], y[s - 2], x[s]]).collect();
+        if rows.len() < 2 {
+            return false;
+        }
+        let n = rows.len() as f64;
+        let mean: Vec<f64> = (0..3)
+            .map(|i| rows.iter().map(|r| r[i]).sum::<f64>() / n)
+            .collect();
+        let mut a = vec![0.0; 9];
+        for r in &rows {
+            for i in 0..3 {
+                for j in 0..3 {
+                    a[i * 3 + j] += (r[i] - mean[i]) * (r[j] - mean[j]) / n;
+                }
+            }
+        }
+        let (vals, _) = oracle::sym_eigen(&a);
+        let top = vals.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+        vals.iter().all(|v| *v > 1e-9 * top)
+    };
+    let first = first.expect("it predicts");
+    assert!(
+        spans(first),
+        "row {first} predicts from a design that spans"
+    );
+    assert!(!spans(first - 1), "and the row before it did not");
+    assert_eq!(first, 6, "four learned rows for four coefficients");
+
+    // x the lag itself: the design never spans, and the fit is never read.
+    let mut m = Ar::new(cfg(vec![1], 1, inf)).unwrap();
+    for t in 1..y.len() {
+        let s = m.step(&[y[t - 1]], &[Some(y[t])], 1.0, 1.0);
+        assert!(s.pred[0].is_nan(), "row {t}");
+    }
+    assert!(m.coefficients().is_none());
+}

@@ -83,7 +83,8 @@ def ar(
         Per target: the prediction from the target's last values and the
         row's features, read before the row is learned, and ``y - pred``
         where the target is not null. Null until the target has
-        ``max(lags)`` values and a fit, and below ``min_weight``.
+        ``max(lags)`` values and its fit is defined (below), and below
+        ``min_weight``.
     ``weight_sum``
         The weight the model has accumulated before the row and before the
         row's own decay: every row's, the first ``max(lags)`` included.
@@ -172,11 +173,19 @@ def ar(
     design over 20,000 rows. Under decay they are weighted least squares
     with each row weighted ``w · λ^age``, its age on the clock.
 
-    **Early rows.** A target's fit has as many coefficients as its constant,
-    lags and features, and fewer learned rows than that leave least squares
-    without a unique answer: the default ``min_weight`` withholds the
-    prediction until the weight holds that many rows. A small ``ridge``
-    makes the early fits defined.
+    **Early rows.** Until a target's lags and features have spread in every
+    direction, least squares has no unique answer. So a target's fit is read
+    only once the system it solves, its Gram plus the ridge, is positive
+    definite: a Cholesky factor with every pivot above ``1e-10`` of its diagonal. The
+    guard is that condition, not a count of rows: on a well-spread series
+    it opens at as many learned rows as coefficients, and on a feature that
+    copies a lag it never opens. ``min_weight`` defaults to 0, with this
+    gate in its place.
+
+    **Standard errors.** ``emit_se_coef`` reports each coefficient's
+    standard error as :func:`ewridge` does, from the same fit: the
+    coefficients' variance over the noise, from the fit's own factor, times
+    the residual variance the bank keeps.
     """
     model: dict[str, Any] = {"type": "ar", "lags": lags}
     # Each absent when not given, as the Rust spec leaves it out, so a bank

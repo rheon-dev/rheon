@@ -128,7 +128,8 @@ WITH_FEATURES = ALL - NO_FEATURES
 #: Each switch's kinds. A knob is taken where its switch is.
 TAKES: dict[str, frozenset[str]] = {
     "emit_error_inflation": LEVERAGE,
-    "emit_se_coef": LEVERAGE,
+    # And `ar`, whose fits are ewridge's.
+    "emit_se_coef": LEVERAGE | {"ar"},
     "emit_influence": LEVERAGE,
     "emit_robust_se": LEAST_SQUARES,
     "emit_feature_health": WITH_FEATURES,

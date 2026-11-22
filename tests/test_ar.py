@@ -17,7 +17,7 @@ import io
 import numpy as np
 import polars as pl
 import pytest
-from statsmodels.regression.linear_model import WLS
+from statsmodels.regression.linear_model import OLS, WLS
 from statsmodels.tsa.ar_model import AutoReg
 from statsmodels.tsa.tsatools import lagmat
 
@@ -296,9 +296,32 @@ def test_the_state_cap_on_both_sides():
         ({"lags": 2, "ridge": -1.0}, "ridge must be finite and at least 0"),
         ({"lags": 2, "max_state_bytes": 0}, "above 0"),
         ({"lags": [1, 2**20]}, "past max_state_bytes"),
-        ({"lags": 2, "emit_se_coef": True}, "emit_se_coef"),
     ],
 )
 def test_refusals(kw, says):
     with pytest.raises(ValueError, match=says):
         rp.spec.ar("a", targets=["y"], half_life=50.0, **kw)
+
+
+def test_se_coef_is_ewridges_least_squares_covariance():
+    """``emit_se_coef`` is ``ewridge``'s standard error of the same fit: with
+    no decay and unit weights, ``se² / sigma²`` is the diagonal of
+    ``(XᵀX)⁻¹`` on the lag design, statsmodels' ``normalized_cov_params``,
+    the intercept's included."""
+    df = _series(3000, 14)
+    spec = rp.spec.ar(
+        "a",
+        targets=["y"],
+        lags=2,
+        features=["x"],
+        half_life=float("inf"),
+        emit_se_coef=True,
+        emit_sigma=True,
+    )
+    out = _out(spec, df)
+    se = np.asarray(out["se_coef"][-1].to_list())
+    sigma = out["sigma_y"][-1]
+    y, x = df["y"].to_numpy(), df["x"].to_numpy()
+    design = np.column_stack([np.ones(len(y) - 2), lagmat(y, 2, trim="both"), x[2:]])
+    want = np.diag(OLS(y[2:], design).fit().normalized_cov_params)
+    np.testing.assert_allclose(se**2 / sigma**2, want, rtol=1e-6)

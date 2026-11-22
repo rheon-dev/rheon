@@ -518,7 +518,7 @@
     model.fit_intercept = true
     model.lags = [1, 2]
     model.max_state_bytes = null
-    model.min_weight = 4.0
+    model.min_weight = 0.0
     model.n_features = 1
     model.n_targets = 1
     model.ridge = 0.0
@@ -527,7 +527,7 @@
     stream.feature_health_half_life = 50.0
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
-    stream.min_weight = [4.0]
+    stream.min_weight = [0.0]
     stream.robust_se_half_life = 50.0
     stream.specification_half_life = 50.0
     stream.tails_half_life = 50.0

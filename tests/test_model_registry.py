@@ -261,6 +261,8 @@ DIAGNOSTIC_READS: dict[str, set[str]] = {
     "lasso": {"max_error_inflation"},
     "huber": {"support_coef"},
     "quantile": {"support_coef"},
+    # Its fits are ewridge's: their standard errors, no more.
+    "ar": {"emit_se_coef"},
     **{
         name: set()
         for name in (
@@ -284,7 +286,6 @@ DIAGNOSTIC_READS: dict[str, set[str]] = {
             "audit",
             "hawkes",
             "garch",
-            "ar",
         )
     },
 }

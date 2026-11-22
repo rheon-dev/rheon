@@ -546,7 +546,10 @@ ORDER_RTOL = 1e-12
 #: 3.5e-9 on ``pred`` at the worst of 50 seeds (2026-11-21). It now runs to
 #: its rounding, and every seed agrees to under 1e-14 (2026-11-22), so it
 #: takes ``ORDER_RTOL``.
-ORDER_RTOL_BY_KIND = {"lasso": 1e-10, "quantile": 2e-11}
+#: ``ar`` least squares (ridge 0): its first fits read a system just past
+#: definite, whose solve carries a reordered sum's last bits further, 2.0e-12
+#: at the worst seed (16, 2026-11-23).
+ORDER_RTOL_BY_KIND = {"lasso": 1e-10, "quantile": 2e-11, "ar": 1e-11}
 #: ``lasso``'s descent visits the features in the order given and stops at
 #: its sweep cap (100) or its tolerance, so at its defaults the order picks
 #: which unconverged point a solve returns: 4.6e-4 relative on ``pred`` at

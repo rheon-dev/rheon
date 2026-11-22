@@ -223,6 +223,11 @@ pub struct Ar {
     fits: Vec<EwRidge>,
     /// Per target, its last `max(lags)` learned values, oldest first.
     rings: Vec<VecDeque<f64>>,
+    /// Per target, whether its fit has been defined: its Gram positive
+    /// definite (`Ar::definite`). Its predictions are withheld until then.
+    /// Once set it stays: decay scales a Gram and a row adds to it, and
+    /// neither takes a definite one back to singular.
+    defined: Vec<bool>,
     /// The row's design, kept so a row allocates nothing: not state.
     #[serde(skip)]
     z: Vec<f64>,
@@ -243,8 +248,67 @@ impl Ar {
                 .collect(),
             z: Vec::with_capacity(cfg.n_regressors()),
             one: Step::default(),
+            defined: vec![false; cfg.n_targets],
             cfg,
         })
+    }
+
+    /// The smallest share of a regressor's spread that the regressors
+    /// before it may leave unexplained for the Gram to count as definite.
+    /// An exactly collinear design leaves rounding, about `1e-16` to
+    /// `1e-14` of it; `1e-10` is past that and below any design whose
+    /// coefficients carry a digit.
+    pub const DEFINITE: f64 = 1e-10;
+
+    /// Whether the system `fit` solves is positive definite: its regressors'
+    /// second moments, centred with an intercept and raw without one, plus
+    /// the ridge on the diagonal, factor by Cholesky with every pivot above
+    /// [`Self::DEFINITE`] of its diagonal. The guard on the fit's early
+    /// rows is this condition, not a count of rows: until the lags and the
+    /// features have spread in every direction, the coefficients are not
+    /// determined, and the fit reports none.
+    fn definite(fit: &EwRidge, intercept: bool, n: usize, ridge: f64) -> bool {
+        let (parts, _) = fit.gram_parts();
+        let Some(part) = parts.first() else {
+            return false;
+        };
+        let c = &part.cov;
+        let off = c.k() - n;
+        // The system solved: the moments plus the ridge on the diagonal.
+        let at = |i: usize, j: usize| {
+            let m = if intercept {
+                c.cov(off + i, off + j)
+            } else {
+                c.raw(off + i, off + j)
+            };
+            if i == j { m + ridge } else { m }
+        };
+        let mut l = vec![0.0; n * n];
+        for i in 0..n {
+            for j in 0..=i {
+                let s: f64 = (0..j).map(|k| l[i * n + k] * l[j * n + k]).sum();
+                let a = at(i, j) - s;
+                if i == j {
+                    let d = at(i, i);
+                    if !(d > 0.0 && a > Self::DEFINITE * d) {
+                        return false;
+                    }
+                    l[i * n + i] = a.sqrt();
+                } else {
+                    l[i * n + j] = a / l[j * n + j];
+                }
+            }
+        }
+        true
+    }
+
+    /// Keep each fit's factor, which the coefficients' standard errors are
+    /// read from ([`OnlineModel::coef_variance`]), as `ewridge` keeps its
+    /// own under `emit_se_coef`.
+    pub fn set_keep_factor(&mut self, on: bool) {
+        for fit in &mut self.fits {
+            fit.set_keep_factor(on);
+        }
     }
 
     pub fn cfg(&self) -> &ArCfg {
@@ -270,12 +334,9 @@ impl Ar {
         let k = self.cfg.k_total();
         let mut out = Vec::with_capacity(self.fits.len());
         let mut any = false;
-        for fit in &self.fits {
-            // A fit solved on no learned row is NaN throughout: no fit.
-            match fit
-                .coefficients()
-                .filter(|c| c[0].iter().any(|v| !v.is_nan()))
-            {
+        for (fit, &defined) in self.fits.iter().zip(&self.defined) {
+            // A fit not yet defined reports none.
+            match fit.coefficients().filter(|_| defined) {
                 Some(c) => {
                     any = true;
                     out.push(c[0].clone());
@@ -338,7 +399,7 @@ impl Ar {
         out.extra = None;
         out.n_eff = self.n_eff();
         for j in 0..self.cfg.n_targets {
-            if !self.full(j) {
+            if !self.full(j) || !self.defined[j] {
                 continue;
             }
             Self::design_into(&self.cfg.lags, &self.rings[j], depth, x, &mut z);
@@ -380,8 +441,17 @@ impl OnlineModel for Ar {
             if j == 0 {
                 out.n_eff = self.one.n_eff;
             }
-            if full {
+            if full && self.defined[j] {
                 out.pred[j] = self.one.pred[0];
+            }
+            // The fit a learned row taught, checked until it is defined.
+            if taught.is_some() && !self.defined[j] {
+                self.defined[j] = Self::definite(
+                    &self.fits[j],
+                    self.cfg.fit_intercept,
+                    self.cfg.n_regressors(),
+                    self.cfg.ridge,
+                );
             }
             if let Some(v) = yj {
                 let ring = &mut self.rings[j];
@@ -428,6 +498,25 @@ impl OnlineModel for Ar {
         }
     }
 
+    /// Each target's coefficients' variances over its noise, its fit's as
+    /// `ewridge` reports them, target after target; NaN for a target whose
+    /// fit is not defined yet.
+    fn coef_variance(&self) -> Option<crate::CoefVariance> {
+        let k = self.cfg.k_total();
+        let mut out = Vec::with_capacity(self.fits.len());
+        let mut any = false;
+        for (fit, &defined) in self.fits.iter().zip(&self.defined) {
+            match fit.coef_variance() {
+                Some(crate::CoefVariance::PerNoise(v)) if defined => {
+                    any = true;
+                    out.push(v.into_iter().next().unwrap_or_else(|| vec![f64::NAN; k]));
+                }
+                _ => out.push(vec![f64::NAN; k]),
+            }
+        }
+        any.then_some(crate::CoefVariance::PerNoise(out))
+    }
+
     fn target_n_eff_into(&self, out: &mut Vec<f64>) -> bool {
         out.clear();
         out.extend(self.fits.iter().map(|f| f.target_weights()[0]));
@@ -447,6 +536,7 @@ impl OnlineModel for Ar {
                 let depth = m.cfg.max_lag();
                 let want = m.cfg.ridge_cfg();
                 let shaped = m.fits.len() == m.cfg.n_targets
+                    && m.defined.len() == m.cfg.n_targets
                     && m.rings.len() == m.cfg.n_targets
                     && m.rings.iter().all(|r| r.len() <= depth)
                     && m.fits.iter().all(|f| *f.cfg() == want);

@@ -122,9 +122,6 @@ shows them at work.
            one
          - ``lasso``, ``kalman``, ``huber``, ``quantile``, ``expectile``,
            ``rls``, ``sgd``, ``pa``, ``ftrl``, ``glm``
-       * - one per coefficient: the lags, the features, and the intercept
-           when there is one
-         - ``ar``
        * - the feature count plus one (1 for ``holt``)
          - ``ew_cov``, ``ew_class``, ``kmeans``, ``micro``, ``holt``
        * - 3
@@ -133,7 +130,7 @@ shows them at work.
          - ``bocpd``
        * - 0, each having a gate of its own or nothing to gate
          - ``ewridge``, ``seqtest``, ``rcov``, ``hmm``, ``corrchange``,
-           ``audit``, ``hawkes``, ``garch``
+           ``audit``, ``hawkes``, ``garch``, ``ar``
 ``min_settled_frac``
     Why: a history shorter than the half-life may not represent the process,
     such as regimes or seasons the half-life was chosen to average across.
