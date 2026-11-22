@@ -736,6 +736,7 @@ CASES: list[Case] = [
             **{k: v for k, v in no_features(full2()).items() if k != "embargo"},
             "targets": ["y"],
             "lags": 2,
+            "select": "bic",
         },
     ),
     # Each target a return series; no half-life (the recursion is per

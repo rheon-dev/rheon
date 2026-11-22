@@ -177,7 +177,7 @@ pub fn ar_cfg(spec: &Spec, decay: rheon_core::Decay) -> Result<rheon_core::ArCfg
             Some(other) => {
                 return Err(format!(
                     "ar: select must be \"aic\" or \"bic\", but it is {other:?}. Use one of \
-                     those words, or leave out select to fit every lag."
+                     those words."
                 ));
             }
         },
