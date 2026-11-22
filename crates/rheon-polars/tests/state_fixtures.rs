@@ -213,7 +213,10 @@ const REGENERATE: &str = "PRINT_STATE_FIXTURES=1 cargo test -p rheon-polars --te
 /// `checkpoint`, a pipeline checkpoint of a `refresh_time` state, a window
 /// run's and that bank's, and, from PLAN 541, a merge's too. A merge's
 /// state is a kind of its own, version 1, new at 72 with `merge` and
-/// `merge_by`. The 71 set was written by the build that counts a
+/// `merge_by`; and, from PLAN 556, `merge_carry`, a merge carrying values
+/// forward, and `refresh_time_age` and `refresh_time_age_held`, grids that
+/// give each value's age, each new at 72 in a version that did not move,
+/// since a state without either writes the bytes it did. The 71 set was written by the build that counts a
 /// zero-weight row in no clock (PLAN 539), so [`ZERO_WEIGHT_CLOCK`] is for
 /// the sets before it.
 ///
@@ -1693,6 +1696,7 @@ fn merge_cfg(by: bool) -> MergeConfig {
         by: by.then(|| "sym".into()),
         restart: by.then_some(600e9),
         restart_text: by.then(|| "10m".into()),
+        carry: Vec::new(),
     }
 }
 
@@ -1853,6 +1857,130 @@ fn merge_by_first() -> (Vec<u8>, DataFrame) {
 
 fn merge_by_run(bytes: &[u8], input: &DataFrame) -> Ran {
     merge_run_of(true, bytes, input)
+}
+
+/// The `merge_by` streams with a column of text, null now and then, for
+/// `carry` (PLAN 556) to fill forward with the bids and asks.
+fn merge_carry_streams() -> Vec<(&'static str, DataFrame)> {
+    let mut streams = merge_by_streams();
+    streams[0]
+        .1
+        .with_column(Column::new(
+            "note".into(),
+            [
+                Some("open"),
+                None,
+                Some("odd"),
+                None,
+                None,
+                Some("late"),
+                None,
+            ],
+        ))
+        .unwrap();
+    streams
+}
+
+const MERGE_CARRY: [&str; 3] = ["bid", "ask", "note"];
+
+fn merge_carry_of(state: Option<&[u8]>) -> Result<Merge, String> {
+    let streams = merge_carry_streams();
+    let names = streams.iter().map(|(n, _)| (*n).to_owned()).collect();
+    let schemas = streams
+        .iter()
+        .map(|(_, d)| d.schema().as_ref().clone())
+        .collect();
+    let mut cfg = merge_cfg(true);
+    cfg.carry = MERGE_CARRY.iter().map(|c| (*c).to_owned()).collect();
+    match state {
+        None => Merge::new(names, schemas, cfg),
+        Some(b) => Merge::load_bytes(b, names, schemas, cfg),
+    }
+    .map_err(|e| e.to_string())
+}
+
+/// `merge_carry`: `merge_by`'s streams and cut, carrying the bid, the ask
+/// and the note (PLAN 556): every group carries a value of the second
+/// session, the null one included, and the note none in some.
+fn merge_carry_first() -> (Vec<u8>, DataFrame) {
+    let streams = merge_carry_streams();
+    let parts: Vec<DataFrame> = streams.iter().map(|(_, d)| d.clone()).collect();
+    let mut m = merge_carry_of(None).unwrap();
+    let head = merge_drive(&mut m, &parts, Some(9), false).unwrap();
+    let src = head.column("source").unwrap().str().unwrap();
+    let rest: Vec<DataFrame> = streams
+        .iter()
+        .map(|(n, d)| {
+            let took = src.iter().filter(|s| *s == Some(*n)).count();
+            d.slice(took as i64, d.height() - took)
+        })
+        .collect();
+    (m.save_bytes().unwrap(), merge_join(&rest))
+}
+
+fn merge_carry_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    let mut m = merge_carry_of(Some(bytes))?;
+    let again = m.save_bytes()?;
+    let parts = merge_split(&merge_carry_streams(), input)?;
+    let out = merge_drive(&mut m, &parts, None, false)?;
+    Ok((again, vec![("merged".into(), out)]))
+}
+
+/// `refresh_time_age`: the `refresh_time` grid with each value's age (PLAN
+/// 556), part-way through an interval, so the series seen hold their last
+/// tick's clock.
+fn refresh_age_first() -> (Vec<u8>, DataFrame) {
+    let ticks = ticks();
+    let half = ticks.height() / 2;
+    let mut r = RefreshTime::new(refresh_names(), false)
+        .unwrap()
+        .with_age(true);
+    r.feed(&ticks.slice(0, half), &refresh_cols()).unwrap();
+    (
+        r.save_bytes().unwrap(),
+        ticks.slice(half as i64, ticks.height() - half),
+    )
+}
+
+fn refresh_age_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    let mut r = RefreshTime::load_bytes_with_age(bytes, refresh_names(), false, false, true)?;
+    let again = r.save_bytes()?;
+    let fed = r.feed(input, &refresh_cols()).map_err(|e| e.to_string())?;
+    Ok((again, vec![("feed".into(), fed)]))
+}
+
+/// `refresh_time_age_held`: `refresh_time_held`'s pair grid and slice with
+/// each value's age (PLAN 556): the held points keep their values' clocks,
+/// on a zoned temporal clock.
+fn refresh_age_held_first() -> (Vec<u8>, DataFrame) {
+    let df = ticks_held();
+    let keep = held_keep();
+    let new = || {
+        RefreshTime::new(refresh_names(), true)
+            .unwrap()
+            .with_age(true)
+    };
+    let whole = new().feed(&df, &held_cols(&keep)).unwrap();
+    let i = whole.column("i").unwrap().i64().unwrap();
+    let half = (df.height() / 2) as i64;
+    let at = (1..i.len())
+        .find(|&r| i.get(r) == i.get(r - 1) && i.get(r).unwrap() > half)
+        .expect("a tick completing two pairs past the middle");
+    let mut r = new();
+    r.feed_limited(&df, &held_cols(&keep), Some(at)).unwrap();
+    let bytes = r.save_bytes().unwrap();
+    let fed = i.get(at).unwrap() as usize + 1;
+    (bytes, df.slice(fed as i64, df.height() - fed))
+}
+
+fn refresh_age_held_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    let keep = held_keep();
+    let mut r = RefreshTime::load_bytes_with_age(bytes, refresh_names(), true, true, true)?;
+    let again = r.save_bytes()?;
+    let fed = r
+        .feed(input, &held_cols(&keep))
+        .map_err(|e| e.to_string())?;
+    Ok((again, vec![("feed".into(), fed)]))
 }
 
 /// The stages of the `checkpoint` fixture, in order: a `refresh_time`
@@ -2047,6 +2175,21 @@ fn kinds() -> Vec<Kind> {
             name: "checkpoint",
             first: checkpoint_first,
             run: checkpoint_run,
+        },
+        Kind {
+            name: "merge_carry",
+            first: merge_carry_first,
+            run: merge_carry_run,
+        },
+        Kind {
+            name: "refresh_time_age",
+            first: refresh_age_first,
+            run: refresh_age_run,
+        },
+        Kind {
+            name: "refresh_time_age_held",
+            first: refresh_age_held_first,
+            run: refresh_age_held_run,
         },
     ]
 }
@@ -2478,8 +2621,8 @@ fn every_current_fixture_is_written_in_the_envelope() {
         [
             ("bank", 16),
             ("checkpoint", 1),
-            ("merge", 2),
-            ("refresh_time", 3),
+            ("merge", 3),
+            ("refresh_time", 5),
             ("windows", 3)
         ]
     );
@@ -3417,6 +3560,49 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
         }),
         ("merge_by", "a group's last clock", |p, _| {
             p.starts_with(".groups.") && p.ends_with(".1.Int")
+        }),
+        // PLAN 556: a merge's carried values -- each group's, the null
+        // one's too, of a day started again, a column with none yet in a
+        // group, and the value as a number and as text -- and a grid's ages:
+        // the clock of each seen series' last tick, a number and a temporal
+        // one, and each held point's.
+        ("merge_carry", "a carried value's clock", |p, _| {
+            p.starts_with(".carry.groups.") && p.ends_with(".at.Int")
+        }),
+        ("merge_carry", "a value of a day started again", |p, v| {
+            p.starts_with(".carry.groups.") && p.ends_with(".restarts") && v.as_u64() == Some(1)
+        }),
+        ("merge_carry", "the null group's values", |p, v| {
+            p.starts_with(".carry.groups.")
+                && p.ends_with(".0")
+                && p.split('.').count() == 5
+                && v.is_nil()
+        }),
+        ("merge_carry", "a column with no value yet", |p, v| {
+            let seg: Vec<&str> = p.split('.').collect();
+            seg.len() == 6 && seg[1] == "carry" && seg[4] == "1" && v.is_nil()
+        }),
+        ("merge_carry", "a carried Cell::Float", |p, _| {
+            p.starts_with(".carry.groups.") && p.ends_with(".value.Float")
+        }),
+        ("merge_carry", "a carried Cell::Str", |p, _| {
+            p.starts_with(".carry.groups.") && p.ends_with(".value.Str")
+        }),
+        ("refresh_time_age", "a run with ages", |p, v| {
+            p == ".age" && v.as_bool() == Some(true)
+        }),
+        (
+            "refresh_time_age",
+            "a series' last tick's Instant::Number",
+            |p, _| p.starts_with(".states.") && p.ends_with(".at.Number"),
+        ),
+        (
+            "refresh_time_age_held",
+            "a series' last tick's Instant::Nanos",
+            |p, _| p.starts_with(".states.") && p.ends_with(".at.Nanos"),
+        ),
+        ("refresh_time_age_held", "a held point's clocks", |p, _| {
+            p.starts_with(".held.ats.0.") && p.ends_with(".Nanos")
         }),
         ("refresh_time_int", "Instant::Int", |p, _| {
             p.contains(".last_time.") && p.ends_with(".Int")

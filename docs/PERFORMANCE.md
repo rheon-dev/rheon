@@ -519,10 +519,10 @@ in the table.
 
 ### The table
 
-**127 cells: 90 over the 26 model kinds' rows, 19 over the
-bank, 3 over the command line, 9 over the window operators, 4 over
-`refresh_time` and 2 over the sample of an internal helper for
-gradient-boosted trees.** Each row is one cell: the
+**131 cells: 90 over the 26 model kinds' rows, 19 over the
+bank, 3 over the command line, 9 over the window operators, 6 over
+`refresh_time`, 2 over `merge`'s `carry` and 2 over the sample of an
+internal helper for gradient-boosted trees.** Each row is one cell: the
 size it varies, its two sizes, the growth declared for a row's work and for
 the state in that size (written in `n`, the size), and the reason. The last
 column has the four native ratios from large to small, as measured on
@@ -532,7 +532,9 @@ column has the four native ratios from large to small, as measured on
 2026-11-20 by a release build (`--release`) at a load of 7, and the four
 `hawkes` cells' on 2026-11-21 by a debug build at a load of 5. The four
 `expectile` cells' were measured on 2026-11-21 the same way, at a load of 14, and the three
-`garch` cells the same day the same way, at a load of 11. The two `.window` cells were
+`garch` cells the same day the same way, at a load of 11. The two
+`refresh.age_` cells and the two `merge.carry_` cells were measured on
+2026-11-22 the same way, at a load of 3. The two `.window` cells were
 measured again on 2026-11-06, once a window's snapshots were laid out
 flat. A row's time and allocations are per
 row; the saved state and the heap are the state's. `(CI)` marks the 25 cells
@@ -668,6 +670,10 @@ largest buffer at the smaller.
 | `refresh.pairs` | series m, pairs | 8 → 64 | O(n) | O(n^2) | a tick updates its m−1 pairs; m² pairs held | 10.45 · 8.96 · 67.43 · 43.77 |
 | `refresh.groups` (CI) | groups G | 100 → 800 | O(1) | O(n) | a tick touches its group | 1.01 · 1.00 · 8.05 · 7.70 |
 | `refresh.history` (CI) | ticks already seen | 1,000 → 8,000 | O(1) | O(1) | the grid's last values only | 1.00 · 1.00 · 1.00 · 1.00 |
+| `refresh.age_groups` | groups G, with `age=True` | 100 → 800 | O(1) | O(n) | a tick touches its group; the clock of each series' last tick a group | 0.99 · 1.00 · 8.03 · 7.76 |
+| `refresh.age_history` | ticks already seen, with `age=True` | 1,000 → 8,000 | O(1) | O(1) | one clock a series, since the last point | 0.98 · 1.00 · 1.00 · 1.00 |
+| `merge.carry_groups` | groups G, two columns carried | 100 → 800 | O(1) | O(n) | a pull gathers the values its groups read and appends those they end on, whatever the groups; one value a column a group | 1.06 · 1.06 · 8.03 · 6.42 |
+| `merge.carry_history` | rows already merged, two columns carried | 1,000 → 8,000 | O(1) | O(1) | the values a column's store holds are gathered down to the groups' once past twice their number | 1.00 · 1.00 · 1.00 · 1.00 |
 | `gbdt.history` | rows offered | 10,000 → 80,000 | O(1) | O(1) | a priority sample: a row is kept or not by its hash, the heap holds the sample | 0.53 · 0.83 · 1.00 · 1.00 |
 | `gbdt.sample` | sample size N | 1,000 → 8,000 | O(log n) | O(n) | a heap of N, log N; N rows kept | 1.90 · 1.01 · 8.00 · 7.30 |
 

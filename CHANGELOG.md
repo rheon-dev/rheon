@@ -91,6 +91,45 @@ model that only the new build has is listed as an addition and passes.
 
 ### Added
 
+- **A stream's last value carried forward, with its age on the clock**
+  (PLAN 556): `rp.stream.merge(..., carry=[...])` and
+  `rp.stream.refresh_time(..., age=True)`, so that how stale a value may be
+  is a threshold the user writes in Polars, such as
+  `pl.col("bid_age") <= pl.duration(seconds=1)`. Under `carry`, each column
+  named is filled forward over the merged rows of each `by` group, as
+  Polars' `forward_fill` fills it (a null is no value, so the value before
+  it goes on), and a column `<c>_age` gives the row's clock less the clock
+  of the row the value came from, by Polars' own subtraction of the clock's
+  dtype (a `Duration` on a temporal clock); before a group's first value
+  both are null. Under `restart_after_step_back` a value is carried within
+  its day only. Held to the bit against the backward `join_asof` of each
+  merged row onto the rows with a value (on the row's place in the merge,
+  and on the clock where no two rows share one) and against
+  `forward_fill(...).over(by)`, over Hypothesis-drawn streams, clock
+  dtypes, ties, nulls, groups and chunkings (`tests/test_stream_carry.py`),
+  and in Rust to the definition (`merge/carry_tests.rs`). Under `age=True`,
+  each point of the refresh grid gains `<s>_age` (`a_age` and `b_age` under
+  `pairs`): `time_refresh` less the clock of the tick `<s>_value` came from,
+  held to the backward `join_asof` of each point's completing tick onto the
+  series' ticks with a value; the grid's other columns do not move. Both
+  are resumable: a merge's state keeps each group's last value of each
+  column, with its clock, and a grid's the clock of each series' last tick
+  since the last point, one value a column (or a series) a group, whatever
+  the stream's length (the scaling cells `merge.carry_groups`,
+  `merge.carry_history`, `refresh.age_groups` and `refresh.age_history`).
+  Neither state's version moves: a state without the option writes the
+  bytes it did, and one saved with it loads only into a call with it (and
+  the reverse), refused by name; frozen fixtures `merge_carry`,
+  `refresh_time_age` and `refresh_time_age_held` hold each new form. The
+  how-to [Merge streams by the clock](docs/how-to/merge-streams-by-the-clock.md)
+  gains a staleness example. Its cost on arm64 (M4 Pro, best of 5, load 3,
+  the dev-wheel build): carrying two columns of two streams of 2M rows each
+  takes 45 ns a row against 25 without, and 60 against 38 under `by` over
+  100 groups, about 10 ns a row a column; a merge state of 100 groups
+  grows from 3.1 KB to 14 KB with two columns carried. `age=True` takes 51
+  ns a tick against 46 on a joint grid of four series, and 182 against 155
+  with `pairs`.
+
 - **`rp.stream.merge`: streams that each run in clock order, merged into one
   stream in clock order** (PLAN 541). It takes any number of frames or
   queries, by position or in a dict of name to frame, and gives every row

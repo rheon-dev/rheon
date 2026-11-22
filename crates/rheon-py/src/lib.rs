@@ -1001,7 +1001,8 @@ struct PyRefreshTime {
 #[pymethods]
 impl PyRefreshTime {
     #[new]
-    #[pyo3(signature = (names, series, clock, value, group=None, pairs=false, keep=None))]
+    #[pyo3(signature = (names, series, clock, value, group=None, pairs=false, keep=None, age=false))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         names: Vec<String>,
         series: String,
@@ -1010,9 +1011,12 @@ impl PyRefreshTime {
         group: Option<String>,
         pairs: bool,
         keep: Option<Vec<String>>,
+        age: bool,
     ) -> PyResult<Self> {
         Ok(Self {
-            inner: rheon_polars::RefreshTime::new(names, pairs).map_err(PyValueError::new_err)?,
+            inner: rheon_polars::RefreshTime::new(names, pairs)
+                .map_err(PyValueError::new_err)?
+                .with_age(age),
             series,
             clock,
             value,
@@ -1024,7 +1028,7 @@ impl PyRefreshTime {
     /// A sampler that goes on from a saved state (`RefreshTime::load_bytes`):
     /// `names` and `pairs` must be the ones it was saved with.
     #[staticmethod]
-    #[pyo3(signature = (state, names, series, clock, value, group=None, pairs=false, keep=None))]
+    #[pyo3(signature = (state, names, series, clock, value, group=None, pairs=false, keep=None, age=false))]
     #[allow(clippy::too_many_arguments)]
     fn load_bytes(
         state: &[u8],
@@ -1035,10 +1039,17 @@ impl PyRefreshTime {
         group: Option<String>,
         pairs: bool,
         keep: Option<Vec<String>>,
+        age: bool,
     ) -> PyResult<Self> {
         Ok(Self {
-            inner: rheon_polars::RefreshTime::load_bytes(state, names, pairs, group.is_some())
-                .map_err(PyValueError::new_err)?,
+            inner: rheon_polars::RefreshTime::load_bytes_with_age(
+                state,
+                names,
+                pairs,
+                group.is_some(),
+                age,
+            )
+            .map_err(PyValueError::new_err)?,
             series,
             clock,
             value,
@@ -1124,6 +1135,7 @@ fn merge_parts(
     by: Option<String>,
     restart: Option<f64>,
     restart_text: Option<String>,
+    carry: Option<Vec<String>>,
 ) -> (Vec<polars::prelude::Schema>, rheon_polars::MergeConfig) {
     let schemas = frames
         .into_iter()
@@ -1135,6 +1147,7 @@ fn merge_parts(
         by,
         restart,
         restart_text,
+        carry: carry.unwrap_or_default(),
     };
     (schemas, cfg)
 }
@@ -1142,7 +1155,8 @@ fn merge_parts(
 #[pymethods]
 impl PyMerge {
     #[new]
-    #[pyo3(signature = (names, frames, clock, source, by=None, restart=None, restart_text=None))]
+    #[pyo3(signature = (names, frames, clock, source, by=None, restart=None, restart_text=None, carry=None))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         names: Vec<String>,
         frames: Vec<PyDataFrame>,
@@ -1151,8 +1165,9 @@ impl PyMerge {
         by: Option<String>,
         restart: Option<f64>,
         restart_text: Option<String>,
+        carry: Option<Vec<String>>,
     ) -> PyResult<Self> {
-        let (schemas, cfg) = merge_parts(frames, clock, source, by, restart, restart_text);
+        let (schemas, cfg) = merge_parts(frames, clock, source, by, restart, restart_text, carry);
         Ok(Self {
             inner: rheon_polars::Merge::new(names, schemas, cfg).map_err(|e| run_err(&e, None))?,
         })
@@ -1160,7 +1175,7 @@ impl PyMerge {
 
     /// A merge that goes on from a saved state (`Merge::load_bytes`).
     #[staticmethod]
-    #[pyo3(signature = (state, names, frames, clock, source, by=None, restart=None, restart_text=None))]
+    #[pyo3(signature = (state, names, frames, clock, source, by=None, restart=None, restart_text=None, carry=None))]
     #[allow(clippy::too_many_arguments)]
     fn load_bytes(
         state: &[u8],
@@ -1171,8 +1186,9 @@ impl PyMerge {
         by: Option<String>,
         restart: Option<f64>,
         restart_text: Option<String>,
+        carry: Option<Vec<String>>,
     ) -> PyResult<Self> {
-        let (schemas, cfg) = merge_parts(frames, clock, source, by, restart, restart_text);
+        let (schemas, cfg) = merge_parts(frames, clock, source, by, restart, restart_text, carry);
         Ok(Self {
             inner: rheon_polars::Merge::load_bytes(state, names, schemas, cfg)
                 .map_err(|e| run_err(&e, None))?,

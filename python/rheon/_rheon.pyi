@@ -19,6 +19,7 @@ class RefreshTime:
         group: str | None = None,
         pairs: bool = False,
         keep: list[str] | None = None,
+        age: bool = False,
     ) -> None: ...
     @staticmethod
     def load_bytes(
@@ -30,6 +31,7 @@ class RefreshTime:
         group: str | None = None,
         pairs: bool = False,
         keep: list[str] | None = None,
+        age: bool = False,
     ) -> RefreshTime: ...
     def save(self, path: str) -> None: ...
     def feed(self, df: pl.DataFrame, limit: int | None = None) -> pl.DataFrame: ...
@@ -46,6 +48,7 @@ class Merge:
         by: str | None = None,
         restart: float | None = None,
         restart_text: str | None = None,
+        carry: list[str] | None = None,
     ) -> None: ...
     @staticmethod
     def load_bytes(
@@ -57,6 +60,7 @@ class Merge:
         by: str | None = None,
         restart: float | None = None,
         restart_text: str | None = None,
+        carry: list[str] | None = None,
     ) -> Merge: ...
     def empty(self) -> pl.DataFrame: ...
     def push(self, i: int, df: pl.DataFrame) -> None: ...
