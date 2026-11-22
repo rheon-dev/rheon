@@ -1546,6 +1546,36 @@ def load_checkpoint(source: str | os.PathLike[str] | bytes) -> dict[str, bytes]:
         is damaged, or was written by a newer version of rheon.
     ``FileNotFoundError``
         ``source`` is a path that is not there.
+
+    .. rubric:: Examples
+
+    A grid run over the first part of a file of ticks, its state checkpointed,
+    and the run resumed on the rest from the checkpoint's stage:
+
+    .. code-block:: python
+
+        pl.DataFrame({
+            "symbol": ["A", "B", "A", "B", "A", "B"],
+            "t": [0.5, 1.0, 1.5, 2.0, 2.5, 3.0],
+            "px": [10.0, 20.0, 10.1, 20.2, 10.2, 20.1],
+        }).write_parquet("ticks.parquet")
+        ticks = pl.scan_parquet("ticks.parquet")
+        grid = {"series": "symbol", "names": ["A", "B"], "clock": "t", "value": "px"}
+        first = rp.stream.refresh_time(
+            ticks.filter(pl.col("t") < 2.2), **grid, save_state="grid.state"
+        ).collect()
+        rp.stream.save_checkpoint("run.checkpoint", {"grid": "grid.state"})
+        stages = rp.stream.load_checkpoint("run.checkpoint")   # a new process starts here
+        print(list(stages))
+        rest = rp.stream.refresh_time(
+            ticks.filter(pl.col("t") >= 2.2), **grid, load_state=stages["grid"]
+        ).collect()
+        print(first["time_refresh"].to_list(), rest["time_refresh"].to_list())
+
+    .. code-block:: text
+
+        ['grid']
+        [1.0, 2.0] [3.0]
     """
     data = (
         bytes(source) if isinstance(source, bytes | bytearray | memoryview) else _read_state(source)

@@ -4439,15 +4439,18 @@ impl Bank {
                     // build's.
                     return Err(format!(
                         "state file: it is damaged (its schema {} was never written without \
-                         the envelope). {DAMAGED_REMEDY}",
+                         the envelope). Load an undamaged copy of the state file, or rebuild it \
+                         from its input.",
                         header.schema_version
                     ));
                 }
                 if header.schema_version >= SEALED_FROM_SCHEMA && !sealed {
-                    return Err(format!(
+                    return Err(
                         "state file: it is damaged (the checksum it ends with is missing or \
-                         cut). {DAMAGED_REMEDY}"
-                    ));
+                         cut). Load an undamaged copy of the state file, or rebuild it from its \
+                         input."
+                            .into(),
+                    );
                 }
                 (header.schema_version, Some(header.format_version))
             }
@@ -4485,7 +4488,8 @@ impl Bank {
             // No build wrote the envelope at a schema before it.
             return Err(format!(
                 "state file: it is damaged (its version {found} is not one the envelope was \
-                 written at). {DAMAGED_REMEDY}"
+                 written at). Load an undamaged copy of the state file, or rebuild it from its \
+                 input."
             ));
         }
         // Past the header a refusal is damage (`file_encoding::damaged`).
