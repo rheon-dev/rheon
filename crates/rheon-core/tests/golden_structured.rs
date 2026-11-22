@@ -802,6 +802,49 @@ fn glm_gamma_golden() {
     check("glm_gamma", &got, GOLDEN_GLM_GAMMA);
 }
 
+/// A series with a trend: `10 + 0.5 t` and noise of 0.5. `holt` reads the
+/// target alone.
+fn trend_rows() -> Vec<Row> {
+    target_rows(120, 2468, |i, s| {
+        ([0.0, 0.0], 10.0 + 0.5 * i as f64 + 0.5 * gauss(s))
+    })
+}
+
+/// `holt` on the trending series, the golden's two half-lives: the forecast
+/// at rows 40, 80 and 119 and the level and trend at the end. The trend is
+/// found: its estimate is within 0.15 of the slope 0.5, and the forecast is
+/// within 2 of the line.
+#[test]
+fn holt_trend_golden() {
+    let mut m = Holt::new(HoltCfg {
+        n_targets: 1,
+        level_half_life: 10.0,
+        trend_half_life: 40.0,
+        min_weight: 3.0,
+        trend: true,
+    })
+    .unwrap();
+    let rows = trend_rows();
+    let mut got = Vec::new();
+    for (i, (x, y, d, w)) in rows.iter().enumerate() {
+        let step = m.step(&x[..0], y, *d, *w);
+        if matches!(i, 40 | 80 | 119) {
+            assert!(
+                (step.pred[0] - (10.0 + 0.5 * i as f64)).abs() < 2.0,
+                "row {i}"
+            );
+            got.push(step.pred[0]);
+        }
+    }
+    let coef = m.coefficients()[0].clone();
+    assert!(
+        (coef.last().copied().unwrap() - 0.5).abs() < 0.15,
+        "coefficients {coef:?}"
+    );
+    got.extend(&coef);
+    check("holt_trend", &got, GOLDEN_HOLT_TREND);
+}
+
 // --- generated; see the module docs ---
 const GOLDEN_KMEANS_BLOBS: &[f64] = &[
     2.0,
@@ -941,4 +984,11 @@ const GOLDEN_GLM_GAMMA: &[f64] = &[
     0.5019867023301244,
     0.742887826853017,
     -0.43220700417823393,
+];
+const GOLDEN_HOLT_TREND: &[f64] = &[
+    29.994442248160894,
+    50.06146877462335,
+    69.47081536438878,
+    69.52337608339845,
+    0.5001413372772974,
 ];

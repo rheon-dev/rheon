@@ -130,7 +130,7 @@ realistic test and nothing is left to add.
 | | F | 1 | R\* | none |
 | | O | `convergence.ftrl_logistic` (7), `ftrl_squared` (9) (statsmodels), `learning_rate` (3), `test_oracles_gradient_paths` (2), `test_second_opinion` | R | a finite half-life: `ftrl_ref` only (no library forgets) |
 | | C | as `ewridge` | D / R | none |
-| `holt` | G | 1 | R\* | the stream has no trend: the series `y` is a function of random features, so the level and trend states are driven by noise |
+| `holt` | G | 1, and `golden_structured.rs`'s `holt_trend` (`10 + 0.5 t` and noise: the forecast within 2 of the line, the trend within 0.15 of 0.5, measured 0.0001) | R\*; R (the added test) | none |
 | | F | 2 (`holt`, `_inf`) | D: same stream, no trend | a trending series; the fixtures freeze forms only |
 | | O | `convergence.holt` (8, statsmodels), `test_second_opinion` (4: statsmodels Holt, missing rows, row after a gap) | R | none |
 | | C | as `ewridge` (`holt` takes no features) | D / R | none |
