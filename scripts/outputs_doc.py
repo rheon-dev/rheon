@@ -48,7 +48,7 @@ FAMILIES: dict[str, tuple[str, ...]] = {
         "expectile",
         "holt",
     ),
-    "Moments and correlation": ("ew_cov", "marginal", "deco", "rcov", "audit", "garch"),
+    "Moments and correlation": ("ew_cov", "marginal", "deco", "rcov", "audit", "garch", "tdigest"),
     "Clustering and classification": ("kmeans", "micro", "ew_class"),
     "Sequential tests and regimes": ("seqtest", "corrchange", "bocpd", "hmm", "hawkes"),
 }
@@ -114,6 +114,10 @@ MEANING: dict[str, str] = {
     ),
     "std_resid_<t>": "`<t>` over the square root of its variance on this row",
     "forecast_<t>": "the variance of `<t>` `horizon - 1` rows past this one, from the same rows",
+    "q<level>_<t>": (
+        "the quantile of `<t>` at `<level>` over the rows before this one, read from its t-digest "
+        "before the row is added"
+    ),
     "u": (
         "the equicorrelation this row alone implies"
         " (Engle and Kelly's Lemma 2.3, from the standardized row)"
@@ -202,6 +206,10 @@ ALSO_NULL: dict[str, str] = {
     "variance_<t>": "while withheld, and before the target's start is fitted",
     "std_resid_<t>": "where the variance is null, and where `<t>` is",
     "forecast_<t>": "where the variance is null",
+    "q<level>_<t>": (
+        "while withheld, and while the rows before it do not identify the level "
+        "(`level_beyond_sample`)"
+    ),
     "u": (
         "while withheld, where fewer than two of the block's columns have a positive variance "
         "before the row, and where every standardized value is 0"
@@ -651,6 +659,9 @@ def stem(field: str, targets: tuple[str, ...], features: tuple[str, ...]) -> str
         ):
             if base == f"{pre}_{t}":
                 return f"{pre}_<t>"
+        level, sep, column = base.partition("_")
+        if sep and column == t and level.startswith("q") and _is_number(level[1:]):
+            return "q<level>_<t>"
     for pre in ("corr", "cov", "partial_corr"):
         if base.startswith(pre + "_"):
             return f"{pre}_<a>_<b>"
@@ -660,6 +671,14 @@ def stem(field: str, targets: tuple[str, ...], features: tuple[str, ...]) -> str
     if base.startswith("p_") and base != "p_change":
         return "p_<label>"
     return base
+
+
+def _is_number(text: str) -> bool:
+    try:
+        float(text)
+    except ValueError:
+        return False
+    return True
 
 
 def check_families() -> None:

@@ -111,6 +111,7 @@ pub enum AnyModel {
     Expectile(Box<rheon_core::Expectile>),
     Hawkes(Box<rheon_core::Hawkes>),
     Garch(Box<rheon_core::Garch>),
+    TDigest(Box<rheon_core::TDigestModel>),
 }
 
 /// A flush's shards, run on whichever pool the caller is in: the bank's
@@ -161,6 +162,7 @@ macro_rules! dispatch {
             AnyModel::Expectile($m) => $body,
             AnyModel::Hawkes($m) => $body,
             AnyModel::Garch($m) => $body,
+            AnyModel::TDigest($m) => $body,
         }
     };
 }
@@ -495,6 +497,17 @@ impl AnyModel {
         }
     }
 
+    /// Whether some level a `tdigest` reads is withheld because the rows
+    /// before it do not identify it: past the plotting position of the
+    /// smallest or largest row (`rheon_core::TDigestModel::beyond_sample`).
+    /// Read from the state, so it names the levels the next row reads.
+    pub fn beyond_sample(&self) -> bool {
+        match self {
+            AnyModel::TDigest(m) => m.beyond_sample(),
+            _ => false,
+        }
+    }
+
     /// What went wrong in a model's solves, counted (docs/PLAN.md §7):
     /// `ewridge` and `robust` count their jittered or failed factorizations,
     /// `lasso` its coordinate descents that ran out of sweeps, `ew_class` the
@@ -534,7 +547,8 @@ impl AnyModel {
             | AnyModel::Audit(_)
             // Every read it withholds is a row's, not a failure.
             | AnyModel::Hawkes(_)
-            | AnyModel::Garch(_) => 0,
+            | AnyModel::Garch(_)
+            | AnyModel::TDigest(_) => 0,
         }
     }
 
@@ -608,6 +622,8 @@ impl AnyModel {
             AnyModel::Hawkes(m) => Some(m.coefficients()),
             // Each target's process parameters, then its shape.
             AnyModel::Garch(m) => Some(m.coefficients()),
+            // tdigest has none: its value is the levels it reads.
+            AnyModel::TDigest(_) => None,
         }
     }
 
@@ -632,7 +648,7 @@ mod model_cfgs;
 use model_cfgs::read_floor;
 pub use model_cfgs::{
     audit_cfg, bocpd_cfg, corrchange_cfg, deco_block_names, deco_cfg, expectile_cfg, garch_cfg,
-    glm_cfg, hawkes_cfg, hmm_cfg, huber_model, quantile_model, rcov_cfg, sgd_model,
+    glm_cfg, hawkes_cfg, hmm_cfg, huber_model, quantile_model, rcov_cfg, sgd_model, tdigest_cfg,
 };
 
 /// One grid combo: the rendered label plus the machine values it encodes, so
@@ -738,7 +754,8 @@ pub fn combos(spec: &Spec) -> Vec<Combo> {
         | ModelKind::Glm { .. }
         | ModelKind::Hawkes { .. }
         | ModelKind::Expectile { .. }
-        | ModelKind::Garch { .. } => vec![Combo::default()],
+        | ModelKind::Garch { .. }
+        | ModelKind::TDigest { .. } => vec![Combo::default()],
         // `p` for the penalty, since `l` is a lag's (`lag_corr_l1_a_b`); and
         // no label for a path of one point, as a single ridge or half-life
         // writes none, while the machine value says which it is.
@@ -1305,14 +1322,16 @@ pub fn settled_weight(weight: f64, first: f64, settled: f64, steps: f64) -> f64 
 /// (task 278, D4), and the noise gate reads a fit withheld for its
 /// condition as not a number, so it never names that fit in its place;
 /// `unstable_rate` after it (task 278, D8), `sgd`'s gate, which no model
-/// with an earlier reason of its own has.
-pub const WITHHELD_REASONS: [&str; 6] = [
+/// with an earlier reason of its own has; `level_beyond_sample` after it
+/// (task 544), a `tdigest` level its rows do not identify yet.
+pub const WITHHELD_REASONS: [&str; 7] = [
     "below_min_settled_frac",
     "below_min_weight",
     "above_max_error_inflation",
     "below_warm_rows",
     "ill_conditioned",
     "unstable_rate",
+    "level_beyond_sample",
 ];
 const REASON_SETTLED: u8 = 1;
 const REASON_MIN_PERIODS: u8 = 2;
@@ -1320,6 +1339,7 @@ const REASON_INFLATION: u8 = 3;
 const REASON_WARM_ROWS: u8 = 4;
 const REASON_ILL_CONDITIONED: u8 = 5;
 const REASON_UNSTABLE_RATE: u8 = 6;
+const REASON_BEYOND_SAMPLE: u8 = 7;
 
 /// The settled fraction at which a readiness notice judges a stream
 /// (docs/WARMUP-AND-CONVERGENCE.md §3): the one rule all three notices
@@ -4091,6 +4111,9 @@ fn run_instance(
         // from the state before the step, as the model's own gate reads it
         // (task 278, D8).
         let unstable = inst.model.get().unstable_targets();
+        // And whether a quantile level is past what the rows before this one
+        // identify (task 544): read before the step, as the levels are.
+        let beyond = inst.model.get().beyond_sample();
 
         // The residual spread folds each slot's own prediction, whether or
         // not a readiness gate withholds it from the output
@@ -4315,6 +4338,11 @@ fn run_instance(
         // claim it; the model's own null is then named for what it is.
         if reason == 0 && ill {
             reason = REASON_ILL_CONDITIONED;
+        }
+        // A quantile level the rows before the row do not identify, where no
+        // gate above has withheld it: the model's own null, named.
+        if reason == 0 && beyond {
+            reason = REASON_BEYOND_SAMPLE;
         }
         // A target withheld because its learning rate is past its stability
         // bound, where no gate above has withheld the row; said once an

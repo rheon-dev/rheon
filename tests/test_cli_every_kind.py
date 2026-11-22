@@ -762,6 +762,30 @@ CASES: list[Case] = [
             "max_rows_between_coefs": 7,
         },
     ),
+    # A digest a target: no decay and no coefficients, every key it takes.
+    Case(
+        "tdigest",
+        "tdigest",
+        {
+            **NODECAY,
+            "targets": ["y", "x0"],
+            "quantiles": [0.05, 0.5, 0.95],
+            "compression": 200.0,
+            "max_state_bytes": 1 << 20,
+        },
+    ),
+    # The other stream keys.
+    Case(
+        "tdigest2",
+        "tdigest",
+        {**NODECAY2, "targets": ["y"], "quantiles": [0.01, 0.99]},
+    ),
+    # Its groups run to a close.
+    Case(
+        "tdigest_close",
+        "tdigest",
+        {**CLOSE, "targets": ["y"], "quantiles": [0.25, 0.75]},
+    ),
     Case(
         "audit",
         "audit",

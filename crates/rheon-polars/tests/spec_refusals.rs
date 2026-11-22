@@ -1269,6 +1269,89 @@ fn a_garch_past_its_state_cap_or_its_forms_is_refused() {
     );
 }
 
+/// `tdigest` (task 544): the defaults build, compression 100 and 200 build,
+/// a level not strictly inside (0, 1) or listed twice is refused, a decay
+/// is refused naming the windowed DDSketch, and features, a compression
+/// past its range and a state past `max_state_bytes` are refused by name.
+#[test]
+fn a_tdigest_spec_builds_or_is_refused_by_name() {
+    let spec = |model: &str| {
+        format!(r#"{{"name": "m", "model": {model}, "targets": ["a", "b"], "features": []}}"#)
+    };
+    accepted(&spec(r#"{"type": "tdigest", "quantiles": [0.5]}"#));
+    for c in ["100", "200"] {
+        accepted(&spec(&format!(
+            r#"{{"type": "tdigest", "compression": {c}, "quantiles": [0.01, 0.5, 0.99]}}"#
+        )));
+    }
+    let fields = output_fields(
+        &serde_json::from_str(&spec(r#"{"type": "tdigest", "quantiles": [0.05, 0.95]}"#)).unwrap(),
+    );
+    assert_eq!(
+        fields,
+        [
+            "q0.05_a",
+            "q0.95_a",
+            "q0.05_b",
+            "q0.95_b",
+            "weight_sum",
+            "settled_frac",
+            "withheld_reason"
+        ]
+    );
+    for bad in ["0.0", "1.0", "1.5", "-0.25"] {
+        refused(
+            &spec(&format!(
+                r#"{{"type": "tdigest", "quantiles": [0.5, {bad}]}}"#
+            )),
+            &["each of quantiles must be above 0 and below 1"],
+        );
+    }
+    refused(
+        &spec(r#"{"type": "tdigest", "quantiles": [0.5, 0.5]}"#),
+        &["lists 0.5 twice"],
+    );
+    refused(
+        &spec(r#"{"type": "tdigest", "quantiles": []}"#),
+        &["at least one level"],
+    );
+    for (decay, key) in [
+        (r#""half_life": 50.0"#, "half_life"),
+        (r#""lam": 0.99"#, "lam"),
+    ] {
+        refused(
+            &format!(
+                r#"{{"name": "m", "model": {{"type": "tdigest", "quantiles": [0.5]}},
+                    "targets": ["a"], "features": [], {decay}}}"#
+            ),
+            &[
+                &format!("{key} does not apply to tdigest, whose merging digest"),
+                "the windowed DDSketch (ewm_quantile with a window_size)",
+            ],
+        );
+    }
+    refused(
+        r#"{"name": "m", "model": {"type": "tdigest", "quantiles": [0.5]}, "targets": ["a"],
+            "features": ["x"]}"#,
+        &["tdigest takes no features"],
+    );
+    accepted(&spec(
+        r#"{"type": "tdigest", "compression": 10, "quantiles": [0.5]}"#,
+    ));
+    refused(
+        &spec(r#"{"type": "tdigest", "compression": 9.5, "quantiles": [0.5]}"#),
+        &["compression must be at least 10"],
+    );
+    refused(
+        &spec(r#"{"type": "tdigest", "quantiles": [0.5], "max_state_bytes": 20000}"#),
+        &["past max_state_bytes 20000"],
+    );
+    refused(
+        &spec(r#"{"type": "tdigest", "quantiles": [0.5], "max_state_bytes": 67108865}"#),
+        &["at most 67108864"],
+    );
+}
+
 /// `hawkes`' window of clock units: a span above 0, beside no other window,
 /// with `closed` only under it, a number where the kernels' decays are
 /// rates, and a state whose fixed part alone fits `max_state_bytes`; what

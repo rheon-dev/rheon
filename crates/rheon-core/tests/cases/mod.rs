@@ -2592,7 +2592,40 @@ pub fn all() -> Vec<Case> {
             Targets::Linear(2),
             40
         ),
+        // A t-digest a target (PLAN 544), saved before its first merge:
+        // each digest's buffer, its extremes and the weights, no centroid.
+        case!(
+            "tdigest",
+            "TDigest",
+            TDigestModel,
+            TDigestModel::new(tdigest_cfg()).unwrap(),
+            0,
+            Targets::Linear(2),
+            40
+        ),
+        // Saved past its merges, its buffer part-filled again: the
+        // centroids beside the buffer.
+        case!(
+            "tdigest_merged",
+            "TDigest",
+            TDigestModel,
+            TDigestModel::new(tdigest_cfg()).unwrap(),
+            0,
+            Targets::Linear(2),
+            300
+        ),
     ]
+}
+
+/// A `tdigest` of two targets at the smallest compression, whose buffer
+/// merges every 80 rows, read at three levels.
+fn tdigest_cfg() -> TDigestModelCfg {
+    TDigestModelCfg {
+        n_targets: 2,
+        compression: 10.0,
+        levels: vec![0.1, 0.5, 0.9],
+        max_state_bytes: None,
+    }
 }
 
 /// An upper `expectile` of two targets under decay, its first rows' refit

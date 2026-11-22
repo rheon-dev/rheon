@@ -545,6 +545,9 @@ def clock_specs(draw, model: str, step: int, cap: int):
             kw["refit_span"] = steps(1, 30)
         else:
             kw["refit_rows"] = draw(st.integers(0, 12))
+    elif model == "tdigest":
+        # Task 544: a digest a target, no decay, no clock parameter.
+        kw |= dict(targets=["y"], quantiles=[0.05, 0.5, 0.95])
     elif model == "garch":
         # Task 492: the start as a span of the clock, or of rows; no decay.
         kw |= dict(targets=["y"])
@@ -747,6 +750,7 @@ N_EFF_EXEMPT = {
         "whose variance recursion is per observation and whose estimate weighs every row it has "
         "learned"
     ),
+    "tdigest": "whose merging digest cannot take a row out again",
 }
 
 #: The kinds with a rate for a parameter (``hawkes``' ``kernel_decays``, per

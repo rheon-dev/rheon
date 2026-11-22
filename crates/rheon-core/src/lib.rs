@@ -128,6 +128,7 @@ mod spread;
 mod stats;
 mod tails;
 mod tdigest;
+mod tdigest_model;
 /// The thread pools of the tests that run one computation at several pool
 /// sizes, held within what a Windows runner can commit.
 #[cfg(test)]
@@ -230,6 +231,7 @@ pub use stats::{
 };
 pub use tails::Tails;
 pub use tdigest::TDigest;
+pub use tdigest_model::{TDIGEST_COMPRESSION, TDigestModel, TDigestModelCfg, level_identified};
 pub use warmup::{WARMUP_ROWS, Warmup};
 pub use window::{
     At, Bytes, Cadence, DiagMoments, Edit, Footprint, Moments, Offer, Pack, Packer, Snapshots,

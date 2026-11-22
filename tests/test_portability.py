@@ -33,6 +33,7 @@ REASON_DTYPE = pl.Enum(
         "below_warm_rows",
         "ill_conditioned",
         "unstable_rate",
+        "level_beyond_sample",
     ]
 )
 

@@ -66,6 +66,24 @@ model that only the new build has is listed as an addition and passes.
 
 ### Added
 
+- **`rheon.spec.tdigest`: quantiles of each column from a merging
+  t-digest** (PLAN 544). A spec of `type = "tdigest"` takes its columns as
+  `targets`, the levels as `quantiles=[...]` and a `compression` (default
+  100), and writes `q<level>_<column>` for each level and column, read
+  before the row is added, beside `weight_sum`, `settled_frac` and
+  `withheld_reason`; no `pred` or `coef`. Each column has its own digest in
+  each group (Dunning and Ertl's merging digest on the `k_1` scale), its
+  rank error measured at most 2.0e-3 at compression 100 and 9.3e-4 at 200
+  against exact ranks, and read within those tolerances of the `tdigest`
+  package. A level is null until its rows identify it, `p (n + 1) >= 1` and
+  `(1 - p)(n + 1) >= 1` for Kish's effective size `n`, and
+  `withheld_reason` names the new `level_beyond_sample` there. The state is
+  bounded by the compression, refused at the call past `max_state_bytes`;
+  a `half_life`, `lam` or window is refused, naming the windowed DDSketch
+  (`ewm_quantile` with a `window_size`) as the quantile that forgets. The
+  state file gains the variant `TDigest`, with no schema change (72 is
+  unreleased).
+
 - **Clock forms for the remaining counts of rows** (task 538, part 2), each
   beside its count and refused with it, each a number of the clock's units
   (rows without a clock) or a duration on a temporal clock, read off the

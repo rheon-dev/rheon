@@ -111,6 +111,7 @@ const FAKETIME_ENV: [&str; 4] = [
 #[bench::hawkes(args = ("hawkes"), setup = model_setup)]
 #[bench::garch(args = ("garch"), setup = model_setup)]
 #[bench::garch_figarch(args = ("garch_figarch"), setup = model_setup)]
+#[bench::tdigest(args = ("tdigest"), setup = model_setup)]
 fn model(mut run: ModelRun) -> ModelRun {
     black_box(rheon_budget_model_rows(black_box(&mut run)));
     run

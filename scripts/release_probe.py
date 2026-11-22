@@ -409,6 +409,13 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         dict(targets=["y", "z"], start_rows=50, horizon=3, group="g", **CLOCK),
         [],
     ),
+    # A digest a target: the tails withheld until the rows identify them.
+    (
+        "tdigest",
+        "tdigest",
+        dict(targets=["y", "z"], quantiles=[0.05, 0.5, 0.95], group="g", **CLOCK),
+        [],
+    ),
     (
         "hawkes",
         "hawkes",

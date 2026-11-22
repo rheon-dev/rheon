@@ -1495,6 +1495,23 @@ pub enum ModelKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_state_bytes: Option<u64>,
     },
+    /// Quantiles of each target column from a merging t-digest
+    /// (`rheon_core::TDigestModel`): one digest a target per group, read
+    /// at each of `quantiles` before the row is added. Per target and
+    /// level, `q<level>_<target>`; no `pred` or `coef`. No features, no
+    /// decay and no window: a merging digest cannot take a row out.
+    #[serde(rename = "tdigest")]
+    TDigest {
+        /// The digest's `delta`; absent is 100.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        compression: Option<f64>,
+        /// The levels read, each above 0 and below 1.
+        quantiles: Vec<f64>,
+        /// The bytes a group's state may hold. Default 256 KB, at most 64
+        /// MiB.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
+    },
 }
 
 /// The two sides of a `seqtest` comparison, as [`ModelKind::compares`]
@@ -1583,6 +1600,7 @@ impl ModelKind {
         "hawkes",
         "expectile",
         "garch",
+        "tdigest",
     ];
 
     pub fn kind_name(&self) -> &'static str {
@@ -1613,6 +1631,7 @@ impl ModelKind {
             ModelKind::Hawkes { .. } => "hawkes",
             ModelKind::Expectile { .. } => "expectile",
             ModelKind::Garch { .. } => "garch",
+            ModelKind::TDigest { .. } => "tdigest",
         }
     }
 
@@ -1638,8 +1657,8 @@ impl ModelKind {
 
     /// False for the models that report no coefficients -- no `coef` field
     /// in their output: `ew_cov`, `seqtest`, `marginal`, `rcov`, `corrchange`,
-    /// `bocpd` and `audit`. `tests/test_model_registry.py` holds this to the field
-    /// names, which are rendered elsewhere.
+    /// `bocpd`, `audit` and `tdigest`. `tests/test_model_registry.py` holds
+    /// this to the field names, which are rendered elsewhere.
     pub fn has_coef(&self) -> bool {
         !matches!(
             self,
@@ -1650,6 +1669,7 @@ impl ModelKind {
                 | ModelKind::CorrChange { .. }
                 | ModelKind::Bocpd { .. }
                 | ModelKind::Audit { .. }
+                | ModelKind::TDigest { .. }
         )
     }
 
@@ -1933,6 +1953,7 @@ impl ModelKind {
                     | ModelKind::Marginal { .. }
                     | ModelKind::Hawkes { .. }
                     | ModelKind::Garch { .. }
+                    | ModelKind::TDigest { .. }
             )
     }
 
@@ -2057,6 +2078,18 @@ pub fn name_renamed(msg: &str) -> String {
     for (old, new) in RENAMED_VALUES {
         if msg.contains(&format!("unknown variant `{old}`")) && msg.contains(&format!("`{new}`")) {
             return format!("{msg}; {old} was renamed {new}");
+        }
+    }
+    // A window given to a `tdigest` (whose fields are the ones serde lists
+    // as expected): a merging digest has no windowed form, so the refusal
+    // names the quantile that forgets (task 544).
+    let tdigest = msg.contains("`compression`") && msg.contains("`quantiles`");
+    for key in ["window_size", "window_rows", "span"] {
+        if tdigest
+            && msg.contains(&format!("unknown field `{key}`"))
+            && let Err(why) = rheon_core::TDigest::check_no_span(Some(key))
+        {
+            return format!("{msg}; {}", models::tdigest_words(&why));
         }
     }
     msg.to_string()
@@ -2630,7 +2663,8 @@ impl Spec {
             | ModelKind::Rcov { .. }
             | ModelKind::Bocpd { .. }
             | ModelKind::Audit { .. }
-            | ModelKind::Garch { .. } => true,
+            | ModelKind::Garch { .. }
+            | ModelKind::TDigest { .. } => true,
             ModelKind::CorrChange { scalar, .. } => !scalar.unwrap_or(false),
             _ => false,
         };
@@ -2835,6 +2869,9 @@ impl Spec {
             ModelKind::Hawkes { .. } => 0.0,
             // The start is the gate: nothing is reported before it is fitted.
             ModelKind::Garch { .. } => 0.0,
+            // Each level is withheld until its rows identify it, the
+            // model's own rule: no count of rows is the gate.
+            ModelKind::TDigest { .. } => 0.0,
             // The noise gate is this model's readiness gate
             // (docs/WARMUP-AND-CONVERGENCE.md §2.1): `max_error_inflation`
             // tracks the model where a count of weight cannot, and the
@@ -3350,6 +3387,15 @@ impl Spec {
                     "spec {name:?}: garch takes no features, but features lists {}: each of \
                      its targets is a return series whose variance it models. Put the return \
                      columns in targets, and leave out features.",
+                    columns_counted(self.features.len())
+                ));
+            }
+        } else if let ModelKind::TDigest { .. } = &self.model {
+            if !self.features.is_empty() {
+                no.refuse(format!(
+                    "spec {name:?}: tdigest takes no features, but features lists {}: each of \
+                     its targets is a column whose quantiles it reads. Put those columns in \
+                     targets, and leave out features.",
                     columns_counted(self.features.len())
                 ));
             }

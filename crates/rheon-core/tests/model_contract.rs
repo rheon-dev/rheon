@@ -248,10 +248,11 @@ const SPARSE_OUTPUT: &[&str] = &["corrchange"];
 /// `audit`, a record of the rows; `bocpd`, whose recursion over run lengths
 /// does not decay; `rcov`, a block estimator; `seqtest`, an e-process that
 /// would not be one if it forgot; `garch`, whose recursion is per
-/// observation and whose estimator weighs every row it learned. `probe_with` holds them to the sum where
+/// observation and whose estimator weighs every row it learned; `tdigest`,
+/// a merging digest that cannot take a row out again. `probe_with` holds them to the sum where
 /// it holds every other model to rule 8's decayed recursion, so a model
 /// added here is a choice made in this file, not a default.
-const NO_DECAY: &[&str] = &["audit", "bocpd", "garch", "rcov", "seqtest"];
+const NO_DECAY: &[&str] = &["audit", "bocpd", "garch", "rcov", "seqtest", "tdigest"];
 
 /// Slots null by design except on a flag, which the ready count leaves out:
 /// `corrchange`'s `since_change` dates a change only where one is flagged
@@ -807,6 +808,7 @@ fn every_state_kind_is_distinct_and_named() {
         "hawkes",
         "expectile",
         "garch",
+        "tdigest",
     ];
     let mut seen = std::collections::HashSet::new();
     for k in kinds {
@@ -843,6 +845,7 @@ fn every_state_kind_is_distinct_and_named() {
         Hawkes::new(hawkes_cfg()).unwrap().state(),
         Expectile::new(expectile_cfg()).unwrap().state(),
         Garch::new(garch_cfg()).unwrap().state(),
+        TDigestModel::new(tdigest_cfg()).unwrap().state(),
     ];
     let from_states: Vec<&str> = states.iter().map(|s| s.model.kind()).collect();
     assert_eq!(from_states, kinds);
@@ -911,6 +914,7 @@ fn one_state_of_each_kind() -> Vec<State> {
         Hawkes::new(hawkes_cfg()).unwrap().state(),
         Expectile::new(expectile_cfg()).unwrap().state(),
         Garch::new(garch_cfg()).unwrap().state(),
+        TDigestModel::new(tdigest_cfg()).unwrap().state(),
         State::new(ModelState::EwCov(Box::new(EwCov::new(1)))),
     ]
 }
@@ -968,6 +972,7 @@ fn every_model_refuses_every_other_models_state_by_name() {
     refuses_every_other_kind::<Audit>("audit", &states);
     refuses_every_other_kind::<Glm>("glm", &states);
     refuses_every_other_kind::<Expectile>("expectile", &states);
+    refuses_every_other_kind::<TDigestModel>("tdigest", &states);
 }
 
 /// Task 252: each model hands back the configuration it was built from,
@@ -1031,6 +1036,8 @@ fn every_model_hands_back_its_configuration() {
     same(Expectile::new(c.clone()).unwrap(), &c, Expectile::cfg);
     let c = garch_cfg();
     same(Garch::new(c.clone()).unwrap(), &c, Garch::cfg);
+    let c = tdigest_cfg();
+    same(TDigestModel::new(c.clone()).unwrap(), &c, TDigestModel::cfg);
 }
 
 fn ew_class_cfg() -> EwClassCfg {
@@ -1892,6 +1899,12 @@ fn every_model_refuses_at_restore_a_configuration_its_new_refuses() {
             0.into(),
             "horizon must be at least 1",
         ),
+        refused(
+            TDigestModel::new(tdigest_cfg()).unwrap(),
+            "compression",
+            5.0.into(),
+            "compression must be at least 10",
+        ),
     ];
     // Every model's `restore`: the twenty-one kinds, `robust` under both
     // losses.
@@ -2308,6 +2321,7 @@ fn exactly_the_scheduled_solvers_report_a_solve_share() {
         ("hawkes", share(Hawkes::new(hawkes_cfg()).unwrap())),
         ("expectile", share(Expectile::new(expectile_cfg()).unwrap())),
         ("garch", share(Garch::new(garch_cfg()).unwrap())),
+        ("tdigest", share(TDigestModel::new(tdigest_cfg()).unwrap())),
     ];
     let reporting: Vec<&str> = shares
         .iter()
@@ -2356,6 +2370,7 @@ const PROBED: &[(&str, &str)] = &[
     ("Hawkes", "hawkes"),
     ("Expectile", "expectile"),
     ("Garch", "garch"),
+    ("TDigest", "tdigest"),
 ];
 
 #[test]
@@ -4915,6 +4930,37 @@ fn garch() {
         let r = probe_with(Garch::new(c).unwrap(), 2, Some(&Garch::n_eff));
         assert!(r.roundtrips, "{vol:?} {dist:?}");
     }
+}
+
+/// Two targets read at three levels, the tails withheld until the rows
+/// identify them (`level_identified`).
+fn tdigest_cfg() -> TDigestModelCfg {
+    TDigestModelCfg {
+        n_targets: 2,
+        compression: 20.0,
+        levels: vec![0.05, 0.5, 0.95],
+        max_state_bytes: None,
+    }
+}
+
+#[test]
+fn tdigest() {
+    // A digest per target, no features: one level a slot, target by
+    // target, and `n_eff` every learned row's weight, summed (no decay: a
+    // merging digest cannot take a row out).
+    let m = TDigestModel::new(tdigest_cfg()).unwrap();
+    assert_eq!(m.n_features(), 0, "tdigest reads no features");
+    let r = probe_with(m, 2, Some(&TDigestModel::n_eff));
+    assert_eq!(r.kind, "tdigest");
+    assert_eq!(r.n_targets, 2);
+    assert_eq!(r.n_outputs, 6);
+    assert_eq!(r.pred_len, 6);
+    assert!(r.roundtrips);
+}
+
+#[test]
+fn tdigest_predict_is_the_step() {
+    predict_is_the_step_without_the_step(|| TDigestModel::new(tdigest_cfg()).unwrap(), 2, false);
 }
 
 #[test]

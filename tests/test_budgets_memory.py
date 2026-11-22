@@ -327,6 +327,20 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         ),
         [],
     ),
+    # A digest a target, read at three levels, the tails withheld until the
+    # rows identify them: every field it has.
+    (
+        "tdigest",
+        "tdigest",
+        dict(
+            targets=["y", "z"],
+            quantiles=[0.05, 0.5, 0.95],
+            group="g",
+            emit_clocks=True,
+            **CLOCK,
+        ),
+        [],
+    ),
     (
         "hawkes",
         "hawkes",

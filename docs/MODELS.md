@@ -1,7 +1,7 @@
 <!-- kind: reference -->
 # Models
 
-The reference entry of each of the twenty-six models a spec can name, by
+The reference entry of each of the twenty-seven models a spec can name, by
 family, for a reader who knows which model they want to look up. A
 model's parameters, their defaults and its refusals are in its docstring,
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md).
@@ -28,7 +28,7 @@ which models keep each, and why.
 
 ## The models at a glance
 
-The twenty-six models fall into four families, and each family answers one
+The twenty-seven models fall into four families, and each family answers one
 kind of question about a stream. Each name links its builder's reference
 page, which gives its keywords and their defaults, and *entry* links its
 entry on this page. [Choose a model](how-to/choose-a-model.md) says which
@@ -56,6 +56,7 @@ to start with for which question.
 | [`rcov`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.rcov) · [entry](#rcov--a-blocks-realized-covariance-robust-to-noise) | accumulate | a block's realized covariance, robust to microstructure noise: the Barndorff-Nielsen–Hansen–Lunde–Shephard kernel or Christensen–Kinnebrock–Podolskij pre-averaging, reported when a group closes |
 | [`audit`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.audit) · [entry](#audit--what-a-streams-columns-hold) | accumulate | what each column holds, counted in one pass: nulls, NaNs and infinities apart, repeated values, runs, persistence, tails and duplicated columns, and the clock's duplicate stamps and gaps, read back as a table and by `bank.check()` |
 | [`garch`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.garch) · [entry](#garch--how-large-will-the-next-return-be) | step | the GARCH family, a conditional variance for each return series: GARCH(1,1), GJR, EGARCH and FIGARCH, with normal, Student-t or skewed-t innovations, its parameters learned a row at a time after a start fitted by likelihood |
+| [`tdigest`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.tdigest) · [entry](#tdigest--where-do-this-columns-quantiles-stand) | accumulate | quantiles of each column at the levels you list, from a merging t-digest whose error is uniform in rank, each level withheld until the rows identify it |
 | **[Clustering and classification](#clustering-and-classification)** | | put labels on rows |
 | [`kmeans`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.kmeans) · [entry](#kmeans--exponentially-weighted-k-means) | step | exponentially weighted k-means: cluster labels assigned before the row is learned from, with a split–merge move that finds a cluster born after seeding |
 | [`micro`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.micro) · [entry](#micro--density-based-clustering-any-shape) | step | density-based clustering: DenStream micro-clusters linked into clusters of any shape and number, flagging the rows that belong to none |
@@ -266,7 +267,7 @@ per target, give `min_weight` a list. The default depends on the model:
 | the feature count plus one (1 for `holt`) | `ew_cov`, `ew_class`, `kmeans`, `micro`, `holt` |
 | 3 | `marginal`, `deco` |
 | 1 | `bocpd` |
-| 0, each having a gate of its own or nothing to gate | `ewridge`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes`, `garch` |
+| 0, each having a gate of its own or nothing to gate | `ewridge`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes`, `garch`, `tdigest` |
 
 **`min_settled_frac` is off by default.** Set it when the half-life was
 chosen to average over regimes or seasons that a shorter history would not
@@ -297,7 +298,7 @@ readiness fields:
 | field | on | what it holds |
 |---|---|---|
 | `settled_frac` | every model but `marginal`, `rcov` and `audit` | how far the model has come toward its steady state under decay |
-| `withheld_reason` | every model but `marginal`, `rcov` and `audit` | why `pred_y` is null, or null when it is not: `below_min_settled_frac`, `below_min_weight`, `above_max_error_inflation`, `below_warm_rows` (the rows `kmeans`, `hmm` and `bocpd` hold to seed themselves from, and the rows before `kalman` has sized any of a target's coefficients, standardized with no intercept), `ill_conditioned` (an `ewridge` fit whose normal equations are too nearly singular to keep a digit) or `unstable_rate` (an `sgd` target whose learning rate is past its stability bound, so the fit diverges), in that order of precedence |
+| `withheld_reason` | every model but `marginal`, `rcov` and `audit` | why `pred_y` is null, or null when it is not: `below_min_settled_frac`, `below_min_weight`, `above_max_error_inflation`, `below_warm_rows` (the rows `kmeans`, `hmm` and `bocpd` hold to seed themselves from, and the rows before `kalman` has sized any of a target's coefficients, standardized with no intercept), `ill_conditioned` (an `ewridge` fit whose normal equations are too nearly singular to keep a digit) `unstable_rate` (an `sgd` target whose learning rate is past its stability bound, so the fit diverges) or `level_beyond_sample` (a `tdigest` level past what the rows before it identify), in that order of precedence |
 | `error_inflation_y` | `ewridge`, `rls`, `kalman`, under `emit_error_inflation` | the row's own estimation variance over the noise: high on a row leaning on a direction the data never showed, at one triangular solve a row |
 | `support_coef` | `ewridge`, `huber`, `quantile`, beside `coef` | each coefficient's data share, `1 - ridge * (S^-1)_jj` on the system the solve inverts. A duplicated pair of features reads 0.5 each |
 | `se_coef` | `ewridge`, `rls`, `kalman`, under `emit_se_coef`, beside `coef` | each coefficient's standard error in its own units: `sigma` times the fit's own covariance, `kalman`'s posterior exactly. A report, not a gate; it errs large in warm-up and under a ridge |
@@ -3049,6 +3050,85 @@ GJR with the skewed t: under skewed innovations GJR's persistence reads
 EGARCH or FIGARCH, APARCH, the generalized error distribution and a mean
 model: none has an online estimator checked against `arch`. EGARCH's
 forecast past one row has no closed form.
+
+### `tdigest` — where do this column's quantiles stand?
+
+*API:* [`rheon.spec.tdigest`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.tdigest) — *Rust:* [`tdigest_model.rs`](../crates/rheon-core/src/tdigest_model.rs) — *Outputs:* [fields](OUTPUTS.md#tdigest)
+
+Quantiles of each target column, read at the levels you list from a merging
+t-digest whose error is uniform in rank: each row reports every level from
+the rows before it, so a row's own value is never in its own quantile.
+
+Use it for a column whose values sit near 0 or take both signs (returns,
+residuals, spreads), where a sketch of relative accuracy misreads. Each
+target has its own digest in each group. The digest never forgets: for a
+quantile that does, use `ewm_quantile` with a `window_size`, the windowed
+DDSketch, whose buckets drop a row as it leaves the window.
+
+Its parameters, their defaults and what each refuses are in its
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.tdigest),
+and the fields it writes in [OUTPUTS.md](OUTPUTS.md#tdigest). The
+parameters every spec takes are in [What every spec
+takes](#what-every-spec-takes), apart from `features`, `half_life` and
+`lam`, which it refuses. It takes no window either: a merging digest folds
+each row into a centroid's mean and cannot take it out again.
+A row's weight is its mass in the digest, and scaling every weight changes
+nothing but `weight_sum`. A row of weight 0, or whose value is null, adds
+nothing; it is still read.
+
+#### The update
+
+Each target `t` keeps a merging t-digest `D_t` (Dunning and Ertl, 2019, on
+the scale function `k(q) = δ/(2π) asin(2q − 1)`), with the weight `W_t` and
+the squared weights `S_t` of the rows it holds. For a row of weight `w` and
+value `y`:
+
+```text
+q_p,t = D_t.quantile(p)        read first: the rows before this one
+D_t   ← D_t + (y, w)           when w > 0 and y is present
+W_t   ← W_t + w,   S_t ← S_t + w²
+```
+
+The digest keeps centroids ascending by mean, each spanning at most 1 in
+`k`, and merges a buffer of `8δ` rows into them. A read merges a copy, so
+the state is the rows' alone, and interpolates between the centroids'
+centers from the smallest row to the largest. The merge's limit `k⁻¹(k(q) +
+1)` is taken through the sine addition formula with `sin` and `cos` of `2π/δ`
+summed from their series, so no math library's last bit decides a merge and
+the digest is the same bits on every platform.
+
+**A level is withheld until its rows identify it.** Take Kish's effective
+size `n_t = W_t²/S_t`, the rows themselves for rows of equal weight. The
+`i`-th smallest of `n` rows sits at level `i/(n + 1)` in expectation, so a
+level past `1/(n + 1)` or `n/(n + 1)` lies beyond the smallest or largest
+row, where the digest can read only the extreme. Such a level is null and
+`withheld_reason` is `level_beyond_sample`, while
+
+```text
+p (n_t + 1) < 1   or   (1 − p) (n_t + 1) < 1
+```
+
+The median is reported from the second row, 0.05 and 0.95 from the
+twentieth, 0.01 and 0.99 from the hundredth; no count of rows is fixed.
+
+**State.** At most `δ + 1` centroids and `8δ` buffered rows a target, 16
+bytes each, plus a fixed header: about 14.5 KB a target at `δ = 100` and
+29 KB at 200, whatever the stream's length. A spec past `max_state_bytes`
+(256 KB by default) is refused at the call.
+
+#### Notes
+
+**Its rank error, against exact ranks and the `tdigest` package.** It was
+measured at 100,000 rows of normal, lognormal, Student-t(3) and Pareto(2.5)
+values over 20 seeds, at the levels 0.01, 0.05, 0.5, 0.95 and 0.99. The
+largest rank error `|F(q̂) − p|` was 2.0e-3 at `δ = 100` and 9.3e-4 at 200,
+held under 3.8e-3 and 1.8e-3. The `tdigest` package's own digest read the
+same quantiles within those tolerances in rank. The error is largest at the
+median and smallest in the tails, where `k_1` keeps the centroids small.
+
+**A read costs a merge.** Each row's read merges a copy of the buffer into
+the centroids, `O(δ log δ)` a target, so a digest of compression 100 costs
+more a row than a running moment does.
 
 ## Clustering and classification
 

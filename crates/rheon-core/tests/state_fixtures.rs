@@ -1318,7 +1318,7 @@ fn variants() -> Vec<String> {
 /// name here, and a fixture.
 #[test]
 fn the_variant_names_are_frozen() {
-    const FROZEN: [&str; 26] = [
+    const FROZEN: [&str; 27] = [
         "EwCov",
         "EwRidge",
         "Rls",
@@ -1345,6 +1345,7 @@ fn the_variant_names_are_frozen() {
         "Hawkes",
         "Expectile",
         "Garch",
+        "TDigest",
     ];
     assert_eq!(
         variants(),
@@ -1465,7 +1466,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 115] = [
+    const FORMS: [(&str, &[&str]); 119] = [
         // Schema 70 (rule 5's twenty-second exception): the stabilized
         // prior's `ŝ` and `V` under `full` in each form and under `diag`,
         // the factor form's `f`, and a spec's own `prior_rows`.
@@ -1629,6 +1630,18 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
             &["model", "Garch", "series", "0", "filter", "ring"],
         ),
         ("garch_span", &["model", "Garch", "series", "0", "buffer"]),
+        // `tdigest`'s digests (PLAN 544): a buffer before the first
+        // merge, then the centroids beside it, and the weights.
+        ("tdigest", &["model", "TDigest", "digests", "1", "buffer"]),
+        ("tdigest", &["model", "TDigest", "target_w2"]),
+        (
+            "tdigest_merged",
+            &["model", "TDigest", "digests", "0", "centroids"],
+        ),
+        (
+            "tdigest_merged",
+            &["model", "TDigest", "digests", "0", "buffer"],
+        ),
         // A refit over a span of the clock (task 538): the span in each
         // cfg, glm's clock summed from the steps, and each buffer.
         ("glm_refit_clock", &["model", "Glm", "cfg", "refit_clock"]),
@@ -2989,10 +3002,16 @@ fn first_difference(got: &rmpv::Value, want: &rmpv::Value, bound: f64, at: &str)
 /// to the bit and its reports within the same tolerance. A decay or a
 /// log-likelihood runs through libm, whose last bit is the platform's.
 /// `garch` calls no platform library (its `ln`, `exp` and `ln_1p` are the
-/// `libm` crate's), so its cases are held to the bit: a start fitted on
-/// another platform's last bits once took another path, 28% away.
+/// `libm` crate's), nor does `tdigest` (its sine and cosine are series and
+/// its `sqrt` correctly rounded), so their cases are held to the bit: a
+/// start fitted on another platform's last bits once took another path, 28%
+/// away.
 fn differs_from_another_writer(case: &Case, f: &Fixture) -> Option<String> {
-    let tol = if f.variant == "Garch" { 0.0 } else { TOL };
+    let tol = if matches!(f.variant, "Garch" | "TDigest") {
+        0.0
+    } else {
+        TOL
+    };
     let (mut m, rows) = saved(case);
     let decode = |b: &[u8]| rmpv::decode::read_value(&mut &b[..]).unwrap();
     let state = first_difference(

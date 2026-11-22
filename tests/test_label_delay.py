@@ -1156,6 +1156,8 @@ STATE_READS: dict[str, frozenset[str]] = {
     # A variance and its forecast read the state alone; the standardized
     # residual reads the row's own target.
     "garch": frozenset({"variance_y"}),
+    # Each level reads the digest alone.
+    "tdigest": frozenset({"q0.05_y", "q0.5_y", "q0.95_y"}),
     "hmm": frozenset(
         {"filtered_state0", "filtered_state1", "predicted_state0", "predicted_state1", "state"}
     ),
@@ -1493,6 +1495,8 @@ DOUBLED: dict[str, dict] = {
     # Its recursion is per observation: a lesson late steps it in the same
     # order, from the same rows.
     "garch": {},
+    # A digest of the same rows, added in the same order.
+    "tdigest": {},
     "glm": {},
     "expectile": {},
     "huber": {},

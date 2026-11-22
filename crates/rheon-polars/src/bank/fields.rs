@@ -265,6 +265,7 @@ pub fn coef_fields(spec: &Spec) -> Vec<CoefField> {
             | crate::ModelKind::CorrChange { .. }
             | crate::ModelKind::Bocpd { .. }
             | crate::ModelKind::Audit { .. }
+            | crate::ModelKind::TDigest { .. }
     ) {
         return Vec::new();
     }
@@ -1202,6 +1203,32 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                 FieldMeta::new(format!("coef{suffix}"), "coef")
                     .decay(suffix, d)
                     .src(Source::Coef(mi)),
+            );
+        }
+        return fields;
+    }
+    // tdigest predicts no target's value: per target, one quantile a level,
+    // `q<level>_<target>` (read before the row is added), then `n_eff`. One
+    // undecayed instance; no `coef`.
+    if let crate::ModelKind::TDigest { quantiles, .. } = &spec.model {
+        let mut fields = Vec::new();
+        for (mi, (suffix, d)) in decays.iter().enumerate() {
+            let base = mi * spec.targets.len() * quantiles.len();
+            for (t_i, t) in spec.targets.iter().enumerate() {
+                for (li, q) in quantiles.iter().enumerate() {
+                    let name = format!("q{}_{t}{suffix}", crate::spec::num_label(*q));
+                    let mut f = FieldMeta::new(name, "q")
+                        .decay(suffix, d)
+                        .target(t)
+                        .src(Source::Stat(base + t_i * quantiles.len() + li));
+                    f.quantile = Some(*q);
+                    fields.push(f);
+                }
+            }
+            fields.push(
+                FieldMeta::new(format!("weight_sum{suffix}"), "weight_sum")
+                    .decay(suffix, d)
+                    .src(Source::NEff(mi)),
             );
         }
         return fields;

@@ -106,7 +106,7 @@ EXTRA: dict[str, dict[str, Any]] = {
 TABLE_KINDS = frozenset({"marginal", "rcov"})
 ROW_KINDS = [k for k in KINDS if k not in TABLE_KINDS]
 #: The kinds with no decay: ``min_settled_frac`` has nothing to settle.
-NO_DECAY = frozenset({"seqtest", "bocpd", "corrchange", "rcov", "garch"})
+NO_DECAY = frozenset({"seqtest", "bocpd", "corrchange", "rcov", "garch", "tdigest"})
 SETTLED_KINDS = [k for k in KINDS if k not in NO_DECAY]
 #: The kinds whose ridge system reads ``max_error_inflation``.
 INFLATION_KINDS = ["ewridge", "rls", "lasso", "kalman"]
@@ -169,7 +169,7 @@ def _frame(kind: str) -> pl.DataFrame:
 
 #: The kinds that report no coefficients, so take no ``coef_every``; the
 #: rest write ``coef`` on every row, so the fit is compared on every row.
-NO_COEF = frozenset({"seqtest", "bocpd", "corrchange", "ew_cov", "marginal", "rcov"})
+NO_COEF = frozenset({"seqtest", "bocpd", "corrchange", "ew_cov", "marginal", "rcov", "tdigest"})
 
 
 def _weight_column(kind: str) -> str | None:

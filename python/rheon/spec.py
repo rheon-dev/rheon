@@ -130,7 +130,7 @@ shows them at work.
          - ``bocpd``
        * - 0, each having a gate of its own or nothing to gate
          - ``ewridge``, ``seqtest``, ``rcov``, ``hmm``, ``corrchange``,
-           ``audit``, ``hawkes``, ``garch``
+           ``audit``, ``hawkes``, ``garch``, ``tdigest``
 ``min_settled_frac``
     Why: a history shorter than the half-life may not represent the process,
     such as regimes or seasons the half-life was chosen to average across.
@@ -439,9 +439,9 @@ releases none. A regression writes, with ``<t>`` a target:
 ``withheld_reason``
     Which gate withheld the row's predictions, as an ``Enum``, and null where
     no gate did. ``below_min_settled_frac``, ``below_min_weight``,
-    ``above_max_error_inflation``, ``below_warm_rows``, ``ill_conditioned``
-    and ``unstable_rate`` are named in that order, the first that withheld
-    anything.
+    ``above_max_error_inflation``, ``below_warm_rows``, ``ill_conditioned``,
+    ``unstable_rate`` and ``level_beyond_sample`` are named in that order,
+    the first that withheld anything.
     ``below_warm_rows`` is the model's own warm-up: the rows ``kmeans``,
     ``hmm`` and ``bocpd`` hold to seed their centres, states or prior from
     (``warm_rows``), a count of rows, where ``min_weight`` is a weight, and
@@ -454,7 +454,11 @@ releases none. A regression writes, with ``<t>`` a target:
     learning rate is past its stability bound: its recent steps' gains
     ``q`` have a mean square above twice their mean, so each step grows its
     own row's residual in mean square, and the fit diverges; the ``sgd``
-    builder's docstring has the gain. Fields null for another reason,
+    builder's docstring has the gain. ``level_beyond_sample`` is a
+    ``tdigest`` level its rows do not identify yet: past the expected level
+    of the smallest or largest row, ``1/(n + 1)`` and ``n/(n + 1)`` for
+    ``n`` rows; the ``tdigest`` builder's docstring has the rule. Fields
+    null for another reason,
     such as a skipped row or a statistic not yet due, leave it null. An
     ``Enum`` rather than a string, because a string column costs sixteen
     bytes a row even when every value is null.
@@ -1137,6 +1141,7 @@ from rheon._spec import (
     rls,
     seqtest,
     sgd,
+    tdigest,
 )
 
 __all__ = [
@@ -1170,4 +1175,5 @@ __all__ = [
     "rls",
     "seqtest",
     "sgd",
+    "tdigest",
 ]

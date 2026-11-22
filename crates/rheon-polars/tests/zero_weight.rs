@@ -394,6 +394,12 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
         ALL,
     ),
     (
+        "tdigest",
+        r#"{"type": "tdigest", "compression": 10, "quantiles": [0.05, 0.5, 0.95]}"#,
+        r#""targets": ["y", "x0"], "features": []"#,
+        ALL,
+    ),
+    (
         "glm",
         r#"{"type": "glm", "refit_rows": 60}"#,
         r#""targets": ["yb"], "features": ["x0", "x1"], "half_life": @50"#,

@@ -99,6 +99,9 @@ pub const MODEL_CASES: &[&str] = &[
     // (task 492); and FIGARCH, its O(M) pass of 1,000 lags a row.
     "garch",
     "garch_figarch",
+    // One column's digest at compression 100, read at three levels: a row's
+    // merge of a copy of its buffer (task 544).
+    "tdigest",
 ];
 
 /// The one model case that reports on a single row of its block:
@@ -516,6 +519,15 @@ fn case_spec(id: &str) -> (Value, Shape) {
             json!({
                 "name": "m",
                 "model": {"type": "garch", "vol": "figarch", "max_state_bytes": 40000},
+                "targets": ["y0"],
+                "features": [],
+            }),
+            Shape::Linear,
+        ),
+        "tdigest" => (
+            json!({
+                "name": "m",
+                "model": {"type": "tdigest", "quantiles": [0.05, 0.5, 0.95]},
                 "targets": ["y0"],
                 "features": [],
             }),

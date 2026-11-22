@@ -827,6 +827,7 @@ class TestEdgeCases:
                         "below_warm_rows",
                         "ill_conditioned",
                         "unstable_rate",
+                        "level_beyond_sample",
                     ]
                 ),
             }

@@ -775,5 +775,9 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         ModelKind::Garch { .. } => Ok(AnyModel::Garch(Box::new(rheon_core::Garch::new(
             garch_cfg(spec)?,
         )?))),
+        // No decay: a merging digest cannot take a row out.
+        ModelKind::TDigest { .. } => Ok(AnyModel::TDigest(Box::new(
+            rheon_core::TDigestModel::new(tdigest_cfg(spec)?)?,
+        ))),
     }
 }

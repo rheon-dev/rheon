@@ -202,6 +202,28 @@ pub fn garch_cfg(spec: &Spec) -> Result<rheon_core::GarchCfg, String> {
     Ok(cfg)
 }
 
+/// A `tdigest` spec's [`rheon_core::TDigestModelCfg`]: one digest a target,
+/// at compression 100 unless the spec gives one. Every value is the
+/// model's own to check.
+pub fn tdigest_cfg(spec: &Spec) -> Result<rheon_core::TDigestModelCfg, String> {
+    let ModelKind::TDigest {
+        compression,
+        quantiles,
+        max_state_bytes,
+    } = &spec.model
+    else {
+        return Err(not_a(spec, "tdigest_cfg", "tdigest"));
+    };
+    let cfg = rheon_core::TDigestModelCfg {
+        n_targets: spec.m(),
+        compression: compression.unwrap_or(rheon_core::TDIGEST_COMPRESSION),
+        levels: quantiles.clone(),
+        max_state_bytes: *max_state_bytes,
+    };
+    cfg.validate()?;
+    Ok(cfg)
+}
+
 /// A `garch` spec's start, in rows, when it gives neither rows nor a span.
 pub const GARCH_START_ROWS: usize = 2000;
 
