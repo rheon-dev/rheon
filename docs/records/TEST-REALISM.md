@@ -286,11 +286,25 @@ Part 2, section 5 items 2 to 4 and 6, and the scipy half of item 5.
 | `seqtest` | `2a1ea5a` | the closed form through `scipy.special.betaln` on a noisy 70% stream |
 | contract | `030aabc` | a noisy line beside the noiseless one, in Rust and in the Python sweep |
 
+Part 3: a golden on a stream with signal for the five regression models whose
+golden stream had none for the option or family that the model is for
+(`golden_structured.rs`, each asserting the model found what the stream holds).
+
+| model | commit | what the stream is |
+|---|---|---|
+| `huber` | `3d5dcb9` | a line with +4 outliers on 8% of the rows; the Huber fit's bias is under a third of least squares' |
+| `quantile` | `694bd41` | a line with `Exp(1) - 1` noise, at 0.7 |
+| `expectile` | `25c4213` | the same noise, at 0.85, against the expectile of `Exp(1)` found by bisection |
+| `glm` | `cbe7c4d` | Gamma draws of shape 4 at a log-linear mean |
+| `holt` | `d75c0fd` | `10 + 0.5 t` and noise |
+
 Left: `pa`'s projection (no converged limit to hold to a library: its step
 is not a descent on the loss), `deco`'s estimate and `corrchange(perm_block=)`
 (no library computes them; the longhand stays), and the rows of section 3
-whose "missing" cell is not in section 5: `glm`'s golden and fixtures on a
-stream drawn from the family, `holt`'s fixtures on a trending series, and
-the option-level cells of the regression goldens (a contaminated stream for
-`huber`'s golden, skewed noise for `quantile`'s and `expectile`'s).
+whose "missing" cell is not in section 5: the state fixtures of `glm`, `holt`
+and `hawkes` on streams drawn from their family (a fixture freezes a form, not
+a fit; a new case there means a new set under every schema's directory, which
+this part did not take on), and the option-level cells of the other regression
+goldens (`ewridge`'s conditioning, `lasso`'s selection, `kalman`'s drift,
+`sgd`'s and `ftrl`'s later rows, `ftrl`'s sparse regime).
 
