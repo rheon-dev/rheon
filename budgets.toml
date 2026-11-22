@@ -1404,8 +1404,8 @@ windows = { budget = 73.1016 }
 # whole read the test's negative control.
 [rss.streaming_5m]
 windows = { budget = 128.461 }
-darwin = { budget = 142.4688 }
-linux = { budget = 140.7852 }
+darwin = { budget = 117.8438 }
+linux = { budget = 128.9688 }
 
 [rss.predict_wide]
 windows = { budget = 153.168 }
