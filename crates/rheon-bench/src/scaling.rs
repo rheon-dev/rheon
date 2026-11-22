@@ -1137,15 +1137,17 @@ fn model_case(id: &str, n: usize) -> ModelCase {
         ("dcc", "series" | "history") => {
             let s = json!({
                 "name": "m",
-                "model": {"type": "dcc", "margins": "none", "asymmetric": true, "start_rows": 50},
+                "model": {"type": "dcc", "margins": "none", "asymmetric": true, "start_rows": 200},
                 "targets": names("y", if dim == "series" { n } else { 2 }),
                 "features": [],
                 "half_life": "inf",
             });
-            let c = ModelCase::new(s, lin);
+            let c = ModelCase::new(s, Shape::Dcc(false));
             match dim {
+                // the start, 200 rows, or twice or four times that where its
+                // fit waited on its evidence, done before the rows timed
                 "history" => c.warm(n.max(1000)),
-                _ => c.warm(1_000),
+                _ => c.warm(2_000),
             }
         }
         _ => panic!("no model cell {id:?}"),

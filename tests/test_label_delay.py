@@ -1167,9 +1167,9 @@ STATE_READS: dict[str, frozenset[str]] = {
     # A variance and its forecast read the state alone; the standardized
     # residual reads the row's own target.
     "garch": frozenset({"variance_y"}),
-    # The margins' variances and the pairs' correlations read the state
-    # alone; the log-density reads the row's own targets.
-    "dcc": frozenset({"variance_y", "variance_x0", "corr_y_x0"}),
+    # The pairs' correlations read the state alone; the log-density reads
+    # the row's own targets.
+    "dcc": frozenset({"corr_y_x0"}),
     "hmm": frozenset(
         {"filtered_state0", "filtered_state1", "predicted_state0", "predicted_state1", "state"}
     ),

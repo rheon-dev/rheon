@@ -213,16 +213,17 @@ def test_a_save_goes_on_to_the_bit(kw):
 
 
 @pytest.mark.parametrize(
-    "kw", [{"asymmetric": True}, {"margins": "garch", "margin_start_rows": 60, "half_life": 400.0}]
+    "kw", [{"asymmetric": True}, {"margins": "garch", "margin_start_rows": 500, "half_life": 400.0}]
 )
 def test_a_zero_weight_row_counts_in_no_clock(kw):
     """The stream with rows of weight 0 gives every other row, to the bit,
     the output of the stream without them, on an irregular clock: such a
     row learns nothing and counts in no clock. They are still read."""
-    x = _z(700, 7)
+    n = 2500
+    x = _z(n, 7)
     if kw.get("margins") == "garch":
         x = _returns(x, 7)
-    df = _frame(x, 7).drop("g").with_columns(t=pl.Series(np.cumsum(1.0 + np.arange(700) % 3)))
+    df = _frame(x, 7).drop("g").with_columns(t=pl.Series(np.cumsum(1.0 + np.arange(n) % 3)))
     s = _spec(weight="w", coef_every=0, clock="t", gap_cap=1e9, **kw)
     keep = (df["w"] > 0).to_numpy()
     full = _out(s, df)
@@ -293,7 +294,7 @@ def test_the_margins_are_garchs():
             {"margins": "garch", "vol": "figarch", "margin_start_rows": 100},
             "margin_start_rows must be at least 2000",
         ),
-        ({"start_rows": 49}, "start_rows must be at least 50"),
+        ({"start_rows": 0}, "start_rows must be at least 1"),
         ({"start_rows": 100, "start_span": 10.0}, "Leave one of them out"),
         ({"max_state_bytes": 1000}, "past max_state_bytes of 1000"),
     ],
@@ -374,9 +375,31 @@ def test_a_start_span_on_a_temporal_clock_is_a_duration():
             "b": z[:, 1],
         }
     )
-    s = _spec(k=2, clock="ts", gap_cap="1h", start_rows=None, start_span="2h")
+    # the parameters given: the span alone decides where the start closes
+    s = _spec(k=2, clock="ts", gap_cap="1h", start_rows=None, start_span="2h", a=0.05, b=0.9)
     out = _out(s, df)
     # the rows from the first through the first at or past two hours on
     assert out["corr_a_b"].is_not_null().arg_max() == 121
     with pytest.raises(ValueError, match="start_span"):
         rp.ModelBank([_spec(k=2, clock="ts", gap_cap="1h", start_rows=None, start_span=120.0)])
+
+
+@pytest.mark.parametrize("asymmetric", [False, True])
+def test_a_start_reports_only_a_recursion_its_rows_identify(asymmetric):
+    """The start waits on the evidence, not on a count of rows: on series of
+    one constant correlation (no recursion to find) the fit is withheld,
+    each row after the start's buffer naming the wait ``not_identified``,
+    and nothing is reported; on a realistic stream the same spec reports
+    from its start's row."""
+    null = _z(2000, 14, theta=(0.0, 0.0, 0.0))
+    s = _spec(start_rows=300, asymmetric=asymmetric)
+    out = _out(s, pl.DataFrame({n: null[:, j] for j, n in enumerate(NAMES)}))
+    assert out["corr_a_b"].is_null().all() and out["coef"].list.get(0).is_null().all()
+    reasons = out["withheld_reason"].cast(pl.String)
+    assert (reasons[:300] == "below_warm_rows").all()
+    assert (reasons[300:] == "not_identified").all()
+    live = _z(2000, 15, theta=(0.04, 0.92, 0.04 if asymmetric else 0.0))
+    out = _out(s, pl.DataFrame({n: live[:, j] for j, n in enumerate(NAMES)}))
+    first = out["corr_a_b"].is_not_null().arg_max()
+    assert first in (300, 600, 1200), first
+    assert out["withheld_reason"][first:].is_null().all()

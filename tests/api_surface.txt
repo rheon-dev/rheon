@@ -593,7 +593,7 @@
     stream.robust_se_half_life = "inf"
     stream.specification_half_life = "inf"
     stream.tails_half_life = "inf"
-  dcc(half_life=50.0, targets=['y', 'x0']):
+  dcc(a=0.05, b=0.9, half_life=50.0, targets=['y', 'x0']):
     model.asymmetric = false
     model.decay.Halflife = 50.0
     model.margins.dist = "normal"
@@ -609,7 +609,7 @@
     model.max_state_bytes = null
     model.min_weight = 0.0
     model.n_targets = 2
-    model.params = null
+    model.params = [0.05, 0.9]
     model.start_rows = 500
     model.start_span = null
     stream.breaks_half_life = 50.0
@@ -1248,10 +1248,10 @@
   dcc(a=0.03, asymmetric=True, b=0.9, g=0.04, half_life=50.0, targets=['y', 'x0']), the lines that differ from dcc's:
     model.asymmetric = true
     model.params = [0.03, 0.9, 0.04]
-  dcc(half_life=50.0, margins='none', start_span=500.0, targets=['y', 'x0']), the lines that differ from dcc's:
+  dcc(a=0.05, b=0.9, half_life=50.0, margins='none', start_span=500.0, targets=['y', 'x0']), the lines that differ from dcc's:
     model.margins = null
     model.start_span = 500.0
-  dcc(dist='t', half_life=50.0, margin_start_span=900.0, targets=['y', 'x0'], vol='gjr'), the lines that differ from dcc's:
+  dcc(a=0.05, b=0.9, dist='t', half_life=50.0, margin_start_span=900.0, margins='garch', targets=['y', 'x0'], vol='gjr'), the lines that differ from dcc's:
     model.margins.dist = "t"
     model.margins.start_span = 900.0
     model.margins.vol = "gjr"

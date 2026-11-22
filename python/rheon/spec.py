@@ -452,8 +452,9 @@ releases none. A regression writes, with ``<t>`` a target:
     own row's residual in mean square, and the fit diverges; the ``sgd``
     builder's docstring has the gain. ``not_identified`` is a ``garch``
     start whose rows do not yet tell its variance process from a constant
-    variance, so it buffers more rows before it reports; the ``garch``
-    builder's docstring has the test. Fields null for another reason,
+    variance, or a ``dcc`` start whose rows do not tell its correlation's
+    recursion from constant correlation, so it buffers more rows before it
+    reports; each builder's docstring has the test. Fields null for another reason,
     such as a skipped row or a statistic not yet due, leave it null. An
     ``Enum`` rather than a string, because a string column costs sixteen
     bytes a row even when every value is null.

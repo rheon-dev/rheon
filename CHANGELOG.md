@@ -120,8 +120,15 @@ model that only the new build has is listed as an addition and passes.
   MiB). Against the batch quasi-likelihood fit written from the definition
   and maximized by scipy (no Python library fits DCC), on 50 simulated
   series of each of six forms at 10,000 rows, every parameter was within two
-  of its standard errors on all 50 (largest gap 0.99 SE under normal
-  innovations, 1.88 under t(5)). Its cost through the bank, on arm64 only
+  of its standard errors on all 50 (largest gap 1.17 SE under normal
+  innovations, 1.95 under t(5)). The start reports only a recursion its rows
+  identify, by the condition and no count of rows: its fit is withheld
+  (`withheld_reason` `not_identified`) until the likelihood-ratio statistic
+  against constant correlation, at Kish's count, reaches χ² at 0.999 (13.8
+  for DCC, 16.3 for ADCC) with the information positive definite, and is
+  stepped from only at its optimum (the projected Newton step's predicted
+  gain at most 1e-6 nats); a start that fails waits for twice its rows,
+  at most twice, then buffers afresh. `start_rows` takes any count from 1. Its cost through the bank, on arm64 only
   (an optimized build of the wheel without LTO, one thread, a load of 7 to
   9, the best of three runs of 200,000 rows): 0.4 µs a row at two and three
   series, 1.0 to 1.3 µs at five and 5.0 to 6.5 µs at ten, learned, about

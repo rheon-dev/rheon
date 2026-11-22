@@ -102,12 +102,19 @@ def dcc(
         The rows the correlation's start buffers, after the margins' start:
         the targets are their means, and the parameters their batch
         quasi-likelihood's maximum. They report no correlation. Default
-        500, at least 50. Refused beside ``start_span``.
+        500, at least 1: the start waits on the evidence, not a count. Its
+        fit is withheld (``withheld_reason`` ``not_identified``) until its
+        likelihood-ratio statistic against constant correlation reaches χ²
+        at 0.999 (13.8 for ``a`` and ``b``, 16.3 with ``g``), and stepped
+        from only at its optimum; a start that fails either waits for twice
+        its rows and fits again, at most twice, and then a withheld one
+        buffers afresh. Refused beside ``start_span``.
     ``start_span``
         The correlation's start as a span of the clock in place of
         ``start_rows``: a number of the clock column's units, or a duration
         such as ``"1d"`` on a temporal clock. It closes at the first row at
-        or past the span from its first row, once it holds 50 rows.
+        or past the span from its first row; a refit waits for twice the
+        span.
     ``max_state_bytes``
         The bytes a group's state may hold, both starts' buffers included.
         A spec whose state is past it is refused; a start over a span is

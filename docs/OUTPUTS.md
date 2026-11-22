@@ -405,18 +405,23 @@ The fields of `po.spec.garch("m", targets=["y"], start_rows=50)`:
 
 ## `dcc`
 
-The fields of `po.spec.dcc("m", targets=["y", "x0"], half_life=50.0, margin_start_rows=50, start_rows=50)`:
+The fields of `po.spec.dcc("m", targets=["y", "x0"], half_life=50.0, margins="none", a=0.05, b=0.9, start_rows=50)`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
-| `variance_y` | `f64` | the variance of `<t>` on this row given the rows before it, read before the row is learned | while withheld, and before the target's margin's start is fitted |
-| `variance_x0` | `f64` | the variance of `<t>` on this row given the rows before it, read before the row is learned | while withheld, and before the target's margin's start is fitted |
-| `corr_y_x0` | `f64` | the pair's correlation given the rows before this one, from the DCC recursion, read before the row is learned | while withheld, and before the correlation's start is fitted |
+| `corr_y_x0` | `f64` | the pair's correlation given the rows before this one, from the DCC recursion, read before the row is learned | while withheld, before the correlation's start is fitted, and while a learned start's rows do not identify its recursion (`not_identified`) |
 | `loglik` | `f64` | the Gaussian log-density of the row's standardized residuals under that correlation | while withheld, before the correlation's start is fitted, and where any target is |
 | `weight_sum` | `f64` | accumulated weight before the model learns this row, and before its own decay ([shared field](#fields-most-models-write)) | never |
 | `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
 | `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
 | `coef` | `list[f64]` | the numbers behind the fit as one list ([shared field](#fields-most-models-write)) | on every row but those `coef_every` or `max_rows_between_coefs` fills (by default, each group's last row not skipped in each chunk), and before the model has anything to report |
+
+Under `margins="garch"`, it also writes:
+
+| field | dtype | what it holds | also null |
+|---|---|---|---|
+| `variance_y` | `f64` | the variance of `<t>` on this row given the rows before it, read before the row is learned | while withheld, and before the target's start is fitted |
+| `variance_x0` | `f64` | the variance of `<t>` on this row given the rows before it, read before the row is learned | while withheld, and before the target's start is fitted |
 
 ## `kmeans`
 

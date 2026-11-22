@@ -75,6 +75,23 @@ fn adcc_stream(
     out
 }
 
+/// Each series of `z` scaled by its own GARCH(1,1) at `(0.05, 0.08, 0.9)`:
+/// returns whose margins have a variance process to identify.
+fn garch_returns(z: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    let k = z[0].len();
+    let mut v = vec![1.0; k];
+    let mut e = vec![0.0_f64; k];
+    z.iter()
+        .map(|zt| {
+            for i in 0..k {
+                v[i] = 0.05 + 0.08 * e[i] * e[i] + 0.9 * v[i];
+                e[i] = v[i].sqrt() * zt[i];
+            }
+            e.clone()
+        })
+        .collect()
+}
+
 fn cfg(k: usize, asymmetric: bool, params: Option<Vec<f64>>) -> DccCfg {
     DccCfg {
         n_targets: k,
@@ -234,7 +251,7 @@ fn the_start_fit_maximizes_the_likelihood() {
             nbar: &nbar,
         };
         let got = crate::scratch::with_borrow_mut(&WORK, |wk| fit::fit(&r, p, dlt, wk)).unwrap();
-        assert!(got.sound, "{got:?}");
+        assert!(got.sound() && got.identified(), "{got:?}");
         let lik = |th: &[f64]| -> f64 {
             let mut q = qbar.clone();
             let mut s = 0.0;
@@ -350,32 +367,149 @@ fn adcc_at_g_zero_is_dcc() {
     }
 }
 
-/// The start fires on its row, not one before; `start_rows` at its least
-/// and one under; `min_weight` either side.
+/// The start fires on its row, not one before, at any `start_rows` from 1
+/// (0 refused): with the parameters given there is nothing to identify. The
+/// floor `min_weight` either side.
 #[test]
 fn the_start_and_the_floor_hold_at_their_edges() {
     let rows = adcc_stream(2, 200, [0.04, 0.92, 0.0], 0.4, None, 4);
+    // one row's `Q̄` is singular for two series: the start waits for two,
+    // the condition and not a floor
+    for (start, first) in [(1, 2), (2, 2), (37, 37)] {
+        let mut c = cfg(2, false, Some(vec![0.05, 0.9]));
+        c.start_rows = start;
+        let mut m = Dcc::new(c.clone()).unwrap();
+        let out = run(&mut m, &rows);
+        assert!(out[first - 1][0].is_nan(), "{start}");
+        assert!(out[first][0].is_finite(), "{start}");
+    }
     let mut c = cfg(2, false, None);
-    c.start_rows = DCC_MIN_START_ROWS;
-    let mut m = Dcc::new(c.clone()).unwrap();
-    let out = run(&mut m, &rows);
-    assert!(out[DCC_MIN_START_ROWS - 1][0].is_nan());
-    assert!(out[DCC_MIN_START_ROWS][0].is_finite());
-    c.start_rows = DCC_MIN_START_ROWS - 1;
+    c.start_rows = 0;
     assert!(
         c.validate()
             .unwrap_err()
-            .contains("start_rows must be at least 50")
+            .contains("start_rows must be at least 1")
     );
+    c.start_rows = 1;
+    assert!(c.validate().is_ok());
     // min_weight: the row whose weight before it is the floor reports, the
     // one before it does not
-    let mut c = cfg(2, false, None);
+    let mut c = cfg(2, false, Some(vec![0.05, 0.9]));
     c.start_rows = 50;
     c.min_weight = 60.0;
     let mut m = Dcc::new(c).unwrap();
     let out = run(&mut m, &rows);
     assert!(out[59].iter().all(|v| v.is_nan()));
     assert!(out[60][0].is_finite());
+}
+
+/// Identification, the condition and not a count of rows: on a realistic
+/// stream the start's likelihood-ratio statistic is far past its cut and
+/// the fit is stepped from at the start's row; on a stream of constant
+/// correlation (no dynamics to find, a realistic null) the fit is withheld,
+/// the start waits for twice its rows twice and then buffers afresh, and
+/// nothing is reported, for DCC and ADCC alike.
+#[test]
+fn a_start_reports_only_a_recursion_its_rows_identify() {
+    for asym in [false, true] {
+        let rows = adcc_stream(
+            3,
+            2000,
+            [0.04, 0.92, if asym { 0.04 } else { 0.0 }],
+            0.5,
+            None,
+            31,
+        );
+        let mut m = Dcc::new(cfg(3, asym, None)).unwrap();
+        let out = run(&mut m, &rows);
+        assert!(out[DCC_START_ROWS - 1][0].is_nan() && out[DCC_START_ROWS][0].is_finite());
+        assert!(
+            m.start_lr() > fit::lr_cut(m.cfg().n_params()),
+            "{}",
+            m.start_lr()
+        );
+        assert!(m.start_sound() && !m.no_effect());
+        // the null: every target correlation 0.5, held
+        for seed in [1u64, 2, 3] {
+            let null = adcc_stream(3, 4000, [0.0, 0.0, 0.0], 0.5, None, seed);
+            let mut c = cfg(3, asym, None);
+            c.start_rows = 300;
+            let mut m = Dcc::new(c).unwrap();
+            let mut waits = 0;
+            for (t, z) in null.iter().enumerate() {
+                let out = m.step(&[], &ys(z), 1.0, 1.0);
+                assert!(out.pred[0].is_nan(), "{asym} {seed} {t}");
+                waits += usize::from(m.no_effect());
+            }
+            assert!(!m.started() && m.no_effect() && m.coefficients()[0].is_nan());
+            assert!(
+                m.start_lr() < fit::lr_cut(m.cfg().n_params()),
+                "{}",
+                m.start_lr()
+            );
+            // tried at 300, 600 and 1,200 rows, then afresh: three rounds
+            // of 1,200 rows in 4,000
+            assert_eq!(m.restarts(), 3, "{asym} {seed}");
+            assert!(waits > 3000);
+        }
+    }
+}
+
+/// Both sides of each cut: the likelihood-ratio statistic at its cut
+/// identifies and a hair under it does not, for two and three parameters;
+/// the projected step's gain at `10⁻⁶` nats is sound and a hair over it is
+/// not; a statistic that is not a number identifies nothing, and an
+/// information that is not definite neither.
+#[test]
+fn each_cut_holds_on_both_sides() {
+    for (p, cut) in [(2, fit::LR_CUT_2), (3, fit::LR_CUT_3)] {
+        let at = |lr: f64, gain: f64, definite: bool| fit::Fit {
+            theta: vec![0.05; p],
+            gain,
+            lr,
+            definite,
+            iterations: 1,
+        };
+        assert!(at(cut, 0.0, true).identified());
+        assert!(!at(cut.next_down(), 0.0, true).identified());
+        assert!(!at(f64::NAN, 0.0, true).identified());
+        assert!(!at(cut * 2.0, 0.0, false).identified());
+        assert!(at(cut, fit::SOUND_GAIN, true).sound());
+        assert!(!at(cut, fit::SOUND_GAIN.next_up(), true).sound());
+    }
+    // the cuts are χ² at 0.999 of 2 and 3 degrees of freedom: the survival
+    // function there, 1 − P(χ² ≤ x), by the closed forms e^{−x/2} and
+    // erfc(√(x/2)) + √(2x/π) e^{−x/2}
+    assert!((((-fit::LR_CUT_2) / 2.0).exp() - 1e-3).abs() < 1e-15);
+    let x = fit::LR_CUT_3;
+    let sf3 =
+        libm::erfc((x / 2.0).sqrt()) + (2.0 * x / std::f64::consts::PI).sqrt() * (-x / 2.0).exp();
+    assert!((sf3 - 1e-3).abs() < 1e-12, "{sf3}");
+}
+
+/// The projected step's gain: 0 at an interior maximum and at a maximum on
+/// a face of the set, where the unconstrained step leaves the set; the
+/// quadratic's own gain `½ gᵀG⁻¹g` away from it.
+#[test]
+fn the_projected_gain_is_zero_at_an_optimum_inside_or_on_a_face() {
+    let h = [2.0, 0.3, 0.3, 1.0];
+    let c = [1.0, 1.0];
+    // the quadratic −½ (θ − m)ᵀ H (θ − m): gradient H (m − θ)
+    let grad = |th: [f64; 2], m: [f64; 2]| {
+        let d = [m[0] - th[0], m[1] - th[1]];
+        [h[0] * d[0] + h[1] * d[1], h[2] * d[0] + h[3] * d[1]]
+    };
+    let inside = [0.05, 0.9];
+    assert!(fit::projected_gain(&inside, &grad(inside, inside), &h, &c) < 1e-15);
+    // a maximum past a + b = cap: its nearest point in H's metric on the face
+    let m = [0.3, 0.9];
+    let face = region::project(&m, &h, &c, PERSISTENCE_CAP);
+    assert!(fit::projected_gain(&face, &grad([face[0], face[1]], m), &h, &c) < 1e-12);
+    // off the optimum, inside: ½ gᵀH⁻¹g
+    let th = [0.05, 0.85];
+    let g = grad(th, inside);
+    let want = 0.5 * oracle::quad_form(&h, &g);
+    assert!((fit::projected_gain(&th, &g, &h, &c) - want).abs() < 1e-15);
 }
 
 /// The state's bytes are the docs' formula, the call refuses past the cap
@@ -505,8 +639,14 @@ fn the_margins_are_the_garch_models() {
             rho_from = Some(t);
         }
     }
-    // the correlation from the margins' start and the stage's
-    assert_eq!(rho_from, Some(1000 + DCC_START_ROWS));
+    // the correlation from the margins' start and the stage's, which may
+    // have waited for twice its rows
+    let from = rho_from.unwrap();
+    assert!(
+        [1, 2, 4].contains(&((from - 1000) / DCC_START_ROWS))
+            && (from - 1000) % DCC_START_ROWS == 0,
+        "{from}"
+    );
     assert!((m.coefficients()[1] - 0.92).abs() < 0.1);
 }
 
@@ -536,8 +676,11 @@ fn a_margin_with_no_fourth_moment_is_said_once() {
     c.margins = Some(gcfg.clone());
     let mut m = Dcc::new(c).unwrap();
     let mut said = 0;
-    for _ in 0..2300 {
-        let r: Vec<f64> = (0..k).map(|_| t3(&mut s)).collect();
+    // t(3) innovations under GARCH(1,1) margins, a variance process to find
+    let z: Vec<Vec<f64>> = (0..2300)
+        .map(|_| (0..k).map(|_| t3(&mut s)).collect())
+        .collect();
+    for r in garch_returns(&z) {
         m.step(&[], &ys(&r), 1.0, 1.0);
         if let Some((_, nu)) = m.take_heavy_tail() {
             assert!(nu <= 4.0);
@@ -550,13 +693,17 @@ fn a_margin_with_no_fourth_moment_is_said_once() {
     let mut c = cfg(k, false, None);
     c.margins = Some(gcfg);
     let mut m = Dcc::new(c).unwrap();
-    for _ in 0..2300 {
-        let r: Vec<f64> = (0..k)
-            .map(|_| {
-                let chi: f64 = (0..10).map(|_| normal(&mut s).powi(2)).sum();
-                normal(&mut s) / (chi / 10.0).sqrt()
-            })
-            .collect();
+    let z: Vec<Vec<f64>> = (0..2300)
+        .map(|_| {
+            (0..k)
+                .map(|_| {
+                    let chi: f64 = (0..10).map(|_| normal(&mut s).powi(2)).sum();
+                    normal(&mut s) / (chi / 10.0).sqrt() * (0.8f64).sqrt()
+                })
+                .collect()
+        })
+        .collect();
+    for r in garch_returns(&z) {
         m.step(&[], &ys(&r), 1.0, 1.0);
         assert!(m.take_heavy_tail().is_none());
     }
@@ -629,7 +776,8 @@ fn a_decay_tracks_a_moving_correlation() {
 #[test]
 fn a_start_on_the_clock_closes_at_its_span_and_holds_the_cap() {
     let rows = adcc_stream(2, 400, [0.04, 0.92, 0.0], 0.4, None, 2);
-    let mut c = cfg(2, false, None);
+    // given parameters: the span alone decides where the start closes
+    let mut c = cfg(2, false, Some(vec![0.05, 0.9]));
     c.start_span = Some(99.5);
     let mut m = Dcc::new(c.clone()).unwrap();
     let mut opened = None;
@@ -682,24 +830,33 @@ fn a_weights_scale_changes_only_the_weight() {
     }
 }
 
-/// A buffer whose target is not positive definite (one series constant)
-/// is dropped and the start begins again; nothing is reported, no NaN is
-/// left in the state.
+/// A buffer whose target is not positive definite (two series the same)
+/// identifies no correlation: it is withheld, waits for twice its rows
+/// twice, then buffers afresh; nothing is reported, no NaN is left in the
+/// state. The given parameters wait on it too.
 #[test]
 fn a_degenerate_start_begins_again() {
-    let mut m = Dcc::new({
-        let mut c = cfg(2, false, None);
-        c.start_rows = 50;
-        c
-    })
-    .unwrap();
-    for t in 0..120 {
-        let v = if t % 2 == 0 { 1.0 } else { -1.0 };
-        let out = m.step(&[], &[Some(v), Some(v)], 1.0, 1.0);
-        assert!(out.pred[0].is_nan());
+    for params in [None, Some(vec![0.05, 0.9])] {
+        let mut m = Dcc::new({
+            let mut c = cfg(2, false, params);
+            c.start_rows = 50;
+            c
+        })
+        .unwrap();
+        for t in 0..400 {
+            let v = if t % 2 == 0 { 1.0 } else { -1.0 };
+            let out = m.step(&[], &[Some(v), Some(v)], 1.0, 1.0);
+            assert!(out.pred[0].is_nan());
+            if t >= 49 {
+                assert!(m.no_effect() && !m.starting(), "{t}");
+            }
+        }
+        // tried at 50, 100 and 200 rows, then afresh, and again: 350 rows
+        // a round
+        assert_eq!(m.restarts(), 2);
+        assert!(!m.started());
+        assert!(m.stage.qbar.iter().all(|v| v.is_finite()));
     }
-    assert_eq!(m.restarts(), 2);
-    assert!(!m.started());
 }
 
 /// With GARCH margins, `predict_with` is the step without the step, to the
@@ -707,20 +864,20 @@ fn a_degenerate_start_begins_again() {
 /// with no residuals the same but for the log-density.
 #[test]
 fn with_margins_predict_is_the_step() {
-    let rows = adcc_stream(2, 1400, [0.04, 0.92, 0.0], 0.5, None, 29);
+    let rows = garch_returns(&adcc_stream(2, 3000, [0.04, 0.92, 0.0], 0.5, None, 29));
     let mut c = cfg(2, false, None);
-    c.start_rows = 60;
+    c.start_rows = 200;
     c.margins = Some(GarchCfg {
         n_targets: 2,
         vol: GarchVol::Gjr,
         dist: GarchDist::T,
         truncation: None,
         variance_targeting: false,
-        start_rows: 200,
+        start_rows: 1000,
         start_span: None,
         horizon: 1,
         min_weight: 0.0,
-        max_state_bytes: Some(20_000),
+        max_state_bytes: None,
     });
     let mut m = Dcc::new(c).unwrap();
     let mut ready = 0;
@@ -728,7 +885,7 @@ fn with_margins_predict_is_the_step() {
         let y: Vec<Option<f64>> = z
             .iter()
             .enumerate()
-            .map(|(j, v)| (!(t % 13 == 5 && j == 1)).then_some(v * (1.0 + 0.3 * (t % 7) as f64)))
+            .map(|(j, v)| (!(t % 13 == 5 && j == 1)).then_some(*v))
             .collect();
         let w = if t % 17 == 3 { 0.0 } else { 1.0 };
         let p = m.predict_with(&[], &y, 1.0);

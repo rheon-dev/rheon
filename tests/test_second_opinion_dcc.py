@@ -231,11 +231,13 @@ SEEDS = range(50)
 #: and the per-seed bounds: the largest gap in SE, the worst pair's median
 #: correlation gap and the persistence gap, each the measurement's with
 #: headroom.
-#: Measured (2026-11-22, 50 seeds a form): within 2 SE 50 of 50 on every
-#: form; the largest gap 0.79, 0.74, 0.99, 0.75 SE under normal innovations
-#: and 1.88, 0.82 under t(5); the correlation gap at most 0.0104 and
-#: 0.0180; the persistence gap at most 0.0096 and 0.0206. The floors are
-#: four seeds under, the per-seed bounds about 1.5 times the worst.
+#: Measured (2026-11-22, 50 seeds a form, the start held to its
+#: likelihood-ratio test and the projected step's gain): within 2 SE 50 of
+#: 50 on every form; the largest gap 0.73, 0.74, 1.17, 0.91 SE under normal
+#: innovations and 1.95, 0.82 under t(5); the correlation gap at most 0.0097
+#: and 0.0169; the persistence gap at most 0.0078 and 0.0206. The floors
+#: are four seeds under, the per-seed bounds unchanged from the first
+#: build's grid (worst 0.99, 1.88), about 1.3 to 1.5 times the worst.
 NORMAL = (46, 1.5, 0.02, 0.015)
 HEAVY = (46, 3.0, 0.03, 0.03)
 BOUNDS: dict[str, tuple[int, float, float, float]] = {
@@ -319,8 +321,8 @@ def test_through_garch_margins_against_the_two_step_batch_fit(form):
     online margins' out-of-sample variances against ``arch``'s in-sample
     ones, and their 2,000-row start, which the correlation's own start
     follows. Measured on ten seeds a form (2026-11-22): the largest gap
-    1.20 and 1.14 of the oracle's standard errors, the worst pair's median
-    correlation gap at most 0.0118 and 0.0097. Held: 2.5 SE and 0.025 on
+    1.20 and 1.11 of the oracle's standard errors, the worst pair's median
+    correlation gap at most 0.0118 and 0.0102. Held: 2.5 SE and 0.025 on
     every seed."""
     for seed in range(10):
         c = compare_with_margins(form, seed)

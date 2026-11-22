@@ -466,17 +466,20 @@ impl AnyModel {
     /// buffers for a target; [`OwnWait::NotIdentified`] while a fit is
     /// withheld because its rows do not identify the model -- `garch`'s
     /// start, whose likelihood did not tell the variance process from a
-    /// constant variance, so it buffers more rows. One dispatch a row
-    /// answers both.
+    /// constant variance, and `dcc`'s, whose did not tell the correlation's
+    /// recursion from constant correlation, so they buffer more rows. One
+    /// dispatch a row answers both.
     pub fn own_wait(&self) -> OwnWait {
         let seeding = match self {
             AnyModel::KMeans(m) => !m.seeded(),
             AnyModel::Hmm(m) => !m.seeded(),
             AnyModel::Bocpd(m) => m.warming(),
-            AnyModel::Dcc(m) => !m.started(),
             AnyModel::Kalman(m) => m.sizing(),
             AnyModel::Garch(m) if m.starting() => true,
             AnyModel::Garch(m) if m.no_effect() => return OwnWait::NotIdentified,
+            // `dcc`'s starts, its margins' and its own, the same two ways.
+            AnyModel::Dcc(m) if m.starting() => true,
+            AnyModel::Dcc(m) if m.no_effect() => return OwnWait::NotIdentified,
             _ => false,
         };
         if seeding {

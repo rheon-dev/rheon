@@ -57,17 +57,32 @@
 //! information forget at the same rate.
 //!
 //! **The start.** The stage's first `start_rows` learned rows (500 by
-//! default; at least 50), or the rows of its first `start_span` of the
-//! clock (at least 50, up to and including the first at or past the span),
-//! are buffered and report no correlation; the targets are their weighted
-//! means, the parameters the batch quasi-likelihood's maximum over them
-//! with `Q_1 = Q̄` (projected Fisher scoring from a grid, `dcc::fit`), and
-//! the buffer is replayed at the fit to build `H` and the recursion. With
-//! `params` given, the start only forms the targets. A buffer whose `Q̄` is
-//! not positive definite (a series constant over it, or two the same) is
-//! dropped and the start begins again. The GARCH margins buffer their own
-//! start first (2,000 rows by default), so with margins the correlation
-//! reports from the margins' start plus the stage's.
+//! default), or the rows of its first `start_span` of the clock (up to and
+//! including the first at or past the span), are buffered and report no
+//! correlation; the targets are their weighted means, the parameters the
+//! batch quasi-likelihood's maximum over them with `Q_1 = Q̄` (projected
+//! Fisher scoring from a grid, run to its rounding, `dcc::fit`), and the
+//! buffer is replayed at the fit to build `H` and the recursion. With
+//! `params` given, the start only forms the targets.
+//!
+//! **A start reports only a recursion its rows identify**, judged by the
+//! condition, not by a count of rows. Its fit is withheld unless the
+//! likelihood-ratio statistic against constant correlation (`a = b = 0`,
+//! and `g = 0`), at Kish's count of the weights, reaches χ² at 0.999 for
+//! those restrictions -- 13.8 for DCC's two, 16.3 for ADCC's three -- and
+//! the information there is positive definite; a buffer whose `Q̄` is not
+//! positive definite (a series constant over it, or two the same) is
+//! withheld too. A fit that passes but is not at its optimum, the gain its
+//! projected Newton step predicts over `10⁻⁶` nats, is not stepped from
+//! either. Either waits for twice the rows (or the span) and fits again,
+//! at most [`DCC_MAX_REFITS`] times while the cap holds the doubled
+//! buffer; then a withheld start buffers afresh, and one short of its
+//! optimum is stepped from. How the iteration stopped decides nothing.
+//! While a fit is withheld the bank names the wait `not_identified`
+//! ([`Dcc::no_effect`]). The GARCH margins buffer their own start first
+//! (2,000 rows by default, held to their own test of a variance process),
+//! so with margins the correlation reports from the margins' start plus
+//! the stage's.
 //!
 //! **What a row reports**, before it is learned: with margins, each
 //! series' variance; the correlation `R_t` of each pair `i < j`; and the
@@ -115,8 +130,10 @@ use rows::{WORK, advance, quad, read, score_info};
 /// The correlation stage's start in rows, where a spec gives neither rows
 /// nor a span.
 pub const DCC_START_ROWS: usize = 500;
-/// The fewest rows the correlation stage's start holds.
-pub const DCC_MIN_START_ROWS: usize = 50;
+/// How many times a start that did not identify its recursion, or stopped
+/// short of its optimum, waits for twice its rows (or its span) and fits
+/// again before it buffers afresh, or steps from the fit it has.
+pub const DCC_MAX_REFITS: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DccCfg {
@@ -277,13 +294,11 @@ impl DccCfg {
         if let Err(e) = self.decay.check() {
             return Err(format!("dcc: {e}"));
         }
-        if self.start_span.is_none() && self.start_rows < DCC_MIN_START_ROWS {
+        if self.start_span.is_none() && self.start_rows == 0 {
             return Err(format!(
-                "dcc: start_rows must be at least {DCC_MIN_START_ROWS}, but it is {}. The start \
-                 forms the targets and fits the parameters on these rows, and on fewer they are \
-                 mostly noise. Set start_rows to {DCC_MIN_START_ROWS} or more; {DCC_START_ROWS} \
-                 is the default.",
-                self.start_rows
+                "dcc: start_rows must be at least 1, but it is 0. The start forms the targets \
+                 and fits the parameters on these rows. Set start_rows to 1 or more; \
+                 {DCC_START_ROWS} is the default."
             ));
         }
         if let Some(span) = self.start_span
@@ -350,10 +365,22 @@ struct Stage {
     /// row before.
     buffer: Vec<f64>,
     first: Option<Stamp>,
-    /// The start's fit converged, or stopped at an optimum on a face.
+    /// The start's fit was at its optimum by the projected step's gain.
     sound: bool,
-    /// Starts dropped for a `Q̄` that was not positive definite.
+    /// Starts dropped for a `Q̄` that was not positive definite, or a fit
+    /// its rows did not identify, after every refit.
     restarts: u32,
+    /// The waits for twice the rows the current start has made.
+    #[serde(default)]
+    refits: u32,
+    /// The last start fitted did not tell its recursion from constant
+    /// correlation: the fit is withheld, and the start waits.
+    #[serde(default)]
+    withheld: bool,
+    /// The last start's likelihood-ratio statistic against constant
+    /// correlation, at Kish's count; not a number before one.
+    #[serde(default = "nan", with = "crate::humanfloat::f64_or_tag")]
+    lr: f64,
     /// Rows whose `Q` did not give a correlation, after which it restarted
     /// from the target.
     repairs: u64,
@@ -382,6 +409,9 @@ impl Stage {
             first: None,
             sound: false,
             restarts: 0,
+            refits: 0,
+            withheld: false,
+            lr: f64::NAN,
             repairs: 0,
         }
     }
@@ -402,6 +432,10 @@ impl Stage {
     fn rows(&self, cfg: &DccCfg) -> usize {
         self.buffer.len() / (cfg.n_targets + 2)
     }
+}
+
+fn nan() -> f64 {
+    f64::NAN
 }
 
 thread_local! {
@@ -469,15 +503,39 @@ impl Dcc {
         self.stage.started
     }
 
-    /// Whether the start's fit converged, or stopped at an optimum on a
-    /// face of the set (false before it, and with given parameters).
+    /// Whether the start's fit was at its optimum, by the gain its
+    /// projected Newton step predicts (false before it, and with given
+    /// parameters).
     pub fn start_sound(&self) -> bool {
         self.stage.sound
     }
 
-    /// The starts dropped for a target that was not positive definite.
+    /// The starts dropped, after every refit, for a target that was not
+    /// positive definite or a fit its rows did not identify.
     pub fn restarts(&self) -> u32 {
         self.stage.restarts
+    }
+
+    /// The last start's likelihood-ratio statistic against constant
+    /// correlation, at Kish's count (not a number before one, and with
+    /// given parameters).
+    pub fn start_lr(&self) -> f64 {
+        self.stage.lr
+    }
+
+    /// Whether the model holds rows for a start, its own or its margins',
+    /// and is not waiting on [`Self::no_effect`].
+    pub fn starting(&self) -> bool {
+        !self.stage.started && !self.no_effect()
+    }
+
+    /// Whether a fit is withheld because its rows did not identify it: the
+    /// correlation's start did not tell its recursion from constant
+    /// correlation, or a margin's did not tell its variance from a constant
+    /// one; it buffers more rows.
+    pub fn no_effect(&self) -> bool {
+        !self.stage.started
+            && (self.stage.withheld || self.margins.as_ref().is_some_and(Garch::no_effect))
     }
 
     /// Rows whose `Q` gave no correlation, after which it restarted from
@@ -663,11 +721,14 @@ impl Dcc {
         self.stage.buffer.push(w);
         self.stage.buffer.push(fr);
         let rows = self.stage.rows(&self.cfg);
+        // A refit waits for twice the rows, or twice the span, of the try
+        // before.
+        let times = 1usize << self.stage.refits;
         let due = match (self.cfg.start_span, now) {
             (Some(span), Some(now)) => {
-                start_due(&mut self.stage.first, now, span, rows, DCC_MIN_START_ROWS)
+                start_due(&mut self.stage.first, now, span * times as f64, rows, 1)
             }
-            _ => rows >= self.cfg.start_rows,
+            _ => rows >= self.cfg.start_rows * times,
         };
         if due {
             self.start();
@@ -679,8 +740,7 @@ impl Dcc {
         let (k, p) = (self.cfg.n_targets, self.cfg.n_params());
         let kk = k * k;
         let stride = k + 2;
-        let buf = std::mem::take(&mut self.stage.buffer);
-        self.stage.first = None;
+        let buf = self.stage.buffer.clone();
         let n = buf.len() / stride;
         let z: Vec<f64> = (0..n)
             .flat_map(|t| buf[t * stride..t * stride + k].iter().copied())
@@ -707,17 +767,15 @@ impl Dcc {
         }
         let mut chol = vec![0.0; kk];
         if !(big_w > 0.0 && mat::cholesky(&qbar, k, &mut chol)) {
-            self.stage.restarts += 1;
-            return;
+            // a series constant over the rows, or two the same: no
+            // correlation to identify yet
+            return self.wait(true);
         }
         let mut work = Vec::new();
         let dlt = if self.cfg.asymmetric {
             match delta(&qbar, &nbar, k, &mut work) {
                 Some(d) => d,
-                None => {
-                    self.stage.restarts += 1;
-                    return;
-                }
+                None => return self.wait(true),
             }
         } else {
             0.0
@@ -735,10 +793,16 @@ impl Dcc {
                 };
                 let got = crate::scratch::with_borrow_mut(&WORK, |w| fit::fit(&rows, p, dlt, w));
                 let Some(got) = got else {
-                    self.stage.restarts += 1;
-                    return;
+                    return self.wait(true);
                 };
-                self.stage.sound = got.sound;
+                self.stage.lr = got.lr;
+                if !got.identified() {
+                    return self.wait(true);
+                }
+                if !got.sound() && self.may_double() {
+                    return self.wait(false);
+                }
+                self.stage.sound = got.sound();
                 got.theta
             }
         };
@@ -765,6 +829,10 @@ impl Dcc {
             *v /= big_w;
         }
         let s = &mut self.stage;
+        s.buffer = Vec::new();
+        s.first = None;
+        s.refits = 0;
+        s.withheld = false;
         s.theta = theta;
         s.qbar = qbar;
         s.nbar = nbar;
@@ -775,6 +843,30 @@ impl Dcc {
         }
         s.w = big_w;
         s.started = true;
+    }
+
+    /// Whether a start may wait for twice its rows: refits left, and the
+    /// cap holding the doubled buffer.
+    fn may_double(&self) -> bool {
+        self.stage.refits < DCC_MAX_REFITS
+            && self.bytes() + 8 * self.stage.buffer.len() as u64 <= self.cfg.cap()
+    }
+
+    /// A start that is not stepped from: it waits for twice its rows while
+    /// it may, and otherwise buffers afresh. `withheld` where its rows did
+    /// not identify the recursion.
+    fn wait(&mut self, withheld: bool) {
+        let s = &mut self.stage;
+        s.withheld |= withheld;
+        if self.may_double() {
+            self.stage.refits += 1;
+        } else {
+            let s = &mut self.stage;
+            s.restarts += 1;
+            s.refits = 0;
+            s.buffer.clear();
+            s.first = None;
+        }
     }
 
     /// One learned row after the start (the module docs' step).

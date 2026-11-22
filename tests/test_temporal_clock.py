@@ -543,7 +543,7 @@ class TestEveryClockParameterTakesADuration:
         "window_size": ("30m", {}),
         "kernel_half_lives": (["20s", "10m"], {}),
         "start_span": ("30m", {"start_rows": None}),
-        "margin_start_span": ("30m", {"margin_start_rows": None}),
+        "margin_start_span": ("30m", {"margin_start_rows": None, "margins": "garch"}),
         "refit_span": ("30m", {"refit_rows": None}),
         "warm_span": ("30m", {"warm_rows": None}),
         "hazard": ("40m", {}),

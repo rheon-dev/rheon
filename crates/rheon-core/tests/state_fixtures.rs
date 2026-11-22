@@ -1466,7 +1466,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 128] = [
+    const FORMS: [(&str, &[&str]); 130] = [
         // Schema 70 (rule 5's twenty-second exception): the stabilized
         // prior's `ŝ` and `V` under `full` in each form and under `diag`,
         // the factor form's `f`, and a spec's own `prior_rows`.
@@ -1651,6 +1651,8 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         ("dcc_started", &["model", "Dcc", "stage", "dq"]),
         ("dcc_started", &["model", "Dcc", "stage", "h"]),
         ("dcc_started", &["model", "Dcc", "stage", "theta"]),
+        ("dcc_started", &["model", "Dcc", "stage", "lr"]),
+        ("dcc_withheld", &["model", "Dcc", "stage", "buffer"]),
         ("dcc_given", &["model", "Dcc", "cfg", "params"]),
         ("dcc_margins", &["model", "Dcc", "margins", "series"]),
         ("dcc_margins", &["model", "Dcc", "stage", "buffer"]),
@@ -1769,6 +1771,22 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
     let first = at(&v, &["model", "Dcc", "stage", "first"]).expect("a first stamp");
     assert!(!first.is_nil(), "dcc_span: no first stamp");
+    // dcc's withheld start: the flag set and a refit counted (a bool and an
+    // integer, which `held` does not count); its statistic is 0 where the
+    // fit sits at a = 0, so present rather than held.
+    let f = frozen::ALL
+        .iter()
+        .find(|f| f.name == "dcc_withheld")
+        .expect("dcc_withheld");
+    let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+    let stage = |key: &str| at(&v, &["model", "Dcc", "stage", key]).cloned();
+    assert_eq!(stage("withheld"), Some(rmpv::Value::Boolean(true)));
+    assert!(
+        stage("refits")
+            .and_then(|r| r.as_u64())
+            .is_some_and(|r| r >= 1)
+    );
+    assert!(stage("lr").is_some_and(|l| l.as_f64().is_some_and(f64::is_finite)));
     for (name, path) in FORMS {
         let f = frozen::ALL
             .iter()

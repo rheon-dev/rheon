@@ -1573,7 +1573,7 @@ variance_x0 = { budget = 8.125 }
 variance_y = { budget = 8.125 }
 variance_z = { budget = 8.125 }
 weight_sum = { budget = 8.0 }
-withheld_reason = { budget = 1.125 }
+withheld_reason = { budget = 1.0 }
 
 # --- raises and sign-offs -------------------------------------------------------
 [[raised]]

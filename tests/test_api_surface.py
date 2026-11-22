@@ -421,7 +421,16 @@ RESOLVED_VARIANTS: list[tuple[str, dict[str, object]]] = [
         "dcc",
         {"margins": "none", "margin_start_rows": None, "start_rows": None, "start_span": 500.0},
     ),
-    ("dcc", {"vol": "gjr", "dist": "t", "margin_start_rows": None, "margin_start_span": 900.0}),
+    (
+        "dcc",
+        {
+            "margins": "garch",
+            "vol": "gjr",
+            "dist": "t",
+            "margin_start_rows": None,
+            "margin_start_span": 900.0,
+        },
+    ),
 ]
 
 
@@ -719,8 +728,15 @@ ENUM_PROBES: list[
         {"none": {"margin_start_rows": None}},
     ),
     # FIGARCH's margins need a start of 2,000 rows.
-    ("dcc.vol", "dcc", {}, "model.vol", "word", {"figarch": {"margin_start_rows": 2000}}),
-    ("dcc.dist", "dcc", {}, "model.dist", "word"),
+    (
+        "dcc.vol",
+        "dcc",
+        {"margins": "garch"},
+        "model.vol",
+        "word",
+        {"figarch": {"margin_start_rows": 2000}},
+    ),
+    ("dcc.dist", "dcc", {"margins": "garch"}, "model.dist", "word"),
     ("marginal.closed", "marginal", {"window_size": 100.0}, "model.closed", "word"),
     ("ew_class.covariance_type", "ew_class", {}, "model.covariance_type", "word"),
     ("ew_class.window_budget", "ew_class", {"window_size": 100.0}, "model.window_budget", "key"),

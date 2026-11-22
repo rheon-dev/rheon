@@ -1324,8 +1324,13 @@ fn a_dcc_past_its_state_cap_or_its_forms_is_refused() {
         &["Leave one of them out"],
     );
     refused(
-        &spec(r#"{"type": "dcc", "start_rows": 49}"#, 2),
-        &["start_rows must be at least 50"],
+        &spec(r#"{"type": "dcc", "start_rows": 0}"#, 2),
+        &["start_rows must be at least 1"],
+    );
+    accepted(&spec(r#"{"type": "dcc", "start_rows": 1}"#, 2));
+    refused(
+        &spec(r#"{"type": "dcc", "start_rows": 0}"#, 3),
+        &["start_rows must be at least 1"],
     );
     refused(&spec(r#"{"type": "dcc"}"#, 1), &["at least two targets"]);
     refused(

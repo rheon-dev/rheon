@@ -633,8 +633,8 @@ largest buffer at the smaller.
 | `garch.targets` | targets T, one series each | 1 → 8 | O(n) | O(n) | each target steps its own series and keeps its own parameters, information matrix and lags | 8.10 · 8.39 · 6.33 · 2.51 |
 | `garch.truncation` | FIGARCH's lags M | 100 → 800 | O(n) | O(n) | a row is one pass of the M weights, their derivatives and the ring; the ring holds M squared returns | 3.18 · 0.97 · 6.35 · 3.30 |
 | `garch.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | the parameters, the information matrix and the lags only; the start's buffer is gone | 1.01 · 1.00 · 1.00 · 1.00 |
-| `dcc.series` | series k, the asymmetric model learned | 2 → 16 | O(n^3) | O(n^2) | a row factors and inverts R and forms R⁻¹ ∂R for each of its three parameters, k³; the state holds Q, its two targets and three sensitivities, k² each | 63.84 · 1.00 · 33.97 · 7.12 |
-| `dcc.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | the targets, Q, its sensitivities and the information only; the start's buffer is gone | 1.10 · 1.00 · 1.00 · 1.00 |
+| `dcc.series` | series k, the asymmetric model learned | 2 → 16 | O(n^3) | O(n^2) | a row factors and inverts R and forms R⁻¹ ∂R for each of its three parameters, k³; the state holds Q, its two targets and three sensitivities, k² each | 66.00 · 1.00 · 32.89 · 7.08 |
+| `dcc.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | the targets, Q, its sensitivities and the information only; the start's buffer is gone | 0.99 · 1.00 · 1.00 · 1.00 |
 | `bank.groups_seen` (CI) | groups seen G (a block over 50 of them) | 250 → 2,000 | O(1) | O(n) | a row touches its group's state alone; a state a group | 1.03 · 1.00 · 7.99 · 7.14 |
 | `bank.groups_seen_per_call` (CI) | groups seen G, calls of four rows to one group each | 1,000 → 8,000 | O(1) | O(n) | a call finds each of its groups' state by key and takes only their notices; a state a group | 1.00 · 1.00 · 7.98 · 7.33 |
 | `bank.specs` (CI) | specs S, one set of columns | 1 → 8 | O(n) | O(n) | each spec steps its model, S | 8.28 · 7.67 · 7.80 · 7.23 |

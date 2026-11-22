@@ -1905,8 +1905,8 @@ fn every_model_refuses_at_restore_a_configuration_its_new_refuses() {
         refused(
             Dcc::new(dcc_cfg()).unwrap(),
             "start_rows",
-            10.into(),
-            "start_rows must be at least 50",
+            0.into(),
+            "start_rows must be at least 1",
         ),
     ];
     // Every model's `restore`: the twenty-one kinds, `robust` under both
@@ -4997,15 +4997,17 @@ fn garch_predict_is_the_step() {
     );
 }
 
-/// Two series, the asymmetric model estimated after a start of 50 rows,
-/// decayed at the contract's half-life, the targets taken as standardized
-/// residuals (no margins).
+/// Two series, the asymmetric model with its parameters given after a start
+/// of 50 rows, decayed at the contract's half-life, the targets taken as
+/// standardized residuals (no margins). The contract's stream holds one
+/// correlation, which identifies no recursion, so a learned model's start
+/// withholds its fit there: [`dcc`] probes that one too.
 fn dcc_cfg() -> DccCfg {
     DccCfg {
         n_targets: 2,
         asymmetric: true,
         margins: None,
-        params: None,
+        params: Some(vec![0.03, 0.9, 0.04]),
         decay: Decay::Halflife(HALFLIFE),
         start_rows: 50,
         start_span: None,
@@ -5025,6 +5027,13 @@ fn dcc() {
     assert_eq!(r.n_targets, 2);
     assert_eq!(r.n_outputs, 2);
     assert_eq!(r.pred_len, 2);
+    assert!(r.roundtrips);
+    // learned: its start withheld on this stream, its contract kept
+    let c = DccCfg {
+        params: None,
+        ..dcc_cfg()
+    };
+    let r = probe_with(Dcc::new(c).unwrap(), 2, Some(&Dcc::n_eff));
     assert!(r.roundtrips);
     // with GARCH margins and given parameters, three series
     let c = DccCfg {

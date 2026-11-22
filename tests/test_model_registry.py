@@ -83,7 +83,17 @@ MINIMAL: dict[str, dict[str, object]] = {
     "audit": {"targets": None, "features": None, "half_life": None, "columns": ["x0", "x1"]},
     "hawkes": {"features": None, "kernel_decays": [1.0, 5.0]},
     "garch": {"features": None, "half_life": None, "start_rows": 50},
-    "dcc": {"features": None, "targets": ["y", "x0"], "margin_start_rows": 50, "start_rows": 50},
+    # The parameters given and no margins: these frames hold no correlation
+    # dynamics or variance process for a start to identify, and a learned
+    # start would withhold every row (`not_identified`).
+    "dcc": {
+        "features": None,
+        "targets": ["y", "x0"],
+        "margins": "none",
+        "a": 0.05,
+        "b": 0.9,
+        "start_rows": 50,
+    },
 }
 
 #: The sweeps fit a numeric target, so the models that predict none --

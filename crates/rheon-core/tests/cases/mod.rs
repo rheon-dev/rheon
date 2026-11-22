@@ -235,8 +235,10 @@ pub enum Targets {
     /// 0.03)`, every target correlation 0.5), each scaled by its own
     /// GARCH(1,1) volatility where the flag is set: a realistic stream for
     /// `dcc`, whose parameters it identifies. Arithmetic and `sqrt` alone,
-    /// so it is the same bits on every platform.
-    Correlated(usize, bool),
+    /// so it is the same bits on every platform. With the last flag unset,
+    /// `(a, b, g) = 0`: one correlation, held, the null a start must not
+    /// mistake for a recursion.
+    Correlated(usize, bool, bool),
     /// `n` series of returns of a GARCH-family process at a truth `arch`
     /// is held to, each its own draw: a process a start of 2,000 rows
     /// identifies.
@@ -257,14 +259,18 @@ pub enum Process {
 
 /// [`Targets::Correlated`]'s stream: `n` rows of `k` series after 200
 /// discarded, innovations by Irwin and Hall's sum of twelve uniforms.
-pub fn correlated(k: usize, n: usize, garch: bool, seed: u64) -> Vec<Vec<f64>> {
+pub fn correlated(k: usize, n: usize, garch: bool, dynamic: bool, seed: u64) -> Vec<Vec<f64>> {
     let mut s = seed;
     let kk = k * k;
     let mut qbar = vec![0.5_f64; kk];
     for i in 0..k {
         qbar[i * k + i] = 1.0;
     }
-    let (a, b, g) = (0.04, 0.92, 0.03);
+    let (a, b, g) = if dynamic {
+        (0.04, 0.92, 0.03)
+    } else {
+        (0.0, 0.0, 0.0)
+    };
     let mut q = qbar.clone();
     let mut v = vec![1.0_f64; k];
     let mut e = vec![0.0_f64; k];
@@ -349,7 +355,7 @@ impl Case {
         }
         let n = self.before + CONTINUATION;
         let series = match self.targets {
-            Targets::Correlated(k, garch) => correlated(k, n, garch, s),
+            Targets::Correlated(k, garch, dynamic) => correlated(k, n, garch, dynamic, s),
             _ => Vec::new(),
         };
         let returns: Vec<Vec<f64>> = match self.targets {
@@ -2777,23 +2783,38 @@ pub fn all() -> Vec<Case> {
             Dcc,
             Dcc::new(dcc_cfg(3, true, None)).unwrap(),
             0,
-            Targets::Correlated(3, false),
+            Targets::Correlated(3, false, true),
             40
         ),
         // Saved after the start: the targets Q̄ and N̄, Q, its sensitivities,
-        // the information and the estimate, under a decay.
+        // the information and the estimate, under a decay; its start of 400
+        // rows identified its recursion (the likelihood-ratio statistic,
+        // kept).
         case!(
             "dcc_started",
             "Dcc",
             Dcc,
             Dcc::new(DccCfg {
-                decay: Decay::Halflife(400.0),
+                decay: Decay::Halflife(4000.0),
+                start_rows: 400,
                 ..dcc_cfg(3, true, None)
             })
             .unwrap(),
             0,
-            Targets::Correlated(3, false),
-            300
+            Targets::Correlated(3, false, true),
+            1500
+        ),
+        // A start withheld: two series of one correlation, no recursion to
+        // find, waiting for twice its rows with the statistic it fell
+        // short with.
+        case!(
+            "dcc_withheld",
+            "Dcc",
+            Dcc,
+            Dcc::new(dcc_cfg(2, false, None)).unwrap(),
+            0,
+            Targets::Correlated(2, false, false),
+            120
         ),
         // Given parameters, the symmetric model: no sensitivities.
         case!(
@@ -2802,7 +2823,7 @@ pub fn all() -> Vec<Case> {
             Dcc,
             Dcc::new(dcc_cfg(2, false, Some(vec![0.05, 0.9]))).unwrap(),
             0,
-            Targets::Correlated(2, false),
+            Targets::Correlated(2, false, true),
             120
         ),
         // GARCH margins on returns: the margins started, the stage's own
@@ -2814,15 +2835,19 @@ pub fn all() -> Vec<Case> {
             Dcc::new(DccCfg {
                 margins: Some(GarchCfg {
                     horizon: 1,
+                    start_rows: 400,
                     ..garch_cfg(GarchVol::Garch, GarchDist::Normal)
                 }),
+                start_rows: 2000,
                 ..dcc_cfg(2, false, None)
             })
             .unwrap(),
             0,
-            Targets::Correlated(2, true),
-            // the margins' start doubles its rows and refits while it has
-            // not converged, so it may take 200 rows of each series
+            Targets::Correlated(2, true, true),
+            // the margins' start waits for twice its rows while its fit
+            // does not identify a variance process, so it may take 800 rows
+            // of each series; the correlation's long start is still
+            // buffering
             CASE_DCC_MARGINS_BEFORE
         ),
         // A start over a span of the clock, saved within it: its first
@@ -2837,7 +2862,7 @@ pub fn all() -> Vec<Case> {
             })
             .unwrap(),
             0,
-            Targets::Correlated(2, false),
+            Targets::Correlated(2, false, true),
             40
         ),
     ]
@@ -2845,7 +2870,7 @@ pub fn all() -> Vec<Case> {
 
 /// Rows before `dcc_margins`' save: past its margins' start, within the
 /// stage's.
-const CASE_DCC_MARGINS_BEFORE: usize = 300;
+const CASE_DCC_MARGINS_BEFORE: usize = 1500;
 
 /// `dcc` of the case's series, the start 50 rows, no margins.
 fn dcc_cfg(k: usize, asymmetric: bool, params: Option<Vec<f64>>) -> DccCfg {

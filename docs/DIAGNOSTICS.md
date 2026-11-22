@@ -1151,10 +1151,10 @@ prediction's `withheld_reason` names the gate that held it:
 | `min_settled_frac` | `below_min_settled_frac` |
 | `min_weight` | `below_min_weight` |
 | `max_error_inflation` | `above_max_error_inflation` |
-| `warm_rows` (`kmeans`, `hmm`, `bocpd`): the rows a model learns from before it has seeded its centers, states or prior; `kalman`'s rows before a target's prior is sized; the rows `garch` buffers for a target's start (`start_rows`, `start_span`) | `below_warm_rows` |
+| `warm_rows` (`kmeans`, `hmm`, `bocpd`): the rows a model learns from before it has seeded its centers, states or prior; `kalman`'s rows before a target's prior is sized; the rows `garch` buffers for a target's start (`start_rows`, `start_span`), and `dcc` for its margins' and its own | `below_warm_rows` |
 | none, the solve itself (`ewridge`): a fit whose normal equations are past the condition at which a solve keeps a digit, see [`ewridge`](MODELS.md#ewridge--exponentially-weighted-ridge-regression) | `ill_conditioned` |
 | none, the learning rate itself (`sgd`): a target whose recent steps' gains have a mean square above twice their mean, so each step grows its own row's residual and the fit diverges | `unstable_rate` |
-| none, the evidence itself (`garch`): a start whose likelihood-ratio statistic against a constant variance is under χ² at 0.999 for the restrictions that puts on the process, so its rows do not identify the process; it buffers more rows and refits, see [`garch`](MODELS.md#garch--how-large-will-the-next-return-be) | `not_identified` |
+| none, the evidence itself (`garch`): a start whose likelihood-ratio statistic against a constant variance is under χ² at 0.999 for the restrictions that puts on the process, so its rows do not identify the process; it buffers more rows and refits, see [`garch`](MODELS.md#garch--how-large-will-the-next-return-be); `dcc`'s start, whose statistic against constant correlation falls short the same way, see [`dcc`](MODELS.md#dcc--how-do-the-correlations-move-from-row-to-row) | `not_identified` |
 
 The reasons are listed in their order of precedence, which is the order
 `withheld_reason` reports them in. `max_error_inflation` is on by default

@@ -249,7 +249,10 @@ MEANING_BY_MODEL: dict[tuple[str, str], str] = {
 #: A model whose rule for a stem differs from `ALSO_NULL`'s.
 ALSO_NULL_BY_MODEL: dict[tuple[str, str], str] = {
     ("dcc", "variance_<t>"): "while withheld, and before the target's margin's start is fitted",
-    ("dcc", "corr_<a>_<b>"): "while withheld, and before the correlation's start is fitted",
+    ("dcc", "corr_<a>_<b>"): (
+        "while withheld, before the correlation's start is fitted, and while a learned start's "
+        "rows do not identify its recursion (`not_identified`)"
+    ),
     ("dcc", "loglik"): (
         "while withheld, before the correlation's start is fitted, and where any target is"
     ),
@@ -282,6 +285,7 @@ ALSO_NULL_BY_MODEL: dict[tuple[str, str], str] = {
 #: switch, and the spec keywords that turn it on.
 SWITCHED: dict[str, tuple[str, dict[str, object]]] = {
     "huber": ("emit_huber_scale=True", {"emit_huber_scale": True}),
+    "dcc": ('margins="garch"', {"margins": "garch"}),
 }
 
 #: What a model writes when it writes nothing per row.

@@ -3147,9 +3147,25 @@ information forget at the same rate.
 margins', or the rows of its first `start_span` of the clock, are buffered.
 Their weighted means are the targets, and the parameters are the maximum of
 their batch quasi-likelihood with `Q_1 = Q̄`, by the model's own projected
-Fisher scoring from a small grid; the buffer is then replayed at the fit to
-build `H`. A buffer whose `Q̄` is not positive definite (a series constant
-over it, or two the same) is dropped and the start begins again.
+Fisher scoring from a small grid, run to its rounding. The buffer is then
+replayed at the fit to build `H`.
+
+**A start reports only a recursion its rows identify.** The test is the
+condition itself, not a count of rows. The fit is withheld unless its
+likelihood-ratio statistic against constant correlation (`a = b = 0`, and
+`g = 0`), with the weights at Kish's count, reaches χ² at 0.999 for those
+restrictions: 13.8 for DCC's two and 16.3 for the asymmetric model's three.
+The information there must be positive definite too, and a buffer whose
+`Q̄` is not positive definite (a series constant over it, or two the same)
+is withheld the same way. A fit that passes is stepped from only at its
+optimum: the gain its projected Newton step predicts is at most `10⁻⁶`
+nats, which an optimum on a bound of the set meets as well. A start that
+fails either waits for twice its rows (or its span) and fits again, at most
+twice while `max_state_bytes` holds the doubled buffer. Then a withheld
+start buffers afresh, and one short of its optimum is stepped from. While a
+fit is withheld, `withheld_reason` reads `not_identified`. With `a` and `b`
+given there is nothing to identify, and the start waits only for a `Q̄`
+that is positive definite.
 
 The state is `32 k² + 96` bytes for DCC and `48 k² + 144` for the
 asymmetric model, learned (`16 k² + 64` and `24 k² + 72` given), for `k`
@@ -3242,9 +3258,9 @@ SLSQP, with the second stage's sandwich standard errors. It was run on 50
 simulated series of 10,000 rows for each of six forms: two and three
 series, DCC and the asymmetric model, normal and Student-t(5) innovations.
 On every form every parameter was within two of those standard errors on
-all 50 series. The largest gap was 0.99 of them under normal innovations
-and 1.88 under t(5), and the median gap between the two correlation paths
-over the second half of the rows was at most 0.018. Through GARCH margins, against
+all 50 series. The largest gap was 1.17 of them under normal innovations
+and 1.95 under t(5), and the median gap between the two correlation paths
+over the second half of the rows was at most 0.017. Through GARCH margins, against
 `arch`'s margins and the same second stage, ten series of two forms were
 within 1.2 standard errors.
 
