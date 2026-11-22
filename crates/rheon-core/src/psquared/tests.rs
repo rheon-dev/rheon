@@ -379,18 +379,22 @@ fn a_positive_weight_is_one_row_and_a_zero_weight_is_none() {
     assert_eq!(only_zero.count(), 0.0);
 }
 
-/// PLAN 544, part 2: P² takes no span; a spec that gives one is refused,
-/// naming the forms that forget. No span passes.
+/// PLAN 544, parts 2 and 4: P² takes no span; a spec that gives one is
+/// refused, naming the windowed DDSketch as the quantile that forgets (and
+/// no longer a "decayed or windowed form" of P², which has none). No span
+/// passes.
 #[test]
-fn a_span_is_refused_naming_the_forms_that_forget() {
+fn a_span_is_refused_naming_the_windowed_ddsketch() {
     assert_eq!(PSquared::check_no_span(None), Ok(()));
     for field in ["half_life", "window_size", "span"] {
         let err = PSquared::check_no_span(Some(field)).unwrap_err();
         assert!(err.contains(field), "{err}");
         assert!(err.contains("never forgets"), "{err}");
         assert!(
-            err.contains("decayed form") && err.contains("windowed form"),
+            err.contains("the windowed DDSketch (ewm_quantile with a window_size)"),
             "{err}"
         );
+        assert!(!err.contains("decayed form"), "{err}");
+        assert!(!err.contains("windowed form"), "{err}");
     }
 }

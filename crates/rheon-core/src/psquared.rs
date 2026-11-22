@@ -55,9 +55,10 @@
 //! how far `q_3` strays from the quantile on a stream that is not
 //! stationary. It never forgets a row, so it takes no span: a spec that
 //! gives it a half-life, a window or another span is refused when it is
-//! built ([`PSquared::check_no_span`]), naming the quantiles that forget. Its state is fixed by the levels: per
-//! level the 15 numbers above (`p` aside, 128 bytes), and up to five values
-//! before the sixth arrives.
+//! built ([`PSquared::check_no_span`]), naming the windowed DDSketch as the
+//! quantile that forgets. Its state is fixed by the levels: per level the
+//! 15 numbers above (`p` aside, 128 bytes), and up to five values before the
+//! sixth arrives.
 
 use serde::{Deserialize, Serialize};
 
@@ -210,8 +211,9 @@ impl PSquared {
             None => Ok(()),
             Some(field) => Err(format!(
                 "PSquared: {field} is not allowed. P-squared never forgets a row, so it takes no \
-                 span, half-life or window. For a quantile that forgets, use the decayed form \
-                 (a half_life) or the windowed form (a window) instead."
+                 span, half-life or window. For a quantile that forgets, use the windowed \
+                 DDSketch (ewm_quantile with a window_size), whose buckets drop a row as it \
+                 leaves the window."
             )),
         }
     }
