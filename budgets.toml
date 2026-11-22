@@ -245,6 +245,9 @@ what = "hawkes, one node, three kernels: AnyModel::step_into, into one kept Step
 [instructions.garch]
 what = "garch, one series after its start: AnyModel::step_into, into one kept Step, a 3 x 3 step a row; its budget is CI's first count"
 
+[instructions.pca]
+what = "pca, one component of 20 features by the incremental SVD: AnyModel::step_into, into one kept Step, a few Jacobi sweeps over 3 rows of 20 a row; its budget is CI's first count"
+
 [instructions.garch_figarch]
 what = "garch, FIGARCH of 1,000 lags after its start: AnyModel::step_into, its O(M) pass of the weights and their derivatives a row; its budget is CI's first count"
 

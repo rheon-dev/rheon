@@ -519,7 +519,7 @@ in the table.
 
 ### The table
 
-**127 cells: 90 over the 26 model kinds' rows, 19 over the
+**130 cells: 93 over the 27 model kinds' rows, 19 over the
 bank, 3 over the command line, 9 over the window operators, 4 over
 `refresh_time` and 2 over the sample of an internal helper for
 gradient-boosted trees.** Each row is one cell: the
@@ -589,6 +589,9 @@ largest buffer at the smaller.
 | `ew_cov.lags` | lags L | 1 → 8 | O(n) | O(n) | a lagged co-moment block a lag | 2.51 · 1.00 · 3.33 · 1.49 |
 | `ew_cov.window` (CI) | window W clock units | 500 → 4,000 | O(1) | O(n) | a snapshot added and one subtracted a row; a snapshot a row held | 1.00 · 1.00 · 8.23 · 7.86 |
 | `ew_cov.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | moments only | 1.00 · 1.00 · 1.00 · 1.00 |
+| `pca.k` | columns k | 4 → 32 | O(n) | O(n) | a few rotation sweeps over the 3 kept directions and the row, each of k; the directions held | 3.48 · 1.00 · 5.89 · 2.72 |
+| `pca.components` | components r, of 16 columns | 1 → 8 | O(n^2) | O(n) | the sweeps rotate each pair of the r + 1 kept directions and the row; r + 1 directions held | 13.21 · 1.00 · 2.32 · 2.42 |
+| `pca.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | the directions and the moments only | 1.03 · 1.00 · 1.00 · 1.00 |
 | `marginal.k` (CI) | features p | 4 → 32 | O(n) | O(n) | each feature's pair with the target, p | 2.63 · 1.00 · 4.59 · 1.40 |
 | `marginal.targets` | targets T | 1 → 8 | O(n) | O(n) | p pairs a target | 6.14 · 1.00 · 6.67 · 1.92 |
 | `marginal.lags` | lags L | 1 → 8 | O(n) | O(n) | each lag's pair moments, p·L | 3.49 · 1.00 · 3.56 · 1.74 |
