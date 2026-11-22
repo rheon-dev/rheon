@@ -274,3 +274,23 @@ closed form, not the truth); and `corrchange`'s `monitor` test flagged a stable
 span of 100 rows at a statistic of 3.9 against a critical value of 1.36 on the
 first seed tried (a numpy replay of the definition gave the same number, so
 the draw and not the code), which is why that test's seed is the second.
+
+Part 2, section 5 items 2 to 4 and 6, and the scipy half of item 5.
+
+| model | commit | what was added |
+|---|---|---|
+| `ew_cov` | `9b9ae31` | numpy's weighted mean, variance, covariance and correlation at a correlation of 0.6, with row weights, zero-weight rows and long gaps, capped and not |
+| `huber` | `ec72141` | feature sets against `WLS` at the converged `RLM` weights; the sum-scale ridge against `Ridge`; the solve cadence read off the predictions, against `RLM` |
+| `quantile` | `f3f5223` | the solve cadence against `QuantReg` on skewed noise |
+| `sgd` | `232f4da` | the simplex constraint against SLSQP, on correlated features of unit and unequal scales |
+| `seqtest` | `2a1ea5a` | the closed form through `scipy.special.betaln` on a noisy 70% stream |
+| contract | `030aabc` | a noisy line beside the noiseless one, in Rust and in the Python sweep |
+
+Left: `pa`'s projection (no converged limit to hold to a library: its step
+is not a descent on the loss), `deco`'s estimate and `corrchange(perm_block=)`
+(no library computes them; the longhand stays), and the rows of section 3
+whose "missing" cell is not in section 5: `glm`'s golden and fixtures on a
+stream drawn from the family, `holt`'s fixtures on a trending series, and
+the option-level cells of the regression goldens (a contaminated stream for
+`huber`'s golden, skewed noise for `quantile`'s and `expectile`'s).
+
