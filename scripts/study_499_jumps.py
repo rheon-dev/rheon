@@ -28,6 +28,13 @@ stdout; a finished part is not recomputed without ``--force``):
   ``intradayJumpTest``), against the paper's definitions, with and without planted jumps and
   on the Binance data; the effect of ``mfe-toolbox``'s tripower-quarticity error on its test.
 
+* ``part3``: the online forms (one pass, decay, a hard window in rows and in clock time, zero-weight
+  rows) of the bipower variation, the tripower and quadpower quarticity, the BNS ratio and the
+  Lee and Mykland statistic, their state in bytes, and their gaps to the batch oracles.
+
+* ``part4``: hfvol's Hawkes intensity against ``tick`` (needs ``numpydoc`` and ``six`` beside
+  ``tick``), the online Hawkes form, and the rows each form can hold under a per-group cap.
+
 Every candidate is compared with the paper's definition evaluated in 40-digit
 arithmetic (mpmath) on the very float64 returns the candidate sees, so a gap
 in "ulps" is a gap to the exact value of the formula, and the paper's formula
@@ -2444,13 +2451,411 @@ def print_part3(res: dict) -> None:
             print(json.dumps(row, default=str))
 
 
+# --------------------------------------------------------------------------
+# Part 4: the Hawkes intensity (hfvol) against tick, the online form, the caps
+# --------------------------------------------------------------------------
+#
+# Univariate Hawkes process, exponential kernel (Hawkes 1971; Ozaki 1979):
+#   lambda(t) = mu + alpha sum_{t_j < t} exp(-beta (t - t_j))   (the left limit; strictly earlier)
+#   log L = sum_i log lambda(t_i) - mu T - (alpha/beta) sum_i (1 - exp(-beta (T - t_i)))
+# hfvol: HawkesParams(mu, alpha, beta), alpha the jump in intensity per event.
+# tick:  phi(t) = a beta exp(-beta t), a the adjacency (= the branching ratio alpha/beta).
+# The map: alpha = a beta.  tick's `score` for gofit="likelihood" is (log L + T)/n.
+
+
+class HawkesEngine:
+    """The intensity before each event as a row machine: three numbers of state.
+
+    E = sum over events strictly before the last time of exp(-beta (last - t_j)) w_j, m = the
+    weight of the events at the last time (they excite later times only), last = that time.
+    An event of weight 0 advances the clock and excites nothing.
+    """
+
+    def __init__(self, mu: float, alpha: float, beta: float):
+        self.mu, self.alpha, self.beta = mu, alpha, beta
+        self.E = 0.0
+        self.m = 0.0
+        self.last: float | None = None
+
+    def step(self, t: float, w: float = 1.0) -> float:
+        """lambda(t-) from the events before t, then the event takes its place."""
+        if self.last is not None and t < self.last:
+            raise ValueError("the clock went backwards")
+        if self.last is not None and t > self.last:
+            self.E = math.exp(-self.beta * (t - self.last)) * (self.E + self.m)
+            self.m = 0.0
+        self.last = t
+        lam = self.mu + self.alpha * self.E
+        if w > 0.0 and math.isfinite(w):
+            self.m += w
+        return lam
+
+    def state_bytes(self) -> int:
+        return 3 * 8  # E, m, last (the parameters are the model's, not its state)
+
+
+def hawkes_def_float(ev: np.ndarray, p, t: np.ndarray) -> np.ndarray:
+    """lambda(t-) by the definition in float64, one sum per time (strictly earlier events)."""
+    out = np.empty(len(t))
+    for i, ti in enumerate(t):
+        k = np.searchsorted(ev, ti, side="left")  # events strictly before ti
+        out[i] = p[0] + p[1] * math.fsum(np.exp(-p[2] * (ti - ev[:k])))
+    return out
+
+
+def hawkes_def_exact(ev: np.ndarray, p, ti: float):
+    import mpmath as mp
+
+    mp.mp.dps = 40
+    k = int(np.searchsorted(ev, ti, side="left"))
+    s = mp.fsum(mp.exp(-mp.mpf(p[2]) * (mp.mpf(float(ti)) - mp.mpf(float(e)))) for e in ev[:k])
+    return mp.mpf(p[0]) + mp.mpf(p[1]) * s
+
+
+def hawkes_ll_exact(ev: np.ndarray, T: float, p):
+    """The log-likelihood in 40 digits (strictly earlier events excite)."""
+    import mpmath as mp
+
+    mp.mp.dps = 40
+    mu, al, be = (mp.mpf(x) for x in p)
+    tot = mp.mpf(0)
+    R = mp.mpf(0)
+    prev = None
+    m = 0
+    for t in ev:
+        t = mp.mpf(float(t))
+        if prev is None:
+            R = mp.mpf(0)
+        elif t == prev:
+            pass
+        else:
+            R = mp.exp(-be * (t - prev)) * (R + m)
+            m = 0
+        m += 1
+        prev = t
+        tot += mp.log(mu + al * R)
+    integral = mu * T + (al / be) * mp.fsum(
+        1 - mp.exp(-be * (mp.mpf(T) - mp.mpf(float(t)))) for t in ev
+    )
+    return tot - integral
+
+
+def part4(force: bool) -> None:
+    import mpmath as mp
+
+    out = CACHE / "part4.json"
+    if out.exists() and not force:
+        print(f"{out} exists; not recomputing (use --force)")
+        return
+    import hfvol
+    from hfvol import HawkesParams
+    from scipy.optimize import minimize, minimize_scalar
+    from tick.hawkes import HawkesExpKern, HawkesKernelExp, SimuHawkes
+
+    t0 = time.time()
+    res: dict = {
+        "versions": {
+            "hfvol": md.version("hfvol"),
+            "tick": md.version("tick"),
+            "numpydoc": md.version("numpydoc"),
+        }
+    }
+    T = 2000.0
+    mu, alpha, beta = 0.5, 0.6, 1.0
+    ev1 = hfvol.hawkes_simulate(HawkesParams(mu, alpha, beta), T, rng=1)
+    sim = SimuHawkes(
+        kernels=[[HawkesKernelExp(intensity=alpha / beta, decay=beta)]],
+        baseline=[mu],
+        end_time=T,
+        seed=2,
+        verbose=False,
+    )
+    sim.track_intensity(0.05)
+    sim.simulate()
+    ev2 = np.asarray(sim.timestamps[0])
+    tr_i, tr_t = np.asarray(sim.tracked_intensity[0]), np.asarray(sim.intensity_tracked_times)
+    ev3 = np.round(ev1, 1)  # binned: tied time stamps
+    res["streams"] = {
+        "hfvol_simulated": len(ev1),
+        "tick_simulated": len(ev2),
+        "binned_ties": len(ev3),
+        "tied_events": int(len(ev3) - len(np.unique(ev3))),
+    }
+
+    # ---- the intensity: hfvol and tick against the definition, at tick's own times
+    rng = np.random.default_rng(4)
+
+    def tick_fit(ev, decays, gofit="likelihood"):
+        m = HawkesExpKern(
+            decays=decays,
+            gofit=gofit,
+            solver="bfgs" if gofit == "likelihood" else "agd",
+            penalty="l2",
+            C=1e12,
+            max_iter=20000,
+            tol=1e-14,
+        )
+        m.fit([ev])
+        return m
+
+    inten = []
+    for name, ev in (("hfvol_simulated", ev1), ("tick_simulated", ev2), ("binned_ties", ev3)):
+        m = tick_fit(ev, beta)
+        mu_t, a_t = float(m.baseline[0]), float(m.adjacency[0, 0])
+        p = (mu_t, a_t * beta, beta)
+        x, times = m.estimated_intensity([ev], 0.05, end_time=float(ev[-1]))
+        x, times = np.asarray(x[0]), np.asarray(times)
+        h_left = hfvol.hawkes_intensity_path(ev, HawkesParams(*p), times, include_current=False)
+        h_right = hfvol.hawkes_intensity_path(ev, HawkesParams(*p), times, include_current=True)
+        smp = np.sort(rng.choice(len(times), 60, replace=False))
+        ex = [hawkes_def_exact(ev, p, times[i]) for i in smp]
+        d = {
+            "stream": name,
+            "fitted_params_tick": [mu_t, a_t],
+            "points": len(times),
+            "tick_vs_hfvol_left_max_abs": float(np.max(np.abs(x - h_left))),
+            "tick_vs_hfvol_left_max_rel": float(np.max(np.abs(x - h_left) / h_left)),
+            "tick_vs_hfvol_right_max_abs": float(np.max(np.abs(x - h_right))),
+            "points_where_right_differs": int(np.sum(np.abs(x - h_right) > 1e-9)),
+            "tick_ulps_vs_exact_max": max(
+                _ulp_gap(float(x[i]), e) for i, e in zip(smp, ex, strict=True)
+            ),
+            "hfvol_left_ulps_vs_exact_max": max(
+                _ulp_gap(float(h_left[i]), e) for i, e in zip(smp, ex, strict=True)
+            ),
+        }
+        # at event times only (the predictable intensity before each event)
+        ie = np.flatnonzero(np.isin(times, ev))
+        d["event_times_in_tick_grid"] = int(len(ie))
+        d["tick_vs_hfvol_at_events_max_rel"] = (
+            float(np.max(np.abs(x[ie] - h_left[ie]) / h_left[ie])) if len(ie) else None
+        )
+        inten.append(d)
+    res["intensity"] = inten
+
+    # tick's tracked intensity from its simulation, against the definition at the true parameters
+    h_true = hfvol.hawkes_intensity_path(
+        ev2, HawkesParams(mu, alpha, beta), tr_t, include_current=True
+    )
+    h_true_l = hfvol.hawkes_intensity_path(
+        ev2, HawkesParams(mu, alpha, beta), tr_t, include_current=False
+    )
+    res["tick_simulation_tracked"] = {
+        "points": len(tr_t),
+        "max_abs_vs_hfvol_right": float(np.max(np.abs(tr_i - h_true))),
+        "max_abs_vs_hfvol_left": float(np.max(np.abs(tr_i - h_true_l))),
+        "max_rel_vs_hfvol_right": float(np.max(np.abs(tr_i - h_true) / h_true)),
+    }
+
+    # ---- the log-likelihood: hfvol, tick's score and the definition, at several parameters
+    ll = []
+    for name, ev in (("hfvol_simulated", ev1), ("binned_ties", ev3)):
+        Tend = float(ev[-1])
+        for pr in (
+            (0.5, 0.6, 1.0),
+            (0.4, 0.3, 1.0),
+            (0.8, 0.0, 1.0),
+            (0.45, 0.5, 0.8),
+            (0.6, 1.2, 2.0),
+        ):
+            m = HawkesExpKern(decays=pr[2], gofit="likelihood")
+            s = m.score(
+                [ev], Tend, baseline=np.array([pr[0]]), adjacency=np.array([[pr[1] / pr[2]]])
+            )
+            n = len(ev)
+            mapped = n * s - Tend  # tick's score is (log L + T)/n
+            h = hfvol.hawkes_log_likelihood(ev, Tend, HawkesParams(*pr))
+            e = hawkes_ll_exact(ev, Tend, pr)
+            ll.append(
+                {
+                    "stream": name,
+                    "params": pr,
+                    "n": n,
+                    "hfvol": h,
+                    "tick_mapped": mapped,
+                    "exact": float(e),
+                    "hfvol_vs_exact_abs": float(abs(mp.mpf(h) - e)),
+                    "tick_vs_exact_abs": float(abs(mp.mpf(mapped) - e)),
+                    "tick_vs_hfvol_abs": abs(mapped - h),
+                    "scale": abs(h),
+                }
+            )
+    res["loglik"] = ll
+
+    # ---- the fit: tick's likelihood and least-squares fits, hfvol's likelihood at a fixed beta
+    fits = []
+    for name, ev in (("hfvol_simulated", ev1), ("tick_simulated", ev2)):
+        Tend = float(ev[-1])
+        m = tick_fit(ev, beta)
+        ml = tick_fit(ev, beta, "least-squares")
+
+        def f(x, ev=ev, Tend=Tend):
+            return -hfvol.hawkes_log_likelihood(ev, Tend, HawkesParams(x[0], x[1], beta))
+
+        r = minimize(
+            f,
+            [0.4, 0.4],
+            method="Nelder-Mead",
+            options={"xatol": 1e-13, "fatol": 1e-13, "maxiter": 4000},
+        )
+
+        # profile over beta with tick: the likelihood at tick's fitted parameters, mapped
+        def prof(b, ev=ev, Tend=Tend):
+            mm = tick_fit(ev, float(b))
+            sc = mm.score([ev], Tend, baseline=mm.baseline, adjacency=mm.adjacency)
+            return -(len(ev) * sc - Tend)
+
+        rb = minimize_scalar(prof, bounds=(0.3, 3.0), method="bounded", options={"xatol": 1e-9})
+        mb = tick_fit(ev, float(rb.x))
+        hp, hll = hfvol.fit_hawkes_mle(ev, Tend, n_restarts=10, rng=0)
+        fits.append(
+            {
+                "stream": name,
+                "n": len(ev),
+                "tick_likelihood_fit": [float(m.baseline[0]), float(m.adjacency[0, 0] * beta)],
+                "hfvol_likelihood_max_fixed_beta": [float(r.x[0]), float(r.x[1])],
+                "gap_mu": abs(float(m.baseline[0]) - float(r.x[0])),
+                "gap_alpha": abs(float(m.adjacency[0, 0] * beta) - float(r.x[1])),
+                "tick_least_squares_fit": [float(ml.baseline[0]), float(ml.adjacency[0, 0] * beta)],
+                "tick_free_beta": {
+                    "beta": float(rb.x),
+                    "mu": float(mb.baseline[0]),
+                    "alpha": float(mb.adjacency[0, 0] * rb.x),
+                    "loglik": float(-rb.fun),
+                },
+                "hfvol_free_beta": {"beta": hp.beta, "mu": hp.mu, "alpha": hp.alpha, "loglik": hll},
+                "true": [mu, alpha, beta],
+            }
+        )
+    res["fits"] = fits
+    print(f"hawkes oracles {time.time() - t0:.1f} s")
+
+    # ---- the online form
+    eng = HawkesEngine(mu, alpha, beta)
+    lam_on = np.array([eng.step(float(t), 1.0) for t in ev1])
+    lam_def = hawkes_def_float(ev1, (mu, alpha, beta), ev1)
+    lam_hf = hfvol.hawkes_intensity_path(
+        ev1, HawkesParams(mu, alpha, beta), ev1, include_current=False
+    )
+    smp = np.sort(rng.choice(len(ev1), 60, replace=False))
+    ex = [hawkes_def_exact(ev1, (mu, alpha, beta), ev1[i]) for i in smp]
+    # ties
+    eng3 = HawkesEngine(mu, alpha, beta)
+    lam3 = np.array([eng3.step(float(t), 1.0) for t in ev3])
+    lam3_hf = hfvol.hawkes_intensity_path(
+        ev3, HawkesParams(mu, alpha, beta), ev3, include_current=False
+    )
+    # zero-weight events (weight 0, garbage time stamps between the real ones, same clock)
+    zr = np.random.default_rng(6)
+    extra = np.sort(zr.uniform(0, T, 800))
+    allt = np.concatenate([ev1, extra])
+    ww = np.concatenate([np.ones(len(ev1)), np.zeros(len(extra))])
+    o = np.argsort(allt, kind="stable")
+    engz = HawkesEngine(mu, alpha, beta)
+    lz = np.array([engz.step(float(allt[i]), float(ww[i])) for i in o])
+    real = ww[o] > 0
+    # the intensity at each real event, with the zero-weight events present, against without
+    zero_gap_ulps = float(np.max(np.abs(lz[real] - lam_on) / np.spacing(lam_on)))
+    res["online"] = {
+        "events": len(ev1),
+        "state_bytes": eng.state_bytes(),
+        "vs_definition_float_max_ulps": float(
+            np.max(np.abs(lam_on - lam_def) / np.spacing(lam_def))
+        ),
+        "vs_hfvol_left_max_ulps": float(np.max(np.abs(lam_on - lam_hf) / np.spacing(lam_hf))),
+        "bitwise_equal_to_hfvol_count": int(np.sum(lam_on == lam_hf)),
+        "vs_exact_max_ulps_60_events": max(
+            _ulp_gap(float(lam_on[i]), e) for i, e in zip(smp, ex, strict=True)
+        ),
+        "ties_vs_hfvol_max_ulps": float(np.max(np.abs(lam3 - lam3_hf) / np.spacing(lam3_hf))),
+        "ties_events": int(len(ev3) - len(np.unique(ev3))),
+        "zero_weight_events_inserted": len(extra),
+        "zero_weight_vs_without_max_ulps": zero_gap_ulps,
+        "zero_weight_state_finite": bool(all(math.isfinite(x) for x in (engz.E, engz.m))),
+    }
+
+    # ---- per-group cap: the rows each form can hold
+    cap = 256 * 1024
+    warn = 128 * 1024
+
+    def rows(fixed, per, limit):
+        return int((limit - fixed) // per)
+
+    res["caps"] = {
+        "cap_bytes": cap,
+        "warn_bytes": warn,
+        "forms": [
+            {
+                "form": "BNS engine, snapshot ring",
+                "fixed": 89 + 56,
+                "per_row": 56,
+                "rows_at_warn": rows(89 + 56, 56, warn),
+                "rows_at_cap": rows(89 + 56, 56, cap),
+            },
+            {
+                "form": "BNS engine, term ring",
+                "fixed": 137,
+                "per_row": 48,
+                "rows_at_warn": rows(137, 48, warn),
+                "rows_at_cap": rows(137, 48, cap),
+            },
+            {
+                "form": "BV alone, term ring (minimal)",
+                "fixed": 32,
+                "per_row": 16,
+                "rows_at_warn": rows(32, 16, warn),
+                "rows_at_cap": rows(32, 16, cap),
+            },
+            {
+                "form": "BNS ratio (TQ), term ring (minimal)",
+                "fixed": 64,
+                "per_row": 40,
+                "rows_at_warn": rows(64, 40, warn),
+                "rows_at_cap": rows(64, 40, cap),
+            },
+            {
+                "form": "Lee-Mykland K rows, compensated",
+                "fixed": 48,
+                "per_row": 8,
+                "rows_at_warn": rows(48, 8, warn),
+                "rows_at_cap": rows(48, 8, cap),
+            },
+            {
+                "form": "Lee-Mykland clock window, term ring",
+                "fixed": 80,
+                "per_row": 24,
+                "rows_at_warn": rows(80, 24, warn),
+                "rows_at_cap": rows(80, 24, cap),
+            },
+            {
+                "form": "Hawkes, exponential kernel",
+                "fixed": 24,
+                "per_row": 0,
+                "rows_at_warn": None,
+                "rows_at_cap": None,
+            },
+        ],
+    }
+    res["summary"] = {"seconds": time.time() - t0}
+    CACHE.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(res, indent=1, default=str))
+    print(f"part4 done in {time.time() - t0:.1f} s -> {out}")
+    for k, v in res.items():
+        print(f"\n## {k}")
+        if isinstance(v, list):
+            for row in v:
+                print(json.dumps(row, default=str))
+        else:
+            print(json.dumps(v, default=str, indent=1))
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("part", choices=["part1", "part2", "part3"])
+    ap.add_argument("part", choices=["part1", "part2", "part3", "part4"])
     ap.add_argument("--force", action="store_true")
     a = ap.parse_args(argv)
     CACHE.mkdir(parents=True, exist_ok=True)
-    {"part1": part1, "part2": part2, "part3": part3}[a.part](a.force)
+    {"part1": part1, "part2": part2, "part3": part3, "part4": part4}[a.part](a.force)
     return 0
 
 

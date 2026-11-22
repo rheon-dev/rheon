@@ -1,17 +1,18 @@
 # Bipower variation and the jump tests against third-party oracles (PLAN task 499, request A19)
 
-*Status, 2026-11-21: a record, in progress for request A19 (branch
-`vm/study-499b`). Parts 1, 2 and 3 are done: the oracle search (§2), the paper's
-definitions (§3), bipower variation and tripower quarticity against every
-candidate that computes them (§4), the Barndorff-Nielsen and Shephard tests and
-the Lee and Mykland statistic against theirs, with and without planted jumps and
-on the Binance data (§5), and the online forms of all four with their state in
-bytes and their agreement with the batch oracles (§6). Part 4 (the `tick` Hawkes
-check, the proposed tolerances, the conclusions) is not yet run; its sections say
-so. Nothing in the package or the Rust crates was changed. The runnable study is
-`scripts/study_499_jumps.py` (`part1`, `part2`, `part3`); it is Python, plus R
-through rpy2. This is not the realized-kernel study of the same task number on
-branch `vm/study-499`; the two share nothing but the task.*
+*Status, 2026-11-22: a record, complete for request A19 (branch `vm/study-499b`).
+Part 1: the oracle search (§2), the paper's definitions (§3), bipower variation and
+tripower quarticity against every candidate that computes them (§4). Part 2: the
+Barndorff-Nielsen and Shephard tests and the Lee and Mykland statistic against
+theirs, with and without planted jumps and on the Binance data (§5). Part 3: the
+online forms of all four, their state in bytes and their agreement with the batch
+oracles (§6). Part 4: hfvol's Hawkes intensity against `tick` and the online
+Hawkes form (§7), the proposed tolerances, the state against a per-group cap and
+the conclusions (§8). Nothing in the package or the Rust crates was changed. The
+online forms are Python prototypes of the arithmetic, not Rust. The runnable study
+is `scripts/study_499_jumps.py` (`part1` to `part4`); it is Python, plus R through
+rpy2. This is not the realized-kernel study of the same task number on branch
+`vm/study-499`; the two share nothing but the task.*
 
 ## 1. The question
 
@@ -763,10 +764,206 @@ that a Rust layout is stable).
    built); `weight` and `min_weight` across a bank (rule 8 is implemented, not
    tested against the other models).
 
-## 7. Hawkes intensity against `tick` (part 4)
+## 7. Hawkes intensity: hfvol against tick (part 4)
 
-Not yet run.
+*Run: `scripts/study_499_jumps.py part4` (16 s; the run twice gave identical
+output). PLAN task 498 (Hawkes and other point processes) has no model yet; this
+is the check of the two Python oracles it names, before a model: hfvol 0.1.0
+(MIT) and tick 0.8.0.2 (BSD-3-Clause).*
+
+### 7.1 The definitions and the conventions
+
+Univariate Hawkes process, exponential kernel (Hawkes 1971; Ozaki 1979):
+`lambda(t) = mu + alpha sum_{t_j < t} exp(-beta (t - t_j))`, the left limit,
+strictly earlier events; `log L = sum_i log lambda(t_i) - mu T - (alpha/beta)
+sum_i (1 - exp(-beta (T - t_i)))`. hfvol's `HawkesParams(mu, alpha, beta)` has
+`alpha` the jump in intensity per event; tick's kernel is `a beta exp(-beta t)`,
+`a` the adjacency (the branching ratio `alpha/beta`): **`alpha = a beta`**. Other
+conventions found, each of which a test must state:
+
+* tick's `score` with `gofit="likelihood"` is **`(log L + T)/n`**, not `log L`:
+  `log L = n score - T` (checked at five parameter sets, §7.2).
+* tick's `estimated_intensity` at an event time is the **left limit**; hfvol's
+  `hawkes_intensity_path` defaults to the **right limit** (`include_current=True`:
+  an event at `t` counts), which differs at every event by `alpha`; the left
+  limit, `include_current=False`, is the predictable intensity and the one to use as
+  a feature. tick's *simulator's* `tracked_intensity` is the right limit (it
+  agrees with hfvol's `include_current=True` to 4e-15 and differs from the
+  left by 0.6 = `alpha` at event times).
+* **Tied time stamps**: hfvol lets only strictly earlier events excite. tick's
+  `estimated_intensity` at tied events is sequential in array order: the k-th
+  event of a tie group sees the `k - 1` earlier ones, so it is the left limit plus
+  `(k - 1) alpha` (on a stream with 257 tied events, the largest relative
+  difference is 1.76; the first event of each group agrees). tick's log-likelihood
+  agrees with hfvol's on the same stream (2.7e-12 absolute) so it is strict.
+* tick's learners need `numpydoc` and `six`, which its wheel does not declare
+  (without `numpydoc` every learner fails with "has no settable attribute
+  'events'": tick builds its attribute table from docstrings); `fit(events, start)`
+  has no `end_time` (the end is the last event; a float passed as the second
+  argument is the *start point*, which is how a first attempt failed with "the
+  sum of the influence on someone cannot be negative"); the likelihood fit works
+  with `solver="bfgs"` and `penalty="l2"` at a huge `C` (a negligible penalty) and
+  raises that error with `agd` and `gd` and with `penalty="none"` in this build.
+  The decay is fixed (given), not estimated.
+
+### 7.2 Agreement
+
+Three streams of 2,000 time units: one simulated by hfvol (`mu, alpha, beta =
+0.5, 0.6, 1`; 2,523 events), one by tick's `SimuHawkes` (2,624), and the first
+rounded to 0.1 (2,523 events, 257 tied). Parameters for the intensity are tick's
+own likelihood fit of the stream.
+
+*The intensity* at tick's 42,500 times (a 0.05 grid and the event times), tick's
+`estimated_intensity` against hfvol's left limit: maximum absolute 6.2e-15,
+relative **1.7e-15** (hfvol-simulated stream) and 4.9e-15 and 1.8e-15 (tick's
+stream). Against the definition in 40 digits at 60 sampled points: hfvol
+**1.7 ulps**, tick **8.2 ulps** (5.9 and 1.5 on the second stream). The right limit
+differs at the event times, as §7.1 says (by `alpha` at all 2,522 event times).
+
+*The log-likelihood* at five parameter sets (including `alpha = 0`, and `beta`
+other than 1), against the definition in 40 digits:
+
+| | hfvol | tick (mapped, `n score - T`) |
+|---|---|---|
+| largest absolute gap to the definition, `|log L|` of 1,500 to 2,200 | 4.1e-13 | 5.6e-12 |
+| tick against hfvol | 5.5e-12 absolute, **3e-15** relative to `|log L|` | |
+
+(The same on the tied stream: 5.5e-12.) Both implement the strict-tie definition.
+
+*The fit.* tick's likelihood fit (`bfgs`) and the maximum of hfvol's
+log-likelihood found by Nelder-Mead at the same `beta = 1`: the same maximum to
+**5.6e-9** in `mu` and **2.2e-9** in `alpha` (3.7e-9 and 2.2e-9 on the second
+stream), which is the optimisers' tolerance; with `beta` free, hfvol's
+`fit_hawkes_mle` and tick's likelihood profiled over `beta` give `beta` = 0.91089966 and 0.91089965
+(0.98756930 and 0.98756918 on the second stream) with log-likelihoods equal to
+7e-12 and 5e-12. tick's default least-squares fit is a different estimator:
+`mu, alpha` = 0.4845, 0.6167 against 0.4906, 0.6118 for the likelihood on the first stream.
+hfvol's own code is correct against the definition (above), including its tie rule.
+
+### 7.3 The online form
+
+`HawkesEngine`: three numbers of state (`E`, the excitation of the strictly earlier
+events; `m`, the weight of the events at the last time; the last time), 24 bytes,
+whatever the length of the stream and the half-life `ln 2/beta`. The intensity
+before each event is `mu + alpha E` with `E <- exp(-beta dt)(E + m)` when the time
+moves and `m` kept while it does not (events at one time do not excite each
+other: hfvol's rule); an event of weight 0 advances the clock and adds nothing to
+`m`. On the hfvol stream: **3 ulps** to the definition in float64, **2 ulps** to
+hfvol's left limit (bit for bit at 1,958 of 2,523 events), 1.4 ulps to the exact
+values at 60 events; on the tied stream 2 ulps to hfvol (strict ties, 257 tied
+events). 800 zero-weight events inserted at random times leave the intensity at
+every real event within **4 ulps** of the stream without them and the state finite. A
+hard window on a kernel that already decays is not needed; a truncated kernel
+would hold one time stamp (8 bytes) per event in the window, not built.
 
 ## 8. Proposed tolerances and conclusions (part 4)
 
-Not yet written.
+### 8.1 Tolerances
+
+Each is what a rheon test could assert, with the measurement it comes from. Ulps
+are of the quantity, for deterministic arithmetic, with the oracle's own error
+included; a statistic that is a difference carries its conditioning
+(`cond = (RV + BV)/|RV - BV|`, at most 3.4e3 here) in units of `cond x 2^-52`.
+
+| Quantity | Against | Proposed tolerance | Measured (largest) |
+|---|---|---|---|
+| bipower variation, batch | `hfvol`, R `rBPCov`, `hffe`, `highfrequency`, `hf.econometrics` (no factor) | 8 ulps | 5 (all pairs); the paper's formula in numpy 4.4 |
+| bipower variation with `n/(n-1)` (`realized-library` default, `hf.econometrics adjust`) | the same, times `n/(n-1)` | 8 ulps after the factor | 3.8 to 4.9 |
+| tripower quarticity, batch | `highfrequency` `rTPQuar` (its `n/(n-2)` divided out), `realized-library` `multipower_variation(m=3, r=4)` | 32 ulps | 17.7 to 23.7; the paper's in numpy 14.7 |
+| `mfe-toolbox` tripower quarticity | none: wrong by `n - 2` | not an oracle | - |
+| BNS `Z` (G, H, J), batch | `highfrequency` (with `n/(n-2)` on TQ), `yuima` (`sqrt(n+1)`), with the conventions applied | relative 1e-12, and 64 in units of `cond x 2^-52` | 9.4e-14 relative; 50 (cond units) |
+| BNS `Z`, the paper's against `realized-library` ratio, `mfe-toolbox` | none | not an oracle (a factor of order `n`; the `n - 2`; the numerator `RV/BV - 1`) | - |
+| Lee and Mykland per-return `L` | `highfrequency` with `dontIncludeLast = TRUE`, `alpha = 0.05` | 8 ulps; the flags identical | 4 (all 28 cases); flags identical in all |
+| Lee and Mykland `T` | the paper's formula | 1e-11 absolute; same `n` in `C_n`, `S_n` | 1.3e-12 |
+| `yuima` `lm.jumptest`, `realized-library` `lm_test` | none | not oracles (a shifted window; scale-dependent) | - |
+| online one pass, compensated sums (137 bytes): BV, TQ, QP, RV | the exact paper value | 4, 16, 8, 2 ulps | 0.7, 5.1, 1.4, 0 |
+| online one pass, plain sums (89 bytes) | the same | `0.5 sqrt(n)` ulps for BV, QP, RV and `1.5 sqrt(n)` for TQ | 40, 30, 32 and 132 at n = 23,400 (0.26 sqrt(n), 0.9 sqrt(n)) |
+| online `Z`, one pass | `yuima`, `highfrequency` with conventions | relative 1e-12 plain, 1e-14 compensated; `cond` units 64 plain, 8 compensated | 2.6e-13 plain, 8.7e-16 compensated; 29.6 and 1.5 |
+| online decay (any half-life) | the exact weighted sums | 48 ulps BV, 64 TQ and QP, 32 RV and `weight` | 23, 31, 45, 17, 15 |
+| online hard window, term ring (compensated) | the paper's formula on the `W + 1` returns (`hfvol`, `rBPCov`); `rTPQuar` rescaled | 4 ulps BV, 32 TQ, 4 RV | 1, 13, 0 |
+| the same with a decay | the exact weighted window | 32 ulps BV, 256 TQ, 32 RV | 13, 161, 18 |
+| online hard window, snapshot ring, no decay | the same | **not acceptable**: error is `eps x rows so far / W` times a constant (2,100 ulps BV, 14,000 TQ at 23,400 rows over 100) | - |
+| online Lee-Mykland `L`, window of `K` rows | the paper's `L` | 8 ulps (compensated ring), 8 (two stacks); 128 (plain running sum) | 3, 7, 62 |
+| online Lee-Mykland, decay and clock windows | the exact weighted mean | 8 eps | 3.0, 0.8 |
+| zero-weight rows, `lam = 1` or any window | the same stream without them | **bit for bit** | bit for bit in all |
+| zero-weight rows, decay | the same stream without them | 64 ulps (the decay rounds once per row) | 44 |
+| Hawkes intensity, hfvol left limit | the definition (40 digits) | 4 ulps | 1.7 |
+| Hawkes intensity, tick `estimated_intensity` | hfvol left limit | relative 1e-14; ties excluded (they differ by convention) | 1.8e-15 |
+| Hawkes log-likelihood, hfvol, tick (mapped `n score - T`) | the definition | 1e-14 of `|log L|` | 3e-15 |
+| Hawkes fit, `beta` fixed | tick `bfgs` likelihood fit | 1e-7 in each parameter (the optimisers') | 5.6e-9 |
+| Hawkes online intensity | the definition; hfvol | 4 ulps; 4 ulps | 3; 2 |
+
+A recursive estimator of the parameters (PLAN 498) is compared with the batch
+likelihood by a statistical tolerance, not a floating one; not run.
+
+### 8.2 The state of each form against a per-group cap
+
+Cap 256 KB (262,144 bytes) a group, a warning at 128 KB (131,072), a refusal at
+the cap, no cap on a bank's total. The rows a window can hold:
+
+| Form | Bytes | Rows at the warning | Rows at the cap |
+|---|---|---|---|
+| BNS engine (BV, TQ, QP, RV, ratio), one pass or decay | 89 (137 compensated) | no limit | no limit |
+| BNS engine, hard window, snapshot ring | `145 + 56 W` | 2,337 | **4,678** |
+| BNS engine, hard window, term ring | `137 + 48 W` | 2,727 | **5,458** |
+| BNS ratio with the tripower, minimal term ring | `64 + 40 W` | 3,275 | **6,552** |
+| bipower variation alone, minimal term ring | `32 + 16 W` | 8,190 | 16,382 |
+| Lee-Mykland, `K` rows, compensated ring | `8 K + 48` | 16,378 | 32,762 |
+| Lee-Mykland, clock window, term ring | `80 + 24 W` | 5,458 | 10,919 |
+| Lee-Mykland, decay | 80 | no limit | no limit |
+| Hawkes, exponential kernel | 24 | no limit | no limit |
+
+**A hard window on the BNS engine beyond about 4,500 rows (4,678 with the
+repo's snapshot ring, 5,458 with a term ring) exceeds the per-group cap, and the
+warning is reached at about 2,300 to 2,700 rows. That needs the user's decision:**
+refuse such a window; or take a snapshot cadence (`W/20`: 21 snapshots, 1.3 KB,
+but the snapshot ring loses the digits, §6.4) or a bucketed ring of compensated
+sums (not built; bounds the bytes and keeps the digits); or hold a smaller
+number of outputs per group. A clock-time window is bounded by the rows its
+window can hold, so it needs a row cap in any case. The Lee-Mykland window of
+the paper's range (`K` up to a few hundred) and every decay form are far under the
+warning.
+
+### 8.3 Conclusions
+
+1. **Bipower variation and tripower quarticity** have six independent oracles
+   that agree to 5 ulps (BV) and to the conventions' factors (`n/(n-1)`, `n/(n-2)`)
+   and 24 ulps (TQ); `mfe-toolbox`'s TQ is wrong by `n - 2` (§4).
+2. **BNS test.** R `highfrequency` and R `yuima` are oracles to 1e-13 relative once
+   their conventions are applied (`n/(n-2)` on the quarticity; `sqrt(n+1)`); the
+   paper's statistics have no small-sample factor. `realized-library`'s ratio test
+   and `mfe-toolbox`'s test are not oracles; the latter over-rejects (8.5% and
+   8.0% against 5.6% and 5.1% at 5%) and flags 7 of 10 BTCUSDT days where the
+   paper's flags 2 (§5).
+3. **Lee and Mykland.** R `highfrequency` with `dontIncludeLast = TRUE` and
+   `alpha = 0.05` is an oracle for the per-return statistic and the flags to 4 ulps
+   (its defaults include the current return and use a critical value that is for a
+   95% test); `yuima` and `realized-library` are not (§5).
+4. **Online forms exist** for all four and agree with the batch oracles to the
+   rounding of the sums (§6): compensated sums cost 48 bytes; a hard window is
+   best held as a term ring (48 bytes a row, 1 to 13 ulps) rather than the
+   snapshot ring (56 bytes a row, up to 14,000 ulps without a decay); the
+   windowed bipower variation has `W` products over `W` returns; a zero-weight row
+   advances the clock and is otherwise absent, bit for bit under `lam = 1` and
+   under a window.
+5. **Hawkes.** hfvol and tick agree to 2e-15 relative on the intensity and 3e-15
+   on the log-likelihood once the conventions of §7.1 are stated (the left limit,
+   `alpha = a beta`, `(log L + T)/n`, the tie rule); both are second oracles for a
+   rheon `hawkes`, and hfvol is correct against the definition. The online
+   intensity is 24 bytes and within 3 ulps.
+6. **For the user:** the state of a hard window beyond about 4,500 rows (§8.2).
+
+### 8.4 Not verified
+
+Speed and memory traffic of any online form (Python prototypes only); a Rust
+layout and its state fixtures; a bucketed ring (a window held as buckets of
+compensated sums); non-unit weights inside a hard window; `min_weight` and
+`weight` across a bank; Lee and Mykland's `T` as the maximum over a moving set
+of rows; jumps smaller than 6 to 12 local standard deviations (power);
+`K` in the paper's recommended range, which a single day cannot supply; the BNS
+tests on several days of Binance data (one day each, ten for BTCUSDT); the
+published JFEC article of BNS (2006) (the working paper of 2004 was read);
+oracles reachable only through MATLAB (the MFE Toolbox); tick's least-squares
+learner beyond one stream; tick's multivariate Hawkes and non-exponential kernels;
+a recursive parameter estimator for Hawkes against the batch likelihood; any
+part of the search that PyPI's missing search endpoint hid.
