@@ -21,9 +21,10 @@ One table, ``ITEMS``, and the same checks for each entry:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 import polars as pl
