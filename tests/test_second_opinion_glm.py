@@ -208,8 +208,8 @@ def test_a_refit_of_every_row_is_glums_fit():
     """A buffer as long as the stream is fitted to convergence by the
     refit's penalized IRLS on the family's unit deviance, so the bank's fit
     is glum's ridge-matched fit of the same rows: within 1e-4 standard
-    errors (glum stops at a gradient of 1e-10, the refit at a step of 1e-11;
-    measured 1e-6)."""
+    errors (glum stops at a gradient of 1e-10, the refit runs to its
+    rounding; measured 1e-6)."""
     X, y = design("tweedie", 3, 2000, 5)
     got = online("tweedie", X, y, refit_rows=2000)
     glum_b, _, bse = batch("tweedie", X, y)

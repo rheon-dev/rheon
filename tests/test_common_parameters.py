@@ -541,11 +541,12 @@ STATE_KEY = {"marginal": "feature", "audit": "column"}
 #: times its worst. Its sketch rounds each ``|e|`` into buckets, and the
 #: last bits a reordered sum moves can cross a bucket's edge.
 ORDER_RTOL = 1e-12
-#: ``glm``'s refit stops at a step of 1e-11 of its own, so the order of the
-#: features picks which point just inside that tolerance it stops at, and
-#: the recursion carries the difference on: 3.5e-9 on ``pred`` at the worst
-#: of 50 seeds (2026-11-21).
-ORDER_RTOL_BY_KIND = {"lasso": 1e-10, "quantile": 2e-11, "glm": 1e-8}
+#: ``glm``'s refit once stopped at a step of 1e-11, so the order of the
+#: features picked which point just inside that tolerance it stopped at:
+#: 3.5e-9 on ``pred`` at the worst of 50 seeds (2026-11-21). It now runs to
+#: its rounding, and every seed agrees to under 1e-14 (2026-11-22), so it
+#: takes ``ORDER_RTOL``.
+ORDER_RTOL_BY_KIND = {"lasso": 1e-10, "quantile": 2e-11}
 #: ``lasso``'s descent visits the features in the order given and stops at
 #: its sweep cap (100) or its tolerance, so at its defaults the order picks
 #: which unconverged point a solve returns: 4.6e-4 relative on ``pred`` at
