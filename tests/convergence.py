@@ -439,22 +439,6 @@ def glm(family: sm.families.Family) -> Callable[[np.ndarray, np.ndarray, np.ndar
     return fit
 
 
-def ar_linear(n: int, seed: int, **kw: object) -> Stream:
-    """:func:`linear`, read by ``ar`` at lag 1: its noise is independent, so
-    the truth's lag coefficient is 0, in ``ar``'s layout (intercept, lag,
-    features)."""
-    s = linear(n, seed, **kw)  # type: ignore[arg-type]
-    return Stream(s.frame, np.insert(s.truth, 1, 0.0))
-
-
-def ar_oracle(X: np.ndarray, y: np.ndarray, v: np.ndarray) -> np.ndarray:
-    """Weighted least squares (statsmodels) on ``ar``'s design at lag 1: the
-    intercept, the target's previous value, then the features, over every
-    row but the first, which is only a lag."""
-    Z = np.column_stack([X[1:, :1], y[:-1], X[1:, 1:]])
-    return ols(Z, y[1:], v[1:])
-
-
 def trend_oracle(X: np.ndarray, y: np.ndarray, v: np.ndarray) -> np.ndarray:
     """A linear trend fitted to the history on its row clock by weighted
     least squares (statsmodels), read as ``holt`` reads its state: the
@@ -765,17 +749,6 @@ def _registrations() -> list[Registration]:
             level=5.0,
         ),
         Registration(
-            key="ar",
-            builder="ar",
-            build=_spec("ar", lags=1),
-            stream=ar_linear,
-            oracle=ar_oracle,
-            classes=frozenset({1, 5}),
-            limit="the batch weighted least-squares fit of every row after the first on its "
-            "lag and features, exactly: its sums are the problem",
-            other=OTHER_LINEAR,
-        ),
-        Registration(
             key="holt",
             builder="holt",
             build=_spec("holt"),
@@ -826,7 +799,12 @@ REGISTRY: dict[str, Registration] = {r.key: r for r in _registrations()}
 PENDING: dict[str, str] = {}
 
 #: Models (or losses) that predict a target and have no registration, and why.
-NOT_REGISTERED: dict[str, str] = {}
+NOT_REGISTERED: dict[str, str] = {
+    "ar": "its design is the target's own lags beside the features, which the "
+    "harness's streams and oracles (`Stream.X`, the features' design) do not "
+    "carry; its exactness against statsmodels' AutoReg and WLS is held in "
+    "tests/test_ar.py meanwhile, and its grids and bounds are still to be measured",
+}
 
 
 def losses(builder: str) -> tuple[str, ...]:

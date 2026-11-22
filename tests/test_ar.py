@@ -217,9 +217,11 @@ def test_each_target_is_its_own_series():
     for j, t in enumerate(("y", "z")):
         one = _out(rp.spec.ar("a", targets=[t], **kw), df)
         assert both[f"pred_{t}"].equals(one[f"pred_{t}"], null_equal=True)
-        # four coefficients a target: the intercept, two lags, the feature
-        coef = both["coef"].list.slice(4 * j, 4)
-        assert coef.equals(one["coef"], null_equal=True)
+        # four coefficients a target: the intercept, two lags, the feature;
+        # from row 10, where both targets have a fit (before it, a target
+        # with none reads null inside the other's list)
+        coef = both["coef"].list.slice(4 * j, 4).slice(10)
+        assert coef.equals(one["coef"].slice(10), null_equal=True)
 
 
 @pytest.mark.parametrize("kw", [{"half_life": float("inf")}, {"half_life": 50.0, "weight": "w"}])

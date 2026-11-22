@@ -720,21 +720,15 @@ CASES: list[Case] = [
             "max_state_bytes": 1 << 20,
         },
     ),
-    # Two series, each on its own lags, with an exogenous feature; and a pure
-    # AR on the other stream keys.
+    # Two series, each on its own lags, with the features beside them and
+    # every diagnostic, its groups run to a close; and a pure AR on the other
+    # stream keys, drift resetting the fit.
     Case(
         "ar",
         "ar",
-        {
-            **STREAM,
-            "targets": ["y", "x1"],
-            "features": ["x0"],
-            "lags": [1, 3],
-            "ridge": 0.01,
-            "max_state_bytes": 1 << 20,
-        },
+        full(**CLOSE, lags=[1, 3], ridge=0.01, max_state_bytes=1 << 20),
     ),
-    Case("ar_pure", "ar", {**STREAM2, "targets": ["y"], "lags": 2}),
+    Case("ar_pure", "ar", {**no_features(full2()), "targets": ["y"], "lags": 2}),
     # Each target a return series; no half-life (the recursion is per
     # observation), so no gate on settling toward one either.
     Case(
