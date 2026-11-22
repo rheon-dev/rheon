@@ -217,11 +217,18 @@ model that only the new build has is listed as an addition and passes.
   weight 0 loads and goes on under the new rule, from the clock those rows
   left (rule 5's twenty-fifth exception: on a time clock its fits within
   3.4e-15 of a fresh run and `weight_sum` within 0.30, on a row clock its
-  fits within 0.31). Moves: `bocpd.*`, `corrchange.*`, `deco.*`,
+  fits within 0.31). `seqtest` moves only through the residuals it
+  compares: where two models' absolute residuals nearly tie, the moved
+  residuals can change which is smaller, and the win then counts on the
+  other side, so both win counts move by one and the leading side's
+  e-value moves from that row on (in the release workload, `kalman`
+  against `ridge`, whose residuals move from the zero-weight row 51 on:
+  row 158's `|resid_b| - |resid_a|` was 8.5e-4 and is now -1.2e-3, and
+  row 248's flips too). Moves: `bocpd.*`, `corrchange.*`, `deco.*`,
   `ew_class.*`, `ew_cov.*`, `ewridge.*`, `ftrl.*`, `glm.*`, `hawkes.*`,
   `hmm.*`, `holt.*`, `huber.*`, `kalman.*`, `kmeans.*`, `lasso.*`,
   `marginal.*`, `micro.*`, `pa.*`, `quantile.*`, `rcov.*`, `rls.*`,
-  `sgd.*`.
+  `seqtest.log_e_*`, `seqtest.wins_*`, `sgd.*`.
 - **`hmm` under `covariance_type` `"full"` and `"diag"`, in a model that
   learns, forgets each state's covariance toward a prior,** where it kept a
   ridge that decayed with the state's data (stabilized forgetting, Kulhavý
