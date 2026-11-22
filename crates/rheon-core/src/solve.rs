@@ -2634,6 +2634,214 @@ mod tests {
         }
     }
 
+    /// The packed lower triangle `C` and the square `m·C + diag(add)` (or
+    /// `m·C + R·G·R`) the shrunk factorizations read, for a test.
+    fn shrunk_square(
+        k: usize,
+        c: &[f64],
+        m: f64,
+        add: Option<&[f64]>,
+        toward: Option<(&[f64], &[f64])>,
+    ) -> Vec<f64> {
+        let mut a = vec![0.0; k * k];
+        for i in 0..k {
+            for j in 0..=i {
+                let at = crate::ewcov::row_at(i) + j;
+                let mut v = m * c[at];
+                if let Some((r, g)) = toward {
+                    v += (r[i] * r[j]) * g[at];
+                }
+                if i == j {
+                    v += add.map_or(0.0, |add| add[i]);
+                }
+                a[i * k + j] = v;
+                a[j * k + i] = v;
+            }
+        }
+        a
+    }
+
+    /// The jitter ladder of the shrunk factorizations: a matrix that is not
+    /// positive definite gets `eps · trace/k` on its diagonal, `trace/k` the
+    /// mean diagonal of the matrix as it is (read as 1 where the trace is
+    /// not positive), at the first rung of [`JITTER`] that makes it one; and
+    /// what is factorized is that matrix plus the jitter, not minus it.
+    #[test]
+    fn the_shrunk_factorizations_jitter_by_the_mean_diagonal() {
+        let k = 4;
+        let v = [1.0, 2.0, 3.0, -1.5];
+        let w = [0.5, -1.0, 2.0, 1.0];
+        let pack = |f: &dyn Fn(usize, usize) -> f64| -> Vec<f64> {
+            (0..k)
+                .flat_map(|i| (0..=i).map(move |j| (i, j)))
+                .map(|(i, j)| f(i, j))
+                .collect()
+        };
+        let c = pack(&|i, j| v[i] * v[j]);
+        let m = 0.5;
+        let mut work = FactorWork::default();
+
+        // `m·C + diag(add)`: rank one, with a hole of 1e-8 under it that the
+        // third rung of the ladder (1e-6 of the mean diagonal) covers.
+        let add = [0.0, 0.0, 0.0, -1e-8];
+        let mean_diag = |a: &[f64]| (0..k).map(|i| a[i * k + i]).sum::<f64>() / k as f64;
+        let square = shrunk_square(k, &c, m, Some(&add), None);
+        let f = work
+            .factor_shrunk(&c, m, &add, k)
+            .expect("a jitter covers it");
+        assert!(f.attempts() >= 1);
+        assert_eq!(
+            f.jitter(),
+            mean_diag(&square) * JITTER[f.attempts() as usize]
+        );
+        let mut want = square.clone();
+        for i in 0..k {
+            want[i * k + i] += f.jitter();
+        }
+        let off = crate::oracle::exact::Recursion::of(&want).off_factor(&f.lower_rows(), 1.0);
+        assert!(off < 64.0, "{off} units of rounding off");
+
+        // `m·C + R·G·R`, the same shape of hole.
+        let r = [1.0, 0.5, 2.0, 1.5];
+        let mut g = pack(&|i, j| w[i] * w[j]);
+        g[crate::ewcov::row_at(3) + 3] -= 1e-8;
+        let square = shrunk_square(k, &c, m, None, Some((&r, &g)));
+        let f = work
+            .factor_shrunk_toward(&c, m, &r, &g, k)
+            .expect("a jitter covers it");
+        assert!(f.attempts() >= 1);
+        assert_eq!(
+            f.jitter(),
+            mean_diag(&square) * JITTER[f.attempts() as usize]
+        );
+        let mut want = square.clone();
+        for i in 0..k {
+            want[i * k + i] += f.jitter();
+        }
+        let off = crate::oracle::exact::Recursion::of(&want).off_factor(&f.lower_rows(), 1.0);
+        assert!(off < 64.0, "{off} units of rounding off");
+
+        // No trace to read: the matrix of nothing is `1e-12` of 1 on its
+        // diagonal, at the first rung that is not 0.
+        let zero = vec![0.0; crate::ewcov::row_at(k)];
+        let f = work.factor_shrunk(&zero, m, &[0.0; 4], k).expect("jitter");
+        assert_eq!((f.attempts(), f.jitter()), (1, 1e-12));
+        let f = work
+            .factor_shrunk_toward(&zero, m, &r, &zero, k)
+            .expect("jitter");
+        assert_eq!((f.attempts(), f.jitter()), (1, 1e-12));
+    }
+
+    /// The shrunk factorizations write into whatever matrix they are handed,
+    /// of any shape, and leave `k × k`: a matrix one row or one column too
+    /// large is made over, not written into.
+    #[test]
+    fn the_shrunk_factorizations_remake_a_matrix_of_the_wrong_shape() {
+        let k = 4;
+        let v = [1.0, 2.0, 3.0, -1.5];
+        let c: Vec<f64> = (0..k)
+            .flat_map(|i| (0..=i).map(move |j| (i, j)))
+            .map(|(i, j)| v[i] * v[j])
+            .collect();
+        let add = [1.0, 2.0, 0.5, 3.0];
+        let r = [1.0, 0.5, 2.0, 1.5];
+        let g: Vec<f64> = (0..k)
+            .flat_map(|i| (0..=i).map(move |j| (i, j)))
+            .map(|(i, j)| if i == j { 2.0 } else { 0.25 })
+            .collect();
+        let m = 0.75;
+        let mut chol = CholWork::default();
+        let lower = |l: &Mat<f64>| {
+            assert_eq!((l.nrows(), l.ncols()), (k, k));
+            (0..k * k)
+                .map(|ij| l[(ij / k, ij % k)])
+                .collect::<Vec<f64>>()
+        };
+        for shape in [
+            (0, 0),
+            (k, k),
+            (k + 1, k),
+            (k, k + 1),
+            (k + 1, k + 1),
+            (2, 2),
+        ] {
+            let mut l = Mat::from_fn(shape.0, shape.1, |_, _| 7.0);
+            let (attempts, jitter) =
+                factorize_shrunk_into(&c, m, &add, k, &mut l, &mut chol).expect("positive");
+            assert_eq!((attempts, jitter), (0, 0.0), "{shape:?}");
+            let want = shrunk_square(k, &c, m, Some(&add), None);
+            let off = crate::oracle::exact::Recursion::of(&want).off_factor(&lower(&l), 1.0);
+            assert!(off < 64.0, "{shape:?}: {off}");
+
+            let mut l = Mat::from_fn(shape.0, shape.1, |_, _| 7.0);
+            let (attempts, jitter) =
+                factorize_shrunk_toward_into(&c, m, &r, &g, k, &mut l, &mut chol)
+                    .expect("positive");
+            assert_eq!((attempts, jitter), (0, 0.0), "{shape:?} toward");
+            let want = shrunk_square(k, &c, m, None, Some((&r, &g)));
+            let off = crate::oracle::exact::Recursion::of(&want).off_factor(&lower(&l), 1.0);
+            assert!(off < 64.0, "{shape:?} toward: {off}");
+        }
+    }
+
+    /// A shift whose sum has a pivot beyond the doubles is refused with the
+    /// factor unmoved, though the factorization itself ran: the factor it
+    /// would leave is not one.
+    #[test]
+    fn a_shift_to_infinity_is_refused_and_moves_nothing() {
+        let k = 3;
+        let a = [4.0, 1.0, 0.5, 1.0, 3.0, 0.25, 0.5, 0.25, 2.0];
+        let f0 = SpdFactor::of(&a, k).unwrap();
+        let mut work = FactorWork::default();
+        for inf in [f64::INFINITY] {
+            let mut f = f0.clone();
+            assert!(!work.refactor_shifted(&mut f, &[0.0, inf, 0.0]));
+            assert_eq!(f, f0);
+            let mut full = vec![0.0; crate::ewcov::row_at(k)];
+            full[crate::ewcov::row_at(1) + 1] = inf;
+            assert!(!work.refactor_shifted_full(&mut f, &full));
+            assert_eq!(f, f0);
+        }
+    }
+
+    /// The fused rank-one update refuses a vector of the wrong length
+    /// before it moves anything, and reports a pivot the rotation took
+    /// beyond the doubles as no factor, though only the last column's has no
+    /// entry below it for the check on entries to meet.
+    #[test]
+    fn the_fused_update_refuses_what_it_cannot_do() {
+        let a = [4.0, 1.0, 0.5, 1.0, 3.0, 0.25, 0.5, 0.25, 2.0];
+        let f0 = SpdFactor::of(&a, 3).unwrap();
+        for v in [vec![1.0, 2.0], vec![1.0, 2.0, 3.0, 4.0], vec![]] {
+            let mut f = f0.clone();
+            assert!(!f.add_outer_in_place_fused(&mut v.clone()), "{v:?}");
+            assert_eq!(f, f0, "{v:?}: refused before moving");
+        }
+        let mut f = f0.clone();
+        assert!(!f.add_outer_in_place_fused(&mut [1.0, f64::NAN, 0.0]));
+        assert_eq!(f, f0);
+        // One coordinate, a pivot of 1.7e308 and a row of the same: the new
+        // pivot is beyond the doubles, with nothing below it.
+        let big = f64::MAX;
+        let huge = SpdFactor {
+            l: Mat::from_fn(1, 1, |_, _| big),
+            log_det: OnceLock::new(),
+            attempts: 0,
+            jitter: 0.0,
+            moves: 0,
+        };
+        let mut f = huge.clone();
+        assert!(!f.add_outer_in_place_fused(&mut [big]));
+        let mut f = huge.clone();
+        assert!(!f.add_outer_in_place(&mut [big]), "the unfused agrees");
+        // And a sound update says so, as the unfused does.
+        let mut f = f0.clone();
+        let mut g = f0.clone();
+        assert!(f.add_outer_in_place_fused(&mut [0.5, -1.0, 2.0]));
+        assert!(g.add_outer_in_place(&mut [0.5, -1.0, 2.0]));
+        assert_eq!(f, g);
+    }
+
     /// [`SpdFactor::solve_into`] is [`SpdFactor::solve`] to the bit, in one
     /// kept matrix and one kept output across shapes it returns to, and the
     /// certificate formed in a dirty kept list is the one formed afresh.
