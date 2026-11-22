@@ -190,7 +190,7 @@ realistic test and nothing is left to add.
 | | F | 3 (`audit` (300), `_exact`, `_scaled`) | R\* | none |
 | | O | `test_second_opinion_audit` (numpy `corrcoef` and `==` over the rows both columns hold: 3,000 dirty rows), `test_second_opinion` (scipy moments, statsmodels Dickey-Fuller, numpy median and MAD from exact counts), `test_audit` | R | none |
 | | C | Rust probe D | D | none |
-| `hawkes` | G | 1 (+ a window case) | D: events on a unit lattice, no self-excitation | a simulated self-exciting stream |
+| `hawkes` | G | 1 (+ a window case) on events on a unit lattice (D: no self-excitation), and `golden_structured.rs`'s `hawkes_process` (300 events of a process simulated by thinning at a baseline of 0.4, a branching ratio of 0.5 and a kernel decay of 1.5: the intensity and the fit at the true decay, the baseline and excitation asserted near the truth, then two kernels under forgetting) | D and R | none |
 | | F | 3 (`hawkes` (40), `_window` (45), `_clock_window`) | D: same stream | none for forms |
 | | O | `test_second_opinion_hawkes` (tick's least-squares contrast on tick-simulated streams, 3.9e-14) | R | the weighted fit: tick takes no weights, so the decay form is a longhand |
 | | C | Rust probe D | D | none |

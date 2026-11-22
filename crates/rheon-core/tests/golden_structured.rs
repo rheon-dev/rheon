@@ -469,6 +469,68 @@ fn rcov_returns_golden() {
     check("rcov_returns", &got, GOLDEN_RCOV_RETURNS);
 }
 
+/// A Hawkes process of baseline 0.4, branching ratio 0.5 and kernel decay
+/// 1.5, simulated by Ogata's thinning: 300 events, each a row on the clock
+/// of mark 1.
+fn hawkes_rows() -> Vec<Row> {
+    let (mu, alpha, beta) = (0.4f64, 0.5f64, 1.5f64);
+    let mut s = 1234567u64;
+    let uniform = |s: &mut u64| (lcg(s) + 1.0) / 2.0;
+    let (mut excite, mut last, mut now) = (0.0f64, 0.0f64, 0.0f64);
+    let mut out: Vec<Row> = Vec::new();
+    while out.len() < 300 {
+        // The intensity only falls between events, so its value now bounds
+        // it until the next one.
+        let bound = mu + excite * (-beta * (now - last)).exp();
+        now += -uniform(&mut s).max(1e-300).ln() / bound;
+        let here = mu + excite * (-beta * (now - last)).exp();
+        if uniform(&mut s) * bound <= here {
+            excite = excite * (-beta * (now - last)).exp() + alpha * beta;
+            let d = if out.is_empty() { 0.0 } else { now - last };
+            last = now;
+            out.push(([0.0, 0.0], [Some(1.0)], d, 1.0));
+        }
+    }
+    out
+}
+
+/// `hawkes` fitted to the simulated process by one kernel at the true
+/// decay, with no forgetting: the intensity at rows 100, 200 and 299 and
+/// the fit `(mu, alpha)`, then two kernels under forgetting.
+#[test]
+fn hawkes_process_golden() {
+    let cfg = |decays: Vec<f64>, half_life| HawkesCfg {
+        n_targets: 1,
+        kernel_decays: decays,
+        decay: Decay::Halflife(half_life),
+        min_weight: 0.0,
+        window_events: None,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        max_state_bytes: None,
+    };
+    let data: Vec<Row> = hawkes_rows();
+    let run = |m: &mut Hawkes| -> Vec<f64> {
+        let mut got = Vec::new();
+        for (i, (x, y, d, w)) in data.iter().enumerate() {
+            let step = m.step(&x[..0], y, *d, *w);
+            if matches!(i, 100 | 200 | 299) {
+                got.push(step.pred[0]);
+            }
+        }
+        got.extend(&m.coefficients()[0]);
+        got
+    };
+    let mut m = Hawkes::new(cfg(vec![1.5], f64::INFINITY)).unwrap();
+    let mut got = run(&mut m);
+    let (mu, alpha) = (got[3], got[4]);
+    assert!((mu - 0.4).abs() < 0.15, "baseline {mu}, true 0.4");
+    assert!((alpha - 0.5).abs() < 0.2, "excitation {alpha}, true 0.5");
+    let mut m = Hawkes::new(cfg(vec![0.8, 3.0], 150.0)).unwrap();
+    got.extend(run(&mut m));
+    check("hawkes_process", &got, GOLDEN_HAWKES_PROCESS);
+}
+
 // --- generated; see the module docs ---
 const GOLDEN_KMEANS_BLOBS: &[f64] = &[
     2.0,
@@ -569,4 +631,17 @@ const GOLDEN_RCOV_RETURNS: &[f64] = &[
     283.81883050579927,
     362.2519795198528,
     0.7944966584471378,
+];
+const GOLDEN_HAWKES_PROCESS: &[f64] = &[
+    0.38134630118736423,
+    1.5863115646818613,
+    1.2528902701167157,
+    0.4687148251549859,
+    0.4652004858618119,
+    0.3339130879246461,
+    1.5719619973726842,
+    1.2565531910258125,
+    0.47986354169547724,
+    0.32679293101720874,
+    0.15354451470316674,
 ];
