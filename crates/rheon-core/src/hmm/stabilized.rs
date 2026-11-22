@@ -524,3 +524,106 @@ impl Stabilized {
         &self.moves
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fresh() -> Stabilized {
+        let mut st = Stabilized::new(2.0, 3, Decay::Halflife(5.0), 1e-3, None);
+        st.seed(&[1.0, 2.0, 3.0], 4.0);
+        st
+    }
+
+    /// What a state holds is `P₀`, `ŝ`, `V` and `f`, and it is equal to
+    /// another only where all four are: one that differs in any one alone is
+    /// not equal.
+    #[test]
+    fn a_state_is_equal_to_another_in_all_four_of_its_parts() {
+        let a = fresh();
+        assert_eq!(a, a.clone());
+        let mut p0 = a.clone();
+        p0.prior_rows = 2.5;
+        let mut scale = a.clone();
+        scale.scale[1] = 2.5;
+        let mut weight = a.clone();
+        weight.scale_w = 5.0;
+        let mut held = a.clone();
+        held.hold_all();
+        for (what, b) in [("P₀", &p0), ("ŝ", &scale), ("V", &weight), ("f", &held)] {
+            assert_ne!(&a, b, "differs in {what} alone");
+            assert_ne!(b, &a, "differs in {what} alone");
+        }
+        // What is derived or working space is no part of it.
+        let mut other = a.clone();
+        other.e = vec![1.0];
+        other.fallback = 7.0;
+        assert_eq!(a, other);
+    }
+
+    /// The debug form names what a state holds.
+    #[test]
+    fn a_state_shows_what_it_holds() {
+        let mut st = fresh();
+        st.hold_all();
+        let text = format!("{st:?}");
+        assert!(text.starts_with("Stabilized {"), "{text}");
+        for part in [
+            "prior_rows: 2.0",
+            "scale: [1.0, 2.0, 3.0]",
+            "scale_w: 4.0",
+            "held: [",
+        ] {
+            assert!(text.contains(part), "{text}");
+        }
+    }
+
+    /// A state read from a file is refused where a number of its is not
+    /// finite or is below 0, or its sizes are not this model's: each part
+    /// alone is enough.
+    #[test]
+    fn a_loaded_state_is_refused_where_any_one_part_is_damaged() {
+        let built = |scale: &[f64], w: f64, held: &[f64]| {
+            let mut st = Stabilized::from(Saved {
+                scale: scale.to_vec(),
+                scale_weight: w,
+                factored_prior: held.to_vec(),
+            });
+            st.rebuild(2.0, 3, Decay::Halflife(5.0), 1e-3, None)
+        };
+        let ok = [1.0, 2.0, 3.0];
+        assert!(built(&ok, 4.0, &[]));
+        assert!(built(&ok, 0.0, &[1.0, 2.0, 3.0]));
+        assert!(built(&[0.0; 3], 0.0, &[0.0; 3]));
+        // The sizes.
+        assert!(!built(&[1.0, 2.0], 4.0, &[]));
+        assert!(!built(&[1.0, 2.0, 3.0, 4.0], 4.0, &[]));
+        assert!(!built(&ok, 4.0, &[1.0, 2.0]));
+        assert!(!built(&ok, 4.0, &[1.0, 2.0, 3.0, 4.0]));
+        // Each number, alone, in each part.
+        for bad in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1e-300] {
+            assert!(!built(&[1.0, bad, 3.0], 4.0, &[]), "ŝ {bad}");
+            assert!(!built(&ok, bad, &[]), "V {bad}");
+            assert!(!built(&ok, 4.0, &[1.0, bad, 3.0]), "f {bad}");
+        }
+    }
+
+    /// `shrink_of` is `shrink` as a function: the same weight on the data and
+    /// the same prior beside it, `P₀ψᵢ/(w + P₀)`.
+    #[test]
+    fn shrink_of_is_shrink() {
+        let mut st = fresh();
+        for w in [0.0, 0.5, 4.0, 100.0] {
+            let (m, add) = st.shrink(w);
+            let add = add.to_vec();
+            let (m2, f) = st.shrink_of(w);
+            assert_eq!(m.to_bits(), m2.to_bits());
+            assert_eq!(m, w / (w + 2.0));
+            for (i, a) in add.iter().enumerate() {
+                assert_eq!(f(i).to_bits(), a.to_bits(), "w {w}, coordinate {i}");
+                let want = 2.0 * st.psi()[i] / (w + 2.0);
+                assert!((a - want).abs() <= 1e-15 * want, "w {w}, coordinate {i}");
+            }
+        }
+    }
+}

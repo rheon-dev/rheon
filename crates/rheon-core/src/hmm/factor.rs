@@ -876,4 +876,233 @@ mod tests {
         assert_eq!(f.factor().lower_columns(), [1.0, 0.25, 2.0]);
         assert_eq!(f.matrix(), [0.5, 0.125, 0.125, 0.5 * (0.0625 + 4.0)]);
     }
+    /// A factor of order `d` at `L = I`, with the weight and `σ` given.
+    fn identity_factor(d: usize, w_sum: f64, sigma: f64) -> EwFactor {
+        let l = (0..d)
+            .flat_map(|j| (j..d).map(move |i| if i == j { 1.0 } else { 0.0 }))
+            .collect();
+        EwFactor::try_from(EwFactorState {
+            w_sum,
+            m: vec![0.0; d],
+            m_lo: vec![0.0; d],
+            precision_scale: 1.0,
+            sigma,
+            l,
+        })
+        .unwrap()
+    }
+
+    /// A shape `G` of order 3, SPD, its lower triangle packed row by row.
+    const SHAPE3: [f64; 6] = [2.0, 0.5, 3.0, 0.25, 0.5, 4.0];
+
+    /// `R·G·R` for `R = diag(r)`, row-major.
+    fn rgr(r: &[f64], g: &[f64]) -> Vec<f64> {
+        let d = r.len();
+        let mut m = vec![0.0; d * d];
+        for i in 0..d {
+            for j in 0..=i {
+                let v = (r[i] * r[j]) * g[crate::ewcov::row_at(i) + j];
+                m[i * d + j] = v;
+                m[j * d + i] = v;
+            }
+        }
+        m
+    }
+
+    /// Whether a decay leaves `σ` past the normal range is decided as the
+    /// exact recursion says, `σ·λ(W + P₀)/(λW + P₀)` below the smallest
+    /// normal double, strictly, and [`EwFactor::ages_out`] and
+    /// [`EwFactor::age_stabilized`] decide it alike. Each case is where one
+    /// way of getting the share wrong, or of comparing it, reads the other
+    /// side of the threshold.
+    #[test]
+    fn a_decay_past_the_normal_range_is_decided_by_the_share_and_strictly() {
+        let min = f64::MIN_POSITIVE;
+        // (W, P₀, λ, past the range).
+        let cases = [
+            (3.0, 1.0, 6e-309, false),
+            (3.0, 1.0, 1e-308, false),
+            (0.0, 1.0, min, false),
+            (0.0, 1.0, min / 2.0, true),
+            (1e-310, 1.0, 3e-308, false),
+            (5.0, 1.0, 1.0, false),
+            (0.0, 1e10, 1e-310, true),
+            (1e10, 1.0, 1e-308, false),
+            (2.0, 3.0, 1e-308, true),
+            (0.5, 2.0, min, false),
+            (4.0, 1.0, 5e-309, false),
+            (3.0, 1.0, 1e-300, false),
+        ];
+        for (w, p0, lam, want) in cases {
+            let f = identity_factor(2, w, 1.0);
+            assert_eq!(
+                f.ages_out(lam, p0),
+                want,
+                "ages_out: W {w} P₀ {p0} λ {lam:e}"
+            );
+            let mut g = f.clone();
+            assert_eq!(
+                g.age_stabilized(lam, p0, &[1.0, 1.0], None),
+                want,
+                "age_stabilized: W {w} P₀ {p0} λ {lam:e}"
+            );
+            assert_eq!(g.w_sum, w * lam);
+            if want {
+                // Started again at the prior `P₀ψ/(W' + P₀)`, `σ = 1`.
+                assert_eq!(g.sigma, 1.0);
+            }
+        }
+    }
+
+    /// A row that teaches nothing moves nothing: a weight of NaN, 0 or below
+    /// 0 is refused before the state is touched.
+    #[test]
+    fn a_stabilized_row_without_weight_moves_nothing() {
+        let mut v = Vec::new();
+        for w in [f64::NAN, 0.0, -1.0, -f64::INFINITY] {
+            let f0 = identity_factor(2, 3.0, 0.5);
+            let mut f = f0.clone();
+            assert!(f.update_stabilized(&[1.0, 2.0], w, 2.0, (&[1.0, 1.0], None), &mut v));
+            assert_eq!(f, f0, "w {w}");
+        }
+    }
+
+    /// A weight so small beside the history that its share rounds to 0 moves
+    /// no mean, not even to renormalize the pair `(hi, lo)` it is kept in.
+    #[test]
+    fn a_row_too_light_to_move_the_means_leaves_their_bits() {
+        let lo = 0.75 * 2f64.powi(-52);
+        let f0 = EwFactor::try_from(EwFactorState {
+            w_sum: 3.0,
+            m: vec![1.0, 1.0],
+            m_lo: vec![lo, lo],
+            precision_scale: 1.0,
+            sigma: 1.0,
+            l: vec![1.0, 0.0, 1.0],
+        })
+        .unwrap();
+        let mut f = f0.clone();
+        let mut v = Vec::new();
+        assert!(f.update_stabilized(&[2.0, 3.0], 5e-324, 1.0, (&[1.0, 1.0], None), &mut v));
+        assert_eq!(f.m, f0.m);
+        assert_eq!(f.m_lo, f0.m_lo);
+        // The same pair is renormalized by an addition of 0, which is why.
+        let (mut hi, mut l) = (1.0, lo);
+        crate::comp::add(&mut hi, &mut l, 0.0);
+        assert_ne!((hi, l), (1.0, lo));
+    }
+
+    /// A step that takes `σ` below the normal range starts the matrix again
+    /// at the prior as factored, `held/(W' + P₀)`, and one that leaves it
+    /// exactly at the smallest normal double does not; a rotation that
+    /// leaves no factor does the same and says so.
+    #[test]
+    fn a_stabilized_step_past_the_normal_range_starts_again_at_the_prior() {
+        let big = 2f64.powi(1022);
+        let held = [3.0, 3.0];
+        let mut v = Vec::new();
+        // `σ' = P₀/(W' + P₀)` is `2⁻¹⁰²²` exactly: not past it. The matrix
+        // stays `σ'·I`, the prior's share having nothing to say here.
+        let mut f = identity_factor(2, 0.0, 1.0);
+        assert!(f.update_stabilized(&[1.0, 1.0], big, 1.0, (&held, None), &mut v));
+        let m = f.matrix();
+        assert_eq!((m[0], m[3]), (f64::MIN_POSITIVE, f64::MIN_POSITIVE));
+        // One more doubling: past it, so it starts at `held/(W' + P₀)`.
+        let mut f = identity_factor(2, 0.0, 1.0);
+        let t_new = 2.0 * big;
+        assert!(f.update_stabilized(&[1.0, 1.0], 2.0 * big, 1.0, (&held, None), &mut v));
+        let m = f.matrix();
+        let want = 3.0 / t_new;
+        assert_eq!(f.sigma, 1.0);
+        assert!(((m[0] - want) / want).abs() < 1e-3, "{} {want:e}", m[0]);
+        assert!(((m[3] - want) / want).abs() < 1e-3);
+        assert_eq!((m[1], m[2]), (0.0, 0.0));
+
+        // A rotation that overflows: a pivot and a row near the largest
+        // double leave `√(d² + p²)` beyond it.
+        let damaged = || {
+            EwFactor::try_from(EwFactorState {
+                w_sum: 1.0,
+                m: vec![0.0],
+                m_lo: vec![0.0],
+                precision_scale: 1.0,
+                sigma: 1.0,
+                l: vec![f64::MAX],
+            })
+            .unwrap()
+        };
+        let mut f = damaged();
+        assert!(!f.update_stabilized(&[1e308], 1.0, 1.0, (&[3.0], None), &mut v));
+        // `t' = 1 + 1 + 1 = 3`: the prior `3` over it is 1.
+        assert_eq!(f.sigma, 1.0);
+        assert_eq!(f.matrix(), [1.0]);
+        let mut f = damaged();
+        assert!(!f.update_stabilized(&[1e308], 1.0, 3.0, (&[6.0], None), &mut v));
+        // `t' = 1 + 1 + 3 = 5`.
+        assert!(
+            (f.matrix()[0] - 6.0 / 5.0).abs() < 1e-15,
+            "{:?}",
+            f.matrix()
+        );
+    }
+
+    /// The matrix started again at `scale·diag(prior)`, or at
+    /// `scale·R·G·R` under a shape, `R = diag(√prior)`; a prior that is no
+    /// positive finite diagonal leaves it alone.
+    #[test]
+    fn restarting_at_the_prior_reads_its_scale_and_its_shape() {
+        let prior = [1.0, 4.0, 9.0];
+        // No shape: `scale·prior` on the diagonal.
+        let mut f = identity_factor(3, 1.0, 0.5);
+        f.restart_at_prior(&prior, 0.25, None);
+        assert_eq!(f.sigma, 1.0);
+        let m = f.matrix();
+        for i in 0..3 {
+            for j in 0..3 {
+                let want = if i == j { 0.25 * prior[i] } else { 0.0 };
+                assert!((m[i * 3 + j] - want).abs() < 1e-15, "({i}, {j})");
+            }
+        }
+        // A shape: `R·G·R` with `R = diag(√(scale·prior))`.
+        let mut f = identity_factor(3, 1.0, 0.5);
+        f.restart_at_prior(&prior, 0.25, Some(&SHAPE3));
+        assert_eq!(f.sigma, 1.0);
+        let r: Vec<f64> = prior.iter().map(|p| (0.25 * p).sqrt()).collect();
+        let want = rgr(&r, &SHAPE3);
+        let got = f.matrix();
+        for (i, (g, w)) in got.iter().zip(&want).enumerate() {
+            assert!((g - w).abs() < 1e-14, "entry {i}: {g} against {w}");
+        }
+        // No usable prior: the state stays as it was.
+        for bad in [
+            [1.0, 0.0, 9.0],
+            [1.0, -4.0, 9.0],
+            [1.0, f64::INFINITY, 9.0],
+            [1.0, f64::NAN, 9.0],
+        ] {
+            for shape in [None, Some(&SHAPE3[..])] {
+                let f0 = identity_factor(3, 1.0, 0.5);
+                let mut f = f0.clone();
+                f.restart_at_prior(&bad, 0.25, shape);
+                assert_eq!(f, f0, "{bad:?} {shape:?}");
+            }
+        }
+    }
+
+    /// Taken up from co-moments that no jitter makes a matrix of, a state
+    /// under a shape starts at its prior `R·G·R`, `R` the roots it was given.
+    #[test]
+    fn a_state_with_no_factor_under_a_shape_retakes_the_prior_alone() {
+        let r = [0.5, 1.0, 1.5];
+        let c = vec![f64::NAN; crate::ewcov::row_at(3)];
+        let mut f = identity_factor(3, 2.0, 0.5);
+        let mut work = FactorWork::default();
+        f.retake_stabilized_shaped(&c, 0.5, &r, &SHAPE3, &mut work);
+        assert_eq!((f.sigma, f.precision_scale), (1.0, 1.0));
+        let want = rgr(&r, &SHAPE3);
+        let got = f.matrix();
+        for (i, (g, w)) in got.iter().zip(&want).enumerate() {
+            assert!((g - w).abs() < 1e-14, "entry {i}: {g} against {w}");
+        }
+    }
 }
