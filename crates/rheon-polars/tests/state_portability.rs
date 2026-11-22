@@ -109,6 +109,11 @@ const SPECS: &[(&str, &str, &str)] = &[
         r#""targets": ["y", "x0"], "features": [], "half_life": "inf""#,
     ),
     (
+        "power_variation",
+        r#"{"type": "power_variation", "terms": [{"name": "rv", "powers": [2.0]}, {"name": "bv", "powers": [1.0, 1.0], "normalize": true}, {"name": "lrv", "kernel": "parzen", "bandwidth": 4, "center": true}, {"name": "sub", "powers": [2.0], "scale": 3}], "window_rows": 30}"#,
+        r#""targets": ["y", "x0"], "features": [], "half_life": "inf""#,
+    ),
+    (
         "holt",
         r#"{"type": "holt"}"#,
         r#""targets": ["y"], "features": [], "half_life": 50.0"#,

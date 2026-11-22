@@ -266,6 +266,7 @@ pub fn coef_fields(spec: &Spec) -> Vec<CoefField> {
             | crate::ModelKind::Bocpd { .. }
             | crate::ModelKind::Audit { .. }
             | crate::ModelKind::Realized { .. }
+            | crate::ModelKind::PowerVariation { .. }
     ) {
         return Vec::new();
     }
@@ -1184,6 +1185,33 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                             .decay(suffix, d)
                             .target(t)
                             .src(src),
+                    );
+                }
+            }
+            fields.push(
+                FieldMeta::new(format!("weight_sum{suffix}"), "weight_sum")
+                    .decay(suffix, d)
+                    .src(Source::NEff(mi)),
+            );
+        }
+        return fields;
+    }
+    // power_variation predicts no target's value: per instance and target,
+    // each named term of the returns before the row, then their count `n`;
+    // then `n_eff`. No `coef`.
+    if let crate::ModelKind::PowerVariation { terms, .. } = &spec.model {
+        let names: Vec<&str> = terms.iter().map(|t| t.name.as_str()).chain(["n"]).collect();
+        let n_slots = names.len();
+        let mut fields = Vec::new();
+        for (mi, (suffix, d)) in decays.iter().enumerate() {
+            let base = mi * spec.targets.len() * n_slots;
+            for (t_i, t) in spec.targets.iter().enumerate() {
+                for (slot, name) in names.iter().enumerate() {
+                    fields.push(
+                        FieldMeta::new(format!("{name}_{t}{suffix}"), name)
+                            .decay(suffix, d)
+                            .target(t)
+                            .src(Source::Stat(base + t_i * n_slots + slot)),
                     );
                 }
             }

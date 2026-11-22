@@ -1120,6 +1120,14 @@ fn every_kind_refuses_or_loads_corruption(prefix_step: usize, flip_step: usize) 
             "[]",
             true,
         ),
+        // Its rings and a raw return held when the file is saved.
+        (
+            "power_variation",
+            r#"{"type": "power_variation", "terms": [{"name": "rv", "powers": [2.0]}, {"name": "bv", "powers": [1.0, 1.0], "normalize": true}, {"name": "lrv", "kernel": "parzen", "bandwidth": 4, "center": true}, {"name": "sub", "powers": [2.0], "scale": 3}]}"#,
+            r#"["y"]"#,
+            "[]",
+            true,
+        ),
         // Saved after its start, a t's shape beside the process.
         (
             "garch",

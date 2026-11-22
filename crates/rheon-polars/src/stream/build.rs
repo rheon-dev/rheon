@@ -778,5 +778,8 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         ModelKind::Realized { .. } => Ok(AnyModel::Realized(Box::new(rheon_core::Realized::new(
             realized_cfg(spec, decay)?,
         )?))),
+        ModelKind::PowerVariation { .. } => Ok(AnyModel::PowerVariation(Box::new(
+            rheon_core::PowerVariation::new(power_variation_cfg(spec, decay)?)?,
+        ))),
     }
 }

@@ -77,6 +77,10 @@ fn window_words(spec: &Spec) -> (String, &'static str, &'static str) {
         | ModelKind::Realized {
             window_size: Some(w),
             ..
+        }
+        | ModelKind::PowerVariation {
+            window_size: Some(w),
+            ..
         } => (format!("window_size = {w}"), "Shorten window_size", "rows"),
         ModelKind::Garch {
             start_span: Some(s),

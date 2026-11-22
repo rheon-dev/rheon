@@ -1536,6 +1536,63 @@ pub enum ModelKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_state_bytes: Option<u64>,
     },
+    /// Power variation and kernel-weighted autocovariance sums
+    /// (`rheon_core::PowerVariation`): each target a return series; per
+    /// target, each named term of the returns before the row and their
+    /// count `n`. No features, no `coef`.
+    #[serde(rename = "power_variation")]
+    PowerVariation {
+        /// The terms each target reports, in order, each named.
+        terms: Vec<PvSpecTerm>,
+        /// The terms of the last this many rows of positive weight alone,
+        /// in place of a decay (`half_life` "inf"). Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window_rows: Option<usize>,
+        /// The terms of the rows of the last this long on the clock alone:
+        /// a number of the clock column's units (rows when the spec has no
+        /// clock), or a duration on a temporal clock. Beside `window_rows`
+        /// it is refused. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window_size: Option<Span>,
+        /// Which edge of `window_size` holds the row exactly that old:
+        /// `"right"`, the default, or `"both"`. Skipped when `"right"`.
+        #[serde(default, skip_serializing_if = "ModelClosed::is_right")]
+        closed: ModelClosed,
+        /// The bytes a group's state may hold, a window's rows included.
+        /// Default 256 KB, at most 64 MiB. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
+    },
+}
+
+/// One term of a `power_variation` spec: its name, which names its fields
+/// (`<name>_<target>`), and either `powers` (a multipower term) or `kernel`
+/// and `bandwidth` (a kernel-weighted autocovariance sum).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PvSpecTerm {
+    pub name: String,
+    /// One power a return of the product, oldest first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub powers: Option<Vec<f64>>,
+    /// Multiply a multipower term by `n^(Σp/2 − 1) Π μ_p^-1`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub normalize: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kernel: Option<rheon_core::PvKernel>,
+    /// `H`, the last lag with weight.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bandwidth: Option<usize>,
+    /// The flat-top weights `k((h − 1)/H)`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub flat_top: bool,
+    /// About the mean of the returns.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub center: bool,
+    /// `K`: the term of the `K`-step returns, averaged over the `K`
+    /// offsets; absent is 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<usize>,
 }
 
 /// The two sides of a `seqtest` comparison, as [`ModelKind::compares`]
@@ -1625,6 +1682,7 @@ impl ModelKind {
         "expectile",
         "garch",
         "realized",
+        "power_variation",
     ];
 
     pub fn kind_name(&self) -> &'static str {
@@ -1656,6 +1714,7 @@ impl ModelKind {
             ModelKind::Expectile { .. } => "expectile",
             ModelKind::Garch { .. } => "garch",
             ModelKind::Realized { .. } => "realized",
+            ModelKind::PowerVariation { .. } => "power_variation",
         }
     }
 
@@ -1694,6 +1753,7 @@ impl ModelKind {
                 | ModelKind::Bocpd { .. }
                 | ModelKind::Audit { .. }
                 | ModelKind::Realized { .. }
+                | ModelKind::PowerVariation { .. }
         )
     }
 
@@ -1978,6 +2038,7 @@ impl ModelKind {
                     | ModelKind::Hawkes { .. }
                     | ModelKind::Garch { .. }
                     | ModelKind::Realized { .. }
+                    | ModelKind::PowerVariation { .. }
             )
     }
 
@@ -2884,6 +2945,8 @@ impl Spec {
             // none is 0, and a test or a statistic whose sums are 0 is
             // `NaN`): no count of weight is the gate.
             ModelKind::Realized { .. } => 0.0,
+            // As realized: each term is defined from its first returns.
+            ModelKind::PowerVariation { .. } => 0.0,
             // The noise gate is this model's readiness gate
             // (docs/WARMUP-AND-CONVERGENCE.md §2.1): `max_error_inflation`
             // tracks the model where a count of weight cannot, and the
@@ -3402,12 +3465,13 @@ impl Spec {
                     columns_counted(self.features.len())
                 ));
             }
-        } else if let ModelKind::Realized { .. } = &self.model {
+        } else if let ModelKind::Realized { .. } | ModelKind::PowerVariation { .. } = &self.model {
             if !self.features.is_empty() {
                 no.refuse(format!(
-                    "spec {name:?}: realized takes no features, but features lists {}: each \
-                     of its targets is a return series it measures. Put the return columns in \
+                    "spec {name:?}: {} takes no features, but features lists {}: each of its \
+                     targets is a return series it measures. Put the return columns in \
                      targets, and leave out features.",
+                    self.model.kind_name(),
                     columns_counted(self.features.len())
                 ));
             }
