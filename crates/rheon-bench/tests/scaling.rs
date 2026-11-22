@@ -416,6 +416,7 @@ const SURFACES: &[&[&str]] = &[
         "audit.",
         "hawkes.",
         "garch.",
+        "realized.",
     ],
     &["bank."],
     &["runner.", "windows.", "refresh.", "gbdt."],

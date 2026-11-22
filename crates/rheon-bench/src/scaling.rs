@@ -231,6 +231,13 @@ pub const CELLS: &[Cell] = &[
     cell("garch.targets", 1, 8, Pow(1), Pow(1)),
     cell("garch.truncation", 100, 8, Pow(1), Pow(1)),
     cell("garch.history", 1000, 8, Const, Const),
+    // A row adds each target's terms to its sums, `O(1)` each; a window's
+    // leaving row takes back its terms, `O(1)`, and the window keeps its
+    // rows; Lee and Mykland's ring takes one product in and one out a row.
+    cell("realized.targets", 1, 8, Pow(1), Pow(1)),
+    cell("realized.window", 100, 8, Const, Pow(1)),
+    cell("realized.lm_window", 100, 8, Const, Pow(1)),
+    cell("realized.history", 1000, 8, Const, Const),
     // --- the bank, `Bank::fit_predict` on a pool of one thread --------------
     cell("bank.groups_seen", 250, 8, Const, Pow(1)),
     // The same in calls of four rows, each to one group: what a call costs
@@ -1125,6 +1132,33 @@ fn model_case(id: &str, n: usize) -> ModelCase {
                 "history" => c.warm(n.max(1000)),
                 "truncation" => c.warm(9_000),
                 _ => c.warm(1_000),
+            }
+        }
+        ("realized", "targets" | "window" | "lm_window" | "history") => {
+            let mut model = json!({"type": "realized"});
+            let mut half_life = json!(1000.0);
+            match dim {
+                "window" => {
+                    model["window_rows"] = json!(n);
+                    half_life = json!("inf");
+                }
+                "lm_window" => model["lm_window"] = json!(n),
+                _ => {}
+            }
+            let s = json!({
+                "name": "m",
+                "model": model,
+                "targets": names("y", if dim == "targets" { n } else { 1 }),
+                "features": [],
+                "clock": "t",
+                "half_life": half_life,
+                "gap_cap": 100.0,
+            });
+            let c = ModelCase::new(s, lin);
+            match dim {
+                "history" => c.warm(n),
+                "window" | "lm_window" => c.warm(2 * n + 1_000),
+                _ => c,
             }
         }
         _ => panic!("no model cell {id:?}"),

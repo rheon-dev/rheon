@@ -99,6 +99,9 @@ pub const MODEL_CASES: &[&str] = &[
     // (task 492); and FIGARCH, its O(M) pass of 1,000 lags a row.
     "garch",
     "garch_figarch",
+    // Two return series under a decay, Lee and Mykland's own window of 100:
+    // a row's compensated sums and ring (task 499).
+    "realized",
 ];
 
 /// The one model case that reports on a single row of its block:
@@ -518,6 +521,18 @@ fn case_spec(id: &str) -> (Value, Shape) {
                 "model": {"type": "garch", "vol": "figarch", "max_state_bytes": 40000},
                 "targets": ["y0"],
                 "features": [],
+            }),
+            Shape::Linear,
+        ),
+        "realized" => (
+            json!({
+                "name": "m",
+                "model": {"type": "realized", "lm_window": 100},
+                "targets": ["y0", "y1"],
+                "features": [],
+                "clock": "t",
+                "half_life": 1000.0,
+                "gap_cap": 100.0,
             }),
             Shape::Linear,
         ),

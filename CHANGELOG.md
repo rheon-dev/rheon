@@ -292,6 +292,31 @@ model that only the new build has is listed as an addition and passes.
   / half-life`, in place of `kernel_decays`), the intensity and `mu` in
   events per second. A row of weight 0 counts in no clock, is in no window
   and no `weight_sum`, and is still read (task 539).
+- **`realized`, realized volatility and the jump tests on it** (task
+  499): each target a series of returns; each row reports, from the returns
+  before it, the realized variance `rv`, the bipower and tripower
+  variations `bv` and `tv` (which leave jumps out), the tripower quarticity
+  `tq` and Barndorff-Nielsen and Shephard's adjusted ratio test `bns`, and
+  of its own return Lee and Mykland's statistic `lm` (the return over the
+  volatility of the returns before it, `lm_window = K` returns of its own or
+  the measures') and its flag `lm_jump` at confidence `lm_beta` (0.99). No
+  small-sample factor, as the papers: a window of `W` returns holds `W - 1`
+  products and `W - 2` triples. The count of returns `n` the quarticity and
+  both tests read is a window's returns, or Kish's effective count of the
+  decayed weights. One pass, a decay (the default form), a window of rows
+  (checked against `max_state_bytes` when the spec is built, refused naming
+  the largest that fits) or of the clock (`window_size`, `closed`; checked
+  as the rows go in, a warning past half of the cap and a refusal at it).
+  The sums are TwoSum-compensated pairs: a day of 23,400 returns keeps the
+  rounding of its terms, and a window takes a leaving jump back exactly.
+  State `8 + 144 m` bytes for `m` targets; a window `32` and `16 + 56 m` a
+  row; `lm_window` `16 (K - 2) + 32` a target. Against R's `highfrequency`
+  and `yuima` and Python's `hfvol` (test-only; R's through rpy2 in its own
+  `r-oracles` group and CI job, the `r_oracle` marker), with their
+  small-sample factors divided out: RV and BV to a few units in the last
+  place, TV and TQ to 64, the ratio test to the rounding of its difference,
+  `lm` to 8 ulps of `intradayJumpTest`'s (`dontIncludeLast = TRUE`), whose
+  flags at `alpha = 0.05` are the rows past the paper's critical value.
 - **`kalman(covariance_form="square_root")`** (task 281 (3)): the filter
   holds its covariance as an upper-triangular factor, `P = C Cᵀ`, and
   updates the factor by Carlson's step, so a vague prior costs it no

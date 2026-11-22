@@ -1,7 +1,7 @@
 <!-- kind: reference -->
 # Models
 
-The reference entry of each of the twenty-six models a spec can name, by
+The reference entry of each of the twenty-seven models a spec can name, by
 family, for a reader who knows which model they want to look up. A
 model's parameters, their defaults and its refusals are in its docstring,
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md).
@@ -28,7 +28,7 @@ which models keep each, and why.
 
 ## The models at a glance
 
-The twenty-six models fall into four families, and each family answers one
+The twenty-seven models fall into four families, and each family answers one
 kind of question about a stream. Each name links its builder's reference
 page, which gives its keywords and their defaults, and *entry* links its
 entry on this page. [Choose a model](how-to/choose-a-model.md) says which
@@ -56,6 +56,7 @@ to start with for which question.
 | [`rcov`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.rcov) · [entry](#rcov--a-blocks-realized-covariance-robust-to-noise) | accumulate | a block's realized covariance, robust to microstructure noise: the Barndorff-Nielsen–Hansen–Lunde–Shephard kernel or Christensen–Kinnebrock–Podolskij pre-averaging, reported when a group closes |
 | [`audit`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.audit) · [entry](#audit--what-a-streams-columns-hold) | accumulate | what each column holds, counted in one pass: nulls, NaNs and infinities apart, repeated values, runs, persistence, tails and duplicated columns, and the clock's duplicate stamps and gaps, read back as a table and by `bank.check()` |
 | [`garch`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.garch) · [entry](#garch--how-large-will-the-next-return-be) | step | the GARCH family, a conditional variance for each return series: GARCH(1,1), GJR, EGARCH and FIGARCH, with normal, Student-t or skewed-t innovations, its parameters learned a row at a time after a start fitted by likelihood |
+| [`realized`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.realized) · [entry](#realized--how-much-did-it-move-and-did-it-jump) | accumulate | realized volatility and the jump tests on it, for each return series: realized variance, bipower and tripower variation, tripower quarticity, Barndorff-Nielsen and Shephard's ratio test, and Lee and Mykland's statistic of each return with its flag |
 | **[Clustering and classification](#clustering-and-classification)** | | put labels on rows |
 | [`kmeans`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.kmeans) · [entry](#kmeans--exponentially-weighted-k-means) | step | exponentially weighted k-means: cluster labels assigned before the row is learned from, with a split–merge move that finds a cluster born after seeding |
 | [`micro`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.micro) · [entry](#micro--density-based-clustering-any-shape) | step | density-based clustering: DenStream micro-clusters linked into clusters of any shape and number, flagging the rows that belong to none |
@@ -3049,6 +3050,128 @@ GJR with the skewed t: under skewed innovations GJR's persistence reads
 EGARCH or FIGARCH, APARCH, the generalized error distribution and a mean
 model: none has an online estimator checked against `arch`. EGARCH's
 forecast past one row has no closed form.
+
+### `realized` — how much did it move, and did it jump?
+
+*API:* [`rheon.spec.realized`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.realized) — *Rust:* [`realized.rs`](../crates/rheon-core/src/realized.rs) — *Outputs:* [fields](OUTPUTS.md#realized)
+
+Realized volatility, measured three ways, and two tests for a jump, for
+each series of returns, one pass.
+
+Use `realized` on log returns of a price sampled at intervals, when you
+want to know how much a series has moved and whether a move was a jump.
+The realized variance counts every move. Bipower and tripower variation
+leave the jumps out, and the difference between them is the jump part.
+Barndorff-Nielsen and Shephard's ratio test says whether the stretch the
+measures cover holds a jump; Lee and Mykland's statistic says whether this
+row's own return is one, against the volatility of the returns before it.
+Each target is its own series. Set `session` with `session_gap="reset"` to
+measure a day at a time, or a window, or a half-life, to measure the
+recent past.
+
+Its parameters, their defaults and what each refuses are in its
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.realized),
+and the fields it writes in [OUTPUTS.md](OUTPUTS.md#realized). The
+parameters every spec takes are in [What every spec takes](#what-every-spec-takes),
+apart from `features`, which it refuses. A row's weight counts its return
+that many times. A row of weight 0 counts in no clock, and its return is in
+no product. A null return is that target's alone, and its products reach
+across the row to its last return. A gap past `gap_cap` and a session's
+edge end the products: none reaches across one.
+
+#### The measures
+
+For `n` returns `r_j`, `a_j = |r_j|` and `μ_p = E|Z|^p` of a standard
+normal (Barndorff-Nielsen and Shephard 2004, 2006; Lee and Mykland 2008):
+
+```text
+RV  = Σ r_j²
+BV  = μ_1^-2 Σ_{j≥2} a_j a_{j-1}                      μ_1^-2 = π/2
+TV  = μ_{2/3}^-3 Σ_{j≥3} (a_j a_{j-1} a_{j-2})^(2/3)
+TQ  = n μ_{4/3}^-3 Σ_{j≥3} (a_j a_{j-1} a_{j-2})^(4/3)
+bns = √n (1 - BV/RV) / √(ϑ max(1, TQ/BV²))      ϑ = π²/4 + π - 5
+lm  = r_i / σ_i,   σ_i² the mean of a_j a_{j-1} over the products before row i
+```
+
+`RV` converges to the integrated variance plus the squared jumps, `BV` and
+`TV` to the integrated variance alone. `bns` is a standard normal without
+jumps and large and positive with them. `√(2/π) · lm` is a standard normal
+without a jump, so it reads as a z-score. Every field but `lm` and
+`lm_jump` is of the returns before the row, so a row's own return is in its
+statistic and in nothing it is tested against.
+
+**No small-sample factor.** The papers have none, so neither has
+`realized`: no `n/(n-1)` on `BV`, no `n/(n-2)` on `TQ`. Libraries differ
+here, and the [tested against](#tested-against) note below says by how
+much.
+
+**A window of `W` returns holds `W - 1` products and `W - 2` triples**, as
+the papers' sums over `W` returns do. A product is in the window only while
+both of its returns are, so a window's measures are the papers' on its
+returns.
+
+**The count `n`.** `TQ`, `bns` and the flag read the count of returns the
+measures are of. Under a window it is the returns the window holds. Under a
+decay it is Kish's effective count `(Σ w)² / Σ w²` of the returns' decayed
+weights, which is the count itself at equal weights without a decay. The
+sums themselves are weighted, so they scale with the weights; `n` does not.
+
+**Lee and Mykland's flag.** It is the paper's test of the largest `|lm|`
+among `n` returns, at confidence `lm_beta` (0.99, a test at 1%):
+
+```text
+C_n = √(2 ln n)/c - (ln π + ln ln n) / (2 c √(2 ln n))     S_n = 1 / (c √(2 ln n))
+lm_jump = (|lm| - C_n) / S_n > -ln(-ln lm_beta)            c = √(2/π)
+```
+
+`lm_window = K` takes `σ_i` from the target's `K - 1` returns before the row
+alone, the paper's window; without it, `σ_i` is read from the measures'
+own window or decay.
+
+#### The forms
+
+The measures take one of four forms:
+
+- **One pass** (`half_life = inf`): the measures of every return so far.
+- **A decay** (`half_life`): each term decays by `0.5 ** (Δclock /
+  half_life)` from its row, the default form.
+- **A window of rows** (`window_rows`): the last `W` rows of positive
+  weight. Its bytes, `16 + 56 m` a row for `m` targets, are known from the
+  settings, so a window past `max_state_bytes` is refused when the spec is
+  built, naming the largest that fits.
+- **A window of the clock** (`window_size`): the rows of the last span,
+  `closed` deciding the row exactly that old. The data decides how many
+  rows it holds, so its bytes are checked as the rows go in: past half of
+  `max_state_bytes` a warning names the group once, and the row that would
+  pass the cap stops the run.
+
+A window forgets by dropping, so it takes no decay: set `half_life` to
+`inf` beside one. Without a window a group holds `8 + 144 m` bytes,
+whatever the stream's length.
+
+#### Tested against
+
+The measures and both tests are held to R's `highfrequency` (`rRVar`,
+`rBPCov`, `rMPVar`, `rTPQuar`, `BNSjumpTest`, `intradayJumpTest`) and
+`yuima` (`bns.test`), the field's reference implementations. RV and BV are
+held to Python's `hfvol` too. The days are simulated, with and without
+planted jumps, and Binance's BTCUSDT minutes and ETCUSDT trades.
+`highfrequency` puts `N/(N-2)` on its tripower measures, and `yuima` takes
+the number of prices `n + 1` where the paper has the `n` returns. With
+those factors divided out every measure agrees to a few units in the last
+place, and each test to the rounding of the difference it is built on.
+`intradayJumpTest` agrees on `√(2/π) · lm` with `dontIncludeLast = TRUE`,
+which leaves the row's own return out of its volatility as the paper does;
+its default puts it in.
+
+#### See also
+
+Where `realized` is not the measure you need:
+
+- [`rcov`](#rcov--a-blocks-realized-covariance-robust-to-noise), for a
+  block's realized covariance robust to microstructure noise.
+- [`garch`](#garch--how-large-will-the-next-return-be), for a conditional
+  variance fitted to the returns.
 
 ## Clustering and classification
 

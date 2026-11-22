@@ -51,7 +51,7 @@ spec and clock:
 | tolerated mutant | a mutant that differs from the original only at an exact tie or by less than the computation's own error, so no test a correct implementation passes can kill it; listed apart, not as equivalent ([Mutation survivors](#mutation-survivors)) |
 | IC | the correlation of prediction with target, `rp.eval`'s `ic` |
 | hard rule N | the numbered hard rules in `CLAUDE.md` |
-| a model kind | one of the 26 model types a spec can name; `MINIMAL` in `tests/test_model_registry.py` holds one spec of each |
+| a model kind | one of the 27 model types a spec can name; `MINIMAL` in `tests/test_model_registry.py` holds one spec of each |
 | the ten regression models | the models the per-model sweeps run: `ewridge`, `rls`, `lasso`, `kalman`, `huber`, `quantile`, `sgd`, `pa`, `ftrl` and `holt`, which `REGRESSIONS` in `tests/test_model_registry.py` lists |
 | the window operators | exponentially weighted means, variances, sums, rates and quantiles of a column along the clock, with or without a hard window, which `rp.stream.with_windows` runs over a stream: `rp.ewm_mean`, `rp.ewm_sum`, `rp.ewm_rate`, `rp.ewm_quantile`, `rp.ewm_var` and `rp.ewm_std` look back, and the first four look ahead under `reverse=True` |
 | a formula target | a spec's target written as an expression over a window operator that looks ahead, such as `rp.ewm_mean("mid", ...) - pl.col("mid")`, which the bank resolves once the window has closed |
@@ -184,6 +184,7 @@ in `tests/test_second_opinion.py`, Vowpal Wabbit among them.
 | `sgd`'s squared, epsilon-insensitive (at `eps = 0`, its tube being in the target's own EW std) and logistic losses under `"constant"`, weighted or not; `"inv_scaling"` at unit weights; the Huber cut is `sgd_ref`'s | scikit-learn's `SGDRegressor` and `SGDClassifier(loss="log_loss")`, `partial_fit` one row at a time (`TestSgdIsScikitLearnsSgd`) | 1e-12 (1.0e-15 measured) |
 | `hmm` at fixed parameters | hmmlearn's `GaussianHMM`: the filtered and predicted probabilities, and each row's log-likelihood (`TestHmmIsHmmlearns`) | 1e-10 (1.4e-13 measured) |
 | `rls` | padasip's `FilterRLS`, at unit weights on a row clock (`TestRlsIsPadasips`) | 1e-11 (1.6e-14 measured) |
+| `realized` | the papers' estimators in numpy (`tests/reference_realized.py`) on simulated days and Binance's data; `hfvol` on RV, BV and the jump variation; R's `highfrequency` (`rRVar`, `rBPCov`, `rMPVar`, `rTPQuar`, `BNSjumpTest`, `intradayJumpTest`) and `yuima` (`bns.test`) in `tests/r_oracle/`, their small-sample factors divided out | a few ulps (RV, BV, `lm`), 64 ulps (TV, TQ), 64 units of `cond · ε` (the ratio test) |
 | `seqtest` | `reference.seqtest_ref`, the paper's betting recursion in scalar code, and its closed form where the clip never binds (`tests/test_seqtest.py`) | 1e-12, relative |
 | `emit_drift` | river's `PageHinkley` at `half_life = inf` (`TestAZeroWeightRowIsNotSeen`) | flag for flag |
 | a prediction under `embargo` | river's progressive validation with `delay` (`TestLabelDelayFoldsWhatWasScored`) | 1e-12 |
@@ -265,7 +266,13 @@ source and where: `bayesian-changepoint-detection`'s wheel declares none,
 and its repository's `LICENSE` is MIT.
 
 **A library that must not be in every contributor's environment, for its
-platforms, gets a group of its own and a CI job of its own.**
+platforms, gets a group of its own and a CI job of its own.** R's `highfrequency` and `yuima`, the reference
+implementations of the realized measures and the jump tests, are such:
+they need R. So rpy2 is the `r-oracles` group, and `tests/r_oracle/` is
+collected only under `-m r_oracle` (`tests/conftest.py`).
+`.github/workflows/oracles.yml`'s `r-oracles` job installs R, its packages
+and the group on Linux and runs them. `tests/test_dependency_policy.py`
+holds their imports to that group and the dev group.
 
 **Rule 3 reaches the child interpreters a test spawns.** `tests/child.py`
 puts `tests/_site/sitecustomize.py`, which installs the same finder, on the
@@ -1271,7 +1278,7 @@ against the last. There are three kinds:
 
 | kind | what is measured | where it runs | tolerance |
 |---|---|---|---|
-| `instructions` | the instructions one block of 1,000 rows executes, after 2,000 rows of warm-up, counted by Callgrind. The cases are the lists in `crates/rheon-bench/src/lib.rs`: a step of each of the 26 models at a standard width, and beside them the costlier options (`ewridge` at 200 features, `ewridge` at 50 features with 10 targets folded into a 64-row block's merge, the refit of the first rows of `huber`, `sgd`'s Huber loss and `quantile`, `huber`'s feature sets and `ridge_scale="sum"`, `sgd`'s Huber loss, `bocpd`'s full run, `ew_cov`'s lags, `marginal`'s Huber bins, and `corrchange`'s monitor and window); the clock's step on a float and on a nanosecond clock; `Bank::fit_predict` around `seqtest` and around `ewridge`, as one stream and as 1,000 groups of one row each, and around a window target that holds 1,000 rows back; five window cases through `WindowsRun::feed` (a mean, a sum and two quantiles, one within a window and one running, and a sum over 10,000 groups); and `Bank::fit_predict` of 8,192 rows of `ew_cov`'s 230 statistics on a pool of one thread | `.github/workflows/budgets.yml`, on Linux | 2% |
+| `instructions` | the instructions one block of 1,000 rows executes, after 2,000 rows of warm-up, counted by Callgrind. The cases are the lists in `crates/rheon-bench/src/lib.rs`: a step of each of the 27 models at a standard width, and beside them the costlier options (`ewridge` at 200 features, `ewridge` at 50 features with 10 targets folded into a 64-row block's merge, the refit of the first rows of `huber`, `sgd`'s Huber loss and `quantile`, `huber`'s feature sets and `ridge_scale="sum"`, `sgd`'s Huber loss, `bocpd`'s full run, `ew_cov`'s lags, `marginal`'s Huber bins, and `corrchange`'s monitor and window); the clock's step on a float and on a nanosecond clock; `Bank::fit_predict` around `seqtest` and around `ewridge`, as one stream and as 1,000 groups of one row each, and around a window target that holds 1,000 rows back; five window cases through `WindowsRun::feed` (a mean, a sum and two quantiles, one within a window and one running, and a sum over 10,000 groups); and `Bank::fit_predict` of 8,192 rows of `ew_cov`'s 230 statistics on a pool of one thread | `.github/workflows/budgets.yml`, on Linux | 2% |
 | `memory` | the bytes per row of every output field of every model with every output it has switched on, over 20,000 rows, from `estimated_size()` | `tests/test_budgets_memory.py`, on every CI leg | 2% |
 | `rss` | the peak resident memory a standard run adds over its process's baseline, per platform, in MiB, for six runs: `ewridge` with ten targets over 200,000 rows; `ew_cov`'s 230 moments a row over 200,000; an eager `predict` of 1,000 features over 20,000 rows; a windowed `ewridge` (`window_size` 20,000) over 200,000; `bocpd` holding up to 200 runs over 50,000; and five million rows streamed from one parquet file to another. The streamed run has Polars reading one row group ahead on four threads, and the allocator giving freed pages back at once (`_RJEM_MALLOC_CONF=dirty_decay_ms:0,muzzy_decay_ms:0`, `MIMALLOC_PURGE_DELAY=0`), so its peak is the live memory. A control reads the same rows whole before the plan, and must exceed the streamed run's budget | the same file, in the extended tier: held on CI at each OS's floor Python, on Windows on `windows-latest` alone, and reported everywhere else. The interpreter alone moved macOS's peak 18-20% between 3.12 and 3.14, and the machine moved the streaming run's 23%. Windows Server 2022 and Server 2025 read the six runs up to 8% apart on one build, so the two images would each tighten the budget below the other | 30% over: two runs of one build on one CI runner read 14-18% apart; tightened at 7.5% under |
 

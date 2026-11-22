@@ -48,7 +48,7 @@ FAMILIES: dict[str, tuple[str, ...]] = {
         "expectile",
         "holt",
     ),
-    "Moments and correlation": ("ew_cov", "marginal", "deco", "rcov", "audit", "garch"),
+    "Moments and correlation": ("ew_cov", "marginal", "deco", "rcov", "audit", "garch", "realized"),
     "Clustering and classification": ("kmeans", "micro", "ew_class"),
     "Sequential tests and regimes": ("seqtest", "corrchange", "bocpd", "hmm", "hawkes"),
 }
@@ -114,6 +114,19 @@ MEANING: dict[str, str] = {
     ),
     "std_resid_<t>": "`<t>` over the square root of its variance on this row",
     "forecast_<t>": "the variance of `<t>` `horizon - 1` rows past this one, from the same rows",
+    "rv_<t>": "the realized variance of `<t>`'s returns before this row, the sum of their squares",
+    "bv_<t>": "the bipower variation of `<t>`'s returns before this row, which leaves jumps out",
+    "tv_<t>": "the tripower variation of `<t>`'s returns before this row, which leaves jumps out",
+    "tq_<t>": "the tripower quarticity of `<t>`'s returns before this row",
+    "bns_<t>": (
+        "Barndorff-Nielsen and Shephard's adjusted ratio test of `<t>`'s returns before this "
+        "row: a standard normal without jumps, large and positive with them"
+    ),
+    "lm_<t>": (
+        "Lee and Mykland's statistic of this row's `<t>`: the return over the volatility of the "
+        "returns before it; `sqrt(2/π)` times it is a standard normal without a jump"
+    ),
+    "lm_jump_<t>": "whether `lm_<t>` is a jump at confidence `lm_beta`, by Lee and Mykland's test",
     "u": (
         "the equicorrelation this row alone implies"
         " (Engle and Kelly's Lemma 2.3, from the standardized row)"
@@ -202,6 +215,16 @@ ALSO_NULL: dict[str, str] = {
     "variance_<t>": "while withheld, and before the target's start is fitted",
     "std_resid_<t>": "where the variance is null, and where `<t>` is",
     "forecast_<t>": "where the variance is null",
+    "rv_<t>": WITHHELD,
+    "bv_<t>": WITHHELD,
+    "tv_<t>": WITHHELD,
+    "tq_<t>": WITHHELD,
+    "bns_<t>": "while withheld, and where `rv_<t>` or `bv_<t>` is 0",
+    "lm_<t>": (
+        "while withheld, where the row has no `<t>`, and where the volatility of the returns "
+        "before it is 0"
+    ),
+    "lm_jump_<t>": "where `lm_<t>` is, and where the count of returns is 1 or less",
     "u": (
         "while withheld, where fewer than two of the block's columns have a positive variance "
         "before the row, and where every standardized value is 0"
@@ -648,6 +671,13 @@ def stem(field: str, targets: tuple[str, ...], features: tuple[str, ...]) -> str
             "variance",
             "std_resid",
             "forecast",
+            "rv",
+            "bv",
+            "tv",
+            "tq",
+            "bns",
+            "lm_jump",
+            "lm",
         ):
             if base == f"{pre}_{t}":
                 return f"{pre}_<t>"
