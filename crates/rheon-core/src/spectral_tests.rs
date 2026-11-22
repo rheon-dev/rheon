@@ -75,8 +75,10 @@ fn longhand(
     }
 }
 
+/// The model's own trigonometry, `rotation`, as the longhand reads it.
 fn platform(t: f64) -> (f64, f64) {
-    t.sin_cos()
+    let [c, s] = rotation(t);
+    (s, c)
 }
 
 fn correctly_rounded(t: f64) -> (f64, f64) {

@@ -1318,7 +1318,7 @@ fn variants() -> Vec<String> {
 /// name here, and a fixture.
 #[test]
 fn the_variant_names_are_frozen() {
-    const FROZEN: [&str; 27] = [
+    const FROZEN: [&str; 28] = [
         "EwCov",
         "EwRidge",
         "Rls",
@@ -1346,6 +1346,7 @@ fn the_variant_names_are_frozen() {
         "Expectile",
         "Garch",
         "Ar",
+        "Spectral",
     ];
     assert_eq!(
         variants(),
@@ -1466,7 +1467,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 123] = [
+    const FORMS: [(&str, &[&str]); 125] = [
         // Schema 70 (rule 5's twenty-second exception): the stabilized
         // prior's `ŝ` and `V` under `full` in each form and under `diag`,
         // the factor form's `f`, and a spec's own `prior_rows`.
@@ -1711,6 +1712,9 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         ("ar_select", &["model", "Ar", "chosen", "1"]),
         ("ar_select", &["model", "Ar", "chosen", "0"]),
         ("ar_window", &["model", "Ar", "fits", "0", "win"]),
+        // `spectral` (task 491): each target's transform and its weights'.
+        ("spectral", &["model", "Spectral", "sums", "1", "x"]),
+        ("spectral", &["model", "Spectral", "sums", "0", "u"]),
         ("ar_filling", &["model", "Ar", "rings", "0"]),
         ("ar_filling", &["model", "Ar", "fits", "0", "acc"]),
     ];

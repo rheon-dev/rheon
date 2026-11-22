@@ -2634,6 +2634,26 @@ pub fn all() -> Vec<Case> {
             Targets::Linear(2),
             40
         ),
+        // Two series' transforms at three frequencies.
+        case!(
+            "spectral",
+            "Spectral",
+            Spectral,
+            Spectral::new(SpectralCfg {
+                n_targets: 2,
+                frequencies: vec![0.0, 0.2, 0.5],
+                spacing: 1.0,
+                decay: decay(),
+                scaling: SpectralScaling::Density,
+                detrend: true,
+                min_weight: 0.0,
+                max_state_bytes: None,
+            })
+            .unwrap(),
+            0,
+            Targets::Linear(2),
+            40
+        ),
         // Saved two rows in: rings still filling, no fit yet.
         case!(
             "ar_filling",

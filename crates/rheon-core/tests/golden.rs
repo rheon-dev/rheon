@@ -882,6 +882,26 @@ fn ar_golden() {
     check("ar", &got, GOLDEN_AR);
 }
 
+/// `spectral` on the same stream's target: its power at three frequencies
+/// under decay, its null target and its gap among the rows.
+#[test]
+fn spectral_golden() {
+    let mut m = Spectral::new(SpectralCfg {
+        n_targets: 1,
+        frequencies: vec![0.0, 0.1, 0.5],
+        spacing: 1.0,
+        decay: Decay::Halflife(15.0),
+        scaling: SpectralScaling::Density,
+        detrend: true,
+        min_weight: 0.0,
+        max_state_bytes: None,
+    })
+    .unwrap();
+    let mut got = signature_of(&mut m, 1, false);
+    got.extend(&m.powers()[0]);
+    check("spectral", &got, GOLDEN_SPECTRAL);
+}
+
 /// `expectile` on the same stream: an upper expectile under decay whose
 /// first 15 learned rows are refit, then the fit at the end.
 #[test]
@@ -2101,6 +2121,14 @@ const GOLDEN_AR: &[f64] = &[
     0.006207809809043063,
     1.5217126158114949,
     -0.7726238396515506,
+];
+const GOLDEN_SPECTRAL: &[f64] = &[
+    0.6649015871575261,
+    0.09516153180377941,
+    0.9749530137841262,
+    0.0,
+    0.9737255863944811,
+    2.9174867193629694,
 ];
 const GOLDEN_HOLT: &[f64] = &[1.510543784944197, 0.05346222911849938, 0.1063893470704486];
 const GOLDEN_SEQTEST: &[f64] = &[-0.6443570163905132, -1.086393303225433, -0.9577414997686987];

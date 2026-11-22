@@ -54,6 +54,15 @@ use serde::{Deserialize, Serialize};
 use crate::Decay;
 use crate::model::{ModelState, OnlineModel, State, StateError, Step, check_schema};
 
+/// `[cos θ, sin θ]`: the one place the transform takes its trigonometry
+/// from, so where it comes from (the platform's library, or a correctly
+/// rounded one that gives the same bits on every OS) is decided here alone.
+#[inline]
+pub(crate) fn rotation(theta: f64) -> [f64; 2] {
+    let (s, c) = theta.sin_cos();
+    [c, s]
+}
+
 /// What a [`Spectral`] reports at each frequency: scipy's `scaling`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -226,16 +235,12 @@ impl Spectral {
         (8 * (4 * f + 3)).saturating_mul(cfg.n_targets as u64) + 8
     }
 
-    /// The rotation `e^{2πi f Δ}` of each frequency for a clock step `d`,
-    /// from the platform's `sin` and `cos`.
+    /// The rotation `e^{2πi f Δ}` of each frequency for a clock step `d`.
     fn rotations(&self, d: f64) -> Vec<[f64; 2]> {
         self.cfg
             .frequencies
             .iter()
-            .map(|f| {
-                let th = std::f64::consts::TAU * f * d;
-                [th.cos(), th.sin()]
-            })
+            .map(|f| rotation(std::f64::consts::TAU * f * d))
             .collect()
     }
 

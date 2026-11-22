@@ -231,7 +231,7 @@ fn probe_checked<M: OnlineModel + Clone>(
 /// move under `clear_lags`. Everything else must not: `clear_lags` is not a
 /// reset, and a model that quietly threw away a mean here would look like a
 /// decay bug three chunks later (docs/PLAN.md task 47).
-const KEEPS_LAGS: &[&str] = &["rcov", "corrchange", "ew_cov", "marginal", "ar"];
+const KEEPS_LAGS: &[&str] = &["rcov", "corrchange", "ew_cov", "marginal", "ar", "spectral"];
 
 /// The model that counts a value that is not usable rather than refusing
 /// it: `audit`, whose counts of nulls, NaNs and infinities are what it is for
@@ -808,6 +808,7 @@ fn every_state_kind_is_distinct_and_named() {
         "expectile",
         "garch",
         "ar",
+        "spectral",
     ];
     let mut seen = std::collections::HashSet::new();
     for k in kinds {
@@ -845,6 +846,7 @@ fn every_state_kind_is_distinct_and_named() {
         Expectile::new(expectile_cfg()).unwrap().state(),
         Garch::new(garch_cfg()).unwrap().state(),
         Ar::new(ar_cfg()).unwrap().state(),
+        Spectral::new(spectral_cfg()).unwrap().state(),
     ];
     let from_states: Vec<&str> = states.iter().map(|s| s.model.kind()).collect();
     assert_eq!(from_states, kinds);
@@ -914,6 +916,7 @@ fn one_state_of_each_kind() -> Vec<State> {
         Expectile::new(expectile_cfg()).unwrap().state(),
         Garch::new(garch_cfg()).unwrap().state(),
         Ar::new(ar_cfg()).unwrap().state(),
+        Spectral::new(spectral_cfg()).unwrap().state(),
         State::new(ModelState::EwCov(Box::new(EwCov::new(1)))),
     ]
 }
@@ -1036,6 +1039,8 @@ fn every_model_hands_back_its_configuration() {
     same(Garch::new(c.clone()).unwrap(), &c, Garch::cfg);
     let c = ar_cfg();
     same(Ar::new(c.clone()).unwrap(), &c, Ar::cfg);
+    let c = spectral_cfg();
+    same(Spectral::new(c.clone()).unwrap(), &c, Spectral::cfg);
 }
 
 fn ew_class_cfg() -> EwClassCfg {
@@ -1898,6 +1903,7 @@ fn every_model_refuses_at_restore_a_configuration_its_new_refuses() {
             "horizon must be at least 1",
         ),
         refused(Ar::new(ar_cfg()).unwrap(), "decay", zero(), h),
+        refused(Spectral::new(spectral_cfg()).unwrap(), "decay", zero(), h),
     ];
     // Every model's `restore`: the twenty-one kinds, `robust` under both
     // losses.
@@ -2315,6 +2321,7 @@ fn exactly_the_scheduled_solvers_report_a_solve_share() {
         ("expectile", share(Expectile::new(expectile_cfg()).unwrap())),
         ("garch", share(Garch::new(garch_cfg()).unwrap())),
         ("ar", share(Ar::new(ar_cfg()).unwrap())),
+        ("spectral", share(Spectral::new(spectral_cfg()).unwrap())),
     ];
     let reporting: Vec<&str> = shares
         .iter()
@@ -2364,6 +2371,7 @@ const PROBED: &[(&str, &str)] = &[
     ("Expectile", "expectile"),
     ("Garch", "garch"),
     ("Ar", "ar"),
+    ("Spectral", "spectral"),
 ];
 
 #[test]
@@ -6449,6 +6457,58 @@ fn ar_predict_is_the_step() {
             Ar::new(ArCfg {
                 min_weight: 6.0,
                 ..ar_cfg()
+            })
+            .unwrap()
+        },
+        2,
+        false,
+    );
+}
+
+/// Two series at three frequencies, the DC and the Nyquist among them, the
+/// probes' half-life.
+fn spectral_cfg() -> SpectralCfg {
+    SpectralCfg {
+        n_targets: 2,
+        frequencies: vec![0.0, 0.2, 0.5],
+        spacing: 1.0,
+        decay: Decay::Halflife(HALFLIFE),
+        scaling: SpectralScaling::Density,
+        detrend: true,
+        min_weight: 0.0,
+        max_state_bytes: None,
+    }
+}
+
+#[test]
+fn spectral() {
+    // A power per target and frequency, read before the row; `n_eff` every
+    // row's weight, decayed (rule 8); the transform is what a break clears.
+    let m = Spectral::new(spectral_cfg()).unwrap();
+    assert_eq!(m.n_features(), 0, "spectral reads no features");
+    let r = probe_with(m, 2, Some(&Spectral::n_eff));
+    assert_eq!(r.kind, "spectral");
+    assert_eq!(r.n_outputs, 6);
+    assert_eq!(r.pred_len, 6);
+    assert!(r.roundtrips);
+    assert!(!r.lags_are_a_no_op);
+    let other = SpectralCfg {
+        scaling: SpectralScaling::Spectrum,
+        detrend: false,
+        ..spectral_cfg()
+    };
+    assert!(probe_with(Spectral::new(other).unwrap(), 2, Some(&Spectral::n_eff)).roundtrips);
+}
+
+#[test]
+fn spectral_predict_is_the_step() {
+    predict_is_the_step_without_the_step(|| Spectral::new(spectral_cfg()).unwrap(), 2, false);
+    predict_is_the_step_without_the_step(
+        || {
+            Spectral::new(SpectralCfg {
+                min_weight: 3.0,
+                scaling: SpectralScaling::Spectrum,
+                ..spectral_cfg()
             })
             .unwrap()
         },
