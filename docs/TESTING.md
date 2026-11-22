@@ -158,6 +158,7 @@ in `tests/test_second_opinion.py`, Vowpal Wabbit among them.
 | `quantile`'s every fit | the stationarity condition of the smoothed check loss it solves, rebuilt from the rows by the module doc's rules, band and nudge rows alike (`TestTheQuantileFitsDefinition`) | 1e-10 of the gradient's scale (1e-15 measured) |
 | Huber | `river.linear_model.LinearRegression(loss=optim.losses.Huber)` | statistical |
 | quantile | `river.stats.Quantile` | statistical |
+| `PSquared`, the core's P² estimate | `river.stats.Quantile`, every read after every value, at three levels on four seeded streams (`TestPSquaredIsRivers`) | bit for bit |
 | FTRL | `ftrl_ref` | ~1e-16 |
 | `ftrl`'s targets and decay, `pa`, `sgd`, `holt` | `ftrl_ref`; the docstrings' update equations, written out (`pa_ref`, `sgd_ref`, `holt_ref`), in `tests/test_oracles_gradient_paths.py` | pred 8.2e-16 |
 | FTRL | `river.optim.FTRLProximal`, row for row | 1e-12 |

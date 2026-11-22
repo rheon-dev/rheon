@@ -346,6 +346,65 @@ class TestQuantile:
         assert abs(ours - theirs) < 0.05, f"ours {ours} vs river {theirs}"
 
 
+class TestPSquaredIsRivers:
+    """T-R5b: the core's P² estimate against river's `stats.Quantile`, which
+    runs the same recursion (Jain and Chlamtac 1985), row for row and to the
+    bit (PLAN 544, part 1).
+
+    Four seeded streams (normal, lognormal, Student-t with 3 degrees of
+    freedom, classical Pareto with shape 2.5) at the levels 0.05, 0.5 and
+    0.95: every read after every value is compared as bits, the reads before
+    the sixth value included, where both return an order statistic of the
+    values so far. A level moved by `1e-12` disagrees with river, so the
+    comparison sees the last bits.
+    """
+
+    LEVELS = (0.05, 0.5, 0.95)
+    N = 3_000
+
+    @staticmethod
+    def _stream(dist, seed, n):
+        rng = np.random.default_rng([seed, dist, 544])
+        return [
+            rng.standard_normal(n),
+            rng.lognormal(0.0, 1.0, n),
+            rng.standard_t(3, n),
+            rng.pareto(2.5, n) + 1.0,
+        ][dist]
+
+    @staticmethod
+    def _rivers(xs, level):
+        q = stats.Quantile(level)
+        reads = []
+        for x in xs:
+            q.update(float(x))
+            reads.append(q.get())
+        return np.array(reads, dtype=np.float64)
+
+    @pytest.mark.parametrize("dist", [0, 1, 2, 3], ids=["normal", "lognormal", "t3", "pareto"])
+    @pytest.mark.parametrize("seed", [0, 1, 2, 3, 4])
+    def test_every_read_is_rivers_to_the_bit(self, dist, seed):
+        from rheon import _rheon as native
+
+        xs = self._stream(dist, seed, self.N)
+        ours = native.psquared_reads(xs.tolist(), list(self.LEVELS))
+        mismatches = 0
+        for level, reads in zip(self.LEVELS, ours, strict=True):
+            mine = np.array(reads, dtype=np.float64)
+            theirs = self._rivers(xs, level)
+            assert len(mine) == len(theirs) == self.N
+            mismatches += int(np.sum(mine.view(np.uint64) != theirs.view(np.uint64)))
+        assert mismatches == 0, f"{mismatches} of {3 * self.N} reads differ from river's"
+
+    def test_a_level_moved_in_its_last_bits_disagrees(self):
+        from rheon import _rheon as native
+
+        xs = self._stream(0, 0, self.N)
+        (ours,) = native.psquared_reads(xs.tolist(), [0.5 + 1e-12])
+        theirs = self._rivers(xs, 0.5)
+        assert np.any(np.array(ours, dtype=np.float64).view(np.uint64) != theirs.view(np.uint64))
+
+
 class TestHuber:
     """T-R6: contamination robustness, cross-checked qualitatively."""
 

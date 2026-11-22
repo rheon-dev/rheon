@@ -1357,6 +1357,25 @@ fn format_duration(ns: i64) -> String {
     rheon_polars::format_duration(ns)
 }
 
+/// The P² estimate (Jain and Chlamtac 1985) at each of `levels`, read after
+/// every one of `values` in turn: one list a level, as long as `values`. A
+/// value that is not finite is not seen, and the read before it repeats.
+/// The core's estimate itself, with no clock, weight or group: what the
+/// comparison with river's `stats.Quantile` runs, row for row.
+#[pyfunction]
+fn psquared_reads(values: Vec<f64>, levels: Vec<f64>) -> PyResult<Vec<Vec<Option<f64>>>> {
+    let mut est =
+        rheon_polars::rheon_core::PSquared::new(&levels).map_err(PyValueError::new_err)?;
+    let mut out = vec![Vec::with_capacity(values.len()); levels.len()];
+    for v in values {
+        est.update(v);
+        for (l, reads) in out.iter_mut().enumerate() {
+            reads.push(est.get(l));
+        }
+    }
+    Ok(out)
+}
+
 /// The parameters measured in clock units, which take a duration under a
 /// temporal clock, keyed `"*"` for the shared ones and by model `type` for
 /// the rest; the rates per clock unit, which a temporal clock refuses
@@ -1551,6 +1570,7 @@ fn _rheon(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(model_kinds, m)?)?;
     m.add_function(wrap_pyfunction!(validate_spec, m)?)?;
     m.add_function(wrap_pyfunction!(parse_duration, m)?)?;
+    m.add_function(wrap_pyfunction!(psquared_reads, m)?)?;
     m.add_function(wrap_pyfunction!(format_duration, m)?)?;
     m.add_function(wrap_pyfunction!(spec_clock_fields, m)?)?;
     m.add_function(wrap_pyfunction!(format_of_path, m)?)?;

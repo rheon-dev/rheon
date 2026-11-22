@@ -111,6 +111,7 @@ mod model;
 mod oracle;
 mod pa;
 mod pieces;
+mod psquared;
 mod rcov;
 mod refusals;
 mod rls;
@@ -209,6 +210,7 @@ pub use model::{
 };
 pub use pa::{Pa, PaCfg, PaMode};
 pub use pieces::Sequential;
+pub use psquared::PSquared;
 pub use rcov::{
     Rcov, RcovCfg, RcovEstimate, RcovKind, parzen, parzen_c_star, phi_11, phi_12, phi_22, preavg_g,
     psi1, psi2,
