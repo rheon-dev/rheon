@@ -413,8 +413,14 @@ def evidence(
 STEP_BLIND: frozenset[str] = frozenset({"bocpd", "seqtest", "garch"})
 #: The kinds a session change breaks whatever its gap, as a gap past
 #: ``gap_cap`` does: ``rcov``'s block is split there (no product pairs two
-#: returns across it), and ``corrchange`` abandons its span, windows or cycle.
-BREAK_AT_A_SESSION: frozenset[str] = frozenset({"rcov", "corrchange"})
+#: returns across it), ``corrchange`` abandons its span, windows or cycle,
+#: and ``ar`` empties its lags: the values either side are not adjacent.
+BREAK_AT_A_SESSION: frozenset[str] = frozenset({"rcov", "corrchange", "ar"})
+#: Of those, the kinds that also decay: a session change is a break *and*
+#: a step of ``session_gap``, where a rewritten clock is a break only at a
+#: step past ``gap_cap``, which decays by the cap. The two agree only where
+#: the gap is past the cap.
+BREAK_AND_DECAY: frozenset[str] = frozenset({"ar"})
 
 
 def rewrite(df: pl.DataFrame, step: float) -> pl.DataFrame:
@@ -450,6 +456,8 @@ def test_a_numeric_session_gap_is_the_clock_rewritten(kind, gap):
         print(f"audit, gap {gap}: the rewritten clock moves its clock table's {moved}")
         assert moved
         return
+    if kind in BREAK_AND_DECAY and gap < GAP_CAP:
+        pytest.skip(f"{kind}: no clock rewrite both breaks and steps by a gap under the cap")
     at = max(gap, 2 * GAP_CAP) if kind in BREAK_AT_A_SESSION else gap
     plain, plain_bank = fit(clocked(kind), rewrite(df, at))
     assert_frame_equal(out, plain, check_exact=True)

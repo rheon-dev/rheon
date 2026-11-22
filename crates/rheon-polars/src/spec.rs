@@ -1525,9 +1525,12 @@ pub enum ArLags {
 }
 
 impl ArLags {
-    /// The lags, `1..=p` for an order.
+    /// The lags, `1..=p` for an order. An order past
+    /// [`rheon_core::MAX_LAG`] is the one lag `p`, which the model refuses
+    /// by name: listing `1..=p` would allocate the refused order first.
     pub fn lags(&self) -> Vec<usize> {
         match self {
+            ArLags::Order(p) if *p > rheon_core::MAX_LAG => vec![*p],
             ArLags::Order(p) => (1..=*p).collect(),
             ArLags::List(l) => l.clone(),
         }

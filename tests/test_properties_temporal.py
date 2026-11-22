@@ -670,8 +670,12 @@ DELAYED_ARGS: dict[str, dict] = {"kalman": {"coef_half_life": "1h"}}
 #: The models a delayed label is fitted with, and what each needs besides:
 #: every regression, since ``embargo`` is a parameter they all share. Built
 #: from `test_model_registry.REGRESSIONS`, so a new regression is swept
-#: without an edit here (a hand-kept list held five of the ten).
-DELAYED_MODELS = {name: MINIMAL[name] | DELAYED_ARGS.get(name, {}) for name in sorted(REGRESSIONS)}
+#: without an edit here (a hand-kept list held five of the ten), less
+#: ``ar``, which refuses ``embargo``: a delay would make its lags older for
+#: the rows it predicts than for the rows it learns.
+DELAYED_MODELS = {
+    name: MINIMAL[name] | DELAYED_ARGS.get(name, {}) for name in sorted(REGRESSIONS - {"ar"})
+}
 
 
 @st.composite

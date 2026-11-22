@@ -728,7 +728,16 @@ CASES: list[Case] = [
         "ar",
         full(**CLOSE, lags=[1, 3], ridge=0.01, max_state_bytes=1 << 20),
     ),
-    Case("ar_pure", "ar", {**no_features(full2()), "targets": ["y"], "lags": 2}),
+    # Without the embargo, which `ar` refuses.
+    Case(
+        "ar_pure",
+        "ar",
+        {
+            **{k: v for k, v in no_features(full2()).items() if k != "embargo"},
+            "targets": ["y"],
+            "lags": 2,
+        },
+    ),
     # Each target a return series; no half-life (the recursion is per
     # observation), so no gate on settling toward one either.
     Case(

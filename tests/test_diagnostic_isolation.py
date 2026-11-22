@@ -112,6 +112,10 @@ KINDS: dict[str, Builder] = {
 ESSENTIAL_KINDS = ("ewridge", "sgd", "holt")
 #: The kinds with no features: they take ``targets`` only.
 NO_FEATURES = frozenset({"holt"})
+#: The kinds that refuse ``embargo``: ``ar``'s lags are the target's last
+#: values, which a delay would make older for the rows predicted than for
+#: the rows learned. Their clocked variant runs without one.
+NO_EMBARGO = frozenset({"ar"})
 
 #: Where a switch is taken by fewer than every linear kind (the builders'
 #: refusals; docs/DIAGNOSTICS.md, "What each costs, and which models take it").
@@ -316,6 +320,8 @@ def _spec(build: Builder, kind: str, variant: str, kw: dict[str, Any], grid: boo
     )
     if kind not in NO_FEATURES:
         full["features"] = ["x0", "x1"]
+    if kind in NO_EMBARGO:
+        full.pop("embargo", None)
     full |= kw
     if variant == "clocked" and full.get("emit_drift") and "drift_threshold" not in full:
         # On a clock, the threshold is in sigma x clock units and has no

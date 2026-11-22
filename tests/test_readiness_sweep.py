@@ -723,7 +723,9 @@ EMBARGO: dict[str, Any] = dict(clock="t", gap_cap=5.0, embargo=3.0)
         )
         for k in sorted(REGRESSIONS)
         for name, _ in _gates(k)
-        for held in (False, True)
+        # `ar` refuses an embargo: its lags would be older for the rows it
+        # predicts than for the rows it learns.
+        for held in ((False,) if k == "ar" else (False, True))
     ],
 )
 def test_the_residual_spread_never_moves_with_a_gate(kind: str, name: str, held: bool):
