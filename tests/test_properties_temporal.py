@@ -508,6 +508,14 @@ def clock_specs(draw, model: str, step: int, cap: int):
             kw["closed"] = draw(st.sampled_from(["right", "both"]))
         else:
             kw["refit_rows"] = draw(st.integers(0, 12))
+    elif model == "glm":
+        # Task 538: the first rows' refit over a span of the clock, or of
+        # rows, on a count the stream derives from its target.
+        kw |= xy | dict(targets=["c"])
+        if draw(st.booleans()):
+            kw["refit_span"] = steps(1, 30)
+        else:
+            kw["refit_rows"] = draw(st.integers(0, 12))
     elif model == "garch":
         # Task 492: the start as a span of the clock, or of rows; no decay.
         kw |= dict(targets=["y"])
@@ -563,6 +571,9 @@ def temporal_streams(draw, model: str, min_rows=1, max_rows=40):
         schema_overrides={c: pl.Float64 for c in ("x0", "x1", "y", "w")},
     ).with_columns(lab=pl.when(pl.col("y") > 0.5).then(pl.lit("a")).otherwise(pl.lit("b")))
     df = df.with_columns(lab=pl.when(pl.col("y").is_null()).then(None).otherwise(pl.col("lab")))
+    # A count for `glm`, from the target: no draw, so every other stream is
+    # the one it was.
+    df = df.with_columns(c=pl.col("y").abs().round(0))
     spec = draw(clock_specs(model, step, cap), label="spec")
     return df, spec
 

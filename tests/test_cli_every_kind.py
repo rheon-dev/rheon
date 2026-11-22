@@ -408,6 +408,9 @@ CASES: list[Case] = [
         },
     ),
     Case("glm2", "glm", {**full2(refit_rows=0, step_cap=0.5), "targets": ["hit"]}),
+    # The first rows' refit over a span of the clock (task 538).
+    Case("glm_span", "glm", {**full2(refit_span=40.0), "targets": ["hit"]}),
+    Case("expectile_span", "expectile", full2(expectile=0.7, refit_span=40.0)),
     Case("expectile", "expectile", full(**CLOSE, expectile=0.8, refit_rows=30, refit_budget=64.0)),
     # A window of clock units and one of rows, refit exactly on every row: a
     # window takes no decay.

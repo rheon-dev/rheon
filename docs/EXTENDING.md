@@ -420,10 +420,10 @@ output leaves the bank through `Bank::closed_groups` when the group closes.
 **Give a parameter measured in clock units the type `Span`,** so a temporal clock can give it as a duration. A window, a solve cadence
 and a half-life of the model's own are such parameters, and one value per
 slot is a `SpanList`. **A span a model takes as a count of rows takes a clock
-form beside it** wherever the quantity has a meaning on the clock: a
-`<name>_rows` count beside a `<name>_span` or `window_size` (`window_rows`
-and `window_size`, `start_rows` and `start_span`, `refit_rows` and
-`refit_span`), the two refused together. Where it has none (a lag of a
+form beside it** wherever the quantity has a meaning on the clock. The count
+is `<name>_rows`, and its clock form `<name>_span` or `window_size`:
+`window_rows` and `window_size`, `start_rows` and `start_span`, `refit_rows`
+and `refit_span`. The two are refused together. Where it has none (a lag of a
 recursion per observation, a detector's count of observations, a cap on
 state), say why in the docstring. Each goes into the tables of
 `crates/rheon-polars/src/spec/clock.rs`:

@@ -354,8 +354,8 @@ and each diagnostic's own ``*_half_life`` below, and in the models
 ``prune_every`` and the model half-lives: ``long_half_life``,
 ``select_half_life``, ``coef_half_life``,
 ``revert_half_life``, ``trend_half_life`` and ``huber_scale_half_life``,
-``hawkes``' ``kernel_half_lives``, a list of them, and ``garch``'s
-``start_span``.
+``hawkes``' ``kernel_half_lives``, a list of them, ``garch``'s
+``start_span``, and ``glm``'s and ``expectile``'s ``refit_span``.
 
 One parameter takes either form, with a meaning for each: ``bocpd``'s
 ``hazard``. A number, finite and above 1, is the expected rows between

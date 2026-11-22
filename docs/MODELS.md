@@ -1339,9 +1339,9 @@ A row's own update cannot move its residual across zero, so one solve a
 row is the whole step. What one pass cannot do is judge an earlier row
 again once the fit has crossed it. Each target's first `refit_rows` rows
 are therefore fitted exactly once, and the sums rebuilt at the sides the
-exact fit gives them; `refit_span` is the same refit over the rows of a span
-of the clock from the target's first learned row, the row that reaches the
-span the last, its rows checked against `max_state_bytes` as they come. A
+exact fit gives them. `refit_span` is the same refit over a span of the
+clock from the target's first learned row, the row that reaches the span its
+last. Its rows are checked against `max_state_bytes` as they come. A
 window, `window_rows` rows or `window_size` of the
 clock, instead refits the rows it holds on every row. The exact fit
 repeats a weighted least-squares solve at the current sides, judging every
@@ -1910,15 +1910,16 @@ decay.
 
 **The spans.** `half_life`, `gap_cap` and `refit_span` take a number (rows,
 with no clock) or a clock duration, as every spec's do. `refit_rows` counts
-rows of positive weight; `refit_span` is the same refit over a span of the
+rows of positive weight. `refit_span` is the same refit over a span of the
 clock: a target's rows from its first learned row through the first row at
-least `refit_span` after it, read off the rows' exact stamps, once they hold
-a row per coefficient. On a clock of one unit a row that is `refit_span + 1`
-rows, the refit of `refit_rows = refit_span + 1` to the bit. A count's
-buffer has a size known when the spec is built, and is refused there past
-256 KB a group; a span's holds the rows the data puts in it, so it is held
-to 256 KB as the rows come: a warning past half, once a group, and an error
-naming the group and the bytes at the row that would pass it.
+least `refit_span` after it, once they hold a row per coefficient. The span
+is read off the rows' exact stamps. On a clock of one unit a row that is
+`refit_span + 1` rows, the refit of `refit_rows = refit_span + 1` to the
+bit. A count's buffer has a size known when the spec is built, and is
+refused there past 256 KB a group. A span's holds the rows the data puts in
+it, so it is held to 256 KB as the rows come. A group past half of it gets
+a warning, once, and the row that would pass it stops the run with an error
+naming the group and the bytes.
 
 #### Example
 
