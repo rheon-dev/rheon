@@ -337,9 +337,11 @@ fn a_held_row_takes_the_inputs_dtypes_or_is_refused_by_name() {
     assert!(e.contains("saved without a \"z\" column"), "{e}");
 }
 
-/// A state holding points is version 2; a damaged held set is refused.
+/// A state holding points loads, and a damaged held set is refused; one of
+/// version 1, written before the envelope, holding points is damaged,
+/// where version 2 held them.
 #[test]
-fn a_state_holding_points_is_version_two_and_checked_on_load() {
+fn a_state_holding_points_is_checked_on_load() {
     let df = ticks(160);
     let c = cols(false, KEEP);
     let mut rt = RefreshTime::new(names(), true).unwrap();
@@ -350,19 +352,29 @@ fn a_state_holding_points_is_version_two_and_checked_on_load() {
     rt.feed_limited(&df, &c, Some(r)).unwrap();
     let bytes = rt.save_bytes().unwrap();
     let mut file: super::RefreshFile = rmp_serde::from_slice(&bytes).unwrap();
-    assert_eq!(file.version, super::REFRESH_VERSION_HELD);
+    assert_eq!(file.version, super::REFRESH_VERSION);
+    assert!(file.held.is_some());
     let load = |f: &super::RefreshFile| {
-        RefreshTime::load_bytes(&rmp_serde::to_vec_named(f).unwrap(), names(), true, false)
+        RefreshTime::load_bytes(
+            &crate::reseal(&rmp_serde::to_vec_named(f).unwrap()),
+            names(),
+            true,
+            false,
+        )
     };
     assert!(load(&file).is_ok());
     let good = file.held.clone();
-    file.version = super::REFRESH_VERSION;
+    let old = |version| crate::envelope::legacy::refresh(&bytes, version);
+    let two = RefreshTime::load_bytes(&old(super::REFRESH_VERSION_HELD), names(), true, false)
+        .unwrap();
+    assert_eq!(two.save_bytes().unwrap(), bytes);
     assert_eq!(
-        load(&file).err().unwrap(),
+        RefreshTime::load_bytes(&old(super::REFRESH_VERSION_PLAIN), names(), true, false)
+            .err()
+            .unwrap(),
         "rp.stream.refresh_time: the state is damaged: its contents do not match its version, \
          1. Load an undamaged copy of the state file, or leave out load_state to start over."
     );
-    file.version = super::REFRESH_VERSION_HELD;
     for damage in [
         |h: &mut Held| h.points.clear(),
         |h: &mut Held| h.points[0].0 = 6,

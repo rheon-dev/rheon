@@ -2,7 +2,7 @@
 //! every other file stays readable by a build from before durations. A file
 //! of its own, keeping bank.rs under `tests/test_repo_hygiene.py`'s 250 KB
 //! cap for a source file.
-use super::{BankHeader, format_version_for};
+use super::format_version_for;
 use crate::{Bank, Spec};
 
 fn spec(extra: &str) -> Spec {
@@ -26,7 +26,11 @@ fn a_file_says_version_3_only_when_a_spec_carries_a_duration() {
         let specs = vec![spec(extra)];
         assert_eq!(format_version_for(&specs), version, "{extra}");
         let bytes = Bank::new(specs).unwrap().save_bytes().unwrap();
-        let header: BankHeader = rmp_serde::from_slice(&bytes).unwrap();
+        #[derive(serde::Deserialize)]
+        struct Format {
+            format_version: u32,
+        }
+        let header: Format = rmp_serde::from_slice(&bytes).unwrap();
         assert_eq!(header.format_version, version, "{extra}");
         // And the file loads back, specs and all.
         let back = Bank::load_bytes(&bytes, None).unwrap();

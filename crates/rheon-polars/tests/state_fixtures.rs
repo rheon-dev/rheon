@@ -28,16 +28,18 @@
 //! before 1.0, whenever the bank's schema, the windows state's version or
 //! the `refresh_time` state's moves, or a number does; the bank's minimum
 //! schema moves with the schema until 1.0 and stays at 1.0's after, as
-//! `rheon-core`'s does. The windows state and the formula tree are
-//! labelled unstable (docs/PLAN.md task 198, D5): a change to either
-//! regenerates its fixture rather than keeping it with a loader.
+//! `rheon-core`'s does. The windows state and the formula tree were
+//! labelled unstable (docs/PLAN.md task 198, D5) until PLAN 542 wrote every
+//! state file in one envelope: since then a window run's state, the
+//! formula tree inside it and a pipeline checkpoint are kept with a loader
+//! like the rest.
 //!
 //! **From 1.0** a layout change keeps the fixtures of the schema before it
 //! (docs/PLAN.md §18 D1; review round 5, D1 and D2), as `rheon-core`'s
 //! harness does. The first 1.x layout change, from schema 44 to 45:
 //!
-//! 1. copy the kinds the promise covers -- `bank.rs` and the
-//!    `refresh_time*.rs` files, not the unstable windows states -- to
+//! 1. copy the kinds the promise covers -- every current file, since PLAN
+//!    542 the window runs' and the checkpoint's too -- to
 //!    `tests/state_fixtures/v44/`, the directory the kept set, which
 //!    `build.rs` finds;
 //! 2. raise `SCHEMA_VERSION` to 45 and write the loader;
@@ -69,7 +71,8 @@ use std::path::{Path, PathBuf};
 use polars::prelude::*;
 use rheon_polars::rheon_core::SCHEMA_VERSION;
 use rheon_polars::{
-    Bank, MIN_BANK_SCHEMA_VERSION, RefreshCols, RefreshTime, Spec, WindowsConfig, WindowsRun,
+    Bank, MIN_BANK_SCHEMA_VERSION, RefreshCols, RefreshTime, Spec, StateKind, WindowsConfig,
+    WindowsRun, checkpoint_bytes, load_checkpoint,
 };
 
 /// One frozen fixture, as `tests/state_fixtures/<name>.rs` holds it.
@@ -195,6 +198,20 @@ const REGENERATE: &str = "PRINT_STATE_FIXTURES=1 cargo test -p rheon-polars --te
 /// the current bytes exactly, the windows states included. No bank file
 /// here holds a formula target; a 70 bank whose target's core is version 10
 /// is held by `state_checksum.rs`.
+///
+/// 71 kept since 72 wrote every state file in one envelope (PLAN 542): its
+/// first entries are `magic` (`"rheon-state"`), `kind` and `version`, its
+/// last the checksum; a window run's state is version 12 and a
+/// `refresh_time` state version 3, which gains the checksum and names its
+/// clock's kind `clock_kind`. A kept file begins with its kind's old magic
+/// and loads through its loader, so every kept kind goes on to the bit and
+/// converts to the current bytes exactly. Two kinds are new at 72 and have
+/// no kept file: `bank_formula`, a bank holding a formula target's window
+/// core, the form a bank file embeds a window run's state in, and
+/// `checkpoint`, a pipeline checkpoint of a `refresh_time` state, a window
+/// run's and that bank's. The 71 set was written by the build that counts a
+/// zero-weight row in no clock (PLAN 539), so [`ZERO_WEIGHT_CLOCK`] is for
+/// the sets before it.
 ///
 /// The kept schemas, each a `v<N>/` directory found beside the current set.
 fn previous() -> Vec<u32> {
@@ -1431,6 +1448,89 @@ fn refresh_held_run(bytes: &[u8], input: &DataFrame) -> Ran {
     Ok((again, vec![("feed".into(), fed)]))
 }
 
+/// A formula target, whose window looks ahead, so each group's window core
+/// holds rows across the save; a bank file embeds that core as a window
+/// run's state (PLAN 542's form of a bank holding one). Groups by `g`,
+/// whose blocks of 25 rows only grow, so a core per group seen.
+fn formula_specs() -> Vec<Spec> {
+    [
+        r#"{"name": "ahead", "model": {"type": "ewridge"}, "features": ["x0"], "group": "g",
+            "targets": [{"name": "fwd", "formula": ["-", ["rewm_mean", ["col", "mid"],
+                {"half_life": 2.0, "window_size": 4.0}], ["col", "mid"]]}],
+            "clock": "t", "gap_cap": 50.0, "half_life": 20.0, "embargo": 4.0}"#,
+    ]
+    .iter()
+    .map(|text| serde_json::from_str(text).unwrap_or_else(|e| panic!("{text}: {e}")))
+    .collect()
+}
+
+fn formula_input(df: &DataFrame) -> DataFrame {
+    df.select(["t", "g", "x0", "mid"]).unwrap()
+}
+
+fn formula_first() -> (Vec<u8>, DataFrame) {
+    let df = formula_input(&frame());
+    let mut bank = Bank::new(formula_specs()).unwrap();
+    bank.fit_predict(&df.slice(0, SPLIT)).unwrap();
+    (bank.save_bytes().unwrap(), df.slice(SPLIT as i64, N - SPLIT))
+}
+
+fn formula_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    bank_run_of(&formula_specs(), bytes, input)
+}
+
+/// The stages of the `checkpoint` fixture, in order: a `refresh_time`
+/// grid, a window run and a bank, each its kind's fixture's state, and
+/// each continued on that fixture's input. The bank's input is the
+/// fixture's own; the others are made from the same generators.
+const STAGES: [&str; 3] = ["grid", "windows", "bank"];
+
+fn checkpoint_first() -> (Vec<u8>, DataFrame) {
+    let (grid, _) = refresh_first();
+    let (windows, _) = windows_first();
+    let (bank, input) = formula_first();
+    let stages: Vec<(&str, &[u8])> = STAGES.into_iter().zip([&grid[..], &windows, &bank]).collect();
+    (checkpoint_bytes(&stages).unwrap(), input)
+}
+
+fn checkpoint_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    let stages = load_checkpoint(bytes)?;
+    let names: Vec<(&str, StateKind)> = stages.iter().map(|s| (s.name.as_str(), s.kind)).collect();
+    if names
+        != STAGES
+            .into_iter()
+            .zip([StateKind::RefreshTime, StateKind::Windows, StateKind::Bank])
+            .collect::<Vec<_>>()
+    {
+        return Err(format!("the checkpoint's stages are {names:?}"));
+    }
+    let ticks = ticks();
+    let half = ticks.height() / 2;
+    let runs = [
+        refresh_run(
+            &stages[0].state,
+            &ticks.slice(half as i64, ticks.height() - half),
+        )?,
+        windows_run(&stages[1].state, &window_input(&frame()).slice(SPLIT as i64, N - SPLIT))?,
+        formula_run(&stages[2].state, input)?,
+    ];
+    let again: Vec<(&str, &[u8])> = STAGES
+        .into_iter()
+        .zip(runs.iter().map(|(b, _)| &b[..]))
+        .collect();
+    let again = checkpoint_bytes(&again)?;
+    let frames = STAGES
+        .into_iter()
+        .zip(runs)
+        .flat_map(|(stage, (_, frames))| {
+            frames
+                .into_iter()
+                .map(move |(name, df)| (format!("{stage}/{name}"), df))
+        })
+        .collect();
+    Ok((again, frames))
+}
+
 fn kinds() -> Vec<Kind> {
     vec![
         Kind {
@@ -1522,6 +1622,16 @@ fn kinds() -> Vec<Kind> {
             name: "refresh_time_held",
             first: refresh_held_first,
             run: refresh_held_run,
+        },
+        Kind {
+            name: "bank_formula",
+            first: formula_first,
+            run: formula_run,
+        },
+        Kind {
+            name: "checkpoint",
+            first: checkpoint_first,
+            run: checkpoint_run,
         },
     ]
 }
@@ -1794,6 +1904,7 @@ const KEPT_COUNTS: &[(u32, usize)] = &[
     (68, 18),
     (69, 18),
     (70, 18),
+    (71, 18),
 ];
 
 /// The one place a set lacks a case of the set before it: the window
@@ -1893,27 +2004,112 @@ fn a_kept_schema_without_its_set_on_disk_is_refused() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
-/// The form schema 71 added, held in the files (review 5, B1 and D3): every
-/// current bank file and window run's state ends with its checksum entry,
-/// and every kept file of 70 with none; a `refresh_time` state keeps none.
+/// The envelope's head (PLAN 542): `magic`, `kind` and `version` as the
+/// file's first three entries, read from its first bytes as the loaders
+/// read them, or `None`.
+fn envelope_head(bytes: &[u8]) -> Option<(String, String, u64)> {
+    let v = rmpv::decode::read_value(&mut &bytes[..]).ok()?;
+    let m = v.as_map()?;
+    let entry = |i: usize, key: &str| m.get(i).filter(|(k, _)| k.as_str() == Some(key));
+    Some((
+        entry(0, "magic")?.1.as_str()?.to_owned(),
+        entry(1, "kind")?.1.as_str()?.to_owned(),
+        entry(2, "version")?.1.as_u64()?,
+    ))
+}
+
+/// The forms schemas 71 and 72 added, held in the files (review 5, B1 and
+/// D3): every current fixture is written in the envelope -- the head of its
+/// kind and version first, the checksum last -- a checkpoint's stages each a
+/// whole state of its own kind, and a bank's formula target's core a whole
+/// window run's state; every kept file of 71 begins with its kind's old
+/// magic, its bank files and window states sealed and its `refresh_time`
+/// states not; and no kept file of 70 or earlier is sealed.
 #[test]
-fn the_current_bank_and_windows_fixtures_end_with_their_checksum() {
+fn every_current_fixture_is_written_in_the_envelope() {
     const TAIL: &[u8] = b"\xa8checksum\xc4\x08";
     let sealed = |bytes: &[u8]| {
         bytes.len() > TAIL.len() + 8
             && &bytes[bytes.len() - 8 - TAIL.len()..bytes.len() - 8] == TAIL
     };
-    let mut held = 0;
+    let kind_of = |name: &str| {
+        if name == "checkpoint" {
+            ("checkpoint", 1)
+        } else if name.starts_with("refresh_time") {
+            ("refresh_time", 3)
+        } else if name.starts_with("with_windows") {
+            ("windows", 12)
+        } else {
+            ("bank", u64::from(SCHEMA_VERSION))
+        }
+    };
+    let mut kinds = std::collections::BTreeMap::new();
     for f in frozen::ALL {
         let bytes = unhex(f.state);
-        let want = !f.name.starts_with("refresh_time");
-        assert_eq!(sealed(&bytes), want, "{}", f.name);
-        held += usize::from(want);
+        let (kind, version) = kind_of(f.name);
+        assert_eq!(
+            envelope_head(&bytes),
+            Some(("rheon-state".to_owned(), kind.to_owned(), version)),
+            "{}",
+            f.name
+        );
+        assert!(sealed(&bytes), "{}", f.name);
+        *kinds.entry(kind).or_insert(0) += 1;
     }
-    assert_eq!(held, 15, "twelve bank files and three window states");
+    assert_eq!(
+        kinds.into_iter().collect::<Vec<_>>(),
+        [("bank", 13), ("checkpoint", 1), ("refresh_time", 3), ("windows", 3)]
+    );
+    // A checkpoint's stages, each a whole state of its kind; and the bank's
+    // formula target's cores inside its bank stage, each a window run's.
+    let f = frozen::ALL.iter().find(|f| f.name == "checkpoint").unwrap();
+    let stages = load_checkpoint(&unhex(f.state)).unwrap();
+    for (s, (kind, version)) in
+        stages
+            .iter()
+            .zip([("refresh_time", 3), ("windows", 12), ("bank", 72)])
+    {
+        assert_eq!(
+            envelope_head(&s.state),
+            Some(("rheon-state".to_owned(), kind.to_owned(), version)),
+            "{}",
+            s.name
+        );
+    }
+    let f = frozen::ALL.iter().find(|f| f.name == "bank_formula").unwrap();
+    let v = rmpv::decode::read_value(&mut &unhex(f.state)[..]).unwrap();
+    let resolvers = v
+        .as_map()
+        .unwrap()
+        .iter()
+        .find(|(k, _)| k.as_str() == Some("resolvers"))
+        .expect("the bank holds its formula target's cores")
+        .1
+        .clone();
+    let mut cores = 0;
+    for spec in resolvers.as_array().unwrap() {
+        for group in spec.as_array().unwrap()[1].as_array().unwrap() {
+            let core = &group.as_array().unwrap()[1];
+            let bytes: Vec<u8> = match core {
+                rmpv::Value::Binary(b) => b.clone(),
+                rmpv::Value::Array(a) => a.iter().map(|x| x.as_u64().unwrap() as u8).collect(),
+                other => panic!("a core is bytes, not {other}"),
+            };
+            assert_eq!(
+                envelope_head(&bytes),
+                Some(("rheon-state".to_owned(), "windows".to_owned(), 12))
+            );
+            assert!(sealed(&bytes));
+            cores += 1;
+        }
+    }
+    assert!(cores > 0, "a core held across the save");
     for (schema, set) in previous_sets() {
         for f in set {
-            assert!(!sealed(&unhex(f.state)), "v{schema}/{}", f.name);
+            let bytes = unhex(f.state);
+            assert_eq!(envelope_head(&bytes), None, "v{schema}/{}", f.name);
+            let want = schema == 71 && !f.name.starts_with("refresh_time");
+            assert_eq!(sealed(&bytes), want, "v{schema}/{}", f.name);
         }
     }
 }
@@ -1950,7 +2146,7 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
             let what = format!("v{schema}/{}", f.name);
             assert_eq!(f.schema, schema, "{what}: a fixture of schema {}", f.schema);
             let kind = kind_of(f);
-            if ZERO_WEIGHT_CLOCK.iter().any(|z| z.0 == f.name) {
+            if schema <= 70 && ZERO_WEIGHT_CLOCK.iter().any(|z| z.0 == f.name) {
                 zero_weight_clock_rule(&kind, f, &what);
                 continue;
             }
@@ -2707,10 +2903,19 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
             p.contains(".last_time.") && p.ends_with(".Int")
         }),
         // Task 321: a pair grid sliced among one tick's points holds the
-        // rest, the file then version 2, and the tick's row in each form a
-        // held value takes.
-        ("refresh_time_held", "version 2", |p, v| {
-            p == ".version" && v.as_u64() == Some(2)
+        // rest, the file then version 2 (3, with or without them, since
+        // PLAN 542's envelope; `v71/` keeps the 2), and the tick's row in
+        // each form a held value takes.
+        ("refresh_time_held", "version 3 holding points", |p, v| {
+            p == ".version" && v.as_u64() == Some(3)
+        }),
+        // PLAN 542: the clock's kind, named `clock_kind` beside the
+        // envelope's own `kind`, in each of its two forms.
+        ("refresh_time", "a number clock's clock_kind", |p, v| {
+            p == ".clock_kind" && v.as_str() == Some("Numeric")
+        }),
+        ("refresh_time_held", "a temporal clock's clock_kind", |p, v| {
+            p == ".clock_kind" && v.as_str() == Some("Temporal")
         }),
         ("refresh_time_held", "a held point", |p, v| {
             p.starts_with(".held.points.0.2.") && v.as_f64().is_some()
@@ -3325,9 +3530,20 @@ fn a_conformal_radius_of_schema_66_is_shown_then_converted() {
     let mut found = 0;
     to_66(&mut v, &mut found);
     assert_eq!(found, 1, "one tracker");
-    // A file of 66 ends with no checksum (schema 71's).
+    // A file of 66 begins with the bank's magic before the envelope, names
+    // its schema `schema_version`, and ends with no checksum (schema 71's).
     if let rmpv::Value::Map(m) = &mut v {
-        m.retain(|(k, _)| k.as_str() != Some("checksum"));
+        m.retain(|(k, _)| !matches!(k.as_str(), Some("checksum" | "kind")));
+        for (k, val) in m.iter_mut() {
+            match k.as_str() {
+                Some("magic") => *val = "polars-online-bank".into(),
+                Some("version") => {
+                    *k = "schema_version".into();
+                    *val = 66.into();
+                }
+                _ => {}
+            }
+        }
     }
     let mut old = Vec::new();
     rmpv::encode::write_value(&mut old, &v).unwrap();

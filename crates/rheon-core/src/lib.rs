@@ -917,7 +917,17 @@ pub use window::{
 ///   model's own state moved. A bank file of 70 or earlier has none and
 ///   loads as it did, to the bit, re-saving the current fixture's bytes.
 ///   Schema 70's fixtures are kept (`tests/state_fixtures/v70/`).
-pub const SCHEMA_VERSION: u32 = 71;
+/// - 72 (2026-11-22, PLAN 542): every state file of the library -- a bank's,
+///   a window run's (version 12), a `refresh_time` sampler's (version 3) and
+///   the new pipeline checkpoint -- is written in one envelope: a map whose
+///   first entries are `magic` (`"rheon-state"`), `kind` and `version`, and
+///   whose last is the checksum schema 71 added. A bank file's `version` is
+///   this schema, where 71 and earlier began with `"polars-online-bank"`
+///   and named it `schema_version`. No model's own state moved. A bank file
+///   of 71 or earlier loads as it did, to the bit, and re-saves the current
+///   fixture's bytes. Schema 71's fixtures are kept
+///   (`tests/state_fixtures/v71/`).
+pub const SCHEMA_VERSION: u32 = 72;
 
 /// The default solve cadence of `ewridge`, `lasso`, `huber` and `quantile`
 /// (docs/PLAN.md task 115 (b)): a solve once the weight learned since the last

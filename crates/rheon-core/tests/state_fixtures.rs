@@ -501,7 +501,9 @@ const READ_ANEW: &[(&str, f64)] = &[
 /// row's weight), saves bytes that load back to the same, and differs from
 /// the current fixture's state in its columns' and pairs' counts and, since
 /// PLAN 539 (a zero-weight row counts in no clock), its clock's, which
-/// counted those rows' steps ([`counted_zero_weight_rule`]).
+/// counted those rows' steps ([`counted_zero_weight_rule`]). The sets of
+/// schema 70 and earlier; schema 71's was written by the build that counts
+/// none, and converts to the current bytes exactly.
 const COUNTED_ZERO_WEIGHT: &[&str] = &["audit", "audit_exact", "audit_scaled"];
 
 /// How far a continuation may part from the one frozen, on a platform other
@@ -729,6 +731,7 @@ const KEPT_COUNTS: &[(u32, usize)] = &[
     (68, 85),
     (69, 85),
     (70, 86),
+    (71, 104),
 ];
 
 /// The names one set holds that the next does not, each set given as a
@@ -940,7 +943,7 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                     named(&again.state()) == saved,
                     "{what}: saved, loaded, saved"
                 );
-            } else if COUNTED_ZERO_WEIGHT.contains(&f.name) {
+            } else if schema <= 70 && COUNTED_ZERO_WEIGHT.contains(&f.name) {
                 let saved = named(&m.state());
                 let again = load(&case, &saved).unwrap_or_else(|e| panic!("{what}: {e}"));
                 assert!(

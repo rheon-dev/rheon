@@ -917,6 +917,23 @@ fn the_decoders_own_failures_are_said_in_plain_words() {
         .to_string();
     assert_eq!(
         cut,
+        "state file: it is damaged (the checksum it ends with is missing or cut). Load an \
+         undamaged copy of the state file, or rebuild it from its input."
+    );
+    // Cut inside the envelope's head, the bytes are no bank file at all.
+    let head = Bank::load_bytes(&bytes[..12], None).err().expect("loaded");
+    assert_eq!(
+        head,
+        "state file: these bytes are not a rheon bank state file, or the file is cut \
+         short. Load a whole file that ModelBank.save or the command line's save_state wrote."
+    );
+    // A file written before the envelope, cut, is said as it was.
+    let old = crate::envelope::legacy::bank(&bytes, 70);
+    let cut = Bank::load_bytes(&old[..old.len() - 7], None)
+        .err()
+        .expect("loaded");
+    assert_eq!(
+        cut,
         "state file: these bytes are not a rheon bank state file, or the file is cut \
          short. Load a whole file that ModelBank.save or the command line's save_state wrote."
     );

@@ -8,6 +8,10 @@
 //! length byte read 0x7f made polars-arrow ask for 3.6e16 bytes, which
 //! aborts the process: a test reaching that case would not fail, it would
 //! end the run, so this one finishing is part of what it holds.
+//!
+//! From schema 72 and windows state 12 both are written in the envelope
+//! every state file shares (PLAN 542); the files before it load through
+//! their loaders, held here with a formula target's core inside a bank.
 
 use polars::prelude::*;
 use rheon_polars::{Bank, Spec, WindowsConfig, WindowsRun};
@@ -182,41 +186,135 @@ fn unsealed(bytes: &[u8], version_key: &str, version: Option<u64>) -> Vec<u8> {
     out
 }
 
-/// A file of the sealed schema without its checksum is damaged; the same
-/// file of the schema before, which wrote none, loads as one, and saves
-/// the sealed file back.
+/// `bytes`, an enveloped file, in the layout a build before the envelope
+/// wrote: `magic` as given, no `kind`, its `version` named `version_key`
+/// and set to `version`, and its checksum kept only if `sealed`.
+fn legacy(bytes: &[u8], magic: &str, version_key: &str, version: u64, sealed: bool) -> Vec<u8> {
+    let mut v = rmpv::decode::read_value(&mut &bytes[..]).unwrap();
+    let rmpv::Value::Map(m) = &mut v else {
+        panic!("a state file is a map")
+    };
+    m.retain(|(k, _)| !matches!(k.as_str(), Some("kind" | "checksum")));
+    for (k, val) in m.iter_mut() {
+        match k.as_str() {
+            Some("magic") => *val = magic.into(),
+            Some("version") => {
+                *k = version_key.into();
+                *val = version.into();
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    rmpv::encode::write_value(&mut out, &v).unwrap();
+    if sealed {
+        rheon_polars::reseal(&out)
+    } else {
+        out
+    }
+}
+
+fn legacy_bank(bytes: &[u8], schema: u64) -> Vec<u8> {
+    legacy(bytes, "polars-online-bank", "schema_version", schema, schema >= 71)
+}
+
+fn legacy_windows(bytes: &[u8], version: u64) -> Vec<u8> {
+    legacy(bytes, "polars-online windows", "version", version, version >= 11)
+}
+
+/// A file of the sealed schema without its checksum is damaged, enveloped
+/// or not; a file of the schema before the checksum, which wrote none,
+/// loads as one, and each saves the current file back.
 #[test]
 fn a_file_of_the_sealed_schema_without_its_checksum_is_damaged() {
     let bytes = bank_bytes();
+    let missing = "state file: it is damaged (the checksum it ends with is missing or cut). Load \
+                   an undamaged copy of the state file, or rebuild it from its input.";
     let err = Bank::load_bytes(&unsealed(&bytes, "", None), Some(&specs()))
         .err()
         .expect("refused");
-    assert_eq!(
-        err,
-        "state file: it is damaged (the checksum it ends with is missing or cut). Load an \
-         undamaged copy of the state file, or rebuild it from its input."
-    );
-    // The resolver's own core, version 11, is sealed in its own right, and
-    // the bank's 70 loader takes the file whole, so only the bank's entry
-    // goes.
-    let old = unsealed(&bytes, "schema_version", Some(70));
-    let bank = Bank::load_bytes(&old, Some(&specs())).unwrap();
-    assert_eq!(bank.save_bytes().unwrap(), bytes);
+    assert_eq!(err, missing);
+    let err = Bank::load_bytes(
+        &legacy(&bytes, "polars-online-bank", "schema_version", 71, false),
+        Some(&specs()),
+    )
+    .err()
+    .expect("refused");
+    assert_eq!(err, missing);
+    // The resolvers' own cores stay as they were saved, enveloped, and load
+    // so; only the bank's head moves.
+    for schema in [70, 71] {
+        let bank = Bank::load_bytes(&legacy_bank(&bytes, schema), Some(&specs())).unwrap();
+        assert_eq!(bank.save_bytes().unwrap(), bytes, "{schema}");
+    }
 
     let w = windows_bytes();
     let schema = windows_input().schema().clone();
-    let err = WindowsRun::load_bytes(&unsealed(&w, "", None), windows_config(), &schema)
+    let missing = "with_windows: the state is damaged (the checksum it ends with is missing or \
+                   cut). Load an undamaged copy of the state file, or leave out load_state to \
+                   start over.";
+    for unsealed in [
+        unsealed(&w, "", None),
+        legacy(&w, "polars-online windows", "version", 11, false),
+    ] {
+        let err = WindowsRun::load_bytes(&unsealed, windows_config(), &schema)
+            .err()
+            .expect("refused")
+            .to_string();
+        assert_eq!(err, missing);
+    }
+    for version in [10, 11] {
+        let run =
+            WindowsRun::load_bytes(&legacy_windows(&w, version), windows_config(), &schema)
+                .unwrap();
+        assert_eq!(run.save_bytes().unwrap(), w, "{version}");
+    }
+}
+
+/// A file written before the envelope that names a schema written only
+/// inside it is damaged; a bank's loader names a window run's state, a
+/// `refresh_time` state and a checkpoint for what they are, and a window
+/// run's loader a bank's.
+#[test]
+fn a_state_of_another_kind_is_named_for_what_it_is() {
+    let bytes = bank_bytes();
+    let err = Bank::load_bytes(&legacy_bank(&bytes, 72), Some(&specs()))
+        .err()
+        .expect("refused");
+    assert!(
+        err.starts_with("state file: it is damaged (its schema 72 was never written"),
+        "{err}"
+    );
+    let w = windows_bytes();
+    let err = Bank::load_bytes(&w, None).err().expect("refused");
+    assert_eq!(
+        err,
+        "state file: these bytes are a with_windows run's state, not a model bank's state. \
+         Load a file that ModelBank.save or the command line's save_state wrote."
+    );
+    let checkpoint = rheon_polars::checkpoint_bytes(&[("bank", &bytes), ("windows", &w)]).unwrap();
+    let err = Bank::load_bytes(&checkpoint, None).err().expect("refused");
+    assert!(err.contains("a pipeline checkpoint, not a model bank's state"), "{err}");
+    let schema = windows_input().schema().clone();
+    let err = WindowsRun::load_bytes(&bytes, windows_config(), &schema)
         .err()
         .expect("refused")
         .to_string();
-    assert_eq!(
-        err,
-        "with_windows: the state is damaged (the checksum it ends with is missing or cut). \
-         Load an undamaged copy of the state file, or leave out load_state to start over."
+    assert!(
+        err.starts_with("with_windows: the state is a model bank's state, not a window run's."),
+        "{err}"
     );
-    let old = unsealed(&w, "version", Some(10));
-    let run = WindowsRun::load_bytes(&old, windows_config(), &schema).unwrap();
-    assert_eq!(run.save_bytes().unwrap(), w);
+    let err = WindowsRun::load_bytes(&checkpoint, windows_config(), &schema)
+        .err()
+        .expect("refused")
+        .to_string();
+    assert!(err.contains("load_checkpoint"), "{err}");
+    // And the checkpoint gives each back, to load as it was saved.
+    let stages = rheon_polars::load_checkpoint(&checkpoint).unwrap();
+    assert_eq!(stages[0].state, bytes);
+    assert_eq!(stages[1].state, w);
+    assert!(Bank::load_bytes(&stages[0].state, Some(&specs())).is_ok());
+    assert!(WindowsRun::load_bytes(&stages[1].state, windows_config(), &schema).is_ok());
 }
 
 /// The JSON export is for reading, not loading: it carries no checksum.
@@ -228,7 +326,9 @@ fn the_json_export_carries_no_checksum() {
     let json: serde_json::Value =
         serde_json::from_str(&bank.save_json_string(false).unwrap()).unwrap();
     assert!(json.get("checksum").is_none());
-    assert_eq!(json["schema_version"], 71);
+    assert_eq!(json["magic"], "rheon-state");
+    assert_eq!(json["kind"], "bank");
+    assert_eq!(json["version"], 72);
 }
 
 /// A file is hashed as it is written and the bytes in memory are sealed
@@ -248,62 +348,75 @@ fn a_saved_file_is_the_saved_bytes() {
 }
 
 /// A bank file of schema 70 holding a formula target's window core of
-/// version 10, neither with a checksum, as the 70 build wrote it: it loads,
-/// goes on to the bit of the sealed file loaded, and then saves that
-/// bank's bytes.
+/// version 10, neither with a checksum, and one of 71 holding cores of 11,
+/// both sealed, each as its build wrote it: it loads, goes on to the bit of
+/// the current file loaded, and then saves that bank's bytes.
 #[test]
-fn a_bank_of_70_with_a_core_of_10_goes_on_to_the_bit() {
+fn a_bank_written_before_the_envelope_with_its_cores_goes_on_to_the_bit() {
     let df = stream(60);
     let mut bank = Bank::new(specs()).unwrap();
     bank.fit_predict(&df.slice(0, 40)).unwrap();
     let bytes = bank.save_bytes().unwrap();
-    let mut v =
-        rmpv::decode::read_value(&mut &unsealed(&bytes, "schema_version", Some(70))[..]).unwrap();
-    let rmpv::Value::Map(m) = &mut v else {
-        panic!("a bank file is a map")
-    };
-    let (_, resolvers) = m
-        .iter_mut()
-        .find(|(k, _)| k.as_str() == Some("resolvers"))
-        .expect("a formula target keeps its core");
-    fn list(v: &mut rmpv::Value) -> &mut Vec<rmpv::Value> {
-        match v {
-            rmpv::Value::Array(a) => a,
-            other => panic!("a list, not {other}"),
+    for (schema, core_version) in [(70, 10), (71, 11)] {
+        let mut v =
+            rmpv::decode::read_value(&mut &legacy_bank(&bytes, schema)[..]).unwrap();
+        let rmpv::Value::Map(m) = &mut v else {
+            panic!("a bank file is a map")
+        };
+        let (_, resolvers) = m
+            .iter_mut()
+            .find(|(k, _)| k.as_str() == Some("resolvers"))
+            .expect("a formula target keeps its core");
+        fn list(v: &mut rmpv::Value) -> &mut Vec<rmpv::Value> {
+            match v {
+                rmpv::Value::Array(a) => a,
+                other => panic!("a list, not {other}"),
+            }
         }
-    }
-    let mut cores = 0;
-    for spec in list(resolvers) {
-        for group in list(&mut list(spec)[1]) {
-            let held = &mut list(group)[1];
-            let core: Vec<u8> = match held {
-                rmpv::Value::Binary(b) => b.clone(),
-                rmpv::Value::Array(a) => a.iter().map(|x| x.as_u64().unwrap() as u8).collect(),
-                other => panic!("a core is bytes, not {other}"),
-            };
-            let old = unsealed(&core, "version", Some(10));
-            *held = match held {
-                rmpv::Value::Binary(_) => rmpv::Value::Binary(old),
-                _ => rmpv::Value::Array(old.into_iter().map(rmpv::Value::from).collect()),
-            };
-            cores += 1;
+        let mut cores = 0;
+        for spec in list(resolvers) {
+            for group in list(&mut list(spec)[1]) {
+                let held = &mut list(group)[1];
+                let core: Vec<u8> = match held {
+                    rmpv::Value::Binary(b) => b.clone(),
+                    rmpv::Value::Array(a) => {
+                        a.iter().map(|x| x.as_u64().unwrap() as u8).collect()
+                    }
+                    other => panic!("a core is bytes, not {other}"),
+                };
+                let old = legacy_windows(&core, core_version);
+                *held = match held {
+                    rmpv::Value::Binary(_) => rmpv::Value::Binary(old),
+                    _ => rmpv::Value::Array(old.into_iter().map(rmpv::Value::from).collect()),
+                };
+                cores += 1;
+            }
         }
+        assert_eq!(cores, 2, "a core for each group");
+        let mut old = Vec::new();
+        rmpv::encode::write_value(&mut old, &v).unwrap();
+        let old = if schema >= 71 {
+            rheon_polars::reseal(&old)
+        } else {
+            old
+        };
+        // A group's core is read at its next chunk, and kept as it came
+        // until then, so it is after the chunk that the two save one file.
+        let mut loaded = Bank::load_bytes(&old, Some(&specs())).unwrap();
+        let tail = df.slice(40, 20);
+        // The current file loaded and fed the same rows: a loaded core knows
+        // its input from the load on, as the old bank's does.
+        let mut bank = Bank::load_bytes(&bytes, Some(&specs())).unwrap();
+        let want = bank.fit_predict(&tail).unwrap();
+        let got = loaded.fit_predict(&tail).unwrap();
+        assert_eq!(got.len(), want.len());
+        for (g, w) in got.iter().zip(&want) {
+            assert!(g.equals_missing(w), "{schema}: {g:?} against {w:?}");
+        }
+        assert_eq!(
+            loaded.save_bytes().unwrap(),
+            bank.save_bytes().unwrap(),
+            "{schema}"
+        );
     }
-    assert_eq!(cores, 2, "a core for each group");
-    let mut old = Vec::new();
-    rmpv::encode::write_value(&mut old, &v).unwrap();
-    // A group's core is read at its next chunk, and kept as it came until
-    // then, so it is after the chunk that the two save one file.
-    let mut loaded = Bank::load_bytes(&old, Some(&specs())).unwrap();
-    let tail = df.slice(40, 20);
-    // The sealed file loaded and fed the same rows: a loaded core knows
-    // its input from the load on, as the 70 bank's does.
-    let mut bank = Bank::load_bytes(&bytes, Some(&specs())).unwrap();
-    let want = bank.fit_predict(&tail).unwrap();
-    let got = loaded.fit_predict(&tail).unwrap();
-    assert_eq!(got.len(), want.len());
-    for (g, w) in got.iter().zip(&want) {
-        assert!(g.equals_missing(w), "{g:?} against {w:?}");
-    }
-    assert_eq!(loaded.save_bytes().unwrap(), bank.save_bytes().unwrap());
 }
