@@ -170,7 +170,7 @@ realistic test and nothing is left to add.
 | | F | 1 | R\* | none |
 | | O | `test_deco` (longhand pair sum, `ew_cov`'s mean form to the bit, scipy `multivariate_normal` for `loglik`, dense and blocked: a one-factor stream of 800 rows at a given rho), `truth_recovery.deco_level` (50 seeds) | R, **third party only for `loglik`** | the estimate and its dynamics: a longhand (no library computes DECO's `u`; `dccmidas` runs another model) |
 | | C | Rust probe D | D | none |
-| `corrchange` | G | 2 (`corrchange`, `_sequential`) | D: no correlation break, the detector reports the statistic of a null stream | a stream with a break |
+| `corrchange` | G | 2 (`corrchange`, `_sequential`) on a stream with no break (D: the detector reports a null statistic), and `golden_structured.rs`'s `corrchange_break` (300 rows, a correlation of +0.9 reversed to -0.9 half way through the third span of 100: the statistic, the critical value and the flag at the three span ends, the first two quiet and the third flagged) | D and R | none (`monitor` only; `perm_block=` and `change_action="reset"` stay as section 5 item 5 says) |
 | | F | 4 (`_monitor`, `_window`, `_permute_every`, `_sequential`) | R\* (two regimes) | none |
 | | O | `truth_recovery.corrchange_break` (50 seeds: size and power), `test_family_f_grids` (4), `test_corrchange` (statsmodels `S_hac_simple` for `bandwidth`), `corrchange.n_perm` (numpy), `second_opinion_regimes` | R | `perm_block=` and `change_action="reset"`: a limit and self-comparison only |
 | | C | Rust probe D | D | none |

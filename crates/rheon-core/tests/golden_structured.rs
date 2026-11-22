@@ -299,6 +299,57 @@ fn bocpd_shift_on_the_clock_golden() {
     check("bocpd_shift_clock", &got, GOLDEN_BOCPD_SHIFT_CLOCK);
 }
 
+/// Two features whose correlation is +0.9 for rows 0 to 249 and -0.9 from
+/// row 250 on, each of variance 1.
+// The seed is the second tried: the first drew a stable span whose
+// statistic was 3.9 against a critical value of 1.36 (the test's size is
+// 5%, and the draw was one in which the early rows of the span read a
+// lower correlation than the rest; a replay in numpy gave the same number).
+fn break_rows() -> Vec<Row> {
+    rows(300, 8675309, |i, s| {
+        let rho: f64 = if i < 250 { 0.9 } else { -0.9 };
+        let (a, b) = (gauss(s), gauss(s));
+        [a, rho * a + (1.0 - rho * rho).sqrt() * b]
+    })
+}
+
+fn corrchange_cfg() -> CorrChangeCfg {
+    CorrChangeCfg {
+        n_features: 2,
+        kind: CorrChangeKind::Monitor,
+        span_rows: 100,
+        alpha: 0.05,
+        alpha_adjust: "bonferroni".into(),
+        bandwidth: None,
+        scalar: false,
+        decay: Decay::Halflife(20.0),
+        crit: None,
+        n_perm: 20,
+        permute_every_rows: 10,
+        perm_block: 1,
+        norm: ChangeNorm::L1,
+        seed: 5,
+        reset: false,
+        monitor_rows: 0,
+        boundary_gamma: 0.0,
+        permute_every: None,
+    }
+}
+
+/// `corrchange` on a break in the correlation: the statistic, its critical
+/// value and the flag (slots 0 to 2) at the three span ends of 100 rows. The
+/// break comes at row 250, inside the third span, so the first two test a
+/// correlation that does not move and the third one that reverses.
+#[test]
+fn corrchange_break_golden() {
+    let mut m = CorrChange::new(corrchange_cfg()).unwrap();
+    let got = probe(&mut m, &break_rows(), &[0, 1, 2], &[99, 199, 299]);
+    // The first two spans hold a correlation that does not move, the third
+    // one that reverses half way: only it is flagged.
+    assert_eq!([got[2], got[5], got[8]], [0.0, 0.0, 1.0], "flags {got:?}");
+    check("corrchange_break", &got, GOLDEN_CORRCHANGE_BREAK);
+}
+
 // --- generated; see the module docs ---
 const GOLDEN_KMEANS_BLOBS: &[f64] = &[
     2.0,
@@ -370,4 +421,15 @@ const GOLDEN_BOCPD_SHIFT_CLOCK: &[f64] = &[
     2.0,
     7.194893573234455e-5,
     29.0,
+];
+const GOLDEN_CORRCHANGE_BREAK: &[f64] = &[
+    0.8466760494398093,
+    1.35809863932255,
+    0.0,
+    0.9617703258967044,
+    1.35809863932255,
+    0.0,
+    1.5528196731668689,
+    1.35809863932255,
+    1.0,
 ];
