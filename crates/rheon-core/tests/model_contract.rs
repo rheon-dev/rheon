@@ -808,6 +808,7 @@ fn every_state_kind_is_distinct_and_named() {
         "expectile",
         "garch",
         "realized",
+        "power_variation",
     ];
     let mut seen = std::collections::HashSet::new();
     for k in kinds {
@@ -845,6 +846,7 @@ fn every_state_kind_is_distinct_and_named() {
         Expectile::new(expectile_cfg()).unwrap().state(),
         Garch::new(garch_cfg()).unwrap().state(),
         Realized::new(realized_cfg()).unwrap().state(),
+        PowerVariation::new(power_variation_cfg()).unwrap().state(),
     ];
     let from_states: Vec<&str> = states.iter().map(|s| s.model.kind()).collect();
     assert_eq!(from_states, kinds);
@@ -914,6 +916,7 @@ fn one_state_of_each_kind() -> Vec<State> {
         Expectile::new(expectile_cfg()).unwrap().state(),
         Garch::new(garch_cfg()).unwrap().state(),
         Realized::new(realized_cfg()).unwrap().state(),
+        PowerVariation::new(power_variation_cfg()).unwrap().state(),
         State::new(ModelState::EwCov(Box::new(EwCov::new(1)))),
     ]
 }
@@ -1036,6 +1039,12 @@ fn every_model_hands_back_its_configuration() {
     same(Garch::new(c.clone()).unwrap(), &c, Garch::cfg);
     let c = realized_cfg();
     same(Realized::new(c.clone()).unwrap(), &c, Realized::cfg);
+    let c = power_variation_cfg();
+    same(
+        PowerVariation::new(c.clone()).unwrap(),
+        &c,
+        PowerVariation::cfg,
+    );
 }
 
 fn ew_class_cfg() -> EwClassCfg {
@@ -1190,6 +1199,30 @@ fn the_n_eff_accessor_is_the_steps_under_a_window() {
             Realized::new(realized_clock_cfg()).unwrap(),
             2,
             &Realized::n_eff,
+        ),
+        whole,
+    );
+    // `power_variation` keeps a window of rows and one of clock units.
+    let whole = accessor_is_the_step(
+        PowerVariation::new(power_variation_cfg()).unwrap(),
+        2,
+        &PowerVariation::n_eff,
+    );
+    pair(
+        "power_variation, window_rows",
+        accessor_is_the_step(
+            PowerVariation::new(power_variation_rows_cfg()).unwrap(),
+            2,
+            &PowerVariation::n_eff,
+        ),
+        whole,
+    );
+    pair(
+        "power_variation, window_size",
+        accessor_is_the_step(
+            PowerVariation::new(power_variation_clock_cfg()).unwrap(),
+            2,
+            &PowerVariation::n_eff,
         ),
         whole,
     );
@@ -1635,7 +1668,7 @@ fn bocpd() {
 #[test]
 fn every_model_refuses_a_decay_it_cannot_run_on() {
     type Build<'a> = (&'a str, &'a dyn Fn(Decay) -> Result<(), String>);
-    let builds: [Build; 20] = [
+    let builds: [Build; 21] = [
         ("ewridge", &|decay| {
             EwRidge::new(EwRidgeCfg {
                 decay,
@@ -1751,6 +1784,13 @@ fn every_model_refuses_a_decay_it_cannot_run_on() {
             Realized::new(RealizedCfg {
                 decay,
                 ..realized_cfg()
+            })
+            .map(drop)
+        }),
+        ("power_variation", &|decay| {
+            PowerVariation::new(PowerVariationCfg {
+                decay,
+                ..power_variation_cfg()
             })
             .map(drop)
         }),
@@ -1919,6 +1959,12 @@ fn every_model_refuses_at_restore_a_configuration_its_new_refuses() {
         refused(Hawkes::new(hawkes_cfg()).unwrap(), "decay", zero(), h),
         refused(Expectile::new(expectile_cfg()).unwrap(), "decay", zero(), h),
         refused(Realized::new(realized_cfg()).unwrap(), "decay", zero(), h),
+        refused(
+            PowerVariation::new(power_variation_cfg()).unwrap(),
+            "decay",
+            zero(),
+            h,
+        ),
         refused(
             Garch::new(garch_cfg()).unwrap(),
             "horizon",
@@ -2342,6 +2388,10 @@ fn exactly_the_scheduled_solvers_report_a_solve_share() {
         ("expectile", share(Expectile::new(expectile_cfg()).unwrap())),
         ("garch", share(Garch::new(garch_cfg()).unwrap())),
         ("realized", share(Realized::new(realized_cfg()).unwrap())),
+        (
+            "power_variation",
+            share(PowerVariation::new(power_variation_cfg()).unwrap()),
+        ),
     ];
     let reporting: Vec<&str> = shares
         .iter()
@@ -2391,6 +2441,7 @@ const PROBED: &[(&str, &str)] = &[
     ("Expectile", "expectile"),
     ("Garch", "garch"),
     ("Realized", "realized"),
+    ("PowerVariation", "power_variation"),
 ];
 
 #[test]
@@ -6469,4 +6520,113 @@ fn realized_predict_is_the_step() {
     predict_is_the_step_without_the_step(|| Realized::new(realized_cfg()).unwrap(), 2, false);
     predict_is_the_step_without_the_step(|| Realized::new(realized_rows_cfg()).unwrap(), 2, false);
     predict_is_the_step_without_the_step(|| Realized::new(realized_clock_cfg()).unwrap(), 2, false);
+}
+
+/// Two return series under the shared decay, with a term of each form: a
+/// sum of squares, a normalized bipower term, a centred Parzen sum and a
+/// flat-top Bartlett sum of two-step returns.
+fn power_variation_cfg() -> PowerVariationCfg {
+    let mp = |powers: &[f64], normalize: bool| PvTerm {
+        kind: PvTermKind::Multipower {
+            powers: powers.to_vec(),
+            normalize,
+        },
+        scale: 1,
+    };
+    let ker = |kernel, bandwidth, flat_top, center, scale| PvTerm {
+        kind: PvTermKind::Kernel {
+            kernel,
+            bandwidth,
+            flat_top,
+            center,
+        },
+        scale,
+    };
+    PowerVariationCfg {
+        n_targets: 2,
+        terms: vec![
+            mp(&[2.0], false),
+            mp(&[1.0, 1.0], true),
+            ker(PvKernel::Parzen, 3, false, true, 1),
+            ker(PvKernel::Bartlett, 2, true, false, 2),
+        ],
+        decay: decay(),
+        min_weight: 3.0,
+        window_rows: None,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        max_state_bytes: None,
+    }
+}
+
+/// A window of six rows, so the probes run through its turnovers.
+fn power_variation_rows_cfg() -> PowerVariationCfg {
+    PowerVariationCfg {
+        decay: Decay::Halflife(f64::INFINITY),
+        window_rows: Some(6),
+        ..power_variation_cfg()
+    }
+}
+
+/// The same over a span of the clock: 12.5 units hold thirteen rows.
+fn power_variation_clock_cfg() -> PowerVariationCfg {
+    PowerVariationCfg {
+        decay: Decay::Halflife(f64::INFINITY),
+        window_clock: Some(12.5),
+        ..power_variation_cfg()
+    }
+}
+
+#[test]
+fn power_variation() {
+    // One return series per target, no features, a term each and `n` a
+    // series, and `n_eff` every row's weight on the shared recursion.
+    let m = PowerVariation::new(power_variation_cfg()).unwrap();
+    assert_eq!(m.n_features(), 0, "power_variation reads no features");
+    let r = probe_with(m, 2, Some(&PowerVariation::n_eff));
+    assert_eq!(r.n_features, 0);
+    assert_eq!(r.kind, "power_variation");
+    assert_eq!(r.n_targets, 2);
+    assert_eq!(r.n_outputs, 10);
+    assert_eq!(r.pred_len, 10);
+    assert_eq!(r.n_eff[0], 0.0);
+    assert_eq!(r.n_eff[1], 1.0);
+    assert!((r.n_eff[2] - (0.5f64.powf(1.0 / HALFLIFE) + 1.0)).abs() < 1e-12);
+    assert!((r.after_gap - (r.before_gap * 0.5f64.powi(10) + 1.0)).abs() < 1e-9);
+    assert!(r.roundtrips);
+    // Under a window `n_eff` is the weight inside it (hard rule 8).
+    let r = probe_windowed(
+        PowerVariation::new(power_variation_rows_cfg()).unwrap(),
+        2,
+        Some(&PowerVariation::n_eff),
+    );
+    assert_eq!(r.n_eff, vec![0.0, 1.0, 2.0, 6.0]);
+    assert_eq!(r.after_gap, r.before_gap, "a gap does not move the window");
+    assert!(r.roundtrips);
+    let r = probe_windowed(
+        PowerVariation::new(power_variation_clock_cfg()).unwrap(),
+        2,
+        Some(&PowerVariation::n_eff),
+    );
+    assert_eq!(r.n_eff, vec![0.0, 1.0, 2.0, 13.0]);
+    assert!(r.roundtrips);
+}
+
+#[test]
+fn power_variation_predict_is_the_step() {
+    predict_is_the_step_without_the_step(
+        || PowerVariation::new(power_variation_cfg()).unwrap(),
+        2,
+        false,
+    );
+    predict_is_the_step_without_the_step(
+        || PowerVariation::new(power_variation_rows_cfg()).unwrap(),
+        2,
+        false,
+    );
+    predict_is_the_step_without_the_step(
+        || PowerVariation::new(power_variation_clock_cfg()).unwrap(),
+        2,
+        false,
+    );
 }
