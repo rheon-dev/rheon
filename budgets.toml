@@ -1490,7 +1490,7 @@ calibration_slope_y = { budget = 8.125 }
 calibration_slope_z = { budget = 8.125 }
 calibration_wald_y = { budget = 8.125 }
 calibration_wald_z = { budget = 8.125 }
-coef = { budget = 72.475 }
+coef = { budget = 68.9538 }
 coverage_y = { budget = 8.125 }
 coverage_z = { budget = 8.125 }
 cusum_sq_y = { budget = 8.125 }
@@ -1541,7 +1541,7 @@ withheld_reason = { budget = 1.125 }
 zscore_y = { budget = 8.125 }
 zscore_z = { budget = 8.125 }
 [memory.garch]
-coef = { budget = 89.25 }
+coef = { budget = 86.125 }
 forecast_y = { budget = 8.125 }
 forecast_z = { budget = 8.125 }
 learned_clock = { budget = 8.125 }
