@@ -3940,7 +3940,7 @@ infinite pivot)"""
 
 [[equivalent]]
 file = "crates/rheon-core/src/sgd.rs"
-function = "<impl WithSimd for StandardizeLanes<'_>>::with_simd"
+function = "<impl pulp::WithSimd for StandardizeLanes<'_>>::with_simd"
 mutation = "replace + with -"
 line_has = "let s = if crate::variance_is_usable(v, v + h2 * h2) {"
 why = """`variance_is_usable(var, _raw_second_moment)` reads only its first \
@@ -3949,7 +3949,7 @@ argument's arithmetic can move the result"""
 
 [[equivalent]]
 file = "crates/rheon-core/src/sgd.rs"
-function = "<impl WithSimd for StandardizeLanes<'_>>::with_simd"
+function = "<impl pulp::WithSimd for StandardizeLanes<'_>>::with_simd"
 mutation = "replace + with *"
 line_has = "let s = if crate::variance_is_usable(v, v + h2 * h2) {"
 why = """`variance_is_usable(var, _raw_second_moment)` reads only its first \
@@ -3958,7 +3958,7 @@ argument's arithmetic can move the result"""
 
 [[equivalent]]
 file = "crates/rheon-core/src/sgd.rs"
-function = "<impl WithSimd for StandardizeLanes<'_>>::with_simd"
+function = "<impl pulp::WithSimd for StandardizeLanes<'_>>::with_simd"
 mutation = "replace * with +"
 line_has = "let s = if crate::variance_is_usable(v, v + h2 * h2) {"
 why = """`variance_is_usable(var, _raw_second_moment)` reads only its first \
@@ -3967,7 +3967,7 @@ argument's arithmetic can move the result"""
 
 [[equivalent]]
 file = "crates/rheon-core/src/sgd.rs"
-function = "<impl WithSimd for StandardizeLanes<'_>>::with_simd"
+function = "<impl pulp::WithSimd for StandardizeLanes<'_>>::with_simd"
 mutation = "replace * with /"
 line_has = "let s = if crate::variance_is_usable(v, v + h2 * h2) {"
 why = """`variance_is_usable(var, _raw_second_moment)` reads only its first \
