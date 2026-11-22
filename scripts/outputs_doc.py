@@ -148,7 +148,9 @@ MEANING: dict[str, str] = {
         "the variance along component `<j>`, from 0: its eigenvalue, times Bessel's correction at "
         "Kish's effective size"
     ),
-    "pc<j>_share": "component `<j>`'s share of the total variance, the sum of the columns' variances",
+    "pc<j>_share": (
+        "component `<j>`'s share of the total variance, the sum of the columns' variances"
+    ),
     "pc<j>_loading_<f>": "component `<j>`'s unit loading on feature `<f>`",
     "pc<j>_score": (
         "the row's coordinate along component `<j>`, `e_j . (x - m)`, on the mean and the "

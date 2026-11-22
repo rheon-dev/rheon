@@ -340,7 +340,7 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
             **CLOCK,
         ),
         [],
-    ),    # Two components of three columns, every field they have.
+    ),  # Two components of three columns, every field they have.
     (
         "pca",
         "pca",
