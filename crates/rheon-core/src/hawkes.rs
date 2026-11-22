@@ -975,10 +975,14 @@ impl Hawkes {
 
     /// Drop the rows of a clock window that have left at `now`, oldest
     /// first, each by the older block's exact subtraction (the block is formed
-    /// from the newer when it has run out). True if any left.
+    /// from the newer when it has run out). True if any left. Each pass
+    /// takes one row out, so the window's rows bound the passes.
     fn trim(&mut self, now: Stamp) -> bool {
         let mut dropped = false;
-        while self.oldest_has_left(now) {
+        for _ in 0..self.window_rows() {
+            if !self.oldest_has_left(now) {
+                break;
+            }
             if self.window.as_ref().is_some_and(|w| w.old == 0) {
                 self.form_old_block();
             } else {
@@ -1248,5 +1252,7 @@ impl OnlineModel for Hawkes {
     }
 }
 
+#[cfg(test)]
+mod mutant_tests;
 #[cfg(test)]
 mod tests;

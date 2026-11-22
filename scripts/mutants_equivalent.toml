@@ -3973,3 +3973,148 @@ line_has = "let s = if crate::variance_is_usable(v, v + h2 * h2) {"
 why = """`variance_is_usable(var, _raw_second_moment)` reads only its first \
 argument (`var > 0.0 && var.is_finite()`), so no change to the second \
 argument's arithmetic can move the result"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/family.rs"
+function = "Family::mean"
+mutation = "replace match guard eta > 0.0 with true"
+line_has = "GlmLink::Inverse if eta > 0.0 => (eta, 1.0 / eta),"
+why = """at `η ≤ 0` the arm gives `μ = 1/η`, which is negative, or infinite at \
+`η = ±0`, and the check of `μ` below the match (finite and above 0) returns \
+`None`, as the arm that refuses does"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/family.rs"
+function = "Family::mean"
+mutation = "replace > with >="
+line_has = "GlmLink::Inverse if eta > 0.0 => (eta, 1.0 / eta),"
+columns = [37]
+why = """at `η = 0` the arm gives `μ = 1/0 = ∞`, which the check of `μ` below the \
+match returns as `None`, the arm that refuses's answer"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/family.rs"
+function = "Family::mean"
+mutation = "replace > with >="
+line_has = "GlmLink::Power if eta > 0.0 => (eta, eta.powf(1.0 / (1.0 - self.power))),"
+why = """at `η = ±0` the arm gives `0^(1/(1−p))`, an infinity for every power the \
+family takes (`p > 1`, so the exponent is negative), which the check of `μ` \
+below the match returns as `None`, the arm that refuses's answer"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/family.rs"
+function = "Family::takes"
+mutation = "replace > with >="
+line_has = "GlmFamily::Tweedie if self.power > 2.0 => y > 0.0,"
+why = """the two part only at a power of exactly 2, which `Family::check` refuses \
+(a Tweedie power of 2 is the Gamma family) on every path a family is built \
+or restored by"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/family.rs"
+function = "Family::support"
+mutation = "replace > with >="
+line_has = "GlmFamily::Tweedie if self.power > 2.0 => {"
+why = """the two part only at a power of exactly 2, which `Family::check` refuses \
+on every path a family is built or restored by"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/glm.rs"
+function = "Glm::learn"
+mutation = "replace > with >="
+line_has = "let scale = if moved.abs() > cap {"
+why = """at `|moved| = cap` the scale is `cap/|moved| = 1`, the other arm's 1, to \
+the bit; an infinite cap ties only at an infinite `moved`, which cannot be: \
+`moved = s x̃'(G + R I)⁻¹x̃`, and `x̃'(G + R I)⁻¹x̃` is at most the \
+reciprocal of the row's own weight in `G`, so `|moved| ≤ |z − η|`, finite"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/glm.rs"
+function = "solve_ridged"
+mutation = "replace > with >="
+line_has = "if !(s > 0.0 && s.is_finite()) {"
+columns = [24]
+why = """let through at a pivot of exactly 0, the factor's 0 divides the \
+substitutions into `±∞` or NaN (`0/0` at a right-hand side of 0), and the \
+closing check that every `x` is finite returns `false`, the guard's answer; \
+no caller reads `l` or `x` after a `false`"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/hawkes.rs"
+function = "rate"
+mutation = "replace match guard h.is_infinite() with false"
+line_has = "Decay::Halflife(h) if h.is_infinite() => 0.0,"
+why = """`ln 2 / ∞` is `+0.0`, the arm's own value, to the bit"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/hawkes.rs"
+function = "HawkesCfg::validate"
+mutation = "replace > with >="
+line_has = "let near = |s: f64| gamma > 0.0 && (s - gamma).abs() <= RATE_MARGIN * s;"
+columns = [39]
+why = """the two part only at `γ = 0`, where `|s − 0| ≤ 0.001 s` is false for every \
+`s` above 0, and `s` (a kernel's decay, or the sum of two) is above 0 where \
+this runs (`bad` is empty)"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/hawkes.rs"
+function = "Hawkes::learn_marks"
+mutation = "replace > with >="
+line_has = "if m > 0.0 {"
+columns = [18]
+why = """at a mark of 0 every sum the arm reaches takes `+ 0·x` (`x` a finite sum: \
+a mark past 1e300 has already overflowed `m β` into `R`), and the `b` and \
+`Q` entries and `R` stay as they were to the bit"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/hawkes.rs"
+function = "Hawkes::learn_marks"
+mutation = "replace > with >="
+line_has = "if ml > 0.0 {"
+columns = [27]
+why = """at a mark of 0 the arm adds `m · 0 = 0` to a `Q` entry, which stays as it \
+was to the bit"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/hawkes.rs"
+function = "Hawkes::drop_oldest"
+mutation = "replace > with >="
+line_has = "let ml = w.marks[l];\n                if ml > 0.0 {"
+columns = [23]
+why = """at a mark of 0 the arm subtracts `m · 0 = 0` from a `Q` entry, which stays \
+as it was to the bit"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/hawkes.rs"
+function = "Hawkes::window_learn"
+mutation = "replace > with >="
+line_has = "let m = w.marks[at + i];\n                if m > 0.0 {"
+columns = [22]
+why = """at a mark of 0 the arm adds `0 · e = 0` (`e = e^(−β·since)`, finite) to \
+`B`, which stays as it was to the bit"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/hawkes.rs"
+function = "Hawkes::read_ahead"
+mutation = "replace > with >="
+line_has = "if let Some(span) = self.cfg.window_clock.filter(|&span| g0 > span) {"
+columns = [69]
+why = """at `g0 = span` the arm sets `g0 = span`, the value it had"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/hawkes.rs"
+function = "Hawkes::advance"
+mutation = "replace > with >="
+line_has = "if dropped || self.g0 > span {"
+columns = [35]
+why = """at `g0 = span` the arm sets `g0 = span`, the value it had"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/hawkes.rs"
+function = "Hawkes::form_old_block"
+mutation = "replace > with >="
+line_has = "if r > 1 {"
+columns = [18]
+why = """at `r = 1` the arm multiplies `R` by `e^(−β·gap)`, and `R` is the 0 \
+that `fill(0.0)` left before the loop, so `0 · e = 0` (`e` between 0 and 1: \
+`gap` is the clock between two rows, not below 0)"""

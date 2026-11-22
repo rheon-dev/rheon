@@ -96,6 +96,8 @@ use crate::solve::dot_aug;
 use crate::{Decay, RefitStatus, Stamp};
 
 #[cfg(test)]
+mod mutant_tests;
+#[cfg(test)]
 mod refit_clock_tests;
 #[cfg(test)]
 mod tests;
@@ -733,6 +735,11 @@ fn score_along(
     Some(s)
 }
 
+/// The halvings of a step the line search tries: from 1 to below `1e-12`,
+/// `2⁻⁴⁰`. A count rather than a test of the step's size, so that a line
+/// search that stopped halving would end, wrongly, rather than never.
+const HALVINGS: u32 = 40;
+
 /// How small a change of the objective, relative to `1 + |F|`, the line
 /// search reads from the slopes rather than from `F` itself (the
 /// [`refit_fit`] docs).
@@ -825,7 +832,7 @@ fn refit_fit(cfg: &GlmCfg, rows: &[f64], nf: usize) -> Option<(Vec<f64>, u32, bo
         let mut t = 1.0;
         let mut fresh = f;
         let mut fell = false;
-        while t > 1e-12 {
+        for _ in 0..HALVINGS {
             for i in 0..k {
                 trial[i] = b[i] + t * d[i];
             }
