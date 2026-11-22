@@ -155,7 +155,7 @@ pub use corrchange::{
     ChangeNorm, CorrChange, CorrChangeCfg, CorrChangeKind, MAX_PERM, kolmogorov_cdf,
     kolmogorov_quantile,
 };
-pub use deco::{Deco, DecoCfg, DecoDynamics, DecoLevel};
+pub use deco::{Deco, DecoCfg, DecoDynamics};
 pub use drift::{
     Adwin, AdwinCfg, Cusum, Ddm, DriftDetector, Eddm, ErrorRate, Kswin, KswinCfg, PageHinkley,
     ks_critical_h, ks_equal_tail,
@@ -937,14 +937,15 @@ pub use window::{
 ///   the EW means of the row's numerator and denominator (or their averaged
 ///   DCC recursion under `"linear"`), kept in `ratio` -- the means, a pair's
 ///   second denominator, `"linear"`'s `N` and `D`, and the standardiser's
-///   `Σw²/(Σw)²` its warm-up reads -- with `cfg.level = "ratio"`, and no
-///   `rho_bar`. A state of 71 or earlier has neither field: it loads as the
-///   level it was fitted with, the EW mean of `u` ([`DecoLevel::MeanOfU`]),
-///   and goes on with it to the bit, re-saving its own layout, since the
-///   sums the ratio needs are not in it. The kept `deco` case is that form,
-///   so it converts to the current bytes exactly; the ratio's forms are the
-///   cases `deco_ratio`, `deco_linear` and `deco_warming`, with no kept
-///   files.
+///   `Σw²/(Σw)²` its warm-up reads -- where `rho_bar` and `rho_bar_lo` kept
+///   the EW mean of `u`. A state of 71 or earlier has no `ratio`: it loads
+///   with its level restarted (CLAUDE.md rule 5's twenty-sixth exception,
+///   the user's "Switch, restarting the level", 2026-11-22): its
+///   standardiser and `u` go on to the bit, its level's sums start empty
+///   and relearn, and its share is taken as 1. The kept `deco` files are
+///   held to that ([`Deco`]'s module docs; `tests/state_fixtures.rs`,
+///   `RESTARTED_LEVEL`); the ratio's forms are the cases `deco`,
+///   `deco_linear` and `deco_warming`.
 pub const SCHEMA_VERSION: u32 = 72;
 
 /// The default solve cadence of `ewridge`, `lasso`, `huber` and `quantile`

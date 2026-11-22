@@ -611,3 +611,51 @@ weight 0 before the save, at least as many as the current one's. No bank's
 of weight 0 continues to the bit: every output of `scripts/compare_outputs.py`'s
 unweighted cases moved 0 ulps against a3554b27, and a bank state saved
 without one is the same bytes but for `hawkes`'.
+
+A twenty-sixth, the user's (2026-11-22: "Switch, restarting the level",
+asked whether a saved `deco` state of an earlier schema keeps the old form
+of its level or switches to the new one; PLAN 551): a `deco` state of
+schema 61 to 71 switches to the ratio level on load, its level restarted.
+From schema 72 `deco`'s level `rho` is the ratio of the exponentially
+weighted means of the row's numerator and denominator, `EW(A)/EW(V)` (or
+their averaged DCC recursion, `N/D`, under `"linear"`), kept in the state's
+`ratio`; a state of 71 or earlier kept `rho_bar` and `rho_bar_lo`, the
+weighted mean of the row estimate `u` and what it leaves out, from which
+neither mean can be had, and no `Σw²/(Σw)²` of the standardiser. What
+continues: the configuration, the blocks and the standardiser (its weight,
+means and variances) load as saved, so `u`, `weight_sum` and `settled_frac`
+go on to the bit of the old build's continuation, and `loglik` is read
+under the new level as soon as it has one. What restarts: the level. Every
+value's `rho` is NaN, its weight 0, its means of `A`, `V` (and a pair's
+second `V`) and `"linear"`'s `N` and `D` empty, and `rho_bar` is let go;
+the standardiser's share `Σw²/(Σw)²`, which the warm-up reads, is taken as
+1, one effective row, the cold side. The level then relearns from the next
+rows under the same warm-up as a new model's (a row teaches it only once
+the standardiser's Kish size `(Σw)²/Σw²` passes 5), and until it has a
+value `rho` and `loglik` are null and `withheld_reason` reads
+`below_warm_rows`. From the share of 1, the share falls below a fifth in
+about 1.2 half-lives of rows at a steady rate (24 rows at a half-life of
+20), where a state of this build that was warm carries on at once. So such
+a state continues neither to its frozen continuation nor to a fresh run of
+this build. The state re-saves in the current layout, bytes that load back
+the same. No layout of any other model moved, and there is no schema bump
+of its own (schema 72 was unreleased). The kept `deco` files of `v61/` to
+`v71/` (`rheon-core`) are held by `RESTARTED_LEVEL`
+(`restarted_level_rule`, `crates/rheon-core/tests/state_fixtures.rs`):
+each loads, re-saves bytes that load back the same with the kept
+configuration, blocks and standardiser, every `rho` NaN, every weight 0,
+empty means and a share of 1, in the current fixture's layout key for key;
+and continues with `weight_sum` and `u` to the bit of its frozen
+continuation, and `rho` and `loglik` null until the level relearns and
+numbers after, the relearning reached inside the 16 rows. `deco.rs`'s
+`a_state_from_before_the_ratio_restarts_its_level` holds the restarted
+model to this build's model with the same standardiser and its level
+emptied by hand, to the bit, under both dynamics and with blocks. A
+release's own `deco` file (`tests/test_released_state.py`,
+`RESTARTED_LEVEL`) is declared moved since 2.0.0 and held, every release
+from 1.0.0 to 2.0.0, to the release's own continuation in `u`,
+`weight_sum` and `settled_frac` to the bit, `rho` and `loglik` null on a
+run of first rows and numbers after it, and `withheld_reason`
+`below_warm_rows` on that run and the release's value after. No bank
+fixture of `rheon-polars` holds a `deco`. The current fixtures `deco`,
+`deco_linear` and `deco_warming` of `rheon-core` are the ratio's.

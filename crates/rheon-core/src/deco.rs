@@ -101,9 +101,16 @@
 //! A state saved by a build of schema 71 or earlier kept `ρ` as the
 //! exponentially weighted mean of `u` (`"ew"`), or the linear recursion on
 //! `u` targeted at that mean (`"linear"`), learning from every row. Neither
-//! the numerators nor the denominators it would need are recoverable from
-//! it, so it loads as that form ([`DecoLevel::MeanOfU`]) and goes on with
-//! it to the bit; a spec builds the ratio ([`DecoLevel::Ratio`]).
+//! the numerators nor the denominators the ratio needs are in it, so it
+//! loads with its level restarted (the user's "Switch, restarting the
+//! level", 2026-11-22; CLAUDE.md rule 5's twenty-sixth exception): the
+//! standardiser, and with it `u`, keeps its history to the bit; the level's
+//! means, weights and `"linear"`'s `N` and `D` start empty, `ρ` is NaN, and
+//! the level relearns from the next rows under the warm-up above. The
+//! standardiser's `Σw²/(Σw)²` is not in such a state either, and is taken
+//! as 1, one effective row, the cold side: its recursion then reaches a
+//! fifth in about 1.2 half-lives of rows at a steady rate, where a state of
+//! this build carries on at once.
 //!
 //! # A column with no spread
 //!
@@ -185,32 +192,6 @@ pub enum DecoDynamics {
     Linear,
 }
 
-/// What the level averages (the module docs, "A state from before the
-/// ratio").
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DecoLevel {
-    /// The numerator and the denominator of `u`, each averaged, and their
-    /// ratio taken: what a spec builds.
-    Ratio,
-    /// `u` itself, averaged: the level of a state saved by a build of
-    /// schema 71 or earlier, which keeps nothing the ratio needs. It loads
-    /// as this form and goes on with it to the bit, learning from every
-    /// row as it was fitted. A cfg written without the field is one.
-    MeanOfU,
-}
-
-impl DecoLevel {
-    /// A cfg saved before the field: schema 71 or earlier.
-    fn of_a_state_before_the_ratio() -> Self {
-        DecoLevel::MeanOfU
-    }
-
-    fn is_mean_of_u(&self) -> bool {
-        *self == DecoLevel::MeanOfU
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DecoCfg {
     pub n_features: usize,
@@ -224,13 +205,6 @@ pub struct DecoCfg {
     /// holding every feature, which is the unblocked model.
     pub blocks: Vec<Vec<usize>>,
     pub min_weight: f64,
-    /// What the level averages. Written only where it is the ratio, so a
-    /// state of the older form keeps its bytes.
-    #[serde(
-        default = "DecoLevel::of_a_state_before_the_ratio",
-        skip_serializing_if = "DecoLevel::is_mean_of_u"
-    )]
-    pub level: DecoLevel,
 }
 
 impl DecoCfg {
@@ -366,6 +340,7 @@ impl DecoCfg {
 
 /// Engle–Kelly dynamic equicorrelation; see the module docs.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(from = "DecoWire")]
 pub struct Deco {
     cfg: DecoCfg,
     /// The standardiser: pre-row means and variances of the features.
@@ -375,31 +350,79 @@ pub struct Deco {
     /// The level per value, in emission order (within-block, then pairs);
     /// NaN before the first update.
     rho: Vec<f64>,
-    /// The `"ew"` recursion run alongside as `"linear"`'s target; equal to
-    /// `rho` under `"ew"`, and kept there too so the state is one shape.
-    rho_bar: Vec<f64>,
-    /// Accumulated weight behind each `rho_bar`, one per value. Not the
-    /// diag's: a row whose `u` for a value is not finite teaches that value
-    /// nothing, and must not decay it.
+    /// Accumulated weight behind each value's means, one per value. Not
+    /// the diag's: a row whose `u` for a value is not finite teaches that
+    /// value nothing, and must not decay it.
     rho_w: Vec<f64>,
-    /// What each `rho_bar` leaves out: the level is a pair no step is
-    /// rounded off, as an `ew_cov`'s mean is ([`crate::comp`]; docs/PLAN.md
-    /// task 101), so the identity `Deco::advance` states holds. One per
-    /// value, as `rho_bar` is. `rho_bar` and `rho_bar_lo` are the
-    /// [`DecoLevel::MeanOfU`] form's, and empty under the ratio.
-    rho_bar_lo: Vec<f64>,
-    /// The ratio's sums ([`DecoLevel::Ratio`]); none under the older form,
-    /// and written only where there are some, so its state keeps its bytes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    ratio: Option<RatioSums>,
+    /// The level's sums (the module docs, "The level").
+    ratio: RatioSums,
     /// The row's working space ([`RowWork`]). Not state.
     #[serde(skip)]
     work: RowWork,
 }
 
+/// A state as it is read: a state of schema 71 or earlier holds `rho_bar`
+/// and `rho_bar_lo`, the EW mean of `u` and what it leaves out, and no
+/// `ratio`; it is read with its level restarted (the module docs, "A state
+/// from before the ratio"). The rest is read as written.
+#[derive(Deserialize)]
+struct DecoWire {
+    cfg: DecoCfg,
+    diag: EwDiag,
+    blocks: Vec<Vec<usize>>,
+    rho: Vec<f64>,
+    rho_w: Vec<f64>,
+    #[serde(default)]
+    ratio: Option<RatioSums>,
+    // The older level, read only to be let go: its `u` mean cannot give
+    // the ratio's sums. Present in such a state, and checked as numbers.
+    #[serde(default, rename = "rho_bar")]
+    _rho_bar: Option<Vec<f64>>,
+    #[serde(default, rename = "rho_bar_lo")]
+    _rho_bar_lo: Option<Vec<f64>>,
+}
+
+impl From<DecoWire> for Deco {
+    fn from(w: DecoWire) -> Self {
+        let DecoWire {
+            cfg,
+            diag,
+            blocks,
+            rho,
+            rho_w,
+            ratio,
+            ..
+        } = w;
+        let (rho, rho_w, ratio) = match ratio {
+            Some(r) => (rho, rho_w, r),
+            None => {
+                // The level restarted: as many values as it had, each with
+                // no level, no weight and empty sums; `restore` holds the
+                // shape against the cfg.
+                let values = rho.len();
+                let pairs = values.saturating_sub(blocks.len());
+                (
+                    vec![f64::NAN; values],
+                    vec![0.0; values],
+                    RatioSums::new(values, pairs, cfg.dynamics == DecoDynamics::Linear),
+                )
+            }
+        };
+        Self {
+            cfg,
+            diag,
+            blocks,
+            rho,
+            rho_w,
+            ratio,
+            work: RowWork::default(),
+        }
+    }
+}
+
 /// The ratio level's state (the module docs, "The level"). Each mean is a
 /// pair no step is rounded off ([`crate::comp`]), its high part the one
-/// read, as `rho_bar` is.
+/// read, as an `ew_cov`'s mean's is.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct RatioSums {
     /// The standardiser's `Σw²/(Σw)²`, the inverse of Kish's effective size
@@ -494,9 +517,7 @@ impl std::fmt::Debug for Deco {
             diag,
             blocks,
             rho,
-            rho_bar,
             rho_w,
-            rho_bar_lo,
             ratio,
             work: _,
         } = self;
@@ -505,9 +526,7 @@ impl std::fmt::Debug for Deco {
             .field("diag", diag)
             .field("blocks", blocks)
             .field("rho", rho)
-            .field("rho_bar", rho_bar)
             .field("rho_w", rho_w)
-            .field("rho_bar_lo", rho_bar_lo)
             .field("ratio", ratio)
             .finish()
     }
@@ -554,57 +573,38 @@ impl Deco {
         let k = blocks.len();
         let m = n_values(k);
         let diag = EwDiag::new(cfg.n_features);
-        let (bar, ratio) = match cfg.level {
-            DecoLevel::MeanOfU => (m, None),
-            DecoLevel::Ratio => (
-                0,
-                Some(RatioSums::new(
-                    m,
-                    m - k,
-                    cfg.dynamics == DecoDynamics::Linear,
-                )),
-            ),
-        };
+        let ratio = RatioSums::new(m, m - k, cfg.dynamics == DecoDynamics::Linear);
         Ok(Self {
             cfg,
             diag,
             blocks,
             rho: vec![f64::NAN; m],
-            rho_bar: vec![f64::NAN; bar],
             rho_w: vec![0.0; m],
-            rho_bar_lo: vec![0.0; bar],
             ratio,
             work: RowWork::default(),
         })
     }
 
     /// Whether the standardiser is warm enough for a row it standardises
-    /// to teach the ratio level: Kish's effective size of its weights above
-    /// 5, so the row's fourth moment exists (the module docs, "The
-    /// standardiser's warm-up"). Read before the row's update. The older
-    /// form ([`DecoLevel::MeanOfU`]) learns from every row, as it was
-    /// fitted, and is always warm.
+    /// to teach the level: Kish's effective size of its weights above 5,
+    /// so the row's fourth moment exists (the module docs, "The
+    /// standardiser's warm-up"). Read before the row's update.
     pub fn standardiser_warm(&self) -> bool {
-        match &self.ratio {
-            None => true,
-            // `n_e = 1/q > 5`, with the share's own rounding kept on the
-            // cold side: equal weights reach `n_e = 5` exactly, where the
-            // fourth moment does not exist, and the recursion's last bits
-            // must not count it warm.
-            // A fresh model's share is 1. A decay that took the whole
-            // weight leaves the share as it was, as a decay one half-life
-            // short of it does: the moments are the history's either way.
-            Some(r) => 5.0 * r.w2_share < 1.0 - 4.0 * f64::EPSILON,
-        }
+        // `n_e = 1/q > 5`, with the share's own rounding kept on the cold
+        // side: equal weights reach `n_e = 5` exactly, where the fourth
+        // moment does not exist, and the recursion's last bits must not
+        // count it warm. A fresh model's share is 1. A decay that took the
+        // whole weight leaves the share as it was, as a decay one half-life
+        // short of it does: the moments are the history's either way.
+        5.0 * self.ratio.w2_share < 1.0 - 4.0 * f64::EPSILON
     }
 
-    /// Whether the ratio level has no value yet, the standardiser not
-    /// having been warm on a row that had an estimate: the row's `rho` and
-    /// `loglik` are null for that reason, which a bank names
-    /// (`below_warm_rows`). Never under the older form, whose start was
-    /// not reported as a wait.
+    /// Whether the level has no value yet, the standardiser not having
+    /// been warm on a row that had an estimate (or the level restarted from
+    /// a state of schema 71 or earlier): the row's `rho` and `loglik` are
+    /// null for that reason, which a bank names (`below_warm_rows`).
     pub fn warming(&self) -> bool {
-        self.ratio.is_some() && self.rho.iter().all(|v| v.is_nan())
+        self.rho.iter().all(|v| v.is_nan())
     }
 
     pub fn cfg(&self) -> &DecoCfg {
@@ -913,13 +913,9 @@ impl crate::OnlineModel for Deco {
             // Each value learns from its own estimate, where the row has one
             // (task 115 (h)); the ratio from a row its standardiser was warm
             // for, read before the standardiser takes the row (PLAN 551).
-            if self.ratio.is_some() {
-                let warm = self.standardiser_warm();
-                self.advance_ratio(row, lam, if warm { weight } else { 0.0 });
-                self.age_w2_share(lam, weight);
-            } else {
-                self.advance(&row.u, lam, weight);
-            }
+            let warm = self.standardiser_warm();
+            self.advance_ratio(row, lam, if warm { weight } else { 0.0 });
+            self.age_w2_share(lam, weight);
         }
         self.diag.update(x, lam, weight);
         self.work.0 = Some(kept);
@@ -961,22 +957,11 @@ impl crate::OnlineModel for Deco {
                 // 2026-09-18, B3).
                 let k = m.blocks.len();
                 let values = n_values(k);
-                // The older form keeps `rho_bar` and no ratio; the ratio
-                // keeps its sums and no `rho_bar`.
-                let (bar, form) = match (&m.ratio, m.cfg.level) {
-                    (None, DecoLevel::MeanOfU) => (values, true),
-                    (Some(r), DecoLevel::Ratio) => (
-                        0,
-                        r.has_shape(values, values - k, m.cfg.dynamics == DecoDynamics::Linear),
-                    ),
-                    _ => (values, false),
-                };
+                let linear = m.cfg.dynamics == DecoDynamics::Linear;
                 if m.diag.k() != m.cfg.n_features
                     || m.blocks != m.cfg.resolved_blocks()
-                    || !form
+                    || !m.ratio.has_shape(values, values - k, linear)
                     || m.rho.len() != values
-                    || m.rho_bar.len() != bar
-                    || m.rho_bar_lo.len() != bar
                     || m.rho_w.len() != values
                 {
                     return Err(crate::model::damaged(
@@ -1014,10 +999,9 @@ impl Deco {
     fn age_w2_share(&mut self, lam: f64, w: f64) {
         let w_old = self.diag.n_eff();
         let w_new = lam * w_old + w;
-        if let Some(r) = self.ratio.as_mut()
-            && w_new > 0.0
-        {
+        if w_new > 0.0 {
             let (a, b) = (lam * w_old / w_new, w / w_new);
+            let r = &mut self.ratio;
             r.w2_share = a * a * r.w2_share + b * b;
         }
     }
@@ -1027,7 +1011,7 @@ impl Deco {
     /// estimate for it, at weight `w`: the row's, or 0 for a row the
     /// standardiser was not warm for, which ages the level's weight and
     /// teaches it nothing. A value without an estimate learns nothing and
-    /// keeps its weight undecayed, as under the older form.
+    /// keeps its weight undecayed (task 115 (h)).
     fn advance_ratio(&mut self, row: &Row, lam: f64, w: f64) {
         let Row { s1, s2, n, u, .. } = row;
         let k = self.blocks.len();
@@ -1062,8 +1046,8 @@ impl Deco {
             return;
         }
         let b = if w_new > 0.0 { w / w_new } else { 0.0 };
-        let r = self.ratio.as_mut().expect("the ratio's sums");
-        // A pair no step is rounded off, as `rho_bar` is; a row of weight
+        let r = &mut self.ratio;
+        // A pair no step is rounded off, as an `ew_cov`'s mean is; a row of weight
         // 0 takes no step (`crate::comp::add` says why). A step of more
         // than half the mean is taken as the weighted sum `a·m + b·x`
         // instead: the row's numbers can lie many orders of magnitude from
@@ -1129,70 +1113,6 @@ impl Deco {
         };
         self.rho_w[m] = w_new;
     }
-
-    /// Move each level by the row's estimate for it. A value whose estimate
-    /// is not finite learns nothing and keeps its weight undecayed, as the
-    /// whole row did before each value had its own (task 115 (h)).
-    ///
-    /// Written as `EwCov::update` writes its mean -- `ρ + b·(u − ρ)` as a
-    /// pair ([`crate::comp`]), not the algebraically equal `a·ρ + b·u` -- so
-    /// that `rho` under `"ew"` is
-    /// **bit-identical** to an `ew_cov(stats = ["mean"])` over the same `u`
-    /// sequence at the same half-life. The two forms differ in the last bit,
-    /// and a test pins this one.
-    fn advance(&mut self, u: &[f64], lam: f64, w: f64) {
-        for (m, &um) in u.iter().enumerate() {
-            if !um.is_finite() {
-                continue;
-            }
-            let w_old = self.rho_w[m];
-            let w_new = lam * w_old + w;
-            if w_new <= 0.0 && w_old <= 0.0 {
-                // A zero-weight row at zero weight: advance the clock, learn
-                // nothing, and do not divide 0/0 (hard rule 9).
-                continue;
-            }
-            // A zero-weight row after a decay that took the whole history --
-            // `lam·W` is 0 from 1075 half-lives on -- is the row one half-life
-            // short of it: `b` is 0 and the weight goes to 0, where the
-            // history used to be kept whole (task 115 (c), PLAN §12).
-            let b = if w_new > 0.0 { w / w_new } else { 0.0 };
-            let bar = &mut self.rho_bar[m];
-            let lo = &mut self.rho_bar_lo[m];
-            if bar.is_finite() {
-                // A row of weight 0 takes no step (`crate::comp::add` says
-                // why).
-                if b > 0.0 {
-                    let d = crate::comp::dev(um, *bar, *lo);
-                    crate::comp::add(bar, lo, b * d);
-                }
-            } else {
-                (*bar, *lo) = (um, 0.0);
-            }
-            self.rho[m] = match self.cfg.dynamics {
-                DecoDynamics::Ew => *bar,
-                DecoDynamics::Linear => {
-                    let (alpha, beta) = (
-                        self.cfg.alpha.expect("validated"),
-                        self.cfg.beta.expect("validated"),
-                    );
-                    // A row of weight 0 advances the clock and learns
-                    // nothing (hard rule 9): the paper's recursion has no
-                    // row weights, and took its `u` at full strength in the
-                    // `α·u` term (review 2026-09-28). A positive weight
-                    // reaches `rho` through `rho_bar` alone.
-                    if w <= 0.0 {
-                        self.rho[m]
-                    } else if self.rho[m].is_finite() {
-                        (1.0 - alpha - beta) * *bar + alpha * um + beta * self.rho[m]
-                    } else {
-                        um
-                    }
-                }
-            };
-            self.rho_w[m] = w_new;
-        }
-    }
 }
 
 #[cfg(test)]
@@ -1241,7 +1161,7 @@ mod tests {
                 format!("{:?}", fresh.state())
             );
             let shown = format!("{kept:?}");
-            assert!(shown.starts_with("Deco { cfg: ") && shown.contains(", rho_bar_lo: "));
+            assert!(shown.starts_with("Deco { cfg: ") && shown.contains(", ratio: "));
             assert!(!shown.contains("work"), "{shown}");
         }
     }
@@ -1319,15 +1239,6 @@ mod tests {
             beta: None,
             blocks: Vec::new(),
             min_weight: 0.0,
-            level: DecoLevel::Ratio,
-        }
-    }
-
-    /// [`cfg`] in the form a state of schema 71 or earlier loads as.
-    fn legacy(n: usize) -> DecoCfg {
-        DecoCfg {
-            level: DecoLevel::MeanOfU,
-            ..cfg(n)
         }
     }
 
@@ -1414,43 +1325,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    /// Under the older form ([`DecoLevel::MeanOfU`]), the level is an
-    /// `ew_cov`'s mean of `u`, to the bit, through a value `u` repeats: both take their steps as pairs ([`crate::comp`];
-    /// docs/PLAN.md task 101), so neither stops short of the value, and the
-    /// level reaches it. Rows of weight 0 among them move nothing.
-    #[test]
-    fn the_level_is_ew_covs_mean_through_a_value_u_repeats() {
-        let mut d = Deco::new(legacy(2)).unwrap();
-        let mut cov = crate::EwCov::new(1);
-        let lam = Decay::Halflife(20.0).factor(1.0);
-        let mut s = 5u64;
-        for row in 0..3000 {
-            let u = if row < 300 { 0.3 * lcg(&mut s) } else { 0.8 };
-            let w = if row % 7 == 3 { 0.0 } else { 1.0 };
-            d.advance(&[u], lam, w);
-            cov.update(&[u], lam, w);
-            assert_eq!(d.rho_bar[0].to_bits(), cov.mean(0).to_bits(), "row {row}");
-        }
-        assert_eq!(d.rho_bar[0], 0.8, "the level reaches the value u holds");
-    }
-
-    /// Under the older form, a row of weight 0 takes no step in the level,
-    /// to the bit: the rows
-    /// 0.7 and 5.292162135665459 leave its pair with a low part of a whole
-    /// rounding step, where a zero step would round the double up
-    /// (`crate::comp::add`).
-    #[test]
-    fn a_row_of_no_weight_leaves_the_level_as_it_was() {
-        let mut d = Deco::new(legacy(2)).unwrap();
-        d.advance(&[0.7], 1.0, 1.0);
-        d.advance(&[5.292162135665459], 1.0, 1.0);
-        assert_eq!(d.rho_bar[0], 2.996081067832729, "the fixture");
-        assert_eq!(d.rho_bar_lo[0], 4.440892098500626e-16);
-        d.advance(&[1.0], 1.0, 0.0);
-        assert_eq!(d.rho_bar[0], 2.996081067832729);
-        assert_eq!(d.rho_bar_lo[0], 4.440892098500626e-16);
     }
 
     /// A correlated stream: one common factor plus idiosyncratic noise, so
@@ -1764,47 +1638,6 @@ mod tests {
         }
     }
 
-    /// The older form's linear recursion on `u`, targeted at its EW mean.
-    #[test]
-    fn the_linear_dynamics_is_its_recursion() {
-        let (alpha, beta) = (0.05, 0.9);
-        let mut m = Deco::new(DecoCfg {
-            dynamics: DecoDynamics::Linear,
-            alpha: Some(alpha),
-            beta: Some(beta),
-            ..legacy(4)
-        })
-        .unwrap();
-        let mut bar = f64::NAN;
-        let mut rho = f64::NAN;
-        let mut w = 0.0;
-        let lam = Decay::Halflife(20.0).factor(1.0);
-        for x in stream(200, 4, 0.4, 13) {
-            let step = m.step(&x, &[], 1.0, 1.0);
-            assert!(step.pred[1].is_nan() == rho.is_nan());
-            if step.pred[1].is_finite() {
-                assert!((step.pred[1] - rho).abs() < 1e-12);
-            }
-            let u = step.pred[0];
-            if u.is_finite() {
-                let w_new = lam * w + 1.0;
-                let b = 1.0 / w_new;
-                bar = if bar.is_finite() {
-                    bar + b * (u - bar)
-                } else {
-                    u
-                };
-                rho = if rho.is_finite() {
-                    (1.0 - alpha - beta) * bar + alpha * u + beta * rho
-                } else {
-                    u
-                };
-                w = w_new;
-            }
-        }
-        assert!(rho.is_finite());
-    }
-
     /// The pre-row standardised row, by hand: `(x − m)/√v` against the
     /// model's standardiser before it takes the row.
     fn standardised(m: &Deco, x: &[f64]) -> Vec<f64> {
@@ -1907,31 +1740,30 @@ mod tests {
     /// A row far past the standardiser's spread, under a `ρ` at the edge of
     /// what a correlation matrix allows, has a log-density below the
     /// double's range (review 2026-09-27, G4, from the contract's proptest):
-    /// weights of `0.01`, `0.01` and `1e100` leave `x0` a spread near
-    /// `5e-52`, the next row at `1e100` standardises to about `2e151`, `ρ` is
-    /// `-1`, the density clamps it to `1e-9` of singular, and the quadratic
-    /// form reaches `1e311`. `loglik` was `-inf`; it is NaN, no reading, as
-    /// `hmm`'s is when its densities leave the range.
+    /// two columns of opposite sign put the level at `-1`; a row of weight
+    /// `1e100` at the means leaves each column a spread near `1e-53` and
+    /// teaches the level nothing (its squares are 0); the next row at `1e100`
+    /// standardises to about `1e153`, the
+    /// density clamps `ρ` to `1e-9` of singular, and the quadratic form
+    /// passes the double's range. `loglik` was `-inf`; it is NaN, no
+    /// reading, as `hmm`'s is when its densities leave the range.
     #[test]
     fn a_log_density_past_the_range_is_no_reading() {
         use crate::OnlineModel;
-        // The older form, which learns from every row: the ratio does not
-        // learn from a standardiser of one effective row, so it never
-        // reaches the edge on these rows. The density is the same code.
-        let mut m = Deco::new(DecoCfg {
-            min_weight: 3.0,
-            ..legacy(2)
-        })
-        .unwrap();
-        m.step(&[0.5, 0.0], &[], 0.0, 0.01);
-        m.step(&[0.0, 1e100], &[], 1.0, 0.01);
-        m.step(&[0.5, 0.0], &[], 1.0, 1e100);
+        let mut m = Deco::new(cfg(2)).unwrap();
+        for i in 0..20 {
+            let s = if i % 2 == 0 { 1e-3 } else { -1e-3 };
+            m.step(&[s, -s], &[], 1.0, 1.0);
+        }
+        assert_eq!(m.rho[0], -1.0, "the fixture");
+        let at_the_means = [m.diag.mean(0), m.diag.mean(1)];
+        m.step(&at_the_means, &[], 1.0, 1e100);
         let out = m.step(&[1e100, 0.0], &[], 1.0, 1.0);
         assert!(out.pred.iter().all(|v| !v.is_infinite()), "{:?}", out.pred);
         assert!(out.pred[2].is_nan(), "{:?}", out.pred);
         assert_eq!(out.pred[1], -1.0, "the emitted rho is never clamped");
         // An ordinary row still has its density.
-        let near = m.predict(&[0.5, 0.0], 1.0);
+        let near = m.predict(&at_the_means, 1.0);
         assert!(near.pred[2].is_finite(), "{:?}", near.pred);
     }
 
@@ -2773,7 +2605,7 @@ mod tests {
     /// the standardiser one effective row. That level is kept, reported,
     /// and taught nothing until the standardiser holds more than five
     /// again, so a row standardised against one row's variance does not
-    /// reach it. The older form learned from those rows.
+    /// reach it. The mean of `u` learned from those rows.
     #[test]
     fn after_a_gap_that_takes_the_history_the_level_waits_and_keeps_its_value() {
         let rows = gaussian(300, 4, 0.6, 9);
@@ -2942,43 +2774,94 @@ mod tests {
         }
     }
 
-    /// A state of the older form loads as it, keeps no ratio, and a state
-    /// whose form and sums disagree is refused: a ratio cfg without the
-    /// sums, the older form's cfg with them, and sums of the wrong length.
+    /// A state of schema 71 or earlier -- `rho_bar` and `rho_bar_lo`, the
+    /// EW mean of `u`, and no `ratio` -- loads with its level restarted
+    /// (CLAUDE.md rule 5's twenty-sixth exception): its standardiser, and so
+    /// every `u`, to the bit; its level's sums empty, `rho` NaN, the weights
+    /// 0 and the share 1; and from there it goes on, to the bit, as this
+    /// build's model with the same standardiser and the level emptied by
+    /// hand, under both dynamics and with blocks. A state whose sums do not
+    /// fit its cfg is refused.
     #[test]
-    fn a_state_whose_form_and_sums_disagree_is_refused() {
+    fn a_state_from_before_the_ratio_restarts_its_level() {
         use crate::{ModelState, StateError};
-        let ratio = Deco::new(DecoCfg {
+        for (linear, blocks) in [(false, Vec::new()), (true, vec![vec![0, 1], vec![2, 3]])] {
+            let mut m = Deco::new(DecoCfg {
+                dynamics: if linear {
+                    DecoDynamics::Linear
+                } else {
+                    DecoDynamics::Ew
+                },
+                alpha: linear.then_some(0.05),
+                beta: linear.then_some(0.9),
+                blocks,
+                ..cfg(4)
+            })
+            .unwrap();
+            let rows = gaussian(200, 4, 0.4, 2);
+            for x in &rows[..100] {
+                m.step(x, &[], 1.0, 1.0);
+            }
+            // The layout of schema 71: the level as `rho_bar` and its low
+            // part, no `ratio`.
+            let mut v = serde_json::to_value(m.state()).unwrap();
+            let inner = v["model"]["Deco"].as_object_mut().unwrap();
+            let values = inner["rho"].as_array().unwrap().len();
+            inner.remove("ratio");
+            inner.insert("rho_bar".into(), serde_json::json!(vec![0.3; values]));
+            inner.insert("rho_bar_lo".into(), serde_json::json!(vec![0.0; values]));
+            let old: crate::State = serde_json::from_value(v).unwrap();
+            let mut back = Deco::restore(&old).unwrap();
+            assert_eq!(back.diag, m.diag, "the standardiser keeps its history");
+            assert!(back.rho.iter().all(|v| v.is_nan()) && back.warming());
+            assert!(back.rho_w.iter().all(|&w| w == 0.0));
+            let empty = RatioSums::new(values, values - back.blocks.len(), linear);
+            assert_eq!(format!("{:?}", back.ratio), format!("{empty:?}"));
+            assert_eq!(back.ratio.w2_share, 1.0, "one effective row: the cold side");
+            let mut want = m.clone();
+            want.rho = vec![f64::NAN; values];
+            want.rho_w = vec![0.0; values];
+            want.ratio = RatioSums::new(values, values - want.blocks.len(), linear);
+            let (mut relearned, mut held) = (None, 0);
+            for (i, x) in rows[100..].iter().enumerate() {
+                let a = m.step(x, &[], 1.0, 1.0);
+                let b = back.step(x, &[], 1.0, 1.0);
+                let c = want.step(x, &[], 1.0, 1.0);
+                let bits = |v: &[f64]| v.iter().map(|p| p.to_bits()).collect::<Vec<_>>();
+                assert_eq!(bits(&b.pred), bits(&c.pred), "row {i}");
+                // The first `values` slots are the `u`s.
+                assert_eq!(
+                    bits(&a.pred[..values]),
+                    bits(&b.pred[..values]),
+                    "row {i}: u"
+                );
+                assert_eq!(a.n_eff, b.n_eff, "row {i}");
+                if b.pred[values].is_nan() {
+                    held += 1;
+                } else if relearned.is_none() {
+                    relearned = Some(i);
+                }
+            }
+            // Half-life 20: the share falls below a fifth in about 1.2
+            // half-lives of rows.
+            assert!(held > 10 && relearned.is_some(), "{held} {relearned:?}");
+            assert!(back.rho.iter().all(|v| v.is_finite()));
+        }
+        // Sums that do not fit the cfg are refused.
+        let m = Deco::new(DecoCfg {
             blocks: vec![vec![0, 1], vec![2, 3]],
             ..cfg(4)
         })
         .unwrap();
-        let older = Deco::new(DecoCfg {
-            blocks: vec![vec![0, 1], vec![2, 3]],
-            ..legacy(4)
-        })
-        .unwrap();
-        let (mut ratio, mut older) = (ratio, older);
-        for x in gaussian(60, 4, 0.4, 2) {
-            ratio.step(&x, &[], 1.0, 1.0);
-            older.step(&x, &[], 1.0, 1.0);
-        }
-        assert!(older.ratio.is_none() && older.rho_bar.len() == 3);
-        assert!(ratio.ratio.is_some() && ratio.rho_bar.is_empty());
         type Edit = fn(&mut Deco);
-        let edits: [(&str, &Deco, Edit); 4] = [
-            ("no sums", &ratio, |d| d.ratio = None),
-            ("sums on the older form", &older, |d| {
-                d.ratio = Some(RatioSums::new(3, 1, false))
+        let edits: [(&str, Edit); 3] = [
+            ("a short pair list", |d| d.ratio.den_b.clear()),
+            ("linear's sums under ew", |d| {
+                d.ratio = RatioSums::new(3, 1, true)
             }),
-            ("a short pair list", &ratio, |d| {
-                d.ratio.as_mut().unwrap().den_b.clear()
-            }),
-            ("linear's sums under ew", &ratio, |d| {
-                d.ratio = Some(RatioSums::new(3, 1, true))
-            }),
+            ("too few values", |d| d.ratio = RatioSums::new(2, 1, false)),
         ];
-        for (what, m, edit) in edits {
+        for (what, edit) in edits {
             let mut s = m.state();
             let ModelState::Deco(inner) = &mut s.model else {
                 unreachable!()
@@ -2989,13 +2872,5 @@ mod tests {
                 other => panic!("{what}: {other:?}"),
             }
         }
-        // The older form's cfg is written without the field, and a cfg
-        // without it loads as the older form.
-        let v = serde_json::to_value(older.state()).unwrap();
-        assert!(!v.to_string().contains("\"level\""), "{v}");
-        let back: crate::State = serde_json::from_value(v).unwrap();
-        assert_eq!(Deco::restore(&back).unwrap(), older);
-        let v = serde_json::to_value(ratio.state()).unwrap();
-        assert!(v.to_string().contains("\"level\":\"ratio\""), "{v}");
     }
 }

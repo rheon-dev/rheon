@@ -643,13 +643,14 @@ same; with `i < n` neither overflows"""
 
 [[equivalent]]
 file = "crates/rheon-core/src/deco.rs"
-function = "Deco::advance"
+function = "Deco::learn_ratio"
 mutation = "replace > with >="
 line_has = "let b = if w_new > 0.0 { w / w_new } else { 0.0 };"
 why = """they differ only at `w_new = 0` with `w_old > 0` (both zero is \
 skipped above), so `lam = 0` and `w = 0`, where the mutant's `b` is 0/0 = \
-NaN; `b` is read only by `if b > 0.0`, false for NaN as for 0, so the level \
-takes no step either way"""
+NaN; `b` is read only by `if b > 0.0` (and inside it), false for NaN as for \
+0, so no mean takes a step either way, and `"linear"` reads `w`, not `b` \
+(PLAN 551 moved the line from `Deco::advance`)"""
 
 [[equivalent]]
 file = "crates/rheon-core/src/cluster/micro.rs"

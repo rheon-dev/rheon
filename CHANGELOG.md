@@ -53,10 +53,12 @@ model that only the new build has is listed as an addition and passes.
   only once the standardizer's weights hold a Kish size above 5, where a
   standardized row's fourth moment exists, and while no level has a value
   `withheld_reason` reads `below_warm_rows`; a half-life under 1.71 rows
-  never learns. `u` does not move. A state saved by 2.0.0 loads as the
-  older level and goes on with it to the bit, since the sums the ratio
-  needs are not in it; a new spec builds the ratio, and its state carries
-  `level = "ratio"` and the sums. Moves: `deco.rho*`, `deco.loglik`,
+  never learns. `u` does not move. A state saved by 2.0.0 or earlier
+  switches to the ratio on load with its level restarted, since the sums
+  the ratio needs are not in it: its standardizer, `u` and `weight_sum` go
+  on as saved, and the level starts empty and relearns from the next rows
+  under the same warm-up, `rho` null and `withheld_reason` `below_warm_rows`
+  until it has a value. Moves: `deco.rho*`, `deco.loglik`,
   `deco.coef`, `deco.withheld_reason`.
 
 - **`bocpd` takes its hazard in rows or on the clock** (PLAN 547).

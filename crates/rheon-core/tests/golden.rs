@@ -1156,7 +1156,6 @@ fn deco_golden() {
         beta: Some(0.9),
         blocks: Vec::new(),
         min_weight: 3.0,
-        level: rheon_core::DecoLevel::Ratio,
     })
     .unwrap();
     check("deco", &signature(&mut m, 1), GOLDEN_DECO);
@@ -1173,7 +1172,6 @@ fn deco_loglik_golden() {
         beta: None,
         blocks: Vec::new(),
         min_weight: 3.0,
-        level: rheon_core::DecoLevel::Ratio,
     })
     .unwrap();
     check("deco_loglik", &signature(&mut m, 2), GOLDEN_DECO_LOGLIK);
