@@ -5,7 +5,7 @@
 //!
 //! ```text
 //! magic    "rheon-state"
-//! kind     "bank" | "windows" | "refresh_time" | "checkpoint"
+//! kind     "bank" | "windows" | "refresh_time" | "merge" | "checkpoint"
 //! version  the kind's own layout version
 //! ```
 //!
@@ -24,10 +24,11 @@
 //!
 //! A kind's versions are its own: a bank's is the models' schema
 //! (`rheon_core::SCHEMA_VERSION`), which moves whenever a model's state
-//! does; a window run's and a `refresh_time` sampler's move with their own
-//! layouts alone. A new kind -- the state of a merge of streams, say -- is
-//! a new name here and a body of its own, and a pipeline checkpoint carries
-//! it as a stage with no change to the checkpoint's layout.
+//! does; a window run's, a `refresh_time` sampler's and a merge's move with
+//! their own layouts alone. A new kind is a new name here and a body of its
+//! own, as the merge of streams was (docs/PLAN.md task 541), and a pipeline
+//! checkpoint carries it as a stage with no change to the checkpoint's
+//! layout.
 //!
 //! Files written before the envelope began with a magic string of their
 //! kind's own (`polars-online-bank`, `polars-online windows`,
@@ -46,16 +47,20 @@ pub enum Kind {
     Windows,
     /// A `refresh_time` sampler: each group's grid part-way.
     RefreshTime,
+    /// A merge of streams (`rp.stream.merge`): each input's last clock and
+    /// the rows held at a tie.
+    Merge,
     /// A pipeline checkpoint: the states of several stages, one file.
     Checkpoint,
 }
 
 impl Kind {
     /// Every kind this build reads.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::Bank,
         Self::Windows,
         Self::RefreshTime,
+        Self::Merge,
         Self::Checkpoint,
     ];
 
@@ -65,6 +70,7 @@ impl Kind {
             Self::Bank => "bank",
             Self::Windows => "windows",
             Self::RefreshTime => "refresh_time",
+            Self::Merge => "merge",
             Self::Checkpoint => "checkpoint",
         }
     }
@@ -80,6 +86,7 @@ impl Kind {
             Self::Bank => "a model bank's state",
             Self::Windows => "a with_windows run's state",
             Self::RefreshTime => "a refresh_time run's state",
+            Self::Merge => "a merge run's state",
             Self::Checkpoint => "a pipeline checkpoint",
         }
     }
@@ -433,8 +440,8 @@ mod tests {
             assert_eq!(Kind::from_tag(want.tag()), Some(want));
         }
         assert_eq!(
-            open(&sealed("merge", 1), Kind::Bank),
-            Err(Refused::UnknownKind("merge".into()))
+            open(&sealed("lag", 1), Kind::Bank),
+            Err(Refused::UnknownKind("lag".into()))
         );
         let mut broken = sealed("bank", 1);
         let n = broken.len();

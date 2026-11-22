@@ -66,6 +66,39 @@ model that only the new build has is listed as an addition and passes.
 
 ### Added
 
+- **`rp.stream.merge`: streams that each run in clock order, merged into one
+  stream in clock order** (PLAN 541). It takes any number of frames or
+  queries, by position or in a dict of name to frame, and gives every row
+  once, at its own clock, with a `source` column naming its stream; columns
+  are matched by name, and one a stream lacks is null on its rows. A tie goes
+  to the stream given first, then to each stream's own order, so the output
+  is `pl.concat(frames, how="diagonal").sort(clock, maintain_order=True)`,
+  and eager `merge_sorted` chained from the first stream, to the bit
+  (`tests/test_stream_merge.py`, over Hypothesis-drawn streams, clock dtypes
+  and chunkings). Clocks must be of one dtype, unit and time zone, and are
+  refused otherwise naming the two streams. It runs as an operator of the
+  Rust core read as a lazy source, an N-way heap over the heads of one chunk
+  of each stream, so its output is the same for any chunking. Each stream's
+  clock is read as a bank reads a group's: a step back is refused naming the
+  stream and its row, or, past `restart_after_step_back`, starts that stream
+  again, its later rows sorting after every row before; with `by`, the
+  merged rows of each group are checked as a bank grouped by it checks them.
+  `save_state` and `load_state` resume it on the next part of every stream,
+  cut at one clock, with the rows at the last clock held in the state; under
+  a slice nothing is held, and each stream resumes after its rows the slice
+  returned. The state is a new kind of the state envelope, `"merge"` version
+  1, with frozen fixtures of each form it takes, and a stage of a pipeline
+  checkpoint. A zero-weight row passes through like any row. Its cost on
+  arm64 (M4 Pro, 4M rows of three float columns, best of 5, load 6-9): 20,
+  28 and 42 ns a row for 2, 8 and 64 streams, against 6 to 10 ns for Polars'
+  sort of the concatenation on 14 threads (13 to 34 ns on one) and 29, 90
+  and 546 ns for chained `merge_sorted`. Its own memory was measured at its
+  bound, one chunk of each stream and one of output (22, 65 and 468 MB at
+  the default 100,000-row chunk over 8M rows of 72 bytes); the process's
+  peak, with Polars' row-group prefetch at 1, was 142, 535 and 751 MB, where
+  Polars' readers of the same streams alone, read in turn, peaked at 104,
+  199 and 731 MB and Polars' sort of the concatenation at 949 to 1,148 MB.
+
 - **Clock forms for the remaining counts of rows** (task 538, part 2), each
   beside its count and refused with it, each a number of the clock's units
   (rows without a clock) or a duration on a temporal clock, read off the

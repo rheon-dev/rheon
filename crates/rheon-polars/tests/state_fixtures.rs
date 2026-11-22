@@ -5,7 +5,9 @@
 //! lagged values (`bank_autocorr`), a `with_windows` state holding
 //! rows for a window that looks ahead, a `refresh_time` state part-way
 //! through an interval, and one holding the rest of a tick's pair points
-//! that a slice left out (`refresh_time_held`) -- each embedded as its bytes beside the input that
+//! that a slice left out (`refresh_time_held`), two states of a merge of
+//! streams (`merge`, holding rows at a tie; `merge_by`, under `by` and a
+//! restart) -- each embedded as its bytes beside the input that
 //! follows it and the frames that input gave (docs/PLAN.md task 198; review
 //! round 4, D1). The models' own states are `rheon-core`'s
 //! `tests/state_fixtures.rs`, on the same three checks:
@@ -71,8 +73,8 @@ use std::path::{Path, PathBuf};
 use polars::prelude::*;
 use rheon_polars::rheon_core::SCHEMA_VERSION;
 use rheon_polars::{
-    Bank, MIN_BANK_SCHEMA_VERSION, RefreshCols, RefreshTime, Spec, StateKind, WindowsConfig,
-    WindowsRun, checkpoint_bytes, load_checkpoint,
+    Bank, MIN_BANK_SCHEMA_VERSION, Merge, MergeConfig, RefreshCols, RefreshTime, Spec, StateKind,
+    WindowsConfig, WindowsRun, checkpoint_bytes, load_checkpoint,
 };
 
 /// One frozen fixture, as `tests/state_fixtures/<name>.rs` holds it.
@@ -209,7 +211,9 @@ const REGENERATE: &str = "PRINT_STATE_FIXTURES=1 cargo test -p rheon-polars --te
 /// no kept file: `bank_formula`, a bank holding a formula target's window
 /// core, the form a bank file embeds a window run's state in, and
 /// `checkpoint`, a pipeline checkpoint of a `refresh_time` state, a window
-/// run's and that bank's. The 71 set was written by the build that counts a
+/// run's and that bank's, and, from PLAN 541, a merge's too. A merge's
+/// state is a kind of its own, version 1, new at 72 with `merge` and
+/// `merge_by`. The 71 set was written by the build that counts a
 /// zero-weight row in no clock (PLAN 539), so [`ZERO_WEIGHT_CLOCK`] is for
 /// the sets before it.
 ///
@@ -1575,19 +1579,269 @@ fn formula_run(bytes: &[u8], input: &DataFrame) -> Ran {
     bank_run_of(&formula_specs(), bytes, input)
 }
 
+// --- rp.stream.merge (PLAN 541) ---------------------------------------------
+
+/// The column of a merge fixture's input that says which stream a row is
+/// of: the continuation's streams travel as one frame.
+const MERGE_INPUT: &str = "__input";
+
+/// Three streams on a float clock, ties within and across them; `news` has
+/// no row before the cut, so its state holds no clock.
+fn merge_streams() -> Vec<(&'static str, DataFrame)> {
+    let quotes = [0.0, 0.5, 1.0, 1.0, 2.0, 2.5, 3.0, 3.0, 4.0, 5.0, 5.5, 6.0];
+    let trades = [0.25, 1.0, 1.0, 2.0, 3.0, 3.5, 4.0, 4.5, 6.0];
+    let news = [3.0, 5.0, 6.5];
+    vec![
+        (
+            "quotes",
+            df!(
+                "t" => quotes,
+                "bid" => quotes.iter().map(|t| 100.0 + t / 8.0).collect::<Vec<_>>(),
+            )
+            .unwrap(),
+        ),
+        (
+            "trades",
+            df!(
+                "t" => trades,
+                "price" => trades.iter().map(|t| 100.1 + t / 16.0).collect::<Vec<_>>(),
+                "size" => (1..=trades.len() as i64).collect::<Vec<_>>(),
+            )
+            .unwrap(),
+        ),
+        (
+            "news",
+            df!("t" => news, "headline" => ["open", "halt", "close"]).unwrap(),
+        ),
+    ]
+}
+
+/// Two streams on a session clock (a `Duration` since each session's open)
+/// grouped by a symbol, with a null one; each starts again at its second
+/// session, a step back past `restart_after_step_back` = 10m.
+fn merge_by_streams() -> Vec<(&'static str, DataFrame)> {
+    let minutes = |m: &[i64]| {
+        Series::new("t".into(), m.iter().map(|m| m * 60_000).collect::<Vec<_>>())
+            .cast(&DataType::Duration(TimeUnit::Milliseconds))
+            .unwrap()
+            .into_column()
+    };
+    let bids = DataFrame::new(
+        7,
+        vec![
+            Column::new(
+                "sym".into(),
+                [
+                    Some("A"),
+                    Some("B"),
+                    None,
+                    Some("A"),
+                    Some("A"),
+                    Some("B"),
+                    Some("A"),
+                ],
+            ),
+            minutes(&[0, 5, 10, 20, 2, 7, 15]),
+            Column::new("bid".into(), [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]),
+        ],
+    )
+    .unwrap();
+    let asks = DataFrame::new(
+        5,
+        vec![
+            Column::new("sym".into(), ["B", "A", "B", "A", "B"]),
+            minutes(&[3, 12, 25, 1, 9]),
+            Column::new("ask".into(), [1.5, 2.5, 3.5, 4.5, 5.5]),
+        ],
+    )
+    .unwrap();
+    vec![("bids", bids), ("asks", asks)]
+}
+
+fn merge_cfg(by: bool) -> MergeConfig {
+    MergeConfig {
+        clock: "t".into(),
+        source: "source".into(),
+        by: by.then(|| "sym".into()),
+        restart: by.then_some(600e9),
+        restart_text: by.then(|| "10m".into()),
+    }
+}
+
+fn merge_of(
+    streams: &[(&'static str, DataFrame)],
+    by: bool,
+    state: Option<&[u8]>,
+) -> Result<Merge, String> {
+    let names = streams.iter().map(|(n, _)| (*n).to_owned()).collect();
+    let schemas = streams
+        .iter()
+        .map(|(_, d)| d.schema().as_ref().clone())
+        .collect();
+    match state {
+        None => Merge::new(names, schemas, merge_cfg(by)),
+        Some(b) => Merge::load_bytes(b, names, schemas, merge_cfg(by)),
+    }
+    .map_err(|e| e.to_string())
+}
+
+/// Each stream fed two rows at a time, pulled as the Python source pulls,
+/// up to `limit` rows; `hold` holds the rows at the last clock.
+fn merge_drive(
+    m: &mut Merge,
+    parts: &[DataFrame],
+    limit: Option<usize>,
+    hold: bool,
+) -> Result<DataFrame, String> {
+    let e = |e: PolarsError| e.to_string();
+    let mut next = vec![0usize; parts.len()];
+    let mut out = DataFrame::empty_with_schema(m.schema());
+    loop {
+        let (df, want) = m.pull(limit.map(|l| l - out.height()), hold).map_err(e)?;
+        out.vstack_mut(&df).map_err(e)?;
+        if limit.is_some_and(|l| out.height() >= l) {
+            return Ok(out);
+        }
+        let Some(i) = want else { return Ok(out) };
+        if next[i] < parts[i].height() {
+            m.push(i, parts[i].slice(next[i] as i64, 2)).map_err(e)?;
+            next[i] += 2;
+        } else {
+            m.end(i);
+        }
+    }
+}
+
+/// The continuation's streams as one frame, each row tagged with its
+/// stream's index, and back.
+fn merge_join(parts: &[DataFrame]) -> DataFrame {
+    let mut schema = Schema::default();
+    for d in parts {
+        for (n, t) in d.schema().iter() {
+            if schema.get(n).is_none() {
+                schema.insert(n.clone(), t.clone());
+            }
+        }
+    }
+    let mut out = DataFrame::empty_with_schema(&schema);
+    out.with_column(Column::new_empty(MERGE_INPUT.into(), &DataType::UInt32))
+        .unwrap();
+    for (i, d) in parts.iter().enumerate() {
+        let h = d.height();
+        let mut cols: Vec<Column> = schema
+            .iter()
+            .map(|(n, t)| {
+                d.column(n)
+                    .cloned()
+                    .unwrap_or_else(|_| Column::full_null(n.clone(), h, t))
+            })
+            .collect();
+        cols.push(Column::new(MERGE_INPUT.into(), vec![i as u32; h]));
+        out.vstack_mut(&DataFrame::new(h, cols).unwrap()).unwrap();
+    }
+    out.rechunk_mut();
+    out
+}
+
+fn merge_split(
+    streams: &[(&'static str, DataFrame)],
+    input: &DataFrame,
+) -> Result<Vec<DataFrame>, String> {
+    let e = |e: PolarsError| e.to_string();
+    let tag = input
+        .column(MERGE_INPUT)
+        .map_err(e)?
+        .u32()
+        .map_err(e)?
+        .clone();
+    streams
+        .iter()
+        .enumerate()
+        .map(|(i, (_, d))| {
+            let rows = input.filter(&tag.equal(i as u32)).map_err(e)?;
+            rows.select(d.get_column_names_owned()).map_err(e)
+        })
+        .collect()
+}
+
+/// `merge`: the streams cut at 3.0, inside its tie -- `quotes`' first row
+/// at 3.0 before the cut, its second and `trades`' after -- and the first
+/// part merged to its end by a run that holds the tie: the state holds
+/// `quotes`' row at 3.0, and `news` no clock.
+fn merge_first() -> (Vec<u8>, DataFrame) {
+    let streams = merge_streams();
+    let before = [7usize, 4, 0];
+    let mut m = merge_of(&streams, false, None).unwrap();
+    let first: Vec<DataFrame> = streams
+        .iter()
+        .zip(before)
+        .map(|((_, d), k)| d.head(Some(k)))
+        .collect();
+    merge_drive(&mut m, &first, None, true).unwrap();
+    let rest: Vec<DataFrame> = streams
+        .iter()
+        .zip(before)
+        .map(|((_, d), k)| d.slice(k as i64, d.height() - k))
+        .collect();
+    (m.save_bytes().unwrap(), merge_join(&rest))
+}
+
+fn merge_run_of(by: bool, bytes: &[u8], input: &DataFrame) -> Ran {
+    let streams = if by {
+        merge_by_streams()
+    } else {
+        merge_streams()
+    };
+    let mut m = merge_of(&streams, by, Some(bytes))?;
+    let again = m.save_bytes()?;
+    let parts = merge_split(&streams, input)?;
+    let out = merge_drive(&mut m, &parts, None, false)?;
+    Ok((again, vec![("merged".into(), out)]))
+}
+
+fn merge_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    merge_run_of(false, bytes, input)
+}
+
+/// `merge_by`: the session streams under `by` and a restart, sliced after
+/// the merged stream's ninth row, inside the second session: each stream
+/// has started again, every group has merged rows, the null one included,
+/// and nothing is held.
+fn merge_by_first() -> (Vec<u8>, DataFrame) {
+    let streams = merge_by_streams();
+    let parts: Vec<DataFrame> = streams.iter().map(|(_, d)| d.clone()).collect();
+    let mut m = merge_of(&streams, true, None).unwrap();
+    let head = merge_drive(&mut m, &parts, Some(9), false).unwrap();
+    let src = head.column("source").unwrap().str().unwrap();
+    let rest: Vec<DataFrame> = streams
+        .iter()
+        .map(|(n, d)| {
+            let took = src.iter().filter(|s| *s == Some(*n)).count();
+            d.slice(took as i64, d.height() - took)
+        })
+        .collect();
+    (m.save_bytes().unwrap(), merge_join(&rest))
+}
+
+fn merge_by_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    merge_run_of(true, bytes, input)
+}
+
 /// The stages of the `checkpoint` fixture, in order: a `refresh_time`
-/// grid, a window run and a bank, each its kind's fixture's state, and
-/// each continued on that fixture's input. The bank's input is the
-/// fixture's own; the others are made from the same generators.
-const STAGES: [&str; 3] = ["grid", "windows", "bank"];
+/// grid, a window run, a bank and a merge of streams (PLAN 541), each its
+/// kind's fixture's state, and each continued on that fixture's input. The
+/// bank's input is the fixture's own; the others are made from the same
+/// generators.
+const STAGES: [&str; 4] = ["grid", "windows", "bank", "merge"];
 
 fn checkpoint_first() -> (Vec<u8>, DataFrame) {
     let (grid, _) = refresh_first();
     let (windows, _) = windows_first();
     let (bank, input) = formula_first();
+    let (merge, _) = merge_first();
     let stages: Vec<(&str, &[u8])> = STAGES
         .into_iter()
-        .zip([&grid[..], &windows, &bank])
+        .zip([&grid[..], &windows, &bank, &merge])
         .collect();
     (checkpoint_bytes(&stages).unwrap(), input)
 }
@@ -1598,7 +1852,12 @@ fn checkpoint_run(bytes: &[u8], input: &DataFrame) -> Ran {
     if names
         != STAGES
             .into_iter()
-            .zip([StateKind::RefreshTime, StateKind::Windows, StateKind::Bank])
+            .zip([
+                StateKind::RefreshTime,
+                StateKind::Windows,
+                StateKind::Bank,
+                StateKind::Merge,
+            ])
             .collect::<Vec<_>>()
     {
         return Err(format!("the checkpoint's stages are {names:?}"));
@@ -1615,6 +1874,7 @@ fn checkpoint_run(bytes: &[u8], input: &DataFrame) -> Ran {
             &window_input(&frame()).slice(SPLIT as i64, N - SPLIT),
         )?,
         formula_run(&stages[2].state, input)?,
+        merge_run(&stages[3].state, &merge_first().1)?,
     ];
     let again: Vec<(&str, &[u8])> = STAGES
         .into_iter()
@@ -1739,6 +1999,16 @@ fn kinds() -> Vec<Kind> {
             name: "bank_formula",
             first: formula_first,
             run: formula_run,
+        },
+        Kind {
+            name: "merge",
+            first: merge_first,
+            run: merge_run,
+        },
+        Kind {
+            name: "merge_by",
+            first: merge_by_first,
+            run: merge_by_run,
         },
         Kind {
             name: "checkpoint",
@@ -2149,6 +2419,8 @@ fn every_current_fixture_is_written_in_the_envelope() {
             ("checkpoint", 1)
         } else if name.starts_with("refresh_time") {
             ("refresh_time", 3)
+        } else if name.starts_with("merge") {
+            ("merge", 1)
         } else if name.starts_with("with_windows") {
             ("windows", 12)
         } else {
@@ -2173,6 +2445,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
         [
             ("bank", 15),
             ("checkpoint", 1),
+            ("merge", 2),
             ("refresh_time", 3),
             ("windows", 3)
         ]
@@ -2181,11 +2454,12 @@ fn every_current_fixture_is_written_in_the_envelope() {
     // formula target's cores inside its bank stage, each a window run's.
     let f = frozen::ALL.iter().find(|f| f.name == "checkpoint").unwrap();
     let stages = load_checkpoint(&unhex(f.state)).unwrap();
-    for (s, (kind, version)) in
-        stages
-            .iter()
-            .zip([("refresh_time", 3), ("windows", 12), ("bank", 72)])
-    {
+    for (s, (kind, version)) in stages.iter().zip([
+        ("refresh_time", 3),
+        ("windows", 12),
+        ("bank", 72),
+        ("merge", 1),
+    ]) {
         assert_eq!(
             envelope_head(&s.state),
             Some(("rheon-state".to_owned(), kind.to_owned(), version)),
@@ -3067,6 +3341,37 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
                 p.contains(".quant.") && p.contains(".prev.") && v.as_f64().is_some_and(|f| f > 0.0)
             },
         ),
+        // PLAN 541: a merge's state, in each form it takes -- an input's
+        // last clock as a float and as an integer (a temporal clock's
+        // physical one) and none, the rows held at a tie, an input started
+        // again, and the merged rows' last clock in each group, the null
+        // key's and the one key of a merge without `by`.
+        ("merge", "Stamp::Float", |p, _| {
+            p.starts_with(".inputs.") && p.ends_with(".last.Float")
+        }),
+        ("merge", "an input with no clock", |p, v| {
+            p.starts_with(".inputs.") && p.ends_with(".last") && v.is_nil()
+        }),
+        ("merge", "the rows held at a tie", |p, v| {
+            p.starts_with(".inputs.")
+                && p.ends_with(".held")
+                && v.as_slice().is_some_and(|b| b.starts_with(b"ARROW1"))
+        }),
+        ("merge", "the one key without by", |p, v| {
+            p == ".groups.0.0" && v.as_str() == Some("")
+        }),
+        ("merge_by", "Stamp::Int", |p, _| {
+            p.starts_with(".inputs.") && p.ends_with(".last.Int")
+        }),
+        ("merge_by", "an input started again", |p, v| {
+            p.starts_with(".inputs.") && p.ends_with(".restarts") && v.as_u64() == Some(1)
+        }),
+        ("merge_by", "the null group", |p, v| {
+            p.starts_with(".groups.") && p.ends_with(".0") && v.is_nil()
+        }),
+        ("merge_by", "a group's last clock", |p, _| {
+            p.starts_with(".groups.") && p.ends_with(".1.Int")
+        }),
         ("refresh_time_int", "Instant::Int", |p, _| {
             p.contains(".last_time.") && p.ends_with(".Int")
         }),

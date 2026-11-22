@@ -1583,9 +1583,9 @@ pub(crate) use closed_rows::instance_decay;
 pub use closed_rows::{ClosedRow, Gram, PairRow, vech};
 use closed_rows::{check_closed_row, closed_frame, gram_of, spec_bins, spec_cross_lags, spec_lags};
 use inline::{join_maybe_par, map_maybe_par, map_range_maybe_par, map_vec_maybe_par, par};
-pub(crate) use refusals::clock_amount;
 #[cfg(test)]
 use refusals::over_budget_message;
+pub(crate) use refusals::{CLOCK_ORDER_HOW_TO, clock_amount};
 use refusals::{backwards_clock, non_finite_step, outside_support, over_budget, over_state_cap};
 
 /// Drop the streams a refused chunk materialized, `(spec index, key)` each.
