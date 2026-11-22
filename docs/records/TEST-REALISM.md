@@ -245,4 +245,26 @@ realistic test is not an oracle:
 Each realistic case lands as one commit per model and is listed here with
 its sha.
 
-(none yet)
+Part 1, section 5 item 1: a golden on a stream with structure for each of
+the eight models that look for it, in
+`crates/rheon-core/tests/golden_structured.rs` (one test file, a stream a
+model, the structure asserted found before the signature is pinned).
+
+| model | commit | what the stream is |
+|---|---|---|
+| `kmeans` | `2832294` | three blobs, one a row in turn |
+| `micro` | `66efac4` | the same blobs; the default linkage reads three far-apart summaries as one shape, a given link keeps three |
+| `hmm` | `07cf4c0` | two regimes of 15 rows at -1.5 and +1.5 |
+| `bocpd` | `6948c45` | a shift of six standard deviations at row 30, per row and on the clock |
+| `corrchange` | `a2211c5` | a correlation of +0.9 reversed to -0.9 inside a span of 100 |
+| `deco` | `ec63cd6` | one factor at a correlation of 0.6; the estimate averages 1/3 there |
+| `rcov` | `aa4f216` | 300 returns at a correlation of 0.7 |
+| `hawkes` | `ea277c7` | 300 events of a simulated process (baseline 0.4, branching 0.5) |
+
+Two things the realistic streams showed that the degenerate one could not:
+`deco`'s row estimate is the paper's Lemma 2.3 `u`, which sits below the
+correlation it estimates (1/3 at 0.6 for two series: the golden test holds the
+closed form, not the truth); and `corrchange`'s `monitor` test flagged a stable
+span of 100 rows at a statistic of 3.9 against a critical value of 1.36 on the
+first seed tried (a numpy replay of the definition gave the same number, so
+the draw and not the code), which is why that test's seed is the second.

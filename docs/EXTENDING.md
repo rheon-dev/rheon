@@ -327,6 +327,17 @@ never pytest.
 reads this file, and fails for a kind in `KINDS` with no
 `fn <kind>_golden()`.
 
+**A model that looks for structure** (clusters, regimes, a change, a
+correlation, self-excitation) is also pinned in
+`tests/golden_structured.rs`, on a stream that has the structure: the fixed
+stream's features are independent noise, so there a clusterer has no
+clusters and a change detector no change, and a mutant that moves a number
+only when the structure is there moves none. Write a stream from the
+structure the model finds, generated from the seed with sums and products
+only, assert in the test that the model found it (the cluster, the run
+length, the correlation, the parameters the simulation used), and then pin
+the signature. Regenerate one test at a time with `PRINT_GOLDEN=1`.
+
 ## The bank — `crates/rheon-polars`
 
 The bank in `crates/rheon-polars` turns a spec into a model, steps it over
