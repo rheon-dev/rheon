@@ -674,6 +674,46 @@ fn ols_model() -> EwRidge {
     .unwrap()
 }
 
+/// `Exp(1)` as half a chi-square on two degrees of freedom: two normals,
+/// sums and products only.
+fn exp1(s: &mut u64) -> f64 {
+    let (a, b) = (gauss(s), gauss(s));
+    0.5 * (a * a + b * b)
+}
+
+/// The line with noise `Exp(1) - 1` of scale 0.8: mean 0, skewed to the right.
+fn skewed_rows() -> Vec<Row> {
+    target_rows(600, 880011, |_, s| {
+        let x = [lcg(s), lcg(s)];
+        (x, line(&x) + 0.8 * (exp1(s) - 1.0))
+    })
+}
+
+/// `quantile` at 0.7 on skewed noise with no forgetting: the fit sits above
+/// the mean's line by the noise's 0.7 quantile, `0.8 (ln(1/0.3) - 1)`, which
+/// is 0.16 here and not the 0 a symmetric noise would give.
+#[test]
+fn quantile_skewed_golden() {
+    let rows = skewed_rows();
+    let cfg = || {
+        robust_cfg(
+            RobustLoss::Quantile { tau: 0.7 },
+            true,
+            Decay::Halflife(f64::INFINITY),
+        )
+    };
+    let mut m = Robust::new(cfg()).unwrap();
+    let mut got = probe(&mut m, &rows, &[0], &[200, 400, 599]);
+    let shift = mean_error(&mut Robust::new(cfg()).unwrap(), &rows, line, 300);
+    let want = 0.8 * ((1.0f64 / 0.3).ln() - 1.0);
+    assert!(
+        (shift - want).abs() < 0.15,
+        "shift {shift}, the quantile's {want}"
+    );
+    got.push(shift);
+    check("quantile_skewed", &got, GOLDEN_QUANTILE_SKEWED);
+}
+
 // --- generated; see the module docs ---
 const GOLDEN_KMEANS_BLOBS: &[f64] = &[
     2.0,
@@ -793,4 +833,10 @@ const GOLDEN_HUBER_CONTAMINATED: &[f64] = &[
     0.301095749294845,
     0.22378708973246048,
     0.04014623471851346,
+];
+const GOLDEN_QUANTILE_SKEWED: &[f64] = &[
+    0.01130043329129038,
+    -0.14877383228171126,
+    0.6511296088025674,
+    0.2649190652119157,
 ];
