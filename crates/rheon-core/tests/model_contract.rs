@@ -4676,6 +4676,7 @@ fn glm_cfg() -> GlmCfg {
         ridge: 1.0,
         min_weight: 3.0,
         refit_rows: 10,
+        refit_clock: None,
         step_cap: f64::INFINITY,
     }
 }
@@ -4749,6 +4750,7 @@ fn expectile_cfg() -> ExpectileCfg {
         ridge: 1e-6,
         min_weight: 3.0,
         refit_rows: 10,
+        refit_clock: None,
         window_rows: None,
         window_clock: None,
         closed: WindowClosed::Right,

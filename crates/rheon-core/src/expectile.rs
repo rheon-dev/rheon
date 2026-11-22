@@ -62,7 +62,13 @@
 //! with each row's side judged at the converged fit, `S = Σ v a`, `G = Σ v a
 //! x̃x̃' / S`, `c = Σ v a x̃ y / S`, and the buffer freed. The study measured
 //! a fivefold cut in the gap at 500 rows without decay (0.102 to 0.020 of
-//! the yardstick at `τ = 0.9`).
+//! the yardstick at `τ = 0.9`). `refit_clock = D` is the same refit over a
+//! span of the clock (docs/PLAN.md task 538): a target's rows from its first
+//! learned row through the first at least `D` clock units after it, once
+//! they hold a row per coefficient, `D` read off the rows' exact stamps
+//! ([`crate::clock_span::span_reached`]); on the row clock, `D + 1` rows.
+//! How many rows that is the data decides, so they are checked against
+//! `max_state_bytes` as they come, as a clock window's are.
 //!
 //! **The exact refit**, of a buffer or a window: start from the sides at
 //! the fit before (warm) or from least squares (cold); a pass is one WLS
@@ -120,6 +126,8 @@ use crate::since::back_by;
 use crate::solve::dot_aug;
 use crate::{Decay, RefitStatus, Stamp, WindowClosed};
 
+#[cfg(test)]
+mod refit_clock_tests;
 #[cfg(test)]
 mod tests;
 
@@ -200,6 +208,14 @@ pub struct ExpectileCfg {
     /// [`EXPECTILE_MAX_STATE_BYTES`].
     #[serde(default)]
     pub max_state_bytes: Option<u64>,
+    /// The refit over a span of the clock in place of a count of rows:
+    /// each target's rows from its first learned row through the first at
+    /// least this many clock units after it (seconds on a temporal clock),
+    /// once they hold a row per coefficient. `refit_rows` is 0 beside it.
+    /// Last, and written only when set, so a state without it keeps its
+    /// bytes and the array form its order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refit_clock: Option<f64>,
 }
 
 impl ExpectileCfg {
@@ -214,6 +230,11 @@ impl ExpectileCfg {
 
     fn windowed(&self) -> bool {
         self.window_rows.is_some() || self.window_clock.is_some()
+    }
+
+    /// Whether the first rows are refit, after a count or a span.
+    fn refits(&self) -> bool {
+        self.refit_rows > 0 || self.refit_clock.is_some()
     }
 
     /// The bytes the settings fix: the sums, a refit buffer at its full
@@ -263,6 +284,22 @@ impl ExpectileCfg {
                  window_rows, or leave it out for no window."
             ));
         }
+        if let Some(d) = self.refit_clock {
+            if !(d.is_finite() && d > 0.0) {
+                no.refuse(format!(
+                    "expectile: refit_span must be a finite number of clock units above 0, but \
+                     it is {d}. Give the span of clock whose rows the refit fits, or leave it \
+                     out for refit_rows."
+                ));
+            }
+            if self.refit_rows > 0 {
+                no.refuse(format!(
+                    "expectile: refit_span and refit_rows = {} are two refits of the first \
+                     rows, and a target is refit once. Leave one of them out.",
+                    self.refit_rows
+                ));
+            }
+        }
         if let Some(d) = self.window_clock {
             if !(d.is_finite() && d > 0.0) {
                 no.refuse(format!(
@@ -299,6 +336,13 @@ impl ExpectileCfg {
                      0, or leave out the window.",
                     self.refit_rows
                 ));
+            }
+            if self.refit_clock.is_some() {
+                no.refuse(
+                    "expectile: a window refits its rows exactly on every row, so the first \
+                     rows' refit has nothing to add, but refit_span is set. Leave out \
+                     refit_span, or the window.",
+                );
             }
         }
         match self.max_state_bytes {
@@ -366,6 +410,10 @@ struct Refit {
     passes: u32,
     failed: bool,
     over_budget: bool,
+    /// Under a refit over a span of the clock, the stamp of the target's
+    /// first learned row, from which the span runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    first: Option<Stamp>,
 }
 
 impl Refit {
@@ -377,6 +425,7 @@ impl Refit {
             passes: 0,
             failed: false,
             over_budget: false,
+            first: None,
         }
     }
 
@@ -391,9 +440,14 @@ impl Refit {
         }
     }
 
-    fn fits(&self, width: usize, refit_rows: u32) -> bool {
+    /// Whether the buffer's shape is its count's: `learned` rows of `width`
+    /// numbers until the refit runs, and fewer rows than a count of them
+    /// (a span of the clock holds the rows its span has).
+    fn fits(&self, width: usize, refit_rows: u32, clocked: bool) -> bool {
         let n = if self.done { 0 } else { self.learned as usize };
-        self.rows.len() == n * width && (self.done || self.learned < refit_rows.max(1))
+        self.rows.len() == n * width
+            && (self.done || clocked || self.learned < refit_rows.max(1))
+            && (clocked || self.first.is_none())
     }
 }
 
@@ -831,7 +885,7 @@ impl Expectile {
             beta: vec![vec![0.0; k]; m],
             fitted: vec![false; m],
             rows: vec![0; m],
-            refit: if cfg.refit_rows > 0 {
+            refit: if cfg.refits() {
                 vec![Refit::new(); m]
             } else {
                 Vec::new()
@@ -913,12 +967,41 @@ impl Expectile {
         self.refit.iter().map(Refit::status).collect()
     }
 
-    /// The bytes this model's refit buffers can hold at most.
+    /// The bytes this model's refit buffers can hold at most: under a
+    /// refit over a span of the clock, what the cap leaves beside the sums,
+    /// since past that the run is refused.
     pub fn refit_reservation(&self) -> usize {
         if self.refit.is_empty() {
             return 0;
         }
+        if self.cfg.refit_clock.is_some() {
+            let (k, m) = (self.cfg.n_features, self.cfg.n_targets);
+            let sums = Self::sums_bytes(k, m, self.cfg.fit_intercept, false);
+            return usize::try_from(self.cfg.cap().saturating_sub(sums)).unwrap_or(usize::MAX);
+        }
         self.cfg.n_targets * 8 * self.cfg.refit_rows as usize * (self.cfg.n_features + 2)
+    }
+
+    /// The bytes the state holds under a refit over a span of the clock,
+    /// with `extra` more rows in its buffers: the sums, each buffered row's
+    /// `k + 2` numbers and each target's first stamp.
+    fn refit_clock_bytes(&self, extra: usize) -> u64 {
+        let (k, m) = (self.cfg.n_features, self.cfg.n_targets);
+        let held: usize = self.refit.iter().map(|r| r.rows.len()).sum();
+        let stamps = (m * std::mem::size_of::<Option<Stamp>>()) as u64;
+        Self::sums_bytes(k, m, self.cfg.fit_intercept, false)
+            + 8 * (held + extra * (k + 2)) as u64
+            + stamps
+    }
+
+    /// The run-time check of a state the data sizes, over this model's
+    /// fields ([`crate::clock_span::HeldCap`]).
+    fn held_cap(&mut self) -> crate::clock_span::HeldCap<'_> {
+        crate::clock_span::HeldCap {
+            over: &mut self.over,
+            warned: &mut self.warned,
+            warning: &mut self.warning,
+        }
     }
 
     /// Give every target's refit up before it begins: its rows are freed
@@ -1304,9 +1387,8 @@ impl Expectile {
                 return;
             }
             if self.cfg.window_clock.is_some() {
-                let bytes = self.clock_bytes_with(1);
-                if bytes > self.cfg.cap() {
-                    self.over = Some(bytes);
+                let (bytes, cap) = (self.clock_bytes_with(1), self.cfg.cap());
+                if !self.held_cap().admit(bytes, cap) {
                     return;
                 }
             }
@@ -1325,17 +1407,30 @@ impl Expectile {
                 w.pop_front(nf, m);
             }
             self.refit_window();
-            if self.cfg.window_clock.is_some() && !self.warned {
-                let bytes = self.clock_bytes_with(0);
-                if 2 * bytes > self.cfg.cap() {
-                    self.warned = true;
-                    self.warning = Some(bytes);
-                }
+            if self.cfg.window_clock.is_some() {
+                let (bytes, cap) = (self.clock_bytes_with(0), self.cfg.cap());
+                self.held_cap().note(bytes, cap);
             }
             return;
         }
         self.read_into(x, floor, n_eff, out);
+        // A refit over a span of the clock holds the rows the span has: a
+        // row that would take the state past the cap is not learned, nor
+        // any after it.
+        if self.cfg.refit_clock.is_some() {
+            let joining = self
+                .refit
+                .iter()
+                .zip(y)
+                .filter(|(r, t)| !r.done && t.is_some())
+                .count();
+            let (bytes, cap) = (self.refit_clock_bytes(joining), self.cfg.cap());
+            if !self.held_cap().admit(bytes, cap) {
+                return;
+            }
+        }
         let tau = self.cfg.expectile;
+        let p = self.cfg.k_total();
         // The targets' weights first: a solve reads its rows' weight `W`
         // with this row's in it, as `S` has it.
         crate::model::age_target_weights(&mut self.w_target, |j| y[j].is_some(), lam, weight);
@@ -1366,12 +1461,24 @@ impl Expectile {
                 r.rows.push(t);
                 r.rows.push(weight);
                 r.learned += 1;
-                if r.learned >= self.cfg.refit_rows {
+                let due = match self.cfg.refit_clock {
+                    Some(span) => {
+                        let first = *r.first.get_or_insert(key);
+                        r.learned as usize >= p.max(1)
+                            && crate::clock_span::span_reached(key, first, span)
+                    }
+                    None => r.learned >= self.cfg.refit_rows,
+                };
+                if due {
                     self.run_refit(j);
                 }
             }
         }
         self.w_sum = lam * self.w_sum + weight;
+        if self.cfg.refit_clock.is_some() {
+            let (bytes, cap) = (self.refit_clock_bytes(0), self.cfg.cap());
+            self.held_cap().note(bytes, cap);
+        }
     }
 }
 
@@ -1463,8 +1570,10 @@ impl OnlineModel for Expectile {
                     && m.beta.iter().all(|b| b.len() == k)
                     && m.fitted.len() == n
                     && m.rows.len() == n
-                    && m.refit.len() == if m.cfg.refit_rows > 0 { n } else { 0 }
-                    && m.refit.iter().all(|r| r.fits(width, m.cfg.refit_rows))
+                    && m.refit.len() == if m.cfg.refits() { n } else { 0 }
+                    && m.refit
+                        .iter()
+                        .all(|r| r.fits(width, m.cfg.refit_rows, m.cfg.refit_clock.is_some()))
                     && match (&m.window, m.cfg.windowed()) {
                         (None, false) => true,
                         (Some(w), true) => {

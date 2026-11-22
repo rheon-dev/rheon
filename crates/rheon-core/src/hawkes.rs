@@ -952,6 +952,16 @@ impl Hawkes {
         }
     }
 
+    /// The run-time check of a clock window's rows, over this model's
+    /// fields ([`crate::clock_span::HeldCap`]).
+    fn held_cap(&mut self) -> crate::clock_span::HeldCap<'_> {
+        crate::clock_span::HeldCap {
+            over: &mut self.over,
+            warned: &mut self.warned,
+            warning: &mut self.warning,
+        }
+    }
+
     /// Whether the oldest row of a clock window has left at `now`.
     fn oldest_has_left(&self, now: Stamp) -> bool {
         let Some(span) = self.cfg.window_clock else {
@@ -1128,9 +1138,8 @@ impl OnlineModel for Hawkes {
             return;
         }
         if now.is_some() {
-            let bytes = self.clock_bytes_with(1);
-            if bytes > self.cfg.cap() {
-                self.over = Some(bytes);
+            let (bytes, cap) = (self.clock_bytes_with(1), self.cfg.cap());
+            if !self.held_cap().admit(bytes, cap) {
                 return;
             }
         }
@@ -1163,12 +1172,9 @@ impl OnlineModel for Hawkes {
         debug_assert_eq!(self.r.len(), k);
         if self.window.is_some() {
             self.window_learn(y, weight, now);
-            if now.is_some() && !self.warned {
-                let bytes = self.clock_bytes_with(0);
-                if 2 * bytes > self.cfg.cap() {
-                    self.warned = true;
-                    self.warning = Some(bytes);
-                }
+            if now.is_some() {
+                let (bytes, cap) = (self.clock_bytes_with(0), self.cfg.cap());
+                self.held_cap().note(bytes, cap);
             }
         }
     }

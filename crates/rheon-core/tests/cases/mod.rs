@@ -568,6 +568,7 @@ fn glm_cfg(refit_rows: u32) -> GlmCfg {
         ridge: 1.0,
         min_weight: 3.0,
         refit_rows,
+        refit_clock: None,
         step_cap: f64::INFINITY,
     }
 }
@@ -1568,6 +1569,7 @@ pub fn all() -> Vec<Case> {
             Glm::new(GlmCfg {
                 family: GlmFamily::Tweedie,
                 refit_rows: 0,
+                refit_clock: None,
                 step_cap: 1.0,
                 ..glm_cfg(0)
             })
@@ -2407,6 +2409,7 @@ fn expectile_cfg(refit_rows: u32) -> ExpectileCfg {
         ridge: 1e-6,
         min_weight: 2.0,
         refit_rows,
+        refit_clock: None,
         window_rows: None,
         window_clock: None,
         closed: WindowClosed::Right,

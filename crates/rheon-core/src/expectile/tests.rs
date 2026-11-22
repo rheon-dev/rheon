@@ -46,11 +46,21 @@ fn cfg(k: usize, tau: f64) -> ExpectileCfg {
         ridge: 0.0,
         min_weight: 0.0,
         refit_rows: 0,
+        refit_clock: None,
         window_rows: None,
         window_clock: None,
         closed: WindowClosed::Right,
         max_state_bytes: None,
     }
+}
+
+/// [`cfg`] and [`stream`], for the clock refit's tests beside these.
+pub(super) fn cfg_of(k: usize, tau: f64) -> ExpectileCfg {
+    cfg(k, tau)
+}
+
+pub(super) fn stream_of(k: usize, n: usize, seed: u64) -> Vec<(Vec<f64>, f64)> {
+    stream(k, n, seed)
 }
 
 fn z_of(x: &[f64]) -> Vec<f64> {

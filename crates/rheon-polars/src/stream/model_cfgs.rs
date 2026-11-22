@@ -131,6 +131,7 @@ pub fn expectile_cfg(
                 cap,
             )
         }),
+        refit_clock: None,
         window_rows: *window_rows,
         window_clock: window_size.as_ref().map(Span::value),
         closed: closed.edge(),
@@ -1212,6 +1213,7 @@ pub fn glm_cfg(spec: &Spec) -> Result<rheon_core::GlmCfg, String> {
         ridge: ridge.unwrap_or(1.0),
         min_weight: spec.min_periods_or_default(),
         refit_rows,
+        refit_clock: None,
         step_cap: step_cap.map_or_else(|| rheon_core::default_glm_step_cap(refit_rows), |n| n.0),
     })
 }

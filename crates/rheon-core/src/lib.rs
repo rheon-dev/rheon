@@ -66,6 +66,7 @@ mod breaks;
 mod budget;
 mod calibration;
 mod clock;
+mod clock_span;
 mod cluster;
 /// Compensated running means, `hi + lo` (docs/PLAN.md task 101): public so
 /// `rheon-polars`' window core keeps a variance's mean by the same rule

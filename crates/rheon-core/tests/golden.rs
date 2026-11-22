@@ -485,6 +485,7 @@ fn glm_golden() {
         ridge: 1.0,
         min_weight: 3.0,
         refit_rows: 15,
+        refit_clock: None,
         step_cap: f64::INFINITY,
     })
     .unwrap();
@@ -506,6 +507,7 @@ fn glm_cap_golden() {
         ridge: 1.0,
         min_weight: 3.0,
         refit_rows: 0,
+        refit_clock: None,
         step_cap: 0.5,
     })
     .unwrap();
@@ -838,6 +840,7 @@ fn expectile_golden() {
         ridge: 1e-6,
         min_weight: 3.0,
         refit_rows: 15,
+        refit_clock: None,
         window_rows: None,
         window_clock: None,
         closed: WindowClosed::Right,
@@ -864,6 +867,7 @@ fn expectile_window_golden() {
         expectile: 0.2,
         ridge: 1e-6,
         refit_rows: 0,
+        refit_clock: None,
         window_rows: Some(12),
     })
     .unwrap();

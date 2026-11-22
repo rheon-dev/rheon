@@ -390,7 +390,7 @@ pub(super) fn start_due(cfg: &GarchCfg, series: &Series, now: Option<Stamp>) -> 
     match (cfg.start_span, now, series.first) {
         (Some(span), Some(now), Some(first)) => {
             rows >= super::MIN_START_ROWS
-                && now.cmp_span(first, span * scale) != std::cmp::Ordering::Less
+                && crate::clock_span::span_reached(now, first, span * scale)
         }
         _ => rows >= cfg.start_rows << series.refits,
     }

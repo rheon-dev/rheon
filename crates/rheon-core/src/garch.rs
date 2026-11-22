@@ -516,6 +516,16 @@ impl Garch {
         cfg.n_targets as u64 * Self::series_bytes(cfg, rows) + 16
     }
 
+    /// The run-time check of a start of a clock span's rows, over this
+    /// model's fields ([`crate::clock_span::HeldCap`]).
+    fn held_cap(&mut self) -> crate::clock_span::HeldCap<'_> {
+        crate::clock_span::HeldCap {
+            over: &mut self.over,
+            warned: &mut self.warned,
+            warning: &mut self.warning,
+        }
+    }
+
     /// The bytes the state holds as it stands.
     pub fn bytes(&self) -> u64 {
         self.series.iter().map(|s| s.bytes(&self.cfg)).sum::<u64>() + 16
@@ -643,14 +653,12 @@ impl OnlineModel for Garch {
             // the cap as they come, the warning at half of it once.
             if self.cfg.start_span.is_some() {
                 let with = self.series.iter().map(|s| s.bytes(&self.cfg)).sum::<u64>() + 16 + 16;
-                if with > self.cfg.cap() {
-                    self.over = Some(with);
+                let cap = self.cfg.cap();
+                let mut held = self.held_cap();
+                if !held.admit(with, cap) {
                     continue;
                 }
-                if !self.warned && 2 * with > self.cfg.cap() {
-                    self.warned = true;
-                    self.warning = Some(with);
-                }
+                held.note(with, cap);
             }
             let series = &mut self.series[j];
             if series.buffer.is_empty() {
