@@ -125,6 +125,7 @@ mod solve;
 mod specification;
 mod spread;
 mod stats;
+mod streampca;
 mod tails;
 /// The thread pools of the tests that run one computation at several pool
 /// sizes, held within what a Windows runner can commit.
@@ -224,6 +225,9 @@ pub use solve::{SpdFactor, quad_forms_logdet, solve_spd};
 pub use specification::Specification;
 pub use stats::{
     EW_QUANTILE_ALPHA, EwAutoCorr, EwQuantile, HitTest, MAX_BAND_OCTAVES, SlotMetrics,
+};
+pub use streampca::{
+    OJA_DEFAULT_LEARNING_RATE, PCA_MAX_STATE_BYTES, PcaMethod, StreamPca, StreamPcaCfg,
 };
 pub use tails::Tails;
 pub use warmup::{WARMUP_ROWS, Warmup};

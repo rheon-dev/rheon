@@ -1787,7 +1787,85 @@ fn ew_class_windowed_golden() {
     );
 }
 
+/// `pca` on the golden stream's two columns mixed, `(3 x0 + x1, x0 - 0.5
+/// x1)`, so its components differ (the columns alone are of one spread, a
+/// tie `pca` withholds): component 0's variance, first loading and score at
+/// rows 20, 45 and 59.
+fn pca_signature(method: PcaMethod) -> Vec<f64> {
+    let mut m = StreamPca::new(StreamPcaCfg {
+        n_features: 2,
+        n_components: 1,
+        method,
+        decay: Decay::Halflife(20.0),
+        min_weight: 0.0,
+        learning_rate: None,
+        max_state_bytes: None,
+    })
+    .unwrap();
+    let mut out = Vec::new();
+    for (i, (x, _, d, w)) in stream().into_iter().enumerate() {
+        let x = [3.0 * x[0] + x[1], x[0] - 0.5 * x[1]];
+        let step = m.step(&x, &[], d, w);
+        if matches!(i, 20 | 45 | 59) {
+            out.extend([step.pred[0], step.pred[2], step.pred[4]]);
+        }
+    }
+    out
+}
+
+#[test]
+fn pca_golden() {
+    check("pca", &pca_signature(PcaMethod::Svd), GOLDEN_PCA);
+}
+
+#[test]
+fn pca_ccipca_golden() {
+    check(
+        "pca_ccipca",
+        &pca_signature(PcaMethod::Ccipca),
+        GOLDEN_PCA_CCIPCA,
+    );
+}
+
+#[test]
+fn pca_oja_golden() {
+    check("pca_oja", &pca_signature(PcaMethod::Oja), GOLDEN_PCA_OJA);
+}
+
 // --- generated; see the module docs ---
+const GOLDEN_PCA: &[f64] = &[
+    3.111731224759684,
+    0.9381509032059694,
+    0.3805052170124993,
+    3.5709325086051242,
+    0.9585947766729436,
+    2.0614940695355655,
+    3.993684243361783,
+    0.9648635656349285,
+    -0.6711049564076937,
+];
+const GOLDEN_PCA_CCIPCA: &[f64] = &[
+    3.0947140108359883,
+    0.9392450889119539,
+    0.381798733276914,
+    3.5578435679969886,
+    0.9579038842355805,
+    2.063278804381221,
+    3.984871387572133,
+    0.9643292688869347,
+    -0.6710734268145182,
+];
+const GOLDEN_PCA_OJA: &[f64] = &[
+    3.065450592096426,
+    0.9293422404418946,
+    0.37034117065932554,
+    3.534792566197564,
+    0.9611213764330746,
+    2.0547337417745033,
+    3.968928959714573,
+    0.9689517297744557,
+    -0.6712573084911837,
+];
 const GOLDEN_GLM: &[f64] = &[0.8190287945803094, 1.5909174696403168, 1.3226756022889994];
 const GOLDEN_GLM_CAP: &[f64] = &[0.8059966005129862, 2.2639186345702202, 1.0964813502655293];
 const GOLDEN_EXPECTILE: &[f64] = &[
