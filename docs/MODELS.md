@@ -297,7 +297,7 @@ readiness fields:
 | field | on | what it holds |
 |---|---|---|
 | `settled_frac` | every model but `marginal`, `rcov` and `audit` | how far the model has come toward its steady state under decay |
-| `withheld_reason` | every model but `marginal`, `rcov` and `audit` | why `pred_y` is null, or null when it is not: `below_min_settled_frac`, `below_min_weight`, `above_max_error_inflation`, `below_warm_rows` (the rows `kmeans`, `hmm` and `bocpd` hold to seed themselves from, and the rows before `kalman` has sized any of a target's coefficients, standardized with no intercept), `ill_conditioned` (an `ewridge` fit whose normal equations are too nearly singular to keep a digit) or `unstable_rate` (an `sgd` target whose learning rate is past its stability bound, so the fit diverges), in that order of precedence |
+| `withheld_reason` | every model but `marginal`, `rcov` and `audit` | why `pred_y` is null, or null when it is not: `below_min_settled_frac`, `below_min_weight`, `above_max_error_inflation`, `below_warm_rows` (the rows `kmeans`, `hmm` and `bocpd` hold to seed themselves from, the rows `garch` buffers for a target's start, and the rows before `kalman` has sized any of a target's coefficients, standardized with no intercept), `ill_conditioned` (an `ewridge` fit whose normal equations are too nearly singular to keep a digit), `unstable_rate` (an `sgd` target whose learning rate is past its stability bound, so the fit diverges) or `not_identified` (a `garch` start whose rows do not tell its variance process from a constant variance), in that order of precedence |
 | `error_inflation_y` | `ewridge`, `rls`, `kalman`, under `emit_error_inflation` | the row's own estimation variance over the noise: high on a row leaning on a direction the data never showed, at one triangular solve a row |
 | `support_coef` | `ewridge`, `huber`, `quantile`, beside `coef` | each coefficient's data share, `1 - ridge * (S^-1)_jj` on the system the solve inverts. A duplicated pair of features reads 0.5 each |
 | `se_coef` | `ewridge`, `rls`, `kalman`, under `emit_se_coef`, beside `coef` | each coefficient's standard error in its own units: `sigma` times the fit's own covariance, `kalman`'s posterior exactly. A report, not a gate; it errs large in warm-up and under a ridge |
@@ -2954,9 +2954,24 @@ near 1) whose filter does contract.
 **The start.** The first `start_rows` rows of a target, or the rows of the
 first `start_span` of the clock, are fitted by the model's own projected
 Newton on their likelihood, from a small grid, and replayed at the fit to
-build `H`. A fit that does not converge, or sits on a bound of the
-process's parameters, waits for twice the rows and refits, at most twice,
-while `max_state_bytes` holds the doubled buffer.
+build `H`. They report nothing, as `below_warm_rows`. The Newton runs until
+a step is at the parameters' rounding, so where it stops is not a matter of
+`ln`'s last bits. A fit is at its optimum when its Newton decrement, `½ gᵀ
+M⁻¹ g` with `M` the observed curvature, is at most `10⁻⁶` nats.
+
+**It reports only a process its rows identify.** On returns with no
+conditional variance the likelihood is flat along a ridge, where `β` is not
+identified once `α` is 0, and any fit there is noise. So a start's fit is
+stepped from only when its likelihood-ratio statistic against a constant
+variance, `2 (l_fit − l_const)` with the weights at Kish's count, reaches
+χ² at 0.999 for the restrictions a constant variance puts on the process.
+That is 13.8 for `garch` (`α = β = 0`), and 16.3 for `gjr`, `egarch` and
+`figarch` (three each). Until one does, the start waits for twice the rows and
+refits, at most twice, while `max_state_bytes` holds the doubled buffer,
+and then buffers afresh; its rows are withheld as `not_identified`. A fit
+that passes but is not at its optimum, or sits on a bound of the process's
+parameters, waits and refits the same way, and with no doubling left is
+stepped from.
 
 **Variance targeting** (`variance_targeting=True`, `vol="garch"` with
 normal innovations) sets the level by the running mean square, `ω = v̄ (1 −

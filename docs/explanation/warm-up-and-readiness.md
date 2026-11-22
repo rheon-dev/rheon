@@ -20,7 +20,9 @@ condition holds. On a
 null, and the field `withheld_reason` says why. It names the gate, or a
 reason the fit cannot be trusted on that row: `ill_conditioned` for an
 `ewridge` solve too near singular to keep a digit, and `unstable_rate`
-for an `sgd` learning rate past its stability bound. [Is it
+for an `sgd` learning rate past its stability bound. A `garch` start
+whose rows do not yet tell its variance process from a constant variance
+is `not_identified`. [Is it
 ready?](../DIAGNOSTICS.md#is-it-ready) lists every reason in their order of precedence, and [Decide
 when a model is ready](../how-to/decide-when-a-model-is-ready.md) runs the
 three main gates on one stream.

@@ -163,6 +163,20 @@ def _frame(kind: str) -> pl.DataFrame:
     # cap of 5) every 100 rows.
     steps = r.uniform(0.5, 1.5, size=N)
     steps[::100] = 12.0
+    if kind == "garch":
+        # Returns with a conditional variance, a GARCH(1,1) at (0.05, 0.5,
+        # 0.45), whose first start of 50 rows identifies it: on the linear
+        # target `garch`'s start waits on every row (PLAN 548). Its weights
+        # at 0.4 of the others' (a weight is relative evidence to `garch`),
+        # so the start closes under a weight of 30 and `min_weight=30`
+        # withholds rows past the warm-up.
+        g = np.random.default_rng([278, 2])
+        s, e, ret = 1.0, 0.0, np.empty(N)
+        for i, z in enumerate(g.standard_normal(N)):
+            s = 0.05 + 0.5 * e * e + 0.45 * s
+            e = math.sqrt(s) * z
+            ret[i] = e
+        df, w = df.with_columns(y=ret), 0.4 * w
     # `rcov` weighs a row 0 or 1: a return or none.
     return df.with_columns(w=w, w01=(w > 0).astype(float), t=np.cumsum(steps))
 

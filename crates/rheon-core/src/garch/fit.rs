@@ -12,7 +12,7 @@ use super::dist::{self, LAM_LIM, NU_HI, NU_LO};
 use super::filter::{Filter, figarch_weights};
 use super::linalg::HalfSpaces;
 use super::math;
-use super::optim::{Eval, Stop, maximize};
+use super::optim::{Eval, Fit, maximize};
 use super::{GarchDist, GarchVol};
 
 /// The stationarity margin: the persistence is held at most `1 − 10⁻⁴`.
@@ -361,12 +361,137 @@ fn garch_grid(gjr: bool, v: f64) -> Vec<Vec<f64>> {
     out
 }
 
-/// The start's fit: the full `θ` (with the shape for a t), and whether it
-/// is one to step from -- the optimizer converged, and no constraint of
-/// the process holds the fit on its bound.
+/// The Newton decrement under which a start's fit is at its optimum, in
+/// nats of the likelihood with the rows' weights scaled to Kish's count
+/// ([`kish_scale`]). At an optimum the decrement is the rounding's: on
+/// realistic series of 500 to 2,000 rows it was at most `1.6·10⁻¹²` where
+/// the iteration stopped for want of an ascent, median `5·10⁻²⁵`; where
+/// such a stop was not an optimum it was `0.07` nats or more. A cut six
+/// orders above the one and five below the other is decided by no last bit.
+pub(super) const SOUND_DECREMENT: f64 = 1e-6;
+
+/// The likelihood-ratio statistic's cut, χ² at 0.999, for 2 and for 3
+/// restrictions ([`restrictions`]): `−2 ln 0.001` and `chi2.ppf(0.999, 3)`.
+const LR_CUT_2: f64 = 13.815_510_557_964_274;
+const LR_CUT_3: f64 = 16.266_236_196_238_13;
+
+/// How many restrictions constant variance puts on a form's process: `α =
+/// β = 0` for GARCH(1,1), free or variance-targeted; `α = γ = β = 0` for
+/// GJR and EGARCH; `d = 0` and `φ = β` for FIGARCH, whose four parameters
+/// then give one variance, `ω/(1 − β)`, as GJR's do. A t's shape is in both
+/// models and restricts nothing.
+pub(super) fn restrictions(vol: GarchVol) -> usize {
+    match vol {
+        GarchVol::Garch => 2,
+        GarchVol::Gjr | GarchVol::Egarch | GarchVol::Figarch => 3,
+    }
+}
+
+/// The likelihood-ratio statistic a start must reach before its fit is
+/// stepped from: χ² of [`restrictions`] at 0.999.
+pub(super) fn lr_cut(vol: GarchVol) -> f64 {
+    if restrictions(vol) == 2 {
+        LR_CUT_2
+    } else {
+        LR_CUT_3
+    }
+}
+
+/// Whether a start's rows identify its process: its likelihood-ratio
+/// statistic at least [`lr_cut`] (not a number does not).
+pub(super) fn identified(vol: GarchVol, lr: f64) -> bool {
+    lr >= lr_cut(vol)
+}
+
+/// `Σw / Σw²` over the buffer: the factor that takes its weighted
+/// log-likelihood to the scale of Kish's count of rows, `(Σw)²/Σw²`, so a
+/// statistic read from it does not move when every weight is scaled, and
+/// at unit weights is the plain one. A weighted score's variance is `Σw²`
+/// times a row's, not `Σw`, so this is the factor under which twice the
+/// gain is χ² under the null.
+pub(super) fn kish_scale(rows: &[[f64; 2]]) -> f64 {
+    let (w, w2) = rows
+        .iter()
+        .fold((0.0, 0.0), |(a, b), r| (a + r[1], b + r[1] * r[1]));
+    w / w2
+}
+
+/// The start's fit: the full `θ` (with the shape for a t); whether it is one
+/// to step from -- at its optimum by the Newton decrement, and off every
+/// bound of the process's set; and its likelihood-ratio statistic against
+/// constant variance, `2 (f − f₀)` at Kish's scale.
 pub(super) struct StartFit {
     pub theta: Vec<f64>,
     pub sound: bool,
+    pub lr: f64,
+}
+
+impl StartFit {
+    pub(super) fn of(fit: Fit, theta: Vec<f64>, bounded: bool, f0: f64, scale: f64) -> Self {
+        Self {
+            theta,
+            sound: fit.decrement * scale <= SOUND_DECREMENT && !bounded,
+            lr: 2.0 * (fit.f - f0) * scale,
+        }
+    }
+}
+
+/// The buffer's log-likelihood under constant variance, maximized: the
+/// normal's at the mean square `v`, `−½ Σw (ln 2π + ln v + 1)`, in closed
+/// form; with a t, over the variance and the shape, by [`maximize`] from
+/// `v` and the start's shapes. Not a number where no point has a finite
+/// likelihood.
+fn constant_variance(dist: GarchDist, rows: &[[f64; 2]], bc: f64, v: f64, floor: f64) -> f64 {
+    let m = dist.shape_len();
+    if m == 0 {
+        let w: f64 = rows.iter().map(|r| r[1]).sum();
+        return -0.5 * w * (LN_2PI + math::ln(v) + 1.0);
+    }
+    // GARCH(1,1) at α = β = 0: every row's variance is ω
+    let q = 1 + m;
+    let obj = |x: &[f64], grad: bool| {
+        let mut th = vec![x[0], 0.0, 0.0];
+        th.extend_from_slice(&x[1..]);
+        let full = likelihood(GarchVol::Garch, dist, 3, rows, bc, &th, grad);
+        if !full.f.is_finite() {
+            return Eval::bad(q);
+        }
+        let at = |i: usize| if i == 0 { 0 } else { i + 2 };
+        let mut e = Eval {
+            f: full.f,
+            g: (0..q).map(|i| full.g[at(i)]).collect(),
+            h: vec![0.0; q * q],
+        };
+        for i in 0..q {
+            for j in 0..q {
+                e.h[i * q + j] = full.h[at(i) * (3 + m) + at(j)];
+            }
+        }
+        e
+    };
+    let proj = |x: &[f64]| {
+        let mut y = x.to_vec();
+        y[0] = y[0].max(floor);
+        clip_shape(&mut y[1..]);
+        y
+    };
+    let grid: Vec<Vec<f64>> = start_shapes(dist)
+        .iter()
+        .map(|s| std::iter::once(v).chain(s[..m].iter().copied()).collect())
+        .collect();
+    let mut units = vec![1.0; q];
+    units[0] = v;
+    maximize(&obj, &proj, &grid, &units).map_or(f64::NAN, |f| f.f)
+}
+
+/// The shapes the start's grid tries for a t: `ν` 5 and 10, and `(ν, λ) =
+/// (7, −0.2)` for a skewed t.
+fn start_shapes(dist: GarchDist) -> &'static [[f64; 2]] {
+    match dist {
+        GarchDist::Normal => &[],
+        GarchDist::T => &[[5.0, 0.0], [10.0, 0.0]],
+        GarchDist::Skewt => &[[5.0, 0.0], [10.0, 0.0], [7.0, -0.2]],
+    }
 }
 
 /// Whether `x` sits on a face of `set`: a constraint's slack within `10⁻⁹`
@@ -393,6 +518,8 @@ pub(super) fn fit(
     v: f64,
 ) -> Option<StartFit> {
     let floor = OMEGA_FLOOR_FRAC * v;
+    let scale = kish_scale(rows);
+    let f0 = constant_variance(dist, rows, bc, v, floor);
     if targeted {
         // the variance-targeted GARCH(1,1): (α, β), ω = v (1 − α − β)
         let grid: Vec<Vec<f64>> = [0.01, 0.05, 0.1, 0.2]
@@ -404,10 +531,9 @@ pub(super) fn fit(
         let proj = |x: &[f64]| set.project(x);
         let fit = maximize(&obj, &proj, &grid, &[1.0, 1.0])?;
         let (a, b) = (fit.theta[0], fit.theta[1]);
-        return Some(StartFit {
-            sound: fit.stop == Stop::Converged && !on_bound(&set, &fit.theta, &[1.0, 1.0]),
-            theta: vec![v * (1.0 - a - b), a, b],
-        });
+        let bounded = on_bound(&set, &fit.theta, &[1.0, 1.0]);
+        let theta = vec![v * (1.0 - a - b), a, b];
+        return Some(StartFit::of(fit, theta, bounded, f0, scale));
     }
     match vol {
         GarchVol::Egarch => {
@@ -430,10 +556,9 @@ pub(super) fn fit(
             let proj = |x: &[f64]| set.project(x);
             let units = [1.0; 4];
             let fit = maximize(&obj, &proj, &grid, &units)?;
-            Some(StartFit {
-                sound: fit.stop == Stop::Converged && !on_bound(&set, &fit.theta, &units),
-                theta: fit.theta,
-            })
+            let bounded = on_bound(&set, &fit.theta, &units);
+            let theta = fit.theta.clone();
+            Some(StartFit::of(fit, theta, bounded, f0, scale))
         }
         GarchVol::Figarch => {
             let set = figarch_set(floor);
@@ -455,21 +580,16 @@ pub(super) fn fit(
             let proj = |x: &[f64]| set.project(x);
             let units = [v, 1.0, 1.0, 1.0];
             let fit = maximize(&obj, &proj, &grid, &units)?;
-            Some(StartFit {
-                sound: fit.stop == Stop::Converged && !on_bound(&set, &fit.theta, &units),
-                theta: fit.theta,
-            })
+            let bounded = on_bound(&set, &fit.theta, &units);
+            let theta = fit.theta.clone();
+            Some(StartFit::of(fit, theta, bounded, f0, scale))
         }
         _ => {
             // GARCH and GJR, normal or with a t: every parameter free
             let gjr = vol == GarchVol::Gjr;
             let k = if gjr { 4 } else { 3 };
             let set = set_of(vol, floor);
-            let shapes: &[[f64; 2]] = match dist {
-                GarchDist::Normal => &[],
-                GarchDist::T => &[[5.0, 0.0], [10.0, 0.0]],
-                GarchDist::Skewt => &[[5.0, 0.0], [10.0, 0.0], [7.0, -0.2]],
-            };
+            let shapes = start_shapes(dist);
             let m = dist.shape_len();
             let mut grid = Vec::new();
             for th in garch_grid(gjr, v) {
@@ -496,10 +616,9 @@ pub(super) fn fit(
             let mut units = vec![1.0; k + m];
             units[0] = v;
             let fit = maximize(&obj, &proj, &grid, &units)?;
-            Some(StartFit {
-                sound: fit.stop == Stop::Converged && !on_bound(&set, &fit.theta[..k], &units[..k]),
-                theta: fit.theta,
-            })
+            let bounded = on_bound(&set, &fit.theta[..k], &units[..k]);
+            let theta = fit.theta.clone();
+            Some(StartFit::of(fit, theta, bounded, f0, scale))
         }
     }
 }
