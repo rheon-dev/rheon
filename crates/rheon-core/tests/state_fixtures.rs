@@ -1465,7 +1465,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 85] = [
+    const FORMS: [(&str, &[&str]); 90] = [
         // Schema 70 (rule 5's twenty-second exception): the stabilized
         // prior's `ŝ` and `V` under `full` in each form and under `diag`,
         // the factor form's `f`, and a spec's own `prior_rows`.
@@ -1629,7 +1629,34 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
             &["model", "Garch", "series", "0", "filter", "ring"],
         ),
         ("garch_span", &["model", "Garch", "series", "0", "buffer"]),
+        // A refit over a span of the clock (task 538): the span in each
+        // cfg, glm's clock summed from the steps, and each buffer.
+        ("glm_refit_clock", &["model", "Glm", "cfg", "refit_clock"]),
+        ("glm_refit_clock", &["model", "Glm", "own"]),
+        ("glm_refit_clock", &["model", "Glm", "refit", "0", "rows"]),
+        (
+            "expectile_refit_clock",
+            &["model", "Expectile", "cfg", "refit_clock"],
+        ),
+        (
+            "expectile_refit_clock",
+            &["model", "Expectile", "refit", "0", "rows"],
+        ),
     ];
+    // Each refit's first stamp, written only under a span (task 538): in
+    // glm on the summed clock, in expectile an integer stamp.
+    for (name, variant) in [
+        ("glm_refit_clock", "Glm"),
+        ("expectile_refit_clock", "Expectile"),
+    ] {
+        let f = frozen::ALL
+            .iter()
+            .find(|f| f.name == name)
+            .unwrap_or_else(|| panic!("{name}: no fixture"));
+        let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+        let first = at(&v, &["model", variant, "refit", "0", "first"]).expect("a first stamp");
+        assert!(!first.is_nil(), "{name}: no first stamp");
+    }
     // The span's first stamp, an integer stamp msgpack writes as integers
     // (which `held` does not count): present, not nil.
     let f = frozen::ALL

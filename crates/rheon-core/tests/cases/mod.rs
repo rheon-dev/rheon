@@ -2379,6 +2379,42 @@ pub fn all() -> Vec<Case> {
             Targets::Linear(2),
             2700
         ),
+        // A refit over a span of the clock (task 538), saved within the
+        // span: each target's first stamp, on the clock summed from the
+        // steps, which is state.
+        case!(
+            "glm_refit_clock",
+            "Glm",
+            Glm,
+            Glm::new(GlmCfg {
+                refit_rows: 0,
+                refit_clock: Some(60.0),
+                ..glm_cfg(0)
+            })
+            .unwrap(),
+            K,
+            Targets::Positive(2),
+            40
+        ),
+        // The same in `expectile`, each row stamped in nanoseconds.
+        Case {
+            name: "expectile_refit_clock",
+            variant: "Expectile",
+            build: || {
+                Box::new(StampedExpectile {
+                    model: Expectile::new(ExpectileCfg {
+                        refit_clock: Some(60.0),
+                        ..expectile_cfg(0)
+                    })
+                    .unwrap(),
+                    ns: 0,
+                })
+            },
+            restore: restore_stamped_expectile,
+            n_features: K,
+            targets: Targets::Linear(2),
+            before: 40,
+        },
         // A start of a clock span, saved within it: the first row's stamp
         // (the targets join at the fifth row, so it is not the clock's 0).
         case!(

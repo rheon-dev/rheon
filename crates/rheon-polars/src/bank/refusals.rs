@@ -45,7 +45,9 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
             max_state_bytes: Some(_),
             ..
         } => format!("max_state_bytes of {cap}"),
-        ModelKind::Glm { .. } => format!("the {cap} bytes (256 KB) a group's refit buffers may hold"),
+        ModelKind::Glm { .. } => {
+            format!("the {cap} bytes (256 KB) a group's refit buffers may hold")
+        }
         _ => format!("the default max_state_bytes of {cap}, which a spec gets when it sets none"),
     };
     let (window, shorten) = match &spec.model {
