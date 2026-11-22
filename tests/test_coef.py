@@ -140,6 +140,7 @@ COEF_SPECS = [
     rp.spec.ftrl("m", targets=["b"], features=["x1", "x2"], half_life=30),
     rp.spec.sgd("m", targets=["y"], features=["x1", "x2"], half_life=30),
     rp.spec.glm("m", targets=["b"], features=["x1", "x2"], half_life=30, refit_rows=20),
+    rp.spec.expectile("m", targets=["y"], features=["x1", "x2"], half_life=30, expectile=0.8),
     rp.spec.pa("m", targets=["y"], features=["x1", "x2"], half_life=30),
     rp.spec.holt("m", targets=["y"], half_life=30),
     # The five it missed until task 111; the test below holds the list

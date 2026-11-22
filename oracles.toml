@@ -5767,6 +5767,80 @@ n = 50
 ideal = 0.0
 n = 50
 
+[group."convergence.expectile"]
+tests = [
+    "tests/test_convergence.py::test_consistency[expectile]",
+    "tests/test_convergence.py::test_reconvergence_after_a_break[expectile-level]",
+    "tests/test_convergence.py::test_reconvergence_after_a_break[expectile-regime]",
+    "tests/test_convergence.py::test_reconvergence_after_a_break[expectile-slope]",
+    "tests/test_convergence.py::test_reconvergence_after_a_break[expectile-variance]",
+    "tests/test_convergence.py::test_start_at_a_large_level[expectile]",
+    "tests/test_convergence.py::test_start_from_another_regime[expectile-200]",
+    "tests/test_convergence.py::test_start_from_another_regime[expectile-inf]",
+]
+oracles = { "statsmodels" = "0.15.0" }
+dataset = ""
+
+[case."convergence.expectile.break_level_at_12"]
+ideal = 0.0
+n = 50
+
+[case."convergence.expectile.break_regime_at_12"]
+ideal = 0.0
+n = 50
+
+[case."convergence.expectile.break_slope_at_12"]
+ideal = 0.0
+n = 50
+
+[case."convergence.expectile.break_variance_at_12"]
+ideal = 0.0
+n = 50
+
+[case."convergence.expectile.consistency_at_2000"]
+ideal = 0.0
+n = 50
+
+[case."convergence.expectile.consistency_at_32000"]
+ideal = 0.0
+n = 50
+
+[case."convergence.expectile.consistency_at_500"]
+ideal = 0.0
+n = 50
+
+[case."convergence.expectile.consistency_at_8000"]
+ideal = 0.0
+n = 50
+
+[case."convergence.expectile.large_level_at_8000"]
+ideal = 0.0
+n = 50
+
+[case."convergence.expectile.level_zero_at_8000"]
+ideal = 0.0
+n = 50
+
+[case."convergence.expectile.start_200_at_3200"]
+ideal = 0.0
+n = 50
+
+[case."convergence.expectile.start_inf_truth_at_2000"]
+ideal = 0.0
+n = 50
+
+[case."convergence.expectile.start_inf_truth_at_32000"]
+ideal = 0.0
+n = 50
+
+[case."convergence.expectile.start_inf_truth_at_500"]
+ideal = 0.0
+n = 50
+
+[case."convergence.expectile.start_inf_truth_at_8000"]
+ideal = 0.0
+n = 50
+
 # --- raises
 
 [[raised]]

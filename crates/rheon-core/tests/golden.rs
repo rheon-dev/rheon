@@ -825,6 +825,53 @@ fn hawkes_golden() {
     check("hawkes_window", &got, GOLDEN_HAWKES_WINDOW);
 }
 
+/// `expectile` on the same stream: an upper expectile under decay whose
+/// first 15 learned rows are refit, then the fit at the end.
+#[test]
+fn expectile_golden() {
+    let cfg = ExpectileCfg {
+        n_features: 2,
+        n_targets: 1,
+        fit_intercept: true,
+        decay: Decay::Halflife(20.0),
+        expectile: 0.85,
+        ridge: 1e-6,
+        min_weight: 3.0,
+        refit_rows: 15,
+        window_rows: None,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        max_state_bytes: None,
+    };
+    let mut m = Expectile::new(cfg).unwrap();
+    let mut got = signature(&mut m, 0);
+    got.extend(&m.coefficients()[0]);
+    check("expectile", &got, GOLDEN_EXPECTILE);
+}
+
+/// A window of twelve rows at a lower level, refit exactly on every row.
+#[test]
+fn expectile_window_golden() {
+    let mut m = Expectile::new(ExpectileCfg {
+        n_features: 2,
+        n_targets: 1,
+        fit_intercept: true,
+        min_weight: 3.0,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        max_state_bytes: None,
+        decay: Decay::Halflife(f64::INFINITY),
+        expectile: 0.2,
+        ridge: 1e-6,
+        refit_rows: 0,
+        window_rows: Some(12),
+    })
+    .unwrap();
+    let mut got = signature(&mut m, 0);
+    got.extend(&m.coefficients()[0]);
+    check("expectile_window", &got, GOLDEN_EXPECTILE_WINDOW);
+}
+
 /// The pre-averaged estimate on the same stream: the other arithmetic.
 #[test]
 fn rcov_preavg_golden() {
@@ -1627,6 +1674,22 @@ fn ew_class_windowed_golden() {
 // --- generated; see the module docs ---
 const GOLDEN_GLM: &[f64] = &[0.8190287944178032, 1.5909174698270316, 1.3226756023793542];
 const GOLDEN_GLM_CAP: &[f64] = &[0.8059966005129862, 2.2639186345702202, 1.0964813502655293];
+const GOLDEN_EXPECTILE: &[f64] = &[
+    0.28722805885299973,
+    2.2382733779673214,
+    -0.02537400516394961,
+    0.29742742033317526,
+    1.5009295142639878,
+    -0.7627708885306641,
+];
+const GOLDEN_EXPECTILE_WINDOW: &[f64] = &[
+    0.17140744111304002,
+    2.1597812960535903,
+    -0.09429068171192226,
+    0.214942275621624,
+    1.5275050476441234,
+    -0.7809933429467285,
+];
 const GOLDEN_HAWKES: &[f64] = &[
     0.5698035355306798,
     0.3189638413584075,

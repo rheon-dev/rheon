@@ -743,5 +743,8 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         ModelKind::Hawkes { .. } => Ok(AnyModel::Hawkes(Box::new(rheon_core::Hawkes::new(
             hawkes_cfg(spec, decay)?,
         )?))),
+        ModelKind::Expectile { .. } => Ok(AnyModel::Expectile(Box::new(
+            rheon_core::Expectile::new(expectile_cfg(spec, decay)?)?,
+        ))),
     }
 }

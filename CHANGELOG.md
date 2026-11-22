@@ -45,6 +45,39 @@ model that only the new build has is listed as an addition and passes.
   alerts, since GitHub's advisory database holds security advisories only.
   It runs on Thursdays and on a push that changes either lock.
 
+- **`expectile`, expectile regression fitted one row at a time** (task
+  501): the squared error with the rows above the fit weighed `tau` and
+  those at or below it `1 - tau`, one level a spec. Each row's side is
+  judged at the fit before it and the row enters mean-form sums at weight
+  `w·a`: `S = λS + wa`, `G += (wa/S)(zzᵀ − G)`, `c += (wa/S)(zy − c)`,
+  `β = (G + r·(W/S)·D)⁻¹c`, `r` the `ridge` on the slopes (default 1e-6,
+  which keeps a constant or duplicated feature solvable from the first
+  row; 0 the exact fit); a row's own update cannot move its residual
+  across zero, so one solve a row is the whole step. Each target's first `max(200, 10k)`
+  rows are refit exactly once (`refit_rows`, under `refit_budget`), the
+  sums rebuilt at the sides the exact fit gives them; or a window of the
+  last `window_rows` rows, or of the last `window_size` of the clock (a
+  number or a duration, its edge by `closed`), is refit exactly on every
+  row, warm-started, by weighted least squares at the current sides until
+  no side changes. Against statsmodels' `RLM` with `MQuantileNorm(tau,
+  LeastSquares())` on the same rows the refit and the window agree to
+  1e-12 relative (the study measured 2.3e-14 and 7.6e-15), a window of the
+  constant alone `scipy.stats.expectile` within 4 ulps of the largest
+  target, and the one pass at `tau = 0.5` the decayed weighted least
+  squares to 1e-12; elsewhere the one pass stands within the batch fit's
+  own sampling error of the exact decayed fit (1.2 of it at worst). Rows of
+  weight 0 count in no clock: the next row decays from the last row that
+  counted, its gap taken once from the two rows' stamps, and the weighted
+  rows' outputs are those of the stream without them, to the bit. State:
+  `k(k+1)/2 + 2k + 4` numbers a target, and a refit buffer of
+  `refit_rows·(features + 2)` numbers or a window of `window_rows` rows of
+  `8·(features + targets + 1) + targets` bytes, each checked against
+  `max_state_bytes` (256 KB by default, at most 64 MiB) when the spec is
+  built; a `window_size` window, which the data sizes, is warned of at half
+  the cap and refused at it, naming the group and the bytes. Cost on an M-series Mac at a load of 14,
+  native release build: 1.75 µs a row at 20 features (glm 1.83, quantile
+  0.46), and 21.5 µs a row for a window of 500 rows at 5 features.
+
 - **`glm`, generalized linear models fitted one row at a time** (task 500):
   Poisson, Gamma, binomial and Tweedie regression, each with its log or
   canonical link (the Poisson's log, the Gamma's log and inverse, the

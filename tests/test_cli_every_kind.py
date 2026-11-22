@@ -408,6 +408,37 @@ CASES: list[Case] = [
         },
     ),
     Case("glm2", "glm", {**full2(refit_rows=0, step_cap=0.5), "targets": ["hit"]}),
+    Case("expectile", "expectile", full(**CLOSE, expectile=0.8, refit_rows=30, refit_budget=64.0)),
+    # A window of clock units and one of rows, refit exactly on every row: a
+    # window takes no decay.
+    Case(
+        "expectile_window",
+        "expectile",
+        {
+            **XY,
+            "expectile": 0.3,
+            "clock": "t",
+            "gap_cap": 6.0,
+            "half_life": float("inf"),
+            "window_size": 40.0,
+            "closed": "both",
+            "max_rows_between_coefs": 7,
+            "max_state_bytes": 200_000,
+        },
+    ),
+    Case(
+        "expectile_rows",
+        "expectile",
+        {
+            **XY,
+            "expectile": 0.6,
+            "half_life": float("inf"),
+            "window_rows": 30,
+            "weight": "w",
+            "max_rows_between_coefs": 7,
+        },
+    ),
+    Case("expectile2", "expectile", full2(expectile=0.2, ridge=0.0)),
     Case(
         "ftrl",
         "ftrl",

@@ -1062,6 +1062,54 @@ impl Spec {
                     })
                 }));
             }
+            ModelKind::Expectile {
+                refit_budget,
+                window_size,
+                ..
+            } => {
+                no.take(check_refit_budget(&self.name, *refit_budget));
+                let bad_window = window_size
+                    .as_ref()
+                    .is_some_and(|w| !(w.value().is_finite() && w.value() > 0.0));
+                if let Some(w) = window_size
+                    .as_ref()
+                    .filter(|w| !(w.value().is_finite() && w.value() > 0.0))
+                {
+                    no.refuse(format!(
+                        "spec {:?}: window_size must be a finite span of the clock above \
+                         0, but it is {w}. Give the span the fit keeps rows of, or leave it \
+                         out for no window.",
+                        self.name
+                    ));
+                }
+                // The settings, here at the call: the model's own checks,
+                // among them the state's bytes against `max_state_bytes`
+                // where the settings fix them (a refit buffer, a window of
+                // rows). A decay refused is `decays`' to say.
+                if let Some((_, decay)) = self
+                    .decays()
+                    .ok()
+                    .and_then(|d| d.into_iter().next())
+                    .filter(|_| !bad_window)
+                {
+                    no.take(
+                        crate::stream::expectile_cfg(self, decay)
+                            .and_then(|c| c.validate())
+                            .map_err(|e| {
+                                e.lines()
+                                    .map(|l| {
+                                        format!(
+                                            "spec {:?}: {}",
+                                            self.name,
+                                            l.trim_start_matches("expectile: ")
+                                        )
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            }),
+                    );
+                }
+            }
             ModelKind::Audit { .. } => {
                 if self.half_life.is_some() || self.lam.is_some() {
                     no.refuse(format!(

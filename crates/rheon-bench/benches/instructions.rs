@@ -83,6 +83,8 @@ const FAKETIME_ENV: [&str; 4] = [
 #[bench::sgd_huber_refit(args = ("sgd_huber_refit"), setup = model_setup)]
 #[bench::pa(args = ("pa"), setup = model_setup)]
 #[bench::glm_k20(args = ("glm_k20"), setup = model_setup)]
+#[bench::expectile_k20(args = ("expectile_k20"), setup = model_setup)]
+#[bench::expectile_window(args = ("expectile_window"), setup = model_setup)]
 #[bench::seqtest(args = ("seqtest"), setup = model_setup)]
 #[bench::bocpd(args = ("bocpd"), setup = model_setup)]
 #[bench::kmeans(args = ("kmeans"), setup = model_setup)]

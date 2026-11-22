@@ -375,6 +375,7 @@ class TestOutputSchemaStability:
         ("sgd", {"features": ["x0", "x1"], "learning_rate": 0.01}),
         ("pa", {"features": ["x0", "x1"]}),
         ("glm", {"features": ["x0", "x1"]}),
+        ("expectile", {"features": ["x0", "x1"], "expectile": 0.8}),
         ("holt", {}),
     ]
 

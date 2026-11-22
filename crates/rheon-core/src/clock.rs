@@ -340,6 +340,23 @@ impl Stamp {
         diff.partial_cmp(&span).unwrap_or(Ordering::Equal)
     }
 
+    /// `self`'s decayed clock less `older`'s, in clock units, taken once
+    /// from the two stamps (docs/PLAN.md tasks 501 and 539): the gap since
+    /// the last row a model counted, over any rows of weight 0 between,
+    /// never summed from their steps. It is the step the stream hands
+    /// (`ClockValue::delta`) where nothing was capped between the two rows:
+    /// two temporal stamps' nanoseconds through [`seconds_of_ns`], two raw
+    /// stamps' one subtraction (their removed times equal), two integer
+    /// stamps' whole difference rounded once beside their fractions'.
+    pub(crate) fn since(self, older: Stamp) -> f64 {
+        match (self, older) {
+            (Stamp::Ns(a), Stamp::Ns(b)) => seconds_of_ns(a.saturating_sub(b)),
+            (Stamp::Raw(a, ra), Stamp::Raw(b, rb)) => (a - b) - (ra - rb),
+            (Stamp::Int(a, fa), Stamp::Int(b, fb)) => a.saturating_sub(b) as f64 + (fa - fb),
+            (a, b) => a.value() - b.value(),
+        }
+    }
+
     /// The decayed clock as a number of clock units: seconds on a temporal
     /// clock. For a stamp of another form; an edge never reads it.
     fn value(self) -> f64 {

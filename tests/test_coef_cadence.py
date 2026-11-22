@@ -111,6 +111,7 @@ KINDS = [
     "sgd",
     "pa",
     "glm",
+    "expectile",
     "holt",
     "kmeans",
     "micro",
@@ -139,6 +140,7 @@ def kind(name: str, h: float | str, **common) -> dict:
         "sgd": dict(targets=["y"], features=two),
         "pa": dict(targets=["y"], features=two),
         "glm": dict(targets=["b"], features=two),
+        "expectile": dict(targets=["y"], features=two, expectile=0.8),
         "holt": dict(targets=["y"]),
         "kmeans": dict(features=two, n_clusters=2, warm_rows=50),
         "micro": dict(features=two, eps=0.3),
@@ -552,7 +554,19 @@ BESIDE = {
 }
 #: The kinds that take ``emit_sigma``: those with a target to score.
 SCORED = frozenset(
-    {"ewridge", "lasso", "rls", "kalman", "quantile", "ftrl", "sgd", "pa", "glm", "holt"}
+    {
+        "ewridge",
+        "lasso",
+        "rls",
+        "kalman",
+        "quantile",
+        "ftrl",
+        "sgd",
+        "pa",
+        "glm",
+        "expectile",
+        "holt",
+    }
 )
 
 #: A sweep name that is not a kind: ``sgd``'s Huber loss, with the refit of

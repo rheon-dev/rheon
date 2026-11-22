@@ -58,6 +58,7 @@ MODELS = [
     ("sgd", {"learning_rate": 0.01, "clip_gradient": 1e3}),
     ("pa", {}),
     ("glm", {}),
+    ("expectile", {"expectile": 0.8}),
     ("holt", {"features": None}),  # no features keyword
 ]
 IDS = [m[0] for m in MODELS]

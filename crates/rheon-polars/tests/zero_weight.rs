@@ -297,6 +297,24 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
         CLOCKED,
     ),
     (
+        "expectile",
+        r#"{"type": "expectile", "expectile": 0.8, "refit_rows": 60}"#,
+        r#""targets": ["y"], "features": ["x0", "x1"], "half_life": @50"#,
+        ALL,
+    ),
+    (
+        "expectile_rows",
+        r#"{"type": "expectile", "expectile": 0.8, "window_rows": 40}"#,
+        r#""targets": ["y"], "features": ["x0", "x1"], "half_life": "inf""#,
+        UNTIMED,
+    ),
+    (
+        "expectile_clock",
+        r#"{"type": "expectile", "expectile": 0.3, "window_size": @20, "closed": "both"}"#,
+        r#""targets": ["y"], "features": ["x0", "x1"], "half_life": "inf""#,
+        ALL,
+    ),
+    (
         "ftrl",
         r#"{"type": "ftrl", "strict_binary": false, "loss": "logistic"}"#,
         r#""targets": ["yb"], "features": ["x0"], "half_life": @50"#,

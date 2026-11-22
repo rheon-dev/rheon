@@ -1488,6 +1488,7 @@ DOUBLED: dict[str, dict] = {
     "ewridge": {},
     "ftrl": {},
     "glm": {},
+    "expectile": {},
     "huber": {},
     "kmeans": {},
     "lasso": {},

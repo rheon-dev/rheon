@@ -523,6 +523,7 @@ class TestEveryClockParameterTakesADuration:
             # A rate per clock unit has no duration: the kernels are half-lives.
             kw.pop("kernel_decays", None)
             kw["kernel_half_lives"] = ["30s", "2m"]
+        if builder in ("hawkes", "expectile"):
             # A window takes no decay beside it: the parameter under test
             # sets its own half_life where it is that one.
             kw["half_life"] = float("inf")

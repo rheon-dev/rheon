@@ -251,6 +251,7 @@ def describe_api(cli: Path | None = None) -> str:
         ("sgd", dict(targets=["y"], features=["x0"], half_life=100.0, learning_rate=0.01)),
         ("pa", dict(targets=["y"], features=["x0"], half_life=100.0)),
         ("glm", dict(targets=["y"], features=["x0"], half_life=100.0)),
+        ("expectile", dict(targets=["y"], features=["x0"], half_life=100.0, expectile=0.8)),
         ("ftrl", dict(targets=["y"], features=["x0"], half_life=100.0)),
         ("holt", dict(targets=["y"], half_life=100.0)),
         (
@@ -405,6 +406,8 @@ RESOLVED_VARIANTS: list[tuple[str, dict[str, object]]] = [
     ("bocpd", {"robust_beta": 0.1}),
     ("glm", {"family": "tweedie"}),
     ("glm", {"refit_rows": 0}),
+    ("expectile", {"half_life": float("inf"), "window_rows": 50}),
+    ("expectile", {"half_life": float("inf"), "window_size": 30.0, "closed": "both"}),
     ("hawkes", {"half_life": float("inf"), "window_events": 20}),
     ("hawkes", {"half_life": float("inf"), "window_size": 30.0, "closed": "both"}),
     ("hawkes", {"kernel_decays": None, "kernel_half_lives": [0.5, 4.0]}),
@@ -666,6 +669,13 @@ ENUM_PROBES: list[
     ("ew_class.closed", "ew_class", {"window_size": 100.0}, "model.closed", "word"),
     ("ew_cov.closed", "ew_cov", {"window_size": 100.0}, "model.closed", "word"),
     ("ewridge.closed", "ewridge", {"window_size": 100.0}, "model.closed", "word"),
+    (
+        "expectile.closed",
+        "expectile",
+        {"half_life": float("inf"), "window_size": 100.0},
+        "model.closed",
+        "word",
+    ),
     (
         "hawkes.closed",
         "hawkes",

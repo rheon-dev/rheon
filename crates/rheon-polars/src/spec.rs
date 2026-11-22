@@ -1319,6 +1319,49 @@ pub enum ModelKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_state_bytes: Option<u64>,
     },
+    /// Expectile regression by recursive reweighted least squares
+    /// (`rheon_core::Expectile`; docs/PLAN.md task 501): the asymmetric
+    /// squared loss at one level a spec, since levels share no sums.
+    Expectile {
+        /// The level `τ`, above 0 and below 1; required.
+        expectile: f64,
+        /// The penalty on the slopes, on the mean-form Gram in the
+        /// features' squared units; absent is 1e-6, 0 the exact fit. Skipped
+        /// when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ridge: Option<f64>,
+        /// Each target's first learned rows refit exactly, once: absent is
+        /// `rheon_core::default_expectile_refit_rows`, 0 is off. Skipped
+        /// when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refit_rows: Option<u32>,
+        /// Fit the last this many rows of positive weight alone, refit
+        /// exactly on every row, in place of a decay. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window_rows: Option<usize>,
+        /// Fit the rows of the last this long on the clock alone: a number
+        /// of the clock column's units (rows when the spec has no clock), or
+        /// a duration on a temporal clock. The data decides how many rows
+        /// that is, so the state's bytes are checked as the rows go in.
+        /// Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window_size: Option<Span>,
+        /// Which edge of `window_size` holds the row exactly that old:
+        /// `"right"`, the default, or `"both"`. Skipped when `"right"`.
+        #[serde(default, skip_serializing_if = "ModelClosed::is_right")]
+        closed: ModelClosed,
+        /// The bytes a group's state may hold: the sums, a refit buffer and
+        /// a window's rows, checked at the call where the settings fix their
+        /// size, and as the rows go in under `window_size`. Default 256 KB,
+        /// at most 64 MiB. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
+        /// The MiB the refit buffers of all this spec's groups may reserve:
+        /// absent is [`REFIT_BUDGET_MIB`], `inf` no bound. Skipped when
+        /// absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refit_budget: Option<Num>,
+    },
 }
 
 /// The two sides of a `seqtest` comparison, as [`ModelKind::compares`]
@@ -1405,6 +1448,7 @@ impl ModelKind {
         "audit",
         "glm",
         "hawkes",
+        "expectile",
     ];
 
     pub fn kind_name(&self) -> &'static str {
@@ -1433,6 +1477,7 @@ impl ModelKind {
             ModelKind::Audit { .. } => "audit",
             ModelKind::Glm { .. } => "glm",
             ModelKind::Hawkes { .. } => "hawkes",
+            ModelKind::Expectile { .. } => "expectile",
         }
     }
 
@@ -1559,7 +1604,8 @@ impl ModelKind {
         let given = match self {
             ModelKind::Huber { refit_budget, .. }
             | ModelKind::Quantile { refit_budget, .. }
-            | ModelKind::Glm { refit_budget, .. } => refit_budget,
+            | ModelKind::Glm { refit_budget, .. }
+            | ModelKind::Expectile { refit_budget, .. } => refit_budget,
             ModelKind::Sgd {
                 refit_budget, loss, ..
             } if loss.as_deref() == Some("huber") => refit_budget,
@@ -3458,6 +3504,10 @@ impl Spec {
                     "a generalized linear fit's covariance is its inverse Fisher information \
                      times its family's dispersion, which it does not estimate"
                 }
+                ModelKind::Expectile { .. } => {
+                    "an expectile fit's covariance is a sandwich of its asymmetric weights, \
+                     which it does not keep"
+                }
                 ModelKind::Sgd { .. } | ModelKind::Pa { .. } | ModelKind::Ftrl { .. } => {
                     "a gradient fit keeps no second moments of the features to read a covariance \
                      from"
@@ -3498,6 +3548,10 @@ impl Spec {
                 }
                 ModelKind::Glm { .. } => {
                     "a generalized linear fit weighs each row by its family's variance, not as \
+                     least squares does"
+                }
+                ModelKind::Expectile { .. } => {
+                    "an expectile fit weighs each row by the side its residual falls on, not as \
                      least squares does"
                 }
                 ModelKind::Sgd { .. } | ModelKind::Pa { .. } | ModelKind::Ftrl { .. } => {

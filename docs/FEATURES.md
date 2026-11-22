@@ -14,7 +14,7 @@ pages by the task you have in hand.
 
 | family | its features |
 |---|---|
-| [Models](#models) | the twenty-four models a spec can name |
+| [Models](#models) | the twenty-five models a spec can name |
 | [Running a bank](#running-a-bank) | a bank in a query, in a Python loop, and its output as Arrow |
 | [Saving, loading and serving](#saving-loading-and-serving) | a bank's state, written and read back |
 | [Reading a bank](#reading-a-bank) | what a bank holds, and the names of its output |
@@ -43,6 +43,7 @@ to start with.
 | [`rheon.spec.kalman`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.kalman) | a regression whose coefficients drift, tracked by a Kalman filter | [entry](MODELS.md#kalman--random-walk-β-dynamic-linear-model) · [choose a drift speed](how-to/choose-a-kalman-drift-speed.md) |
 | [`rheon.spec.huber`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.huber) | Huber regression, which down-weights the rows a prediction misses by far | [entry](MODELS.md#huber--robust-regression) · [the robust scale](explanation/robust-scale.md) |
 | [`rheon.spec.quantile`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.quantile) | quantile regression, the fit that a share `tau` of the targets fall below | [entry](MODELS.md#quantile--robust-regression) |
+| [`rheon.spec.expectile`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.expectile) | expectile regression, the squared error weighed `tau` above the fit and `1 - tau` below it, in one pass or exact over a window | [entry](MODELS.md#expectile--expectile-regression) |
 | [`rheon.spec.sgd`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.sgd) | stochastic gradient descent under squared, Huber, quantile, ε-insensitive, Poisson and logistic losses | [entry](MODELS.md#sgd--stochastic-gradient-descent) · [choose a learning rate](how-to/choose-a-learning-rate.md) · [a count target](how-to/fit-a-count-target.md) · [bound the coefficients](how-to/bound-the-coefficients.md) |
 | [`rheon.spec.pa`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.pa) | passive-aggressive regression, the smallest step that brings each row within a margin | [entry](MODELS.md#pa--passive-aggressive-regression) · [follow a level that moves](how-to/follow-a-level-that-moves.md) |
 | [`rheon.spec.ftrl`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ftrl) | FTRL-proximal regression, logistic for a 0/1 target, with an L1 penalty that zeroes coefficients | [entry](MODELS.md#ftrl--online-logistic-regression) · [choose its penalties](how-to/choose-ftrl-penalties.md) |

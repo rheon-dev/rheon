@@ -56,6 +56,14 @@ pub const MODEL_CASES: &[&str] = &[
     // Cholesky of `G + R I` at 21 coefficients; the default refit of the
     // first 210 rows runs in the warm-up.
     "glm_k20",
+    // An upper expectile in one pass: its side judged at the fit before
+    // the row, a rank-one update of the mean-form Gram and a Cholesky of 21
+    // coefficients a row; the default refit of the first 210 rows runs in
+    // the warm-up.
+    "expectile_k20",
+    // A window of 500 rows at 5 features refit exactly on every row,
+    // warm-started at the fit before: a WLS solve a pass over the window.
+    "expectile_window",
     "seqtest",
     "bocpd",
     "kmeans",
@@ -461,6 +469,18 @@ fn case_spec(id: &str) -> (Value, Shape) {
         ),
         "pa" => (fit(json!({"type": "pa"}), 20), Shape::Linear),
         "glm_k20" => (fit(json!({"type": "glm"}), 20), Shape::Labelled),
+        "expectile_k20" => (
+            fit(json!({"type": "expectile", "expectile": 0.9}), 20),
+            Shape::Linear,
+        ),
+        "expectile_window" => {
+            let mut s = fit(
+                json!({"type": "expectile", "expectile": 0.9, "window_rows": 500}),
+                5,
+            );
+            s["half_life"] = json!("inf");
+            (s, Shape::Linear)
+        }
         // The penalty path's selection on every row and its solves on the
         // default cadence (docs/PLAN.md task 270, C-2); the path is
         // `scripts/wide_benchmark.py`'s.

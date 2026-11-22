@@ -36,6 +36,10 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
         ModelKind::Hawkes {
             max_state_bytes: Some(_),
             ..
+        }
+        | ModelKind::Expectile {
+            max_state_bytes: Some(_),
+            ..
         } => format!("max_state_bytes of {cap}"),
         _ => format!("the default max_state_bytes of {cap}, which a spec gets when it sets none"),
     };
@@ -45,6 +49,13 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
             ..
         } => (
             format!("the events inside window_size = {w}"),
+            "Shorten window_size",
+        ),
+        ModelKind::Expectile {
+            window_size: Some(w),
+            ..
+        } => (
+            format!("the rows inside window_size = {w}"),
             "Shorten window_size",
         ),
         _ => ("its window".to_string(), "Shorten the window"),

@@ -108,6 +108,7 @@ pub enum AnyModel {
     Bocpd(Box<Bocpd>),
     Audit(Box<rheon_core::Audit>),
     Glm(Box<rheon_core::Glm>),
+    Expectile(Box<rheon_core::Expectile>),
     Hawkes(Box<rheon_core::Hawkes>),
 }
 
@@ -156,6 +157,7 @@ macro_rules! dispatch {
             AnyModel::Bocpd($m) => $body,
             AnyModel::Audit($m) => $body,
             AnyModel::Glm($m) => $body,
+            AnyModel::Expectile($m) => $body,
             AnyModel::Hawkes($m) => $body,
         }
     };
@@ -248,6 +250,7 @@ impl AnyModel {
             AnyModel::Sgd(m) => m.refit_reservation(),
             AnyModel::Marginal(m) => m.refit_reservation(),
             AnyModel::Glm(m) => m.refit_reservation(),
+            AnyModel::Expectile(m) => m.refit_reservation(),
             _ => 0,
         }
     }
@@ -260,6 +263,7 @@ impl AnyModel {
             AnyModel::Sgd(m) => m.refit_give_up(),
             AnyModel::Marginal(m) => m.refit_give_up(),
             AnyModel::Glm(m) => m.refit_give_up(),
+            AnyModel::Expectile(m) => m.refit_give_up(),
             _ => {}
         }
     }
@@ -271,6 +275,7 @@ impl AnyModel {
             AnyModel::Sgd(m) => m.refit_status(),
             AnyModel::Marginal(m) => m.refit_status(),
             AnyModel::Glm(m) => m.refit_status(),
+            AnyModel::Expectile(m) => m.refit_status(),
             _ => Vec::new(),
         }
     }
@@ -509,6 +514,7 @@ impl AnyModel {
             AnyModel::Hmm(m) => m.solve_failures,
             AnyModel::Bocpd(m) => m.solve_failures,
             AnyModel::Glm(m) => m.solve_failures(),
+            AnyModel::Expectile(m) => m.solve_failures(),
             AnyModel::KMeans(m) => m.solve_failures,
             AnyModel::Sgd(m) => m.solve_failures(),
             AnyModel::Marginal(m) => m.solve_failures(),
@@ -563,6 +569,8 @@ impl AnyModel {
             AnyModel::Sgd(m) => Some(m.coefficients()),
             AnyModel::Pa(m) => Some(m.coefficients().to_vec()),
             AnyModel::Glm(m) => Some(m.coefficients()),
+            // Absent until a target has a fit.
+            AnyModel::Expectile(m) => m.has_fit().then(|| m.coefficients()),
             AnyModel::Holt(m) => Some(m.coefficients()),
             // The centres, k rows of p; absent until seeded.
             AnyModel::KMeans(m) => m.coefficients(),
@@ -618,8 +626,8 @@ use build::{build_one, constraint, huber_scale_of, resid_window};
 mod model_cfgs;
 use model_cfgs::read_floor;
 pub use model_cfgs::{
-    audit_cfg, bocpd_cfg, corrchange_cfg, deco_block_names, deco_cfg, glm_cfg, hawkes_cfg, hmm_cfg,
-    huber_model, quantile_model, rcov_cfg, sgd_model,
+    audit_cfg, bocpd_cfg, corrchange_cfg, deco_block_names, deco_cfg, expectile_cfg, glm_cfg,
+    hawkes_cfg, hmm_cfg, huber_model, quantile_model, rcov_cfg, sgd_model,
 };
 
 /// One grid combo: the rendered label plus the machine values it encodes, so
@@ -723,7 +731,8 @@ pub fn combos(spec: &Spec) -> Vec<Combo> {
         | ModelKind::Bocpd { .. }
         | ModelKind::Audit { .. }
         | ModelKind::Glm { .. }
-        | ModelKind::Hawkes { .. } => vec![Combo::default()],
+        | ModelKind::Hawkes { .. }
+        | ModelKind::Expectile { .. } => vec![Combo::default()],
         // `p` for the penalty, since `l` is a lag's (`lag_corr_l1_a_b`); and
         // no label for a path of one point, as a single ridge or half-life
         // writes none, while the machine value says which it is.

@@ -91,6 +91,53 @@ pub fn hawkes_cfg(spec: &Spec, decay: rheon_core::Decay) -> Result<rheon_core::H
     Ok(cfg)
 }
 
+/// An `expectile` spec's [`rheon_core::ExpectileCfg`] at `decay`: the
+/// refit's default from the features, the targets and the state's cap
+/// ([`rheon_core::default_expectile_refit_rows`]); every parameter check is
+/// the model's, the state's bytes against `max_state_bytes` among them.
+pub fn expectile_cfg(
+    spec: &Spec,
+    decay: rheon_core::Decay,
+) -> Result<rheon_core::ExpectileCfg, String> {
+    let ModelKind::Expectile {
+        expectile,
+        ridge,
+        refit_rows,
+        window_rows,
+        window_size,
+        closed,
+        max_state_bytes,
+        ..
+    } = &spec.model
+    else {
+        return Err(not_a(spec, "expectile_cfg", "expectile"));
+    };
+    let windowed = window_rows.is_some() || window_size.is_some();
+    let cap = max_state_bytes.unwrap_or(rheon_core::EXPECTILE_MAX_STATE_BYTES);
+    Ok(rheon_core::ExpectileCfg {
+        n_features: spec.k(),
+        n_targets: spec.m(),
+        fit_intercept: spec.fit_intercept,
+        decay,
+        expectile: *expectile,
+        ridge: ridge.unwrap_or(1e-6),
+        min_weight: spec.min_periods_or_default(),
+        refit_rows: refit_rows.unwrap_or_else(|| {
+            rheon_core::default_expectile_refit_rows(
+                spec.k(),
+                spec.m(),
+                spec.fit_intercept,
+                windowed,
+                cap,
+            )
+        }),
+        window_rows: *window_rows,
+        window_clock: window_size.as_ref().map(Span::value),
+        closed: closed.edge(),
+        max_state_bytes: *max_state_bytes,
+    })
+}
+
 /// A `bocpd` spec's [`BocpdCfg`]; every parameter check is the model's.
 pub fn bocpd_cfg(spec: &Spec) -> Result<BocpdCfg, String> {
     let ModelKind::Bocpd {

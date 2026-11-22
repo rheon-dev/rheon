@@ -1315,7 +1315,7 @@ fn variants() -> Vec<String> {
 /// name here, and a fixture.
 #[test]
 fn the_variant_names_are_frozen() {
-    const FROZEN: [&str; 24] = [
+    const FROZEN: [&str; 25] = [
         "EwCov",
         "EwRidge",
         "Rls",
@@ -1340,6 +1340,7 @@ fn the_variant_names_are_frozen() {
         "Audit",
         "Glm",
         "Hawkes",
+        "Expectile",
     ];
     assert_eq!(
         variants(),
@@ -1456,7 +1457,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 68] = [
+    const FORMS: [(&str, &[&str]); 76] = [
         // Schema 70 (rule 5's twenty-second exception): the stabilized
         // prior's `ŝ` and `V` under `full` in each form and under `diag`,
         // the factor form's `f`, and a spec's own `prior_rows`.
@@ -1576,6 +1577,23 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         (
             "hawkes_clock_window",
             &["model", "Hawkes", "window", "track", "last"],
+        ),
+        // `expectile` (task 501): the one pass's sums, the refit's buffer,
+        // a window of rows and one of clock units with its stamps, and the
+        // clock rows of weight 0 left uncounted.
+        ("expectile", &["model", "Expectile", "gram"]),
+        ("expectile", &["model", "Expectile", "clock", "carry"]),
+        ("expectile_refit", &["model", "Expectile", "refit"]),
+        ("expectile_refit_done", &["model", "Expectile", "refit"]),
+        ("expectile_window", &["model", "Expectile", "window", "x"]),
+        ("expectile_window", &["model", "Expectile", "window", "y"]),
+        (
+            "expectile_clock_window",
+            &["model", "Expectile", "window", "stamp"],
+        ),
+        (
+            "expectile_clock_window",
+            &["model", "Expectile", "clock", "last"],
         ),
     ];
     for (name, path) in FORMS {

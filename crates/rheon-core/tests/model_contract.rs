@@ -796,6 +796,7 @@ fn every_state_kind_is_distinct_and_named() {
         "audit",
         "glm",
         "hawkes",
+        "expectile",
     ];
     let mut seen = std::collections::HashSet::new();
     for k in kinds {
@@ -830,6 +831,7 @@ fn every_state_kind_is_distinct_and_named() {
         Audit::new(audit_cfg()).unwrap().state(),
         Glm::new(glm_cfg()).unwrap().state(),
         Hawkes::new(hawkes_cfg()).unwrap().state(),
+        Expectile::new(expectile_cfg()).unwrap().state(),
     ];
     let from_states: Vec<&str> = states.iter().map(|s| s.model.kind()).collect();
     assert_eq!(from_states, kinds);
@@ -896,6 +898,7 @@ fn one_state_of_each_kind() -> Vec<State> {
         Audit::new(audit_cfg()).unwrap().state(),
         Glm::new(glm_cfg()).unwrap().state(),
         Hawkes::new(hawkes_cfg()).unwrap().state(),
+        Expectile::new(expectile_cfg()).unwrap().state(),
         State::new(ModelState::EwCov(Box::new(EwCov::new(1)))),
     ]
 }
@@ -952,6 +955,7 @@ fn every_model_refuses_every_other_models_state_by_name() {
     refuses_every_other_kind::<Bocpd>("bocpd", &states);
     refuses_every_other_kind::<Audit>("audit", &states);
     refuses_every_other_kind::<Glm>("glm", &states);
+    refuses_every_other_kind::<Expectile>("expectile", &states);
 }
 
 /// Task 252: each model hands back the configuration it was built from,
@@ -1011,6 +1015,8 @@ fn every_model_hands_back_its_configuration() {
     same(Glm::new(c.clone()).unwrap(), &c, Glm::cfg);
     let c = hawkes_cfg();
     same(Hawkes::new(c.clone()).unwrap(), &c, Hawkes::cfg);
+    let c = expectile_cfg();
+    same(Expectile::new(c.clone()).unwrap(), &c, Expectile::cfg);
 }
 
 fn ew_class_cfg() -> EwClassCfg {
@@ -1146,6 +1152,30 @@ fn the_n_eff_accessor_is_the_steps_under_a_window() {
     pair(
         "hawkes, window_size",
         accessor_is_the_step(Hawkes::new(hawkes_clock_cfg()).unwrap(), 2, &Hawkes::n_eff),
+        whole,
+    );
+    // `expectile` keeps a window of rows and one of clock units.
+    let whole = accessor_is_the_step(
+        Expectile::new(expectile_cfg()).unwrap(),
+        2,
+        &Expectile::n_eff,
+    );
+    pair(
+        "expectile, window_rows",
+        accessor_is_the_step(
+            Expectile::new(expectile_rows_cfg()).unwrap(),
+            2,
+            &Expectile::n_eff,
+        ),
+        whole,
+    );
+    pair(
+        "expectile, window_size",
+        accessor_is_the_step(
+            Expectile::new(expectile_clock_cfg()).unwrap(),
+            2,
+            &Expectile::n_eff,
+        ),
         whole,
     );
 }
@@ -1563,7 +1593,7 @@ fn bocpd() {
 #[test]
 fn every_model_refuses_a_decay_it_cannot_run_on() {
     type Build<'a> = (&'a str, &'a dyn Fn(Decay) -> Result<(), String>);
-    let builds: [Build; 18] = [
+    let builds: [Build; 19] = [
         ("ewridge", &|decay| {
             EwRidge::new(EwRidgeCfg {
                 decay,
@@ -1672,6 +1702,13 @@ fn every_model_refuses_a_decay_it_cannot_run_on() {
             Hawkes::new(HawkesCfg {
                 decay,
                 ..hawkes_cfg()
+            })
+            .map(drop)
+        }),
+        ("expectile", &|decay| {
+            Expectile::new(ExpectileCfg {
+                decay,
+                ..expectile_cfg()
             })
             .map(drop)
         }),
@@ -1831,6 +1868,7 @@ fn every_model_refuses_at_restore_a_configuration_its_new_refuses() {
         ),
         refused(Glm::new(glm_cfg()).unwrap(), "decay", zero(), h),
         refused(Hawkes::new(hawkes_cfg()).unwrap(), "decay", zero(), h),
+        refused(Expectile::new(expectile_cfg()).unwrap(), "decay", zero(), h),
     ];
     // Every model's `restore`: the twenty-one kinds, `robust` under both
     // losses.
@@ -2245,6 +2283,7 @@ fn exactly_the_scheduled_solvers_report_a_solve_share() {
         ("audit", share(Audit::new(audit_cfg()).unwrap())),
         ("glm", share(Glm::new(glm_cfg()).unwrap())),
         ("hawkes", share(Hawkes::new(hawkes_cfg()).unwrap())),
+        ("expectile", share(Expectile::new(expectile_cfg()).unwrap())),
     ];
     let reporting: Vec<&str> = shares
         .iter()
@@ -2291,6 +2330,7 @@ const PROBED: &[(&str, &str)] = &[
     ("Audit", "audit"),
     ("Glm", "glm"),
     ("Hawkes", "hawkes"),
+    ("Expectile", "expectile"),
 ];
 
 #[test]
@@ -4681,6 +4721,80 @@ fn glm_predict_is_the_step() {
     predict_is_the_step_without_the_step(|| Glm::new(glm_cfg()).unwrap(), 2, false);
 }
 
+/// An upper expectile whose first rows' refit fills on its tenth learned
+/// row, inside the probes' streams, so the contract holds the buffer, the
+/// refit and the one pass after it.
+fn expectile_cfg() -> ExpectileCfg {
+    ExpectileCfg {
+        n_features: K,
+        n_targets: 2,
+        fit_intercept: true,
+        decay: decay(),
+        expectile: 0.8,
+        ridge: 1e-6,
+        min_weight: 3.0,
+        refit_rows: 10,
+        window_rows: None,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        max_state_bytes: None,
+    }
+}
+
+/// A window of a dozen rows, so the probes run through its turnovers; a
+/// window takes no decay.
+fn expectile_rows_cfg() -> ExpectileCfg {
+    ExpectileCfg {
+        decay: Decay::Halflife(f64::INFINITY),
+        refit_rows: 0,
+        window_rows: Some(12),
+        ..expectile_cfg()
+    }
+}
+
+/// The same over a span of the clock: the probes' rows are a unit apart.
+fn expectile_clock_cfg() -> ExpectileCfg {
+    ExpectileCfg {
+        decay: Decay::Halflife(f64::INFINITY),
+        refit_rows: 0,
+        window_clock: Some(12.5),
+        ..expectile_cfg()
+    }
+}
+
+#[test]
+fn expectile() {
+    let r = probe_with(
+        Expectile::new(expectile_cfg()).unwrap(),
+        2,
+        Some(&Expectile::n_eff),
+    );
+    check(&r, "expectile", 2, 1);
+    // The one pass with no refit, at the lower tail.
+    let c = ExpectileCfg {
+        refit_rows: 0,
+        expectile: 0.1,
+        ..expectile_cfg()
+    };
+    let r = probe_with(Expectile::new(c).unwrap(), 2, Some(&Expectile::n_eff));
+    check(&r, "expectile", 2, 1);
+}
+
+#[test]
+fn expectile_predict_is_the_step() {
+    predict_is_the_step_without_the_step(|| Expectile::new(expectile_cfg()).unwrap(), 2, false);
+    predict_is_the_step_without_the_step(
+        || Expectile::new(expectile_rows_cfg()).unwrap(),
+        2,
+        false,
+    );
+    predict_is_the_step_without_the_step(
+        || Expectile::new(expectile_clock_cfg()).unwrap(),
+        2,
+        false,
+    );
+}
+
 #[test]
 fn hawkes() {
     // A point process: one node per target, no features, one intensity a
@@ -5023,6 +5137,10 @@ fn every_model_refuses_a_state_without_the_low_parts() {
         (
             "hawkes",
             refuses_without_low_parts(|| Hawkes::new(hawkes_cfg()).unwrap(), &two),
+        ),
+        (
+            "expectile",
+            refuses_without_low_parts(|| Expectile::new(expectile_cfg()).unwrap(), &two),
         ),
     ];
     // Each model that keeps a mean had parts to drop, so its refusal is of
@@ -6086,6 +6204,16 @@ mod generated {
         #[test]
         fn hawkes(rows in stream(2, false), split in 0usize..60) {
             contract(|| Hawkes::new(hawkes_cfg()).unwrap(), &rows, split)?;
+        }
+
+        #[test]
+        fn expectile(rows in stream(2, false), split in 0usize..60) {
+            contract(|| Expectile::new(expectile_cfg()).unwrap(), &rows, split)?;
+        }
+
+        #[test]
+        fn expectile_window_rows(rows in stream(2, false), split in 0usize..60) {
+            contract(|| Expectile::new(expectile_rows_cfg()).unwrap(), &rows, split)?;
         }
 
         /// The window drops a row a row once full, and forms its older

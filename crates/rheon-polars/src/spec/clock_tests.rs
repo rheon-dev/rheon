@@ -150,6 +150,7 @@ fn with_duration(owner: &str, field: &str) -> Spec {
                 "lasso" => r#", "penalties": [0.1]"#,
                 "kalman" if field != "coef_half_life" => r#", "coef_half_life": "1h""#,
                 "quantile" => r#", "quantile": 0.5"#,
+                "expectile" => r#", "expectile": 0.5"#,
                 "ew_class" => r#", "classes": ["a", "b"], "precision_prior": 1.0"#,
                 "micro" => r#", "eps": 0.3"#,
                 _ => "",

@@ -583,6 +583,7 @@ BUILDERS = {
     rp.spec.sgd: {},
     rp.spec.pa: {},
     rp.spec.glm: {},
+    rp.spec.expectile: dict(expectile=0.8),
     rp.spec.holt: dict(features=None),
     rp.spec.kmeans: dict(features=["x0", "y"], targets=None, n_clusters=2),
     rp.spec.ew_class: dict(targets=None, label="y", classes=["a", "b"], precision_prior=1.0),

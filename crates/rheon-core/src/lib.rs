@@ -81,6 +81,7 @@ mod ewcov;
 mod ewdiag;
 mod ewlagcov;
 mod ewridge;
+mod expectile;
 mod family;
 mod ftrl;
 mod gaps;
@@ -162,6 +163,10 @@ pub use ewcov::{
 pub use ewdiag::{EwDiag, Including};
 pub use ewlagcov::{EwLagCov, MAX_LAG, check_lag_ceiling};
 pub use ewridge::{EwRidge, EwRidgeCfg};
+pub use expectile::{
+    DEFAULT_EXPECTILE_REFIT_ROWS, EXPECTILE_MAX_STATE_BYTES, EXPECTILE_REFIT_PASSES,
+    EXPECTILE_STATE_BYTES_CEILING, Expectile, ExpectileCfg, default_expectile_refit_rows,
+};
 pub use family::{ETA_CLIP, Family, GlmFamily, GlmLink, Working};
 pub use ftrl::{Ftrl, FtrlCfg, FtrlLoss};
 pub use gaps::{GramPart, TargetGaps};

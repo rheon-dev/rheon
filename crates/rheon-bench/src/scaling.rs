@@ -169,6 +169,10 @@ pub const CELLS: &[Cell] = &[
     cell("glm.k", 4, 8, Pow(3), Pow(2)),
     cell("glm.targets", 1, 8, Pow(1), Pow(1)),
     cell("glm.history", 1000, 8, Const, Const),
+    cell("expectile.k", 4, 8, Pow(3), Pow(2)),
+    cell("expectile.targets", 1, 8, Pow(1), Pow(1)),
+    cell("expectile.history", 1000, 8, Const, Const),
+    cell("expectile.window", 50, 8, Pow(1), Pow(1)),
     cell("ftrl.k", 4, 8, Pow(1), Pow(1)),
     cell("ftrl.history", 1000, 8, Const, Const),
     cell("holt.targets", 1, 8, Pow(1), Pow(1)),
@@ -561,6 +565,14 @@ pub fn rheon_budget_scale_rows(run: &mut ScaleRun) -> f64 {
 
 // --- the workloads -------------------------------------------------------------
 
+/// An upper expectile's model: one pass, or a window of `rows` rows.
+fn expectile(rows: Option<usize>) -> Value {
+    match rows {
+        Some(n) => json!({"type": "expectile", "expectile": 0.9, "window_rows": n}),
+        None => json!({"type": "expectile", "expectile": 0.9}),
+    }
+}
+
 /// A model spec over `k` features and `t` targets, as the budget cases'
 /// (`case_spec`'s `fit`).
 fn fit(model: Value, k: usize, t: usize) -> Value {
@@ -783,6 +795,18 @@ fn model_case(id: &str, n: usize) -> ModelCase {
         ("glm", "targets") => ModelCase::new(fit(json!({"type": "glm"}), 8, n), Shape::Labelled),
         ("glm", "history") => {
             ModelCase::new(fit(json!({"type": "glm"}), 8, 1), Shape::Labelled).warm(n)
+        }
+        // A rank-one update of the mean-form Gram and its Cholesky a row and
+        // target, so `k³` a row beside `G`'s `k²` numbers.
+        ("expectile", "k") => ModelCase::new(fit(expectile(None), n, 1), lin),
+        ("expectile", "targets") => ModelCase::new(fit(expectile(None), 8, n), lin),
+        ("expectile", "history") => ModelCase::new(fit(expectile(None), 8, 1), lin).warm(n),
+        // A window of `n` rows refit on every row: a pass is a WLS solve over
+        // the window's rows, so `n` a row and `n` rows held.
+        ("expectile", "window") => {
+            let mut s = fit(expectile(Some(n)), 4, 1);
+            s["half_life"] = json!("inf");
+            ModelCase::new(s, lin)
         }
         ("ftrl", "k") => ModelCase::new(fit(json!({"type": "ftrl"}), n, 1), lin),
         ("ftrl", "history") => ModelCase::new(fit(json!({"type": "ftrl"}), 8, 1), lin).warm(n),
