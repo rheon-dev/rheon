@@ -155,7 +155,10 @@ pub use corrchange::{
     kolmogorov_quantile,
 };
 pub use deco::{Deco, DecoCfg, DecoDynamics};
-pub use drift::PageHinkley;
+pub use drift::{
+    Adwin, AdwinCfg, Cusum, Ddm, DriftDetector, Eddm, ErrorRate, Kswin, KswinCfg, PageHinkley,
+    ks_critical_h, ks_equal_tail,
+};
 pub use ewclass::{Covariance, EwClass, EwClassCfg};
 pub use ewcov::{
     EwCov, EwCovCfg, EwCovDiag, EwCovModel, EwCovStat, LowerTriangle, Pca, TargetMoments,

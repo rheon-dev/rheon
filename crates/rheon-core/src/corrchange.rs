@@ -752,7 +752,7 @@ fn is_zero(n: &u64) -> bool {
 /// within that. The remainder this replaces, `x % n`, was a 64-bit division on
 /// every draw and biased by up to `n / 2^64`.
 #[inline]
-fn below_by(n: u64, mut next: impl FnMut() -> u64) -> u64 {
+pub(crate) fn below_by(n: u64, mut next: impl FnMut() -> u64) -> u64 {
     debug_assert!(n > 0);
     let mut m = u128::from(next()) * u128::from(n);
     if (m as u64) < n {

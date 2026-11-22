@@ -76,6 +76,8 @@
   drift_delta = None
   drift_threshold = None
   drift_action = 'flag'
+  drift_kind = None
+  drift_options = None
   emit_calibration = False
   calibration_half_life = None
   emit_breaks = False
@@ -480,6 +482,7 @@
     stream.conformal_rate = 0.05
     stream.drift_action = "flag"
     stream.drift_delta = 0.5
+    stream.drift_kind = "page_hinkley"
     stream.drift_threshold = 20.0
     stream.horizon_rows = 0
     stream.ljung_box_lags = 10
@@ -2610,6 +2613,7 @@
 [enum values]  # the words each string-valued parameter takes, read from its refusal of one it does not: a word added, renamed or dropped is a diff here
   spec.conformal_rate: auto
   spec.drift_action: flag, reset
+  spec.drift_kind: adwin, cusum, ddm, eddm, kswin, page_hinkley
   spec.group_close: monotone, session
   spec.held_overflow: drop_oldest, refuse
   spec.session_gap: reset
@@ -2715,6 +2719,8 @@
     conformal_rate
     drift_action
     drift_delta
+    drift_kind
+    drift_options
     drift_threshold
     embargo
     emit_autocorr

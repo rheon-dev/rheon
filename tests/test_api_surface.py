@@ -622,6 +622,18 @@ ENUM_PROBES: list[
 ] = [
     ("spec.conformal_rate", "ewridge", {"conformal": 0.9}, "conformal_rate", "word"),
     ("spec.drift_action", "ewridge", {"emit_drift": True}, "drift_action", "word"),
+    # `"ddm"` and `"eddm"` count errors, and need what an error is.
+    (
+        "spec.drift_kind",
+        "ewridge",
+        {"emit_drift": True},
+        "drift_kind",
+        "word",
+        {
+            "ddm": {"drift_options": {"error_above": 1.0}},
+            "eddm": {"drift_options": {"error_above": 1.0}},
+        },
+    ),
     # `"session"` closes on a session column, which needs its clock and gap,
     # and stands in for `session_gap`, which the builder needs beside a
     # session otherwise: dropped for that word alone.

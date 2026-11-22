@@ -25,6 +25,8 @@ mod values;
 pub use values::*;
 mod clock;
 pub use clock::*;
+mod drift;
+pub use drift::*;
 mod label_clock;
 pub(crate) use clock::{ClockPolicy, clock_cfg_of};
 pub use label_clock::*;
@@ -2218,6 +2220,19 @@ pub struct Spec {
     /// they are released.
     #[serde(default)]
     pub drift_action: Option<String>,
+    /// The detector `emit_drift` keeps on each slot's errors:
+    /// `"page_hinkley"` (the default), `"cusum"` (Page's tabular two-sided
+    /// CUSUM on the scaled residual, `drift_delta` its `k` and
+    /// `drift_threshold` its `h`), `"adwin"`, `"ddm"`, `"eddm"` or `"kswin"`,
+    /// whose settings are in `drift_options` (`spec/drift.rs`). Written only
+    /// where given, so a spec without it is the bytes it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drift_kind: Option<String>,
+    /// The settings of a `drift_kind` other than `"page_hinkley"` and
+    /// `"cusum"`, by river's names ([`DriftOptions`]). Written only where
+    /// given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drift_options: Option<DriftOptions>,
     /// Emit `calibration_slope_<slot>`, `calibration_intercept_<slot>` and
     /// `calibration_wald_<slot>`: Mincer and Zarnowitz's (1969) regression
     /// of the outcome on its out-of-sample prediction, `y = a + b·pred`, and
@@ -2788,9 +2803,15 @@ impl Spec {
 
     /// The drift detector's threshold in `sigma` times clock units: `20`
     /// unless set, which only a spec without a clock column can leave it
-    /// (task 168).
+    /// (task 168); under `drift_kind = "cusum"` Page's decision interval
+    /// `h`, `5` unless set (task 508).
     pub fn drift_threshold_or_default(&self) -> f64 {
-        self.drift_threshold.as_ref().map_or(20.0, Span::value)
+        let default = if self.drift_kind_or_default() == Some(DriftKind::Cusum) {
+            5.0
+        } else {
+            20.0
+        };
+        self.drift_threshold.as_ref().map_or(default, Span::value)
     }
 
     /// The conformal multiplier's step with nothing waiting, `0.05` unless
@@ -3805,12 +3826,17 @@ impl Spec {
             for (knob, set) in [
                 ("drift_delta", self.drift_delta.is_some()),
                 ("drift_threshold", self.drift_threshold.is_some()),
+                ("drift_kind", self.drift_kind.is_some()),
+                ("drift_options", self.drift_options.is_some()),
             ] {
                 if set {
                     no.refuse(needs(knob, "emit_drift"));
                 }
             }
-        } else if self.clock.is_some() && self.drift_threshold.is_none() {
+        } else if self.clock.is_some()
+            && self.drift_threshold.is_none()
+            && self.drift_kind_or_default().is_some_and(DriftKind::clocked)
+        {
             no.refuse(format!(
                 "spec {name:?}: drift_threshold must be set when the spec has a clock, but it is \
                  not: the detector sums each row's excess times its clock step, so no default \
@@ -3818,6 +3844,7 @@ impl Spec {
                  duration such as \"20m\" on a clock that holds times."
             ));
         }
+        self.check_drift_kind(no);
         if self.average_eta.is_some() && !self.emit_averaged {
             no.refuse(needs("average_eta", "emit_averaged"));
         }
@@ -4153,3 +4180,6 @@ mod covariance_form_tests;
 
 #[cfg(test)]
 mod pa_tests;
+
+#[cfg(test)]
+mod drift_tests;

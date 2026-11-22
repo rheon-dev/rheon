@@ -254,6 +254,67 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
            "emit_clocks": true, "coef_every": @3, "min_weight": 3.0"#,
         ALL,
     ),
+    // Each other drift detector, resetting the model on a flag: each
+    // counts rows of positive weight, ADWIN its scan cadence and KSWIN its
+    // draw among them (PLAN 508). The settings make each flag on this
+    // stream (`every_drift_kind_flags_here`); ADWIN watches a slow `sgd`,
+    // whose errors fall as it learns, so its window has a change to cut.
+    (
+        "drift_cusum",
+        r#"{"type": "ewridge"}"#,
+        r#""targets": ["y"], "features": ["x0", "x1"], "half_life": @40, "emit_sigma": true,
+           "emit_drift": true, "drift_kind": "cusum", "drift_delta": 0.25,
+           "drift_threshold": @2, "drift_action": "reset""#,
+        ALL,
+    ),
+    (
+        "drift_adwin",
+        r#"{"type": "sgd", "loss": "squared", "learning_rate": 0.005, "schedule": "constant", "standardize": false}"#,
+        r#""targets": ["y"], "features": ["x0", "x1"], "half_life": @40,
+           "emit_drift": true, "drift_kind": "adwin", "drift_action": "reset",
+           "drift_options": {"delta": 0.1, "clock": 3, "grace_period": 5, "max_width": 200}"#,
+        ALL,
+    ),
+    (
+        "drift_adwin_kept",
+        r#"{"type": "sgd", "loss": "squared", "learning_rate": 0.005, "schedule": "constant", "standardize": false}"#,
+        r#""targets": ["y"], "features": ["x0", "x1"], "half_life": @40,
+           "emit_drift": true, "drift_kind": "adwin",
+           "drift_options": {"delta": 0.1, "clock": 2, "restart": false, "max_buckets": 2}"#,
+        ALL,
+    ),
+    (
+        "drift_ddm",
+        r#"{"type": "ewridge"}"#,
+        r#""targets": ["y"], "features": ["x0", "x1"], "half_life": @40,
+           "emit_drift": true, "drift_kind": "ddm", "drift_action": "reset",
+           "drift_options": {"error_above": 0.04, "warm_start": 10, "drift_threshold": 1.0}"#,
+        ALL,
+    ),
+    (
+        "drift_eddm",
+        r#"{"type": "ewridge"}"#,
+        r#""targets": ["y"], "features": ["x0", "x1"], "half_life": @40,
+           "emit_drift": true, "drift_kind": "eddm", "drift_action": "reset",
+           "drift_options": {"error_above": 0.04, "warm_start": 5, "beta": 0.95}"#,
+        ALL,
+    ),
+    (
+        "drift_kswin",
+        r#"{"type": "ewridge"}"#,
+        r#""targets": ["y"], "features": ["x0", "x1"], "half_life": @40,
+           "emit_drift": true, "drift_kind": "kswin", "drift_action": "reset",
+           "drift_options": {"alpha": 0.3, "window_size": 24, "stat_size": 8, "seed": 3}"#,
+        ALL,
+    ),
+    (
+        "drift_kswin_kept",
+        r#"{"type": "ewridge"}"#,
+        r#""targets": ["y"], "features": ["x0", "x1"], "half_life": @40,
+           "emit_drift": true, "drift_kind": "kswin",
+           "drift_options": {"alpha": 0.3, "window_size": 24, "stat_size": 8, "restart": false}"#,
+        ALL,
+    ),
     (
         "ewridge_grid",
         r#"{"type": "ewridge"}"#,
@@ -720,6 +781,27 @@ fn every_kind_but_the_two_that_take_no_weight_is_here() {
         .collect();
     want.sort();
     assert_eq!(have, want);
+}
+
+/// The drift detectors' cases above flag on this stream, on every clock,
+/// so the comparison reads their resets and restarts, not only their quiet
+/// rows.
+#[test]
+fn every_drift_kind_flags_here() {
+    let (with_df, _, _) = streams();
+    for (name, model, rest, clocks) in SPECS.iter().filter(|s| s.0.starts_with("drift_")) {
+        for clock in clocks.iter().copied() {
+            let (out, _) = run(&spec_of(&spec_text(name, model, rest, clock)), &with_df);
+            let flags = out
+                .column("drift_y")
+                .unwrap()
+                .bool()
+                .unwrap()
+                .sum()
+                .unwrap_or(0);
+            assert!(flags > 0, "{name} on {clock:?}: no flag");
+        }
+    }
 }
 
 /// Every kind, every clock: the weighted rows' outputs and the final state

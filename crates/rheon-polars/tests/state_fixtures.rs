@@ -825,6 +825,53 @@ fn reset_first() -> (Vec<u8>, DataFrame) {
     (bank.save_bytes().unwrap(), df.slice((fired + 1) as i64, 20))
 }
 
+/// The specs of `bank_drift_kinds` (PLAN 508): each drift detector other
+/// than Page-Hinkley, which `bank_reset` and the others hold, on
+/// `bank_reset`'s stream, whose break at its middle each flags. Each kind
+/// is written under its name (`rheon_core::DriftDetector`): a CUSUM's sums,
+/// an ADWIN's window of several levels, a DDM's and an EDDM's counts behind
+/// their error cut, and a KSWIN's ring and generator, kept after a flag.
+fn drift_kinds_specs() -> Vec<Spec> {
+    [
+        r#"{"name": "cusum", "model": {"type": "rls"}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 10.0, "half_life": 100.0, "emit_sigma": true, "emit_drift": true, "drift_kind": "cusum", "drift_delta": 0.25, "drift_threshold": 3.0}"#,
+        r#"{"name": "adwin", "model": {"type": "rls"}, "targets": ["y"], "features": ["x0", "x1"], "half_life": 100.0, "emit_drift": true, "drift_kind": "adwin", "drift_action": "reset", "drift_options": {"clock": 2, "max_buckets": 2, "max_width": 400}}"#,
+        r#"{"name": "ddm", "model": {"type": "rls"}, "targets": ["y"], "features": ["x0", "x1"], "half_life": 100.0, "emit_drift": true, "drift_kind": "ddm", "drift_options": {"error_above": 0.15, "warm_start": 10}}"#,
+        r#"{"name": "eddm", "model": {"type": "rls"}, "targets": ["y"], "features": ["x0", "x1"], "half_life": 100.0, "emit_drift": true, "drift_kind": "eddm", "drift_options": {"error_above": 0.15, "warm_start": 5, "beta": 0.95}}"#,
+        r#"{"name": "kswin", "model": {"type": "rls"}, "targets": ["y"], "features": ["x0", "x1"], "half_life": 100.0, "emit_drift": true, "drift_kind": "kswin", "drift_options": {"window_size": 40, "stat_size": 12, "alpha": 0.05, "seed": 7, "restart": false}}"#,
+    ]
+    .iter()
+    .map(|text| serde_json::from_str(text).unwrap_or_else(|e| panic!("{text}: {e}")))
+    .collect()
+}
+
+/// Saved at row 220, after the break each kind has flagged; the next 80
+/// rows continue.
+fn drift_kinds_first() -> (Vec<u8>, DataFrame) {
+    let df = reset_frame();
+    let mut bank = Bank::new(drift_kinds_specs()).unwrap();
+    let cols = bank.fit_predict(&df.slice(0, 220)).unwrap();
+    let out = DataFrame::new(220, cols).unwrap();
+    for spec in drift_kinds_specs() {
+        let drift = out
+            .column(spec.name.as_str())
+            .unwrap()
+            .struct_()
+            .unwrap()
+            .field_by_name("drift_y")
+            .unwrap();
+        assert!(
+            drift.bool().unwrap().sum().unwrap_or(0) > 0,
+            "{} flags before the save",
+            spec.name
+        );
+    }
+    (bank.save_bytes().unwrap(), df.slice(220, RESET_N - 220))
+}
+
+fn drift_kinds_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    bank_run_of(&drift_kinds_specs(), bytes, input)
+}
+
 /// The specs of the fifth bank file, `bank_refit`: `huber` and
 /// `sgd(loss = "huber")` grouped, each refitting a target's first 20 rows
 /// (docs/PLAN.md task 277, schema 64). `huber`'s `refit_budget` holds two
@@ -1494,6 +1541,11 @@ fn kinds() -> Vec<Kind> {
             run: auto_run,
         },
         Kind {
+            name: "bank_drift_kinds",
+            first: drift_kinds_first,
+            run: drift_kinds_run,
+        },
+        Kind {
             name: "with_windows",
             first: windows_first,
             run: windows_run,
@@ -1910,7 +1962,7 @@ fn the_current_bank_and_windows_fixtures_end_with_their_checksum() {
         assert_eq!(sealed(&bytes), want, "{}", f.name);
         held += usize::from(want);
     }
-    assert_eq!(held, 15, "twelve bank files and three window states");
+    assert_eq!(held, 16, "thirteen bank files and three window states");
     for (schema, set) in previous_sets() {
         for f in set {
             assert!(!sealed(&unhex(f.state)), "v{schema}/{}", f.name);
@@ -2626,6 +2678,35 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
         // and the drift detector folding what a gate withholds.
         ("bank_gated", "ewridge's output-only floor", |p, v| {
             p.ends_with(".min_weight_output_only") && v.as_bool() == Some(true)
+        }),
+        // PLAN 508: each drift detector other than Page-Hinkley, under its
+        // name, each holding what its kind keeps.
+        ("bank_drift_kinds", "a CUSUM's sums", |p, v| {
+            p.contains(".Cusum.")
+                && (p.ends_with(".up") || p.ends_with(".down"))
+                && v.as_f64().is_some_and(|f| f > 0.0)
+        }),
+        ("bank_drift_kinds", "an ADWIN's second level", |p, v| {
+            p.contains(".Adwin.levels.1.") && v.as_f64().is_some()
+        }),
+        ("bank_drift_kinds", "a DDM's least rate", |p, v| {
+            p.contains(".Ddm.detector.")
+                && p.ends_with(".p_min")
+                && v.as_f64().is_some_and(f64::is_finite)
+        }),
+        ("bank_drift_kinds", "a DDM's error cut", |p, v| {
+            p.contains(".Ddm.") && p.ends_with(".error_above") && v.as_f64() == Some(0.15)
+        }),
+        ("bank_drift_kinds", "an EDDM's distances", |p, v| {
+            p.contains(".Eddm.detector.")
+                && p.ends_with(".p2s_max")
+                && v.as_f64().is_some_and(|f| f > 0.0)
+        }),
+        ("bank_drift_kinds", "a KSWIN's ring", |p, v| {
+            p.contains(".Kswin.window.") && v.as_f64().is_some()
+        }),
+        ("bank_drift_kinds", "a KSWIN's generator", |p, v| {
+            p.contains(".Kswin.rng") && v.as_u64().is_some_and(|n| n != 7)
         }),
         ("bank_reset", "the drift detector's flag", |p, v| {
             p.ends_with(".ungated_drift") && v.as_bool() == Some(true)

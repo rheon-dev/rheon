@@ -18,7 +18,7 @@ import math
 import numbers
 import types
 import typing
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict, Unpack
 
@@ -1102,6 +1102,8 @@ def _common(
     drift_delta: float | None = None,
     drift_threshold: float | Duration | None = None,
     drift_action: Literal["flag", "reset"] = "flag",
+    drift_kind: Literal["page_hinkley", "cusum", "adwin", "ddm", "eddm", "kswin"] | None = None,
+    drift_options: Mapping[str, float | int | bool] | None = None,
     emit_calibration: bool = False,
     calibration_half_life: float | Duration | None = None,
     emit_breaks: bool = False,
@@ -1198,6 +1200,10 @@ def _common(
         spec["max_held_rows"] = max_held_rows
     if held_overflow is not None:
         spec["held_overflow"] = held_overflow
+    if drift_kind is not None:
+        spec["drift_kind"] = drift_kind
+    if drift_options is not None:
+        spec["drift_options"] = dict(drift_options)
     validate_spec(_json(spec))
     return spec
 
