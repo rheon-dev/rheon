@@ -3056,6 +3056,115 @@ mod tests {
         assert!(checked > 4000, "{checked}");
     }
 
+    /// The scale's choice at its edges, held on every platform through
+    /// `standardize_row` (the lanes, and the features past the last full
+    /// vector, on an x86-64 CPU with AVX2 from `LANES_FROM` features; the
+    /// loop elsewhere) and through the loop itself. Four kinds of feature,
+    /// each at every position mod 4 so that each is once a lane and once
+    /// past the last: constant 0 (raw second moment exactly 0 through the
+    /// origin, variance exactly 0 with it), constant 2, constant 1e-150 (a
+    /// raw moment of 1e-300, positive and small), and one with spread.
+    /// Through the origin `raw > 0` decides the root against 1; with the
+    /// intercept `v > 0` does, and `v` of exactly 0 gives scale 1 and a
+    /// `z` of 0, where a scale of 0 would give 0/0.
+    #[test]
+    fn the_scale_choice_holds_at_zero_and_just_above_it_in_lanes_and_tail() {
+        let hist = |kind: usize, r: usize| match kind {
+            0 => 0.0,
+            1 => 2.0,
+            2 => 1e-150,
+            _ => {
+                if r.is_multiple_of(2) {
+                    1.0
+                } else {
+                    3.0
+                }
+            }
+        };
+        let mut checked = 0usize;
+        for k in 12..=19usize {
+            for shift in 0..4usize {
+                for off in [0usize, 1] {
+                    let slots = k + off;
+                    let mut sc = EwDiag::new(slots);
+                    for r in 0..6 {
+                        // Slot 0 is the intercept's column when `off` is 1.
+                        let x: Vec<f64> = (0..slots)
+                            .map(|j| {
+                                if j < off {
+                                    1.0
+                                } else {
+                                    hist((j - off + shift) % 4, r)
+                                }
+                            })
+                            .collect();
+                        sc.update(&x, 0.9, 1.0);
+                    }
+                    // The row is each constant feature's own value, so that
+                    // it adds no deviation; the feature with spread gets 2.
+                    let x: Vec<f64> = (0..k)
+                        .map(|j| match (j + shift) % 4 {
+                            0 => 0.0,
+                            1 => 2.0,
+                            2 => 1e-150,
+                            _ => 2.0,
+                        })
+                        .collect();
+                    let (mut z1, mut m1, mut s1) = (vec![9.0; k], vec![9.0; k], vec![9.0; k]);
+                    standardize_row(&sc, off, &x, 0.95, 1.0, 1.0, &mut z1, &mut m1, &mut s1);
+                    let inc = sc.including(scaler_decay(&sc, 0.95, 1.0, 1.0));
+                    let (hi, lo, c) = sc.parts();
+                    let (mut z2, mut m2, mut s2) = (vec![9.0; k], vec![9.0; k], vec![9.0; k]);
+                    standardize_scalar(
+                        &inc,
+                        off,
+                        &x,
+                        &hi[off..off + k],
+                        &lo[off..off + k],
+                        &c[off..off + k],
+                        &mut z2,
+                        &mut m2,
+                        &mut s2,
+                    );
+                    for (z, m, s) in [(&z1, &m1, &s1), (&z2, &m2, &s2)] {
+                        for i in 0..k {
+                            let kind = (i + shift) % 4;
+                            let ctx = format!("k={k} shift={shift} off={off} i={i} kind={kind}");
+                            let near = |a: f64, b: f64| (a - b).abs() <= 1e-12 * b.abs();
+                            match (off, kind) {
+                                // Raw second moment exactly 0: scale 1, z the
+                                // row's own 0, not 0/0.
+                                (0, 0) => assert_eq!((z[i], m[i], s[i]), (0.0, 0.0, 1.0), "{ctx}"),
+                                (0, 1) => assert_eq!((z[i], m[i], s[i]), (1.0, 0.0, 2.0), "{ctx}"),
+                                // 1e-300 is positive: the root 1e-150 is the
+                                // scale, not 1, and z is about 1.
+                                (0, 2) => {
+                                    assert!(near(s[i], 1e-150) && near(z[i], 1.0), "{ctx}");
+                                    assert_eq!(m[i], 0.0, "{ctx}");
+                                }
+                                (0, _) => assert!(s[i] > 1.0 && z[i].is_finite(), "{ctx}"),
+                                // No spread: scale 1, dev 0, mean the constant.
+                                (_, 0) => assert_eq!((z[i], m[i], s[i]), (0.0, 0.0, 1.0), "{ctx}"),
+                                (_, 1) => assert_eq!((z[i], m[i], s[i]), (0.0, 2.0, 1.0), "{ctx}"),
+                                (_, 2) => {
+                                    assert_eq!((z[i], m[i], s[i]), (0.0, 1e-150, 1.0), "{ctx}")
+                                }
+                                // Spread: the sd, below 2 here and not 1.
+                                (_, _) => assert!(
+                                    s[i] > 0.0 && s[i] != 1.0 && s[i] < 2.0 && z[i].is_finite(),
+                                    "{ctx}: s {}",
+                                    s[i]
+                                ),
+                            }
+                            checked += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(checked, 2 * 2 * 4 * (12 + 13 + 14 + 15 + 16 + 17 + 18 + 19));
+    }
+
     /// A row standardized against the moments that include it, after a
     /// clock gap of up to 1,000 half-lives, is what exact arithmetic gives
     /// (review fable2, C1): `z = (x − m)/sqrt(v)` from the stream's
