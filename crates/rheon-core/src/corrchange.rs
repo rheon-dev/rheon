@@ -1472,7 +1472,7 @@ impl CorrChange {
     /// and the first `j` it is attained at. NaN where `sd` is not a positive
     /// number.
     fn cusum(s: &[f64], sd: f64) -> (f64, usize) {
-        if !(sd > 0.0) {
+        if sd.is_nan() || sd <= 0.0 {
             return (f64::NAN, 0);
         }
         let (mut run, mut best, mut at) = (0.0f64, 0.0f64, 0);
@@ -3894,7 +3894,7 @@ mod tests {
                 2.0 * w * acf / tf
             };
         }
-        if !(var > 0.0) {
+        if var.is_nan() || var <= 0.0 {
             return f64::NAN;
         }
         let mut run = 0.0f64;
@@ -4766,8 +4766,8 @@ mod tests {
     /// (`corr_of`, `long_run_sd` at `⌊ln m⌋`), the monitored rows'
     /// correlation from scratch, the Fisher-`z` detector `V_k = ((k − 3)/
     /// √(m − 3))·|atanh ρ̂_k − atanh ρ̂_h|·(1 − ρ̂_h²)/σ̂` (`atanh` the
-    /// standard library's, not the model's `libm`), the ratio to `w(b) = (1
-    /// + b)(b/(1 + b))^γ` at `b = (k − 3)/(m − 3)`, none below four
+    /// standard library's, not the model's `libm`), the ratio to `w(b) =
+    /// (1 + b)(b/(1 + b))^γ` at `b = (k − 3)/(m − 3)`, none below four
     /// monitored rows, the maximum over the three pairs, the critical value
     /// at the period's information `(K − 3)/(m − 3)`, W&G's Eq. 8 on a
     /// flag, and the cycle: a history of `m` learned rows, then at most

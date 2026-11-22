@@ -260,9 +260,9 @@ defines its three kinds and its statistic.
    boundary starts lower, so a change soon after the history is caught
    sooner, and a late one later. Each monitored row's correlation is
    compared on Fisher's scale at its own variance, so the share of stable
-   cycles flagged holds at every `boundary_gamma`: measured on Wied and
-   Galeano's GARCH pairs and on Gaussian ones at histories of 50 to 1,000
-   rows, at a nominal 0.05:
+   cycles flagged holds at every `boundary_gamma`. Measured on Wied and
+   Galeano's GARCH pairs and on Gaussian ones, at histories of 50 to 1,000
+   rows and a nominal 0.05:
 
    | `boundary_gamma` | a change soon after the history | stable streams flagged, at a nominal 0.05 |
    |---|---|---|
@@ -324,7 +324,7 @@ compares the correlations of two adjacent windows of `window_rows` rows
 on every row, and flags against a permutation quantile at the level
 `alpha` (0.05 by default). Two windows that slide by one row are almost
 the same windows, so a statistic above the quantile stays above it for a
-run of rows: each report flags at the rate `alpha`, but a stretch of a
+run of rows. Each report flags at the rate `alpha`, but a stretch of a
 window's length of reports holds a flag about a third of the time on rows
 where nothing changed. Set `change_action="reset"`, which empties both
 windows at a flag, so one change gives one flag.
@@ -414,5 +414,5 @@ break. Where they are not:
 | a break you planted, and no CUSUM flag beside a gradient fit | the fit absorbs a level at its learning rate, so its residuals carry little of the move | read `break_wald`, which reads the target and the features alone |
 | a slope break, and no CUSUM flag | a slope on a feature centered at zero leaves the residuals' mean at zero | read `break_wald` |
 | flags on a target that looks ahead, with nothing broken | the residuals overlap by construction | give the spec `horizon_rows=` (with a clock) or `embargo=` (without one), so each test allows for it ([Can its t be trusted?](../DIAGNOSTICS.md#can-its-t-be-trusted)) |
-| `corrchange` flags on stable streams under `kind="sequential"` | a short or heavy-tailed history: its correlation and long-run deviation have not settled (0.08 to 0.12 of cycles at 50 rows of `t_5` pairs) | lengthen `window_rows` to a few hundred rows |
+| `corrchange` flags on stable streams under `kind="sequential"` | a short or heavy-tailed history: its correlation and long-run deviation have not converged (0.08 to 0.12 of cycles at 50 rows of `t_5` pairs) | lengthen `window_rows` to a few hundred rows |
 | a `corrchange` `flag` null, with `withheld_reason` `scale_ratio_moved` | under `kind="monitor"`, one column's scale moved against the other's inside the span, where the statistic is off its null law | use `kind="window"`, whose windows' correlations are each free of their own scale |

@@ -248,18 +248,18 @@ one span of `T` rows, tested once with `alpha_adjust="none"`.
 
 **Under the shared-scale reading, the size is 0.029 to 0.033, at or under
 WKD's Table 1 in every cell.** The linear form is the more conservative of
-the two on heavy tails. Its sums and its `D-hat` are made of the same rows'
-`xi`, so a few large rows raise the denominator as much as the sums they
-enter; and it forms no correlation of a span's first few rows, where WKD's
+the two on heavy tails. Its sums and its denominator are made of the same
+rows, so a few large rows lift the denominator as much as the sums they
+enter. And it forms no correlation of a span's first few rows, where WKD's
 statistic gained rejections at every distribution.
 Neither reading is liberal: no `t_5` cell is above 0.040.
 
 **On Gaussian pairs the size is 0.041 to 0.046**, a little under the
 nominal 0.05. `tests/test_corrchange.py` holds the test to that level on
 Gaussian pairs at `T = 500`, for `rho` of 0 and 0.5, and again at 0.5 with
-one column multiplied by 100, and its extended tier holds the size at 8 to
-1000 rows, correlations up to 0.9, `t_5`, GARCH and scales that double,
-where WKD's own statistic read up to 0.26 at a correlation of 0.9 and 100
+one column multiplied by 100. Its extended tier holds the size at 8 to 1000
+rows, at correlations up to 0.9, on `t_5`, GARCH and scales that double.
+There WKD's own statistic read up to 0.26, at a correlation of 0.9 and 100
 rows.
 
 ## 3. And is it the power its paper says?

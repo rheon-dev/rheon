@@ -3548,11 +3548,11 @@ pairs, and the level `alpha` (0.05 by default) is spread over the pairs as
 `alpha / npairs` unless `alpha_adjust="none"`.
 
 `kind="monitor"` is the closed-sample constancy test of Wied, Krämer and
-Dehling (2012) in its linear form. With `T = window_rows`, `x̃`, `ỹ` the
-span's rows centered at its means and scaled by its standard deviations,
-`ρ̂` their correlation, and `D̂` the Bartlett long-run standard deviation of
-`ξ`, the delta-method deviation of `ρ̂`, the last row of a span reports, per
-pair:
+Dehling (2012) in its linear form. Its span is `T = window_rows` rows,
+centered at their means and scaled by their standard deviations (`x̃`,
+`ỹ`), with correlation `ρ̂`. `D̂` is the Bartlett long-run standard
+deviation of `ξ`, the delta-method deviation of `ρ̂`. The last row of a
+span reports, per pair:
 
 ```
 ξ_t  = x̃_t ỹ_t − (ρ̂/2)(x̃_t² + ỹ_t²)
@@ -3585,13 +3585,13 @@ w(b) = (1 + b)·(b/(1 + b))^γ               γ = boundary_gamma, 0 ≤ γ ≤ 0
 
 and flags where `stat` passes `crit`. The paper's own detector, `(k/√m)·|ρ̂_k
 − ρ̂_h| / D̂` from the second row, flagged a quarter to a third of the
-cycles in their first rows at `γ = 0.45` with nothing changed; this one
+cycles in their first rows at `γ = 0.45` with nothing changed. This one
 holds 0.05 to 0.07 on Gaussian pairs at every `γ`.
 
 Every kind takes its span on the clock too, as `window_size` in place of
-`window_rows` (and `monitor_span` in place of `monitor_rows`): each span,
-history or pair of windows is then tested at the rows it holds, the window
-kind's held critical value rescaled to each report's two windows.
+`window_rows` (and `monitor_span` in place of `monitor_rows`). Each span,
+history or pair of windows is then tested at the rows it holds, and the
+window kind's held critical value is rescaled to each report's two windows.
 
 `kind="window"` reports `‖vech(R_pre − R_post)‖₁` (under `norm="linf"`, its
 largest absolute entry instead) over two adjacent windows of `window_rows` rows each. `R_pre` and `R_post` are the windows'
