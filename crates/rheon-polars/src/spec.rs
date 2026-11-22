@@ -1006,26 +1006,28 @@ pub enum ModelKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         feature_moments: Option<String>,
     },
-    /// Dynamic equicorrelation (Engle & Kelly 2012; docs/ENHANCEMENTS.md
-    /// E55): one number for the whole correlation matrix, `O(m)` a row where
-    /// a full one is `O(m²)`.
+    /// Dynamic equicorrelation (Engle & Kelly, NYU FIN-08-038, 2008;
+    /// docs/ENHANCEMENTS.md E55): one number for the whole correlation
+    /// matrix, `O(m)` a row where a full one is `O(m²)`.
     ///
     /// The row is standardised against an [`rheon_core::EwDiag`]'s pre-row
     /// means and variances, and the average pairwise correlation of the
     /// standardised row is a closed form in two sums. `blocks` estimates one
     /// number per named block and one per pair of blocks instead of a single
     /// one, which is the useful middle between "one correlation" and "all of
-    /// them". Outputs `u` (the row's own estimate), `rho` (the level before
-    /// the row), `loglik` (the row's Gaussian density under it) and `n_eff`;
+    /// them". Outputs `u` (the row's own estimate, eq. 20), `rho` (the level
+    /// before the row: the ratio of the EW means of `u`'s numerator and
+    /// denominator, PLAN 551), `loglik` (the row's Gaussian density under
+    /// it) and `n_eff`;
     /// with blocks, one `u_*` and one `rho_*` per value and a single
     /// `loglik`. `half_life`/`lam` are the spec's and are required, since
     /// both the standardiser and the level decay on them.
     #[serde(rename = "deco")]
     Deco {
-        /// `"ew"` (default): `rho' = a·rho + b·u`, the exponentially
-        /// weighted mean of the row estimates. `"linear"`: Engle–Kelly
-        /// eq. 21 with correlation targeting, `rho' = (1 − α − β)·rho_bar' +
-        /// α·u + β·rho`, which needs `alpha` and `beta`.
+        /// `"ew"` (default): `rho = Abar/Vbar`, the ratio of the EW means
+        /// of the row's numerator and denominator. `"linear"`: the DCC `Q`
+        /// recursion (Engle–Kelly eq. 5, correlation targeting) averaged to
+        /// `N` and `D`, `rho = N/D`, which needs `alpha` and `beta`.
         #[serde(default)]
         dynamics: Option<String>,
         #[serde(default)]

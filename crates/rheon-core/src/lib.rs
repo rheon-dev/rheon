@@ -155,7 +155,7 @@ pub use corrchange::{
     ChangeNorm, CorrChange, CorrChangeCfg, CorrChangeKind, MAX_PERM, kolmogorov_cdf,
     kolmogorov_quantile,
 };
-pub use deco::{Deco, DecoCfg, DecoDynamics};
+pub use deco::{Deco, DecoCfg, DecoDynamics, DecoLevel};
 pub use drift::{
     Adwin, AdwinCfg, Cusum, Ddm, DriftDetector, Eddm, ErrorRate, Kswin, KswinCfg, PageHinkley,
     ks_critical_h, ks_equal_tail,
@@ -931,6 +931,20 @@ pub use window::{
 ///   of 71 or earlier loads as it did, to the bit, and re-saves the current
 ///   fixture's bytes. Schema 71's fixtures are kept
 ///   (`tests/state_fixtures/v71/`).
+///
+///   Also at 72, before any release carried it (2026-11-22, PLAN 551, the
+///   user's "Replace rho with the ratio"): `deco`'s level is the ratio of
+///   the EW means of the row's numerator and denominator (or their averaged
+///   DCC recursion under `"linear"`), kept in `ratio` -- the means, a pair's
+///   second denominator, `"linear"`'s `N` and `D`, and the standardiser's
+///   `Σw²/(Σw)²` its warm-up reads -- with `cfg.level = "ratio"`, and no
+///   `rho_bar`. A state of 71 or earlier has neither field: it loads as the
+///   level it was fitted with, the EW mean of `u` ([`DecoLevel::MeanOfU`]),
+///   and goes on with it to the bit, re-saving its own layout, since the
+///   sums the ratio needs are not in it. The kept `deco` case is that form,
+///   so it converts to the current bytes exactly; the ratio's forms are the
+///   cases `deco_ratio`, `deco_linear` and `deco_warming`, with no kept
+///   files.
 pub const SCHEMA_VERSION: u32 = 72;
 
 /// The default solve cadence of `ewridge`, `lasso`, `huber` and `quantile`

@@ -2084,11 +2084,77 @@ pub fn all() -> Vec<Case> {
                 beta: None,
                 blocks: Vec::new(),
                 min_weight: 3.0,
+                level: rheon_core::DecoLevel::MeanOfU,
             })
             .unwrap(),
             3,
             Targets::None,
             40
+        ),
+        // PLAN 551: the ratio level, the form a spec builds. `deco` above is
+        // the form a state of schema 71 or earlier loads as, which its kept
+        // files hold. Each column rides the stream's common regime shift, so
+        // the equicorrelation is positive and identified.
+        case!(
+            "deco_ratio",
+            "Deco",
+            Deco,
+            Deco::new(DecoCfg {
+                n_features: 3,
+                decay: decay(),
+                dynamics: DecoDynamics::Ew,
+                alpha: None,
+                beta: None,
+                blocks: Vec::new(),
+                min_weight: 3.0,
+                level: rheon_core::DecoLevel::Ratio,
+            })
+            .unwrap(),
+            3,
+            Targets::None,
+            40
+        ),
+        // The linear form over two blocks: `N`, `D` and each pair's own
+        // second denominator.
+        case!(
+            "deco_linear",
+            "Deco",
+            Deco,
+            Deco::new(DecoCfg {
+                n_features: 4,
+                decay: decay(),
+                dynamics: DecoDynamics::Linear,
+                alpha: Some(0.05),
+                beta: Some(0.9),
+                blocks: vec![vec![0, 1], vec![2, 3]],
+                min_weight: 0.0,
+                level: rheon_core::DecoLevel::Ratio,
+            })
+            .unwrap(),
+            4,
+            Targets::None,
+            40
+        ),
+        // Saved inside the standardiser's warm-up: no level yet, the share
+        // above a fifth, and the continuation crosses it.
+        case!(
+            "deco_warming",
+            "Deco",
+            Deco,
+            Deco::new(DecoCfg {
+                n_features: 3,
+                decay: decay(),
+                dynamics: DecoDynamics::Ew,
+                alpha: None,
+                beta: None,
+                blocks: Vec::new(),
+                min_weight: 0.0,
+                level: rheon_core::DecoLevel::Ratio,
+            })
+            .unwrap(),
+            3,
+            Targets::None,
+            4
         ),
         case!(
             "rcov",

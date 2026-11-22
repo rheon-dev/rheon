@@ -106,10 +106,10 @@ returns, 16 % of the 119991 at the finest interval. The lag inversion of
 Averaged over five seeds it levels off at 0.775 for lags from 256 to 512
 rows ([§6](#6-the-epps-effect-and-the-two-ways-out)).
 
-**`deco`'s estimate levels off near two-thirds of the true equicorrelation, and
-moves at its half-life.** The row's estimate is biased low, as its paper
-warns, and the level is an exponentially weighted mean of it
-([§7](#7-deco-an-equicorrelation-that-moves)).
+**`deco`'s level reads the true equicorrelation, and moves at its
+half-life.** The row's own estimate is biased low, as its paper warns; the
+level averages that estimate's numerator and denominator before it divides,
+which removes the bias ([§7](#7-deco-an-equicorrelation-that-moves)).
 
 **Each of `rcov`'s estimators wins somewhere.** `plain` is the most
 accurate on clean returns, the kernel under noise, and pre-averaging when
@@ -477,9 +477,10 @@ figure.
 ## 7. `deco`: an equicorrelation that moves
 
 `deco` reduces a correlation matrix to one number, the average of its
-off-diagonal, and follows it with an exponentially weighted mean of each row's own estimate,
-`u`. The stream here has five series whose equicorrelation alternates
-between 0.2 and 0.6.
+off-diagonal. Each row gives an estimate of it, `u`, the row's mean product
+of two standardized values over its mean square, and the level `rho` is the
+ratio of the exponentially weighted means of those two. The stream here has
+five series whose equicorrelation alternates between 0.2 and 0.6.
 
 | condition | value |
 |---|---|
@@ -490,23 +491,27 @@ between 0.2 and 0.6.
 
 | half-life | `rho`'s level, true 0.2 | `rho`'s level, true 0.6 | median rows to the midpoint | range | switches never crossed |
 |---|---|---|---|---|---|
-| 25 | 0.129 | 0.377 | 26 | 8–58 | 0 of 24 |
-| 100 | 0.130 | 0.381 | 100 | 66–172 | 0 of 24 |
-| 400 | 0.146 | 0.348 | 330 | 246–520 | 0 of 24 |
+| 25 | 0.193 | 0.604 | 30 | 8–64 | 0 of 24 |
+| 100 | 0.198 | 0.607 | 106 | 64–152 | 0 of 24 |
+| 400 | 0.227 | 0.549 | 324 | 266–516 | 0 of 24 |
 
-**`rho` levels off near two-thirds of the truth, because `u` does.** The
-row's estimate `u` averages 0.130 where the truth is 0.2, and 0.379 where
-it is 0.6. The spec's docstring warns of this, after Engle and Kelly: `u`
-is a ratio, and its mean is not the ratio of the means. `rho` is an exponentially weighted mean
-of `u`, so it carries the same bias. Read `rho` as a signal that moves with
-the correlation, not as the correlation.
+**`rho` levels off at the truth; the row's own estimate does not.** `u`
+averages 0.130 where the truth is 0.2, and 0.379 where it is 0.6: it is a
+ratio over one row, and the mean of a ratio is not the ratio of the means,
+as Engle and Kelly warn. A wider row does not help, since every row sees
+one draw of the common factor, and neither does a longer half-life, which
+averages the same biased ratio. `rho` averages the numerator and the
+denominator first and divides once, which is the weighted Gaussian
+estimate of the equicorrelation, so it reads 0.193 and 0.604 at a
+half-life of 25.
 
-**It moves at its half-life.** An exponentially weighted mean reaches the midpoint of a step in
-one half-life, and `rho` does: a median of 26 rows at a half-life of 25, and
-100 at a half-life of 100. At 400 the median is 330. A state lasts 1200
-rows, three of those half-lives, so `rho` has not reached its level when the next
-switch comes. Its two levels, 0.146 and 0.348, are closer together than at
-the shorter half-lives, and it starts nearer their midpoint.
+**It moves at its half-life.** An exponentially weighted mean reaches the
+midpoint of a step in about one half-life, and `rho` does: a median of 30
+rows at a half-life of 25, and 106 at a half-life of 100. At 400 the median
+is 324. A state lasts 1200 rows, three of those half-lives, so `rho` has
+not reached its level when the next switch comes. Its two levels, 0.227 and
+0.549, are closer together than at the shorter half-lives, and it starts
+nearer their midpoint.
 
 ## 8. `rcov`: three estimators against each block's truth
 

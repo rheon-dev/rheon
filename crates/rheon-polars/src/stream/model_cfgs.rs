@@ -797,6 +797,7 @@ pub fn deco_cfg(spec: &Spec) -> Result<DecoCfg, String> {
         beta: *beta,
         blocks,
         min_weight: spec.min_periods_or_default(),
+        level: rheon_core::DecoLevel::Ratio,
     })
 }
 

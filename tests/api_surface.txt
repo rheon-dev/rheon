@@ -581,6 +581,7 @@
     model.blocks = []
     model.decay.Halflife = 50.0
     model.dynamics = "ew"
+    model.level = "ratio"
     model.min_weight = 3.0
     model.n_features = 2
     stream.breaks_half_life = 50.0

@@ -284,6 +284,15 @@ use rheon_core::{MIN_SCHEMA_VERSION, ModelState, SCHEMA_VERSION, State};
 /// current bytes exactly and continues to the bit, as every other kept case
 /// does.
 ///
+/// 71 kept since 72 (PLAN 542's envelope, then PLAN 551 before any release
+/// carried 72): `deco`'s level is the ratio of the means, in `ratio`, with
+/// `cfg.level` written as `"ratio"`. A `deco` state of 71 or earlier has
+/// neither and loads as the older level, the EW mean of `u`, going on with
+/// it to the bit; the kept `deco` case is built in that form, so every kept
+/// file of it converts to the current bytes exactly. The ratio's forms are
+/// the cases `deco_ratio`, `deco_linear` and `deco_warming`, which have no
+/// kept files.
+///
 /// The kept schemas, each a `v<N>/` directory found beside the current set.
 fn previous() -> Vec<u32> {
     frozen::PREVIOUS_SETS.iter().map(|(s, _)| *s).collect()
@@ -1465,7 +1474,18 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 117] = [
+    const FORMS: [(&str, &[&str]); 125] = [
+        // PLAN 551, at schema 72: the ratio level's sums, the form a spec
+        // builds, under each dynamics, with a pair's second denominator, and
+        // the standardiser's share inside its warm-up.
+        ("deco_ratio", &["model", "Deco", "ratio", "num"]),
+        ("deco_ratio", &["model", "Deco", "ratio", "den"]),
+        ("deco_ratio", &["model", "Deco", "ratio", "w2_share"]),
+        ("deco_linear", &["model", "Deco", "ratio", "den_b"]),
+        ("deco_linear", &["model", "Deco", "ratio", "lin_num"]),
+        ("deco_linear", &["model", "Deco", "ratio", "lin_den"]),
+        ("deco_linear", &["model", "Deco", "ratio", "lin_den_b"]),
+        ("deco_warming", &["model", "Deco", "ratio", "w2_share"]),
         // Schema 70 (rule 5's twenty-second exception): the stabilized
         // prior's `ŝ` and `V` under `full` in each form and under `diag`,
         // the factor form's `f`, and a spec's own `prior_rows`.
@@ -1744,6 +1764,24 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
     let first = at(&v, &["model", "Garch", "series", "0", "first"]).expect("a first stamp");
     assert!(!first.is_nil(), "garch_span: no first stamp");
+    // `deco_warming` is saved inside the standardiser's warm-up (PLAN 551):
+    // its share at a fifth or more, so Kish's size at 5 or less, and no level;
+    // `deco_ratio` past it.
+    for (name, warm) in [("deco_warming", false), ("deco_ratio", true)] {
+        let f = frozen::ALL
+            .iter()
+            .find(|f| f.name == name)
+            .unwrap_or_else(|| panic!("{name}: no fixture"));
+        let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+        let share = at(&v, &["model", "Deco", "ratio", "w2_share"])
+            .and_then(rmpv::Value::as_f64)
+            .expect("a share");
+        let rho = at(&v, &["model", "Deco", "rho", "0"])
+            .and_then(rmpv::Value::as_f64)
+            .expect("a level");
+        assert_eq!(share < 0.2, warm, "{name}: share {share}");
+        assert_eq!(rho.is_finite(), warm, "{name}: level {rho}");
+    }
     for (name, path) in FORMS {
         let f = frozen::ALL
             .iter()

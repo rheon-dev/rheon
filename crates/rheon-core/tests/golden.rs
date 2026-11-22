@@ -1156,6 +1156,7 @@ fn deco_golden() {
         beta: Some(0.9),
         blocks: Vec::new(),
         min_weight: 3.0,
+        level: rheon_core::DecoLevel::Ratio,
     })
     .unwrap();
     check("deco", &signature(&mut m, 1), GOLDEN_DECO);
@@ -1172,6 +1173,7 @@ fn deco_loglik_golden() {
         beta: None,
         blocks: Vec::new(),
         min_weight: 3.0,
+        level: rheon_core::DecoLevel::Ratio,
     })
     .unwrap();
     check("deco_loglik", &signature(&mut m, 2), GOLDEN_DECO_LOGLIK);
@@ -2029,12 +2031,21 @@ const GOLDEN_RCOV: &[f64] = &[15.118271471980519, -2.2219191583655915, 22.721761
 // (`ψ₁ = 1`, `ψ₂ = 19/216`); each entry is the last pin times 19/16, to an ulp
 // (7.978660961271573, -1.6354544255766184, 20.275069787152503).
 const GOLDEN_RCOV_PREAVG: &[f64] = &[9.474659891509994, -1.9421021303722343, 24.0766453722436];
+// `deco` and `deco_loglik` re-pinned 2026-11-22 (PLAN 551): `rho` is the
+// ratio of the EW means of the row's numerator and denominator, and the
+// linear form their averaged DCC recursion, learning once the standardiser's
+// Kish size passes 5, where it was the EW mean of `u` and the recursion on
+// it; `loglik` moves with the level it is read at. The pins were
+// (-0.05328065158114557, -0.10464551302436545, -0.036211528292942816) and
+// (-2.2831901919538913, -3.7586606055778677, -1.896095909765855).
+// `deco.rs`'s `the_ratio_level_is_its_definition` holds the recursion to
+// its longhand sums.
 const GOLDEN_DECO: &[f64] = &[
-    -0.05328065158114557,
-    -0.10464551302436545,
-    -0.036211528292942816,
+    0.03481957260969185,
+    -0.18599722774742422,
+    -0.05901327009183074,
 ];
-const GOLDEN_DECO_LOGLIK: &[f64] = &[-2.2831901919538913, -3.7586606055778677, -1.896095909765855];
+const GOLDEN_DECO_LOGLIK: &[f64] = &[-2.2843768890798684, -3.654894485613948, -1.897177036587538];
 // `ewridge`, `ewridge_std` and `lasso` re-frozen 2026-09-14 (docs/PLAN.md
 // task 81): the target is null on row 31, and under `target_gaps =
 // "own_rows"` its Gram no longer learns that row's features, so rows 45 and

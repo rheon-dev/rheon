@@ -1402,6 +1402,7 @@ fn deco_cfg() -> DecoCfg {
         beta: None,
         blocks: Vec::new(),
         min_weight: 3.0,
+        level: rheon_core::DecoLevel::Ratio,
     }
 }
 

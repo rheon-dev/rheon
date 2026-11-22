@@ -80,7 +80,7 @@ dataset = ""
 
 [group."truth_recovery.deco_level"]
 tests = [
-    "tests/test_truth_recovery.py::test_deco_level_settles_low_and_moves_at_its_half_life[50 seeds]",
+    "tests/test_truth_recovery.py::test_deco_level_settles_at_the_truth_and_moves_at_its_half_life[50 seeds]",
 ]
 oracles = {}
 dataset = ""

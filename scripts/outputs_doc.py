@@ -116,9 +116,12 @@ MEANING: dict[str, str] = {
     "forecast_<t>": "the variance of `<t>` `horizon - 1` rows past this one, from the same rows",
     "u": (
         "the equicorrelation this row alone implies"
-        " (Engle and Kelly's Lemma 2.3, from the standardized row)"
+        " (Engle and Kelly's eq. 20, from the standardized row; biased toward 0)"
     ),
-    "rho": "the block's equicorrelation level, the smoothed value `u` is folded into",
+    "rho": (
+        "the block's equicorrelation level: the ratio of the weighted means of `u`'s numerator"
+        " and denominator"
+    ),
     "stat": (
         "the test statistic, this row included, for the span, the pair of windows or the "
         "monitored row"
@@ -206,7 +209,7 @@ ALSO_NULL: dict[str, str] = {
         "while withheld, where fewer than two of the block's columns have a positive variance "
         "before the row, and where every standardized value is 0"
     ),
-    "rho": "while withheld, and until the row after the first `u`",
+    "rho": "while withheld, and until the row after the first one the standardizer is warm for",
     "stat": "while withheld, and on every row but those a test is due on",
     "crit": "where `stat` is",
     "flag": "where `stat` is",
@@ -349,8 +352,9 @@ SHARED_FIELDS: list[tuple[str, str, str]] = [
         "`not_identified`. That order is their precedence, so the first that applies is the one "
         "named. `below_warm_rows` is the model's own warm-up, the rows `kmeans`, `hmm` and "
         "`bocpd` hold to seed themselves from, the rows `garch` buffers for a target's start, "
-        "and, in a `kalman` fit standardized with no intercept, the rows before any of a "
-        "target's coefficients is sized. `ill_conditioned` is an `ewridge` "
+        "in a `kalman` fit standardized with no intercept, the rows before any of a "
+        "target's coefficients is sized, and the rows before `deco`'s standardizer holds more "
+        "than five effective rows, while it has no level. `ill_conditioned` is an `ewridge` "
         "fit whose normal equations are too nearly singular for a solve to keep a digit. "
         "`unstable_rate` is an `sgd` target whose learning rate is past its stability bound: its "
         "recent steps' gains have a mean square above twice their mean, so each step grows its "

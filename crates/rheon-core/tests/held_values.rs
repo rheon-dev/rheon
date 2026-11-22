@@ -1622,6 +1622,7 @@ fn a_row_of_no_weight_moves_nothing_without_a_target() {
             beta: None,
             blocks: Vec::new(),
             min_weight: 3.0,
+            level: rheon_core::DecoLevel::Ratio,
         })
         .unwrap()
     });
@@ -2316,6 +2317,7 @@ fn deco_reports_the_same_at_every_level() {
                 beta: None,
                 blocks: Vec::new(),
                 min_weight: 3.0,
+                level: rheon_core::DecoLevel::Ratio,
             })
             .unwrap()
         },
