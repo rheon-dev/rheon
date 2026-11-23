@@ -190,13 +190,13 @@ def pca(
         pc = rp.spec.pca("pc", features=cols, half_life=float("inf"), n_components=2)
         out = pl.scan_parquet("five.parquet").rheon.fit_predict([pc]).collect().unnest("pc")
         last = out.row(-1, named=True)
-        print("planted share: 0.92")
+        print("planted share: 0.84")
         print(f"found share: {last['pc0_share']:.2f}")
 
     .. code-block:: text
 
-        planted share: 0.92
-        found share: 0.92
+        planted share: 0.84
+        found share: 0.84
 
     .. rubric:: See also
 
