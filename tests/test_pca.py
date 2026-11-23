@@ -324,7 +324,7 @@ def test_targets_are_refused():
 
 
 def test_the_state_is_held_to_its_cap_at_the_call():
-    """``8 (2 + 3k + q k + q)`` bytes: 2,000 features and 12 components (13
+    """``8 (3 + 3k + q k + q)`` bytes: 2,000 features and 12 components (13
     kept) fit the default 256 KB; 13 components do not, until the cap is
     raised."""
     cols = [f"c{i}" for i in range(2000)]
@@ -333,7 +333,7 @@ def test_the_state_is_held_to_its_cap_at_the_call():
         return rp.ModelBank([rp.spec.pca("p", features=cols, half_life=INF, **kw)])
 
     build(n_components=12)
-    with pytest.raises(Exception, match="272128 bytes"):
+    with pytest.raises(Exception, match="272136 bytes"):
         build(n_components=13)
     build(n_components=13, max_state_bytes=300_000)
 

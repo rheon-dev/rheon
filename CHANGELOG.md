@@ -538,7 +538,7 @@ model that only the new build has is listed as an addition and passes.
 
 - **`pca`, principal components learned one row at a time** (task 505):
   the top `n_components` directions of the decayed covariance of the
-  features, in state of `8 (2 + 3k + qk + q)` bytes for `k` features and
+  features, in state of `8 (3 + 3k + qk + q)` bytes for `k` features and
   `q` kept directions (one more than written), checked against
   `max_state_bytes` when the spec is built. Three methods: `"svd"`, the
   incremental SVD (scikit-learn's `IncrementalPCA` update, a row at a time,
@@ -726,6 +726,18 @@ model that only the new build has is listed as an addition and passes.
   whole. Nothing later can join it, so it now gives its value. A window
   reaching past the last row stays null. A formula target of a spec learns
   those rows' targets, which it did not. Only those windows' values move.
+
+- **`pca`'s rank rule counts the rows that span the data** (Fable's W13
+  review, C2). A neighbor of no variance is told apart once the rows could
+  have given it some: `m` rows span at most `m - 1` dimensions. The rule
+  read Kish's effective count for `m`, which under a decay stops near `(1 +
+  λ)/(1 − λ)`, so at a half-life of 0.9 rows (2.7) the second of two
+  components on data of exact rank 2 was never written; now it is written
+  from the fourth row on wherever its gap to the first is told apart. The
+  rank the rows span does not shrink with their weights: the rule counts
+  the rows of positive weight, up to one more than the kept directions, 8
+  bytes more state. Without a decay and at unit weights the two counts are
+  one. Moves: `pca.pc*`, `pca.withheld_reason`.
 
 - **`pca` under `"oja"` writes a component only where its rate has found
   it** (Fable's W13 review, C1). The eigengap test is of two eigenvalue
