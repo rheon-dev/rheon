@@ -718,6 +718,16 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **`sgd`'s Huber refit on the row its scaler's warm-up completes is
+  projected with the scaler's means** (review 2026-11-23, REG-6). Under
+  `standardize=True` and a constraint, a refit projects its fit in the
+  metric of the standardized coordinates, and the intercept takes
+  `Σ m_i (β_i − β'_i)` of the slopes' move. The map of means and scales it
+  reads is formed only on a row that starts in the caller's units, so on
+  the switching row it was still `m = 0`, `s = 1`: the intercept kept the
+  unprojected value (off by 1.46 on a 60-row test stream). It is now the
+  scaler's on that row. Moves: `sgd.*`.
+
 - **`ewridge`'s residual variance stays finite where a weighted square of
   a residual is past the largest double** (review 2026-11-23, REG-10). At
   a weight of `1e100` and a residual of `2·10^104` the square is in range

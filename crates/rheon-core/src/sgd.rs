@@ -2817,6 +2817,17 @@ impl OnlineModel for Sgd {
             && self.warmup.learn(weight)
         {
             self.beta = unscaled(&self.beta, sc, self.cfg.fit_intercept);
+            // The map a refit on this row projects with
+            // ([`Self::project_mapped`]): a row that starts held forms it
+            // as it standardizes, and this one did not, so it is the
+            // scaler's as it stands. It was the `[0]`, `[1]` the buffers
+            // start at, and the intercept took none of the slopes' move
+            // (review 2026-11-23, REG-6).
+            let scales = scales_of(sc, off);
+            for i in off..scales.len() {
+                self.mbuf[i] = sc.mean(i);
+                self.sbuf[i] = scales[i];
+            }
         }
         // The refit's buffers take the row, a learned one or an ageing, and
         // a target whose buffer it fills is refit, after the row's own

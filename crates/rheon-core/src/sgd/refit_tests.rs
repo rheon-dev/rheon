@@ -535,3 +535,56 @@ fn a_gap_past_the_decays_underflow_with_a_refit_open() {
         assert_eq!(bits(&whole), bits(&parts), "cut {cut}");
     }
 }
+
+/// A refit that fires on the row the scaler's warm-up completes is
+/// projected with the scaler's means (review 2026-11-23, REG-6): the row's
+/// map of means and scales is formed only on a row that starts held in the
+/// caller's units, so on the switching row it was still the `[0]`, `[1]`
+/// the buffers start at, and the intercept took none of the slopes' move
+/// from the projection. Against the same stream without the constraint,
+/// whose refit is the same fit (it reads only the rows buffered): the
+/// slopes are clipped to the box, and the intercept is the unconstrained
+/// one plus `Σ m_i (β_i − β'_i)`, at the scaler's means.
+#[test]
+fn a_refit_on_the_switching_row_is_projected_with_the_scalers_means() {
+    let data = rows(60, false);
+    let probe = cfg(10_000, true, LearningRate::Constant, Decay::Lam(1.0));
+    let mut m = Sgd::new(probe).unwrap();
+    let switch = data
+        .iter()
+        .position(|(x, y, w)| {
+            m.step(x, y, 1.0, *w);
+            m.warmup().switched()
+        })
+        .expect("the warm-up completes");
+    // Target 1 learns every row: its buffer fills on the switching row.
+    let at = switch as u32 + 1;
+    let free = cfg(at, true, LearningRate::Constant, Decay::Lam(1.0));
+    let mut boxed = free.clone();
+    boxed.constraint = Some(Constraint {
+        lo: vec![0.0, 0.0],
+        hi: vec![0.5, 0.5],
+        sum: None,
+    });
+    let (mut u, mut c) = (Sgd::new(free).unwrap(), Sgd::new(boxed).unwrap());
+    run(&mut u, &data[..=switch]);
+    run(&mut c, &data[..=switch]);
+    assert!(!u.refit[1].open() && !c.refit[1].open(), "the refit ran");
+    assert!(!u.scaler_warming() && !c.scaler_warming());
+    let (bu, bc) = (&u.coefficients()[1], &c.coefficients()[1]);
+    let sc = c.scaler.as_ref().unwrap();
+    let mut want0 = bu[0];
+    for i in 1..3 {
+        assert_eq!(bc[i], bu[i].clamp(0.0, 0.5), "slope {i}: {bu:?} {bc:?}");
+        want0 += sc.mean(i) * (bu[i] - bc[i]);
+    }
+    assert!(
+        bu[1..].iter().any(|v| !(0.0..=0.5).contains(v)),
+        "the box binds: {bu:?}"
+    );
+    assert!(
+        (bc[0] - want0).abs() <= 1e-9 * want0.abs(),
+        "intercept {} against {want0}",
+        bc[0]
+    );
+}
