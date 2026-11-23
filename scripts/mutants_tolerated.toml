@@ -185,7 +185,7 @@ most 2.3e-14, relatively"""
 file = "crates/rheon-core/src/constraint.rs"
 function = "Constraint::project_with"
 mutation = "replace > with >="
-line_has = "let j = breaks.partition_point(|&t| g(t) > 0.0);"
+line_has = "        let j = breaks.partition_point(|&t| g(t) > 0.0);"
 kind = "rounding"
 why = """the two part only where `g` is exactly 0 at a breakpoint, where both \
 segments give the same projection in exact arithmetic; on a grid of 400,000 \

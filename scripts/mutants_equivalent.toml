@@ -150,9 +150,9 @@ why = """both mutants are inside the second argument, which \
 file = "crates/rheon-core/src/lasso.rs"
 function = "Lasso::solve_in"
 mutation = "replace > with >="
-line_has = "if s[i] > 0.0 && p.is_finite() {"
+line_has = "if s[i] > 0.0 && start.is_finite() {"
 why = """it adds the features with no scale, whose warm start is then \
-`p * 0`, the 0 they start at anyway"""
+`prev * 0`, the 0 they start at anyway"""
 
 [[equivalent]]
 file = "crates/rheon-core/src/lasso.rs"
