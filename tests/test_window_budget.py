@@ -8,9 +8,9 @@ names what to do past a budget in MiB, on the user's decision of
 from __future__ import annotations
 
 import inspect
-import re
 import math
 import pickle
+import re
 
 import numpy as np
 import polars as pl

@@ -87,8 +87,23 @@ fn prepass_against_the_ring(spec: &Spec, df: &DataFrame, size: usize) -> Option<
                 // The bank without the pre-pass learned part of the piece, and
                 // says so where the pre-pass refused it whole: past that
                 // clause the two say the same.
+                // The pre-pass names the row that would take the window past
+                // its budget, and that none of the piece was learned.
+                let a = a.to_string();
+                assert!(a.contains("at the chunk's row "), "{a}");
+                let a = match (a.find(" at the chunk's row "), a.find(", counted from 0")) {
+                    (Some(i), Some(j)) if i < j => {
+                        format!("{}{}", &a[..i], &a[j + ", counted from 0".len()..])
+                    }
+                    _ => a,
+                }
+                .replace("would hold ", "hold ")
+                .replace(
+                    "the bank refused the chunk and learned none of it",
+                    "the bank refused the chunk",
+                );
                 let (a, b) = (
-                    a.to_string(),
+                    a,
                     b.to_string()
                         .replace(
                             "the bank stopped after learning part of the chunk",
