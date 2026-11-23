@@ -30,6 +30,7 @@ import scipy.linalg
 import scipy.stats
 from sklearn.decomposition import PCA, IncrementalPCA
 
+import ledger
 from rheon import polars as rp
 
 TIER = "mixed"
@@ -180,27 +181,45 @@ CONVERGENCE = {
 }
 
 
-@pytest.mark.extended(reason="a second or more: 40 runs of 20,000 rows against PCA")
+SEEDS = range(10)
+SPECTRUM = [9.0, 4.0, 1.0, 0.6, 0.4, 0.2]
+
+
+def _loadings(method: str, half_life: float, seed: int) -> tuple[np.ndarray, np.ndarray]:
+    """The stream of ``seed`` and the first two loadings ``pca`` reads before
+    its last row."""
+    k = len(SPECTRUM)
+    x = stream(20_000, SPECTRUM, seed)
+    s = rp.spec.pca(
+        "p",
+        features=[f"x{i}" for i in range(k)],
+        n_components=2,
+        method=method,
+        half_life=half_life,
+    )
+    out = rp.ModelBank([s]).fit_predict(frame(x)).unnest("p")
+    got = emitted(out, 19_999, 2, k)
+    assert got is not None, (method, seed)
+    return x, got[0]
+
+
+ledger.guard(
+    "streampca_convergence",
+    lambda: [_loadings(m, h, seed)[1] for (m, h) in CONVERGENCE for seed in SEEDS],
+    oracles=["scikit-learn", "scipy"],
+)
+
+
+@pytest.mark.oracle_grid(reason="ten seeds of 20,000 rows for each method and half-life")
 @pytest.mark.parametrize(("method", "half_life"), list(CONVERGENCE))
 def test_the_stochastic_methods_converge_to_pca(method, half_life):
-    k = 6
-    worst = 0.0
-    for seed in range(10):
-        x = stream(20_000, [9.0, 4.0, 1.0, 0.6, 0.4, 0.2], seed)
-        s = rp.spec.pca(
-            "p",
-            features=[f"x{i}" for i in range(k)],
-            n_components=2,
-            method=method,
-            half_life=half_life,
-        )
-        out = rp.ModelBank([s]).fit_predict(frame(x)).unnest("p")
-        got = emitted(out, 19_999, 2, k)
-        assert got is not None, (method, seed)
-        load, _, _ = got
+    angles = []
+    for seed in SEEDS:
+        x, load = _loadings(method, half_life, seed)
         age = np.arange(19_998, -1, -1)
         u = np.ones(19_999) if half_life == INF else 0.5 ** (age / half_life)
         pca = weighted_pca(x[:19_999], u)
-        a = float(scipy.linalg.subspace_angles(load.T, pca.components_[:2].T).max())
-        worst = max(worst, a)
-    assert worst < CONVERGENCE[(method, half_life)], worst
+        angles.append(float(scipy.linalg.subspace_angles(load.T, pca.components_[:2].T).max()))
+    hl = "inf" if half_life == INF else f"{half_life:g}"
+    ledger.record("streampca_convergence", f"{method}_hl{hl}_angle", angles)
+    assert max(angles) < CONVERGENCE[(method, half_life)], max(angles)

@@ -279,7 +279,8 @@ model that only the new build has is listed as an addition and passes.
   its eigenvalue with a neighbor's passes at 1% at Kish's effective size,
   with a new `withheld_reason`, `"not_separated"`: every model's
   `withheld_reason` enum gains the category after the six before it, and
-  no value moves. Checked against
+  no value moves: the release comparison reads the new category as the
+  field's dtype moving. Moves: `*.withheld_reason`. Checked against
   `IncrementalPCA` (7.0e-13 rad), `PCA` and `eigh` on the weighted rows
   (1.4e-14 rad), and, for the stochastic two, their definitions and their
   convergence to `PCA`. No window: none of the three can remove a row.
