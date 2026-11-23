@@ -412,7 +412,15 @@ impl OnlineModel for Holt {
                     g
                 }
                 _ => {
-                    self.level[j] = (held * p + weight * yj) * rh;
+                    let mean = (held * p + weight * yj) * rh;
+                    // `held·p` or `w·y` past the largest double, where the
+                    // mean is in range: the mean of shares, `held/(held +
+                    // w)` and `w/(held + w)` each in [0, 1] (REG-4).
+                    self.level[j] = if mean.is_finite() {
+                        mean
+                    } else {
+                        (held * rh) * p + gain * yj
+                    };
                     gain
                 }
             };
@@ -439,7 +447,7 @@ impl OnlineModel for Holt {
                     let slope = (level - prev_level) * ri;
                     (held_b * trend + weight * slope) * rb
                 };
-                self.trend[j] = match (line, textbook) {
+                let next = match (line, textbook) {
                     // Both gains are on offer: both trends are formed and
                     // the larger gain's is kept by a select, not a branch.
                     // Which gain is the larger turns on the row's clock
@@ -459,6 +467,32 @@ impl OnlineModel for Holt {
                     (None, true) => by_textbook(),
                     (None, false) => trend,
                 };
+                // A trend past the largest double: `w·slope` alone past it,
+                // which the mean of shares forms in range; or the slope
+                // itself, a move over a clock step so small that it is not
+                // a double (`y = 0, 10` a step of `1e-308` apart), read as
+                // a step of no clock, as one whose reciprocal is infinite
+                // is, so the trend holds. An infinite trend made the level
+                // NaN on the next row, for good (review 2026-11-23, REG-4).
+                // A finite trend takes neither branch: its bits are as
+                // before.
+                let (next, clocked) = if next.is_finite() {
+                    (next, clocked)
+                } else {
+                    let by_textbook = match (line, textbook) {
+                        (Some((_, h)), true) => !(h > weight * rb * level_gain * ri),
+                        (None, true) => true,
+                        _ => false,
+                    };
+                    let slope = (level - prev_level) * ri;
+                    let shares = (held_b * rb) * trend + (weight * rb) * slope;
+                    if by_textbook && shares.is_finite() {
+                        (shares, clocked)
+                    } else {
+                        (trend, false)
+                    }
+                };
+                self.trend[j] = next;
                 if clocked {
                     self.w_trend[j] = held_b + weight;
                 }
@@ -1883,6 +1917,37 @@ mod tests {
                 );
             }
             assert!((last - 4.99).abs() < 1e-2, "{w0:e}, {d1:e}: {last}");
+        }
+    }
+
+    /// A clock step small enough that the slope it measures is past the
+    /// largest double leaves the fit finite (review 2026-11-23, REG-4):
+    /// at `y = 0, 10, 20` and a step of `1e-308`, `1/s` is finite, so the
+    /// step was read as clock, and the slope `5·10^308` made the trend
+    /// infinite and the level NaN for good. Such a step is read as one of
+    /// no clock, as one whose reciprocal is infinite is. And a slope
+    /// within range at a weight past it (`s = 1e-200`, a rise of `1e50`,
+    /// `w = 1e100`) is formed without `w · slope` overflowing.
+    #[test]
+    fn a_slope_past_the_largest_double_leaves_the_fit_finite() {
+        for (d1, rise, w) in [
+            (1e-308, 10.0, 1.0),
+            (1e-200, 1e50, 1e100),
+            (1e-300, 1e10, 1.0),
+        ] {
+            for hl in [10.0, f64::INFINITY] {
+                let mut m = Holt::new(cfg(hl, hl)).unwrap();
+                m.step(&[], &[Some(0.0)], 0.0, w);
+                m.step(&[], &[Some(rise)], d1, w);
+                for i in 2..50 {
+                    m.step(&[], &[Some(rise * i as f64)], 1.0, w);
+                    assert!(
+                        m.level()[0].is_finite() && m.trend()[0].is_finite(),
+                        "{d1:e}, {rise:e}, {w:e}, {hl}: row {i}, {:?}",
+                        m.coefficients()
+                    );
+                }
+            }
         }
     }
 

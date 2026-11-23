@@ -718,6 +718,18 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **`holt` keeps a finite level and trend across a clock step too small
+  for its slope** (review 2026-11-23, REG-4). A step was read as clock
+  wherever its reciprocal is finite, so at `y = 0, 10` a step of `1e-308`
+  apart measured a slope of `5·10^308`, past the largest double. The trend
+  was infinite, and the level NaN for good from the next row. Such a step
+  is now read as one of no clock, as a step whose reciprocal is infinite
+  already was: the level moves and the trend holds. A trend or a level
+  whose weighted mean is in range while `w·slope` or `held·pred` is not
+  (a step of `1e-200`, a rise of `1e50`, a weight of `1e100`) is formed as
+  the mean of shares. A finite trend and level keep their bits.
+  Moves: `holt.*`.
+
 - **`holt`'s line fit keeps its slope at weights near the ends of the
   doubles** (review 2026-11-23, REG-5). The spread of the ages took the
   term `S0·w·ā²/S0'` in that order, so `S0·w` underflowed to 0 at weights
