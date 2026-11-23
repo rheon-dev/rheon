@@ -189,14 +189,14 @@ pub use hasher::{FixedHasher, FixedState};
 pub use hawkes::{Hawkes, HawkesCfg, MAX_STATE_BYTES as HAWKES_MAX_STATE_BYTES};
 pub use health::FeatureHealth;
 pub use hmm::{EwFactor, Hmm, HmmCfg, Stabilized};
-pub use holt::{Holt, HoltCfg};
+pub use holt::{HOLT_MAX_HORIZONS, Holt, HoltCfg};
 pub use huber_refit::{
     BIN_REFIT_ROWS_PER_BIN, DEFAULT_REFIT_MAX_FEATURES, DEFAULT_REFIT_ROWS, MAX_REFIT_ROWS,
     REFIT_PASSES, REFIT_RUNS_PER_ROW, RefitStatus, default_bin_refit_rows, default_refit_rows,
     refit_reservation,
 };
 pub use influence::Influence;
-pub use kalman::{CovarianceForm, Kalman, KalmanCfg};
+pub use kalman::{CovarianceForm, KALMAN_MAX_HORIZONS, Kalman, KalmanCfg};
 pub use lasso::{Lasso, LassoCfg};
 pub use margbins::{BinCfg, BinRule, BinStat};
 pub(crate) use margbins::{MarginalBins, edges_from};

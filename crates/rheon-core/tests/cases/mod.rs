@@ -444,6 +444,7 @@ fn lasso_cfg() -> LassoCfg {
 
 fn kalman_cfg() -> KalmanCfg {
     KalmanCfg {
+        horizons: Vec::new(),
         min_weight_holds_learning: true,
         noise_units: false,
         n_features: K,
@@ -1679,6 +1680,7 @@ pub fn all() -> Vec<Case> {
             "Holt",
             Holt,
             Holt::new(HoltCfg {
+                horizons: Vec::new(),
                 n_targets: 2,
                 level_half_life: H,
                 trend_half_life: 4.0 * H,
@@ -1697,6 +1699,7 @@ pub fn all() -> Vec<Case> {
             "Holt",
             Holt,
             Holt::new(HoltCfg {
+                horizons: Vec::new(),
                 n_targets: 2,
                 level_half_life: f64::INFINITY,
                 trend_half_life: f64::INFINITY,

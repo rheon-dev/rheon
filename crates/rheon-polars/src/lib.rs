@@ -121,7 +121,8 @@ pub use span::{Span, SpanList, format_duration, parse_duration, seconds_of};
 pub use spec::{
     CLOCK_FIELDS, CLOCK_RATES, ClockScale, Compare, CountOrAuto, FloatOrList, GramThreads, Horizon,
     INIT_WORDS, ModelKind, Num, RENAMED, RENAMED_VALUES, RidgeScale, SessionGapSpec, ShardSpec,
-    Spec, name_renamed, spec_words_refusal, word_refusal_body, words_body, words_refusal,
+    SpanHorizon, Spec, name_renamed, spec_words_refusal, word_refusal_body, words_body,
+    words_refusal,
 };
 pub use stream::{
     AnyModel, ChunkOut, LastRow, Stream, StreamState, build_models, combo_labels, marginal_shards,

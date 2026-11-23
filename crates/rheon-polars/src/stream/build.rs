@@ -298,8 +298,14 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
             revert_half_life,
             standardize,
             covariance_form,
+            horizons,
         } => {
             let cfg = KalmanCfg {
+                horizons: horizons
+                    .iter()
+                    .flatten()
+                    .map(|h| h.span().value())
+                    .collect(),
                 n_features: spec.k(),
                 n_targets: spec.m(),
                 fit_intercept: spec.fit_intercept,
@@ -469,6 +475,7 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         ModelKind::Holt {
             trend_half_life,
             trend,
+            horizons,
         } => {
             // The level's half-life is the spec's own, so `half_life` means
             // the same thing here as it does for every other model; it had a
@@ -482,6 +489,11 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
                 Decay::Lam(l) => -std::f64::consts::LN_2 / l.ln(),
             };
             let cfg = HoltCfg {
+                horizons: horizons
+                    .iter()
+                    .flatten()
+                    .map(|h| h.span().value())
+                    .collect(),
                 n_targets: spec.m(),
                 level_half_life: level,
                 trend_half_life: trend_half_life.as_ref().map_or(level * 4.0, Span::value),

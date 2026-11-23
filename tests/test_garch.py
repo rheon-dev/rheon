@@ -223,16 +223,12 @@ def test_a_weight_scales_nothing_but_the_weight():
 def _definition(vol: str, theta: list[float], s: float, h: int) -> list[float]:
     """The variances ``f_1 .. f_h`` from a row whose variance is ``s``, by the
     recursion written out: each later row's ``e²`` read as its variance and
-    GJR's asymmetric term as half of it, the terms taken in the order the
-    row's own variance takes them (``ω + α e² + γ a + β s``)."""
+    GJR's asymmetric term as half of it, ``ω + P f`` with the persistence
+    ``P = α + γ/2 + β`` formed once."""
+    p = theta[1] + 0.5 * theta[2] + theta[3] if vol == "gjr" else theta[1] + theta[2]
     f = [s]
     for _ in range(h - 1):
-        v = theta[0]
-        v += theta[1] * f[-1]
-        if vol == "gjr":
-            v += theta[2] * (0.5 * f[-1])
-        v += theta[-1] * f[-1]
-        f.append(v)
+        f.append(theta[0] + p * f[-1])
     return f
 
 

@@ -69,6 +69,7 @@ fn lab(k: usize, n: usize, seed: u64) -> Lab {
 /// (infinite: a fixed truth), the moments' half-life of 20 rows.
 fn filter(k: usize, coef_hl: f64) -> Kalman {
     Kalman::new(KalmanCfg {
+        horizons: Vec::new(),
         min_weight_holds_learning: false,
         noise_units: true,
         n_features: k,

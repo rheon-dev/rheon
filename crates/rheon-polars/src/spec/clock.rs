@@ -369,10 +369,14 @@ impl Spec {
             ModelKind::Kalman {
                 coef_half_life,
                 revert_half_life,
+                horizons,
                 ..
             } => {
                 put_list(&mut out, "coef_half_life", coef_half_life.as_ref());
                 put_list(&mut out, "revert_half_life", revert_half_life.as_ref());
+                for h in horizons.iter().flatten() {
+                    put(&mut out, "horizons", Some(h.span()));
+                }
             }
             ModelKind::Huber {
                 solve_every,
@@ -436,9 +440,14 @@ impl Spec {
                 put(&mut out, "snapshot_every", snapshot_every.as_ref());
             }
             ModelKind::Holt {
-                trend_half_life, ..
+                trend_half_life,
+                horizons,
+                ..
             } => {
                 put(&mut out, "trend_half_life", trend_half_life.as_ref());
+                for h in horizons.iter().flatten() {
+                    put(&mut out, "horizons", Some(h.span()));
+                }
             }
             ModelKind::Hawkes {
                 window_size,

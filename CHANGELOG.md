@@ -340,9 +340,27 @@ model that only the new build has is listed as an addition and passes.
   `max_horizon_work`, 2^20 a target a row by default, refused at the spec
   with the work it would take. Horizons count rows: the recursion steps once
   a learned row, so a span of the clock has no forecast. No state is added.
-  GARCH's and GJR's forecasts now take their terms in the row's own order,
-  `ω + α f + γ f/2 + β f`, which moved them by at most 4 units in the last
-  place; a state saved with `horizon = h` loads as `horizons = [h]`.
+  The forecast's arithmetic is the single horizon's, `ω + P f` with `P = α
+  + γ/2 + β`, so its values are unchanged to the bit; a state saved with
+  `horizon = h` loads as `horizons = [h]` and goes on to the bit.
+- **`holt` and `kalman` forecast at horizons on the clock** (task 559):
+  `horizons`, spans of the clock past the row (numbers of clock units, rows
+  without a clock, or durations such as `"30d"`; a dict names them), give per
+  target and horizon the forecast `forecast_<h>_<t>` and its integral over
+  the span `forecast_sum_<h>_<t>`, read before the row from the rows before
+  it; at a span of 0 the forecast is `pred_<t>`, to the bit. `holt`'s is
+  `l + b (s + Δ)` and `Δ (l + b (s + Δ/2))`, held to `statsmodels`' `Holt`
+  forecast and scipy's integral of it; it has no forecast variance, since
+  ETS's counts the innovations of the rows a span holds under fixed gains,
+  which holds here only on evenly spaced rows of equal weight once the gains
+  stop moving (it matched within 0.7% there). `kalman`'s is the prediction a
+  row of this row's features would get `Δ` past the row with no row
+  between, its integral, and its variance `forecast_var_<h>_<t>` from the
+  covariance carried through the transition and the drift of the clock
+  since the last observation plus `Δ`; against `filterpy`'s filter on the
+  same rows the three agree to 1.4e-15. No state is added; a configuration
+  without horizons is written as before. The Python `kalman` builder moves
+  to a module of its own (`_spec.py` passed its 250 KB cap).
 - **`hawkes`, a self-exciting point process** (task 498): each target a
   node, a value above 0 on a row an event of that mark; exponential kernels
   at the given `kernel_decays`. Each row reports every node's

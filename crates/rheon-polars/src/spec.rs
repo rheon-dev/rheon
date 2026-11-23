@@ -278,6 +278,10 @@ pub enum ModelKind {
             skip_serializing_if = "rheon_core::CovarianceForm::is_covariance"
         )]
         covariance_form: rheon_core::CovarianceForm,
+        /// The forecasts' horizons, each a span of the clock past the row,
+        /// as `holt`'s are. Absent reports none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        horizons: Option<Vec<SpanHorizon>>,
     },
     /// Huber regression (docs/PLAN.md §4.5).
     Huber {
@@ -660,6 +664,12 @@ pub enum ModelKind {
         /// absent: the trend is on.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         trend: Option<bool>,
+        /// The forecasts' horizons, each a span of the clock past the row
+        /// (a number of clock units, rows without a clock, or a duration),
+        /// labelled `h<number>` or by the duration as written, or a `[name,
+        /// span]` pair labelled by its name. Absent reports none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        horizons: Option<Vec<SpanHorizon>>,
     },
     Rls {
         /// Prior strength: `A0 = delta I`, i.e. `P0 = I / delta`, the
@@ -1509,6 +1519,56 @@ pub enum ModelKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_state_bytes: Option<u64>,
     },
+}
+
+/// One forecast horizon on the clock (`holt`'s `horizons`): a span, its
+/// fields labelled `h<number>` or by the duration as written, or a `[name,
+/// span]` pair labelled by the name.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SpanHorizon {
+    Span(Span),
+    Named(String, Span),
+}
+
+impl SpanHorizon {
+    pub fn span(&self) -> &Span {
+        match self {
+            SpanHorizon::Span(s) | SpanHorizon::Named(_, s) => s,
+        }
+    }
+
+    /// The label its fields carry: `h<number>`, the duration as written,
+    /// or its name.
+    pub fn label(&self) -> String {
+        match self {
+            SpanHorizon::Span(Span::Units(v)) => format!("h{}", num_label(*v)),
+            SpanHorizon::Span(s) => s.label(),
+            SpanHorizon::Named(name, _) => name.clone(),
+        }
+    }
+}
+
+/// The labels of a list of horizons checked: each non-empty, none beginning
+/// with `sum` (which `<quantity>_sum_<label>` would confuse) and none given
+/// twice. `who` names the model in the message.
+pub fn check_horizon_labels(who: &str, labels: &[String]) -> Result<(), String> {
+    for (i, l) in labels.iter().enumerate() {
+        if l.is_empty() || l.starts_with("sum") {
+            return Err(format!(
+                "{who}: a horizon's name must be non-empty and not begin with \"sum\", but one \
+                 is {l:?}. It names a field and the sum's field beside it, which a name \
+                 beginning with \"sum\" would confuse. Rename it."
+            ));
+        }
+        if labels[..i].contains(l) {
+            return Err(format!(
+                "{who}: two horizons are labeled {l:?}. Each labels its fields, so each label is \
+                 given once. Rename one, or leave out the second."
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// One forecast horizon of a spec (`garch`'s `horizons`): a count of rows,
@@ -2658,6 +2718,34 @@ impl Spec {
 
     pub fn m(&self) -> usize {
         self.targets.len()
+    }
+
+    /// The labels of a regression's forecasts at horizons (`holt`,
+    /// `kalman`), in order; empty for every other spec.
+    pub fn forecast_labels(&self) -> Vec<String> {
+        match &self.model {
+            ModelKind::Holt { horizons, .. } | ModelKind::Kalman { horizons, .. } => {
+                horizons.iter().flatten().map(SpanHorizon::label).collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// What a regression reports at each horizon, in its slot order: the
+    /// forecast and its integral (`holt`), and its variance (`kalman`).
+    pub fn forecast_kinds(&self) -> &'static [&'static str] {
+        match &self.model {
+            ModelKind::Holt { .. } => &["forecast", "forecast_sum"],
+            ModelKind::Kalman { .. } => &["forecast", "forecast_sum", "forecast_var"],
+            _ => &[],
+        }
+    }
+
+    /// The slots a regression's forecasts take after its predictions, per
+    /// model instance: each target's [`Self::forecast_kinds`] at each
+    /// horizon.
+    pub fn forecast_slots(&self) -> usize {
+        self.m() * self.forecast_kinds().len() * self.forecast_labels().len()
     }
 
     /// Decay values, one per half-life grid entry (one model instance each).

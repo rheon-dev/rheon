@@ -7,7 +7,7 @@
 //! rows, this one's included: the variance of the `h`-row return.
 //!
 //! ```text
-//! garch, gjr   f_1 = s_t,  f_h = ω + α f + γ (f/2) + β f,   f = f_{h−1}   (γ = 0 for garch)
+//! garch, gjr   f_1 = s_t,  f_h = ω + P f_{h−1},  P = α + γ/2 + β   (γ = 0 for garch)
 //! egarch       f_h = exp(L_h) Π_{j=1}^{h−1} M(β^{j−1}),     L_1 = ln s_t,  L_h = ω + β L_{h−1}
 //!              M(c) = E e^{c g(z)} = e^{−cα√(2/π)} [e^{(A+B)²/2} Φ(A + B) + e^{(A−B)²/2} Φ(A − B)],
 //!              A = cα,  B = cγ,  g(z) = α (|z| − √(2/π)) + γ z
@@ -17,9 +17,9 @@
 //!
 //! Each later row's `e²` is read as its variance, and GJR's asymmetric term
 //! as half of it (its innovations are symmetric), as `arch`'s analytic
-//! forecast reads them; GARCH and GJR take the terms in the order the row's
-//! own variance does (`Filter::predict`), so `f_1` from the lags `(f, f/2,
-//! f)` is that arithmetic. EGARCH's is Nelson's (1991) closed form for
+//! forecast reads them, with the persistence `P` formed once, as the
+//! forecast of one horizon was before the horizons (so a state of then goes
+//! on to the bit). EGARCH's is Nelson's (1991) closed form for
 //! normal innovations: its log-variance is linear in the news terms
 //! `g(z)`, independent across rows, so the variance is the exponential of
 //! the log-variance's mean times the product of their moment generating
@@ -204,18 +204,18 @@ pub fn forecasts(
     let k = cfg.vol.k();
     match cfg.vol {
         GarchVol::Garch | GarchVol::Gjr => {
+            // the persistence `P = α + γ/2 + β` (γ = 0 for garch), formed
+            // once: each later row's `e²` read as its variance and GJR's
+            // asymmetric term as half of it
+            let persist = if k == 4 {
+                theta[1] + 0.5 * theta[2] + theta[3]
+            } else {
+                theta[1] + theta[2]
+            };
             let mut f = s;
             for h in 1..=hmax {
                 if h > 1 {
-                    // the row's variance from the lags (f, f/2, f): the
-                    // terms in `Filter::predict`'s order
-                    let mut v = theta[0];
-                    v += theta[1] * f;
-                    if k == 4 {
-                        v += theta[2] * (0.5 * f);
-                    }
-                    v += theta[k - 1] * f;
-                    f = v;
+                    f = theta[0] + persist * f;
                 }
                 let (a, e) = two_sum(hi, f);
                 hi = a;

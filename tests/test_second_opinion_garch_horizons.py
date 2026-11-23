@@ -53,13 +53,16 @@ def _bound(vol: str, h: int) -> float:
     """The gap allowed to `arch`'s forecast at horizon `h`, in units of the
     last place of `arch`'s value (and of the sum's). Measured 2026-11-23 on
     Linux x86-64, the largest over 79 rows (15 for FIGARCH) from row 2,050 to
-    2,599: GARCH 0, 1, 3, 6 and 9 at horizons 1, 2, 5, 22 and 100, GJR 0,
-    1, 2, 4 and 8, their sums at most 7; each step adds `arch`'s rounding of
-    `sqrt(f)²`, so the gap grows like the square root of the horizon, and the
-    bound is `2 √h + 2`, about twice the measured. FIGARCH 19, 15, 16, 26
-    and 20, its sums at most 19, flat in the horizon: `arch`'s 1,000-term dot
-    product is in BLAS's order, the bank's in the lags'; the bound is 64."""
-    return 64.0 if vol == "figarch" else 2.0 * math.sqrt(h) + 2.0
+    2,599: GARCH 0, 1, 4, 15 and 37 at horizons 1, 2, 5, 22 and 100, GJR 0,
+    2, 4, 13 and 32, their sums at most 30. The bank forms the persistence
+    `P = α + γ/2 + β` once and steps `ω + P f`, as the single horizon did,
+    where `arch` adds `ω`, `α f`, `γ f/2` and `β f` a step: `P`'s one
+    rounding is carried into every step, so the gap grows about linearly in
+    the horizon, and the bound is `2 + 0.75 h`, about twice the measured.
+    FIGARCH 19, 15, 16, 26 and 20, its sums at most 19, flat in the horizon:
+    `arch`'s 1,000-term dot product is in BLAS's order, the bank's in the
+    lags'; the bound is 64."""
+    return 64.0 if vol == "figarch" else 2.0 + 0.75 * h
 
 
 def _series(vol: str, n: int, seed: int) -> np.ndarray:

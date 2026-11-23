@@ -320,6 +320,7 @@ CASES: list[Case] = [
             share_p=True,
             revert_half_life=[INF, 200.0, 200.0, 200.0],
             standardize=False,
+            horizons=[0.0, 3.0],
         ),
     ),
     Case("kalman2", "kalman", full2(q=[0.0, 1e-4, 1e-4], covariance_form="square_root")),
@@ -346,7 +347,12 @@ CASES: list[Case] = [
     Case(
         "holt",
         "holt",
-        {**no_features(full(**CLOSE)), "targets": ["y"], "trend_half_life": 80.0},
+        {
+            **no_features(full(**CLOSE)),
+            "targets": ["y"],
+            "trend_half_life": 80.0,
+            "horizons": [1.0, 10.0],
+        },
     ),
     Case("holt2", "holt", {**no_features(full2()), "targets": ["y"], "trend": False}),
     Case(

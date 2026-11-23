@@ -4195,6 +4195,13 @@ fn run_instance(
             inst.model.get().predict_into(xs, &sc.ys, score_d, step);
         }
         let n_slots = step.pred.len();
+        // A regression's forecasts at horizons ride after its predictions
+        // (`holt`, `kalman`): the model's row inflation is one a prediction,
+        // so the forecasts' slots read none, and a held row's record keeps
+        // one a slot as every other part of it does.
+        if has_row_infl && sc.row_infl.len() < n_slots {
+            sc.row_infl.resize(n_slots, f64::NAN);
+        }
         // `ew_cov` has no targets; its slots are statistics, so every one
         // maps to "target 0" for the warmup check. Slot `s` belongs to target
         // `s / nc`; the passes below walk the slots in groups of `nc` rather

@@ -397,6 +397,7 @@ fn lasso() {
 /// form a state saved before it goes on in is held below too.
 fn kalman_cfg() -> KalmanCfg {
     KalmanCfg {
+        horizons: Vec::new(),
         min_weight_holds_learning: false,
         noise_units: true,
         n_features: K,
@@ -603,6 +604,7 @@ fn pa() {
 
 fn holt_cfg() -> HoltCfg {
     HoltCfg {
+        horizons: Vec::new(),
         n_targets: 2,
         level_half_life: HALFLIFE,
         trend_half_life: 4.0 * HALFLIFE,
@@ -2420,6 +2422,7 @@ fn fn_body<'a>(src: &'a str, signature: &str) -> Option<&'a str> {
 #[test]
 fn restoring_the_wrong_model_is_an_error_that_names_both() {
     let holt = Holt::new(HoltCfg {
+        horizons: Vec::new(),
         n_targets: 1,
         level_half_life: 10.0,
         trend_half_life: 40.0,

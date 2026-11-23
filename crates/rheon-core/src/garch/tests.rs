@@ -674,8 +674,8 @@ fn mgf_by_quadrature(alpha: f64, gamma: f64, c: f64) -> f64 {
 }
 
 /// The forecasts of a started series, read on the row with `predict`,
-/// against their definitions written out: GARCH's and GJR's recursion in
-/// the row's own order of terms, FIGARCH's weights over the forecasts and
+/// against their definitions written out: GARCH's and GJR's recursion `ω +
+/// P f`, FIGARCH's weights over the forecasts and
 /// the ring, EGARCH's log-variance and the product of `M`. GARCH, GJR and
 /// FIGARCH to the bit, EGARCH's `M` against its integral; horizon 1 is the
 /// row's variance itself, and each sum is the variances' to a rounding.
@@ -734,15 +734,14 @@ fn the_forecasts_are_their_definitions_written_out() {
                 }
             }
             _ => {
+                let p = if vol == GarchVol::Gjr {
+                    th[1] + 0.5 * th[2] + th[3]
+                } else {
+                    th[1] + th[2]
+                };
                 for _ in 1..30 {
                     let v = *f.last().unwrap();
-                    let mut x = th[0];
-                    x += th[1] * v;
-                    if vol == GarchVol::Gjr {
-                        x += th[2] * (0.5 * v);
-                    }
-                    x += th[if vol == GarchVol::Gjr { 3 } else { 2 }] * v;
-                    f.push(x);
+                    f.push(th[0] + p * v);
                 }
             }
         }

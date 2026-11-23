@@ -121,6 +121,16 @@ MEANING: dict[str, str] = {
         "the sum of the variances of `<t>` over the `h` rows from this one, this row's included: "
         "the variance of the `h`-row return"
     ),
+    "forecast_<h>_<t>": (
+        "the prediction of `<t>` a span `Δ` of the clock past this row, horizon `<h>` of "
+        "`horizons`, from the rows before it, a regression's at this row's features held; at "
+        "`Δ = 0` it is `pred_<t>`"
+    ),
+    "forecast_sum_<h>_<t>": "the integral of that prediction over the span from this row",
+    "forecast_var_<h>_<t>": (
+        "the variance of that prediction, as the filter would read it for a row at that clock "
+        "with no row between"
+    ),
     "u": (
         "the equicorrelation this row alone implies"
         " (Engle and Kelly's Lemma 2.3, from the standardized row)"
@@ -210,6 +220,9 @@ ALSO_NULL: dict[str, str] = {
     "std_resid_<t>": "where the variance is null, and where `<t>` is",
     "variance_<h>_<t>": "where the variance is null",
     "variance_sum_<h>_<t>": "where the variance is null",
+    "forecast_<h>_<t>": "where `pred_<t>` is",
+    "forecast_sum_<h>_<t>": "where `pred_<t>` is",
+    "forecast_var_<h>_<t>": "where `pred_<t>` is, and before there is a noise",
     "u": (
         "while withheld, where fewer than two of the block's columns have a positive variance "
         "before the row, and where every standardized value is 0"
@@ -660,7 +673,10 @@ def stem(field: str, targets: tuple[str, ...], features: tuple[str, ...]) -> str
         ):
             if base == f"{pre}_{t}":
                 return f"{pre}_<t>"
-        # a forecast at a horizon, labelled `h<rows>` or by its name
+        # a forecast at a horizon, labelled `h<span>` or by its name
+        for pre in ("forecast_sum", "forecast_var", "forecast"):
+            if base.startswith(pre + "_") and base.endswith(f"_{t}"):
+                return f"{pre}_<h>_<t>"
         if base.startswith("variance_sum_") and base.endswith(f"_{t}"):
             return "variance_sum_<h>_<t>"
         if base.startswith("variance_") and base.endswith(f"_{t}"):

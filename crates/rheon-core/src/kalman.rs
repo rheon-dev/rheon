@@ -511,6 +511,7 @@ use crate::model::{ModelState, OnlineModel, State, StateError, Step, check_schem
 use crate::{Decay, EwDiag};
 
 mod forms;
+mod horizons;
 pub use forms::CovarianceForm;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -578,7 +579,13 @@ pub struct KalmanCfg {
     /// same either way.
     #[serde(default, skip_serializing_if = "is_false")]
     pub noise_units: bool,
+    /// The forecasts' horizons, spans of the clock past the row
+    /// (`kalman::horizons`); empty, and not written, for none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub horizons: Vec<f64>,
 }
+
+pub use horizons::KALMAN_MAX_HORIZONS;
 
 fn default_true() -> bool {
     true
@@ -727,6 +734,7 @@ impl KalmanCfg {
                  target's noise variance, or leave it out to estimate it from the residuals."
             ));
         }
+        horizons::check(self, &mut no);
         no.take(crate::model::check_min_weight("kalman", self.min_weight));
         no.finish()
     }
@@ -1248,32 +1256,7 @@ impl Kalman {
                     }
                     quad += z[i] * acc;
                 }
-                match self.cfg.obs_var {
-                    Some(r) => quad + r,
-                    // `P` in units of the noise: the target's own noise
-                    // scales it, shared or not (the module doc).
-                    None if self.cfg.noise_units => {
-                        let own = self.sig2[j];
-                        if own > 0.0 {
-                            own * (quad + 1.0)
-                        } else {
-                            f64::NAN
-                        }
-                    }
-                    None if self.cfg.share_p => {
-                        let mean = shared_noise(&mut Vec::new(), &self.sig2);
-                        let own = self.sig2[j];
-                        if own > 0.0 && mean > 0.0 {
-                            own * (quad / mean + 1.0)
-                        } else {
-                            f64::NAN
-                        }
-                    }
-                    None => {
-                        let own = self.sig2[j];
-                        if own > 0.0 { quad + own } else { f64::NAN }
-                    }
-                }
+                self.variance_of(j, quad)
             })
             .collect()
     }
@@ -2638,7 +2621,15 @@ impl OnlineModel for Kalman {
                     *p = a_number_or_none(v);
                 }
             }
+            // The forecasts at the horizons, from the state `step` reads.
+            if !self.cfg.horizons.is_empty() {
+                let g = coupled.then_some(&g[..]);
+                let ahead = self.ahead_of_the_read(&pred, &zs, reverts, &phi, g, d_clock);
+                pred.extend_from_slice(&ahead);
+            }
         }
+        let per = 3 * self.cfg.horizons.len();
+        pred.resize(m * (1 + per), f64::NAN);
         Step {
             pred,
             n_eff,
@@ -2673,6 +2664,12 @@ impl OnlineModel for Kalman {
 
     fn n_features(&self) -> usize {
         self.cfg.n_features
+    }
+
+    /// A prediction a target, then each target's forecasts at the horizons,
+    /// three a horizon.
+    fn n_outputs(&self) -> usize {
+        self.cfg.n_targets * (1 + 3 * self.cfg.horizons.len())
     }
 }
 
@@ -2761,6 +2758,10 @@ impl Kalman {
                 }
             }
         }
+        // The forecasts at the horizons, from the state as the prediction
+        // reads it: after the row's transition, before its noise and update.
+        // They ride after the predictions once the row is learned.
+        let ahead = self.ahead_of_the_step(pred);
 
         // A null target, or a present one at weight zero -- an observation
         // of infinite variance, `σ²/0` -- is a prediction step and no
@@ -3004,6 +3005,7 @@ impl Kalman {
             }
         }
 
+        pred.extend_from_slice(&ahead);
         // `min_weight` withholds the output; the filter learned from it.
         if !ready {
             pred.fill(f64::NAN);
@@ -3161,6 +3163,7 @@ mod tests {
 
     fn cfg(k: usize, m: usize, hl: Vec<f64>) -> KalmanCfg {
         KalmanCfg {
+            horizons: Vec::new(),
             min_weight_holds_learning: false,
             noise_units: false,
             n_features: k,
@@ -3736,6 +3739,7 @@ mod tests {
     fn unstandardized_with_no_process_noise_is_bayesian_regression() {
         let (p0, obs_var) = (10.0, 0.25);
         let mut m = Kalman::new(KalmanCfg {
+            horizons: Vec::new(),
             min_weight_holds_learning: false,
             noise_units: false,
             n_features: 2,
@@ -4923,6 +4927,7 @@ mod tests {
     #[test]
     fn an_innovation_of_zero_or_a_target_not_a_number_corrects_nothing() {
         let mut m = Kalman::new(KalmanCfg {
+            horizons: Vec::new(),
             min_weight_holds_learning: false,
             noise_units: false,
             n_features: 1,
@@ -5244,6 +5249,7 @@ mod tests {
     /// the filter the tests below start from.
     fn plain(p0: f64, half_life: f64, obs_var: Option<f64>) -> KalmanCfg {
         KalmanCfg {
+            horizons: Vec::new(),
             min_weight_holds_learning: false,
             noise_units: false,
             n_features: 1,
@@ -5549,6 +5555,7 @@ mod tests {
     /// at `coef_half_life`, rows one clock unit apart.
     fn settled_readiness(n_feat: usize, coef_hl: f64) -> (f64, f64, f64) {
         let c = KalmanCfg {
+            horizons: Vec::new(),
             min_weight_holds_learning: false,
             noise_units: false,
             n_features: n_feat,
@@ -5694,4 +5701,5 @@ mod tests {
     // Review C1's follow-up: the moments keep the row's weight of history
     // after a gap of more than a half-life.
     mod gap_moments;
+    mod horizons;
 }

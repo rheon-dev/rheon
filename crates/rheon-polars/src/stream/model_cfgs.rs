@@ -210,22 +210,7 @@ pub fn garch_cfg(spec: &Spec) -> Result<rheon_core::GarchCfg, String> {
         .flatten()
         .map(crate::Horizon::label)
         .collect();
-    for (i, l) in labels.iter().enumerate() {
-        if l.is_empty() || l.starts_with("sum") {
-            return Err(format!(
-                "garch: a horizon's name must be non-empty and not begin with \"sum\", but one \
-                 is {l:?}. It names the fields variance_<name>_<target> and \
-                 variance_sum_<name>_<target>, which a name beginning with \"sum\" would \
-                 confuse. Rename it."
-            ));
-        }
-        if labels[..i].contains(l) {
-            return Err(format!(
-                "garch: two horizons are labeled {l:?}. Each labels its fields, so each label is \
-                 given once. Rename one, or leave out the second."
-            ));
-        }
-    }
+    crate::spec::check_horizon_labels("garch", &labels)?;
     Ok(cfg)
 }
 

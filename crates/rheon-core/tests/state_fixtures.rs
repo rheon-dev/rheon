@@ -442,15 +442,11 @@ const RENUMBERED: &[(&str, f64, std::ops::Range<usize>)] = &[("corrchange_window
 /// `horizon` (task 559): each loads as the one horizon it named, and goes
 /// on reporting its sum beside it, so a target's slots are four where they
 /// were three (the variance, the standardized residual, the forecast, and
-/// now the sum). The sums are dropped from the comparison ([`narrowed`]),
-/// and the forecast, whose terms are now taken in the row's own order
-/// (`ω + α f + γ f/2 + β f`, where it was `ω + (α + γ/2 + β) f`), continues
-/// within this bound of `1 + |out|`: the golden forecasts moved by at most
-/// 4 units in their last place, measured 2026-11-23 on Linux x86-64.
-const GARCH_ONE_HORIZON: f64 = 1e-15;
-
-/// A `garch` row of schema 71's layout from this build's, the sums
-/// dropped: each target's four slots to the three of before.
+/// now the sum). The sums, which the old build did not report, are dropped
+/// from the comparison ([`narrowed`]); every other number goes on to the
+/// bit, the forecast's arithmetic being the old build's. This is such a
+/// row in schema 71's layout from this build's, the sums dropped: each
+/// target's four slots to the three of before.
 fn narrowed(got: &Out) -> Out {
     let mut out = got.clone();
     out.pred = got
@@ -877,15 +873,11 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                 .unwrap_or_else(|| {
                     panic!("{what}: the current set has no fixture of that case; a kept case stays")
                 });
-            // `garch` calls no platform library, so its bytes are the same
-            // on every platform and its sets may come from two (task 559
-            // regenerated its current set on Linux)
-            assert!(
-                current.writer == f.writer || f.variant == "Garch",
+            assert_eq!(
+                current.writer, f.writer,
                 "{what}: written on {}, the current set on {}: the sets are written on one \
                  platform, or their bytes differ in libm's last bit",
-                f.writer,
-                current.writer
+                f.writer, current.writer
             );
             let windowed = holds_a_window(&f.bytes());
             let moved = MOVED.iter().find(|(n, _)| *n == f.name).map(|&(_, b)| b);
@@ -1047,13 +1039,7 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                         &format!("{what}, row {i} after the save"),
                         &narrowed(&got),
                         &want,
-                        |n| {
-                            if n < want.pred.len() && n % 3 == 2 {
-                                tol.max(GARCH_ONE_HORIZON)
-                            } else {
-                                tol
-                            }
-                        },
+                        |_| tol,
                     );
                     continue;
                 }

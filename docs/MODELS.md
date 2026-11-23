@@ -866,6 +866,20 @@ Here `half_life` decays the noise estimate and the features'
 standardization, and `coef_half_life` sets how fast a coefficient may
 drift.
 
+
+**Forecasts at horizons.** `horizons` asks for the prediction a row of
+this row's features would get a span `Δ` of the clock past the row, with no
+row between, as the filter would make it. `forecast_<h>_<t>` is that
+prediction and `forecast_sum_<h>_<t>` its integral over the span.
+`forecast_var_<h>_<t>` is its variance, from the covariance carried through
+the transition over `Δ` and the drift of the clock since the target's last
+observation plus `Δ`. At `Δ = 0` the
+forecast is `pred_<t>`. The features are held at the row's: the forecast is
+the regression's at them. Under the default random walk the forecast does
+not move with `Δ` and only its variance grows; under `revert_half_life` it
+reverts too. Against `filterpy`'s filter run on the same rows, unstandardized
+with a given noise, the three agree to 1.4e-15.
+
 #### The update
 
 Per target `j`, `β_j` are the coefficients and `R_j·P_j` their covariance.
@@ -2021,6 +2035,22 @@ Its parameters, their defaults and what each refuses are in its
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md#holt). The parameters
 every spec takes are in [What every spec takes](#what-every-spec-takes),
 apart from `features`, which `holt` does not take.
+
+
+**Forecasts at horizons.** `horizons` asks for the forecast a span `Δ` of
+the clock past the row and its integral over the span. Both read the level
+and trend before the row: `forecast_<h>_<t> = l + b (s + Δ)` and
+`forecast_sum_<h>_<t> = Δ (l + b (s + Δ/2))`. At `Δ = 0` the forecast is
+`pred_<t>`. A span is a number of clock units, rows without a clock, or a
+duration such as `"30d"`, never a count of rows: the trend is per clock unit
+and the clock of rows to come is not known. No forecast variance is given.
+The variance of exponential smoothing's forecast (ETS with additive errors
+and trend, `statsmodels`' `ETSModel`) counts the innovations of the rows
+within the span and assumes fixed gains. Here that holds only on evenly
+spaced rows of equal weight once the gains have stopped moving. There it
+matched the forecast errors' variance within 0.7% at 1 to 10 rows ahead,
+over 195,000 simulated rows. On a clock the rows a span holds are the data's
+to decide, and the model keeps no noise variance of its own.
 
 #### The update
 

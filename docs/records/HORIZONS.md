@@ -526,19 +526,24 @@ the last place set from the measured gap.
 **State and fixtures.** The forecasts add no state. `GarchCfg.horizons`
 reads a state's `horizon` (schema 71's form): `h > 1` as `[h]`, 1 as none;
 the v71 garch fixtures load through it, convert to the current bytes, and
-continue with their sums dropped and the forecast within 1e-15 of `1 +
-|out|` (`GARCH_ONE_HORIZON`). The current garch fixtures were regenerated on
-Linux (writer `linux-x86_64`); since `garch` calls no platform library its
-bytes are the same on every platform, and the previous-set check now admits
-a garch set from another writer. The realistic cases carry three horizons
-out of order, and FIGARCH's its own `max_horizon_work`. Both fields are
-written even when empty: the contract's probe saves a state as an array
-(`rmp_serde::to_vec`), where a skipped field shifts every later one (section
-7's `skip_serializing_if` for `holt` and `kalman` must be checked against
-that probe too). No schema bump:
-`garch` is unreleased. The goldens moved only in the forecast slots (at most
-4 units in the last place, the new term order; FIGARCH's none) and gained
-the sum slots.
+continue to the bit with the new sum slots dropped from the comparison
+(`narrowed`). Both fields are written even when empty: the contract's probe
+saves a state as an array (`rmp_serde::to_vec`), where a skipped field
+shifts every later one; `holt`'s and `kalman`'s `horizons` are the last
+field of their configuration, so skipping it when empty shifts nothing. No
+schema bump: `garch` is unreleased. The realistic cases carry three
+horizons out of order, and FIGARCH's its own `max_horizon_work`.
+
+**Revised after R104** (the Mac's answers (d) and (e)): the first build took
+GARCH's and GJR's forecast terms in the row's own order, which moved the
+forecasts by up to 4 units in the last place and needed a tolerance on the
+v71 continuation; the forecast is `ω + P f` again, the single horizon's
+arithmetic, so the goldens' forecasts equal `main`'s to the bit and the v71
+continuation needs none. The writer check on the kept sets is strict again;
+the garch fixtures this build writes differ from `main`'s (`horizons` for
+`horizon`), and a set written here carries the writer `linux-x86_64`, so
+the strict check passes only once they are written on the platform the v71
+set was, macOS arm64.
 
 **Measured against `arch`** (Linux x86-64, 2026-11-23,
 `tests/test_second_opinion_garch_horizons.py`). The analytic forecast from
@@ -553,3 +558,57 @@ error 1.3e-4 to 3.7e-4), while `exp(E ln s)`, the forecast without
 Nelson's convexity, sits 57 to 149 standard errors away, so the draws
 resolve the difference the closed form makes. The 20,000-draw form runs in
 the essentials, the 10⁶ one (about 6 s, 200 MB) in the extended tier.
+
+## 15. Part 3: `holt` and `kalman` on the clock (2026-11-23)
+
+**Answer 9, measured.** `statsmodels`' `ETSModel` forecast variance for
+ETS(A,A,N), `σ² (1 + Σ_{j=1}^{h−1} (α + β j)²)` (checked in section 1), is
+the variance of `holt`'s forecast errors where `holt` is ETS(A,A,N): unit
+row steps, unit weights, gains past their warm-up (`α = 1 − λ_l`, `β = (1 −
+λ_b) α`). On 200,000 simulated ETS rows at `(α, β) = (0.3, 0.06)`, from row
+5,000, the empirical variance of the `h`-step errors over the formula was
+1.0023, 1.0014, 0.9964 and 0.9930 at `h` = 1, 2, 5 and 10. Elsewhere it does
+not apply: on a clock the rows a span holds are not known, the gains move
+with the spacing and the weights and through the line fit's warm-up, and
+`holt` keeps no noise variance. So `holt` reports none, and its docstring
+and MODELS.md say why.
+
+**Built.** Both take `horizons`, spans of the clock `Δ ≥ 0` past the row
+(the polars spec's `SpanHorizon`: a span labelled `h<number>` or by the
+duration's text, or a `[name, span]` pair), at most 64, distinct, finite.
+The forecasts ride after the predictions in the model's `pred` (each
+target's slots together), as `Source::Stat` fields; the bank's slot stride
+for a regression is now `m·nc` plus `Spec::forecast_slots()`, and the
+residual machinery treats the extra slots as having no target (their
+residuals are NaN and fold nowhere).
+
+- `holt`: `f(Δ) = l + b (s + Δ)`, `F(Δ) = Δ (l + b (s + Δ/2))`, from the
+  level and trend before the row; `Δ = 0` is `pred` to the bit.
+  `statsmodels`' `Holt.forecast` from the rows before (after the gains stop
+  moving) agrees to 1e-12, and scipy's `quad` of it gives the integral.
+- `kalman` (`kalman/horizons.rs`): the mean `zᵀ T(Δ) b`, the integral
+  `zᵀ T̄(Δ) b` with each factor `2^(−u/r)` integrated, and the variance from
+  `T(Δ) P T(Δ)ᵀ` plus the drift of `D + Δ` carried into the anchor's
+  coordinates as `covariance_now` carries it, scaled as `pred_var` is.
+  `predict` reads what `step` writes to the bit in both covariance forms,
+  with and without the standardizer, reversion and `share_p`. Against
+  `filterpy` (unstandardized, a given noise and `q`, per-slot reversion,
+  rows of weight 0): largest gaps 2.6e-16 (mean), 1.4e-15 (integral) and
+  1.3e-16 (variance) of `1 + |value|`.
+
+**State and fixtures.** No state is added. `horizons` is the last field of
+`HoltCfg` and `KalmanCfg`, skipped when empty, so every existing fixture
+loads and re-saves its bytes (none was regenerated for part 3), and a
+state written as an array keeps its places. `kalman.rs` stays under the
+250 KB cap by keeping the forecasts in `kalman/horizons.rs`, and the Python
+`kalman` builder moved to `_spec_kalman.py` for `_spec.py`'s cap.
+
+**A bug the forecast slots found.** Under an `embargo` a held row keeps a
+record of its scores, one entry a slot in each part, and its release checks
+the record's length. `kalman`'s row inflation (which a conformal interval
+reads) is one a prediction, so with forecast slots the record came up short
+and every released row scored nothing: `sigma`, the interval, the metrics
+and the calibration went null. The stream now pads the row inflation to
+every slot (the forecasts' read none), and
+`test_a_short_delay_is_the_undelayed_run_with_horizons` holds both models to
+the undelayed run under a short delay.

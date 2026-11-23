@@ -1289,11 +1289,29 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                 .combo(c)
                 .src(src)
         };
-        let dst = |t_i: usize, c_i: usize| mi * m * nc + t_i * nc + c_i;
+        // An instance's slots: its predictions, then its forecasts at
+        // horizons (`holt`, `kalman`), each target's together.
+        let horizons = spec.forecast_labels();
+        let stride = m * nc + spec.forecast_slots();
+        let dst = |t_i: usize, c_i: usize| mi * stride + t_i * nc + c_i;
         for (t_i, t) in spec.targets.iter().enumerate() {
             for (c_i, c) in combos.iter().enumerate() {
                 fields.push(mk("pred", t, c, Source::Pred(dst(t_i, c_i))));
                 fields.push(mk("resid", t, c, Source::Resid(dst(t_i, c_i))));
+            }
+        }
+        let kinds = spec.forecast_kinds();
+        for (t_i, t) in spec.targets.iter().enumerate() {
+            let at = mi * stride + m * nc + t_i * kinds.len() * horizons.len();
+            for (k, l) in horizons.iter().enumerate() {
+                for (slot, kind) in kinds.iter().enumerate() {
+                    fields.push(
+                        FieldMeta::new(format!("{kind}_{l}_{t}{suffix}"), kind)
+                            .decay(suffix, d)
+                            .target(t)
+                            .src(Source::Stat(at + kinds.len() * k + slot)),
+                    );
+                }
             }
         }
         if spec.emit_error_inflation {
