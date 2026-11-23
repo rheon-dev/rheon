@@ -1272,16 +1272,16 @@ fn a_garch_past_its_state_cap_or_its_forms_is_refused() {
 /// `tdigest` (task 544): the defaults build, compression 100 and 200 build,
 /// a level not strictly inside (0, 1) or listed twice is refused, a decay
 /// is refused naming the windowed DDSketch, and features, a compression
-/// past its range and a state past `max_state_bytes` are refused by name.
+/// under its floor of 10 and a state past `max_state_bytes` are refused by name.
 #[test]
 fn a_tdigest_spec_builds_or_is_refused_by_name() {
     let spec = |model: &str| {
         format!(r#"{{"name": "m", "model": {model}, "targets": ["a", "b"], "features": []}}"#)
     };
-    accepted(&spec(r#"{"type": "tdigest", "quantiles": [0.5]}"#));
+    accepted(&spec(r#"{"type": "tdigest", "quantiles": [0.25]}"#));
     for c in ["100", "200"] {
         accepted(&spec(&format!(
-            r#"{{"type": "tdigest", "compression": {c}, "quantiles": [0.01, 0.5, 0.99]}}"#
+            r#"{{"type": "tdigest", "compression": {c}, "quantiles": [0.01, 0.25, 0.99]}}"#
         )));
     }
     let fields = output_fields(
@@ -1292,8 +1292,12 @@ fn a_tdigest_spec_builds_or_is_refused_by_name() {
         [
             "q0.05_a",
             "q0.95_a",
+            "es0.05_a",
+            "es0.95_a",
             "q0.05_b",
             "q0.95_b",
+            "es0.05_b",
+            "es0.95_b",
             "weight_sum",
             "settled_frac",
             "withheld_reason"
@@ -1302,15 +1306,22 @@ fn a_tdigest_spec_builds_or_is_refused_by_name() {
     for bad in ["0.0", "1.0", "1.5", "-0.25"] {
         refused(
             &spec(&format!(
-                r#"{{"type": "tdigest", "quantiles": [0.5, {bad}]}}"#
+                r#"{{"type": "tdigest", "quantiles": [0.25, {bad}]}}"#
             )),
             &["each of quantiles must be above 0 and below 1"],
         );
     }
     refused(
-        &spec(r#"{"type": "tdigest", "quantiles": [0.5, 0.5]}"#),
-        &["lists 0.5 twice"],
+        &spec(r#"{"type": "tdigest", "quantiles": [0.25, 0.25]}"#),
+        &["lists 0.25 twice"],
     );
+    refused(
+        &spec(r#"{"type": "tdigest", "quantiles": [0.05, 0.5]}"#),
+        &["quantiles lists 0.5", "neither the lower nor the upper"],
+    );
+    accepted(&spec(
+        r#"{"type": "tdigest", "quantiles": [0.4999, 0.5001]}"#,
+    ));
     refused(
         &spec(r#"{"type": "tdigest", "quantiles": []}"#),
         &["at least one level"],
@@ -1321,7 +1332,7 @@ fn a_tdigest_spec_builds_or_is_refused_by_name() {
     ] {
         refused(
             &format!(
-                r#"{{"name": "m", "model": {{"type": "tdigest", "quantiles": [0.5]}},
+                r#"{{"name": "m", "model": {{"type": "tdigest", "quantiles": [0.25]}},
                     "targets": ["a"], "features": [], {decay}}}"#
             ),
             &[
@@ -1331,23 +1342,29 @@ fn a_tdigest_spec_builds_or_is_refused_by_name() {
         );
     }
     refused(
-        r#"{"name": "m", "model": {"type": "tdigest", "quantiles": [0.5]}, "targets": ["a"],
+        r#"{"name": "m", "model": {"type": "tdigest", "quantiles": [0.25]}, "targets": ["a"],
             "features": ["x"]}"#,
         &["tdigest takes no features"],
     );
-    accepted(&spec(
-        r#"{"type": "tdigest", "compression": 10, "quantiles": [0.5]}"#,
-    ));
+    for c in ["10", "12.5", "200"] {
+        accepted(&spec(&format!(
+            r#"{{"type": "tdigest", "compression": {c}, "quantiles": [0.25]}}"#
+        )));
+    }
+    for c in ["0", "9.5", "-3"] {
+        refused(
+            &spec(&format!(
+                r#"{{"type": "tdigest", "compression": {c}, "quantiles": [0.25]}}"#
+            )),
+            &["compression must be at least 10"],
+        );
+    }
     refused(
-        &spec(r#"{"type": "tdigest", "compression": 9.5, "quantiles": [0.5]}"#),
-        &["compression must be at least 10"],
-    );
-    refused(
-        &spec(r#"{"type": "tdigest", "quantiles": [0.5], "max_state_bytes": 20000}"#),
+        &spec(r#"{"type": "tdigest", "quantiles": [0.25], "max_state_bytes": 20000}"#),
         &["past max_state_bytes 20000"],
     );
     refused(
-        &spec(r#"{"type": "tdigest", "quantiles": [0.5], "max_state_bytes": 67108865}"#),
+        &spec(r#"{"type": "tdigest", "quantiles": [0.25], "max_state_bytes": 67108865}"#),
         &["at most 67108864"],
     );
 }

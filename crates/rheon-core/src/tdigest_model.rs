@@ -6,6 +6,9 @@
 //!
 //! ```text
 //! q_p,t  = D_t.quantile(p)        read before the row (out of sample)
+//! es_p,t = D_t.tail_mean(p)       the same digest's curve averaged over the
+//!                                 tail past q_p,t: the lower below 0.5,
+//!                                 the upper above it (0.5 is refused)
 //! D_t   <- D_t + (y, w)           a row of weight w > 0 with y present
 //! W_t   <- W_t + w,   S_t <- S_t + w^2
 //! ```
@@ -26,11 +29,12 @@
 //! p (n_t + 1) >= 1   and   (1 - p) (n_t + 1) >= 1
 //! ```
 //!
-//! and withheld otherwise, as NaN, for the stream to name
+//! and withheld otherwise, as NaN, with its tail mean (a tail whose level
+//! is not identified holds no row in expectation), for the stream to name
 //! ([`TDigestModel::beyond_sample`]). The rule is the condition itself, at
-//! every sample size; no count of rows is fixed. A level of 0.5 is reported
-//! from the first row, 0.05 and 0.95 from the 19th of equal weight, 0.01
-//! and 0.99 from the 99th.
+//! every sample size; no count of rows is fixed. Levels of 0.25 and 0.75 are
+//! reported from the 3rd row of equal weight, 0.05 and 0.95 from the 19th,
+//! 0.01 and 0.99 from the 99th.
 //!
 //! **The weight.** `n_eff` is every learned row's weight, with no decay (a
 //! digest never forgets), before the row: the shared weight; each target's
@@ -54,8 +58,8 @@ pub struct TDigestModelCfg {
     pub n_targets: usize,
     /// The digest's `delta` ([`crate::TDigest`]): 100 by default.
     pub compression: f64,
-    /// The levels read, each in (0, 1), no two alike; one output a level
-    /// and a target, in this order.
+    /// The levels read, each in (0, 1), no two alike; per target, one
+    /// quantile a level, then one tail mean a level, in this order.
     pub levels: Vec<f64>,
     /// The bytes a group's state may hold; `None` is 256 KB.
     pub max_state_bytes: Option<u64>,
@@ -89,7 +93,7 @@ impl TDigestModelCfg {
         if self.levels.is_empty() {
             return Err(
                 "tdigest: quantiles must list at least one level, but it is empty. \
-                 Give the levels to read, such as [0.05, 0.5, 0.95]."
+                 Give the levels to read, such as [0.05, 0.25, 0.95]."
                     .into(),
             );
         }
@@ -99,6 +103,14 @@ impl TDigestModelCfg {
                  level of 0 or 1 is the smallest or largest row, which no sample identifies \
                  as a quantile. Give levels strictly between 0 and 1."
             ));
+        }
+        if self.levels.contains(&0.5) {
+            return Err(
+                "tdigest: quantiles lists 0.5, whose tail is neither the lower nor the upper, \
+                 so its expected shortfall has no side. Give a level below or above 0.5, such \
+                 as 0.49 or 0.51; the median itself is the level a tail's mean is not taken at."
+                    .into(),
+            );
         }
         for (i, p) in self.levels.iter().enumerate() {
             if self.levels[..i].iter().any(|q| q.to_bits() == p.to_bits()) {
@@ -194,12 +206,13 @@ impl TDigestModel {
             + 8 * self.cfg.levels.len() as u64
     }
 
-    /// The levels read before the next row, target by target, NaN where a
-    /// level is withheld.
+    /// The levels and their tail means read before the next row, target by
+    /// target (the quantiles at `2 nl j + l`, the tail means at
+    /// `2 nl j + nl + l`), NaN where a level is withheld.
     fn read_into(&self, out: &mut Step) {
         let nl = self.cfg.levels.len();
         out.pred.clear();
-        out.pred.resize(self.cfg.n_targets * nl, f64::NAN);
+        out.pred.resize(self.cfg.n_targets * 2 * nl, f64::NAN);
         out.n_eff = self.w_sum;
         out.extra = None;
         for (j, d) in self.digests.iter().enumerate() {
@@ -207,10 +220,11 @@ impl TDigestModel {
             if !self.cfg.levels.iter().any(|&p| level_identified(p, n)) {
                 continue;
             }
-            let reads = d.quantiles(&self.cfg.levels);
-            for (li, (&p, q)) in self.cfg.levels.iter().zip(reads).enumerate() {
-                if let Some(q) = q.filter(|_| level_identified(p, n)) {
-                    out.pred[j * nl + li] = q;
+            let reads = d.quantiles_and_tails(&self.cfg.levels);
+            for (li, (&p, r)) in self.cfg.levels.iter().zip(reads).enumerate() {
+                if let Some((q, es)) = r.filter(|_| level_identified(p, n)) {
+                    out.pred[2 * nl * j + li] = q;
+                    out.pred[2 * nl * j + nl + li] = es;
                 }
             }
         }
@@ -311,7 +325,7 @@ impl OnlineModel for TDigestModel {
     }
 
     fn n_outputs(&self) -> usize {
-        self.cfg.n_targets * self.cfg.levels.len()
+        self.cfg.n_targets * 2 * self.cfg.levels.len()
     }
 }
 

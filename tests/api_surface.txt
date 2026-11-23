@@ -1093,9 +1093,9 @@
     stream.robust_se_half_life = 50.0
     stream.specification_half_life = 50.0
     stream.tails_half_life = 50.0
-  tdigest(quantiles=[0.05, 0.5, 0.95], targets=['y']):
+  tdigest(quantiles=[0.05, 0.25, 0.95], targets=['y']):
     model.compression = 100.0
-    model.levels = [0.05, 0.5, 0.95]
+    model.levels = [0.05, 0.25, 0.95]
     model.max_state_bytes = null
     model.n_targets = 1
     stream.breaks_half_life = "inf"
@@ -2382,11 +2382,17 @@
     coef: list[f64]
   tdigest minimal:
     q0.05_y: f64
-    q0.5_y: f64
+    q0.25_y: f64
     q0.95_y: f64
+    es0.05_y: f64
+    es0.25_y: f64
+    es0.95_y: f64
     q0.05_z: f64
-    q0.5_z: f64
+    q0.25_z: f64
     q0.95_z: f64
+    es0.05_z: f64
+    es0.25_z: f64
+    es0.95_z: f64
     weight_sum: f64
     settled_frac: f64
     withheld_reason: enum

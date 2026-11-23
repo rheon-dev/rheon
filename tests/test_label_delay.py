@@ -1156,8 +1156,8 @@ STATE_READS: dict[str, frozenset[str]] = {
     # A variance and its forecast read the state alone; the standardized
     # residual reads the row's own target.
     "garch": frozenset({"variance_y"}),
-    # Each level reads the digest alone.
-    "tdigest": frozenset({"q0.05_y", "q0.5_y", "q0.95_y"}),
+    # Each level and its tail mean read the digest alone.
+    "tdigest": frozenset({"q0.05_y", "q0.25_y", "q0.95_y", "es0.05_y", "es0.25_y", "es0.95_y"}),
     "hmm": frozenset(
         {"filtered_state0", "filtered_state1", "predicted_state0", "predicted_state1", "state"}
     ),

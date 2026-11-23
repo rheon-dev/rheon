@@ -1498,14 +1498,15 @@ pub enum ModelKind {
     /// Quantiles of each target column from a merging t-digest
     /// (`rheon_core::TDigestModel`): one digest a target per group, read
     /// at each of `quantiles` before the row is added. Per target and
-    /// level, `q<level>_<target>`; no `pred` or `coef`. No features, no
-    /// decay and no window: a merging digest cannot take a row out.
+    /// level, `q<level>_<target>` and the tail mean past it,
+    /// `es<level>_<target>`; no `pred` or `coef`. No features, no decay and
+    /// no window: a merging digest cannot take a row out.
     #[serde(rename = "tdigest")]
     TDigest {
-        /// The digest's `delta`; absent is 100.
+        /// The digest's `delta`, at least 10; absent is 100.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         compression: Option<f64>,
-        /// The levels read, each above 0 and below 1.
+        /// The levels read, each above 0 and below 1, and not 0.5.
         quantiles: Vec<f64>,
         /// The bytes a group's state may hold. Default 256 KB, at most 64
         /// MiB.

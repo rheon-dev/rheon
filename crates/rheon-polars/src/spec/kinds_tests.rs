@@ -46,7 +46,7 @@ fn an_unknown_key_is_refused_at_either_level() {
 #[test]
 fn a_tdigest_window_is_refused_naming_the_windowed_ddsketch() {
     let json = serde_json::from_str::<super::Spec>(
-        r#"{"name": "m", "model": {"type": "tdigest", "quantiles": [0.5], "window_size": 20},
+        r#"{"name": "m", "model": {"type": "tdigest", "quantiles": [0.25], "window_size": 20},
             "targets": ["y"], "features": []}"#,
     )
     .unwrap_err()

@@ -769,7 +769,7 @@ CASES: list[Case] = [
         {
             **NODECAY,
             "targets": ["y", "x0"],
-            "quantiles": [0.05, 0.5, 0.95],
+            "quantiles": [0.05, 0.25, 0.95],
             "compression": 200.0,
             "max_state_bytes": 1 << 20,
         },

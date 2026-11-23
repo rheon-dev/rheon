@@ -118,6 +118,11 @@ MEANING: dict[str, str] = {
         "the quantile of `<t>` at `<level>` over the rows before this one, read from its t-digest "
         "before the row is added"
     ),
+    "es<level>_<t>": (
+        "the mean of `<t>` past `q<level>_<t>` (expected shortfall) over the rows before this "
+        "one, the t-digest's own curve averaged over the tail: the lower tail at a level "
+        "below 0.5, the upper above it"
+    ),
     "u": (
         "the equicorrelation this row alone implies"
         " (Engle and Kelly's Lemma 2.3, from the standardized row)"
@@ -207,6 +212,10 @@ ALSO_NULL: dict[str, str] = {
     "std_resid_<t>": "where the variance is null, and where `<t>` is",
     "forecast_<t>": "where the variance is null",
     "q<level>_<t>": (
+        "while withheld, and while the rows before it do not identify the level "
+        "(`level_beyond_sample`)"
+    ),
+    "es<level>_<t>": (
         "while withheld, and while the rows before it do not identify the level "
         "(`level_beyond_sample`)"
     ),
@@ -660,8 +669,10 @@ def stem(field: str, targets: tuple[str, ...], features: tuple[str, ...]) -> str
             if base == f"{pre}_{t}":
                 return f"{pre}_<t>"
         level, sep, column = base.partition("_")
-        if sep and column == t and level.startswith("q") and _is_number(level[1:]):
-            return "q<level>_<t>"
+        if sep and column == t:
+            for pre in ("q", "es"):
+                if level.startswith(pre) and _is_number(level[len(pre) :]):
+                    return f"{pre}<level>_<t>"
     for pre in ("corr", "cov", "partial_corr"):
         if base.startswith(pre + "_"):
             return f"{pre}_<a>_<b>"

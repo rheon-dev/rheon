@@ -41,6 +41,24 @@
 //! last from `c_n` to the maximum (at rank `N`); one centroid reads its
 //! mean. A read merges a copy of the buffer and leaves the state as it was.
 //!
+//! **Expected shortfall** at level `p`, from the same curve `Q(t)` over the
+//! rank `t` in `[0, N]` (the knots: the minimum at 0, each centroid's mean
+//! at its centre, the maximum at `N`; linear between them). The tail is
+//! chosen by the level, the lower one below 0.5 (`E[X | X <= q]`) and the
+//! upper one above it (`E[X | X >= q]`), and its mean is
+//!
+//! ```text
+//! ES_p = (1 / (p N))       int_0^{p N} Q(t) dt        p < 0.5
+//! ES_p = (1 / ((1 - p) N)) int_{p N}^N Q(t) dt        p > 0.5
+//! ```
+//!
+//! a trapezoid a piece, exact for the piecewise-linear curve: the centroid
+//! the level falls in is split at `p N`, so the tail mean and the quantile
+//! come from one curve. `Q` rises, so
+//! the lower tail's mean is at most the read at `p` and the upper's at least
+//! it; the values keep their sign (a loss is not negated). One centroid's
+//! tail mean is its mean.
+//!
 //! **Size.** Every pair of neighbours spans more than 1 in `k` together, and
 //! `k` spans `delta / 2`, so at most `delta + 1` centroids remain after a merge
 //! (between about `delta / 2` and `delta` in practice): 16 bytes each, plus
@@ -60,18 +78,16 @@
 
 use serde::{Deserialize, Serialize};
 
-/// The smallest compression taken: under it the limit's series and the
-/// digest's few centroids are no longer worth a sketch.
+/// The smallest compression taken: the limit's sine and cosine of
+/// `2 pi / delta` are summed from series that converge within 30 terms for
+/// `2 pi / delta <= 2 pi / 10`, and under it the digest's few centroids are
+/// no longer worth a sketch. No ceiling: `max_state_bytes` bounds it.
 pub const MIN_COMPRESSION: f64 = 10.0;
-
-/// The largest compression taken: a digest of 100,000 centroids, 14 MB with
-/// its buffer, past which an exact quantile over the rows costs less.
-pub const MAX_COMPRESSION: f64 = 100_000.0;
 
 /// A merging t-digest at one compression (the module's equations).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TDigest {
-    /// `delta`, in [`MIN_COMPRESSION`, `MAX_COMPRESSION`].
+    /// `delta`, at least [`MIN_COMPRESSION`].
     compression: f64,
     /// `sin(2 pi / delta)` and `cos(2 pi / delta)`, from `delta` alone.
     sin_b: f64,
@@ -105,11 +121,11 @@ fn sin_cos(x: f64) -> (f64, f64) {
 
 impl TDigest {
     pub fn new(compression: f64) -> Result<Self, String> {
-        if !(MIN_COMPRESSION..=MAX_COMPRESSION).contains(&compression) {
+        if !(compression >= MIN_COMPRESSION && compression.is_finite()) {
             return Err(format!(
-                "TDigest: compression must be at least {MIN_COMPRESSION} and at most \
-                 {MAX_COMPRESSION}, but it is {compression}. Pass 100 for a rank error near \
-                 2.5e-3, or 200 for near 1.2e-3 (twice the state)."
+                "TDigest: compression must be at least {MIN_COMPRESSION} and finite, but it is \
+                 {compression}. Pass 100 for a rank error near 2.5e-3, or 200 for near \
+                 1.2e-3 (twice the state); max_state_bytes bounds how large it may be."
             ));
         }
         let (sin_b, cos_b) = sin_cos(std::f64::consts::TAU / compression);
@@ -268,6 +284,73 @@ impl TDigest {
             .iter()
             .map(|&p| Self::read(&settled, self.lo, self.hi, p))
             .collect()
+    }
+
+    /// The estimate and the tail mean at each of `levels`, merging the
+    /// buffer's copy once: the tail is the lower one below a level of 0.5
+    /// and the upper one above it (0.5 has no tail of its own and is refused
+    /// by the model's settings), and its mean is the digest's own
+    /// curve averaged over it (the module's expected shortfall).
+    pub fn quantiles_and_tails(&self, levels: &[f64]) -> Vec<Option<(f64, f64)>> {
+        let settled = self.settled();
+        levels
+            .iter()
+            .map(|&p| {
+                let q = Self::read(&settled, self.lo, self.hi, p)?;
+                Some((q, Self::tail_mean(&settled, self.lo, self.hi, p)?))
+            })
+            .collect()
+    }
+
+    /// The knots `(rank, value)` of the curve [`Self::read`] interpolates:
+    /// the minimum at rank 0, each centroid's mean at its centre, the
+    /// maximum at rank `N`.
+    fn knots(centroids: &[(f64, f64)], lo: f64, hi: f64) -> Vec<(f64, f64)> {
+        let total: f64 = centroids.iter().map(|c| c.1).sum();
+        let mut knots = Vec::with_capacity(centroids.len() + 2);
+        knots.push((0.0, lo));
+        let mut centre = centroids[0].1 / 2.0;
+        knots.push((centre, centroids[0].0));
+        for pair in centroids.windows(2) {
+            centre += pair[0].1 / 2.0 + pair[1].1 / 2.0;
+            knots.push((centre, pair[1].0));
+        }
+        knots.push((total, hi));
+        knots
+    }
+
+    /// The integral of the piecewise-linear curve through `knots` over the
+    /// ranks `[a, b]`: a trapezoid a piece, each clipped to `[a, b]`.
+    fn integral(knots: &[(f64, f64)], a: f64, b: f64) -> f64 {
+        let mut sum = 0.0;
+        for pair in knots.windows(2) {
+            let ((t0, v0), (t1, v1)) = (pair[0], pair[1]);
+            let (lo, hi) = (t0.max(a), t1.min(b));
+            if hi <= lo || t1 <= t0 {
+                continue;
+            }
+            let at = |t: f64| v0 + (t - t0) / (t1 - t0) * (v1 - v0);
+            sum += (hi - lo) * (at(lo) + at(hi)) / 2.0;
+        }
+        sum
+    }
+
+    /// The tail mean at `p` in (0, 1), not 0.5: `(1 / (p N)) int_0^{p N} Q`
+    /// below 0.5, `(1 / ((1 - p) N)) int_{p N}^N Q` above it, `Q` the
+    /// read's curve over the rank; one centroid's is its mean.
+    fn tail_mean(centroids: &[(f64, f64)], lo: f64, hi: f64, p: f64) -> Option<f64> {
+        let &(first, _) = centroids.first()?;
+        if centroids.len() == 1 {
+            return Some(first);
+        }
+        let knots = Self::knots(centroids, lo, hi);
+        let total = knots[knots.len() - 1].0;
+        let t = p * total;
+        Some(if p < 0.5 {
+            Self::integral(&knots, 0.0, t) / t
+        } else {
+            Self::integral(&knots, t, total) / (total - t)
+        })
     }
 
     /// The module's read at `p` from `centroids`, `lo` and `hi`.

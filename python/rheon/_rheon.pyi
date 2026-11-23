@@ -154,6 +154,9 @@ def psquared_reads(values: list[float], levels: list[float]) -> list[list[float 
 def tdigest_quantiles(
     values: list[float], compression: float, levels: list[float]
 ) -> list[float | None]: ...
+def tdigest_tail_means(
+    values: list[float], compression: float, levels: list[float]
+) -> list[float | None]: ...
 def spec_clock_fields() -> tuple[
     list[tuple[str, list[str]]], list[tuple[str, list[str]]], list[tuple[str, list[str]]]
 ]: ...

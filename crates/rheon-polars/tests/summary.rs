@@ -1123,7 +1123,7 @@ fn every_kind_refuses_or_loads_corruption(prefix_step: usize, flip_step: usize) 
         // Saved past its merges, its buffer part full.
         (
             "tdigest",
-            r#"{"type": "tdigest", "compression": 10, "quantiles": [0.1, 0.5, 0.9]}"#,
+            r#"{"type": "tdigest", "compression": 10, "quantiles": [0.1, 0.4, 0.9]}"#,
             r#"["y"]"#,
             "[]",
             false,

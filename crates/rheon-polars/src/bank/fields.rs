@@ -1208,21 +1208,25 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
         return fields;
     }
     // tdigest predicts no target's value: per target, one quantile a level,
-    // `q<level>_<target>` (read before the row is added), then `n_eff`. One
-    // undecayed instance; no `coef`.
+    // `q<level>_<target>`, then the tail mean past it a level,
+    // `es<level>_<target>` (both read before the row is added), then
+    // `n_eff`. One undecayed instance; no `coef`.
     if let crate::ModelKind::TDigest { quantiles, .. } = &spec.model {
         let mut fields = Vec::new();
+        let nl = quantiles.len();
         for (mi, (suffix, d)) in decays.iter().enumerate() {
-            let base = mi * spec.targets.len() * quantiles.len();
+            let base = mi * spec.targets.len() * 2 * nl;
             for (t_i, t) in spec.targets.iter().enumerate() {
-                for (li, q) in quantiles.iter().enumerate() {
-                    let name = format!("q{}_{t}{suffix}", crate::spec::num_label(*q));
-                    let mut f = FieldMeta::new(name, "q")
-                        .decay(suffix, d)
-                        .target(t)
-                        .src(Source::Stat(base + t_i * quantiles.len() + li));
-                    f.quantile = Some(*q);
-                    fields.push(f);
+                for (part, role) in ["q", "es"].into_iter().enumerate() {
+                    for (li, q) in quantiles.iter().enumerate() {
+                        let name = format!("{role}{}_{t}{suffix}", crate::spec::num_label(*q));
+                        let mut f = FieldMeta::new(name, role)
+                            .decay(suffix, d)
+                            .target(t)
+                            .src(Source::Stat(base + (2 * t_i + part) * nl + li));
+                        f.quantile = Some(*q);
+                        fields.push(f);
+                    }
                 }
             }
             fields.push(

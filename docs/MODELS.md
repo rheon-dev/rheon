@@ -3056,8 +3056,10 @@ forecast past one row has no closed form.
 *API:* [`rheon.spec.tdigest`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.tdigest) — *Rust:* [`tdigest_model.rs`](../crates/rheon-core/src/tdigest_model.rs) — *Outputs:* [fields](OUTPUTS.md#tdigest)
 
 Quantiles of each target column, read at the levels you list from a merging
-t-digest whose error is uniform in rank: each row reports every level from
-the rows before it, so a row's own value is never in its own quantile.
+t-digest whose error is uniform in rank, each beside the mean of the tail past
+it: the value at risk and the expected shortfall. Each row reports every
+level from the rows before it, so a row's own value is never in its own
+quantile.
 
 Use it for a column whose values sit near 0 or take both signs (returns,
 residuals, spreads), where a sketch of relative accuracy misreads. Each
@@ -3084,9 +3086,10 @@ the squared weights `S_t` of the rows it holds. For a row of weight `w` and
 value `y`:
 
 ```text
-q_p,t = D_t.quantile(p)        read first: the rows before this one
-D_t   ← D_t + (y, w)           when w > 0 and y is present
-W_t   ← W_t + w,   S_t ← S_t + w²
+q_p,t  = D_t.quantile(p)        read first: the rows before this one
+es_p,t = mean of Q_t over the tail past q_p,t
+D_t    ← D_t + (y, w)           when w > 0 and y is present
+W_t    ← W_t + w,   S_t ← S_t + w²
 ```
 
 The digest keeps centroids ascending by mean, each spanning at most 1 in
@@ -3096,6 +3099,24 @@ centers from the smallest row to the largest. The merge's limit `k⁻¹(k(q) +
 1)` is taken through the sine addition formula with `sin` and `cos` of `2π/δ`
 summed from their series, so no math library's last bit decides a merge and
 the digest is the same bits on every platform.
+
+**The tail's mean comes from the digest's own curve.** The read's curve `Q_t(r)`
+over the rank `r` in `[0, W_t]` runs from the smallest row at rank 0 through
+each centroid's mean at its center to the largest row at `W_t`, straight
+between them. A level below 0.5 reads the lower tail, `E[X | X ≤ q]`, and
+one above it the upper, `E[X | X ≥ q]`; 0.5 itself has no tail of its own
+and is refused by name. The centroid a level falls in is split at the level,
+so the tail's mean and the quantile come from one curve:
+
+```text
+es_p,t = (1 / (p W_t))       ∫_0^{p W_t} Q_t(r) dr        p < 0.5
+es_p,t = (1 / ((1 − p) W_t)) ∫_{p W_t}^{W_t} Q_t(r) dr    p > 0.5
+```
+
+a trapezoid a straight piece, so exact for the curve. The curve rises, so a
+lower tail's mean is at most its quantile and an upper's at least it; the
+values keep their sign (a loss is not negated). It is null where its level
+is.
 
 **A level is withheld until its rows identify it.** Take Kish's effective
 size `n_t = W_t²/S_t`, the rows themselves for rows of equal weight. The
@@ -3108,8 +3129,9 @@ row, where the digest can read only the extreme. Such a level is null and
 p (n_t + 1) < 1   or   (1 − p) (n_t + 1) < 1
 ```
 
-The median is reported from the second row, 0.05 and 0.95 from the
-twentieth, 0.01 and 0.99 from the hundredth; no count of rows is fixed.
+Levels of 0.25 and 0.75 are reported from the fourth row, 0.05 and 0.95
+from the twentieth, 0.01 and 0.99 from the hundredth; no count of rows is
+fixed.
 
 **State.** At most `δ + 1` centroids and `8δ` buffered rows a target, 16
 bytes each, plus a fixed header: about 14.5 KB a target at `δ = 100` and

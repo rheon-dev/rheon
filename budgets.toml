@@ -1558,11 +1558,17 @@ weight_sum = { budget = 8.0 }
 withheld_reason = { budget = 1.125 }
 
 [memory.tdigest]
+"es0.05_y" = { budget = 8.125 }
+"es0.05_z" = { budget = 8.125 }
+"es0.25_y" = { budget = 8.125 }
+"es0.25_z" = { budget = 8.125 }
+"es0.95_y" = { budget = 8.125 }
+"es0.95_z" = { budget = 8.125 }
 learned_clock = { budget = 8.125 }
 "q0.05_y" = { budget = 8.125 }
 "q0.05_z" = { budget = 8.125 }
-"q0.5_y" = { budget = 8.125 }
-"q0.5_z" = { budget = 8.125 }
+"q0.25_y" = { budget = 8.125 }
+"q0.25_z" = { budget = 8.125 }
 "q0.95_y" = { budget = 8.125 }
 "q0.95_z" = { budget = 8.125 }
 scored_clock = { budget = 8.0 }

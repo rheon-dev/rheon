@@ -1902,7 +1902,7 @@ fn every_model_refuses_at_restore_a_configuration_its_new_refuses() {
         refused(
             TDigestModel::new(tdigest_cfg()).unwrap(),
             "compression",
-            5.0.into(),
+            9.5.into(),
             "compression must be at least 10",
         ),
     ];
@@ -4938,23 +4938,23 @@ fn tdigest_cfg() -> TDigestModelCfg {
     TDigestModelCfg {
         n_targets: 2,
         compression: 20.0,
-        levels: vec![0.05, 0.5, 0.95],
+        levels: vec![0.05, 0.25, 0.95],
         max_state_bytes: None,
     }
 }
 
 #[test]
 fn tdigest() {
-    // A digest per target, no features: one level a slot, target by
-    // target, and `n_eff` every learned row's weight, summed (no decay: a
+    // A digest per target, no features: per target one quantile a level,
+    // then one tail mean a level, and `n_eff` every learned row's weight, summed (no decay: a
     // merging digest cannot take a row out).
     let m = TDigestModel::new(tdigest_cfg()).unwrap();
     assert_eq!(m.n_features(), 0, "tdigest reads no features");
     let r = probe_with(m, 2, Some(&TDigestModel::n_eff));
     assert_eq!(r.kind, "tdigest");
     assert_eq!(r.n_targets, 2);
-    assert_eq!(r.n_outputs, 6);
-    assert_eq!(r.pred_len, 6);
+    assert_eq!(r.n_outputs, 12);
+    assert_eq!(r.pred_len, 12);
     assert!(r.roundtrips);
 }
 

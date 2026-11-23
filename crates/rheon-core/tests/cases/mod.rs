@@ -2623,7 +2623,7 @@ fn tdigest_cfg() -> TDigestModelCfg {
     TDigestModelCfg {
         n_targets: 2,
         compression: 10.0,
-        levels: vec![0.1, 0.5, 0.9],
+        levels: vec![0.1, 0.4, 0.9],
         max_state_bytes: None,
     }
 }

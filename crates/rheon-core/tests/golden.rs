@@ -941,16 +941,17 @@ fn garch_signature(vol: GarchVol, dist: GarchDist, targeting: bool) -> Vec<f64> 
 }
 
 /// `tdigest` on the stream run five times at the smallest compression,
-/// whose buffer merges every 80 rows: the three levels on three rows, each
-/// past a merge, one with a full buffer's merge just made. The merge's
-/// limit, its centroid means and the read's interpolation move every one;
+/// whose buffer merges every 80 rows: the three levels and their tail means
+/// on three rows, each past a merge, one with a full buffer's merge just
+/// made. The merge's limit, its centroid means, the read's interpolation and
+/// the tail's trapezoids move every one;
 /// no libm call is in it, so it is held to the bit.
 #[test]
 fn tdigest_golden() {
     let mut m = TDigestModel::new(TDigestModelCfg {
         n_targets: 1,
         compression: 10.0,
-        levels: vec![0.05, 0.5, 0.95],
+        levels: vec![0.05, 0.25, 0.95],
         max_state_bytes: None,
     })
     .unwrap();
@@ -2338,12 +2339,21 @@ const GOLDEN_GARCH_FIGARCH: &[f64] = &[
 
 const GOLDEN_TDIGEST: &[f64] = &[
     -1.4506754991295818,
-    0.14831122941979052,
+    -0.6153938389536291,
     1.9669305121855334,
+    -1.5865131443922433,
+    -1.128040203026179,
+    2.243778845090675,
     -1.4889104278521395,
-    0.12305878953214994,
+    -0.63596345124358,
     1.948147518472067,
+    -1.606734930822977,
+    -1.1541978093056844,
+    2.2324026689816905,
     -1.5012510796384302,
-    0.14266737069362673,
+    -0.6234457757321644,
     1.9185853898662055,
+    -1.6136585876633442,
+    -1.153470725120345,
+    2.2082117630850724,
 ];

@@ -103,11 +103,14 @@ fn a_coarser_digest_breaks_the_tolerance() {
 /// ulp.
 #[test]
 fn the_limit_is_the_scale_function_definition() {
-    for delta in [10.0, 100.0, 200.0, 1000.0, 100_000.0] {
+    for delta in [10.0, 100.0, 200.0, 1000.0, 100_000.0, 1e7] {
         let d = TDigest::new(delta).unwrap();
         let b = std::f64::consts::TAU / delta;
-        assert!((d.sin_b - b.sin()).abs() <= f64::EPSILON * b.sin());
-        assert!((d.cos_b - b.cos()).abs() <= f64::EPSILON);
+        assert!(
+            (d.sin_b - b.sin()).abs() <= f64::EPSILON * b.sin(),
+            "{delta}"
+        );
+        assert!((d.cos_b - b.cos()).abs() <= f64::EPSILON, "{delta}");
         let k = |q: f64| delta / std::f64::consts::TAU * (2.0 * q - 1.0).asin();
         let k_inv = |k: f64| {
             if k >= delta / 4.0 {
@@ -286,26 +289,22 @@ fn small_digests_read_their_rows() {
     assert_eq!(d, TDigest::new(100.0).unwrap());
 }
 
-/// The compression's bounds and the state cap, each from both sides.
+/// The compression's floor, each side of it, no ceiling, and the state
+/// cap checked from both sides.
 #[test]
 fn compression_and_cap_are_checked_on_both_sides() {
-    assert!(TDigest::new(MIN_COMPRESSION).is_ok());
-    assert!(TDigest::new(MAX_COMPRESSION).is_ok());
-    for bad in [
-        9.99,
-        MAX_COMPRESSION * 1.0001,
-        f64::NAN,
-        f64::INFINITY,
-        -100.0,
-    ] {
+    for good in [MIN_COMPRESSION, 10.5, 100.0, 1e6] {
+        assert!(TDigest::new(good).is_ok(), "{good}");
+    }
+    for bad in [9.99, 1.0, 0.0, f64::NAN, f64::INFINITY, -100.0] {
         let err = TDigest::new(bad).unwrap_err();
-        assert!(err.contains("compression"), "{err}");
+        assert!(err.contains("at least 10"), "{err}");
     }
     let most = TDigest::max_bytes(100.0);
     assert!(TDigest::check_cap(100.0, most).is_ok());
     assert!(TDigest::check_cap(100.0, most - 1).is_err());
     assert!(TDigest::check_cap(200.0, crate::clock_span::DEFAULT_STATE_BYTES).is_ok());
-    assert!(TDigest::check_cap(MAX_COMPRESSION, crate::clock_span::STATE_BYTES_CEILING).is_ok());
+    assert!(TDigest::check_cap(100_000.0, crate::clock_span::STATE_BYTES_CEILING).is_ok());
 }
 
 /// A restored state that a digest could not hold is refused.

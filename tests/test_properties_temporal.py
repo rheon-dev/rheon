@@ -547,7 +547,7 @@ def clock_specs(draw, model: str, step: int, cap: int):
             kw["refit_rows"] = draw(st.integers(0, 12))
     elif model == "tdigest":
         # Task 544: a digest a target, no decay, no clock parameter.
-        kw |= dict(targets=["y"], quantiles=[0.05, 0.5, 0.95])
+        kw |= dict(targets=["y"], quantiles=[0.05, 0.25, 0.95])
     elif model == "garch":
         # Task 492: the start as a span of the clock, or of rows; no decay.
         kw |= dict(targets=["y"])

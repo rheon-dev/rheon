@@ -405,13 +405,16 @@ The fields of `po.spec.garch("m", targets=["y"], start_rows=50)`:
 
 ## `tdigest`
 
-The fields of `po.spec.tdigest("m", targets=["y"], quantiles=[0.05, 0.5, 0.95])`:
+The fields of `po.spec.tdigest("m", targets=["y"], quantiles=[0.05, 0.25, 0.95])`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
 | `q0.05_y` | `f64` | the quantile of `<t>` at `<level>` over the rows before this one, read from its t-digest before the row is added | while withheld, and while the rows before it do not identify the level (`level_beyond_sample`) |
-| `q0.5_y` | `f64` | the quantile of `<t>` at `<level>` over the rows before this one, read from its t-digest before the row is added | while withheld, and while the rows before it do not identify the level (`level_beyond_sample`) |
+| `q0.25_y` | `f64` | the quantile of `<t>` at `<level>` over the rows before this one, read from its t-digest before the row is added | while withheld, and while the rows before it do not identify the level (`level_beyond_sample`) |
 | `q0.95_y` | `f64` | the quantile of `<t>` at `<level>` over the rows before this one, read from its t-digest before the row is added | while withheld, and while the rows before it do not identify the level (`level_beyond_sample`) |
+| `es0.05_y` | `f64` | the mean of `<t>` past `q<level>_<t>` (expected shortfall) over the rows before this one, the t-digest's own curve averaged over the tail: the lower tail at a level below 0.5, the upper above it | while withheld, and while the rows before it do not identify the level (`level_beyond_sample`) |
+| `es0.25_y` | `f64` | the mean of `<t>` past `q<level>_<t>` (expected shortfall) over the rows before this one, the t-digest's own curve averaged over the tail: the lower tail at a level below 0.5, the upper above it | while withheld, and while the rows before it do not identify the level (`level_beyond_sample`) |
+| `es0.95_y` | `f64` | the mean of `<t>` past `q<level>_<t>` (expected shortfall) over the rows before this one, the t-digest's own curve averaged over the tail: the lower tail at a level below 0.5, the upper above it | while withheld, and while the rows before it do not identify the level (`level_beyond_sample`) |
 | `weight_sum` | `f64` | accumulated weight before the model learns this row, and before its own decay ([shared field](#fields-most-models-write)) | never |
 | `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
 | `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |

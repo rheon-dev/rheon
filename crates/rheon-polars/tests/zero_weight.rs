@@ -395,7 +395,7 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
     ),
     (
         "tdigest",
-        r#"{"type": "tdigest", "compression": 10, "quantiles": [0.05, 0.5, 0.95]}"#,
+        r#"{"type": "tdigest", "compression": 10, "quantiles": [0.05, 0.25, 0.95]}"#,
         r#""targets": ["y", "x0"], "features": []"#,
         ALL,
     ),

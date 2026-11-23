@@ -21,8 +21,8 @@ def tdigest(
     max_state_bytes: int | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
-    """Quantiles of each target column, from a merging t-digest whose
-    error is uniform in rank.
+    """Quantiles and expected shortfalls of each target column, from a
+    merging t-digest whose error is uniform in rank.
 
     Use it for the quantiles of a column whose values sit near 0 or take
     both signs, where a sketch of relative accuracy misreads: returns,
@@ -45,14 +45,18 @@ def tdigest(
     This model's own parameters:
 
     ``quantiles``
-        The levels read, each above 0 and below 1, no two alike; one output
-        a level and a target.
+        The levels read, each above 0 and below 1, no two alike; two outputs
+        a level and a target, the quantile (the value at risk) and its
+        tail's mean (the expected shortfall). A level below 0.5 reads the
+        lower tail, one above it the upper; 0.5 itself has no tail of its
+        own and is refused.
     ``compression``
-        The digest's ``delta``, from 10 to 100,000: about ``delta`` centroids
-        a target, 16 bytes each, beside a buffer of ``8 delta`` rows.
-        Default 100, whose rank error was measured at most 2.0e-3 (held
-        under 3.8e-3); 200 halves it, at most 9.3e-4 (held under 1.8e-3),
-        for twice the state. Both measured at 100,000 rows of normal,
+        The digest's ``delta``, at least 10, with no ceiling but
+        ``max_state_bytes``: at most ``delta + 1`` centroids a target, 16
+        bytes each, beside a buffer of ``8 delta`` rows. Default 100,
+        whose rank error was measured at most 2.0e-3 (held under 3.8e-3);
+        200 halves it, at most 9.3e-4 (held under 1.8e-3), for twice the
+        state. Both measured at 100,000 rows of normal,
         lognormal, Student-t(3) and Pareto(2.5) values over 20 seeds.
     ``max_state_bytes``
         The bytes a group's state may hold: each target's fullest digest
@@ -70,6 +74,11 @@ def tdigest(
         Per target and level: the quantile of the target's rows before this
         one. Null until the rows identify the level (see the update), and
         below ``min_weight``.
+    ``es<level>_<t>``
+        Per target and level: the mean of the target's rows past
+        ``q<level>_<t>``, below it at a level under 0.5 and above it at one
+        over 0.5 (the expected shortfall), from the same digest. Its sign
+        is the values', not a loss's. Null where ``q<level>_<t>`` is.
     ``weight_sum``
         The weight the model has learned before the row: every learned
         row's weight, with no decay.
@@ -83,7 +92,7 @@ def tdigest(
     As every builder does (:mod:`rheon.spec`); ``TypeError`` for
     ``features``, which this model does not take; and ``ValueError`` naming
     the problem for an empty ``quantiles``, a level not above 0 and below
-    1 or listed twice, a ``compression`` outside 10 to 100,000,
+    1, listed twice or of 0.5, a ``compression`` under 10,
     ``half_life`` or ``lam``, and a state past ``max_state_bytes``, or a
     ``max_state_bytes`` of 0 or past 64 MiB.
 
@@ -96,14 +105,23 @@ def tdigest(
 
     .. code-block:: text
 
-        q_p,t = D_t.quantile(p)        read first: the rows before this one
+        q_p,t  = D_t.quantile(p)        read first: the rows before this one
+        es_p,t = mean of Q_t over the tail past q_p,t
         D_t   ← D_t + (y, w)           when w > 0 and y is present
         W_t   ← W_t + w,   S_t ← S_t + w²
 
     The digest keeps centroids ``(c, m)`` ascending by mean, each spanning
     at most 1 in ``k(q) = delta / (2π) asin(2q - 1)``, and merges a buffer
     of ``8 delta`` rows into them; the quantile interpolates between the
-    centroids' centers, from the smallest row to the largest.
+    centroids' centers, from the smallest row to the largest. That curve,
+    ``Q_t(r)`` over the rank ``r`` in ``[0, W_t]``, is the quantile function
+    the tail's mean averages, exactly, a straight piece at a time:
+
+    .. code-block:: text
+
+        es_p,t = (1 / (p W_t))       ∫_0^{p W_t} Q_t(r) dr        p < 0.5
+        es_p,t = (1 / ((1 - p) W_t)) ∫_{p W_t}^{W_t} Q_t(r) dr    p > 0.5
+
 
     A level is reported where the rows identify it: with Kish's effective
     size ``n_t = W_t² / S_t`` (the rows themselves, for rows of equal
@@ -114,16 +132,16 @@ def tdigest(
 
         p (n_t + 1) < 1   or   (1 - p) (n_t + 1) < 1
 
-    that is, while it lies past the smallest or the largest row. The median
-    is reported from the second row, 0.05 and 0.95 from the twentieth, 0.01
-    and 0.99 from the hundredth. The state is at most ``delta + 1``
-    centroids and ``8 delta`` buffered rows a target, 16 bytes each,
+    that is, while it lies past the smallest or the largest row. Levels of
+    0.25 and 0.75 are reported from the fourth row, 0.05 and 0.95 from the
+    twentieth, 0.01 and 0.99 from the hundredth. The state is at most
+    ``delta + 1`` centroids and ``8 delta`` buffered rows a target, 16 bytes each,
     whatever the stream's length.
 
     .. rubric:: Example
 
     This code reads the 5% and 95% quantiles of a normal column as it
-    streams, and prints the last row's:
+    streams, with the mean of each tail, and prints the last row's:
 
     .. code-block:: python
 
@@ -137,11 +155,11 @@ def tdigest(
         model = rp.spec.tdigest("d", targets=["y"], quantiles=[0.05, 0.95])
         out = rp.ModelBank([model]).fit_predict(df).unnest("d")
         last = out.row(-1, named=True)
-        print(f"q0.05: {last['q0.05_y']:.2f}, q0.95: {last['q0.95_y']:.2f}")
+        print(f"q0.05: {last['q0.05_y']:.2f}, es0.05: {last['es0.05_y']:.2f}")
 
     .. code-block:: text
 
-        q0.05: -1.63, q0.95: 1.64
+        q0.05: -1.63, es0.05: -2.05
 
     .. rubric:: See also
 

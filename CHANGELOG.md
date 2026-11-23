@@ -69,9 +69,13 @@ model that only the new build has is listed as an addition and passes.
 - **`rheon.spec.tdigest`: quantiles of each column from a merging
   t-digest** (PLAN 544). A spec of `type = "tdigest"` takes its columns as
   `targets`, the levels as `quantiles=[...]` and a `compression` (default
-  100), and writes `q<level>_<column>` for each level and column, read
-  before the row is added, beside `weight_sum`, `settled_frac` and
-  `withheld_reason`; no `pred` or `coef`. Each column has its own digest in
+  100, at least 10 and no ceiling but `max_state_bytes`), and writes `q<level>_<column>` and
+  `es<level>_<column>` for each level and column, read before the row is
+  added, beside `weight_sum`, `settled_frac` and `withheld_reason`; no
+  `pred` or `coef`. `es<level>_<column>` is the expected shortfall, the
+  mean of the digest's own curve over the tail past the quantile, the lower
+  tail below a level of 0.5 and the upper above it (0.5 itself is refused
+  by name), in the values' own sign; the quantile is the value at risk. Each column has its own digest in
   each group (Dunning and Ertl's merging digest on the `k_1` scale), its
   rank error measured at most 2.0e-3 at compression 100 and 9.3e-4 at 200
   against exact ranks, and read within those tolerances of the `tdigest`

@@ -1394,6 +1394,29 @@ fn tdigest_quantiles(
     Ok(est.quantiles(&levels))
 }
 
+/// The merging t-digest's tail mean (expected shortfall) at each of
+/// `levels` after `values` (each of weight 1) at `compression`, the lower
+/// tail at a level of 0.5 or less and the upper above it: the core's digest
+/// itself, which the agreement test with the `tdigest` package's trimmed
+/// mean and the exact tail mean reads.
+#[pyfunction]
+fn tdigest_tail_means(
+    values: Vec<f64>,
+    compression: f64,
+    levels: Vec<f64>,
+) -> PyResult<Vec<Option<f64>>> {
+    let mut est =
+        rheon_polars::rheon_core::TDigest::new(compression).map_err(PyValueError::new_err)?;
+    for v in values {
+        est.update(v, 1.0);
+    }
+    Ok(est
+        .quantiles_and_tails(&levels)
+        .into_iter()
+        .map(|r| r.map(|(_, es)| es))
+        .collect())
+}
+
 /// The parameters measured in clock units, which take a duration under a
 /// temporal clock, keyed `"*"` for the shared ones and by model `type` for
 /// the rest; the rates per clock unit, which a temporal clock refuses
@@ -1590,6 +1613,7 @@ fn _rheon(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(parse_duration, m)?)?;
     m.add_function(wrap_pyfunction!(psquared_reads, m)?)?;
     m.add_function(wrap_pyfunction!(tdigest_quantiles, m)?)?;
+    m.add_function(wrap_pyfunction!(tdigest_tail_means, m)?)?;
     m.add_function(wrap_pyfunction!(format_duration, m)?)?;
     m.add_function(wrap_pyfunction!(spec_clock_fields, m)?)?;
     m.add_function(wrap_pyfunction!(format_of_path, m)?)?;

@@ -1142,7 +1142,7 @@ fn model_case(id: &str, n: usize) -> ModelCase {
             let s = json!({
                 "name": "m",
                 "model": {"type": "tdigest", "compression": compression,
-                          "quantiles": [0.05, 0.5, 0.95]},
+                          "quantiles": [0.05, 0.25, 0.95]},
                 "targets": names("y", if dim == "targets" { n } else { 1 }),
                 "features": [],
             });

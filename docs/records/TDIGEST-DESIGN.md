@@ -11,7 +11,8 @@ is `tdigest_model.rs`.
 For target `t`, level `p`, a row of weight `w` and value `y`:
 
 ```text
-q_p,t = D_t.quantile(p)        read before the row (hard rule 2)
+q_p,t  = D_t.quantile(p)       read before the row (hard rule 2)
+es_p,t = the curve's mean over the tail past q_p,t
 D_t   <- D_t + (y, w)          w > 0 and y usable
 W_t   <- W_t + w,   S_t <- S_t + w^2
 ```
@@ -52,8 +53,8 @@ position, Hyndman and Fan's definition 6), so a level outside
 `[1 / (n + 1), n / (n + 1)]` lies beyond the smallest or largest row and the
 digest can only read that extreme. Kish's size, not `W_t`, so that scaling
 every weight changes nothing but `weight_sum` (the weight-scale rule); for
-rows of weight 1 it is the row count. The median reads from the second row,
-0.05 and 0.95 from the 20th, 0.01 and 0.99 from the 100th.
+rows of weight 1 it is the row count. Levels of 0.25 and 0.75 read from the
+4th row, 0.05 and 0.95 from the 20th, 0.01 and 0.99 from the 100th.
 
 The model writes NaN for such a level, and the stream names it with a new
 `withheld_reason`, `level_beyond_sample`, appended after `unstable_rate` (a
@@ -64,9 +65,34 @@ reason's name, and whether a row where some levels are reported and some
 withheld should carry the reason (it does, as every gate's reason is "the
 first that withheld anything").
 
-`compression` takes the core's range, 10 to 100,000, not any positive
-value: under 10 the limit's series and the digest's few centroids are no
-longer worth a sketch (part 2's choice, held by its tests).
+`compression` keeps the floor the algorithm needs, 10 (the merge limit's
+sine and cosine of `2 pi / delta` are summed from series that converge
+within 30 terms there, and under it the digest's few centroids are not
+worth a sketch), and has no ceiling: `max_state_bytes` bounds it (the
+coordinator, 2026-11-23, part 5's exchange B).
+
+## Expected shortfall (PLAN 544, part 6)
+
+The coordinator's answer (2026-11-23, part 5's exchange B): emit
+`es<level>_<column>` only, no `var<level>`, since `q<level>_<column>` is the
+value at risk already; the tail is chosen by the level, below 0.5 the lower
+(`E[X | X <= q]`), above it the upper (`E[X | X >= q]`), exactly 0.5 refused
+by name; no sign flip; the mean is the integral of the sketch's own
+interpolated quantile function over the tail, the boundary centroid split,
+so ES and `q` come from one curve; the same Kish condition withholds it. The curve is the read's: knots at the minimum
+(rank 0), each centroid's mean at its centre and the maximum (rank `N`),
+linear between:
+
+```text
+ES_p = (1 / (p N))       int_0^{p N} Q        p < 0.5
+ES_p = (1 / ((1 - p) N)) int_{p N}^N Q        p >  0.5
+```
+
+summed a trapezoid a piece, exact for the curve. It is withheld with its
+level, by the same rule: a tail whose level the rows do not identify holds
+less than one row in expectation. The `tdigest` package's `trimmed_mean`
+(a partial-mass rule over its centroids) and numpy's exact tail mean are
+its oracles (`tests/test_tdigest.py`).
 
 ## State and cost
 

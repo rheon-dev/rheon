@@ -527,7 +527,7 @@ fn case_spec(id: &str) -> (Value, Shape) {
         "tdigest" => (
             json!({
                 "name": "m",
-                "model": {"type": "tdigest", "quantiles": [0.05, 0.5, 0.95]},
+                "model": {"type": "tdigest", "quantiles": [0.05, 0.25, 0.95]},
                 "targets": ["y0"],
                 "features": [],
             }),

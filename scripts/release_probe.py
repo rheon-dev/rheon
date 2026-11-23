@@ -413,7 +413,7 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
     (
         "tdigest",
         "tdigest",
-        dict(targets=["y", "z"], quantiles=[0.05, 0.5, 0.95], group="g", **CLOCK),
+        dict(targets=["y", "z"], quantiles=[0.05, 0.25, 0.95], group="g", **CLOCK),
         [],
     ),
     (
