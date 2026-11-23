@@ -78,7 +78,10 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
     ("glm", &["refit_span"]),
     ("garch", &["start_span"]),
     ("ar", &["window_size", "snapshot_every"]),
-    ("spectral", &["periods", "spacing"]),
+    (
+        "spectral",
+        &["periods", "spacing", "window_size", "snapshot_every"],
+    ),
 ];
 
 /// The parameters that take a duration on a temporal clock or a number that

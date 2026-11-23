@@ -778,6 +778,22 @@ CASES: list[Case] = [
             "scaling": "spectrum",
         },
     ),
+    # Lomb-Scargle under a hard window, its cadence, its edge and its budget.
+    Case(
+        "spectral_window",
+        "spectral",
+        {
+            **{k: v for k, v in STREAM.items() if k != "max_rows_between_coefs"},
+            "targets": ["y"],
+            "periods": [8.0, 1.5],
+            "scaling": "lomb_scargle",
+            "window_size": 40.0,
+            "closed": "both",
+            "snapshot_every": 2.0,
+            "max_rows_between_snapshots": 3,
+            "window_budget": {"thin": 64.0},
+        },
+    ),
     # Each target a return series; no half-life (the recursion is per
     # observation), so no gate on settling toward one either.
     Case(
