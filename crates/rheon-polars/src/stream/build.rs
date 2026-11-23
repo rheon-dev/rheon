@@ -781,5 +781,9 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         ModelKind::Realized { .. } => Ok(AnyModel::Realized(Box::new(rheon_core::Realized::new(
             realized_cfg(spec, decay)?,
         )?))),
+
+        ModelKind::Pca { .. } => Ok(AnyModel::Pca(Box::new(rheon_core::StreamPca::new(
+            pca_cfg(spec, decay)?,
+        )?))),
     }
 }

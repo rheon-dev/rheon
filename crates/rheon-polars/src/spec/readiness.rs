@@ -57,6 +57,7 @@ impl Spec {
                  least-squares fit's uncertainty does not hold for it"
             }
             ModelKind::EwCov { .. }
+            | ModelKind::Pca { .. }
             | ModelKind::Marginal { .. }
             | ModelKind::Deco { .. }
             | ModelKind::Rcov { .. }

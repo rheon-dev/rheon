@@ -1421,7 +1421,7 @@ fn variants() -> Vec<String> {
 /// name here, and a fixture.
 #[test]
 fn the_variant_names_are_frozen() {
-    const FROZEN: [&str; 28] = [
+    const FROZEN: [&str; 29] = [
         "EwCov",
         "EwRidge",
         "Rls",
@@ -1450,6 +1450,7 @@ fn the_variant_names_are_frozen() {
         "Garch",
         "Dcc",
         "Realized",
+        "StreamPca",
     ];
     assert_eq!(
         variants(),

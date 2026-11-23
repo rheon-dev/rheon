@@ -1184,6 +1184,9 @@ STATE_READS: dict[str, frozenset[str]] = {
     "holt": frozenset({"pred_y"}),
     "lasso": frozenset({"penalty_selected_y"}),
     "micro": frozenset({"n_clusters", "n_micro"}),
+    # A component's variance, share and loadings are the state's; its score
+    # reads the row.
+    "pca": frozenset({"pc0_var", "pc0_share", "pc0_loading_x0", "pc0_loading_y"}),
     "seqtest": frozenset({"log_e_pos_y", "log_e_neg_y", "n_pos_y", "n_neg_y"}),
 }
 ALWAYS_STATE = frozenset({"weight_sum", "withheld_reason"})
@@ -1520,6 +1523,7 @@ DOUBLED: dict[str, dict] = {
     # Its sums take each return in the order of the rows learned: a lesson
     # late steps them the same, from the same rows.
     "realized": {},
+    "pca": {},
     "expectile": {},
     "huber": {},
     "kmeans": {},

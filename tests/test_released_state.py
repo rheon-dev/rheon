@@ -97,6 +97,7 @@ INTRODUCED = {
     "garch": "2.1.0",
     "dcc": "2.1.0",
     "realized": "2.1.0",
+    "pca": "2.1.0",
 }
 
 #: The workload's specs that need a parameter newer than a release, by the

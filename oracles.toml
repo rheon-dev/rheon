@@ -5841,6 +5841,40 @@ n = 50
 ideal = 0.0
 n = 50
 
+[group."second_opinion_pca.streampca_convergence"]
+tests = [
+    "tests/test_second_opinion_pca.py::test_the_stochastic_methods_converge_to_pca[ccipca-2000.0]",
+    "tests/test_second_opinion_pca.py::test_the_stochastic_methods_converge_to_pca[ccipca-inf]",
+    "tests/test_second_opinion_pca.py::test_the_stochastic_methods_converge_to_pca[oja-2000.0]",
+    "tests/test_second_opinion_pca.py::test_the_stochastic_methods_converge_to_pca[oja-inf]",
+]
+oracles = { "scikit-learn" = "1.9.1", "scipy" = "1.18.1" }
+dataset = ""
+
+[case."second_opinion_pca.streampca_convergence.ccipca_hl2000_angle"]
+ideal = 0.0
+worst = 0.00291056
+p95 = 0.00291056
+n = 10
+
+[case."second_opinion_pca.streampca_convergence.ccipca_hlinf_angle"]
+ideal = 0.0
+worst = 0.00321393
+p95 = 0.00321393
+n = 10
+
+[case."second_opinion_pca.streampca_convergence.oja_hl2000_angle"]
+ideal = 0.0
+worst = 0.00821172
+p95 = 0.00821172
+n = 10
+
+[case."second_opinion_pca.streampca_convergence.oja_hlinf_angle"]
+ideal = 0.0
+worst = 0.00450845
+p95 = 0.00450845
+n = 10
+
 # --- raises
 
 [[raised]]

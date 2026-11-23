@@ -372,6 +372,7 @@ class TestAccumulateOnly:
             "unstable_rate",
             "not_identified",
             "scale_ratio_moved",
+            "not_separated",
         ]
         assert out.schema["c"] == pl.Struct(
             {

@@ -92,6 +92,7 @@ pub enum ModelState {
     Garch(Box<crate::Garch>),
     Dcc(Box<crate::Dcc>),
     Realized(Box<crate::Realized>),
+    StreamPca(Box<crate::StreamPca>),
 }
 
 #[derive(Debug, Error)]
@@ -216,6 +217,7 @@ impl ModelState {
             ModelState::Garch(_) => "garch",
             ModelState::Dcc(_) => "dcc",
             ModelState::Realized(_) => "realized",
+            ModelState::StreamPca(_) => "pca",
         }
     }
 }

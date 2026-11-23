@@ -886,6 +886,7 @@ fn every_state_kind_is_distinct_and_named() {
         "garch",
         "dcc",
         "realized",
+        "pca",
     ];
     let mut seen = std::collections::HashSet::new();
     for k in kinds {
@@ -924,6 +925,7 @@ fn every_state_kind_is_distinct_and_named() {
         Garch::new(garch_cfg()).unwrap().state(),
         Dcc::new(dcc_cfg()).unwrap().state(),
         Realized::new(realized_cfg()).unwrap().state(),
+        StreamPca::new(pca_cfg()).unwrap().state(),
     ];
     let from_states: Vec<&str> = states.iter().map(|s| s.model.kind()).collect();
     assert_eq!(from_states, kinds);
@@ -994,6 +996,7 @@ fn one_state_of_each_kind() -> Vec<State> {
         Garch::new(garch_cfg()).unwrap().state(),
         Dcc::new(dcc_cfg()).unwrap().state(),
         Realized::new(realized_cfg()).unwrap().state(),
+        StreamPca::new(pca_cfg()).unwrap().state(),
         State::new(ModelState::EwCov(Box::new(EwCov::new(1)))),
     ]
 }
@@ -1118,6 +1121,8 @@ fn every_model_hands_back_its_configuration() {
     same(Dcc::new(c.clone()).unwrap(), &c, Dcc::cfg);
     let c = realized_cfg();
     same(Realized::new(c.clone()).unwrap(), &c, Realized::cfg);
+    let c = pca_cfg();
+    same(StreamPca::new(c.clone()).unwrap(), &c, StreamPca::cfg);
 }
 
 fn ew_class_cfg() -> EwClassCfg {
@@ -2016,6 +2021,7 @@ fn every_model_refuses_at_restore_a_configuration_its_new_refuses() {
             0.into(),
             "start_rows must be at least 1",
         ),
+        refused(StreamPca::new(pca_cfg()).unwrap(), "decay", zero(), h),
     ];
     // Every model's `restore`: the twenty-one kinds, `robust` under both
     // losses.
@@ -2434,6 +2440,7 @@ fn exactly_the_scheduled_solvers_report_a_solve_share() {
         ("garch", share(Garch::new(garch_cfg()).unwrap())),
         ("dcc", share(Dcc::new(dcc_cfg()).unwrap())),
         ("realized", share(Realized::new(realized_cfg()).unwrap())),
+        ("pca", share(StreamPca::new(pca_cfg()).unwrap())),
     ];
     let reporting: Vec<&str> = shares
         .iter()
@@ -2484,6 +2491,7 @@ const PROBED: &[(&str, &str)] = &[
     ("Garch", "garch"),
     ("Dcc", "dcc"),
     ("Realized", "realized"),
+    ("StreamPca", "pca"),
 ];
 
 #[test]
@@ -3229,11 +3237,19 @@ fn predict_is_the_step_without_the_step<M: OnlineModel + Clone>(
     // `SPARSE_OUTPUT` says how many are enough.
     let want = if SPARSE_OUTPUT.contains(&kind) {
         10
+    } else if kind == "pca" {
+        // This stream's two columns are independent and of one spread, so
+        // its components are tied, and `pca` withholds a tie: it reports
+        // nothing here by design. `streampca/tests.rs`'s
+        // `predict_is_the_step_on_a_separated_stream` holds the ready path
+        // on a stream whose components differ, with the same weights and
+        // gaps.
+        0
     } else {
         300
     };
     assert!(
-        ready > want,
+        ready > want || (want == 0 && ready == 0),
         "{kind}: only {ready} rows had every slot ready"
     );
     // Of mixed signs, and all positive and all negative at a level of 1,000
@@ -5476,6 +5492,10 @@ fn every_model_refuses_a_state_without_the_low_parts() {
             "expectile",
             refuses_without_low_parts(|| Expectile::new(expectile_cfg()).unwrap(), &two),
         ),
+        (
+            "pca",
+            refuses_without_low_parts(|| StreamPca::new(pca_cfg()).unwrap(), &none),
+        ),
     ];
     // Each model that keeps a mean had parts to drop, so its refusal is of
     // a real state: a model that lost its means, or a renamed field, shows
@@ -5498,6 +5518,7 @@ fn every_model_refuses_a_state_without_the_low_parts() {
         "corrchange",
         "bocpd",
         "audit",
+        "pca",
     ];
     for (name, (stripped, refused)) in &results {
         if keeps_means.contains(name) {
@@ -6541,6 +6562,16 @@ mod generated {
         }
 
         #[test]
+        fn pca(rows in stream(0, false), split in 0usize..60) {
+            contract(|| StreamPca::new(pca_cfg()).unwrap(), &rows, split)?;
+        }
+
+        #[test]
+        fn pca_oja(rows in stream(0, false), split in 0usize..60) {
+            contract(|| StreamPca::new(pca_oja_cfg()).unwrap(), &rows, split)?;
+        }
+
+        #[test]
         fn expectile(rows in stream(2, false), split in 0usize..60) {
             contract(|| Expectile::new(expectile_cfg()).unwrap(), &rows, split)?;
         }
@@ -6582,6 +6613,20 @@ fn realized_cfg() -> RealizedCfg {
     }
 }
 
+/// `pca` on the probes' two columns: one component emitted, both kept, the
+/// incremental SVD; its gate is the eigengap test, so `min_weight` 0.
+fn pca_cfg() -> StreamPcaCfg {
+    StreamPcaCfg {
+        n_features: K,
+        n_components: 1,
+        method: PcaMethod::Svd,
+        decay: decay(),
+        min_weight: 0.0,
+        learning_rate: None,
+        max_state_bytes: None,
+    }
+}
+
 /// A window of six rows, so the probes run through its turnovers; a window
 /// takes no decay, and its `n_eff` is the weight inside it.
 fn realized_rows_cfg() -> RealizedCfg {
@@ -6600,6 +6645,20 @@ fn realized_clock_cfg() -> RealizedCfg {
         decay: Decay::Halflife(f64::INFINITY),
         window_clock: Some(12.5),
         ..realized_cfg()
+    }
+}
+
+fn pca_oja_cfg() -> StreamPcaCfg {
+    StreamPcaCfg {
+        method: PcaMethod::Oja,
+        ..pca_cfg()
+    }
+}
+
+fn pca_ccipca_cfg() -> StreamPcaCfg {
+    StreamPcaCfg {
+        method: PcaMethod::Ccipca,
+        ..pca_cfg()
     }
 }
 
@@ -6648,4 +6707,31 @@ fn realized_predict_is_the_step() {
     predict_is_the_step_without_the_step(|| Realized::new(realized_cfg()).unwrap(), 2, false);
     predict_is_the_step_without_the_step(|| Realized::new(realized_rows_cfg()).unwrap(), 2, false);
     predict_is_the_step_without_the_step(|| Realized::new(realized_clock_cfg()).unwrap(), 2, false);
+}
+
+#[test]
+fn pca() {
+    // Principal components, not a fit: no targets, `k + 3` slots a
+    // component, and `n_eff` the decayed weight, under each method.
+    for cfg in [pca_cfg(), pca_oja_cfg(), pca_ccipca_cfg()] {
+        let m = StreamPca::new(cfg).unwrap();
+        assert_eq!(m.n_targets(), 0);
+        assert_eq!(m.n_features(), K);
+        assert_eq!(m.n_outputs(), K + 3);
+        let r = probe_with(m, 0, Some(&StreamPca::n_eff));
+        assert_eq!(r.kind, "pca");
+        assert_eq!(r.pred_len, r.n_outputs);
+        assert_eq!(r.n_eff[0], 0.0);
+        assert_eq!(r.n_eff[1], 1.0);
+        assert!((r.n_eff[2] - (0.5f64.powf(1.0 / HALFLIFE) + 1.0)).abs() < 1e-12);
+        assert!((r.after_gap - (r.before_gap * 0.5f64.powi(10) + 1.0)).abs() < 1e-9);
+        assert!(r.roundtrips);
+    }
+}
+
+#[test]
+fn pca_predict_is_the_step() {
+    predict_is_the_step_without_the_step(|| StreamPca::new(pca_cfg()).unwrap(), 0, false);
+    predict_is_the_step_without_the_step(|| StreamPca::new(pca_oja_cfg()).unwrap(), 0, false);
+    predict_is_the_step_without_the_step(|| StreamPca::new(pca_ccipca_cfg()).unwrap(), 0, false);
 }

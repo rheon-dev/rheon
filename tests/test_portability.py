@@ -35,6 +35,7 @@ REASON_DTYPE = pl.Enum(
         "unstable_rate",
         "not_identified",
         "scale_ratio_moved",
+        "not_separated",
     ]
 )
 

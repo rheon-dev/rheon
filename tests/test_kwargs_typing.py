@@ -25,6 +25,7 @@ BUILDERS = [
     "garch",
     "dcc",
     "realized",
+    "pca",
     "bocpd",
     "corrchange",
     "deco",

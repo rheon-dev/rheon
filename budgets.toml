@@ -245,6 +245,9 @@ what = "hawkes, one node, three kernels: AnyModel::step_into, into one kept Step
 [instructions.garch]
 what = "garch, one series after its start: AnyModel::step_into, into one kept Step, a 3 x 3 step a row; its budget is CI's first count"
 
+[instructions.pca]
+what = "pca, one component of 20 features by the incremental SVD: AnyModel::step_into, into one kept Step, a few Jacobi sweeps over 3 rows of 20 a row; its budget is CI's first count"
+
 [instructions.garch_figarch]
 what = "garch, FIGARCH of 1,000 lags after its start: AnyModel::step_into, its O(M) pass of the weights and their derivatives a row; its budget is CI's first count"
 
@@ -1597,6 +1600,24 @@ tq_z = { budget = 8.0 }
 tv_y = { budget = 8.0 }
 tv_z = { budget = 8.0 }
 weight_sum = { budget = 8.0 }
+
+[memory.pca]
+learned_clock = { budget = 8.125 }
+pc0_loading_x0 = { budget = 8.125 }
+pc0_loading_x1 = { budget = 8.125 }
+pc0_loading_x2 = { budget = 8.125 }
+pc0_score = { budget = 8.125 }
+pc0_share = { budget = 8.125 }
+pc0_var = { budget = 8.125 }
+pc1_loading_x0 = { budget = 8.125 }
+pc1_loading_x1 = { budget = 8.125 }
+pc1_loading_x2 = { budget = 8.125 }
+pc1_score = { budget = 8.125 }
+pc1_share = { budget = 8.125 }
+pc1_var = { budget = 8.125 }
+scored_clock = { budget = 8.125 }
+settled_frac = { budget = 8.125 }
+weight_sum = { budget = 8.125 }
 withheld_reason = { budget = 1.125 }
 
 # --- raises and sign-offs -------------------------------------------------------

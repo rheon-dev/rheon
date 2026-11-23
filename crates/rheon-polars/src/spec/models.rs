@@ -831,6 +831,24 @@ impl Spec {
                         }),
                 );
             }
+
+            // Its features are checked with the shared checks; every value is
+            // the model's own to check, here at the call, where the state's
+            // size against its cap is known too.
+            ModelKind::Pca { .. } => {
+                let decay = self
+                    .decays()
+                    .ok()
+                    .and_then(|d| d.first().map(|(_, d)| *d))
+                    .unwrap_or(rheon_core::Decay::Halflife(f64::INFINITY));
+                no.take(
+                    crate::stream::pca_cfg(self, decay)
+                        .and_then(|cfg| cfg.validate())
+                        .map_err(|e| {
+                            format!("spec {:?}: {}", self.name, e.trim_start_matches("pca: "))
+                        }),
+                );
+            }
             // The shared checks (non-empty features and targets, no column on
             // both sides, a decay, `min_weight` per target, no residual
             // diagnostics) and one of its own: given edges and the knobs for

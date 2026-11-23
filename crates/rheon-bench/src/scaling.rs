@@ -183,6 +183,13 @@ pub const CELLS: &[Cell] = &[
     cell("ew_cov.lags", 1, 8, Pow(1), Pow(1)),
     cell("ew_cov.window", 500, 8, Const, Pow(1)),
     cell("ew_cov.history", 1000, 8, Const, Const),
+    // A row of the incremental SVD rotates `q = n_components + 1` rows of
+    // `k` in pairs, a few sweeps of `O(q^2 k)`, and keeps them: in the
+    // features at a fixed `q`, `O(k)` work and state; in the components at a
+    // fixed `k`, `O(q^2)` work and `O(q)` state.
+    cell("pca.k", 4, 8, Pow(1), Pow(1)),
+    cell("pca.components", 1, 8, Pow(2), Pow(1)),
+    cell("pca.history", 1000, 8, Const, Const),
     cell("marginal.k", 4, 8, Pow(1), Pow(1)),
     cell("marginal.targets", 1, 8, Pow(1), Pow(1)),
     cell("marginal.lags", 1, 8, Pow(1), Pow(1)),
@@ -867,6 +874,19 @@ fn model_case(id: &str, n: usize) -> ModelCase {
         ("ew_cov", "history") => {
             ModelCase::new(untargeted(json!({"type": "ew_cov"}), 8, true), lin).warm(n)
         }
+        ("pca", "k") => ModelCase::new(
+            untargeted(json!({"type": "pca", "n_components": 2}), n, true),
+            lin,
+        ),
+        ("pca", "components") => ModelCase::new(
+            untargeted(json!({"type": "pca", "n_components": n}), 16, true),
+            lin,
+        ),
+        ("pca", "history") => ModelCase::new(
+            untargeted(json!({"type": "pca", "n_components": 2}), 8, true),
+            lin,
+        )
+        .warm(n),
         ("marginal", "k") => ModelCase::new(fit(json!({"type": "marginal"}), n, 1), lin),
         ("marginal", "targets") => ModelCase::new(fit(json!({"type": "marginal"}), 8, n), lin),
         ("marginal", "lags") => {

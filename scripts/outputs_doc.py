@@ -48,7 +48,7 @@ FAMILIES: dict[str, tuple[str, ...]] = {
         "expectile",
         "holt",
     ),
-    "Moments and correlation": ("ew_cov", "marginal", "deco", "rcov", "audit", "garch", "dcc", "realized"),
+    "Moments and correlation": ("ew_cov", "pca", "marginal", "deco", "rcov", "audit", "garch", "dcc", "realized"),
     "Clustering and classification": ("kmeans", "micro", "ew_class"),
     "Sequential tests and regimes": ("seqtest", "corrchange", "bocpd", "hmm", "hawkes"),
 }
@@ -160,6 +160,18 @@ MEANING: dict[str, str] = {
     "predicted_state<j>": "one-step-ahead probability of state `<j>`",
     "state": "the most likely state for this row: the one with the largest `predicted_state<j>`",
     "huber_scale_<t>": "the scale the row's cut for `<t>` is drawn in",
+    "pc<j>_var": (
+        "the variance along component `<j>`, from 0: its eigenvalue, times Bessel's correction at "
+        "Kish's effective size"
+    ),
+    "pc<j>_share": (
+        "component `<j>`'s share of the total variance, the sum of the columns' variances"
+    ),
+    "pc<j>_loading_<f>": "component `<j>`'s unit loading on feature `<f>`",
+    "pc<j>_score": (
+        "the row's coordinate along component `<j>`, `e_j . (x - m)`, on the mean and the "
+        "component before this row"
+    ),
 }
 
 #: Where a field is null besides a skipped row, which nulls every field (see
@@ -253,6 +265,13 @@ ALSO_NULL: dict[str, str] = {
     "predicted_state<j>": UNTIL_SEEDED,
     "state": UNTIL_SEEDED,
     "huber_scale_<t>": "until the target has a scale above 0",
+    **{
+        f"pc<j>_{s}": (
+            "while withheld, and while the component is not told apart from the one above it "
+            "or below it (`not_separated`)"
+        )
+        for s in ("var", "share", "loading_<f>", "score")
+    },
 }
 
 #: `bocpd`'s fields, null while its first rows set a prior left out (task 195).
@@ -395,7 +414,7 @@ SHARED_FIELDS: list[tuple[str, str, str]] = [
         "withheld_reason",
         "why the row's predictions are null: `below_min_settled_frac`, `below_min_weight`, "
         "`above_max_error_inflation`, `below_warm_rows`, `ill_conditioned`, `unstable_rate`, "
-        "`not_identified` or `scale_ratio_moved`. That order is their precedence, so the first "
+        "`not_identified`, `scale_ratio_moved` or `not_separated`. That order is their precedence, so the first "
         "that applies is the one named. `below_warm_rows` is the model's own warm-up, the rows "
         "`kmeans`, `hmm` and `bocpd` hold to seed themselves from, the rows `garch` buffers for "
         "a target's start, in a `kalman` fit standardized with no intercept, the rows before "
@@ -408,7 +427,9 @@ SHARED_FIELDS: list[tuple[str, str, str]] = [
         "own row's residual and the fit diverges. `not_identified` is a `garch` start whose rows "
         "do not yet tell its variance process from a constant variance, so it buffers more. "
         "`scale_ratio_moved` is a `corrchange` span past its critical value whose two columns' "
-        "scale ratio moved inside it, so its `flag` is null",
+        "scale ratio moved inside it, so its `flag` is null. `not_separated` is a `pca` component "
+        "the data does not yet tell apart from a neighbor: the test of the equality of their two "
+        "eigenvalues does not pass",
         "where nothing was withheld",
     ),
     (
@@ -721,6 +742,9 @@ def stem(field: str, targets: tuple[str, ...], features: tuple[str, ...]) -> str
             return f"{pre}<j>"
     if base.startswith("p_") and base != "p_change":
         return "p_<label>"
+    if base.startswith("pc") and "_" in base and base[2 : base.index("_")].isdigit():
+        rest = base[base.index("_") + 1 :]
+        return "pc<j>_loading_<f>" if rest.startswith("loading_") else f"pc<j>_{rest}"
     return base
 
 

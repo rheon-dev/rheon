@@ -2997,6 +2997,56 @@ pub fn all() -> Vec<Case> {
             Targets::Linear(2),
             45
         ),
+        // Principal components by the incremental SVD, three columns, two
+        // emitted and three kept: saved with every direction started.
+        case!(
+            "pca",
+            "StreamPca",
+            StreamPca,
+            StreamPca::new(pca_cfg(PcaMethod::Svd)).unwrap(),
+            3,
+            Targets::None,
+            40
+        ),
+        // Saved on the third row: the directions not yet started, all
+        // zeros beside the started one, and a cap of the spec's own.
+        case!(
+            "pca_early",
+            "StreamPca",
+            StreamPca,
+            StreamPca::new(StreamPcaCfg {
+                max_state_bytes: Some(4096),
+                ..pca_cfg(PcaMethod::Svd)
+            })
+            .unwrap(),
+            3,
+            Targets::None,
+            3
+        ),
+        // CCIPCA: each direction its variance times its unit vector.
+        case!(
+            "pca_ccipca",
+            "StreamPca",
+            StreamPca,
+            StreamPca::new(pca_cfg(PcaMethod::Ccipca)).unwrap(),
+            3,
+            Targets::None,
+            40
+        ),
+        // Oja's rule with a gain of its own.
+        case!(
+            "pca_oja",
+            "StreamPca",
+            StreamPca,
+            StreamPca::new(StreamPcaCfg {
+                learning_rate: Some(1.5),
+                ..pca_cfg(PcaMethod::Oja)
+            })
+            .unwrap(),
+            3,
+            Targets::None,
+            40
+        ),
         // A refit over a span of the clock (task 538), saved within the
         // span: each target's first stamp, on the clock summed from the
         // steps, which is state.
@@ -3433,4 +3483,16 @@ pub fn agree(got: f64, want: f64, tol: f64) -> bool {
         && got.is_finite()
         && want.is_finite()
         && (got - want).abs() <= tol * (1.0 + want.abs())
+}
+
+fn pca_cfg(method: PcaMethod) -> StreamPcaCfg {
+    StreamPcaCfg {
+        n_features: 3,
+        n_components: 2,
+        method,
+        decay: decay(),
+        min_weight: 0.0,
+        learning_rate: None,
+        max_state_bytes: None,
+    }
 }

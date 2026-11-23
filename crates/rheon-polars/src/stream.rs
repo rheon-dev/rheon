@@ -113,6 +113,7 @@ pub enum AnyModel {
     Garch(Box<rheon_core::Garch>),
     Dcc(Box<rheon_core::Dcc>),
     Realized(Box<rheon_core::Realized>),
+    Pca(Box<rheon_core::StreamPca>),
 }
 
 /// A flush's shards, run on whichever pool the caller is in: the bank's
@@ -165,6 +166,7 @@ macro_rules! dispatch {
             AnyModel::Garch($m) => $body,
             AnyModel::Dcc($m) => $body,
             AnyModel::Realized($m) => $body,
+            AnyModel::Pca($m) => $body,
         }
     };
 }
@@ -572,6 +574,9 @@ impl AnyModel {
             | AnyModel::Garch(_)
             | AnyModel::Dcc(_)
             | AnyModel::Realized(_) => 0,
+            // The components are withheld, never failed: the rotation has no
+            // factorization to fail.
+            | AnyModel::Pca(_) => 0,
         }
     }
 
@@ -650,6 +655,8 @@ impl AnyModel {
             AnyModel::Dcc(m) => Some(vec![m.coefficients()]),
             // realized has none: its outputs are the estimators.
             AnyModel::Realized(_) => None,
+            // pca has none: its components are its output fields.
+            AnyModel::Pca(_) => None,
         }
     }
 
@@ -674,8 +681,8 @@ mod model_cfgs;
 use model_cfgs::read_floor;
 pub use model_cfgs::{
     BOCPD_HAZARD_ROWS, audit_cfg, bocpd_cfg, corrchange_cfg, dcc_cfg, deco_block_names, deco_cfg,
-    expectile_cfg, garch_cfg, glm_cfg, hawkes_cfg, hmm_cfg, huber_model, quantile_model, rcov_cfg,
-    realized_cfg, sgd_model,
+    expectile_cfg, garch_cfg, glm_cfg, hawkes_cfg, hmm_cfg, huber_model, pca_cfg, quantile_model,
+    rcov_cfg, realized_cfg, sgd_model,
 };
 
 /// One grid combo: the rendered label plus the machine values it encodes, so
@@ -784,6 +791,7 @@ pub fn combos(spec: &Spec) -> Vec<Combo> {
         | ModelKind::Garch { .. }
         | ModelKind::Dcc { .. }
         | ModelKind::Realized { .. } => vec![Combo::default()],
+        ModelKind::Pca { .. } => vec![Combo::default()],
         // `p` for the penalty, since `l` is a lag's (`lag_corr_l1_a_b`); and
         // no label for a path of one point, as a single ridge or half-life
         // writes none, while the machine value says which it is.
@@ -1363,8 +1371,10 @@ pub enum OwnWait {
 /// from a constant one, which comes after its own warm-up;
 /// `scale_ratio_moved` last (PLAN 553), `corrchange`'s flag withheld where
 /// the correlation's CUSUM is off its null law because the two columns'
-/// scale ratio moved, which no model with an earlier reason has.
-pub const WITHHELD_REASONS: [&str; 8] = [
+/// scale ratio moved, which no model with an earlier reason has;
+/// `not_separated` last (PLAN 505), `pca`'s wait for components whose eigenvalues
+/// the rows have not yet told apart.
+pub const WITHHELD_REASONS: [&str; 9] = [
     "below_min_settled_frac",
     "below_min_weight",
     "above_max_error_inflation",
@@ -1373,6 +1383,7 @@ pub const WITHHELD_REASONS: [&str; 8] = [
     "unstable_rate",
     "not_identified",
     "scale_ratio_moved",
+    "not_separated",
 ];
 const REASON_SETTLED: u8 = 1;
 const REASON_MIN_PERIODS: u8 = 2;
@@ -1382,6 +1393,7 @@ const REASON_ILL_CONDITIONED: u8 = 5;
 const REASON_UNSTABLE_RATE: u8 = 6;
 const REASON_NOT_IDENTIFIED: u8 = 7;
 const REASON_SCALE_RATIO: u8 = 8;
+const REASON_NOT_SEPARATED: u8 = 9;
 
 /// The settled fraction at which a readiness notice judges a stream
 /// (docs/WARMUP-AND-CONVERGENCE.md §3): the one rule all three notices
@@ -4412,6 +4424,16 @@ fn run_instance(
         // moved inside the span, where no gate above has withheld the row.
         if reason == 0 && ratio_moved {
             reason = REASON_SCALE_RATIO;
+        }
+        // A `pca` component its model withheld because the data does not
+        // yet tell it apart from a neighbor, where no gate above has
+        // withheld the row: such a component is the only null a `pca` row
+        // writes past its floor.
+        if reason == 0
+            && matches!(inst.spec.model, ModelKind::Pca { .. })
+            && step.pred.iter().any(|p| p.is_nan())
+        {
+            reason = REASON_NOT_SEPARATED;
         }
         // The noise gate has not been met: the stream has all but settled,
         // the gate has withheld every row for a further half-life, and the

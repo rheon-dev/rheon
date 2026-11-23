@@ -373,6 +373,19 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
             **CLOCK,
         ),
         [],
+    ),  # Two components of three columns, every field they have.
+    (
+        "pca",
+        "pca",
+        dict(
+            features=["x0", "x1", "x2"],
+            n_components=2,
+            group="g",
+            half_life=25.0,
+            emit_clocks=True,
+            **CLOCK,
+        ),
+        [],
     ),
     # Each target a series of returns, every field it has: the estimators,
     # both tests and the flag.

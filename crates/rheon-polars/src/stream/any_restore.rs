@@ -58,6 +58,9 @@ impl AnyModel {
             ModelState::Realized(_) => Ok(AnyModel::Realized(Box::new(
                 rheon_core::Realized::restore(s)?,
             ))),
+            ModelState::StreamPca(_) => {
+                Ok(AnyModel::Pca(Box::new(rheon_core::StreamPca::restore(s)?)))
+            }
             // A kind only rheon-core builds, such as `ew_cov`'s bare running
             // sums: its name is the code's, so the message does not print it.
             _ => Err(StateError::Invalid(format!(

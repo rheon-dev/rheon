@@ -104,6 +104,11 @@ const SPECS: &[(&str, &str, &str)] = &[
         r#""targets": ["y", "x0"], "features": [], "half_life": 50.0"#,
     ),
     (
+        "pca",
+        r#"{"type": "pca", "method": "ccipca", "n_components": 1}"#,
+        r#""targets": ["x0"], "features": ["x0", "x1"], "half_life": 50.0"#,
+    ),
+    (
         "hmm",
         r#"{"type": "hmm", "n_components": 2, "covariance_type": "full", "precision_prior": 0.1, "learn": true}"#,
         r#""targets": ["x0"], "features": ["x0", "x1"], "half_life": 50.0"#,

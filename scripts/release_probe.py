@@ -439,6 +439,14 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         dict(targets=["y", "z"], lm_window=30, group="g", half_life=25.0, **CLOCK),
         [],
     ),
+
+    # Two components of three columns by the incremental SVD.
+    (
+        "pca",
+        "pca",
+        dict(features=["x0", "x1", "x2"], n_components=2, group="g", half_life=25.0, **CLOCK),
+        [],
+    ),
 ]
 
 #: The switches and paths the workload above never reached (review round 9,

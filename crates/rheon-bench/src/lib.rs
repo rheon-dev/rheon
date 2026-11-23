@@ -107,6 +107,9 @@ pub const MODEL_CASES: &[&str] = &[
     // Two return series under a decay, Lee and Mykland's own window of 100:
     // a row's compensated sums and ring (task 499).
     "realized",
+    // One component of 20 features by the incremental SVD: a row rotates
+    // the 2 kept directions and the row's deviation until orthogonal.
+    "pca",
 ];
 
 /// The one model case that reports on a single row of its block:
@@ -659,6 +662,16 @@ fn case_spec(id: &str) -> (Value, Shape) {
             }),
             Shape::Linear,
         ),
+        "pca" => {
+            // Rows around two centres: one direction of a larger variance,
+            // so its component is written, where independent features of
+            // one spread (and three symmetric centres) are tied and withheld.
+            let mut s = fit(json!({"type": "pca", "n_components": 1}), 20);
+            let s = s.as_object_mut().expect("an object");
+            s.remove("targets");
+            s.remove("min_weight");
+            (Value::Object(s.clone()), Shape::Classes(2))
+        }
         "ew_cov" | "bank_ew_cov_wide_t1" | "bank_ew_cov_wide_t4" => {
             let mut s = fit(json!({"type": "ew_cov"}), 20);
             let s = s.as_object_mut().expect("an object");

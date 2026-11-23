@@ -570,13 +570,18 @@ ORDER_RTOL_BY_KIND = {"lasso": 1e-10, "quantile": 2e-11}
 #: counted in ``solve_failures``; at ``max_iter=10_000`` 1.1e-8. Run
 #: converged, it is order-free to 1.1e-12.
 CONVERGED = {"lasso": {"max_iter": 100_000, "tol": 1e-14}}
+#: The features reversed where ``x0`` and ``x1`` cannot show a number:
+#: they are independent and of one spread, so ``pca``'s two components are
+#: tied and withheld on every row; ``x0`` and ``y`` are correlated.
+FEATURE_PAIR = {"pca": ("x0", "y")}
 
 
 @pytest.mark.parametrize(("variant", "seed"), _seeded([k for k in KINDS if k not in NO_FEATURES]))
 def test_the_feature_order_moves_no_number(variant: str, seed: int):
     key = "columns" if variant == "audit" else "features"
     extra = CONVERGED.get(variant, {})
-    fw, bw = {key: ["x0", "x1"], **extra}, {key: ["x1", "x0"], **extra}
+    a0, a1 = FEATURE_PAIR.get(variant, ("x0", "x1"))
+    fw, bw = {key: [a0, a1], **extra}, {key: [a1, a0], **extra}
     df = _stream(seed)
     a = run(variant, df, **fw)
     b = run(variant, df, **bw)

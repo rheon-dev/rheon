@@ -315,6 +315,7 @@ def describe_api(cli: Path | None = None) -> str:
         ("garch", dict(targets=["y", "z"], vol="gjr", dist="t", horizon=3)),
         ("dcc", dict(targets=["y", "z", "w"], asymmetric=True, half_life=float("inf"))),
         ("realized", dict(targets=["y", "z"], half_life=100.0, lm_window=30)),
+        ("pca", dict(features=["x0", "x1", "x2"], n_components=2, half_life=100.0)),
         (
             "deco blocked",
             dict(
@@ -747,6 +748,7 @@ ENUM_PROBES: list[
         "model.closed",
         "word",
     ),
+    ("pca.method", "pca", {}, "model.method", "word"),
     ("marginal.closed", "marginal", {"window_size": 100.0}, "model.closed", "word"),
     ("ew_class.covariance_type", "ew_class", {}, "model.covariance_type", "word"),
     ("ew_class.window_budget", "ew_class", {"window_size": 100.0}, "model.window_budget", "key"),

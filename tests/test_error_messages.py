@@ -608,6 +608,7 @@ BUILDERS = {
     rp.spec.garch: dict(features=None, half_life=None),
     rp.spec.dcc: dict(features=None, targets=["x0", "y"]),
     rp.spec.realized: dict(features=None),
+    rp.spec.pca: dict(features=["x0", "y"], targets=None),
 }
 
 
@@ -622,6 +623,7 @@ NO_TARGET = [
     rp.spec.corrchange,
     rp.spec.hmm,
     rp.spec.rcov,
+    rp.spec.pca,
 ]
 
 
