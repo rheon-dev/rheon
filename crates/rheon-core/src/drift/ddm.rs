@@ -66,6 +66,28 @@ impl Ddm {
         (self.p_min, self.s_min)
     }
 
+    /// Whether a restored state keeps the shape every row relies on: a
+    /// `drift_threshold` finite and above 0, as a spec takes it, a whole
+    /// count of rows, a rate in `[0, 1]`, and a minimum that is either none
+    /// yet (every part infinite) or a rate in `[0, 1]` with a deviation at
+    /// least 0.
+    pub fn sound(&self) -> bool {
+        let none = self.p_min == f64::INFINITY
+            && self.s_min == f64::INFINITY
+            && self.ps_min == f64::INFINITY;
+        let some = (0.0..=1.0).contains(&self.p_min)
+            && self.s_min.is_finite()
+            && self.s_min >= 0.0
+            && self.ps_min.is_finite();
+        self.drift_threshold.is_finite()
+            && self.drift_threshold > 0.0
+            && self.n.is_finite()
+            && self.n >= 0.0
+            && self.n.fract() == 0.0
+            && (0.0..=1.0).contains(&self.p)
+            && (none || some)
+    }
+
     pub fn reset(&mut self) {
         *self = Self::new(self.warm_start, self.drift_threshold);
     }

@@ -48,6 +48,12 @@ pub enum DriftDetector {
     Cusum(Cusum),
 }
 
+/// `error_above` as a spec takes it: at least 0 and not NaN. A spec that
+/// leaves it out of a kind that does not count errors stores infinity.
+fn error_above_sound(v: f64) -> bool {
+    v >= 0.0
+}
+
 impl DriftDetector {
     /// Feed one row's residual `r`, the slot's scale before it, the row's
     /// clock step `d` and the decay `lam` over it. Returns whether the row
@@ -87,9 +93,12 @@ impl DriftDetector {
     pub fn restores_as(&self, fresh: &Self) -> bool {
         std::mem::discriminant(self) == std::mem::discriminant(fresh)
             && match self {
+                Self::PageHinkley(p) => p.sound(),
                 Self::Adwin(a) => a.sound(),
                 Self::Kswin(k) => k.sound(),
-                _ => true,
+                Self::Cusum(c) => c.sound(),
+                Self::Ddm(e) => error_above_sound(e.error_above) && e.detector.sound(),
+                Self::Eddm(e) => error_above_sound(e.error_above) && e.detector.sound(),
             }
     }
 
@@ -269,6 +278,127 @@ mod tests {
                 .unwrap()
                 .restores_as(&fresh)
         );
+    }
+
+    /// Every kind is held to a shape its rows run on, each bound on its own
+    /// (review 2026-11-23, DRIFT-5): an ADWIN whose top level is empty (its
+    /// next drop, of the oldest bucket, finds none), wider than its cap, with
+    /// no shortest part or a sum or spread that is not a finite number;
+    /// an EDDM whose last error is after its last row (`n - last_error`
+    /// wraps); a DDM, a Page-Hinkley or a CUSUM whose numbers are out of
+    /// their range. Each kind saved mid-stream restores. (A number that is
+    /// not finite, which JSON cannot write, is held in each kind's own
+    /// tests.)
+    #[test]
+    fn every_kind_is_held_to_its_shape() {
+        let mut s = 21u64;
+        for fresh in every_kind() {
+            let mut a = fresh.clone();
+            for i in 0..400 {
+                let r = lcg(&mut s) * 2.0 + if i > 300 { 1.5 } else { 0.0 };
+                a.update(r, 1.0, 1.0, 0.99);
+            }
+            assert!(a.restores_as(&fresh), "{a:?}");
+        }
+        // Each kind after 100 rows of steady noise: every number finite
+        // (a DDM's minimum is infinite before its first).
+        let damaged = |kind: usize, edit: &dyn Fn(&mut serde_json::Value)| {
+            let fresh = every_kind().swap_remove(kind);
+            let mut fed = fresh.clone();
+            let mut s = 23u64;
+            for _ in 0..100 {
+                fed.update(lcg(&mut s), 1.0, 1.0, 0.99);
+            }
+            assert!(fed.restores_as(&fresh));
+            let mut v = serde_json::to_value(&fed).unwrap();
+            edit(&mut v);
+            let d = serde_json::from_value::<DriftDetector>(v).unwrap();
+            d.restores_as(&fresh)
+        };
+        // Page-Hinkley, untagged.
+        for edit in [
+            &(|v: &mut serde_json::Value| v["threshold"] = serde_json::json!(0.0))
+                as &dyn Fn(&mut serde_json::Value),
+            &|v| v["delta"] = serde_json::json!(-1.0),
+            &|v| v["n"] = serde_json::json!(-1.0),
+            &|v| v["w"] = serde_json::json!(-1.0),
+            &|v| v["min_cum"] = serde_json::json!(1.0),
+            &|v| {
+                v["cum"] = serde_json::json!(-2.0);
+                v["min_cum"] = serde_json::json!(-1.0);
+            },
+        ] {
+            assert!(!damaged(0, edit), "page_hinkley");
+        }
+        // ADWIN.
+        for edit in [
+            &(|v: &mut serde_json::Value| {
+                v["Adwin"]["levels"] = serde_json::json!([[[1.0, 0.0]], []]);
+                v["Adwin"]["width"] = serde_json::json!(1.0);
+                v["Adwin"]["total"] = serde_json::json!(1.0);
+            }) as &dyn Fn(&mut serde_json::Value),
+            &|v| {
+                v["Adwin"]["levels"] = serde_json::json!([[[1.0, 0.0], [1.0, 0.0]]]);
+                v["Adwin"]["width"] = serde_json::json!(2.0);
+                v["Adwin"]["max_width"] = serde_json::json!(1);
+            },
+            &|v| v["Adwin"]["min_window_length"] = serde_json::json!(0),
+            &|v| v["Adwin"]["var"] = serde_json::json!(-1.0),
+            &|v| {
+                v["Adwin"]["levels"] = serde_json::json!([[[1.0, -1.0]]]);
+                v["Adwin"]["width"] = serde_json::json!(1.0);
+            },
+        ] {
+            assert!(!damaged(1, edit), "adwin");
+        }
+        // DDM.
+        for edit in [
+            &(|v: &mut serde_json::Value| v["Ddm"]["detector"]["p"] = serde_json::json!(1.5))
+                as &dyn Fn(&mut serde_json::Value),
+            &|v| v["Ddm"]["detector"]["n"] = serde_json::json!(-1.0),
+            &|v| v["Ddm"]["detector"]["drift_threshold"] = serde_json::json!(0.0),
+            &|v| v["Ddm"]["detector"]["s_min"] = serde_json::json!(-1.0),
+            &|v| v["Ddm"]["error_above"] = serde_json::json!(-1.0),
+        ] {
+            assert!(!damaged(2, edit), "ddm");
+        }
+        // EDDM.
+        for edit in [
+            &(|v: &mut serde_json::Value| v["Eddm"]["detector"]["last_error"] = serde_json::json!(101))
+                as &dyn Fn(&mut serde_json::Value),
+            &|v| v["Eddm"]["detector"]["errors"] = serde_json::json!(101),
+            &|v| v["Eddm"]["detector"]["k"] = serde_json::json!(3.0),
+            &|v| v["Eddm"]["detector"]["beta"] = serde_json::json!(0.0),
+            &|v| v["Eddm"]["detector"]["sq"] = serde_json::json!(-1.0),
+        ] {
+            assert!(!damaged(3, edit), "eddm");
+        }
+        // CUSUM.
+        for edit in [
+            &(|v: &mut serde_json::Value| v["Cusum"]["h"] = serde_json::json!(0.0))
+                as &dyn Fn(&mut serde_json::Value),
+            &|v| v["Cusum"]["k"] = serde_json::json!(-1.0),
+            &|v| v["Cusum"]["up"] = serde_json::json!(-1.0),
+            &|v| v["Cusum"]["down"] = serde_json::json!(-0.5),
+        ] {
+            assert!(!damaged(5, edit), "cusum");
+        }
+    }
+
+    /// A damaged ADWIN whose top level is empty is refused; were it run, the
+    /// drop of its oldest bucket would find none and leave the window past
+    /// its cap.
+    #[test]
+    fn an_empty_top_level_is_no_window() {
+        let mut a = Adwin::new(AdwinCfg {
+            max_width: 1,
+            ..AdwinCfg::default()
+        });
+        a.update(1.0);
+        let mut v = serde_json::to_value(&a).unwrap();
+        v["levels"] = serde_json::json!([[[1.0, 0.0]], []]);
+        let d: Adwin = serde_json::from_value(v).unwrap();
+        assert!(!d.sound());
     }
 
     /// The tags a file carries for each kind other than Page-Hinkley are

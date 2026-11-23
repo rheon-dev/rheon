@@ -752,6 +752,17 @@ model that only the new build has is listed as an addition and passes.
   holds two samples; and `hawkes`' `window_events = 2^59` read 72 bytes. A
   debug build panicked on each. The bytes now stop at the largest `u64`,
   which no cap takes.
+- **Every drift detector in a loaded state is held to a shape its rows run
+  on** (review 2026-11-23, DRIFT-5). Only `adwin` and `kswin` were checked,
+  so a damaged file loaded an `eddm` whose last error came after its last
+  row, where the next distance wrapped to `1.8e19` (a debug build
+  panicked), and `ddm`, `page_hinkley` and `cusum` numbers out of their
+  range or not finite. Each kind is checked against the bounds a spec
+  takes and the invariants its rows keep. `adwin`'s check also refuses an
+  empty top level, a window wider than `max_width`, a `min_window_length`
+  of 0, and sums that are not finite or a spread below 0. The review's
+  endless loop on an empty top level was gone before this change, which
+  bounded that loop; the window stayed past its cap instead.
 - **A window looking ahead whose far edge is the input's last row is whole
   at the end of the input** (PLAN 565). Under `closed="right"` or `"both"`,
   `rp.ewm_sum`, `rp.ewm_mean`, `rp.ewm_rate` and `rp.ewm_quantile` with

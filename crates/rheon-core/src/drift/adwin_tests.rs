@@ -267,13 +267,27 @@ fn a_restored_windows_shape_is_checked_bound_by_bound() {
     assert!(!with(&|b| b.delta = 1.0));
     assert!(with(&|b| b.delta = 1.0 - f64::EPSILON));
     assert!(!with(&|b| b.delta = f64::NAN));
-    // The most levels: 63 are held, 64 are not.
+    // The most levels: 63 are held, 64 are not; each holds its top level's
+    // one bucket, as a state must (an empty top level is no window).
     let empty = |n: usize| {
-        let mut b = Adwin::new(cfg());
+        let mut b = Adwin::new(AdwinCfg {
+            max_width: u64::MAX,
+            ..cfg()
+        });
         b.levels = vec![VecDeque::new(); n];
+        if let Some(top) = b.levels.last_mut() {
+            top.push_back([0.0, 0.0]);
+            b.width = 2f64.powi(n as i32 - 1);
+        }
         b.sound()
     };
     assert!(empty(63) && !empty(64) && !empty(65) && !empty(0));
+    assert!(!with(&|b| b.levels.push(VecDeque::new())));
+    assert!(!with(&|b| b.min_window_length = 0) && with(&|b| b.min_window_length = 1));
+    assert!(!with(&|b| b.max_width = b.width as u64 - 1));
+    assert!(with(&|b| b.max_width = b.width as u64));
+    assert!(!with(&|b| b.var = -1e-300) && with(&|b| b.var = 0.0));
+    assert!(!with(&|b| b.total = f64::NAN));
     assert!(!with(&|b| b.clock = 0) && with(&|b| b.clock = 1));
     assert!(!with(&|b| b.max_buckets = 0));
     assert!(!with(&|b| b.max_width = 0));
