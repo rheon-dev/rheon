@@ -827,7 +827,11 @@ mod tests {
             plain.update(&[10.0], lam, 1.0);
             let h = (lam * 1e-6f64).max(1e-6f64.min(1.0));
             let want = 10.0 * 1.0 / (h + 1.0);
-            assert!((d.mean(0) - want).abs() < 1e-12, "lam {lam}: {} against {want}", d.mean(0));
+            assert!(
+                (d.mean(0) - want).abs() < 1e-12,
+                "lam {lam}: {} against {want}",
+                d.mean(0)
+            );
             assert!(d.mean(0) > 9.99999, "lam {lam}");
             assert_eq!(d.n_eff(), plain.n_eff());
         }

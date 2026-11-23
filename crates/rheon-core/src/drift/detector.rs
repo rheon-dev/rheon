@@ -431,7 +431,9 @@ mod tests {
         let mut k = DriftDetector::Cusum(c);
         k.update(1e100, 1e-250, 0.0, 1.0);
         k.update(-1e100, 1e-250, 0.0, 1.0);
-        let DriftDetector::Cusum(c) = k else { unreachable!() };
+        let DriftDetector::Cusum(c) = k else {
+            unreachable!()
+        };
         assert_eq!(c.sums(), before);
         // (1) A mean of `1e305`, then a long step with an error of 0: the
         // excess overflows below, and the statistic stays a number that

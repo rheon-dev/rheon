@@ -608,7 +608,11 @@ mod tests {
         for coverage in [1.0f64.next_down(), 1.0 - 1e-15, 0.999_999_999] {
             let mut c = Conformal::new(coverage, 0.01).unwrap();
             assert!(c.z.is_finite() && c.z > 5.0, "{coverage}: z {}", c.z);
-            assert!(c.gain.is_finite() && c.gain > 0.0, "{coverage}: gain {}", c.gain);
+            assert!(
+                c.gain.is_finite() && c.gain > 0.0,
+                "{coverage}: gain {}",
+                c.gain
+            );
             for _ in 0..50 {
                 c.update(0.3, 1.0, 0.99, 1.0);
             }

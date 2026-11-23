@@ -1216,7 +1216,10 @@ fn a_hawkes_window_past_its_state_cap_is_refused() {
             &["max_state_bytes of 262144"],
         );
     }
-    assert_eq!(rheon_core::Hawkes::state_bytes(1, 1, Some(usize::MAX)), u64::MAX);
+    assert_eq!(
+        rheon_core::Hawkes::state_bytes(1, 1, Some(usize::MAX)),
+        u64::MAX
+    );
     refused(
         r#"{"name": "m", "model": {"type": "hawkes", "kernel_decays": [1.0]},
             "targets": ["a"], "features": ["x"], "half_life": 10.0}"#,
