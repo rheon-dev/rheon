@@ -84,6 +84,51 @@ pub(crate) fn is_zero(s: &i32) -> bool {
     *s == 0
 }
 
+/// A sum of squared weights that may be absent (a state written before Kish
+/// sums were kept), with its power of two: `Σw² = q · 4^s`. Written as the
+/// plain `q` while `s` is 0 -- the bytes it had before the power was kept,
+/// in both the named and the positional encoding -- and as `[q, s]`
+/// otherwise, which a load reads either way. One field, so no encoding
+/// slides the fields after it.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub(crate) struct KishSum {
+    pub(crate) q: Option<f64>,
+    pub(crate) s: i32,
+}
+
+impl KishSum {
+    pub(crate) fn of(q: Option<f64>) -> Self {
+        Self { q, s: 0 }
+    }
+}
+
+impl serde::Serialize for KishSum {
+    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        match (self.q, self.s) {
+            (q, 0) | (q @ None, _) => q.serialize(ser),
+            (Some(q), s) => (q, s).serialize(ser),
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for KishSum {
+    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum Wire {
+            Plain(Option<f64>),
+            Scaled(f64, i32),
+        }
+        match Wire::deserialize(de)? {
+            Wire::Plain(q) => Ok(Self::of(q)),
+            Wire::Scaled(q, s) if scale_fits(s) => Ok(Self { q: Some(q), s }),
+            Wire::Scaled(_, s) => Err(serde::de::Error::custom(format!(
+                "a sum of squared weights at a power of 4^{s}, which no weight in the doubles makes"
+            ))),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

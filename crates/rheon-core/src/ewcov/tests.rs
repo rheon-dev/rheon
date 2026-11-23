@@ -3507,7 +3507,7 @@ fn kish_size_holds_at_weights_too_small_to_square() {
     assert!(small.iter().all(Option::is_some));
     let n = b.n_kish().unwrap();
     assert!((b.unbiased_factor() - n / (n - 1.0)).abs() < 1e-15);
-    assert_eq!(a.q_scale, 0);
+    assert_eq!(a.q_sum.s, 0);
     let bytes = rmp_serde::to_vec_named(&a).unwrap();
     assert!(
         !bytes.windows(7).any(|w| w == b"q_scale"),

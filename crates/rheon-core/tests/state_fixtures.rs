@@ -3748,8 +3748,8 @@ fn restarted_level_rule(
 /// `*_tiny_weights` case is fed every weight times `2^-664`, so each sum of
 /// squared weights it keeps writes a non-zero exponent beside it -- the
 /// warm-up's and every level's `w2_scale` in `sgd`, `rls`'s `s2_scale`,
-/// and every Gram's `q_scale` in `ewridge` -- and the cases at ordinary
-/// weights write none, the bytes they had.
+/// and every Gram's `q_sum` in `ewridge`, written as `[q, s]` there -- and
+/// the cases at ordinary weights write none, the bytes they had.
 #[test]
 fn the_kish_sums_exponents_are_written() {
     if regenerating() {
@@ -3760,7 +3760,14 @@ fn the_kish_sums_exponents_are_written() {
             rmpv::Value::Map(m) => {
                 for (k, v) in m {
                     if k.as_str() == Some(key) {
-                        out.push(v.as_i64().unwrap());
+                        // `q_sum` is a float, or `[q, s]` beside a power.
+                        match v {
+                            rmpv::Value::Array(a) => out.push(a[1].as_i64().unwrap()),
+                            v if key == "q_sum" => {
+                                assert!(v.is_f64() || v.is_nil(), "{v}");
+                            }
+                            v => out.push(v.as_i64().unwrap()),
+                        }
                     }
                     found(v, key, out);
                 }
@@ -3779,7 +3786,7 @@ fn the_kish_sums_exponents_are_written() {
     for (name, key, at_least) in [
         ("sgd_tiny_weights", "w2_scale", 3),
         ("rls_tiny_weights", "s2_scale", 1),
-        ("ewridge_tiny_weights", "q_scale", 1),
+        ("ewridge_tiny_weights", "q_sum", 1),
     ] {
         let s = scales(name, key);
         assert!(

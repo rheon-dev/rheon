@@ -729,7 +729,8 @@ model that only the new build has is listed as an addition and passes.
   it at that scale. While the weights square to doubles the exponent is 0
   and every operation is the plain one, to the bit. A state writes no
   exponent then, so its bytes are as before; one at such weights writes
-  `w2_scale`, `s2_scale` or `q_scale` beside its sum. Moves: `sgd.*`,
+  `w2_scale` or `s2_scale` beside its sum, or an accumulator's `q_sum` as
+  `[q, s]`. Moves: `sgd.*`,
   `pa.*`, `rls.*`, `ewridge.*`, `lasso.*`, `ew_cov.*`.
 
 - **Five edge cases of `rheon.corr` and `rheon.gram`** (review 2026-11-23,
