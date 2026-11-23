@@ -12,6 +12,12 @@
 //! FIGARCH(1,d,1) s_t = ω/(1 − β) + Σ_{j=1..M} λ_j e²_{t−j}
 //! ```
 //!
+//! With inputs (GARCH-X), the row's own `x_t` enters its variance, `π'x_t`
+//! added to GARCH's and GJR's `s_t` and to EGARCH's `ln s_t`, and each `π`'s
+//! sensitivity is the same recursion driven by the input: `∂s_t/∂π = x_t +
+//! β ∂s_{t−1}/∂π`, and EGARCH's `∂ln s_t/∂π = x_t + (β − (α |z| + γ
+//! z)/2)_{t−1} ∂ln s_{t−1}/∂π`. FIGARCH takes none.
+//!
 //! Before the first row every lag is the backcast `b` (`arch`'s: the
 //! 0.94-weighted mean of the first 75 squared residuals), GJR's asymmetric
 //! term `b/2`, EGARCH's news terms 0 and its `ln s` lag `ln b`, and every
@@ -34,8 +40,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::GarchVol;
 use super::math;
+use super::{GarchVol, MAX_K};
 
 /// `E|z|` of a standard normal, EGARCH's centring of `|z|` (`arch` keeps it
 /// for every distribution).
@@ -145,21 +151,24 @@ impl Filter {
         self.ring[(self.head + j - 1) % m]
     }
 
-    /// `s_t` at `theta`, and `∂ ln s_t/∂θ` into `dl` (`k` entries).
-    pub fn predict(&self, vol: GarchVol, theta: &[f64], dl: &mut [f64]) -> f64 {
+    /// `s_t` at `theta`, and `∂ ln s_t/∂θ` into `dl` (`k` entries): the
+    /// process's parameters, then one a input of `x`, the row's own inputs,
+    /// whose terms `π'x` come after the process's in the sum.
+    pub fn predict(&self, vol: GarchVol, theta: &[f64], x: &[f64], dl: &mut [f64]) -> f64 {
+        let vk = vol.k();
         match vol {
             GarchVol::Garch | GarchVol::Gjr => {
-                let k = dl.len();
-                let beta = theta[k - 1];
-                let x = |i: usize| match (i, k) {
+                let beta = theta[vk - 1];
+                let reg = |i: usize| match (i, vk) {
                     (0, _) => 1.0,
                     (1, _) => self.lag[0],
                     (2, 4) => self.lag[1],
-                    _ => self.lag[2],
+                    _ if i < vk => self.lag[2],
+                    _ => x[i - vk],
                 };
-                let s: f64 = (0..k).map(|i| theta[i] * x(i)).sum();
+                let s: f64 = (0..dl.len()).map(|i| theta[i] * reg(i)).sum();
                 for (i, d) in dl.iter_mut().enumerate() {
-                    *d = x(i) + beta * self.sens[i];
+                    *d = reg(i) + beta * self.sens[i];
                 }
                 if s > 0.0 {
                     for d in dl.iter_mut() {
@@ -180,10 +189,14 @@ impl Filter {
                     )
                 };
                 let l = self.lag[1];
-                let lt = theta[0] + theta[1] * az + theta[2] * zz + theta[3] * l;
-                let x = [1.0, az, zz, l];
+                let mut lt = theta[0] + theta[1] * az + theta[2] * zz + theta[3] * l;
+                for (p, v) in theta[vk..dl.len()].iter().zip(x) {
+                    lt += p * v;
+                }
+                let head = [1.0, az, zz, l];
                 for (i, d) in dl.iter_mut().enumerate() {
-                    *d = x[i] + coef * self.sens[i];
+                    let reg = if i < vk { head[i] } else { x[i - vk] };
+                    *d = reg + coef * self.sens[i];
                 }
                 // `arch`'s variance bounds: within a factor 10⁶ of the
                 // 0.94-weighted mean of `e²` over the rows before, above it
@@ -217,8 +230,9 @@ impl Filter {
         }
     }
 
-    /// `s_t` at `theta` alone, without the sensitivity.
-    pub fn variance(&self, vol: GarchVol, theta: &[f64], k: usize) -> f64 {
+    /// `s_t` at `theta` alone, without the sensitivity; `k` the variance
+    /// equation's parameters, `x` the row's inputs.
+    pub fn variance(&self, vol: GarchVol, theta: &[f64], x: &[f64], k: usize) -> f64 {
         if vol == GarchVol::Figarch {
             let mut h = theta[0] / (1.0 - theta[3]);
             figarch_weights(theta, self.ring.len(), false, |j, lam, _, _, _| {
@@ -226,8 +240,8 @@ impl Filter {
             });
             return h;
         }
-        let mut dl = [0.0; 4];
-        self.predict(vol, theta, &mut dl[..k])
+        let mut dl = [0.0; MAX_K];
+        self.predict(vol, theta, x, &mut dl[..k])
     }
 
     /// The lags moved past a row of residual `e`, whose variance was `s` and

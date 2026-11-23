@@ -4898,6 +4898,7 @@ fn hawkes() {
 /// learned row.
 fn garch_cfg() -> GarchCfg {
     GarchCfg {
+        n_inputs: 0,
         n_targets: 1,
         vol: GarchVol::Garch,
         dist: GarchDist::Normal,
@@ -4932,6 +4933,7 @@ fn garch() {
         (GarchVol::Figarch, GarchDist::Normal),
     ] {
         let c = GarchCfg {
+            n_inputs: 0,
             vol,
             dist,
             horizons: vec![3],
@@ -4944,6 +4946,25 @@ fn garch() {
         let r = probe_with(Garch::new(c).unwrap(), 2, Some(&Garch::n_eff));
         assert!(r.roundtrips, "{vol:?} {dist:?}");
     }
+    // GARCH-X: the features are the variance equation's inputs (PLAN 559).
+    // EGARCH's, which read any sign: the probe's features fall below 0,
+    // which GARCH and GJR refuse as rows of weight 0 (`garch/tests_x.rs`).
+    {
+        let vol = GarchVol::Egarch;
+        // a cap that holds the start of 50 rows with its inputs, and not
+        // its doubling
+        let c = GarchCfg {
+            n_inputs: K,
+            vol,
+            max_state_bytes: Some(3000),
+            ..garch_cfg()
+        };
+        let m = Garch::new(c).unwrap();
+        assert_eq!(m.n_features(), K, "garch-X reads its inputs");
+        let r = probe_with(m, 1, Some(&Garch::n_eff));
+        assert!(r.roundtrips, "{vol:?} with inputs");
+        assert_eq!(r.n_outputs, 4);
+    }
 }
 
 #[test]
@@ -4952,6 +4973,7 @@ fn garch_predict_is_the_step() {
     predict_is_the_step_without_the_step(
         || {
             Garch::new(GarchCfg {
+                n_inputs: 0,
                 vol: GarchVol::Gjr,
                 dist: GarchDist::T,
                 ..garch_cfg()
@@ -4964,6 +4986,7 @@ fn garch_predict_is_the_step() {
     predict_is_the_step_without_the_step(
         || {
             Garch::new(GarchCfg {
+                n_inputs: 0,
                 vol: GarchVol::Egarch,
                 ..garch_cfg()
             })
@@ -4972,9 +4995,27 @@ fn garch_predict_is_the_step() {
         1,
         false,
     );
+    // EGARCH-X: its inputs read any sign, as the features here take
+    {
+        let vol = GarchVol::Egarch;
+        predict_is_the_step_without_the_step(
+            move || {
+                Garch::new(GarchCfg {
+                    n_inputs: K,
+                    vol,
+                    max_state_bytes: Some(3000),
+                    ..garch_cfg()
+                })
+                .unwrap()
+            },
+            1,
+            false,
+        );
+    }
     predict_is_the_step_without_the_step(
         || {
             Garch::new(GarchCfg {
+                n_inputs: 0,
                 variance_targeting: true,
                 ..garch_cfg()
             })

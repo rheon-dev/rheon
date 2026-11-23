@@ -123,6 +123,49 @@ pub(super) fn ridged(a: &[f64], n: usize, rel: f64) -> Vec<f64> {
     r
 }
 
+/// The smallest eigenvalue of the symmetric `n × n` matrix `a` (row-major),
+/// by cyclic Jacobi rotations until every off-diagonal entry is under
+/// `10⁻¹⁸` of the diagonal's scale, at most 64 sweeps. For the small
+/// matrices of the start's information (at most 12 a side).
+pub(super) fn min_eigenvalue(a: &[f64], n: usize) -> f64 {
+    let mut m = a.to_vec();
+    let scale = (0..n).map(|i| m[i * n + i].abs()).fold(0.0, f64::max);
+    for _ in 0..64 {
+        let off: f64 = (0..n)
+            .flat_map(|i| (0..n).filter(move |&j| j != i).map(move |j| (i, j)))
+            .map(|(i, j)| m[i * n + j] * m[i * n + j])
+            .sum();
+        if off.sqrt() <= 1e-18 * scale {
+            break;
+        }
+        for p in 0..n {
+            for r in p + 1..n {
+                let apr = m[p * n + r];
+                if apr == 0.0 {
+                    continue;
+                }
+                let (app, arr) = (m[p * n + p], m[r * n + r]);
+                let theta = (arr - app) / (2.0 * apr);
+                let t = theta.signum() / (theta.abs() + (theta * theta + 1.0).sqrt());
+                let t = if theta == 0.0 { 1.0 } else { t };
+                let c = 1.0 / (t * t + 1.0).sqrt();
+                let s = t * c;
+                for k in 0..n {
+                    let (mkp, mkr) = (m[k * n + p], m[k * n + r]);
+                    m[k * n + p] = c * mkp - s * mkr;
+                    m[k * n + r] = s * mkp + c * mkr;
+                }
+                for k in 0..n {
+                    let (mpk, mrk) = (m[p * n + k], m[r * n + k]);
+                    m[p * n + k] = c * mpk - s * mrk;
+                    m[r * n + k] = s * mpk + c * mrk;
+                }
+            }
+        }
+    }
+    (0..n).map(|i| m[i * n + i]).fold(f64::INFINITY, f64::min)
+}
+
 /// Half-spaces `A x ≥ b`, `A` row-major with `n` columns.
 #[derive(Debug, Clone)]
 pub(super) struct HalfSpaces {
@@ -261,6 +304,22 @@ mod tests {
         // and a singular one no LU solve
         assert!(cholesky(&[1.0, 2.0, 2.0, 1.0], 2).is_none());
         assert!(lu_solve(&[1.0, 2.0, 2.0, 4.0], 2, &[1.0, 1.0]).is_none());
+    }
+
+    #[test]
+    fn the_smallest_eigenvalue_is_faers() {
+        let a = [
+            4.0, 1.0, 0.5, 0.2, //
+            1.0, 3.0, 0.2, 0.1, //
+            0.5, 0.2, 2.0, 0.3, //
+            0.2, 0.1, 0.3, 1.0,
+        ];
+        let want = crate::oracle::sym_eigen(&a).0[0];
+        assert!((min_eigenvalue(&a, 4) - want).abs() < 1e-14, "{want}");
+        // two columns exactly collinear: the rounding's eigenvalue
+        let b = [1.0, 1.0, 0.3, 1.0, 1.0, 0.3, 0.3, 0.3, 1.0];
+        assert!(min_eigenvalue(&b, 3).abs() < 1e-15);
+        assert_eq!(min_eigenvalue(&[2.5], 1), 2.5);
     }
 
     #[test]

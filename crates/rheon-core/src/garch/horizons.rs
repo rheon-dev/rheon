@@ -7,13 +7,20 @@
 //! rows, this one's included: the variance of the `h`-row return.
 //!
 //! ```text
-//! garch, gjr   f_1 = s_t,  f_h = ω + P f_{h−1},  P = α + γ/2 + β   (γ = 0 for garch)
-//! egarch       f_h = exp(L_h) Π_{j=1}^{h−1} M(β^{j−1}),     L_1 = ln s_t,  L_h = ω + β L_{h−1}
+//! garch, gjr   f_1 = s_t,  f_h = ω̄ + P f_{h−1},  P = α + γ/2 + β   (γ = 0 for garch)
+//! egarch       f_h = exp(L_h) Π_{j=1}^{h−1} M(β^{j−1}),     L_1 = ln s_t,  L_h = ω̄ + β L_{h−1}
 //!              M(c) = E e^{c g(z)} = e^{−cα√(2/π)} [e^{(A+B)²/2} Φ(A + B) + e^{(A−B)²/2} Φ(A − B)],
 //!              A = cα,  B = cγ,  g(z) = α (|z| − √(2/π)) + γ z
 //! figarch      f_h = ω/(1 − β) + Σ_{j=1}^{M} λ_j ê_{t+h−1−j},  ê a forecast at or after row t, the ring's e² before it
 //! F_h = Σ_{i=1}^{h} f_i
+//! ω̄ = ω + π'x̄   (ω without inputs)
 //! ```
+//!
+//! With inputs (GARCH-X), horizon 1 reads the row's own `x_t`, as its
+//! variance does, and every later row holds the inputs at `x̄`, their
+//! weighted mean over the rows learned: no input past the row is known, and
+//! at `x̄` the forecasts revert to the long-run variance the inputs' mean
+//! gives, `ω̄/(1 − P)` for GARCH and GJR.
 //!
 //! Each later row's `e²` is read as its variance, and GJR's asymmetric term
 //! as half of it (its innovations are symmetric), as `arch`'s analytic
@@ -171,13 +178,15 @@ pub fn egarch_mgf(alpha: f64, gamma: f64, c: f64) -> f64 {
 }
 
 /// The forecasts of one target from a row whose variance is `s`, at the
-/// parameters `theta` and the lags in `filter`: for each of `horizons`, in
-/// its order, the variance at it and the sum to it, into `out` (two
-/// slots a horizon). `scratch` holds FIGARCH's weights and the pass's
-/// values.
+/// parameters `theta` (the variance equation's, the inputs' `π` last) and
+/// the lags in `filter`, the inputs held at `xbar` past the row: for each
+/// of `horizons`, in its order, the variance at it and the sum to it, into
+/// `out` (two slots a horizon). `scratch` holds FIGARCH's weights and the
+/// pass's values.
 pub fn forecasts(
     cfg: &GarchCfg,
     theta: &[f64],
+    xbar: &[f64],
     filter: &Filter,
     s: f64,
     out: &mut [f64],
@@ -202,6 +211,12 @@ pub fn forecasts(
         }
     };
     let k = cfg.vol.k();
+    // The intercept past the row: `ω + π'x̄`, the inputs at their learned
+    // mean; `ω` itself without inputs.
+    let mut omega = theta[0];
+    for (p, x) in theta[k..].iter().zip(xbar) {
+        omega += p * x;
+    }
     match cfg.vol {
         GarchVol::Garch | GarchVol::Gjr => {
             // the persistence `P = α + γ/2 + β` (γ = 0 for garch), formed
@@ -215,7 +230,7 @@ pub fn forecasts(
             let mut f = s;
             for h in 1..=hmax {
                 if h > 1 {
-                    f = theta[0] + persist * f;
+                    f = omega + persist * f;
                 }
                 let (a, e) = two_sum(hi, f);
                 hi = a;
@@ -224,7 +239,7 @@ pub fn forecasts(
             }
         }
         GarchVol::Egarch => {
-            let (omega, alpha, gamma, beta) = (theta[0], theta[1], theta[2], theta[3]);
+            let (alpha, gamma, beta) = (theta[1], theta[2], theta[3]);
             let mut ln_s = math::ln(s);
             let mut prod = 1.0;
             let mut c = 1.0;

@@ -10,10 +10,10 @@
 
 use super::dist::{self, LAM_LIM, NU_HI, NU_LO};
 use super::filter::{Filter, figarch_weights};
-use super::linalg::HalfSpaces;
+use super::linalg::{HalfSpaces, min_eigenvalue};
 use super::math;
 use super::optim::{Eval, Fit, maximize};
-use super::{GarchDist, GarchVol};
+use super::{GarchDist, GarchVol, MAX_K};
 
 /// The stationarity margin: the persistence is held at most `1 − 10⁻⁴`.
 pub(super) const MARGIN: f64 = 1e-4;
@@ -120,20 +120,55 @@ pub(super) fn egarch_set() -> HalfSpaces {
 /// guard's part that reads the data, its filter contracting on the
 /// standardized residuals the filter at `theta` gives the rows
 /// ([`super::guard`]).
-pub(super) fn egarch_start_admits(theta: &[f64], rows: &[[f64; 2]], bc: f64) -> bool {
-    let mut f = Filter::new(GarchVol::Egarch, 4, 0, bc);
+pub(super) fn egarch_start_admits(
+    theta: &[f64],
+    rows: &[[f64; 2]],
+    xs: &[f64],
+    q: usize,
+    bc: f64,
+) -> bool {
+    let k = 4 + q;
+    let mut f = Filter::new(GarchVol::Egarch, k, 0, bc);
     let mut counts = vec![0.0; super::guard::BINS];
-    let mut dl = [0.0; 4];
-    for r in rows {
-        let s = f.predict(GarchVol::Egarch, theta, &mut dl);
+    let mut dl = [0.0; MAX_K];
+    let dl = &mut dl[..k];
+    for (i, r) in rows.iter().enumerate() {
+        let s = f.predict(GarchVol::Egarch, theta, &xs[i * q..(i + 1) * q], dl);
         counts[super::guard::bin(r[0] / s.sqrt())] += r[1];
-        f.push(GarchVol::Egarch, r[0], s, &dl);
+        f.push(GarchVol::Egarch, r[0], s, dl);
     }
     super::guard::admits(theta, &counts)
 }
 
-/// The set of a process's `θ`, its `ω` at least `floor` (none for EGARCH).
-pub(super) fn set_of(vol: GarchVol, floor: f64) -> HalfSpaces {
+/// The set of a process's `θ`, its `ω` at least `floor` (none for EGARCH),
+/// with `q` inputs' `π` after the process's parameters: `π ≥ 0` under
+/// GARCH and GJR, which with `x ≥ 0` keeps the variance positive, and free
+/// under EGARCH, whose input enters the log-variance. The `π` rows come
+/// after the process's, which alone decide whether a fit is on a bound
+/// ([`process_set`]): `π = 0` is where an input that explains nothing sits.
+pub(super) fn set_of(vol: GarchVol, q: usize, floor: f64) -> HalfSpaces {
+    let base = process_set(vol, floor);
+    if q == 0 {
+        return base;
+    }
+    let n = base.n + q;
+    let mut a = Vec::with_capacity((base.b.len() + q) * n);
+    for row in base.a.chunks(base.n) {
+        a.extend_from_slice(row);
+        a.extend(std::iter::repeat_n(0.0, q));
+    }
+    let mut b = base.b;
+    if vol != GarchVol::Egarch {
+        for i in 0..q {
+            a.extend((0..n).map(|j| if j == base.n + i { 1.0 } else { 0.0 }));
+            b.push(0.0);
+        }
+    }
+    HalfSpaces { a, b, n }
+}
+
+/// The set of a process's own parameters, without inputs.
+pub(super) fn process_set(vol: GarchVol, floor: f64) -> HalfSpaces {
     match vol {
         GarchVol::Gjr => gjr_set(floor),
         GarchVol::Egarch => egarch_set(),
@@ -151,13 +186,17 @@ pub(super) fn clip_shape(shape: &mut [f64]) {
 }
 
 /// The buffer's weighted log-likelihood under a GARCH, GJR or EGARCH `θ`
-/// (all `k` parameters), with the shape `shape` (empty: normal), its
+/// (all `k` parameters, the last `q` the inputs' `π`, the rows' inputs `xs`
+/// in order, `q` a row), with the shape `shape` (empty: normal), its
 /// gradient in `(θ, shape)` and its matrix.
+#[allow(clippy::too_many_arguments)]
 fn likelihood(
     vol: GarchVol,
     dist: GarchDist,
     k: usize,
+    q: usize,
     rows: &[[f64; 2]],
+    xs: &[f64],
     bc: f64,
     x: &[f64],
     grad: bool,
@@ -175,17 +214,17 @@ fn likelihood(
     }
     let skew = dist == GarchDist::Skewt;
     let mut filter = Filter::new(vol, k, 0, bc);
-    let mut dl = [0.0; 4];
+    let mut dl = [0.0; MAX_K];
     let dl = &mut dl[..k];
     let mut e = Eval {
         f: 0.0,
         g: vec![0.0; p],
         h: vec![0.0; p * p],
     };
-    let mut row = [0.0; 6];
-    for r in rows {
+    let mut row = [0.0; MAX_K + 2];
+    for (t, r) in rows.iter().enumerate() {
         let (y, w) = (r[0], r[1]);
-        let s = filter.predict(vol, theta, dl);
+        let s = filter.predict(vol, theta, &xs[t * q..(t + 1) * q], dl);
         if !(s > 0.0 && s.is_finite() && dl.iter().all(|d| d.is_finite())) {
             return Eval::bad(p);
         }
@@ -308,7 +347,7 @@ fn targeted(
     let k = q + 1;
     let mut theta = vec![v * (1.0 - c.iter().zip(phi).map(|(c, p)| c * p).sum::<f64>())];
     theta.extend_from_slice(phi);
-    let full = likelihood(vol, GarchDist::Normal, k, rows, bc, &theta, grad);
+    let full = likelihood(vol, GarchDist::Normal, k, 0, rows, &[], bc, &theta, grad);
     if !full.f.is_finite() {
         return Eval::bad(q);
     }
@@ -370,18 +409,31 @@ fn garch_grid(gjr: bool, v: f64) -> Vec<Vec<f64>> {
 /// orders above the one and five below the other is decided by no last bit.
 pub(super) const SOUND_DECREMENT: f64 = 1e-6;
 
-/// The likelihood-ratio statistic's cut, χ² at 0.999, for 2 and for 3
-/// restrictions ([`restrictions`]): `−2 ln 0.001` and `chi2.ppf(0.999, 3)`.
-const LR_CUT_2: f64 = 13.815_510_557_964_274;
-const LR_CUT_3: f64 = 16.266_236_196_238_13;
+/// The likelihood-ratio statistic's cut, χ² at 0.999, for 2 to 11
+/// restrictions ([`restrictions`]): `chi2.ppf(0.999, r)` at `LR_CUTS[r −
+/// 2]`, 2 being `−2 ln 0.001`. Each is held by its survival function in the
+/// tests.
+const LR_CUTS: [f64; 10] = [
+    13.815_510_557_964_274,
+    16.266_236_196_238_13,
+    18.466_826_952_903_17,
+    20.515_005_652_432_873,
+    22.457_744_484_825_323,
+    24.321_886_347_856_854,
+    26.124_481_558_376_14,
+    27.877_164_871_256_568,
+    29.588_298_445_074_42,
+    31.264_133_620_239_985,
+];
 
 /// How many restrictions constant variance puts on a form's process: `α =
 /// β = 0` for GARCH(1,1), free or variance-targeted; `α = γ = β = 0` for
 /// GJR and EGARCH; `d = 0` and `φ = β` for FIGARCH, whose four parameters
-/// then give one variance, `ω/(1 − β)`, as GJR's do. A t's shape is in both
-/// models and restricts nothing.
-pub(super) fn restrictions(vol: GarchVol) -> usize {
-    match vol {
+/// then give one variance, `ω/(1 − β)`, as GJR's do; and with `q` inputs
+/// each `π = 0` besides. A t's shape is in both models and restricts
+/// nothing.
+pub(super) fn restrictions(vol: GarchVol, q: usize) -> usize {
+    q + match vol {
         GarchVol::Garch => 2,
         GarchVol::Gjr | GarchVol::Egarch | GarchVol::Figarch => 3,
     }
@@ -389,18 +441,43 @@ pub(super) fn restrictions(vol: GarchVol) -> usize {
 
 /// The likelihood-ratio statistic a start must reach before its fit is
 /// stepped from: χ² of [`restrictions`] at 0.999.
-pub(super) fn lr_cut(vol: GarchVol) -> f64 {
-    if restrictions(vol) == 2 {
-        LR_CUT_2
-    } else {
-        LR_CUT_3
-    }
+pub(super) fn lr_cut(vol: GarchVol, q: usize) -> f64 {
+    LR_CUTS[restrictions(vol, q) - 2]
 }
 
 /// Whether a start's rows identify its process: its likelihood-ratio
 /// statistic at least [`lr_cut`] (not a number does not).
-pub(super) fn identified(vol: GarchVol, lr: f64) -> bool {
-    lr >= lr_cut(vol)
+pub(super) fn identified(vol: GarchVol, q: usize, lr: f64) -> bool {
+    lr >= lr_cut(vol, q)
+}
+
+/// The smallest eigenvalue of the start's information in the variance
+/// equation's parameters, scaled to a unit diagonal, at or under which the
+/// inputs are not identified: an input constant over the start's rows is
+/// collinear with `ω` (its sensitivity is the same recursion driven by a
+/// constant, so it is `x` times `ω`'s), and two inputs that move together
+/// are collinear with each other. Exactly collinear, the eigenvalue is the
+/// rounding's (`10⁻¹⁶` to `10⁻¹⁵` over 2,000 rows); the cut sits five orders
+/// above that.
+pub(super) const COLLINEAR: f64 = 1e-10;
+
+/// Whether the start's information in its first `k` parameters, `h` of
+/// `p × p` (row-major), scaled to a unit diagonal, has its smallest
+/// eigenvalue at or under [`COLLINEAR`], or a diagonal entry that is not
+/// positive.
+pub(super) fn collinear(h: &[f64], p: usize, k: usize) -> bool {
+    let d: Vec<f64> = (0..k).map(|i| h[i * p + i]).collect();
+    if !d.iter().all(|v| *v > 0.0 && v.is_finite()) {
+        return true;
+    }
+    let mut c = vec![0.0; k * k];
+    for i in 0..k {
+        for j in 0..k {
+            c[i * k + j] = h[i * p + j] / (d[i] * d[j]).sqrt();
+        }
+    }
+    let low = min_eigenvalue(&c, k);
+    low.is_nan() || low <= COLLINEAR
 }
 
 /// `Σw / Σw²` over the buffer: the factor that takes its weighted
@@ -424,6 +501,9 @@ pub(super) struct StartFit {
     pub theta: Vec<f64>,
     pub sound: bool,
     pub lr: f64,
+    /// Inputs the start's rows do not tell apart from `ω` or from each
+    /// other ([`collinear`]); false without inputs.
+    pub collinear: bool,
 }
 
 impl StartFit {
@@ -432,6 +512,7 @@ impl StartFit {
             theta,
             sound: fit.decrement * scale <= SOUND_DECREMENT && !bounded,
             lr: 2.0 * (fit.f - f0) * scale,
+            collinear: false,
         }
     }
 }
@@ -452,7 +533,7 @@ fn constant_variance(dist: GarchDist, rows: &[[f64; 2]], bc: f64, v: f64, floor:
     let obj = |x: &[f64], grad: bool| {
         let mut th = vec![x[0], 0.0, 0.0];
         th.extend_from_slice(&x[1..]);
-        let full = likelihood(GarchVol::Garch, dist, 3, rows, bc, &th, grad);
+        let full = likelihood(GarchVol::Garch, dist, 3, 0, rows, &[], bc, &th, grad);
         if !full.f.is_finite() {
             return Eval::bad(q);
         }
@@ -508,15 +589,19 @@ fn on_bound(set: &HalfSpaces, x: &[f64], units: &[f64]) -> bool {
 /// The fit of the buffer for a form, the variance level at `v` (the
 /// buffer's weighted mean square). `None` when no grid point has a finite
 /// likelihood.
+/// `xs` holds the rows' inputs, `xs.len() / rows.len()` a row.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn fit(
     vol: GarchVol,
     dist: GarchDist,
     targeted: bool,
     trunc: usize,
     rows: &[[f64; 2]],
+    xs: &[f64],
     bc: f64,
     v: f64,
 ) -> Option<StartFit> {
+    let q = xs.len().checked_div(rows.len()).unwrap_or(0);
     let floor = OMEGA_FLOOR_FRAC * v;
     let scale = kish_scale(rows);
     let f0 = constant_variance(dist, rows, bc, v, floor);
@@ -537,7 +622,8 @@ pub(super) fn fit(
     }
     match vol {
         GarchVol::Egarch => {
-            let set = egarch_set();
+            let k = 4 + q;
+            let set = set_of(vol, q, 0.0);
             let lv = math::ln(v);
             let mut grid = Vec::new();
             for a in [0.05, 0.1, 0.2] {
@@ -547,18 +633,20 @@ pub(super) fn fit(
                     }
                 }
             }
+            let (grid, units) = with_inputs(vol, grid, &[1.0; 4], rows, xs, q);
             let obj = |x: &[f64], g: bool| {
-                if !egarch_start_admits(x, rows, bc) {
-                    return Eval::bad(4);
+                if !egarch_start_admits(x, rows, xs, q, bc) {
+                    return Eval::bad(k);
                 }
-                likelihood(vol, dist, 4, rows, bc, x, g)
+                likelihood(vol, dist, k, q, rows, xs, bc, x, g)
             };
             let proj = |x: &[f64]| set.project(x);
-            let units = [1.0; 4];
             let fit = maximize(&obj, &proj, &grid, &units)?;
-            let bounded = on_bound(&set, &fit.theta, &units);
+            let bounded = on_bound(&egarch_set(), &fit.theta[..4], &units[..4]);
             let theta = fit.theta.clone();
-            Some(StartFit::of(fit, theta, bounded, f0, scale))
+            let mut got = StartFit::of(fit, theta, bounded, f0, scale);
+            got.collinear = q > 0 && inputs_collinear(vol, dist, k, q, rows, xs, bc, &got.theta);
+            Some(got)
         }
         GarchVol::Figarch => {
             let set = figarch_set(floor);
@@ -587,12 +675,16 @@ pub(super) fn fit(
         _ => {
             // GARCH and GJR, normal or with a t: every parameter free
             let gjr = vol == GarchVol::Gjr;
-            let k = if gjr { 4 } else { 3 };
-            let set = set_of(vol, floor);
+            let vk = if gjr { 4 } else { 3 };
+            let k = vk + q;
+            let set = set_of(vol, q, floor);
             let shapes = start_shapes(dist);
             let m = dist.shape_len();
             let mut grid = Vec::new();
-            for th in garch_grid(gjr, v) {
+            let mut head = vec![1.0; vk];
+            head[0] = v;
+            let (with, units_k) = with_inputs(vol, garch_grid(gjr, v), &head, rows, xs, q);
+            for th in with {
                 if m == 0 {
                     grid.push(th);
                 } else {
@@ -603,7 +695,7 @@ pub(super) fn fit(
                     }
                 }
             }
-            let obj = |x: &[f64], g: bool| likelihood(vol, dist, k, rows, bc, x, g);
+            let obj = |x: &[f64], g: bool| likelihood(vol, dist, k, q, rows, xs, bc, x, g);
             let proj = |x: &[f64]| {
                 let mut out = set.project(&x[..k]);
                 let mut shape = x[k..].to_vec();
@@ -613,12 +705,88 @@ pub(super) fn fit(
                 out.extend(shape);
                 out
             };
-            let mut units = vec![1.0; k + m];
-            units[0] = v;
+            let mut units = units_k;
+            units.resize(k + m, 1.0);
             let fit = maximize(&obj, &proj, &grid, &units)?;
-            let bounded = on_bound(&set, &fit.theta[..k], &units[..k]);
+            let bounded = on_bound(&process_set(vol, floor), &fit.theta[..vk], &units[..vk]);
             let theta = fit.theta.clone();
-            Some(StartFit::of(fit, theta, bounded, f0, scale))
+            let mut got = StartFit::of(fit, theta, bounded, f0, scale);
+            got.collinear = q > 0 && inputs_collinear(vol, dist, k, q, rows, xs, bc, &got.theta);
+            Some(got)
         }
     }
+}
+
+/// The start's grid with `q` inputs: each point with every `π` at 0, and
+/// beside it one with a share of the level moved onto the inputs, half of
+/// `ω` under GARCH and GJR (`π_i x̄_i = ω/(2q)`, where `x̄_i`, the weighted
+/// mean of the input over the rows, is above 0), and `0.05` of the
+/// log-variance under EGARCH (`π_i x̄_i = 0.05/q`, `x̄_i` the mean of `|x|`).
+/// With the parameters' units, `head` the process's: an input's is the
+/// level over its mean, as `ω`'s is the level. Without inputs, the grid
+/// and the units as they are.
+fn with_inputs(
+    vol: GarchVol,
+    grid: Vec<Vec<f64>>,
+    head: &[f64],
+    rows: &[[f64; 2]],
+    xs: &[f64],
+    q: usize,
+) -> (Vec<Vec<f64>>, Vec<f64>) {
+    let mut units = head.to_vec();
+    if q == 0 {
+        return (grid, units);
+    }
+    let egarch = vol == GarchVol::Egarch;
+    let wsum: f64 = rows.iter().map(|r| r[1]).sum();
+    let mean: Vec<f64> = (0..q)
+        .map(|i| {
+            rows.iter()
+                .enumerate()
+                .map(|(t, r)| r[1] * xs[t * q + i].abs())
+                .sum::<f64>()
+                / wsum
+        })
+        .collect();
+    let level = if egarch { 1.0 } else { head[0] };
+    units.extend(mean.iter().map(|m| {
+        if *m > 0.0 && m.is_finite() {
+            level / m
+        } else {
+            level
+        }
+    }));
+    let mut out = Vec::with_capacity(2 * grid.len());
+    for th in grid {
+        let mut zero = th.clone();
+        zero.extend(std::iter::repeat_n(0.0, q));
+        out.push(zero);
+        let share = if egarch { 0.05 } else { 0.5 * th[0] };
+        if mean.iter().all(|m| *m > 0.0 && m.is_finite()) {
+            let mut moved = th;
+            moved[0] -= share;
+            moved.extend(mean.iter().map(|m| share / (q as f64 * m)));
+            out.push(moved);
+        }
+    }
+    (out, units)
+}
+
+/// Whether the start's fit `theta` leaves its inputs unidentified: the
+/// information of the variance equation's `k` parameters at it, the
+/// normal's expected information or a t's outer product of the score as
+/// the fit's own matrix, [`collinear`].
+#[allow(clippy::too_many_arguments)]
+fn inputs_collinear(
+    vol: GarchVol,
+    dist: GarchDist,
+    k: usize,
+    q: usize,
+    rows: &[[f64; 2]],
+    xs: &[f64],
+    bc: f64,
+    theta: &[f64],
+) -> bool {
+    let e = likelihood(vol, dist, k, q, rows, xs, bc, theta, true);
+    !e.f.is_finite() || collinear(&e.h, theta.len(), k)
 }

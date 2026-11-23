@@ -1497,7 +1497,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 119] = [
+    const FORMS: [(&str, &[&str]); 122] = [
         // Schema 70 (rule 5's twenty-second exception): the stabilized
         // prior's `ŝ` and `V` under `full` in each form and under `diag`,
         // the factor form's `f`, and a spec's own `prior_rows`.
@@ -1678,6 +1678,14 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
             &["model", "Garch", "series", "0", "filter", "ring"],
         ),
         ("garch_span", &["model", "Garch", "series", "0", "buffer"]),
+        // GARCH-X (task 559, part 4): the inputs' count, their running
+        // mean once started, and the start's inputs within it.
+        ("garch_x_realistic", &["model", "Garch", "cfg", "n_inputs"]),
+        (
+            "garch_x_realistic",
+            &["model", "Garch", "series", "1", "xbar"],
+        ),
+        ("garch_x_start", &["model", "Garch", "series", "0", "xbuf"]),
         // A refit over a span of the clock (task 538): the span in each
         // cfg, glm's clock summed from the steps, and each buffer.
         ("glm_refit_clock", &["model", "Glm", "cfg", "refit_clock"]),

@@ -936,6 +936,7 @@ fn expectile_window_golden() {
 fn garch_signature(vol: GarchVol, dist: GarchDist, targeting: bool) -> Vec<f64> {
     let fig = vol == GarchVol::Figarch;
     let mut m = Garch::new(GarchCfg {
+        n_inputs: 0,
         n_targets: 1,
         vol,
         dist,
@@ -1019,6 +1020,7 @@ fn garch_figarch_golden() {
 /// (`garch_series`), so these are the same bits on every platform.
 fn garch_realistic(vol: GarchVol, dist: GarchDist, targeting: bool, ys: &[f64]) -> Vec<f64> {
     let mut m = Garch::new(GarchCfg {
+        n_inputs: 0,
         n_targets: 1,
         vol,
         dist,

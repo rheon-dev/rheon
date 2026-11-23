@@ -10,7 +10,7 @@ use super::fit::{ab_set, backcast, clip_shape, fit, identified, set_of};
 use super::guard;
 use super::linalg::{HalfSpaces, backward, chol_solve, cholesky, forward, tri, unpack};
 use super::math;
-use super::{GarchCfg, GarchDist, GarchVol};
+use super::{GarchCfg, GarchDist, GarchVol, MAX_K};
 use crate::Stamp;
 
 /// The Huber cut of the variance-targeted score, in standard deviations:
@@ -55,6 +55,16 @@ pub(super) struct Series {
     /// `E[z² 1[z² < c²]]`, under variance targeting.
     pub kappa: f64,
     pub slope: f64,
+    /// GARCH-X: the inputs' weighted running mean `x̄` over the rows
+    /// learned, the start's included, which the forecasts hold the inputs
+    /// at past the row. Empty without inputs, and then not written.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub xbar: Vec<f64>,
+    /// GARCH-X: the start's rows' inputs, `q` a row in the buffer's order,
+    /// until it is fitted. Last, so a state written as an array keeps its
+    /// places when it is empty and not written.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub xbuf: Vec<f64>,
 }
 
 impl Series {
@@ -78,13 +88,15 @@ impl Series {
             },
             kappa: 0.0,
             slope: 0.0,
+            xbar: vec![0.0; cfg.q()],
+            xbuf: Vec::new(),
         }
     }
 
     /// Whether the state has the shape `cfg` gives it.
     pub fn has_shape(&self, cfg: &GarchCfg) -> bool {
         let nf = cfg.n_free();
-        let k = cfg.vol.k();
+        let k = cfg.k();
         let lags = if !self.started {
             self.filter.sens.is_empty() && self.filter.ring.is_empty()
         } else if cfg.vol == GarchVol::Figarch {
@@ -98,6 +110,8 @@ impl Series {
             0
         };
         self.theta.len() == cfg.n_params()
+            && self.xbar.len() == cfg.q()
+            && self.xbuf.len() == self.buffer.len() * cfg.q()
             && self.h.len() == nf * (nf + 1) / 2
             && self.zbins.len() == bins
             && lags
@@ -106,22 +120,22 @@ impl Series {
             && (cfg.start_span.is_some() || self.buffer.len() < cfg.start_rows << self.refits)
     }
 
-    /// The variance of the row about to be read, and its sensitivity into
-    /// `dl`; not a number before the start.
-    pub fn read(&self, cfg: &GarchCfg, dl: &mut [f64]) -> f64 {
+    /// The variance of the row about to be read, whose inputs are `x`, and
+    /// its sensitivity into `dl`; not a number before the start.
+    pub fn read(&self, cfg: &GarchCfg, x: &[f64], dl: &mut [f64]) -> f64 {
         if !self.started {
             return f64::NAN;
         }
-        self.filter.predict(cfg.vol, &self.theta[..cfg.vol.k()], dl)
+        self.filter.predict(cfg.vol, &self.theta[..cfg.k()], x, dl)
     }
 
     /// The variance of the row about to be read, without the sensitivity.
-    pub fn variance(&self, cfg: &GarchCfg) -> f64 {
+    pub fn variance(&self, cfg: &GarchCfg, x: &[f64]) -> f64 {
         if !self.started {
             return f64::NAN;
         }
-        let k = cfg.vol.k();
-        self.filter.variance(cfg.vol, &self.theta[..k], k)
+        let k = cfg.k();
+        self.filter.variance(cfg.vol, &self.theta[..k], x, k)
     }
 
     /// Whether the series waits because its last start's fit did not tell
@@ -153,6 +167,7 @@ impl Series {
             cfg.variance_targeting,
             cfg.truncation(),
             &self.buffer,
+            &self.xbuf,
             bc,
             v,
         )
@@ -164,6 +179,7 @@ impl Series {
                 series.refits += 1;
             } else {
                 series.buffer.clear();
+                series.xbuf.clear();
                 series.first = None;
                 series.w_sum = 0.0;
             }
@@ -174,13 +190,16 @@ impl Series {
             // reports nothing and buffers afresh.
             None => return wait(self, None),
             // No evidence of a variance process: withheld, the same way.
-            Some(f) if !identified(cfg.vol, f.lr) => return wait(self, Some(f.theta)),
+            Some(f) if !identified(cfg.vol, cfg.q(), f.lr) || f.collinear => {
+                return wait(self, Some(f.theta));
+            }
             // Not settled: twice the rows while they may double.
             Some(f) if !f.sound && doubles => return wait(self, None),
             Some(f) => f,
         };
         let rows = std::mem::take(&mut self.buffer);
-        let k = cfg.vol.k();
+        let xs = std::mem::take(&mut self.xbuf);
+        let (k, q) = (cfg.k(), cfg.q());
         self.theta = got.theta;
         self.sound = got.sound;
         self.started = true;
@@ -190,30 +209,46 @@ impl Series {
         self.kappa = 0.0;
         self.slope = 0.0;
         self.h.fill(0.0);
+        self.xbar.fill(0.0);
         self.filter = Filter::new(cfg.vol, k, cfg.truncation(), bc);
-        let mut dl = [0.0; 4];
-        for r in &rows {
-            let s = self.read(cfg, &mut dl[..k]);
-            self.learn(cfg, r[0], r[1], s, &dl[..k], true);
+        let mut dl = [0.0; MAX_K];
+        for (i, r) in rows.iter().enumerate() {
+            let x = &xs[i * q..(i + 1) * q];
+            let s = self.read(cfg, x, &mut dl[..k]);
+            self.learn(cfg, r[0], x, r[1], s, &dl[..k], true);
         }
         self.first = None;
     }
 
-    /// Learn a row of residual `e` at weight `w > 0`, whose variance was `s`
-    /// and sensitivity `dl`: the running means, the information matrix and,
-    /// unless `replay`, the step; then the filter's lags.
-    pub fn learn(&mut self, cfg: &GarchCfg, e: f64, w: f64, s: f64, dl: &[f64], replay: bool) {
-        let (vol, k, nf) = (cfg.vol, cfg.vol.k(), cfg.n_free());
+    /// Learn a row of residual `e` and inputs `x` at weight `w > 0`, whose
+    /// variance was `s` and sensitivity `dl`: the running means, the
+    /// information matrix and, unless `replay`, the step; then the filter's
+    /// lags.
+    #[allow(clippy::too_many_arguments)]
+    pub fn learn(
+        &mut self,
+        cfg: &GarchCfg,
+        e: f64,
+        x: &[f64],
+        w: f64,
+        s: f64,
+        dl: &[f64],
+        replay: bool,
+    ) {
+        let (vol, k, nf) = (cfg.vol, cfg.k(), cfg.n_free());
         self.w_sum += w;
         let a = w / self.w_sum;
         let e2 = e * e;
         self.mean_e2 += a * (e2 - self.mean_e2);
+        for (m, v) in self.xbar.iter_mut().zip(x) {
+            *m += a * (v - *m);
+        }
         if vol == GarchVol::Egarch {
             self.zbins[guard::bin(e / s.sqrt())] += w;
         }
-        let mut sc = [0.0; 6];
+        let mut sc = [0.0; MAX_K + 2];
         if cfg.dist == GarchDist::Normal {
-            let mut df = [0.0; 4];
+            let mut df = [0.0; MAX_K];
             let z2 = e2 / s;
             let resid = if cfg.variance_targeting {
                 // the free (α, β) through ω = v̄ (1 − α − β), and the
@@ -275,7 +310,7 @@ impl Series {
     /// step one way and takes every step the other, a ratchet driven by the
     /// score's noise.
     fn step(&mut self, cfg: &GarchCfg, a: f64, sc: &[f64]) {
-        let (vol, k, nf) = (cfg.vol, cfg.vol.k(), cfg.n_free());
+        let (vol, k, nf) = (cfg.vol, cfg.k(), cfg.n_free());
         let mut hm = unpack(&self.h, nf);
         for i in 0..nf {
             hm[i * nf + i] += STEP_RIDGE * hm[i * nf + i].abs();
@@ -292,7 +327,7 @@ impl Series {
         } else {
             let floor = OMEGA_FLOOR_FRAC * self.mean_e2;
             let mut prop: Vec<f64> = th.iter().zip(&mv).map(|(t, m)| t + m).collect();
-            let (y, shift) = project(&set_of(vol, floor), &prop, &hm, k);
+            let (y, shift) = project(&set_of(vol, cfg.q(), floor), &prop, &hm, k);
             if nf > k {
                 // a t: the shape's step, ν − 2 ← (ν − 2) e^{Δs} (and λ), with
                 // the move the projection gave it on top

@@ -61,7 +61,7 @@ fn figarch_series(n: usize, seed: u64) -> Vec<f64> {
     let mut dl = [0.0; 4];
     let mut out = Vec::with_capacity(n);
     for t in 0..n + 3000 {
-        let v = f.predict(GarchVol::Figarch, &th, &mut dl);
+        let v = f.predict(GarchVol::Figarch, &th, &[], &mut dl);
         let e = v.sqrt() * normal(&mut s);
         f.push(GarchVol::Figarch, e, v, &dl);
         if t >= 3000 {
@@ -90,6 +90,7 @@ fn series_of(c: &GarchCfg, n: usize, seed: u64) -> Vec<f64> {
 
 fn cfg(vol: GarchVol, dist: GarchDist) -> GarchCfg {
     GarchCfg {
+        n_inputs: 0,
         n_targets: 1,
         vol,
         dist,
@@ -119,6 +120,7 @@ const FORMS: [(GarchVol, GarchDist); 7] = [
 fn every_cfg() -> Vec<GarchCfg> {
     let mut out: Vec<GarchCfg> = FORMS.iter().map(|&(v, d)| cfg(v, d)).collect();
     out.push(GarchCfg {
+        n_inputs: 0,
         variance_targeting: true,
         ..cfg(GarchVol::Garch, GarchDist::Normal)
     });
@@ -242,7 +244,7 @@ fn each_filter_is_its_recursion() {
         let (mut e2, mut asym, mut s) = (bc, 0.5 * bc, bc);
         let mut dl = vec![0.0; k];
         for y in &ys {
-            let got = f.predict(vol, &th, &mut dl);
+            let got = f.predict(vol, &th, &[], &mut dl);
             let want = if k == 3 {
                 th[0] + th[1] * e2 + th[2] * s
             } else {
@@ -259,7 +261,7 @@ fn each_filter_is_its_recursion() {
     let (mut z, mut l, mut fresh) = (0.0f64, bc.ln(), true);
     let mut dl = [0.0; 4];
     for y in &ys {
-        let got = f.predict(GarchVol::Egarch, &th, &mut dl);
+        let got = f.predict(GarchVol::Egarch, &th, &[], &mut dl);
         let news = if fresh {
             0.0
         } else {
@@ -279,7 +281,7 @@ fn each_filter_is_its_recursion() {
     let mut f = Filter::new(GarchVol::Figarch, 4, m, bc);
     let mut dl = [0.0; 4];
     for (t, y) in ys.iter().enumerate() {
-        let got = f.predict(GarchVol::Figarch, &th, &mut dl);
+        let got = f.predict(GarchVol::Figarch, &th, &[], &mut dl);
         let want = th[0] / (1.0 - th[3])
             + (1..=m)
                 .map(|j| lam[j] * if j <= t { ys[t - j] * ys[t - j] } else { bc })
@@ -308,7 +310,7 @@ fn each_sensitivity_is_its_variances_slope() {
             let mut dl = vec![0.0; k];
             ys.iter()
                 .map(|y| {
-                    let s = f.predict(vol, th, &mut dl);
+                    let s = f.predict(vol, th, &[], &mut dl);
                     f.push(vol, *y, s, &dl);
                     (s, dl.clone())
                 })
@@ -491,6 +493,7 @@ fn the_fit_finds_the_process() {
     for c in [
         cfg(GarchVol::Garch, GarchDist::Normal),
         GarchCfg {
+            n_inputs: 0,
             variance_targeting: true,
             ..cfg(GarchVol::Garch, GarchDist::Normal)
         },
@@ -831,6 +834,7 @@ fn the_state_is_bounded_by_its_settings() {
     assert_eq!(Garch::series_bytes(&c, 0), 168);
     assert_eq!(Garch::series_bytes(&c, 500), 168 + 8000);
     let t = GarchCfg {
+        n_inputs: 0,
         variance_targeting: true,
         ..c.clone()
     };
@@ -955,6 +959,7 @@ fn a_clock_span_start_closes_at_its_span() {
 fn a_state_of_the_wrong_shape_is_refused() {
     let ys = t_series(900, 22, 1.0);
     let mut m = Garch::new(GarchCfg {
+        n_inputs: 0,
         start_rows: 100,
         ..cfg(GarchVol::Gjr, GarchDist::T)
     })
@@ -1159,13 +1164,13 @@ fn the_lr_cut_is_chi_squared_at_its_restrictions() {
         GarchVol::Egarch,
         GarchVol::Figarch,
     ] {
-        let df = restrictions(vol);
+        let df = restrictions(vol, 0);
         assert_eq!(df, if vol == GarchVol::Garch { 2 } else { 3 }, "{vol:?}");
-        let cut = lr_cut(vol);
+        let cut = lr_cut(vol, 0);
         assert!((survival(df, cut) - 0.001).abs() < 1e-15, "{vol:?}: {cut}");
-        assert!(identified(vol, cut), "{vol:?}");
-        assert!(!identified(vol, cut.next_down()), "{vol:?}");
-        assert!(!identified(vol, f64::NAN), "{vol:?}");
+        assert!(identified(vol, 0, cut), "{vol:?}");
+        assert!(!identified(vol, 0, cut.next_down()), "{vol:?}");
+        assert!(!identified(vol, 0, f64::NAN), "{vol:?}");
     }
 }
 
@@ -1219,7 +1224,7 @@ fn the_lr_statistic_is_twice_the_gain_at_kish_scale() {
         (GarchVol::Gjr, GarchDist::Normal),
         (GarchVol::Garch, GarchDist::T),
     ] {
-        let got = fit(vol, dist, false, 0, &unit, bc, v).unwrap();
+        let got = fit(vol, dist, false, 0, &unit, &[], bc, v).unwrap();
         // f₀ by the definition: every row's variance the constant
         let k = vol.k();
         let m = dist.shape_len();
@@ -1227,7 +1232,7 @@ fn the_lr_statistic_is_twice_the_gain_at_kish_scale() {
             let (mut f, mut filter) = (0.0, Filter::new(vol, k, 0, bc));
             let mut dl = [0.0; 4];
             for &e in &ys {
-                let s = filter.predict(vol, &theta[..k], &mut dl[..k]);
+                let s = filter.predict(vol, &theta[..k], &[], &mut dl[..k]);
                 f += match m {
                     0 => -0.5 * (libm::log(std::f64::consts::TAU) + libm::log(s) + e * e / s),
                     _ => super::dist::log_density(e / s.sqrt(), theta[k], 0.0) - 0.5 * libm::log(s),
@@ -1260,10 +1265,14 @@ fn the_lr_statistic_is_twice_the_gain_at_kish_scale() {
             (got.lr - 2.0 * (f - f0)).abs() < 1e-8 * (1.0 + got.lr),
             "{vol:?} {dist:?}"
         );
-        assert!(got.lr > 2.0 * lr_cut(vol), "{vol:?} {dist:?}: {}", got.lr);
+        assert!(
+            got.lr > 2.0 * lr_cut(vol, 0),
+            "{vol:?} {dist:?}: {}",
+            got.lr
+        );
         // every weight scaled by 3: the same fit, the same statistic
         let tripled: Vec<[f64; 2]> = ys.iter().map(|&e| [e, 3.0]).collect();
-        let same = fit(vol, dist, false, 0, &tripled, bc, v).unwrap();
+        let same = fit(vol, dist, false, 0, &tripled, &[], bc, v).unwrap();
         assert!((same.lr - got.lr).abs() < 1e-9 * got.lr, "{vol:?} {dist:?}");
         assert_eq!(same.sound, got.sound, "{vol:?} {dist:?}");
     }
@@ -1283,17 +1292,27 @@ fn a_start_waits_under_the_lr_cut_and_starts_over_it() {
         for n in (60..=1200).step_by(60) {
             let rows: Vec<[f64; 2]> = ys[..n].iter().map(|&e| [e, 1.0]).collect();
             let v = ys[..n].iter().map(|e| e * e).sum::<f64>() / n as f64;
-            let lr = fit(vol, GarchDist::Normal, false, 0, &rows, backcast(&rows), v)
-                .unwrap()
-                .lr;
+            let lr = fit(
+                vol,
+                GarchDist::Normal,
+                false,
+                0,
+                &rows,
+                &[],
+                backcast(&rows),
+                v,
+            )
+            .unwrap()
+            .lr;
             let c = GarchCfg {
+                n_inputs: 0,
                 start_rows: n,
                 max_state_bytes: Some(Garch::state_bytes(&cfg(vol, GarchDist::Normal), n)),
                 ..cfg(vol, GarchDist::Normal)
             };
             let mut m = Garch::new(c).unwrap();
             let out = run(&mut m, &ys[..=n], &vec![1.0; n + 1]);
-            let pass = identified(vol, lr);
+            let pass = identified(vol, 0, lr);
             sides[usize::from(pass)] += 1;
             assert_eq!(m.started()[0], pass, "{vol:?} {n}: {lr}");
             assert_eq!(m.no_effect(), !pass, "{vol:?} {n}: {lr}");
