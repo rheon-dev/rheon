@@ -2,8 +2,9 @@
 # Extrema on the clock: the design record
 
 The design for task 561, part 1, written 2026-11-23 on branch
-`vm/task-561-extrema` from `main` at 555b45e5. Nothing here is built yet;
-the questions at the end are for the coordinator before the build starts.
+`vm/task-561-extrema` from `main` at 555b45e5, then built in parts 2 to 4
+the same day. The coordinator's answers to the questions at the end, and
+where the build differs from the design, are in "What was built", last.
 
 ## What exists, and what this adds
 
@@ -402,3 +403,106 @@ window) with its measured cost; the guide's table of operators
 11. Two-stack queue (shared with the engine, 64 bytes a row an operator) over a monotone deque (32 bytes a kept row, the same worst case); recommend the queue, measure both in the build.
 12. An age-of-extremum output (clock since the peak: a drawdown's duration), which Polars has no rolling form of; recommend deferring to its own row, held to the definition.
 13. Close the open window-operator row's min and max with this build (one implementation); recommend yes, leaving its quantile, rank and count-weighted mean open.
+
+## What was built (parts 2 to 4)
+
+**The coordinator's answers** (2026-11-23), which override the design where
+they differ: the names `rp.rolling_max` / `rp.rolling_min`, no
+`window_size` being the running form; the event keyword `since=`, acting on
+its whole stamp, its own stamp null under `closed="left"` and `"none"`; a
+gap past `gap_cap` or a session change restarts the running form, as for
+every operator; `since` with `reverse=True` refused, saying why; ties to the
+earliest row, held by the 400-frame test against Polars; NaN and infinities
+by the engine's rule, the difference from Polars stated and tested on both
+sides; `max_state_bytes` **not** engine-wide, only on the new operators'
+queues; the existing two-stack queue, measured against a monotone deque;
+no age-of-extremum output (its own task) and no decayed extremum; drawdown a
+formula; rows of weight 0 left as the engine reads them, recorded by a
+failing test if the engine breaks the rule; this build closes the **min
+and max of task 518** (its exact quantile, rank and count-weighted mean
+stay open).
+
+**The core** (`crates/rheon-polars/src/windows/extrema.rs`). `Stat::Max`
+and `Stat::Min`, `OpKind::{RollingMax, RollingMin, RrollingMax,
+RrollingMin}`, on a kernel whose half-life is infinite (refused otherwise).
+The extremum is kept beside the queue's sums, as a quantile's sketch is,
+not in the sums themselves: each extremum keeps one double per `front` row
+(the extremum from that row through `front`'s newest, built at the
+turnover), one for `back`, and for the running form the run's extremum and
+count. The queue's sums still count the values for `min_samples` in a
+windowed queue; the running form counts its own, since an event lets the
+run go without touching the shared sums. The join is `pick`: the older
+value unless the newer is strictly beyond it, looking back; the newer
+unless the older is strictly beyond, looking ahead.
+
+**`since`.** A kernel carries the row input of its event (`KernelDef.since`,
+part of the kernel's key, so an event never acts on another operator's
+queue). An event read at any row of a stamp: with a window, the rows of the
+earlier stamps are evicted; with none, the run before the stamp is let go
+and the stamp's own rows, kept apart (`cur`), stay. Under `"left"` and
+`"none"` the stamp's value, read as it began, becomes empty. Because an
+event may come at any row of its stamp, a `since` kernel's rows wait for
+the next distinct stamp under every `closed` (`KernelDef::waits`), so a
+stamp never gets two values. A window is whole once its span has passed
+since the stretch began and since the last event (`extrema::complete`,
+decided on the raw clocks). The plain loop does not take a core with a
+`since` kernel or a windowed extremum (`Derived::push_only`); every such
+row is `push`'s.
+
+**`max_state_bytes`** is an extremum's own parameter (default 256 KB a
+group, at most 64 MiB), bounding the queue it sits on. Without a clock
+column the window's rows are known (`floor(w) + 2` at most), so a window
+past the cap is refused when the query is built, its cost stated; on a
+clock the row that takes a group's queue past it is refused
+(`Refusal::OverCap`), naming the row, the rows held, the bytes a row and
+the cap. No existing operator is bounded.
+
+**State bytes, measured** (`extrema::row_bytes`, held by the Python test of
+the bound on both sides): a windowed row is `8 (5 + 8 n + e)` bytes for `n`
+operators on the queue, `e` of them extrema, or `8 (5 + 14 n + e)` on a
+queue holding a variance: **112 bytes** a row for one extremum on its own
+window (the design's 104 plus the front double), so the 256 KB default
+holds 2,340 rows a group; 184 for a maximum and a minimum sharing one. The
+running form is about 70 bytes an extremum in memory (five doubles, two
+flags and an empty list) plus the queue's three running sums, whatever the
+stream's length.
+
+**Two-stack queue against a monotone deque** (a standalone Rust probe,
+`--release`, 2,000,000 rows, best of 5, the queue in the engine's row
+layout of 14 doubles, the deque 32 bytes a kept row; x86-64, load about 2-4):
+
+| window, data | two-stack ns a row | its peak bytes | deque ns a row | its peak bytes |
+|---|---|---|---|---|
+| 1,000 rows, uniform | 9.4 | 112,000 | 12.4 | 704 |
+| 1,000 rows, falling | 9.3 | 112,000 | 5.6 | 32,000 |
+| 10,000 rows, uniform | 17.1 | 1,120,000 | 12.8 | 864 |
+| 10,000 rows, falling | 14.8 | 1,120,000 | 4.8 | 320,000 |
+
+The deque holds far less on exchangeable data and 3.5 times less in its
+worst case, and is faster on a long window; the queue keeps the engine's
+one tested copy of every edge rule (`closed`, cuts, resets, nanosecond
+edges, the forward close, the event). Kept as the coordinator decided; the
+deque is the change to make if the memory is wanted.
+
+**Windows state 13** within schema 72, which no release has written: a
+kernel's `since`, a queue's `ext` and `since_off`, an operator's
+`max_state_bytes`, each written only where there is an extremum, so a 12
+loads as a 13 without one. The committed fixtures were moved from 12 to 13
+by their version byte and checksums alone (the bank files that embed a
+windows state too), keeping their bytes otherwise; `with_windows_extrema`
+is new and freezes each form.
+
+**Oracles as built**: Polars' `rolling_max_by` / `rolling_min_by` bit for
+bit (every `closed`, integer and datetime clocks, repeated stamps, the
+400 frames of both zeros, nulls from 1.38.1), the reversed stream for a
+forward window, Polars over each run for `since`, numpy's
+`fmax.accumulate` as a second opinion; in Rust the brute force of
+`windows.rs` (the extrema added to `all_kernels`, every direction and
+`closed`, across gaps, sessions, resets, groups, chunking and resumes) and
+`extrema_tests.rs`'s definition of `since` by stamp, resumed at every row.
+
+**Rows of weight 0.** A spec's formula target's window core reads every
+row, a row of weight 0 included, for every operator: an extremum there
+moves with such a row's value. Recorded as a strict expected failure,
+`test_a_weight_zero_row_moves_no_formula_targets_extremum`; the fix is the
+engine's, for every operator at once, and is not in this build.
