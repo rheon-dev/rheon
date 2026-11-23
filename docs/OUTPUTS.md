@@ -346,21 +346,6 @@ The fields of `po.spec.ew_cov("m", features=["x0", "x1"], half_life=50.0)`:
 | `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
 | `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
 
-## `pca`
-
-The fields of `po.spec.pca("m", features=["x0", "y"], half_life=50.0, n_components=1)`:
-
-| field | dtype | what it holds | also null |
-|---|---|---|---|
-| `pc0_var` | `f64` | the variance along component `<j>`, from 0: its eigenvalue, times Bessel's correction at Kish's effective size | while withheld, and while the component is not told apart from the one above it or below it (`not_separated`) |
-| `pc0_share` | `f64` | component `<j>`'s share of the total variance, the sum of the columns' variances | while withheld, and while the component is not told apart from the one above it or below it (`not_separated`) |
-| `pc0_loading_x0` | `f64` | component `<j>`'s unit loading on feature `<f>` | while withheld, and while the component is not told apart from the one above it or below it (`not_separated`) |
-| `pc0_loading_y` | `f64` | component `<j>`'s unit loading on feature `<f>` | while withheld, and while the component is not told apart from the one above it or below it (`not_separated`) |
-| `pc0_score` | `f64` | the row's coordinate along component `<j>`, `e_j . (x - m)`, on the mean and the component before this row | while withheld, and while the component is not told apart from the one above it or below it (`not_separated`) |
-| `weight_sum` | `f64` | accumulated weight before the model learns this row, and before its own decay ([shared field](#fields-most-models-write)) | never |
-| `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
-| `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
-
 ## `ewm_moments`
 
 The fields of `po.spec.ewm_moments("m", features=["x0"], half_life=50.0, terms={"var": {"x0": 2}})`:
@@ -377,6 +362,21 @@ Under `se=True`, it also writes:
 | field | dtype | what it holds | also null |
 |---|---|---|---|
 | `se_var` | `f64` | the term's delta-method standard error at Kish's effective number of rows, after every term and in the same order | where its term is null, and where the error keeps no digit |
+
+## `pca`
+
+The fields of `po.spec.pca("m", features=["x0", "y"], half_life=50.0, n_components=1)`:
+
+| field | dtype | what it holds | also null |
+|---|---|---|---|
+| `pc0_var` | `f64` | the variance along component `<j>`, from 0: its eigenvalue, times Bessel's correction at Kish's effective size | while withheld, and while the component is not told apart from the one above it or below it (`not_separated`) |
+| `pc0_share` | `f64` | component `<j>`'s share of the total variance, the sum of the columns' variances | while withheld, and while the component is not told apart from the one above it or below it (`not_separated`) |
+| `pc0_loading_x0` | `f64` | component `<j>`'s unit loading on feature `<f>` | while withheld, and while the component is not told apart from the one above it or below it (`not_separated`) |
+| `pc0_loading_y` | `f64` | component `<j>`'s unit loading on feature `<f>` | while withheld, and while the component is not told apart from the one above it or below it (`not_separated`) |
+| `pc0_score` | `f64` | the row's coordinate along component `<j>`, `e_j . (x - m)`, on the mean and the component before this row | while withheld, and while the component is not told apart from the one above it or below it (`not_separated`) |
+| `weight_sum` | `f64` | accumulated weight before the model learns this row, and before its own decay ([shared field](#fields-most-models-write)) | never |
+| `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
+| `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
 
 ## `marginal`
 
