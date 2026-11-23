@@ -76,6 +76,7 @@ mod conformal;
 mod constraint;
 mod corrchange;
 mod deco;
+mod dist_fit;
 mod drift;
 mod ewclass;
 mod ewcov;
@@ -158,6 +159,7 @@ pub use corrchange::{
     kolmogorov_quantile,
 };
 pub use deco::{Deco, DecoCfg, DecoDynamics};
+pub use dist_fit::{DistFamily, DistFit, DistFitCfg, DistWithheld};
 pub use drift::{
     Adwin, AdwinCfg, Cusum, Ddm, DriftDetector, Eddm, ErrorRate, Kswin, KswinCfg, PageHinkley,
     ks_critical_h, ks_equal_tail,

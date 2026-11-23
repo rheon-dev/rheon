@@ -2698,7 +2698,40 @@ pub fn all() -> Vec<Case> {
             Targets::Linear(2),
             40
         ),
+        // A normal fit, its location fitted: each target's weighted Welford
+        // moments, the second target saved before it has joined (no weight).
+        case!(
+            "dist_fit",
+            "DistFit",
+            DistFit,
+            DistFit::new(dist_fit_cfg(None)).unwrap(),
+            0,
+            Targets::JoiningFrom(2, 30),
+            20
+        ),
+        // Its location fixed (scipy's `floc`): the moments of `y − floc`.
+        case!(
+            "dist_fit_floc",
+            "DistFit",
+            DistFit,
+            DistFit::new(dist_fit_cfg(Some(0.5))).unwrap(),
+            0,
+            Targets::Linear(2),
+            40
+        ),
     ]
+}
+
+fn dist_fit_cfg(floc: Option<f64>) -> DistFitCfg {
+    DistFitCfg {
+        n_targets: 2,
+        family: DistFamily::Normal,
+        decay: Decay::Halflife(20.0),
+        min_weight: 0.0,
+        quantiles: vec![0.05, 0.95],
+        es_levels: vec![0.05],
+        floc,
+    }
 }
 
 /// An upper `expectile` of two targets under decay, its first rows' refit

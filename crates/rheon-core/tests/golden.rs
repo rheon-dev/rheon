@@ -625,6 +625,42 @@ fn holt_golden() {
 }
 
 #[test]
+fn dist_fit_golden() {
+    // A normal fit: slot 5 is the PIT of the row's own target, which reads
+    // `loc`, `scale` and `erfc`.
+    check(
+        "dist_fit",
+        &signature_of(&mut dist_fit_model(), 5, false),
+        GOLDEN_DIST_FIT,
+    );
+}
+
+#[test]
+fn dist_fit_log_score_golden() {
+    // Slot 6, the log score of the row's own target (`ln scale`).
+    check(
+        "dist_fit_log_score",
+        &signature_of(&mut dist_fit_model(), 6, false),
+        GOLDEN_DIST_FIT_LOG_SCORE,
+    );
+}
+
+fn dist_fit_model() -> DistFit {
+    {
+        DistFit::new(DistFitCfg {
+            n_targets: 1,
+            family: DistFamily::Normal,
+            decay: Decay::Halflife(20.0),
+            min_weight: 3.0,
+            quantiles: vec![0.05, 0.95],
+            es_levels: vec![0.05],
+            floc: None,
+        })
+        .unwrap()
+    }
+}
+
+#[test]
 fn seqtest_golden() {
     // Slot 0 is the log e-value for "the target is positive", slot 1 the one
     // for "negative": together they pin the stake, the wealth update and the
@@ -1923,6 +1959,9 @@ fn ew_class_windowed_golden() {
 }
 
 // --- generated; see the module docs ---
+const GOLDEN_DIST_FIT: &[f64] = &[0.36222178080062084, 0.9761973474842893, 0.3801994266194362];
+const GOLDEN_DIST_FIT_LOG_SCORE: &[f64] =
+    &[-1.042467858404618, -2.9111721140088753, -0.9865599151673602];
 const GOLDEN_GLM: &[f64] = &[0.8190287945803094, 1.5909174696403168, 1.3226756022889994];
 const GOLDEN_GLM_CAP: &[f64] = &[0.8059966005129862, 2.2639186345702202, 1.0964813502655293];
 const GOLDEN_EXPECTILE: &[f64] = &[

@@ -1895,6 +1895,7 @@ fn every_model_refuses_at_restore_a_configuration_its_new_refuses() {
             0.into(),
             "horizon must be at least 1",
         ),
+        refused(DistFit::new(dist_fit_cfg()).unwrap(), "decay", zero(), h),
     ];
     // Every model's `restore`: the twenty-one kinds, `robust` under both
     // losses.
@@ -2359,6 +2360,7 @@ const PROBED: &[(&str, &str)] = &[
     ("Hawkes", "hawkes"),
     ("Expectile", "expectile"),
     ("Garch", "garch"),
+    ("DistFit", "dist_fit"),
 ];
 
 #[test]
@@ -6375,4 +6377,55 @@ mod generated {
             contract(|| Hawkes::new(hawkes_clock_cfg()).unwrap(), &rows, split)?;
         }
     }
+}
+
+fn dist_fit_cfg() -> DistFitCfg {
+    DistFitCfg {
+        n_targets: 1,
+        family: DistFamily::Normal,
+        decay: Decay::Halflife(20.0),
+        min_weight: 0.0,
+        quantiles: vec![0.05, 0.95],
+        es_levels: vec![0.05],
+        floc: None,
+    }
+}
+
+#[test]
+fn dist_fit() {
+    // A normal fit per target, no features: loc, scale, two quantiles, one
+    // shortfall, the PIT and the log score a target; `n_eff` the decayed
+    // weight of every row.
+    let m = DistFit::new(dist_fit_cfg()).unwrap();
+    assert_eq!(m.n_features(), 0, "dist_fit reads no features");
+    let r = probe_with(m, 1, Some(&DistFit::n_eff));
+    assert_eq!(r.kind, "dist_fit");
+    assert_eq!(r.n_targets, 1);
+    assert_eq!(r.n_outputs, 7);
+    assert_eq!(r.pred_len, 7);
+    assert!(r.roundtrips);
+    let c = DistFitCfg {
+        n_targets: 2,
+        floc: Some(0.5),
+        ..dist_fit_cfg()
+    };
+    let r = probe_with(DistFit::new(c).unwrap(), 2, Some(&DistFit::n_eff));
+    assert!(r.roundtrips);
+}
+
+#[test]
+fn dist_fit_predict_is_the_step() {
+    predict_is_the_step_without_the_step(|| DistFit::new(dist_fit_cfg()).unwrap(), 1, false);
+    predict_is_the_step_without_the_step(
+        || {
+            DistFit::new(DistFitCfg {
+                n_targets: 2,
+                floc: Some(-1.0),
+                ..dist_fit_cfg()
+            })
+            .unwrap()
+        },
+        2,
+        false,
+    );
 }
