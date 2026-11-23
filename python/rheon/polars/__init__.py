@@ -162,6 +162,7 @@ from rheon.polars.ops import (
     rewm_mean,  # noqa: F401
     rewm_rate,  # noqa: F401
     rewm_sum,  # noqa: F401
+    tick_sign,
 )
 
 __all__ = [
@@ -173,6 +174,7 @@ __all__ = [
     "ewm_var",
     "increment",
     "ops",
+    "tick_sign",
     "ArrowStruct",
     "ColumnNotFoundError",
     "ConsumedSourceWarning",

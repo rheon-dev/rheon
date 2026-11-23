@@ -54,6 +54,15 @@ session. It is null on the first row of each group and of each session, on a row
 whose input is null, and after a reset, and in seconds when `x` is a
 temporal column.
 
+`rp.tick_sign`, the tick rule, is the sign of that step: +1 on a price
+above its last one, -1 below it, and over a step of 0 the sign of the
+last step that was not 0. On a price grid, that carried sign is most
+trades' sign. It
+is null where the step is, and on the rows at the first price until it
+first moves; `.fill_null(1.0)` gives the convention that signs a first
+trade +1. Times a size, it is the signed volume of an order-flow sum or of
+an imbalance bar.
+
 [Check the result](how-to/make-window-features.md#check-the-result)
 compares `rp.ewm_mean` and `rp.ewm_sum` with Polars' `ewm_mean_by` and
 `rolling_sum_by`, on one symbol's rows.
@@ -213,7 +222,7 @@ with_windows: 'out' holds no window operator, so it reads only its own row
 ```
 
 **An operator's input can be a formula of the same kind, `rp.increment`
-included, but not another operator.** To window an operator's output, make
+and `rp.tick_sign` included, but not another operator.** To window an operator's output, make
 it a column in one `with_windows` call, and window that column in a second
 ([Window an operator's
 output](how-to/make-window-features.md#window-an-operators-output)).

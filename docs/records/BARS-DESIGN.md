@@ -661,6 +661,25 @@ made these:
   `"imbalance"` of integers past 2^53 on an integer clock (a threshold
   column, a weight, a session and the cuts), and a `"count"` on a temporal
   clock under a monotone close.
+- **The tick test is `rp.tick_sign`, a window operator** (question 12).
+  It reads the step `rp.increment` reads and carries the sign of the last
+  step that was not 0 over a step of 0. A row with no step has no sign: a
+  session's first row, a row whose price is missing (skipped, as an
+  increment skips it), and the rows at the first price until it first
+  moves. Lee and Ready's convention, and bar-forge's, signs those +1;
+  `.fill_null(1.0)` gives it, and the tests hold the filled signs to
+  bar-forge's `tick_rule_signs` row for row, and the unfilled ones to
+  Polars' `sign` of `diff`, 0 read as null, filled forward `.over` the
+  group, to the bit. A zero-weight row under a weighted spec's policy
+  (`like=`) moves the sign as any row does: the sign looks back only, and
+  no window looking back reads a weight.
+  The carried sign is a number a group per tick sign. It rides in the
+  windows state's `prev`, past the increments' previous values, rather
+  than in a new field: the state's layout is unchanged, so its version and
+  the bank's schema stay where they are, every existing state is the same
+  bytes, and a new fixture, `with_windows_tick`, freezes the form with
+  carried signs. A build without `tick_sign` refuses such a state by the
+  operator's name in its formulas, not by a version number.
 
 ## Questions
 

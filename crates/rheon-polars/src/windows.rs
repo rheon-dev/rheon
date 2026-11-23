@@ -221,6 +221,7 @@ pub enum OpKind {
     EwmQuantile,
     RewmQuantile,
     Increment,
+    TickSign,
 }
 
 impl OpKind {
@@ -237,6 +238,7 @@ impl OpKind {
             OpKind::EwmQuantile => "ewm_quantile",
             OpKind::RewmQuantile => "rewm_quantile",
             OpKind::Increment => "increment",
+            OpKind::TickSign => "tick_sign",
         }
     }
 
@@ -253,6 +255,7 @@ impl OpKind {
             "ewm_quantile" => Some(OpKind::EwmQuantile),
             "rewm_quantile" => Some(OpKind::RewmQuantile),
             "increment" => Some(OpKind::Increment),
+            "tick_sign" => Some(OpKind::TickSign),
             _ => None,
         }
     }
@@ -266,7 +269,16 @@ impl OpKind {
         }
     }
 
-    /// The statistic of a window operator; `None` for `increment`.
+    /// Whether it reads the row before its own within the group and
+    /// session, rather than a window: `increment` and `tick_sign`. Its
+    /// input is a formula of the row, and a window operator's input may read
+    /// it.
+    pub fn is_step(self) -> bool {
+        matches!(self, OpKind::Increment | OpKind::TickSign)
+    }
+
+    /// The statistic of a window operator; `None` for `increment` and
+    /// `tick_sign`.
     pub fn stat(self) -> Option<Stat> {
         match self {
             OpKind::EwmMean | OpKind::RewmMean => Some(Stat::Mean),
@@ -275,7 +287,7 @@ impl OpKind {
             OpKind::EwmVar => Some(Stat::Var),
             OpKind::EwmStd => Some(Stat::Std),
             OpKind::EwmQuantile | OpKind::RewmQuantile => Some(Stat::Quantile),
-            OpKind::Increment => None,
+            OpKind::Increment | OpKind::TickSign => None,
         }
     }
 }
@@ -6217,6 +6229,17 @@ mod tests {
         assert_eq!(OpKind::Increment.stat(), None);
         assert_eq!(OpKind::Increment.direction(), Direction::Backward);
         assert_eq!(OpKind::EwmStd.stat(), Some(Stat::Std));
+        // So is a tick sign; the two are the steps, and no window operator is.
+        assert_eq!(OpKind::TickSign.stat(), None);
+        assert_eq!(OpKind::TickSign.direction(), Direction::Backward);
+        assert_eq!(OpKind::parse("tick_sign"), Some(OpKind::TickSign));
+        assert_eq!(OpKind::TickSign.name(), "tick_sign");
+        for kind in [OpKind::Increment, OpKind::TickSign] {
+            assert!(kind.is_step(), "{kind:?}");
+        }
+        for kind in [OpKind::EwmMean, OpKind::RewmSum, OpKind::EwmStd] {
+            assert!(!kind.is_step(), "{kind:?}");
+        }
     }
 
     /// Task 252: what the core reports of itself -- its outputs, one per

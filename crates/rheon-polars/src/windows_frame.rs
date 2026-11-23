@@ -217,7 +217,12 @@ struct IncrState {
     key: Option<String>,
     /// Per increment: the previous value, NaN for none; a temporal input in
     /// nanoseconds; an integer input in integers (docs/PLAN.md task 200),
-    /// whose step is taken in integers before it becomes a double.
+    /// whose step is taken in integers before it becomes a double. Then,
+    /// per tick sign in the order of the increments, the sign it carries
+    /// over a step of 0: +1, -1, or NaN while none is known (task 562). A
+    /// run with no tick sign has none of these, so its state is the one an
+    /// older build wrote; one with a tick sign names `tick_sign` in its
+    /// formulas, which an older build refuses by name.
     prev: Vec<f64>,
     prev_ns: Vec<Option<i64>>,
     prev_int: Vec<Option<i128>>,
@@ -294,11 +299,27 @@ pub struct Given {
     incr: Option<IncrInputs>,
 }
 
+/// The tick rule's sign of a row whose step is `step`: +1 up, -1 down, and
+/// over a step of 0 the sign of the last step that was not 0, `carried`,
+/// which it moves (NaN while no such step has been seen: null). A row with
+/// no step -- the first of its group and session, or one whose input is
+/// missing -- has no sign and leaves the carried one as it is.
+fn tick_sign(step: Option<f64>, carried: &mut f64) -> Option<f64> {
+    let step = step?;
+    if step > 0.0 {
+        *carried = 1.0;
+    } else if step < 0.0 {
+        *carried = -1.0;
+    }
+    (!carried.is_nan()).then_some(*carried)
+}
+
 /// One value an increment's step reads, per row of `keys`: `x_i - x_{i-1}`
-/// within each key's session, moving `track` as it goes.
+/// within each key's session, moving `track` as it goes; a tick sign's is
+/// the sign of that step ([`tick_sign`]).
 fn step_increments(
     track: IncrTrack<'_>,
-    width: usize,
+    steps: &[IncrDef],
     (restart, restarts): (f64, bool),
     inputs: &IncrInputs,
     keys: &[Option<&str>],
@@ -317,6 +338,19 @@ fn step_increments(
         numeric,
         temporal,
     } = inputs;
+    let width = steps.len();
+    // Each tick sign's carried sign, past the increments' previous values
+    // in `prev`.
+    let carry: Vec<Option<usize>> = steps
+        .iter()
+        .scan(width, |next, d| {
+            Some(d.sign.then(|| {
+                *next += 1;
+                *next - 1
+            }))
+        })
+        .collect();
+    let carried = carry.iter().flatten().count();
     let mut out: Vec<Vec<Option<f64>>> = vec![Vec::with_capacity(*n); width];
     for r in 0..*n {
         let found = match keys[r] {
@@ -329,7 +363,7 @@ fn step_increments(
                 let gi = state.len();
                 state.push(IncrState {
                     key: keys[r].map(str::to_string),
-                    prev: vec![f64::NAN; width],
+                    prev: vec![f64::NAN; width + carried],
                     prev_ns: vec![None; width],
                     prev_int: vec![None; width],
                     session: None,
@@ -376,44 +410,53 @@ fn step_increments(
         st.session = now_session;
         st.clock = now_clock;
         for i in 0..width {
-            if let Some(vals) = &integer[i] {
+            let step = if let Some(vals) = &integer[i] {
                 let v = vals[r];
-                out[i].push(match (v, st.prev_int[i]) {
+                let step = match (v, st.prev_int[i]) {
                     (Some(c), Some(p)) => Some(integer_step(c, p)),
                     // A previous value a float input of another chunk left.
                     (Some(c), None) if !st.prev[i].is_nan() => Some(c as f64 - st.prev[i]),
                     _ => None,
-                });
+                };
                 if let Some(c) = v {
                     st.prev_int[i] = Some(c);
                     st.prev[i] = c as f64;
                 }
+                step
             } else if let Some(vals) = &numeric[i] {
                 let v = match vals[r] {
                     Some(x) if usable(x) => x,
                     _ => f64::NAN,
                 };
-                out[i].push(if v.is_nan() || st.prev[i].is_nan() {
+                let step = if v.is_nan() || st.prev[i].is_nan() {
                     None
                 } else {
                     Some(v - st.prev[i])
-                });
+                };
                 if !v.is_nan() {
                     st.prev[i] = v;
                     st.prev_int[i] = None;
                 }
+                step
             } else if let Some(vals) = &temporal[i] {
                 let v = vals[r];
-                out[i].push(match (v, st.prev_ns[i]) {
+                let step = match (v, st.prev_ns[i]) {
                     (Some(c), Some(p)) => {
                         Some(rheon_core::seconds_of_ns(i128::from(c) - i128::from(p)))
                     }
                     _ => None,
-                });
+                };
                 if v.is_some() {
                     st.prev_ns[i] = v;
                 }
-            }
+                step
+            } else {
+                None
+            };
+            out[i].push(match carry[i] {
+                None => step,
+                Some(c) => tick_sign(step, &mut st.prev[c]),
+            });
         }
     }
     out
@@ -470,6 +513,20 @@ fn input_column(i: usize) -> String {
     format!("@in:{i}")
 }
 
+/// A step of the row before: an increment, or a tick sign, the sign of
+/// one.
+#[derive(Debug, Clone, PartialEq)]
+struct IncrDef {
+    /// The hidden column it stands in as.
+    key: String,
+    /// Its input, a formula of the row.
+    input: Node,
+    /// Whether the input is temporal (an increment in seconds).
+    temporal: bool,
+    /// A tick sign, which carries a sign of its own in [`IncrState::prev`].
+    sign: bool,
+}
+
 /// What the plan made of the call.
 struct Plan {
     kernels: Vec<KernelDef>,
@@ -483,9 +540,8 @@ struct Plan {
     /// increment), each formula's hidden column: named once here, since
     /// naming one writes the operator out as JSON.
     bare: Option<Vec<String>>,
-    /// Distinct increments: the hidden column, the input formula and whether
-    /// the input is temporal (an increment in seconds).
-    increments: Vec<(String, Node, bool)>,
+    /// Distinct steps, increments and tick signs (an [`IncrDef`] each).
+    increments: Vec<IncrDef>,
     /// Every span a kernel reads, with its parameter's name, for the scale
     /// check.
     spans: Vec<(&'static str, Span)>,
@@ -601,24 +657,24 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
     // Increments first: an operator's input may read them.
     for f in &config.formulas {
         for op in f.tree.operators() {
-            if op.kind != OpKind::Increment {
+            if !op.kind.is_step() {
                 continue;
             }
             let key = hidden(op);
-            if p.increments.iter().any(|(k, _, _)| *k == key) {
+            if p.increments.iter().any(|d| d.key == key) {
                 continue;
             }
-            if op
-                .input
-                .operators()
-                .iter()
-                .any(|o| o.kind == OpKind::Increment)
-            {
+            let (its, outer) = match op.kind {
+                OpKind::TickSign => ("a tick sign's", "the tick sign"),
+                _ => ("an increment's", "the increment"),
+            };
+            if let Some(inner) = op.input.operators().iter().find(|o| o.kind.is_step()) {
+                let inner = inner.kind.name();
                 return Err(format!(
-                    "{WHO}: {}: an increment's input holds another increment, but it must be an \
-                     expression (a column computation, such as pl.col(\"x\") + 1) of the row's \
-                     own columns. Compute the inner increment in one \
-                     with_windows call, and the increment of its output in a second.",
+                    "{WHO}: {}: {its} input holds {inner}, but it must be an expression (a \
+                     column computation, such as pl.col(\"x\") + 1) of the row's own columns. \
+                     Compute {inner} in one with_windows call, and {outer} of its output in a \
+                     second.",
                     f.name
                 )
                 .into());
@@ -629,8 +685,8 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
             )
             .map_err(|e| {
                 format!(
-                    "{WHO}: {}: Polars cannot compute the increment's input ({e}). Check that \
-                     the input reads columns of the right type.",
+                    "{WHO}: {}: Polars cannot compute {its} input ({e}). Check that the input \
+                     reads columns of the right type.",
                     f.name
                 )
             })?;
@@ -638,26 +694,31 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
             let temporal = dtype.is_temporal();
             if !(numeric(&dtype) || temporal) {
                 return Err(Refused::wrong_type(format!(
-                    "{WHO}: {}: an increment's input must be a number or a temporal column, but \
-                     it is {}. Cast the input to a number, such as with .cast(pl.Float64).",
+                    "{WHO}: {}: {its} input must be a number or a temporal column, but it is {}. \
+                     Cast the input to a number, such as with .cast(pl.Float64).",
                     f.name,
                     crate::arrow::dtype_name(&dtype)
                 )));
             }
-            p.increments.push((key, (*op.input).clone(), temporal));
+            p.increments.push(IncrDef {
+                key,
+                input: (*op.input).clone(),
+                temporal,
+                sign: op.kind == OpKind::TickSign,
+            });
         }
     }
     let incr_schema = {
         let mut s = input.clone();
-        for (k, _, _) in &p.increments {
-            s.insert(k.as_str().into(), DataType::Float64);
+        for d in &p.increments {
+            s.insert(d.key.as_str().into(), DataType::Float64);
         }
         s
     };
     let resolve_incr = |op: &OpNode| col(hidden(op).as_str());
     for f in &config.formulas {
         for op in f.tree.operators() {
-            if op.kind == OpKind::Increment {
+            if op.kind.is_step() {
                 continue;
             }
             let key = hidden(op);
@@ -1039,7 +1100,7 @@ struct Constants {
     columns: Vec<(String, usize)>,
     /// [`Plan::bare`].
     bare: Option<Vec<String>>,
-    increments: Vec<(String, Node, bool)>,
+    increments: Vec<IncrDef>,
     accept: Vec<String>,
     /// The input's schema, as the call was built against it.
     input: Schema,
@@ -1256,8 +1317,8 @@ impl WindowsRun {
         // The output's dtypes: the formulas over the hidden columns, every
         // one a Float64, on an empty frame.
         let mut hidden_schema = input.clone();
-        for (k, _, _) in &p.increments {
-            hidden_schema.insert(k.as_str().into(), DataType::Float64);
+        for d in &p.increments {
+            hidden_schema.insert(d.key.as_str().into(), DataType::Float64);
         }
         for (k, _) in &p.columns {
             hidden_schema.insert(k.as_str().into(), DataType::Float64);
@@ -1422,11 +1483,7 @@ impl WindowsRun {
 
     /// The hidden columns a held chunk carries beside the input's.
     fn hidden_names(&self) -> Vec<String> {
-        self.k
-            .increments
-            .iter()
-            .map(|(k, _, _)| k.clone())
-            .collect()
+        self.k.increments.iter().map(|d| d.key.clone()).collect()
     }
 
     /// Feed one chunk and return the rows it resolved, in input order, less
@@ -2144,7 +2201,7 @@ impl WindowsRun {
                 null: &mut self.incr_null,
                 stream_clock: &mut self.stream_clock,
             },
-            self.k.increments.len(),
+            &self.k.increments,
             (restart, restarts),
             &inputs,
             keys,
@@ -2175,9 +2232,9 @@ impl WindowsRun {
             .increments
             .iter()
             .zip(out)
-            .map(|((name, _, _), values)| {
+            .map(|(d, values)| {
                 let ca: Float64Chunked = values.into_iter().collect();
-                ca.with_name(name.as_str().into()).into_column()
+                ca.with_name(d.key.as_str().into()).into_column()
             })
             .collect()
     }
@@ -2192,8 +2249,9 @@ impl WindowsRun {
                     .increments
                     .iter()
                     .enumerate()
-                    .map(|(i, (_, node, _))| {
-                        node.to_expr(&|_| unreachable!("no operator in an increment's input"))
+                    .map(|(i, d)| {
+                        d.input
+                            .to_expr(&|_| unreachable!("no operator in an increment's input"))
                             .alias(input_column(i).as_str())
                     })
                     .collect::<Vec<_>>(),
@@ -2211,7 +2269,7 @@ impl WindowsRun {
         let integer: Vec<Option<Vec<Option<i128>>>> = (0..width)
             .map(|i| {
                 let c = inputs.column(input_column(i).as_str())?;
-                if self.k.increments[i].2 || !integer_input(c.dtype()) {
+                if self.k.increments[i].temporal || !integer_input(c.dtype()) {
                     Ok(None)
                 } else {
                     integer_values(c.as_materialized_series()).map(Some)
@@ -2220,7 +2278,7 @@ impl WindowsRun {
             .collect::<PolarsResult<_>>()?;
         let numeric: Vec<Option<Vec<Option<f64>>>> = (0..width)
             .map(|i| {
-                if self.k.increments[i].2 || integer[i].is_some() {
+                if self.k.increments[i].temporal || integer[i].is_some() {
                     Ok(None)
                 } else {
                     let s = inputs
@@ -2232,7 +2290,7 @@ impl WindowsRun {
             .collect::<PolarsResult<_>>()?;
         let temporal: Vec<Option<Vec<Option<i64>>>> = (0..width)
             .map(|i| {
-                if self.k.increments[i].2 {
+                if self.k.increments[i].temporal {
                     // A time of day is read too, in nanoseconds since
                     // midnight (review round 4, PD5).
                     let c = inputs.column(input_column(i).as_str())?;
@@ -2302,8 +2360,9 @@ impl WindowsRun {
                     .increments
                     .iter()
                     .enumerate()
-                    .map(|(i, (_, node, _))| {
-                        node.to_expr(&|_| unreachable!("no operator in an increment's input"))
+                    .map(|(i, d)| {
+                        d.input
+                            .to_expr(&|_| unreachable!("no operator in an increment's input"))
                             .alias(input_column(i).as_str())
                     })
                     .collect::<Vec<_>>(),
@@ -2366,7 +2425,7 @@ impl WindowsRun {
                 null: &mut null,
                 stream_clock: &mut stream_clock,
             },
-            self.k.increments.len(),
+            &self.k.increments,
             self.restart_policy(),
             inputs,
             keys,
@@ -3500,6 +3559,17 @@ mod tests {
                 format!(r#"["rewm_mean", ["increment", ["col", "k"]], {window}]"#),
                 r#", "clock": "t", "gap_cap": 100, "session": "s", "session_gap": "reset""#,
             ),
+            (
+                // Task 562: a tick sign beside an increment, each with its
+                // own slot, and the sign carried past them.
+                "a tick sign",
+                true,
+                format!(
+                    r#"["-", ["rewm_sum", ["*", ["tick_sign", ["col", "k"]], ["col", "x"]], {window}],
+                    ["rewm_mean", ["increment", ["col", "x"]], {window}]]"#
+                ),
+                r#", "clock": "t", "gap_cap": 100, "session": "s", "session_gap": "reset""#,
+            ),
         ] {
             let json = format!(r#"{{"formulas": [{{"name": "f", "tree": {tree}}}]{policy}}}"#);
             let first = frame_of(0, 35);
@@ -4015,6 +4085,100 @@ mod tests {
         assert_eq!(dc, vec![None, Some(2.0), None, Some(0.5), Some(4.5)]);
         let dt: Vec<Option<f64>> = out.column("dt").unwrap().f64().unwrap().iter().collect();
         assert_eq!(dt, vec![None, Some(1.0), None, Some(1.0), Some(1.0)]);
+    }
+
+    /// Task 562: a tick sign is the sign of the increment, the last nonzero
+    /// one carried over a step of 0, in a slot of its own beside the
+    /// increments: two tick signs and an increment, interleaved, each read
+    /// its own input, and the carried signs resume across a save, a step of
+    /// 0 on each side of the cut. A session change starts them over.
+    #[test]
+    fn a_tick_sign_carries_the_last_nonzero_sign_across_a_save() {
+        let df = df!(
+            "t" => [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
+            "s" => ["a", "a", "a", "a", "a", "a", "b", "b"],
+            "p" => [Some(10.0), Some(10.0), Some(11.0), Some(11.0), None, Some(11.0), Some(11.0), Some(9.0)],
+            "q" => [5_i64, 4, 4, 4, 6, 6, 6, 6],
+        )
+        .unwrap();
+        let cfg = r#"{"formulas": [{"name": "sp", "tree": ["tick_sign", ["col", "p"]]},
+            {"name": "dq", "tree": ["increment", ["col", "q"]]},
+            {"name": "sq", "tree": ["tick_sign", ["col", "q"]]}],
+            "clock": "t", "gap_cap": 100, "session": "s"}"#;
+        let want_p = [
+            None,
+            None,
+            Some(1.0),
+            Some(1.0),
+            None,
+            Some(1.0),
+            None,
+            Some(-1.0),
+        ];
+        let want_dq = [
+            None,
+            Some(-1.0),
+            Some(0.0),
+            Some(0.0),
+            Some(2.0),
+            Some(0.0),
+            None,
+            Some(0.0),
+        ];
+        let want_q = [
+            None,
+            Some(-1.0),
+            Some(-1.0),
+            Some(-1.0),
+            Some(1.0),
+            Some(1.0),
+            None,
+            None,
+        ];
+        let whole = run_whole(cfg, &df);
+        assert_eq!(values_of(&whole, "sp"), want_p);
+        assert_eq!(values_of(&whole, "dq"), want_dq);
+        assert_eq!(values_of(&whole, "sq"), want_q);
+        for at in 1..df.height() {
+            let mut first = WindowsRun::new(config(cfg), df.schema()).unwrap();
+            let mut out = first.feed(&df.slice(0, at), None).unwrap();
+            let state = first.save_bytes().unwrap();
+            let mut second = WindowsRun::load_bytes(&state, config(cfg), df.schema()).unwrap();
+            out.vstack_mut(
+                &second
+                    .feed(&df.slice(at as i64, df.height() - at), None)
+                    .unwrap(),
+            )
+            .unwrap();
+            out.vstack_mut(&second.finish().unwrap()).unwrap();
+            assert!(out.equals_missing(&whole), "cut at {at}");
+        }
+        // The state holds each tick sign's carried sign past the previous
+        // values: three slots, then two signs.
+        let mut run = WindowsRun::new(config(cfg), df.schema()).unwrap();
+        run.feed(&df.slice(0, 4), None).unwrap();
+        assert_eq!(run.incr_state.len(), 1);
+        let prev = &run.incr_state[0].prev;
+        assert_eq!(prev.len(), 5);
+        assert_eq!(&prev[3..], &[1.0, -1.0]);
+    }
+
+    /// The tick rule on one step, from its definition.
+    #[test]
+    fn the_tick_rule_on_one_step() {
+        for (step, carried, want, then) in [
+            (Some(0.5), f64::NAN, Some(1.0), 1.0),
+            (Some(-1e-300), 1.0, Some(-1.0), -1.0),
+            (Some(0.0), -1.0, Some(-1.0), -1.0),
+            (Some(-0.0), 1.0, Some(1.0), 1.0),
+            (Some(0.0), f64::NAN, None, f64::NAN),
+            (None, 1.0, None, 1.0),
+            (None, f64::NAN, None, f64::NAN),
+        ] {
+            let mut c = carried;
+            assert_eq!(tick_sign(step, &mut c), want, "{step:?} {carried}");
+            assert_eq!(c.to_bits(), then.to_bits(), "{step:?} {carried}");
+        }
     }
 
     /// A state resumes only its own call, and goes on from where it was.

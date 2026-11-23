@@ -45,7 +45,7 @@ from rheon._rheon import parse_duration
 # would break formulas saved by 1.x.
 PREFIX = "@po:"
 
-#: The window operators, and the one that reads one row back.
+#: The window operators, and the two that read one row back (the steps).
 OPERATORS = (
     "ewm_mean",
     "rewm_mean",
@@ -58,7 +58,12 @@ OPERATORS = (
     "ewm_quantile",
     "rewm_quantile",
     "increment",
+    "tick_sign",
 )
+
+#: The operators that read the row before, not a window: their input is a
+#: formula of the row, and a window operator's input may read them.
+STEPS = ("increment", "tick_sign")
 
 #: The operators that take ``bias``: a variance's own (task 212).
 VARIANCES = ("ewm_var", "ewm_std")
@@ -256,7 +261,7 @@ def _walk(node: Any, who: str) -> Any:
             except json.JSONDecodeError:
                 raise reserved from None
             # Only an operator's own node is one: a list headed by an
-            # operator, with its input and, but for `increment`, its
+            # operator, with its input and, but for a step, its
             # parameters. A short list raised a bare IndexError where the tree
             # is walked, and a number was refused as holding no operator
             # (review round 4, PD3).
@@ -503,13 +508,13 @@ def _input_tree(who: str, value: Any) -> list[Any]:
         return ["col", value]
     if isinstance(value, pl.Expr):
         tree = to_tree(value, who)
-        if any(op[0] != "increment" for op in operators(tree)):
+        if any(op[0] not in STEPS for op in operators(tree)):
             raise ValueError(
                 f"{who}: the input holds another window operator, but an operator's input may "
                 f"hold only columns and Polars expressions of the same row (a column "
-                f'computation, such as pl.col("x") + 1), or rp.increment. To apply an operator to '
-                f"another's output, add the inner one as a column with rp.stream.with_windows "
-                f"first, and pass that column."
+                f'computation, such as pl.col("x") + 1), rp.increment or rp.tick_sign. To apply '
+                f"an operator to another's output, add the inner one as a column with "
+                f"rp.stream.with_windows first, and pass that column."
             )
         return tree
     raise TypeError(
@@ -600,8 +605,8 @@ def operator(
     ``ewm_*(reverse=True)`` to the caller and ``rewm_*`` in the tree."""
     who = who or f"rp.{name}"
     tree = _input_tree(who, input)
-    if name == "increment":
-        return operator_column(["increment", tree])
+    if name in STEPS:
+        return operator_column([name, tree])
     if half_life is None:
         raise TypeError(
             f"{who}: half_life is required, but it is not given. Give half_life in clock units, "

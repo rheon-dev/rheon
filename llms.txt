@@ -132,7 +132,8 @@ Windows alike.
 - [Window operators](https://rheon-dev.github.io/rheon/ops.html): `rp.ewm_mean`,
   `rp.ewm_sum`, `rp.ewm_rate`, `rp.ewm_quantile` (each looking ahead under `reverse=True`),
   `rp.ewm_var`, `rp.ewm_std` -- Polars expressions over a stream's clock -- and
-  `rp.increment`, a column's step from its last value, all run by
+  `rp.increment`, a column's step from its last value, and `rp.tick_sign`, the tick
+  rule's sign of that step, all run by
   `lf.rheon.with_windows(*exprs, **named, clock=...)` in one pass. A look-ahead one
   is also a spec's target, learned once its window has passed: `fit_predict`
   refuses an `embargo` shorter than its `window_size`

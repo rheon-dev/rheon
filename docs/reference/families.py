@@ -142,6 +142,7 @@ FAMILIES: tuple[Family, ...] = (
                 "ewm_quantile",
                 "ewm_rate",
                 "increment",
+                "tick_sign",
             )
         ),
     ),

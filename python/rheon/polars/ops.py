@@ -1,7 +1,8 @@
 """The window operators: exponentially weighted (EW) means, sums, rates and
 quantiles over a stream's clock, looking back or ahead, and a variance and a
 standard deviation looking back. ``increment``, the step of a running total,
-gives a window operator an input.
+and ``tick_sign``, the sign of a price's last change, give a window operator
+an input.
 
 Each operator returns a ``pl.Expr`` that composes with Polars' own
 expressions, in which ``pl.col`` reads the current row.
@@ -74,6 +75,11 @@ half_life)``:
      - ``x_i - x_{i-1}`` within the group and session, null on a session's
        first row, and in seconds on a temporal column
      - the row before it
+   * - :func:`tick_sign`
+     - the sign of :func:`increment`, +1 or -1, and over a step of 0 the
+       sign of the last step that was not 0: the tick rule
+     - bar-forge's ``tick_rule_signs``, and Polars' ``sign`` of ``diff``
+       with the last nonzero sign filled forward
 
 **Which rows a window holds follows Polars' rolling windows**
 (``rolling_*_by``). A window is a set of timestamps, and ``closed`` says
@@ -200,7 +206,8 @@ that falls silent. ``partial`` needs a ``window_size``: without one no
 window is cut short, so ``partial`` alone is refused.
 
 An operator's input is a column name or an element-wise expression of the
-row, :func:`increment` included, and never another window operator. For a
+row, :func:`increment` and :func:`tick_sign` included, and never another
+window operator. For a
 formula over an operator's output, add the inner operator as a column with
 one call, and pass that column to a second. ``half_life`` and
 ``window_size`` are in the clock's units: numbers on a numeric clock, and
@@ -237,6 +244,7 @@ __all__ = [
     "ewm_sum",
     "ewm_var",
     "increment",
+    "tick_sign",
 ]
 
 
@@ -1282,3 +1290,94 @@ def increment(input: str | pl.Expr) -> pl.Expr:
     sums near 1e10, loses about four of a double's sixteen digits.
     """
     return operator("increment", input)
+
+
+def tick_sign(input: str | pl.Expr) -> pl.Expr:
+    """The tick rule: the sign of a price's step from its last value, the
+    last nonzero sign held over a step of 0.
+
+    Use it to sign trades as buys (+1) or sells (-1) when the feed carries
+    no side: a trade above the last price is taken as a buy, one below as a
+    sell, and one at the same price as the trade before it. Multiplied by a
+    size it gives the signed volume an imbalance bar
+    (:func:`rheon.polars.stream.bars`) or a decayed order-flow sum
+    (:func:`ewm_sum`) reads.
+
+    .. rubric:: Parameters
+
+    ``input``
+        The price: a column name, or an element-wise expression of the row.
+        It may hold no window operator, :func:`increment` or
+        :func:`tick_sign`.
+
+    .. rubric:: Returns
+
+    A ``pl.Expr`` that :func:`rheon.polars.stream.with_windows` computes as
+    a Float64 column, or that a window operator takes as its input. With
+    ``d_i`` the row's :func:`increment` and ``s`` the sign carried:
+
+    .. code-block:: text
+
+        d_i > 0:   s = +1,  the row's sign is +1
+        d_i < 0:   s = -1,  the row's sign is -1
+        d_i = 0:   s as it was, the row's sign is s (null while none is known)
+        d_i null:  s as it was, the row's sign is null
+
+    So the first row of each group and session has no sign, as it has no
+    step; nor do the rows after it at the same price, until the price first
+    moves. A row whose input is missing (null, NaN, infinite or beyond 1e100
+    in magnitude) has no sign and is skipped, so the next row's step is from
+    the last valued price, and a session change, or a step back of the
+    clock past ``restart_after_step_back``, starts the rule over, as each
+    does :func:`increment`'s.
+
+    .. rubric:: Raises
+
+    ``TypeError``
+        ``input`` is neither a column name nor a ``pl.Expr``.
+    ``ValueError``
+        ``input`` holds a window operator, a part that is not element-wise, or
+        a column whose name starts with ``@po:``, the prefix the operators' own
+        columns carry.
+
+    .. rubric:: Examples
+
+    .. code-block:: python
+
+        rows = pl.DataFrame({"t": [0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+                             "p": [10.0, 10.0, 10.5, 10.5, 10.25, 10.25]})
+        out = rp.stream.with_windows(rows, s=rp.tick_sign("p"), clock="t", gap_cap=10.0)
+        print(out["s"].to_list())   # no sign until the price first moves
+
+    .. code-block:: text
+
+        [None, None, 1.0, 1.0, -1.0, -1.0]
+
+    .. rubric:: See also
+
+    - :func:`increment`, the step it reads the sign of.
+    - :func:`rheon.polars.stream.bars`, whose imbalance bars sum a signed
+      quantity.
+
+    .. rubric:: Notes
+
+    The rule is the tick test of Lee and Ready (1991), "Inferring trade
+    direction from intraday data", *Journal of Finance* 46(2). Its own
+    convention for a first trade, +1, is ``.fill_null(1.0)`` on the output,
+    which then matches bar-forge's ``tick_rule_signs`` row for row; the
+    output leaves it null instead, since no step is known. On a price grid
+    many trades print at the last price, so carrying the last nonzero sign,
+    rather than giving 0, keeps their volume in the signed flow.
+
+    On a whole frame with no missing price, the same column in Polars, which
+    the tests hold this to bit for bit, is the sign of ``diff`` with 0 read
+    as null and the last sign filled forward (``.over`` the group, under
+    ``group``)::
+
+        d = pl.col("p").diff()
+        pl.when(d != 0).then(d.sign()).forward_fill()
+
+    Polars' form needs the whole column, where this one reads one row and
+    carries two numbers a group: the last price and the last sign.
+    """
+    return operator("tick_sign", input)

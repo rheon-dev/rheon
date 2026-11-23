@@ -520,6 +520,27 @@ fn windows_int_config() -> WindowsConfig {
     .unwrap()
 }
 
+/// Task 562: two tick signs and an increment. The first signs `mid` in
+/// tenths, an integer input whose step is often 0, so the sign carried over
+/// a step of 0 is read across the save; the second signs `mid` itself inside
+/// a decayed sum, the signed flow. Each tick sign's carried sign rides in
+/// its group's `prev` past the increments' previous values.
+fn windows_tick_config() -> WindowsConfig {
+    serde_json::from_str(
+        r#"{"formulas": [
+               {"name": "sign", "tree": ["tick_sign", ["cast", ["*", ["col", "mid"], ["lit", 10.0]], "Int64"]]},
+               {"name": "flow", "tree": ["ewm_sum", ["*", ["tick_sign", ["col", "mid"]], ["col", "cum"]], {"half_life": 5.0, "window_size": 10.0}]},
+               {"name": "step", "tree": ["increment", ["col", "cum"]]}
+             ],
+             "clock": "t", "gap_cap": 50.0}"#,
+    )
+    .unwrap()
+}
+
+fn window_tick_input(df: &DataFrame) -> DataFrame {
+    df.select(["t", "mid", "cum"]).unwrap()
+}
+
 fn window_int_input(df: &DataFrame) -> DataFrame {
     df.select(["ti", "mid", "cum"]).unwrap()
 }
@@ -1420,6 +1441,14 @@ fn windows_quantile_run(bytes: &[u8], input: &DataFrame) -> Ran {
     windows_run_of(windows_quantile_config(), bytes, input)
 }
 
+fn windows_tick_first() -> (Vec<u8>, DataFrame) {
+    windows_first_of(windows_tick_config(), window_tick_input(&frame()))
+}
+
+fn windows_tick_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    windows_run_of(windows_tick_config(), bytes, input)
+}
+
 fn windows_int_first() -> (Vec<u8>, DataFrame) {
     windows_first_of(windows_int_config(), window_int_input(&frame()))
 }
@@ -2247,6 +2276,11 @@ fn kinds() -> Vec<Kind> {
             run: windows_quantile_run,
         },
         Kind {
+            name: "with_windows_tick",
+            first: windows_tick_first,
+            run: windows_tick_run,
+        },
+        Kind {
             name: "refresh_time",
             first: refresh_first,
             run: refresh_run,
@@ -2731,7 +2765,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
             ("checkpoint", 1),
             ("merge", 2),
             ("refresh_time", 3),
-            ("windows", 3)
+            ("windows", 4)
         ]
     );
     // A checkpoint's stages, each a whole state of its kind; and the bank's
@@ -3638,6 +3672,13 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
                 p.contains(".quant.") && p.contains(".prev.") && v.as_f64().is_some_and(|f| f > 0.0)
             },
         ),
+        // Task 562: a tick sign's carried sign, past the three slots of the
+        // previous values (two tick signs and an increment), each +1 or -1.
+        ("with_windows_tick", "a tick sign's carried sign", |p, v| {
+            p.starts_with(".increments.")
+                && (p.ends_with(".prev.3") || p.ends_with(".prev.4"))
+                && v.as_f64().is_some_and(|f| f.abs() == 1.0)
+        }),
         // PLAN 541: a merge's state, in each form it takes -- an input's
         // last clock as a float and as an integer (a temporal clock's
         // physical one) and none, the rows held at a tie, an input started

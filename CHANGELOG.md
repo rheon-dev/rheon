@@ -114,6 +114,22 @@ model that only the new build has is listed as an addition and passes.
   `fractions.Fraction`, and to bar-forge's tick, volume, dollar and
   imbalance bars (a test-only dependency).
 
+- **`rp.tick_sign`: the tick rule, as a window operator** (PLAN 562). A
+  row's sign is +1 on a price above its last one within the group and
+  session, -1 below it, and over a step of 0 the sign of the last step that
+  was not 0; null on a row with no step (a session's first, a missing
+  price) and on the rows at the first price until it moves. It is a step,
+  as `rp.increment` is: `with_windows` computes it, a window operator's
+  input may read it (signed flow, `rp.ewm_sum(rp.tick_sign("price") *
+  pl.col("size"), ...)`), and it feeds `rp.stream.bars`' imbalance bars.
+  Each tick sign carries its sign in the windows state's `prev`, past the
+  increments' previous values, so the layout of a state file is unchanged
+  and a state with no tick sign is the bytes it was; a state with one names
+  `tick_sign` in its formulas, which an older build refuses by name. Held to
+  bar-forge's `tick_rule_signs` (with its first trade's +1 filled in) and to
+  Polars' `sign` of `diff` with the last nonzero sign filled forward, to the
+  bit.
+
 - **`rp.stream.merge`: streams that each run in clock order, merged into one
   stream in clock order** (PLAN 541). It takes any number of frames or
   queries, by position or in a dict of name to frame, and gives every row

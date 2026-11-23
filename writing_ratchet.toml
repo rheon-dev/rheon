@@ -622,9 +622,15 @@ rule = "remedy"
 text = "is relative to another column, but {_RELATIVE_REMOVED}"
 reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends in the remedy: \"... and name that column in targets.\""
 
+[messages."crates/rheon-core/src/bars.rs"]
+"remedy" = 1
+
 [messages."crates/rheon-core/src/bocpd/span.rs"]
 
 [messages."crates/rheon-core/src/clock_span.rs"]
+
+[messages."crates/rheon-core/src/exact.rs"]
+"remedy" = 2
 
 [messages."crates/rheon-core/src/expectile.rs"]
 
@@ -639,6 +645,10 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [messages."crates/rheon-core/src/kalman/forms.rs"]
 
 [messages."crates/rheon-polars/src/bank/closed_rows.rs"]
+
+[messages."crates/rheon-polars/src/bars.rs"]
+"remedy" = 7
+"where" = 2
 
 [messages."crates/rheon-polars/src/checkpoint.rs"]
 
@@ -679,9 +689,13 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [docstrings."python/rheon/polars/_warnings.py"]
 
+[vocabulary."crates/rheon-core/src/bars.rs#messages"]
+
 [vocabulary."crates/rheon-core/src/bocpd/span.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/clock_span.rs#messages"]
+
+[vocabulary."crates/rheon-core/src/exact.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/expectile.rs#messages"]
 
@@ -696,6 +710,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."crates/rheon-core/src/kalman/forms.rs#messages"]
 
 [vocabulary."crates/rheon-polars/src/bank/closed_rows.rs#messages"]
+
+[vocabulary."crates/rheon-polars/src/bars.rs#messages"]
 
 [vocabulary."crates/rheon-polars/src/checkpoint.rs#messages"]
 

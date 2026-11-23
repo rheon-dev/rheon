@@ -18,8 +18,8 @@
 //! `["alias", x, name]`. An operator is `[name, input, {params}]` for
 //! `ewm_mean`, `rewm_mean`, `ewm_sum`, `rewm_sum`, `ewm_rate`,
 //! `rewm_rate`, `ewm_var` and `ewm_std` (these two with a `bias` too),
-//! `ewm_quantile` and `rewm_quantile` (with a `quantile`, the level), and
-//! `["increment", input]`. Nothing else is read, so a
+//! `ewm_quantile` and `rewm_quantile` (with a `quantile`, the level),
+//! `["increment", input]` and `["tick_sign", input]`. Nothing else is read, so a
 //! `shift`, a `cum_sum`, a rolling window or an aggregation -- which would
 //! depend on the chunking (hard rule 3) -- is refused by name, at build time.
 
@@ -92,10 +92,10 @@ impl Literal {
 #[derive(Debug, Clone, PartialEq)]
 pub struct OpNode {
     pub kind: OpKind,
-    /// An element-wise formula of the row, `increment` nodes included; no
-    /// window operator.
+    /// An element-wise formula of the row, `increment` and `tick_sign`
+    /// nodes included; no window operator.
     pub input: Box<Node>,
-    /// Required for a window operator; none for `increment`.
+    /// Required for a window operator; none for `increment` or `tick_sign`.
     pub half_life: Option<Span>,
     pub window_size: Option<Span>,
     pub closed: Closed,
@@ -111,7 +111,8 @@ pub struct OpNode {
 }
 
 impl OpNode {
-    /// Backward or forward; `increment` reads back one row and is backward.
+    /// Backward or forward; a step (`increment`, `tick_sign`) reads back one
+    /// row and is backward.
     pub fn direction(&self) -> Direction {
         self.kind.direction()
     }
@@ -405,12 +406,12 @@ impl Node {
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(Node::Call(name.to_string(), nodes))
             }
-            "increment" => {
+            "increment" | "tick_sign" => {
                 arity(1)?;
                 let input = Node::from_json(&args[0])?;
-                input.no_window_operator("increment")?;
+                input.no_window_operator(head.as_str())?;
                 Ok(Node::Op(OpNode {
-                    kind: OpKind::Increment,
+                    kind: OpKind::parse(head.as_str()).expect("a step"),
                     input: Box::new(input),
                     half_life: None,
                     window_size: None,
@@ -425,7 +426,7 @@ impl Node {
                 let kind = OpKind::parse(name).expect("checked");
                 arity(2)?;
                 let input = Node::from_json(&args[0])?;
-                input.no_window_operator(name)?;
+                input.no_window_operator(head.as_str())?;
                 let Value::Object(params) = &args[1] else {
                     return Err(format!(
                         "formula: {name:?} takes its parameters as an object, but it has {}. \
@@ -582,7 +583,8 @@ impl Node {
             }
             other => Err(format!(
                 "formula: {other:?} is not one of the operators a formula can hold. It can hold \
-                 increment (the step from a column's previous value), the window operators {}, \
+                 increment (the step from a column's previous value), tick_sign (the sign of \
+                 that step, the last nonzero one held over a step of 0), the window operators {}, \
                  and these operators within one row: {}. If the operator is misspelled, correct it; \
                  otherwise, write the formula with the operators listed.",
                 {
@@ -641,7 +643,7 @@ impl Node {
             }
             Node::Op(op) => {
                 let mut items = vec![json!(op.kind.name()), op.input.to_json()];
-                if op.kind != OpKind::Increment {
+                if !op.kind.is_step() {
                     items.push(op.params_json());
                 }
                 Value::Array(items)
@@ -717,11 +719,10 @@ impl Node {
         }
     }
 
-    /// Whether the tree holds a window operator (an `increment` is not one).
+    /// Whether the tree holds a window operator (an `increment` or a
+    /// `tick_sign` is not one).
     pub fn has_window_operator(&self) -> bool {
-        self.operators()
-            .iter()
-            .any(|op| op.kind != OpKind::Increment)
+        self.operators().iter().any(|op| !op.kind.is_step())
     }
 
     /// Whether the tree holds a forward operator.
@@ -733,7 +734,7 @@ impl Node {
 
     fn no_window_operator(&self, who: &str) -> Result<(), String> {
         if self.has_window_operator() {
-            let such_as = if who == "increment" {
+            let such_as = if who == "increment" || who == "tick_sign" {
                 "a column"
             } else {
                 "a column or an increment of one"
@@ -1077,15 +1078,12 @@ mod tests {
         read.sort_unstable();
         assert_eq!(listed, read);
         for head in WINDOW_HEADS {
-            assert!(
-                OpKind::parse(head).is_some_and(|k| k != OpKind::Increment),
-                "{head}"
-            );
+            assert!(OpKind::parse(head).is_some_and(|k| !k.is_step()), "{head}");
         }
         assert_eq!(
             WINDOW_HEADS.len(),
             10,
-            "every window operator but increment"
+            "every window operator but the steps, increment and tick_sign"
         );
         let err = Node::from_json(&json!(["shift", ["col", "a"]])).unwrap_err();
         assert!(
@@ -1185,8 +1183,29 @@ mod tests {
             let err = Node::parse(text).unwrap_err();
             assert!(err.contains(says), "{text}: {err}");
         }
-        // An increment inside an operator's input is the one nesting allowed.
+        // A step inside an operator's input is the one nesting allowed: an
+        // increment or a tick sign.
         assert!(Node::parse(r#"["ewm_sum",["increment",["col","c"]],{"half_life":1}]"#).is_ok());
+        let signed = r#"["ewm_sum",["*",["tick_sign",["col","p"]],["col","q"]],{"closed":"right","half_life":1.0,"min_samples":1}]"#;
+        let node = Node::parse(signed).unwrap();
+        assert!(node.has_window_operator());
+        assert_eq!(
+            node.to_json().to_string(),
+            signed,
+            "it writes no parameters"
+        );
+        let sign = tree(r#"["tick_sign",["col","p"]]"#);
+        assert!(!sign.has_window_operator());
+        assert_eq!(sign.columns(), ["p"]);
+        let err =
+            Node::parse(r#"["tick_sign",["ewm_sum",["col","p"],{"half_life":1}]]"#).unwrap_err();
+        assert!(
+            err.contains("tick_sign: its input holds a window operator")
+                && err.contains("such as a column."),
+            "{err}"
+        );
+        let err = Node::parse(r#"["tick_sign",["col","p"],{"half_life":1}]"#).unwrap_err();
+        assert!(err.contains("takes 1 argument"), "{err}");
         let f = tree(r#"["alias",["-",["col","a"],["col","b"]],"spread"]"#);
         assert_eq!(f.alias(), Some("spread"));
         assert!(!f.has_window_operator());

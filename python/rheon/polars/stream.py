@@ -902,7 +902,7 @@ def _bar_aggregates(
                 else:
                     raise RefusedValueError(
                         f"{who}: aggregate {name!r} holds the aggregation {agg}, which a bar does "
-                        f"not take. A bar takes {accepted}, over an element-wise expression of "
+                        f"not take. Write it with {accepted}, over an element-wise expression of "
                         "the row, with element-wise arithmetic around them."
                     )
                 tree = _formula._walk(inner, f"{who}: the input of aggregate {name!r}")
@@ -936,7 +936,8 @@ def _bar_aggregates(
         if found == 0:
             raise ValueError(
                 f"{who}: aggregate {name!r} holds no aggregation, so it has no value for a bar. "
-                f'Aggregate the rows, such as pl.col("price").last(), with {accepted}.'
+                f'Write an aggregation of the rows, such as pl.col("price").last(), with '
+                f"{accepted}."
             )
         tree = _formula._walk(replaced, f"{who}: aggregate {name!r}")
         outer.append((name, tree))
@@ -1006,8 +1007,8 @@ def bars(
     ``quantity``
         Under ``"sum"`` and ``"imbalance"``, the column or element-wise
         expression of the row to sum, such as
-        ``pl.col("price") * pl.col("size")``. A missing value (null, NaN,
-        infinite or past 1e100 in magnitude, the rule every spec column
+        ``pl.col("price") * pl.col("size")``. A value that is null, NaN,
+        infinite or past 1e100 in magnitude (the rule every spec column
         follows) adds 0, and the row is still a row of the bar. Not taken under
         ``"count"``.
     ``group``
@@ -1174,11 +1175,15 @@ def bars(
             "to one of those, or leave it out."
         )
     if not isinstance(final, bool):
-        raise WrongTypeError(f"{who}: final must be True or False, but it is {final!r}.")
+        raise WrongTypeError(
+            f"{who}: final must be True or False, but it is {final!r}. Pass final=True to emit "
+            f"the bars still open at the end."
+        )
     for key, cap in (("max_state_bytes", max_state_bytes), ("max_total_bytes", max_total_bytes)):
         if isinstance(cap, bool) or not isinstance(cap, numbers.Integral) or cap < 1:
             raise ValueError(
-                f"{who}: {key} must be a whole number of bytes of at least 1, but it is {cap!r}."
+                f"{who}: {key} must be a whole number of bytes of at least 1, but it is {cap!r}. "
+                f"Give it as an int, such as {key}=1 << 20."
             )
     lazy = lf.lazy()
     in_schema = lazy.collect_schema()
@@ -1243,11 +1248,14 @@ def bars(
     if quantity is not None and not isinstance(quantity, str | pl.Expr):
         raise TypeError(
             f"{who}: quantity takes a column name or an expression, but it is "
-            f"{type(quantity).__name__}."
+            f'{type(quantity).__name__}. Pass a column name, such as quantity="size".'
         )
     q_col = column_of("quantity", quantity) if quantity is not None else None
     if isinstance(threshold, bool):
-        raise WrongTypeError(f"{who}: threshold must be a number or a column, but it is a bool.")
+        raise WrongTypeError(
+            f"{who}: threshold must be a number or a column, but it is a bool. Give the "
+            f"threshold as a number, such as threshold=500."
+        )
     if isinstance(threshold, numbers.Real):
         th: dict[str, Any] = {"value": float(threshold)}
         if float(threshold) != threshold:
@@ -1261,7 +1269,7 @@ def bars(
     else:
         raise TypeError(
             f"{who}: threshold takes a number, a column name or an expression, but it is "
-            f"{type(threshold).__name__}."
+            f"{type(threshold).__name__}. Give a number, such as threshold=500, or a column."
         )
     outer, aggs, inputs, texts = _bar_aggregates(aggregates, _BAR_HIDDEN)
     computed.update(inputs)
