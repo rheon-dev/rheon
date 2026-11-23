@@ -3792,7 +3792,8 @@ impl Spec {
                     ModelKind::SeqTest { .. }
                     | ModelKind::Rcov { .. }
                     | ModelKind::Bocpd { .. }
-                    | ModelKind::Audit { .. } => false,
+                    | ModelKind::Audit { .. }
+                    | ModelKind::Garch { .. } => false,
                     ModelKind::CorrChange { scalar, .. } => scalar.unwrap_or(false),
                     _ => true,
                 };
@@ -4444,8 +4445,18 @@ impl Spec {
                 .iter()
                 .any(|(_, d)| !forgets(self.diagnostic_decay_of(memory, *d, 1)))
             {
+                let rows_on_a_clock = matches!(
+                    self.model,
+                    ModelKind::Expectile {
+                        window_rows: Some(_),
+                        ..
+                    }
+                ) && self.clock.is_some();
                 let why = if memory.is_some() {
                     "feature_health_half_life is inf"
+                } else if rows_on_a_clock {
+                    "its memory is the fit's, and window_rows counts rows, which are no span \
+                     of the clock column, while half_life is inf"
                 } else if self.lam.is_some() {
                     "its memory is the fit's, which forgets nothing (lam is 1, with no \
                      window_size)"

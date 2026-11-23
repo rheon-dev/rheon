@@ -879,6 +879,14 @@ model that only the new build has is listed as an addition and passes.
   now, under which the flags are the same in any unit, to the bit at a
   power of two. Each bucket then keeps its least and greatest value, two
   numbers more. No default moves.
+- **`emit_feature_health` reads an `expectile` window as its memory, and
+  `garch` is not told to set a finite `half_life`** (review 2026-11-23,
+  SPEC-8). Beside `expectile(window_size=...)`, or `window_rows=...` with
+  no clock column, feature health was refused as "half_life is inf, with
+  no window_size", and the diagnostics read the infinite half-life, not the
+  window's; `window_rows` on a clock now says its rows are no span of the
+  clock. And `min_settled_frac` on `garch`, which refuses a finite
+  `half_life`, advised setting one; it now says `garch` does not decay.
 - **A window looking ahead whose far edge is the input's last row is whole
   at the end of the input** (PLAN 565). Under `closed="right"` or `"both"`,
   `rp.ewm_sum`, `rp.ewm_mean`, `rp.ewm_rate` and `rp.ewm_quantile` with
