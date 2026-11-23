@@ -213,6 +213,7 @@ impl ProfileDef {
                 _ => None,
             },
             closed: self.closed,
+            since: None,
         }
     }
 

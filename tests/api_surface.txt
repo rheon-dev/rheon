@@ -44,6 +44,8 @@
   increment(input: 'str | pl.Expr') -> 'pl.Expr'
   ops
   predict(frame: 'pl.LazyFrame | pl.DataFrame', bank: 'ModelBank | State', *, chunk_size: 'int | None' = None, threads: 'int | None' = None) -> 'pl.LazyFrame | pl.DataFrame'
+  rolling_max(input: 'str | pl.Expr', *, window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False, since: 'str | pl.Expr | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
+  rolling_min(input: 'str | pl.Expr', *, window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False, since: 'str | pl.Expr | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
   sim  # unstable
   stream
   unnest(frame: 'pl.LazyFrame | pl.DataFrame', specs: 'Specs | ModelBank | State', *, separator: 'str | None' = None) -> 'pl.LazyFrame | pl.DataFrame'
@@ -1900,6 +1902,8 @@
     ewm_sum(input: 'str | pl.Expr', *, half_life: 'float | Duration', window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 0, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False) -> 'pl.Expr'
     ewm_var(input: 'str | pl.Expr', *, half_life: 'float | Duration', window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, bias: 'bool' = False) -> 'pl.Expr'
     increment(input: 'str | pl.Expr') -> 'pl.Expr'
+    rolling_max(input: 'str | pl.Expr', *, window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False, since: 'str | pl.Expr | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
+    rolling_min(input: 'str | pl.Expr', *, window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False, since: 'str | pl.Expr | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
   sim:  # unstable
     regimes(m: 'int', *, states: 'Sequence[Any]', transition: 'Any', n_blocks: 'int', rows_per_block: 'int', durations: 'Sequence[int] | None' = None, design: 'str' = 'step', smooth_rows: 'int' = 0, phi: 'float | Sequence[float]' = 0.0, scale_state: 'float | Sequence[float]' = 0.0, async_rates: 'Sequence[float] | None' = None, noise: 'float' = 0.0, cycle_profile: 'Sequence[float] | None' = None, cycle_rows: 'int | None' = None, activity: 'tuple[float, float] | None' = None, seed: 'int' = 0) -> 'dict[str, pl.DataFrame]'
   stream:

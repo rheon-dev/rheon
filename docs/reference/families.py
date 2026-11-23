@@ -157,6 +157,8 @@ FAMILIES: tuple[Family, ...] = (
                 "ewm_quantile",
                 "ewm_profile",
                 "ewm_rate",
+                "rolling_max",
+                "rolling_min",
                 "increment",
                 "cross_mean",
                 "cross_std",

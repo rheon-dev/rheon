@@ -46,6 +46,7 @@ temporal one. Each operator then reads the weighted rows its own way:
 | `rp.ewm_sum` | `Σ 0.5 ** (age / half_life) · x`, each row counted once at its own time. Every row at a repeated clock value carries that value's total. A window with no row with a value sums to 0.0 under the default `min_samples=0`, and is null under 1 or more | `ewm_sum_by` on distinct clock values, whose sum at a repeated one runs row by row; `rolling_sum_by`, empty windows included |
 | `rp.ewm_rate` | the sum divided by the decayed time the window covers: a quantity per unit of clock | the sum and the decayed time, each as above |
 | `rp.ewm_quantile` | each row weighed as `rp.ewm_sum` weighs it ([Quantiles and a robust scale](#quantiles-and-a-robust-scale)) | numpy's weighted quantile (`inverted_cdf`), within 0.78% |
+| `rp.rolling_max`, `rp.rolling_min` | every row of the window counts once, whatever its age, so there is no `half_life`; with no `window_size`, every row since the stretch began or since the last `since` event ([The largest and smallest value, and since an event](#the-largest-and-smallest-value-and-since-an-event)) | `rolling_max_by` and `rolling_min_by`, bit for bit, a NaN or an infinity read as missing where Polars lets a NaN make the window NaN and counts an infinity |
 | `rp.ewm_var`, `rp.ewm_std` | about `rp.ewm_mean`, each value weighed as the mean weighs it, and looking back only. With `bias=False`, the default, the variance is corrected for the weights' number and inequality, so a window that one row's weight fills is null. A window that holds one value gives 0 exactly | `ewm_var` and `ewm_std` with `adjust=False`, on a clock that steps by 1 a row with `half_life` in rows and an input with no nulls: a null row moves nothing here and the last value is held across the longer step to the next value, which no `ignore_nulls` setting of Polars' does. Polars before 1.44 gave the first row 0.0 under `bias=False`, where it now gives null, as these do |
 | `rp.ewm_moments` | one term of the moments of one or more columns, each perhaps lagged (`{"x": 3}`, `{"x": 1, "x@1": 1}`), each row weighed by its held interval's decayed time as `rp.ewm_var` weighs it, and looking back only. The moments are merged a row at a time by Pébay's rule, so a column far from zero keeps its higher moments. Under `window_size` a row is in the window by its clock value and weighs its whole interval, where `rp.ewm_var` counts only the oldest row's part inside the window. A lag pairs each row with the latest row at or before `t - k`, within `lag_tolerance` | numpy's weighted averages of the deviations' products over the window's rows; scipy's `moment`, `skew`, `kurtosis` and `kstat` at equal weights; `rp.spec.ewm_moments` fed the same weights, to the bit |
 
@@ -532,6 +533,71 @@ docstring gives each form's bytes. A call whose buckets pass the cap is
 refused before it reads a row; a state the data grows (a window's rows, a
 quantile's sketches) warns once at half the cap and refuses the row that
 would pass it.
+
+## The largest and smallest value, and since an event
+
+**`rp.rolling_max` and `rp.rolling_min` are the largest and smallest value
+the window holds.** The window is the one `rolling_max_by` holds under each
+`closed`, and the value is Polars' to the bit. On equal values that differ
+only as `0.0` and `-0.0` the earliest row of the window wins, as in Polars.
+Looking ahead the latest wins, so a forward window is the backward one over
+the reversed stream. A NaN, an infinity or a value beyond 1e100 is read as
+missing, as every operator reads it, where Polars' `rolling_max_by` lets a
+NaN make the window NaN and counts an infinity.
+
+**`since` starts the window over at an event.** It is an element-wise
+boolean of the row, such as `pl.col("new_period")`. A stamp that holds a
+true row, at any of its rows, starts the window at that stamp: every row of
+the stamp is in, every earlier row is out, so the rows of one stamp never
+get two values. Under `closed="left"` or `"none"` the event's stamp is null,
+since its own rows are outside its window and the event emptied the rest.
+With a `window_size`, a window the event cut before its full span is
+partial, under `partial`. The event acts on its operator alone, and under
+`group` each group's events are its own. A gap past `gap_cap` or a session
+change starts the running form over too, as it does every operator; a
+`gap_cap` wide enough keeps a high-water mark across a long gap. `since`
+does not combine with `reverse=True` yet: a window looking ahead would end
+at the next event, and whether such a window is whole has no rule yet.
+
+**The drawdown subtracts the high-water mark from the value.** This code makes
+both from a column of equity:
+
+```python
+import polars as pl
+import rheon.polars as rp
+
+rows = pl.DataFrame({
+    "t": [0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+    "equity": [1.0, 3.0, 2.0, 4.0, 1.0, 2.0],
+    "new_period": [False, False, False, False, True, False],
+})
+peak = rp.rolling_max("equity", since="new_period")
+out = rp.stream.with_windows(
+    rows, peak=peak, drawdown=pl.col("equity") - peak, clock="t", gap_cap=10.0
+)
+print(out["drawdown"].to_list())
+```
+
+```text
+[0.0, 0.0, -1.0, 0.0, 0.0, 0.0]
+```
+
+Its running worst, the maximum drawdown so far, is `rp.rolling_min` of the
+`drawdown` column in a second call, since an operator's input holds no
+other operator.
+
+**What it holds.** With no `window_size`, one running extremum and its
+count a group: a few doubles, whatever the stream's length. With a
+`window_size`, the window's rows, as every windowed operator keeps them,
+and one double a row more for the extremum. A row costs 112 bytes for one
+extremum on its own window: 40 for the row, 64 for the operator's value
+and sums, 8 for the extremum. Each other operator sharing the window adds
+64 bytes a row, and another extremum 72. A window on a clock holds every
+row inside its span, so a burst of rows fills it. `max_state_bytes` bounds
+it, 256 KB a group by default and at most 64 MiB. Without a clock column
+the window's rows are known, and a window past the cap is refused when the
+query is built. On a clock, the row that takes a group's window past it is
+refused.
 
 ## Saving and resuming a window run
 

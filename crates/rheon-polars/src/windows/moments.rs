@@ -317,6 +317,7 @@ mod tests {
             window_size: window,
             window_ns: None,
             closed: Closed::Right,
+            since: None,
         }
     }
 
@@ -329,6 +330,7 @@ mod tests {
             partial: Partial::Keep,
             bias: false,
             quantile: None,
+            max_state_bytes: None,
         }
     }
 

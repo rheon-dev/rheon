@@ -1,6 +1,7 @@
 """The window operators: exponentially weighted (EW) means, sums, rates and
-quantiles over a stream's clock, looking back or ahead, and a variance and a
-standard deviation looking back. ``increment``, the step of a running total,
+quantiles over a stream's clock, looking back or ahead, a variance and a
+standard deviation looking back, and the largest and smallest value of a
+window, or since an event. ``increment``, the step of a running total,
 gives a window operator an input.
 
 Each operator returns a ``pl.Expr`` that composes with Polars' own
@@ -78,6 +79,15 @@ half_life)``:
        quantile, relatively
      - numpy's ``inverted_cdf`` quantile over the window's values and
        their weights
+   * - :func:`rolling_max`, :func:`rolling_min`
+     - the largest or smallest value of the rows the window holds, each row
+       counted once whatever its age; with no ``window_size``, every row
+       since the stretch began or, under ``since``, since the last stamp
+       holding an event
+     - Polars' ``rolling_max_by`` and ``rolling_min_by``, bit for bit, the
+       earliest row winning a tie of ``0.0`` and ``-0.0``. A NaN or an
+       infinity is missing here, where Polars lets a NaN make the window NaN
+       and counts an infinity
    * - :func:`increment`
      - ``x_i - x_{i-1}`` within the group and session, null on a session's
        first row, and in seconds on a temporal column
@@ -253,6 +263,8 @@ __all__ = [
     "ewm_sum",
     "ewm_var",
     "increment",
+    "rolling_max",
+    "rolling_min",
 ]
 
 
@@ -913,6 +925,415 @@ def ewm_quantile(
         partial=partial,
         reverse=reverse,
         quantile=quantile,
+    )
+
+
+def _extremum(
+    name: str,
+    input: str | pl.Expr,
+    *,
+    window_size: float | Duration | None,
+    closed: Literal["right", "left", "both", "none"],
+    min_samples: int,
+    partial: Literal["keep", "null", "drop"] | None,
+    reverse: bool,
+    since: str | pl.Expr | None,
+    max_state_bytes: int | None,
+) -> pl.Expr:
+    """The maximum or minimum ``name`` names, looking back, or ahead under
+    ``reverse``, which the tree keeps as ``r<name>``."""
+    who = f"rp.{name}"
+    if not isinstance(reverse, bool):
+        raise TypeError(
+            f"{who}: reverse must be True or False, but it is {reverse!r}. "
+            "Pass reverse=True to read the rows after each row, or reverse=False."
+        )
+    if reverse and window_size is None:
+        raise RefusedValueError(
+            f"{who}: reverse=True needs window_size, but it is not set, and the rows after a "
+            "row have no end without it. Set window_size to the span to read ahead."
+        )
+    return operator(
+        f"r{name}" if reverse else name,
+        input,
+        window_size=window_size,
+        closed=closed,
+        min_samples=min_samples,
+        partial=partial,
+        since=since,
+        max_state_bytes=max_state_bytes,
+        who=f"rp.{name}(reverse=True)" if reverse else None,
+    )
+
+
+def rolling_max(
+    input: str | pl.Expr,
+    *,
+    window_size: float | Duration | None = None,
+    closed: Literal["right", "left", "both", "none"] = "right",
+    min_samples: int = 1,
+    partial: Literal["keep", "null", "drop"] | None = None,
+    reverse: bool = False,
+    since: str | pl.Expr | None = None,
+    max_state_bytes: int | None = None,
+) -> pl.Expr:
+    """The largest value of a column over each row's window.
+
+    Use it for the largest value of a trailing or leading window on the
+    stream's clock, or, with ``since``, for the largest since an event, such as
+    a drawdown's high-water mark. With no ``window_size`` it covers every row since the
+    last clock break or event, in constant memory.
+
+    .. rubric:: Parameters
+
+    ``input``
+        The values the window reads: a column name, or an element-wise
+        expression of the row, such as ``pl.col("bid") - pl.col("ask")`` or
+        :func:`increment`. It may hold no other window operator.
+    ``window_size``
+        The span of clock time a window covers: a number of clock units on a
+        numeric clock, a duration (``"10s"``, a ``timedelta``,
+        ``pl.duration(seconds=10)``) on a temporal one, and rows where the
+        call has no clock column. The default, ``None``, covers every row
+        since the last clock break (a gap past ``gap_cap`` or a session
+        change) or the last ``since`` event. Required under ``reverse=True``.
+    ``closed``
+        Which ends of the window are in: ``"right"`` (the default, as in
+        Polars' ``rolling_*_by``), ``"left"``, ``"both"`` or ``"none"``. The
+        module's table of ``closed`` (:mod:`rheon.polars.ops`) gives each end,
+        looking back and ahead.
+    ``min_samples``
+        The fewest rows with a value a window must hold to give a value, as in
+        Polars' rolling functions. Default 1. An integer from 1 to
+        ``2**32 - 1``.
+    ``partial``
+        What a window cut short gives: one that a gap past ``gap_cap``, a
+        session change, the stream's start or a ``since`` event cuts before
+        its full span. ``"keep"`` gives the largest value over what it saw,
+        ``"null"`` gives null, and ``"drop"`` removes the row from the output.
+        ``None`` (the default) means ``"keep"`` looking back and ``"null"``
+        looking ahead. It needs ``window_size``.
+    ``reverse``
+        ``True`` reads the rows after each row, at most ``window_size`` later,
+        in place of the rows at or before it. As a spec's target, a window
+        looking ahead is known only once it has closed, so the bank learns it
+        under an ``embargo`` of at least ``window_size``. Default ``False``.
+    ``since``
+        An element-wise boolean of the row, a column name or a ``pl.Expr``:
+        a row where it is true starts the window over at its stamp. Every row
+        at that stamp is in the new window and every row before it is out, so
+        the rows of one stamp never get two values, wherever in the stamp the
+        true row falls. A null is false. It acts on this operator alone, and
+        under ``group`` each group's events are its own. Default ``None``, no
+        event. It cannot be combined with ``reverse=True`` yet: a window
+        looking ahead would end at the next event, and whether such a window
+        is whole or partial has no rule yet.
+    ``max_state_bytes``
+        The bytes a group's window may hold under a ``window_size``: each row
+        inside the window costs a few dozen bytes (the module's Notes), and a
+        window on a clock holds every row inside its span, so a burst fills
+        it. Default 256 KB; at most 64 MiB. Without a clock column the window
+        holds a known number of rows, and one past the cap is refused when the
+        query is built; on a clock the row that takes a group's window past it
+        is refused. With no ``window_size`` the state is a few doubles a
+        group, whatever the stream's length.
+
+    .. rubric:: Returns
+
+    A ``pl.Expr`` that :func:`rheon.polars.stream.with_windows` computes as a
+    ``Float64`` column, or that a spec takes as its target. Its value is the
+    largest of the values the window holds, and null where the window holds
+    fewer than ``min_samples`` of them. It is null too where
+    ``partial="null"`` meets a cut window, where a forward window is still
+    open at the input's end, and after a reset (the module's ``partial``
+    table). At a row whose value is missing, it gives the window as it
+    stands. Under ``closed="left"`` or ``"none"`` the rows of an event's
+    stamp are outside their own window, which the event has emptied, so they
+    are null.
+
+    .. rubric:: Raises
+
+    ``TypeError``
+        When:
+
+        - ``input`` or ``since`` is neither a column name nor a ``pl.Expr``;
+        - ``window_size`` is neither a number nor a duration;
+        - ``min_samples`` or ``max_state_bytes`` is not an integer (a
+          :class:`~rheon.WrongTypeError`, also a ``ValueError``);
+        - ``reverse`` is not ``True`` or ``False``.
+    ``ValueError``
+        When:
+
+        - ``window_size`` is NaN, infinite or not above 0, or text that is not
+          a duration;
+        - ``closed`` or ``partial`` is a word it does not know, or ``partial``
+          is given without ``window_size``;
+        - ``min_samples`` is below 1 or above ``2**32 - 1``;
+        - ``max_state_bytes`` is not above 0 or is above 64 MiB;
+        - ``input`` or ``since`` holds a window operator, a part that is not
+          element-wise, or a column whose name starts with ``@po:``.
+    :class:`~rheon.RefusedValueError`
+        ``reverse=True`` without ``window_size``, or with ``since``. It is
+        both a ``ValueError`` and a ``TypeError``.
+
+    :func:`rheon.polars.stream.with_windows` refuses the rest when it builds
+    its query: a ``since`` that is not a boolean, a window past
+    ``max_state_bytes`` on the row clock, and a window looking ahead under
+    ``group`` with no clock column.
+
+    .. rubric:: Examples
+
+    .. code-block:: python
+
+        rows = pl.DataFrame({
+            "t": [0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+            "equity": [1.0, 3.0, 2.0, 4.0, 1.0, 2.0],
+            "new_period": [False, False, False, False, True, False],
+        })
+        peak = rp.rolling_max("equity", since="new_period")   # the high-water mark
+        out = rp.stream.with_windows(
+            rows,
+            peak=peak,
+            drawdown=pl.col("equity") - peak,
+            last_3=rp.rolling_max("equity", window_size=3.0),
+            clock="t", gap_cap=10.0,
+        )
+        print(out["peak"].to_list())
+        print(out["drawdown"].to_list())
+        print(out["last_3"].to_list())
+
+    .. code-block:: text
+
+        [1.0, 3.0, 3.0, 4.0, 1.0, 2.0]
+        [0.0, 0.0, -1.0, 0.0, 0.0, 0.0]
+        [1.0, 3.0, 3.0, 4.0, 4.0, 4.0]
+
+    .. rubric:: See also
+
+    - :func:`rolling_min`, the smallest value.
+    - :func:`rheon.polars.stream.with_windows`, which computes the operators
+      over a stream.
+    - `How a window operator weighs the rows near each row
+      <https://github.com/rheon-dev/rheon/blob/main/docs/WINDOWS.md>`_,
+      the guide.
+
+    .. rubric:: Notes
+
+    The value at row *t* is ``max(x_j for j in W_t)``, ``W_t`` the rows of
+    the window with a value: Polars' ``rolling_max_by`` over a window on the
+    clock. The window is the rows ``rolling_*_by`` holds under ``closed``,
+    cut at the start of the stretch and, under ``since``, at the stamp of the
+    last event. With no ``window_size`` it is every row since then, kept as
+    one running maximum and its count, ``m_t = max(m_(t-1), x_t)``.
+
+    Where it differs from Polars: a NaN, an infinity or a value beyond 1e100
+    in magnitude is read as missing, as for every operator here, where
+    Polars' ``rolling_max_by`` lets a NaN make the window NaN and counts an
+    infinity. On equal values that differ only as ``0.0`` and ``-0.0`` the
+    earliest row of the window wins, Polars' rolling rule, and looking ahead
+    the latest. An integer input is read as a double, so one beyond ``2**53``
+    in magnitude is rounded, where Polars returns an integer. Polars'
+    ``cum_max`` gives null at a null row; this gives the window as it
+    stands.
+
+    **Drawdown** is a formula around it, not an operator of its own: with
+    ``peak = rp.rolling_max("equity", since="new_period")``, the drawdown is
+    ``pl.col("equity") - peak``, 0 at a new high and negative below it, and
+    ``pl.col("equity") / peak - 1`` the relative one. Its running worst is
+    :func:`rolling_min` of that column, in a second call.
+    """
+    return _extremum(
+        "rolling_max",
+        input,
+        window_size=window_size,
+        closed=closed,
+        min_samples=min_samples,
+        partial=partial,
+        reverse=reverse,
+        since=since,
+        max_state_bytes=max_state_bytes,
+    )
+
+
+def rolling_min(
+    input: str | pl.Expr,
+    *,
+    window_size: float | Duration | None = None,
+    closed: Literal["right", "left", "both", "none"] = "right",
+    min_samples: int = 1,
+    partial: Literal["keep", "null", "drop"] | None = None,
+    reverse: bool = False,
+    since: str | pl.Expr | None = None,
+    max_state_bytes: int | None = None,
+) -> pl.Expr:
+    """The smallest value of a column over each row's window.
+
+    Use it for the smallest value of a trailing or leading window on the
+    stream's clock, or, with ``since``, for the smallest since an event, such as
+    a period's low. With no ``window_size`` it covers every row since the
+    last clock break or event, in constant memory.
+
+    .. rubric:: Parameters
+
+    ``input``
+        The values the window reads: a column name, or an element-wise
+        expression of the row, such as ``pl.col("bid") - pl.col("ask")`` or
+        :func:`increment`. It may hold no other window operator.
+    ``window_size``
+        The span of clock time a window covers: a number of clock units on a
+        numeric clock, a duration (``"10s"``, a ``timedelta``,
+        ``pl.duration(seconds=10)``) on a temporal one, and rows where the
+        call has no clock column. The default, ``None``, covers every row
+        since the last clock break (a gap past ``gap_cap`` or a session
+        change) or the last ``since`` event. Required under ``reverse=True``.
+    ``closed``
+        Which ends of the window are in: ``"right"`` (the default, as in
+        Polars' ``rolling_*_by``), ``"left"``, ``"both"`` or ``"none"``. The
+        module's table of ``closed`` (:mod:`rheon.polars.ops`) gives each end,
+        looking back and ahead.
+    ``min_samples``
+        The fewest rows with a value a window must hold to give a value, as in
+        Polars' rolling functions. Default 1. An integer from 1 to
+        ``2**32 - 1``.
+    ``partial``
+        What a window cut short gives: one that a gap past ``gap_cap``, a
+        session change, the stream's start or a ``since`` event cuts before
+        its full span. ``"keep"`` gives the smallest value over what it saw,
+        ``"null"`` gives null, and ``"drop"`` removes the row from the output.
+        ``None`` (the default) means ``"keep"`` looking back and ``"null"``
+        looking ahead. It needs ``window_size``.
+    ``reverse``
+        ``True`` reads the rows after each row, at most ``window_size`` later,
+        in place of the rows at or before it. As a spec's target, a window
+        looking ahead is known only once it has closed, so the bank learns it
+        under an ``embargo`` of at least ``window_size``. Default ``False``.
+    ``since``
+        An element-wise boolean of the row, a column name or a ``pl.Expr``:
+        a row where it is true starts the window over at its stamp. Every row
+        at that stamp is in the new window and every row before it is out, so
+        the rows of one stamp never get two values, wherever in the stamp the
+        true row falls. A null is false. It acts on this operator alone, and
+        under ``group`` each group's events are its own. Default ``None``, no
+        event. It cannot be combined with ``reverse=True`` yet: a window
+        looking ahead would end at the next event, and whether such a window
+        is whole or partial has no rule yet.
+    ``max_state_bytes``
+        The bytes a group's window may hold under a ``window_size``: each row
+        inside the window costs a few dozen bytes (the module's Notes), and a
+        window on a clock holds every row inside its span, so a burst fills
+        it. Default 256 KB; at most 64 MiB. Without a clock column the window
+        holds a known number of rows, and one past the cap is refused when the
+        query is built; on a clock the row that takes a group's window past it
+        is refused. With no ``window_size`` the state is a few doubles a
+        group, whatever the stream's length.
+
+    .. rubric:: Returns
+
+    A ``pl.Expr`` that :func:`rheon.polars.stream.with_windows` computes as a
+    ``Float64`` column, or that a spec takes as its target. Its value is the
+    smallest of the values the window holds, and null where the window holds
+    fewer than ``min_samples`` of them. It is null too where
+    ``partial="null"`` meets a cut window, where a forward window is still
+    open at the input's end, and after a reset (the module's ``partial``
+    table). At a row whose value is missing, it gives the window as it
+    stands. Under ``closed="left"`` or ``"none"`` the rows of an event's
+    stamp are outside their own window, which the event has emptied, so they
+    are null.
+
+    .. rubric:: Raises
+
+    ``TypeError``
+        When:
+
+        - ``input`` or ``since`` is neither a column name nor a ``pl.Expr``;
+        - ``window_size`` is neither a number nor a duration;
+        - ``min_samples`` or ``max_state_bytes`` is not an integer (a
+          :class:`~rheon.WrongTypeError`, also a ``ValueError``);
+        - ``reverse`` is not ``True`` or ``False``.
+    ``ValueError``
+        When:
+
+        - ``window_size`` is NaN, infinite or not above 0, or text that is not
+          a duration;
+        - ``closed`` or ``partial`` is a word it does not know, or ``partial``
+          is given without ``window_size``;
+        - ``min_samples`` is below 1 or above ``2**32 - 1``;
+        - ``max_state_bytes`` is not above 0 or is above 64 MiB;
+        - ``input`` or ``since`` holds a window operator, a part that is not
+          element-wise, or a column whose name starts with ``@po:``.
+    :class:`~rheon.RefusedValueError`
+        ``reverse=True`` without ``window_size``, or with ``since``. It is
+        both a ``ValueError`` and a ``TypeError``.
+
+    :func:`rheon.polars.stream.with_windows` refuses the rest when it builds
+    its query: a ``since`` that is not a boolean, a window past
+    ``max_state_bytes`` on the row clock, and a window looking ahead under
+    ``group`` with no clock column.
+
+    .. rubric:: Examples
+
+    .. code-block:: python
+
+        rows = pl.DataFrame({"t": [0, 1, 2, 3, 4], "x": [3.0, 1.0, 2.0, 5.0, 4.0]})
+        out = rp.stream.with_windows(
+            rows,
+            low=rp.rolling_min("x", window_size=2),
+            ahead=rp.rolling_min("x", window_size=2, reverse=True),
+            clock="t", gap_cap=10,
+        )
+        polars = rows.select(pl.col("x").rolling_min_by("t", window_size="2i"))
+        print(out["low"].to_list(), polars["x"].to_list())   # equal
+        print(out["ahead"].to_list())   # null where a window was open at the input's end
+
+    .. code-block:: text
+
+        [3.0, 1.0, 1.0, 2.0, 4.0] [3.0, 1.0, 1.0, 2.0, 4.0]
+        [1.0, 2.0, None, None, None]
+
+    .. rubric:: See also
+
+    - :func:`rolling_max`, the largest value.
+    - :func:`rheon.polars.stream.with_windows`, which computes the operators
+      over a stream.
+    - `How a window operator weighs the rows near each row
+      <https://github.com/rheon-dev/rheon/blob/main/docs/WINDOWS.md>`_,
+      the guide.
+
+    .. rubric:: Notes
+
+    The value at row *t* is ``min(x_j for j in W_t)``, ``W_t`` the rows of
+    the window with a value: Polars' ``rolling_min_by`` over a window on the
+    clock. The window is the rows ``rolling_*_by`` holds under ``closed``,
+    cut at the start of the stretch and, under ``since``, at the stamp of the
+    last event. With no ``window_size`` it is every row since then, kept as
+    one running minimum and its count, ``m_t = min(m_(t-1), x_t)``.
+
+    Where it differs from Polars: a NaN, an infinity or a value beyond 1e100
+    in magnitude is read as missing, as for every operator here, where
+    Polars' ``rolling_min_by`` lets a NaN make the window NaN and counts an
+    infinity. On equal values that differ only as ``0.0`` and ``-0.0`` the
+    earliest row of the window wins, Polars' rolling rule, and looking ahead
+    the latest. An integer input is read as a double, so one beyond ``2**53``
+    in magnitude is rounded, where Polars returns an integer. Polars'
+    ``cum_min`` gives null at a null row; this gives the window as it
+    stands.
+
+    **Drawdown** is a formula around it, not an operator of its own: with
+    ``peak = rp.rolling_max("equity", since="new_period")``, the drawdown is
+    ``pl.col("equity") - peak``, 0 at a new high and negative below it, and
+    ``pl.col("equity") / peak - 1`` the relative one. Its running worst is
+    :func:`rolling_min` of that column, in a second call.
+    """
+    return _extremum(
+        "rolling_min",
+        input,
+        window_size=window_size,
+        closed=closed,
+        min_samples=min_samples,
+        partial=partial,
+        reverse=reverse,
+        since=since,
+        max_state_bytes=max_state_bytes,
     )
 
 

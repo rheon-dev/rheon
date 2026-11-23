@@ -115,8 +115,8 @@ pub struct OpNode {
     /// A cross-group operator's weight, an element-wise formula of the row;
     /// `None` weighs every row 1, and every window operator has none.
     pub weight: Option<Box<Node>>,
-    /// A cross-group operator's cap on its state, where the call sets one;
-    /// `None` for every window operator.
+    /// A cross-group operator's cap on its state, or an extremum's on its
+    /// window's bytes a group, where the call sets one; `None` otherwise.
     pub max_state_bytes: Option<u64>,
     /// A cross rank's tie rule and direction, and a cross quantile's
     /// interpolation; the defaults for every other operator.
@@ -133,6 +133,10 @@ pub struct OpNode {
     /// A profile's (`ewm_profile`) own parameters; `None` for every other
     /// operator.
     pub profile: Option<Box<ProfileParams>>,
+    /// An extremum's event (`rolling_max`, `rolling_min`): an element-wise
+    /// boolean of the row, true where the window starts over at the row's
+    /// stamp; `None` for every other operator.
+    pub since: Option<Box<Node>>,
 }
 
 /// What an `ewm_profile` takes beside the window operators' parameters.
@@ -228,7 +232,8 @@ impl OpNode {
 
     fn params_json(&self) -> Value {
         let mut m = Map::new();
-        if let Some(h) = &self.half_life {
+        let ext = self.kind.stat().is_some_and(Stat::is_extremum);
+        if let Some(h) = self.half_life.as_ref().filter(|_| !ext) {
             m.insert(
                 "half_life".into(),
                 serde_json::to_value(h).expect("a span is JSON"),
@@ -265,9 +270,6 @@ impl OpNode {
             }
             if let Some(p) = &self.pick {
                 m.insert("where".into(), p.to_json());
-            }
-            if let Some(b) = self.max_state_bytes {
-                m.insert("max_state_bytes".into(), json!(b));
             }
             match self.kind.cross() {
                 Some(CrossStat::Rank) => {
@@ -333,6 +335,12 @@ impl OpNode {
                 m.insert("max_state_bytes".into(), json!(b));
             }
         }
+        if let Some(e) = &self.since {
+            m.insert("since".into(), e.to_json());
+        }
+        if let Some(b) = self.max_state_bytes {
+            m.insert("max_state_bytes".into(), json!(b));
+        }
         Value::Object(m)
     }
 }
@@ -388,10 +396,14 @@ const WINDOW_HEADS: &[&str] = &[
     "ewm_std",
     "ewm_quantile",
     "ewm_moments",
+    "rolling_max",
+    "rolling_min",
     "rewm_mean",
     "rewm_sum",
     "rewm_rate",
     "rewm_quantile",
+    "rrolling_max",
+    "rrolling_min",
 ];
 
 /// What a formula reads around the window operators, in the words a reader
@@ -613,6 +625,7 @@ impl Node {
                     pick: None,
                     moments: None,
                     profile: None,
+                    since: None,
                 }))
             }
             name if OpKind::parse(name).is_some_and(|k| k.cross().is_some()) => {
@@ -644,6 +657,7 @@ impl Node {
                     pick: None,
                     moments: None,
                     profile: None,
+                    since: None,
                 };
                 let std = kind == OpKind::CrossStd;
                 let stat = kind.cross().expect("checked");
@@ -868,13 +882,42 @@ impl Node {
                     pick: None,
                     moments: None,
                     profile: None,
+                    since: None,
                 };
                 let var = kind.stat().is_some_and(Stat::is_var);
                 let quantile = kind.stat() == Some(Stat::Quantile);
+                let ext = kind.stat().is_some_and(Stat::is_extremum);
+                if ext {
+                    // An extremum weighs no row: its kernel is the even one.
+                    op.half_life = Some(Span::Units(f64::INFINITY));
+                }
                 for (k, v) in params {
                     match k.as_str() {
-                        "half_life" => {
+                        "half_life" if !ext => {
                             op.half_life = Some(span_of(name, k, v)?);
+                        }
+                        "since" if ext => {
+                            let e = Node::from_json(v)?;
+                            if !e.operators().is_empty() {
+                                return Err(format!(
+                                    "{name}: since holds a window operator or an increment, but \
+                                     it may read only an expression of the row itself, such as \
+                                     pl.col(\"new_period\"). Add the operator's result as a \
+                                     column of the input before the run, and read that column."
+                                ));
+                            }
+                            op.since = Some(Box::new(e));
+                        }
+                        "max_state_bytes" if ext => {
+                            op.max_state_bytes =
+                                Some(v.as_u64().filter(|&b| b > 0).ok_or_else(|| {
+                                    format!(
+                                        "{name}: max_state_bytes must be a whole number of \
+                                         bytes above 0, but it is {}. Set max_state_bytes to the \
+                                         bytes a group's window may hold.",
+                                        short(v)
+                                    )
+                                })?);
                         }
                         "window_size" => {
                             op.window_size = Some(span_of(name, k, v)?);
@@ -938,6 +981,18 @@ impl Node {
                                 })?,
                             );
                         }
+                        other if ext => {
+                            return Err(format!(
+                                "{name}: {other:?} is not one of its parameters, which are \
+                                 window_size, closed, min_samples, partial, since and \
+                                 max_state_bytes. Remove {other:?}, or correct its name.{}",
+                                if other == "half_life" {
+                                    " An extremum weighs no row, so it has no half_life."
+                                } else {
+                                    ""
+                                }
+                            ));
+                        }
                         other => {
                             return Err(format!(
                                 "{name}: {other:?} is not one of its parameters, which are \
@@ -953,6 +1008,9 @@ impl Node {
                             ));
                         }
                     }
+                }
+                if op.since.is_some() && kind.direction() == Direction::Forward {
+                    return Err(format!("{name}: {}.", crate::windows::SINCE_AHEAD));
                 }
                 if quantile && op.quantile.is_none() {
                     return Err(format!(
@@ -1008,7 +1066,7 @@ impl Node {
                  and these operators within one row: {}. If the operator is misspelled, correct it; \
                  otherwise, write the formula with the operators listed.",
                 {
-                    let (last, rest) = WINDOW_HEADS.split_last().expect("eleven heads");
+                    let (last, rest) = WINDOW_HEADS.split_last().expect("fifteen heads");
                     format!("{} and {last}", rest.join(", "))
                 },
                 accepted_heads()
@@ -1118,6 +1176,9 @@ impl Node {
                 {
                     out.push(n.clone());
                 }
+                if let Some(e) = &op.since {
+                    e.collect_columns(out);
+                }
             }
         }
     }
@@ -1129,7 +1190,9 @@ impl Node {
             Node::Col(_) | Node::Lit(_) => false,
             Node::Call(n, args) => n == name || args.iter().any(|a| a.contains_call(name)),
             Node::Op(op) => {
-                op.input.contains_call(name) || op.trees().any(|w| w.contains_call(name))
+                op.input.contains_call(name)
+                    || op.trees().any(|w| w.contains_call(name))
+                    || op.since.as_ref().is_some_and(|e| e.contains_call(name))
             }
         }
     }
@@ -1159,6 +1222,9 @@ impl Node {
                     && !out.contains(&n.as_str())
                 {
                     out.push(n.as_str());
+                }
+                if let Some(e) = &op.since {
+                    e.collect_columns_ref(out);
                 }
             }
         }
@@ -1363,6 +1429,7 @@ fn moments_from_json(args: &[Value]) -> Result<Node, String> {
         pick: None,
         moments: None,
         profile: None,
+        since: None,
     };
     let mut powers: Option<Vec<u32>> = None;
     let mut lags: Option<Vec<Span>> = None;
@@ -1558,6 +1625,7 @@ fn profile_of(input: Node, params: &Map<String, Value>) -> Result<OpNode, String
         pick: None,
         moments: None,
         profile: None,
+        since: None,
     };
     let (mut period, mut offset, mut buckets, mut stat) = (None, None, None, ProfileStat::Mean);
     let mut harmonics: Option<u32> = None;
@@ -2006,7 +2074,7 @@ mod tests {
         }
         assert_eq!(
             WINDOW_HEADS.len(),
-            11,
+            15,
             "every window operator but increment"
         );
         let err = Node::from_json(&json!(["shift", ["col", "a"]])).unwrap_err();

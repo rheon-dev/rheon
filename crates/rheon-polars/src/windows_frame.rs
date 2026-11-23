@@ -101,6 +101,12 @@ const WINDOWS_KIND: &str = crate::envelope::Kind::Windows.tag();
 /// The magic a state began with before the envelope, version 11 and
 /// earlier.
 const LEGACY_WINDOWS_MAGIC: &str = "polars-online windows";
+/// 13 since task 561: a kernel may keep a `since` event (`since`), a queue
+/// its extrema (`ext`) and its last event's stamp (`since_off`), and an
+/// operator its `max_state_bytes`, each written only where there is an
+/// extremum, so a version-12 state is a version-13 state without one and
+/// loads as one; an older build refuses a 13 by its number rather than at
+/// an extremum's name;
 /// 12 since PLAN 542: the state is written in the envelope every state
 /// file of this library shares (`envelope.rs`): its first entries are the
 /// envelope's `magic`, `kind` (`"windows"`) and `version`, and the body is
@@ -133,7 +139,7 @@ const LEGACY_WINDOWS_MAGIC: &str = "polars-online windows";
 /// task 143: formulas over operators, where 1 held descriptions. An older
 /// state would load with defaults and misbehave. The bank's schema moves
 /// with this number (review R4, A2; R6, D5).
-const WINDOWS_VERSION: u32 = 12;
+const WINDOWS_VERSION: u32 = 13;
 
 /// The last version written before the envelope.
 const LAST_LEGACY_VERSION: u32 = 11;
@@ -999,7 +1005,9 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
             let direction = op.direction();
             let stat = op.kind.stat().expect("a window operator");
             let half_life = op.half_life.clone().expect("checked when read");
-            p.spans.push(("half_life", half_life.clone()));
+            if !stat.is_extremum() {
+                p.spans.push(("half_life", half_life.clone()));
+            }
             if let Some(w) = &op.window_size {
                 p.spans.push(("window_size", w.clone()));
             }
@@ -1012,6 +1020,10 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
                     _ => None,
                 },
                 closed: op.closed,
+                since: match &op.since {
+                    Some(e) => Some(since_input(&mut p, e, &incr_schema, &f.name, op)?),
+                    None => None,
+                },
             };
             kernel
                 .check()
@@ -1078,6 +1090,7 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
                 }),
                 bias: op.bias,
                 quantile: op.quantile,
+                max_state_bytes: op.max_state_bytes,
             });
             p.columns.push((key, p.ops.len() - 1));
         }
@@ -1106,6 +1119,40 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
         .map(|f| f.tree.bare_operator().map(hidden))
         .collect();
     Ok(p)
+}
+
+/// The row input an extremum's `since` reads (task 561): an element-wise
+/// boolean, read as 1.0 where true, among the plan's inputs.
+fn since_input(
+    p: &mut Plan,
+    e: &Node,
+    schema: &Schema,
+    name: &str,
+    op: &OpNode,
+) -> Result<usize, Refused> {
+    if let Some(i) = p.inputs.iter().position(|n| n == e) {
+        return Ok(i);
+    }
+    let dtype =
+        dtypes_of(schema, vec![e.to_expr(&|_| unreachable!()).alias("@t")]).map_err(|err| {
+            format!(
+                "{WHO}: {name}: Polars cannot compute {}'s since ({err}). Check that since reads \
+             columns of the right type.",
+                op.kind.name()
+            )
+        })?;
+    let dtype = dtype.get("@t").expect("aliased").clone();
+    if dtype != DataType::Boolean {
+        return Err(Refused::wrong_type(format!(
+            "{WHO}: {name}: {}'s since must be a boolean, true at a row that starts the window \
+             over, but it is {}. Compare the column to a value, such as pl.col(\"period\") != \
+             pl.col(\"period\").shift() computed before the call.",
+            op.kind.name(),
+            crate::arrow::dtype_name(&dtype)
+        )));
+    }
+    p.inputs.push(e.clone());
+    Ok(p.inputs.len() - 1)
 }
 
 /// The kind of clock a run is fed. A state resumes only on the kind that
@@ -1662,6 +1709,7 @@ impl WindowsRun {
                     // integer window converts nothing (review R4).
                     window_ns: Some(1_000_000_000),
                     closed: Closed::Left,
+                    since: None,
                 }],
                 vec![OpDef {
                     kernel: 0,
@@ -1671,6 +1719,7 @@ impl WindowsRun {
                     partial: Partial::Keep,
                     bias: false,
                     quantile: None,
+                    max_state_bytes: None,
                 }],
                 cfg,
             )
@@ -1679,6 +1728,26 @@ impl WindowsRun {
             Windows::with_moments(p.kernels, p.ops, p.moments, cfg)
                 .map_err(|e| format!("{WHO}: {e}"))?
         };
+        if config.clock.is_none() {
+            // On the row clock a window of `w` holds at most `w + 1` rows
+            // read, and the row that joins before the oldest leaves.
+            for (ki, row, cap) in core.extremum_caps() {
+                let w = core.kernels()[ki]
+                    .window_size
+                    .expect("a capped kernel has a window");
+                let rows = w.floor() + 2.0;
+                let bytes = rows * row as f64;
+                if bytes > cap as f64 {
+                    return Err(format!(
+                        "{WHO}: a rolling_max or rolling_min window of {w} rows holds up to \
+                         {rows} rows of {row} bytes each a group, {bytes} bytes, past \
+                         max_state_bytes of {cap}. Shorten window_size, or raise \
+                         max_state_bytes (at most 64 MiB)."
+                    )
+                    .into());
+                }
+            }
+        }
         core.set_grouped(config.group.is_some());
         let inputs = if p.inputs.is_empty() {
             vec![Node::Lit(crate::formula::Literal::Float(0.0))]
@@ -3036,6 +3105,19 @@ impl WindowsRun {
                     ),
                 }
             }
+            Refusal::OverCap {
+                seq,
+                rows,
+                row_bytes,
+                cap,
+            } => polars_err!(ComputeError:
+                "{WHO}: at row {} (counting from 0) a group's rolling_max or rolling_min window \
+                 holds {rows} rows of {row_bytes} bytes each, {} bytes, past max_state_bytes of \
+                 {cap}. A window on a clock holds every row inside its span, so a burst of rows \
+                 fills it. Shorten window_size, or raise max_state_bytes (at most 64 MiB).",
+                row(seq),
+                rows * row_bytes
+            ),
         }
     }
 
@@ -4635,7 +4717,7 @@ mod tests {
         assert!(
             err.contains(
                 "the state's version is 2, but this version of rheon reads versions 9 \
-                 to 12"
+                 to 13"
             ),
             "{err}"
         );
@@ -4797,7 +4879,11 @@ mod tests {
         // a 70 bank's 10 cores have none and load as they did. 72 with
         // windows state 12 (PLAN 542): both written in the envelope every
         // state file shares; a 71 bank's 11 cores load as they did.
-        assert_eq!((WINDOWS_VERSION, rheon_core::SCHEMA_VERSION), (12, 72));
+        // Windows state 13 (task 561, the extrema) within schema 72, which
+        // no release has written: this build reads a 12 core as a 13
+        // without an extremum, so a 72 bank holding window targets resumes
+        // here, and a released build refuses a 72 bank by number.
+        assert_eq!((WINDOWS_VERSION, rheon_core::SCHEMA_VERSION), (13, 72));
         assert_eq!(MIN_WINDOWS_VERSION, 9);
     }
 

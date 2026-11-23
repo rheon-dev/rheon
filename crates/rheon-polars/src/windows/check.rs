@@ -78,9 +78,7 @@ impl Windows {
         // Each group at its kernels' widths, and the windows still open over
         // each held row, which `close` and `flush_group` count down.
         let n_wait = u32::from(
-            self.kernels
-                .iter()
-                .any(|k| k.direction == Direction::Backward && k.closed.near(Direction::Backward))
+            self.kernels.iter().any(KernelDef::waits)
                 || self.profiles.iter().any(ProfileDef::waits),
         );
         let is_held = |seq: u64| seq >= self.held_first && seq < self.next_seq;
@@ -93,12 +91,13 @@ impl Windows {
         let mut open = vec![0u32; held];
         let var: Vec<Vec<bool>> = (0..nk).map(|ki| self.var_of(ki)).collect();
         let quant: Vec<Vec<bool>> = (0..nk).map(|ki| self.quant_of(ki)).collect();
+        let ext: Vec<_> = (0..nk).map(|ki| self.ext_of(ki)).collect();
         for (gi, g) in self.groups.iter().enumerate() {
             let fits = g.queues.len() == nk
                 && g.queues
                     .iter()
-                    .zip(var.iter().zip(&quant))
-                    .all(|(q, (v, qu))| q.has_width(v, qu))
+                    .zip(var.iter().zip(&quant).zip(&ext))
+                    .all(|(q, ((v, qu), (e, later)))| q.has_width(v, qu, e, *later))
                 && g.open.len() == nk
                 && widths(&g.open_x)
                 && widths(&g.open_held)
