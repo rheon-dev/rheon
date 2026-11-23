@@ -2749,7 +2749,7 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                 && (sketches(&kept, "anchor") > 0 || holds_for_a_refit(&unhex(current.state)));
             if old_scale {
                 kept_scale_rule(&kind, &kept, &again, &from_ipc(f.input), &what);
-            } else if moved_by_the_held_mass(f.name) {
+            } else if moved_by_the_held_mass(f.name) || started_fresh(f.name, schema) {
                 // Rule 5's fifteenth exception: the queue's sums hold the old
                 // form's bits for the rows before the save, so the state this
                 // build saves after the continued rows is not the current
@@ -2943,6 +2943,23 @@ fn parted_by(got: &Series, want: &Series) -> (f64, usize) {
 /// hundredth of a half-life up, so a kept state continues, after its load,
 /// within about 1e-13 relative of the frames it was frozen with, not to the
 /// bit. The current set is held to the bit as ever.
+/// The kinds whose banks hold a `huber` or `quantile` under `standardize`
+/// (rule 5's twenty-ninth exception, the user's "Exception 29: start
+/// fresh", 2026-11-23; review 2026-11-23, REG-18). The model now keeps each
+/// target's features' moments over every row, which a state of 71 or
+/// earlier holds none of: it starts them at its first row after the load,
+/// its scales the band's until they give one. So the state it saves after
+/// its continuation is not the current fixture's: it is held to saving
+/// bytes that load back the same. Its frames go on to the bit of its frozen
+/// ones (measured 2026-11-23 on macOS arm64: the fresh start moves no cell
+/// of these frames over their rows). The current fixtures were
+/// regenerated.
+const STARTED_FRESH: &[&str] = &["bank_diagnosed", "bank_refit", "bank_refit_64"];
+
+fn started_fresh(name: &str, schema: u32) -> bool {
+    schema < 72 && STARTED_FRESH.contains(&name)
+}
+
 fn moved_by_the_held_mass(name: &str) -> bool {
     name.starts_with("with_windows")
 }

@@ -2536,7 +2536,7 @@ const GOLDEN_HUBER: &[f64] = &[0.2431909931355622, 2.2046451423295514, -0.064912
 // Gram's diagonal; the early rows' band Gram is not diagonal, so the bound
 // they bind moved, and the three values by 5.1e-4, 4.6e-4 and 1.5e-3 of
 // themselves. The QuantReg oracles hold.
-const GOLDEN_QUANTILE: &[f64] = &[0.2569661845683642, 2.2264188014755097, -0.02100641074469728];
+const GOLDEN_QUANTILE: &[f64] = &[0.25697145681782263, 2.226414143382377, -0.0210007825524009];
 // Regenerated for the code review's C24 (2026-09-15), this and the next:
 // under a half-life the proximal term is a decayed sum of its own, where `n`
 // was decayed inside its square root and every coefficient shrank.

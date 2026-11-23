@@ -691,3 +691,43 @@ fn a_converged_band_of_a_row_a_coefficient_is_rebuilt_as_the_stream() {
         assert_eq!(m.wj[0], 3.0 * w, "{w}");
     }
 }
+
+/// A 0/1 feature constant on the rows inside the smoothing band keeps its
+/// coefficient under `standardize` (review 2026-11-23, REG-18; the user's
+/// decision, "Scales from every row"): `y = 2x₀ + 20x₁` with `x₁` in
+/// {0, 1} and two outliers, refit on its last row. The band's Gram held
+/// `x₁` constant, so its variance there was 0, the feature was dropped and
+/// the fit read `[16.67, 0.29, 0.0]`; standardized by its spread over every
+/// row, the fit is the unstandardized one, within the band's half-width
+/// (statsmodels' `QuantReg` in `tests/test_quantile_refit.py`).
+#[test]
+fn a_binary_feature_keeps_its_coefficient_under_standardize() {
+    let mut s = 41u64;
+    let data: Vec<Row> = (0..80)
+        .map(|i| {
+            let x = [lcg(&mut s), if lcg(&mut s) > 0.0 { 1.0 } else { 0.0 }];
+            let out = if i == 5 || i == 11 { 500.0 } else { 0.0 };
+            let y = 2.0 * x[0] + 20.0 * x[1] + 0.01 * laplace(&mut s) + out;
+            (x, vec![Some(y)], 1.0)
+        })
+        .collect();
+    let fit = |standardize: bool| {
+        let mut c = base(0.5, Decay::Lam(1.0), 80);
+        c.standardize = standardize;
+        c.quantile_eps = 1e-3;
+        let mut m = Robust::new(c).unwrap();
+        run(&mut m, &data);
+        m.coefficients().expect("a fit")[0].clone()
+    };
+    let (plain, scaled) = (fit(false), fit(true));
+    assert!((plain[2] - 20.0).abs() < 0.01, "{plain:?}");
+    // The band's half-width: `(k / n)^0.4` of the residuals' scale, at
+    // most `0.27 · 0.02` here; the two fits' values at any row of the
+    // data, `|x| ≤ 1`, part by less.
+    for (p, q) in plain.iter().zip(&scaled) {
+        assert!(
+            (p - q).abs() < 0.27 * 0.02 / 3.0,
+            "{plain:?} against {scaled:?}"
+        );
+    }
+}

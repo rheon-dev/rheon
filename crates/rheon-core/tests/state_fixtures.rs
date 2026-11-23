@@ -477,6 +477,32 @@ const UNDER_THE_PRIOR: &[&str] = &["hmm_diag", "hmm_full", "hmm_full_narrow"];
 /// level to a model emptied by hand, to the bit.
 const RESTARTED_LEVEL: &[&str] = &["deco"];
 
+/// The `huber` and `quantile` cases of schema 71 or earlier (rule 5's
+/// twenty-ninth exception, the user's "Exception 29: start fresh",
+/// 2026-11-23; review 2026-11-23, REG-18): under `standardize` the state
+/// keeps each target's features' moments over every row, which a state of
+/// 71 or earlier holds none of. It loads with them empty and starts them at
+/// its first row after the load, its scales the band's until they give one,
+/// so its continuation is neither the old build's nor this build's from the
+/// same rows. It is held to [`started_fresh_rule`] -- saving bytes that load
+/// back the same, its moments empty and in the current layout -- and to
+/// its frozen continuation's `weight_sum` to the bit, each prediction a
+/// number where the frozen one is, and within [`STARTED_FRESH_BOUND`] of it
+/// relatively; a case without `standardize` keeps none and goes on to the
+/// bit.
+fn started_fresh(name: &str, schema: u32) -> bool {
+    schema < 72 && (name.starts_with("huber") || name.starts_with("quantile"))
+}
+
+/// What a fresh start of the scales moves a kept `huber` or `quantile`
+/// state's predictions by, relative to the larger of each and 1, over the
+/// 16 rows after its load ([`started_fresh`]): the largest measured over
+/// `v61/` to `v71/` is 1.56e-5 (`huber`, its fourth row; 3,540 of 4,554
+/// predictions moved, every null kept). The scales move the ridge's
+/// weight on each slope, `1e-6` of its standardized square, and the
+/// columns kept, which no kept case drops.
+const STARTED_FRESH_BOUND: f64 = 2e-5;
+
 /// The weighted `sgd` and `pa` cases under `standardize` (rule 5's
 /// twenty-third exception, the user's, 2026-11-20; review C1), each with
 /// how far its continuation may part from a previous set's frozen one by
@@ -936,8 +962,18 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                 .find(|(n, _)| *n == f.name && schema < 69)
                 .map(|&(_, b)| b);
             let kept = rmpv::decode::read_value(&mut &f.bytes()[..]).unwrap();
+            let fresh = started_fresh(f.name, schema);
             // A `holt` of 61-63 keeps no line fit (the doc above `previous`).
-            if under_prior || restarted {
+            if fresh {
+                let saved = named(&m.state());
+                let again = load(&case, &saved).unwrap_or_else(|e| panic!("{what}: {e}"));
+                assert!(
+                    named(&again.state()) == saved,
+                    "{what}: saved, loaded, saved"
+                );
+                let decode = |b: &[u8]| rmpv::decode::read_value(&mut &b[..]).unwrap();
+                started_fresh_rule(&kept, &decode(&saved), &decode(&current.bytes()), &what);
+            } else if under_prior || restarted {
                 let saved = named(&m.state());
                 let again = load(&case, &saved).unwrap_or_else(|e| panic!("{what}: {e}"));
                 assert!(
@@ -1077,6 +1113,19 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                 let base = read_anew.map_or(tol, |b| tol.max(b));
                 let tol = moved.map_or(base, |b| base.max(b));
                 let got = m.step(row);
+                if fresh {
+                    let what = format!("{what}, row {i} after the save");
+                    assert!(agree(got.n_eff, want.n_eff, tol), "{what}: weight_sum");
+                    assert_eq!(got.pred.len(), want.pred.len(), "{what}");
+                    for (g, w) in got.pred.iter().zip(&want.pred) {
+                        assert_eq!(g.is_nan(), w.is_nan(), "{what}: {g} against {w}");
+                        if w.is_finite() {
+                            let rel = (g - w).abs() / w.abs().max(1.0);
+                            assert!(rel <= STARTED_FRESH_BOUND, "{what}: {g} against {w}");
+                        }
+                    }
+                    continue;
+                }
                 if restarted {
                     // `weight_sum` and `u` to the bit; `rho` and `loglik` null
                     // until the level relearns, then numbers.
@@ -3680,6 +3729,58 @@ fn under_the_prior_rule(kept: &rmpv::Value, saved: &rmpv::Value, what: &str) {
     }
 }
 
+/// A `huber` or `quantile` state of 71 or earlier, loaded and saved
+/// ([`started_fresh`]): every key the kept state held, in the current
+/// fixture's layout key for key, with each target's moments over every row
+/// empty -- no weight, every moment 0 -- and its scales none under
+/// `standardize`, and neither without it.
+fn started_fresh_rule(kept: &rmpv::Value, saved: &rmpv::Value, current: &rmpv::Value, what: &str) {
+    let model = |v: &rmpv::Value| -> Vec<(String, rmpv::Value)> {
+        at(v, &["model", "Robust"])
+            .and_then(rmpv::Value::as_map)
+            .unwrap_or_else(|| panic!("{what}: no Robust"))
+            .iter()
+            .map(|(k, v)| (k.as_str().unwrap().to_owned(), v.clone()))
+            .collect()
+    };
+    let keys = |m: &[(String, rmpv::Value)]| m.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>();
+    let (s, c) = (model(saved), model(current));
+    assert_eq!(keys(&s), keys(&c), "{what}: the current layout");
+    let get = |m: &[(String, rmpv::Value)], k: &str| {
+        m.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone())
+    };
+    for (k, _) in model(kept) {
+        assert!(get(&s, &k).is_some(), "{what}: {k} dropped");
+    }
+    let standardize = at(saved, &["model", "Robust", "cfg", "standardize"])
+        .and_then(rmpv::Value::as_bool)
+        .unwrap();
+    let spread = get(&s, "spread").unwrap();
+    let scales = get(&s, "spread_scale").unwrap();
+    let (spread, scales) = (spread.as_array().unwrap(), scales.as_array().unwrap());
+    if standardize {
+        assert!(
+            !spread.is_empty() && spread.len() == scales.len(),
+            "{what}: one a target"
+        );
+        for d in spread {
+            assert_eq!(
+                held(d) - usize::from(at(d, &["k"]).is_some()),
+                0,
+                "{what}: {d}"
+            );
+        }
+        assert!(
+            scales
+                .iter()
+                .all(|v| v.as_array().is_some_and(Vec::is_empty)),
+            "{what}"
+        );
+    } else {
+        assert!(spread.is_empty() && scales.is_empty(), "{what}");
+    }
+}
+
 /// A `deco` state of 71 or earlier, loaded and saved ([`RESTARTED_LEVEL`]):
 /// the kept state held the older level (`rho_bar`, `rho_bar_lo`) and no
 /// sums; the saved one holds the kept standardiser, cfg and blocks as they
@@ -3801,4 +3902,55 @@ fn the_kish_sums_exponents_are_written() {
     ] {
         assert_eq!(scales(name, key), Vec::<i64>::new(), "{name}: {key}");
     }
+}
+
+/// The scales from every row (schema 72, review 2026-11-23, REG-18): each
+/// standardized `huber` and `quantile` case keeps, per target, its
+/// features' moments over every row it learned, holding weight, and the
+/// scales its band last moved at, one per feature; a case without
+/// `standardize` keeps neither.
+#[test]
+fn the_scales_from_every_row_are_written() {
+    if regenerating() {
+        return;
+    }
+    let mut kept = 0;
+    for f in frozen::ALL
+        .iter()
+        .filter(|f| f.name.starts_with("huber") || f.name.starts_with("quantile"))
+    {
+        let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+        let get = |k: &str| at(&v, &["model", "Robust", k]).cloned().unwrap();
+        let standardize = get("cfg")
+            .as_map()
+            .unwrap()
+            .iter()
+            .find(|(k, _)| k.as_str() == Some("standardize"))
+            .and_then(|(_, v)| v.as_bool())
+            .unwrap();
+        let (spread, scales) = (get("spread"), get("spread_scale"));
+        let (spread, scales) = (spread.as_array().unwrap(), scales.as_array().unwrap());
+        if standardize {
+            assert!(
+                !spread.is_empty() && spread.len() == scales.len(),
+                "{}",
+                f.name
+            );
+            for d in spread {
+                let w = at(d, &["w_sum"]).and_then(rmpv::Value::as_f64).unwrap();
+                assert!(w > 0.0, "{}: {d}", f.name);
+            }
+            assert!(
+                scales
+                    .iter()
+                    .any(|s| s.as_array().is_some_and(|a| !a.is_empty())),
+                "{}: no scales",
+                f.name
+            );
+            kept += 1;
+        } else {
+            assert!(spread.is_empty() && scales.is_empty(), "{}", f.name);
+        }
+    }
+    assert!(kept >= 10, "{kept} standardized cases");
 }

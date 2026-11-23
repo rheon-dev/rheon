@@ -894,6 +894,30 @@ pub struct Robust {
     /// cadence alone, to the bit.
     #[serde(default)]
     first_period_by_share: bool,
+    /// Under `standardize`, each target's features' moments over every row
+    /// it is learned on with a positive weight, decayed as the model's own
+    /// (`wobs`): the scales its solve standardizes by
+    /// ([`Self::band_scales_into`]). The band's Gram holds only the rows
+    /// near the fit under the quantile loss, and a 0/1 feature constant on
+    /// them was dropped, its coefficient 0 where the rows outside the band
+    /// held it at 20 (review 2026-11-23, REG-18; the user's decision,
+    /// "Scales from every row"). Empty otherwise. Schema 72: a state of 71
+    /// or earlier holds none, and starts one at its first row after the
+    /// load (rule 5's twenty-ninth exception). Written always, before the
+    /// fields that are written only when they hold something, so the
+    /// compact encoding does not slide it.
+    #[serde(default)]
+    spread: Vec<crate::EwDiag>,
+    /// Each target's scales from `spread` as they stood at its last row
+    /// inside the band, the one that last moved its Gram: what its solve
+    /// and its nudges standardize by. A row outside the band moves the
+    /// moments and not the band's system, which a nudge reads back as the
+    /// next solve will, so the scales move with the system, at the rows
+    /// that move it. A scale that is not a positive number has none there
+    /// (the band's stands in, [`Self::band_scales_into`]). Empty until the
+    /// target's first such row. Written always, as `spread`.
+    #[serde(default)]
+    spread_scale: Vec<Vec<f64>>,
     /// The row's augmented values ([`RowBuf`]). Not state.
     #[serde(skip)]
     zbuf: RowBuf,
@@ -953,6 +977,8 @@ impl std::fmt::Debug for Robust {
             refit,
             seen,
             first_period_by_share,
+            spread,
+            spread_scale,
             zbuf,
             nudge,
             scratch: _,
@@ -986,6 +1012,8 @@ impl std::fmt::Debug for Robust {
             .field("refit", refit)
             .field("seen", seen)
             .field("first_period_by_share", first_period_by_share)
+            .field("spread", spread)
+            .field("spread_scale", spread_scale)
             .field("place", place)
             .field("over", over)
             .field("warned", warned)
@@ -1279,6 +1307,16 @@ impl Robust {
                 vec![0; m]
             },
             first_period_by_share: false,
+            spread: if cfg.standardize {
+                vec![crate::EwDiag::new(cfg.n_features); m]
+            } else {
+                Vec::new()
+            },
+            spread_scale: if cfg.standardize {
+                vec![Vec::new(); m]
+            } else {
+                Vec::new()
+            },
             cfg,
         })
     }
@@ -2230,7 +2268,7 @@ impl Robust {
             };
             let (s, keep) = self.band_scales(j);
             let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
-            if keep != sys.keep || bits(&s) != bits(&sys.s) {
+            if !(keep == sys.keep && bits(&s) == bits(&sys.s)) {
                 return Err(format!(
                     "it is damaged, since what it saved for the quantile fit of target {j} (counting \
                      from 0) does not match its running sums. Load an undamaged copy of the state file, \
@@ -2320,27 +2358,74 @@ impl Robust {
         let cov = &self.cov[j];
         s.clear();
         keep.clear();
+        // Under `standardize`, each feature's scale over every row the
+        // target is learned on (`spread`; REG-18) where that is usable, and
+        // its scale in the band's Gram where it is not: the only one a
+        // state of schema 71 or earlier has until its rows since the load
+        // give one, and on a fresh stream no more than the rows give, the
+        // band's rows being among them. A feature with neither is dropped.
+        let over = |i: usize| {
+            self.spread_scale
+                .get(j)
+                .and_then(|v| v.get(i))
+                .copied()
+                .filter(|v| *v > 0.0 && v.is_finite())
+        };
         if self.cfg.fit_intercept {
             let kf = k - 1;
             if self.cfg.standardize {
-                s.extend((0..kf).map(|i| cov.cov(i + 1, i + 1).max(0.0).sqrt()));
-                keep.extend((0..kf).filter(|&i| {
-                    let var = cov.cov(i + 1, i + 1);
-                    crate::variance_is_usable(var, cov.raw(i + 1, i + 1))
-                }));
+                for i in 0..kf {
+                    let (v, raw) = (cov.cov(i + 1, i + 1), cov.raw(i + 1, i + 1));
+                    let band = crate::variance_is_usable(v, raw).then(|| v.sqrt());
+                    match over(i).or(band) {
+                        Some(scale) => {
+                            s.push(scale);
+                            keep.push(i);
+                        }
+                        None => s.push(v.max(0.0).sqrt()),
+                    }
+                }
             } else {
                 s.resize(kf, 1.0);
                 keep.extend(0..kf);
             }
         } else {
             if self.cfg.standardize {
-                s.extend((0..k).map(|i| cov.raw(i, i).max(0.0).sqrt()));
+                s.extend((0..k).map(|i| over(i).unwrap_or_else(|| cov.raw(i, i).max(0.0).sqrt())));
             } else {
                 s.resize(k, 1.0);
             }
             // No centering here, so no cancellation: any strictly positive raw
             // moment is usable.
             keep.extend((0..k).filter(|&i| s[i] > 0.0));
+        }
+    }
+
+    /// Target `j`'s scales from its moments over every row, as they stand
+    /// ([`Self::spread_scale`]'s refresh, at a row that moves its band):
+    /// with an intercept each feature's standard deviation where its
+    /// variance is usable, through the origin each feature's root mean
+    /// square where it is above 0, and 0 where not (a NaN would make the
+    /// model unequal to itself).
+    fn refresh_spread_scale(&mut self, j: usize) {
+        let (Some(d), Some(out)) = (self.spread.get(j), self.spread_scale.get_mut(j)) else {
+            return;
+        };
+        out.clear();
+        if self.cfg.fit_intercept {
+            out.extend((0..d.k()).map(|i| {
+                let v = d.var(i);
+                if crate::variance_is_usable(v, d.raw(i)) {
+                    v.sqrt()
+                } else {
+                    0.0
+                }
+            }));
+        } else {
+            out.extend((0..d.k()).map(|i| {
+                let raw = d.raw(i);
+                if raw > 0.0 { raw.sqrt() } else { 0.0 }
+            }));
         }
     }
 
@@ -2816,6 +2901,9 @@ impl OnlineModel for Robust {
             let Some(yj) = y[j] else {
                 self.age_refit(j, lam, lam_scale);
                 self.cov[j].decay(lam);
+                if let Some(d) = self.spread.get_mut(j) {
+                    d.update(x, lam, 0.0);
+                }
                 self.wj[j] *= lam;
                 self.wobs[j] = present;
                 self.nobs[j] = rows;
@@ -2841,6 +2929,11 @@ impl OnlineModel for Robust {
             // the loss then does with it (hard rule 8), and as one row.
             let counts = weight > 0.0 && weight.is_finite();
             self.wobs[j] = present + if counts { weight } else { 0.0 };
+            // The features' moments over every row the target is learned on,
+            // at the row's weight, decayed as `wobs` is (REG-18).
+            if let Some(d) = self.spread.get_mut(j) {
+                d.update(x, lam_t, if counts { weight } else { 0.0 });
+            }
             self.nobs[j] = rows + if counts { 1.0 } else { 0.0 };
             // The floor's count of the target's rows, which starts over
             // where its history is gone -- forgotten above, or aged to
@@ -2906,6 +2999,9 @@ impl OnlineModel for Robust {
                     let step = if due { None } else { self.band_step(j, a, bb) };
                     self.cov[j].update(&self.zbuf, lam_t, w);
                     self.wj[j] = wj_new;
+                    // The scales move with the band, at the rows that move
+                    // it (`spread_scale`).
+                    self.refresh_spread_scale(j);
                     self.move_band_system(j, a, step);
                     if self.buffer_row(j, x, yj, e_abs, weight, lam, lam_scale, now) {
                         refits.push(j);
@@ -3072,6 +3168,33 @@ impl OnlineModel for Robust {
                 {
                     return Err(StateError::Invalid(format!(
                         "{kind}: it is damaged, since its running sums have the wrong shape. Load an undamaged copy of the state file, or rebuild it from its input."
+                    )));
+                }
+                // The features' moments over every row (REG-18): one per
+                // target exactly under `standardize`. A state of schema 71
+                // or earlier holds none and starts them here, empty, so
+                // they hold the rows from the load on (rule 5's
+                // twenty-ninth exception); until they give a feature a
+                // scale, the band's stands in, as it did.
+                if m.cfg.standardize && m.spread.is_empty() && s.schema_version <= 71 {
+                    m.spread = vec![crate::EwDiag::new(m.cfg.n_features); n];
+                    m.spread_scale = vec![Vec::new(); n];
+                }
+                let spread_fits = if m.cfg.standardize {
+                    m.spread.len() == n
+                        && m.spread.iter().all(|d| d.k() == m.cfg.n_features)
+                        && m.spread_scale.len() == n
+                        && m.spread_scale
+                            .iter()
+                            .all(|v| v.is_empty() || v.len() == m.cfg.n_features)
+                } else {
+                    m.spread.is_empty() && m.spread_scale.is_empty()
+                };
+                if !spread_fits {
+                    return Err(StateError::Invalid(format!(
+                        "{kind}: it is damaged, since the moments it saved for its standardize \
+                         scales do not match its features and targets. Load an undamaged copy of \
+                         the state file, or rebuild it from its input."
                     )));
                 }
                 // The band systems are state (task 170), held as they were
