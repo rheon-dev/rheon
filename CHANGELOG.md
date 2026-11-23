@@ -816,6 +816,17 @@ model that only the new build has is listed as an addition and passes.
 
 ### Performance
 
+- **`ar` reads its fits' systems in place** (PLAN 491). Its order
+  selection and, under a window, the definiteness check it makes on every
+  row read each fit's own accumulators and a window view kept between
+  rows, where they copied the Gram and its cross-moments and factored into
+  new buffers a row. Outputs are unchanged to the bit. Allocations a row in
+  a release build, `lags=6, select="bic"`: 22 -> 1; `lags=3,
+  window_size=200`: 44.083 -> 1.083. Measured on an x86-64 Linux VM, one
+  target and one feature over 60,000 rows (the best of 5): 1,491-1,605 ->
+  1,063-1,132 ns a row under `select`, and 2,289-2,390 -> 1,080-1,139 ns a
+  row under the window.
+
 - **A state loads faster in the envelope, and its size moves by a few
   bytes** (PLAN 542). A load reads the file's kind and version from its
   first bytes, where it walked the whole MessagePack map once to find them

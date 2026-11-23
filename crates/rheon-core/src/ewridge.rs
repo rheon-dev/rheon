@@ -648,6 +648,44 @@ impl RidgeMoments {
     }
 }
 
+/// One target's system as its fit reads it, borrowed: the Gram it is
+/// solved against, its centred cross-moments and their means, its weight
+/// and the target's own moments. What [`EwRidge::gram_parts`] reports for
+/// the target, read in place rather than copied.
+pub(crate) struct FitSystem<'a> {
+    pub(crate) cov: &'a EwCov,
+    pub(crate) cross_c: &'a [f64],
+    pub(crate) mj: &'a [f64],
+    pub(crate) my: f64,
+    pub(crate) wj: f64,
+    pub(crate) tm: Option<&'a TargetMoments>,
+}
+
+/// The working space [`EwRidge::system`] writes a window's view into, kept
+/// by the caller so a row allocates none: not state.
+#[derive(Default)]
+pub(crate) struct SystemKept(RidgeView);
+
+impl std::fmt::Debug for SystemKept {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SystemKept")
+    }
+}
+
+impl Clone for SystemKept {
+    /// Working space: a copy starts empty.
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl PartialEq for SystemKept {
+    /// Working space holds nothing of the model's.
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
 /// The accumulators a windowed fit reads, with everything older than the
 /// window subtracted off.
 #[derive(Default)]
@@ -836,6 +874,43 @@ impl EwRidge {
                 )
             }
         }
+    }
+
+    /// Target `j`'s system, read where it is kept: the live accumulators,
+    /// or under a window its view, written over `kept` in place. `None`
+    /// where a held Gram block would need merging first (a model built with `gram_block_rows`, which
+    /// [`crate::Ar`]'s fits are not).
+    pub(crate) fn system<'a>(
+        &'a self,
+        j: usize,
+        kept: &'a mut SystemKept,
+    ) -> Option<FitSystem<'a>> {
+        let g = self.acc.grams.of[j];
+        // A window with no cut yet holds every row: its system is the live
+        // accumulators', as in [`Self::gram_parts`].
+        if self.cfg.window.is_some() && self.view_into(&mut kept.0) {
+            let v = &kept.0.acc;
+            return Some(FitSystem {
+                cov: &v.grams[g],
+                cross_c: &v.cross.c[j],
+                mj: &v.cross.mj[j],
+                my: v.cross.my[j],
+                wj: self.acc.wj[j],
+                tm: v.tm.as_ref(),
+            });
+        }
+        let cov = &self.acc.grams.grams[g];
+        if cov.has_pending() {
+            return None;
+        }
+        Some(FitSystem {
+            cov,
+            cross_c: &self.acc.cross.c[j],
+            mj: &self.acc.cross.mj[j],
+            my: self.acc.cross.my[j],
+            wj: self.acc.wj[j],
+            tm: Some(&self.acc.tm),
+        })
     }
 
     /// The accumulated weight over every row, whatever the targets (hard rule

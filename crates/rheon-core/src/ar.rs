@@ -63,6 +63,7 @@ use std::collections::VecDeque;
 
 use serde::{Deserialize, Serialize};
 
+use crate::ewridge::{FitSystem, SystemKept};
 use crate::model::{ModelState, OnlineModel, State, StateError, Step, check_schema};
 use crate::{Decay, EwRidge, EwRidgeCfg, TargetGaps};
 
@@ -293,6 +294,45 @@ pub struct Ar {
     /// One fit's step, likewise.
     #[serde(skip)]
     one: Step,
+    /// The working space of the definiteness check and the order
+    /// selection, likewise: not state.
+    #[serde(skip)]
+    work: Work,
+}
+
+/// The working space [`Ar`] reads its fits' systems into: kept between
+/// rows so that neither the definiteness check nor the order selection
+/// allocates or copies a Gram on a row. It is not state: a clone starts
+/// empty and two are always equal.
+#[derive(Debug, Default)]
+struct Work {
+    /// A window's view of a fit, the moments of the rows inside it.
+    kept: SystemKept,
+    /// The definiteness check's factor.
+    l: Vec<f64>,
+    /// The order selection's.
+    scratch: SelectWork,
+}
+
+impl Clone for Work {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl PartialEq for Work {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+/// The order selection's working space: its factor, its forward solve
+/// and its back solve.
+#[derive(Debug, Default)]
+pub(crate) struct SelectWork {
+    l: Vec<f64>,
+    r: Vec<f64>,
+    beta: Vec<f64>,
 }
 
 impl Ar {
@@ -307,6 +347,7 @@ impl Ar {
                 .collect(),
             z: Vec::with_capacity(cfg.n_regressors()),
             one: Step::default(),
+            work: Work::default(),
             defined: vec![false; cfg.n_targets],
             chosen: vec![Vec::new(); cfg.n_targets],
             cfg,
@@ -327,13 +368,17 @@ impl Ar {
     /// rows is this condition, not a count of rows: until the lags and the
     /// features have spread in every direction, the coefficients are not
     /// determined, and the fit reports none.
-    fn definite(fit: &EwRidge, intercept: bool, n: usize, ridge: f64) -> bool {
-        let (parts, _) = fit.gram_parts();
-        let Some(part) = parts.first() else {
+    fn definite(
+        sys: &FitSystem<'_>,
+        intercept: bool,
+        n: usize,
+        ridge: f64,
+        l: &mut Vec<f64>,
+    ) -> bool {
+        let c = sys.cov;
+        let Some(off) = c.k().checked_sub(n) else {
             return false;
         };
-        let c = &part.cov;
-        let off = c.k() - n;
         // The system solved: the moments plus the ridge on the diagonal.
         let at = |i: usize, j: usize| {
             let m = if intercept {
@@ -343,7 +388,8 @@ impl Ar {
             };
             if i == j { m + ridge } else { m }
         };
-        let mut l = vec![0.0; n * n];
+        l.clear();
+        l.resize(n * n, 0.0);
         for i in 0..n {
             for j in 0..=i {
                 let s: f64 = (0..j).map(|k| l[i * n + k] * l[j * n + k]).sum();
@@ -396,23 +442,41 @@ impl Ar {
     /// its coefficients by one back solve. `S`, `c` and `s_yy` are centred
     /// with an intercept and raw without one. `None` where the system is
     /// not definite or the target has no weight.
-    pub(crate) fn select_order(fit: &EwRidge, cfg: &ArCfg, ic: ArSelect) -> Option<Vec<f64>> {
-        let (parts, tm) = fit.gram_parts();
-        let (part, tm) = (parts.first()?, tm?);
+    pub(crate) fn select_order(
+        sys: &FitSystem<'_>,
+        cfg: &ArCfg,
+        ic: ArSelect,
+        work: &mut SelectWork,
+        out: &mut Vec<f64>,
+    ) -> bool {
+        let Some(tm) = sys.tm else {
+            return false;
+        };
         let (e, p) = (cfg.n_features, cfg.lags.len());
         let n = e + p;
-        let c = &part.cov;
-        let off = c.k().checked_sub(n)?;
+        let c = sys.cov;
+        let Some(off) = c.k().checked_sub(n) else {
+            return false;
+        };
         let intercept = cfg.fit_intercept;
         // The reordered index: the features first, then the lags.
         let orig = |i: usize| if i < e { p + i } else { i - e };
-        let rhs_all = if intercept {
-            &part.cross_centred[0]
-        } else {
-            &part.cross_moments[0]
+        // The cross-moments the system is solved for: centred with an
+        // intercept, raw without, `c + m ȳ` as the fit forms them.
+        let Some(roff) = sys.cross_c.len().checked_sub(n) else {
+            return false;
         };
-        let roff = rhs_all.len().checked_sub(n)?;
-        let mut l = vec![0.0; n * n];
+        let rhs = |i: usize| {
+            let k = roff + i;
+            if intercept {
+                sys.cross_c[k]
+            } else {
+                sys.cross_c[k] + sys.mj[k] * sys.my
+            }
+        };
+        let (l, r) = (&mut work.l, &mut work.r);
+        l.clear();
+        l.resize(n * n, 0.0);
         for i in 0..n {
             for jj in 0..=i {
                 let (a, b) = (off + orig(i), off + orig(jj));
@@ -422,7 +486,7 @@ impl Ar {
                 if i == jj {
                     // Not above 0, NaN included: no definite system.
                     if v.is_nan() || v <= 0.0 {
-                        return None;
+                        return false;
                     }
                     l[i * n + i] = v.sqrt();
                 } else {
@@ -430,10 +494,11 @@ impl Ar {
                 }
             }
         }
-        let mut r = vec![0.0; n];
+        r.clear();
+        r.resize(n, 0.0);
         for i in 0..n {
             let s: f64 = (0..i).map(|k| l[i * n + k] * r[k]).sum();
-            r[i] = (rhs_all[roff + orig(i)] - s) / l[i * n + i];
+            r[i] = (rhs(orig(i)) - s) / l[i * n + i];
         }
         let (mean_y, var_y) = (tm.means()[0], tm.vars()[0]);
         let syy = if intercept {
@@ -441,10 +506,12 @@ impl Ar {
         } else {
             var_y + mean_y * mean_y
         };
-        let w = fit.target_weights()[0];
-        let kish = tm.n_kish(&[w])[0]?;
+        let w = sys.wj;
+        let Some(kish) = tm.n_kish(&[w])[0] else {
+            return false;
+        };
         if !(w > 0.0 && kish > 0.0) {
-            return None;
+            return false;
         }
         let mut best: Option<(f64, usize)> = None;
         let mut explained = r[..e].iter().map(|v| v * v).sum::<f64>();
@@ -469,26 +536,31 @@ impl Ar {
                 best = Some((value, q));
             }
         }
-        let (_, q) = best?;
+        let Some((_, q)) = best else {
+            return false;
+        };
         // The back solve of the leading block of order q.
         let m = e + q;
-        let mut beta = vec![0.0; m];
+        let beta = &mut work.beta;
+        beta.clear();
+        beta.resize(m, 0.0);
         for i in (0..m).rev() {
             let s: f64 = (i + 1..m).map(|k| l[k * n + i] * beta[k]).sum();
             beta[i] = (r[i] - s) / l[i * n + i];
         }
         let i0 = usize::from(intercept);
-        let mut out = vec![0.0; cfg.k_total()];
+        out.clear();
+        out.resize(cfg.k_total(), 0.0);
         for (i, b) in beta.iter().enumerate() {
             out[i0 + orig(i)] = *b;
         }
         if intercept {
-            let means = &part.means_by_target[0];
+            let means = sys.cov.means();
             let moff = means.len() - n;
             let at_means: f64 = (0..m).map(|i| beta[i] * means[moff + orig(i)]).sum();
             out[0] = mean_y - at_means;
         }
-        Some(out)
+        true
     }
 
     pub fn cfg(&self) -> &ArCfg {
@@ -642,18 +714,35 @@ impl OnlineModel for Ar {
             }
             // The fit a learned row taught, checked until it is defined;
             // under a window, on every row, as rows leave it.
-            if (taught.is_some() && !self.defined[j]) || (self.cfg.window.is_some() && full) {
-                self.defined[j] = Self::definite(
-                    &self.fits[j],
-                    self.cfg.fit_intercept,
-                    self.cfg.n_regressors(),
-                    self.cfg.ridge,
-                );
-            }
+            let check =
+                (taught.is_some() && !self.defined[j]) || (self.cfg.window.is_some() && full);
             let moved = taught.is_some() || self.cfg.window.is_some();
-            if let (Some(ic), true, true) = (self.cfg.select, moved, self.defined[j]) {
-                self.chosen[j] =
-                    Self::select_order(&self.fits[j], &self.cfg, ic).unwrap_or_default();
+            let choose = self.cfg.select.is_some() && moved;
+            if check || choose {
+                // The fit's system read in place, the window's view in the
+                // kept working space: no copy of the Gram a row.
+                let work = &mut self.work;
+                let sys = self.fits[j].system(0, &mut work.kept);
+                if check {
+                    self.defined[j] = sys.as_ref().is_some_and(|sys| {
+                        Self::definite(
+                            sys,
+                            self.cfg.fit_intercept,
+                            self.cfg.n_regressors(),
+                            self.cfg.ridge,
+                            &mut work.l,
+                        )
+                    });
+                }
+                if let (Some(ic), true) = (self.cfg.select, choose && self.defined[j]) {
+                    let chosen = &mut self.chosen[j];
+                    let ok = sys.as_ref().is_some_and(|sys| {
+                        Self::select_order(sys, &self.cfg, ic, &mut work.scratch, chosen)
+                    });
+                    if !ok {
+                        chosen.clear();
+                    }
+                }
             }
             if let Some(v) = yj {
                 let ring = &mut self.rings[j];
