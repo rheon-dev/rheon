@@ -4,7 +4,7 @@ pub const FIXTURE: crate::cases::Fixture = crate::cases::Fixture {
     name: "pca_oja",
     variant: "StreamPca",
     schema: 72,
-    writer: "linux-x86_64",
+    writer: "macos-aarch64",
     state: "\
         82ae736368656d615f76657273696f6e48a56d6f64656c81a953747265616d50636185a363666787aa6e5f6665617475\
         72657303ac6e5f636f6d706f6e656e747302a66d6574686f64a36f6a61a5646563617981a848616c666c696665cb4024\

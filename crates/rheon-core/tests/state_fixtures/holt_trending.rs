@@ -4,7 +4,7 @@ pub const FIXTURE: crate::cases::Fixture = crate::cases::Fixture {
     name: "holt_trending",
     variant: "Holt",
     schema: 72,
-    writer: "linux-x86_64",
+    writer: "macos-aarch64",
     state: "\
         82ae736368656d615f76657273696f6e48a56d6f64656c81a4486f6c748ba363666785a96e5f7461726765747302af6c\
         6576656c5f68616c665f6c696665cb4024000000000000af7472656e645f68616c665f6c696665cb4044000000000000\

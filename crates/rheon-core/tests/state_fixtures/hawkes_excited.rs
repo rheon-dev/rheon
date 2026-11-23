@@ -4,7 +4,7 @@ pub const FIXTURE: crate::cases::Fixture = crate::cases::Fixture {
     name: "hawkes_excited",
     variant: "Hawkes",
     schema: 72,
-    writer: "linux-x86_64",
+    writer: "macos-aarch64",
     state: "\
         82ae736368656d615f76657273696f6e48a56d6f64656c81a64861776b657389a363666788a96e5f7461726765747302\
         ad6b65726e656c5f64656361797392cb3fe999999999999acb4008000000000000a5646563617981a848616c666c6966\
@@ -56,14 +56,14 @@ pub const FIXTURE: crate::cases::Fixture = crate::cases::Fixture {
         0x3fe0000000000000, 0x3ff0000000000000, 0x3ff0000000000000, 0x3ff0000000000000,
     ],
     pred: &[
-        0x3fbc77ccdd9e5028, 0x3f9fa2dfb9be8db7, 0x3fc1dd0c6b255c70, 0x3fc2e560f267223f,
-        0x3fc4aa65a485b419, 0x3fc0b14fb99c28bf, 0x3fd20f40aa04b998, 0x3f86f295ae95d98b,
-        0x3fd8c0a81dac04eb, 0x3fcd6e19fc83a9c3, 0x3fd348189111d612, 0x3fc5ff6863c0f76f,
+        0x3fbc77ccdd9e5028, 0x3f9fa2dfb9be8db7, 0x3fc1dd0c6b255c70, 0x3fc2e560f2672240,
+        0x3fc4aa65a485b419, 0x3fc0b14fb99c28bf, 0x3fd20f40aa04b998, 0x3f86f295ae95d97b,
+        0x3fd8c0a81dac04ef, 0x3fcd6e19fc83a9c2, 0x3fd348189111d612, 0x3fc5ff6863c0f770,
         0x3fb3fc66da1e6e7e, 0x3fcb5c49f2b949e7, 0x3fd765df2fe1b661, 0x3fd04c2c0f7871f7,
-        0x3fc0abae5c20c917, 0x3fb38e495bf13f66, 0x3fbd914362285d0c, 0x3fb158530765fd28,
-        0x3fba60d01dabd469, 0x3faef35e64b262c3, 0x3fb7a6764ab0e4e4, 0x3fabc03e570aa27a,
-        0x3fb54b1c9fa5cf3c, 0x3fa8fc679e581dff, 0x3fb33d7901e28051, 0x3fa693ab7ddaf28c,
-        0x3fc5bcdf59c55446, 0x3fb77d6dc80c95b9, 0x3fd5a498da14b013, 0x3fac7314e686e285,
+        0x3fc0abae5c20c918, 0x3fb38e495bf13f66, 0x3fbd914362285d0c, 0x3fb158530765fd28,
+        0x3fba60d01dabd469, 0x3faef35e64b262c4, 0x3fb7a6764ab0e4e4, 0x3fabc03e570aa27c,
+        0x3fb54b1c9fa5cf3d, 0x3fa8fc679e581dff, 0x3fb33d7901e28051, 0x3fa693ab7ddaf28d,
+        0x3fc5bcdf59c55446, 0x3fb77d6dc80c95b9, 0x3fd5a498da14b013, 0x3fac7314e686e288,
     ],
     n_eff: &[
         0x402b14a7206e5f01, 0x402b4464d135cfb1, 0x402970f00ec68280, 0x4029bcc928338d85,

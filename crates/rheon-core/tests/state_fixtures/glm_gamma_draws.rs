@@ -4,7 +4,7 @@ pub const FIXTURE: crate::cases::Fixture = crate::cases::Fixture {
     name: "glm_gamma_draws",
     variant: "Glm",
     schema: 72,
-    writer: "linux-x86_64",
+    writer: "macos-aarch64",
     state: "\
         82ae736368656d615f76657273696f6e48a56d6f64656c81a3476c6d87a36366678baa6e5f666561747572657302a96e\
         5f7461726765747302ad6669745f696e74657263657074c3a5646563617981a848616c666c696665cb40240000000000\
