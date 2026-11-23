@@ -702,7 +702,7 @@ model that only the new build has is listed as an addition and passes.
   of returns `n_<t>`. A term is a multipower sum of consecutive absolute
   returns at any powers, oldest first (`normalize` gives Barndorff-Nielsen
   and Shephard's multipower variation, so `realized`'s `rv`, `bv` and `tq`
-  are terms, the first two to the bit), or a kernel sum `Σ r_j² + 2 Σ_h c_h
+  are terms, the first two to the bit, under a decay too), or a kernel sum `Σ r_j² + 2 Σ_h c_h
   r_j r_{j-h}` up to a bandwidth `H` with the Bartlett, Parzen,
   Tukey-Hanning or rectangular kernel at `c_h = k(h/(H + 1))`; `flat_top`
   for the flat-top realized kernel's `k((h - 1)/H)`, `center` for the sum
@@ -828,6 +828,23 @@ model that only the new build has is listed as an addition and passes.
   call that was right before, under those settings, now needs the argument.
 
 ### Fixed
+
+- **`power_variation`'s normalized terms scale by the returns' weight, and
+  `n` is Kish's count under a window too** (Fable's W13 review, B1 and B2,
+  as `realized` was fixed). `normalize` multiplied a term of powers `p` by
+  `n^(Σp/2 − 1)` with `n` Kish's count, so the tripower quarticity over
+  the bipower variation squared was `W/V`, not 1, at a constant volatility
+  under unequal or decayed weights: bipower's statistic made of the terms,
+  `√n (1 − BV/RV)/√(ϑ max(1, TQ/BV²))`, had a standard deviation of 0.70
+  under a half-life of 100 rows, 0.5 at a weight of 0.25 (simulated, 2,000
+  streams a case). The factor is now the weight `W`, which is `n` at unit
+  weights without a decay, and `n` under a window is Kish's count of its
+  weights where it was the count of returns: the statistic's sd is 0.96 to
+  0.99 and its size at 2.326 0.009 to 0.014 in each case (2,000 and 20,000
+  streams), and the normalized quarticity is `realized`'s `tq` under a
+  decay too.
+  Terms whose powers sum to 2 (`[2]`, `[1, 1]`) do not move. Moves:
+  `power_variation.*`.
 
 - **`rheon.gram.merge` takes nothing from a part with no weight on a
   target** (review 2026-11-23, MATH-3). The merge weights each part's

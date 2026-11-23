@@ -92,12 +92,16 @@ def power_variation(
             ``[2]`` is the sum of squared returns, ``[1, 1]`` of products of
             neighboring absolute returns. Each finite and above 0.
         ``normalize``
-            With ``powers``: multiply by ``n^(Σp/2 - 1) / Π μ_p``, ``μ_p``
-            the ``p``-th absolute moment of a standard normal, so the term
-            is Barndorff-Nielsen and Shephard's multipower variation:
-            ``[1, 1]`` bipower variation, ``[4/3, 4/3, 4/3]`` tripower
-            quarticity. Default false, the plain sum. Refused beside a
-            ``scale`` past 1.
+            With ``powers``: multiply by ``W^(Σp/2 - 1) / Π μ_p``, ``μ_p``
+            the ``p``-th absolute moment of a standard normal and ``W`` the
+            returns' weight, the count of returns at unit weights without a
+            decay, so the term is Barndorff-Nielsen and Shephard's
+            multipower variation: ``[1, 1]`` bipower variation, ``[4/3,
+            4/3, 4/3]`` tripower quarticity. The weight, not ``n``, makes
+            the quarticity over the bipower variation squared 1 at a
+            constant volatility under any weights, as ``realized``'s.
+            Default false, the plain sum. Refused beside a ``scale`` past
+            1.
         ``kernel``
             ``"bartlett"``, ``"parzen"``, ``"tukey_hanning"`` or
             ``"rectangular"``, with ``bandwidth``: the sum of ``r_j² + 2 Σ_h
@@ -154,10 +158,9 @@ def power_variation(
         Per term and target: the term's sum, ``rv_<t>`` for a term named
         ``rv`` and ``lrv_<t>`` for one named ``lrv``.
     ``n_<t>``
-        Per target: the count of returns ``n`` the terms are of: the returns
-        a window holds, or Kish's effective count ``(Σ w)² / Σ w²`` of the
-        returns' decayed weights, which is the count itself at equal
-        weights without a decay.
+        Per target: the count of returns ``n`` the terms are of: Kish's
+        effective count ``(Σ w)² / Σ w²`` of the returns' weights, decayed
+        or in the window, which is the count itself at equal weights.
     ``weight_sum``
         The weight the model has accumulated before the row and before the
         row's own decay, every row's, or the weight inside the window.

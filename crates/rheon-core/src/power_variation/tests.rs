@@ -135,7 +135,7 @@ fn name(k: PvKernel) -> &'static str {
 /// The definition of `t` on the returns `r` at the final weights `om`,
 /// `n` the count its normalization reads; and the scale its gap is read
 /// against, `Σ ω R² / K` for a kernel sum (whose products cancel).
-fn definition(t: &PvTerm, r: &[f64], om: &[f64], n: f64) -> (f64, f64) {
+fn definition(t: &PvTerm, r: &[f64], om: &[f64]) -> (f64, f64) {
     match &t.kind {
         PvTermKind::Multipower { powers, normalize } => {
             let s = paper::multipower(r, om, powers, t.scale);
@@ -145,8 +145,12 @@ fn definition(t: &PvTerm, r: &[f64], om: &[f64], n: f64) -> (f64, f64) {
                     .map(|&p| series::abs_normal_moment(p))
                     .product();
                 let e = powers.iter().sum::<f64>() / 2.0 - 1.0;
-                if n > 0.0 || e >= 0.0 {
-                    s * n.powf(e) / mu
+                // the period the sum is of, in returns: their weight `W`
+                // (Barndorff-Nielsen and Shephard's `n` at unit weights
+                // without a decay)
+                let w = paper::sum(om.iter().copied());
+                if w > 0.0 || e >= 0.0 {
+                    s * w.powf(e) / mu
                 } else {
                     f64::NAN
                 }
@@ -181,7 +185,7 @@ fn worst_gaps(
     for (i, s) in steps.iter().enumerate() {
         let (r, om, n) = held(i);
         for (k, t) in terms.iter().enumerate() {
-            let (want, scale) = definition(t, &r, &om, n);
+            let (want, scale) = definition(t, &r, &om);
             let g = gap(s.pred[k], want, scale);
             assert!(
                 g.is_finite(),
@@ -362,12 +366,9 @@ fn normalized_terms_are_realized_measures() {
         }
         eprintln!("against realized, half-life {h}: {worst:?}");
         assert!(worst[..2].iter().all(|w| *w == 0.0), "{worst:?}");
-        // `realized`'s `tq` carries the period's weight `W` since its bns fix
-        // (PLAN 499, W13 B1), where `normalize` carries Kish's count `n`: the
-        // two are one number only where `W = n`, at unit weights without a
-        // decay. Under a decay the first three terms still agree.
-        let checked = if h.is_infinite() { 4 } else { 3 };
-        assert!(worst[..checked].iter().all(|w| *w <= 16.0), "{worst:?}");
+        // the quarticity's factor the period's weight `W` in both (W13 B1),
+        // so under a decay too
+        assert!(worst.iter().all(|w| *w <= 16.0), "{worst:?}");
     }
 }
 
@@ -636,4 +637,81 @@ fn a_clock_window_is_held_to_its_cap_as_the_rows_go_in() {
     let (over, cap) = m.state_over_cap().expect("over the cap");
     assert!(over > cap && m.bytes() <= cap);
     assert!(warned.is_some_and(|i| i < 100));
+}
+
+/// Bipower's test statistic made of the normalized terms, as `realized`'s
+/// `bns` is: `Z = √n (1 − BV/RV) / √(ϑ max(1, TQ/BV²))`, `n` the target's
+/// count. It is N(0, 1) without jumps under a decay, at a constant weight
+/// below 1 and at unequal weights in a window, not only at unit weights,
+/// only where the normalized quarticity is scaled by the period's weight
+/// `W`, as `realized`'s `tq` is (Fable's W13 review, B1): `1 − BV/RV` has
+/// variance `ϑ Σw² / (Σw)²` at a constant volatility, so `√n` is Kish's
+/// count, and `TQ/BV²` is 1 there only with `TQ`'s factor `W`. With Kish's
+/// count in `TQ` too the sd is about 1/√(1 + λ) under a decay and 0.5 at a
+/// weight of 0.25; with the count of returns in front under a window of
+/// weights from 0.1 to 1.9, about 1.19. Its law is the oracle: the
+/// simulated null over enough streams to resolve a 1% test's size.
+fn pv_null(
+    c: &PowerVariationCfg,
+    n: usize,
+    reps: u64,
+    weight: impl Fn(usize) -> f64,
+) -> (f64, f64) {
+    let mut zs = Vec::with_capacity(reps as usize);
+    for rep in 0..reps {
+        let mut s = 0x5EED_0000 + rep;
+        let mut m = PowerVariation::new(c.clone()).unwrap();
+        let mut p = Vec::new();
+        for t in 0..n {
+            let r = 0.001 * normal(&mut s);
+            p = m.step(&[], &[Some(r)], 1.0, weight(t)).pred;
+        }
+        let (rv, bv, tq, k) = (p[0], p[1], p[2], p[3]);
+        zs.push(k.sqrt() * (1.0 - bv / rv) / (crate::BNS_THETA * (tq / (bv * bv)).max(1.0)).sqrt());
+    }
+    let k = zs.len() as f64;
+    let mean = zs.iter().sum::<f64>() / k;
+    let sd = (zs.iter().map(|z| (z - mean).powi(2)).sum::<f64>() / (k - 1.0)).sqrt();
+    let size = zs.iter().filter(|z| **z > 2.326).count() as f64 / k;
+    (sd, size)
+}
+
+fn check_pv_null(reps: u64, sd_tol: f64, size: (f64, f64)) {
+    let q = 4.0 / 3.0;
+    let terms = vec![
+        mp(&[2.0], 1, true),
+        mp(&[1.0, 1.0], 1, true),
+        mp(&[q, q, q], 1, true),
+    ];
+    let decayed = cfg(1, terms.clone(), 100.0);
+    let plain = cfg(1, terms.clone(), f64::INFINITY);
+    let mut windowed = cfg(1, terms, f64::INFINITY);
+    windowed.window_rows = Some(1_000);
+    type Case<'a> = (&'a str, &'a PowerVariationCfg, usize, fn(usize) -> f64);
+    let cases: [Case; 3] = [
+        ("half-life 100", &decayed, 1_500, |_| 1.0),
+        ("weight 0.25", &plain, 1_000, |_| 0.25),
+        ("window, weights 0.1 to 1.9", &windowed, 1_500, |t| {
+            1.0 + 0.9 * (std::f64::consts::TAU * t as f64 / 400.0).sin()
+        }),
+    ];
+    for (name, c, n, w) in cases {
+        let (sd, share) = pv_null(c, n, reps, w);
+        eprintln!("{name}: sd {sd:.4}, size {share:.4}");
+        assert!((sd - 1.0).abs() < sd_tol, "{name}: sd {sd}");
+        assert!(share > size.0 && share < size.1, "{name}: size {share}");
+    }
+}
+
+#[test]
+fn bipowers_statistic_from_the_normalized_terms_is_standard_normal() {
+    check_pv_null(2_000, 0.06, (0.005, 0.02));
+}
+
+/// [`bipowers_statistic_from_the_normalized_terms_is_standard_normal`] at
+/// 20,000 streams, where the size is resolved to 0.0008 and the sd to 0.005.
+#[test]
+#[ignore = "extended: 20,000 simulated streams"]
+fn bipowers_statistic_from_the_normalized_terms_is_standard_normal_finely() {
+    check_pv_null(20_000, 0.035, (0.008, 0.016));
 }

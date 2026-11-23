@@ -26,12 +26,19 @@
 //! `flat_top` is the flat-top realized kernel of Barndorff-Nielsen, Hansen,
 //! Lunde and Shephard (2008), which gives lag 1 the full weight.
 //!
-//! **Options.** `normalize` multiplies a multipower term by `n^(Σp/2 − 1)
+//! **Options.** `normalize` multiplies a multipower term by `W^(Σp/2 − 1)
 //! Π μ_{p_i}^-1`, `μ_p = E|Z|^p = 2^(p/2) Γ((p + 1)/2) / Γ(1/2)` for a
-//! standard normal `Z`: the multipower variation of Barndorff-Nielsen and
-//! Shephard, so `[2]` is realized variance, `[1, 1]` bipower variation,
-//! `[2/3, 2/3, 2/3]` tripower variation and `[4/3, 4/3, 4/3]` tripower
-//! quarticity. `center` takes a kernel term about the mean `m̄` of the
+//! standard normal `Z` and `W` the returns' weight: the multipower
+//! variation of Barndorff-Nielsen and Shephard, whose factor is the count
+//! `n` at unit weights without a decay, so `[2]` is realized variance,
+//! `[1, 1]` bipower variation, `[2/3, 2/3, 2/3]` tripower variation and
+//! `[4/3, 4/3, 4/3]` tripower quarticity. Under unequal or decayed weights
+//! the factor is the weight, the period the sums are of: at a constant
+//! volatility the weighted sum of `Σp`-th powers is about `W σ^Σp
+//! δ^(Σp/2) Π μ`, so the quarticity over the bipower variation squared is
+//! 1 there only with `W` as the factor, as the bipower test needs, while
+//! the test's `√n` in front is Kish's count, the variance of `1 − BV/RV`
+//! being `ϑ Σw² / (Σw)²`. `realized` reads the same. `center` takes a kernel term about the mean `m̄` of the
 //! `R_j` it is of: each product `(R_j − m̄)(R_{j−hK} − m̄)`, the sum the
 //! HAC long-run variance divides by `n`. Neither carries a small-sample
 //! factor such as `n/(n − h)`: a factor of `n` has no meaning on decayed
@@ -54,9 +61,9 @@
 //! `2 c_h` beyond) and the weight `M₀` and sum `M₁` of the `R_j`, and reads
 //! `S − m̄ (A + B) + m̄² C`, `m̄ = M₁ / M₀`: the sum about the mean as it
 //! stands, exactly, not about each row's earlier mean. `n` is the count of
-//! returns: the returns a window holds, or Kish's effective count `W² / V`
-//! of the returns' decayed weights, which is the count at equal weights
-//! without a decay; each target reports it beside its terms.
+//! returns: Kish's effective count `W² / V` of the returns' weights,
+//! decayed or in the window, which is the count at equal weights; each
+//! target reports it beside its terms.
 //!
 //! **Out of sample** (hard rule 2): a row reports from the state before its
 //! own return and before its own decay. `weight_sum` is every row's weight
@@ -526,7 +533,7 @@ impl PowerVariation {
     fn read_into(&self, pred: &mut Vec<f64>) {
         pred.clear();
         for s in &self.series {
-            s.read(&self.plan, self.cfg.min_weight, self.window.is_some(), pred);
+            s.read(&self.plan, self.cfg.min_weight, pred);
         }
     }
 

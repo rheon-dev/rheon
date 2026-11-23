@@ -480,7 +480,7 @@ The fields of `po.spec.power_variation("m", targets=["y"], half_life=50.0, terms
 |---|---|---|---|
 | `rv_y` | `f64` | the realized variance of `<t>`'s returns before this row, the sum of their squares | while withheld |
 | `lrv_y` | `f64` | a term named `lrv`, here a Parzen kernel sum of `<t>`'s returns before this row at a bandwidth of 3: each term's field is named `<term>_<t>` | while withheld |
-| `n_y` | `f64` | the count of `<t>`'s returns the terms are of: the returns a window holds, or Kish's effective count of their decayed weights | while withheld |
+| `n_y` | `f64` | the count of `<t>`'s returns the terms are of: Kish's effective count of their weights, decayed or in the window, which is the count at equal weights | while withheld |
 | `weight_sum` | `f64` | accumulated weight before the model learns this row, and before its own decay ([shared field](#fields-most-models-write)) | never |
 | `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
 | `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |

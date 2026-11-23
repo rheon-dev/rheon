@@ -263,13 +263,10 @@ impl Series {
         }
     }
 
-    /// The count of returns `n`: the returns a window holds, or Kish's
-    /// effective count `(Σw)² / Σw²` of the decayed weights. 0 before a
-    /// return.
-    pub(super) fn count(&self, windowed: bool) -> f64 {
-        if windowed {
-            return self.held.len() as f64;
-        }
+    /// The count of returns `n`: Kish's effective count `(Σw)² / Σw²` of
+    /// the returns' weights, decayed or in the window, which is the count of
+    /// returns at equal weights. 0 before a return.
+    pub(super) fn count(&self) -> f64 {
         let w2 = self.sum(W2);
         if w2 > 0.0 {
             let w = self.sum(NW);
@@ -456,23 +453,26 @@ impl Series {
     }
 
     /// The series' outputs into `out`: each term, then `n`.
-    pub(super) fn read(&self, plan: &Plan, min_weight: f64, windowed: bool, out: &mut Vec<f64>) {
+    pub(super) fn read(&self, plan: &Plan, min_weight: f64, out: &mut Vec<f64>) {
         if self.sum(NW) < min_weight {
             out.extend(std::iter::repeat_n(f64::NAN, plan.terms.len() + 1));
             return;
         }
-        let n = self.count(windowed);
+        let n = self.count();
+        // The period the sums are of, in returns: their weight `W`, which
+        // is `n` at unit weights without a decay.
+        let period = self.sum(NW);
         for t in &plan.terms {
             let k = t.scale as f64;
             let v = match &t.form {
                 Form::Multi { norm, .. } => {
                     let s = self.sum(t.at) / k;
                     match norm {
-                        // `n^e` has no value at `n = 0` for `e < 0`; at
+                        // `W^e` has no value at `W = 0` for `e < 0`; at
                         // `e = 0` it is 1 (`[2]`, `[1, 1]`: no factor of
-                        // `n`, as `realized`'s `rv` and `bv` read 0 there).
-                        Some((e, _)) if n <= 0.0 && *e < 0.0 => f64::NAN,
-                        Some((e, c)) => s * (c * libm::pow(n, *e)),
+                        // `W`, as `realized`'s `rv` and `bv` read 0 there).
+                        Some((e, _)) if period <= 0.0 && *e < 0.0 => f64::NAN,
+                        Some((e, c)) => s * (c * libm::pow(period, *e)),
                         None => s,
                     }
                 }

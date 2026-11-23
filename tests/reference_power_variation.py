@@ -96,15 +96,21 @@ def kish(om) -> float:
     return math.fsum(om) ** 2 / v if v > 0 else 0.0
 
 
-def term(r, om, spec: dict, n: float) -> float:
-    """One term of the builder's ``terms`` dict on ``r`` at weights ``om``."""
+def term(r, om, spec: dict) -> float:
+    """One term of the builder's ``terms`` dict on ``r`` at weights ``om``.
+    Normalized, a multipower sum of powers ``p`` is multiplied by ``W^(Σp/2
+    - 1) / Π μ_p``, ``W = Σ ω`` the period it is of in returns, which is
+    Barndorff-Nielsen and Shephard's count ``n`` at unit weights without a
+    decay: so the tripower quarticity over the bipower variation squared is
+    1 at a constant volatility under any weights."""
     k = spec.get("scale", 1)
     if "powers" in spec:
         s = multipower(r, om, spec["powers"], k)
         if spec.get("normalize"):
             p = spec["powers"]
             e = sum(p) / 2 - 1
-            return s * n**e / math.prod(mu(x) for x in p) if n > 0 or e >= 0 else math.nan
+            w = math.fsum(om)
+            return s * w**e / math.prod(mu(x) for x in p) if w > 0 or e >= 0 else math.nan
         return s
     return kernel_sum(
         r,

@@ -3675,7 +3675,9 @@ names its fields:
   consecutive absolute returns, oldest first. `[2]` is the realized
   variance, `[1, 1]` the bipower sum, `[4/3, 4/3, 4/3]` the tripower
   quarticity's; with `normalize` each is Barndorff-Nielsen and Shephard's
-  multipower variation, `n^(Σp/2 - 1) / Π μ_p` times the sum.
+  multipower variation, `W^(Σp/2 - 1) / Π μ_p` times the sum. `W` is the
+  returns' weight, which is their count `n` at unit weights without a
+  decay.
 - **A kernel term** (`kernel`, `bandwidth`): `Σ_j [r_j² + 2 Σ_h c_h r_j
   r_{j-h}]` for lags up to the bandwidth `H`, with the Bartlett, Parzen,
   Tukey-Hanning or rectangular kernel at `c_h = k(h/(H + 1))`, Newey and
@@ -3689,9 +3691,10 @@ names its fields:
   composed from: `sub_K - (n̄_K / n̄_J) sub_J`, `n̄_K = (n - K + 1) / K`.
 
 Each target reports `n` beside its terms, the count of returns they are of:
-under a window the returns it holds, under a decay Kish's effective count
-`(Σ w)² / Σ w²`. No term carries a small-sample factor such as `n/(n - h)`;
-divide or multiply in Polars where a convention needs one. Its forms are
+Kish's effective count `(Σ w)² / Σ w²` of their weights, decayed or in the
+window, which is the count at equal weights. No term carries a
+small-sample factor such as `n/(n - h)`; divide or multiply in Polars
+where a convention needs one. Its forms are
 `realized`'s: one pass, a decay, a window of rows (checked against
 `max_state_bytes` when the spec is built) and a window of the clock
 (checked as the rows go in); a term is in a window while every return in
