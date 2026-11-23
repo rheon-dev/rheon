@@ -407,30 +407,18 @@ impl Stream {
             }
             // A row of weight 0 is held for nothing: it teaches nothing and
             // its step joins no clock, the held rows' included (hard rule
-            // 9). It is scored as any row is, from the labels known at its
-            // clock: the held rows whose wait it has seen out are released
-            // first, as the next row would release them. What a restarted
-            // instance takes out of the held clock is kept for it, as for a
-            // held row.
+            // 9). It is scored as `predict` scores a row, from the state as
+            // it stands: it releases nothing, so the live models, the held
+            // rows and the saved state are what the stream without it holds
+            // (the user, 2026-11-23: "Score as predict"). Releasing the rows
+            // its clock had seen out let a later row of positive weight at an
+            // earlier clock be scored by a model that had learned a label
+            // the embargo still held there, and a stream that ended on such
+            // a row saved what the stream without it held back (review
+            // 2026-11-23, STRM-1). The cost: such a row does not see the
+            // labels matured at its own clock. What a restarted instance
+            // takes out of the held clock is kept for it, as for a held row.
             if plan.weightless() {
-                if plan.accept {
-                    if let Some(lr) = labels.as_deref_mut() {
-                        Self::release_labels(lr, pending, &plan, (&mut released, &mut out));
-                    } else {
-                        let now = elapsed[plan.ri];
-                        while let Some(row) = pending.pop_front_if(|r| {
-                            r.resolved && embargo.is_none_or(|e| e.passed(now, r.arrived))
-                        }) {
-                            resolved = resolved.saturating_sub(1);
-                            released.push(row);
-                            out.push(replay(
-                                released.len() - 1,
-                                released.last().unwrap(),
-                                plan.ri,
-                            ));
-                        }
-                    }
-                }
                 if let Some(cuts) = front_cuts.as_deref_mut() {
                     cuts[plan.ri] = pending.front().map(|r| r.d_clock - r.d_fresh);
                 }
@@ -809,14 +797,14 @@ impl Stream {
             if !plan.accept {
                 continue;
             }
+            // A row of weight 0 releases nothing and is held for nothing
+            // (hard rule 9; review 2026-11-23, STRM-1).
+            if plan.weightless() {
+                continue;
+            }
             let Some(now) = plan.clock else { continue };
             while held.front().is_some_and(|&l| !now.is_before(l)) {
                 held.pop_front();
-            }
-            // A row of weight 0 releases what its clock has reached and is
-            // held for nothing (hard rule 9).
-            if plan.weightless() {
-                continue;
             }
             let Some(l) = times.at(plan.i) else { continue };
             if l.is_before(now) {

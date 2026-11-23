@@ -978,16 +978,27 @@ fn clock_fields(df: &DataFrame) -> Vec<String> {
 /// A row of weight 0 is scored as `predict` scores the row against the
 /// state the rows before it left: on each clock, at every zero row of the
 /// stream, the prediction the bank wrote is the one a bank fed the rows
-/// before it gives the row by `predict`.
+/// before it gives the row by `predict`. Under an `embargo` and under
+/// `label_clock` too, where such a row released the held rows its clock had
+/// seen out into the live models before it was scored (the user,
+/// 2026-11-23: "Score as predict"; review 2026-11-23, STRM-1): it releases
+/// none, as `predict` releases none.
 #[test]
 fn a_zero_weight_row_is_scored_as_predict_scores_it() {
     let (df, _, weights) = streams();
-    for clock in ALL {
+    let cases: [(&str, &[Clock]); 3] =
+        [("", ALL), (r#", "embargo": @3"#, ALL), (" #label", CLOCKED)];
+    for (clock, extra) in cases
+        .iter()
+        .flat_map(|(extra, clocks)| clocks.iter().map(move |c| (c, *extra)))
+    {
         let spec = spec_of(&spec_text(
             "m",
             r#"{"type": "ewridge"}"#,
-            r#""targets": ["y"], "features": ["x0", "x1"], "half_life": @40, "gap_cap": @20,
-               "emit_sigma": true"#,
+            &format!(
+                r#""targets": ["y"], "features": ["x0", "x1"], "half_life": @40, "gap_cap": @20,
+               "emit_sigma": true{extra}"#
+            ),
             *clock,
         ));
         let (out, _) = run(&spec, &df);
@@ -1010,12 +1021,12 @@ fn a_zero_weight_row_is_scored_as_predict_scores_it() {
             assert_eq!(
                 cells(scored.column("pred_y").unwrap())[0],
                 pred[i],
-                "{clock:?}: row {i}"
+                "{clock:?}{extra}: row {i}"
             );
             assert_eq!(
                 cells(scored.column("sigma_y").unwrap())[0],
                 sigma[i],
-                "{clock:?}: row {i}: sigma"
+                "{clock:?}{extra}: row {i}: sigma"
             );
             checked += 1;
         }
@@ -1204,5 +1215,65 @@ fn a_zero_weight_row_of_another_session_closes_no_span() {
     assert_eq!(one.height(), 1, "{one}");
     for lens in cuttings(df.height()) {
         assert!(closed(&lens).equals_missing(&one), "{lens:?}");
+    }
+}
+
+/// A stream that ends on rows of weight 0 under an `embargo` or
+/// `label_clock` saves the state the stream without them saves, the counts
+/// of rows fed aside (hard rule 9): such a row released the held rows its
+/// clock had seen out into the live models, so the saved state had learned
+/// what the stream without it still held (review 2026-11-23, STRM-1; the
+/// user, 2026-11-23: "Score as predict"). On every clock that takes each,
+/// ending on the run of four rows of weight 0 at 63-66 and on the one at
+/// 100-103.
+#[test]
+fn a_stream_ending_on_zero_weight_rows_saves_what_it_would_without_them() {
+    let (df, _, weights) = streams();
+    let cases: [(&str, &[Clock]); 2] = [(r#", "embargo": @3"#, ALL), (" #label", CLOCKED)];
+    for (clock, extra) in cases
+        .iter()
+        .flat_map(|(extra, clocks)| clocks.iter().map(move |c| (c, *extra)))
+    {
+        let spec = spec_of(&spec_text(
+            "m",
+            r#"{"type": "ewridge"}"#,
+            &format!(
+                r#""targets": ["y"], "features": ["x0", "x1"], "half_life": @40, "gap_cap": @20,
+               "emit_sigma": true{extra}"#
+            ),
+            *clock,
+        ));
+        for end in [67usize, 104] {
+            assert!(weights[end - 4..end].iter().all(|&w| w == 0.0), "{end}");
+            let head = df.slice(0, end);
+            let mask = BooleanChunked::from_iter_values(
+                "m".into(),
+                weights[..end].iter().map(|&v| v != 0.0),
+            );
+            let (_, with) = run(&spec, &head);
+            let (_, without) = run(&spec, &head.filter(&mask).unwrap());
+            // `last_row` is the last row the model predicted, a row of weight
+            // 0 among them (`ModelBank.last_row`'s rule), and is left out.
+            let strip = |v: &Value| without_key(&without_counts(v), "last_row");
+            let diff = first_difference(&strip(&with), &strip(&without), "");
+            assert!(
+                diff.is_none(),
+                "{clock:?}{extra}, ending at {end}: {diff:?}"
+            );
+        }
+    }
+}
+
+/// `v` with every map entry under `key` taken out, wherever it sits.
+fn without_key(v: &Value, key: &str) -> Value {
+    match v {
+        Value::Map(m) => Value::Map(
+            m.iter()
+                .filter(|(k, _)| k.as_str() != Some(key))
+                .map(|(k, v)| (k.clone(), without_key(v, key)))
+                .collect(),
+        ),
+        Value::Array(a) => Value::Array(a.iter().map(|v| without_key(v, key)).collect()),
+        other => other.clone(),
     }
 }

@@ -1218,6 +1218,22 @@ model that only the new build has is listed as an addition and passes.
   refuses the row whose step could take the removed time there, as it
   refuses a single step past the largest double; only a clock whose
   values span more than a double holds reaches it.
+- **A row of weight 0 under `embargo` or `label_clock` releases nothing**
+  (review 2026-11-23, STRM-1; the user, 2026-11-23: "Score as predict").
+  Such a row released the held rows whose wait or label time its clock had
+  seen out into the live models before it was scored. A row of weight 0
+  counts in no step-back rule, so a later row of positive weight at an
+  earlier clock was then scored by a model that had learned a label the
+  embargo still held there, and a stream that ended on such a row saved a
+  state that had learned what the stream without it still held. It is now
+  scored as `predict` scores it, from the rows learned before it, over the
+  held rows' clock and its own step, and moves no live state: the cost is
+  that it does not see a label that matured at its own clock. The rows of
+  positive weight move only after a row of weight 0 that stepped past
+  them. Moves: `*.pred_*`, `*.resid_*`, `*.sigma_*`, `*.zscore_*`,
+  `*.lo_*`, `*.hi_*`, `*.coverage_*`, `*.ic_*`, `*.r2_*`, `*.hit_rate_*`,
+  `*.weight_sum`, `*.settled_frac`, `*.withheld_reason`, `*.coef`,
+  `*.support_coef`, `*.learned_clock`.
 - **A row of weight 0 that starts a fresh session reads a fresh stream's
   diagnostics** (review 2026-11-23, STRM-2). Under `session_gap = "reset"`
   (or a session that closes its group) such a row was scored by a fresh

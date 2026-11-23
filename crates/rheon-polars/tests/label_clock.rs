@@ -542,7 +542,15 @@ fn the_served_predictions_are_the_doubled_streams_scored_copies() {
             served > 400,
             "half_life {half_life}: {served} rows served a prediction"
         );
-        let bad: Vec<usize> = (0..got.len()).filter(|&i| got[i] != want[i]).collect();
+        // A row of weight 0 is scored as `predict` scores it, from the
+        // labels learned before it, and releases none matured at its clock
+        // (the user, 2026-11-23: "Score as predict"; review 2026-11-23,
+        // STRM-1), where the doubled stream's scored copy sees them:
+        // `zero_weight.rs` holds those rows to `predict`.
+        let w = df.column("w").unwrap().f64().unwrap();
+        let bad: Vec<usize> = (0..got.len())
+            .filter(|&i| w.get(i) != Some(0.0) && got[i] != want[i])
+            .collect();
         assert!(bad.is_empty(), "half_life {half_life}: rows {bad:?}");
     }
 }

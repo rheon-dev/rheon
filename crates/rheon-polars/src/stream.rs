@@ -2628,20 +2628,21 @@ impl Stream {
             // planned on copies of the clock and left out of everything the
             // schedule counts ([`Self::weightless_plan`]).
             if w == Some(0.0) {
-                let (plan, place) = self.weightless_plan(
+                let plan = self.weightless_plan(
                     spec,
                     cfg,
                     (&clock_state, restart_fold.as_ref().filter(|_| fresh_steps)),
                     (c, session.map(|s| s[i])),
                     (ri, i, fed, accept),
-                    keep_elapsed,
                 );
                 if accept {
                     rows_seen = rows_seen.saturating_add(1);
                 }
                 plans.push(plan);
+                // It releases nothing, so it has no place on the elapsed
+                // clock (review 2026-11-23, STRM-1).
                 if keep_elapsed {
-                    elapsed.push(place);
+                    elapsed.push(None);
                 }
                 continue;
             }
