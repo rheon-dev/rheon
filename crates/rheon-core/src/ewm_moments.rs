@@ -627,7 +627,10 @@ impl EwmMomentsCfg {
             );
         }
         if self.window_rows == Some(0) {
-            no.refuse("ewm_moments: window_rows must be at least 1, but it is 0.");
+            no.refuse(
+                "ewm_moments: window_rows must be at least 1, but it is 0. Give a window of at \
+                 least one row, or leave window_rows out for no window.",
+            );
         }
         if let Some(w) = self.window_clock {
             if !self.clocked {
@@ -638,7 +641,8 @@ impl EwmMomentsCfg {
             }
             if !(w > 0.0 && w.is_finite()) {
                 no.refuse(format!(
-                    "ewm_moments: window_clock must be a span above 0, but it is {w}."
+                    "ewm_moments: window_clock must be a finite span above 0, but it is {w}. \
+                     Give a finite span above 0, or leave it out for no window."
                 ));
             }
         }
@@ -652,7 +656,9 @@ impl EwmMomentsCfg {
             }
             if !(tol >= 0.0 && tol.is_finite()) {
                 no.refuse(format!(
-                    "ewm_moments: lag_tolerance must be a span of at least 0, but it is {tol}."
+                    "ewm_moments: lag_tolerance must be a finite span of at least 0, but it is \
+                     {tol}. Give a finite span of at least 0, or leave it out for each lag's own \
+                     length."
                 ));
             }
         }
@@ -674,8 +680,8 @@ impl EwmMomentsCfg {
         for (j, &(leg, p)) in t.powers.iter().enumerate() {
             if p == 0 {
                 no.refuse(format!(
-                    "ewm_moments: the term {name:?} has order 0 in a leg; a power is a whole \
-                     number from 1."
+                    "ewm_moments: the term {name:?} gives a leg the power 0, but a power is a \
+                     whole number from 1. Give each leg a power of at least 1."
                 ));
             }
             if t.powers[..j].iter().any(|(l, _)| l == &leg) {
@@ -686,7 +692,8 @@ impl EwmMomentsCfg {
             }
             if !(leg.lag >= 0.0 && leg.lag.is_finite()) {
                 no.refuse(format!(
-                    "ewm_moments: the term {name:?} lags a leg by {}; a lag is at least 0.",
+                    "ewm_moments: the term {name:?} lags a leg by {}, but a lag is finite and at \
+                     least 0. Give a lag of at least 0, or none for the row itself.",
                     leg.lag
                 ));
             } else if !self.clocked && leg.lag.fract() != 0.0 {
@@ -697,8 +704,8 @@ impl EwmMomentsCfg {
                 ));
             } else if !self.clocked && leg.lag > crate::MAX_LAG as f64 {
                 no.refuse(format!(
-                    "ewm_moments: the term {name:?} lags a leg by {} rows; lags may be at \
-                     most {} rows.",
+                    "ewm_moments: the term {name:?} lags a leg by {} rows, past the most a lag \
+                     of rows may be, {}. Give a shorter lag, or a clock and a lag of its units.",
                     leg.lag,
                     crate::MAX_LAG
                 ));
@@ -707,7 +714,8 @@ impl EwmMomentsCfg {
         let ord = t.order();
         if ord == 0 {
             no.refuse(format!(
-                "ewm_moments: the term {name:?} has order 0; an order is a whole number from 1."
+                "ewm_moments: the term {name:?} has order 0, but an order is a whole number \
+                 from 1. Give its legs powers of at least 1."
             ));
         }
         if t.kind == MomentKind::Cumulant && t.powers.len() > 1 {

@@ -114,19 +114,22 @@ pub(super) fn check_moments(ops: &[OpDef], moments: &[MomentsDef]) -> Result<(),
     let have: Vec<usize> = moments.iter().map(|m| m.op).collect();
     if want != have {
         return Err(format!(
-            "the moments operators are {want:?}, but terms are given for {have:?}"
+            "ewm_moments: the moments operators are {want:?}, but terms are given for \
+             {have:?}. Give one term for each, in operator order."
         ));
     }
     for m in moments {
         if m.inputs.first() != Some(&ops[m.op].input) {
             return Err(format!(
-                "operator {}: its first input is not its term's first column",
+                "operator {}: its first input is not its term's first column. Give the term's \
+                 columns in the order of its inputs.",
                 m.op
             ));
         }
         if m.cfg.terms.len() != 1 || m.cfg.n_columns() > m.inputs.len() {
             return Err(format!(
-                "operator {}: its term reads columns it has no input for",
+                "operator {}: its term reads columns it has no input for. Give an input for \
+                 each column the term reads.",
                 m.op
             ));
         }
@@ -220,13 +223,14 @@ pub(super) fn check_op(o: usize, op: &OpDef, k: &KernelDef) -> Result<(), String
     if k.half_life.is_infinite() && k.window_size.is_none() {
         return Err(format!(
             "operator {o}: moments under half_life = inf need a window_size, since a value \
-             held from before the first row would have no finite weight"
+             held from before the first row would have no finite weight. Give a window_size, \
+             or a finite half_life."
         ));
     }
     if k.direction == Direction::Forward || k.closed != Closed::Right {
         return Err(format!(
             "operator {o}: moments read only the rows up to each row, its own stamp's \
-             included (closed \"right\")"
+             included. Set closed to \"right\", looking back."
         ));
     }
     Ok(())

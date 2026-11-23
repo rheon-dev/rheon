@@ -275,29 +275,33 @@ pub fn ewm_moments_cfg(
         for (name, _) in each {
             if !terms.0.iter().any(|(t, _)| t == name) {
                 no.refuse(format!(
-                    "kind names the term {name:?}, which terms does not have. Name a term of \
-                     terms, or leave {name:?} out of kind."
+                    "spec {:?}: kind names the term {name:?}, which terms does not have. Name a \
+                     term of terms, or leave {name:?} out of kind.",
+                    spec.name
                 ));
             }
         }
     }
     if window_rows.is_some() && window_size.is_some() {
-        no.refuse(
-            "window_rows (a count of rows) and window_size (a span of the clock) both set the \
-             window. Give one of them.",
-        );
+        no.refuse(format!(
+            "spec {:?}: window_rows (a count of rows) and window_size (a span of the clock) both \
+             set the window. Give one of them.",
+            spec.name
+        ));
     }
     let clocked = spec.clock.is_some();
     if let Some(w) = window_size {
         if !clocked {
             no.refuse(format!(
-                "window_size = {w} is a span of the clock, but the spec has no clock. Give \
-                 window_rows for a window of learned rows, or set clock."
+                "spec {:?}: window_size = {w} is a span of the clock, but the spec has no clock. \
+                 Give window_rows for a window of learned rows, or set clock.",
+                spec.name
             ));
         } else if !(w.value().is_finite() && w.value() > 0.0) {
             no.refuse(format!(
-                "window_size must be a finite span of the clock above 0, but it is {w}. Give \
-                 the span the moments keep rows of, or leave it out for no window."
+                "spec {:?}: window_size must be a finite span of the clock above 0, but it is \
+                 {w}. Give the span the moments keep rows of, or leave it out for no window.",
+                spec.name
             ));
         }
     }
@@ -307,8 +311,9 @@ pub fn ewm_moments_cfg(
             Some(MomentKinds::Each(each)) => match each.iter().find(|(t, _)| t == name) {
                 Some((_, w)) => match word(w) {
                     Ok(k) => k,
-                    Err(e) => {
-                        no.refuse(format!("the term {name:?}'s {e}"));
+                    Err(_) => {
+                        let param = format!("the term {name:?}'s kind");
+                        no.refuse(spec_words_refusal(&spec.name, &param, &MOMENT_KINDS, w));
                         MomentKind::Central
                     }
                 },

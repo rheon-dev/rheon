@@ -156,12 +156,12 @@ REFUSALS: list[tuple[str, dict, str]] = [
     (
         "a power below 1",
         dict(terms={"v": {"g": 0}}),
-        'the term "v" has order 0 in a leg; a power is a whole number from 1',
+        'the term "v" gives a leg the power 0, but a power is a whole number from 1',
     ),
     (
         "a negative lag",
         dict(terms={"ac": {"g": 1, "g@-1": 1}}),
-        'the term "ac" lags a leg by -1; a lag is at least 0',
+        'the term "ac" lags a leg by -1, but a lag is finite and at least 0',
     ),
     (
         "a leg named twice",

@@ -1371,7 +1371,7 @@ def ewm_moments(
 
     These are computed in one pass by Pébay's update (Pébay, Terriberry,
     Kolla and Bennett 2016): a row of weight ``w`` after a decay ``lam``
-    merges into ``W``, the means, the normalised central moments ``c_a`` and
+    merges into ``W``, the means, the normalized central moments ``c_a`` and
     the ratios ``r_k = sum m_i**k / W**k`` as
 
     .. code-block:: text
@@ -1403,7 +1403,7 @@ def ewm_moments(
     ``strategy="backward"`` pairs them, and with no row where that one is
     more than ``lag_tolerance`` before ``t - k``: after a gap longer than the
     lag a row closes no pair. A pair weighs its closing row's ``m_i``. A
-    clock break starts the window and the lags over. The pairs are centred
+    clock break starts the window and the lags over. The pairs are centered
     on their own weighted means, so ``{"x": 1, "x@1": 1}`` under
     ``kind="standardized"`` is the pairs' Pearson correlation, which differs
     from statsmodels' ``acf`` (the whole stream's mean over its variance)
