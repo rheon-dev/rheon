@@ -1093,7 +1093,9 @@ def kind_frame(kind: str, *, n: int = 400, steps=None, seed: int = 5) -> pl.Data
         # returns with a conditional variance, a GARCH(1,1) at (0.05, 0.5,
         # 0.45): on the linear target `garch`'s start waits on every row
         # (PLAN 548), and its fields would carry no number
-        g = np.random.default_rng([548, seed])
+        # (the stream of 400 rows keyed 548 was one the start never took, so
+        # the keyed stream is one that starts, a third of the way in)
+        g = np.random.default_rng([1, seed])
         s, e, ret = 1.0, 0.0, np.empty(n)
         for i, z in enumerate(g.standard_normal(n)):
             s = 0.05 + 0.5 * e * e + 0.45 * s

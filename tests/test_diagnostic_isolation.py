@@ -537,12 +537,14 @@ def test_every_switch_at_once_never_moves_the_fit(kind: str, variant: str) -> No
     own = [n for n in out.columns if n not in fit]
     print(f"{kind} on {variant}: every switch writes {len(own)} fields")
     # `holt` has no feature for a spread to move with: its Breusch-Pagan
-    # is null by design.
+    # is null by design, and a Poisson `glm` (the default family) has no sign
+    # to hit: its `hit_rate` is null by design too.
     empty = [
         n
         for n in own
         if out[n].drop_nulls().len() == 0
         and not (kind in NO_FEATURES and n.startswith("breusch_pagan_"))
+        and not (kind == "glm" and n.startswith("hit_rate_"))
     ]
     assert not empty, f"{kind} on {variant}: fields with no value at all: {empty}"
 
