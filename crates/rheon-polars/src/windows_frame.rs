@@ -30,8 +30,8 @@ use crate::spec::{ClockPolicy, SessionGapSpec, clock_cfg_of};
 use crate::stream::usable;
 use crate::windows::{ChunkKeys, session_hashes};
 use crate::windows::{
-    Closed, Direction, KernelDef, OpDef, OpKind, Partial, Peek, PlainRows, Refusal, RowIn, Stat,
-    Windows,
+    Closed, CrossClosed, CrossDef, Direction, KernelDef, OpDef, OpKind, Partial, Peek, PlainRows,
+    Refusal, RowIn, Stat, Windows,
 };
 use crate::wrong_type::{Refused, wrong_type};
 
@@ -489,6 +489,10 @@ struct Plan {
     /// Every span a kernel reads, with its parameter's name, for the scale
     /// check.
     spans: Vec<(&'static str, Span)>,
+    /// The cross-group operators, after the window operators in output
+    /// order, and each one's hidden column.
+    cross: Vec<CrossDef>,
+    cross_columns: Vec<String>,
 }
 
 fn dtype_of<'a>(input: &'a Schema, column: &str) -> &'a DataType {
@@ -597,6 +601,8 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
         bare: None,
         increments: Vec::new(),
         spans: Vec::new(),
+        cross: Vec::new(),
+        cross_columns: Vec::new(),
     };
     // Increments first: an operator's input may read them.
     for f in &config.formulas {
@@ -655,13 +661,67 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
         s
     };
     let resolve_incr = |op: &OpNode| col(hidden(op).as_str());
+    // An input of a cross operator, its value or its weight: a number,
+    // each distinct formula read once.
+    let cross_input = |p: &mut Plan, f: &str, name: &str, what: &str, node: &Node| {
+        if let Some(i) = p.inputs.iter().position(|n| n == node) {
+            return Ok(i);
+        }
+        let dtype = dtypes_of(&incr_schema, vec![node.to_expr(&resolve_incr).alias("@t")])
+            .map_err(|e| {
+                format!(
+                    "{WHO}: {f}: Polars cannot compute {name}'s {what} ({e}). Check that the \
+                     {what} reads columns of the right type."
+                )
+            })?;
+        let dtype = dtype.get("@t").expect("aliased").clone();
+        if !numeric(&dtype) {
+            return Err(Refused::wrong_type(format!(
+                "{WHO}: {f}: {name}'s {what} must be a number, but it is {}. Cast it to a \
+                 number, such as with .cast(pl.Float64).",
+                crate::arrow::dtype_name(&dtype)
+            )));
+        }
+        p.inputs.push(node.clone());
+        Ok(p.inputs.len() - 1)
+    };
     for f in &config.formulas {
         for op in f.tree.operators() {
             if op.kind == OpKind::Increment {
                 continue;
             }
             let key = hidden(op);
-            if p.columns.iter().any(|(k, _)| *k == key) {
+            if p.columns.iter().any(|(k, _)| *k == key) || p.cross_columns.contains(&key) {
+                continue;
+            }
+            if let Some(stat) = op.kind.cross() {
+                let name = op.kind.name();
+                if config.clock.is_none() {
+                    return Err(format!(
+                        "{WHO}: {}: {name} reduces every group's row at one stamp of the clock, \
+                         but the call names no clock column, and a row count gives each row a \
+                         stamp of its own. Name the clock column with clock=.",
+                        f.name
+                    )
+                    .into());
+                }
+                let input = cross_input(&mut p, &f.name, name, "input", &op.input)?;
+                let weight = match &op.weight {
+                    Some(w) => Some(cross_input(&mut p, &f.name, name, "weight", w)?),
+                    None => None,
+                };
+                p.cross.push(CrossDef {
+                    stat,
+                    closed: if op.closed == Closed::Left {
+                        CrossClosed::Left
+                    } else {
+                        CrossClosed::Right
+                    },
+                    input,
+                    weight,
+                    bias: op.bias,
+                });
+                p.cross_columns.push(key);
                 continue;
             }
             let direction = op.direction();
@@ -735,8 +795,12 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
             p.columns.push((key, p.ops.len() - 1));
         }
     }
+    // The cross operators' outputs follow the window operators'.
+    for (ci, key) in std::mem::take(&mut p.cross_columns).into_iter().enumerate() {
+        p.columns.push((key, p.ops.len() + ci));
+    }
     debug_assert!(
-        !(p.ops.is_empty() && p.increments.is_empty()),
+        !(p.ops.is_empty() && p.increments.is_empty() && p.cross.is_empty()),
         "checked per formula"
     );
     p.bare = config
@@ -1282,7 +1346,10 @@ impl WindowsRun {
             let dtype = evaluated.get(&f.name).expect("aliased").clone();
             output.insert(f.name.as_str().into(), dtype);
         }
-        let mut core = if p.ops.is_empty() {
+        let mut core = if !p.cross.is_empty() {
+            Windows::with_cross(p.kernels, p.ops, p.cross, cfg)
+                .map_err(|e| format!("{WHO}: {e}"))?
+        } else if p.ops.is_empty() {
             // Increments alone: the core carries a kernel that reads nothing,
             // so rows pass straight through it. A sum over no window, read
             // at every row.
@@ -2873,6 +2940,7 @@ impl WindowsRun {
         }
         if file.core.kernels() != run.core.kernels()
             || file.core.ops() != run.core.ops()
+            || file.core.cross_defs() != run.core.cross_defs()
             || same_clock(file.core.clock_cfg()) != same_clock(run.core.clock_cfg())
         {
             return Err(format!(

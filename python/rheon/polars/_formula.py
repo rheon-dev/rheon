@@ -58,7 +58,13 @@ OPERATORS = (
     "ewm_quantile",
     "rewm_quantile",
     "increment",
+    "cross_mean",
+    "cross_std",
 )
+
+#: The cross-group operators: a statistic over every group's row at one
+#: stamp of the clock, with no kernel of their own.
+CROSS = ("cross_mean", "cross_std")
 
 #: The operators that take ``bias``: a variance's own (task 212).
 VARIANCES = ("ewm_var", "ewm_std")
@@ -367,6 +373,8 @@ def operators(tree: Any) -> list[list[Any]]:
         if head in OPERATORS:
             out.append(node)
             walk(node[1])
+            if len(node) > 2 and isinstance(node[2], dict) and "weight" in node[2]:
+                walk(node[2]["weight"])
         elif head not in ("col", "lit"):
             for arg in node[1:]:
                 walk(arg)
@@ -395,6 +403,8 @@ def columns(tree: Any) -> list[str]:
             return
         elif head in OPERATORS:
             walk(node[1])
+            if len(node) > 2 and isinstance(node[2], dict) and "weight" in node[2]:
+                walk(node[2]["weight"])
         else:
             for arg in node[1:]:
                 walk(arg)
@@ -591,6 +601,7 @@ def operator(
     partial: str | None = None,
     bias: Any = None,
     quantile: Any = None,
+    weight: Any = None,
     who: str | None = None,
 ) -> pl.Expr:
     """The expression of operator ``name`` over ``input`` with these
@@ -602,6 +613,8 @@ def operator(
     tree = _input_tree(who, input)
     if name == "increment":
         return operator_column(["increment", tree])
+    if name in CROSS:
+        return _cross(name, tree, who, closed=closed, bias=bias, weight=weight)
     if half_life is None:
         raise TypeError(
             f"{who}: half_life is required, but it is not given. Give half_life in clock units, "
@@ -685,4 +698,25 @@ def operator(
         raise TypeError(
             f"{who}: quantile is given, but only ewm_quantile takes it. Leave out quantile."
         )
+    return operator_column([name, tree, params])
+
+
+def _cross(name: str, tree: list[Any], who: str, *, closed: Any, bias: Any, weight: Any) -> pl.Expr:
+    """A cross-group operator's node: its stamp (``closed``), a standard
+    deviation's ``bias``, and its weight's tree where one is given."""
+    if closed not in ("right", "left"):
+        raise ValueError(
+            f'{who}: closed must be "right" (the row\'s own stamp) or "left" (the stamp before '
+            f"it), but it is {closed!r}. Set closed to one of those words."
+        )
+    params: dict[str, Any] = {"closed": closed}
+    if name == "cross_std":
+        if not isinstance(bias, bool):
+            raise TypeError(
+                f"{who}: bias must be True or False, but it is of type {type(bias).__name__}. "
+                f"Set bias to True or False."
+            )
+        params["bias"] = bias
+    if weight is not None:
+        params["weight"] = _input_tree(f"{who}: weight", weight)
     return operator_column([name, tree, params])

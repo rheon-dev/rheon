@@ -108,6 +108,9 @@ pub struct OpNode {
     /// A quantile's level (`ewm_quantile`, `rewm_quantile`), in (0, 1);
     /// `None` for every other operator.
     pub quantile: Option<f64>,
+    /// A cross-group operator's weight, an element-wise formula of the row;
+    /// `None` weighs every row 1, and every window operator has none.
+    pub weight: Option<Box<Node>>,
 }
 
 impl OpNode {
@@ -146,6 +149,16 @@ impl OpNode {
         }
         if let Some(q) = self.quantile {
             m.insert("quantile".into(), json!(q));
+        }
+        if self.kind.cross().is_some() {
+            // A cross operator has no kernel: its stamp and its weight.
+            m.remove("min_samples");
+            if self.kind == OpKind::CrossStd {
+                m.insert("bias".into(), json!(self.bias));
+            }
+            if let Some(w) = &self.weight {
+                m.insert("weight".into(), w.to_json());
+            }
         }
         Value::Object(m)
     }
@@ -419,7 +432,78 @@ impl Node {
                     partial: None,
                     bias: false,
                     quantile: None,
+                    weight: None,
                 }))
+            }
+            name if OpKind::parse(name).is_some_and(|k| k.cross().is_some()) => {
+                let kind = OpKind::parse(name).expect("checked");
+                arity(2)?;
+                let input = Node::from_json(&args[0])?;
+                input.no_window_operator(name)?;
+                let Value::Object(params) = &args[1] else {
+                    return Err(format!(
+                        "formula: {name:?} takes its parameters as an object, but it has {}. \
+                         Give them as an object, such as {{\"closed\": \"right\"}}.",
+                        short(&args[1])
+                    ));
+                };
+                let mut op = OpNode {
+                    kind,
+                    input: Box::new(input),
+                    half_life: None,
+                    window_size: None,
+                    closed: Closed::Right,
+                    min_samples: 2,
+                    partial: None,
+                    bias: false,
+                    quantile: None,
+                    weight: None,
+                };
+                let std = kind == OpKind::CrossStd;
+                for (k, v) in params {
+                    match k.as_str() {
+                        "closed" => {
+                            op.closed = match v.as_str() {
+                                Some("right") => Closed::Right,
+                                Some("left") => Closed::Left,
+                                _ => {
+                                    return Err(format!(
+                                        "{name}: closed must be \"right\" (the row's own stamp) \
+                                         or \"left\" (the stamp before it), but it is {}. Set \
+                                         closed to one of those words.",
+                                        short(v)
+                                    ));
+                                }
+                            };
+                        }
+                        "bias" if std => {
+                            op.bias = v.as_bool().ok_or_else(|| {
+                                format!(
+                                    "{name}: bias must be true or false, but it is {}. Set bias \
+                                     to true or false.",
+                                    short(v)
+                                )
+                            })?;
+                        }
+                        "weight" => {
+                            let w = Node::from_json(v)?;
+                            w.no_window_operator(name)?;
+                            op.weight = Some(Box::new(w));
+                        }
+                        other => {
+                            return Err(format!(
+                                "{name}: {other:?} is not one of its parameters, which are \
+                                 closed{}. Remove {other:?}, or correct its name.",
+                                if std {
+                                    ", weight and bias"
+                                } else {
+                                    " and weight"
+                                }
+                            ));
+                        }
+                    }
+                }
+                Ok(Node::Op(op))
             }
             name if OpKind::parse(name).is_some() => {
                 let kind = OpKind::parse(name).expect("checked");
@@ -446,6 +530,7 @@ impl Node {
                     partial: None,
                     bias: false,
                     quantile: None,
+                    weight: None,
                 };
                 let var = kind.stat().is_some_and(Stat::is_var);
                 let quantile = kind.stat() == Some(Stat::Quantile);
@@ -663,6 +748,9 @@ impl Node {
             Node::Op(op) => {
                 out.push(op);
                 op.input.collect(out);
+                if let Some(w) = &op.weight {
+                    w.collect(out);
+                }
             }
         }
     }
@@ -683,7 +771,12 @@ impl Node {
             }
             Node::Lit(_) => {}
             Node::Call(_, args) => args.iter().for_each(|a| a.collect_columns(out)),
-            Node::Op(op) => op.input.collect_columns(out),
+            Node::Op(op) => {
+                op.input.collect_columns(out);
+                if let Some(w) = &op.weight {
+                    w.collect_columns(out);
+                }
+            }
         }
     }
 
@@ -693,7 +786,10 @@ impl Node {
         match self {
             Node::Col(_) | Node::Lit(_) => false,
             Node::Call(n, args) => n == name || args.iter().any(|a| a.contains_call(name)),
-            Node::Op(op) => op.input.contains_call(name),
+            Node::Op(op) => {
+                op.input.contains_call(name)
+                    || op.weight.as_ref().is_some_and(|w| w.contains_call(name))
+            }
         }
     }
 
@@ -713,7 +809,12 @@ impl Node {
             }
             Node::Lit(_) => {}
             Node::Call(_, args) => args.iter().for_each(|a| a.collect_columns_ref(out)),
-            Node::Op(op) => op.input.collect_columns_ref(out),
+            Node::Op(op) => {
+                op.input.collect_columns_ref(out);
+                if let Some(w) = &op.weight {
+                    w.collect_columns_ref(out);
+                }
+            }
         }
     }
 

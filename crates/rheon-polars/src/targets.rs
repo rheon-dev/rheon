@@ -305,6 +305,14 @@ impl<'de> Deserialize<'de> for Targets {
                                  the subtraction in the formula"
                             )));
                         }
+                        if tree.operators().iter().any(|op| op.kind.cross().is_some()) {
+                            return Err(serde::de::Error::custom(format!(
+                                "target {name:?}: a formula target holds a cross-group operator \
+                                 (cross_mean or cross_std), which reads every group's row at a \
+                                 stamp, and a spec learns each group apart; make the column with \
+                                 rp.stream.with_windows and name it as the target"
+                            )));
+                        }
                         if !tree.has_forward_operator() {
                             // Name the call that makes the column: with_windows
                             // for a formula over operators looking back, Polars'
