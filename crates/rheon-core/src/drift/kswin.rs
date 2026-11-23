@@ -109,7 +109,11 @@ pub fn ks_equal_tail(r: usize, h: usize) -> f64 {
     if h == 0 {
         return 1.0;
     }
-    // ratio[m] = C(2r, r − m) / C(2r, r).
+    tail_of(&ratios(r), r, h)
+}
+
+/// `ratio[m] = C(2r, r − m) / C(2r, r)` for `m` in `0..=r`, by their product.
+fn ratios(r: usize) -> Vec<f64> {
     let mut ratio = Vec::with_capacity(r + 1);
     let mut t = 1.0f64;
     ratio.push(t);
@@ -117,6 +121,11 @@ pub fn ks_equal_tail(r: usize, h: usize) -> f64 {
         t *= (r - i) as f64 / (r + 1 + i) as f64;
         ratio.push(t);
     }
+    ratio
+}
+
+/// The tail at `h ≥ 1` from the ratios: the module doc's alternating sum.
+fn tail_of(ratio: &[f64], r: usize, h: usize) -> f64 {
     let mut sum = 0.0;
     let mut j = 1;
     while j * h <= r {
@@ -133,9 +142,15 @@ pub fn ks_equal_tail(r: usize, h: usize) -> f64 {
 
 /// `h*`: the least `h` in `1..=r` whose tail is at most `alpha`, or `r + 1`
 /// where none is.
+///
+/// The ratios are built once, so the search costs `Σ_h r/h`, about `r ln r`
+/// operations, where building them for each `h` cost `r` each: `r^{3/2}`
+/// and a vector of `r + 1` numbers a step (review 2026-11-23, DRIFT-8). The
+/// same numbers in the same order, so the same `h*`, to the bit.
 pub fn ks_critical_h(r: usize, alpha: f64) -> usize {
+    let ratio = ratios(r);
     (1..=r)
-        .find(|&h| ks_equal_tail(r, h) <= alpha)
+        .find(|&h| tail_of(&ratio, r, h) <= alpha)
         .unwrap_or(r + 1)
 }
 

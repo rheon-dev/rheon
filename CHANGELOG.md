@@ -887,6 +887,12 @@ model that only the new build has is listed as an addition and passes.
   window's; `window_rows` on a clock now says its rows are no span of the
   clock. And `min_settled_frac` on `garch`, which refuses a finite
   `half_life`, advised setting one; it now says `garch` does not decay.
+- **`kswin`'s critical count is found in about `r ln r` operations**
+  (review 2026-11-23, DRIFT-8). The search for the least `h` whose exact
+  tail is at most `alpha` built the binomial ratios again for each `h`,
+  `r^{3/2}` operations and a vector of `r + 1` numbers a step, about 219 MB
+  allocated in all at `stat_size = 50,000`. They are built once; the
+  numbers and their order are the same, so `h*` is the same to the bit.
 - **A window looking ahead whose far edge is the input's last row is whole
   at the end of the input** (PLAN 565). Under `closed="right"` or `"both"`,
   `rp.ewm_sum`, `rp.ewm_mean`, `rp.ewm_rate` and `rp.ewm_quantile` with
