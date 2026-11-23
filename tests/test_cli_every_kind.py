@@ -831,6 +831,10 @@ CASES: list[Case] = [
             "half_life": float("inf"),
             "clock": "t",
             "gap_cap": 6.0,
+            # A cadence: without one the `coef` rows are each chunk's last,
+            # which the case's chunk size (97 rows, by its place in the
+            # list) moves off the blocks' ends.
+            "max_rows_between_coefs": 50,
         },
     ),
     # Streaming components, each method and every key.
