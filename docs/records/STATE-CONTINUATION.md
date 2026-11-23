@@ -611,6 +611,24 @@ weight 0 before the save, at least as many as the current one's. No bank's
 of weight 0 continues to the bit: every output of `scripts/compare_outputs.py`'s
 unweighted cases moved 0 ulps against a3554b27, and a bank state saved
 without one is the same bytes but for `hawkes`'.
+Widened, the user's (2026-11-23: "Widen exception 25"; no new number): the
+same change continued. After the review of 2026-11-23 (STRM-1), a row of
+weight 0 under `embargo` or `label_clock` is scored as `predict` scores it
+and releases no held row, where it released the rows its clock had seen
+out into the live models. A kept state whose continued rows include such a
+row goes on further from its frozen frame, and `ZERO_WEIGHT_CLOCK` is held
+to the figures measured on macOS arm64 that day, each bound rounded up:
+`bank` 3.77e-2 (0.04, unchanged); `bank_gated` 1.67e-1 and two other cells
+of its frame (0.17, 2 cells, where no cell moved before);
+`bank_label_clock` 4.11e-2 for `v67/` and `v68/` and 1.64e-1 for `v69/` and
+`v70/` (0.17, unchanged); `bank_conformal_auto` 1.79e-2 for `v67/` and
+`v68/` and 1.17e-1 for `v69/` and `v70/` (0.12, was 0.05). The schema-71
+set, written by the build that counted such rows in no clock but released at
+them, still loads and converts to the current schema's bytes exactly; its
+frozen frames of those four kinds were rewritten to what its unchanged
+state now continues to, and its state bytes are untouched. The current
+fixtures of the four kinds were regenerated. The count in CLAUDE.md's rule 5
+does not move.
 
 A twenty-sixth, the user's (2026-11-22: "Switch, restarting the level",
 asked whether a saved `deco` state of an earlier schema keeps the old form
