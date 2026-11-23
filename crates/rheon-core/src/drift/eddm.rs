@@ -217,4 +217,93 @@ mod tests {
         }
         assert_eq!(a, b);
     }
+
+    /// The whole test written out over the distances themselves: the mean
+    /// and sample deviation, `p' + 2s'` with its largest so far, and the flag
+    /// below `beta` of it once more than `warm_start` rows and errors have
+    /// been seen. Flags, the largest `p' + 2s'` and the row count equal the
+    /// longhand's on every row, at several warm starts (0 reads the first
+    /// distance, whose deviation is 0, and the second) and levels.
+    #[test]
+    fn the_flag_is_the_longhand_over_the_distances() {
+        for (warm, beta, rate) in [
+            (0u64, 0.9, 0.15),
+            (3, 0.95, 0.3),
+            (10, 0.9, 0.1),
+            (30, 0.97, 0.2),
+        ] {
+            let mut e = Eddm::new(warm, beta);
+            let (mut last, mut ds, mut p2s_max) = (0u64, Vec::<f64>::new(), -1.0f64);
+            let (mut n, mut errors, mut flags) = (0u64, 0u64, 0);
+            let mut s = 21u64;
+            for t in 0..6000 {
+                // A change of regime so the distances move both ways.
+                let rate = if (t / 700) % 2 == 1 { rate * 2.5 } else { rate };
+                let err = lcg(&mut s) < rate;
+                n += 1;
+                let mut expect = false;
+                if err {
+                    errors += 1;
+                    ds.push((n - last) as f64);
+                    last = n;
+                    if n > warm {
+                        let k = ds.len() as f64;
+                        let mean = ds.iter().sum::<f64>() / k;
+                        let sd = if ds.len() > 1 {
+                            (ds.iter().map(|d| (d - mean) * (d - mean)).sum::<f64>() / (k - 1.0))
+                                .sqrt()
+                        } else {
+                            0.0
+                        };
+                        let p2s = mean + 2.0 * sd;
+                        if p2s > p2s_max {
+                            p2s_max = p2s;
+                        } else if errors > warm && p2s / p2s_max < beta {
+                            expect = true;
+                        }
+                    }
+                }
+                let got = e.update(err);
+                assert_eq!(got, expect, "warm {warm} row {t}");
+                if expect {
+                    (last, p2s_max, n, errors) = (0, -1.0, 0, 0);
+                    ds.clear();
+                    flags += 1;
+                    assert_eq!(e.n(), 0);
+                } else {
+                    assert_eq!(e.n(), n, "row {t}");
+                    let want = p2s_max;
+                    let have = e.distances().2;
+                    assert!(
+                        (have - want).abs() <= 1e-9 * want.abs(),
+                        "warm {warm} row {t}: {have} {want}"
+                    );
+                }
+            }
+            assert!(flags >= 3, "warm {warm}: {flags} flags");
+        }
+    }
+
+    /// The first row past `warm_start` is the one that reads: an error on
+    /// row `warm_start` itself leaves the largest untouched, the next
+    /// sets it, and the first distance read alone has a deviation of 0.
+    #[test]
+    fn the_warm_start_is_strict_and_one_distance_has_no_deviation() {
+        let mut e = Eddm::new(5, 0.9);
+        for t in 1..=5 {
+            e.update(t == 3 || t == 5);
+        }
+        assert_eq!(e.distances().2, -1.0, "row 5 is the warm start");
+        e.update(true);
+        // Distances 3, 2, 1: mean 2, deviation 1: 2 + 2 = 4.
+        assert!((e.distances().2 - 4.0).abs() < 1e-12, "{:?}", e.distances());
+        let mut e = Eddm::new(0, 0.9);
+        e.update(false);
+        e.update(false);
+        e.update(true);
+        assert_eq!(e.distances().2, 3.0, "one distance: 3 + 0");
+        e.update(true);
+        // Distances 3 and 1: mean 2, sample variance 2: 2 + 2 sqrt 2.
+        assert!((e.distances().2 - (2.0 + 2.0 * 2f64.sqrt())).abs() < 1e-12);
+    }
 }
