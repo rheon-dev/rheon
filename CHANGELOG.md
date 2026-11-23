@@ -718,6 +718,18 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **Five edge cases of `rheon.corr` and `rheon.gram`** (review 2026-11-23,
+  MATH-6). `corr.mp_edge` and `corr.mp_density` refuse a count `n` or `m`
+  that is not finite; NaN passed the check and gave NaN edges.
+  `corr.absorption` and `corr.spectral` read a matrix's symmetric part:
+  the eigensolvers read the lower triangle alone, so the upper half of a
+  matrix whose halves differ went unread. `corr.from_blocks` names the
+  pair that fails its symmetry check where one side is NaN; it named
+  another pair that matched. `gram.subset` of a Gram with no targets gives
+  `cross_moments` the subset's width. `gram.solve_subsets` refuses a
+  position that is not a whole number, where `True` read as 1 and `0.5`
+  as 0.
+
 - **`ewridge` under `target_gaps="pairwise"` reads each target's errors at
   its own rows** (review 2026-11-23, REG-13). Its slopes solve the Gram
   of every row against the target's cross-moments over the rows it is
