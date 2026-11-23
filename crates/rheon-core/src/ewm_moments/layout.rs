@@ -353,8 +353,14 @@ impl Summary {
                 _ => a2 * a2 * *r + b2 * b2 * ro,
             };
         }
-        for j in 0..g.legs.len() {
-            crate::comp::add(&mut self.m[j], &mut self.m_lo[j], b * delta[j]);
+        for ((m, lo), d) in self
+            .m
+            .iter_mut()
+            .zip(&mut self.m_lo)
+            .zip(&delta)
+            .take(g.legs.len())
+        {
+            crate::comp::add(m, lo, b * d);
         }
         self.w = w;
     }
