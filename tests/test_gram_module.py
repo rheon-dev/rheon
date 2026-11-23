@@ -801,6 +801,26 @@ class TestCoefStats:
         assert st["r2"] == pytest.approx(1 - resid.var() / y.var(), rel=1e-6)
         assert st["n"] == pytest.approx(len(y), rel=1e-9)
 
+    def test_an_intercept_off_the_fit_counts_in_the_residuals(self):
+        """Coefficients whose intercept is not least squares' (review
+        2026-11-23, MATH-4): the residuals' variance about their own mean
+        left out the intercept's error, so ``[100, 2]`` on ``y = 2x`` read
+        ``r2`` 1 and ``sigma2`` 0. Their mean square is now read, which for
+        ``solve``'s coefficients is the variance it was, the mean being 0."""
+        df, _ = stream(n=5000, k=3, seed=13)
+        bank = fit(df, ridge=1e-12, standardize=False, max_rows_between_solves=1)
+        g = bank.gram("m")[0]
+        X = df.select("x0", "x1", "x2").to_numpy()
+        y = df["y"].to_numpy()
+        b = pg.solve(g, ridge=1e-12)
+        off = b.copy()
+        off[0] += 10.0
+        for coef in (b, off):
+            st = pg.coef_stats(g, coef)
+            resid = y - (coef[0] + X @ coef[1:])
+            assert st["resid_var"] == pytest.approx(np.mean(resid**2), rel=1e-6)
+            assert st["r2"] == pytest.approx(1 - np.mean(resid**2) / y.var(), rel=1e-6)
+
     def test_standard_errors_against_the_textbook_formula(self):
         df, _ = stream(n=5000, k=3, seed=14)
         bank = fit(df, ridge=1e-12, standardize=False, max_rows_between_solves=1)

@@ -3060,16 +3060,20 @@ def coef_stats(
 
     .. code-block:: text
 
-        resid_var = Var[y] - 2 b' Cov[X, y] + b' C b
+        resid_var = Var[y] - 2 b' Cov[X, y] + b' C b + (b_0 + m . b - ybar)**2
         sigma2    = resid_var * n / (n - k)          # n = target_n_kish
         se        = sqrt(diag(inv(C)) * sigma2 / n)
         se_0      = sqrt((1 + m' inv(C) m) * sigma2 / n)   # the intercept's
         t         = b / se
         r2        = 1 - resid_var / Var[y]
 
-    ``b`` is the slopes, ``C`` the features' centered co-moments,
-    ``Cov[X, y]`` the target's centered cross-moments (``cross_centered``)
-    and ``m`` the column means over the target's rows. ``k`` counts the
+    ``b`` is the slopes, ``b_0`` the intercept, ``C`` the features'
+    centered co-moments, ``Cov[X, y]`` the target's centered cross-moments
+    (``cross_centered``), ``m`` the column means over the target's rows and
+    ``ybar`` the target's mean. The last term is the intercept's error
+    against least squares' ``ybar - m . b``, so ``resid_var`` is the
+    residuals' mean square for any coefficients: for those :func:`solve`
+    returns it is 0, to a rounding. ``k`` counts the
     features with variance and the intercept: a column of none, such as a
     constant that ``standardize`` drops at 0, has no coefficient to
     estimate and spends no degree of freedom. ``se_0`` is least squares'
@@ -3158,6 +3162,14 @@ def coef_stats(
 
     resid_var = s_yy - 2.0 * b @ rhs + b @ a @ b
     resid_var = max(resid_var, 0.0)
+    if icept >= 0 and not _is_within(g):
+        # The residuals' mean square, not their variance: an intercept off
+        # least squares' `ybar - m . b` adds its error squared, which is 0
+        # to a rounding for `solve`'s coefficients (review 2026-11-23,
+        # MATH-4: `[100, 2]` on `y = 2x` read r2 1 and sigma2 0).
+        # The target's mean is its cross-moment with the intercept column.
+        bias = float(beta[icept] + m[slots] @ b - cross[icept])
+        resid_var += bias * bias
     # The columns with variance: one of none, such as a constant that
     # standardize dropped, has a coefficient of 0 by construction, spends no
     # degree of freedom, and is a zero row no inverse of the whole takes, so

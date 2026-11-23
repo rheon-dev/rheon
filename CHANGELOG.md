@@ -718,6 +718,14 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **`rheon.gram.coef_stats` counts an intercept off the fit in the
+  residuals** (review 2026-11-23, MATH-4). Its residual variance was the
+  residuals' variance about their own mean, so coefficients whose
+  intercept was not least squares' `ȳ − m'b` read as fitting better than
+  they do: `[100, 2]` on `y = 2x` gave `r2` 1 and `sigma2` 0. It is now
+  their mean square, with the intercept's error squared added, which is 0
+  to a rounding for the coefficients `rheon.gram.solve` returns.
+
 - **`huber` and `quantile` refuse a state whose refit span has no place on
   the clock** (review 2026-11-23, REG-16). A refit over a span of the
   clock keeps where the span began, and `sgd`'s load checked that a state
