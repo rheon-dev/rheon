@@ -34,12 +34,16 @@ pub(crate) fn ldexp(mut x: f64, mut n: i64) -> f64 {
 pub(crate) fn add(q: &mut f64, s: &mut i32, lam2: f64, w: f64) {
     let mut held = lam2 * *q;
     let mut ws = ldexp(w, -i64::from(*s));
-    if ws != 0.0 && ws.is_finite() && !(LO..=HI).contains(&ws) {
-        let (_, t) = crate::held_median::frexp(ws);
+    // `ws` is infinite where a finite weight is past the doubles at this
+    // scale (a weight of 1 at a scale of 2^-1073): the scale moves to the
+    // weight's own, read from the weight, not from its scaled value.
+    if w.is_finite() && ws != 0.0 && !(LO..=HI).contains(&ws) {
+        let (_, e) = crate::held_median::frexp(w.abs());
+        let t = e - i64::from(*s);
         let moved = ldexp(held, -2 * t);
         if moved.is_finite() {
             held = moved;
-            ws = ldexp(ws, -t);
+            ws = ldexp(w, -e);
             *s += t as i32;
         } else {
             // The sum held is more than `2^512` times the row's square at
@@ -183,5 +187,24 @@ mod tests {
         add(&mut q, &mut s, 1.0, 1.0);
         assert!((count(1.0 + 4e-300, q, s).unwrap() - 1.0).abs() < 1e-15);
         assert!(s.abs() < 2, "{s}");
+    }
+
+    /// A row whose weight, taken to the sum's scale, is past the doubles
+    /// (a weight of 1 after a subnormal one, whose scale is 2^-1073) moves
+    /// the scale to its own, as any weight outside the range does, and
+    /// leaves a sum that is a number: a plain `ldexp` made it infinite,
+    /// which a saved state then refused to load.
+    #[test]
+    fn a_weight_past_the_doubles_at_the_scale_moves_it() {
+        for first in [5e-324, 1e-320, 2.2251e-309] {
+            let (mut q, mut s) = (0.0, 0);
+            add(&mut q, &mut s, 1.0, first);
+            add(&mut q, &mut s, 1.0, 1.0);
+            assert!(q.is_finite() && q > 0.0, "{first}: {q}");
+            assert!(s.abs() < 2, "{first}: {s}");
+            assert!((count(1.0 + first, q, s).unwrap() - 1.0).abs() < 1e-15);
+            add(&mut q, &mut s, 1.0, 1e154);
+            assert!(q.is_finite() && q > 0.0, "{first}: {q}");
+        }
     }
 }
