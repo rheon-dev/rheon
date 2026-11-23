@@ -231,6 +231,11 @@ pub const CELLS: &[Cell] = &[
     cell("garch.targets", 1, 8, Pow(1), Pow(1)),
     cell("garch.truncation", 100, 8, Pow(1), Pow(1)),
     cell("garch.history", 1000, 8, Const, Const),
+    // A row reads and updates each target's mean and variance, O(1) each, and
+    // reads each target's quantile and shortfall at each level.
+    cell("dist_fit.targets", 1, 8, Pow(1), Pow(1)),
+    cell("dist_fit.levels", 1, 8, Pow(1), Pow(1)),
+    cell("dist_fit.history", 1000, 8, Const, Const),
     // --- the bank, `Bank::fit_predict` on a pool of one thread --------------
     cell("bank.groups_seen", 250, 8, Const, Pow(1)),
     // The same in calls of four rows, each to one group: what a call costs
@@ -1128,6 +1133,26 @@ fn model_case(id: &str, n: usize) -> ModelCase {
                 "truncation" => c.warm(9_000),
                 _ => c.warm(1_000),
             }
+        }
+        // `n` quantile levels and `n` shortfall levels, read a target a row.
+        ("dist_fit", "targets" | "levels" | "history") => {
+            let levels: Vec<f64> = (1..=n).map(|i| i as f64 / (n + 1) as f64).collect();
+            let model = if dim == "levels" {
+                json!({"type": "dist_fit", "quantiles": levels, "es_levels": levels})
+            } else {
+                json!({"type": "dist_fit", "quantiles": [0.05, 0.5, 0.95], "es_levels": [0.05]})
+            };
+            let s = json!({
+                "name": "m",
+                "model": model,
+                "targets": names("y", if dim == "targets" { n } else { 1 }),
+                "features": [],
+                "clock": "t",
+                "half_life": 1000.0,
+                "gap_cap": 100.0,
+            });
+            let c = ModelCase::new(s, lin);
+            if dim == "history" { c.warm(n) } else { c }
         }
         _ => panic!("no model cell {id:?}"),
     }

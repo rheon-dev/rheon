@@ -405,7 +405,14 @@ const SURFACES: &[&[&str]] = &[
         "glm.",
         "expectile.",
     ],
-    &["ew_cov.", "marginal.", "deco.", "rcov.", "corrchange."],
+    &[
+        "ew_cov.",
+        "marginal.",
+        "deco.",
+        "rcov.",
+        "corrchange.",
+        "dist_fit.",
+    ],
     &[
         "hmm.",
         "kmeans.",

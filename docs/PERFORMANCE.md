@@ -519,8 +519,8 @@ in the table.
 
 ### The table
 
-**127 cells: 90 over the 26 model kinds' rows, 19 over the
-bank, 3 over the command line, 9 over the window operators, 4 over
+**131 cells: 93 over the 27 model kinds' rows, 19 over the
+bank, 3 over the command line, 10 over the window operators, 4 over
 `refresh_time` and 2 over the sample of an internal helper for
 gradient-boosted trees.** Each row is one cell: the
 size it varies, its two sizes, the growth declared for a row's work and for
@@ -532,7 +532,8 @@ column has the four native ratios from large to small, as measured on
 2026-11-20 by a release build (`--release`) at a load of 7, and the four
 `hawkes` cells' on 2026-11-21 by a debug build at a load of 5. The four
 `expectile` cells' were measured on 2026-11-21 the same way, at a load of 14, and the three
-`garch` cells the same day the same way, at a load of 11. The two `.window` cells were
+`garch` cells the same day the same way, at a load of 11, and the three
+`dist_fit` cells' on 2026-11-23 the same way, at a load of 1. The two `.window` cells were
 measured again on 2026-11-06, once a window's snapshots were laid out
 flat. A row's time and allocations are per
 row; the saved state and the heap are the state's. `(CI)` marks the 25 cells
@@ -632,6 +633,9 @@ largest buffer at the smaller.
 | `garch.targets` | targets T, one series each | 1 → 8 | O(n) | O(n) | each target steps its own series and keeps its own parameters, information matrix and lags | 8.10 · 8.39 · 6.33 · 2.51 |
 | `garch.truncation` | FIGARCH's lags M | 100 → 800 | O(n) | O(n) | a row is one pass of the M weights, their derivatives and the ring; the ring holds M squared returns | 3.18 · 0.97 · 6.35 · 3.30 |
 | `garch.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | the parameters, the information matrix and the lags only; the start's buffer is gone | 1.01 · 1.00 · 1.00 · 1.00 |
+| `dist_fit.targets` | targets T | 1 → 8 | O(n) | O(n) | each target's weighted mean and variance, read and updated in O(1) | 6.75 · 1.00 · 3.09 · 2.18 |
+| `dist_fit.levels` | quantile levels L and shortfall levels L | 1 → 8 | O(n) | O(n) | a target's quantile and shortfall read at each level; the levels are kept once, not a target | 3.49 · 1.00 · 2.06 · 1.24 |
+| `dist_fit.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | a target's weight, mean and variance only | 0.99 · 1.00 · 1.00 · 1.00 |
 | `bank.groups_seen` (CI) | groups seen G (a block over 50 of them) | 250 → 2,000 | O(1) | O(n) | a row touches its group's state alone; a state a group | 1.03 · 1.00 · 7.99 · 7.14 |
 | `bank.groups_seen_per_call` (CI) | groups seen G, calls of four rows to one group each | 1,000 → 8,000 | O(1) | O(n) | a call finds each of its groups' state by key and takes only their notices; a state a group | 1.00 · 1.00 · 7.98 · 7.33 |
 | `bank.specs` (CI) | specs S, one set of columns | 1 → 8 | O(n) | O(n) | each spec steps its model, S | 8.28 · 7.67 · 7.80 · 7.23 |
