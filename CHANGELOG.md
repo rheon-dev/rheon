@@ -906,6 +906,14 @@ model that only the new build has is listed as an addition and passes.
   every output and -5 or `True` were taken; `binary="false"`, a non-empty
   string, read as true and scored a regression as a classifier. Each is
   refused by name.
+- **`emit_breaks` studentizes no row by a spread a step has forgotten, and
+  keeps its saved state loadable** (review 2026-11-23, DIAG-8). A row after
+  a step whose decay is 0 (a gap past about 1,075 half-lives) was
+  studentized by the rows the step had forgotten; it now joins the sums as
+  a fresh stream's first row does. A studentized residual whose fourth
+  power overflows (a residual near `1e100` against a spread near `1e-80`),
+  and a row whose twin-fit products overflow (a weight and a feature near
+  the input bound), only age the sums, where they left them infinite.
 - **A window looking ahead whose far edge is the input's last row is whole
   at the end of the input** (PLAN 565). Under `closed="right"` or `"both"`,
   `rp.ewm_sum`, `rp.ewm_mean`, `rp.ewm_rate` and `rp.ewm_quantile` with

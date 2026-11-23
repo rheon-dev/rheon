@@ -266,7 +266,17 @@ impl Breaks {
     /// place of the studentized residual. A `v` that is not finite, or a
     /// weight of 0, only ages (CLAUDE.md hard rule 9).
     pub fn update(&mut self, v: f64, lam: f64, w: f64, c: Option<f64>) {
-        let z = self.studentized(v);
+        // A step that forgets every row (a decay of 0) leaves no spread to
+        // studentize by: read before it, the row was scaled by the rows it
+        // forgot. And a studentized residual whose fourth power the sums
+        // cannot hold (a residual near `1e100` against a spread near
+        // `1e-80`) is no term of them, so a saved state still loads.
+        let z = if lam == 0.0 {
+            None
+        } else {
+            self.studentized(v)
+                .filter(|z| (w * z * z * z * z).is_finite())
+        };
         self.age(lam);
         if !(v.is_finite() && w > 0.0) {
             return;
@@ -1201,6 +1211,17 @@ impl TwinFit {
     /// ages.
     pub fn update(&mut self, x: &[f64], y: f64, lam: f64, w: f64) {
         if !(y.is_finite() && w > 0.0 && x.iter().all(|v| v.is_finite())) {
+            return self.age(lam);
+        }
+        // The sandwiches keep `w² zᵢ zⱼ`: a row whose largest such product
+        // passes the largest double (a weight and a feature near the input
+        // bound) only ages, so a saved state still loads.
+        let far = x
+            .iter()
+            .zip(&self.origin)
+            .map(|(v, c)| (v - c).abs())
+            .fold(1.0f64, f64::max);
+        if !(w * w * far * far).is_finite() {
             return self.age(lam);
         }
         let slow = slow_factor(lam);
@@ -4511,5 +4532,66 @@ mod review_2026_11_23 {
             let c = b.cusum(1.0).unwrap();
             assert!(c > 1.96, "row {i} after the break: {c}");
         }
+    }
+}
+
+#[cfg(test)]
+mod review_2026_11_23_diag8 {
+    use super::*;
+
+    /// A step whose decay is 0 forgets every row before it: the row after it
+    /// has no spread to be studentized by, so it adds nothing to the sums
+    /// the old spread scaled (review 2026-11-23, DIAG-8). Read before the
+    /// decay, it was studentized by the rows the step had forgotten.
+    #[test]
+    fn a_row_after_a_total_forgetting_is_studentized_by_nothing() {
+        let mut b = Breaks::with_lags(0);
+        for i in 0..50 {
+            b.update(f64::from(i % 7) - 3.0, 0.99, 1.0, None);
+        }
+        b.update(2.0, 0.0, 1.0, None);
+        let mut fresh = Breaks::with_lags(0);
+        fresh.update(2.0, 1.0, 1.0, None);
+        assert_eq!((b.z1, b.s1, b.z2), (fresh.z1, fresh.s1, fresh.z2));
+    }
+
+    /// A recursive residual whose studentized fourth power overflows, inside
+    /// the bound a residual can reach, leaves the sums finite, so a saved
+    /// state loads (review 2026-11-23, DIAG-8).
+    #[test]
+    fn a_residual_whose_fourth_power_overflows_leaves_the_sums_finite() {
+        for lags in [0, 3] {
+            let mut b = Breaks::with_lags(lags);
+            for i in 0..60 {
+                b.update(f64::from(i % 5) * 1e-80, 0.99, 1.0, None);
+            }
+            b.update(1e100, 0.99, 1.0, None);
+            assert!(
+                [b.z1, b.z2, b.z4, b.s1, b.s2, b.vq]
+                    .iter()
+                    .all(|v| v.is_finite()),
+                "{lags}: {b:?}"
+            );
+        }
+    }
+
+    /// A row whose weighted products the twin fits' sandwiches cannot hold
+    /// (a weight of `1e100` and a feature `1e100` from the origin) leaves
+    /// them finite (review 2026-11-23, DIAG-8).
+    #[test]
+    fn a_twin_fit_row_past_the_doubles_only_ages() {
+        let mut t = TwinFit::new(1);
+        for i in 0..30 {
+            t.update(&[f64::from(i)], f64::from(i) * 0.5, 0.99, 1.0);
+        }
+        t.update(&[1e100], 1.0, 0.99, 1e100);
+        assert!(
+            t.hff
+                .iter()
+                .chain(&t.hss)
+                .chain(&t.hfs)
+                .all(|v| v.is_finite()),
+            "{t:?}"
+        );
     }
 }
