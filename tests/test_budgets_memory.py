@@ -455,7 +455,11 @@ CHILD = textwrap.dedent(
 
     proc = psutil.Process()
     case, src, dst, spec = sys.argv[1], sys.argv[2], sys.argv[3], json.loads(sys.argv[4])
-    df = None if case.startswith(("streaming", "collect")) else pl.read_parquet(src)
+    BARS_AGGS = dict(
+        open=pl.col("x0").first(), high=pl.col("x0").max(), low=pl.col("x0").min(),
+        close=pl.col("x0").last(), flow=pl.col("y0").sum(), rows=pl.len(),
+    )
+    df = None if case.startswith(("streaming", "collect", "bars")) else pl.read_parquet(src)
     if case.startswith("predict"):
         # Fitted before the baseline: the run is the scoring alone.
         bank = po.ModelBank([spec])
@@ -477,6 +481,9 @@ CHILD = textwrap.dedent(
     sampler.start()
     if case.startswith("streaming"):
         pl.scan_parquet(src).rheon.fit_predict([spec]).sink_parquet(dst)
+        rows = pl.scan_parquet(dst).select(pl.len()).collect().item()
+    elif case.startswith("bars"):
+        po.stream.bars(pl.scan_parquet(src), **spec, **BARS_AGGS).sink_parquet(dst)
         rows = pl.scan_parquet(dst).select(pl.len()).collect().item()
     elif case.startswith("collect"):
         # The negative control: the source read whole inside the run, and
@@ -535,6 +542,10 @@ def _spec(case: str) -> tuple[dict, pl.DataFrame]:
             "m", features=[f"x{j}" for j in range(4)], clock="t", gap_cap=100.0,
             prune_below=1e-6, max_run=200,
         )  # fmt: skip
+    elif case == "bars_5m":
+        # The call's keywords; the child adds the six aggregates.
+        df = _frame(STREAMED_ROWS, 5, 1)
+        spec = {"clock": "t", "kind": "count", "threshold": BAR_ROWS}
     else:
         df = _frame(STREAMED_ROWS, 5, 1)
         spec = rp.spec.ewridge(
@@ -548,12 +559,24 @@ def _spec(case: str) -> tuple[dict, pl.DataFrame]:
 #: hold whole. The frame is 267 MiB in memory and 251 MiB as parquet.
 STREAMED_ROWS = 5_000_000
 
+#: Rows of a bar in the streamed bars run: 50,000 bars of 100 rows each.
+BAR_ROWS = 100
+
 #: The standard runs: a ten-target regression over 200,000 rows (the shape
 #: whose dense `coef` cost +3.9 GiB), 230 moments a row over 200,000, an eager
 #: `predict` of 1,000 features over 20,000 rows (it copies the task's
 #: features into rows, `n * k * 8` bytes), a windowed `ewridge` (its ring of
 #: snapshots), `bocpd` holding up to 200 runs, and five million rows streamed
-#: from a parquet scan to a parquet sink.
+#: from a parquet scan to a parquet sink, through a bank and, as
+#: `bars_5m`, through `rp.stream.bars` (count bars of 100 rows with six
+#: aggregates). The bars' own state is the open bar, 825 bytes saved, at
+#: any length; what the run's peak holds besides is the scan's decoded
+#: batches ahead of the operator. Measured on Linux (4 threads, a prefetch
+#: of one row group, 2026-11-23): 56, 98 and 136 MiB at 1M, 3M and 5M rows,
+#: where the bank's run read 123 and 131 at 1M and 5M. The same rows fed
+#: from memory hold flat, and a scan of the clock column alone grows by its
+#: 8 bytes a row, so the growth is the scan's read-ahead, which this budget
+#: holds at its 5M-row figure.
 #:
 #: The streamed run is what holds the plan to a bounded peak, so its input is
 #: larger than any budget it could pass whole (review round 9, J-1: at a
@@ -576,6 +599,7 @@ RSS_CASES = (
     "ewridge_window",
     "bocpd_runs",
     "streaming_5m",
+    "bars_5m",
 )
 #: Each case's environment beyond the child's own: the streamed run's and its
 #: control's. `_RJEM_MALLOC_CONF` is Polars' jemalloc on Linux and macOS, and
@@ -586,7 +610,11 @@ STREAMED_ENV = {
     "_RJEM_MALLOC_CONF": "dirty_decay_ms:0,muzzy_decay_ms:0",
     "MIMALLOC_PURGE_DELAY": "0",
 }
-RSS_ENV = {"streaming_5m": STREAMED_ENV, "collect_then_plan": STREAMED_ENV}
+RSS_ENV = {
+    "streaming_5m": STREAMED_ENV,
+    "collect_then_plan": STREAMED_ENV,
+    "bars_5m": STREAMED_ENV,
+}
 
 
 def _floor_python() -> tuple[int, int]:
@@ -627,7 +655,7 @@ def _peak(case: str, spec: dict, src: Path, dst: Path, rows: int) -> float:
     return got["mib"]
 
 
-@pytest.mark.extended(reason="memory: seven child interpreters, up to five million rows each")
+@pytest.mark.extended(reason="memory: eight child interpreters, up to five million rows each")
 @pytest.mark.serial
 @pytest.mark.pins
 def test_the_peak_memory_of_the_standard_runs_within_its_budget(tmp_path):
@@ -636,7 +664,8 @@ def test_the_peak_memory_of_the_standard_runs_within_its_budget(tmp_path):
         spec, df = _spec(case)
         src, dst = tmp_path / f"{case}.parquet", tmp_path / f"{case}.out.parquet"
         df.write_parquet(src)
-        measured[f"rss.{case}.{PLATFORM}"] = _peak(case, spec, src, dst, df.height)
+        rows = df.height // BAR_ROWS if case == "bars_5m" else df.height
+        measured[f"rss.{case}.{PLATFORM}"] = _peak(case, spec, src, dst, rows)
         if case == "streaming_5m":
             # The negative control: the same rows read whole and then planned
             # must fail the streamed run's budget, or the budget cannot see

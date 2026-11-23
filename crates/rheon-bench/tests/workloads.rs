@@ -5,10 +5,10 @@
 
 use polars::prelude::*;
 use rheon_bench::{
-    BANK_CASES, CLOCK_CASES, GROUPS, MODEL_CASES, ROWS, SILENT_CASES, SPAN_CASE, WARM_ROWS,
-    WIDE_CASES, WIDE_ROWS, WINDOW_CASES, bank_setup, clock_setup, model_setup,
-    rheon_budget_bank_rows, rheon_budget_clock_rows, rheon_budget_model_rows,
-    rheon_budget_windows_rows, spec, windows_setup,
+    BANK_CASES, BAR_CASES, BAR_GROUPS, CLOCK_CASES, GROUPS, MODEL_CASES, ROWS, SILENT_CASES,
+    SPAN_CASE, WARM_ROWS, WIDE_CASES, WIDE_ROWS, WINDOW_CASES, bank_setup, bars_setup, clock_setup,
+    model_setup, rheon_budget_bank_rows, rheon_budget_bars_rows, rheon_budget_clock_rows,
+    rheon_budget_model_rows, rheon_budget_windows_rows, spec, windows_setup,
 };
 use rheon_polars::{AnyModel, ChunkOut, PAR_MIN_ROWS, Stream};
 
@@ -32,6 +32,7 @@ fn the_bench_names_every_case_and_nothing_else() {
         .chain(BANK_CASES)
         .chain(WIDE_CASES)
         .chain(WINDOW_CASES)
+        .chain(BAR_CASES)
         .copied()
         .chain(scaled.iter().map(String::as_str))
         .collect();
@@ -289,6 +290,43 @@ fn every_window_case_reads_its_block_inside_the_first_window() {
             WARM_ROWS + ROWS
         };
         assert_eq!(run.run.queued(), held, "{id}: a row left the window");
+    }
+}
+
+/// Each bar case closes bars in its block, about one in 20 rows (volume
+/// bars of 1,000 over sizes of 1 to 100), and the grouped one closes them
+/// across many of its groups, so the count is the path of a row that adds
+/// to an open bar and of one that closes it, with every aggregate filled.
+#[test]
+fn every_bar_case_closes_bars_through_its_block() {
+    for &id in BAR_CASES {
+        let mut run = bars_setup(id);
+        let out = rheon_budget_bars_rows(&mut run);
+        let grouped = id.ends_with("_groups100");
+        let (lo, hi) = if grouped { (25, 90) } else { (30, 80) };
+        assert!(
+            (lo..=hi).contains(&out.height()),
+            "{id}: {} bars",
+            out.height()
+        );
+        let complete = out.column("complete").unwrap().bool().unwrap();
+        assert!(complete.all(), "{id}");
+        // A bar's own volume is the threshold give or take the carried
+        // remainder, under one row's size.
+        let volume = out.column("volume").unwrap().f64().unwrap();
+        assert!(
+            volume
+                .into_no_null_iter()
+                .all(|v| (900.0..1_100.0).contains(&v)),
+            "{id}"
+        );
+        if grouped {
+            let groups = out.column("g").unwrap().n_unique().unwrap();
+            assert!(
+                groups * 4 > BAR_GROUPS,
+                "{id}: {groups} groups closed a bar"
+            );
+        }
     }
 }
 

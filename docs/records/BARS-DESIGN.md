@@ -680,6 +680,36 @@ made these:
   bytes, and a new fixture, `with_windows_tick`, freezes the form with
   carried signs. A build without `tick_sign` refuses such a state by the
   operator's name in its formulas, not by a version number.
+- **The budgets are two instruction cases and a resident-memory case.**
+  `bars_volume` counts one `Bars::feed` of 1,000 rows of volume bars of
+  1,000 over sizes of 1 to 100, about 20 rows a bar, with the open, high,
+  low and close of the price, the volume and the rows: the exact running
+  total, the crossing test and six aggregates a row, about 50 bars closed.
+  `bars_volume_groups100` is the same over 100 groups, one row of each in
+  turn after 20 a group, so a row finds its group's open bar and about half
+  the groups close one. Each takes CI's first count as its budget, as a new
+  case does; locally (Callgrind, gungraun 0.20.0, rustc 1.100.0, x86-64
+  Linux, not CI's pinned toolchain) they counted 1,735,679 and
+  2,276,447 instructions, about 1,736 and 2,276 a row, beside the 1,538,670
+  budget of `window_ewm_sum_w10k`, a decayed window sum over the same rows.
+  `rss.bars_5m` streams five million rows from a parquet scan through count
+  bars of 100 rows with six aggregates to a parquet sink, as the bank's
+  `streaming_5m` does, and takes CI's floor-leg readings as its budgets.
+  Linux read 136.7 and 136.3 MiB locally, the bank's run 130.9 and 131.2
+  beside it. The peak is not flat in the stream's length: 56, 98 and 136
+  MiB at 1M, 3M and 5M rows, where the bank's run read 123 at 1M. The bars'
+  state is not the cause: it saves to 825 bytes at 100,000 rows and at a
+  million, and the core's live heap is flat over 40 chunks of 100,000
+  rows. The same rows fed from memory hold flat (12.7 MiB over 30 chunks),
+  and fed from the scan the process's memory rises over the first chunks
+  and falls back as they are consumed, so the growth points to the parquet
+  scan's decoded batches held ahead of the operator, under
+  `POLARS_ROW_GROUP_PREFETCH_SIZE=1` and four threads on py-polars 2.1.0;
+  why the bank's slower consumer is not read as far ahead is not traced.
+  It is reported, not fixed here: the budget holds the 5M-row figure, so
+  it would catch the growth getting worse.
+  The design's case of the state per group is `Bars::group_bytes`, which
+  the caps already check, rather than a budget.
 
 ## Questions
 
