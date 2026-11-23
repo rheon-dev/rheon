@@ -374,8 +374,33 @@ pub fn lars_lasso_weighted(
     if weights.iter().all(|&w| w == 1.0) {
         return Ok(lars_lasso_rows(rows, d, live, limits));
     }
+    // The weights taken to a power of two near 1, exactly: `R̃` holds
+    // `1/(w_i w_j)`, which was 0 at weights of `1e200`, every column then
+    // collinear and every slope 0, and infinite at `1e-160` (review
+    // 2026-11-23, MATH-8). Weights `c` times larger are the penalty `λ/c`,
+    // so the path is the same, its penalties times `c`; a power of two
+    // moves no bit of it. Weights further apart than `R̃` can hold are
+    // refused.
+    let (lo, hi) = (0..k)
+        .filter(|&j| live[j])
+        .fold((f64::INFINITY, 0.0_f64), |(lo, hi), j| {
+            (lo.min(weights[j]), hi.max(weights[j]))
+        });
+    if hi > lo * 1.157_920_892_373_162e77 {
+        return Err(format!(
+            "penalty weights must lie within a factor of 2^256 (about 1.2e77) of each other, \
+             but they run from {lo} to {hi}, and the weighted correlations of weights that far \
+             apart are past what a double holds. Set the smallest weights nearer the others."
+        ));
+    }
+    let centre = if hi > 0.0 {
+        -((lo.log2() + hi.log2()) / 2.0).round() as i32
+    } else {
+        0
+    };
+    let c = 2f64.powi(centre);
     let w: Vec<f64> = (0..k)
-        .map(|j| if live[j] { weights[j] } else { 1.0 })
+        .map(|j| if live[j] { weights[j] * c } else { 1.0 })
         .collect();
     let dt: Vec<f64> = (0..k).map(|j| d[j] / w[j]).collect();
     let mut path = lars_lasso_rows(&Weighted { rows, w: &w }, &dt, live, limits);
@@ -383,6 +408,10 @@ pub fn lars_lasso_weighted(
         for (v, wj) in row.iter_mut().zip(&w) {
             *v /= wj;
         }
+    }
+    // `λ Σ w̃_j |b_j|` with `w̃ = c w` is `(λ c) Σ w_j |b_j|`.
+    for p in &mut path.penalties {
+        *p *= c;
     }
     Ok(path)
 }

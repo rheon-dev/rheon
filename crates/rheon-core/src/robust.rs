@@ -2849,9 +2849,9 @@ impl OnlineModel for Robust {
             // old fit back, which the fit now learns from (task 278, D10;
             // `Self::slot_predictions` predicts nothing from such a target).
             // A state written before schema 64 keeps it, as it did. The
-            // refit's buffer keeps the model's factor, a factor of 0 being
-            // no row it holds (`RefitBuf::fits`): a history that far below
-            // a row's weight is no history its replay reads apart from 0.
+            // refit's buffer keeps the model's factor, a factor of 0 (a gap
+            // past the decay's underflow) among them (`RefitBuf::fits`):
+            // the rows before it weigh nothing in its replay.
             let lam_t = if self.cfg.min_weight_holds_learning {
                 lam
             } else {
@@ -3154,7 +3154,10 @@ impl OnlineModel for Robust {
                                 m.cfg.huber_scale == HuberScale::Mad,
                             )
                         })
-                };
+                    // A place on the clock exactly under a span, as `sgd`'s:
+                    // a span without one never closed (review 2026-11-23,
+                    // REG-16).
+                } && m.place.is_some() == m.cfg.refit_clock.is_some();
                 if !refit_fits {
                     return Err(StateError::Invalid(format!(
                         "{kind}: it is damaged, since the rows it saved for its refit do not match {kind}_refit_rows. Load an undamaged copy of the state file, or rebuild it from its input."

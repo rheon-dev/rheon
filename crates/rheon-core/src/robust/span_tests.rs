@@ -351,3 +351,37 @@ fn an_ageing_row_is_held_to_the_spans_cap() {
         assert!(m.state_over_cap().is_some(), "{loss:?}");
     }
 }
+
+/// A state whose place on the clock does not match its refit's span is
+/// refused (review 2026-11-23, REG-16), as `sgd`'s is: a span's state
+/// without its place never closed its span, and held rows until the byte
+/// cap stopped them; a place without a span is a state no configuration
+/// writes.
+#[test]
+fn a_state_whose_place_does_not_match_its_span_is_refused() {
+    let span = Robust::new(RobustCfg {
+        refit_clock: Some(40.0),
+        ..base(HUBER, HuberScale::Mad)
+    })
+    .unwrap();
+    let rows_ = Robust::new(RobustCfg {
+        refit_rows: 40,
+        ..base(HUBER, HuberScale::Mad)
+    })
+    .unwrap();
+    for (m, place) in [
+        (span, None),
+        (rows_, Some(crate::clock_span::Place::default())),
+    ] {
+        let mut s = m.state();
+        assert!(Robust::restore(&s).is_ok());
+        let crate::ModelState::Robust(inner) = &mut s.model else {
+            unreachable!()
+        };
+        inner.place = place;
+        match Robust::restore(&s) {
+            Err(crate::StateError::Invalid(e)) => assert!(e.contains("refit"), "{e}"),
+            other => panic!("{other:?}"),
+        }
+    }
+}

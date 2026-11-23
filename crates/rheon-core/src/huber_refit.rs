@@ -304,7 +304,7 @@ struct RefitBufFile {
 impl From<RefitBufFile> for RefitBuf {
     /// The buffer and its tree. A buffer whose rows are not `learned` rows
     /// of one width with an `|e|` each, or whose scale's factors are not
-    /// each in `(0, 1]`, holds no tree; the configuration's check refuses
+    /// each in `[0, 1]`, holds no tree; the configuration's check refuses
     /// it ([`RefitBuf::fits`]) before any row reads one.
     fn from(f: RefitBufFile) -> Self {
         let mut b = Self {
@@ -327,7 +327,7 @@ impl From<RefitBufFile> for RefitBuf {
             .flatten();
         let shaped =
             b.resid.as_ref().is_some_and(|r| r.len() == n) && b.ages.len().is_multiple_of(4);
-        let factor = |f: f64| f > 0.0 && f <= 1.0;
+        let factor = |f: f64| (0.0..=1.0).contains(&f);
         if let (Some(nf), true) = (width, shaped)
             && b.rows.chunks_exact(nf + 4).all(|r| factor(r[nf + 3]))
             && b.ages.as_chunks::<4>().0.iter().all(|a| factor(a[1]))
@@ -687,13 +687,14 @@ impl RefitBuf {
 
     /// Whether a restored buffer is one this configuration writes: exactly
     /// `learned` rows of `nf` features, fewer than `cap`, each weight above 0
-    /// and each factor in (0, 1]; runs of whole counts, factors in (0, 1],
+    /// and each factor in [0, 1] (0 a gap past the decay's underflow); runs
+    /// of whole counts, factors in [0, 1],
     /// following learned rows in order, at most the cap's number; an `|e|`
     /// a learned row where it keeps them, which it may only under the MAD
     /// (`mad`), each finite and at least 0 or [`NOT_TAKEN`]; none once done, and
     /// neither mark while open.
     pub(crate) fn fits(&self, nf: usize, cap: u32, mad: bool) -> bool {
-        let factor = |f: f64| f > 0.0 && f <= 1.0;
+        let factor = |f: f64| (0.0..=1.0).contains(&f);
         let resid_fit = self.resid.as_ref().is_none_or(|r| {
             mad && r.len() == if self.done { 0 } else { self.learned as usize }
                 && r.iter()
@@ -2087,7 +2088,15 @@ mod tests {
         assert!(bad(&|c| c.learned = 0), "rows held before any was learned");
         assert!(bad(&|c| c.rows[2] = 0.0), "a learned row of no weight");
         assert!(bad(&|c| c.rows[3] = 1.5), "a factor above 1");
-        assert!(bad(&|c| c.ages[1] = 0.0), "a run's scale factor of 0");
+        // A factor of 0 is a gap past the decay's underflow, which a buffer
+        // holds (REG-1); one below 0, or NaN, no stream writes.
+        assert!(!bad(&|c| c.ages[1] = 0.0), "a run's scale factor of 0");
+        assert!(!bad(&|c| c.rows[3] = 0.0), "a row's scale factor of 0");
+        assert!(bad(&|c| c.ages[1] = -0.5), "a run's scale factor below 0");
+        assert!(
+            bad(&|c| c.rows[3] = f64::NAN),
+            "a row's scale factor of NaN"
+        );
         assert!(bad(&|c| c.ages[2] = 1.5), "a run of no whole count");
         assert!(bad(&|c| c.ages[2] = 0.0), "a run of no rows");
         assert!(bad(&|c| c.ages[3] = 2.0), "a run after a row not learned");

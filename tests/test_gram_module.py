@@ -461,6 +461,46 @@ class TestMerge:
         # lose a digit or more over the same split.
         assert max(worst.values()) < 1e-8, worst
 
+    @pytest.mark.parametrize("within", [False, True])
+    @pytest.mark.parametrize("fit_intercept", [True, False])
+    def test_a_part_with_no_weight_on_a_target_takes_nothing_from_it(self, within, fit_intercept):
+        """A part whose target has no weight, its moments for that target
+        NaN as a Gram from elsewhere may hold them (review 2026-11-23,
+        MATH-3): the merge weighted each by its share, and ``0 * nan`` made
+        the pooled target's moments NaN. The merge with it is the other part
+        alone, for that target."""
+        df = gappy_stream(n=1500, seed=3)
+        bank = fit(df, targets=["ya", "yb"], target_gaps="pairwise", fit_intercept=fit_intercept)
+        (g,) = bank.gram("m")
+        empty = {k: (v.copy() if isinstance(v, np.ndarray) else v) for k, v in g.items()}
+        t = 1
+        empty["target_weights"][t] = 0.0
+        for key in (
+            "target_means",
+            "target_vars",
+            "cross_moments",
+            "cross_centered",
+            "means_by_target",
+        ):
+            if empty.get(key) is not None:
+                empty[key] = np.asarray(empty[key], dtype=float).copy()
+                empty[key][t] = np.nan
+        merged = pg.merge([g, empty], within=within)
+        alone = pg.merge([g, g], within=within)
+        for key in (
+            "target_vars",
+            "cross_moments",
+            "cross_centered",
+            "target_means",
+            "means_by_target",
+        ):
+            got, want = merged.get(key), alone.get(key)
+            if got is None or want is None:
+                continue
+            got, want = np.asarray(got, dtype=float)[t], np.asarray(want, dtype=float)[t]
+            assert np.all(np.isfinite(got)), (key, got)
+            assert got == pytest.approx(want, rel=1e-9, abs=1e-12), key
+
     def test_merging_one_gram_returns_it_unchanged(self):
         """Review 2026-10-05 (YB8): the docstring says so, and the merge of one
         part came back with ``group`` and ``instance`` None and without its
@@ -800,6 +840,26 @@ class TestCoefStats:
         assert st["resid_var"] == pytest.approx(resid.var(), rel=1e-6)
         assert st["r2"] == pytest.approx(1 - resid.var() / y.var(), rel=1e-6)
         assert st["n"] == pytest.approx(len(y), rel=1e-9)
+
+    def test_an_intercept_off_the_fit_counts_in_the_residuals(self):
+        """Coefficients whose intercept is not least squares' (review
+        2026-11-23, MATH-4): the residuals' variance about their own mean
+        left out the intercept's error, so ``[100, 2]`` on ``y = 2x`` read
+        ``r2`` 1 and ``sigma2`` 0. Their mean square is now read, which for
+        ``solve``'s coefficients is the variance it was, the mean being 0."""
+        df, _ = stream(n=5000, k=3, seed=13)
+        bank = fit(df, ridge=1e-12, standardize=False, max_rows_between_solves=1)
+        g = bank.gram("m")[0]
+        X = df.select("x0", "x1", "x2").to_numpy()
+        y = df["y"].to_numpy()
+        b = pg.solve(g, ridge=1e-12)
+        off = b.copy()
+        off[0] += 10.0
+        for coef in (b, off):
+            st = pg.coef_stats(g, coef)
+            resid = y - (coef[0] + X @ coef[1:])
+            assert st["resid_var"] == pytest.approx(np.mean(resid**2), rel=1e-6)
+            assert st["r2"] == pytest.approx(1 - np.mean(resid**2) / y.var(), rel=1e-6)
 
     def test_standard_errors_against_the_textbook_formula(self):
         df, _ = stream(n=5000, k=3, seed=14)

@@ -829,6 +829,168 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **`rheon.gram.merge` takes nothing from a part with no weight on a
+  target** (review 2026-11-23, MATH-3). The merge weights each part's
+  target moments by its share of the target's weight, so a part with none
+  entered at a share of 0. A Gram built elsewhere may hold NaN for a target
+  it has no rows of, and `0 · NaN` made the pooled moments NaN, under
+  `within=True` too. A part's moments for a target it has no weight on are
+  now read as 0, and the merge with it is the other parts alone for that
+  target. The Grams `ModelBank.gram()` returns hold 0 there and merge as
+  before.
+
+- **`rheon.gram.coef_stats` counts an intercept off the fit in the
+  residuals** (review 2026-11-23, MATH-4). Its residual variance was the
+  residuals' variance about their own mean, so coefficients whose
+  intercept was not least squares' `ȳ − m'b` read as fitting better than
+  they do: `[100, 2]` on `y = 2x` gave `r2` 1 and `sigma2` 0. It is now
+  their mean square, with the intercept's error squared added, which is 0
+  to a rounding for the coefficients `rheon.gram.solve` returns.
+
+- **`huber` and `quantile` refuse a state whose refit span has no place on
+  the clock** (review 2026-11-23, REG-16). A refit over a span of the
+  clock keeps where the span began, and `sgd`'s load checked that a state
+  has that place exactly when its configuration has a span, but
+  `huber`'s and `quantile`'s did not. A damaged state without its place
+  loaded and never closed its span, holding rows until `max_state_bytes`
+  stopped them. It is now refused as damaged, as `sgd`'s is.
+
+- **`lasso` reads the size a decayed stream grows to with its first row at
+  no clock** (review 2026-11-23, LASSO-2). A descent that runs out of
+  sweeps is not counted in `solve_failures` while the Gram's rows are too
+  few for its features and more rows would cure it. Whether they would is
+  read from the Kish size the stream settles at under its decay, from the
+  product of the decays the Gram has taken. The first row has no clock
+  before it and decays by 1, so that product is `λ^{t−1}` after `t` rows,
+  where it was read as `λᵗ`. The settled size came out up to twice the
+  true one, so at 50 features a half-life of 30, which settles at 87 rows
+  against a bound of 115, was excused on its first rows. The decay per row
+  is now solved from the size and the product together. Moves: `lasso.*`.
+
+- **A positive definite system whose trace is past the largest double
+  solves** (review 2026-11-23, SOLVE-1). The factorization's jitters are
+  multiples of the mean diagonal, the trace over `k`. At `diag(1e308,
+  1e308)` the trace was infinite, the first rung's jitter `0 · ∞` NaN, and
+  every rung failed, so the fit was counted a failure. The first rung now
+  adds nothing whatever the base, and the base is the sum of each entry
+  over `k` where the trace is infinite. A finite trace keeps its bits.
+
+- **The weighted LARS path holds at penalty weights near the ends of the
+  doubles** (review 2026-11-23, MATH-8). The path with a penalty weight
+  per column runs on the correlations over `w_i w_j`, which were 0 at
+  weights of `1e200`, so every column read as collinear and every slope
+  stayed 0, and infinite at `1e-160`. The weights are now taken to a power
+  of two near 1 first, which moves no bit of the path and multiplies its
+  penalties back. Weights more than `2^256` (about `1.2e77`) apart, past
+  what those correlations can hold, are refused with a message that says
+  so.
+
+- **`sgd`'s and `pa`'s coefficient constraints project soundly at any
+  feature scales** (review 2026-11-23, REG-8 and REG-19). Under
+  `standardize=True` the projection onto `coef_min`, `coef_max` and
+  `coef_sum` takes steps of `1/s_i²` per unit of its multiplier, `s_i` each
+  feature's scale. At a spread near `1e-155` that step is infinite, and the
+  fit was NaN for good from the row the warm-up ended. Near `1e-154` the
+  sum of the steps was infinite and the point was left off the sum. At
+  scales `10^156` apart a breakpoint left the doubles and was dropped from
+  the search, and the point was off the sum by a third; at `10^85` apart
+  the steps cancelled and a coefficient read `-3.6·10^121`. Where a step is
+  not a normal double, a breakpoint of a finite bound is lost, or the point
+  is off the sum, the projection is now made again in the caller's units
+  by scale groups. It solves the coordinates within `2^53` of the smallest
+  scale with steps normalized to at most 1, holding the stiffer ones where
+  they are while the others can meet the sum, and then meets the sum from
+  itself. A projection that was sound keeps its bits. A coordinate whose
+  value in the standardized coordinates is not a double, such as
+  `coef_min = 1e-220` at a scale of `1e-110`, still rounds there.
+  Moves: `sgd.*`, `pa.*`.
+
+- **`lasso`'s warm start begins at 0 where the last fit is not a number in
+  the new scale** (review 2026-11-23, LASSO-3). Each solve starts from the
+  last one's coefficients times the features' new spreads. A coefficient
+  near `1e229`, fitted while a feature's spread was `1e-130` beside a
+  target near `1e99`, is finite, but times a spread widened to `1e99` it
+  is not: the descent started at `±inf` and the fit was counted a failure
+  and withheld. Such a coordinate now starts at 0, and the solve converges.
+  Moves: `lasso.*`.
+
+- **`ftrl`'s and `sgd`'s AdaGrad sums never pass the largest double**
+  (review 2026-11-23, REG-9). A row whose squared gradient would overflow
+  was skipped, but not one whose square fits while the sum it joins does
+  not: two gradients of `1.2·10^154` left the sum infinite. Under `ftrl`
+  the step from it made the coefficient NaN for good; under
+  `sgd(learning_rate="adagrad")` with an infinite `clip_gradient` the
+  slot's steps were 0 for good, and NaN after a gap past the decay's
+  underflow. Such a row is now skipped as the square's check skips one:
+  under `ftrl` by a bound on the largest sum, which also refuses a step
+  past the largest double at a small `alpha`, and under `sgd` slot by slot.
+  `ftrl` forms the largest gradient in the update's own order, so a row
+  whose gradient overflowed while the check's did not is refused too.
+  Rows of ordinary size move nothing. Moves: `ftrl.*`, `sgd.*`.
+
+- **`sgd`'s Huber refit on the row its scaler's warm-up completes is
+  projected with the scaler's means** (review 2026-11-23, REG-6). Under
+  `standardize=True` and a constraint, a refit projects its fit in the
+  metric of the standardized coordinates, and the intercept takes
+  `Σ m_i (β_i − β'_i)` of the slopes' move. The map of means and scales it
+  reads is formed only on a row that starts in the caller's units, so on
+  the switching row it was still `m = 0`, `s = 1`: the intercept kept the
+  unprojected value (off by 1.46 on a 60-row test stream). It is now the
+  scaler's on that row. Moves: `sgd.*`.
+
+- **`ewridge`'s residual variance stays finite where a weighted square of
+  a residual is past the largest double** (review 2026-11-23, REG-10). At
+  a weight of `1e100` and a residual of `2·10^104` the square is in range
+  but `w·r·r` overflowed, so `σ²` was infinite, and at the next gap past
+  the decay's underflow `0·∞` made it NaN for good, with `sigma2`,
+  `se_coef` and `pred_se`. Such a mean is now formed as the mean of shares,
+  and a square past the largest double ages `σ²`'s weight as a row without
+  a prediction does. A finite mean keeps its bits. Moves: `ewridge.*`.
+
+- **`holt` keeps a finite level and trend across a clock step too small
+  for its slope** (review 2026-11-23, REG-4). A step was read as clock
+  wherever its reciprocal is finite, so at `y = 0, 10` a step of `1e-308`
+  apart measured a slope of `5·10^308`, past the largest double. The trend
+  was infinite, and the level NaN for good from the next row. Such a step
+  is now read as one of no clock, as a step whose reciprocal is infinite
+  already was: the level moves and the trend holds. A trend or a level
+  whose weighted mean is in range while `w·slope` or `held·pred` is not
+  (a step of `1e-200`, a rise of `1e50`, a weight of `1e100`) is formed as
+  the mean of shares. A finite trend and level keep their bits.
+  Moves: `holt.*`.
+
+- **`holt`'s line fit keeps its slope at weights near the ends of the
+  doubles** (review 2026-11-23, REG-5). The spread of the ages took the
+  term `S0·w·ā²/S0'` in that order, so `S0·w` underflowed to 0 at weights
+  near `2^-512` and overflowed near `2^512` beside a long clock step. The
+  slope's gain was then lost: a straight line at every weight `1e-200`
+  forecast 41% short. Where `S0·w·ā²` is not a normal double the term is
+  now formed from `S0/S0'` first; a term formed in range keeps its bits.
+  Only streams at such weights move. Moves: `holt.*`.
+
+- **A coordinate descent that runs to infinities is not converged**
+  (review 2026-11-23, LASSO-1). `lasso`'s and the Gram path's descent end
+  when a sweep's largest move is under the tolerance. On a correlation
+  matrix that is not positive semidefinite, which a window's subtraction
+  can leave, the moves grow until the coefficients are `±inf`. There
+  `|inf − inf|` is NaN, which `f64::max` drops, so the sweep read as one
+  that moved nothing and the fit counted as converged. A descent that
+  settles now converges only at finite coefficients; one that does not is
+  counted in `solve_failures`, and its prediction is withheld as before.
+
+- **A gap past the decay's underflow while a refit buffer is open forgets
+  the rows before it, and the state saves and loads** (review 2026-11-23,
+  REG-1). At a half-life `h`, a gap of `1075 h` or more decays by exactly
+  0. Under `huber`, `quantile` or `sgd(loss="huber")` with a refit still
+  filling and the MAD scale, a row whose target was null across such a gap
+  took `frexp(0)` in the held median: a debug build panicked, and a release
+  build read `2^-1087` for the 0, so the rows before the gap kept their
+  weight in the scale. A row learned across the gap stored its factor of 0
+  in the buffer, and the load refused it as damaged. The held median now
+  lets every row go on a run of decays of 0, as on one decay of 0, and a
+  buffer's factors may be 0. Only streams with such a gap move.
+  Moves: `huber.*`, `quantile.*`, `sgd.*`.
+
 - **A window looking ahead whose far edge is the input's last row is whole
   at the end of the input** (PLAN 565). Under `closed="right"` or `"both"`,
   `rp.ewm_sum`, `rp.ewm_mean`, `rp.ewm_rate` and `rp.ewm_quantile` with

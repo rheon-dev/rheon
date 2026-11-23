@@ -232,7 +232,20 @@ impl Holt {
         // gain `w·ā·∞` made the trend NaN for good (review fable2, C7).
         let r0 = 1.0 / s0_new;
         let age = s0 * aged * r0;
-        let spread = self.fit_spread[j] + s0 * w * aged * aged * r0;
+        // The spread's term `S0·w·ā²/S0'`. Where `S0·w·ā²` is not a normal
+        // double -- weights near `2^{-512}`, or near `2^{512}` with a long
+        // clock step -- the term is formed from `S0/S0'`, in [0, 1], first:
+        // `S0·w` underflowed to 0 and lost the slope's gain, or overflowed
+        // and left it 0 for good, where the term itself is in range (review
+        // 2026-11-23, REG-5). A term formed in range keeps its bits.
+        let swa = s0 * w * aged * aged;
+        let term = swa * r0;
+        let term = if swa.is_normal() && term.is_normal() {
+            term
+        } else {
+            s0 * r0 * w * aged * aged
+        };
+        let spread = self.fit_spread[j] + term;
         self.fit_weight[j] = s0_new;
         self.fit_age[j] = age;
         self.fit_spread[j] = spread;
@@ -399,7 +412,15 @@ impl OnlineModel for Holt {
                     g
                 }
                 _ => {
-                    self.level[j] = (held * p + weight * yj) * rh;
+                    let mean = (held * p + weight * yj) * rh;
+                    // `held·p` or `w·y` past the largest double, where the
+                    // mean is in range: the mean of shares, `held/(held +
+                    // w)` and `w/(held + w)` each in [0, 1] (REG-4).
+                    self.level[j] = if mean.is_finite() {
+                        mean
+                    } else {
+                        (held * rh) * p + gain * yj
+                    };
                     gain
                 }
             };
@@ -426,7 +447,7 @@ impl OnlineModel for Holt {
                     let slope = (level - prev_level) * ri;
                     (held_b * trend + weight * slope) * rb
                 };
-                self.trend[j] = match (line, textbook) {
+                let next = match (line, textbook) {
                     // Both gains are on offer: both trends are formed and
                     // the larger gain's is kept by a select, not a branch.
                     // Which gain is the larger turns on the row's clock
@@ -446,6 +467,35 @@ impl OnlineModel for Holt {
                     (None, true) => by_textbook(),
                     (None, false) => trend,
                 };
+                // A trend past the largest double: `w·slope` alone past it,
+                // which the mean of shares forms in range; or the slope
+                // itself, a move over a clock step so small that it is not
+                // a double (`y = 0, 10` a step of `1e-308` apart), read as
+                // a step of no clock, as one whose reciprocal is infinite
+                // is, so the trend holds. An infinite trend made the level
+                // NaN on the next row, for good (review 2026-11-23, REG-4).
+                // A finite trend takes neither branch: its bits are as
+                // before.
+                let (next, clocked) = if next.is_finite() {
+                    (next, clocked)
+                } else {
+                    let by_textbook = match (line, textbook) {
+                        (Some((_, h)), true) => {
+                            h.partial_cmp(&(weight * rb * level_gain * ri))
+                                != Some(std::cmp::Ordering::Greater)
+                        }
+                        (None, true) => true,
+                        _ => false,
+                    };
+                    let slope = (level - prev_level) * ri;
+                    let shares = (held_b * rb) * trend + (weight * rb) * slope;
+                    if by_textbook && shares.is_finite() {
+                        (shares, clocked)
+                    } else {
+                        (trend, false)
+                    }
+                };
+                self.trend[j] = next;
                 if clocked {
                     self.w_trend[j] = held_b + weight;
                 }
@@ -1870,6 +1920,79 @@ mod tests {
                 );
             }
             assert!((last - 4.99).abs() < 1e-2, "{w0:e}, {d1:e}: {last}");
+        }
+    }
+
+    /// A clock step small enough that the slope it measures is past the
+    /// largest double leaves the fit finite (review 2026-11-23, REG-4):
+    /// at `y = 0, 10, 20` and a step of `1e-308`, `1/s` is finite, so the
+    /// step was read as clock, and the slope `5·10^308` made the trend
+    /// infinite and the level NaN for good. Such a step is read as one of
+    /// no clock, as one whose reciprocal is infinite is. And a slope
+    /// within range at a weight past it (`s = 1e-200`, a rise of `1e50`,
+    /// `w = 1e100`) is formed without `w · slope` overflowing.
+    #[test]
+    fn a_slope_past_the_largest_double_leaves_the_fit_finite() {
+        for (d1, rise, w) in [
+            (1e-308, 10.0, 1.0),
+            (1e-200, 1e50, 1e100),
+            (1e-300, 1e10, 1.0),
+        ] {
+            for hl in [10.0, f64::INFINITY] {
+                let mut m = Holt::new(cfg(hl, hl)).unwrap();
+                m.step(&[], &[Some(0.0)], 0.0, w);
+                m.step(&[], &[Some(rise)], d1, w);
+                for i in 2..50 {
+                    m.step(&[], &[Some(rise * i as f64)], 1.0, w);
+                    assert!(
+                        m.level()[0].is_finite() && m.trend()[0].is_finite(),
+                        "{d1:e}, {rise:e}, {w:e}, {hl}: row {i}, {:?}",
+                        m.coefficients()
+                    );
+                }
+            }
+        }
+    }
+
+    /// Scaling every weight by a power of two moves no prediction past
+    /// rounding while the line fit's spread is inside the doubles (review
+    /// 2026-11-23, REG-5): it was formed as `S0 · w · ā² / S0'`, whose
+    /// `S0 · w` underflowed at `w = 2^{-660}` (the slope's gain lost, the
+    /// forecast of a straight line 41% short) and overflowed at `w =
+    /// 2^{330}` with a clock step of `10^60` (the slope's gain 0 for good).
+    /// Out of range it is formed as `(S0 / S0') · w · ā²`, each factor in
+    /// range, which rounds otherwise than the plain form.
+    #[test]
+    fn scaling_every_weight_by_a_power_of_two_moves_no_prediction() {
+        for (scale, step) in [
+            (2f64.powi(-660), 1.0),
+            (2f64.powi(330), 1e60),
+            (2f64.powi(-900), 1e30),
+        ] {
+            for hl in [5.0 * step, f64::INFINITY] {
+                let run = |w: f64| {
+                    let mut m = Holt::new(cfg(hl, 4.0 * hl)).unwrap();
+                    let mut s = 3u64;
+                    (0..60)
+                        .map(|i| {
+                            let y = 10.0 * i as f64 + lcg(&mut s);
+                            let d = if i == 0 {
+                                0.0
+                            } else {
+                                step * (1.0 + 0.5 * lcg(&mut s))
+                            };
+                            m.step(&[], &[Some(y)], d, w * (1.5 + lcg(&mut s))).pred[0]
+                        })
+                        .collect::<Vec<_>>()
+                };
+                let (got, want) = (run(scale), run(1.0));
+                for (i, (g, w)) in got.iter().zip(&want).enumerate() {
+                    assert!(
+                        g.to_bits() == w.to_bits() || (g - w).abs() <= 1e-12 * w.abs(),
+                        "{scale:e}, {step:e}, {hl}: row {i}, {g} against {w}"
+                    );
+                }
+            }
         }
     }
 }
