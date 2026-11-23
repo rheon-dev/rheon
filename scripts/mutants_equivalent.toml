@@ -4145,3 +4145,22 @@ line_has = "while x < 20.0 {"
 why = """the two differ only at `x = 20.0`, where the mutant shifts once more \
 (`x = 21`, `shift = ln 20`) and returns the same double: \
 `ln_gamma_at_the_series_edge` pins the bits at 20 and passes both ways"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/expectile.rs"
+function = "centred_solve"
+mutation = "replace > with >="
+line_has = "let p = k.checked_sub(1).filter(|&p| p > 0)?;"
+why = """at `p = 0` (an intercept alone) `chol_solve` is asked for a system of 0 \
+rows, whose largest diagonal `top` is 0 and not above 0, so it returns false \
+and `centred_solve` returns `None` there as the filter does"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/expectile.rs"
+function = "Expectile::solve"
+mutation = "replace > with >="
+line_has = "&& self.cfg.fit_intercept\n            && self.s[j] > 0.0"
+why = """`solve` runs after a row of positive weight has been added to `S`, so \
+`S > 0` wherever the line runs; and were `S` 0, `W` is too and the penalty \
+`r W / S` is NaN, whose pivots `chol_solve` refuses, so `centred_solve` \
+returns `None` as the skipped arm leaves the fit"""
