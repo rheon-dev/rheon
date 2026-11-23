@@ -24,6 +24,7 @@ BUILDERS = [
     "hawkes",
     "garch",
     "realized",
+    "power_variation",
     "bocpd",
     "corrchange",
     "deco",

@@ -48,7 +48,16 @@ FAMILIES: dict[str, tuple[str, ...]] = {
         "expectile",
         "holt",
     ),
-    "Moments and correlation": ("ew_cov", "marginal", "deco", "rcov", "audit", "garch", "realized"),
+    "Moments and correlation": (
+        "ew_cov",
+        "marginal",
+        "deco",
+        "rcov",
+        "audit",
+        "garch",
+        "realized",
+        "power_variation",
+    ),
     "Clustering and classification": ("kmeans", "micro", "ew_class"),
     "Sequential tests and regimes": ("seqtest", "corrchange", "bocpd", "hmm", "hawkes"),
 }
@@ -127,6 +136,14 @@ MEANING: dict[str, str] = {
         "returns before it; `sqrt(2/π)` times it is a standard normal without a jump"
     ),
     "lm_jump_<t>": "whether `lm_<t>` is a jump at confidence `lm_beta`, by Lee and Mykland's test",
+    "lrv_<t>": (
+        "a term named `lrv`, here a Parzen kernel sum of `<t>`'s returns before this row at a "
+        "bandwidth of 3: each term's field is named `<term>_<t>`"
+    ),
+    "n_<t>": (
+        "the count of `<t>`'s returns the terms are of: the returns a window holds, or Kish's "
+        "effective count of their decayed weights"
+    ),
     "u": (
         "the equicorrelation this row alone implies"
         " (Engle and Kelly's Lemma 2.3, from the standardized row)"
@@ -225,6 +242,8 @@ ALSO_NULL: dict[str, str] = {
         "before it is 0"
     ),
     "lm_jump_<t>": "where `lm_<t>` is, and where the count of returns is 1 or less",
+    "lrv_<t>": WITHHELD,
+    "n_<t>": WITHHELD,
     "u": (
         "while withheld, where fewer than two of the block's columns have a positive variance "
         "before the row, and where every standardized value is 0"
@@ -678,6 +697,8 @@ def stem(field: str, targets: tuple[str, ...], features: tuple[str, ...]) -> str
             "bns",
             "lm_jump",
             "lm",
+            "lrv",
+            "n",
         ):
             if base == f"{pre}_{t}":
                 return f"{pre}_<t>"

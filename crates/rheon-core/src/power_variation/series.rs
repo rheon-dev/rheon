@@ -443,7 +443,10 @@ impl Series {
                 Form::Multi { norm, .. } => {
                     let s = self.sum(t.at) / k;
                     match norm {
-                        Some(_) if n <= 0.0 => f64::NAN,
+                        // `n^e` has no value at `n = 0` for `e < 0`; at
+                        // `e = 0` it is 1 (`[2]`, `[1, 1]`: no factor of
+                        // `n`, as `realized`'s `rv` and `bv` read 0 there).
+                        Some((e, _)) if n <= 0.0 && *e < 0.0 => f64::NAN,
                         Some((e, c)) => s * (c * libm::pow(n, *e)),
                         None => s,
                     }

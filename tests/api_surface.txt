@@ -416,6 +416,15 @@
     coef_sum = None
     standardize = True
     common
+  power_variation:
+    name
+    targets
+    terms
+    window_rows = None
+    window_size = None
+    closed = 'right'
+    max_state_bytes = None
+    common
   quantile:
     name
     targets
@@ -981,6 +990,24 @@
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
     stream.min_weight = [2.0]
+    stream.robust_se_half_life = 50.0
+    stream.specification_half_life = 50.0
+    stream.tails_half_life = 50.0
+  power_variation(half_life=50.0, targets=['y'], terms={'rv': {'powers': [2]}, 'lrv': {'kernel': 'parzen', 'bandwidth': 3}}):
+    model.closed = "right"
+    model.decay.Halflife = 50.0
+    model.max_state_bytes = null
+    model.min_weight = 0.0
+    model.n_targets = 1
+    model.terms = [{"kind": {"multipower": {"normalize": false, "powers": [2.0]}}, "scale": 1}, {"kind": {"kernel": {"bandwidth": 3, "center": false, "flat_top": false, "kernel": "parzen"}}, "scale": 1}]
+    model.window_clock = null
+    model.window_rows = null
+    stream.breaks_half_life = 50.0
+    stream.calibration_half_life = 200.0
+    stream.feature_health_half_life = 50.0
+    stream.influence_half_life = 50.0
+    stream.max_error_inflation = "inf"
+    stream.min_weight = [0.0]
     stream.robust_se_half_life = 50.0
     stream.specification_half_life = 50.0
     stream.tails_half_life = 50.0
@@ -2427,6 +2454,18 @@
     weight_sum: f64
     settled_frac: f64
     withheld_reason: enum
+  power_variation minimal:
+    rv_y: f64
+    bv_y: f64
+    lrv_y: f64
+    n_y: f64
+    rv_z: f64
+    bv_z: f64
+    lrv_z: f64
+    n_z: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
   deco blocked:
     u_a: f64
     u_b: f64
@@ -2572,6 +2611,7 @@
     pair_t_stat: List[Float64]
   micro: the shared columns only
   pa: the shared columns only
+  power_variation: the shared columns only
   quantile: the shared columns only
   rcov:
     spec: String
@@ -2718,6 +2758,7 @@
   garch.vol: egarch, figarch, garch, gjr
   garch.dist: normal, skewt, t
   realized.closed: both, right
+  power_variation.closed: both, right
   marginal.closed: both, right
   ew_class.covariance_type: diag, full, tied
   ew_class.window_budget: refuse, thin
@@ -2880,6 +2921,7 @@
     marginal: bin_budget, bin_edges, bin_huber_delta, bin_refit_rows, bin_rule, bin_stat, bin_warm_rows, bins, closed, cross_lags, feature_moments, lags, max_rows_between_snapshots, refit_budget, serial_rule, shards, snapshot_every, window_budget, window_lags, window_size
     micro: beta_mu, eps, macro_link, max_clusters, max_rows_between_prunes, prune_every, scale_floor, standardize
     pa: c, coef_max, coef_min, coef_sum, eps, mode, standardize
+    power_variation: closed, max_state_bytes, terms, window_rows, window_size
     quantile: max_rows_between_solves, max_state_bytes, quantile, quantile_eps, quantile_refit_rows, quantile_refit_span, refit_budget, ridge, solve_every, standardize
     rcov: bandwidth, block_rows, iv_stride, jitter, kernel, kind, max_bandwidth, noise_stride, preavg_rows, psd, theta
     realized: closed, lm_beta, lm_window, max_state_bytes, window_rows, window_size

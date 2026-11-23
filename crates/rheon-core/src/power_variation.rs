@@ -48,7 +48,7 @@
 //! S ← f S + w · term   for each term ending at the row
 //! ```
 //!
-//! and a row reads `S / K`, scaled where `normalize` says. A centred kernel
+//! and a row reads `S / K`, scaled where `normalize` says. A centered kernel
 //! term keeps, beside its products `S`, the sums `A` of `c R_j`, `B` of `c
 //! R_{j−hK}` and `C` of `c` over the same products (`c = 1` at lag 0 and
 //! `2 c_h` beyond) and the weight `M₀` and sum `M₁` of the `R_j`, and reads
@@ -76,7 +76,7 @@
 //! keeps it). A window forgets by dropping, so it takes no decay.
 //!
 //! **The state.** Per target, the sums (16 bytes each: `W`, `V`, one a
-//! multipower or plain kernel term, six a centred kernel term), the last
+//! multipower or plain kernel term, six a centered kernel term), the last
 //! `K_max − 1` returns and, per scale, the last `K`-step returns its lags
 //! reach (8 bytes each); bounded by the settings, whatever the stream's
 //! length. A window adds `32` bytes, and a row it holds `16` (a stamp more

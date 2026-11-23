@@ -4,7 +4,7 @@
 //! West 1987 for the kernel sums; Zhang, Mykland and Aït-Sahalia 2005 for
 //! the subsampled grids), never from the online code: the oracle the online
 //! forms are held to in the Rust tests (docs/PLAN.md task 555). Each sum is
-//! carried in double-double, the `K`-step returns too, and a centred sum is
+//! carried in double-double, the `K`-step returns too, and a centered sum is
 //! taken about its mean directly, not by the online form's expansion.
 
 /// A sum in double-double: `hi + lo`, each term added by TwoSum.

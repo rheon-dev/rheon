@@ -2838,7 +2838,7 @@ fn garch_cfg(vol: GarchVol, dist: GarchDist) -> GarchCfg {
 }
 
 /// Two return series, a term of each form: a sum of squares, a normalized
-/// bipower term, a centred Parzen sum and a flat-top Bartlett sum of
+/// bipower term, a centered Parzen sum and a flat-top Bartlett sum of
 /// two-step returns.
 fn power_variation_cfg() -> PowerVariationCfg {
     let mp = |powers: &[f64], normalize: bool| PvTerm {

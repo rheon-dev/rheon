@@ -607,6 +607,7 @@ BUILDERS = {
     rp.spec.hawkes: dict(features=None, kernel_decays=[1.0, 5.0]),
     rp.spec.garch: dict(features=None, half_life=None),
     rp.spec.realized: dict(features=None),
+    rp.spec.power_variation: dict(features=None, terms={"rv": {"powers": [2]}}),
 }
 
 

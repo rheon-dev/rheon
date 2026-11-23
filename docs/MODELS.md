@@ -1,7 +1,7 @@
 <!-- kind: reference -->
 # Models
 
-The reference entry of each of the twenty-seven models a spec can name, by
+The reference entry of each of the twenty-eight models a spec can name, by
 family, for a reader who knows which model they want to look up. A
 model's parameters, their defaults and its refusals are in its docstring,
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md).
@@ -28,7 +28,7 @@ which models keep each, and why.
 
 ## The models at a glance
 
-The twenty-seven models fall into four families, and each family answers one
+The twenty-eight models fall into four families, and each family answers one
 kind of question about a stream. Each name links its builder's reference
 page, which gives its keywords and their defaults, and *entry* links its
 entry on this page. [Choose a model](how-to/choose-a-model.md) says which
@@ -57,6 +57,7 @@ to start with for which question.
 | [`audit`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.audit) · [entry](#audit--what-a-streams-columns-hold) | accumulate | what each column holds, counted in one pass: nulls, NaNs and infinities apart, repeated values, runs, persistence, tails and duplicated columns, and the clock's duplicate stamps and gaps, read back as a table and by `bank.check()` |
 | [`garch`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.garch) · [entry](#garch--how-large-will-the-next-return-be) | step | the GARCH family, a conditional variance for each return series: GARCH(1,1), GJR, EGARCH and FIGARCH, with normal, Student-t or skewed-t innovations, its parameters learned a row at a time after a start fitted by likelihood |
 | [`realized`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.realized) · [entry](#realized--how-much-did-it-move-and-did-it-jump) | accumulate | realized volatility and the jump tests on it, for each return series: realized variance, bipower and tripower variation, tripower quarticity, Barndorff-Nielsen and Shephard's ratio test, and Lee and Mykland's statistic of each return with its flag |
+| [`power_variation`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.power_variation) · [entry](#power_variation--power-variation-and-kernel-weighted-autocovariance) | accumulate | power variation and kernel-weighted autocovariance sums, for each return series: named multipower terms, kernel sums (Bartlett, Parzen, Tukey-Hanning, rectangular; flat-top or centered) and subsampled scales, with their count of returns |
 | **[Clustering and classification](#clustering-and-classification)** | | put labels on rows |
 | [`kmeans`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.kmeans) · [entry](#kmeans--exponentially-weighted-k-means) | step | exponentially weighted k-means: cluster labels assigned before the row is learned from, with a split–merge move that finds a cluster born after seeding |
 | [`micro`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.micro) · [entry](#micro--density-based-clustering-any-shape) | step | density-based clustering: DenStream micro-clusters linked into clusters of any shape and number, flagging the rows that belong to none |
@@ -267,7 +268,7 @@ per target, give `min_weight` a list. The default depends on the model:
 | the feature count plus one (1 for `holt`) | `ew_cov`, `ew_class`, `kmeans`, `micro`, `holt` |
 | 3 | `marginal`, `deco` |
 | 1 | `bocpd` |
-| 0, each having a gate of its own or nothing to gate | `ewridge`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes`, `garch`, `realized` |
+| 0, each having a gate of its own or nothing to gate | `ewridge`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes`, `garch`, `realized`, `power_variation` |
 
 **`min_settled_frac` is off by default.** Set it when the half-life was
 chosen to average over regimes or seasons that a shorter history would not
@@ -3173,6 +3174,45 @@ Where `realized` is not the measure you need:
   block's realized covariance robust to microstructure noise.
 - [`garch`](#garch--how-large-will-the-next-return-be), for a conditional
   variance fitted to the returns.
+
+### `power_variation` — power variation and kernel-weighted autocovariance
+
+*API:* [`rheon.spec.power_variation`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.power_variation) — *Rust:* [`power_variation.rs`](../crates/rheon-core/src/power_variation.rs) — *Outputs:* [fields](OUTPUTS.md#power_variation)
+
+Sums of powers of returns and of their kernel-weighted autocovariances,
+for each series of returns, one pass: the building block the realized
+measures are made of.
+
+Use `power_variation` on returns when the measure you need is one of these
+sums, or is composed from them in Polars. Each term is named, and its name
+names its fields:
+
+- **A multipower term** (`powers`): the sum of products of powers of
+  consecutive absolute returns, oldest first. `[2]` is the realized
+  variance, `[1, 1]` the bipower sum, `[4/3, 4/3, 4/3]` the tripower
+  quarticity's; with `normalize` each is Barndorff-Nielsen and Shephard's
+  multipower variation, `n^(Σp/2 - 1) / Π μ_p` times the sum.
+- **A kernel term** (`kernel`, `bandwidth`): `Σ_j [r_j² + 2 Σ_h c_h r_j
+  r_{j-h}]` for lags up to the bandwidth `H`, with the Bartlett, Parzen,
+  Tukey-Hanning or rectangular kernel at `c_h = k(h/(H + 1))`, Newey and
+  West's weights for the Bartlett kernel. `flat_top` gives lag 1 the full
+  weight, `c_h = k((h - 1)/H)`, the flat-top realized kernel, which takes a
+  bid-ask bounce out of a realized variance. `center` takes each product
+  about the mean, which is the HAC long-run variance times `n`.
+- **A scale** (`scale = K`) on either: the term of the `K`-step returns
+  at every row, divided by `K`, which averages it over the `K` offset grids.
+  The sum of squares at two scales is what two-scale realized variance is
+  composed from: `sub_K - (n̄_K / n̄_J) sub_J`, `n̄_K = (n - K + 1) / K`.
+
+Each target reports `n` beside its terms, the count of returns they are of:
+under a window the returns it holds, under a decay Kish's effective count
+`(Σ w)² / Σ w²`. No term carries a small-sample factor such as `n/(n - h)`;
+divide or multiply in Polars where a convention needs one. Its forms are
+`realized`'s: one pass, a decay, a window of rows (checked against
+`max_state_bytes` when the spec is built) and a window of the clock
+(checked as the rows go in); a term is in a window while every return in
+it is. Its parameters, their defaults and what each refuses are in its
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.power_variation).
 
 ## Clustering and classification
 

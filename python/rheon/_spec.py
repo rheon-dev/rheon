@@ -449,6 +449,7 @@ _NO_FEATURES = {
     "hawkes": "each of its targets is a node, whose values above 0 are its events",
     "garch": "each of its targets is a return series whose variance it models",
     "realized": "each of its targets is a return series it measures",
+    "power_variation": "each of its targets is a return series it measures",
 }
 
 #: The parameters renamed in one builder, or whose old name another keeps
@@ -725,6 +726,7 @@ __all__ = [
     "micro",
     "output_fields",
     "pa",
+    "power_variation",
     "quantile",
     "realized",
     "rls",
@@ -5040,6 +5042,7 @@ from rheon._spec_garch import garch  # noqa: E402
 from rheon._spec_glm import glm  # noqa: E402
 from rheon._spec_gradient import sgd  # noqa: E402
 from rheon._spec_point import hawkes  # noqa: E402
+from rheon._spec_power_variation import power_variation  # noqa: E402
 from rheon._spec_realized import realized  # noqa: E402
 from rheon._spec_regimes import hmm, rcov  # noqa: E402
 from rheon._spec_robust import huber, quantile  # noqa: E402

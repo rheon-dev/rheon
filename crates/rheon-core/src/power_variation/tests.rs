@@ -75,7 +75,7 @@ fn ker(kernel: PvKernel, bandwidth: usize, flat_top: bool, center: bool, scale: 
 
 /// Every form a term takes: the four of realized variance, bipower,
 /// tripower variation and quarticity, unequal powers, each kernel, flat-top
-/// and centred, and scales past 1.
+/// and centered, and scales past 1.
 fn terms() -> Vec<PvTerm> {
     let (t, q) = (2.0 / 3.0, 4.0 / 3.0);
     vec![
@@ -145,7 +145,7 @@ fn definition(t: &PvTerm, r: &[f64], om: &[f64], n: f64) -> (f64, f64) {
                     .map(|&p| series::abs_normal_moment(p))
                     .product();
                 let e = powers.iter().sum::<f64>() / 2.0 - 1.0;
-                if n > 0.0 {
+                if n > 0.0 || e >= 0.0 {
                     s * n.powf(e) / mu
                 } else {
                     f64::NAN

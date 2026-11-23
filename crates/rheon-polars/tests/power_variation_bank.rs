@@ -15,7 +15,7 @@ use rheon_polars::{Bank, Spec};
 const NAMES: [&str; 6] = ["rv", "bv", "lrv", "rk", "sub", "n"];
 
 /// The terms, in the spec's words: a sum of squares, normalized bipower
-/// variation, a centred Parzen sum, a flat-top Bartlett sum, and the sum of
+/// variation, a centered Parzen sum, a flat-top Bartlett sum, and the sum of
 /// squares of four-step returns.
 const TERMS: &str = r#""terms": [
     {"name": "rv", "powers": [2.0]},

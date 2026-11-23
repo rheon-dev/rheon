@@ -899,7 +899,7 @@ fn realized_golden() {
 
 /// `power_variation` on the same stream: a term of each form (a sum of
 /// squares, normalized bipower and tripower quarticity, unequal powers, a
-/// centred Parzen sum, a flat-top Bartlett sum, a Tukey-Hanning sum and the
+/// centered Parzen sum, a flat-top Bartlett sum, a Tukey-Hanning sum and the
 /// squares of three-step returns) and `n`, at the three rows, under a
 /// decay; the null target and the gap move them.
 #[test]

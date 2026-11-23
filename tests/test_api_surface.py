@@ -315,6 +315,18 @@ def describe_api(cli: Path | None = None) -> str:
         ("garch", dict(targets=["y", "z"], vol="gjr", dist="t", horizon=3)),
         ("realized", dict(targets=["y", "z"], half_life=100.0, lm_window=30)),
         (
+            "power_variation",
+            dict(
+                targets=["y", "z"],
+                half_life=100.0,
+                terms={
+                    "rv": {"powers": [2]},
+                    "bv": {"powers": [1, 1], "normalize": True},
+                    "lrv": {"kernel": "parzen", "bandwidth": 3, "center": True},
+                },
+            ),
+        ),
+        (
             "deco blocked",
             dict(
                 features=["x0", "x1", "x2", "x3"],
@@ -708,6 +720,13 @@ ENUM_PROBES: list[
     (
         "realized.closed",
         "realized",
+        {"half_life": float("inf"), "window_size": 100.0},
+        "model.closed",
+        "word",
+    ),
+    (
+        "power_variation.closed",
+        "power_variation",
         {"half_life": float("inf"), "window_size": 100.0},
         "model.closed",
         "word",
