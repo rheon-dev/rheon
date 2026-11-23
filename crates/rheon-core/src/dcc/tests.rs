@@ -403,6 +403,68 @@ fn the_start_and_the_floor_hold_at_their_edges() {
     assert!(out[60][0].is_finite());
 }
 
+/// `Q̄` from `n` rows of iid normal residuals, `k` series, as the start forms
+/// it (unit weights, the running mean).
+fn qbar_of(k: usize, n: usize, s: &mut u64) -> Vec<f64> {
+    let mut qbar = vec![0.0; k * k];
+    for t in 0..n {
+        let z: Vec<f64> = (0..k).map(|_| normal(s)).collect();
+        update_targets(&mut qbar, &mut [], &z, 1.0 / (t + 1) as f64, k);
+    }
+    qbar
+}
+
+/// The start's target is judged by its conditioning, not by the sign of a
+/// rounded 0 (review W13, A1). `Q̄` of fewer rows than series is singular,
+/// and its last pivot is an exact 0 computed with rounding: refused on
+/// every seed, where `s > 0` once passed some (k = 4, two rows). One row
+/// more spans, and is taken on every seed. With the parameters given and
+/// `start_rows = 1` the start tries at 1, 2, 4 and 8 rows, keeping the
+/// buffer while it lacks rank, so the first report is at the first of
+/// those that holds `k` rows: k = 5 and 8 once cycled at 1, 2 and 4 rows
+/// for ever, or started on a rank-4 target. Two series the same, with
+/// random values (where the pivot is a rounded 0, not the true 0 of ±1),
+/// never start.
+#[test]
+fn a_target_short_of_rank_is_refused_whatever_its_rounding() {
+    let mut s = 7;
+    for k in [2usize, 4, 8] {
+        let mut l = vec![0.0; k * k];
+        for _ in 0..300 {
+            let short = qbar_of(k, k - 1, &mut s);
+            assert!(!mat::definite(&short, k, &mut l), "{k}: {short:?}");
+            let full = qbar_of(k, k, &mut s);
+            assert!(mat::definite(&full, k, &mut l), "{k}: {full:?}");
+        }
+    }
+    for k in [2usize, 4, 5, 8] {
+        for seed in 0..40u64 {
+            let mut s = 1000 + seed;
+            let rows: Vec<Vec<f64>> = (0..40)
+                .map(|_| (0..k).map(|_| normal(&mut s)).collect())
+                .collect();
+            let mut c = cfg(k, false, Some(vec![0.05, 0.9]));
+            c.start_rows = 1;
+            let mut m = Dcc::new(c).unwrap();
+            let out = run(&mut m, &rows);
+            let first = out.iter().position(|p| p[0].is_finite());
+            assert_eq!(first, Some(k.next_power_of_two()), "{k} {seed}");
+        }
+    }
+    let mut s = 3;
+    for params in [None, Some(vec![0.05, 0.9])] {
+        let mut c = cfg(3, false, params);
+        c.start_rows = 20;
+        let mut m = Dcc::new(c).unwrap();
+        for _ in 0..600 {
+            let (x, y) = (normal(&mut s), normal(&mut s));
+            let out = m.step(&[], &ys(&[x, y, x]), 1.0, 1.0);
+            assert!(out.pred[0].is_nan());
+        }
+        assert!(!m.started() && m.no_effect());
+    }
+}
+
 /// Identification, the condition and not a count of rows: on a realistic
 /// stream the start's likelihood-ratio statistic is far past its cut and
 /// the fit is stepped from at the start's row; on a stream of constant
@@ -831,9 +893,10 @@ fn a_weights_scale_changes_only_the_weight() {
 }
 
 /// A buffer whose target is not positive definite (two series the same)
-/// identifies no correlation: it is withheld, waits for twice its rows
-/// twice, then buffers afresh; nothing is reported, no NaN is left in the
-/// state. The given parameters wait on it too.
+/// identifies no correlation: it is withheld and keeps its rows, waiting
+/// for twice them while the cap holds them, since clearing cannot cure a
+/// shortage of rank; nothing is reported, no NaN is left in the state. The
+/// given parameters wait on it too.
 #[test]
 fn a_degenerate_start_begins_again() {
     for params in [None, Some(vec![0.05, 0.9])] {
@@ -851,9 +914,9 @@ fn a_degenerate_start_begins_again() {
                 assert!(m.no_effect() && !m.starting(), "{t}");
             }
         }
-        // tried at 50, 100 and 200 rows, then afresh, and again: 350 rows
-        // a round
-        assert_eq!(m.restarts(), 2);
+        // tried at 50, 100, 200 and 400 rows, the buffer kept
+        assert_eq!(m.restarts(), 0);
+        assert_eq!(m.stage.rows(m.cfg()), 400);
         assert!(!m.started());
         assert!(m.stage.qbar.iter().all(|v| v.is_finite()));
     }

@@ -30,6 +30,45 @@ pub(super) fn cholesky(a: &[f64], k: usize, l: &mut [f64]) -> bool {
     true
 }
 
+/// Whether `A` is positive definite past its rounding, its factor into `l`
+/// as [`cholesky`] gives it. The computed factor is the exact one of `A +
+/// E` with `‖E‖` of order `k ε ‖A‖` (Higham, *Accuracy and Stability of
+/// Numerical Algorithms*, Theorem 10.3), so a smallest eigenvalue under
+/// that is not told from 0. It is bounded below by `1 / tr(A⁻¹) = 1 /
+/// ‖L⁻¹‖_F²`, and `‖A‖` above by `tr A`: `A` is taken where `tr A ·
+/// ‖L⁻¹‖_F² · k ε < 1`, a condition number past `1 / (k ε)` refused. A
+/// matrix of rank short of `k` -- `Q̄` of fewer rows than series, or of two
+/// series the same -- has an exact 0 eigenvalue, computed with rounding,
+/// and its last pivot is that 0 amplified by the leading block's
+/// conditioning: `s > 0` alone passed or refused it by the rounding, and
+/// no floor on the pivot against its own diagonal entry separates it (one
+/// of 10⁻⁷ was measured at four series and three rows). Measured on `Q̄` of
+/// iid normal rows, 3,000 draws at each `k` from 2 to 20: `tr A ·
+/// ‖L⁻¹‖_F² · k ε` was at least 4.2 short of rank by one row (where the
+/// factor ran at all) and at least 8.0 for 500 rows with two series the
+/// same, and at most 5.3·10⁻⁴ at `k` rows, which span.
+pub(super) fn definite(a: &[f64], k: usize, l: &mut [f64]) -> bool {
+    if !cholesky(a, k, l) {
+        return false;
+    }
+    // ‖L⁻¹‖_F², column by column of L⁻¹ by forward substitution
+    let mut col = vec![0.0; k];
+    let mut inv2 = 0.0;
+    for c in 0..k {
+        for i in 0..k {
+            let mut s = if i == c { 1.0 } else { 0.0 };
+            for m in c..i {
+                s -= l[i * k + m] * col[m];
+            }
+            col[i] = if i < c { 0.0 } else { s / l[i * k + i] };
+            inv2 += col[i] * col[i];
+        }
+    }
+    let trace: f64 = (0..k).map(|i| a[i * k + i]).sum();
+    let kappa = trace * inv2;
+    kappa.is_finite() && kappa * (k as f64 * f64::EPSILON) < 1.0
+}
+
 /// `b ← A⁻¹ b` from `A`'s factor `l`.
 pub(super) fn chol_solve(l: &[f64], k: usize, b: &mut [f64]) {
     for i in 0..k {

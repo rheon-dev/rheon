@@ -766,10 +766,12 @@ impl Dcc {
             update_targets(&mut qbar, &mut nbar, zt, r, k);
         }
         let mut chol = vec![0.0; kk];
-        if !(big_w > 0.0 && mat::cholesky(&qbar, k, &mut chol)) {
-            // a series constant over the rows, or two the same: no
-            // correlation to identify yet
-            return self.wait(true);
+        if !(big_w > 0.0 && mat::definite(&qbar, k, &mut chol)) {
+            // fewer rows than series, a series constant over the rows, or
+            // two the same: no correlation to identify yet, and a shortage
+            // of rows that clearing the buffer cannot cure, so it is kept
+            // while the cap holds it doubled
+            return self.wait_for_rank();
         }
         let mut work = Vec::new();
         let dlt = if self.cfg.asymmetric {
@@ -850,6 +852,19 @@ impl Dcc {
     fn may_double(&self) -> bool {
         self.stage.refits < DCC_MAX_REFITS
             && self.bytes() + 8 * self.stage.buffer.len() as u64 <= self.cfg.cap()
+    }
+
+    /// A start whose target lacks rank: withheld, it waits for twice its
+    /// rows while the cap holds them, whatever its refits, and otherwise
+    /// buffers afresh.
+    fn wait_for_rank(&mut self) {
+        let fits = self.bytes() + 8 * self.stage.buffer.len() as u64 <= self.cfg.cap();
+        if fits {
+            self.stage.withheld = true;
+            self.stage.refits += 1;
+        } else {
+            self.wait(true);
+        }
     }
 
     /// A start that is not stepped from: it waits for twice its rows while
