@@ -57,8 +57,11 @@ TOOL_OUTPUT_DIRS = {"mutants.out", "mutants.out.old", "target", ".venv", "htmlco
 #: (task 87, 2026-09-21); a data file would still be caught, only later.
 #: `crates/rheon-polars/src/windows.rs` passed 250 KB with the end-of-input
 #: rule for a window looking ahead, its brute-force oracle's test module
-#: included, and the cap moved to 260 KB with it.
-MAX_SOURCE_BYTES = 260_000
+#: included, and the cap moved to 260 KB with it. It moved to 270 KB on
+#: 2026-11-23: `crates/rheon-core/tests/model_contract.rs`, the one file that
+#: holds every model to the same contract, reached 263 KB with wave W13's
+#: `ar`, `spectral` and `realized` cases beside it.
+MAX_SOURCE_BYTES = 270_000
 
 #: Prose gets more room: `docs/PLAN.md` was the design log and passed 200 KB
 #: when tasks 45-56 were prepared (2026-09-05), and 1 MB with tasks 221-231
@@ -74,8 +77,10 @@ MAX_SOURCE_BYTES = 260_000
 #: cap below, only later. Raised to 700 KB on 2026-11-20 (review C1): the
 #: CHANGELOG reached 649 KB with 2.0.0's unreleased fixes, the same reading
 #: of "its size with some room". Raised to 750 KB on 2026-11-22: the CHANGELOG
-#: reached 711 KB with wave W13's seven branches' entries.
-MAX_DOC_BYTES = 750_000
+#: reached 711 KB with wave W13's seven branches' entries. Raised to 800 KB
+#: on 2026-11-23: it reached 765 KB with the wave's later branches (the
+#: `ar` and `spectral` models, the diagnostics and regressions batches).
+MAX_DOC_BYTES = 800_000
 
 #: Lockfiles are generated but must be tracked, and grow with every wheel a
 #: dependency publishes (mypy alone added 65 KB); their size says nothing
