@@ -669,9 +669,14 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
                 _ => ("an increment's", "the increment"),
             };
             if let Some(inner) = op.input.operators().iter().find(|o| o.kind.is_step()) {
-                let inner = inner.kind.name();
+                let (holds, inner) = match (inner.kind == op.kind, inner.kind) {
+                    (true, OpKind::TickSign) => ("another tick sign", "the inner tick sign"),
+                    (true, _) => ("another increment", "the inner increment"),
+                    (false, OpKind::TickSign) => ("a tick sign", "the tick sign"),
+                    (false, _) => ("an increment", "the increment"),
+                };
                 return Err(format!(
-                    "{WHO}: {}: {its} input holds {inner}, but it must be an expression (a \
+                    "{WHO}: {}: {its} input holds {holds}, but it must be an expression (a \
                      column computation, such as pl.col(\"x\") + 1) of the row's own columns. \
                      Compute {inner} in one with_windows call, and {outer} of its output in a \
                      second.",
@@ -685,8 +690,8 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
             )
             .map_err(|e| {
                 format!(
-                    "{WHO}: {}: Polars cannot compute {its} input ({e}). Check that the input \
-                     reads columns of the right type.",
+                    "{WHO}: {}: Polars cannot compute {outer}'s input ({e}). Check that the \
+                     input reads columns of the right type.",
                     f.name
                 )
             })?;

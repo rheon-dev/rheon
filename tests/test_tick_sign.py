@@ -166,11 +166,11 @@ def test_a_tick_sign_of_a_tick_sign_or_of_a_window_is_refused() -> None:
     with pytest.raises(ValueError, match="holds another window operator"):
         rp.tick_sign(rp.ewm_sum("price", half_life=1.0))
     with pytest.raises(
-        (pl.exceptions.ComputeError, ValueError), match="a tick sign's input holds tick_sign"
+        (pl.exceptions.ComputeError, ValueError), match="a tick sign's input holds another tick sign"
     ):
         rp.stream.with_windows(df, s=rp.tick_sign(rp.tick_sign("price")), **CLOCK)
     with pytest.raises(
-        (pl.exceptions.ComputeError, ValueError), match="a tick sign's input holds increment"
+        (pl.exceptions.ComputeError, ValueError), match="a tick sign's input holds an increment"
     ):
         rp.stream.with_windows(df, s=rp.tick_sign(rp.increment("price")), **CLOCK)
     with pytest.raises(TypeError, match="column name or a pl.Expr"):
