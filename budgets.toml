@@ -251,6 +251,9 @@ what = "garch, FIGARCH of 1,000 lags after its start: AnyModel::step_into, its O
 [instructions.realized]
 what = "realized, two series under a decay with Lee and Mykland's window of 100: AnyModel::step_into, into one kept Step, seven compensated sums and a ring a series a row; its budget is CI's first count"
 
+[instructions.power_variation]
+what = "power_variation, two series under a decay, a sum of squares, normalized bipower variation, a centered Parzen sum of 20 lags, a flat-top Bartlett sum of 10 and squares of ten-step returns: AnyModel::step_into, into one kept Step, eleven compensated sums, a ring of 10 raw returns and of 201 ten-step returns a series a row; its budget is CI's first count"
+
 [instructions.audit_continuous]
 what = "audit, one continuous column, 256 counters: AnyModel::step_into, into one kept Step, past the cap on nearly every row"
 budget = 847018

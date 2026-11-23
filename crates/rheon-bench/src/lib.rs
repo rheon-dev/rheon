@@ -102,6 +102,10 @@ pub const MODEL_CASES: &[&str] = &[
     // Two return series under a decay, Lee and Mykland's own window of 100:
     // a row's compensated sums and ring (task 499).
     "realized",
+    // Two return series under a decay, a term of each kind: a row's
+    // multipower products, two kernel sums of 20 and 10 lags and a scale of
+    // 10 (task 555).
+    "power_variation",
 ];
 
 /// The one model case that reports on a single row of its block:
@@ -528,6 +532,27 @@ fn case_spec(id: &str) -> (Value, Shape) {
             json!({
                 "name": "m",
                 "model": {"type": "realized", "lm_window": 100},
+                "targets": ["y0", "y1"],
+                "features": [],
+                "clock": "t",
+                "half_life": 1000.0,
+                "gap_cap": 100.0,
+            }),
+            Shape::Linear,
+        ),
+        "power_variation" => (
+            json!({
+                "name": "m",
+                "model": {
+                    "type": "power_variation",
+                    "terms": [
+                        {"name": "rv", "powers": [2.0]},
+                        {"name": "bv", "powers": [1.0, 1.0], "normalize": true},
+                        {"name": "lrv", "kernel": "parzen", "bandwidth": 20, "center": true},
+                        {"name": "rk", "kernel": "bartlett", "bandwidth": 10, "flat_top": true},
+                        {"name": "sub", "powers": [2.0], "scale": 10}
+                    ],
+                },
                 "targets": ["y0", "y1"],
                 "features": [],
                 "clock": "t",

@@ -179,14 +179,35 @@ impl Plan {
     }
 }
 
-/// A return a window holds: its row, its weight and the terms credited to
-/// it, the terms whose oldest return it is, as `(hi, lo)` pairs, one a sum
-/// after `W` and `V`.
+/// A return a window holds: its row and its weight. The terms credited to
+/// it are in [`Series::credits`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct Entry {
     seq: u64,
     w: f64,
-    credits: Vec<f64>,
+}
+
+/// Where a row's terms go: each sum, and under a window the credits of the
+/// return each term's oldest return is, `back` returns before the row's.
+struct Sink<'a> {
+    hi: &'a mut [f64],
+    lo: &'a mut [f64],
+    /// The window's credits and how many returns it holds; `None` without
+    /// a window.
+    credits: Option<(&'a mut VecDeque<f64>, usize)>,
+    stride: usize,
+}
+
+impl Sink<'_> {
+    fn add(&mut self, at: usize, back: usize, x: f64) {
+        add(&mut self.hi[at], &mut self.lo[at], x);
+        if let Some((c, held)) = self.credits.as_mut() {
+            let i = (*held - 1 - back) * self.stride + 2 * (at - BASE);
+            let mut pair = (c[i], c[i + 1]);
+            add(&mut pair.0, &mut pair.1, x);
+            (c[i], c[i + 1]) = pair;
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -202,11 +223,13 @@ pub(super) struct Series {
     /// A window's returns of this series, oldest first.
     #[serde(default)]
     held: VecDeque<Entry>,
+    /// The terms credited to each return `held` holds, the terms whose
+    /// oldest return it is, as `(hi, lo)` pairs, one a sum after `W` and
+    /// `V`: `2 (T − 2)` numbers a return for `T` sums, oldest first, in one
+    /// ring so that a row takes no allocation of its own.
+    #[serde(default)]
+    credits: VecDeque<f64>,
 }
-
-/// One term's numbers at a row, its sums' indices beside them, before they
-/// are added.
-type Pending = Vec<(usize, usize, f64)>;
 
 impl Series {
     pub(super) fn new(plan: &Plan) -> Self {
@@ -216,6 +239,7 @@ impl Series {
             raw: VecDeque::new(),
             rings: vec![VecDeque::new(); plan.scales.len()],
             held: VecDeque::new(),
+            credits: VecDeque::new(),
         }
     }
 
@@ -255,25 +279,17 @@ impl Series {
         }
     }
 
-    /// Whether a term reaching `back` returns before the row's is in the
-    /// window: its oldest return is held. Always, without a window.
-    fn holds(&self, windowed: bool, back: usize) -> bool {
-        !windowed || self.held.len() > back
-    }
-
     /// The return `r` learned at the weight `w > 0`, a window's row `seq`
     /// where there is a window.
     pub(super) fn learn(&mut self, plan: &Plan, r: f64, w: f64, seq: Option<u64>) {
         let windowed = seq.is_some();
+        let stride = 2 * (plan.sums - BASE);
         if let Some(seq) = seq {
-            self.held.push_back(Entry {
-                seq,
-                w,
-                credits: vec![0.0; 2 * (plan.sums - BASE)],
-            });
+            self.held.push_back(Entry { seq, w });
+            self.credits.extend(std::iter::repeat_n(0.0, stride));
         }
-        self.credit(NW, 0, w, false);
-        self.credit(W2, 0, w * w, false);
+        add(&mut self.hi[NW], &mut self.lo[NW], w);
+        add(&mut self.hi[W2], &mut self.lo[W2], w * w);
         // Each scale's `K`-step return ending here, summed oldest first:
         // made once `K - 1` returns are before the row.
         let made = |raw: usize, k: usize| raw + 1 >= k;
@@ -295,79 +311,80 @@ impl Series {
                 }
             }
         }
-        let mut pending: Pending = Vec::new();
+        let held = self.held.len();
+        // A term is in a window while its oldest return, `back` before the
+        // row's, is held; always without a window.
+        let holds = |back: usize| !windowed || held > back;
+        let raw = self.raw.len();
+        let Series {
+            hi,
+            lo,
+            rings,
+            credits,
+            ..
+        } = self;
+        let mut sink = Sink {
+            hi,
+            lo,
+            credits: windowed.then_some((credits, held)),
+            stride,
+        };
         for t in &plan.terms {
-            if !made(self.raw.len(), t.scale) {
+            if !made(raw, t.scale) {
                 continue;
             }
-            let ring = &self.rings[t.slot];
+            let ring = &rings[t.slot];
             let (k, len) = (t.scale, ring.len());
             match &t.form {
                 Form::Multi { powers, .. } => {
                     let m = powers.len();
                     let back = m * k - 1;
-                    if len < (m - 1) * k + 1 || !self.holds(windowed, back) {
+                    if len < (m - 1) * k + 1 || !holds(back) {
                         continue;
                     }
                     let mut acc = 1.0;
                     for (i, &p) in powers.iter().enumerate() {
                         acc *= power(ring[len - 1 - (m - 1 - i) * k].abs(), p);
                     }
-                    pending.push((t.at, back, w * acc));
+                    sink.add(t.at, back, w * acc);
                 }
                 Form::Kernel { c2, center } => {
                     let rt = ring[len - 1];
-                    if !self.holds(windowed, k - 1) {
+                    if !holds(k - 1) {
                         continue;
                     }
-                    pending.push((t.at, k - 1, w * (rt * rt)));
+                    sink.add(t.at, k - 1, w * (rt * rt));
                     if *center {
-                        pending.push((t.at + 1, k - 1, w * rt));
-                        pending.push((t.at + 2, k - 1, w * rt));
-                        pending.push((t.at + 3, k - 1, w));
-                        pending.push((t.at + 4, k - 1, w * rt));
-                        pending.push((t.at + 5, k - 1, w));
+                        sink.add(t.at + 1, k - 1, w * rt);
+                        sink.add(t.at + 2, k - 1, w * rt);
+                        sink.add(t.at + 3, k - 1, w);
+                        sink.add(t.at + 4, k - 1, w * rt);
+                        sink.add(t.at + 5, k - 1, w);
                     }
                     for (h, &c) in (1..).zip(c2) {
                         let back = (h + 1) * k - 1;
-                        if len < h * k + 1 || !self.holds(windowed, back) {
+                        if len < h * k + 1 || !holds(back) {
                             break;
                         }
                         if c == 0.0 {
                             continue;
                         }
                         let x = ring[len - 1 - h * k];
-                        pending.push((t.at, back, w * (c * (rt * x))));
+                        sink.add(t.at, back, w * (c * (rt * x)));
                         if *center {
-                            pending.push((t.at + 1, back, w * (c * rt)));
-                            pending.push((t.at + 2, back, w * (c * x)));
-                            pending.push((t.at + 3, back, w * c));
+                            sink.add(t.at + 1, back, w * (c * rt));
+                            sink.add(t.at + 2, back, w * (c * x));
+                            sink.add(t.at + 3, back, w * c);
                         }
                     }
                 }
             }
-        }
-        for (at, back, x) in pending {
-            self.credit(at, back, x, windowed);
         }
         if plan.raw > 0 {
             self.raw.push_back(r);
             while self.raw.len() > plan.raw {
                 self.raw.pop_front();
             }
-        }
-    }
-
-    /// `x` into the sum `at` and, under a window, into the credits of the
-    /// return `back` before the row's.
-    fn credit(&mut self, at: usize, back: usize, x: f64, windowed: bool) {
-        add(&mut self.hi[at], &mut self.lo[at], x);
-        if windowed && at >= BASE {
-            let pos = self.held.len() - 1 - back;
-            let c = &mut self.held[pos].credits;
-            let i = 2 * (at - BASE);
-            let (hi, rest) = c[i..].split_at_mut(1);
-            add(&mut hi[0], &mut rest[0], x);
         }
     }
 
@@ -382,14 +399,19 @@ impl Series {
         };
         add(&mut self.hi[NW], &mut self.lo[NW], -e.w);
         add(&mut self.hi[W2], &mut self.lo[W2], -(e.w * e.w));
-        for (i, pair) in e.credits.chunks_exact(2).enumerate() {
+        let stride = 2 * (self.hi.len() - BASE);
+        for i in 0..stride / 2 {
+            let (Some(h), Some(l)) = (self.credits.pop_front(), self.credits.pop_front()) else {
+                break;
+            };
             let at = BASE + i;
-            add(&mut self.hi[at], &mut self.lo[at], -pair[0]);
-            add(&mut self.hi[at], &mut self.lo[at], -pair[1]);
+            add(&mut self.hi[at], &mut self.lo[at], -h);
+            add(&mut self.hi[at], &mut self.lo[at], -l);
         }
         if self.held.is_empty() {
             self.hi.fill(0.0);
             self.lo.fill(0.0);
+            self.credits.clear();
         }
     }
 
@@ -401,7 +423,8 @@ impl Series {
             + self.lo.len()
             + self.raw.len()
             + self.rings.iter().map(VecDeque::len).sum::<usize>()
-            + self.held.iter().map(|e| 2 + e.credits.len()).sum::<usize>()
+            + 2 * self.held.len()
+            + self.credits.len()
     }
 
     /// Whether a restored series has the shape its settings give it.
@@ -415,16 +438,18 @@ impl Series {
                 .all(|(r, &k)| r.len() <= k)
             && self.raw.len() <= plan.raw;
         let held = match rows {
-            None => self.held.is_empty(),
+            None => self.held.is_empty() && self.credits.is_empty(),
             Some(rows) => {
-                self.held
-                    .iter()
-                    .zip(self.held.iter().skip(1))
-                    .all(|(a, b)| a.seq < b.seq)
-                    && self.held.iter().all(|e| {
-                        e.credits.len() == 2 * (plan.sums - BASE)
-                            && rows.binary_search_by_key(&e.seq, |h| h.seq).is_ok()
-                    })
+                self.credits.len() == self.held.len() * 2 * (plan.sums - BASE)
+                    && self
+                        .held
+                        .iter()
+                        .zip(self.held.iter().skip(1))
+                        .all(|(a, b)| a.seq < b.seq)
+                    && self
+                        .held
+                        .iter()
+                        .all(|e| rows.binary_search_by_key(&e.seq, |h| h.seq).is_ok())
             }
         };
         sums && rings && held

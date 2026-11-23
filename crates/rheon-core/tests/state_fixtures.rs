@@ -1489,15 +1489,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         ),
         (
             "power_variation_window",
-            &[
-                "model",
-                "PowerVariation",
-                "series",
-                "1",
-                "held",
-                "0",
-                "credits",
-            ],
+            &["model", "PowerVariation", "series", "1", "credits"],
         ),
         (
             "power_variation_window",
