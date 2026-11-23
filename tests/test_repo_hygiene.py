@@ -70,8 +70,9 @@ MAX_SOURCE_BYTES = 250_000
 #: keeps its heading. A data file renamed `.md` would still be caught by the
 #: cap below, only later. Raised to 700 KB on 2026-11-20 (review C1): the
 #: CHANGELOG reached 649 KB with 2.0.0's unreleased fixes, the same reading
-#: of "its size with some room".
-MAX_DOC_BYTES = 700_000
+#: of "its size with some room". Raised to 750 KB on 2026-11-22: the CHANGELOG
+#: reached 711 KB with wave W13's seven branches' entries.
+MAX_DOC_BYTES = 750_000
 
 #: Lockfiles are generated but must be tracked, and grow with every wheel a
 #: dependency publishes (mypy alone added 65 KB); their size says nothing
