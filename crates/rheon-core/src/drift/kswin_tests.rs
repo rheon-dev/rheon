@@ -269,3 +269,48 @@ fn h_is_read_to_the_end_of_the_walk() {
         assert_eq!(ks_h(&a, &b), want, "r = {r}");
     }
 }
+
+/// A restored ring holding a value that is not finite is damaged, and
+/// refused: the sorted samples would put a NaN where the scan reads a gap
+/// between counts, and the statistic it read would be wrong (review
+/// 2026-11-23, DRIFT-4; before task 578e such a ring also spun the scan).
+#[test]
+fn a_restored_ring_holds_only_finite_values() {
+    let mut s = 3u64;
+    let k = full(KswinCfg::default(), &mut s);
+    assert!(k.sound());
+    for bad in [f64::NAN, -f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let mut d = k.clone();
+        d.window[40] = bad;
+        assert!(!d.sound(), "a ring holding {bad} is refused");
+    }
+}
+
+/// A value that is not finite is no row: it enters no ring, moves no
+/// generator and flags nothing, at every point of the ring's filling.
+#[test]
+fn a_non_finite_value_is_no_row() {
+    let mut s = 5u64;
+    for fed in [0usize, 1, 50, 99, 100, 350] {
+        let mut k = Kswin::new(KswinCfg::default());
+        for _ in 0..fed {
+            k.update(lcg(&mut s));
+        }
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let before = k.clone();
+            assert!(!k.update(bad));
+            assert_eq!(k, before, "{bad} after {fed} rows");
+            assert_eq!(k.rng, before.rng);
+        }
+    }
+}
+
+/// The scan ends on samples holding a NaN at either end, as `total_cmp`
+/// sorts them: a pass that moves neither cursor is counted, not spun.
+#[test]
+fn the_scan_ends_on_a_nan() {
+    let a = [-f64::NAN, 1.0, 2.0, 3.0];
+    let b = [0.0, 1.5, 2.5, f64::NAN];
+    assert!(ks_h(&a, &b) <= a.len());
+    assert!(ks_h(&b, &a) <= a.len());
+}

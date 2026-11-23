@@ -718,6 +718,13 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **A `kswin` detector's state holding a value that is not finite is
+  refused on load, and a value that is not finite is no row for it**
+  (review 2026-11-23, DRIFT-4). `KSWIN` sorts each sample with NaN at an
+  end, where its scan reads the gap between the two samples' counts, so a
+  damaged file whose ring held a NaN loaded and read a wrong statistic on
+  every row the NaN stayed in the ring. The bank feeds it only finite
+  residuals, so no output moves.
 - **A window looking ahead whose far edge is the input's last row is whole
   at the end of the input** (PLAN 565). Under `closed="right"` or `"both"`,
   `rp.ewm_sum`, `rp.ewm_mean`, `rp.ewm_rate` and `rp.ewm_quantile` with

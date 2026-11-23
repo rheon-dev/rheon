@@ -191,11 +191,13 @@ impl Kswin {
 
     /// Whether a restored state keeps the shape every row relies on: samples
     /// of at least one row, a ring that holds twice that, no more values
-    /// than it holds, and a level in range.
+    /// than it holds, each of them finite (a NaN sorts to an end of a sample
+    /// and stops the scan short), and a level in range.
     pub fn sound(&self) -> bool {
         self.stat_size >= 1
             && self.window_size >= 2 * self.stat_size
             && self.window.len() <= self.window_size
+            && self.window.iter().all(|v| v.is_finite())
             && self.alpha > 0.0
             && self.alpha < 1.0
     }
@@ -227,8 +229,12 @@ impl Kswin {
     }
 
     /// Feed one value. Returns whether this row's test rejects; before the
-    /// ring is full there is no test.
+    /// ring is full there is no test. A value that is not finite is no row:
+    /// it enters no ring and draws nothing.
     pub fn update(&mut self, x: f64) -> bool {
+        if !x.is_finite() {
+            return false;
+        }
         if self.window.len() == self.window_size {
             self.window.pop_front();
         }
