@@ -900,7 +900,7 @@ def _bar_aggregates(
                     inner = body["input"]
                     kind = "len" if body.get("include_nulls") else "count"
                 else:
-                    raise _formula.FormulaError(
+                    raise RefusedValueError(
                         f"{who}: aggregate {name!r} holds the aggregation {agg}, which a bar does "
                         f"not take. A bar takes {accepted}, over an element-wise expression of "
                         "the row, with element-wise arithmetic around them."
@@ -929,7 +929,7 @@ def _bar_aggregates(
         try:
             replaced = walk(json.loads(expr.meta.serialize(format="json")))
         except KeyError:
-            raise _formula.FormulaError(
+            raise RefusedValueError(
                 f"{who}: aggregate {name!r} has an aggregation this version of rheon cannot read "
                 f"under this version of Polars. Write it with {accepted}."
             ) from None
