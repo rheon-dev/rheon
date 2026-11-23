@@ -4118,3 +4118,30 @@ columns = [18]
 why = """at `r = 1` the arm multiplies `R` by `e^(−β·gap)`, and `R` is the 0 \
 that `fill(0.0)` left before the loop, so `0 · e = 0` (`e` between 0 and 1: \
 `gap` is the clock between two rows, not below 0)"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/drift/adwin.rs"
+function = "Adwin::detect"
+mutation = "replace > with >="
+line_has = "if self.width > 0.0 {"
+why = """a cut is found only at a split whose older part holds a bucket, `n0 >= 1` \
+rows, and `n0 <= width`, so `width >= 1` wherever the line runs: `> 0` and \
+`>= 0` agree"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/garch/filter.rs"
+function = "Filter::predict"
+mutation = "replace < with <="
+line_has = "return if s < lo { lo } else { hi + math::ln(s / hi) };"
+columns = [33]
+why = """the line runs only inside `if s < lo || s > hi`, which `s = lo` does \
+not enter, so `s < lo` and `s <= lo` agree wherever it runs"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/garch/dist.rs"
+function = "ln_gamma"
+mutation = "replace < with <="
+line_has = "while x < 20.0 {"
+why = """the two differ only at `x = 20.0`, where the mutant shifts once more \
+(`x = 21`, `shift = ln 20`) and returns the same double: \
+`ln_gamma_at_the_series_edge` pins the bits at 20 and passes both ways"""
