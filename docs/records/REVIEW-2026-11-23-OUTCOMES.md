@@ -160,7 +160,7 @@ REG-14 and MATH-7 are batch c's. Test paths are under
 | REG-16 | confirmed (a span's state without its place loaded), fixed: refused as damaged, as `sgd`'s is | `robust/span_tests.rs::a_state_whose_place_does_not_match_its_span_is_refused` | cfafe5d9 |
 | MATH-3 | confirmed (a part with a target of no weight and NaN moments made the pooled moments NaN, `within` or not, with and without an intercept), fixed: such a part's moments read 0. The `Σ w²` fabrication REG-14 names is `_target_q`'s, unchanged here | `tests/test_gram_module.py::TestMerge::test_a_part_with_no_weight_on_a_target_takes_nothing_from_it` | bb5058cf |
 | REG-17 | not reproduced: against the same rows shifted back exactly, the quantile refit's slope moves by `1.9e-3` at a feature of `1e14 + N(0, 1)` and `2.4e-7` at `1e10`, inside the `64 · shift · ε` every centred moment of such a feature carries | `robust/equivariance_tests.rs::a_shift_of_the_feature_moves_the_quantile_refits_slope_by_rounding` | 2b993c11 |
-| MATH-6 | not started in this batch | -- | -- |
+| MATH-6 | confirmed and fixed in the second round: see "Batch g, continued" below | d12cd115 (PLAN 578g, MATH-6: five edge cases of `rheon.corr` and `rheon.gram`, each test first) | see that table |
 
 ## Batch g, continued (PLAN 578g, second round)
 
