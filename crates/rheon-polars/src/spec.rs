@@ -1554,7 +1554,8 @@ pub struct SpectralSpec {
     /// The clock units between rows, `1/fs`; absent is 1.
     #[serde(default)]
     pub spacing: Option<Span>,
-    /// `"density"` (the default, scipy's) or `"spectrum"`.
+    /// `"density"` (the default, scipy's), `"spectrum"` or
+    /// `"lomb_scargle"`, the generalised Lomb-Scargle power.
     #[serde(default)]
     pub scaling: Option<String>,
     /// Remove the weighted mean before the transform; absent is true.
@@ -1563,6 +1564,22 @@ pub struct SpectralSpec {
     /// The bytes a group's state may hold.
     #[serde(default)]
     pub max_state_bytes: Option<u64>,
+    /// Clock units of history the transform holds, a hard cutoff: the
+    /// sliding-window transform of the rows inside it.
+    #[serde(default)]
+    pub window_size: Option<Span>,
+    /// Which edge holds a row exactly `window_size` old.
+    #[serde(default)]
+    pub closed: ModelClosed,
+    /// Clock units between the window's snapshots.
+    #[serde(default)]
+    pub snapshot_every: Option<Span>,
+    /// At most this many rows between the window's snapshots.
+    #[serde(default)]
+    pub max_rows_between_snapshots: Option<u32>,
+    /// Past this many MiB the group's snapshots thin or refuse.
+    #[serde(default)]
+    pub window_budget: Option<WindowBudgetSpec>,
 }
 
 /// `ar`'s lags: the order `p`, for `1..=p`, or the lags themselves.
@@ -1823,7 +1840,12 @@ impl ModelKind {
                 window_size: window,
                 window_budget,
                 ..
-            } => Some((window.as_ref().map(Span::value), *window_budget)),
+            }
+            | ModelKind::Spectral(SpectralSpec {
+                window_size: window,
+                window_budget,
+                ..
+            }) => Some((window.as_ref().map(Span::value), *window_budget)),
             _ => None,
         }
     }
@@ -1893,7 +1915,12 @@ impl ModelKind {
                 snapshot_every,
                 max_rows_between_snapshots,
                 ..
-            } => Some((snapshot_every.as_ref(), *max_rows_between_snapshots)),
+            }
+            | ModelKind::Spectral(SpectralSpec {
+                snapshot_every,
+                max_rows_between_snapshots,
+                ..
+            }) => Some((snapshot_every.as_ref(), *max_rows_between_snapshots)),
             _ => None,
         }
     }
@@ -1907,7 +1934,8 @@ impl ModelKind {
             | ModelKind::EwCov { closed, .. }
             | ModelKind::EwClass { closed, .. }
             | ModelKind::Marginal { closed, .. }
-            | ModelKind::Ar { closed, .. } => Some(*closed),
+            | ModelKind::Ar { closed, .. }
+            | ModelKind::Spectral(SpectralSpec { closed, .. }) => Some(*closed),
             _ => None,
         }
     }
@@ -1996,7 +2024,11 @@ impl ModelKind {
             | ModelKind::Ar {
                 window_size: Some(w),
                 ..
-            } => Some((w.value(), self.snapshot_cadence()?)),
+            }
+            | ModelKind::Spectral(SpectralSpec {
+                window_size: Some(w),
+                ..
+            }) => Some((w.value(), self.snapshot_cadence()?)),
             _ => None,
         }
     }

@@ -74,7 +74,17 @@ model that only the new build has is listed as an addition and passes.
   transform at the periods given, `O(F)` a row, no FFT; its `sin` and
   `cos` from the `libm` crate, the same bits on every OS. A break empties
   the transform; the state is `8 (4F + 3)` bytes a target, held to
-  `max_state_bytes`.
+  `max_state_bytes`. `scaling="lomb_scargle"` reads the generalised
+  Lomb-Scargle power instead (the share of the weighted variance a
+  sinusoid explains, scipy's `lombscargle(normalize=True,
+  floating_mean=detrend)` with the amplitudes as weights), which needs no
+  even clock: two sums more, `8 (6F + 4)` bytes a target, its early rows
+  guarded by the fit's spread, not a count. `window_size` (with `closed`,
+  `snapshot_every`, `max_rows_between_snapshots` and `window_budget`)
+  gives the sliding-window transform of the rows inside it, cut from
+  snapshots: the sums referred to an origin moved to the row at each
+  snapshot, the boundary turned by the product of the turns since; within
+  1.5e-8 of the window's periodogram over ten million rows with no decay.
 - **`ar`, an autoregression for each target** (task 486): AR(p), or any
   list of lags, by exponentially weighted least squares on lags the model
   keeps itself, with the features as exogenous regressors and the constant
@@ -443,8 +453,9 @@ model that only the new build has is listed as an addition and passes.
   the rows behind it: a learning stream clears what is lagged by rows
   before it reads the row. `predict` scored such a row with the lags it
   had, so `ar` predicted from lags `fit_predict` had dropped, and
-  `spectral`'s power read across the break. Such a row is now scored with a copy whose lags are
-  cleared, as a row in a new session is scored with a blended copy.
+  `spectral`'s power read across the break. Such a row is now scored with
+  a copy whose lags are cleared, as a row in a new session is scored with
+  a blended copy.
 
 - **`output_index` tells `spectral`'s periods apart** (PLAN 491). Each
   `power_<t>_p<k>` field's `component` is its period's place in

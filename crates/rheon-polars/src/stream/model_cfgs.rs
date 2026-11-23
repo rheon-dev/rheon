@@ -205,10 +205,11 @@ pub fn spectral_cfg(
     let scaling = match s.scaling.as_deref().unwrap_or("density") {
         "density" => rheon_core::SpectralScaling::Density,
         "spectrum" => rheon_core::SpectralScaling::Spectrum,
+        "lomb_scargle" => rheon_core::SpectralScaling::LombScargle,
         other => {
             return Err(format!(
-                "spectral: scaling must be \"density\" or \"spectrum\", but it is {other:?}. \
-                 Use one of those words."
+                "spectral: scaling must be \"density\", \"spectrum\" or \"lomb_scargle\", but \
+                 it is {other:?}. Use one of those words."
             ));
         }
     };
@@ -238,6 +239,9 @@ pub fn spectral_cfg(
         detrend: s.detrend.unwrap_or(true),
         min_weight: spec.min_periods_or_default(),
         max_state_bytes: s.max_state_bytes,
+        window: s.window_size.as_ref().map(Span::value),
+        window_every: s.snapshot_every.as_ref().map(Span::value),
+        max_rows_between_snapshots: s.max_rows_between_snapshots.map(|r| r as usize),
     };
     cfg.validate()?;
     Ok(cfg)

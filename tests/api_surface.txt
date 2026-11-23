@@ -508,6 +508,11 @@
     scaling = 'density'
     detrend = True
     max_state_bytes = None
+    window_size = None
+    closed = 'right'
+    snapshot_every = None
+    max_rows_between_snapshots = None
+    window_budget = None
     common
 
 [resolved defaults]  # what a spec left out resolves to, read off the bank's own build of the spec shown (_rheon.resolved_defaults): a moved default is a diff here
@@ -2731,7 +2736,9 @@
   garch.vol: egarch, figarch, garch, gjr
   garch.dist: normal, skewt, t
   ar.select: aic, bic
-  spectral.scaling: density, spectrum
+  spectral.scaling: density, lomb_scargle, spectrum
+  spectral.closed: both, right
+  spectral.window_budget: refuse, thin
   ar.closed: both, right
   ar.window_budget: refuse, thin
   marginal.closed: both, right
@@ -2902,7 +2909,7 @@
     rls: coef_prior, delta
     seqtest: a, a_suffix, b, b_suffix
     sgd: clip_gradient, coef_max, coef_min, coef_sum, eps, huber_delta, huber_refit_rows, huber_refit_span, huber_scale, huber_scale_half_life, l2, learning_rate, loss, max_state_bytes, power, quantile, refit_budget, schedule, standardize, strict_binary
-    spectral: detrend, max_state_bytes, periods, scaling, spacing
+    spectral: closed, detrend, max_rows_between_snapshots, max_state_bytes, periods, scaling, snapshot_every, spacing, window_budget, window_size
 
 [cli flags]  # `rheon --help`: a flag added, renamed or removed, or one that starts or stops taking a value, is a diff here
   Usage: rheon [OPTIONS] --config <CONFIG>

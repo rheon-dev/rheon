@@ -3066,6 +3066,30 @@ library on every platform, so the state is the same bits everywhere. A
 session change or a gap past `gap_cap` empties the transform, since the
 phase across it is not known.
 
+**Lomb-Scargle.** Under `scaling="lomb_scargle"` the power at each period
+is the generalized Lomb-Scargle power: the share of the target's weighted
+variance that a sinusoid of that period explains, between 0 and 1. It
+comes from the weighted least squares fit of `a·cos + b·sin`, and a
+constant with `detrend`. It needs no even clock and has no Nyquist limit, so it is the
+read for an uneven clock. It keeps two sums more: the amplitudes'
+transform at twice each frequency, `V ← λ·r²·V + w`, and `S ← λ·S + w·x²`.
+The fit's cross-products are read from them: `CC = (A + Re V)/2`,
+`SS = (A − Re V)/2`, `CS = Im V / 2`. Where the rows' phases have not yet
+spread over enough of a cycle to tell a cosine from a sine, the power is
+null. It equals scipy's `lombscargle(normalize=True, weights=a,
+floating_mean=detrend)` of the rows to 1e-9.
+
+**A window.** Under `window_size` the power is of the rows less than
+`window_size` old alone, the sliding-window transform: with no decay,
+scipy's `periodogram` of the window's rows. The window is cut from
+snapshots, as every windowed model's is, with `closed`, `snapshot_every`,
+`max_rows_between_snapshots` and `window_budget` as `ewridge`'s. Under it
+the sums are referred to an origin fixed on the clock, moved to the row
+each time a snapshot is taken, so a snapshot's sums are turned once, by
+the product of the origin's turns since, before they are subtracted. Over
+ten million rows with no decay the power is within 1.5e-8 of the window's
+periodogram.
+
 #### Example
 
 **A daily cycle found in an hourly series:**

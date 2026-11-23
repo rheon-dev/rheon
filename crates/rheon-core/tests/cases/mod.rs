@@ -2648,6 +2648,58 @@ pub fn all() -> Vec<Case> {
                 detrend: true,
                 min_weight: 0.0,
                 max_state_bytes: None,
+                window: None,
+                window_every: None,
+                max_rows_between_snapshots: None,
+            })
+            .unwrap(),
+            0,
+            Targets::Linear(2),
+            40
+        ),
+        // Two series' Lomb-Scargle sums on an uneven clock: the weights'
+        // transform at twice each frequency and the squares beside the
+        // transform, one frequency past the even clock's Nyquist.
+        case!(
+            "spectral_ls",
+            "Spectral",
+            Spectral,
+            Spectral::new(SpectralCfg {
+                n_targets: 2,
+                frequencies: vec![0.2, 0.7],
+                spacing: 1.0,
+                decay: decay(),
+                scaling: SpectralScaling::LombScargle,
+                detrend: true,
+                min_weight: 0.0,
+                max_state_bytes: None,
+                window: None,
+                window_every: None,
+                max_rows_between_snapshots: None,
+            })
+            .unwrap(),
+            0,
+            Targets::Linear(2),
+            40
+        ),
+        // Two series' transforms over a window of 15 clock units: the ring
+        // of snapshots, each with its turns' product, and the live origin's.
+        case!(
+            "spectral_window",
+            "Spectral",
+            Spectral,
+            Spectral::new(SpectralCfg {
+                n_targets: 2,
+                frequencies: vec![0.2, 0.5],
+                spacing: 1.0,
+                decay: decay(),
+                scaling: SpectralScaling::LombScargle,
+                detrend: true,
+                min_weight: 0.0,
+                max_state_bytes: None,
+                window: Some(15.0),
+                window_every: None,
+                max_rows_between_snapshots: Some(3),
             })
             .unwrap(),
             0,

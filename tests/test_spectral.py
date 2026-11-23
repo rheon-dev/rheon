@@ -13,7 +13,7 @@ import io
 import numpy as np
 import polars as pl
 import pytest
-from scipy.signal import periodogram
+from scipy.signal import lombscargle, periodogram
 
 from rheon import polars as rp
 
@@ -87,6 +87,94 @@ def test_on_an_uneven_clock_it_is_the_definition():
             assert g == pytest.approx(2 * abs(z) ** 2 / np.sum(a * a), rel=1e-9), end
 
 
+@pytest.mark.parametrize("detrend", [True, False])
+@pytest.mark.parametrize("h", [float("inf"), 90.0])
+def test_lomb_scargle_is_scipys_with_the_decay_as_weights(detrend, h):
+    """On an uneven clock with weights, the ``"lomb_scargle"`` power before
+    row ``end`` is scipy's ``lombscargle(τ, x, 2π/period, normalize=True,
+    weights=a, floating_mean=detrend)`` of the rows before it, ``a`` each
+    row's weight times its decay; at the clock's cycle, off it, and at a
+    period below twice the mean step, which an uneven clock can see."""
+    n = 900
+    rng = np.random.default_rng(7)
+    t = np.cumsum(rng.uniform(0.2, 1.8, n))
+    w = rng.uniform(0.5, 1.5, n)
+    y = 1.5 + np.sin(2 * np.pi * t / 8) + rng.normal(size=n)
+    df = pl.DataFrame({"t": t, "y": y, "w": w})
+    periods = [8.0, 21.0, 1.3]
+    spec = rp.spec.spectral(
+        "s", targets=["y"], periods=periods, scaling="lomb_scargle", detrend=detrend,
+        clock="t", gap_cap=10.0, weight="w", half_life=h,
+    )  # fmt: skip
+    out = _out(spec, df)
+    for end in (200, n - 1):
+        tau, x = t[:end], y[:end]
+        a = w[:end] * 0.5 ** ((tau[-1] - tau) / h)
+        want = lombscargle(
+            tau, x, 2 * np.pi / np.array(periods), normalize=True, weights=a,
+            floating_mean=detrend,
+        )  # fmt: skip
+        got = [out[f"power_y_p{j}"][end] for j in range(len(periods))]
+        assert got == pytest.approx(list(want), rel=1e-9), end
+        assert all(0.0 <= g <= 1.0 for g in got)
+    if detrend:
+        assert out["power_y_p0"][-1] > 10 * out["power_y_p1"][-1]
+
+
+def test_lomb_scargle_takes_a_period_past_the_even_clocks_limit():
+    """A period below twice ``spacing`` is refused for a periodogram and
+    taken for Lomb-Scargle; an infinite one is refused, by the spec for
+    every scaling and by the model under Lomb-Scargle."""
+    df = _signal(50, 5)
+    with pytest.raises(ValueError, match="Nyquist"):
+        _out(rp.spec.spectral("s", targets=["y"], periods=[1.5], half_life=50.0), df)
+    ls = rp.spec.spectral("s", targets=["y"], periods=[1.5], scaling="lomb_scargle", half_life=50.0)
+    assert _out(ls, df)["power_y_p0"][-1] >= 0.0
+    with pytest.raises(ValueError, match="finite"):
+        _out(
+            rp.spec.spectral(
+                "s", targets=["y"], periods=[float("inf")], scaling="lomb_scargle", half_life=50.0
+            ),
+            df,
+        )
+
+
+@pytest.mark.parametrize("scaling", ["density", "lomb_scargle"])
+@pytest.mark.parametrize("h", [float("inf"), 80.0])
+def test_a_window_is_scipys_over_its_rows(scaling, h):
+    """Under ``window_size`` the power before row ``end`` is scipy's
+    ``periodogram`` (or ``lombscargle``) of the rows before it that are
+    less than ``window_size`` old, the decay's amplitudes as the window
+    (or the weights), many windows into the stream."""
+    n, step, size = 1500, 0.5, 60.0
+    df = _signal(n, 9, step)
+    rows = int(size / step)
+    grid = np.fft.rfftfreq(rows, d=step)
+    ks = [7, 30, 51]
+    periods = [1.0 / grid[k] for k in ks]
+    spec = rp.spec.spectral(
+        "s", targets=["y"], periods=periods, spacing=step, scaling=scaling,
+        clock="t", gap_cap=10.0, half_life=h, window_size=size,
+    )  # fmt: skip
+    out = _out(spec, df)
+    for end in (400, n - 1):
+        x = df["y"].to_numpy()[end - rows : end]
+        tau = df["t"].to_numpy()[end - rows : end]
+        a = 0.5 ** ((tau[-1] - tau) / h)
+        got = [out[f"power_y_p{j}"][end] for j in range(len(ks))]
+        if scaling == "density":
+            m = np.sum(a * x) / np.sum(a)
+            _, p = periodogram(x - m, fs=1 / step, window=a, detrend=False)
+            want = [p[k] for k in ks]
+        else:
+            want = list(
+                lombscargle(tau, x, 2 * np.pi / np.array(periods), normalize=True, weights=a,
+                            floating_mean=True)
+            )  # fmt: skip
+        assert got == pytest.approx(want, rel=1e-9), end
+        assert out["weight_sum"][end] == pytest.approx(np.sum(a), rel=1e-12)
+
+
 def test_a_cycle_stands_out():
     df = _signal(3000, 3)
     spec = rp.spec.spectral("s", targets=["y"], periods=[8.0, 5.0, 3.2], half_life=500.0)
@@ -95,15 +183,17 @@ def test_a_cycle_stands_out():
     assert p8 > 20 * p5 and p32 > 5 * p5
 
 
+@pytest.mark.parametrize("scaling", ["density", "lomb_scargle"])
 @pytest.mark.parametrize("cut", [1, 333, 998])
-def test_chunks_and_a_save_go_on_to_the_bit(cut):
+def test_chunks_and_a_save_go_on_to_the_bit(cut, scaling):
     df = _signal(1000, 4).with_columns(
         pl.Series("g", np.where(np.arange(1000) % 3 == 0, "a", "b")),
         pl.Series("w", np.where(np.arange(1000) % 11 == 4, 0.0, 1.5)),
     )
     s = rp.spec.spectral(
-        "s", targets=["y"], periods=[8.0, 3.2], group="g", weight="w", half_life=40.0
-    )
+        "s", targets=["y"], periods=[8.0, 3.2], group="g", weight="w", half_life=40.0,
+        scaling=scaling,
+    )  # fmt: skip
     one = rp.ModelBank([s]).fit_predict(df)
     a = rp.ModelBank([s])
     first = a.fit_predict(df.slice(0, cut))

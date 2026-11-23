@@ -1467,7 +1467,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 125] = [
+    const FORMS: [(&str, &[&str]); 127] = [
         // Schema 70 (rule 5's twenty-second exception): the stabilized
         // prior's `ŝ` and `V` under `full` in each form and under `diag`,
         // the factor form's `f`, and a spec's own `prior_rows`.
@@ -1715,6 +1715,11 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         // `spectral` (task 491): each target's transform and its weights'.
         ("spectral", &["model", "Spectral", "sums", "1", "x"]),
         ("spectral", &["model", "Spectral", "sums", "0", "u"]),
+        // Under Lomb-Scargle, the weights' transform at twice each
+        // frequency.
+        ("spectral_ls", &["model", "Spectral", "sums", "1", "v"]),
+        // Under a window, the turns' product of the live origin.
+        ("spectral_window", &["model", "Spectral", "win", "turned"]),
         ("ar_filling", &["model", "Ar", "rings", "0"]),
         ("ar_filling", &["model", "Ar", "fits", "0", "acc"]),
     ];

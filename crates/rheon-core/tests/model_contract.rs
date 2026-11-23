@@ -6477,6 +6477,9 @@ fn spectral_cfg() -> SpectralCfg {
         detrend: true,
         min_weight: 0.0,
         max_state_bytes: None,
+        window: None,
+        window_every: None,
+        max_rows_between_snapshots: None,
     }
 }
 

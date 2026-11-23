@@ -258,9 +258,14 @@ def spectral(
     targets: TargetList,
     periods: list[float | Duration],
     spacing: float | Duration | None = None,
-    scaling: Literal["density", "spectrum"] = "density",
+    scaling: Literal["density", "spectrum", "lomb_scargle"] = "density",
     detrend: bool = True,
     max_state_bytes: int | None = None,
+    window_size: float | Duration | None = None,
+    closed: Literal["right", "both"] = "right",
+    snapshot_every: float | Duration | None = None,
+    max_rows_between_snapshots: int | None = None,
+    window_budget: dict[Literal["thin", "refuse"], float] | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """The power of each target at chosen periods, from an exponentially
@@ -285,8 +290,9 @@ def spectral(
 
     ``periods``
         The periods to transform at, each in clock units, or a duration on
-        a temporal clock, at least twice ``spacing`` (the Nyquist limit).
-        Their inverses are the frequencies. Required; at most 4,096.
+        a temporal clock, at least twice ``spacing`` (the Nyquist limit),
+        or under ``"lomb_scargle"`` any finite period. Their inverses are
+        the frequencies. Required; at most 4,096.
     ``spacing``
         The clock units between rows, scipy's ``1/fs``: the density's scale
         and the place of the Nyquist frequency. Default 1, a row a clock
@@ -294,13 +300,36 @@ def spectral(
     ``scaling``
         ``"density"``, the default and scipy's, ``|X|² spacing / Σa²``, or
         ``"spectrum"``, ``|X|² / (Σa)²``, each doubled but at the zero
-        frequency and the Nyquist.
+        frequency and the Nyquist; or ``"lomb_scargle"``, the generalized
+        Lomb-Scargle power, which needs no even clock: per period, the
+        share of the target's weighted variance that a sinusoid of that
+        period explains, between 0 and 1, from the weighted least squares
+        fit of ``a cos + b sin`` (and a constant with ``detrend``). It is
+        scipy's ``lombscargle(normalize=True, floating_mean=detrend)`` with
+        the amplitudes as ``weights``. Where the rows' phases have not yet
+        spread over enough of a cycle to tell a cosine from a sine, or the
+        target has not varied, the power is null.
     ``detrend``
         Remove the weighted mean before the transform, as scipy's
         ``detrend="constant"`` removes the mean. Default True.
     ``max_state_bytes``
         The bytes a group's state may hold: ``8 (4F + 3)`` a target for
-        ``F`` periods. Default 256 KB; at most 64 MiB.
+        ``F`` periods, ``8 (6F + 4)`` under ``"lomb_scargle"``. Default
+        256 KB; at most 64 MiB.
+    ``window_size``
+        Clock units of history the transform holds, a hard cutoff: the
+        sliding-window transform of the rows less than this old, a number of
+        the clock's units or a duration on a temporal clock. With no decay
+        it is scipy's ``periodogram`` of the window's rows; under decay the
+        rows inside are still weighted by it. A session change or a capped
+        gap empties the window too. Default none.
+    ``closed``, ``snapshot_every``, ``max_rows_between_snapshots``
+        The window's edge and the cadence of the snapshots it is cut from,
+        as :func:`ewridge`'s. Each snapshot holds the state and ``16 F``
+        bytes more.
+    ``window_budget``
+        The MiB a group's snapshots may take; past it they thin or refuse
+        the run, as :func:`ewridge`'s. Default ``{"refuse": 256}``.
 
     .. rubric:: Output
 
@@ -323,7 +352,8 @@ def spectral(
     As every builder does (:mod:`rheon.spec`); ``TypeError`` for
     ``features``, which this model does not take; and ``ValueError`` naming
     the problem for ``periods`` empty, longer than 4,096, or holding a period
-    not finite, not above 0 or below twice ``spacing``, a ``spacing`` not
+    not finite, not above 0 or below twice ``spacing`` (but under
+    ``"lomb_scargle"``, where any finite period is taken), a ``spacing`` not
     above 0, ``scaling`` not one of its words, and a state past
     ``max_state_bytes``.
 
@@ -342,9 +372,31 @@ def spectral(
     ``X`` is the transform of the rows, each at amplitude ``w λ^age``,
     referred to the current clock; ``U`` is the amplitudes' own, which
     removes the mean. ``c`` is 2, and 1 at the zero frequency and the
-    Nyquist. The ``sin`` and ``cos`` are the same bits on every platform.
+    Nyquist. Under ``"lomb_scargle"`` the model keeps two sums more, the
+    amplitudes' transform at twice each frequency and ``Σ a x²``:
+
+    .. code-block:: text
+
+        V ← λ r² V + w         S ← λ S + w x²
+        CC = (A + Re V)/2      SS = (A − Re V)/2      CS = Im V / 2
+        YC = Re X              YS = Im X              YY = S
+        P = (SS YC² − 2 CS YC YS + CC YS²) / ((CC SS − CS²) YY)
+
+    with each centered first under ``detrend`` (``CC −= (Re U)²/A``,
+    ``YC −= B Re U/A``, ``YY −= B²/A`` and so on). The ``sin`` and ``cos``
+    are the same bits on every platform.
     The cost is two of them a frequency where the clock's step changes,
     none where it does not, and ``O(F)`` arithmetic a row.
+
+    Under ``window_size`` the sums are referred to an origin fixed on the
+    clock instead of the current row: a row ``σ`` clock units past it adds
+    ``w x e^{-2πi f σ}``, and the origin moves to the row, the sums turned
+    by ``e^{2πi f σ}``, each time a snapshot is taken. The window is the
+    live sums less the snapshot taken before its first row, decayed
+    forward and turned by the product of the turns since. That costs a
+    ``sin`` and a ``cos`` a frequency on every row, and the turned sums keep
+    their digits on long streams: over ten million rows with no decay the
+    power is within ``1.5e-8`` of the window's periodogram.
 
     .. rubric:: Example
 
@@ -380,5 +432,10 @@ def spectral(
         "scaling": scaling,
         "detrend": detrend,
         "max_state_bytes": max_state_bytes,
+        "window_size": window_size,
+        "closed": closed,
+        "snapshot_every": snapshot_every,
+        "max_rows_between_snapshots": max_rows_between_snapshots,
+        "window_budget": window_budget,
     }
     return _common(name, model, targets=targets, features=[], **common)

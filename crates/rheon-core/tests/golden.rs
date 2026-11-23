@@ -895,6 +895,9 @@ fn spectral_golden() {
         detrend: true,
         min_weight: 0.0,
         max_state_bytes: None,
+        window: None,
+        window_every: None,
+        max_rows_between_snapshots: None,
     })
     .unwrap();
     let mut got = signature_of(&mut m, 1, false);

@@ -495,6 +495,8 @@ impl Spec {
             ModelKind::Spectral(s) => {
                 out.extend(s.periods.spans().iter().map(|p| ("periods", p.clone())));
                 put(&mut out, "spacing", s.spacing.as_ref());
+                put(&mut out, "window_size", s.window_size.as_ref());
+                put(&mut out, "snapshot_every", s.snapshot_every.as_ref());
             }
             ModelKind::Ar {
                 window_size,
