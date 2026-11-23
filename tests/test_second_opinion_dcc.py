@@ -47,6 +47,7 @@ from scipy.signal import lfilter
 from scipy.stats import multivariate_normal
 from statsmodels.tools.numdiff import approx_fprime, approx_hess
 
+import ledger
 from rheon import polars as rp
 
 TIER = "mixed"
@@ -250,12 +251,29 @@ BOUNDS: dict[str, tuple[int, float, float, float]] = {
 }
 
 
-@pytest.mark.extended(reason="50 seeds a form at 10,000 rows, a scipy fit and its sandwich each")
+#: The hash guard's inputs: two seeds a form, the online fit alone, about 2
+#: s. All 300 of the grid's would be 42 s of the gate (each simulation a
+#: Python loop of 11,000 rows, 0.1 s, measured 2026-11-23), and a change to
+#: the estimator moves these seeds' coefficients as well.
+ledger.guard(
+    "dcc_batch",
+    lambda: [
+        online(simulate(f, 10_000, s), FORMS[f][1][2] > 0)[0] for f in sorted(FORMS) for s in (0, 1)
+    ],
+    oracles=["scipy", "statsmodels"],
+)
+
+
+@pytest.mark.oracle_grid(reason="50 seeds a form at 10,000 rows, a scipy fit and its sandwich each")
 @pytest.mark.parametrize("form", sorted(FORMS))
 def test_fifty_seeds_a_form_against_the_batch_fit(form):
     floor, worst, rho, pers = BOUNDS[form]
     cs = [compare(form, s) for s in SEEDS]
     within = sum(c["within2"] for c in cs)
+    ledger.record("dcc_batch", f"{form}_gap_se", [float(np.max(np.abs(c["gap"]))) for c in cs])
+    ledger.record("dcc_batch", f"{form}_rho_gap", [c["rho_gap"] for c in cs])
+    ledger.record("dcc_batch", f"{form}_persistence_gap", [c["persistence_gap"] for c in cs])
+    ledger.record("dcc_batch", f"{form}_outside_2se", len(cs) - within, exact=True)
     assert within >= floor, (form, within)
     assert max(np.max(np.abs(c["gap"])) for c in cs) <= worst, form
     assert max(c["rho_gap"] for c in cs) <= rho, form
