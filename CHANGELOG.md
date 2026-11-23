@@ -91,6 +91,28 @@ model that only the new build has is listed as an addition and passes.
 
 ### Added
 
+- **`rp.rolling_max` and `rp.rolling_min`: the largest and smallest value
+  of a window on the clock, or since an event** (PLAN 561, the min and max
+  of PLAN 518's window operators). Polars' `rolling_max_by` and
+  `rolling_min_by` over every `closed`, held to them bit for bit (on 400
+  frames of `0.0`, `-0.0`, `1.0` and `-1.0` too: the earliest row of a
+  window wins a tie, and looking ahead the latest), looking back and, under
+  `reverse=True`, ahead. With no `window_size` the running form: every row
+  since the stretch began, in a few doubles a group. `since=`, an
+  element-wise boolean, starts the window over at the stamp of a true row,
+  every row of that stamp in; under `closed="left"` or `"none"` the event's
+  stamp is null. `since` with `reverse=True` is refused, saying why. A NaN
+  or an infinity is read as missing, as for every operator, where Polars
+  lets a NaN make the window NaN. A drawdown is the formula
+  `pl.col("x") - rp.rolling_max("x", since=...)`. A windowed extremum's
+  queue is bounded by `max_state_bytes` (256 KB a group, at most 64 MiB):
+  refused when the query is built on the row clock, at the row that passes
+  it on a clock; a row costs 112 bytes for one extremum on its own window.
+  The windows state is version 13, which reads a 12 as a 13 without an
+  extremum; the bank's schema stays 72, which no release has written.
+  A row of weight 0 in a spec's formula target still moves its window, as
+  every operator's does (recorded by a test expected to fail).
+
 - **`rp.stream.merge`: streams that each run in clock order, merged into one
   stream in clock order** (PLAN 541). It takes any number of frames or
   queries, by position or in a dict of name to frame, and gives every row

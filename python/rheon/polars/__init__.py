@@ -162,6 +162,8 @@ from rheon.polars.ops import (
     rewm_mean,  # noqa: F401
     rewm_rate,  # noqa: F401
     rewm_sum,  # noqa: F401
+    rolling_max,
+    rolling_min,
 )
 
 __all__ = [
@@ -172,6 +174,8 @@ __all__ = [
     "ewm_sum",
     "ewm_var",
     "increment",
+    "rolling_max",
+    "rolling_min",
     "ops",
     "ArrowStruct",
     "ColumnNotFoundError",

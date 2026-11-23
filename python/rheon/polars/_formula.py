@@ -57,6 +57,10 @@ OPERATORS = (
     "ewm_std",
     "ewm_quantile",
     "rewm_quantile",
+    "rolling_max",
+    "rolling_min",
+    "rrolling_max",
+    "rrolling_min",
     "increment",
 )
 
@@ -65,6 +69,9 @@ VARIANCES = ("ewm_var", "ewm_std")
 
 #: The operators that take ``quantile``, the level (task 272 (d)).
 QUANTILES = ("ewm_quantile", "rewm_quantile")
+
+#: The extrema (task 561): no ``half_life``, and a ``since`` event.
+EXTREMA = ("rolling_max", "rolling_min", "rrolling_max", "rrolling_min")
 
 _BINARY = {
     "Plus": "+",
@@ -377,7 +384,7 @@ def operators(tree: Any) -> list[list[Any]]:
 
 #: The operators that look ahead: a formula with one is a target of the
 #: row's future (docs/PLAN.md task 104).
-FORWARD = ("rewm_mean", "rewm_sum", "rewm_rate", "rewm_quantile")
+FORWARD = ("rewm_mean", "rewm_sum", "rewm_rate", "rewm_quantile", "rrolling_max", "rrolling_min")
 
 
 def columns(tree: Any) -> list[str]:
@@ -395,6 +402,9 @@ def columns(tree: Any) -> list[str]:
             return
         elif head in OPERATORS:
             walk(node[1])
+            # An extremum's event reads columns of its own.
+            if len(node) > 2 and isinstance(node[2], dict) and "since" in node[2]:
+                walk(node[2]["since"])
         else:
             for arg in node[1:]:
                 walk(arg)
@@ -579,6 +589,9 @@ def _number(who: str, key: str, x: float, shown: Any, *, inf_ok: bool) -> float 
 #: in a ``u32``.
 MAX_MIN_SAMPLES = 2**32 - 1
 
+#: The most an extremum's ``max_state_bytes`` may be: 64 MiB a group.
+MAX_STATE_BYTES = 64 << 20
+
 
 def operator(
     name: str,
@@ -591,6 +604,8 @@ def operator(
     partial: str | None = None,
     bias: Any = None,
     quantile: Any = None,
+    since: Any = None,
+    max_state_bytes: Any = None,
     who: str | None = None,
 ) -> pl.Expr:
     """The expression of operator ``name`` over ``input`` with these
@@ -602,15 +617,23 @@ def operator(
     tree = _input_tree(who, input)
     if name == "increment":
         return operator_column(["increment", tree])
-    if half_life is None:
+    params: dict[str, Any] = {}
+    if name in EXTREMA:
+        # An extremum weighs no row, so it has no half_life.
+        if half_life is not None:
+            raise TypeError(
+                f"{who}: half_life is given, but an extremum weighs no row. Leave it out."
+            )
+    elif half_life is None:
         raise TypeError(
             f"{who}: half_life is required, but it is not given. Give half_life in clock units, "
             f"or inf for no decay."
         )
-    params: dict[str, Any] = {"half_life": _span(who, "half_life", half_life, inf_ok=True)}
+    else:
+        params["half_life"] = _span(who, "half_life", half_life, inf_ok=True)
     if window_size is not None:
         params["window_size"] = _span(who, "window_size", window_size, inf_ok=False)
-    elif name.startswith("rewm"):
+    elif name.startswith("rewm") or name.startswith("rrolling"):
         raise RefusedValueError(
             f"{who}: window_size is required when the operator looks ahead, since the rows "
             f"after a row have no end without one, but it is not given. Give window_size in "
@@ -685,4 +708,41 @@ def operator(
         raise TypeError(
             f"{who}: quantile is given, but only ewm_quantile takes it. Leave out quantile."
         )
+    if since is not None:
+        if name not in EXTREMA:
+            raise TypeError(
+                f"{who}: since is given, but only rolling_max and rolling_min take it. "
+                f"Leave out since."
+            )
+        if name.startswith("rrolling"):
+            raise RefusedValueError(
+                f"{who}: since cannot be combined with reverse=True yet. A window looking ahead "
+                f"would end at the next event, and whether such a window is whole or partial "
+                f"has no rule yet. Leave out since, or read the rows at or before each row."
+            )
+        since_tree = _input_tree(f"{who} since", since)
+        if operators(since_tree):
+            raise ValueError(
+                f"{who}: since holds an operator, but it may hold only columns and Polars "
+                f'expressions of the same row, such as pl.col("new_period"). Add the operator '
+                f"as a column with rp.stream.with_windows first, and pass that column."
+            )
+        params["since"] = since_tree
+    if max_state_bytes is not None:
+        if name not in EXTREMA:
+            raise TypeError(
+                f"{who}: max_state_bytes is given, but only rolling_max and rolling_min take "
+                f"it. Leave out max_state_bytes."
+            )
+        wrong = isinstance(max_state_bytes, bool) or not isinstance(
+            max_state_bytes, numbers.Integral
+        )
+        if wrong or not 0 < max_state_bytes <= MAX_STATE_BYTES:
+            msg = (
+                f"{who}: max_state_bytes must be an integer above 0 and at most "
+                f"{MAX_STATE_BYTES} (64 MiB), but it is {max_state_bytes!r}. Set it to the "
+                f"bytes a group's window may hold."
+            )
+            raise WrongTypeError(msg) if wrong else ValueError(msg)
+        params["max_state_bytes"] = int(max_state_bytes)
     return operator_column([name, tree, params])
