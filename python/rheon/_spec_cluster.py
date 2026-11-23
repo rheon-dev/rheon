@@ -606,8 +606,10 @@ def micro(
     **The prune schedule.** Without a clock column the clock is the
     row's number, the first row being 1, so ``prune_every=n`` prunes on
     the rows ``max_rows_between_prunes=n`` does while every row has weight.
-    A row of weight zero advances the clock, so a quiet spell still prunes
-    on time, and a gap capped at ``gap_cap`` counts as the cap. DenStream
+    A row of weight zero is in no clock, so it neither prunes nor brings a
+    prune nearer; on a clock column the next row's step reaches back to the
+    last row of weight, so a quiet spell of the clock still prunes on time,
+    and a gap capped at ``gap_cap`` counts as the cap. DenStream
     checks every ``Tp`` clock units (*Pruning*): give ``prune_every`` that
     to follow the paper.
 

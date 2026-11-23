@@ -2027,7 +2027,7 @@ mod tests {
     }
 
     #[test]
-    fn a_zero_weight_row_advances_the_clock_and_learns_nothing_even_first() {
+    fn a_zero_weight_row_handed_directly_ages_the_state_and_learns_nothing_even_first() {
         let c = KMeansCfg {
             decay: Decay::Halflife(5.0),
             ..cfg(2)
