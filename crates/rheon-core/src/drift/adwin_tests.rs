@@ -487,3 +487,23 @@ fn outliers_that_leave_the_window_leave_no_variance_behind() {
         }
     }
 }
+
+/// A split with no newer rows is never a cut, whatever `min_window_length`
+/// a direct caller gives: at one bucket a level, with level 0 empty, the
+/// scan's last split left `n1 = 0`, and `u1 / 0` was infinite where the
+/// window's sum and its buckets' differed by a rounding, a cut of a steady
+/// stream (review 2026-11-23, DRIFT-9).
+#[test]
+fn a_split_with_nothing_newer_is_no_cut_at_any_shortest_part() {
+    for x in [0.1, 0.3, 1.0 / 3.0, 7.7] {
+        let mut a = Adwin::new(AdwinCfg {
+            max_buckets: 1,
+            min_window_length: 0,
+            clock: 1,
+            grace_period: 0,
+            ..cfg()
+        });
+        let flags = (0..500).filter(|_| a.update(x)).count();
+        assert_eq!(flags, 0, "a steady {x} flagged");
+    }
+}

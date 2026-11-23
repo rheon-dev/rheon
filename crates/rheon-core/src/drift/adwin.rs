@@ -381,7 +381,10 @@ impl Adwin {
                     let tk = self.levels[idx][k][0];
                     u0 += tk;
                     u1 -= tk;
-                    if idx == 0 && k == cnt - 1 {
+                    // The newest bucket leaves no newer part; at one bucket
+                    // a level with level 0 empty it is not level 0's, and
+                    // `u1 / 0` read a rounding of the sums as infinite.
+                    if (idx == 0 && k == cnt - 1) || n1 <= 0.0 {
                         break 'scan;
                     }
                     let dmean = (u0 / n0) - (u1 / n1);
