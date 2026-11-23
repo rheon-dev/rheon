@@ -718,6 +718,16 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **A coordinate descent that runs to infinities is not converged**
+  (review 2026-11-23, LASSO-1). `lasso`'s and the Gram path's descent end
+  when a sweep's largest move is under the tolerance. On a correlation
+  matrix that is not positive semidefinite, which a window's subtraction
+  can leave, the moves grow until the coefficients are `±inf`. There
+  `|inf − inf|` is NaN, which `f64::max` drops, so the sweep read as one
+  that moved nothing and the fit counted as converged. A descent that
+  settles now converges only at finite coefficients; one that does not is
+  counted in `solve_failures`, and its prediction is withheld as before.
+
 - **A gap past the decay's underflow while a refit buffer is open forgets
   the rows before it, and the state saves and loads** (review 2026-11-23,
   REG-1). At a half-life `h`, a gap of `1075 h` or more decays by exactly

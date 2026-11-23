@@ -1475,3 +1475,25 @@ fn the_edge_and_the_sweep_estimate_hold_on_independent_features() {
         );
     }
 }
+
+/// A descent that runs to infinities has not converged (review 2026-11-23,
+/// LASSO-1): on the symmetric `[[1, 2], [2, 1]]`, which is not positive
+/// semidefinite, the moves grow until they are `±inf`, where `|inf − inf|`
+/// is NaN and `f64::max` dropped it, so a sweep of NaN moves read as one of
+/// none and settled.
+#[test]
+fn a_descent_that_diverges_is_not_converged() {
+    let r = [1.0, 2.0, 2.0, 1.0];
+    let p = cd_path(
+        &r,
+        &[1.0, 0.5],
+        &[true; 2],
+        &[0.0],
+        1.0,
+        &[1.0; 2],
+        5000,
+        1e-7,
+        1.0,
+    );
+    assert_eq!(p.unconverged, [true], "{:?}", p.coefs);
+}

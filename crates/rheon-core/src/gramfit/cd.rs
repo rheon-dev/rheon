@@ -69,6 +69,14 @@ pub(crate) fn settled(delta: f64, limit: f64) -> bool {
     delta < limit || delta == 0.0
 }
 
+/// Whether a descent whose sweep [`settled`] stopped at finite
+/// coefficients: one that ran to `±inf` took `|inf − inf|`, a NaN move,
+/// which the largest move's `f64::max` drops, and settled on it. Read once
+/// a descent, where it would settle, not on every move.
+pub(crate) fn finite(b: &[f64]) -> bool {
+    b.iter().all(|v| v.is_finite())
+}
+
 /// Whether a descent that ran out of sweeps did so because the rows behind
 /// its Gram are too few for the features: a fit in its warm-up, whose cap
 /// hit says nothing about the data or the settings, so it is not counted as
@@ -259,7 +267,10 @@ pub fn cd_path(
                 }
             }
             if settled(delta, limit) {
-                converged = true;
+                // A descent that ran to infinities settles on NaN moves,
+                // which `max` dropped: not converged, and no sweep after
+                // brings it back.
+                converged = finite(&b);
                 break;
             }
         }

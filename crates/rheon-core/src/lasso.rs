@@ -1192,7 +1192,9 @@ fn descend(
             cd_sweep(c, k, d, s, l1, l2, b, &mut support.acc)
         };
         if crate::gramfit::settled(delta, limit) {
-            return true;
+            // A descent that ran to infinities settles on NaN moves, which
+            // `max` dropped: not converged.
+            return crate::gramfit::finite(b);
         }
     }
     false
@@ -1795,6 +1797,39 @@ impl OnlineModel for Lasso {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A descent that runs to infinities has not converged (review
+    /// 2026-11-23, LASSO-1): on a symmetric `c` that is not positive
+    /// semidefinite, `[[1, 2], [2, 1]]` (a window's subtraction can leave a
+    /// correlation past 1), each sweep multiplies the moves until they are
+    /// `±inf`, where `|inf − inf|` is NaN and `f64::max` dropped it, so a
+    /// sweep of NaN moves read as one of none and settled. Under both sweeps:
+    /// the one-chain one at two features and the split one at its threshold
+    /// (the bad pair beside an identity).
+    #[test]
+    fn a_descent_that_diverges_is_not_converged() {
+        for k in [2, split::SPLIT_MIN_K] {
+            let mut c = vec![0.0; k * k];
+            for i in 0..k {
+                c[i * k + i] = 1.0;
+            }
+            c[1] = 2.0;
+            c[k] = 2.0;
+            let d: Vec<f64> = (0..k)
+                .map(|i| if i < 2 { 1.0 - 0.5 * i as f64 } else { 0.1 })
+                .collect();
+            let s = vec![1.0; k];
+            let mut b = vec![0.0; k];
+            let mut support = Support::default();
+            let converged = descend(&c, k, &d, &s, (0.0, 0.0), &mut b, 5000, 1e-9, &mut support);
+            assert!(
+                !converged || b.iter().all(|v| v.is_finite()),
+                "k {k}: settled at {:?}",
+                &b[..2]
+            );
+            assert!(!converged, "k {k}: {:?}", &b[..2]);
+        }
+    }
 
     /// A selection index past the path is refused, where it loaded and
     /// panicked in `lam_selected` (review 2026-09-18, B3); so is a threshold
@@ -4772,7 +4807,10 @@ mod tests {
                         cd_sweep_serial(&c, k, &d, &s, l1, 0.0, &mut serial)
                     };
                     if crate::gramfit::settled(delta, limit) {
-                        converged_serial = true;
+                        // At 90 features this `c` is not positive
+                        // semidefinite and one penalty's descent runs to
+                        // infinities: settled, not converged (LASSO-1).
+                        converged_serial = crate::gramfit::finite(&serial);
                         break;
                     }
                 }
