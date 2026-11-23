@@ -177,12 +177,13 @@ impl<'a> From<Vec<&'a str>> for Targets {
     }
 }
 
-/// A target as it is written: a column's name, or a table.
+/// A target as it is written: a column's name, or a table (boxed: a formula
+/// is a tree of window-operator nodes, which are large).
 #[derive(Serialize)]
 #[serde(untagged)]
 enum Written {
     Name(String),
-    Table(Table),
+    Table(Box<Table>),
 }
 
 /// A string or a table, each read by its own rules, so a table with a
@@ -214,7 +215,7 @@ impl<'de> Deserialize<'de> for Written {
 
             fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<Written, A::Error> {
                 Table::deserialize(serde::de::value::MapAccessDeserializer::new(map))
-                    .map(Written::Table)
+                    .map(|t| Written::Table(Box::new(t)))
             }
         }
         d.deserialize_any(V)
@@ -248,13 +249,13 @@ impl Serialize for Targets {
                 if d.is_plain() {
                     Written::Name(d.column.clone())
                 } else {
-                    Written::Table(Table {
+                    Written::Table(Box::new(Table {
                         column: d.formula.is_none().then(|| d.column.clone()),
                         name: Some(d.name.clone()),
                         formula: d.formula.clone(),
                         relative_to: None,
                         relative: None,
-                    })
+                    }))
                 }
             })
             .collect();
