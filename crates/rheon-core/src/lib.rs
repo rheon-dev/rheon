@@ -938,7 +938,9 @@ pub use window::{
 ///   (`tests/state_fixtures/v71/`). A new model's state rides on the same
 ///   schema: `ewm_moments`' [`ModelState::EwmMoments`], appended, which
 ///   moves no other layout (the cases `ewm_moments` and
-///   `ewm_moments_plugin`).
+///   `ewm_moments_plugin`; its lag buffers and window ring, row and clock,
+///   in `ewm_moments_lags`, `ewm_moments_clock_lags`, `ewm_moments_window`
+///   and `ewm_moments_clock_window`).
 pub const SCHEMA_VERSION: u32 = 72;
 
 /// The default solve cadence of `ewridge`, `lasso`, `huber` and `quantile`

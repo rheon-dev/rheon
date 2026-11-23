@@ -55,8 +55,6 @@ fn kind(s: &str) -> MomentKind {
     }
 }
 
-type Spec = [(&'static str, &'static [(&'static str, u32)], &'static str)];
-
 /// The script's terms at one `bias`, suffixed; under `bias = false` only
 /// those the reference keeps (no raw term, order 4 at most).
 fn terms_of(spec: &Spec, bias: bool, suffix: &str) -> Vec<MomentTerm> {

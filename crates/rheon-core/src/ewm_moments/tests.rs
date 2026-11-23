@@ -8,6 +8,10 @@
 use super::*;
 use crate::EwDiag;
 
+/// Part 4's terms as the literal script prints them: a name, the legs
+/// (`"x@3"`) with their powers, and a kind.
+type Spec = [(&'static str, &'static [(&'static str, u32)], &'static str)];
+
 include!("reference_values.rs");
 
 mod part4;

@@ -188,7 +188,7 @@ const REF_B: &[(usize, &str, f64)] = &[
 ];
 
 // Part 4: lags, windows and the standard error, on `stream2`.
-const LAG_TERMS: &[(&str, &[(&str, u32)], &str)] = &[
+const LAG_TERMS: &Spec = &[
     ("ac1", &[("x", 1), ("x@1", 1)], "central"),
     ("acor2", &[("x", 1), ("x@2", 1)], "standardized"),
     ("xy", &[("x", 1), ("y", 1)], "central"),
@@ -202,14 +202,14 @@ const LAG_TERMS: &[(&str, &[(&str, u32)], &str)] = &[
     ("sk1", &[("x@1", 3)], "standardized"),
     ("ku1", &[("x@1", 4)], "standardized"),
 ];
-const CLOCK_TERMS: &[(&str, &[(&str, u32)], &str)] = &[
+const CLOCK_TERMS: &Spec = &[
     ("ac2", &[("x", 1), ("x@2", 1)], "central"),
     ("acor2", &[("x", 1), ("x@2", 1)], "standardized"),
     ("xy35", &[("x", 1), ("y@3.5", 1)], "central"),
     ("sk2", &[("x@2", 3)], "standardized"),
     ("lm35", &[("y@3.5", 1)], "raw"),
 ];
-const WINDOW_TERMS: &[(&str, &[(&str, u32)], &str)] = &[
+const WINDOW_TERMS: &Spec = &[
     ("c2", &[("x", 2)], "central"),
     ("c4", &[("x", 4)], "central"),
     ("sk", &[("x", 3)], "standardized"),
@@ -217,7 +217,7 @@ const WINDOW_TERMS: &[(&str, &[(&str, u32)], &str)] = &[
     ("corr", &[("x", 1), ("y", 1)], "standardized"),
     ("k4", &[("x", 4)], "cumulant"),
 ];
-const SE_TERMS: &[(&str, &[(&str, u32)], &str)] = &[
+const SE_TERMS: &Spec = &[
     ("c2", &[("x", 2)], "central"),
     ("c3", &[("x", 3)], "central"),
     ("s3", &[("x", 3)], "standardized"),

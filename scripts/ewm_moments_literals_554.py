@@ -150,7 +150,7 @@ ROWS4 = (2, 13, 31, 44, 59)
 
 
 def print_terms(const: str, terms) -> None:
-    print(f"const {const}: &[(&str, &[(&str, u32)], &str)] = &[")
+    print(f"const {const}: &Spec = &[")
     for name, legs, kind in terms:
         ls = ", ".join(f'("{k}", {v})' for k, v in legs.items())
         print(f'    ("{name}", &[{ls}], "{kind}"),')
