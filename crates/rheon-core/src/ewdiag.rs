@@ -246,21 +246,33 @@ impl EwDiag {
     }
 
     /// [`Self::update`], the moments read against a history of at least
-    /// `floor`: where the history's decayed weight `lam·W` is below it (and
-    /// there is a history, and the row has a weight), the old statistics
-    /// take the share `floor / (floor + w)` in place of `lam·W / (lam·W +
+    /// `floor`, up to `had`, the weight the history had before the gap:
+    /// where the history's decayed weight `lam·W` is below `H = min(had,
+    /// floor)` (and there is a history, and the row has a weight), the old
+    /// statistics take the share `H / (H + w)` in place of `lam·W / (lam·W +
     /// w)`. The weight kept is `lam·W + w` either way, so `n_eff` is the
     /// plain recursion's (hard rule 8); where the floor does not bind this
-    /// is `update`, to the bit. `true` where it bound.
-    pub(crate) fn update_keeping(&mut self, x: &[f64], lam: f64, w: f64, floor: f64) -> bool {
+    /// is `update`, to the bit. `true` where it bound. Uncapped, a history
+    /// of `1e-6` read against a row of weight 1 after a half-life took half
+    /// the share, a million times its weight. `had` is the caller's, since
+    /// rows of weight 0 inside the gap have aged `W` already.
+    pub(crate) fn update_keeping(
+        &mut self,
+        x: &[f64],
+        lam: f64,
+        w: f64,
+        floor: f64,
+        had: f64,
+    ) -> bool {
         let carried = lam * self.w_sum;
-        if !(self.w_sum > 0.0 && w > 0.0 && floor > carried) {
+        let kept = floor.min(had);
+        if !(self.w_sum > 0.0 && w > 0.0 && kept > carried) {
             self.update(x, lam, w);
             return false;
         }
         debug_assert_eq!(x.len(), self.k);
-        let total = floor + w;
-        let a = floor / total;
+        let total = kept + w;
+        let a = kept / total;
         let b = w / total;
         for (((ci, mi), lo), &xi) in self
             .c
@@ -748,7 +760,7 @@ mod tests {
         // No history: the floor has nothing to hold up.
         let mut kept = EwDiag::new(2);
         let mut plain = EwDiag::new(2);
-        assert!(!kept.update_keeping(&x, 0.9, 1.0, 5.0));
+        assert!(!kept.update_keeping(&x, 0.9, 1.0, 5.0, f64::INFINITY));
         plain.update(&x, 0.9, 1.0);
         assert_eq!(kept, plain);
 
@@ -759,28 +771,31 @@ mod tests {
 
         // A row of no weight: nothing to learn, so nothing to keep.
         let (mut kept, mut plain) = (base.clone(), base.clone());
-        assert!(!kept.update_keeping(&x, 0.5, 0.0, 9.0));
+        assert!(!kept.update_keeping(&x, 0.5, 0.0, 9.0, 2.0));
         plain.update(&x, 0.5, 0.0);
         assert_eq!(kept, plain);
 
         // The tie: lam * W is 1 and so is the floor.
         let (mut kept, mut plain) = (base.clone(), base.clone());
-        assert!(!kept.update_keeping(&x, 0.5, 1.0, 1.0));
+        assert!(!kept.update_keeping(&x, 0.5, 1.0, 1.0, 2.0));
         plain.update(&x, 0.5, 1.0);
         assert_eq!(kept, plain);
 
         // Below the tie the floor does not bind either.
         let (mut kept, mut plain) = (base.clone(), base.clone());
-        assert!(!kept.update_keeping(&x, 0.5, 1.0, 0.5));
+        assert!(!kept.update_keeping(&x, 0.5, 1.0, 0.5, 2.0));
         plain.update(&x, 0.5, 1.0);
         assert_eq!(kept, plain);
 
-        // Above it: the old statistics take the share floor / (floor + w),
-        // and the weight kept is lam * W + w, the plain recursion's.
+        // Above it: the old statistics take the share H / (H + w), H the
+        // floor up to the history's own weight W = 2, and the weight kept is
+        // lam * W + w, the plain recursion's.
         let (floor, w, lam) = (3.0, 1.0, 0.5);
         let mut kept = base.clone();
-        assert!(kept.update_keeping(&x, lam, w, floor));
-        let (a, b) = (floor / (floor + w), w / (floor + w));
+        assert!(kept.update_keeping(&x, lam, w, floor, base.n_eff()));
+        let h = floor.min(base.n_eff());
+        assert_eq!(h, 2.0);
+        let (a, b) = (h / (h + w), w / (h + w));
         for (i, xi) in x.iter().enumerate() {
             let d = xi - base.mean(i);
             let want_mean = base.mean(i) + b * d;
@@ -793,6 +808,29 @@ mod tests {
             );
         }
         assert_eq!(kept.n_eff(), lam * base.n_eff() + w);
+    }
+
+    /// The history is held up to the floor, never past the weight it had:
+    /// a row of weight `1e-6`, then a row of weight 1 a little past a
+    /// half-life later, read the light row at half the share, a million
+    /// times its weight, where a little short of a half-life the plain
+    /// update gave it its weight's share (review 2026-11-23, REG-15). The
+    /// history kept is `max(lam·W, min(W, floor))`, as `sgd`'s scaler keeps
+    /// it.
+    #[test]
+    fn the_floor_holds_a_history_up_to_its_own_weight_and_no_further() {
+        for lam in [0.5f64.powf(0.99), 0.5f64.powf(1.01), 0.5f64.powi(30)] {
+            let mut d = EwDiag::new(1);
+            d.update(&[0.0], 1.0, 1e-6);
+            let mut plain = d.clone();
+            d.update_keeping(&[10.0], lam, 1.0, 1.0, 1e-6);
+            plain.update(&[10.0], lam, 1.0);
+            let h = (lam * 1e-6f64).max(1e-6f64.min(1.0));
+            let want = 10.0 * 1.0 / (h + 1.0);
+            assert!((d.mean(0) - want).abs() < 1e-12, "lam {lam}: {} against {want}", d.mean(0));
+            assert!(d.mean(0) > 9.99999, "lam {lam}");
+            assert_eq!(d.n_eff(), plain.n_eff());
+        }
     }
 
     /// The deviation is read as `a·d` where the history's share is strictly

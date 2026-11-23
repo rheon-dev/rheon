@@ -833,6 +833,16 @@ model that only the new build has is listed as an addition and passes.
   flagged on the first row past each warm start: 10 flags in 310 rows at
   0.5. `drift_kind` is new in this release, so no released spec is
   refused.
+- **A standardizing `kalman` holds its history up after a gap no further
+  than the weight it had** (review 2026-11-23, REG-15). More than a
+  half-life after a target was last learned, the feature moments read
+  their history at no less than the row's own weight, and so a history
+  lighter than the row was lifted past what it held: a row of weight
+  `1e-6`, then a row of weight 1 a little past a half-life later, read the
+  light row at half the share. The history is now read at `max(lam·W,
+  min(W, w))`, `W` its weight before the gap, as `sgd`'s scaler reads it,
+  and the same however rows of weight 0 split the gap. Moves:
+  `kalman.pred_*`, `kalman.coef`.
 - **A window looking ahead whose far edge is the input's last row is whole
   at the end of the input** (PLAN 565). Under `closed="right"` or `"both"`,
   `rp.ewm_sum`, `rp.ewm_mean`, `rp.ewm_rate` and `rp.ewm_quantile` with

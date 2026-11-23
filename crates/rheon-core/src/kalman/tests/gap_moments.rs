@@ -335,10 +335,10 @@ fn the_floor_binds_only_after_more_than_a_half_life() {
 }
 
 /// `update_keeping` is `update` to the bit where the history's decayed
-/// weight is at least the floor, and where it is below, reads the history
-/// at the floor: the moments are `update`'s with the history's share `H /
-/// (H + w)`, `H` the floor, within rounding, and the weight kept is `lam·W
-/// + w`, exactly.
+/// weight is at least the floor (or its own weight), and where it is
+/// below, reads the history at the floor: the moments are `update`'s with
+/// the history's share `H / (H + w)`, `H` the floor up to the history's
+/// weight, within rounding, and the weight kept is `lam·W + w`, exactly.
 #[test]
 fn update_keeping_is_update_but_where_the_floor_binds() {
     let mut s = 91u64;
@@ -356,11 +356,11 @@ fn update_keeping_is_update_but_where_the_floor_binds() {
         );
         let (w_sum, floor) = (sc.n_eff(), w);
         let (mut kept, mut plain) = (sc.clone(), sc.clone());
-        let bound = kept.update_keeping(&x, lam, w, floor);
+        let bound = kept.update_keeping(&x, lam, w, floor, w_sum);
         assert_eq!(
             bound,
-            lam * w_sum < floor,
-            "it binds where the history is lighter"
+            lam * w_sum < floor.min(w_sum),
+            "it binds where the history is lighter, up to its own weight"
         );
         assert_eq!(
             kept.n_eff().to_bits(),
