@@ -248,10 +248,10 @@ and cancels to the spread:
 The mean is held as `m + m_lo` (compensated, as `EwDiag`), which keeps
 `dx`'s error at the spread's scale when the level is large. A high order
 can overflow: `|dx|^p` for `p = 8` at a spread of `1e40` is past `f64`'s
-range; the order cap (Q1) bounds this, and an overflowed moment is withheld
-by its non-finiteness, never emitted.
+range; with no order cap (Q1), an overflowed moment is withheld by its
+non-finiteness, with a reason, never emitted.
 
-## 8. Open questions (for the user)
+## 8. Open questions (for the user; answered in section 9)
 
 - **Q1. The orders and the API's spelling.** `orders=[...]` for one column
   is clear. For cross terms: a list of `(a, b)` pairs per column pair, or
@@ -295,12 +295,182 @@ by its non-finiteness, never emitted.
   pair), or `w_t * w_{t-k}`? A zero-weight `t - k` is not in the ring under
   either.
 
-## 9. The next part
+## 9. The answers (the user, 2026-11-22)
 
-Part 2: the update of section 3 in numpy (Rust-free), the reference the
-Rust is checked against: single column, pair and lag summaries, the row
-window by block merge, the zero-weight and constant-leg cases, the oracle
-tests of section 2 at `w = 1, lam = 1` and the longhand weighted
-definitions otherwise, and the raw-from-central gap measured. Part 3: the
-state in `rheon-core` behind `OnlineModel`, its size checked against
-`max_state_bytes`, fixtures per the state rules, then the spec.
+- **Q1.** A new spec kind, `ewm_moments`, and the window operator
+  `rp.ewm_moments`, beside `ewm_mean` and `ewm_var`; not new statistics of
+  `ew_cov`. Terms are named by the user, as `power_variation`'s:
+  `terms={"m3": {"x": 3}, "xy2": {"x": 1, "y": 2}, "ac1": {"x": 1, "x@1": 1}}`,
+  a lag written on the column, each output named after its term. No order
+  cap: the state is checked against `max_state_bytes`; tests run to order
+  6, the oracles' range.
+- **Q2.** Exact central moments about the lagged pairs' own weighted means
+  (Pebay over the pairs); the autocorrelation is that over both legs'
+  variances on the same pairs. It differs from `ew_lag_cov`'s recursion and
+  from `acf`, and the tests state by how much (section 10).
+- **Q3.** One lag buffer per column, shared by every pair that reads it. A
+  clock lag pairs the row with the latest row at or before `t - lag`
+  (as-of); a break clears the buffer; a gap longer than the lag leaves no
+  pair (the row adds nothing to the lagged terms and still counts for the
+  others).
+- **Q4.** The merged-block window, on the clock as on rows, its edges from
+  the raw clocks as Polars' `rolling_*_by`.
+- **Q5.** Guard by the condition: `sum omega^2` is kept always (Kish's
+  `n`). A term is withheld with a reason where it is undefined: no weight;
+  zero variance for a standardized or correlation term; a bias-correction
+  denominator at or below 0. Orders to `2P` are kept only when the spec asks
+  for `se=True`, which emits `se_<term>`. No row counts anywhere.
+- **Q6.** One `bias` parameter, its default each statistic's in Polars
+  (`ewm_var`: unbiased; `skew`, `kurtosis`: plug-in). Unbiased orders 3 and
+  4 by Rimoldini's forms for reliability weights; `bias=False` above order 4
+  is refused by name.
+- **Q7.** `ew_lag_cov`'s pair weight, `w_t`, the weight of the row that
+  closes the pair, so the two weigh a pair alike at order (1,1). A
+  zero-weight row on either side gives no pair: a zero-weight row is never
+  learned, so it is neither a pair's row nor in a buffer.
+
+## 10. The reference (part 2)
+
+`tests/reference_ewm_moments.py` is the update in Python floats, Rust-free,
+and `tests/test_reference_ewm_moments.py` holds it to the oracles (28 tests,
+3 s, the essentials tier). It is exact against itself (chunks, a saved
+state) and held to the Rust within a tolerance, not to the bit: it keeps the
+mean whole where `EwDiag` compensates it, and folds a window's blocks left
+to right where `window_moments` aggregates them by van Herk's scheme.
+
+**The summary.** Over a term's `d` legs: `W`, the `d` means, the normalised
+central co-moments `c_a = M_a / W` for every `a` in the downward closure of
+the terms' indices (order 2 and up), and `r_k = sum omega^k / W^k` for
+`k = 2` always (`1 / r_2` is Kish's `n`) and `k = 3, 4` where an unbiased
+third or fourth moment is asked for. Decay multiplies `W` alone: `c` and
+`r` are ratios every factor scales alike, so a long gap moves no moment and
+underflows nothing. A row is Pebay's merge with the one-row summary
+`(w, z, c = 0, r = 1)`, and a block is the same merge with a block's
+summary, so one function does both:
+
+```text
+W = W_A + W_B    a = W_A / W    b = W_B / W    delta = m_B - m_A    m = m_A + b delta
+c_a = sum_{beta <= a} C(a, beta) [ a c^A_{a-beta} (-b delta)^beta + b c^B_{a-beta} (a delta)^beta ]
+r_k = a^k r^A_k + b^k r^B_k
+```
+
+Powers are formed by repeated multiplication, not `pow`, so the Rust can
+form the same numbers. An empty side (`W = 0`) returns the other unchanged:
+the guard is the condition, so a zero-weight first row is no 0/0.
+
+**The unbiased forms.** For i.i.d. rows under weights with ratios `r_k`,
+derived exactly (rational enumeration over two discrete distributions, the
+coefficients fitted in `1, r2, r3, r4, r2^2` and checked on further weight
+vectors):
+
+```text
+E[m2]   = (1 - r2) mu2
+E[m3]   = (1 - 3 r2 + 2 r3) mu3
+E[m4]   = (1 - 4 r2 + 6 r3 - 3 r4) mu4 + (6 r2 - 6 r3 + 9 r4 - 9 r2^2) mu2^2
+E[m2^2] = (r2 - 2 r3 + r4) mu4 + (1 - 3 r2 + 2 r3 - 3 r4 + 3 r2^2) mu2^2
+```
+
+Inverting gives Rimoldini's unbiased `M2`, `M3`, `M4` and an unbiased
+`mu2^2`; Fisher's `k4` is `M4 - 3 (mu2^2)_unbiased`. At equal weights these
+are `kstat`, `skew(bias=False)` (`M3 / M2^1.5`) and
+`kurtosis(bias=False, fisher=False)` (`k4 / M2^2 + 3`). Cross terms of order
+3 and 4 use the same coefficients, polarised (`mu2^2` becomes
+`(c_ij c_kl + c_ik c_jl + c_il c_jk) / 3` over the four leg indices). Each
+denominator (`1 - r2`, `1 - 3 r2 + 2 r3`, the 2x2 determinant) withholds its
+term when it keeps no digit (within `64 eps` of its terms' sizes): one row
+carrying all the weight, or the weight on too few rows, by the weights, not
+a count.
+
+**The standard error.** Each kind's influence function is a polynomial in
+the legs' deviations (`d^a - mu_a - sum_j a_j mu_{a-e_j} d_j` for a central
+moment, the chain rule for standardized and cumulant terms, the expansion
+of `(m + d)^a` for raw ones); its mean square, read from moments to twice
+the order, times `r_2`, is the delta-method variance at Kish's `n`.
+
+**Choices the reference makes that the answers left open.**
+
+- A zero-weight row, or one with a non-finite value or weight in a column
+  the spec reads, is no row: no clock advance, no decay, no buffer, no
+  window. Every output is a ratio that a uniform decay leaves alone, so on
+  a clock this changes nothing; on a row clock it means a zero-weight row
+  is not a row of decay.
+- "A gap longer than the lag", for a clock lag `L`: the as-of row is more
+  than `L` before the as-of point `t - L` (older than `t - 2L`). An as-of
+  match within `L` of the point pairs; jittered rows at a spacing near `L`
+  still pair, which a rule on the spacing between consecutive rows would not
+  allow.
+- `kind` is one kind for every term or a map from term name to kind
+  (`central`, `raw`, `standardized`, `cumulant`). A cumulant is of one leg;
+  a joint cumulant is refused by name.
+- A break clears the lag buffers only; the accumulators and the window ring
+  go on, as `ew_lag_cov`'s `clear`. The window operator's surface resets at
+  a break as `ewm_var` does; that is the surface's, not the state's.
+- Output is read after the row's update (`emit="after"`, a window
+  operator's convention, closed on the right) or before it (`"before"`, a
+  model's, out of sample).
+
+**Results** (seed 554, 60 rows of `3 + Gamma(2, 1.5)`, unequal weights with
+one zero; "gap" is `|ref - oracle| / max(|oracle|, 1)`, worst over every row
+and order):
+
+| Held to | Gap |
+|---|---|
+| `scipy.stats.moment`, central, orders 2 to 6, equal weights | 2.1e-14 |
+| `scipy.stats.moment(center=0)`, raw read from central and the mean | 1.1e-15 |
+| `numpy.average`, central, orders 2 to 6, decayed on a clock, weighted | 8.0e-14 |
+| `numpy.average`, raw, the same | 1.3e-15 |
+| `scipy.stats.skew` / `kurtosis`, `bias=True` | 3.0e-15 / 1.7e-15 |
+| `scipy.stats.skew` / `kurtosis`, `bias=False` | 3.2e-15 / 6.4e-15 |
+| `scipy.stats.kstat`, orders 2 to 4 | 8.3e-13 (five rows, `k4`'s cancellation) |
+| `moment_helpers.mc2cum`, plug-in cumulants 2 to 6 | 2.6e-13 |
+| `pl.Series.ewm_var(adjust=True, bias=False)`, decay only | under 1e-12 |
+| exact expectation, unequal weights, `M2`, `M3`, `M4`, `k4` | under 1e-12 relative |
+| `numpy.cov(x[k:], x[:-k], bias=True)`, lags 1 to 3 | 8.9e-16 |
+| `acovf` through `(n-k)/n (cov_k + (m_a - m)(m_b - m))` | 8.9e-16 |
+| `acf` through that over `acovf_0` | under 1e-13 |
+| the pairs' Pearson correlation against `acf` (the convention gap) | 2.3e-3, 2.8e-3, 1.1e-3 at lags 1, 2, 3 |
+| cross and lagged cross `(1,1)`, `(1,2)`, `(2,2)`, `(3,1)` against the longhand | under 1e-12 |
+| `pl.Series.rolling_skew` / `rolling_kurtosis(bias=True)`, 10 rows | 2.2e-14 / 4.1e-14 |
+| a clock window, decayed and weighted, against the longhand | under 1e-12 |
+| delta-method se of `mu_3`, and of `mu_2` at Kish's `n` | under 1e-12 |
+| se of the skew, 3,000 normal rows, against `sqrt(6/n)` | within 10% |
+| `mu_4` of `1e6 + N(0, 1)`, a 500-row window of 3,000 rows | 2.3e-11 |
+
+And to the bit: 1 chunk, random chunks of 1 to 6 rows and chunks of one row
+give the same outputs and reasons (EW on a clock and on rows, a row window,
+a clock window, output before the row; a break inside); a state saved
+halfway (as JSON) continues to the same outputs and the same final state;
+a zero-weight first row leaves every later output what it is without it.
+
+**The state, in doubles** (8 bytes each):
+
+```text
+summary over d legs     1 + d + |closure| + |{r_k}|
+  one column, order P   P + 2            (P = 4: 48 bytes; se=True: 2P + 2)
+  a pair, orders (A, B) (A+1)(B+1) + 1   ((2,2): 80 bytes)
+  + r3, r4              + 1 each, only for an unbiased order 3 or 4
+lag buffer, row lags    K per column     (K the column's deepest lag)
+lag buffer, clock lags  2 per row inside the last 2 K of clock time
+row window              n (3 + L) ring   + (floor(n / b) + 2) summaries, rebuilt on load
+clock window            (3 + L) per row inside the window's span
+counters                3
+```
+
+`L` is the number of distinct legs. Nothing grows with the stream's
+length: the summaries with the spec, a row lag's buffer with the lag, a row
+window's ring with the window. A clock lag's buffer and a clock window's
+ring hold the rows inside a span of the clock, so their size is the data's
+rate times the span; the reference checks them against `max_state_bytes`
+as they fill and refuses the run by name when they pass it.
+
+## 11. The next part
+
+Part 3: the state in `rheon-core` behind `OnlineModel`, checked against this
+reference within a stated tolerance: the summary and Pebay's merge (order 2
+by `EwDiag`'s expressions, so a variance is `ew_cov`'s to the bit), the
+compensated mean, the per-column lag buffer (row and as-of clock), the
+row and clock windows on `window_moments`' block aggregation, the unbiased
+forms and the withholding reasons, the se, the state size checked against
+`max_state_bytes` before the first row and as a clock span fills, and
+fixtures for the new state per the state rules. Then the spec and the
+window operator.
