@@ -272,3 +272,44 @@ fn the_first_value_anchor_moves_the_scale_far_past_the_bound() {
         assert!(g > 100.0 * K * u * r.big, "seed {seed}: {g:e}");
     }
 }
+
+/// A shift of the feature moves the quantile refit's slope by no more
+/// than the rounding the shift itself leaves (review 2026-11-23, REG-17,
+/// not reproduced). The review read the replay's sum of the nudges, `(P −
+/// P₀·m)/W`, as losing digits at a feature of `1e14 + N(0, 1)`; against the
+/// same rows shifted back exactly (a double keeps `1e14 + x` to `2^-6`),
+/// the slope moves by `1.9e-3` at `1e14` and `2.4e-7` at `1e10`, inside
+/// `64 · shift · ε` of it, the rounding every centred moment of such a
+/// feature carries.
+#[test]
+fn a_shift_of_the_feature_moves_the_quantile_refits_slope_by_rounding() {
+    let q = RobustLoss::Quantile { tau: 0.5 };
+    let mut s = 31u64;
+    let n = 400;
+    let x: Vec<f64> = (0..n).map(|_| normal(&mut s)).collect();
+    let y: Vec<f64> = x
+        .iter()
+        .enumerate()
+        .map(|(i, xi)| 1.0 + 2.0 * xi + normal(&mut s) + if i % 7 == 3 { 40.0 } else { 0.0 })
+        .collect();
+    // The feature as the shifted stream holds it, shifted back exactly:
+    // at `1e14` a double keeps it to `2^-6`.
+    let slope = |shift: f64, back: bool| {
+        let mut m = Robust::new(cfg(q, 300)).unwrap();
+        for (xi, yi) in x.iter().zip(&y) {
+            let held = xi + shift;
+            let xi = if back { held - shift } else { held };
+            m.step(&[xi], &[Some(*yi)], 1.0, 1.0);
+        }
+        assert!(!m.refit[0].open(), "the refit ran");
+        m.coefficients().expect("a fit")[0][1]
+    };
+    for shift in [1e6, 1e10, 1e14] {
+        let (got, base) = (slope(shift, false), slope(shift, true));
+        let tol = 64.0 * shift * f64::EPSILON * base.abs();
+        assert!(
+            (got - base).abs() <= tol,
+            "shift {shift:e}: {got} against {base}"
+        );
+    }
+}
