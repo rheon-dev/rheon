@@ -245,7 +245,8 @@
     variance_targeting = False
     start_rows = None
     start_span = None
-    horizon = 1
+    horizons = None
+    max_horizon_work = None
     max_state_bytes = None
     common
   glm:
@@ -709,7 +710,8 @@
     stream.tails_half_life = 50.0
   garch(targets=['y']):
     model.dist = "normal"
-    model.horizon = 1
+    model.horizons = []
+    model.max_horizon_work = null
     model.max_state_bytes = null
     model.min_weight = 0.0
     model.n_targets = 1
@@ -1194,9 +1196,13 @@
     model.kernel_decays = [1.38629436112, 0.17328679514]
   garch(start_rows=2000, targets=['y'], vol='figarch'), the lines that differ from garch's:
     model.vol = "figarch"
-  garch(horizon=5, targets=['y'], variance_targeting=True), the lines that differ from garch's:
-    model.horizon = 5
+  garch(horizons=[5], targets=['y'], variance_targeting=True), the lines that differ from garch's:
+    model.horizons = [5]
     model.variance_targeting = true
+  garch(horizons={'week': 5}, max_horizon_work=5000, targets=['y'], vol='egarch'), the lines that differ from garch's:
+    model.horizons = [5]
+    model.max_horizon_work = 5000
+    model.vol = "egarch"
   garch(start_span=500.0, targets=['y']), the lines that differ from garch's:
     model.start_span = 500.0
 
@@ -2353,10 +2359,12 @@
   garch minimal:
     variance_y: f64
     std_resid_y: f64
-    forecast_y: f64
+    variance_h3_y: f64
+    variance_sum_h3_y: f64
     variance_z: f64
     std_resid_z: f64
-    forecast_z: f64
+    variance_h3_z: f64
+    variance_sum_h3_z: f64
     weight_sum: f64
     settled_frac: f64
     withheld_reason: enum
@@ -2800,7 +2808,7 @@
     ewridge: closed, coef_prior, feature_sets, gram_block_rows, gram_threads, long_half_life, max_rows_between_snapshots, max_rows_between_solves, ridge, ridge_scale, session_shrink, snapshot_every, solve_every, standardize, target_gaps, window_budget, window_size
     expectile: closed, expectile, max_state_bytes, refit_budget, refit_rows, refit_span, ridge, window_rows, window_size
     ftrl: alpha, beta, l1, l2, loss, strict_binary
-    garch: dist, horizon, max_state_bytes, start_rows, start_span, truncation, variance_targeting, vol
+    garch: dist, horizons, max_horizon_work, max_state_bytes, start_rows, start_span, truncation, variance_targeting, vol
     glm: family, link, max_state_bytes, refit_budget, refit_rows, refit_span, ridge, step_cap, var_power
     hawkes: closed, kernel_decays, kernel_half_lives, max_state_bytes, window_events, window_size
     hmm: covariance_type, covs, exog_tvtp, init, learn, means, n_components, precision_prior, prior_rows, seed, transition, transition_prior, tvtp_coef, warm_rows, warm_span

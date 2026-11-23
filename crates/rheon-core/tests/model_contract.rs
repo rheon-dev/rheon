@@ -1891,9 +1891,9 @@ fn every_model_refuses_at_restore_a_configuration_its_new_refuses() {
         refused(Expectile::new(expectile_cfg()).unwrap(), "decay", zero(), h),
         refused(
             Garch::new(garch_cfg()).unwrap(),
-            "horizon",
-            0.into(),
-            "horizon must be at least 1",
+            "horizons",
+            rmpv::Value::Array(vec![2.into(), 0.into()]),
+            "each of horizons must be at least 1",
         ),
     ];
     // Every model's `restore`: the twenty-one kinds, `robust` under both
@@ -4902,7 +4902,8 @@ fn garch_cfg() -> GarchCfg {
         variance_targeting: false,
         start_rows: 50,
         start_span: None,
-        horizon: 3,
+        horizons: vec![3],
+        max_horizon_work: None,
         min_weight: 0.0,
         max_state_bytes: Some(1700),
     }
@@ -4918,8 +4919,8 @@ fn garch() {
     let r = probe_with(m, 1, Some(&Garch::n_eff));
     assert_eq!(r.kind, "garch");
     assert_eq!(r.n_targets, 1);
-    assert_eq!(r.n_outputs, 3);
-    assert_eq!(r.pred_len, 3);
+    assert_eq!(r.n_outputs, 4);
+    assert_eq!(r.pred_len, 4);
     assert!(r.roundtrips);
     for (vol, dist) in [
         (GarchVol::Gjr, GarchDist::T),
@@ -4930,7 +4931,7 @@ fn garch() {
         let c = GarchCfg {
             vol,
             dist,
-            horizon: if vol == GarchVol::Egarch { 1 } else { 3 },
+            horizons: vec![3],
             truncation: (vol == GarchVol::Figarch).then_some(30),
             start_rows: if vol == GarchVol::Figarch { 2000 } else { 50 },
             n_targets: 2,
@@ -4961,7 +4962,6 @@ fn garch_predict_is_the_step() {
         || {
             Garch::new(GarchCfg {
                 vol: GarchVol::Egarch,
-                horizon: 1,
                 ..garch_cfg()
             })
             .unwrap()

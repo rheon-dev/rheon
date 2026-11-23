@@ -632,6 +632,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [messages."crates/rheon-core/src/garch.rs"]
 
+[messages."crates/rheon-core/src/garch/horizons.rs"]
+
 [messages."crates/rheon-core/src/glm.rs"]
 
 [messages."crates/rheon-core/src/hawkes.rs"]
@@ -688,6 +690,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."crates/rheon-core/src/family.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/garch.rs#messages"]
+
+[vocabulary."crates/rheon-core/src/garch/horizons.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/glm.rs#messages"]
 

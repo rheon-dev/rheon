@@ -276,7 +276,8 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
             "variance_targeting",
             "start_rows",
             "start_span",
-            "horizon",
+            "horizons",
+            "max_horizon_work",
             "max_state_bytes",
         }
     ),

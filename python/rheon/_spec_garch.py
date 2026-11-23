@@ -23,7 +23,8 @@ def garch(
     variance_targeting: bool = False,
     start_rows: int | None = None,
     start_span: float | Duration | None = None,
-    horizon: int = 1,
+    horizons: list[int] | dict[str, int] | None = None,
+    max_horizon_work: int | None = None,
     max_state_bytes: int | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
@@ -94,10 +95,30 @@ def garch(
         waits for twice the span. How many rows that is, the data decides,
         so its bytes are checked as the rows go in (see
         ``max_state_bytes``).
-    ``horizon``
-        Report the variance this many rows ahead too, as ``forecast_<t>``.
-        Default 1, the variance alone. ``vol="egarch"`` takes 1 only: its
-        forecast past one row has no closed form.
+    ``horizons``
+        The variance forecasts to report, each a count of rows ``h`` from
+        the row read, its own included: the variance of the return ``h - 1``
+        rows past this one, and the sum of the variances over those ``h``
+        rows, the variance of the ``h``-row return. Both are read before
+        the row is learned, from the rows before it, as ``variance_<t>`` is,
+        and horizon 1 is ``variance_<t>`` itself. A list labels each
+        horizon's fields ``h<h>`` (``horizons=[1, 5, 21]`` gives
+        ``variance_h5_<t>`` and ``variance_sum_h5_<t>``); a dict names them
+        (``horizons={"week": 5, "month": 21}`` gives ``variance_month_<t>``).
+        Every process takes them, EGARCH included. They count rows, never a
+        span of the clock: the recursion steps once a learned row, however
+        far apart the rows are, so a span of the clock holds as many steps as
+        the data puts in it and has no forecast. At most 64; a name must not
+        begin with ``"sum"``. Default none.
+    ``max_horizon_work``
+        The work a target's forecasts may take a row, in multiply-adds: the
+        largest horizon times one step's work, 4 for ``"garch"`` and
+        ``"gjr"``, ``truncation + 2`` for ``"figarch"`` and 164 for
+        ``"egarch"`` (its step calls ``exp`` and ``erfc`` five times, each
+        counted as 32). A spec past it is refused, naming the work it would
+        take. Default 2^20, ``1048576``, which holds ``"garch"`` to horizons
+        of 262,144 rows, ``"egarch"`` to 6,393 and ``"figarch"`` at its
+        default truncation to 1,046; at most 2^30.
     ``max_state_bytes``
         The bytes a group's state may hold, the start's buffer included (16
         bytes a row until it is fitted). A spec whose start or FIGARCH ring
@@ -121,9 +142,14 @@ def garch(
     ``std_resid_<t>``
         Per target: the row's return over the square root of its variance,
         null where either is.
-    ``forecast_<t>``
-        Per target, with ``horizon`` above 1: the variance ``horizon - 1``
-        rows past this one, from the same rows as ``variance_<t>``.
+    ``variance_<h>_<t>``
+        Per target and horizon: the variance of the return ``h - 1`` rows
+        past this one, from the same rows as ``variance_<t>``. Null where
+        the variance is.
+    ``variance_sum_<h>_<t>``
+        Per target and horizon: the sum of the variances over the ``h``
+        rows from this one, this row's included. Null where the variance
+        is.
     ``weight_sum``
         The weight the model has learned before the row: every learned
         row's weight, the start's included, with no decay.
@@ -143,8 +169,10 @@ def garch(
     ``egarch`` or ``figarch``, a skewed t on ``gjr``, ``variance_targeting``
     on any form but ``garch`` with normal innovations, ``truncation`` on a
     process but FIGARCH or below 1, ``start_rows`` below its floor or beside
-    ``start_span``, ``start_span`` not finite or not above 0, ``horizon``
-    below 1 or above 1 on ``egarch``, ``half_life`` or ``lam``, and a state
+    ``start_span``, ``start_span`` not finite or not above 0, a horizon below
+    1, given twice, more than 64 of them or a name beginning with ``"sum"``,
+    forecasts past ``max_horizon_work``, a ``max_horizon_work`` of 0 or past
+    2^30, ``half_life`` or ``lam``, and a state
     past ``max_state_bytes``, or a ``max_state_bytes`` of 0 or past 64 MiB.
 
     .. rubric:: The update
@@ -173,6 +201,30 @@ def garch(
         a_t = w_t / W_t          W_t the weight learned, the start's included
         H  ← H + a_t (I_t - H)   I_t = ½ ∂ln s ∂ln sᵀ, or the score's outer product under a t
         θ  ← Proj_H(θ + a_t H⁻¹ g_t)
+
+    The forecasts at the horizons run the recursion ahead from the row's
+    variance ``s_t``, each later row's ``e²`` read as its variance and GJR's
+    asymmetric term as half of it, as ``arch``'s analytic forecast reads
+    them, and sum the variances as they go:
+
+    .. code-block:: text
+
+        garch, gjr  f_1 = s_t,  f_h = ω + α f_{h-1} + γ f_{h-1}/2 + β f_{h-1}
+        egarch      f_h = exp(L_h) Π_{j=1..h-1} M(β^{j-1}),
+                    L_1 = ln s_t,  L_h = ω + β L_{h-1},
+                    M(c) = E exp(c (α (|z| - sqrt(2/π)) + γ z))
+                         = exp(-c α sqrt(2/π))
+                           [exp((cα + cγ)²/2) Φ(cα + cγ) + exp((cα - cγ)²/2) Φ(cα - cγ)]
+        figarch     f_h = ω / (1 - β) + Σ_{j=1..M} λ_j e²_{t+h-1-j},
+                    e² a forecast for each row at or after t
+        sum         F_h = f_1 + ... + f_h
+
+    EGARCH's is Nelson's (1991) closed form for normal innovations: its
+    log-variance is linear in the news terms, independent from row to row,
+    so the variance's mean is the exponential of the log-variance's mean
+    times the product of the news terms' moment generating function.
+    ``arch`` makes it only by simulation, and its simulation agrees within
+    its own sampling error.
 
     ``Proj_H`` projects onto the process's admissible set, ``arch``'s with
     the persistence at most ``1 - 1e-4``, in ``H``'s own metric. A t's
@@ -281,8 +333,12 @@ def garch(
         model["start_rows"] = start_rows
     if start_span is not None:
         model["start_span"] = start_span
-    if horizon != 1:
-        model["horizon"] = horizon
+    if horizons is not None:
+        model["horizons"] = (
+            [[k, h] for k, h in horizons.items()] if isinstance(horizons, dict) else list(horizons)
+        )
+    if max_horizon_work is not None:
+        model["max_horizon_work"] = max_horizon_work
     if max_state_bytes is not None:
         model["max_state_bytes"] = max_state_bytes
     return _common(name, model, targets=targets, features=[], **common)

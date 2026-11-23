@@ -438,6 +438,29 @@ const CONTINUES_WITHIN: &[(&str, f64, std::ops::Range<usize>)] = &[
 ///   macOS arm64; the bound is 24 times that.
 const RENUMBERED: &[(&str, f64, std::ops::Range<usize>)] = &[("corrchange_window", 1e-14, 0..1)];
 
+/// `garch`'s states of schema 71 and before, whose forecast was one
+/// `horizon` (task 559): each loads as the one horizon it named, and goes
+/// on reporting its sum beside it, so a target's slots are four where they
+/// were three (the variance, the standardized residual, the forecast, and
+/// now the sum). The sums are dropped from the comparison ([`narrowed`]),
+/// and the forecast, whose terms are now taken in the row's own order
+/// (`ω + α f + γ f/2 + β f`, where it was `ω + (α + γ/2 + β) f`), continues
+/// within this bound of `1 + |out|`: the golden forecasts moved by at most
+/// 4 units in their last place, measured 2026-11-23 on Linux x86-64.
+const GARCH_ONE_HORIZON: f64 = 1e-15;
+
+/// A `garch` row of schema 71's layout from this build's, the sums
+/// dropped: each target's four slots to the three of before.
+fn narrowed(got: &Out) -> Out {
+    let mut out = got.clone();
+    out.pred = got
+        .pred
+        .chunks(4)
+        .flat_map(|c| c[..3].iter().copied())
+        .collect();
+    out
+}
+
 /// The `hmm` cases a kept set holds under `covariance_type` `"full"` and
 /// `"diag"` with `learn` on, which go on under the stabilized prior (schema
 /// 70; rule 5's twenty-second exception, the user's, 2026-11-20). A state
@@ -854,11 +877,15 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                 .unwrap_or_else(|| {
                     panic!("{what}: the current set has no fixture of that case; a kept case stays")
                 });
-            assert_eq!(
-                current.writer, f.writer,
+            // `garch` calls no platform library, so its bytes are the same
+            // on every platform and its sets may come from two (task 559
+            // regenerated its current set on Linux)
+            assert!(
+                current.writer == f.writer || f.variant == "Garch",
                 "{what}: written on {}, the current set on {}: the sets are written on one \
                  platform, or their bytes differ in libm's last bit",
-                f.writer, current.writer
+                f.writer,
+                current.writer
             );
             let windowed = holds_a_window(&f.bytes());
             let moved = MOVED.iter().find(|(n, _)| *n == f.name).map(|&(_, b)| b);
@@ -1010,6 +1037,25 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                         slots.end <= got.pred.len(),
                         "{what}: CONTINUES_WITHIN names slots past the predictions"
                     );
+                }
+                let one_horizon = f.variant == "Garch"
+                    && schema <= 71
+                    && got.pred.len() == want.pred.len() / 3 * 4
+                    && got.pred.len() != want.pred.len();
+                if one_horizon {
+                    same_out_by(
+                        &format!("{what}, row {i} after the save"),
+                        &narrowed(&got),
+                        &want,
+                        |n| {
+                            if n < want.pred.len() && n % 3 == 2 {
+                                tol.max(GARCH_ONE_HORIZON)
+                            } else {
+                                tol
+                            }
+                        },
+                    );
+                    continue;
                 }
                 same_out_by(
                     &format!("{what}, row {i} after the save"),
@@ -1465,7 +1511,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 117] = [
+    const FORMS: [(&str, &[&str]); 119] = [
         // Schema 70 (rule 5's twenty-second exception): the stabilized
         // prior's `ŝ` and `V` under `full` in each form and under `diag`,
         // the factor form's `f`, and a spec's own `prior_rows`.
@@ -1612,6 +1658,13 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         // fit such a wait withheld.
         ("garch", &["model", "Garch", "series", "1", "buffer"]),
         ("garch_started", &["model", "Garch", "series", "0", "theta"]),
+        // the forecasts' horizons (task 559): several, out of order, and a
+        // work cap of the spec's own
+        ("garch_realistic", &["model", "Garch", "cfg", "horizons"]),
+        (
+            "garch_figarch_realistic",
+            &["model", "Garch", "cfg", "max_horizon_work"],
+        ),
         ("garch_realistic", &["model", "Garch", "series", "0", "h"]),
         (
             "garch_realistic",

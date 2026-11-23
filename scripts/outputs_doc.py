@@ -113,7 +113,14 @@ MEANING: dict[str, str] = {
         "the variance of `<t>` on this row given the rows before it, read before the row is learned"
     ),
     "std_resid_<t>": "`<t>` over the square root of its variance on this row",
-    "forecast_<t>": "the variance of `<t>` `horizon - 1` rows past this one, from the same rows",
+    "variance_<h>_<t>": (
+        "the variance of `<t>` `h - 1` rows past this one, horizon `h` of `horizons`, from the "
+        "same rows; horizon 1 is `variance_<t>`"
+    ),
+    "variance_sum_<h>_<t>": (
+        "the sum of the variances of `<t>` over the `h` rows from this one, this row's included: "
+        "the variance of the `h`-row return"
+    ),
     "u": (
         "the equicorrelation this row alone implies"
         " (Engle and Kelly's Lemma 2.3, from the standardized row)"
@@ -201,7 +208,8 @@ ALSO_NULL: dict[str, str] = {
     ),
     "variance_<t>": "while withheld, and before the target's start is fitted",
     "std_resid_<t>": "where the variance is null, and where `<t>` is",
-    "forecast_<t>": "where the variance is null",
+    "variance_<h>_<t>": "where the variance is null",
+    "variance_sum_<h>_<t>": "where the variance is null",
     "u": (
         "while withheld, where fewer than two of the block's columns have a positive variance "
         "before the row, and where every standardized value is 0"
@@ -649,10 +657,14 @@ def stem(field: str, targets: tuple[str, ...], features: tuple[str, ...]) -> str
             "intensity",
             "variance",
             "std_resid",
-            "forecast",
         ):
             if base == f"{pre}_{t}":
                 return f"{pre}_<t>"
+        # a forecast at a horizon, labelled `h<rows>` or by its name
+        if base.startswith("variance_sum_") and base.endswith(f"_{t}"):
+            return "variance_sum_<h>_<t>"
+        if base.startswith("variance_") and base.endswith(f"_{t}"):
+            return "variance_<h>_<t>"
     for pre in ("corr", "cov", "partial_corr"):
         if base.startswith(pre + "_"):
             return f"{pre}_<a>_<b>"

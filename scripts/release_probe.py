@@ -406,7 +406,7 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
     (
         "garch",
         "garch",
-        dict(targets=["y", "z"], start_rows=50, horizon=3, group="g", **CLOCK),
+        dict(targets=["y", "z"], start_rows=50, horizons=[3, 1], group="g", **CLOCK),
         [],
     ),
     (

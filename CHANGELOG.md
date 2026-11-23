@@ -301,7 +301,8 @@ model that only the new build has is listed as an addition and passes.
   lags, 1,000 by default), with normal, Student-t or skewed-t innovations
   (`dist`; the t on `garch` and `gjr`, the skewed t on `garch`). Each row
   reports its variance before it is learned, its standardized residual and,
-  with `horizon`, the variance further ahead; `coef` holds the parameters.
+  at each of `horizons`, the variance further ahead and its sum (below);
+  `coef` holds the parameters.
   The parameters are learned by a recursive Gauss-Newton step on each row's
   score, `θ ← Proj_H(θ + a H⁻¹ g)`, projected onto the process's set in
   `H`'s own metric, after a start of `start_rows` rows (2,000) or a
@@ -323,6 +324,25 @@ model that only the new build has is listed as an addition and passes.
   to `arch`'s path a median 0.9 of its expected size and at most 2.6 times
   it; at 100,000 rows the median gap 0.04 to 0.14 standard errors. GARCH(2,2)
   is left out: its two `β`s are not yet held to a tolerance.
+- **`garch`'s forecasts at several horizons, with their sums** (task 559,
+  in place of the single `horizon` and its `forecast_<t>`): `horizons`, a
+  list of row counts or a dict naming them, gives per target and horizon
+  `h` the variance `h − 1` rows past the row, `variance_h<h>_<t>`, and the
+  sum of the variances over the `h` rows, `variance_sum_h<h>_<t>`, the
+  variance of the `h`-row return; horizon 1 is `variance_<t>` itself. Every
+  process takes them: GARCH and GJR by the recursion run ahead, FIGARCH by
+  its weights over the forecasts and its ring, and EGARCH, which took one
+  row only, by Nelson's closed form for normal innovations, the product of
+  the news terms' moment generating function (`arch` simulates it; its
+  simulation agrees within its sampling error). One pass makes every horizon
+  and carries the sum, compensated; its work, the largest horizon times one
+  step's (4, `truncation + 2` or 164 multiply-adds), is held under
+  `max_horizon_work`, 2^20 a target a row by default, refused at the spec
+  with the work it would take. Horizons count rows: the recursion steps once
+  a learned row, so a span of the clock has no forecast. No state is added.
+  GARCH's and GJR's forecasts now take their terms in the row's own order,
+  `ω + α f + γ f/2 + β f`, which moved them by at most 4 units in the last
+  place; a state saved with `horizon = h` loads as `horizons = [h]`.
 - **`hawkes`, a self-exciting point process** (task 498): each target a
   node, a value above 0 on a row an event of that mark; exponential kernels
   at the given `kernel_decays`. Each row reports every node's

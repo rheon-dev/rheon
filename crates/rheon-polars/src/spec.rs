@@ -1494,14 +1494,48 @@ pub enum ModelKind {
         /// of the clock column's units, or a duration on a temporal clock.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         start_span: Option<Span>,
-        /// The forecast's rows ahead; absent is 1, the variance alone.
+        /// The forecasts' horizons in rows, each a count (its fields
+        /// labelled `h<n>`) or a `[name, count]` pair (labelled by the
+        /// name): the variance `count − 1` rows past the row and the sum of
+        /// the variances over those rows. Absent reports none.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        horizon: Option<usize>,
+        horizons: Option<Vec<Horizon>>,
+        /// The multiply-adds a target's forecasts may take a row; absent is
+        /// 2^20.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_horizon_work: Option<u64>,
         /// The bytes a group's state may hold, the start's buffer included.
         /// Default 256 KB, at most 64 MiB.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_state_bytes: Option<u64>,
     },
+}
+
+/// One forecast horizon of a spec (`garch`'s `horizons`): a count of rows,
+/// its fields labelled `h<count>`, or a `[name, count]` pair, labelled by
+/// the name (a Python dict's item).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Horizon {
+    Rows(usize),
+    Named(String, usize),
+}
+
+impl Horizon {
+    /// The rows it counts, the row read included.
+    pub fn rows(&self) -> usize {
+        match self {
+            Horizon::Rows(n) | Horizon::Named(_, n) => *n,
+        }
+    }
+
+    /// The label its fields carry: `h<count>`, or its name.
+    pub fn label(&self) -> String {
+        match self {
+            Horizon::Rows(n) => format!("h{n}"),
+            Horizon::Named(name, _) => name.clone(),
+        }
+    }
 }
 
 /// The two sides of a `seqtest` comparison, as [`ModelKind::compares`]

@@ -2676,6 +2676,8 @@ pub fn all() -> Vec<Case> {
             Garch,
             Garch::new(GarchCfg {
                 truncation: Some(20),
+                // a cap of its own on the forecasts' work: 22 a step to 10
+                max_horizon_work: Some(220),
                 ..realistic(GarchVol::Figarch, GarchDist::Normal)
             })
             .unwrap(),
@@ -2730,16 +2732,25 @@ fn garch_cfg(vol: GarchVol, dist: GarchDist) -> GarchCfg {
         variance_targeting: false,
         start_rows: 50,
         start_span: None,
-        horizon: if vol == GarchVol::Egarch { 1 } else { 3 },
+        // EGARCH's states of schema 71 have no horizon; the others one,
+        // at 3 rows (task 559 read them as these horizons)
+        horizons: if vol == GarchVol::Egarch {
+            Vec::new()
+        } else {
+            vec![3]
+        },
+        max_horizon_work: None,
         min_weight: 0.0,
         max_state_bytes: None,
     }
 }
 
-/// [`garch_cfg`] at the default start of 2,000 rows, for a realistic case.
+/// [`garch_cfg`] at the default start of 2,000 rows, for a realistic case,
+/// its forecasts at three horizons out of order (task 559).
 fn realistic(vol: GarchVol, dist: GarchDist) -> GarchCfg {
     GarchCfg {
         start_rows: 2000,
+        horizons: vec![10, 1, 3],
         ..garch_cfg(vol, dist)
     }
 }

@@ -90,7 +90,7 @@ const SPECS: &[(&str, &str, &str)] = &[
     ),
     (
         "garch",
-        r#"{"type": "garch", "vol": "gjr", "dist": "t", "start_rows": 50, "horizon": 3}"#,
+        r#"{"type": "garch", "vol": "gjr", "dist": "t", "start_rows": 50, "horizons": [3, ["week", 5]]}"#,
         r#""targets": ["y", "x0"], "features": []"#,
     ),
     (

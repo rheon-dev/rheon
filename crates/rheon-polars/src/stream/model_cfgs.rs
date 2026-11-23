@@ -157,7 +157,8 @@ pub fn garch_cfg(spec: &Spec) -> Result<rheon_core::GarchCfg, String> {
         variance_targeting,
         start_rows,
         start_span,
-        horizon,
+        horizons,
+        max_horizon_work,
         max_state_bytes,
     } = &spec.model
     else {
@@ -194,11 +195,37 @@ pub fn garch_cfg(spec: &Spec) -> Result<rheon_core::GarchCfg, String> {
         variance_targeting: variance_targeting.unwrap_or(false),
         start_rows: start_rows.unwrap_or(GARCH_START_ROWS),
         start_span: start_span.as_ref().map(Span::value),
-        horizon: horizon.unwrap_or(1),
+        horizons: horizons
+            .iter()
+            .flatten()
+            .map(crate::Horizon::rows)
+            .collect(),
+        max_horizon_work: *max_horizon_work,
         min_weight: spec.min_periods_or_default(),
         max_state_bytes: *max_state_bytes,
     };
     cfg.validate()?;
+    let labels: Vec<String> = horizons
+        .iter()
+        .flatten()
+        .map(crate::Horizon::label)
+        .collect();
+    for (i, l) in labels.iter().enumerate() {
+        if l.is_empty() || l.starts_with("sum") {
+            return Err(format!(
+                "garch: a horizon's name must be non-empty and not begin with \"sum\", but one \
+                 is {l:?}. It names the fields variance_<name>_<target> and \
+                 variance_sum_<name>_<target>, which a name beginning with \"sum\" would \
+                 confuse. Rename it."
+            ));
+        }
+        if labels[..i].contains(l) {
+            return Err(format!(
+                "garch: two horizons are labeled {l:?}. Each labels its fields, so each label is \
+                 given once. Rename one, or leave out the second."
+            ));
+        }
+    }
     Ok(cfg)
 }
 

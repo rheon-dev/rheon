@@ -392,12 +392,14 @@ The fields of `po.spec.audit("m", columns=["x0", "x1"])`:
 
 ## `garch`
 
-The fields of `po.spec.garch("m", targets=["y"], start_rows=50)`:
+The fields of `po.spec.garch("m", targets=["y"], start_rows=50, horizons=[5])`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
 | `variance_y` | `f64` | the variance of `<t>` on this row given the rows before it, read before the row is learned | while withheld, and before the target's start is fitted |
 | `std_resid_y` | `f64` | `<t>` over the square root of its variance on this row | where the variance is null, and where `<t>` is |
+| `variance_h5_y` | `f64` | the variance of `<t>` `h - 1` rows past this one, horizon `h` of `horizons`, from the same rows; horizon 1 is `variance_<t>` | where the variance is null |
+| `variance_sum_h5_y` | `f64` | the sum of the variances of `<t>` over the `h` rows from this one, this row's included: the variance of the `h`-row return | where the variance is null |
 | `weight_sum` | `f64` | accumulated weight before the model learns this row, and before its own decay ([shared field](#fields-most-models-write)) | never |
 | `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
 | `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |

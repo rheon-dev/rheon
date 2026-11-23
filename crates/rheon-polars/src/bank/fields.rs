@@ -1161,12 +1161,16 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
         return fields;
     }
     // garch predicts no target's value: per target, the variance and the
-    // standardized residual (read before the row is learned) and, with a
-    // horizon past one row, the forecast; then `n_eff` and the parameters as
-    // `coef`. One undecayed instance.
-    if matches!(spec.model, crate::ModelKind::Garch { .. }) {
-        let forecast = crate::stream::garch_cfg(spec).is_ok_and(|c| c.horizon > 1);
-        let n_slots = 2 + usize::from(forecast);
+    // standardized residual (read before the row is learned) and, at each
+    // horizon, the variance there and the sum of the variances to it; then
+    // `n_eff` and the parameters as `coef`. One undecayed instance.
+    if let crate::ModelKind::Garch { horizons, .. } = &spec.model {
+        let labels: Vec<String> = horizons
+            .iter()
+            .flatten()
+            .map(crate::Horizon::label)
+            .collect();
+        let n_slots = 2 + 2 * labels.len();
         let mut fields = Vec::new();
         for (mi, (suffix, d)) in decays.iter().enumerate() {
             let base = mi * spec.targets.len() * n_slots;
@@ -1184,12 +1188,18 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                         .target(t)
                         .src(Source::Stat(at(1))),
                 );
-                if forecast {
+                for (k, l) in labels.iter().enumerate() {
                     fields.push(
-                        FieldMeta::new(format!("forecast_{t}{suffix}"), "forecast")
+                        FieldMeta::new(format!("variance_{l}_{t}{suffix}"), "variance_at")
                             .decay(suffix, d)
                             .target(t)
-                            .src(Source::Stat(at(2))),
+                            .src(Source::Stat(at(2 + 2 * k))),
+                    );
+                    fields.push(
+                        FieldMeta::new(format!("variance_sum_{l}_{t}{suffix}"), "variance_sum")
+                            .decay(suffix, d)
+                            .target(t)
+                            .src(Source::Stat(at(3 + 2 * k))),
                     );
                 }
             }

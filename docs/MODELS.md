@@ -2883,8 +2883,9 @@ time, when you want each row's variance forecast before the row arrives: a
 risk limit, a position size, a standardized residual for a detector
 downstream. Each target is its own series with its own parameters. The
 start's rows (2,000 by default) report nothing; after them every row
-reports its variance, its standardized residual and, with `horizon`, the
-variance further ahead.
+reports its variance, its standardized residual and, at each of `horizons`,
+the variance further ahead and the variance of the return over the rows to
+it.
 
 Its parameters, their defaults and what each refuses are in its
 [docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.garch),
@@ -2989,6 +2990,51 @@ parameters, `m` shape parameters and `n` stepped coordinates. EGARCH keeps
 for `figarch` (8,216 at 1,000 lags). The start's buffer adds 16 bytes a
 row until it is fitted, 32,000 at the default.
 
+#### Forecasts at horizons
+
+`horizons` asks for the variance further ahead. Each horizon is a count of
+rows `h` from the row read, its own included. It gives the variance `h − 1`
+rows past this one, `variance_h<h>_<t>`, and the sum of the variances over
+those `h` rows, `variance_sum_h<h>_<t>`. That sum is the variance of the
+`h`-row return, the quantity an option's implied variance over the same span
+is set beside.
+Horizon 1 is `variance_<t>` itself, the same number. Both are read before the
+row is learned, from the rows before it, so a forecast never reads a row it
+forecasts. A dict names the horizons, `horizons={"week": 5, "month": 21}`
+giving `variance_month_<t>`.
+
+The recursion runs ahead from the row's variance, each later row's `e²`
+read as its variance and GJR's asymmetric term as half of it, as `arch`'s
+analytic forecast reads them:
+
+```
+garch, gjr  f_1 = s_t,  f_h = ω + α f_{h−1} + γ f_{h−1}/2 + β f_{h−1}
+egarch      f_h = exp(L_h) Π_{j=1..h−1} M(β^{j−1}),  L_1 = ln s_t,  L_h = ω + β L_{h−1}
+            M(c) = E exp(c (α (|z| − √(2/π)) + γ z))
+figarch     f_h = ω/(1 − β) + Σ_{j=1..M} λ_j e²_{t+h−1−j},  a forecast for each row at or after t
+sum         F_h = f_1 + … + f_h
+```
+
+GARCH and GJR revert geometrically to `ω/(1 − P)`, `P = α + γ/2 + β`.
+EGARCH's is Nelson's closed form for normal innovations. The log-variance is
+linear in the news terms, which are independent from row to row. So the
+variance's mean is the exponential of the log-variance's mean times the
+product of the news terms' moment generating function,
+`M(c) = e^{−cα√(2/π)} [e^{(cα+cγ)²/2} Φ(cα + cγ) + e^{(cα−cγ)²/2} Φ(cα − cγ)]`.
+`arch` makes it only by simulation, and agrees within its sampling error.
+The forecasts are not held within the bounds the filter holds the row's own
+variance to.
+
+One pass from horizon 1 to the largest makes every horizon and carries the
+sum, so no horizon is summed twice; the sum is compensated, the variances'
+own to a rounding. The pass costs the largest horizon times one step's
+work: 4 multiply-adds for `garch` and `gjr`, `truncation + 2` for `figarch`,
+and 164 for `egarch`, whose step calls `exp` and `erfc` five times, each
+counted as 32. A spec whose forecasts would take more than
+`max_horizon_work` (2^20 a target a row by default) is refused, naming the
+work: that holds `garch` to horizons of 262,144 rows, `egarch` to 6,393 and
+`figarch` at 1,000 lags to 1,046. The forecasts add nothing to the state.
+
 #### Rows and the clock
 
 **The recursion is per observation.** A row's lags are the row before it,
@@ -2998,7 +3044,10 @@ form: `β` is a share of the last observation's variance, not of an hour's. The 
 `start_span`, a number of the clock column's units or a duration such as
 `"1d"` on a temporal clock. A span's rows are the data's to decide, so their
 bytes are checked as they come: a warning past half of `max_state_bytes`,
-and a refusal at it.
+and a refusal at it. The horizons count rows and have no clock form: the
+recursion steps once a learned row, so a span of the clock holds as many
+steps as the data puts in it. A row of weight 0 is no step, so it is in no
+horizon, and it reads the forecasts the next learned row reads.
 
 #### Example
 
@@ -3062,8 +3111,9 @@ from series to series, and the online fit is not yet held to a tolerance.
 GJR with the skewed t: under skewed innovations GJR's persistence reads
 `E[z² 1(z < 0)]` rather than the half of `E[z²]` its forecast uses. A t on
 EGARCH or FIGARCH, APARCH, the generalized error distribution and a mean
-model: none has an online estimator checked against `arch`. EGARCH's
-forecast past one row has no closed form.
+model: none has an online estimator checked against `arch`. A t on EGARCH
+would also have no variance forecast past one row: `E e^{c|z|}` is infinite
+for a t.
 
 ## Clustering and classification
 

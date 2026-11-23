@@ -322,32 +322,6 @@ impl Series {
     pub fn bytes(&self, cfg: &GarchCfg) -> u64 {
         super::Garch::series_bytes(cfg, self.buffer.len())
     }
-
-    /// The variance `horizon` rows ahead of a row whose variance is `s`.
-    pub fn forecast(&self, cfg: &GarchCfg, s: f64, scratch: &mut Vec<f64>) -> f64 {
-        let h = cfg.horizon;
-        if h <= 1 || !s.is_finite() {
-            return s;
-        }
-        let th = &self.theta;
-        match cfg.vol {
-            GarchVol::Figarch => self.filter.figarch_forecast(th, s, h, scratch),
-            _ => {
-                // a later row's e² is read as its variance, and GJR's
-                // asymmetric term as half of it (its innovations are
-                // symmetric: a skewed t takes no GJR), as `arch` reads them
-                let persist = match cfg.vol {
-                    GarchVol::Gjr => th[1] + 0.5 * th[2] + th[3],
-                    _ => th[1] + th[2],
-                };
-                let mut f = s;
-                for _ in 1..h {
-                    f = th[0] + persist * f;
-                }
-                f
-            }
-        }
-    }
 }
 
 /// The first `kc` coordinates of `prop` onto `set` in the metric of the

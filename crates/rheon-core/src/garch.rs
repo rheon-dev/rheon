@@ -109,14 +109,13 @@
 //!
 //! **What a row reports**, per target, all before the row is learned
 //! (hard rule 2): the variance `s_t`; the standardized residual `z_t =
-//! e_t/√s_t`; and, with `horizon = h > 1`, the variance `h − 1` rows past
-//! this one, each later row's `e²` read as its variance and GJR's
-//! asymmetric term as half of it (`arch`'s analytic forecast): `ω + P f`
-//! repeated, `P = α + γ/2 + β`, for `garch` and `gjr`, FIGARCH's weights
-//! over the forecasts and the ring for `figarch`. EGARCH's is not linear in
-//! its own past and has no closed form past one row, so `egarch` takes
-//! `horizon = 1` only. Not a number before the start, or while the target's
-//! weight is under `min_weight`.
+//! e_t/√s_t`; and, at each of `horizons`, the variance `h − 1` rows past
+//! this one and the sum of the variances over those `h` rows, this one's
+//! included (`garch::horizons` states each process's recursion: each later
+//! row's `e²` read as its variance and GJR's asymmetric term as half of it,
+//! as `arch`'s analytic forecast reads them; EGARCH's by Nelson's closed
+//! form). Horizon 1 is `s_t` itself. Not a number before the start, or
+//! while the target's weight is under `min_weight`.
 //!
 //! **Rows, weights and the clock.** The recursion is per observation: a
 //! row's lags are the row before it, however far back on the clock that
@@ -163,11 +162,13 @@ mod dist;
 mod filter;
 mod fit;
 mod guard;
+mod horizons;
 mod linalg;
 mod math;
 mod optim;
 mod series;
 
+pub use horizons::{HORIZON_WORK, HORIZON_WORK_CEILING, LIBM_CALL_COST, MAX_HORIZONS};
 use series::{Series, start_due};
 
 /// The bytes a group's state may hold by default, a spec's
@@ -261,8 +262,19 @@ pub struct GarchCfg {
     /// decides.
     #[serde(default)]
     pub start_span: Option<f64>,
-    /// The forecast's rows ahead; 1 reports none beyond the variance.
-    pub horizon: usize,
+    /// The forecasts' horizons in rows, each at least 1: horizon `h` is the
+    /// variance `h − 1` rows past the row read and the sum of the
+    /// variances over those `h` rows (`garch::horizons`). Empty reports
+    /// none. A state of before it holds `horizon`, a count of rows ahead
+    /// (1 for none), read as the one horizon it names.
+    #[serde(default, alias = "horizon", deserialize_with = "horizons::read")]
+    pub horizons: Vec<usize>,
+    /// The multiply-adds a target's forecasts may take a row: the largest
+    /// horizon times one step's work ([`horizons::step_cost`]). `None` is
+    /// [`HORIZON_WORK`]. Neither field is skipped when empty, so a state
+    /// written as an array (`rmp_serde::to_vec`) keeps its positions.
+    #[serde(default)]
+    pub max_horizon_work: Option<u64>,
     /// `weight_sum` before a row reports, each target's own.
     pub min_weight: f64,
     /// The bytes a group's state may hold, the start's buffer included;
@@ -297,9 +309,9 @@ impl GarchCfg {
     }
 
     /// Each target's slots in a row's report: the variance, the
-    /// standardized residual, and the forecast where `horizon > 1`.
+    /// standardized residual, and each horizon's variance and sum.
     pub fn slots(&self) -> usize {
-        2 + usize::from(self.horizon > 1)
+        2 + 2 * self.horizons.len()
     }
 
     fn cap(&self) -> u64 {
@@ -392,22 +404,7 @@ impl GarchCfg {
                  clock span the start buffers, or leave it out for start_rows."
             ));
         }
-        if self.horizon == 0 {
-            return Err(
-                "garch: horizon must be at least 1, but it is 0. Give the rows ahead \
-                        of the forecast, or leave it out for 1, the variance alone."
-                    .into(),
-            );
-        }
-        if self.horizon > 1 && self.vol == GarchVol::Egarch {
-            return Err(format!(
-                "garch: vol = \"egarch\" forecasts one row ahead only, but horizon is {}. \
-                 EGARCH's log-variance depends on |z| of each row between, so a forecast past one \
-                 row has no closed form and is made only by simulation. Leave horizon out, or \
-                 set vol to \"garch\", \"gjr\" or \"figarch\".",
-                self.horizon
-            ));
-        }
+        horizons::check(self)?;
         crate::model::check_min_weight("garch", self.min_weight)?;
         if let Some(cap) = self.max_state_bytes {
             if cap == 0 {
@@ -475,7 +472,8 @@ impl GarchDist {
 }
 
 thread_local! {
-    /// FIGARCH's weights for a forecast, read on the row and dropped.
+    /// FIGARCH's weights and the forecast pass's values, read on the row
+    /// and dropped.
     static SCRATCH: RefCell<Vec<f64>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -628,12 +626,22 @@ impl Garch {
             Some(e) if open => e / s.sqrt(),
             _ => f64::NAN,
         };
-        if self.cfg.horizon > 1 {
-            out[base + 2] = if open {
-                crate::scratch::with_borrow_mut(&SCRATCH, |sc| series.forecast(&self.cfg, s, sc))
+        if !self.cfg.horizons.is_empty() {
+            let at = &mut out[base + 2..base + self.cfg.slots()];
+            if open {
+                crate::scratch::with_borrow_mut(&SCRATCH, |sc| {
+                    horizons::forecasts(
+                        &self.cfg,
+                        &series.theta[..self.cfg.vol.k()],
+                        &series.filter,
+                        s,
+                        at,
+                        sc,
+                    )
+                });
             } else {
-                f64::NAN
-            };
+                at.fill(f64::NAN);
+            }
         }
     }
 

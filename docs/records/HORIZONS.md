@@ -483,3 +483,73 @@ every place `EXTENDING.md` lists), and the budgets' memory and speed cells.
     as `rmgarch` and `mvgarch`. *Recommended.*
 11. **EGARCH past one row** by Nelson's closed form, lifting today's refusal.
     *Recommended.*
+
+## 14. Part 2 as built: the interface and `garch` (request A24, 2026-11-23)
+
+**The answers** (the user on the Exchange page, relayed by the
+coordinator): all eleven recommendations taken, with these changes: (1)
+horizon 1 is the row's own value and a test holds the equality; (5) a
+negative input under GARCH or GJR is withheld with a reason, never clipped;
+(7) the bound is cited; (8) the work cap is a named limit,
+`max_horizon_work`, refused at build with the work it would take; (9) `holt`
+gets a forecast variance if `ETSModel`'s applies to ETS(A,A,N), else none
+with the reason; (10) ADCC's persistence is `a + b + δ g` (Cappiello, Engle
+and Sheppard), checked against `rmgarch`; (11) EGARCH's closed form is
+checked against `arch`'s simulation with draws enough to resolve the
+difference.
+
+**What part 2 built.** `garch` takes `horizons` (a list of row counts,
+labelled `h<n>`, or a dict naming them) and `max_horizon_work` (2²⁰ by
+default, at most 2³⁰), in place of `horizon` and `forecast_<t>`. Per target
+and horizon, `variance_<L>_<t>` and `variance_sum_<L>_<t>`. One pass from
+horizon 1 to the largest (`garch/horizons.rs`): GARCH and GJR run the
+recursion with the terms in `Filter::predict`'s order; FIGARCH's pass is the
+existing forecast's arithmetic, unchanged to the bit; EGARCH's is Nelson's
+product, `exp` and `erfc` from the `libm` crate. The sum is TwoSum-
+compensated. Every process takes horizons; the EGARCH refusal is gone. Step
+work: 4 (GARCH, GJR), `M + 2` (FIGARCH), `4 + 5·32` (EGARCH), so the default
+holds horizons of 262,144, 1,046 at `M = 1,000`, and 6,393.
+
+**Not to the bit against `arch`, and why.** The brief asked for `arch`'s
+forecast to the bit. `arch` squares each forecast's square root through
+numpy's vectorized `power` with an array of exponents; on this x86-64
+(AVX-512, numpy 2.5.2) that differs from the correctly rounded product in
+5.7% of 10⁷ draws, and glibc's scalar `pow(x, 2)` from `x·x` in 189 of
+200,000. `sqrt(f)²` is not `f` either. So `arch`'s last bits are its
+platform's. The bank is held to the recursion written out to the bit (Rust
+`the_forecasts_are_their_definitions_written_out`, Python
+`test_the_forecasts_are_the_recursion_run_ahead`) and to `arch`'s analytic
+forecast, run from the bank's own variance and residual
+(`tests/test_second_opinion_garch_horizons.py`), within a bound in units of
+the last place set from the measured gap.
+
+**State and fixtures.** The forecasts add no state. `GarchCfg.horizons`
+reads a state's `horizon` (schema 71's form): `h > 1` as `[h]`, 1 as none;
+the v71 garch fixtures load through it, convert to the current bytes, and
+continue with their sums dropped and the forecast within 1e-15 of `1 +
+|out|` (`GARCH_ONE_HORIZON`). The current garch fixtures were regenerated on
+Linux (writer `linux-x86_64`); since `garch` calls no platform library its
+bytes are the same on every platform, and the previous-set check now admits
+a garch set from another writer. The realistic cases carry three horizons
+out of order, and FIGARCH's its own `max_horizon_work`. Both fields are
+written even when empty: the contract's probe saves a state as an array
+(`rmp_serde::to_vec`), where a skipped field shifts every later one (section
+7's `skip_serializing_if` for `holt` and `kalman` must be checked against
+that probe too). No schema bump:
+`garch` is unreleased. The goldens moved only in the forecast slots (at most
+4 units in the last place, the new term order; FIGARCH's none) and gained
+the sum slots.
+
+**Measured against `arch`** (Linux x86-64, 2026-11-23,
+`tests/test_second_opinion_garch_horizons.py`). The analytic forecast from
+the bank's own variance and residual, over 79 rows (15 for FIGARCH) from
+row 2,050 to 2,599, largest gap in units of the last place at horizons 1,
+2, 5, 22 and 100: GARCH 0, 1, 3, 6, 9; GJR 0, 1, 2, 4, 8; FIGARCH 19, 15, 16,
+26, 20 (a 1,000-term dot product in BLAS's order); sums at most 7, 4 and
+19. The bound held is `2 √h + 2` (64 for FIGARCH). EGARCH against `arch`'s
+simulation with 10⁶ draws at rows 2,100, 2,300 and 2,599, horizons 2, 3, 5
+and 10: the bank within 1.9 standard errors everywhere (relative standard
+error 1.3e-4 to 3.7e-4), while `exp(E ln s)`, the forecast without
+Nelson's convexity, sits 57 to 149 standard errors away, so the draws
+resolve the difference the closed form makes. The 20,000-draw form runs in
+the essentials, the 10⁶ one (about 6 s, 200 MB) in the extended tier.

@@ -140,7 +140,7 @@ impl Filter {
     }
 
     /// The `j`-th squared residual back (`j ≥ 1`) of FIGARCH's ring.
-    fn back(&self, j: usize) -> f64 {
+    pub(super) fn back(&self, j: usize) -> f64 {
         let m = self.ring.len();
         self.ring[(self.head + j - 1) % m]
     }
@@ -252,34 +252,5 @@ impl Filter {
                 self.ring[self.head] = e2;
             }
         }
-    }
-
-    /// FIGARCH's `h`-row variance forecast from a row whose variance is `s`:
-    /// each later row's squared residual read as its own forecast, the
-    /// rows before as they were, as `arch`'s analytic forecast does.
-    pub fn figarch_forecast(
-        &self,
-        theta: &[f64],
-        s: f64,
-        horizon: usize,
-        scratch: &mut Vec<f64>,
-    ) -> f64 {
-        let m = self.ring.len();
-        scratch.clear();
-        figarch_weights(theta, m, false, |_, lam, _, _, _| scratch.push(lam));
-        let w = theta[0] / (1.0 - theta[3]);
-        // fc[i] is the forecast of the row i after this one's.
-        let mut fc = Vec::with_capacity(horizon);
-        fc.push(s);
-        for i in 1..horizon {
-            let mut h = w;
-            for (j, lam) in scratch.iter().enumerate().map(|(j, l)| (j + 1, *l)) {
-                // the row j back from row i: a forecast while it is one of
-                // this row's or later, else the ring's (j − i) back
-                h += lam * if j <= i { fc[i - j] } else { self.back(j - i) };
-            }
-            fc.push(h);
-        }
-        fc[horizon - 1]
     }
 }
