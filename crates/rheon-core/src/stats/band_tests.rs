@@ -598,3 +598,45 @@ fn a_band_ending_at_the_first_bucket_folds_into_it_as_before() {
     assert_eq!(held(&q), vec![(-128, 1.0), (0, 1.0 + f64::EPSILON)]);
     assert_eq!((q.lo, q.buckets.len()), (-128, 129));
 }
+
+/// Two levels, the lower at 0 and the upper at 1: a value at `1e-300` lies
+/// between them, and the band keeps the buckets between a sketch's levels
+/// (the module doc's "The band"), so it spans the 63,788 buckets from that
+/// value to the upper level's (review 2026-11-23, DIAG-5, not reproduced as
+/// a defect). Kept, the lower level steps off 0 onto the bucket the
+/// unbounded sketch reads, to the bit; folded, as the review proposes, it
+/// would read a bucket some 16 octaves away. Every bounded sketch the
+/// library keeps (`huber`'s and `quantile`'s MAD, the bins' medians) has
+/// one level, which the same rows hold to `one_level_buckets`.
+#[test]
+fn a_value_between_two_levels_is_kept_and_one_level_holds_its_band() {
+    let rows = [(0.0, 3.0), (1.0, 7.0), (1e-300, 0.5)];
+    let mut q = EwQuantile::bounded(&[0.25, 0.75], 8).unwrap();
+    let mut wide = EwQuantile::new(&[0.25, 0.75]).unwrap();
+    for (v, w) in rows {
+        q.add(v, w);
+        wide.add(v, w);
+    }
+    assert_eq!(q.at[0], None, "the lower level is at 0");
+    assert_eq!(q.at[1], Some(EwQuantile::index(1.0)));
+    let span = (EwQuantile::index(1.0) - EwQuantile::index(1e-300) + 1) as usize;
+    assert_eq!(q.buckets_held().0, span);
+    // The zeros' share falls: the lower level leaves 0 for the value
+    // between, the upper stays at 1.
+    q.age(0.5);
+    wide.age(0.5);
+    q.add(1e-300, 2.0);
+    wide.add(1e-300, 2.0);
+    assert!(q.at[0].is_some(), "the lower level has left 0");
+    assert_eq!(q.at[1], Some(EwQuantile::index(1.0)));
+    assert_eq!(q.get(0), wide.get(0));
+    assert_eq!(q.get(0), Some(EwQuantile::bucket_value(EwQuantile::index(1e-300))));
+    // One level, the same rows: held to its band.
+    let mut one = EwQuantile::bounded(&[0.5], 8).unwrap();
+    for (v, w) in rows {
+        one.add(v, w);
+    }
+    let (len, cap) = one.buckets_held();
+    let most = EwQuantile::one_level_buckets(8);
+    assert!(len <= most && cap <= most, "{len} spanned, {cap} held");
+}
