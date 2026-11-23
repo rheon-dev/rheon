@@ -295,6 +295,10 @@ fn decrement(obj: &dyn Fn(&[f64], bool) -> Eval, theta: &[f64], e: &Eval, units:
         .map_or(f64::INFINITY, f64::abs)
 }
 
+/// A projection onto a set in a metric: the point, then the metric
+/// (row-major), to the nearest point of the set.
+pub(super) type InMetric<'a> = dyn Fn(&[f64], &[f64]) -> Vec<f64> + 'a;
+
 /// The Newton decrement inside the set: the gain the Newton step predicts
 /// once it is projected onto the set in the curvature's own metric, `gᵀd −
 /// ½ dᵀ M d` with `d = P_M(θ + M⁻¹ g) − θ` (`in_metric` the projection, `M`
@@ -308,7 +312,7 @@ pub(super) fn decrement_in(
     obj: &dyn Fn(&[f64], bool) -> Eval,
     theta: &[f64],
     units: &[f64],
-    in_metric: &dyn Fn(&[f64], &[f64]) -> Vec<f64>,
+    in_metric: &InMetric<'_>,
 ) -> f64 {
     let e = obj(theta, true);
     if !e.f.is_finite() {

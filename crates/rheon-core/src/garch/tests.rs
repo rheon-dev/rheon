@@ -955,7 +955,13 @@ fn soundness_is_the_decrement_at_its_cut() {
             assert!(ok.sound, "{stop:?} {scale}");
             assert_eq!(ok.lr, 14.0 * scale);
             let outside = |_: &Fit| f64::INFINITY;
-            let over = StartFit::of(fit(at.next_up(), stop), theta.clone(), &outside, -17.0, scale);
+            let over = StartFit::of(
+                fit(at.next_up(), stop),
+                theta.clone(),
+                &outside,
+                -17.0,
+                scale,
+            );
             assert!(!over.sound, "{stop:?} {scale}");
             // past the cut outside the set, at it inside: an optimum on a face
             let face = |_: &Fit| at;
@@ -1169,4 +1175,3 @@ fn a_start_on_a_bound_at_its_optimum_is_stepped_from() {
     }
     assert_eq!(m.start_report()[0], (0, true));
 }
-

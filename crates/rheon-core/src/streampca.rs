@@ -373,8 +373,14 @@ impl StreamPca {
     /// docs' rule), from the state as it stands.
     pub fn separated(&self, j: usize) -> bool {
         let tr = self.trace();
-        separated(&self.vals, j, self.n_kish(), self.spanning, tr, self.cfg.n_features)
-            && self.rate_finds(j, tr)
+        separated(
+            &self.vals,
+            j,
+            self.n_kish(),
+            self.spanning,
+            tr,
+            self.cfg.n_features,
+        ) && self.rate_finds(j, tr)
     }
 
     /// Whether the method's own rate has found component `j` against its

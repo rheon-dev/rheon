@@ -1988,7 +1988,10 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         let f = frozen::ALL.iter().find(|f| f.name == name).expect(name);
         let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
         let spanning = at(&v, &["model", "StreamPca", "spanning"]).and_then(rmpv::Value::as_u64);
-        assert!(spanning.is_some_and(|n| n > 0), "{name}: spanning {spanning:?}");
+        assert!(
+            spanning.is_some_and(|n| n > 0),
+            "{name}: spanning {spanning:?}"
+        );
     }
     // dcc's start over a span: its first stamp, the clock's 0 on this
     // stream, so present and not nil rather than held.
