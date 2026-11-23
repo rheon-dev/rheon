@@ -352,6 +352,12 @@ fn previous_sets() -> Vec<(u32, &'static [&'static Fixture])> {
 ///   no `flag` flipped. The bound, 0.25, is under the 0.5 a flipped flag
 ///   would be, so a flip fails the test. A schema-65 state is also
 ///   renumbered ([`RENUMBERED`]).
+/// - `micro`: the rows' mean weight is taken at the old mean's and the
+///   row's shares, where the Welford step cancelled (rule 5's thirtieth
+///   exception, the user's, 2026-11-23: "Exception 30, full fix"), so a
+///   kept state's `w_mean` holds the old step's last bits. On these rows it
+///   moved by one ulp (2.2e-16 relative), measured 2026-11-23 on every kept
+///   set; the bound is 45 times that.
 const MOVED: &[(&str, f64)] = &[
     ("lasso", 1e-9),
     ("lasso_window", 1e-9),
@@ -359,6 +365,7 @@ const MOVED: &[(&str, f64)] = &[
     ("bocpd", 1e-13),
     ("bocpd_warming", 1e-13),
     ("corrchange_window", 0.25),
+    ("micro", 1e-14),
 ];
 
 /// The [`MOVED`] cases whose bound covers only some numbers, each with the

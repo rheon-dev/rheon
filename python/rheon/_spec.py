@@ -1042,7 +1042,7 @@ def _common(
     drift_threshold: float | Duration | None = None,
     drift_action: Literal["flag", "reset"] = "flag",
     drift_kind: Literal["page_hinkley", "cusum", "adwin", "ddm", "eddm", "kswin"] | None = None,
-    drift_options: Mapping[str, float | int | bool] | None = None,
+    drift_options: Mapping[str, float | int | bool | str] | None = None,
     emit_calibration: bool = False,
     calibration_half_life: float | Duration | None = None,
     emit_breaks: bool = False,

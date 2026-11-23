@@ -317,3 +317,16 @@ fn the_scan_ends_on_a_nan() {
     assert!(ks_h(&a, &b) <= a.len());
     assert!(ks_h(&b, &a) <= a.len());
 }
+
+/// At large samples `h*` is the least `h` whose tail is at most `alpha`,
+/// read from the ratios built once (review 2026-11-23, DRIFT-8: built per
+/// `h`, `r = 50,000` cost `r^{3/2}` and a vector of `r + 1` numbers a step).
+#[test]
+fn the_critical_h_of_a_large_sample_is_the_least_whose_tail_passes() {
+    for (r, alpha) in [(5_000usize, 0.005), (50_000, 0.005), (50_000, 0.05)] {
+        let h = ks_critical_h(r, alpha);
+        assert!(h > 1 && h <= r, "{r}: {h}");
+        assert!(ks_equal_tail(r, h) <= alpha, "{r}: the tail at {h}");
+        assert!(ks_equal_tail(r, h - 1) > alpha, "{r}: the tail below {h}");
+    }
+}

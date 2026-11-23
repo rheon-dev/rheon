@@ -980,6 +980,31 @@ fn drift_kinds_run(bytes: &[u8], input: &DataFrame) -> Ran {
     bank_run_of(&drift_kinds_specs(), bytes, input)
 }
 
+/// The specs of `bank_drift_ranges` (review 2026-11-23, DRIFT-1): ADWIN's
+/// two forms of range other than river's 1, a number given and the
+/// window's, whose state writes the range and each bucket's extent.
+fn drift_ranges_specs() -> Vec<Spec> {
+    [
+        r#"{"name": "fixed", "model": {"type": "rls"}, "targets": ["y"], "features": ["x0", "x1"], "half_life": 100.0, "emit_drift": true, "drift_kind": "adwin", "drift_action": "reset", "drift_options": {"clock": 2, "max_buckets": 2, "max_width": 400, "range": 0.5}}"#,
+        r#"{"name": "window", "model": {"type": "rls"}, "targets": ["y"], "features": ["x0", "x1"], "half_life": 100.0, "emit_drift": true, "drift_kind": "adwin", "drift_options": {"clock": 2, "max_buckets": 2, "max_width": 400, "range": "window", "restart": false}}"#,
+    ]
+    .iter()
+    .map(|text| serde_json::from_str(text).unwrap_or_else(|e| panic!("{text}: {e}")))
+    .collect()
+}
+
+/// Saved at row 220, after the break; the next rows continue.
+fn drift_ranges_first() -> (Vec<u8>, DataFrame) {
+    let df = reset_frame();
+    let mut bank = Bank::new(drift_ranges_specs()).unwrap();
+    bank.fit_predict(&df.slice(0, 220)).unwrap();
+    (bank.save_bytes().unwrap(), df.slice(220, RESET_N - 220))
+}
+
+fn drift_ranges_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    bank_run_of(&drift_ranges_specs(), bytes, input)
+}
+
 /// The specs of `bank_refit_span` (PLAN 538): `glm` and `expectile`, each
 /// refitting a target's first rows over a span of the clock, grouped on
 /// `bank_refit`'s stream. Saved at its split, inside every group's span,
@@ -2234,6 +2259,11 @@ fn kinds() -> Vec<Kind> {
             run: drift_kinds_run,
         },
         Kind {
+            name: "bank_drift_ranges",
+            first: drift_ranges_first,
+            run: drift_ranges_run,
+        },
+        Kind {
             name: "bank_refit_span",
             first: refit_span_first,
             run: refit_span_run,
@@ -2756,7 +2786,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
     assert_eq!(
         kinds.into_iter().collect::<Vec<_>>(),
         [
-            ("bank", 16),
+            ("bank", 17),
             ("checkpoint", 1),
             ("merge", 3),
             ("refresh_time", 5),
@@ -2886,7 +2916,10 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                 && (sketches(&kept, "anchor") > 0 || holds_for_a_refit(&unhex(current.state)));
             if old_scale {
                 kept_scale_rule(&kind, &kept, &again, &from_ipc(f.input), &what);
-            } else if moved_by_the_held_mass(f.name) || started_fresh(f.name, schema) {
+            } else if moved_by_the_held_mass(f.name)
+                || started_fresh(f.name, schema)
+                || moved_by_the_mean_weight(schema, f.name)
+            {
                 // Rule 5's fifteenth exception: the queue's sums hold the old
                 // form's bits for the rows before the save, so the state this
                 // build saves after the continued rows is not the current
@@ -2907,6 +2940,14 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                      reaches from the same stream"
                 );
             }
+            if seeded_lag0(schema, f.name) {
+                // Rule 5's thirty-first exception: the kept state has no lag
+                // 0 of its own, so it is not the current fixture's; it saves
+                // bytes that load back the same.
+                let (resaved, _) = (kind.run)(&again, &from_ipc(f.input))
+                    .unwrap_or_else(|e| panic!("{what}: {e}"));
+                assert!(resaved == again, "{what}: saved, loaded, saved");
+            }
             let tol = if f.writer == writer() { 0.0 } else { TOL };
             assert_eq!(frames.len(), f.output.len(), "{what}");
             assert_eq!(current.output.len(), f.output.len(), "{what}");
@@ -2914,7 +2955,13 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                 frames.iter().zip(f.output).zip(current.output)
             {
                 assert_eq!(name, frozen_name, "{what}");
-                let want = moved_since(&from_ipc(want), &from_ipc(now));
+                let kept_frame = from_ipc(want);
+                let want = moved_since(&kept_frame, &from_ipc(now));
+                let want = if seeded_lag0(schema, f.name) {
+                    fallback_cells(&kept_frame, &want, got)
+                } else {
+                    want
+                };
                 let want = whole_at_the_end_of_the_input(f.name, name, &want, &from_ipc(now));
                 let want = if old_scale {
                     new_after_load(f.name, name, &from_ipc(f.input), &want, &from_ipc(now))
@@ -2930,7 +2977,10 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                         CONTINUES_WITHIN,
                     );
                 }
-                let tol = if windowed || moved_by_the_held_mass(f.name) {
+                let tol = if windowed
+                    || moved_by_the_held_mass(f.name)
+                    || moved_by_the_mean_weight(schema, f.name)
+                {
                     tol.max(TOL)
                 } else {
                     tol
@@ -3112,6 +3162,92 @@ fn started_fresh(name: &str, schema: u32) -> bool {
 
 fn moved_by_the_held_mass(name: &str) -> bool {
     name.starts_with("with_windows")
+}
+
+/// The fixtures of schema 71 or earlier whose conformal band's mean weight
+/// a later change moved (rule 5's thirtieth exception, the user's,
+/// 2026-11-23: "Exception 30, full fix"): the band's mean weight is taken
+/// at the old mean's and the row's shares, `(R/R')·w̄ + (1/R')·w`, where the
+/// Welford step `w̄ + (w − w̄)/R'` cancelled, so a kept state's mean weight
+/// holds the old step's last bits. It saves bytes that load back the same,
+/// and its continuation is held within [`TOL`] (1e-12 relative) of the
+/// frames it was frozen with, not to the bit. The current set is held to
+/// the bit as ever. The kinds are [`MEAN_WEIGHT_MOVED`]'s, the kept ones
+/// whose band's rows have uneven weights.
+const MEAN_WEIGHT_MOVED: &[&str] = &["bank_conformal_auto", "bank_label_clock"];
+
+/// The fixtures of schema 71 or earlier whose breaks or coverage under a
+/// horizon read a long-run variance (rule 5's thirty-first exception, the
+/// user's, 2026-11-23): where the null's lag 0 left that variance at or below
+/// 0, the old build read `None`, and this build reads the fallback, the
+/// terms' own lag 0, which a kept state starts at the null's `Σ ω²` and then
+/// decays. Every row whose frozen value is a number reads it to the bit, as
+/// the null's form is unchanged; a row the old build left `None` in
+/// [`FALLBACK_FIELDS`] is held only to a finite number
+/// ([`fallback_cells`]).
+fn seeded_lag0(schema: u32, name: &str) -> bool {
+    schema <= 71 && name == "bank_diagnosed"
+}
+
+/// The fields a long-run variance divides: the CUSUM (not the CUSUM of
+/// squares, whose lag 0 is the measured fourth moment's), the break Wald
+/// distance, and a quantile fit's coverage Wald.
+const FALLBACK_FIELDS: &[&str] = &["cusum_", "break_wald_", "calibration_wald_"];
+
+/// `want` with each [`FALLBACK_FIELDS`] cell that `kept`, the kept fixture's
+/// own frozen frame, left null taken from `got` where that is a finite
+/// number: the rows where the old build read no variance.
+fn fallback_cells(kept: &DataFrame, want: &DataFrame, got: &DataFrame) -> DataFrame {
+    let falls_back =
+        |n: &str| FALLBACK_FIELDS.iter().any(|p| n.starts_with(p)) && !n.starts_with("cusum_sq_");
+    let columns: Vec<Column> = want
+        .columns()
+        .iter()
+        .map(|w| {
+            let ws = w.as_materialized_series();
+            let (DataType::Struct(_), Ok(k), Ok(g)) =
+                (ws.dtype(), kept.column(w.name()), got.column(w.name()))
+            else {
+                return w.clone();
+            };
+            let (wst, kst, gst) = (
+                ws.struct_().unwrap(),
+                k.as_materialized_series().struct_().unwrap().clone(),
+                g.as_materialized_series().struct_().unwrap().clone(),
+            );
+            let fields: Vec<Series> = wst
+                .fields_as_series()
+                .into_iter()
+                .map(|f| {
+                    let (Some(kf), Some(gf)) = (
+                        kst.field_by_name(f.name()).ok(),
+                        gst.field_by_name(f.name()).ok(),
+                    ) else {
+                        return f;
+                    };
+                    if !falls_back(f.name()) || kf.len() != f.len() || gf.len() != f.len() {
+                        return f;
+                    }
+                    let finite = gf
+                        .f64()
+                        .map(|c| c.is_not_nan() & c.is_not_null())
+                        .unwrap_or_else(|_| gf.is_not_null());
+                    let take = kf.is_null() & finite;
+                    gf.zip_with(&take, &f).unwrap()
+                })
+                .collect();
+            StructChunked::from_series(ws.name().clone(), ws.len(), fields.iter())
+                .unwrap()
+                .with_outer_validity(wst.rechunk_validity())
+                .into_series()
+                .into_column()
+        })
+        .collect();
+    DataFrame::new(want.height(), columns).unwrap()
+}
+
+fn moved_by_the_mean_weight(schema: u32, name: &str) -> bool {
+    schema <= 71 && MEAN_WEIGHT_MOVED.contains(&name)
 }
 
 /// The maps in `v`, at any depth, that hold the key `key`: the sketches a
@@ -3637,6 +3773,25 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
         }),
         ("bank_drift_kinds", "an ADWIN's second level", |p, v| {
             p.contains(".Adwin.levels.1.") && v.as_f64().is_some()
+        }),
+        // Rule 5's thirty-first exception: under a horizon the breaks' and
+        // a quantile fit's coverage's empirical lag 0.
+        ("bank_diagnosed", "a CUSUM's empirical lag 0", |p, v| {
+            p.ends_with(".g1") && v.as_f64().is_some_and(|f| f > 0.0)
+        }),
+        (
+            "bank_diagnosed",
+            "a quantile fit's residuals' lag 0",
+            |p, v| p.ends_with(".gz") && v.as_f64().is_some_and(|f| f > 0.0),
+        ),
+        ("bank_diagnosed", "a coverage's empirical lag 0", |p, v| {
+            p.ends_with(".g") && v.as_f64().is_some_and(|f| f > 0.0)
+        }),
+        ("bank_drift_ranges", "an ADWIN's fixed range", |p, v| {
+            p.contains(".Adwin.") && p.ends_with(".range") && v.as_f64() == Some(0.5)
+        }),
+        ("bank_drift_ranges", "an ADWIN bucket's extent", |p, v| {
+            p.contains(".Adwin.extents.1.") && v.as_f64().is_some()
         }),
         ("bank_drift_kinds", "a DDM's least rate", |p, v| {
             p.contains(".Ddm.detector.")

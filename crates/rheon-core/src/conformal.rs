@@ -255,6 +255,29 @@ impl Conformal {
         })
     }
 
+    /// Whether a restored tracker keeps the shape every row relies on: a
+    /// level in `(0, 1)` and a rate above 0, a multiplier and a kept radius
+    /// that are each NaN (not started) or a finite number at least 0, a
+    /// coverage in `[0, 1]`, and weights and counts that are finite and at
+    /// least 0. A file that says otherwise is damaged (review 2026-11-23,
+    /// DIAG-10 (4)).
+    pub fn has_shape(&self) -> bool {
+        let unset_or_held = |v: f64| v.is_nan() || (v.is_finite() && v >= 0.0);
+        let held = |v: f64| v.is_finite() && v >= 0.0;
+        self.alpha > 0.0
+            && self.alpha < 1.0
+            && self.rate.is_finite()
+            && self.rate > 0.0
+            && unset_or_held(self.m)
+            && unset_or_held(self.q)
+            && (0.0..=1.0).contains(&self.cov)
+            && held(self.cov_w)
+            && held(self.w_mean)
+            && held(self.w_rows)
+            && held(self.held_mean)
+            && held(self.released)
+    }
+
     /// The half-width of the interval for a row whose residual spread
     /// before it is `sigma`: `m · σ` once started, for a finite `σ > 0`.
     /// A radius kept from a file before the multiplier is shown as it was,
@@ -335,8 +358,8 @@ impl Conformal {
         // The stream's mean weight, this row's included, so the first row
         // reads its own weight as 1; and the mean of the rows waiting, on the
         // same count.
-        self.w_rows = lam * self.w_rows + 1.0;
-        self.w_mean += (w - self.w_mean) / self.w_rows;
+        self.w_rows *= lam;
+        self.w_mean = crate::cluster::mean_weight(&mut self.w_rows, self.w_mean, w);
         // (A tracker that has never been passed a count skips the division,
         // whose result would be 0: the fixed step costs what it did.)
         if held > 0 || self.held_mean != 0.0 {
@@ -598,6 +621,35 @@ pub fn norm_ppf(p: f64) -> f64 {
 mod tests {
     use super::*;
 
+    /// A restored tracker is held to its shape, each bound on its own; one
+    /// fed mid-stream is sound (review 2026-11-23, DIAG-10 (4)).
+    #[test]
+    fn a_restored_trackers_shape_is_checked() {
+        let mut c = Conformal::new(0.9, 0.05).unwrap();
+        assert!(c.has_shape());
+        for i in 0..50 {
+            c.update(f64::from(i % 5) - 2.0, 1.0, 0.99, 1.0);
+        }
+        assert!(c.has_shape());
+        for edit in [
+            &(|c: &mut Conformal| c.alpha = 1.0) as &dyn Fn(&mut Conformal),
+            &|c| c.rate = 0.0,
+            &|c| c.m = -1.0,
+            &|c| c.m = f64::INFINITY,
+            &|c| c.q = -1.0,
+            &|c| c.cov = 1.5,
+            &|c| c.cov_w = f64::NAN,
+            &|c| c.w_mean = -1.0,
+            &|c| c.w_rows = f64::INFINITY,
+            &|c| c.held_mean = -1.0,
+            &|c| c.released = f64::NAN,
+        ] {
+            let mut d = c.clone();
+            edit(&mut d);
+            assert!(!d.has_shape(), "{d:?}");
+        }
+    }
+
     /// A coverage just under 1 is a coverage the tracker takes: `1 − α/2`
     /// rounds to 1 there, and `Φ⁻¹(1)` made the multiplier's start and its
     /// gain NaN for good (review 2026-11-23, DIAG-6). The upper quantile
@@ -641,11 +693,9 @@ mod tests {
     /// 2026-11-23, CLUST-3: the Welford step read `1e16 + (1 − 1e16) / 1 =
     /// 0` after total forgetting, and up to 20% off at shares near `2^-50`).
     ///
-    /// Confirmed, and not fixed here: the fix moves the last bits of the
-    /// mean weight, so a saved state (schema 71) no longer continues to the
-    /// bit, which is the user's to allow (rule 5). It panics until then.
+    /// The share form moves the mean weight's last bits, so a state saved
+    /// before it continues within rule 5's thirtieth exception.
     #[test]
-    #[should_panic(expected = "share")]
     fn the_mean_weight_survives_a_heavy_row_decaying_away() {
         for share in [
             0.0,

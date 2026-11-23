@@ -116,6 +116,12 @@ fn each_setting_is_held_to_its_range_on_both_sides() {
             adwin(r#""min_window_length": 1"#),
         ),
         (adwin(r#""max_width": 0"#), adwin(r#""max_width": 1"#)),
+        (adwin(r#""range": 0"#), adwin(r#""range": 1e-300"#)),
+        (adwin(r#""range": -1"#), adwin(r#""range": 2.5"#)),
+        (
+            adwin(r#""range": "windows""#),
+            adwin(r#""range": "window""#),
+        ),
         (
             adwin(r#""max_state_bytes": 0"#),
             adwin(r#""max_state_bytes": 4000"#),
@@ -245,7 +251,7 @@ fn each_kind_builds_its_detector() {
     );
     assert_eq!(
         built(
-            r#", "drift_kind": "adwin", "drift_options": {"delta": 0.01, "clock": 4, "max_buckets": 3, "min_window_length": 2, "grace_period": 7, "max_width": 99, "restart": false}"#
+            r#", "drift_kind": "adwin", "drift_options": {"delta": 0.01, "clock": 4, "max_buckets": 3, "min_window_length": 2, "grace_period": 7, "max_width": 99, "restart": false, "range": 3}"#
         ),
         DriftDetector::Adwin(rheon_core::Adwin::new(rheon_core::AdwinCfg {
             delta: 0.01,
@@ -255,6 +261,7 @@ fn each_kind_builds_its_detector() {
             grace_period: 7,
             max_width: 99,
             restart: false,
+            range: rheon_core::AdwinRange::Fixed(3.0),
         }))
     );
     assert_eq!(
@@ -344,4 +351,43 @@ fn a_ring_past_what_its_bytes_can_count_is_refused() {
     );
     assert!(err.contains("at least twice"), "{err}");
     assert_eq!(rheon_core::Kswin::state_bytes(usize::MAX), u64::MAX);
+}
+
+/// `range` builds ADWIN's range: river's 1 when left out, the number given,
+/// or the window's (review 2026-11-23, DRIFT-1; the user, 2026-11-23: "Allow
+/// both by parameter"); it is ADWIN's alone, and the window's form counts
+/// each bucket's extent in the bytes.
+#[test]
+fn range_builds_adwins_range() {
+    let built = |o: &str| {
+        spec(&format!(
+            r#", "drift_kind": "adwin", "drift_options": {{{o}}}"#
+        ))
+        .drift_detector()
+        .unwrap()
+    };
+    let with = |range| {
+        DriftDetector::Adwin(rheon_core::Adwin::new(rheon_core::AdwinCfg {
+            range,
+            ..Default::default()
+        }))
+    };
+    assert_eq!(built(""), with(rheon_core::AdwinRange::Fixed(1.0)));
+    assert_eq!(
+        built(r#""range": 2.5"#),
+        with(rheon_core::AdwinRange::Fixed(2.5))
+    );
+    assert_eq!(
+        built(r#""range": "window""#),
+        with(rheon_core::AdwinRange::Window)
+    );
+    let err = refused(r#", "drift_kind": "kswin", "drift_options": {"range": 2}"#);
+    assert!(err.contains("range"), "{err}");
+    let plain = spec(r#", "drift_kind": "adwin""#).drift_slot_bytes();
+    let window =
+        spec(r#", "drift_kind": "adwin", "drift_options": {"range": "window"}"#).drift_slot_bytes();
+    assert!(
+        window > plain && window < 2 * plain + 200,
+        "{plain} {window}"
+    );
 }

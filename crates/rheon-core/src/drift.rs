@@ -40,7 +40,7 @@ mod detector;
 mod eddm;
 mod kswin;
 
-pub use adwin::{Adwin, AdwinCfg};
+pub use adwin::{Adwin, AdwinCfg, AdwinRange};
 pub use cusum::Cusum;
 pub use ddm::Ddm;
 pub use detector::{DriftDetector, ErrorRate};

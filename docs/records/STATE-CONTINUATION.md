@@ -787,3 +787,58 @@ of every `huber*` and `quantile*` case and of those three banks were
 regenerated, and `the_scales_from_every_row_are_written` holds the new form:
 each standardized case's moments holding weight and its scales written,
 neither in a case without `standardize`.
+
+A thirtieth, the user's (2026-11-23: "Exception 30, full fix"; PLAN 578e,
+review 2026-11-23 CLUST-3): the rows' EW mean weight kept by `micro` (its
+`w_mean`, the unit a summary admits and `beta_mu` counts) and by the
+conformal band (`Conformal::w_mean`, which scales its step) is taken at the
+old mean's and the row's shares, `(R/R')·w̄ + (1/R')·w` with `R' = R + 1`,
+where the Welford step `w̄ + (w − w̄)/R'` was. The Welford step cancels
+where a heavy mean meets a light row it has all but forgotten: after a row
+of weight `1e16`, a gap of 60 half-lives and a row of weight 1, `micro`'s
+mean read 0 and a summary admitted a point `1.4e6` away at `eps = 1`; at a
+share of `2^-30` it read `8e-8` off; and the band's read 0 after total
+forgetting. A row at the mean leaves it to the bit, so a stream of constant
+weights moves nothing; a stream of uneven weights moves the mean weight in
+its last bits. No layout changes. A state saved before the change holds the
+old step's bits: it loads, re-saves bytes that load back the same, and goes
+on by the new step. The kept sets are held to bounds, not to the bit:
+`v61/` to `v71/` `micro` (`crates/rheon-core/tests/state_fixtures.rs`,
+`MOVED`, 1e-14 of `1 + |value|`; `w_mean` moved by one ulp, `2.2e-16`
+relative, measured 2026-11-23), and `v71/` `bank_conformal_auto` and
+`bank_label_clock` (`crates/rheon-polars/tests/state_fixtures.rs`,
+`MEAN_WEIGHT_MOVED`, every frame within `TOL`, 1e-12 relative). The
+current fixtures `micro`, `bank_conformal_auto` and `bank_label_clock`
+regenerated.
+
+A thirty-first, the user's (2026-11-23: the seed and its decay, with the
+fallback form; PLAN 578e, review 2026-11-23 DIAG-1): under a horizon, the
+breaks' long-run variance (`cusum_*`, and `break_wald_*` through the
+residuals' long-run factor) and a quantile fit's coverage Wald
+(`calibration_wald_*`) take the null's lag 0 (`Σ ω²` of the terms, or `q
+(1 − q) Σ ω²` of the indicators) wherever that leaves the variance above 0,
+and the terms' own lag 0 (`G1 = Σ (ω t)²`, Newey and West's, which
+Bartlett's weights keep at or above 0) only where it does not. Before,
+such a row read `None`. Where the null's form is above 0 every number is
+the old one, to the bit. Measured on simulated nulls and shifts, size and
+power are the null form's: run-once size 4.6%, 6.3% and 6.6% at horizons
+of 1, 3 and 5, and the same rows to a flag after a shift of 1, 3, 10 and
+1000 standard deviations. The empirical lag 0 alone would have held the
+size (4.3%, 5.8%, 6.7%) and lost power: 197 rows to flag a 1000-sd break
+where the null's form flags it on its row. The new sums, `Breaks::g1`,
+`Breaks::gz` (a quantile fit's residuals) and `Coverage::g`, are kept on
+every row under a horizon, written only there, and absent from a state
+saved before the change. Such a state loads, reads the null's lag 0 in
+their place until its next row, and on that row starts each at the
+null's value, from which it decays as `Σ ω²` does and takes each row's own
+square, so the seed's share fades with the horizon's weight. Its
+continuation reads every number the old build read where that was one, to
+the bit; where the old build read `None`, it reads a finite number, from
+the seed and the rows after it, not the current fixture's. The kept sets
+`v61/` to `v71/` `bank_diagnosed` are held to that
+(`crates/rheon-polars/tests/state_fixtures.rs`, `seeded_lag0` and
+`fallback_cells`): each saves bytes that load back the same, every field
+but `cusum_*`, `break_wald_*` and `calibration_wald_*` goes on to its frozen
+frames to the bit, and those three go on to the bit wherever the frozen
+value is a number and to a finite number where it is `None`. The current
+fixture `bank_diagnosed` regenerated, and freezes the three sums.

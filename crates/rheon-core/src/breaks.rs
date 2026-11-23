@@ -67,11 +67,23 @@
 //!
 //! ```text
 //! P1_l = Σ ω_t ω_{t−l} z_t z_{t−l}             P2_l = the same of z² − 1
+//! G1   = Σ (ω_t z_t)²                         the empirical lag 0
 //! cusum    = Z1 / sqrt(r (S2 + 2 Σ_l (1 − l/(L+1)) P1_l))
 //! cusum_sq = (Z2 − S1) / sqrt(r₂ ((m4 − 1) S2 + 2 Σ_l (1 − l/(L+1)) P2_l))
 //! ```
 //!
-//! and the same long-run factor `1 + 2 Σ_l (1 − l/(L+1)) P1_l / S2` scales
+//! The CUSUM's lag 0 is the null's `S2` (a studentized residual has
+//! variance 1) wherever that leaves the variance above 0, and the terms'
+//! own `G1`, Newey and West's, only where it does not. The null's lag 0
+//! beside empirical lag products can fall to 0 or below: under shocks
+//! alternating in sign `cusum` and `break_wald` read `None` from the first
+//! of them (review 2026-11-23, DIAG-1). `G1` in its place keeps the variance
+//! at or above 0 for any terms, but it holds a break's own rows, so a break
+//! divides itself out: a 1000-sd break read 1.0 on its row, where the
+//! null's lag 0 reads 36. So `G1` is the fallback alone.
+//!
+//! and the same long-run factor, `1 + 2 Σ_l (1 − l/(L+1)) P1_l / S2` or its
+//! fallback `(G1 + 2 Σ_l (1 − l/(L+1)) P1_l) / S2`, scales
 //! `break_wald`'s noise variance ([`TwinFit::wald`]). With no horizon `L` is
 //! 0 and they are the forms above. On a quantile fit the CUSUM's terms are
 //! the indicators (task 232 (6)), so `P1_l` is theirs; the residuals'
@@ -140,6 +152,17 @@ pub struct Breaks {
     pz: Vec<f64>,
     #[serde(default, skip_serializing_if = "VecDeque::is_empty")]
     ringz: VecDeque<f64>,
+    /// Under a horizon, the CUSUM's terms' empirical lag 0, `Σ (ω t)²` (`t`
+    /// the studentized residual, or on a quantile fit the indicator), and on
+    /// a quantile fit the studentized residuals' `Σ (ω z)²` beside it: the
+    /// long-run variance's lag 0, which keeps it positive (module docs).
+    /// `None` without a horizon, and in a state saved before it, which is
+    /// read at the null's `Σ ω²` until its next row (rule 5's thirty-first
+    /// exception).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    g1: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    gz: Option<f64>,
 }
 
 fn is_zero(v: &usize) -> bool {
@@ -158,6 +181,7 @@ impl Breaks {
             lags,
             p1: vec![0.0; lags],
             p2: vec![0.0; lags],
+            g1: (lags > 0).then_some(0.0),
             ..Self::default()
         }
     }
@@ -170,7 +194,34 @@ impl Breaks {
         let kept = if on { self.lags } else { 0 };
         self.pz = vec![0.0; kept];
         self.ringz.clear();
+        self.gz = (kept > 0).then_some(0.0);
         self
+    }
+
+    /// The CUSUM's terms' lag 0: the kept sum, or in a state saved before it
+    /// was kept the null's, `Σ ω²` of the terms (a studentized residual or a
+    /// standardized indicator has variance 1 under the null).
+    fn lag0(&self) -> f64 {
+        self.g1.unwrap_or_else(|| self.cusum_s2())
+    }
+
+    /// The studentized residuals' lag 0, on a quantile fit: the kept sum, or
+    /// the null's `Σ ω²`.
+    fn lag0_residuals(&self) -> f64 {
+        self.gz.unwrap_or(self.s2)
+    }
+
+    /// A state saved before the lag 0 was kept starts it at the null's, as
+    /// it is read until then: from here it decays as `Σ ω²` does and takes
+    /// each row's own square, so the seed's share fades with the horizon's
+    /// weight (rule 5's thirty-first exception).
+    fn seed_lag0(&mut self) {
+        if self.lags > 0 && self.g1.is_none() {
+            self.g1 = Some(self.cusum_s2());
+        }
+        if self.residual_lags() > 0 && self.gz.is_none() {
+            self.gz = Some(self.s2);
+        }
     }
 
     /// The lags the residuals' own products are kept over: `lags` on a
@@ -192,6 +243,12 @@ impl Breaks {
             && self.ringz.len() <= self.residual_lags()
             && self.c2.is_finite()
             && self.c2 >= 0.0
+            && self
+                .g1
+                .is_none_or(|g| g.is_finite() && g >= 0.0 && self.lags > 0)
+            && self
+                .gz
+                .is_none_or(|g| g.is_finite() && g >= 0.0 && self.residual_lags() > 0)
             && self
                 .p1
                 .iter()
@@ -216,6 +273,13 @@ impl Breaks {
     /// The clock moves on by a step whose decay is `lam`, with nothing
     /// scored.
     pub fn age(&mut self, lam: f64) {
+        self.seed_lag0();
+        if let Some(g) = self.g1.as_mut() {
+            *g *= lam * lam;
+        }
+        if let Some(g) = self.gz.as_mut() {
+            *g *= lam * lam;
+        }
         self.s1 *= lam;
         self.s2 *= lam * lam;
         self.z1 *= lam;
@@ -266,7 +330,17 @@ impl Breaks {
     /// place of the studentized residual. A `v` that is not finite, or a
     /// weight of 0, only ages (CLAUDE.md hard rule 9).
     pub fn update(&mut self, v: f64, lam: f64, w: f64, c: Option<f64>) {
-        let z = self.studentized(v);
+        // A step that forgets every row (a decay of 0) leaves no spread to
+        // studentize by: read before it, the row was scaled by the rows it
+        // forgot. And a studentized residual whose fourth power the sums
+        // cannot hold (a residual near `1e100` against a spread near
+        // `1e-80`) is no term of them, so a saved state still loads.
+        let z = if lam == 0.0 {
+            None
+        } else {
+            self.studentized(v)
+                .filter(|z| (w * z * z * z * z).is_finite())
+        };
         self.age(lam);
         if !(v.is_finite() && w > 0.0) {
             return;
@@ -280,6 +354,9 @@ impl Breaks {
             }
             if self.lags > 0 {
                 let u1 = w * t;
+                if let Some(g) = self.g1.as_mut() {
+                    *g += u1 * u1;
+                }
                 for (l, b1) in self.ring1.iter().enumerate() {
                     self.p1[l] += u1 * b1;
                 }
@@ -305,6 +382,9 @@ impl Breaks {
             // residuals' own, for `break_wald`, are kept beside them.
             if self.residual_lags() > 0 {
                 let uz = w * z;
+                if let Some(g) = self.gz.as_mut() {
+                    *g += uz * uz;
+                }
                 for (l, bz) in self.ringz.iter().enumerate() {
                     self.pz[l] += uz * bz;
                 }
@@ -335,10 +415,10 @@ impl Breaks {
     /// The long-run variance of the CUSUM's terms over their short-run one,
     /// `1 + 2 Σ_l (1 − l/(L+1)) P1_l / S2` (module docs) -- the studentized
     /// residuals', or on a quantile fit the indicators': 1 with no horizon,
-    /// `None` before the first term and where the lag products leave it at
-    /// or below 0.
+    /// `None` before the first term. Where the lag products leave that at or
+    /// below 0 it is the terms' own lag 0's ([`Self::long_run_of`]).
     pub fn long_run(&self) -> Option<f64> {
-        Self::long_run_of(self.cusum_s2(), self.bartlett(&self.p1))
+        Self::long_run_of(self.cusum_s2(), self.lag0(), self.bartlett(&self.p1))
     }
 
     /// The studentized residuals' long-run variance over their short-run
@@ -355,14 +435,23 @@ impl Breaks {
         if !self.indicator {
             return self.long_run();
         }
-        Self::long_run_of(self.s2, self.bartlett(&self.pz))
+        Self::long_run_of(self.s2, self.lag0_residuals(), self.bartlett(&self.pz))
     }
 
-    fn long_run_of(s2: f64, bartlett: f64) -> Option<f64> {
+    /// `1 + 2 Σ_l (1 − l/(L+1)) P_l / S2`, the null's lag 0, where that is
+    /// above 0; else `(G0 + 2 Σ_l (1 − l/(L+1)) P_l) / S2`, `G0` the terms'
+    /// empirical lag 0, Newey and West's estimate, which Bartlett's weights
+    /// keep at or above 0 for any terms (module docs). `None` before a term,
+    /// and where even that is 0: every term 0.
+    fn long_run_of(s2: f64, lag0: f64, bartlett: f64) -> Option<f64> {
         if s2 <= 0.0 {
             return None;
         }
-        let f = 1.0 + 2.0 * bartlett / s2;
+        let null = 1.0 + 2.0 * bartlett / s2;
+        if null > 0.0 {
+            return Some(null);
+        }
+        let f = (lag0 + 2.0 * bartlett) / s2;
         (f > 0.0).then_some(f)
     }
 
@@ -1203,6 +1292,17 @@ impl TwinFit {
         if !(y.is_finite() && w > 0.0 && x.iter().all(|v| v.is_finite())) {
             return self.age(lam);
         }
+        // The sandwiches keep `w² zᵢ zⱼ`: a row whose largest such product
+        // passes the largest double (a weight and a feature near the input
+        // bound) only ages, so a saved state still loads.
+        let far = x
+            .iter()
+            .zip(&self.origin)
+            .map(|(v, c)| (v - c).abs())
+            .fold(1.0f64, f64::max);
+        if !(w * w * far * far).is_finite() {
+            return self.age(lam);
+        }
         let slow = slow_factor(lam);
         self.fresh_rows = if history_wiped(lam * self.fast.n_eff(), w) {
             1
@@ -1267,7 +1367,9 @@ impl TwinFit {
             let distance = self.wald_in(sc, idx, intercept, long_run);
             // A thread keeps buffers for the orders a bank usually reads, not
             // for a thousand features' matrices.
-            if idx.len() >= KEPT_ORDER {
+            // The order is the coefficients', the intercept counted (review
+            // 2026-11-23, DIAG-10 (1)).
+            if idx.len() + usize::from(intercept) >= KEPT_ORDER {
                 *sc = WaldScratch::default();
             }
             distance
@@ -1673,7 +1775,8 @@ mod tests {
 
     /// Under a horizon, the denominators by their definition: Bartlett's
     /// weights on the lag products of the scored rows' `ω z` and `ω (z² −
-    /// 1)`, each at its present weight, a pair `l` scored rows apart --
+    /// 1)`, each at its present weight, a pair `l` scored rows apart, the
+    /// CUSUM's lag 0 the rows' own `Σ (ω z)²` --
     /// under a decay, uneven weights, zeros, and studentized residuals that
     /// carry a lag; a cleared run pairs nothing across it.
     #[test]
@@ -1709,6 +1812,7 @@ mod tests {
             let all: Vec<&(f64, f64)> = runs.iter().flatten().collect();
             let s1: f64 = all.iter().map(|r| r.1).sum();
             let s2: f64 = all.iter().map(|r| r.1 * r.1).sum();
+            let g1: f64 = all.iter().map(|r| (r.1 * r.0).powi(2)).sum();
             let z1: f64 = all.iter().map(|r| r.1 * r.0).sum();
             let z2: f64 = all.iter().map(|r| r.1 * r.0 * r.0).sum();
             let z4: f64 = slow.iter().map(|r| r.1 * r.0.powi(4)).sum();
@@ -1725,11 +1829,13 @@ mod tests {
                 }
             }
             let tol = 1e-9;
-            let want = z1 / (s2 + 2.0 * p1).sqrt();
+            let null = s2 + 2.0 * p1;
+            let lr = if null > 0.0 { null } else { g1 + 2.0 * p1 };
+            let want = z1 / lr.sqrt();
             assert!((b.cusum(1.0).unwrap() - want).abs() < tol, "row {i}");
             let want = (z2 - s1) / ((z4 / w4 - 1.0) * s2 + 2.0 * p2).sqrt();
             assert!((b.cusum_sq(1.0).unwrap() - want).abs() < tol, "row {i}");
-            let want = 1.0 + 2.0 * p1 / s2;
+            let want = lr / s2;
             assert!((b.long_run().unwrap() - want).abs() < tol, "row {i}");
         }
         assert!(
@@ -2982,6 +3088,7 @@ mod tests {
             }
             let factor = |runs: &Vec<Vec<(f64, f64)>>| {
                 let s2: f64 = runs.iter().flatten().map(|r| r.1 * r.1).sum();
+                let g0: f64 = runs.iter().flatten().map(|r| (r.1 * r.0).powi(2)).sum();
                 let mut p = 0.0;
                 for run in runs {
                     for l in 1..=lags {
@@ -2991,7 +3098,12 @@ mod tests {
                         }
                     }
                 }
-                1.0 + 2.0 * p / s2
+                let null = 1.0 + 2.0 * p / s2;
+                if null > 0.0 {
+                    null
+                } else {
+                    (g0 + 2.0 * p) / s2
+                }
             };
             let (want_z, want_c) = (factor(&zs), factor(&cs));
             let tol = 1e-9;
@@ -3059,17 +3171,22 @@ mod tests {
         assert!(bad(|c| c.ringz[1] = f64::INFINITY));
     }
 
-    /// The lag products of the indicators can cancel the variance outright
-    /// (`c = 2` then `c = −1` one lag apart, Bartlett's weight 1/2): then
-    /// there is no long-run variance and no CUSUM, where dividing would
-    /// read infinity.
+    /// Where the lag products cancel the null's lag 0 (`c = 2` then `c = −1`
+    /// one lag apart, Bartlett's weight 1/2: `2 − 2 = 0`) the terms' own lag
+    /// 0 is read, `4 + 1 − 2 = 3`, where the null's alone read no variance
+    /// and no CUSUM. The fallback is 0 only where every term is, and there
+    /// the null's lag 0 is read, 1: no row reads `None` past the first term.
     #[test]
-    fn a_long_run_variance_of_zero_reads_nothing() {
+    fn a_long_run_variance_the_lags_cancel_reads_the_terms_own_lag_0() {
         let mut b = Breaks::with_lags(1).with_indicator(true);
         b.update(1.0, 1.0, 1.0, Some(2.0));
         b.update(1.0, 1.0, 1.0, Some(-1.0));
-        assert!(b.long_run().is_none());
-        assert!(b.cusum(1.0).is_none());
+        assert_eq!(b.long_run(), Some(3.0 / 2.0));
+        assert!(b.cusum(1.0).is_some_and(f64::is_finite));
+        let mut b = Breaks::with_lags(1).with_indicator(true);
+        b.update(1.0, 1.0, 1.0, Some(0.0));
+        b.update(1.0, 1.0, 1.0, Some(0.0));
+        assert_eq!(b.long_run(), Some(1.0));
     }
 
     /// No studentized residual for a residual that is not a number, nor
@@ -4460,6 +4577,47 @@ mod tests {
 mod review_2026_11_23 {
     use super::*;
 
+    /// Both sides of the switch: where the null's lag 0 leaves the variance
+    /// above 0 the factor is `1 + 2 B / S2` to the bit, as before the
+    /// empirical lag 0 was kept; where it does not, it is `(G1 + 2 B) / S2`
+    /// (review 2026-11-23, DIAG-1; the user, 2026-11-23: the fallback).
+    #[test]
+    fn the_null_lag_0_is_read_where_positive_and_the_empirical_one_where_not() {
+        let lam = 0.5f64.powf(1.0 / 20.0);
+        let mut b = Breaks::with_lags(4);
+        let mut g = crate::SplitMix64::new(5);
+        let (mut null_rows, mut fallback_rows) = (0, 0);
+        for i in 0..400 {
+            let v = if i >= 300 && i % 2 == 0 {
+                5.0
+            } else if i >= 300 {
+                -5.0
+            } else {
+                normal(&mut g)
+            };
+            b.update(v, lam, 1.0, None);
+            let (s2, bart) = (b.cusum_s2(), b.bartlett(&b.p1));
+            if s2 <= 0.0 {
+                continue;
+            }
+            let null = 1.0 + 2.0 * bart / s2;
+            let got = b.long_run();
+            if null > 0.0 {
+                assert_eq!(got.map(f64::to_bits), Some(null.to_bits()), "row {i}");
+                null_rows += 1;
+            } else {
+                let want = (b.g1.unwrap() + 2.0 * bart) / s2;
+                assert_eq!(got, Some(want), "row {i}");
+                assert!(want > 0.0);
+                fallback_rows += 1;
+            }
+        }
+        assert!(
+            null_rows > 100 && fallback_rows > 0,
+            "{null_rows} {fallback_rows}"
+        );
+    }
+
     fn normal(g: &mut crate::SplitMix64) -> f64 {
         let u = 1.0 - g.uniform();
         let v = g.uniform();
@@ -4468,12 +4626,10 @@ mod review_2026_11_23 {
 
     /// Under a horizon the long-run variance pairs the null's lag 0 (`S2`)
     /// with the empirical lag products, which no kernel guarantees is
-    /// positive: shocks alternating in sign after a quiet spell drive it
+    /// positive: shocks alternating in sign after a quiet spell drove it
     /// to 0 or below, where `cusum` and `break_wald` read `None` (review
-    /// 2026-11-23, DIAG-1 (1)). Confirmed; a decision for the user. It
-    /// panics until then.
+    /// 2026-11-23, DIAG-1 (1)). With the terms' own lag 0 it is positive.
     #[test]
-    #[should_panic(expected = "long-run")]
     fn the_long_run_variance_stays_positive_under_alternating_shocks() {
         let lam = 0.5f64.powf(1.0 / 20.0);
         let mut b = Breaks::with_lags(4);
@@ -4511,5 +4667,66 @@ mod review_2026_11_23 {
             let c = b.cusum(1.0).unwrap();
             assert!(c > 1.96, "row {i} after the break: {c}");
         }
+    }
+}
+
+#[cfg(test)]
+mod review_2026_11_23_diag8 {
+    use super::*;
+
+    /// A step whose decay is 0 forgets every row before it: the row after it
+    /// has no spread to be studentized by, so it adds nothing to the sums
+    /// the old spread scaled (review 2026-11-23, DIAG-8). Read before the
+    /// decay, it was studentized by the rows the step had forgotten.
+    #[test]
+    fn a_row_after_a_total_forgetting_is_studentized_by_nothing() {
+        let mut b = Breaks::with_lags(0);
+        for i in 0..50 {
+            b.update(f64::from(i % 7) - 3.0, 0.99, 1.0, None);
+        }
+        b.update(2.0, 0.0, 1.0, None);
+        let mut fresh = Breaks::with_lags(0);
+        fresh.update(2.0, 1.0, 1.0, None);
+        assert_eq!((b.z1, b.s1, b.z2), (fresh.z1, fresh.s1, fresh.z2));
+    }
+
+    /// A recursive residual whose studentized fourth power overflows, inside
+    /// the bound a residual can reach, leaves the sums finite, so a saved
+    /// state loads (review 2026-11-23, DIAG-8).
+    #[test]
+    fn a_residual_whose_fourth_power_overflows_leaves_the_sums_finite() {
+        for lags in [0, 3] {
+            let mut b = Breaks::with_lags(lags);
+            for i in 0..60 {
+                b.update(f64::from(i % 5) * 1e-80, 0.99, 1.0, None);
+            }
+            b.update(1e100, 0.99, 1.0, None);
+            assert!(
+                [b.z1, b.z2, b.z4, b.s1, b.s2, b.vq]
+                    .iter()
+                    .all(|v| v.is_finite()),
+                "{lags}: {b:?}"
+            );
+        }
+    }
+
+    /// A row whose weighted products the twin fits' sandwiches cannot hold
+    /// (a weight of `1e100` and a feature `1e100` from the origin) leaves
+    /// them finite (review 2026-11-23, DIAG-8).
+    #[test]
+    fn a_twin_fit_row_past_the_doubles_only_ages() {
+        let mut t = TwinFit::new(1);
+        for i in 0..30 {
+            t.update(&[f64::from(i)], f64::from(i) * 0.5, 0.99, 1.0);
+        }
+        t.update(&[1e100], 1.0, 0.99, 1e100);
+        assert!(
+            t.hff
+                .iter()
+                .chain(&t.hss)
+                .chain(&t.hfs)
+                .all(|v| v.is_finite()),
+            "{t:?}"
+        );
     }
 }

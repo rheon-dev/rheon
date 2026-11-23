@@ -1228,14 +1228,18 @@ model that only the new build has is listed as an addition and passes.
   less its floor remainder, in the clock's own units where `every` is a
   whole number of them, and a window that would start before the least
   value the clock's type holds is refused by name.
-- **`micro` reads a row of weight 1 where its mean weight has cancelled to
-  nothing** (review 2026-11-23, CLUST-3, in part). After a row of weight
-  `1e16`, a gap of 60 half-lives and a row of weight 1, the mean weight's
-  step `1e16 + (1 − 1e16) / 1` read 0, and a summary scaled by it admitted
-  a point `1.4e6` away at `eps = 1`. Where the mean is 0 or below, a
-  summary is read at a row of weight 1. The step's cancellation itself,
-  and the same step in the conformal band's mean weight, are not changed
-  in this release.
+- **`micro`'s and the conformal band's mean weight no longer cancel**
+  (review 2026-11-23, CLUST-3; the user, 2026-11-23: "Exception 30, full
+  fix"). After a row of weight `1e16`, a gap of 60 half-lives and a row of
+  weight 1, the Welford step `1e16 + (1 − 1e16) / 1` read 0, and a `micro`
+  summary scaled by it admitted a point `1.4e6` away at `eps = 1`; at a
+  share of `2^-30` it read `8e-8` off, and the band's read 0 after total
+  forgetting. Each is now taken at the old mean's and the row's shares,
+  `(R/R')·w̄ + (1/R')·w`, so neither term cancels, and a `micro` mean at 0
+  or below reads a row of weight 1. A constant weight is its own mean to
+  the bit; uneven weights move the mean weight in its last bits, and a
+  saved state goes on by the new step (rule 5's thirtieth exception).
+  Moves: `micro.*`, `*.lo_*`, `*.hi_*`, `*.coverage_*`.
 - **`calibration_wald` under a horizon is read about the predictions' own
   mean** (review 2026-11-23, DIAG-2). Its Newey-West covariance was moved
   from the frame its sums are kept in to the predictions' own units before
@@ -1302,6 +1306,72 @@ model that only the new build has is listed as an addition and passes.
   taken in its square roots; elsewhere it keeps its bits. The moments'
   scale for values near `1e-81`, which still corrupts `kurtosis` there, is
   not changed in this release.
+- **`drift_kind="adwin"` takes a `range`** (review 2026-11-23, DRIFT-1;
+  the user, 2026-11-23: "Allow both by parameter"). ADWIN's bound has the
+  values' range `R` in its second term, which river, and so this detector,
+  writes as 1, so its flags depend on the residuals' unit: a threefold rise
+  in their spread was found in 15 rows at a spread of 1, in 655 at 0.01
+  and not in 8,000 at 0.001. `drift_options={"range": ...}` takes a number,
+  the residuals' range in the target's units (1, river's, by default, its
+  flags river's to the bit), or `"window"`, the range the window holds
+  now, under which the flags are the same in any unit, to the bit at a
+  power of two. Each bucket then keeps its least and greatest value, two
+  numbers more. No default moves.
+- **`emit_feature_health` reads an `expectile` window as its memory, and
+  `garch` is not told to set a finite `half_life`** (review 2026-11-23,
+  SPEC-8). Beside `expectile(window_size=...)`, or `window_rows=...` with
+  no clock column, feature health was refused as "half_life is inf, with
+  no window_size", and the diagnostics read the infinite half-life, not the
+  window's; `window_rows` on a clock now says its rows are no span of the
+  clock. And `min_settled_frac` on `garch`, which refuses a finite
+  `half_life`, advised setting one; it now says `garch` does not decay.
+- **`kswin`'s critical count is found in about `r ln r` operations**
+  (review 2026-11-23, DRIFT-8). The search for the least `h` whose exact
+  tail is at most `alpha` built the binomial ratios again for each `h`,
+  `r^{3/2}` operations and a vector of `r + 1` numbers a step, about 219 MB
+  allocated in all at `stat_size = 50,000`. They are built once; the
+  numbers and their order are the same, so `h*` is the same to the bit.
+- **`rp.eval`'s tests and windows refuse arguments of the wrong type by
+  name** (review 2026-11-23, PY-6). `diebold_mariano` and `clark_west`
+  scored with a `min_samples` of -5, `True` or `None`, and raised Polars'
+  or Python's own error on `"30"` or 2.5; a `half_life` of `True` read as
+  one row; `window_metrics(every=True)` read one clock unit and
+  `every=None` raised Python's own comparison error; and
+  `seqtest(targets="ret")` read the columns `r`, `e` and `t`. Each is now a
+  `WrongTypeError` or `ValueError` naming the argument.
+- **`rp.eval.seqtest` checks `min_weight`, and the scores refuse `binary`
+  given as a string** (review 2026-11-23, PY-15). `min_weight=nan` nulled
+  every output and -5 or `True` were taken; `binary="false"`, a non-empty
+  string, read as true and scored a regression as a classifier. Each is
+  refused by name.
+- **`emit_breaks` studentizes no row by a spread a step has forgotten, and
+  keeps its saved state loadable** (review 2026-11-23, DIAG-8). A row after
+  a step whose decay is 0 (a gap past about 1,075 half-lives) was
+  studentized by the rows the step had forgotten; it now joins the sums as
+  a fresh stream's first row does. A studentized residual whose fourth
+  power overflows (a residual near `1e100` against a spread near `1e-80`),
+  and a row whose twin-fit products overflow (a weight and a feature near
+  the input bound), only age the sums, where they left them infinite.
+- **A loaded state's conformal bands are held to a shape their rows run
+  on** (review 2026-11-23, DIAG-10). A damaged file whose band held a
+  negative multiplier, a coverage past 1 or a weight that is not a number
+  loaded and ran; it is refused as damaged, as the other diagnostics' are.
+- **Two audits merge only under the same clock settings** (review
+  2026-11-23, AUDIT-2). A merge of an audit with a clock column and one
+  without, or under two `gap_cap`s, was taken, and the merged clock's gaps
+  read as neither stream's; it is refused as other settings that differ
+  are.
+- **Under a horizon, `cusum`, `break_wald` and a quantile fit's
+  `calibration_wald` read a statistic where their long-run variance read
+  none** (review 2026-11-23, DIAG-1; the user, 2026-11-23). The variance
+  pairs the null's lag 0 with the residuals' Bartlett-weighted lag
+  products, which shocks alternating in sign can cancel to 0 or below, and
+  there each read null. Where that happens it now takes the terms' own lag
+  0, Newey and West's estimate, statsmodels' `S_hac_simple` at the same
+  lags; everywhere else every number is as it was. Size and power on
+  simulated streams are the old form's. A saved state starts the new sum
+  at the null's value and goes on (rule 5's thirty-first exception).
+  Moves: `*.cusum_*`, `*.break_wald_*`, `*.calibration_wald_*`.
 - **A window looking ahead whose far edge is the input's last row is whole
   at the end of the input** (PLAN 565). Under `closed="right"` or `"both"`,
   `rp.ewm_sum`, `rp.ewm_mean`, `rp.ewm_rate` and `rp.ewm_quantile` with

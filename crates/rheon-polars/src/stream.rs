@@ -2371,7 +2371,7 @@ impl Stream {
             "conformal intervals",
             &mut p.conformal,
             &fresh.conformal,
-            |_, _| true,
+            |s, _| s.has_shape(),
         )?;
         // Task 221's accumulators, by the same rule: absent, or kept for
         // another set of switches, they start over; this spec's count but

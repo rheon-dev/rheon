@@ -766,7 +766,12 @@ The diagnostics add, per slot:
          (default 0.5) and ``h`` is ``drift_threshold``, a clock parameter
          as above, default 5 without a clock column. At ``k = 0.5`` on a
          row clock its average run on standard normal errors is about 168
-         rows at ``h = 4`` and 465 at ``h = 5``.
+         rows at ``h = 4`` and 465 at ``h = 5``. On a clock it depends on
+         the steps, since ``d`` scales the noise as well as the drift: at
+         ``h = 5`` and a mean step of 1 it is 469 rows at steps of 1, 79
+         at steps drawn from ``Exp(1)``, and 30 at steps of 0.1 nine times
+         in ten and 9.1 otherwise. Where a steady false-alarm rate
+         matters, use a regular clock or a row clock.
        - ``"adwin"``, Bifet and Gavaldà's (2007) adaptive window on
          ``|resid|``, flag for flag river's ``drift.ADWIN``: an exponential
          histogram of the last rows (``max_buckets`` buckets of each size,
@@ -780,6 +785,16 @@ The diagnostics add, per slot:
          ``1/m = 1/(n0 - L + 1) + 1/(n1 - L + 1)``, ``L`` the
          ``min_window_length``. A break where it cuts. ``max_width``
          (default 1,000,000) bounds the window, river's has no bound.
+         The second term's ``(2/3) * c * (1/m)`` is the paper's
+         ``(2/3) * R * c * (1/m)`` at a range ``R`` of 1, river's, which
+         takes ``|resid|`` to be of order 1: the same stream in another
+         unit is cut sooner or later, or not at all (a threefold rise in
+         the residuals' spread is found in 15 rows at a spread of 1 and
+         not in 8,000 at 0.001). ``range`` sets ``R``: a number, the
+         residuals' range in the target's units, or ``"window"``, the
+         range the window holds now, under which the flags are the same
+         in any unit; each bucket then keeps its least and greatest
+         value.
        - ``"ddm"`` and ``"eddm"`` count errors: a row is one where
          ``|resid|`` passes ``error_above``, which they require, in the
          target's units (0.5 for a probability of a 0/1 target makes an

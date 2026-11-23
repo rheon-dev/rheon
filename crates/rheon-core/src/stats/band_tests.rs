@@ -643,3 +643,20 @@ fn a_value_between_two_levels_is_kept_and_one_level_holds_its_band() {
     let most = EwQuantile::one_level_buckets(8);
     assert!(len <= most && cap <= most, "{len} spanned, {cap} held");
 }
+
+/// The EW lag-1 autocorrelation of `(−1)^t` is −1 at every memory, and of
+/// an AR(1) at 0.8 near 0.8. At `lam = 0.5` it read −0.5 and 0.44: the
+/// lagged leg's mean is the current leg's, a step behind, which shrinks
+/// the estimate by about `lam` under a short memory (review 2026-11-23,
+/// DIAG-9). Confirmed; the fix keeps the lagged leg's own mean, which is
+/// state, for a later batch. It panics until then.
+#[test]
+#[should_panic(expected = "autocorrelation")]
+fn the_ew_autocorrelation_of_an_alternating_stream_is_minus_one() {
+    let mut a = EwAutoCorr::new(1).unwrap();
+    for t in 0..200 {
+        a.update(if t % 2 == 0 { 1.0 } else { -1.0 }, 0.5);
+    }
+    let got = a.get().unwrap();
+    assert!((got + 1.0).abs() < 1e-6, "the autocorrelation reads {got}");
+}

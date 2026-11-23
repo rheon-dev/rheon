@@ -940,7 +940,7 @@ class MicroRef:
         return best
 
     def unit(self) -> float:
-        return self.w_mean if self.w_rows > 0.0 else 1.0
+        return self.w_mean if self.w_rows > 0.0 and self.w_mean > 0.0 else 1.0
 
     def admits(self, j: int, d2: float, lam: float) -> bool:
         s = self.mc[j].s
@@ -1106,8 +1106,12 @@ class MicroRef:
         dec = self.decide(x, 1.0) if valid else None
         pred = self.score(dec, n_before)
         if learn and dec is not None:
-            self.w_rows += 1.0
-            self.w_mean += (w - self.w_mean) / self.w_rows
+            # The mean weight at the old mean's and the row's shares, which
+            # do not cancel as the Welford step did.
+            prev = self.w_rows
+            self.w_rows = prev + 1.0
+            if w != self.w_mean:
+                self.w_mean = (prev / self.w_rows) * self.w_mean + w / self.w_rows
             self.moments.absorb(x, w)
             self.learn_row(x, w, dec)
         # The checkpoint, on the clock or the learned rows, whichever comes

@@ -780,6 +780,51 @@ class TestUnderAHorizonTheTestsAreNeweyWest:
             np.testing.assert_allclose(got, want, rtol=1e-6)
 
 
+class TestTheCusumsLongRunVarianceFallsBackToNeweyWest:
+    """Under a horizon the CUSUM's long-run variance takes the null's lag 0,
+    ``S2``, where that leaves it above 0, and the studentized residuals'
+    own lag 0 where it does not: Newey and West's estimate, statsmodels'
+    ``S_hac_simple`` at the same lags. Residuals alternating at ±30 after a
+    quiet spell cancel the null's form, where the CUSUM read ``None``
+    (review 2026-11-23, DIAG-1)."""
+
+    def test_each_row_reads_the_null_form_or_statsmodels_hac(self):
+        from statsmodels.stats.sandwich_covariance import S_hac_simple
+
+        rng = np.random.default_rng(1)
+        n, lags = 200, 4
+        y = rng.normal(size=n)
+        y[120:] = np.where(np.arange(80) % 2 == 0, 30.0, -30.0)
+        df = pl.DataFrame({"x": np.zeros(n), "y": y})
+        spec = rp.spec.ewridge(
+            "m",
+            targets=["y"],
+            features=["x"],
+            half_life=float("inf"),
+            emit_breaks=True,
+            horizon_rows=2,
+            breaks_half_life=float("inf"),
+        )
+        out = rp.ModelBank([spec]).fit_predict(df)["m"].struct.unnest()
+        z, cusum = out["studentized_y"].to_numpy(), out["cusum_y"].to_numpy()
+        fell_back = 0
+        for t in range(30, n):
+            x = z[:t][np.isfinite(z[:t])]
+            s2 = len(x)
+            bart = sum(
+                (1 - lag / (lags + 1)) * np.dot(x[lag:], x[:-lag]) for lag in range(1, lags + 1)
+            )
+            null = 1.0 + 2.0 * bart / s2
+            if null > 0.0:
+                want = x.sum() / np.sqrt(s2 * null)
+            else:
+                fell_back += 1
+                want = x.sum() / np.sqrt(S_hac_simple(x[:, None], nlags=lags)[0, 0])
+            assert np.isfinite(cusum[t]), f"row {t}"
+            np.testing.assert_allclose(cusum[t], want, rtol=1e-9, err_msg=f"row {t}")
+        assert fell_back > 20, fell_back
+
+
 class TestTailsAreScipyAndJarqueBera:
     """Task 221 (e). Run once, the tails of the recursive residuals before
     each row, ``resid / error_inflation``, are ``scipy.stats``' biased

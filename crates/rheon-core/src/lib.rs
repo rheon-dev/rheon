@@ -176,8 +176,8 @@ pub use ddsketch::{
 pub use ddsketch_model::{DdSketchModel, DdSketchModelCfg};
 pub use deco::{Deco, DecoCfg, DecoDynamics};
 pub use drift::{
-    Adwin, AdwinCfg, Cusum, Ddm, DriftDetector, Eddm, ErrorRate, Kswin, KswinCfg, PageHinkley,
-    ks_critical_h, ks_equal_tail,
+    Adwin, AdwinCfg, AdwinRange, Cusum, Ddm, DriftDetector, Eddm, ErrorRate, Kswin, KswinCfg,
+    PageHinkley, ks_critical_h, ks_equal_tail,
 };
 pub use ewclass::{Covariance, EwClass, EwClassCfg};
 pub use ewcov::{

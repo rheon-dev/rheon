@@ -1714,3 +1714,40 @@ fn a_hawkes_clock_window_is_refused_where_it_conflicts() {
         &["with no event in its window", "max_state_bytes of 100"],
     );
 }
+
+/// `emit_feature_health` beside an `expectile` window reads the window's
+/// memory, as beside an `ewridge` window: refused as "half_life is inf, with
+/// no window_size" though the window was set (review 2026-11-23, SPEC-8
+/// (2)). A window of rows on a clock has no span of the clock to read, and
+/// says so. And `garch`, which refuses a finite `half_life`, is not told to
+/// set one for `min_settled_frac` (SPEC-8 (1)).
+#[test]
+fn an_expectile_window_is_feature_healths_memory_and_garch_is_told_it_does_not_decay() {
+    let expectile = |window: &str, clock: &str| {
+        format!(
+            r#"{{"name": "m", "model": {{"type": "expectile", "expectile": 0.8, {window}}},
+                "targets": ["y"], "features": ["x"], "half_life": "inf",
+                "emit_feature_health": true{clock}}}"#
+        )
+    };
+    accepted(&expectile(r#""window_size": 100"#, ""));
+    accepted(&expectile(r#""window_rows": 100"#, ""));
+    accepted(&expectile(
+        r#""window_size": 100"#,
+        r#", "clock": "t", "gap_cap": 10.0"#,
+    ));
+    refused(
+        &expectile(
+            r#""window_rows": 100"#,
+            r#", "clock": "t", "gap_cap": 10.0"#,
+        ),
+        &["window_rows counts rows"],
+    );
+    let e = check(
+        r#"{"name": "m", "model": {"type": "garch"}, "targets": ["y"], "features": [],
+            "min_settled_frac": 0.5}"#,
+    )
+    .unwrap_err();
+    assert!(!e.contains("Set half_life to a finite value"), "{e}");
+    assert!(e.contains("min_settled_frac"), "{e}");
+}
