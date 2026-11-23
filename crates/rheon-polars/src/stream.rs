@@ -4189,7 +4189,11 @@ fn run_instance(
         // Read before the step, which may seed the model on this row, or
         // fit a start that waited on its evidence: the row itself was still
         // read by the unseeded model, and reports nothing.
-        let own_reason = if waits { inst.model.get().own_wait() as u8 } else { 0 };
+        let own_reason = if waits {
+            inst.model.get().own_wait() as u8
+        } else {
+            0
+        };
         // So, for the same reason, is whether the fit this row is predicted
         // from was withheld as too ill-conditioned to carry a digit: the
         // step may solve again on this row, and the reason names the fit
@@ -4462,8 +4466,7 @@ fn run_instance(
         // yet tell it apart from a neighbor, where no gate above has
         // withheld the row: such a component is the only null a `pca` row
         // writes past its floor.
-        if reason == 0 && is_pca && step.pred.iter().any(|p| p.is_nan())
-        {
+        if reason == 0 && is_pca && step.pred.iter().any(|p| p.is_nan()) {
             reason = REASON_NOT_SEPARATED;
         }
         // The noise gate has not been met: the stream has all but settled,
