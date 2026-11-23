@@ -386,7 +386,10 @@ fn the_warm_up_is_counted_and_a_saved_state_is_held_to_its_cfg() {
         other => panic!("{what}: {:?}", other.map(|_| ())),
     };
     wrong_shape(damaged(&full, |m| m.place = None), "no place");
-    wrong_shape(damaged(&plain, |m| m.place = Some(Default::default())), "a place");
+    wrong_shape(
+        damaged(&plain, |m| m.place = Some(Default::default())),
+        "a place",
+    );
     wrong_shape(damaged(&full, |m| m.since_update = None), "no update clock");
     wrong_shape(damaged(&full, |m| m.since_split = None), "no split clock");
     wrong_shape(
