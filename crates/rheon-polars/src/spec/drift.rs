@@ -427,11 +427,13 @@ impl Spec {
                     )),
                     Some(_) => {}
                 }
-                if let Some(v) = o.drift_threshold.filter(|v| !(v.is_finite() && *v > 0.0)) {
+                if let Some(v) = o.drift_threshold.filter(|v| !(v.is_finite() && *v > 1.0)) {
                     no.refuse(format!(
                         "spec {name:?}: drift_options' drift_threshold must be finite and above \
-                         0, but it is {}. Set drift_threshold to the standard deviations past \
-                         the best error rate that flag a drift, such as 3.",
+                         1, but it is {}: at 1 or under, the row that sets the best error rate \
+                         is already past it, so a stream that never changes flags once a \
+                         warm_start. Set drift_threshold to the standard deviations past the \
+                         best error rate that flag a drift, such as 3.",
                         num_label(v)
                     ));
                 }

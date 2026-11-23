@@ -826,6 +826,13 @@ model that only the new build has is listed as an addition and passes.
   good. The ratio is now the largest double, which flags; a step of 0 adds
   nothing to CUSUM; and Page-Hinkley starts its sums again at such a low,
   where its statistic is 0. No finite path moves.
+- **`drift_kind="ddm"` refuses a `drift_threshold` of 1 or under**
+  (review 2026-11-23, DRIFT-7). DDM flags where `p + s` passes `p_min +
+  drift_threshold · s_min`, and the row that sets the minimum has `p + s =
+  p_min + s_min`, so at 1 or under a stream whose error rate never moved
+  flagged on the first row past each warm start: 10 flags in 310 rows at
+  0.5. `drift_kind` is new in this release, so no released spec is
+  refused.
 - **A window looking ahead whose far edge is the input's last row is whole
   at the end of the input** (PLAN 565). Under `closed="right"` or `"both"`,
   `rp.ewm_sum`, `rp.ewm_mean`, `rp.ewm_rate` and `rp.ewm_quantile` with

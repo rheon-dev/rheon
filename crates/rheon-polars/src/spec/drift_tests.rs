@@ -131,9 +131,20 @@ fn each_setting_is_held_to_its_range_on_both_sides() {
             kswin(r#""window_size": 59, "stat_size": 30"#),
             kswin(r#""window_size": 60, "stat_size": 30"#),
         ),
+        // At or under 1 the minimum's own row passes `p_min + t s_min`, so
+        // a stationary stream flags every `warm_start + 1` rows (review
+        // 2026-11-23, DRIFT-7).
         (
             ddm(r#""drift_threshold": 0"#),
-            ddm(r#""drift_threshold": 0.1"#),
+            ddm(r#""drift_threshold": 1.0001"#),
+        ),
+        (
+            ddm(r#""drift_threshold": 1"#),
+            ddm(r#""drift_threshold": 1.5"#),
+        ),
+        (
+            ddm(r#""drift_threshold": 0.5"#),
+            ddm(r#""drift_threshold": 3"#),
         ),
         (eddm(r#""beta": 0"#), eddm(r#""beta": 0.1"#)),
         (eddm(r#""beta": 1.0001"#), eddm(r#""beta": 1"#)),
