@@ -421,8 +421,8 @@ row count (PLAN 552).
 | a start's likelihood ratio against the static model below `χ²` at 0.999 (`garch`: 2, 3; GARCH-X: `2 + q`; GAS: 2, 3 with leverage) | `garch`, GARCH-X, `gas` | the start's fit, as now | `not_identified` |
 | the start's information singular in `π` (an input constant or collinear over the start's rows: its smallest eigenvalue, scaled to unit diagonal, at the rounding) | GARCH-X | the start | `not_identified`, naming the inputs |
 | the start's Newton decrement over 10⁻⁶ nats | `garch`, `gas` | as now | as now |
-| the filter not contracting: `E ln |φ − 2(κ + κ* sgn(−y))(ν + 1) b(1 − b)| ≥ 0` (t; `∂u/∂λ = −2(ν + 1) b(1 − b)`, the normal's `−2z²`) read from 64 bins of `b` (of `z²`) and the sign at the current parameters (Blasques et al. 2018), held below 0 by cutting the step, as EGARCH's guard | `gas` log-scale | the step | (no withholding) |
-| a variance forecast that does not exist: `E e^{a(z² − 1)}` needs `a < ½`, so `κ + |κ*| < ¼` | `gas` normal log-scale | held in the admissible set (question 7) | (no withholding) |
+| the filter not contracting: `E ln abs(φ − 2(κ + κ* sgn(−y))(ν + 1) b(1 − b)) ≥ 0` (t; `∂u/∂λ = −2(ν + 1) b(1 − b)`, the normal's `−2z²`) read from 64 bins of `b` (of `z²`) and the sign at the current parameters (Blasques et al. 2018), held below 0 by cutting the step, as EGARCH's guard | `gas` log-scale | the step | (no withholding) |
+| a variance forecast that does not exist: `E e^{a(z² − 1)}` needs `a < ½`, so `κ + abs(κ*) < ¼` | `gas` normal log-scale | held in the admissible set (question 7) | (no withholding) |
 | `R̄` not positive definite (`Q̄`'s Cholesky fails) | `dcc` | horizons past 1 | `not_identified` |
 | a value not finite (overflow at a long horizon of an explosive `ar`, an `exp` past the double range) | every kind | that field | null |
 
