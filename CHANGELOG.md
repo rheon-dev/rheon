@@ -893,6 +893,14 @@ model that only the new build has is listed as an addition and passes.
   `r^{3/2}` operations and a vector of `r + 1` numbers a step, about 219 MB
   allocated in all at `stat_size = 50,000`. They are built once; the
   numbers and their order are the same, so `h*` is the same to the bit.
+- **`rp.eval`'s tests and windows refuse arguments of the wrong type by
+  name** (review 2026-11-23, PY-6). `diebold_mariano` and `clark_west`
+  scored with a `min_samples` of -5, `True` or `None`, and raised Polars'
+  or Python's own error on `"30"` or 2.5; a `half_life` of `True` read as
+  one row; `window_metrics(every=True)` read one clock unit and
+  `every=None` raised Python's own comparison error; and
+  `seqtest(targets="ret")` read the columns `r`, `e` and `t`. Each is now a
+  `WrongTypeError` or `ValueError` naming the argument.
 - **A window looking ahead whose far edge is the input's last row is whole
   at the end of the input** (PLAN 565). Under `closed="right"` or `"both"`,
   `rp.ewm_sum`, `rp.ewm_mean`, `rp.ewm_rate` and `rp.ewm_quantile` with

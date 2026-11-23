@@ -1203,6 +1203,14 @@ def window_metrics(
     who = "rp.eval.window_metrics"
     spec_name, written = _spec_of(who, spec)
     _check_min_samples(who, min_samples)
+    if every is None or isinstance(every, bool):
+        # `True` read as one clock unit, and `None` raised Python's own
+        # comparison error.
+        msg = (
+            f"rp.eval.window_metrics: every must be a number of clock units or a duration, "
+            f'but it is {every!r}. Give the windows\' length, such as 10 or "1d".'
+        )
+        raise WrongTypeError(msg)
     probe = _probe(df)
     dtype = probe.schema.get(clock)
     if dtype is None:
@@ -2678,6 +2686,14 @@ def seqtest(
     """
     who = "rp.eval.seqtest"
     _frame(who, df, lazy=True)
+    if isinstance(targets, str):
+        # A string is a sequence of its characters: `"ret"` read `r`, `e`
+        # and `t`.
+        msg = (
+            f"{who}: targets must be a list of column names, but it is the string "
+            f"{targets!r}. Give [{targets!r}]."
+        )
+        raise WrongTypeError(msg)
     probe = _probe(df)
     _check_name("rp.eval.seqtest", probe, name)
     _check_columns(probe, who, group=group)
@@ -4320,6 +4336,14 @@ def _check_half_life(who: str, half_life: float) -> None:
     1.25e16 rows. An infinite one, or a longer one, reached polars'
     ``ewm_mean`` as ``alpha = 0``, which it refuses with no word of the
     parameter."""
+    if isinstance(half_life, bool) or not isinstance(half_life, numbers.Real):
+        # `True` read as a half-life of one row.
+        msg = (
+            f"{who}: half_life must be a number of rows, but it is {half_life!r}. Give "
+            f"half_life a positive number of rows, or leave it None for one statistic over "
+            f"every row."
+        )
+        raise WrongTypeError(msg)
     finite = 0 < half_life < math.inf
     if not finite or 0.5 ** (1.0 / half_life) == 1.0:
         why = (
@@ -4687,6 +4711,7 @@ def diebold_mariano(
     p-value of 0 either way.
     """
     _frame("rp.eval.diebold_mariano", df, lazy=True)
+    _check_min_samples("rp.eval.diebold_mariano", min_samples)
     probe = _probe(df)
     _check_columns(probe, "rp.eval.diebold_mariano", group=group)
     keys = _group_keys(group)
@@ -4887,6 +4912,7 @@ def clark_west(
     measured as :func:`diebold_mariano`'s Notes say.
     """
     _frame("rp.eval.clark_west", df, lazy=True)
+    _check_min_samples("rp.eval.clark_west", min_samples)
     probe = _probe(df)
     _check_columns(probe, "rp.eval.clark_west", group=group)
     keys = _group_keys(group)
