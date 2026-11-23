@@ -718,6 +718,14 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **A positive definite system whose trace is past the largest double
+  solves** (review 2026-11-23, SOLVE-1). The factorization's jitters are
+  multiples of the mean diagonal, the trace over `k`. At `diag(1e308,
+  1e308)` the trace was infinite, the first rung's jitter `0 · ∞` NaN, and
+  every rung failed, so the fit was counted a failure. The first rung now
+  adds nothing whatever the base, and the base is the sum of each entry
+  over `k` where the trace is infinite. A finite trace keeps its bits.
+
 - **The weighted LARS path holds at penalty weights near the ends of the
   doubles** (review 2026-11-23, MATH-8). The path with a penalty weight
   per column runs on the correlations over `w_i w_j`, which were 0 at
