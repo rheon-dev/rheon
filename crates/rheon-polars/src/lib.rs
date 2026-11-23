@@ -121,8 +121,9 @@ pub use runner::{
 pub use span::{Span, SpanList, format_duration, parse_duration, seconds_of};
 pub use spec::{
     CLOCK_FIELDS, CLOCK_RATES, ClockScale, Compare, CountOrAuto, FloatOrList, GramThreads,
-    INIT_WORDS, MOMENT_KINDS, ModelKind, MomentKinds, MomentLegs, MomentTerms, Num, RENAMED, RENAMED_VALUES, RidgeScale, SessionGapSpec, ShardSpec,
-    Spec, ewm_moments_cfg, name_renamed, spec_words_refusal, word_refusal_body, words_body, words_refusal,
+    INIT_WORDS, MOMENT_KINDS, ModelKind, MomentKinds, MomentLegs, MomentTerms, Num, RENAMED,
+    RENAMED_VALUES, RidgeScale, SessionGapSpec, ShardSpec, Spec, ewm_moments_cfg, name_renamed,
+    spec_words_refusal, word_refusal_body, words_body, words_refusal,
 };
 pub use stream::{
     AnyModel, ChunkOut, LastRow, Stream, StreamState, build_models, combo_labels, marginal_shards,

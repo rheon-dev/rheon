@@ -84,23 +84,22 @@ impl Longhand {
             }
         }
         // B1: the cell k, with q_k <= x < q_{k+1}, the extremes moved.
-        let k;
-        if x < self.q[1] {
+        let k = if x < self.q[1] {
             self.q[1] = x;
-            k = 1;
+            1
         } else if x >= self.q[5] {
             self.q[5] = self.q[5].max(x);
-            k = 4;
+            4
         } else {
             let mut j = 1;
             while !(self.q[j] <= x && x < self.q[j + 1]) {
                 j += 1;
             }
-            k = j;
-        }
+            j
+        };
         // B2: positions above the cell, and every desired position.
-        for i in k + 1..=5 {
-            self.n[i] += 1;
+        for n in self.n.iter_mut().skip(k + 1) {
+            *n += 1;
         }
         for i in 1..=5 {
             self.nd[i] += self.dn[i];

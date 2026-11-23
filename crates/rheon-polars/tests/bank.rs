@@ -951,9 +951,18 @@ fn only_models_that_predict_a_target_have_residual_fields() {
     ];
     let mut seen = Vec::new();
     for model in kinds {
-        let features = if ["holt", "hawkes", "garch", "dcc", "realized", "power_variation", "tdigest", "ddsketch"]
-            .iter()
-            .any(|k| model.contains(k))
+        let features = if [
+            "holt",
+            "hawkes",
+            "garch",
+            "dcc",
+            "realized",
+            "power_variation",
+            "tdigest",
+            "ddsketch",
+        ]
+        .iter()
+        .any(|k| model.contains(k))
         {
             "[]"
         } else {
