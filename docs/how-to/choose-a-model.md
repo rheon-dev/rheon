@@ -3,7 +3,7 @@
 
 This how-to is for anyone about to write a
 [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads) (the description
-of a model) who wants to know which of the twenty-seven models to name in
+of a model) who wants to know which of the twenty-nine models to name in
 it, and, for watching a stream for change, which model answers which
 question.
 

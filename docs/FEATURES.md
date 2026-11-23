@@ -14,7 +14,7 @@ pages by the task you have in hand.
 
 | family | its features |
 |---|---|
-| [Models](#models) | the twenty-seven models a spec can name |
+| [Models](#models) | the twenty-nine models a spec can name |
 | [Running a bank](#running-a-bank) | a bank in a query, in a Python loop, and its output as Arrow |
 | [Saving, loading and serving](#saving-loading-and-serving) | a bank's state, written and read back |
 | [Reading a bank](#reading-a-bank) | what a bank holds, and the names of its output |
