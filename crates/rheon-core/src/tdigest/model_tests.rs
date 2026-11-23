@@ -239,12 +239,12 @@ fn the_state_stays_within_its_bound() {
     assert!(m.bytes() <= most);
 }
 
-/// Each tail mean is the curve's mean over its tail: the lower below 0.5,
-/// the upper above; it lies on its side of the level's read, and
-/// against the exact tail mean of the rows it is within the curve's own
-/// error (a smooth stream of 20,000 rows).
+/// Each tail mean is the partial-mass rule over the digest's own
+/// centroids, worked out here from them, to rounding; and against the
+/// exact tail mean of the rows it is within 2e-2 on a smooth stream of
+/// 20,000 rows (the 0.01 tail holds 200 rows in two or three centroids).
 #[test]
-fn each_tail_mean_lies_past_its_level_and_near_the_rows() {
+fn each_tail_mean_is_its_centroids_partial_mass_and_near_the_rows() {
     let levels = [0.01, 0.05, 0.4, 0.6, 0.95, 0.99];
     let mut m = TDigestModel::new(cfg(1, &levels)).unwrap();
     let mut s = 21u64;
@@ -256,37 +256,57 @@ fn each_tail_mean_lies_past_its_level_and_near_the_rows() {
     }
     rows.sort_by(f64::total_cmp);
     let step = m.predict(&[], 1.0);
+    let centroids = m.digest(0).settled();
+    let total: f64 = centroids.iter().map(|c| c.1).sum();
+    let by_hand = |p: f64| {
+        let (mass, order): (f64, Vec<(f64, f64)>) = if p < 0.5 {
+            (p * total, centroids.clone())
+        } else {
+            ((1.0 - p) * total, centroids.iter().rev().copied().collect())
+        };
+        let (mut before, mut sum) = (0.0, 0.0);
+        for (c, w) in order {
+            let take = w.min(mass - before);
+            sum += take * c;
+            before += take;
+            if before >= mass {
+                break;
+            }
+        }
+        sum / mass
+    };
     for (li, &p) in levels.iter().enumerate() {
-        let (q, es) = (step.pred[li], step.pred[6 + li]);
+        let es = step.pred[6 + li];
+        let want = by_hand(p);
+        assert!(
+            (es - want).abs() <= 1e-12 * want.abs(),
+            "{p}: {es} vs {want}"
+        );
         let k = (p * rows.len() as f64).round() as usize;
         let exact = if p < 0.5 {
-            assert!(es <= q * (1.0 + 1e-12), "{p}: {es} {q}");
             rows[..k].iter().sum::<f64>() / k as f64
         } else {
-            assert!(es >= q * (1.0 - 1e-12), "{p}: {es} {q}");
             rows[k..].iter().sum::<f64>() / (rows.len() - k) as f64
         };
         assert!(
-            (es - exact).abs() <= 5e-3 * exact.abs(),
+            (es - exact).abs() <= 2e-2 * exact.abs(),
             "{p}: {es} vs {exact}"
         );
     }
 }
 
-/// A two-row digest's tails, worked by hand: the curve runs from the
-/// minimum at rank 0 through each row's value at its centre to the maximum
-/// at rank 2, and 0.4 and 0.6 are levels two rows identify.
+/// Tails worked by hand: three rows of 0, 3 and 6, each its own centroid.
+/// The lower 0.4 tail is the mass 1.2 from the bottom, all of 0 and 0.2 of
+/// 3, mean 0.5; the upper 0.6 tail all of 6 and 0.2 of 3, mean 5.5. The
+/// split centroid counts in part, at its own mean.
 #[test]
-fn a_two_row_tail_mean_is_its_curve_by_hand() {
+fn a_three_row_tail_mean_by_hand() {
     let mut m = TDigestModel::new(cfg(1, &[0.4, 0.6])).unwrap();
-    m.step(&[], &[Some(0.0)], 1.0, 1.0);
-    m.step(&[], &[Some(4.0)], 1.0, 1.0);
+    for v in [0.0, 3.0, 6.0] {
+        m.step(&[], &[Some(v)], 1.0, 1.0);
+    }
     let step = m.predict(&[], 1.0);
-    // The knots are (0, 0), (0.5, 0), (1.5, 4), (2, 4). Lower 0.4 is ranks
-    // [0, 0.8]: 0 to rank 0.5, then up to 1.2, area 0.18, mean 0.225; upper
-    // 0.6 is [1.2, 2], from 2.8 to 4 then 4, area 3.02, mean 3.775.
-    let want = [1.2, 2.8, 0.225, 3.775];
-    for (got, want) in step.pred.iter().zip(want) {
+    for (got, want) in step.pred[2..].iter().zip([0.5, 5.5]) {
         assert!((got - want).abs() <= 1e-14, "{got} vs {want}");
     }
 }

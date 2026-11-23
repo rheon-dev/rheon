@@ -944,7 +944,7 @@ fn garch_signature(vol: GarchVol, dist: GarchDist, targeting: bool) -> Vec<f64> 
 /// whose buffer merges every 80 rows: the three levels and their tail means
 /// on three rows, each past a merge, one with a full buffer's merge just
 /// made. The merge's limit, its centroid means, the read's interpolation and
-/// the tail's trapezoids move every one;
+/// the tail's partial mass move every one;
 /// no libm call is in it, so it is held to the bit.
 #[test]
 fn tdigest_golden() {
@@ -2372,21 +2372,21 @@ const GOLDEN_TDIGEST: &[f64] = &[
     -1.4506754991295818,
     -0.6153938389536291,
     1.9669305121855334,
-    -1.5865131443922433,
-    -1.128040203026179,
-    2.243778845090675,
+    -1.4626009005582017,
+    -0.9992829396489874,
+    1.9874652286997394,
     -1.4889104278521395,
     -0.63596345124358,
     1.948147518472067,
-    -1.606734930822977,
-    -1.1541978093056844,
-    2.2324026689816905,
+    -1.5045266365995258,
+    -1.0229911855131937,
+    1.9616845856185046,
     -1.5012510796384302,
     -0.6234457757321644,
     1.9185853898662055,
-    -1.6136585876633442,
-    -1.153470725120345,
-    2.2082117630850724,
+    -1.5199855742701565,
+    -1.0211641212789853,
+    1.9367196420068518,
 ];
 
 const GOLDEN_DDSKETCH: &[f64] = &[

@@ -3101,23 +3101,24 @@ centers from the smallest row to the largest. The merge's limit `k⁻¹(k(q) +
 summed from their series, so no math library's last bit decides a merge and
 the digest is the same bits on every platform.
 
-**The tail's mean comes from the digest's own curve.** The read's curve `Q_t(r)`
-over the rank `r` in `[0, W_t]` runs from the smallest row at rank 0 through
-each centroid's mean at its center to the largest row at `W_t`, straight
-between them. A level below 0.5 reads the lower tail, `E[X | X ≤ q]`, and
-one above it the upper, `E[X | X ≥ q]`; 0.5 itself has no tail of its own
-and is refused by name. The centroid a level falls in is split at the level,
-so the tail's mean and the quantile come from one curve:
+**The tail's mean comes from the digest's own centroids.** A level below
+0.5 reads the lower tail, `E[X | X ≤ q]`, and one above it the upper,
+`E[X | X ≥ q]`; 0.5 itself has no tail of its own and is refused by name.
+The tail holds the mass `m = p W_t` from the smallest mean, or
+`m = (1 − p) W_t` from the largest. Each centroid wholly inside counts at its
+mean, and the one the level falls in is split, counted at only the weight
+the tail still needs:
 
 ```text
-es_p,t = (1 / (p W_t))       ∫_0^{p W_t} Q_t(r) dr        p < 0.5
-es_p,t = (1 / ((1 − p) W_t)) ∫_{p W_t}^{W_t} Q_t(r) dr    p > 0.5
+es_p,t = (Σ_{i<j} m_i c_i + (m − M_{j−1}) c_j) / m
 ```
 
-a trapezoid a straight piece, so exact for the curve. The curve rises, so a
-lower tail's mean is at most its quantile and an upper's at least it; the
-values keep their sign (a loss is not negated). It is null where its level
-is.
+The values keep their sign (a loss is not negated), and it is null where
+its level is. On 100,000 rows of the four streams below it was within 4.3%
+of the exact tail mean at `δ = 100` and 1.2% at 200. A mean of the read's
+interpolated curve was tried first and is not used: its end pieces run to
+the smallest and largest row over half a centroid's weight, and on a heavy
+tail that took the mean as far as 97% off.
 
 **A level is withheld until its rows identify it.** Take Kish's effective
 size `n_t = W_t²/S_t`, the rows themselves for rows of equal weight. The

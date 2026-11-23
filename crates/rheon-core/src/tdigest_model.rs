@@ -6,9 +6,10 @@
 //!
 //! ```text
 //! q_p,t  = D_t.quantile(p)        read before the row (out of sample)
-//! es_p,t = D_t.tail_mean(p)       the same digest's curve averaged over the
-//!                                 tail past q_p,t: the lower below 0.5,
-//!                                 the upper above it (0.5 is refused)
+//! es_p,t = D_t.tail_mean(p)       the same digest's centroids past the
+//!                                 level, the boundary one split: the lower
+//!                                 tail below 0.5, the upper above it (0.5
+//!                                 is refused)
 //! D_t   <- D_t + (y, w)           a row of weight w > 0 with y present
 //! W_t   <- W_t + w,   S_t <- S_t + w^2
 //! ```

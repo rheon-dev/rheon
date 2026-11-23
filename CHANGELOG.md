@@ -92,7 +92,8 @@ model that only the new build has is listed as an addition and passes.
   `es<level>_<column>` for each level and column, read before the row is
   added, beside `weight_sum`, `settled_frac` and `withheld_reason`; no
   `pred` or `coef`. `es<level>_<column>` is the expected shortfall, the
-  mean of the digest's own curve over the tail past the quantile, the lower
+  partial-mass mean of the digest's own centroids past the quantile (within
+  4.3% of the exact tail mean at compression 100), the lower
   tail below a level of 0.5 and the upper above it (0.5 itself is refused
   by name), in the values' own sign; the quantile is the value at risk. Each column has its own digest in
   each group (Dunning and Ertl's merging digest on the `k_1` scale), its

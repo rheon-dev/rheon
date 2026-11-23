@@ -12,7 +12,7 @@ For target `t`, level `p`, a row of weight `w` and value `y`:
 
 ```text
 q_p,t  = D_t.quantile(p)       read before the row (hard rule 2)
-es_p,t = the curve's mean over the tail past q_p,t
+es_p,t = the centroids' mean past q_p,t, the boundary one split
 D_t   <- D_t + (y, w)          w > 0 and y usable
 W_t   <- W_t + w,   S_t <- S_t + w^2
 ```
@@ -77,22 +77,29 @@ The coordinator's answer (2026-11-23, part 5's exchange B): emit
 `es<level>_<column>` only, no `var<level>`, since `q<level>_<column>` is the
 value at risk already; the tail is chosen by the level, below 0.5 the lower
 (`E[X | X <= q]`), above it the upper (`E[X | X >= q]`), exactly 0.5 refused
-by name; no sign flip; the mean is the integral of the sketch's own
-interpolated quantile function over the tail, the boundary centroid split,
-so ES and `q` come from one curve; the same Kish condition withholds it. The curve is the read's: knots at the minimum
-(rank 0), each centroid's mean at its centre and the maximum (rank `N`),
-linear between:
+by name; no sign flip; the same Kish condition withholds it.
+
+The first build took the mean of the read's interpolated curve over the
+tail (knots at the minimum, each centroid's centre and the maximum,
+integrated a trapezoid a piece). Measured over 20 seeds at N = 100,000 it
+was within 2.1e-2 of the exact tail mean on a normal stream but 0.97
+relative on Pareto's upper 0.99 tail (0.37 at compression 200): the end
+pieces run from the last centroid's mean to the largest row over half that
+centroid's weight, so a heavy tail's mean carried the maximum. The
+coordinator's second answer (2026-11-23, parts 6-7) chose the partial-mass
+rule over the centroids, keeping the boundary split and the 0.5 refusal:
 
 ```text
-ES_p = (1 / (p N))       int_0^{p N} Q        p < 0.5
-ES_p = (1 / ((1 - p) N)) int_{p N}^N Q        p >  0.5
+ES_p = (sum_{i<j} w_i c_i + (m - W_{j-1}) c_j) / m,   m = p N (p < 0.5) or (1 - p) N (p > 0.5)
 ```
 
-summed a trapezoid a piece, exact for the curve. It is withheld with its
-level, by the same rule: a tail whose level the rows do not identify holds
-less than one row in expectation. The `tdigest` package's `trimmed_mean`
-(a partial-mass rule over its centroids) and numpy's exact tail mean are
-its oracles (`tests/test_tdigest.py`).
+Measured over 20 seeds at N = 100,000, largest over six levels, relative to
+the exact tail mean: compression 100 normal 1.15e-2, lognormal 4.32e-2, t3
+2.13e-2, Pareto 1.94e-2; compression 200 3.28e-3, 1.19e-2, 5.13e-3,
+4.32e-3. The `tdigest` package's `trimmed_mean` (the same rule over its
+much finer digest) is within 6.5e-5 of exact. The tests hold the
+definition in fractions from the centroids and the measurements with a
+margin of 1.5 (`tests/test_tdigest.py`).
 
 ## State and cost
 

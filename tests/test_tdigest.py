@@ -34,11 +34,11 @@ own digest, one chunk against a thousand, a save going on to the bit, rows
 of weight 0, and a level withheld with ``level_beyond_sample`` until the
 rows identify it.
 
-The expected shortfall (part 6): ``es<level>_<column>`` is the digest's own
-curve averaged over the tail past the level (the lower tail below 0.5,
-the upper above; 0.5 itself is refused). It is checked against that definition, the curve
-read at 4,001 levels and integrated by numpy's trapezoid; against the
-``tdigest`` package's ``trimmed_mean`` (a partial-mass rule over its
+The expected shortfall (part 6): ``es<level>_<column>`` is the partial-mass
+rule over the digest's own centroids past the level (the lower tail below
+0.5, the upper above; 0.5 itself is refused). It is checked against that
+definition, worked out in fractions from the centroids; against the
+``tdigest`` package's ``trimmed_mean`` (the same rule over its finer
 centroids); and against numpy's exact tail mean of the rows.
 """
 
@@ -357,53 +357,64 @@ def _exact_tail_mean(xs_sorted: np.ndarray, p: float) -> float:
     return float(total / m)
 
 
-def _curve_tail_mean(xs: list[float], compression: float, p: float) -> float:
-    """The definition: the digest's quantile curve read at 4,001 levels over
-    the tail and averaged by the trapezoid rule."""
-    grid = np.linspace(0.0, p, 4_001) if p < 0.5 else np.linspace(p, 1.0, 4_001)
-    q = np.asarray(native.tdigest_quantiles(xs, compression, grid.tolist()), dtype=float)
-    return float(np.trapezoid(q, grid) / (grid[-1] - grid[0]))
+def _partial_mass_tail_mean(xs: list[float], compression: float, p: float) -> float:
+    """The definition: the partial-mass rule over the digest's own centroids
+    (``_rheon.tdigest_centroids``), worked out here with ``fractions`` so no
+    rounding of ours is in the reference: the mass ``p N`` from the smallest
+    mean below 0.5, ``(1 - p) N`` from the largest above it, the boundary
+    centroid counted at only the weight the tail still needs."""
+    from fractions import Fraction
+
+    cs = native.tdigest_centroids(xs, compression)
+    total = sum(Fraction(w) for _, w in cs)
+    order, mass = (cs, Fraction(p) * total) if p < 0.5 else (cs[::-1], (1 - Fraction(p)) * total)
+    before, acc = Fraction(0), Fraction(0)
+    for c, w in order:
+        take = min(Fraction(w), mass - before)
+        acc += take * Fraction(c)
+        before += take
+        if before >= mass:
+            break
+    return float(acc / mass)
 
 
 #: Our tail mean against the exact one and against the package's trimmed
 #: mean, relative to the exact tail mean, at N = 100,000: the largest over
-#: 20 seeds and the five levels, with a margin of 1.5. Measured (ours vs
-#: exact; the package's own gap to exact is under 6.5e-5 everywhere):
-#: compression 100, normal 2.14e-2, lognormal 0.104, t3 0.240, Pareto 0.973;
-#: compression 200, normal 5.78e-3, lognormal 3.56e-2, t3 0.141, Pareto
-#: 0.369. The gap is the curve's ends: the read interpolates from the last
-#: centroid's mean to the largest row over half that centroid's weight, so
-#: a heavy upper tail's mean carries the maximum at that weight (a centroid
-#: partial-mass rule measured 4.3e-2 and 1.2e-2 at its worst, the same
-#: streams).
+#: 20 seeds and the six levels, with a margin of 1.5. Measured (ours vs
+#: exact; the package's own gap to exact is under 6.5e-5 everywhere, its
+#: digest about 835 centroids at compression 100 against our 58):
+#: compression 100, normal 1.15e-2, lognormal 4.32e-2, t3 2.13e-2, Pareto
+#: 1.94e-2; compression 200, normal 3.28e-3, lognormal 1.19e-2, t3 5.13e-3,
+#: Pareto 4.32e-3. The gap is the boundary centroid's and the tail's
+#: centroids' own spread, largest in a 1% tail of two or three centroids.
 ES_TOLERANCE = {
-    (100, "normal"): 3.2e-2,
-    (100, "lognormal"): 0.16,
-    (100, "t3"): 0.36,
-    (100, "pareto"): 1.5,
-    (200, "normal"): 8.7e-3,
-    (200, "lognormal"): 5.4e-2,
-    (200, "t3"): 0.22,
-    (200, "pareto"): 0.56,
+    (100, "normal"): 1.8e-2,
+    (100, "lognormal"): 6.5e-2,
+    (100, "t3"): 3.2e-2,
+    (100, "pareto"): 2.9e-2,
+    (200, "normal"): 4.9e-3,
+    (200, "lognormal"): 1.8e-2,
+    (200, "t3"): 7.7e-3,
+    (200, "pareto"): 6.5e-3,
 }
 
 
 class TestExpectedShortfall:
     @pytest.mark.parametrize("p", [0.01, 0.2, 0.45, 0.55, 0.8, 0.99])
-    def test_it_is_the_digests_curve_averaged_over_the_tail(self, p: float) -> None:
+    def test_it_is_the_partial_mass_rule_over_the_centroids(self, p: float) -> None:
         xs = _stream("lognormal", 3)[:5_000].tolist()
         (got,) = native.tdigest_tail_means(xs, 100.0, [p])
         assert got is not None
-        want = _curve_tail_mean(xs, 100.0, p)
-        assert abs(got - want) <= 1e-5 * abs(want), (got, want)
+        want = _partial_mass_tail_mean(xs, 100.0, p)
+        assert abs(got - want) <= 1e-12 * abs(want), (got, want)
 
-    def test_the_lower_tail_sits_below_its_level_and_the_upper_above(self) -> None:
+    def test_the_lower_tail_sits_below_the_mean_and_the_upper_above(self) -> None:
         xs = _stream("t3", 1)[:20_000].tolist()
-        qs = native.tdigest_quantiles(xs, 100.0, list(ES_LEVELS))
         es = native.tdigest_tail_means(xs, 100.0, list(ES_LEVELS))
-        for p, q, e in zip(ES_LEVELS, qs, es, strict=True):
-            assert q is not None and e is not None
-            assert (e <= q) if p < 0.5 else (e >= q), (p, q, e)
+        mean = float(np.mean(xs))
+        for p, e in zip(ES_LEVELS, es, strict=True):
+            assert e is not None
+            assert (e <= mean) if p < 0.5 else (e >= mean), (p, mean, e)
 
     @pytest.mark.parametrize("dist", DISTS)
     @pytest.mark.parametrize("compression", [100, 200])

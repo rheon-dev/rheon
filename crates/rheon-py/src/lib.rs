@@ -1394,9 +1394,22 @@ fn tdigest_quantiles(
     Ok(est.quantiles(&levels))
 }
 
+/// The merging t-digest's centroids `(mean, weight)` after `values` (each of
+/// weight 1) at `compression`, the buffer merged in: what the partial-mass
+/// tail mean is read from, for the definition test.
+#[pyfunction]
+fn tdigest_centroids(values: Vec<f64>, compression: f64) -> PyResult<Vec<(f64, f64)>> {
+    let mut est =
+        rheon_polars::rheon_core::TDigest::new(compression).map_err(PyValueError::new_err)?;
+    for v in values {
+        est.update(v, 1.0);
+    }
+    Ok(est.settled())
+}
+
 /// The merging t-digest's tail mean (expected shortfall) at each of
 /// `levels` after `values` (each of weight 1) at `compression`, the lower
-/// tail at a level of 0.5 or less and the upper above it: the core's digest
+/// tail below a level of 0.5 and the upper above it: the core's digest
 /// itself, which the agreement test with the `tdigest` package's trimmed
 /// mean and the exact tail mean reads.
 #[pyfunction]
@@ -1670,6 +1683,7 @@ fn _rheon(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(psquared_reads, m)?)?;
     m.add_function(wrap_pyfunction!(tdigest_quantiles, m)?)?;
     m.add_function(wrap_pyfunction!(tdigest_tail_means, m)?)?;
+    m.add_function(wrap_pyfunction!(tdigest_centroids, m)?)?;
     m.add_function(wrap_pyfunction!(ddsketch_buckets, m)?)?;
     m.add_function(wrap_pyfunction!(ddsketch_values, m)?)?;
     m.add_function(wrap_pyfunction!(ddsketch_reads, m)?)?;

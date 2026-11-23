@@ -41,24 +41,22 @@
 //! last from `c_n` to the maximum (at rank `N`); one centroid reads its
 //! mean. A read merges a copy of the buffer and leaves the state as it was.
 //!
-//! **Expected shortfall** at level `p`, from the same curve `Q(t)` over the
-//! rank `t` in `[0, N]` (the knots: the minimum at 0, each centroid's mean
-//! at its centre, the maximum at `N`; linear between them). The tail is
-//! chosen by the level, the lower one below 0.5 (`E[X | X <= q]`) and the
-//! upper one above it (`E[X | X >= q]`), and its mean is
+//! **Expected shortfall** at level `p`, by the partial-mass rule over the
+//! centroids. The tail is chosen by the level, the lower one below 0.5
+//! (`E[X | X <= q]`) and the upper one above it (`E[X | X >= q]`), with
+//! mass `m = p N` from the smallest mean or `m = (1 - p) N` from the largest:
 //!
 //! ```text
-//! ES_p = (1 / (p N))       int_0^{p N} Q(t) dt        p < 0.5
-//! ES_p = (1 / ((1 - p) N)) int_{p N}^N Q(t) dt        p > 0.5
+//! ES_p = (sum_{i<j} w_i c_i + (m - W_{j-1}) c_j) / m
 //! ```
 //!
-//! a trapezoid a piece, exact for the piecewise-linear curve: the centroid
-//! the level falls in is split at `p N`, so the tail mean and the quantile
-//! come from one curve. `Q` rises, so
-//! the lower tail's mean is at most the read at `p` and the upper's at least
-//! it; the values keep their sign (a loss is not negated). One centroid's
-//! tail mean is its mean.
-//!
+//! each centroid wholly in the tail at its mean, the boundary centroid `j`
+//! split at the level, counted at only the weight the tail still needs. The
+//! values keep their sign (a loss is not negated). One centroid's tail mean
+//! is its mean. A heavy tail's mean is not pulled toward the largest row, as
+//! the read's curve, which runs to the extremes over half a centroid's
+//! weight, would pull it.
+
 //! **Size.** Every pair of neighbours spans more than 1 in `k` together, and
 //! `k` spans `delta / 2`, so at most `delta + 1` centroids remain after a merge
 //! (between about `delta / 2` and `delta` in practice): 16 bytes each, plus
@@ -289,68 +287,46 @@ impl TDigest {
     /// The estimate and the tail mean at each of `levels`, merging the
     /// buffer's copy once: the tail is the lower one below a level of 0.5
     /// and the upper one above it (0.5 has no tail of its own and is refused
-    /// by the model's settings), and its mean is the digest's own
-    /// curve averaged over it (the module's expected shortfall).
+    /// by the model's settings), its mean the partial-mass rule over the
+    /// centroids (the module's expected shortfall).
     pub fn quantiles_and_tails(&self, levels: &[f64]) -> Vec<Option<(f64, f64)>> {
         let settled = self.settled();
         levels
             .iter()
             .map(|&p| {
                 let q = Self::read(&settled, self.lo, self.hi, p)?;
-                Some((q, Self::tail_mean(&settled, self.lo, self.hi, p)?))
+                Some((q, Self::tail_mean(&settled, p)?))
             })
             .collect()
     }
 
-    /// The knots `(rank, value)` of the curve [`Self::read`] interpolates:
-    /// the minimum at rank 0, each centroid's mean at its centre, the
-    /// maximum at rank `N`.
-    fn knots(centroids: &[(f64, f64)], lo: f64, hi: f64) -> Vec<(f64, f64)> {
+    /// The tail mean at `p` in (0, 1), not 0.5, by the partial-mass rule
+    /// over the centroids: the mass `m = p N` from the smallest mean below
+    /// 0.5, `m = (1 - p) N` from the largest above it, each centroid wholly
+    /// in the tail at its mean and the one the tail ends in at only the
+    /// weight the tail still needs.
+    fn tail_mean(centroids: &[(f64, f64)], p: f64) -> Option<f64> {
+        centroids.first()?;
         let total: f64 = centroids.iter().map(|c| c.1).sum();
-        let mut knots = Vec::with_capacity(centroids.len() + 2);
-        knots.push((0.0, lo));
-        let mut centre = centroids[0].1 / 2.0;
-        knots.push((centre, centroids[0].0));
-        for pair in centroids.windows(2) {
-            centre += pair[0].1 / 2.0 + pair[1].1 / 2.0;
-            knots.push((centre, pair[1].0));
-        }
-        knots.push((total, hi));
-        knots
-    }
-
-    /// The integral of the piecewise-linear curve through `knots` over the
-    /// ranks `[a, b]`: a trapezoid a piece, each clipped to `[a, b]`.
-    fn integral(knots: &[(f64, f64)], a: f64, b: f64) -> f64 {
-        let mut sum = 0.0;
-        for pair in knots.windows(2) {
-            let ((t0, v0), (t1, v1)) = (pair[0], pair[1]);
-            let (lo, hi) = (t0.max(a), t1.min(b));
-            if hi <= lo || t1 <= t0 {
-                continue;
-            }
-            let at = |t: f64| v0 + (t - t0) / (t1 - t0) * (v1 - v0);
-            sum += (hi - lo) * (at(lo) + at(hi)) / 2.0;
-        }
-        sum
-    }
-
-    /// The tail mean at `p` in (0, 1), not 0.5: `(1 / (p N)) int_0^{p N} Q`
-    /// below 0.5, `(1 / ((1 - p) N)) int_{p N}^N Q` above it, `Q` the
-    /// read's curve over the rank; one centroid's is its mean.
-    fn tail_mean(centroids: &[(f64, f64)], lo: f64, hi: f64, p: f64) -> Option<f64> {
-        let &(first, _) = centroids.first()?;
-        if centroids.len() == 1 {
-            return Some(first);
-        }
-        let knots = Self::knots(centroids, lo, hi);
-        let total = knots[knots.len() - 1].0;
-        let t = p * total;
         Some(if p < 0.5 {
-            Self::integral(&knots, 0.0, t) / t
+            Self::partial_mass(centroids.iter().copied(), p * total)
         } else {
-            Self::integral(&knots, t, total) / (total - t)
+            Self::partial_mass(centroids.iter().rev().copied(), (1.0 - p) * total)
         })
+    }
+
+    /// The mean of the first `m` of weight of `centroids`, the last one
+    /// counted in part.
+    fn partial_mass(centroids: impl Iterator<Item = (f64, f64)>, m: f64) -> f64 {
+        let (mut before, mut sum) = (0.0, 0.0);
+        for (c, w) in centroids {
+            if before + w >= m {
+                return (sum + (m - before) * c) / m;
+            }
+            before += w;
+            sum += w * c;
+        }
+        sum / before
     }
 
     /// The module's read at `p` from `centroids`, `lo` and `hi`.
