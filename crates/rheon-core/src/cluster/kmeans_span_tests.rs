@@ -300,3 +300,167 @@ fn the_spans_are_checked() {
         assert!(e.contains(words), "{e}");
     }
 }
+
+/// The row clock's stamps (`stamp_next_on_rows`) are the clock the spans
+/// read, whatever their spacing: on a clock of 2.5 a row the span of 10 closes
+/// at the fifth row and not at the fourth, and a cadence of 5 fires two rows
+/// after the seeding and not one. Unstamped, a row is one unit and neither
+/// moves, so only a stamp the model reads tells them apart.
+#[test]
+fn the_row_clock_is_read_at_its_own_spacing() {
+    let data = rows(12, 12);
+    let warm = KMeansCfg {
+        warm_rows: 3,
+        warm_clock: Some(10.0),
+        ..cfg(3)
+    };
+    let mut m = KMeans::new(warm).unwrap();
+    for (i, x) in data[..5].iter().enumerate() {
+        m.stamp_next_on_rows(Stamp::from(i as f64 * 2.5));
+        m.step(x, &[], 1.0, 1.0);
+        assert_eq!(!m.clusters.is_empty(), i == 4, "row {i}");
+    }
+    let cadence = KMeansCfg {
+        warm_rows: 3,
+        update_every_rows: u32::MAX,
+        update_every: Some(5.0),
+        ..cfg(3)
+    };
+    let mut m = KMeans::new(cadence).unwrap();
+    let mut fired = Vec::new();
+    for (i, x) in data[..8].iter().enumerate() {
+        m.stamp_next_on_rows(Stamp::from(i as f64 * 2.5));
+        m.step(x, &[], 1.0, 1.0);
+        fired.push(!m.clusters.is_empty() && m.since == 0);
+    }
+    // Seeded at row 2; the cadence's 5 units are rows 3 and 4 after it.
+    assert_eq!(
+        fired,
+        [false, false, true, false, true, false, true, false],
+        "{fired:?}"
+    );
+}
+
+/// The warm-up's byte count and cap, and the shape checks of a saved state
+/// that the cadences and the span add, each alone.
+#[test]
+fn the_warm_up_is_counted_and_a_saved_state_is_held_to_its_cfg() {
+    let m = KMeans::new(cfg(3)).unwrap();
+    assert_eq!(m.warm_cap(), 256 * 1024 * 1024);
+    assert_eq!(
+        m.warm_bytes(1000),
+        (1000 * (std::mem::size_of::<Vec<f64>>() + 3 * 8)) as u64
+    );
+
+    let spans = KMeansCfg {
+        warm_clock: Some(1e9),
+        update_every_rows: u32::MAX,
+        update_every: Some(5.0),
+        split_merge_every_rows: u32::MAX,
+        split_merge_every: Some(25.0),
+        ..cfg(3)
+    };
+    let mut full = KMeans::new(spans).unwrap();
+    for (i, x) in rows(10, 13).iter().enumerate() {
+        full.stamp_next(Stamp::Ns(i as i128 * S));
+        full.step(x, &[], 1.0, 1.0);
+    }
+    let mut plain = KMeans::new(cfg(3)).unwrap();
+    for x in rows(40, 13).iter() {
+        plain.step(x, &[], 1.0, 1.0);
+    }
+    assert!(full.since_update.is_some() && full.since_split.is_some());
+    let damaged = |m: &KMeans, damage: fn(&mut KMeans)| {
+        let mut s = m.state();
+        let crate::ModelState::KMeans(inner) = &mut s.model else {
+            unreachable!()
+        };
+        damage(inner);
+        KMeans::restore(&s)
+    };
+    for m in [&full, &plain] {
+        assert!(damaged(m, |_| {}).is_ok());
+    }
+    let wrong_shape = |r: Result<KMeans, StateError>, what: &str| match r {
+        Err(StateError::Invalid(e)) => assert!(e.contains("wrong shape"), "{what}: {e}"),
+        other => panic!("{what}: {:?}", other.map(|_| ())),
+    };
+    wrong_shape(damaged(&full, |m| m.place = None), "no place");
+    wrong_shape(damaged(&plain, |m| m.place = Some(Default::default())), "a place");
+    wrong_shape(damaged(&full, |m| m.since_update = None), "no update clock");
+    wrong_shape(damaged(&full, |m| m.since_split = None), "no split clock");
+    wrong_shape(
+        damaged(&plain, |m| m.since_update = full_since()),
+        "an update clock",
+    );
+    wrong_shape(
+        damaged(&plain, |m| m.since_split = full_since()),
+        "a split clock",
+    );
+}
+
+fn full_since() -> Option<crate::since::Since> {
+    Some(Default::default())
+}
+
+/// The warning's flag is state: a model saved after its half-of-the-cap
+/// warning restores with it raised, so it does not warn a second time.
+#[test]
+fn a_warned_flag_survives_a_save() {
+    let c = KMeansCfg {
+        warm_rows: 3,
+        warm_clock: Some(1e12),
+        ..cfg(3)
+    };
+    let mut m = KMeans::new(c).unwrap();
+    m.set_cap_for_test(m.warm_bytes(100));
+    for (i, x) in rows(60, 8).iter().enumerate() {
+        m.stamp_next(Stamp::Ns(i as i128 * S));
+        m.step(x, &[], 1.0, 1.0);
+    }
+    assert!(m.warned && m.state_over_cap().is_none());
+    let bytes = rmp_serde::to_vec_named(&m.state()).unwrap();
+    let key = b"\xa6warned";
+    assert!(bytes.windows(key.len()).any(|w| w == key));
+    let back = KMeans::restore(&rmp_serde::from_slice(&bytes).unwrap()).unwrap();
+    assert!(back.warned);
+}
+
+/// The warm-up's cap is asked of a row that would be learned into the
+/// warm-up, and of no other: a row of no weight takes no room, and once the
+/// model is seeded its buffer is gone and no cap holds a row back.
+#[test]
+fn the_warm_up_cap_is_asked_of_learned_warm_up_rows_only() {
+    let c = KMeansCfg {
+        warm_rows: 3,
+        warm_clock: Some(4.0),
+        ..cfg(3)
+    };
+    // A row of no weight, with a cap of one byte: nothing is held, nothing
+    // is over it.
+    let mut m = KMeans::new(c.clone()).unwrap();
+    m.set_cap_for_test(1);
+    m.stamp_next(Stamp::Ns(0));
+    m.step(&[0.5, 0.5], &[], 1.0, 0.0);
+    assert_eq!(m.state_over_cap(), None);
+    // The same row with weight is the one past the cap.
+    let mut m = KMeans::new(c.clone()).unwrap();
+    m.set_cap_for_test(1);
+    m.stamp_next(Stamp::Ns(0));
+    m.step(&[0.5, 0.5], &[], 1.0, 1.0);
+    assert!(m.state_over_cap().is_some());
+
+    // A seeded model learns on, whatever cap is set after the seeding.
+    let data = rows(60, 14);
+    let (mut capped, mut free) = (KMeans::new(c.clone()).unwrap(), KMeans::new(c).unwrap());
+    for (i, x) in data.iter().enumerate() {
+        if i == 20 {
+            assert!(!capped.clusters.is_empty());
+            capped.set_cap_for_test(1);
+        }
+        capped.stamp_next(Stamp::Ns(i as i128 * S));
+        free.stamp_next(Stamp::Ns(i as i128 * S));
+        assert_eq!(bits(&mut capped, x), bits(&mut free, x), "row {i}");
+    }
+    assert_eq!(capped.state_over_cap(), None);
+}
