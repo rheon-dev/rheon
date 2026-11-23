@@ -269,16 +269,12 @@ impl OpKind {
         }
     }
 
-    /// Whether it reads the row before its own within the group and
-    /// session, rather than a window: `increment` and `tick_sign`. Its
-    /// input is a formula of the row, and a window operator's input may read
-    /// it.
+    /// A step (`increment`, `tick_sign`): the row before, not a window.
     pub fn is_step(self) -> bool {
         matches!(self, OpKind::Increment | OpKind::TickSign)
     }
 
-    /// The statistic of a window operator; `None` for `increment` and
-    /// `tick_sign`.
+    /// The statistic of a window operator; `None` for a step.
     pub fn stat(self) -> Option<Stat> {
         match self {
             OpKind::EwmMean | OpKind::RewmMean => Some(Stat::Mean),
@@ -6229,17 +6225,6 @@ mod tests {
         assert_eq!(OpKind::Increment.stat(), None);
         assert_eq!(OpKind::Increment.direction(), Direction::Backward);
         assert_eq!(OpKind::EwmStd.stat(), Some(Stat::Std));
-        // So is a tick sign; the two are the steps, and no window operator is.
-        assert_eq!(OpKind::TickSign.stat(), None);
-        assert_eq!(OpKind::TickSign.direction(), Direction::Backward);
-        assert_eq!(OpKind::parse("tick_sign"), Some(OpKind::TickSign));
-        assert_eq!(OpKind::TickSign.name(), "tick_sign");
-        for kind in [OpKind::Increment, OpKind::TickSign] {
-            assert!(kind.is_step(), "{kind:?}");
-        }
-        for kind in [OpKind::EwmMean, OpKind::RewmSum, OpKind::EwmStd] {
-            assert!(!kind.is_step(), "{kind:?}");
-        }
     }
 
     /// Task 252: what the core reports of itself -- its outputs, one per

@@ -1196,6 +1196,10 @@ mod tests {
         );
         let sign = tree(r#"["tick_sign",["col","p"]]"#);
         assert!(!sign.has_window_operator());
+        assert!(OpKind::TickSign.is_step() && OpKind::Increment.is_step());
+        assert!(!OpKind::EwmMean.is_step() && !OpKind::RewmSum.is_step());
+        assert_eq!(OpKind::TickSign.stat(), None);
+        assert_eq!(OpKind::TickSign.direction(), Direction::Backward);
         assert_eq!(sign.columns(), ["p"]);
         let err =
             Node::parse(r#"["tick_sign",["ewm_sum",["col","p"],{"half_life":1}]]"#).unwrap_err();
