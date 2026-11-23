@@ -718,6 +718,18 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **`lasso` reads the size a decayed stream grows to with its first row at
+  no clock** (review 2026-11-23, LASSO-2). A descent that runs out of
+  sweeps is not counted in `solve_failures` while the Gram's rows are too
+  few for its features and more rows would cure it. Whether they would is
+  read from the Kish size the stream settles at under its decay, from the
+  product of the decays the Gram has taken. The first row has no clock
+  before it and decays by 1, so that product is `λ^{t−1}` after `t` rows,
+  where it was read as `λᵗ`. The settled size came out up to twice the
+  true one, so at 50 features a half-life of 30, which settles at 87 rows
+  against a bound of 115, was excused on its first rows. The decay per row
+  is now solved from the size and the product together. Moves: `lasso.*`.
+
 - **A positive definite system whose trace is past the largest double
   solves** (review 2026-11-23, SOLVE-1). The factorization's jitters are
   multiples of the mean diagonal, the trace over `k`. At `diag(1e308,

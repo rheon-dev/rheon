@@ -178,12 +178,14 @@ pub(crate) fn warming_up(
 /// long the stream, and a stream that settles below the bound is never out
 /// of its warm-up, so the sweeps run out for good and the user is to be
 /// told. The size the stream is growing to is read from the Gram itself:
-/// after `t` unit rows `n_t = (1 + λ)(1 − λᵗ) / ((1 − λ)(1 + λᵗ))` and
-/// `prior_scale = λᵗ` (the product of every decay factor, which
-/// [`crate::EwCov::prior_scale`] holds), so
+/// after `t` unit rows `n_t = (1 + λ)(1 − λᵗ) / ((1 − λ)(1 + λᵗ))`, and
+/// the first row comes at no clock, so `prior_scale = λ^{t−1}` (the product
+/// of every decay factor, which [`crate::EwCov::prior_scale`] holds, the
+/// first row's 1 among them). With `f = prior_scale`, `λ` is the positive
+/// root of `f(n_t − 1)λ² + (n_t + 1)(1 − f)λ − (n_t − 1) = 0`, and
 ///
 /// ```text
-/// n_∞ = n_t · (1 + prior_scale) / (1 − prior_scale)
+/// n_∞ = n_t · (1 + λf) / (1 − λf)
 /// ```
 ///
 /// with no decay (`prior_scale` 1, the limit unbounded) and a `prior_scale`
@@ -194,8 +196,8 @@ pub(crate) fn warming_up(
 /// many half-lives takes `prior_scale` to 0 while the rows after it start
 /// the Kish size over (the old rows' weight is gone), so the rebuild after
 /// such a gap reads as at its limit and its cap hits are counted: the Gram
-/// does not remember how young it is. A window's Gram is not read this way
-/// (the caller passes a scale of 1, so the rows alone decide).
+/// does not remember how young it is. A window's Gram is read as at its
+/// limit (the caller passes a scale of 0, so `n_∞ = n_t`).
 ///
 /// Costs O(k) on a cap hit and a few flops; a converged descent pays
 /// nothing. No state: `prior_scale` is the Gram's own.
@@ -212,7 +214,20 @@ pub(crate) fn young(
     }
     // `warming_up` held, so the size is known and finite.
     let limit = match n_kish {
-        Some(n) if prior_scale < 1.0 => n * (1.0 + prior_scale) / (1.0 - prior_scale),
+        Some(n) if prior_scale < 1.0 => {
+            // The first row comes at no clock, so it decays by 1 and
+            // `prior_scale` is the first row's weight `f = λ^{t−1}` (review
+            // 2026-11-23, LASSO-2: read as `λᵗ`, the limit came out up to
+            // twice the true one). With `n_t = (1 + λ)(1 − λf) / ((1 −
+            // λ)(1 + λf))`, `λ` is the positive root of `f(n − 1)λ² +
+            // (n + 1)(1 − f)λ − (n − 1) = 0`, taken in the form that
+            // cancels nothing, and `n_∞ = n_t (1 + λf) / (1 − λf)`.
+            let f = prior_scale;
+            let b = (n + 1.0) * (1.0 - f);
+            let lam = 2.0 * (n - 1.0) / (b + (b * b + 4.0 * f * (n - 1.0) * (n - 1.0)).sqrt());
+            let lf = lam * f;
+            n * (1.0 + lf) / (1.0 - lf)
+        }
         _ => return true,
     };
     !warming_up(Some(limit), features, centred, l2, descent)

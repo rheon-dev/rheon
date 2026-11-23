@@ -1378,10 +1378,11 @@ fn a_decay_that_holds_the_size_under_the_bound_is_not_a_warm_up() {
     let d = (100u32, 1e-10);
     let k = 50;
     let limit = |lam: f64| (1.0 + lam) / (1.0 - lam);
-    // The Kish size after `t` unit rows, and the prior scale.
+    // The Kish size after `t` unit rows, and the prior scale, the first
+    // row at no clock.
     let at = |lam: f64, t: i32| {
         let s = lam.powi(t);
-        (limit(lam) * (1.0 - s) / (1.0 + s), s)
+        (limit(lam) * (1.0 - s) / (1.0 + s), s / lam)
     };
     // No decay: the rows alone, as warming_up.
     assert!(young(Some(60.0), 1.0, k, true, 0.0, d), "no decay, 60 rows");
@@ -1389,12 +1390,13 @@ fn a_decay_that_holds_the_size_under_the_bound_is_not_a_warm_up() {
     // A half-life of 30 settles at 87: never a warm-up, from the first row.
     let lam30 = 0.5f64.powf(1.0 / 30.0);
     assert!((limit(lam30) - 87.0).abs() < 1.0);
-    for t in [1, 10, 50, 200, 2000, 20_000] {
+    // From the second row: the first has no decay to read.
+    for t in [2, 10, 50, 200, 2000, 20_000] {
         let (n, s) = at(lam30, t);
         assert!(!young(Some(n), s, k, true, 0.0, d), "row {t}, n {n:.1}");
     }
     // A half-life of 60 settles at 173: a warm-up until the size passes 115
-    // (about row 65), none after.
+    // (row 139), none after.
     let lam60 = 0.5f64.powf(1.0 / 60.0);
     assert!(limit(lam60) > 115.0);
     let (young_n, young_s) = at(lam60, 10);
@@ -1540,4 +1542,41 @@ fn penalty_weights_near_the_ends_of_the_doubles_walk_the_scaled_path() {
     )
     .unwrap_err();
     assert!(err.contains("2^256"), "{err}");
+}
+
+/// The size a decayed stream grows to is read from a Gram whose first row
+/// came at no clock (review 2026-11-23, LASSO-2): the bank's first row has
+/// no clock before it, so it decays by 1 and `prior_scale` after `t` unit
+/// rows is `λ^{t−1}`, not `λᵗ`. Read as `λᵗ`, the limit came out up to
+/// twice the true one, infinite on the first row, and a half-life of 30,
+/// which settles at 87 rows against a bound of 115, was excused as a
+/// warm-up on its first rows. Fed through the Gram itself, never.
+#[test]
+fn a_gram_whose_first_row_came_at_no_clock_is_read_at_its_limit() {
+    let d = (100u32, 1e-10);
+    let k = 50;
+    let lam30 = 0.5f64.powf(1.0 / 30.0);
+    let lam60 = 0.5f64.powf(1.0 / 60.0);
+    for (lam, settles_above) in [(lam30, false), (lam60, true)] {
+        let mut g = crate::EwCov::new(1);
+        let mut s = 3u64;
+        let mut young_rows = 0;
+        for t in 0..400 {
+            // On its first row the Gram has no clock to read a decay from,
+            // and is read as without one.
+            let x = [(s as f64).sin()];
+            s += 1;
+            g.update(&x, if t == 0 { 1.0 } else { lam }, 1.0);
+            if t > 0 && young(g.n_kish(), g.prior_scale(), k, true, 0.0, d) {
+                young_rows += 1;
+            }
+        }
+        if settles_above {
+            // A warm-up until the size passes the bound: `173 (1 − λᵗ) /
+            // (1 + λᵗ) = 115` at `λᵗ = 0.2`, `t = 139`.
+            assert!((130..145).contains(&young_rows), "{young_rows}");
+        } else {
+            assert_eq!(young_rows, 0, "a half-life of 30 is never a warm-up");
+        }
+    }
 }
