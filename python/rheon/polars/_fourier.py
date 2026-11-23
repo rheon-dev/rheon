@@ -38,6 +38,7 @@ term peaks at the same local hour in summer and winter.
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from typing import Any
 
 import polars as pl
 import polars.selectors as cs
@@ -57,19 +58,39 @@ _MONDAY_NS = 4 * 86_400 * 10**9
 _CALENDAR = ("1h", "1d", "1w", "1mo", "1q", "1y")
 
 
-def _wall(clock: str, keep_unit: bool) -> pl.Expr:
+def _refusal(clock: str, accepted: Any, message: str, dtype: pl.DataType) -> pl.Expr:
+    """An arm that selects the clock only when its dtype is not ``accepted``,
+    and then raises ``message`` when the query runs. An expression cannot see
+    its column's dtype when it is built; a selector resolves against the
+    schema, so for an accepted clock this arm selects nothing and leaves no
+    Python function in the plan."""
+
+    def refuse(_: pl.Series) -> pl.Series:
+        raise ValueError(message)
+
+    return (cs.by_name(clock) & ~accepted).as_expr().map_batches(refuse, return_dtype=dtype)
+
+
+def _wall(clock: str, keep_unit: bool, who: str) -> pl.Expr:
     """A temporal clock column on its wall clock: a ``Date`` as is (or as
     nanoseconds), a naive ``Datetime`` as is, a zoned one with its zone
     dropped after reading the local time. Each arm selects the column only
-    when its dtype matches, so exactly one arm is non-empty, and a column of
-    no temporal type is refused by Polars when the query runs."""
+    when its dtype matches, so exactly one arm is non-empty; a column of no
+    temporal type selects the refusal's arm."""
     col = cs.by_name(clock)
     date_arm = (col & cs.date()).as_expr()
     datetime_arm = (col & cs.datetime()).as_expr().dt.replace_time_zone(None)
     if not keep_unit:
         date_arm = date_arm.cast(pl.Datetime("ns"))
         datetime_arm = datetime_arm.dt.cast_time_unit("ns")
-    return pl.max_horizontal(date_arm, datetime_arm)
+    refused = _refusal(
+        clock,
+        cs.date() | cs.datetime(),
+        f"{who}: clock {clock!r} is not a Date or Datetime column, but the period is a "
+        "duration. Use a temporal clock, or an integer clock with an int period.",
+        pl.Datetime("ns"),
+    )
+    return pl.max_horizontal(date_arm, datetime_arm, refused)
 
 
 def _check_order(order: object, who: str) -> int:
@@ -140,7 +161,15 @@ def fourier(
                 f"{who}: the period is an int, so origin must be an int of the clock's units, "
                 f"but it is {origin!r}. Give origin as an int."
             )
-        t = pl.max_horizontal((cs.by_name(clock) & cs.integer()).as_expr()).cast(pl.Int64)
+        refused = _refusal(
+            clock,
+            cs.integer(),
+            f"{who}: clock {clock!r} is not an integer column, but the period is an int. A "
+            "float clock has no exact reduction, so cast it to integer units first; give a "
+            "temporal clock a duration period.",
+            pl.Int64,
+        )
+        t = pl.max_horizontal((cs.by_name(clock) & cs.integer()).as_expr(), refused).cast(pl.Int64)
     else:
         try:
             text = duration_text(period, who, "period")
@@ -159,7 +188,7 @@ def fourier(
             ) from None
         label = format_duration(p)
         t0 = (_MONDAY_NS if p % _WEEK_NS == 0 else 0) if origin is None else _origin_ns(origin, who)
-        t = _wall(clock, keep_unit=False).dt.epoch("ns")
+        t = _wall(clock, keep_unit=False, who=who).dt.epoch("ns")
     if p <= 0:
         raise ValueError(
             f"{who}: period must be above 0, but it is {label}. Give a positive period."
@@ -203,7 +232,7 @@ def calendar_fourier(clock: str, *, freq: str, order: int) -> list[pl.Expr]:
             f"{who}: freq must be one of {', '.join(_CALENDAR)}, but it is {freq!r}. "
             "For a fixed span of several units, use fourier's period."
         )
-    t = _wall(clock, keep_unit=True)
+    t = _wall(clock, keep_unit=True, who=who)
     start = t.dt.truncate(freq)
     gap = start.dt.offset_by(freq) - start
     ratio = (t - start).to_physical().cast(pl.Float64) / gap.to_physical().cast(pl.Float64)

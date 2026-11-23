@@ -164,11 +164,38 @@ def test_a_null_clock_gives_null_terms():
     assert out.row(1) == (None, None, None, None)
 
 
+def test_the_phase_is_the_correctly_rounded_quotient():
+    """u = r / P is divided as IEEE division, not as r * (1 / P): the two
+    differ at some hours of a day in nanoseconds, and Polars divides a
+    column by a scalar the second way, so the builder divides by P as a
+    column. Each hour's first harmonic is sin(2 pi (r / P)) to the bit."""
+    p = 86400 * NS
+    r = np.arange(24, dtype=np.int64) * 3600 * NS
+    quotient = r.astype(np.float64) / float(p)
+    by_reciprocal = r.astype(np.float64) * (1.0 / float(p))
+    assert np.any(quotient != by_reciprocal)  # the hours where the two forms part
+    frame = pl.DataFrame({"t": pl.Series(r).cast(pl.Datetime("ns"))})
+    mine = frame.select(fourier("t", period="1d", order=1)).to_numpy()
+    x = quotient * (2 * np.pi)
+    assert _bits_differ(mine, np.c_[np.sin(x), np.cos(x)]) == 0
+
+
+@pytest.mark.parametrize("engine", ["in-memory", "streaming"])
+def test_a_clock_of_the_wrong_type_is_refused_by_name(engine):
+    frame = pl.DataFrame({"f": [1.5], "i": [1], "d": [dt.date(2026, 1, 1)]}).lazy()
+    cases = [
+        (fourier("f", period=24, order=1), "fourier: clock 'f' is not an integer column"),
+        (fourier("d", period=24, order=1), "fourier: clock 'd' is not an integer column"),
+        (fourier("f", period="1d", order=1), "fourier: clock 'f' is not a Date or Datetime"),
+        (fourier("i", period="1d", order=1), "fourier: clock 'i' is not a Date or Datetime"),
+        (calendar_fourier("i", freq="1d", order=1), "calendar_fourier: clock 'i' is not a Date"),
+    ]
+    for exprs, message in cases:
+        with pytest.raises(ValueError, match=message):
+            frame.select(exprs).collect(engine=engine)
+
+
 def test_refusals():
-    with pytest.raises(pl.exceptions.InvalidOperationError):
-        pl.DataFrame({"f": [1.5]}).select(fourier("f", period=24, order=1))
-    with pytest.raises(pl.exceptions.InvalidOperationError):
-        pl.DataFrame({"i": [1]}).select(fourier("i", period="1d", order=1))
     with pytest.raises(ValueError, match="calendar_fourier"):
         fourier("t", period="1mo", order=1)
     with pytest.raises(ValueError, match="2\\*\\*63"):
