@@ -3245,22 +3245,32 @@ likelihood-ratio statistic against constant correlation (`a = b = 0`, and
 `g = 0`), with the weights at Kish's count, reaches χ² at 0.999 for those
 restrictions: 13.8 for DCC's two and 16.3 for the asymmetric model's three.
 The information there must be positive definite too, and a buffer whose
-`Q̄` is not positive definite (a series constant over it, or two the same)
-is withheld the same way. A fit that passes is stepped from only at its
+`Q̄` is not positive definite is withheld the same way: fewer rows than
+series, a series constant over them, or two the same. `Q̄` is judged by its
+conditioning, a condition number past `1 / (k ε)` refused, because a `Q̄`
+short of rank has an exact 0 eigenvalue that the factor computes with
+rounding of either sign. A fit that passes is stepped from only at its
 optimum: the gain its projected Newton step predicts is at most `10⁻⁶`
 nats, which an optimum on a bound of the set meets as well. A start that
-fails either waits for twice its rows (or its span) and fits again, at most
-twice while `max_state_bytes` holds the doubled buffer. Then a withheld
-start buffers afresh, and one short of its optimum is stepped from. While a
-fit is withheld, `withheld_reason` reads `not_identified`. With `a` and `b`
-given there is nothing to identify, and the start waits only for a `Q̄`
-that is positive definite.
+fails either keeps its rows and fits again once as many new rows have come
+as it held: twice its rows while `max_state_bytes` holds them, then the
+latest rows the cap holds, the oldest leaving as each new one comes. No
+count of tries ends the wait, and nothing is cleared, which could not cure
+a shortage of rows. While a fit is withheld, `withheld_reason` reads
+`not_identified`; while it is short of its optimum alone, the start's own
+warm-up, `below_warm_rows`. With `a` and `b` given there is nothing to
+identify, and the start waits only for a `Q̄` that is positive definite.
+Under a decay the evidence a buffer holds stops growing: its rows' weights
+are decayed to the last, so Kish's count of them is at most about `(1 +
+λ)/(1 − λ)`, 289 at a half-life of 100 rows. Give a half-life several times
+the rows that tell the recursion from a constant correlation.
 
 The state is `32 k² + 96` bytes for DCC and `48 k² + 144` for the
 asymmetric model, learned (`16 k² + 64` and `24 k² + 72` given), for `k`
 series, and the margins' 168 bytes a series. Each start's buffer adds its
 own until it is fitted: 16 bytes a row a series for the margins', `8 (k +
-2)` a row for the correlation's. The margins' start comes first, so with
+2)` a row for the correlation's, which a start that waits grows up to what
+`max_state_bytes` holds. The margins' start comes first, so with
 the default starts `max_state_bytes`' 256 KB holds eight series. A row
 costs `O(p k³)` for `p` parameters: the factor and inverse of `R`, and `R⁻¹
 ∂R` for each parameter.

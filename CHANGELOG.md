@@ -689,6 +689,24 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **`dcc`'s start judges `Q̄` by its conditioning and waits on its evidence
+  with no count of tries** (Fable's W13 review, A1 to A3). The "`Q̄`
+  positive definite" gate was a Cholesky pivot `> 0`, so a `Q̄` short of
+  rank (fewer rows than series, two series the same) was passed or refused
+  by the rounding of an exact 0: at `start_rows = 1` four series once
+  started on two rows, and eight never on the 1, 2 and 4 rows they were
+  tried at. It now refuses a condition number past `1 / (k ε)` (measured:
+  at least 4.2 times that short of rank, at most `5·10⁻⁴` of it at `k`
+  rows). A try that does not start keeps its buffer, which grows to what
+  `max_state_bytes` holds and then keeps the latest rows, each try on rows
+  the last did not see; it was dropped after two doublings, so at
+  `start_rows = 100` a stream identified at 1,000 rows was never looked at
+  past 400. A fit short of its optimum is withheld rather than stepped from
+  once the doublings ran out, and the wait after it is `below_warm_rows`
+  rather than the earlier try's `not_identified`. Where a start fires
+  earlier, later or not at all moves every output of the rows around it.
+  Moves: `dcc.corr_*`, `dcc.loglik`, `dcc.coef`, `dcc.withheld_reason`.
+
 - **`realized`'s `bns` is a standard normal without jumps under a decay
   and under weights** (Fable's W13 review, B1 and B2). It read one count
   `n`, Kish's `(Σw)²/Σw²`, both in front (`√n`) and inside the tripower

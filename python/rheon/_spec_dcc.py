@@ -106,20 +106,24 @@ def dcc(
         fit is withheld (``withheld_reason`` ``not_identified``) until its
         likelihood-ratio statistic against constant correlation reaches χ²
         at 0.999 (13.8 for ``a`` and ``b``, 16.3 with ``g``), and stepped
-        from only at its optimum; a start that fails either waits for twice
-        its rows and fits again, at most twice, and then a withheld one
-        buffers afresh. Refused beside ``start_span``.
+        from only at its optimum. A start that fails either keeps its rows
+        and fits again once as many new rows have come as it held: twice
+        its rows while ``max_state_bytes`` holds them, then the latest rows
+        it holds. No count of tries ends the wait. Under a decay give a
+        half-life several times these rows: the rows' weights decay to the
+        last, so the evidence a buffer holds stops growing. Refused beside
+        ``start_span``.
     ``start_span``
         The correlation's start as a span of the clock in place of
         ``start_rows``: a number of the clock column's units, or a duration
         such as ``"1d"`` on a temporal clock. It closes at the first row at
-        or past the span from its first row; a refit waits for twice the
-        span.
+        or past the span from its first row; a refit waits, as under
+        ``start_rows``, for as many new rows as the try before held.
     ``max_state_bytes``
         The bytes a group's state may hold, both starts' buffers included.
-        A spec whose state is past it is refused; a start over a span is
-        checked as the rows go in, warned of once past half of it, and
-        stopped at it. Default 256 KB, ``262144``, which holds eight series
+        A spec whose state is past it is refused; a first span is checked as
+        the rows go in, warned of once past half of it, and stopped at it.
+        A start that waits after a try keeps at most the rows it holds. Default 256 KB, ``262144``, which holds eight series
         with the margins' default start; at most 64 MiB.
 
     .. rubric:: Output

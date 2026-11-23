@@ -469,7 +469,7 @@ fn a_target_short_of_rank_is_refused_whatever_its_rounding() {
 /// stream the start's likelihood-ratio statistic is far past its cut and
 /// the fit is stepped from at the start's row; on a stream of constant
 /// correlation (no dynamics to find, a realistic null) the fit is withheld,
-/// the start waits for twice its rows twice and then buffers afresh, and
+/// the start keeps its rows and waits for twice them at each try, and
 /// nothing is reported, for DCC and ADCC alike.
 #[test]
 fn a_start_reports_only_a_recursion_its_rows_identify() {
@@ -509,10 +509,10 @@ fn a_start_reports_only_a_recursion_its_rows_identify() {
                 "{}",
                 m.start_lr()
             );
-            // tried at 300, 600 and 1,200 rows, then afresh: three rounds
-            // of 1,200 rows in 4,000
-            assert_eq!(m.restarts(), 3, "{asym} {seed}");
-            assert!(waits > 3000);
+            // tried at 300, 600, 1,200 and 2,400 rows, the buffer kept
+            assert_eq!((m.refits(), m.dropped()), (4, 0), "{asym} {seed}");
+            assert_eq!(m.stage.rows(m.cfg()), 4000);
+            assert!(waits > 3600);
         }
     }
 }
@@ -832,9 +832,10 @@ fn a_decay_tracks_a_moving_correlation() {
     assert!((m.stage.w - 1.0 / (1.0 - lam)).abs() < 2e-6 / (1.0 - lam));
 }
 
-/// A start over a span of the clock closes at its length with at least 50
-/// rows, on the rows' stamps; its buffer is checked against the cap as
-/// rows come, warned of once past half and stopped at the cap.
+/// A start over a span of the clock closes at its length, on the rows'
+/// stamps, whatever rows it holds; its first span's buffer is checked
+/// against the cap as rows come, warned of once past half and stopped at
+/// the cap.
 #[test]
 fn a_start_on_the_clock_closes_at_its_span_and_holds_the_cap() {
     let rows = adcc_stream(2, 400, [0.04, 0.92, 0.0], 0.4, None, 2);
@@ -915,7 +916,7 @@ fn a_degenerate_start_begins_again() {
             }
         }
         // tried at 50, 100, 200 and 400 rows, the buffer kept
-        assert_eq!(m.restarts(), 0);
+        assert_eq!((m.refits(), m.dropped()), (4, 0));
         assert_eq!(m.stage.rows(m.cfg()), 400);
         assert!(!m.started());
         assert!(m.stage.qbar.iter().all(|v| v.is_finite()));
@@ -964,4 +965,124 @@ fn with_margins_predict_is_the_step() {
         }
     }
     assert!(ready > 300, "{ready}");
+}
+
+/// No count of tries ends a start's wait (review W13, A2): the buffer is
+/// bounded by `max_state_bytes` alone. On a null stream under a cap that
+/// holds 700 rows the buffer grows to the cap and stays there, the oldest
+/// row leaving as each new one comes, each try on rows the last did not
+/// see; it is never cleared, never past the cap and never refused, and the
+/// wait is named on every row after the first try. A stream that its first
+/// few hundred rows do not identify, at `start_rows = 100`, is identified
+/// once its buffer holds enough rows, past four times `start_rows`, where a
+/// cap of two refits once cleared it at 400 rows and began again.
+#[test]
+fn a_start_waits_on_its_evidence_bounded_by_the_cap_alone() {
+    let mut c = cfg(3, false, None);
+    c.start_rows = 100;
+    c.max_state_bytes = Some(c.stage_bytes() + 32 + 700 * c.row_bytes());
+    let null = adcc_stream(3, 6000, [0.0, 0.0, 0.0], 0.5, None, 4);
+    let mut m = Dcc::new(c.clone()).unwrap();
+    let mut most = 0;
+    for (t, z) in null.iter().enumerate() {
+        let out = m.step(&[], &ys(z), 1.0, 1.0);
+        assert!(out.pred[0].is_nan());
+        let rows = m.stage.rows(m.cfg());
+        assert!(rows >= most.min(700), "{t}: the buffer shrank to {rows}");
+        most = most.max(rows);
+        assert!(m.bytes() <= c.max_state_bytes.unwrap(), "{t}");
+        assert!(m.state_over_cap().is_none(), "{t}");
+        if t >= 99 {
+            assert!(m.no_effect() && !m.starting(), "{t}");
+        }
+    }
+    assert_eq!(most, 700);
+    // 100, 200, 400, then 700 held at 800 rows and every 700 after
+    assert_eq!(m.refits(), 3 + (6000 - 800) / 700 + 1);
+    assert_eq!(m.dropped(), 6000 - 700);
+    // the ring replays in order: the start's targets are the latest 700
+    // rows' means, in the order they came
+    let (mut ring, mut want) = (m.clone(), m.clone());
+    ring.start();
+    want.stage.buffer.rotate_left(want.stage.head * 5);
+    want.stage.head = 0;
+    want.start();
+    assert_eq!(ring.stage.qbar, want.stage.qbar);
+    assert_eq!(ring.stage.lr.to_bits(), want.stage.lr.to_bits());
+    let mut later = 0;
+    for seed in [5u64, 6, 7, 8, 9, 10] {
+        let rows = adcc_stream(3, 6000, [0.02, 0.95, 0.0], 0.5, None, seed);
+        let mut m = Dcc::new(c.clone()).unwrap();
+        let out = run(&mut m, &rows);
+        let first = out.iter().position(|p| p[0].is_finite());
+        assert!(m.started() && m.start_sound(), "{seed}: {first:?}");
+        later += usize::from(first.unwrap() > 400);
+    }
+    assert!(later > 0, "every seed started within 400 rows");
+}
+
+/// A try that is identified but short of its optimum is not withheld: the
+/// wait after it is the start's own warm-up, not `not_identified`, whatever
+/// the try before it found (review W13, A3).
+#[test]
+fn a_wait_names_its_last_try_alone() {
+    let mut m = Dcc::new(cfg(3, false, None)).unwrap();
+    m.wait(true);
+    assert!(m.no_effect() && !m.starting());
+    m.wait(false);
+    assert!(!m.no_effect() && m.starting());
+    assert_eq!(m.refits(), 2);
+}
+
+/// The estimator under a decay (review W13, A3): a start fitted on rows
+/// whose weights decay, the weight the decayed sum of the rows' (so the
+/// gain tends to its floor `1 − λ`), the information a decayed mean, and
+/// the estimate
+/// near the truth over a half-life long against the recursion's memory,
+/// in the set throughout, DCC and ADCC alike.
+#[test]
+fn the_estimate_under_a_decay_finds_the_truth() {
+    for (asym, seed) in [(false, 61u64), (true, 62)] {
+        let k = 3;
+        let truth = [0.04, 0.92, if asym { 0.04 } else { 0.0 }];
+        let rows = adcc_stream(k, 30000, truth, 0.5, None, seed);
+        let mut c = cfg(k, asym, None);
+        c.decay = Decay::Halflife(5000.0);
+        let mut m = Dcc::new(c).unwrap();
+        let mut path = Vec::new();
+        for (t, z) in rows.iter().enumerate() {
+            m.step(&[], &ys(z), 1.0, 1.0);
+            if m.started() {
+                assert!(m.persistence() <= PERSISTENCE_CAP + 1e-15);
+                assert!(m.coefficients().iter().all(|v| *v >= 0.0));
+                if t >= 20000 {
+                    path.push(m.coefficients());
+                }
+            }
+        }
+        assert!(m.started() && m.start_sound());
+        let lam = 0.5_f64.powf(1.0 / 5000.0);
+        // the weight of 30,000 unit rows by its closed form, which tends to
+        // the ceiling 1/(1 − λ) and floors the gain at 1 − λ
+        let want = (1.0 - lam.powi(30000)) / (1.0 - lam);
+        assert!(
+            (m.stage.w - want).abs() < 1e-9 * want,
+            "{} {want}",
+            m.stage.w
+        );
+        // the estimate's mean over the last 10,000 rows
+        let mean: Vec<f64> = (0..m.cfg().n_params())
+            .map(|i| path.iter().map(|p| p[i]).sum::<f64>() / path.len() as f64)
+            .collect();
+        assert!((mean[0] - truth[0]).abs() < 0.015, "{asym} {mean:?}");
+        assert!((mean[1] - truth[1]).abs() < 0.04, "{asym} {mean:?}");
+        if asym {
+            assert!((mean[2] - truth[2]).abs() < 0.03, "{mean:?}");
+        }
+        // the information is a decayed mean of the rows', positive definite
+        let p = m.cfg().n_params();
+        let mut l = vec![0.0; p * p];
+        assert!(mat::cholesky(&m.stage.h, p, &mut l));
+        assert_eq!(m.repairs(), 0);
+    }
 }

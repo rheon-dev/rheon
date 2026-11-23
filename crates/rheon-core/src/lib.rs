@@ -158,7 +158,7 @@ pub use corrchange::{
     ChangeNorm, CorrChange, CorrChangeCfg, CorrChangeKind, MAX_PERM, kolmogorov_cdf,
     kolmogorov_quantile,
 };
-pub use dcc::{DCC_MAX_REFITS, DCC_PERSISTENCE_CAP, DCC_START_ROWS, Dcc, DccCfg};
+pub use dcc::{DCC_PERSISTENCE_CAP, DCC_START_ROWS, Dcc, DccCfg};
 pub use deco::{Deco, DecoCfg, DecoDynamics};
 pub use drift::{
     Adwin, AdwinCfg, Cusum, Ddm, DriftDetector, Eddm, ErrorRate, Kswin, KswinCfg, PageHinkley,
