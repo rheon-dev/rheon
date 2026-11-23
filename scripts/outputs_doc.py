@@ -51,15 +51,6 @@ FAMILIES: dict[str, tuple[str, ...]] = {
     ),
     "Moments and correlation": (
         "ew_cov",
-        "marginal",
-        "deco",
-        "rcov",
-        "audit",
-        "garch",
-        "spectral",
-    ),
-    "Moments and correlation": (
-        "ew_cov",
         "ewm_moments",
         "pca",
         "marginal",
