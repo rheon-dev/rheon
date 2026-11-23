@@ -39,6 +39,11 @@ use rheon_polars::{Bank, RefreshCols, RefreshTime, Spec, WindowsConfig, WindowsR
 /// the registry.
 const SPECS: &[(&str, &str, &str)] = &[
     (
+        "spectral",
+        r#"{"type": "spectral", "periods": [8.0, 3.0], "scaling": "spectrum"}"#,
+        r#""targets": ["y", "x1"], "features": [], "half_life": 50.0"#,
+    ),
+    (
         "ar",
         r#"{"type": "ar", "lags": [1, 2, 4]}"#,
         r#""targets": ["y", "x1"], "features": ["x0"], "half_life": 50.0"#,

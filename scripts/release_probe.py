@@ -409,6 +409,13 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         dict(targets=["y", "z"], start_rows=50, horizon=3, group="g", **CLOCK),
         [],
     ),
+    # Each target's power at two periods.
+    (
+        "spectral",
+        "spectral",
+        dict(targets=["y", "z"], periods=[8.0, 3.0], group="g", half_life=25.0, **CLOCK),
+        [],
+    ),
     # Each target on its own lags, the features beside them.
     (
         "ar",

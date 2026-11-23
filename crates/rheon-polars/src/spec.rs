@@ -1495,6 +1495,11 @@ pub enum ModelKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_state_bytes: Option<u64>,
     },
+    /// An exponentially weighted Fourier transform of each target at the
+    /// periods given, read as scipy's periodogram (`rheon_core::Spectral`):
+    /// per target and period, the power before the row. No features.
+    #[serde(rename = "spectral")]
+    Spectral(SpectralSpec),
     /// An autoregression per target, AR(p), by exponentially weighted least
     /// squares on lags of the target the model keeps itself, with the
     /// features as exogenous regressors (`rheon_core::Ar`). Per target, the
@@ -1536,6 +1541,27 @@ pub enum ModelKind {
         #[serde(default)]
         window_budget: Option<WindowBudgetSpec>,
     },
+}
+
+/// `spectral`'s settings beside its periods.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpectralSpec {
+    /// The periods to transform at, each a span of the clock (a duration on
+    /// a temporal clock); their inverses are the frequencies.
+    pub periods: Vec<Span>,
+    /// The clock units between rows, `1/fs`; absent is 1.
+    #[serde(default)]
+    pub spacing: Option<Span>,
+    /// `"density"` (the default, scipy's) or `"spectrum"`.
+    #[serde(default)]
+    pub scaling: Option<String>,
+    /// Remove the weighted mean before the transform; absent is true.
+    #[serde(default)]
+    pub detrend: Option<bool>,
+    /// The bytes a group's state may hold.
+    #[serde(default)]
+    pub max_state_bytes: Option<u64>,
 }
 
 /// `ar`'s lags: the order `p`, for `1..=p`, or the lags themselves.
@@ -1646,6 +1672,7 @@ impl ModelKind {
         "expectile",
         "garch",
         "ar",
+        "spectral",
     ];
 
     pub fn kind_name(&self) -> &'static str {
@@ -1677,6 +1704,7 @@ impl ModelKind {
             ModelKind::Expectile { .. } => "expectile",
             ModelKind::Garch { .. } => "garch",
             ModelKind::Ar { .. } => "ar",
+            ModelKind::Spectral(_) => "spectral",
         }
     }
 
@@ -2012,6 +2040,7 @@ impl ModelKind {
                     | ModelKind::Marginal { .. }
                     | ModelKind::Hawkes { .. }
                     | ModelKind::Garch { .. }
+                    | ModelKind::Spectral(_)
             )
     }
 
@@ -2918,6 +2947,8 @@ impl Spec {
             // target predicts once its lags and features span every
             // direction, which no count of rows says.
             ModelKind::Ar { .. } => 0.0,
+            // A power is defined from the first row; nothing to wait for.
+            ModelKind::Spectral(_) => 0.0,
             // The noise gate is this model's readiness gate
             // (docs/WARMUP-AND-CONVERGENCE.md §2.1): `max_error_inflation`
             // tracks the model where a count of weight cannot, and the
@@ -3433,6 +3464,15 @@ impl Spec {
                     "spec {name:?}: garch takes no features, but features lists {}: each of \
                      its targets is a return series whose variance it models. Put the return \
                      columns in targets, and leave out features.",
+                    columns_counted(self.features.len())
+                ));
+            }
+        } else if matches!(self.model, ModelKind::Spectral(_)) {
+            if !self.features.is_empty() {
+                no.refuse(format!(
+                    "spec {name:?}: spectral takes no features, but features lists {}: each of \
+                     its targets is a series it transforms. Put the series in targets, and \
+                     leave out features.",
                     columns_counted(self.features.len())
                 ));
             }

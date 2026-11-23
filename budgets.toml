@@ -251,6 +251,9 @@ what = "garch, FIGARCH of 1,000 lags after its start: AnyModel::step_into, its O
 [instructions.ar]
 what = "ar, an AR(5) with no features: AnyModel::step_into, into one kept Step, the ring, a rank-one update of a 6 x 6 Gram and its Cholesky a row; its budget is CI's first count"
 
+[instructions.spectral]
+what = "spectral, sixteen periods on an even clock: AnyModel::step_into, into one kept Step, a rotation and an add a period a row; its budget is CI's first count"
+
 [instructions.audit_continuous]
 what = "audit, one continuous column, 256 counters: AnyModel::step_into, into one kept Step, past the cap on nearly every row"
 budget = 847018
@@ -1625,6 +1628,17 @@ withheld_reason = { budget = 1.125 }
 zscore_y = { budget = 8.125 }
 zscore_z = { budget = 8.125 }
 se_coef = { budget = 100.6623 }
+
+[memory.spectral]
+learned_clock = { budget = 8.125 }
+power_y_p0 = { budget = 8.125 }
+power_y_p1 = { budget = 8.125 }
+power_z_p0 = { budget = 8.125 }
+power_z_p1 = { budget = 8.125 }
+scored_clock = { budget = 8.0 }
+settled_frac = { budget = 8.0 }
+weight_sum = { budget = 8.0 }
+withheld_reason = { budget = 1.125 }
 
 # --- raises and sign-offs -------------------------------------------------------
 [[raised]]

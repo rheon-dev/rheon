@@ -752,6 +752,20 @@ impl Spec {
             // Every value is the model's own to check, here at the call,
             // where the state's size against its cap is known too; the
             // decay is checked with the spec's others.
+            // Its features are checked above; every value is the model's own.
+            ModelKind::Spectral(_) => {
+                no.take(
+                    crate::stream::spectral_cfg(self, rheon_core::Decay::Halflife(f64::INFINITY))
+                        .map(|_| ())
+                        .map_err(|e| {
+                            format!(
+                                "spec {:?}: {}",
+                                self.name,
+                                e.trim_start_matches("spectral: ")
+                            )
+                        }),
+                );
+            }
             ModelKind::Ar { .. } => {
                 // A late target joins the lags late: a row learned under an
                 // embargo reads lags one row back, but a row predicted reads

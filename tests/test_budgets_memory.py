@@ -330,6 +330,19 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         [],
     ),
     (
+        "spectral",
+        "spectral",
+        dict(
+            targets=["y", "z"],
+            periods=[8.0, 3.0],
+            group="g",
+            half_life=25.0,
+            emit_clocks=True,
+            **CLOCK,
+        ),
+        [],
+    ),
+    (
         "hawkes",
         "hawkes",
         dict(

@@ -265,6 +265,7 @@ pub fn coef_fields(spec: &Spec) -> Vec<CoefField> {
             | crate::ModelKind::CorrChange { .. }
             | crate::ModelKind::Bocpd { .. }
             | crate::ModelKind::Audit { .. }
+            | crate::ModelKind::Spectral(_)
     ) {
         return Vec::new();
     }
@@ -1211,6 +1212,31 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                 FieldMeta::new(format!("coef{suffix}"), "coef")
                     .decay(suffix, d)
                     .src(Source::Coef(mi)),
+            );
+        }
+        return fields;
+    }
+    // spectral: per target and period, the power read before the row, then
+    // `n_eff`; no `coef`. Its periods are named by their place in the list.
+    if let crate::ModelKind::Spectral(s) = &spec.model {
+        let n_slots = s.periods.len();
+        let mut fields = Vec::new();
+        for (mi, (suffix, d)) in decays.iter().enumerate() {
+            let base = mi * spec.targets.len() * n_slots;
+            for (t_i, t) in spec.targets.iter().enumerate() {
+                for k in 0..n_slots {
+                    fields.push(
+                        FieldMeta::new(format!("power_{t}_p{k}{suffix}"), "power")
+                            .decay(suffix, d)
+                            .target(t)
+                            .src(Source::Stat(base + t_i * n_slots + k)),
+                    );
+                }
+            }
+            fields.push(
+                FieldMeta::new(format!("weight_sum{suffix}"), "weight_sum")
+                    .decay(suffix, d)
+                    .src(Source::NEff(mi)),
             );
         }
         return fields;

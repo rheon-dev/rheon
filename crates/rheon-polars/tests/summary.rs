@@ -1120,6 +1120,14 @@ fn every_kind_refuses_or_loads_corruption(prefix_step: usize, flip_step: usize) 
             "[]",
             false,
         ),
+        // Its transforms at two periods.
+        (
+            "spectral",
+            r#"{"type": "spectral", "periods": [8.0, 3.0]}"#,
+            r#"["y"]"#,
+            "[]",
+            true,
+        ),
         // Its rings full and its fits solved.
         (
             "ar",

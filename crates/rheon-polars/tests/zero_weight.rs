@@ -177,6 +177,13 @@ impl Clock {
 /// `v` clock units ([`Clock::span`]), `#clock` the clock entry on `t` /
 /// `ts`, and `#back` the one on the clock that steps back.
 const SPECS: &[(&str, &str, &str, &[Clock])] = &[
+    // Its transform takes no row of weight 0, and its rotation no step of one.
+    (
+        "spectral",
+        r#"{"type": "spectral", "periods": [@8, @3]}"#,
+        r#""targets": ["y"], "features": [], "half_life": @50"#,
+        ALL,
+    ),
     // Its lags count learned rows: a row of weight 0 is none of them.
     (
         "ar",

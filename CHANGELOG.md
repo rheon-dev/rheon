@@ -66,6 +66,15 @@ model that only the new build has is listed as an addition and passes.
 
 ### Added
 
+- **`spectral`, the power of each target at chosen periods** (task 491):
+  an exponentially weighted Fourier transform on the clock (a row a clock
+  unit without a clock column), read as scipy's `periodogram` with the
+  decay's amplitudes as the window: `scaling` `"density"` (the default) or
+  `"spectrum"`, the weighted mean removed under `detrend`. A direct
+  transform at the periods given, `O(F)` a row, no FFT; its `sin` and
+  `cos` from the `libm` crate, the same bits on every OS. A break empties
+  the transform; the state is `8 (4F + 3)` bytes a target, held to
+  `max_state_bytes`.
 - **`ar`, an autoregression for each target** (task 486): AR(p), or any
   list of lags, by exponentially weighted least squares on lags the model
   keeps itself, with the features as exogenous regressors and the constant

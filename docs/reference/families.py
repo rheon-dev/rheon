@@ -96,7 +96,7 @@ FAMILIES: tuple[Family, ...] = (
         "covariance",
         "spec",
         tuple(
-            f"{_SPEC}.{m}" for m in ("ew_cov", "marginal", "deco", "rcov", "audit", "hmm", "garch")
+            f"{_SPEC}.{m}" for m in ("ew_cov", "marginal", "deco", "rcov", "audit", "hmm", "garch", "spectral")
         ),
     ),
     Family(

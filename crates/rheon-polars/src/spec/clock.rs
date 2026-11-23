@@ -78,6 +78,7 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
     ("glm", &["refit_span"]),
     ("garch", &["start_span"]),
     ("ar", &["window_size", "snapshot_every"]),
+    ("spectral", &["periods", "spacing"]),
 ];
 
 /// The parameters that take a duration on a temporal clock or a number that
@@ -490,6 +491,10 @@ impl Spec {
                 put(&mut out, "warm_span", warm_span.as_ref());
                 put(&mut out, "update_every", update_every.as_ref());
                 put(&mut out, "split_merge_every", split_merge_every.as_ref());
+            }
+            ModelKind::Spectral(s) => {
+                out.extend(s.periods.iter().map(|p| ("periods", p.clone())));
+                put(&mut out, "spacing", s.spacing.as_ref());
             }
             ModelKind::Ar {
                 window_size,

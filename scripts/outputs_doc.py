@@ -49,7 +49,15 @@ FAMILIES: dict[str, tuple[str, ...]] = {
         "holt",
         "ar",
     ),
-    "Moments and correlation": ("ew_cov", "marginal", "deco", "rcov", "audit", "garch"),
+    "Moments and correlation": (
+        "ew_cov",
+        "marginal",
+        "deco",
+        "rcov",
+        "audit",
+        "garch",
+        "spectral",
+    ),
     "Clustering and classification": ("kmeans", "micro", "ew_class"),
     "Sequential tests and regimes": ("seqtest", "corrchange", "bocpd", "hmm", "hawkes"),
 }
@@ -114,6 +122,10 @@ MEANING: dict[str, str] = {
         "the variance of `<t>` on this row given the rows before it, read before the row is learned"
     ),
     "std_resid_<t>": "`<t>` over the square root of its variance on this row",
+    "power_<t>_p<k>": (
+        "the power of `<t>` at the `k`-th period, scipy's periodogram of the rows before this "
+        "one with the decay's amplitudes as the window"
+    ),
     "forecast_<t>": "the variance of `<t>` `horizon - 1` rows past this one, from the same rows",
     "u": (
         "the equicorrelation this row alone implies"
@@ -203,6 +215,7 @@ ALSO_NULL: dict[str, str] = {
     "variance_<t>": "while withheld, and before the target's start is fitted",
     "std_resid_<t>": "where the variance is null, and where `<t>` is",
     "forecast_<t>": "where the variance is null",
+    "power_<t>_p<k>": "while withheld, and before the target's first row",
     "u": (
         "while withheld, where fewer than two of the block's columns have a positive variance "
         "before the row, and where every standardized value is 0"
@@ -652,6 +665,10 @@ def stem(field: str, targets: tuple[str, ...], features: tuple[str, ...]) -> str
         ):
             if base == f"{pre}_{t}":
                 return f"{pre}_<t>"
+    for t in targets:
+        rest = base.removeprefix(f"power_{t}_p")
+        if rest != base and rest.isdigit():
+            return "power_<t>_p<k>"
     for pre in ("corr", "cov", "partial_corr"):
         if base.startswith(pre + "_"):
             return f"{pre}_<a>_<b>"

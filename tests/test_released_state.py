@@ -96,6 +96,7 @@ INTRODUCED = {
     "expectile": "2.1.0",
     "garch": "2.1.0",
     "ar": "2.1.0",
+    "spectral": "2.1.0",
 }
 
 #: The workload's specs that need a parameter newer than a release, by the

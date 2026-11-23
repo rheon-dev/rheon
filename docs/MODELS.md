@@ -1,7 +1,7 @@
 <!-- kind: reference -->
 # Models
 
-The reference entry of each of the twenty-seven models a spec can name, by
+The reference entry of each of the twenty-eight models a spec can name, by
 family, for a reader who knows which model they want to look up. A
 model's parameters, their defaults and its refusals are in its docstring,
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md).
@@ -28,7 +28,7 @@ which models keep each, and why.
 
 ## The models at a glance
 
-The twenty-seven models fall into four families, and each family answers one
+The twenty-eight models fall into four families, and each family answers one
 kind of question about a stream. Each name links its builder's reference
 page, which gives its keywords and their defaults, and *entry* links its
 entry on this page. [Choose a model](how-to/choose-a-model.md) says which
@@ -56,6 +56,7 @@ to start with for which question.
 | [`deco`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.deco) · [entry](#deco--one-correlation-for-the-whole-matrix) | accumulate | one correlation for the whole matrix: Engle & Kelly's equicorrelation, or one per block and per pair of blocks |
 | [`rcov`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.rcov) · [entry](#rcov--a-blocks-realized-covariance-robust-to-noise) | accumulate | a block's realized covariance, robust to microstructure noise: the Barndorff-Nielsen–Hansen–Lunde–Shephard kernel or Christensen–Kinnebrock–Podolskij pre-averaging, reported when a group closes |
 | [`audit`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.audit) · [entry](#audit--what-a-streams-columns-hold) | accumulate | what each column holds, counted in one pass: nulls, NaNs and infinities apart, repeated values, runs, persistence, tails and duplicated columns, and the clock's duplicate stamps and gaps, read back as a table and by `bank.check()` |
+| [`spectral`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.spectral) · [entry](#spectral--how-strong-is-each-cycle) | accumulate | the power of each target at chosen periods, from an exponentially weighted Fourier transform on the clock, read as scipy's periodogram |
 | [`garch`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.garch) · [entry](#garch--how-large-will-the-next-return-be) | step | the GARCH family, a conditional variance for each return series: GARCH(1,1), GJR, EGARCH and FIGARCH, with normal, Student-t or skewed-t innovations, its parameters learned a row at a time after a start fitted by likelihood |
 | **[Clustering and classification](#clustering-and-classification)** | | put labels on rows |
 | [`kmeans`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.kmeans) · [entry](#kmeans--exponentially-weighted-k-means) | step | exponentially weighted k-means: cluster labels assigned before the row is learned from, with a split–merge move that finds a cluster born after seeding |
@@ -267,7 +268,7 @@ per target, give `min_weight` a list. The default depends on the model:
 | the feature count plus one (1 for `holt`) | `ew_cov`, `ew_class`, `kmeans`, `micro`, `holt` |
 | 3 | `marginal`, `deco` |
 | 1 | `bocpd` |
-| 0, each having a gate of its own or nothing to gate | `ewridge`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes`, `garch`, `ar` |
+| 0, each having a gate of its own or nothing to gate | `ewridge`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes`, `garch`, `ar`, `spectral` |
 
 **`min_settled_frac` is off by default.** Set it when the half-life was
 chosen to average over regimes or seasons that a shorter history would not
@@ -3030,6 +3031,85 @@ absolute deviation are numpy's while the counts are exact. Past the cap,
 they are within about 1% of the rows in rank. Each pair's correlation
 agrees with `np.corrcoef` over the rows where both columns are usable,
 within 1e-13 relative, in each group and in the pooled merge.
+
+### `spectral` — how strong is each cycle?
+
+*API:* [`rheon.spec.spectral`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.spectral) — *Rust:* [`spectral.rs`](../crates/rheon-core/src/spectral.rs) — *Outputs:* [fields](OUTPUTS.md#spectral)
+
+The power of each target at chosen periods, from an exponentially weighted
+Fourier transform on the clock, read as scipy's periodogram.
+
+Use `spectral` to watch how strong a known cycle is as the stream runs: a
+daily rhythm in a load, a weekly one in sales, a line in a vibration. Each
+row reports the power at each period before the row, under the spec's
+`half_life`. Its parameters, their defaults and what each refuses are in
+its [docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.spectral),
+and the fields it writes in [OUTPUTS.md](OUTPUTS.md#spectral). It takes no
+features.
+
+#### The update
+
+Per row of clock step `Δ`, weight `w` and target `x`, with the rotation
+`r = e^{2πi f Δ}` for each frequency `f`, the inverse of a period:
+
+```
+X ← λ·r·X + w·x        U ← λ·r·U + w
+A ← λ·A + w            B ← λ·B + w·x        Q ← λ²·Q + w²
+P = c·|X − m·U|²·spacing / Q      (density; m = B / A, the weighted mean)
+```
+
+`X` is the transform of the rows at amplitudes `w·λ^age`, referred to the
+current clock, and `U` the amplitudes' own, which removes the mean. `c` is
+2, and 1 at the zero frequency and the Nyquist. Under `scaling="spectrum"`
+the power is `c·|X − m·U|² / A²`. The `sin` and `cos` come from one
+library on every platform, so the state is the same bits everywhere. A
+session change or a gap past `gap_cap` empties the transform, since the
+phase across it is not known.
+
+#### Example
+
+**A daily cycle found in an hourly series:**
+
+```python
+import numpy as np
+import polars as pl
+from rheon import polars as rp
+
+# A cycle of 24 rows under noise of the same size.
+rng = np.random.default_rng(1)
+t = np.arange(24 * 60, dtype=float)
+y = np.sin(2 * np.pi * t / 24) + rng.standard_normal(t.size)
+pl.DataFrame({"y": y}).write_parquet("hourly.parquet")
+
+spec = rp.spec.spectral("s", targets=["y"], periods=[24.0, 10.0], half_life=float("inf"))
+out = pl.scan_parquet("hourly.parquet").rheon.fit_predict([spec]).collect()
+last = out["s"][-1]
+print(f"24 h: {last['power_y_p0']:.1f}, 10 h: {last['power_y_p1']:.1f}")
+```
+
+```text
+24 h: 684.0, 10 h: 1.4
+```
+
+The daily period's power is hundreds of times the other's.
+
+#### See also
+
+When the question is a forecast or a spread rather than a cycle:
+
+- [`ar`](#ar--an-autoregression-on-the-targets-own-past), to forecast a
+  series from its own past.
+- [`ew_cov`](#ew_cov--exponentially-weighted-moments), for a series'
+  variance rather than its cycles.
+
+#### Notes
+
+**With no decay it is scipy's `periodogram`.** On an even clock of spacing
+0.5, the power before a row equals `periodogram(x − m, fs=2, window=a,
+detrend=False)` of the rows before it to 1e-9, `a` the decay's amplitudes.
+That holds at two frequencies and the Nyquist, in both scalings, with no
+decay and under a half-life. On an uneven clock with weights, where scipy has no
+periodogram, it equals the definition written out with numpy to 1e-9.
 
 ### `garch` — how large will the next return be?
 

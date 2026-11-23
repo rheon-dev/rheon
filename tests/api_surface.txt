@@ -500,6 +500,15 @@
     coef_sum = None
     strict_binary = False
     common
+  spectral:
+    name
+    targets
+    periods
+    spacing = None
+    scaling = 'density'
+    detrend = True
+    max_state_bytes = None
+    common
 
 [resolved defaults]  # what a spec left out resolves to, read off the bank's own build of the spec shown (_rheon.resolved_defaults): a moved default is a diff here
   chunk_size = 100000
@@ -1119,6 +1128,24 @@
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
     stream.min_weight = [2.0]
+    stream.robust_se_half_life = 50.0
+    stream.specification_half_life = 50.0
+    stream.tails_half_life = 50.0
+  spectral(half_life=50.0, periods=[8.0, 3.0], targets=['y']):
+    model.decay.Halflife = 50.0
+    model.detrend = true
+    model.frequencies = [0.125, 0.333333333333]
+    model.max_state_bytes = null
+    model.min_weight = 0.0
+    model.n_targets = 1
+    model.scaling = "density"
+    model.spacing = 1.0
+    stream.breaks_half_life = 50.0
+    stream.calibration_half_life = 200.0
+    stream.feature_health_half_life = 50.0
+    stream.influence_half_life = 50.0
+    stream.max_error_inflation = "inf"
+    stream.min_weight = [0.0]
     stream.robust_se_half_life = 50.0
     stream.specification_half_life = 50.0
     stream.tails_half_life = 50.0
@@ -2404,6 +2431,14 @@
     settled_frac: f64
     withheld_reason: enum
     coef: list[f64]
+  spectral minimal:
+    power_y_p0: f64
+    power_y_p1: f64
+    power_z_p0: f64
+    power_z_p1: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
   deco blocked:
     u_a: f64
     u_b: f64
@@ -2577,6 +2612,7 @@
   rls: the shared columns only
   seqtest: the shared columns only
   sgd: the shared columns only
+  spectral: the shared columns only
   ew_cov with pca:
     spec: String
     group: String
@@ -2695,6 +2731,7 @@
   garch.vol: egarch, figarch, garch, gjr
   garch.dist: normal, skewt, t
   ar.select: aic, bic
+  spectral.scaling: density, spectrum
   ar.closed: both, right
   ar.window_budget: refuse, thin
   marginal.closed: both, right
@@ -2865,6 +2902,7 @@
     rls: coef_prior, delta
     seqtest: a, a_suffix, b, b_suffix
     sgd: clip_gradient, coef_max, coef_min, coef_sum, eps, huber_delta, huber_refit_rows, huber_refit_span, huber_scale, huber_scale_half_life, l2, learning_rate, loss, max_state_bytes, power, quantile, refit_budget, schedule, standardize, strict_binary
+    spectral: detrend, max_state_bytes, periods, scaling, spacing
 
 [cli flags]  # `rheon --help`: a flag added, renamed or removed, or one that starts or stops taking a value, is a diff here
   Usage: rheon [OPTIONS] --config <CONFIG>

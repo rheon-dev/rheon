@@ -541,6 +541,7 @@ _NO_FEATURES = {
     "seqtest": "it reads only its targets, or the residuals of the specs a and b name",
     "hawkes": "each of its targets is a node, whose values above 0 are its events",
     "garch": "each of its targets is a return series whose variance it models",
+    "spectral": "each of its targets is a series it transforms",
 }
 
 #: The parameters renamed in one builder, or whose old name another keeps
@@ -822,6 +823,7 @@ __all__ = [
     "rls",
     "seqtest",
     "sgd",
+    "spectral",
 ]
 
 
@@ -5118,12 +5120,9 @@ def deco(
 #: plumbing, and nothing residual-based applies to them. ``ew_class`` is
 #: not one -- its label column travels as the target -- though it predicts
 #: no number either, and refuses the residual switches the same way.
-# The changepoint detectors', the classifier's, the clustering models', the regimes', the realised
-# covariance's, the robust regressions', `sgd`'s and the trend's builders live in files of their own
-# (the 250 KB cap); read back here,
-# after everything they use, for `__all__`, the key tables below and
-# `rheon.spec`.
-from rheon._spec_ar import ar  # noqa: E402
+# Most builders live in files of their own (the 250 KB cap), read back here
+# after all they use, for `__all__`, the tables above and `rheon.spec`.
+from rheon._spec_ar import ar, spectral  # noqa: E402
 from rheon._spec_audit import audit  # noqa: E402
 from rheon._spec_changepoint import bocpd, corrchange  # noqa: E402
 from rheon._spec_class import ew_class  # noqa: E402

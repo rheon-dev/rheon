@@ -1,6 +1,6 @@
-"""The autoregression's builder, :func:`ar`: a part of :mod:`rheon.spec`,
-split from ``_spec.py`` to keep it under the repository's file-size cap.
-Import it from :mod:`rheon.spec`.
+"""The time-series builders, :func:`ar` and :func:`spectral`: a part of
+:mod:`rheon.spec`, split from ``_spec.py`` to keep it under the repository's
+file-size cap. Import them from :mod:`rheon.spec`.
 """
 
 from __future__ import annotations
@@ -249,3 +249,136 @@ def ar(
     if select is not None:
         model["select"] = select
     return _common(name, model, targets=targets, features=features or [], **common)
+
+
+@_checked
+def spectral(
+    name: str,
+    *,
+    targets: TargetList,
+    periods: list[float | Duration],
+    spacing: float | Duration | None = None,
+    scaling: Literal["density", "spectrum"] = "density",
+    detrend: bool = True,
+    max_state_bytes: int | None = None,
+    **common: Unpack[CommonKwargs],
+) -> dict[str, Any]:
+    """The power of each target at chosen periods, from an exponentially
+    weighted Fourier transform, read as scipy's periodogram.
+
+    Use it to watch how strong a cycle is as a stream runs: a daily rhythm in
+    a load, a weekly one in sales, a vibration's line in a sensor. Each row
+    reports, per target and period, the power before the row, under the
+    spec's ``half_life``. With no decay on an even clock it is scipy's
+    ``periodogram`` of the rows so far at those frequencies.
+
+    .. rubric:: Parameters
+
+    The stream parameters every builder takes, such as ``clock``,
+    ``half_life``, ``gap_cap``, ``weight`` and ``group``, are in
+    :mod:`rheon.spec`. A row's ``weight`` scales its amplitude in the
+    transform. A row of weight 0, or whose target is null, adds nothing; it
+    is still read. A session change or a gap past ``gap_cap`` empties the
+    transform, since the phase across it is not known.
+
+    This model's own parameters:
+
+    ``periods``
+        The periods to transform at, each in clock units, or a duration on
+        a temporal clock, at least twice ``spacing`` (the Nyquist limit).
+        Their inverses are the frequencies. Required; at most 4,096.
+    ``spacing``
+        The clock units between rows, scipy's ``1/fs``: the density's scale
+        and the place of the Nyquist frequency. Default 1, a row a clock
+        unit, which is the stream's own clock without a clock column.
+    ``scaling``
+        ``"density"``, the default and scipy's, ``|X|² spacing / Σa²``, or
+        ``"spectrum"``, ``|X|² / (Σa)²``, each doubled but at the zero
+        frequency and the Nyquist.
+    ``detrend``
+        Remove the weighted mean before the transform, as scipy's
+        ``detrend="constant"`` removes the mean. Default True.
+    ``max_state_bytes``
+        The bytes a group's state may hold: ``8 (4F + 3)`` a target for
+        ``F`` periods. Default 256 KB; at most 64 MiB.
+
+    .. rubric:: Output
+
+    One output column, named after the spec, holds a record of these fields
+    in each row. `docs/OUTPUTS.md#spectral
+    <https://github.com/rheon-dev/rheon/blob/main/docs/OUTPUTS.md#spectral>`_
+    gives each field's type and when it is null:
+
+    ``power_<t>_p<k>``
+        Per target and period, ``k`` its place in ``periods``: the power
+        before the row. Null before the target's first row.
+    ``weight_sum``
+        The weight the model has accumulated before the row and before the
+        row's own decay.
+    ``settled_frac``, ``withheld_reason``
+        As every model reports them (:mod:`rheon.spec`).
+
+    .. rubric:: Raises
+
+    As every builder does (:mod:`rheon.spec`); ``TypeError`` for
+    ``features``, which this model does not take; and ``ValueError`` naming
+    the problem for ``periods`` empty, longer than 4,096, or holding a period
+    not finite, not above 0 or below twice ``spacing``, a ``spacing`` not
+    above 0, ``scaling`` not one of its words, and a state past
+    ``max_state_bytes``.
+
+    .. rubric:: The update
+
+    Per row of clock step ``Δ``, weight ``w`` and target ``x``, with
+    ``λ = 0.5 ** (Δ / half_life)`` and, per frequency ``f``, the rotation
+    ``r = e^{2πi f Δ}``:
+
+    .. code-block:: text
+
+        X ← λ r X + w x        U ← λ r U + w
+        A ← λ A + w            B ← λ B + w x        Q ← λ² Q + w²
+        P = c |X − m U|² spacing / Q     (density; m = B / A with detrend)
+
+    ``X`` is the transform of the rows, each at amplitude ``w λ^age``,
+    referred to the current clock; ``U`` is the amplitudes' own, which
+    removes the mean. ``c`` is 2, and 1 at the zero frequency and the
+    Nyquist. The ``sin`` and ``cos`` are the same bits on every platform.
+    The cost is two of them a frequency where the clock's step changes,
+    none where it does not, and ``O(F)`` arithmetic a row.
+
+    .. rubric:: Example
+
+    This code finds a daily cycle in an hourly series:
+
+    .. code-block:: python
+
+        import numpy as np
+
+        rng = np.random.default_rng(1)
+        t = np.arange(24 * 60, dtype=float)
+        y = np.sin(2 * np.pi * t / 24) + rng.standard_normal(t.size)
+        pl.DataFrame({"y": y}).write_parquet("hourly.parquet")
+
+        spec = rp.spec.spectral("s", targets=["y"], periods=[24.0, 10.0], half_life=float("inf"))
+        out = pl.scan_parquet("hourly.parquet").rheon.fit_predict([spec]).collect()
+        last = out["s"][-1]
+        print(f"24 h: {last['power_y_p0']:.1f}, 10 h: {last['power_y_p1']:.1f}")
+
+    .. code-block:: text
+
+        24 h: 684.0, 10 h: 1.4
+
+    .. rubric:: See also
+
+    - :func:`ar`, to forecast a series from its own past.
+    - :func:`ew_cov`, for a series' variance rather than its cycles.
+    """
+    model: dict[str, Any] = {
+        "type": "spectral",
+        "periods": periods,
+        "spacing": spacing,
+        "scaling": scaling,
+        "detrend": detrend,
+        "max_state_bytes": max_state_bytes,
+    }
+    return _common(name, model, targets=targets, features=[], **common)

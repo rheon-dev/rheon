@@ -55,6 +55,9 @@ impl AnyModel {
             }
             ModelState::Garch(_) => Ok(AnyModel::Garch(Box::new(rheon_core::Garch::restore(s)?))),
             ModelState::Ar(_) => Ok(AnyModel::Ar(Box::new(rheon_core::Ar::restore(s)?))),
+            ModelState::Spectral(_) => Ok(AnyModel::Spectral(Box::new(
+                rheon_core::Spectral::restore(s)?,
+            ))),
             // A kind only rheon-core builds, such as `ew_cov`'s bare running
             // sums: its name is the code's, so the message does not print it.
             _ => Err(StateError::Invalid(format!(

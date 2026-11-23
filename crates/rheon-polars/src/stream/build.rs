@@ -775,6 +775,9 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         ModelKind::Garch { .. } => Ok(AnyModel::Garch(Box::new(rheon_core::Garch::new(
             garch_cfg(spec)?,
         )?))),
+        ModelKind::Spectral(_) => Ok(AnyModel::Spectral(Box::new(rheon_core::Spectral::new(
+            spectral_cfg(spec, decay)?,
+        )?))),
         ModelKind::Ar { .. } => {
             let mut m = rheon_core::Ar::new(ar_cfg(spec, decay)?)?;
             // Each fit's factor, which its standard errors are read from.
