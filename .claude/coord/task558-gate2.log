@@ -1,0 +1,14 @@
+gate: the extended tier, in 4 processes
+cargo fmt             OK (4 s)
+cargo clippy          OK (6 s)
+cargo test            OK (2233 s)
+uv lock               OK (0 s)
+ruff format           OK (0 s)
+ruff check            OK (0 s)
+mypy                  OK (2 s)
+maturin develop       OK (236 s)
+pytest                OK (1884 s)
+pytest serial         OK (622 s)
+sphinx                OK (18 s)
+gate: 5005 s in all
+gate: PASS (the extended tier: the full suite, the pre-push check)

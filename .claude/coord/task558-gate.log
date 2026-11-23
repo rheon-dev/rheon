@@ -1,0 +1,41 @@
+gate: the extended tier, in 4 processes
+cargo fmt             OK (4 s)
+cargo clippy          OK (55 s)
+cargo test            OK (2264 s)
+uv lock               OK (0 s)
+ruff format           OK (0 s)
+ruff check            OK (1 s)
+mypy                  OK (11 s)
+maturin develop       OK (549 s)
+pytest                FAILED (1824 s)
+pytest serial         OK (581 s)
+sphinx                OK (20 s)
+gate: 5309 s in all
+
+--- pytest ---
+    tests/test_second_opinion_hmm.py::TestTheLimitIsBaumWelch::test_one_seed
+      /home/user/rheon/.venv/lib/python3.13/site-packages/hmmlearn/utils.py:27: DeprecationWarning: Setting the shape on a NumPy array has been deprecated in NumPy 2.5.
+      As an alternative, you can create a new view using np.reshape (with copy=False if needed).
+        a_sum.shape = shape
+    
+    tests/test_second_opinion_garch.py::test_the_wait_is_arch_likelihood_ratio_test_on_twenty_seeds
+      /home/user/rheon/tests/test_second_opinion_garch.py:559: ConvergenceWarning: The optimizer returned code 9. The message is:
+      Iteration limit reached
+      See scipy.optimize.fmin_slsqp for code meaning.
+      
+        res = full.fit(disp="off", options={"maxiter": 1000})
+    
+    -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+    =========================== short test summary info ============================
+    SKIPPED [6] tests/test_regimes_doc.py:110: REGIMES.md is generated on macOS; another libm may move a third decimal
+    SKIPPED [1] tests/public_benchmarks.py:86: offline: could not download the LIBSVM set regression/abalone (HTTP Error 502: Bad Gateway)
+    SKIPPED [2] tests/test_portability.py:736: the \\?\ prefix is a Windows spelling
+    SKIPPED [1] tests/test_exception_types.py:645: a folder's write bit stops no one on Windows, and nothing for root: there the call is the filesystem's, and Windows' PermissionError is the folder case
+    SKIPPED [1] tests/test_exception_types.py:888: a file's read bit stops no one on Windows, and nothing for root: there is no unreadable file to make without another account; Windows' folder case is above
+    FAILED tests/test_doc_structure.py::test_every_tracked_document_keeps_its_structure
+    FAILED tests/test_doc_structure.py::test_every_document_under_docs_has_a_row_in_the_index
+    FAILED tests/test_mutants_report.py::test_every_equivalent_still_finds_its_line
+    FAILED tests/test_mutants_report.py::test_every_tolerated_entry_still_finds_its_line_and_column
+    FAILED tests/test_writing_checks.py::test_writing_ratchet_toml_holds[messages]
+    5 failed, 17522 passed, 11 skipped, 1384 warnings in 1821.02s (0:30:21)
+gate: FAIL (pytest) (the extended tier: the full suite, the pre-push check)
