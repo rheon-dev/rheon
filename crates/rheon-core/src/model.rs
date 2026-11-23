@@ -90,6 +90,7 @@ pub enum ModelState {
     Hawkes(Box<crate::Hawkes>),
     Expectile(Box<crate::Expectile>),
     Garch(Box<crate::Garch>),
+    EwmMoments(Box<crate::EwmMoments>),
 }
 
 #[derive(Debug, Error)]
@@ -212,6 +213,7 @@ impl ModelState {
             ModelState::Hawkes(_) => "hawkes",
             ModelState::Expectile(_) => "expectile",
             ModelState::Garch(_) => "garch",
+            ModelState::EwmMoments(_) => "ewm_moments",
         }
     }
 }

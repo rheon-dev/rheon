@@ -2592,7 +2592,63 @@ pub fn all() -> Vec<Case> {
             Targets::Linear(2),
             40
         ),
+        // Every kind of term to order 6, and the unbiased forms to order 4:
+        // the central moments of orders 2 to 6 and all three of `r_2`, `r_3`
+        // and `r_4`.
+        case!(
+            "ewm_moments",
+            "EwmMoments",
+            EwmMoments,
+            EwmMoments::new(ewm_moments_cfg(true)).unwrap(),
+            1,
+            Targets::None,
+            40
+        ),
+        // The plug-in terms alone: Kish's `r_2` and no other.
+        case!(
+            "ewm_moments_plugin",
+            "EwmMoments",
+            EwmMoments,
+            EwmMoments::new(ewm_moments_cfg(false)).unwrap(),
+            1,
+            Targets::None,
+            40
+        ),
     ]
+}
+
+/// `ewm_moments` of the first feature: plug-in central, standardized,
+/// cumulant and raw terms to order 6, and with `unbiased` the unbiased
+/// central moments, cumulants and skew and kurtosis to order 4.
+fn ewm_moments_cfg(unbiased: bool) -> EwmMomentsCfg {
+    let term = |name: &str, order, kind, bias| MomentTerm {
+        name: name.to_owned(),
+        order,
+        kind,
+        bias,
+    };
+    let mut terms = vec![
+        term("var", 2, MomentKind::Central, true),
+        term("skew", 3, MomentKind::Standardized, true),
+        term("kurt", 4, MomentKind::Standardized, true),
+        term("m6", 6, MomentKind::Central, true),
+        term("k5", 5, MomentKind::Cumulant, true),
+        term("raw3", 3, MomentKind::Raw, true),
+    ];
+    if unbiased {
+        terms.extend([
+            term("var_u", 2, MomentKind::Central, false),
+            term("skew_u", 3, MomentKind::Standardized, false),
+            term("kurt_u", 4, MomentKind::Standardized, false),
+            term("k4_u", 4, MomentKind::Cumulant, false),
+        ]);
+    }
+    EwmMomentsCfg {
+        decay: decay(),
+        terms,
+        min_weight: 2.0,
+        max_state_bytes: None,
+    }
 }
 
 /// An upper `expectile` of two targets under decay, its first rows' refit
