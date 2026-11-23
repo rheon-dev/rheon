@@ -1495,11 +1495,6 @@ pub enum ModelKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_state_bytes: Option<u64>,
     },
-    /// An exponentially weighted Fourier transform of each target at the
-    /// periods given, read as scipy's periodogram (`rheon_core::Spectral`):
-    /// per target and period, the power before the row. No features.
-    #[serde(rename = "spectral")]
-    Spectral(SpectralSpec),
     /// An autoregression per target, AR(p), by exponentially weighted least
     /// squares on lags of the target the model keeps itself, with the
     /// features as exogenous regressors (`rheon_core::Ar`). Per target, the
@@ -1541,6 +1536,11 @@ pub enum ModelKind {
         #[serde(default)]
         window_budget: Option<WindowBudgetSpec>,
     },
+    /// An exponentially weighted Fourier transform of each target at the
+    /// periods given, read as scipy's periodogram (`rheon_core::Spectral`):
+    /// per target and period, the power before the row. No features.
+    #[serde(rename = "spectral")]
+    Spectral(SpectralSpec),
 }
 
 /// `spectral`'s settings beside its periods.
@@ -1548,8 +1548,9 @@ pub enum ModelKind {
 #[serde(deny_unknown_fields)]
 pub struct SpectralSpec {
     /// The periods to transform at, each a span of the clock (a duration on
-    /// a temporal clock); their inverses are the frequencies.
-    pub periods: Vec<Span>,
+    /// a temporal clock); their inverses are the frequencies. One period
+    /// may be given alone.
+    pub periods: SpanList,
     /// The clock units between rows, `1/fs`; absent is 1.
     #[serde(default)]
     pub spacing: Option<Span>,

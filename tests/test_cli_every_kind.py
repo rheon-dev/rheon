@@ -758,7 +758,8 @@ CASES: list[Case] = [
         "spectral",
         "spectral",
         {
-            **STREAM,
+            # No coefficients, so no coefficient cadence.
+            **{k: v for k, v in STREAM.items() if k != "max_rows_between_coefs"},
             **CLOSE,
             "targets": ["y", "x0"],
             "periods": [8.0, 3.0],
@@ -770,7 +771,12 @@ CASES: list[Case] = [
     Case(
         "spectral_spectrum",
         "spectral",
-        {**STREAM2, "targets": ["y"], "periods": [6.0], "scaling": "spectrum"},
+        {
+            **{k: v for k, v in STREAM2.items() if k != "coef_every"},
+            "targets": ["y"],
+            "periods": [6.0],
+            "scaling": "spectrum",
+        },
     ),
     # Each target a return series; no half-life (the recursion is per
     # observation), so no gate on settling toward one either.

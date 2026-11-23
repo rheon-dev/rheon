@@ -215,6 +215,7 @@ pub fn spectral_cfg(
     let mut no = rheon_core::Refusals::new();
     let frequencies = s
         .periods
+        .spans()
         .iter()
         .map(|p| {
             let v = p.value();

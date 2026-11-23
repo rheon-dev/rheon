@@ -493,7 +493,7 @@ impl Spec {
                 put(&mut out, "split_merge_every", split_merge_every.as_ref());
             }
             ModelKind::Spectral(s) => {
-                out.extend(s.periods.iter().map(|p| ("periods", p.clone())));
+                out.extend(s.periods.spans().iter().map(|p| ("periods", p.clone())));
                 put(&mut out, "spacing", s.spacing.as_ref());
             }
             ModelKind::Ar {

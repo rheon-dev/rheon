@@ -1219,7 +1219,7 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
     // spectral: per target and period, the power read before the row, then
     // `n_eff`; no `coef`. Its periods are named by their place in the list.
     if let crate::ModelKind::Spectral(s) = &spec.model {
-        let n_slots = s.periods.len();
+        let n_slots = s.periods.spans().len();
         let mut fields = Vec::new();
         for (mi, (suffix, d)) in decays.iter().enumerate() {
             let base = mi * spec.targets.len() * n_slots;
