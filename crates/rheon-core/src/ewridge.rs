@@ -2076,8 +2076,21 @@ impl EwRidge {
         {
             return true;
         }
-        let (sizes, _) = self.error_sizes();
-        for (j, &size) in sizes.iter().enumerate().take(m) {
+        // Under pairwise gaps the sizes are each target's own, a list made
+        // per read; otherwise each is the Gram's, read in place, so a row's
+        // gate allocates nothing.
+        let pairwise = self.cfg.target_gaps == TargetGaps::Pairwise;
+        let own = if pairwise {
+            self.error_sizes().0
+        } else {
+            Vec::new()
+        };
+        let live = (!pairwise).then(|| self.gram_kish());
+        for j in 0..m {
+            let size = match &live {
+                Some(kish) => kish.of(self.acc.grams.of[j]),
+                None => own.get(j).copied().flatten(),
+            };
             let Some(n) = size else {
                 continue;
             };
