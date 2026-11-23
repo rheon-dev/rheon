@@ -258,8 +258,18 @@ def _logistic(spec: dict | None) -> bool:
 
 def _binary(binary: bool | None, spec: dict | None) -> bool:
     """``binary`` as given, or read from the spec when ``None``: on for a
-    logistic fit, off without a spec, where the loss cannot be known."""
-    return _logistic(spec) if binary is None else binary
+    logistic fit, off without a spec, where the loss cannot be known. A
+    string is refused: ``"false"`` is a non-empty string, which Python reads
+    as true, and scored a regression as a classifier."""
+    if binary is not None and not isinstance(binary, (bool, numbers.Integral)):
+        if type(binary).__name__ != "bool_":
+            msg = (
+                f"rp.eval: binary must be True, False or None, but it is {binary!r}. Give "
+                "True for a 0/1 target scored as a probability, False for a regression, or "
+                "None to read it from the spec."
+            )
+            raise WrongTypeError(msg)
+    return _logistic(spec) if binary is None else bool(binary)
 
 
 def _pred_fields(who: str, df: pl.DataFrame, spec_name: str) -> list[str]:
@@ -2744,6 +2754,18 @@ def seqtest(
             raise ValueError(msg)
         signs = {t: pl.col(t) for t in targets}
         names = ("log_e_pos", "log_e_neg", "n_pos", "n_neg")
+    if (
+        isinstance(min_weight, bool)
+        or not isinstance(min_weight, numbers.Real)
+        or not (math.isfinite(min_weight) and min_weight >= 0.0)
+    ):
+        # NaN nulled every output, and -5 and `True` were taken.
+        msg = (
+            f"{who}: min_weight must be a finite number of at least 0, but it is "
+            f"{min_weight!r}. Give the weight a key's sums must reach before its test reads, "
+            "such as the default 0."
+        )
+        raise ValueError(msg)
     test = _SeqTest(signs, names, keys, min_weight, name)
     if isinstance(df, pl.LazyFrame):
         # A column-mode target the query lacks is Polars' own refusal, here

@@ -540,3 +540,27 @@ def test_the_kind_column_says_what_each_row_is(tmp_path):
     ranked = table.filter(pl.col("rank").is_not_null() | pl.col("folds_chosen").is_not_null())
     assert set(ranked["kind"]) == {"candidate"}
     assert table.filter(kind="candidate")["folds_chosen"].sum() == 4  # two spans, two targets
+
+
+def test_the_selected_and_averaged_fields_move_no_candidates_score():
+    """A grid's candidates are scored on the rows where every candidate of
+    the target has a prediction. ``emit_selected`` and ``emit_averaged``,
+    scored beside them, are null until a slot is chosen, and counted among
+    the candidates they cut the common rows and moved each candidate's
+    error, count and rank (review 2026-11-23, PY-15 (1))."""
+    rng = np.random.default_rng(15)
+    n = 400
+    x0, x1 = rng.standard_normal((2, n))
+    df = pl.DataFrame({"x0": x0, "x1": x1, "y": x0 - 0.5 * x1 + rng.standard_normal(n)})
+
+    def table(**kw):
+        spec = rp.spec.ewridge(
+            "m", targets=["y"], features=["x0", "x1"], half_life=[10.0, 40.0, 160.0], **kw
+        )
+        t = rp.eval.grid_search(df, spec, n_splits=4)
+        return t.filter(kind="candidate").sort("half_life")
+
+    plain = table()
+    both = table(emit_selected=True, emit_averaged=True)
+    for col in ("mse", "n", "rank"):
+        assert both[col].to_list() == plain[col].to_list(), col

@@ -901,6 +901,11 @@ model that only the new build has is listed as an addition and passes.
   `every=None` raised Python's own comparison error; and
   `seqtest(targets="ret")` read the columns `r`, `e` and `t`. Each is now a
   `WrongTypeError` or `ValueError` naming the argument.
+- **`rp.eval.seqtest` checks `min_weight`, and the scores refuse `binary`
+  given as a string** (review 2026-11-23, PY-15). `min_weight=nan` nulled
+  every output and -5 or `True` were taken; `binary="false"`, a non-empty
+  string, read as true and scored a regression as a classifier. Each is
+  refused by name.
 - **A window looking ahead whose far edge is the input's last row is whole
   at the end of the input** (PLAN 565). Under `closed="right"` or `"both"`,
   `rp.ewm_sum`, `rp.ewm_mean`, `rp.ewm_rate` and `rp.ewm_quantile` with

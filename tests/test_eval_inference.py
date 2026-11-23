@@ -375,3 +375,23 @@ def test_seqtest_refuses_targets_given_as_one_string():
     df = pl.DataFrame({"ret": np.linspace(-1.0, 1.0, 50)})
     with pytest.raises((ValueError, TypeError), match="targets"):
         rp.eval.seqtest(df, targets="ret")
+
+
+@pytest.mark.parametrize("bad", [float("nan"), -5.0, True, "1"])
+def test_seqtest_refuses_a_min_weight_that_is_no_weight(bad):
+    """``min_weight=nan`` nulled every output, and -5 or ``True`` were taken
+    (review 2026-11-23, PY-15 (2))."""
+    df = pl.DataFrame({"ret": np.linspace(-1.0, 1.0, 50)})
+    with pytest.raises((ValueError, TypeError), match="min_weight"):
+        rp.eval.seqtest(df, targets=["ret"], min_weight=bad)
+
+
+@pytest.mark.parametrize("call", ["metrics", "sums"])
+def test_binary_given_as_a_string_is_refused(call):
+    """``binary="false"`` is a non-empty string, which Python reads as true:
+    the scores were a classifier's (review 2026-11-23, PY-15 (3))."""
+    df = pl.DataFrame({"y": [0.0, 1.0, 1.0, 0.0]}).with_columns(
+        m=pl.struct(pl.Series("pred_y", [0.2, 0.7, 0.9, 0.4]))
+    )
+    with pytest.raises(TypeError, match="binary"):
+        getattr(rp.eval, call)(df, "m", binary="false")
