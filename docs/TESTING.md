@@ -388,7 +388,7 @@ pure-noise targets checks the same thing from the other side
 `tests/test_properties.py`.
 
 **Fixed numbers.** Each model has one golden stream in the Rust core
-(`crates/rheon-core/tests/golden.rs`). The whole pipeline, from reading the columns through the models and
+(`crates/rheon-core/tests/golden.rs`; the models that look for structure also have one on a stream that has it, `golden_structured.rs`). The whole pipeline, from reading the columns through the models and
 the diagnostics to assembling each spec's output, is pinned to fixed output
 and compared on every operating system (`tests/test_golden_pipeline.py`). So a divergence in Polars'
 vectorized paths on another CPU would show.

@@ -260,6 +260,23 @@ pub enum Targets {
     /// `n` positive targets: each linear target squared, plus 0.1 -- a
     /// Gamma or Tweedie amount for `glm`.
     Positive(usize),
+    /// `n` Gamma draws of shape 4 at a mean linear in the features
+    /// (`(2 + 0.8 x0 - 0.4 x1) (1 + j)`, positive on this stream): the
+    /// target `glm` is fitted to, drawn from its family. The draw is a sum
+    /// of eight squared normals over 8 times the mean, from the generator
+    /// alone.
+    GammaDraw(usize),
+    /// `n` series with a trend on the clock: `10 (1 + j) + (0.5 + 0.25 j) t`
+    /// plus noise of about 0.3, `t` the clock the row stands at (a gap
+    /// moves the line by its length), so a model with a trend has one to
+    /// find.
+    Trending(usize),
+    /// `n` nodes of a discrete-time self-exciting process: node `j` has an
+    /// event on a row with probability `0.1 + 0.25 R_j + 0.05 R_other`
+    /// (at most 0.9), `R` each node's events before the row decayed by 0.6 a
+    /// row, so an event makes the next few likelier. A value of 1 is an
+    /// event and of 0 none.
+    Excited(usize),
     /// One 0/1 target.
     Binary,
     /// One class label in `0..n`.
@@ -378,6 +395,14 @@ fn lcg(s: &mut u64) -> f64 {
     ((*s >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0
 }
 
+/// A standard normal to within the central limit theorem's reach: the sum
+/// of six uniforms on [-1, 1] has variance 2, so it over the root of 2. Sums
+/// and one correctly rounded square root, so the same bits on every
+/// platform.
+fn gauss(s: &mut u64) -> f64 {
+    (0..6).map(|_| lcg(s)).sum::<f64>() / 2f64.sqrt()
+}
+
 impl Case {
     /// The case's whole stream: `before` rows, then the continuation. A clock
     /// gap, a null target, a zero weight and weights other than 1 among
@@ -408,6 +433,7 @@ impl Case {
                 .collect(),
             _ => Vec::new(),
         };
+        let (mut clock, mut excitation) = (0.0, [0.0f64; 2]);
         (0..n)
             .map(|i| {
                 let shift = if (i / 12) % 2 == 1 { 2.0 } else { 0.0 };
@@ -417,7 +443,43 @@ impl Case {
                 let signal = 1.5 * x0 - 0.75 * x1 + 0.25;
                 let noise = 0.1 * lcg(&mut s);
                 let null = i % 11 == 7;
+                let d = match i {
+                    0 => 0.0,
+                    _ if i % 23 == 13 => 9.0,
+                    _ => 1.0,
+                };
+                clock += d;
                 let y = match self.targets {
+                    Targets::GammaDraw(t) => (0..t)
+                        .map(|j| {
+                            let mean = (2.0 + 0.8 * x0 - 0.4 * x1) * (1.0 + j as f64);
+                            let chi: f64 = (0..8).map(|_| gauss(&mut s).powi(2)).sum();
+                            (!null).then_some(mean * chi / 8.0)
+                        })
+                        .collect(),
+                    Targets::Trending(t) => (0..t)
+                        .map(|j| {
+                            let level = 10.0 * (1.0 + j as f64);
+                            let slope = 0.5 + 0.25 * j as f64;
+                            (!null).then_some(level + slope * clock + 5.0 * noise)
+                        })
+                        .collect(),
+                    Targets::Excited(t) => {
+                        let before = excitation;
+                        let events: Vec<bool> = (0..t)
+                            .map(|j| {
+                                let other = if t > 1 { before[(j + 1) % t] } else { 0.0 };
+                                let p = (0.1 + 0.25 * before[j] + 0.05 * other).min(0.9);
+                                (lcg(&mut s) + 1.0) / 2.0 < p && !null
+                            })
+                            .collect();
+                        for (j, e) in events.iter().enumerate() {
+                            excitation[j] = 0.6 * before[j] + f64::from(u8::from(*e));
+                        }
+                        (0..t)
+                            .map(|j| (!null).then_some(f64::from(u8::from(events[j]))))
+                            .collect()
+                    }
                     Targets::Linear(t) => (0..t)
                         .map(|j| (!null).then_some(signal * (1.0 + j as f64) + noise - j as f64))
                         .collect(),
@@ -451,11 +513,6 @@ impl Case {
                         series[i].iter().map(|v| (!null).then_some(*v)).collect()
                     }
                     Targets::Garch(..) => returns.iter().map(|r| (!null).then_some(r[i])).collect(),
-                };
-                let d = match i {
-                    0 => 0.0,
-                    _ if i % 23 == 13 => 9.0,
-                    _ => 1.0,
                 };
                 let w = match i % 9 {
                     4 => 0.0,
@@ -1769,6 +1826,17 @@ pub fn all() -> Vec<Case> {
             Targets::Positive(2),
             40
         ),
+        // Gamma amounts drawn from the family at a log-linear mean, saved
+        // after each target's refit ran: a fit with a dispersion to learn.
+        case!(
+            "glm_gamma_draws",
+            "Glm",
+            Glm,
+            Glm::new(glm_cfg(15)).unwrap(),
+            K,
+            Targets::GammaDraw(2),
+            120
+        ),
         // No refit: a Tweedie fit at p = 1.5 held to the step cap.
         case!(
             "glm_cap",
@@ -1804,6 +1872,24 @@ pub fn all() -> Vec<Case> {
         ),
         // Without decay, the weighted line fit alone (schema 64, docs/PLAN.md
         // task 278, D-H): its weight, mean age and spread per target.
+        // A series with a trend, as `holt` is for: the level and the slope
+        // the clock carries, a gap moving the line by its length.
+        case!(
+            "holt_trending",
+            "Holt",
+            Holt,
+            Holt::new(HoltCfg {
+                n_targets: 2,
+                level_half_life: H,
+                trend_half_life: 4.0 * H,
+                min_weight: 3.0,
+                trend: true,
+            })
+            .unwrap(),
+            0,
+            Targets::Trending(2),
+            80
+        ),
         case!(
             "holt_inf",
             "Holt",
@@ -2512,6 +2598,17 @@ pub fn all() -> Vec<Case> {
             K,
             Targets::Linear(2),
             40
+        ),
+        // Events that excite each other, as the process is for: sparse
+        // rows, runs of events after an event, both nodes.
+        case!(
+            "hawkes_excited",
+            "Hawkes",
+            Hawkes,
+            Hawkes::new(hawkes_cfg(None)).unwrap(),
+            K,
+            Targets::Excited(2),
+            120
         ),
         // In a window of six rows with an event, saved with rows in both
         // blocks: the older block's offsets, marks and forward sums, the
