@@ -798,6 +798,16 @@ model that only the new build has is listed as an addition and passes.
   summary is read at a row of weight 1. The step's cancellation itself,
   and the same step in the conformal band's mean weight, are not changed
   in this release.
+- **`calibration_wald` under a horizon is read about the predictions' own
+  mean** (review 2026-11-23, DIAG-2). Its Newey-West covariance was moved
+  from the frame its sums are kept in to the predictions' own units before
+  it was solved, which multiplied its condition by the square of the
+  predictions' level over their spread: a target at `1e6` read the test
+  `3.9e-5` off statsmodels', and one at `1e8` read 0.722 where the test is
+  0.593 (or null, where the covariance did not factorize). A test of every
+  coefficient, as the calibration's is, now reads the distance in that
+  frame, where it is statsmodels' HAC kernel to `1e-6` at both levels.
+  Elsewhere it moves the test by rounding. Moves: `*.calibration_wald_*`.
 - **A window looking ahead whose far edge is the input's last row is whole
   at the end of the input** (PLAN 565). Under `closed="right"` or `"both"`,
   `rp.ewm_sum`, `rp.ewm_mean`, `rp.ewm_rate` and `rp.ewm_quantile` with

@@ -270,7 +270,7 @@ impl Sandwich {
     /// factorize: fewer rows than coefficients, or a feature with no spread.
     pub fn covariance(&self, idx: &[usize], hac: bool) -> Option<Vec<f64>> {
         with_cov(idx.len() + usize::from(self.intercept), |sc| {
-            self.covariance_in(sc, idx, hac)?;
+            self.covariance_in(sc, idx, hac, false)?;
             Some(sc.out.clone())
         })
     }
@@ -279,8 +279,16 @@ impl Sandwich {
     /// is written over one the thread kept, the lag sums are read where
     /// they lie rather than picked out into a matrix each, and the bread's
     /// factor serves both solves. The arithmetic is that of the allocating
-    /// form, operation for operation.
-    fn covariance_in(&self, sc: &mut CovScratch, idx: &[usize], hac: bool) -> Option<()> {
+    /// form, operation for operation. `centred` leaves the intercept about
+    /// the features' origin, the frame the sums are kept in, rather than
+    /// moving it to the features' own units.
+    fn covariance_in(
+        &self,
+        sc: &mut CovScratch,
+        idx: &[usize],
+        hac: bool,
+        centred: bool,
+    ) -> Option<()> {
         let d = self.dim();
         let off = usize::from(self.intercept);
         let CovScratch {
@@ -347,7 +355,7 @@ impl Sandwich {
             let (i, j) = (n / p, n % p);
             0.5 * (v[j * p + i] + v[i * p + j])
         }));
-        if self.intercept {
+        if self.intercept && !centred {
             // The intercept in the features' own units is `β₀ − c'β_x`:
             // `T V T'` with `T = [[1, −c'], [0, I]]`.
             c.clear();
@@ -380,7 +388,7 @@ impl Sandwich {
         let off = usize::from(self.intercept);
         let p = idx.len() + off;
         with_cov(p, |sc| {
-            self.covariance_in(sc, idx, hac)?;
+            self.covariance_in(sc, idx, hac, false)?;
             let v = &sc.out;
             let mut out = vec![f64::NAN; self.k + off];
             // A rounding below 0 is 0, but a NaN variance stays NaN:
@@ -401,14 +409,48 @@ impl Sandwich {
     /// distance `d` of their estimates from the null, `V` the covariance
     /// with Newey and West's lags (`hac`). `None` where the covariance is
     /// not there, or its part over `pick` does not factorize.
+    ///
+    /// A test of every coefficient, the intercept among them, is read in
+    /// the frame the sums are kept in, about the features' origin `c`:
+    /// with `T = [[1, −c'], [0, I]]` taking it to the features' own units,
+    /// `d' (T V_c T')⁻¹ d = (T⁻¹ d)' V_c⁻¹ (T⁻¹ d)`, `T⁻¹ d = [d₀ + c'd_x,
+    /// d_x]`. `T V_c T'` grows the covariance's condition by the square of
+    /// the features' level over their spread: a calibration of predictions
+    /// at `1e8` with a spread of 1 did not factorize, and read `None` where
+    /// the test is 37.5.
     pub fn wald(&self, idx: &[usize], hac: bool, pick: &[usize], d: &[f64]) -> Option<f64> {
         let p = idx.len() + usize::from(self.intercept);
+        let every = self.intercept
+            && pick.len() == p
+            && pick.iter().enumerate().all(|(i, &j)| i == j);
         with_cov(p, |sc| {
-            self.covariance_in(sc, idx, hac)?;
+            self.covariance_in(sc, idx, hac, every)?;
             let q = pick.len();
             if q == 0 || d.len() != q || pick.iter().any(|&i| i >= p) {
                 return None;
             }
+            // `T⁻¹ d`, on the stack for the calibration's two coefficients
+            // and the few a test of every one has.
+            let (mut short, mut long) = ([0.0f64; 8], Vec::new());
+            let d = if every {
+                let shifted = d[0]
+                    + idx
+                        .iter()
+                        .zip(&d[1..])
+                        .map(|(&i, &di)| self.origin.get(i).copied().unwrap_or(0.0) * di)
+                        .sum::<f64>();
+                let into: &mut [f64] = if q <= short.len() {
+                    &mut short[..q]
+                } else {
+                    long.resize(q, 0.0);
+                    &mut long
+                };
+                into[0] = shifted;
+                into[1..].copy_from_slice(&d[1..]);
+                &*into
+            } else {
+                d
+            };
             let CovScratch {
                 solves,
                 out,
@@ -826,6 +868,10 @@ mod tests {
     /// twice, each lag sum picked out.
     impl Sandwich {
         fn covariance_alloc(&self, idx: &[usize], hac: bool) -> Option<Vec<f64>> {
+            self.covariance_alloc_in(idx, hac, false)
+        }
+
+        fn covariance_alloc_in(&self, idx: &[usize], hac: bool, centred: bool) -> Option<Vec<f64>> {
             let d = self.dim();
             let off = usize::from(self.intercept);
             let pos: Vec<usize> = (0..off).chain(idx.iter().map(|&i| i + off)).collect();
@@ -867,7 +913,7 @@ mod tests {
                     0.5 * (v[j * p + i] + v[i * p + j])
                 })
                 .collect();
-            if self.intercept {
+            if self.intercept && !centred {
                 // The intercept in the features' own units is `β₀ − c'β_x`:
                 // `T V T'` with `T = [[1, −c'], [0, I]]`.
                 let c: Vec<f64> = std::iter::once(0.0)
@@ -891,12 +937,27 @@ mod tests {
         }
 
         fn wald_alloc(&self, idx: &[usize], hac: bool, pick: &[usize], d: &[f64]) -> Option<f64> {
-            let v = self.covariance_alloc(idx, hac)?;
             let p = idx.len() + usize::from(self.intercept);
+            // A test of every coefficient reads the frame the sums are kept
+            // in, `d` moved there by `T⁻¹`.
+            let every = self.intercept && pick.iter().copied().eq(0..p);
+            let v = self.covariance_alloc_in(idx, hac, every)?;
             let q = pick.len();
             if q == 0 || d.len() != q || pick.iter().any(|&i| i >= p) {
                 return None;
             }
+            let moved: Vec<f64>;
+            let d = if every {
+                let c0: f64 = idx
+                    .iter()
+                    .zip(&d[1..])
+                    .map(|(&i, &di)| self.origin.get(i).copied().unwrap_or(0.0) * di)
+                    .sum();
+                moved = std::iter::once(d[0] + c0).chain(d[1..].iter().copied()).collect();
+                &moved[..]
+            } else {
+                d
+            };
             let v = &v;
             let sub: Vec<f64> = pick
                 .iter()
