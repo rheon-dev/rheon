@@ -801,14 +801,17 @@ alike"""
 file = "crates/rheon-core/src/robust.rs"
 function = "Robust::band_scales_into"
 mutation = "replace + with *"
-line_has = "crate::variance_is_usable(var, cov.raw(i + 1, i + 1))"
-why = """as `EwRidge::solve_centred`'s: both mutants are inside the second \
-argument, which `variance_is_usable` ignores; `cov.raw(i * 1, ..)` is still \
-in range. The line moved here from `Robust::solve_centred` (task 160, TC1b), \
-then from `Robust::band_system`, which tested a copy of the Gram, and \
-into `Robust::band_scales_into` with the solves' kept lists (task 297); the \
-first argument, `var`, is read on the line above, whose mutants three tests \
-catch (task 170)"""
+line_has = "let (v, raw) = (cov.cov(i + 1, i + 1), cov.raw(i + 1, i + 1));"
+columns = [70, 77]
+why = """as `EwRidge::solve_centred`'s: both mutants are inside `raw`'s \
+indices, and `raw` is read only as `variance_is_usable`'s second argument, \
+which it ignores; `cov.raw(i * 1, ..)` is still in range. The line moved here \
+from `Robust::solve_centred` (task 160, TC1b), then from \
+`Robust::band_system`, which tested a copy of the Gram, and into \
+`Robust::band_scales_into` with the solves' kept lists (task 297); REG-18 \
+(task 578g) bound `v` and `raw` on one line, so `columns` names `raw`'s two \
+`+` and leaves `v`'s, the first argument, whose mutants three tests catch \
+(task 170)"""
 
 [[equivalent]]
 file = "crates/rheon-core/src/robust.rs"
@@ -3666,16 +3669,6 @@ line_has = "Decay::Lam(l) => l < 1.0 && d_clock * l.log2() < -1.0,"
 columns = [32]
 why = """at `l = 1`, `log2(l)` is 0, so `d_clock · 0 < −1` is false (a NaN for an \
 infinite `d_clock`, also false): the `&&` returns false there either way"""
-
-[[equivalent]]
-file = "crates/rheon-core/src/warmup.rs"
-function = "Warmup::row_weight"
-mutation = "replace > with >="
-line_has = "if self.w > 0.0 && self.w2 > 0.0 {"
-columns = [19]
-why = """`w` is a sum of weights, none below 0 (a model refuses a negative weight \
-before its scaler), so `w = 0` means every weight was 0 and `w2 = 0` with it, and \
-the second test returns 1 there as the first does"""
 
 [[equivalent]]
 file = "crates/rheon-core/src/lasso.rs"
