@@ -128,7 +128,7 @@ impl EwCovDiag {
         Self {
             k,
             w_sum: cov.w_sum,
-            q_sum: cov.q_sum,
+            q_sum: cov.q_sum(),
             prior_scale: cov.prior_scale,
             m: cov.m.clone(),
             v: (0..k).map(|i| cov.c.get(k, i, i)).collect(),

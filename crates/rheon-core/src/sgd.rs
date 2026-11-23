@@ -620,20 +620,22 @@ const WAKE_SPREADS: f64 = 8.0;
 pub(crate) struct Level {
     w: f64,
     w2: f64,
+    /// `w2`'s power of two, `Σw² = w2 · 4^w2_scale` ([`crate::sqsum`]): 0,
+    /// and not written, while the weights square to doubles; at weights of
+    /// `1e-200` the squares were 0 and the level never warmed (review
+    /// 2026-11-23, REG-12). Schema 72; last, for the compact encoding.
+    #[serde(default, skip_serializing_if = "crate::sqsum::is_zero")]
+    w2_scale: i32,
 }
 
 impl Level {
     fn learn(&mut self, weight: f64) {
         self.w += weight;
-        self.w2 += weight * weight;
+        crate::sqsum::add(&mut self.w2, &mut self.w2_scale, 1.0, weight);
     }
 
     fn count(&self) -> f64 {
-        if self.w2 > 0.0 {
-            self.w * self.w / self.w2
-        } else {
-            0.0
-        }
+        crate::sqsum::count(self.w, self.w2, self.w2_scale).unwrap_or(0.0)
     }
 }
 
@@ -1130,7 +1132,9 @@ impl TryFrom<SgdV3> for Sgd {
                     .into(),
             );
         }
-        if level.len() != scales(keeps_level(&cfg)) {
+        if level.len() != scales(keeps_level(&cfg))
+            || !level.iter().all(|l| crate::sqsum::scale_fits(l.w2_scale))
+        {
             return Err(
                 "sgd: part of its saved fit does not match its settings. Load an \
                         undamaged copy of the state file, or rebuild it from its input."

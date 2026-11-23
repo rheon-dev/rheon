@@ -1228,3 +1228,32 @@ class TestTheDocstringsMeasuredClaims:
         sub = pg.solve(pg.subset(g, [pg.INTERCEPT, "x0", "x2"]), ridge=0.1)
         assert narrow.shape == (4,) and narrow[2] == 0.0
         assert narrow[[0, 1, 3]] == pytest.approx(sub, rel=1e-12)
+
+
+class TestMath6:
+    """Review 2026-11-23, MATH-6 (4) and (5)."""
+
+    def test_a_subset_of_a_gram_with_no_targets_has_the_subsets_width(self):
+        """(4): with no targets ``cross_moments`` is ``0 x k``, its size 0,
+        and the subset kept it as it was, ``k`` columns wide beside a
+        subset of fewer."""
+        df, _ = stream(n=200, k=3, seed=4)
+        g = dict(fit(df).gram("m")[0])
+        k = len(g["columns"])
+        g["targets"] = []
+        for key in ("cross_moments", "means_by_target", "cross_centered"):
+            g[key] = np.zeros((0, k))
+        for key in ("target_weights", "target_means", "target_vars", "target_n_kish"):
+            g[key] = np.zeros(0)
+        narrow = pg.subset(g, ["intercept", "x1"])
+        assert np.asarray(narrow["cross_moments"]).shape == (0, 2)
+
+    @pytest.mark.parametrize("bad", [True, 1.0, 0.5])
+    def test_a_subsets_position_is_a_whole_number(self, bad):
+        """(5): ``int(i)`` took ``True`` as 1 and ``0.5`` as 0, so a subset
+        written by mistake fitted some other Gram."""
+        df, _ = stream(n=400, k=2, seed=5)
+        grams = [fit(df.head(200)).gram("m")[0], fit(df.tail(200)).gram("m")[0]]
+        with pytest.raises(TypeError, match=r"a subset's positions must be whole numbers"):
+            pg.solve_subsets(grams, [[0, bad]])
+        assert len(pg.solve_subsets(grams, [[np.int64(0), 1]])) == 1

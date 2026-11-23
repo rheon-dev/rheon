@@ -265,6 +265,36 @@ fn restore_scaled_audit(s: &State) -> Result<Box<dyn Run>, String> {
         .map_err(|e| e.to_string())
 }
 
+/// A model fed every weight times `2^-664`: weights whose squares are not
+/// doubles, so the Kish sums keep a power of two of their own (review
+/// 2026-11-23, REG-12; `sqsum`), and the fixture writes each exponent. A
+/// power of two, so the stream is the case's own at another scale.
+struct TinyWeights<M>(M);
+
+/// `2^-664`.
+const TINY_WEIGHT: f64 = 1.306_420_176_630_260_4e-200;
+
+impl<M: OnlineModel> Run for TinyWeights<M> {
+    fn step(&mut self, r: &Row) -> Out {
+        let s = self.0.step(&r.x, &r.y, r.d, r.w * TINY_WEIGHT);
+        Out {
+            pred: s.pred,
+            n_eff: s.n_eff,
+            extra: Vec::new(),
+        }
+    }
+
+    fn state(&self) -> State {
+        self.0.state()
+    }
+}
+
+fn restore_tiny<M: OnlineModel + 'static>(s: &State) -> Result<Box<dyn Run>, String> {
+    M::restore(s)
+        .map(|m| Box::new(TinyWeights(m)) as Box<dyn Run>)
+        .map_err(|e| e.to_string())
+}
+
 fn restore_accumulator(s: &State) -> Result<Box<dyn Run>, String> {
     check_schema(s).map_err(|e| e.to_string())?;
     match &s.model {
@@ -1098,6 +1128,66 @@ pub fn all() -> Vec<Case> {
             Targets::Linear(2),
             43
         ),
+        // Weights whose squares are not doubles (schema 72, review
+        // 2026-11-23, REG-12): each Kish sum's exponent, written.
+        Case {
+            name: "ewridge_tiny_weights",
+            variant: "EwRidge",
+            build: || {
+                Box::new(TinyWeights(
+                    EwRidge::new(EwRidgeCfg {
+                        min_weight: 0.0,
+                        ..ewridge_cfg()
+                    })
+                    .unwrap(),
+                ))
+            },
+            restore: restore_tiny::<EwRidge>,
+            n_features: K,
+            targets: Targets::Linear(2),
+            before: 40,
+        },
+        Case {
+            name: "rls_tiny_weights",
+            variant: "Rls",
+            build: || {
+                Box::new(TinyWeights(
+                    Rls::new(RlsCfg {
+                        n_features: K,
+                        n_targets: 2,
+                        fit_intercept: true,
+                        decay: decay(),
+                        delta: 1e-200,
+                        coef_prior: None,
+                        min_weight: 0.0,
+                    })
+                    .unwrap(),
+                ))
+            },
+            restore: restore_tiny::<Rls>,
+            n_features: K,
+            targets: Targets::Linear(2),
+            before: 40,
+        },
+        Case {
+            name: "sgd_tiny_weights",
+            variant: "Sgd",
+            build: || {
+                Box::new(TinyWeights(
+                    Sgd::new(SgdCfg {
+                        target_spread: true,
+                        min_weight_holds_learning: false,
+                        min_weight: 0.0,
+                        ..sgd_cfg(SgdLoss::Squared, 2)
+                    })
+                    .unwrap(),
+                ))
+            },
+            restore: restore_tiny::<Sgd>,
+            n_features: K,
+            targets: Targets::Linear(2),
+            before: 40,
+        },
         case!(
             "rls",
             "Rls",

@@ -1238,7 +1238,10 @@ def subset(g: Gram, columns: Sequence[str | int]) -> Gram:
         "comoments": como[np.ix_(idx, idx)][np.triu_indices(len(idx))]
         if _is_packed(np, g)
         else como[np.ix_(idx, idx)],
-        "cross_moments": cross[:, idx] if cross.size else cross,
+        # By shape, not size: with no targets it is `0 x k`, of size 0,
+        # and kept whole it was `k` wide beside the subset (review
+        # 2026-11-23, MATH-6).
+        "cross_moments": cross[:, idx] if cross.ndim == 2 else cross,
         "means_by_target": by_target[:, idx]
         if by_target is not None and by_target.ndim == 2
         else by_target,
@@ -2566,7 +2569,15 @@ def solve_subsets(
             raise ValueError(msg)
     picked: list[list[int]] = []
     for s in subsets:
-        idx = [int(i) for i in s]
+        # Whole numbers: `int` took `True` as 1 and `0.5` as 0 (review
+        # 2026-11-23, MATH-6).
+        if any(isinstance(i, bool) or not isinstance(i, numbers.Integral) for i in s):
+            msg = (
+                f"{who}: a subset's positions must be whole numbers, but subset {list(s)!r} "
+                "holds one that is not. Name Grams by their position in grams, such as 0 or 1."
+            )
+            raise WrongTypeError(msg)
+        idx = [operator.index(i) for i in s]
         if not idx:
             msg = (
                 f"{who}: each subset must name at least one Gram, but one is empty. Give each "

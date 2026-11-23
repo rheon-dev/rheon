@@ -540,3 +540,36 @@ fn a_sum_on_features_near_the_smallest_doubles_holds() {
         assert!((b[1] + b[2] - 1.0).abs() < 1e-12, "row {i}: {b:?}");
     }
 }
+
+/// Weights too small to square in a double count as rows (review
+/// 2026-11-23, REG-12): the warm-up's and the level's Kish counts are
+/// `(Σw)² / Σw²`, and at weights of `2^-664` each `w²` was 0, so both
+/// counts stayed 0: the scaler never switched and the level never warmed.
+/// Every weight times `2^-664` now counts as at unit weights, to the bit,
+/// and the switch comes on the same row. (A weight is also a step size
+/// here, `tests/test_weight_scale.py`, so the fits themselves part: at
+/// such weights AdaGrad's epsilon outweighs every gradient, and the review's
+/// 0.9 quantile held at the mean is that, not the count.)
+#[test]
+fn weights_too_small_to_square_count_as_rows() {
+    let run = |scale: f64| {
+        let mut c = cfg(1, 0.05, LearningRate::AdaGrad);
+        c.loss = SgdLoss::Quantile { tau: 0.9 };
+        let mut m = Sgd::new(c).unwrap();
+        let mut r = Rng(9);
+        (0..60)
+            .map(|_| {
+                let y = 1.0 + r.n();
+                m.step(&[r.n()], &[Some(y)], 1.0, scale * (0.5 + r.u()));
+                (
+                    m.warmup().switched(),
+                    m.warmup().count().to_bits(),
+                    m.level[0].count().to_bits(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let (unit, tiny) = (run(1.0), run(crate::sqsum::ldexp(1.0, -664)));
+    assert_eq!(unit, tiny);
+    assert!(tiny.last().is_some_and(|t| t.0), "the scaler switched");
+}

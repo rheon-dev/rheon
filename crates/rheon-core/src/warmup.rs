@@ -81,6 +81,11 @@ pub struct Warmup {
     w2: f64,
     /// Whether the count has reached [`WARMUP_ROWS`].
     switched: bool,
+    /// `w2`'s power of two, `Σ w² = w2 · 4^w2_scale` ([`crate::sqsum`]):
+    /// 0, and not written, while the weights square to doubles. Schema 72;
+    /// last, for the compact encoding.
+    #[serde(default, skip_serializing_if = "crate::sqsum::is_zero")]
+    w2_scale: i32,
 }
 
 /// The wire layout, checked on the way in: two sums no row can make
@@ -90,13 +95,20 @@ struct WarmupWire {
     w: f64,
     w2: f64,
     switched: bool,
+    #[serde(default)]
+    w2_scale: i32,
 }
 
 impl TryFrom<WarmupWire> for Warmup {
     type Error = String;
 
     fn try_from(v: WarmupWire) -> Result<Self, String> {
-        if !(v.w.is_finite() && v.w >= 0.0 && v.w2.is_finite() && v.w2 >= 0.0) {
+        if !(v.w.is_finite()
+            && v.w >= 0.0
+            && v.w2.is_finite()
+            && v.w2 >= 0.0
+            && crate::sqsum::scale_fits(v.w2_scale))
+        {
             return Err(format!(
                 "warm-up: its saved weight sums must be finite and at least 0, but they are {} \
                  and {}. Load an undamaged copy of the state file, or rebuild it from its input.",
@@ -107,20 +119,19 @@ impl TryFrom<WarmupWire> for Warmup {
             w: v.w,
             w2: v.w2,
             switched: v.switched,
+            w2_scale: v.w2_scale,
         })
     }
 }
 
 impl Warmup {
     /// Kish's count of the rows the scaler has learned, `(Σ w)² / Σ w²`:
-    /// 0 before any row of positive weight, and where the weights are so
-    /// small that their squares underflow.
+    /// 0 before any row of positive weight. The squares are kept at a power
+    /// of two of their own ([`crate::sqsum`]), so weights too small to
+    /// square in a double count as rows (review 2026-11-23, REG-12): at
+    /// `1e-200` the count was 0 for good and the fit never switched.
     pub fn count(&self) -> f64 {
-        if self.w2 > 0.0 {
-            self.w * self.w / self.w2
-        } else {
-            0.0
-        }
+        crate::sqsum::count(self.w, self.w2, self.w2_scale).unwrap_or(0.0)
     }
 
     /// Whether the count has reached [`WARMUP_ROWS`]: from the row after
@@ -139,11 +150,7 @@ impl Warmup {
     /// so that a stream whose weights are all scaled by `c` is read as the
     /// unscaled one (`sgd.rs`, `scaler_decay`; review fable2, C1's rule A).
     pub(crate) fn row_weight(&self) -> f64 {
-        if self.w > 0.0 && self.w2 > 0.0 {
-            self.w2 / self.w
-        } else {
-            1.0
-        }
+        crate::sqsum::per_weight(self.w, self.w2, self.w2_scale).unwrap_or(1.0)
     }
 
     /// The weight a row is read at against the moments that include it,
@@ -186,7 +193,7 @@ impl Warmup {
             return false;
         }
         self.w += weight;
-        self.w2 += weight * weight;
+        crate::sqsum::add(&mut self.w2, &mut self.w2_scale, 1.0, weight);
         self.switched = self.count() >= WARMUP_ROWS;
         self.switched
     }
@@ -230,23 +237,29 @@ mod tests {
 
     /// Weights whose squares underflow count for nothing, and nothing is
     /// not 0/0.
+    /// Weights too small to square in a double count as rows (review
+    /// 2026-11-23, REG-12): the count and one row's weight at every weight
+    /// `2^-664` are those at weight 1, the count to the bit and the weight
+    /// times `2^-664`, where the plain sum of squares was 0, the count 0 and
+    /// the switch never came.
     #[test]
-    fn weights_too_small_to_square_count_nothing() {
-        let mut w = Warmup::default();
-        assert_eq!(w.count(), 0.0);
-        for _ in 0..100 {
-            assert!(!w.learn(1e-200));
+    fn weights_too_small_to_square_count_as_rows() {
+        let tiny = crate::sqsum::ldexp(1.0, -664);
+        let (mut a, mut b) = (Warmup::default(), Warmup::default());
+        for i in 0..21 {
+            let w = 0.5 + 0.1 * f64::from(i % 5);
+            assert_eq!(a.learn(w), b.learn(w * tiny), "row {i}");
+            assert_eq!(a.count().to_bits(), b.count().to_bits(), "row {i}");
+            assert_eq!(b.row_weight().to_bits(), (a.row_weight() * tiny).to_bits());
         }
-        assert_eq!(w.count(), 0.0);
-        // The history holds weight but its squares are 0: one row's weight is
-        // not 0 / 1e-198, it is the 1 of a scaler with nothing to weigh by.
-        assert!(w.w > 0.0 && w.w2 == 0.0);
-        assert_eq!(w.row_weight(), 1.0);
+        let mut n = 21;
+        while !b.learn(tiny) {
+            n += 1;
+        }
+        assert!(n < 30 && b.switched(), "{n}");
         assert_eq!(Warmup::default().row_weight(), 1.0);
     }
 
-    /// One row's weight is `Σw² / Σw`: 1 at unit weights, and the stream's
-    /// own unit where its weights are scaled.
     #[test]
     fn a_rows_weight_is_the_ratio_of_the_sums() {
         let mut w = Warmup::default();
@@ -286,7 +299,15 @@ mod tests {
             w: 3.0,
             w2: 5.0,
             switched: false,
+            w2_scale: 0,
         };
+        // An exponent no weight in the doubles makes is refused too.
+        let far = rmp_serde::to_vec_named(&Warmup {
+            w2_scale: 5000,
+            ..good.clone()
+        })
+        .unwrap();
+        assert!(rmp_serde::from_slice::<Warmup>(&far).is_err());
         let back: Warmup = rmp_serde::from_slice(&rmp_serde::to_vec_named(&good).unwrap()).unwrap();
         assert_eq!(back, good);
     }

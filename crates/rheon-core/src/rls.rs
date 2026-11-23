@@ -206,6 +206,13 @@ pub struct Rls {
     zbuf: Vec<f64>,
     #[serde(skip)]
     ybuf: Vec<f64>,
+    /// `s2`'s power of two, `s₂ = s2 · 4^s2_scale` ([`crate::sqsum`]): 0,
+    /// and not written, while the weights square to doubles; at weights of
+    /// `1e-200` the squares were 0 and the Kish ratio absent for good
+    /// (review 2026-11-23, REG-12). Schema 72; last, for the compact
+    /// encoding.
+    #[serde(default, skip_serializing_if = "crate::sqsum::is_zero")]
+    s2_scale: i32,
 }
 
 /// Where row `i` of the packed upper triangle of a `k x k` factor starts,
@@ -554,6 +561,7 @@ impl Rls {
             seen: false,
             zbuf: vec![0.0; k],
             ybuf: vec![0.0; cfg.n_targets],
+            s2_scale: 0,
             cfg,
         })
     }
@@ -659,7 +667,7 @@ impl Rls {
     /// doc): `None` before it has learned one.
     fn kish_ratio(&self) -> Option<f64> {
         let s1 = self.w_target.first().copied().unwrap_or(0.0);
-        (self.s2 > 0.0 && s1 > 0.0).then(|| self.s2 / s1)
+        crate::sqsum::per_weight(s1, self.s2, self.s2_scale)
     }
 }
 
@@ -766,7 +774,8 @@ impl OnlineModel for Rls {
         crate::model::age_target_weights(&mut self.w_target, |_| learns, lam, weight);
         // Kish's squared-weight sum, on the rows the fit learns (the module
         // doc): decayed by `λ²` on every row, as the weights by `λ`.
-        self.s2 = lam * lam * self.s2 + if learns { weight * weight } else { 0.0 };
+        let w = if learns { weight } else { 0.0 };
+        crate::sqsum::add(&mut self.s2, &mut self.s2_scale, lam * lam, w);
 
         // ---- update (only when every target is present) ----
         if learns {
@@ -852,7 +861,7 @@ impl OnlineModel for Rls {
                 }
                 // A sum of squared weights is finite and not negative; one
                 // that is not reads Kish's size as NaN or below zero.
-                if !(m.s2.is_finite() && m.s2 >= 0.0) {
+                if !(m.s2.is_finite() && m.s2 >= 0.0 && crate::sqsum::scale_fits(m.s2_scale)) {
                     return Err(crate::model::damaged(
                         "rls",
                         format!(
@@ -884,6 +893,40 @@ impl OnlineModel for Rls {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Kish's ratio `s₂ / s₁` at weights too small to square in a double
+    /// (review 2026-11-23, REG-12): at every weight times `2^-664` it is
+    /// the unit stream's times `2^-664`, to the bit, where the sum of squares
+    /// was 0 and the ratio, the error inflation and `se_coef` absent.
+    #[test]
+    fn the_kish_ratio_holds_at_weights_too_small_to_square() {
+        use crate::OnlineModel;
+        let tiny = crate::sqsum::ldexp(1.0, -664);
+        let run = |scale: f64| {
+            let mut m = Rls::new(RlsCfg {
+                n_features: 1,
+                n_targets: 1,
+                fit_intercept: true,
+                decay: Decay::Halflife(20.0),
+                delta: 1e-3,
+                coef_prior: None,
+                min_weight: 0.0,
+            })
+            .unwrap();
+            for i in 0..50 {
+                let x = f64::from(i % 7) - 3.0;
+                m.step(
+                    &[x],
+                    &[Some(0.5 * x + 1.0)],
+                    1.0,
+                    scale * (1.0 + f64::from(i % 3)),
+                );
+            }
+            m.kish_ratio()
+        };
+        let (unit, small) = (run(1.0).unwrap(), run(tiny).expect("a ratio"));
+        assert_eq!(small.to_bits(), (unit * tiny).to_bits());
+    }
     use crate::oracle::CanonBits;
 
     /// A state whose vectors are not the cfg's is refused, where it loaded
@@ -1236,7 +1279,8 @@ mod tests {
         m.w_sum = lam * m.w_sum + weight;
         let learns = weight > 0.0 && y.iter().all(Option::is_some);
         crate::model::age_target_weights(&mut m.w_target, |_| learns, lam, weight);
-        m.s2 = lam * lam * m.s2 + if learns { weight * weight } else { 0.0 };
+        let w = if learns { weight } else { 0.0 };
+        crate::sqsum::add(&mut m.s2, &mut m.s2_scale, lam * lam, w);
         let root = (lam != 1.0).then(|| lam.sqrt());
         let mut r = square::unpack(&m.r, k);
         if learns {

@@ -891,6 +891,43 @@ model that only the new build has is listed as an addition and passes.
   decay too.
   Terms whose powers sum to 2 (`[2]`, `[1, 1]`) do not move. Moves:
   `power_variation.*`.
+- **Weights too small to square in a double count as rows** (review
+  2026-11-23, REG-12). Kish's count `(Σw)² / Σw²` is the same at every
+  scale of the weights, but below about `1.5·10^-154` each `w²` was 0.
+  `sgd`'s and `pa`'s warm-up then never switched, `sgd`'s level never
+  warmed, `rls`'s Kish ratio (and with it `se_coef` and the error
+  inflation) was absent, and every accumulator's Kish size, which
+  standard errors divide by, was absent too. Each sum of squared weights
+  is now kept beside a power of two of its own, and a row's weight enters
+  it at that scale. While the weights square to doubles the exponent is 0
+  and every operation is the plain one, to the bit. A state writes no
+  exponent then, so its bytes are as before; one at such weights writes
+  `w2_scale` or `s2_scale` beside its sum, or an accumulator's `q_sum` as
+  `[q, s]`. Moves: `sgd.*`,
+  `pa.*`, `rls.*`, `ewridge.*`, `lasso.*`, `ew_cov.*`.
+
+- **Five edge cases of `rheon.corr` and `rheon.gram`** (review 2026-11-23,
+  MATH-6). `corr.mp_edge` and `corr.mp_density` refuse a count `n` or `m`
+  that is not finite; NaN passed the check and gave NaN edges.
+  `corr.absorption` and `corr.spectral` read a matrix's symmetric part:
+  the eigensolvers read the lower triangle alone, so the upper half of a
+  matrix whose halves differ went unread. `corr.from_blocks` names the
+  pair that fails its symmetry check where one side is NaN; it named
+  another pair that matched. `gram.subset` of a Gram with no targets gives
+  `cross_moments` the subset's width. `gram.solve_subsets` refuses a
+  position that is not a whole number, where `True` read as 1 and `0.5`
+  as 0.
+
+- **`ewridge` under `target_gaps="pairwise"` reads each target's errors at
+  its own rows** (review 2026-11-23, REG-13). Its slopes solve the Gram
+  of every row against the target's cross-moments over the rows it is
+  present on, so their variance is the noise over those rows' Kish size,
+  and its intercept is centred at those rows' column means. `se_coef`, the
+  error inflation and the row's leverage read the Gram's size and means
+  instead. A target present on a quarter of the rows had standard errors
+  half the size of least squares' on its rows (statsmodels' WLS on the
+  pairwise-complete rows); they now agree within the sampling gap between
+  the two Grams. `"own_rows"` does not move. Moves: `ewridge.*`.
 
 - **`rheon.gram.merge` takes nothing from a part with no weight on a
   target** (review 2026-11-23, MATH-3). The merge weights each part's

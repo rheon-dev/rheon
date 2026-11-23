@@ -6329,3 +6329,46 @@ fn a_weighted_square_past_the_largest_double_leaves_sigma2_finite() {
     let sig2 = m.sigma2();
     assert!(sig2[0].is_finite() && sig2[0] > 0.0, "{sig2:?}");
 }
+
+/// Under `target_gaps="pairwise"` a target's coefficient variances are read
+/// at the Kish size of its own rows and its own column means (review
+/// 2026-11-23, REG-13): against the same target under `"own_rows"`, whose
+/// Gram is over exactly its rows, they agree to the sampling gap between
+/// the Gram of every row and the Gram of the target's (a few percent at
+/// 2,000 rows), where they read a quarter of it at the Gram's size.
+#[test]
+fn pairwise_errors_are_read_at_the_targets_own_rows() {
+    let mut s = 41u64;
+    let mut u = || {
+        s = s
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        ((s >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0
+    };
+    let rows: Vec<([f64; 2], [Option<f64>; 2])> = (0..8000)
+        .map(|_| {
+            let x = [1.5 + u(), -0.5 + u()];
+            let y = 0.5 + x[0] - 2.0 * x[1] + u();
+            let seen = u() < -0.5;
+            ([x[0], x[1]], [seen.then_some(y), Some(y + u())])
+        })
+        .collect();
+    let vars = |gaps: TargetGaps| {
+        let mut c = cfg(2, 2);
+        c.target_gaps = gaps;
+        c.min_weight = 5.0;
+        let mut m = EwRidge::new(c).unwrap();
+        m.set_keep_factor(true);
+        for (x, y) in &rows {
+            m.step(x, y, 1.0, 1.0);
+        }
+        match m.coef_variance() {
+            Some(crate::CoefVariance::PerNoise(v)) => v[0].clone(),
+            other => panic!("{other:?}"),
+        }
+    };
+    let (pair, own) = (vars(TargetGaps::Pairwise), vars(TargetGaps::OwnRows));
+    for (p, o) in pair.iter().zip(&own) {
+        assert!((p / o - 1.0).abs() < 0.08, "{pair:?} against {own:?}");
+    }
+}
