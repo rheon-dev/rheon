@@ -27,6 +27,9 @@ fn cfg() -> CorrChangeCfg {
         monitor_rows: 0,
         boundary_gamma: 0.0,
         permute_every: None,
+        span_clock: None,
+        monitor_clock: None,
+        max_state_bytes: None,
     }
 }
 

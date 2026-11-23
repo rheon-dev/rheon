@@ -40,7 +40,7 @@ import numpy as np
 import polars as pl
 import pytest
 from hmmlearn.hmm import GaussianHMM
-from scipy.special import logsumexp
+from scipy.special import logsumexp, zeta
 from scipy.stats import kstwobign, multivariate_normal
 from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
 from statsmodels.tsa.regime_switching.markov_regression import MarkovRegression
@@ -699,8 +699,15 @@ class TestBocpdIsThePackagesAtEveryPrecisionPrior:
 # --- corrchange's monitor quantile against scipy -----------------------------------------
 
 
+#: The grid term the ``monitor`` kind takes off the quantile, ``-zeta(1/2) /
+#: sqrt(2 pi) / sqrt(T)`` at a span of ``T`` rows (scipy's ``zeta``): its
+#: statistic is a maximum over the span's rows, the quantile a supremum's.
+GRID_SHIFT = -float(zeta(0.5)) / np.sqrt(2.0 * np.pi)
+
+
 def monitor_crit(alpha: float, k: int = 2, alpha_adjust: str = "none") -> float:
-    """The critical value a ``monitor`` span of 8 rows reports where it closes."""
+    """The Kolmogorov quantile a ``monitor`` span of 8 rows reads where it
+    closes: its reported critical value, the grid term added back."""
     rng = np.random.default_rng(0)
     features = [f"x{i}" for i in range(k)]
     x = rng.standard_normal((8, k))
@@ -708,7 +715,8 @@ def monitor_crit(alpha: float, k: int = 2, alpha_adjust: str = "none") -> float:
         "c", features=features, window_rows=8, alpha=alpha, alpha_adjust=alpha_adjust
     )
     frame = pl.DataFrame({f: x[:, i] for i, f in enumerate(features)})
-    return rp.ModelBank([spec]).fit_predict(frame)["c"].struct.field("crit")[7]
+    crit = rp.ModelBank([spec]).fit_predict(frame)["c"].struct.field("crit")[7]
+    return crit + GRID_SHIFT / np.sqrt(8.0)
 
 
 #: The levels from the end at which the model leaves the bisection on ``1 -
@@ -749,7 +757,9 @@ def crit_over_bound(alpha: float, k: int = 2, alpha_adjust: str = "none") -> flo
         solved = (np.pi**2 / (2.0 * want**2) + 5.0) * U * (1.0 - level) / density
     else:
         solved = 4.0 * U / density
-    bound = solved + U * want + 1e-14 * want
+    # The grid term taken off and added back rounds twice at the quantile's
+    # scale: two units of rounding more.
+    bound = solved + 3.0 * U * want + 1e-14 * want
     return abs(monitor_crit(alpha, k, alpha_adjust) - want) / bound
 
 

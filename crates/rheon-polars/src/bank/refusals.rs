@@ -43,6 +43,10 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
             max_state_bytes: Some(_),
             ..
         }
+        | ModelKind::CorrChange {
+            max_state_bytes: Some(_),
+            ..
+        }
         | ModelKind::Garch {
             max_state_bytes: Some(_),
             ..
@@ -93,6 +97,13 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
             } => (
                 format!("the rows inside window_size = {w}"),
                 "Shorten window_size",
+            ),
+            ModelKind::CorrChange {
+                window_size: Some(w),
+                ..
+            } => (
+                format!("the rows inside window_size = {w}"),
+                "Shorten window_size, or give window_rows",
             ),
             ModelKind::Garch {
                 start_span: Some(s),

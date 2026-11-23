@@ -659,3 +659,44 @@ run of first rows and numbers after it, and `withheld_reason`
 `below_warm_rows` on that run and the release's value after. No bank
 fixture of `rheon-polars` holds a `deco`. The current fixtures `deco`,
 `deco_linear` and `deco_warming` of `rheon-core` are the ratio's.
+
+A twenty-seventh, the user's (2026-11-22, PLAN 553: "Switch to the new
+statistics", asked whether a state saved before keeps the papers'
+statistics or switches; the twenty-sixth is `deco`'s, on its own branch):
+`corrchange`'s `monitor` is the linear CUSUM `max_j |Σ_{t≤j} ξ_t|/(√T·D̂)`
+against the Kolmogorov quantile less `0.5826/√T`, a pair's flag withheld
+where the same CUSUM of `x̃² − ỹ²` passes it too, and its `sequential`
+detector compares the monitored rows' correlation with the history's on
+Fisher's scale, `((k − 3)/√(m − 3))·|atanh ρ̂_k − atanh ρ̂_h|·(1 − ρ̂_h²)/D̂`,
+its critical value at `(K − 3)/(m − 3)`. No layout changed and there is no
+schema bump: the state holds no number either old statistic computed (a
+span's rows, a history's rows or its correlation and long-run deviation, the
+monitored rows and their sums), so a state of schema 61 to 71 loads as it
+was, re-saves the same bytes, and goes on under the new statistics from its
+first row after the load. What it keeps of the old statistics is where they
+flagged: `since_flag` counts from the last flag the old statistic made, and a
+`sequential` cycle in progress began at the row after an old flag (or an old
+period's end), so it monitors the rows of that cycle against that history
+with the new detector, where this build from the same rows would be in
+another cycle. The outputs from the load on are as this build computes them
+from the state: `stat`, `crit`, `flag`, `since_change` and, after the next
+flag, `since_flag`; under `monitor` a state goes on exactly as this build
+from the same rows wherever the two statistics flagged alike before the
+save. No loader is needed or could do more: the rows before an old flag are
+not in the state. The kept sets `v61/` to `v71/` of `corrchange_monitor` and
+`corrchange_sequential` are held by `NEW_STATISTICS`
+(`crates/rheon-core/tests/state_fixtures.rs`): no span of the monitor's rows
+flagged under either statistic before its save, so a kept `monitor` state
+converts to the current fixture's bytes exactly and goes on to the current
+fixture's frozen continuation to the bit; a kept `sequential` state (the old
+detector flagged 8 learned rows before the save, the new one 19) saves bytes
+that load back to the same and goes on with its frozen continuation's
+`weight_sum` to the bit, its reports the new detector's over the old cycle.
+The current fixtures `corrchange_monitor` and `corrchange_sequential`
+regenerated (`corrchange_window` and `corrchange_permute_every` did not
+move). A release's own file of `corrchange` (`tests/test_released_state.py`,
+the probe's `monitor` over spans of 40 rows, every release from 1.0.0 to
+2.0.0) is held by `NEW_STATISTICS` there: it goes on as this build goes on
+from both halves, every field to the bit but `since_flag`; its release's own
+continuation differs in `stat` from the first span closed after the load
+(row 89: 0.704 against the release's 0.849).

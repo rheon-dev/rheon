@@ -562,8 +562,8 @@ model: covered 0.904 of the targets, half-width 1.56
 fixed: covered 0.895 of the targets, half-width 3.39
 break test: 0 flags before row 10000, the first after it at row 10474
 flags before any change: 0
-correlation changed at row 5000: flagged at row 5110
-correlation changed at row 10000: flagged at row 10098
+correlation changed at row 5000: flagged at row 5109
+correlation changed at row 10000: flagged at row 10072
 correlation changed at row 15000: flagged at row 15056
 ```
 

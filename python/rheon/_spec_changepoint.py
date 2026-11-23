@@ -544,6 +544,9 @@ def corrchange(
     monitor_rows: int | None = None,
     boundary_gamma: float | None = None,
     permute_every: float | Duration | None = None,
+    window_size: float | Duration | None = None,
+    monitor_span: float | Duration | None = None,
+    max_state_bytes: int | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Tests of whether the correlations between the feature columns have changed, by
@@ -573,9 +576,31 @@ def corrchange(
     ``kind``
         ``"monitor"`` (the default), ``"sequential"`` or ``"window"``.
     ``window_rows``
-        Required by every kind: the span ``"monitor"`` tests (at least 8),
-        the history ``"sequential"`` monitors against (at least 8), or each
-        of ``"window"``'s two windows (at least 3).
+        A count of rows, required by every kind unless ``window_size`` is
+        given: the span ``"monitor"`` tests (at least 8), the history
+        ``"sequential"`` monitors against (at least 8), or each of
+        ``"window"``'s two windows (at least 3).
+    ``window_size``
+        ``window_rows`` on the clock, in its place: a number of the clock's
+        units (rows where the spec has no clock) or a duration such as
+        ``"5m"`` on a temporal clock, above 0. A ``"monitor"`` span and a
+        ``"sequential"`` history begin at their first row and end at the
+        first row at least ``window_size`` after it, which is their last; on
+        a clock of one unit a row, ``window_size = n`` is ``window_rows = n +
+        1``, to the bit. ``"window"``'s two windows are the rows of ``(t -
+        2 window_size, t - window_size]`` and ``(t - window_size, t]``, as
+        Polars' ``rolling_*_by`` reads a window, and reports begin once the
+        stream has run ``2 window_size``. Each span, history or pair of
+        windows is tested at the rows it holds, with no least count of rows
+        (*Spans on the clock* in Notes). A row of weight 0 counts in no clock.
+    ``monitor_span``
+        ``"sequential"`` under ``window_size``: the monitoring period on the
+        clock, in place of ``monitor_rows``. Default ``window_size``.
+    ``max_state_bytes``
+        Under ``window_size``: the bytes a group's state may hold, since how
+        many rows a span of the clock holds is the data's to say. Default 256
+        KB, at most 64 MiB. Past half of it the bank warns once; a row that
+        would pass it is not learned, and the bank refuses the run.
     ``alpha``, ``alpha_adjust``
         The level, in ``(0, 1)`` (default 0.05), and, under ``"monitor"`` and
         ``"sequential"``, how it is spread over the pairs: ``"bonferroni"``,
@@ -588,13 +613,13 @@ def corrchange(
         more than the 0.03 Wied and Galeano's own table is good to.
     ``bandwidth``
         ``"monitor"`` and ``"sequential"``: overrides the Bartlett bandwidth,
-        ``floor(ln window_rows)``, for the span and for the history alike. Lag
-        ``l`` is weighted ``1 - l / bandwidth`` for ``l < bandwidth``, so at 1
-        only lag 0 is left, and 0 is refused. At most ``window_rows``: a span
-        of ``window_rows`` rows has no lag past ``window_rows - 1``, so a
-        larger bandwidth adds no lag. It only flattens the weights toward 1,
-        where the centered lags sum to 0, and the long-run variance falls
-        toward 0 with them.
+        ``floor(ln T)`` for a span or history of ``T`` rows. Lag ``l`` is
+        weighted ``1 - l / bandwidth`` for ``l < bandwidth``, so at 1 only lag
+        0 is left, and 0 is refused. At most ``window_rows``: a span of
+        ``window_rows`` rows has no lag past ``window_rows - 1``, so a larger
+        bandwidth adds no lag. It only flattens the weights toward 1, where
+        the centered lags sum to 0, and the long-run variance falls toward 0
+        with them.
     ``scalar``
         ``"monitor"`` and ``"sequential"``: in place of every pair, test the
         mean of ``u``, the equicorrelation of the standardized row
@@ -613,7 +638,10 @@ def corrchange(
         2^20, and without ``crit`` at least 20 and at least ``ceil(1 / alpha) -
         1``), redrawn every ``permute_every_rows`` rows (default ``window_rows``, at
         least 1), in blocks of ``perm_block`` rows (default 1, from 1 to
-        ``window_rows``). *The window test* in Notes gives the cost and the size.
+        ``window_rows``; at least 1 under ``window_size``). A block longer than
+        a tenth of a window makes the held value too small for later
+        windows: *The window test* in Notes gives the cost, the size and the
+        blocks.
     ``permute_every``
         ``"window"``: the same redraw on the clock, every this long as well
         as every ``permute_every_rows`` reports, whichever comes first; given
@@ -621,7 +649,7 @@ def corrchange(
         (rows where the spec has no clock) or a duration such as ``"10m"``
         on a temporal clock, at least 0, ``0`` every report. On a clock of
         one unit a row, ``permute_every = n`` is ``permute_every_rows = n``,
-        to the bit.
+        to the bit. Under ``window_size`` its default is ``window_size``.
     ``norm``
         ``"window"``: ``"l1"`` (the default) or ``"linf"``.
     ``seed``
@@ -639,12 +667,14 @@ def corrchange(
         refused there.
     ``monitor_rows``
         ``"sequential"``: the rows monitored after each history, the paper's
-        ``floor(m T)``. Default ``window_rows`` (``T = 1``). At least 2.
+        ``floor(m T)``. Default ``window_rows`` (``T = 1``). At least 4, since a
+        pair's monitored correlation carries no information before its fourth
+        row (*The sequential test* in Notes), and at least 2 under ``scalar``.
     ``boundary_gamma``
         ``"sequential"``: the boundary's exponent, ``0 <= boundary_gamma <=
-        0.49``. Default 0, the straight boundary ``1 + k/m``. Above 0 a
-        change soon after the history is caught sooner and a late one later,
-        at more false alarms (*Choosing boundary_gamma* in Notes). At 0.5 the
+        0.49``. Default 0, the straight boundary ``1 + b``. Above 0 a
+        change soon after the history is caught sooner and a late one later
+        (*Choosing boundary_gamma* in Notes). At 0.5 the
         boundary would be crossed with probability 1, and the solve behind
         the critical value costs time in proportion to ``1 / (1/2 -
         boundary_gamma)`` on the way there, so a value above 0.49 is refused.
@@ -670,21 +700,26 @@ def corrchange(
         The test statistic: for the span, for the pair of windows, or for the
         monitored row against its boundary.
     ``crit``
-        The critical value it is compared against.
+        The critical value it is compared against: under ``"monitor"`` it
+        reads the span's rows, under ``"sequential"`` with ``window_size`` the
+        cycle's, and under ``"window"`` with ``window_size`` the report's two
+        windows'.
     ``flag``
-        True on the row where ``stat`` crossed ``crit``.
+        True on the row where ``stat`` crossed ``crit``. Under ``"monitor"``,
+        null on a span past ``crit`` whose two columns' scale ratio moved
+        inside it, which ``withheld_reason`` names ``scale_ratio_moved`` (*The
+        monitor test* in Notes).
     ``since_flag``
         Learned rows since the last flag.
     ``since_change``
         On a flag, the rows since the change it dates, counted through the
         flag's row from the first changed one. That row is the one after the
-        maximum of ``j * |rho_j - rho_m|`` over the span (``"monitor"``), the
+        maximum of the span's CUSUM (``"monitor"``), the
         one the paper's Eq. 8 gives (``"sequential"``), or the second
         window's first (``"window"``). Null otherwise. In the pairwise test
-        (without ``scalar``), it is null on a ``"sequential"`` flag that has
-        fewer than two monitored rows before it. And it is null where either
-        feature of the flagged pair is constant over those rows, since a
-        correlation then has no spread to divide by.
+        (without ``scalar``), it is null where either feature of the flagged
+        pair is constant over the monitored rows before a ``"sequential"``
+        flag, since a correlation then has no spread to divide by.
     ``weight_sum``
         The weight the model has accumulated before the row and before the
         row's own decay.
@@ -693,8 +728,9 @@ def corrchange(
         before the row, null where nothing decays.
     ``withheld_reason``
         Why the row's fields were withheld: null on every row at the default
-        ``min_weight``, and ``below_min_weight`` while ``weight_sum`` is
-        below a ``min_weight`` given.
+        ``min_weight``, ``below_min_weight`` while ``weight_sum`` is below a
+        ``min_weight`` given, and ``scale_ratio_moved`` where a ``"monitor"``
+        flag is withheld.
 
     .. rubric:: Raises
 
@@ -705,7 +741,11 @@ def corrchange(
     - fewer than two features, and an ``alpha`` outside ``(0, 1)``;
     - a ``kind``, ``alpha_adjust``, ``norm`` or ``change_action`` not one
       of its words;
-    - ``window_rows`` left out or below the kind's minimum;
+    - ``window_rows`` and ``window_size`` both left out, both given, or a
+      ``window_rows`` below the kind's minimum, a ``window_size`` or
+      ``monitor_span`` not above 0, and a ``monitor_span`` without
+      ``window_size`` or beside ``monitor_rows``;
+    - a ``max_state_bytes`` without ``window_size``, of 0 or above 64 MiB;
     - a parameter of another kind, and ``half_life`` or ``lam`` without
       ``scalar``;
     - under ``"sequential"`` without ``crit``, a share of ``alpha`` below
@@ -716,43 +756,53 @@ def corrchange(
       gives, an ``n_perm``
       among them too small to flag at ``alpha``;
     - a ``boundary_gamma`` outside ``[0, 0.49]``, and a ``monitor_rows``
-      below 2;
+      below 4 (below 2 under ``scalar``);
     - ``change_action="reset"`` under ``"monitor"`` or ``"sequential"``;
     - a switch of a diagnostic that reads residuals.
 
     .. rubric:: The update
 
-    ``"monitor"`` is the closed-sample constancy test of Wied, Krämer &
-    Dehling (2012), run over consecutive spans of ``window_rows`` rows. At
-    the last row of a span, per pair, with ``m`` the span's rows and
-    ``rho_j`` the sample correlation of its first ``j`` rows:
+    ``"monitor"`` is the constancy test of Wied, Krämer & Dehling (2012) in
+    its linear form, run over consecutive spans of ``window_rows`` rows. At
+    the last row of a span of ``T`` rows, per pair:
 
     .. code-block:: text
 
-        Q = max_{2 <= j <= m} (j / sqrt(m)) * |rho_j - rho_m| / D
+        xi_t = x_t * y_t - (rho_T / 2) * (x_t**2 + y_t**2)
+        Q    = max_{1 <= j <= T} |sum_{t <= j} xi_t| / (sqrt(T) * D)
+        crit = q(1 - alpha) - 0.5826 / sqrt(T)
 
-    ``D`` is the delta-method long-run standard deviation of ``rho``
-    (*The long-run deviation* in Notes). Over the pairs the statistic is the
-    maximum, and the level is ``alpha / npairs`` under the default
-    Bonferroni adjustment, or ``alpha`` under ``alpha_adjust="none"``.
+    with ``x_t``, ``y_t`` the span's rows centered at its means and scaled by
+    its standard deviations, ``rho_T`` their correlation, and ``D`` the
+    Bartlett long-run standard deviation of ``xi`` (*The long-run deviation*
+    in Notes). ``q`` is the Kolmogorov quantile, the law of ``sup|B|`` for a
+    Brownian bridge ``B``. Over the pairs the statistic is the maximum, and
+    the level is ``alpha / npairs`` under the default Bonferroni adjustment,
+    or ``alpha`` under ``alpha_adjust="none"``. A pair flags where ``Q``
+    passes ``crit`` and the same CUSUM of ``d_t = x_t**2 - y_t**2`` does
+    not; where every pair past ``crit`` is one whose ``d`` passes it too,
+    the flag is withheld.
 
-    ``"sequential"`` is the monitoring procedure of Wied & Galeano (2013). A
-    cycle is ``window_rows`` learned rows of history (``m``), from which
-    each pair's correlation ``rho_hist`` and its ``D`` are read as for
-    ``"monitor"``. Then the ``k``-th monitored row, for ``k`` up to
-    ``monitor_rows``, reports
+    ``"sequential"`` is the monitoring procedure of Wied & Galeano (2013) on
+    Fisher's scale. A cycle is ``window_rows`` learned rows of history
+    (``m``), from which each pair's correlation ``rho_h`` and its ``D`` are
+    read as for ``"monitor"``. Then the ``k``-th monitored row, for ``k`` up
+    to ``monitor_rows`` (``K``), reports
 
     .. code-block:: text
 
-        V_k  = (k / sqrt(m)) * (rho_mon_k - rho_hist) / D
-        stat = max over pairs of |V_k| / w(k / m)
+        V_k  = ((k - 3) / sqrt(m - 3)) * |atanh(rho_k) - atanh(rho_h)| * (1 - rho_h**2) / D
+        stat = max over pairs of V_k / w((k - 3) / (m - 3))
         w(b) = (1 + b) * (b / (1 + b)) ** boundary_gamma
 
-    with ``rho_mon_k`` the correlation of the ``k`` monitored rows so far,
-    this one included, and flags where ``stat`` passes ``crit``. The cycle
-    ends at a flag or after its ``monitor_rows``-th row, and the next learned
-    row starts a new history. Nothing is reported during the history, nor on
-    the first monitored row, since a correlation needs two.
+    with ``rho_k`` the correlation of the ``k`` monitored rows so far, this
+    one included, and flags where ``stat`` passes ``crit``. The cycle ends at
+    a flag or after its ``K``-th row, and the next learned row starts a new
+    history. Nothing is reported during the history, nor on the first three
+    monitored rows, which carry no information on Fisher's scale. Under
+    ``scalar`` the detector is the mean's, ``(k / sqrt(m)) * |mean_k(u) -
+    mean_h(u)| / D_u`` against ``w(k / m)``, reported from the second
+    monitored row.
 
     ``"window"`` reports ``norm(vech(R_pre - R_post))`` over two adjacent
     blocks of ``window_rows`` rows, ``R_pre`` and ``R_post`` their
@@ -793,7 +843,7 @@ def corrchange(
     .. code-block:: text
 
         10 spans tested, 1 flagged
-        span ending on row 1199: stat 2.52 against 1.36
+        span ending on row 1199: stat 2.51 against 1.32
         the change dated to row 1099
 
     .. rubric:: See also
@@ -806,31 +856,127 @@ def corrchange(
 
     .. rubric:: Notes
 
-    **The long-run deviation.** ``D`` takes the five raw moments ``(x², y²,
-    x, y, xy)`` centered at their span means and their Bartlett long-run
-    covariance at bandwidth ``L = floor(ln m)`` with the paper's kernel, lag
-    ``l`` at weight ``1 - l/L`` (their Appendix A.1). It maps them to
-    ``(var_x, var_y, cov)`` and then to ``rho``. It is computed on the span
-    centered at its means and scaled by its standard deviations, as the
-    paper's ``xi`` series, so the columns' level does not enter. A pair
-    within rounding of ``|rho| = 1`` has no ``D`` and no verdict, as a
-    constant column has none.
+    **The long-run deviation.** ``D`` is the Bartlett long-run standard
+    deviation of ``xi``, at bandwidth ``L = floor(ln T)`` with the paper's
+    kernel, lag ``l`` at weight ``1 - l/L`` (their Appendix A.1). It is the
+    paper's delta-method deviation of ``rho`` exactly: their five raw moments
+    ``(x², y², x, y, xy)``, centered and mapped to ``(var_x, var_y, cov)``
+    and then to ``rho``, give the series ``xi`` on the span centered at its
+    means and scaled by its standard deviations, so the columns' level does
+    not enter. A pair within rounding of ``|rho| = 1`` has no ``D`` and no
+    verdict, as a constant column has none.
 
-    **The monitor test.** Under the null ``Q`` converges to ``sup|B|``, a
-    Brownian bridge, so the critical value is the Kolmogorov quantile,
-    computed from the series, not pinned, and it reproduces the published
-    1.3581 at 5%. A span reports on its last row only, and tests only its
-    own rows. So a change is found at most ``window_rows`` rows late, and
-    reliably only where it falls well inside a span. A jump in correlation
-    from 0 to 0.8 at row 1,100 of spans of 200 rows was found on 20 of 20
-    seeds. At rows 1,190 and 1,195, near the span's end, it was found on 0
-    to 3 of 20 (each of three sets of 20 seeds).
-    ``docs/REGIMES.md`` §2 and §3 measure its size and power against those
-    tables, and ``tests/test_corrchange.py`` holds its size near the nominal
-    level.
+    **The monitor test.** The paper's statistic is ``max_j (j / sqrt(T)) *
+    |rho_j - rho_T| / D``, with ``rho_j`` the correlation of the span's first
+    ``j`` rows. Their proof reduces ``j (rho_j - rho_T)`` to the partial sum
+    of ``xi`` plus a remainder, and the limit ``sup|B|`` is the law of the
+    sum. The remainder is what over-rejects: ``rho_j`` of a few rows lives in
+    ``[-1, 1]`` and is ``±1`` at two rows whatever the data, so at a
+    correlation of 0.9 one span in seven was flagged by its second row. That
+    statistic flagged 26% of stable spans of 100 rows at a correlation of
+    0.9, and 41% of spans of 8 rows at 0 (the paper's own table has 0.142 at
+    ``T = 200``). The partial sums form no correlation of a few rows, so they
+    have no remainder to wait for: ``Q`` is valid at every ``T`` and every
+    ``rho``. A span too short to carry a verdict cannot flag, with no least
+    count written anywhere: ``xi`` sums to 0 over the span, so ``Q`` is at
+    most ``max_j sqrt(j (T - j) / T)`` at bandwidth 1, under ``crit`` through
+    ``T = 5``. The term ``0.5826 / sqrt(T)`` is ``-zeta(1/2) / sqrt(2 pi) /
+    sqrt(T)``, how far a Brownian bridge's maximum over ``T`` points falls
+    short of its supremum (Siegmund 1985; Broadie, Glasserman & Kou 1997),
+    since ``Q`` is a maximum over the span's ``T`` rows. Share of stable spans
+    flagged at a nominal 0.05, one pair, 10,000 spans a cell:
+
+    .. list-table::
+       :header-rows: 1
+       :widths: 34 11 11 11 11 11 11
+
+       * - stream
+         - T = 8
+         - 20
+         - 50
+         - 100
+         - 200
+         - 1000
+       * - Gaussian, ``rho`` 0
+         - 0.008
+         - 0.013
+         - 0.026
+         - 0.037
+         - 0.037
+         - 0.043
+       * - Gaussian, ``rho`` 0.6
+         - 0.010
+         - 0.017
+         - 0.026
+         - 0.031
+         - 0.036
+         - 0.043
+       * - Gaussian, ``rho`` 0.9
+         - 0.008
+         - 0.016
+         - 0.024
+         - 0.036
+         - 0.036
+         - 0.043
+       * - multivariate t, 5 df, ``rho`` 0.9
+         - 0.006
+         - 0.011
+         - 0.015
+         - 0.021
+         - 0.023
+         - 0.031
+       * - one GARCH volatility, persistence 0.98, ``rho`` 0.6
+         - 0.009
+         - 0.017
+         - 0.026
+         - 0.035
+         - 0.040
+         - 0.044
+       * - both standard deviations double mid-span, ``rho`` 0.6
+         - 0.011
+         - 0.016
+         - 0.022
+         - 0.027
+         - 0.035
+         - 0.046
+
+    So the level is under nominal at short spans and heavy tails, and
+    reaches it by 1000 rows. Power, a jump at the span's middle on Gaussian
+    pairs, at ``T`` = 100 / 200 / 500: 0.19 / 0.42 / 0.83 from 0.5 to 0.7,
+    0.54 / 0.87 / 0.94 from 0.9 to 0.7, 0.19 / 0.41 / 0.82 from 0 to 0.3. A
+    jump in the first tenth of a span, or in its last, is found less often:
+    0.18 and 0.15 of spans of 500 rows. The paper's statistic had about the
+    same power once both are calibrated, and more for a jump near the span's
+    start, for the same reason it over-rejected.
+
+    What ``Q`` assumes is that the two columns' scales hold their ratio over
+    the span. Both doubling together is a change of clock for the partial
+    sums, which ``sup|B|`` does not see (the last row above). But with the
+    correlation constant and the columns' scales at ``r_x`` and ``r_y`` times
+    their span values, ``xi`` has mean ``-(rho/2)(r_x - r_y)²``: when one
+    column's scale moves, ``Q`` leaves its null law, at ``rho`` 0.9 past
+    ``crit`` on 93% of spans of 1000 rows whose one column doubles mid-span.
+    The CUSUM of ``d = x² - y²`` has the same limit while the ratio holds,
+    and grows with ``sqrt(T)`` when it moves, so it is the check: where it
+    passes ``crit`` too, the flag is withheld. It costs a correlation jump
+    about 5% of its flags, the check's own false alarms (0.04 / 0.06 of
+    spans at ``T`` = 500 at the jumps above). On spans where one column's
+    scale doubles at a correlation of 0.6, the flags withheld are 0.002 /
+    0.014 / 0.037 / 0.056 / 0.12 at ``T`` = 20 / 50 / 100 / 200 / 1000, and
+    the flags left are 0.015 / 0.020 / 0.005 / 0.001 / 0.000. Use
+    ``"window"`` where the scales move and a verdict on every span matters:
+    each of its windows' correlations is free of its own scale.
+
+    A span reports on its last row only, and tests only its own rows. So a
+    change is found at most ``window_rows`` rows late, and reliably only
+    where it falls well inside a span. A jump in correlation from 0 to 0.8
+    at row 1,100 of spans of 200 rows was found on 17 to 20 of 20 seeds;
+    at rows 1,190 and 1,195, near the span's end, on 0 to 2 of 20 (each of
+    three sets of 20 seeds).
 
     **The sequential test.** The critical value is Wied & Galeano's: with
-    ``T = monitor_rows / window_rows``, ``crit = (T / (1 + T)) ** (1/2 -
+    ``T`` the period's length in the detector's time, ``(K - 3) / (m - 3)``
+    (``K / m`` under ``scalar``), ``crit = (T / (1 + T)) ** (1/2 -
     boundary_gamma) * q``. ``q`` is the ``1 - alpha`` quantile of
     ``sup_{0 < s <= 1} |W(s)| / s ** boundary_gamma`` for a Brownian motion
     ``W`` (their Eq. 7), at ``alpha / npairs`` under Bonferroni. At
@@ -840,6 +986,91 @@ def corrchange(
     simulation error. The values are within 0.03 of the paper's Table 1 and
     above it in 11 of its 12 cells, since a simulation on a grid misses
     crossings between its points. ``crit`` replaces the value.
+
+    The detector is theirs with each side's correlation on Fisher's scale,
+    at its own finite-sample variance: ``atanh(rho)`` of ``n`` rows has
+    variance ``sigma_z² / (n - 3)``, so ``V_k`` has variance ``b + b²`` at
+    ``b = (k - 3) / (m - 3)``, the paper's limit exactly and not only as
+    ``m`` grows. Their own detector, ``(k / sqrt(m)) * |rho_k - rho_h| / D``
+    from ``k = 2``, compared a correlation of two rows, ``±1`` whatever the
+    data, with the history's: at ``boundary_gamma = 0.45`` and a correlation
+    of 0.6, a quarter to a third of the cycles flagged in their first rows
+    with nothing changed, at every history up to 1000 rows. Share of cycles
+    ending in a flag with nothing changed, ``monitor_rows = window_rows``,
+    one pair, 10,000 cycles a cell (5,000 at ``m = 1000``):
+
+    .. list-table::
+       :header-rows: 1
+       :widths: 46 12 12 12 12
+
+       * - stream, ``boundary_gamma``
+         - m = 50
+         - 100
+         - 250
+         - 1000
+       * - Gaussian, ``rho`` 0, 0
+         - 0.077
+         - 0.063
+         - 0.060
+         - 0.051
+       * - Gaussian, ``rho`` 0.6, 0.45
+         - 0.071
+         - 0.067
+         - 0.057
+         - 0.047
+       * - Gaussian, ``rho`` 0.9, 0
+         - 0.073
+         - 0.067
+         - 0.055
+         - 0.059
+       * - Gaussian, ``rho`` 0.9, 0.45
+         - 0.065
+         - 0.063
+         - 0.059
+         - 0.048
+       * - multivariate t, 5 df, ``rho`` 0, 0
+         - 0.121
+         - 0.096
+         - 0.083
+         - 0.081
+       * - multivariate t, 5 df, ``rho`` 0.9, 0.45
+         - 0.093
+         - 0.085
+         - 0.066
+         - 0.059
+       * - GARCH, the paper's design, ``rho`` 0.5, 0
+         - 0.083
+         - 0.070
+         - 0.063
+         - 0.058
+       * - GARCH, the paper's design, ``rho`` 0.5, 0.45
+         - 0.074
+         - 0.069
+         - 0.059
+         - 0.050
+       * - one standard deviation doubles where the monitoring starts, 0.6, 0
+         - 0.076
+         - 0.060
+         - 0.057
+         - 0.053
+       * - both double half way through the monitoring, 0.6, 0
+         - 0.160
+         - 0.160
+         - 0.150
+         - 0.156
+
+    What is left above 0.05 is the history itself: a short history's
+    ``rho_h`` and ``D``, and heavy tails' fourth moments, have not converged,
+    which no treatment of the monitored rows can see. Take a history of a
+    few hundred rows where the rows are heavy-tailed. A scale that changes
+    between the history and the monitoring moves nothing, since each side's
+    correlation is free of its own scale; a scale that changes inside the
+    monitoring does (the last row), as the paper's stationarity assumption
+    excludes. Power at ``m = 250``, flagged before the break / after it /
+    median delay in rows: from 0.5 to 0.7 at monitored row 12, 0.000 / 0.890
+    / 109 at ``boundary_gamma`` 0 and 0.014 / 0.770 / 93 at 0.45; from 0.9 to
+    0.7 at row 62, 0.002 / 0.998 / 46 and 0.032 / 0.965 / 45; from 0 to 0.5
+    at row 62, 0.001 / 0.982 / 73 and 0.037 / 0.911 / 79.
 
     On a flag, ``since_change`` dates the change as the paper's Eq. 8 does:
     ``k_hat = argmax_{j < tau} j * |rho_mon_j - rho_mon_{tau-1}|`` over the
@@ -859,9 +1090,10 @@ def corrchange(
 
     **Choosing boundary_gamma.** Above 0 the boundary is lower at the start
     of the period, so a change soon after the history is caught sooner and a
-    late one later. It also increases the size: the paper measured 0.050-0.077
-    at ``boundary_gamma`` of 0, 0.047-0.087 at 0.25, and 0.106-0.174 at
-    0.45, for a nominal 0.05 on GARCH pairs (their Table 2). Their summary:
+    late one later: from 0.5 to 0.7 at monitored row 12, a median of 93 rows
+    at 0.45 against 109 at 0, found on 0.77 of the cycles against 0.89. The
+    size holds at every ``boundary_gamma`` (the table above). The paper's
+    summary:
 
     .. list-table::
        :header-rows: 1
@@ -887,28 +1119,45 @@ def corrchange(
     exchangeable, its rank among the ``n_perm + 1`` is uniform. So a test of
     a report against draws of its own windows has a size of that count over
     ``n_perm + 1``, at most ``alpha``: at alpha 0.05, 0.0476 at 20 draws and
-    0.0498 at the default 200. The size here is about that, not exactly it.
-    The critical value is drawn from the windows after a report and held for
-    ``permute_every_rows`` reports, so each later report is compared with
-    draws of windows up to ``permute_every_rows - 1`` rows older than its
-    own. Over 200 streams of iid rows at alpha 0.05 and 200 draws, with the
-    value held for ``window_rows`` reports (the default), 4.8% to 5.2% of
-    non-overlapping spans flagged at windows of 50 to 400 rows, each within
-    one standard error (0.24%) of 5%. Fewer than ``ceil(1 / alpha) - 1``
-    draws could never flag, so such an ``n_perm`` is refused: at alpha 0.01,
-    99 draws at least.
+    0.0498 at the default 200. The critical value is drawn from the windows
+    after a report and held for ``permute_every_rows`` reports, so each
+    later report is compared with draws of windows up to
+    ``permute_every_rows - 1`` rows older than its own. Measured at alpha
+    0.05, 200 draws and windows of 100 rows, the value held for 100
+    reports, the share of reports flagged is ``alpha``: 0.049 on Gaussian
+    rows at a correlation of 0 and 0.053 at 0.9, 0.049 under a GARCH
+    volatility, 0.054 and 0.060 with both or one standard deviation
+    doubling inside the windows. The test does not assume the scales hold.
 
-    The draws are in blocks of ``perm_block``, so that serial dependence
-    does not make the null too liberal. It is not a sign-flip null. Negating a whole row leaves
+    A stretch of reports is another matter. Two windows that slide by one
+    row are almost the same windows, so a statistic above the quantile
+    stays above it for a run of rows (5 to 7, about 7 runs in 1000 quiet
+    rows at windows of 100). So at least one flag falls within a window's
+    length of reports 0.33 of the time, within five windows' lengths 0.79 to
+    0.82, and within ten 0.95 to 0.96, on Gaussian rows where nothing
+    changed. A report says how
+    large the change between its two windows is against its own null; use
+    ``"sequential"`` to ask whether anything has changed since a history.
+
+    The draws are in blocks of ``perm_block`` rows, so that serial
+    dependence does not make the null too liberal: on levels whose lag-one
+    correlation is 0.5, 0.124 of reports flag at blocks of 1 and 0.069 at
+    blocks of 10 (windows of 100). A block holds back that liberality only
+    while the windows hold many blocks. The value is an order statistic of
+    the distinct splits of the pool's blocks into two windows (35 for 8
+    blocks, 3 for 4), and held for later windows it is too small, more so
+    the older it is. Share of reports flagged on independent rows, windows
+    of 100, at ``perm_block`` 1 / 10 / 25 / 50: 0.049 / 0.058 / 0.083 /
+    0.224, and about a half at ``perm_block = window_rows``, where the value
+    is the one observed statistic. Keep ``perm_block`` to a tenth of
+    ``window_rows`` or less. It is not a sign-flip null. Negating a whole row leaves
     every ``x x'`` and so every correlation matrix exactly where it was, so a
     sign-flip null has no spread at all. The quantile is drawn from the
     windows after a row is reported, so the first report once the windows
     fill has no critical value and cannot flag: ``crit`` is null there, and
     in force from the next row. A ``change_action="reset"`` empties the
     windows and the value in force with them, so the first report after the
-    refill has none either. The flag rate per row is not ``alpha`` here: two
-    windows that slide by one row are almost the same windows, so a
-    statistic above the quantile stays above it for a run of rows.
+    refill has none either.
 
     A redraw shuffles the ``2 * window_rows`` pooled rows ``n_perm`` times
     and reads both windows' correlations each time, so it costs ``n_perm *
@@ -918,6 +1167,23 @@ def corrchange(
     the draws' cost per row does not grow with ``window_rows``. Each drawn
     value is held for those ``window_rows`` rows. A smaller
     ``permute_every_rows`` redraws more often, at more cost a row.
+
+    **Spans on the clock.** ``window_size`` reads each span, history and
+    window off the rows' stamps, so each holds the rows the data put in it
+    and is tested at its own count: ``"monitor"``'s grid term and
+    ``"sequential"``'s ``(K - 3) / (m - 3)`` read it, a cycle's period
+    planned as ``K = floor(m * monitor_span / window_size)`` rows and ended at
+    the first of those and its own span (a shorter period is crossed less
+    often, so the size holds however the rows arrive). The window kind's
+    permutation needs no equal windows: on exchangeable rows every
+    assignment of the pooled rows to two windows of ``n1`` and ``n2`` is
+    equally likely. Its held value is rescaled to each report's windows by
+    ``sqrt((1/n1 + 1/n2) / (1/n1' + 1/n2'))``, ``n1'`` and ``n2'`` the
+    windows it was drawn from, since a difference of two windows'
+    correlations spreads as that root: drawn at 100 rows a window and held
+    as the rate halves, unscaled it would turn 5% into 17%. A clock
+    window's correlations are read whole, ``p**2`` times its rows a report,
+    where ``window_rows`` merges block summaries.
     """
     model: dict[str, Any] = {
         "type": "corrchange",
@@ -937,8 +1203,14 @@ def corrchange(
         "monitor_rows": monitor_rows,
         "boundary_gamma": boundary_gamma,
     }
-    # Written only when given, as the Rust spec leaves it out when absent.
-    if permute_every is not None:
-        model["permute_every"] = permute_every
+    # Written only when given, as the Rust spec leaves them out when absent.
+    for key, value in (
+        ("permute_every", permute_every),
+        ("window_size", window_size),
+        ("monitor_span", monitor_span),
+        ("max_state_bytes", max_state_bytes),
+    ):
+        if value is not None:
+            model[key] = value
     targets = _mirror_target(name, "corrchange", features, common, "its test is of")
     return _common(name, model, targets=targets, features=features, **common)

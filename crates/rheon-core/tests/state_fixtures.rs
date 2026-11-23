@@ -529,6 +529,31 @@ const READ_ANEW: &[(&str, f64)] = &[
 /// none, and converts to the current bytes exactly.
 const COUNTED_ZERO_WEIGHT: &[&str] = &["audit", "audit_exact", "audit_scaled"];
 
+/// The `corrchange` cases whose statistics were replaced with no layout
+/// changed (rule 5's twenty-seventh exception, the user's, 2026-11-22:
+/// "Switch to the new statistics"; PLAN 553): `monitor` is the linear
+/// CUSUM against the grid-corrected critical value, `sequential` the
+/// Fisher-`z` detector. A kept state holds no number the old statistics
+/// computed -- the span's or the history's rows, the history's correlation
+/// and long-run deviation, the monitored rows' sums -- so it loads as it was
+/// and goes on under the new statistics, and its frozen continuation, the
+/// old statistics', is not what it is held to. What it keeps of the old
+/// ones is where they flagged. What is held:
+///
+/// - `corrchange_monitor`: no span of these rows flagged under either
+///   statistic before the save, so the kept state converts to the current
+///   fixture's bytes exactly, and goes on to the current fixture's frozen
+///   continuation to the bit: every output as this build computes it from
+///   the same rows.
+/// - `corrchange_sequential`: the old detector last flagged 8 learned rows
+///   before the save and the new one 19, so the kept state's cycle began
+///   at the old flag, and it is not the current fixture's. It is held to
+///   saving bytes that load back to the same, and to its frozen
+///   continuation's `weight_sum` to the bit; its reports are the new
+///   detector's over the cycle the old one began, which no build reaches
+///   from these rows, so no output of them is held to a number.
+const NEW_STATISTICS: &[&str] = &["corrchange_monitor", "corrchange_sequential"];
+
 /// How far a continuation may part from the one frozen, on a platform other
 /// than the writer's: the golden files' tolerance (`tests/golden.rs`).
 const TOL: f64 = 1e-12;
@@ -980,6 +1005,16 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                     "{what}: saved, loaded, saved"
                 );
                 counted_zero_weight_rule(&saved, &current.bytes(), &what);
+            } else if NEW_STATISTICS.contains(&f.name) && named(&m.state()) != current.bytes() {
+                // The old detector's cycle ([`NEW_STATISTICS`]): the
+                // sequential case alone, its state the kept one's.
+                assert_eq!(f.name, "corrchange_sequential", "{what}: converts exactly");
+                let saved = named(&m.state());
+                let again = load(&case, &saved).unwrap_or_else(|e| panic!("{what}: {e}"));
+                assert!(
+                    named(&again.state()) == saved,
+                    "{what}: saved, loaded, saved"
+                );
             } else if renumbered.is_some() {
                 assert_eq!(schema, 65, "{what}: RENUMBERED is for schema 65's windows");
                 renumbered_rule(&case, &named(&m.state()), &current.bytes(), &|_| 0.0, &what);
@@ -994,7 +1029,25 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
             let tol = if f.writer == writer() { 0.0 } else { TOL };
             let mut relabel: Vec<(u64, u64)> = Vec::new();
             let mut relearned = false;
+            // Under the new statistics ([`NEW_STATISTICS`]): a state that
+            // converts to the current fixture's goes on as that fixture does,
+            // every output to the bit; one that does not, by its frozen
+            // `weight_sum`.
+            let new_statistics = NEW_STATISTICS.contains(&f.name);
+            let exact = new_statistics && named(&m.state()) == current.bytes();
+            let current_outs = current.outs();
             for (i, (row, want)) in f.rows().iter().zip(f.outs()).enumerate() {
+                if new_statistics {
+                    let got = m.step(row);
+                    let what = format!("{what}, row {i} after the save");
+                    if exact {
+                        let tol = if current.writer == writer() { 0.0 } else { TOL };
+                        same_out(&what, &got, &current_outs[i], tol);
+                    } else {
+                        assert!(agree(got.n_eff, want.n_eff, tol), "{what}: weight_sum");
+                    }
+                    continue;
+                }
                 if reseeded {
                     let got = m.step(row);
                     let (g, w) = (got.pred[0], want.pred[0]);
@@ -1517,7 +1570,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 145] = [
+    const FORMS: [(&str, &[&str]); 154] = [
         // `realized` (task 499): the sums and the last returns, Lee and
         // Mykland's ring of products, a window's terms and rows, a clock
         // window's stamps and clock, and a cap's warning and overrun.
@@ -1781,6 +1834,40 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         (
             "corrchange_permute_every",
             &["model", "CorrChange", "since_draw"],
+        ),
+        // Task 553: each kind's span on the clock.
+        (
+            "corrchange_monitor_clock",
+            &["model", "CorrChange", "cfg", "span_clock"],
+        ),
+        (
+            "corrchange_monitor_clock",
+            &["model", "CorrChange", "cfg", "max_state_bytes"],
+        ),
+        (
+            "corrchange_monitor_clock",
+            &["model", "CorrChange", "clock"],
+        ),
+        (
+            "corrchange_monitor_clock",
+            &["model", "CorrChange", "first"],
+        ),
+        (
+            "corrchange_sequential_clock",
+            &["model", "CorrChange", "cfg", "monitor_clock"],
+        ),
+        (
+            "corrchange_sequential_clock",
+            &["model", "CorrChange", "monitoring", "history"],
+        ),
+        (
+            "corrchange_sequential_clock",
+            &["model", "CorrChange", "monitoring", "horizon"],
+        ),
+        ("corrchange_window_clock", &["model", "CorrChange", "keys"]),
+        (
+            "corrchange_window_clock",
+            &["model", "CorrChange", "perm_counts"],
         ),
         (
             "huber_refit_span",

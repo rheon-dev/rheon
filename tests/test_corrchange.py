@@ -1,18 +1,21 @@
 """E59: has the correlation structure changed?
 
-Three tests with three nulls. The `monitor` kind is Wied, Krämer & Dehling's
-closed-sample constancy test, and its critical value is a *published*
-distribution — so its size and power are held to their tables rather than to
-a number this implementation happened to produce. The `sequential` kind is
-Wied & Galeano's detector against a stable history (docs/PLAN.md task 114),
-whose critical values are held to their Table 1 and to a simulation of the
-law behind it. The `window` kind measures how big a change is, against a
-permutation null; that one is held to a longhand statistic and to behaving
-on a stationary stream.
+Three tests with three nulls. The `monitor` kind is the linearised form of
+Wied, Krämer & Dehling's closed-sample constancy test (docs/PLAN.md task
+553), against the Kolmogorov law their statistic converges to, read on a
+grid; its statistic is held to statsmodels' OLS-residual CUSUM and Bartlett
+long-run variance, and its size and power to the review's measured tables.
+The `sequential` kind is Wied & Galeano's detector against a stable history
+(task 114) on Fisher's scale (task 553), whose critical values are held to
+their Table 1 and to a simulation of the law behind it, and whose detector is
+held to numpy's `arctanh` and the variance scipy's `pearsonr` puts on it. The
+`window` kind measures how big a change is, against a permutation null held to
+scipy's exact `permutation_test` over the blocks.
 """
 
 import itertools
 import math
+import re
 
 import numpy as np
 import polars as pl
@@ -32,7 +35,12 @@ def pair(n, rho, seed=0, k=2):
 
 
 def spec(**kw):
-    d = {"features": ["x0", "x1"], "window_rows": 200}
+    # A span of the clock in place of the count of rows.
+    d = (
+        {"features": ["x0", "x1"]}
+        if "window_size" in kw
+        else {"features": ["x0", "x1"], "window_rows": 200}
+    )
     d.update(kw)
     return rp.spec.corrchange("c", **d)
 
@@ -45,11 +53,21 @@ def run(df, **kw):
 
 
 def test_the_critical_value_is_the_kolmogorov_quantile():
-    """Computed from the series, not pinned: 1.3581 at 5%, 1.6276 at 1%,
-    1.2239 at 10% are the published values it must reproduce."""
-    for alpha, want in ((0.05, 1.3581), (0.01, 1.6276), (0.10, 1.2239)):
+    """Computed from the series, not pinned: scipy's ``kstwobign``, 1.3581 at
+    5%, 1.6276 at 1%, 1.2239 at 10%, less the grid correction
+    ``-zeta(1/2)/sqrt(2 pi)/sqrt(T)`` (scipy's ``zeta``): the statistic is a
+    maximum over the span's ``T`` rows and the quantile is of a supremum
+    over a continuum."""
+    from scipy.special import zeta
+    from scipy.stats import kstwobign
+
+    shift = -zeta(0.5) / math.sqrt(2 * math.pi)
+    assert shift == pytest.approx(0.5825971579390107, rel=1e-15)
+    for alpha, published in ((0.05, 1.3581), (0.01, 1.6276), (0.10, 1.2239)):
+        want = kstwobign.isf(alpha) - shift / math.sqrt(200)
+        assert kstwobign.isf(alpha) == pytest.approx(published, abs=1e-4)
         out = run(pair(200, 0.4), window_rows=200, alpha=alpha, alpha_adjust="none")
-        assert out["crit"][199] == pytest.approx(want, abs=1e-3)
+        assert out["crit"][199] == pytest.approx(want, rel=1e-13)
     # Bonferroni over the pairs takes a smaller level, so a larger value.
     three = run(
         pair(200, 0.4, k=3),
@@ -57,7 +75,7 @@ def test_the_critical_value_is_the_kolmogorov_quantile():
         window_rows=200,
         alpha=0.05,
     )
-    assert three["crit"][199] > 1.3581
+    assert three["crit"][199] > 1.3581 - shift / math.sqrt(200)
 
 
 def test_nothing_is_reported_except_where_a_span_closes():
@@ -92,16 +110,17 @@ def test_the_size_is_near_nominal_on_gaussian_pairs():
     measures both, and Gaussian pairs, at 2000 replications. What is pinned
     here is the level the test claims for itself.
 
-    **`|rho| <= 0.5` only**: the test over-rejects at `|rho| = 0.9` for
-    `T <= 500` (`.142` in their own table), which is the paper's finding,
-    not a defect here.
+    The paper's own statistic over-rejected at `|rho| = 0.9` for `T <= 500`
+    (`.142` in their own table at `T = 200`, `.26` measured at 100); the
+    linear CUSUM does not, which the extended grid below holds.
     """
     n, reps, want = 500, 200, 0.05
     for rho in (0.0, 0.5):
         flags = 0
         for r in range(reps):
             out = run(pair(n, rho, seed=1000 + r), window_rows=n, alpha_adjust="none")
-            flags += int(out["flag"][n - 1])
+            # A flag withheld (null) because the scale ratio moved is not one.
+            flags += int(out["flag"][n - 1] is True)
         size = flags / reps
         se = (want * (1 - want) / reps) ** 0.5
         assert abs(size - want) < 4 * se + 0.02, (rho, size, want)
@@ -125,7 +144,7 @@ def test_the_power_is_at_least_the_papers():
         a = pair(n // 2, 0.5, seed=7000 + r)
         b = pair(n // 2, 0.7, seed=9000 + r)
         out = run(pl.concat([a, b]), window_rows=n, alpha_adjust="none")
-        flags += int(out["flag"][n - 1])
+        flags += int(out["flag"][n - 1] is True)
     power = flags / reps
     se = (want * (1 - want) / reps) ** 0.5
     assert power > want - 4 * se, (power, want)
@@ -296,6 +315,16 @@ CHUNK_KW = {
         "permute_every_rows": 5,
         "change_action": "reset",
     },
+    # Task 553: each kind's span on the clock, here the row clock, whose
+    # spans, histories, periods and windows are read off the rows' stamps.
+    "monitor, clock": {"window_size": 149},
+    "sequential, clock": {
+        "kind": "sequential",
+        "window_size": 99,
+        "monitor_span": 149,
+        "boundary_gamma": 0.25,
+    },
+    "window, clock": {"kind": "window", "window_size": 50, "n_perm": 30},
 }
 
 
@@ -461,9 +490,17 @@ def test_the_boundary_exponent_is_at_most_0_49(kw):
         spec(kind="sequential", window_rows=50, **kw)
 
 
-def test_the_monitoring_period_is_at_least_two_rows():
-    with pytest.raises(ValueError, match="monitor_rows of at least 2"):
-        spec(kind="sequential", window_rows=50, monitor_rows=1)
+def test_the_monitoring_period_holds_a_row_the_detector_reads():
+    """A pair's period of fewer than four rows would report nothing, ever:
+    Fisher's ``z`` of ``k`` rows carries the information ``k - 3``. Four is
+    accepted, as two is under ``scalar``, whose mean is read from its second
+    row."""
+    with pytest.raises(ValueError, match="monitor_rows of at least 4, but it is 3"):
+        spec(kind="sequential", window_rows=50, monitor_rows=3)
+    spec(kind="sequential", window_rows=50, monitor_rows=4)
+    with pytest.raises(ValueError, match="monitor_rows of at least 2, but it is 1"):
+        spec(kind="sequential", window_rows=50, monitor_rows=1, scalar=True)
+    spec(kind="sequential", window_rows=50, monitor_rows=2, scalar=True)
 
 
 # --- the sequential detector (Wied & Galeano 2013) ---------------------------
@@ -503,9 +540,12 @@ def _sequential_crit(m, ratio, gamma=0.0, **kw):
 @pytest.mark.parametrize("ratio", [0.5, 1.0, 2.0, 4.0])
 def test_the_sequential_critical_value_at_gamma_zero_is_the_series(ratio):
     """Wied & Galeano's Eq. 7 at ``γ = 0``: ``sqrt(T/(1+T))`` times the 95 %
-    point of ``sup|W|`` on ``[0, 1]``, 2.2414, with ``T = monitor_rows /
-    window_rows``."""
-    want = (ratio / (1 + ratio)) ** 0.5 * _sup_abs_bm_quantile(0.95)
+    point of ``sup|W|`` on ``[0, 1]``, 2.2414, with ``T`` the period's
+    length in the detector's own time: the information ``(monitor_rows -
+    3) / (window_rows - 3)`` Fisher's ``z`` carries, 1 where the two
+    counts are equal."""
+    t = (round(ratio * 100) - 3) / (100 - 3)
+    want = (t / (1 + t)) ** 0.5 * _sup_abs_bm_quantile(0.95)
     assert _sequential_crit(100, ratio) == pytest.approx(want, abs=1e-6)
     assert _sup_abs_bm_quantile(0.95) == pytest.approx(2.2414, abs=1e-4)
 
@@ -549,12 +589,15 @@ def test_the_boundary_law_matches_a_simulation():
     assert simulated - 0.015 < ours < simulated + 0.05, (ours, simulated)
 
 
-def test_nothing_is_reported_in_the_history_or_on_the_first_monitored_row():
+def test_nothing_is_reported_in_the_history_or_on_the_first_three_monitored_rows():
+    """Fisher's ``z`` of ``k`` rows carries the information ``k - 3``: none on
+    the first three monitored rows, which report nothing, as the first did
+    when a correlation of two rows was compared."""
     out = run(pair(260, 0.3), kind="sequential", window_rows=100, monitor_rows=100, crit=1e9)
     live = [i for i, v in enumerate(out["stat"].to_list()) if v is not None]
-    # History 0..99, first monitored row 100 silent, 101..199 report, then a
+    # History 0..99, monitored rows 100..102 silent, 103..199 report, then a
     # new history from row 200.
-    assert live == list(range(101, 200)), live[:5]
+    assert live == list(range(103, 200)), live[:5]
 
 
 def test_the_sequential_size_is_near_nominal_on_gaussian_pairs():
@@ -866,9 +909,11 @@ def test_the_permutation_knobs_bounds_are_accepted():
 def test_alpha_nests_the_flags():
     """A higher level never flags less, row by row. Under ``"monitor"`` the
     statistic does not read ``alpha`` and the Kolmogorov quantile falls as
-    it rises. Under ``"window"`` the same seed gives the same draws, and the
-    level picks a lower order statistic of them, so the critical value falls
-    on every row."""
+    it rises; the check on the two columns' scale ratio is read at the same
+    level, so a span past the critical value at one level is past it at a
+    higher one, flagged or its flag withheld (null). Under ``"window"`` the
+    same seed gives the same draws, and the level picks a lower order
+    statistic of them, so the critical value falls on every row."""
     spans = pl.concat([pair(50, (0.1, 0.7)[i % 2], seed=100 + i) for i in range(80)])
     window = three_regimes()
     for frame, kw in (
@@ -879,7 +924,8 @@ def test_alpha_nests_the_flags():
         flags, crits = [], []
         for alpha in (0.001, 0.01, 0.05, 0.2, 0.5):
             out = run(frame, alpha=alpha, **kw)
-            flags.append(out["flag"].fill_null(False).to_numpy())
+            past = out["flag"].fill_null(out["stat"].is_not_null() & out["flag"].is_null())
+            flags.append(past.fill_null(False).to_numpy())
             crits.append(out["crit"].to_numpy())
         counts = [int(f.sum()) for f in flags]
         print(kw.get("kind", "monitor"), "flags at rising alpha:", counts)
@@ -924,18 +970,24 @@ def test_the_default_bandwidth_is_the_floor_of_ln_m(kind, m):
             assert not default["stat"].equals(run(df, **kw, bandwidth=other)["stat"]), other
 
 
+def _span_series(s):
+    """The span's influence series as numpy writes it: ``ξₜ = x̃ₜỹₜ − ρ̂ −
+    (ρ̂/2)(x̃ₜ² − 1 + ỹₜ² − 1)`` and ``dₜ = x̃ₜ² − ỹₜ²``, the span standardized
+    by its mean and (biased) standard deviation."""
+    z = (s - s.mean(axis=0)) / s.std(axis=0)
+    rho = float((z[:, 0] * z[:, 1]).mean())
+    xi = z[:, 0] * z[:, 1] - rho - rho / 2 * (z[:, 0] ** 2 - 1 + z[:, 1] ** 2 - 1)
+    return xi, z[:, 0] ** 2 - z[:, 1] ** 2
+
+
 @pytest.mark.parametrize("bandwidth", [1, 3, 10, None])
 def test_the_monitor_statistic_is_its_definition_with_statsmodels_bartlett(bandwidth):
     """``bandwidth`` (task 320, rank 13) through the whole statistic, each
-    span's ``Q = max_{2≤j≤T} (j/√T)·|ρ̂ⱼ − ρ̂_T| / D̂`` from Wied, Krämer and
-    Dehling's definition: ``ρ̂ⱼ`` numpy's ``corrcoef`` of the span's first
-    ``j`` rows, and ``D̂²`` statsmodels' Bartlett long-run variance
-    ``S_hac_simple(ξ, nlags=γ − 1) / T`` of the delta-method series ``ξₜ =
-    x̃ₜỹₜ − ρ̂ − (ρ̂/2)(x̃ₜ² − 1 + ỹₜ² − 1)`` on the span standardized by
-    its mean and (biased) standard deviation. statsmodels weighs lag ``l``
-    by ``1 − l/(nlags + 1)``, so ``nlags = γ − 1`` is this kernel's ``1 −
-    l/γ``; unset, ``γ = ⌊ln T⌋``. Measured 2026-11-04: 4.4e-15 relative at
-    most over the four spans and four bandwidths; a correlation break inside
+    span's linear CUSUM ``max_j |Σ_{t≤j} ξₜ| / (√T·D̂)`` (task 553): ``D̂²``
+    statsmodels' Bartlett long-run variance ``S_hac_simple(ξ, nlags=γ − 1) /
+    T`` of the delta-method series of Wied, Krämer and Dehling. statsmodels
+    weighs lag ``l`` by ``1 − l/(nlags + 1)``, so ``nlags = γ − 1`` is this
+    kernel's ``1 − l/γ``; unset, ``γ = ⌊ln T⌋``. A correlation break inside
     the third span puts its statistic past the 5% critical value."""
     from statsmodels.stats.sandwich_covariance import S_hac_simple
 
@@ -948,19 +1000,56 @@ def test_the_monitor_statistic_is_its_definition_with_statsmodels_bartlett(bandw
     closes = np.flatnonzero(np.isfinite(stat))
     assert closes.tolist() == [199, 399, 599, 799]
     gamma = bandwidth or math.floor(math.log(span))
-    j = np.arange(2, span + 1)
     qs = []
     for c in closes:
-        s = X[c - span + 1 : c + 1]
-        z = (s - s.mean(axis=0)) / s.std(axis=0)
-        rho = float((z[:, 0] * z[:, 1]).mean())
-        xi = z[:, 0] * z[:, 1] - rho - rho / 2 * (z[:, 0] ** 2 - 1 + z[:, 1] ** 2 - 1)
+        xi, _ = _span_series(X[c - span + 1 : c + 1])
         d = math.sqrt(S_hac_simple(xi, nlags=gamma - 1)[0, 0] / span)
-        rj = np.array([np.corrcoef(s[:i, 0], s[:i, 1])[0, 1] for i in j])
-        qs.append(np.max(j / math.sqrt(span) * np.abs(rj - rho) / d))
-    np.testing.assert_allclose(stat[closes], qs, rtol=1e-13)
-    # The break's span reads past the 5% critical value, 1.3581; the others not.
-    assert stat[599] > 1.3581 > max(stat[199], stat[399], stat[799]), stat[closes]
+        qs.append(np.max(np.abs(np.cumsum(xi))) / (math.sqrt(span) * d))
+    np.testing.assert_allclose(stat[closes], qs, rtol=1e-12)
+    crit = out["crit"][199]
+    assert stat[599] > crit > max(stat[199], stat[399], stat[799]), stat[closes]
+
+
+@pytest.mark.parametrize("seed", range(6))
+def test_the_monitor_cusum_is_statsmodels_ols_residual_cusum(seed):
+    """At ``bandwidth = 1`` the statistic is statsmodels'
+    ``breaks_cusumolsresid(ξ, ddof=0)``, the OLS-residual CUSUM ``max_j
+    |Σ_{t≤j} uₜ| / √(Σu²)`` (Ploberger and Krämer 1992), on the delta-method
+    series: ``ξ`` sums to 0 over the span, as residuals do, and ``D̂²`` at
+    one lag is ``Σξ²/T``. Its p-value is scipy's ``kstwobign``, the limit the
+    critical value is read from. And the check on the scale ratio is the
+    same CUSUM of ``d = x̃² − ỹ²``: a span whose correlation CUSUM passes
+    the critical value flags where ``d``'s does not, and its flag is
+    withheld (null) where ``d``'s does too -- on streams whose correlation
+    breaks, and whose one column's scale doubles, at spans of 30 to 400
+    rows."""
+    from statsmodels.stats.diagnostic import breaks_cusumolsresid
+
+    rng = np.random.default_rng(553 + seed)
+    span = [30, 60, 120, 200, 300, 400][seed]
+    n = 6 * span
+    a, e = rng.standard_normal((2, n))
+    rho = np.where((np.arange(n) // (span // 2)) % 3 == 0, 0.2, 0.8)
+    x = a * np.where(np.arange(n) % (2 * span) < span // 2, 1.0, 2.0)
+    y = rho * a + np.sqrt(1 - rho**2) * e
+    df = pl.DataFrame({"x0": x, "x1": y})
+    out = run(df, window_rows=span, bandwidth=1, alpha_adjust="none")
+    stat = out["stat"].to_numpy().astype(float)
+    crit = out["crit"].to_numpy().astype(float)
+    closes = np.flatnonzero(np.isfinite(stat))
+    assert closes.size == 6
+    seen = set()
+    for c in closes:
+        xi, d = _span_series(np.column_stack([x, y])[c - span + 1 : c + 1])
+        q, pval, _ = breaks_cusumolsresid(xi, ddof=0)
+        assert stat[c] == pytest.approx(q, rel=1e-12)
+        r, _, _ = breaks_cusumolsresid(d, ddof=0)
+        flag = out["flag"][int(c)]
+        want = bool(q > crit[c] and not r > crit[c])
+        withheld = bool(q > crit[c] and r > crit[c])
+        assert flag is (None if withheld else want), (c, q, r, crit[c], flag)
+        seen.add("withheld" if withheld else str(want))
+    print(span, seen)
 
 
 @pytest.mark.parametrize("kind", ["monitor", "sequential"])
@@ -1151,9 +1240,9 @@ def test_a_state_saved_across_a_reset_goes_on_to_the_bit():
     [
         # A span of 8 reports on its last row, every 8 rows.
         ({"window_rows": 8}, [7, 15, 23]),
-        # A history of 8 (rows 0-7), the first monitored row silent, the
-        # second reports and ends the period; then the next history.
-        ({"kind": "sequential", "window_rows": 8, "monitor_rows": 2}, [9, 19]),
+        # A history of 8 (rows 0-7), the first three monitored rows silent,
+        # the fourth reports and ends the period; then the next history.
+        ({"kind": "sequential", "window_rows": 8, "monitor_rows": 4}, [11, 23]),
         # Two windows of 3: the first statistic once six rows are in.
         ({"kind": "window", "window_rows": 3}, list(range(5, 24))),
     ],
@@ -1176,11 +1265,532 @@ def test_the_smallest_window_rows_report_where_they_close(kw, live):
             'kind="sequential" needs window_rows of at least 8, but it is 7',
         ),
         (
-            {"kind": "sequential", "window_rows": 8, "monitor_rows": 1},
-            "monitor_rows of at least 2",
+            {"kind": "sequential", "window_rows": 8, "monitor_rows": 3},
+            "monitor_rows of at least 4",
         ),
     ],
 )
 def test_one_below_the_smallest_window_rows_is_refused(kw, message):
     with pytest.raises(ValueError, match=message):
         spec(**kw)
+
+
+# --- task 553: the oracles of the new statistics ------------------------------
+
+
+@pytest.mark.parametrize("gamma", [0.0, 0.25, 0.45])
+def test_the_sequential_detector_is_fisher_z_by_numpy_and_scipy(gamma):
+    """The ``"sequential"`` detector from third-party pieces: numpy's
+    ``arctanh`` of scipy's ``pearsonr`` correlations of the history and of
+    the monitored rows so far, each weighted by the information scipy's
+    ``pearsonr(...).confidence_interval()`` puts on its Fisher ``z``
+    (``1/se² = n - 3``, read back from the interval's width), and the
+    history's long-run deviation from statsmodels' ``S_hac_simple``:
+
+    ``V_k = (I_k/sqrt(I_h))·|z_k − z_h|·(1 − r_h²)/σ̂``, against ``w(I_k/I_h)``.
+
+    On a stream whose correlation moves from 0.4 to 0.7 inside the period,
+    with a ``crit`` no row reaches, so the whole period reports; the first
+    three monitored rows report nothing, having no information."""
+    from scipy.stats import norm, pearsonr
+    from statsmodels.stats.sandwich_covariance import S_hac_simple
+
+    m, k_rows = 120, 150
+    df = pl.concat([pair(m + 60, 0.4, seed=71), pair(90, 0.7, seed=72)])
+    X = df.to_numpy()
+    out = run(
+        df,
+        kind="sequential",
+        window_rows=m,
+        monitor_rows=k_rows,
+        boundary_gamma=gamma,
+        crit=1e9,
+        alpha_adjust="none",
+    )
+    stat = out["stat"].to_numpy().astype(float)
+    z975 = norm.ppf(0.975)
+
+    def info(a, b):
+        ci = pearsonr(a, b).confidence_interval(0.95)
+        return ((2 * z975) / (np.arctanh(ci.high) - np.arctanh(ci.low))) ** 2
+
+    h = X[:m]
+    r_h = pearsonr(h[:, 0], h[:, 1]).statistic
+    xi, _ = _span_series(h)
+    sd = math.sqrt(S_hac_simple(xi, nlags=math.floor(math.log(m)) - 1)[0, 0] / m)
+    i_h = info(h[:, 0], h[:, 1])
+    assert i_h == pytest.approx(m - 3, rel=1e-9)
+    want = np.full(k_rows, np.nan)
+    for k in range(4, k_rows + 1):
+        mon = X[m : m + k]
+        r_k = pearsonr(mon[:, 0], mon[:, 1]).statistic
+        i_k = info(mon[:, 0], mon[:, 1])
+        b = i_k / i_h
+        w = (1 + b) * (b / (1 + b)) ** gamma
+        v = i_k / math.sqrt(i_h) * abs(np.arctanh(r_k) - np.arctanh(r_h)) * (1 - r_h**2) / sd
+        want[k - 1] = v / w
+    got = stat[m : m + k_rows]
+    assert np.isnan(got[:3]).all(), got[:4]
+    np.testing.assert_allclose(got[3:], want[3:], rtol=1e-9)
+
+
+@pytest.mark.parametrize("alpha", [0.1, 0.2, 0.31, 0.35, 0.4, 0.55, 0.65, 0.69, 0.9])
+def test_the_block_permutation_null_is_scipys_exact_one(alpha):
+    """``perm_block`` against scipy's ``permutation_test``, which enumerates
+    the null exactly: two windows of 6 rows in blocks of 3 are four blocks,
+    and their six splits into two windows are the whole null, each block one
+    observation that scipy permutes by its number (the statistic does not
+    read the order inside a window). The model's critical value at many
+    draws is the ``1 - alpha`` quantile of that null, one of its atoms, at
+    levels on both sides of the atoms' edges at 1/3 and 2/3, so the draws
+    are uniform over the block splits and not merely on the right values.
+    Matched to 3e-16 in the review that found the oracle."""
+    from scipy import stats
+
+    rng = np.random.default_rng(7)
+    w, b = 6, 3
+    n = 2 * w
+    a, e = rng.standard_normal((2, n + 1))
+    x = np.column_stack([a, 0.5 * a + e])
+    df = pl.DataFrame({"x0": x[:, 0], "x1": x[:, 1]})
+    blocks = x[:n].reshape(n // b, b * 2)
+
+    def stat(pre, post):
+        def r(ids):
+            return np.corrcoef(blocks[ids.astype(int)].reshape(-1, 2).T)[0, 1]
+
+        return abs(r(pre) - r(post))
+
+    ids = np.arange(n // b, dtype=float)
+    res = stats.permutation_test(
+        (ids[: w // b], ids[w // b :]),
+        stat,
+        permutation_type="independent",
+        n_resamples=np.inf,
+        vectorized=False,
+        alternative="greater",
+    )
+    null = np.sort(res.null_distribution)
+    assert len(null) == 6
+    cdf = np.arange(1, len(null) + 1) / len(null)
+    want = null[np.searchsorted(cdf, 1 - alpha - 1e-12)]
+    out = run(
+        df,
+        kind="window",
+        window_rows=w,
+        perm_block=b,
+        n_perm=20_000,
+        alpha=alpha,
+        permute_every_rows=1,
+        seed=3,
+    )
+    # Drawn after the first report (row n - 1), in force at row n.
+    assert out["crit"][n] == pytest.approx(want, abs=1e-14)
+
+
+def test_a_moved_scale_ratio_withholds_the_flag_by_name():
+    """The one condition the linear CUSUM does not remove: with the
+    correlation constant and one column's scale doubled half way through a
+    span, ``ξ``'s mean moves by ``−(ρ/2)(r_x − r_y)²`` and its CUSUM leaves
+    its null law, so at ``rho = 0.9`` it passes the critical value on most
+    such spans (0.93 of spans of 1,000 rows, measured). The same CUSUM of
+    ``x̃² − ỹ²`` sees the ratio move, and the flag is withheld: null, named
+    ``scale_ratio_moved`` by ``withheld_reason``. A correlation that breaks
+    with both scales steady flags, with no reason; a span where both scales
+    double together (a change of clock for the sums) is stable and flags
+    neither."""
+    rng = np.random.default_rng(91)
+    T = 1000
+
+    def span(rho, sx=1.0, sy=1.0):
+        a, e = rng.standard_normal((2, T))
+        rho = np.asarray(rho)
+        x, y = a, rho * a + np.sqrt(1 - rho**2) * e
+        return pl.DataFrame({"x0": x * sx, "x1": y * sy})
+
+    step = np.where(np.arange(T) < T // 2, 1.0, 2.0)
+    df = pl.concat(
+        [
+            span(0.9, sx=step),
+            span(np.where(np.arange(T) < T // 2, 0.2, 0.8)),
+            span(0.6, sx=step, sy=step),
+        ]
+    )
+    bank = rp.ModelBank([spec(window_rows=T, alpha_adjust="none")])
+    out = bank.fit_predict(df)
+    c = out["c"].struct.unnest()
+    reason = c["withheld_reason"].cast(pl.String)
+    ends = [T - 1, 2 * T - 1, 3 * T - 1]
+    assert c["stat"][ends[0]] > c["crit"][ends[0]]
+    assert c["flag"][ends[0]] is None and reason[ends[0]] == "scale_ratio_moved"
+    assert c["flag"][ends[1]] is True and reason[ends[1]] is None
+    assert c["flag"][ends[2]] is False and reason[ends[2]] is None
+    assert reason.drop_nulls().len() == 1
+
+
+# --- task 553: spans on the clock ----------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("clock_kw", "rows_kw"),
+    [
+        ({"window_size": 39}, {"window_rows": 40}),
+        (
+            {"kind": "sequential", "window_size": 49, "monitor_span": 79},
+            {"kind": "sequential", "window_rows": 50, "monitor_rows": 80},
+        ),
+    ],
+)
+def test_a_clock_span_on_rows_is_its_count_plus_one(clock_kw, rows_kw):
+    """Without a clock column each row is one unit of clock, and a span of
+    ``D`` units ends at the row ``D`` after its first: ``window_size = D`` is
+    ``window_rows = D + 1`` (and ``monitor_span = M`` is ``monitor_rows = M +
+    1``), to the bit, on a stream with breaks and a row of weight 0 in every
+    seven, which counts in no clock and is in no span."""
+    df = broken().with_columns(w=pl.when(pl.int_range(pl.len()) % 7 == 3).then(0.0).otherwise(1.0))
+    a = run(df, weight="w", **clock_kw)
+    b = run(df, weight="w", **rows_kw)
+    assert a.equals(b)
+    assert a["flag"].fill_null(False).sum() >= 1
+
+
+def _stamped(n, seed, rho=None):
+    """``n`` rows of a pair at irregular times, 0.2 s to 3 s apart, and the
+    times as a datetime column ``t``."""
+    rng = np.random.default_rng(seed)
+    gaps = rng.uniform(0.2, 3.0, n)
+    t = np.datetime64("2026-01-01T00:00:00", "ns") + (np.cumsum(gaps) * 1e9).astype(
+        "timedelta64[ns]"
+    )
+    rho = np.full(n, 0.3) if rho is None else rho
+    a, e = rng.standard_normal((2, n))
+    return pl.DataFrame({"t": t, "x0": a, "x1": rho * a + np.sqrt(1 - rho**2) * e})
+
+
+def test_a_monitor_span_of_the_clock_is_its_rows_by_polars_datetimes():
+    """``window_size = "60s"`` on a temporal clock, against the definition by
+    Polars' datetime arithmetic: a span begins at its first row and ends at
+    the first row at least 60 s after it, which is its last; the report
+    there is the ``window_rows`` statistic of exactly those rows, at the
+    critical value of their count."""
+    df = _stamped(700, 5)
+    out = run(df, clock="t", gap_cap="10s", window_size="60s", alpha_adjust="none")
+    t = df["t"].to_numpy()
+    ends, first = [], 0
+    for i in range(df.height):
+        if t[i] - t[first] >= np.timedelta64(60, "s"):
+            ends.append(i)
+            first = i + 1
+    live = np.flatnonzero(out["stat"].is_not_null().to_numpy()).tolist()
+    assert live == ends
+    start = 0
+    for e in ends:
+        rows = df[start : e + 1]
+        alone = run(rows.drop("t"), window_rows=rows.height, alpha_adjust="none")
+        assert out["stat"][e] == alone["stat"][rows.height - 1]
+        assert out["crit"][e] == alone["crit"][rows.height - 1]
+        start = e + 1
+
+
+def test_a_clock_window_reads_its_two_windows_by_polars_datetimes():
+    """``kind="window"`` with ``window_size = "30s"`` on a temporal clock:
+    each report's two windows are the rows of ``(now − 60 s, now − 30 s]``
+    and ``(now − 30 s, now]``, cut by Polars' datetime comparisons, and its
+    statistic is ``|corr(pre) − corr(post)|`` by numpy; reports begin once
+    the stream has run 60 s. Between two draws the held critical value is
+    rescaled to each report's counts: the ratio of two reports' values is
+    ``sqrt((1/n₁ + 1/n₂)/(1/n₁' + 1/n₂'))``."""
+    df = _stamped(900, 6, rho=np.where(np.arange(900) < 450, 0.1, 0.8))
+    out = run(
+        df,
+        clock="t",
+        gap_cap="10s",
+        kind="window",
+        window_size="30s",
+        n_perm=50,
+        permute_every="200s",
+    )
+    t = df["t"].to_numpy()
+    X = df.select("x0", "x1").to_numpy()
+    d = np.timedelta64(30, "s")
+    stat = out["stat"].to_numpy().astype(float)
+    crit = out["crit"].to_numpy().astype(float)
+    spread = np.full(df.height, np.nan)
+    for i in range(df.height):
+        now = t[i]
+        if now - t[0] < 2 * d:
+            assert np.isnan(stat[i]), i
+            continue
+        pre = (t > now - 2 * d) & (t <= now - d) & (np.arange(df.height) <= i)
+        post = (t > now - d) & (np.arange(df.height) <= i)
+        n1, n2 = int(pre.sum()), int(post.sum())
+        spread[i] = 1 / n1 + 1 / n2
+        if n1 < 2 or n2 < 2:
+            continue
+        want = abs(np.corrcoef(X[pre].T)[0, 1] - np.corrcoef(X[post].T)[0, 1])
+        assert stat[i] == pytest.approx(want, rel=1e-12, abs=1e-15), i
+    # The same draw on consecutive rows: its value moves with the counts.
+    same = 0
+    for i in range(1, df.height):
+        if np.isfinite(crit[i]) and np.isfinite(crit[i - 1]) and np.isfinite(spread[i - 1]):
+            ratio = crit[i] / crit[i - 1]
+            want = math.sqrt(spread[i] / spread[i - 1])
+            if abs(ratio - want) < 1e-12:
+                same += 1
+    assert same > 600, same
+
+
+def test_a_sequential_cycle_on_the_clock_plans_its_period():
+    """``kind="sequential"`` with ``window_size = "40s"`` and ``monitor_span
+    = "60s"``: each cycle's history is the rows of the 40 s from its first,
+    ``m`` of them by Polars' count, its period plans ``K = ⌊1.5 m⌋`` rows, and
+    its critical value is Wied & Galeano's at ``T = (K − 3)/(m − 3)``: at
+    ``γ = 0``, ``sqrt(T/(1+T))`` times 2.2414, a value per cycle."""
+    df = _stamped(1200, 7)
+    out = run(
+        df,
+        clock="t",
+        gap_cap="10s",
+        kind="sequential",
+        window_size="40s",
+        monitor_span="60s",
+        alpha_adjust="none",
+        crit=None,
+    )
+    crits = out["crit"].drop_nulls().unique()
+    assert crits.len() > 2, crits
+    q = _sup_abs_bm_quantile(0.95)
+    allowed = []
+    for m in range(4, 200):
+        k = math.floor(m * 1.5)
+        ratio = (k - 3) / (m - 3)
+        allowed.append((ratio / (1 + ratio)) ** 0.5 * q)
+    for c in crits:
+        assert min(abs(c - a) for a in allowed) < 1e-6, c
+
+
+@pytest.mark.parametrize(
+    ("kw", "message"),
+    [
+        (
+            {"window_rows": 50, "window_size": 20},
+            "window_rows and window_size are both set",
+        ),
+        (
+            {"kind": "sequential", "window_rows": 50, "monitor_span": 20},
+            "monitor_span needs window_size",
+        ),
+        (
+            {"window_size": 20, "monitor_span": 20},
+            'monitor_span applies only under kind="sequential"',
+        ),
+        (
+            {"window_rows": 50, "max_state_bytes": 10_000},
+            "max_state_bytes applies only under window_size",
+        ),
+        ({"window_size": 0}, "window_size must be a span of the clock above 0"),
+        ({"window_size": 20, "max_state_bytes": 0}, "max_state_bytes must be above 0"),
+    ],
+)
+def test_the_clock_forms_are_refused_by_name(kw, message):
+    d = {"features": ["x0", "x1"]}
+    d.update(kw)
+    with pytest.raises(ValueError, match=re.escape(message)):
+        rp.ModelBank([rp.spec.corrchange("c", **d)])
+
+
+def test_a_clock_span_past_its_bytes_is_refused_by_the_bank():
+    """The rows a span of the clock holds are the data's to number, so they
+    are checked as they come: a ``window_size`` of a day over rows a second
+    apart passes a ``max_state_bytes`` of 20 KB, and the bank refuses the run
+    by the spec, naming ``window_size``."""
+    df = _stamped(2000, 8)
+    with pytest.raises(ValueError, match=r"the rows inside window_size = 1d would take its state"):
+        run(df, clock="t", gap_cap="10s", window_size="1d", max_state_bytes=20_000)
+
+
+# --- task 553: size and power against the review's measured tables -------------
+#
+# The review of 2026-11-22 measured each candidate statistic on a numpy
+# replica written from the papers (10,000 replications a cell); these are its
+# figures for the two that were built, the linear CUSUM against the grid-
+# corrected value and the Fisher-z detector. The built model is held to them
+# here: a size at most the review's plus three standard errors of this
+# grid's replications, a power at least the review's less three, where the
+# monitor's figures without the scale-ratio check are first taken down by
+# the 5% of spans that check withholds at a correlation break (0.033 to 0.046
+# measured, every T). The streams are the review's: Gaussian, a shared-scale
+# multivariate t_5, a shared GARCH(1,1) volatility of persistence 0.98, W&G's
+# own GARCH design, and the scales that double at the span's or the
+# period's middle.
+
+
+def _garch(rng, reps, n, omega, a, b, burn=500):
+    z = rng.standard_normal((reps, n + burn))
+    h = np.full(reps, omega / (1 - a - b))
+    out = np.empty((reps, n + burn))
+    for t in range(n + burn):
+        out[:, t] = np.sqrt(h) * z[:, t]
+        h = omega + a * out[:, t] ** 2 + b * h
+    return out[:, burn:] / np.sqrt(omega / (1 - a - b))
+
+
+def _streams(rng, reps, n, rho, kind):
+    """The review's designs: ``x, y`` of shape ``(reps, n)``."""
+    rho = np.asarray(rho, float)
+    mix = lambda e1, e2, r: (e1, r * e1 + np.sqrt(1 - r**2) * e2)  # noqa: E731
+    if kind == "gauss":
+        return mix(*rng.standard_normal((2, reps, n)), rho)
+    if kind == "t5":
+        x, y = mix(*rng.standard_normal((2, reps, n)), rho)
+        s = np.sqrt(rng.chisquare(5, (reps, n)) / 5)
+        return x / s, y / s
+    if kind == "garch_wg":
+        e1 = _garch(rng, reps, n, 0.01, 0.05, 0.8)
+        e2 = _garch(rng, reps, n, 0.01, 0.1, 0.75)
+        a = 0.5 * (np.sqrt(1 + rho) + np.sqrt(1 - rho))
+        b = 0.5 * (np.sqrt(1 + rho) - np.sqrt(1 - rho))
+        return a * e1 + b * e2, b * e1 + a * e2
+    if kind == "garch_hi":
+        e1, e2 = rng.standard_normal((2, reps, n + 500))
+        h = np.full(reps, 0.02 / (1 - 0.98))
+        sd = np.empty((reps, n + 500))
+        for t in range(n + 500):
+            sd[:, t] = np.sqrt(h)
+            h = 0.02 + 0.08 * (sd[:, t] * e1[:, t]) ** 2 + 0.90 * h
+        x, y = mix(e1[:, 500:], e2[:, 500:], rho)
+        return x * sd[:, 500:], y * sd[:, 500:]
+    if kind in ("both_double", "one_doubles"):
+        x, y = mix(*rng.standard_normal((2, reps, n)), rho)
+        s = np.where(np.arange(n) < n // 2, 1.0, 2.0)
+        return (x * s, y * s) if kind == "both_double" else (x * s, y)
+    raise ValueError(kind)
+
+
+def _grouped(x, y, **kw):
+    """Each replication a group of one bank, run in one pass."""
+    reps, n = x.shape
+    df = pl.DataFrame(
+        {
+            "g": np.repeat(np.arange(reps), n),
+            "i": np.tile(np.arange(n), reps),
+            "x0": x.ravel(),
+            "x1": y.ravel(),
+        }
+    )
+    out = rp.ModelBank([spec(group="g", alpha_adjust="none", **kw)]).fit_predict(df)
+    return pl.concat([df.select("g", "i"), out["c"].struct.unnest()], how="horizontal")
+
+
+#: Monitor, the share of stable spans flagged: the review's linear CUSUM
+#: against the grid-corrected value, at T = 8 / 20 / 100 / 200 / 1000; the
+#: one-scale row is its guarded figure (correlation flags the ratio does not).
+MONITOR_SIZE = {
+    ("gauss", 0.0): (0.008, 0.017, 0.034, 0.037, 0.049),
+    ("gauss", 0.9): (0.007, 0.017, 0.030, 0.036, 0.044),
+    ("t5", 0.9): (0.007, 0.009, 0.024, 0.029, 0.036),
+    ("garch_hi", 0.6): (0.009, 0.015, 0.034, 0.035, 0.044),
+    ("both_double", 0.0): (0.010, 0.016, 0.028, 0.036, 0.048),
+    ("one_doubles", 0.6): (0.009, 0.019, 0.044, 0.001, 0.000),
+}
+
+#: Monitor power, Gaussian: (from, to, where) -> {T: the review's rate}.
+MONITOR_POWER = {
+    (0.5, 0.7, 0.5): {100: 0.198, 200: 0.430, 500: 0.869},
+    (0.9, 0.7, 0.5): {100: 0.564, 200: 0.922},
+    (0.5, 0.7, 0.1): {500: 0.178},
+    (0.3, 0.6, 0.9): {500: 0.142},
+}
+
+#: Sequential, the share of cycles ending in a flag, nothing changed in the
+#: correlation (monitor_rows = window_rows): the review's Fisher-z figures at
+#: m = 50 / 100 / 250 / 1000.
+SEQUENTIAL_SIZE = {
+    ("gauss", 0.0, 0.0): (0.077, 0.069, 0.055, 0.050),
+    ("gauss", 0.6, 0.45): (0.071, 0.060, 0.057, 0.049),
+    ("gauss", 0.9, 0.0): (0.072, 0.064, 0.058, 0.056),
+    ("gauss", 0.9, 0.45): (0.068, 0.060, 0.055, 0.052),
+    ("t5", 0.0, 0.0): (0.121, 0.102, 0.080, 0.071),
+    ("t5", 0.9, 0.45): (0.096, 0.086, 0.067, 0.061),
+    ("garch_wg", 0.5, 0.45): (0.071, 0.072, 0.062, 0.055),
+}
+
+#: Sequential power at m = 250: (from, to, monitored row of the break, gamma)
+#: -> (flagged before it, flagged after it, median delay in rows).
+SEQUENTIAL_POWER = {
+    (0.5, 0.7, 12, 0.0): (0.000, 0.885, 106),
+    (0.5, 0.7, 12, 0.45): (0.013, 0.761, 90),
+    (0.9, 0.7, 62, 0.0): (0.001, 0.998, 46),
+    (0.9, 0.7, 62, 0.45): (0.035, 0.962, 44),
+    (0.5, -0.5, 12, 0.0): (0.000, 1.000, 29),
+    (0.0, 0.5, 62, 0.0): (0.001, 0.984, 73),
+}
+
+
+def _band(p, reps):
+    return 3 * math.sqrt(max(p, 0.002) * (1 - p) / reps)
+
+
+@pytest.mark.extended(reason="the review's size and power grid: 4,000 replications a cell")
+@pytest.mark.parametrize(("dgp", "rho"), list(MONITOR_SIZE))
+def test_the_monitor_size_is_at_most_the_reviews(dgp, rho):
+    reps = 4000
+    for T, want in zip((8, 20, 100, 200, 1000), MONITOR_SIZE[(dgp, rho)], strict=True):
+        rng = np.random.default_rng(553_000 + T)
+        x, y = _streams(rng, reps, T, rho, dgp)
+        out = _grouped(x, y, window_rows=T).filter(pl.col("i") == T - 1)
+        size = float((out["flag"] == True).sum()) / reps  # noqa: E712
+        assert size <= want + _band(want, reps), (dgp, rho, T, size, want)
+
+
+@pytest.mark.extended(reason="the review's size and power grid: 4,000 replications a cell")
+@pytest.mark.parametrize("brk", list(MONITOR_POWER))
+def test_the_monitor_power_is_at_least_the_reviews(brk):
+    r0, r1, at = brk
+    reps = 4000
+    for T, want in MONITOR_POWER[brk].items():
+        rng = np.random.default_rng(553_100 + T)
+        rho = np.where(np.arange(T) < int(at * T), r0, r1)
+        x, y = _streams(rng, reps, T, rho, "gauss")
+        out = _grouped(x, y, window_rows=T).filter(pl.col("i") == T - 1)
+        power = float((out["flag"] == True).sum()) / reps  # noqa: E712
+        guarded = 0.95 * want
+        assert power >= guarded - _band(guarded, reps), (brk, T, power, want)
+
+
+def _first_flags(x, y, m, gamma):
+    out = _grouped(x, y, kind="sequential", window_rows=m, monitor_rows=m, boundary_gamma=gamma)
+    f = out.filter(pl.col("flag").fill_null(False)).group_by("g").agg(pl.col("i").min())
+    first = np.full(x.shape[0], -1)
+    first[f["g"].to_numpy()] = f["i"].to_numpy() - m + 1
+    return first
+
+
+@pytest.mark.extended(reason="the review's size and power grid: 4,000 replications a cell")
+@pytest.mark.parametrize(("dgp", "rho", "gamma"), list(SEQUENTIAL_SIZE))
+def test_the_sequential_size_is_at_most_the_reviews(dgp, rho, gamma):
+    for m, want in zip((50, 100, 250, 1000), SEQUENTIAL_SIZE[(dgp, rho, gamma)], strict=True):
+        reps = 4000 if m < 1000 else 2000
+        rng = np.random.default_rng(553_200 + m)
+        x, y = _streams(rng, reps, 2 * m, rho, dgp)
+        size = float((_first_flags(x, y, m, gamma) > 0).mean())
+        assert size <= want + _band(want, reps), (dgp, rho, gamma, m, size, want)
+
+
+@pytest.mark.extended(reason="the review's size and power grid: 4,000 replications a cell")
+@pytest.mark.parametrize("brk", list(SEQUENTIAL_POWER))
+def test_the_sequential_power_is_at_least_the_reviews(brk):
+    r0, r1, k, gamma = brk
+    before, after, delay = SEQUENTIAL_POWER[brk]
+    m, reps = 250, 4000
+    rng = np.random.default_rng(553_300 + k)
+    rho = np.full(2 * m, r0)
+    rho[m + k :] = r1
+    x, y = _streams(rng, reps, 2 * m, rho, "gauss")
+    first = _first_flags(x, y, m, gamma)
+    early = float(((first > 0) & (first <= k)).mean())
+    late = first[first > k]
+    assert early <= before + _band(before, reps), (brk, early)
+    assert late.size / reps >= after - _band(after, reps), (brk, late.size / reps)
+    # The delay is a median of a few thousand: within a tenth of the review's.
+    assert np.median(late - k) <= 1.1 * delay, (brk, np.median(late - k))

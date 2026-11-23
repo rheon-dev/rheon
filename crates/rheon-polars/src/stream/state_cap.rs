@@ -78,6 +78,18 @@ fn window_words(spec: &Spec) -> (String, &'static str, &'static str) {
             window_size: Some(w),
             ..
         } => (format!("window_size = {w}"), "Shorten window_size", "rows"),
+        ModelKind::CorrChange {
+            window_size: Some(w),
+            monitor_span,
+            ..
+        } => (
+            match monitor_span {
+                Some(m) => format!("window_size = {w} and monitor_span = {m}"),
+                None => format!("window_size = {w}"),
+            },
+            "Shorten window_size, or give window_rows",
+            "rows",
+        ),
         ModelKind::Garch {
             start_span: Some(s),
             ..

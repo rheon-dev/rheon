@@ -398,11 +398,14 @@ def power(reps: int = 1000, alpha: float = 0.05) -> None:
             q = float(np.quantile(null, 1 - alpha))
             rho = np.where(np.arange(t) < t // 2, 0.5, 0.7)
             broken = np.array([stat("broken", rho, r) for r in range(reps)])
+            # The model's critical value: the Kolmogorov quantile less the
+            # grid term, since the statistic is a maximum over the span's rows.
+            crit = 1.3580986393225505 - 0.5825971579390107 / np.sqrt(t)
             rows.append(
                 [
                     t,
                     dist,
-                    f"{(broken > 1.3581).mean():.3f}",
+                    f"{(broken > crit).mean():.3f}",
                     f"{(broken > q).mean():.3f}",
                     f"{q:.3f}",
                     f"{published[t]:.3f}" if dist == "t5" else "",
@@ -410,7 +413,8 @@ def power(reps: int = 1000, alpha: float = 0.05) -> None:
             )
     _table(["T", "innovations", "power", "size-adjusted", "empirical 95%", "WKD Table 2"], rows)
     print(
-        f"\n{reps} replications each, nominal {alpha}, asymptotic critical value 1.3581."
+        f"\n{reps} replications each, nominal {alpha}, critical value 1.3581 less"
+        " 0.5826/sqrt(T)."
         "\nOn Gaussian pairs this implementation is well above WKD's table, and"
         "\nunder either reading of their t_5 it is close to it. The size-adjusted"
         "\ncolumn is the one to read across distributions, since it takes its null"
@@ -419,18 +423,15 @@ def power(reps: int = 1000, alpha: float = 0.05) -> None:
 
 
 def _numerator(x: np.ndarray) -> float:
-    """`max_j (j/sqrt(T)) |rho_j - rho_T|`, the monitor's statistic before it
-    is divided by `D-hat`. Written here in one pass so `D-hat` itself can be
-    recovered from the reported statistic."""
+    """`max_j |sum_{t <= j} xi_t| / sqrt(T)`, the monitor's statistic before
+    it is divided by `D-hat`: `xi_t = x_t y_t - (rho/2)(x_t^2 + y_t^2)` on the
+    span standardized by its means and standard deviations. Written here so
+    `D-hat` itself can be recovered from the reported statistic."""
     t = len(x)
-    cs, cs2 = np.cumsum(x, 0), np.cumsum(x * x, 0)
-    cxy = np.cumsum(x[:, 0] * x[:, 1])
-    j = np.arange(1, t + 1)
-    mx, my = cs[:, 0] / j, cs[:, 1] / j
-    vx, vy = cs2[:, 0] / j - mx**2, cs2[:, 1] / j - my**2
-    with np.errstate(invalid="ignore", divide="ignore"):
-        r = (cxy / j - mx * my) / np.sqrt(vx * vy)
-    return float(np.nanmax(((j / np.sqrt(t)) * np.abs(r - r[-1]))[1:]))
+    z = (x - x.mean(axis=0)) / x.std(axis=0)
+    rho = float((z[:, 0] * z[:, 1]).mean())
+    xi = z[:, 0] * z[:, 1] - rho / 2 * (z[:, 0] ** 2 + z[:, 1] ** 2)
+    return float(np.max(np.abs(np.cumsum(xi))) / np.sqrt(t))
 
 
 def dhat(reps: int = 200) -> None:

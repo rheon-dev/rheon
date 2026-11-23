@@ -320,7 +320,7 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
     "kmeans": frozenset({"warm_span", "update_every", "split_merge_every"}),
     "hmm": frozenset({"warm_span"}),
     "bocpd": frozenset({"warm_span", "hazard_rows"}),
-    "corrchange": frozenset({"permute_every"}),
+    "corrchange": frozenset({"permute_every", "window_size", "monitor_span", "max_state_bytes"}),
     "realized": frozenset(
         {"window_rows", "window_size", "closed", "lm_window", "lm_beta", "max_state_bytes"}
     ),

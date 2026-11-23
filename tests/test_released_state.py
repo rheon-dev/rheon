@@ -469,6 +469,17 @@ DECLARED.update(
     }
 )
 
+#: Rule 5's twenty-seventh exception (the user's, 2026-11-22: "Switch to
+#: the new statistics"; PLAN 553): `corrchange`'s monitor is the linear
+#: CUSUM against the grid-corrected critical value and its sequential
+#: detector the Fisher-`z` one, with no layout changed. A file of any
+#: release holds no number the old statistic computed (the span's rows), so
+#: it goes on under the new statistic, not the release's: its rows are held
+#: to this build's own continuation from both halves, every field to the
+#: bit but ``since_flag``, which counts from the last flag the release's
+#: statistic made in the first half. Keyed as `DECLARED` is.
+NEW_STATISTICS = {("corrchange", "2.0.0")}
+
 
 def _online() -> bool:
     """Whether PyPI answers. An HTTP error is an ``OSError``, and a 404 here
@@ -992,6 +1003,7 @@ def test_a_moved_spec_goes_on_as_its_release_did(resumed):
         "converted": 0,
         "prior": 0,
         "restart": 0,
+        "new_statistics": 0,
     }
     for name in names:
         specs = [built[r] for r in work[name]] + [built[name]]
@@ -1036,6 +1048,21 @@ def test_a_moved_spec_goes_on_as_its_release_did(resumed):
                 used["restart"] += 1
                 wrong[f"{name}.{table}"] = _restarted_level(mine, want, name, table)
                 continue
+            if table == "rows" and any(
+                n == name and _version(version) <= _version(since) for n, since in NEW_STATISTICS
+            ):
+                # Under the new statistic (`NEW_STATISTICS`): as this build
+                # goes on from both halves, `since_flag` aside.
+                used["new_statistics"] += 1
+                own = rp.ModelBank(specs)
+                own.fit_predict(probe.stream().head(probe.HALF))
+                ours = _plain(own.fit_predict(second).select(name))
+                wrong[f"{name}.rows"] = _differences(
+                    _plain(mine).drop(f"{name}.since_flag"),
+                    ours.drop(f"{name}.since_flag"),
+                    against="this build's own",
+                )
+                continue
             left = np.ones(second.height, dtype=bool)
             if table == "rows" and name in RESETS:
                 after = _after_reset(mine, second, name, RESETS[name])
@@ -1066,6 +1093,8 @@ def test_a_moved_spec_goes_on_as_its_release_did(resumed):
     # release's files read them as this build does and use no exception.
     young_moved = _version(version) <= _version("1.3.0")
     assert used["reset"] == len(set(RESETS) & set(names)), used
+    restated = {n for n, since in NEW_STATISTICS if _version(version) <= _version(since)}
+    assert used["new_statistics"] == len(restated & set(names)), used
     # A file of 1.4.0 or older holds a radius, and its interval moved; one of
     # 1.5.0 holds the multiplier, so the conformal entry covers none of its
     # specs.

@@ -595,8 +595,10 @@ fn corrchange_reads_its_rows_where_they_are() {
 /// rows over spans of 250 (4 closes), each in its own model, after a warm-up of
 /// two spans, at one column and at seven; and the same of a model that has
 /// not closed a span yet, which has nothing to take (1 a row, as before). What
-/// is left is each close's own statistic, which forms its lists once a span
-/// (22 at seven columns: 0.088 a row here).
+/// is left is each close's own statistic, which forms its lists once a span:
+/// 22 at seven columns (0.088 a row here) while each pair formed its own,
+/// two since PLAN 553, the span's rows and one buffer its pairs share
+/// (0.008 a row here).
 #[test]
 fn the_monitor_kind_copies_a_spans_rows_into_the_last_spans() {
     for (k, scalar) in [(2, false), (7, false), (3, true)] {

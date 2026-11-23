@@ -477,6 +477,9 @@ pub fn corrchange_cfg(spec: &Spec) -> Result<CorrChangeCfg, String> {
         monitor_rows,
         boundary_gamma,
         permute_every,
+        window_size,
+        monitor_span,
+        max_state_bytes,
     } = &spec.model
     else {
         return Err(not_a(spec, "corrchange_cfg", "corrchange"));
@@ -501,9 +504,12 @@ pub fn corrchange_cfg(spec: &Spec) -> Result<CorrChangeCfg, String> {
             ));
         }
     };
-    let span_rows = match *span_rows {
-        Some(rows) => rows,
-        None => {
+    let span_rows = match (*span_rows, window_size) {
+        (Some(rows), _) => rows,
+        // On the clock: the model refuses the two together, and reads the
+        // span from `span_clock`.
+        (None, Some(_)) => 0,
+        (None, None) => {
             // A subject either way: the spec's render drops "corrchange: ".
             let kind_said = if kind_given {
                 format!("kind={name:?} ")
@@ -512,7 +518,7 @@ pub fn corrchange_cfg(spec: &Spec) -> Result<CorrChangeCfg, String> {
             };
             no.refuse(format!(
                 "corrchange: {kind_said}needs window_rows, {}, but it is not set. Set window_rows \
-                 to a number of rows, {} or more.",
+                 to a number of rows, {} or more, or window_size to a span of the clock.",
                 match kind {
                     CorrChangeKind::Sequential =>
                         "the rows of history each monitored period is tested against",
@@ -610,11 +616,21 @@ pub fn corrchange_cfg(spec: &Spec) -> Result<CorrChangeCfg, String> {
     );
     if !sequential {
         refuse(monitor_rows.is_some(), "monitor_rows", "\"sequential\"", "");
+        refuse(monitor_span.is_some(), "monitor_span", "\"sequential\"", "");
         refuse(
             boundary_gamma.is_some(),
             "boundary_gamma",
             "\"sequential\"",
             "",
+        );
+    }
+    // The rows a span of rows holds are bounded by its count; only a span
+    // of the clock holds what the data sizes.
+    if max_state_bytes.is_some() && window_size.is_none() {
+        no.refuse(
+            "corrchange: max_state_bytes applies only under window_size, where the rows a span \
+             of the clock holds are the data's to number; window_rows bounds them already. \
+             Leave max_state_bytes out, or give window_size in place of window_rows.",
         );
     }
     no.finish()?;
@@ -631,24 +647,43 @@ pub fn corrchange_cfg(spec: &Spec) -> Result<CorrChangeCfg, String> {
         n_perm: n_perm.unwrap_or(200),
         // One critical value in force for one shift of the windows: the
         // draws then cost `n_perm · k²` a row whatever `window_rows` is.
-        // A clock cadence alone has no count of reports.
-        permute_every_rows: permute_every_rows.unwrap_or(if permute_every.is_some() {
-            usize::MAX
-        } else {
-            span_rows
-        }),
+        // A clock cadence alone has no count of reports, and under
+        // `window_size` the shift is a span of the clock (below).
+        permute_every_rows: permute_every_rows.unwrap_or(
+            if permute_every.is_some() || window_size.is_some() {
+                usize::MAX
+            } else {
+                span_rows
+            },
+        ),
         perm_block: perm_block.unwrap_or(1),
         norm,
         seed: seed.unwrap_or(0),
         reset,
-        // W&G's `T = 1`: as many rows monitored as the history has.
-        monitor_rows: if sequential {
-            monitor_rows.unwrap_or(span_rows)
-        } else {
-            0
+        // W&G's `T = 1`: as many rows monitored as the history has, or
+        // under `window_size` a period as long as the history's span.
+        monitor_rows: match (sequential, window_size) {
+            (false, _) => 0,
+            (true, None) => monitor_rows.unwrap_or(span_rows),
+            (true, Some(_)) => monitor_rows.unwrap_or(0),
         },
         boundary_gamma: boundary_gamma.unwrap_or(0.0),
-        permute_every: permute_every.as_ref().map(Span::value),
+        // Under `window_size` the value is redrawn once the windows have
+        // moved on by a window, as `window_rows`' default redraws once
+        // they have moved on by its rows.
+        permute_every: permute_every.as_ref().map(Span::value).or_else(|| {
+            window_size
+                .as_ref()
+                .filter(|_| window && permute_every_rows.is_none())
+                .map(Span::value)
+        }),
+        span_clock: window_size.as_ref().map(Span::value),
+        monitor_clock: match (sequential, window_size, monitor_span) {
+            (true, _, Some(s)) => Some(s.value()),
+            (true, Some(w), None) if monitor_rows.is_none() => Some(w.value()),
+            (_, _, s) => s.as_ref().map(Span::value),
+        },
+        max_state_bytes: *max_state_bytes,
     })
 }
 

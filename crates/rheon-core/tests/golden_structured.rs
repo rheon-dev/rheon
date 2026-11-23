@@ -336,6 +336,9 @@ fn corrchange_cfg() -> CorrChangeCfg {
         monitor_rows: 0,
         boundary_gamma: 0.0,
         permute_every: None,
+        span_clock: None,
+        monitor_clock: None,
+        max_state_bytes: None,
     }
 }
 
@@ -932,14 +935,14 @@ const GOLDEN_BOCPD_SHIFT_CLOCK: &[f64] = &[
     29.0,
 ];
 const GOLDEN_CORRCHANGE_BREAK: &[f64] = &[
-    1.0342495833347525,
-    1.35809863932255,
+    1.0806317176843494,
+    1.299838923528649,
     0.0,
-    0.952260748658668,
-    1.35809863932255,
+    0.9148881178221503,
+    1.299838923528649,
     0.0,
-    1.5089720557732986,
-    1.35809863932255,
+    1.9256181134833392,
+    1.299838923528649,
     1.0,
 ];
 const GOLDEN_DECO_FACTOR: &[f64] = &[
