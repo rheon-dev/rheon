@@ -2293,10 +2293,10 @@ Principal components of the feature columns, learned one row at a time.
 
 Use `pca` for the leading directions of a stream's columns, the variance
 along each and each row's scores, where the columns are too many for a
-`k x k` covariance to be kept per group. Its state is `8 (3 + 3k + qk + q)`
+`k x k` covariance to be kept per group. Its state is `8 (2 + 3k + qk + q)`
 bytes for `k` columns and `q` kept directions, one more than the components
 written where there is room. So 2,000 columns and 12 components hold
-256,128 bytes, where `ew_cov`'s covariance would hold 16 MB. For a few
+256,120 bytes, where `ew_cov`'s covariance would hold 16 MB. For a few
 hundred columns or fewer, [`ew_cov`](#ew_cov--exponentially-weighted-moments)'s
 `pca` gives the exact components of the same decayed covariance, and of a
 hard window too.

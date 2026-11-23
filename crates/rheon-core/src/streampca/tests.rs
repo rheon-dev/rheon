@@ -270,31 +270,30 @@ fn the_eigengap_gate_holds_on_both_sides_of_its_threshold() {
     let tr = 10.0;
     let stat = |n: f64| (n - 1.0) * (25.0f64 / 16.0).ln();
     assert!(stat(21.0) < PCA_GAP_CRITICAL && stat(22.0) > PCA_GAP_CRITICAL);
-    assert!(!separated(&[4.0, 1.0], 0, 21.0, 1000, tr, 2));
-    assert!(!separated(&[4.0, 1.0], 1, 21.0, 1000, tr, 2));
-    assert!(separated(&[4.0, 1.0], 0, 22.0, 1000, tr, 2));
-    assert!(separated(&[4.0, 1.0], 1, 22.0, 1000, tr, 2));
+    assert!(!separated(&[4.0, 1.0], 0, 21.0, tr, 2));
+    assert!(!separated(&[4.0, 1.0], 1, 21.0, tr, 2));
+    assert!(separated(&[4.0, 1.0], 0, 22.0, tr, 2));
+    assert!(separated(&[4.0, 1.0], 1, 22.0, tr, 2));
     // A middle component needs both neighbors: apart from the one above
     // but not the one below.
-    assert!(!separated(&[16.0, 4.0, 3.5], 1, 22.0, 1000, tr, 3));
-    assert!(separated(&[16.0, 4.0, 1.0], 1, 22.0, 1000, tr, 3));
+    assert!(!separated(&[16.0, 4.0, 3.5], 1, 22.0, tr, 3));
+    assert!(separated(&[16.0, 4.0, 1.0], 1, 22.0, tr, 3));
     // The last kept direction has no neighbor below.
-    assert!(separated(&[16.0, 4.0], 1, 22.0, 1000, tr, 2));
+    assert!(separated(&[16.0, 4.0], 1, 22.0, tr, 2));
     // A neighbor of no variance is told apart once the rows could have
-    // given it some: at index 1, more than 2 rows of positive weight,
-    // whatever Kish's count (here 1.5, which tells no gap of some variance).
-    assert!(!separated(&[4.0, 0.0], 0, 1.5, 2, tr, 2));
-    assert!(separated(&[4.0, 0.0], 0, 1.5, 3, tr, 2));
-    assert!(!separated(&[400.0, 2.0, 0.0], 1, 3.5, 3, tr, 3));
-    assert!(separated(&[400.0, 2.0, 0.0], 1, 3.5, 4, tr, 3));
+    // given it some: at index 1, `N > 2`.
+    assert!(!separated(&[4.0, 0.0], 0, 2.0, tr, 2));
+    assert!(separated(&[4.0, 0.0], 0, 2.5, tr, 2));
+    assert!(!separated(&[4.0, 2.0, 0.0], 1, 3.0, tr, 3));
+    assert!(separated(&[400.0, 2.0, 0.0], 1, 3.5, tr, 3));
     // A variance at the trace's rounding is no direction; one just above
     // it is, and is a neighbor of some variance.
     let floor = tr * f64::EPSILON * 2.0;
-    assert!(!separated(&[4.0, floor], 1, 1e6, 1000, tr, 2));
-    assert!(separated(&[4.0, floor * 2.0], 1, 1e6, 1000, tr, 2));
+    assert!(!separated(&[4.0, floor], 1, 1e6, tr, 2));
+    assert!(separated(&[4.0, floor * 2.0], 1, 1e6, tr, 2));
     // No weight read yet, or one row.
-    assert!(!separated(&[4.0, 1.0], 0, 0.0, 1000, tr, 2));
-    assert!(!separated(&[4.0, 1.0], 0, 1.0, 1000, tr, 2));
+    assert!(!separated(&[4.0, 1.0], 0, 0.0, tr, 2));
+    assert!(!separated(&[4.0, 1.0], 0, 1.0, tr, 2));
 }
 
 /// No count of rows gates the first rows: they are withheld because Kish's
@@ -473,21 +472,11 @@ fn a_state_of_the_wrong_shape_is_refused() {
     let mut m = StreamPca::new(cfg(3, 2, PcaMethod::Svd, Decay::Lam(0.9))).unwrap();
     m.rows.push(0.0);
     assert!(StreamPca::restore(&m.state()).is_err());
-    // the rows that span it are counted to one more than the kept
-    // directions (3 here), no further
-    let mut m = StreamPca::new(cfg(3, 2, PcaMethod::Svd, Decay::Lam(0.9))).unwrap();
-    for i in 0..10 {
-        m.step(&[i as f64, 1.0, -(i as f64)], &[], 1.0, 1.0);
-    }
-    assert_eq!(m.spanning, 4);
-    assert!(StreamPca::restore(&m.state()).is_ok());
-    m.spanning = 5;
-    assert!(StreamPca::restore(&m.state()).is_err());
 }
 
 /// The settings each refused with its remedy, and the state's size checked
-/// against `max_state_bytes` at the call: `8 (3 + 3k + q k + q)` bytes, so
-/// 2,000 features and 13 components (14 kept) hold 272,136 bytes, past the
+/// against `max_state_bytes` at the call: `8 (2 + 3k + q k + q)` bytes, so
+/// 2,000 features and 13 components (14 kept) hold 272,128 bytes, past the
 /// default 256 KB, and pass with the cap raised.
 #[test]
 fn the_settings_are_checked_with_their_remedies() {
@@ -540,7 +529,7 @@ fn the_settings_are_checked_with_their_remedies() {
         .contains("min_weight")
     );
     let wide = cfg(2000, 13, PcaMethod::Svd, Decay::Lam(0.9));
-    assert_eq!(wide.state_bytes(), 8 * (3 + 6000 + 14 * 2000 + 14));
+    assert_eq!(wide.state_bytes(), 8 * (2 + 6000 + 14 * 2000 + 14));
     assert!(wide.state_bytes() > PCA_MAX_STATE_BYTES);
     assert!(refused(wide.clone()).contains("past max_state_bytes of 262144"));
     assert!(
@@ -754,30 +743,4 @@ fn the_rate_condition_holds_on_both_sides_of_one_half() {
     assert!(m.rate_finds(0, 26.0));
     m.cfg.method = PcaMethod::Oja;
     assert!(!m.rate_finds(0, 26.0));
-}
-
-/// The rank rule counts the rows of positive weight, not Kish's `N` (Fable's
-/// W13 review, C2): `N` rows span at most `N - 1` dimensions whatever their
-/// weights, but under a decay Kish's count stops near `(1 + lam)/(1 - lam)`,
-/// 2.7 at a half-life of 0.9 rows. On data of exact rank 2 the second of
-/// two components, whose neighbor has no variance, needs more than three
-/// rows; read by Kish's count it was never written.
-#[test]
-fn the_rank_rule_counts_the_rows_that_span_the_data() {
-    let k = 3;
-    let mut m = StreamPca::new(cfg(k, 2, PcaMethod::Svd, Decay::Halflife(0.9))).unwrap();
-    let mut stream = Stream::new(&[100.0, 0.001, 0.0], 21);
-    let mut written = 0;
-    for t in 0..200 {
-        let x = stream.row();
-        m.step(&x, &[], 1.0, 1.0);
-        assert!(m.n_kish() < 3.0, "{t}: Kish's count {}", m.n_kish());
-        written += usize::from(m.separated(1));
-    }
-    let (_, vals) = m.directions();
-    assert!(vals[2] <= 1e-12 * vals[0], "{vals:?}");
-    // the second component is written once the rows could span its
-    // neighbor's dimension: from the fourth row on, wherever its own gap
-    // to the first is told apart
-    assert!(written > 150, "written on {written} of 200 rows");
 }

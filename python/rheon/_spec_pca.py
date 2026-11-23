@@ -68,9 +68,9 @@ def pca(
     ``max_state_bytes``
         The bytes a group's state may hold, above 0 and at most 64 MiB.
         Default 262,144 (256 KB). The state is
-        ``8 * (3 + 3k + q*k + q)`` bytes for ``k`` features and ``q`` kept
+        ``8 * (2 + 3k + q*k + q)`` bytes for ``k`` features and ``q`` kept
         directions, fixed by the spec, so it is checked as the spec is
-        built: 2,000 features and 12 components hold 256,128 bytes.
+        built: 2,000 features and 12 components hold 256,120 bytes.
 
     .. rubric:: Output
 
@@ -217,10 +217,7 @@ def pca(
     9.21, the 99th percentile of a chi-squared with two degrees of freedom,
     where ``l`` and ``m`` are the two variances and ``n`` is Kish's
     effective size ``W**2 / Q``. A neighbor of no variance is told apart
-    once the rows of positive weight pass those that could leave it at
-    none: ``m`` rows span at most ``m - 1`` dimensions whatever their
-    weights, while under a short half-life ``n`` stops near ``(1 + λ) /
-    (1 - λ)``. So no count of
+    once ``n`` passes the rows that could leave it at none. So no count of
     rows gates the first rows: they are withheld while ``n`` is too small
     for the test, and a stream with tied components is withheld at the tie
     for as long as it lasts. The test reads eigenvalue estimates, which the

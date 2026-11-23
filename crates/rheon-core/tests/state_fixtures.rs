@@ -1982,17 +1982,6 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
             assert!(series(key) > 0, "garch_bound: series {j}'s {key} is 0");
         }
     }
-    // pca's count of the rows that span it (Fable W13, C2), an integer
-    // `held` does not count: every pca fixture's past its first rows.
-    for name in ["pca", "pca_ccipca", "pca_oja"] {
-        let f = frozen::ALL.iter().find(|f| f.name == name).expect(name);
-        let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
-        let spanning = at(&v, &["model", "StreamPca", "spanning"]).and_then(rmpv::Value::as_u64);
-        assert!(
-            spanning.is_some_and(|n| n > 0),
-            "{name}: spanning {spanning:?}"
-        );
-    }
     // dcc's start over a span: its first stamp, the clock's 0 on this
     // stream, so present and not nil rather than held.
     let f = frozen::ALL

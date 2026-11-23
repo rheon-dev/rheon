@@ -78,11 +78,8 @@
 //!
 //! for `j` and the component above it, and for `j` and the one below. A
 //! neighbor of no variance (below the trace's rounding) is told apart once
-//! the rows of positive weight exceed those that could leave it at none,
-//! `m > i + 1` for the neighbor at index `i`, since `m` rows span at most
-//! `m - 1` dimensions whatever their weights (Kish's `N`, which under a
-//! decay stops near `(1 + lam)/(1 - lam)`, would never pass 3 at a
-//! half-life of a row).
+//! `N` exceeds the rows that could leave it at none, `N > i + 1` for the
+//! neighbor at index `i`, since `N` rows span at most `N - 1` dimensions.
 //! `j` itself needs a variance above the trace's rounding. One direction
 //! more than `n_components` is kept so the last emitted component has a
 //! neighbor to be told apart from. No count of rows enters: the first rows
@@ -204,12 +201,12 @@ impl StreamPcaCfg {
     }
 
     /// The state's bytes as numbers: the weight, its sum of squares, the
-    /// rows that span it, the mean and its low parts, the variances, the
-    /// directions and their variances: `8 (3 + 3k + q k + q)`.
+    /// mean and its low parts, the variances, the directions and their
+    /// variances: `8 (2 + 3k + q k + q)`.
     pub fn state_bytes(&self) -> u64 {
         let k = self.n_features as u64;
         let q = self.kept() as u64;
-        8 * (3 + 3 * k + q * k + q)
+        8 * (2 + 3 * k + q * k + q)
     }
 
     fn cap(&self) -> u64 {
@@ -307,12 +304,6 @@ pub struct StreamPca {
     moments: EwDiag,
     /// `sum w^2` under the decay: `lam^2 Q + w^2`. Kish's `N` is `W^2 / Q`.
     q_sum: f64,
-    /// The rows of positive weight learned, counted up to one more than the
-    /// kept directions, past which the rank rule reads no more: its count,
-    /// since `m` rows span at most `m - 1` dimensions whatever their
-    /// weights.
-    #[serde(default)]
-    spanning: u64,
     /// The `q` directions, row-major `q * k`, each a unit vector or all
     /// zeros for a direction not yet started.
     rows: Vec<f64>,
@@ -329,7 +320,6 @@ impl StreamPca {
         Ok(Self {
             moments: EwDiag::new(k),
             q_sum: 0.0,
-            spanning: 0,
             rows: vec![0.0; q * k],
             vals: vec![0.0; q],
             scratch: Scratch::default(),
@@ -373,14 +363,7 @@ impl StreamPca {
     /// docs' rule), from the state as it stands.
     pub fn separated(&self, j: usize) -> bool {
         let tr = self.trace();
-        separated(
-            &self.vals,
-            j,
-            self.n_kish(),
-            self.spanning,
-            tr,
-            self.cfg.n_features,
-        ) && self.rate_finds(j, tr)
+        separated(&self.vals, j, self.n_kish(), tr, self.cfg.n_features) && self.rate_finds(j, tr)
     }
 
     /// Whether the method's own rate has found component `j` against its
@@ -411,7 +394,7 @@ impl StreamPca {
         let w2 = w * w;
         let unbias = w2 / (w2 - self.q_sum);
         for j in 0..r {
-            if !(separated(&self.vals, j, n, self.spanning, tr, k) && self.rate_finds(j, tr)) {
+            if !(separated(&self.vals, j, n, tr, k) && self.rate_finds(j, tr)) {
                 continue;
             }
             let e = &self.rows[j * k..(j + 1) * k];
@@ -633,9 +616,8 @@ impl StreamPca {
 pub const PCA_GAP_CRITICAL: f64 = 9.210_340_371_976_184;
 
 /// Whether component `j` of the variances `vals` is told apart from its
-/// neighbors at Kish's `n`, `rows` of positive weight and the trace `tr`
-/// (the module docs' rule).
-fn separated(vals: &[f64], j: usize, n: f64, rows: u64, tr: f64, k: usize) -> bool {
+/// neighbors at Kish's `n` and the trace `tr` (the module docs' rule).
+fn separated(vals: &[f64], j: usize, n: f64, tr: f64, k: usize) -> bool {
     let lj = vals[j];
     // Above the trace's rounding: a direction of no variance, or of
     // rounding alone, is no direction.
@@ -645,15 +627,14 @@ fn separated(vals: &[f64], j: usize, n: f64, rows: u64, tr: f64, k: usize) -> bo
     }
     // Two eigenvalues told apart (the module docs): a neighbor of no
     // variance is told apart once the rows could have given it some, past
-    // the dimensions the rows of positive weight so far span, a rank that
-    // their weights do not shrink; two of some variance by the test
+    // the dimensions the rows so far span; two of some variance by the test
     // of their equality, `(n - 1) ln(((l + m) / 2)^2 / (l m))` past the
     // critical value. `libm`'s `log`, so the decision is the same on every
     // platform for the same state.
     let apart = |l: f64, m: f64, below: usize| {
         let (hi, lo) = if l >= m { (l, m) } else { (m, l) };
         if lo <= floor {
-            return rows > (below + 1) as u64;
+            return n > (below + 1) as f64;
         }
         let am = 0.5 * (hi + lo);
         (n - 1.0) * libm::log(am / hi * (am / lo)) > PCA_GAP_CRITICAL
@@ -798,9 +779,6 @@ impl OnlineModel for StreamPca {
         self.scratch.d = d;
         self.moments.update(x, lam, weight);
         self.q_sum = lam * lam * self.q_sum + weight * weight;
-        if weight > 0.0 {
-            self.spanning = (self.spanning + 1).min(self.cfg.kept() as u64 + 1);
-        }
         if w_new <= 0.0 {
             // Nothing carried and nothing added: no share to take, and
             // nothing moves but the weight, which the update decayed.
@@ -836,11 +814,7 @@ impl OnlineModel for StreamPca {
                 let m = *m;
                 crate::model::check_cfg("pca", m.cfg.validate())?;
                 let (k, q) = (m.cfg.n_features, m.cfg.kept());
-                if m.moments.k() != k
-                    || m.rows.len() != q * k
-                    || m.vals.len() != q
-                    || m.spanning > q as u64 + 1
-                {
+                if m.moments.k() != k || m.rows.len() != q * k || m.vals.len() != q {
                     return Err(crate::model::damaged(
                         "pca",
                         "its running sums have the wrong shape",
