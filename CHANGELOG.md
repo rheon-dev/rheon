@@ -718,6 +718,16 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **The weighted LARS path holds at penalty weights near the ends of the
+  doubles** (review 2026-11-23, MATH-8). The path with a penalty weight
+  per column runs on the correlations over `w_i w_j`, which were 0 at
+  weights of `1e200`, so every column read as collinear and every slope
+  stayed 0, and infinite at `1e-160`. The weights are now taken to a power
+  of two near 1 first, which moves no bit of the path and multiplies its
+  penalties back. Weights more than `2^256` (about `1.2e77`) apart, past
+  what those correlations can hold, are refused with a message that says
+  so.
+
 - **`sgd`'s and `pa`'s coefficient constraints project soundly at any
   feature scales** (review 2026-11-23, REG-8 and REG-19). Under
   `standardize=True` the projection onto `coef_min`, `coef_max` and

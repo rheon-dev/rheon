@@ -1497,3 +1497,47 @@ fn a_descent_that_diverges_is_not_converged() {
     );
     assert_eq!(p.unconverged, [true], "{:?}", p.coefs);
 }
+
+/// Penalty weights near the ends of the doubles walk the path their scaled
+/// copy walks (review 2026-11-23, MATH-8): `R̃_ij = R_ij / (w_i w_j)` was 0
+/// at weights of `1e200`, so every column read as collinear and every
+/// slope stayed 0, and infinite at `1e-160`. Weights multiplied by one
+/// number give the same coefficients at each knot, the penalties divided
+/// by it: the weights are taken to a power of two near 1 first, exactly.
+/// Weights further apart than the doubles can hold `R̃` for, `2^256`, are
+/// refused by name.
+#[test]
+fn penalty_weights_near_the_ends_of_the_doubles_walk_the_scaled_path() {
+    let (r, d) = design(23, 300, 4, 0.5, &[1.0, -0.6, 0.4, 0.3]);
+    let rows = DenseRows { r: &r, k: 4 };
+    let live = [true; 4];
+    let base = [1.0, 2.0, 0.5, 1.5];
+    let want = lars_lasso_weighted(&rows, &d, &live, &base, LarsLimits::default()).unwrap();
+    assert!(want.len() > 2);
+    for scale in [1e200, 1e-200, 2f64.powi(-1000), 1e300] {
+        let w: Vec<f64> = base.iter().map(|x| x * scale).collect();
+        let got = lars_lasso_weighted(&rows, &d, &live, &w, LarsLimits::default()).unwrap();
+        assert_eq!(got.len(), want.len(), "{scale:e}");
+        for (g, x) in got.coefs.iter().zip(&want.coefs) {
+            assert!(
+                (g - x).abs() <= 1e-12 * (1.0 + x.abs()),
+                "{scale:e}: {g} against {x}"
+            );
+        }
+        for (g, x) in got.penalties.iter().zip(&want.penalties) {
+            assert!(
+                (g * scale - x).abs() <= 1e-12 * x.abs(),
+                "{scale:e}: {g} against {x}"
+            );
+        }
+    }
+    let err = lars_lasso_weighted(
+        &rows,
+        &d,
+        &live,
+        &[1e-160, 1.0, 1.0, 1.0],
+        LarsLimits::default(),
+    )
+    .unwrap_err();
+    assert!(err.contains("2^256"), "{err}");
+}
