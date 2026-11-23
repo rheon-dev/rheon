@@ -19,7 +19,7 @@ exact spec you built.
 | family | models |
 |---|---|
 | [Linear models](MODELS.md#linear-models) | [`ewridge`](#ewridge) · [`rls`](#rls) · [`lasso`](#lasso) · [`kalman`](#kalman) · [`huber`](#huber) · [`quantile`](#quantile) · [`sgd`](#sgd) · [`pa`](#pa) · [`ftrl`](#ftrl) · [`glm`](#glm) · [`expectile`](#expectile) · [`holt`](#holt) |
-| [Moments and correlation](MODELS.md#moments-and-correlation) | [`ew_cov`](#ew_cov) · [`marginal`](#marginal) · [`deco`](#deco) · [`rcov`](#rcov) · [`audit`](#audit) · [`garch`](#garch) |
+| [Moments and correlation](MODELS.md#moments-and-correlation) | [`ew_cov`](#ew_cov) · [`marginal`](#marginal) · [`deco`](#deco) · [`rcov`](#rcov) · [`audit`](#audit) · [`garch`](#garch) · [`dist_fit`](#dist_fit) |
 | [Clustering and classification](MODELS.md#clustering-and-classification) | [`kmeans`](#kmeans) · [`micro`](#micro) · [`ew_class`](#ew_class) |
 | [Sequential tests and regimes](MODELS.md#sequential-tests-and-regimes) | [`seqtest`](#seqtest) · [`corrchange`](#corrchange) · [`bocpd`](#bocpd) · [`hmm`](#hmm) · [`hawkes`](#hawkes) |
 
@@ -402,6 +402,29 @@ The fields of `po.spec.garch("m", targets=["y"], start_rows=50)`:
 | `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
 | `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
 | `coef` | `list[f64]` | the numbers behind the fit as one list ([shared field](#fields-most-models-write)) | on every row but those `coef_every` or `max_rows_between_coefs` fills (by default, each group's last row not skipped in each chunk), and before the model has anything to report |
+
+## `dist_fit`
+
+The fields of `po.spec.dist_fit("m", targets=["y"], half_life=50.0)`:
+
+| field | dtype | what it holds | also null |
+|---|---|---|---|
+| `loc_y` | `f64` | the location of the distribution fitted to `<t>`, from the rows before this one | while withheld, and where `withheld_reason_<t>` names a reason |
+| `scale_y` | `f64` | the scale of that fit: the normal's standard deviation | where `loc_<t>` is |
+| `pit_y` | `f64` | the fit's distribution function at the row's own `<t>` | where `loc_<t>` is, and where `<t>` is |
+| `log_score_y` | `f64` | the log of the fit's density at the row's own `<t>` | where `loc_<t>` is, and where `<t>` is |
+| `withheld_reason_y` | `enum` | why `<t>`'s fit reports nothing on this row: `no_weight`, `min_weight` or `degenerate_variance` (a scale of 0) | where `<t>`'s fit reports, and while withheld |
+| `weight_sum` | `f64` | accumulated weight before the model learns this row, and before its own decay ([shared field](#fields-most-models-write)) | never |
+| `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
+| `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
+
+Under `quantiles=[0.05, 0.95], es_levels=[0.05]`, it also writes:
+
+| field | dtype | what it holds | also null |
+|---|---|---|---|
+| `q0.05_y` | `f64` | the fit's quantile of `<t>` at `<level>`, one of `quantiles` | where `loc_<t>` is |
+| `q0.95_y` | `f64` | the fit's quantile of `<t>` at `<level>`, one of `quantiles` | where `loc_<t>` is |
+| `es0.05_y` | `f64` | the fit's lower-tail expected shortfall of `<t>` at `<level>`, one of `es_levels`: the mean of the values below the quantile at that level | where `loc_<t>` is |
 
 ## `kmeans`
 

@@ -356,6 +356,21 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         ),
         [],
     ),
+    # Two targets, two quantiles and a shortfall each: every field it has.
+    (
+        "dist_fit",
+        "dist_fit",
+        dict(
+            targets=["y", "z"],
+            quantiles=[0.05, 0.95],
+            es_levels=[0.05],
+            group="g",
+            half_life=25.0,
+            emit_clocks=True,
+            **CLOCK,
+        ),
+        [],
+    ),
 ]
 
 

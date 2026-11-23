@@ -219,8 +219,7 @@ pub fn dist_fit_cfg(spec: &Spec, decay: Decay) -> Result<rheon_core::DistFitCfg,
         "normal" => rheon_core::DistFamily::Normal,
         other => {
             return Err(format!(
-                "dist_fit: family must be \"normal\", but it is {other:?}. Use \"normal\", \
-                 or leave family out."
+                "dist_fit: family must be \"normal\", but it is {other:?}. Use \"normal\"."
             ));
         }
     };

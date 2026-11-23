@@ -1554,6 +1554,29 @@ variance_z = { budget = 8.125 }
 weight_sum = { budget = 8.0 }
 withheld_reason = { budget = 1.125 }
 
+[memory.dist_fit]
+"es0.05_y" = { budget = 8.125 }
+"es0.05_z" = { budget = 8.125 }
+learned_clock = { budget = 8.125 }
+loc_y = { budget = 8.125 }
+loc_z = { budget = 8.125 }
+log_score_y = { budget = 8.125 }
+log_score_z = { budget = 8.125 }
+pit_y = { budget = 8.125 }
+pit_z = { budget = 8.125 }
+"q0.05_y" = { budget = 8.125 }
+"q0.05_z" = { budget = 8.125 }
+"q0.95_y" = { budget = 8.125 }
+"q0.95_z" = { budget = 8.125 }
+scale_y = { budget = 8.125 }
+scale_z = { budget = 8.125 }
+scored_clock = { budget = 8.0 }
+settled_frac = { budget = 8.0 }
+weight_sum = { budget = 8.0 }
+withheld_reason = { budget = 1.125 }
+withheld_reason_y = { budget = 1.125 }
+withheld_reason_z = { budget = 1.0 }
+
 # --- raises and sign-offs -------------------------------------------------------
 [[raised]]
 key = "tolerance.rss"

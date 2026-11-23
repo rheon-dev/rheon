@@ -762,6 +762,26 @@ CASES: list[Case] = [
             "max_rows_between_coefs": 7,
         },
     ),
+    # Each target fitted a normal: its levels, and every stream key but a
+    # coefficient cadence, since it has no coefficients.
+    Case(
+        "dist_fit",
+        "dist_fit",
+        {
+            **NOCOEF,
+            "targets": ["y", "x0"],
+            "family": "normal",
+            "quantiles": [0.05, 0.95],
+            "es_levels": [0.025, 0.1],
+        },
+    ),
+    # The other stream keys, a fixed location, and its groups run to a close.
+    Case("dist_fit_floc", "dist_fit", {**NOCOEF2, "targets": ["y"], "floc": 0.0}),
+    Case(
+        "dist_fit_close",
+        "dist_fit",
+        {**CLOSE, "targets": ["y"], "half_life": 25.0, "quantiles": [0.5]},
+    ),
     Case(
         "audit",
         "audit",

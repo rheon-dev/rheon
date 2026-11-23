@@ -1,7 +1,7 @@
 <!-- kind: reference -->
 # Models
 
-The reference entry of each of the twenty-six models a spec can name, by
+The reference entry of each of the twenty-seven models a spec can name, by
 family, for a reader who knows which model they want to look up. A
 model's parameters, their defaults and its refusals are in its docstring,
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md).
@@ -28,7 +28,7 @@ which models keep each, and why.
 
 ## The models at a glance
 
-The twenty-six models fall into four families, and each family answers one
+The twenty-seven models fall into four families, and each family answers one
 kind of question about a stream. Each name links its builder's reference
 page, which gives its keywords and their defaults, and *entry* links its
 entry on this page. [Choose a model](how-to/choose-a-model.md) says which
@@ -56,6 +56,7 @@ to start with for which question.
 | [`rcov`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.rcov) · [entry](#rcov--a-blocks-realized-covariance-robust-to-noise) | accumulate | a block's realized covariance, robust to microstructure noise: the Barndorff-Nielsen–Hansen–Lunde–Shephard kernel or Christensen–Kinnebrock–Podolskij pre-averaging, reported when a group closes |
 | [`audit`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.audit) · [entry](#audit--what-a-streams-columns-hold) | accumulate | what each column holds, counted in one pass: nulls, NaNs and infinities apart, repeated values, runs, persistence, tails and duplicated columns, and the clock's duplicate stamps and gaps, read back as a table and by `bank.check()` |
 | [`garch`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.garch) · [entry](#garch--how-large-will-the-next-return-be) | step | the GARCH family, a conditional variance for each return series: GARCH(1,1), GJR, EGARCH and FIGARCH, with normal, Student-t or skewed-t innovations, its parameters learned a row at a time after a start fitted by likelihood |
+| [`dist_fit`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.dist_fit) · [entry](#dist_fit--what-values-will-the-target-take) | accumulate | a normal distribution fitted to each target, exponentially weighted, and what it gives each row before the row is learned: quantiles, the lower-tail expected shortfall, the probability integral transform and the log score |
 | **[Clustering and classification](#clustering-and-classification)** | | put labels on rows |
 | [`kmeans`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.kmeans) · [entry](#kmeans--exponentially-weighted-k-means) | step | exponentially weighted k-means: cluster labels assigned before the row is learned from, with a split–merge move that finds a cluster born after seeding |
 | [`micro`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.micro) · [entry](#micro--density-based-clustering-any-shape) | step | density-based clustering: DenStream micro-clusters linked into clusters of any shape and number, flagging the rows that belong to none |
@@ -266,7 +267,7 @@ per target, give `min_weight` a list. The default depends on the model:
 | the feature count plus one (1 for `holt`) | `ew_cov`, `ew_class`, `kmeans`, `micro`, `holt` |
 | 3 | `marginal`, `deco` |
 | 1 | `bocpd` |
-| 0, each having a gate of its own or nothing to gate | `ewridge`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes`, `garch` |
+| 0, each having a gate of its own or nothing to gate | `ewridge`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes`, `garch`, `dist_fit` |
 
 **`min_settled_frac` is off by default.** Set it when the half-life was
 chosen to average over regimes or seasons that a shorter history would not
@@ -2145,7 +2146,9 @@ against that state. `marginal`,
 `rcov` and `audit` write only `weight_sum` on a row, and keep their results
 in the state: read them as a table after the run, or, for `rcov`, when a
 block closes. `garch` forecasts each return's variance before the row
-arrives, from a model of how variance clusters in time.
+arrives, from a model of how variance clusters in time. `dist_fit` fits a
+distribution to each column and reads the row's quantiles, shortfall and
+score from it before the row arrives.
 
 ### `ew_cov` — exponentially weighted moments
 
@@ -3064,6 +3067,126 @@ GJR with the skewed t: under skewed innovations GJR's persistence reads
 EGARCH or FIGARCH, APARCH, the generalized error distribution and a mean
 model: none has an online estimator checked against `arch`. EGARCH's
 forecast past one row has no closed form.
+
+### `dist_fit` — what values will the target take?
+
+*API:* [`rheon.spec.dist_fit`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.dist_fit) — *Rust:* [`dist_fit.rs`](../crates/rheon-core/src/dist_fit.rs) — *Outputs:* [fields](OUTPUTS.md#dist_fit)
+
+A normal distribution fitted to each target by weighted maximum likelihood,
+the older rows weighing less by the decay, and what the fit says of each
+row before the row is learned.
+
+Use `dist_fit` when the question is what values a series is likely to take,
+not what its mean will be. It gives a band to hold a reading to, a value at
+risk and the expected shortfall past it, and a score of how surprising each
+row was. Each target is fitted on its own. Every row reports, per target,
+the fit's `loc` and `scale`, a quantile at each level of `quantiles`, a
+lower-tail expected shortfall at each level of `es_levels`, and the row's
+own `pit` and `log_score`, all from the rows before it.
+
+Its parameters, their defaults and what each refuses are in its
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.dist_fit),
+and the fields it writes in [OUTPUTS.md](OUTPUTS.md#dist_fit). The
+parameters every spec takes are in [What every spec takes](#what-every-spec-takes),
+apart from `features`, which it refuses. A row's weight scales its term in
+the likelihood. A row of weight 0 counts in no clock and learns nothing; it
+is still read. A target that is null on a row learns nothing from it, and
+its own weight ages by the row's decay, so `min_weight` is each target's
+floor on the weight of the rows it was present on.
+
+#### The fit
+
+Per target, with `w` the row's weight and `λ = 0.5^(Δ / half_life)` the
+decay over the clock `Δ` since the last row that counted, the weighted
+moments step as Welford's, in the mean form:
+
+```
+W' = λ W + w,   a = λ W / W',   b = w / W'
+d  = y − m
+m' = m + b d
+c' = a c + a b d²
+```
+
+so `m` is the weighted mean of every learned row at its decayed weight, and
+`c` the weighted mean square about it. `loc = m` and `scale = √c`: the
+normal's maximum-likelihood fit, with no degrees-of-freedom correction, as
+`scipy.stats.norm.fit` gives it. Given `floc`, the location is fixed there
+instead, the moments are of `y − floc`, and `scale = √(c + m²)`, the root of
+the weighted mean square about `floc`.
+
+From that fit, with `Φ` the standard normal's distribution function and `φ`
+its density:
+
+```
+q_p       = loc + scale Φ⁻¹(p)
+es_α      = E[y | y ≤ q_α] = loc − scale φ(Φ⁻¹(α)) / α
+z         = (y − loc) / scale
+pit       = Φ(z)
+log_score = −ln scale − ½ ln 2π − ½ z²
+```
+
+A target with no weight yet, one under its `min_weight`, and one whose
+values have all been the same (a scale of 0, which nothing is divided by)
+reports nothing, and `withheld_reason_<t>` says which: `no_weight`,
+`min_weight` or `degenerate_variance`.
+
+The state is four numbers a target, its weight, its mean, the part of the
+mean that rounding leaves out and its second moment, beside the shared
+weight and clock: 32 bytes a target, whatever the stream's length or the
+levels asked for.
+
+#### Example
+
+**It finds the distribution it did not see made.** This code fits a normal
+to a series of mean 5 and standard deviation 2, and prints the fit and the
+5% quantile the last row was given:
+
+```python
+import numpy as np
+import polars as pl
+from rheon import polars as rp
+
+# Simulate the series: a normal of mean 5 and standard deviation 2.
+rng = np.random.default_rng(7)
+y = 5.0 + 2.0 * rng.standard_normal(20_000)
+pl.DataFrame({"y": y}).write_parquet("levels.parquet")
+
+# Fit it, each row reading the fit from the rows before it.
+fit = rp.spec.dist_fit("d", targets=["y"], quantiles=[0.05], half_life=5_000.0)
+out = rp.ModelBank([fit]).fit_predict(pl.read_parquet("levels.parquet")).unnest("d")
+
+# Read the last row's fit and quantile, and compare them with the truth.
+last = out.row(-1, named=True)
+print(f"loc {last['loc_y']:.2f}, scale {last['scale_y']:.2f}, q0.05 {last['q0.05_y']:.2f}")
+```
+
+```text
+loc 4.99, scale 1.98, q0.05 1.74
+```
+
+#### See also
+
+For the moments of several columns, or a variance that is forecast:
+
+- [`ew_cov`](#ew_cov--exponentially-weighted-moments), for the weighted
+  moments of several columns together, their covariances included.
+- [`garch`](#garch--how-large-will-the-next-return-be), for a variance
+  forecast from the rows' own clustering rather than averaged over a fixed
+  decay.
+
+#### Notes
+
+**It matches a two-pass weighted fit.** `loc` and `scale` are the weighted
+mean and standard deviation of every learned row at its decayed weight, to
+rounding. Statsmodels' `DescrStatsW` with `ddof=0` computes them in two
+passes from the same weights, and agreed to within `10⁻¹⁵` relative. The
+series had irregular gaps on the clock and unequal row weights, at levels
+from 0 to −1,000.
+
+**The shortfall moves with the fit alone.** The expected shortfall is the normal's
+closed form, so it moves with `loc` and `scale` alone. A series with
+heavier tails than the normal's has a shortfall past it; a `pit` near 0 or
+1 more often than its level says is how that shows.
 
 ## Clustering and classification
 

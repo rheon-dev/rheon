@@ -415,6 +415,21 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         dict(targets=["y", "z"], kernel_decays=[0.5, 2.0], group="g", half_life=25.0, **CLOCK),
         [],
     ),
+    # Each target fitted a normal: two quantiles, a shortfall, the pit and
+    # the log score; the zero weights learn nothing.
+    (
+        "dist_fit",
+        "dist_fit",
+        dict(
+            targets=["y", "z"],
+            quantiles=[0.05, 0.95],
+            es_levels=[0.05],
+            group="g",
+            half_life=25.0,
+            **CLOCK,
+        ),
+        [],
+    ),
 ]
 
 #: The switches and paths the workload above never reached (review round 9,

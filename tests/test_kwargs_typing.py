@@ -23,6 +23,7 @@ BUILDERS = [
     "audit",
     "hawkes",
     "garch",
+    "dist_fit",
     "bocpd",
     "corrchange",
     "deco",

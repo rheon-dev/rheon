@@ -158,6 +158,14 @@
     beta = None
     blocks = None
     common
+  dist_fit:
+    name
+    targets
+    family = 'normal'
+    quantiles = None
+    es_levels = None
+    floc = None
+    common
   ew_class:
     name
     features
@@ -589,6 +597,23 @@
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
     stream.min_weight = [3.0]
+    stream.robust_se_half_life = 50.0
+    stream.specification_half_life = 50.0
+    stream.tails_half_life = 50.0
+  dist_fit(half_life=50.0, targets=['y']):
+    model.decay.Halflife = 50.0
+    model.es_levels = []
+    model.family = "Normal"
+    model.floc = null
+    model.min_weight = 0.0
+    model.n_targets = 1
+    model.quantiles = []
+    stream.breaks_half_life = 50.0
+    stream.calibration_half_life = 200.0
+    stream.feature_health_half_life = 50.0
+    stream.influence_half_life = 50.0
+    stream.max_error_inflation = "inf"
+    stream.min_weight = [0.0]
     stream.robust_se_half_life = 50.0
     stream.specification_half_life = 50.0
     stream.tails_half_life = 50.0
@@ -1199,6 +1224,10 @@
     model.variance_targeting = true
   garch(start_span=500.0, targets=['y']), the lines that differ from garch's:
     model.start_span = 500.0
+  dist_fit(es_levels=[0.05], floc=0.0, half_life=50.0, quantiles=[0.05, 0.95], targets=['y']), the lines that differ from dist_fit's:
+    model.es_levels = [0.05]
+    model.floc = 0.0
+    model.quantiles = [0.05, 0.95]
 
 [ModelBank]  # name and signature: a parameter added or a default moved is a diff here
   __init__(self, specs: 'Iterable[dict[str, Any]]', *, threads: 'int | None' = None) -> 'None'
@@ -2361,6 +2390,26 @@
     settled_frac: f64
     withheld_reason: enum
     coef: list[f64]
+  dist_fit minimal:
+    loc_y: f64
+    scale_y: f64
+    q0.05_y: f64
+    q0.95_y: f64
+    es0.05_y: f64
+    pit_y: f64
+    log_score_y: f64
+    withheld_reason_y: enum
+    loc_z: f64
+    scale_z: f64
+    q0.05_z: f64
+    q0.95_z: f64
+    es0.05_z: f64
+    pit_z: f64
+    log_score_z: f64
+    withheld_reason_z: enum
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
   deco blocked:
     u_a: f64
     u_b: f64
@@ -2392,6 +2441,7 @@
   bocpd: the shared columns only
   corrchange: the shared columns only
   deco: the shared columns only
+  dist_fit: the shared columns only
   ew_class: the shared columns only
   ew_cov:
     spec: String
@@ -2650,6 +2700,7 @@
   lasso.closed: both, right
   garch.vol: egarch, figarch, garch, gjr
   garch.dist: normal, skewt, t
+  dist_fit.family: normal
   marginal.closed: both, right
   ew_class.covariance_type: diag, full, tied
   ew_class.window_budget: refuse, thin
@@ -2795,6 +2846,7 @@
     bocpd: covariance_prior, covariance_type, degrees_of_freedom_prior, hazard, hazard_col, hazard_rows, max_run, mean_precision_prior, mean_prior, prune_below, robust_beta, warm_rows, warm_span
     corrchange: alpha, alpha_adjust, bandwidth, boundary_gamma, change_action, crit, kind, monitor_rows, n_perm, norm, perm_block, permute_every, permute_every_rows, scalar, seed, window_rows
     deco: alpha, beta, blocks, dynamics
+    dist_fit: es_levels, family, floc, quantiles
     ew_class: classes, closed, covariance_type, max_rows_between_snapshots, precision_prior, snapshot_every, window_budget, window_size
     ew_cov: bias, closed, gram_threads, lags, mahal_quantiles, max_rows_between_pcas, max_rows_between_snapshots, pca, pca_every, precision_prior, snapshot_every, stats, window_budget, window_size
     ewridge: closed, coef_prior, feature_sets, gram_block_rows, gram_threads, long_half_life, max_rows_between_snapshots, max_rows_between_solves, ridge, ridge_scale, session_shrink, snapshot_every, solve_every, standardize, target_gaps, window_budget, window_size

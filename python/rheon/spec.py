@@ -95,10 +95,10 @@ shows them at work.
     converged, so it never reports a number it is not yet informed enough to
     give. What: the weight a model must have seen before its outputs stop being
     null; the model learns from every row either way. A list gives one
-    threshold per target. Thirteen models keep a weight per target: ``ewridge``,
+    threshold per target. Fourteen models keep a weight per target: ``ewridge``,
     ``lasso``, ``kalman``, ``huber``, ``quantile``, ``expectile``, ``holt``, ``sgd``,
-    ``pa``, ``ftrl``, ``rls``, ``glm`` and ``marginal``, whose table's ``corr``, ``beta`` and
-    ``t_stat`` are gated per target. Each checks a target's threshold against
+    ``pa``, ``ftrl``, ``rls``, ``glm``, ``dist_fit`` and ``marginal``, whose table's
+    ``corr``, ``beta`` and ``t_stat`` are gated per target. Each checks a target's threshold against
     that target's own weight: the rows it was present on, at their raw weights,
     decayed, and inside the window under one. ``rls`` learns only from rows on
     which every target is present, so its targets' weights are equal. The other
@@ -130,7 +130,7 @@ shows them at work.
          - ``bocpd``
        * - 0, each having a gate of its own or nothing to gate
          - ``ewridge``, ``seqtest``, ``rcov``, ``hmm``, ``corrchange``,
-           ``audit``, ``hawkes``, ``garch``
+           ``audit``, ``hawkes``, ``garch``, ``dist_fit``
 ``min_settled_frac``
     Why: a history shorter than the half-life may not represent the process,
     such as regimes or seasons the half-life was chosen to average across.
@@ -1111,6 +1111,7 @@ from rheon._spec import (
     coef_index,
     corrchange,
     deco,
+    dist_fit,
     ew_class,
     ew_cov,
     ewridge,
@@ -1156,6 +1157,7 @@ __all__ = [
     "bocpd",
     "corrchange",
     "deco",
+    "dist_fit",
     "marginal",
     "rcov",
     "micro",

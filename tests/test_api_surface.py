@@ -314,6 +314,10 @@ def describe_api(cli: Path | None = None) -> str:
         ("hawkes", dict(targets=["y", "z"], kernel_decays=[1.0, 5.0], half_life=100.0)),
         ("garch", dict(targets=["y", "z"], vol="gjr", dist="t", horizon=3)),
         (
+            "dist_fit",
+            dict(targets=["y", "z"], quantiles=[0.05, 0.95], es_levels=[0.05], half_life=100.0),
+        ),
+        (
             "deco blocked",
             dict(
                 features=["x0", "x1", "x2", "x3"],
@@ -415,6 +419,7 @@ RESOLVED_VARIANTS: list[tuple[str, dict[str, object]]] = [
     ("garch", {"vol": "figarch", "start_rows": 2000}),
     ("garch", {"variance_targeting": True, "horizon": 5}),
     ("garch", {"start_rows": None, "start_span": 500.0}),
+    ("dist_fit", {"quantiles": [0.05, 0.95], "es_levels": [0.05], "floc": 0.0}),
 ]
 
 
@@ -702,6 +707,7 @@ ENUM_PROBES: list[
     ("lasso.closed", "lasso", {"window_size": 100.0}, "model.closed", "word"),
     ("garch.vol", "garch", {"start_rows": 2000}, "model.vol", "word"),
     ("garch.dist", "garch", {}, "model.dist", "word"),
+    ("dist_fit.family", "dist_fit", {}, "model.family", "word"),
     ("marginal.closed", "marginal", {"window_size": 100.0}, "model.closed", "word"),
     ("ew_class.covariance_type", "ew_class", {}, "model.covariance_type", "word"),
     ("ew_class.window_budget", "ew_class", {"window_size": 100.0}, "model.window_budget", "key"),

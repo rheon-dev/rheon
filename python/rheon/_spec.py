@@ -280,6 +280,7 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
             "max_state_bytes",
         }
     ),
+    "dist_fit": frozenset({"family", "quantiles", "es_levels", "floc"}),
     "ewridge": frozenset({"gram_threads"}),
     "expectile": frozenset(
         {
@@ -540,6 +541,7 @@ _NO_FEATURES = {
     "seqtest": "it reads only its targets, or the residuals of the specs a and b name",
     "hawkes": "each of its targets is a node, whose values above 0 are its events",
     "garch": "each of its targets is a return series whose variance it models",
+    "dist_fit": "it fits a distribution to each target on its own",
 }
 
 #: The parameters renamed in one builder, or whose old name another keeps
@@ -797,6 +799,7 @@ __all__ = [
     "bocpd",
     "corrchange",
     "deco",
+    "dist_fit",
     "hmm",
     "rcov",
     "ew_class",
@@ -5116,15 +5119,13 @@ def deco(
 #: plumbing, and nothing residual-based applies to them. ``ew_class`` is
 #: not one -- its label column travels as the target -- though it predicts
 #: no number either, and refuses the residual switches the same way.
-# The changepoint detectors', the classifier's, the clustering models', the regimes', the realised
-# covariance's, the robust regressions', `sgd`'s and the trend's builders live in files of their own
-# (the 250 KB cap); read back here,
-# after everything they use, for `__all__`, the key tables below and
-# `rheon.spec`.
+# The builders in files of their own (the 250 KB cap), read back here, after
+# everything they use, for `__all__`, the key tables below and `rheon.spec`.
 from rheon._spec_audit import audit  # noqa: E402
 from rheon._spec_changepoint import bocpd, corrchange  # noqa: E402
 from rheon._spec_class import ew_class  # noqa: E402
 from rheon._spec_cluster import kmeans, micro  # noqa: E402
+from rheon._spec_dist import dist_fit  # noqa: E402
 from rheon._spec_expectile import expectile  # noqa: E402
 from rheon._spec_garch import garch  # noqa: E402
 from rheon._spec_glm import glm  # noqa: E402

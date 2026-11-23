@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import re
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -48,7 +49,7 @@ FAMILIES: dict[str, tuple[str, ...]] = {
         "expectile",
         "holt",
     ),
-    "Moments and correlation": ("ew_cov", "marginal", "deco", "rcov", "audit", "garch"),
+    "Moments and correlation": ("ew_cov", "marginal", "deco", "rcov", "audit", "garch", "dist_fit"),
     "Clustering and classification": ("kmeans", "micro", "ew_class"),
     "Sequential tests and regimes": ("seqtest", "corrchange", "bocpd", "hmm", "hawkes"),
 }
@@ -114,6 +115,19 @@ MEANING: dict[str, str] = {
     ),
     "std_resid_<t>": "`<t>` over the square root of its variance on this row",
     "forecast_<t>": "the variance of `<t>` `horizon - 1` rows past this one, from the same rows",
+    "loc_<t>": "the location of the distribution fitted to `<t>`, from the rows before this one",
+    "scale_<t>": "the scale of that fit: the normal's standard deviation",
+    "q<level>_<t>": "the fit's quantile of `<t>` at `<level>`, one of `quantiles`",
+    "es<level>_<t>": (
+        "the fit's lower-tail expected shortfall of `<t>` at `<level>`, one of `es_levels`: the "
+        "mean of the values below the quantile at that level"
+    ),
+    "pit_<t>": "the fit's distribution function at the row's own `<t>`",
+    "log_score_<t>": "the log of the fit's density at the row's own `<t>`",
+    "withheld_reason_<t>": (
+        "why `<t>`'s fit reports nothing on this row: `no_weight`, `min_weight` or "
+        "`degenerate_variance` (a scale of 0)"
+    ),
     "u": (
         "the equicorrelation this row alone implies"
         " (Engle and Kelly's Lemma 2.3, from the standardized row)"
@@ -202,6 +216,13 @@ ALSO_NULL: dict[str, str] = {
     "variance_<t>": "while withheld, and before the target's start is fitted",
     "std_resid_<t>": "where the variance is null, and where `<t>` is",
     "forecast_<t>": "where the variance is null",
+    "loc_<t>": "while withheld, and where `withheld_reason_<t>` names a reason",
+    "scale_<t>": "where `loc_<t>` is",
+    "q<level>_<t>": "where `loc_<t>` is",
+    "es<level>_<t>": "where `loc_<t>` is",
+    "pit_<t>": "where `loc_<t>` is, and where `<t>` is",
+    "log_score_<t>": "where `loc_<t>` is, and where `<t>` is",
+    "withheld_reason_<t>": "where `<t>`'s fit reports, and while withheld",
     "u": (
         "while withheld, where fewer than two of the block's columns have a positive variance "
         "before the row, and where every standardized value is 0"
@@ -266,6 +287,10 @@ ALSO_NULL_BY_MODEL: dict[tuple[str, str], str] = {
 #: switch, and the spec keywords that turn it on.
 SWITCHED: dict[str, tuple[str, dict[str, object]]] = {
     "huber": ("emit_huber_scale=True", {"emit_huber_scale": True}),
+    "dist_fit": (
+        "quantiles=[0.05, 0.95], es_levels=[0.05]",
+        {"quantiles": [0.05, 0.95], "es_levels": [0.05]},
+    ),
 }
 
 #: What a model writes when it writes nothing per row.
@@ -650,9 +675,18 @@ def stem(field: str, targets: tuple[str, ...], features: tuple[str, ...]) -> str
             "variance",
             "std_resid",
             "forecast",
+            "loc",
+            "scale",
+            "pit",
+            "log_score",
+            "withheld_reason",
         ):
             if base == f"{pre}_{t}":
                 return f"{pre}_<t>"
+        # `dist_fit`'s levels: `q0.05_<t>`, `es0.05_<t>`.
+        level = re.fullmatch(rf"(q|es)[0-9.e-]+_{re.escape(t)}", base)
+        if level:
+            return f"{level.group(1)}<level>_<t>"
     for pre in ("corr", "cov", "partial_corr"):
         if base.startswith(pre + "_"):
             return f"{pre}_<a>_<b>"
