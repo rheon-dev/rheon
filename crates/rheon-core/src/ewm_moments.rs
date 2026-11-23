@@ -523,6 +523,9 @@ impl EwmMomentsCfg {
             let w = w as u64;
             n += w * (2 + d.legs.len() as u64);
             working = (w / self.block_rows() + 2) * (sums + 2);
+        } else if self.window_clock.is_some() {
+            // An empty ring's: its rows are the data's, counted as they go in.
+            working = 2 * (sums + 2);
         }
         (n, working)
     }
@@ -1536,17 +1539,21 @@ impl EwmMoments {
         }
         self.evaluate(i, s)?;
         let poly = self.influence(i, s);
-        let mut var = 0.0;
+        let (mut var, mut size) = (0.0, 0.0);
         for (a, ca) in &poly {
             for (b, cb) in &poly {
-                var += ca * cb * s.cv(g, &idx_add(a, b));
+                let v = ca * cb * s.cv(g, &idx_add(a, b));
+                var += v;
+                size += v.abs();
             }
         }
-        var *= s.r[0];
-        if !(var > 0.0 && var.is_finite()) {
+        // The mean square cancels to the variance: where it keeps no digit
+        // of its terms' sizes (two rows, whose correlation is exactly 1),
+        // what is left is rounding, and the error is withheld.
+        if !(kept(var, &[size]) && var.is_finite()) {
             return Err(Withheld::NoStandardError);
         }
-        Ok(var.sqrt())
+        Ok((var * s.r[0]).sqrt())
     }
 
     /// Term `i`'s influence function, a polynomial in the deviations whose

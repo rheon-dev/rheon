@@ -442,6 +442,28 @@ def test_a_clock_lag_is_as_of_and_a_gap_past_it_leaves_no_pair():
     assert out["ac"][0] == rm.Out(None, "no lagged pair yet")
 
 
+def test_lag_tolerance_pairs_at_it_and_not_past_it():
+    # Lag 2: at t = 7 the as-of point is 5 and the latest row at or before
+    # it is at 4, one before the point. A tolerance of 1 pairs it (at the
+    # tolerance), one of 0.5 does not; the default (the lag, 2) does.
+    t = [0.0, 1.0, 4.0, 7.0]
+    x = [1.0, 3.0, 2.0, 5.0]
+    lagmean = {"lagmean": {"x@2": 1}}
+
+    def last(**kw):
+        spec = rm.EwmMoments(lagmean, kind="raw", bias=True, clocked=True, **kw)
+        return rm.run(spec, {"x": x, "t": t})["lagmean"]
+
+    # t = 1: as-of point -1, no row; t = 4: point 2, row 1 (1 before).
+    at = last(lag_tolerance=1.0)
+    assert [o.value for o in at] == [None, None, 3.0, 2.5]
+    short = last(lag_tolerance=0.5)
+    assert [o.value for o in short] == [None, None, None, None]
+    assert [o.value for o in last()] == [o.value for o in at]
+    with pytest.raises(ValueError, match="lag_tolerance"):
+        rm.EwmMoments(lagmean, lag_tolerance=1.0)
+
+
 def test_row_windows_match_polars_rolling():
     d = _data()
     x = np.array(d["x"])

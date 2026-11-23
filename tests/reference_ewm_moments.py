@@ -366,6 +366,7 @@ class EwmMoments:
         block_rows: int = 4,
         emit: str = "after",
         max_state_bytes: int = MAX_STATE_BYTES,
+        lag_tolerance: float | None = None,
     ):
         if not terms:
             raise ValueError("terms must name at least one term")
@@ -375,6 +376,10 @@ class EwmMoments:
             raise ValueError("give window_rows or window_clock, not both")
         if window_clock is not None and not clocked:
             raise ValueError("window_clock needs a clock")
+        if lag_tolerance is not None and not clocked:
+            raise ValueError("lag_tolerance is the as-of tolerance of a clock lag; give a clock")
+        if lag_tolerance is not None and not (lag_tolerance >= 0 and math.isfinite(lag_tolerance)):
+            raise ValueError(f"lag_tolerance must be at least 0, not {lag_tolerance!r}")
         if emit not in ("after", "before"):
             raise ValueError(f"emit must be 'after' or 'before', not {emit!r}")
         self.decay = Decay(half_life, lam)
@@ -385,6 +390,7 @@ class EwmMoments:
         self.emit = emit
         self.se = se
         self.max_state_bytes = max_state_bytes
+        self.lag_tolerance = lag_tolerance
         kinds = kind if isinstance(kind, dict) else {n: kind for n in terms}
         self.terms: list[Term] = []
         for name, powers in terms.items():
@@ -549,11 +555,17 @@ class EwmMoments:
 
     # -- the row ---------------------------------------------------------------
 
+    def _tolerance(self, lag: float) -> float:
+        """How far before ``t - lag`` the as-of row may be: ``lag_tolerance``,
+        or the lag itself (``join_asof``'s ``tolerance``)."""
+        return lag if self.lag_tolerance is None else self.lag_tolerance
+
     def _partner(self, col: str, lag: float, t: float) -> float | None:
         """The value of ``col`` ``lag`` back: the ``lag``-th learned row
         back, or on a clock the latest learned row at or before ``t - lag``
-        (as-of), with no pair when that row is more than ``lag`` before
-        ``t - lag`` (a gap longer than the lag), or when none is kept."""
+        (as-of), with no pair when that row is more than the tolerance
+        before ``t - lag`` (by default the lag: a gap longer than the lag),
+        or when none is kept."""
         b = self.buf[col]
         if not self.clocked:
             k = int(lag)
@@ -561,7 +573,7 @@ class EwmMoments:
         edge = t - lag
         for tt, v in reversed(b):
             if tt <= edge:
-                return v if edge - tt <= lag else None
+                return v if edge - tt <= self._tolerance(lag) else None
         return None
 
     def _push(self, col: str, t: float, v: float) -> None:
@@ -572,16 +584,18 @@ class EwmMoments:
             del b[: max(0, len(b) - k)]
             return
         # Keep the latest row at or before t - K (a future as-of may still
-        # land on it) and everything after; drop anything older than t - 2K,
-        # which no lag up to K can pair with.
+        # land on it) and everything after; drop anything older than t less
+        # the column's reach (a lag plus its tolerance, 2K by default),
+        # which no lag can pair with.
         K = max(self.lags[col])
+        reach = max(lag + self._tolerance(lag) for lag in self.lags[col])
         edge = t - K
         keep_from = 0
         for i in range(len(b) - 1, -1, -1):
             if b[i][0] <= edge:
                 keep_from = i
                 break
-        while keep_from < len(b) and b[keep_from][0] < t - 2 * K:
+        while keep_from < len(b) and b[keep_from][0] < t - reach:
             keep_from += 1
         del b[:keep_from]
 
@@ -706,13 +720,19 @@ class EwmMoments:
             return Out(None, why)
         poly = _influence(lay, s, t)
         var = 0.0
+        size = 0.0
         items = sorted(poly.items())
         for a, ca in items:
             for b, cb in items:
-                var += ca * cb * s.cv(lay, _add(a, b))
-        var *= s.r[0]  # 1 / Kish's n
-        if not (var > 0.0 and math.isfinite(var)):
+                v = ca * cb * s.cv(lay, _add(a, b))
+                var += v
+                size += abs(v)
+        # The mean square cancels to the variance: where it keeps no digit
+        # of its terms' sizes (two rows, whose correlation is exactly 1),
+        # what is left is rounding, and the error is withheld.
+        if not (_kept(var, size) and math.isfinite(var)):
             return Out(None, "the standard error keeps no digit")
+        var *= s.r[0]  # 1 / Kish's n
         return Out(math.sqrt(var), None)
 
     # -- the stream ------------------------------------------------------------

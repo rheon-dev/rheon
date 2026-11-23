@@ -10,6 +10,8 @@ use crate::EwDiag;
 
 include!("reference_values.rs");
 
+mod part4;
+
 fn lcg(state: &mut u64) -> f64 {
     *state = state
         .wrapping_mul(6364136223846793005)
