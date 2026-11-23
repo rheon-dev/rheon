@@ -8,8 +8,8 @@
 //! refused, as every switch's knob is.
 
 use rheon_core::{
-    Adwin, AdwinCfg, Cusum, Ddm, DriftDetector, Eddm, ErrorRate, Kswin, KswinCfg, PageHinkley,
-    Refusals,
+    Adwin, AdwinCfg, AdwinRange, Cusum, Ddm, DriftDetector, Eddm, ErrorRate, Kswin, KswinCfg,
+    PageHinkley, Refusals,
 };
 use serde::{Deserialize, Serialize};
 
@@ -65,6 +65,7 @@ impl DriftKind {
                 "max_width",
                 "restart",
                 "max_state_bytes",
+                "range",
             ],
             Self::Ddm => &["error_above", "warm_start", "drift_threshold"],
             Self::Eddm => &["error_above", "warm_start", "beta"],
@@ -104,6 +105,10 @@ pub struct DriftOptions {
     /// ADWIN's most rows, at least 1. Default 1,000,000.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_width: Option<u64>,
+    /// ADWIN's range `R` in its bound: a positive number in the residuals'
+    /// units, or `"window"`, the range the window holds. Default 1, river's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<RangeOption>,
     /// ADWIN's and KSWIN's choice after a flag: start again empty (`true`,
     /// the default) or keep what the flag left.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -140,6 +145,14 @@ pub struct DriftOptions {
     pub seed: Option<u64>,
 }
 
+/// `drift_options`' `range`: a number, or the name `"window"`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum RangeOption {
+    Fixed(f64),
+    Named(String),
+}
+
 /// The default cap on a group's ADWIN or KSWIN detectors, every slot
 /// together: the per-group 256 KB every bounded state is held to.
 pub const DRIFT_MAX_STATE_BYTES: u64 = 256 * 1024;
@@ -157,6 +170,7 @@ impl DriftOptions {
             ("min_window_length", self.min_window_length.is_some()),
             ("grace_period", self.grace_period.is_some()),
             ("max_width", self.max_width.is_some()),
+            ("range", self.range.is_some()),
             ("restart", self.restart.is_some()),
             ("max_state_bytes", self.max_state_bytes.is_some()),
             ("error_above", self.error_above.is_some()),
@@ -186,6 +200,11 @@ impl DriftOptions {
             grace_period: self.grace_period.unwrap_or(d.grace_period),
             max_width: self.max_width.unwrap_or(d.max_width),
             restart: self.restart.unwrap_or(d.restart),
+            range: match &self.range {
+                None => d.range,
+                Some(RangeOption::Fixed(r)) => AdwinRange::Fixed(*r),
+                Some(RangeOption::Named(_)) => AdwinRange::Window,
+            },
         }
     }
 
@@ -254,7 +273,11 @@ impl Spec {
         match self.drift_kind_or_default() {
             Some(DriftKind::Adwin) => {
                 let c = o.adwin();
-                Adwin::state_bytes(c.max_width, c.max_buckets)
+                Adwin::state_bytes_with(
+                    c.max_width,
+                    c.max_buckets,
+                    matches!(c.range, AdwinRange::Window),
+                )
             }
             Some(DriftKind::Kswin) => Kswin::state_bytes(o.kswin().window_size),
             _ => 72,
@@ -388,6 +411,26 @@ impl Spec {
                     1,
                     "the most rows the window holds, such as 1000000",
                 );
+                match &o.range {
+                    Some(RangeOption::Fixed(r)) if !(r.is_finite() && *r > 0.0) => {
+                        no.refuse(format!(
+                            "spec {name:?}: drift_options' range must be a finite number above \
+                             0 or \"window\", but it is {}. Set range to the range the \
+                             residuals' sizes lie in, in the target's units (1, river's, by \
+                             default), or to \"window\" for the range the window holds, which \
+                             makes the test the same in any unit.",
+                            num_label(*r)
+                        ));
+                    }
+                    Some(RangeOption::Named(n)) if n != "window" => {
+                        no.refuse(format!(
+                            "spec {name:?}: drift_options' range must be a finite number above \
+                             0 or \"window\", but it is {n:?}. Set range to a number in the \
+                             target's units, or to \"window\"."
+                        ));
+                    }
+                    _ => {}
+                }
             }
             DriftKind::Kswin => {
                 open_unit(no, "alpha", o.alpha, "the test's level, such as 0.005");

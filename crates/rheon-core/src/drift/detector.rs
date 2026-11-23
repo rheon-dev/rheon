@@ -11,9 +11,11 @@
 //!
 //! `r` is the row's out-of-sample residual and `σ` the slot's error scale
 //! before the row. The two read on the clock need the scale, and a row
-//! without one ages Page-Hinkley's mean and is not read; ADWIN and KSWIN test
-//! a location or a distribution with no unit in their settings, so they read
-//! the error's size as it is; DDM and EDDM count errors, and what counts as
+//! without one ages Page-Hinkley's mean and is not read; ADWIN and KSWIN read
+//! the error's size as it is. KSWIN's test compares ranks, so its flags are
+//! the same in any unit; ADWIN's bound takes the values' range `R`, river's
+//! 1 by default, so its flags are not, unless `R` is the window's own range
+//! ([`crate::AdwinRange::Window`]); DDM and EDDM count errors, and what counts as
 //! one is the caller's `error_above`, in the target's units. ADWIN, KSWIN, DDM
 //! and EDDM count rows, not clock: their statistics are defined on a number of
 //! observations (ADWIN's bound on its parts' rows, KSWIN's exact null on two

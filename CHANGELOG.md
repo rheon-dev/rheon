@@ -868,6 +868,17 @@ model that only the new build has is listed as an addition and passes.
   taken in its square roots; elsewhere it keeps its bits. The moments'
   scale for values near `1e-81`, which still corrupts `kurtosis` there, is
   not changed in this release.
+- **`drift_kind="adwin"` takes a `range`** (review 2026-11-23, DRIFT-1;
+  the user, 2026-11-23: "Allow both by parameter"). ADWIN's bound has the
+  values' range `R` in its second term, which river, and so this detector,
+  writes as 1, so its flags depend on the residuals' unit: a threefold rise
+  in their spread was found in 15 rows at a spread of 1, in 655 at 0.01
+  and not in 8,000 at 0.001. `drift_options={"range": ...}` takes a number,
+  the residuals' range in the target's units (1, river's, by default, its
+  flags river's to the bit), or `"window"`, the range the window holds
+  now, under which the flags are the same in any unit, to the bit at a
+  power of two. Each bucket then keeps its least and greatest value, two
+  numbers more. No default moves.
 - **A window looking ahead whose far edge is the input's last row is whole
   at the end of the input** (PLAN 565). Under `closed="right"` or `"both"`,
   `rp.ewm_sum`, `rp.ewm_mean`, `rp.ewm_rate` and `rp.ewm_quantile` with

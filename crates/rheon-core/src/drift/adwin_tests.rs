@@ -315,9 +315,9 @@ fn the_cut_is_the_bernstein_bound_to_the_bit() {
         let above = f64::from_bits(eps.to_bits() + 1);
         let below = f64::from_bits(eps.to_bits() - 1);
         for sign in [1.0, -1.0] {
-            assert!(!a.cut(n0, n1, sign * eps, d), "{n0} {n1} at the bound");
-            assert!(!a.cut(n0, n1, sign * below, d), "{n0} {n1} below");
-            assert!(a.cut(n0, n1, sign * above, d), "{n0} {n1} above");
+            assert!(!a.cut(n0, n1, sign * eps, d, 1.0), "{n0} {n1} at the bound");
+            assert!(!a.cut(n0, n1, sign * below, d, 1.0), "{n0} {n1} below");
+            assert!(a.cut(n0, n1, sign * above, d, 1.0), "{n0} {n1} above");
         }
     }
 }
@@ -506,4 +506,137 @@ fn a_split_with_nothing_newer_is_no_cut_at_any_shortest_part() {
         let flags = (0..500).filter(|_| a.update(x)).count();
         assert_eq!(flags, 0, "a steady {x} flagged");
     }
+}
+
+/// A range of the caller's: the bound's second term is `(2/3) d R / m`, on
+/// both sides of `ε` to the last bit, written out by hand from the paper's
+/// Bernstein form at `R = 4` and `R = 0.25` (review 2026-11-23, DRIFT-1;
+/// the user, 2026-11-23: "Allow both by parameter").
+#[test]
+fn a_fixed_range_is_the_bernstein_bound_at_that_range() {
+    for r in [4.0, 0.25] {
+        let mut a = Adwin::new(AdwinCfg {
+            clock: 1 << 40,
+            min_window_length: 5,
+            range: AdwinRange::Fixed(r),
+            ..cfg()
+        });
+        let mut s = 31u64;
+        for _ in 0..40 {
+            a.update(lcg(&mut s) * 3.0);
+        }
+        assert_eq!(a.range_now(), r);
+        for (n0, n1, d) in [(20.0, 7.0, 4.0), (6.0, 34.0, 5.5)] {
+            let m_recip = 1.0 / (n0 - 5.0 + 1.0) + 1.0 / (n1 - 5.0 + 1.0);
+            let eps = (2.0 * m_recip * (a.variance() / a.width()) * d).sqrt()
+                + 2.0 / 3.0 * d * m_recip * r;
+            let above = f64::from_bits(eps.to_bits() + 1);
+            let below = f64::from_bits(eps.to_bits() - 1);
+            assert!(!a.cut(n0, n1, eps, d, a.range_now()), "{r}: at the bound");
+            assert!(!a.cut(n0, n1, below, d, a.range_now()), "{r}: below");
+            assert!(a.cut(n0, n1, above, d, a.range_now()), "{r}: above");
+        }
+    }
+}
+
+/// The window's range is `max − min` over the rows the window holds, row
+/// by row against a longhand over those rows, while `max_width` drops the
+/// oldest buckets and across cuts and restarts.
+#[test]
+fn the_windows_range_is_the_rows_it_holds() {
+    for restart in [true, false] {
+        let mut a = Adwin::new(AdwinCfg {
+            max_width: 200,
+            restart,
+            range: AdwinRange::Window,
+            ..cfg()
+        });
+        let mut rows: Vec<f64> = Vec::new();
+        let mut s = 41u64;
+        for i in 0..3000 {
+            let x = lcg(&mut s) * if (i / 500) % 2 == 1 { 9.0 } else { 1.0 } + (i / 700) as f64;
+            rows.push(x);
+            a.update(x);
+            let w = a.width() as usize;
+            let held = &rows[rows.len() - w..];
+            let want = if w == 0 {
+                0.0
+            } else {
+                held.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+                    - held.iter().copied().fold(f64::INFINITY, f64::min)
+            };
+            assert_eq!(a.range_now(), want, "row {i}, restart {restart}");
+            assert!(a.sound(), "row {i}");
+        }
+    }
+}
+
+/// Under the window's range the flags do not depend on the values' unit:
+/// the stream scaled by a power of two flags on the same rows, to the bit
+/// (every number of the bound scales exactly), and scaled by `1e-3` or
+/// `7.3` on the same rows (no comparison here sits within rounding of the
+/// bound). River's fixed range does not: the same stream in thousandths
+/// finds a threefold rise in the errors' spread hundreds of rows late or
+/// not at all, where the window's range finds it at every scale.
+#[test]
+fn under_the_windows_range_the_flags_do_not_depend_on_the_unit() {
+    let stream: Vec<f64> = {
+        let mut s = 43u64;
+        (0..6000)
+            .map(|i| {
+                let u = lcg(&mut s) - 0.5;
+                (u * if i >= 2000 { 3.0 } else { 1.0 }).abs()
+            })
+            .collect()
+    };
+    let flags = |range: AdwinRange, c: f64| -> Vec<usize> {
+        let mut a = Adwin::new(AdwinCfg { range, ..cfg() });
+        (0..stream.len())
+            .filter(|&i| a.update(stream[i] * c))
+            .collect()
+    };
+    let one = flags(AdwinRange::Window, 1.0);
+    assert!(one.iter().any(|&i| (2000..2400).contains(&i)), "{one:?}");
+    for c in [2f64.powi(-30), 2f64.powi(-7), 8.0, 2f64.powi(40), 1e-3, 7.3] {
+        assert_eq!(flags(AdwinRange::Window, c), one, "scaled by {c}");
+    }
+    // River's R = 1 at a thousandth of the scale.
+    let late = |f: &[usize]| f.iter().find(|&&i| i >= 2000).map(|i| i - 2000);
+    let river_one = flags(AdwinRange::Fixed(1.0), 0.1);
+    let river_milli = flags(AdwinRange::Fixed(1.0), 1e-4);
+    assert!(
+        late(&river_milli).is_none_or(|l| l > late(&river_one).unwrap_or(0) + 100),
+        "{river_one:?} {river_milli:?}"
+    );
+}
+
+/// A saved window's range goes on to the bit, its extents with it; the
+/// range of river's form is no part of its file, which writes as it did.
+#[test]
+fn the_windows_range_is_saved_and_rivers_form_writes_no_range() {
+    let mut a = Adwin::new(AdwinCfg {
+        range: AdwinRange::Window,
+        ..cfg()
+    });
+    let mut s = 47u64;
+    for _ in 0..700 {
+        a.update(lcg(&mut s));
+    }
+    let mut b: Adwin = rmp_serde::from_slice(&rmp_serde::to_vec_named(&a).unwrap()).unwrap();
+    assert!(b.sound());
+    for i in 0..2000 {
+        let x = lcg(&mut s) * if i > 900 { 4.0 } else { 1.0 };
+        assert_eq!(a.update(x), b.update(x), "row {i}");
+    }
+    assert_eq!(a, b);
+    let river = serde_json::to_value(Adwin::new(cfg())).unwrap();
+    assert!(
+        river.get("range").is_none() && river.get("extents").is_none(),
+        "{river}"
+    );
+    // An extent out of shape is damaged.
+    let mut v = serde_json::to_value(&a).unwrap();
+    v["extents"][0] = serde_json::json!([]);
+    let damaged: Adwin = serde_json::from_value(v).unwrap();
+    assert!(!damaged.sound() || a.levels[0].is_empty());
 }

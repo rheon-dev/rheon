@@ -161,8 +161,8 @@ pub use corrchange::{
 pub use dcc::{DCC_PERSISTENCE_CAP, DCC_START_ROWS, Dcc, DccCfg};
 pub use deco::{Deco, DecoCfg, DecoDynamics};
 pub use drift::{
-    Adwin, AdwinCfg, Cusum, Ddm, DriftDetector, Eddm, ErrorRate, Kswin, KswinCfg, PageHinkley,
-    ks_critical_h, ks_equal_tail,
+    Adwin, AdwinCfg, AdwinRange, Cusum, Ddm, DriftDetector, Eddm, ErrorRate, Kswin, KswinCfg,
+    PageHinkley, ks_critical_h, ks_equal_tail,
 };
 pub use ewclass::{Covariance, EwClass, EwClassCfg};
 pub use ewcov::{

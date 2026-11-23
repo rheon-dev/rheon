@@ -896,6 +896,31 @@ fn drift_kinds_run(bytes: &[u8], input: &DataFrame) -> Ran {
     bank_run_of(&drift_kinds_specs(), bytes, input)
 }
 
+/// The specs of `bank_drift_ranges` (review 2026-11-23, DRIFT-1): ADWIN's
+/// two forms of range other than river's 1, a number given and the
+/// window's, whose state writes the range and each bucket's extent.
+fn drift_ranges_specs() -> Vec<Spec> {
+    [
+        r#"{"name": "fixed", "model": {"type": "rls"}, "targets": ["y"], "features": ["x0", "x1"], "half_life": 100.0, "emit_drift": true, "drift_kind": "adwin", "drift_action": "reset", "drift_options": {"clock": 2, "max_buckets": 2, "max_width": 400, "range": 0.5}}"#,
+        r#"{"name": "window", "model": {"type": "rls"}, "targets": ["y"], "features": ["x0", "x1"], "half_life": 100.0, "emit_drift": true, "drift_kind": "adwin", "drift_options": {"clock": 2, "max_buckets": 2, "max_width": 400, "range": "window", "restart": false}}"#,
+    ]
+    .iter()
+    .map(|text| serde_json::from_str(text).unwrap_or_else(|e| panic!("{text}: {e}")))
+    .collect()
+}
+
+/// Saved at row 220, after the break; the next rows continue.
+fn drift_ranges_first() -> (Vec<u8>, DataFrame) {
+    let df = reset_frame();
+    let mut bank = Bank::new(drift_ranges_specs()).unwrap();
+    bank.fit_predict(&df.slice(0, 220)).unwrap();
+    (bank.save_bytes().unwrap(), df.slice(220, RESET_N - 220))
+}
+
+fn drift_ranges_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    bank_run_of(&drift_ranges_specs(), bytes, input)
+}
+
 /// The specs of `bank_refit_span` (PLAN 538): `glm` and `expectile`, each
 /// refitting a target's first rows over a span of the clock, grouped on
 /// `bank_refit`'s stream. Saved at its split, inside every group's span,
@@ -2117,6 +2142,11 @@ fn kinds() -> Vec<Kind> {
             run: drift_kinds_run,
         },
         Kind {
+            name: "bank_drift_ranges",
+            first: drift_ranges_first,
+            run: drift_ranges_run,
+        },
+        Kind {
             name: "bank_refit_span",
             first: refit_span_first,
             run: refit_span_run,
@@ -2619,7 +2649,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
     assert_eq!(
         kinds.into_iter().collect::<Vec<_>>(),
         [
-            ("bank", 16),
+            ("bank", 17),
             ("checkpoint", 1),
             ("merge", 3),
             ("refresh_time", 5),
@@ -3489,6 +3519,12 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
         }),
         ("bank_drift_kinds", "an ADWIN's second level", |p, v| {
             p.contains(".Adwin.levels.1.") && v.as_f64().is_some()
+        }),
+        ("bank_drift_ranges", "an ADWIN's fixed range", |p, v| {
+            p.contains(".Adwin.") && p.ends_with(".range") && v.as_f64() == Some(0.5)
+        }),
+        ("bank_drift_ranges", "an ADWIN bucket's extent", |p, v| {
+            p.contains(".Adwin.extents.1.") && v.as_f64().is_some()
         }),
         ("bank_drift_kinds", "a DDM's least rate", |p, v| {
             p.contains(".Ddm.detector.")

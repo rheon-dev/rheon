@@ -111,15 +111,17 @@ ADWIN_CASES = [
     {},
     {"clock": 1, "delta": 0.05},
     {"max_buckets": 3, "min_window_length": 10, "grace_period": 50},
+    # `range` at river's 1, given: river's detector, which has no range.
+    {"range": 1.0},
 ]
 
 
-@pytest.mark.parametrize("options", ADWIN_CASES, ids=["defaults", "clock1", "buckets3"])
+@pytest.mark.parametrize("options", ADWIN_CASES, ids=["defaults", "clock1", "buckets3", "range1"])
 def test_adwin_is_rivers(options):
     df = _frame()
     out = _fit(df, drift_kind="adwin", drift_options=options)
     resid, _, flags, read = _read(df, out)
-    adwin = river_drift.ADWIN(**options)
+    adwin = river_drift.ADWIN(**{k: v for k, v in options.items() if k != "range"})
 
     def oracle(i: int) -> bool:
         adwin.update(float(abs(resid[i])))
