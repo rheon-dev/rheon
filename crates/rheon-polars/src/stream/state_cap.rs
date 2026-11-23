@@ -73,6 +73,10 @@ fn window_words(spec: &Spec) -> (String, &'static str, &'static str) {
         ModelKind::Expectile {
             window_size: Some(w),
             ..
+        }
+        | ModelKind::EwmMoments {
+            window_size: Some(w),
+            ..
         } => (format!("window_size = {w}"), "Shorten window_size", "rows"),
         ModelKind::Garch {
             start_span: Some(s),
@@ -108,6 +112,12 @@ fn window_words(spec: &Spec) -> (String, &'static str, &'static str) {
         } => (
             format!("quantile_refit_span = {s}"),
             "Shorten quantile_refit_span, or give quantile_refit_rows",
+            "rows",
+        ),
+        // No window on the clock: the lag buffers are what the data sizes.
+        ModelKind::EwmMoments { .. } => (
+            "the reach of its lags".to_string(),
+            "Shorten the lags or lag_tolerance",
             "rows",
         ),
         _ => ("its window".to_string(), "Shorten the window", "events"),

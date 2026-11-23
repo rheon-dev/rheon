@@ -63,6 +63,12 @@ impl Stream {
                     .elapsed_stamp
             })
             .flatten();
+        // Its own stamp, for a model whose read decides a window's edge.
+        let stamp = spec
+            .model
+            .reads_at_stamp()
+            .then(|| read_stamp(clock_state, cfg, &self.exact_caps, c, session))
+            .flatten();
         let plan = RowPlan {
             ri,
             i,
@@ -70,7 +76,7 @@ impl Stream {
             d_clock: adv.d_clock,
             d_fresh,
             elapsed_step: adv.d_clock,
-            stamp: None,
+            stamp,
             clock: c.or(Some(ClockValue::F64(fed as f64))),
             reset: false,
             blend: false,
@@ -89,4 +95,25 @@ impl Stream {
         };
         (plan, place)
     }
+}
+
+/// The stamp a row only scored is read at, on a copy of the clock: the one
+/// it would take were it learned, or, for a row the clock would refuse as a
+/// step back, the last learned row's, where a read of it stands (a step of
+/// 0). `None` before the first stamped row.
+pub(super) fn read_stamp(
+    clock: &ClockState,
+    cfg: &rheon_core::ClockCfg,
+    caps: &rheon_core::ExactCaps,
+    c: Option<ClockValue>,
+    session: Option<u64>,
+) -> Option<Stamp> {
+    let adv = clock.clone().advance_stamped(cfg, caps, c, session, true);
+    if adv.backwards.is_none() {
+        return adv.stamp;
+    }
+    clock
+        .clone()
+        .advance_stamped(cfg, caps, clock.last_clock(), session, true)
+        .stamp
 }

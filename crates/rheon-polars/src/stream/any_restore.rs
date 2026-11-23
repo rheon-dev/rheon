@@ -54,6 +54,9 @@ impl AnyModel {
                 Ok(AnyModel::Hawkes(Box::new(rheon_core::Hawkes::restore(s)?)))
             }
             ModelState::Garch(_) => Ok(AnyModel::Garch(Box::new(rheon_core::Garch::restore(s)?))),
+            ModelState::EwmMoments(_) => Ok(AnyModel::EwmMoments(Box::new(
+                rheon_core::EwmMoments::restore(s)?,
+            ))),
             // A kind only rheon-core builds, such as `ew_cov`'s bare running
             // sums: its name is the code's, so the message does not print it.
             _ => Err(StateError::Invalid(format!(

@@ -265,6 +265,7 @@ pub fn coef_fields(spec: &Spec) -> Vec<CoefField> {
             | crate::ModelKind::CorrChange { .. }
             | crate::ModelKind::Bocpd { .. }
             | crate::ModelKind::Audit { .. }
+            | crate::ModelKind::EwmMoments { .. }
     ) {
         return Vec::new();
     }
@@ -1156,6 +1157,46 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                 FieldMeta::new(format!("coef{suffix}"), "coef")
                     .decay(suffix, d)
                     .src(Source::Coef(mi)),
+            );
+        }
+        return fields;
+    }
+    // ewm_moments predicts no target's value: per instance, each term in the
+    // order the spec names them, then under `se` each term's standard error
+    // in the same order, then `n_eff` (the weight inside the window under
+    // one). Each is read before the row is learned; no `coef`.
+    if let crate::ModelKind::EwmMoments { terms, se, .. } = &spec.model {
+        let se = se.unwrap_or(false);
+        let n_slots = terms.0.len() * if se { 2 } else { 1 };
+        let mut fields = Vec::new();
+        for (mi, (suffix, d)) in decays.iter().enumerate() {
+            let columns = |legs: &crate::spec::MomentLegs| {
+                let mut cols: Vec<String> = Vec::new();
+                for (key, _) in &legs.0 {
+                    let col = crate::spec::moment_leg_column(&spec.features, key);
+                    if !cols.contains(&col) {
+                        cols.push(col);
+                    }
+                }
+                cols
+            };
+            let names = terms.0.iter().map(|(t, legs)| (t.clone(), "moment", legs));
+            let ses = terms
+                .0
+                .iter()
+                .filter(|_| se)
+                .map(|(t, legs)| (format!("se_{t}"), "se_moment", legs));
+            for (slot, (name, kind, legs)) in names.chain(ses).enumerate() {
+                let mut f = FieldMeta::new(format!("{name}{suffix}"), kind)
+                    .decay(suffix, d)
+                    .src(Source::Stat(mi * n_slots + slot));
+                f.columns = Some(columns(legs));
+                fields.push(f);
+            }
+            fields.push(
+                FieldMeta::new(format!("weight_sum{suffix}"), "weight_sum")
+                    .decay(suffix, d)
+                    .src(Source::NEff(mi)),
             );
         }
         return fields;

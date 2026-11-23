@@ -111,6 +111,7 @@ pub enum AnyModel {
     Expectile(Box<rheon_core::Expectile>),
     Hawkes(Box<rheon_core::Hawkes>),
     Garch(Box<rheon_core::Garch>),
+    EwmMoments(Box<rheon_core::EwmMoments>),
 }
 
 /// A flush's shards, run on whichever pool the caller is in: the bank's
@@ -161,6 +162,7 @@ macro_rules! dispatch {
             AnyModel::Expectile($m) => $body,
             AnyModel::Hawkes($m) => $body,
             AnyModel::Garch($m) => $body,
+            AnyModel::EwmMoments($m) => $body,
         }
     };
 }
@@ -290,6 +292,25 @@ impl AnyModel {
     /// (docs/REVIEW-E54-E64.md C1).
     pub fn predict(&self, x: &[f64], y: &[Option<f64>], d_clock: f64) -> rheon_core::Step {
         dispatch!(self, m => m.predict_with(x, y, d_clock))
+    }
+
+    /// [`Self::predict_into`] for a row whose stamp the stream knows: a
+    /// model whose read decides a window's edge on the clock
+    /// ([`ModelKind::reads_at_stamp`]) reads it at `stamp`, as a step would
+    /// be handed it; every other model, and a row with no stamp, as
+    /// `predict_into`.
+    pub fn predict_at_into(
+        &self,
+        x: &[f64],
+        y: &[Option<f64>],
+        d_clock: f64,
+        stamp: Option<Stamp>,
+        out: &mut rheon_core::Step,
+    ) {
+        match (self, stamp) {
+            (AnyModel::EwmMoments(m), Some(s)) => *out = m.predict_at(x, d_clock, s),
+            _ => self.predict_into(x, y, d_clock, out),
+        }
     }
 
     /// [`Self::predict`] into the caller's step, which it overwrites in
@@ -534,7 +555,9 @@ impl AnyModel {
             | AnyModel::Audit(_)
             // Every read it withholds is a row's, not a failure.
             | AnyModel::Hawkes(_)
-            | AnyModel::Garch(_) => 0,
+            | AnyModel::Garch(_)
+            // A term it withholds is withheld by its condition, no failure.
+            | AnyModel::EwmMoments(_) => 0,
         }
     }
 
@@ -608,6 +631,8 @@ impl AnyModel {
             AnyModel::Hawkes(m) => Some(m.coefficients()),
             // Each target's process parameters, then its shape.
             AnyModel::Garch(m) => Some(m.coefficients()),
+            // ewm_moments has none: its outputs are the terms.
+            AnyModel::EwmMoments(_) => None,
         }
     }
 
@@ -738,7 +763,8 @@ pub fn combos(spec: &Spec) -> Vec<Combo> {
         | ModelKind::Glm { .. }
         | ModelKind::Hawkes { .. }
         | ModelKind::Expectile { .. }
-        | ModelKind::Garch { .. } => vec![Combo::default()],
+        | ModelKind::Garch { .. }
+        | ModelKind::EwmMoments { .. } => vec![Combo::default()],
         // `p` for the penalty, since `l` is a lag's (`lag_corr_l1_a_b`); and
         // no label for a path of one point, as a single ridge or half-life
         // writes none, while the machine value says which it is.
@@ -3159,8 +3185,22 @@ impl Stream {
                         .d_clock
                 }),
                 elapsed_step: adv.d_clock,
-                // Scored, never learned: no window moves, no row is held.
-                stamp: None,
+                // Scored, never learned: no window moves, no row is held. A
+                // model whose read decides a window's edge reads it at the
+                // row's stamp, on a copy of the clock.
+                stamp: spec
+                    .model
+                    .reads_at_stamp()
+                    .then(|| {
+                        weightless::read_stamp(
+                            &self.persisted.clock,
+                            cfg,
+                            &self.exact_caps,
+                            clock.map(|c| c.at(i)),
+                            session.map(|s| s[i]),
+                        )
+                    })
+                    .flatten(),
                 // Without a clock column, the row's index in its group: the
                 // rows learned, then this call's rows in order, as
                 // `fit_predict` counts them (task 159, B2: every scored row
@@ -4165,7 +4205,11 @@ fn run_instance(
                 inst.notified.raise(state_cap_notice(inst.spec, bytes, cap));
             }
         } else {
-            inst.model.get().predict_into(xs, &sc.ys, score_d, step);
+            // A row only scored, of weight 0 or held for its label, read at
+            // its stamp where the model's read decides a window's edge.
+            inst.model
+                .get()
+                .predict_at_into(xs, &sc.ys, score_d, plan.stamp, step);
         }
         let n_slots = step.pred.len();
         // `ew_cov` has no targets; its slots are statistics, so every one

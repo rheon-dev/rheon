@@ -1148,6 +1148,15 @@ impl Spec {
                     );
                 }
             }
+            // The terms read against the features, and the model's own
+            // checks of them (a joint cumulant, `bias=False` past order 4, a
+            // lag of part of a row, the state's bytes where the settings fix
+            // them), here at the call. A decay refused is `decays`' to say.
+            ModelKind::EwmMoments { .. } => {
+                if let Some((_, decay)) = self.decays().ok().and_then(|d| d.into_iter().next()) {
+                    no.take(super::ewm_moments_cfg(self, decay).and_then(|c| c.validate()));
+                }
+            }
             ModelKind::Audit { .. } => {
                 if self.half_life.is_some() || self.lam.is_some() {
                     no.refuse(format!(

@@ -775,5 +775,8 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         ModelKind::Garch { .. } => Ok(AnyModel::Garch(Box::new(rheon_core::Garch::new(
             garch_cfg(spec)?,
         )?))),
+        ModelKind::EwmMoments { .. } => Ok(AnyModel::EwmMoments(Box::new(
+            rheon_core::EwmMoments::new(crate::spec::ewm_moments_cfg(spec, decay)?)?,
+        ))),
     }
 }

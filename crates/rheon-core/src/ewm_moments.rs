@@ -1625,6 +1625,24 @@ impl EwmMoments {
         }
     }
 
+    /// [`crate::OnlineModel::predict`] for a row whose place on the clock
+    /// the caller knows, `stamp`, as [`crate::OnlineModel::stamp_next`]
+    /// hands a step's: a window of the clock is read with its edge there.
+    /// `predict` reads it at the clock summed from the steps, which begins
+    /// at the model's first row where a caller's stamps begin at the
+    /// clock's, so a caller that stamps its steps reads its rows of weight
+    /// 0, and the rows it only scores, here. Without a clock the stamp is
+    /// not read.
+    pub fn predict_at(&self, x: &[f64], d_clock: f64, stamp: Stamp) -> crate::Step {
+        if let Some(refused) = crate::model::refused_predict(self, x, d_clock) {
+            return refused;
+        }
+        let now = self.place.as_ref().map(|_| stamp);
+        let mut out = crate::Step::default();
+        out.n_eff = self.read_into(now, &mut out.pred);
+        out
+    }
+
     /// Term `i`'s value, or why it is withheld.
     pub fn value(&self, i: usize) -> Result<f64, Withheld> {
         if self.cfg.windowed() {

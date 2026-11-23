@@ -293,6 +293,75 @@ stats = []
     }
 }
 
+/// `ewm_moments` from TOML: the terms' table keeps the order the file writes
+/// it in, which names the outputs (a term, then its standard error), and the
+/// run gives the same numbers at any `chunk_size`.
+#[test]
+fn ewm_moments_from_toml_keeps_its_terms_order_and_is_chunk_invariant() {
+    let input = tmp("moments-in.parquet");
+    write_input(&input, 1200).unwrap();
+    let toml = |output: &Path, chunk_size: usize| {
+        format!(
+            r#"
+input = "{}"
+output = "{}"
+chunk_size = {chunk_size}
+
+[[specs]]
+name = "mom"
+features = []
+clock = "t"
+half_life = 30.0
+gap_cap = 10.0
+weight = "w"
+group = "group"
+
+[specs.model]
+type = "ewm_moments"
+se = true
+kind = {{ skew = "standardized", rho1 = "standardized" }}
+
+[specs.model.terms]
+skew = {{ x0 = 3 }}
+m2 = {{ x0 = 2 }}
+rho1 = {{ x0 = 1, "x1@1.5" = 1 }}
+"#,
+            toml_path(&input),
+            toml_path(output)
+        )
+    };
+    let (out_a, out_b) = (tmp("moments-a.parquet"), tmp("moments-b.parquet"));
+    let cfg_a: RunConfig = toml::from_str(&toml(&out_a, 5000)).unwrap();
+    let cfg_b: RunConfig = toml::from_str(&toml(&out_b, 137)).unwrap();
+    assert_eq!(
+        rheon_polars::output_fields(&cfg_a.specs[0]),
+        [
+            "skew",
+            "m2",
+            "rho1",
+            "se_skew",
+            "se_m2",
+            "se_rho1",
+            "weight_sum",
+            "settled_frac",
+            "withheld_reason"
+        ]
+    );
+    run_config(&cfg_a, |_| Ok(())).unwrap();
+    run_config(&cfg_b, |_| Ok(())).unwrap();
+    let (a, b) = (read_frame(&out_a), read_frame(&out_b));
+    assert!(a.equals_missing(&b), "chunking moved an output");
+    let rho = a.column("mom").unwrap().struct_().unwrap();
+    let rho = rho.field_by_name("rho1").unwrap();
+    assert!(
+        rho.f64().unwrap().iter().flatten().count() > 1000,
+        "the lagged correlation reports once each group has its pairs"
+    );
+    for p in [&input, &out_a, &out_b] {
+        let _ = std::fs::remove_file(p);
+    }
+}
+
 #[test]
 fn rejects_a_config_with_no_specs() {
     let cfg: RunConfig = toml::from_str(

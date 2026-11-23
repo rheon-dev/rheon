@@ -77,6 +77,7 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
     ("expectile", &["window_size", "refit_span"]),
     ("glm", &["refit_span"]),
     ("garch", &["start_span"]),
+    ("ewm_moments", &["lag_tolerance", "window_size"]),
 ];
 
 /// The parameters that take a duration on a temporal clock or a number that
@@ -492,6 +493,19 @@ impl Spec {
             }
             ModelKind::Garch { start_span, .. } => {
                 put(&mut out, "start_span", start_span.as_ref());
+            }
+            // A lag written on a term's leg (`x@5m`) is a span of the clock
+            // too, named by the table it is written in.
+            ModelKind::EwmMoments {
+                lag_tolerance,
+                window_size,
+                ..
+            } => {
+                put(&mut out, "lag_tolerance", lag_tolerance.as_ref());
+                put(&mut out, "window_size", window_size.as_ref());
+                for lag in self.model.moment_lags(&self.features) {
+                    put(&mut out, "terms", Some(&lag));
+                }
             }
             // A number of rows binds to no clock unit
             // ([`DURATION_OR_UNIT_FREE_FIELDS`]).

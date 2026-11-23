@@ -62,6 +62,10 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
         | ModelKind::Sgd {
             max_state_bytes: Some(_),
             ..
+        }
+        | ModelKind::EwmMoments {
+            max_state_bytes: Some(_),
+            ..
         } => format!("max_state_bytes of {cap}"),
         _ => format!("the default max_state_bytes of {cap}, which a spec gets when it sets none"),
     };
@@ -76,6 +80,10 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
                 "Shorten window_size",
             ),
             ModelKind::Expectile {
+                window_size: Some(w),
+                ..
+            }
+            | ModelKind::EwmMoments {
                 window_size: Some(w),
                 ..
             } => (
@@ -117,6 +125,11 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
             } => (
                 format!("the rows of its refit inside quantile_refit_span = {s}"),
                 "Shorten quantile_refit_span, or give quantile_refit_rows",
+            ),
+            // No window on the clock: the lag buffers are what the data sizes.
+            ModelKind::EwmMoments { .. } => (
+                "the rows its lags on the clock hold".to_string(),
+                "Shorten the lags or lag_tolerance",
             ),
             _ => ("its window".to_string(), "Shorten the window"),
         },
