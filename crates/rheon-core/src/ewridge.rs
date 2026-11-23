@@ -3020,8 +3020,24 @@ impl OnlineModel for EwRidge {
                 Some(yj) if weight > 0.0 && pred[j * nc].is_finite() => {
                     let resid = yj - pred[j * nc];
                     let ws_new = aged + weight;
-                    self.sig2[j] = (aged * self.sig2[j] + weight * resid * resid) / ws_new;
-                    self.wsig[j] = ws_new;
+                    let next = (aged * self.sig2[j] + weight * resid * resid) / ws_new;
+                    // `w·r²` or `W·σ²` past the largest double, where the
+                    // mean is in range: the mean of shares, each in [0, 1].
+                    // A square past it too ages `σ²`'s weight as a row with
+                    // no prediction does: an infinite `σ²` was NaN for good
+                    // at the next decay of 0 (review 2026-11-23, REG-10). A
+                    // finite mean takes neither branch, its bits as before.
+                    let next = if next.is_finite() {
+                        next
+                    } else {
+                        (aged / ws_new) * self.sig2[j] + (weight / ws_new) * (resid * resid)
+                    };
+                    if next.is_finite() {
+                        self.sig2[j] = next;
+                        self.wsig[j] = ws_new;
+                    } else {
+                        self.wsig[j] = aged;
+                    }
                 }
                 _ => self.wsig[j] = aged,
             }

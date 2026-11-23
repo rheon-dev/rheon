@@ -718,6 +718,15 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **`ewridge`'s residual variance stays finite where a weighted square of
+  a residual is past the largest double** (review 2026-11-23, REG-10). At
+  a weight of `1e100` and a residual of `2·10^104` the square is in range
+  but `w·r·r` overflowed, so `σ²` was infinite, and at the next gap past
+  the decay's underflow `0·∞` made it NaN for good, with `sigma2`,
+  `se_coef` and `pred_se`. Such a mean is now formed as the mean of shares,
+  and a square past the largest double ages `σ²`'s weight as a row without
+  a prediction does. A finite mean keeps its bits. Moves: `ewridge.*`.
+
 - **`holt` keeps a finite level and trend across a clock step too small
   for its slope** (review 2026-11-23, REG-4). A step was read as clock
   wherever its reciprocal is finite, so at `y = 0, 10` a step of `1e-308`
