@@ -26,7 +26,7 @@ import pytest
 from polars_version import INSTALLED, needs_polars
 from rheon import polars as rp
 
-TIER = "mixed"
+TIER = "essential"
 
 CLOSED = ("right", "left", "both", "none")
 MIRROR = {"right": "left", "left": "right", "both": "both", "none": "none"}

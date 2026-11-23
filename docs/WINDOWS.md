@@ -328,9 +328,9 @@ by it without reading targets not yet known.
 
 **`rp.rolling_max` and `rp.rolling_min` are the largest and smallest value
 the window holds.** The window is the one `rolling_max_by` holds under each
-`closed`, and the value is Polars' to the bit: on equal values that differ
-only as `0.0` and `-0.0` the earliest row of the window wins, as in Polars,
-and looking ahead the latest, so a forward window is the backward one over
+`closed`, and the value is Polars' to the bit. On equal values that differ
+only as `0.0` and `-0.0` the earliest row of the window wins, as in Polars.
+Looking ahead the latest wins, so a forward window is the backward one over
 the reversed stream. A NaN, an infinity or a value beyond 1e100 is read as
 missing, as every operator reads it, where Polars' `rolling_max_by` lets a
 NaN make the window NaN and counts an infinity.
@@ -349,7 +349,8 @@ change starts the running form over too, as it does every operator; a
 does not combine with `reverse=True` yet: a window looking ahead would end
 at the next event, and whether such a window is whole has no rule yet.
 
-**A drawdown is a formula around the high-water mark:**
+**The drawdown subtracts the high-water mark from the value.** This code makes
+both from a column of equity:
 
 ```python
 import polars as pl
@@ -378,14 +379,15 @@ other operator.
 **What it holds.** With no `window_size`, one running extremum and its
 count a group: a few doubles, whatever the stream's length. With a
 `window_size`, the window's rows, as every windowed operator keeps them,
-and one double a row more for the extremum; a row costs 112 bytes for one
-extremum on its own window (40 for the row, 64 for the operator's value
-and sums, 8 for the extremum), and 64 more for
-each other operator sharing the window, 72 for another extremum. A window on a clock holds every row inside its span, so a burst of
-rows fills it, and `max_state_bytes` (256 KB a group by default, at most
-64 MiB) bounds it: without a clock column the window's rows are known, and
-a window past the cap is refused when the query is built; on a clock, the
-row that takes a group's window past it is refused.
+and one double a row more for the extremum. A row costs 112 bytes for one
+extremum on its own window: 40 for the row, 64 for the operator's value
+and sums, 8 for the extremum. Each other operator sharing the window adds
+64 bytes a row, and another extremum 72. A window on a clock holds every
+row inside its span, so a burst of rows fills it. `max_state_bytes` bounds
+it, 256 KB a group by default and at most 64 MiB. Without a clock column
+the window's rows are known, and a window past the cap is refused when the
+query is built. On a clock, the row that takes a group's window past it is
+refused.
 
 ## Saving and resuming a window run
 

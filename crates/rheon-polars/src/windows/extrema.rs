@@ -44,26 +44,28 @@ pub const STATE_BYTES_CEILING: u64 = 64 << 20;
 pub(super) fn check_op(o: usize, op: &OpDef, k: &KernelDef) -> Result<(), String> {
     if op.stat.is_extremum() && !k.half_life.is_infinite() {
         return Err(format!(
-            "operator {o}: an extremum weighs no row, so its kernel's half-life must be inf"
+            "operator {o}: an extremum weighs no row, so its kernel's half-life must be inf. \
+             Give it a kernel of its own with half_life = inf."
         ));
     }
     if k.since.is_some() && !op.stat.is_extremum() {
         return Err(format!(
-            "operator {o}: only rolling_max and rolling_min take since, but this one is a {:?}",
+            "operator {o}: only rolling_max and rolling_min take since, but this one is a {:?}. \
+             Give since to an extremum, or leave it out.",
             op.stat
         ));
     }
     match (op.stat.is_extremum(), op.max_state_bytes) {
         (false, Some(_)) => Err(format!(
-            "operator {o}: max_state_bytes is given, but only rolling_max and rolling_min take it"
+            "operator {o}: max_state_bytes is given, but only rolling_max and rolling_min take it. \
+             Leave out max_state_bytes."
         )),
-        (true, Some(0)) => Err(
-            "max_state_bytes must be above 0, but it is 0. Give the bytes a group's window may \
-             hold, or leave it out for 256 KB."
-                .into(),
-        ),
+        (true, Some(0)) => Err(format!(
+            "operator {o}: max_state_bytes must be above 0, but it is 0. Give the bytes a \
+             group's window may hold, or leave it out for 256 KB."
+        )),
         (true, Some(c)) if c > STATE_BYTES_CEILING => Err(format!(
-            "max_state_bytes may be at most {STATE_BYTES_CEILING} (64 MiB) a group, but it is \
+            "operator {o}: max_state_bytes may be at most {STATE_BYTES_CEILING} (64 MiB) a group, but it is \
              {c}. Lower it: a group's window is held in memory beside every other group's."
         )),
         _ => Ok(()),
