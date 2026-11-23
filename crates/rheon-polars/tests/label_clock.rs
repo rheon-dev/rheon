@@ -1124,8 +1124,13 @@ fn the_interval_is_the_multiplier_fold_of_the_served_residuals() {
                     w_rows *= lam;
                     continue;
                 }
-                w_rows = lam * w_rows + 1.0;
-                w_mean += (w[j] - w_mean) / w_rows;
+                // The mean weight at the old mean's and the row's shares
+                // (rule 5's thirtieth exception).
+                let prev = lam * w_rows;
+                w_rows = prev + 1.0;
+                if w[j] != w_mean {
+                    w_mean = (prev / w_rows) * w_mean + w[j] / w_rows;
+                }
                 let waiting = (held.len() + due.len() - k - 1) as f64;
                 if auto && (waiting > 0.0 || nbar != 0.0) {
                     nbar += (waiting - nbar) / w_rows;

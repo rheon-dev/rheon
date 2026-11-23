@@ -146,8 +146,11 @@ def fold(df, pred, coverage=0.9, rate=0.05, auto=False):
                 cov_w *= lam
                 w_rows *= lam
             else:
-                w_rows = lam * w_rows + 1.0
-                w_mean += (w[j] - w_mean) / w_rows
+                # The mean weight at the old mean's and the row's shares.
+                prev = lam * w_rows
+                w_rows = prev + 1.0
+                if w[j] != w_mean:
+                    w_mean = (prev / w_rows) * w_mean + w[j] / w_rows
                 if auto:
                     waiting = len(held) + len(due) - k - 1
                     nbar += (waiting - nbar) / w_rows
