@@ -1089,34 +1089,44 @@ class TestARateOf1e300:
         assert notices == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="REG-3: confirmed; the row-weight unit is frozen at the warm-up by design "
-    "(review fable2, C1's rule A), a decision for the user",
-)
-def test_a_fall_in_the_weights_does_not_freeze_the_fit():
-    """Review 2026-11-23, REG-3: the scaler's unit of weight, one row's
-    ``Σw² / Σw``, is frozen once its warm-up ends. When the weights then
-    fall a million-fold, each row steps the fit a millionth of a row, and
-    after fourteen half-lives on the new rows the slope has not left the
-    old regime's 0, where a weighted least squares on the same rows has
-    long forgotten it."""
+def test_a_fall_in_the_weights_slows_the_fit_as_scikit_learn_s_sample_weight_does():
+    """Review 2026-11-23, REG-3, not reproduced as stated. The review reads
+    the slope that stays near 0 after the weights fall a million-fold as the
+    frozen unit of weight ``ŵ = Σw² / Σw`` freezing the scaler. It is the
+    step's weight: under the default constant rate a row's gradient is
+    multiplied by its weight, as scikit-learn's ``SGDRegressor`` multiplies
+    it by ``sample_weight``, so a row of weight 1e-6 moves the fit a
+    millionth of a row's step. Weights of 1e-6 on every row, with no fall
+    and ``ŵ`` exactly 1e-6, stay as near 0, standardized or not, and so does
+    scikit-learn on the same rows."""
+    from sklearn.linear_model import SGDRegressor
+
     rng = np.random.default_rng(3)
     n0, n1 = 25, 275
     x = rng.standard_normal(n0 + n1)
     y = np.concatenate([np.zeros(n0), 3.0 * x[n0:] + 0.01 * rng.standard_normal(n1)])
-    w = np.concatenate([np.ones(n0), np.full(n1, 1e-6)])
-    df = pl.DataFrame({"x": x, "y": y, "w": w})
-    spec = rp.spec.sgd(
-        "s",
-        targets=["y"],
-        features=["x"],
-        weight="w",
-        half_life=20.0,
-        min_weight=0.0,
-        standardize=True,
-    )
-    bank = rp.ModelBank([spec])
-    bank.fit(df)
-    slope = bank.coef().filter(pl.col("term") == "x")["coef"][0]
-    assert slope == pytest.approx(3.0, rel=0.1)
+    fall = np.concatenate([np.ones(n0), np.full(n1, 1e-6)])
+
+    def slope(w: np.ndarray, standardize: bool) -> float:
+        df = pl.DataFrame({"x": x, "y": y, "w": w})
+        spec = rp.spec.sgd(
+            "s",
+            targets=["y"],
+            features=["x"],
+            weight="w",
+            half_life=20.0,
+            min_weight=0.0,
+            standardize=standardize,
+        )
+        bank = rp.ModelBank([spec])
+        bank.fit(df)
+        return bank.coef().filter(pl.col("term") == "x")["coef"][0]
+
+    for standardize in (True, False):
+        assert abs(slope(fall, standardize)) < 1e-4, standardize
+        assert abs(slope(np.full(n0 + n1, 1e-6), standardize)) < 1e-4, standardize
+        assert slope(np.ones(n0 + n1), standardize) > 2.0, standardize
+    sk = SGDRegressor(learning_rate="constant", eta0=0.01, penalty=None, shuffle=False)
+    for i in range(n0 + n1):
+        sk.partial_fit(x[i : i + 1, None], y[i : i + 1], sample_weight=[1e-6])
+    assert abs(sk.coef_[0]) < 1e-4
