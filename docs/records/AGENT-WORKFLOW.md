@@ -43,8 +43,11 @@ onto `main` (a fast-forward where it can be) and the full tier runs once, on
 that sha, before the push (the user, 2026-11-03: "why bother with an
 integration branch").
 `scripts/gate.sh` takes one of two machine-wide tokens and waits for one
-(`POLARS_ONLINE_GATES`, now `RHEON_GATES`). The full tier runs, always, before every push on
-the exact sha.
+(`POLARS_ONLINE_GATES`, now `RHEON_GATES`). The full tier runs, always, before every push to `main` on
+the exact sha. A worker or cloud session pushing a `vm/*` branch runs
+`scripts/quick.sh --extended` and the lints on the pushed sha, never the full
+gate (the user, 2026-11-23: "Agents should test their changes but not a full
+gate"): the coordinator's gate before `main` covers the rest.
 Run at most two building agents at once on this machine -- three while the
 1-minute load stays under about 20 (the user, 2026-11-07) -- each with
 `CARGO_BUILD_JOBS=6`, pytest at `-n 4` and the gate at `GATE_WORKERS=4`;

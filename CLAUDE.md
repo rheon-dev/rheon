@@ -40,7 +40,7 @@ docs/EXTENDING.md      every place a new model touches, with the test that catch
 ```
 uv sync                                  # Python env
 scripts/gate.sh                          # the essentials: each commit while a task is in progress
-scripts/gate.sh --extended               # everything: before EVERY push, always
+scripts/gate.sh --extended               # everything: before EVERY push to main, always
 cargo test --workspace --exclude rheon-py   # Rust essentials only (rheon-py has none; see ci.yml)
 cargo test --workspace --exclude rheon-py -- --include-ignored   # every Rust test
 maturin develop --release -m crates/rheon-py/Cargo.toml
@@ -59,9 +59,12 @@ uv run python scripts/oracles.py rerun   # the oracle grids whose hashes the gat
 
 Workflow (the detail and each rule's reason: `docs/records/AGENT-WORKFLOW.md`):
 - Workers iterate with `scripts/quick.sh` and finish with `scripts/quick.sh --extended`
-  plus the lints, never a full gate, never a merge of `main` unless asked.
+  plus the lints, never a full gate, never a merge of `main` unless asked. The same holds
+  for a cloud session's push of a `vm/*` branch: `quick.sh --extended` and the lints on
+  the pushed sha, never the full gate (the user, 2026-11-23: "Agents should test their
+  changes but not a full gate").
 - The coordinator merges a wave of 2+ branches onto `integration`; a wave of one merges onto
-  `main` directly. **The full tier runs before every push, on the exact sha**, and is the
+  `main` directly. **The full tier runs before every push to `main`, on the exact sha**, and is the
   only gate a wave pushed at once gets; the essentials gate runs on `integration` only when
   the wave will wait before its push (the user, 2026-11-14). Budget tightenings from CI ride
   with the next wave, never a gate of their own. A gated wave with no open bug is pushed
@@ -76,7 +79,7 @@ Workflow (the detail and each rule's reason: `docs/records/AGENT-WORKFLOW.md`):
 
 Two tiers of tests (docs/TESTING.md, "Two tiers"; PLAN task 210). The
 essentials gate each commit while a task is in progress, for speed of
-iteration; **the full suite runs before every push, always**
+iteration; **the full suite runs before every push to `main`, always**
 (`scripts/gate.sh --extended`), whatever the essentials said, and CI and a
 release run it too. The defaults are asymmetric: a plain `uv run pytest`
 runs both tiers, but a plain `cargo test` skips the extended Rust tests
