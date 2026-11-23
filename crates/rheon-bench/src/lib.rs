@@ -114,6 +114,12 @@ pub const MODEL_CASES: &[&str] = &[
     // multipower products, two kernel sums of 20 and 10 lags and a scale of
     // 10 (task 555).
     "power_variation",
+    // One column's digest at compression 100, read at three levels: a row's
+    // merge of a copy of its buffer (task 544).
+    "tdigest",
+    // One column's DDSketch at the default accuracy, read at three levels
+    // with their tail means: a row's walk of its buckets (task 544).
+    "ddsketch",
 ];
 
 /// The one model case that reports on a single row of its block:
@@ -661,6 +667,24 @@ fn case_spec(id: &str) -> (Value, Shape) {
                 "clock": "t",
                 "half_life": 1000.0,
                 "gap_cap": 100.0,
+            }),
+            Shape::Linear,
+        ),
+        "tdigest" => (
+            json!({
+                "name": "m",
+                "model": {"type": "tdigest", "quantiles": [0.05, 0.25, 0.95]},
+                "targets": ["y0"],
+                "features": [],
+            }),
+            Shape::Linear,
+        ),
+        "ddsketch" => (
+            json!({
+                "name": "m",
+                "model": {"type": "ddsketch", "quantiles": [0.05, 0.25, 0.95]},
+                "targets": ["y0"],
+                "features": [],
             }),
             Shape::Linear,
         ),

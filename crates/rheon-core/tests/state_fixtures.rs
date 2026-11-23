@@ -1421,7 +1421,7 @@ fn variants() -> Vec<String> {
 /// name here, and a fixture.
 #[test]
 fn the_variant_names_are_frozen() {
-    const FROZEN: [&str; 30] = [
+    const FROZEN: [&str; 32] = [
         "EwCov",
         "EwRidge",
         "Rls",
@@ -1452,6 +1452,8 @@ fn the_variant_names_are_frozen() {
         "Realized",
         "StreamPca",
         "PowerVariation",
+        "TDigest",
+        "DdSketch",
     ];
     assert_eq!(
         variants(),
@@ -1572,7 +1574,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 164] = [
+    const FORMS: [(&str, &[&str]); 175] = [
         // `power_variation` (task 555): the sums, the last raw returns, the
         // scales' rings, a window's credits and rows, a clock window's
         // stamps and clock, and a cap's overrun.
@@ -1839,6 +1841,39 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         ("dcc_margins", &["model", "Dcc", "margins", "series"]),
         ("dcc_margins", &["model", "Dcc", "stage", "buffer"]),
         ("dcc_span", &["model", "Dcc", "place"]),
+        // `tdigest`'s digests (PLAN 544): a buffer before the first
+        // merge, then the centroids beside it, and the weights.
+        ("tdigest", &["model", "TDigest", "digests", "1", "buffer"]),
+        ("tdigest", &["model", "TDigest", "target_w2"]),
+        (
+            "tdigest_merged",
+            &["model", "TDigest", "digests", "0", "centroids"],
+        ),
+        (
+            "tdigest_merged",
+            &["model", "TDigest", "digests", "0", "buffer"],
+        ),
+        // `ddsketch`'s sketches (PLAN 544, part 7): both stores, then a row
+        // window's ring and counts, then a clock window's stamps and clock.
+        (
+            "ddsketch",
+            &["model", "DdSketch", "sketches", "0", "pos", "w"],
+        ),
+        (
+            "ddsketch",
+            &["model", "DdSketch", "sketches", "1", "neg", "w"],
+        ),
+        ("ddsketch_rows", &["model", "DdSketch", "ring", "codes"]),
+        (
+            "ddsketch_rows",
+            &["model", "DdSketch", "sketches", "0", "pos", "n"],
+        ),
+        ("ddsketch_clock", &["model", "DdSketch", "ring", "stamp"]),
+        ("ddsketch_decayed", &["model", "DdSketch", "cfg", "decay"]),
+        (
+            "ddsketch_clock",
+            &["model", "DdSketch", "cfg", "window_clock"],
+        ),
         // A refit over a span of the clock (task 538): the span in each
         // cfg, glm's clock summed from the steps, and each buffer.
         ("glm_refit_clock", &["model", "Glm", "cfg", "refit_clock"]),
@@ -3303,10 +3338,19 @@ fn first_difference(got: &rmpv::Value, want: &rmpv::Value, bound: f64, at: &str)
 /// to the bit and its reports within the same tolerance. A decay or a
 /// log-likelihood runs through libm, whose last bit is the platform's.
 /// `garch` calls no platform library (its `ln`, `exp` and `ln_1p` are the
-/// `libm` crate's), so its cases are held to the bit: a start fitted on
-/// another platform's last bits once took another path, 28% away.
+/// `libm` crate's), nor does `tdigest` (its sine and cosine are series and
+/// its `sqrt` correctly rounded), nor `ddsketch` (its logarithm and power
+/// are series), so their cases are held to the bit: a
+/// start fitted on another platform's last bits once took another path, 28%
+/// away.
 fn differs_from_another_writer(case: &Case, f: &Fixture) -> Option<String> {
-    let tol = if f.variant == "Garch" { 0.0 } else { TOL };
+    // `ddsketch`'s decayed form multiplies by the platform's `exp2`.
+    let exact_ddsketch = f.variant == "DdSketch" && f.name != "ddsketch_decayed";
+    let tol = if matches!(f.variant, "Garch" | "TDigest") || exact_ddsketch {
+        0.0
+    } else {
+        TOL
+    };
     let (mut m, rows) = saved(case);
     let decode = |b: &[u8]| rmpv::decode::read_value(&mut &b[..]).unwrap();
     let state = first_difference(

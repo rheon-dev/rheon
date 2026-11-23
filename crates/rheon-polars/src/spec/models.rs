@@ -887,6 +887,49 @@ impl Spec {
                         }),
                 );
             }
+            // Its features are checked above. No decay and no window: a
+            // merging digest folds each row into a centroid's mean and
+            // cannot take it out, so a half-life is refused naming the
+            // quantile that forgets. Every other value is the model's own to
+            // check, here at the call, where the state's size against its
+            // cap is known too.
+            ModelKind::TDigest { .. } => {
+                if self.half_life.is_some() || self.lam.is_some() {
+                    no.take(
+                        rheon_core::TDigest::check_no_span(Some(decay_key))
+                            .map_err(|e| format!("spec {:?}: {}", self.name, tdigest_words(&e))),
+                    );
+                }
+                no.take(crate::stream::tdigest_cfg(self).map(|_| ()).map_err(|e| {
+                    format!(
+                        "spec {:?}: {}",
+                        self.name,
+                        e.trim_start_matches("tdigest: ")
+                    )
+                }));
+            }
+            // Its features are checked above. A decay is its rounded form and
+            // a window its exact one, refused together by the model. Every
+            // value is the model's own to check, here at the call, under
+            // each decay the spec's grid gives.
+            ModelKind::DdSketch { .. } => {
+                let decays = self
+                    .decays()
+                    .unwrap_or_else(|_| vec![(String::new(), Decay::Halflife(f64::INFINITY))]);
+                if let Some((_, decay)) = decays.first() {
+                    no.take(
+                        crate::stream::ddsketch_cfg(self, *decay)
+                            .map(|_| ())
+                            .map_err(|e| {
+                                format!(
+                                    "spec {:?}: {}",
+                                    self.name,
+                                    e.trim_start_matches("ddsketch: ")
+                                )
+                            }),
+                    );
+                }
+            }
             // The shared checks (non-empty features and targets, no column on
             // both sides, a decay, `min_weight` per target, no residual
             // diagnostics) and one of its own: given edges and the knobs for
@@ -1815,5 +1858,19 @@ impl Spec {
                 ));
             }
         }
+    }
+}
+
+/// A `TDigest` refusal of a span in the spec's words, as every model that
+/// takes no decay words its own: "`<key>` does not apply to tdigest, whose
+/// ...", then the core's reason and the quantile that forgets.
+pub(crate) fn tdigest_words(e: &str) -> String {
+    let e = e.trim_start_matches("TDigest: ");
+    match e.split_once(" is not allowed. ") {
+        Some((key, why)) => format!(
+            "{key} does not apply to tdigest, whose merging digest cannot take a row out \
+             again. {why}"
+        ),
+        None => e.to_string(),
     }
 }

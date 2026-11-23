@@ -64,6 +64,12 @@ impl AnyModel {
             ModelState::PowerVariation(_) => Ok(AnyModel::PowerVariation(Box::new(
                 rheon_core::PowerVariation::restore(s)?,
             ))),
+            ModelState::TDigest(_) => Ok(AnyModel::TDigest(Box::new(
+                rheon_core::TDigestModel::restore(s)?,
+            ))),
+            ModelState::DdSketch(_) => Ok(AnyModel::DdSketch(Box::new(
+                rheon_core::DdSketchModel::restore(s)?,
+            ))),
             // A kind only rheon-core builds, such as `ew_cov`'s bare running
             // sums: its name is the code's, so the message does not print it.
             _ => Err(StateError::Invalid(format!(

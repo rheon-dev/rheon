@@ -360,6 +360,50 @@ model that only the new build has is listed as an addition and passes.
   `rankdata` and NumPy's `quantile` on one chunk, and to chunk
   invariance and a save and load at every stamp.
 
+- **`rheon.spec.ddsketch`: quantiles and tail means of each column within a
+  relative accuracy** (PLAN 544). A spec of `type = "ddsketch"` takes its
+  columns as `targets`, the levels as `quantiles=[...]` and an `alpha`
+  (default `tanh(1/128)`, about 0.0078), and writes `q<level>_<column>` and
+  `es<level>_<column>` for each level and column, read before the row is
+  added, beside `weight_sum`, `settled_frac` and `withheld_reason`; no
+  `pred` or `coef`. Each column has its own DDSketch in each group (Masson,
+  Rim and Lee's sketch with the `ddsketch` package's logarithmic mapping,
+  sparse stores), every quantile within `alpha` of the exact one and every
+  tail mean (the partial-mass rule over the buckets) within `alpha` times
+  the tail's mean magnitude; its buckets and quantiles are the `ddsketch`
+  package's (3.0.1). `window_rows` or `window_size` (with `closed`) reads a
+  window's rows alone, a ring taking each row out of its bucket exactly; a
+  `half_life` or `lam` decays every bucket, each step rounded once, so a
+  bucket formed `k` rows ago is its exact decayed sum within a relative
+  `2k 2^-53` (refused beside a window). A level is null until
+  its rows identify it (`level_beyond_sample`), and 0.5 is refused by name.
+  The buckets are checked against `max_state_bytes` as the rows go in. The
+  state file gains the variant `DdSketch`, with no schema change (72 is
+  unreleased).
+
+- **`rheon.spec.tdigest`: quantiles of each column from a merging
+  t-digest** (PLAN 544). A spec of `type = "tdigest"` takes its columns as
+  `targets`, the levels as `quantiles=[...]` and a `compression` (default
+  100, at least 10 and no ceiling but `max_state_bytes`), and writes `q<level>_<column>` and
+  `es<level>_<column>` for each level and column, read before the row is
+  added, beside `weight_sum`, `settled_frac` and `withheld_reason`; no
+  `pred` or `coef`. `es<level>_<column>` is the expected shortfall, the
+  partial-mass mean of the digest's own centroids past the quantile (within
+  4.3% of the exact tail mean at compression 100), the lower
+  tail below a level of 0.5 and the upper above it (0.5 itself is refused
+  by name), in the values' own sign; the quantile is the value at risk. Each column has its own digest in
+  each group (Dunning and Ertl's merging digest on the `k_1` scale), its
+  rank error measured at most 2.0e-3 at compression 100 and 9.3e-4 at 200
+  against exact ranks, and read within those tolerances of the `tdigest`
+  package. A level is null until its rows identify it, `p (n + 1) >= 1` and
+  `(1 - p)(n + 1) >= 1` for Kish's effective size `n`, and
+  `withheld_reason` names the new `level_beyond_sample` there. The state is
+  bounded by the compression, refused at the call past `max_state_bytes`;
+  a `half_life`, `lam` or window is refused, naming the windowed DDSketch
+  (`ewm_quantile` with a `window_size`) as the quantile that forgets. The
+  state file gains the variant `TDigest`, with no schema change (72 is
+  unreleased).
+
 - **Clock forms for the remaining counts of rows** (task 538, part 2), each
   beside its count and refused with it, each a number of the clock's units
   (rows without a clock) or a duration on a temporal clock, read off the

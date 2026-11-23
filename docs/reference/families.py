@@ -109,6 +109,8 @@ FAMILIES: tuple[Family, ...] = (
                 "dcc",
                 "realized",
                 "power_variation",
+                "tdigest",
+                "ddsketch",
             )
         ),
     ),

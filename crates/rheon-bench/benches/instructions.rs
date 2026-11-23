@@ -116,6 +116,8 @@ const FAKETIME_ENV: [&str; 4] = [
 #[bench::realized(args = ("realized"), setup = model_setup)]
 #[bench::pca(args = ("pca"), setup = model_setup)]
 #[bench::power_variation(args = ("power_variation"), setup = model_setup)]
+#[bench::tdigest(args = ("tdigest"), setup = model_setup)]
+#[bench::ddsketch(args = ("ddsketch"), setup = model_setup)]
 fn model(mut run: ModelRun) -> ModelRun {
     black_box(rheon_budget_model_rows(black_box(&mut run)));
     run

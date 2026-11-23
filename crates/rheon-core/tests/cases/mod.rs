@@ -3378,6 +3378,74 @@ pub fn all() -> Vec<Case> {
             Targets::Correlated(2, false, true),
             40
         ),
+        // A t-digest a target (PLAN 544), saved before its first merge:
+        // each digest's buffer, its extremes and the weights, no centroid.
+        case!(
+            "tdigest",
+            "TDigest",
+            TDigestModel,
+            TDigestModel::new(tdigest_cfg()).unwrap(),
+            0,
+            Targets::Linear(2),
+            40
+        ),
+        // Saved past its merges, its buffer part-filled again: the
+        // centroids beside the buffer.
+        case!(
+            "tdigest_merged",
+            "TDigest",
+            TDigestModel,
+            TDigestModel::new(tdigest_cfg()).unwrap(),
+            0,
+            Targets::Linear(2),
+            300
+        ),
+        // A DDSketch a target (PLAN 544, part 7), never forgetting: both
+        // stores, the zero count stays empty on a linear target.
+        case!(
+            "ddsketch",
+            "DdSketch",
+            DdSketchModel,
+            DdSketchModel::new(ddsketch_cfg(None, None)).unwrap(),
+            0,
+            Targets::Linear(2),
+            40
+        ),
+        // A row window, full and turning over: the ring's codes and
+        // weights, and the stores' row counts.
+        case!(
+            "ddsketch_rows",
+            "DdSketch",
+            DdSketchModel,
+            DdSketchModel::new(ddsketch_cfg(Some(25), None)).unwrap(),
+            0,
+            Targets::Linear(2),
+            60
+        ),
+        // The decayed form: the decay in the cfg, the weights decayed.
+        case!(
+            "ddsketch_decayed",
+            "DdSketch",
+            DdSketchModel,
+            DdSketchModel::new(DdSketchModelCfg {
+                decay: Decay::Halflife(15.0),
+                ..ddsketch_cfg(None, None)
+            })
+            .unwrap(),
+            0,
+            Targets::Linear(2),
+            60
+        ),
+        // A clock window: the ring's stamps and the clock kept for them.
+        case!(
+            "ddsketch_clock",
+            "DdSketch",
+            DdSketchModel,
+            DdSketchModel::new(ddsketch_cfg(None, Some(12.0))).unwrap(),
+            0,
+            Targets::Linear(2),
+            60
+        ),
     ]
 }
 
@@ -3396,6 +3464,32 @@ fn dcc_cfg(k: usize, asymmetric: bool, params: Option<Vec<f64>>) -> DccCfg {
         start_rows: 50,
         start_span: None,
         min_weight: 0.0,
+        max_state_bytes: None,
+    }
+}
+
+/// A `ddsketch` of two targets at a coarse accuracy, read at three levels,
+/// plain or under a window.
+fn ddsketch_cfg(window_rows: Option<usize>, window_clock: Option<f64>) -> DdSketchModelCfg {
+    DdSketchModelCfg {
+        n_targets: 2,
+        alpha: 0.02,
+        levels: vec![0.1, 0.4, 0.9],
+        window_rows,
+        window_clock,
+        closed: WindowClosed::Right,
+        decay: Decay::Halflife(f64::INFINITY),
+        max_state_bytes: None,
+    }
+}
+
+/// A `tdigest` of two targets at the smallest compression, whose buffer
+/// merges every 80 rows, read at three levels.
+fn tdigest_cfg() -> TDigestModelCfg {
+    TDigestModelCfg {
+        n_targets: 2,
+        compression: 10.0,
+        levels: vec![0.1, 0.4, 0.9],
         max_state_bytes: None,
     }
 }

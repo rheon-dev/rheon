@@ -1149,6 +1149,94 @@ fn garch_signature(vol: GarchVol, dist: GarchDist, targeting: bool) -> Vec<f64> 
     got
 }
 
+/// `tdigest` on the stream run five times at the smallest compression,
+/// whose buffer merges every 80 rows: the three levels and their tail means
+/// on three rows, each past a merge, one with a full buffer's merge just
+/// made. The merge's limit, its centroid means, the read's interpolation and
+/// the tail's partial mass move every one;
+/// no libm call is in it, so it is held to the bit.
+#[test]
+fn tdigest_golden() {
+    let mut m = TDigestModel::new(TDigestModelCfg {
+        n_targets: 1,
+        compression: 10.0,
+        levels: vec![0.05, 0.25, 0.95],
+        max_state_bytes: None,
+    })
+    .unwrap();
+    let rows = stream();
+    let mut got = Vec::new();
+    for i in 0..300 {
+        let (_, y, d, w) = rows[i % 60];
+        let step = m.step(&[], &y, d, w);
+        if [150, 170, 299].contains(&i) {
+            got.extend(&step.pred);
+        }
+    }
+    check_bits("tdigest", &got, GOLDEN_TDIGEST);
+}
+
+/// `ddsketch` on the stream run five times: plain, under a row window of
+/// 40 and under a clock window of 80 units, the three levels and their tail
+/// means on three rows each. The key's logarithm, the representative's
+/// power and the partial-mass walk move every one; no libm call is in it,
+/// so it is held to the bit.
+#[test]
+fn ddsketch_golden() {
+    let mut got = Vec::new();
+    for (rows, clock) in [(None, None), (Some(40), None), (None, Some(80.0))] {
+        let mut m = DdSketchModel::new(DdSketchModelCfg {
+            n_targets: 1,
+            alpha: 0.01,
+            levels: vec![0.05, 0.25, 0.95],
+            window_rows: rows,
+            window_clock: clock,
+            closed: WindowClosed::Right,
+            decay: Decay::Halflife(f64::INFINITY),
+            max_state_bytes: None,
+        })
+        .unwrap();
+        let stream = stream();
+        for i in 0..300 {
+            let (_, y, d, w) = stream[i % 60];
+            let step = m.step(&[], &y, d, w);
+            if [150, 170, 299].contains(&i) {
+                got.extend(&step.pred);
+            }
+        }
+    }
+    check_bits("ddsketch", &got, GOLDEN_DDSKETCH);
+}
+
+/// `ddsketch`'s decayed form, a half-life of 20 rows: the factor is the
+/// platform's `exp2`, so it is held to the golden files' tolerance, not to
+/// the bit.
+#[test]
+fn ddsketch_decayed_golden() {
+    let mut m = DdSketchModel::new(DdSketchModelCfg {
+        n_targets: 1,
+        alpha: 0.01,
+        levels: vec![0.05, 0.25, 0.95],
+        window_rows: None,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        decay: Decay::Halflife(20.0),
+        max_state_bytes: None,
+    })
+    .unwrap();
+    let stream = stream();
+    let mut got = Vec::new();
+    for i in 0..300 {
+        let (_, y, d, w) = stream[i % 60];
+        let step = m.step(&[], &y, d, w);
+        if [150, 170, 299].contains(&i) {
+            got.extend(&step.pred);
+            got.push(step.n_eff);
+        }
+    }
+    check("ddsketch_decayed", &got, GOLDEN_DDSKETCH_DECAYED);
+}
+
 /// The free GARCH(1,1).
 #[test]
 fn garch_golden() {
@@ -4101,4 +4189,106 @@ const GOLDEN_POWER_VARIATION_WINDOW: &[f64] = &[
     7.5394428256191475,
     5.381814193807589,
     12.0,
+];
+
+const GOLDEN_TDIGEST: &[f64] = &[
+    -1.4506754991295818,
+    -0.6153938389536291,
+    1.9669305121855334,
+    -1.4626009005582017,
+    -0.9992829396489874,
+    1.9874652286997394,
+    -1.4889104278521395,
+    -0.63596345124358,
+    1.948147518472067,
+    -1.5045266365995258,
+    -1.0229911855131937,
+    1.9616845856185046,
+    -1.5012510796384302,
+    -0.6234457757321644,
+    1.9185853898662055,
+    -1.5199855742701565,
+    -1.0211641212789853,
+    1.9367196420068518,
+];
+
+const GOLDEN_DDSKETCH: &[f64] = &[
+    -1.476926144063773,
+    -0.624961225664581,
+    1.7331981299642243,
+    -1.6254534993405247,
+    -1.071237747864269,
+    2.290251881689183,
+    -1.537202693153204,
+    -0.624961225664581,
+    1.7331981299642243,
+    -1.6592146905265275,
+    -1.0996546789342858,
+    2.27294307536278,
+    -1.537202693153204,
+    -0.600455344842521,
+    1.7331981299642243,
+    -1.6525632698860737,
+    -1.0992880578758688,
+    2.2435191601110698,
+    -1.3099107407241846,
+    -0.5220083628371914,
+    1.6652362387784885,
+    -1.4633920513902652,
+    -0.9858309127376075,
+    2.288711348987963,
+    -1.6322612637531722,
+    -0.7334027039711133,
+    2.2932675214577865,
+    -1.6840237592460194,
+    -1.18135595786429,
+    2.4401953309769513,
+    -1.6322612637531722,
+    -0.7334027039711133,
+    1.4476800818050848,
+    -1.6840237592460194,
+    -1.274658337302112,
+    1.8153649851088371,
+    -1.537202693153204,
+    -0.600455344842521,
+    1.7331981299642243,
+    -1.6570551861482388,
+    -1.0879553281795669,
+    2.2633900674796195,
+    -1.537202693153204,
+    -0.624961225664581,
+    1.7331981299642243,
+    -1.6614534427719094,
+    -1.1197345743729152,
+    2.28284665234257,
+    -1.537202693153204,
+    -0.7334027039711133,
+    1.6652362387784885,
+    -1.6626039126757866,
+    -1.136873377715784,
+    2.2829017763508332,
+];
+
+const GOLDEN_DDSKETCH_DECAYED: &[f64] = &[
+    -1.3099107407241846,
+    -0.7633344539546297,
+    1.6652362387784885,
+    -1.5388589569648967,
+    -1.0710360328115065,
+    2.315423616777208,
+    26.867539807603332,
+    -1.7331981299642243,
+    -0.7334027039711133,
+    1.7331981299642243,
+    -1.7331981299642243,
+    -1.2098232667812512,
+    2.260432223073342,
+    16.92073916656056,
+    -1.6322612637531722,
+    -0.600455344842521,
+    1.4476800818050848,
+    -1.7104392927357428,
+    -1.1778803166775635,
+    1.988277768204018,
+    20.212303545600623,
 ];

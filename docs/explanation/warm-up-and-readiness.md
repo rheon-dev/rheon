@@ -23,7 +23,9 @@ reason the fit cannot be trusted on that row: `ill_conditioned` for an
 for an `sgd` learning rate past its stability bound. A `garch` start
 whose rows do not yet tell its variance process from a constant variance
 is `not_identified`, and a `corrchange` flag on a span whose two columns'
-scale ratio moved is `scale_ratio_moved`. [Is it
+scale ratio moved is `scale_ratio_moved`.
+`level_beyond_sample` is a `tdigest` or `ddsketch` level past what its rows
+identify. [Is it
 ready?](../DIAGNOSTICS.md#is-it-ready) lists every reason in their order of precedence, and [Decide
 when a model is ready](../how-to/decide-when-a-model-is-ready.md) runs the
 three main gates on one stream.

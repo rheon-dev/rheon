@@ -281,10 +281,14 @@ const SPARSE_OUTPUT: &[&str] = &["corrchange", "garch"];
 /// `audit`, a record of the rows; `bocpd`, whose recursion over run lengths
 /// does not decay; `rcov`, a block estimator; `seqtest`, an e-process that
 /// would not be one if it forgot; `garch`, whose recursion is per
-/// observation and whose estimator weighs every row it learned. `probe_with` holds them to the sum where
+/// observation and whose estimator weighs every row it learned; `tdigest`,
+/// a merging digest that cannot take a row out again; `ddsketch`, whose
+/// decayed form is refused (a window is its form that forgets). `probe_with` holds them to the sum where
 /// it holds every other model to rule 8's decayed recursion, so a model
 /// added here is a choice made in this file, not a default.
-const NO_DECAY: &[&str] = &["audit", "bocpd", "garch", "rcov", "seqtest"];
+const NO_DECAY: &[&str] = &[
+    "audit", "bocpd", "ddsketch", "garch", "rcov", "seqtest", "tdigest",
+];
 
 /// Slots null by design except on a flag, which the ready count leaves out:
 /// `corrchange`'s `since_change` dates a change only where one is flagged
@@ -888,6 +892,8 @@ fn every_state_kind_is_distinct_and_named() {
         "realized",
         "pca",
         "power_variation",
+        "tdigest",
+        "ddsketch",
     ];
     let mut seen = std::collections::HashSet::new();
     for k in kinds {
@@ -928,6 +934,8 @@ fn every_state_kind_is_distinct_and_named() {
         Realized::new(realized_cfg()).unwrap().state(),
         StreamPca::new(pca_cfg()).unwrap().state(),
         PowerVariation::new(power_variation_cfg()).unwrap().state(),
+        TDigestModel::new(tdigest_cfg()).unwrap().state(),
+        DdSketchModel::new(ddsketch_cfg()).unwrap().state(),
     ];
     let from_states: Vec<&str> = states.iter().map(|s| s.model.kind()).collect();
     assert_eq!(from_states, kinds);
@@ -1000,6 +1008,8 @@ fn one_state_of_each_kind() -> Vec<State> {
         Realized::new(realized_cfg()).unwrap().state(),
         StreamPca::new(pca_cfg()).unwrap().state(),
         PowerVariation::new(power_variation_cfg()).unwrap().state(),
+        TDigestModel::new(tdigest_cfg()).unwrap().state(),
+        DdSketchModel::new(ddsketch_cfg()).unwrap().state(),
         State::new(ModelState::EwCov(Box::new(EwCov::new(1)))),
     ]
 }
@@ -1057,6 +1067,8 @@ fn every_model_refuses_every_other_models_state_by_name() {
     refuses_every_other_kind::<Audit>("audit", &states);
     refuses_every_other_kind::<Glm>("glm", &states);
     refuses_every_other_kind::<Expectile>("expectile", &states);
+    refuses_every_other_kind::<TDigestModel>("tdigest", &states);
+    refuses_every_other_kind::<DdSketchModel>("ddsketch", &states);
 }
 
 /// Task 252: each model hands back the configuration it was built from,
@@ -1131,6 +1143,14 @@ fn every_model_hands_back_its_configuration() {
         PowerVariation::new(c.clone()).unwrap(),
         &c,
         PowerVariation::cfg,
+    );
+    let c = tdigest_cfg();
+    same(TDigestModel::new(c.clone()).unwrap(), &c, TDigestModel::cfg);
+    let c = ddsketch_cfg();
+    same(
+        DdSketchModel::new(c.clone()).unwrap(),
+        &c,
+        DdSketchModel::cfg,
     );
 }
 
@@ -2068,6 +2088,18 @@ fn every_model_refuses_at_restore_a_configuration_its_new_refuses() {
             "start_rows must be at least 1",
         ),
         refused(StreamPca::new(pca_cfg()).unwrap(), "decay", zero(), h),
+        refused(
+            TDigestModel::new(tdigest_cfg()).unwrap(),
+            "compression",
+            9.5.into(),
+            "compression must be at least 10",
+        ),
+        refused(
+            DdSketchModel::new(ddsketch_cfg()).unwrap(),
+            "alpha",
+            1.5.into(),
+            "alpha must be at least",
+        ),
     ];
     // Every model's `restore`: the twenty-one kinds, `robust` under both
     // losses.
@@ -2491,6 +2523,11 @@ fn exactly_the_scheduled_solvers_report_a_solve_share() {
             "power_variation",
             share(PowerVariation::new(power_variation_cfg()).unwrap()),
         ),
+        ("tdigest", share(TDigestModel::new(tdigest_cfg()).unwrap())),
+        (
+            "ddsketch",
+            share(DdSketchModel::new(ddsketch_cfg()).unwrap()),
+        ),
     ];
     let reporting: Vec<&str> = shares
         .iter()
@@ -2543,6 +2580,8 @@ const PROBED: &[(&str, &str)] = &[
     ("Realized", "realized"),
     ("StreamPca", "pca"),
     ("PowerVariation", "power_variation"),
+    ("TDigest", "tdigest"),
+    ("DdSketch", "ddsketch"),
 ];
 
 #[test]
@@ -5134,6 +5173,37 @@ fn garch() {
     }
 }
 
+/// Two targets read at three levels, the tails withheld until the rows
+/// identify them (`level_identified`).
+fn tdigest_cfg() -> TDigestModelCfg {
+    TDigestModelCfg {
+        n_targets: 2,
+        compression: 20.0,
+        levels: vec![0.05, 0.25, 0.95],
+        max_state_bytes: None,
+    }
+}
+
+#[test]
+fn tdigest() {
+    // A digest per target, no features: per target one quantile a level,
+    // then one tail mean a level, and `n_eff` every learned row's weight, summed (no decay: a
+    // merging digest cannot take a row out).
+    let m = TDigestModel::new(tdigest_cfg()).unwrap();
+    assert_eq!(m.n_features(), 0, "tdigest reads no features");
+    let r = probe_with(m, 2, Some(&TDigestModel::n_eff));
+    assert_eq!(r.kind, "tdigest");
+    assert_eq!(r.n_targets, 2);
+    assert_eq!(r.n_outputs, 12);
+    assert_eq!(r.pred_len, 12);
+    assert!(r.roundtrips);
+}
+
+#[test]
+fn tdigest_predict_is_the_step() {
+    predict_is_the_step_without_the_step(|| TDigestModel::new(tdigest_cfg()).unwrap(), 2, false);
+}
+
 #[test]
 fn garch_predict_is_the_step() {
     predict_is_the_step_without_the_step(|| Garch::new(garch_cfg()).unwrap(), 1, false);
@@ -6891,6 +6961,89 @@ fn power_variation_predict_is_the_step() {
     );
     predict_is_the_step_without_the_step(
         || PowerVariation::new(power_variation_clock_cfg()).unwrap(),
+        2,
+        false,
+    );
+}
+
+/// Two targets read at three levels with their tail means, a coarse
+/// accuracy, no window: the contract's recursion is the sum.
+fn ddsketch_cfg() -> DdSketchModelCfg {
+    DdSketchModelCfg {
+        n_targets: 2,
+        alpha: 0.02,
+        levels: vec![0.05, 0.25, 0.95],
+        window_rows: None,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        decay: Decay::Halflife(f64::INFINITY),
+        max_state_bytes: None,
+    }
+}
+
+#[test]
+fn ddsketch() {
+    // A sketch per target, no features: per target one quantile a level,
+    // then one tail mean a level, and `n_eff` every learned row's weight.
+    let m = DdSketchModel::new(ddsketch_cfg()).unwrap();
+    assert_eq!(m.n_features(), 0, "ddsketch reads no features");
+    let r = probe_with(m, 2, Some(&DdSketchModel::n_eff));
+    assert_eq!(r.kind, "ddsketch");
+    assert_eq!(r.n_targets, 2);
+    assert_eq!(r.n_outputs, 12);
+    assert_eq!(r.pred_len, 12);
+    assert!(r.roundtrips);
+}
+
+#[test]
+fn ddsketch_predict_is_the_step() {
+    predict_is_the_step_without_the_step(|| DdSketchModel::new(ddsketch_cfg()).unwrap(), 2, false);
+}
+
+/// The decayed form keeps the step's parity: `predict` reads what the step
+/// would, before the row's decay.
+#[test]
+fn ddsketch_decayed_predict_is_the_step() {
+    predict_is_the_step_without_the_step(
+        || {
+            DdSketchModel::new(DdSketchModelCfg {
+                decay: decay(),
+                levels: vec![0.25, 0.75],
+                ..ddsketch_cfg()
+            })
+            .unwrap()
+        },
+        2,
+        false,
+    );
+}
+
+/// The windowed forms keep the step's parity too: a row window and a
+/// clock window, each read ahead as the step reads, at levels a few rows
+/// identify.
+#[test]
+fn ddsketch_windowed_predict_is_the_step() {
+    predict_is_the_step_without_the_step(
+        || {
+            DdSketchModel::new(DdSketchModelCfg {
+                window_rows: Some(7),
+                levels: vec![0.25, 0.75],
+                ..ddsketch_cfg()
+            })
+            .unwrap()
+        },
+        2,
+        false,
+    );
+    predict_is_the_step_without_the_step(
+        || {
+            DdSketchModel::new(DdSketchModelCfg {
+                window_clock: Some(40.0),
+                levels: vec![0.25, 0.75],
+                ..ddsketch_cfg()
+            })
+            .unwrap()
+        },
         2,
         false,
     );

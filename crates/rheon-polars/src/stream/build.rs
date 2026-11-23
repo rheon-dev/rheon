@@ -788,5 +788,13 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         ModelKind::PowerVariation { .. } => Ok(AnyModel::PowerVariation(Box::new(
             rheon_core::PowerVariation::new(power_variation_cfg(spec, decay)?)?,
         ))),
+        // No decay: a merging digest cannot take a row out.
+        ModelKind::TDigest { .. } => Ok(AnyModel::TDigest(Box::new(
+            rheon_core::TDigestModel::new(tdigest_cfg(spec)?)?,
+        ))),
+        // A decay (rounded) or a window (exact), not both.
+        ModelKind::DdSketch { .. } => Ok(AnyModel::DdSketch(Box::new(
+            rheon_core::DdSketchModel::new(ddsketch_cfg(spec, decay)?)?,
+        ))),
     }
 }

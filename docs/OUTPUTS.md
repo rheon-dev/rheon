@@ -19,7 +19,7 @@ exact spec you built.
 | family | models |
 |---|---|
 | [Linear models](MODELS.md#linear-models) | [`ewridge`](#ewridge) · [`rls`](#rls) · [`lasso`](#lasso) · [`kalman`](#kalman) · [`huber`](#huber) · [`quantile`](#quantile) · [`sgd`](#sgd) · [`pa`](#pa) · [`ftrl`](#ftrl) · [`glm`](#glm) · [`expectile`](#expectile) · [`holt`](#holt) |
-| [Moments and correlation](MODELS.md#moments-and-correlation) | [`ew_cov`](#ew_cov) · [`pca`](#pca) · [`marginal`](#marginal) · [`deco`](#deco) · [`rcov`](#rcov) · [`audit`](#audit) · [`garch`](#garch) · [`dcc`](#dcc) · [`realized`](#realized) · [`power_variation`](#power_variation) |
+| [Moments and correlation](MODELS.md#moments-and-correlation) | [`ew_cov`](#ew_cov) · [`pca`](#pca) · [`marginal`](#marginal) · [`deco`](#deco) · [`rcov`](#rcov) · [`audit`](#audit) · [`garch`](#garch) · [`dcc`](#dcc) · [`realized`](#realized) · [`power_variation`](#power_variation) · [`tdigest`](#tdigest) · [`ddsketch`](#ddsketch) |
 | [Clustering and classification](MODELS.md#clustering-and-classification) | [`kmeans`](#kmeans) · [`micro`](#micro) · [`ew_class`](#ew_class) |
 | [Sequential tests and regimes](MODELS.md#sequential-tests-and-regimes) | [`seqtest`](#seqtest) · [`corrchange`](#corrchange) · [`bocpd`](#bocpd) · [`hmm`](#hmm) · [`hawkes`](#hawkes) |
 
@@ -464,6 +464,38 @@ The fields of `po.spec.power_variation("m", targets=["y"], half_life=50.0, terms
 | `rv_y` | `f64` | the realized variance of `<t>`'s returns before this row, the sum of their squares | while withheld |
 | `lrv_y` | `f64` | a term named `lrv`, here a Parzen kernel sum of `<t>`'s returns before this row at a bandwidth of 3: each term's field is named `<term>_<t>` | while withheld |
 | `n_y` | `f64` | the count of `<t>`'s returns the terms are of: the returns a window holds, or Kish's effective count of their decayed weights | while withheld |
+| `weight_sum` | `f64` | accumulated weight before the model learns this row, and before its own decay ([shared field](#fields-most-models-write)) | never |
+| `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
+| `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
+
+## `tdigest`
+
+The fields of `po.spec.tdigest("m", targets=["y"], quantiles=[0.05, 0.25, 0.95])`:
+
+| field | dtype | what it holds | also null |
+|---|---|---|---|
+| `q0.05_y` | `f64` | the quantile of `<t>` at `<level>` over the rows before this one (a window's, under a window), read from its sketch before the row is added | while withheld, and while the rows before it do not identify the level (`level_beyond_sample`) |
+| `q0.25_y` | `f64` | the quantile of `<t>` at `<level>` over the rows before this one (a window's, under a window), read from its sketch before the row is added | while withheld, and while the rows before it do not identify the level (`level_beyond_sample`) |
+| `q0.95_y` | `f64` | the quantile of `<t>` at `<level>` over the rows before this one (a window's, under a window), read from its sketch before the row is added | while withheld, and while the rows before it do not identify the level (`level_beyond_sample`) |
+| `es0.05_y` | `f64` | the mean of `<t>` past `q<level>_<t>` (expected shortfall) over the same rows, from the same sketch: the lower tail at a level below 0.5, the upper above it | while withheld, and while the rows before it do not identify the level (`level_beyond_sample`) |
+| `es0.25_y` | `f64` | the mean of `<t>` past `q<level>_<t>` (expected shortfall) over the same rows, from the same sketch: the lower tail at a level below 0.5, the upper above it | while withheld, and while the rows before it do not identify the level (`level_beyond_sample`) |
+| `es0.95_y` | `f64` | the mean of `<t>` past `q<level>_<t>` (expected shortfall) over the same rows, from the same sketch: the lower tail at a level below 0.5, the upper above it | while withheld, and while the rows before it do not identify the level (`level_beyond_sample`) |
+| `weight_sum` | `f64` | accumulated weight before the model learns this row, and before its own decay ([shared field](#fields-most-models-write)) | never |
+| `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
+| `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
+
+## `ddsketch`
+
+The fields of `po.spec.ddsketch("m", targets=["y"], half_life=50.0, quantiles=[0.05, 0.25, 0.95])`:
+
+| field | dtype | what it holds | also null |
+|---|---|---|---|
+| `q0.05_y` | `f64` | the quantile of `<t>` at `<level>` over the rows before this one (a window's, under a window), read from its sketch before the row is added | while withheld, and while the rows before it do not identify the level (`level_beyond_sample`) |
+| `q0.25_y` | `f64` | the quantile of `<t>` at `<level>` over the rows before this one (a window's, under a window), read from its sketch before the row is added | while withheld, and while the rows before it do not identify the level (`level_beyond_sample`) |
+| `q0.95_y` | `f64` | the quantile of `<t>` at `<level>` over the rows before this one (a window's, under a window), read from its sketch before the row is added | while withheld, and while the rows before it do not identify the level (`level_beyond_sample`) |
+| `es0.05_y` | `f64` | the mean of `<t>` past `q<level>_<t>` (expected shortfall) over the same rows, from the same sketch: the lower tail at a level below 0.5, the upper above it | while withheld, and while the rows before it do not identify the level (`level_beyond_sample`) |
+| `es0.25_y` | `f64` | the mean of `<t>` past `q<level>_<t>` (expected shortfall) over the same rows, from the same sketch: the lower tail at a level below 0.5, the upper above it | while withheld, and while the rows before it do not identify the level (`level_beyond_sample`) |
+| `es0.95_y` | `f64` | the mean of `<t>` past `q<level>_<t>` (expected shortfall) over the same rows, from the same sketch: the lower tail at a level below 0.5, the upper above it | while withheld, and while the rows before it do not identify the level (`level_beyond_sample`) |
 | `weight_sum` | `f64` | accumulated weight before the model learns this row, and before its own decay ([shared field](#fields-most-models-write)) | never |
 | `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
 | `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |

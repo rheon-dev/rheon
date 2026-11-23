@@ -63,6 +63,10 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
             max_state_bytes: Some(_),
             ..
         }
+        | ModelKind::DdSketch {
+            max_state_bytes: Some(_),
+            ..
+        }
         | ModelKind::Glm {
             max_state_bytes: Some(_),
             ..
@@ -159,6 +163,17 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
             } => (
                 format!("the rows of its refit inside quantile_refit_span = {s}"),
                 "Shorten quantile_refit_span, or give quantile_refit_rows",
+            ),
+            ModelKind::DdSketch {
+                window_size: Some(w),
+                ..
+            } => (
+                format!("the rows and buckets inside window_size = {w}"),
+                "Shorten window_size, or raise alpha",
+            ),
+            ModelKind::DdSketch { .. } => (
+                "the buckets the range of its values spans".to_string(),
+                "Raise alpha",
             ),
             _ => ("its window".to_string(), "Shorten the window"),
         },

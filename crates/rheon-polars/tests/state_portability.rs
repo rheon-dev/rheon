@@ -99,6 +99,16 @@ const SPECS: &[(&str, &str, &str)] = &[
         r#""targets": ["y", "x0"], "features": [], "half_life": 50.0"#,
     ),
     (
+        "tdigest",
+        r#"{"type": "tdigest", "compression": 10, "quantiles": [0.05, 0.25, 0.95]}"#,
+        r#""targets": ["y", "x0"], "features": []"#,
+    ),
+    (
+        "ddsketch",
+        r#"{"type": "ddsketch", "quantiles": [0.05, 0.25, 0.95], "window_rows": 50}"#,
+        r#""targets": ["y", "x0"], "features": []"#,
+    ),
+    (
         "hawkes",
         r#"{"type": "hawkes", "kernel_decays": [0.5, 2.0]}"#,
         r#""targets": ["y", "x0"], "features": [], "half_life": 50.0"#,

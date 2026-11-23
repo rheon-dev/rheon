@@ -1156,6 +1156,7 @@ prediction's `withheld_reason` names the gate that held it:
 | none, the learning rate itself (`sgd`): a target whose recent steps' gains have a mean square above twice their mean, so each step grows its own row's residual and the fit diverges | `unstable_rate` |
 | none, the evidence itself (`garch`): a start whose likelihood-ratio statistic against a constant variance is under χ² at 0.999 for the restrictions that puts on the process, so its rows do not identify the process; it buffers more rows and refits, see [`garch`](MODELS.md#garch--how-large-will-the-next-return-be); `dcc`'s start, whose statistic against constant correlation falls short the same way, see [`dcc`](MODELS.md#dcc--how-do-the-correlations-move-from-row-to-row) | `not_identified` |
 | none, the check beside the statistic (`corrchange`, `kind="monitor"`): a span whose correlation statistic passed its critical value while the same CUSUM of `x̃² − ỹ²` passed it too, so the two columns' scale ratio moved and the statistic is off its null law; its `flag` is null | `scale_ratio_moved` |
+| none, the sample itself (`tdigest`, `ddsketch`): a quantile level past the expected level of the smallest or largest of the `n` rows before it, `1/(n + 1)` or `n/(n + 1)`, see [`tdigest`](MODELS.md#tdigest--where-do-this-columns-quantiles-stand) | `level_beyond_sample` |
 
 The reasons are listed in their order of precedence, which is the order
 `withheld_reason` reports them in. `max_error_inflation` is on by default

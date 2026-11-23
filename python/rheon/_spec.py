@@ -451,6 +451,8 @@ _NO_FEATURES = {
     "dcc": "its targets are the return series whose correlation it models",
     "realized": "each of its targets is a return series it measures",
     "power_variation": "each of its targets is a return series it measures",
+    "tdigest": "each of its targets is a column whose quantiles it reads",
+    "ddsketch": "each of its targets is a column whose quantiles it reads",
 }
 
 #: The parameters renamed in one builder, or whose old name another keeps
@@ -735,6 +737,8 @@ __all__ = [
     "rls",
     "seqtest",
     "sgd",
+    "tdigest",
+    "ddsketch",
 ]
 
 
@@ -4807,6 +4811,7 @@ from rheon._spec_class import ew_class  # noqa: E402
 from rheon._spec_cluster import kmeans, micro  # noqa: E402
 from rheon._spec_dcc import dcc  # noqa: E402
 from rheon._spec_deco import deco  # noqa: E402
+from rheon._spec_ddsketch import ddsketch  # noqa: E402
 from rheon._spec_expectile import expectile  # noqa: E402
 from rheon._spec_garch import garch  # noqa: E402
 from rheon._spec_glm import glm  # noqa: E402
@@ -4817,6 +4822,7 @@ from rheon._spec_power_variation import power_variation  # noqa: E402
 from rheon._spec_realized import realized  # noqa: E402
 from rheon._spec_regimes import hmm, rcov  # noqa: E402
 from rheon._spec_robust import huber, quantile  # noqa: E402
+from rheon._spec_tdigest import tdigest  # noqa: E402
 from rheon._spec_trend import holt  # noqa: E402
 
 UNSUPERVISED = frozenset(

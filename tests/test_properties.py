@@ -1295,6 +1295,7 @@ def test_each_kind_takes_every_stream_parameter_but_those_it_refuses():
         "pca",
         "rcov",
         "seqtest",
+        "tdigest",
     ]
     for kind in UNCLOCKED_KINDS:
         taken = {name for names in COMBINATIONS[kind] for name in names}

@@ -1179,6 +1179,10 @@ STATE_READS: dict[str, frozenset[str]] = {
     "realized": frozenset({"rv_y", "bv_y", "tv_y", "tq_y", "bns_y"}),
     # Every term and the count read the state alone.
     "power_variation": frozenset({"rv_y", "lrv_y", "n_y"}),
+    # Each level and its tail mean read the digest alone.
+    "tdigest": frozenset({"q0.05_y", "q0.25_y", "q0.95_y", "es0.05_y", "es0.25_y", "es0.95_y"}),
+    # Each level and its tail mean read the sketch alone.
+    "ddsketch": frozenset({"q0.05_y", "q0.25_y", "q0.95_y", "es0.05_y", "es0.25_y", "es0.95_y"}),
     "hmm": frozenset(
         {"filtered_state0", "filtered_state1", "predicted_state0", "predicted_state1", "state"}
     ),
@@ -1521,6 +1525,10 @@ DOUBLED: dict[str, dict] = {
     "garch": {},
     # The same: its recursion steps once a row, in the rows' order.
     "dcc": {},
+    # A digest of the same rows, added in the same order.
+    "tdigest": {},
+    # A sketch of the same rows' buckets.
+    "ddsketch": {},
     "glm": {},
     # Its sums take each return in the order of the rows learned: a lesson
     # late steps them the same, from the same rows.

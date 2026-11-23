@@ -51,7 +51,7 @@ spec and clock:
 | tolerated mutant | a mutant that differs from the original only at an exact tie or by less than the computation's own error, so no test a correct implementation passes can kill it; listed apart, not as equivalent ([Mutation survivors](#mutation-survivors)) |
 | IC | the correlation of prediction with target, `rp.eval`'s `ic` |
 | hard rule N | the numbered hard rules in `CLAUDE.md` |
-| a model kind | one of the 30 model types a spec can name; `MINIMAL` in `tests/test_model_registry.py` holds one spec of each |
+| a model kind | one of the 32 model types a spec can name; `MINIMAL` in `tests/test_model_registry.py` holds one spec of each |
 | the ten regression models | the models the per-model sweeps run: `ewridge`, `rls`, `lasso`, `kalman`, `huber`, `quantile`, `sgd`, `pa`, `ftrl` and `holt`, which `REGRESSIONS` in `tests/test_model_registry.py` lists |
 | the window operators | exponentially weighted means, variances, sums, rates and quantiles of a column along the clock, with or without a hard window, which `rp.stream.with_windows` runs over a stream: `rp.ewm_mean`, `rp.ewm_sum`, `rp.ewm_rate`, `rp.ewm_quantile`, `rp.ewm_var` and `rp.ewm_std` look back, and the first four look ahead under `reverse=True` |
 | a formula target | a spec's target written as an expression over a window operator that looks ahead, such as `rp.ewm_mean("mid", ...) - pl.col("mid")`, which the bank resolves once the window has closed |
@@ -158,6 +158,7 @@ in `tests/test_second_opinion.py`, Vowpal Wabbit among them.
 | `quantile`'s every fit | the stationarity condition of the smoothed check loss it solves, rebuilt from the rows by the module doc's rules, band and nudge rows alike (`TestTheQuantileFitsDefinition`) | 1e-10 of the gradient's scale (1e-15 measured) |
 | Huber | `river.linear_model.LinearRegression(loss=optim.losses.Huber)` | statistical |
 | quantile | `river.stats.Quantile` | statistical |
+| `PSquared`, the core's P² estimate | `river.stats.Quantile`, every read after every value, at three levels on four seeded streams (`TestPSquaredIsRivers`) | bit for bit |
 | FTRL | `ftrl_ref` | ~1e-16 |
 | `ftrl`'s targets and decay, `pa`, `sgd`, `holt` | `ftrl_ref`; the docstrings' update equations, written out (`pa_ref`, `sgd_ref`, `holt_ref`), in `tests/test_oracles_gradient_paths.py` | pred 8.2e-16 |
 | FTRL | `river.optim.FTRLProximal`, row for row | 1e-12 |

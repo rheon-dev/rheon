@@ -328,6 +328,9 @@ def describe_api(cli: Path | None = None) -> str:
                 },
             ),
         ),
+        ("tdigest", dict(targets=["y", "z"], quantiles=[0.05, 0.25, 0.95])),
+        ("ddsketch", dict(targets=["y", "z"], quantiles=[0.05, 0.25, 0.95])),
+        ("ddsketch windowed", dict(targets=["y"], quantiles=[0.25, 0.75], window_rows=50)),
         (
             "deco blocked",
             dict(
@@ -732,6 +735,13 @@ ENUM_PROBES: list[
         "word",
     ),
     ("lasso.closed", "lasso", {"window_size": 100.0}, "model.closed", "word"),
+    (
+        "ddsketch.closed",
+        "ddsketch",
+        {"half_life": None, "features": None, "quantiles": [0.25], "window_size": 100.0},
+        "model.closed",
+        "word",
+    ),
     ("garch.vol", "garch", {"start_rows": 2000}, "model.vol", "word"),
     ("garch.dist", "garch", {}, "model.dist", "word"),
     # `"none"` runs no margin, so the margins' start is dropped for it.

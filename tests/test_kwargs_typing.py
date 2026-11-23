@@ -27,6 +27,8 @@ BUILDERS = [
     "realized",
     "pca",
     "power_variation",
+    "tdigest",
+    "ddsketch",
     "bocpd",
     "corrchange",
     "deco",

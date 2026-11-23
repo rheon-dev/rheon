@@ -337,6 +337,60 @@ pub fn garch_cfg(spec: &Spec) -> Result<rheon_core::GarchCfg, String> {
     Ok(cfg)
 }
 
+/// A `tdigest` spec's [`rheon_core::TDigestModelCfg`]: one digest a target,
+/// at compression 100 unless the spec gives one. Every value is the
+/// model's own to check.
+pub fn tdigest_cfg(spec: &Spec) -> Result<rheon_core::TDigestModelCfg, String> {
+    let ModelKind::TDigest {
+        compression,
+        quantiles,
+        max_state_bytes,
+    } = &spec.model
+    else {
+        return Err(not_a(spec, "tdigest_cfg", "tdigest"));
+    };
+    let cfg = rheon_core::TDigestModelCfg {
+        n_targets: spec.m(),
+        compression: compression.unwrap_or(rheon_core::TDIGEST_COMPRESSION),
+        levels: quantiles.clone(),
+        max_state_bytes: *max_state_bytes,
+    };
+    cfg.validate()?;
+    Ok(cfg)
+}
+
+/// A `ddsketch` spec's [`rheon_core::DdSketchModelCfg`] under `decay`: one
+/// sketch a target, at `alpha = tanh(1/128)` unless the spec gives one, its
+/// window in rows or in clock units. Every value is the model's own to check.
+pub fn ddsketch_cfg(
+    spec: &Spec,
+    decay: rheon_core::Decay,
+) -> Result<rheon_core::DdSketchModelCfg, String> {
+    let ModelKind::DdSketch {
+        alpha,
+        quantiles,
+        window_rows,
+        window_size,
+        closed,
+        max_state_bytes,
+    } = &spec.model
+    else {
+        return Err(not_a(spec, "ddsketch_cfg", "ddsketch"));
+    };
+    let cfg = rheon_core::DdSketchModelCfg {
+        n_targets: spec.m(),
+        alpha: alpha.unwrap_or(rheon_core::EW_QUANTILE_ALPHA),
+        levels: quantiles.clone(),
+        window_rows: *window_rows,
+        window_clock: window_size.as_ref().map(Span::value),
+        closed: closed.edge(),
+        decay,
+        max_state_bytes: *max_state_bytes,
+    };
+    cfg.validate()?;
+    Ok(cfg)
+}
+
 /// A `garch` spec's start, in rows, when it gives neither rows nor a span.
 pub const GARCH_START_ROWS: usize = 2000;
 

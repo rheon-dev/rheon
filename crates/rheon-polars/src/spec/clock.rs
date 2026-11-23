@@ -83,6 +83,7 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
     ("dcc", &["start_span", "margin_start_span"]),
     ("realized", &["window_size"]),
     ("power_variation", &["window_size"]),
+    ("ddsketch", &["window_size"]),
 ];
 
 /// The parameters that are a rate *per* clock unit: a decay factor per unit
@@ -505,6 +506,9 @@ impl Spec {
             } => {
                 put(&mut out, "start_span", start_span.as_ref());
                 put(&mut out, "margin_start_span", margin_start_span.as_ref());
+            }
+            ModelKind::DdSketch { window_size, .. } => {
+                put(&mut out, "window_size", window_size.as_ref());
             }
             // A number is clock units, rows without a clock, as every other
             // span's (task 547); the count of rows is `hazard_rows`.

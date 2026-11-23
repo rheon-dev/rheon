@@ -59,6 +59,8 @@ FAMILIES: dict[str, tuple[str, ...]] = {
         "dcc",
         "realized",
         "power_variation",
+        "tdigest",
+        "ddsketch",
     ),
     "Clustering and classification": ("kmeans", "micro", "ew_class"),
     "Sequential tests and regimes": ("seqtest", "corrchange", "bocpd", "hmm", "hawkes"),
@@ -145,6 +147,14 @@ MEANING: dict[str, str] = {
     "n_<t>": (
         "the count of `<t>`'s returns the terms are of: the returns a window holds, or Kish's "
         "effective count of their decayed weights"
+    ),
+    "q<level>_<t>": (
+        "the quantile of `<t>` at `<level>` over the rows before this one (a window's, under a "
+        "window), read from its sketch before the row is added"
+    ),
+    "es<level>_<t>": (
+        "the mean of `<t>` past `q<level>_<t>` (expected shortfall) over the same rows, from the "
+        "same sketch: the lower tail at a level below 0.5, the upper above it"
     ),
     "u": (
         "the equicorrelation this row alone implies"
@@ -261,6 +271,14 @@ ALSO_NULL: dict[str, str] = {
     "lm_jump_<t>": "where `lm_<t>` is, and where the count of returns is 1 or less",
     "lrv_<t>": WITHHELD,
     "n_<t>": WITHHELD,
+    "q<level>_<t>": (
+        "while withheld, and while the rows before it do not identify the level "
+        "(`level_beyond_sample`)"
+    ),
+    "es<level>_<t>": (
+        "while withheld, and while the rows before it do not identify the level "
+        "(`level_beyond_sample`)"
+    ),
     "u": (
         "while withheld, where fewer than two of the block's columns have a positive variance "
         "before the row, and where every standardized value is 0"
@@ -758,6 +776,11 @@ def stem(field: str, targets: tuple[str, ...], features: tuple[str, ...]) -> str
         ):
             if base == f"{pre}_{t}":
                 return f"{pre}_<t>"
+        level, sep, column = base.partition("_")
+        if sep and column == t:
+            for pre in ("q", "es"):
+                if level.startswith(pre) and _is_number(level[len(pre) :]):
+                    return f"{pre}<level>_<t>"
     for pre in ("corr", "cov", "partial_corr"):
         if base.startswith(pre + "_"):
             return f"{pre}_<a>_<b>"
@@ -770,6 +793,14 @@ def stem(field: str, targets: tuple[str, ...], features: tuple[str, ...]) -> str
         rest = base[base.index("_") + 1 :]
         return "pc<j>_loading_<f>" if rest.startswith("loading_") else f"pc<j>_{rest}"
     return base
+
+
+def _is_number(text: str) -> bool:
+    try:
+        float(text)
+    except ValueError:
+        return False
+    return True
 
 
 def check_families() -> None:

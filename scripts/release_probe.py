@@ -425,6 +425,20 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         ),
         [],
     ),
+    # A digest a target: the tails withheld until the rows identify them.
+    (
+        "tdigest",
+        "tdigest",
+        dict(targets=["y", "z"], quantiles=[0.05, 0.25, 0.95], group="g", **CLOCK),
+        [],
+    ),
+    # A sketch a target over a row window, its tails withheld likewise.
+    (
+        "ddsketch",
+        "ddsketch",
+        dict(targets=["y", "z"], quantiles=[0.05, 0.25, 0.95], window_rows=200, group="g", **CLOCK),
+        [],
+    ),
     (
         "hawkes",
         "hawkes",

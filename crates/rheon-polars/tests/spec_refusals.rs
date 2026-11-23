@@ -1408,6 +1408,212 @@ fn a_dcc_past_its_state_cap_or_its_forms_is_refused() {
     );
 }
 
+/// `tdigest` (task 544): the defaults build, compression 100 and 200 build,
+/// a level not strictly inside (0, 1) or listed twice is refused, a decay
+/// is refused naming the windowed DDSketch, and features, a compression
+/// under its floor of 10 and a state past `max_state_bytes` are refused by name.
+#[test]
+fn a_tdigest_spec_builds_or_is_refused_by_name() {
+    let spec = |model: &str| {
+        format!(r#"{{"name": "m", "model": {model}, "targets": ["a", "b"], "features": []}}"#)
+    };
+    accepted(&spec(r#"{"type": "tdigest", "quantiles": [0.25]}"#));
+    for c in ["100", "200"] {
+        accepted(&spec(&format!(
+            r#"{{"type": "tdigest", "compression": {c}, "quantiles": [0.01, 0.25, 0.99]}}"#
+        )));
+    }
+    let fields = output_fields(
+        &serde_json::from_str(&spec(r#"{"type": "tdigest", "quantiles": [0.05, 0.95]}"#)).unwrap(),
+    );
+    assert_eq!(
+        fields,
+        [
+            "q0.05_a",
+            "q0.95_a",
+            "es0.05_a",
+            "es0.95_a",
+            "q0.05_b",
+            "q0.95_b",
+            "es0.05_b",
+            "es0.95_b",
+            "weight_sum",
+            "settled_frac",
+            "withheld_reason"
+        ]
+    );
+    for bad in ["0.0", "1.0", "1.5", "-0.25"] {
+        refused(
+            &spec(&format!(
+                r#"{{"type": "tdigest", "quantiles": [0.25, {bad}]}}"#
+            )),
+            &["each of quantiles must be above 0 and below 1"],
+        );
+    }
+    refused(
+        &spec(r#"{"type": "tdigest", "quantiles": [0.25, 0.25]}"#),
+        &["lists 0.25 twice"],
+    );
+    refused(
+        &spec(r#"{"type": "tdigest", "quantiles": [0.05, 0.5]}"#),
+        &["quantiles lists 0.5", "neither the lower nor the upper"],
+    );
+    accepted(&spec(
+        r#"{"type": "tdigest", "quantiles": [0.4999, 0.5001]}"#,
+    ));
+    refused(
+        &spec(r#"{"type": "tdigest", "quantiles": []}"#),
+        &["at least one level"],
+    );
+    for (decay, key) in [
+        (r#""half_life": 50.0"#, "half_life"),
+        (r#""lam": 0.99"#, "lam"),
+    ] {
+        refused(
+            &format!(
+                r#"{{"name": "m", "model": {{"type": "tdigest", "quantiles": [0.25]}},
+                    "targets": ["a"], "features": [], {decay}}}"#
+            ),
+            &[
+                &format!("{key} does not apply to tdigest, whose merging digest"),
+                "the windowed DDSketch (ewm_quantile with a window_size)",
+            ],
+        );
+    }
+    refused(
+        r#"{"name": "m", "model": {"type": "tdigest", "quantiles": [0.25]}, "targets": ["a"],
+            "features": ["x"]}"#,
+        &["tdigest takes no features"],
+    );
+    for c in ["10", "12.5", "200"] {
+        accepted(&spec(&format!(
+            r#"{{"type": "tdigest", "compression": {c}, "quantiles": [0.25]}}"#
+        )));
+    }
+    for c in ["0", "9.5", "-3"] {
+        refused(
+            &spec(&format!(
+                r#"{{"type": "tdigest", "compression": {c}, "quantiles": [0.25]}}"#
+            )),
+            &["compression must be at least 10"],
+        );
+    }
+    refused(
+        &spec(r#"{"type": "tdigest", "quantiles": [0.25], "max_state_bytes": 20000}"#),
+        &["past max_state_bytes 20000"],
+    );
+    refused(
+        &spec(r#"{"type": "tdigest", "quantiles": [0.25], "max_state_bytes": 67108865}"#),
+        &["at most 67108864"],
+    );
+}
+
+/// `ddsketch` (task 544, part 7): the defaults build, a coarse and a fine
+/// `alpha` build, each window builds, a decay builds; a level outside (0, 1),
+/// twice or 0.5, an `alpha` out of range, a decay beside a window, both
+/// windows, `closed = "both"` without `window_size`, features, and a row
+/// window past `max_state_bytes` are refused by name. The outputs are each
+/// level's quantile then its tail mean, a target at a time.
+#[test]
+fn a_ddsketch_spec_builds_or_is_refused_by_name() {
+    let spec = |model: &str| {
+        format!(r#"{{"name": "m", "model": {model}, "targets": ["a", "b"], "features": []}}"#)
+    };
+    accepted(&spec(r#"{"type": "ddsketch", "quantiles": [0.25]}"#));
+    for alpha in ["0.000001", "0.01", "0.5"] {
+        accepted(&spec(&format!(
+            r#"{{"type": "ddsketch", "alpha": {alpha}, "quantiles": [0.01, 0.99]}}"#
+        )));
+    }
+    for alpha in ["0", "0.0000009", "1", "-0.1"] {
+        refused(
+            &spec(&format!(
+                r#"{{"type": "ddsketch", "alpha": {alpha}, "quantiles": [0.25]}}"#
+            )),
+            &["alpha must be at least"],
+        );
+    }
+    accepted(&spec(
+        r#"{"type": "ddsketch", "quantiles": [0.25], "window_rows": 1}"#,
+    ));
+    accepted(&spec(
+        r#"{"type": "ddsketch", "quantiles": [0.25], "window_size": 10, "closed": "both"}"#,
+    ));
+    let fields = output_fields(
+        &serde_json::from_str(&spec(r#"{"type": "ddsketch", "quantiles": [0.05, 0.95]}"#)).unwrap(),
+    );
+    assert_eq!(
+        fields,
+        [
+            "q0.05_a",
+            "q0.95_a",
+            "es0.05_a",
+            "es0.95_a",
+            "q0.05_b",
+            "q0.95_b",
+            "es0.05_b",
+            "es0.95_b",
+            "weight_sum",
+            "settled_frac",
+            "withheld_reason"
+        ]
+    );
+    for (quantiles, says) in [
+        ("[0.25, 1.0]", "above 0 and below 1"),
+        ("[0.25, 0.25]", "lists 0.25 twice"),
+        ("[0.05, 0.5]", "quantiles lists 0.5"),
+        ("[]", "at least one level"),
+    ] {
+        refused(
+            &spec(&format!(
+                r#"{{"type": "ddsketch", "quantiles": {quantiles}}}"#
+            )),
+            &[says],
+        );
+    }
+    for decay in [r#""half_life": 50.0"#, r#""lam": 0.99"#] {
+        accepted(&format!(
+            r#"{{"name": "m", "model": {{"type": "ddsketch", "quantiles": [0.25]}},
+                "targets": ["a"], "features": [], {decay}}}"#
+        ));
+        refused(
+            &format!(
+                r#"{{"name": "m", "model": {{"type": "ddsketch", "quantiles": [0.25],
+                    "window_rows": 20}}, "targets": ["a"], "features": [], {decay}}}"#
+            ),
+            &["a window and a decay", "not both"],
+        );
+    }
+    accepted(
+        r#"{"name": "m", "model": {"type": "ddsketch", "quantiles": [0.25], "window_rows": 20},
+            "targets": ["a"], "features": [], "half_life": "inf"}"#,
+    );
+    refused(
+        &spec(r#"{"type": "ddsketch", "quantiles": [0.25], "window_rows": 5, "window_size": 5}"#),
+        &["not both"],
+    );
+    refused(
+        &spec(r#"{"type": "ddsketch", "quantiles": [0.25], "window_rows": 5, "closed": "both"}"#),
+        &["closed"],
+    );
+    refused(
+        &spec(r#"{"type": "ddsketch", "quantiles": [0.25], "window_rows": 0}"#),
+        &["window_rows must be at least 1"],
+    );
+    refused(
+        r#"{"name": "m", "model": {"type": "ddsketch", "quantiles": [0.25]}, "targets": ["a"],
+            "features": ["x"]}"#,
+        &["ddsketch takes no features"],
+    );
+    refused(
+        &spec(
+            r#"{"type": "ddsketch", "quantiles": [0.25], "window_rows": 100000,
+                "max_state_bytes": 100000}"#,
+        ),
+        &["max_state_bytes 100000"],
+    );
+}
+
 /// `hawkes`' window of clock units: a span above 0, beside no other window,
 /// with `closed` only under it, a number where the kernels' decays are
 /// rates, and a state whose fixed part alone fits `max_state_bytes`; what

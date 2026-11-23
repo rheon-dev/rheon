@@ -94,6 +94,8 @@ pub enum ModelState {
     Realized(Box<crate::Realized>),
     StreamPca(Box<crate::StreamPca>),
     PowerVariation(Box<crate::PowerVariation>),
+    TDigest(Box<crate::TDigestModel>),
+    DdSketch(Box<crate::DdSketchModel>),
 }
 
 #[derive(Debug, Error)]
@@ -220,6 +222,8 @@ impl ModelState {
             ModelState::Realized(_) => "realized",
             ModelState::StreamPca(_) => "pca",
             ModelState::PowerVariation(_) => "power_variation",
+            ModelState::TDigest(_) => "tdigest",
+            ModelState::DdSketch(_) => "ddsketch",
         }
     }
 }

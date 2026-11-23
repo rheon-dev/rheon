@@ -115,6 +115,8 @@ pub enum AnyModel {
     Realized(Box<rheon_core::Realized>),
     Pca(Box<rheon_core::StreamPca>),
     PowerVariation(Box<rheon_core::PowerVariation>),
+    TDigest(Box<rheon_core::TDigestModel>),
+    DdSketch(Box<rheon_core::DdSketchModel>),
 }
 
 /// A flush's shards, run on whichever pool the caller is in: the bank's
@@ -169,6 +171,8 @@ macro_rules! dispatch {
             AnyModel::Realized($m) => $body,
             AnyModel::Pca($m) => $body,
             AnyModel::PowerVariation($m) => $body,
+            AnyModel::TDigest($m) => $body,
+            AnyModel::DdSketch($m) => $body,
         }
     };
 }
@@ -556,6 +560,18 @@ impl AnyModel {
         }
     }
 
+    /// Whether some level a `tdigest` reads is withheld because the rows
+    /// before it do not identify it: past the plotting position of the
+    /// smallest or largest row (`rheon_core::TDigestModel::beyond_sample`).
+    /// Read from the state, so it names the levels the next row reads.
+    pub fn beyond_sample(&self) -> bool {
+        match self {
+            AnyModel::TDigest(m) => m.beyond_sample(),
+            AnyModel::DdSketch(m) => m.beyond_sample(),
+            _ => false,
+        }
+    }
+
     /// What went wrong in a model's solves, counted (docs/PLAN.md §7):
     /// `ewridge` and `robust` count their jittered or failed factorizations,
     /// `lasso` its coordinate descents that ran out of sweeps, `ew_class` the
@@ -598,7 +614,9 @@ impl AnyModel {
             | AnyModel::Garch(_)
             | AnyModel::Dcc(_)
             | AnyModel::Realized(_)
-            | AnyModel::PowerVariation(_) => 0,
+            | AnyModel::PowerVariation(_)
+            | AnyModel::TDigest(_)
+            | AnyModel::DdSketch(_) => 0,
             // The components are withheld, never failed: the rotation has no
             // factorization to fail.
             | AnyModel::Pca(_) => 0,
@@ -684,6 +702,8 @@ impl AnyModel {
             AnyModel::Pca(_) => None,
             // power_variation has none: its outputs are the terms.
             AnyModel::PowerVariation(_) => None,
+            // tdigest has none: its value is the levels it reads.
+            AnyModel::TDigest(_) | AnyModel::DdSketch(_) => None,
         }
     }
 
@@ -707,9 +727,9 @@ use build::{build_one, constraint, huber_scale_of, resid_window};
 mod model_cfgs;
 use model_cfgs::read_floor;
 pub use model_cfgs::{
-    BOCPD_HAZARD_ROWS, audit_cfg, bocpd_cfg, corrchange_cfg, dcc_cfg, deco_block_names, deco_cfg,
-    expectile_cfg, garch_cfg, glm_cfg, hawkes_cfg, hmm_cfg, huber_model, pca_cfg, power_variation_cfg, quantile_model,
-    rcov_cfg, realized_cfg, sgd_model,
+    BOCPD_HAZARD_ROWS, audit_cfg, bocpd_cfg, corrchange_cfg, dcc_cfg, ddsketch_cfg, deco_block_names,
+    deco_cfg, expectile_cfg, garch_cfg, glm_cfg, hawkes_cfg, hmm_cfg, huber_model, pca_cfg,
+    power_variation_cfg, quantile_model, rcov_cfg, realized_cfg, sgd_model, tdigest_cfg,
 };
 
 /// One grid combo: the rendered label plus the machine values it encodes, so
@@ -818,7 +838,9 @@ pub fn combos(spec: &Spec) -> Vec<Combo> {
         | ModelKind::Garch { .. }
         | ModelKind::Dcc { .. }
         | ModelKind::Realized { .. }
-        | ModelKind::PowerVariation { .. } => vec![Combo::default()],
+        | ModelKind::PowerVariation { .. }
+        | ModelKind::TDigest { .. }
+        | ModelKind::DdSketch { .. } => vec![Combo::default()],
         ModelKind::Pca { .. } => vec![Combo::default()],
         // `p` for the penalty, since `l` is a lag's (`lag_corr_l1_a_b`); and
         // no label for a path of one point, as a single ridge or half-life
@@ -1404,8 +1426,9 @@ pub enum OwnWait {
 /// the correlation's CUSUM is off its null law because the two columns'
 /// scale ratio moved, which no model with an earlier reason has;
 /// `not_separated` last (PLAN 505), `pca`'s wait for components whose eigenvalues
-/// the rows have not yet told apart.
-pub const WITHHELD_REASONS: [&str; 9] = [
+/// the rows have not yet told apart; `level_beyond_sample` after it (task
+/// 544), a `tdigest` or `ddsketch` level its rows do not identify yet.
+pub const WITHHELD_REASONS: [&str; 10] = [
     "below_min_settled_frac",
     "below_min_weight",
     "above_max_error_inflation",
@@ -1415,6 +1438,7 @@ pub const WITHHELD_REASONS: [&str; 9] = [
     "not_identified",
     "scale_ratio_moved",
     "not_separated",
+    "level_beyond_sample",
 ];
 const REASON_SETTLED: u8 = 1;
 const REASON_MIN_PERIODS: u8 = 2;
@@ -1425,6 +1449,7 @@ const REASON_UNSTABLE_RATE: u8 = 6;
 const REASON_NOT_IDENTIFIED: u8 = 7;
 const REASON_SCALE_RATIO: u8 = 8;
 const REASON_NOT_SEPARATED: u8 = 9;
+const REASON_BEYOND_SAMPLE: u8 = 10;
 
 /// The settled fraction at which a readiness notice judges a stream
 /// (docs/WARMUP-AND-CONVERGENCE.md §3): the one rule all three notices
@@ -4209,6 +4234,9 @@ fn run_instance(
         // from the state before the step, as the model's own gate reads it
         // (task 278, D8).
         let unstable = inst.model.get().unstable_targets();
+        // And whether a quantile level is past what the rows before this one
+        // identify (task 544): read before the step, as the levels are.
+        let beyond = inst.model.get().beyond_sample();
 
         // The residual spread folds each slot's own prediction, whether or
         // not a readiness gate withholds it from the output
@@ -4449,6 +4477,11 @@ fn run_instance(
         // claim it; the model's own null is then named for what it is.
         if reason == 0 && ill {
             reason = REASON_ILL_CONDITIONED;
+        }
+        // A quantile level the rows before the row do not identify, where no
+        // gate above has withheld it: the model's own null, named.
+        if reason == 0 && beyond {
+            reason = REASON_BEYOND_SAMPLE;
         }
         // A target withheld because its learning rate is past its stability
         // bound, where no gate above has withheld the row; said once an

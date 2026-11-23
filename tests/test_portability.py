@@ -36,6 +36,7 @@ REASON_DTYPE = pl.Enum(
         "not_identified",
         "scale_ratio_moved",
         "not_separated",
+        "level_beyond_sample",
     ]
 )
 

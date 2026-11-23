@@ -76,6 +76,8 @@ mod conformal;
 mod constraint;
 mod corrchange;
 mod dcc;
+pub mod ddsketch;
+mod ddsketch_model;
 mod deco;
 mod drift;
 mod ewclass;
@@ -113,6 +115,7 @@ mod oracle;
 mod pa;
 mod pieces;
 mod power_variation;
+mod psquared;
 mod rcov;
 mod realized;
 mod refusals;
@@ -130,6 +133,8 @@ mod spread;
 mod stats;
 mod streampca;
 mod tails;
+mod tdigest;
+mod tdigest_model;
 /// The thread pools of the tests that run one computation at several pool
 /// sizes, held within what a Windows runner can commit.
 #[cfg(test)]
@@ -160,6 +165,10 @@ pub use corrchange::{
     kolmogorov_quantile,
 };
 pub use dcc::{DCC_PERSISTENCE_CAP, DCC_START_ROWS, Dcc, DccCfg};
+pub use ddsketch::{
+    DDSKETCH_MIN_ALPHA, DdSketch, Mapping as DdSketchMapping, Slot as DdSketchSlot,
+};
+pub use ddsketch_model::{DdSketchModel, DdSketchModelCfg};
 pub use deco::{Deco, DecoCfg, DecoDynamics};
 pub use drift::{
     Adwin, AdwinCfg, Cusum, Ddm, DriftDetector, Eddm, ErrorRate, Kswin, KswinCfg, PageHinkley,
@@ -218,6 +227,7 @@ pub use power_variation::{
     PowerVariation, PowerVariationCfg, PvKernel, PvTerm, PvTermKind,
     outputs_per_target as power_variation_outputs,
 };
+pub use psquared::PSquared;
 pub use rcov::{
     Rcov, RcovCfg, RcovEstimate, RcovKind, parzen, parzen_c_star, phi_11, phi_12, phi_22, preavg_g,
     psi1, psi2,
@@ -242,6 +252,8 @@ pub use streampca::{
     OJA_DEFAULT_LEARNING_RATE, PCA_MAX_STATE_BYTES, PcaMethod, StreamPca, StreamPcaCfg,
 };
 pub use tails::Tails;
+pub use tdigest::TDigest;
+pub use tdigest_model::{TDIGEST_COMPRESSION, TDigestModel, TDigestModelCfg, level_identified};
 pub use warmup::{WARMUP_ROWS, Warmup};
 pub use window::{
     At, Bytes, Cadence, DiagMoments, Edit, Footprint, Moments, Offer, Pack, Packer, Snapshots,
