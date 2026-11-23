@@ -663,6 +663,14 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [messages."crates/rheon-polars/src/stream/build.rs"]
 "where" = 3
 
+[messages."crates/rheon-polars/src/windows/check.rs"]
+"remedy" = 14
+"where" = 14
+
+[messages."crates/rheon-polars/src/windows/cross.rs"]
+"remedy" = 2
+"where" = 2
+
 [messages."python/rheon/_cpu_check.py"]
 "remedy" = 2
 "where" = 2
@@ -734,6 +742,10 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."crates/rheon-polars/src/spec/drift.rs#messages"]
 
 [vocabulary."crates/rheon-polars/src/stream/build.rs#messages"]
+
+[vocabulary."crates/rheon-polars/src/windows/check.rs#messages"]
+
+[vocabulary."crates/rheon-polars/src/windows/cross.rs#messages"]
 
 [vocabulary."docs/how-to/merge-streams-by-the-clock.md"]
 

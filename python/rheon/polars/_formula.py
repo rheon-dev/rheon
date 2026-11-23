@@ -58,7 +58,16 @@ OPERATORS = (
     "ewm_quantile",
     "rewm_quantile",
     "increment",
+    "cross_mean",
+    "cross_std",
+    "cross_rank",
+    "cross_quantile",
+    "cross_ref",
 )
+
+#: The cross-group operators: a statistic over every group's row at one
+#: stamp of the clock, with no kernel of their own.
+CROSS = ("cross_mean", "cross_std", "cross_rank", "cross_quantile", "cross_ref")
 
 #: The operators that take ``bias``: a variance's own (task 212).
 VARIANCES = ("ewm_var", "ewm_std")
@@ -367,6 +376,10 @@ def operators(tree: Any) -> list[list[Any]]:
         if head in OPERATORS:
             out.append(node)
             walk(node[1])
+            if len(node) > 2 and isinstance(node[2], dict):
+                for key in ("weight", "where"):
+                    if key in node[2]:
+                        walk(node[2][key])
         elif head not in ("col", "lit"):
             for arg in node[1:]:
                 walk(arg)
@@ -395,6 +408,12 @@ def columns(tree: Any) -> list[str]:
             return
         elif head in OPERATORS:
             walk(node[1])
+            if len(node) > 2 and isinstance(node[2], dict):
+                for key in ("weight", "where"):
+                    if key in node[2]:
+                        walk(node[2][key])
+                if node[2].get("neighbors") is not None and node[2]["neighbors"] not in out:
+                    out.append(node[2]["neighbors"])
         else:
             for arg in node[1:]:
                 walk(arg)
@@ -591,6 +610,13 @@ def operator(
     partial: str | None = None,
     bias: Any = None,
     quantile: Any = None,
+    weight: Any = None,
+    max_state_bytes: Any = None,
+    method: Any = "average",
+    descending: Any = False,
+    interpolation: Any = None,
+    neighbors: Any = None,
+    where: Any = None,
     who: str | None = None,
 ) -> pl.Expr:
     """The expression of operator ``name`` over ``input`` with these
@@ -602,6 +628,22 @@ def operator(
     tree = _input_tree(who, input)
     if name == "increment":
         return operator_column(["increment", tree])
+    if name in CROSS:
+        return _cross(
+            name,
+            tree,
+            who,
+            closed=closed,
+            bias=bias,
+            weight=weight,
+            max_state_bytes=max_state_bytes,
+            quantile=quantile,
+            method=method,
+            descending=descending,
+            interpolation=interpolation,
+            neighbors=neighbors,
+            where=where,
+        )
     if half_life is None:
         raise TypeError(
             f"{who}: half_life is required, but it is not given. Give half_life in clock units, "
@@ -685,4 +727,119 @@ def operator(
         raise TypeError(
             f"{who}: quantile is given, but only ewm_quantile takes it. Leave out quantile."
         )
+    return operator_column([name, tree, params])
+
+
+#: A cross-group operator's ``max_state_bytes`` at most: 64 MiB.
+CROSS_STATE_BYTES_CEILING = 64 << 20
+
+
+#: A cross rank's tie rules: Polars' ``rank(method=)`` less ``"random"``.
+RANK_METHODS = ("average", "min", "max", "dense", "ordinal")
+
+#: A cross quantile's readings between two values: Polars' ``interpolation``.
+INTERPOLATIONS = ("nearest", "higher", "lower", "midpoint", "linear", "equiprobable")
+
+
+def _cross(
+    name: str,
+    tree: list[Any],
+    who: str,
+    *,
+    closed: Any,
+    bias: Any,
+    weight: Any,
+    max_state_bytes: Any,
+    quantile: Any = None,
+    method: Any = "average",
+    descending: Any = False,
+    interpolation: Any = None,
+    neighbors: Any = None,
+    where: Any = None,
+) -> pl.Expr:
+    """A cross-group operator's node: its stamp (``closed``), a standard
+    deviation's ``bias``, a rank's ``method`` and ``descending``, a
+    quantile's level and ``interpolation``, its weight's tree and its cap
+    where given. The node carries what the native reader writes back, each
+    default resolved, so the two spell an operator's column alike."""
+    if closed not in ("right", "left"):
+        raise ValueError(
+            f'{who}: closed must be "right" (the row\'s own stamp) or "left" (the stamp before '
+            f"it), but it is {closed!r}. Set closed to one of those words."
+        )
+    params: dict[str, Any] = {"closed": closed}
+    if name == "cross_ref":
+        if where is None:
+            raise TypeError(
+                f"{who}: where is required: the predicate that picks the stamp's reference row, "
+                f'such as pl.col("symbol") == "SPY". Give where.'
+            )
+        params["where"] = _input_tree(f"{who}: where", where)
+    if neighbors is not None:
+        if not isinstance(neighbors, str) or not neighbors:
+            raise TypeError(
+                f"{who}: neighbors must name a list column, but it is {neighbors!r}. Set "
+                f"neighbors to the name of a column whose rows list the group keys each row "
+                f"reads."
+            )
+        params["neighbors"] = neighbors
+    if name == "cross_std":
+        if not isinstance(bias, bool):
+            raise TypeError(
+                f"{who}: bias must be True or False, but it is of type {type(bias).__name__}. "
+                f"Set bias to True or False."
+            )
+        params["bias"] = bias
+    if name == "cross_rank":
+        if method not in RANK_METHODS:
+            raise ValueError(
+                f"{who}: method must be one of {', '.join(map(repr, RANK_METHODS))}, but it is "
+                f"{method!r}. Set method to one of those words."
+            )
+        if not isinstance(descending, bool):
+            raise TypeError(
+                f"{who}: descending must be True or False, but it is of type "
+                f"{type(descending).__name__}. Set descending to True or False."
+            )
+        params["method"] = method
+        params["descending"] = descending
+    if name == "cross_quantile":
+        wrong = isinstance(quantile, bool) or not isinstance(quantile, numbers.Real)
+        if wrong or not 0.0 <= float(quantile) <= 1.0:
+            msg = (
+                f"{who}: quantile must be a number from 0 to 1, but it is {quantile!r}. Set "
+                f"quantile within that range, such as 0.5 for the median."
+            )
+            raise WrongTypeError(msg) if wrong else ValueError(msg)
+        params["quantile"] = float(quantile)
+        if interpolation is None:
+            interpolation = "nearest" if weight is None else "equiprobable"
+        if interpolation not in INTERPOLATIONS:
+            raise ValueError(
+                f"{who}: interpolation must be one of "
+                f"{', '.join(map(repr, INTERPOLATIONS))}, but it is {interpolation!r}. Set "
+                f"interpolation to one of those words."
+            )
+        if weight is not None and interpolation != "equiprobable":
+            raise ValueError(
+                f"{who}: interpolation {interpolation!r} has no weighted form: with weight= the "
+                f"quantile is the first value whose cumulative weight share reaches the level, "
+                f'"equiprobable". Set interpolation to "equiprobable" or leave it out, or '
+                f"remove weight."
+            )
+        params["interpolation"] = interpolation
+    if weight is not None:
+        params["weight"] = _input_tree(f"{who}: weight", weight)
+    if max_state_bytes is not None:
+        wrong = isinstance(max_state_bytes, bool) or not isinstance(
+            max_state_bytes, numbers.Integral
+        )
+        if wrong or not 1 <= max_state_bytes <= CROSS_STATE_BYTES_CEILING:
+            msg = (
+                f"{who}: max_state_bytes must be a whole number from 1 to "
+                f"{CROSS_STATE_BYTES_CEILING} (64 MiB), but it is {max_state_bytes!r}. Set it "
+                f"within that range, or leave it out for 262144 (256 KB)."
+            )
+            raise WrongTypeError(msg) if wrong else ValueError(msg)
+        params["max_state_bytes"] = int(max_state_bytes)
     return operator_column([name, tree, params])

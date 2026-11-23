@@ -522,7 +522,7 @@ impl Windows {
     /// before it builds the rows.
     #[inline]
     pub(crate) fn plain_may_run(&self) -> bool {
-        !self.derived.ready || !self.derived.off
+        self.cross.is_none() && (!self.derived.ready || !self.derived.off)
     }
 
     /// Take as many of `rows`, from its start, as the plain loop runs: each a
@@ -533,7 +533,8 @@ impl Windows {
     /// state `push` would have left.
     pub(crate) fn push_plain(&mut self, rows: &PlainRows<'_>) -> usize {
         self.scratch();
-        if self.derived.off {
+        // The cross-group operators read every row's stamp in `push`.
+        if self.derived.off || self.cross.is_some() {
             return 0;
         }
         let several = self.groups.len() > 1 && rows.keys.is_some();

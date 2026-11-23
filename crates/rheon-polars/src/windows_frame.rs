@@ -30,8 +30,8 @@ use crate::spec::{ClockPolicy, SessionGapSpec, clock_cfg_of};
 use crate::stream::usable;
 use crate::windows::{ChunkKeys, session_hashes};
 use crate::windows::{
-    Closed, Direction, KernelDef, OpDef, OpKind, Partial, Peek, PlainRows, Refusal, RowIn, Stat,
-    Windows,
+    Closed, CrossClosed, CrossDef, Direction, KernelDef, OpDef, OpKind, Partial, Peek, PlainRows,
+    Refusal, RowIn, Stat, Windows,
 };
 use crate::wrong_type::{Refused, wrong_type};
 
@@ -489,6 +489,13 @@ struct Plan {
     /// Every span a kernel reads, with its parameter's name, for the scale
     /// check.
     spans: Vec<(&'static str, Span)>,
+    /// The cross-group operators, after the window operators in output
+    /// order, and each one's hidden column.
+    cross: Vec<CrossDef>,
+    cross_columns: Vec<String>,
+    /// The list columns cross operators read their neighbors from, by the
+    /// index `CrossDef::neighbors` names.
+    lists: Vec<String>,
 }
 
 fn dtype_of<'a>(input: &'a Schema, column: &str) -> &'a DataType {
@@ -507,6 +514,80 @@ fn dtypes_of(schema: &Schema, exprs: Vec<Expr>) -> Result<Schema, String> {
         .collect_schema()
         .map(|s| s.as_ref().clone())
         .map_err(|e| e.to_string())
+}
+
+/// The index of a cross operator's list column of neighbor keys among the
+/// plan's, checked: a list of keys, under a group column of its own.
+fn neighbor_list(
+    p: &mut Plan,
+    config: &WindowsConfig,
+    input: &Schema,
+    f: &str,
+    name: &str,
+    column: &str,
+) -> Result<usize, Refused> {
+    if config.group.is_none() {
+        return Err(format!(
+            "{WHO}: {f}: {name} reads the rows of the groups named in {column:?}, but the call \
+             names no group column, so no row has a group to be named by. Name the group \
+             column with group=."
+        )
+        .into());
+    }
+    let Some(dtype) = input.get(column) else {
+        return Err(format!(
+            "{WHO}: {f}: {name}'s neighbors column {column:?} is not in the input. Name a \
+             column of the input that lists each row's neighbor keys."
+        )
+        .into());
+    };
+    let keys = |d: &DataType| {
+        d.is_integer()
+            || matches!(
+                d,
+                DataType::String | DataType::Categorical(..) | DataType::Enum(..)
+            )
+    };
+    match dtype {
+        DataType::List(inner) if keys(inner) => {}
+        other => {
+            return Err(Refused::wrong_type(format!(
+                "{WHO}: {f}: {name}'s neighbors column {column:?} must be a list of group keys \
+                 (integers or text), but it is {}. Give each row a list of the keys of the \
+                 groups it reads, such as with pl.concat_list or a column of lists.",
+                crate::arrow::dtype_name(other)
+            )));
+        }
+    }
+    Ok(match p.lists.iter().position(|c| c == column) {
+        Some(i) => i,
+        None => {
+            p.lists.push(column.to_string());
+            p.lists.len() - 1
+        }
+    })
+}
+
+/// A list column's keys as text, flat, and each row's range of them (`None`
+/// for a null list).
+type ListKeys = (Vec<Option<String>>, Vec<Option<(usize, usize)>>);
+
+/// [`ListKeys`] of a column.
+fn list_keys(df: &DataFrame, column: &str) -> PolarsResult<ListKeys> {
+    let ca = df.column(column)?.list()?.rechunk();
+    let arr = ca.downcast_iter().next().expect("rechunked");
+    let values = Series::from_arrow(PlSmallStr::EMPTY, arr.values().clone())?;
+    let text = crate::arrow::key_text(&values)?;
+    let flat: Vec<Option<String>> = text.str()?.iter().map(|v| v.map(str::to_string)).collect();
+    let offsets = arr.offsets();
+    let ranges = (0..arr.len())
+        .map(|i| {
+            arr.validity()
+                .is_none_or(|v| v.get_bit(i))
+                .then(|| (offsets[i] as usize, offsets[i + 1] as usize))
+        })
+        .collect();
+    Ok((flat, ranges))
 }
 
 fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
@@ -597,6 +678,9 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
         bare: None,
         increments: Vec::new(),
         spans: Vec::new(),
+        cross: Vec::new(),
+        cross_columns: Vec::new(),
+        lists: Vec::new(),
     };
     // Increments first: an operator's input may read them.
     for f in &config.formulas {
@@ -655,13 +739,85 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
         s
     };
     let resolve_incr = |op: &OpNode| col(hidden(op).as_str());
+    // An input of a cross operator, its value or its weight: a number,
+    // each distinct formula read once.
+    let cross_input = |p: &mut Plan, f: &str, name: &str, what: &str, node: &Node| {
+        if let Some(i) = p.inputs.iter().position(|n| n == node) {
+            return Ok(i);
+        }
+        let dtype = dtypes_of(&incr_schema, vec![node.to_expr(&resolve_incr).alias("@t")])
+            .map_err(|e| {
+                format!(
+                    "{WHO}: {f}: Polars cannot compute {name}'s {what} ({e}). Check that the \
+                     {what} reads columns of the right type."
+                )
+            })?;
+        let dtype = dtype.get("@t").expect("aliased").clone();
+        if !numeric(&dtype) {
+            return Err(Refused::wrong_type(format!(
+                "{WHO}: {f}: {name}'s {what} must be a number, but it is {}. Cast it to a \
+                 number, such as with .cast(pl.Float64).",
+                crate::arrow::dtype_name(&dtype)
+            )));
+        }
+        p.inputs.push(node.clone());
+        Ok(p.inputs.len() - 1)
+    };
     for f in &config.formulas {
         for op in f.tree.operators() {
             if op.kind == OpKind::Increment {
                 continue;
             }
             let key = hidden(op);
-            if p.columns.iter().any(|(k, _)| *k == key) {
+            if p.columns.iter().any(|(k, _)| *k == key) || p.cross_columns.contains(&key) {
+                continue;
+            }
+            if let Some(stat) = op.kind.cross() {
+                let name = op.kind.name();
+                if config.clock.is_none() {
+                    return Err(format!(
+                        "{WHO}: {}: {name} reduces every group's row at one stamp of the clock, \
+                         but the call names no clock column, and a row count gives each row a \
+                         stamp of its own. Name the clock column with clock=.",
+                        f.name
+                    )
+                    .into());
+                }
+                let neighbors = match &op.neighbors {
+                    Some(c) => Some(neighbor_list(&mut p, config, input, &f.name, name, c)?),
+                    None => None,
+                };
+                let input = cross_input(&mut p, &f.name, name, "input", &op.input)?;
+                let weight = match &op.weight {
+                    Some(w) => Some(cross_input(&mut p, &f.name, name, "weight", w)?),
+                    None => None,
+                };
+                let pick = match &op.pick {
+                    Some(w) => Some(cross_input(&mut p, &f.name, name, "where", w)?),
+                    None => None,
+                };
+
+                p.cross.push(CrossDef {
+                    stat,
+                    closed: if op.closed == Closed::Left {
+                        CrossClosed::Left
+                    } else {
+                        CrossClosed::Right
+                    },
+                    input,
+                    weight,
+                    bias: op.bias,
+                    cap: op
+                        .max_state_bytes
+                        .unwrap_or(crate::windows::CROSS_STATE_BYTES),
+                    rank: op.order.rank,
+                    descending: op.order.descending,
+                    quantile: op.quantile.unwrap_or(0.5),
+                    interpolation: op.order.interpolation,
+                    neighbors,
+                    pick,
+                });
+                p.cross_columns.push(key);
                 continue;
             }
             let direction = op.direction();
@@ -735,8 +891,12 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
             p.columns.push((key, p.ops.len() - 1));
         }
     }
+    // The cross operators' outputs follow the window operators'.
+    for (ci, key) in std::mem::take(&mut p.cross_columns).into_iter().enumerate() {
+        p.columns.push((key, p.ops.len() + ci));
+    }
     debug_assert!(
-        !(p.ops.is_empty() && p.increments.is_empty()),
+        !(p.ops.is_empty() && p.increments.is_empty() && p.cross.is_empty()),
         "checked per formula"
     );
     p.bare = config
@@ -1041,6 +1201,8 @@ struct Constants {
     bare: Option<Vec<String>>,
     increments: Vec<(String, Node, bool)>,
     accept: Vec<String>,
+    /// [`Plan::lists`].
+    lists: Vec<String>,
     /// The input's schema, as the call was built against it.
     input: Schema,
     /// The group and session columns' dtypes, by role: a key is its value's
@@ -1236,7 +1398,7 @@ impl WindowsRun {
                 .iter()
                 .any(|f| f.tree.has_forward_operator()),
         })?;
-        let p = plan(&config, input)?;
+        let mut p = plan(&config, input)?;
         check_scale(&config, &p.spans, input)?;
         let accept = config
             .like
@@ -1282,7 +1444,11 @@ impl WindowsRun {
             let dtype = evaluated.get(&f.name).expect("aliased").clone();
             output.insert(f.name.as_str().into(), dtype);
         }
-        let mut core = if p.ops.is_empty() {
+        let lists = std::mem::take(&mut p.lists);
+        let mut core = if !p.cross.is_empty() {
+            Windows::with_cross(p.kernels, p.ops, p.cross, cfg)
+                .map_err(|e| format!("{WHO}: {e}"))?
+        } else if p.ops.is_empty() {
             // Increments alone: the core carries a kernel that reads nothing,
             // so rows pass straight through it. A sum over no window, read
             // at every row.
@@ -1334,6 +1500,7 @@ impl WindowsRun {
                 bare: p.bare,
                 increments: p.increments,
                 accept,
+                lists,
                 input: input.clone(),
                 key_dtypes,
                 output,
@@ -1823,6 +1990,15 @@ impl WindowsRun {
             })
             .collect::<PolarsResult<_>>()?;
 
+        // The neighbor lists cross operators read, as text.
+        let lists = self
+            .k
+            .lists
+            .iter()
+            .map(|c| list_keys(df, c))
+            .collect::<PolarsResult<Vec<_>>>()?;
+        let mut row_lists: Vec<Option<&[Option<String>]>> = vec![None; lists.len()];
+
         // Pass three: the core.
         let chunk_base = self.core.next_seq();
         let mut row_values = vec![0.0; self.k.inputs.len()];
@@ -1869,12 +2045,16 @@ impl WindowsRun {
             for (k, col) in slices.iter().enumerate() {
                 row_values[k] = col[i];
             }
+            for (l, (flat, ranges)) in lists.iter().enumerate() {
+                row_lists[l] = ranges[i].map(|(a, b)| &flat[a..b]);
+            }
             let row = RowIn {
                 group,
                 clock: clock.as_ref().map(|c| c[i]),
                 session: session.as_ref().map(|s| s[i]),
                 values: &row_values,
                 accept: accepts.iter().all(|col| usable(col[i])),
+                lists: &row_lists,
             };
             if let Err(r) = self.core.push(&row) {
                 // The rows before it are in the core: hold them, and put the
@@ -2476,10 +2656,73 @@ impl WindowsRun {
         Ok(Some(values))
     }
 
+    /// The cross-group operator `op` (its index among them) in the reader's
+    /// words: its name and the expressions that read it.
+    fn cross_name(&self, op: usize) -> String {
+        let at = self.core.ops().len() + op;
+        let Some((key, _)) = self.k.columns.iter().find(|(_, o)| *o == at) else {
+            return "a cross-group operator".to_owned();
+        };
+        let mut kind = "a cross-group operator";
+        let mut names = Vec::new();
+        for f in &self.k.config.formulas {
+            for o in f.tree.operators() {
+                if hidden(o) == *key {
+                    kind = o.kind.name();
+                    if !names.contains(&f.name.as_str()) {
+                        names.push(f.name.as_str());
+                    }
+                }
+            }
+        }
+        format!("{kind} (in {})", names.join(", "))
+    }
+
+    /// The first row to take a cross-group operator past half of its
+    /// `max_state_bytes`, once a run, as the warning a caller raises.
+    pub fn take_warning(&mut self) -> Option<String> {
+        let (op, bytes, cap) = self.core.take_state_warning()?;
+        Some(format!(
+            "{WHO}: {} holds {bytes} bytes for the rows of one stamp of the clock, past half of \
+             its max_state_bytes of {cap}; a stamp that holds twice as many rows will be \
+             refused. Raise max_state_bytes, or use closed=\"left\", which holds no row for \
+             its output.",
+            self.cross_name(op)
+        ))
+    }
+
     /// A row the core refused, as the error naming it.
     fn refusal(&self, r: Refusal, _chunk_base: u64) -> PolarsError {
         let row = |seq: u64| seq - self.run_base + self.skipped;
         match r {
+            Refusal::StateCap {
+                seq,
+                op,
+                bytes,
+                cap,
+            } => {
+                let name = self.cross_name(op);
+                polars_err!(ComputeError:
+                    "{WHO}: {name} would hold {bytes} bytes for the rows of one stamp of the clock \
+                     at row {} (counting from 0), past its max_state_bytes of {cap}. Under \
+                     closed=\"right\" each row of a stamp is held until the stamp closes; a \
+                     rank, a quantile or a read over neighbors also keeps each row's value. \
+                     Raise max_state_bytes, or use closed=\"left\", which holds no row for its \
+                     output.",
+                    row(seq)
+                )
+            }
+            Refusal::CrossRefTwice { seq, op, first } => {
+                let name = self.cross_name(op);
+                polars_err!(ComputeError:
+                    "{WHO}: {name} picks row {} (counting from 0) as the reference row of its \
+                     stamp, but it picked row {} at the same stamp already, and a stamp has one \
+                     reference row. Change where= to pick one row a stamp, such as by naming \
+                     one group's key.",
+                    row(seq),
+                    row(first)
+                )
+            }
             Refusal::Backwards {
                 seq,
                 back,
@@ -2893,6 +3136,7 @@ impl WindowsRun {
         }
         if file.core.kernels() != run.core.kernels()
             || file.core.ops() != run.core.ops()
+            || file.core.cross_defs() != run.core.cross_defs()
             || same_clock(file.core.clock_cfg()) != same_clock(run.core.clock_cfg())
         {
             return Err(format!(

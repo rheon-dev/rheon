@@ -325,6 +325,137 @@ shared laptop at a load average of 8 to 12.
 shows how to make a MAD scale with `rp.ewm_quantile`, and weight each row
 by it without reading targets not yet known.
 
+## Across groups at one stamp
+
+**A cross operator reduces the rows of every group at one stamp of the
+clock and gives the result to each of those rows.** `rp.cross_mean`,
+`rp.cross_std`, `rp.cross_rank` and `rp.cross_quantile` read the stamp's
+cross-section: its weighted mean, its spread, a row's rank within it, or a
+level of it. Each gives the value Polars gives over the clock on the whole
+frame, such as `pl.col("r").mean().over("t")` for the mean, while the
+stream arrives in chunks of any size. A row less its stamp's mean is a
+*cross-sectional residual*: what a symbol did beyond what every symbol did.
+This code builds its own rows:
+
+```python
+# Three symbols' returns at three timestamps, the rows in clock order.
+panel = pl.DataFrame(
+    {
+        "t": [1, 1, 1, 2, 2, 2, 3, 3, 3],
+        "symbol": ["a", "b", "c"] * 3,
+        "r": [0.010, 0.030, -0.010, 0.020, 0.000, 0.040, 0.000, -0.030, 0.030],
+    }
+)
+out = rp.stream.with_windows(
+    panel,
+    resid=pl.col("r") - rp.cross_mean("r"),                         # less every symbol's mean at its stamp
+    rank=rp.cross_rank("r"),                                        # 1 for the smallest at its stamp
+    resid_before=pl.col("r") - rp.cross_mean("r", closed="left"),   # less the stamp before's mean
+    clock="t", gap_cap=10, group="symbol",
+)
+print(out.select("t", "symbol", pl.col("resid", "resid_before").round(3), "rank"))
+```
+
+```text
+shape: (9, 5)
+┌─────┬────────┬───────┬──────────────┬──────┐
+│ t   ┆ symbol ┆ resid ┆ resid_before ┆ rank │
+│ --- ┆ ---    ┆ ---   ┆ ---          ┆ ---  │
+│ i64 ┆ str    ┆ f64   ┆ f64          ┆ f64  │
+╞═════╪════════╪═══════╪══════════════╪══════╡
+│ 1   ┆ a      ┆ 0.0   ┆ null         ┆ 2.0  │
+│ 1   ┆ b      ┆ 0.02  ┆ null         ┆ 3.0  │
+│ 1   ┆ c      ┆ -0.02 ┆ null         ┆ 1.0  │
+│ 2   ┆ a      ┆ 0.0   ┆ 0.01         ┆ 2.0  │
+│ 2   ┆ b      ┆ -0.02 ┆ -0.01        ┆ 1.0  │
+│ 2   ┆ c      ┆ 0.02  ┆ 0.03         ┆ 3.0  │
+│ 3   ┆ a      ┆ 0.0   ┆ -0.02        ┆ 2.0  │
+│ 3   ┆ b      ┆ -0.03 ┆ -0.05        ┆ 1.0  │
+│ 3   ┆ c      ┆ 0.03  ┆ 0.01         ┆ 3.0  │
+└─────┴────────┴───────┴──────────────┴──────┘
+```
+
+**Under `closed="right"`, the default, a row reads its own stamp, so it
+waits until the stamp closes.** A run's rows are in clock order across its
+groups, so a stamp's rows arrive together, and the first row of a later
+stamp closes the stamp, or the end of the input does. A row whose stamp
+comes before the one already open is refused, naming the row. Under
+`closed="left"` a row reads the stamp before its own, which is known when
+the row arrives. That form is causal: a feature it makes reads no row at
+the row's own time, so a model can learn from it without the row's own
+cross-section. Above, `resid_before` at `t = 2` subtracts the mean at
+`t = 1`, 0.01, and the first stamp has none to subtract.
+
+**A row of weight 0, or with no value, counts in no stamp. A cross-section
+of fewer than two rows of weight is null.** One row has no spread, and
+there is nothing to rank it against. A stamp that holds only such rows is
+no stamp: under `"left"` the next row reads the stamp before it. A gap past
+`gap_cap`, a session change or a reset ends the stamp before, as it ends
+every window.
+
+**`neighbors=` names a list column of group keys: each row reads the rows
+of the groups its own list names, in place of every group's.** A transit
+stop can read the stops beside it, and a stock the other stocks in its
+sector. A row's own group counts only where its list names it. Each key
+counts once, and a key with no row at the stamp counts for nothing.
+`rp.cross_ref` reads one reference row's value at each stamp, the row its
+`where=` predicate picks, such as an index's return beside each symbol's.
+A stamp with two such rows is refused, naming the second row:
+
+```python
+# Four stops on a line, each reading the delay at the stops beside it, and the line's first stop.
+delays = pl.DataFrame(
+    {
+        "t": [0, 0, 0, 0, 1, 1, 1, 1],
+        "stop": ["s1", "s2", "s3", "s4"] * 2,
+        "delay": [2.0, 4.0, 6.0, 9.0, 3.0, 3.0, 7.0, 11.0],
+        "beside": [["s2"], ["s1", "s3"], ["s2", "s4"], ["s3"]] * 2,
+    }
+)
+out = rp.stream.with_windows(
+    delays,
+    beside_mean=rp.cross_mean("delay", neighbors="beside"),          # null where one stop is beside
+    first_stop=rp.cross_ref("delay", where=pl.col("stop") == "s1"),
+    clock="t", gap_cap=10, group="stop",
+)
+print(out.select("t", "stop", "beside_mean", "first_stop"))
+```
+
+```text
+shape: (8, 4)
+┌─────┬──────┬─────────────┬────────────┐
+│ t   ┆ stop ┆ beside_mean ┆ first_stop │
+│ --- ┆ ---  ┆ ---         ┆ ---        │
+│ i64 ┆ str  ┆ f64         ┆ f64        │
+╞═════╪══════╪═════════════╪════════════╡
+│ 0   ┆ s1   ┆ null        ┆ 2.0        │
+│ 0   ┆ s2   ┆ 4.0         ┆ 2.0        │
+│ 0   ┆ s3   ┆ 6.5         ┆ 2.0        │
+│ 0   ┆ s4   ┆ null        ┆ 2.0        │
+│ 1   ┆ s1   ┆ null        ┆ 3.0        │
+│ 1   ┆ s2   ┆ 5.0         ┆ 3.0        │
+│ 1   ┆ s3   ┆ 7.0         ┆ 3.0        │
+│ 1   ┆ s4   ┆ null        ┆ 3.0        │
+└─────┴──────┴─────────────┴────────────┘
+```
+
+`s1` and `s4` each list one stop, and one row is no cross-section, so each
+reads null. `s3` lists `s2` and `s4`: at `t = 0` it reads (4 + 9) / 2.
+
+**The state holds the rows of the open stamp, within `max_state_bytes`.**
+Under `"right"` a stamp's rows wait for it, so the state grows with the
+rows one stamp holds, never with the stream's length. The run warns once,
+as a `RheonWarning`, when a stamp takes it past half of the cap, and
+refuses the row that would take it past the cap. A rank, a quantile and a
+read over neighbors also keep each row's value, and under `"left"` the
+stamp before's; each operator's docstring gives its bytes a row.
+
+**A cross-section needs every group's rows in one place.** A stream
+partitioned by group, as a Kafka topic keyed by group is, keeps each
+group's rows in order but splits the stamp across partitions. A cross
+operator therefore runs in one consumer that reads every group's rows,
+such as from a topic with a single partition, after the per-group work.
+
 ## Saving and resuming a window run
 
 **A window run's state holds the rows still waiting for their windows to

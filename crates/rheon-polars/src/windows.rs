@@ -221,6 +221,13 @@ pub enum OpKind {
     EwmQuantile,
     RewmQuantile,
     Increment,
+    /// A cross-group operator ([`CrossStat::Mean`]): no kernel, the
+    /// stream's stamps.
+    CrossMean,
+    CrossStd,
+    CrossRank,
+    CrossQuantile,
+    CrossRef,
 }
 
 impl OpKind {
@@ -237,6 +244,11 @@ impl OpKind {
             OpKind::EwmQuantile => "ewm_quantile",
             OpKind::RewmQuantile => "rewm_quantile",
             OpKind::Increment => "increment",
+            OpKind::CrossMean => "cross_mean",
+            OpKind::CrossStd => "cross_std",
+            OpKind::CrossRank => "cross_rank",
+            OpKind::CrossQuantile => "cross_quantile",
+            OpKind::CrossRef => "cross_ref",
         }
     }
 
@@ -253,6 +265,11 @@ impl OpKind {
             "ewm_quantile" => Some(OpKind::EwmQuantile),
             "rewm_quantile" => Some(OpKind::RewmQuantile),
             "increment" => Some(OpKind::Increment),
+            "cross_mean" => Some(OpKind::CrossMean),
+            "cross_std" => Some(OpKind::CrossStd),
+            "cross_rank" => Some(OpKind::CrossRank),
+            "cross_quantile" => Some(OpKind::CrossQuantile),
+            "cross_ref" => Some(OpKind::CrossRef),
             _ => None,
         }
     }
@@ -275,7 +292,25 @@ impl OpKind {
             OpKind::EwmVar => Some(Stat::Var),
             OpKind::EwmStd => Some(Stat::Std),
             OpKind::EwmQuantile | OpKind::RewmQuantile => Some(Stat::Quantile),
-            OpKind::Increment => None,
+            OpKind::Increment
+            | OpKind::CrossMean
+            | OpKind::CrossStd
+            | OpKind::CrossRank
+            | OpKind::CrossQuantile
+            | OpKind::CrossRef => None,
+        }
+    }
+
+    /// The cross-group statistic, for a cross operator; `None` for every
+    /// window operator and `increment`.
+    pub fn cross(self) -> Option<CrossStat> {
+        match self {
+            OpKind::CrossMean => Some(CrossStat::Mean),
+            OpKind::CrossStd => Some(CrossStat::Std),
+            OpKind::CrossRank => Some(CrossStat::Rank),
+            OpKind::CrossQuantile => Some(CrossStat::Quantile),
+            OpKind::CrossRef => Some(CrossStat::Ref),
+            _ => None,
         }
     }
 }
@@ -582,6 +617,9 @@ pub struct RowIn<'a> {
     /// target of a row it skips (docs/PLAN.md task 104). The row still
     /// steps the clocks and still counts in other rows' windows.
     pub accept: bool,
+    /// Per list a cross operator reads its neighbors from: the row's keys,
+    /// as text (`None` for a null list). Empty with no such operator.
+    pub lists: &'a [Option<&'a [Option<String>]>],
 }
 
 /// What the clocks make of a row before it is taken ([`Windows::peek`]).
@@ -611,6 +649,18 @@ pub enum Refusal {
         now: Option<ClockValue>,
         min_backwards_jump: Option<f64>,
     },
+    /// The cross-group operator `op` (its index among them) would hold
+    /// `bytes` for its open stamp with this row, past its `cap`; the row is
+    /// not taken.
+    StateCap {
+        seq: u64,
+        op: usize,
+        bytes: u64,
+        cap: u64,
+    },
+    /// The reference read `op` (its index among the cross operators) picks
+    /// this row at a stamp where it picked the row `first` already.
+    CrossRefTwice { seq: u64, op: usize, first: u64 },
 }
 
 /// Per operator, a segment's sums: the mass-weighted value, the mass and
@@ -1556,7 +1606,7 @@ struct Group {
     stamp_values: Vec<Vec<f64>>,
     /// Raw clock of the group's last row, while it is in the silent list.
     last_raw: Option<ClockValue>,
-    /// Neighbours in the silent list, the oldest `last_raw` at the head.
+    /// Neighbors in the silent list, the oldest `last_raw` at the head.
     prev_link: Option<usize>,
     next_link: Option<usize>,
     linked: bool,
@@ -1658,6 +1708,11 @@ pub struct Windows {
     /// row's wait count; derived by [`Windows::scratch`], never saved.
     #[serde(skip)]
     derived: Derived,
+    /// The cross-group operators, after the window operators in output
+    /// order, and where their stamps stand; absent, and not written, where
+    /// the call has none, so a state without them keeps its bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cross: Option<Box<Cross>>,
 }
 
 /// A map as a sorted list, so the state's bytes do not depend on the
@@ -2018,6 +2073,8 @@ macro_rules! by_width {
 }
 
 // After `by_width!`, which it uses.
+mod check;
+mod cross;
 #[cfg(test)]
 mod empty_sum_tests;
 mod held_mass;
@@ -2028,6 +2085,10 @@ mod keys;
 mod memo_tests;
 mod plain;
 
+pub use cross::{
+    CROSS_STATE_BYTES, CROSS_STATE_BYTES_CEILING, Cross, CrossClosed, CrossDef, CrossStat, Interp,
+    RankMethod,
+};
 use keys::IntGroups;
 pub(crate) use keys::{ChunkKeys, session_hashes};
 pub(crate) use plain::PlainRows;
@@ -2065,15 +2126,31 @@ impl Windows {
         ops: Vec<OpDef>,
         clock_cfg: ClockCfg,
     ) -> Result<Self, String> {
-        Self::build(kernels, ops, clock_cfg).map_err(|e| defect(&e))
+        Self::build(kernels, ops, Vec::new(), clock_cfg).map_err(|e| defect(&e))
+    }
+
+    /// [`Self::new`] with cross-group operators beside the window
+    /// operators, after them in output order.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::new`].
+    pub fn with_cross(
+        kernels: Vec<KernelDef>,
+        ops: Vec<OpDef>,
+        cross: Vec<CrossDef>,
+        clock_cfg: ClockCfg,
+    ) -> Result<Self, String> {
+        Self::build(kernels, ops, cross, clock_cfg).map_err(|e| defect(&e))
     }
 
     fn build(
         kernels: Vec<KernelDef>,
         ops: Vec<OpDef>,
+        cross: Vec<CrossDef>,
         clock_cfg: ClockCfg,
     ) -> Result<Self, String> {
-        if ops.is_empty() {
+        if ops.is_empty() && cross.is_empty() {
             return Err("at least one operator is needed".into());
         }
         for k in &kernels {
@@ -2102,8 +2179,11 @@ impl Windows {
             .iter()
             .filter(|k| k.direction == Direction::Forward)
             .count();
+        let n_cross = cross.len();
+        let first_out = ops.len();
         Ok(Self {
-            n_outputs: ops.len(),
+            cross: (n_cross > 0).then(|| Box::new(Cross::new(cross, first_out))),
+            n_outputs: ops.len() + n_cross,
             n_forward: u32::try_from(n_forward).map_err(|_| "too many kernels")?,
             kernels: Arc::new(kernels),
             ops: Arc::new(ops),
@@ -2155,180 +2235,6 @@ impl Windows {
         self.grouped = grouped;
     }
 
-    /// Whether a core read back from a state file holds what every method
-    /// here indexes by (review 2026-10-06, PD1): the loader compared the
-    /// kernels, the operators and the clock with its own call's and the
-    /// held rows' count with the frame's, and took the rest on trust, so a
-    /// damaged file that still decoded panicked at the next call. The rest:
-    /// each kernel's operators and the output count are the operators',
-    /// the held values `n_outputs` a held row, the rows ready among those
-    /// held, each group at its kernels' widths with its waiting rows held
-    /// and still open by exactly the windows left to close over them, the
-    /// silent list a list of the groups, and the keys the groups one to
-    /// one. `Err` names the first that fails.
-    ///
-    /// # Errors
-    ///
-    /// A core that is none this module could have built and fed.
-    pub fn check(&self) -> Result<(), String> {
-        for k in self.kernels.iter() {
-            k.check()?;
-        }
-        let (nk, no) = (self.kernels.len(), self.ops.len());
-        let mut members = vec![Vec::new(); nk];
-        for (o, op) in self.ops.iter().enumerate() {
-            match members.get_mut(op.kernel) {
-                Some(m) => m.push(o),
-                None => return Err(format!("operator {o} names kernel {}", op.kernel)),
-            }
-            check_op(o, op, &self.kernels[op.kernel])?;
-        }
-        if no == 0 || members != *self.members || members.iter().any(Vec::is_empty) {
-            return Err("its kernels' operators are not its operators".into());
-        }
-        if self.n_outputs != no {
-            return Err(format!("{} outputs for {no} operators", self.n_outputs));
-        }
-        let is_forward = |k: &KernelDef| k.direction == Direction::Forward;
-        let forward = self.kernels.iter().filter(|k| is_forward(k)).count();
-        if self.n_forward as usize != forward {
-            return Err(format!("{} forward kernels of {forward}", self.n_forward));
-        }
-        let held = self.held_meta.len();
-        if held.checked_mul(no) != Some(self.held_values.len()) {
-            return Err(format!(
-                "{} values held for {held} rows of {no} outputs",
-                self.held_values.len()
-            ));
-        }
-        let kept = self.held_meta.iter().take(self.ready).filter(|m| !m.drop);
-        if self.ready > held || self.ready_kept != kept.count() {
-            return Err(format!("{} rows ready of {held} held", self.ready));
-        }
-        if self.held_first.checked_add(held as u64) != Some(self.next_seq) {
-            return Err(format!(
-                "{held} rows held from row {} before row {}",
-                self.held_first, self.next_seq
-            ));
-        }
-        // Each group at its kernels' widths, and the windows still open over
-        // each held row, which `close` and `flush_group` count down.
-        let n_wait = u32::from(
-            self.kernels
-                .iter()
-                .any(|k| k.direction == Direction::Backward && k.closed.near(Direction::Backward)),
-        );
-        let is_held = |seq: u64| seq >= self.held_first && seq < self.next_seq;
-        let widths = |v: &[Vec<f64>]| {
-            v.len() == nk
-                && v.iter()
-                    .zip(self.members.iter())
-                    .all(|(x, m)| x.len() == m.len())
-        };
-        let mut open = vec![0u32; held];
-        let var: Vec<Vec<bool>> = (0..nk).map(|ki| self.var_of(ki)).collect();
-        let quant: Vec<Vec<bool>> = (0..nk).map(|ki| self.quant_of(ki)).collect();
-        for (gi, g) in self.groups.iter().enumerate() {
-            let fits = g.queues.len() == nk
-                && g.queues
-                    .iter()
-                    .zip(var.iter().zip(&quant))
-                    .all(|(q, (v, qu))| q.has_width(v, qu))
-                && g.open.len() == nk
-                && widths(&g.open_x)
-                && widths(&g.open_held)
-                && widths(&g.stamp_values)
-                && g.closed.len() == nk
-                && g.closed.iter().all(|&c| c <= g.waiting.len())
-                && g.last_valued.len() == no
-                && g.held.len() == no
-                && (forward > 0 || g.waiting.is_empty())
-                && (n_wait > 0 || g.pending.is_empty())
-                && g.waiting.iter().all(|w| is_held(w.seq))
-                && g.pending.iter().all(|&s| is_held(s))
-                && (!g.linked || g.last_raw.is_some());
-            if !fits {
-                return Err(format!("group {gi} does not fit its kernels and held rows"));
-            }
-            for (i, w) in g.waiting.iter().enumerate() {
-                let r = (w.seq - self.held_first) as usize;
-                let still = self.kernels.iter().zip(&g.closed);
-                open[r] += still.filter(|&(k, &c)| is_forward(k) && i >= c).count() as u32;
-            }
-            for &s in &g.pending {
-                open[(s - self.held_first) as usize] += n_wait;
-            }
-        }
-        if self.held_meta.iter().zip(&open).any(|(m, &o)| m.open != o) {
-            return Err("a held row's open windows are not the ones still open over it".into());
-        }
-        self.check_links()?;
-        // The keys name the groups one to one: `group` makes each group
-        // under its key, and `push` reads a group by the index a key gives.
-        let mut named = vec![false; self.groups.len()];
-        for &gi in self.index.values().chain(&self.null_group) {
-            match named.get_mut(gi) {
-                Some(seen) if !*seen => *seen = true,
-                _ => return Err("its keys do not name its groups one to one".into()),
-            }
-        }
-        if named.contains(&false) {
-            return Err("its keys do not name its groups one to one".into());
-        }
-        Ok(())
-    }
-
-    /// The silent list: links inside the groups, from the head through each
-    /// linked group once, back links that agree, the tail last, and no
-    /// unlinked group holding a link ([`Self::check`]).
-    fn check_links(&self) -> Result<(), String> {
-        let n = self.groups.len();
-        let bad = || Err("its silent list is not a list of its groups".to_string());
-        let inside = |l: Option<usize>| l.is_none_or(|i| i < n);
-        let mut links = self.groups.iter().flat_map(|g| [g.prev_link, g.next_link]);
-        if !inside(self.head) || !inside(self.tail) || !links.all(inside) {
-            return bad();
-        }
-        let (mut at, mut prev, mut walked) = (self.head, None, 0);
-        while let Some(i) = at {
-            let g = &self.groups[i];
-            if walked == n || !g.linked || g.prev_link != prev {
-                return bad();
-            }
-            (prev, at, walked) = (Some(i), g.next_link, walked + 1);
-        }
-        let linked = self.groups.iter().filter(|g| g.linked).count();
-        let stray = self
-            .groups
-            .iter()
-            .any(|g| !g.linked && (g.prev_link.is_some() || g.next_link.is_some()));
-        if prev != self.tail || walked != linked || stray {
-            return bad();
-        }
-        Ok(())
-    }
-
-    /// One named damage, as a bit flip or a truncated array in a state file
-    /// would leave the core: for the loader's test in `windows_frame.rs`,
-    /// the fields being this module's.
-    #[cfg(test)]
-    pub(crate) fn damage(&mut self, what: &str) {
-        match what {
-            "held_values" => {
-                self.held_values.pop_back();
-            }
-            "n_outputs" => self.n_outputs = 0,
-            "queue" => self.groups[0].queues[0].n += 1,
-            "link" => self.head = Some(self.groups.len()),
-            "ready" => self.ready = self.held_meta.len() + 1,
-            "waiting" => {
-                let past = self.held_first + self.held_meta.len() as u64;
-                self.groups[0].waiting[0].seq = past;
-            }
-            other => unreachable!("no damage {other:?}"),
-        }
-    }
-
     /// The scratch buffers, which a loaded state lacks.
     #[inline]
     fn scratch(&mut self) {
@@ -2370,6 +2276,17 @@ impl Windows {
 
     pub fn ops(&self) -> &[OpDef] {
         &self.ops
+    }
+
+    /// The cross-group operators, after [`Self::ops`] in output order.
+    pub fn cross_defs(&self) -> &[CrossDef] {
+        self.cross.as_ref().map_or(&[], |c| c.defs())
+    }
+
+    /// The first row to take a cross-group operator's state past half of
+    /// its cap, once a run, as `(op, bytes, cap)`, taken by this call.
+    pub fn take_state_warning(&mut self) -> Option<(usize, u64, u64)> {
+        self.cross.as_mut().and_then(|c| c.take_warning())
     }
 
     pub fn clock_cfg(&self) -> &ClockCfg {
@@ -2546,6 +2463,12 @@ impl Windows {
         self.scratch();
         let seq = self.next_seq;
         let gi = row.group;
+        // The cross-group operators' state with this row, before anything
+        // moves: a row that would take an operator past its cap is refused.
+        let cross_held = match &self.cross {
+            Some(c) => Some(c.check_row(row, seq, self.n_outputs)?),
+            None => None,
+        };
         // A plain step forward on both clocks is never refused: each steps
         // where it stands, with no copy of the state to keep or put back.
         // Any other row steps both on copies, kept only once neither
@@ -2604,6 +2527,27 @@ impl Windows {
             self.flush_stamps_before(now);
         }
 
+        // The cross-group operators' stamp: a later one closes the open
+        // stamp, whose rows are the ones before this; a reset discards it.
+        if let Some(c) = self.cross.as_mut() {
+            let index = &self.index;
+            let find = |k: &str| index.get(k).copied();
+            let mut rows = cross::Rows {
+                first: self.held_first,
+                n_outputs: self.n_outputs,
+                values: &mut self.held_values,
+                meta: &mut self.held_meta,
+                find: &find,
+            };
+            c.before_row(
+                row.clock,
+                adv.reset,
+                adv.session_changed || adv.capped,
+                &mut rows,
+                seq,
+            );
+        }
+
         // One push each: `extend(repeat_n(..))` was a call to a fill routine
         // for the one or two values a row holds.
         for _ in 0..self.n_outputs {
@@ -2615,11 +2559,27 @@ impl Windows {
         // own windows are read at the end of this push (review R1, C1: they
         // were never read without a clock, and every such output was null).
         let n_wait = self.derived.n_wait;
+        let cross_wait = self.cross.as_ref().map_or(0, |c| u32::from(c.waits()));
         self.held_meta.push_back(Meta {
-            open: self.n_forward + n_wait,
+            open: self.n_forward + n_wait + cross_wait,
             accept: row.accept,
             drop: false,
         });
+        if let Some(c) = self.cross.as_mut() {
+            let index = &self.index;
+            let find = |k: &str| index.get(k).copied();
+            let mut rows = cross::Rows {
+                first: self.held_first,
+                n_outputs: self.n_outputs,
+                values: &mut self.held_values,
+                meta: &mut self.held_meta,
+                find: &find,
+            };
+            c.row(row, seq, &mut rows);
+            if let Some(held) = cross_held {
+                c.note_held(&held);
+            }
+        }
 
         let g = &mut self.groups[gi];
         if let Some(clock) = clock {
@@ -3033,6 +2993,18 @@ impl Windows {
             }
             g.open.iter_mut().for_each(|o| *o = None);
             self.unlink(gi);
+        }
+        if let Some(c) = self.cross.as_mut() {
+            let index = &self.index;
+            let find = |k: &str| index.get(k).copied();
+            let mut rows = cross::Rows {
+                first: self.held_first,
+                n_outputs: self.n_outputs,
+                values: &mut self.held_values,
+                meta: &mut self.held_meta,
+                find: &find,
+            };
+            c.finish(&mut rows, self.next_seq);
         }
         self.ready = self.held_meta.len();
         self.ready_kept = self.held_meta.iter().filter(|m| !m.drop).count();
@@ -3904,6 +3876,7 @@ mod tests {
             session: r.session,
             values: &r.values,
             accept: r.accept,
+            lists: &[],
         })
     }
 

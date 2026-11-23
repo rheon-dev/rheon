@@ -231,6 +231,11 @@ if TYPE_CHECKING:
     from rheon._duration import Duration
 
 __all__ = [
+    "cross_mean",
+    "cross_std",
+    "cross_rank",
+    "cross_quantile",
+    "cross_ref",
     "ewm_mean",
     "ewm_quantile",
     "ewm_rate",
@@ -1283,3 +1288,505 @@ def increment(input: str | pl.Expr) -> pl.Expr:
     sums near 1e10, loses about four of a double's sixteen digits.
     """
     return operator("increment", input)
+
+
+def cross_mean(
+    input: str | pl.Expr,
+    *,
+    weight: str | pl.Expr | None = None,
+    closed: Literal["right", "left"] = "right",
+    neighbors: str | None = None,
+    max_state_bytes: int | None = None,
+) -> pl.Expr:
+    """The mean of a column across every group's row at each stamp of the clock.
+
+    Use it for a cross-sectional level, such as the average return of every
+    symbol at each timestamp, broadcast back to each symbol's row; a row's
+    deviation from it, ``pl.col("r") - rp.cross_mean("r")``, is its
+    cross-sectional residual. :func:`cross_std` gives the spread about it.
+
+    .. rubric:: Parameters
+
+    ``input``
+        The values reduced: a column name, or an element-wise expression of
+        the row, such as ``pl.col("price") / pl.col("open") - 1`` or
+        :func:`increment`. It may hold no window or cross operator.
+    ``weight``
+        Each row's weight: a column name or an element-wise expression of the
+        row. ``None`` (the default) weighs every row 1. A row whose weight is
+        null, NaN, infinite or not above 0 contributes nothing.
+    ``closed``
+        Which stamp a row reads. ``"right"`` (the default) is the row's own
+        stamp: every group's row at that clock value, the row's own included,
+        the value ``pl.col(input).mean().over(clock)`` gives on the whole
+        frame. The row waits for its stamp to close, which the first row of a
+        later stamp, or the end of the input, does. ``"left"`` is the stamp
+        before the row's own, known as the row arrives.
+    ``neighbors``
+        The name of a list column giving each row's neighbors: the keys of
+        the groups whose rows it reads, in place of every group's. ``None``
+        (the default) reads every group. Each key counts once, a key with no
+        row at the stamp read adds nothing, and the row's own group is read
+        only where its list names it. It needs a ``group`` column, whose keys
+        the lists name. Under ``"right"`` a neighbor's row later in the
+        stamp counts. Each row of the open stamp is kept with its keys, 40
+        bytes and 8 bytes plus its text a key, and under ``"left"`` each row
+        of the stamp before with a value and a weight, 32 bytes, within
+        ``max_state_bytes``.
+    ``max_state_bytes``
+        The most bytes the operator's state may hold, a whole number from 1
+        to 64 MiB. Default ``None``, 262,144 (256 KB). Under ``"right"`` each
+        row of a stamp is held until the stamp closes, ``8 * (outputs + 1)``
+        bytes a row for the call's ``outputs`` operator columns, so the state
+        grows with the rows of one stamp: the run warns once, as a
+        :class:`~rheon.RheonWarning`, when a stamp takes it past half of the
+        cap, and refuses the row that would take it past the cap, naming the
+        row. Under ``"left"`` no row is held.
+
+    .. rubric:: Returns
+
+    A ``pl.Expr`` that :func:`rheon.polars.stream.with_windows` computes as a
+    column, under a ``clock``. Every row of a stamp reads the same value. It
+    is null where the cross-section it reads holds fewer than two rows of
+    weight with a value: one row is no cross-section. Under ``"left"`` it is
+    null on the first stamp, and on the first stamp after a clock break (a
+    gap past ``gap_cap``, a session change on a stream with no ``group``, or
+    a step back past ``restart_after_step_back``).
+
+    .. rubric:: Raises
+
+    ``TypeError``
+        When ``input`` or ``weight`` is neither a column name nor a
+        ``pl.Expr``, or ``max_state_bytes`` is not an integer (a
+        :class:`~rheon.WrongTypeError`).
+    ``ValueError``
+        When ``closed`` is neither ``"right"`` nor ``"left"``, ``input`` or
+        ``weight`` holds a window or cross operator, or ``max_state_bytes``
+        is below 1 or above 64 MiB.
+
+    .. rubric:: Examples
+
+    Each symbol's return less the mean return of every symbol at the same
+    timestamp:
+
+    .. code-block:: python
+
+        import polars as pl
+        from rheon import polars as rp
+
+        df = pl.DataFrame(
+            {
+                "t": [1, 1, 1, 2, 2, 2],
+                "symbol": ["a", "b", "c", "a", "b", "c"],
+                "r": [0.01, 0.03, -0.01, 0.02, 0.00, 0.01],
+            }
+        )
+        out = rp.stream.with_windows(
+            df,
+            resid=pl.col("r") - rp.cross_mean("r"),
+            clock="t",
+            gap_cap=10,
+            group="symbol",
+        )
+        print(out["resid"].round(4).to_list())
+
+    .. code-block:: text
+
+        [0.0, 0.02, -0.02, 0.01, -0.01, 0.0]
+
+    .. rubric:: Notes
+
+    **The stamps.** The rows of a run are in clock order across groups, so
+    a stamp's rows arrive together, and a step back of the clock is refused
+    by row, as every window operator refuses it. A stamp's value does not
+    depend on how the input was cut into chunks. A row of weight 0, or with
+    no value, contributes nothing and counts in no stamp: a stamp of such
+    rows alone is skipped by ``"left"``, whose next row reads the stamp
+    before it.
+
+    **The definition.** With ``w_i`` the weights of the stamp's rows of
+    weight above 0 with a value ``x_i``, the mean is ``sum w_i x_i / sum
+    w_i``, accumulated in Welford's form in input order. The oracle is
+    Polars' ``pl.col(input).mean().over(clock)``, or ``group_by(clock)``
+    and a join, on the whole frame at once.
+
+    **A stream processor.** A cross-section needs every group's row at a
+    stamp in one place, so a run partitioned by group, as a Kafka topic
+    keyed by group is, computes it in one partition that reads every group.
+    """
+    return operator(
+        "cross_mean",
+        input,
+        closed=closed,
+        weight=weight,
+        neighbors=neighbors,
+        max_state_bytes=max_state_bytes,
+    )
+
+
+def cross_std(
+    input: str | pl.Expr,
+    *,
+    weight: str | pl.Expr | None = None,
+    closed: Literal["right", "left"] = "right",
+    bias: bool = False,
+    neighbors: str | None = None,
+    max_state_bytes: int | None = None,
+) -> pl.Expr:
+    """The standard deviation of a column across every group's row at each stamp.
+
+    Use it for a cross-sectional spread, such as the dispersion of returns
+    across symbols at each timestamp, broadcast back to each symbol's row.
+    :func:`cross_mean` gives the level it is about.
+
+    .. rubric:: Parameters
+
+    ``input``, ``weight``, ``closed``, ``neighbors``, ``max_state_bytes``
+        As :func:`cross_mean` takes them.
+    ``bias``
+        ``False`` (the default) corrects the weighted second moment for the
+        weights' count, as Polars' ``std(ddof=1)`` does at equal weights;
+        ``True`` reports it as it is.
+
+    .. rubric:: Returns
+
+    A ``pl.Expr``, as :func:`cross_mean` returns one, null where it is null.
+
+    .. rubric:: Raises
+
+    ``TypeError``
+        When ``input`` or ``weight`` is neither a column name nor a
+        ``pl.Expr``, or ``bias`` is not ``True`` or ``False``.
+    ``ValueError``
+        As :func:`cross_mean` raises it.
+
+    .. rubric:: Examples
+
+    Each symbol's return in units of the spread of every symbol's return at
+    the same timestamp:
+
+    .. code-block:: python
+
+        import polars as pl
+        from rheon import polars as rp
+
+        df = pl.DataFrame(
+            {
+                "t": [1, 1, 1, 2, 2, 2],
+                "symbol": ["a", "b", "c", "a", "b", "c"],
+                "r": [0.01, 0.03, -0.01, 0.02, 0.00, 0.01],
+            }
+        )
+        out = rp.stream.with_windows(
+            df,
+            z=(pl.col("r") - rp.cross_mean("r")) / rp.cross_std("r"),
+            clock="t",
+            gap_cap=10,
+            group="symbol",
+        )
+        print(out["z"].round(3).to_list())
+
+    .. code-block:: text
+
+        [0.0, 1.0, -1.0, 1.0, -1.0, 0.0]
+
+    .. rubric:: Notes
+
+    With ``V1 = sum w_i``, ``V2 = sum w_i ** 2`` and the mean ``m`` of
+    :func:`cross_mean`, the variance is ``sum w_i (x_i - m) ** 2 / V1``,
+    times ``V1 ** 2 / (V1 ** 2 - V2)`` unless ``bias``; the standard
+    deviation is its root. At equal weights the factor is ``n / (n - 1)``,
+    and the value is Polars' ``pl.col(input).std().over(clock)``. Its stamps,
+    weights and nulls are :func:`cross_mean`'s.
+    """
+    return operator(
+        "cross_std",
+        input,
+        closed=closed,
+        bias=bias,
+        weight=weight,
+        neighbors=neighbors,
+        max_state_bytes=max_state_bytes,
+    )
+
+
+def cross_rank(
+    input: str | pl.Expr,
+    *,
+    method: Literal["average", "min", "max", "dense", "ordinal"] = "average",
+    descending: bool = False,
+    closed: Literal["right", "left"] = "right",
+    neighbors: str | None = None,
+    max_state_bytes: int | None = None,
+) -> pl.Expr:
+    """A row's rank among every group's row at its stamp.
+
+    Use it for a cross-sectional rank, such as where each symbol's return
+    stands among every symbol's return at the same timestamp: 1 is the
+    smallest, and the cross-section's count of rows the largest.
+
+    .. rubric:: Parameters
+
+    ``input``, ``closed``, ``neighbors``
+        As :func:`cross_mean` takes them. Under ``"right"`` the row is ranked
+        among its own stamp's rows, itself included: Polars'
+        ``pl.col(input).rank(method, descending=descending).over(clock)`` on
+        the whole frame. Under ``"left"`` it is ranked among the stamp
+        before's rows, as though it were added to them last.
+    ``method``
+        How tied values rank, as Polars' ``rank`` reads it: ``"average"``
+        (the default) their mean rank, ``"min"`` or ``"max"`` the lowest or
+        highest, ``"dense"`` the place of their value among the distinct
+        values, ``"ordinal"`` each its own, the earlier row first.
+    ``descending``
+        ``True`` ranks the largest value 1.
+    ``max_state_bytes``
+        As :func:`cross_mean` takes it. A rank also keeps each row of the
+        open stamp, 16 bytes a row, and under ``"left"`` the stamp before's
+        distinct values, 16 bytes each.
+
+    .. rubric:: Returns
+
+    A ``pl.Expr``, as :func:`cross_mean` returns one. It is null where the
+    row has no value, and where the cross-section it reads holds fewer than
+    two rows with a value.
+
+    .. rubric:: Raises
+
+    ``TypeError``
+        As :func:`cross_mean` raises it, or when ``descending`` is not
+        ``True`` or ``False``.
+    ``ValueError``
+        As :func:`cross_mean` raises it, or when ``method`` is not one of
+        the five words above.
+
+    .. rubric:: Examples
+
+    Each symbol's rank by return among every symbol at the same timestamp:
+
+    .. code-block:: python
+
+        import polars as pl
+        from rheon import polars as rp
+
+        df = pl.DataFrame(
+            {
+                "t": [1, 1, 1, 2, 2, 2],
+                "symbol": ["a", "b", "c", "a", "b", "c"],
+                "r": [0.01, 0.03, 0.01, 0.02, 0.00, 0.01],
+            }
+        )
+        out = rp.stream.with_windows(
+            df, rank=rp.cross_rank("r"), clock="t", gap_cap=10, group="symbol"
+        )
+        print(out["rank"].to_list())
+
+    .. code-block:: text
+
+        [1.5, 3.0, 1.5, 3.0, 1.0, 2.0]
+
+    .. rubric:: Notes
+
+    With ``l`` the rows ranked before the row's value, ``e`` the rows tied
+    with it, itself among them, and ``p`` its place among those ties in
+    input order, from 0: ``average`` is ``l + (e + 1) / 2``, ``min``
+    ``l + 1``, ``max`` ``l + e``, ``dense`` one more than the distinct values
+    ranked before it, and ``ordinal`` ``l + p + 1``. A rank takes no weight:
+    it counts rows. A row with no value is no member of its stamp, and a
+    stamp of such rows alone is skipped by ``"left"``, as :func:`cross_mean`
+    skips it. The oracles are Polars' ``rank`` over the clock and SciPy's
+    ``rankdata``.
+    """
+    return operator(
+        "cross_rank",
+        input,
+        closed=closed,
+        method=method,
+        descending=descending,
+        neighbors=neighbors,
+        max_state_bytes=max_state_bytes,
+    )
+
+
+def cross_quantile(
+    input: str | pl.Expr,
+    quantile: float,
+    *,
+    interpolation: Literal["nearest", "higher", "lower", "midpoint", "linear", "equiprobable"]
+    | None = None,
+    weight: str | pl.Expr | None = None,
+    closed: Literal["right", "left"] = "right",
+    neighbors: str | None = None,
+    max_state_bytes: int | None = None,
+) -> pl.Expr:
+    """A quantile of a column across every group's row at each stamp.
+
+    Use it for a cross-sectional level, such as the median return across
+    symbols at each timestamp, broadcast back to each symbol's row: a level
+    that one outlying symbol does not move as it moves :func:`cross_mean`.
+
+    .. rubric:: Parameters
+
+    ``input``, ``weight``, ``closed``, ``neighbors``
+        As :func:`cross_mean` takes them. Under ``"right"`` the value is
+        Polars' ``pl.col(input).quantile(quantile, interpolation).over(clock)``
+        on the whole frame.
+    ``quantile``
+        The level, from 0 to 1: 0.5 is the median.
+    ``interpolation``
+        How a level between two values is read, as Polars reads it:
+        ``"nearest"``, ``"higher"``, ``"lower"``, ``"midpoint"``,
+        ``"linear"`` or ``"equiprobable"``. ``None`` (the default) is
+        ``"nearest"``, Polars' own default, without ``weight``, and
+        ``"equiprobable"``, the only reading with a weighted form, with it.
+    ``max_state_bytes``
+        As :func:`cross_mean` takes it. A quantile also keeps each row of the
+        open stamp, 16 bytes a row, under either ``closed``.
+
+    .. rubric:: Returns
+
+    A ``pl.Expr``, as :func:`cross_mean` returns one, null where it is null.
+
+    .. rubric:: Raises
+
+    ``TypeError``
+        As :func:`cross_mean` raises it, or when ``quantile`` is not a
+        number (a :class:`~rheon.WrongTypeError`).
+    ``ValueError``
+        As :func:`cross_mean` raises it, or when ``quantile`` is below 0 or
+        above 1, ``interpolation`` is not one of the six words above, or it
+        is not ``"equiprobable"`` with ``weight``.
+
+    .. rubric:: Examples
+
+    Each symbol's return less the median return of every symbol at the same
+    timestamp:
+
+    .. code-block:: python
+
+        import polars as pl
+        from rheon import polars as rp
+
+        df = pl.DataFrame(
+            {
+                "t": [1, 1, 1, 2, 2, 2],
+                "symbol": ["a", "b", "c", "a", "b", "c"],
+                "r": [0.01, 0.03, -0.01, 0.02, 0.00, 0.50],
+            }
+        )
+        out = rp.stream.with_windows(
+            df,
+            resid=pl.col("r") - rp.cross_quantile("r", 0.5),
+            clock="t",
+            gap_cap=10,
+            group="symbol",
+        )
+        print(out["resid"].round(4).to_list())
+
+    .. code-block:: text
+
+        [0.0, 0.02, -0.02, 0.0, -0.02, 0.48]
+
+    .. rubric:: Notes
+
+    With the cross-section's ``n`` values sorted, ``v[0] <= ... <=
+    v[n - 1]``, and ``h = (n - 1) * quantile``: ``"nearest"`` reads
+    ``v[round(h)]``, ``"lower"`` ``v[floor(h)]``, ``"higher"``
+    ``v[ceil(h)]``, ``"midpoint"`` the mean of those two, ``"linear"`` the
+    point ``h - floor(h)`` of the way between them, and ``"equiprobable"``
+    ``v[max(ceil(n * quantile) - 1, 0)]``. With weights it is ``v[k]`` for
+    the first ``k`` whose cumulative weight share ``(w_0 + ... + w_k) / sum
+    w`` reaches the level, the inverse of the weighted distribution
+    function: NumPy's ``quantile(method="inverted_cdf", weights=...)``.
+    Its stamps, weights and nulls are :func:`cross_mean`'s.
+    """
+    return operator(
+        "cross_quantile",
+        input,
+        closed=closed,
+        quantile=quantile,
+        interpolation=interpolation,
+        weight=weight,
+        neighbors=neighbors,
+        max_state_bytes=max_state_bytes,
+    )
+
+
+def cross_ref(
+    input: str | pl.Expr,
+    where: pl.Expr,
+    *,
+    closed: Literal["right", "left"] = "right",
+    max_state_bytes: int | None = None,
+) -> pl.Expr:
+    """The value of one reference row at each stamp, read by every row of it.
+
+    Use it to read a leader's value on every group's row, such as an index's
+    return beside each symbol's at the same timestamp, without a join.
+
+    .. rubric:: Parameters
+
+    ``input``, ``closed``, ``max_state_bytes``
+        As :func:`cross_mean` takes them. Under ``"right"`` a row reads the
+        reference row of its own stamp, and waits for the stamp to close;
+        under ``"left"`` the reference value of the last stamp before its own
+        whose reference row had a value, known as the row arrives.
+    ``where``
+        The predicate that picks the reference row, an element-wise
+        expression of the row, such as ``pl.col("symbol") == "SPY"``: a row
+        where it is true (or a number other than 0) is the stamp's reference
+        row.
+
+    .. rubric:: Returns
+
+    A ``pl.Expr``, as :func:`cross_mean` returns one. It is null where the
+    stamp it reads has no reference row, or the reference row has no value.
+    One row is all it reads, so it is not withheld for being one row.
+
+    .. rubric:: Raises
+
+    ``TypeError``
+        As :func:`cross_mean` raises it, or when ``where`` is not given.
+    ``ValueError``
+        As :func:`cross_mean` raises it. The run raises an error naming the
+        row where ``where`` picks a second row at one stamp: a stamp has one
+        reference row.
+
+    .. rubric:: Examples
+
+    Each symbol's return less the index's return at the same timestamp:
+
+    .. code-block:: python
+
+        import polars as pl
+        from rheon import polars as rp
+
+        df = pl.DataFrame(
+            {
+                "t": [1, 1, 1, 2, 2, 2],
+                "symbol": ["a", "idx", "b", "idx", "a", "b"],
+                "r": [0.01, 0.02, -0.01, 0.01, 0.03, 0.00],
+            }
+        )
+        out = rp.stream.with_windows(
+            df,
+            excess=pl.col("r") - rp.cross_ref("r", where=pl.col("symbol") == "idx"),
+            clock="t",
+            gap_cap=10,
+            group="symbol",
+        )
+        print(out["excess"].round(4).to_list())
+
+    .. code-block:: text
+
+        [-0.01, 0.0, -0.03, 0.0, 0.02, -0.01]
+
+    .. rubric:: Notes
+
+    The oracle under ``"right"`` is a join on the clock with the reference
+    rows, ``df.join(df.filter(where).select(clock, input), on=clock,
+    how="left")``; under ``"left"``, Polars' ``join_asof`` on the reference
+    rows with a value, backward and excluding an exact match. A clock break
+    ends the stamp before, as for :func:`cross_mean`.
+    """
+    return operator("cross_ref", input, closed=closed, where=where, max_state_bytes=max_state_bytes)

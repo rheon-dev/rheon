@@ -336,6 +336,30 @@ model that only the new build has is listed as an addition and passes.
   Polars' readers of the same streams alone, read in turn, peaked at 104,
   199 and 731 MB and Polars' sort of the concatenation at 949 to 1,148 MB.
 
+- **Cross-group operators** (PLAN 557): `rp.cross_mean`, `rp.cross_std`,
+  `rp.cross_rank` and `rp.cross_quantile` reduce every group's row at one
+  stamp of the clock and give each row the result, and `rp.cross_ref`
+  reads one reference row's value (the row its `where=` predicate picks)
+  at each stamp. They run in `rp.stream.with_windows` under a `clock`.
+  Under `closed="right"`, the default, a row reads its own stamp and is
+  held until the stamp closes: Polars' `over(clock)` on the whole frame,
+  to the bit for the mean's, the rank's and the quantile's tests but
+  `"linear"`'s, which Polars reads from an index offset by a group's
+  nulls. Under `closed="left"` a row reads the stamp before, known as it
+  arrives. `neighbors=` names a List column of group keys, and each row
+  reads the rows of the groups its list names. A weight above 0 and a
+  value make a row a member; a cross-section of fewer than two members is
+  null; a stamp earlier than the open one is refused by row. A rank
+  takes Polars' tie rules but `"random"` and no weight; a weighted
+  quantile reads only `"equiprobable"`, NumPy's weighted `inverted_cdf`.
+  The state is the open stamp's rows, held to `max_state_bytes` (256 KB
+  by default, at most 64 MiB, a warning past half and a refusal at the
+  cap naming the row), never the stream's length. A formula target
+  refuses a cross operator, since a model learns each group apart. Held
+  to Polars' `over`, `group_by` and joins, `join_asof`, SciPy's
+  `rankdata` and NumPy's `quantile` on one chunk, and to chunk
+  invariance and a save and load at every stamp.
+
 - **Clock forms for the remaining counts of rows** (task 538, part 2), each
   beside its count and refused with it, each a number of the clock's units
   (rows without a clock) or a duration on a temporal clock, read off the

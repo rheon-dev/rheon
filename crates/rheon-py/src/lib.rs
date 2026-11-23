@@ -1403,6 +1403,15 @@ impl PyWindows {
         let this = slf.try_borrow().map_err(|_| windows_busy("consumed"))?;
         Ok(this.inner.consumed())
     }
+
+    /// The warning a cross-group operator raised, once a run, when a stamp
+    /// took its state past half of its `max_state_bytes`; taken by the call.
+    fn take_warning(slf: &Bound<'_, Self>) -> PyResult<Option<String>> {
+        let mut this = slf
+            .try_borrow_mut()
+            .map_err(|_| windows_busy("take_warning"))?;
+        Ok(this.inner.take_warning())
+    }
 }
 
 /// The name of the format `path`'s extension says it is, or a `ValueError`
