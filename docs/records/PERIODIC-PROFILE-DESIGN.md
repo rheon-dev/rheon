@@ -2,7 +2,14 @@
 # A periodic profile on the clock: the design
 
 A design for PLAN 560 (building block B5), written 2026-11-23 on branch
-`vm/task-560-periodic` off main `c4e7c7d`, before any code. It covers where
+`vm/task-560-periodic` off main `c4e7c7d`, before any code. **Built** on
+that branch in four parts the same day, with the coordinator's answers to
+the questions at the end (a window operator only; the wall clock; mo/q/y
+refused; the row's own bucket; var = fit(x²) − fit(x)², null where
+negative; decay by the clock's age; a harmonic window built, exact;
+`closed="right"` by default; `ewm_quantile`'s sketch; per group; and, by
+ruling, `min_samples` in place of `min_weight`). The notes marked "As
+built" below say where the build departs from the design. It covers where
 the block lives, how a row's phase is read off its clock (time zones and
 daylight saving included), the bucketed and harmonic forms, how a phase not
 yet seen is withheld, decay and a window, the state's bytes, and the

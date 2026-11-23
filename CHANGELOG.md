@@ -91,6 +91,30 @@ model that only the new build has is listed as an addition and passes.
 
 ### Added
 
+- **`rp.ewm_profile`: a column's EW mean, variance, standard deviation or
+  quantile by each row's phase of a period** (PLAN 560), read at the row's
+  own phase, one profile per group, in `rp.stream.with_windows`. The
+  phase is Polars' `t − t.dt.truncate(period)` less an `offset`, on the
+  wall clock of the clock column's own time zone, so a rush hour keeps its
+  phase across a daylight-saving change; a week starts on Monday; a
+  calendar period (`"1mo"`) is refused. `buckets=` keeps a weighted
+  Welford mean and variance per phase, or `ewm_quantile`'s sketch for a
+  quantile; `harmonics=` fits a Fourier series of `x` and `x²` by EW least
+  squares, its variance the fit of `x²` less the fit of `x` squared,
+  withheld where negative or where the rows do not pin the curve down.
+  Each phase decays by the clock's age; `window_size` keeps each phase's
+  rows in two stacks, so a row leaves without a subtraction. A phase is
+  read once it holds `min_samples` rows. `closed="right"` by default, as
+  `rp.ewm_mean`; `"left"` for an adjustment from earlier rows alone. The
+  state is bounded by the period's shape and the window and held to
+  `max_state_bytes` (a warning at half, a refusal at the cap naming the
+  row). Held to Polars' `group_by` over the phase, `zoneinfo` row by row
+  across both daylight-saving changes, NumPy's weighted `inverted_cdf`,
+  statsmodels' `WLS` on `CalendarFourier`'s basis, chunk invariance, and a
+  save and load. `chrono-tz` and `libm`, already in the build through
+  Polars and `rheon-core`, are named by `rheon-polars` for the zone and the
+  harmonic basis.
+
 - **`rp.stream.merge`: streams that each run in clock order, merged into one
   stream in clock order** (PLAN 541). It takes any number of frames or
   queries, by position or in a dict of name to frame, and gives every row
