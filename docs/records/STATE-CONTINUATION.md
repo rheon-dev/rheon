@@ -700,3 +700,14 @@ the probe's `monitor` over spans of 40 rows, every release from 1.0.0 to
 from both halves, every field to the bit but `since_flag`; its release's own
 continuation differs in `stat` from the first span closed after the load
 (row 89: 0.704 against the release's 0.849).
+
+A moved readout, not an exception (the user, 2026-11-23: "Accept"; review
+2026-11-23, STRM-3): `summary()["weight_sum_settled"]` now takes the rows'
+mean weight over the rows that carry weight, the rows of weight 0 left out,
+so a bank state with rows of weight 0 reports another value from the same
+bytes. The kept schema-71 fixture `v71/bank_label_clock` loads, re-saves and
+goes on to the bit as before; only its frozen frame of that one summary field
+was updated, to what its state, loaded and continued, now reports
+(16.398890461263203 where it froze 16.411711841536942), beside the current
+set's regenerated `bank_label_clock`. Its state bytes are untouched, so the
+count of exceptions in CLAUDE.md's rule 5 does not move.
