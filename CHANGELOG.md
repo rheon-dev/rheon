@@ -718,6 +718,15 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **`holt`'s line fit keeps its slope at weights near the ends of the
+  doubles** (review 2026-11-23, REG-5). The spread of the ages took the
+  term `S0·w·ā²/S0'` in that order, so `S0·w` underflowed to 0 at weights
+  near `2^-512` and overflowed near `2^512` beside a long clock step. The
+  slope's gain was then lost: a straight line at every weight `1e-200`
+  forecast 41% short. Where `S0·w·ā²` is not a normal double the term is
+  now formed from `S0/S0'` first; a term formed in range keeps its bits.
+  Only streams at such weights move. Moves: `holt.*`.
+
 - **A coordinate descent that runs to infinities is not converged**
   (review 2026-11-23, LASSO-1). `lasso`'s and the Gram path's descent end
   when a sweep's largest move is under the tolerance. On a correlation

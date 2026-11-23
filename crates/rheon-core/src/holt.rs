@@ -232,7 +232,20 @@ impl Holt {
         // gain `w·ā·∞` made the trend NaN for good (review fable2, C7).
         let r0 = 1.0 / s0_new;
         let age = s0 * aged * r0;
-        let spread = self.fit_spread[j] + s0 * w * aged * aged * r0;
+        // The spread's term `S0·w·ā²/S0'`. Where `S0·w·ā²` is not a normal
+        // double -- weights near `2^{-512}`, or near `2^{512}` with a long
+        // clock step -- the term is formed from `S0/S0'`, in [0, 1], first:
+        // `S0·w` underflowed to 0 and lost the slope's gain, or overflowed
+        // and left it 0 for good, where the term itself is in range (review
+        // 2026-11-23, REG-5). A term formed in range keeps its bits.
+        let swa = s0 * w * aged * aged;
+        let term = swa * r0;
+        let term = if swa.is_normal() && term.is_normal() {
+            term
+        } else {
+            s0 * r0 * w * aged * aged
+        };
+        let spread = self.fit_spread[j] + term;
         self.fit_weight[j] = s0_new;
         self.fit_age[j] = age;
         self.fit_spread[j] = spread;
@@ -1870,6 +1883,48 @@ mod tests {
                 );
             }
             assert!((last - 4.99).abs() < 1e-2, "{w0:e}, {d1:e}: {last}");
+        }
+    }
+
+    /// Scaling every weight by a power of two moves no prediction past
+    /// rounding while the line fit's spread is inside the doubles (review
+    /// 2026-11-23, REG-5): it was formed as `S0 · w · ā² / S0'`, whose
+    /// `S0 · w` underflowed at `w = 2^{-660}` (the slope's gain lost, the
+    /// forecast of a straight line 41% short) and overflowed at `w =
+    /// 2^{330}` with a clock step of `10^60` (the slope's gain 0 for good).
+    /// Out of range it is formed as `(S0 / S0') · w · ā²`, each factor in
+    /// range, which rounds otherwise than the plain form.
+    #[test]
+    fn scaling_every_weight_by_a_power_of_two_moves_no_prediction() {
+        for (scale, step) in [
+            (2f64.powi(-660), 1.0),
+            (2f64.powi(330), 1e60),
+            (2f64.powi(-900), 1e30),
+        ] {
+            for hl in [5.0 * step, f64::INFINITY] {
+                let run = |w: f64| {
+                    let mut m = Holt::new(cfg(hl, 4.0 * hl)).unwrap();
+                    let mut s = 3u64;
+                    (0..60)
+                        .map(|i| {
+                            let y = 10.0 * i as f64 + lcg(&mut s);
+                            let d = if i == 0 {
+                                0.0
+                            } else {
+                                step * (1.0 + 0.5 * lcg(&mut s))
+                            };
+                            m.step(&[], &[Some(y)], d, w * (1.5 + lcg(&mut s))).pred[0]
+                        })
+                        .collect::<Vec<_>>()
+                };
+                let (got, want) = (run(scale), run(1.0));
+                for (i, (g, w)) in got.iter().zip(&want).enumerate() {
+                    assert!(
+                        g.to_bits() == w.to_bits() || (g - w).abs() <= 1e-12 * w.abs(),
+                        "{scale:e}, {step:e}, {hl}: row {i}, {g} against {w}"
+                    );
+                }
+            }
         }
     }
 }
