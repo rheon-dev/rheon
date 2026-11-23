@@ -74,9 +74,13 @@ def _wall(clock: str, keep_unit: bool) -> pl.Expr:
 
 def _check_order(order: object, who: str) -> int:
     if isinstance(order, bool) or not isinstance(order, int):
-        raise WrongTypeError(f"{who}: order must be an int, but it is {order!r}.")
+        raise WrongTypeError(
+            f"{who}: order must be an int, but it is {order!r}. Give the number of harmonics."
+        )
     if order < 1:
-        raise ValueError(f"{who}: order must be at least 1, but it is {order}.")
+        raise ValueError(
+            f"{who}: order must be at least 1, but it is {order}. Give 1 or more harmonics."
+        )
     return order
 
 
@@ -94,7 +98,7 @@ def _origin_ns(origin: object, who: str) -> int:
     else:
         raise WrongTypeError(
             f"{who}: the period is a duration, so origin must be a date or a datetime, "
-            f"but it is {origin!r}."
+            f"but it is {origin!r}. Give origin as a date or a naive datetime."
         )
     return (delta.days * 86_400 + delta.seconds) * 10**9 + delta.microseconds * 1_000
 
@@ -118,12 +122,14 @@ def fourier(
     """
     who = "fourier"
     if not isinstance(clock, str):
-        raise WrongTypeError(f"{who}: clock must be a column name, but it is {clock!r}.")
+        raise WrongTypeError(
+            f"{who}: clock must be a column name, but it is {clock!r}. Pass the name as a str."
+        )
     order = _check_order(order, who)
     if isinstance(period, (bool, float)):
         raise WrongTypeError(
             f"{who}: period must be an int on an integer clock or a duration on a temporal "
-            f"one, but it is {period!r}."
+            f'one, but it is {period!r}. Give an int, or a duration such as "1d".'
         )
     if isinstance(period, int):
         p = period
@@ -132,7 +138,7 @@ def fourier(
         if isinstance(t0, bool) or not isinstance(t0, int):
             raise WrongTypeError(
                 f"{who}: the period is an int, so origin must be an int of the clock's units, "
-                f"but it is {origin!r}."
+                f"but it is {origin!r}. Give origin as an int."
             )
         t = pl.max_horizontal((cs.by_name(clock) & cs.integer()).as_expr()).cast(pl.Int64)
     else:
@@ -142,21 +148,26 @@ def fourier(
         except ValueError as e:
             if isinstance(period, str) and period.endswith(("mo", "q", "y")):
                 raise ValueError(
-                    f"{who}: period {period!r} is a calendar unit, whose length varies; "
-                    "calendar_fourier takes it."
+                    f"{who}: period {period!r} is a calendar unit, whose length varies. "
+                    "Use calendar_fourier for it."
                 ) from None
             if str(e).startswith(who):
                 raise
-            raise ValueError(f"{who}: period {e}") from None
+            reason = str(e).rstrip(".")
+            raise ValueError(
+                f'{who}: period {reason}. Give a fixed duration such as "1d".'
+            ) from None
         label = format_duration(p)
         t0 = (_MONDAY_NS if p % _WEEK_NS == 0 else 0) if origin is None else _origin_ns(origin, who)
         t = _wall(clock, keep_unit=False).dt.epoch("ns")
     if p <= 0:
-        raise ValueError(f"{who}: period must be above 0, but it is {label}.")
+        raise ValueError(
+            f"{who}: period must be above 0, but it is {label}. Give a positive period."
+        )
     if p * order >= 2**63:
         raise ValueError(
             f"{who}: period {label} times order {order} must stay below 2**63 so the "
-            "reduction is exact in Int64; lower the order."
+            "reduction is exact in Int64. Lower the order."
         )
     # (t - t0) mod P, without forming t - t0, which may overflow Int64.
     base = ((t % p) - (t0 % p)) % p
@@ -183,12 +194,14 @@ def calendar_fourier(clock: str, *, freq: str, order: int) -> list[pl.Expr]:
     calendar day."""
     who = "calendar_fourier"
     if not isinstance(clock, str):
-        raise WrongTypeError(f"{who}: clock must be a column name, but it is {clock!r}.")
+        raise WrongTypeError(
+            f"{who}: clock must be a column name, but it is {clock!r}. Pass the name as a str."
+        )
     order = _check_order(order, who)
     if freq not in _CALENDAR:
         raise ValueError(
             f"{who}: freq must be one of {', '.join(_CALENDAR)}, but it is {freq!r}. "
-            "A fixed span of several units is fourier's period."
+            "For a fixed span of several units, use fourier's period."
         )
     t = _wall(clock, keep_unit=True)
     start = t.dt.truncate(freq)
