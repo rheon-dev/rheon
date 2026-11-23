@@ -461,6 +461,46 @@ class TestMerge:
         # lose a digit or more over the same split.
         assert max(worst.values()) < 1e-8, worst
 
+    @pytest.mark.parametrize("within", [False, True])
+    @pytest.mark.parametrize("fit_intercept", [True, False])
+    def test_a_part_with_no_weight_on_a_target_takes_nothing_from_it(self, within, fit_intercept):
+        """A part whose target has no weight, its moments for that target
+        NaN as a Gram from elsewhere may hold them (review 2026-11-23,
+        MATH-3): the merge weighted each by its share, and ``0 * nan`` made
+        the pooled target's moments NaN. The merge with it is the other part
+        alone, for that target."""
+        df = gappy_stream(n=1500, seed=3)
+        bank = fit(df, targets=["ya", "yb"], target_gaps="pairwise", fit_intercept=fit_intercept)
+        (g,) = bank.gram("m")
+        empty = {k: (v.copy() if isinstance(v, np.ndarray) else v) for k, v in g.items()}
+        t = 1
+        empty["target_weights"][t] = 0.0
+        for key in (
+            "target_means",
+            "target_vars",
+            "cross_moments",
+            "cross_centered",
+            "means_by_target",
+        ):
+            if empty.get(key) is not None:
+                empty[key] = np.asarray(empty[key], dtype=float).copy()
+                empty[key][t] = np.nan
+        merged = pg.merge([g, empty], within=within)
+        alone = pg.merge([g, g], within=within)
+        for key in (
+            "target_vars",
+            "cross_moments",
+            "cross_centered",
+            "target_means",
+            "means_by_target",
+        ):
+            got, want = merged.get(key), alone.get(key)
+            if got is None or want is None:
+                continue
+            got, want = np.asarray(got, dtype=float)[t], np.asarray(want, dtype=float)[t]
+            assert np.all(np.isfinite(got)), (key, got)
+            assert got == pytest.approx(want, rel=1e-9, abs=1e-12), key
+
     def test_merging_one_gram_returns_it_unchanged(self):
         """Review 2026-10-05 (YB8): the docstring says so, and the merge of one
         part came back with ``group`` and ``instance`` None and without its

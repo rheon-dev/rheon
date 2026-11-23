@@ -718,6 +718,16 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **`rheon.gram.merge` takes nothing from a part with no weight on a
+  target** (review 2026-11-23, MATH-3). The merge weights each part's
+  target moments by its share of the target's weight, so a part with none
+  entered at a share of 0. A Gram built elsewhere may hold NaN for a target
+  it has no rows of, and `0 · NaN` made the pooled moments NaN, under
+  `within=True` too. A part's moments for a target it has no weight on are
+  now read as 0, and the merge with it is the other parts alone for that
+  target. The Grams `ModelBank.gram()` returns hold 0 there and merge as
+  before.
+
 - **`rheon.gram.coef_stats` counts an intercept off the fit in the
   residuals** (review 2026-11-23, MATH-4). Its residual variance was the
   residuals' variance about their own mean, so coefficients whose
