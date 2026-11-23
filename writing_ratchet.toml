@@ -626,6 +626,10 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [messages."crates/rheon-core/src/clock_span.rs"]
 
+[messages."crates/rheon-core/src/ddsketch.rs"]
+
+[messages."crates/rheon-core/src/ddsketch_model.rs"]
+
 [messages."crates/rheon-core/src/expectile.rs"]
 
 [messages."crates/rheon-core/src/family.rs"]
@@ -669,6 +673,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [messages."python/rheon/polars/_clock.py"]
 
+[docstrings."python/rheon/_spec_ddsketch.py"]
+
 [docstrings."python/rheon/_spec_expectile.py"]
 
 [docstrings."python/rheon/_spec_garch.py"]
@@ -686,6 +692,10 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."crates/rheon-core/src/bocpd/span.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/clock_span.rs#messages"]
+
+[vocabulary."crates/rheon-core/src/ddsketch.rs#messages"]
+
+[vocabulary."crates/rheon-core/src/ddsketch_model.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/expectile.rs#messages"]
 
@@ -718,6 +728,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."python/rheon/_cpu_check.py#messages"]
 
 [vocabulary."python/rheon/_env.py#messages"]
+
+[vocabulary."python/rheon/_spec_ddsketch.py#docstrings"]
 
 [vocabulary."python/rheon/_spec_expectile.py#docstrings"]
 

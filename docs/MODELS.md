@@ -1,7 +1,7 @@
 <!-- kind: reference -->
 # Models
 
-The reference entry of each of the twenty-seven models a spec can name, by
+The reference entry of each of the twenty-eight models a spec can name, by
 family, for a reader who knows which model they want to look up. A
 model's parameters, their defaults and its refusals are in its docstring,
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md).
@@ -28,7 +28,7 @@ which models keep each, and why.
 
 ## The models at a glance
 
-The twenty-seven models fall into four families, and each family answers one
+The twenty-eight models fall into four families, and each family answers one
 kind of question about a stream. Each name links its builder's reference
 page, which gives its keywords and their defaults, and *entry* links its
 entry on this page. [Choose a model](how-to/choose-a-model.md) says which
@@ -57,6 +57,7 @@ to start with for which question.
 | [`audit`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.audit) · [entry](#audit--what-a-streams-columns-hold) | accumulate | what each column holds, counted in one pass: nulls, NaNs and infinities apart, repeated values, runs, persistence, tails and duplicated columns, and the clock's duplicate stamps and gaps, read back as a table and by `bank.check()` |
 | [`garch`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.garch) · [entry](#garch--how-large-will-the-next-return-be) | step | the GARCH family, a conditional variance for each return series: GARCH(1,1), GJR, EGARCH and FIGARCH, with normal, Student-t or skewed-t innovations, its parameters learned a row at a time after a start fitted by likelihood |
 | [`tdigest`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.tdigest) · [entry](#tdigest--where-do-this-columns-quantiles-stand) | accumulate | quantiles of each column at the levels you list, from a merging t-digest whose error is uniform in rank, each level withheld until the rows identify it |
+| [`ddsketch`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ddsketch) · [entry](#ddsketch--how-large-are-this-columns-quantiles-and-tails) | accumulate | quantiles and tail means of each column within a relative accuracy `alpha` of the value, from a DDSketch over every row or over a window of rows or of the clock |
 | **[Clustering and classification](#clustering-and-classification)** | | put labels on rows |
 | [`kmeans`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.kmeans) · [entry](#kmeans--exponentially-weighted-k-means) | step | exponentially weighted k-means: cluster labels assigned before the row is learned from, with a split–merge move that finds a cluster born after seeding |
 | [`micro`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.micro) · [entry](#micro--density-based-clustering-any-shape) | step | density-based clustering: DenStream micro-clusters linked into clusters of any shape and number, flagging the rows that belong to none |
@@ -267,7 +268,7 @@ per target, give `min_weight` a list. The default depends on the model:
 | the feature count plus one (1 for `holt`) | `ew_cov`, `ew_class`, `kmeans`, `micro`, `holt` |
 | 3 | `marginal`, `deco` |
 | 1 | `bocpd` |
-| 0, each having a gate of its own or nothing to gate | `ewridge`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes`, `garch`, `tdigest` |
+| 0, each having a gate of its own or nothing to gate | `ewridge`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes`, `garch`, `tdigest`, `ddsketch` |
 
 **`min_settled_frac` is off by default.** Set it when the half-life was
 chosen to average over regimes or seasons that a shorter history would not
@@ -3151,6 +3152,88 @@ median and smallest in the tails, where `k_1` keeps the centroids small.
 **A read costs a merge.** Each row's read merges a copy of the buffer into
 the centroids, `O(δ log δ)` a target, so a digest of compression 100 costs
 more a row than a running moment does.
+
+### `ddsketch` — how large are this column's quantiles and tails?
+
+*API:* [`rheon.spec.ddsketch`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ddsketch) — *Rust:* [`ddsketch_model.rs`](../crates/rheon-core/src/ddsketch_model.rs) — *Outputs:* [fields](OUTPUTS.md#ddsketch)
+
+Quantiles of each target column, read at the levels you list from a DDSketch
+whose error is relative to the value, each beside the mean of the tail past
+it: the value at risk and the expected shortfall. Each row reports every
+level from the rows before it, so a row's own value is never in its own
+quantile.
+
+Use it where a reading within 1% of the true quantile is what is asked,
+whatever the value's size: latencies, sizes, prices, losses. Each target has
+its own sketch in each group. Without a window it never forgets; with
+`window_rows` (the last rows of positive weight) or `window_size` (the rows
+of the last span of the clock) it reads the window's rows alone. For values
+near 0 or of both signs whose rank matters, use `tdigest`.
+
+Its parameters, their defaults and what each refuses are in its
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ddsketch),
+and the fields it writes in [OUTPUTS.md](OUTPUTS.md#ddsketch). The
+parameters every spec takes are in [What every spec
+takes](#what-every-spec-takes), apart from `features`, `half_life` and
+`lam`, which it refuses. A decay would round every bucket's weight on every
+row, and no row could then be taken out exactly; the window is the form that
+forgets. A row's weight is its mass in the sketch, and scaling every weight
+changes nothing but `weight_sum`. A row of weight 0 counts in no clock and
+is in no window.
+
+#### The update
+
+With `γ = (1 + α)/(1 − α)`, a value `x > 0` goes to the bucket
+`k = ⌈log_γ x⌉`, which covers `(γ^(k−1), γ^k]` and reads `2γ^k/(1 + γ)`,
+within `α` of every value in it. This is Masson, Rim and Lee's sketch (2019)
+with the `ddsketch` package's logarithmic mapping. A negative value goes to a second
+store by its magnitude, and one within about `2.2e-308` of 0 to a count of
+its own. For a row of weight `w` and value `y`:
+
+```text
+q_p,t  = the representative of the first bucket, in value order, whose weight reaches p W_t
+es_p,t = (Σ_{k<j} c_k r_k + (m − C_{j−1}) r_j) / m
+D_t    ← D_t + (y, w)           when w > 0 and y is present
+W_t    ← W_t + w,   S_t ← S_t + w²
+```
+
+The tail is the lower one below a level of 0.5, `m = p W_t` from the
+smallest value, and the upper one above it, `m = (1 − p) W_t` from the
+largest; 0.5 itself is refused by name. The bucket the tail ends in counts
+only the weight the tail still needs, so the tail's mean is within `α` times
+the tail's mean magnitude of the exact one, and the quantile within `α` of
+the exact quantile (numpy's `inverted_cdf` over the rows). The logarithm and
+the power are summed from their series in plain arithmetic, so a row's
+bucket is the same on every platform.
+
+**A window takes a row out exactly.** A ring keeps each row's weight and, per
+target, its bucket; a row leaving takes its weight out of its bucket, and a
+bucket whose rows have all left is removed, so the sketch is the one the
+window's rows alone build. A clock window's rows leave at the first row at
+or after the one they age out on, before that row's read; `closed` decides
+whether a row exactly `window_size` old stays. Under a window, `weight_sum`
+is the weight of the rows the row reads.
+
+**A level is withheld until its rows identify it**, by `tdigest`'s rule:
+null while `p (n_t + 1) < 1` or `(1 − p)(n_t + 1) < 1`, `n_t` Kish's
+effective size of the rows, with `withheld_reason` `level_beyond_sample`.
+
+**State.** Each store keeps its live buckets alone, 12 bytes each (16 under
+a window, with a row count): at most the data's log-range over `ln γ`,
+about 1,470 a store for values spanning `1e-5` to `1e5` at the default `α`,
+whatever the stream's length. A row window adds `window_rows (8 + 4m)` bytes
+for `m` targets, checked at the call; the buckets and a clock window's rows
+are checked against `max_state_bytes` as the rows go in, said past half of
+it and refused at it.
+
+#### Notes
+
+**Against the `ddsketch` package and exact reads.** The streams were normal,
+lognormal, Student-t(3) and Pareto(2.5), 100,001 rows each over 20 seeds.
+Every bucket's key and count was the package's, and each representative and
+each quantile was the package's within 2 ulps. Each quantile was within `α`
+of the exact quantile, and each tail mean within `α` times the tail's mean
+magnitude of the exact tail mean, with weights of 1 and of many sizes.
 
 ## Clustering and classification
 

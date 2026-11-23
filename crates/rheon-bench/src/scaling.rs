@@ -238,6 +238,15 @@ pub const CELLS: &[Cell] = &[
     cell("tdigest.targets", 1, 8, Pow(1), Pow(1)),
     cell("tdigest.compression", 50, 8, Frac(5, 4), Pow(1)),
     cell("tdigest.history", 1000, 8, Const, Const),
+    // A row walks each target's live buckets, which the values' range bounds,
+    // not the stream's length: a stream that keeps widening its range (as an
+    // unbounded distribution's extremes do, about 300 buckets a decade of
+    // rows for a normal) adds buckets as the log of its rows. A row window's
+    // ring holds its rows, the walk over the window's buckets alone (task
+    // 544, part 7).
+    cell("ddsketch.targets", 1, 8, Pow(1), Pow(1)),
+    cell("ddsketch.window", 100, 8, Log, Pow(1)),
+    cell("ddsketch.history", 1000, 8, Log, Log),
     // --- the bank, `Bank::fit_predict` on a pool of one thread --------------
     cell("bank.groups_seen", 250, 8, Const, Pow(1)),
     // The same in calls of four rows, each to one group: what a call costs
@@ -1153,6 +1162,25 @@ fn model_case(id: &str, n: usize) -> ModelCase {
                 "history" => c.warm(n.max(1000) / 80 * 80),
                 // a block of two buffers' rows, so each reads every fill
                 "compression" => c.warm(16 * n).block(16 * n),
+                _ => c,
+            }
+        }
+        ("ddsketch", "targets" | "window" | "history") => {
+            let mut model = json!({"type": "ddsketch", "quantiles": [0.05, 0.25, 0.95]});
+            if dim == "window" {
+                model["window_rows"] = json!(n);
+            }
+            let s = json!({
+                "name": "m",
+                "model": model,
+                "targets": names("y", if dim == "targets" { n } else { 1 }),
+                "features": [],
+            });
+            let c = ModelCase::new(s, lin);
+            match dim {
+                "history" => c.warm(n.max(1000)),
+                // a window filled before the block
+                "window" => c.warm(2 * n),
                 _ => c,
             }
         }

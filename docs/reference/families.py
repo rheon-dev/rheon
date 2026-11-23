@@ -97,7 +97,17 @@ FAMILIES: tuple[Family, ...] = (
         "spec",
         tuple(
             f"{_SPEC}.{m}"
-            for m in ("ew_cov", "marginal", "deco", "rcov", "audit", "hmm", "garch", "tdigest")
+            for m in (
+                "ew_cov",
+                "marginal",
+                "deco",
+                "rcov",
+                "audit",
+                "hmm",
+                "garch",
+                "tdigest",
+                "ddsketch",
+            )
         ),
     ),
     Family(

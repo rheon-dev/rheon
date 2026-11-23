@@ -251,6 +251,9 @@ what = "garch, FIGARCH of 1,000 lags after its start: AnyModel::step_into, its O
 [instructions.tdigest]
 what = "tdigest, one column at compression 100, three levels: AnyModel::step_into, a merge of a copy of its buffer a row; its budget is CI's first count"
 
+[instructions.ddsketch]
+what = "ddsketch, one column at the default alpha, three levels: AnyModel::step_into, a walk of its live buckets a row for the levels and tail means; its budget is CI's first count"
+
 [instructions.audit_continuous]
 what = "audit, one continuous column, 256 counters: AnyModel::step_into, into one kept Step, past the cap on nearly every row"
 budget = 847018
@@ -1556,6 +1559,25 @@ variance_y = { budget = 8.125 }
 variance_z = { budget = 8.125 }
 weight_sum = { budget = 8.0 }
 withheld_reason = { budget = 1.125 }
+
+[memory.ddsketch]
+"es0.05_y" = { budget = 8.125 }
+"es0.05_z" = { budget = 8.125 }
+"es0.25_y" = { budget = 8.125 }
+"es0.25_z" = { budget = 8.125 }
+"es0.95_y" = { budget = 8.125 }
+"es0.95_z" = { budget = 8.125 }
+learned_clock = { budget = 8.125 }
+"q0.05_y" = { budget = 8.125 }
+"q0.05_z" = { budget = 8.125 }
+"q0.25_y" = { budget = 8.125 }
+"q0.25_z" = { budget = 8.125 }
+"q0.95_y" = { budget = 8.125 }
+"q0.95_z" = { budget = 8.125 }
+scored_clock = { budget = 8.0 }
+settled_frac = { budget = 8.125 }
+weight_sum = { budget = 8.0 }
+withheld_reason = { budget = 1.0 }
 
 [memory.tdigest]
 "es0.05_y" = { budget = 8.125 }

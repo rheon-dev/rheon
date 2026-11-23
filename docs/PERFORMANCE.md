@@ -533,7 +533,8 @@ column has the four native ratios from large to small, as measured on
 `hawkes` cells' on 2026-11-21 by a debug build at a load of 5. The four
 `expectile` cells' were measured on 2026-11-21 the same way, at a load of 14, and the three
 `garch` cells the same day the same way, at a load of 11. The three
-`tdigest` cells were measured on 2026-11-22 the same way, at a load of 3. The two `.window` cells were
+`tdigest` cells were measured on 2026-11-22 the same way, at a load of 3, and the three
+`ddsketch` cells on 2026-11-23 the same way, at a load of 2. The two `.window` cells were
 measured again on 2026-11-06, once a window's snapshots were laid out
 flat. A row's time and allocations are per
 row; the saved state and the heap are the state's. `(CI)` marks the 25 cells
@@ -636,6 +637,9 @@ largest buffer at the smaller.
 | `tdigest.targets` | targets T, a digest each | 1 → 8 | O(n) | O(n) | each target's digest is read from a merged copy and learns its own row | 8.05 · 7.99 · 7.68 · 4.97 |
 | `tdigest.compression` | the compression δ | 50 → 400 | O(n^(5/4)) | O(n) | a row's read merges a copy of up to 8δ buffered rows into δ + 1 centroids, sorting them: O(δ log δ); the state holds both | 10.34 · 1.13 · 6.63 · 6.89 |
 | `tdigest.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | the centroids are at most δ + 1 and the buffer at most 8δ rows, whatever the stream's length | 1.02 · 1.00 · 1.02 · 1.00 |
+| `ddsketch.targets` | targets T, a sketch each | 1 → 8 | O(n) | O(n) | each target's live buckets are walked for its levels and tail means, and learn its own row | 2.41 · 4.49 · 1.76 · 1.63 |
+| `ddsketch.window` | a row window W | 100 → 800 | O(log n) | O(n) | a row walks the window's live buckets, which grow with the range its rows span; the ring holds W rows, 8 + 4 bytes each | 2.51 · 1.00 · 5.64 · 4.10 |
+| `ddsketch.history` | rows already seen | 1,000 → 8,000 | O(log n) | O(log n) | the live buckets are the values' distinct ones, which an unbounded stream's widening range adds as the log of its rows | 1.47 · 1.00 · 1.24 · 1.30 |
 | `bank.groups_seen` (CI) | groups seen G (a block over 50 of them) | 250 → 2,000 | O(1) | O(n) | a row touches its group's state alone; a state a group | 1.03 · 1.00 · 7.99 · 7.14 |
 | `bank.groups_seen_per_call` (CI) | groups seen G, calls of four rows to one group each | 1,000 → 8,000 | O(1) | O(n) | a call finds each of its groups' state by key and takes only their notices; a state a group | 1.00 · 1.00 · 7.98 · 7.33 |
 | `bank.specs` (CI) | specs S, one set of columns | 1 → 8 | O(n) | O(n) | each spec steps its model, S | 8.28 · 7.67 · 7.80 · 7.23 |

@@ -48,7 +48,16 @@ FAMILIES: dict[str, tuple[str, ...]] = {
         "expectile",
         "holt",
     ),
-    "Moments and correlation": ("ew_cov", "marginal", "deco", "rcov", "audit", "garch", "tdigest"),
+    "Moments and correlation": (
+        "ew_cov",
+        "marginal",
+        "deco",
+        "rcov",
+        "audit",
+        "garch",
+        "tdigest",
+        "ddsketch",
+    ),
     "Clustering and classification": ("kmeans", "micro", "ew_class"),
     "Sequential tests and regimes": ("seqtest", "corrchange", "bocpd", "hmm", "hawkes"),
 }
@@ -115,13 +124,12 @@ MEANING: dict[str, str] = {
     "std_resid_<t>": "`<t>` over the square root of its variance on this row",
     "forecast_<t>": "the variance of `<t>` `horizon - 1` rows past this one, from the same rows",
     "q<level>_<t>": (
-        "the quantile of `<t>` at `<level>` over the rows before this one, read from its t-digest "
-        "before the row is added"
+        "the quantile of `<t>` at `<level>` over the rows before this one (a window's, under a "
+        "window), read from its sketch before the row is added"
     ),
     "es<level>_<t>": (
-        "the mean of `<t>` past `q<level>_<t>` (expected shortfall) over the rows before this "
-        "one, the t-digest's own curve averaged over the tail: the lower tail at a level "
-        "below 0.5, the upper above it"
+        "the mean of `<t>` past `q<level>_<t>` (expected shortfall) over the same rows, from the "
+        "same sketch: the lower tail at a level below 0.5, the upper above it"
     ),
     "u": (
         "the equicorrelation this row alone implies"

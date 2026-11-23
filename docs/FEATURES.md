@@ -14,7 +14,7 @@ pages by the task you have in hand.
 
 | family | its features |
 |---|---|
-| [Models](#models) | the twenty-seven models a spec can name |
+| [Models](#models) | the twenty-eight models a spec can name |
 | [Running a bank](#running-a-bank) | a bank in a query, in a Python loop, and its output as Arrow |
 | [Saving, loading and serving](#saving-loading-and-serving) | a bank's state, written and read back |
 | [Reading a bank](#reading-a-bank) | what a bank holds, and the names of its output |
@@ -64,6 +64,7 @@ to start with.
 | [`rheon.spec.hawkes`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.hawkes) | a self-exciting point process, fitted exactly by least squares | [entry](MODELS.md#hawkes--how-much-does-each-event-excite-the-next) |
 | [`rheon.spec.garch`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.garch) | the GARCH family: a conditional variance for each return series, its parameters learned a row at a time | [entry](MODELS.md#garch--how-large-will-the-next-return-be) |
 | [`rheon.spec.tdigest`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.tdigest) | quantiles of each column at the levels you list, from a merging t-digest, uniform in rank | [entry](MODELS.md#tdigest--where-do-this-columns-quantiles-stand) |
+| [`rheon.spec.ddsketch`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ddsketch) | quantiles and tail means of each column within a relative accuracy, from a DDSketch, over every row or a window | [entry](MODELS.md#ddsketch--how-large-are-this-columns-quantiles-and-tails) |
 
 ## Running a bank
 

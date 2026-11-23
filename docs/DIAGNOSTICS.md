@@ -1154,7 +1154,7 @@ prediction's `withheld_reason` names the gate that held it:
 | `warm_rows` (`kmeans`, `hmm`, `bocpd`): the rows a model learns from before it has seeded its centers, states or prior; `kalman`'s rows before a target's prior is sized | `below_warm_rows` |
 | none, the solve itself (`ewridge`): a fit whose normal equations are past the condition at which a solve keeps a digit, see [`ewridge`](MODELS.md#ewridge--exponentially-weighted-ridge-regression) | `ill_conditioned` |
 | none, the learning rate itself (`sgd`): a target whose recent steps' gains have a mean square above twice their mean, so each step grows its own row's residual and the fit diverges | `unstable_rate` |
-| none, the sample itself (`tdigest`): a quantile level past the expected level of the smallest or largest of the `n` rows before it, `1/(n + 1)` or `n/(n + 1)`, see [`tdigest`](MODELS.md#tdigest--where-do-this-columns-quantiles-stand) | `level_beyond_sample` |
+| none, the sample itself (`tdigest`, `ddsketch`): a quantile level past the expected level of the smallest or largest of the `n` rows before it, `1/(n + 1)` or `n/(n + 1)`, see [`tdigest`](MODELS.md#tdigest--where-do-this-columns-quantiles-stand) | `level_beyond_sample` |
 
 The reasons are listed in their order of precedence, which is the order
 `withheld_reason` reports them in. `max_error_inflation` is on by default

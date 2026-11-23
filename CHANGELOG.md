@@ -66,6 +66,25 @@ model that only the new build has is listed as an addition and passes.
 
 ### Added
 
+- **`rheon.spec.ddsketch`: quantiles and tail means of each column within a
+  relative accuracy** (PLAN 544). A spec of `type = "ddsketch"` takes its
+  columns as `targets`, the levels as `quantiles=[...]` and an `alpha`
+  (default `tanh(1/128)`, about 0.0078), and writes `q<level>_<column>` and
+  `es<level>_<column>` for each level and column, read before the row is
+  added, beside `weight_sum`, `settled_frac` and `withheld_reason`; no
+  `pred` or `coef`. Each column has its own DDSketch in each group (Masson,
+  Rim and Lee's sketch with the `ddsketch` package's logarithmic mapping,
+  sparse stores), every quantile within `alpha` of the exact one and every
+  tail mean (the partial-mass rule over the buckets) within `alpha` times
+  the tail's mean magnitude; its buckets and quantiles are the `ddsketch`
+  package's (3.0.1). `window_rows` or `window_size` (with `closed`) reads a
+  window's rows alone, a ring taking each row out of its bucket exactly; a
+  `half_life` or `lam` is refused, naming the window. A level is null until
+  its rows identify it (`level_beyond_sample`), and 0.5 is refused by name.
+  The buckets are checked against `max_state_bytes` as the rows go in. The
+  state file gains the variant `DdSketch`, with no schema change (72 is
+  unreleased).
+
 - **`rheon.spec.tdigest`: quantiles of each column from a merging
   t-digest** (PLAN 544). A spec of `type = "tdigest"` takes its columns as
   `targets`, the levels as `quantiles=[...]` and a `compression` (default
