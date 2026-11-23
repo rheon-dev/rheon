@@ -1087,3 +1087,36 @@ class TestARateOf1e300:
         assert np.isfinite(pred[served]).all(), "a served prediction is not finite"
         assert (reasons.drop_nulls() == "below_min_weight").all()
         assert notices == []
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="REG-3: confirmed; the row-weight unit is frozen at the warm-up by design "
+    "(review fable2, C1's rule A), a decision for the user",
+)
+def test_a_fall_in_the_weights_does_not_freeze_the_fit():
+    """Review 2026-11-23, REG-3: the scaler's unit of weight, one row's
+    ``Σw² / Σw``, is frozen once its warm-up ends. When the weights then
+    fall a million-fold, each row steps the fit a millionth of a row, and
+    after fourteen half-lives on the new rows the slope has not left the
+    old regime's 0, where a weighted least squares on the same rows has
+    long forgotten it."""
+    rng = np.random.default_rng(3)
+    n0, n1 = 25, 275
+    x = rng.standard_normal(n0 + n1)
+    y = np.concatenate([np.zeros(n0), 3.0 * x[n0:] + 0.01 * rng.standard_normal(n1)])
+    w = np.concatenate([np.ones(n0), np.full(n1, 1e-6)])
+    df = pl.DataFrame({"x": x, "y": y, "w": w})
+    spec = rp.spec.sgd(
+        "s",
+        targets=["y"],
+        features=["x"],
+        weight="w",
+        half_life=20.0,
+        min_weight=0.0,
+        standardize=True,
+    )
+    bank = rp.ModelBank([spec])
+    bank.fit(df)
+    slope = bank.coef().filter(pl.col("term") == "x")["coef"][0]
+    assert slope == pytest.approx(3.0, rel=0.1)
