@@ -2701,7 +2701,7 @@ def seqtest(
         # and `t`.
         msg = (
             f"{who}: targets must be a list of column names, but it is the string "
-            f"{targets!r}. Give [{targets!r}]."
+            f"{targets!r}. Give the names in a list, such as [{targets!r}]."
         )
         raise WrongTypeError(msg)
     probe = _probe(df)
