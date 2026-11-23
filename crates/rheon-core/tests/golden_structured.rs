@@ -166,6 +166,19 @@ fn micro_blobs_golden() {
     for r in 0..3 {
         assert_eq!(id(r), id(r + 3), "blob {r} changed summary");
     }
+    // The derived link's known limit, which the docstring's table of
+    // symptoms and the how-to on `eps` name (`n_micro` about the number of
+    // clusters): with each blob one summary, the nearest-neighbour spacing
+    // it is derived from is the gap between the blobs, and 1.5 times it
+    // links them, so the macro label is one for all three. At an `eps`
+    // that gives each blob many summaries the spacing is the summaries'
+    // own and the blobs stay apart (`truth_recovery.micro_blobs`, 50 seeds
+    // at `eps = 0.1`); `micro_blobs_linked_golden` gives `macro_link`.
+    let label = |r: usize| got[3 * r];
+    assert!(
+        (0..6).all(|r| label(r) == label(0)),
+        "the derived link kept lone summaries apart: {got:?}"
+    );
     for r in 0..6 {
         let dist = got[3 * r + 1];
         assert!(dist > 0.0 && dist < 1.0, "row {r}: {dist}");
