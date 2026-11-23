@@ -1536,10 +1536,13 @@ impl Sgd {
             match lr_row {
                 Some(lr) => g.is_finite().then(|| -(lr * g)),
                 None => {
-                    if !(g * g).is_finite() {
+                    // The sum with the square in it, not the square alone:
+                    // a sum past the largest double is kept for good
+                    // (REG-9).
+                    let s = sums[i] + g * g;
+                    if !s.is_finite() {
                         return None;
                     }
-                    let s = sums[i] + g * g;
                     gbuf[i] = s;
                     Some(-adagrad_step(lr0, s, ada_eps, g))
                 }
@@ -1866,9 +1869,12 @@ pub(crate) fn unscaled(beta: &[Vec<f64>], sc: &EwDiag, fit_intercept: bool) -> V
 }
 
 /// Whether every slope's gradient `g_i = clip(d·z_i·w + l2·β_i)` is a
-/// finite number -- under AdaGrad (`squared`), whether `g_i²` is, which
-/// `g2` would keep for good. Every slot's verdict is folded without an
-/// early exit, so the check vectorizes as the update does; the verdict is a
+/// finite number -- under AdaGrad (`sums`, its sums of squared gradients
+/// for the slopes), whether `sums_i + g_i²` is, which `g2` would keep for
+/// good: a square inside the doubles whose sum is not (two gradients of
+/// `1.2e154`) left the sum infinite, and NaN at the next decay of 0 (review
+/// 2026-11-23, REG-9). Every slot's verdict is folded without an early
+/// exit, so the check vectorizes as the update does; the verdict is a
 /// short-circuiting `any`'s, which reached it a slot at a time at three
 /// times the update's cost (task 250).
 fn slopes_usable(
@@ -1878,13 +1884,16 @@ fn slopes_usable(
     weight: f64,
     l2: f64,
     clip: f64,
-    squared: bool,
+    sums: Option<&[f64]>,
 ) -> bool {
-    if squared {
-        beta.iter().zip(z).fold(true, |ok, (b, &zi)| {
-            let g = (d * zi * weight + l2 * *b).clamp(-clip, clip);
-            ok & (g * g).is_finite()
-        })
+    if let Some(sums) = sums {
+        beta.iter()
+            .zip(z)
+            .zip(sums)
+            .fold(true, |ok, ((b, &zi), s)| {
+                let g = (d * zi * weight + l2 * *b).clamp(-clip, clip);
+                ok & (s + g * g).is_finite()
+            })
     } else {
         beta.iter().zip(z).fold(true, |ok, (b, &zi)| {
             ok & (d * zi * weight + l2 * *b).clamp(-clip, clip).is_finite()
@@ -2718,7 +2727,8 @@ impl OnlineModel for Sgd {
                 if lr_row.is_some() {
                     g.is_finite()
                 } else {
-                    (g * g).is_finite()
+                    // The intercept's sum with its square in it (REG-9).
+                    (self.g2[j][0] + g * g).is_finite()
                 }
             };
             // At a shared rate the check and the step are one pass: each
@@ -2742,7 +2752,15 @@ impl OnlineModel for Sgd {
                     (l2, clip, lr),
                     &mut self.dbuf[..n],
                 ),
-                None => slopes_usable(&beta[off..], z, d, weight, l2, clip, true),
+                None => slopes_usable(
+                    &beta[off..],
+                    z,
+                    d,
+                    weight,
+                    l2,
+                    clip,
+                    Some(&self.g2[j][off..]),
+                ),
             };
             if (off == 1 && !usable((d * weight).clamp(-clip, clip))) || !slopes_ok {
                 self.refused_step(j, found);
@@ -3879,11 +3897,20 @@ mod tests {
         };
         let k = 5;
         let beta = vec![0.25; k];
+        let zeros = [0.0; 5];
         let mut refusals = 0;
         for squared in [false, true] {
             for clip in [f64::INFINITY, 1e300] {
                 let z = vec![1.0; k];
-                assert!(slopes_usable(&beta, &z, 2.0, 1.0, 0.1, clip, squared));
+                assert!(slopes_usable(
+                    &beta,
+                    &z,
+                    2.0,
+                    1.0,
+                    0.1,
+                    clip,
+                    squared.then_some(&zeros)
+                ));
                 assert!(any_form(&beta, &z, 2.0, 1.0, 0.1, clip, squared));
                 for pos in 0..k {
                     for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 1e200] {
@@ -3895,7 +3922,15 @@ mod tests {
                             // A clipped infinity or 2e200: finite, its square not.
                             !squared
                         };
-                        let got = slopes_usable(&beta, &z, 2.0, 1.0, 0.1, clip, squared);
+                        let got = slopes_usable(
+                            &beta,
+                            &z,
+                            2.0,
+                            1.0,
+                            0.1,
+                            clip,
+                            squared.then_some(&zeros),
+                        );
                         assert_eq!(
                             got, want,
                             "squared {squared}, clip {clip}, slot {pos}: {bad}"
@@ -3930,7 +3965,7 @@ mod tests {
                             z[pos] = v;
                         }
                         let (d, w, lr) = (1.5 * lcg(&mut s), 0.5 + lcg(&mut s).abs(), 0.01);
-                        let want_ok = slopes_usable(&beta, &z, d, w, l2, clip, false);
+                        let want_ok = slopes_usable(&beta, &z, d, w, l2, clip, None);
                         let mut want = beta.clone();
                         for (b, &zi) in want.iter_mut().zip(&z) {
                             let g = (d * zi * w + l2 * *b).clamp(-clip, clip);
@@ -4042,7 +4077,15 @@ mod tests {
             (1e154, 1.0, 1e154, 1.0, 1.0, 1e150, true, true),
         ];
         for (i, &(b, z, d, w, l2, clip, sq, want)) in cases.iter().enumerate() {
-            let got = slopes_usable(&[0.5, b], &[1.0, z], d, w, l2, clip, sq);
+            let got = slopes_usable(
+                &[0.5, b],
+                &[1.0, z],
+                d,
+                w,
+                l2,
+                clip,
+                sq.then_some(&[0.0; 2]),
+            );
             assert_eq!(got, want, "case {i}");
             assert_eq!(got, any_form(b, z, d, w, l2, clip, sq), "case {i}");
         }

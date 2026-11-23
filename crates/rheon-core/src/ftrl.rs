@@ -410,14 +410,36 @@ impl Ftrl {
         // comparable weight or, under the squared loss, a comparable
         // error) is skipped rather than learned from
         // (docs/IMPROVEMENTS.md C2).
-        let g_max = err.abs() * weight * self.zbuf.iter().fold(0.0_f64, |m, z| m.max(z.abs()));
-        if !(g_max * g_max).is_finite() {
+        //
+        // Nor a row that would take a sum past it (review 2026-11-23,
+        // REG-9): two gradients of `1.2e154` pass the square's check but
+        // their sum `n` does not, and the step `s = (√n' − √n)/α` from an
+        // infinite `n` made the coefficient NaN for good; so too a step
+        // past the largest double at a small `α`. The test is of a bound,
+        // the largest sum and the largest square, so a row within a factor
+        // of 2 of the largest double may be skipped where it would just
+        // fit. The largest gradient is formed in the update's own order,
+        // `(err·z)·w`, which rounds monotonically in `|z|`, so it bounds
+        // every `|g_i|` exactly: `(|err|·w)·|z|` once passed a row whose
+        // `(err·z)·w` was infinite.
+        let (z_max, n_max) = self
+            .zbuf
+            .iter()
+            .zip(&self.n[j])
+            .fold((0.0_f64, 0.0_f64), |(zm, nm), (z, n)| {
+                (zm.max(z.abs()), nm.max(*n))
+            });
+        let g_max = err.abs() * z_max * weight;
+        let owed = self.pending[j];
+        let n_bound = n_max * owed + g_max * g_max;
+        // A square past the largest double leaves the bound infinite, and
+        // a NaN fails the test too.
+        if !(n_bound.sqrt() / self.cfg.alpha).is_finite() {
             return false;
         }
         let k = self.cfg.k_total();
         // The row teaches the target: its sums take the decay they were
         // owed, the clock's since the last row that taught it.
-        let owed = self.pending[j];
         if owed != 1.0 {
             for i in 0..k {
                 self.n[j][i] *= owed;
@@ -886,6 +908,38 @@ mod tests {
             lines[1].starts_with("ftrl: l1 must be at least 0, but it is -1."),
             "{e}"
         );
+    }
+
+    /// A row whose update would take a sum past the largest double is
+    /// skipped, as a row whose squared gradient would is (review
+    /// 2026-11-23, REG-9): under the squared loss two rows of gradient
+    /// `1.2·10^154` each pass the square's check, `1.44·10^308`, but their
+    /// sum `n` is infinite, and the step `s = (√n' − √n)/α` with it made
+    /// the coefficient NaN for good. A gradient formed in another order
+    /// than the check's -- `(err·z)·w` past the largest double where
+    /// `(|err|·w)·|z|` is not -- is refused by the same check. The fit
+    /// stays finite and the next row of ordinary size is learned.
+    #[test]
+    fn a_row_that_would_overflow_a_sum_is_skipped() {
+        let mut c = cfg(1, 1);
+        c.loss = FtrlLoss::Squared;
+        c.fit_intercept = false;
+        c.min_weight = 0.0;
+        c.l2 = 0.0;
+        // A small rate, so the first row's coefficient reads the next
+        // row's prediction far below its target.
+        c.alpha = 1e-60;
+        let mut m = Ftrl::new(c).unwrap();
+        for _ in 0..4 {
+            // A target `1.2e54` off the prediction, at a feature of `1e100`
+            // (the input bound): a gradient of `1.2e154`.
+            let p = m.coefficients()[0][0] * 1e100;
+            m.step(&[1e100], &[Some(p - 1.2e54)], 1.0, 1.0);
+            assert!(m.n[0].iter().all(|v| v.is_finite()), "{:?}", m.n);
+            assert!(m.coef.iter().all(|v| v.is_finite()), "{:?}", m.coef);
+        }
+        let p = m.step(&[1.0], &[Some(0.0)], 1.0, 1.0).pred[0];
+        assert!(p.is_finite(), "{p}");
     }
 
     fn cfg(k: usize, m: usize) -> FtrlCfg {

@@ -718,6 +718,20 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **`ftrl`'s and `sgd`'s AdaGrad sums never pass the largest double**
+  (review 2026-11-23, REG-9). A row whose squared gradient would overflow
+  was skipped, but not one whose square fits while the sum it joins does
+  not: two gradients of `1.2·10^154` left the sum infinite. Under `ftrl`
+  the step from it made the coefficient NaN for good; under
+  `sgd(learning_rate="adagrad")` with an infinite `clip_gradient` the
+  slot's steps were 0 for good, and NaN after a gap past the decay's
+  underflow. Such a row is now skipped as the square's check skips one:
+  under `ftrl` by a bound on the largest sum, which also refuses a step
+  past the largest double at a small `alpha`, and under `sgd` slot by slot.
+  `ftrl` forms the largest gradient in the update's own order, so a row
+  whose gradient overflowed while the check's did not is refused too.
+  Rows of ordinary size move nothing. Moves: `ftrl.*`, `sgd.*`.
+
 - **`sgd`'s Huber refit on the row its scaler's warm-up completes is
   projected with the scaler's means** (review 2026-11-23, REG-6). Under
   `standardize=True` and a constraint, a refit projects its fit in the
