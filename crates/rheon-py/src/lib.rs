@@ -1439,14 +1439,16 @@ fn special_function(name: &str, a: Vec<f64>, b: Vec<f64>, x: Vec<f64>) -> PyResu
         "norm_ppf" => |_, _, x| sp::norm_ppf(x),
         _ => {
             return Err(PyValueError::new_err(format!(
-                "no special function {name:?}"
+                "special_function: there is no special function {name:?}. Give one of ln_gamma, \
+                 digamma, trigamma, ln_beta, gamma_p, gamma_q, gamma_p_inv, gamma_q_inv, \
+                 beta_inc, beta_inc_c, beta_inc_inv, norm_cdf, ndtri or norm_ppf."
             )));
         }
     };
     let n = x.len();
     if a.len() != n || b.len() != n {
         return Err(PyValueError::new_err(
-            "a, b and x must have the same length",
+            "special_function: a, b and x have different lengths. Give three lists of one length.",
         ));
     }
     Ok((0..n).map(|i| f(a[i], b[i], x[i])).collect())

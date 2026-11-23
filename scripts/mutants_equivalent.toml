@@ -556,7 +556,7 @@ positive wherever the line runs; a weight of NaN or `∞` takes the same \
 branch under both"""
 
 [[equivalent]]
-file = "crates/rheon-core/src/conformal.rs"
+file = "crates/rheon-core/src/special/normal.rs"
 function = "norm_ppf"
 mutation = "replace > with >="
 line_has = "if !(p > 0.0 && p < 1.0) {"
@@ -565,7 +565,7 @@ formula too -- `ln` of zero or less is `−∞` or NaN, and the tail at `∞` is
 `−∞/∞` -- so `p = ±0` let through returns the NaN it returned"""
 
 [[equivalent]]
-file = "crates/rheon-core/src/conformal.rs"
+file = "crates/rheon-core/src/special/normal.rs"
 function = "norm_ppf"
 mutation = "replace && with ||"
 line_has = "if !(p > 0.0 && p < 1.0) {"
@@ -573,7 +573,7 @@ why = """as the `>` mutant: every `p` outside `(0, 1)` gives NaN through the \
 formula as it does through the guard"""
 
 [[equivalent]]
-file = "crates/rheon-core/src/conformal.rs"
+file = "crates/rheon-core/src/special/normal.rs"
 function = "norm_ppf"
 mutation = "replace < with <="
 line_has = "if !(p > 0.0 && p < 1.0) {"
@@ -3431,7 +3431,7 @@ since `rate` is finite (`Conformal::new` refuses any other) and \
 `g = 2φ(·) < 0.8`, so `rate·g·0` is a zero; `η/1 = η` (task 358)"""
 
 [[equivalent]]
-file = "crates/rheon-core/src/conformal.rs"
+file = "crates/rheon-core/src/special/normal.rs"
 function = "ln_basic"
 mutation = "replace < with <="
 line_has = "let (x, k0) = if x < f64::MIN_POSITIVE {"
@@ -3442,7 +3442,7 @@ original reads from `x` itself, so every later line computes the same \
 bits (task 373)"""
 
 [[equivalent]]
-file = "crates/rheon-core/src/conformal.rs"
+file = "crates/rheon-core/src/special/normal.rs"
 function = "ln_basic"
 mutation = "replace | with ^"
 line_has = "let mut f = f64::from_bits((bits & ((1u64 << 52) - 1)) | (1023u64 << 52));"

@@ -795,7 +795,7 @@ above order 64 the mutant calls faer's own sequential factorization, the \
 same bits on aarch64"""
 
 [[tolerated]]
-file = "crates/rheon-core/src/conformal.rs"
+file = "crates/rheon-core/src/special/normal.rs"
 function = "ln_basic"
 mutation = "replace > with >="
 line_has = "if f > std::f64::consts::SQRT_2 {"

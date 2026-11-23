@@ -296,7 +296,7 @@ learned (rule 2):
 | `loc`, `scale` | `μ`, `σ` (the sd) |
 | `nu`, `lambda` | the shape, `arch`'s names (as `garch`'s `coefficients`) |
 | `q_<level>` | `μ + σ F_z⁻¹(level)` |
-| `es_<level>` | expected shortfall `E[y | y ≤ q]` from the lower partial moment |
+| `es_<level>` | expected shortfall `E[y \| y ≤ q]` from the lower partial moment |
 | `skew`, `excess_kurtosis` | implied by the shape (NaN where the moment does not exist, `ν ≤ 3`, `ν ≤ 4`) |
 | `pit` | `F(y_t)` under the fit before the row: the calibration stream |
 | `log_score` | `log f(y_t)` under that fit, and `log_score_vs_normal` (section 4) |
