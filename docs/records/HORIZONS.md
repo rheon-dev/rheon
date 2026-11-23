@@ -624,7 +624,7 @@ for it). At fixed parameters, zero mean, normal innovations, an input `v ≥
 |---|---|---|
 | `sGARCH` | `s_t = ω + ζ v_t + α e²_{t−1} + β s_{t−1}`, the input on the row itself | 6.4e-16 |
 | `gjrGARCH` | `s_t = ω + ζ v_t + (α + γ 1[e_{t−1} < 0]) e²_{t−1} + β s_{t−1}` | 5.6e-16 |
-| `eGARCH` | `ln s_t = ω + ζ v_t + α z_{t−1} + γ (|z_{t−1}| − √(2/π)) + β ln s_{t−1}` | 7.2e-16 |
+| `eGARCH` | `ln s_t = ω + ζ v_t + α z_{t−1} + γ (\|z_{t−1}\| − √(2/π)) + β ln s_{t−1}` | 7.2e-16 |
 
 So `rugarch` reads the input of the row whose variance it forms (the caller
 lags it), as section 10 proposes and the user's answer 5 confirmed.
