@@ -1,9 +1,12 @@
 <!-- kind: record -->
 # Threshold-triggered bars: the design (task 562)
 
-Status, 2026-11-23: a design, with nothing built. The questions in the last
-section wait for the user's answers, and the build follows them. The
-third-party libraries are checked as oracles ([Oracles](#oracles)).
+Status, 2026-11-23: built as `rp.stream.bars`. The questions in the last
+section are answered: each as recommended but the tenth, where the number of
+groups is bounded by bytes, not by a count ([Groups and their
+bound](#groups-and-their-bound)). The third-party libraries are checked as
+oracles ([Oracles](#oracles)), and [As built](#as-built) states the choices
+the build made that the design left open.
 
 A **bar** here is one output row that aggregates a run of consecutive input
 rows. It closes at the row where a running quantity reaches a threshold.
@@ -27,7 +30,8 @@ and the oracles that would hold it.
 | [Decay and windows](#decay-and-windows) | why neither applies to the bars, and where they apply instead |
 | [Oracles](#oracles) | the Polars construction, the exact one, the imbalance loop, VPIN, and the libraries scanned |
 | [Tests and budgets](#tests-and-budgets) | the tests and measurements the build owes |
-| [Questions](#questions) | each open choice, with a recommendation |
+| [As built](#as-built) | the choices the build made that the design left open |
+| [Questions](#questions) | each open choice, with a recommendation, and the answers |
 
 ## The operator in one example
 
@@ -236,7 +240,9 @@ the part above it (the renormalization of Joldes, Marty, Muller and Popescu,
 expansions", IEEE Transactions on Computers, 2016). Each part is then at
 least 2^52 below the one above. A value here lies between 2^-1074, the
 smallest double, and 2^334, above twice the input bound of 1e100, which
-bounds a quantity and the threshold alike. So an expansion has at most 28 parts, 224 bytes, whatever the input. On
+bounds a quantity and the threshold alike. So an expansion has at most 27 parts, 216 bytes, whatever the input
+(`⌊(334 + 1074) / 53⌋ + 1`), and a float sum among the aggregates, whose
+values may reach the largest double, at most 40. On
 realistic data it holds one to three. The build must test the property
 after every operation, not assume it.
 
@@ -271,7 +277,7 @@ The same expressions, run by Polars' own `group_by`, are the oracle
 | `min`, `max` | the value; nulls skipped, NaN as Polars orders it | 16 | to the bit |
 | `count`, `pl.len()` | the non-null count, the row count | 8 | to the bit, in Polars' index dtype |
 | `sum` of an integer column | an `i128`, emitted as Polars' sum dtype; an overflow of that dtype refused, naming the bar | 16 | to the bit |
-| `sum` of a float column | an expansion, rounded once at the close; a NaN or an infinity kept apart in plain arithmetic and given as Polars gives it | 32 + 8·p, p ≤ 28 | to the bit against `math.fsum`; within the bound in [Oracles](#oracles) against Polars, whose float sum is not correctly rounded |
+| `sum` of a float column | an expansion, rounded once at the close; a NaN or an infinity kept apart in plain arithmetic and given as Polars gives it | 32 + 8·p, p ≤ 40 | to the bit against `math.fsum`; within the bound in [Oracles](#oracles) against Polars, whose float sum is not correctly rounded |
 
 `mean`, `std` and `var` are left out of the first build. A mean is
 `sum() / count()`, written out, and its rounding is then stated. A
@@ -299,10 +305,11 @@ B_group = 48 + len(key)                   the key in the group map
         + Σ a_j                           each aggregate, by the table above
 ```
 
-`p` is an expansion's parts: at most 28, one to three in practice. The
+`p` is an expansion's parts: at most 27 for the running quantity and 40
+for a float sum, one to three in practice. The
 example above, with a dollar quantity, four `first`/`last`/`min`/`max`, and
 three float sums, holds about 48 + 8 + 128 + 40 + 48 + 64 + 3·56 ≈ 500 bytes
-a group in practice, and about 1.3 KB at the bound of 28 parts. The three
+a group in practice, and under 2 KB at the bounds. The three
 sums are `volume`, `buys` and the dollar sum: `vwap`'s `quantity` sum is
 `volume`'s, and an aggregation written twice is kept once. That bound
 is checked against `max_state_bytes`, which means what it means on a spec:
@@ -310,17 +317,21 @@ a group's bytes, 256 KB by default and at most 64 MiB. A call past it is
 refused when the query is built, naming the bytes. The state file holds the
 same fields in msgpack, a little smaller.
 
-**The number of groups is the only unbounded factor, so it has a cap of its
-own.** No cap on groups exists in the library today: a bank's groups stay
-until `drop_groups` or `group_close` removes them. A query has no point at
-which to call a method, so the operator takes `max_groups`, proposed at
-100,000 by default. A group past it is refused with an error naming the
-group, the count and the keyword; a warning comes once at half of it. At
-about 500 bytes a group, the default is about 50 MB of state. Under
-`group_close="monotone"`, with the bank's meaning, a group is closed when a
-row of a greater key arrives: its open bar is cut ([The clock of a
-bar](#the-clock-of-a-bar)) and its state dropped. That bounds the groups of a
-key that only grows, such as a trading day or a block identifier.
+**The number of groups is the only unbounded factor, so the groups
+together are bounded by bytes too.** No cap on groups exists in the library
+today: a bank's groups stay until `drop_groups` or `group_close` removes
+them. A query has no point at which to call a method, so the operator takes
+`max_total_bytes`, the most bytes the groups together may hold, 1 GiB by
+default. Each new group adds its worst case, key included; a group that would
+take the total past it is refused, naming the group, the bytes and the
+keyword, and a `ReadinessWarning` comes once at half of it, the bank's
+notice for a state past half of its cap. A count of groups was considered
+and not taken: the bytes are what bound memory, and a group's bytes vary
+with the call's aggregates and its key. Under `group_close="monotone"`, with
+the bank's meaning, a group is closed when a row of a greater key arrives:
+its open bar is cut ([The clock of a bar](#the-clock-of-a-bar)) and its state
+dropped. That bounds the groups of a key that only grows, such as a trading
+day or a block identifier.
 
 ## State across chunks and on save
 
@@ -610,6 +621,41 @@ The build owes these, each in its tier under the testing rules:
   memory case of the state per group. A sum through the expansion is a few
   two-sums a row, an estimate to be measured, not a measurement.
 
+## As built
+
+The build follows the sections above; where they left a choice open, it
+made these:
+
+- **A group is an integer, a String, a Categorical or a Date.** The key is
+  held as its text, and a bar written at another group's row (a monotone
+  close) or at the end (`final=True`) has no row of its own to copy the key
+  from, so the key is cast back from its text: these four are the dtypes
+  whose text casts back to the same value.
+- **A bar's index counts the bars emitted.** A bar cut short under
+  `partial="drop"` takes no index, so the indices of a group's bars are
+  0, 1, 2, ... with no gap.
+- **A cut bar's `time_close` is its last row's clock**, not the clock of the
+  row that cut it: every value in it comes from rows at or before its last
+  row. It is emitted at the cutting row, so under a group the output is in
+  the order the bars became known, not sorted by `time_close` across groups.
+- **`final=True` emits every open bar, whatever `partial`**, in the order of
+  the groups' keys, since the caller asked for them by name.
+- **A null weight is 0**, as a bank skips a row of null weight.
+- **A `Float32` sum is the exact sum rounded to a double, then to a
+  `Float32`**: two roundings, which can differ from one in a tie of the
+  second. A `Float64` sum is rounded once.
+- **Under `kind="count"` with a threshold column**, a threshold that falls
+  below the bar's rows closes the bar at once, with `thresholds` the rows
+  over the threshold, rounded down.
+- **The state file** holds the call (its settings and the text of its
+  expressions, compared whole on a load), each group's open bar, and the
+  high-water key of a monotone close. Its three frozen fixtures cover an
+  ungrouped `"sum"` on a float clock (a running quantity of three parts, a
+  null first value, a float sum of two parts and a NaN), a grouped
+  `"imbalance"` of integers past 2^53 on an integer clock (a threshold
+  column, a weight, a session and the cuts), and a `"count"` on a temporal
+  clock under a monotone close.
+
 ## Questions
 
 Each choice the design makes that the user may want otherwise, with the
@@ -649,7 +695,10 @@ recommendation:
 10. **The bound on groups?** Recommended: `max_state_bytes` for a group,
     checked when the query is built from the worst case; `max_groups`, 100,000
     by default, with a warning at half; and `group_close="monotone"`, which
-    cuts and drops a group once a greater key arrives.
+    cuts and drops a group once a greater key arrives. **Answered:** no count
+    of groups; `max_state_bytes` for a group and `max_total_bytes` for the
+    stream, refused and warned as the bank refuses and warns, and
+    `group_close="monotone"` kept.
 11. **The threshold: a number, a column, or adaptive?** Recommended: a
     number or a column read at each row. López de Prado's adaptive
     threshold, fed back from the bars themselves, not in this build.
@@ -680,4 +729,14 @@ recommendation:
     partial="keep", group_close=None, max_state_bytes=..., max_groups=100_000,
     chunk_size=None, load_state=None, save_state=None, **aggregates)`,
     `quantity` required under `"sum"` and `"imbalance"` and refused under
-    `"count"`.
+    `"count"`. **Built** with `max_total_bytes=1 << 30` in place of
+    `max_groups`, and `final=False`.
+
+The answers, in short: questions 1 to 9 and 11 to 16 as recommended. The
+method of question 4 is Shewchuk's expansion sums, and its bits are tested
+on each system. Question 7's reason is in the docstring: a weight only
+includes or excludes a row, since a bar's count or high has no meaning for a
+fraction of a row. Question 9's cuts are each tested on both sides of the
+setting. The tick test of question 12 is its own small part, with its own
+oracle, and VPIN and a CUSUM filter (questions 14 and 15) are later work,
+not this build.

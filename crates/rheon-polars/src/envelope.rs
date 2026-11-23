@@ -52,16 +52,19 @@ pub enum Kind {
     Merge,
     /// A pipeline checkpoint: the states of several stages, one file.
     Checkpoint,
+    /// Threshold-triggered bars (`rp.stream.bars`): each group's open bar.
+    Bars,
 }
 
 impl Kind {
     /// Every kind this build reads.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Bank,
         Self::Windows,
         Self::RefreshTime,
         Self::Merge,
         Self::Checkpoint,
+        Self::Bars,
     ];
 
     /// The `kind` entry's value.
@@ -72,6 +75,7 @@ impl Kind {
             Self::RefreshTime => "refresh_time",
             Self::Merge => "merge",
             Self::Checkpoint => "checkpoint",
+            Self::Bars => "bars",
         }
     }
 
@@ -88,6 +92,7 @@ impl Kind {
             Self::RefreshTime => "a refresh_time run's state",
             Self::Merge => "a merge run's state",
             Self::Checkpoint => "a pipeline checkpoint",
+            Self::Bars => "a bars run's state",
         }
     }
 }

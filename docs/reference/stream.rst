@@ -9,7 +9,7 @@
 Columns made before a bank
 --------------------------
 
-Windows over the clock as columns, targets whose values arrive late, and series that tick at their own times brought onto one clock.
+Windows over the clock as columns, targets whose values arrive late, series that tick at their own times brought onto one clock, and bars that close when a running quantity reaches a threshold.
 
 .. entries:: stream
 

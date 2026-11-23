@@ -91,6 +91,29 @@ model that only the new build has is listed as an addition and passes.
 
 ### Added
 
+- **`rp.stream.bars`: threshold-triggered bars** (PLAN 562). A stream
+  operator, beside `refresh_time` and `merge`, that aggregates a stream into
+  one row per run of rows whose count (`kind="count"`), sum (`"sum"`, the
+  remainder carried as the multiples of the threshold on the running total)
+  or signed sum (`"imbalance"`, reset at each bar) reaches `threshold`, a
+  number or a column, with `>=`: tick, volume, dollar and imbalance bars.
+  A row larger than the threshold stays whole, with `thresholds` counting
+  what it crossed. The running total is kept exactly, as Shewchuk's
+  expansion sums (`rheon_core::exact`), so the bars are those of exact
+  arithmetic and the same bits on every system. Aggregates are Polars'
+  `first`, `last`, `min`, `max`, `sum`, `count` and `pl.len()` over
+  element-wise inputs, matched to Polars' dtypes and nulls, a float sum
+  rounded once as `math.fsum` rounds it. `weight` takes 0 or 1 (a row of
+  weight 0 in no bar and no clock), `group` gives each key its bars, bounded
+  by `max_state_bytes` a group and `max_total_bytes` for the stream, and
+  `session`, `gap_cap`, `max_span`, `restart_after_step_back` and
+  `group_close="monotone"` cut a bar short, marked `complete = false`.
+  `final=True` emits the bars still open at the end. It streams, resumes
+  from a state file of a new kind, `bars`, version 1, and is held to Polars'
+  `cum_sum` and `group_by` construction, to the definitions in
+  `fractions.Fraction`, and to bar-forge's tick, volume, dollar and
+  imbalance bars (a test-only dependency).
+
 - **`rp.stream.merge`: streams that each run in clock order, merged into one
   stream in clock order** (PLAN 541). It takes any number of frames or
   queries, by position or in a dict of name to frame, and gives every row

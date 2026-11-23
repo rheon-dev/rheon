@@ -41,6 +41,7 @@
 pub mod arrow;
 mod atomic;
 mod bank;
+mod bars;
 mod checkpoint;
 mod checks;
 mod checksum;
@@ -78,6 +79,7 @@ pub use arrow::{
 /// A state file's checksum computed again, for a test that edits a file on
 /// purpose (`checksum.rs` has the layout).
 #[doc(hidden)]
+pub use bars::{AggKind, AggSpec, Bars, BarsConfig, Threshold as BarThreshold};
 pub use checksum::reseal;
 // The Arrow types an `ArrowChunk` is built from and a `fit_predict_arrow`
 // result is read as, plus the C Data Interface export a binding layer hands

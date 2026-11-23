@@ -201,6 +201,18 @@ wheels = [
 ]
 
 [[package]]
+name = "bar-forge"
+version = "1.0.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2a/41/3a4f6b32ee18259cbba5c6d3de7ecd407ec216e1173cf7bbe727170024a7/bar_forge-1.0.1.tar.gz", hash = "sha256:204a4d9dbc2829d8702beae5c4f37fe85c8d4d82be6c88886583001157c42a9d", size = 41455, upload-time = "2026-08-15T18:44:48.102Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/16/9e/3f14c3f5bde8f460c234f10a5f887a0c55015ee204343655ad0dcc45000c/bar_forge-1.0.1-py3-none-any.whl", hash = "sha256:0fbf03a1128a2ab645bfd60cd3f54466e92c45bb2b58f01b415089ae5ea275a4", size = 25877, upload-time = "2026-08-15T18:44:46.902Z" },
+]
+
+[[package]]
 name = "bayesian-changepoint-detection"
 version = "0.2.dev1"
 source = { registry = "https://pypi.org/simple" }
@@ -2028,6 +2040,7 @@ dev = [
     { name = "adbc-driver-manager" },
     { name = "adbc-driver-sqlite" },
     { name = "arch" },
+    { name = "bar-forge" },
     { name = "bayesian-changepoint-detection" },
     { name = "duckdb" },
     { name = "filterpy" },
@@ -2081,6 +2094,7 @@ dev = [
     { name = "adbc-driver-manager", specifier = ">=1.12.0" },
     { name = "adbc-driver-sqlite", specifier = ">=1.12.0" },
     { name = "arch", specifier = ">=9.0.0" },
+    { name = "bar-forge", specifier = ">=1.0.1" },
     { name = "bayesian-changepoint-detection", specifier = ">=0.2.dev1" },
     { name = "duckdb", specifier = ">=1.5.5" },
     { name = "filterpy", specifier = ">=1.4.5" },
