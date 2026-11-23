@@ -31,6 +31,19 @@ model that only the new build has is listed as an addition and passes.
 
 ### Changed
 
+- **`skip_learned` (and `--skip-learned`) keeps a row one spec has not
+  learned** (PLAN 566). A row was kept only if every spec that reads a
+  clock had it after its group's last clock, so one spec's tie at its last
+  clock dropped a row that another spec, grouping differently, had not
+  learned, though the bank takes that row. A row is now dropped when any
+  spec has it strictly before its group's last clock, and kept when at
+  least one spec has it after, in a group it has not seen, or on a null
+  clock. A row of weight 0 at a last clock is kept too, unless a spec
+  learned it at a positive weight there: it learns nothing and counts in no
+  clock, so the predict rows of `rp.stream.embargo` survive a resume. A
+  spec that has already learned a kept row learns it again, the cost of one
+  list of rows for every spec. A row that was kept is still kept.
+
 - **`bocpd` takes its hazard in rows or on the clock** (PLAN 547).
   `hazard_rows` is the expected rows between changepoints, `H =
   1/hazard_rows` the chance of a break after each row of positive weight on

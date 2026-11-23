@@ -659,68 +659,107 @@ fn what_a_bank_has_learned_is_read_off_each_clock_type() {
     );
 }
 
-/// PLAN 566, a known bug, held by `should_panic` so the fix flips it: an
-/// ignored test is the extended tier's here, which the full gate runs.
-/// Expected: `--skip-learned` keeps a row that one spec has provably not
-/// learned -- its clock is after that spec's group's last clock -- where the
-/// other spec only ties on its own group's last clock, which is no step back,
-/// so the bank takes the row. A row the bank learned was learned by every
-/// spec, so any spec's "after" proves the row new (`ModelBank.skip_learned`'s
-/// first line: "The rows ... that the bank has not learned"). Today
-/// `Learned::unlearned` counts a tie as learned (`learned.rs`, the `<=` and
-/// `Less | Equal` comparisons) and lets any one spec's "learned" drop the row
-/// (`keep[i] = false`), so `by_comp`'s tie vetoes `by_seg`'s proof. Python's
+/// PLAN 566: `--skip-learned` keeps a row that one spec has provably not
+/// learned -- its clock is after that spec's group's last clock, or its group
+/// is one the spec has not seen -- where another spec only ties on its own
+/// group's last clock, which is no step back, so the bank takes the row. A
+/// row any spec has strictly before its group's last clock is still dropped,
+/// and a row every spec ties on at a positive weight is learned. A row of
+/// weight 0 at a last clock learns nothing and counts in no clock, so it is
+/// kept unless a spec learned it at a positive weight. Python's
 /// `tests/test_report_565_569.py` holds the same through `skip_learned`.
 #[test]
-#[should_panic(expected = "known bug: PLAN 566")]
 fn a_row_one_spec_ties_on_and_another_has_not_learned_is_kept() {
-    let frame = |t: &[f64], comp: &[&str], seg: &[&str]| {
+    let frame = |t: &[f64], comp: &[&str], seg: &[&str], w: &[f64]| {
         let n = t.len();
         let mut df = rows(n, 9);
         df.put(Series::new("t".into(), t.to_vec())).unwrap();
         df.put(Series::new("comp".into(), comp.to_vec())).unwrap();
         df.put(Series::new("seg".into(), seg.to_vec())).unwrap();
+        df.put(Series::new("w".into(), w.to_vec())).unwrap();
         df
     };
-    let by = |name: &str, group: &str| {
+    let by = |name: &str, group: &str, weight: &str| {
         spec(&format!(
             r#"{{"name": "{name}", "model": {{"type": "ewridge"}}, "targets": ["y"],
                 "features": ["x0"], "clock": "t", "group": "{group}", "gap_cap": 50.0,
-                "half_life": 10.0}}"#
+                "half_life": 10.0{weight}}}"#
         ))
     };
-    let specs = vec![by("by_comp", "comp"), by("by_seg", "seg")];
-    let mut bank = Bank::new(specs.clone()).unwrap();
-    bank.fit_predict(&frame(
+    let specs = vec![by("by_comp", "comp", ""), by("by_seg", "seg", "")];
+    let first = frame(
         &[0.0, 0.0, 5.0],
         &["IRT", "IRT", "IRT"],
         &["1_N", "2_N", "1_N"],
-    ))
-    .unwrap();
-    // by_seg's group 2_N last learned at 0, so 5 is new to it.
-    let row = frame(&[5.0], &["IRT"], &["2_N"]);
-    let kept: Vec<bool> = bank
-        .learned(false)
-        .unwrap()
-        .unlearned(&row)
-        .unwrap()
-        .iter()
-        .map(|b| b.unwrap())
-        .collect();
+        &[1.0; 3],
+    );
+    let mut bank = Bank::new(specs.clone()).unwrap();
+    bank.fit_predict(&first).unwrap();
+    let kept_of = |bank: &Bank, df: &DataFrame| -> Vec<bool> {
+        bank.learned(false)
+            .unwrap()
+            .unlearned(df)
+            .unwrap()
+            .iter()
+            .map(|b| b.unwrap())
+            .collect()
+    };
+    // by_seg's group 2_N last learned at 0, so 5 is new to it; by_comp's
+    // IRT ties at 5. Before, after and unseen, each beside a tie.
+    let row = frame(&[5.0], &["IRT"], &["2_N"], &[1.0]);
     let mut resumed = Bank::new(specs).unwrap();
-    resumed
-        .fit_predict(&frame(
-            &[0.0, 0.0, 5.0],
-            &["IRT", "IRT", "IRT"],
-            &["1_N", "2_N", "1_N"],
-        ))
-        .unwrap();
+    resumed.fit_predict(&first).unwrap();
     assert!(resumed.fit_predict(&row).is_ok(), "the bank takes the row");
     assert_eq!(
-        kept,
+        kept_of(&bank, &row),
         [true],
-        "known bug: PLAN 566: a tie in by_comp drops a row by_seg has not learned"
+        "a tie in by_comp does not drop a row by_seg has not learned"
     );
+    let probe = frame(
+        &[5.0, 5.0, 5.0, 4.0, 6.0, 5.0],
+        &["IRT", "IRT", "IRT", "IRT", "IRT", "IRT"],
+        &["1_N", "2_N", "3_N", "2_N", "1_N", "1_N"],
+        &[1.0; 6],
+    );
+    assert_eq!(
+        kept_of(&bank, &probe),
+        // tie in both; tie + new; tie + unseen group; before in by_comp
+        // (4 < 5) beside by_seg's new (4 > 0); new in by_comp; tie in both.
+        [false, true, true, false, true, false]
+    );
+    // Weight 0: kept at a last clock unless a spec learned it at a weight
+    // above 0 there; a zero-weight row before a last clock is dropped.
+    let weighted = vec![
+        by("w_comp", "comp", r#", "weight": "w""#),
+        by("w_seg", "seg", ""),
+    ];
+    let mut b = Bank::new(weighted).unwrap();
+    b.fit_predict(&first).unwrap();
+    let zero = frame(
+        &[5.0, 5.0, 4.0],
+        &["IRT", "IRT", "IRT"],
+        &["1_N", "2_N", "1_N"],
+        &[0.0, 0.0, 0.0],
+    );
+    // 1: w_comp ties at 5 at weight 0, w_seg ties at 5 at its weight 1:
+    // learned by w_seg. 2: w_seg's group 2_N is at 0, so the row is new
+    // there. 3: before in both.
+    assert_eq!(kept_of(&b, &zero), [false, true, false]);
+    let both = vec![
+        by("z_comp", "comp", r#", "weight": "w""#),
+        by("z_seg", "seg", r#", "weight": "w""#),
+    ];
+    let mut b = Bank::new(both).unwrap();
+    b.fit_predict(&first).unwrap();
+    // Every spec reads the zero weight: nothing learned at a positive weight
+    // at a last clock, so a tie is kept (a clock before it is not).
+    let zero = frame(
+        &[5.0, 4.0, 5.0],
+        &["IRT", "IRT", "IRT"],
+        &["1_N", "1_N", "1_N"],
+        &[0.0, 0.0, 1.0],
+    );
+    assert_eq!(kept_of(&b, &zero), [true, false, false]);
 }
 
 /// A temporal clock column is a clock and nothing else: another spec that

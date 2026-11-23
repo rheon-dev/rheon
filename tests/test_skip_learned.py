@@ -233,6 +233,64 @@ def test_the_command_line_is_told_its_own_way_out(rheon_cli, tmp_path):
         assert got[name].struct.field(f).equals(want[name].struct.field(f)), f
 
 
+def test_the_command_line_keeps_the_rows_the_method_keeps_across_specs_that_group_differently(
+    tmp_path, rheon_cli
+):
+    """PLAN 566: a row is dropped when some spec has it before its group's
+    last clock, kept when another has it after or in an unseen group, and a
+    weight-0 row at a last clock is kept: the command line's rule is the
+    method's."""
+    from conftest import run_online
+
+    first = pl.DataFrame(
+        {
+            "t": [0.0, 0.0, 1.0],
+            "comp": ["IRT", "IRT", "IRT"],
+            "seg": ["1_N", "2_N", "1_N"],
+            "x0": [1.0, 2.0, 3.0],
+            "y": [1.0, 2.0, 3.0],
+            "w": [1.0, 1.0, 1.0],
+        }
+    )
+    # tie in both; tie + after; tie + unseen; before + tie; weight 0 at a last
+    # clock in both; weight 0 before one; after in both.
+    rows = pl.DataFrame(
+        {
+            "t": [1.0, 1.0, 1.0, 0.0, 1.0, 0.0, 2.0],
+            "comp": ["IRT"] * 7,
+            "seg": ["1_N", "2_N", "3_N", "2_N", "1_N", "1_N", "1_N"],
+            "x0": [0.0] * 7,
+            "y": [0.0] * 7,
+            "w": [1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0],
+        }
+    )
+    specs = [spec("by_comp", group="comp", weight="w"), spec("by_seg", group="seg", weight="w")]
+    first.write_parquet(tmp_path / "first.parquet")
+    rows.write_parquet(tmp_path / "rows.parquet")
+    state = tmp_path / "bank.state"
+    run_online(
+        rheon_cli,
+        tmp_path,
+        specs,
+        input=tmp_path / "first.parquet",
+        output=tmp_path / "first-out.parquet",
+        save_state=state,
+    )
+    want = rp.ModelBank.load(state).skip_learned(rows)
+    assert want["t"].to_list() == [1.0, 1.0, 1.0, 2.0]
+    run_online(
+        rheon_cli,
+        tmp_path,
+        specs,
+        input=tmp_path / "rows.parquet",
+        output=tmp_path / "rows-out.parquet",
+        args=["--load-state", str(state), "--skip-learned"],
+    )
+    got = pl.read_parquet(tmp_path / "rows-out.parquet")
+    assert got.height == want.height
+    assert got["t"].equals(want["t"])
+
+
 # --- a clock that may start again (review fable2, Y2; the user, 2026-11-20:
 # "Refuse unless declared") -----------------------------------------------------
 

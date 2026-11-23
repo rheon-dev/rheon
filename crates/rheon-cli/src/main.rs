@@ -255,8 +255,11 @@ struct Cli {
     /// input that overlaps it learns each row once, as Python's
     /// `ModelBank.skip_learned` does (sets the config's `skip_learned`).
     /// Needs `--load-state` or `load_state`, and a spec that reads a clock.
-    /// A row is kept when its clock is after its group's last one, so this is
-    /// right only where, within a group, the clock never goes back. Under a
+    /// A row is dropped when some spec has its clock before its group's last
+    /// one, and kept when another has it after, in a group it has not seen,
+    /// or null; a row at a last clock counts as learned unless its weight is
+    /// 0. So this is right only where, within a group, the clock never goes
+    /// back. Under a
     /// spec with `session` or `restart_after_step_back` it is refused unless
     /// `--clock-runs-on` says so.
     #[arg(long)]

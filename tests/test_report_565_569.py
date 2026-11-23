@@ -279,9 +279,8 @@ def _ewridge(name: str, **kw: Any) -> dict[str, Any]:
     )
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason="PLAN 566: a tie in one spec vetoes")
 def test_skip_learned_keeps_a_row_one_spec_ties_on_and_another_has_not_learned() -> None:
-    """PLAN 566, confirmed. Expected: ``skip_learned`` keeps a row that one
+    """PLAN 566, fixed. Expected: ``skip_learned`` keeps a row that one
     spec has provably not learned -- its clock is after that spec's group's
     last clock -- when no spec would refuse it as a step back. Source: its
     docstring's first line, "The rows of a frame or query that the bank has
@@ -313,7 +312,7 @@ def test_skip_learned_keeps_a_row_one_spec_ties_on_and_another_has_not_learned()
     assert bank.skip_learned(row).height == 1
 
 
-def test_skip_learned_drops_a_row_at_the_saved_clock_an_embargo_predict_row_included(
+def test_skip_learned_keeps_an_embargo_predict_row_at_the_saved_clock_and_drops_its_learn_row(
     tmp_path: Path,
 ) -> None:
     """PLAN 566, the documented part. ``skip_learned`` reads a row at its
@@ -334,9 +333,109 @@ def test_skip_learned_drops_a_row_at_the_saved_clock_an_embargo_predict_row_incl
     bank.fit_predict(rows.head(2))
     bank.save(tmp_path / "b.state")
     resumed = rp.ModelBank.load(tmp_path / "b.state")
-    assert resumed.skip_learned(rows.slice(2)).height == 0
+    assert resumed.skip_learned(rows.slice(2)).height == 1
+    # The learn row at the clock, of weight 1, is learned.
+    assert resumed.skip_learned(rows.slice(1)).height == 1
     # The bank itself takes the predict row: a tie is no step back.
     assert resumed.fit_predict(rows.slice(2)).height == 1
+
+
+def _two_banks(**kw: Any) -> rp.ModelBank:
+    """``l1_comp`` by ``comp`` and ``l1_seg`` by ``seg``, each learning ``T0``
+    in its groups and ``T1`` too in ``IRT`` and ``1_N``."""
+    bank = rp.ModelBank(
+        [_ewridge("l1_comp", group="comp", **kw), _ewridge("l1_seg", group="seg", **kw)]
+    )
+    bank.fit_predict(
+        pl.DataFrame(
+            {
+                "t": [T0, T0, T1],
+                "comp": ["IRT", "IRT", "IRT"],
+                "seg": ["1_N", "2_N", "1_N"],
+                "x": [1.0, 2.0, 3.0],
+                "y": [1.0, 2.0, 3.0],
+                "w": [1.0, 1.0, 1.0],
+            }
+        )
+    )
+    return bank
+
+
+def test_skip_learned_reads_each_spec_before_at_and_after_its_groups_last_clock() -> None:
+    """PLAN 566, both sides of every edge. ``l1_comp``'s ``IRT`` last learned
+    at ``T1`` and ``l1_seg``'s ``1_N`` at ``T1``, ``2_N`` at ``T0``. A row is
+    dropped when some spec has it strictly before its last clock, kept when no
+    spec does and one has it after, or in an unseen group, or on a null clock,
+    and dropped when every spec with a view ties."""
+    T2 = T1 + dt.timedelta(minutes=5)
+    rows = pl.DataFrame(
+        {
+            "t": [T1, T1, T1, T0, T0, T2, T1, None, T1],
+            "comp": ["IRT", "IRT", "IRT", "IRT", "IRT", "IRT", "NEW", "IRT", "IRT"],
+            "seg": ["1_N", "2_N", "3_N", "2_N", "1_N", "1_N", "1_N", "1_N", None],
+            "x": [0.0] * 9,
+            "y": [0.0] * 9,
+        }
+    )
+    keep = [
+        False,  # ties in both
+        True,  # tie in comp, after in seg (2_N is at T0)
+        True,  # tie in comp, seg's 3_N unseen
+        False,  # before in comp; seg's 2_N at T0 ties
+        False,  # before in both
+        True,  # after in both
+        True,  # comp's NEW unseen, tie in seg
+        True,  # a null clock is the bank's to judge
+        True,  # tie in comp, seg's null group unseen
+    ]
+    got = _two_banks().skip_learned(rows)
+    assert got["t"].to_list() == [t for t, k in zip(rows["t"], keep, strict=True) if k]
+    assert got.equals(rows.filter(pl.Series(keep)))
+    # The lazy form agrees.
+    assert _two_banks().skip_learned(rows.lazy()).collect().equals(got)
+
+
+def test_skip_learned_keeps_a_weight_zero_row_at_the_last_clock_unless_a_spec_learned_it() -> None:
+    """PLAN 566. Weight 0 learns nothing and counts in no clock, so replaying
+    such a row at a last clock is harmless, and it is kept; a spec that learned
+    the row at a positive weight there has it, and it is dropped; a row of
+    weight 0 before a last clock is dropped as any such row is."""
+    both = _two_banks(weight="w")
+    seg_only = rp.ModelBank(
+        [_ewridge("l1_comp", group="comp", weight="w"), _ewridge("l1_seg", group="seg")]
+    )
+    seg_only.fit_predict(
+        pl.DataFrame(
+            {
+                "t": [T0, T0, T1],
+                "comp": ["IRT", "IRT", "IRT"],
+                "seg": ["1_N", "2_N", "1_N"],
+                "x": [1.0, 2.0, 3.0],
+                "y": [1.0, 2.0, 3.0],
+                "w": [1.0, 1.0, 1.0],
+            }
+        )
+    )
+
+    def rows(t: list[dt.datetime], w: list[float]) -> pl.DataFrame:
+        n = len(t)
+        return pl.DataFrame(
+            {
+                "t": t,
+                "comp": ["IRT"] * n,
+                "seg": ["1_N"] * n,
+                "x": [0.0] * n,
+                "y": [0.0] * n,
+                "w": w,
+            }
+        )
+
+    frame = rows([T1, T1, T0, T1], [0.0, 1.0, 0.0, 2.0])
+    # Both specs read the weight: the zero-weight tie is kept, a positive one
+    # is learned, and a zero-weight row before the last clock is dropped.
+    assert both.skip_learned(frame)["w"].to_list() == [0.0]
+    # l1_seg reads no weight, so it learned the row at weight 1 as every row.
+    assert seg_only.skip_learned(frame).height == 0
 
 
 # --------------------------------------------------------------------------
