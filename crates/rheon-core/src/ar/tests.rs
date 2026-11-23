@@ -701,6 +701,61 @@ fn select_is_the_weighted_least_squares_of_each_order() {
     }
 }
 
+/// Under a window, order selection reads the window's rows alone: its
+/// weight and Kish's `n` are the window's, not the stream's. With no decay
+/// and unit weights, each order's least squares on the rows inside the
+/// window, by faer's LU, and `n` their count; the stream is fifteen windows
+/// long, so the stream's weight would make `n` fifteen times too large and
+/// the penalty too small.
+#[test]
+fn under_a_window_select_reads_the_window_alone() {
+    let (x, y) = series(1500, 61);
+    let w = 100.0;
+    for ic in [ArSelect::Aic, ArSelect::Bic] {
+        let mut m = Ar::new(ArCfg {
+            select: Some(ic),
+            window: Some(w),
+            ..cfg((1..=6).collect(), 1, Decay::Halflife(f64::INFINITY))
+        })
+        .unwrap();
+        for t in 0..y.len() {
+            m.step(&[x[t]], &[Some(y[t])], 1.0, 1.0);
+            if !matches!(t, 700 | 1499) {
+                continue;
+            }
+            let n = t + 1;
+            // rows s with t - s < w
+            let v: Vec<f64> = (0..n)
+                .map(|s| f64::from(u8::from(t - s < w as usize)))
+                .collect();
+            let kish = w;
+            let pen = |k: usize| match ic {
+                ArSelect::Aic => 2.0 * k as f64,
+                ArSelect::Bic => kish.ln() * k as f64,
+            };
+            let fits: Vec<(Vec<f64>, f64)> = (0..=6)
+                .map(|q| order_fit(q, 6, &x[..n], &y[..n], &v))
+                .collect();
+            let crit: Vec<f64> = fits
+                .iter()
+                .enumerate()
+                .map(|(q, (_, rss))| kish * rss.ln() + pen(q + 2))
+                .collect();
+            let best = (0..=6)
+                .min_by(|&a, &b| crit[a].total_cmp(&crit[b]))
+                .unwrap();
+            let got = &m.coefficients().unwrap()[0];
+            let chosen = (1..=6).rev().find(|&l| got[l] != 0.0).unwrap_or(0);
+            assert_eq!(chosen, best, "{ic:?} at row {t}: {crit:?}");
+            assert!(
+                rel_gap(got, &fits[best].0) < 1e-9,
+                "{ic:?} at row {t}: {got:?} vs {:?}",
+                fits[best].0
+            );
+        }
+    }
+}
+
 /// `select` takes lags 1 to its largest order and no ridge, each refused
 /// beside it by name; and both are taken without it.
 #[test]

@@ -895,7 +895,7 @@ impl EwRidge {
                 cross_c: &v.cross.c[j],
                 mj: &v.cross.mj[j],
                 my: v.cross.my[j],
-                wj: self.acc.wj[j],
+                wj: v.wj[j],
                 tm: v.tm.as_ref(),
             });
         }
