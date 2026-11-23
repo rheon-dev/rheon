@@ -1415,7 +1415,7 @@ windows = { budget = 73.1016 }
 # read passed: five million, the allocator's pages given back at once, and a
 # whole read the test's negative control.
 [rss.streaming_5m]
-windows = { budget = 128.461 }
+windows = { budget = 116.4766 }
 darwin = { budget = 117.8438 }
 linux = { budget = 128.9688 }
 

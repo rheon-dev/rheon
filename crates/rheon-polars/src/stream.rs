@@ -474,22 +474,44 @@ impl AnyModel {
     /// constant variance, and `dcc`'s, whose did not tell the correlation's
     /// recursion from constant correlation, so they buffer more rows. One
     /// dispatch a row answers both.
+    /// Whether the model is one of the kinds [`Self::own_wait`] can answer
+    /// for, so a row of every other kind is spared the dispatch. Keep it in
+    /// step with that match: a kind missing here never reports its wait.
+    pub fn waits(&self) -> bool {
+        matches!(
+            self,
+            AnyModel::KMeans(_)
+                | AnyModel::Hmm(_)
+                | AnyModel::Bocpd(_)
+                | AnyModel::Kalman(_)
+                | AnyModel::Deco(_)
+                | AnyModel::Garch(_)
+                | AnyModel::Dcc(_)
+        )
+    }
+
+    #[inline]
     pub fn own_wait(&self) -> OwnWait {
-        let seeding = match self {
-            AnyModel::KMeans(m) => !m.seeded(),
-            AnyModel::Hmm(m) => !m.seeded(),
-            AnyModel::Bocpd(m) => m.warming(),
-            AnyModel::Kalman(m) => m.sizing(),
-            AnyModel::Garch(m) if m.starting() => true,
-            AnyModel::Garch(m) if m.no_effect() => return OwnWait::NotIdentified,
-            // `dcc`'s starts, its margins' and its own, the same two ways.
-            AnyModel::Dcc(m) if m.starting() => true,
-            AnyModel::Dcc(m) if m.no_effect() => return OwnWait::NotIdentified,
-            AnyModel::Deco(m) => m.warming(),
-            _ => false,
-        };
-        if seeding {
+        match self {
+            AnyModel::KMeans(m) if !m.seeded() => OwnWait::Seeding,
+            AnyModel::Hmm(m) if !m.seeded() => OwnWait::Seeding,
+            AnyModel::Bocpd(m) if m.warming() => OwnWait::Seeding,
+            AnyModel::Kalman(m) if m.sizing() => OwnWait::Seeding,
+            AnyModel::Deco(m) if m.warming() => OwnWait::Seeding,
+            // `garch`'s start and `dcc`'s, its margins' and its own, wait two
+            // ways: buffering, or buffering for want of an effect.
+            AnyModel::Garch(m) => Self::start_wait(m.starting(), || m.no_effect()),
+            AnyModel::Dcc(m) => Self::start_wait(m.starting(), || m.no_effect()),
+            _ => OwnWait::None,
+        }
+    }
+
+    #[inline]
+    fn start_wait(starting: bool, no_effect: impl FnOnce() -> bool) -> OwnWait {
+        if starting {
             OwnWait::Seeding
+        } else if no_effect() {
+            OwnWait::NotIdentified
         } else {
             OwnWait::None
         }
@@ -1349,12 +1371,15 @@ pub fn settled_weight(weight: f64, first: f64, settled: f64, steps: f64) -> f64 
     }
 }
 
-/// A model's own wait ([`AnyModel::own_wait`]).
+/// A model's own wait ([`AnyModel::own_wait`]), as the code of the reason
+/// it withholds a row under (0 for none): a row reads the wait once, before
+/// its step, and says the code where nothing earlier withheld it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum OwnWait {
-    None,
-    Seeding,
-    NotIdentified,
+    None = 0,
+    Seeding = REASON_WARM_ROWS,
+    NotIdentified = REASON_NOT_IDENTIFIED,
 }
 
 /// The reasons a row's predictions are withheld, as `withheld_reason`
@@ -3950,6 +3975,14 @@ fn run_instance(
     // the ratio target, whose test was about 1.
     let poisson = matches!(&inst.spec.model, ModelKind::Sgd { loss, .. }
         if loss.as_deref() == Some("poisson"));
+    // What a model's kind adds to a row, decided once an instance: a row of
+    // every other kind pays a branch on each, where reading the kind from the
+    // model each row cost it a dispatch apiece (about 30 instructions a row,
+    // PLAN 548 to 505).
+    let waits = inst.model.get().waits();
+    let is_dcc = matches!(inst.model.get(), AnyModel::Dcc(_));
+    let is_corrchange = matches!(inst.model.get(), AnyModel::CorrChange(_));
+    let is_pca = matches!(inst.spec.model, ModelKind::Pca { .. });
     let hit_test = if poisson {
         HitTest::Undefined
     } else if binary_loss {
@@ -4156,8 +4189,7 @@ fn run_instance(
         // Read before the step, which may seed the model on this row, or
         // fit a start that waited on its evidence: the row itself was still
         // read by the unseeded model, and reports nothing.
-        let wait = inst.model.get().own_wait();
-        let seeding = wait == OwnWait::Seeding;
+        let own_reason = if waits { inst.model.get().own_wait() as u8 } else { 0 };
         // So, for the same reason, is whether the fit this row is predicted
         // from was withheld as too ill-conditioned to carry a digit: the
         // step may solve again on this row, and the reason names the fit
@@ -4241,7 +4273,8 @@ fn run_instance(
                 inst.notified.raise(state_cap_notice(inst.spec, bytes, cap));
             }
             // A dcc margin with no fourth moment: said once, by the bank.
-            if let AnyModel::Dcc(m) = inst.model.get_mut()
+            if is_dcc
+                && let AnyModel::Dcc(m) = inst.model.get_mut()
                 && let Some((j, nu)) = m.take_heavy_tail()
             {
                 inst.notified
@@ -4252,7 +4285,7 @@ fn run_instance(
         }
         let n_slots = step.pred.len();
         // Read from the step's own report, before a gate below nulls it.
-        let ratio_moved = inst.model.get().withheld_by_its_row(&step.pred);
+        let ratio_moved = is_corrchange && inst.model.get().withheld_by_its_row(&step.pred);
         // `ew_cov` has no targets; its slots are statistics, so every one
         // maps to "target 0" for the warmup check. Slot `s` belongs to target
         // `s / nc`; the passes below walk the slots in groups of `nc` rather
@@ -4391,8 +4424,14 @@ fn run_instance(
         // with a noise gate seeds itself). It is a count of learned rows,
         // not of weight, so it is not `min_weight`'s: a decayed weight can
         // sit above the floor for every row of it.
-        if reason == 0 && seeding {
-            reason = REASON_WARM_ROWS;
+        //
+        // So it is for a fit withheld because the rows so far do not identify
+        // it: `garch`'s and `dcc`'s start waiting for rows that tell its
+        // process from a constant one. No model that waits so has an
+        // ill-conditioned or unstable fit, which are read below, so the one
+        // read names both.
+        if reason == 0 {
+            reason = own_reason;
         }
         // A fit withheld because its system was past the condition at which
         // a solve keeps a digit, where no gate above has withheld the row.
@@ -4414,12 +4453,6 @@ fn run_instance(
                 inst.notified.raise(unstable_rate_notice(inst.spec, target));
             }
         }
-        // A fit withheld because the rows so far do not identify it, where
-        // no gate or wait above has withheld the row: `garch`'s start
-        // waiting for rows that tell its process from a constant variance.
-        if reason == 0 && wait == OwnWait::NotIdentified {
-            reason = REASON_NOT_IDENTIFIED;
-        }
         // A `corrchange` flag withheld because the two columns' scale ratio
         // moved inside the span, where no gate above has withheld the row.
         if reason == 0 && ratio_moved {
@@ -4429,9 +4462,7 @@ fn run_instance(
         // yet tell it apart from a neighbor, where no gate above has
         // withheld the row: such a component is the only null a `pca` row
         // writes past its floor.
-        if reason == 0
-            && matches!(inst.spec.model, ModelKind::Pca { .. })
-            && step.pred.iter().any(|p| p.is_nan())
+        if reason == 0 && is_pca && step.pred.iter().any(|p| p.is_nan())
         {
             reason = REASON_NOT_SEPARATED;
         }

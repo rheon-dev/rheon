@@ -102,8 +102,7 @@ model that only the new build has is listed as an addition and passes.
   cycle's start). The new reason is a new category of every model's
   `withheld_reason` Enum, every value as it was. Moves: `corrchange.stat`,
   `corrchange.crit`, `corrchange.flag`, `corrchange.since_flag`,
-  `corrchange.since_change`, `corrchange.withheld_reason`,
-  `seqtest.withheld_reason`.
+  `corrchange.since_change`, `*.withheld_reason`.
 
 - **`rp.stream.with_windows(..., save_state=...)` returns the newest
   stamp's rows** (PLAN 567). At the end of the whole input, the windows
@@ -812,8 +811,10 @@ model that only the new build has is listed as an addition and passes.
   start's fit costs 1.13 to 1.20 times what it did under the normal, and
   1.9 to 2.6 times with a t, which fits the constant-variance null's shape
   too (2,000 rows: 2.2 ms for `garch`, 70 ms with a t, 144 with a skewed
-  t, once a start, on arm64); a row after the start costs what it did.
-  Moves: `garch.*`.
+  t, once a start, on arm64); a row after the start costs what it did. The
+  new reason is a new category of every model's `withheld_reason` Enum,
+  every value of the other models as it was. Moves: `garch.*`,
+  `*.withheld_reason`.
 
 - **`glm`'s refit gives the same fit on every platform** (W9's CI on
   1819e678: the committed `glm_refit_done` state fixture failed on Windows
@@ -1158,6 +1159,22 @@ model that only the new build has is listed as an addition and passes.
   416 specs, against 1,296 of 74. Against 2.0.0 every field is identical.
 
 ### Performance
+
+- **A model bank row reads each model's kind once an instance, not once a
+  row** (PLAN 548 to 553). The checks a few kinds add to a row (the start a
+  `garch`, `dcc`, `deco`, `kmeans`, `hmm`, `bocpd` or `kalman` waits on, a
+  `dcc` margin's heavy tail, a `corrchange` flag's scale ratio, a `pca`
+  component's separation) each dispatched on the model's kind every row,
+  about 20 instructions for the first of them and 30 for the four after,
+  paid by every other kind. They are decided when an instance starts, and a
+  row of any other kind pays a branch apiece. Measured as retired
+  instructions of one 1,000-row chunk through the bank on macOS arm64
+  (minimum of 20 runs, one thread): `seqtest` 2,127,009 before 548, 2,156,376
+  with it and 2,189,619 with the rest of wave 13, 2,159,977 now;
+  `ewridge` with 5 features 4,998,290, 5,034,588, 5,066,990 and 5,045,486.
+  The rest of the rise since 548, about 33 to 47 instructions a row, is not
+  in a check of this kind: with the wait read as a constant the count is as
+  now.
 
 - **`deco`'s ratio level costs 3-4% a row unblocked and 18-22% over four
   blocks** (PLAN 551), for a level that reads the equicorrelation where the
