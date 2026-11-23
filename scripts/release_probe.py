@@ -409,6 +409,22 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         dict(targets=["y", "z"], start_rows=50, horizon=3, group="g", **CLOCK),
         [],
     ),
+    # Three series' correlations, through GARCH margins, after both starts
+    # of 50 rows: the asymmetric model, estimated.
+    (
+        "dcc",
+        "dcc",
+        dict(
+            targets=["y", "z", "x0"],
+            asymmetric=True,
+            margin_start_rows=50,
+            start_rows=50,
+            half_life=50.0,
+            group="g",
+            **CLOCK,
+        ),
+        [],
+    ),
     (
         "hawkes",
         "hawkes",

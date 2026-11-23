@@ -1120,6 +1120,15 @@ fn every_kind_refuses_or_loads_corruption(prefix_step: usize, flip_step: usize) 
             "[]",
             false,
         ),
+        // Saved after its margins' start and its own: two GARCH margins,
+        // the targets, Q and its sensitivities.
+        (
+            "dcc",
+            r#"{"type": "dcc", "asymmetric": true, "margin_start_rows": 50, "start_rows": 50}"#,
+            r#"["y", "x0"]"#,
+            "[]",
+            true,
+        ),
     ];
     let mut seen = Vec::new();
     for &(kind, model, targets, features, half_life) in kinds {

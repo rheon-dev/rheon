@@ -205,6 +205,139 @@ pub fn garch_cfg(spec: &Spec) -> Result<rheon_core::GarchCfg, String> {
 /// A `garch` spec's start, in rows, when it gives neither rows nor a span.
 pub const GARCH_START_ROWS: usize = 2000;
 
+/// A `dcc` spec's [`rheon_core::DccCfg`] under `decay`: the targets the
+/// series, a GARCH margin each unless `margins` is `"none"` (its start
+/// 2,000 rows unless the spec gives rows or a span), the correlation's
+/// start 500 rows unless the spec gives rows or a span, and `(a, b[, g])`
+/// held where the spec gives them. Every value is the model's own to check.
+pub fn dcc_cfg(spec: &Spec, decay: Decay) -> Result<rheon_core::DccCfg, String> {
+    use rheon_core::{GarchDist, GarchVol};
+    let ModelKind::Dcc {
+        asymmetric,
+        margins,
+        vol,
+        dist,
+        truncation,
+        variance_targeting,
+        margin_start_rows,
+        margin_start_span,
+        a,
+        b,
+        g,
+        start_rows,
+        start_span,
+        max_state_bytes,
+    } = &spec.model
+    else {
+        return Err(not_a(spec, "dcc_cfg", "dcc"));
+    };
+    let asymmetric = asymmetric.unwrap_or(false);
+    let with_margins = match margins.as_deref().unwrap_or("garch") {
+        "garch" => true,
+        "none" => false,
+        other => {
+            return Err(format!(
+                "dcc: margins must be \"garch\" or \"none\", but it is {other:?}. Use one of \
+                 those words."
+            ));
+        }
+    };
+    let margin_keys_given = vol.is_some()
+        || dist.is_some()
+        || truncation.is_some()
+        || variance_targeting.is_some()
+        || margin_start_rows.is_some()
+        || margin_start_span.is_some();
+    if !with_margins && margin_keys_given {
+        return Err(
+            "dcc: margins = \"none\" runs no GARCH margin, but the spec sets one of vol, dist, \
+             truncation, variance_targeting, margin_start_rows or margin_start_span. Leave them \
+             out, or set margins to \"garch\"."
+                .into(),
+        );
+    }
+    let vol = match vol.as_deref().unwrap_or("garch") {
+        "garch" => GarchVol::Garch,
+        "gjr" => GarchVol::Gjr,
+        "egarch" => GarchVol::Egarch,
+        "figarch" => GarchVol::Figarch,
+        other => {
+            return Err(format!(
+                "dcc: vol must be \"garch\", \"gjr\", \"egarch\" or \"figarch\", but it is \
+                 {other:?}. Use one of those words."
+            ));
+        }
+    };
+    let dist = match dist.as_deref().unwrap_or("normal") {
+        "normal" => GarchDist::Normal,
+        "t" => GarchDist::T,
+        "skewt" => GarchDist::Skewt,
+        other => {
+            return Err(format!(
+                "dcc: dist must be \"normal\", \"t\" or \"skewt\", but it is {other:?}. Use \
+                 one of those words."
+            ));
+        }
+    };
+    let params = match (a, b, g) {
+        (None, None, None) => None,
+        (Some(a), Some(b), None) if !asymmetric => Some(vec![*a, *b]),
+        (Some(a), Some(b), Some(g)) if asymmetric => Some(vec![*a, *b, *g]),
+        _ => {
+            return Err(format!(
+                "dcc: the spec gives {} of the parameters, but they are held only all together. \
+                 Give {}, or leave every one out to estimate them.",
+                [("a", a), ("b", b), ("g", g)]
+                    .iter()
+                    .filter(|(_, v)| v.is_some())
+                    .map(|(n, _)| *n)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+                    + if !asymmetric && g.is_some() {
+                        " (g is the asymmetric model's: set asymmetric to true)"
+                    } else {
+                        ""
+                    },
+                if asymmetric { "a, b and g" } else { "a and b" },
+            ));
+        }
+    };
+    let cfg = rheon_core::DccCfg {
+        n_targets: spec.m(),
+        asymmetric,
+        margins: with_margins.then(|| rheon_core::GarchCfg {
+            n_targets: spec.m(),
+            vol,
+            dist,
+            truncation: *truncation,
+            variance_targeting: variance_targeting.unwrap_or(false),
+            start_rows: margin_start_rows.unwrap_or(GARCH_START_ROWS),
+            start_span: margin_start_span.as_ref().map(Span::value),
+            horizon: 1,
+            min_weight: 0.0,
+            max_state_bytes: None,
+        }),
+        params,
+        decay,
+        start_rows: start_rows.unwrap_or(rheon_core::DCC_START_ROWS),
+        start_span: start_span.as_ref().map(Span::value),
+        min_weight: spec.min_periods_or_default(),
+        max_state_bytes: *max_state_bytes,
+    };
+    // A margin's refusal names the margins' parameters as the spec spells
+    // them.
+    cfg.validate()
+        .map_err(|e| match e.strip_prefix("dcc: garch: ") {
+            Some(rest) => format!(
+                "dcc: {}",
+                rest.replace("start_rows", "margin_start_rows")
+                    .replace("start_span", "margin_start_span")
+            ),
+            None => e,
+        })?;
+    Ok(cfg)
+}
+
 /// A `bocpd` spec's expected rows between changepoints, where it gives
 /// neither `hazard_rows` nor `hazard`.
 pub const BOCPD_HAZARD_ROWS: f64 = 250.0;

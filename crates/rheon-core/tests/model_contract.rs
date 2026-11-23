@@ -260,7 +260,9 @@ const NO_DECAY: &[&str] = &["audit", "bocpd", "garch", "rcov", "seqtest"];
 /// `corrchange`'s `since_change` dates a change only where one is flagged
 /// (docs/PLAN.md task 114); `garch`'s standardized residual is one only
 /// where the row has its residual.
-const ONLY_ON_A_FLAG: &[(&str, usize)] = &[("corrchange", 4), ("garch", 1)];
+/// `dcc`'s log-density is one only where every series has its residual
+/// (slot 1 with two series and no margins).
+const ONLY_ON_A_FLAG: &[(&str, usize)] = &[("corrchange", 4), ("garch", 1), ("dcc", 1)];
 
 fn check(r: &Report, kind: &str, targets: usize, combos: usize) {
     assert_eq!(r.kind, kind, "state kind");
@@ -810,6 +812,7 @@ fn every_state_kind_is_distinct_and_named() {
         "hawkes",
         "expectile",
         "garch",
+        "dcc",
     ];
     let mut seen = std::collections::HashSet::new();
     for k in kinds {
@@ -846,6 +849,7 @@ fn every_state_kind_is_distinct_and_named() {
         Hawkes::new(hawkes_cfg()).unwrap().state(),
         Expectile::new(expectile_cfg()).unwrap().state(),
         Garch::new(garch_cfg()).unwrap().state(),
+        Dcc::new(dcc_cfg()).unwrap().state(),
     ];
     let from_states: Vec<&str> = states.iter().map(|s| s.model.kind()).collect();
     assert_eq!(from_states, kinds);
@@ -914,6 +918,7 @@ fn one_state_of_each_kind() -> Vec<State> {
         Hawkes::new(hawkes_cfg()).unwrap().state(),
         Expectile::new(expectile_cfg()).unwrap().state(),
         Garch::new(garch_cfg()).unwrap().state(),
+        Dcc::new(dcc_cfg()).unwrap().state(),
         State::new(ModelState::EwCov(Box::new(EwCov::new(1)))),
     ]
 }
@@ -1034,6 +1039,8 @@ fn every_model_hands_back_its_configuration() {
     same(Expectile::new(c.clone()).unwrap(), &c, Expectile::cfg);
     let c = garch_cfg();
     same(Garch::new(c.clone()).unwrap(), &c, Garch::cfg);
+    let c = dcc_cfg();
+    same(Dcc::new(c.clone()).unwrap(), &c, Dcc::cfg);
 }
 
 fn ew_class_cfg() -> EwClassCfg {
@@ -1895,6 +1902,12 @@ fn every_model_refuses_at_restore_a_configuration_its_new_refuses() {
             0.into(),
             "horizon must be at least 1",
         ),
+        refused(
+            Dcc::new(dcc_cfg()).unwrap(),
+            "start_rows",
+            0.into(),
+            "start_rows must be at least 1",
+        ),
     ];
     // Every model's `restore`: the twenty-one kinds, `robust` under both
     // losses.
@@ -2311,6 +2324,7 @@ fn exactly_the_scheduled_solvers_report_a_solve_share() {
         ("hawkes", share(Hawkes::new(hawkes_cfg()).unwrap())),
         ("expectile", share(Expectile::new(expectile_cfg()).unwrap())),
         ("garch", share(Garch::new(garch_cfg()).unwrap())),
+        ("dcc", share(Dcc::new(dcc_cfg()).unwrap())),
     ];
     let reporting: Vec<&str> = shares
         .iter()
@@ -2359,6 +2373,7 @@ const PROBED: &[(&str, &str)] = &[
     ("Hawkes", "hawkes"),
     ("Expectile", "expectile"),
     ("Garch", "garch"),
+    ("Dcc", "dcc"),
 ];
 
 #[test]
@@ -4980,6 +4995,70 @@ fn garch_predict_is_the_step() {
         1,
         false,
     );
+}
+
+/// Two series, the asymmetric model with its parameters given after a start
+/// of 50 rows, decayed at the contract's half-life, the targets taken as
+/// standardized residuals (no margins). The contract's stream holds one
+/// correlation, which identifies no recursion, so a learned model's start
+/// withholds its fit there: [`dcc`] probes that one too.
+fn dcc_cfg() -> DccCfg {
+    DccCfg {
+        n_targets: 2,
+        asymmetric: true,
+        margins: None,
+        params: Some(vec![0.03, 0.9, 0.04]),
+        decay: Decay::Halflife(HALFLIFE),
+        start_rows: 50,
+        start_span: None,
+        min_weight: 0.0,
+        max_state_bytes: None,
+    }
+}
+
+#[test]
+fn dcc() {
+    // A correlation per pair, no features: the pair's correlation and the
+    // row's log-density, and `n_eff` the decayed weight (rule 8).
+    let m = Dcc::new(dcc_cfg()).unwrap();
+    assert_eq!(m.n_features(), 0, "dcc reads no features");
+    let r = probe_with(m, 2, Some(&Dcc::n_eff));
+    assert_eq!(r.kind, "dcc");
+    assert_eq!(r.n_targets, 2);
+    assert_eq!(r.n_outputs, 2);
+    assert_eq!(r.pred_len, 2);
+    assert!(r.roundtrips);
+    // learned: its start withheld on this stream, its contract kept
+    let c = DccCfg {
+        params: None,
+        ..dcc_cfg()
+    };
+    let r = probe_with(Dcc::new(c).unwrap(), 2, Some(&Dcc::n_eff));
+    assert!(r.roundtrips);
+    // with GARCH margins and given parameters, three series
+    let c = DccCfg {
+        n_targets: 3,
+        asymmetric: false,
+        params: Some(vec![0.05, 0.9]),
+        margins: Some(GarchCfg {
+            start_rows: 50,
+            horizon: 1,
+            n_targets: 3,
+            max_state_bytes: None,
+            ..garch_cfg()
+        }),
+        ..dcc_cfg()
+    };
+    let r = probe_with(Dcc::new(c).unwrap(), 3, Some(&Dcc::n_eff));
+    assert_eq!(r.n_outputs, 7);
+    assert!(r.roundtrips);
+}
+
+#[test]
+fn dcc_predict_is_the_step() {
+    // With margins the start is the margins' and the stage's, too long for
+    // the parity's 300 ready rows: `dcc/tests.rs` holds that form.
+    predict_is_the_step_without_the_step(|| Dcc::new(dcc_cfg()).unwrap(), 2, false);
 }
 
 #[test]

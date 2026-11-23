@@ -248,6 +248,12 @@ what = "garch, one series after its start: AnyModel::step_into, into one kept St
 [instructions.garch_figarch]
 what = "garch, FIGARCH of 1,000 lags after its start: AnyModel::step_into, its O(M) pass of the weights and their derivatives a row; its budget is CI's first count"
 
+[instructions.dcc]
+what = "dcc, three series, the asymmetric model learned after its start, no margins: AnyModel::step_into, into one kept Step, R's 3 x 3 factor and inverse and three R⁻¹ ∂R a row; its budget is CI's first count"
+
+[instructions.dcc_margins]
+what = "dcc, three series through GARCH margins, the asymmetric model learned after both starts: AnyModel::step_into, three GARCH steps and the correlation's a row; its budget is CI's first count"
+
 [instructions.audit_continuous]
 what = "audit, one continuous column, 256 counters: AnyModel::step_into, into one kept Step, past the cap on nearly every row"
 budget = 847018
@@ -1553,6 +1559,21 @@ variance_y = { budget = 8.125 }
 variance_z = { budget = 8.125 }
 weight_sum = { budget = 8.0 }
 withheld_reason = { budget = 1.125 }
+
+[memory.dcc]
+coef = { budget = 31.525 }
+corr_y_x0 = { budget = 8.125 }
+corr_y_z = { budget = 8.125 }
+corr_z_x0 = { budget = 8.125 }
+learned_clock = { budget = 8.125 }
+loglik = { budget = 8.125 }
+scored_clock = { budget = 8.0 }
+settled_frac = { budget = 8.0 }
+variance_x0 = { budget = 8.125 }
+variance_y = { budget = 8.125 }
+variance_z = { budget = 8.125 }
+weight_sum = { budget = 8.0 }
+withheld_reason = { budget = 1.0 }
 
 # --- raises and sign-offs -------------------------------------------------------
 [[raised]]

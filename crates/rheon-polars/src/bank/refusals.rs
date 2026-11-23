@@ -47,6 +47,10 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
             max_state_bytes: Some(_),
             ..
         }
+        | ModelKind::Dcc {
+            max_state_bytes: Some(_),
+            ..
+        }
         | ModelKind::Glm {
             max_state_bytes: Some(_),
             ..
@@ -85,9 +89,20 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
             ModelKind::Garch {
                 start_span: Some(s),
                 ..
+            }
+            | ModelKind::Dcc {
+                start_span: Some(s),
+                ..
             } => (
                 format!("the rows of its start inside start_span = {s}"),
                 "Shorten start_span",
+            ),
+            ModelKind::Dcc {
+                margin_start_span: Some(s),
+                ..
+            } => (
+                format!("the rows of its margins' start inside margin_start_span = {s}"),
+                "Shorten margin_start_span",
             ),
             ModelKind::Expectile {
                 refit_span: Some(s),

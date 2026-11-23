@@ -150,6 +150,24 @@
     boundary_gamma = None
     permute_every = None
     common
+  dcc:
+    name
+    targets
+    asymmetric = False
+    margins = 'garch'
+    vol = 'garch'
+    dist = 'normal'
+    truncation = None
+    variance_targeting = False
+    margin_start_rows = None
+    margin_start_span = None
+    a = None
+    b = None
+    g = None
+    start_rows = None
+    start_span = None
+    max_state_bytes = None
+    common
   deco:
     name
     features
@@ -575,6 +593,34 @@
     stream.robust_se_half_life = "inf"
     stream.specification_half_life = "inf"
     stream.tails_half_life = "inf"
+  dcc(a=0.05, b=0.9, half_life=50.0, targets=['y', 'x0']):
+    model.asymmetric = false
+    model.decay.Halflife = 50.0
+    model.margins.dist = "normal"
+    model.margins.horizon = 1
+    model.margins.max_state_bytes = null
+    model.margins.min_weight = 0.0
+    model.margins.n_targets = 2
+    model.margins.start_rows = 2000
+    model.margins.start_span = null
+    model.margins.truncation = null
+    model.margins.variance_targeting = false
+    model.margins.vol = "garch"
+    model.max_state_bytes = null
+    model.min_weight = 0.0
+    model.n_targets = 2
+    model.params = [0.05, 0.9]
+    model.start_rows = 500
+    model.start_span = null
+    stream.breaks_half_life = 50.0
+    stream.calibration_half_life = 200.0
+    stream.feature_health_half_life = 50.0
+    stream.influence_half_life = 50.0
+    stream.max_error_inflation = "inf"
+    stream.min_weight = [0.0, 0.0]
+    stream.robust_se_half_life = 50.0
+    stream.specification_half_life = 50.0
+    stream.tails_half_life = 50.0
   deco(features=['x0', 'x1'], half_life=50.0):
     model.alpha = null
     model.beta = null
@@ -1199,6 +1245,16 @@
     model.variance_targeting = true
   garch(start_span=500.0, targets=['y']), the lines that differ from garch's:
     model.start_span = 500.0
+  dcc(a=0.03, asymmetric=True, b=0.9, g=0.04, half_life=50.0, targets=['y', 'x0']), the lines that differ from dcc's:
+    model.asymmetric = true
+    model.params = [0.03, 0.9, 0.04]
+  dcc(a=0.05, b=0.9, half_life=50.0, margins='none', start_span=500.0, targets=['y', 'x0']), the lines that differ from dcc's:
+    model.margins = null
+    model.start_span = 500.0
+  dcc(a=0.05, b=0.9, dist='t', half_life=50.0, margin_start_span=900.0, margins='garch', targets=['y', 'x0'], vol='gjr'), the lines that differ from dcc's:
+    model.margins.dist = "t"
+    model.margins.start_span = 900.0
+    model.margins.vol = "gjr"
 
 [ModelBank]  # name and signature: a parameter added or a default moved is a diff here
   __init__(self, specs: 'Iterable[dict[str, Any]]', *, threads: 'int | None' = None) -> 'None'
@@ -2361,6 +2417,18 @@
     settled_frac: f64
     withheld_reason: enum
     coef: list[f64]
+  dcc minimal:
+    variance_y: f64
+    variance_z: f64
+    variance_w: f64
+    corr_y_z: f64
+    corr_y_w: f64
+    corr_z_w: f64
+    loglik: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
+    coef: list[f64]
   deco blocked:
     u_a: f64
     u_b: f64
@@ -2391,6 +2459,7 @@
     coef: List[Float64]
   bocpd: the shared columns only
   corrchange: the shared columns only
+  dcc: the shared columns only
   deco: the shared columns only
   ew_class: the shared columns only
   ew_cov:
@@ -2650,6 +2719,9 @@
   lasso.closed: both, right
   garch.vol: egarch, figarch, garch, gjr
   garch.dist: normal, skewt, t
+  dcc.margins: garch, none
+  dcc.vol: egarch, figarch, garch, gjr
+  dcc.dist: normal, skewt, t
   marginal.closed: both, right
   ew_class.covariance_type: diag, full, tied
   ew_class.window_budget: refuse, thin
@@ -2794,6 +2866,7 @@
     audit: distinct_cap, pairs
     bocpd: covariance_prior, covariance_type, degrees_of_freedom_prior, hazard, hazard_col, hazard_rows, max_run, mean_precision_prior, mean_prior, prune_below, robust_beta, warm_rows, warm_span
     corrchange: alpha, alpha_adjust, bandwidth, boundary_gamma, change_action, crit, kind, monitor_rows, n_perm, norm, perm_block, permute_every, permute_every_rows, scalar, seed, window_rows
+    dcc: a, asymmetric, b, dist, g, margin_start_rows, margin_start_span, margins, max_state_bytes, start_rows, start_span, truncation, variance_targeting, vol
     deco: alpha, beta, blocks, dynamics
     ew_class: classes, closed, covariance_type, max_rows_between_snapshots, precision_prior, snapshot_every, window_budget, window_size
     ew_cov: bias, closed, gram_threads, lags, mahal_quantiles, max_rows_between_pcas, max_rows_between_snapshots, pca, pca_every, precision_prior, snapshot_every, stats, window_budget, window_size

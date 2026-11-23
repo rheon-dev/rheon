@@ -94,6 +94,11 @@ const SPECS: &[(&str, &str, &str)] = &[
         r#""targets": ["y", "x0"], "features": []"#,
     ),
     (
+        "dcc",
+        r#"{"type": "dcc", "asymmetric": true, "margin_start_rows": 50, "start_rows": 50}"#,
+        r#""targets": ["y", "x0"], "features": [], "half_life": 50.0"#,
+    ),
+    (
         "hawkes",
         r#"{"type": "hawkes", "kernel_decays": [0.5, 2.0]}"#,
         r#""targets": ["y", "x0"], "features": [], "half_life": 50.0"#,

@@ -1,7 +1,7 @@
 <!-- kind: reference -->
 # Models
 
-The reference entry of each of the twenty-six models a spec can name, by
+The reference entry of each of the twenty-seven models a spec can name, by
 family, for a reader who knows which model they want to look up. A
 model's parameters, their defaults and its refusals are in its docstring,
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md).
@@ -28,7 +28,7 @@ which models keep each, and why.
 
 ## The models at a glance
 
-The twenty-six models fall into four families, and each family answers one
+The twenty-seven models fall into four families, and each family answers one
 kind of question about a stream. Each name links its builder's reference
 page, which gives its keywords and their defaults, and *entry* links its
 entry on this page. [Choose a model](how-to/choose-a-model.md) says which
@@ -56,6 +56,7 @@ to start with for which question.
 | [`rcov`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.rcov) · [entry](#rcov--a-blocks-realized-covariance-robust-to-noise) | accumulate | a block's realized covariance, robust to microstructure noise: the Barndorff-Nielsen–Hansen–Lunde–Shephard kernel or Christensen–Kinnebrock–Podolskij pre-averaging, reported when a group closes |
 | [`audit`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.audit) · [entry](#audit--what-a-streams-columns-hold) | accumulate | what each column holds, counted in one pass: nulls, NaNs and infinities apart, repeated values, runs, persistence, tails and duplicated columns, and the clock's duplicate stamps and gaps, read back as a table and by `bank.check()` |
 | [`garch`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.garch) · [entry](#garch--how-large-will-the-next-return-be) | step | the GARCH family, a conditional variance for each return series: GARCH(1,1), GJR, EGARCH and FIGARCH, with normal, Student-t or skewed-t innovations, its parameters learned a row at a time after a start fitted by likelihood |
+| [`dcc`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.dcc) · [entry](#dcc--how-do-the-correlations-move-from-row-to-row) | step | dynamic conditional correlation and its asymmetric form: the full correlation matrix of a few return series, each standardized by its own GARCH, moving every row, its two or three parameters given or learned a row at a time after a start fitted by quasi-likelihood |
 | **[Clustering and classification](#clustering-and-classification)** | | put labels on rows |
 | [`kmeans`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.kmeans) · [entry](#kmeans--exponentially-weighted-k-means) | step | exponentially weighted k-means: cluster labels assigned before the row is learned from, with a split–merge move that finds a cluster born after seeding |
 | [`micro`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.micro) · [entry](#micro--density-based-clustering-any-shape) | step | density-based clustering: DenStream micro-clusters linked into clusters of any shape and number, flagging the rows that belong to none |
@@ -266,7 +267,7 @@ per target, give `min_weight` a list. The default depends on the model:
 | the feature count plus one (1 for `holt`) | `ew_cov`, `ew_class`, `kmeans`, `micro`, `holt` |
 | 3 | `marginal`, `deco` |
 | 1 | `bocpd` |
-| 0, each having a gate of its own or nothing to gate | `ewridge`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes`, `garch` |
+| 0, each having a gate of its own or nothing to gate | `ewridge`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes`, `garch`, `dcc` |
 
 **`min_settled_frac` is off by default.** Set it when the half-life was
 chosen to average over regimes or seasons that a shorter history would not
@@ -2145,7 +2146,8 @@ against that state. `marginal`,
 `rcov` and `audit` write only `weight_sum` on a row, and keep their results
 in the state: read them as a table after the run, or, for `rcov`, when a
 block closes. `garch` forecasts each return's variance before the row
-arrives, from a model of how variance clusters in time.
+arrives, from a model of how variance clusters in time, and `dcc` the
+correlations of several returns from a model of how they move together.
 
 ### `ew_cov` — exponentially weighted moments
 
@@ -3064,6 +3066,207 @@ GJR with the skewed t: under skewed innovations GJR's persistence reads
 EGARCH or FIGARCH, APARCH, the generalized error distribution and a mean
 model: none has an online estimator checked against `arch`. EGARCH's
 forecast past one row has no closed form.
+
+### `dcc` — how do the correlations move from row to row?
+
+*API:* [`rheon.spec.dcc`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.dcc) — *Rust:* [`dcc.rs`](../crates/rheon-core/src/dcc.rs) — *Outputs:* [fields](OUTPUTS.md#dcc)
+
+Dynamic conditional correlation (Engle 2002) and its asymmetric form
+(Cappiello, Engle and Sheppard 2006): the full correlation matrix of `k`
+return series given the rows before the row, with two or three numbers that
+drive it, given or learned one row at a time.
+
+Use `dcc` on a few return series whose correlations change with time, and
+rise after joint falls, when you want each pair's correlation forecast
+before the row arrives: a portfolio's risk, a hedge ratio, a pair's spread.
+Each series is standardized by its own GARCH(1,1) margin, as `garch` would
+fit it. The margins' start (2,000 rows by default) reports no variance, and
+the correlation's own start (500 rows) after it reports no correlation;
+after them every row reports each series' variance, each pair's
+correlation and the row's log-density under it.
+
+Its parameters, their defaults and what each refuses are in its
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.dcc),
+and the fields it writes in [OUTPUTS.md](OUTPUTS.md#dcc). The parameters
+every spec takes are in [What every spec takes](#what-every-spec-takes),
+apart from `features`, which it refuses. `half_life` or `lam` is required,
+`"inf"` for no decay. A row's weight scales its evidence. A row of weight 0,
+or with any series null, steps nothing, and is still read.
+
+#### The recursion
+
+With `z_t` the row's standardized residuals, each series' return over the
+square root of its margin's variance read before the row, and `n_t` their
+negative parts:
+
+```
+Q_{t+1} = (1 − a − b) Q̄ − g N̄ + a z_t z_tᵀ + g n_t n_tᵀ + b Q_t
+R_t     = diag(Q_t)^{−1/2} Q_t diag(Q_t)^{−1/2}
+Q̄ ← Q̄ + (w/W)(z zᵀ − Q̄),   N̄ ← N̄ + (w/W)(n nᵀ − N̄),   W ← λ W + w
+```
+
+`R_t` is the correlation reported for row `t`. The targets `Q̄` and `N̄` are
+the weighted means of the rows learned, so the level the correlations
+revert to is the stream's own. `g = 0` is DCC(1,1): set `asymmetric=True`
+for the asymmetric model, whose correlations also answer joint negative
+returns. With `margins="none"` the targets are taken as standardized
+residuals already.
+
+**The set it holds** is `a, b, g ≥ 0` and `a + b + δ g ≤ 1 − 10⁻⁴`, with `δ`
+the largest eigenvalue of `Q̄^{−1/2} N̄ Q̄^{−1/2}`. That is exactly where the
+intercept `(1 − a − b) Q̄ − g N̄` is positive semi-definite, so every `Q_t` is
+positive definite and every `R_t` a correlation matrix. It is also where a
+covariance-stationary `Q_t` exists, given innovations with a finite fourth
+moment: the recursions of `Q`'s mean and variance have the matrices `b I`
+and `b² I`, so `δ` enters only through positivity. A Student-t margin
+fitted at or below 4 degrees of freedom has no fourth moment, and the bank
+says so once. The targets move, and `δ` with them, so the set is held at
+every row: parameters the targets have left outside are projected back onto
+it before the next `Q` is formed. Given parameters are projected afresh
+each row, so they return as given once the targets do.
+
+#### The update
+
+Each learned row of weight `w` steps the parameters by the score of its
+quasi-log-likelihood `l_t = −½ (ln |R_t| + z_tᵀ R_t⁻¹ z_t)`. The score
+reads `∂R` from `∂Q`, and its own recursion carries `∂Q` at the parameters
+of its time:
+
+```
+r = w / W
+H ← H + r (I_t − H)          I_t = ½ tr(R⁻¹ ∂R_i R⁻¹ ∂R_j)
+θ ← Proj_H(θ + r H⁻¹ g_t)    g_t = ½ (uᵀ ∂R_i u − tr(R⁻¹ ∂R_i)),  u = R⁻¹ z
+```
+
+`Proj_H` is the nearest point of the set in `H`'s own metric, as `garch`
+projects. With no decay `r = 1/(n + N)` after a start of `N` rows; under a
+half-life it floors at `1 − λ`, a tracking estimator whose targets and
+information forget at the same rate.
+
+**The start.** The correlation's first `start_rows` rows after the
+margins', or the rows of its first `start_span` of the clock, are buffered.
+Their weighted means are the targets, and the parameters are the maximum of
+their batch quasi-likelihood with `Q_1 = Q̄`, by the model's own projected
+Fisher scoring from a small grid, run to its rounding. The buffer is then
+replayed at the fit to build `H`.
+
+**A start reports only a recursion its rows identify.** The test is the
+condition itself, not a count of rows. The fit is withheld unless its
+likelihood-ratio statistic against constant correlation (`a = b = 0`, and
+`g = 0`), with the weights at Kish's count, reaches χ² at 0.999 for those
+restrictions: 13.8 for DCC's two and 16.3 for the asymmetric model's three.
+The information there must be positive definite too, and a buffer whose
+`Q̄` is not positive definite (a series constant over it, or two the same)
+is withheld the same way. A fit that passes is stepped from only at its
+optimum: the gain its projected Newton step predicts is at most `10⁻⁶`
+nats, which an optimum on a bound of the set meets as well. A start that
+fails either waits for twice its rows (or its span) and fits again, at most
+twice while `max_state_bytes` holds the doubled buffer. Then a withheld
+start buffers afresh, and one short of its optimum is stepped from. While a
+fit is withheld, `withheld_reason` reads `not_identified`. With `a` and `b`
+given there is nothing to identify, and the start waits only for a `Q̄`
+that is positive definite.
+
+The state is `32 k² + 96` bytes for DCC and `48 k² + 144` for the
+asymmetric model, learned (`16 k² + 64` and `24 k² + 72` given), for `k`
+series, and the margins' 168 bytes a series. Each start's buffer adds its
+own until it is fitted: 16 bytes a row a series for the margins', `8 (k +
+2)` a row for the correlation's. The margins' start comes first, so with
+the default starts `max_state_bytes`' 256 KB holds eight series. A row
+costs `O(p k³)` for `p` parameters: the factor and inverse of `R`, and `R⁻¹
+∂R` for each parameter.
+
+#### Rows and the clock
+
+**The recursion is per observation**, as a GARCH's is: `Q_{t+1}` follows
+row `t` however far back on the clock it was. The decay acts on the clock,
+through the targets, the weight and the estimator's gain, so a half-life in
+clock units forgets the same at any row rate. Each start is a span of rows,
+`start_rows` and `margin_start_rows`, or of the clock, `start_span` and
+`margin_start_span`, a number of the clock column's units or a duration
+such as `"1d"` on a temporal clock. A span's rows are the data's to decide,
+so their bytes are checked as they come: a warning past half of
+`max_state_bytes`, and a refusal at it.
+
+**No rolling window.** The targets could be read over a window, but the
+estimate could not: its sensitivities and information are the recursion's
+whole path, from which no row can be taken back out. A half-life gives the
+targets and the estimate the same memory.
+
+#### Example
+
+**It recovers the process it did not see made.** This code simulates two
+series whose correlation follows a DCC at `(a, b) = (0.04, 0.93)` and prints
+the fit after 20,000 rows:
+
+```python
+import numpy as np
+import polars as pl
+from rheon import polars as rp
+
+# Set the truth: the parameters and the level the correlations revert to.
+rng = np.random.default_rng(3)
+a, b, qbar = 0.04, 0.93, np.array([[1.0, 0.5], [0.5, 1.0]])
+
+# Simulate the process: each row's correlation from the rows before.
+q, rows = qbar.copy(), []
+for _ in range(20_000):
+    d = np.sqrt(np.diag(q))
+    z = np.linalg.cholesky(q / np.outer(d, d)) @ rng.standard_normal(2)
+    q = (1 - a - b) * qbar + a * np.outer(z, z) + b * q
+    rows.append(z)
+
+# Write the two series to a file.
+z = np.array(rows)
+pl.DataFrame({"x": z[:, 0], "y": z[:, 1]}).write_parquet("z.parquet")
+
+# Fit it, a row at a time after the start of 500 rows.
+model = rp.spec.dcc("c", targets=["x", "y"], margins="none", half_life="inf")
+bank = rp.ModelBank([model])
+bank.fit(pl.scan_parquet("z.parquet"))
+
+# Read the fit's terms by name and compare them with the truth.
+coef = {row["term"]: row["coef"] for row in bank.coef().iter_rows(named=True)}
+print(f"a: true 0.04, found {coef['a']:.2f}")
+print(f"b: true 0.93, found {coef['b']:.2f}")
+```
+
+```text
+a: true 0.04, found 0.04
+b: true 0.93, found 0.93
+```
+
+#### See also
+
+For correlations measured another way:
+
+- [`garch`](#garch--how-large-will-the-next-return-be), for each series'
+  variance alone.
+- [`deco`](#deco--one-correlation-for-the-whole-matrix), for one average
+  correlation across many series, at `O(k)` a row.
+- [`ew_cov`](#ew_cov--exponentially-weighted-moments), for a correlation
+  with a fixed decay rather than a fitted recursion.
+
+#### Notes
+
+**It agrees with the batch fit to first order.** It is the recursive
+prediction-error method: with the gain `1/W` and a batch start, its
+estimate agrees with the batch fit of the same rows to first order. No
+Python library fits DCC, so the batch fit it was held to is Engle's
+definition written out, its targets the sample means, maximized by scipy's
+SLSQP, with the second stage's sandwich standard errors. It was run on 50
+simulated series of 10,000 rows for each of six forms: two and three
+series, DCC and the asymmetric model, normal and Student-t(5) innovations.
+On every form every parameter was within two of those standard errors on
+all 50 series. The largest gap was 1.17 of them under normal innovations
+and 1.95 under t(5), and the median gap between the two correlation paths
+over the second half of the rows was at most 0.017. Through GARCH margins, against
+`arch`'s margins and the same second stage, ten series of two forms were
+within 1.2 standard errors.
+
+**Two stages.** As in the batch method, the margins' estimation error is
+not carried into the correlation's: the quasi-likelihood is the second
+stage's alone, and the margins are `garch`'s, unchanged.
 
 ## Clustering and classification
 

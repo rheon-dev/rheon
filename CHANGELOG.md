@@ -91,6 +91,50 @@ model that only the new build has is listed as an addition and passes.
 
 ### Added
 
+- **`dcc`, dynamic conditional correlation fitted one row at a time** (task
+  493, with task 514's recursion): the full correlation matrix of `k` return
+  series, Engle's (2002) DCC or, with `asymmetric=True`, Cappiello, Engle
+  and Sheppard's (2006) ADCC, `Q_{t+1} = (1 − a − b) Q̄ − g N̄ + a z zᵀ + g n
+  nᵀ + b Q_t`, its targets the running means of the rows learned. Each
+  series is standardized by its own GARCH(1,1) margin, `garch`'s model
+  unchanged (`vol`, `dist`, `truncation`, `variance_targeting`,
+  `margin_start_rows`, `margin_start_span`), or taken as a standardized
+  residual already (`margins="none"`). Each row reports, before it is
+  learned, every series' variance, every pair's correlation `corr_<a>_<b>`
+  and its Gaussian log-density; `coef` holds `a`, `b` (and `g`). The
+  parameters are given (`a`, `b`, `g`) or learned by recursive
+  quasi-likelihood, `θ ← Proj_H(θ + r H⁻¹ g)` with the expected information,
+  after a start of `start_rows` rows (500) or a `start_span` of the clock
+  fitted by the model's own projected Fisher scoring. Both are held at
+  every row in `a, b, g ≥ 0`, `a + b + δ g ≤ 1 − 10⁻⁴`, `δ` the largest
+  eigenvalue of `Q̄^{−1/2} N̄ Q̄^{−1/2}`, exactly where every `Q` is positive
+  definite. A Student-t margin fitted at or below 4 degrees of freedom is
+  said once, as a warning. A decay (`half_life` or `lam`, required, `"inf"`
+  for none) acts on the targets, the weight and the gain; no rolling window,
+  since the estimate's sensitivities cannot have a row taken back out.
+  State: `32 k² + 96` bytes for DCC and `48 k² + 144` for ADCC, learned
+  (`16 k² + 64` and `24 k² + 72` given), the margins' 168 a series, and
+  each start's buffer until it is fitted (`8 (k + 2)` bytes a row of the
+  correlation's, 16 a row a series of the margins'), held to
+  `max_state_bytes` (256 KB, eight series at the default starts; at most 64
+  MiB). Against the batch quasi-likelihood fit written from the definition
+  and maximized by scipy (no Python library fits DCC), on 50 simulated
+  series of each of six forms at 10,000 rows, every parameter was within two
+  of its standard errors on all 50 (largest gap 1.17 SE under normal
+  innovations, 1.95 under t(5)). The start reports only a recursion its rows
+  identify, by the condition and no count of rows: its fit is withheld
+  (`withheld_reason` `not_identified`) until the likelihood-ratio statistic
+  against constant correlation, at Kish's count, reaches χ² at 0.999 (13.8
+  for DCC, 16.3 for ADCC) with the information positive definite, and is
+  stepped from only at its optimum (the projected Newton step's predicted
+  gain at most 1e-6 nats); a start that fails waits for twice its rows,
+  at most twice, then buffers afresh. `start_rows` takes any count from 1. Its cost through the bank, on arm64 only
+  (an optimized build of the wheel without LTO, one thread, a load of 7 to
+  9, the best of three runs of 200,000 rows): 0.4 µs a row at two and three
+  series, 1.0 to 1.3 µs at five and 5.0 to 6.5 µs at ten, learned, about
+  half that with the parameters given, and 1.7 µs at three series with
+  GARCH margins; a learned row allocates nothing.
+
 - **`rp.stream.merge`: streams that each run in clock order, merged into one
   stream in clock order** (PLAN 541). It takes any number of frames or
   queries, by position or in a dict of name to frame, and gives every row

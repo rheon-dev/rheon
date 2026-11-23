@@ -77,6 +77,7 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
     ("expectile", &["window_size", "refit_span"]),
     ("glm", &["refit_span"]),
     ("garch", &["start_span"]),
+    ("dcc", &["start_span", "margin_start_span"]),
 ];
 
 /// The parameters that are a rate *per* clock unit: a decay factor per unit
@@ -480,6 +481,14 @@ impl Spec {
             }
             ModelKind::Garch { start_span, .. } => {
                 put(&mut out, "start_span", start_span.as_ref());
+            }
+            ModelKind::Dcc {
+                start_span,
+                margin_start_span,
+                ..
+            } => {
+                put(&mut out, "start_span", start_span.as_ref());
+                put(&mut out, "margin_start_span", margin_start_span.as_ref());
             }
             // A number is clock units, rows without a clock, as every other
             // span's (task 547); the count of rows is `hazard_rows`.

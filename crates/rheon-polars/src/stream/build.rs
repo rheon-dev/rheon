@@ -775,5 +775,8 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         ModelKind::Garch { .. } => Ok(AnyModel::Garch(Box::new(rheon_core::Garch::new(
             garch_cfg(spec)?,
         )?))),
+        ModelKind::Dcc { .. } => Ok(AnyModel::Dcc(Box::new(rheon_core::Dcc::new(dcc_cfg(
+            spec, decay,
+        )?)?))),
     }
 }

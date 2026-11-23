@@ -113,6 +113,7 @@ KINDS = [
     "glm",
     "expectile",
     "garch",
+    "dcc",
     "holt",
     "kmeans",
     "micro",
@@ -150,6 +151,7 @@ def kind(name: str, h: float | str, **common) -> dict:
         "deco": dict(features=two),
         # No half-life: the recursion is per observation.
         "garch": dict(targets=["y"], start_rows=50),
+        "dcc": dict(targets=["y", "x1"], margin_start_rows=50, start_rows=50),
     }[name]
     decay = {} if name == "garch" else {"half_life": h}
     return getattr(rp.spec, name)("m", weight="w", **decay, **own, **common)

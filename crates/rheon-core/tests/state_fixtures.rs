@@ -1318,7 +1318,7 @@ fn variants() -> Vec<String> {
 /// name here, and a fixture.
 #[test]
 fn the_variant_names_are_frozen() {
-    const FROZEN: [&str; 26] = [
+    const FROZEN: [&str; 27] = [
         "EwCov",
         "EwRidge",
         "Rls",
@@ -1345,6 +1345,7 @@ fn the_variant_names_are_frozen() {
         "Hawkes",
         "Expectile",
         "Garch",
+        "Dcc",
     ];
     assert_eq!(
         variants(),
@@ -1465,7 +1466,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 117] = [
+    const FORMS: [(&str, &[&str]); 130] = [
         // Schema 70 (rule 5's twenty-second exception): the stabilized
         // prior's `ŝ` and `V` under `full` in each form and under `diag`,
         // the factor form's `f`, and a spec's own `prior_rows`.
@@ -1639,6 +1640,23 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
             &["model", "Garch", "series", "0", "filter", "ring"],
         ),
         ("garch_span", &["model", "Garch", "series", "0", "buffer"]),
+        // `dcc`'s stage (task 493): its start's buffer, then the targets,
+        // `Q`, its sensitivities and the information, the decay carried to
+        // the next row, given parameters, the margins, and a start of a
+        // clock span's stamp.
+        ("dcc", &["model", "Dcc", "stage", "buffer"]),
+        ("dcc_started", &["model", "Dcc", "stage", "qbar"]),
+        ("dcc_started", &["model", "Dcc", "stage", "nbar"]),
+        ("dcc_started", &["model", "Dcc", "stage", "q"]),
+        ("dcc_started", &["model", "Dcc", "stage", "dq"]),
+        ("dcc_started", &["model", "Dcc", "stage", "h"]),
+        ("dcc_started", &["model", "Dcc", "stage", "theta"]),
+        ("dcc_started", &["model", "Dcc", "stage", "lr"]),
+        ("dcc_withheld", &["model", "Dcc", "stage", "buffer"]),
+        ("dcc_given", &["model", "Dcc", "cfg", "params"]),
+        ("dcc_margins", &["model", "Dcc", "margins", "series"]),
+        ("dcc_margins", &["model", "Dcc", "stage", "buffer"]),
+        ("dcc_span", &["model", "Dcc", "place"]),
         // A refit over a span of the clock (task 538): the span in each
         // cfg, glm's clock summed from the steps, and each buffer.
         ("glm_refit_clock", &["model", "Glm", "cfg", "refit_clock"]),
@@ -1744,6 +1762,31 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
     let first = at(&v, &["model", "Garch", "series", "0", "first"]).expect("a first stamp");
     assert!(!first.is_nil(), "garch_span: no first stamp");
+    // dcc's start over a span: its first stamp, the clock's 0 on this
+    // stream, so present and not nil rather than held.
+    let f = frozen::ALL
+        .iter()
+        .find(|f| f.name == "dcc_span")
+        .expect("dcc_span");
+    let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+    let first = at(&v, &["model", "Dcc", "stage", "first"]).expect("a first stamp");
+    assert!(!first.is_nil(), "dcc_span: no first stamp");
+    // dcc's withheld start: the flag set and a refit counted (a bool and an
+    // integer, which `held` does not count); its statistic is 0 where the
+    // fit sits at a = 0, so present rather than held.
+    let f = frozen::ALL
+        .iter()
+        .find(|f| f.name == "dcc_withheld")
+        .expect("dcc_withheld");
+    let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+    let stage = |key: &str| at(&v, &["model", "Dcc", "stage", key]).cloned();
+    assert_eq!(stage("withheld"), Some(rmpv::Value::Boolean(true)));
+    assert!(
+        stage("refits")
+            .and_then(|r| r.as_u64())
+            .is_some_and(|r| r >= 1)
+    );
+    assert!(stage("lr").is_some_and(|l| l.as_f64().is_some_and(f64::is_finite)));
     for (name, path) in FORMS {
         let f = frozen::ALL
             .iter()

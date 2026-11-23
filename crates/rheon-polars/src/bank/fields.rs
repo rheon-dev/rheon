@@ -268,6 +268,43 @@ pub fn coef_fields(spec: &Spec) -> Vec<CoefField> {
     ) {
         return Vec::new();
     }
+    // dcc's `coef` is its parameters, `a`, `b` and the asymmetric model's
+    // `g`, one slot each and no target: `coef_a`.
+    if let crate::ModelKind::Dcc { asymmetric, .. } = &spec.model {
+        let names: &[&str] = if asymmetric.unwrap_or(false) {
+            &["a", "b", "g"]
+        } else {
+            &["a", "b"]
+        };
+        let mut out = Vec::new();
+        for (suffix, d) in spec.decays().expect("validated") {
+            for (position, n) in names.iter().enumerate() {
+                out.push(CoefField {
+                    field: format!("coef{suffix}"),
+                    position,
+                    name: format!("coef_{n}{suffix}"),
+                    target: None,
+                    instance: suffix.clone(),
+                    half_life: match d {
+                        rheon_core::Decay::Halflife(h) => Some(h),
+                        rheon_core::Decay::Lam(_) => None,
+                    },
+                    lam: match d {
+                        rheon_core::Decay::Lam(l) => Some(l),
+                        rheon_core::Decay::Halflife(_) => None,
+                    },
+                    ridge: None,
+                    feature_set: None,
+                    penalty: None,
+                    cluster: None,
+                    state: None,
+                    class: None,
+                    term: n.to_string(),
+                });
+            }
+        }
+        return out;
+    }
     // deco's `coef` is the correlation values themselves, one slot each,
     // named for the block or the pair of blocks they belong to.
     if matches!(spec.model, crate::ModelKind::Deco { .. }) {
@@ -1147,6 +1184,60 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                         .src(Source::Stat(mi * m + t_i)),
                 );
             }
+            fields.push(
+                FieldMeta::new(format!("weight_sum{suffix}"), "weight_sum")
+                    .decay(suffix, d)
+                    .src(Source::NEff(mi)),
+            );
+            fields.push(
+                FieldMeta::new(format!("coef{suffix}"), "coef")
+                    .decay(suffix, d)
+                    .src(Source::Coef(mi)),
+            );
+        }
+        return fields;
+    }
+    // dcc predicts no target's value either: with margins each target's
+    // variance, then each pair's correlation and the row's log-density
+    // (read before the row is learned); then `n_eff` and the parameters as
+    // `coef`. An instance a decay.
+    if matches!(spec.model, crate::ModelKind::Dcc { .. }) {
+        let margins = !matches!(
+            &spec.model,
+            crate::ModelKind::Dcc { margins: Some(m), .. } if m == "none"
+        );
+        let k = spec.targets.len();
+        let n_slots = if margins { k } else { 0 } + k * (k - 1) / 2 + 1;
+        let mut fields = Vec::new();
+        for (mi, (suffix, d)) in decays.iter().enumerate() {
+            let mut at = mi * n_slots;
+            if margins {
+                for t in &spec.targets {
+                    fields.push(
+                        FieldMeta::new(format!("variance_{t}{suffix}"), "variance")
+                            .decay(suffix, d)
+                            .target(t)
+                            .src(Source::Stat(at)),
+                    );
+                    at += 1;
+                }
+            }
+            for i in 0..k {
+                for j in (i + 1)..k {
+                    let (a, b) = (&spec.targets[i], &spec.targets[j]);
+                    let mut m = FieldMeta::new(format!("corr_{a}_{b}{suffix}"), "corr")
+                        .decay(suffix, d)
+                        .src(Source::Stat(at));
+                    m.columns = Some(vec![a.clone(), b.clone()]);
+                    fields.push(m);
+                    at += 1;
+                }
+            }
+            let mut m = FieldMeta::new(format!("loglik{suffix}"), "loglik")
+                .decay(suffix, d)
+                .src(Source::Stat(at));
+            m.columns = Some(spec.targets.iter().cloned().collect());
+            fields.push(m);
             fields.push(
                 FieldMeta::new(format!("weight_sum{suffix}"), "weight_sum")
                     .decay(suffix, d)

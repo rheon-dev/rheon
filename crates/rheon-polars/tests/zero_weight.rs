@@ -394,6 +394,24 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
         ALL,
     ),
     (
+        "dcc",
+        r#"{"type": "dcc", "asymmetric": true, "margins": "none", "start_rows": 50}"#,
+        r#""targets": ["y", "x0"], "features": [], "half_life": @50"#,
+        ALL,
+    ),
+    (
+        "dcc_margins",
+        r#"{"type": "dcc", "margin_start_rows": 50, "start_rows": 50}"#,
+        r#""targets": ["y", "x0"], "features": [], "half_life": "inf""#,
+        ALL,
+    ),
+    (
+        "dcc_span",
+        r#"{"type": "dcc", "margins": "none", "start_span": @20}"#,
+        r#""targets": ["y", "x0"], "features": [], "half_life": @80"#,
+        ALL,
+    ),
+    (
         "glm",
         r#"{"type": "glm", "refit_rows": 60}"#,
         r#""targets": ["yb"], "features": ["x0", "x1"], "half_life": @50"#,

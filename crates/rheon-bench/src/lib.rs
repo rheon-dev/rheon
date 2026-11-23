@@ -99,6 +99,11 @@ pub const MODEL_CASES: &[&str] = &[
     // (task 492); and FIGARCH, its O(M) pass of 1,000 lags a row.
     "garch",
     "garch_figarch",
+    // Three series' correlation, the asymmetric model learned after its
+    // start: a row's 3 x 3 factor, inverse and three R⁻¹ ∂R (task 493); and
+    // the same through GARCH margins.
+    "dcc",
+    "dcc_margins",
 ];
 
 /// The one model case that reports on a single row of its block:
@@ -233,6 +238,13 @@ enum Shape {
     /// returns with no conditional variance waits, so on `Linear` targets a
     /// `garch` case would time its start's buffer, not its step (PLAN 548).
     Garch,
+    /// The targets a DCC process at `(a, b) = (0.04, 0.92)`, every target
+    /// correlation 0.5 (twelve uniforms less six, through the Cholesky
+    /// factor of each row's `R`), and with the flag each scaled by its own
+    /// GARCH(1,1) at `(0.05, 0.15, 0.8)`: what `dcc` is for. A start on
+    /// series of one constant correlation waits (PLAN 493), so on `Linear`
+    /// targets a learned `dcc` case would time its start's buffer.
+    Dcc(bool),
 }
 
 /// Rows in the layout a model steps them: features row-major, targets
@@ -257,6 +269,11 @@ impl Rows {
         let mut clock = 1_000.0;
         // each target's variance and last return, for `Shape::Garch`
         let mut garch: Vec<(f64, f64)> = vec![(1.0, 0.0); m];
+        // the DCC process's Q, for `Shape::Dcc`
+        let qbar: Vec<f64> = (0..m * m)
+            .map(|ij| if ij / m == ij % m { 1.0 } else { 0.5 })
+            .collect();
+        let mut q = qbar.clone();
         for i in 0..n {
             let row = x.len();
             match shape {
@@ -284,6 +301,46 @@ impl Rows {
                         y.push(Some(*e));
                     }
                 }
+                Shape::Dcc(scaled) => {
+                    x.extend((0..k).map(|_| g.signed()));
+                    let mut l = vec![0.0; m * m];
+                    for a in 0..m {
+                        for b in 0..=a {
+                            let r = if a == b {
+                                1.0
+                            } else {
+                                q[a * m + b] / (q[a * m + a] * q[b * m + b]).sqrt()
+                            };
+                            let acc = r - (0..b).map(|c| l[a * m + c] * l[b * m + c]).sum::<f64>();
+                            l[a * m + b] = if a == b {
+                                acc.sqrt()
+                            } else {
+                                acc / l[b * m + b]
+                            };
+                        }
+                    }
+                    let u: Vec<f64> = (0..m)
+                        .map(|_| (0..12).map(|_| g.next()).sum::<f64>() - 6.0)
+                        .collect();
+                    let z: Vec<f64> = (0..m)
+                        .map(|a| (0..=a).map(|b| l[a * m + b] * u[b]).sum())
+                        .collect();
+                    for a in 0..m {
+                        for b in 0..m {
+                            let ab = a * m + b;
+                            q[ab] = 0.04 * qbar[ab] + 0.04 * z[a] * z[b] + 0.92 * q[ab];
+                        }
+                    }
+                    for (j, (s, e)) in garch.iter_mut().enumerate() {
+                        if scaled {
+                            *s = 0.05 + 0.15 * *e * *e + 0.8 * *s;
+                            *e = (*s).sqrt() * z[j];
+                        } else {
+                            *e = z[j];
+                        }
+                        y.push(Some(*e));
+                    }
+                }
             }
             let fit: f64 = x[row..]
                 .iter()
@@ -293,7 +350,10 @@ impl Rows {
             // With no features, a column whose sign a sequential test
             // watches: either sign, a small drift up.
             let (level, noise) = if k == 0 { (0.05, 1.0) } else { (0.5, 0.3) };
-            if !matches!(shape, Shape::Labelled | Shape::Classes(_) | Shape::Garch) {
+            if !matches!(
+                shape,
+                Shape::Labelled | Shape::Classes(_) | Shape::Garch | Shape::Dcc(_)
+            ) {
                 y.extend((0..m).map(|j| Some(level + fit + j as f64 + noise * g.signed())));
             }
             let step = if i == 0 { 0.0 } else { step_of(g.next()) };
@@ -538,6 +598,28 @@ fn case_spec(id: &str) -> (Value, Shape) {
                 "features": [],
             }),
             Shape::Garch,
+        ),
+        // Both starts within the warm-up: the correlation's 500 rows, after
+        // the margins' 300 (doubled at most twice) where it has them.
+        "dcc" => (
+            json!({
+                "name": "m",
+                "model": {"type": "dcc", "margins": "none", "asymmetric": true},
+                "targets": ["y0", "y1", "y2"],
+                "features": [],
+                "half_life": "inf",
+            }),
+            Shape::Dcc(false),
+        ),
+        "dcc_margins" => (
+            json!({
+                "name": "m",
+                "model": {"type": "dcc", "asymmetric": true, "margin_start_rows": 300},
+                "targets": ["y0", "y1", "y2"],
+                "features": [],
+                "half_life": "inf",
+            }),
+            Shape::Dcc(true),
         ),
         "hawkes" => (
             json!({

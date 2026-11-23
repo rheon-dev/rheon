@@ -48,7 +48,7 @@ FAMILIES: dict[str, tuple[str, ...]] = {
         "expectile",
         "holt",
     ),
-    "Moments and correlation": ("ew_cov", "marginal", "deco", "rcov", "audit", "garch"),
+    "Moments and correlation": ("ew_cov", "marginal", "deco", "rcov", "audit", "garch", "dcc"),
     "Clustering and classification": ("kmeans", "micro", "ew_class"),
     "Sequential tests and regimes": ("seqtest", "corrchange", "bocpd", "hmm", "hawkes"),
 }
@@ -235,8 +235,27 @@ BOCPD_WARM = (
     "`ModelBank.solve_failures()`)"
 )
 
+#: A model whose meaning for a stem differs from `MEANING`'s.
+MEANING_BY_MODEL: dict[tuple[str, str], str] = {
+    ("dcc", "corr_<a>_<b>"): (
+        "the pair's correlation given the rows before this one, from the DCC recursion, read "
+        "before the row is learned"
+    ),
+    ("dcc", "loglik"): (
+        "the Gaussian log-density of the row's standardized residuals under that correlation"
+    ),
+}
+
 #: A model whose rule for a stem differs from `ALSO_NULL`'s.
 ALSO_NULL_BY_MODEL: dict[tuple[str, str], str] = {
+    ("dcc", "variance_<t>"): "while withheld, and before the target's margin's start is fitted",
+    ("dcc", "corr_<a>_<b>"): (
+        "while withheld, before the correlation's start is fitted, and while a learned start's "
+        "rows do not identify its recursion (`not_identified`)"
+    ),
+    ("dcc", "loglik"): (
+        "while withheld, before the correlation's start is fitted, and where any target is"
+    ),
     ("kmeans", "cluster"): (
         "while withheld, which includes the rows before seeding: seeding waits for `warm_rows` "
         "learned rows (at least `n_clusters`; by default 500, or `n_clusters` where that is "
@@ -266,6 +285,7 @@ ALSO_NULL_BY_MODEL: dict[tuple[str, str], str] = {
 #: switch, and the spec keywords that turn it on.
 SWITCHED: dict[str, tuple[str, dict[str, object]]] = {
     "huber": ("emit_huber_scale=True", {"emit_huber_scale": True}),
+    "dcc": ('margins="garch"', {"margins": "garch"}),
 }
 
 #: What a model writes when it writes nothing per row.
@@ -705,7 +725,8 @@ def main() -> None:
             for f, dtype in declared.items():
                 s = stem(f, targets, features)
                 null = ALSO_NULL_BY_MODEL.get((name, s), ALSO_NULL.get(s, "**undocumented**"))
-                rows.append((f"`{f}`", f"`{dtype}`", MEANING.get(s, "**undocumented**"), null))
+                meaning = MEANING_BY_MODEL.get((name, s), MEANING.get(s, "**undocumented**"))
+                rows.append((f"`{f}`", f"`{dtype}`", meaning, null))
             print(table(FIELD_HEAD, rows))
             if name in SWITCHED:
                 switch, extra = SWITCHED[name]

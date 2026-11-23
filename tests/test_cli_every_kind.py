@@ -735,6 +735,70 @@ CASES: list[Case] = [
             "max_state_bytes": 1 << 20,
         },
     ),
+    # Three return series through GARCH margins, the asymmetric model
+    # estimated after both starts.
+    Case(
+        "dcc",
+        "dcc",
+        {
+            **STREAM,
+            "targets": ["y", "x0", "x1"],
+            "asymmetric": True,
+            "vol": "gjr",
+            "dist": "t",
+            "margin_start_rows": 50,
+            "start_rows": 50,
+            "max_state_bytes": 1 << 20,
+        },
+    ),
+    # The other stream keys; FIGARCH margins of 50 lags, their start a span
+    # of the clock.
+    Case(
+        "dcc_figarch",
+        "dcc",
+        {
+            **STREAM2,
+            "targets": ["y", "x0"],
+            "vol": "figarch",
+            "truncation": 50,
+            "margin_start_span": 40.0,
+            "start_rows": 50,
+        },
+    ),
+    # Variance-targeted margins.
+    Case(
+        "dcc_targeted",
+        "dcc",
+        {
+            "targets": ["y", "x0"],
+            "variance_targeting": True,
+            "margin_start_rows": 50,
+            "start_rows": 50,
+            "half_life": float("inf"),
+            "clock": "t",
+            "gap_cap": 6.0,
+            "max_rows_between_coefs": 7,
+        },
+    ),
+    # Given parameters on standardized residuals, the start a span of the
+    # clock, its groups run to a close.
+    Case(
+        "dcc_given_span",
+        "dcc",
+        {
+            **CLOSE,
+            "targets": ["y", "x0"],
+            "margins": "none",
+            "asymmetric": True,
+            "a": 0.03,
+            "b": 0.9,
+            "g": 0.04,
+            "start_span": 60.0,
+            "half_life": float("inf"),
+            "clock": "t",
+            "gap_cap": 6.0,
+        },
+    ),
     # The other stream keys, and variance targeting.
     Case(
         "garch_targeted",
