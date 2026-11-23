@@ -718,6 +718,17 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **`ewridge` under `target_gaps="pairwise"` reads each target's errors at
+  its own rows** (review 2026-11-23, REG-13). Its slopes solve the Gram
+  of every row against the target's cross-moments over the rows it is
+  present on, so their variance is the noise over those rows' Kish size,
+  and its intercept is centred at those rows' column means. `se_coef`, the
+  error inflation and the row's leverage read the Gram's size and means
+  instead. A target present on a quarter of the rows had standard errors
+  half the size of least squares' on its rows (statsmodels' WLS on the
+  pairwise-complete rows); they now agree within the sampling gap between
+  the two Grams. `"own_rows"` does not move. Moves: `ewridge.*`.
+
 - **`rheon.gram.merge` takes nothing from a part with no weight on a
   target** (review 2026-11-23, MATH-3). The merge weights each part's
   target moments by its share of the target's weight, so a part with none
