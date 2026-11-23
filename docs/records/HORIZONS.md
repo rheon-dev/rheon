@@ -612,3 +612,35 @@ and the calibration went null. The stream now pads the row inflation to
 every slot (the forecasts' read none), and
 `test_a_short_delay_is_the_undelayed_run_with_horizons` holds both models to
 the undelayed run under a short delay.
+
+## 16. Part 4 (GARCH-X): the oracle's convention, measured (2026-11-23)
+
+`rugarch` 1.5-6 installed here (R 4.3.3, beside `Rcpp` 1.1.1 and
+`RcppArmadillo` in a scratch library; the system's `Rcpp` 1.0.12 is too old
+for it). At fixed parameters, zero mean, normal innovations, an input `v ≥
+0` on each of 1,500 rows, its filter against the definition written in R:
+
+| model | `rugarch`'s variance equation, measured | largest gap (rows 2 on) |
+|---|---|---|
+| `sGARCH` | `s_t = ω + ζ v_t + α e²_{t−1} + β s_{t−1}`, the input on the row itself | 6.4e-16 |
+| `gjrGARCH` | `s_t = ω + ζ v_t + (α + γ 1[e_{t−1} < 0]) e²_{t−1} + β s_{t−1}` | 5.6e-16 |
+| `eGARCH` | `ln s_t = ω + ζ v_t + α z_{t−1} + γ (|z_{t−1}| − √(2/π)) + β ln s_{t−1}` | 7.2e-16 |
+
+So `rugarch` reads the input of the row whose variance it forms (the caller
+lags it), as section 10 proposes and the user's answer 5 confirmed.
+`rugarch`'s `eGARCH` names the sign term `α` and the size term `γ`, the
+reverse of `arch`'s and `garch`'s (`α` on `|z| − √(2/π)`, `γ` on `z`): a
+test maps them. `ugarchforecast` takes the future inputs as
+`external.forecasts$vregfor`, one a step, and fills a missing one with 0;
+its first step from the last row reads `vregfor[1]` for the next row
+(measured to 1.4e-16 against the recursion by hand). The bank's forecast
+holds the input at its learned weighted mean `x̄` past the row (answer 4),
+so a test hands `rugarch` `x̄` for every step but the first, which is the
+row's own input.
+
+The oracles for the build: the definition in numpy (every Python run), a
+batch maximum-likelihood fit by `scipy.optimize` on the same rows for the
+estimates, and `rugarch` where R is present. The repository's CI has no R
+job on `main` yet (the `r-oracles` group and job are on task 499's and
+555's branches), so `rugarch`'s test would be marked for that job and
+skipped elsewhere.
