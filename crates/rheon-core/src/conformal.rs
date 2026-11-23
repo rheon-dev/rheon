@@ -584,6 +584,30 @@ pub fn norm_ppf(p: f64) -> f64 {
 mod tests {
     use super::*;
 
+    /// The stream's mean weight after a heavy row has all but decayed away:
+    /// the two rows' weights at their present shares, to rounding (review
+    /// 2026-11-23, CLUST-3: the Welford step read `1e16 + (1 − 1e16) / 1 =
+    /// 0` after total forgetting, and up to 20% off at shares near `2^-50`).
+    ///
+    /// Confirmed, and not fixed here: the fix moves the last bits of the
+    /// mean weight, so a saved state (schema 71) no longer continues to the
+    /// bit, which is the user's to allow (rule 5). It panics until then.
+    #[test]
+    #[should_panic(expected = "share")]
+    fn the_mean_weight_survives_a_heavy_row_decaying_away() {
+        for share in [0.0, 2f64.powi(-60), 2f64.powi(-50), 2f64.powi(-40), 2f64.powi(-30)] {
+            let mut c = Conformal::new(0.9, 0.01).unwrap();
+            c.update(0.5, 1.0, 1.0, 1e16);
+            c.update(0.5, 1.0, share, 1.0);
+            let want = (1e16 * share + 1.0) / (share + 1.0);
+            assert!(
+                (c.w_mean - want).abs() <= 1e-12 * want,
+                "share {share}: {} against {want}",
+                c.w_mean
+            );
+        }
+    }
+
     fn lcg(state: &mut u64) -> f64 {
         *state = state
             .wrapping_mul(6364136223846793005)

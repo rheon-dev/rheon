@@ -790,6 +790,14 @@ model that only the new build has is listed as an addition and passes.
   less its floor remainder, in the clock's own units where `every` is a
   whole number of them, and a window that would start before the least
   value the clock's type holds is refused by name.
+- **`micro` reads a row of weight 1 where its mean weight has cancelled to
+  nothing** (review 2026-11-23, CLUST-3, in part). After a row of weight
+  `1e16`, a gap of 60 half-lives and a row of weight 1, the mean weight's
+  step `1e16 + (1 − 1e16) / 1` read 0, and a summary scaled by it admitted
+  a point `1.4e6` away at `eps = 1`. Where the mean is 0 or below, a
+  summary is read at a row of weight 1. The step's cancellation itself,
+  and the same step in the conformal band's mean weight, are not changed
+  in this release.
 - **A window looking ahead whose far edge is the input's last row is whole
   at the end of the input** (PLAN 565). Under `closed="right"` or `"both"`,
   `rp.ewm_sum`, `rp.ewm_mean`, `rp.ewm_rate` and `rp.ewm_quantile` with
