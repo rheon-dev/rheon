@@ -446,6 +446,24 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         dict(features=["x0", "x1", "x2"], n_components=2, group="g", half_life=25.0, **CLOCK),
         [],
     ),
+    # Each target a series of returns, decayed, a term of each kind.
+    (
+        "power_variation",
+        "power_variation",
+        dict(
+            targets=["y", "z"],
+            terms={
+                "rv": {"powers": [2]},
+                "bv": {"powers": [1, 1], "normalize": True},
+                "lrv": {"kernel": "parzen", "bandwidth": 5, "center": True},
+                "sub": {"powers": [2], "scale": 4},
+            },
+            group="g",
+            half_life=25.0,
+            **CLOCK,
+        ),
+        [],
+    ),
 ]
 
 #: The switches and paths the workload above never reached (review round 9,

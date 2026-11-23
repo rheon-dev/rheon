@@ -760,6 +760,44 @@ impl Spec {
                     );
                 }
             }
+            // Its features are checked above; its terms' shapes by the
+            // builder of its configuration, every other value by the model.
+            ModelKind::PowerVariation { window_size, .. } => {
+                let bad_window = window_size
+                    .as_ref()
+                    .is_some_and(|w| !(w.value().is_finite() && w.value() > 0.0));
+                if let Some(w) = window_size.as_ref().filter(|_| bad_window) {
+                    no.refuse(format!(
+                        "spec {:?}: window_size must be a finite span of the clock above \
+                         0, but it is {w}. Give the span the terms are summed over, or \
+                         leave it out for no window.",
+                        self.name
+                    ));
+                }
+                if let Some((_, decay)) = self
+                    .decays()
+                    .ok()
+                    .and_then(|d| d.into_iter().next())
+                    .filter(|_| !bad_window)
+                {
+                    no.take(
+                        crate::stream::power_variation_cfg(self, decay)
+                            .and_then(|c| c.validate())
+                            .map_err(|e| {
+                                e.lines()
+                                    .map(|l| {
+                                        format!(
+                                            "spec {:?}: {}",
+                                            self.name,
+                                            l.trim_start_matches("power_variation: ")
+                                        )
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            }),
+                    );
+                }
+            }
             // Its features are checked above. No decay: the recursion is per
             // observation and the estimate weighs every row it learned. The
             // start is rows or a span of the clock, not both; every other

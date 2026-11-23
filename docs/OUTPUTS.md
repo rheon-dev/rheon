@@ -19,7 +19,7 @@ exact spec you built.
 | family | models |
 |---|---|
 | [Linear models](MODELS.md#linear-models) | [`ewridge`](#ewridge) · [`rls`](#rls) · [`lasso`](#lasso) · [`kalman`](#kalman) · [`huber`](#huber) · [`quantile`](#quantile) · [`sgd`](#sgd) · [`pa`](#pa) · [`ftrl`](#ftrl) · [`glm`](#glm) · [`expectile`](#expectile) · [`holt`](#holt) |
-| [Moments and correlation](MODELS.md#moments-and-correlation) | [`ew_cov`](#ew_cov) · [`pca`](#pca) · [`marginal`](#marginal) · [`deco`](#deco) · [`rcov`](#rcov) · [`audit`](#audit) · [`garch`](#garch) · [`dcc`](#dcc) · [`realized`](#realized) |
+| [Moments and correlation](MODELS.md#moments-and-correlation) | [`ew_cov`](#ew_cov) · [`pca`](#pca) · [`marginal`](#marginal) · [`deco`](#deco) · [`rcov`](#rcov) · [`audit`](#audit) · [`garch`](#garch) · [`dcc`](#dcc) · [`realized`](#realized) · [`power_variation`](#power_variation) |
 | [Clustering and classification](MODELS.md#clustering-and-classification) | [`kmeans`](#kmeans) · [`micro`](#micro) · [`ew_class`](#ew_class) |
 | [Sequential tests and regimes](MODELS.md#sequential-tests-and-regimes) | [`seqtest`](#seqtest) · [`corrchange`](#corrchange) · [`bocpd`](#bocpd) · [`hmm`](#hmm) · [`hawkes`](#hawkes) |
 
@@ -451,6 +451,19 @@ The fields of `po.spec.realized("m", targets=["y"], half_life=50.0, lm_window=30
 | `bns_y` | `f64` | Barndorff-Nielsen and Shephard's adjusted ratio test of `<t>`'s returns before this row: a standard normal without jumps, large and positive with them | while withheld, and where `rv_<t>` or `bv_<t>` is 0 |
 | `lm_y` | `f64` | Lee and Mykland's statistic of this row's `<t>`: the return over the volatility of the returns before it; `sqrt(2/π)` times it is a standard normal without a jump | while withheld, where the row has no `<t>`, and where the volatility of the returns before it is 0 |
 | `lm_jump_y` | `bool` | whether `lm_<t>` is a jump at confidence `lm_beta`, by Lee and Mykland's test | where `lm_<t>` is, and where the count of returns is 1 or less |
+| `weight_sum` | `f64` | accumulated weight before the model learns this row, and before its own decay ([shared field](#fields-most-models-write)) | never |
+| `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
+| `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
+
+## `power_variation`
+
+The fields of `po.spec.power_variation("m", targets=["y"], half_life=50.0, terms={"rv": {"powers": [2]}, "lrv": {"kernel": "parzen", "bandwidth": 3}})`:
+
+| field | dtype | what it holds | also null |
+|---|---|---|---|
+| `rv_y` | `f64` | the realized variance of `<t>`'s returns before this row, the sum of their squares | while withheld |
+| `lrv_y` | `f64` | a term named `lrv`, here a Parzen kernel sum of `<t>`'s returns before this row at a bandwidth of 3: each term's field is named `<term>_<t>` | while withheld |
+| `n_y` | `f64` | the count of `<t>`'s returns the terms are of: the returns a window holds, or Kish's effective count of their decayed weights | while withheld |
 | `weight_sum` | `f64` | accumulated weight before the model learns this row, and before its own decay ([shared field](#fields-most-models-write)) | never |
 | `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
 | `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |

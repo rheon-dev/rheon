@@ -108,6 +108,7 @@ FAMILIES: tuple[Family, ...] = (
                 "garch",
                 "dcc",
                 "realized",
+                "power_variation",
             )
         ),
     ),

@@ -176,6 +176,110 @@ pub fn realized_cfg(
     })
 }
 
+/// A `power_variation` spec's [`rheon_core::PowerVariationCfg`] at
+/// `decay`: one series a target, each named term as the core's. A term's
+/// shape (powers or a kernel, the options each takes) and its name are
+/// checked here; every other value is the model's own to check.
+pub fn power_variation_cfg(
+    spec: &Spec,
+    decay: rheon_core::Decay,
+) -> Result<rheon_core::PowerVariationCfg, String> {
+    use rheon_core::{PvTerm, PvTermKind};
+    let ModelKind::PowerVariation {
+        terms,
+        window_rows,
+        window_size,
+        closed,
+        max_state_bytes,
+    } = &spec.model
+    else {
+        return Err(not_a(spec, "power_variation_cfg", "power_variation"));
+    };
+    let mut no = rheon_core::Refusals::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::with_capacity(terms.len());
+    for t in terms {
+        let name = &t.name;
+        if name.is_empty() {
+            no.refuse(
+                "power_variation: a term's name is empty. Give each term a name: its fields are \
+                 <name>_<target>.",
+            );
+        } else if name == "n" || name == "weight_sum" {
+            no.refuse(format!(
+                "power_variation: a term is named {name:?}, which names a field every \
+                 power_variation reports. Give the term another name."
+            ));
+        } else if !seen.insert(name.as_str()) {
+            no.refuse(format!(
+                "power_variation: two terms are named {name:?}, and a name names a term's \
+                 fields. Give each term its own name."
+            ));
+        }
+        let scale = t.scale.unwrap_or(1);
+        match (&t.powers, t.kernel) {
+            (Some(powers), None) => {
+                if t.bandwidth.is_some() || t.flat_top || t.center {
+                    no.refuse(format!(
+                        "power_variation: term {name:?} has powers, and bandwidth, flat_top \
+                         and center belong to a kernel term. Leave them out, or give the term \
+                         a kernel in place of its powers."
+                    ));
+                }
+                out.push(PvTerm {
+                    kind: PvTermKind::Multipower {
+                        powers: powers.clone(),
+                        normalize: t.normalize,
+                    },
+                    scale,
+                });
+            }
+            (None, Some(kernel)) => {
+                if t.normalize {
+                    no.refuse(format!(
+                        "power_variation: term {name:?} is a kernel term, and normalize \
+                         belongs to a multipower term. Leave normalize out."
+                    ));
+                }
+                match t.bandwidth {
+                    Some(bandwidth) => out.push(PvTerm {
+                        kind: PvTermKind::Kernel {
+                            kernel,
+                            bandwidth,
+                            flat_top: t.flat_top,
+                            center: t.center,
+                        },
+                        scale,
+                    }),
+                    None => no.refuse(format!(
+                        "power_variation: term {name:?} has a kernel and no bandwidth. Give \
+                         its bandwidth H, the last lag with weight."
+                    )),
+                }
+            }
+            (Some(_), Some(_)) => no.refuse(format!(
+                "power_variation: term {name:?} has both powers and a kernel, and a term is \
+                 one of the two. Split it into two terms."
+            )),
+            (None, None) => no.refuse(format!(
+                "power_variation: term {name:?} has neither powers nor a kernel. Give its \
+                 powers, such as [1, 1], or a kernel and a bandwidth."
+            )),
+        }
+    }
+    no.finish()?;
+    Ok(rheon_core::PowerVariationCfg {
+        n_targets: spec.m(),
+        terms: out,
+        decay,
+        min_weight: spec.min_periods_or_default(),
+        window_rows: *window_rows,
+        window_clock: window_size.as_ref().map(Span::value),
+        closed: closed.edge(),
+        max_state_bytes: *max_state_bytes,
+    })
+}
+
 /// A `garch` spec's [`rheon_core::GarchCfg`]: one series a target, the
 /// start 2,000 rows unless the spec gives rows or a span. Every value is
 /// the model's own to check.

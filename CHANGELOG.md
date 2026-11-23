@@ -606,6 +606,27 @@ model that only the new build has is listed as an addition and passes.
   place, TV and TQ to 64, the ratio test to the rounding of its difference,
   `lm` to 8 ulps of `intradayJumpTest`'s (`dontIncludeLast = TRUE`), whose
   flags at `alpha = 0.05` are the rows past the paper's critical value.
+- **`power_variation`, power variation and kernel-weighted autocovariance
+  sums** (task 555): each target a series of returns; each row reports,
+  from the returns before it, each named term (`<term>_<t>`) and the count
+  of returns `n_<t>`. A term is a multipower sum of consecutive absolute
+  returns at any powers, oldest first (`normalize` gives Barndorff-Nielsen
+  and Shephard's multipower variation, so `realized`'s `rv`, `bv` and `tq`
+  are terms, the first two to the bit), or a kernel sum `Σ r_j² + 2 Σ_h c_h
+  r_j r_{j-h}` up to a bandwidth `H` with the Bartlett, Parzen,
+  Tukey-Hanning or rectangular kernel at `c_h = k(h/(H + 1))`; `flat_top`
+  for the flat-top realized kernel's `k((h - 1)/H)`, `center` for the sum
+  about the mean (the HAC long-run variance times `n`). A `scale` of `K`
+  takes a term of the `K`-step returns, averaged over the `K` offsets, from
+  which two-scale realized variance is composed in Polars. No small-sample
+  factor. The forms are `realized`'s: one pass, a decay, a window of rows
+  or of the clock, each checked against `max_state_bytes`; a term is in a
+  window while every return in it is. State `8` bytes and, per target, `16`
+  a sum and `8` a return a term reaches back over. Against R's `yuima`
+  (`mpv`, any powers) and `highfrequency` (`rMPVar`, `rKernelCov`) to 9 ulps
+  and 2.2 ε of a kernel sum's scale, `sandwich`'s `kernHAC` to 1.2 ε,
+  Python's `arch` (its kernel long-run covariances) to 0.2 ε and `hfhd`
+  (`krvm`, `tsrc`) to 3 ulps, test-only.
 - **`kalman(covariance_form="square_root")`** (task 281 (3)): the filter
   holds its covariance as an upper-triangular factor, `P = C Cᵀ`, and
   updates the factor by Carlson's step, so a vague prior costs it no

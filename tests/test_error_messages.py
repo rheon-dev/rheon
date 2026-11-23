@@ -609,6 +609,7 @@ BUILDERS = {
     rp.spec.dcc: dict(features=None, targets=["x0", "y"]),
     rp.spec.realized: dict(features=None),
     rp.spec.pca: dict(features=["x0", "y"], targets=None),
+    rp.spec.power_variation: dict(features=None, terms={"rv": {"powers": [2]}}),
 }
 
 

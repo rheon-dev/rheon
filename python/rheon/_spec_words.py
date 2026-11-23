@@ -325,4 +325,5 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
     "realized": frozenset(
         {"window_rows", "window_size", "closed", "lm_window", "lm_beta", "max_state_bytes"}
     ),
+    "power_variation": frozenset({"window_rows", "window_size", "closed", "max_state_bytes"}),
 }

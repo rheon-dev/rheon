@@ -1421,7 +1421,7 @@ fn variants() -> Vec<String> {
 /// name here, and a fixture.
 #[test]
 fn the_variant_names_are_frozen() {
-    const FROZEN: [&str; 29] = [
+    const FROZEN: [&str; 30] = [
         "EwCov",
         "EwRidge",
         "Rls",
@@ -1451,6 +1451,7 @@ fn the_variant_names_are_frozen() {
         "Dcc",
         "Realized",
         "StreamPca",
+        "PowerVariation",
     ];
     assert_eq!(
         variants(),
@@ -1571,7 +1572,46 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 155] = [
+    const FORMS: [(&str, &[&str]); 164] = [
+        // `power_variation` (task 555): the sums, the last raw returns, the
+        // scales' rings, a window's credits and rows, a clock window's
+        // stamps and clock, and a cap's overrun.
+        (
+            "power_variation",
+            &["model", "PowerVariation", "series", "1", "hi"],
+        ),
+        (
+            "power_variation",
+            &["model", "PowerVariation", "series", "1", "raw"],
+        ),
+        (
+            "power_variation",
+            &["model", "PowerVariation", "series", "1", "rings", "1"],
+        ),
+        (
+            "power_variation_window",
+            &["model", "PowerVariation", "series", "0", "held"],
+        ),
+        (
+            "power_variation_window",
+            &["model", "PowerVariation", "series", "1", "credits"],
+        ),
+        (
+            "power_variation_window",
+            &["model", "PowerVariation", "window", "rows"],
+        ),
+        (
+            "power_variation_clock_window",
+            &["model", "PowerVariation", "window", "rows", "0", "stamp"],
+        ),
+        (
+            "power_variation_clock_window",
+            &["model", "PowerVariation", "window", "place"],
+        ),
+        (
+            "power_variation_clock_capped",
+            &["model", "PowerVariation", "over"],
+        ),
         // `realized` (task 499): the sums and the last returns, Lee and
         // Mykland's ring of products, a window's terms and rows, a clock
         // window's stamps and clock, and a cap's warning and overrun.

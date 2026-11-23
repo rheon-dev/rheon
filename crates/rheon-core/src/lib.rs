@@ -112,6 +112,7 @@ mod model;
 mod oracle;
 mod pa;
 mod pieces;
+mod power_variation;
 mod rcov;
 mod realized;
 mod refusals;
@@ -213,6 +214,10 @@ pub use model::{
 };
 pub use pa::{Pa, PaCfg, PaMode};
 pub use pieces::Sequential;
+pub use power_variation::{
+    PowerVariation, PowerVariationCfg, PvKernel, PvTerm, PvTermKind,
+    outputs_per_target as power_variation_outputs,
+};
 pub use rcov::{
     Rcov, RcovCfg, RcovEstimate, RcovKind, parzen, parzen_c_star, phi_11, phi_12, phi_22, preavg_g,
     psi1, psi2,

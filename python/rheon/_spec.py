@@ -450,6 +450,7 @@ _NO_FEATURES = {
     "garch": "each of its targets is a return series whose variance it models",
     "dcc": "its targets are the return series whose correlation it models",
     "realized": "each of its targets is a return series it measures",
+    "power_variation": "each of its targets is a return series it measures",
 }
 
 #: The parameters renamed in one builder, or whose old name another keeps
@@ -728,6 +729,7 @@ __all__ = [
     "output_fields",
     "pa",
     "pca",
+    "power_variation",
     "quantile",
     "realized",
     "rls",
@@ -4811,6 +4813,7 @@ from rheon._spec_glm import glm  # noqa: E402
 from rheon._spec_gradient import sgd  # noqa: E402
 from rheon._spec_pca import pca  # noqa: E402
 from rheon._spec_point import hawkes  # noqa: E402
+from rheon._spec_power_variation import power_variation  # noqa: E402
 from rheon._spec_realized import realized  # noqa: E402
 from rheon._spec_regimes import hmm, rcov  # noqa: E402
 from rheon._spec_robust import huber, quantile  # noqa: E402

@@ -260,6 +260,9 @@ what = "dcc, three series through GARCH margins, the asymmetric model learned af
 [instructions.realized]
 what = "realized, two series under a decay with Lee and Mykland's window of 100: AnyModel::step_into, into one kept Step, seven compensated sums and a ring a series a row; its budget is CI's first count"
 
+[instructions.power_variation]
+what = "power_variation, two series under a decay, a sum of squares, normalized bipower variation, a centered Parzen sum of 20 lags, a flat-top Bartlett sum of 10 and squares of ten-step returns: AnyModel::step_into, into one kept Step, eleven compensated sums, a ring of 10 raw returns and of 201 ten-step returns a series a row; its budget is CI's first count"
+
 [instructions.audit_continuous]
 what = "audit, one continuous column, 256 counters: AnyModel::step_into, into one kept Step, past the cap on nearly every row"
 budget = 847018
@@ -1620,7 +1623,25 @@ settled_frac = { budget = 8.125 }
 weight_sum = { budget = 8.125 }
 withheld_reason = { budget = 1.125 }
 
+[memory.power_variation]
+bv_y = { budget = 8.125 }
+bv_z = { budget = 8.125 }
+learned_clock = { budget = 8.125 }
+lrv_y = { budget = 8.0 }
+lrv_z = { budget = 8.0 }
+n_y = { budget = 8.0 }
+n_z = { budget = 8.0 }
+rv_y = { budget = 8.0 }
+rv_z = { budget = 8.0 }
+scored_clock = { budget = 8.0 }
+settled_frac = { budget = 8.0 }
+sub_y = { budget = 8.0 }
+sub_z = { budget = 8.0 }
+weight_sum = { budget = 8.0 }
+withheld_reason = { budget = 1.125 }
+
 # --- raises and sign-offs -------------------------------------------------------
+
 [[raised]]
 key = "tolerance.rss"
 from = 0.15

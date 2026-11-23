@@ -134,6 +134,40 @@ fn restore_stamped_realized(s: &State) -> Result<Box<dyn Run>, String> {
     Ok(Box::new(StampedRealized { model, ns }))
 }
 
+/// A `power_variation` over a window of clock units, each row handed its
+/// stamp in integer nanoseconds as a stream hands it.
+struct StampedPowerVariation {
+    model: PowerVariation,
+    ns: i128,
+}
+
+impl Run for StampedPowerVariation {
+    fn step(&mut self, r: &Row) -> Out {
+        self.ns += ns_of_seconds(r.d).unwrap();
+        self.model.stamp_next(Stamp::Ns(self.ns));
+        let s = self.model.step(&r.x, &r.y, r.d, r.w);
+        Out {
+            pred: s.pred,
+            n_eff: s.n_eff,
+            extra: Vec::new(),
+        }
+    }
+
+    fn state(&self) -> State {
+        self.model.state()
+    }
+}
+
+/// The run goes on from the newest stamp its window holds.
+fn restore_stamped_power_variation(s: &State) -> Result<Box<dyn Run>, String> {
+    let model = PowerVariation::restore(s).map_err(|e| e.to_string())?;
+    let ns = match model.last_stamp() {
+        Some(Stamp::Ns(ns)) => ns,
+        other => return Err(format!("expected a temporal stamp, found {other:?}")),
+    };
+    Ok(Box::new(StampedPowerVariation { model, ns }))
+}
+
 /// An `expectile` handed each row's stamp in integer nanoseconds, as a
 /// stream hands it: its state holds the last stamp, the last counted row's,
 /// and under a clock window a stamp a row.
@@ -3047,6 +3081,73 @@ pub fn all() -> Vec<Case> {
             Targets::None,
             40
         ),
+        // `power_variation` (task 555) under a decay, a term of each form:
+        // the sums, the last raw return and both scales' rings.
+        case!(
+            "power_variation",
+            "PowerVariation",
+            PowerVariation,
+            PowerVariation::new(power_variation_cfg()).unwrap(),
+            0,
+            Targets::JoiningFrom(2, 20),
+            40
+        ),
+        // A window of twelve rows, full and turning over: each return's
+        // credits, the rows' weights.
+        case!(
+            "power_variation_window",
+            "PowerVariation",
+            PowerVariation,
+            PowerVariation::new(PowerVariationCfg {
+                decay: Decay::Halflife(f64::INFINITY),
+                window_rows: Some(12),
+                ..power_variation_cfg()
+            })
+            .unwrap(),
+            0,
+            Targets::JoiningFrom(2, 20),
+            40
+        ),
+        // A window of clock units over stamped rows, `closed` the `both`
+        // one: a stamp a row and the clock summed.
+        Case {
+            name: "power_variation_clock_window",
+            variant: "PowerVariation",
+            build: || {
+                Box::new(StampedPowerVariation {
+                    model: PowerVariation::new(PowerVariationCfg {
+                        decay: Decay::Halflife(f64::INFINITY),
+                        window_clock: Some(20.0),
+                        closed: WindowClosed::Both,
+                        ..power_variation_cfg()
+                    })
+                    .unwrap(),
+                    ns: 0,
+                })
+            },
+            restore: restore_stamped_power_variation,
+            n_features: 0,
+            targets: Targets::Linear(2),
+            before: 45,
+        },
+        // A clock window whose rows passed its cap (552 bytes fixed, 368 a
+        // row, so six rows under 3,000): warned past half of it, the row
+        // that would pass it recorded, nothing learned since.
+        case!(
+            "power_variation_clock_capped",
+            "PowerVariation",
+            PowerVariation,
+            PowerVariation::new(PowerVariationCfg {
+                decay: Decay::Halflife(f64::INFINITY),
+                window_clock: Some(20.0),
+                max_state_bytes: Some(3_000),
+                ..power_variation_cfg()
+            })
+            .unwrap(),
+            0,
+            Targets::Linear(2),
+            45
+        ),
         // A refit over a span of the clock (task 538), saved within the
         // span: each target's first stamp, on the clock summed from the
         // steps, which is state.
@@ -3339,6 +3440,43 @@ fn realistic(vol: GarchVol, dist: GarchDist) -> GarchCfg {
     GarchCfg {
         start_rows: 2000,
         ..garch_cfg(vol, dist)
+    }
+}
+
+/// Two return series, a term of each form: a sum of squares, a normalized
+/// bipower term, a centered Parzen sum and a flat-top Bartlett sum of
+/// two-step returns.
+fn power_variation_cfg() -> PowerVariationCfg {
+    let mp = |powers: &[f64], normalize: bool| PvTerm {
+        kind: PvTermKind::Multipower {
+            powers: powers.to_vec(),
+            normalize,
+        },
+        scale: 1,
+    };
+    let ker = |kernel, bandwidth, flat_top, center, scale| PvTerm {
+        kind: PvTermKind::Kernel {
+            kernel,
+            bandwidth,
+            flat_top,
+            center,
+        },
+        scale,
+    };
+    PowerVariationCfg {
+        n_targets: 2,
+        terms: vec![
+            mp(&[2.0], false),
+            mp(&[1.0, 1.0], true),
+            ker(PvKernel::Parzen, 3, false, true, 1),
+            ker(PvKernel::Bartlett, 2, true, false, 2),
+        ],
+        decay: decay(),
+        min_weight: 2.0,
+        window_rows: None,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        max_state_bytes: None,
     }
 }
 

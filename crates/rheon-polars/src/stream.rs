@@ -114,6 +114,7 @@ pub enum AnyModel {
     Dcc(Box<rheon_core::Dcc>),
     Realized(Box<rheon_core::Realized>),
     Pca(Box<rheon_core::StreamPca>),
+    PowerVariation(Box<rheon_core::PowerVariation>),
 }
 
 /// A flush's shards, run on whichever pool the caller is in: the bank's
@@ -167,6 +168,7 @@ macro_rules! dispatch {
             AnyModel::Dcc($m) => $body,
             AnyModel::Realized($m) => $body,
             AnyModel::Pca($m) => $body,
+            AnyModel::PowerVariation($m) => $body,
         }
     };
 }
@@ -595,7 +597,8 @@ impl AnyModel {
             | AnyModel::Hawkes(_)
             | AnyModel::Garch(_)
             | AnyModel::Dcc(_)
-            | AnyModel::Realized(_) => 0,
+            | AnyModel::Realized(_)
+            | AnyModel::PowerVariation(_) => 0,
             // The components are withheld, never failed: the rotation has no
             // factorization to fail.
             | AnyModel::Pca(_) => 0,
@@ -679,6 +682,8 @@ impl AnyModel {
             AnyModel::Realized(_) => None,
             // pca has none: its components are its output fields.
             AnyModel::Pca(_) => None,
+            // power_variation has none: its outputs are the terms.
+            AnyModel::PowerVariation(_) => None,
         }
     }
 
@@ -703,7 +708,7 @@ mod model_cfgs;
 use model_cfgs::read_floor;
 pub use model_cfgs::{
     BOCPD_HAZARD_ROWS, audit_cfg, bocpd_cfg, corrchange_cfg, dcc_cfg, deco_block_names, deco_cfg,
-    expectile_cfg, garch_cfg, glm_cfg, hawkes_cfg, hmm_cfg, huber_model, pca_cfg, quantile_model,
+    expectile_cfg, garch_cfg, glm_cfg, hawkes_cfg, hmm_cfg, huber_model, pca_cfg, power_variation_cfg, quantile_model,
     rcov_cfg, realized_cfg, sgd_model,
 };
 
@@ -812,7 +817,8 @@ pub fn combos(spec: &Spec) -> Vec<Combo> {
         | ModelKind::Expectile { .. }
         | ModelKind::Garch { .. }
         | ModelKind::Dcc { .. }
-        | ModelKind::Realized { .. } => vec![Combo::default()],
+        | ModelKind::Realized { .. }
+        | ModelKind::PowerVariation { .. } => vec![Combo::default()],
         ModelKind::Pca { .. } => vec![Combo::default()],
         // `p` for the penalty, since `l` is a lag's (`lag_corr_l1_a_b`); and
         // no label for a path of one point, as a single ridge or half-life

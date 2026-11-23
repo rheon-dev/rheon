@@ -64,6 +64,7 @@ EXCEPTIONS = {
     # count of returns is the returns' weight: a weight counts its return
     # that many times (the builder's docs say so).
     "realized": "a weight counts its return that many times: the measures are sums",
+    "power_variation": "a weight counts its terms that many times: the terms are sums",
 }
 
 SCALE = 100.0

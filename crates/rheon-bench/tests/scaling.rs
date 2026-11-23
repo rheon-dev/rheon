@@ -425,6 +425,7 @@ const SURFACES: &[&[&str]] = &[
         "garch.",
         "dcc.",
         "realized.",
+        "power_variation.",
     ],
     &["bank."],
     &["runner.", "windows.", "refresh.", "merge.", "gbdt."],

@@ -484,6 +484,30 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
         ALL,
     ),
     (
+        "power_variation",
+        r#"{"type": "power_variation", "terms": [{"name": "rv", "powers": [2.0]}, {"name": "bv", "powers": [1.0, 1.0], "normalize": true}, {"name": "lrv", "kernel": "parzen", "bandwidth": 4, "center": true}, {"name": "sub", "powers": [2.0], "scale": 3}]}"#,
+        r#""targets": ["y", "x0"], "features": [], "half_life": @50"#,
+        ALL,
+    ),
+    (
+        "power_variation_rows",
+        r#"{"type": "power_variation", "terms": [{"name": "rv", "powers": [2.0]}, {"name": "bv", "powers": [1.0, 1.0], "normalize": true}, {"name": "lrv", "kernel": "parzen", "bandwidth": 4, "center": true}, {"name": "sub", "powers": [2.0], "scale": 3}], "window_rows": 40}"#,
+        r#""targets": ["y", "x0"], "features": [], "half_life": "inf""#,
+        UNTIMED,
+    ),
+    (
+        "power_variation_clock",
+        r#"{"type": "power_variation", "terms": [{"name": "rv", "powers": [2.0]}, {"name": "bv", "powers": [1.0, 1.0], "normalize": true}, {"name": "lrv", "kernel": "parzen", "bandwidth": 4, "center": true}, {"name": "sub", "powers": [2.0], "scale": 3}], "window_size": @20}"#,
+        r#""targets": ["y", "x0"], "features": [], "half_life": "inf""#,
+        ALL,
+    ),
+    (
+        "power_variation_clock_both",
+        r#"{"type": "power_variation", "terms": [{"name": "rv", "powers": [2.0]}, {"name": "bv", "powers": [1.0, 1.0], "normalize": true}, {"name": "lrv", "kernel": "parzen", "bandwidth": 4, "center": true}, {"name": "sub", "powers": [2.0], "scale": 3}], "window_size": @20, "closed": "both"}"#,
+        r#""targets": ["y", "x0"], "features": [], "half_life": "inf""#,
+        ALL,
+    ),
+    (
         "holt",
         r#"{"type": "holt"}"#,
         r#""targets": ["y"], "features": [], "half_life": @50"#,

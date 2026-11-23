@@ -59,6 +59,10 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
             max_state_bytes: Some(_),
             ..
         }
+        | ModelKind::PowerVariation {
+            max_state_bytes: Some(_),
+            ..
+        }
         | ModelKind::Glm {
             max_state_bytes: Some(_),
             ..
@@ -92,6 +96,10 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
                 ..
             }
             | ModelKind::Realized {
+                window_size: Some(w),
+                ..
+            }
+            | ModelKind::PowerVariation {
                 window_size: Some(w),
                 ..
             } => (

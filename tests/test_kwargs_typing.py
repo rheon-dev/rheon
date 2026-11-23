@@ -26,6 +26,7 @@ BUILDERS = [
     "dcc",
     "realized",
     "pca",
+    "power_variation",
     "bocpd",
     "corrchange",
     "deco",

@@ -1177,6 +1177,8 @@ STATE_READS: dict[str, frozenset[str]] = {
     # The measures and the ratio test read the state alone; Lee and
     # Mykland's statistic and its flag read the row's own return.
     "realized": frozenset({"rv_y", "bv_y", "tv_y", "tq_y", "bns_y"}),
+    # Every term and the count read the state alone.
+    "power_variation": frozenset({"rv_y", "lrv_y", "n_y"}),
     "hmm": frozenset(
         {"filtered_state0", "filtered_state1", "predicted_state0", "predicted_state1", "state"}
     ),
@@ -1524,6 +1526,7 @@ DOUBLED: dict[str, dict] = {
     # late steps them the same, from the same rows.
     "realized": {},
     "pca": {},
+    "power_variation": {},
     "expectile": {},
     "huber": {},
     "kmeans": {},

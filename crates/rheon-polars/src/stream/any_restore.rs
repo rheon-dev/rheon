@@ -61,6 +61,9 @@ impl AnyModel {
             ModelState::StreamPca(_) => {
                 Ok(AnyModel::Pca(Box::new(rheon_core::StreamPca::restore(s)?)))
             }
+            ModelState::PowerVariation(_) => Ok(AnyModel::PowerVariation(Box::new(
+                rheon_core::PowerVariation::restore(s)?,
+            ))),
             // A kind only rheon-core builds, such as `ew_cov`'s bare running
             // sums: its name is the code's, so the message does not print it.
             _ => Err(StateError::Invalid(format!(

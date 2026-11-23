@@ -519,7 +519,7 @@ in the table.
 
 ### The table
 
-**140 cells: 99 over the 29 model kinds' rows, 19 over the
+**144 cells: 103 over the 30 model kinds' rows, 19 over the
 bank, 3 over the command line, 9 over the window operators, 6 over
 `refresh_time`, 2 over `merge`'s `carry` and 2 over the sample of an
 internal helper for gradient-boosted trees.** Each row is one cell: the
@@ -533,8 +533,8 @@ column has the four native ratios from large to small, as measured on
 `hawkes` cells' on 2026-11-21 by a debug build at a load of 5. The four
 `expectile` cells' were measured on 2026-11-21 the same way, at a load of 14, and the three
 `garch` cells the same day the same way, at a load of 11. The two `dcc` cells were
-measured on 2026-11-22 the same way, at a load of 9, and the four `realized` cells at a
-load of 0.5. The two
+measured on 2026-11-22 the same way, at a load of 9, the four `realized` cells at a
+load of 0.5 and the four `power_variation` cells on 2026-11-23 the same way, at a load of 1. The two
 `refresh.age_` cells and the two `merge.carry_` cells were measured on
 2026-11-22 the same way, at a load of 3. The two `.window` cells were
 measured again on 2026-11-06, once a window's snapshots were laid out
@@ -645,6 +645,10 @@ largest buffer at the smaller.
 | `realized.window` | window W rows, one series | 100 → 800 | O(1) | O(n) | a leaving row takes back its terms, its successor's product and triple; W rows held, 16 + 56 bytes each | 1.00 · 1.00 · 7.73 · 7.23 |
 | `realized.lm_window` | Lee and Mykland's K, one series | 100 → 800 | O(1) | O(n) | one product into the ring and one out a row; K − 2 products held | 0.98 · 1.00 · 7.24 · 4.89 |
 | `realized.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | its compensated sums and last returns only | 1.04 · 1.00 · 1.00 · 1.00 |
+| `power_variation.targets` | targets T, one series each, three terms | 1 → 8 | O(n) | O(n) | each target adds its terms to its own compensated sums and keeps its rings of returns | 7.23 · 1.00 · 5.58 · 2.43 |
+| `power_variation.bandwidth` | a centered Parzen sum's bandwidth H, one series | 10 → 80 | O(n) | O(n) | H products a row into the kernel sum's four sums; a ring of H + 1 returns | 3.17 · 1.00 · 2.44 · 1.57 |
+| `power_variation.window` | window W rows, one series | 100 → 800 | O(1) | O(n) | a leaving row takes back the terms credited to its return; W rows held, 16 + 16 a sum bytes each | 0.99 · 1.00 · 7.81 · 7.34 |
+| `power_variation.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | its compensated sums and rings only | 0.99 · 1.00 · 1.00 · 1.00 |
 | `bank.groups_seen` (CI) | groups seen G (a block over 50 of them) | 250 → 2,000 | O(1) | O(n) | a row touches its group's state alone; a state a group | 1.03 · 1.00 · 7.99 · 7.14 |
 | `bank.groups_seen_per_call` (CI) | groups seen G, calls of four rows to one group each | 1,000 → 8,000 | O(1) | O(n) | a call finds each of its groups' state by key and takes only their notices; a state a group | 1.00 · 1.00 · 7.98 · 7.33 |
 | `bank.specs` (CI) | specs S, one set of columns | 1 → 8 | O(n) | O(n) | each spec steps its model, S | 8.28 · 7.67 · 7.80 · 7.23 |

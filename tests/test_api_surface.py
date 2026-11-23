@@ -317,6 +317,18 @@ def describe_api(cli: Path | None = None) -> str:
         ("realized", dict(targets=["y", "z"], half_life=100.0, lm_window=30)),
         ("pca", dict(features=["x0", "x1", "x2"], n_components=2, half_life=100.0)),
         (
+            "power_variation",
+            dict(
+                targets=["y", "z"],
+                half_life=100.0,
+                terms={
+                    "rv": {"powers": [2]},
+                    "bv": {"powers": [1, 1], "normalize": True},
+                    "lrv": {"kernel": "parzen", "bandwidth": 3, "center": True},
+                },
+            ),
+        ),
+        (
             "deco blocked",
             dict(
                 features=["x0", "x1", "x2", "x3"],
@@ -749,6 +761,13 @@ ENUM_PROBES: list[
         "word",
     ),
     ("pca.method", "pca", {}, "model.method", "word"),
+    (
+        "power_variation.closed",
+        "power_variation",
+        {"half_life": float("inf"), "window_size": 100.0},
+        "model.closed",
+        "word",
+    ),
     ("marginal.closed", "marginal", {"window_size": 100.0}, "model.closed", "word"),
     ("ew_class.covariance_type", "ew_class", {}, "model.covariance_type", "word"),
     ("ew_class.window_budget", "ew_class", {"window_size": 100.0}, "model.window_budget", "key"),

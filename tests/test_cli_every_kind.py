@@ -754,6 +754,66 @@ CASES: list[Case] = [
             "max_state_bytes": 1 << 20,
         },
     ),
+    # Each target a return series, a term of each kind: decayed, its groups
+    # run to a close; the other stream keys; a window of rows; and a window
+    # of clock units, its edge and its cap.
+    Case(
+        "power_variation",
+        "power_variation",
+        {
+            **NOCOEF,
+            **CLOSE,
+            "targets": ["y", "x0"],
+            "terms": {
+                "rv": {"powers": [2]},
+                "bv": {"powers": [1, 1], "normalize": True},
+                "lrv": {"kernel": "tukey_hanning", "bandwidth": 4, "center": True},
+                "rk": {"kernel": "rectangular", "bandwidth": 2, "flat_top": True, "scale": 2},
+            },
+        },
+    ),
+    Case(
+        "power_variation2",
+        "power_variation",
+        {**NOCOEF2, "targets": ["y", "x0"], "terms": {"rv": {"powers": [2]}}},
+    ),
+    Case(
+        "power_variation_window",
+        "power_variation",
+        {
+            "targets": ["y"],
+            "terms": {
+                "rv": {"powers": [2]},
+                "bv": {"powers": [1, 1], "normalize": True},
+                "lrv": {"kernel": "tukey_hanning", "bandwidth": 4, "center": True},
+                "rk": {"kernel": "rectangular", "bandwidth": 2, "flat_top": True, "scale": 2},
+            },
+            "clock": "t",
+            "gap_cap": 6.0,
+            "half_life": float("inf"),
+            "window_rows": 40,
+            "max_state_bytes": 1 << 20,
+        },
+    ),
+    Case(
+        "power_variation_clock_window",
+        "power_variation",
+        {
+            "targets": ["y", "x0"],
+            "terms": {
+                "rv": {"powers": [2]},
+                "bv": {"powers": [1, 1], "normalize": True},
+                "lrv": {"kernel": "tukey_hanning", "bandwidth": 4, "center": True},
+                "rk": {"kernel": "rectangular", "bandwidth": 2, "flat_top": True, "scale": 2},
+            },
+            "clock": "t",
+            "gap_cap": 6.0,
+            "half_life": float("inf"),
+            "window_size": 12.0,
+            "closed": "both",
+            "max_state_bytes": 1 << 20,
+        },
+    ),
     # Each target a return series; no half-life (the recursion is per
     # observation), so no gate on settling toward one either.
     Case(

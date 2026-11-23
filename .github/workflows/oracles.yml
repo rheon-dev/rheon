@@ -203,7 +203,7 @@ jobs:
 
   # The R oracles (tests/r_oracle/): R's `highfrequency` and `yuima`, the
   # reference implementations of the realized measures and the jump tests,
-  # through rpy2. R is not on every contributor's machine, so they are a
+  # and `sandwich`'s HAC long-run variance, through rpy2. R is not on every contributor's machine, so they are a
   # dependency group of their own (pyproject.toml's `r-oracles`) and this
   # one Linux job installs R, its packages and the group, and runs them
   # alone, by their marker: no other run collects them (tests/conftest.py).
@@ -231,7 +231,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y r-base r-base-dev
-          sudo Rscript -e 'options(repos = c(CRAN = "https://packagemanager.posit.co/cran/__linux__/noble/latest")); install.packages(c("highfrequency", "yuima"), lib = .Library.site[1]); stopifnot(requireNamespace("highfrequency"), requireNamespace("yuima"))'
+          sudo Rscript -e 'options(repos = c(CRAN = "https://packagemanager.posit.co/cran/__linux__/noble/latest")); install.packages(c("highfrequency", "yuima", "sandwich"), lib = .Library.site[1]); stopifnot(requireNamespace("highfrequency"), requireNamespace("yuima"), requireNamespace("sandwich"))'
       - run: uv sync --locked --group r-oracles
       # `--release`, as every workflow builds it: what is tested is what ships.
       - name: build the extension

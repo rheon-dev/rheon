@@ -944,6 +944,7 @@ fn only_models_that_predict_a_target_have_residual_fields() {
         r#"{"type": "dcc"}"#,
         r#"{"type": "realized"}"#,
         r#"{"type": "pca"}"#,
+        r#"{"type": "power_variation", "terms": [{"name": "rv", "powers": [2.0]}]}"#,
     ];
     let mut seen = Vec::new();
     for model in kinds {
@@ -952,6 +953,7 @@ fn only_models_that_predict_a_target_have_residual_fields() {
             || model.contains("garch")
             || model.contains("dcc")
             || model.contains("realized")
+            || model.contains("power_variation")
         {
             "[]"
         } else {

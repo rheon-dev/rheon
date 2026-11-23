@@ -990,6 +990,77 @@ fn realized_golden() {
     check_bits("realized_window", &got, GOLDEN_REALIZED_WINDOW);
 }
 
+/// `power_variation` on the same stream: a term of each form (a sum of
+/// squares, normalized bipower and tripower quarticity, unequal powers, a
+/// centered Parzen sum, a flat-top Bartlett sum, a Tukey-Hanning sum and the
+/// squares of three-step returns) and `n`, at the three rows, under a
+/// decay; the null target and the gap move them.
+#[test]
+fn power_variation_golden() {
+    let got = power_variation_rows(Decay::Halflife(15.0), None);
+    check("power_variation", &got, GOLDEN_POWER_VARIATION);
+}
+
+/// The same in a window of 12 rows. Nothing decays and its powers, cosines
+/// and gammas are the `libm` crate's, so it is pinned to the bit.
+#[test]
+fn power_variation_window_golden() {
+    let got = power_variation_rows(Decay::Halflife(f64::INFINITY), Some(12));
+    check_bits(
+        "power_variation_window",
+        &got,
+        GOLDEN_POWER_VARIATION_WINDOW,
+    );
+}
+
+fn power_variation_rows(decay: Decay, window_rows: Option<usize>) -> Vec<f64> {
+    let mp = |powers: &[f64], normalize: bool, scale: usize| PvTerm {
+        kind: PvTermKind::Multipower {
+            powers: powers.to_vec(),
+            normalize,
+        },
+        scale,
+    };
+    let ker = |kernel, bandwidth, flat_top, center| PvTerm {
+        kind: PvTermKind::Kernel {
+            kernel,
+            bandwidth,
+            flat_top,
+            center,
+        },
+        scale: 1,
+    };
+    let q = 4.0 / 3.0;
+    let mut m = PowerVariation::new(PowerVariationCfg {
+        n_targets: 1,
+        terms: vec![
+            mp(&[2.0], false, 1),
+            mp(&[1.0, 1.0], true, 1),
+            mp(&[q, q, q], true, 1),
+            mp(&[1.0, 0.5], false, 1),
+            ker(PvKernel::Parzen, 4, false, true),
+            ker(PvKernel::Bartlett, 3, true, false),
+            ker(PvKernel::TukeyHanning, 2, false, false),
+            mp(&[2.0], false, 3),
+        ],
+        decay,
+        min_weight: 0.0,
+        window_rows,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        max_state_bytes: None,
+    })
+    .unwrap();
+    let mut out = Vec::new();
+    for (i, (_, y, d, w)) in stream().into_iter().enumerate() {
+        let step = m.step(&[], &y, d, w);
+        if matches!(i, 20 | 45 | 59) {
+            out.extend(&step.pred);
+        }
+    }
+    out
+}
+
 /// `expectile` on the same stream: an upper expectile under decay whose
 /// first 15 learned rows are refit, then the fit at the end.
 #[test]
@@ -3970,4 +4041,64 @@ const GOLDEN_CORRCHANGE_SEQUENTIAL_REALISTIC: &[f64] = &[
     0.004094959914973394,
     2.0995546966895327,
     0.0,
+];
+
+const GOLDEN_POWER_VARIATION: &[f64] = &[
+    20.301763088150093,
+    14.524981482223351,
+    187.80240536346363,
+    9.302374921594874,
+    11.002419458319203,
+    29.464292253703377,
+    20.847172608307673,
+    14.276477863287328,
+    16.071940011962074,
+    10.459155766645733,
+    10.642877740344339,
+    143.74057524135296,
+    7.025526342384912,
+    2.778344739613954,
+    -0.0030414029344230124,
+    4.580167185467167,
+    5.553668494365291,
+    14.240623039921394,
+    15.904128496397625,
+    18.06313225979898,
+    377.1116923780164,
+    12.028522824449905,
+    5.811766800865598,
+    1.317485386565981,
+    9.772659335199275,
+    10.58332018400874,
+    21.63821001394927,
+];
+
+const GOLDEN_POWER_VARIATION_WINDOW: &[f64] = &[
+    23.20165621168584,
+    13.363161652229811,
+    146.95773760814996,
+    8.459800999631693,
+    8.726110417548874,
+    36.34337751793883,
+    25.735361329750464,
+    14.509426922427343,
+    12.0,
+    12.833685109912663,
+    13.473997818648956,
+    188.8799869536873,
+    8.860895137388496,
+    2.047731521551962,
+    -2.7628090527922424,
+    4.898316695965254,
+    6.419299085112919,
+    12.0,
+    11.7484856053016,
+    13.10735007891979,
+    131.79937669810045,
+    8.662419548382553,
+    5.47306623704143,
+    1.7445983458686738,
+    7.5394428256191475,
+    5.381814193807589,
+    12.0,
 ];

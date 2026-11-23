@@ -402,6 +402,25 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         ),
         [],
     ),
+    # Each target a series of returns, a term of each kind and the count.
+    (
+        "power_variation",
+        "power_variation",
+        dict(
+            targets=["y", "z"],
+            terms={
+                "rv": {"powers": [2]},
+                "bv": {"powers": [1, 1], "normalize": True},
+                "lrv": {"kernel": "parzen", "bandwidth": 5, "center": True},
+                "sub": {"powers": [2], "scale": 4},
+            },
+            group="g",
+            half_life=25.0,
+            emit_clocks=True,
+            **CLOCK,
+        ),
+        [],
+    ),
 ]
 
 

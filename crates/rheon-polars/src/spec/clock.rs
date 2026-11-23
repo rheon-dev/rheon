@@ -82,6 +82,7 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
     ("garch", &["start_span"]),
     ("dcc", &["start_span", "margin_start_span"]),
     ("realized", &["window_size"]),
+    ("power_variation", &["window_size"]),
 ];
 
 /// The parameters that are a rate *per* clock unit: a decay factor per unit
@@ -464,7 +465,8 @@ impl Spec {
             ModelKind::Glm { refit_span, .. } => {
                 put(&mut out, "refit_span", refit_span.as_ref());
             }
-            ModelKind::Realized { window_size, .. } => {
+            ModelKind::Realized { window_size, .. }
+            | ModelKind::PowerVariation { window_size, .. } => {
                 put(&mut out, "window_size", window_size.as_ref());
             }
             ModelKind::Micro { prune_every, .. } => {

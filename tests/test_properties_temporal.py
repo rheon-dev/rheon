@@ -551,6 +551,21 @@ def clock_specs(draw, model: str, step: int, cap: int):
             kw["closed"] = draw(st.sampled_from(["right", "both"]))
         else:
             kw |= dict(half_life=steps(1, 30), lm_window=draw(st.integers(3, 12)))
+    elif model == "power_variation":
+        # Task 555: the terms over a window of the clock, with its edge, or
+        # under a decay.
+        kw |= dict(
+            targets=["y"],
+            terms={
+                "rv": {"powers": [2]},
+                "rk": {"kernel": "bartlett", "bandwidth": 3, "flat_top": True, "scale": 2},
+            },
+        )
+        if draw(st.booleans()):
+            kw |= dict(half_life=float("inf"), window_size=steps(1, 60))
+            kw["closed"] = draw(st.sampled_from(["right", "both"]))
+        else:
+            kw |= dict(half_life=steps(1, 30))
     elif model == "garch":
         # Task 492: the start as a span of the clock, or of rows; no decay.
         kw |= dict(targets=["y"])

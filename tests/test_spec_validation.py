@@ -849,7 +849,7 @@ def test_fit_intercept_is_inert_on_every_kind_without_an_intercept():
     from test_model_registry import MINIMAL, REGRESSIONS, _build
 
     inert = (frozenset(MINIMAL) - REGRESSIONS) | {"holt"}
-    assert len(inert) == 18, sorted(inert)
+    assert len(inert) == 19, sorted(inert)
 
     def run(name, flag):
         spec = {**_build(name), "fit_intercept": flag}

@@ -640,6 +640,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [messages."crates/rheon-core/src/kalman/forms.rs"]
 
+[messages."crates/rheon-core/src/power_variation.rs"]
+
 [messages."crates/rheon-core/src/realized.rs"]
 
 [messages."crates/rheon-core/src/streampca.rs"]
@@ -669,6 +671,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [messages."python/rheon/_spec_fields.py"]
 
+[messages."python/rheon/_spec_power_variation.py"]
+
 [messages."python/rheon/polars/__init__.py"]
 
 [messages."python/rheon/polars/_clock.py"]
@@ -684,6 +688,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [docstrings."python/rheon/_spec_pca.py"]
 
 [docstrings."python/rheon/_spec_point.py"]
+
+[docstrings."python/rheon/_spec_power_variation.py"]
 
 [docstrings."python/rheon/_spec_realized.py"]
 
@@ -708,6 +714,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."crates/rheon-core/src/hawkes.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/kalman/forms.rs#messages"]
+
+[vocabulary."crates/rheon-core/src/power_variation.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/realized.rs#messages"]
 
@@ -747,6 +755,10 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 "retired" = 1
 
 [vocabulary."python/rheon/_spec_point.py#docstrings"]
+
+[vocabulary."python/rheon/_spec_power_variation.py#docstrings"]
+
+[vocabulary."python/rheon/_spec_power_variation.py#messages"]
 
 [vocabulary."python/rheon/_spec_realized.py#docstrings"]
 

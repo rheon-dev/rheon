@@ -252,6 +252,13 @@ pub const CELLS: &[Cell] = &[
     cell("realized.window", 100, 8, Const, Pow(1)),
     cell("realized.lm_window", 100, 8, Const, Pow(1)),
     cell("realized.history", 1000, 8, Const, Const),
+    // A row adds each target's terms, `O(1)` a multipower term and `O(H)` a
+    // kernel term, its rings `O(HK)`; a window's leaving row takes back its
+    // credits, `O(1)`, and the window keeps its rows.
+    cell("power_variation.targets", 1, 8, Pow(1), Pow(1)),
+    cell("power_variation.bandwidth", 10, 8, Pow(1), Pow(1)),
+    cell("power_variation.window", 100, 8, Const, Pow(1)),
+    cell("power_variation.history", 1000, 8, Const, Const),
     // --- the bank, `Bank::fit_predict` on a pool of one thread --------------
     cell("bank.groups_seen", 250, 8, Const, Pow(1)),
     // The same in calls of four rows, each to one group: what a call costs
@@ -1220,6 +1227,37 @@ fn model_case(id: &str, n: usize) -> ModelCase {
                 "history" => c.warm(n),
                 "window" | "lm_window" => c.warm(2 * n + 1_000),
                 _ => c,
+            }
+        }
+        ("power_variation", "targets" | "bandwidth" | "window" | "history") => {
+            let h = if dim == "bandwidth" { n } else { 10 };
+            let mut model = json!({
+                "type": "power_variation",
+                "terms": [
+                    {"name": "rv", "powers": [2.0]},
+                    {"name": "bv", "powers": [1.0, 1.0], "normalize": true},
+                    {"name": "lrv", "kernel": "parzen", "bandwidth": h, "center": true},
+                ],
+            });
+            let mut half_life = json!(1000.0);
+            if dim == "window" {
+                model["window_rows"] = json!(n);
+                half_life = json!("inf");
+            }
+            let s = json!({
+                "name": "m",
+                "model": model,
+                "targets": names("y", if dim == "targets" { n } else { 1 }),
+                "features": [],
+                "clock": "t",
+                "half_life": half_life,
+                "gap_cap": 100.0,
+            });
+            let c = ModelCase::new(s, lin);
+            match dim {
+                "history" => c.warm(n),
+                "window" => c.warm(2 * n + 1_000),
+                _ => c.warm(1_000),
             }
         }
         _ => panic!("no model cell {id:?}"),
