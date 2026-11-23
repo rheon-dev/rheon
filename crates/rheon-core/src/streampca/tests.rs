@@ -744,3 +744,42 @@ fn the_rate_condition_holds_on_both_sides_of_one_half() {
     m.cfg.method = PcaMethod::Oja;
     assert!(!m.rate_finds(0, 26.0));
 }
+
+/// The rank rule reads Kish's effective count, which under a decay stops
+/// near `(1 + lam)/(1 - lam)` (Fable's W13 review, C2): on data of exact
+/// rank 2 the second of two components, whose neighbor has no variance,
+/// needs that count past 3, so at a half-life of 0.9 rows (2.7) it is never
+/// written, and at 3 rows (8.7) it is. The rows of positive weight would
+/// read a row whose weight has decayed to nothing as one that spans the
+/// data (`model_contract`'s zero-weight row past the underflow), so the
+/// limit is the docs', on both sides here.
+#[test]
+fn the_rank_rule_under_a_half_life_of_a_row_is_kishs_count() {
+    let k = 3;
+    for (half_life, writes) in [(0.9, false), (3.0, true)] {
+        let mut m = StreamPca::new(cfg(k, 2, PcaMethod::Svd, Decay::Halflife(half_life))).unwrap();
+        let mut stream = Stream::new(&[100.0, 0.001, 0.0], 21);
+        let mut written = 0;
+        for _ in 0..200 {
+            m.step(&stream.row(), &[], 1.0, 1.0);
+            written += usize::from(m.separated(1));
+        }
+        let (_, vals) = m.directions();
+        assert!(vals[2] <= 1e-12 * vals[0], "{vals:?}");
+        let lam = 0.5f64.powf(1.0 / half_life);
+        let cap = (1.0 + lam) / (1.0 - lam);
+        assert!(
+            (m.n_kish() - cap).abs() < 1e-9 * cap,
+            "{} {cap}",
+            m.n_kish()
+        );
+        if writes {
+            assert!(
+                written > 150,
+                "{half_life}: written on {written} of 200 rows"
+            );
+        } else {
+            assert_eq!(written, 0, "{half_life}");
+        }
+    }
+}
