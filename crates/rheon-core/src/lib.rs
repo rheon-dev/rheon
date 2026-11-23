@@ -60,6 +60,7 @@
 //! See `docs/PLAN.md` §2 and §4.
 
 mod audit;
+pub mod bars;
 mod bocpd;
 mod boundary;
 mod breaks;
@@ -82,6 +83,7 @@ mod ewcov;
 mod ewdiag;
 mod ewlagcov;
 mod ewridge;
+pub mod exact;
 mod expectile;
 mod family;
 mod ftrl;
