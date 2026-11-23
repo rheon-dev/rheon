@@ -4808,14 +4808,14 @@ from rheon._spec_changepoint import bocpd, corrchange  # noqa: E402
 from rheon._spec_class import ew_class  # noqa: E402
 from rheon._spec_cluster import kmeans, micro  # noqa: E402
 from rheon._spec_dcc import dcc  # noqa: E402
-from rheon._spec_deco import deco  # noqa: E402
 from rheon._spec_ddsketch import ddsketch  # noqa: E402
+from rheon._spec_deco import deco  # noqa: E402
 from rheon._spec_expectile import expectile  # noqa: E402
 from rheon._spec_garch import garch  # noqa: E402
 from rheon._spec_glm import glm  # noqa: E402
 from rheon._spec_gradient import sgd  # noqa: E402
-from rheon._spec_pca import pca  # noqa: E402
 from rheon._spec_moments import ewm_moments  # noqa: E402
+from rheon._spec_pca import pca  # noqa: E402
 from rheon._spec_point import hawkes  # noqa: E402
 from rheon._spec_power_variation import power_variation  # noqa: E402
 from rheon._spec_realized import realized  # noqa: E402
@@ -4825,7 +4825,19 @@ from rheon._spec_tdigest import tdigest  # noqa: E402
 from rheon._spec_trend import holt  # noqa: E402
 
 UNSUPERVISED = frozenset(
-    {"ew_cov", "kmeans", "micro", "deco", "rcov", "hmm", "corrchange", "bocpd", "audit", "pca", "ewm_moments"}
+    {
+        "ew_cov",
+        "kmeans",
+        "micro",
+        "deco",
+        "rcov",
+        "hmm",
+        "corrchange",
+        "bocpd",
+        "audit",
+        "pca",
+        "ewm_moments",
+    }
 )
 
 _NUMERIC_KEYS = _numeric_keys()
