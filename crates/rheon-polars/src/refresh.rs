@@ -69,16 +69,12 @@ use held::Held;
 pub(crate) use held::{Bin, Cell};
 
 /// One series' state within a group: its last value, whether it has ticked
-/// since the last grid point, and how many times; and, under `age`, the
-/// clock of the tick its last value came from (PLAN 556), written only
-/// there, so a state without ages is the bytes it was.
+/// since the last grid point, and how many times.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct SeriesState {
     last: f64,
     seen: bool,
     ticks: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    at: Option<Instant>,
 }
 
 /// One group's (or one pair's) refresh state.
@@ -87,22 +83,31 @@ struct GridState {
     series: Vec<SeriesState>,
     /// Series still to tick before the next grid point; `m` after a point.
     pending: usize,
+    /// Under `age` alone (PLAN 556), one a series: the clock of the tick
+    /// its last value came from, for each series seen since the last point.
+    /// Empty without it, so a run without ages keeps its per-series state
+    /// as it was and writes the bytes it did.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    ats: Vec<Option<Instant>>,
 }
 
 impl GridState {
-    fn new(m: usize) -> Self {
+    fn new(m: usize, age: bool) -> Self {
         Self {
             series: vec![SeriesState::default(); m],
             pending: m,
+            ats: if age { vec![None; m] } else { Vec::new() },
         }
     }
 
-    /// One tick. Returns true when it completed the set, i.e. this row is a
-    /// grid point.
+    /// One tick, and under `age` its clock. Returns true when it completed
+    /// the set, i.e. this row is a grid point.
     fn tick(&mut self, si: usize, value: f64, at: Option<Instant>) -> bool {
+        if let Some(at) = at {
+            self.ats[si] = Some(at);
+        }
         let s = &mut self.series[si];
         s.last = value;
-        s.at = at;
         // Saturating: a state file can carry a count at the top of its
         // range (task 160, PA5).
         s.ticks = s.ticks.saturating_add(1);
@@ -121,22 +126,27 @@ impl GridState {
     /// it never reached zero, so the grid never completed again (task 160,
     /// PA5).
     ///
-    /// Under `age` every series seen since the last point holds the clock
-    /// of its last tick and no other does (a point clears them), and
-    /// without it none does.
+    /// Under `age` the grid holds a clock for every series seen since the
+    /// last point and for no other (a point clears them); without it, none.
     fn fits(&self, width: usize, age: bool) -> bool {
         let unseen = self.series.iter().filter(|s| !s.seen).count();
-        let stamped = self
-            .series
-            .iter()
-            .all(|s| s.at.is_some() == (age && s.seen));
+        let stamped = if age {
+            self.ats.len() == width
+                && self
+                    .ats
+                    .iter()
+                    .zip(&self.series)
+                    .all(|(a, s)| a.is_some() == s.seen)
+        } else {
+            self.ats.is_empty()
+        };
         self.series.len() == width && self.pending >= 1 && self.pending == unseen && stamped
     }
 
     /// The clock of each series' last tick, at a point under `age`; empty
     /// without it.
     fn ats(&self) -> Vec<Instant> {
-        self.series.iter().filter_map(|s| s.at).collect()
+        self.ats.iter().flatten().copied().collect()
     }
 
     /// Start the next interval: every series unseen, every count back to
@@ -146,8 +156,8 @@ impl GridState {
         for s in self.series.iter_mut() {
             s.seen = false;
             s.ticks = 0;
-            s.at = None;
         }
+        self.ats.fill(None);
         self.pending = m;
         ticks
     }
@@ -1006,7 +1016,7 @@ impl RefreshTime {
             // row (review 2026-09-18, minor).
             if !self.states.contains_key(&*key) {
                 let init: Vec<GridState> = (0..n_states)
-                    .map(|_| GridState::new(if self.pairs.is_empty() { m } else { 2 }))
+                    .map(|_| GridState::new(if self.pairs.is_empty() { m } else { 2 }, self.age))
                     .collect();
                 self.states.insert(key.clone(), init);
             }

@@ -363,17 +363,17 @@ fn a_state_gives_ages_only_where_it_was_saved_with_them() {
         e.contains("saved with age = True, but this call gives age = False"),
         "{e}"
     );
-    // Without ages the state is the bytes it was: no `age` and no `at`.
+    // Without ages the state is the bytes it was: no `age` and no `ats`.
     let v = rmpv::decode::read_value(&mut &saved(false)[..]).unwrap();
     let text = format!("{v}");
     assert!(
-        !text.contains("\"age\"") && !text.contains("\"at\""),
+        !text.contains("\"age\"") && !text.contains("\"ats\""),
         "{text}"
     );
     let v = rmpv::decode::read_value(&mut &saved(true)[..]).unwrap();
     let text = format!("{v}");
     assert!(
-        text.contains("\"age\": true") && text.contains("\"at\""),
+        text.contains("\"age\": true") && text.contains("\"ats\""),
         "{text}"
     );
 }
@@ -411,17 +411,31 @@ fn a_state_whose_ages_do_not_hold_together_is_damaged() {
         .iter()
         .position(|s| s.seen)
         .expect("a series seen");
-    grid.series[seen].at = None;
+    grid.ats[seen] = None;
     assert!(load(f, false).contains("does not hold 1 sets of 4 series"));
-    let mut f = saved;
+    let mut f: RefreshFile = rmp_serde::from_slice(&rt.save_bytes().unwrap()).unwrap();
     let grid = &mut f.states[0].1[0];
     let unseen = grid
         .series
         .iter()
         .position(|s| !s.seen)
         .expect("a series unseen");
-    grid.series[unseen].at = grid.series[seen].at;
+    grid.ats[unseen] = grid.ats[seen];
     assert!(load(f, false).contains("does not hold 1 sets of 4 series"));
+    // A grid without a clock a series, under ages; and one with them,
+    // loaded without ages.
+    let mut f: RefreshFile = rmp_serde::from_slice(&rt.save_bytes().unwrap()).unwrap();
+    f.states[0].1[0].ats.pop();
+    assert!(load(f, false).contains("does not hold 1 sets of 4 series"));
+    let mut f = saved;
+    f.age = false;
+    f.checksum = Some(crate::checksum::Trailer::Patched);
+    let mut bytes = rmp_serde::to_vec_named(&f).unwrap();
+    crate::checksum::seal(&mut bytes);
+    let e = RefreshTime::load_bytes(&bytes, names(), false, false)
+        .err()
+        .unwrap();
+    assert!(e.contains("does not hold 1 sets of 4 series"), "{e}");
     // A pair grid's held points: each needs its values' clocks.
     let mut by_tick: HashMap<i64, usize> = HashMap::new();
     let whole = sampler(true, true).feed(&df, &c).unwrap();

@@ -3594,12 +3594,17 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
         (
             "refresh_time_age",
             "a series' last tick's Instant::Number",
-            |p, _| p.starts_with(".states.") && p.ends_with(".at.Number"),
+            |p, _| p.starts_with(".states.") && p.contains(".ats.") && p.ends_with(".Number"),
+        ),
+        (
+            "refresh_time_age",
+            "a series unseen since the point, without a clock",
+            |p, v| p.starts_with(".states.") && p.contains(".ats.") && v.is_nil(),
         ),
         (
             "refresh_time_age_held",
             "a series' last tick's Instant::Nanos",
-            |p, _| p.starts_with(".states.") && p.ends_with(".at.Nanos"),
+            |p, _| p.starts_with(".states.") && p.contains(".ats.") && p.ends_with(".Nanos"),
         ),
         ("refresh_time_age_held", "a held point's clocks", |p, _| {
             p.starts_with(".held.ats.0.") && p.ends_with(".Nanos")
