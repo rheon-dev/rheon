@@ -761,6 +761,7 @@ mod tests {
             window_size: window,
             window_ns: None,
             closed: Closed::Right,
+            since: None,
         }
     }
 

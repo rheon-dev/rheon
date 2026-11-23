@@ -38,6 +38,7 @@ fn a_memoed_discount_and_mass_are_the_unmemoed_ones() {
             window_size: Some(5.0),
             window_ns: None,
             closed: Closed::Right,
+            since: None,
         };
         let mut memo = DecayMemo::default();
         let mut fwd = FwdMemo::default();
@@ -108,6 +109,7 @@ fn a_queues_memo_answers_the_distance_it_holds_and_keeps_the_last() {
         window_size: Some(5.0),
         window_ns: None,
         closed: Closed::Right,
+        since: None,
     };
     let k = kernel(5.0);
     let mut memo = DecayMemo {
@@ -160,6 +162,7 @@ fn the_cut_s_mass_holds_the_last_distance_of_each_of_four_classes() {
         window_size: Some(60.0),
         window_ns: None,
         closed: Closed::Right,
+        since: None,
     };
     let mut memo = DecayMemo::default();
     // Four neighbours of 60: one of each class.
@@ -209,8 +212,9 @@ fn a_turn_over_moves_every_row_into_room_made_for_them() {
         window_size: Some(100.0),
         window_ns: None,
         closed: Closed::Right,
+        since: None,
     };
-    let mut q = Queue::new(vec![false, false], &[false, false]);
+    let mut q = Queue::new(vec![false, false], &[false, false], &[None, None], false);
     let mut scratch = vec![0.0; ROW * 2];
     let rows = 50usize;
     for i in 0..rows {
@@ -282,6 +286,7 @@ fn the_held_mass_changes_form_at_a_hundredth_of_a_half_life() {
             window_size: None,
             window_ns: None,
             closed: Closed::Right,
+            since: None,
         };
         let new_form = |d: f64| (half_life / std::f64::consts::LN_2) * (1.0 - k.discount(d));
         // The first distance at the edge, and the one before it.

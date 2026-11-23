@@ -502,6 +502,24 @@ fn windows_quantile_config() -> WindowsConfig {
     .unwrap()
 }
 
+/// The extrema (task 561, windows state 13): a windowed maximum and a
+/// minimum under `"left"`, a maximum looking ahead, so rows are held across
+/// the save, a running maximum since an event, and a windowed minimum since
+/// one with its own `max_state_bytes`.
+fn windows_extrema_config() -> WindowsConfig {
+    serde_json::from_str(
+        r#"{"formulas": [
+               {"name": "hi", "tree": ["rolling_max", ["col", "mid"], {"window_size": 10.0}]},
+               {"name": "lo", "tree": ["rolling_min", ["col", "mid"], {"window_size": 10.0, "closed": "left"}]},
+               {"name": "ahead", "tree": ["rrolling_max", ["col", "mid"], {"window_size": 10.0}]},
+               {"name": "peak", "tree": ["-", ["col", "mid"], ["rolling_max", ["col", "mid"], {"since": [">", ["col", "mid"], ["lit", 100.3]]}]]},
+               {"name": "low", "tree": ["rolling_min", ["col", "mid"], {"window_size": 10.0, "since": [">", ["col", "mid"], ["lit", 100.3]], "max_state_bytes": 1000000}]}
+             ],
+             "clock": "t", "gap_cap": 50.0}"#,
+    )
+    .unwrap()
+}
+
 /// The same two means on the `Int64` clock, under a fractional `gap_cap`,
 /// and an `increment` of an integer input (task 200; review round 5, B1):
 /// the rows' `off` in the integer form, and the increment's previous value
@@ -1418,6 +1436,14 @@ fn windows_quantile_run(bytes: &[u8], input: &DataFrame) -> Ran {
     windows_run_of(windows_quantile_config(), bytes, input)
 }
 
+fn windows_extrema_first() -> (Vec<u8>, DataFrame) {
+    windows_first_of(windows_extrema_config(), window_input(&frame()))
+}
+
+fn windows_extrema_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    windows_run_of(windows_extrema_config(), bytes, input)
+}
+
 fn windows_int_first() -> (Vec<u8>, DataFrame) {
     windows_first_of(windows_int_config(), window_int_input(&frame()))
 }
@@ -2014,6 +2040,11 @@ fn kinds() -> Vec<Kind> {
             run: windows_quantile_run,
         },
         Kind {
+            name: "with_windows_extrema",
+            first: windows_extrema_first,
+            run: windows_extrema_run,
+        },
+        Kind {
             name: "refresh_time",
             first: refresh_first,
             run: refresh_run,
@@ -2455,7 +2486,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
         } else if name.starts_with("merge") {
             ("merge", 1)
         } else if name.starts_with("with_windows") {
-            ("windows", 12)
+            ("windows", 13)
         } else {
             ("bank", u64::from(SCHEMA_VERSION))
         }
@@ -2480,7 +2511,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
             ("checkpoint", 1),
             ("merge", 2),
             ("refresh_time", 3),
-            ("windows", 3)
+            ("windows", 4)
         ]
     );
     // A checkpoint's stages, each a whole state of its kind; and the bank's
@@ -2489,7 +2520,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
     let stages = load_checkpoint(&unhex(f.state)).unwrap();
     for (s, (kind, version)) in stages.iter().zip([
         ("refresh_time", 3),
-        ("windows", 12),
+        ("windows", 13),
         ("bank", 72),
         ("merge", 1),
     ]) {
@@ -2524,7 +2555,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
             };
             assert_eq!(
                 envelope_head(&bytes),
-                Some(("rheon-state".to_owned(), "windows".to_owned(), 12))
+                Some(("rheon-state".to_owned(), "windows".to_owned(), 13))
             );
             assert!(sealed(&bytes));
             cores += 1;
@@ -3386,6 +3417,38 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
             |p, v| {
                 p.contains(".quant.") && p.contains(".prev.") && v.as_f64().is_some_and(|f| f > 0.0)
             },
+        ),
+        // Windows state 13 (task 561): an extremum's `front` rows, its
+        // running form's count, a kernel's `since` and its last event's
+        // stamp, and an operator's `max_state_bytes`.
+        (
+            "with_windows_extrema",
+            "an extremum's front rows",
+            |p, v| {
+                p.contains(".ext.")
+                    && p.contains(".front.")
+                    && v.as_f64().is_some_and(f64::is_finite)
+            },
+        ),
+        (
+            "with_windows_extrema",
+            "a running extremum's count",
+            |p, v| {
+                p.contains(".ext.")
+                    && (p.ends_with(".run_n") || p.ends_with(".cur_n"))
+                    && v.as_f64().is_some_and(|f| f > 0.0)
+            },
+        ),
+        ("with_windows_extrema", "a kernel's since", |p, v| {
+            p.ends_with(".since") && v.as_u64().is_some()
+        }),
+        ("with_windows_extrema", "a queue's last event", |p, v| {
+            p.ends_with(".since_off") && v.as_i64().is_some()
+        }),
+        (
+            "with_windows_extrema",
+            "an operator's max_state_bytes",
+            |p, v| p.ends_with(".max_state_bytes") && v.as_u64() == Some(1_000_000),
         ),
         // PLAN 541: a merge's state, in each form it takes -- an input's
         // last clock as a float and as an integer (a temporal clock's

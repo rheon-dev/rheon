@@ -108,6 +108,13 @@ pub struct OpNode {
     /// A quantile's level (`ewm_quantile`, `rewm_quantile`), in (0, 1);
     /// `None` for every other operator.
     pub quantile: Option<f64>,
+    /// An extremum's event (`rolling_max`, `rolling_min`): an element-wise
+    /// boolean of the row, true where the window starts over at the row's
+    /// stamp; `None` for every other operator.
+    pub since: Option<Box<Node>>,
+    /// An extremum's bound on its window's bytes a group; `None` for the
+    /// default and for every other operator.
+    pub max_state_bytes: Option<u64>,
 }
 
 impl OpNode {
@@ -124,7 +131,8 @@ impl OpNode {
 
     fn params_json(&self) -> Value {
         let mut m = Map::new();
-        if let Some(h) = &self.half_life {
+        let ext = self.kind.stat().is_some_and(Stat::is_extremum);
+        if let Some(h) = self.half_life.as_ref().filter(|_| !ext) {
             m.insert(
                 "half_life".into(),
                 serde_json::to_value(h).expect("a span is JSON"),
@@ -146,6 +154,12 @@ impl OpNode {
         }
         if let Some(q) = self.quantile {
             m.insert("quantile".into(), json!(q));
+        }
+        if let Some(e) = &self.since {
+            m.insert("since".into(), e.to_json());
+        }
+        if let Some(b) = self.max_state_bytes {
+            m.insert("max_state_bytes".into(), json!(b));
         }
         Value::Object(m)
     }
@@ -201,10 +215,14 @@ const WINDOW_HEADS: &[&str] = &[
     "ewm_var",
     "ewm_std",
     "ewm_quantile",
+    "rolling_max",
+    "rolling_min",
     "rewm_mean",
     "rewm_sum",
     "rewm_rate",
     "rewm_quantile",
+    "rrolling_max",
+    "rrolling_min",
 ];
 
 /// What a formula reads around the window operators, in the words a reader
@@ -419,6 +437,8 @@ impl Node {
                     partial: None,
                     bias: false,
                     quantile: None,
+                    since: None,
+                    max_state_bytes: None,
                 }))
             }
             name if OpKind::parse(name).is_some() => {
@@ -446,13 +466,43 @@ impl Node {
                     partial: None,
                     bias: false,
                     quantile: None,
+                    since: None,
+                    max_state_bytes: None,
                 };
                 let var = kind.stat().is_some_and(Stat::is_var);
                 let quantile = kind.stat() == Some(Stat::Quantile);
+                let ext = kind.stat().is_some_and(Stat::is_extremum);
+                if ext {
+                    // An extremum weighs no row: its kernel is the even one.
+                    op.half_life = Some(Span::Units(f64::INFINITY));
+                }
                 for (k, v) in params {
                     match k.as_str() {
-                        "half_life" => {
+                        "half_life" if !ext => {
                             op.half_life = Some(span_of(name, k, v)?);
+                        }
+                        "since" if ext => {
+                            let e = Node::from_json(v)?;
+                            if !e.operators().is_empty() {
+                                return Err(format!(
+                                    "{name}: since holds a window operator or an increment, but \
+                                     it may read only an expression of the row itself, such as \
+                                     pl.col(\"new_period\"). Add the operator's result as a \
+                                     column of the input before the run, and read that column."
+                                ));
+                            }
+                            op.since = Some(Box::new(e));
+                        }
+                        "max_state_bytes" if ext => {
+                            op.max_state_bytes =
+                                Some(v.as_u64().filter(|&b| b > 0).ok_or_else(|| {
+                                    format!(
+                                        "{name}: max_state_bytes must be a whole number of \
+                                         bytes above 0, but it is {}. Set max_state_bytes to the \
+                                         bytes a group's window may hold.",
+                                        short(v)
+                                    )
+                                })?);
                         }
                         "window_size" => {
                             op.window_size = Some(span_of(name, k, v)?);
@@ -516,6 +566,18 @@ impl Node {
                                 })?,
                             );
                         }
+                        other if ext => {
+                            return Err(format!(
+                                "{name}: {other:?} is not one of its parameters, which are \
+                                 window_size, closed, min_samples, partial, since and \
+                                 max_state_bytes. Remove {other:?}, or correct its name.{}",
+                                if other == "half_life" {
+                                    " An extremum weighs no row, so it has no half_life."
+                                } else {
+                                    ""
+                                }
+                            ));
+                        }
                         other => {
                             return Err(format!(
                                 "{name}: {other:?} is not one of its parameters, which are \
@@ -531,6 +593,9 @@ impl Node {
                             ));
                         }
                     }
+                }
+                if op.since.is_some() && kind.direction() == Direction::Forward {
+                    return Err(format!("{name}: {}.", crate::windows::SINCE_AHEAD));
                 }
                 if quantile && op.quantile.is_none() {
                     return Err(format!(
@@ -586,7 +651,7 @@ impl Node {
                  and these operators within one row: {}. If the operator is misspelled, correct it; \
                  otherwise, write the formula with the operators listed.",
                 {
-                    let (last, rest) = WINDOW_HEADS.split_last().expect("ten heads");
+                    let (last, rest) = WINDOW_HEADS.split_last().expect("fourteen heads");
                     format!("{} and {last}", rest.join(", "))
                 },
                 accepted_heads()
@@ -683,7 +748,12 @@ impl Node {
             }
             Node::Lit(_) => {}
             Node::Call(_, args) => args.iter().for_each(|a| a.collect_columns(out)),
-            Node::Op(op) => op.input.collect_columns(out),
+            Node::Op(op) => {
+                op.input.collect_columns(out);
+                if let Some(e) = &op.since {
+                    e.collect_columns(out);
+                }
+            }
         }
     }
 
@@ -693,7 +763,10 @@ impl Node {
         match self {
             Node::Col(_) | Node::Lit(_) => false,
             Node::Call(n, args) => n == name || args.iter().any(|a| a.contains_call(name)),
-            Node::Op(op) => op.input.contains_call(name),
+            Node::Op(op) => {
+                op.input.contains_call(name)
+                    || op.since.as_ref().is_some_and(|e| e.contains_call(name))
+            }
         }
     }
 
@@ -713,7 +786,12 @@ impl Node {
             }
             Node::Lit(_) => {}
             Node::Call(_, args) => args.iter().for_each(|a| a.collect_columns_ref(out)),
-            Node::Op(op) => op.input.collect_columns_ref(out),
+            Node::Op(op) => {
+                op.input.collect_columns_ref(out);
+                if let Some(e) = &op.since {
+                    e.collect_columns_ref(out);
+                }
+            }
         }
     }
 
@@ -1084,7 +1162,7 @@ mod tests {
         }
         assert_eq!(
             WINDOW_HEADS.len(),
-            10,
+            14,
             "every window operator but increment"
         );
         let err = Node::from_json(&json!(["shift", ["col", "a"]])).unwrap_err();

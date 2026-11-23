@@ -105,6 +105,12 @@ pub(super) struct Derived {
     pub(super) backward: Vec<u32>,
     /// The plain loop is switched off (`Windows::set_plain_run`).
     pub(super) off: bool,
+    /// A kernel the plain loop does not take: one with a `since` event, or
+    /// a windowed extremum, whose queue's bytes are checked a row at a time
+    /// (task 561). Its core's rows are all `push`'s.
+    pub(super) push_only: bool,
+    /// Per kernel, its cap on a group's queue in rows (`extrema::cap_of`).
+    pub(super) cap_rows: Vec<Option<usize>>,
     /// Rows the plain loop has taken since the core was built or read back.
     taken: u64,
     bufs: Bufs,
@@ -118,12 +124,25 @@ impl PartialEq for Derived {
 }
 
 impl Derived {
-    pub(super) fn of(kernels: &[KernelDef], off: bool) -> Self {
-        let n_wait = u32::from(
-            kernels
-                .iter()
-                .any(|k| k.direction == Direction::Backward && k.closed.near(Direction::Backward)),
-        );
+    pub(super) fn of(
+        kernels: &[KernelDef],
+        ops: &[OpDef],
+        members: &[Vec<usize>],
+        off: bool,
+    ) -> Self {
+        let n_wait = u32::from(kernels.iter().any(KernelDef::waits));
+        let cap_rows: Vec<Option<usize>> = (0..kernels.len())
+            .map(|ki| {
+                let cap = extrema::cap_of(&kernels[ki], ops, &members[ki])?;
+                let m = &members[ki];
+                let wide = m.iter().any(|&o| ops[o].stat.is_var());
+                let ext = m.iter().filter(|&&o| ops[o].stat.is_extremum()).count();
+                let row = extrema::row_bytes(m.len(), wide, ext) as u64;
+                Some(usize::try_from(cap / row).unwrap_or(usize::MAX))
+            })
+            .collect();
+        let push_only =
+            kernels.iter().any(|k| k.since.is_some()) || cap_rows.iter().any(Option::is_some);
         let of = |d: Direction| {
             (0..kernels.len())
                 .filter(|&ki| kernels[ki].direction == d)
@@ -136,6 +155,8 @@ impl Derived {
             backward: of(Direction::Backward),
             n_wait,
             off,
+            push_only,
+            cap_rows,
             taken: 0,
             bufs: Bufs::default(),
             multi: Multi::default(),
@@ -312,7 +333,10 @@ impl Rows<'_> {
 /// Whether a kernel is folded a block at a time by [`fold_op`]: its sums
 /// are the running total, with no window to evict from and no sketch to feed.
 fn fast_kernel(k: &KernelDef, members: &[usize], ops: &[OpDef]) -> bool {
-    k.window_size.is_none() && members.iter().all(|&o| ops[o].stat != Stat::Quantile)
+    k.window_size.is_none()
+        && members
+            .iter()
+            .all(|&o| ops[o].stat != Stat::Quantile && !ops[o].stat.is_extremum())
 }
 
 /// Whether a row at `now` is a step forward from `last` within `cap`, or no
@@ -522,7 +546,7 @@ impl Windows {
     /// before it builds the rows.
     #[inline]
     pub(crate) fn plain_may_run(&self) -> bool {
-        !self.derived.ready || !self.derived.off
+        !self.derived.ready || !(self.derived.off || self.derived.push_only)
     }
 
     /// Take as many of `rows`, from its start, as the plain loop runs: each a
@@ -533,7 +557,7 @@ impl Windows {
     /// state `push` would have left.
     pub(crate) fn push_plain(&mut self, rows: &PlainRows<'_>) -> usize {
         self.scratch();
-        if self.derived.off {
+        if self.derived.off || self.derived.push_only {
             return 0;
         }
         let several = self.groups.len() > 1 && rows.keys.is_some();
