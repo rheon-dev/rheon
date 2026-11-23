@@ -14,7 +14,7 @@ pages by the task you have in hand.
 
 | family | its features |
 |---|---|
-| [Models](#models) | the twenty-six models a spec can name |
+| [Models](#models) | the twenty-seven models a spec can name |
 | [Running a bank](#running-a-bank) | a bank in a query, in a Python loop, and its output as Arrow |
 | [Saving, loading and serving](#saving-loading-and-serving) | a bank's state, written and read back |
 | [Reading a bank](#reading-a-bank) | what a bank holds, and the names of its output |
@@ -50,6 +50,7 @@ to start with.
 | [`rheon.spec.glm`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.glm) | Poisson, Gamma, binomial and Tweedie regression, a Newton step a row on the likelihood | [entry](MODELS.md#glm--generalized-linear-models-poisson-gamma-binomial-tweedie) · [a count target](how-to/fit-a-count-target.md) |
 | [`rheon.spec.holt`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.holt) | Holt's linear trend, a baseline that extrapolates the target's own level and slope | [entry](MODELS.md#holt--holts-linear-trend) · [choose Holt's smoothing](how-to/choose-holts-smoothing.md) |
 | [`rheon.spec.ew_cov`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ew_cov) | running means, variances, covariances, correlations, partial correlations, Mahalanobis distances and principal components | [entry](MODELS.md#ew_cov--exponentially-weighted-moments) · [flag joint outliers](how-to/flag-joint-outliers.md) · [track principal components](how-to/track-principal-components.md) · [find which series leads](how-to/find-which-series-leads.md) |
+| [`rheon.spec.ewm_moments`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ewm_moments) | exponentially weighted or windowed moments of columns to any order, each leg perhaps lagged: skew, kurtosis, cumulants, co-moments, autocovariances and autocorrelations, each a term you name | [entry](MODELS.md#ewm_moments--moments-to-any-order-lagged-or-not) · [OUTPUTS.md](OUTPUTS.md#ewm_moments) |
 | [`rheon.spec.marginal`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.marginal) | every feature and target pair's moments, slope and t, kept in the state and read back as a table | [entry](MODELS.md#marginal--every-pairs-moments-kept-in-the-state) · [screen features against a target](how-to/screen-features-against-a-target.md) |
 | [`rheon.spec.deco`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.deco) | one correlation for the whole matrix, or one per block and pair of blocks | [entry](MODELS.md#deco--one-correlation-for-the-whole-matrix) · [track the average correlation](how-to/track-the-average-correlation.md) |
 | [`rheon.spec.rcov`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.rcov) | a block's realized covariance, robust to microstructure noise | [entry](MODELS.md#rcov--a-blocks-realized-covariance-robust-to-noise) · [a block's covariance from ticks](how-to/estimate-a-blocks-covariance-from-ticks.md) |
@@ -121,8 +122,9 @@ the fields of its output.
 The window operators return Polars expressions, computed over a window of
 the clock and run in `lf.rheon.with_windows`. `ewm_mean`, `ewm_sum`,
 `ewm_rate` and `ewm_quantile` look back from a row, or ahead under
-`reverse=True`, and a look-ahead one can be a spec's target. `ewm_var` and
-`ewm_std` look back only ([WINDOWS.md](WINDOWS.md) describes each).
+`reverse=True`, and a look-ahead one can be a spec's target. `ewm_var`,
+`ewm_std` and `ewm_moments` look back only ([WINDOWS.md](WINDOWS.md) describes
+each).
 
 | feature | what it does | shown in |
 |---|---|---|
@@ -130,6 +132,7 @@ the clock and run in `lf.rheon.with_windows`. `ewm_mean`, `ewm_sum`,
 | [`rp.ewm_sum`](https://rheon-dev.github.io/rheon/ops.html#rheon.polars.ops.ewm_sum), also `rp.ops.ewm_sum` | the weighted sum over each row's window, such as the two sums of a VWAP | [Make features that look back](how-to/make-window-features.md#make-a-weighted-mean-such-as-a-vwap) |
 | [`rp.ewm_rate`](https://rheon-dev.github.io/rheon/ops.html#rheon.polars.ops.ewm_rate), also `rp.ops.ewm_rate` | a weighted sum per unit of clock time, such as volume per second | [WINDOWS.md](WINDOWS.md) |
 | [`rp.ewm_var`](https://rheon-dev.github.io/rheon/ops.html#rheon.polars.ops.ewm_var), [`rp.ewm_std`](https://rheon-dev.github.io/rheon/ops.html#rheon.polars.ops.ewm_std), also `rp.ops.ewm_var` and `rp.ops.ewm_std` | the variance and standard deviation about the time-weighted mean | [WINDOWS.md](WINDOWS.md) · [Scale a feature by its spread](how-to/scale-a-feature-by-its-spread.md) |
+| [`rp.ewm_moments`](https://rheon-dev.github.io/rheon/ops.html#rheon.polars.ops.ewm_moments), also `rp.ops.ewm_moments` | one term of the moments of one or more columns over each row's window, each weighing its held interval: a skew, a kurtosis, a cumulant, a co-moment, an autocorrelation | [WINDOWS.md](WINDOWS.md) · [the model's entry](MODELS.md#ewm_moments--moments-to-any-order-lagged-or-not) |
 | [`rp.ewm_quantile`](https://rheon-dev.github.io/rheon/ops.html#rheon.polars.ops.ewm_quantile), also `rp.ops.ewm_quantile` | a weighted quantile of the window's values, such as a median | [Weight rows by a robust scale](how-to/weight-rows-by-a-robust-scale.md) |
 | [`rp.increment`](https://rheon-dev.github.io/rheon/ops.html#rheon.polars.ops.increment), also `rp.ops.increment` | a column's step from its last value within the group and session | [WINDOWS.md](WINDOWS.md) |
 | [`lf.rheon.with_windows`](https://rheon-dev.github.io/rheon/namespaces.html#rheon.polars._frame.LazyFrameRheonNamespace.with_windows), [`rp.stream.with_windows`](https://rheon-dev.github.io/rheon/stream.html#rheon.polars.stream.with_windows) | adds window columns to a stream in one pass, before the bank | [Make features that look back](how-to/make-window-features.md) · [Resume a window run](how-to/resume-a-window-run.md) |

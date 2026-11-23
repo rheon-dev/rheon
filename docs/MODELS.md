@@ -1,7 +1,7 @@
 <!-- kind: reference -->
 # Models
 
-The reference entry of each of the twenty-six models a spec can name, by
+The reference entry of each of the twenty-seven models a spec can name, by
 family, for a reader who knows which model they want to look up. A
 model's parameters, their defaults and its refusals are in its docstring,
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md).
@@ -28,7 +28,7 @@ which models keep each, and why.
 
 ## The models at a glance
 
-The twenty-six models fall into four families, and each family answers one
+The twenty-seven models fall into four families, and each family answers one
 kind of question about a stream. Each name links its builder's reference
 page, which gives its keywords and their defaults, and *entry* links its
 entry on this page. [Choose a model](how-to/choose-a-model.md) says which
@@ -51,6 +51,7 @@ to start with for which question.
 | [`holt`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.holt) · [entry](#holt--holts-linear-trend) | step | Holt's linear trend, the baseline that uses no features |
 | **[Moments and correlation](#moments-and-correlation)** | | track the running moments and correlations of the columns you name |
 | [`ew_cov`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ew_cov) · [entry](#ew_cov--exponentially-weighted-moments) | accumulate | running mean, variance, covariance, correlation, partial correlation, Mahalanobis distance and principal components |
+| [`ewm_moments`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ewm_moments) · [entry](#ewm_moments--moments-to-any-order-lagged-or-not) | accumulate | moments and cross-moments of columns to any order, each leg perhaps lagged, each a term you name: skew, kurtosis, cumulants, co-skewness, autocovariances and autocorrelations, decayed or over a window, unbiased to order 4 and with standard errors |
 | [`marginal`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.marginal) · [entry](#marginal--every-pairs-moments-kept-in-the-state) | accumulate | every (feature, target) pair's running mean, variance, covariance, correlation, slope and t, for a wide set of columns, kept in the state and read back as a table; optionally at a set of lags, and with binned target moments for the relations a correlation cannot see |
 | [`deco`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.deco) · [entry](#deco--one-correlation-for-the-whole-matrix) | accumulate | one correlation for the whole matrix: Engle & Kelly's equicorrelation, or one per block and per pair of blocks |
 | [`rcov`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.rcov) · [entry](#rcov--a-blocks-realized-covariance-robust-to-noise) | accumulate | a block's realized covariance, robust to microstructure noise: the Barndorff-Nielsen–Hansen–Lunde–Shephard kernel or Christensen–Kinnebrock–Podolskij pre-averaging, reported when a group closes |
@@ -73,7 +74,7 @@ answer depends on the row order:**
 | learns by | what the model does with a row | with decay off | order-dependent even so |
 |---|---|---|---|
 | **solve** | keeps running sums and computes its coefficients from them | converges to the batch answer, in any row order | `lasso`'s `penalty_selected`, ranked by out-of-sample error, though its path converges in any order |
-| **accumulate** | keeps running sums and reports them | converges to the batch answer, in any row order | a lag, in `ew_cov` or `marginal`, which counts learned rows; `rcov`'s block and `deco`'s per-row estimate; `audit`'s runs, smallest change, lag pairs and clock steps, and past `distinct_cap` the digest's `median`, `mad` and `robust_z` and the counters' `top_value`, `top_count`, `second_count` and `equal_by_chance`, each within its bound |
+| **accumulate** | keeps running sums and reports them | converges to the batch answer, in any row order | a lag, in `ew_cov`, `marginal` or `ewm_moments`, which counts learned rows; `rcov`'s block and `deco`'s per-row estimate; `audit`'s runs, smallest change, lag pairs and clock steps, and past `distinct_cap` the digest's `median`, `mad` and `robust_z` and the counters' `top_value`, `top_count`, `second_count` and `equal_by_chance`, each within its bound |
 | **reweight** | solves from running sums, but lets the fit before each row decide how that row enters them | depends on the row order | |
 | **step** | moves its coefficients a little on each row | depends on the row order | |
 | **filter** | carries a belief forward from row to row | depends on the row order | |
@@ -2136,8 +2137,9 @@ ones to 1e-12, the fit is statsmodels' `Holt` to 1e-12.
 
 These models measure the columns you name without fitting a target: their
 means, variances and correlations, for a few columns or for thousands, and,
-in `audit`'s case, the counts of what the columns hold. `ew_cov` and `deco`
-write their statistics on every row, from the state before that row. The
+in `audit`'s case, the counts of what the columns hold. `ew_cov`,
+`ewm_moments` and `deco` write their statistics on every row, from the state
+before that row. The
 means, spreads, correlations and `rho` read that state alone, so they can
 serve as features for the row without leaking it. `mahal`, the
 principal-component scores, `u` and `loglik` measure the row's own values
@@ -2280,6 +2282,142 @@ with `n`. Measured, the spec ran 24 times as fast at a 74-row
 window and 1,100 times at a 4,680-row one. So use the spec for a stream, a
 state to save, or speed. The docstring's Notes, under *Against Polars*,
 give how to weight the rows.
+
+### `ewm_moments` — moments to any order, lagged or not
+
+*API:* [`rheon.spec.ewm_moments`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ewm_moments) — *Rust:* [`ewm_moments.rs`](../crates/rheon-core/src/ewm_moments.rs) — *Outputs:* [fields](OUTPUTS.md#ewm_moments)
+
+Exponentially weighted, or windowed, moments and cross-moments of columns,
+to any order, each leg read at the row or lagged.
+
+Use `ewm_moments` for the running shape of a stream's columns: a skew or a
+kurtosis, a cumulant, a co-skewness of two columns, or an autocovariance or
+autocorrelation at a lag, each a term you name. Each is read before its row,
+so it can be a feature for that row. Every term comes from one state
+whose size the terms, the lags and the window fix, whatever the stream's
+length. Use [`ew_cov`](#ew_cov--exponentially-weighted-moments) for the
+means, covariances and correlations of many columns and the statistics read
+off them. For one term as a window column of a stream, read after its row
+as the other window operators are, use the operator `rp.ewm_moments`
+([WINDOWS.md](WINDOWS.md)).
+
+Its parameters, their defaults and what each refuses are in its
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ewm_moments),
+and the fields it writes in [OUTPUTS.md](OUTPUTS.md#ewm_moments). The
+parameters every spec takes are in [What every spec
+takes](#what-every-spec-takes).
+
+#### The update
+
+A term names its legs and a power of each: `{"m3": {"x": 3}}` is the third
+moment of `x`, `{"xy2": {"x": 1, "y": 2}}` a cross-moment, and
+`{"ac1": {"x": 1, "x@1": 1}}` the first autocovariance. Row `t` holds the
+weight `ω_t`, its own weight times every later row's decay, and with
+`W = Σ ω_t` and `z_t` the legs' values:
+
+```
+mean           m    = Σ ω_t z_t / W
+central        μ_a  = Σ ω_t (z_t − m)^a / W          (a, the powers over the legs)
+raw            μ'_a = Σ ω_t z_t^a / W
+standardized   s_a  = μ_a / Π_j μ_{2e_j}^(a_j/2)     (a skew, a kurtosis, a correlation)
+cumulant       κ_p  = μ_p − Σ_{j=2..p−2} C(p−1, j−1) κ_j μ_{p−j}     (one leg)
+```
+
+The state keeps `W`, the means, the normalized central moments `c_a = μ_a`
+below each term and the ratios `r_k = Σ ω_t^k / W^k` (`1 / r_2` is Kish's
+effective number of rows). A row of weight `w` after a decay `λ` merges
+into them by Pébay's rule:
+
+```
+W' = λW + w      a = λW / W'      b = w / W'      d = z − m
+c'_a = Σ_{β ≤ a} C(a, β) a c_{a−β} (−b d)^β  +  b (a d)^a      (c_0 = 1, c_1 = 0)
+r'_k = a^k r_k + b^k      m' = m + b d
+```
+
+Every product is at the scale of the spread, so a column at `1e6` with a
+spread of 1 keeps its fourth moment, where power sums keep no digit of it,
+and decay multiplies `W` alone, so a long gap moves no moment. Under
+`bias=False` a term of order 2 to 4 is the form unbiased for rows drawn
+independently under these weights (Rimoldini's weighted moments; scipy's
+`kstat`, `skew(bias=False)` and `kurtosis(bias=False)` at equal weights).
+A lag pairs a row with the row `k` learned rows back, or on a clock with
+the latest at or before `t − k` within `lag_tolerance`, and the pairs are
+centered on their own weighted means. Under a window the moments are read
+by merging summaries of the window's parts, so a row leaving it is never
+subtracted.
+
+#### Example
+
+**It reads a distribution's shape and a series' memory as the rows
+arrive.** This code draws a gamma column, whose skew is 1 and kurtosis
+4.5, and an autoregressive one whose lag-1 autocorrelation is 0.6, and
+reads the last row's terms under a half-life of 10,000 rows:
+
+```python
+import numpy as np
+import polars as pl
+from rheon import polars as rp
+
+# A skewed column and an autoregressive one.
+rng = np.random.default_rng(5)
+n = 50_000
+e, ar = rng.standard_normal(n), np.zeros(n)
+for t in range(1, n):
+    ar[t] = 0.6 * ar[t - 1] + e[t]                            # the truth: an autocorrelation of 0.6
+frame = pl.DataFrame({"g": rng.gamma(4.0, size=n), "ar": ar})    # the truth: skew 1, kurtosis 4.5
+
+# Fit, and read the last row's terms.
+model = rp.spec.ewm_moments(
+    "shape",
+    terms={"skew": {"g": 3}, "kurt": {"g": 4}, "ac1": {"ar": 1, "ar@1": 1}},
+    kind="standardized",
+    half_life=10_000.0,
+)
+last = rp.ModelBank([model]).fit_predict(frame)["shape"][-1]
+print(f"skew: true 1.00, found {last['skew']:.2f}")
+print(f"kurtosis: true 4.50, found {last['kurt']:.2f}")
+print(f"lag-1 autocorrelation: true 0.60, found {last['ac1']:.2f}")
+```
+
+```text
+skew: true 1.00, found 0.99
+kurtosis: true 4.50, found 4.43
+lag-1 autocorrelation: true 0.60, found 0.60
+```
+
+A half-life of 10,000 rows weighs the rows as about 29,000 equal ones
+would (Kish's effective size, `2 · 10,000 / ln 2`), and the kurtosis, a
+fourth moment, is the term furthest from its truth.
+
+#### See also
+
+The operator and the models beside it:
+
+- The window operator
+  [`rp.ewm_moments`](https://rheon-dev.github.io/rheon/ops.html#rheon.polars.ops.ewm_moments),
+  one term as a column of a stream, each row weighing the time its value is
+  held, as `rp.ewm_var` weighs it.
+- [`ew_cov`](#ew_cov--exponentially-weighted-moments), the means,
+  covariances, correlations and principal components of many columns.
+- [`audit`](#audit--what-a-streams-columns-hold), a column's lag pairs and
+  tails counted once over the whole stream.
+
+#### Notes
+
+**Held to scipy, statsmodels and Polars.** With every weight 1 and no
+decay the terms are scipy's `moment`, `skew`, `kurtosis` and `kstat`
+within 1e-12, and a lagged term of order (1, 1) is numpy's
+`cov(x[k:], x[:-k], bias=True)`. Under decay and unequal weights they are
+numpy's weighted averages of the same products. Over a window of rows they
+are Polars' `rolling_skew` and `rolling_kurtosis`.
+
+**An autocorrelation centers each leg on its own pairs.** The pairs are centered
+on their own means, so the lag-1 correlation differs from statsmodels'
+`acf`, which centers on the whole stream's mean and divides by its
+variance, by a few thousandths on an autoregressive series. `ew_cov`'s
+`lag_corr` centers both legs on the stream's mean before the row and reads
+the whole stream's variance, a third statistic: on an AR(1) series it parts
+from this one by about 4e-2 at lag 2.
 
 ### `marginal` — every pair's moments, kept in the state
 
