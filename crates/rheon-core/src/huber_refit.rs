@@ -2069,7 +2069,15 @@ mod tests {
         assert!(bad(&|c| c.learned = 0), "rows held before any was learned");
         assert!(bad(&|c| c.rows[2] = 0.0), "a learned row of no weight");
         assert!(bad(&|c| c.rows[3] = 1.5), "a factor above 1");
-        assert!(bad(&|c| c.ages[1] = 0.0), "a run's scale factor of 0");
+        // A factor of 0 is a gap past the decay's underflow, which a buffer
+        // holds (REG-1); one below 0, or NaN, no stream writes.
+        assert!(!bad(&|c| c.ages[1] = 0.0), "a run's scale factor of 0");
+        assert!(!bad(&|c| c.rows[3] = 0.0), "a row's scale factor of 0");
+        assert!(bad(&|c| c.ages[1] = -0.5), "a run's scale factor below 0");
+        assert!(
+            bad(&|c| c.rows[3] = f64::NAN),
+            "a row's scale factor of NaN"
+        );
         assert!(bad(&|c| c.ages[2] = 1.5), "a run of no whole count");
         assert!(bad(&|c| c.ages[2] = 0.0), "a run of no rows");
         assert!(bad(&|c| c.ages[3] = 2.0), "a run after a row not learned");

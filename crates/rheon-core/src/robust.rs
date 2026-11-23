@@ -2828,9 +2828,9 @@ impl OnlineModel for Robust {
             // old fit back, which the fit now learns from (task 278, D10;
             // `Self::slot_predictions` predicts nothing from such a target).
             // A state written before schema 64 keeps it, as it did. The
-            // refit's buffer keeps the model's factor, a factor of 0 being
-            // no row it holds (`RefitBuf::fits`): a history that far below
-            // a row's weight is no history its replay reads apart from 0.
+            // refit's buffer keeps the model's factor, a factor of 0 (a gap
+            // past the decay's underflow) among them (`RefitBuf::fits`):
+            // the rows before it weigh nothing in its replay.
             let lam_t = if self.cfg.min_weight_holds_learning {
                 lam
             } else {
