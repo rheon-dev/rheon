@@ -217,3 +217,24 @@ fn the_state_is_its_ring() {
     assert_eq!(Kswin::state_bytes(100), 848);
     assert_eq!(Kswin::state_bytes(1000), 8048);
 }
+
+/// `sound` takes the level just inside each end of `(0, 1)` and refuses
+/// both ends, and each other shape bound on its own.
+#[test]
+fn a_restored_levels_shape_is_checked_at_both_ends() {
+    let with = |f: &dyn Fn(&mut Kswin)| {
+        let mut k = Kswin::new(KswinCfg::default());
+        f(&mut k);
+        k.sound()
+    };
+    assert!(with(&|_| {}));
+    assert!(!with(&|k| k.alpha = 0.0));
+    assert!(with(&|k| k.alpha = 1e-300));
+    assert!(!with(&|k| k.alpha = 1.0));
+    assert!(with(&|k| k.alpha = 1.0 - f64::EPSILON));
+    assert!(!with(&|k| k.alpha = f64::NAN));
+    assert!(!with(&|k| k.stat_size = 0));
+    assert!(with(&|k| k.stat_size = 50) && !with(&|k| k.stat_size = 51));
+    assert!(with(&|k| k.window = (0..100).map(f64::from).collect()));
+    assert!(!with(&|k| k.window = (0..101).map(f64::from).collect()));
+}
