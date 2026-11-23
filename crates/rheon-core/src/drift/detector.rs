@@ -62,16 +62,19 @@ impl DriftDetector {
     #[inline]
     pub fn update(&mut self, r: f64, scale: f64, d: f64, lam: f64) -> bool {
         let scaled = scale.is_finite() && scale > 0.0;
+        // A finite residual whose ratio to a positive scale overflows is the
+        // largest double of scales out, not a row unseen: so read, it flags.
+        let ratio = |r: f64| (r / scale).clamp(-f64::MAX, f64::MAX);
         match self {
             Self::PageHinkley(p) => {
                 if scaled {
-                    p.update(r.abs() / scale, d, lam)
+                    p.update(ratio(r.abs()), d, lam)
                 } else {
                     p.age(lam);
                     false
                 }
             }
-            Self::Cusum(c) => scaled && c.update(r / scale, d),
+            Self::Cusum(c) => scaled && c.update(ratio(r), d),
             Self::Adwin(a) => a.update(r.abs()),
             Self::Kswin(k) => k.update(r.abs()),
             Self::Ddm(e) => e.detector.update(r.abs() > e.error_above),
@@ -400,6 +403,45 @@ mod tests {
         v["levels"] = serde_json::json!([[[1.0, 0.0]], []]);
         let d: Adwin = serde_json::from_value(v).unwrap();
         assert!(!d.sound());
+    }
+
+    /// A residual so many scales out that `r / σ` overflows is a drift, not
+    /// a row unseen; a clock step of 0 with such a residual wipes nothing;
+    /// and an excess that overflows below leaves Page-Hinkley reading on,
+    /// not NaN forever (review 2026-11-23, DRIFT-6).
+    #[test]
+    fn overflowing_rows_flag_or_pass_and_leave_the_detectors_reading() {
+        // (2) `|r| / σ = inf`: Page-Hinkley and CUSUM flag.
+        for k in [
+            DriftDetector::PageHinkley(PageHinkley::new(0.5, 20.0)),
+            DriftDetector::Cusum(Cusum::new(0.5, 5.0)),
+        ] {
+            let mut k = k;
+            for _ in 0..50 {
+                k.update(0.3, 1.0, 1.0, 0.99);
+            }
+            assert!(k.update(1e100, 1e-250, 1.0, 0.99), "{k:?}");
+        }
+        // (3) A step of 0 with `r / σ = ±inf` keeps CUSUM's sums.
+        let mut c = Cusum::new(0.5, 50.0);
+        for _ in 0..20 {
+            c.update(2.0, 1.0);
+        }
+        let before = c.sums();
+        let mut k = DriftDetector::Cusum(c);
+        k.update(1e100, 1e-250, 0.0, 1.0);
+        k.update(-1e100, 1e-250, 0.0, 1.0);
+        let DriftDetector::Cusum(c) = k else { unreachable!() };
+        assert_eq!(c.sums(), before);
+        // (1) A mean of `1e305`, then a long step with an error of 0: the
+        // excess overflows below, and the statistic stays a number that
+        // the next rows of a drift move past the threshold.
+        let mut ph = PageHinkley::new(0.5, 20.0);
+        ph.update(1e305, 1.0, 1.0);
+        ph.update(0.0, 86400.0, 1.0);
+        assert!(!ph.statistic().is_nan(), "{ph:?}");
+        let flagged = (0..1000).any(|_| ph.update(1e306, 1.0, 1.0));
+        assert!(flagged, "{ph:?}");
     }
 
     /// The tags a file carries for each kind other than Page-Hinkley are

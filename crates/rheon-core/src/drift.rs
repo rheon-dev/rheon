@@ -108,6 +108,13 @@ impl PageHinkley {
         if self.cum < self.min_cum {
             self.min_cum = self.cum;
         }
+        // An excess past the doubles below (a mean of `1e305` and a long
+        // step at an error of 0) left both at `−∞` and the statistic NaN
+        // for good. At a low the statistic is 0, so both start again there.
+        if self.cum == f64::NEG_INFINITY {
+            self.cum = 0.0;
+            self.min_cum = 0.0;
+        }
         if self.statistic() > self.threshold {
             self.reset();
             true

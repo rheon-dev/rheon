@@ -817,6 +817,15 @@ model that only the new build has is listed as an addition and passes.
   where the predictions settle (`1e4` to `1e6` away) still reads null:
   its powers' moments lose the curvature in rounding there, which a
   change of origin, not of the solve, would fix.
+- **`page_hinkley` and `cusum` read a residual whose ratio to its scale
+  overflows as a drift, and keep reading past an overflow** (review
+  2026-11-23, DRIFT-6). A finite residual over a scale near `1e-250` read
+  infinite and was dropped as no row; on a step of 0 such a ratio made
+  CUSUM's sums `0 · ∞ = NaN`, which `max(0, ·)` read as 0, wiping both; and
+  a Page-Hinkley excess that overflowed below left its statistic NaN for
+  good. The ratio is now the largest double, which flags; a step of 0 adds
+  nothing to CUSUM; and Page-Hinkley starts its sums again at such a low,
+  where its statistic is 0. No finite path moves.
 - **A window looking ahead whose far edge is the input's last row is whole
   at the end of the input** (PLAN 565). Under `closed="right"` or `"both"`,
   `rp.ewm_sum`, `rp.ewm_mean`, `rp.ewm_rate` and `rp.ewm_quantile` with

@@ -71,7 +71,13 @@ impl Cusum {
 
     /// Feed one standardized error `z`, `d` clock units after the one before.
     /// Returns whether either sum passed `h`, and then starts both again.
+    ///
+    /// A step of 0 adds nothing to either sum, whatever `z`: `0 · ∞` would
+    /// be NaN, which `max(0, ·)` read as 0 and so wiped both.
     pub fn update(&mut self, z: f64, d: f64) -> bool {
+        if d == 0.0 {
+            return false;
+        }
         self.up = (self.up + d * (z - self.k)).max(0.0);
         self.down = (self.down + d * (-z - self.k)).max(0.0);
         if self.up > self.h || self.down > self.h {
