@@ -227,6 +227,7 @@ pub enum OpKind {
     CrossStd,
     CrossRank,
     CrossQuantile,
+    CrossRef,
 }
 
 impl OpKind {
@@ -247,6 +248,7 @@ impl OpKind {
             OpKind::CrossStd => "cross_std",
             OpKind::CrossRank => "cross_rank",
             OpKind::CrossQuantile => "cross_quantile",
+            OpKind::CrossRef => "cross_ref",
         }
     }
 
@@ -267,6 +269,7 @@ impl OpKind {
             "cross_std" => Some(OpKind::CrossStd),
             "cross_rank" => Some(OpKind::CrossRank),
             "cross_quantile" => Some(OpKind::CrossQuantile),
+            "cross_ref" => Some(OpKind::CrossRef),
             _ => None,
         }
     }
@@ -293,7 +296,8 @@ impl OpKind {
             | OpKind::CrossMean
             | OpKind::CrossStd
             | OpKind::CrossRank
-            | OpKind::CrossQuantile => None,
+            | OpKind::CrossQuantile
+            | OpKind::CrossRef => None,
         }
     }
 
@@ -305,6 +309,7 @@ impl OpKind {
             OpKind::CrossStd => Some(CrossStat::Std),
             OpKind::CrossRank => Some(CrossStat::Rank),
             OpKind::CrossQuantile => Some(CrossStat::Quantile),
+            OpKind::CrossRef => Some(CrossStat::Ref),
             _ => None,
         }
     }
@@ -612,6 +617,9 @@ pub struct RowIn<'a> {
     /// target of a row it skips (docs/PLAN.md task 104). The row still
     /// steps the clocks and still counts in other rows' windows.
     pub accept: bool,
+    /// Per list a cross operator reads its neighbors from: the row's keys,
+    /// as text (`None` for a null list). Empty with no such operator.
+    pub lists: &'a [Option<&'a [Option<String>]>],
 }
 
 /// What the clocks make of a row before it is taken ([`Windows::peek`]).
@@ -650,6 +658,9 @@ pub enum Refusal {
         bytes: u64,
         cap: u64,
     },
+    /// The reference read `op` (its index among the cross operators) picks
+    /// this row at a stamp where it picked the row `first` already.
+    CrossRefTwice { seq: u64, op: usize, first: u64 },
 }
 
 /// Per operator, a segment's sums: the mass-weighted value, the mass and
@@ -1595,7 +1606,7 @@ struct Group {
     stamp_values: Vec<Vec<f64>>,
     /// Raw clock of the group's last row, while it is in the silent list.
     last_raw: Option<ClockValue>,
-    /// Neighbours in the silent list, the oldest `last_raw` at the head.
+    /// Neighbors in the silent list, the oldest `last_raw` at the head.
     prev_link: Option<usize>,
     next_link: Option<usize>,
     linked: bool,
@@ -2451,7 +2462,7 @@ impl Windows {
         // The cross-group operators' state with this row, before anything
         // moves: a row that would take an operator past its cap is refused.
         let cross_held = match &self.cross {
-            Some(c) => Some(c.check_cap(row.clock, seq, self.n_outputs)?),
+            Some(c) => Some(c.check_row(row, seq, self.n_outputs)?),
             None => None,
         };
         // A plain step forward on both clocks is never refused: each steps
@@ -2515,11 +2526,14 @@ impl Windows {
         // The cross-group operators' stamp: a later one closes the open
         // stamp, whose rows are the ones before this; a reset discards it.
         if let Some(c) = self.cross.as_mut() {
+            let index = &self.index;
+            let find = |k: &str| index.get(k).copied();
             let mut rows = cross::Rows {
                 first: self.held_first,
                 n_outputs: self.n_outputs,
                 values: &mut self.held_values,
                 meta: &mut self.held_meta,
+                find: &find,
             };
             c.before_row(
                 row.clock,
@@ -2548,13 +2562,16 @@ impl Windows {
             drop: false,
         });
         if let Some(c) = self.cross.as_mut() {
+            let index = &self.index;
+            let find = |k: &str| index.get(k).copied();
             let mut rows = cross::Rows {
                 first: self.held_first,
                 n_outputs: self.n_outputs,
                 values: &mut self.held_values,
                 meta: &mut self.held_meta,
+                find: &find,
             };
-            c.row(row.values, seq, &mut rows);
+            c.row(row, seq, &mut rows);
             if let Some(held) = cross_held {
                 c.note_held(&held);
             }
@@ -2951,11 +2968,14 @@ impl Windows {
             self.unlink(gi);
         }
         if let Some(c) = self.cross.as_mut() {
+            let index = &self.index;
+            let find = |k: &str| index.get(k).copied();
             let mut rows = cross::Rows {
                 first: self.held_first,
                 n_outputs: self.n_outputs,
                 values: &mut self.held_values,
                 meta: &mut self.held_meta,
+                find: &find,
             };
             c.finish(&mut rows, self.next_seq);
         }
@@ -3823,6 +3843,7 @@ mod tests {
             session: r.session,
             values: &r.values,
             accept: r.accept,
+            lists: &[],
         })
     }
 

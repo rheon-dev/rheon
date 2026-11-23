@@ -143,6 +143,7 @@ FAMILIES: tuple[Family, ...] = (
                 "cross_std",
                 "cross_rank",
                 "cross_quantile",
+                "cross_ref",
             )
         ),
     ),

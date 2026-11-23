@@ -117,6 +117,12 @@ pub struct OpNode {
     /// A cross rank's tie rule and direction, and a cross quantile's
     /// interpolation; the defaults for every other operator.
     pub order: Order,
+    /// A cross operator's list column of neighbor keys: it reads the rows
+    /// of those groups alone. `None` reads every group.
+    pub neighbors: Option<String>,
+    /// A reference read's predicate, an element-wise formula of the row:
+    /// the row where it holds is the stamp's reference row.
+    pub pick: Option<Box<Node>>,
 }
 
 /// How a cross operator that reads values in order reads them.
@@ -128,6 +134,12 @@ pub struct Order {
 }
 
 impl OpNode {
+    /// The trees beside the input a cross operator reads: its weight and
+    /// a reference read's predicate.
+    pub fn trees(&self) -> impl Iterator<Item = &Node> {
+        self.weight.iter().chain(self.pick.iter()).map(|b| &**b)
+    }
+
     /// Backward or forward; `increment` reads back one row and is backward.
     pub fn direction(&self) -> Direction {
         self.kind.direction()
@@ -172,6 +184,12 @@ impl OpNode {
             }
             if let Some(w) = &self.weight {
                 m.insert("weight".into(), w.to_json());
+            }
+            if let Some(n) = &self.neighbors {
+                m.insert("neighbors".into(), json!(n));
+            }
+            if let Some(p) = &self.pick {
+                m.insert("where".into(), p.to_json());
             }
             if let Some(b) = self.max_state_bytes {
                 m.insert("max_state_bytes".into(), json!(b));
@@ -465,6 +483,8 @@ impl Node {
                     weight: None,
                     max_state_bytes: None,
                     order: Order::default(),
+                    neighbors: None,
+                    pick: None,
                 }))
             }
             name if OpKind::parse(name).is_some_and(|k| k.cross().is_some()) => {
@@ -492,6 +512,8 @@ impl Node {
                     weight: None,
                     max_state_bytes: None,
                     order: Order::default(),
+                    neighbors: None,
+                    pick: None,
                 };
                 let std = kind == OpKind::CrossStd;
                 let stat = kind.cross().expect("checked");
@@ -520,6 +542,28 @@ impl Node {
                                     short(v)
                                 )
                             })?;
+                        }
+                        "where" if stat == CrossStat::Ref => {
+                            let w = Node::from_json(v)?;
+                            w.no_window_operator(name)?;
+                            op.pick = Some(Box::new(w));
+                        }
+                        "neighbors" if stat != CrossStat::Ref => {
+                            let col = v.as_str().filter(|c| !c.is_empty()).ok_or_else(|| {
+                                format!(
+                                    "{name}: neighbors must name a list column, but it is {}. \
+                                     Set neighbors to the name of a column whose rows list \
+                                     the group keys each row reads.",
+                                    short(v)
+                                )
+                            })?;
+                            op.neighbors = Some(col.to_string());
+                        }
+                        "weight" if stat == CrossStat::Ref => {
+                            return Err(format!(
+                                "{name}: a reference read takes no weight: it reads one row's \
+                                 value. Remove weight."
+                            ));
                         }
                         "weight" if stat == CrossStat::Rank => {
                             return Err(format!(
@@ -598,17 +642,27 @@ impl Node {
                                 "{name}: {other:?} is not one of its parameters, which are \
                                  {}. Remove {other:?}, or correct its name.",
                                 match stat {
-                                    CrossStat::Std => "closed, weight, max_state_bytes and bias",
+                                    CrossStat::Std =>
+                                        "closed, weight, neighbors, max_state_bytes and bias",
                                     CrossStat::Rank =>
-                                        "closed, method, descending and max_state_bytes",
-                                    CrossStat::Quantile =>
-                                        "quantile, closed, interpolation, weight and \
+                                        "closed, method, descending, neighbors and \
                                          max_state_bytes",
-                                    CrossStat::Mean => "closed, weight and max_state_bytes",
+                                    CrossStat::Quantile =>
+                                        "quantile, closed, interpolation, weight, neighbors \
+                                         and max_state_bytes",
+                                    CrossStat::Mean =>
+                                        "closed, weight, neighbors and max_state_bytes",
+                                    CrossStat::Ref => "where, closed and max_state_bytes",
                                 }
                             ));
                         }
                     }
+                }
+                if stat == CrossStat::Ref && op.pick.is_none() {
+                    return Err(format!(
+                        "{name}: where is required: the predicate that picks the stamp's \
+                         reference row. Set where, such as pl.col(\"symbol\") == \"SPY\"."
+                    ));
                 }
                 if stat == CrossStat::Quantile {
                     if op.quantile.is_none() {
@@ -665,6 +719,8 @@ impl Node {
                     weight: None,
                     max_state_bytes: None,
                     order: Order::default(),
+                    neighbors: None,
+                    pick: None,
                 };
                 let var = kind.stat().is_some_and(Stat::is_var);
                 let quantile = kind.stat() == Some(Stat::Quantile);
@@ -882,7 +938,7 @@ impl Node {
             Node::Op(op) => {
                 out.push(op);
                 op.input.collect(out);
-                if let Some(w) = &op.weight {
+                for w in op.trees() {
                     w.collect(out);
                 }
             }
@@ -907,8 +963,13 @@ impl Node {
             Node::Call(_, args) => args.iter().for_each(|a| a.collect_columns(out)),
             Node::Op(op) => {
                 op.input.collect_columns(out);
-                if let Some(w) = &op.weight {
+                for w in op.trees() {
                     w.collect_columns(out);
+                }
+                if let Some(n) = &op.neighbors
+                    && !out.contains(n)
+                {
+                    out.push(n.clone());
                 }
             }
         }
@@ -921,8 +982,7 @@ impl Node {
             Node::Col(_) | Node::Lit(_) => false,
             Node::Call(n, args) => n == name || args.iter().any(|a| a.contains_call(name)),
             Node::Op(op) => {
-                op.input.contains_call(name)
-                    || op.weight.as_ref().is_some_and(|w| w.contains_call(name))
+                op.input.contains_call(name) || op.trees().any(|w| w.contains_call(name))
             }
         }
     }
@@ -945,8 +1005,13 @@ impl Node {
             Node::Call(_, args) => args.iter().for_each(|a| a.collect_columns_ref(out)),
             Node::Op(op) => {
                 op.input.collect_columns_ref(out);
-                if let Some(w) = &op.weight {
+                for w in op.trees() {
                     w.collect_columns_ref(out);
+                }
+                if let Some(n) = &op.neighbors
+                    && !out.contains(&n.as_str())
+                {
+                    out.push(n.as_str());
                 }
             }
         }

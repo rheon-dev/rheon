@@ -40,6 +40,7 @@ fn sums(direction: Direction, closed: Closed, min_samples: u32, rows: &[(f64, f6
             session: None,
             values: &[x],
             accept: true,
+            lists: &[],
         })
         .unwrap();
         out.extend(core.drain().values.remove(0));

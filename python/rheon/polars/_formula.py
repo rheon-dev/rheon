@@ -62,11 +62,12 @@ OPERATORS = (
     "cross_std",
     "cross_rank",
     "cross_quantile",
+    "cross_ref",
 )
 
 #: The cross-group operators: a statistic over every group's row at one
 #: stamp of the clock, with no kernel of their own.
-CROSS = ("cross_mean", "cross_std", "cross_rank", "cross_quantile")
+CROSS = ("cross_mean", "cross_std", "cross_rank", "cross_quantile", "cross_ref")
 
 #: The operators that take ``bias``: a variance's own (task 212).
 VARIANCES = ("ewm_var", "ewm_std")
@@ -375,8 +376,10 @@ def operators(tree: Any) -> list[list[Any]]:
         if head in OPERATORS:
             out.append(node)
             walk(node[1])
-            if len(node) > 2 and isinstance(node[2], dict) and "weight" in node[2]:
-                walk(node[2]["weight"])
+            if len(node) > 2 and isinstance(node[2], dict):
+                for key in ("weight", "where"):
+                    if key in node[2]:
+                        walk(node[2][key])
         elif head not in ("col", "lit"):
             for arg in node[1:]:
                 walk(arg)
@@ -405,8 +408,12 @@ def columns(tree: Any) -> list[str]:
             return
         elif head in OPERATORS:
             walk(node[1])
-            if len(node) > 2 and isinstance(node[2], dict) and "weight" in node[2]:
-                walk(node[2]["weight"])
+            if len(node) > 2 and isinstance(node[2], dict):
+                for key in ("weight", "where"):
+                    if key in node[2]:
+                        walk(node[2][key])
+                if node[2].get("neighbors") is not None and node[2]["neighbors"] not in out:
+                    out.append(node[2]["neighbors"])
         else:
             for arg in node[1:]:
                 walk(arg)
@@ -608,6 +615,8 @@ def operator(
     method: Any = "average",
     descending: Any = False,
     interpolation: Any = None,
+    neighbors: Any = None,
+    where: Any = None,
     who: str | None = None,
 ) -> pl.Expr:
     """The expression of operator ``name`` over ``input`` with these
@@ -632,6 +641,8 @@ def operator(
             method=method,
             descending=descending,
             interpolation=interpolation,
+            neighbors=neighbors,
+            where=where,
         )
     if half_life is None:
         raise TypeError(
@@ -743,6 +754,8 @@ def _cross(
     method: Any = "average",
     descending: Any = False,
     interpolation: Any = None,
+    neighbors: Any = None,
+    where: Any = None,
 ) -> pl.Expr:
     """A cross-group operator's node: its stamp (``closed``), a standard
     deviation's ``bias``, a rank's ``method`` and ``descending``, a
@@ -755,6 +768,21 @@ def _cross(
             f"it), but it is {closed!r}. Set closed to one of those words."
         )
     params: dict[str, Any] = {"closed": closed}
+    if name == "cross_ref":
+        if where is None:
+            raise TypeError(
+                f"{who}: where is required: the predicate that picks the stamp's reference row, "
+                f'such as pl.col("symbol") == "SPY". Give where.'
+            )
+        params["where"] = _input_tree(f"{who}: where", where)
+    if neighbors is not None:
+        if not isinstance(neighbors, str) or not neighbors:
+            raise TypeError(
+                f"{who}: neighbors must name a list column, but it is {neighbors!r}. Set "
+                f"neighbors to the name of a column whose rows list the group keys each row "
+                f"reads."
+            )
+        params["neighbors"] = neighbors
     if name == "cross_std":
         if not isinstance(bias, bool):
             raise TypeError(

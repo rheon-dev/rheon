@@ -172,6 +172,8 @@ mod tests {
             descending,
             quantile: 0.5,
             interpolation: Interp::Nearest,
+            neighbors: None,
+            pick: None,
         }
     }
 

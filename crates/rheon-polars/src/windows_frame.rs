@@ -493,6 +493,9 @@ struct Plan {
     /// order, and each one's hidden column.
     cross: Vec<CrossDef>,
     cross_columns: Vec<String>,
+    /// The list columns cross operators read their neighbors from, by the
+    /// index `CrossDef::neighbors` names.
+    lists: Vec<String>,
 }
 
 fn dtype_of<'a>(input: &'a Schema, column: &str) -> &'a DataType {
@@ -511,6 +514,80 @@ fn dtypes_of(schema: &Schema, exprs: Vec<Expr>) -> Result<Schema, String> {
         .collect_schema()
         .map(|s| s.as_ref().clone())
         .map_err(|e| e.to_string())
+}
+
+/// The index of a cross operator's list column of neighbor keys among the
+/// plan's, checked: a list of keys, under a group column of its own.
+fn neighbor_list(
+    p: &mut Plan,
+    config: &WindowsConfig,
+    input: &Schema,
+    f: &str,
+    name: &str,
+    column: &str,
+) -> Result<usize, Refused> {
+    if config.group.is_none() {
+        return Err(format!(
+            "{WHO}: {f}: {name} reads the rows of the groups named in {column:?}, but the call \
+             names no group column, so no row has a group to be named by. Name the group \
+             column with group=."
+        )
+        .into());
+    }
+    let Some(dtype) = input.get(column) else {
+        return Err(format!(
+            "{WHO}: {f}: {name}'s neighbors column {column:?} is not in the input. Name a \
+             column of the input that lists each row's neighbor keys."
+        )
+        .into());
+    };
+    let keys = |d: &DataType| {
+        d.is_integer()
+            || matches!(
+                d,
+                DataType::String | DataType::Categorical(..) | DataType::Enum(..)
+            )
+    };
+    match dtype {
+        DataType::List(inner) if keys(inner) => {}
+        other => {
+            return Err(Refused::wrong_type(format!(
+                "{WHO}: {f}: {name}'s neighbors column {column:?} must be a list of group keys \
+                 (integers or text), but it is {}. Give each row a list of the keys of the \
+                 groups it reads, such as with pl.concat_list or a column of lists.",
+                crate::arrow::dtype_name(other)
+            )));
+        }
+    }
+    Ok(match p.lists.iter().position(|c| c == column) {
+        Some(i) => i,
+        None => {
+            p.lists.push(column.to_string());
+            p.lists.len() - 1
+        }
+    })
+}
+
+/// A list column's keys as text, flat, and each row's range of them (`None`
+/// for a null list).
+type ListKeys = (Vec<Option<String>>, Vec<Option<(usize, usize)>>);
+
+/// [`ListKeys`] of a column.
+fn list_keys(df: &DataFrame, column: &str) -> PolarsResult<ListKeys> {
+    let ca = df.column(column)?.list()?.rechunk();
+    let arr = ca.downcast_iter().next().expect("rechunked");
+    let values = Series::from_arrow(PlSmallStr::EMPTY, arr.values().clone())?;
+    let text = crate::arrow::key_text(&values)?;
+    let flat: Vec<Option<String>> = text.str()?.iter().map(|v| v.map(str::to_string)).collect();
+    let offsets = arr.offsets();
+    let ranges = (0..arr.len())
+        .map(|i| {
+            arr.validity()
+                .is_none_or(|v| v.get_bit(i))
+                .then(|| (offsets[i] as usize, offsets[i + 1] as usize))
+        })
+        .collect();
+    Ok((flat, ranges))
 }
 
 fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
@@ -603,6 +680,7 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
         spans: Vec::new(),
         cross: Vec::new(),
         cross_columns: Vec::new(),
+        lists: Vec::new(),
     };
     // Increments first: an operator's input may read them.
     for f in &config.formulas {
@@ -705,11 +783,20 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
                     )
                     .into());
                 }
+                let neighbors = match &op.neighbors {
+                    Some(c) => Some(neighbor_list(&mut p, config, input, &f.name, name, c)?),
+                    None => None,
+                };
                 let input = cross_input(&mut p, &f.name, name, "input", &op.input)?;
                 let weight = match &op.weight {
                     Some(w) => Some(cross_input(&mut p, &f.name, name, "weight", w)?),
                     None => None,
                 };
+                let pick = match &op.pick {
+                    Some(w) => Some(cross_input(&mut p, &f.name, name, "where", w)?),
+                    None => None,
+                };
+
                 p.cross.push(CrossDef {
                     stat,
                     closed: if op.closed == Closed::Left {
@@ -727,6 +814,8 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
                     descending: op.order.descending,
                     quantile: op.quantile.unwrap_or(0.5),
                     interpolation: op.order.interpolation,
+                    neighbors,
+                    pick,
                 });
                 p.cross_columns.push(key);
                 continue;
@@ -1112,6 +1201,8 @@ struct Constants {
     bare: Option<Vec<String>>,
     increments: Vec<(String, Node, bool)>,
     accept: Vec<String>,
+    /// [`Plan::lists`].
+    lists: Vec<String>,
     /// The input's schema, as the call was built against it.
     input: Schema,
     /// The group and session columns' dtypes, by role: a key is its value's
@@ -1307,7 +1398,7 @@ impl WindowsRun {
                 .iter()
                 .any(|f| f.tree.has_forward_operator()),
         })?;
-        let p = plan(&config, input)?;
+        let mut p = plan(&config, input)?;
         check_scale(&config, &p.spans, input)?;
         let accept = config
             .like
@@ -1353,6 +1444,7 @@ impl WindowsRun {
             let dtype = evaluated.get(&f.name).expect("aliased").clone();
             output.insert(f.name.as_str().into(), dtype);
         }
+        let lists = std::mem::take(&mut p.lists);
         let mut core = if !p.cross.is_empty() {
             Windows::with_cross(p.kernels, p.ops, p.cross, cfg)
                 .map_err(|e| format!("{WHO}: {e}"))?
@@ -1408,6 +1500,7 @@ impl WindowsRun {
                 bare: p.bare,
                 increments: p.increments,
                 accept,
+                lists,
                 input: input.clone(),
                 key_dtypes,
                 output,
@@ -1897,6 +1990,15 @@ impl WindowsRun {
             })
             .collect::<PolarsResult<_>>()?;
 
+        // The neighbor lists cross operators read, as text.
+        let lists = self
+            .k
+            .lists
+            .iter()
+            .map(|c| list_keys(df, c))
+            .collect::<PolarsResult<Vec<_>>>()?;
+        let mut row_lists: Vec<Option<&[Option<String>]>> = vec![None; lists.len()];
+
         // Pass three: the core.
         let chunk_base = self.core.next_seq();
         let mut row_values = vec![0.0; self.k.inputs.len()];
@@ -1943,12 +2045,16 @@ impl WindowsRun {
             for (k, col) in slices.iter().enumerate() {
                 row_values[k] = col[i];
             }
+            for (l, (flat, ranges)) in lists.iter().enumerate() {
+                row_lists[l] = ranges[i].map(|(a, b)| &flat[a..b]);
+            }
             let row = RowIn {
                 group,
                 clock: clock.as_ref().map(|c| c[i]),
                 session: session.as_ref().map(|s| s[i]),
                 values: &row_values,
                 accept: accepts.iter().all(|col| usable(col[i])),
+                lists: &row_lists,
             };
             if let Err(r) = self.core.push(&row) {
                 // The rows before it are in the core: hold them, and put the
@@ -2559,7 +2665,8 @@ impl WindowsRun {
         Some(format!(
             "{WHO}: {} holds {bytes} bytes for the rows of one stamp of the clock, past half of \
              its max_state_bytes of {cap}; a stamp that holds twice as many rows will be \
-             refused. Raise max_state_bytes, or use closed=\"left\", which holds no row.",
+             refused. Raise max_state_bytes, or use closed=\"left\", which holds no row for \
+             its output.",
             self.cross_name(op)
         ))
     }
@@ -2577,10 +2684,23 @@ impl WindowsRun {
                 let name = self.cross_name(op);
                 polars_err!(ComputeError:
                     "{WHO}: {name} would hold {bytes} bytes for the rows of one stamp of the clock \
-                     at row {} (counting from 0), past its max_state_bytes of {cap}. Each row of a \
-                     stamp is held until the stamp closes. Raise max_state_bytes, or use \
-                     closed=\"left\", which holds no row.",
+                     at row {} (counting from 0), past its max_state_bytes of {cap}. Under \
+                     closed=\"right\" each row of a stamp is held until the stamp closes; a \
+                     rank, a quantile or a read over neighbors also keeps each row's value. \
+                     Raise max_state_bytes, or use closed=\"left\", which holds no row for its \
+                     output.",
                     row(seq)
+                )
+            }
+            Refusal::CrossRefTwice { seq, op, first } => {
+                let name = self.cross_name(op);
+                polars_err!(ComputeError:
+                    "{WHO}: {name} picks row {} (counting from 0) as the reference row of its \
+                     stamp, but it picked row {} at the same stamp already, and a stamp has one \
+                     reference row. Change where= to pick one row a stamp, such as by naming \
+                     one group's key.",
+                    row(seq),
+                    row(first)
                 )
             }
             Refusal::Backwards {
