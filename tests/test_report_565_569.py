@@ -11,7 +11,7 @@ held by a plain test that pins it, naming the doc that says so.
   (plain test). ``rp.ewm_mean`` is a time-weighted mean, so its far-edge row
   weighs nothing (documented, plain test). Confirmed: a window looking ahead
   under ``"right"`` or ``"both"`` whose far edge is the input's last row is
-  null at the end of the input, where the same window before a gap is whole.
+  whole at the end of the input, as the same window before a gap is (fixed).
 - PLAN 566: ``ModelBank.skip_learned`` drops a row one spec ties on and
   another spec has provably not learned (confirmed); a row at the saved clock
   is dropped as learned, the predict copy of ``rp.stream.embargo`` included
@@ -152,9 +152,6 @@ def test_reverse_mean_is_time_weighted_so_its_far_edge_row_weighs_nothing(
         assert all(v is None for v in got)
 
 
-FAR_EDGE_ON_THE_LAST_ROW = "PLAN 565: a forward window whose far edge is the last row is null"
-
-
 #: Each operator, window and ``closed`` whose far-edge window has a value
 #: when a later row follows: a one-step ``"right"`` mean holds nothing
 #: (the test above), so it is left out.
@@ -167,12 +164,11 @@ FAR_EDGE_CASES = [
 ]
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=FAR_EDGE_ON_THE_LAST_ROW)
 @pytest.mark.parametrize(("closed", "w", "op"), FAR_EDGE_CASES)
 def test_a_reverse_window_whose_far_edge_is_the_last_row_is_whole_at_the_end_of_the_input(
     closed: str, w: int, op: str
 ) -> None:
-    """PLAN 565, confirmed. Expected: at the end of the input, a window
+    """PLAN 565, fixed. Expected: at the end of the input, a window
     looking ahead under ``"right"`` or ``"both"`` whose far edge ``t+w`` is
     the input's last row has a value, the one it has when a row past ``t+w``
     follows. Source: WINDOWS.md, "A window that looks ahead under
@@ -199,6 +195,76 @@ def test_a_reverse_window_whose_far_edge_is_the_last_row_is_whole_at_the_end_of_
         assert whole == _sum_by_polars(closed, w)[edge]
     got = rp.stream.with_windows(GRID, v=expr, clock="t", gap_cap="2h")["v"][edge]
     assert got == whole, (closed, w, op, got, whole)
+
+
+def _reverse_expr(op: str, closed: str, w: int) -> pl.Expr:
+    kw: dict[str, Any] = dict(
+        half_life=float("inf"), window_size=f"{w}m", closed=closed, partial="keep", reverse=True
+    )
+    if op == "ewm_quantile":
+        kw["quantile"] = 0.5
+    return getattr(rp, op)("x", **kw)
+
+
+#: Two groups on one clock, in clock order across them: ``a`` ends at 25
+#: minutes and ``b`` at 15, so a window's far edge is its own group's last
+#: stamp for ``a`` at 15 and ``b`` at 5 (w = 10).
+GROUPED = pl.DataFrame(
+    {
+        "t": [T0 + dt.timedelta(minutes=m) for m in (0, 0, 5, 5, 10, 10, 15, 15, 20, 25)],
+        "g": ["a", "b", "a", "b", "a", "b", "a", "b", "a", "a"],
+        "x": [1.0, 10.0, 2.0, 20.0, 3.0, 30.0, 4.0, 40.0, 5.0, 6.0],
+    }
+)
+
+
+@pytest.mark.parametrize("op", ["ewm_sum", "ewm_mean", "ewm_rate", "ewm_quantile"])
+@pytest.mark.parametrize("closed", ["right", "left", "both", "none"])
+@pytest.mark.parametrize("grouped", [False, True])
+@pytest.mark.parametrize("rows", [1, 3, 10_000])
+def test_a_reverse_window_is_whole_at_the_end_of_the_input_only_up_to_the_last_row(
+    closed: str, op: str, grouped: bool, rows: int
+) -> None:
+    """PLAN 565. Both sides of the edge, under every ``closed``, with and
+    without ``group``, at any chunk size. Each row's window is read at the
+    end of the input and again with a row appended per group far past every
+    window (so each window is whole by the rows it holds): a window whose far
+    edge is at or before its group's last stamp has the appended run's value,
+    one reaching past the last stamp is null, as documented. Under ``"left"``
+    and ``"none"`` the far edge holds no row, so a row on it closed the window
+    already."""
+    w = 10
+    frame = GROUPED if grouped else GRID
+    names: dict[str, Any] = {"group": "g"} if grouped else {}
+    last = {
+        key: max(sub["t"])
+        for key, sub in (
+            frame.partition_by("g", as_dict=True) if grouped else {(None,): frame}
+        ).items()
+    }
+    far = T0 + dt.timedelta(hours=5)
+    extra = pl.DataFrame(
+        {"t": [far] * len(last), "x": [0.0] * len(last)}
+        | ({"g": [k[0] for k in last]} if grouped else {})
+    ).select(frame.columns)
+    expr = _reverse_expr(op, closed, w)
+    kw: dict[str, Any] = dict(clock="t", gap_cap="10h", **names)
+    # Window values by the rows that follow, from the longer input.
+    whole = rp.stream.with_windows(pl.concat([frame, extra]), v=expr, chunk_size=rows, **kw)["v"]
+    got = rp.stream.with_windows(frame, v=expr, chunk_size=rows, **kw)["v"].to_list()
+    one = rp.stream.with_windows(frame, v=expr, chunk_size=10_000, **kw)["v"].to_list()
+    assert got == one, "chunk invariance"
+    saw_edge = saw_past = False
+    for i in range(frame.height):
+        key = (frame["g"][i],) if grouped else (None,)
+        edge = frame["t"][i] + dt.timedelta(minutes=w)
+        if edge > last[key]:
+            saw_past = True
+            assert got[i] is None, (i, got[i])
+        else:
+            saw_edge = saw_edge or edge == last[key]
+            assert got[i] == whole[i], (i, got[i], whole[i])
+    assert saw_edge and saw_past
 
 
 # --------------------------------------------------------------------------
@@ -256,9 +322,10 @@ def test_skip_learned_drops_a_row_at_the_saved_clock_an_embargo_predict_row_incl
     clock value and was saved between two rows with that value loses the
     later ones"). ``rp.stream.embargo`` puts a learn row and then a predict
     row of weight 0 at one clock, so a save between them loses the predict
-    row. Proposed with the fix of the test above: keep a row of weight 0 at
-    the last clock, which a resumed bank can take harmlessly, since such a
-    row learns nothing and moves no clock (CLAUDE.md, rule 9)."""
+    row. With the fix of the test above a row of weight 0 at the last clock
+    is kept, which a resumed bank takes harmlessly, since such a row learns
+    nothing and moves no clock (CLAUDE.md, rule 9); the learn row at that
+    clock, of weight 1, is still dropped."""
     spec = _ewridge("m", weight="w")
     rows = pl.DataFrame(
         {"t": [T0, T1, T1], "x": [1.0, 2.0, 2.0], "y": [1.0, 2.0, 2.0], "w": [1.0, 1.0, 0.0]}

@@ -1572,8 +1572,10 @@ def with_windows(
     across one, and the number a spec takes there would change nothing. So a
     session needs no ``session_gap`` here. A window looking ahead under
     ``closed="right"`` or ``"both"`` whose far edge is the last row before a
-    cut or a reset holds every row it covers, so it is whole, and gives its
-    value under any ``partial``.
+    cut or a reset, or its group's last row when the input ends, holds every
+    row it covers, so it is whole, and gives its value under any ``partial``.
+    A window looking ahead whose far edge lies past the input's last row is
+    null.
 
     The clock is also read in input order, under the same settings. So a step
     back there is refused or, past ``restart_after_step_back``, resets every

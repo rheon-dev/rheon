@@ -3908,14 +3908,10 @@ mod tests {
         assert_eq!(run.held(), 3);
         let rest = run.finish().unwrap();
         assert_eq!(rest.height(), 3);
-        assert!(
-            rest.column("f")
-                .unwrap()
-                .f64()
-                .unwrap()
-                .iter()
-                .all(|v| v.is_none())
-        );
+        // Row 3's window (3, 5] has its far edge on the last row: whole.
+        // The windows of rows 4 and 5 reach past the input: null.
+        let f: Vec<Option<f64>> = rest.column("f").unwrap().f64().unwrap().iter().collect();
+        assert_eq!(f, [Some(40.0), None, None]);
     }
 
     /// The schema is the input's columns then the formulas, typed by what

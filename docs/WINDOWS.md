@@ -269,8 +269,10 @@ partial="drop": 2898 rows, 0 null
 
 **A window that looks ahead under `closed="right"` or `"both"` gives its
 value under any `partial` when its far edge falls on the last row before a
-gap or a reset.** That row is in the window and no later row can join it, so the
-window is whole. For a formula target, a reset still starts the model
+gap or a reset, or on its group's last row when the input ends.** That row is
+in the window and no later row can join it, so the window is whole. A window
+whose far edge lies past the last row of the input is null, since rows past
+the input would have joined it. For a formula target, a reset still starts the model
 over and drops every row waiting to be learned, a whole one with the rest.
 
 ## Quantiles and a robust scale

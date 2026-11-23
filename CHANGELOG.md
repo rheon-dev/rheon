@@ -462,6 +462,15 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **A window looking ahead whose far edge is the input's last row is whole
+  at the end of the input** (PLAN 565). Under `closed="right"` or `"both"`,
+  `rp.ewm_sum`, `rp.ewm_mean`, `rp.ewm_rate` and `rp.ewm_quantile` with
+  `reverse=True` gave null for a row whose window's far edge fell on its
+  group's last row, where the same window before a gap or a reset was
+  whole. Nothing later can join it, so it now gives its value. A window
+  reaching past the last row stays null. A formula target of a spec learns
+  those rows' targets, which it did not. Only those windows' values move.
+
 - **`ModelBank.write_json` of a `bocpd` with its hazard on the clock**
   (PLAN 547). Under a clock hazard the empty run's log joint is `-inf`
   after every row, which JSON has no number for: the export wrote it as

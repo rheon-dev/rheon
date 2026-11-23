@@ -30,7 +30,14 @@ use rheon_polars::{WindowsConfig, WindowsRun};
 use serde_json::{Value, json};
 
 /// The digest of every output's null mask (all platforms).
-const MASKS: u64 = 0x7d9052681ddf16a6;
+///
+/// 0x7d9052681ddf16a6 until PLAN 565: a window looking ahead whose far edge
+/// is the input's last row is whole at the end of the input, where it was
+/// null. The CASE lines before and after differ in 17 of the 236 cases, each
+/// a window looking ahead under `closed` `"right"` or `"both"` (the
+/// `session` cases read `"right"`) on one group, and in no other: no state
+/// byte moved, and no output of the other 219.
+const MASKS: u64 = 0x8ab94abb9163ebc2;
 /// The digest of every output float's bits and every state byte, arm64 macOS.
 /// 0x162b1609e20133e2 until windows state 11 (review P7) ended each state
 /// with its checksum; the same digest, with each state read back to its
@@ -40,7 +47,9 @@ const MASKS: u64 = 0x7d9052681ddf16a6;
 /// same digest, with each state read back to its version-11 form (the old
 /// magic, no `kind`, the version 11, resealed), gave 0xf19d9c9140f82a7e
 /// again, so no output bit and no other state byte moved.
-const BITS: u64 = 0x9c369b3e00245758;
+///
+/// 0x9c369b3e00245758 until PLAN 565 (the 17 cases of [`MASKS`]).
+const BITS: u64 = 0x1f2f972d03cf8ccc;
 /// Rows a case runs over.
 const ROWS: usize = 2000;
 

@@ -1579,6 +1579,10 @@ enum End {
     Cut,
     /// A reset discarded it: null, and never dropped.
     Discard,
+    /// The end of the input: a window whose far edge is the last row is
+    /// whole, as at a cut; every other forward window is unresolved (null,
+    /// never dropped), since rows past the input would have joined it.
+    Finish,
 }
 
 /// Per row not yet emitted.
@@ -2989,13 +2993,21 @@ impl Windows {
     }
 
     /// The end of the input: every backward window still waiting is read
-    /// as it stands, every forward window still open is unresolved -- null
-    /// whatever `partial` says, never dropped -- and every row goes out.
-    /// The core takes no more rows after this.
+    /// as it stands, a forward window under "right" or "both" whose far edge
+    /// is its group's last row is whole (no later row could join it), every
+    /// other forward window still open is unresolved -- null whatever
+    /// `partial` says, never dropped -- and every row goes out. The core
+    /// takes no more rows after this.
     pub fn finish(&mut self) -> Emitted {
         self.scratch();
         for gi in 0..self.groups.len() {
             self.flush_group(gi);
+            let (mut p, groups) = self.split();
+            // The state a finished core saves is as it always was: the
+            // closing leaves the group's restart flag where it was.
+            let restart = groups[gi].restart;
+            end_in(&mut p, &mut groups[gi], End::Finish);
+            groups[gi].restart = restart;
             let g = &mut self.groups[gi];
             g.waiting.clear();
             g.closed.iter_mut().for_each(|c| *c = 0);
@@ -3329,7 +3341,7 @@ fn close<const W: bool>(
         let keep = match how {
             End::Complete => true,
             End::Cut => op.partial == Partial::Keep,
-            End::Discard => false,
+            End::Discard | End::Finish => false,
         };
         // A variance has no forward kernel (`check_op`).
         if !(keep && meta.accept) || op.stat.is_var() {
@@ -3620,9 +3632,13 @@ fn end_in(p: &mut Parts<'_>, g: &mut Group, how: End) {
             // dropped (task 160, PC2) -- and a reset discarded it (task
             // 173, PC2). Under "left" and "none" a row on the edge closed
             // it already. A reset discards every other window.
-            let whole = matches!(how, End::Cut | End::Discard)
+            let whole = matches!(how, End::Cut | End::Discard | End::Finish)
                 && k.closed.far(Direction::Forward)
                 && gap(g.form, t.off, g.off).cmp_window(k) == Ordering::Equal;
+            // At the end of the input every other window stays unresolved.
+            if how == End::Finish && !whole {
+                continue;
+            }
             let (how, far) = if whole {
                 (End::Complete, t.tau + w)
             } else {
@@ -3792,8 +3808,10 @@ mod tests {
     }
 
     /// [`long_windows_keep_their_bits`]'s digest, computed on the code
-    /// before task 270 (M-2).
-    const LONG_WINDOWS_DIGEST: u64 = 0x8b76_0af8_32d7_e069;
+    /// before task 270 (M-2), and moved once by task 565: a window looking
+    /// ahead whose far edge is the input's last row is whole at the end of
+    /// the input where it was null.
+    const LONG_WINDOWS_DIGEST: u64 = 0x9224_8a97_1fbc_e295;
 
     #[derive(Debug, Clone)]
     struct Row {
@@ -4326,7 +4344,10 @@ mod tests {
                             // edge where the window holds it ("right",
                             // "both"), at it or past where it does not; a
                             // window it has not shown whole is unresolved,
-                            // and null.
+                            // and null -- except that, under "right" and
+                            // "both", a window whose far edge is the last
+                            // row of the input holds every timestamp it
+                            // can, as at a cut, and is whole.
                             let reaches_edge =
                                 gap_bf(rows, s, a, n - 1).cmp_window(k) != Ordering::Less;
                             let shown_whole = (a + 1..n).any(|b| {
@@ -4350,7 +4371,13 @@ mod tests {
                                     }
                                     (later, false, (ta + w).min(end_tau) - ta)
                                 }
-                                _ if shown_whole => (later, true, w),
+                                _ if shown_whole
+                                    || (k.closed.far(Direction::Forward)
+                                        && gap_bf(rows, s, a, n - 1).cmp_window(k)
+                                            == Ordering::Equal) =>
+                                {
+                                    (later, true, w)
+                                }
                                 _ => continue,
                             }
                         }

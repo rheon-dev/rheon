@@ -192,9 +192,10 @@ every stream's first ``window_size`` gives:
 A reset discards a window: it gives null, and the row is never dropped.
 Under ``session_gap="reset"`` a session change is a reset, so it discards
 the windows rather than cuts them. A forward window under ``closed="right"``
-or ``"both"`` whose far edge is the last row before a cut or a reset is
-whole: every row it covers has arrived, so it gives its value. A forward
-window still open when the input ends is null. Under ``group`` a forward
+or ``"both"`` whose far edge is the last row before a cut or a reset, or
+its group's last row when the input ends, is whole: every row it covers has
+arrived, so it gives its value. A forward window whose far edge lies past
+the last row of the input is null. Under ``group`` a forward
 window needs a clock column, since only a clock ends the windows of a group
 that falls silent. ``partial`` needs a ``window_size``: without one no
 window is cut short, so ``partial`` alone is refused.
