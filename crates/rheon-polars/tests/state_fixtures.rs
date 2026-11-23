@@ -2749,7 +2749,7 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                 && (sketches(&kept, "anchor") > 0 || holds_for_a_refit(&unhex(current.state)));
             if old_scale {
                 kept_scale_rule(&kind, &kept, &again, &from_ipc(f.input), &what);
-            } else if moved_by_the_held_mass(f.name) {
+            } else if moved_by_the_held_mass(f.name) || moved_by_the_mean_weight(schema, f.name) {
                 // Rule 5's fifteenth exception: the queue's sums hold the old
                 // form's bits for the rows before the save, so the state this
                 // build saves after the continued rows is not the current
@@ -2793,7 +2793,10 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                         CONTINUES_WITHIN,
                     );
                 }
-                let tol = if windowed || moved_by_the_held_mass(f.name) {
+                let tol = if windowed
+                    || moved_by_the_held_mass(f.name)
+                    || moved_by_the_mean_weight(schema, f.name)
+                {
                     tol.max(TOL)
                 } else {
                     tol
@@ -2945,6 +2948,22 @@ fn parted_by(got: &Series, want: &Series) -> (f64, usize) {
 /// bit. The current set is held to the bit as ever.
 fn moved_by_the_held_mass(name: &str) -> bool {
     name.starts_with("with_windows")
+}
+
+/// The fixtures of schema 71 or earlier whose conformal band's mean weight
+/// a later change moved (rule 5's thirtieth exception, the user's,
+/// 2026-11-23: "Exception 30, full fix"): the band's mean weight is taken
+/// at the old mean's and the row's shares, `(R/R')·w̄ + (1/R')·w`, where the
+/// Welford step `w̄ + (w − w̄)/R'` cancelled, so a kept state's mean weight
+/// holds the old step's last bits. It saves bytes that load back the same,
+/// and its continuation is held within [`TOL`] (1e-12 relative) of the
+/// frames it was frozen with, not to the bit. The current set is held to
+/// the bit as ever. The kinds are [`MEAN_WEIGHT_MOVED`]'s, the kept ones
+/// whose band's rows have uneven weights.
+const MEAN_WEIGHT_MOVED: &[&str] = &["bank_conformal_auto", "bank_label_clock"];
+
+fn moved_by_the_mean_weight(schema: u32, name: &str) -> bool {
+    schema <= 71 && MEAN_WEIGHT_MOVED.contains(&name)
 }
 
 /// The maps in `v`, at any depth, that hold the key `key`: the sketches a

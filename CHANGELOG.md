@@ -790,14 +790,18 @@ model that only the new build has is listed as an addition and passes.
   less its floor remainder, in the clock's own units where `every` is a
   whole number of them, and a window that would start before the least
   value the clock's type holds is refused by name.
-- **`micro` reads a row of weight 1 where its mean weight has cancelled to
-  nothing** (review 2026-11-23, CLUST-3, in part). After a row of weight
-  `1e16`, a gap of 60 half-lives and a row of weight 1, the mean weight's
-  step `1e16 + (1 − 1e16) / 1` read 0, and a summary scaled by it admitted
-  a point `1.4e6` away at `eps = 1`. Where the mean is 0 or below, a
-  summary is read at a row of weight 1. The step's cancellation itself,
-  and the same step in the conformal band's mean weight, are not changed
-  in this release.
+- **`micro`'s and the conformal band's mean weight no longer cancel**
+  (review 2026-11-23, CLUST-3; the user, 2026-11-23: "Exception 30, full
+  fix"). After a row of weight `1e16`, a gap of 60 half-lives and a row of
+  weight 1, the Welford step `1e16 + (1 − 1e16) / 1` read 0, and a `micro`
+  summary scaled by it admitted a point `1.4e6` away at `eps = 1`; at a
+  share of `2^-30` it read `8e-8` off, and the band's read 0 after total
+  forgetting. Each is now taken at the old mean's and the row's shares,
+  `(R/R')·w̄ + (1/R')·w`, so neither term cancels, and a `micro` mean at 0
+  or below reads a row of weight 1. A constant weight is its own mean to
+  the bit; uneven weights move the mean weight in its last bits, and a
+  saved state goes on by the new step (rule 5's thirtieth exception).
+  Moves: `micro.*`, `*.lo_*`, `*.hi_*`, `*.coverage_*`.
 - **`calibration_wald` under a horizon is read about the predictions' own
   mean** (review 2026-11-23, DIAG-2). Its Newey-West covariance was moved
   from the frame its sums are kept in to the predictions' own units before

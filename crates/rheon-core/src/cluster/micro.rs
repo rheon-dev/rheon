@@ -351,6 +351,24 @@ pub struct Micro {
     factors: StepFactors,
 }
 
+/// The rows' EW mean weight after one more row of weight `w`, `rows` the
+/// decayed count of rows before it (moved to count this one): the old mean
+/// and the row at their shares, `(R/R')·w̄ + (1/R')·w`, `R' = R + 1`. The
+/// Welford step `w̄ + (w − w̄)/R'` cancels where a heavy mean meets a light
+/// row it has all but forgotten: after a row of `1e16` and 60 half-lives,
+/// `R' = 1` and `1e16 + (1 − 1e16)` read 0, and at a share of `2^-30` it
+/// read 8e-8 off. Both terms here are at least 0, so neither cancels. A row
+/// at the mean leaves it to the bit, so a constant weight is its own mean.
+pub(crate) fn mean_weight(rows: &mut f64, mean: f64, w: f64) -> f64 {
+    let prev = *rows;
+    *rows = prev + 1.0;
+    if w == mean {
+        mean
+    } else {
+        (prev / *rows) * mean + w / *rows
+    }
+}
+
 impl Micro {
     pub fn new(cfg: MicroCfg) -> Result<Self, String> {
         cfg.validate()?;
@@ -837,8 +855,7 @@ impl OnlineModel for Micro {
         self.score_into(dec.as_ref(), n_before, &mut out.pred);
 
         if let Some(dec) = dec.filter(|_| learn) {
-            self.w_rows += 1.0;
-            self.w_mean += (weight - self.w_mean) / self.w_rows;
+            self.w_mean = mean_weight(&mut self.w_rows, self.w_mean, weight);
             self.moments.absorb(x, weight);
             self.learn_row(x, weight, &dec);
         }
@@ -1075,12 +1092,10 @@ mod tests {
     /// The gaps cover total forgetting and shares of `2^-50` to `2^-30`,
     /// where the Welford step's cancellation read 20% off.
     ///
-    /// Confirmed, and not fixed here: the share form that passes it moves
-    /// the mean weight's last bits, so a saved state (schema 61 on) no
-    /// longer continues to the bit, which is the user's to allow (rule 5).
-    /// It panics until then.
+    /// The share form moves the mean weight's last bits on every stream of
+    /// uneven weights, so a state saved before it continues within rule 5's
+    /// thirtieth exception, not to the bit.
     #[test]
-    #[should_panic(expected = "half-lives")]
     fn the_mean_weight_survives_a_heavy_row_decaying_away() {
         for half_lives in [30.0, 40.0, 50.0, 53.0, 60.0, 2000.0] {
             let mut m = Micro::new(cfg()).unwrap();

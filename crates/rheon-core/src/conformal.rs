@@ -335,8 +335,8 @@ impl Conformal {
         // The stream's mean weight, this row's included, so the first row
         // reads its own weight as 1; and the mean of the rows waiting, on the
         // same count.
-        self.w_rows = lam * self.w_rows + 1.0;
-        self.w_mean += (w - self.w_mean) / self.w_rows;
+        self.w_rows *= lam;
+        self.w_mean = crate::cluster::mean_weight(&mut self.w_rows, self.w_mean, w);
         // (A tracker that has never been passed a count skips the division,
         // whose result would be 0: the fixed step costs what it did.)
         if held > 0 || self.held_mean != 0.0 {
@@ -641,11 +641,9 @@ mod tests {
     /// 2026-11-23, CLUST-3: the Welford step read `1e16 + (1 − 1e16) / 1 =
     /// 0` after total forgetting, and up to 20% off at shares near `2^-50`).
     ///
-    /// Confirmed, and not fixed here: the fix moves the last bits of the
-    /// mean weight, so a saved state (schema 71) no longer continues to the
-    /// bit, which is the user's to allow (rule 5). It panics until then.
+    /// The share form moves the mean weight's last bits, so a state saved
+    /// before it continues within rule 5's thirtieth exception.
     #[test]
-    #[should_panic(expected = "share")]
     fn the_mean_weight_survives_a_heavy_row_decaying_away() {
         for share in [
             0.0,

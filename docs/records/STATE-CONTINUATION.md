@@ -700,3 +700,26 @@ the probe's `monitor` over spans of 40 rows, every release from 1.0.0 to
 from both halves, every field to the bit but `since_flag`; its release's own
 continuation differs in `stat` from the first span closed after the load
 (row 89: 0.704 against the release's 0.849).
+
+A thirtieth, the user's (2026-11-23: "Exception 30, full fix"; PLAN 578e,
+review 2026-11-23 CLUST-3): the rows' EW mean weight kept by `micro` (its
+`w_mean`, the unit a summary admits and `beta_mu` counts) and by the
+conformal band (`Conformal::w_mean`, which scales its step) is taken at the
+old mean's and the row's shares, `(R/R')·w̄ + (1/R')·w` with `R' = R + 1`,
+where the Welford step `w̄ + (w − w̄)/R'` was. The Welford step cancels
+where a heavy mean meets a light row it has all but forgotten: after a row
+of weight `1e16`, a gap of 60 half-lives and a row of weight 1, `micro`'s
+mean read 0 and a summary admitted a point `1.4e6` away at `eps = 1`; at a
+share of `2^-30` it read `8e-8` off; and the band's read 0 after total
+forgetting. A row at the mean leaves it to the bit, so a stream of constant
+weights moves nothing; a stream of uneven weights moves the mean weight in
+its last bits. No layout changes. A state saved before the change holds the
+old step's bits: it loads, re-saves bytes that load back the same, and goes
+on by the new step. The kept sets are held to bounds, not to the bit:
+`v61/` to `v71/` `micro` (`crates/rheon-core/tests/state_fixtures.rs`,
+`MOVED`, 1e-14 of `1 + |value|`; `w_mean` moved by one ulp, `2.2e-16`
+relative, measured 2026-11-23), and `v71/` `bank_conformal_auto` and
+`bank_label_clock` (`crates/rheon-polars/tests/state_fixtures.rs`,
+`MEAN_WEIGHT_MOVED`, every frame within `TOL`, 1e-12 relative). The
+current fixtures `micro`, `bank_conformal_auto` and `bank_label_clock`
+regenerated.
