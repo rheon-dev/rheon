@@ -364,8 +364,9 @@ mod tests {
         }
         // EDDM.
         for edit in [
-            &(|v: &mut serde_json::Value| v["Eddm"]["detector"]["last_error"] = serde_json::json!(101))
-                as &dyn Fn(&mut serde_json::Value),
+            &(|v: &mut serde_json::Value| {
+                v["Eddm"]["detector"]["last_error"] = serde_json::json!(101)
+            }) as &dyn Fn(&mut serde_json::Value),
             &|v| v["Eddm"]["detector"]["errors"] = serde_json::json!(101),
             &|v| v["Eddm"]["detector"]["k"] = serde_json::json!(3.0),
             &|v| v["Eddm"]["detector"]["beta"] = serde_json::json!(0.0),

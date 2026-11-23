@@ -406,7 +406,10 @@ mod tests {
                 ("kurtosis", t.kurtosis(), one.kurtosis()),
                 ("jarque_bera", t.jarque_bera(), one.jarque_bera()),
             ] {
-                assert!(got.is_none() || got == want, "2^{k}: {what} {got:?} against {want:?}");
+                assert!(
+                    got.is_none() || got == want,
+                    "2^{k}: {what} {got:?} against {want:?}"
+                );
             }
         }
         // At 2^-300 the fourth moment is below the doubles: no kurtosis.

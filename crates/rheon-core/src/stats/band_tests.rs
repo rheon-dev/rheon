@@ -630,7 +630,10 @@ fn a_value_between_two_levels_is_kept_and_one_level_holds_its_band() {
     assert!(q.at[0].is_some(), "the lower level has left 0");
     assert_eq!(q.at[1], Some(EwQuantile::index(1.0)));
     assert_eq!(q.get(0), wide.get(0));
-    assert_eq!(q.get(0), Some(EwQuantile::bucket_value(EwQuantile::index(1e-300))));
+    assert_eq!(
+        q.get(0),
+        Some(EwQuantile::bucket_value(EwQuantile::index(1e-300)))
+    );
     // One level, the same rows: held to its band.
     let mut one = EwQuantile::bounded(&[0.5], 8).unwrap();
     for (v, w) in rows {

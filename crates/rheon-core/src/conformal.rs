@@ -595,7 +595,13 @@ mod tests {
     #[test]
     #[should_panic(expected = "share")]
     fn the_mean_weight_survives_a_heavy_row_decaying_away() {
-        for share in [0.0, 2f64.powi(-60), 2f64.powi(-50), 2f64.powi(-40), 2f64.powi(-30)] {
+        for share in [
+            0.0,
+            2f64.powi(-60),
+            2f64.powi(-50),
+            2f64.powi(-40),
+            2f64.powi(-30),
+        ] {
             let mut c = Conformal::new(0.9, 0.01).unwrap();
             c.update(0.5, 1.0, 1.0, 1e16);
             c.update(0.5, 1.0, share, 1.0);

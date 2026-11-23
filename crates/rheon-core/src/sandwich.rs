@@ -420,9 +420,8 @@ impl Sandwich {
     /// the test is 37.5.
     pub fn wald(&self, idx: &[usize], hac: bool, pick: &[usize], d: &[f64]) -> Option<f64> {
         let p = idx.len() + usize::from(self.intercept);
-        let every = self.intercept
-            && pick.len() == p
-            && pick.iter().enumerate().all(|(i, &j)| i == j);
+        let every =
+            self.intercept && pick.len() == p && pick.iter().enumerate().all(|(i, &j)| i == j);
         with_cov(p, |sc| {
             self.covariance_in(sc, idx, hac, every)?;
             let q = pick.len();
@@ -953,7 +952,9 @@ mod tests {
                     .zip(&d[1..])
                     .map(|(&i, &di)| self.origin.get(i).copied().unwrap_or(0.0) * di)
                     .sum();
-                moved = std::iter::once(d[0] + c0).chain(d[1..].iter().copied()).collect();
+                moved = std::iter::once(d[0] + c0)
+                    .chain(d[1..].iter().copied())
+                    .collect();
                 &moved[..]
             } else {
                 d

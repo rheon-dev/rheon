@@ -1838,10 +1838,19 @@ mod review_2026_11_23 {
     #[test]
     fn a_row_whose_powers_overflow_leaves_the_state_loadable() {
         for nw in [0, 4] {
-            for wild in [(2e51, 1.0), (1e100, 1.0), (1.0, 2e77), (1.0, 2e100), (-1e100, -2e100)] {
+            for wild in [
+                (2e51, 1.0),
+                (1e100, 1.0),
+                (1.0, 2e77),
+                (1.0, 2e100),
+                (-1e100, -2e100),
+            ] {
                 let s = fed(None, nw, Some(wild));
                 assert!(s.has_shape(1, 0, 3, nw), "{wild:?} at {nw} lags");
-                assert!(s.reset().is_some_and(f64::is_finite), "{wild:?} at {nw} lags");
+                assert!(
+                    s.reset().is_some_and(f64::is_finite),
+                    "{wild:?} at {nw} lags"
+                );
                 assert!(
                     s.breusch_pagan(&[0]).is_some_and(f64::is_finite),
                     "{wild:?} at {nw} lags"
