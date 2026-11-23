@@ -425,3 +425,59 @@ fn a_refit_given_up_mid_wait_keeps_its_scale_in_the_sketch() {
         }
     }
 }
+
+/// A gap past every decay's underflow -- `0.5^{d / h}` is 0 at `d ≥ 1075 h`
+/// -- while a refit buffer is open forgets every row before it (review
+/// 2026-11-23, REG-1): a row that only ages a target (its target null) and
+/// a learned row across the gap each read a factor of 0, and neither may
+/// panic, leave the pre-gap rows weighing in the held median, nor write a
+/// buffer the next load refuses. Saved after the gap and loaded, the model
+/// goes on to the bit.
+#[test]
+fn a_gap_past_the_decays_underflow_with_a_refit_open() {
+    let data = rows(200, false);
+    let huber = base(1.345, Decay::Halflife(1.0), 120);
+    let mut quantile = huber.clone();
+    quantile.loss = RobustLoss::Quantile { tau: 0.5 };
+    quantile.quantile_eps = 0.2;
+    quantile.mad_anchor = true;
+    for cfg in [huber, quantile] {
+        gap_case(&data, cfg);
+    }
+}
+
+fn gap_case(data: &[Row], cfg: RobustCfg) {
+    let step = |m: &mut Robust, (i, (x, y, w)): (usize, &Row)| {
+        // An ageing row (target 0 null) at row 40, a learned row at row 60,
+        // each across a gap of 2,000 half-lives.
+        let d = if i == 40 || i == 60 { 2000.0 } else { 1.0 };
+        let y = if i == 40 { [None, y[1]] } else { *y };
+        m.step(x, &y, d, *w).pred
+    };
+    let whole: Vec<Vec<f64>> = {
+        let mut m = Robust::new(cfg.clone()).unwrap();
+        data.iter().enumerate().map(|r| step(&mut m, r)).collect()
+    };
+    for cut in [41, 61, 70] {
+        let mut m = Robust::new(cfg.clone()).unwrap();
+        let mut parts: Vec<Vec<f64>> = data[..cut]
+            .iter()
+            .enumerate()
+            .map(|r| step(&mut m, r))
+            .collect();
+        assert!(
+            m.refit.iter().any(|b| b.open() && b.held() > 0),
+            "cut {cut}"
+        );
+        let bytes = rmp_serde::to_vec(&m.state()).unwrap();
+        let mut back = Robust::restore(&rmp_serde::from_slice(&bytes).unwrap())
+            .unwrap_or_else(|e| panic!("cut {cut}: {e}"));
+        parts.extend(
+            data[cut..]
+                .iter()
+                .enumerate()
+                .map(|(i, r)| step(&mut back, (i + cut, r))),
+        );
+        assert_eq!(bits(&whole), bits(&parts), "cut {cut}");
+    }
+}

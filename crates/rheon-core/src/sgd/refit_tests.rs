@@ -494,3 +494,44 @@ fn a_refit_given_up_mid_wait_keeps_its_scale_in_the_sketch() {
         }
     }
 }
+
+/// A gap past the decay's underflow while the refit buffer is open (review
+/// 2026-11-23, REG-1): an ageing row and a learned row across it each read
+/// a factor of 0; neither panics nor writes a buffer the next load refuses,
+/// and saved after the gap the model goes on to the bit.
+#[test]
+fn a_gap_past_the_decays_underflow_with_a_refit_open() {
+    let data = rows(150, false);
+    let c = cfg(120, true, LearningRate::AdaGrad, Decay::Halflife(1.0));
+    let step = |m: &mut Sgd, i: usize, (x, y, w): &Row| {
+        let d = if i == 40 || i == 60 { 2000.0 } else { 1.0 };
+        let y = if i == 40 { [None, y[1]] } else { *y };
+        m.step(x, &y, d, *w).pred
+    };
+    let whole: Vec<Vec<f64>> = {
+        let mut m = Sgd::new(c.clone()).unwrap();
+        data.iter()
+            .enumerate()
+            .map(|(i, r)| step(&mut m, i, r))
+            .collect()
+    };
+    for cut in [41, 61, 70] {
+        let mut m = Sgd::new(c.clone()).unwrap();
+        let mut parts: Vec<Vec<f64>> = data[..cut]
+            .iter()
+            .enumerate()
+            .map(|(i, r)| step(&mut m, i, r))
+            .collect();
+        assert!(m.refit.iter().all(RefitBuf::open), "cut {cut}");
+        let bytes = rmp_serde::to_vec(&m.state()).unwrap();
+        let mut back = Sgd::restore(&rmp_serde::from_slice(&bytes).unwrap())
+            .unwrap_or_else(|e| panic!("cut {cut}: {e}"));
+        parts.extend(
+            data[cut..]
+                .iter()
+                .enumerate()
+                .map(|(i, r)| step(&mut back, i + cut, r)),
+        );
+        assert_eq!(bits(&whole), bits(&parts), "cut {cut}");
+    }
+}

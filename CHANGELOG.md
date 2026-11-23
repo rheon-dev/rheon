@@ -718,6 +718,19 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **A gap past the decay's underflow while a refit buffer is open forgets
+  the rows before it, and the state saves and loads** (review 2026-11-23,
+  REG-1). At a half-life `h`, a gap of `1075 h` or more decays by exactly
+  0. Under `huber`, `quantile` or `sgd(loss="huber")` with a refit still
+  filling and the MAD scale, a row whose target was null across such a gap
+  took `frexp(0)` in the held median: a debug build panicked, and a release
+  build read `2^-1087` for the 0, so the rows before the gap kept their
+  weight in the scale. A row learned across the gap stored its factor of 0
+  in the buffer, and the load refused it as damaged. The held median now
+  lets every row go on a run of decays of 0, as on one decay of 0, and a
+  buffer's factors may be 0. Only streams with such a gap move.
+  Moves: `huber.*`, `quantile.*`, `sgd.*`.
+
 - **A window looking ahead whose far edge is the input's last row is whole
   at the end of the input** (PLAN 565). Under `closed="right"` or `"both"`,
   `rp.ewm_sum`, `rp.ewm_mean`, `rp.ewm_rate` and `rp.ewm_quantile` with
