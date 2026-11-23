@@ -46,6 +46,7 @@ REASONS = {
     "ill_conditioned",
     "unstable_rate",
     "not_identified",
+    "negative_input",
 }
 
 

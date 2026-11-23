@@ -297,7 +297,7 @@ readiness fields:
 | field | on | what it holds |
 |---|---|---|
 | `settled_frac` | every model but `marginal`, `rcov` and `audit` | how far the model has come toward its steady state under decay |
-| `withheld_reason` | every model but `marginal`, `rcov` and `audit` | why `pred_y` is null, or null when it is not: `below_min_settled_frac`, `below_min_weight`, `above_max_error_inflation`, `below_warm_rows` (the rows `kmeans`, `hmm` and `bocpd` hold to seed themselves from, the rows `garch` buffers for a target's start, and the rows before `kalman` has sized any of a target's coefficients, standardized with no intercept), `ill_conditioned` (an `ewridge` fit whose normal equations are too nearly singular to keep a digit), `unstable_rate` (an `sgd` target whose learning rate is past its stability bound, so the fit diverges) or `not_identified` (a `garch` start whose rows do not tell its variance process from a constant variance), in that order of precedence |
+| `withheld_reason` | every model but `marginal`, `rcov` and `audit` | why `pred_y` is null, or null when it is not: `below_min_settled_frac`, `below_min_weight`, `above_max_error_inflation`, `below_warm_rows` (the rows `kmeans`, `hmm` and `bocpd` hold to seed themselves from, the rows `garch` buffers for a target's start, and the rows before `kalman` has sized any of a target's coefficients, standardized with no intercept), `ill_conditioned` (an `ewridge` fit whose normal equations are too nearly singular to keep a digit), `unstable_rate` (an `sgd` target whose learning rate is past its stability bound, so the fit diverges), `not_identified` (a `garch` start whose rows do not tell its variance process from a constant variance) or `negative_input` (a `garch` row under GARCH or GJR whose input is below 0), in that order of precedence |
 | `error_inflation_y` | `ewridge`, `rls`, `kalman`, under `emit_error_inflation` | the row's own estimation variance over the noise: high on a row leaning on a direction the data never showed, at one triangular solve a row |
 | `support_coef` | `ewridge`, `huber`, `quantile`, beside `coef` | each coefficient's data share, `1 - ridge * (S^-1)_jj` on the system the solve inverts. A duplicated pair of features reads 0.5 each |
 | `se_coef` | `ewridge`, `rls`, `kalman`, under `emit_se_coef`, beside `coef` | each coefficient's standard error in its own units: `sigma` times the fit's own covariance, `kalman`'s posterior exactly. A report, not a gate; it errs large in warm-up and under a ridge |
@@ -2921,9 +2921,9 @@ Its parameters, their defaults and what each refuses are in its
 [docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.garch),
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md#garch). The parameters
 every spec takes are in [What every spec takes](#what-every-spec-takes),
-apart from `features`, `half_life` and `lam`, which it refuses: the
-recursion is per observation and the estimate weighs every row it has
-learned. A row's weight scales its evidence. A row of weight 0, or whose
+apart from `half_life` and `lam`, which it refuses: the recursion is per
+observation and the estimate weighs every row it has learned. Its
+`features`, if any, are inputs of the variance equation (GARCH-X, below). A row's weight scales its evidence. A row of weight 0, or whose
 return is null, steps nothing: the next row's lags are those of the last row
 learned, as if it were not there; it is still read.
 
@@ -2949,6 +2949,28 @@ innovations: normal; Student's t, whose degrees of freedom `ν` are learned;
 Hansen's skewed t, which learns a skew `λ` too. The t takes `garch` and
 `gjr`, the skewed t `garch` alone. Every lag before the first row is the
 backcast, the `0.94^i`-weighted mean of the first 75 squared returns.
+
+**Inputs (GARCH-X).** `features` are inputs `x` of the variance equation,
+each with a coefficient `π` of its own, learned beside the process's:
+
+```
+garch-X   s_t = ω + π'x_t + α e²_{t−1} + β s_{t−1}                       π ≥ 0, x_t ≥ 0
+gjr-X     s_t = ω + π'x_t + α e²_{t−1} + γ 1[e_{t−1} < 0] e²_{t−1} + β s_{t−1}
+egarch-X  ln s_t = ω + π'x_t + α (|z_{t−1}| − √(2/π)) + γ z_{t−1} + β ln s_{t−1}
+```
+
+The row's own `x_t` is read, as every model reads its features: they are
+known before the row's target. So lag a column that measures the day
+before, such as a realized variance, to make it known before the return
+it explains; `rugarch`'s `external.regressors` read the same row. Under
+GARCH and GJR each `π` is at least 0 and an input must be at least 0, so
+the variance stays positive: a row whose input is below 0 reports nothing
+and is learned as a row of weight 0, `withheld_reason` `negative_input`,
+as a row with a null feature is. Under EGARCH the input enters the
+log-variance, and `π` and the input take any sign. Each `π`'s sensitivity
+is the filter's own recursion driven by the input, `∂s_t/∂π = x_t + β
+∂s_{t−1}/∂π` (EGARCH's carries `β − (α |z| + γ z)/2` in place of `β`).
+FIGARCH and variance targeting take no inputs; at most 8.
 
 #### The update
 
@@ -2997,7 +3019,15 @@ stepped from only when its likelihood-ratio statistic against a constant
 variance, `2 (l_fit − l_const)` with the weights at Kish's count, reaches
 χ² at 0.999 for the restrictions a constant variance puts on the process.
 That is 13.8 for `garch` (`α = β = 0`), and 16.3 for `gjr`, `egarch` and
-`figarch` (three each). Until one does, the start waits for twice the rows and
+`figarch` (three each); each input adds one, `π = 0`, so `garch` with one
+input waits for 16.3. `π = 0` is where an input that explains nothing
+sits, so a fit with a `π` at 0 is not counted as on a bound. A start with
+inputs also waits while its rows do not tell the inputs apart: an input
+constant over them is `ω` again, and two that move together are one. It
+waits where the smallest eigenvalue of the start's information in the
+variance equation's parameters, scaled to a unit diagonal, is at most
+`10⁻¹⁰`; inputs exactly collinear give the rounding's, `10⁻¹⁵` or less.
+Until one does, the start waits for twice the rows and
 refits, at most twice, while `max_state_bytes` holds the doubled buffer,
 and then buffers afresh; its rows are withheld as `not_identified`. A fit
 that passes but is not at its optimum, or sits on a bound of the process's
@@ -3013,12 +3043,15 @@ at persistence 0.98 its forecasts, each made before its row, lost a mean of
 3.4 nats over 8,000 rows to the true process, against 2.8 for the free `ω`:
 its level rides on one running mean the whole stream shares.
 
-The state is `8 (2k + m + n(n + 1)/2 + 9)` bytes a target for `k` process
-parameters, `m` shape parameters and `n` stepped coordinates. EGARCH keeps
+The state is `8 (2k + q + m + n(n + 1)/2 + 9)` bytes a target for `k`
+parameters in the variance equation, `q` of them the inputs' `π` (whose
+running mean adds the `q`), `m` shape parameters and `n` stepped
+coordinates. EGARCH keeps
 64 bins of residuals beside them, 512 bytes. That is 168 bytes for `garch`,
 216 for `gjr`, 728 for `egarch`, 208 for `garch` with a t, and `216 + 8 M`
 for `figarch` (8,216 at 1,000 lags). The start's buffer adds 16 bytes a
-row until it is fitted, 32,000 at the default.
+row until it is fitted, 32,000 at the default, and 8 more a row for each
+input. `garch` with two inputs holds 288 bytes a target.
 
 #### Forecasts at horizons
 
@@ -3044,6 +3077,12 @@ egarch      f_h = exp(L_h) Π_{j=1..h−1} M(β^{j−1}),  L_1 = ln s_t,  L_h = 
 figarch     f_h = ω/(1 − β) + Σ_{j=1..M} λ_j e²_{t+h−1−j},  a forecast for each row at or after t
 sum         F_h = f_1 + … + f_h
 ```
+
+With inputs, horizon 1 reads the row's own `x_t`, and every later row
+holds them at `x̄`, their weighted mean over the rows learned, the start's
+included: no input past the row is known. So `ω` above reads `ω̄ = ω +
+π'x̄` past the row, and the forecasts revert to the long-run variance the
+inputs' mean gives.
 
 GARCH and GJR revert geometrically to `ω/(1 − P)`, `P = α + γ/2 + β`.
 EGARCH's is Nelson's closed form for normal innovations. The log-variance is

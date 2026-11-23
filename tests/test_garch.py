@@ -321,11 +321,6 @@ def test_refusals(kw, says):
         rp.ModelBank([_spec(**kw)])
 
 
-def test_features_are_refused():
-    with pytest.raises(TypeError, match="features"):
-        rp.spec.garch("m", targets=["y"], features=["x"])
-
-
 def test_a_start_span_on_a_temporal_clock_is_a_duration():
     """``start_span`` as a duration on a temporal clock: rows a minute
     apart, a start of two hours closes at its 121st row."""

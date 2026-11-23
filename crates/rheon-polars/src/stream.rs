@@ -483,6 +483,17 @@ impl AnyModel {
         }
     }
 
+    /// Whether the model refuses the row's inputs `xs`, and so reports
+    /// nothing for it: `garch`'s, an input below 0 under GARCH or GJR
+    /// ([`rheon_core::GarchCfg::refuses_inputs`]). Every other model reads
+    /// any finite feature.
+    pub fn refuses_inputs(&self, xs: &[f64]) -> bool {
+        match self {
+            AnyModel::Garch(m) => m.cfg().refuses_inputs(xs),
+            _ => false,
+        }
+    }
+
     /// Whether a slot's fit is withheld because the system it was solved
     /// from is past the condition at which a solve keeps a digit:
     /// `ewridge`'s, whose normal equations can factorize past it
@@ -1329,8 +1340,10 @@ pub enum OwnWait {
 /// `unstable_rate` after it (task 278, D8), `sgd`'s gate, which no model
 /// with an earlier reason of its own has; `not_identified` after that (PLAN
 /// 548), `garch`'s wait for a start whose rows tell its variance process
-/// from a constant one, which comes after its own warm-up.
-pub const WITHHELD_REASONS: [&str; 7] = [
+/// from a constant one, which comes after its own warm-up; `negative_input`
+/// after that (PLAN 559), a GARCH-X row under GARCH or GJR whose input is
+/// below 0, which its variance equation cannot read.
+pub const WITHHELD_REASONS: [&str; 8] = [
     "below_min_settled_frac",
     "below_min_weight",
     "above_max_error_inflation",
@@ -1338,6 +1351,7 @@ pub const WITHHELD_REASONS: [&str; 7] = [
     "ill_conditioned",
     "unstable_rate",
     "not_identified",
+    "negative_input",
 ];
 const REASON_SETTLED: u8 = 1;
 const REASON_MIN_PERIODS: u8 = 2;
@@ -1346,6 +1360,7 @@ const REASON_WARM_ROWS: u8 = 4;
 const REASON_ILL_CONDITIONED: u8 = 5;
 const REASON_UNSTABLE_RATE: u8 = 6;
 const REASON_NOT_IDENTIFIED: u8 = 7;
+const REASON_NEGATIVE_INPUT: u8 = 8;
 
 /// The settled fraction at which a readiness notice judges a stream
 /// (docs/WARMUP-AND-CONVERGENCE.md §3): the one rule all three notices
@@ -4118,6 +4133,10 @@ fn run_instance(
         // from the state before the step, as the model's own gate reads it
         // (task 278, D8).
         let unstable = inst.model.get().unstable_targets();
+        // And whether the row's inputs are ones the model refuses: a
+        // GARCH-X's input below 0 under GARCH or GJR, a row it reports
+        // nothing for and learns at weight 0.
+        let negative = inst.model.get().refuses_inputs(xs);
 
         // The residual spread folds each slot's own prediction, whether or
         // not a readiness gate withholds it from the output
@@ -4368,6 +4387,11 @@ fn run_instance(
         // waiting for rows that tell its process from a constant variance.
         if reason == 0 && wait == OwnWait::NotIdentified {
             reason = REASON_NOT_IDENTIFIED;
+        }
+        // A row whose inputs the model refuses, where nothing above has
+        // withheld it: a GARCH-X's input below 0 under GARCH or GJR.
+        if reason == 0 && negative {
+            reason = REASON_NEGATIVE_INPUT;
         }
         // The noise gate has not been met: the stream has all but settled,
         // the gate has withheld every row for a further half-life, and the

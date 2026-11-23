@@ -115,7 +115,8 @@ MEANING: dict[str, str] = {
     "std_resid_<t>": "`<t>` over the square root of its variance on this row",
     "variance_<h>_<t>": (
         "the variance of `<t>` `h - 1` rows past this one, horizon `h` of `horizons`, from the "
-        "same rows; horizon 1 is `variance_<t>`"
+        "same rows, each input past the row held at its weighted mean over the rows learned; "
+        "horizon 1 is `variance_<t>`"
     ),
     "variance_sum_<h>_<t>": (
         "the sum of the variances of `<t>` over the `h` rows from this one, this row's included: "
@@ -366,9 +367,10 @@ SHARED_FIELDS: list[tuple[str, str, str]] = [
     (
         "withheld_reason",
         "why the row's predictions are null: `below_min_settled_frac`, `below_min_weight`, "
-        "`above_max_error_inflation`, `below_warm_rows`, `ill_conditioned`, `unstable_rate` or "
-        "`not_identified`. That order is their precedence, so the first that applies is the one "
-        "named. `below_warm_rows` is the model's own warm-up, the rows `kmeans`, `hmm` and "
+        "`above_max_error_inflation`, `below_warm_rows`, `ill_conditioned`, `unstable_rate`, "
+        "`not_identified` or `negative_input`. That order is their precedence, so the first "
+        "that applies is the one named. `below_warm_rows` is the model's own warm-up, the "
+        "rows `kmeans`, `hmm` and "
         "`bocpd` hold to seed themselves from, the rows `garch` buffers for a target's start, "
         "and, in a `kalman` fit standardized with no intercept, the rows before any of a "
         "target's coefficients is sized. `ill_conditioned` is an `ewridge` "
@@ -376,7 +378,10 @@ SHARED_FIELDS: list[tuple[str, str, str]] = [
         "`unstable_rate` is an `sgd` target whose learning rate is past its stability bound: its "
         "recent steps' gains have a mean square above twice their mean, so each step grows its "
         "own row's residual and the fit diverges. `not_identified` is a `garch` start whose rows "
-        "do not yet tell its variance process from a constant variance, so it buffers more",
+        "do not yet tell its variance process from a constant variance, so it buffers more. "
+        "`negative_input` is a `garch` row under GARCH or GJR with an input below 0, which its "
+        "variance equation cannot read: the row reports nothing and is learned as a row of "
+        "weight 0",
         "where nothing was withheld",
     ),
     (

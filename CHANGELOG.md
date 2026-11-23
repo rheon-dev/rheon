@@ -361,6 +361,34 @@ model that only the new build has is listed as an addition and passes.
   same rows the three agree to 1.4e-15. No state is added; a configuration
   without horizons is written as before. The Python `kalman` builder moves
   to a module of its own (`_spec.py` passed its 250 KB cap).
+- **`garch` takes inputs in its variance equation, GARCH-X** (task 559):
+  `features` are inputs `x` whose row's own value enters that row's
+  variance, `π'x_t` added to GARCH's and GJR's `s_t` and to EGARCH's
+  `ln s_t`, each `π` learned beside the process's parameters, by the start's
+  likelihood and the online step, its sensitivity the filter's recursion
+  driven by the input. The row's own input is read, as `rugarch`'s
+  `external.regressors` read it (measured: its variance equation and the
+  definition agree to 7.2e-16), so an input measured the row before is
+  lagged by the caller. Under GARCH and GJR `π ≥ 0` and an input must be at
+  least 0, so the variance stays positive: a row whose input is below 0
+  reports nothing and is learned as a row of weight 0, named by a new
+  `withheld_reason`, `negative_input`, after `not_identified`. Under EGARCH
+  `π` and the input take any sign. The start's test against constant
+  variance takes one more restriction an input (`π = 0`; 16.3 for `garch`
+  with one, χ² at 0.999), a `π` at 0 is no bound that makes a start wait,
+  and a start waits (`not_identified`) while its information in the
+  variance equation's parameters is singular to the rounding, as an input
+  constant over its rows makes it. The forecasts at horizons past the row
+  hold each input at its weighted mean over the rows learned. FIGARCH and
+  variance targeting take no inputs; at most 8. A target's state is `8 (2k
+  + q + m + n(n + 1)/2 + 9)` bytes, `k` parameters in the variance
+  equation and `n` stepped coordinates each counting the `q` inputs' `π`,
+  the `q` their running mean, and the start's buffer `16 + 8q` bytes a row:
+  288 bytes for `garch` with two inputs, 168 with none. A spec with no
+  inputs writes the state it wrote, to the byte, and its outputs do not
+  move. `withheld_reason`'s new
+  name changes its Enum's categories in every model's output. Moves:
+  `*.withheld_reason`.
 - **`hawkes`, a self-exciting point process** (task 498): each target a
   node, a value above 0 on a row an event of that mark; exponential kernels
   at the given `kernel_decays`. Each row reports every node's

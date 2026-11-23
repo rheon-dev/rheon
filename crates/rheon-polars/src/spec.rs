@@ -1487,8 +1487,9 @@ pub enum ModelKind {
     /// zero-mean return series, its parameters estimated online by recursive
     /// quasi-maximum likelihood after a start fitted by batch likelihood
     /// (`rheon_core::Garch`). Per target, the variance, the standardized
-    /// residual and, with `horizon`, the forecast; the parameters in `coef`.
-    /// No features.
+    /// residual and, with `horizons`, the forecasts; the parameters in
+    /// `coef`. Its features, if any, are the inputs of the variance
+    /// equation (GARCH-X), read on the row whose variance they enter.
     #[serde(rename = "garch")]
     Garch {
         /// The process: `"garch"` (the default), `"gjr"`, `"egarch"` or
@@ -3563,14 +3564,9 @@ impl Spec {
                 }
             }
         } else if let ModelKind::Garch { .. } = &self.model {
-            if !self.features.is_empty() {
-                no.refuse(format!(
-                    "spec {name:?}: garch takes no features, but features lists {}: each of \
-                     its targets is a return series whose variance it models. Put the return \
-                     columns in targets, and leave out features.",
-                    columns_counted(self.features.len())
-                ));
-            }
+            // Its features are optional: the inputs of a GARCH-X's variance
+            // equation, none for a plain GARCH; the model checks their
+            // count and the process that takes them.
         } else if self.features.is_empty() && !(columns_missing && self.model.is_unsupervised()) {
             columns_missing = true;
             no.refuse(format!(

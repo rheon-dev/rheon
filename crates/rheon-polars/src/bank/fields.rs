@@ -368,13 +368,15 @@ pub fn coef_fields(spec: &Spec) -> Vec<CoefField> {
             }))
             .collect()
     } else if matches!(spec.model, crate::ModelKind::Garch { .. }) {
-        // The process's parameters, then the shape: `Garch::coefficients`.
+        // The process's parameters, each input's `π` as `pi_<feature>`,
+        // then the shape: `Garch::coefficients`.
         let cfg = crate::stream::garch_cfg(spec).expect("validated");
         cfg.vol
             .names()
             .iter()
-            .chain(cfg.dist.names())
             .map(|n| n.to_string())
+            .chain(spec.features.iter().map(|f| format!("pi_{f}")))
+            .chain(cfg.dist.names().iter().map(|n| n.to_string()))
             .collect()
     } else if matches!(
         spec.model,

@@ -644,3 +644,83 @@ estimates, and `rugarch` where R is present. The repository's CI has no R
 job on `main` yet (the `r-oracles` group and job are on task 499's and
 555's branches), so `rugarch`'s test would be marked for that job and
 skipped elsewhere.
+
+## 17. Part 4 as built: GARCH-X (2026-11-23)
+
+**Built.** `garch` takes `features`, the inputs `x` of the variance
+equation, at most 8, under GARCH, GJR and EGARCH (FIGARCH and variance
+targeting refuse them). The row's own `x_t` enters its variance, after the
+process's terms in the sum (`s_t = ω + α e² + [γ a] + β s + π'x_t`; EGARCH's
+`ln s_t` likewise), so a configuration without inputs computes what it did,
+bit for bit (every `garch` golden, fixture and continuation unchanged). The
+parameters are the process's, then each input's `π` (`coef` names them
+`pi_<feature>`), then the shape. Each `π`'s sensitivity is the filter's
+recursion driven by the input, and the step, the start's likelihood and its
+Gauss-Newton matrix carry it with no other change.
+
+- **The set.** `π ≥ 0` under GARCH and GJR, free under EGARCH; the `π` rows
+  are appended after the process's, and only the process's decide that a
+  fit sits on a bound (`fit::process_set`), so a `π` at 0 does not make a
+  start wait.
+- **The start's test.** `restrictions(vol) + q`: 2 + q under GARCH, 3 + q
+  under GJR and EGARCH (sections 10 and 11 say "2 + q", which is GARCH's;
+  GJR's and EGARCH's own null already restricts three). The cuts, χ² at
+  0.999 for 2 to 11, are tabulated from `scipy.stats.chi2.ppf` and held in
+  the unit tests by the closed-form survival function to 1e-14.
+- **Collinear inputs** (section 11's guard). At the fit, the information of
+  the variance equation's `k + q` parameters (the fit's own matrix: the
+  normal's expected information, a t's score outer product), scaled to a
+  unit diagonal, has its smallest eigenvalue (cyclic Jacobi, checked
+  against faer's) compared with `COLLINEAR = 1e-10`; at or under it the
+  start waits as `not_identified`, keeping the fit, as a start under the LR
+  cut does. An input constant over the start is exactly collinear with `ω`
+  (its sensitivity is the same recursion), measured at 1e-16 to 1e-15. The
+  bank does not yet name the inputs in a notice (section 11's "naming the
+  inputs"): the wait is reported only by `withheld_reason`.
+- **The grid.** Each GARCH and GJR point at `π = 0`, and beside it one with
+  half of `ω` moved onto the inputs (`π_i x̄_i = ω/(2q)`); EGARCH's with
+  0.05 of the log-variance moved. An input's unit is the level over its
+  mean `|x|`.
+- **`x̄`.** Per target, the weighted running mean over that target's
+  learned rows, the start's replay included (`Series::xbar`), as `mean_e2`
+  is kept. The forecasts read `ω̄ = ω + π'x̄` past horizon 1.
+- **A negative input** under GARCH or GJR: the model reports nothing for
+  the row and steps it as a row of weight 0 with every input 0
+  (`GarchCfg::refuses_inputs`), as `refused_step` does a feature that is
+  not a number; `predict` and `predict_with` report nothing. The bank names
+  the row `negative_input`, the eighth `WITHHELD_REASONS` entry, after
+  `not_identified`, read before the step (`AnyModel::refuses_inputs`); a
+  start's own rows outrank it (`below_warm_rows`). The new category changes
+  every model's `withheld_reason` dtype (CHANGELOG: `Moves:
+  *.withheld_reason`).
+- **State.** `GarchCfg.n_inputs` (not written when 0), `Series.xbar` and
+  `Series.xbuf` (the start's inputs, `q` a buffered row), both last and not
+  written when empty, so every state without inputs keeps its bytes, and a
+  state written as an array keeps its places. `8 (2k + q + m + n(n+1)/2 +
+  9)` bytes a target, `k` and `n` counting the inputs, and `16 + 8q` a
+  buffered row: 288 bytes for `garch` with two inputs (168 without). No
+  schema bump: schema 72 is unreleased.
+
+**Measured** (Linux x86-64). The start's fit against `scipy.optimize`'s
+SLSQP maximum of the same Gaussian likelihood on its 2,000 rows (the
+definition from the backcast, `scipy.signal.lfilter` for GARCH and GJR):
+the bank 1.8e-12 to 1.8e-11 nats above scipy's stop, every parameter within
+5.4e-6 of a standard error (test bound 1e-4). The online estimate after
+20,000 rows against scipy's batch fit of those rows, five seeds a form: at
+most 0.45 standard errors under GARCH and GJR, 0.88 under EGARCH (test
+bound 1.5, three seeds, extended tier). The bank's variance against the
+definition at the reported parameters: within 2 units of the last place
+under GARCH and GJR, 1e-13 under EGARCH (`tests/test_garch_x.py`).
+`rugarch` was not re-run: section 16's measurement of its variance
+equation at fixed parameters is the record, and R is in no CI job of
+`main`; the EGARCH naming swap matters only to that one-off.
+
+**Fixtures.** `garch_x_realistic` (EGARCH with two inputs, started) and
+`garch_x_start` (GJR with two inputs, saved within its start, rows with an
+input below 0 among them) were written here and carry the writer
+`linux-x86_64`; the rest of the core set is the Mac's, untouched. The Mac
+should rewrite the two with the set. The bank fixtures' frozen frames carry
+`withheld_reason`'s Enum, whose categories grew, and the oracle hashes are
+`darwin-arm64`'s: both are for the Mac to regenerate (`PRINT_STATE_FIXTURES=1
+cargo test -p rheon-polars --test state_fixtures`, `scripts/oracles.py
+rerun`).

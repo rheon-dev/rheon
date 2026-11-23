@@ -1263,9 +1263,23 @@ fn a_garch_past_its_state_cap_or_its_forms_is_refused() {
             "half_life": 10.0}"#,
         &["half_life does not apply to garch"],
     );
+    // features are GARCH-X's inputs (task 559): taken under GARCH, GJR
+    // and EGARCH, refused under FIGARCH and variance targeting, at most 8
+    accepted(r#"{"name": "m", "model": {"type": "garch"}, "targets": ["a"], "features": ["x"]}"#);
     refused(
-        r#"{"name": "m", "model": {"type": "garch"}, "targets": ["a"], "features": ["x"]}"#,
-        &["garch takes no features"],
+        r#"{"name": "m", "model": {"type": "garch", "vol": "figarch"}, "targets": ["a"],
+            "features": ["x"]}"#,
+        &["figarch\" takes no inputs"],
+    );
+    refused(
+        r#"{"name": "m", "model": {"type": "garch", "variance_targeting": true},
+            "targets": ["a"], "features": ["x"]}"#,
+        &["variance_targeting takes no inputs"],
+    );
+    refused(
+        r#"{"name": "m", "model": {"type": "garch"}, "targets": ["a"],
+            "features": ["x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9"]}"#,
+        &["at most 8 inputs"],
     );
 }
 

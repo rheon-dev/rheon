@@ -203,6 +203,7 @@ pub fn garch_cfg(spec: &Spec) -> Result<rheon_core::GarchCfg, String> {
         max_horizon_work: *max_horizon_work,
         min_weight: spec.min_periods_or_default(),
         max_state_bytes: *max_state_bytes,
+        n_inputs: spec.features.len(),
     };
     cfg.validate()?;
     let labels: Vec<String> = horizons

@@ -435,8 +435,8 @@ releases none. A regression writes, with ``<t>`` a target:
     Which gate withheld the row's predictions, as an ``Enum``, and null where
     no gate did. ``below_min_settled_frac``, ``below_min_weight``,
     ``above_max_error_inflation``, ``below_warm_rows``, ``ill_conditioned``,
-    ``unstable_rate`` and ``not_identified`` are named in that order, the
-    first that withheld anything.
+    ``unstable_rate``, ``not_identified`` and ``negative_input`` are named in
+    that order, the first that withheld anything.
     ``below_warm_rows`` is the model's own warm-up: the rows ``kmeans``,
     ``hmm`` and ``bocpd`` hold to seed their centres, states or prior from
     (``warm_rows``), a count of rows, where ``min_weight`` is a weight, the
@@ -453,7 +453,10 @@ releases none. A regression writes, with ``<t>`` a target:
     builder's docstring has the gain. ``not_identified`` is a ``garch``
     start whose rows do not yet tell its variance process from a constant
     variance, so it buffers more rows before it reports; the ``garch``
-    builder's docstring has the test. Fields null for another reason,
+    builder's docstring has the test. ``negative_input`` is a ``garch`` row
+    under ``vol="garch"`` or ``"gjr"`` with an input (a feature) below 0,
+    which its variance equation cannot read: the row reports nothing and is
+    learned as a row of weight 0. Fields null for another reason,
     such as a skipped row or a statistic not yet due, leave it null. An
     ``Enum`` rather than a string, because a string column costs sixteen
     bytes a row even when every value is null.
