@@ -161,6 +161,9 @@ def tdigest_centroids(values: list[float], compression: float) -> list[tuple[flo
 def ddsketch_buckets(
     values: list[float], alpha: float
 ) -> tuple[list[tuple[int, float]], list[tuple[int, float]], float]: ...
+def ddsketch_decayed_buckets(
+    values: list[float], alpha: float, half_life: float
+) -> tuple[list[tuple[int, float]], float]: ...
 def ddsketch_values(keys: list[int], alpha: float) -> list[float]: ...
 def ddsketch_reads(
     values: list[float], weights: list[float], alpha: float, levels: list[float]

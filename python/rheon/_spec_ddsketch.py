@@ -37,17 +37,16 @@ def ddsketch(
     1% of the true quantile is what is asked; for values near 0 or of both
     signs, use :func:`tdigest`. Each target gets its own sketch in each
     group, and each row reports every level from the rows before it, so the
-    row's own value is never in its own quantile. Without a window the
-    sketch never forgets; with ``window_rows`` or ``window_size`` it reads
-    the window's rows alone.
+    row's own value is never in its own quantile. It forgets by a window,
+    exactly, or by a decay, rounded, or not at all.
 
     .. rubric:: Parameters
 
     The stream parameters every builder takes, such as ``clock``, ``group``
-    and ``weight``, are in :mod:`rheon.spec`; ``half_life`` and ``lam`` are
-    refused, since a decay rounds every bucket's weight on every row and no
-    row could be taken out of it exactly: the window is the form that
-    forgets. A row's ``weight`` is its mass in the sketch; scaling every
+    and ``weight``, are in :mod:`rheon.spec`. ``half_life`` or ``lam``
+    decays every bucket on the clock (the rounded form, below), and is
+    refused beside a window; unset, the sketch never forgets. A row's
+    ``weight`` is its mass in the sketch; scaling every
     weight changes nothing but ``weight_sum``. A row of weight 0 counts in
     no clock and is in no window, and a row whose target is null adds
     nothing to that target's sketch; both are still read.
@@ -120,13 +119,25 @@ def ddsketch(
     the problem for an empty ``quantiles``, a level not above 0 and below
     1, listed twice or of 0.5, an ``alpha`` below ``1e-6`` or not below 1, a
     ``window_rows`` of 0, a ``window_size`` not above 0 and finite, the two
-    windows together, ``closed="both"`` without ``window_size``,
-    ``half_life`` or ``lam``, a ``window_rows`` ring past
+    windows together, ``closed="both"`` without ``window_size``, a finite
+    ``half_life`` or a ``lam`` below 1 beside a window, a ``window_rows``
+    ring past
     ``max_state_bytes``, or a ``max_state_bytes`` of 0 or past 64 MiB.
     ``fit_predict`` raises when a group's buckets would pass
     ``max_state_bytes``.
 
     .. rubric:: The update
+
+    **The decayed form is rounded.** Under ``half_life`` or ``lam`` every
+    row, after its read, multiplies each bucket's weight, the zero count and
+    the weights by the clock step's factor ``f`` before it adds itself, each
+    multiply and add rounded once. So a bucket formed ``k`` rows ago holds
+    its exact decayed sum within a relative ``2 k u / (1 - 2 k u)``,
+    ``u = 2^-53``: about ``2.2e-12`` after 10,000 rows, far below ``alpha``.
+    No row can be taken out of such a weight exactly, which is why the
+    window, not the decay, is the form that drops a row; the factor is the
+    platform's, so a decayed sketch agrees across platforms within its last
+    bits rather than to the bit.
 
     Each target ``t`` keeps a DDSketch ``D_t`` (Masson, Rim and Lee, 2019,
     with the ``ddsketch`` package's logarithmic mapping). With

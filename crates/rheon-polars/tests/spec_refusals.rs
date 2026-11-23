@@ -1370,8 +1370,8 @@ fn a_tdigest_spec_builds_or_is_refused_by_name() {
 }
 
 /// `ddsketch` (task 544, part 7): the defaults build, a coarse and a fine
-/// `alpha` build, each window builds; a level outside (0, 1), twice or 0.5,
-/// an `alpha` out of range, a decay (naming the windowed form), both
+/// `alpha` build, each window builds, a decay builds; a level outside (0, 1),
+/// twice or 0.5, an `alpha` out of range, a decay beside a window, both
 /// windows, `closed = "both"` without `window_size`, features, and a row
 /// window past `max_state_bytes` are refused by name. The outputs are each
 /// level's quantile then its tail mean, a target at a time.
@@ -1432,21 +1432,23 @@ fn a_ddsketch_spec_builds_or_is_refused_by_name() {
             &[says],
         );
     }
-    for (decay, key) in [
-        (r#""half_life": 50.0"#, "half_life"),
-        (r#""lam": 0.99"#, "lam"),
-    ] {
+    for decay in [r#""half_life": 50.0"#, r#""lam": 0.99"#] {
+        accepted(&format!(
+            r#"{{"name": "m", "model": {{"type": "ddsketch", "quantiles": [0.25]}},
+                "targets": ["a"], "features": [], {decay}}}"#
+        ));
         refused(
             &format!(
-                r#"{{"name": "m", "model": {{"type": "ddsketch", "quantiles": [0.25]}},
-                    "targets": ["a"], "features": [], {decay}}}"#
+                r#"{{"name": "m", "model": {{"type": "ddsketch", "quantiles": [0.25],
+                    "window_rows": 20}}, "targets": ["a"], "features": [], {decay}}}"#
             ),
-            &[
-                &format!("{key} does not apply to ddsketch"),
-                "windowed DDSketch",
-            ],
+            &["a window and a decay", "not both"],
         );
     }
+    accepted(
+        r#"{"name": "m", "model": {"type": "ddsketch", "quantiles": [0.25], "window_rows": 20},
+            "targets": ["a"], "features": [], "half_life": "inf"}"#,
+    );
     refused(
         &spec(r#"{"type": "ddsketch", "quantiles": [0.25], "window_rows": 5, "window_size": 5}"#),
         &["not both"],

@@ -79,7 +79,9 @@ model that only the new build has is listed as an addition and passes.
   the tail's mean magnitude; its buckets and quantiles are the `ddsketch`
   package's (3.0.1). `window_rows` or `window_size` (with `closed`) reads a
   window's rows alone, a ring taking each row out of its bucket exactly; a
-  `half_life` or `lam` is refused, naming the window. A level is null until
+  `half_life` or `lam` decays every bucket, each step rounded once, so a
+  bucket formed `k` rows ago is its exact decayed sum within a relative
+  `2k 2^-53` (refused beside a window). A level is null until
   its rows identify it (`level_beyond_sample`), and 0.5 is refused by name.
   The buckets are checked against `max_state_bytes` as the rows go in. The
   state file gains the variant `DdSketch`, with no schema change (72 is

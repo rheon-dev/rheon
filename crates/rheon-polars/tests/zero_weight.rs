@@ -406,6 +406,12 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
         ALL,
     ),
     (
+        "ddsketch_decayed",
+        r#"{"type": "ddsketch", "quantiles": [0.25, 0.75]}"#,
+        r#""targets": ["y", "x0"], "features": [], "half_life": @50"#,
+        ALL,
+    ),
+    (
         "ddsketch_rows",
         r#"{"type": "ddsketch", "quantiles": [0.25, 0.75], "window_rows": 30}"#,
         r#""targets": ["y", "x0"], "features": []"#,

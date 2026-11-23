@@ -30,10 +30,27 @@
 //! exactly 0, so the sketch is the one built from the rows left. A clock
 //! window's rows leave at the first row at or after the one they age out
 //! on, before that row's read. Under a window `n_eff`, `W_t` and `S_t` are
-//! the window's, the rows the row reads (hard rule 8), and a target's sums are exactly 0 once its
-//! rows have all left. No decay: a decayed sketch's weights are rounded by
-//! every decay step, so it is refused for the windowed form, which takes a
-//! row out exactly.
+//! the window's, the rows the row reads (hard rule 8), and a target's sums
+//! are exactly 0 once its rows have all left.
+//!
+//! **A decay** (`Halflife` or `Lam`, refused beside a window) is the rounded
+//! form. Each row, after its read, multiplies every bucket's weight, the zero
+//! count, `n_eff` and `W_t` by the factor `f = decay.factor(d_clock)` (and
+//! `S_t` by `f^2`), then adds the row:
+//!
+//! ```text
+//! c_k <- f c_k (+ w where the row lands),   W_t <- f W_t + w,   S_t <- f^2 S_t + w^2
+//! ```
+//!
+//! Each multiply and each add rounds once, so a bucket formed `k` rows ago
+//! holds its exact decayed sum `sum_i w_i prod f` (with the factors as
+//! computed) within a relative `2 k u / (1 - 2 k u)`, `u = 2^-53`: 2.2e-12
+//! after 10,000 rows. A row can never be taken out of such a weight
+//! exactly, which is why the window is the form that does. A bucket whose
+//! weight underflows to 0 is removed. `n_eff` is read before the row's own
+//! decay (hard rule 8); the factor is the platform's `exp2` or `powf`, so the
+//! decayed weights agree across platforms within their last bits, not to
+//! the bit.
 //!
 //! **When a level is withheld.** As `tdigest`'s
 //! ([`crate::tdigest_model::level_identified`]): with Kish's effective size
@@ -59,11 +76,11 @@ use std::collections::VecDeque;
 use serde::{Deserialize, Serialize};
 
 use crate::Stamp;
-use crate::WindowClosed;
 use crate::clock_span::{DEFAULT_STATE_BYTES, HeldCap, check_max_state_bytes};
 use crate::ddsketch::{DdSketch, Mapping, Slot};
 use crate::model::{ModelState, OnlineModel, State, StateError, Step, check_schema};
 use crate::tdigest_model::level_identified;
+use crate::{Decay, WindowClosed};
 
 /// The settings of a [`DdSketchModel`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -81,6 +98,9 @@ pub struct DdSketchModelCfg {
     pub window_clock: Option<f64>,
     /// Which edge of `window_clock` holds a row exactly that old.
     pub closed: WindowClosed,
+    /// The decay on the model's clock: `Halflife(inf)` (none) by default,
+    /// refused beside a window.
+    pub decay: Decay,
     /// The bytes a group's state may hold; `None` is 256 KB.
     pub max_state_bytes: Option<u64>,
 }
@@ -92,6 +112,15 @@ impl DdSketchModelCfg {
 
     fn windowed(&self) -> bool {
         self.window_rows.is_some() || self.window_clock.is_some()
+    }
+
+    /// Whether the decay forgets at all: a finite half-life, or `lam`
+    /// below 1.
+    pub fn decays(&self) -> bool {
+        match self.decay {
+            Decay::Halflife(h) => h.is_finite(),
+            Decay::Lam(l) => l < 1.0,
+        }
     }
 
     /// The bytes a ring row takes: its weight, a 32-bit slot a target, and
@@ -154,6 +183,15 @@ impl DdSketchModelCfg {
                      List each level once."
                 ));
             }
+        }
+        self.decay.check().map_err(|e| format!("ddsketch: {e}"))?;
+        if self.decays() && self.windowed() {
+            return Err(
+                "ddsketch: a window and a decay are each a way to forget, and a window takes \
+                 each row out exactly where a decay rounds every bucket on every row. Give \
+                 the window, or the half_life or lam, not both."
+                    .into(),
+            );
         }
         if self.window_rows.is_some() && self.window_clock.is_some() {
             return Err(
@@ -252,26 +290,6 @@ pub struct DdSketchModel {
 }
 
 impl DdSketchModel {
-    /// Refuse a decay: `given` names the field a spec set (`half_life`,
-    /// `lam`), `None` when it set none. A decayed sketch multiplies every
-    /// bucket by the decay at each step, so its weights are rounded on every
-    /// row and a row can never be taken out of them exactly; the windowed
-    /// form takes each row out of its bucket exactly. Run once at spec
-    /// build, before any row.
-    pub fn check_no_decay(given: Option<&str>) -> Result<(), String> {
-        match given {
-            None => Ok(()),
-            Some(field) => Err(format!(
-                "DdSketch: {field} is not allowed. A decayed DDSketch multiplies every bucket \
-                 by the decay at each row, so its weights are rounded on every row and no row \
-                 can be taken out of them exactly. For a quantile that forgets, use the \
-                 windowed DDSketch: give window_rows (the last rows of positive weight) or \
-                 window_size (the rows of the last span of the clock), whose ring takes each \
-                 row out of its bucket exactly as it leaves."
-            )),
-        }
-    }
-
     pub fn new(cfg: DdSketchModelCfg) -> Result<Self, String> {
         cfg.validate()?;
         let map = Mapping::new(cfg.alpha)?;
@@ -430,6 +448,27 @@ impl DdSketchModel {
         }
     }
 
+    /// The decayed form's step of `d_clock`: every sketch, the shared
+    /// weight and each target's sums times the factor (the squared weights
+    /// times its square), one rounding each. Nothing without a decay.
+    fn decay_by(&mut self, d_clock: f64) {
+        if !self.cfg.decays() {
+            return;
+        }
+        let f = self.cfg.decay.factor(d_clock);
+        if f == 1.0 {
+            return;
+        }
+        for s in &mut self.sketches {
+            s.decay(f);
+        }
+        self.w_sum *= f;
+        for (w, w2) in self.target_w.iter_mut().zip(&mut self.target_w2) {
+            *w *= f;
+            *w2 *= f * f;
+        }
+    }
+
     /// Whether the oldest row of a clock window has left at `now`.
     fn oldest_has_left(&self, now: Stamp) -> bool {
         let Some(span) = self.cfg.window_clock else {
@@ -549,9 +588,12 @@ impl OnlineModel for DdSketchModel {
         if weight <= 0.0 {
             // Counts in no clock (hard rule 9): read from the window as it
             // would stand at the row, and nothing kept but where it stood.
+            // Handed to the model directly, under a decay it decays the
+            // weights, which advances its clock and learns nothing.
             let key = self.window_key(handed, d_clock, false);
             self.read_ahead(key, out);
             self.note_clock(d_clock, handed, false);
+            self.decay_by(d_clock);
             return;
         }
         let key = self.window_key(handed, d_clock, true);
@@ -570,6 +612,9 @@ impl OnlineModel for DdSketchModel {
         if !self.held_cap().admit(bytes, cap) {
             return;
         }
+        // The row's own decay, after its read (hard rule 8: `n_eff` before
+        // it), then the row.
+        self.decay_by(d_clock);
         let counted = self.cfg.windowed();
         for (j, slot) in slots.iter().enumerate() {
             if let Some(slot) = *slot {

@@ -216,6 +216,7 @@ FORMS = {
     "rows": {"window_rows": 40},
     "clock": {"window_size": 25.0, "clock": "t", "gap_cap": 10.0},
     "clock_both": {"window_size": 25.0, "clock": "t", "gap_cap": 10.0, "closed": "both"},
+    "decayed": {"half_life": 30.0},
 }
 
 
@@ -249,11 +250,17 @@ class TestTheSpec:
             rp.spec.ddsketch("d", targets=["y"], quantiles=[0.4, 0.4])
 
     @pytest.mark.parametrize("decay", [{"half_life": 50.0}, {"lam": 0.99}])
-    def test_a_decay_is_refused_naming_the_windowed_ddsketch(self, decay: dict) -> None:
-        key = next(iter(decay))
-        with pytest.raises(ValueError, match=rf"{key} does not apply to ddsketch") as e:
-            rp.spec.ddsketch("d", targets=["y"], quantiles=[0.4], **decay)
-        assert "windowed DDSketch" in str(e.value)
+    def test_a_decay_builds_and_is_refused_beside_a_window(self, decay: dict) -> None:
+        rp.ModelBank([rp.spec.ddsketch("d", targets=["y"], quantiles=[0.4], **decay)])
+        with pytest.raises(ValueError, match="a window and a decay"):
+            rp.spec.ddsketch("d", targets=["y"], quantiles=[0.4], window_rows=20, **decay)
+        rp.ModelBank(
+            [
+                rp.spec.ddsketch(
+                    "d", targets=["y"], quantiles=[0.4], window_rows=20, half_life=float("inf")
+                )
+            ]
+        )
 
     def test_both_windows_are_refused(self) -> None:
         with pytest.raises(ValueError, match="not both"):
@@ -455,3 +462,49 @@ class TestTheCap:
         df = pl.DataFrame({"y": rng.uniform(1.0, 10.0, 100_000)})
         s = ddsketch_spec("d", targets=["y"], quantiles=[0.4], max_state_bytes=65_536)
         assert _out(s, df)["q0.4_y"].drop_nulls().len() > 99_000
+
+
+class TestDecayed:
+    """The decayed form is rounded: each bucket against its exact decayed
+    sum, worked in fractions from the same factor, within the stated bound
+    ``2 k u / (1 - 2 k u)``; and its reads against numpy's on the rows at
+    their decayed weights, within the sketch's alpha bounds."""
+
+    def test_each_bucket_is_its_exact_sum_within_the_rounding_bound(self) -> None:
+        from fractions import Fraction
+
+        xs = _stream("lognormal", 4, 2_000)
+        buckets, f = native.ddsketch_decayed_buckets(xs.tolist(), ALPHA, 40.0)
+        sk = DDSketch(relative_accuracy=ALPHA)
+        keys = [sk._mapping.key(x) for x in xs.tolist()]
+        exact: dict[int, Fraction] = {}
+        ff = Fraction(f)
+        for k in keys:
+            for b in exact:
+                exact[b] *= ff
+            exact[k] = exact.get(k, Fraction(0)) + 1
+        u = 2.0**-53
+        n = len(xs)
+        bound = 2 * n * u / (1 - 2 * n * u)
+        worst = 0.0
+        for k, w in buckets:
+            rel = abs(float((Fraction(w) - exact[k]) / exact[k]))
+            worst = max(worst, rel)
+            assert rel <= bound, (k, rel, bound)
+        assert worst > 0.0
+
+    @pytest.mark.parametrize("dist", DISTS)
+    def test_reads_are_numpys_on_the_decayed_weights_within_alpha(self, dist: str) -> None:
+        xs = _stream(dist, 5, 6_001)
+        df = pl.DataFrame({"y": xs})
+        levels = [0.05, 0.25, 0.75, 0.95]
+        s = ddsketch_spec("d", targets=["y"], quantiles=levels, half_life=500.0)
+        out = _out(s, df)
+        f = 0.5 ** (1.0 / 500.0)
+        hist = xs[:-1]
+        ws = f ** np.arange(len(hist) - 1, -1, -1, dtype=float)
+        for p in levels:
+            eq, ees = _exact(hist, ws, p)
+            q, es = out[f"q{p}_y"][-1], out[f"es{p}_y"][-1]
+            assert abs(q - eq) <= ALPHA * abs(eq) * (1 + 1e-9), (p, q, eq)
+            assert abs(es - ees) <= ALPHA * _tail_magnitude(hist, p) * 1.5, (p, es, ees)

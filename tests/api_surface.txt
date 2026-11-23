@@ -591,23 +591,24 @@
     stream.robust_se_half_life = "inf"
     stream.specification_half_life = "inf"
     stream.tails_half_life = "inf"
-  ddsketch(quantiles=[0.05, 0.25, 0.95], targets=['y']):
+  ddsketch(half_life=50.0, quantiles=[0.05, 0.25, 0.95], targets=['y']):
     model.alpha = 0.00781234105816
     model.closed = "right"
+    model.decay.Halflife = 50.0
     model.levels = [0.05, 0.25, 0.95]
     model.max_state_bytes = null
     model.n_targets = 1
     model.window_clock = null
     model.window_rows = null
-    stream.breaks_half_life = "inf"
-    stream.calibration_half_life = "inf"
-    stream.feature_health_half_life = "inf"
-    stream.influence_half_life = "inf"
+    stream.breaks_half_life = 50.0
+    stream.calibration_half_life = 200.0
+    stream.feature_health_half_life = 50.0
+    stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
     stream.min_weight = [0.0]
-    stream.robust_se_half_life = "inf"
-    stream.specification_half_life = "inf"
-    stream.tails_half_life = "inf"
+    stream.robust_se_half_life = 50.0
+    stream.specification_half_life = 50.0
+    stream.tails_half_life = 50.0
   deco(features=['x0', 'x1'], half_life=50.0):
     model.alpha = null
     model.beta = null

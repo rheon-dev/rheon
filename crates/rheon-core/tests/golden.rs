@@ -983,6 +983,7 @@ fn ddsketch_golden() {
             window_rows: rows,
             window_clock: clock,
             closed: WindowClosed::Right,
+            decay: Decay::Halflife(f64::INFINITY),
             max_state_bytes: None,
         })
         .unwrap();
@@ -996,6 +997,35 @@ fn ddsketch_golden() {
         }
     }
     check_bits("ddsketch", &got, GOLDEN_DDSKETCH);
+}
+
+/// `ddsketch`'s decayed form, a half-life of 20 rows: the factor is the
+/// platform's `exp2`, so it is held to the golden files' tolerance, not to
+/// the bit.
+#[test]
+fn ddsketch_decayed_golden() {
+    let mut m = DdSketchModel::new(DdSketchModelCfg {
+        n_targets: 1,
+        alpha: 0.01,
+        levels: vec![0.05, 0.25, 0.95],
+        window_rows: None,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        decay: Decay::Halflife(20.0),
+        max_state_bytes: None,
+    })
+    .unwrap();
+    let stream = stream();
+    let mut got = Vec::new();
+    for i in 0..300 {
+        let (_, y, d, w) = stream[i % 60];
+        let step = m.step(&[], &y, d, w);
+        if [150, 170, 299].contains(&i) {
+            got.extend(&step.pred);
+            got.push(step.n_eff);
+        }
+    }
+    check("ddsketch_decayed", &got, GOLDEN_DDSKETCH_DECAYED);
 }
 
 /// The free GARCH(1,1).
@@ -2444,4 +2474,28 @@ const GOLDEN_DDSKETCH: &[f64] = &[
     -1.6626039126757866,
     -1.136873377715784,
     2.2829017763508332,
+];
+
+const GOLDEN_DDSKETCH_DECAYED: &[f64] = &[
+    -1.3099107407241846,
+    -0.7633344539546297,
+    1.6652362387784885,
+    -1.5388589569648967,
+    -1.0710360328115065,
+    2.315423616777208,
+    26.867539807603332,
+    -1.7331981299642243,
+    -0.7334027039711133,
+    1.7331981299642243,
+    -1.7331981299642243,
+    -1.2098232667812512,
+    2.260432223073342,
+    16.92073916656056,
+    -1.6322612637531722,
+    -0.600455344842521,
+    1.4476800818050848,
+    -1.7104392927357428,
+    -1.1778803166775635,
+    1.988277768204018,
+    20.212303545600623,
 ];

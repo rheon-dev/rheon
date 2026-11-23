@@ -9,6 +9,7 @@ fn cfg(n_targets: usize, levels: &[f64]) -> DdSketchModelCfg {
         window_rows: None,
         window_clock: None,
         closed: WindowClosed::Right,
+        decay: Decay::Halflife(f64::INFINITY),
         max_state_bytes: None,
     }
 }
@@ -301,20 +302,136 @@ fn the_settings_are_checked() {
     assert!(at(0).is_err());
 }
 
-/// The refusal of a decay names the field and the windowed form; none
-/// given, none refused.
-#[test]
-fn a_decay_is_refused_naming_the_windowed_ddsketch() {
-    assert_eq!(DdSketchModel::check_no_decay(None), Ok(()));
-    for field in ["half_life", "lam"] {
-        let err = DdSketchModel::check_no_decay(Some(field)).unwrap_err();
-        assert!(err.contains(field), "{err}");
-        assert!(err.contains("windowed DDSketch"), "{err}");
-        assert!(
-            err.contains("window_rows") && err.contains("window_size"),
-            "{err}"
-        );
+fn decayed(half_life: f64) -> DdSketchModelCfg {
+    DdSketchModelCfg {
+        decay: Decay::Halflife(half_life),
+        ..cfg(1, &[0.1, 0.4, 0.9])
     }
+}
+
+/// The decayed form's weights keep the decaying-sum recursion every model
+/// keeps (hard rule 8): `n_eff` is the weight before the row's update and
+/// its own decay, `W <- f W + w`, to the bit, rows of weight 0 handed
+/// directly decaying it and learning nothing.
+#[test]
+fn the_decayed_weight_is_the_decaying_sum() {
+    let mut m = DdSketchModel::new(decayed(20.0)).unwrap();
+    let f = Decay::Halflife(20.0).factor(1.5);
+    let mut want = 0.0f64;
+    let mut s = 4u64;
+    for i in 0..500 {
+        let w = if i % 7 == 0 { 0.0 } else { 0.5 + lcg(&mut s) };
+        let step = m.step(&[], &[Some(lcg(&mut s))], 1.5, w);
+        assert_eq!(step.n_eff.to_bits(), want.to_bits(), "row {i}");
+        want = f * want + w;
+    }
+    assert_eq!(m.n_eff().to_bits(), want.to_bits());
+}
+
+/// A bucket's decayed weight against its exact decayed sum, worked in
+/// double-double arithmetic from the same factor: within the stated bound,
+/// `2 k u / (1 - 2 k u)` for `k` rows, and the reads pick the buckets the
+/// exact weights pick.
+#[test]
+fn a_decayed_bucket_is_its_exact_sum_within_the_rounding_bound() {
+    let h = 50.0;
+    let mut m = DdSketchModel::new(decayed(h)).unwrap();
+    let f = Decay::Halflife(h).factor(1.0);
+    let map = m.mapping().clone();
+    let mut s = 8u64;
+    let n = 3_000usize;
+    let mut rows = Vec::new();
+    for _ in 0..n {
+        let (x, w) = (0.5 + 3.0 * lcg(&mut s), 1.0 + lcg(&mut s));
+        m.step(&[], &[Some(x)], 1.0, w);
+        rows.push((x, w));
+    }
+    // Double-double: (hi, lo) with the error-free product and sum.
+    let two_prod = |a: f64, b: f64| {
+        let p = a * b;
+        (p, a.mul_add(b, -p))
+    };
+    let two_sum = |a: f64, b: f64| {
+        let s = a + b;
+        let bb = s - a;
+        (s, (a - (s - bb)) + (b - bb))
+    };
+    let mut exact: std::collections::BTreeMap<i32, (f64, f64)> = Default::default();
+    for &(x, w) in &rows {
+        for v in exact.values_mut() {
+            let (p, e) = two_prod(v.0, f);
+            let (hi, lo) = two_sum(p, e + v.1 * f);
+            *v = (hi, lo);
+        }
+        let Slot::Pos(k) = Slot::of(&map, x) else {
+            unreachable!()
+        };
+        let v = exact.entry(k).or_insert((0.0, 0.0));
+        let (hi, lo) = two_sum(v.0, w);
+        *v = (hi, lo + v.1);
+    }
+    let u = f64::EPSILON / 2.0;
+    let bound = 2.0 * n as f64 * u / (1.0 - 2.0 * n as f64 * u);
+    let mut worst = 0.0f64;
+    for (k, w) in m.sketch(0).positive().buckets() {
+        let (hi, lo) = exact[&k];
+        let rel = ((w - hi) - lo).abs() / hi;
+        worst = worst.max(rel);
+        assert!(rel <= bound, "bucket {k}: {rel:e} past {bound:e}");
+    }
+    assert!(worst > 0.0, "a decayed sum rounds somewhere");
+}
+
+/// A decay with a window is refused, both ways round, and a half-life of 0
+/// or a lam past 1 by the decay's own check; `inf` and lam 1 are no decay
+/// and sit beside a window.
+#[test]
+fn a_decay_and_a_window_are_refused_together() {
+    let ok = |c: DdSketchModelCfg| DdSketchModel::new(c).map(|_| ());
+    assert!(ok(decayed(10.0)).is_ok());
+    let both = DdSketchModelCfg {
+        window_rows: Some(5),
+        ..decayed(10.0)
+    };
+    assert!(ok(both).unwrap_err().contains("not both"));
+    let clock = DdSketchModelCfg {
+        window_clock: Some(5.0),
+        decay: Decay::Lam(0.9),
+        ..cfg(1, &[0.4])
+    };
+    assert!(ok(clock).unwrap_err().contains("not both"));
+    for decay in [Decay::Halflife(f64::INFINITY), Decay::Lam(1.0)] {
+        let c = DdSketchModelCfg {
+            window_rows: Some(5),
+            decay,
+            ..cfg(1, &[0.4])
+        };
+        assert!(ok(c).is_ok(), "{decay:?}");
+    }
+    assert!(
+        ok(decayed(0.0))
+            .unwrap_err()
+            .contains("half_life must be above 0")
+    );
+    let lam = DdSketchModelCfg {
+        decay: Decay::Lam(1.5),
+        ..cfg(1, &[0.4])
+    };
+    assert!(ok(lam).unwrap_err().contains("lam must be"));
+}
+
+/// Under a short half-life a bucket left behind underflows to 0 and is
+/// removed: the state holds the buckets of recent rows alone, and a saved
+/// state of it loads.
+#[test]
+fn a_bucket_that_decays_to_nothing_is_removed() {
+    let mut m = DdSketchModel::new(decayed(0.5)).unwrap();
+    m.step(&[], &[Some(1e6)], 1.0, 1.0);
+    for _ in 0..3_000 {
+        m.step(&[], &[Some(2.0)], 1.0, 1.0);
+    }
+    assert_eq!(m.sketch(0).buckets_len(), 1);
+    assert!(DdSketchModel::restore(&m.state()).is_ok());
 }
 
 /// The buckets the data spans are checked as the rows go in: the first row

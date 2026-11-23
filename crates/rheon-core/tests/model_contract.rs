@@ -6432,6 +6432,7 @@ fn ddsketch_cfg() -> DdSketchModelCfg {
         window_rows: None,
         window_clock: None,
         closed: WindowClosed::Right,
+        decay: Decay::Halflife(f64::INFINITY),
         max_state_bytes: None,
     }
 }
@@ -6453,6 +6454,24 @@ fn ddsketch() {
 #[test]
 fn ddsketch_predict_is_the_step() {
     predict_is_the_step_without_the_step(|| DdSketchModel::new(ddsketch_cfg()).unwrap(), 2, false);
+}
+
+/// The decayed form keeps the step's parity: `predict` reads what the step
+/// would, before the row's decay.
+#[test]
+fn ddsketch_decayed_predict_is_the_step() {
+    predict_is_the_step_without_the_step(
+        || {
+            DdSketchModel::new(DdSketchModelCfg {
+                decay: decay(),
+                levels: vec![0.25, 0.75],
+                ..ddsketch_cfg()
+            })
+            .unwrap()
+        },
+        2,
+        false,
+    );
 }
 
 /// The windowed forms keep the step's parity too: a row window and a

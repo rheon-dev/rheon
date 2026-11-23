@@ -2636,6 +2636,20 @@ pub fn all() -> Vec<Case> {
             Targets::Linear(2),
             60
         ),
+        // The decayed form: the decay in the cfg, the weights decayed.
+        case!(
+            "ddsketch_decayed",
+            "DdSketch",
+            DdSketchModel,
+            DdSketchModel::new(DdSketchModelCfg {
+                decay: Decay::Halflife(15.0),
+                ..ddsketch_cfg(None, None)
+            })
+            .unwrap(),
+            0,
+            Targets::Linear(2),
+            60
+        ),
         // A clock window: the ring's stamps and the clock kept for them.
         case!(
             "ddsketch_clock",
@@ -2659,6 +2673,7 @@ fn ddsketch_cfg(window_rows: Option<usize>, window_clock: Option<f64>) -> DdSket
         window_rows,
         window_clock,
         closed: WindowClosed::Right,
+        decay: Decay::Halflife(f64::INFINITY),
         max_state_bytes: None,
     }
 }

@@ -1467,7 +1467,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 125] = [
+    const FORMS: [(&str, &[&str]); 126] = [
         // Schema 70 (rule 5's twenty-second exception): the stabilized
         // prior's `ŝ` and `V` under `full` in each form and under `diag`,
         // the factor form's `f`, and a spec's own `prior_rows`.
@@ -1659,6 +1659,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
             &["model", "DdSketch", "sketches", "0", "pos", "n"],
         ),
         ("ddsketch_clock", &["model", "DdSketch", "ring", "stamp"]),
+        ("ddsketch_decayed", &["model", "DdSketch", "cfg", "decay"]),
         (
             "ddsketch_clock",
             &["model", "DdSketch", "cfg", "window_clock"],
@@ -3029,7 +3030,9 @@ fn first_difference(got: &rmpv::Value, want: &rmpv::Value, bound: f64, at: &str)
 /// start fitted on another platform's last bits once took another path, 28%
 /// away.
 fn differs_from_another_writer(case: &Case, f: &Fixture) -> Option<String> {
-    let tol = if matches!(f.variant, "Garch" | "TDigest" | "DdSketch") {
+    // `ddsketch`'s decayed form multiplies by the platform's `exp2`.
+    let exact_ddsketch = f.variant == "DdSketch" && f.name != "ddsketch_decayed";
+    let tol = if matches!(f.variant, "Garch" | "TDigest") || exact_ddsketch {
         0.0
     } else {
         TOL

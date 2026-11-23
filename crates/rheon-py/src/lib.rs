@@ -1451,6 +1451,40 @@ fn ddsketch_buckets(values: Vec<f64>, alpha: f64) -> PyResult<(Buckets, Buckets,
     ))
 }
 
+/// The decayed DDSketch's positive buckets after `values` (each of weight
+/// 1, a clock step of 1 apart) at `alpha` and `half_life`, and the factor
+/// each step multiplied by: the model's own decayed form, which the
+/// rounding-bound test holds against exact sums.
+#[pyfunction]
+fn ddsketch_decayed_buckets(
+    values: Vec<f64>,
+    alpha: f64,
+    half_life: f64,
+) -> PyResult<(Buckets, f64)> {
+    use rheon_polars::rheon_core::{
+        DdSketchModel, DdSketchModelCfg, Decay, OnlineModel, WindowClosed,
+    };
+    let decay = Decay::Halflife(half_life);
+    let mut m = DdSketchModel::new(DdSketchModelCfg {
+        n_targets: 1,
+        alpha,
+        levels: vec![0.25],
+        window_rows: None,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        decay,
+        max_state_bytes: Some(1 << 26),
+    })
+    .map_err(PyValueError::new_err)?;
+    for v in values {
+        m.step(&[], &[Some(v)], 1.0, 1.0);
+    }
+    Ok((
+        m.sketch(0).positive().buckets().collect(),
+        decay.factor(1.0),
+    ))
+}
+
 /// The representative of each of `keys` at `alpha`.
 #[pyfunction]
 fn ddsketch_values(keys: Vec<i32>, alpha: f64) -> PyResult<Vec<f64>> {
@@ -1686,6 +1720,7 @@ fn _rheon(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tdigest_centroids, m)?)?;
     m.add_function(wrap_pyfunction!(ddsketch_buckets, m)?)?;
     m.add_function(wrap_pyfunction!(ddsketch_values, m)?)?;
+    m.add_function(wrap_pyfunction!(ddsketch_decayed_buckets, m)?)?;
     m.add_function(wrap_pyfunction!(ddsketch_reads, m)?)?;
     m.add_function(wrap_pyfunction!(format_duration, m)?)?;
     m.add_function(wrap_pyfunction!(spec_clock_fields, m)?)?;

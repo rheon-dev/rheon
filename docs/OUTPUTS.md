@@ -421,7 +421,7 @@ The fields of `po.spec.tdigest("m", targets=["y"], quantiles=[0.05, 0.25, 0.95])
 
 ## `ddsketch`
 
-The fields of `po.spec.ddsketch("m", targets=["y"], quantiles=[0.05, 0.25, 0.95])`:
+The fields of `po.spec.ddsketch("m", targets=["y"], half_life=50.0, quantiles=[0.05, 0.25, 0.95])`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|

@@ -1517,8 +1517,9 @@ pub enum ModelKind {
     /// (`rheon_core::DdSketchModel`), relative to the value within `alpha`:
     /// one sketch a target per group, read at each of `quantiles` before the
     /// row is added. Per target and level, `q<level>_<target>` and
-    /// `es<level>_<target>`; no `pred` or `coef`. No features and no
-    /// decay; `window_rows` or `window_size` keeps a window's rows alone.
+    /// `es<level>_<target>`; no `pred` or `coef`. No features; a
+    /// `half_life` or `lam` decays the buckets (rounded), or `window_rows`
+    /// or `window_size` keeps a window's rows alone (exact), not both.
     #[serde(rename = "ddsketch")]
     DdSketch {
         /// The relative accuracy, at least 1e-6 and below 1; absent is
@@ -2702,8 +2703,7 @@ impl Spec {
             | ModelKind::Bocpd { .. }
             | ModelKind::Audit { .. }
             | ModelKind::Garch { .. }
-            | ModelKind::TDigest { .. }
-            | ModelKind::DdSketch { .. } => true,
+            | ModelKind::TDigest { .. } => true,
             ModelKind::CorrChange { scalar, .. } => !scalar.unwrap_or(false),
             _ => false,
         };
@@ -2729,6 +2729,11 @@ impl Spec {
                 | ModelKind::CorrChange { .. }
                 | ModelKind::Bocpd { .. }
                 | ModelKind::Audit { .. } => {
+                    Ok(vec![(String::new(), Decay::Halflife(f64::INFINITY))])
+                }
+                // A sketch with no half-life never forgets, or forgets by
+                // its window: no decay is the plain form.
+                ModelKind::DdSketch { .. } => {
                     Ok(vec![(String::new(), Decay::Halflife(f64::INFINITY))])
                 }
                 // A window with no half-life is the common case of a flat

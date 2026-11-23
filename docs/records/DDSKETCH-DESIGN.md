@@ -37,12 +37,21 @@ no libm result is in the state (only the keys and weights are).
   keys in the state: `window_rows` (the last rows of positive weight) or
   `window_size` (the rows of the last span of the clock, under `closed`),
   the library's two spellings of a window (as `expectile`'s).
-- A decay is refused naming the windowed DDSketch. A decayed sketch scales
-  every bucket at every row, so its weights are rounded on every row and no
-  row can be taken out of them exactly; the window takes each row out of
-  its bucket exactly (a count of rows a bucket zeroes a bucket whose rows
-  have all left). `ewm_quantile` remains the decayed DDSketch as a window
-  operator.
+- A decay: refused in the first build, naming the windowed form (a decayed
+  sketch scales every bucket at every row, so its weights are rounded and no
+  row can be taken out exactly). The coordinator's answer to parts 6-7:
+  build the decayed form as a rounded form, the rounding stated and checked
+  against a reference; the windowed ring stays exact. A decay beside a
+  window is refused. Each row, after its read (`n_eff` before its own decay,
+  hard rule 8), multiplies every bucket, the zero count, `n_eff` and `W_t`
+  by the factor (`S_t` by its square), then adds the row. A bucket formed
+  `k` rows ago holds its exact decayed sum within a relative
+  `2 k u / (1 - 2 k u)`, `u = 2^-53` (one rounding a multiply, one an add);
+  `tests/test_ddsketch.py` holds every bucket of 2,000 rows to the exact sum
+  in `fractions` from the same factor within it, and the Rust test to a
+  double-double sum. A bucket that underflows to 0 is removed. The factor is
+  the platform's `exp2`/`powf`, so the decayed fixture is held to the
+  golden tolerance across platforms, not to the bit.
 - The Kish withholding rule of `tdigest` (`level_identified`), with its
   reason `level_beyond_sample`.
 - State bounded and checked against `max_state_bytes`: the fixed part

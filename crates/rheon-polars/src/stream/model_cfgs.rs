@@ -224,10 +224,13 @@ pub fn tdigest_cfg(spec: &Spec) -> Result<rheon_core::TDigestModelCfg, String> {
     Ok(cfg)
 }
 
-/// A `ddsketch` spec's [`rheon_core::DdSketchModelCfg`]: one sketch a
-/// target, at `alpha = tanh(1/128)` unless the spec gives one, its window
-/// in rows or in clock units. Every value is the model's own to check.
-pub fn ddsketch_cfg(spec: &Spec) -> Result<rheon_core::DdSketchModelCfg, String> {
+/// A `ddsketch` spec's [`rheon_core::DdSketchModelCfg`] under `decay`: one
+/// sketch a target, at `alpha = tanh(1/128)` unless the spec gives one, its
+/// window in rows or in clock units. Every value is the model's own to check.
+pub fn ddsketch_cfg(
+    spec: &Spec,
+    decay: rheon_core::Decay,
+) -> Result<rheon_core::DdSketchModelCfg, String> {
     let ModelKind::DdSketch {
         alpha,
         quantiles,
@@ -246,6 +249,7 @@ pub fn ddsketch_cfg(spec: &Spec) -> Result<rheon_core::DdSketchModelCfg, String>
         window_rows: *window_rows,
         window_clock: window_size.as_ref().map(Span::value),
         closed: closed.edge(),
+        decay,
         max_state_bytes: *max_state_bytes,
     };
     cfg.validate()?;

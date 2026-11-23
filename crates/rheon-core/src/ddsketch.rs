@@ -315,6 +315,27 @@ impl Store {
             .map(|(&r, &w)| (r, w))
     }
 
+    /// Every bucket's weight times `f` in `(0, 1)`, one rounding each; a
+    /// bucket whose weight underflows to 0 is removed (a store without a
+    /// window, which holds no row counts).
+    fn scale(&mut self, f: f64) {
+        for w in &mut self.w {
+            *w *= f;
+        }
+        if self.w.contains(&0.0) {
+            let mut i = 0;
+            while i < self.w.len() {
+                if self.w[i] == 0.0 {
+                    self.keys.remove(i);
+                    self.w.remove(i);
+                    self.reps.remove(i);
+                } else {
+                    i += 1;
+                }
+            }
+        }
+    }
+
     /// Work each bucket's representative out again, as after a load.
     fn refill(&mut self, map: &Mapping) {
         self.reps = self.keys.iter().map(|&k| map.value(k)).collect();
@@ -481,6 +502,15 @@ impl DdSketch {
         let zero = (self.zero_w > 0.0).then_some((0.0, self.zero_w));
         let neg = self.neg.reps_and_weights().map(|(r, w)| (-r, w));
         self.pos.reps_and_weights().rev().chain(zero).chain(neg)
+    }
+
+    /// Decay the sketch by `f` in `(0, 1)`: every bucket's weight and the
+    /// zero count times `f`, each rounded once (the decayed form; a windowed
+    /// sketch takes no decay).
+    pub fn decay(&mut self, f: f64) {
+        self.pos.scale(f);
+        self.neg.scale(f);
+        self.zero_w *= f;
     }
 
     /// Work every bucket's representative out again from `map`: after a

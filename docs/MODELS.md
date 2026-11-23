@@ -3166,19 +3166,18 @@ quantile.
 
 Use it where a reading within 1% of the true quantile is what is asked,
 whatever the value's size: latencies, sizes, prices, losses. Each target has
-its own sketch in each group. Without a window it never forgets; with
-`window_rows` (the last rows of positive weight) or `window_size` (the rows
-of the last span of the clock) it reads the window's rows alone. For values
-near 0 or of both signs whose rank matters, use `tdigest`.
+its own sketch in each group. It forgets by a window, exactly: `window_rows`
+(the last rows of positive weight) or `window_size` (the rows of the last
+span of the clock). Or it forgets by a decay, `half_life` or `lam`, rounded;
+or it never forgets. For values near 0 or of both signs whose rank matters,
+use `tdigest`.
 
 Its parameters, their defaults and what each refuses are in its
 [docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ddsketch),
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md#ddsketch). The
 parameters every spec takes are in [What every spec
-takes](#what-every-spec-takes), apart from `features`, `half_life` and
-`lam`, which it refuses. A decay would round every bucket's weight on every
-row, and no row could then be taken out exactly; the window is the form that
-forgets. A row's weight is its mass in the sketch, and scaling every weight
+takes](#what-every-spec-takes), apart from `features`, which it refuses,
+and `half_life` and `lam`, which it refuses beside a window. A row's weight is its mass in the sketch, and scaling every weight
 changes nothing but `weight_sum`. A row of weight 0 counts in no clock and
 is in no window.
 
@@ -3214,6 +3213,17 @@ window's rows alone build. A clock window's rows leave at the first row at
 or after the one they age out on, before that row's read; `closed` decides
 whether a row exactly `window_size` old stays. Under a window, `weight_sum`
 is the weight of the rows the row reads.
+
+**A decay is rounded.** Under `half_life` or `lam` each row, after its read,
+multiplies every bucket's weight, the zero count and the weights by its
+clock step's factor `f` before it adds itself, each multiply and add rounded
+once. A bucket formed `k` rows ago then holds its exact decayed sum within a
+relative `2ku/(1 − 2ku)`, `u = 2⁻⁵³`: about `2.2e-12` after 10,000 rows. The
+tests hold each bucket to its exact sum in fractions, from the same factor,
+within that bound. No row can be taken out of such a weight exactly, which is
+why the window is the form that drops one. A bucket that decays to 0 is
+removed. The factor is the platform's, so a decayed sketch agrees across
+platforms within its last bits.
 
 **A level is withheld until its rows identify it**, by `tdigest`'s rule:
 null while `p (n_t + 1) < 1` or `(1 − p)(n_t + 1) < 1`, `n_t` Kish's
