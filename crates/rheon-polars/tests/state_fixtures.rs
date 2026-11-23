@@ -562,7 +562,8 @@ fn windows_profile_units_config() -> WindowsConfig {
     serde_json::from_str(
         r#"{"formulas": [
                {"name": "level", "tree": ["ewm_profile", ["col", "mid"], {"period": 6.0, "buckets": 3, "half_life": 12.0, "weight": ["col", "w"], "stat": "std"}]},
-               {"name": "recent", "tree": ["ewm_profile", ["col", "mid"], {"period": 6.0, "buckets": 3, "half_life": 12.0, "window_size": 20.0, "closed": "both", "min_samples": 2}]}
+               {"name": "recent", "tree": ["ewm_profile", ["col", "mid"], {"period": 6.0, "buckets": 3, "half_life": 12.0, "window_size": 20.0, "closed": "both", "min_samples": 2}]},
+               {"name": "shape", "tree": ["ewm_profile", ["col", "mid"], {"period": 6.0, "harmonics": 1, "half_life": 12.0, "window_size": 4.0, "stat": "var", "weight": ["col", "w"]}]}
              ],
              "clock": "t", "gap_cap": 50.0, "group": "g"}"#,
     )
@@ -3511,6 +3512,25 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
             "with_windows_profile_units",
             "a window's front moments",
             |p, _| p.contains(".win.") && p.ends_with(".suffix.0.m2"),
+        ),
+        (
+            "with_windows_profile_units",
+            "a harmonic window's front Grams",
+            |p, v| {
+                p.contains(".harm.suffix.")
+                    && p.contains(".g.")
+                    && v.as_f64().is_some_and(|f| f != 0.0)
+            },
+        ),
+        (
+            "with_windows_profile_units",
+            "a harmonic profile's phase",
+            |p, v| p.ends_with(".phi") && v.as_f64().is_some_and(|f| (0.0..1.0).contains(&f)),
+        ),
+        (
+            "with_windows_profile_units",
+            "a profile's harmonics",
+            |p, v| p.ends_with(".harmonics") && v.as_u64() == Some(1),
         ),
         (
             "with_windows_profile_units",

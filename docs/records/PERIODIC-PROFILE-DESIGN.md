@@ -215,6 +215,21 @@ per-bucket quantile is the one form whose default could pass the default
 cap. The options are a coarser sketch for a profile (Q10), or a cap the
 user raises.
 
+**As built: the harmonic window's bytes** (the coordinator's ruling of
+2026-11-23). A harmonic window keeps its rows in two stacks of Grams, as a
+bucket keeps its rows, so a row leaves exactly, with no downdate. Each row
+in the window is counted at `40 + 8 (p(p+1)/2 + 2p + 2)` bytes, `p = 2K +
+1`: its clock, time, phase, value and weight, and the Gram, the two
+moments and the count a front row keeps (256 bytes at `K = 2`, 152 at `K
+= 1`). The fit itself is `8 (p(p+1)/2 + 2p + 2)` bytes. Both count into the
+group's total under `max_state_bytes`, with a warning at half and a refusal
+at the cap that names the row and the bytes, as every other form's state
+does. The harmonic form is withheld where its rows are fewer than
+`min_samples`, or where its Gram is not positive definite as it stands (a
+Cholesky pivot at or below `1e-12` of the largest diagonal entry, no
+jitter); the fit's weight at `φ`, `1 / (zᵀ G⁻¹ z)`, is held to its closed
+form on evenly spaced phases.
+
 ## Oracles
 
 - **The phase.**

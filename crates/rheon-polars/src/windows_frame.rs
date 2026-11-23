@@ -606,15 +606,28 @@ fn profile_def(
             .unwrap_or(crate::windows::PROFILE_STATE_BYTES),
         window: op.window_size.as_ref().map(phase),
         quantile: op.quantile,
+        harmonics: params.harmonics,
     };
     if def.bytes() > def.cap {
+        let (what, fewer) = if def.harmonics > 0 {
+            (
+                format!("its fit of {} harmonics", def.harmonics),
+                "harmonics",
+            )
+        } else {
+            (
+                format!(
+                    "{} buckets of {} bytes each",
+                    def.buckets,
+                    crate::windows::PROFILE_BUCKET_BYTES
+                ),
+                "buckets",
+            )
+        };
         return Err(format!(
-            "{WHO}: {f}: {name} holds {} bytes a group, {} buckets of {} bytes each, past its \
-             max_state_bytes of {}. Raise max_state_bytes to at least {}, or take fewer \
-             buckets.",
+            "{WHO}: {f}: {name} holds {} bytes a group, {what}, past its max_state_bytes of {}. \
+             Raise max_state_bytes to at least {}, or take fewer {fewer}.",
             def.bytes(),
-            def.buckets,
-            crate::windows::PROFILE_BUCKET_BYTES,
             def.cap,
             def.bytes()
         )

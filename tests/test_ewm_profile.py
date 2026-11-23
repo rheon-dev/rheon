@@ -602,3 +602,185 @@ def test_a_window_past_half_its_cap_warns_once_and_past_it_is_refused():
     ):
         run(rows(5), m=rp.ewm_profile("x", **kw), _kw={"gap_cap": 1e9})
     run(rows(20, step=20.0), m=rp.ewm_profile("x", **kw), _kw={"gap_cap": 1e9})
+
+
+# ---- the harmonic form ---------------------------------------------------------
+
+
+def statsmodels_profile(
+    df: pl.DataFrame,
+    *,
+    order: int,
+    half_life: float,
+    closed: str,
+    min_samples: int,
+    window_ns: int | None = None,
+) -> tuple[list[float | None], list[float | None]]:
+    """Per row: statsmodels' weighted least squares of each group's earlier
+    rows on ``CalendarFourier``'s daily basis, read at the row's own time of
+    day: the mean profile, and the fit of ``x²`` less its square."""
+    import pandas as pd
+    import statsmodels.api as sm
+    from statsmodels.tsa.deterministic import CalendarFourier
+
+    fourier = CalendarFourier(freq="D", order=order)
+    t = df["t"].to_list()
+    terms = fourier.in_sample(pd.DatetimeIndex(t)).to_numpy()
+    design = np.column_stack([np.ones(len(t)), terms])
+    x, w, g = df["x"].to_numpy(), df["w"].to_numpy(), df["g"].to_list()
+    ns = df["t"].cast(pl.Int64).to_numpy() * 1000  # microseconds to ns
+    mean: list[float | None] = []
+    var: list[float | None] = []
+    near = closed in ("right", "both")
+    for i in range(df.height):
+        age = ns[i] - ns
+        keep = (np.array(g) == g[i]) & ~np.isnan(x) & (w > 0)
+        keep &= age >= 0 if near else age > 0
+        if window_ns is not None:
+            keep &= age <= window_ns if closed in ("left", "both") else age < window_ns
+        if keep.sum() < min_samples:
+            mean.append(None)
+            var.append(None)
+            continue
+        wd = w[keep] * 2.0 ** (-age[keep] / 1e9 / half_life)
+        z = design[keep]
+        m = sm.WLS(x[keep], z, weights=wd).fit().predict(design[i : i + 1])[0]
+        s = sm.WLS(x[keep] ** 2, z, weights=wd).fit().predict(design[i : i + 1])[0]
+        mean.append(float(m))
+        v = float(s - m * m)
+        var.append(v if v >= 0 else None)
+    return mean, var
+
+
+@pytest.mark.parametrize(("closed", "window"), [("right", None), ("left", None), ("both", 4)])
+def test_the_harmonic_profile_is_statsmodels_wls_on_a_fourier_basis(
+    closed: str, window: int | None
+):
+    """The harmonic form, mean and variance, against statsmodels' ``WLS`` on
+    ``CalendarFourier``'s basis of the time of day, weighted by each row's
+    weight and decay, inside the window where there is one."""
+    df = stream(10, seed=31)
+    kw: dict[str, Any] = {
+        "period": "1d",
+        "harmonics": 2,
+        "half_life": "3d",
+        "weight": "w",
+        "closed": closed,
+        "min_samples": 12,
+    }
+    if window is not None:
+        kw["window_size"] = f"{window}d"
+    out = run(df, m=rp.ewm_profile("x", **kw), v=rp.ewm_profile("x", stat="var", **kw))
+    mean, var = statsmodels_profile(
+        df,
+        order=2,
+        half_life=3 * 86_400.0,
+        closed=closed,
+        min_samples=12,
+        window_ns=None if window is None else window * DAY,
+    )
+    close(out["m"], pl.Series(mean, dtype=pl.Float64), tol=1e-8)
+    close(out["v"], pl.Series(var, dtype=pl.Float64), tol=1e-7)
+
+
+def test_the_harmonic_form_is_withheld_where_its_rows_do_not_pin_the_curve():
+    """With two harmonics a curve has five terms: four rows at four phases
+    leave it free, and it is null; a fifth phase fixes it."""
+    hours = [0, 5, 10, 15, 20]
+    df = pl.DataFrame(
+        {
+            "t": [datetime(2026, 1, 5, h) for h in hours],
+            "g": ["a"] * 5,
+            "x": [1.0, 2.0, 0.5, 3.0, 1.5],
+        }
+    )
+    out = run(df, m=rp.ewm_profile("x", period="1d", harmonics=2, half_life=float("inf")))
+    assert out["m"].to_list()[:4] == [None] * 4
+    # Five points, five terms: the curve passes through each.
+    assert abs(out["m"][4] - 1.5) < 1e-9
+
+
+def harmonic() -> dict[str, pl.Expr]:
+    kw = {"period": "1d", "harmonics": 2, "half_life": "2d", "weight": "w"}
+    return {
+        "m": rp.ewm_profile("x", **kw),
+        "s": rp.ewm_profile("x", stat="std", closed="left", window_size="3d", **kw),
+    }
+
+
+@pytest.mark.parametrize("rows", [1, 3, 50, 10_000])
+def test_the_harmonic_form_changes_nothing_by_chunking(rows: int):
+    df = stream(8, seed=32, zone="America/New_York")
+    kw = {"clock": "t", "gap_cap": "30d", "group": "g"}
+    one = rp.stream.with_windows(df.lazy(), **harmonic(), **kw, chunk_size=100_000).collect()
+    out = rp.stream.with_windows(df.lazy(), **harmonic(), **kw, chunk_size=rows).collect()
+    assert out.equals(one)
+
+
+def test_the_harmonic_form_saves_and_loads_at_every_stamp(tmp_path: Path):
+    df = stream(4, seed=33)
+    kw = {"clock": "t", "gap_cap": "30d", "group": "g"}
+    one = rp.stream.with_windows(df, **harmonic(), **kw)
+    starts = [i for i in range(1, df.height) if df["t"][i] != df["t"][i - 1]]
+    for at in starts[::4]:
+        state = tmp_path / f"h{at}.state"
+        first = rp.stream.with_windows(df[:at], **harmonic(), **kw, save_state=state)
+        second = rp.stream.with_windows(df[at:], **harmonic(), **kw, load_state=state)
+        assert pl.concat([first, second]).equals(one), at
+
+
+def test_the_harmonic_refusals():
+    with pytest.raises(TypeError, match="give buckets or harmonics, one of them"):
+        rp.ewm_profile("x", period="1d", half_life="1d")
+    with pytest.raises(TypeError, match="both are given"):
+        rp.ewm_profile("x", period="1d", half_life="1d", buckets=24, harmonics=2)
+    with pytest.raises(ValueError, match="harmonics must be a whole number from 1 to 64"):
+        rp.ewm_profile("x", period="1d", half_life="1d", harmonics=65)
+    with pytest.raises(ValueError, match="a quantile has no one-pass fit"):
+        rp.ewm_profile("x", period="1d", half_life="1d", harmonics=2, stat="quantile", quantile=0.5)
+
+
+def test_a_harmonic_window_past_half_its_cap_warns_once_and_past_it_is_refused():
+    """One harmonic: the fit is 112 bytes and each row in the window 152,
+    so a cap of 600 holds three rows; the second takes it past half, which
+    warns once, and a fourth row inside the window is refused by row."""
+    from rheon import RheonWarning
+
+    def rows(n: int, step: float = 1.0) -> pl.DataFrame:
+        return pl.DataFrame(
+            {
+                "t": [step * i for i in range(n)],
+                "g": ["a"] * n,
+                "x": [float(i % 3) for i in range(n)],
+            }
+        )
+
+    kw: dict[str, Any] = {
+        "period": 10.0,
+        "harmonics": 1,
+        "half_life": 50.0,
+        "window_size": 10.0,
+        "max_state_bytes": 600,
+    }
+    with pytest.warns(RheonWarning, match="past half of its max_state_bytes of 600") as caught:
+        run(rows(3), m=rp.ewm_profile("x", **kw), _kw={"gap_cap": 1e9})
+    assert len([w for w in caught if issubclass(w.category, RheonWarning)]) == 1
+    with pytest.raises(
+        Exception, match=r"would hold 720 bytes for one group at row 3 .*max_state_bytes of 600"
+    ):
+        run(rows(4), m=rp.ewm_profile("x", **kw), _kw={"gap_cap": 1e9})
+    run(rows(20, step=20.0), m=rp.ewm_profile("x", **kw), _kw={"gap_cap": 1e9})
+    with pytest.raises(Exception, match=r"holds 216 bytes a group, its fit of 2 harmonics"):
+        run(rows(1), m=rp.ewm_profile("x", **{**kw, "harmonics": 2, "max_state_bytes": 200}))
+
+
+def test_a_harmonic_window_bounds_the_state(tmp_path: Path):
+    sizes = []
+    for days in (6, 120):
+        df = stream(days, seed=34)
+        state = tmp_path / f"h{days}.state"
+        rp.stream.with_windows(
+            df, **harmonic(), clock="t", gap_cap="30d", group="g", save_state=state
+        )
+        sizes.append(state.stat().st_size)
+    assert sizes[1] < 2 * sizes[0], sizes

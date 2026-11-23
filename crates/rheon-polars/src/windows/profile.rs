@@ -56,6 +56,8 @@ use super::{Closed, Direction, Group, Held, KernelDef, Refusal};
 use crate::stream::usable;
 use crate::window_quantile::QSide;
 
+mod harm;
+
 /// A nanosecond day and week.
 const DAY_NS: i64 = 86_400_000_000_000;
 const WEEK_NS: i64 = 7 * DAY_NS;
@@ -144,24 +146,50 @@ pub struct ProfileDef {
     /// A quantile's level, in `(0, 1)`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quantile: Option<f64>,
+    /// The harmonic form's harmonics `K`, where `buckets` is 0: a Fourier
+    /// series of `2K + 1` terms in the phase.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub harmonics: u32,
+}
+
+fn is_zero_u32(k: &u32) -> bool {
+    *k == 0
 }
 
 impl ProfileDef {
     /// The bytes one group's state of this operator holds.
     pub fn bytes(&self) -> u64 {
-        u64::from(self.buckets) * BUCKET_BYTES
+        if self.harmonics > 0 {
+            harm::gram_bytes(self.terms())
+        } else {
+            u64::from(self.buckets) * BUCKET_BYTES
+        }
+    }
+
+    /// The harmonic form's terms, `2K + 1`.
+    fn terms(&self) -> usize {
+        2 * self.harmonics as usize + 1
     }
 
     /// Whether the buckets keep their rows or a sketch: under a window, or
     /// for a quantile.
     fn keeps_rows(&self) -> bool {
-        self.window.is_some() || self.stat == ProfileStat::Quantile
+        self.harmonics == 0 && (self.window.is_some() || self.stat == ProfileStat::Quantile)
     }
 
     /// The bytes a row in a bucket's window is counted at: its clock, time,
     /// value and weight, its share of the moments a front row keeps, and a
     /// quantile's three weights a front row keeps.
     fn row_bytes(&self) -> u64 {
+        if self.harmonics > 0 {
+            // Its clock, time, phase, value and weight, and the Gram and
+            // moments a front row keeps.
+            return if self.window.is_some() {
+                40 + harm::gram_bytes(self.terms())
+            } else {
+                0
+            };
+        }
         let q = if self.stat == ProfileStat::Quantile {
             24
         } else {
@@ -212,7 +240,8 @@ impl ProfileDef {
             PhaseSpan::Ns(_) => true,
             PhaseSpan::Units(u) => u.is_finite(),
         };
-        if self.buckets == 0
+        if (self.buckets == 0) == (self.harmonics == 0)
+            || (self.harmonics > 0 && (self.stat == ProfileStat::Quantile || self.bias))
             || !positive(self.period)
             || !same_kind
             || !offset_finite
@@ -301,6 +330,11 @@ pub(super) struct ProfState {
     /// kept row and sketch bucket).
     #[serde(default, skip_serializing_if = "is_zero")]
     bytes: u64,
+    /// The harmonic form's fit, and the phase the current stamp reads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    harm: Option<harm::Harm>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    phi: Option<f64>,
 }
 
 fn is_zero(b: &u64) -> bool {
@@ -311,7 +345,7 @@ impl ProfState {
     fn new(def: &ProfileDef) -> Self {
         let keeps = def.keeps_rows();
         let mut st = Self {
-            buckets: if keeps {
+            buckets: if keeps || def.harmonics > 0 {
                 Vec::new()
             } else {
                 vec![Bucket::default(); def.buckets as usize]
@@ -326,8 +360,13 @@ impl ProfState {
             },
             origin: None,
             bytes: 0,
+            harm: (def.harmonics > 0).then(|| harm::Harm::new(def)),
+            phi: None,
         };
         st.bytes = def.bytes() + st.win.iter().map(|b| b.bytes(def)).sum::<u64>();
+        if let Some(h) = &st.harm {
+            st.bytes += h.bytes(def);
+        }
         st
     }
 }
@@ -604,7 +643,13 @@ pub(super) fn fits(defs: &[ProfileDef], states: &[ProfState]) -> bool {
         || (states.len() == defs.len()
             && states.iter().zip(defs).all(|(s, d)| {
                 let n = d.buckets as usize;
-                let shaped = if d.keeps_rows() {
+                let shaped = if d.harmonics > 0 {
+                    s.buckets.is_empty()
+                        && s.win.is_empty()
+                        && s.harm
+                            .as_ref()
+                            .is_some_and(|h| h.fits(d) && s.bytes == d.bytes() + h.bytes(d))
+                } else if d.keeps_rows() {
                     s.buckets.is_empty()
                         && s.win.len() == n
                         && s.win.iter().all(|b| b.fits(d))
@@ -650,19 +695,25 @@ fn bucket_of_f(ph: f64, p: f64, b: u32) -> u32 {
     }
 }
 
-/// The bucket of a clock value (`None`: the row clock's `rows`).
-pub(super) fn bucket(def: &ProfileDef, clock: Option<ClockValue>, rows: i64) -> u32 {
-    let b = def.buckets;
+/// A row's phase in the period, `(phase, period)`: in integers where the
+/// clock, the period and the offset are, else in doubles.
+enum Phase {
+    Int(i128, i128),
+    Float(f64, f64),
+}
+
+/// The phase of a clock value (`None`: the row clock's `rows`).
+fn phase(def: &ProfileDef, clock: Option<ClockValue>, rows: i64) -> Phase {
     let units = |t: f64| match (def.period, def.offset) {
-        (PhaseSpan::Units(p), PhaseSpan::Units(o)) => bucket_of_f((t - o).rem_euclid(p), p, b),
-        _ => 0,
+        (PhaseSpan::Units(p), PhaseSpan::Units(o)) => Phase::Float((t - o).rem_euclid(p), p),
+        _ => Phase::Float(0.0, 1.0),
     };
     let int = |t: i64| match (def.period, def.offset) {
         (PhaseSpan::Units(p), PhaseSpan::Units(o))
             if p.fract() == 0.0 && o.fract() == 0.0 && p.abs() < 9e18 && o.abs() < 9e18 =>
         {
             let (p, o) = (p as i128, o as i128);
-            bucket_of_int((i128::from(t) - o).rem_euclid(p), p, b)
+            Phase::Int((i128::from(t) - o).rem_euclid(p), p)
         }
         _ => units(t as f64),
     };
@@ -672,7 +723,7 @@ pub(super) fn bucket(def: &ProfileDef, clock: Option<ClockValue>, rows: i64) -> 
         Some(ClockValue::F64(t)) => units(t),
         Some(ClockValue::Ns(t)) => {
             let (PhaseSpan::Ns(p), PhaseSpan::Ns(o)) = (def.period, def.offset) else {
-                return 0;
+                return Phase::Float(0.0, 1.0);
             };
             let local = match def.zone.as_deref().map(zone_of) {
                 Some(Ok(z)) => i128::from(t) + i128::from(zone_offset_ns(&z, t)),
@@ -680,8 +731,30 @@ pub(super) fn bucket(def: &ProfileDef, clock: Option<ClockValue>, rows: i64) -> 
             };
             let origin = if p % WEEK_NS == 0 { MONDAY_NS } else { 0 };
             let ph = (local - i128::from(origin) - i128::from(o)).rem_euclid(i128::from(p));
-            bucket_of_int(ph, i128::from(p), b)
+            Phase::Int(ph, i128::from(p))
         }
+    }
+}
+
+/// The bucket of a clock value (`None`: the row clock's `rows`).
+pub(super) fn bucket(def: &ProfileDef, clock: Option<ClockValue>, rows: i64) -> u32 {
+    match phase(def, clock, rows) {
+        Phase::Int(ph, p) => bucket_of_int(ph, p, def.buckets),
+        Phase::Float(ph, p) => bucket_of_f(ph, p, def.buckets),
+    }
+}
+
+/// The phase as a share of the period, in `[0, 1)`: the harmonic form's
+/// argument.
+fn share(def: &ProfileDef, clock: Option<ClockValue>, rows: i64) -> f64 {
+    let f = match phase(def, clock, rows) {
+        Phase::Int(ph, p) => ph as f64 / p as f64,
+        Phase::Float(ph, p) => ph / p,
+    };
+    if f.is_finite() && (0.0..1.0).contains(&f) {
+        f
+    } else {
+        0.0
     }
 }
 
@@ -800,6 +873,23 @@ fn bytes_with(
     clock: Option<ClockValue>,
     values: &[f64],
 ) -> u64 {
+    if def.harmonics > 0 {
+        let Some(h) = st.and_then(|st| st.harm.as_ref()) else {
+            return def.bytes();
+        };
+        let st = st.expect("a state holds the fit");
+        let x = values[def.input];
+        let w = def.weight.map_or(1.0, |i| values[i]);
+        let rows = if usable(w) && w > 0.0 {
+            st.rows
+        } else {
+            (st.rows - 1).max(0)
+        };
+        let now = clock.unwrap_or(ClockValue::I64(rows));
+        let joins = usable(w) && w > 0.0 && usable(x) && def.window.is_some();
+        return st.bytes + if joins { def.row_bytes() } else { 0 }
+            - h.leaving(def, now) * def.row_bytes();
+    }
     let Some(st) = st.filter(|_| def.keeps_rows()) else {
         // A fresh state: its buckets, and a quantile's two empty sketches
         // a bucket, of one sketch bucket each.
@@ -859,7 +949,8 @@ pub(super) fn check_row(
             });
         }
         // A state the data sizes: a window's rows, a quantile's sketches.
-        if said.is_none() && def.keeps_rows() && bytes > def.cap / 2 {
+        let grows = def.keeps_rows() || (def.harmonics > 0 && def.window.is_some());
+        if said.is_none() && grows && bytes > def.cap / 2 {
             said = Some((op, bytes, def.cap));
         }
     }
@@ -895,6 +986,33 @@ pub(super) fn row(
         let origin = *st.origin.get_or_insert(now);
         let tau = age(origin, now);
         let k = def.kernel();
+        if let Some(h) = st.harm.as_mut() {
+            if new_stamp || st.at.is_none() || clock.is_none() {
+                let phi = share(def, clock, rows);
+                st.at = Some((0, now));
+                st.phi = Some(phi);
+                let before = h.bytes(def);
+                h.evict(def, &k, now);
+                st.bytes = st.bytes - before + h.bytes(def);
+                if !def.waits() {
+                    st.left = h.read(def, &k, phi, tau);
+                }
+            }
+            if !def.waits() {
+                let r = (seq - held.first) as usize;
+                held.values[r * held.n_outputs + out.first + j] = st.left;
+            }
+            if weighed {
+                st.rows += 1;
+                if usable(x) {
+                    let phi = st.phi.expect("set above");
+                    let before = h.bytes(def);
+                    h.push(def, &k, (now, tau, phi), x, w);
+                    st.bytes = st.bytes - before + h.bytes(def);
+                }
+            }
+            continue;
+        }
         if new_stamp || st.at.is_none() || clock.is_none() {
             let b = bucket(def, clock, rows);
             st.at = Some((b, now));
@@ -941,6 +1059,15 @@ pub(super) fn flush(out: &Out<'_>, g: &mut Group, pending: &[u64], held: &mut He
         }
         let v = match st.at {
             None => f64::NAN,
+            Some((_, now)) if def.harmonics > 0 => {
+                let k = def.kernel();
+                let h = st.harm.as_mut().expect("a harmonic fit");
+                let before = h.bytes(def);
+                h.evict(def, &k, now);
+                st.bytes = st.bytes - before + h.bytes(def);
+                let tau = st.origin.map_or(0.0, |o| age(o, now));
+                h.read(def, &k, st.phi.unwrap_or(0.0), tau)
+            }
             Some((b, now)) if def.keeps_rows() => {
                 let k = def.kernel();
                 let wb = &mut st.win[b as usize];
@@ -982,6 +1109,7 @@ mod tests {
             cap: PROFILE_STATE_BYTES,
             window: None,
             quantile: None,
+            harmonics: 0,
         }
     }
 
@@ -1101,6 +1229,19 @@ mod tests {
                 stat: ProfileStat::Quantile,
                 quantile: Some(0.5),
                 window: Some(PhaseSpan::Units(9.0)),
+                ..base.clone()
+            },
+            ProfileDef {
+                buckets: 0,
+                harmonics: 1,
+                stat: ProfileStat::Std,
+                closed: Closed::Left,
+                ..base.clone()
+            },
+            ProfileDef {
+                buckets: 0,
+                harmonics: 2,
+                window: Some(PhaseSpan::Units(9.0)),
                 ..base
             },
         ];
@@ -1118,7 +1259,7 @@ mod tests {
             (s >> 11) as f64 / (1u64 << 53) as f64
         };
         let mut rows: Vec<(f64, usize, f64, f64)> = Vec::new();
-        let mut out: Vec<Vec<f64>> = vec![Vec::new(); 4];
+        let mut out: Vec<Vec<f64>> = vec![Vec::new(); 6];
         for k in 0..120 {
             let t = f64::from(k / 2);
             let g = usize::from(next() < 0.5);
@@ -1153,8 +1294,9 @@ mod tests {
         for (i, &(t, g, _, _)) in rows.iter().enumerate() {
             let b = (t.rem_euclid(6.0) / 6.0 * 3.0).floor();
             for (o, d) in defs.iter().enumerate() {
-                if d.stat == ProfileStat::Quantile {
-                    // Held to NumPy in the Python tests; here, read at all.
+                if d.stat == ProfileStat::Quantile || d.harmonics > 0 {
+                    // Held to NumPy and statsmodels in the Python tests;
+                    // here, read and checked at every row.
                     continue;
                 }
                 let take = |r: &&(f64, usize, f64, f64)| {

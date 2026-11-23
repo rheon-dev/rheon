@@ -1289,8 +1289,9 @@ def ewm_profile(
     input: str | pl.Expr,
     *,
     period: float | Duration,
-    buckets: int,
     half_life: float | Duration,
+    buckets: int | None = None,
+    harmonics: int | None = None,
     stat: Literal["mean", "var", "std", "quantile"] = "mean",
     quantile: float | None = None,
     window_size: float | Duration | None = None,
@@ -1323,8 +1324,16 @@ def ewm_profile(
         one, or a number of rows without a clock. A calendar unit (``"1mo"``,
         ``"1q"``, ``"1y"``) is refused, since a month has no fixed length.
     ``buckets``
-        How many equal phases the period is cut into: 24 for each hour of a
-        day, 7 for each day of a week, 168 for each hour of a week.
+        The bucketed form: how many equal phases the period is cut into, 24
+        for each hour of a day, 7 for each day of a week, 168 for each hour
+        of a week. A row reads its own phase's rows alone. Give ``buckets``
+        or ``harmonics``, one of them.
+    ``harmonics``
+        The harmonic form: how many Fourier harmonics fit the profile, from
+        1 to 64, so ``2 · harmonics + 1`` terms. Every row reads one smooth
+        curve fitted to every phase's rows, so a phase seen rarely borrows
+        from the rest of the period. It takes ``stat`` ``"mean"``, ``"var"``
+        or ``"std"`` and no ``bias``.
     ``half_life``
         How fast a row's weight fades with its distance in clock time from the
         row the profile is read at, whatever its phase: a row ``half_life``
@@ -1382,9 +1391,13 @@ def ewm_profile(
         buckets pass its cap is refused before it reads a row, naming their
         bytes. Under a ``window_size`` each row in a phase's window adds 80
         bytes (104 for a quantile), and a quantile's sketches 8 bytes a
-        sketch bucket: the run warns once, as a :class:`~rheon.RheonWarning`,
-        when a row takes a group past half of the cap, and refuses the row
-        that would take it past the cap, naming the row.
+        sketch bucket. The harmonic form's fit holds ``8 · (p(p + 1)/2 + 2p
+        + 2)`` bytes, ``p = 2 · harmonics + 1`` (216 at two harmonics), and
+        under a ``window_size`` each row in the window adds that and 40 more
+        (256 at two harmonics), its share of the Grams the window keeps. The
+        run warns once, as a :class:`~rheon.RheonWarning`, when a row takes
+        a group past half of the cap, and refuses the row that would take it
+        past the cap, naming the row.
 
     .. rubric:: Returns
 
@@ -1392,7 +1405,11 @@ def ewm_profile(
     column, one profile per group. It is null where the row's phase holds
     fewer rows than ``min_samples``, inside the window where there is one,
     so a phase no row has reached is null; for a variance, also where one
-    row's weight fills the phase.
+    row's weight fills the phase. The harmonic form is null where its rows
+    are fewer than ``min_samples``, where they do not pin the curve down
+    (fewer distinct phases than its terms, or as good as), and, for a
+    variance, where the fit of ``x²`` falls below the square of the fit of
+    ``x``.
 
     .. rubric:: Raises
 
@@ -1469,6 +1486,14 @@ def ewm_profile(
     The variance is ``M2 / V1`` times ``V1² / (V1² − V2)`` unless ``bias``.
     A bucket decays by the clock whether or not a row falls in it.
 
+    **The harmonic form** fits ``f(φ) = a₀ + Σₖ aₖ cos 2πkφ + bₖ sin
+    2πkφ`` to the rows by weighted least squares, each row weighed as a
+    bucket's are, ``φ`` the phase as a share of the period: with the basis
+    ``z(φ)``, the Gram ``G = Σ w d z zᵀ`` and ``r = Σ w d z x``, the mean
+    profile is ``z(φ)ᵀ G⁻¹ r``, and the variance the fit of ``x²`` less the
+    square of the fit of ``x``. The oracle is statsmodels' ``WLS`` on the
+    same basis.
+
     **A window** keeps each phase's rows in two stacks, the oldest with the
     moments of the rows newer than it, so a row leaves by dropping its own,
     never by a subtraction that would leave a rounding behind; a quantile's
@@ -1484,6 +1509,7 @@ def ewm_profile(
         input,
         period=period,
         buckets=buckets,
+        harmonics=harmonics,
         half_life=half_life,
         stat=stat,
         quantile=quantile,

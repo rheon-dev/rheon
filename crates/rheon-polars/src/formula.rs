@@ -120,7 +120,10 @@ pub struct OpNode {
 pub struct ProfileParams {
     pub period: Span,
     pub offset: Option<Span>,
+    /// The bucketed form's buckets, or 0 for the harmonic form.
     pub buckets: u32,
+    /// The harmonic form's harmonics, or 0 for the bucketed form.
+    pub harmonics: u32,
     pub stat: ProfileStat,
     pub weight: Option<Node>,
     pub max_state_bytes: Option<u64>,
@@ -181,9 +184,13 @@ impl OpNode {
                     serde_json::to_value(o).expect("a span is JSON"),
                 );
             }
-            m.insert("buckets".into(), json!(p.buckets));
+            if p.harmonics > 0 {
+                m.insert("harmonics".into(), json!(p.harmonics));
+            } else {
+                m.insert("buckets".into(), json!(p.buckets));
+            }
             m.insert("stat".into(), json!(p.stat.name()));
-            if matches!(p.stat, ProfileStat::Var | ProfileStat::Std) {
+            if p.harmonics == 0 && matches!(p.stat, ProfileStat::Var | ProfileStat::Std) {
                 m.insert("bias".into(), json!(self.bias));
             }
             if let Some(w) = &p.weight {
@@ -936,6 +943,10 @@ pub struct Formula {
 }
 
 /// An `ewm_profile` node from its parameters, each checked by name.
+/// The most harmonics a profile takes: a period cut finer than this is
+/// what `buckets` is for.
+const MAX_HARMONICS: u32 = 64;
+
 fn profile_of(input: Node, params: &Map<String, Value>) -> Result<OpNode, String> {
     let name = "ewm_profile";
     let mut op = OpNode {
@@ -951,6 +962,7 @@ fn profile_of(input: Node, params: &Map<String, Value>) -> Result<OpNode, String
         profile: None,
     };
     let (mut period, mut offset, mut buckets, mut stat) = (None, None, None, ProfileStat::Mean);
+    let mut harmonics: Option<u32> = None;
     let (mut weight, mut max_state_bytes) = (None, None);
     let mut bias = None;
     for (k, v) in params {
@@ -989,6 +1001,22 @@ fn profile_of(input: Node, params: &Map<String, Value>) -> Result<OpNode, String
                                  is {}. Set buckets to the number of phases of the period, \
                                  such as 24 for the hours of a day.",
                                 u32::MAX,
+                                short(v)
+                            )
+                        })?,
+                );
+            }
+            "harmonics" => {
+                harmonics = Some(
+                    v.as_u64()
+                        .and_then(|k| u32::try_from(k).ok())
+                        .filter(|&k| (1..=MAX_HARMONICS).contains(&k))
+                        .ok_or_else(|| {
+                            format!(
+                                "{name}: harmonics must be a whole number from 1 to \
+                                 {MAX_HARMONICS}, but it is {}. Set harmonics to the Fourier \
+                                 terms the profile takes, such as 3 for the daily shape of an \
+                                 hourly series.",
                                 short(v)
                             )
                         })?,
@@ -1047,7 +1075,7 @@ fn profile_of(input: Node, params: &Map<String, Value>) -> Result<OpNode, String
             other => {
                 return Err(format!(
                     "{name}: {other:?} is not one of its parameters, which are period, buckets, \
-                     half_life, window_size, stat, quantile, closed, offset, weight, \
+                     harmonics, half_life, window_size, stat, quantile, closed, offset, weight, \
                      min_samples, bias and max_state_bytes. Remove {other:?}, or correct its name."
                 ));
             }
@@ -1085,11 +1113,32 @@ fn profile_of(input: Node, params: &Map<String, Value>) -> Result<OpNode, String
              starts after its default start, such as \"9h30m\"."
         ));
     }
-    let Some(buckets) = buckets else {
-        return Err(format!(
-            "{name}: buckets is not set, but a profile needs it: how many equal phases the \
-             period is cut into. Set buckets, such as 24 for the hours of a day."
-        ));
+    let (buckets, harmonics) = match (buckets, harmonics) {
+        (Some(b), None) => (b, 0),
+        (None, Some(k)) => {
+            if stat == ProfileStat::Quantile || bias.is_some() {
+                return Err(format!(
+                    "{name}: harmonics takes stat \"mean\", \"var\" or \"std\" and no bias: \
+                     a Fourier fit's variance is the fit of x² less the square of the fit of \
+                     x, and a quantile has no one-pass fit. Remove bias or quantile, or take \
+                     buckets."
+                ));
+            }
+            (0, k)
+        }
+        (None, None) => {
+            return Err(format!(
+                "{name}: buckets or harmonics is needed: how many equal phases the period is \
+                 cut into, or how many Fourier terms fit it. Set one, such as buckets=24 for \
+                 the hours of a day."
+            ));
+        }
+        (Some(_), Some(_)) => {
+            return Err(format!(
+                "{name}: buckets and harmonics are both given, but a profile is one form or \
+                 the other. Remove one of them."
+            ));
+        }
     };
     if let Some(w) = &op.window_size
         && !(w.value().is_finite() && w.value() > 0.0)
@@ -1125,6 +1174,7 @@ fn profile_of(input: Node, params: &Map<String, Value>) -> Result<OpNode, String
         period,
         offset,
         buckets,
+        harmonics,
         stat,
         weight,
         max_state_bytes,

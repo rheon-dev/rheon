@@ -3468,6 +3468,7 @@ dependencies = [
  "equivalent",
  "indexmap",
  "libloading",
+ "libm",
  "polars",
  "polars-arrow",
  "polars-core",

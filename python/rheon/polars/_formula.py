@@ -696,6 +696,9 @@ def operator(
 #: A profile's ``max_state_bytes`` at most: 64 MiB.
 PROFILE_STATE_BYTES_CEILING = 64 << 20
 
+#: The most harmonics a profile takes.
+MAX_HARMONICS = 64
+
 #: What a profile reads of each phase.
 PROFILE_STATS = ("mean", "var", "std", "quantile")
 
@@ -704,8 +707,9 @@ def profile(
     input: Any,
     *,
     period: Any,
-    buckets: Any,
     half_life: Any,
+    buckets: Any = None,
+    harmonics: Any = None,
     stat: Any = "mean",
     quantile: Any = None,
     window_size: Any = None,
@@ -745,15 +749,39 @@ def profile(
             f"Set closed to one of those words."
         )
     params["closed"] = closed
-    wrong = isinstance(buckets, bool) or not isinstance(buckets, numbers.Integral)
-    if wrong or not 1 <= buckets <= 2**32 - 1:
-        msg = (
-            f"{who}: buckets must be a whole number from 1 to {2**32 - 1}, but it is "
-            f"{buckets!r}. Set buckets to the number of phases of the period, such as 24 for "
-            f"the hours of a day."
+    if (buckets is None) == (harmonics is None):
+        raise TypeError(
+            f"{who}: give buckets or harmonics, one of them: how many equal phases the period "
+            f"is cut into, or how many Fourier terms fit it, but "
+            + ("both are given." if buckets is not None else "neither is given.")
+            + " Set one, such as buckets=24 for the hours of a day."
         )
-        raise WrongTypeError(msg) if wrong else ValueError(msg)
-    params["buckets"] = int(buckets)
+    if buckets is not None:
+        wrong = isinstance(buckets, bool) or not isinstance(buckets, numbers.Integral)
+        if wrong or not 1 <= buckets <= 2**32 - 1:
+            msg = (
+                f"{who}: buckets must be a whole number from 1 to {2**32 - 1}, but it is "
+                f"{buckets!r}. Set buckets to the number of phases of the period, such as 24 "
+                f"for the hours of a day."
+            )
+            raise WrongTypeError(msg) if wrong else ValueError(msg)
+        params["buckets"] = int(buckets)
+    else:
+        wrong = isinstance(harmonics, bool) or not isinstance(harmonics, numbers.Integral)
+        if wrong or not 1 <= harmonics <= MAX_HARMONICS:
+            msg = (
+                f"{who}: harmonics must be a whole number from 1 to {MAX_HARMONICS}, but it is "
+                f"{harmonics!r}. Set harmonics to the Fourier terms the profile takes, such as "
+                f"3 for the daily shape of an hourly series."
+            )
+            raise WrongTypeError(msg) if wrong else ValueError(msg)
+        if stat == "quantile" or bias is not None:
+            raise ValueError(
+                f'{who}: harmonics takes stat "mean", "var" or "std" and no bias: a Fourier '
+                f"fit's variance is the fit of x² less the square of the fit of x, and a "
+                f"quantile has no one-pass fit. Leave out bias or quantile, or give buckets."
+            )
+        params["harmonics"] = int(harmonics)
     if stat not in PROFILE_STATS:
         raise ValueError(
             f'{who}: stat must be "mean", "var", "std" or "quantile", but it is {stat!r}. Set '
@@ -776,7 +804,7 @@ def profile(
         raise TypeError(
             f'{who}: quantile is given, but only stat="quantile" takes it. Leave out quantile.'
         )
-    if stat in ("var", "std"):
+    if stat in ("var", "std") and harmonics is None:
         if bias is None:
             bias = False
         if not isinstance(bias, bool):
