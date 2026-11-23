@@ -918,6 +918,11 @@ model that only the new build has is listed as an addition and passes.
   on** (review 2026-11-23, DIAG-10). A damaged file whose band held a
   negative multiplier, a coverage past 1 or a weight that is not a number
   loaded and ran; it is refused as damaged, as the other diagnostics' are.
+- **Two audits merge only under the same clock settings** (review
+  2026-11-23, AUDIT-2). A merge of an audit with a clock column and one
+  without, or under two `gap_cap`s, was taken, and the merged clock's gaps
+  read as neither stream's; it is refused as other settings that differ
+  are.
 - **A window looking ahead whose far edge is the input's last row is whole
   at the end of the input** (PLAN 565). Under `closed="right"` or `"both"`,
   `rp.ewm_sum`, `rp.ewm_mean`, `rp.ewm_rate` and `rp.ewm_quantile` with

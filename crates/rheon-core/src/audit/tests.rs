@@ -1899,3 +1899,47 @@ fn the_unit_root_t_of_a_tiny_spread_is_the_scaled_ones() {
     assert!((tiny - (-1.0 / 3f64.sqrt())).abs() < 1e-12, "{tiny}");
     assert!((tiny - big).abs() < 1e-12, "{tiny} against {big}");
 }
+
+/// Two audits merge only under the same clock settings: a merge of an
+/// audit with a clock and one without, or under two `gap_cap`s, was taken,
+/// and the clock's gaps read as neither stream's (review 2026-11-23,
+/// AUDIT-2 (1)).
+#[test]
+fn audits_under_other_clock_settings_do_not_merge() {
+    let a = audit_of(&cfg(1), &[1.0, 2.0]);
+    for other in [
+        AuditCfg {
+            has_clock: false,
+            ..cfg(1)
+        },
+        AuditCfg {
+            gap_cap: Some(5.0),
+            ..cfg(1)
+        },
+    ] {
+        let mut m = a.clone();
+        assert!(m.merge(&audit_of(&other, &[3.0])).is_err(), "{other:?}");
+    }
+    let mut m = a.clone();
+    assert!(m.merge(&audit_of(&cfg(1), &[3.0])).is_ok());
+}
+
+/// A negative weight is a weight that is not usable, as NaN is: the row's
+/// values are counted and `n_eff` is not moved, the rule
+/// `a_weight_that_is_not_usable_adds_no_weight` holds (review 2026-11-23,
+/// AUDIT-2 (3): not reproduced as an asymmetry).
+#[test]
+fn a_negative_weight_is_counted_as_an_unusable_one_is() {
+    let fed = |w: f64| {
+        let mut a = Audit::new(cfg(1)).unwrap();
+        a.step(&[1.0], &[], 1.0, 1.0);
+        a.step(&[5.0], &[], 3.0, w);
+        a
+    };
+    let (neg, nan) = (fed(-1.0), fed(f64::NAN));
+    assert_eq!((neg.n_eff(), neg.column(0).count), (1.0, 2));
+    assert_eq!(
+        serde_json::to_value(&neg).unwrap(),
+        serde_json::to_value(&nan).unwrap()
+    );
+}

@@ -84,12 +84,13 @@
 //!
 //! **A row's weight** goes into `n_eff`, the accumulated weight before the
 //! row, undecayed (CLAUDE.md hard rule 8; `audit` has no decay). A row of
-//! weight 0 advances the clock and learns nothing (hard rule 9; the user,
-//! 2026-11-21): its step is the clock's and is counted as every row's is,
-//! and its values reach no count, moment, counter, run, lag or pair, so
-//! every column and pair reads as the stream with that row left out. Until
-//! then such a row's values were counted like any other's. Any other weight
-//! moves `n_eff` alone: a value is a value whatever its row weighs. A bank's
+//! weight 0 counts in no clock and learns nothing (hard rule 9; the user,
+//! 2026-11-21): its step goes to the next row's, and its values reach no
+//! count, moment, counter, run, lag or pair, so every column, pair and the
+//! clock read as the stream with that row left out. Any other weight moves
+//! `n_eff` alone, and only where it is usable and above 0: a value is a
+//! value whatever its row weighs, so a row of a weight that is not usable
+//! (past the bound, not a number, or below 0) is counted with no weight. A bank's
 //! `audit` takes no weight column, so every row it reads weighs 1. Nor does
 //! `audit` refuse a value that is not usable, as every other model does
 //! ([`OnlineModel`]): it counts it, which is the point.
@@ -1311,8 +1312,10 @@ impl Audit {
     /// audit had read both streams (the module's doc says which parts are
     /// exact).
     pub fn merge(&mut self, o: &Audit) -> Result<(), String> {
+        let clock = |c: &AuditCfg| (c.has_clock, c.gap_cap.map(f64::to_bits));
         if (o.cfg.n_columns, o.cfg.pairs, o.cfg.distinct_cap)
             != (self.cfg.n_columns, self.cfg.pairs, self.cfg.distinct_cap)
+            || clock(&o.cfg) != clock(&self.cfg)
         {
             return Err(
                 "audit: two audits merge only when they read the same columns under the same \
