@@ -446,30 +446,36 @@ def embargo(
     # both, so the two schemas agree whatever the column's dtype; `w * 0.0`
     # beside an integer `w` died in the merge (review round 4, YB2).
     weight_value = pl.col(weight).cast(pl.Float64) if weight is not None else None
+    # The two helper columns take names the input does not hold: fixed
+    # names made a polars error of an input that held them (review
+    # 2026-11-23, PY-7).
+    taken = set(schema.names()) | {role, wcol}
+    order, key = "__embargo_order", "__embargo_key"
+    while order in taken or key in taken:
+        order, key = f"_{order}", f"_{key}"
     predict = lazy.with_columns(
         pl.lit("predict").alias(role),
         (weight_value * 0.0 if weight_value is not None else pl.lit(0.0)).alias(wcol),
-        pl.lit(1, pl.UInt8).alias("__embargo_order"),
+        pl.lit(1, pl.UInt8).alias(order),
     )
     learn = lazy.with_columns(
         pl.lit("learn").alias(role),
         (weight_value if weight_value is not None else pl.lit(1.0)).alias(wcol),
         later.alias(clock),
-        pl.lit(0, pl.UInt8).alias("__embargo_order"),
+        pl.lit(0, pl.UInt8).alias(order),
     )
     # One sort key, so the merge is by (clock, order): at a tie the lesson
     # lands before the prediction that may use it.
-    key = "__embargo_key"
     both = [
         f.with_columns(
-            pl.struct(pl.col(clock), pl.col("__embargo_order")).alias(key),
+            pl.struct(pl.col(clock), pl.col(order)).alias(key),
         )
         for f in (predict, learn)
     ]
     out = (
         both[0]
         .merge_sorted(both[1], key=key)
-        .drop(key, "__embargo_order")
+        .drop(key, order)
         .select(*schema.names(), *([] if weight is not None else [wcol]), role)
     )
     return out if isinstance(lf, pl.LazyFrame) else out.collect()
@@ -1200,6 +1206,11 @@ def merge(
             seen += out.height
             if out.height:
                 yield from _in_morsels(emit(out))
+            # A slice met reads no further: the stream the merge asks for
+            # next may hold a row past it, which the slice must not read
+            # (review 2026-11-23, MERGE-1).
+            if n_rows is not None and seen >= n_rows:
+                break
             if want is None and out.height < cap:
                 break
             if want is None:

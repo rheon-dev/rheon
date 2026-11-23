@@ -1797,3 +1797,64 @@ class TestADelayShorterThanEveryStep:
         )
         assert same(plain["weight_sum"], oracle["weight_sum"])
         assert not same(plain["pred_y"], oracle["pred_y"])
+
+
+# Review 2026-11-23, STRM-1: a row of weight 0 releases the held rows whose
+# wait it has seen out into the live models before it is scored. A later
+# row of positive weight whose clock is before it is then scored by a model
+# that has learned a label the embargo still holds at that row's clock, and
+# a stream that ends on such a row saves a state that has learned what the
+# stream without it holds back. Confirmed; the fix reverses the mechanism
+# docs/records/ZERO-WEIGHT-AUDIT.md chose (release into the live models, "as
+# the next row would"), so it is the user's decision
+# (docs/records/REVIEW-2026-11-23-OUTCOMES.md).
+STRM_1 = pytest.mark.xfail(
+    strict=True, reason="STRM-1: confirmed, a decision for the user (scoring shadow vs release)"
+)
+
+
+@STRM_1
+def test_a_zero_weight_row_releases_no_label_a_later_row_before_it_would_not_see():
+    zero = pl.DataFrame(
+        {
+            "t": [0.0, 100.0, 5.0],
+            "x": [1.0, 1.0, 1.0],
+            "y": [100.0, 0.0, 50.0],
+            "w": [1.0, 0.0, 1.0],
+        }
+    )
+    s = spec(embargo=10.0, weight="w", min_weight=0.0, half_life=1e9)
+    with_it = rp.ModelBank([s]).fit_predict(zero)["m"].struct.field("weight_sum")
+    without = (
+        rp.ModelBank([s]).fit_predict(zero.filter(pl.col("w") > 0))["m"].struct.field("weight_sum")
+    )
+    # Row 2 at t = 5 is before row 0's label is known (t = 10): the bank
+    # without the zero-weight row has learned nothing by then, and the bank
+    # with it has learned row 0 (weight 1).
+    assert with_it[2] == without[1] == 0.0
+
+
+@STRM_1
+def test_a_stream_ending_on_a_zero_weight_row_saves_what_it_would_without_it():
+    df = pl.DataFrame({"t": [0.0, 15.0], "x": [1.0, 1.0], "y": [10.0, 0.0], "w": [1.0, 0.0]})
+    s = spec(embargo=10.0, weight="w", min_weight=0.0, half_life=1e9)
+    a, b = rp.ModelBank([s]), rp.ModelBank([s])
+    a.fit(df)
+    b.fit(df.head(1))
+    assert a.coef().equals(b.coef())
+
+
+def test_the_doubled_stream_takes_an_input_holding_its_helper_columns_names():
+    """Review 2026-11-23, PY-7: ``rp.stream.embargo`` named its two helper
+    columns ``__embargo_key`` and ``__embargo_order``, and an input holding
+    either died in a polars error. The helpers take names the input does
+    not hold, and the input's columns come back as they were. (A weight of
+    ``inf`` gives its predict copy a NaN weight, as ``inf * 0`` is: the
+    bank skips both copies, as it skips the row under ``embargo``, so that
+    half of the claim is the rule kept.)"""
+    df = pl.DataFrame(
+        {"t": [0.0, 1.0], "x": [1.0, 2.0], "__embargo_key": [7, 8], "__embargo_order": ["a", "b"]}
+    )
+    out = stream.embargo(df, clock="t", delay=1.0)
+    assert out.columns == [*df.columns, stream.ROLE + "_weight", stream.ROLE]
+    assert out.filter(pl.col(stream.ROLE) == "predict").select(df.columns).equals(df)

@@ -249,9 +249,11 @@ def _takes_spec[R](
 
 def _logistic(spec: dict | None) -> bool:
     """Whether ``spec`` names a fit with ``loss = "logistic"``, whose
-    ``pred`` is a probability and its target a 0/1 label: ``ftrl``'s default
-    and one of ``sgd``'s losses."""
+    ``pred`` is a probability and its target a 0/1 label: ``ftrl``'s default,
+    one of ``sgd``'s losses, and a binomial ``glm``."""
     model = (spec or {}).get("model") or {}
+    if model.get("type") == "glm":
+        return model.get("family") == "binomial"
     loss = model.get("loss", "logistic" if model.get("type") == "ftrl" else None)
     return loss == "logistic"
 
@@ -701,9 +703,12 @@ def _no_hit(spec: dict | None) -> bool:
     the bank's ``emit_metrics`` nulls: a Poisson ``sgd`` (``loss =
     "poisson"``), where a rate is positive and a count never negative, so
     the sign test about zero agrees on every row and reads 1.0 whatever the
-    fit. Without ``spec``
+    fit; and a ``glm`` of every family but the binomial, whose mean is
+    positive against a target never negative. Without ``spec``
     the loss cannot be known, and the sign test is read."""
     model = (spec or {}).get("model") or {}
+    if model.get("type") == "glm":
+        return (model.get("family") or "poisson") != "binomial"
     return model.get("type") == "sgd" and model.get("loss") == "poisson"
 
 

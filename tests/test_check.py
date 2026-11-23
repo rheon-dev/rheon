@@ -317,6 +317,16 @@ class TestValues:
         var = df["x0"].var()
         assert row["value"] == pytest.approx(1.0 / var, rel=1e-12)
 
+    def test_an_expectiles_ridge_is_told_its_own_way_out(self):
+        """Review 2026-11-23, PY-11: ``expectile`` keeps its ridge in the
+        features' squared units, so the finding holds for it, but it takes
+        no ``standardize``, which the finding told it to set."""
+        df, _ = cs.clean_independent(0)
+        c = dict(targets=["y"], features=cs.FEATURES, half_life=200.0)
+        f = cs.findings(df, [rp.spec.expectile("e", expectile=0.5, ridge=1.0, **c)])
+        message = f.filter(code="ridge_shrinks", spec="e", column="x0")["message"][0]
+        assert "lower ridge, or rescale" in message and "standardize" not in message
+
     def test_few_learned_fires_on_more_than_half_skipped_and_not_at_half(self):
         """The docstring's line: more than half the rows skipped for a missing
         feature. At exactly half, ``rows_processed / rows_fed`` is 0.5, which

@@ -20,6 +20,11 @@ use crate::spec::Spec;
 pub struct Learned {
     specs: Vec<Spec>,
     lasts: Vec<Option<HashMap<GroupKey, ClockValue>>>,
+    /// Per spec under `group_close = "monotone"`, the largest group key the
+    /// bank has read and whether its keys order as numbers: a group below
+    /// it was learned and closed, and is gone from `lasts` (review
+    /// 2026-11-23, BANK-1).
+    marks: Vec<Option<(GroupKey, bool)>>,
 }
 
 impl Bank {
@@ -59,9 +64,11 @@ impl Bank {
                     .into(),
             );
         }
+        let marks = self.group_marks();
         Ok(Learned {
             specs: self.specs().to_vec(),
             lasts,
+            marks,
         })
     }
 }
@@ -134,7 +141,7 @@ impl Learned {
         let (mut before, mut new) = (vec![false; n], vec![false; n]);
         let (mut tied, mut tied_zero) = (vec![false; n], vec![false; n]);
         let chunk = chunk_from_frame(df, &self.specs)?;
-        for (spec, lasts) in self.specs.iter().zip(&self.lasts) {
+        for ((spec, lasts), mark) in self.specs.iter().zip(&self.lasts).zip(&self.marks) {
             let (Some(name), Some(lasts)) = (&spec.clock, lasts) else {
                 continue;
             };
@@ -145,7 +152,18 @@ impl Learned {
             };
             let mut seen = vec![false; n];
             for (key, rows) in group_indices(&chunk, spec)?.iter() {
-                let Some(last) = lasts.get(&key.to_key()) else {
+                let key = key.to_key();
+                let Some(last) = lasts.get(&key) else {
+                    // A group below the largest key a monotone close has
+                    // read was learned and closed, whatever its clock.
+                    if let Some((top, integer)) = mark
+                        && super::key_cmp(&key, top, *integer) == std::cmp::Ordering::Less
+                    {
+                        for &i in rows {
+                            seen[i] = true;
+                            before[i] = true;
+                        }
+                    }
                     continue;
                 };
                 for &i in rows {
@@ -174,6 +192,11 @@ impl Learned {
                     // it dropped the row in silence (review round 5, C3).
                     let order = match (now, last) {
                         (None, _) => None,
+                        // An infinite clock is no place on the clock either,
+                        // and is kept for the bank to refuse by row, as a NaN
+                        // is: read as before the last clock, `-inf` was
+                        // dropped in silence (review 2026-11-23, BANK-2).
+                        (Some(ClockValue::F64(now)), _) if !now.is_finite() => None,
                         (Some(ClockValue::F64(now)), ClockValue::F64(last)) => {
                             now.partial_cmp(last)
                         }

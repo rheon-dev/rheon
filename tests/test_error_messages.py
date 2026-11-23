@@ -1761,3 +1761,48 @@ def test_a_nul_in_a_name_is_refused_not_a_panic(call):
     }
     with pytest.raises(ValueError, match="NUL character"):
         calls[call]()
+
+
+def test_a_notice_for_the_null_group_names_it():
+    """Review 2026-11-23, BANK-8: a notice for the null group of a grouped
+    spec named no group, as if the spec had none; it says ``group null``,
+    as a state file's refusals do."""
+    import warnings
+
+    # A constant feature beside the intercept: the support notice.
+    df = pl.DataFrame({"g": pl.Series([None] * 50, dtype=pl.String), "x0": 1.0, "y": 1.0})
+    spec = rp.spec.ewridge(
+        "m",
+        targets=["y"],
+        features=["x0"],
+        group="g",
+        half_life=10.0,
+        max_rows_between_solves=1,
+        min_weight=1.0,
+    )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        rp.ModelBank([spec]).fit_predict(df)
+    said = [str(w.message) for w in caught if str(w.message).startswith('spec "m"')]
+    assert said, [str(w.message) for w in caught]
+    assert all(m.startswith('spec "m" group null') for m in said), said
+
+
+def test_a_step_back_past_292_years_is_said_at_its_length():
+    """Review 2026-11-23, BANK-9: a refusal wrote a temporal step through an
+    ``i64`` of nanoseconds, which saturates at 292 years, so a step back of
+    400 years was said as 292. 1 January 2200 back to 1 January 1800 is
+    the Gregorian cycle, 146,097 days."""
+    df = pl.DataFrame(
+        {
+            "t": [datetime.datetime(2200, 1, 1), datetime.datetime(1800, 1, 1)],
+            "x0": [1.0, 2.0],
+            "y": [1.0, 2.0],
+        }
+    ).with_columns(pl.col("t").cast(pl.Datetime("ns")))
+    spec = rp.spec.ewridge(
+        "m", targets=["y"], features=["x0"], clock="t", half_life="1d", gap_cap="1d"
+    )
+    with pytest.raises(ValueError, match="steps back by 146097d at row 1") as e:
+        rp.ModelBank([spec]).fit_predict(df)
+    assert "292" not in str(e.value)

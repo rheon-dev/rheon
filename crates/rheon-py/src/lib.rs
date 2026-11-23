@@ -966,6 +966,20 @@ impl PyModelBank {
             .collect())
     }
 
+    /// Per spec under `group_close = "monotone"`: `(largest group key read,
+    /// whether the keys order as numbers)`, or `None` (review 2026-11-23,
+    /// BANK-1).
+    #[allow(clippy::type_complexity)]
+    fn group_marks(slf: &Bound<'_, Self>) -> PyResult<Vec<Option<(Option<String>, bool)>>> {
+        let this = slf.try_borrow().map_err(|_| busy("group_marks"))?;
+        Ok(this
+            .inner
+            .group_marks()
+            .into_iter()
+            .map(|m| m.map(|(k, integer)| (k.0, integer)))
+            .collect())
+    }
+
     #[pyo3(signature = (keys, spec=None))]
     fn drop_groups(
         slf: &Bound<'_, Self>,
@@ -1535,7 +1549,7 @@ fn parse_duration(text: &str) -> PyResult<i64> {
 
 /// The text a duration of `ns` nanoseconds is written as: `"10m"`.
 #[pyfunction]
-fn format_duration(ns: i64) -> String {
+fn format_duration(ns: i128) -> String {
     rheon_polars::format_duration(ns)
 }
 

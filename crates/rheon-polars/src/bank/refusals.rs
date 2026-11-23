@@ -27,11 +27,7 @@ pub(super) fn over_budget(
 /// bank that raises it has learned part of the chunk, learning no event
 /// after the one before the cap, and marks itself `broken`.
 pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) -> PolarsError {
-    let group = key
-        .0
-        .as_deref()
-        .filter(|_| spec.group.is_some())
-        .map_or(String::new(), |g| format!(" group {g:?}"));
+    let group = super::group_label(spec, key);
     let fixed = crate::stream::fixed_span(spec);
     let given = match &spec.model {
         _ if fixed.is_some() => format!("{cap} bytes, {}", fixed.as_ref().map_or("", |f| f.cap)),
@@ -173,7 +169,7 @@ fn spacing_label(spec: &Spec, spacing: f64) -> String {
     match spec.model.window_cadence().and_then(|(every, _)| every) {
         Some(every) if every.value() == spacing => every.label(),
         Some(crate::span::Span::Duration(_)) => {
-            crate::span::format_duration((spacing * 1e9).round() as i64)
+            crate::span::format_duration((spacing * 1e9).round() as i128)
         }
         _ => crate::spec::num_label(spacing),
     }
@@ -221,11 +217,7 @@ pub(super) fn over_budget_message(
     learned: bool,
 ) -> String {
     let mib = spec.model.window_budget().map_or(0.0, |b| b.mib());
-    let group = key
-        .0
-        .as_deref()
-        .filter(|_| spec.group.is_some())
-        .map_or(String::new(), |g| format!(" group {g:?}"));
+    let group = super::group_label(spec, key);
     let named = spec.model.window_parts().and_then(|(_, b)| b).is_some();
     let which = if named {
         format!("window_budget = {{\"refuse\": {mib}}}")
@@ -284,10 +276,7 @@ pub(super) fn backwards_clock(
     // The step exactly: in integer nanoseconds on a temporal clock, where the
     // double of seconds resolves more than a nanosecond above about 104 days;
     // in integers on an integer clock (task 200).
-    let (step, below) = match (
-        refusal.back_ns.and_then(|ns| i64::try_from(ns).ok()),
-        refusal.back_int,
-    ) {
+    let (step, below) = match (refusal.back_ns, refusal.back_int) {
         (Some(ns), _) => {
             let s = crate::span::format_duration(ns);
             (s.clone(), s)
@@ -348,6 +337,19 @@ pub(super) fn non_finite_step(
     refusal: StepRefusal,
     rows: &crate::arrow::InputRows,
 ) -> PolarsError {
+    if refusal.removed {
+        return polars_err!(ComputeError:
+            "spec {:?}: clock column {:?} steps from {} to {} at row {} (counting from 0), \
+             and the time its gap_cap and session steps take out of the clock since its first \
+             row would pass the largest float, so the bank refused the chunk. Shift or rescale \
+             the clock column so that its values span less than the largest float.",
+            spec.name,
+            spec.clock.as_deref().unwrap_or("<row count>"),
+            crate::spec::num_label(refusal.prev),
+            crate::spec::num_label(refusal.now),
+            rows.at(refusal.row)
+        );
+    }
     polars_err!(ComputeError:
         "spec {:?}: clock column {:?} steps from {} to {} at row {} (counting from 0), a \
          difference too large for a float, so the bank refused the chunk. Shift or rescale the \
@@ -370,7 +372,7 @@ pub(crate) fn clock_amount(spec: &Spec, v: f64) -> String {
         .as_ref()
         .is_some_and(crate::span::Span::is_duration)
     {
-        crate::span::format_duration((v * 1e9).round() as i64)
+        crate::span::format_duration((v * 1e9).round() as i128)
     } else {
         crate::spec::num_label(v)
     }
