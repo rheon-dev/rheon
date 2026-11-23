@@ -54,14 +54,17 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
             "snapshot_every",
         ],
     ),
-    ("kalman", &["coef_half_life", "revert_half_life"]),
+    (
+        "kalman",
+        &["coef_half_life", "revert_half_life", "horizons"],
+    ),
     (
         "huber",
         &["solve_every", "huber_scale_half_life", "huber_refit_span"],
     ),
     ("quantile", &["solve_every", "quantile_refit_span"]),
     ("ew_cov", &["pca_every", "window_size", "snapshot_every"]),
-    ("holt", &["trend_half_life"]),
+    ("holt", &["trend_half_life", "horizons"]),
     ("sgd", &["huber_scale_half_life", "huber_refit_span"]),
     ("micro", &["prune_every"]),
     (

@@ -280,7 +280,11 @@ pub enum ModelKind {
         covariance_form: rheon_core::CovarianceForm,
         /// The forecasts' horizons, each a span of the clock past the row,
         /// as `holt`'s are. Absent reports none.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "one_or_more_horizons"
+        )]
         horizons: Option<Vec<SpanHorizon>>,
     },
     /// Huber regression (docs/PLAN.md §4.5).
@@ -668,7 +672,11 @@ pub enum ModelKind {
         /// (a number of clock units, rows without a clock, or a duration),
         /// labelled `h<number>` or by the duration as written, or a `[name,
         /// span]` pair labelled by its name. Absent reports none.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "one_or_more_horizons"
+        )]
         horizons: Option<Vec<SpanHorizon>>,
     },
     Rls {
@@ -1524,11 +1532,92 @@ pub enum ModelKind {
 /// One forecast horizon on the clock (`holt`'s `horizons`): a span, its
 /// fields labelled `h<number>` or by the duration as written, or a `[name,
 /// span]` pair labelled by the name.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum SpanHorizon {
     Span(Span),
     Named(String, Span),
+}
+
+impl<'de> Deserialize<'de> for SpanHorizon {
+    /// A span as [`Span`] reads one (its errors, a word that is no duration
+    /// named as such), or a `[name, span]` pair.
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = SpanHorizon;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a span of the clock, or a [name, span] pair")
+            }
+            fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<SpanHorizon, E> {
+                Ok(SpanHorizon::Span(Span::Units(v)))
+            }
+            fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<SpanHorizon, E> {
+                Ok(SpanHorizon::Span(Span::Units(v as f64)))
+            }
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<SpanHorizon, E> {
+                Ok(SpanHorizon::Span(Span::Units(v as f64)))
+            }
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<SpanHorizon, E> {
+                use serde::de::IntoDeserializer;
+                let d: serde::de::value::StrDeserializer<'_, E> = v.into_deserializer();
+                Span::deserialize(d).map(SpanHorizon::Span)
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<SpanHorizon, A::Error> {
+                use serde::de::Error;
+                let name: String = seq
+                    .next_element()?
+                    .ok_or_else(|| A::Error::invalid_length(0, &"a [name, span] pair"))?;
+                let span: Span = seq
+                    .next_element()?
+                    .ok_or_else(|| A::Error::invalid_length(1, &"a [name, span] pair"))?;
+                Ok(SpanHorizon::Named(name, span))
+            }
+        }
+        d.deserialize_any(V)
+    }
+}
+
+/// `horizons` read as one span or a list of them (a span or a `[name,
+/// span]` pair each), as `kernel_half_lives` reads one or a list.
+fn one_or_more_horizons<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<Vec<SpanHorizon>>, D::Error> {
+    struct V;
+    impl<'de> serde::de::Visitor<'de> for V {
+        type Value = Vec<SpanHorizon>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a span of the clock, or a list of spans or [name, span] pairs")
+        }
+        fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<Self::Value, E> {
+            Ok(vec![SpanHorizon::Span(Span::Units(v))])
+        }
+        fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<Self::Value, E> {
+            Ok(vec![SpanHorizon::Span(Span::Units(v as f64))])
+        }
+        fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<Self::Value, E> {
+            Ok(vec![SpanHorizon::Span(Span::Units(v as f64))])
+        }
+        fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+            use serde::de::IntoDeserializer;
+            let d: serde::de::value::StrDeserializer<'_, E> = v.into_deserializer();
+            Span::deserialize(d).map(|s| vec![SpanHorizon::Span(s)])
+        }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(
+            self,
+            mut seq: A,
+        ) -> Result<Self::Value, A::Error> {
+            let mut out = Vec::new();
+            while let Some(h) = seq.next_element::<SpanHorizon>()? {
+                out.push(h);
+            }
+            Ok(out)
+        }
+    }
+    d.deserialize_any(V).map(Some)
 }
 
 impl SpanHorizon {
