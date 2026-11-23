@@ -314,6 +314,77 @@ mod tests {
         assert!(c.update(3.0, 2.0, 1.0, 1.0));
     }
 
+    /// A row is read through its scale: Page-Hinkley takes `|r| / σ` and
+    /// CUSUM `r / σ`, to the bit, and a scale that is not a positive finite
+    /// number is no row for CUSUM, even for a residual that would flag it.
+    #[test]
+    fn a_row_is_read_in_units_of_its_scale() {
+        let ph = PageHinkley::new(0.5, 20.0);
+        let (mut a, mut direct) = (DriftDetector::PageHinkley(ph.clone()), ph);
+        for (r, scale, d) in [(3.0, 2.0, 1.5), (-1.0, 0.5, 0.7), (4.0, 3.0, 2.0)] {
+            assert_eq!(
+                a.update(r, scale, d, 0.9),
+                direct.update(f64::abs(r) / scale, d, 0.9)
+            );
+            assert_eq!(a, DriftDetector::PageHinkley(direct.clone()));
+        }
+        assert!(direct.n() == 3.0);
+        let cusum = Cusum::new(0.5, 4.0);
+        let (mut a, mut direct) = (DriftDetector::Cusum(cusum.clone()), cusum);
+        for (r, scale, d) in [(3.0, 2.0, 1.5), (-5.0, 0.5, 0.7), (4.0, 3.0, 2.0)] {
+            assert_eq!(a.update(r, scale, d, 1.0), direct.update(r / scale, d));
+            assert_eq!(a, DriftDetector::Cusum(direct.clone()));
+        }
+        // No scale: no row, whatever the residual.
+        for scale in [
+            0.0,
+            -1.0,
+            -1e-300,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ] {
+            let mut c = DriftDetector::Cusum(Cusum::new(0.5, 1.0));
+            assert!(!c.update(100.0, scale, 1.0, 1.0), "scale {scale}");
+            assert!(!c.update(-100.0, scale, 1.0, 1.0), "scale {scale}");
+            assert_eq!(c, DriftDetector::Cusum(Cusum::new(0.5, 1.0)));
+        }
+    }
+
+    /// A row with nothing to read ages Page-Hinkley's mean and no other kind.
+    #[test]
+    fn age_moves_page_hinkleys_mean_and_nothing_else() {
+        let mut ph = PageHinkley::new(0.5, 1e9);
+        for e in [1.0, 2.0, 3.0] {
+            ph.update(e, 1.0, 0.9);
+        }
+        let mut aged = ph.clone();
+        aged.age(0.5);
+        assert_ne!(aged, ph);
+        let mut a = DriftDetector::PageHinkley(ph.clone());
+        a.age(0.5);
+        assert_eq!(a, DriftDetector::PageHinkley(aged));
+        for mut k in every_kind().into_iter().skip(1) {
+            let before = k.clone();
+            k.age(0.5);
+            assert_eq!(k, before);
+        }
+    }
+
+    /// `reset` starts each kind again from nothing seen: equal to a new one.
+    #[test]
+    fn reset_is_a_new_detector_of_every_kind() {
+        for (mut a, fresh) in every_kind().into_iter().zip(every_kind()) {
+            let mut s = 13u64;
+            for _ in 0..300 {
+                a.update(lcg(&mut s) * 2.0 + 1.0, 1.0, 1.0, 0.95);
+            }
+            assert_ne!(a, fresh, "{a:?} has seen rows");
+            a.reset();
+            assert_eq!(a, fresh);
+        }
+    }
+
     /// What each kind reads: CUSUM the signed scaled residual (a residual of
     /// `−3σ` is a downward shift), ADWIN and KSWIN its size, DDM and EDDM
     /// whether its size passes `error_above`, strictly.
