@@ -710,7 +710,7 @@ def profile(
     closed: Any = "right",
     offset: Any = None,
     weight: Any = None,
-    min_weight: Any = 0.0,
+    min_samples: Any = 1,
     bias: Any = None,
     max_state_bytes: Any = None,
     who: str = "rp.ewm_profile",
@@ -769,15 +769,15 @@ def profile(
         raise TypeError(
             f'{who}: bias is given, but only stat="var" or "std" takes it. Leave out bias.'
         )
-    wrong = isinstance(min_weight, bool) or not isinstance(min_weight, numbers.Real)
-    if wrong or not (math.isfinite(min_weight) and min_weight >= 0):
+    wrong = isinstance(min_samples, bool) or not isinstance(min_samples, numbers.Integral)
+    if wrong or not 1 <= min_samples <= MAX_MIN_SAMPLES:
         msg = (
-            f"{who}: min_weight must be a finite number of 0 or more, but it is "
-            f"{min_weight!r}. Set min_weight to the weight a phase needs before it is read, "
-            f"or 0."
+            f"{who}: min_samples must be an integer of at least 1 and at most "
+            f"{MAX_MIN_SAMPLES}, but it is {min_samples!r}. Set min_samples to the rows a phase "
+            f"needs before it is read."
         )
         raise WrongTypeError(msg) if wrong else ValueError(msg)
-    params["min_weight"] = float(min_weight)
+    params["min_samples"] = int(min_samples)
     if weight is not None:
         params["weight"] = _input_tree(f"{who}: weight", weight)
     if max_state_bytes is not None:

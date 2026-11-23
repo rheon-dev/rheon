@@ -94,7 +94,7 @@ def oracle(
     age: pl.Expr,
     half_life: float,
     closed: str = "right",
-    min_weight: float = 0.0,
+    min_samples: int = 1,
     bias: bool = False,
     weight: str | None = "w",
 ) -> pl.DataFrame:
@@ -119,13 +119,14 @@ def oracle(
     )
     mean = (pl.col("wd") * pl.col("x")).sum() / pl.col("wd").sum()
     agg = j.group_by("i").agg(
+        n=pl.len(),
         v1=pl.col("wd").sum(),
         v2=(pl.col("wd") ** 2).sum(),
         mean=mean,
         m2=(pl.col("wd") * (pl.col("x") - mean) ** 2).sum(),
     )
     out = d.select("i").join(agg, on="i", how="left", maintain_order="left")
-    seen = (pl.col("v1") > 0) & (pl.col("v1") >= min_weight)
+    seen = pl.col("n") >= min_samples
     var = (
         pl.col("m2") / pl.col("v1")
         if bias
@@ -280,27 +281,30 @@ def test_a_numeric_an_integer_and_a_row_clock():
     close(out["v"], want["var"])
 
 
-def test_an_unseen_phase_is_withheld_by_its_weight():
-    """A phase with no weight is null; ``min_weight`` withholds one whose
-    decayed weight is below it, which a long absence brings about."""
+def test_an_unseen_phase_is_withheld_and_min_samples_counts_its_rows():
+    """A phase no row has reached is null; ``min_samples`` withholds one
+    holding fewer rows with a value and a weight, as Polars'
+    ``rolling_*_by`` counts them, however far back they are."""
     df = pl.DataFrame(
         {
             "t": [datetime(2026, 1, d, h) for d, h in [(5, 8), (5, 9), (6, 8), (20, 8), (20, 10)]],
             "g": ["a"] * 5,
             "x": [1.0, 2.0, 3.0, 5.0, 7.0],
+            "w": [1.0, 1.0, 0.0, 1.0, 1.0],
         }
     )
-    kw = {"period": "1d", "buckets": 24, "half_life": "1d"}
+    kw = {"period": "1d", "buckets": 24, "half_life": "1d", "weight": "w"}
     out = run(
         df,
         m=rp.ewm_profile("x", closed="left", **kw),
-        gated=rp.ewm_profile("x", closed="left", min_weight=0.5, **kw),
+        two=rp.ewm_profile("x", closed="left", min_samples=2, **kw),
+        r2=rp.ewm_profile("x", min_samples=2, **kw),
     )
-    assert out["m"].to_list()[:3] == [None, None, 1.0]
-    assert out["m"][4] is None
-    # On the 20th the 08:00 phase last saw a row 14 days before: its weight
-    # is 2^-14 + 2^-15, below 0.5, so it is withheld; without a minimum, read.
-    assert out["gated"][3] is None and abs(out["m"][3] - (1 * 0.5 + 3) / 1.5) < 1e-12
+    assert out["m"].to_list() == [None, None, 1.0, 1.0, None]
+    # The 08:00 phase holds one row before the 20th (the 6th's weighs 0).
+    assert out["two"].to_list() == [None] * 5
+    # Under "right" the 20th's own row is the second.
+    assert out["r2"][3] is not None and out["r2"][0] is None
 
 
 def test_a_zero_weight_row_reads_its_phase_and_adds_nothing():
@@ -344,7 +348,7 @@ def test_a_save_and_load_at_every_stamp_is_one_run(tmp_path: Path):
 
 def test_the_state_is_bounded_by_the_buckets(tmp_path: Path):
     """A run of 5 days and one of 200 save states of the same size, give or
-    take the last rows' clock: 48 bytes a bucket a group."""
+    take the last rows' clock: 56 bytes a bucket a group."""
     sizes = []
     for days in (5, 200):
         df = stream(days, seed=8)
@@ -363,11 +367,11 @@ def test_the_state_is_bounded_by_the_buckets(tmp_path: Path):
 
 def test_a_profile_past_its_cap_is_refused_with_its_bytes():
     df = stream(1, seed=9)
-    with pytest.raises(Exception, match=r"holds 1152 bytes a group, 24 buckets of 48 bytes"):
+    with pytest.raises(Exception, match=r"holds 1344 bytes a group, 24 buckets of 56 bytes"):
         run(
             df, m=rp.ewm_profile("x", period="1d", buckets=24, half_life="1d", max_state_bytes=1000)
         )
-    run(df, m=rp.ewm_profile("x", period="1d", buckets=24, half_life="1d", max_state_bytes=1152))
+    run(df, m=rp.ewm_profile("x", period="1d", buckets=24, half_life="1d", max_state_bytes=1344))
 
 
 def test_the_refusals():
@@ -380,8 +384,8 @@ def test_the_refusals():
         rp.ewm_profile("x", period="1d", buckets=24, half_life="1d", bias=True)
     with pytest.raises(ValueError, match="stat must be"):
         rp.ewm_profile("x", period="1d", buckets=24, half_life="1d", stat="median")  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="min_weight must be"):
-        rp.ewm_profile("x", period="1d", buckets=24, half_life="1d", min_weight=-1)
+    with pytest.raises(ValueError, match="min_samples must be an integer of at least 1"):
+        rp.ewm_profile("x", period="1d", buckets=24, half_life="1d", min_samples=0)
     with pytest.raises(Exception, match="month has no fixed length"):
         run(df, m=rp.ewm_profile("x", period="1mo", buckets=12, half_life="1d"))
     with pytest.raises(Exception, match="needs a temporal clock"):

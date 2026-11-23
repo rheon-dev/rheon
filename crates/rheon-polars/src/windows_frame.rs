@@ -596,7 +596,7 @@ fn profile_def(
         closed: op.closed,
         input: x,
         weight,
-        min_weight: params.min_weight,
+        min_samples: op.min_samples,
         bias: op.bias,
         cap: params
             .max_state_bytes

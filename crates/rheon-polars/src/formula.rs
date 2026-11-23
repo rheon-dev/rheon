@@ -122,7 +122,6 @@ pub struct ProfileParams {
     pub offset: Option<Span>,
     pub buckets: u32,
     pub stat: ProfileStat,
-    pub min_weight: f64,
     pub weight: Option<Node>,
     pub max_state_bytes: Option<u64>,
 }
@@ -170,9 +169,8 @@ impl OpNode {
             m.insert("quantile".into(), json!(q));
         }
         if let Some(p) = &self.profile {
-            // A profile has no `min_samples` and no `partial`: its weight
-            // withholds it.
-            m.remove("min_samples");
+            // A profile has no `partial`: its `min_samples` counts a
+            // bucket's rows.
             m.insert(
                 "period".into(),
                 serde_json::to_value(&p.period).expect("a span is JSON"),
@@ -188,7 +186,6 @@ impl OpNode {
             if p.stat != ProfileStat::Mean {
                 m.insert("bias".into(), json!(self.bias));
             }
-            m.insert("min_weight".into(), json!(p.min_weight));
             if let Some(w) = &p.weight {
                 m.insert("weight".into(), w.to_json());
             }
@@ -947,14 +944,14 @@ fn profile_of(input: Node, params: &Map<String, Value>) -> Result<OpNode, String
         half_life: None,
         window_size: None,
         closed: Closed::Right,
-        min_samples: 0,
+        min_samples: 1,
         partial: None,
         bias: false,
         quantile: None,
         profile: None,
     };
     let (mut period, mut offset, mut buckets, mut stat) = (None, None, None, ProfileStat::Mean);
-    let (mut min_weight, mut weight, mut max_state_bytes) = (0.0, None, None);
+    let (mut weight, mut max_state_bytes) = (None, None);
     let mut bias = None;
     for (k, v) in params {
         match k.as_str() {
@@ -1010,14 +1007,19 @@ fn profile_of(input: Node, params: &Map<String, Value>) -> Result<OpNode, String
                     )
                 })?);
             }
-            "min_weight" => {
-                min_weight = v.as_f64().filter(|w| w.is_finite() && *w >= 0.0).ok_or_else(|| {
-                    format!(
-                        "{name}: min_weight must be a finite number of 0 or more, but it is {}. \
-                         Set min_weight to the weight a phase needs before it is read, or 0.",
-                        short(v)
-                    )
-                })?;
+            "min_samples" => {
+                op.min_samples = v
+                    .as_u64()
+                    .and_then(|n| u32::try_from(n).ok())
+                    .filter(|&n| n >= 1)
+                    .ok_or_else(|| {
+                        format!(
+                            "{name}: min_samples must be a whole number from 1 to {}, but it is \
+                             {}. Set min_samples to the rows a phase needs before it is read.",
+                            u32::MAX,
+                            short(v)
+                        )
+                    })?;
             }
             "weight" => {
                 let w = Node::from_json(v)?;
@@ -1040,7 +1042,7 @@ fn profile_of(input: Node, params: &Map<String, Value>) -> Result<OpNode, String
             other => {
                 return Err(format!(
                     "{name}: {other:?} is not one of its parameters, which are period, buckets, \
-                     half_life, stat, closed, offset, weight, min_weight, bias and \
+                     half_life, stat, closed, offset, weight, min_samples, bias and \
                      max_state_bytes. Remove {other:?}, or correct its name."
                 ));
             }
@@ -1096,7 +1098,6 @@ fn profile_of(input: Node, params: &Map<String, Value>) -> Result<OpNode, String
         offset,
         buckets,
         stat,
-        min_weight,
         weight,
         max_state_bytes,
     }));

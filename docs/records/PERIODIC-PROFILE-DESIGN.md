@@ -156,6 +156,17 @@ weight.
 - A row of weight 0, or with no value, reads its phase's profile and adds
   nothing, and counts in no clock (rule 9).
 
+**As built: the check is `min_samples`, not a weight** (the coordinator's
+ruling of 2026-11-23). A profile is a window operator, and the window
+operators withhold by Polars' `min_samples`, the count of rows with a value
+in the window, as `rolling_*_by` does; rule 8's `n_eff` is the models'. So
+`ewm_profile` takes `min_samples` (default 1) and counts each bucket's rows
+with a value and a weight above 0, inside the window where there is one.
+A bucket no row has reached is null under any `min_samples`. The
+`min_weight` above, and the effective weight `1 / (zᵀ G⁻¹ z)` for the
+harmonic form, are not built; the harmonic form's withholding is settled
+when it is.
+
 ## Decay and a window
 
 - **`half_life` decays by the clock's age, not by the bucket's own

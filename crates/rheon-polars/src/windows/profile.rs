@@ -41,10 +41,11 @@
 //! `"left"` (and `"none"`) they are not, and the value is known as the
 //! stamp arrives.
 //!
-//! **Withheld** (null): a bucket whose weight, decayed to the row's time, is
-//! 0 or below `min_weight`; a variance of a bucket one row's weight fills
-//! (`V1² = V2`). A row of weight 0, or with no value, reads its bucket and
-//! adds nothing.
+//! **Withheld** (null): a bucket holding fewer than `min_samples` rows with
+//! a value and a weight above 0, as Polars' `rolling_*_by` and the window
+//! operators count them, so a bucket no row has reached is null; a variance
+//! of a bucket one row's weight fills (`V1² = V2`). A row of weight 0, or
+//! with no value, reads its bucket and adds nothing.
 
 use rheon_core::{ClockValue, seconds_of_ns};
 use serde::{Deserialize, Serialize};
@@ -59,10 +60,10 @@ const WEEK_NS: i64 = 7 * DAY_NS;
 /// starts a whole number of weeks.
 const MONDAY_NS: i64 = 4 * DAY_NS;
 
-/// The bytes one bucket of one operator's state is counted at: its six
-/// numbers (`V1`, `V2`, `m`, `M2` and the time it was last moved, which is
-/// two words as a tagged clock value).
-pub const BUCKET_BYTES: u64 = 48;
+/// The bytes one bucket of one operator's state is counted at: its seven
+/// numbers (its rows, `V1`, `V2`, `m`, `M2` and the time it was last moved,
+/// which is two words as a tagged clock value).
+pub const BUCKET_BYTES: u64 = 56;
 
 /// An operator's `max_state_bytes` where the call sets none: 256 KB.
 pub const PROFILE_STATE_BYTES: u64 = 256 * 1024;
@@ -123,7 +124,8 @@ pub struct ProfileDef {
     pub input: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub weight: Option<usize>,
-    pub min_weight: f64,
+    /// The rows with a value a bucket needs before it is read, at least 1.
+    pub min_samples: u32,
     pub bias: bool,
     /// The most bytes one group's state of this operator may hold.
     pub cap: u64,
@@ -165,7 +167,7 @@ impl ProfileDef {
             || !offset_finite
             || self.half_life.is_nan()
             || self.half_life <= 0.0
-            || !(self.min_weight >= 0.0 && self.min_weight.is_finite())
+            || self.min_samples == 0
             || self.bytes() > self.cap
         {
             return Err(format!("profile operator {self:?} cannot run"));
@@ -200,6 +202,8 @@ fn zone_offset_ns(zone: &chrono_tz::Tz, ns: i64) -> i64 {
 /// A bucket's weighted moments and the time they were last moved to.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub(super) struct Bucket {
+    /// The rows with a value and a weight above 0 it holds.
+    n: u64,
     v1: f64,
     v2: f64,
     m: f64,
@@ -210,6 +214,7 @@ pub(super) struct Bucket {
 impl Default for Bucket {
     fn default() -> Self {
         Self {
+            n: 0,
             v1: 0.0,
             v2: 0.0,
             m: 0.0,
@@ -324,14 +329,10 @@ pub(super) fn bucket(def: &ProfileDef, clock: Option<ClockValue>, rows: i64) -> 
     }
 }
 
-/// The profile of a bucket read at time `now`.
-fn read(def: &ProfileDef, b: &Bucket, now: ClockValue) -> f64 {
-    if b.v1 <= 0.0 {
-        return f64::NAN;
-    }
-    let d = decay(def, b.at, now);
-    let v1 = b.v1 * d;
-    if v1.is_nan() || v1 <= 0.0 || v1 < def.min_weight {
+/// The profile of a bucket. A decay scales every moment of it alike, so
+/// its time drops out of every ratio read.
+fn read(def: &ProfileDef, b: &Bucket, _now: ClockValue) -> f64 {
+    if b.n == 0 || b.n < u64::from(def.min_samples) {
         return f64::NAN;
     }
     match def.stat {
@@ -368,6 +369,7 @@ fn add(def: &ProfileDef, b: &mut Bucket, x: f64, w: f64, now: ClockValue) {
     } else {
         1.0
     };
+    b.n += 1;
     b.v1 = b.v1 * d + w;
     b.v2 = b.v2 * d * d + w * w;
     b.m2 *= d;
@@ -464,7 +466,7 @@ mod tests {
             closed: Closed::Right,
             input: 0,
             weight: None,
-            min_weight: 0.0,
+            min_samples: 1,
             bias: false,
             cap: PROFILE_STATE_BYTES,
         }
@@ -543,14 +545,16 @@ mod tests {
         assert!((got - want).abs() < 1e-12 * want, "{got} {want}");
         d.stat = ProfileStat::Mean;
         assert!((read(&d, &b, ClockValue::F64(now)) - m).abs() < 1e-12);
-        // Below min_weight, withheld.
-        d.min_weight = v1 * 1.0001;
+        // Fewer rows than min_samples, withheld.
+        d.min_samples = 5;
         assert!(read(&d, &b, ClockValue::F64(now)).is_nan());
+        d.min_samples = 4;
+        assert!(!read(&d, &b, ClockValue::F64(now)).is_nan());
         // One row's weight fills a variance: withheld.
         let mut one = Bucket::default();
         add(&d, &mut one, 3.0, 2.0, ClockValue::F64(0.0));
         d.stat = ProfileStat::Var;
-        d.min_weight = 0.0;
+        d.min_samples = 1;
         assert!(read(&d, &one, ClockValue::F64(1.0)).is_nan());
         assert!(read(&d, &Bucket::default(), ClockValue::F64(1.0)).is_nan());
     }

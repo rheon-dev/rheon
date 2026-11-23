@@ -1295,7 +1295,7 @@ def ewm_profile(
     closed: Literal["right", "left", "both", "none"] = "right",
     offset: float | Duration | None = None,
     weight: str | pl.Expr | None = None,
-    min_weight: float = 0.0,
+    min_samples: int = 1,
     bias: bool | None = None,
     max_state_bytes: int | None = None,
 ) -> pl.Expr:
@@ -1350,26 +1350,27 @@ def ewm_profile(
         Each row's weight: a column name or an element-wise expression of the
         row. ``None`` (the default) weighs every row 1. A row whose weight is
         null, NaN, infinite or not above 0 adds nothing.
-    ``min_weight``
-        The weight a phase needs before it is read, counted at the row's
-        time, after its decay. Default 0: a phase with any weight is read,
-        and one with none is null.
+    ``min_samples``
+        The rows with a value and a weight above 0 a phase needs before it is
+        read, as :func:`ewm_mean` and Polars' ``rolling_*_by`` count them.
+        Default 1: a phase any row has reached is read, and one none has is
+        null.
     ``bias``
         For ``stat="var"`` or ``"std"`` only. ``False`` (the default)
         corrects the weighted second moment for the weights' number and
         inequality, as :func:`ewm_var` does; ``True`` reports it as it is.
     ``max_state_bytes``
         The most bytes one group's profile may hold, a whole number from 1
-        to 64 MiB. Default ``None``, 262,144 (256 KB). A profile holds 48
-        bytes a bucket, so the default holds 5,461 buckets; a call past its
+        to 64 MiB. Default ``None``, 262,144 (256 KB). A profile holds 56
+        bytes a bucket, so the default holds 4,681 buckets; a call past its
         cap is refused before it reads a row, naming its bytes.
 
     .. rubric:: Returns
 
     A ``pl.Expr`` that :func:`rheon.polars.stream.with_windows` computes as a
-    column, one profile per group. It is null where the row's phase has no
-    weight, or less than ``min_weight``; for a variance, also where one
-    row's weight fills the phase.
+    column, one profile per group. It is null where the row's phase holds
+    fewer rows than ``min_samples``, so a phase no row has reached is null;
+    for a variance, also where one row's weight fills the phase.
 
     .. rubric:: Raises
 
@@ -1377,14 +1378,13 @@ def ewm_profile(
         When ``input`` or ``weight`` is neither a column name nor a
         ``pl.Expr``, ``period``, ``half_life`` or ``offset`` is neither a
         number nor a duration, ``buckets`` or ``max_state_bytes`` is not an
-        integer, ``min_weight`` is not a number (each a
+        integer, ``min_samples`` is not an integer (each a
         :class:`~rheon.WrongTypeError`), or ``bias`` is not ``True`` or
         ``False``.
     ``ValueError``
         When ``period`` or ``half_life`` is not above 0, ``buckets`` is below
-        1, ``stat`` or ``closed`` is not one of its words, ``min_weight`` is
-        negative or not finite, or ``max_state_bytes`` is below 1 or above
-        64 MiB.
+        1, ``stat`` or ``closed`` is not one of its words, ``min_samples`` is
+        below 1, or ``max_state_bytes`` is below 1 or above 64 MiB.
 
     .. rubric:: Examples
 
@@ -1444,7 +1444,7 @@ def ewm_profile(
     The variance is ``M2 / V1`` times ``V1² / (V1² − V2)`` unless ``bias``.
     A bucket decays by the clock whether or not a row falls in it.
 
-    **The state** is a group's buckets, ``48 · buckets`` bytes, whatever the
+    **The state** is a group's buckets, ``56 · buckets`` bytes, whatever the
     stream's length. The oracle is Polars' ``group_by`` over the phase on
     one chunk, with the decayed weights written out.
     """
@@ -1457,7 +1457,7 @@ def ewm_profile(
         closed=closed,
         offset=offset,
         weight=weight,
-        min_weight=min_weight,
+        min_samples=min_samples,
         bias=bias,
         max_state_bytes=max_state_bytes,
     )
