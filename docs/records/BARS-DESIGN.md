@@ -2,7 +2,8 @@
 # Threshold-triggered bars: the design (task 562)
 
 Status, 2026-11-23: a design, with nothing built. The questions in the last
-section wait for the user's answers, and the build follows them.
+section wait for the user's answers, and the build follows them. The
+third-party libraries are checked as oracles ([Oracles](#oracles)).
 
 A **bar** here is one output row that aggregates a run of consecutive input
 rows. It closes at the row where a running quantity reaches a threshold.
@@ -533,21 +534,54 @@ the bars frame, agrees with the `with_windows` recipe within the rounding of
 two running sums of 50 terms. It is equal to the bit for integer volumes.
 The library's part is the bars, which the oracles above hold.
 
-**The libraries scanned, and what each could check.** The scan is from the
-package indexes' descriptions, 2026-11-23. None was installed, so whether
-each takes a fixed threshold, its licence and its arithmetic are still to be
-checked:
+**The third-party libraries, checked as oracles.** Each library below was
+installed at the version named, its bar code read, and run on seeded
+streams against the three rules of [The crossing rule](#the-crossing-rule)
+written out in `fractions.Fraction`: the count, the sum with its remainder
+carried as multiples of the threshold, and the signed sum that resets to 0
+at each bar. The streams are 4,000 rows on a dyadic grid (sizes the
+integers 1 to 100, prices `j / 64` in [10, 20)), so every double sum a
+library makes is exact and its own arithmetic cannot be what differs; three
+seeds without and three with rows past the threshold (sizes 600 to 2,500
+against a threshold of 500). A rule "matches" when the closing rows agree
+on all six streams, and each library's comparison at exactly the threshold
+was checked on a stream whose running total lands on it. Checked
+2026-11-23:
 
-| library | what it builds | as an oracle |
-|---|---|---|
-| `mlfinpy` (PyPI; the successor of `mlfinlab`) | tick, volume and dollar bars, and imbalance and run bars with López de Prado's adaptive thresholds; its imbalance bars reset at each bar | a second opinion on fixed-threshold bars, if it takes one; it cannot check the adaptive threshold, which this design leaves out |
-| `finmlkit`, `ml4t-engineer`, `bar-forge` (PyPI) | volume, dollar and imbalance bars; `bar-forge` states that the crossing trade stays whole | the same, once read |
-| `PINstimation` (CRAN) | VPIN after Easley, López de Prado and O'Hara, its buckets a fraction of the average daily volume, built from time bars (Abad and Yagüe, 2012) | VPIN on buckets that split, so it agrees with whole-row bars only in distribution; a test-only R dependency, as other oracles use, if a split mode is ever built |
+| library | version, licence, upkeep | count | sum, remainder carried | imbalance, reset |
+|---|---|---|---|---|
+| `bar-forge` (PyPI) | 1.0.1, MIT, two releases in August 2026; depends on NumPy alone | matches (`tick_bars`) | differs: its `volume_bars` and `dollar_bars` reset the total to 0 at each close, so the excess of the closing row is lost; that reset rule is this design's `"imbalance"` on a quantity that is never negative, and matches it | matches, with a fixed threshold (`tick_imbalance_bars`, `volume_imbalance_bars`: `\|θ\| >= threshold`, then 0); it signs each trade itself by the tick rule, +1 before the first price change and the last sign carried over a step of 0 |
+| `ml4t-engineer` (PyPI) | 0.2.1, MIT, 28 releases from January to October 2026; requires `polars>=2.0`, `pydantic`, `structlog`, `numba` and `ml4t-specs` | matches (`TickBarSampler`) | differs as `bar-forge` does: `VolumeBarSampler` and `DollarBarSampler` reset to 0 | matches (`FixedTickImbalanceBarSampler`, `FixedVolumeImbalanceBarSampler`, signs given as a column); its default `ImbalanceBarSampler` is López de Prado's adaptive threshold, which this design leaves out |
+| `mlfinpy` (PyPI; the successor of `mlfinlab`) | 0.1.2, MIT, two releases in October 2024 and none since; requires `numpy<1.27`, `pandas<3`, `numba<0.61` | matches (`get_tick_bars`) | differs: `get_volume_bars` and `get_dollar_bars` reset to 0 | differs: its imbalance bars take only the adaptive threshold, and compare with `>`, not `>=` |
+| `finmlkit` (PyPI) | 0.1.11, MIT, six releases from August to September 2025 and none since; requires `numpy~=2.2.0`, `pandas~=2.2.0` | matches in the closing rows; its aggregates leave the stream's first row out of the first bar, though that row counts toward the first threshold | differs: volume bars reset to 0; dollar bars carry, but subtract the threshold once, so they match this design only while every row is below the threshold, and after a row past it they close a bar on each of the following rows until the excess is spent | not built: its imbalance and run bar functions raise `NotImplementedError` |
+| `PINstimation` (CRAN) | 0.2.2, GPL-3 or later, November 2026; R | does not build bars from rows | differs: VPIN's volume buckets are the multiples of the bucket size on the running total, as here, but are built from time bars, not from rows, and a time bar that straddles a bucket's edge, or is larger than a bucket, is split across buckets by volume; the bucket size is the average daily volume over a count of buckets, read from the whole input | does not build them |
 
-No library computes the exact-arithmetic bars this design gives, so the
-oracles of record are Polars' construction and the exact one in `Fraction`,
-and a library from the scan is a second opinion where it agrees on the
-rule.
+Every library compares with `>=` where it takes a fixed threshold, as this
+design does, and every one keeps the crossing row whole in one bar (no
+library splits a row except `PINstimation`). None keeps its running total
+in anything but one double.
+
+**What the operator is held to.** `bar-forge` computes the same count bar
+and the same fixed-threshold imbalance bar, and its reset volume and dollar
+bars are the `"imbalance"` rule on a quantity that is never negative. It
+depends on NumPy alone, so it is a test-only dependency, and a test holds
+the operator to it on a seeded stream: the closing rows, and the open, high,
+low, close, row count, volume and notional of each bar, to the bit (its
+sums are plain doubles in row order, exact on the dyadic grid). The signs of
+its imbalance bars are its own `tick_rule_signs`, fed to the operator as the
+quantity's sign. `ml4t-engineer` computes the same count and imbalance bars
+as `bar-forge`, row for row on the streams above. It cannot be a test
+dependency: it requires `polars>=2.0`, which the floor of this library's
+Polars range cannot install beside it, so it was checked once, outside the
+suite, at the version above. `mlfinpy` and `finmlkit` require NumPy and
+pandas versions older than the ones the tests run on, so they too were
+checked outside the suite, each in an environment of its own.
+
+**No library carries the remainder as multiples of the threshold**, which
+is the `"sum"` rule. Its oracles of record are Polars' `cum_sum` and
+`group_by` construction above, and the same construction in `Fraction`.
+`finmlkit`'s dollar bars are the one library rule that carries, and they
+agree with `"sum"` only on a stream whose every row is below the threshold.
 
 ## Tests and budgets
 
