@@ -648,11 +648,11 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [messages."crates/rheon-core/src/power_variation.rs"]
 
+[messages."crates/rheon-core/src/psquared.rs"]
+
 [messages."crates/rheon-core/src/realized.rs"]
 
 [messages."crates/rheon-core/src/streampca.rs"]
-
-[messages."crates/rheon-core/src/psquared.rs"]
 
 [messages."crates/rheon-core/src/tdigest.rs"]
 
@@ -711,9 +711,9 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [docstrings."python/rheon/_spec_glm.py"]
 
-[docstrings."python/rheon/_spec_pca.py"]
-
 [docstrings."python/rheon/_spec_moments.py"]
+
+[docstrings."python/rheon/_spec_pca.py"]
 
 [docstrings."python/rheon/_spec_point.py"]
 
@@ -753,11 +753,11 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [vocabulary."crates/rheon-core/src/power_variation.rs#messages"]
 
+[vocabulary."crates/rheon-core/src/psquared.rs#messages"]
+
 [vocabulary."crates/rheon-core/src/realized.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/streampca.rs#messages"]
-
-[vocabulary."crates/rheon-core/src/psquared.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/tdigest.rs#messages"]
 
@@ -783,9 +783,9 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [vocabulary."crates/rheon-polars/src/windows/cross.rs#messages"]
 
-[vocabulary."docs/how-to/merge-streams-by-the-clock.md"]
-
 [vocabulary."crates/rheon-polars/src/windows/moments.rs#messages"]
+
+[vocabulary."docs/how-to/merge-streams-by-the-clock.md"]
 
 [vocabulary."python/rheon/_cpu_check.py#messages"]
 
@@ -803,10 +803,10 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [vocabulary."python/rheon/_spec_glm.py#docstrings"]
 
+[vocabulary."python/rheon/_spec_moments.py#docstrings"]
+
 [vocabulary."python/rheon/_spec_pca.py#docstrings"]
 "retired" = 1
-
-[vocabulary."python/rheon/_spec_moments.py#docstrings"]
 
 [vocabulary."python/rheon/_spec_point.py#docstrings"]
 
