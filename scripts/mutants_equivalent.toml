@@ -832,25 +832,6 @@ is `raw`"""
 
 [[equivalent]]
 file = "crates/rheon-core/src/corrchange.rs"
-function = "<impl crate::OnlineModel for CorrChange>::step_into"
-mutation = "replace * with +"
-line_has = "} else if self.cfg.crit.is_none() && self.ring.len() >= 2 * w {"
-why = """below 2w rows the ring has not been full since it was last emptied, \
-which dropped the permutation value too, so the mutant's earlier calls find \
-none and `permutation_crit` returns `None` before drawing (its own 2w \
-guard): the value stays `None` and `since_perm` 0, as without the calls"""
-
-[[equivalent]]
-file = "crates/rheon-core/src/corrchange.rs"
-function = "<impl crate::OnlineModel for CorrChange>::step_into"
-mutation = "replace * with /"
-line_has = "} else if self.cfg.crit.is_none() && self.ring.len() >= 2 * w {"
-why = """`2 / w` is 0, so the mutant calls `permutation_crit` from the first \
-row; below 2w rows it finds no value held and returns `None` before \
-drawing, as the `replace * with +` entry above says"""
-
-[[equivalent]]
-file = "crates/rheon-core/src/corrchange.rs"
 function = "bartlett"
 mutation = "replace < with <="
 line_has = "if a < 1.0 { 1.0 - a } else { 0.0 }"
@@ -882,14 +863,6 @@ mutation = "replace > with >="
 line_has = "scale.push(if sd > 0.0 { sd } else { f64::NAN });"
 why = """`long_run_sd` never returns 0: it is the root of a positive `v`, \
 itself positive, or NaN"""
-
-[[equivalent]]
-file = "crates/rheon-core/src/corrchange.rs"
-function = "CorrChange::sequential_stat"
-mutation = "replace > with >="
-line_has = "let rho = if den > 0.0 { c / den } else { f64::NAN };"
-why = """at `den = 0` the mutant's `c / 0` is NaN or ±inf, and the ratio built \
-from it is not finite and is skipped, as the original's NaN is"""
 
 [[equivalent]]
 file = "crates/rheon-core/src/corrchange.rs"
@@ -966,30 +939,6 @@ mutation = "replace * with /"
 line_has = "if rows.len() < 2 * w {"
 why = """every caller passes exactly 2w rows, and `2 / w` is 0, so the guard \
 is false either way"""
-
-[[equivalent]]
-file = "crates/rheon-core/src/corrchange.rs"
-function = "CorrChange::permutation_crit"
-mutation = "replace < with >"
-line_has = "if self.ring.len() < 2 * w {"
-why = """called only from `step` under `ring.len() >= 2 * w`, with the ring \
-never past 2w, so it always sees exactly 2w rows and neither guard fires"""
-
-[[equivalent]]
-file = "crates/rheon-core/src/corrchange.rs"
-function = "CorrChange::permutation_crit"
-mutation = "replace * with +"
-line_has = "if self.ring.len() < 2 * w {"
-why = """it always sees exactly 2w rows (see `replace < with >`), and `2w < w \
-+ 2` is false for every `w >= 3`"""
-
-[[equivalent]]
-file = "crates/rheon-core/src/corrchange.rs"
-function = "CorrChange::permutation_crit"
-mutation = "replace * with /"
-line_has = "if self.ring.len() < 2 * w {"
-why = """it always sees exactly 2w rows, and `2 / w` is 0, so the guard is \
-false either way"""
 
 [[equivalent]]
 file = "crates/rheon-core/src/corrchange.rs"
@@ -2190,73 +2139,6 @@ why = "as `replace > with <` here: a band width moves which thread sums a column
 # Task 270 (n) (docs/PLAN.md): the survivors of run 40093702329 over the
 # lines of the push to 85da91e that no input tells from the original. Every
 # other survivor there got a test.
-
-[[equivalent]]
-file = "crates/rheon-core/src/corrchange.rs"
-function = "CorrChange::monitor_stat_at"
-mutation = "replace || with &&"
-line_has = "if den.is_nan() || den <= 0.0 {"
-why = """the guard skips a prefix with no correlation; let through, its `rj = \
-sab / den` is not finite on every such `den` -- `sab / NaN` is NaN, and \
-`sab / 0` (or `/ -0`, the only negative `sqrt` gives) is `±inf` or NaN -- \
-and the `!rj.is_finite()` guard on the next line skips it the same; `den` \
-is otherwise positive, where both forms let it through"""
-
-[[equivalent]]
-file = "crates/rheon-core/src/corrchange.rs"
-function = "CorrChange::window_stat_by"
-mutation = "replace < with >"
-line_has = "if n < 2 * w || w < 2 {"
-why = """on `n < 2 * w`: both callers, the window kind's row and its \
-permutation draws, pass `n = 2 * w`, so `n > 2 * w` is false as `n < 2 * \
-w` is; and `w < 2` is false on every call, the window kind's `span_rows` \
-being at least 3 at `new` and at `restore` (the cfg is private). On `w < \
-2` the mutant is `w > 2`, true on every call, which every window test \
-catches"""
-
-[[equivalent]]
-file = "crates/rheon-core/src/corrchange.rs"
-function = "CorrChange::window_stat_by"
-mutation = "replace * with +"
-line_has = "if n < 2 * w || w < 2 {"
-why = """`n = 2 * w` on every call (see `replace < with >` here), and `2 * w < \
-2 + w` only for `w < 2`, which no window kind's `span_rows` is: false as \
-the original is"""
-
-[[equivalent]]
-file = "crates/rheon-core/src/corrchange.rs"
-function = "CorrChange::window_stat_by"
-mutation = "replace * with /"
-line_has = "if n < 2 * w || w < 2 {"
-why = """`n = 2 * w` on every call (see `replace < with >` here), and `2 / w` \
-is 0 for the window kind's `span_rows` of at least 3: false as the \
-original is"""
-
-[[equivalent]]
-file = "crates/rheon-core/src/corrchange.rs"
-function = "CorrChange::window_stat_by"
-mutation = "replace || with &&"
-line_has = "if n < 2 * w || w < 2 {"
-why = """both clauses are false on every call (see `replace < with >` here), \
-so their `&&` is false as their `||` is"""
-
-[[equivalent]]
-file = "crates/rheon-core/src/corrchange.rs"
-function = "CorrChange::window_stat_by"
-mutation = "replace < with <="
-line_has = "if n < 2 * w || w < 2 {"
-why = """on `w < 2`: the window kind's `span_rows` is at least 3 at `new` and \
-at `restore`, so `w <= 2` is false as `w < 2` is; `n <= 2 * w` on the \
-first clause would be true on every call, and is caught"""
-
-[[equivalent]]
-file = "crates/rheon-core/src/corrchange.rs"
-function = "CorrChange::window_stat_by"
-mutation = "replace < with =="
-line_has = "if n < 2 * w || w < 2 {"
-why = """on `w < 2`: `w == 2` is false for every window kind's `span_rows`, \
-at least 3, as `w < 2` is; `n == 2 * w` on the first clause would be \
-true on every call, and is caught"""
 
 [[equivalent]]
 file = "crates/rheon-core/src/seqtest.rs"

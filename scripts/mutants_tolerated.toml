@@ -182,14 +182,6 @@ two part only where `cdf(mid) == p` exactly, and the quantiles differ by at \
 most 2.3e-14, relatively"""
 
 [[tolerated]]
-file = "crates/rheon-core/src/corrchange.rs"
-function = "kolmogorov_quantile"
-mutation = "replace < with <="
-line_has = "if kolmogorov_cdf(mid) < target {"
-kind = "rounding"
-why = "the same bisection as `sup_abs_bm_quantile`'s: at most 2.3e-14, relatively"
-
-[[tolerated]]
 file = "crates/rheon-core/src/constraint.rs"
 function = "Constraint::project_with"
 mutation = "replace > with >="
@@ -198,27 +190,6 @@ kind = "rounding"
 why = """the two part only where `g` is exactly 0 at a breakpoint, where both \
 segments give the same projection in exact arithmetic; on a grid of 400,000 \
 inputs, 3,831 differ, each in its last bits"""
-
-[[tolerated]]
-file = "crates/rheon-core/src/corrchange.rs"
-function = "CorrChange::read"
-mutation = "replace > with >="
-line_has = "if q.is_finite() && (stat.is_nan() || q > stat) {"
-kind = "tie"
-why = """the two part only when two pairs' monitoring statistics are exactly \
-equal and their maxima fall on different rows: then `at` names the other \
-row"""
-
-[[tolerated]]
-file = "crates/rheon-core/src/corrchange.rs"
-function = "CorrChange::read"
-mutation = "replace > with >="
-line_has = """let crit = self.cfg.fixed_crit().unwrap_or(f64::NAN);
-                let flag = stat.is_finite() && crit.is_finite() && stat > crit;"""
-kind = "tie"
-why = """the two part only at a statistic exactly equal to the Kolmogorov \
-critical value, which is not configurable, so no input can be built to land \
-on it"""
 
 [[tolerated]]
 file = "crates/rheon-core/src/ewclass.rs"
