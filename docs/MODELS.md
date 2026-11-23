@@ -2336,13 +2336,14 @@ long as it lasts, its rows' `withheld_reason` reading `"not_separated"`.
 
 The test reads two eigenvalue estimates, which `"svd"`'s and `"ccipca"`'s
 variances are. `"oja"`'s are running means along directions that still
-move, and its rate `c/t`, `c = learning_rate / tr` per unit of variance,
-turns a direction toward an eigenvector faster than the direction's
-sampling error shrinks only where `c` times the gap to a neighbor passes
-1/2. Below that the variances differ by the directions' convergence error,
-which the test would read as a gap: at 20 features with variances 4, 4 and
-then 1, one component and the default gain (`4 · 3/26 = 0.46`), the tied
-component was written on every late row of 3 seeds in 8. So `"oja"`
+move. Its rate is `c/t`, with `c = learning_rate / tr` per unit of
+variance. That rate turns a direction toward an eigenvector faster than
+the direction's sampling error shrinks only where `c` times the gap to a
+neighbor passes 1/2. Below that the variances differ by the directions'
+convergence error, which the test would read as a gap. Take 20 features
+with variances 4, 4 and then 1, one component and the default gain (`4 ·
+3/26 = 0.46`): the tied component was written on every late row of 3 seeds
+in 8. So `"oja"`
 writes component `j` only where `learning_rate · gap / tr > 1/2` against
 each neighbor as well, and withholds it as `"not_separated"` otherwise. A
 wide stream, whose gaps are small against its trace, needs a larger
@@ -3448,8 +3449,8 @@ without a decay. `TQ`'s factor is the weight `Σ w` instead, the length of
 the period its sum is of, so `TQ/BV²` is 1 at a constant volatility whatever
 the weights. With unequal weights `1 - BV/RV` has the variance `ϑ Σ w² / (Σ
 w)² = ϑ / n`, so with these two factors `bns` is a standard normal without
-jumps under a decay as well: a simulated null of 20,000 streams under a
-half-life of 100 rows gives a standard deviation within 0.035 of 1 and a
+jumps under a decay as well. A simulated null of 20,000 streams under a
+half-life of 100 rows gives a standard deviation within 0.035 of 1, and a
 size at the 1% cut between 0.008 and 0.016. The sums themselves are
 weighted, so they scale with the weights; `n`, `bns` and the flag do not.
 

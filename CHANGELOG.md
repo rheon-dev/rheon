@@ -700,7 +700,8 @@ model that only the new build has is listed as an addition and passes.
   the component the tie leaves unidentified was written on every row of
   the second half of 20,000 on 3 of 8 seeds (58% on one, reproduced in
   Rust). `oja` now also needs `learning_rate · gap / tr > 1/2` against each
-  neighbor and is withheld as `not_separated` otherwise; a tie is now
+  neighbor and is withheld otherwise, as a component its rows have not
+  told apart; a tie is now
   tested under all three methods, and an isotropic stream too. `svd` and
   `ccipca` do not move. Moves: `pca.pc*`, `pca.withheld_reason`.
 
