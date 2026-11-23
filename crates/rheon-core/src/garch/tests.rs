@@ -124,7 +124,9 @@ fn every_cfg() -> Vec<GarchCfg> {
     out
 }
 
-/// The rows a config's start holds at most, after its refits.
+/// The rows by which a config's start has started on its test series: a
+/// try at `start_rows` and, for a fit not yet at its optimum, at two and
+/// four times it (FIGARCH's start, on its own process, at its first).
 fn start(c: &GarchCfg) -> usize {
     if c.vol == GarchVol::Figarch {
         c.start_rows
@@ -553,75 +555,6 @@ fn egarch_stays_invertible() {
     assert!(m.invertibility()[0].is_finite());
 }
 
-/// A start whose fit sits on a bound of the process's set -- here a GJR
-/// whose `α` is 0, the fit's `α` at its bound -- doubles its rows and
-/// refits, twice, then steps from its last fit and says so. The process is
-/// real (`γ` carries it), so its likelihood-ratio statistic passes.
-#[test]
-fn a_start_on_a_bound_doubles_and_refits() {
-    let c = cfg(GarchVol::Gjr, GarchDist::Normal);
-    let n0 = c.start_rows;
-    let ys = gjr_series([0.05, 0.0, 0.15, 0.88], 4 * n0 + 10, 1, 1.0);
-    let mut m = Garch::new(c).unwrap();
-    for (t, y) in ys.iter().enumerate() {
-        m.step(&[], &[Some(*y)], 1.0, 1.0);
-        let (refits, _) = m.start_report()[0];
-        let want = if t + 1 < n0 {
-            0
-        } else if t + 1 < 2 * n0 {
-            1
-        } else {
-            2
-        };
-        assert_eq!(refits, want, "{t}");
-        assert_eq!(m.started()[0], t + 1 >= 4 * n0, "{t}");
-        assert!(!m.no_effect(), "{t}");
-    }
-    assert_eq!(m.start_report()[0], (2, false));
-}
-
-/// A start whose rows hold no variance process -- every residual the same
-/// size, so a constant variance fits them exactly and the likelihood-ratio
-/// statistic is 0 -- is withheld: it doubles its rows twice, then buffers
-/// afresh at four times the rows, again and again, reporting nothing and
-/// saying why; the fit it withheld is no coefficient.
-#[test]
-fn a_start_with_no_variance_process_waits() {
-    let c = cfg(GarchVol::Gjr, GarchDist::Normal);
-    let n0 = c.start_rows;
-    let ys: Vec<f64> = (0..15 * n0)
-        .map(|t| if t % 2 == 0 { 1.0 } else { -1.0 })
-        .collect();
-    let mut m = Garch::new(c).unwrap();
-    for (t, y) in ys.iter().enumerate() {
-        let out = m.step(&[], &[Some(*y)], 1.0, 1.0);
-        assert!(out.pred.iter().all(|v| v.is_nan()), "{t}");
-        let (refits, sound) = m.start_report()[0];
-        let want = if t + 1 < n0 {
-            0
-        } else if t + 1 < 2 * n0 {
-            1
-        } else {
-            2
-        };
-        assert_eq!((refits, sound), (want, false), "{t}");
-        assert!(!m.started()[0], "{t}");
-        // waiting on the evidence from the first fit on, buffering before it
-        assert_eq!(m.no_effect(), t + 1 >= n0, "{t}");
-        assert_eq!(m.starting(), t + 1 < n0, "{t}");
-        assert!(m.coefficients()[0].iter().all(|v| v.is_nan()), "{t}");
-        // the buffer: fitted at n0 and 2 n0, which double it, and at 4 n0,
-        // which cannot, so emptied there and at every 4 n0 rows after
-        let held = m.series[0].buffer.len();
-        let want = if t + 1 < 4 * n0 {
-            t + 1
-        } else {
-            (t + 1 - 4 * n0) % (4 * n0)
-        };
-        assert_eq!(held, want, "{t}");
-    }
-}
-
 /// A row a million standard deviations out, and a run of zero residuals,
 /// leave every form's state finite and reporting.
 #[test]
@@ -648,7 +581,7 @@ fn the_forecast_is_the_variance_recursion_run_ahead() {
         let mut c = cfg(vol, GarchDist::Normal);
         c.horizon = 5;
         let n0 = start(&c);
-        let ys = gjr_series([0.05, 0.08, 0.0, 0.9], n0 + 200, 18, 1.0);
+        let ys = series_of(&c, n0 + 200, 18);
         let mut m = Garch::new(c).unwrap();
         run(&mut m, &ys[..n0 + 150], &vec![1.0; n0 + 150]);
         assert!(m.started()[0]);
@@ -763,10 +696,9 @@ fn a_clock_span_start_is_warned_of_at_half_the_cap_and_stopped_at_it() {
 }
 
 /// A start of a clock span closes at the first row at or past the span
-/// from its first, once it holds 50 rows, on the stamps handed; a refit
-/// waits for twice the span from the same first row, and a start buffered
-/// afresh (its fit withheld with no doubling left) measures the span from
-/// its own first row.
+/// from its first, once it holds 50 rows, on the stamps handed; a try that
+/// does not start keeps its rows, and the next comes once as many new rows
+/// have come as it held, whatever the clock says.
 #[test]
 fn a_clock_span_start_closes_at_its_span() {
     let ys = gjr_series([0.05, 0.08, 0.0, 0.9], 1500, 21, 1.0);
@@ -774,40 +706,37 @@ fn a_clock_span_start_closes_at_its_span() {
         let mut c = cfg(GarchVol::Garch, GarchDist::Normal);
         c.start_span = Some(span);
         let mut m = Garch::new(c).unwrap();
-        // (the row a fit closed at, the buffer's first row, its refits)
-        let mut fits = Vec::new();
-        let (mut first, mut held) = (0, 0);
+        // the rows each try closed at, and the rows it held
+        let mut tries = Vec::new();
         let mut last = (0, false);
         for (t, y) in ys.iter().enumerate() {
             m.stamp_next(Stamp::from(apart * t as f64));
             m.step(&[], &[Some(*y)], apart, 1.0);
             let now = (m.start_report()[0].0, m.started()[0]);
-            let buffered = m.series[0].buffer.len();
-            if now != last || buffered < held + 1 {
-                fits.push((t, first, last.0));
+            if now != last {
+                tries.push((t, m.series[0].tried));
                 last = now;
             }
-            if buffered < held + 1 {
-                first = t + 1;
+            // nothing is let go: the buffer holds every row learned
+            if !now.1 {
+                assert_eq!(m.series[0].buffer.len(), t + 1, "{apart}");
             }
-            held = buffered;
             if now.1 {
                 break;
             }
         }
-        assert!(fits.len() >= 4, "{apart}: {fits:?}");
-        // every decision falls at the span, doubled for each refit, or at
-        // the start's 50th row, whichever is later: the first row after the
-        // decision before it at which both hold
-        let mut before = 0;
-        for &(t, from, refits) in &fits {
-            let reached = |t: usize| {
-                t + 1 - from >= MIN_START_ROWS
-                    && apart * (t - from) as f64 >= span * f64::from(1u32 << refits)
-            };
-            assert!(reached(t), "{apart}: {fits:?}");
-            assert!(t == before || !reached(t - 1), "{apart}: {fits:?}");
-            before = t + 1;
+        assert!(tries.len() >= 3, "{apart}: {tries:?}");
+        assert!(m.started()[0], "{apart}: {tries:?}");
+        // the first at the span, or at the start's 50th row, whichever is
+        // later: the first row at which both hold
+        let reached = |t: usize| t + 1 >= MIN_START_ROWS && apart * t as f64 >= span;
+        let t0 = tries[0].0;
+        assert!(reached(t0) && !reached(t0 - 1), "{apart}: {tries:?}");
+        // each later one as many rows on as the one before held
+        for w in tries.windows(2) {
+            let ((t, held), (next, _)) = (w[0], w[1]);
+            assert_eq!(held, t as u64 + 1, "{apart}: {tries:?}");
+            assert_eq!(next - t, t + 1, "{apart}: {tries:?}");
         }
     }
 }
@@ -1001,10 +930,10 @@ fn the_lr_cut_is_chi_squared_at_its_restrictions() {
     }
 }
 
-/// A fit is one to step from when its Newton decrement, at Kish's scale, is
-/// at most 1e-6 nats and it sits on no bound: at the cut it is, a hair over
-/// it it is not, whatever way the iteration stopped; the statistic is
-/// `2 (f − f₀)` at the same scale.
+/// A fit is one to step from when its Newton decrement inside the set, at
+/// Kish's scale, is at most 1e-6 nats, an optimum on a face of the set
+/// included: at the cut it is, a hair over it it is not, whatever way the
+/// iteration stopped; the statistic is `2 (f − f₀)` at the same scale.
 #[test]
 fn soundness_is_the_decrement_at_its_cut() {
     use super::fit::{SOUND_DECREMENT, StartFit};
@@ -1020,14 +949,22 @@ fn soundness_is_the_decrement_at_its_cut() {
         for scale in [1.0, 0.25, 3.0] {
             let at = SOUND_DECREMENT / scale;
             let theta = vec![1.0, 0.1, 0.8];
-            let ok = StartFit::of(fit(at, stop), theta.clone(), false, -17.0, scale);
+            // the decrement inside the set is read only past the cut
+            let unread = |_: &Fit| -> f64 { panic!("read") };
+            let ok = StartFit::of(fit(at, stop), theta.clone(), &unread, -17.0, scale);
             assert!(ok.sound, "{stop:?} {scale}");
             assert_eq!(ok.lr, 14.0 * scale);
-            let over = StartFit::of(fit(at.next_up(), stop), theta.clone(), false, -17.0, scale);
+            let outside = |_: &Fit| f64::INFINITY;
+            let over = StartFit::of(fit(at.next_up(), stop), theta.clone(), &outside, -17.0, scale);
             assert!(!over.sound, "{stop:?} {scale}");
-            let bounded = StartFit::of(fit(0.0, stop), theta.clone(), true, -17.0, scale);
-            assert!(!bounded.sound, "{stop:?} {scale}");
-            let lost = StartFit::of(fit(f64::INFINITY, stop), theta, false, -17.0, scale);
+            // past the cut outside the set, at it inside: an optimum on a face
+            let face = |_: &Fit| at;
+            let on = StartFit::of(fit(1.0, stop), theta.clone(), &face, -17.0, scale);
+            assert!(on.sound, "{stop:?} {scale}");
+            let near = |_: &Fit| at.next_up();
+            let short = StartFit::of(fit(1.0, stop), theta.clone(), &near, -17.0, scale);
+            assert!(!short.sound, "{stop:?} {scale}");
+            let lost = StartFit::of(fit(f64::INFINITY, stop), theta, &outside, -17.0, scale);
             assert!(!lost.sound, "{stop:?} {scale}");
         }
     }
@@ -1135,3 +1072,101 @@ fn a_start_waits_under_the_lr_cut_and_starts_over_it() {
     }
     assert!(sides[0] > 0 && sides[1] > 0, "{sides:?}");
 }
+
+/// A start whose rows hold no variance process waits on its evidence with
+/// no count of tries (review W13, A2, for `garch`): each try keeps its
+/// buffer, the next comes once as many new rows have come as it held, the
+/// buffer grows to what `max_state_bytes` holds and then keeps the latest
+/// rows, the oldest leaving. It is never cleared, never past the cap, and
+/// the wait is named on every row from the first try.
+#[test]
+fn a_start_waits_on_its_evidence_bounded_by_the_cap_alone() {
+    let mut c = cfg(GarchVol::Gjr, GarchDist::Normal);
+    c.start_rows = 100;
+    c.max_state_bytes = Some(Garch::state_bytes(&c, 700));
+    let ys: Vec<f64> = (0..6000)
+        .map(|t| if t % 2 == 0 { 1.0 } else { -1.0 })
+        .collect();
+    let mut m = Garch::new(c.clone()).unwrap();
+    let mut most = 0;
+    for (t, y) in ys.iter().enumerate() {
+        let out = m.step(&[], &[Some(*y)], 1.0, 1.0);
+        assert!(out.pred.iter().all(|v| v.is_nan()), "{t}");
+        let rows = m.series[0].buffer.len();
+        assert!(rows >= most, "{t}: the buffer shrank to {rows}");
+        most = most.max(rows);
+        assert!(m.bytes() <= c.max_state_bytes.unwrap(), "{t}");
+        assert!(!m.started()[0], "{t}");
+        assert_eq!(m.no_effect(), t >= 99, "{t}");
+        assert_eq!(m.starting(), t < 99, "{t}");
+        assert!(m.coefficients()[0].iter().all(|v| v.is_nan()), "{t}");
+    }
+    assert_eq!(most, 700);
+    // tries at 100, 200 and 400 rows, then at 800 on the latest 700, and
+    // every 700 after
+    assert_eq!(m.start_report()[0].0, 3 + (6000 - 800) / 700 + 1);
+    assert_eq!(m.series[0].dropped, 6000 - 700);
+    // the weight is the buffer's: the rows let go took theirs with them
+    assert_eq!(m.series[0].w_sum, 700.0);
+    // the ring replays in order: a try on it is a try on its rows, oldest
+    // first
+    let s = &m.series[0];
+    assert!(s.head > 0, "the ring sits at its start");
+    let want: Vec<f64> = (6000 - 700..6000).map(|t| ys[t]).collect();
+    let mut ring: Vec<f64> = s.buffer.iter().map(|r| r[0]).collect();
+    ring.rotate_left(s.head);
+    assert_eq!(ring, want);
+    let mut tried = m.clone();
+    let c = tried.cfg().clone();
+    tried.series[0].start(&c);
+    assert_eq!(tried.series[0].head, 0);
+    let got: Vec<f64> = tried.series[0].buffer.iter().map(|r| r[0]).collect();
+    assert_eq!(got, want);
+}
+
+/// A fit short of its optimum is never stepped from (review W13, A2, for
+/// `garch`): a FIGARCH fitted to a GARCH series is not at its optimum by
+/// its decrement at 2,000 rows nor at the 2,485 the cap holds after them,
+/// so it waits, as the start's own warm-up and not `not_identified`, and
+/// starts only from a fit at its optimum. Before, a start whose cap could
+/// not hold twice its rows stepped from the fit it had.
+#[test]
+fn a_fit_short_of_its_optimum_is_never_stepped_from() {
+    let c = cfg(GarchVol::Figarch, GarchDist::Normal);
+    let ys = gjr_series([0.05, 0.08, 0.0, 0.9], 4500, 18, 1.0);
+    let mut m = Garch::new(c).unwrap();
+    for (t, y) in ys.iter().enumerate() {
+        let out = m.step(&[], &[Some(*y)], 1.0, 1.0);
+        assert!(out.pred[0].is_nan(), "{t}");
+        assert!(!m.started()[0], "{t}");
+        assert!(m.starting() && !m.no_effect(), "{t}");
+    }
+    let (refits, sound) = m.start_report()[0];
+    assert_eq!((refits, sound), (2, false));
+    assert_eq!(m.series[0].buffer.len(), 2485);
+}
+
+/// A start whose fit sits on a bound of the process's set at its optimum
+/// -- a GJR whose `α` is 0, the fit's `α` at its bound -- is stepped from
+/// at its first try: the gain the Newton step predicts inside the set is
+/// the rounding's, so it is at its optimum. The process is real (`γ`
+/// carries it), so its likelihood-ratio statistic passes.
+#[test]
+fn a_start_on_a_bound_at_its_optimum_is_stepped_from() {
+    let c = cfg(GarchVol::Gjr, GarchDist::Normal);
+    let n0 = c.start_rows;
+    let ys = gjr_series([0.05, 0.0, 0.15, 0.88], n0 + 10, 1, 1.0);
+    let mut m = Garch::new(c).unwrap();
+    for (t, y) in ys.iter().enumerate() {
+        m.step(&[], &[Some(*y)], 1.0, 1.0);
+        assert_eq!(m.started()[0], t + 1 >= n0, "{t}");
+        assert!(!m.no_effect(), "{t}");
+        if t + 1 == n0 {
+            // the fit it steps from: `α` on its bound
+            let th = m.coefficients()[0].clone();
+            assert!(th[1].abs() < 1e-9, "{th:?}");
+        }
+    }
+    assert_eq!(m.start_report()[0], (0, true));
+}
+

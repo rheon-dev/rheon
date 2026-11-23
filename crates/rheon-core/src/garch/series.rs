@@ -19,24 +19,38 @@ const HUBER_C2: f64 = 4.0;
 /// The ridge on the step's information matrix, relative to each diagonal
 /// entry: it scales with each parameter's units.
 const STEP_RIDGE: f64 = 1e-12;
-/// How many times a start that did not settle doubles its rows and refits.
-pub(super) const MAX_REFITS: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(super) struct Series {
-    /// The start's rows, `[e, weight]` in order, until it is fitted.
+    /// The start's rows, `[e, weight]` in order, until it is fitted. At its
+    /// bound, a ring whose oldest row is at `head`.
     pub buffer: Vec<[f64; 2]>,
+    /// The ring's oldest row once the buffer is at its bound; 0 before, and
+    /// after each try, which puts the rows back in order.
+    #[serde(default)]
+    pub head: usize,
     /// The stamp of the first row buffered, for a start of a clock span.
     pub first: Option<Stamp>,
     /// Whether the start has been fitted.
     pub started: bool,
-    /// How many times the start doubled its rows and refitted, because the
-    /// fit had not converged or sat on a bound of the process's set.
+    /// The tries of the start that did not start: a fit its rows did not
+    /// identify, one short of its optimum, or none with a finite
+    /// likelihood.
     pub refits: u32,
-    /// Whether the fit the series stepped from was sound: converged, off
-    /// every bound. A start out of doublings steps from the last fit.
+    /// The rows the buffer held at the last try; 0 before one.
+    #[serde(default)]
+    pub tried: u64,
+    /// The rows buffered since the last try; 0 before one.
+    #[serde(default)]
+    pub since: u64,
+    /// The rows the buffer let go at its bound, oldest first.
+    #[serde(default)]
+    pub dropped: u64,
+    /// Whether the fit the series stepped from was at its optimum: always,
+    /// once started, since a fit short of it is never stepped from.
     pub sound: bool,
-    /// The weight this target has learned, the start's rows included.
+    /// The weight this target has learned, the start's rows the buffer
+    /// holds included.
     pub w_sum: f64,
     /// The process's parameters, then the shape (`ν`, then `λ`). Before
     /// the start, the last fit withheld because its rows did not tell its
@@ -62,9 +76,13 @@ impl Series {
         let nf = cfg.n_free();
         Self {
             buffer: Vec::new(),
+            head: 0,
             first: None,
             started: false,
             refits: 0,
+            tried: 0,
+            since: 0,
+            dropped: 0,
             sound: false,
             w_sum: 0.0,
             theta: vec![f64::NAN; cfg.n_params()],
@@ -101,9 +119,22 @@ impl Series {
             && self.h.len() == nf * (nf + 1) / 2
             && self.zbins.len() == bins
             && lags
-            && self.refits <= MAX_REFITS
-            && (!self.started || self.buffer.is_empty())
-            && (cfg.start_span.is_some() || self.buffer.len() < cfg.start_rows << self.refits)
+            && (!self.started || (self.buffer.is_empty() && self.tried == 0 && self.head == 0))
+            && (self.head == 0 || self.head < self.buffer.len())
+            && if self.tried == 0 {
+                // before a try; or a state of schema 71 that tried and kept
+                // no count of it, under its rule of a buffer under four
+                // times the start's rows (its next row tries again)
+                let most = if self.refits > 0 {
+                    cfg.start_rows << 2
+                } else {
+                    cfg.start_rows
+                };
+                self.since == 0 && (cfg.start_span.is_some() || self.buffer.len() < most)
+            } else {
+                self.since < self.tried
+                    && (cfg.start_span.is_some() || self.buffer.len() as u64 <= bound(cfg))
+            }
     }
 
     /// The variance of the row about to be read, and its sensitivity into
@@ -133,17 +164,19 @@ impl Series {
 
     /// Fit the buffered rows. A fit whose likelihood-ratio statistic
     /// against constant variance is under the form's cut
-    /// ([`super::fit::identified`]) is withheld: the buffer doubles and waits
-    /// for its rows (`may_double`: the cap holds the doubled buffer), at
-    /// most [`MAX_REFITS`] times, and with no doubling left the series
-    /// buffers afresh; the fit is kept in `theta` to say why it waits. A
-    /// fit that passes, but is not at its optimum by its Newton decrement
-    /// or sits on a bound of the process's set, doubles the same way, and
-    /// with no doubling left is stepped from. Otherwise the buffer is
-    /// replayed at the fit: the filter from the backcast, the information
-    /// matrix and the running means built as equal-weight means over it,
-    /// the parameters held.
-    pub fn start(&mut self, cfg: &GarchCfg, may_double: bool) {
+    /// ([`super::fit::identified`]) is withheld, and kept in `theta` to say
+    /// why the series waits; a fit not at its optimum by its Newton
+    /// decrement inside the process's set, or none with a finite
+    /// likelihood, is not stepped from either, and says nothing. Either
+    /// keeps its buffer, and the next try comes once as many new rows have
+    /// come as this one held ([`Series::buffer_row`]). Otherwise the buffer
+    /// is replayed at the fit: the filter from the backcast, the
+    /// information matrix and the running means built as equal-weight
+    /// means over it, the parameters held.
+    pub fn start(&mut self, cfg: &GarchCfg) {
+        // a ring's rows back in order, oldest first
+        self.buffer.rotate_left(self.head);
+        self.head = 0;
         let bc = backcast(&self.buffer);
         let wsum: f64 = self.buffer.iter().map(|r| r[1]).sum();
         let v = self.buffer.iter().map(|r| r[1] * r[0] * r[0]).sum::<f64>() / wsum;
@@ -157,33 +190,30 @@ impl Series {
             v,
         )
         .filter(|f| f.theta.iter().all(|v| v.is_finite()));
-        let doubles = self.refits < MAX_REFITS && may_double;
+        // a try that does not start: the buffer kept, the reason this
+        // try's alone
         let wait = |series: &mut Self, withheld: Option<Vec<f64>>| {
             series.theta = withheld.unwrap_or_else(|| vec![f64::NAN; cfg.n_params()]);
-            if doubles {
-                series.refits += 1;
-            } else {
-                series.buffer.clear();
-                series.first = None;
-                series.w_sum = 0.0;
-            }
+            series.refits = series.refits.saturating_add(1);
+            series.tried = series.buffer.len() as u64;
+            series.since = 0;
         };
         let got = match got {
-            // No fit with a finite likelihood (a buffer of zeros): the
-            // series waits for twice the rows, or with no doubling left
-            // reports nothing and buffers afresh.
+            // No fit with a finite likelihood (a buffer of zeros).
             None => return wait(self, None),
-            // No evidence of a variance process: withheld, the same way.
+            // No evidence of a variance process: withheld.
             Some(f) if !identified(cfg.vol, f.lr) => return wait(self, Some(f.theta)),
-            // Not settled: twice the rows while they may double.
-            Some(f) if !f.sound && doubles => return wait(self, None),
+            // Not at its optimum: never stepped from.
+            Some(f) if !f.sound => return wait(self, None),
             Some(f) => f,
         };
         let rows = std::mem::take(&mut self.buffer);
         let k = cfg.vol.k();
         self.theta = got.theta;
-        self.sound = got.sound;
+        self.sound = true;
         self.started = true;
+        self.tried = 0;
+        self.since = 0;
         self.w_sum = 0.0;
         self.mean_e2 = 0.0;
         self.zbins.fill(0.0);
@@ -197,6 +227,48 @@ impl Series {
             self.learn(cfg, r[0], r[1], s, &dl[..k], true);
         }
         self.first = None;
+    }
+
+    /// Buffer a row of residual `e` at weight `w > 0` for the start, `now`
+    /// its stamp under a start of a span, and say whether a try is due. The
+    /// first try comes at the start's rows or span; each later one once as
+    /// many rows have come as the try before held. After a try the buffer
+    /// grows while `grows` (the cap holds a row more, [`bound`] and the
+    /// state's bytes), and from then on keeps the latest rows: the oldest
+    /// leaves as each new one comes, its weight with it, and the wait goes
+    /// on by name. Nothing is cleared, which could not cure a shortage of
+    /// evidence, and no count of tries ends the wait.
+    pub fn buffer_row(
+        &mut self,
+        cfg: &GarchCfg,
+        e: f64,
+        w: f64,
+        now: Option<Stamp>,
+        grows: bool,
+    ) -> bool {
+        if self.buffer.is_empty() {
+            self.first = now;
+        }
+        if self.tried > 0 && !grows {
+            let old = std::mem::replace(&mut self.buffer[self.head], [e, w]);
+            self.head = (self.head + 1) % self.buffer.len();
+            self.dropped += 1;
+            self.w_sum += w - old[1];
+        } else {
+            self.buffer.push([e, w]);
+            self.w_sum += w;
+        }
+        if self.tried > 0 {
+            self.since += 1;
+            return self.since >= self.tried;
+        }
+        let rows = self.buffer.len();
+        match (cfg.start_span, now, self.first) {
+            (Some(span), Some(now), Some(first)) => {
+                rows >= super::MIN_START_ROWS && crate::clock_span::span_reached(now, first, span)
+            }
+            _ => rows >= cfg.start_rows,
+        }
     }
 
     /// Learn a row of residual `e` at weight `w > 0`, whose variance was `s`
@@ -405,16 +477,10 @@ fn project(set: &HalfSpaces, prop: &[f64], hm: &[f64], kc: usize) -> (Vec<f64>, 
     (y, shift)
 }
 
-/// Whether a start of `cfg` closes at the row just buffered, `now` its
-/// stamp: the start's rows, or its span, doubled for each refit.
-pub(super) fn start_due(cfg: &GarchCfg, series: &Series, now: Option<Stamp>) -> bool {
-    let rows = series.buffer.len();
-    let scale = f64::from(1u32 << series.refits);
-    match (cfg.start_span, now, series.first) {
-        (Some(span), Some(now), Some(first)) => {
-            rows >= super::MIN_START_ROWS
-                && crate::clock_span::span_reached(now, first, span * scale)
-        }
-        _ => rows >= cfg.start_rows << series.refits,
-    }
+/// The rows a target's start may buffer: its share of what
+/// `max_state_bytes` holds, the most at which every target's series and the
+/// model's own bytes fit under it ([`super::Garch::state_bytes`]).
+pub(super) fn bound(cfg: &GarchCfg) -> u64 {
+    let share = cfg.cap().saturating_sub(16) / cfg.n_targets as u64;
+    share.saturating_sub(super::Garch::series_bytes(cfg, 0) - 8 * cfg.truncation() as u64) / 16
 }

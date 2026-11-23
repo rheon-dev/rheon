@@ -79,20 +79,20 @@ def garch(
         nothing (``withheld_reason`` ``below_warm_rows``). Default 2,000, at
         least 50, and at least 2,000 for ``vol="figarch"``. A start whose
         rows do not tell its process from a constant variance, by the test
-        under "The start" below, waits for twice the rows and refits, at
-        most twice, while ``max_state_bytes`` holds the doubled buffer, and
-        then buffers afresh, reporting nothing (``not_identified``) until a
-        start passes. A start that passes but whose fit is not at its
-        optimum, or sits on a bound of the process's parameters, waits and
-        refits the same way, and with no doubling left is stepped from.
-        Refused beside ``start_span``.
+        under "The start" below, reports nothing (``not_identified``), and
+        one whose fit is not at its optimum is not stepped from either.
+        Either keeps its rows and fits again once as many new rows have
+        come as it held: twice its rows while ``max_state_bytes`` holds
+        them, then the latest rows it holds. No count of tries ends the
+        wait. Refused beside ``start_span``.
     ``start_span``
         The start as a span of the clock in place of ``start_rows``, in
         clock units: a number of the clock column's units, or a duration
         such as ``"1d"`` on a temporal clock. It closes at the first row at
-        or past the span from its first row, once it holds 50 rows; a refit
-        waits for twice the span. How many rows that is, the data decides,
-        so its bytes are checked as the rows go in (see
+        or past the span from its first row, once it holds 50 rows; a try
+        that does not start waits, as under ``start_rows``, for as many new
+        rows as it held. How many rows the span holds, the data decides, so
+        its bytes are checked as the rows go in (see
         ``max_state_bytes``).
     ``horizon``
         Report the variance this many rows ahead too, as ``forecast_<t>``.
@@ -105,6 +105,8 @@ def garch(
         go in: the first row to take a group past half of it raises a
         warning, once for the group, and the row that would take it past
         the cap stops the run with an error naming the group and the bytes.
+        A start that waits after a try keeps at most each target's share
+        of it.
         Default 256 KB, ``262144``; at most 64 MiB.
 
     .. rubric:: Output
@@ -245,8 +247,11 @@ def garch(
     run until a step is at the parameters' rounding: where a step's gain is
     under the likelihood's own rounding, whether it is taken is read from
     the slopes at its two ends, not from the likelihood's last bits. A fit
-    is at its optimum when its Newton decrement ``½ gᵀ M⁻¹ g`` (``M`` the
-    observed curvature) is at most ``10⁻⁶`` nats. 2,000 rows keep a series
+    is at its optimum when the gain its Newton step predicts inside the
+    process's bounds is at most ``10⁻⁶`` nats: ``½ gᵀ M⁻¹ g`` (``M`` the
+    observed curvature) where the step stays inside them, and the step
+    projected onto them in ``M``'s metric where it does not, so an optimum
+    on a bound (a GJR whose ``α`` is 0) is one. 2,000 rows keep a series
     from starting far enough off that the ``1/W`` gain takes the rest of
     the stream to recover; a FIGARCH needs them for its ring of 1,000 lags
     to hold returns rather than the backcast.

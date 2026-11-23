@@ -554,6 +554,27 @@ const COUNTED_ZERO_WEIGHT: &[&str] = &["audit", "audit_exact", "audit_scaled"];
 ///   from these rows, so no output of them is held to a number.
 const NEW_STATISTICS: &[&str] = &["corrchange_monitor", "corrchange_sequential"];
 
+/// The `garch` cases of schema 71 saved within a start that had cleared its
+/// buffer: the start's rule of that schema tried at one, two and four times
+/// `start_rows` and then let every row go and buffered afresh, which no
+/// count of tries ends now (Fable's W13 review, A2, for `garch`: a try that
+/// does not start keeps its rows). The rows let go are not in the state,
+/// so no build reaches the current fixture's state from it. It loads as it
+/// was, its buffer a first one (its next try at `start_rows`, at once where
+/// it holds them), and goes on under the current rule: held to saving bytes
+/// that load back to the same, to its frozen continuation's `weight_sum` to
+/// the bit, and to a null wherever that continuation has one, since the
+/// start is still waiting. No release wrote such a state: `garch` is new
+/// since 2.0.0, whose schema was 67. Proposed as rule 5's twenty-eighth
+/// exception (`docs/records/STATE-CONTINUATION.md`), for the user's word.
+const KEPT_START: &[&str] = &[
+    "garch_egarch",
+    "garch_figarch",
+    "garch_skewt",
+    "garch_started",
+    "garch_targeted",
+];
+
 /// How far a continuation may part from the one frozen, on a platform other
 /// than the writer's: the golden files' tolerance (`tests/golden.rs`).
 const TOL: f64 = 1e-12;
@@ -928,6 +949,9 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
             let under_prior = schema < 70 && UNDER_THE_PRIOR.contains(&f.name);
             // A `deco` of 71 or earlier restarts its level ([`RESTARTED_LEVEL`]).
             let restarted = schema < 72 && RESTARTED_LEVEL.contains(&f.name);
+            // A `garch` of 71 within a start that cleared its rows goes on
+            // under the current start rule ([`KEPT_START`]).
+            let kept_start = schema < 72 && KEPT_START.contains(&f.name);
             // A weighted `sgd` or `pa` under `standardize` of 68 or earlier
             // reads its rows in the stream's own unit of weight since review
             // C1 ([`READ_ANEW`]); a set of 69 was written by C1's read.
@@ -937,7 +961,7 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                 .map(|&(_, b)| b);
             let kept = rmpv::decode::read_value(&mut &f.bytes()[..]).unwrap();
             // A `holt` of 61-63 keeps no line fit (the doc above `previous`).
-            if under_prior || restarted {
+            if under_prior || restarted || kept_start {
                 let saved = named(&m.state());
                 let again = load(&case, &saved).unwrap_or_else(|e| panic!("{what}: {e}"));
                 assert!(
@@ -947,7 +971,7 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                 let decode = |b: &[u8]| rmpv::decode::read_value(&mut &b[..]).unwrap();
                 if restarted {
                     restarted_level_rule(&kept, &decode(&saved), &decode(&current.bytes()), &what);
-                } else {
+                } else if under_prior {
                     under_the_prior_rule(&kept, &decode(&saved), &what);
                 }
             } else if f.name == "kmeans" || f.name == "holt" {
@@ -1096,9 +1120,10 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                     }
                     continue;
                 }
-                if under_prior {
+                if under_prior || kept_start {
                     // `weight_sum` to the bit, and a number wherever the
-                    // frozen continuation has one.
+                    // frozen continuation has one (and, for a kept start,
+                    // nowhere else either: it still waits).
                     let what = format!("{what}, row {i} after the save");
                     assert!(agree(got.n_eff, want.n_eff, tol), "{what}: weight_sum");
                     assert_eq!(got.pred.len(), want.pred.len(), "{what}");
@@ -1571,7 +1596,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 155] = [
+    const FORMS: [(&str, &[&str]); 156] = [
         // `realized` (task 499): the sums and the last returns, Lee and
         // Mykland's ring of products, a window's terms and rows, a clock
         // window's stamps and clock, and a cap's warning and overrun.
@@ -1781,6 +1806,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
             &["model", "Garch", "series", "0", "filter", "ring"],
         ),
         ("garch_span", &["model", "Garch", "series", "0", "buffer"]),
+        ("garch_bound", &["model", "Garch", "series", "0", "buffer"]),
         // `dcc`'s stage (task 493): its start's buffer, then the targets,
         // `Q`, its sensitivities and the information, the decay carried to
         // the next row, given parameters, the margins, and a start of a
@@ -1938,6 +1964,24 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
     let first = at(&v, &["model", "Garch", "series", "0", "first"]).expect("a first stamp");
     assert!(!first.is_nil(), "garch_span: no first stamp");
+    // garch's start at its bound: a ring whose oldest row is not the first
+    // slot, rows let go, and the rows of its last try and since it, each
+    // an integer `held` does not count.
+    let f = frozen::ALL
+        .iter()
+        .find(|f| f.name == "garch_bound")
+        .expect("garch_bound");
+    let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+    for j in ["0", "1"] {
+        let series = |key: &str| {
+            at(&v, &["model", "Garch", "series", j, key])
+                .and_then(rmpv::Value::as_u64)
+                .unwrap_or(0)
+        };
+        for key in ["head", "tried", "since", "dropped"] {
+            assert!(series(key) > 0, "garch_bound: series {j}'s {key} is 0");
+        }
+    }
     // dcc's start over a span: its first stamp, the clock's 0 on this
     // stream, so present and not nil rather than held.
     let f = frozen::ALL

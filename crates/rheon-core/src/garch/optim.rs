@@ -295,6 +295,48 @@ fn decrement(obj: &dyn Fn(&[f64], bool) -> Eval, theta: &[f64], e: &Eval, units:
         .map_or(f64::INFINITY, f64::abs)
 }
 
+/// The Newton decrement inside the set: the gain the Newton step predicts
+/// once it is projected onto the set in the curvature's own metric, `gᵀd −
+/// ½ dᵀ M d` with `d = P_M(θ + M⁻¹ g) − θ` (`in_metric` the projection, `M`
+/// as [`decrement`] reads it). Where the step stays inside it is the
+/// decrement; at an optimum on a face of the set, where the gradient points
+/// out of it, it is the rounding's, as an interior optimum's decrement is,
+/// though the decrement there is not. Never more than the decrement: `θ`
+/// is in the set, and `P_M` is the point of the set nearest the step.
+/// Infinite where no step is.
+pub(super) fn decrement_in(
+    obj: &dyn Fn(&[f64], bool) -> Eval,
+    theta: &[f64],
+    units: &[f64],
+    in_metric: &dyn Fn(&[f64], &[f64]) -> Vec<f64>,
+) -> f64 {
+    let e = obj(theta, true);
+    if !e.f.is_finite() {
+        return f64::INFINITY;
+    }
+    let p = theta.len();
+    let m = ridged(
+        &curvature(obj, theta, units).unwrap_or_else(|| e.h.clone()),
+        p,
+        RIDGE,
+    );
+    let Some(s) = lu_solve(&m, p, &e.g) else {
+        return f64::INFINITY;
+    };
+    let prop: Vec<f64> = theta.iter().zip(&s).map(|(t, s)| t + s).collect();
+    let d: Vec<f64> = in_metric(&prop, &m)
+        .iter()
+        .zip(theta)
+        .map(|(y, t)| y - t)
+        .collect();
+    let gain = dot(&e.g, &d) - 0.5 * quad(&m, &d);
+    if gain.is_finite() {
+        gain.abs()
+    } else {
+        f64::INFINITY
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -364,6 +406,34 @@ mod tests {
             decrement(&obj, &at, &Eval::bad(2), &[1.0, 1.0]),
             f64::INFINITY
         );
+    }
+
+    /// The decrement inside the set: on a concave quadratic whose maximum
+    /// is past a bound, at the face's nearest point it is the rounding's
+    /// while the decrement is the climb to the maximum outside; short of
+    /// that point along the face it is the climb along the face; inside the
+    /// set, with the step inside too, it is the decrement.
+    #[test]
+    fn the_decrement_inside_the_set_reads_an_optimum_on_a_face() {
+        let obj = quadratic([2.0, 0.0, 0.0, 1.0], [2.0, 0.5]);
+        let units = [1.0, 1.0];
+        // `M` is diagonal: the Euclidean clip is the projection in its metric
+        let face = |x: &[f64], _: &[f64]| vec![x[0].min(1.0), x[1]];
+        let free = |x: &[f64], _: &[f64]| x.to_vec();
+        let at = [1.0, 0.5];
+        let outside = decrement(&obj, &at, &obj(&at, true), &units);
+        assert!((outside - 1.0).abs() < 1e-9, "{outside}");
+        let inside = decrement_in(&obj, &at, &units, &face);
+        assert!(inside < 1e-9, "{inside}");
+        let short = decrement_in(&obj, &[1.0, 0.0], &units, &face);
+        assert!((short - 0.125).abs() < 1e-9, "{short}");
+        let at = [0.0, 0.0];
+        let whole = decrement(&obj, &at, &obj(&at, true), &units);
+        let free_in = decrement_in(&obj, &at, &units, &free);
+        assert!((free_in - whole).abs() < 1e-9 * whole, "{free_in} {whole}");
+        // no finite value, no step
+        let bad = |_: &[f64], _: bool| Eval::bad(2);
+        assert_eq!(decrement_in(&bad, &at, &units, &free), f64::INFINITY);
     }
 
     /// On an objective whose value is far larger than the climb left (here

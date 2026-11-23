@@ -700,3 +700,22 @@ the probe's `monitor` over spans of 40 rows, every release from 1.0.0 to
 from both halves, every field to the bit but `since_flag`; its release's own
 continuation differs in `stat` from the first span closed after the load
 (row 89: 0.704 against the release's 0.849).
+
+Proposed as a twenty-eighth, awaiting the user's word (2026-11-23, Fable's
+W13 review, A2, for `garch`; branch `w14-followups`): a `garch` state of
+schema 71 saved within a start that had cleared its buffer goes on under the
+current start rule, not to the current fixture's bytes. The start of schema
+71 tried at one, two and four times `start_rows`, then let every row go and
+buffered afresh; the start now keeps its rows after a try that does not
+start, grows the buffer to each target's share of `max_state_bytes` and then
+keeps the latest rows, with no count of tries. The rows let go are not in
+the state, so no build reaches the current fixture's state from it, and no
+loader could. Such a state loads as it was (its buffer a first one, `tried`
+0, its next try at `start_rows`, at once where it holds them), re-saves the
+same bytes, goes on with its frozen continuation's `weight_sum` to the bit,
+and reports nothing wherever the frozen continuation does. No release wrote
+such a state: `garch` is new since 2.0.0, whose schema was 67. The kept
+sets `v71/` of `garch_egarch`, `garch_figarch`, `garch_skewt`,
+`garch_started` and `garch_targeted` are held by `KEPT_START`
+(`crates/rheon-core/tests/state_fixtures.rs`); `garch` and `garch_span`,
+saved before a first try, convert to the current bytes exactly.
