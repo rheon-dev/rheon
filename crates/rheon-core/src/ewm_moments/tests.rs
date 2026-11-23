@@ -46,12 +46,7 @@ fn stream(seed: u64, zero_rows: &[usize], steps: bool) -> Vec<Row> {
 }
 
 fn term(name: &str, order: u32, kind: MomentKind, bias: bool) -> MomentTerm {
-    MomentTerm {
-        name: name.to_owned(),
-        order,
-        kind,
-        bias,
-    }
+    MomentTerm::of_column(name, order, kind, bias)
 }
 
 fn cfg(decay: Decay, terms: Vec<MomentTerm>) -> EwmMomentsCfg {
@@ -60,6 +55,11 @@ fn cfg(decay: Decay, terms: Vec<MomentTerm>) -> EwmMomentsCfg {
         terms,
         min_weight: 0.0,
         max_state_bytes: None,
+        clocked: false,
+        lag_tolerance: None,
+        se: false,
+        window_rows: None,
+        window_clock: None,
     }
 }
 
@@ -268,7 +268,7 @@ fn order_two_is_ewdiag_to_the_bit() {
         let (mean, lo) = e.mean_pair(0);
         assert_eq!(m.n_eff().to_bits(), e.n_eff().to_bits(), "row {i}");
         assert_eq!(
-            (m.m.to_bits(), m.m_lo.to_bits()),
+            (m.sums[0].m[0].to_bits(), m.sums[0].m_lo[0].to_bits()),
             (mean.to_bits(), lo.to_bits()),
             "row {i}"
         );
@@ -351,7 +351,13 @@ fn a_zero_weight_first_row_changes_nothing() {
                 rmp_serde::to_vec(&plain).unwrap()
             );
         }
-        assert!(m.c.iter().chain(&m.r).all(|v| v.is_finite()));
+        assert!(
+            m.sums[0]
+                .c
+                .iter()
+                .chain(&m.sums[0].r)
+                .all(|v| v.is_finite())
+        );
     }
 }
 
@@ -368,7 +374,12 @@ fn a_zero_weight_row_moves_no_moment() {
         let mut z = m.clone();
         z.update(x, 0.9, 0.0);
         assert_eq!(z.n_eff(), 0.9 * m.n_eff());
-        assert_eq!((z.m, z.m_lo, &z.c, &z.r), (m.m, m.m_lo, &m.c, &m.r), "{x}");
+        let (a, b) = (&z.sums[0], &m.sums[0]);
+        assert_eq!(
+            (&a.m, &a.m_lo, &a.c, &a.r),
+            (&b.m, &b.m_lo, &b.c, &b.r),
+            "{x}"
+        );
     }
 }
 
@@ -401,7 +412,13 @@ fn a_constant_column_withholds_its_standardized_moments() {
         "the spread of the column is zero"
     );
     assert_eq!(&read[3..], &[Ok(0.0), Ok(0.0), Ok(0.0)]);
-    assert!(m.c.iter().chain(&m.r).all(|v| v.is_finite()));
+    assert!(
+        m.sums[0]
+            .c
+            .iter()
+            .chain(&m.sums[0].r)
+            .all(|v| v.is_finite())
+    );
     m.update(1e6 + 0.2, decay.factor(1.0), 1.0);
     assert!(m.read().iter().all(Result::is_ok), "{:?}", m.read());
 }
@@ -500,14 +517,36 @@ fn an_overflowed_moment_is_withheld() {
     assert_eq!(r[1], Err(Withheld::Overflow));
 }
 
-/// The state's bytes are `8 (3 + (P − 1) + n_r)`, and its encoding holds
-/// exactly that many doubles beside the settings: the compact encoding is
-/// an array of the settings, the weight, the mean's pair and two vectors,
-/// each double nine bytes. Orders 1 to 20, with each count of `r_k`.
+/// The numbers a state's encoding holds outside its settings, each a
+/// double's worth: a double or an integer one, a temporal stamp's 128-bit
+/// integer two.
+pub(super) fn saved_numbers(m: &EwmMoments) -> u64 {
+    fn count(v: &rmpv::Value) -> u64 {
+        match v {
+            rmpv::Value::Array(a) => a.iter().map(count).sum(),
+            rmpv::Value::Map(m) => m.iter().map(|(_, v)| count(v)).sum(),
+            rmpv::Value::Binary(b) => b.len() as u64 / 8,
+            rmpv::Value::F64(_) | rmpv::Value::F32(_) | rmpv::Value::Integer(_) => 1,
+            _ => 0,
+        }
+    }
+    let bytes = rmp_serde::to_vec_named(m).unwrap();
+    let v = rmpv::decode::read_value(&mut bytes.as_slice()).unwrap();
+    v.as_map()
+        .unwrap()
+        .iter()
+        .filter(|(k, _)| k.as_str() != Some("cfg"))
+        .map(|(_, v)| count(v))
+        .sum()
+}
+
+/// The state's bytes are `8 (1 + 3 + (P − 1) + n_r)` for one column -- the
+/// weight, and a summary of `W`, the mean's pair, the moments of orders 2
+/// to `P` and the `r_k` -- and its encoding holds exactly that many
+/// numbers beside the settings. Orders 1 to 20, with each count of `r_k`.
 #[test]
 fn the_state_is_its_formula_in_bytes() {
     use MomentKind::*;
-    let header = |n: usize| if n <= 15 { 1 } else { 3 };
     for top in 1..=20u32 {
         for unbiased in [0, 2, 3, 4] {
             let mut terms = vec![term("top", top, Central, true)];
@@ -524,24 +563,21 @@ fn the_state_is_its_formula_in_bytes() {
                 4 => 3,
                 _ => 1,
             };
-            let doubles = 3 + (p as u64 - 1) + n_r;
+            let doubles = 4 + (p as u64 - 1) + n_r;
             assert_eq!(
                 m.state_bytes(),
                 8 * doubles,
                 "order {top}, unbiased {unbiased}"
             );
-            let (n_c, n_r) = (p as usize - 1, n_r as usize);
-            let len = rmp_serde::to_vec(&m).unwrap().len();
-            let cfg_len = rmp_serde::to_vec(&m.cfg).unwrap().len();
             assert_eq!(
-                len,
-                1 + cfg_len + 9 * (m.state_bytes() / 8) as usize + header(n_c) + header(n_r),
+                8 * saved_numbers(&m),
+                m.state_bytes(),
                 "order {top}, unbiased {unbiased}"
             );
         }
     }
-    // Orders 2 to 4, plug-in: 40 to 56 bytes; order 6, 72.
-    for (p, bytes) in [(2, 40), (3, 48), (4, 56), (6, 72)] {
+    // Orders 2 to 4, plug-in: 48 to 64 bytes; order 6, 80.
+    for (p, bytes) in [(2, 48), (3, 56), (4, 64), (6, 80)] {
         let m = EwmMoments::new(cfg(Decay::Lam(0.9), vec![term("c", p, Central, true)])).unwrap();
         assert_eq!(m.state_bytes(), bytes, "order {p}");
     }
@@ -560,21 +596,21 @@ fn the_state_is_held_to_max_state_bytes() {
         c.max_state_bytes = Some(cap);
         EwmMoments::new(c)
     };
-    // Order 40: 3 + 39 + 1 doubles, 344 bytes.
-    assert!(at(40, 344).is_ok());
-    let err = at(41, 344).unwrap_err();
+    // Order 40: 4 + 39 + 1 doubles, 352 bytes.
+    assert!(at(40, 352).is_ok());
+    let err = at(41, 352).unwrap_err();
     assert!(
-        err.contains("352 bytes") && err.contains("max_state_bytes (344)"),
+        err.contains("360 bytes") && err.contains("max_state_bytes (352)"),
         "{err}"
     );
-    // The default, 256 KB: 32,765 orders fit and the next does not.
+    // The default, 256 KB: 32,764 orders fit and the next does not.
     let mut c = cfg(
         Decay::Lam(0.9),
-        vec![term("c", 32_765, MomentKind::Central, true)],
+        vec![term("c", 32_764, MomentKind::Central, true)],
     );
     assert_eq!(c.state_bytes(), 256 * 1024);
     assert!(c.validate().is_ok());
-    c.terms[0].order += 1;
+    c.terms[0].powers[0].1 += 1;
     assert!(
         c.validate()
             .unwrap_err()

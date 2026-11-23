@@ -4967,23 +4967,19 @@ fn garch_predict_is_the_step() {
 /// `ewm_moments` of the first feature: a slot a term, every kind and the
 /// unbiased forms among them, and a floor on the weight.
 fn ewm_moments_cfg() -> EwmMomentsCfg {
-    let term = |name: &str, order, kind, bias| MomentTerm {
-        name: name.to_owned(),
-        order,
-        kind,
-        bias,
-    };
+    let term = MomentTerm::of_column;
     EwmMomentsCfg {
-        decay: decay(),
-        terms: vec![
-            term("var", 2, MomentKind::Central, false),
-            term("skew", 3, MomentKind::Standardized, true),
-            term("kurt_u", 4, MomentKind::Standardized, false),
-            term("k5", 5, MomentKind::Cumulant, true),
-            term("raw2", 2, MomentKind::Raw, true),
-        ],
         min_weight: 3.0,
-        max_state_bytes: None,
+        ..EwmMomentsCfg::new(
+            decay(),
+            vec![
+                term("var", 2, MomentKind::Central, false),
+                term("skew", 3, MomentKind::Standardized, true),
+                term("kurt_u", 4, MomentKind::Standardized, false),
+                term("k5", 5, MomentKind::Cumulant, true),
+                term("raw2", 2, MomentKind::Raw, true),
+            ],
+        )
     }
 }
 

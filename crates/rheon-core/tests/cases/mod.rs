@@ -2621,12 +2621,7 @@ pub fn all() -> Vec<Case> {
 /// cumulant and raw terms to order 6, and with `unbiased` the unbiased
 /// central moments, cumulants and skew and kurtosis to order 4.
 fn ewm_moments_cfg(unbiased: bool) -> EwmMomentsCfg {
-    let term = |name: &str, order, kind, bias| MomentTerm {
-        name: name.to_owned(),
-        order,
-        kind,
-        bias,
-    };
+    let term = MomentTerm::of_column;
     let mut terms = vec![
         term("var", 2, MomentKind::Central, true),
         term("skew", 3, MomentKind::Standardized, true),
@@ -2644,10 +2639,8 @@ fn ewm_moments_cfg(unbiased: bool) -> EwmMomentsCfg {
         ]);
     }
     EwmMomentsCfg {
-        decay: decay(),
-        terms,
         min_weight: 2.0,
-        max_state_bytes: None,
+        ..EwmMomentsCfg::new(decay(), terms)
     }
 }
 
