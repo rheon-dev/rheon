@@ -115,6 +115,7 @@ mod rcov;
 mod refusals;
 mod rls;
 mod robust;
+mod root;
 mod runs;
 mod sandwich;
 mod scratch;
@@ -216,6 +217,9 @@ pub use rcov::{
 pub use refusals::{Refusals, STOPPED, STOPPED_MANY};
 pub use rls::{Rls, RlsCfg};
 pub use robust::{HuberScale, MAD_BAND_OCTAVES, NORMAL_Q3, Robust, RobustCfg, RobustLoss};
+pub use root::{
+    Bounded, DEFAULT_XTOL, MIN_RTOL, RootReport, RootTolerance, Withheld, find_root, itp_steps,
+};
 pub use runs::Runs;
 pub use sandwich::Sandwich;
 pub use seqtest::{SLOTS as SEQTEST_SLOTS, SeqTest, SeqTestCfg};

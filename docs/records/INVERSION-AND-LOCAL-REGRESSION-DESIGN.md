@@ -596,3 +596,65 @@ fixture sets onto the last one merged.
 12. **`erf` and `norm_cdf` from the `libm` crate.** Recommended: yes; it is
     already linked, gives the same bits on every OS, and neither std nor
     Polars 0.55.2 has an `erf`. No new static linking (rule 12).
+
+## 4. Slice 1 as built (part 2a): the solver in `rheon-core`
+
+Built 2026-11-23 on this branch, under the coordinator's rulings on the
+questions above (1, 2, 4, 5, 8, 9 and 11 as recommended; ITP held to
+`brentq`; `increasing` required; the forward-error threshold a parameter;
+identifiability by the Gram's condition; `norm_cdf` behind one function on
+the `libm` crate until the shared special functions land). Code:
+`crates/rheon-core/src/root.rs`, its tests in `root/tests.rs` with a
+bisection oracle of their own (not in `oracle.rs`: a module that names
+`crate::oracle` must be listed in the CPU-paths workflow's SDE filters,
+a CI file this build leaves to the coordinator), and the example
+`crates/rheon-core/examples/root_black76` that `tests/test_second_opinion_root.py`
+holds to scipy's `brentq`.
+
+Decisions taken in the build, beside the record:
+
+- **The core API** is `find_root(f, lo, hi, increasing, &RootTolerance)`,
+  `f` a closure returning `Bounded { value, error }`: the certificate
+  needs each value's rounding bound, so a closure on `f64` alone could not
+  carry it. The interpreter of slice 2 supplies the bound by its running
+  error analysis; a caller with an exact function passes `Bounded::exact`.
+  The core solves `f(x) = 0`; `equals` is the caller's subtraction.
+- **The stop allows the ends' rounding.** A cubic on `[-3, 4]` ran its
+  `n_max` steps and stopped a few units in the last place of its ends
+  wider than `2 eps`: rounding the radius down covers the projection, not
+  the midpoint's own rounding. The stop is therefore `b - a <= 2 eps + 8
+  eps_mach max(|a|, |b|)`, or adjacent doubles, and the answer is within
+  `eps + 5 eps_mach |root|` of a sign change. 5,000,000 random brackets
+  (roots, widths and tolerances across the doubles' range; six monotone
+  families, a step among them) never reached the bound; on the step
+  family the solve comes within `n0` of it.
+- **`bound_reached` is a reason** in the core, as the coordinator's
+  contract lists it, documented as a defect for the caller to raise (A4).
+  A test reaches it by handing the inner solve a smaller `n_max`.
+- **`input_missing`** in the core is a NaN or infinite bracket end;
+  `bracket_invalid` is `lo >= hi` or a width that overflows.
+- **Range and direction verdicts need certain signs.** `below_range`,
+  `above_range` and `wrong_direction` are given only where the ends'
+  signs (or, for the direction, their order) exceed their error bounds;
+  otherwise `not_determined`. A deep in-the-money quote whose time value is
+  below the price's rounding was read as `below_range` before this, a
+  false claim that no volatility gives the price.
+- **The certificate's points** are `m -+ 2 eps`, each at least one double
+  beyond the final bracket and clamped to `[lo, hi]` (an end's value is
+  reused, not evaluated). An exact zero at an end with a nonzero bound is
+  withheld: the root may lie outside the bracket.
+- **Underflow in the running bound.** The tests' Black-76 bound adds
+  `2^-1074` to every operation (Higham's `eta`): `erfc` far in its tail
+  returns 0, and without the term a deep out-of-the-money price was 0 with
+  a zero bound, an exact root the function does not have. Slice 2's
+  interpreter needs the same term.
+- **The grid's moneyness scales with the volatility** (`ln(K/F)` within
+  `±3 sigma sqrt(tau)`): at a fixed `±0.8`, a fifth of the rows had a time
+  value below the price's rounding, which no solver can invert. Measured:
+  the Rust grid withholds 441 of 20,000; the scipy grid certifies 3,850 of
+  4,000, within 2.08e-12 of `brentq` (bound 6e-12), at a mean of 18
+  evaluations to `brentq`'s 12.4, at most 46 (the bound at `[1e-4, 5]`,
+  reached).
+- **The example binary is left out of the `oracle` mark**, as the command
+  line's tests are (`tests/oracle_marks.py`): a CPU-paths leg does not
+  build it, and the Rust solver's numbers move with no CPU path.
