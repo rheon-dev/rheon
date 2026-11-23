@@ -1453,7 +1453,7 @@ integration tests through `run_config`. `rheon-core/src/robust.rs` is at 98%.
 2026-09-24.** `mutants.yml` runs `cargo mutants` over the changed lines of
 `rheon-core` and `rheon-polars/src/span.rs`, on every push to `main` and
 every pull request. It fails on a survivor that
-`scripts/mutants_equivalent.toml` does not list. That file holds 432
+`scripts/mutants_equivalent.toml` does not list. That file holds 437
 entries (2026-11-23), each an equivalent mutant -- a few
 name two that share a line -- with the reason no input can tell it from
 the original. The weekly pass over all of `rheon-core`, 11,138 mutants on

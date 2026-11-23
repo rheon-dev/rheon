@@ -4164,3 +4164,47 @@ why = """`solve` runs after a row of positive weight has been added to `S`, so \
 `S > 0` wherever the line runs; and were `S` 0, `W` is too and the penalty \
 `r W / S` is NaN, whose pivots `chol_solve` refuses, so `centred_solve` \
 returns `None` as the skipped arm leaves the fit"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/drift/adwin.rs"
+function = "Adwin::update"
+mutation = "replace > with >="
+line_has = "while self.width > self.max_width as f64 && held > 0 {"
+columns = [58]
+why = """`held` counts the buckets left, and the loop drops one a pass: the \
+width is 0 once the last is dropped, and 0 is not above `max_width >= 1`, so \
+the loop has stopped before `held` is 0 and `held > 0` and `held >= 0` agree \
+wherever the line runs"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/drift/adwin.rs"
+function = "Adwin::update"
+mutation = "replace -= with +="
+line_has = "held -= 1;"
+why = """`held` is a bound that turns a loop that drops nothing from endless into \
+a failure; the loop ends by its width test before the bound is reached, so \
+changing how the bound counts down changes no input's result"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/drift/adwin.rs"
+function = "Adwin::update"
+mutation = "replace -= with /="
+line_has = "held -= 1;"
+why = """as above: a bound never reached, so no input's result changes"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/drift/adwin.rs"
+function = "Adwin::detect"
+mutation = "replace + with -"
+line_has = "let passes = self.levels.iter().map(VecDeque::len).sum::<usize>() + 1;"
+why = """a pass that cuts drops a bucket and the newest is never dropped (a cut \
+needs a newer part), so at most `B - 1` passes cut: `B - 1` passes make \
+every cut the full count does, and the pass that finds none only confirms \
+it"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/drift/adwin.rs"
+function = "Adwin::detect"
+mutation = "replace + with *"
+line_has = "let passes = self.levels.iter().map(VecDeque::len).sum::<usize>() + 1;"
+why = """as above: `B` passes are one more than the `B - 1` that cut"""
