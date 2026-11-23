@@ -2002,8 +2002,8 @@ impl EwRidge {
             return true;
         }
         let (sizes, _) = self.error_sizes();
-        for j in 0..m {
-            let Some(n) = sizes[j] else {
+        for (j, &size) in sizes.iter().enumerate().take(m) {
+            let Some(n) = size else {
                 continue;
             };
             for c in 0..nc {
