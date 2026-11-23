@@ -38,6 +38,7 @@ fn cfg(freqs: Vec<f64>, decay: Decay) -> SpectralCfg {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 /// The definition written out over the rows, by a direct sum with every
 /// amplitude `w λ^{age}` and every phase `2π f τ` taken from the row's own
 /// clock, sharing no recursion with the model; `trig` is the `sin`/`cos`.

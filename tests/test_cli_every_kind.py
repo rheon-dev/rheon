@@ -752,6 +752,26 @@ CASES: list[Case] = [
             "select": "bic",
         },
     ),
+    # Each target's power at two periods, its groups run to a close; and the
+    # other stream keys with the spectrum's scaling.
+    Case(
+        "spectral",
+        "spectral",
+        {
+            **STREAM,
+            **CLOSE,
+            "targets": ["y", "x0"],
+            "periods": [8.0, 3.0],
+            "spacing": 1.0,
+            "detrend": False,
+            "max_state_bytes": 1 << 20,
+        },
+    ),
+    Case(
+        "spectral_spectrum",
+        "spectral",
+        {**STREAM2, "targets": ["y"], "periods": [6.0], "scaling": "spectrum"},
+    ),
     # Each target a return series; no half-life (the recursion is per
     # observation), so no gate on settling toward one either.
     Case(

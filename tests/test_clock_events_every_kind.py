@@ -415,12 +415,12 @@ STEP_BLIND: frozenset[str] = frozenset({"bocpd", "seqtest", "garch"})
 #: ``gap_cap`` does: ``rcov``'s block is split there (no product pairs two
 #: returns across it), ``corrchange`` abandons its span, windows or cycle,
 #: and ``ar`` empties its lags: the values either side are not adjacent.
-BREAK_AT_A_SESSION: frozenset[str] = frozenset({"rcov", "corrchange", "ar"})
+BREAK_AT_A_SESSION: frozenset[str] = frozenset({"rcov", "corrchange", "ar", "spectral"})
 #: Of those, the kinds that also decay: a session change is a break *and*
 #: a step of ``session_gap``, where a rewritten clock is a break only at a
 #: step past ``gap_cap``, which decays by the cap. The two agree only where
 #: the gap is past the cap.
-BREAK_AND_DECAY: frozenset[str] = frozenset({"ar"})
+BREAK_AND_DECAY: frozenset[str] = frozenset({"ar", "spectral"})
 
 
 def rewrite(df: pl.DataFrame, step: float) -> pl.DataFrame:

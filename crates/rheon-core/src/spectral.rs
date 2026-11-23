@@ -296,12 +296,11 @@ impl Spectral {
         for (j, s) in self.sums.iter_mut().enumerate() {
             let xj = y[j].filter(|_| weight > 0.0);
             let (wx, w) = xj.map_or((0.0, 0.0), |v| (weight * v, weight));
-            for k in 0..rot.len() {
-                let [c, si] = rot[k];
-                let [xr, xi] = s.x[k];
-                let [ur, ui] = s.u[k];
-                s.x[k] = [lam * (c * xr - si * xi) + wx, lam * (c * xi + si * xr)];
-                s.u[k] = [lam * (c * ur - si * ui) + w, lam * (c * ui + si * ur)];
+            for ((&[c, si], x), u) in rot.iter().zip(s.x.iter_mut()).zip(s.u.iter_mut()) {
+                let [xr, xi] = *x;
+                let [ur, ui] = *u;
+                *x = [lam * (c * xr - si * xi) + wx, lam * (c * xi + si * xr)];
+                *u = [lam * (c * ur - si * ui) + w, lam * (c * ui + si * ur)];
             }
             s.a = lam * s.a + w;
             s.b = lam * s.b + wx;
@@ -413,5 +412,4 @@ impl OnlineModel for Spectral {
 }
 
 #[cfg(test)]
-#[path = "spectral_tests.rs"]
 mod tests;

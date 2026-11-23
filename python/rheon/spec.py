@@ -355,7 +355,8 @@ and each diagnostic's own ``*_half_life`` below, and in the models
 ``select_half_life``, ``coef_half_life``,
 ``revert_half_life``, ``trend_half_life`` and ``huber_scale_half_life``,
 ``hawkes``' ``kernel_half_lives``, a list of them, ``garch``'s
-``start_span``, ``glm``'s and ``expectile``'s ``refit_span``, and
+``start_span``, ``spectral``'s ``periods`` and ``spacing``, ``glm``'s and
+``expectile``'s ``refit_span``, and
 ``kmeans``' ``warm_span``, ``update_every`` and ``split_merge_every``,
 ``hmm``'s and ``bocpd``'s ``warm_span``, ``corrchange``'s
 ``permute_every``, ``huber``'s and ``sgd``'s ``huber_refit_span`` and
@@ -1108,7 +1109,6 @@ config each fill its defaults and build its models.
 
 from rheon._spec import (
     ar,
-    spectral,
     audit,
     bocpd,
     coef_fields,
@@ -1139,6 +1139,7 @@ from rheon._spec import (
     rls,
     seqtest,
     sgd,
+    spectral,
 )
 
 __all__ = [

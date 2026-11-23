@@ -552,6 +552,11 @@ def clock_specs(draw, model: str, step: int, cap: int):
             kw["start_span"] = steps(1, 30)
         else:
             kw["start_rows"] = draw(st.integers(50, 60))
+    elif model == "spectral":
+        # Task 491: its periods as durations, and the zero-weight rows that
+        # count in no clock.
+        kw |= dict(targets=["y"], half_life=steps(1, 30), periods=[steps(2, 9), steps(10, 40)])
+        kw["spacing"] = steps(1, 1)
     elif model == "ar":
         # Task 486: its lags beside the features, a window of the clock with
         # its edge, and the zero-weight rows that count in no clock. No
@@ -776,6 +781,8 @@ N_EFF_ARGS: dict[str, dict] = {
     "ew_class": {"label": "lab"},
     "corrchange": {"scalar": True},
     "kalman": {"coef_half_life": float("inf")},
+    # Its periods as durations, as a temporal clock reads them.
+    "spectral": {"periods": ["8s", "3s"]},
 }
 
 #: Every kind -- each emits ``weight_sum`` -- with what it needs besides a

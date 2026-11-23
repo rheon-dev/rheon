@@ -1730,7 +1730,7 @@ impl ModelKind {
 
     /// False for the models that report no coefficients -- no `coef` field
     /// in their output: `ew_cov`, `seqtest`, `marginal`, `rcov`, `corrchange`,
-    /// `bocpd` and `audit`. `tests/test_model_registry.py` holds this to the field
+    /// `bocpd`, `audit` and `spectral`. `tests/test_model_registry.py` holds this to the field
     /// names, which are rendered elsewhere.
     pub fn has_coef(&self) -> bool {
         !matches!(
@@ -1742,6 +1742,7 @@ impl ModelKind {
                 | ModelKind::CorrChange { .. }
                 | ModelKind::Bocpd { .. }
                 | ModelKind::Audit { .. }
+                | ModelKind::Spectral(_)
         )
     }
 

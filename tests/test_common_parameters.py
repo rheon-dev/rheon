@@ -97,13 +97,14 @@ DECAYING = tuple(
 #: The kinds that refuse a weight column.
 UNWEIGHTED = frozenset({"seqtest", "audit"})
 #: The kinds that read no features.
-NO_FEATURES = frozenset({"holt", "seqtest", "hawkes", "garch"})
+NO_FEATURES = frozenset({"holt", "seqtest", "hawkes", "garch", "spectral"})
 #: The kinds whose clock parameters are rates, which have no unit on a
 #: temporal clock: ``hawkes``' ``kernel_decays`` is refused there, by name.
 RATES = frozenset({"hawkes"})
 #: A capped step is a break by design: ``corrchange`` abandons its span,
-#: ``rcov`` splits the block into stretches, ``ar`` empties its lags.
-CAP_IS_A_BREAK = frozenset({"corrchange", "corrchange_scalar", "rcov", "ar"})
+#: ``rcov`` splits the block into stretches, ``ar`` empties its lags and
+#: ``spectral`` its transform.
+CAP_IS_A_BREAK = frozenset({"corrchange", "corrchange_scalar", "rcov", "ar", "spectral"})
 #: The kinds that sum weight as a count, with what makes it exact: the
 #: ewridge readiness gate reads Kish's effective count, which copies change,
 #: and its default solve cadence counts rows; kalman's learned noise reads a
@@ -586,6 +587,8 @@ def _clock_parameters(variant: str) -> dict[str, Any]:
         kw["half_life"] = HALF_LIFE
     if variant == "kalman":
         kw["coef_half_life"] = MINIMAL["kalman"]["coef_half_life"]
+    if variant == "spectral":
+        kw["periods"] = MINIMAL["spectral"]["periods"]
     return kw
 
 
@@ -600,7 +603,10 @@ def test_durations_are_numbers_of_seconds(variant: str):
         t=pl.lit(origin) + pl.duration(milliseconds=(pl.col("t") * 1000).cast(pl.Int64))
     ).with_columns(pl.col("t").dt.cast_time_unit("ms"))
     numbers = _clock_parameters(variant)
-    durations = {k: _as_duration(v) for k, v in numbers.items()}
+    durations = {
+        k: [_as_duration(x) for x in v] if isinstance(v, list) else _as_duration(v)
+        for k, v in numbers.items()
+    }
     a = run(variant, clock="t", **numbers)
     b = run(variant, when, clock="t", **durations)
     assert_live(a, variant)

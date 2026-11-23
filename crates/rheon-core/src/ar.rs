@@ -839,5 +839,4 @@ impl OnlineModel for Ar {
 }
 
 #[cfg(test)]
-#[path = "ar_tests.rs"]
 mod tests;

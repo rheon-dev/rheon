@@ -169,7 +169,7 @@ def _frame(kind: str) -> pl.DataFrame:
 
 #: The kinds that report no coefficients, so take no ``coef_every``; the
 #: rest write ``coef`` on every row, so the fit is compared on every row.
-NO_COEF = frozenset({"seqtest", "bocpd", "corrchange", "ew_cov", "marginal", "rcov"})
+NO_COEF = frozenset({"seqtest", "bocpd", "corrchange", "ew_cov", "marginal", "rcov", "spectral"})
 
 
 def _weight_column(kind: str) -> str | None:
@@ -353,6 +353,12 @@ def assert_rows_agree(base: pl.DataFrame, gated: pl.DataFrame, what: str) -> Non
 #: The rows before a target's first learned row: ``ar``'s ``max(lags)``,
 #: two in ``MINIMAL``.
 HOLD_BACK = {"ar": 2}
+#: The kinds whose own weight starts again at a break: ``spectral``'s
+#: transform empties at a capped gap, its phase across it unknown, so on the
+#: clocked stream its target's weight, which its floor reads, restarts after
+#: each capped step while ``weight_sum`` runs on; and a high floor it cannot
+#: reach between the breaks is said once, in the notice the state keeps.
+RESTARTS_AT_A_BREAK = {"spectral"}
 
 
 @pytest.mark.parametrize(
@@ -381,6 +387,8 @@ def test_min_weight_withholds_exactly_the_rows_below_it_and_they_nest(kind: str,
         # less theirs, decayed, so at most the weight before row `max(lags)`
         # below it.
         slack = ws[HOLD_BACK[kind]] if kind in HOLD_BACK else 0.0
+        if kind in RESTARTS_AT_A_BREAK and variant == "clocked":
+            slack = float("inf")
         own_below = {i for i, w in enumerate(ws) if w < bar + slack}
         named, held = _named(out, "below_min_weight"), _withheld(out)
         what = f"{kind} on {variant}, min_weight={m}"
@@ -507,9 +515,10 @@ def test_a_gate_never_moves_the_state(kind: str, variant: str, name: str):
     gate = _gate_of(kind, name)
     what = f"{kind} on {variant}, {name}"
     _evidence(kind, variant, gate, what)
-    assert_the_state_is_the_same(
-        state(kind, variant, {}), state(kind, variant, gate), what, OUTPUT_RECORDS
-    )
+    drop = OUTPUT_RECORDS
+    if kind in RESTARTS_AT_A_BREAK and variant == "clocked":
+        drop = drop | {"unreachable"}
+    assert_the_state_is_the_same(state(kind, variant, {}), state(kind, variant, gate), what, drop)
 
 
 @pytest.mark.parametrize(

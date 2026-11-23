@@ -24,6 +24,7 @@ BUILDERS = [
     "hawkes",
     "garch",
     "ar",
+    "spectral",
     "bocpd",
     "corrchange",
     "deco",
