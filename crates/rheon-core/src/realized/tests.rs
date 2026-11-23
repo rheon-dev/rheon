@@ -718,12 +718,15 @@ fn bns_is_standard_normal_under_a_decay_and_weights_finely() {
     check_bns_null(20_000, 0.035, (0.008, 0.016));
 }
 
+/// A null stream's form: its name, settings, rows and each row's weight.
+type NullCase<'a> = (&'a str, &'a RealizedCfg, usize, fn(usize) -> f64);
+
 fn check_bns_null(reps: u64, sd_tol: f64, size: (f64, f64)) {
     let decayed = cfg(1, 100.0);
     let plain = cfg(1, f64::INFINITY);
     let mut windowed = cfg(1, f64::INFINITY);
     windowed.window_rows = Some(1_000);
-    let cases: [(&str, &RealizedCfg, usize, fn(usize) -> f64); 3] = [
+    let cases: [NullCase; 3] = [
         ("half-life 100", &decayed, 1_500, |_| 1.0),
         ("weight 0.25", &plain, 1_000, |_| 0.25),
         ("window, weights 0.1 to 1.9", &windowed, 1_500, |t| {

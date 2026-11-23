@@ -123,8 +123,9 @@ def dcc(
         The bytes a group's state may hold, both starts' buffers included.
         A spec whose state is past it is refused; a first span is checked as
         the rows go in, warned of once past half of it, and stopped at it.
-        A start that waits after a try keeps at most the rows it holds. Default 256 KB, ``262144``, which holds eight series
-        with the margins' default start; at most 64 MiB.
+        A start that waits after a try keeps at most the rows it holds.
+        Default 256 KB, ``262144``, which holds eight series with the
+        margins' default start; at most 64 MiB.
 
     .. rubric:: Output
 
