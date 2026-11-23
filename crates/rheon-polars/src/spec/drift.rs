@@ -179,7 +179,9 @@ impl DriftOptions {
         AdwinCfg {
             delta: self.delta.unwrap_or(d.delta),
             clock: self.clock.unwrap_or(d.clock),
-            max_buckets: self.max_buckets.map_or(d.max_buckets, |m| m as usize),
+            max_buckets: self
+                .max_buckets
+                .map_or(d.max_buckets, |m| usize::try_from(m).unwrap_or(usize::MAX)),
             min_window_length: self.min_window_length.unwrap_or(d.min_window_length),
             grace_period: self.grace_period.unwrap_or(d.grace_period),
             max_width: self.max_width.unwrap_or(d.max_width),
@@ -191,8 +193,12 @@ impl DriftOptions {
         let d = KswinCfg::default();
         KswinCfg {
             alpha: self.alpha.unwrap_or(d.alpha),
-            window_size: self.window_size.map_or(d.window_size, |w| w as usize),
-            stat_size: self.stat_size.map_or(d.stat_size, |r| r as usize),
+            window_size: self
+                .window_size
+                .map_or(d.window_size, |w| usize::try_from(w).unwrap_or(usize::MAX)),
+            stat_size: self
+                .stat_size
+                .map_or(d.stat_size, |r| usize::try_from(r).unwrap_or(usize::MAX)),
             seed: self.seed.unwrap_or(d.seed),
             restart: self.restart.unwrap_or(d.restart),
         }
@@ -393,12 +399,12 @@ impl Spec {
                     1,
                     "the rows each sample holds, such as 30",
                 );
-                if c.stat_size >= 1 && c.window_size < 2 * c.stat_size {
+                if c.stat_size >= 1 && c.window_size / 2 < c.stat_size {
                     no.refuse(format!(
                         "spec {name:?}: drift_options' window_size must be at least twice \
                          stat_size ({}), but it is {}: each test draws stat_size rows from the \
                          older window_size - stat_size. Raise window_size, or lower stat_size.",
-                        2 * c.stat_size,
+                        u128::from(c.stat_size as u64) * 2,
                         c.window_size
                     ));
                 }
@@ -421,11 +427,13 @@ impl Spec {
                     )),
                     Some(_) => {}
                 }
-                if let Some(v) = o.drift_threshold.filter(|v| !(v.is_finite() && *v > 0.0)) {
+                if let Some(v) = o.drift_threshold.filter(|v| !(v.is_finite() && *v > 1.0)) {
                     no.refuse(format!(
                         "spec {name:?}: drift_options' drift_threshold must be finite and above \
-                         0, but it is {}. Set drift_threshold to the standard deviations past \
-                         the best error rate that flag a drift, such as 3.",
+                         1, but it is {}: at 1 or under, the row that sets the best error rate \
+                         is already past it, so a stream that never changes flags once a \
+                         warm_start. Set drift_threshold to the standard deviations past the \
+                         best error rate that flag a drift, such as 3.",
                         num_label(v)
                     ));
                 }

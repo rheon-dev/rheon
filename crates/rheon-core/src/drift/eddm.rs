@@ -71,6 +71,24 @@ impl Eddm {
         self.n
     }
 
+    /// Whether a restored state keeps the shape every row relies on: a
+    /// `beta` above 0 and at most 1, as a spec takes it, a last error and an
+    /// error count no later and no more than the rows seen (the next
+    /// error's distance is `n − last_error`), one distance an error, a
+    /// finite mean and a spread at least 0, and a largest `p' + 2s'` that is
+    /// finite.
+    pub fn sound(&self) -> bool {
+        self.beta > 0.0
+            && self.beta <= 1.0
+            && self.last_error <= self.n
+            && self.errors <= self.n
+            && self.k == self.errors as f64
+            && self.mean.is_finite()
+            && self.sq.is_finite()
+            && self.sq >= 0.0
+            && self.p2s_max.is_finite()
+    }
+
     pub fn reset(&mut self) {
         *self = Self::new(self.warm_start, self.beta);
     }

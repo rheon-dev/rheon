@@ -475,6 +475,59 @@ def test_a_narrow_clock_whose_window_edge_it_cannot_hold_is_refused(lazy):
     assert ok.schema["window_start"] == pl.Int8 and ok["window_start"].min() == -120
 
 
+@pytest.mark.parametrize("lazy", [False, True])
+def test_an_int64_clock_whose_window_edge_passes_its_least_value_is_refused(lazy):
+    """An `Int64` clock two above its least value, windowed by 10, has its
+    window start 10 below the clock's least value, past what `Int64` holds:
+    it wrapped to `+9223372036854775806` (review 2026-11-23, PY-1 (1)). It
+    is refused by name; the edges that fit are the floor's, to the integer."""
+    least = -(2**63)
+    rng = np.random.default_rng(14)
+    t = pl.Series([least + 3, least + 4], dtype=pl.Int64)
+    df = _frame(rng.standard_normal(2), rng.standard_normal(2), t=t)
+    src = df.lazy() if lazy else df
+    with pytest.raises(
+        ValueError, match="starts before the least value clock column 't', Int64, can hold"
+    ):
+        rp.eval.window_metrics(src, "m", clock="t", every=10)
+    t = pl.Series([least + 8, least + 9, least + 20, 2**63 - 1], dtype=pl.Int64)
+    df = _frame(rng.standard_normal(4), rng.standard_normal(4), t=t)
+    got = rp.eval.window_metrics(df.lazy() if lazy else df, "m", clock="t", every=10, min_samples=1)
+    assert got["window_start"].to_list() == [least + 8, least + 18, 2**63 - 8]
+    assert got.schema["window_start"] == pl.Int64
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("unit", ["ms", "us", "ns"])
+def test_a_duration_clock_past_292_years_is_windowed_in_its_own_units(lazy, unit):
+    """A `Duration("ms")` clock of `1e13` ms, 317 years, read through its
+    nanoseconds wrapped past 292 years, and its window started at -267.7
+    years (review 2026-11-23, PY-1 (2)). Windowed in the clock's own units
+    it starts where the floor says; a `Duration("ns")` clock near its least
+    value, whose window start Int64 cannot hold, is refused."""
+    per = {"ms": 10**6, "us": 10**3, "ns": 1}[unit]
+    rng = np.random.default_rng(15)
+    least = -(2**63)
+    if unit == "ns":
+        t = pl.Series([least + 3, least + 4], dtype=pl.Int64).cast(pl.Duration("ns"))
+        df = _frame(rng.standard_normal(2), rng.standard_normal(2), t=t)
+        with pytest.raises(
+            ValueError, match="starts before the least value clock column 't', Duration"
+        ):
+            rp.eval.window_metrics(df.lazy() if lazy else df, "m", clock="t", every="1s")
+        return
+    big = 10**13 * 10**6 // per  # 1e13 ms, in the clock's units
+    t = pl.Series([big, big + 5, -big], dtype=pl.Int64).cast(pl.Duration(unit))
+    df = _frame(rng.standard_normal(3), rng.standard_normal(3), t=t)
+    got = rp.eval.window_metrics(
+        df.lazy() if lazy else df, "m", clock="t", every="1s", min_samples=1
+    )
+    second = 10**9 // per
+    starts = sorted(got["window_start"].cast(pl.Int64).to_list())
+    assert starts == [-big // second * second, big // second * second]
+    assert got.schema["window_start"] == pl.Duration(unit)
+
+
 # --- A12, A14, A15: refusals ---------------------------------------------------
 
 

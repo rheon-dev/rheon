@@ -785,9 +785,9 @@ The diagnostics add, per slot:
          target's units (0.5 for a probability of a 0/1 target makes an
          error a misclassification). DDM (Gama et al. 2004) flags past
          ``warm_start`` rows (default 30) where ``p + s`` passes
-         ``p_min + drift_threshold * s_min`` (default 3), ``p`` the error
-         rate, ``s = sqrt(p * (1 - p) / n)``, and ``(p_min, s_min)`` the
-         pair where ``p + s`` was least. EDDM (Baena-García et al. 2006)
+         ``p_min + drift_threshold * s_min`` (default 3, and above 1),
+         ``p`` the error rate, ``s = sqrt(p * (1 - p) / n)``, and
+         ``(p_min, s_min)`` the pair where ``p + s`` was least. EDDM (Baena-García et al. 2006)
          keeps the mean ``p'`` and sample deviation ``s'`` of the rows
          between errors and flags, past ``warm_start`` rows and errors,
          where ``(p' + 2 * s')`` falls under ``beta`` (default 0.9) times

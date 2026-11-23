@@ -301,3 +301,39 @@ def test_each_familys_hit_rate_is_its_own_test_in_the_bank_and_in_eval(family):
         raw = dict(s)
         raw["model"] = {k: v for k, v in raw["model"].items() if k != "family"}
         assert rp.eval.metrics(out, raw, min_samples=1)["hit_rate"][0] is None
+
+
+@pytest.mark.parametrize("key", ["emit_specification", "emit_tails"])
+def test_a_glm_refuses_the_checks_of_a_constant_normal_residual(key):
+    """A glm's residuals have its family's variance, a function of the mean,
+    and its family's shape: on a stream a Poisson fit fits exactly,
+    Breusch-Pagan and Jarque-Bera rejected on every row, and RESET, read
+    under a constant variance, on a quarter of them (review 2026-11-23,
+    DIAG-11). Each switch is refused, by name."""
+    with pytest.raises(ValueError, match=f"{key} tests residuals of constant variance"):
+        rp.ModelBank(
+            [rp.spec.glm("m", features=["x"], targets=["y"], half_life=200.0, **{key: True})]
+        )
+
+
+def test_a_glms_mean_checks_hold_their_level_on_an_exact_fit():
+    """The calibration's Wald, a sandwich, and the CUSUM read a glm's mean:
+    on a stream a Poisson fit fits exactly each holds its 5% level after
+    the first thousand rows."""
+    rng = np.random.default_rng(1)
+    n = 4000
+    x = rng.normal(size=n)
+    y = rng.poisson(np.exp(0.3 + 0.5 * x)).astype(float)
+    spec = rp.spec.glm(
+        "m",
+        features=["x"],
+        targets=["y"],
+        half_life=200.0,
+        family="poisson",
+        emit_calibration=True,
+        emit_breaks=True,
+    )
+    out = rp.ModelBank([spec]).fit_predict(pl.DataFrame({"x": x, "y": y}))["m"].struct.unnest()
+    out = out[1000:]
+    assert (out["calibration_wald_y"] > 5.991).mean() < 0.1
+    assert (out["cusum_y"].abs() > 1.96).mean() < 0.1

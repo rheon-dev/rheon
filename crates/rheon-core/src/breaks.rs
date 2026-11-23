@@ -4455,3 +4455,61 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod review_2026_11_23 {
+    use super::*;
+
+    fn normal(g: &mut crate::SplitMix64) -> f64 {
+        let u = 1.0 - g.uniform();
+        let v = g.uniform();
+        (-2.0 * u.ln()).sqrt() * (std::f64::consts::TAU * v).cos()
+    }
+
+    /// Under a horizon the long-run variance pairs the null's lag 0 (`S2`)
+    /// with the empirical lag products, which no kernel guarantees is
+    /// positive: shocks alternating in sign after a quiet spell drive it
+    /// to 0 or below, where `cusum` and `break_wald` read `None` (review
+    /// 2026-11-23, DIAG-1 (1)). Confirmed; a decision for the user. It
+    /// panics until then.
+    #[test]
+    #[should_panic(expected = "long-run")]
+    fn the_long_run_variance_stays_positive_under_alternating_shocks() {
+        let lam = 0.5f64.powf(1.0 / 20.0);
+        let mut b = Breaks::with_lags(4);
+        let mut g = crate::SplitMix64::new(5);
+        for _ in 0..300 {
+            b.update(normal(&mut g), lam, 1.0, None);
+        }
+        for i in 0..40 {
+            b.update(if i % 2 == 0 { 5.0 } else { -5.0 }, lam, 1.0, None);
+            assert!(
+                b.long_run().is_some(),
+                "long-run variance gone at shock {i}"
+            );
+        }
+    }
+
+    /// Under a sustained shift the un-demeaned lag products grow with the
+    /// shift's square, and the review read the CUSUM as capped near
+    /// `sqrt(n / L)`, under 1.96 at a memory of 20 rows and 20 lags however
+    /// large the break (review 2026-11-23, DIAG-1 (2)). Not reproduced as a
+    /// break unseen: the row of a 1000-sd break reads 36, and every one of
+    /// the 180 rows after it reads past 1.96, falling toward that level only
+    /// as the shift enters the studentizing scale and the lag products, by
+    /// when it is the stream's level.
+    #[test]
+    fn a_large_break_passes_the_cusums_boundary_under_a_horizon() {
+        let lam = 0.5f64.powf(1.0 / 20.0);
+        let mut b = Breaks::with_lags(20);
+        let mut g = crate::SplitMix64::new(7);
+        for _ in 0..400 {
+            b.update(normal(&mut g), lam, 1.0, None);
+        }
+        for i in 0..180 {
+            b.update(1000.0 + normal(&mut g), lam, 1.0, None);
+            let c = b.cusum(1.0).unwrap();
+            assert!(c > 1.96, "row {i} after the break: {c}");
+        }
+    }
+}

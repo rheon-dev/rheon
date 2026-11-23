@@ -381,9 +381,15 @@ impl Micro {
 
     /// A row of the stream's mean weight: what `beta_mu` and `ξ` count, and
     /// what a summary admits. `1` before any row, and for any constant
-    /// weight.
+    /// weight; `1` too where the mean has cancelled to 0 or below, as a heavy
+    /// row all but forgotten leaves it (`1e16`, then 60 half-lives, then a
+    /// row of 1), where a summary admitted any point at all.
     fn unit(&self) -> f64 {
-        if self.w_rows > 0.0 { self.w_mean } else { 1.0 }
+        if self.w_rows > 0.0 && self.w_mean > 0.0 {
+            self.w_mean
+        } else {
+            1.0
+        }
     }
 
     pub fn cfg(&self) -> &MicroCfg {
@@ -1059,6 +1065,55 @@ mod tests {
         // No summary of a kind: nothing.
         m.mc.clear();
         assert!(m.nearest(&[0.0, 0.0], true).is_none());
+    }
+
+    /// The stream's mean weight after a heavy row has all but decayed away:
+    /// the weighted mean of the two rows' weights at their present shares,
+    /// to rounding, and never 0 (review 2026-11-23, CLUST-3: `1e16` then a
+    /// gap of 60 half-lives then `1`, where `1e16 + (1 − 1e16) / 1` read 0
+    /// and the next summary admitted a point `1.4e6` away at `eps = 1`).
+    /// The gaps cover total forgetting and shares of `2^-50` to `2^-30`,
+    /// where the Welford step's cancellation read 20% off.
+    ///
+    /// Confirmed, and not fixed here: the share form that passes it moves
+    /// the mean weight's last bits, so a saved state (schema 61 on) no
+    /// longer continues to the bit, which is the user's to allow (rule 5).
+    /// It panics until then.
+    #[test]
+    #[should_panic(expected = "half-lives")]
+    fn the_mean_weight_survives_a_heavy_row_decaying_away() {
+        for half_lives in [30.0, 40.0, 50.0, 53.0, 60.0, 2000.0] {
+            let mut m = Micro::new(cfg()).unwrap();
+            crate::OnlineModel::step(&mut m, &[0.0, 0.0], &[], 0.0, 1e16);
+            crate::OnlineModel::step(&mut m, &[0.1, 0.1], &[], 500.0 * half_lives, 1.0);
+            let share = 0.5f64.powf(half_lives);
+            let want = (1e16 * share + 1.0) / (share + 1.0);
+            let got = m.unit();
+            assert!(
+                (got - want).abs() <= 1e-12 * want,
+                "{half_lives} half-lives: {got} against {want}"
+            );
+        }
+        // A constant weight is its own mean, to the bit.
+        let mut m = Micro::new(cfg()).unwrap();
+        let mut g = crate::SplitMix64::new(9);
+        for _ in 0..200 {
+            crate::OnlineModel::step(&mut m, &[g.uniform(), g.uniform()], &[], g.uniform(), 2.5);
+            assert_eq!(m.unit(), 2.5);
+        }
+    }
+
+    /// Where the mean weight cancels to 0 (the review's case), a summary is
+    /// read at a row of weight 1, not 0: the point `1.4e6` away is no member
+    /// of the summary at the origin under `eps = 1`.
+    #[test]
+    fn a_mean_weight_cancelled_to_nothing_admits_no_far_point() {
+        let mut m = Micro::new(MicroCfg { eps: 1.0, ..cfg() }).unwrap();
+        crate::OnlineModel::step(&mut m, &[0.0, 0.0], &[], 0.0, 1e16);
+        crate::OnlineModel::step(&mut m, &[0.0, 0.0], &[], 500.0 * 60.0, 1.0);
+        assert!(m.unit() > 0.0);
+        let d = m.decide(&[1e6, 1e6], 1.0);
+        assert!(d.target.is_none(), "{:?}", d.target);
     }
 
     fn cfg() -> MicroCfg {

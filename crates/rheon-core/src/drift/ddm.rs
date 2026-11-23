@@ -27,7 +27,9 @@ use serde::{Deserialize, Serialize};
 pub struct Ddm {
     /// Rows before the minimum is tracked: river's 30.
     warm_start: u64,
-    /// The `s_min`s past `p_min + s_min` that flag: river's 3.
+    /// The `s_min`s past `p_min` that flag, above 1: river's 3. At or
+    /// under 1 the minimum's own row passes `p_min + drift_threshold ·
+    /// s_min`, and a stream that never changes flags once a warm start.
     drift_threshold: f64,
     /// Rows since the start.
     n: f64,
@@ -66,6 +68,28 @@ impl Ddm {
         (self.p_min, self.s_min)
     }
 
+    /// Whether a restored state keeps the shape every row relies on: a
+    /// `drift_threshold` finite and above 0, as a spec takes it, a whole
+    /// count of rows, a rate in `[0, 1]`, and a minimum that is either none
+    /// yet (every part infinite) or a rate in `[0, 1]` with a deviation at
+    /// least 0.
+    pub fn sound(&self) -> bool {
+        let none = self.p_min == f64::INFINITY
+            && self.s_min == f64::INFINITY
+            && self.ps_min == f64::INFINITY;
+        let some = (0.0..=1.0).contains(&self.p_min)
+            && self.s_min.is_finite()
+            && self.s_min >= 0.0
+            && self.ps_min.is_finite();
+        self.drift_threshold.is_finite()
+            && self.drift_threshold > 1.0
+            && self.n.is_finite()
+            && self.n >= 0.0
+            && self.n.fract() == 0.0
+            && (0.0..=1.0).contains(&self.p)
+            && (none || some)
+    }
+
     pub fn reset(&mut self) {
         *self = Self::new(self.warm_start, self.drift_threshold);
     }
@@ -96,6 +120,23 @@ impl Ddm {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// At a `drift_threshold` of 1 or under, a stream whose error rate never
+    /// moves flags on the first row past each warm start, where the minimum
+    /// is set and `p + s = p_min + s_min > p_min + t · s_min` (review
+    /// 2026-11-23, DRIFT-7): 10 flags in 310 rows at 0.5. Above 1 it does
+    /// not; a spec refuses the rest.
+    #[test]
+    fn a_threshold_at_or_under_one_flags_a_steady_stream_every_warm_start() {
+        let flags = |t: f64| {
+            let mut d = Ddm::new(30, t);
+            let mut s = 7u64;
+            (0..310).filter(|_| d.update(lcg(&mut s) < 0.2)).count()
+        };
+        assert!(flags(0.5) >= 9, "{}", flags(0.5));
+        assert!(flags(1.0) >= 1, "{}", flags(1.0));
+        assert_eq!(flags(3.0), 0);
+    }
 
     fn lcg(state: &mut u64) -> f64 {
         *state = state

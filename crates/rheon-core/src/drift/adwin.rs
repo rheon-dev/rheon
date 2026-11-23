@@ -31,15 +31,22 @@
 //!
 //! the paper's Bernstein form (its section 4, `δ' = δ / ln(width)`), with
 //! `1/m` shifted by `L` as MOA and river shift it. A cut drops the oldest
-//! bucket, `(u, v)` of `n` rows:
+//! bucket, of `n` rows, and takes `S` and `V` again from the buckets left,
+//! oldest first, by the pairwise merge of the compression above:
 //!
 //! ```text
-//! width −= n;   S −= u;   V −= v + n·width (u/n − S/width)² / (n + width)
+//! width −= n;   S = S_a + S_b;   V = V_a + V_b + n_a n_b / (n_a + n_b) (S_a/n_a − S_b/n_b)²
 //! ```
 //!
 //! and the scan starts again on the shorter window; the row is flagged if any
-//! cut was made. Each expression is evaluated in river's order, so the flags
-//! and the window's fields are river's to the bit.
+//! cut was made. river takes the bucket's share out of `S` and `V` instead,
+//! a subtraction that cancels when the bucket held most of the window's
+//! spread (two outliers leaving left `V` far above 0 on a window of zeros,
+//! or below it), which blinds every later test; under river's `restart` a
+//! row's first cut flags it and empties the window, so the flags are
+//! river's either way. Each other expression is evaluated in river's order,
+//! so the flags and, until a bucket is dropped, the window's fields are
+//! river's to the bit.
 //!
 //! Two things river does not have. `max_width` caps the window, dropping the
 //! oldest bucket while `width > max_width`, so the state is bounded by the
@@ -157,8 +164,13 @@ impl Adwin {
     /// file's terms: each level `M + 1` buckets of two numbers and a count,
     /// and thirteen numbers of settings and totals.
     pub fn state_bytes(max_width: u64, max_buckets: usize) -> u64 {
-        let per_level = 16 * (max_buckets as u64 + 1) + 8;
-        Self::levels_bound(max_width, max_buckets) * per_level + 104
+        let per_level = (max_buckets as u64)
+            .saturating_add(1)
+            .saturating_mul(16)
+            .saturating_add(8);
+        Self::levels_bound(max_width, max_buckets)
+            .saturating_mul(per_level)
+            .saturating_add(104)
     }
 
     /// The rows in the window.
@@ -192,8 +204,10 @@ impl Adwin {
     }
 
     /// Whether a restored state keeps the shape every row relies on: a level
-    /// to put a row in, no level past `M` buckets, settings in range, and a
-    /// width that is the rows its buckets hold.
+    /// to put a row in, a top level holding the oldest bucket (the one a
+    /// drop takes), no level past `M` buckets, settings in range, a width
+    /// that is the rows its buckets hold and no more than `max_width`, and
+    /// sums that are finite numbers, the spread at least 0.
     pub fn sound(&self) -> bool {
         let held: f64 = self
             .levels
@@ -203,13 +217,24 @@ impl Adwin {
             .sum();
         !self.levels.is_empty()
             && self.levels.len() < 64
+            && (self.levels.len() == 1 || self.levels.last().is_some_and(|l| !l.is_empty()))
             && self.levels.iter().all(|l| l.len() <= self.max_buckets)
+            && self
+                .levels
+                .iter()
+                .flatten()
+                .all(|&[t, v]| t.is_finite() && v.is_finite() && v >= 0.0)
             && self.delta > 0.0
             && self.delta < 1.0
             && self.clock >= 1
             && self.max_buckets >= 1
+            && self.min_window_length >= 1
             && self.max_width >= 1
             && held == self.width
+            && self.width <= self.max_width as f64
+            && self.total.is_finite()
+            && self.var.is_finite()
+            && self.var >= 0.0
     }
 
     pub fn reset(&mut self) {
@@ -280,27 +305,47 @@ impl Adwin {
     fn delete_oldest(&mut self) {
         let last = self.levels.len() - 1;
         let n = (1u64 << last) as f64;
-        let Some([u, vv]) = self.levels[last].pop_front() else {
+        if self.levels[last].pop_front().is_none() {
             return;
-        };
-        let mu = u / n;
-        self.width -= n;
-        self.total -= u;
-        if self.width > 0.0 {
-            let muw = self.total / self.width;
-            let inc = vv + n * self.width * (mu - muw) * (mu - muw) / (n + self.width);
-            self.var -= inc;
-        } else {
-            // The whole window went: nothing is left to hold a deviation, and
-            // `0 / 0` would poison the next row.
-            self.total = 0.0;
-            self.var = 0.0;
         }
+        self.width -= n;
         // The top level goes when it empties, and so does any below it left
         // empty (only at `M = 1`, where a merge leaves no bucket behind).
         while self.levels.len() > 1 && self.levels.last().is_some_and(VecDeque::is_empty) {
             self.levels.pop();
         }
+        self.resum();
+    }
+
+    /// `S` and `V` taken again from the buckets left, oldest first, by the
+    /// pairwise merge of their sums and sums of squared deviations:
+    ///
+    /// ```text
+    /// S = S_a + S_b,   V = V_a + V_b + n_a n_b / (n_a + n_b) (S_a/n_a − S_b/n_b)²
+    /// ```
+    ///
+    /// rather than the dropped bucket's share taken out of them. That
+    /// subtraction cancels where the bucket held most of the window's
+    /// spread: two outliers leaving a window of zeros left `V` at `1.2e24`,
+    /// or below 0, where `ε` is NaN, and either way no split was cut again.
+    /// At most `M` buckets a level, so the scan this follows costs as much.
+    fn resum(&mut self) {
+        let (mut n, mut total, mut var) = (0.0f64, 0.0f64, 0.0f64);
+        for (idx, level) in self.levels.iter().enumerate().rev() {
+            let nb = (1u64 << idx) as f64;
+            for &[sb, vb] in level {
+                if n == 0.0 {
+                    (n, total, var) = (nb, sb, vb);
+                    continue;
+                }
+                let d = total / n - sb / nb;
+                var += vb + n * nb / (n + nb) * d * d;
+                total += sb;
+                n += nb;
+            }
+        }
+        self.total = total;
+        self.var = var;
     }
 
     /// The cut test for a split of `n0` older and `n1` newer rows whose means
@@ -336,7 +381,10 @@ impl Adwin {
                     let tk = self.levels[idx][k][0];
                     u0 += tk;
                     u1 -= tk;
-                    if idx == 0 && k == cnt - 1 {
+                    // The newest bucket leaves no newer part; at one bucket
+                    // a level with level 0 empty it is not level 0's, and
+                    // `u1 / 0` read a rounding of the sums as infinite.
+                    if (idx == 0 && k == cnt - 1) || n1 <= 0.0 {
                         break 'scan;
                     }
                     let dmean = (u0 / n0) - (u1 / n1);

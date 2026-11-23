@@ -248,6 +248,20 @@ impl Specification {
         if !(e.is_finite() && p.is_finite() && w > 0.0 && x.iter().all(|v| v.is_finite())) {
             return self.age(lam);
         }
+        // A row whose terms the sums cannot hold only ages: each sum keeps a
+        // term's weighted square, and a sandwich's meat the square of that,
+        // so `(w t²)²` must be a double for `t` each of `q³`, `e²` and the
+        // features. Inside the input bound a prediction past about `1e51`
+        // from the origin, or a residual past about `1e77`, made a sum
+        // infinite, after which a saved state no longer loaded.
+        let q = p - self.origin.unwrap_or(p);
+        let held = |t: f64| {
+            let s = w * t * t;
+            (s * s).is_finite()
+        };
+        if !(held(q * q * q) && held(e * e) && x.iter().all(|&v| held(v))) {
+            return self.age(lam);
+        }
         self.w = lam * self.w + w;
         self.w2 = lam * lam * self.w2 + w * w;
         self.e1 = lam * self.e1 + w * e;
@@ -1791,6 +1805,80 @@ mod tests {
                 seen += usize::from(got.is_some());
             }
             assert!(seen > 300, "the reads reached numbers: {seen}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod review_2026_11_23 {
+    use super::*;
+
+    fn fed(origin: Option<f64>, nw: usize, wild: Option<(f64, f64)>) -> Specification {
+        let mut g = crate::SplitMix64::new(3);
+        let mut s = Specification::new(1, 0, 3, nw);
+        s.origin = origin;
+        for i in 0..2000 {
+            let x = g.uniform() * 2.0 - 1.0;
+            let p = 3.0 * x + 0.1 * (g.uniform() - 0.5);
+            let e = (g.uniform() - 0.5) + 0.3 * p * p;
+            let (p, e) = match wild {
+                Some(pe) if i == 700 => pe,
+                _ => (p, e),
+            };
+            s.update(&[x], p, e, 0.995, 1.0);
+        }
+        s
+    }
+
+    /// A row inside the input bound whose prediction's cube squared, or
+    /// whose residual's fourth power, passes the largest double leaves the
+    /// sums finite, so a saved state still loads, and the tests read on
+    /// (review 2026-11-23, DIAG-3 (2): `|q| > 1.34e51` overflowed `q⁶`, and
+    /// `|e| > 1.16e77` `e⁴`).
+    #[test]
+    fn a_row_whose_powers_overflow_leaves_the_state_loadable() {
+        for nw in [0, 4] {
+            for wild in [
+                (2e51, 1.0),
+                (1e100, 1.0),
+                (1.0, 2e77),
+                (1.0, 2e100),
+                (-1e100, -2e100),
+            ] {
+                let s = fed(None, nw, Some(wild));
+                assert!(s.has_shape(1, 0, 3, nw), "{wild:?} at {nw} lags");
+                assert!(
+                    s.reset().is_some_and(f64::is_finite),
+                    "{wild:?} at {nw} lags"
+                );
+                assert!(
+                    s.breusch_pagan(&[0]).is_some_and(f64::is_finite),
+                    "{wild:?} at {nw} lags"
+                );
+                assert!(s.ljung_box(true).is_some_and(f64::is_finite), "{wild:?}");
+            }
+        }
+    }
+
+    /// RESET is the same test about any origin: the span of `(1, q, q², q³)`
+    /// does not move with it. About a first prediction far from where the
+    /// predictions settle, the powers' centred moments lose the curvature
+    /// in rounding and the test reads `None` (review 2026-11-23, DIAG-3
+    /// (1); solving them in correlation form, the review's fix, does not
+    /// recover it). Confirmed, and not fixed here: a fix moves the origin,
+    /// which is state. It panics until then.
+    #[test]
+    #[should_panic(expected = "origin")]
+    fn reset_reads_alike_about_a_far_origin() {
+        for nw in [0, 4] {
+            let want = fed(Some(0.0), nw, None).reset().unwrap();
+            for origin in [1e3, 1e4, 1e5, 1e6] {
+                let got = fed(Some(origin), nw, None).reset();
+                assert!(
+                    got.is_some_and(|g| (g - want).abs() <= 1e-3 * want),
+                    "origin {origin}, {nw} lags: {got:?} against {want}"
+                );
+            }
         }
     }
 }

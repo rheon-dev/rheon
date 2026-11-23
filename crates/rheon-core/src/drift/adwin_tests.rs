@@ -267,13 +267,27 @@ fn a_restored_windows_shape_is_checked_bound_by_bound() {
     assert!(!with(&|b| b.delta = 1.0));
     assert!(with(&|b| b.delta = 1.0 - f64::EPSILON));
     assert!(!with(&|b| b.delta = f64::NAN));
-    // The most levels: 63 are held, 64 are not.
+    // The most levels: 63 are held, 64 are not; each holds its top level's
+    // one bucket, as a state must (an empty top level is no window).
     let empty = |n: usize| {
-        let mut b = Adwin::new(cfg());
+        let mut b = Adwin::new(AdwinCfg {
+            max_width: u64::MAX,
+            ..cfg()
+        });
         b.levels = vec![VecDeque::new(); n];
+        if let Some(top) = b.levels.last_mut() {
+            top.push_back([0.0, 0.0]);
+            b.width = 2f64.powi(n as i32 - 1);
+        }
         b.sound()
     };
     assert!(empty(63) && !empty(64) && !empty(65) && !empty(0));
+    assert!(!with(&|b| b.levels.push(VecDeque::new())));
+    assert!(!with(&|b| b.min_window_length = 0) && with(&|b| b.min_window_length = 1));
+    assert!(!with(&|b| b.max_width = b.width as u64 - 1));
+    assert!(with(&|b| b.max_width = b.width as u64));
+    assert!(!with(&|b| b.var = -1e-300) && with(&|b| b.var = 0.0));
+    assert!(!with(&|b| b.total = f64::NAN));
     assert!(!with(&|b| b.clock = 0) && with(&|b| b.clock = 1));
     assert!(!with(&|b| b.max_buckets = 0));
     assert!(!with(&|b| b.max_width = 0));
@@ -413,5 +427,83 @@ fn the_cap_is_held_row_by_row_and_a_scan_ends() {
         a.update(lcg(&mut s));
         assert!(a.width() <= 40.0, "row {i}: {}", a.width());
         assert!(i < 100 || a.width() >= 12.0, "row {i}: {}", a.width());
+    }
+}
+
+/// Two outliers dropped by `max_width` leave no variance behind: once the
+/// window holds only zeros its sum and its sum of squared deviations are 0,
+/// neither below 0 (where `ε` is NaN and no split is ever cut) nor a ghost
+/// left by cancellation above it (where `ε` is huge), and a shift after
+/// them is cut where the window is wide enough to see it (review
+/// 2026-11-23, DRIFT-2: the review's two cases).
+#[test]
+fn outliers_that_leave_the_window_leave_no_variance_behind() {
+    for (outliers, max_width) in [
+        ([1e20, 3.3e19], 25u64),
+        ([1e20, 3.3e19], 64),
+        ([3.3e19, 1e20], 25),
+        ([-1e20, 7e19], 40),
+        ([1e15, 1e-3], 25),
+        ([1e20, 3.3e19], 300),
+        ([-1e20, 7e19], 500),
+    ] {
+        for restart in [true, false] {
+            let mut a = Adwin::new(AdwinCfg {
+                max_width,
+                restart,
+                ..cfg()
+            });
+            for x in outliers {
+                a.update(x);
+            }
+            // Every row from `max_width` on is one fed after the outliers.
+            let (gone, shift) = (max_width as usize, max_width as usize + 100);
+            let mut flags = Vec::new();
+            for i in 0..shift + 1000 {
+                let x = if i < shift { 0.0 } else { 1.0 };
+                if a.update(x) {
+                    flags.push(i);
+                }
+                assert!(
+                    a.variance() >= 0.0,
+                    "{outliers:?} at {max_width}, row {i}: V = {}",
+                    a.variance()
+                );
+                if (gone..shift).contains(&i) {
+                    assert_eq!(
+                        (a.total(), a.variance()),
+                        (0.0, 0.0),
+                        "{outliers:?} at {max_width}, restart {restart}, row {i}: zeros only"
+                    );
+                }
+            }
+            // A unit step is inside the bound of a window under about 60
+            // rows whatever came before.
+            assert!(
+                max_width < 300 || flags.iter().any(|&i| (shift..shift + 300).contains(&i)),
+                "{outliers:?} at {max_width}, restart {restart}: the shift at {shift} is cut: \
+                 {flags:?}"
+            );
+        }
+    }
+}
+
+/// A split with no newer rows is never a cut, whatever `min_window_length`
+/// a direct caller gives: at one bucket a level, with level 0 empty, the
+/// scan's last split left `n1 = 0`, and `u1 / 0` was infinite where the
+/// window's sum and its buckets' differed by a rounding, a cut of a steady
+/// stream (review 2026-11-23, DRIFT-9).
+#[test]
+fn a_split_with_nothing_newer_is_no_cut_at_any_shortest_part() {
+    for x in [0.1, 0.3, 1.0 / 3.0, 7.7] {
+        let mut a = Adwin::new(AdwinCfg {
+            max_buckets: 1,
+            min_window_length: 0,
+            clock: 1,
+            grace_period: 0,
+            ..cfg()
+        });
+        let flags = (0..500).filter(|_| a.update(x)).count();
+        assert_eq!(flags, 0, "a steady {x} flagged");
     }
 }

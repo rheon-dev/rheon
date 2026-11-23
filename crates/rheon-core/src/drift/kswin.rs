@@ -179,9 +179,10 @@ impl Kswin {
     }
 
     /// The bytes a KSWIN's state holds: its ring, `8 W`, its generator and
-    /// its settings.
+    /// its settings. Past what a `u64` counts it reads `u64::MAX`, which no
+    /// cap takes.
     pub fn state_bytes(window_size: usize) -> u64 {
-        8 * window_size as u64 + 48
+        (window_size as u64).saturating_mul(8).saturating_add(48)
     }
 
     /// The values in the ring, oldest first.
@@ -191,11 +192,16 @@ impl Kswin {
 
     /// Whether a restored state keeps the shape every row relies on: samples
     /// of at least one row, a ring that holds twice that, no more values
-    /// than it holds, and a level in range.
+    /// than it holds, each of them finite (a NaN sorts to an end of a sample
+    /// and stops the scan short), and a level in range.
     pub fn sound(&self) -> bool {
         self.stat_size >= 1
-            && self.window_size >= 2 * self.stat_size
+            && self
+                .stat_size
+                .checked_mul(2)
+                .is_some_and(|two_r| self.window_size >= two_r)
             && self.window.len() <= self.window_size
+            && self.window.iter().all(|v| v.is_finite())
             && self.alpha > 0.0
             && self.alpha < 1.0
     }
@@ -227,8 +233,12 @@ impl Kswin {
     }
 
     /// Feed one value. Returns whether this row's test rejects; before the
-    /// ring is full there is no test.
+    /// ring is full there is no test. A value that is not finite is no row:
+    /// it enters no ring and draws nothing.
     pub fn update(&mut self, x: f64) -> bool {
+        if !x.is_finite() {
+            return false;
+        }
         if self.window.len() == self.window_size {
             self.window.pop_front();
         }

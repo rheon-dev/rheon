@@ -131,9 +131,20 @@ fn each_setting_is_held_to_its_range_on_both_sides() {
             kswin(r#""window_size": 59, "stat_size": 30"#),
             kswin(r#""window_size": 60, "stat_size": 30"#),
         ),
+        // At or under 1 the minimum's own row passes `p_min + t s_min`, so
+        // a stationary stream flags every `warm_start + 1` rows (review
+        // 2026-11-23, DRIFT-7).
         (
             ddm(r#""drift_threshold": 0"#),
-            ddm(r#""drift_threshold": 0.1"#),
+            ddm(r#""drift_threshold": 1.0001"#),
+        ),
+        (
+            ddm(r#""drift_threshold": 1"#),
+            ddm(r#""drift_threshold": 1.5"#),
+        ),
+        (
+            ddm(r#""drift_threshold": 0.5"#),
+            ddm(r#""drift_threshold": 3"#),
         ),
         (eddm(r#""beta": 0"#), eddm(r#""beta": 0.1"#)),
         (eddm(r#""beta": 1.0001"#), eddm(r#""beta": 1"#)),
@@ -314,4 +325,23 @@ fn a_spec_without_a_kind_writes_neither_key() {
     s.check().unwrap();
     let text = serde_json::to_string(&s).unwrap();
     assert!(text.contains(r#""drift_options":{"clock":3}"#), "{text}");
+}
+
+/// A ring or a sample so large that its bytes, or twice the sample, pass
+/// what a `u64` holds is refused, not wrapped into a small number that
+/// passes the cap (review 2026-11-23, HAWKES-1: `window_size = 2^61` read
+/// 48 bytes, and `stat_size = 2^63` doubled to 0).
+#[test]
+fn a_ring_past_what_its_bytes_can_count_is_refused() {
+    for w in [1u64 << 61, 1 << 62, u64::MAX / 8 + 1, u64::MAX] {
+        let err = refused(&format!(
+            r#", "drift_kind": "kswin", "drift_options": {{"window_size": {w}}}"#
+        ));
+        assert!(err.contains("past max_state_bytes"), "{w}: {err}");
+    }
+    let err = refused(
+        r#", "drift_kind": "kswin", "drift_options": {"window_size": 100, "stat_size": 9223372036854775808}"#,
+    );
+    assert!(err.contains("at least twice"), "{err}");
+    assert_eq!(rheon_core::Kswin::state_bytes(usize::MAX), u64::MAX);
 }

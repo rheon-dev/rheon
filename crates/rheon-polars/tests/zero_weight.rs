@@ -332,7 +332,7 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
         r#"{"type": "ewridge"}"#,
         r#""targets": ["y"], "features": ["x0", "x1"], "half_life": @40,
            "emit_drift": true, "drift_kind": "ddm", "drift_action": "reset",
-           "drift_options": {"error_above": 0.04, "warm_start": 10, "drift_threshold": 1.0}"#,
+           "drift_options": {"error_above": 0.04, "warm_start": 10, "drift_threshold": 1.5}"#,
         ALL,
     ),
     (

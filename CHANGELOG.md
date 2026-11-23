@@ -1054,6 +1054,152 @@ model that only the new build has is listed as an addition and passes.
   buffer's factors may be 0. Only streams with such a gap move.
   Moves: `huber.*`, `quantile.*`, `sgd.*`.
 
+- **A `kswin` detector's state holding a value that is not finite is
+  refused on load, and a value that is not finite is no row for it**
+  (review 2026-11-23, DRIFT-4). `KSWIN` sorts each sample with NaN at an
+  end, where its scan reads the gap between the two samples' counts, so a
+  damaged file whose ring held a NaN loaded and read a wrong statistic on
+  every row the NaN stayed in the ring. The bank feeds it only finite
+  residuals, so no output moves.
+- **A pooled audit whose counters pass `distinct_cap` drops the counters
+  below the cut** (review 2026-11-23, AUDIT-1). Merging two columns' counts
+  past the cap takes the `(cap + 1)`-th largest count from every counter;
+  a counter below it was taken below zero, which wrapped to nearly `2^64`
+  in a release build (a debug build panicked). Two groups pooled under a
+  cap of 2, counts 10, 8, 6 and 2, read a `top_count` of `2^63 - 1` and an
+  `equal_by_chance` of `5e35`, and the merged state no longer loaded. That
+  counter now goes, as Misra-Gries' merge drops each one at the cut.
+- **An `adwin` detector takes its window's sum and spread again from the
+  buckets left when it drops one** (review 2026-11-23, DRIFT-2). It took
+  the dropped bucket's share out of them, as river does, and that
+  subtraction cancels when the bucket held most of the window's spread:
+  two outliers of `1e20` and `3.3e19` leaving a `max_width` of 25 left a
+  window of zeros with a sum of squared deviations of `1.2e24`, whose
+  bound no later shift could pass, and other values left it below 0, where
+  the bound is NaN and nothing is cut again. The flags under the default
+  `restart` are river's as before, since a row's first cut flags it and
+  empties the window; under `restart=False`, or once `max_width` drops a
+  bucket, a flag can come where it did not.
+- **A `kswin` ring or a `hawkes` window too large for its bytes to be
+  counted is refused** (review 2026-11-23, HAWKES-1). Their bytes were
+  multiplied out in a `u64` that wrapped: `window_size = 2^61` read 48
+  bytes and passed `max_state_bytes`, then asked for the ring at the first
+  row; `stat_size = 2^63` doubled to 0 and passed the check that the ring
+  holds two samples; and `hawkes`' `window_events = 2^59` read 72 bytes. A
+  debug build panicked on each. The bytes now stop at the largest `u64`,
+  which no cap takes.
+- **Every drift detector in a loaded state is held to a shape its rows run
+  on** (review 2026-11-23, DRIFT-5). Only `adwin` and `kswin` were checked,
+  so a damaged file loaded an `eddm` whose last error came after its last
+  row, where the next distance wrapped to `1.8e19` (a debug build
+  panicked), and `ddm`, `page_hinkley` and `cusum` numbers out of their
+  range or not finite. Each kind is checked against the bounds a spec
+  takes and the invariants its rows keep. `adwin`'s check also refuses an
+  empty top level, a window wider than `max_width`, a `min_window_length`
+  of 0, and sums that are not finite or a spread below 0. The review's
+  endless loop on an empty top level was gone before this change, which
+  bounded that loop; the window stayed past its cap instead.
+- **A `glm` refuses `emit_specification` and `emit_tails`, and an
+  `expectile` at a level other than 0.5 refuses `emit_calibration` and
+  `emit_breaks`** (review 2026-11-23, DIAG-11). Each test's null fails on
+  such a fit by construction. A `glm`'s residuals have its family's
+  variance and shape: on a stream a Poisson fit fits exactly,
+  Breusch-Pagan and Jarque-Bera rejected on every row and RESET on a
+  quarter. An expectile off the mean has residuals whose mean is not 0: at
+  0.9 the calibration's Wald and the CUSUM rejected on every row. Both
+  models are new in this release, so no released spec is refused.
+- **`emit_tails` reads null where the doubles cannot hold its moments, and
+  a residual whose fourth power overflows no longer breaks the saved state**
+  (review 2026-11-23, DIAG-4). After a gap of about 538 half-lives `Σω²`
+  underflowed to 0 while `W` did not, and `jarque_bera` read infinite;
+  residuals near `1e-90` underflowed `m_2²` and `m_4`, and `kurtosis` read
+  NaN; and a residual past about `1.2e77`, inside the input bound, made
+  `m_4` infinite, after which the saved state no longer loaded. Each of
+  the three reads null there, and such a residual only ages the sums. No
+  output in the doubles' normal range moves.
+- **`rp.eval.window_metrics` windows an `Int64` or `Duration` clock without
+  wrapping** (review 2026-11-23, PY-1). An `Int64` clock near its least
+  value, windowed by 10, had its window start wrap to near its greatest;
+  a `Duration("ms")` or `Duration("us")` clock past 292 years was read
+  through its nanoseconds, which wrapped, and a clock of `1e13` ms windowed
+  by a second started at -267.7 years. The window's edge is now the clock
+  less its floor remainder, in the clock's own units where `every` is a
+  whole number of them, and a window that would start before the least
+  value the clock's type holds is refused by name.
+- **`micro` reads a row of weight 1 where its mean weight has cancelled to
+  nothing** (review 2026-11-23, CLUST-3, in part). After a row of weight
+  `1e16`, a gap of 60 half-lives and a row of weight 1, the mean weight's
+  step `1e16 + (1 − 1e16) / 1` read 0, and a summary scaled by it admitted
+  a point `1.4e6` away at `eps = 1`. Where the mean is 0 or below, a
+  summary is read at a row of weight 1. The step's cancellation itself,
+  and the same step in the conformal band's mean weight, are not changed
+  in this release.
+- **`calibration_wald` under a horizon is read about the predictions' own
+  mean** (review 2026-11-23, DIAG-2). Its Newey-West covariance was moved
+  from the frame its sums are kept in to the predictions' own units before
+  it was solved, which multiplied its condition by the square of the
+  predictions' level over their spread: a target at `1e6` read the test
+  `3.9e-5` off statsmodels', and one at `1e8` read 0.722 where the test is
+  0.593 (or null, where the covariance did not factorize). A test of every
+  coefficient, as the calibration's is, now reads the distance in that
+  frame, where it is statsmodels' HAC kernel to `1e-6` at both levels.
+  Elsewhere it moves the test by rounding. Moves: `*.calibration_wald_*`.
+- **`emit_specification` keeps its saved state loadable after a row whose
+  powers overflow** (review 2026-11-23, DIAG-3, in part). Inside the input
+  bound, a prediction past about `1e51` from the first one made RESET's
+  sums of `q⁶` infinite, and a residual past about `1e77` Breusch-Pagan's
+  sums of `e⁴`, after which the saved state no longer loaded. Such a row
+  now only ages the sums. RESET read about a first prediction far from
+  where the predictions settle (`1e4` to `1e6` away) still reads null:
+  its powers' moments lose the curvature in rounding there, which a
+  change of origin, not of the solve, would fix.
+- **`page_hinkley` and `cusum` read a residual whose ratio to its scale
+  overflows as a drift, and keep reading past an overflow** (review
+  2026-11-23, DRIFT-6). A finite residual over a scale near `1e-250` read
+  infinite and was dropped as no row; on a step of 0 such a ratio made
+  CUSUM's sums `0 · ∞ = NaN`, which `max(0, ·)` read as 0, wiping both; and
+  a Page-Hinkley excess that overflowed below left its statistic NaN for
+  good. The ratio is now the largest double, which flags; a step of 0 adds
+  nothing to CUSUM; and Page-Hinkley starts its sums again at such a low,
+  where its statistic is 0. No finite path moves.
+- **`drift_kind="ddm"` refuses a `drift_threshold` of 1 or under**
+  (review 2026-11-23, DRIFT-7). DDM flags where `p + s` passes `p_min +
+  drift_threshold · s_min`, and the row that sets the minimum has `p + s =
+  p_min + s_min`, so at 1 or under a stream whose error rate never moved
+  flagged on the first row past each warm start: 10 flags in 310 rows at
+  0.5. `drift_kind` is new in this release, so no released spec is
+  refused.
+- **A standardizing `kalman` holds its history up after a gap no further
+  than the weight it had** (review 2026-11-23, REG-15). More than a
+  half-life after a target was last learned, the feature moments read
+  their history at no less than the row's own weight, and so a history
+  lighter than the row was lifted past what it held: a row of weight
+  `1e-6`, then a row of weight 1 a little past a half-life later, read the
+  light row at half the share. The history is now read at `max(lam·W,
+  min(W, w))`, `W` its weight before the gap, as `sgd`'s scaler reads it,
+  and the same however rows of weight 0 split the gap. Moves:
+  `kalman.pred_*`, `kalman.coef`.
+- **A `conformal` level within `2^-53` of 1 starts its band** (review
+  2026-11-23, DIAG-6). `1 − α/2` rounds to 1 there, and `Φ⁻¹(1)` made the
+  band's starting multiplier and its gain NaN for good. The upper quantile
+  is read from the lower tail where that rounding happens, and every other
+  level keeps its bits. A weight that is not a finite number above 0 only
+  ages the band, as a weight of 0 does, for a caller of the Rust type.
+- **`emit_metrics` and `emit_influence` keep a saved state loadable after a
+  prediction far past its target** (review 2026-11-23, DIAG-12). No bound
+  holds a prediction, and one near `1e160` squared past the largest double
+  in the metrics' moments and the influence's spread, after which `r2` read
+  null and the saved state no longer loaded. Such a row is aged and not
+  scored. And an error inflation past `1.34e154`, whose square overflowed,
+  read the influence infinite; it is read as `e·sqrt(1 − 1/infl²)` there.
+- **An audit's `unit_root_t` reads a lagged spread near the smallest or
+  the largest doubles** (review 2026-11-23, AUDIT-3, in part). On `[0,
+  1e-155, 0, 1]` the Dickey-Fuller standard error's denominator underflowed
+  and the ratio overflowed, `se` read infinite and the statistic `-0.0`
+  where it is `-0.577`. Where either leaves the normal doubles the ratio is
+  taken in its square roots; elsewhere it keeps its bits. The moments'
+  scale for values near `1e-81`, which still corrupts `kurtosis` there, is
+  not changed in this release.
 - **A window looking ahead whose far edge is the input's last row is whole
   at the end of the input** (PLAN 565). Under `closed="right"` or `"both"`,
   `rp.ewm_sum`, `rp.ewm_mean`, `rp.ewm_rate` and `rp.ewm_quantile` with

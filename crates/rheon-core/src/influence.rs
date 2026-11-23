@@ -51,9 +51,18 @@ impl Influence {
         if !(e.is_finite() && infl.is_finite() && infl >= 1.0) || self.w <= 0.0 || self.q <= 0.0 {
             return None;
         }
-        let h = (infl * infl - 1.0).max(0.0);
-        let v = e / infl;
-        Some(v / (self.q / self.w).sqrt() * h.sqrt())
+        let sq = infl * infl;
+        let s = (self.q / self.w).sqrt();
+        if sq.is_finite() {
+            let h = (sq - 1.0).max(0.0);
+            let v = e / infl;
+            Some(v / s * h.sqrt())
+        } else {
+            // `v·sqrt(h) = e·sqrt(1 − 1/infl²)`, where `infl²` overflows
+            // (past `1.34e154`) and read the influence infinite.
+            let r = 1.0 / infl;
+            Some(e * (1.0 - r * r).sqrt() / s)
+        }
     }
 
     /// Fold the row's recursive residual into the spread, after the step's
@@ -64,8 +73,14 @@ impl Influence {
         self.q *= lam;
         if e.is_finite() && infl.is_finite() && infl >= 1.0 && w > 0.0 {
             let v = e / infl;
-            self.w += w;
-            self.q += w * v * v;
+            // A row whose weighted square the spread cannot hold (a
+            // prediction far past its target: no bound holds a prediction)
+            // only ages, so a saved state still loads.
+            let q = self.q + w * v * v;
+            if q.is_finite() {
+                self.w += w;
+                self.q = q;
+            }
         }
     }
 }
@@ -73,6 +88,29 @@ impl Influence {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A residual whose weighted square overflows -- a prediction, which no
+    /// bound holds, far past its target -- leaves the spread finite, so a
+    /// saved state loads, and an inflation past `1.34e154`, whose square
+    /// overflows, reads its influence (review 2026-11-23, DIAG-12).
+    #[test]
+    fn overflowing_squares_leave_the_spread_finite_and_the_influence_read() {
+        let mut i = Influence::new();
+        i.update(1.0, 1.0, 1.0, 1.0);
+        i.update(-1.0, 1.0, 1.0, 1.0);
+        i.update(1e160, 1.0, 1.0, 1.0);
+        i.update(3e100, 1.0, 1.0, 1e100);
+        assert!(i.has_shape(), "{i:?}");
+        let mut j = Influence::new();
+        j.update(1.0, 1.0, 1.0, 1.0);
+        j.update(-1.0, 1.0, 1.0, 1.0);
+        // s = 1, v = e / infl, sqrt(h) = sqrt(infl² − 1): e = 3 at any
+        // inflation large enough reads e·sqrt(1 − 1/infl²) ≈ 3.
+        for infl in [1e100, 1e154, 1e160, 1e300] {
+            let got = j.of(3.0, infl).unwrap();
+            assert!((got - 3.0).abs() < 1e-12, "{infl}: {got}");
+        }
+    }
 
     /// The definition, by hand, and the zero-weight and missing rows.
     #[test]

@@ -4311,6 +4311,71 @@ impl Spec {
                 self.model.kind_name()
             ));
         }
+        // The residual checks whose null a fit fails by construction. An
+        // expectile at a level other than one half is not the mean: its
+        // residuals' mean is not 0 on a stream it fits exactly (-1.0 at 0.9
+        // on unit Gaussian noise), so the Mincer-Zarnowitz Wald and the
+        // CUSUM rejected on every row of such a stream. A generalized linear
+        // fit's residuals have its family's variance, a function of the
+        // mean, and its family's shape: on an exact Poisson fit
+        // Breusch-Pagan and Jarque-Bera rejected on every row, and RESET,
+        // read without a heteroskedasticity correction, on a quarter of
+        // them (review 2026-11-23, DIAG-11).
+        if predicts {
+            let off_mean = match self.model {
+                ModelKind::Expectile { expectile, .. } if expectile != 0.5 => Some(expectile),
+                _ => None,
+            };
+            if let Some(tau) = off_mean {
+                for (on, key, what) in [
+                    (
+                        self.emit_calibration,
+                        "emit_calibration",
+                        "its Wald test asks whether the target's mean is the prediction",
+                    ),
+                    (
+                        self.emit_breaks,
+                        "emit_breaks",
+                        "its CUSUM sums residuals whose mean is 0 under no break",
+                    ),
+                ] {
+                    if on {
+                        no.refuse(format!(
+                            "spec {name:?}: {key} tests a fit of the mean, but expectile {} \
+                             is not the mean, so its residuals' mean is not 0 even where it \
+                             fits exactly, and the test rejects on every row: {what}. Leave \
+                             out {key}, or fit expectile 0.5, the mean.",
+                            num_label(tau)
+                        ));
+                    }
+                }
+            }
+            if matches!(self.model, ModelKind::Glm { .. }) {
+                for (on, key, what) in [
+                    (
+                        self.emit_specification,
+                        "emit_specification",
+                        "Breusch-Pagan's null is a constant variance, and RESET's is read \
+                         under one",
+                    ),
+                    (
+                        self.emit_tails,
+                        "emit_tails",
+                        "Jarque-Bera's null is a normal residual",
+                    ),
+                ] {
+                    if on {
+                        no.refuse(format!(
+                            "spec {name:?}: {key} tests residuals of constant variance and a \
+                             normal shape, but a glm's residuals have its family's variance, \
+                             which moves with the mean, and its family's shape, so the test \
+                             rejects on every row of a stream it fits exactly: {what}. Leave \
+                             out {key}; emit_calibration and emit_breaks read a glm's mean."
+                        ));
+                    }
+                }
+            }
+        }
         if self.ljung_box_lags.is_some() && !self.emit_specification {
             no.refuse(needs("ljung_box_lags", "emit_specification"));
         }

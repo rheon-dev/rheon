@@ -1705,6 +1705,18 @@ DIAGNOSTICS = dict(
     # be told, on a clock where the embargo is not in rows).
     horizon_rows=0,
 )
+#: The mean's checks, which an expectile off the mean (the registry's is
+#: 0.8) refuses.
+OFF_MEAN = ("emit_calibration", "emit_breaks", "horizon_rows")
+
+
+def diagnostics(kind: str) -> dict:
+    """`DIAGNOSTICS` as ``kind`` takes them."""
+    if kind == "expectile":
+        return {k: v for k, v in DIAGNOSTICS.items() if k not in OFF_MEAN}
+    return DIAGNOSTICS
+
+
 SHORT = 0.5
 #: The drift flags' prefix.
 DRIFT = "drift_"
@@ -1741,7 +1753,7 @@ class TestADelayShorterThanEveryStep:
         df = short_frame(kind)
         kw: dict[str, object] = {"clock": "t", "gap_cap": 1e9}
         if scores_a_target(kind):
-            kw.update(DIAGNOSTICS)
+            kw.update(diagnostics(kind))
         if has_coef(kind):
             kw["coef_every"] = 0
         plain = unnested(kind_spec(kind, **kw), df)
@@ -1790,7 +1802,7 @@ class TestADelayShorterThanEveryStep:
         if kind not in NO_HALF_LIFE:
             kw["half_life"] = math.inf
         if scores_a_target(kind):
-            kw.update(DIAGNOSTICS)
+            kw.update(diagnostics(kind))
         plain = unnested(kind_spec(kind, weight="w", **kw), df)
         doubled_ = stream.embargo(df, clock="t", delay=SHORT, weight="w")
         oracle = (

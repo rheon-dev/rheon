@@ -50,6 +50,20 @@ impl Cusum {
         (self.up, self.down)
     }
 
+    /// Whether a restored state keeps the shape every row relies on: `k`
+    /// finite and at least 0 and `h` finite and above 0, as a spec takes
+    /// them, and both sums finite and at least 0.
+    pub fn sound(&self) -> bool {
+        self.k.is_finite()
+            && self.k >= 0.0
+            && self.h.is_finite()
+            && self.h > 0.0
+            && self.up.is_finite()
+            && self.up >= 0.0
+            && self.down.is_finite()
+            && self.down >= 0.0
+    }
+
     pub fn reset(&mut self) {
         self.up = 0.0;
         self.down = 0.0;
@@ -57,7 +71,13 @@ impl Cusum {
 
     /// Feed one standardized error `z`, `d` clock units after the one before.
     /// Returns whether either sum passed `h`, and then starts both again.
+    ///
+    /// A step of 0 adds nothing to either sum, whatever `z`: `0 · ∞` would
+    /// be NaN, which `max(0, ·)` read as 0 and so wiped both.
     pub fn update(&mut self, z: f64, d: f64) -> bool {
+        if d == 0.0 {
+            return false;
+        }
         self.up = (self.up + d * (z - self.k)).max(0.0);
         self.down = (self.down + d * (-z - self.k)).max(0.0);
         if self.up > self.h || self.down > self.h {
@@ -73,6 +93,27 @@ impl Cusum {
 mod tests {
     use super::*;
     use crate::SplitMix64;
+
+    /// A restored CUSUM whose numbers are not finite is refused, each on its
+    /// own (review 2026-11-23, DRIFT-5).
+    #[test]
+    fn a_restored_cusums_numbers_are_finite() {
+        let mut a = Cusum::new(0.5, 5.0);
+        a.update(1.5, 1.0);
+        assert!(a.sound());
+        for bad in [f64::NAN, f64::INFINITY] {
+            for edit in [
+                &(|c: &mut Cusum, v: f64| c.k = v) as &dyn Fn(&mut Cusum, f64),
+                &|c, v| c.h = v,
+                &|c, v| c.up = v,
+                &|c, v| c.down = v,
+            ] {
+                let mut d = a.clone();
+                edit(&mut d, bad);
+                assert!(!d.sound(), "{d:?}");
+            }
+        }
+    }
 
     /// A standard normal by Box-Muller from a seeded `SplitMix64`.
     fn normal(g: &mut SplitMix64) -> f64 {

@@ -735,6 +735,50 @@ class TestUnderAHorizonTheTestsAreNeweyWest:
             checked += 1
         assert checked == 3
 
+    @pytest.mark.parametrize("level", [1e6, 1e8])
+    def test_the_calibration_at_a_large_level_is_statsmodels_in_the_centred_frame(self, level):
+        """A target at a level far above its spread: the covariance moved to
+        the predictions' own units grew its condition by the level's square
+        over the spread's, and at 1e8 did not factorize, so the Wald read
+        null (review 2026-11-23, DIAG-2). It is the same test read about
+        the predictions' mean, where statsmodels' HAC kernel is well
+        conditioned: ``y`` on ``(1, p - mean(p))`` against the intercept at
+        that mean and a slope of 1."""
+        import statsmodels.api as sm
+        from statsmodels.stats.sandwich_covariance import S_hac_simple
+
+        h, n = 3, 600
+        rng = np.random.default_rng(233)
+        x = rng.normal(size=(n, 2))
+        u = rng.normal(size=n + h)
+        fwd = np.convolve(u, np.ones(h), "valid")[1 : n + 1] / np.sqrt(h)
+        y = level + x @ np.array([1.2, -0.8]) + fwd
+        df = pl.DataFrame({"x0": x[:, 0], "x1": x[:, 1], "y": y})
+        spec = rp.spec.ewridge(
+            "m",
+            targets=["y"],
+            features=["x0", "x1"],
+            half_life=float("inf"),
+            embargo=float(h),
+            min_weight=10.0,
+            emit_calibration=True,
+        )
+        out = rp.ModelBank([spec]).fit_predict(df).unnest("m")
+        p = out["pred_y"].to_numpy()
+        for t in (200, 400, 599):
+            keep = np.isfinite(p[: t - h + 1])
+            ps, ys = p[: t - h + 1][keep], y[: t - h + 1][keep]
+            pc = ps - ps.mean()
+            Z = sm.add_constant(pc)
+            fit = sm.OLS(ys - ps.mean(), Z).fit()
+            d = fit.params - [0.0, 1.0]
+            bi = np.linalg.inv(Z.T @ Z)
+            V = bi @ S_hac_simple(Z * (ys - ps)[:, None], nlags=2 * h) @ bi
+            want = float(d @ np.linalg.solve(V, d))
+            got = out["calibration_wald_y"][t]
+            assert got is not None, f"row {t}"
+            np.testing.assert_allclose(got, want, rtol=1e-6)
+
 
 class TestTailsAreScipyAndJarqueBera:
     """Task 221 (e). Run once, the tails of the recursive residuals before
