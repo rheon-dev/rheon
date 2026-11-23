@@ -701,7 +701,7 @@ from both halves, every field to the bit but `since_flag`; its release's own
 continuation differs in `stat` from the first span closed after the load
 (row 89: 0.704 against the release's 0.849).
 
-Proposed as a twenty-eighth, awaiting the user's word (2026-11-23, Fable's
+A twenty-eighth, the user's (2026-11-23: "Accept exception 28"; Fable's
 W13 review, A2, for `garch`; branch `w14-followups`): a `garch` state of
 schema 71 saved within a start that had cleared its buffer goes on under the
 current start rule, not to the current fixture's bytes. The start of schema
