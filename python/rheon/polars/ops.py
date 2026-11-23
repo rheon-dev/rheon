@@ -1288,7 +1288,7 @@ def rolling_min(
     .. code-block:: text
 
         [3.0, 1.0, 1.0, 2.0, 4.0] [3.0, 1.0, 1.0, 2.0, 4.0]
-        [1.0, 2.0, None, None, None]
+        [1.0, 2.0, 4.0, None, None]
 
     .. rubric:: See also
 
