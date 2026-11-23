@@ -90,11 +90,18 @@ impl Tails {
         let d = v - self.mean;
         let (d2, ar) = (d * d, a * r);
         let [m2, m3, m4] = self.m;
-        self.m = [
+        let next = [
             m2 + d2 * ar,
             m3 + d2 * d * ar * (q - r) - 3.0 * d * r * m2,
             m4 + d2 * d2 * ar * (q * q - q * r + r * r) + 6.0 * d2 * r * r * m2 - 4.0 * d * r * m3,
         ];
+        // A deviation whose fourth power passes the largest double (`|δ|`
+        // past about 1.2e77, inside the input bound) is a row the sums
+        // cannot hold: it only ages, and the state stays one a load takes.
+        if !next.iter().all(|v| v.is_finite()) {
+            return;
+        }
+        self.m = next;
         self.mean += d * r;
         self.w = total;
         self.w2 += w * w;
@@ -121,20 +128,36 @@ impl Tails {
     /// correctly: `pow(c²·m, 1.5) ≠ c³·pow(m, 1.5)` for 236 of 400,000
     /// arguments under glibc 2.39 at `c = 2^±20`, and one row a run of
     /// `kalman`, `lasso` or `quantile_median` then left its units by an ulp.
+    ///
+    /// `None` where `m_2^{3/2}` is below the normal doubles: residuals near
+    /// `1e-100`, whose `m_3` underflows with it and read NaN.
     pub fn skew(&self) -> Option<f64> {
-        self.moments().map(|(m2, m3, _)| m3 / (m2 * m2.sqrt()))
+        let (m2, m3, _) = self.moments()?;
+        let den = m2 * m2.sqrt();
+        den.is_normal().then(|| m3 / den)
     }
 
-    /// The excess kurtosis, `m_4 / m_2² − 3`.
+    /// The excess kurtosis, `m_4 / m_2² − 3`. `None` where `m_2²` or `m_4`
+    /// is below the normal doubles: residuals near `1e-90`, where `m_4`
+    /// underflows to 0 and the ratio read NaN or `−3`.
     pub fn kurtosis(&self) -> Option<f64> {
-        self.moments().map(|(m2, _, m4)| m4 / (m2 * m2) - 3.0)
+        let (m2, _, m4) = self.moments()?;
+        let den = m2 * m2;
+        (den.is_normal() && m4.is_normal()).then(|| m4 / den - 3.0)
     }
 
-    /// Jarque and Bera's statistic at Kish's size: `None` before a spread.
+    /// Jarque and Bera's statistic at Kish's size: `None` before a spread,
+    /// and where `Σω²` is below the normal doubles, as a gap of about 538
+    /// half-lives leaves it while `W` is still above 0: no Kish size is read
+    /// there, where it read infinite.
     pub fn jarque_bera(&self) -> Option<f64> {
         let (s, k) = (self.skew()?, self.kurtosis()?);
+        if !self.w2.is_normal() {
+            return None;
+        }
         let n = self.w * self.w / self.w2;
-        Some(n / 6.0 * (s * s + k * k / 4.0))
+        let jb = n / 6.0 * (s * s + k * k / 4.0);
+        jb.is_finite().then_some(jb)
     }
 }
 
@@ -296,5 +319,97 @@ mod tests {
         assert!(bad(|t| t.w = -1.0));
         assert!(bad(|t| t.w2 = -1.0));
         assert!(bad(|t| t.m[0] = -1.0));
+    }
+
+    /// A memory decayed past where `Σω²` can be held (a gap of about 538
+    /// half-lives underflows it to 0 while `W` is still above 0) has no
+    /// Kish size: Jarque and Bera's statistic is `None` there, never
+    /// infinite or NaN, and the next row reads again (review 2026-11-23,
+    /// DIAG-4 (1)).
+    #[test]
+    fn a_memory_decayed_past_its_kish_size_reads_no_statistic() {
+        let mut t = Tails::new();
+        let mut st = 5u64;
+        for _ in 0..200 {
+            t.update(lcg(&mut st), 0.98, 1.0);
+        }
+        assert!(t.jarque_bera().unwrap().is_finite());
+        for half_lives in [530, 538, 540, 600, 1100] {
+            let mut g = t.clone();
+            g.age(0.5f64.powi(half_lives));
+            let jb = g.jarque_bera();
+            assert!(jb.is_none_or(f64::is_finite), "{half_lives}: {jb:?}");
+            if g.w2 == 0.0 {
+                assert_eq!(jb, None, "{half_lives}");
+            }
+            g.update(0.3, 1.0, 1.0);
+            g.update(-0.2, 1.0, 1.0);
+            g.update(0.7, 1.0, 1.0);
+            assert!(g.jarque_bera().unwrap().is_finite(), "{half_lives}");
+        }
+    }
+
+    /// A residual inside the input bound whose fourth power passes the
+    /// largest double leaves the state finite, so a saved state still
+    /// loads (review 2026-11-23, DIAG-4 (2): `|d| > 1.16e77`).
+    #[test]
+    fn a_residual_whose_fourth_power_overflows_leaves_the_state_loadable() {
+        for big in [2e77, 1e100, -1e100, 1.3e154, 1e200] {
+            let mut t = Tails::new();
+            let mut st = 9u64;
+            for _ in 0..50 {
+                t.update(lcg(&mut st), 0.99, 1.0);
+            }
+            t.update(big, 0.99, 1.0);
+            assert!(t.has_shape(), "{big}: {t:?}");
+            for _ in 0..50 {
+                t.update(lcg(&mut st), 0.99, 1.0);
+            }
+            assert!(t.has_shape(), "{big}");
+            assert!(t.kurtosis().unwrap().is_finite(), "{big}");
+        }
+    }
+
+    /// Residuals near `1e-90` read infinite or NaN kurtosis: `m_2²` and
+    /// `m_4` underflow there (review 2026-11-23, DIAG-4 (3)). A ratio whose
+    /// denominator the doubles cannot hold reads `None`; where they hold it,
+    /// a scale by a power of two leaves the shape to the bit; and no scale
+    /// reads a number that is not finite.
+    #[test]
+    fn tiny_residuals_read_their_shape_or_none() {
+        let mut st = 13u64;
+        let rows: Vec<f64> = (0..300)
+            .map(|_| {
+                let u = lcg(&mut st) + 0.5;
+                u * u * u
+            })
+            .collect();
+        let fed = |scale: f64| {
+            let mut t = Tails::new();
+            for &v in &rows {
+                t.update(v * scale, 0.99, 1.0);
+            }
+            t
+        };
+        let one = fed(1.0);
+        for k in [-150, -240, 150, 240] {
+            let t = fed(2f64.powi(k));
+            assert_eq!(t.skew(), one.skew(), "2^{k}");
+            assert_eq!(t.kurtosis(), one.kurtosis(), "2^{k}");
+            assert_eq!(t.jarque_bera(), one.jarque_bera(), "2^{k}");
+        }
+        for k in [-280, -300, -330, -400, -500, 280, 300, 400] {
+            let t = fed(2f64.powi(k));
+            assert!(t.has_shape(), "2^{k}");
+            for (what, got, want) in [
+                ("skew", t.skew(), one.skew()),
+                ("kurtosis", t.kurtosis(), one.kurtosis()),
+                ("jarque_bera", t.jarque_bera(), one.jarque_bera()),
+            ] {
+                assert!(got.is_none() || got == want, "2^{k}: {what} {got:?} against {want:?}");
+            }
+        }
+        // At 2^-300 the fourth moment is below the doubles: no kurtosis.
+        assert_eq!(fed(2f64.powi(-300)).kurtosis(), None);
     }
 }

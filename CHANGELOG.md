@@ -772,6 +772,15 @@ model that only the new build has is listed as an addition and passes.
   quarter. An expectile off the mean has residuals whose mean is not 0: at
   0.9 the calibration's Wald and the CUSUM rejected on every row. Both
   models are new in this release, so no released spec is refused.
+- **`emit_tails` reads null where the doubles cannot hold its moments, and
+  a residual whose fourth power overflows no longer breaks the saved state**
+  (review 2026-11-23, DIAG-4). After a gap of about 538 half-lives `Σω²`
+  underflowed to 0 while `W` did not, and `jarque_bera` read infinite;
+  residuals near `1e-90` underflowed `m_2²` and `m_4`, and `kurtosis` read
+  NaN; and a residual past about `1.2e77`, inside the input bound, made
+  `m_4` infinite, after which the saved state no longer loaded. Each of
+  the three reads null there, and such a residual only ages the sums. No
+  output in the doubles' normal range moves.
 - **A window looking ahead whose far edge is the input's last row is whole
   at the end of the input** (PLAN 565). Under `closed="right"` or `"both"`,
   `rp.ewm_sum`, `rp.ewm_mean`, `rp.ewm_rate` and `rp.ewm_quantile` with
