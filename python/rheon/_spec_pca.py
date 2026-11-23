@@ -61,7 +61,10 @@ def pca(
         components, at a rate set by the gaps between them.
     ``learning_rate``
         ``"oja"``'s gain on its rate, finite and above 0. Default 4.0.
-        Refused under the other methods, which take no rate.
+        Refused under the other methods, which take no rate. A component
+        is written only where the gain times its gap to each neighbor, over
+        the total variance, passes 1/2 (the Notes), so a wide stream needs
+        a larger gain.
     ``max_state_bytes``
         The bytes a group's state may hold, above 0 and at most 64 MiB.
         Default 262,144 (256 KB). The state is
@@ -217,10 +220,17 @@ def pca(
     once ``n`` passes the rows that could leave it at none. So no count of
     rows gates the first rows: they are withheld while ``n`` is too small
     for the test, and a stream with tied components is withheld at the tie
-    for as long as it lasts. Measured on a three-column stream with
-    variances 100, 1 and 0.5 and no decay, the leading component was first
-    written on the fifth row. On an isotropic stream of 5,000 rows, no row
-    told its tied components apart.
+    for as long as it lasts. The test reads eigenvalue estimates, which the
+    variances of ``"svd"`` and ``"ccipca"`` are. ``"oja"``'s are means
+    along directions that still move: its rate ``c/t``, ``c =
+    learning_rate / tr`` per unit of variance, turns a direction toward an
+    eigenvector faster than its sampling error shrinks only where ``c``
+    times the gap passes 1/2, so ``"oja"`` also needs ``learning_rate *
+    gap / tr > 1/2`` against each neighbor, or the test would read the
+    directions' convergence error as a gap. Measured on a three-column
+    stream with variances 100, 1 and 0.5 and no decay, the leading
+    component was first written on the fifth row. On an isotropic stream of
+    5,000 rows, no row told its tied components apart.
 
     **Order and sign.** ``"svd"`` writes its components by variance, largest
     first. ``"ccipca"`` and ``"oja"`` write them in their deflation order,

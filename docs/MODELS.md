@@ -2334,6 +2334,20 @@ two degrees of freedom. No count of rows enters: the
 first rows are withheld because `n` is small, and a tie is withheld for as
 long as it lasts, its rows' `withheld_reason` reading `"not_separated"`.
 
+The test reads two eigenvalue estimates, which `"svd"`'s and `"ccipca"`'s
+variances are. `"oja"`'s are running means along directions that still
+move, and its rate `c/t`, `c = learning_rate / tr` per unit of variance,
+turns a direction toward an eigenvector faster than the direction's
+sampling error shrinks only where `c` times the gap to a neighbor passes
+1/2. Below that the variances differ by the directions' convergence error,
+which the test would read as a gap: at 20 features with variances 4, 4 and
+then 1, one component and the default gain (`4 · 3/26 = 0.46`), the tied
+component was written on every late row of 3 seeds in 8. So `"oja"`
+writes component `j` only where `learning_rate · gap / tr > 1/2` against
+each neighbor as well, and withholds it as `"not_separated"` otherwise. A
+wide stream, whose gaps are small against its trace, needs a larger
+`learning_rate`.
+
 #### Checked against
 
 Each method is held to a third-party library where one computes it, and to

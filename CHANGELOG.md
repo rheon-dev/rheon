@@ -689,6 +689,21 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **`pca` under `"oja"` writes a component only where its rate has found
+  it** (Fable's W13 review, C1). The eigengap test is of two eigenvalue
+  estimates; `oja`'s variances are running means along directions that
+  still move, and its rate `c/t`, `c = learning_rate / tr` per unit of
+  variance, turns a direction toward an eigenvector faster than its
+  sampling error shrinks only where `c · gap > 1/2`. Below that the test read
+  the directions' convergence error as a gap: at 20 features with
+  variances 4, 4 and then 1, one component and the default gain (0.46),
+  the component the tie leaves unidentified was written on every row of
+  the second half of 20,000 on 3 of 8 seeds (58% on one, reproduced in
+  Rust). `oja` now also needs `learning_rate · gap / tr > 1/2` against each
+  neighbor and is withheld as `not_separated` otherwise; a tie is now
+  tested under all three methods, and an isotropic stream too. `svd` and
+  `ccipca` do not move. Moves: `pca.pc*`, `pca.withheld_reason`.
+
 - **`dcc`'s start judges `Q̄` by its conditioning and waits on its evidence
   with no count of tries** (Fable's W13 review, A1 to A3). The "`Q̄`
   positive definite" gate was a Cholesky pivot `> 0`, so a `Q̄` short of
