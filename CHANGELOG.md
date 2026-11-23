@@ -843,6 +843,12 @@ model that only the new build has is listed as an addition and passes.
   min(W, w))`, `W` its weight before the gap, as `sgd`'s scaler reads it,
   and the same however rows of weight 0 split the gap. Moves:
   `kalman.pred_*`, `kalman.coef`.
+- **A `conformal` level within `2^-53` of 1 starts its band** (review
+  2026-11-23, DIAG-6). `1 − α/2` rounds to 1 there, and `Φ⁻¹(1)` made the
+  band's starting multiplier and its gain NaN for good. The upper quantile
+  is read from the lower tail where that rounding happens, and every other
+  level keeps its bits. A weight that is not a finite number above 0 only
+  ages the band, as a weight of 0 does, for a caller of the Rust type.
 - **A window looking ahead whose far edge is the input's last row is whole
   at the end of the input** (PLAN 565). Under `closed="right"` or `"both"`,
   `rp.ewm_sum`, `rp.ewm_mean`, `rp.ewm_rate` and `rp.ewm_quantile` with
