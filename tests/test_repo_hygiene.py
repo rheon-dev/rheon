@@ -60,7 +60,10 @@ TOOL_OUTPUT_DIRS = {"mutants.out", "mutants.out.old", "target", ".venv", "htmlco
 #: included, and the cap moved to 260 KB with it. `crates/rheon-core/tests/
 #: model_contract.rs` reached 263 KB with wave W13's cases and became a root
 #: file over `crates/rheon-core/tests/model_contract/`, one file a section,
-#: each far under the cap; the cap stayed.
+#: each far under the cap; the cap stayed. `crates/rheon-polars/src/
+#: windows_frame.rs` reached 264 KB with wave W13's four window operators and
+#: gave the plan's definitions of the moments, cross-group and profile
+#: operators to `windows_frame/defs.rs`; the cap stayed.
 MAX_SOURCE_BYTES = 260_000
 
 #: Prose gets more room: `docs/PLAN.md` was the design log and passed 200 KB
