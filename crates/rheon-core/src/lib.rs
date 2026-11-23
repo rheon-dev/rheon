@@ -169,8 +169,8 @@ pub use ewcov::{
 pub use ewdiag::{EwDiag, Including};
 pub use ewlagcov::{EwLagCov, MAX_LAG, check_lag_ceiling};
 pub use ewm_moments::{
-    EWM_MOMENTS_MAX_STATE_BYTES, EwmMoments, EwmMomentsCfg, MAX_UNBIASED_MOMENT_ORDER, MomentKind,
-    MomentTerm, Withheld,
+    EWM_MOMENTS_CLOCK_BLOCK_ROWS, EWM_MOMENTS_MAX_STATE_BYTES, EwmMoments, EwmMomentsCfg,
+    Leg as MomentLeg, MAX_UNBIASED_MOMENT_ORDER, MomentKind, MomentTerm, Withheld,
 };
 pub use ewridge::{EwRidge, EwRidgeCfg};
 pub use expectile::{

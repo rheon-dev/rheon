@@ -2614,7 +2614,98 @@ pub fn all() -> Vec<Case> {
             Targets::None,
             40
         ),
+        // Row lags of two columns, an autocorrelation and lagged cross
+        // terms: a summary a set of legs, and one buffer a lagged column.
+        case!(
+            "ewm_moments_lags",
+            "EwmMoments",
+            EwmMoments,
+            EwmMoments::new(ewm_moments_lag_cfg(false, None, None)).unwrap(),
+            2,
+            Targets::None,
+            40
+        ),
+        // The same lags on the clock, as-of within a tolerance: each
+        // buffer's stamps, and the clock's place.
+        case!(
+            "ewm_moments_clock_lags",
+            "EwmMoments",
+            EwmMoments,
+            EwmMoments::new(ewm_moments_lag_cfg(true, None, None)).unwrap(),
+            2,
+            Targets::None,
+            40
+        ),
+        // A window of 12 rows: the ring of rows, no summary.
+        case!(
+            "ewm_moments_window",
+            "EwmMoments",
+            EwmMoments,
+            EwmMoments::new(ewm_moments_lag_cfg(false, Some(12), None)).unwrap(),
+            2,
+            Targets::None,
+            40
+        ),
+        // A window of 7 clock units: the ring's stamps.
+        case!(
+            "ewm_moments_clock_window",
+            "EwmMoments",
+            EwmMoments,
+            EwmMoments::new(ewm_moments_lag_cfg(true, None, Some(7.0))).unwrap(),
+            2,
+            Targets::None,
+            40
+        ),
     ]
+}
+
+/// `ewm_moments` of the first two features with lags: the first's
+/// autocorrelation at 2, a cross term of the first with the second a step
+/// back, the second's lagged skew and the first's unbiased fourth
+/// cumulant, each standard error; on the clock with `clocked`, under a
+/// window of `rows` or of `clock`.
+fn ewm_moments_lag_cfg(clocked: bool, rows: Option<usize>, clock: Option<f64>) -> EwmMomentsCfg {
+    let term = |name: &str, powers: Vec<(MomentLeg, u32)>, kind, bias| MomentTerm {
+        name: name.to_owned(),
+        powers,
+        kind,
+        bias,
+    };
+    let terms = vec![
+        term(
+            "acor2",
+            vec![(MomentLeg::of(0), 1), (MomentLeg::lagged(0, 2.0), 1)],
+            MomentKind::Standardized,
+            true,
+        ),
+        term(
+            "x2y1",
+            vec![(MomentLeg::of(0), 2), (MomentLeg::lagged(1, 1.0), 1)],
+            MomentKind::Central,
+            true,
+        ),
+        term(
+            "sk_y1",
+            vec![(MomentLeg::lagged(1, 1.0), 3)],
+            MomentKind::Standardized,
+            true,
+        ),
+        term(
+            "k4_u",
+            vec![(MomentLeg::of(0), 4)],
+            MomentKind::Cumulant,
+            false,
+        ),
+    ];
+    EwmMomentsCfg {
+        min_weight: 2.0,
+        clocked,
+        lag_tolerance: clocked.then_some(1.0),
+        se: true,
+        window_rows: rows,
+        window_clock: clock,
+        ..EwmMomentsCfg::new(decay(), terms)
+    }
 }
 
 /// `ewm_moments` of the first feature: plug-in central, standardized,
