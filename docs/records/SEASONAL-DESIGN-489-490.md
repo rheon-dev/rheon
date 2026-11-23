@@ -281,6 +281,36 @@ reader-facing cites a plan task or a record. The section's table:
 The section adds: a decomposition's remainder is for review after the lag,
 not a feature for the next row; the gap at shorter lags is tabled.
 
+## Measured after the design: the kernel by the adjoint (2026-11-23)
+
+`scripts/stl_adjoint_490.py` builds each linear step of the study's port
+(the subseries loess with its two end points, the three moving averages,
+the low-pass and trend loess) as a sparse matrix from the port's own loess
+weights, and runs a unit vector back through their transposes: the inner
+loop reversed, then MSTL's chain of passes reversed. MSTL's hourly
+defaults: periods 24 and 168, seasonal spans 11 and 15, `iterate = 2`, five
+inner passes, `W = 2,353`, the emitted position `W // 2`. One Linux x86-64
+VM, 4 cores (Xeon at 2.1 GHz), numpy on OpenBLAS 0.3.34, Python prototype.
+
+| quantity | measured |
+|---|---|
+| the adjoint's row against the port on the identity, `W = 401`, each of the three components | 5.6e-17 at most (absolute) |
+| the sparse steps' forward fit against the port's | 2.8e-16 at most |
+| one kernel row by the adjoint, `W = 2,353` | 19.4 ms |
+| one forward fit through the same sparse steps | 19.0 ms |
+| the three rows an emission dots (two seasonals, the trend) | 58.6 ms |
+| building the sparse steps from the settings | 0.34 s (and 0.48 s for the port's loess plans) |
+| the port on the identity: 64 columns at once, dense, on BLAS | 0.44 s, so 16.3 s for all `W` columns |
+| the port's own one-column fit, vectorised Python | 663 ms, so `W` of them would take 26 min |
+
+So the adjoint costs one fit, as the design said: a kernel row is 19 ms
+here, against 16 s for the port on the identity even with every column
+batched through BLAS (and the half hour the design quoted for `W`
+one-column fits). In the Rust port the kernel's construction is one pass
+per component at build time, about three fits, and an emission is `(m + 1)`
+dot products of `W`. The rows' memory is `3 × 8 W` = 56,472 B, as the
+state table has it.
+
 ## What the study left open, or got wrong
 
 1. **Its online form reads the row it emits on** (§5: the output on row
