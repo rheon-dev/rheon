@@ -1288,7 +1288,9 @@ impl TwinFit {
             let distance = self.wald_in(sc, idx, intercept, long_run);
             // A thread keeps buffers for the orders a bank usually reads, not
             // for a thousand features' matrices.
-            if idx.len() >= KEPT_ORDER {
+            // The order is the coefficients', the intercept counted (review
+            // 2026-11-23, DIAG-10 (1)).
+            if idx.len() + usize::from(intercept) >= KEPT_ORDER {
                 *sc = WaldScratch::default();
             }
             distance
