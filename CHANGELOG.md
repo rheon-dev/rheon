@@ -781,6 +781,15 @@ model that only the new build has is listed as an addition and passes.
   `m_4` infinite, after which the saved state no longer loaded. Each of
   the three reads null there, and such a residual only ages the sums. No
   output in the doubles' normal range moves.
+- **`rp.eval.window_metrics` windows an `Int64` or `Duration` clock without
+  wrapping** (review 2026-11-23, PY-1). An `Int64` clock near its least
+  value, windowed by 10, had its window start wrap to near its greatest;
+  a `Duration("ms")` or `Duration("us")` clock past 292 years was read
+  through its nanoseconds, which wrapped, and a clock of `1e13` ms windowed
+  by a second started at -267.7 years. The window's edge is now the clock
+  less its floor remainder, in the clock's own units where `every` is a
+  whole number of them, and a window that would start before the least
+  value the clock's type holds is refused by name.
 - **A window looking ahead whose far edge is the input's last row is whole
   at the end of the input** (PLAN 565). Under `closed="right"` or `"both"`,
   `rp.ewm_sum`, `rp.ewm_mean`, `rp.ewm_rate` and `rp.ewm_quantile` with
