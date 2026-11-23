@@ -395,6 +395,7 @@ class TestPerTargetMinPeriods:
             "pa": lambda: rp.spec.pa("m", features=["x0"], **common),
             "glm": lambda: rp.spec.glm("m", features=["x0"], family="gamma", **common),
             "expectile": lambda: rp.spec.expectile("m", features=["x0"], expectile=0.8, **common),
+            "ar": lambda: rp.spec.ar("m", features=["x0"], lags=1, ridge=1e-6, **common),
         }[kind]()
         if kind == "glm":
             # A Gamma amount is above 0.
@@ -407,8 +408,12 @@ class TestPerTargetMinPeriods:
             else next(f for f in names if f.startswith(f"pred_{t}"))
             for t in ("y0", "y1")
         }
-        assert self._first(out, pred["y0"]) == (41 if kind == "rls" else 5)
-        assert self._first(out, pred["y1"]) == 10 * (late - 1) + 1
+        # `ar`'s first value of a target is only its lag: each target's own
+        # weight starts one of its rows later, row 1 for `y0` and row 10 for
+        # `y1`.
+        hold = 1 if kind == "ar" else 0
+        assert self._first(out, pred["y0"]) == (41 if kind == "rls" else 5 + hold)
+        assert self._first(out, pred["y1"]) == 10 * (late - 1 + hold) + 1
         assert out["m"].struct.field("weight_sum").to_list()[41] == pytest.approx(41.0)
 
     def test_a_late_target_has_no_residual_and_its_sigma_is_the_eager_ones(self):

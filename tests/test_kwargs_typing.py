@@ -30,6 +30,8 @@ BUILDERS = [
     "tdigest",
     "ddsketch",
     "ewm_moments",
+    "ar",
+    "spectral",
     "bocpd",
     "corrchange",
     "deco",

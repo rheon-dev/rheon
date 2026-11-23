@@ -102,6 +102,8 @@ INTRODUCED = {
     "tdigest": "2.1.0",
     "ddsketch": "2.1.0",
     "ewm_moments": "2.1.0",
+    "ar": "2.1.0",
+    "spectral": "2.1.0",
 }
 
 #: The workload's specs that need a parameter newer than a release, by the

@@ -426,6 +426,52 @@ model that only the new build has is listed as an addition and passes.
   operator's, each absent from a file without them, so no file saved before
   moves a byte. No output of another model moves.
 
+- **`spectral`, the power of each target at chosen periods** (task 491):
+  an exponentially weighted Fourier transform on the clock (a row a clock
+  unit without a clock column), read as scipy's `periodogram` with the
+  decay's amplitudes as the window: `scaling` `"density"` (the default) or
+  `"spectrum"`, the weighted mean removed under `detrend`. A direct
+  transform at the periods given, `O(F)` a row, no FFT; its `sin` and
+  `cos` from the `libm` crate, the same bits on every OS. A break empties
+  the transform; the state is `8 (4F + 3)` bytes a target, held to
+  `max_state_bytes`. `scaling="lomb_scargle"` reads the generalised
+  Lomb-Scargle power instead (the share of the weighted variance a
+  sinusoid explains, scipy's `lombscargle(normalize=True,
+  floating_mean=detrend)` with the amplitudes as weights), which needs no
+  even clock: two sums more, `8 (6F + 4)` bytes a target, its early rows
+  guarded by the fit's spread, not a count. `window_size` (with `closed`,
+  `snapshot_every`, `max_rows_between_snapshots` and `window_budget`)
+  gives the sliding-window transform of the rows inside it: the rows in
+  blocks, each block's sums at its own clock origin, a closed block turned
+  once to a reference origin and added to a running total, written afresh
+  when the reference moves; within 1e-12 of the direct sum over the
+  window's rows from a thousand to ten million rows, with the clock near 0
+  and near 2^40.
+- **`ar`, an autoregression for each target** (task 486): AR(p), or any
+  list of lags, by exponentially weighted least squares on lags the model
+  keeps itself, with the features as exogenous regressors and the constant
+  under `fit_intercept` (statsmodels' `trend="c"` or `"n"`). Each target is
+  its own series: a ring of its last `max(lags)` learned values and a fit of
+  its own, solved after every learned row. With no decay its coefficients are
+  `AutoReg`'s on the same rows, within 1e-9; under decay, weighted least
+  squares with the weights on the clock. A row of weight 0 or a null target
+  is not a lag (`AutoReg(missing="drop")`), a session change or a capped gap
+  empties the lags and keeps the fit, `embargo` is refused (a delay would
+  make the lags older for the rows predicted than for the rows learned), a
+  target predicts once its Gram is positive definite (no count of rows
+  guards the early fits; `min_weight` defaults to 0), `emit_se_coef` is
+  `ewridge`'s standard error of each target's fit, `select="aic"` or
+  `"bic"` chooses the order after every learned row with Kish's effective
+  count (`ar_select_order`'s choice with no decay), `window_size` cuts each
+  target's fit at a span of the clock under one `window_budget` for the
+  group (each target's fit a share), its definiteness checked on every row
+  under a window,
+  and the state, `8 max(lags)` plus at
+  most `8 (4k² + 17k + 64)` bytes a target, is held to `max_state_bytes`
+  when the spec is built. Spans: the half-life in rows or on the clock; the
+  lags count learned rows only, since a value `ℓ` rows back has no meaning
+  on a clock. New in the state at schema 72 (unreleased): the `Ar` variant,
+  with its frozen fixtures.
 - **Clock forms for the remaining counts of rows** (task 538, part 2), each
   beside its count and refused with it, each a number of the clock's units
   (rows without a clock) or a duration on a temporal clock, read off the
@@ -1101,6 +1147,24 @@ model that only the new build has is listed as an addition and passes.
   null, failed its own read-back and raised, for a duration `hazard` too.
   It is now written `"-inf"`, as every other non-finite value in a state's
   JSON is. The state file's bytes are unchanged.
+- **`predict` scores a row after a break as `fit_predict` reads it**
+  (PLAN 491). A row after a gap past `gap_cap`, or in a new session, breaks
+  the rows behind it: a learning stream clears what is lagged by rows
+  before it reads the row. `predict` scored such a row with the lags it
+  had, so `ar` predicted from lags `fit_predict` had dropped, and
+  `spectral`'s power read across the break. Such a row is now scored with
+  a copy whose lags are cleared, as a row in a new session is scored with
+  a blended copy.
+
+- **A window's refusal names the row and the bytes** (PLAN 491). A chunk
+  that would take a hard window past a refusing `window_budget` is refused
+  before any row is learned, as it was; the message now says which of the
+  chunk's rows would take it there, counted from 0, and the MiB the window
+  would then hold, and that the bank learned none of the chunk.
+
+- **`output_index` tells `spectral`'s periods apart** (PLAN 491). Each
+  `power_<t>_p<k>` field's `component` is its period's place in
+  `periods`; the fields of one target matched apart from their names.
 
 - **`garch` gives the same numbers on every platform** (W10's CI on
   f1aa0fe0, run 44991677911: the `garch_egarch` and `garch_skewt` goldens
@@ -1700,6 +1764,16 @@ model that only the new build has is listed as an addition and passes.
   stalled mean's rounding, as `ew_cov`'s and `rp.ewm_var`'s means do. Order
   2 then runs `ew_cov`'s update operation for operation, and a variance here
   is `ew_cov`'s to the bit.
+- **`ar` reads its fits' systems in place** (PLAN 491). Its order
+  selection and, under a window, the definiteness check it makes on every
+  row read each fit's own accumulators and a window view kept between
+  rows, where they copied the Gram and its cross-moments and factored into
+  new buffers a row. Outputs are unchanged to the bit. Allocations a row in
+  a release build, `lags=6, select="bic"`: 22 -> 1; `lags=3,
+  window_size=200`: 44.083 -> 1.083. Measured on an x86-64 Linux VM, one
+  target and one feature over 60,000 rows (the best of 5): 1,491-1,605 ->
+  1,063-1,132 ns a row under `select`, and 2,289-2,390 -> 1,080-1,139 ns a
+  row under the window.
 
 - **A state loads faster in the envelope, and its size moves by a few
   bytes** (PLAN 542). A load reads the file's kind and version from its

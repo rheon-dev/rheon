@@ -1049,7 +1049,11 @@ EVERY_KIND = pytest.mark.extended(reason="the sweep over every kind that takes a
 #: `audit` counts what it is given and learns nothing a delay could hold
 #: back; `rcov` needs `group_close`, and a closed group cannot release the
 #: rows it still holds.
-REFUSE_EMBARGO = {"audit": "embargo", "rcov": "group_close and embargo cannot both be set"}
+REFUSE_EMBARGO = {
+    "audit": "embargo",
+    "rcov": "group_close and embargo cannot both be set",
+    "ar": "embargo does not apply to ar",
+}
 
 #: A sweep name that is not a kind: `sgd`'s Huber loss, with the refit of
 #: its first rows on as `huber`'s is (task 277).
@@ -1186,6 +1190,8 @@ STATE_READS: dict[str, frozenset[str]] = {
     "tdigest": frozenset({"q0.05_y", "q0.25_y", "q0.95_y", "es0.05_y", "es0.25_y", "es0.95_y"}),
     # Each level and its tail mean read the sketch alone.
     "ddsketch": frozenset({"q0.05_y", "q0.25_y", "q0.95_y", "es0.05_y", "es0.25_y", "es0.95_y"}),
+    # Its power reads the state alone.
+    "spectral": frozenset({"power_y_p0", "power_y_p1"}),
     "hmm": frozenset(
         {"filtered_state0", "filtered_state1", "predicted_state0", "predicted_state1", "state"}
     ),
@@ -1535,6 +1541,7 @@ DOUBLED: dict[str, dict] = {
     "tdigest": {},
     # A sketch of the same rows' buckets.
     "ddsketch": {},
+    "spectral": {},
     "glm": {},
     # Its sums take each return in the order of the rows learned: a lesson
     # late steps them the same, from the same rows.

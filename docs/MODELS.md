@@ -1,7 +1,7 @@
 <!-- kind: reference -->
 # Models
 
-The reference entry of each of the thirty-three models a spec can name, by
+The reference entry of each of the thirty-five models a spec can name, by
 family, for a reader who knows which model they want to look up. A
 model's parameters, their defaults and its refusals are in its docstring,
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md).
@@ -28,7 +28,7 @@ which models keep each, and why.
 
 ## The models at a glance
 
-The thirty-three models fall into four families, and each family answers one
+The thirty-five models fall into four families, and each family answers one
 kind of question about a stream. Each name links its builder's reference
 page, which gives its keywords and their defaults, and *entry* links its
 entry on this page. [Choose a model](how-to/choose-a-model.md) says which
@@ -49,6 +49,7 @@ to start with for which question.
 | [`ftrl`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ftrl) · [entry](#ftrl--online-logistic-regression) | step | FTRL-proximal regression, logistic by default, with an L1 penalty that zeroes coefficients |
 | [`glm`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.glm) · [entry](#glm--generalized-linear-models-poisson-gamma-binomial-tweedie) | step | Poisson, Gamma, binomial and Tweedie regression, a Newton step a row on the likelihood, for counts, positive amounts, proportions and amounts with an exact zero |
 | [`holt`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.holt) · [entry](#holt--holts-linear-trend) | step | Holt's linear trend, the baseline that uses no features |
+| [`ar`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ar) · [entry](#ar--an-autoregression-on-the-targets-own-past) | solve | an autoregression for each target, AR(p), by least squares on lags the model keeps itself, with the features as further inputs, and `AutoReg`'s fit with no decay |
 | **[Moments and correlation](#moments-and-correlation)** | | track the running moments and correlations of the columns you name |
 | [`ew_cov`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ew_cov) · [entry](#ew_cov--exponentially-weighted-moments) | accumulate | running mean, variance, covariance, correlation, partial correlation, Mahalanobis distance and principal components |
 | [`pca`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.pca) · [entry](#pca--streaming-principal-components) | step | principal components learned a row at a time in state that grows with the components times the columns, not the columns squared: the incremental SVD, CCIPCA or Oja's rule, each component withheld until the data tells it apart from its neighbors |
@@ -57,6 +58,7 @@ to start with for which question.
 | [`deco`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.deco) · [entry](#deco--one-correlation-for-the-whole-matrix) | accumulate | one correlation for the whole matrix: Engle & Kelly's equicorrelation, or one per block and per pair of blocks |
 | [`rcov`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.rcov) · [entry](#rcov--a-blocks-realized-covariance-robust-to-noise) | accumulate | a block's realized covariance, robust to microstructure noise: the Barndorff-Nielsen–Hansen–Lunde–Shephard kernel or Christensen–Kinnebrock–Podolskij pre-averaging, reported when a group closes |
 | [`audit`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.audit) · [entry](#audit--what-a-streams-columns-hold) | accumulate | what each column holds, counted in one pass: nulls, NaNs and infinities apart, repeated values, runs, persistence, tails and duplicated columns, and the clock's duplicate stamps and gaps, read back as a table and by `bank.check()` |
+| [`spectral`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.spectral) · [entry](#spectral--how-strong-is-each-cycle) | accumulate | the power of each target at chosen periods, from an exponentially weighted Fourier transform on the clock, read as scipy's periodogram |
 | [`garch`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.garch) · [entry](#garch--how-large-will-the-next-return-be) | step | the GARCH family, a conditional variance for each return series: GARCH(1,1), GJR, EGARCH and FIGARCH, with normal, Student-t or skewed-t innovations, its parameters learned a row at a time after a start fitted by likelihood |
 | [`dcc`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.dcc) · [entry](#dcc--how-do-the-correlations-move-from-row-to-row) | step | dynamic conditional correlation and its asymmetric form: the full correlation matrix of a few return series, each standardized by its own GARCH, moving every row, its two or three parameters given or learned a row at a time after a start fitted by quasi-likelihood |
 | [`realized`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.realized) · [entry](#realized--how-much-did-it-move-and-did-it-jump) | accumulate | realized volatility and the jump tests on it, for each return series: realized variance, bipower and tripower variation, tripower quarticity, Barndorff-Nielsen and Shephard's ratio test, and Lee and Mykland's statistic of each return with its flag |
@@ -273,7 +275,7 @@ per target, give `min_weight` a list. The default depends on the model:
 | the feature count plus one (1 for `holt`) | `ew_cov`, `ew_class`, `kmeans`, `micro`, `holt` |
 | 3 | `marginal`, `deco` |
 | 1 | `bocpd` |
-| 0, each having a gate of its own or nothing to gate | `ewridge`, `ewm_moments`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes`, `garch`, `dcc`, `realized`, `pca`, `power_variation`, `tdigest`, `ddsketch` |
+| 0, each having a gate of its own or nothing to gate | `ewridge`, `ewm_moments`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes`, `garch`, `dcc`, `realized`, `pca`, `power_variation`, `tdigest`, `ddsketch`, `ar`, `spectral` |
 
 **`min_settled_frac` is off by default.** Set it when the half-life was
 chosen to average over regimes or seasons that a shorter history would not
@@ -464,15 +466,16 @@ first prediction at t = 30: weight_sum 27.18, settled_frac 0.182
 
 ## Linear models
 
-Eleven models predict a numeric target. Ten regress it on features, and
-`holt`, a baseline, uses none. Several of them take the same parameters:
+Thirteen models predict a numeric target. Eleven regress it on features,
+`holt`, a baseline, uses none, and `ar` regresses it on its own last
+values, and on features where they are given. Several of them take the same parameters:
 
 | parameters | taken by | explained under |
 |---|---|---|
 | `ridge` | `ewridge`, where a list fits a grid; `huber` and `quantile`, as one number. `rls` refuses it and takes `delta` | [`ewridge`](#ewridge--exponentially-weighted-ridge-regression) and [`rls`](#rls--recursive-least-squares) |
 | `solve_every`, `max_rows_between_solves` | `ewridge`, `lasso`, `huber`, `quantile` | [`ewridge`](#ewridge--exponentially-weighted-ridge-regression) |
 | `target_gaps` | `ewridge`, `lasso` | [`ewridge`'s docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ewridge) |
-| `window_size` | `ewridge`, `lasso` | [Forget rows past a window](how-to/forget-rows-past-a-window.md) |
+| `window_size` | `ewridge`, `lasso`, `ar` | [Forget rows past a window](how-to/forget-rows-past-a-window.md) |
 | `standardize` | `ewridge`, `huber` and `quantile`, off by default; `kalman`, `sgd` and `pa`, on by default. `lasso` always standardizes. `ftrl`, `rls`, `expectile` and `glm` take no `standardize` and refuse it by name: `ftrl`'s `l1` zeroes a coefficient in the feature's own units, so a scale inside the model would move which it zeroes; `rls`'s prior (`delta`, `coef_prior`) is in the features' own units; and `expectile`'s and `glm`'s `ridge` is a penalty in the features' squared units. Scale such a feature before the bank | [`ewridge`](#ewridge--exponentially-weighted-ridge-regression), [`kalman`](#kalman--random-walk-β-dynamic-linear-model) and [`ftrl`](#ftrl--online-logistic-regression) |
 | `coef_min`, `coef_max`, `coef_sum` | `sgd`, `pa` | [`sgd`](#sgd--stochastic-gradient-descent) |
 | `weight` | every model, though `rls`, `kalman`, `sgd`, `pa` and `ftrl` read it differently from a weighted mean | [Weights](how-to/weight-rows.md) |
@@ -491,6 +494,7 @@ What `half_life` decays differs by model:
 | `ftrl` | its per-coordinate sums, but not its penalties, so a shorter half-life shrinks the fit more |
 | `glm` | each target's Gram `G`, and its ridge with the rows, so a row of weight 0 moves no coefficient |
 | `holt` | the level, and the trend at `trend_half_life`, four times `half_life` by default |
+| `ar` | each target's running sums, which its fit is solved from; not its lags, which count learned rows |
 
 ### `ewridge` — exponentially weighted ridge regression
 
@@ -2139,6 +2143,163 @@ half-lives (from row 745 at half-lives of 6 and 25). From row 1,000 in
 that run, where the textbook gains have reached statsmodels' fixed
 ones to 1e-12, the fit is statsmodels' `Holt` to 1e-12.
 
+### `ar` — an autoregression on the target's own past
+
+*API:* [`rheon.spec.ar`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ar) — *Rust:* [`ar.rs`](../crates/rheon-core/src/ar.rs) — *Outputs:* [fields](OUTPUTS.md#ar)
+
+An autoregression for each target, AR(p): the target regressed on its own
+last values, and on the features where they are given, by exponentially
+weighted least squares.
+
+Use `ar` to forecast a series one row ahead from its recent past, without
+building lag columns in the query: the model keeps each target's last
+values itself. With no decay its coefficients are statsmodels' `AutoReg`'s
+on the same rows; with a `half_life` it follows dynamics that drift. Each
+target is its own series, with its own lags and fit.
+
+Its parameters, their defaults and what each refuses are in its
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ar),
+and the fields it writes in [OUTPUTS.md](OUTPUTS.md#ar). The parameters
+every spec takes are in [What every spec takes](#what-every-spec-takes);
+`features` is optional.
+
+#### The update
+
+For lags `ℓ_1 < … < ℓ_q`, row `t`'s design is
+`z_t = (y_{t−ℓ_1}, …, y_{t−ℓ_q}, x_t)`, its lags read from the target's last
+learned values. `W_y` is the target's own weight, and `S`, `r` its running
+means of `z zᵀ` and `z·y`, kept centered:
+
+```
+pred_t = c + β·z_t                       from the fit before the row
+W_y'   = λ·W_y + w                       a learned row of the target only
+S'     = (λ·W_y·S + w·z zᵀ)/W_y'          r' = (λ·W_y·r + w·z·y)/W_y'
+β      = (S + ridge·I)⁻¹ r                c = ȳ − β·z̄     after every learned row
+```
+
+A learned row of a target has a weight above 0 and the target present. It
+joins the target's last values, and enters `S` and `r` once `max(lags)`
+values precede it. A row of weight 0, or with the target null, is not a
+lag: the next row's lags are those before it. A lag counts learned rows,
+not clock units, and a session change or a gap past `gap_cap` empties the
+lags, keeping the fit. A target predicts once its Gram plus the ridge
+is positive definite, every Cholesky pivot above `1e-10` of its diagonal: the guard on
+the early rows is that condition, not a count of rows, and `min_weight`
+defaults to 0.
+
+#### Example
+
+**An AR(2) found from the series alone.** Here `y` follows
+`2 + 0.6·y₋₁ − 0.3·y₋₂` plus noise:
+
+```python
+import numpy as np
+import polars as pl
+from rheon import polars as rp
+
+# y = 2 + 0.6 y[-1] - 0.3 y[-2] + noise, one row a clock unit.
+rng = np.random.default_rng(3)
+y = [5.0, 5.0]
+for e in rng.standard_normal(20_000):
+    y.append(2.0 + 0.6 * y[-1] - 0.3 * y[-2] + e)
+pl.DataFrame({"y": y}).write_parquet("series.parquet")
+
+# Two lags and a constant, from the whole history.
+bank = rp.ModelBank([rp.spec.ar("a", targets=["y"], lags=2, half_life=float("inf"))])
+bank.fit(pl.scan_parquet("series.parquet"))
+for row in bank.coef().iter_rows(named=True):
+    print(f"{row['term']}: {row['coef']:.3f}")
+```
+
+```text
+intercept: 2.022
+lag1: 0.603
+lag2: -0.309
+```
+
+The fit lands within sampling error of `(2, 0.6, −0.3)` after 20,000 rows.
+
+**A trend or a season comes in as features.** `ar` has no `trend` or
+`seasonal` parameter of its own: a model sees the clock with every gap past
+`gap_cap` shortened, so a time or a phase read from it would drift after
+each long gap. Make them as columns in the query, from the clock column as
+it is, and pass them in `features`. Here an hourly series has a slow trend
+and a daily cycle on top of its AR(1) noise:
+
+```python
+import numpy as np
+import polars as pl
+from rheon import polars as rp
+
+# y = 10 + 0.001 t + 2 sin(2 pi t / 24) + e, e an AR(1) of 0.6, one row an hour.
+rng = np.random.default_rng(5)
+n = 24 * 400
+t = np.arange(n, dtype=float)
+e = np.zeros(n)
+for i in range(1, n):
+    e[i] = 0.6 * e[i - 1] + rng.standard_normal()
+y = 10.0 + 0.001 * t + 2.0 * np.sin(2 * np.pi * t / 24) + e
+pl.DataFrame({"t": t, "y": y}).write_parquet("hourly.parquet")
+
+# The time and the day's phase, made in the query.
+phase = 2 * np.pi * pl.col("t") / 24
+lf = pl.scan_parquet("hourly.parquet").with_columns(
+    trend=pl.col("t"), day_sin=phase.sin(), day_cos=phase.cos()
+)
+spec = rp.spec.ar(
+    "a", targets=["y"], lags=1, features=["trend", "day_sin", "day_cos"],
+    clock="t", gap_cap=24.0, half_life=float("inf"),
+)
+bank = rp.ModelBank([spec])
+bank.fit(lf)
+for row in bank.coef().iter_rows(named=True):
+    print(f"{row['term']}: {row['coef']:.4g}")
+```
+
+```text
+intercept: 3.983
+lag1: 0.6042
+trend: 0.0003951
+day_sin: 0.8368
+day_cos: 0.3044
+```
+
+The lag of `y` carries part of the trend and the cycle, so their
+coefficients are the generating ones seen through it. The trend's is
+`0.001 · (1 − 0.6)`. The cycle's are `2 (1 − 0.6 cos(2π/24))` and
+`2 · 0.6 sin(2π/24)`, about 0.84 and 0.31.
+
+#### See also
+
+When the lags are not of the target, or the question is not its value:
+
+- [`ewridge`](#ewridge--exponentially-weighted-ridge-regression), the same
+  least squares on lag columns made in the query, for lags across columns.
+- [`holt`](#holt--holts-linear-trend), a level and a trend rather than a
+  regression on lags.
+- [`garch`](#garch--how-large-will-the-next-return-be), for the variance
+  of a series rather than its value.
+
+#### Notes
+
+**With no decay, `ar` is `AutoReg`.** Its coefficients are least squares on
+the rows after the first `max(lags)`, which is what
+`AutoReg(y, lags, trend="c", exog=x).fit()` computes: within 1e-9 relative
+over 5,000 rows, at orders 2 to 5 and at lags `[1, 2, 12]`. A null target
+is `AutoReg(missing="drop")`. Under a half-life the coefficients are
+statsmodels' `WLS` on the lag design, each row weighted
+`w·0.5^(age/half_life)` on the clock, within 1e-9 as well.
+
+**`select` chooses the order as `ar_select_order` does.** Every order is
+read from the one fit at the largest: with the features first and the lags
+after, an order's system is a leading block of the largest one's, so one
+Cholesky factor gives every order's residuals. The count in AIC and BIC is
+Kish's effective number of rows, the row count with no decay. With no decay it
+chose `ar_select_order`'s order on all twelve series of true orders 1 to 4
+it was checked on, by AIC and by BIC, with a feature and without. Under
+decay it chose the order that minimizes the criterion over statsmodels'
+`WLS` per order, on all six series checked.
+
 ## Moments and correlation
 
 These models measure the columns you name without fitting a target: their
@@ -3117,6 +3278,111 @@ absolute deviation are numpy's while the counts are exact. Past the cap,
 they are within about 1% of the rows in rank. Each pair's correlation
 agrees with `np.corrcoef` over the rows where both columns are usable,
 within 1e-13 relative, in each group and in the pooled merge.
+
+### `spectral` — how strong is each cycle?
+
+*API:* [`rheon.spec.spectral`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.spectral) — *Rust:* [`spectral.rs`](../crates/rheon-core/src/spectral.rs) — *Outputs:* [fields](OUTPUTS.md#spectral)
+
+The power of each target at chosen periods, from an exponentially weighted
+Fourier transform on the clock, read as scipy's periodogram.
+
+Use `spectral` to watch how strong a known cycle is as the stream runs: a
+daily rhythm in a load, a weekly one in sales, a line in a vibration. Each
+row reports the power at each period before the row, under the spec's
+`half_life`. Its parameters, their defaults and what each refuses are in
+its [docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.spectral),
+and the fields it writes in [OUTPUTS.md](OUTPUTS.md#spectral). It takes no
+features.
+
+#### The update
+
+Per row of clock step `Δ`, weight `w` and target `x`, with the rotation
+`r = e^{2πi f Δ}` for each frequency `f`, the inverse of a period:
+
+```
+X ← λ·r·X + w·x        U ← λ·r·U + w
+A ← λ·A + w            B ← λ·B + w·x        Q ← λ²·Q + w²
+P = c·|X − m·U|²·spacing / Q      (density; m = B / A, the weighted mean)
+```
+
+`X` is the transform of the rows at amplitudes `w·λ^age`, referred to the
+current clock, and `U` the amplitudes' own, which removes the mean. `c` is
+2, and 1 at the zero frequency and the Nyquist. Under `scaling="spectrum"`
+the power is `c·|X − m·U|² / A²`. The `sin` and `cos` come from one
+library on every platform, so the state is the same bits everywhere. A
+session change or a gap past `gap_cap` empties the transform, since the
+phase across it is not known.
+
+**Lomb-Scargle.** Under `scaling="lomb_scargle"` the power at each period
+is the generalized Lomb-Scargle power: the share of the target's weighted
+variance that a sinusoid of that period explains, between 0 and 1. It
+comes from the weighted least squares fit of `a·cos + b·sin`, and a
+constant with `detrend`. It needs no even clock and has no Nyquist limit, so it is the
+read for an uneven clock. It keeps two sums more: the amplitudes'
+transform at twice each frequency, `V ← λ·r²·V + w`, and `S ← λ·S + w·x²`.
+The fit's cross-products are read from them: `CC = (A + Re V)/2`,
+`SS = (A − Re V)/2`, `CS = Im V / 2`. Where the rows' phases have not yet
+spread over enough of a cycle to tell a cosine from a sine, the power is
+null. It equals scipy's `lombscargle(normalize=True, weights=a,
+floating_mean=detrend)` of the rows to 1e-9.
+
+**A window.** Under `window_size` the power is of the rows less than
+`window_size` old alone, the sliding-window transform: with no decay,
+scipy's `periodogram` of the window's rows. The rows are kept in blocks,
+closed on `snapshot_every` and `max_rows_between_snapshots` (every row by
+default), each block's sums referred to its own origin, the clock of its
+first row. A closed block is turned once to a reference origin and added
+to a running total; it leaves whole once its first row is past the window.
+The reference moves once it is two windows old and the total is written
+afresh, so no sum is turned row after row. Over ten million rows, with
+the clock starting near 0 or near 2^40, the power is within 1e-12 of the
+direct sum over the window's rows. `closed` and `window_budget` are as
+`ewridge`'s.
+
+#### Example
+
+**A daily cycle found in an hourly series:**
+
+```python
+import numpy as np
+import polars as pl
+from rheon import polars as rp
+
+# A cycle of 24 rows under noise of the same size.
+rng = np.random.default_rng(1)
+t = np.arange(24 * 60, dtype=float)
+y = np.sin(2 * np.pi * t / 24) + rng.standard_normal(t.size)
+pl.DataFrame({"y": y}).write_parquet("hourly.parquet")
+
+spec = rp.spec.spectral("s", targets=["y"], periods=[24.0, 10.0], half_life=float("inf"))
+out = pl.scan_parquet("hourly.parquet").rheon.fit_predict([spec]).collect()
+last = out["s"][-1]
+print(f"24 h: {last['power_y_p0']:.1f}, 10 h: {last['power_y_p1']:.1f}")
+```
+
+```text
+24 h: 684.0, 10 h: 1.4
+```
+
+The daily period's power is hundreds of times the other's.
+
+#### See also
+
+When the question is a forecast or a spread rather than a cycle:
+
+- [`ar`](#ar--an-autoregression-on-the-targets-own-past), to forecast a
+  series from its own past.
+- [`ew_cov`](#ew_cov--exponentially-weighted-moments), for a series'
+  variance rather than its cycles.
+
+#### Notes
+
+**With no decay it is scipy's `periodogram`.** On an even clock of spacing
+0.5, the power before a row equals `periodogram(x − m, fs=2, window=a,
+detrend=False)` of the rows before it to 1e-9, `a` the decay's amplitudes.
+That holds at two frequencies and the Nyquist, in both scalings, with no
+decay and under a half-life. On an uneven clock with weights, where scipy has no
+periodogram, it equals the definition written out with numpy to 1e-9.
 
 ### `garch` — how large will the next return be?
 

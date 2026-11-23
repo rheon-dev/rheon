@@ -1178,6 +1178,22 @@ fn every_kind_refuses_or_loads_corruption(prefix_step: usize, flip_step: usize) 
             r#"["x0", "x1"]"#,
             true,
         ),
+        // Its transforms at two periods.
+        (
+            "spectral",
+            r#"{"type": "spectral", "periods": [8.0, 3.0]}"#,
+            r#"["y"]"#,
+            "[]",
+            true,
+        ),
+        // Its rings full and its fits solved.
+        (
+            "ar",
+            r#"{"type": "ar", "lags": [1, 2], "ridge": 0.01}"#,
+            r#"["y"]"#,
+            r#"["x0"]"#,
+            true,
+        ),
     ];
     let mut seen = Vec::new();
     for &(kind, model, targets, features, half_life) in kinds {

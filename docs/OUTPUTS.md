@@ -18,8 +18,8 @@ exact spec you built.
 
 | family | models |
 |---|---|
-| [Linear models](MODELS.md#linear-models) | [`ewridge`](#ewridge) · [`rls`](#rls) · [`lasso`](#lasso) · [`kalman`](#kalman) · [`huber`](#huber) · [`quantile`](#quantile) · [`sgd`](#sgd) · [`pa`](#pa) · [`ftrl`](#ftrl) · [`glm`](#glm) · [`expectile`](#expectile) · [`holt`](#holt) |
-| [Moments and correlation](MODELS.md#moments-and-correlation) | [`ew_cov`](#ew_cov) · [`ewm_moments`](#ewm_moments) · [`pca`](#pca) · [`marginal`](#marginal) · [`deco`](#deco) · [`rcov`](#rcov) · [`audit`](#audit) · [`garch`](#garch) · [`dcc`](#dcc) · [`realized`](#realized) · [`power_variation`](#power_variation) · [`tdigest`](#tdigest) · [`ddsketch`](#ddsketch) |
+| [Linear models](MODELS.md#linear-models) | [`ewridge`](#ewridge) · [`rls`](#rls) · [`lasso`](#lasso) · [`kalman`](#kalman) · [`huber`](#huber) · [`quantile`](#quantile) · [`sgd`](#sgd) · [`pa`](#pa) · [`ftrl`](#ftrl) · [`glm`](#glm) · [`expectile`](#expectile) · [`holt`](#holt) · [`ar`](#ar) |
+| [Moments and correlation](MODELS.md#moments-and-correlation) | [`ew_cov`](#ew_cov) · [`ewm_moments`](#ewm_moments) · [`pca`](#pca) · [`marginal`](#marginal) · [`deco`](#deco) · [`rcov`](#rcov) · [`audit`](#audit) · [`garch`](#garch) · [`dcc`](#dcc) · [`realized`](#realized) · [`power_variation`](#power_variation) · [`tdigest`](#tdigest) · [`ddsketch`](#ddsketch) · [`spectral`](#spectral) |
 | [Clustering and classification](MODELS.md#clustering-and-classification) | [`kmeans`](#kmeans) · [`micro`](#micro) · [`ew_class`](#ew_class) |
 | [Sequential tests and regimes](MODELS.md#sequential-tests-and-regimes) | [`seqtest`](#seqtest) · [`corrchange`](#corrchange) · [`bocpd`](#bocpd) · [`hmm`](#hmm) · [`hawkes`](#hawkes) |
 
@@ -331,6 +331,19 @@ The fields of `po.spec.holt("m", targets=["y"], half_life=50.0)`:
 | `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
 | `coef` | `list[f64]` | the numbers behind the fit as one list ([shared field](#fields-most-models-write)) | on every row but those `coef_every` or `max_rows_between_coefs` fills (by default, each group's last row not skipped in each chunk), and before the model has anything to report |
 
+## `ar`
+
+The fields of `po.spec.ar("m", targets=["y"], features=["x0"], half_life=50.0, lags=2)`:
+
+| field | dtype | what it holds | also null |
+|---|---|---|---|
+| `pred_y` | `f64` | the prediction for `<t>`, computed from the state **before** this row | while withheld |
+| `resid_y` | `f64` | `y - pred` for `<t>` | while withheld; where the target is null; and on every row of a target that is a formula target, whose value is not known at its row |
+| `weight_sum` | `f64` | accumulated weight before the model learns this row, and before its own decay ([shared field](#fields-most-models-write)) | never |
+| `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
+| `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
+| `coef` | `list[f64]` | the numbers behind the fit as one list ([shared field](#fields-most-models-write)) | on every row but those `coef_every` or `max_rows_between_coefs` fills (by default, each group's last row not skipped in each chunk), and before the model has anything to report |
+
 ## `ew_cov`
 
 The fields of `po.spec.ew_cov("m", features=["x0", "x1"], half_life=50.0)`:
@@ -480,7 +493,7 @@ The fields of `po.spec.power_variation("m", targets=["y"], half_life=50.0, terms
 |---|---|---|---|
 | `rv_y` | `f64` | the realized variance of `<t>`'s returns before this row, the sum of their squares | while withheld |
 | `lrv_y` | `f64` | a term named `lrv`, here a Parzen kernel sum of `<t>`'s returns before this row at a bandwidth of 3: each term's field is named `<term>_<t>` | while withheld |
-| `n_y` | `f64` | the count of `<t>`'s returns the terms are of: Kish's effective count of their weights, decayed or in the window, which is the count at equal weights | while withheld |
+| `n_y` | `f64` | the count of `<t>`'s returns the terms are of: the returns a window holds, or Kish's effective count of their decayed weights | while withheld |
 | `weight_sum` | `f64` | accumulated weight before the model learns this row, and before its own decay ([shared field](#fields-most-models-write)) | never |
 | `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
 | `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
@@ -513,6 +526,18 @@ The fields of `po.spec.ddsketch("m", targets=["y"], half_life=50.0, quantiles=[0
 | `es0.05_y` | `f64` | the mean of `<t>` past `q<level>_<t>` (expected shortfall) over the same rows, from the same sketch: the lower tail at a level below 0.5, the upper above it | while withheld, and while the rows before it do not identify the level (`level_beyond_sample`) |
 | `es0.25_y` | `f64` | the mean of `<t>` past `q<level>_<t>` (expected shortfall) over the same rows, from the same sketch: the lower tail at a level below 0.5, the upper above it | while withheld, and while the rows before it do not identify the level (`level_beyond_sample`) |
 | `es0.95_y` | `f64` | the mean of `<t>` past `q<level>_<t>` (expected shortfall) over the same rows, from the same sketch: the lower tail at a level below 0.5, the upper above it | while withheld, and while the rows before it do not identify the level (`level_beyond_sample`) |
+| `weight_sum` | `f64` | accumulated weight before the model learns this row, and before its own decay ([shared field](#fields-most-models-write)) | never |
+| `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
+| `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
+
+## `spectral`
+
+The fields of `po.spec.spectral("m", targets=["y"], half_life=50.0, periods=[8.0, 3.0])`:
+
+| field | dtype | what it holds | also null |
+|---|---|---|---|
+| `power_y_p0` | `f64` | the power of `<t>` at the `k`-th period, scipy's periodogram of the rows before this one with the decay's amplitudes as the window | while withheld, and before the target's first row |
+| `power_y_p1` | `f64` | the power of `<t>` at the `k`-th period, scipy's periodogram of the rows before this one with the decay's amplitudes as the window | while withheld, and before the target's first row |
 | `weight_sum` | `f64` | accumulated weight before the model learns this row, and before its own decay ([shared field](#fields-most-models-write)) | never |
 | `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
 | `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |

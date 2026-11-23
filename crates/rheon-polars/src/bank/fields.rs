@@ -38,8 +38,9 @@ pub struct FieldMeta {
     /// Lag, in learned rows, of an `ew_cov` `lag_corr_*` field
     /// (docs/ENHANCEMENTS.md E56); `None` for every other field.
     pub lag: Option<usize>,
-    /// The principal component an `ew_cov` `pc<j>_*` field is about; `None`
-    /// for every other field.
+    /// The principal component an `ew_cov` `pc<j>_*` field is about, or a
+    /// `spectral` field's period, by its place in `periods`; `None` for
+    /// every other field.
     pub component: Option<usize>,
     /// The hidden state an `hmm` posterior is about, `filtered_state<s>`
     /// and `predicted_state<s>`; `None` for every other field. With `lag`,
@@ -271,6 +272,7 @@ pub fn coef_fields(spec: &Spec) -> Vec<CoefField> {
             | crate::ModelKind::TDigest { .. }
             | crate::ModelKind::DdSketch { .. }
             | crate::ModelKind::EwmMoments { .. }
+            | crate::ModelKind::Spectral(_)
     ) {
         return Vec::new();
     }
@@ -419,6 +421,15 @@ pub fn coef_fields(spec: &Spec) -> Vec<CoefField> {
             .chain(cfg.dist.names())
             .map(|n| n.to_string())
             .collect()
+    } else if let crate::ModelKind::Ar { lags, .. } = &spec.model {
+        // The constant, each lag, then the features: `Ar::coefficients`.
+        let mut t = Vec::with_capacity(spec.features.len() + 1);
+        if spec.fit_intercept {
+            t.push("intercept".to_string());
+        }
+        t.extend(lags.lags().iter().map(|l| format!("lag{l}")));
+        t.extend(spec.features.iter().cloned());
+        t
     } else if matches!(
         spec.model,
         crate::ModelKind::KMeans { .. }
@@ -1462,6 +1473,32 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                         f.quantile = Some(*q);
                         fields.push(f);
                     }
+                }
+            }
+            fields.push(
+                FieldMeta::new(format!("weight_sum{suffix}"), "weight_sum")
+                    .decay(suffix, d)
+                    .src(Source::NEff(mi)),
+            );
+        }
+        return fields;
+    }
+    // spectral: per target and period, the power read before the row, then
+    // `n_eff`; no `coef`. Its periods are named by their place in the list.
+    if let crate::ModelKind::Spectral(s) = &spec.model {
+        let n_slots = s.periods.spans().len();
+        let mut fields = Vec::new();
+        for (mi, (suffix, d)) in decays.iter().enumerate() {
+            let base = mi * spec.targets.len() * n_slots;
+            for (t_i, t) in spec.targets.iter().enumerate() {
+                for k in 0..n_slots {
+                    let mut m = FieldMeta::new(format!("power_{t}_p{k}{suffix}"), "power")
+                        .decay(suffix, d)
+                        .target(t)
+                        .src(Source::Stat(base + t_i * n_slots + k));
+                    // The period's place in `periods` tells the fields apart.
+                    m.component = Some(k);
+                    fields.push(m);
                 }
             }
             fields.push(

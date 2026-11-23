@@ -256,6 +256,7 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
         }
     ),
     "ewridge": frozenset({"gram_threads"}),
+    "ar": frozenset({"ridge", "max_state_bytes", "select"}),
     "pca": frozenset({"n_components", "learning_rate", "max_state_bytes"}),
     "tdigest": frozenset({"compression", "max_state_bytes"}),
     "ddsketch": frozenset({"alpha", "window_rows", "window_size", "closed", "max_state_bytes"}),

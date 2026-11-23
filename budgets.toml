@@ -268,6 +268,11 @@ what = "tdigest, one column at compression 100, three levels: AnyModel::step_int
 
 [instructions.ddsketch]
 what = "ddsketch, one column at the default alpha, three levels: AnyModel::step_into, a walk of its live buckets a row for the levels and tail means; its budget is CI's first count"
+[instructions.ar]
+what = "ar, an AR(5) with no features: AnyModel::step_into, into one kept Step, the ring, a rank-one update of a 6 x 6 Gram and its Cholesky a row; its budget is CI's first count"
+
+[instructions.spectral]
+what = "spectral, sixteen periods on an even clock: AnyModel::step_into, into one kept Step, a rotation and an add a period a row; its budget is CI's first count"
 
 [instructions.audit_continuous]
 what = "audit, one continuous column, 256 counters: AnyModel::step_into, into one kept Step, past the cap on nearly every row"
@@ -1695,6 +1700,84 @@ se_kurt = { budget = 8.125 }
 se_m3 = { budget = 8.125 }
 settled_frac = { budget = 8.125 }
 weight_sum = { budget = 8.125 }
+[memory.ar]
+"abs_resid_q0.1_y" = { budget = 8.125 }
+"abs_resid_q0.1_z" = { budget = 8.125 }
+"abs_resid_q0.9_y" = { budget = 8.125 }
+"abs_resid_q0.9_z" = { budget = 8.125 }
+autocorr_y = { budget = 8.125 }
+autocorr_z = { budget = 8.125 }
+break_wald_y = { budget = 8.125 }
+break_wald_z = { budget = 8.125 }
+breusch_pagan_y = { budget = 8.125 }
+breusch_pagan_z = { budget = 8.125 }
+calibration_intercept_y = { budget = 8.125 }
+calibration_intercept_z = { budget = 8.125 }
+calibration_slope_y = { budget = 8.125 }
+calibration_slope_z = { budget = 8.125 }
+calibration_wald_y = { budget = 8.125 }
+calibration_wald_z = { budget = 8.125 }
+coef = { budget = 100.7939 }
+coverage_y = { budget = 8.125 }
+coverage_z = { budget = 8.125 }
+cusum_sq_y = { budget = 8.125 }
+cusum_sq_z = { budget = 8.125 }
+cusum_y = { budget = 8.125 }
+cusum_z = { budget = 8.125 }
+drift_y = { budget = 0.25 }
+drift_z = { budget = 0.25 }
+hi_y = { budget = 8.125 }
+hi_z = { budget = 8.125 }
+hit_rate_y = { budget = 8.125 }
+hit_rate_z = { budget = 8.125 }
+ic_y = { budget = 8.125 }
+ic_z = { budget = 8.125 }
+jarque_bera_y = { budget = 8.125 }
+jarque_bera_z = { budget = 8.125 }
+kurtosis_y = { budget = 8.125 }
+kurtosis_z = { budget = 8.125 }
+learned_clock = { budget = 8.125 }
+ljung_box_y = { budget = 8.125 }
+ljung_box_z = { budget = 8.125 }
+lo_y = { budget = 8.125 }
+lo_z = { budget = 8.125 }
+mean_shift_x0 = { budget = 8.125 }
+mean_shift_x1 = { budget = 8.125 }
+mean_shift_x2 = { budget = 8.125 }
+pred_y = { budget = 8.125 }
+pred_z = { budget = 8.125 }
+r2_y = { budget = 8.125 }
+r2_z = { budget = 8.125 }
+ramsey_reset_y = { budget = 8.125 }
+ramsey_reset_z = { budget = 8.125 }
+resid_y = { budget = 8.125 }
+resid_z = { budget = 8.125 }
+scored_clock = { budget = 8.125 }
+settled_frac = { budget = 8.125 }
+sigma_y = { budget = 8.125 }
+sigma_z = { budget = 8.125 }
+skew_y = { budget = 8.125 }
+skew_z = { budget = 8.125 }
+spread_ratio_x0 = { budget = 8.125 }
+spread_ratio_x1 = { budget = 8.125 }
+spread_ratio_x2 = { budget = 8.125 }
+studentized_y = { budget = 8.125 }
+studentized_z = { budget = 8.125 }
+weight_sum = { budget = 8.125 }
+withheld_reason = { budget = 1.125 }
+zscore_y = { budget = 8.125 }
+zscore_z = { budget = 8.125 }
+se_coef = { budget = 100.6623 }
+
+[memory.spectral]
+learned_clock = { budget = 8.125 }
+power_y_p0 = { budget = 8.125 }
+power_y_p1 = { budget = 8.125 }
+power_z_p0 = { budget = 8.125 }
+power_z_p1 = { budget = 8.125 }
+scored_clock = { budget = 8.0 }
+settled_frac = { budget = 8.0 }
+weight_sum = { budget = 8.0 }
 withheld_reason = { budget = 1.125 }
 
 # --- raises and sign-offs -------------------------------------------------------

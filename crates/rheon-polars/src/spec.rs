@@ -1775,6 +1775,52 @@ pub enum ModelKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_state_bytes: Option<u64>,
     },
+    /// An autoregression per target, AR(p), by exponentially weighted least
+    /// squares on lags of the target the model keeps itself, with the
+    /// features as exogenous regressors (`rheon_core::Ar`). Per target, the
+    /// prediction from its own last values; the constant, the lags and the
+    /// features in `coef`.
+    #[serde(rename = "ar")]
+    Ar {
+        /// The order `p`, for lags `1..=p`, or a list of lags in learned
+        /// rows, strictly increasing.
+        lags: ArLags,
+        /// The ridge on the lag and feature coefficients; absent is 0,
+        /// least squares.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ridge: Option<f64>,
+        /// The bytes a group's state may hold, its lags and fits. Default
+        /// 256 KB, at most 64 MiB.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
+        /// Choose the order, lags `1..=q`, by `"aic"` or `"bic"` after every
+        /// learned row, with Kish's effective count. Absent fits every lag.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        select: Option<String>,
+        /// Clock units of history each target's fit sees, a hard cutoff,
+        /// as `ewridge`'s `window_size`.
+        #[serde(default)]
+        window_size: Option<Span>,
+        /// Which edge holds a row exactly `window_size` old.
+        #[serde(default)]
+        closed: ModelClosed,
+        /// Clock units between the window's snapshots.
+        #[serde(default)]
+        snapshot_every: Option<Span>,
+        /// At most this many rows between the window's snapshots.
+        #[serde(default)]
+        max_rows_between_snapshots: Option<u32>,
+        /// Past this many MiB the group's snapshots thin or refuse, every
+        /// target's together: one budget a group, each target's fit a
+        /// share of it.
+        #[serde(default)]
+        window_budget: Option<WindowBudgetSpec>,
+    },
+    /// An exponentially weighted Fourier transform of each target at the
+    /// periods given, read as scipy's periodogram (`rheon_core::Spectral`):
+    /// per target and period, the power before the row. No features.
+    #[serde(rename = "spectral")]
+    Spectral(SpectralSpec),
 }
 
 /// One term of a `power_variation` spec: its name, which names its fields
@@ -1805,6 +1851,66 @@ pub struct PvSpecTerm {
     /// offsets; absent is 1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scale: Option<usize>,
+}
+
+/// `spectral`'s settings beside its periods.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpectralSpec {
+    /// The periods to transform at, each a span of the clock (a duration on
+    /// a temporal clock); their inverses are the frequencies. One period
+    /// may be given alone.
+    pub periods: SpanList,
+    /// The clock units between rows, `1/fs`; absent is 1.
+    #[serde(default)]
+    pub spacing: Option<Span>,
+    /// `"density"` (the default, scipy's), `"spectrum"` or
+    /// `"lomb_scargle"`, the generalised Lomb-Scargle power.
+    #[serde(default)]
+    pub scaling: Option<String>,
+    /// Remove the weighted mean before the transform; absent is true.
+    #[serde(default)]
+    pub detrend: Option<bool>,
+    /// The bytes a group's state may hold.
+    #[serde(default)]
+    pub max_state_bytes: Option<u64>,
+    /// Clock units of history the transform holds, a hard cutoff: the
+    /// sliding-window transform of the rows inside it.
+    #[serde(default)]
+    pub window_size: Option<Span>,
+    /// Which edge holds a row exactly `window_size` old.
+    #[serde(default)]
+    pub closed: ModelClosed,
+    /// Clock units between the window's snapshots.
+    #[serde(default)]
+    pub snapshot_every: Option<Span>,
+    /// At most this many rows between the window's snapshots.
+    #[serde(default)]
+    pub max_rows_between_snapshots: Option<u32>,
+    /// Past this many MiB the group's snapshots thin or refuse.
+    #[serde(default)]
+    pub window_budget: Option<WindowBudgetSpec>,
+}
+
+/// `ar`'s lags: the order `p`, for `1..=p`, or the lags themselves.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ArLags {
+    Order(usize),
+    List(Vec<usize>),
+}
+
+impl ArLags {
+    /// The lags, `1..=p` for an order. An order past
+    /// [`rheon_core::MAX_LAG`] is the one lag `p`, which the model refuses
+    /// by name: listing `1..=p` would allocate the refused order first.
+    pub fn lags(&self) -> Vec<usize> {
+        match self {
+            ArLags::Order(p) if *p > rheon_core::MAX_LAG => vec![*p],
+            ArLags::Order(p) => (1..=*p).collect(),
+            ArLags::List(l) => l.clone(),
+        }
+    }
 }
 
 /// The two sides of a `seqtest` comparison, as [`ModelKind::compares`]
@@ -1900,6 +2006,8 @@ impl ModelKind {
         "tdigest",
         "ddsketch",
         "ewm_moments",
+        "ar",
+        "spectral",
     ];
 
     pub fn kind_name(&self) -> &'static str {
@@ -1937,6 +2045,8 @@ impl ModelKind {
             ModelKind::TDigest { .. } => "tdigest",
             ModelKind::DdSketch { .. } => "ddsketch",
             ModelKind::EwmMoments { .. } => "ewm_moments",
+            ModelKind::Ar { .. } => "ar",
+            ModelKind::Spectral(_) => "spectral",
         }
     }
 
@@ -1962,8 +2072,9 @@ impl ModelKind {
 
     /// False for the models that report no coefficients -- no `coef` field
     /// in their output: `ew_cov`, `seqtest`, `marginal`, `rcov`, `corrchange`,
-    /// `bocpd`, `audit`, `realized`, `tdigest` and `ewm_moments`. `tests/test_model_registry.py` holds
-    /// this to the field names, which are rendered elsewhere.
+    /// `bocpd`, `audit`, `realized`, `tdigest`, `ewm_moments` and `spectral`.
+    /// `tests/test_model_registry.py` holds this to the field names, which are
+    /// rendered elsewhere.
     pub fn has_coef(&self) -> bool {
         !matches!(
             self,
@@ -1980,6 +2091,7 @@ impl ModelKind {
                 | ModelKind::TDigest { .. }
                 | ModelKind::DdSketch { .. }
                 | ModelKind::EwmMoments { .. }
+                | ModelKind::Spectral(_)
         )
     }
 
@@ -2054,7 +2166,17 @@ impl ModelKind {
                 window_size: window,
                 window_budget,
                 ..
-            } => Some((window.as_ref().map(Span::value), *window_budget)),
+            }
+            | ModelKind::Ar {
+                window_size: window,
+                window_budget,
+                ..
+            }
+            | ModelKind::Spectral(SpectralSpec {
+                window_size: window,
+                window_budget,
+                ..
+            }) => Some((window.as_ref().map(Span::value), *window_budget)),
             _ => None,
         }
     }
@@ -2119,7 +2241,17 @@ impl ModelKind {
                 snapshot_every,
                 max_rows_between_snapshots,
                 ..
-            } => Some((snapshot_every.as_ref(), *max_rows_between_snapshots)),
+            }
+            | ModelKind::Ar {
+                snapshot_every,
+                max_rows_between_snapshots,
+                ..
+            }
+            | ModelKind::Spectral(SpectralSpec {
+                snapshot_every,
+                max_rows_between_snapshots,
+                ..
+            }) => Some((snapshot_every.as_ref(), *max_rows_between_snapshots)),
             _ => None,
         }
     }
@@ -2132,7 +2264,9 @@ impl ModelKind {
             | ModelKind::Lasso { closed, .. }
             | ModelKind::EwCov { closed, .. }
             | ModelKind::EwClass { closed, .. }
-            | ModelKind::Marginal { closed, .. } => Some(*closed),
+            | ModelKind::Marginal { closed, .. }
+            | ModelKind::Ar { closed, .. }
+            | ModelKind::Spectral(SpectralSpec { closed, .. }) => Some(*closed),
             _ => None,
         }
     }
@@ -2217,7 +2351,15 @@ impl ModelKind {
             | ModelKind::Lasso {
                 window_size: Some(w),
                 ..
-            } => Some((w.value(), self.snapshot_cadence()?)),
+            }
+            | ModelKind::Ar {
+                window_size: Some(w),
+                ..
+            }
+            | ModelKind::Spectral(SpectralSpec {
+                window_size: Some(w),
+                ..
+            }) => Some((w.value(), self.snapshot_cadence()?)),
             _ => None,
         }
     }
@@ -2284,6 +2426,7 @@ impl ModelKind {
                     | ModelKind::PowerVariation { .. }
                     | ModelKind::TDigest { .. }
                     | ModelKind::DdSketch { .. }
+                    | ModelKind::Spectral(_)
             )
     }
 
@@ -3226,6 +3369,12 @@ impl Spec {
             // lagged pair, no spread to standardize by, an unbiased form's
             // denominator that keeps no digit -- not by a count of rows.
             ModelKind::EwmMoments { .. } => 0.0,
+            // The fit's definiteness is the gate (`rheon_core::Ar`): a
+            // target predicts once its lags and features span every
+            // direction, which no count of rows says.
+            ModelKind::Ar { .. } => 0.0,
+            // A power is defined from the first row; nothing to wait for.
+            ModelKind::Spectral(_) => 0.0,
             // The noise gate is this model's readiness gate
             // (docs/WARMUP-AND-CONVERGENCE.md §2.1): `max_error_inflation`
             // tracks the model where a count of weight cannot, and the
@@ -3773,6 +3922,17 @@ impl Spec {
                     columns_counted(self.features.len())
                 ));
             }
+        } else if matches!(self.model, ModelKind::Spectral(_)) {
+            if !self.features.is_empty() {
+                no.refuse(format!(
+                    "spec {name:?}: spectral takes no features, but features lists {}: each of \
+                     its targets is a series it transforms. Put the series in targets, and \
+                     leave out features.",
+                    columns_counted(self.features.len())
+                ));
+            }
+        } else if matches!(self.model, ModelKind::Ar { .. }) {
+            // Features are optional: a pure autoregression has none.
         } else if self.features.is_empty() && !(columns_missing && self.model.is_unsupervised()) {
             columns_missing = true;
             no.refuse(format!(

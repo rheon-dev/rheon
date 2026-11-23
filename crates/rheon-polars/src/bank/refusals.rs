@@ -16,9 +16,9 @@ pub(super) fn over_budget(
     key: &GroupKey,
     bytes: usize,
     cadence: rheon_core::Cadence,
-    learned: bool,
+    refused_at: Option<usize>,
 ) -> PolarsError {
-    polars_err!(ComputeError: "{}", over_budget_message(spec, key, bytes, cadence, learned))
+    polars_err!(ComputeError: "{}", over_budget_message(spec, key, bytes, cadence, refused_at))
 }
 
 /// The error for a state the data sizes (`hawkes`' window of clock units)
@@ -250,7 +250,7 @@ pub(super) fn over_budget_message(
     key: &GroupKey,
     bytes: usize,
     cadence: rheon_core::Cadence,
-    learned: bool,
+    refused_at: Option<usize>,
 ) -> String {
     let mib = spec.model.window_budget().map_or(0.0, |b| b.mib());
     let group = super::group_label(spec, key);
@@ -266,16 +266,22 @@ pub(super) fn over_budget_message(
     // Past the budget mid-chunk, the bank learned part of it: the setting
     // is the spec's, which a load compares, so the way out is a new bank
     // fitted from the start.
-    let (did, then) = if learned {
-        (
-            "the bank stopped after learning part of the chunk",
+    // Refused before any row was learned, the row that would take it past
+    // is named, counted from 0 in the chunk, and the bank is as it was.
+    let (hold, did, then) = match refused_at {
+        None => (
+            format!("hold {held} MiB"),
+            "the bank stopped after learning part of the chunk".to_string(),
             ", then build the bank again and fit it from the start of its input",
-        )
-    } else {
-        ("the bank refused the chunk", "")
+        ),
+        Some(row) => (
+            format!("would hold {held} MiB at the chunk's row {row}, counted from 0"),
+            "the bank refused the chunk and learned none of it".to_string(),
+            "",
+        ),
     };
     format!(
-        "spec {:?}{group}: the snapshots its hard window keeps hold {held} MiB, above {which}, \
+        "spec {:?}{group}: the snapshots its hard window keeps {hold}, above {which}, \
          so {did}. Set window_budget = {{\"refuse\": MiB}} to a larger number of MiB (inf, or \
          float(\"inf\") in Python, for no bound), {} to keep fewer snapshots, or set \
          window_budget = {{\"thin\": MiB}} to thin the snapshots in place of refusing{then}.",

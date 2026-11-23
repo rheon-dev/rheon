@@ -3530,6 +3530,130 @@ pub fn all() -> Vec<Case> {
             Targets::None,
             40
         ),
+        // An AR of lags 1 and 3 over two targets with the features as
+        // exogenous regressors: each target's full ring of lags and its fit.
+        case!(
+            "ar",
+            "Ar",
+            Ar,
+            Ar::new(ar_cfg()).unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        // Its order chosen by BIC after every learned row: the chosen
+        // coefficients beside the fit at the largest order.
+        case!(
+            "ar_select",
+            "Ar",
+            Ar,
+            Ar::new(ArCfg {
+                lags: vec![1, 2, 3],
+                ridge: 0.0,
+                select: Some(ArSelect::Bic),
+                ..ar_cfg()
+            })
+            .unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        // Under a hard window of 15 clock units: each fit's snapshots.
+        case!(
+            "ar_window",
+            "Ar",
+            Ar,
+            Ar::new(ArCfg {
+                window: Some(15.0),
+                ..ar_cfg()
+            })
+            .unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        // Two series' transforms at three frequencies.
+        case!(
+            "spectral",
+            "Spectral",
+            Spectral,
+            Spectral::new(SpectralCfg {
+                n_targets: 2,
+                frequencies: vec![0.0, 0.2, 0.5],
+                spacing: 1.0,
+                decay: decay(),
+                scaling: SpectralScaling::Density,
+                detrend: true,
+                min_weight: 0.0,
+                max_state_bytes: None,
+                window: None,
+                window_every: None,
+                max_rows_between_snapshots: None,
+            })
+            .unwrap(),
+            0,
+            Targets::Linear(2),
+            40
+        ),
+        // Two series' Lomb-Scargle sums on an uneven clock: the weights'
+        // transform at twice each frequency and the squares beside the
+        // transform, one frequency past the even clock's Nyquist.
+        case!(
+            "spectral_ls",
+            "Spectral",
+            Spectral,
+            Spectral::new(SpectralCfg {
+                n_targets: 2,
+                frequencies: vec![0.2, 0.7],
+                spacing: 1.0,
+                decay: decay(),
+                scaling: SpectralScaling::LombScargle,
+                detrend: true,
+                min_weight: 0.0,
+                max_state_bytes: None,
+                window: None,
+                window_every: None,
+                max_rows_between_snapshots: None,
+            })
+            .unwrap(),
+            0,
+            Targets::Linear(2),
+            40
+        ),
+        // Two series' transforms over a window of 15 clock units: its
+        // blocks, each at its own origin, and the closed blocks' total.
+        case!(
+            "spectral_window",
+            "Spectral",
+            Spectral,
+            Spectral::new(SpectralCfg {
+                n_targets: 2,
+                frequencies: vec![0.2, 0.5],
+                spacing: 1.0,
+                decay: decay(),
+                scaling: SpectralScaling::LombScargle,
+                detrend: true,
+                min_weight: 0.0,
+                max_state_bytes: None,
+                window: Some(15.0),
+                window_every: None,
+                max_rows_between_snapshots: Some(3),
+            })
+            .unwrap(),
+            0,
+            Targets::Linear(2),
+            40
+        ),
+        // Saved two rows in: rings still filling, no fit yet.
+        case!(
+            "ar_filling",
+            "Ar",
+            Ar,
+            Ar::new(ar_cfg()).unwrap(),
+            K,
+            Targets::Linear(2),
+            2
+        ),
     ]
 }
 
@@ -3651,6 +3775,25 @@ fn ewm_moments_cfg(unbiased: bool) -> EwmMomentsCfg {
     EwmMomentsCfg {
         min_weight: 2.0,
         ..EwmMomentsCfg::new(decay(), terms)
+    }
+}
+
+/// An AR of lags 1 and 3 under decay, its two targets' fits with a small
+/// ridge.
+fn ar_cfg() -> ArCfg {
+    ArCfg {
+        n_targets: 2,
+        n_features: K,
+        lags: vec![1, 3],
+        fit_intercept: true,
+        decay: decay(),
+        ridge: 0.01,
+        min_weight: 2.0,
+        max_state_bytes: None,
+        select: None,
+        window: None,
+        window_every: None,
+        max_rows_between_snapshots: None,
     }
 }
 

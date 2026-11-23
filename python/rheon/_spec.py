@@ -453,6 +453,7 @@ _NO_FEATURES = {
     "power_variation": "each of its targets is a return series it measures",
     "tdigest": "each of its targets is a column whose quantiles it reads",
     "ddsketch": "each of its targets is a column whose quantiles it reads",
+    "spectral": "each of its targets is a series it transforms",
 }
 
 #: The parameters renamed in one builder, or whose old name another keeps
@@ -706,6 +707,7 @@ def _checked[**P, R](fn: Callable[P, R]) -> Callable[P, R]:
 
 
 __all__ = [
+    "ar",
     "audit",
     "bocpd",
     "corrchange",
@@ -740,6 +742,7 @@ __all__ = [
     "sgd",
     "tdigest",
     "ddsketch",
+    "spectral",
 ]
 
 
@@ -4803,6 +4806,7 @@ def marginal(
 # Most builders live in `_spec_<family>.py` files of their own (the 250 KB
 # cap); read back here, after everything they use, for `__all__`, the key
 # tables below and `rheon.spec`.
+from rheon._spec_ar import ar, spectral  # noqa: E402
 from rheon._spec_audit import audit  # noqa: E402
 from rheon._spec_changepoint import bocpd, corrchange  # noqa: E402
 from rheon._spec_class import ew_class  # noqa: E402

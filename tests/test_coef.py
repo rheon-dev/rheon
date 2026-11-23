@@ -169,6 +169,8 @@ COEF_SPECS = [
         start_rows=50,
         half_life=30,
     ),
+    # Each target on its own lags, the features beside them.
+    rp.spec.ar("m", targets=["y", "y2"], features=["x1", "x2"], lags=[1, 3], half_life=30),
 ]
 
 

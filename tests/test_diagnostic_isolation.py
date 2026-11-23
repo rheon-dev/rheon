@@ -105,11 +105,17 @@ KINDS: dict[str, Builder] = {
     # With the refit of their first rows, on by default (task 277).
     "huber": lambda **kw: rp.spec.huber("m", **kw),
     "sgd_huber": lambda **kw: rp.spec.sgd("m", loss="huber", learning_rate=0.02, **kw),
+    # One lag of the target beside the features.
+    "ar": lambda **kw: rp.spec.ar("m", lags=1, **kw),
 }
 
 ESSENTIAL_KINDS = ("ewridge", "sgd", "holt")
 #: The kinds with no features: they take ``targets`` only.
 NO_FEATURES = frozenset({"holt"})
+#: The kinds that refuse ``embargo``: ``ar``'s lags are the target's last
+#: values, which a delay would make older for the rows predicted than for
+#: the rows learned. Their clocked variant runs without one.
+NO_EMBARGO = frozenset({"ar"})
 
 #: Where a switch is taken by fewer than every linear kind (the builders'
 #: refusals; docs/DIAGNOSTICS.md, "What each costs, and which models take it").
@@ -122,7 +128,8 @@ WITH_FEATURES = ALL - NO_FEATURES
 #: Each switch's kinds. A knob is taken where its switch is.
 TAKES: dict[str, frozenset[str]] = {
     "emit_error_inflation": LEVERAGE,
-    "emit_se_coef": LEVERAGE,
+    # And `ar`, whose fits are ewridge's.
+    "emit_se_coef": LEVERAGE | {"ar"},
     "emit_influence": LEVERAGE,
     "emit_robust_se": LEAST_SQUARES,
     "emit_feature_health": WITH_FEATURES,
@@ -314,6 +321,8 @@ def _spec(build: Builder, kind: str, variant: str, kw: dict[str, Any], grid: boo
     )
     if kind not in NO_FEATURES:
         full["features"] = ["x0", "x1"]
+    if kind in NO_EMBARGO:
+        full.pop("embargo", None)
     full |= kw
     if variant == "clocked" and full.get("emit_drift") and "drift_threshold" not in full:
         # On a clock, the threshold is in sigma x clock units and has no

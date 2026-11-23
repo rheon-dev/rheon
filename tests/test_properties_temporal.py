@@ -622,6 +622,19 @@ def clock_specs(draw, model: str, step: int, cap: int):
             kw["window_rows"] = draw(st.integers(1, 12))
         elif window == "clock":
             kw["window_size"] = steps(1, 60)
+    elif model == "spectral":
+        # Task 491: its periods as durations, and the zero-weight rows that
+        # count in no clock.
+        kw |= dict(targets=["y"], half_life=steps(1, 30), periods=[steps(2, 9), steps(10, 40)])
+        kw["spacing"] = steps(1, 1)
+    elif model == "ar":
+        # Task 486: its lags beside the features, a window of the clock with
+        # its edge, and the zero-weight rows that count in no clock. No
+        # embargo: `ar` refuses one.
+        kw |= xy | dict(lags=draw(st.integers(1, 3)), ridge=1e-6)
+        kw |= maybe("window_size", 1, 60)
+        if "window_size" in kw:
+            kw["closed"] = draw(st.sampled_from(["right", "both"]))
     else:
         assert model == "rls", model
         kw |= xy | maybe("embargo", 1, 5)
@@ -740,8 +753,12 @@ DELAYED_ARGS: dict[str, dict] = {"kalman": {"coef_half_life": "1h"}}
 #: The models a delayed label is fitted with, and what each needs besides:
 #: every regression, since ``embargo`` is a parameter they all share. Built
 #: from `test_model_registry.REGRESSIONS`, so a new regression is swept
-#: without an edit here (a hand-kept list held five of the ten).
-DELAYED_MODELS = {name: MINIMAL[name] | DELAYED_ARGS.get(name, {}) for name in sorted(REGRESSIONS)}
+#: without an edit here (a hand-kept list held five of the ten), less
+#: ``ar``, which refuses ``embargo``: a delay would make its lags older for
+#: the rows it predicts than for the rows it learns.
+DELAYED_MODELS = {
+    name: MINIMAL[name] | DELAYED_ARGS.get(name, {}) for name in sorted(REGRESSIONS - {"ar"})
+}
 
 
 @st.composite
@@ -835,6 +852,8 @@ N_EFF_ARGS: dict[str, dict] = {
     "ew_class": {"label": "lab"},
     "corrchange": {"scalar": True},
     "kalman": {"coef_half_life": float("inf")},
+    # Its periods as durations, as a temporal clock reads them.
+    "spectral": {"periods": ["8s", "3s"]},
 }
 
 #: Every kind -- each emits ``weight_sum`` -- with what it needs besides a

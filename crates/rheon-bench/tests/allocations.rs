@@ -992,3 +992,45 @@ fn ewridge_reads_its_prediction_and_shares_into_kept_buffers() {
         "ewridge predict_into and support_coef_into: {allocated} allocations over {reads} reads"
     );
 }
+
+/// `ar` reads each target's system in place: `select`'s criteria and,
+/// under a window, the definiteness it checks on every row read the fit's
+/// own accumulators (and the window's kept view), where they read a copy of
+/// the Gram and its cross-moments a row, and factored into new buffers.
+/// Each: the bound in a release build and in a debug one, where the window's
+/// ring checks every snapshot a view writes (`window/flat.rs`), and the
+/// counts before, release then debug: 22 and 22 under `select`, 44.083 and
+/// 77.083 under a window.
+#[test]
+fn ar_reads_its_system_in_place() {
+    let spec = |model: Value| {
+        json!({
+            "name": "m",
+            "model": model,
+            "targets": ["y0"],
+            "features": ["x0"],
+            "half_life": 500.0,
+        })
+    };
+    let chosen = per_row_with(
+        spec(json!({"type": "ar", "lags": 6, "select": "bic"})),
+        1,
+        1,
+        true,
+    );
+    let bound = |release: f64, debug: f64| {
+        if cfg!(debug_assertions) {
+            debug
+        } else {
+            release
+        }
+    };
+    check("ar select", chosen, bound(1.0, 1.0), 22.0);
+    let windowed = per_row_with(
+        spec(json!({"type": "ar", "lags": 3, "window_size": 200.0})),
+        1,
+        1,
+        true,
+    );
+    check("ar under a window", windowed, bound(1.083, 34.083), 44.083);
+}

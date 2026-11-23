@@ -47,6 +47,16 @@ FAMILIES: dict[str, tuple[str, ...]] = {
         "glm",
         "expectile",
         "holt",
+        "ar",
+    ),
+    "Moments and correlation": (
+        "ew_cov",
+        "marginal",
+        "deco",
+        "rcov",
+        "audit",
+        "garch",
+        "spectral",
     ),
     "Moments and correlation": (
         "ew_cov",
@@ -62,6 +72,7 @@ FAMILIES: dict[str, tuple[str, ...]] = {
         "power_variation",
         "tdigest",
         "ddsketch",
+        "spectral",
     ),
     "Clustering and classification": ("kmeans", "micro", "ew_class"),
     "Sequential tests and regimes": ("seqtest", "corrchange", "bocpd", "hmm", "hawkes"),
@@ -136,6 +147,10 @@ MEANING: dict[str, str] = {
         "the variance of `<t>` on this row given the rows before it, read before the row is learned"
     ),
     "std_resid_<t>": "`<t>` over the square root of its variance on this row",
+    "power_<t>_p<k>": (
+        "the power of `<t>` at the `k`-th period, scipy's periodogram of the rows before this "
+        "one with the decay's amplitudes as the window"
+    ),
     "forecast_<t>": "the variance of `<t>` `horizon - 1` rows past this one, from the same rows",
     "rv_<t>": "the realized variance of `<t>`'s returns before this row, the sum of their squares",
     "bv_<t>": "the bipower variation of `<t>`'s returns before this row, which leaves jumps out",
@@ -295,6 +310,7 @@ ALSO_NULL: dict[str, str] = {
         "while withheld, and while the rows before it do not identify the level "
         "(`level_beyond_sample`)"
     ),
+    "power_<t>_p<k>": "while withheld, and before the target's first row",
     "u": (
         "while withheld, where fewer than two of the block's columns have a positive variance "
         "before the row, and where every standardized value is 0"
@@ -805,6 +821,10 @@ def stem(
             for pre in ("q", "es"):
                 if level.startswith(pre) and _is_number(level[len(pre) :]):
                     return f"{pre}<level>_<t>"
+    for t in targets:
+        rest = base.removeprefix(f"power_{t}_p")
+        if rest != base and rest.isdigit():
+            return "power_<t>_p<k>"
     for pre in ("corr", "cov", "partial_corr"):
         if base.startswith(pre + "_"):
             return f"{pre}_<a>_<b>"

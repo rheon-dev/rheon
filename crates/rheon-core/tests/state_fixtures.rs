@@ -1446,7 +1446,7 @@ fn variants() -> Vec<String> {
 /// name here, and a fixture.
 #[test]
 fn the_variant_names_are_frozen() {
-    const FROZEN: [&str; 33] = [
+    const FROZEN: [&str; 35] = [
         "EwCov",
         "EwRidge",
         "Rls",
@@ -1480,6 +1480,8 @@ fn the_variant_names_are_frozen() {
         "TDigest",
         "DdSketch",
         "EwmMoments",
+        "Ar",
+        "Spectral",
     ];
     assert_eq!(
         variants(),
@@ -1600,7 +1602,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 185] = [
+    const FORMS: [(&str, &[&str]); 198] = [
         // `power_variation` (task 555): the sums, the last raw returns, the
         // scales' rings, a window's credits and rows, a clock window's
         // stamps and clock, and a cap's overrun.
@@ -2039,6 +2041,25 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
             "sgd_huber_refit_span",
             &["model", "Sgd", "cfg", "max_state_bytes"],
         ),
+        // `ar` (task 486): each target's ring of lags, full and filling,
+        // and its fit, solved and not yet.
+        ("ar", &["model", "Ar", "rings", "1"]),
+        ("ar", &["model", "Ar", "fits", "1", "beta"]),
+        ("ar", &["model", "Ar", "cfg", "lags"]),
+        ("ar_select", &["model", "Ar", "chosen", "1"]),
+        ("ar_select", &["model", "Ar", "chosen", "0"]),
+        ("ar_window", &["model", "Ar", "fits", "0", "win"]),
+        // `spectral` (task 491): each target's transform and its weights'.
+        ("spectral", &["model", "Spectral", "sums", "1", "x"]),
+        ("spectral", &["model", "Spectral", "sums", "0", "u"]),
+        // Under Lomb-Scargle, the weights' transform at twice each
+        // frequency.
+        ("spectral_ls", &["model", "Spectral", "sums", "1", "v"]),
+        // Under a window, its blocks and the closed blocks' total.
+        ("spectral_window", &["model", "Spectral", "win", "blocks"]),
+        ("spectral_window", &["model", "Spectral", "win", "total"]),
+        ("ar_filling", &["model", "Ar", "rings", "0"]),
+        ("ar_filling", &["model", "Ar", "fits", "0", "acc"]),
     ];
     // Each refit's first stamp, written only under a span (task 538): in
     // glm on the summed clock, in expectile an integer stamp.

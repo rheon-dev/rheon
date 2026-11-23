@@ -283,6 +283,105 @@ pub fn power_variation_cfg(
 /// A `garch` spec's [`rheon_core::GarchCfg`]: one series a target, the
 /// start 2,000 rows unless the spec gives rows or a span. Every value is
 /// the model's own to check.
+/// An `ar` spec's [`rheon_core::ArCfg`] under `decay`: its series are the
+/// spec's targets and its exogenous regressors the features; every
+/// parameter check is the model's.
+pub fn ar_cfg(spec: &Spec, decay: rheon_core::Decay) -> Result<rheon_core::ArCfg, String> {
+    let ModelKind::Ar {
+        lags,
+        ridge,
+        max_state_bytes,
+        select,
+        window_size,
+        snapshot_every,
+        max_rows_between_snapshots,
+        ..
+    } = &spec.model
+    else {
+        return Err(not_a(spec, "ar_cfg", "ar"));
+    };
+    let cfg = rheon_core::ArCfg {
+        n_targets: spec.m(),
+        n_features: spec.k(),
+        lags: lags.lags(),
+        fit_intercept: spec.fit_intercept,
+        decay,
+        ridge: ridge.unwrap_or(0.0),
+        min_weight: spec.min_periods_or_default(),
+        max_state_bytes: *max_state_bytes,
+        select: match select.as_deref() {
+            None => None,
+            Some("aic") => Some(rheon_core::ArSelect::Aic),
+            Some("bic") => Some(rheon_core::ArSelect::Bic),
+            Some(other) => {
+                return Err(format!(
+                    "ar: select must be \"aic\" or \"bic\", but it is {other:?}. Use one of \
+                     those words."
+                ));
+            }
+        },
+        window: window_size.as_ref().map(Span::value),
+        window_every: snapshot_every.as_ref().map(Span::value),
+        max_rows_between_snapshots: max_rows_between_snapshots.map(|r| r as usize),
+    };
+    cfg.validate()?;
+    Ok(cfg)
+}
+
+/// A `spectral` spec's [`rheon_core::SpectralCfg`] under `decay`: its
+/// series are the spec's targets, its frequencies the periods' inverses.
+pub fn spectral_cfg(
+    spec: &Spec,
+    decay: rheon_core::Decay,
+) -> Result<rheon_core::SpectralCfg, String> {
+    let ModelKind::Spectral(s) = &spec.model else {
+        return Err(not_a(spec, "spectral_cfg", "spectral"));
+    };
+    let scaling = match s.scaling.as_deref().unwrap_or("density") {
+        "density" => rheon_core::SpectralScaling::Density,
+        "spectrum" => rheon_core::SpectralScaling::Spectrum,
+        "lomb_scargle" => rheon_core::SpectralScaling::LombScargle,
+        other => {
+            return Err(format!(
+                "spectral: scaling must be \"density\", \"spectrum\" or \"lomb_scargle\", but \
+                 it is {other:?}. Use one of those words."
+            ));
+        }
+    };
+    let mut no = rheon_core::Refusals::new();
+    let frequencies = s
+        .periods
+        .spans()
+        .iter()
+        .map(|p| {
+            let v = p.value();
+            if !(v.is_finite() && v > 0.0) {
+                no.refuse(format!(
+                    "spectral: each period must be finite and above 0, but one is {v}. Give \
+                     the periods to transform at, in clock units."
+                ));
+            }
+            1.0 / v
+        })
+        .collect();
+    no.stop_here()?;
+    let cfg = rheon_core::SpectralCfg {
+        n_targets: spec.m(),
+        frequencies,
+        spacing: s.spacing.as_ref().map_or(1.0, Span::value),
+        decay,
+        scaling,
+        detrend: s.detrend.unwrap_or(true),
+        min_weight: spec.min_periods_or_default(),
+        max_state_bytes: s.max_state_bytes,
+        window: s.window_size.as_ref().map(Span::value),
+        window_every: s.snapshot_every.as_ref().map(Span::value),
+        max_rows_between_snapshots: s.max_rows_between_snapshots.map(|r| r as usize),
+    };
+    cfg.validate()?;
+    Ok(cfg)
+}
+
 pub fn garch_cfg(spec: &Spec) -> Result<rheon_core::GarchCfg, String> {
     use rheon_core::{GarchDist, GarchVol};
     let ModelKind::Garch {

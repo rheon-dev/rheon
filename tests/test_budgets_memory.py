@@ -168,6 +168,7 @@ EXCEPT = {
     "glm": ONE_SLOT | NOT_LEAST_SQUARES,
     "expectile": ONE_SLOT | NOT_LEAST_SQUARES,
     "holt": ONE_SLOT | NOT_LEAST_SQUARES | {"emit_feature_health"},
+    "ar": ONE_SLOT | (NOT_LEAST_SQUARES - {"emit_se_coef"}),
 }
 
 
@@ -195,6 +196,7 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
     ("glm", "glm", fullest("glm", **dict(FIT, targets=["hit"])), []),
     ("expectile", "expectile", fullest("expectile", **FIT, expectile=0.8), []),
     ("holt", "holt", fullest("holt", targets=["y"], group="g", half_life=25.0, **CLOCK), []),
+    ("ar", "ar", fullest("ar", **FIT, lags=[1, 3]), []),
     (
         "ew_cov",
         "ew_cov",
@@ -384,6 +386,19 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
             quantiles=[0.05, 0.25, 0.95],
             window_size=50.0,
             group="g",
+            emit_clocks=True,
+            **CLOCK,
+        ),
+        [],
+    ),
+    (
+        "spectral",
+        "spectral",
+        dict(
+            targets=["y", "z"],
+            periods=[8.0, 3.0],
+            group="g",
+            half_life=25.0,
             emit_clocks=True,
             **CLOCK,
         ),

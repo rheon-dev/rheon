@@ -1007,6 +1007,8 @@ fn only_models_that_predict_a_target_have_residual_fields() {
         r#"{"type": "tdigest", "quantiles": [0.25]}"#,
         r#"{"type": "ddsketch", "quantiles": [0.25]}"#,
         r#"{"type": "ewm_moments", "terms": {"m2": {"x0": 2}}}"#,
+        r#"{"type": "ar", "lags": 2}"#,
+        r#"{"type": "spectral", "periods": [8.0]}"#,
     ];
     let mut seen = Vec::new();
     for model in kinds {
@@ -1019,6 +1021,7 @@ fn only_models_that_predict_a_target_have_residual_fields() {
             "power_variation",
             "tdigest",
             "ddsketch",
+            "spectral",
         ]
         .iter()
         .any(|k| model.contains(k))

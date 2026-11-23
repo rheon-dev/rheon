@@ -799,5 +799,14 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         ModelKind::EwmMoments { .. } => Ok(AnyModel::EwmMoments(Box::new(
             rheon_core::EwmMoments::new(crate::spec::ewm_moments_cfg(spec, decay)?)?,
         ))),
+        ModelKind::Spectral(_) => Ok(AnyModel::Spectral(Box::new(rheon_core::Spectral::new(
+            spectral_cfg(spec, decay)?,
+        )?))),
+        ModelKind::Ar { .. } => {
+            let mut m = rheon_core::Ar::new(ar_cfg(spec, decay)?)?;
+            // Each fit's factor, which its standard errors are read from.
+            m.set_keep_factor(spec.emit_se_coef);
+            Ok(AnyModel::Ar(Box::new(m)))
+        }
     }
 }

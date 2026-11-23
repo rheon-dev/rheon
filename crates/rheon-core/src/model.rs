@@ -97,6 +97,8 @@ pub enum ModelState {
     TDigest(Box<crate::TDigestModel>),
     DdSketch(Box<crate::DdSketchModel>),
     EwmMoments(Box<crate::EwmMoments>),
+    Ar(Box<crate::Ar>),
+    Spectral(Box<crate::Spectral>),
 }
 
 #[derive(Debug, Error)]
@@ -226,6 +228,8 @@ impl ModelState {
             ModelState::TDigest(_) => "tdigest",
             ModelState::DdSketch(_) => "ddsketch",
             ModelState::EwmMoments(_) => "ewm_moments",
+            ModelState::Ar(_) => "ar",
+            ModelState::Spectral(_) => "spectral",
         }
     }
 }

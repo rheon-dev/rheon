@@ -14,7 +14,7 @@ pages by the task you have in hand.
 
 | family | its features |
 |---|---|
-| [Models](#models) | the thirty-three models a spec can name |
+| [Models](#models) | the thirty-five models a spec can name |
 | [Running a bank](#running-a-bank) | a bank in a query, in a Python loop, and its output as Arrow |
 | [Saving, loading and serving](#saving-loading-and-serving) | a bank's state, written and read back |
 | [Reading a bank](#reading-a-bank) | what a bank holds, and the names of its output |
@@ -49,6 +49,7 @@ to start with.
 | [`rheon.spec.ftrl`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ftrl) | FTRL-proximal regression, logistic for a 0/1 target, with an L1 penalty that zeroes coefficients | [entry](MODELS.md#ftrl--online-logistic-regression) · [choose its penalties](how-to/choose-ftrl-penalties.md) |
 | [`rheon.spec.glm`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.glm) | Poisson, Gamma, binomial and Tweedie regression, a Newton step a row on the likelihood | [entry](MODELS.md#glm--generalized-linear-models-poisson-gamma-binomial-tweedie) · [a count target](how-to/fit-a-count-target.md) |
 | [`rheon.spec.holt`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.holt) | Holt's linear trend, a baseline that extrapolates the target's own level and slope | [entry](MODELS.md#holt--holts-linear-trend) · [choose Holt's smoothing](how-to/choose-holts-smoothing.md) |
+| [`rheon.spec.ar`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ar) | an autoregression for each target, AR(p), on lags the model keeps itself, with exogenous features | [entry](MODELS.md#ar--an-autoregression-on-the-targets-own-past) |
 | [`rheon.spec.ew_cov`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ew_cov) | running means, variances, covariances, correlations, partial correlations, Mahalanobis distances and principal components | [entry](MODELS.md#ew_cov--exponentially-weighted-moments) · [flag joint outliers](how-to/flag-joint-outliers.md) · [track principal components](how-to/track-principal-components.md) · [find which series leads](how-to/find-which-series-leads.md) |
 | [`rheon.spec.pca`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.pca) | principal components learned a row at a time, in state of the components times the columns: the incremental SVD, CCIPCA or Oja's rule | [entry](MODELS.md#pca--streaming-principal-components) · [track principal components](how-to/track-principal-components.md) |
 | [`rheon.spec.ewm_moments`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ewm_moments) | exponentially weighted or windowed moments of columns to any order, each leg perhaps lagged: skew, kurtosis, cumulants, co-moments, autocovariances and autocorrelations, each a term you name | [entry](MODELS.md#ewm_moments--moments-to-any-order-lagged-or-not) · [OUTPUTS.md](OUTPUTS.md#ewm_moments) |
@@ -64,6 +65,7 @@ to start with.
 | [`rheon.spec.bocpd`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.bocpd) | Bayesian online changepoint detection: how long the current regime has lasted | [entry](MODELS.md#bocpd--how-long-has-this-regime-lasted) · [choose a changepoint hazard](how-to/choose-a-changepoint-hazard.md) |
 | [`rheon.spec.hmm`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.hmm) | a Gaussian hidden Markov model, filtered as the stream runs | [entry](MODELS.md#hmm--which-regime-are-we-in) · [keep its states on their regimes](how-to/keep-hmm-states-on-their-regimes.md) |
 | [`rheon.spec.hawkes`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.hawkes) | a self-exciting point process, fitted exactly by least squares | [entry](MODELS.md#hawkes--how-much-does-each-event-excite-the-next) |
+| [`rheon.spec.spectral`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.spectral) | the power of each series at chosen periods, an exponentially weighted Fourier transform read as scipy's periodogram | [entry](MODELS.md#spectral--how-strong-is-each-cycle) |
 | [`rheon.spec.garch`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.garch) | the GARCH family: a conditional variance for each return series, its parameters learned a row at a time | [entry](MODELS.md#garch--how-large-will-the-next-return-be) |
 | [`rheon.spec.dcc`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.dcc) | dynamic conditional correlation: the full correlation matrix of a few return series, moving every row, its parameters given or learned a row at a time | [entry](MODELS.md#dcc--how-do-the-correlations-move-from-row-to-row) |
 | [`rheon.spec.realized`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.realized) | realized volatility and the jump tests on it: realized variance, bipower and tripower variation, tripower quarticity, Barndorff-Nielsen and Shephard's test, Lee and Mykland's statistic and flag | [entry](MODELS.md#realized--how-much-did-it-move-and-did-it-jump) |

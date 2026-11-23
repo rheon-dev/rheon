@@ -122,6 +122,8 @@ pub enum AnyModel {
     TDigest(Box<rheon_core::TDigestModel>),
     DdSketch(Box<rheon_core::DdSketchModel>),
     EwmMoments(Box<rheon_core::EwmMoments>),
+    Ar(Box<rheon_core::Ar>),
+    Spectral(Box<rheon_core::Spectral>),
 }
 
 /// A flush's shards, run on whichever pool the caller is in: the bank's
@@ -179,6 +181,8 @@ macro_rules! dispatch {
             AnyModel::TDigest($m) => $body,
             AnyModel::DdSketch($m) => $body,
             AnyModel::EwmMoments($m) => $body,
+            AnyModel::Ar($m) => $body,
+            AnyModel::Spectral($m) => $body,
         }
     };
 }
@@ -647,6 +651,9 @@ impl AnyModel {
             // The components are withheld, never failed: the rotation has no
             // factorization to fail.
             | AnyModel::Pca(_) => 0,
+            // Each fit counts its own; none withholds a row as a failure.
+            | AnyModel::Ar(_)
+            | AnyModel::Spectral(_) => 0,
         }
     }
 
@@ -733,6 +740,11 @@ impl AnyModel {
             AnyModel::TDigest(_) | AnyModel::DdSketch(_) => None,
             // ewm_moments has none: its outputs are the terms.
             AnyModel::EwmMoments(_) => None,
+            // The constant, the lags, then the features, one row per
+            // target; absent until a target has a fit.
+            AnyModel::Ar(m) => m.coefficients(),
+            // Its value is the power it reports per row.
+            AnyModel::Spectral(_) => None,
         }
     }
 
@@ -756,10 +768,10 @@ use build::{build_one, constraint, huber_scale_of, resid_window};
 mod model_cfgs;
 use model_cfgs::read_floor;
 pub use model_cfgs::{
-    BOCPD_HAZARD_ROWS, audit_cfg, bocpd_cfg, corrchange_cfg, dcc_cfg, ddsketch_cfg,
+    BOCPD_HAZARD_ROWS, ar_cfg, audit_cfg, bocpd_cfg, corrchange_cfg, dcc_cfg, ddsketch_cfg,
     deco_block_names, deco_cfg, expectile_cfg, garch_cfg, glm_cfg, hawkes_cfg, hmm_cfg,
     huber_model, pca_cfg, power_variation_cfg, quantile_model, rcov_cfg, realized_cfg, sgd_model,
-    tdigest_cfg,
+    spectral_cfg, tdigest_cfg,
 };
 
 /// One grid combo: the rendered label plus the machine values it encodes, so
@@ -871,7 +883,9 @@ pub fn combos(spec: &Spec) -> Vec<Combo> {
         | ModelKind::PowerVariation { .. }
         | ModelKind::TDigest { .. }
         | ModelKind::DdSketch { .. }
-        | ModelKind::EwmMoments { .. } => vec![Combo::default()],
+        | ModelKind::EwmMoments { .. }
+        | ModelKind::Ar { .. }
+        | ModelKind::Spectral(_) => vec![Combo::default()],
         ModelKind::Pca { .. } => vec![Combo::default()],
         // `p` for the penalty, since `l` is a lag's (`lag_corr_l1_a_b`); and
         // no label for a path of one point, as a single ridge or half-life
@@ -2824,7 +2838,7 @@ impl Stream {
         rows: &[usize],
         base: usize,
         formulas: Option<FormulaTargets<'_>>,
-    ) -> Option<(usize, rheon_core::Cadence)> {
+    ) -> Option<(usize, rheon_core::Cadence, usize)> {
         // A learned row adds at most one snapshot to a ring, and the rows a
         // `embargo` holds are learned in this chunk at the most. A shadow
         // copies its ring, so it is formed only where one could refuse.
@@ -2904,8 +2918,10 @@ impl Stream {
             }
             for shadow in &mut live {
                 shadow.learn(plan.d_clock, plan.stamp);
-                if let Some(over) = shadow.over_budget() {
-                    return Some(over);
+                if let Some((bytes, cadence)) = shadow.over_budget() {
+                    // The row that took it past: the input row, counted
+                    // from 0 in the chunk, its rows a held row's release.
+                    return Some((bytes, cadence, rows.get(plan.ri).copied().unwrap_or(plan.i)));
                 }
             }
         }
@@ -3346,10 +3362,15 @@ impl Stream {
     ) {
         let n_rows = rows.len();
         out.rows.extend_from_slice(rows);
-        // Three classes of row, by what the clock says the row would do to
-        // the state it is scored against: nothing, reset it, or blend it.
-        let mut classes: [Vec<RowPlan>; 3] = Default::default();
-        let [as_is, fresh, blended] = [0, 1, 2];
+        // Four classes of row, by what the clock says the row would do to
+        // the state it is scored against: nothing, reset it, blend it, or
+        // break the rows behind it from it. A session change blends and
+        // breaks; a gap past `gap_cap` breaks alone. A break clears what is
+        // lagged by rows (`OnlineModel::clear_lags`), as a learning stream
+        // clears it before it reads the row: `ar`'s lags, `spectral`'s
+        // transform. The copy is scored and dropped.
+        let mut classes: [Vec<RowPlan>; 4] = Default::default();
+        let [as_is, fresh, blended, unlagged] = [0, 1, 2, 3];
         // (class, position in it) of the last accepted row, which carries
         // the coefficients for the chunk.
         let mut last_accepted: Option<(usize, usize)> = None;
@@ -3414,9 +3435,9 @@ impl Stream {
                 backwards: false,
                 // Scoring moves nothing, the lag ring included: the classes
                 // below give the row a *copy* of the model in the state a
-                // learning stream would have reached, and a copy that
-                // cleared its lags would answer for a stream that had
-                // learned the row. `predict` never mutates.
+                // learning stream would have reached before reading it, its
+                // lags cleared where the row breaks them (`unlagged`,
+                // `blended`). `predict` never mutates.
                 capped: false,
                 accept,
                 want_coef: false,
@@ -3436,6 +3457,8 @@ impl Stream {
                 fresh
             } else if adv.session_changed {
                 blended
+            } else if adv.capped {
+                unlagged
             } else {
                 as_is
             };
@@ -3482,12 +3505,26 @@ impl Stream {
         }
         if !classes[blended].is_empty() {
             let mut models = self.models.clone();
-            models
-                .iter_mut()
-                .for_each(|(_, m)| m.blend_toward_long_run());
+            models.iter_mut().for_each(|(_, m)| {
+                m.blend_toward_long_run();
+                m.clear_lags();
+            });
             self.score(
                 spec,
                 &classes[blended],
+                &models,
+                features,
+                targets,
+                out,
+                n_rows,
+            );
+        }
+        if !classes[unlagged].is_empty() {
+            let mut models = self.models.clone();
+            models.iter_mut().for_each(|(_, m)| m.clear_lags());
+            self.score(
+                spec,
+                &classes[unlagged],
                 &models,
                 features,
                 targets,

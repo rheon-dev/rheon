@@ -1061,6 +1061,56 @@ fn power_variation_rows(decay: Decay, window_rows: Option<usize>) -> Vec<f64> {
     out
 }
 
+/// `ar` on the same stream: an AR(2) under decay with the two features as
+/// exogenous regressors, then its coefficients at the end. The ring (its
+/// null target and its gap), the design read from it and the fit all move
+/// these.
+#[test]
+fn ar_golden() {
+    let mut m = Ar::new(ArCfg {
+        n_targets: 1,
+        n_features: 2,
+        lags: vec![1, 2],
+        fit_intercept: true,
+        decay: Decay::Halflife(15.0),
+        ridge: 1e-6,
+        min_weight: 2.0,
+        max_state_bytes: None,
+        select: None,
+        window: None,
+        window_every: None,
+        max_rows_between_snapshots: None,
+    })
+    .unwrap();
+    let mut got = signature(&mut m, 0);
+    got.extend(&m.coefficients().unwrap()[0]);
+    check("ar", &got, GOLDEN_AR);
+}
+
+/// `spectral` on the same stream's target: its power at three frequencies
+/// under decay, its null target and its gap among the rows.
+#[test]
+fn spectral_golden() {
+    let mut m = Spectral::new(SpectralCfg {
+        n_targets: 1,
+        frequencies: vec![0.0, 0.1, 0.5],
+        spacing: 1.0,
+        decay: Decay::Halflife(15.0),
+        scaling: SpectralScaling::Density,
+        detrend: true,
+        min_weight: 0.0,
+        max_state_bytes: None,
+        window: None,
+        window_every: None,
+        max_rows_between_snapshots: None,
+    })
+    .unwrap();
+    let mut got = signature_of(&mut m, 1, false);
+    got.extend(&m.powers()[0]);
+    // Its trigonometry is the `libm` crate's: the same bits everywhere.
+    check_bits("spectral", &got, GOLDEN_SPECTRAL);
+}
+
 /// `expectile` on the same stream: an upper expectile under decay whose
 /// first 15 learned rows are refit, then the fit at the end.
 #[test]
@@ -2936,6 +2986,24 @@ const GOLDEN_PA_BOX: &[f64] = &[0.5262123538733023, 1.6796740252199436, 0.156626
 // Regenerated for task 278 (D-H, 2026-10-26): a row takes the larger of the
 // weighted line fit's gains and the textbook's, so the warm-up is the line
 // fit, where the weighted means pinned the trend to the first observation.
+const GOLDEN_AR: &[f64] = &[
+    0.20651737786601188,
+    2.183823230103924,
+    -0.061890170712155385,
+    0.2507806385801581,
+    0.0023940696647469463,
+    0.006207809809043063,
+    1.5217126158114949,
+    -0.7726238396515506,
+];
+const GOLDEN_SPECTRAL: &[f64] = &[
+    0.6649015871575261,
+    0.09516153180377941,
+    0.9749530137841262,
+    0.0,
+    0.9737255863944811,
+    2.9174867193629694,
+];
 const GOLDEN_HOLT: &[f64] = &[1.510543784944197, 0.05346222911849938, 0.1063893470704486];
 const GOLDEN_SEQTEST: &[f64] = &[-0.6443570163905132, -1.086393303225433, -0.9577414997686987];
 const GOLDEN_SEQTEST_NEG: &[f64] = &[

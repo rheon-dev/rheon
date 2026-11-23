@@ -120,6 +120,11 @@ pub const MODEL_CASES: &[&str] = &[
     // One column's DDSketch at the default accuracy, read at three levels
     // with their tail means: a row's walk of its buckets (task 544).
     "ddsketch",
+    // An AR(5) with no features: a row's ring, design, rank-one update of a
+    // 6 x 6 Gram and its Cholesky.
+    "ar",
+    // Sixteen periods on an even clock: a rotation and an add each a row.
+    "spectral",
 ];
 
 /// The one model case that reports on a single row of its block:
@@ -781,6 +786,17 @@ fn case_spec(id: &str) -> (Value, Shape) {
             Shape::Linear,
         ),
         "ftrl" => (fit(json!({"type": "ftrl"}), 20), Shape::Linear),
+        "spectral" => {
+            let periods: Vec<f64> = (0..16).map(|k| 2.0 + k as f64).collect();
+            let mut s = fit(json!({"type": "spectral", "periods": periods}), 0);
+            s.as_object_mut().expect("an object").remove("min_weight");
+            (s, Shape::Linear)
+        }
+        "ar" => {
+            let mut s = fit(json!({"type": "ar", "lags": 5}), 0);
+            s.as_object_mut().expect("an object").remove("min_weight");
+            (s, Shape::Linear)
+        }
         // Level and trend of one column, no features.
         "holt" => {
             let mut s = fit(json!({"type": "holt"}), 0);

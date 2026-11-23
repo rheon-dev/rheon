@@ -323,26 +323,20 @@ class TestWindowedSpread:
         return pl.DataFrame({"x0": x[:, 0], "x1": x[:, 1], "y": y})
 
     def _spec(self, kind, **kw):
-        common = dict(
-            targets=["y"],
-            features=["x0", "x1"],
-            half_life=self.H,
-            window_size=self.W,
-            solve_every=1e-9,
-            emit_sigma=True,
-            emit_zscore=True,
-            **kw,
-        )
+        common = dict(targets=["y"], features=["x0", "x1"], half_life=self.H, **kw)
+        common |= dict(window_size=self.W, emit_sigma=True, emit_zscore=True)
+        if kind == "ar":
+            return rp.spec.ar("m", lags=1, **common)
         if kind == "lasso":
-            return rp.spec.lasso("m", penalties=[0.01], **common)
-        return rp.spec.ewridge("m", **common)
+            return rp.spec.lasso("m", penalties=[0.01], solve_every=1e-9, **common)
+        return rp.spec.ewridge("m", solve_every=1e-9, **common)
 
     @staticmethod
     def _field(out, spec, prefix):
         name = next(n for n in rp.spec.output_fields(spec) if n.startswith(prefix))
         return out["m"].struct.field(name).to_numpy().astype(float)
 
-    @pytest.mark.parametrize("kind", ["ewridge", "lasso"])
+    @pytest.mark.parametrize("kind", ["ewridge", "lasso", "ar"])
     def test_sigma_is_the_spread_of_the_residuals_inside_the_window(self, kind):
         df = self._frame()
         spec = self._spec(kind)

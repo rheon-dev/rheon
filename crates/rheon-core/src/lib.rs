@@ -59,6 +59,7 @@
 //! into capped, session-aware deltas, and every model decays by them.
 //! See `docs/PLAN.md` §2 and §4.
 
+mod ar;
 mod audit;
 mod bocpd;
 mod boundary;
@@ -130,6 +131,7 @@ mod sgd;
 mod since;
 mod solve;
 mod specification;
+mod spectral;
 mod spread;
 mod stats;
 mod streampca;
@@ -144,6 +146,7 @@ mod warmup;
 mod window;
 mod window_moments;
 
+pub use ar::{Ar, ArCfg, ArSelect, check_lags as check_ar_lags};
 pub use audit::{
     Audit, AuditCfg, ClockReport as AuditClock, ColumnReport as AuditColumn, DISTINCT_CAP,
     MAX_DISTINCT_CAP, NULL, PairReport as AuditPair, is_null,
@@ -250,6 +253,7 @@ pub use seqtest::{SLOTS as SEQTEST_SLOTS, SeqTest, SeqTestCfg};
 pub use sgd::{LearningRate, Sgd, SgdCfg, SgdLoss};
 pub use solve::{SpdFactor, quad_forms_logdet, solve_spd};
 pub use specification::Specification;
+pub use spectral::{MAX_FREQUENCIES, Spectral, SpectralCfg, SpectralScaling};
 pub use stats::{
     EW_QUANTILE_ALPHA, EwAutoCorr, EwQuantile, HitTest, MAX_BAND_OCTAVES, SlotMetrics,
 };

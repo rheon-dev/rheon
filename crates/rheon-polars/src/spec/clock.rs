@@ -85,6 +85,11 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
     ("power_variation", &["window_size"]),
     ("ddsketch", &["window_size"]),
     ("ewm_moments", &["lag_tolerance", "window_size"]),
+    ("ar", &["window_size", "snapshot_every"]),
+    (
+        "spectral",
+        &["periods", "spacing", "window_size", "snapshot_every"],
+    ),
 ];
 
 /// The parameters that are a rate *per* clock unit: a decay factor per unit
@@ -496,6 +501,20 @@ impl Spec {
                 put(&mut out, "warm_span", warm_span.as_ref());
                 put(&mut out, "update_every", update_every.as_ref());
                 put(&mut out, "split_merge_every", split_merge_every.as_ref());
+            }
+            ModelKind::Spectral(s) => {
+                out.extend(s.periods.spans().iter().map(|p| ("periods", p.clone())));
+                put(&mut out, "spacing", s.spacing.as_ref());
+                put(&mut out, "window_size", s.window_size.as_ref());
+                put(&mut out, "snapshot_every", s.snapshot_every.as_ref());
+            }
+            ModelKind::Ar {
+                window_size,
+                snapshot_every,
+                ..
+            } => {
+                put(&mut out, "window_size", window_size.as_ref());
+                put(&mut out, "snapshot_every", snapshot_every.as_ref());
             }
             ModelKind::Garch { start_span, .. } => {
                 put(&mut out, "start_span", start_span.as_ref());

@@ -814,6 +814,80 @@ CASES: list[Case] = [
             "max_state_bytes": 1 << 20,
         },
     ),
+    # Two series, each on its own lags, with the features beside them and
+    # every diagnostic, its groups run to a close; and a pure AR on the other
+    # stream keys, drift resetting the fit.
+    Case(
+        "ar",
+        "ar",
+        full(**CLOSE, lags=[1, 3], ridge=0.01, max_state_bytes=1 << 20, emit_se_coef=True),
+    ),
+    # Under a hard window, its cadence, its edge and its budget.
+    Case(
+        "ar_window",
+        "ar",
+        full(
+            lags=2,
+            window_size=40.0,
+            closed="both",
+            snapshot_every=2.0,
+            max_rows_between_snapshots=3,
+            window_budget={"thin": 64.0},
+        ),
+    ),
+    # Without the embargo, which `ar` refuses.
+    Case(
+        "ar_pure",
+        "ar",
+        {
+            **{k: v for k, v in no_features(full2()).items() if k != "embargo"},
+            "targets": ["y"],
+            "lags": 2,
+            "select": "bic",
+        },
+    ),
+    # Each target's power at two periods, its groups run to a close; and the
+    # other stream keys with the spectrum's scaling.
+    Case(
+        "spectral",
+        "spectral",
+        {
+            # No coefficients, so no coefficient cadence.
+            **{k: v for k, v in STREAM.items() if k != "max_rows_between_coefs"},
+            **CLOSE,
+            "targets": ["y", "x0"],
+            "periods": [8.0, 3.0],
+            "spacing": 1.0,
+            "detrend": False,
+            "max_state_bytes": 1 << 20,
+        },
+    ),
+    Case(
+        "spectral_spectrum",
+        "spectral",
+        {
+            **{k: v for k, v in STREAM2.items() if k != "coef_every"},
+            "targets": ["y"],
+            "periods": [6.0],
+            "scaling": "spectrum",
+        },
+    ),
+    # Lomb-Scargle under a hard window, its cadence, its edge and its budget.
+    Case(
+        "spectral_window",
+        "spectral",
+        {
+            **{k: v for k, v in STREAM.items() if k != "max_rows_between_coefs"},
+            "targets": ["y"],
+            "periods": [8.0, 1.5],
+            "scaling": "lomb_scargle",
+            "window_size": 40.0,
+            "closed": "both",
+            "snapshot_every": 2.0,
+            "max_rows_between_snapshots": 3,
+            "window_budget": {"thin": 64.0},
+        },
+    ),
     # Each target a return series; no half-life (the recursion is per
     # observation), so no gate on settling toward one either.
     Case(

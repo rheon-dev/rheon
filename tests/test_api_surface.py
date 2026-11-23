@@ -340,6 +340,8 @@ def describe_api(cli: Path | None = None) -> str:
                 half_life=100.0,
             ),
         ),
+        ("ar", dict(targets=["y", "z"], features=["x0"], lags=[1, 3], half_life=100.0)),
+        ("spectral", dict(targets=["y", "z"], periods=[24.0, 8.0], half_life=100.0)),
         (
             "deco blocked",
             dict(
@@ -789,6 +791,24 @@ ENUM_PROBES: list[
         "word",
     ),
     ("ewm_moments.kind", "ewm_moments", {}, "model.kind", "word"),
+    ("ar.select", "ar", {"lags": 3}, "model.select", "word"),
+    ("spectral.scaling", "spectral", {"periods": [8.0]}, "model.scaling", "word"),
+    (
+        "spectral.closed",
+        "spectral",
+        {"periods": [8.0], "window_size": 100.0},
+        "model.closed",
+        "word",
+    ),
+    (
+        "spectral.window_budget",
+        "spectral",
+        {"periods": [8.0], "window_size": 100.0},
+        "model.window_budget",
+        "key",
+    ),
+    ("ar.closed", "ar", {"lags": 2, "window_size": 100.0}, "model.closed", "word"),
+    ("ar.window_budget", "ar", {"lags": 2, "window_size": 100.0}, "model.window_budget", "key"),
     ("marginal.closed", "marginal", {"window_size": 100.0}, "model.closed", "word"),
     ("ew_class.covariance_type", "ew_class", {}, "model.covariance_type", "word"),
     ("ew_class.window_budget", "ew_class", {"window_size": 100.0}, "model.window_budget", "key"),
