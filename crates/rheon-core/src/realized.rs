@@ -39,16 +39,27 @@
 //! ```
 //!
 //! and a row reads `RV = s_rv`, `BV = (π/2) s_bv`, `TV = μ_{2/3}^-3 s_tv`,
-//! `TQ = n μ_{4/3}^-3 s_tq`, `Z` with `n` for the papers' count, and `σ_i² =
+//! `TQ = W μ_{4/3}^-3 s_tq`, `Z` with `n` for the papers' count, and `σ_i² =
 //! s_bv / p`, the weighted mean of the products before the row. `n`, the
-//! count of returns the estimators are of, is Kish's effective count `W² /
-//! V` of the returns' decayed weights, and under a window the count of the
-//! target's returns it holds: the count of returns at equal weights without
-//! a decay, and under a decay the count the weights are worth, `TQ`, `Z` and
-//! the flag all reading the same `n`. With no decay (`half_life = inf`) and
-//! unit weights these are the papers' values on the returns so far, `n − 1`
-//! products and `n − 2` triples. A weight counts returns: the estimators are
-//! sums, so they scale with it.
+//! count of returns the statistics are of, is Kish's effective count `W² /
+//! V` of the returns' weights, decayed or in a window: the count of returns
+//! at equal weights without a decay, and otherwise the count the weights
+//! are worth, `Z` and the flag reading the same `n`. The two places the
+//! papers' `n` stands for different things once the weights are unequal,
+//! and each takes its own: at a constant volatility `σ²` a step `δ`,
+//! `Var(RV − BV) ≈ ϑ σ⁴ δ² V` and `RV ≈ σ² δ W`, so `1 − BV/RV` has the
+//! variance `ϑ V/W² = ϑ/n` and `√n` in front is Kish's count; `TQ/BV²`,
+//! which is 1 there (the `max(1, ·)` is Jensen's bound for a varying one),
+//! needs `TQ`'s factor to be the weight `W`, the period its sum is of. With
+//! Kish's count in `TQ` too, `max(1, TQ/BV²)` read `W/V`, about `1 + λ` under
+//! any decay, and `Z` was N(0, 1/(1 + λ)). That variance holds for weights
+//! that vary slowly from one return to the next, as a decay's do: `ϑ`
+//! counts each product's covariance with its neighbour, which shares a
+//! return, at the products' own weight. With no decay (`half_life = inf`)
+//! and unit weights these are the papers' values on the returns so far, `n
+//! − 1` products and `n − 2` triples. A weight counts returns: the
+//! estimators are sums, so they scale with it, and `Z` and the flag do not
+//! move with the weights' scale.
 //!
 //! **Out of sample** (hard rule 2): a row reports from the state before its
 //! own return and before its own decay, so the variations are those of the
@@ -101,8 +112,8 @@
 //! it. As under a decay, a row reports from the window as it stood after
 //! the row before; the rows that have left by its own clock leave after it
 //! reports. A window forgets by dropping, so it takes no decay. `weight_sum`
-//! and each target's `n` are then the weights inside the window (hard rule
-//! 8).
+//! and each target's own weight are then the weights inside the window
+//! (hard rule 8), and its `n` Kish's count of them.
 //!
 //! **`lm_window = K`**, Lee and Mykland's window, takes `σ_i` from the `K −
 //! 1` returns of the target before row `i` alone, their `K − 2` products,
@@ -477,7 +488,6 @@ impl Realized {
                 y.get(j).copied().flatten(),
                 self.cfg.min_weight,
                 self.cfg.lm_beta,
-                self.window.is_some(),
                 pred,
             );
         }

@@ -3417,11 +3417,17 @@ the papers' sums over `W` returns do. A product is in the window only while
 both of its returns are, so a window's measures are the papers' on its
 returns.
 
-**The count `n`.** `TQ`, `bns` and the flag read the count of returns the
-measures are of. Under a window it is the returns the window holds. Under a
-decay it is Kish's effective count `(Σ w)² / Σ w²` of the returns' decayed
-weights, which is the count itself at equal weights without a decay. The
-sums themselves are weighted, so they scale with the weights; `n` does not.
+**The count `n`.** `bns` and the flag read the count of returns the
+measures are of: Kish's effective count `(Σ w)² / Σ w²` of the returns'
+weights, decayed or in a window, which is the count itself at equal weights
+without a decay. `TQ`'s factor is the weight `Σ w` instead, the length of
+the period its sum is of, so `TQ/BV²` is 1 at a constant volatility whatever
+the weights. With unequal weights `1 - BV/RV` has the variance `ϑ Σ w² / (Σ
+w)² = ϑ / n`, so with these two factors `bns` is a standard normal without
+jumps under a decay as well: a simulated null of 20,000 streams under a
+half-life of 100 rows gives a standard deviation within 0.035 of 1 and a
+size at the 1% cut between 0.008 and 0.016. The sums themselves are
+weighted, so they scale with the weights; `n`, `bns` and the flag do not.
 
 **Lee and Mykland's flag.** It is the paper's test of the largest `|lm|`
 among `n` returns, at confidence `lm_beta` (0.99, a test at 1%):

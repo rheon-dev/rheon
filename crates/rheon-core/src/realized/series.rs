@@ -144,7 +144,7 @@ pub(super) fn lm_jump(l: f64, n: f64, beta: f64) -> f64 {
 
 impl Series {
     /// The numbers a series holds outside a window and `lm_window`, in
-    /// bytes: 16 of 8.
+    /// bytes: 18 of 8.
     pub(super) const BYTES: u64 = 8 * 18;
 
     pub(super) fn new(lm_window: Option<usize>) -> Self {
@@ -180,14 +180,15 @@ impl Series {
         }
     }
 
-    /// The count of returns the estimators are of, the papers' `n`: the
-    /// returns a window holds, or Kish's effective count of the returns'
-    /// decayed weights, `(Σw)² / Σw²`, which is the count of returns at
-    /// equal weights without a decay. 0 before a return.
-    pub(super) fn count(&self, windowed: bool) -> f64 {
-        if windowed {
-            return self.held.len() as f64;
-        }
+    /// The count of returns the estimators are of, the papers' `n`: Kish's
+    /// effective count of the returns' weights, `(Σw)² / Σw²`, decayed or
+    /// in a window. At equal weights without a decay it is the count of
+    /// returns, exactly (the sums are compensated, so a window's integer
+    /// sums are exact). It is the count the weights are worth, not their
+    /// weight `W` (hard rule 8's `n_eff`, which gates `min_weight`): the
+    /// variance of a weighted mean is `Σw² / (Σw)²` of one term's. 0 before
+    /// a return.
+    pub(super) fn count(&self) -> f64 {
         let w2 = self.sum(W2);
         if w2 > 0.0 {
             let w = self.sum(NW);
@@ -307,24 +308,20 @@ impl Series {
 
     /// The series' outputs into `out`, from its state as it stands, for a
     /// row whose return is `r` (none where the row has none).
-    pub(super) fn read(
-        &self,
-        r: Option<f64>,
-        min_weight: f64,
-        beta: f64,
-        windowed: bool,
-        out: &mut Vec<f64>,
-    ) {
+    pub(super) fn read(&self, r: Option<f64>, min_weight: f64, beta: f64, out: &mut Vec<f64>) {
         if self.sum(NW) < min_weight {
             out.extend([f64::NAN; OUTPUTS_PER_TARGET]);
             return;
         }
-        let n = self.count(windowed);
+        let n = self.count();
         let rv = self.sum(RV);
         let s_bv = self.sum(BV);
         let bv = BV_SCALE * s_bv;
         let tv = TV_SCALE * self.sum(TV);
-        let tq = n * (TQ_SCALE * self.sum(TQ));
+        // TQ is of the period the weights' sum spans: its factor is that
+        // weight, so TQ/BV² is 1 at a constant volatility whatever the
+        // weights, as the paper's is at unit weights
+        let tq = self.weight() * (TQ_SCALE * self.sum(TQ));
         let z = if rv > 0.0 && bv > 0.0 {
             n.sqrt() * (1.0 - bv / rv) / (BNS_THETA * (tq / (bv * bv)).max(1.0)).sqrt()
         } else {

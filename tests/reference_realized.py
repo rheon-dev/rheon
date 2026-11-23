@@ -53,24 +53,26 @@ def measures(r, n: float | None = None) -> dict[str, float]:
     return {"rv": rv, "bv": bv, "tv": tv, "tq": tq, "bns": z}
 
 
-def weighted(t, r, w, half_life: float, count: float | None = None) -> dict[str, float]:
+def weighted(t, r, w, half_life: float) -> dict[str, float]:
     """The measures of returns ``r`` learned at clocks ``t`` and weights
     ``w``, each term decayed by the age of its latest row from the last
     row, ``2^(-age / half_life)``, and weighted by that row's weight; ``n``
-    Kish's effective count ``(Σ λw)² / Σ (λw)²``, or ``count``. Also the
-    weight of the returns and ``σ²``, the weighted mean of the products."""
+    Kish's effective count ``(Σ λw)² / Σ (λw)²``, which ``bns`` reads, and
+    ``TQ``'s factor the weight ``Σ λw``, the length of the period its sum is
+    of, so ``TQ/BV²`` is 1 at a constant volatility. Also the weight of the
+    returns and ``σ²``, the weighted mean of the products."""
     t, r, w = (np.asarray(v, dtype=float) for v in (t, r, w))
     lw = np.exp2(-(t[-1] - t) / half_life) * w
     a = np.abs(r)
     nw = math.fsum(lw)
-    n = nw**2 / math.fsum(lw * lw) if count is None else count
+    n = nw**2 / math.fsum(lw * lw)
     s_bv = math.fsum(lw[1:] * a[1:] * a[:-1])
     p = math.fsum(lw[1:])
     out = {
         "rv": math.fsum(lw * r * r),
         "bv": mu(1.0) ** -2 * s_bv,
         "tv": mu(2 / 3) ** -3 * math.fsum(lw[2:] * _triples(a, 2 / 3)),
-        "tq": n * mu(4 / 3) ** -3 * math.fsum(lw[2:] * _triples(a, 4 / 3)),
+        "tq": nw * mu(4 / 3) ** -3 * math.fsum(lw[2:] * _triples(a, 4 / 3)),
     }
     out["bns"] = (
         math.sqrt(n)

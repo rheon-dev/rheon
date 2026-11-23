@@ -561,9 +561,9 @@ model that only the new build has is listed as an addition and passes.
   volatility of the returns before it, `lm_window = K` returns of its own or
   the measures') and its flag `lm_jump` at confidence `lm_beta` (0.99). No
   small-sample factor, as the papers: a window of `W` returns holds `W - 1`
-  products and `W - 2` triples. The count of returns `n` the quarticity and
-  both tests read is a window's returns, or Kish's effective count of the
-  decayed weights. One pass, a decay (the default form), a window of rows
+  products and `W - 2` triples. The count of returns `n` both tests read is
+  Kish's effective count of the returns' weights, decayed or in a window;
+  the quarticity's factor is their weight. One pass, a decay (the default form), a window of rows
   (checked against `max_state_bytes` when the spec is built, refused naming
   the largest that fits) or of the clock (`window_size`, `closed`; checked
   as the rows go in, a warning past half of the cap and a refusal at it).
@@ -688,6 +688,26 @@ model that only the new build has is listed as an addition and passes.
   call that was right before, under those settings, now needs the argument.
 
 ### Fixed
+
+- **`realized`'s `bns` is a standard normal without jumps under a decay
+  and under weights** (Fable's W13 review, B1 and B2). It read one count
+  `n`, Kish's `(Σw)²/Σw²`, both in front (`√n`) and inside the tripower
+  quarticity (`TQ = n μ⁻³ Σ`). The two stand for different things once the
+  weights are unequal: `1 - BV/RV` has the variance `ϑ Σw²/(Σw)² = ϑ/n`, so
+  `√n` is Kish's, but `TQ/BV²` is 1 at a constant volatility only with
+  `TQ`'s factor the weight `W = Σw`. With Kish's count there `max(1,
+  TQ/BV²)` read `W/V`, about `1 + λ` under any decay, and `bns` was
+  N(0, 1/(1 + λ)): a simulated null under a half-life of 100 rows gave an
+  sd of 0.70 and a size of 0.0009 at a nominal 0.01; at a constant weight
+  of 0.25 the sd was 0.5. `TQ` is now `W μ⁻³ Σ`, and under a window `n` is
+  Kish's count of its weights too (it was the count of returns whatever
+  their weights): the simulated null gives an sd within 0.035 of 1 and a
+  size between 0.008 and 0.016 over 20,000 streams under the decay, a
+  weight of 0.25 and a window of weights from 0.1 to 1.9, and `bns` no
+  longer moves with the weights' scale. Without a decay at unit weights `W`
+  and `n` are both the count of returns, so the papers' forms, and the
+  R `highfrequency` and `yuima` oracles, are unmoved. Moves: `realized.tq_*`,
+  `realized.bns_*`, `realized.lm_jump_*`.
 
 - **`ModelBank.write_json` of a `bocpd` with its hazard on the clock**
   (PLAN 547). Under a clock hazard the empty run's log joint is `-inf`

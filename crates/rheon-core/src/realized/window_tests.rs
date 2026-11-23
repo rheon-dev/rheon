@@ -160,7 +160,8 @@ fn a_window_of_clock_units_holds_the_rows_of_its_span_on_either_edge() {
 }
 
 /// Unequal weights and a target absent on some rows, in a window of rows:
-/// the window's weight is its rows', each target's `n` its returns', and
+/// the window's weight is its rows', each target's `n` Kish's count of its
+/// returns' weights, and
 /// the measures those of the definition on the target's returns in the
 /// window, a product reaching across a row it is absent on but never past
 /// the window's first row.
@@ -185,9 +186,8 @@ fn a_window_weighs_its_rows_and_skips_an_absent_return() {
                 .filter(|&j| keep(j))
                 .map(|j| (j as f64, rs[j], w[j]))
                 .collect();
-            // A window's `n` is its count of returns.
-            let count = held.len() as f64;
-            paper::weighted_counted(&held, f64::INFINITY, Some(count))
+            // A window's `n` is Kish's count of its returns' weights.
+            paper::weighted(&held, f64::INFINITY)
         };
         let (p0, n0, _) = defn(&r0, &|_| true);
         let (p1, n1, _) = defn(&r1, &present);
