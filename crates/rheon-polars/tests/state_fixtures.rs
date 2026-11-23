@@ -518,6 +518,54 @@ fn windows_int_config() -> WindowsConfig {
     .unwrap()
 }
 
+/// Two periodic profiles (PLAN 560) on a zoned clock: a weighted mean read
+/// with the stamp's rows, so rows are held across the save, and a biased
+/// variance read before them, from an offset; each group's buckets.
+fn windows_profile_config() -> WindowsConfig {
+    serde_json::from_str(
+        r#"{"formulas": [
+               {"name": "level", "tree": ["ewm_profile", ["col", "mid"], {"period": "10s", "buckets": 5, "half_life": "20s", "weight": ["col", "w"]}]},
+               {"name": "spread", "tree": ["ewm_profile", ["col", "mid"], {"period": "10s", "buckets": 5, "half_life": "20s", "stat": "var", "bias": true, "closed": "left", "offset": "3s"}]}
+             ],
+             "clock": "ts", "gap_cap": "50s", "group": "g"}"#,
+    )
+    .unwrap()
+}
+
+/// The clock in Amsterdam's zone, the same instants.
+fn window_profile_input(df: &DataFrame) -> DataFrame {
+    let zone = TimeZone::opt_try_new(Some("Europe/Amsterdam")).unwrap();
+    let ts = df
+        .column("ts")
+        .unwrap()
+        .to_physical_repr()
+        .as_materialized_series()
+        .i64()
+        .unwrap()
+        .clone()
+        .into_datetime(TimeUnit::Nanoseconds, zone.clone())
+        .into_column();
+    assert_eq!(
+        ts.dtype(),
+        &DataType::Datetime(TimeUnit::Nanoseconds, zone),
+        "a zoned clock"
+    );
+    let mut out = df.select(["ts", "g", "mid", "w"]).unwrap();
+    out.with_column(ts).unwrap();
+    out
+}
+
+/// The same profiles' forms on a number clock: a period in clock units.
+fn windows_profile_units_config() -> WindowsConfig {
+    serde_json::from_str(
+        r#"{"formulas": [
+               {"name": "level", "tree": ["ewm_profile", ["col", "mid"], {"period": 6.0, "buckets": 3, "half_life": 12.0, "weight": ["col", "w"], "stat": "std"}]}
+             ],
+             "clock": "t", "gap_cap": 50.0, "group": "g"}"#,
+    )
+    .unwrap()
+}
+
 fn window_int_input(df: &DataFrame) -> DataFrame {
     df.select(["ti", "mid", "cum"]).unwrap()
 }
@@ -1410,6 +1458,23 @@ fn windows_run(bytes: &[u8], input: &DataFrame) -> Ran {
     windows_run_of(windows_config(), bytes, input)
 }
 
+fn windows_profile_first() -> (Vec<u8>, DataFrame) {
+    windows_first_of(windows_profile_config(), window_profile_input(&frame()))
+}
+
+fn windows_profile_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    windows_run_of(windows_profile_config(), bytes, input)
+}
+
+fn windows_profile_units_first() -> (Vec<u8>, DataFrame) {
+    let df = frame().select(["t", "g", "mid", "w"]).unwrap();
+    windows_first_of(windows_profile_units_config(), df)
+}
+
+fn windows_profile_units_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    windows_run_of(windows_profile_units_config(), bytes, input)
+}
+
 fn windows_quantile_first() -> (Vec<u8>, DataFrame) {
     windows_first_of(windows_quantile_config(), window_input(&frame()))
 }
@@ -2014,6 +2079,16 @@ fn kinds() -> Vec<Kind> {
             run: windows_quantile_run,
         },
         Kind {
+            name: "with_windows_profile",
+            first: windows_profile_first,
+            run: windows_profile_run,
+        },
+        Kind {
+            name: "with_windows_profile_units",
+            first: windows_profile_units_first,
+            run: windows_profile_units_run,
+        },
+        Kind {
             name: "refresh_time",
             first: refresh_first,
             run: refresh_run,
@@ -2480,7 +2555,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
             ("checkpoint", 1),
             ("merge", 2),
             ("refresh_time", 3),
-            ("windows", 3)
+            ("windows", 5)
         ]
     );
     // A checkpoint's stages, each a whole state of its kind; and the bank's
@@ -3386,6 +3461,39 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
             |p, v| {
                 p.contains(".quant.") && p.contains(".prev.") && v.as_f64().is_some_and(|f| f > 0.0)
             },
+        ),
+        // PLAN 560: a profile's definition with its zone and spans in
+        // nanoseconds or clock units, and a group's buckets, last moved at
+        // a temporal or a number clock.
+        ("with_windows_profile", "a profile's zone", |p, v| {
+            p.ends_with(".zone") && v.as_str() == Some("Europe/Amsterdam")
+        }),
+        ("with_windows_profile", "a period in nanoseconds", |p, _| {
+            p.ends_with(".period.ns")
+        }),
+        (
+            "with_windows_profile",
+            "a bucket moved at a temporal clock",
+            |p, _| p.contains(".profile.") && p.ends_with(".at.Ns"),
+        ),
+        (
+            "with_windows_profile",
+            "a left profile's stamp value",
+            |p, v| {
+                p.contains(".profile.")
+                    && p.ends_with(".left")
+                    && v.as_f64().is_some_and(f64::is_finite)
+            },
+        ),
+        (
+            "with_windows_profile_units",
+            "a period in clock units",
+            |p, _| p.ends_with(".period.units"),
+        ),
+        (
+            "with_windows_profile_units",
+            "a bucket moved at a number clock",
+            |p, _| p.contains(".profile.") && p.ends_with(".at.F64"),
         ),
         // PLAN 541: a merge's state, in each form it takes -- an input's
         // last clock as a float and as an integer (a temporal clock's

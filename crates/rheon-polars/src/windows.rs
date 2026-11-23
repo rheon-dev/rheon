@@ -221,6 +221,8 @@ pub enum OpKind {
     EwmQuantile,
     RewmQuantile,
     Increment,
+    /// A periodic profile ([`ProfileDef`]): no kernel, a group's buckets.
+    EwmProfile,
 }
 
 impl OpKind {
@@ -237,6 +239,7 @@ impl OpKind {
             OpKind::EwmQuantile => "ewm_quantile",
             OpKind::RewmQuantile => "rewm_quantile",
             OpKind::Increment => "increment",
+            OpKind::EwmProfile => "ewm_profile",
         }
     }
 
@@ -253,6 +256,7 @@ impl OpKind {
             "ewm_quantile" => Some(OpKind::EwmQuantile),
             "rewm_quantile" => Some(OpKind::RewmQuantile),
             "increment" => Some(OpKind::Increment),
+            "ewm_profile" => Some(OpKind::EwmProfile),
             _ => None,
         }
     }
@@ -275,7 +279,7 @@ impl OpKind {
             OpKind::EwmVar => Some(Stat::Var),
             OpKind::EwmStd => Some(Stat::Std),
             OpKind::EwmQuantile | OpKind::RewmQuantile => Some(Stat::Quantile),
-            OpKind::Increment => None,
+            OpKind::Increment | OpKind::EwmProfile => None,
         }
     }
 }
@@ -1560,6 +1564,10 @@ struct Group {
     prev_link: Option<usize>,
     next_link: Option<usize>,
     linked: bool,
+    /// Per profile operator, its state since the group's last restart;
+    /// empty before the group's first row after one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    profile: Vec<profile::ProfState>,
 }
 
 #[cfg(test)]
@@ -1654,6 +1662,10 @@ pub struct Windows {
     /// row's wait count; derived by [`Windows::scratch`], never saved.
     #[serde(skip)]
     derived: Derived,
+    /// The profile operators (`ewm_profile`), after the window operators in
+    /// output order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    profiles: Arc<Vec<ProfileDef>>,
 }
 
 /// A map as a sorted list, so the state's bytes do not depend on the
@@ -1665,312 +1677,10 @@ mod sorted_map;
 /// as `None`: a saved `session_gap = "reset"` would resume as no session
 /// gap at all. The bank never saves a `ClockCfg` -- it rebuilds one from
 /// its specs -- so this state is the first to need the form.
-mod clock_form {
-    use rheon_core::{ClockCfg, OnClockReset, SessionGap};
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+mod clock_form;
 
-    #[derive(Serialize, Deserialize)]
-    struct Form {
-        gap_cap: f64,
-        on_clock_reset: OnClockReset,
-        session_gap: GapForm,
-        min_backwards_jump: f64,
-    }
-
-    #[derive(Serialize, Deserialize)]
-    enum GapForm {
-        Off,
-        Gap(f64),
-        Reset,
-    }
-
-    pub fn serialize<S: Serializer>(c: &ClockCfg, s: S) -> Result<S::Ok, S::Error> {
-        Form {
-            gap_cap: c.gap_cap,
-            on_clock_reset: c.on_clock_reset,
-            session_gap: match c.session_gap {
-                None => GapForm::Off,
-                Some(SessionGap::Gap(g)) => GapForm::Gap(g),
-                Some(SessionGap::Reset) => GapForm::Reset,
-            },
-            min_backwards_jump: c.min_backwards_jump,
-        }
-        .serialize(s)
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<ClockCfg, D::Error> {
-        let f = Form::deserialize(d)?;
-        Ok(ClockCfg {
-            gap_cap: f.gap_cap,
-            on_clock_reset: f.on_clock_reset,
-            session_gap: match f.session_gap {
-                GapForm::Off => None,
-                GapForm::Gap(g) => Some(SessionGap::Gap(g)),
-                GapForm::Reset => Some(SessionGap::Reset),
-            },
-            min_backwards_jump: f.min_backwards_jump,
-        })
-    }
-}
-
-/// `now` minus `last` in clock units: between two temporal values, taken in
-/// integer nanoseconds and rounded once, as the clock takes its steps.
-/// The clock between two rows of one stretch, for a window's edge: the
-/// exact difference of their raw clocks in integer nanoseconds on a
-/// temporal clock (`exact`), else of the clocks carried as bits in `off`
-/// (a number clock's own value; the policy time without a clock column),
-/// never of two origin-subtracted policy times (task 159, W3).
-/// Two rounded policy times differ by rounding, and a row exactly one
-/// window after another landed on either side of the edge (review R2, W1:
-/// 0.4 − 0.1 is not 0.3 in a double). Against a window given as a duration
-/// the comparison is between integers ([`KernelDef::window_ns`]); against
-/// one given as a number the gap is converted to seconds with the same two
-/// operations a duration's text is (`seconds_of_ns`), so a gap of exactly
-/// one window still compares equal to it.
-#[derive(Clone, Copy, Debug)]
-enum Gap {
-    Ns(i64),
-    Secs(f64),
-    /// An integer clock's gap in the column's own units, exact (task 200).
-    Int(i128),
-}
-
-/// What a row's `off` holds: a temporal clock's nanoseconds, an integer
-/// clock's value (docs/PLAN.md task 200), or the bits of a double -- a float
-/// clock's value, or the policy time without a clock column.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-enum OffForm {
-    Ns,
-    Int,
-    Bits,
-}
-
-#[inline]
-fn gap(form: OffForm, from_off: i64, to_off: i64) -> Gap {
-    match form {
-        OffForm::Ns => Gap::Ns(to_off.saturating_sub(from_off)),
-        OffForm::Int => Gap::Int(i128::from(to_off) - i128::from(from_off)),
-        OffForm::Bits => Gap::Secs(f64::from_bits(to_off as u64) - f64::from_bits(from_off as u64)),
-    }
-}
-
-impl Gap {
-    /// The gap against the kernel's window, by the comparison a model's
-    /// window decides its edge with ([`Stamp::cmp_span_ns`], task 175): in
-    /// integer nanoseconds against a window written as a duration, through
-    /// `seconds_of_ns` against one written as a number, and on a number
-    /// clock the one subtraction of the raw values. No answer (a NaN) is
-    /// `Equal`.
-    #[inline]
-    fn cmp_window(self, k: &KernelDef) -> Ordering {
-        let w = k.window_size.expect("a windowed kernel");
-        self.cmp_span(w, k.window_ns.map(i128::from))
-    }
-
-    /// The gap against zero, by the same comparison.
-    #[inline]
-    fn cmp_zero(self) -> Ordering {
-        self.cmp_span(0.0, Some(0))
-    }
-
-    /// The gap as the newer of two stamps, the older at zero.
-    #[inline]
-    fn cmp_span(self, span: f64, span_ns: Option<i128>) -> Ordering {
-        match self {
-            // `Stamp::cmp_span_ns`'s two arms for these pairs, written out
-            // where this is called a row at a time: integer nanoseconds
-            // against a span in nanoseconds, and a number clock's
-            // `(a - b) - (ra - rb)` of the pair `s, 0` with removed time 0.
-            Gap::Ns(n) => match span_ns {
-                Some(w) => i128::from(n).cmp(&w),
-                None => Stamp::Ns(i128::from(n)).cmp_span_ns(Stamp::Ns(0), span, None),
-            },
-            Gap::Secs(s) => ((s - 0.0) - 0.0)
-                .partial_cmp(&span)
-                .unwrap_or(Ordering::Equal),
-            // A gap below 2^53 is a double exactly, and compares with the
-            // span as the exact comparison does (a NaN span is `Equal`).
-            Gap::Int(n) if n.unsigned_abs() < 1 << 53 => {
-                (n as f64).partial_cmp(&span).unwrap_or(Ordering::Equal)
-            }
-            Gap::Int(n) => Stamp::Int(n, 0.0).cmp_span_ns(Stamp::Int(0, 0.0), span, None),
-        }
-    }
-}
-
-/// `now` minus `last` in clock units: between two temporal values, taken
-/// in integer nanoseconds and rounded once; between two integer ones, in
-/// integers and rounded once (task 200).
-fn elapsed(now: ClockValue, last: ClockValue) -> f64 {
-    match (now, last) {
-        (ClockValue::Ns(c), ClockValue::Ns(p)) => seconds_of_ns(i128::from(c) - i128::from(p)),
-        (ClockValue::I64(c), ClockValue::I64(p)) => int_step_f64(c, p),
-        (c, p) => match c.int_step(p) {
-            Some(step) => step as f64,
-            None => c.seconds() - p.seconds(),
-        },
-    }
-}
-
-/// An integer clock's step `c - p` as a double, rounded once: the 64-bit
-/// difference where it fits, which converts with one instruction, the 128-bit
-/// one where it does not, which is a library call. Both round the same
-/// integer to the nearest double, ties to even.
-#[inline(always)]
-fn int_step_f64(c: i64, p: i64) -> f64 {
-    match c.checked_sub(p) {
-        Some(d) => d as f64,
-        None => (i128::from(c) - i128::from(p)) as f64,
-    }
-}
-
-/// Whether `now` is after `last`: `elapsed(now, last) > 0.0`, the sign of the
-/// step, which between two temporal values, or two integer ones, is the
-/// integers' own.
-#[inline]
-fn is_after(now: ClockValue, last: ClockValue) -> bool {
-    match (now, last) {
-        (ClockValue::Ns(c), ClockValue::Ns(p)) | (ClockValue::I64(c), ClockValue::I64(p)) => c > p,
-        _ => elapsed(now, last) > 0.0,
-    }
-}
-
-/// Whether `now` is more than `cap` clock units after `last`: on an
-/// integer clock their difference in integers against the cap, exactly
-/// (task 200), and as [`elapsed`] gives it otherwise.
-#[inline]
-fn past_cap(now: ClockValue, last: ClockValue, cap: f64) -> bool {
-    match (now, last) {
-        // Between two temporal values, a step short of the cap's whole
-        // seconds is not past it, as the integers say, with no conversion to
-        // seconds: a step of fewer whole seconds than `floor(cap)` converts
-        // to at most `floor(cap)` (the conversion never rounds past the next
-        // whole second), which is not more than `cap`. Any other step is
-        // converted and compared, as `elapsed` gives it.
-        (ClockValue::Ns(c), ClockValue::Ns(p)) => {
-            let step = i128::from(c) - i128::from(p);
-            if (1.0..4.0e9).contains(&cap)
-                && step < i128::from(u32::try_from(cap as u64).unwrap_or(0)) * 1_000_000_000
-            {
-                return false;
-            }
-            seconds_of_ns(step) > cap
-        }
-        // Neither pair has an integer step: `elapsed` is the difference.
-        (ClockValue::F64(c), ClockValue::F64(p)) => c - p > cap,
-        // An integer clock's step below 2^53 is a double exactly, and a
-        // double compares with the cap as the exact comparison does
-        // (`cmp_int_f64`: a NaN cap is past by neither); a larger step takes
-        // the exact comparison, out of line.
-        (ClockValue::I64(c), ClockValue::I64(p)) => match c.checked_sub(p) {
-            Some(d) if d.unsigned_abs() < 1 << 53 => d as f64 > cap,
-            _ => past_cap_general(now, last, cap),
-        },
-        _ => past_cap_general(now, last, cap),
-    }
-}
-
-/// [`past_cap`] for any other pair, out of line: the exact comparison of an
-/// integer clock's step against the cap takes a conversion to 128 bits that
-/// the rows of a float or temporal clock, taking the arms above, would
-/// otherwise pay for on every row.
-#[inline(never)]
-fn past_cap_general(now: ClockValue, last: ClockValue, cap: f64) -> bool {
-    match now.int_step(last) {
-        Some(step) => rheon_core::cmp_int_f64(step, cap) == Some(Ordering::Greater),
-        None => elapsed(now, last) > cap,
-    }
-}
-
-fn refuse_backwards(
-    adv: &ClockAdvance,
-    seq: u64,
-    prev: Option<ClockValue>,
-    now: Option<ClockValue>,
-) -> Result<(), Refusal> {
-    match adv.backwards {
-        Some(raw) => Err(Refusal::Backwards {
-            seq,
-            back: -raw,
-            prev,
-            now,
-            min_backwards_jump: adv.disorder.map(|d| d.min_backwards_jump),
-        }),
-        None => Ok(()),
-    }
-}
-
-/// `∫_a^b λ^(T - s) ds` for a backward kernel, `∫_a^b λ^(s - T) ds` for a
-/// forward one: the decayed mass of `[a, b]` seen from `T`, `a <= b`.
-#[inline]
-fn mass_between(k: &KernelDef, t: f64, a: f64, b: f64) -> f64 {
-    if b <= a {
-        return 0.0;
-    }
-    match k.direction {
-        // ∫_a^b λ^(T - s) ds = M(T - a) - M(T - b)
-        Direction::Backward => k.mass(t - a) - k.mass(t - b),
-        // ∫_a^b λ^(s - T) ds = M(b - T) - M(a - T)
-        Direction::Forward => k.mass(b - t) - k.mass(a - t),
-    }
-}
-
-/// [`mass_between`] with both masses taken through `memo`: a window's cut
-/// reads the same two distances for each operator of a kernel.
-#[inline]
-fn mass_between_in(k: &KernelDef, memo: &mut DecayMemo, t: f64, a: f64, b: f64) -> f64 {
-    if b <= a {
-        return 0.0;
-    }
-    match k.direction {
-        Direction::Backward => k.mass_cut_in(t - a, memo) - k.mass_far_in(t - b, memo),
-        Direction::Forward => k.mass(b - t) - k.mass(a - t),
-    }
-}
-
-/// [`mass_between`] for a forward kernel's interval ending at the next row
-/// `b`, starting at its own row `a = t`: one mass, of the distance to the next
-/// row, through `memo`, which a regular clock asks again at the next row.
-#[inline]
-fn mass_between_fill(k: &KernelDef, memo: &mut DecayMemo, t: f64, a: f64, b: f64) -> f64 {
-    if b <= a {
-        return 0.0;
-    }
-    k.mass_in(b - t, memo) - k.mass(a - t)
-}
-
-/// [`mass_between`] for a forward kernel's close: the open row's interval
-/// `[a, b]` seen from the row `t` being closed, its two masses on slots of
-/// their own beside the one a row's interval to the next row takes
-/// ([`mass_between_in`]), so each repeats where the clock does.
-#[inline]
-fn mass_between_close(k: &KernelDef, memo: &mut DecayMemo, t: f64, a: f64, b: f64) -> f64 {
-    if b <= a {
-        return 0.0;
-    }
-    k.mass_slot(b - t, &mut memo.mass_far) - k.mass_slot(a - t, &mut memo.fwd().mass_open)
-}
-
-/// [`mass_between`] for a backward kernel's interval ending at `t` -- a
-/// value held from `a` to the row's own time -- with `memo` holding the mass
-/// of the distance back to `a` that the last ask was for: where operators of
-/// a kernel hold from the same time (they read one column, as a mean and a
-/// spread of it do), it is taken once, and where a clock steps by the same
-/// amount row after row, once for the stream. A forward kernel's is
-/// [`mass_between`]'s.
-#[inline]
-fn mass_held_to(k: &KernelDef, t: f64, a: f64, memo: &mut DecayMemo) -> f64 {
-    // The interval is `[a, b]` with `b` the row's own time `t`, as `mass_between`
-    // takes it, its far end's mass `M(t - b)` read where it is.
-    let b = t;
-    if b <= a {
-        return 0.0;
-    }
-    match k.direction {
-        Direction::Backward => k.mass_held_in(t - a, memo) - k.mass(t - b),
-        Direction::Forward => mass_between(k, t, a, b),
-    }
-}
+mod gap;
+use gap::*;
 
 /// Whether operator `o` can run on its kernel: a mean or a variance with
 /// no decay needs a window, and a variance looks back only (task 212).
@@ -2023,11 +1733,16 @@ mod keys;
 #[cfg(test)]
 mod memo_tests;
 mod plain;
+mod profile;
 
 use keys::IntGroups;
 pub(crate) use keys::{ChunkKeys, session_hashes};
 pub(crate) use plain::PlainRows;
 use plain::{Derived, Parts};
+pub use profile::{
+    BUCKET_BYTES as PROFILE_BUCKET_BYTES, PROFILE_STATE_BYTES, PROFILE_STATE_BYTES_CEILING,
+    PhaseSpan, ProfileDef, ProfileStat, canonical_zone,
+};
 
 /// Group keys, as text, to their groups: hashed with a fixed, fast hasher,
 /// which the saved state never sees ([`sorted_map`]).
@@ -2061,16 +1776,34 @@ impl Windows {
         ops: Vec<OpDef>,
         clock_cfg: ClockCfg,
     ) -> Result<Self, String> {
-        Self::build(kernels, ops, clock_cfg).map_err(|e| defect(&e))
+        Self::build(kernels, ops, Vec::new(), clock_cfg).map_err(|e| defect(&e))
+    }
+
+    /// [`Self::new`] with profile operators after the window operators.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::new`].
+    pub fn with_profiles(
+        kernels: Vec<KernelDef>,
+        ops: Vec<OpDef>,
+        profiles: Vec<ProfileDef>,
+        clock_cfg: ClockCfg,
+    ) -> Result<Self, String> {
+        Self::build(kernels, ops, profiles, clock_cfg).map_err(|e| defect(&e))
     }
 
     fn build(
         kernels: Vec<KernelDef>,
         ops: Vec<OpDef>,
+        profiles: Vec<ProfileDef>,
         clock_cfg: ClockCfg,
     ) -> Result<Self, String> {
-        if ops.is_empty() {
+        if ops.is_empty() && profiles.is_empty() {
             return Err("at least one operator is needed".into());
+        }
+        for p in &profiles {
+            p.check()?;
         }
         for k in &kernels {
             k.check()?;
@@ -2099,7 +1832,8 @@ impl Windows {
             .filter(|k| k.direction == Direction::Forward)
             .count();
         Ok(Self {
-            n_outputs: ops.len(),
+            n_outputs: ops.len() + profiles.len(),
+            profiles: Arc::new(profiles),
             n_forward: u32::try_from(n_forward).map_err(|_| "too many kernels")?,
             kernels: Arc::new(kernels),
             ops: Arc::new(ops),
@@ -2123,6 +1857,11 @@ impl Windows {
             scratch_sum: vec![0.0; SUM_VAR * widest],
             derived: Derived::default(),
         })
+    }
+
+    /// The profile operators, after [`Self::ops`] in output order.
+    pub fn profiles(&self) -> &[ProfileDef] {
+        &self.profiles
     }
 
     /// Per kernel, which of its operators are variances: what its queue is
@@ -2179,11 +1918,19 @@ impl Windows {
             }
             check_op(o, op, &self.kernels[op.kernel])?;
         }
-        if no == 0 || members != *self.members || members.iter().any(Vec::is_empty) {
+        let np = self.profiles.len();
+        if (no == 0 && np == 0) || members != *self.members || members.iter().any(Vec::is_empty) {
             return Err("its kernels' operators are not its operators".into());
         }
-        if self.n_outputs != no {
-            return Err(format!("{} outputs for {no} operators", self.n_outputs));
+        for p in self.profiles.iter() {
+            p.check()?;
+        }
+        {
+            // The outputs are the window operators' and then the profiles'.
+            let no = no + np;
+            if self.n_outputs != no {
+                return Err(format!("{} outputs for {no} operators", self.n_outputs));
+            }
         }
         let is_forward = |k: &KernelDef| k.direction == Direction::Forward;
         let forward = self.kernels.iter().filter(|k| is_forward(k)).count();
@@ -2191,11 +1938,14 @@ impl Windows {
             return Err(format!("{} forward kernels of {forward}", self.n_forward));
         }
         let held = self.held_meta.len();
-        if held.checked_mul(no) != Some(self.held_values.len()) {
-            return Err(format!(
-                "{} values held for {held} rows of {no} outputs",
-                self.held_values.len()
-            ));
+        {
+            let no = no + np;
+            if held.checked_mul(no) != Some(self.held_values.len()) {
+                return Err(format!(
+                    "{} values held for {held} rows of {no} outputs",
+                    self.held_values.len()
+                ));
+            }
         }
         let kept = self.held_meta.iter().take(self.ready).filter(|m| !m.drop);
         if self.ready > held || self.ready_kept != kept.count() {
@@ -2212,7 +1962,8 @@ impl Windows {
         let n_wait = u32::from(
             self.kernels
                 .iter()
-                .any(|k| k.direction == Direction::Backward && k.closed.near(Direction::Backward)),
+                .any(|k| k.direction == Direction::Backward && k.closed.near(Direction::Backward))
+                || self.profiles.iter().any(ProfileDef::waits),
         );
         let is_held = |seq: u64| seq >= self.held_first && seq < self.next_seq;
         let widths = |v: &[Vec<f64>]| {
@@ -2242,7 +1993,8 @@ impl Windows {
                 && (n_wait > 0 || g.pending.is_empty())
                 && g.waiting.iter().all(|w| is_held(w.seq))
                 && g.pending.iter().all(|&s| is_held(s))
-                && (!g.linked || g.last_raw.is_some());
+                && (!g.linked || g.last_raw.is_some())
+                && profile::fits(&self.profiles, &g.profile);
             if !fits {
                 return Err(format!("group {gi} does not fit its kernels and held rows"));
             }
@@ -2329,7 +2081,10 @@ impl Windows {
     #[inline]
     fn scratch(&mut self) {
         if !self.derived.ready {
-            self.derived = Derived::of(&self.kernels, self.derived.off);
+            // A profile reads a group's own state; the plain loop knows none.
+            let off = self.derived.off || !self.profiles.is_empty();
+            self.derived = Derived::of(&self.kernels, off);
+            self.derived.n_wait |= u32::from(self.profiles.iter().any(ProfileDef::waits));
         }
         if self.scratch_sum.is_empty() {
             let widest = self.members.iter().map(Vec::len).max().unwrap_or(0);
@@ -2459,6 +2214,7 @@ impl Windows {
             prev_link: None,
             next_link: None,
             linked: false,
+            profile: Vec::new(),
         });
         match key {
             Some(k) => {
@@ -2768,6 +2524,19 @@ impl Windows {
                 write_backward(&self.ops, m, seq, &g.stamp_values[ki], complete, held);
             }
         }
+        if !self.profiles.is_empty() {
+            let out = profile::Out {
+                defs: &self.profiles,
+                first: self.ops.len(),
+            };
+            let mut held = Held {
+                first: self.held_first,
+                n_outputs: self.n_outputs,
+                values: &mut self.held_values,
+                meta: &mut self.held_meta,
+            };
+            profile::row(&out, g, row.clock, row.values, new_stamp, seq, &mut held);
+        }
         if n_wait > 0 {
             g.pending.push(seq);
         }
@@ -2837,6 +2606,7 @@ impl Windows {
             scratch_sum,
             n_forward,
             derived,
+            profiles,
             ..
         } = self;
         (
@@ -2852,6 +2622,7 @@ impl Windows {
                 scratch_sum,
                 n_wait: derived.n_wait,
                 n_forward: *n_forward,
+                profiles: profiles.as_slice(),
             },
             groups,
         )
@@ -3587,6 +3358,19 @@ fn flush_in(p: &mut Parts<'_>, g: &mut Group) {
             write_backward(p.ops, m, seq, &g.stamp_values[ki], complete, held);
         }
     }
+    if !p.profiles.is_empty() {
+        let out = profile::Out {
+            defs: p.profiles,
+            first: p.ops.len(),
+        };
+        let mut held = Held {
+            first: p.held_first,
+            n_outputs: p.n_out,
+            values: &mut *p.held_values,
+            meta: &mut *p.held_meta,
+        };
+        profile::flush(&out, g, &g.pending, &mut held);
+    }
     for &seq in &g.pending {
         let r = usize::try_from(seq - p.held_first).expect("a pending row is held");
         p.held_meta[r].open -= 1;
@@ -3676,6 +3460,7 @@ fn restart_in(g: &mut Group, origin: Option<ClockValue>) {
     g.restart = false;
     g.stamp = None;
     g.pending.clear();
+    g.profile.clear();
 }
 
 /// Drop the waiting rows every forward kernel has closed.

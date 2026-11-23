@@ -30,8 +30,8 @@ use crate::spec::{ClockPolicy, SessionGapSpec, clock_cfg_of};
 use crate::stream::usable;
 use crate::windows::{ChunkKeys, session_hashes};
 use crate::windows::{
-    Closed, Direction, KernelDef, OpDef, OpKind, Partial, Peek, PlainRows, Refusal, RowIn, Stat,
-    Windows,
+    Closed, Direction, KernelDef, OpDef, OpKind, Partial, Peek, PhaseSpan, PlainRows, ProfileDef,
+    Refusal, RowIn, Stat, Windows,
 };
 use crate::wrong_type::{Refused, wrong_type};
 
@@ -489,6 +489,10 @@ struct Plan {
     /// Every span a kernel reads, with its parameter's name, for the scale
     /// check.
     spans: Vec<(&'static str, Span)>,
+    /// The profile operators, after the window operators in output order,
+    /// and each one's hidden column.
+    profiles: Vec<ProfileDef>,
+    profile_columns: Vec<String>,
 }
 
 fn dtype_of<'a>(input: &'a Schema, column: &str) -> &'a DataType {
@@ -507,6 +511,111 @@ fn dtypes_of(schema: &Schema, exprs: Vec<Expr>) -> Result<Schema, String> {
         .collect_schema()
         .map(|s| s.as_ref().clone())
         .map_err(|e| e.to_string())
+}
+
+/// A profile operator's definition from its node: its input and weight
+/// among the plan's inputs, its spans against the clock, its zone from the
+/// clock column's dtype, and its bytes against its cap.
+#[allow(clippy::too_many_arguments)]
+fn profile_def(
+    config: &WindowsConfig,
+    input: &Schema,
+    p: &mut Plan,
+    f: &str,
+    op: &OpNode,
+    params: &crate::formula::ProfileParams,
+    incr_schema: &Schema,
+) -> Result<ProfileDef, Refused> {
+    let name = op.kind.name();
+    let resolve_incr = |op: &OpNode| col(hidden(op).as_str());
+    let mut input_of = |what: &str, node: &Node| -> Result<usize, Refused> {
+        if let Some(i) = p.inputs.iter().position(|n| n == node) {
+            return Ok(i);
+        }
+        let dtype =
+            dtypes_of(incr_schema, vec![node.to_expr(&resolve_incr).alias("@t")]).map_err(|e| {
+                format!(
+                    "{WHO}: {f}: Polars cannot compute {name}'s {what} ({e}). Check that the \
+                     {what} reads columns of the right type."
+                )
+            })?;
+        let dtype = dtype.get("@t").expect("aliased").clone();
+        if !numeric(&dtype) {
+            return Err(Refused::wrong_type(format!(
+                "{WHO}: {f}: {name}'s {what} must be a number, but it is {}. Cast it to a \
+                 number, such as with .cast(pl.Float64).",
+                crate::arrow::dtype_name(&dtype)
+            )));
+        }
+        p.inputs.push(node.clone());
+        Ok(p.inputs.len() - 1)
+    };
+    let x = input_of("input", &op.input)?;
+    let weight = match &params.weight {
+        Some(w) => Some(input_of("weight", w)?),
+        None => None,
+    };
+    let half_life = op.half_life.clone().expect("checked when read");
+    p.spans.push(("half_life", half_life.clone()));
+    p.spans.push(("period", params.period.clone()));
+    if let Some(o) = &params.offset {
+        p.spans.push(("offset", o.clone()));
+    }
+    let clock_dtype = config.clock.as_deref().and_then(|c| input.get(c));
+    let temporal = clock_dtype.is_some_and(DataType::is_temporal);
+    let phase = |s: &Span| match s {
+        Span::Duration(d) => PhaseSpan::Ns(d.nanos),
+        Span::Units(u) => PhaseSpan::Units(*u),
+    };
+    let period = phase(&params.period);
+    let offset = match &params.offset {
+        Some(o) => phase(o),
+        None if temporal => PhaseSpan::Ns(0),
+        None => PhaseSpan::Units(0.0),
+    };
+    let zone = match clock_dtype {
+        Some(DataType::Datetime(_, Some(tz))) => {
+            Some(crate::windows::canonical_zone(tz.as_str()).map_err(|_| {
+                format!(
+                    "{WHO}: {f}: {name} reads each row's phase on the wall clock of the clock \
+                     column's time zone, but {:?} is not a zone it can read. Convert the clock \
+                     to a named zone, such as with .dt.convert_time_zone(\"Europe/Amsterdam\").",
+                    tz.as_str()
+                )
+            })?)
+        }
+        _ => None,
+    };
+    let def = ProfileDef {
+        stat: params.stat,
+        buckets: params.buckets,
+        period,
+        offset,
+        zone,
+        half_life: half_life.value(),
+        closed: op.closed,
+        input: x,
+        weight,
+        min_weight: params.min_weight,
+        bias: op.bias,
+        cap: params
+            .max_state_bytes
+            .unwrap_or(crate::windows::PROFILE_STATE_BYTES),
+    };
+    if def.bytes() > def.cap {
+        return Err(format!(
+            "{WHO}: {f}: {name} holds {} bytes a group, {} buckets of {} bytes each, past its \
+             max_state_bytes of {}. Raise max_state_bytes to at least {}, or take fewer \
+             buckets.",
+            def.bytes(),
+            def.buckets,
+            crate::windows::PROFILE_BUCKET_BYTES,
+            def.cap,
+            def.bytes()
+        )
+        .into());
+    }
+    Ok(def)
 }
 
 fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
@@ -597,6 +706,8 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
         bare: None,
         increments: Vec::new(),
         spans: Vec::new(),
+        profiles: Vec::new(),
+        profile_columns: Vec::new(),
     };
     // Increments first: an operator's input may read them.
     for f in &config.formulas {
@@ -661,7 +772,13 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
                 continue;
             }
             let key = hidden(op);
-            if p.columns.iter().any(|(k, _)| *k == key) {
+            if p.columns.iter().any(|(k, _)| *k == key) || p.profile_columns.contains(&key) {
+                continue;
+            }
+            if let Some(params) = &op.profile {
+                let def = profile_def(config, input, &mut p, &f.name, op, params, &incr_schema)?;
+                p.profiles.push(def);
+                p.profile_columns.push(key);
                 continue;
             }
             let direction = op.direction();
@@ -735,8 +852,14 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
             p.columns.push((key, p.ops.len() - 1));
         }
     }
+    for (pi, key) in std::mem::take(&mut p.profile_columns)
+        .into_iter()
+        .enumerate()
+    {
+        p.columns.push((key, p.ops.len() + pi));
+    }
     debug_assert!(
-        !(p.ops.is_empty() && p.increments.is_empty()),
+        !(p.ops.is_empty() && p.increments.is_empty() && p.profiles.is_empty()),
         "checked per formula"
     );
     p.bare = config
@@ -1282,7 +1405,10 @@ impl WindowsRun {
             let dtype = evaluated.get(&f.name).expect("aliased").clone();
             output.insert(f.name.as_str().into(), dtype);
         }
-        let mut core = if p.ops.is_empty() {
+        let mut core = if !p.profiles.is_empty() {
+            Windows::with_profiles(p.kernels, p.ops, p.profiles, cfg)
+                .map_err(|e| format!("{WHO}: {e}"))?
+        } else if p.ops.is_empty() {
             // Increments alone: the core carries a kernel that reads nothing,
             // so rows pass straight through it. A sum over no window, read
             // at every row.
@@ -2873,6 +2999,7 @@ impl WindowsRun {
         }
         if file.core.kernels() != run.core.kernels()
             || file.core.ops() != run.core.ops()
+            || file.core.profiles() != run.core.profiles()
             || same_clock(file.core.clock_cfg()) != same_clock(run.core.clock_cfg())
         {
             return Err(format!(

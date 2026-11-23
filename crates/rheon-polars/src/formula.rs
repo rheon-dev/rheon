@@ -30,7 +30,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::span::Span;
-use crate::windows::{Closed, Direction, OpKind, Partial, Stat};
+use crate::windows::{
+    Closed, Direction, OpKind, PROFILE_STATE_BYTES_CEILING, Partial, ProfileStat, Stat,
+};
 
 /// A literal, as JSON carries it.
 #[derive(Debug, Clone, PartialEq)]
@@ -108,9 +110,29 @@ pub struct OpNode {
     /// A quantile's level (`ewm_quantile`, `rewm_quantile`), in (0, 1);
     /// `None` for every other operator.
     pub quantile: Option<f64>,
+    /// A profile's (`ewm_profile`) own parameters; `None` for every other
+    /// operator.
+    pub profile: Option<Box<ProfileParams>>,
+}
+
+/// What an `ewm_profile` takes beside the window operators' parameters.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProfileParams {
+    pub period: Span,
+    pub offset: Option<Span>,
+    pub buckets: u32,
+    pub stat: ProfileStat,
+    pub min_weight: f64,
+    pub weight: Option<Node>,
+    pub max_state_bytes: Option<u64>,
 }
 
 impl OpNode {
+    /// The trees beside the input the operator reads: a profile's weight.
+    pub fn trees(&self) -> impl Iterator<Item = &Node> {
+        self.profile.iter().filter_map(|p| p.weight.as_ref())
+    }
+
     /// Backward or forward; `increment` reads back one row and is backward.
     pub fn direction(&self) -> Direction {
         self.kind.direction()
@@ -146,6 +168,33 @@ impl OpNode {
         }
         if let Some(q) = self.quantile {
             m.insert("quantile".into(), json!(q));
+        }
+        if let Some(p) = &self.profile {
+            // A profile has no `min_samples` and no `partial`: its weight
+            // withholds it.
+            m.remove("min_samples");
+            m.insert(
+                "period".into(),
+                serde_json::to_value(&p.period).expect("a span is JSON"),
+            );
+            if let Some(o) = &p.offset {
+                m.insert(
+                    "offset".into(),
+                    serde_json::to_value(o).expect("a span is JSON"),
+                );
+            }
+            m.insert("buckets".into(), json!(p.buckets));
+            m.insert("stat".into(), json!(p.stat.name()));
+            if p.stat != ProfileStat::Mean {
+                m.insert("bias".into(), json!(self.bias));
+            }
+            m.insert("min_weight".into(), json!(p.min_weight));
+            if let Some(w) = &p.weight {
+                m.insert("weight".into(), w.to_json());
+            }
+            if let Some(b) = p.max_state_bytes {
+                m.insert("max_state_bytes".into(), json!(b));
+            }
         }
         Value::Object(m)
     }
@@ -419,7 +468,22 @@ impl Node {
                     partial: None,
                     bias: false,
                     quantile: None,
+                    profile: None,
                 }))
+            }
+            "ewm_profile" => {
+                let name = "ewm_profile";
+                arity(2)?;
+                let input = Node::from_json(&args[0])?;
+                input.no_window_operator(name)?;
+                let Value::Object(params) = &args[1] else {
+                    return Err(format!(
+                        "formula: {name:?} takes its parameters as an object, but it has {}. \
+                         Give them as an object, such as {{\"period\": \"1d\"}}.",
+                        short(&args[1])
+                    ));
+                };
+                profile_of(input, params).map(Node::Op)
             }
             name if OpKind::parse(name).is_some() => {
                 let kind = OpKind::parse(name).expect("checked");
@@ -446,6 +510,7 @@ impl Node {
                     partial: None,
                     bias: false,
                     quantile: None,
+                    profile: None,
                 };
                 let var = kind.stat().is_some_and(Stat::is_var);
                 let quantile = kind.stat() == Some(Stat::Quantile);
@@ -663,6 +728,9 @@ impl Node {
             Node::Op(op) => {
                 out.push(op);
                 op.input.collect(out);
+                for w in op.trees() {
+                    w.collect(out);
+                }
             }
         }
     }
@@ -683,7 +751,12 @@ impl Node {
             }
             Node::Lit(_) => {}
             Node::Call(_, args) => args.iter().for_each(|a| a.collect_columns(out)),
-            Node::Op(op) => op.input.collect_columns(out),
+            Node::Op(op) => {
+                op.input.collect_columns(out);
+                for w in op.trees() {
+                    w.collect_columns(out);
+                }
+            }
         }
     }
 
@@ -693,7 +766,9 @@ impl Node {
         match self {
             Node::Col(_) | Node::Lit(_) => false,
             Node::Call(n, args) => n == name || args.iter().any(|a| a.contains_call(name)),
-            Node::Op(op) => op.input.contains_call(name),
+            Node::Op(op) => {
+                op.input.contains_call(name) || op.trees().any(|w| w.contains_call(name))
+            }
         }
     }
 
@@ -713,7 +788,12 @@ impl Node {
             }
             Node::Lit(_) => {}
             Node::Call(_, args) => args.iter().for_each(|a| a.collect_columns_ref(out)),
-            Node::Op(op) => op.input.collect_columns_ref(out),
+            Node::Op(op) => {
+                op.input.collect_columns_ref(out);
+                for w in op.trees() {
+                    w.collect_columns_ref(out);
+                }
+            }
         }
     }
 
@@ -856,6 +936,171 @@ impl<'de> Deserialize<'de> for Node {
 pub struct Formula {
     pub name: String,
     pub tree: Node,
+}
+
+/// An `ewm_profile` node from its parameters, each checked by name.
+fn profile_of(input: Node, params: &Map<String, Value>) -> Result<OpNode, String> {
+    let name = "ewm_profile";
+    let mut op = OpNode {
+        kind: OpKind::EwmProfile,
+        input: Box::new(input),
+        half_life: None,
+        window_size: None,
+        closed: Closed::Right,
+        min_samples: 0,
+        partial: None,
+        bias: false,
+        quantile: None,
+        profile: None,
+    };
+    let (mut period, mut offset, mut buckets, mut stat) = (None, None, None, ProfileStat::Mean);
+    let (mut min_weight, mut weight, mut max_state_bytes) = (0.0, None, None);
+    let mut bias = None;
+    for (k, v) in params {
+        match k.as_str() {
+            "half_life" => op.half_life = Some(span_of(name, k, v)?),
+            "window_size" => {
+                return Err(format!(
+                    "{name}: window_size is not yet taken: a profile decays by its half_life \
+                     alone. Remove window_size."
+                ));
+            }
+            "closed" => {
+                op.closed = Closed::parse(v.as_str().unwrap_or("")).ok_or_else(|| {
+                    format!(
+                        "{name}: closed must be \"right\", \"left\", \"both\" or \"none\", \
+                         but it is {}. Set closed to one of those words.",
+                        short(v)
+                    )
+                })?;
+            }
+            "period" => period = Some(span_of(name, k, v)?),
+            "offset" => offset = Some(span_of(name, k, v)?),
+            "buckets" => {
+                buckets = Some(
+                    v.as_u64()
+                        .and_then(|b| u32::try_from(b).ok())
+                        .filter(|&b| b >= 1)
+                        .ok_or_else(|| {
+                            format!(
+                                "{name}: buckets must be a whole number from 1 to {}, but it \
+                                 is {}. Set buckets to the number of phases of the period, \
+                                 such as 24 for the hours of a day.",
+                                u32::MAX,
+                                short(v)
+                            )
+                        })?,
+                );
+            }
+            "stat" => {
+                stat = v.as_str().and_then(ProfileStat::parse).ok_or_else(|| {
+                    format!(
+                        "{name}: stat must be \"mean\", \"var\" or \"std\", but it is {}. \
+                         Set stat to one of those words.",
+                        short(v)
+                    )
+                })?;
+            }
+            "bias" => {
+                bias = Some(v.as_bool().ok_or_else(|| {
+                    format!(
+                        "{name}: bias must be true or false, but it is {}. Set bias to true or \
+                         false.",
+                        short(v)
+                    )
+                })?);
+            }
+            "min_weight" => {
+                min_weight = v.as_f64().filter(|w| w.is_finite() && *w >= 0.0).ok_or_else(|| {
+                    format!(
+                        "{name}: min_weight must be a finite number of 0 or more, but it is {}. \
+                         Set min_weight to the weight a phase needs before it is read, or 0.",
+                        short(v)
+                    )
+                })?;
+            }
+            "weight" => {
+                let w = Node::from_json(v)?;
+                w.no_window_operator(name)?;
+                weight = Some(w);
+            }
+            "max_state_bytes" => {
+                let ceiling = PROFILE_STATE_BYTES_CEILING;
+                max_state_bytes = Some(v.as_u64().filter(|&b| b >= 1 && b <= ceiling).ok_or_else(
+                    || {
+                        format!(
+                            "{name}: max_state_bytes must be a whole number from 1 to {ceiling} \
+                             (64 MiB), but it is {}. Set it within that range, or leave it out \
+                             for 262144 (256 KB).",
+                            short(v)
+                        )
+                    },
+                )?);
+            }
+            other => {
+                return Err(format!(
+                    "{name}: {other:?} is not one of its parameters, which are period, buckets, \
+                     half_life, stat, closed, offset, weight, min_weight, bias and \
+                     max_state_bytes. Remove {other:?}, or correct its name."
+                ));
+            }
+        }
+    }
+    let Some(h) = &op.half_life else {
+        return Err(format!(
+            "{name}: half_life is not set, but a profile needs it. Set half_life to a positive \
+             number of clock units or a duration, or to inf for no decay."
+        ));
+    };
+    if h.value().is_nan() || h.value() <= 0.0 {
+        return Err(format!(
+            "{name}: half_life must be above 0, but it is {h}. Set half_life to a positive \
+             number of clock units or a duration, or to inf for no decay."
+        ));
+    }
+    let Some(period) = period else {
+        return Err(format!(
+            "{name}: period is not set, but a profile needs it: the span the phase repeats \
+             over. Set period, such as \"1d\" for the time of day."
+        ));
+    };
+    if !(period.value().is_finite() && period.value() > 0.0) {
+        return Err(format!(
+            "{name}: period must be finite and above 0, but it is {period}. Set period to a \
+             positive number of clock units or a duration, such as \"1d\"."
+        ));
+    }
+    if let Some(o) = &offset
+        && !o.value().is_finite()
+    {
+        return Err(format!(
+            "{name}: offset must be finite, but it is {o}. Set offset to where the period \
+             starts after its default start, such as \"9h30m\"."
+        ));
+    }
+    let Some(buckets) = buckets else {
+        return Err(format!(
+            "{name}: buckets is not set, but a profile needs it: how many equal phases the \
+             period is cut into. Set buckets, such as 24 for the hours of a day."
+        ));
+    };
+    if bias.is_some() && stat == ProfileStat::Mean {
+        return Err(format!(
+            "{name}: bias is given, but only a variance or a standard deviation takes it. \
+             Remove bias, or set stat to \"var\" or \"std\"."
+        ));
+    }
+    op.bias = bias.unwrap_or(false);
+    op.profile = Some(Box::new(ProfileParams {
+        period,
+        offset,
+        buckets,
+        stat,
+        min_weight,
+        weight,
+        max_state_bytes,
+    }));
+    Ok(op)
 }
 
 fn span_of(name: &str, key: &str, v: &Value) -> Result<Span, String> {

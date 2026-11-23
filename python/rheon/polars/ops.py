@@ -224,13 +224,14 @@ import polars as pl
 
 from rheon._errors import RefusedValueError
 from rheon._renamed import renamed_function
-from rheon.polars._formula import operator
+from rheon.polars._formula import operator, profile
 
 if TYPE_CHECKING:
     from rheon._duration import Duration
 
 __all__ = [
     "ewm_mean",
+    "ewm_profile",
     "ewm_quantile",
     "ewm_rate",
     "ewm_std",
@@ -1282,3 +1283,181 @@ def increment(input: str | pl.Expr) -> pl.Expr:
     sums near 1e10, loses about four of a double's sixteen digits.
     """
     return operator("increment", input)
+
+
+def ewm_profile(
+    input: str | pl.Expr,
+    *,
+    period: float | Duration,
+    buckets: int,
+    half_life: float | Duration,
+    stat: Literal["mean", "var", "std"] = "mean",
+    closed: Literal["right", "left", "both", "none"] = "right",
+    offset: float | Duration | None = None,
+    weight: str | pl.Expr | None = None,
+    min_weight: float = 0.0,
+    bias: bool | None = None,
+    max_state_bytes: int | None = None,
+) -> pl.Expr:
+    """The EW mean or spread of a column at each row's phase of a period.
+
+    Use it for a seasonal profile, such as the typical volatility of each
+    hour of the trading day, or the delay of each hour of a transit day, read
+    at each row's own hour. The profile is the input to an adjustment that
+    the call composes: ``x - profile`` for an additive one, ``x / profile``
+    or ``x / std_profile`` for a multiplicative one. With ``closed="left"``
+    the profile a row reads holds no row of its own time, the row itself
+    included, so the adjustment reads only what was known before the row.
+
+    .. rubric:: Parameters
+
+    ``input``
+        The values the profile reads: a column name, or an element-wise
+        expression of the row, such as ``pl.col("ret") ** 2`` or
+        :func:`increment`. It may hold no other window operator.
+    ``period``
+        The span the phase repeats over: a duration such as ``"1d"`` or
+        ``"1w"`` on a temporal clock, a number of clock units on a numeric
+        one, or a number of rows without a clock. A calendar unit (``"1mo"``,
+        ``"1q"``, ``"1y"``) is refused, since a month has no fixed length.
+    ``buckets``
+        How many equal phases the period is cut into: 24 for each hour of a
+        day, 7 for each day of a week, 168 for each hour of a week.
+    ``half_life``
+        How fast a row's weight fades with its distance in clock time from the
+        row the profile is read at, whatever its phase: a row ``half_life``
+        away weighs half as much, so a phase not seen for a long time weighs
+        little. A number of clock units, a duration on a temporal clock, or
+        ``float("inf")`` for no decay.
+    ``stat``
+        ``"mean"`` (the default), ``"var"`` or ``"std"``: the weighted mean
+        of each phase's rows, or their weighted variance about it, or its
+        root.
+    ``closed``
+        ``"right"`` (the default), as :func:`ewm_mean` and Polars'
+        ``rolling_*_by`` take it: a row reads the profile with every row of
+        its own stamp in it, its own included, known once the stamp closes.
+        ``"left"`` leaves the stamp's rows out, so the value is known as the
+        stamp arrives, from earlier rows alone. ``"both"`` reads as ``"right"``
+        and ``"none"`` as ``"left"``.
+    ``offset``
+        Where the period starts after its default start: a duration such as
+        ``"9h30m"`` for a session that opens at 09:30, or ``"6d"`` for a
+        week that starts on Sunday. The default start is midnight, the
+        Monday of a week for a whole number of weeks (as Polars'
+        ``dt.truncate`` starts one), and 0 on a numeric clock.
+    ``weight``
+        Each row's weight: a column name or an element-wise expression of the
+        row. ``None`` (the default) weighs every row 1. A row whose weight is
+        null, NaN, infinite or not above 0 adds nothing.
+    ``min_weight``
+        The weight a phase needs before it is read, counted at the row's
+        time, after its decay. Default 0: a phase with any weight is read,
+        and one with none is null.
+    ``bias``
+        For ``stat="var"`` or ``"std"`` only. ``False`` (the default)
+        corrects the weighted second moment for the weights' number and
+        inequality, as :func:`ewm_var` does; ``True`` reports it as it is.
+    ``max_state_bytes``
+        The most bytes one group's profile may hold, a whole number from 1
+        to 64 MiB. Default ``None``, 262,144 (256 KB). A profile holds 48
+        bytes a bucket, so the default holds 5,461 buckets; a call past its
+        cap is refused before it reads a row, naming its bytes.
+
+    .. rubric:: Returns
+
+    A ``pl.Expr`` that :func:`rheon.polars.stream.with_windows` computes as a
+    column, one profile per group. It is null where the row's phase has no
+    weight, or less than ``min_weight``; for a variance, also where one
+    row's weight fills the phase.
+
+    .. rubric:: Raises
+
+    ``TypeError``
+        When ``input`` or ``weight`` is neither a column name nor a
+        ``pl.Expr``, ``period``, ``half_life`` or ``offset`` is neither a
+        number nor a duration, ``buckets`` or ``max_state_bytes`` is not an
+        integer, ``min_weight`` is not a number (each a
+        :class:`~rheon.WrongTypeError`), or ``bias`` is not ``True`` or
+        ``False``.
+    ``ValueError``
+        When ``period`` or ``half_life`` is not above 0, ``buckets`` is below
+        1, ``stat`` or ``closed`` is not one of its words, ``min_weight`` is
+        negative or not finite, or ``max_state_bytes`` is below 1 or above
+        64 MiB.
+
+    .. rubric:: Examples
+
+    The mean of each hour of the day, read at every row's own hour, with the
+    hour before 09:00 seen on two days:
+
+    .. code-block:: python
+
+        from datetime import datetime
+
+        import polars as pl
+        from rheon import polars as rp
+
+        df = pl.DataFrame(
+            {
+                "t": [
+                    datetime(2026, 1, 5, 8, 30),
+                    datetime(2026, 1, 5, 9, 30),
+                    datetime(2026, 1, 6, 8, 15),
+                    datetime(2026, 1, 6, 9, 45),
+                ],
+                "delay": [4.0, 1.0, 6.0, 2.0],
+            }
+        )
+        out = rp.stream.with_windows(
+            df,
+            hourly=rp.ewm_profile(
+                "delay", period="1d", buckets=24, half_life=float("inf")
+            ),
+            before=rp.ewm_profile(
+                "delay", period="1d", buckets=24, half_life=float("inf"), closed="left"
+            ),
+            clock="t",
+            gap_cap="7d",
+        )
+        print(out["hourly"].to_list(), out["before"].to_list())
+
+    .. code-block:: text
+
+        [4.0, 1.0, 5.0, 1.5] [None, None, 4.0, 1.0]
+
+    .. rubric:: Notes
+
+    **The phase** is the row's place in the period, read from its own clock
+    alone: ``t − t.dt.truncate(period)``, Polars' own, less the offset. On a
+    clock with a time zone it is read on the wall clock in the column's own
+    zone, as Polars' ``dt`` namespace reads a zoned value: on the day the
+    clocks go forward, 05:00 is phase 5h, though four hours have passed
+    since midnight, so a rush hour stays in its own bucket across the
+    change. Without a clock the phase counts the group's rows of weight
+    above 0. Row ``i`` falls in bucket ``floor(buckets · phase / period)``.
+
+    **The statistic.** Each bucket keeps the weighted moments of its rows,
+    each row weighed by its weight times ``0.5 ** (age / half_life)``, its
+    age the clock between it and the row read: ``V1 = Σ w``, ``V2 = Σ w²``,
+    the mean ``m = Σ w x / V1`` and ``M2 = Σ w (x − m)²``, in Welford's form.
+    The variance is ``M2 / V1`` times ``V1² / (V1² − V2)`` unless ``bias``.
+    A bucket decays by the clock whether or not a row falls in it.
+
+    **The state** is a group's buckets, ``48 · buckets`` bytes, whatever the
+    stream's length. The oracle is Polars' ``group_by`` over the phase on
+    one chunk, with the decayed weights written out.
+    """
+    return profile(
+        input,
+        period=period,
+        buckets=buckets,
+        half_life=half_life,
+        stat=stat,
+        closed=closed,
+        offset=offset,
+        weight=weight,
+        min_weight=min_weight,
+        bias=bias,
+        max_state_bytes=max_state_bytes,
+    )

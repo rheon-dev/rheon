@@ -407,6 +407,8 @@ pub(super) struct Parts<'a> {
     pub(super) n_wait: u32,
     /// Forward kernels: each row of a run waits on them too.
     pub(super) n_forward: u32,
+    /// The profile operators, after the window operators.
+    pub(super) profiles: &'a [super::ProfileDef],
 }
 
 /// A group a pass over several has met.
@@ -717,6 +719,7 @@ impl Windows {
             scratch_sum,
             n_wait,
             n_forward: *n_forward,
+            profiles: &[],
         };
         let cols = Cols {
             whole: Whole::Slices(rows.values),
@@ -1004,6 +1007,7 @@ impl Windows {
             scratch_sum,
             n_wait,
             n_forward: *n_forward,
+            profiles: &[],
         };
         let n_inputs = rows.values.len();
         let mut xg = std::mem::take(&mut m.xg);

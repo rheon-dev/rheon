@@ -58,6 +58,7 @@ OPERATORS = (
     "ewm_quantile",
     "rewm_quantile",
     "increment",
+    "ewm_profile",
 )
 
 #: The operators that take ``bias``: a variance's own (task 212).
@@ -367,6 +368,8 @@ def operators(tree: Any) -> list[list[Any]]:
         if head in OPERATORS:
             out.append(node)
             walk(node[1])
+            if len(node) > 2 and isinstance(node[2], dict) and "weight" in node[2]:
+                walk(node[2]["weight"])
         elif head not in ("col", "lit"):
             for arg in node[1:]:
                 walk(arg)
@@ -395,6 +398,8 @@ def columns(tree: Any) -> list[str]:
             return
         elif head in OPERATORS:
             walk(node[1])
+            if len(node) > 2 and isinstance(node[2], dict) and "weight" in node[2]:
+                walk(node[2]["weight"])
         else:
             for arg in node[1:]:
                 walk(arg)
@@ -686,3 +691,128 @@ def operator(
             f"{who}: quantile is given, but only ewm_quantile takes it. Leave out quantile."
         )
     return operator_column([name, tree, params])
+
+
+#: A profile's ``max_state_bytes`` at most: 64 MiB.
+PROFILE_STATE_BYTES_CEILING = 64 << 20
+
+#: What a profile reads of each phase.
+PROFILE_STATS = ("mean", "var", "std")
+
+
+def profile(
+    input: Any,
+    *,
+    period: Any,
+    buckets: Any,
+    half_life: Any,
+    stat: Any = "mean",
+    closed: Any = "right",
+    offset: Any = None,
+    weight: Any = None,
+    min_weight: Any = 0.0,
+    bias: Any = None,
+    max_state_bytes: Any = None,
+    who: str = "rp.ewm_profile",
+) -> pl.Expr:
+    """The expression of an ``ewm_profile`` node, each parameter checked
+    here by name, written with the keys the native reader writes back, so
+    the two spell its column alike."""
+    tree = _input_tree(who, input)
+    if half_life is None:
+        raise TypeError(
+            f"{who}: half_life is required, but it is not given. Give half_life in clock units, "
+            f"or inf for no decay."
+        )
+    if period is None:
+        raise TypeError(
+            f'{who}: period is required, but it is not given. Give period, such as "1d" for the '
+            f"time of day."
+        )
+    params: dict[str, Any] = {
+        "half_life": _span(who, "half_life", half_life, inf_ok=True),
+        "period": _span(who, "period", period, inf_ok=False),
+    }
+    if offset is not None:
+        params["offset"] = _offset(who, offset)
+    if closed not in ("right", "left", "both", "none"):
+        raise ValueError(
+            f'{who}: closed must be "right", "left", "both" or "none", but it is {closed!r}. '
+            f"Set closed to one of those words."
+        )
+    params["closed"] = closed
+    wrong = isinstance(buckets, bool) or not isinstance(buckets, numbers.Integral)
+    if wrong or not 1 <= buckets <= 2**32 - 1:
+        msg = (
+            f"{who}: buckets must be a whole number from 1 to {2**32 - 1}, but it is "
+            f"{buckets!r}. Set buckets to the number of phases of the period, such as 24 for "
+            f"the hours of a day."
+        )
+        raise WrongTypeError(msg) if wrong else ValueError(msg)
+    params["buckets"] = int(buckets)
+    if stat not in PROFILE_STATS:
+        raise ValueError(
+            f'{who}: stat must be "mean", "var" or "std", but it is {stat!r}. Set stat to one '
+            f"of those words."
+        )
+    params["stat"] = stat
+    if stat != "mean":
+        if bias is None:
+            bias = False
+        if not isinstance(bias, bool):
+            raise TypeError(
+                f"{who}: bias must be True or False, but it is of type {type(bias).__name__}. "
+                f"Set bias to True or False."
+            )
+        params["bias"] = bias
+    elif bias is not None:
+        raise TypeError(
+            f'{who}: bias is given, but only stat="var" or "std" takes it. Leave out bias.'
+        )
+    wrong = isinstance(min_weight, bool) or not isinstance(min_weight, numbers.Real)
+    if wrong or not (math.isfinite(min_weight) and min_weight >= 0):
+        msg = (
+            f"{who}: min_weight must be a finite number of 0 or more, but it is "
+            f"{min_weight!r}. Set min_weight to the weight a phase needs before it is read, "
+            f"or 0."
+        )
+        raise WrongTypeError(msg) if wrong else ValueError(msg)
+    params["min_weight"] = float(min_weight)
+    if weight is not None:
+        params["weight"] = _input_tree(f"{who}: weight", weight)
+    if max_state_bytes is not None:
+        wrong = isinstance(max_state_bytes, bool) or not isinstance(
+            max_state_bytes, numbers.Integral
+        )
+        if wrong or not 1 <= max_state_bytes <= PROFILE_STATE_BYTES_CEILING:
+            msg = (
+                f"{who}: max_state_bytes must be a whole number from 1 to "
+                f"{PROFILE_STATE_BYTES_CEILING} (64 MiB), but it is {max_state_bytes!r}. Set it "
+                f"within that range, or leave it out for 262144 (256 KB)."
+            )
+            raise WrongTypeError(msg) if wrong else ValueError(msg)
+        params["max_state_bytes"] = int(max_state_bytes)
+    return operator_column(["ewm_profile", tree, params])
+
+
+def _offset(who: str, value: Any) -> float | str:
+    """A profile's offset: any finite span, 0 or negative included, where
+    every other span is above 0."""
+    if isinstance(value, numbers.Real) and not isinstance(value, bool):
+        if not math.isfinite(value):
+            raise ValueError(
+                f"{who}: offset must be finite, but it is {value!r}. Set offset to where the "
+                f'period starts after its default start, such as "9h30m".'
+            )
+        return float(value)
+    if isinstance(value, (str, timedelta)) and not isinstance(value, bool):
+        if isinstance(value, timedelta) and value <= timedelta(0):
+            raise ValueError(
+                f"{who}: offset must be above 0 as a duration, but it is {value!r}. Give it as "
+                f'a positive duration within the period, such as "9h30m".'
+            )
+        return _span(who, "offset", value, inf_ok=False)
+    raise TypeError(
+        f"{who}: offset must be a number or a duration, but it is of type "
+        f'{type(value).__name__}. Give it in clock units, or as a duration such as "9h30m".'
+    )

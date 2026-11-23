@@ -321,6 +321,18 @@ impl<'de> Deserialize<'de> for Targets {
                                  known at its own row is a column: make it with {make}"
                             )));
                         }
+                        if tree
+                            .operators()
+                            .iter()
+                            .any(|o| o.kind == crate::windows::OpKind::EwmProfile)
+                        {
+                            return Err(serde::de::Error::custom(format!(
+                                "target {name:?}: a formula target holds ewm_profile, which \
+                                 reads the rows before each row and is a feature, not a target; \
+                                 make it a column with rp.stream.with_windows and subtract it \
+                                 there"
+                            )));
+                        }
                         defs.push(TargetDef::formula(name, tree));
                         continue;
                     }
