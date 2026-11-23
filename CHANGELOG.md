@@ -725,6 +725,14 @@ model that only the new build has is listed as an addition and passes.
   damaged file whose ring held a NaN loaded and read a wrong statistic on
   every row the NaN stayed in the ring. The bank feeds it only finite
   residuals, so no output moves.
+- **A pooled audit whose counters pass `distinct_cap` drops the counters
+  below the cut** (review 2026-11-23, AUDIT-1). Merging two columns' counts
+  past the cap takes the `(cap + 1)`-th largest count from every counter;
+  a counter below it was taken below zero, which wrapped to nearly `2^64`
+  in a release build (a debug build panicked). Two groups pooled under a
+  cap of 2, counts 10, 8, 6 and 2, read a `top_count` of `2^63 - 1` and an
+  `equal_by_chance` of `5e35`, and the merged state no longer loaded. That
+  counter now goes, as Misra-Gries' merge drops each one at the cut.
 - **A window looking ahead whose far edge is the input's last row is whole
   at the end of the input** (PLAN 565). Under `closed="right"` or `"both"`,
   `rp.ewm_sum`, `rp.ewm_mean`, `rp.ewm_rate` and `rp.ewm_quantile` with

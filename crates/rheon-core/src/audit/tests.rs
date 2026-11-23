@@ -1854,3 +1854,33 @@ fn an_emptied_table_is_replaced_from_the_fresh_table_cap_and_kept_below_it() {
         }
     }
 }
+
+/// A merge whose counters number at least `cap + 2` takes the `(cap + 1)`-th
+/// largest count from every counter, those below it included: they go, as
+/// Agarwal et al.'s merge drops every counter at or below the cut, and none
+/// is left below zero (review 2026-11-23, AUDIT-1: the review's own case,
+/// two groups pooled under a cap of 2, where `2 - 6` wrapped to `2^64 - 4`).
+#[test]
+fn a_counter_below_the_cut_goes_and_wraps_nothing() {
+    let capped = AuditCfg {
+        distinct_cap: 2,
+        ..cfg(1)
+    };
+    let a_rows: Vec<f64> = [vec![1.0; 10], vec![2.0; 8]].concat();
+    let b_rows: Vec<f64> = [vec![3.0; 6], vec![4.0; 2]].concat();
+    let mut a = audit_of(&capped, &a_rows);
+    a.merge(&audit_of(&capped, &b_rows)).unwrap();
+    // Counts 10, 8, 6, 2: the cut is 6, so 1.0 keeps 4, 2.0 keeps 2.
+    assert_eq!(
+        a.columns[0].counts,
+        Counts {
+            counts: [(key(1.0), 4), (key(2.0), 2)].into_iter().collect(),
+            decrements: 6,
+            over: true,
+            unordered: false,
+        }
+    );
+    assert!(a.has_shape(), "the merged state loads");
+    let c = a.column(0);
+    assert_eq!((c.top_value, c.top_count, c.second_count), (1.0, 4, 2));
+}

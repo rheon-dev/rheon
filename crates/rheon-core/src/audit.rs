@@ -600,7 +600,11 @@ impl Counts {
             let mut c: Vec<u64> = self.counts.values().copied().collect();
             c.sort_unstable_by(|a, b| b.cmp(a));
             let cut = c[cap];
-            self.counts.values_mut().for_each(|e| *e -= cut);
+            // A counter below the cut goes with those at it: none is less
+            // than nothing.
+            self.counts
+                .values_mut()
+                .for_each(|e| *e = e.saturating_sub(cut));
             self.counts.retain(|_, e| *e > 0);
             self.decrements += cut;
             self.over = true;
