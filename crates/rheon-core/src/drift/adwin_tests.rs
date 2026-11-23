@@ -213,3 +213,205 @@ fn a_saved_detector_goes_on_to_the_bit() {
     assert!(flags > 0);
     assert_eq!(a, b);
 }
+
+/// The levels held are the exponential histogram's: one with no rows, two
+/// at the first merge (the sixth row at `M = 5`), and the count a model of
+/// the buckets' counts gives as it grows.
+#[test]
+fn the_levels_held_follow_the_merges() {
+    let mut a = Adwin::new(AdwinCfg {
+        delta: 1e-12,
+        ..cfg()
+    });
+    assert_eq!(a.levels(), 1);
+    let (mut counts, mut s) = (vec![0usize], 41u64);
+    for i in 1..=400usize {
+        assert!(!a.update(lcg(&mut s)));
+        counts[0] += 1;
+        let mut lv = 0;
+        while counts[lv] == 6 {
+            counts[lv] -= 2;
+            if lv + 1 == counts.len() {
+                counts.push(0);
+            }
+            counts[lv + 1] += 1;
+            lv += 1;
+        }
+        assert_eq!(a.levels(), counts.len(), "row {i}");
+        assert_eq!(a.levels() == 1, i <= 5, "row {i}");
+    }
+    assert!(a.levels() >= 4);
+}
+
+/// `sound` refuses each way a state can be out of shape, alone, and takes the
+/// shape just inside each bound.
+#[test]
+fn a_restored_windows_shape_is_checked_bound_by_bound() {
+    let mut a = Adwin::new(AdwinCfg {
+        delta: 1e-12,
+        ..cfg()
+    });
+    let mut s = 3u64;
+    for _ in 0..90 {
+        a.update(lcg(&mut s));
+    }
+    assert!(a.sound());
+    let with = |f: &dyn Fn(&mut Adwin)| {
+        let mut b = a.clone();
+        f(&mut b);
+        b.sound()
+    };
+    // Settings: open at 0 and at 1, closed inside.
+    assert!(!with(&|b| b.delta = 0.0));
+    assert!(with(&|b| b.delta = 1e-300));
+    assert!(!with(&|b| b.delta = 1.0));
+    assert!(with(&|b| b.delta = 1.0 - f64::EPSILON));
+    assert!(!with(&|b| b.delta = f64::NAN));
+    // The most levels: 63 are held, 64 are not.
+    let empty = |n: usize| {
+        let mut b = Adwin::new(cfg());
+        b.levels = vec![VecDeque::new(); n];
+        b.sound()
+    };
+    assert!(empty(63) && !empty(64) && !empty(65) && !empty(0));
+    assert!(!with(&|b| b.clock = 0) && with(&|b| b.clock = 1));
+    assert!(!with(&|b| b.max_buckets = 0));
+    assert!(!with(&|b| b.max_width = 0));
+    assert!(!with(&|b| b.width += 1.0));
+}
+
+/// The cut's bound, term by term: both sides of `ε` to the last bit, for
+/// parts of unequal size and `L > 1`, so each of the two `1/m` terms and the
+/// shift by `L` is read, and a gap of `-ε` is a cut as `+ε` is.
+#[test]
+fn the_cut_is_the_bernstein_bound_to_the_bit() {
+    let mut a = Adwin::new(AdwinCfg {
+        clock: 1 << 40,
+        min_window_length: 5,
+        ..cfg()
+    });
+    let mut s = 29u64;
+    for _ in 0..40 {
+        a.update(lcg(&mut s) * 3.0);
+    }
+    assert!(a.variance() > 1.0);
+    for (n0, n1, d) in [(20.0, 7.0, 4.0), (6.0, 34.0, 5.5), (9.0, 9.0, 2.0)] {
+        let m_recip = 1.0 / (n0 - 5.0 + 1.0) + 1.0 / (n1 - 5.0 + 1.0);
+        let eps = (2.0 * m_recip * (a.variance() / a.width()) * d).sqrt() + 2.0 / 3.0 * d * m_recip;
+        let above = f64::from_bits(eps.to_bits() + 1);
+        let below = f64::from_bits(eps.to_bits() - 1);
+        for sign in [1.0, -1.0] {
+            assert!(!a.cut(n0, n1, sign * eps, d), "{n0} {n1} at the bound");
+            assert!(!a.cut(n0, n1, sign * below, d), "{n0} {n1} below");
+            assert!(a.cut(n0, n1, sign * above, d), "{n0} {n1} above");
+        }
+    }
+}
+
+/// The window as a list of rows, scanned longhand: every row its own bucket
+/// (`M` past the rows fed), the oldest split `W0 | W1` whose gap passes the
+/// bound cut, the oldest row dropped, the scan over again on the shorter
+/// window. The detector's flags and the window's width are this scan's, row
+/// by row, for several `L`, deltas and both `restart`s: so `d`, `1/m`, the
+/// order of the splits, the repeat after a cut and the skipped empty `W1`
+/// are each held, not only the flags' count.
+#[test]
+fn the_scan_is_the_papers_longhand() {
+    fn first_cut(win: &[f64], delta: f64, l: u64) -> bool {
+        let w = win.len() as f64;
+        let mean = win.iter().sum::<f64>() / w;
+        let var: f64 = win.iter().map(|x| (x - mean) * (x - mean)).sum();
+        let d = (2.0 * w.ln() / delta).ln();
+        (1..win.len()).any(|k| {
+            let (n0, n1) = (k as f64, (win.len() - k) as f64);
+            if (k as u64) < l || ((win.len() - k) as u64) < l {
+                return false;
+            }
+            let lf = l as f64;
+            let m = 1.0 / (n0 - lf + 1.0) + 1.0 / (n1 - lf + 1.0);
+            let eps = (2.0 * m * (var / w) * d).sqrt() + 2.0 / 3.0 * d * m;
+            let gap = win[..k].iter().sum::<f64>() / n0 - win[k..].iter().sum::<f64>() / n1;
+            gap.abs() > eps
+        })
+    }
+    for (delta, l, restart) in [
+        (0.05, 1, true),
+        (0.05, 1, false),
+        (0.3, 3, false),
+        (0.002, 5, false),
+        (0.9, 2, true),
+    ] {
+        let mut a = Adwin::new(AdwinCfg {
+            delta,
+            clock: 1,
+            max_buckets: 5000,
+            min_window_length: l,
+            grace_period: 4,
+            restart,
+            ..cfg()
+        });
+        let (mut win, mut s, mut flags) = (Vec::<f64>::new(), 31u64, 0);
+        for i in 0..700 {
+            let level = match i / 150 {
+                0 | 2 => 0.0,
+                1 => 1.5,
+                _ => 0.6,
+            };
+            let x = level + lcg(&mut s);
+            win.push(x);
+            let mut expect = false;
+            if win.len() > 4 {
+                while first_cut(&win, delta, l) {
+                    win.remove(0);
+                    expect = true;
+                }
+            }
+            let got = a.update(x);
+            if restart && expect {
+                win.clear();
+            }
+            assert_eq!(got, expect, "delta {delta} L {l} row {i}");
+            assert_eq!(a.width() as usize, win.len(), "delta {delta} L {l} row {i}");
+            flags += usize::from(got);
+        }
+        assert!(flags >= 2, "delta {delta} L {l}: {flags} cuts");
+    }
+}
+
+/// `L = 0` lets a part of no rows through the length test, and no split is
+/// tested with an empty newer part, whose mean is a sum left over by
+/// rounding over no rows: 0.1 added three times and taken off three times
+/// leaves 2.7e-17, which divided by 0 would be infinite and cut every
+/// constant stream.
+#[test]
+fn a_split_with_no_newer_rows_is_never_tested() {
+    let mut a = Adwin::new(AdwinCfg {
+        delta: 0.5,
+        clock: 1,
+        grace_period: 0,
+        min_window_length: 0,
+        ..cfg()
+    });
+    for i in 0..6 {
+        assert!(!a.update(0.1), "row {i}");
+    }
+    assert_eq!(a.width(), 6.0);
+}
+
+/// A window past `max_width` loses buckets until it is not, and no scan
+/// goes on past the buckets held: the widths follow the cap row by row.
+#[test]
+fn the_cap_is_held_row_by_row_and_a_scan_ends() {
+    let mut a = Adwin::new(AdwinCfg {
+        max_width: 40,
+        max_buckets: 2,
+        delta: 1e-12,
+        ..cfg()
+    });
+    let mut s = 37u64;
+    for i in 0..500 {
+        a.update(lcg(&mut s));
+        assert!(a.width() <= 40.0, "row {i}: {}", a.width());
+        assert!(i < 100 || a.width() >= 12.0, "row {i}: {}", a.width());
+    }
+}
