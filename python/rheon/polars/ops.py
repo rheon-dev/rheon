@@ -192,9 +192,10 @@ every stream's first ``window_size`` gives:
 A reset discards a window: it gives null, and the row is never dropped.
 Under ``session_gap="reset"`` a session change is a reset, so it discards
 the windows rather than cuts them. A forward window under ``closed="right"``
-or ``"both"`` whose far edge is the last row before a cut or a reset is
-whole: every row it covers has arrived, so it gives its value. A forward
-window still open when the input ends is null. Under ``group`` a forward
+or ``"both"`` whose far edge is the last row before a cut or a reset, or
+its group's last row when the input ends, is whole: every row it covers has
+arrived, so it gives its value. A forward window whose far edge lies past
+the last row of the input is null. Under ``group`` a forward
 window needs a clock column, since only a clock ends the windows of a group
 that falls silent. ``partial`` needs a ``window_size``: without one no
 window is cut short, so ``partial`` alone is refused.
@@ -396,12 +397,12 @@ def ewm_mean(
         )
         polars = rows.select(pl.col("x").ewm_mean_by(pl.col("t").cast(pl.Int64), half_life="1i"))
         print(out["back"].round(4).to_list(), polars["x"].round(4).to_list())   # equal
-        print(out["ahead"].round(4).to_list())   # null where a window was open at the input's end
+        print(out["ahead"].round(4).to_list())   # null where a window reaches past the input's end
 
     .. code-block:: text
 
         [1.0, 1.5, 2.25, 3.125, 4.0625] [1.0, 1.5, 2.25, 3.125, 4.0625]
-        [2.0, 3.0, None, None, None]
+        [2.0, 3.0, 4.0, None, None]
 
     .. rubric:: See also
 

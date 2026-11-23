@@ -55,7 +55,10 @@ TOOL_OUTPUT_DIRS = {"mutants.out", "mutants.out.old", "target", ".venv", "htmlco
 #: state fixture was the biggest legitimate one, a hex constant, until
 #: `crates/rheon-polars/src/bank.rs` passed 200 KB with the readiness fields
 #: (task 87, 2026-09-21); a data file would still be caught, only later.
-MAX_SOURCE_BYTES = 250_000
+#: `crates/rheon-polars/src/windows.rs` passed 250 KB with the end-of-input
+#: rule for a window looking ahead, its brute-force oracle's test module
+#: included, and the cap moved to 260 KB with it.
+MAX_SOURCE_BYTES = 260_000
 
 #: Prose gets more room: `docs/PLAN.md` was the design log and passed 200 KB
 #: when tasks 45-56 were prepared (2026-09-05), and 1 MB with tasks 221-231

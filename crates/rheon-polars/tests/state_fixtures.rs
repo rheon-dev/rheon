@@ -2778,6 +2778,7 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
             {
                 assert_eq!(name, frozen_name, "{what}");
                 let want = moved_since(&from_ipc(want), &from_ipc(now));
+                let want = whole_at_the_end_of_the_input(f.name, name, &want, &from_ipc(now));
                 let want = if old_scale {
                     new_after_load(f.name, name, &from_ipc(f.input), &want, &from_ipc(now))
                 } else {
@@ -3154,6 +3155,41 @@ fn added_since(kept: &DataFrame, now: &DataFrame) -> DataFrame {
         })
         .collect();
     DataFrame::new(kept.height(), columns).unwrap()
+}
+
+/// The window runs' `finish` frames, in which a window that looks ahead
+/// whose far edge is the input's last row is whole since PLAN 565 and was
+/// null before it. The windows' state is the same bytes, so a kept state
+/// continues to the same numbers but for those cells: `kept` (a kept
+/// fixture's frame `frame` of kind `kind`) takes `now`'s value, the
+/// current fixture's, in each cell it holds null where `now` holds a value,
+/// in the column `ahead`, and is the same everywhere else.
+fn whole_at_the_end_of_the_input(
+    kind: &str,
+    frame: &str,
+    kept: &DataFrame,
+    now: &DataFrame,
+) -> DataFrame {
+    if !kind.starts_with("with_windows") || frame != "finish" || kept.height() != now.height() {
+        return kept.clone();
+    }
+    let (Ok(k), Ok(n)) = (kept.column("ahead"), now.column("ahead")) else {
+        return kept.clone();
+    };
+    let (Ok(k), Ok(n)) = (
+        k.as_materialized_series().f64(),
+        n.as_materialized_series().f64(),
+    ) else {
+        return kept.clone();
+    };
+    let taken: Float64Chunked = k
+        .iter()
+        .zip(n.iter())
+        .map(|(k, n)| if k.is_none() { n } else { k })
+        .collect_ca(k.name().clone());
+    let mut out = kept.clone();
+    out.replace("ahead", taken.into_column()).unwrap();
+    out
 }
 
 /// The groups a kind's continuation first sees, after the load: each is a

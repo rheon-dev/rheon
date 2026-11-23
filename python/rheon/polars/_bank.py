@@ -10,7 +10,7 @@ import os
 import warnings
 from collections.abc import Collection, Iterable, Iterator, Mapping
 from pathlib import Path
-from typing import IO, TYPE_CHECKING, Any, Literal, NoReturn, overload
+from typing import IO, TYPE_CHECKING, Any, Literal, NamedTuple, NoReturn, overload
 
 import polars as pl
 
@@ -594,11 +594,18 @@ class ModelBank:
         .. rubric:: Returns
 
         ``frame``'s rows that the bank has not learned, of the same type, in
-        the same order: a ``LazyFrame`` stays lazy. A row is kept when, in
-        every spec that reads a clock, its clock is after its group's last
-        clock, its group is one that spec has not seen, or its clock is null.
-        A null clock is left for :meth:`fit_predict` to judge. A row at its
-        group's last clock counts as learned.
+        the same order: a ``LazyFrame`` stays lazy. A row that some spec that
+        reads a clock has strictly before its group's last clock is dropped:
+        the bank is past it. Any other row is kept when at least one spec has
+        its clock after its group's last clock, its group is one that spec has
+        not seen, or its clock is null. A null clock is left for
+        :meth:`fit_predict` to judge. A row at its group's last clock counts as
+        learned by that spec, but only a spec that has learned the row can
+        say so: one spec's tie does not drop a row another spec has not
+        learned. A row of weight 0 at a last clock is kept, unless a spec that
+        learns from it at a positive weight has it there: it learns nothing and
+        moves no clock, so a resumed bank takes it again harmlessly, as it
+        takes the predict row of ``rp.stream.embargo``.
 
         .. rubric:: Raises
 
@@ -651,9 +658,11 @@ class ModelBank:
 
         The comparison is exact. A temporal clock is compared in the integer
         nanoseconds the bank keeps, whatever its unit or time zone, and an
-        integer clock in integers. Since a row at its group's last clock
-        counts as learned, a stream that repeats a clock value and was saved
-        between two rows with that value loses the later ones.
+        integer clock in integers. Since a row of positive weight at its
+        group's last clock counts as learned, a stream that repeats a clock
+        value and was saved between two rows with that value loses the later
+        ones. A kept row goes to every spec, so a spec that has learned it
+        already, at its last clock, learns it again.
         """
         if not isinstance(frame, (pl.DataFrame, pl.LazyFrame)):
             msg = (
@@ -671,13 +680,24 @@ class ModelBank:
         if not clock_runs_on:
             _refuse_a_clock_that_may_start_again(self.specs)
         schema = frame.lazy().collect_schema()
-        keep: pl.Expr | None = None
+        # Each spec's verdict on a row, gathered over the specs that read a clock.
+        verdicts: list[_Verdict] = []
         for spec, groups in zip(self.specs, self._native.last_clocks(), strict=True):
             clock = spec.get("clock")
             if clock is None:
                 continue
-            unlearned = _unlearned(spec["name"], clock, spec.get("group"), groups, schema)
-            keep = unlearned if keep is None else keep & unlearned
+            verdicts.append(
+                _unlearned(
+                    spec["name"], clock, spec.get("group"), spec.get("weight"), groups, schema
+                )
+            )
+        keep: pl.Expr | None = None
+        if verdicts:
+            before = pl.any_horizontal(*(v.before for v in verdicts))
+            new = pl.any_horizontal(*(v.new for v in verdicts))
+            tied_at_zero = pl.any_horizontal(*(v.tied_at_zero for v in verdicts))
+            tied = pl.any_horizontal(*(v.tied for v in verdicts))
+            keep = ~before & (new | (tied_at_zero & ~tied))
         if keep is None:
             msg = (
                 "ModelBank.skip_learned: no spec reads a clock, so the bank has no place on a "
@@ -1963,8 +1983,8 @@ class ModelBank:
             targets, at least one usable target. A formula target's row counts
             when it is released with a value, once its window has closed.
         ``rows_zero_weight``
-            The processed rows with weight 0: the clock moved, and nothing was
-            learned.
+            The processed rows with weight 0: they were scored, nothing was
+            learned, and the clock stayed where it was.
         ``weight_sum``
             The sum of the processed rows' weights, 1 for a row without a
             weight column. It is undecayed, so it is not the output's
@@ -4114,16 +4134,32 @@ def _refuse_a_clock_that_may_start_again(specs: list[dict[str, Any]]) -> None:
         raise ValueError(msg)
 
 
+class _Verdict(NamedTuple):
+    """One spec's reading of each row against its groups' last clocks
+    (:meth:`ModelBank.skip_learned`): four exclusive, never-null booleans, at
+    most one true a row, none when the spec reads no clock for it."""
+
+    #: Strictly before the group's last clock: the bank is past the row.
+    before: pl.Expr
+    #: After the last clock, in a group the spec has not seen, or on a null
+    #: clock: kept for the bank to judge.
+    new: pl.Expr
+    #: At the last clock, with a weight the spec learns from.
+    tied: pl.Expr
+    #: At the last clock with weight 0: it learns nothing and counts in no
+    #: clock, so replaying it is harmless.
+    tied_at_zero: pl.Expr
+
+
 def _unlearned(
     name: str,
     clock: str,
     group: str | None,
+    weight: str | None,
     groups: list[tuple[str | None, float | None, int | None, int | None]],
     schema: pl.Schema,
-) -> pl.Expr:
-    """True on the rows of one spec's input its state has not learned: a clock
-    after the group's last one, a group the bank has not seen, or a null clock
-    (:meth:`ModelBank.skip_learned`)."""
+) -> _Verdict:
+    """One spec's :class:`_Verdict` of each row of its input."""
     for column, role in ((clock, "clock"), (group, "group")):
         if column is not None and column not in schema:
             msg = (
@@ -4211,4 +4247,10 @@ def _unlearned(
                 .then(pl.lit(lasts[None], dtype=kind))
                 .otherwise(last)
             )
-    return value.is_null() | last.is_null() | (value > last)
+    new = value.is_null() | last.is_null() | (value > last)
+    before = ~new & (value < last)
+    at_last = ~new & ~before
+    zero = pl.lit(False)
+    if weight is not None and weight in schema:
+        zero = pl.col(weight).cast(pl.Float64, strict=False).eq(0.0).fill_null(False)
+    return _Verdict(before=before, new=new, tied=at_last & ~zero, tied_at_zero=at_last & zero)

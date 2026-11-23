@@ -269,8 +269,10 @@ partial="drop": 2898 rows, 0 null
 
 **A window that looks ahead under `closed="right"` or `"both"` gives its
 value under any `partial` when its far edge falls on the last row before a
-gap or a reset.** That row is in the window and no later row can join it, so the
-window is whole. For a formula target, a reset still starts the model
+gap or a reset, or on its group's last row when the input ends.** That row is
+in the window and no later row can join it, so the window is whole. A window
+whose far edge lies past the last row of the input is null, since rows past
+the input would have joined it. For a formula target, a reset still starts the model
 over and drops every row waiting to be learned, a whole one with the rest.
 
 ## Quantiles and a robust scale
@@ -326,7 +328,10 @@ by it without reading targets not yet known.
 ## Saving and resuming a window run
 
 **A window run's state holds the rows still waiting for their windows to
-close, so a run resumed from it returns those rows before its own.** Two
-runs then give what one run gives. [Resume a window
+close, so a run resumed from it returns those rows before its own.** A
+window that looks back and waits for the next stamp is not one of them. At
+the end of the input it is read as it stands. A resumed run refuses an input
+that starts at the last stamp, so no row can join it. Two runs then give what
+one run gives. [Resume a window
 run](how-to/resume-a-window-run.md) shows how to save and load the state,
 and which inputs a resumed run takes or refuses.

@@ -105,6 +105,36 @@ model that only the new build has is listed as an addition and passes.
   `corrchange.since_change`, `corrchange.withheld_reason`,
   `seqtest.withheld_reason`.
 
+- **`rp.stream.with_windows(..., save_state=...)` returns the newest
+  stamp's rows** (PLAN 567). At the end of the whole input, the windows
+  looking back that waited on the last stamp (under `closed="right"` or
+  `"both"`) were held in the state and came out with the next run. A run
+  resumed on an input that starts at that stamp is refused, so no row can
+  join them: they are now read as they stand, and the rows whose windows
+  have all resolved leave with this run, the last stamp's included. Only the
+  rows with a window looking ahead still open are saved. One run equals any
+  split into saved runs, to the bit, at every split point between stamps;
+  the windows state's format is unchanged. With `group` the refusal needed
+  no extension: the stream's clock refuses a row at any group's last stamp
+  that follows a later row, as a step back. A run that the slice `head(n)`
+  stopped holds its rows as before.
+- **A zero-weight row leaves the clock where it was**, in the wording of
+  the docs: the `weight` parameter's, `embargo`'s, `rows_zero_weight`'s and
+  two Notes said it advanced the clock. The behavior is as it was.
+
+- **`skip_learned` (and `--skip-learned`) keeps a row one spec has not
+  learned** (PLAN 566). A row was kept only if every spec that reads a
+  clock had it after its group's last clock, so one spec's tie at its last
+  clock dropped a row that another spec, grouping differently, had not
+  learned, though the bank takes that row. A row is now dropped when any
+  spec has it strictly before its group's last clock, and kept when at
+  least one spec has it after, in a group it has not seen, or on a null
+  clock. A row of weight 0 at a last clock is kept too, unless a spec
+  learned it at a positive weight there: it learns nothing and counts in no
+  clock, so the predict rows of `rp.stream.embargo` survive a resume. A
+  spec that has already learned a kept row learns it again, the cost of one
+  list of rows for every spec. A row that was kept is still kept.
+
 - **`bocpd` takes its hazard in rows or on the clock** (PLAN 547).
   `hazard_rows` is the expected rows between changepoints, `H =
   1/hazard_rows` the chance of a break after each row of positive weight on
@@ -688,6 +718,15 @@ model that only the new build has is listed as an addition and passes.
   call that was right before, under those settings, now needs the argument.
 
 ### Fixed
+
+- **A window looking ahead whose far edge is the input's last row is whole
+  at the end of the input** (PLAN 565). Under `closed="right"` or `"both"`,
+  `rp.ewm_sum`, `rp.ewm_mean`, `rp.ewm_rate` and `rp.ewm_quantile` with
+  `reverse=True` gave null for a row whose window's far edge fell on its
+  group's last row, where the same window before a gap or a reset was
+  whole. Nothing later can join it, so it now gives its value. A window
+  reaching past the last row stays null. A formula target of a spec learns
+  those rows' targets, which it did not. Only those windows' values move.
 
 - **`ModelBank.write_json` of a `bocpd` with its hazard on the clock**
   (PLAN 547). Under a clock hazard the empty run's log joint is `-inf`

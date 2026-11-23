@@ -1855,8 +1855,10 @@ def test_a_state_refuses_a_group_or_session_column_of_another_dtype(tmp_path: An
     same = rp.stream.with_windows(
         second.with_columns(pl.col("g").cast(pl.Int64)), **y, load_state=state, group="g", **CLOCK
     )
-    # The row the state held comes out first, then the new rows.
-    assert same["t"].to_list() == [3.0, 4.0, 5.0]
+    # The first run returned every row, the last stamp's too (a window looking
+    # back that waits on it is read as it stands at the save), so only the
+    # new rows come out.
+    assert same["t"].to_list() == [4.0, 5.0]
     sessions = {**CLOCK, "session": "s"}
     rp.stream.with_windows(first.with_columns(s=pl.lit(1)), **y, save_state=state, **sessions)
     with pytest.raises(
@@ -2035,13 +2037,15 @@ def test_a_forward_window_whose_far_edge_is_the_last_row_before_a_break_is_whole
         )
         return rp.stream.with_windows(frame, f=f, **call)
 
-    # t = 1: (1, 3] holds 4 + 8; t = 2 and t = 3 reach past the stretch; the
-    # last stretch is still open when the input ends.
-    assert run(df)["f"].to_list() == [6.0, 12.0, None, None, None, None, None]
-    assert run(df, closed="both")["f"].to_list() == [7.0, 14.0, None, None, None, None, None]
+    # t = 1: (1, 3] holds 4 + 8; t = 2 and t = 3 reach past the stretch. The
+    # last stretch ends with the input: t = 10's window (10, 12] has its far
+    # edge on the last row, and is whole (PLAN 565); t = 11 and 12 reach past
+    # it, unresolved.
+    assert run(df)["f"].to_list() == [6.0, 12.0, None, None, 96.0, None, None]
+    assert run(df, closed="both")["f"].to_list() == [7.0, 14.0, None, None, 112.0, None, None]
     dropped = run(df, partial="drop")
     assert dropped["t"].to_list() == [0.0, 1.0, 10.0, 11.0, 12.0]
-    assert dropped["f"].to_list() == [6.0, 12.0, None, None, None]
+    assert dropped["f"].to_list() == [6.0, 12.0, 96.0, None, None]
     # The rule that stands: the far edge outside the window.
     assert run(df, closed="left")["f"].to_list() == [3.0, 6.0, None, None, 48.0, None, None]
     assert run(df, closed="none")["f"].to_list() == [2.0, 4.0, None, None, 32.0, None, None]
@@ -2089,15 +2093,24 @@ def test_a_reset_keeps_a_forward_window_whose_far_edge_is_the_last_row_before_it
     step_back: dict[str, Any] = {"restart_after_step_back": 1.0}
     reset: dict[str, Any] = {"session": "s", "session_gap": "reset"}
     # t = 1: (1, 3] holds 4 + 8, and [1, 3] under "both" 2 + 4 + 8; t = 2 and
-    # t = 3 reach past the stretch; the last stretch is open at the end.
-    assert run(back, **step_back)["f"].to_list() == [6.0, 12.0, None, None, None, None, None]
-    assert run(back, "both", **step_back)["f"].to_list() == [7.0, 14.0, *[None] * 5]
+    # t = 3 reach past the stretch; the last stretch ends with the input, so
+    # its row at -7 has its window (-7, -5] whole (PLAN 565).
+    assert run(back, **step_back)["f"].to_list() == [6.0, 12.0, None, None, 96.0, None, None]
+    assert run(back, "both", **step_back)["f"].to_list() == [
+        7.0,
+        14.0,
+        None,
+        None,
+        112.0,
+        None,
+        None,
+    ]
     assert run(sessions, **reset)["f"].to_list() == [6.0, 12.0, None, None, None, None]
     assert run(sessions, "both", **reset)["f"].to_list() == [7.0, 14.0, *[None] * 4]
     for partial in ("keep", "drop"):
         out = run(back, partial=partial, **step_back)
         assert out["t"].to_list() == back["t"].to_list(), partial
-        assert out["f"].to_list() == [6.0, 12.0, None, None, None, None, None], partial
+        assert out["f"].to_list() == [6.0, 12.0, None, None, 96.0, None, None], partial
     # The rule that stands: the far edge outside the window, where the row on
     # it closed the window already.
     assert run(back, "left", **step_back)["f"].to_list() == [3.0, 6.0, None, None, 48.0, None, None]
@@ -2138,9 +2151,11 @@ def test_a_window_looking_ahead_with_group_needs_a_clock_column() -> None:
     with pytest.raises(ValueError, match=msg):
         rp.stream.with_windows(df, f=fwd, like=like)
     # With a clock column: group a's window is cut once the stream's clock is
-    # past the cap; b's row at t = 1 holds 4 + 8; the rest are open at the end.
+    # past the cap; b's row at t = 1 holds 4 + 8; its row at t = 2 has its
+    # window (2, 4] whole at the end of the input, which is its last row; the
+    # rest reach past it.
     clocked = rp.stream.with_windows(df, f=fwd, group="g", clock="t", gap_cap=1.5)
-    assert clocked["f"].to_list() == [None, 12.0, None, None, None]
+    assert clocked["f"].to_list() == [None, 12.0, 24.0, None, None]
     lazy = df.lazy().rheon.with_windows(f=fwd, group="g", clock="t", gap_cap=1.5).collect()
     assert lazy.equals(clocked)
     assert df.rheon.with_windows(f=fwd, group="g", clock="t", gap_cap=1.5).equals(clocked)
@@ -2152,7 +2167,8 @@ def test_a_window_looking_ahead_with_group_needs_a_clock_column() -> None:
     # no group, the one stream's rows.
     back = rp.stream.with_windows(df, b=rp.ewm_sum("x", half_life=math.inf), group="g")
     assert back["b"].to_list() == [1.0, 2.0, 6.0, 14.0, 30.0]
-    assert rp.stream.with_windows(df, f=fwd)["f"].to_list() == [6.0, 12.0, None, None, None]
+    # The row at t = 2 has its window (2, 4] whole: its far edge is the last row.
+    assert rp.stream.with_windows(df, f=fwd)["f"].to_list() == [6.0, 12.0, 24.0, None, None]
 
 
 def test_a_state_resumes_under_another_spelling_of_the_same_length(tmp_path: Any) -> None:
