@@ -51,7 +51,7 @@ spec and clock:
 | tolerated mutant | a mutant that differs from the original only at an exact tie or by less than the computation's own error, so no test a correct implementation passes can kill it; listed apart, not as equivalent ([Mutation survivors](#mutation-survivors)) |
 | IC | the correlation of prediction with target, `rp.eval`'s `ic` |
 | hard rule N | the numbered hard rules in `CLAUDE.md` |
-| a model kind | one of the 27 model types a spec can name; `MINIMAL` in `tests/test_model_registry.py` holds one spec of each |
+| a model kind | one of the 28 model types a spec can name; `MINIMAL` in `tests/test_model_registry.py` holds one spec of each |
 | the ten regression models | the models the per-model sweeps run: `ewridge`, `rls`, `lasso`, `kalman`, `huber`, `quantile`, `sgd`, `pa`, `ftrl` and `holt`, which `REGRESSIONS` in `tests/test_model_registry.py` lists |
 | the window operators | exponentially weighted means, variances, sums, rates and quantiles of a column along the clock, with or without a hard window, which `rp.stream.with_windows` runs over a stream: `rp.ewm_mean`, `rp.ewm_sum`, `rp.ewm_rate`, `rp.ewm_quantile`, `rp.ewm_var` and `rp.ewm_std` look back, and the first four look ahead under `reverse=True` |
 | a formula target | a spec's target written as an expression over a window operator that looks ahead, such as `rp.ewm_mean("mid", ...) - pl.col("mid")`, which the bank resolves once the window has closed |
@@ -185,6 +185,7 @@ in `tests/test_second_opinion.py`, Vowpal Wabbit among them.
 | `hmm` at fixed parameters | hmmlearn's `GaussianHMM`: the filtered and predicted probabilities, and each row's log-likelihood (`TestHmmIsHmmlearns`) | 1e-10 (1.4e-13 measured) |
 | `rls` | padasip's `FilterRLS`, at unit weights on a row clock (`TestRlsIsPadasips`) | 1e-11 (1.6e-14 measured) |
 | `realized` | the papers' estimators in numpy (`tests/reference_realized.py`) on simulated days and Binance's data; `hfvol` on RV, BV and the jump variation; R's `highfrequency` (`rRVar`, `rBPCov`, `rMPVar`, `rTPQuar`, `BNSjumpTest`, `intradayJumpTest`) and `yuima` (`bns.test`) in `tests/r_oracle/`, their small-sample factors divided out | a few ulps (RV, BV, `lm`), 64 ulps (TV, TQ), 64 units of `cond · ε` (the ratio test) |
+| `power_variation` | the definitions in numpy (`tests/reference_power_variation.py`) on simulated returns with a bid-ask bounce and ETCUSDT's trades; `arch`'s kernel long-run covariances (plain and centered) and `hfhd`'s `krvm` (flat-top Parzen) and `tsrc` (two scales, composed in Polars); R's `yuima` (`mpv`, any powers), `highfrequency` (`rMPVar`, `rKernelCov`) and `sandwich` (`kernHAC`) in `tests/r_oracle/`, their conventions divided out | 16 ulps (one pass, windows), 256 under a decay; 9 ulps (`mpv`, `rMPVar`); 3 ulps (`krvm`, `tsrc`); 4 to 8 ε of a kernel sum's scale `(2H + 1) Σ r²` (`arch`, `rKernelCov`, `kernHAC`) |
 | `seqtest` | `reference.seqtest_ref`, the paper's betting recursion in scalar code, and its closed form where the clip never binds (`tests/test_seqtest.py`) | 1e-12, relative |
 | `emit_drift` | river's `PageHinkley` at `half_life = inf` (`TestAZeroWeightRowIsNotSeen`) | flag for flag |
 | a prediction under `embargo` | river's progressive validation with `delay` (`TestLabelDelayFoldsWhatWasScored`) | 1e-12 |
@@ -267,7 +268,8 @@ and its repository's `LICENSE` is MIT.
 
 **A library that must not be in every contributor's environment, for its
 platforms, gets a group of its own and a CI job of its own.** R's `highfrequency` and `yuima`, the reference
-implementations of the realized measures and the jump tests, are such:
+implementations of the realized measures and the jump tests, and
+`sandwich`'s HAC long-run variance are such:
 they need R. So rpy2 is the `r-oracles` group, and `tests/r_oracle/` is
 collected only under `-m r_oracle` (`tests/conftest.py`).
 `.github/workflows/oracles.yml`'s `r-oracles` job installs R, its packages
