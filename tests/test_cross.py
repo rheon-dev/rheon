@@ -13,6 +13,7 @@ refused by row, and a clock break ending the stamp before.
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,7 @@ import numpy as np
 import polars as pl
 import pytest
 
+from rheon import RheonWarning
 from rheon import polars as rp
 
 TIER = "essential"
@@ -289,3 +291,36 @@ def test_the_state_is_bounded_by_the_operators(tmp_path: Path):
         )
         sizes.append(state.stat().st_size)
     assert abs(sizes[0] - sizes[1]) < 200, sizes
+
+
+def test_a_stamp_past_half_the_cap_warns_once_and_past_the_cap_is_refused():
+    """``8 * (outputs + 1)`` bytes a held row: with one operator column, 16
+    bytes a row of a stamp. A cap of 160 holds a stamp of 10 rows; 6 rows
+    take it past half, which warns once a run; the 11th row of a stamp is
+    refused by row. Under ``"left"`` nothing is held, so no cap is met."""
+
+    def stamp(rows: int, t: float) -> pl.DataFrame:
+        return pl.DataFrame(
+            {
+                "t": [t] * rows,
+                "g": [f"g{i}" for i in range(rows)],
+                "x": [float(i) for i in range(rows)],
+            }
+        )
+
+    small = pl.concat([stamp(5, 0.0), stamp(5, 1.0)])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        run(small, m=rp.cross_mean("x", max_state_bytes=160))
+    big = pl.concat([stamp(6, 0.0), stamp(8, 1.0), stamp(4, 2.0)])
+    with pytest.warns(RheonWarning, match="past half of its max_state_bytes of 160") as caught:
+        out = run(big, m=rp.cross_mean("x", max_state_bytes=160))
+    assert len([w for w in caught if issubclass(w.category, RheonWarning)]) == 1
+    assert out["m"].to_list()[:6] == [2.5] * 6
+    over = pl.concat([stamp(4, 0.0), stamp(11, 1.0)])
+    with pytest.raises(Exception, match=r"at row 14 .*past its max_state_bytes of 160"):
+        run(over, m=rp.cross_mean("x", max_state_bytes=160))
+    # The causal form holds no row.
+    run(over, m=rp.cross_mean("x", closed="left", max_state_bytes=160))
+    with pytest.raises(ValueError, match="max_state_bytes must be a whole number from 1"):
+        rp.cross_std("x", max_state_bytes=0)

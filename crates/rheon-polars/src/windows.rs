@@ -629,6 +629,15 @@ pub enum Refusal {
         now: Option<ClockValue>,
         min_backwards_jump: Option<f64>,
     },
+    /// The cross-group operator `op` (its index among them) would hold
+    /// `bytes` for its open stamp with this row, past its `cap`; the row is
+    /// not taken.
+    StateCap {
+        seq: u64,
+        op: usize,
+        bytes: u64,
+        cap: u64,
+    },
 }
 
 /// Per operator, a segment's sums: the mass-weighted value, the mass and
@@ -2048,7 +2057,9 @@ mod keys;
 mod memo_tests;
 mod plain;
 
-pub use cross::{Cross, CrossClosed, CrossDef, CrossStat};
+pub use cross::{
+    CROSS_STATE_BYTES, CROSS_STATE_BYTES_CEILING, Cross, CrossClosed, CrossDef, CrossStat,
+};
 use keys::IntGroups;
 pub(crate) use keys::{ChunkKeys, session_hashes};
 pub(crate) use plain::PlainRows;
@@ -2432,6 +2443,12 @@ impl Windows {
         self.cross.as_ref().map_or(&[], |c| c.defs())
     }
 
+    /// The first row to take a cross-group operator's state past half of
+    /// its cap, once a run, as `(op, bytes, cap)`, taken by this call.
+    pub fn take_state_warning(&mut self) -> Option<(usize, u64, u64)> {
+        self.cross.as_mut().and_then(|c| c.take_warning())
+    }
+
     pub fn clock_cfg(&self) -> &ClockCfg {
         &self.clock_cfg
     }
@@ -2606,6 +2623,12 @@ impl Windows {
         self.scratch();
         let seq = self.next_seq;
         let gi = row.group;
+        // The cross-group operators' state with this row, before anything
+        // moves: a row that would take an operator past its cap is refused.
+        let cross_held = match &self.cross {
+            Some(c) => Some(c.check_cap(row.clock, seq, self.n_outputs)?),
+            None => None,
+        };
         // A plain step forward on both clocks is never refused: each steps
         // where it stands, with no copy of the state to keep or put back.
         // Any other row steps both on copies, kept only once neither
@@ -2707,6 +2730,9 @@ impl Windows {
                 meta: &mut self.held_meta,
             };
             c.row(row.values, seq, &mut rows);
+            if let Some(held) = cross_held {
+                c.note_held(&held);
+            }
         }
 
         let g = &mut self.groups[gi];

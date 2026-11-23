@@ -602,6 +602,7 @@ def operator(
     bias: Any = None,
     quantile: Any = None,
     weight: Any = None,
+    max_state_bytes: Any = None,
     who: str | None = None,
 ) -> pl.Expr:
     """The expression of operator ``name`` over ``input`` with these
@@ -614,7 +615,15 @@ def operator(
     if name == "increment":
         return operator_column(["increment", tree])
     if name in CROSS:
-        return _cross(name, tree, who, closed=closed, bias=bias, weight=weight)
+        return _cross(
+            name,
+            tree,
+            who,
+            closed=closed,
+            bias=bias,
+            weight=weight,
+            max_state_bytes=max_state_bytes,
+        )
     if half_life is None:
         raise TypeError(
             f"{who}: half_life is required, but it is not given. Give half_life in clock units, "
@@ -701,9 +710,22 @@ def operator(
     return operator_column([name, tree, params])
 
 
-def _cross(name: str, tree: list[Any], who: str, *, closed: Any, bias: Any, weight: Any) -> pl.Expr:
+#: A cross-group operator's ``max_state_bytes`` at most: 64 MiB.
+CROSS_STATE_BYTES_CEILING = 64 << 20
+
+
+def _cross(
+    name: str,
+    tree: list[Any],
+    who: str,
+    *,
+    closed: Any,
+    bias: Any,
+    weight: Any,
+    max_state_bytes: Any,
+) -> pl.Expr:
     """A cross-group operator's node: its stamp (``closed``), a standard
-    deviation's ``bias``, and its weight's tree where one is given."""
+    deviation's ``bias``, its weight's tree and its cap where given."""
     if closed not in ("right", "left"):
         raise ValueError(
             f'{who}: closed must be "right" (the row\'s own stamp) or "left" (the stamp before '
@@ -719,4 +741,16 @@ def _cross(name: str, tree: list[Any], who: str, *, closed: Any, bias: Any, weig
         params["bias"] = bias
     if weight is not None:
         params["weight"] = _input_tree(f"{who}: weight", weight)
+    if max_state_bytes is not None:
+        wrong = isinstance(max_state_bytes, bool) or not isinstance(
+            max_state_bytes, numbers.Integral
+        )
+        if wrong or not 1 <= max_state_bytes <= CROSS_STATE_BYTES_CEILING:
+            msg = (
+                f"{who}: max_state_bytes must be a whole number from 1 to "
+                f"{CROSS_STATE_BYTES_CEILING} (64 MiB), but it is {max_state_bytes!r}. Set it "
+                f"within that range, or leave it out for 262144 (256 KB)."
+            )
+            raise WrongTypeError(msg) if wrong else ValueError(msg)
+        params["max_state_bytes"] = int(max_state_bytes)
     return operator_column([name, tree, params])

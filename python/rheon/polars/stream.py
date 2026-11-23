@@ -76,7 +76,7 @@ from rheon._duration import Duration, duration_text
 from rheon._errors import RefusedValueError, WrongTypeError
 from rheon._rheon import parse_duration
 from rheon._spec import _RENAMED, _RENAMED_KEYWORDS, _renamed_keywords
-from rheon._warnings import _user_stacklevel
+from rheon._warnings import RheonWarning, _user_stacklevel
 from rheon.polars import _formula
 from rheon.polars._bank import ModelBank, _refuse_uint128
 from rheon.polars._clock import clock_nanoseconds
@@ -1784,6 +1784,7 @@ def with_windows(
         for chunk in plan.collect_batches(chunk_size=rows, maintain_order=True):
             read += chunk.height
             out = w.feed(chunk, None if n_rows is None else n_rows - seen)
+            _warn_state(w)
             seen += out.height
             yield from _in_morsels(done(out))
             if n_rows is not None and seen >= n_rows:
@@ -1983,3 +1984,11 @@ def load_checkpoint(source: str | os.PathLike[str] | bytes) -> dict[str, bytes]:
         bytes(source) if isinstance(source, bytes | bytearray | memoryview) else _read_state(source)
     )
     return {name: state for name, _kind, state in _native.load_checkpoint(data)}
+
+
+def _warn_state(run: Any) -> None:
+    """The warning a cross-group operator raised on the chunk, once a run:
+    a stamp took its state past half of its ``max_state_bytes``."""
+    message = run.take_warning()
+    if message is not None:
+        warnings.warn(message, RheonWarning, stacklevel=_user_stacklevel())

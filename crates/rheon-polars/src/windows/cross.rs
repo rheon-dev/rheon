@@ -90,7 +90,15 @@ pub struct CrossDef {
     /// A standard deviation's: the weighted second moment about the mean as
     /// it is, uncorrected for the weights' count (Polars' `bias`).
     pub bias: bool,
+    /// The most bytes the operator's state may hold for its open stamp.
+    pub cap: u64,
 }
+
+/// A cross operator's `max_state_bytes` where the call sets none: 256 KB.
+pub const CROSS_STATE_BYTES: u64 = 256 * 1024;
+
+/// The most `max_state_bytes` may be set to: 64 MiB.
+pub const CROSS_STATE_BYTES_CEILING: u64 = 64 << 20;
 
 /// The weighted moments of one stamp's rows for one operator.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
@@ -151,7 +159,17 @@ pub struct Cross {
     /// Per operator, the last closed stamp's value, for `"left"`; NaN where
     /// there is none since the last clock break.
     prev: Vec<f64>,
+    /// Whether a row has taken an operator past half of its cap: said once a
+    /// run, and kept with the state so a resumed run does not say it again.
+    #[serde(default)]
+    warned: bool,
+    /// That warning, `(op, bytes, cap)`, not yet taken by the caller.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    warning: Option<(usize, u64, u64)>,
 }
+
+/// What each operator would hold with a row ([`Cross::check_cap`]).
+pub(super) struct HeldBytes(Vec<u64>);
 
 /// The held rows a cross operator writes into.
 pub(super) struct Rows<'a> {
@@ -170,7 +188,66 @@ impl Cross {
             open: None,
             acc: vec![Acc::default(); n],
             prev: vec![f64::NAN; n],
+            warned: false,
+            warning: None,
         }
+    }
+
+    /// The bytes each operator's state would hold with the row `seq` at
+    /// `now`, `n_outputs` values a held row: under `"right"`, every row of
+    /// the open stamp is held, its values and its count of open windows,
+    /// until the stamp closes; under `"left"` nothing is held past the row.
+    /// `Err` names the first operator the row would take past its cap.
+    pub(super) fn check_cap(
+        &self,
+        now: Option<ClockValue>,
+        seq: u64,
+        n_outputs: usize,
+    ) -> Result<HeldBytes, super::Refusal> {
+        let rows = match self.open {
+            Some((stamp, first)) if now.is_some() && stamp == now => seq - first + 1,
+            _ => 1,
+        };
+        let per_row = 8 * n_outputs as u64 + std::mem::size_of::<Meta>() as u64;
+        let mut held = Vec::with_capacity(self.defs.len());
+        for (op, def) in self.defs.iter().enumerate() {
+            let bytes = match def.closed {
+                CrossClosed::Right => rows * per_row,
+                CrossClosed::Left => 0,
+            };
+            if bytes > def.cap {
+                return Err(super::Refusal::StateCap {
+                    seq,
+                    op,
+                    bytes,
+                    cap: def.cap,
+                });
+            }
+            held.push(bytes);
+        }
+        Ok(HeldBytes(held))
+    }
+
+    /// After a row is taken: the first to take an operator past half of its
+    /// cap raises the warning, once.
+    pub(super) fn note_held(&mut self, held: &HeldBytes) {
+        if self.warned {
+            return;
+        }
+        if let Some((op, (&bytes, def))) = held
+            .0
+            .iter()
+            .zip(&self.defs)
+            .enumerate()
+            .find(|(_, (b, d))| **b > d.cap / 2)
+        {
+            self.warned = true;
+            self.warning = Some((op, bytes, def.cap));
+        }
+    }
+
+    pub(super) fn take_warning(&mut self) -> Option<(usize, u64, u64)> {
+        self.warning.take()
     }
 
     pub fn defs(&self) -> &[CrossDef] {
@@ -289,6 +366,7 @@ mod tests {
             input: 0,
             weight: Some(1),
             bias,
+            cap: CROSS_STATE_BYTES,
         }
     }
 
@@ -347,6 +425,7 @@ mod tests {
                 input: 0,
                 weight: None,
                 bias: false,
+                cap: CROSS_STATE_BYTES,
             },
             CrossDef {
                 stat: CrossStat::Std,
@@ -354,6 +433,7 @@ mod tests {
                 input: 0,
                 weight: Some(1),
                 bias: true,
+                cap: CROSS_STATE_BYTES,
             },
         ];
         let cfg = ClockCfg {

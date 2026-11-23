@@ -111,6 +111,9 @@ pub struct OpNode {
     /// A cross-group operator's weight, an element-wise formula of the row;
     /// `None` weighs every row 1, and every window operator has none.
     pub weight: Option<Box<Node>>,
+    /// A cross-group operator's cap on its state, where the call sets one;
+    /// `None` for every window operator.
+    pub max_state_bytes: Option<u64>,
 }
 
 impl OpNode {
@@ -158,6 +161,9 @@ impl OpNode {
             }
             if let Some(w) = &self.weight {
                 m.insert("weight".into(), w.to_json());
+            }
+            if let Some(b) = self.max_state_bytes {
+                m.insert("max_state_bytes".into(), json!(b));
             }
         }
         Value::Object(m)
@@ -433,6 +439,7 @@ impl Node {
                     bias: false,
                     quantile: None,
                     weight: None,
+                    max_state_bytes: None,
                 }))
             }
             name if OpKind::parse(name).is_some_and(|k| k.cross().is_some()) => {
@@ -458,6 +465,7 @@ impl Node {
                     bias: false,
                     quantile: None,
                     weight: None,
+                    max_state_bytes: None,
                 };
                 let std = kind == OpKind::CrossStd;
                 for (k, v) in params {
@@ -490,14 +498,28 @@ impl Node {
                             w.no_window_operator(name)?;
                             op.weight = Some(Box::new(w));
                         }
+                        "max_state_bytes" => {
+                            let ceiling = crate::windows::CROSS_STATE_BYTES_CEILING;
+                            op.max_state_bytes =
+                                Some(v.as_u64().filter(|&b| b >= 1 && b <= ceiling).ok_or_else(
+                                    || {
+                                        format!(
+                                            "{name}: max_state_bytes must be a whole number from 1 \
+                                         to {ceiling} (64 MiB), but it is {}. Set it within \
+                                         that range, or leave it out for 262144 (256 KB).",
+                                            short(v)
+                                        )
+                                    },
+                                )?);
+                        }
                         other => {
                             return Err(format!(
                                 "{name}: {other:?} is not one of its parameters, which are \
-                                 closed{}. Remove {other:?}, or correct its name.",
+                                 {}. Remove {other:?}, or correct its name.",
                                 if std {
-                                    ", weight and bias"
+                                    "closed, weight, max_state_bytes and bias"
                                 } else {
-                                    " and weight"
+                                    "closed, weight and max_state_bytes"
                                 }
                             ));
                         }
@@ -531,6 +553,7 @@ impl Node {
                     bias: false,
                     quantile: None,
                     weight: None,
+                    max_state_bytes: None,
                 };
                 let var = kind.stat().is_some_and(Stat::is_var);
                 let quantile = kind.stat() == Some(Stat::Quantile);

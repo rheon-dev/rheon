@@ -720,6 +720,9 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
                     input,
                     weight,
                     bias: op.bias,
+                    cap: op
+                        .max_state_bytes
+                        .unwrap_or(crate::windows::CROSS_STATE_BYTES),
                 });
                 p.cross_columns.push(key);
                 continue;
@@ -2523,10 +2526,59 @@ impl WindowsRun {
         Ok(Some(values))
     }
 
+    /// The cross-group operator `op` (its index among them) in the reader's
+    /// words: its name and the expressions that read it.
+    fn cross_name(&self, op: usize) -> String {
+        let at = self.core.ops().len() + op;
+        let Some((key, _)) = self.k.columns.iter().find(|(_, o)| *o == at) else {
+            return "a cross-group operator".to_owned();
+        };
+        let mut kind = "a cross-group operator";
+        let mut names = Vec::new();
+        for f in &self.k.config.formulas {
+            for o in f.tree.operators() {
+                if hidden(o) == *key {
+                    kind = o.kind.name();
+                    if !names.contains(&f.name.as_str()) {
+                        names.push(f.name.as_str());
+                    }
+                }
+            }
+        }
+        format!("{kind} (in {})", names.join(", "))
+    }
+
+    /// The first row to take a cross-group operator past half of its
+    /// `max_state_bytes`, once a run, as the warning a caller raises.
+    pub fn take_warning(&mut self) -> Option<String> {
+        let (op, bytes, cap) = self.core.take_state_warning()?;
+        Some(format!(
+            "{WHO}: {} holds {bytes} bytes for the rows of one stamp of the clock, past half of \
+             its max_state_bytes of {cap}; a stamp that holds twice as many rows will be \
+             refused. Raise max_state_bytes, or use closed=\"left\", which holds no row.",
+            self.cross_name(op)
+        ))
+    }
+
     /// A row the core refused, as the error naming it.
     fn refusal(&self, r: Refusal, _chunk_base: u64) -> PolarsError {
         let row = |seq: u64| seq - self.run_base + self.skipped;
         match r {
+            Refusal::StateCap {
+                seq,
+                op,
+                bytes,
+                cap,
+            } => {
+                let name = self.cross_name(op);
+                polars_err!(ComputeError:
+                    "{WHO}: {name} would hold {bytes} bytes for the rows of one stamp of the clock \
+                     at row {} (counting from 0), past its max_state_bytes of {cap}. Each row of a \
+                     stamp is held until the stamp closes. Raise max_state_bytes, or use \
+                     closed=\"left\", which holds no row.",
+                    row(seq)
+                )
+            }
             Refusal::Backwards {
                 seq,
                 back,

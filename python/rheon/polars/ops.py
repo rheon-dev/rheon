@@ -1291,6 +1291,7 @@ def cross_mean(
     *,
     weight: str | pl.Expr | None = None,
     closed: Literal["right", "left"] = "right",
+    max_state_bytes: int | None = None,
 ) -> pl.Expr:
     """The mean of a column across every group's row at each stamp of the clock.
 
@@ -1316,6 +1317,15 @@ def cross_mean(
         frame. The row waits for its stamp to close, which the first row of a
         later stamp, or the end of the input, does. ``"left"`` is the stamp
         before the row's own, known as the row arrives.
+    ``max_state_bytes``
+        The most bytes the operator's state may hold, a whole number from 1
+        to 64 MiB. Default ``None``, 262,144 (256 KB). Under ``"right"`` each
+        row of a stamp is held until the stamp closes, ``8 * (outputs + 1)``
+        bytes a row for the call's ``outputs`` operator columns, so the state
+        grows with the rows of one stamp: the run warns once, as a
+        :class:`~rheon.RheonWarning`, when a stamp takes it past half of the
+        cap, and refuses the row that would take it past the cap, naming the
+        row. Under ``"left"`` no row is held.
 
     .. rubric:: Returns
 
@@ -1333,8 +1343,10 @@ def cross_mean(
         When ``input`` or ``weight`` is neither a column name nor a
         ``pl.Expr``.
     ``ValueError``
-        When ``closed`` is neither ``"right"`` nor ``"left"``, or ``input``
-        or ``weight`` holds a window or cross operator.
+        When ``closed`` is neither ``"right"`` nor ``"left"``, ``input`` or
+        ``weight`` holds a window or cross operator, or ``max_state_bytes``
+        is below 1 or above 64 MiB (a :class:`~rheon.WrongTypeError`, also a
+        ``ValueError``, where it is not an integer).
 
     .. rubric:: Notes
 
@@ -1386,7 +1398,9 @@ def cross_mean(
 
         [0.0, 0.02, -0.02, 0.01, -0.01, 0.0]
     """
-    return operator("cross_mean", input, closed=closed, weight=weight)
+    return operator(
+        "cross_mean", input, closed=closed, weight=weight, max_state_bytes=max_state_bytes
+    )
 
 
 def cross_std(
@@ -1395,6 +1409,7 @@ def cross_std(
     weight: str | pl.Expr | None = None,
     closed: Literal["right", "left"] = "right",
     bias: bool = False,
+    max_state_bytes: int | None = None,
 ) -> pl.Expr:
     """The standard deviation of a column across every group's row at each stamp.
 
@@ -1404,7 +1419,7 @@ def cross_std(
 
     .. rubric:: Parameters
 
-    ``input``, ``weight``, ``closed``
+    ``input``, ``weight``, ``closed``, ``max_state_bytes``
         As :func:`cross_mean` takes them.
     ``bias``
         ``False`` (the default) corrects the weighted second moment for the
@@ -1462,4 +1477,11 @@ def cross_std(
 
         [0.0, 1.0, -1.0, 1.0, -1.0, 0.0]
     """
-    return operator("cross_std", input, closed=closed, bias=bias, weight=weight)
+    return operator(
+        "cross_std",
+        input,
+        closed=closed,
+        bias=bias,
+        weight=weight,
+        max_state_bytes=max_state_bytes,
+    )
