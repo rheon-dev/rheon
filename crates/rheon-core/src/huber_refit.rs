@@ -1738,6 +1738,26 @@ mod tests {
     use super::*;
     use crate::oracle::CanonBits;
 
+    /// The buffer's bytes: 8 each for its rows and its runs, 48 for each
+    /// learned row's `|e|` and its place in the tree under the MAD, and its
+    /// first stamp.
+    #[test]
+    fn a_buffers_held_bytes_are_its_rows_runs_and_residuals() {
+        let stamp = std::mem::size_of::<Option<crate::Stamp>>() as u64;
+        let (mut plain, mut mad) = (RefitBuf::new(), RefitBuf::keeping_resid());
+        assert_eq!((plain.held_bytes(), mad.held_bytes()), (stamp, stamp));
+        for b in [&mut plain, &mut mad] {
+            for i in 0..3 {
+                b.learn_scored(&[1.0 + f64::from(i), 2.0], 3.0, 0.5, 1.0, 0.9, 0.9, OPEN);
+            }
+            b.age(0.9, 0.9, OPEN);
+            b.age(0.8, 0.8, OPEN);
+        }
+        // 3 rows of 2 + 4 numbers and 2 runs of 4.
+        assert_eq!(plain.held_bytes(), 8 * (18 + 8) + stamp);
+        assert_eq!(mad.held_bytes(), 8 * (18 + 8) + 48 * 3 + stamp);
+    }
+
     /// [`gram_lower`]'s scalar blocks as a function, the same loop, for the
     /// lanes to be held to (`the_blocked_gram_is_the_row_by_row_loop` holds
     /// `gram_lower`'s own, through whichever path it takes).

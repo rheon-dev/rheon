@@ -140,6 +140,10 @@ mod tests {
                 let mut n = 0u64;
                 loop {
                     n += 1;
+                    // A run is geometric-like: 100,000 rows is hundreds of
+                    // times its mean, so a detector that never flags fails
+                    // here and does not hang.
+                    assert!(n <= 100_000, "h = {h}: no flag in {n} rows");
                     if c.update(normal(&mut g), 1.0) {
                         break;
                     }
@@ -167,6 +171,7 @@ mod tests {
             let mut n = 0u64;
             while !c.update(normal(&mut g) + 1.0, 1.0) {
                 n += 1;
+                assert!(n <= 100_000, "no flag in {n} rows of a shift");
             }
             total += n + 1;
         }

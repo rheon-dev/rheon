@@ -225,8 +225,13 @@ impl Adwin {
     /// `restart` it then starts again empty.
     pub fn update(&mut self, x: f64) -> bool {
         self.insert(x);
-        while self.width > self.max_width as f64 {
+        // Each pass drops a bucket, so no more than the buckets held can be
+        // wanted: a bound that holds the loop to a pass count it cannot reach
+        // unless a pass drops nothing.
+        let mut held = self.levels.iter().map(VecDeque::len).sum::<usize>();
+        while self.width > self.max_width as f64 && held > 0 {
             self.delete_oldest();
+            held -= 1;
         }
         let change = self.detect();
         if change && self.restart {
@@ -314,7 +319,10 @@ impl Adwin {
             return false;
         }
         let l = self.min_window_length as f64;
-        loop {
+        // A pass that cuts drops a bucket and one that does not ends the scan,
+        // so the buckets held and one more are the most passes there can be.
+        let passes = self.levels.iter().map(VecDeque::len).sum::<usize>() + 1;
+        for _ in 0..passes {
             let mut reduce = false;
             let (mut n0, mut n1, mut u0, mut u1) = (0.0, self.width, 0.0, self.total);
             // The width holds until a cut, after which the scan starts over.

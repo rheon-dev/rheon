@@ -127,6 +127,8 @@ use crate::solve::dot_aug;
 use crate::{Decay, RefitStatus, Stamp, WindowClosed};
 
 #[cfg(test)]
+mod mutant_tests;
+#[cfg(test)]
 mod refit_clock_tests;
 #[cfg(test)]
 mod tests;

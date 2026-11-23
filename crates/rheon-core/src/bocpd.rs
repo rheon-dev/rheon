@@ -223,6 +223,8 @@ use crate::solve::{FactorWork, QuadWork, SpdFactor};
 
 mod held;
 #[cfg(test)]
+mod mutant_tests;
+#[cfg(test)]
 mod product_tests;
 mod span;
 #[cfg(test)]

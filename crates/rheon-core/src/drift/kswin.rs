@@ -145,14 +145,18 @@ pub fn ks_critical_h(r: usize, alpha: f64) -> usize {
 fn ks_h(a: &[f64], b: &[f64]) -> usize {
     let r = a.len();
     let (mut i, mut j, mut h) = (0, 0, 0);
-    while i < r && j < r {
+    // Each pass moves a cursor past at least one value, so `2r` passes end
+    // the scan: a bound a pass that moved nothing would meet, not pass.
+    for _ in 0..2 * r {
+        if i >= r || j >= r {
+            break;
+        }
         let v = if a[i] <= b[j] { a[i] } else { b[j] };
-        while i < r && a[i] == v {
-            i += 1;
-        }
-        while j < r && b[j] == v {
-            j += 1;
-        }
+        // The values equal to `v` at each cursor, counted and not looped
+        // over: a cursor that stayed would be a count that is wrong, not an
+        // endless loop.
+        i += a[i..].iter().take_while(|&&x| x == v).count();
+        j += b[j..].iter().take_while(|&&x| x == v).count();
         h = h.max(i.abs_diff(j));
     }
     h

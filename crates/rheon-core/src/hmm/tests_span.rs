@@ -192,3 +192,97 @@ fn the_warm_span_is_checked() {
         assert!(e.contains("warm_span must be a finite number"), "{e}");
     }
 }
+
+// ---- mutants-w11: the warm-up's cap, asked of its own rows only ----
+
+/// The cap holds the rows a warm-up over a span buffers, and no other: a model
+/// with no span, or one already seeded, learns on under a cap of one byte as
+/// a free one does, to the bit.
+#[test]
+fn the_warm_up_cap_is_asked_of_a_span_that_has_not_seeded_only() {
+    let data = stream(80, 3, 9);
+    let controlled = |c: HmmCfg, seeded_at: usize| {
+        let (mut capped, mut free) = (Hmm::new(c.clone()).unwrap(), Hmm::new(c).unwrap());
+        for (i, x) in data.iter().enumerate() {
+            if i == seeded_at {
+                capped.set_cap_for_test(1);
+            }
+            for m in [&mut capped, &mut free] {
+                m.stamp_next(Stamp::Ns(i as i128 * S));
+            }
+            assert_eq!(bits(&mut capped, x), bits(&mut free, x), "row {i}");
+        }
+        assert_eq!(capped.state_over_cap(), None);
+    };
+    // No span: unseeded rows are buffered for 20 rows, with a cap of one byte.
+    controlled(cfg(2, 2), 0);
+    // A span that has seeded.
+    controlled(
+        HmmCfg {
+            warm_rows: 2,
+            warm_clock: Some(4.0),
+            ..cfg(2, 2)
+        },
+        30,
+    );
+}
+
+/// A row refused at the cap ages the model as a row of no weight: `n_eff`
+/// decays by the row's factor, and the row is not learned.
+#[test]
+fn a_refused_warm_up_row_ages_n_eff() {
+    let c = HmmCfg {
+        warm_rows: 2,
+        warm_clock: Some(1e12),
+        decay: Decay::Lam(0.9),
+        ..cfg(2, 2)
+    };
+    let mut m = Hmm::new(c).unwrap();
+    m.set_cap_for_test(m.warm_bytes(100));
+    for (i, x) in stream(5, 4, 3).iter().enumerate() {
+        m.stamp_next(Stamp::Ns(i as i128 * S));
+        m.step(x, &[], 1.0, 1.0);
+    }
+    let before = m.n_eff();
+    assert!(before > 1.0);
+    m.set_cap_for_test(1);
+    m.stamp_next(Stamp::Ns(6 * S));
+    m.step(&[0.5, 0.5], &[], 1.0, 1.0);
+    assert!(m.state_over_cap().is_some());
+    assert_eq!(m.n_eff().to_bits(), (before * 0.9).to_bits());
+    assert_eq!(m.buffer.len(), 5);
+}
+
+/// The warning's flag is state: saved after the warning, it restores raised.
+#[test]
+fn a_warned_flag_survives_a_save() {
+    let c = HmmCfg {
+        warm_rows: 2,
+        warm_clock: Some(1e12),
+        ..cfg(2, 2)
+    };
+    let mut m = Hmm::new(c).unwrap();
+    m.set_cap_for_test(m.warm_bytes(100));
+    for (i, x) in stream(70, 5, 7).iter().enumerate() {
+        m.stamp_next(Stamp::Ns(i as i128 * S));
+        m.step(x, &[], 1.0, 1.0);
+    }
+    assert!(m.warned && m.state_over_cap().is_none());
+    let bytes = rmp_serde::to_vec_named(&m.state()).unwrap();
+    let key = b"\xa6warned";
+    assert!(bytes.windows(key.len()).any(|w| w == key));
+    let back = Hmm::restore(&rmp_serde::from_slice(&bytes).unwrap()).unwrap();
+    assert!(back.warned);
+}
+
+/// The warm-up's cap is `kmeans`' budget in bytes, and its rows are counted
+/// by `kmeans`' own width.
+#[test]
+fn the_warm_up_budget_is_counted_in_bytes() {
+    let m = Hmm::new(cfg(2, 2)).unwrap();
+    assert_eq!(m.warm_cap(), 256 * 1024 * 1024);
+    assert_eq!(
+        m.warm_bytes(1000),
+        (1000 * (std::mem::size_of::<Vec<f64>>() + 3 * 8)) as u64
+    );
+}

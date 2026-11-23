@@ -217,3 +217,55 @@ fn the_state_is_its_ring() {
     assert_eq!(Kswin::state_bytes(100), 848);
     assert_eq!(Kswin::state_bytes(1000), 8048);
 }
+
+/// `sound` takes the level just inside each end of `(0, 1)` and refuses
+/// both ends, and each other shape bound on its own.
+#[test]
+fn a_restored_levels_shape_is_checked_at_both_ends() {
+    let with = |f: &dyn Fn(&mut Kswin)| {
+        let mut k = Kswin::new(KswinCfg::default());
+        f(&mut k);
+        k.sound()
+    };
+    assert!(with(&|_| {}));
+    assert!(!with(&|k| k.alpha = 0.0));
+    assert!(with(&|k| k.alpha = 1e-300));
+    assert!(!with(&|k| k.alpha = 1.0));
+    assert!(with(&|k| k.alpha = 1.0 - f64::EPSILON));
+    assert!(!with(&|k| k.alpha = f64::NAN));
+    assert!(!with(&|k| k.stat_size = 0));
+    assert!(with(&|k| k.stat_size = 50) && !with(&|k| k.stat_size = 51));
+    assert!(with(&|k| k.window = (0..100).map(f64::from).collect()));
+    assert!(!with(&|k| k.window = (0..101).map(f64::from).collect()));
+}
+
+/// The largest gap can fall at the far end of the walk: the samples alternate
+/// through their first halves, and the second half of the older is all below the
+/// second half of the newer, so the gap is built only in the last `r / 2`
+/// passes and a walk stopped short of its end reads half of it.
+#[test]
+fn h_is_read_to_the_end_of_the_walk() {
+    for r in [10usize, 30, 60] {
+        let half = r / 2;
+        let a: Vec<f64> = (0..half)
+            .map(|i| (2 * i) as f64)
+            .chain((0..r - half).map(|i| (1000 + i) as f64))
+            .collect();
+        let b: Vec<f64> = (0..half)
+            .map(|i| (2 * i + 1) as f64)
+            .chain((0..r - half).map(|i| (2000 + i) as f64))
+            .collect();
+        let want = a
+            .iter()
+            .chain(&b)
+            .map(|v| {
+                let ca = a.iter().filter(|x| *x <= v).count();
+                let cb = b.iter().filter(|x| *x <= v).count();
+                ca.abs_diff(cb)
+            })
+            .max()
+            .unwrap();
+        assert_eq!(want, r - half);
+        assert_eq!(ks_h(&a, &b), want, "r = {r}");
+    }
+}

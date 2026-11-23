@@ -818,4 +818,6 @@ impl OnlineModel for Garch {
 }
 
 #[cfg(test)]
+mod mutant_tests;
+#[cfg(test)]
 mod tests;
