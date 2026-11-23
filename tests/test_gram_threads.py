@@ -127,7 +127,16 @@ def gram_bits(bank: rp.ModelBank) -> list:
 #: `own_rows` splits its Gram.
 SPECS = {
     "ewridge-blocked": (lambda t: ridge(t, 64), K, 600, True),
-    "ewridge-pairwise": (lambda t: ridge(t, 64, target_gaps="pairwise"), K, 600, False),
+    # Under `pairwise` the noise gate reads each target's own Kish size,
+    # 5% below the Gram's here (its rows the target's), which holds 300
+    # features at 200 rows past `sqrt(2)` on most rows: a gate of 2 leaves
+    # the fit rows to predict, which the check below needs.
+    "ewridge-pairwise": (
+        lambda t: ridge(t, 64, target_gaps="pairwise", max_error_inflation=2.0),
+        K,
+        600,
+        False,
+    ),
     "ewridge-twin": (
         lambda t: ridge(
             t, 64, session="s", session_gap=1.0, session_shrink=0.5, long_half_life=4 * HL
