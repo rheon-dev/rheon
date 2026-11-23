@@ -415,6 +415,21 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         dict(targets=["y", "z"], kernel_decays=[0.5, 2.0], group="g", half_life=25.0, **CLOCK),
         [],
     ),
+    # A skew, a cross-moment and an autocorrelation one clock unit back, each
+    # with its standard error; the zero weights learn nothing.
+    (
+        "ewm_moments",
+        "ewm_moments",
+        dict(
+            terms={"skew": {"x1": 3}, "co": {"x1": 1, "x2": 2}, "ac1": {"x1": 1, "x1@1": 1}},
+            kind={"skew": "standardized", "ac1": "standardized"},
+            se=True,
+            group="g",
+            half_life=25.0,
+            **CLOCK,
+        ),
+        [],
+    ),
 ]
 
 #: The switches and paths the workload above never reached (review round 9,

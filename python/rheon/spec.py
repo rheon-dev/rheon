@@ -130,7 +130,7 @@ shows them at work.
          - ``bocpd``
        * - 0, each having a gate of its own or nothing to gate
          - ``ewridge``, ``seqtest``, ``rcov``, ``hmm``, ``corrchange``,
-           ``audit``, ``hawkes``, ``garch``
+           ``audit``, ``hawkes``, ``garch``, ``ewm_moments``
 ``min_settled_frac``
     Why: a history shorter than the half-life may not represent the process,
     such as regimes or seasons the half-life was chosen to average across.
@@ -359,7 +359,8 @@ and each diagnostic's own ``*_half_life`` below, and in the models
 ``kmeans``' ``warm_span``, ``update_every`` and ``split_merge_every``,
 ``hmm``'s and ``bocpd``'s ``warm_span``, ``corrchange``'s
 ``permute_every``, ``huber``'s and ``sgd``'s ``huber_refit_span`` and
-``quantile``'s ``quantile_refit_span``.
+``quantile``'s ``quantile_refit_span``, and ``ewm_moments``'
+``lag_tolerance`` and a lag written on a term's leg (``"x@5m"``).
 
 One parameter takes either form, with a meaning for each: ``bocpd``'s
 ``hazard``. A number, finite and above 1, is the expected rows between
@@ -1115,6 +1116,7 @@ from rheon._spec import (
     deco,
     ew_class,
     ew_cov,
+    ewm_moments,
     ewridge,
     expectile,
     ftrl,
@@ -1143,6 +1145,7 @@ __all__ = [
     "audit",
     "ew_class",
     "ew_cov",
+    "ewm_moments",
     "ewridge",
     "expectile",
     "ftrl",

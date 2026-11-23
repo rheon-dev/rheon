@@ -1554,6 +1554,19 @@ variance_z = { budget = 8.125 }
 weight_sum = { budget = 8.0 }
 withheld_reason = { budget = 1.125 }
 
+[memory.ewm_moments]
+ac1 = { budget = 8.125 }
+kurt = { budget = 8.125 }
+learned_clock = { budget = 8.125 }
+m3 = { budget = 8.125 }
+scored_clock = { budget = 8.125 }
+se_ac1 = { budget = 8.125 }
+se_kurt = { budget = 8.125 }
+se_m3 = { budget = 8.125 }
+settled_frac = { budget = 8.125 }
+weight_sum = { budget = 8.125 }
+withheld_reason = { budget = 1.125 }
+
 # --- raises and sign-offs -------------------------------------------------------
 [[raised]]
 key = "tolerance.rss"

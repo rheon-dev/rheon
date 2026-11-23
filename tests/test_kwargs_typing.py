@@ -23,6 +23,7 @@ BUILDERS = [
     "audit",
     "hawkes",
     "garch",
+    "ewm_moments",
     "bocpd",
     "corrchange",
     "deco",

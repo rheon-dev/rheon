@@ -762,6 +762,45 @@ CASES: list[Case] = [
             "max_rows_between_coefs": 7,
         },
     ),
+    # Moments on the clock: a lag as-of within a tolerance, a window of the
+    # clock, each term's kind its own, the standard errors and a cap.
+    Case(
+        "ewm_moments",
+        "ewm_moments",
+        {
+            **NOCOEF,
+            "features": ["x0", "x1"],
+            "terms": {
+                "skew": {"x0": 3},
+                "k4": {"x1": 4},
+                "co": {"x0": 1, "x1": 2},
+                "ac": {"x0": 1, "x0@2": 1},
+            },
+            "kind": {"skew": "standardized", "k4": "cumulant", "ac": "standardized"},
+            "bias": False,
+            "se": True,
+            "lag_tolerance": 1.0,
+            "window_size": 40.0,
+            "max_state_bytes": 1 << 20,
+        },
+    ),
+    # The other stream keys, one kind for every term, and a window of rows.
+    Case(
+        "ewm_moments_rows",
+        "ewm_moments",
+        {
+            **NOCOEF2,
+            "terms": {"m3": {"x0": 3}, "xy": {"x1": 1, "x2@1.5": 1}},
+            "kind": "raw",
+            "window_rows": 50,
+        },
+    ),
+    # Its groups run to a close, with no clock: a lag of rows.
+    Case(
+        "ewm_moments_close",
+        "ewm_moments",
+        {**CLOSE, "terms": {"ac": {"x0": 1, "x0@1": 1}}, "half_life": 50.0},
+    ),
     Case(
         "audit",
         "audit",

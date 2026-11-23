@@ -801,6 +801,7 @@ __all__ = [
     "rcov",
     "ew_class",
     "ew_cov",
+    "ewm_moments",
     "ewridge",
     "expectile",
     "ftrl",
@@ -5116,11 +5117,9 @@ def deco(
 #: plumbing, and nothing residual-based applies to them. ``ew_class`` is
 #: not one -- its label column travels as the target -- though it predicts
 #: no number either, and refuses the residual switches the same way.
-# The changepoint detectors', the classifier's, the clustering models', the regimes', the realised
-# covariance's, the robust regressions', `sgd`'s and the trend's builders live in files of their own
-# (the 250 KB cap); read back here,
-# after everything they use, for `__all__`, the key tables below and
-# `rheon.spec`.
+# Most builders live in `_spec_<family>.py` files of their own (the 250 KB
+# cap); read back here, after everything they use, for `__all__`, the key
+# tables below and `rheon.spec`.
 from rheon._spec_audit import audit  # noqa: E402
 from rheon._spec_changepoint import bocpd, corrchange  # noqa: E402
 from rheon._spec_class import ew_class  # noqa: E402
@@ -5129,13 +5128,25 @@ from rheon._spec_expectile import expectile  # noqa: E402
 from rheon._spec_garch import garch  # noqa: E402
 from rheon._spec_glm import glm  # noqa: E402
 from rheon._spec_gradient import sgd  # noqa: E402
+from rheon._spec_moments import ewm_moments  # noqa: E402
 from rheon._spec_point import hawkes  # noqa: E402
 from rheon._spec_regimes import hmm, rcov  # noqa: E402
 from rheon._spec_robust import huber, quantile  # noqa: E402
 from rheon._spec_trend import holt  # noqa: E402
 
 UNSUPERVISED = frozenset(
-    {"ew_cov", "kmeans", "micro", "deco", "rcov", "hmm", "corrchange", "bocpd", "audit"}
+    {
+        "ew_cov",
+        "kmeans",
+        "micro",
+        "deco",
+        "rcov",
+        "hmm",
+        "corrchange",
+        "bocpd",
+        "audit",
+        "ewm_moments",
+    }
 )
 
 _NUMERIC_KEYS = _numeric_keys()

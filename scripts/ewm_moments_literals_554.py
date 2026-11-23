@@ -7,7 +7,8 @@ doubles. The reference (`tests/reference_ewm_moments.py`) is run on it with
 the output read after each row (`emit="after"`), and the numbers at a few
 rows are printed as Rust literals, each with its bits.
 
-    python3 scripts/ewm_moments_literals_554.py > crates/rheon-core/src/ewm_moments/reference_values.rs
+    python3 scripts/ewm_moments_literals_554.py \
+        > crates/rheon-core/src/ewm_moments/reference_values.rs
 
 Needs nothing but the standard library: the reference is pure Python.
 """
@@ -162,11 +163,7 @@ def run4(const: str, data, terms, biases=(True,), suffix=("",), **kw) -> None:
     after each row; NaN where withheld."""
     print(f"const {const}: &[(usize, &str, f64)] = &[")
     for bias, suf in zip(biases, suffix, strict=True):
-        tm = {
-            n: legs
-            for n, legs, k in terms
-            if bias or (k != "raw" and sum(legs.values()) <= 4)
-        }
+        tm = {n: legs for n, legs, k in terms if bias or (k != "raw" and sum(legs.values()) <= 4)}
         kd = {n: k for n, _, k in terms if n in tm}
         spec = rm.EwmMoments(tm, kind=kd, bias=bias, emit="after", **kw)
         cols = sorted({leg.split("@")[0] for legs in tm.values() for leg in legs})

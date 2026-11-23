@@ -1153,6 +1153,7 @@ STATE_READS: dict[str, frozenset[str]] = {
     "corrchange": frozenset({"crit", "since_flag"}),
     "deco": frozenset({"rho"}),
     "ew_cov": frozenset({"mean_x0", "mean_x1", "std_x0", "std_x1", "corr_x0_x1"}),
+    "ewm_moments": frozenset({"var"}),
     # A variance and its forecast read the state alone; the standardized
     # residual reads the row's own target.
     "garch": frozenset({"variance_y"}),
@@ -1488,6 +1489,9 @@ DOUBLED: dict[str, dict] = {
     "deco": {},
     "ew_class": {},
     "ew_cov": {},
+    # Its moments are of the rows learned, in the order learned: a lesson
+    # late folds the same rows in the same order.
+    "ewm_moments": {},
     "ewridge": {},
     "ftrl": {},
     # Its recursion is per observation: a lesson late steps it in the same

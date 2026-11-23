@@ -552,6 +552,29 @@ def clock_specs(draw, model: str, step: int, cap: int):
             kw["start_span"] = steps(1, 30)
         else:
             kw["start_rows"] = draw(st.integers(50, 60))
+    elif model == "ewm_moments":
+        # Task 554: lags on the clock as durations, as-of within a drawn
+        # tolerance, a row lag beside them, a window of the clock or of
+        # rows, and the standard errors; zero-weight rows in no lag.
+        lag = steps(1, 6)
+        kw |= dict(
+            features=["x0", "x1"],
+            half_life=steps(1, 30),
+            terms={
+                "skew": {"x0": 3},
+                "co": {"x0": 1, "x1": 2},
+                "ac": {"x0": 1, f"x0@{lag}": 1},
+                "xc": {"x1": 1, f"x0@{steps(1, 6)}": 1},
+            },
+            kind={"skew": "standardized", "ac": "standardized"},
+            se=draw(st.booleans()),
+        )
+        kw |= maybe("lag_tolerance", 0, 6)
+        window = draw(st.sampled_from(["none", "rows", "clock"]))
+        if window == "rows":
+            kw["window_rows"] = draw(st.integers(1, 12))
+        elif window == "clock":
+            kw["window_size"] = steps(1, 60)
     else:
         assert model == "rls", model
         kw |= xy | maybe("embargo", 1, 5)
