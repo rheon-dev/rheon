@@ -723,6 +723,10 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
                     cap: op
                         .max_state_bytes
                         .unwrap_or(crate::windows::CROSS_STATE_BYTES),
+                    rank: op.order.rank,
+                    descending: op.order.descending,
+                    quantile: op.quantile.unwrap_or(0.5),
+                    interpolation: op.order.interpolation,
                 });
                 p.cross_columns.push(key);
                 continue;

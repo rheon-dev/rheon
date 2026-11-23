@@ -232,6 +232,8 @@ if TYPE_CHECKING:
 __all__ = [
     "cross_mean",
     "cross_std",
+    "cross_rank",
+    "cross_quantile",
     "ewm_mean",
     "ewm_quantile",
     "ewm_rate",
@@ -1341,12 +1343,12 @@ def cross_mean(
 
     ``TypeError``
         When ``input`` or ``weight`` is neither a column name nor a
-        ``pl.Expr``.
+        ``pl.Expr``, or ``max_state_bytes`` is not an integer (a
+        :class:`~rheon.WrongTypeError`).
     ``ValueError``
         When ``closed`` is neither ``"right"`` nor ``"left"``, ``input`` or
         ``weight`` holds a window or cross operator, or ``max_state_bytes``
-        is below 1 or above 64 MiB (a :class:`~rheon.WrongTypeError`, also a
-        ``ValueError``, where it is not an integer).
+        is below 1 or above 64 MiB.
 
     .. rubric:: Examples
 
@@ -1482,6 +1484,204 @@ def cross_std(
         input,
         closed=closed,
         bias=bias,
+        weight=weight,
+        max_state_bytes=max_state_bytes,
+    )
+
+
+def cross_rank(
+    input: str | pl.Expr,
+    *,
+    method: Literal["average", "min", "max", "dense", "ordinal"] = "average",
+    descending: bool = False,
+    closed: Literal["right", "left"] = "right",
+    max_state_bytes: int | None = None,
+) -> pl.Expr:
+    """A row's rank among every group's row at its stamp.
+
+    Use it for a cross-sectional rank, such as where each symbol's return
+    stands among every symbol's return at the same timestamp: 1 is the
+    smallest, and the cross-section's count of rows the largest.
+
+    .. rubric:: Parameters
+
+    ``input``, ``closed``
+        As :func:`cross_mean` takes them. Under ``"right"`` the row is ranked
+        among its own stamp's rows, itself included: Polars'
+        ``pl.col(input).rank(method, descending=descending).over(clock)`` on
+        the whole frame. Under ``"left"`` it is ranked among the stamp
+        before's rows, as though it were added to them last.
+    ``method``
+        How tied values rank, as Polars' ``rank`` reads it: ``"average"``
+        (the default) their mean rank, ``"min"`` or ``"max"`` the lowest or
+        highest, ``"dense"`` the place of their value among the distinct
+        values, ``"ordinal"`` each its own, the earlier row first.
+    ``descending``
+        ``True`` ranks the largest value 1.
+    ``max_state_bytes``
+        As :func:`cross_mean` takes it. A rank also keeps each row of the
+        open stamp, 16 bytes a row, and under ``"left"`` the stamp before's
+        distinct values, 16 bytes each.
+
+    .. rubric:: Returns
+
+    A ``pl.Expr``, as :func:`cross_mean` returns one. It is null where the
+    row has no value, and where the cross-section it reads holds fewer than
+    two rows with a value.
+
+    .. rubric:: Raises
+
+    ``TypeError``
+        As :func:`cross_mean` raises it, or when ``descending`` is not
+        ``True`` or ``False``.
+    ``ValueError``
+        As :func:`cross_mean` raises it, or when ``method`` is not one of
+        the five words above.
+
+    .. rubric:: Examples
+
+    Each symbol's rank by return among every symbol at the same timestamp:
+
+    .. code-block:: python
+
+        import polars as pl
+        from rheon import polars as rp
+
+        df = pl.DataFrame(
+            {
+                "t": [1, 1, 1, 2, 2, 2],
+                "symbol": ["a", "b", "c", "a", "b", "c"],
+                "r": [0.01, 0.03, 0.01, 0.02, 0.00, 0.01],
+            }
+        )
+        out = rp.stream.with_windows(
+            df, rank=rp.cross_rank("r"), clock="t", gap_cap=10, group="symbol"
+        )
+        print(out["rank"].to_list())
+
+    .. code-block:: text
+
+        [1.5, 3.0, 1.5, 3.0, 1.0, 2.0]
+
+    .. rubric:: Notes
+
+    With ``l`` the rows ranked before the row's value, ``e`` the rows tied
+    with it, itself among them, and ``p`` its place among those ties in
+    input order, from 0: ``average`` is ``l + (e + 1) / 2``, ``min``
+    ``l + 1``, ``max`` ``l + e``, ``dense`` one more than the distinct values
+    ranked before it, and ``ordinal`` ``l + p + 1``. A rank takes no weight:
+    it counts rows. A row with no value is no member of its stamp, and a
+    stamp of such rows alone is skipped by ``"left"``, as :func:`cross_mean`
+    skips it. The oracles are Polars' ``rank`` over the clock and SciPy's
+    ``rankdata``.
+    """
+    return operator(
+        "cross_rank",
+        input,
+        closed=closed,
+        method=method,
+        descending=descending,
+        max_state_bytes=max_state_bytes,
+    )
+
+
+def cross_quantile(
+    input: str | pl.Expr,
+    quantile: float,
+    *,
+    interpolation: Literal["nearest", "higher", "lower", "midpoint", "linear", "equiprobable"]
+    | None = None,
+    weight: str | pl.Expr | None = None,
+    closed: Literal["right", "left"] = "right",
+    max_state_bytes: int | None = None,
+) -> pl.Expr:
+    """A quantile of a column across every group's row at each stamp.
+
+    Use it for a cross-sectional level, such as the median return across
+    symbols at each timestamp, broadcast back to each symbol's row: a level
+    that one outlying symbol does not move as it moves :func:`cross_mean`.
+
+    .. rubric:: Parameters
+
+    ``input``, ``weight``, ``closed``
+        As :func:`cross_mean` takes them. Under ``"right"`` the value is
+        Polars' ``pl.col(input).quantile(quantile, interpolation).over(clock)``
+        on the whole frame.
+    ``quantile``
+        The level, from 0 to 1: 0.5 is the median.
+    ``interpolation``
+        How a level between two values is read, as Polars reads it:
+        ``"nearest"``, ``"higher"``, ``"lower"``, ``"midpoint"``,
+        ``"linear"`` or ``"equiprobable"``. ``None`` (the default) is
+        ``"nearest"``, Polars' own default, without ``weight``, and
+        ``"equiprobable"``, the only reading with a weighted form, with it.
+    ``max_state_bytes``
+        As :func:`cross_mean` takes it. A quantile also keeps each row of the
+        open stamp, 16 bytes a row, under either ``closed``.
+
+    .. rubric:: Returns
+
+    A ``pl.Expr``, as :func:`cross_mean` returns one, null where it is null.
+
+    .. rubric:: Raises
+
+    ``TypeError``
+        As :func:`cross_mean` raises it, or when ``quantile`` is not a
+        number (a :class:`~rheon.WrongTypeError`).
+    ``ValueError``
+        As :func:`cross_mean` raises it, or when ``quantile`` is below 0 or
+        above 1, ``interpolation`` is not one of the six words above, or it
+        is not ``"equiprobable"`` with ``weight``.
+
+    .. rubric:: Examples
+
+    Each symbol's return less the median return of every symbol at the same
+    timestamp:
+
+    .. code-block:: python
+
+        import polars as pl
+        from rheon import polars as rp
+
+        df = pl.DataFrame(
+            {
+                "t": [1, 1, 1, 2, 2, 2],
+                "symbol": ["a", "b", "c", "a", "b", "c"],
+                "r": [0.01, 0.03, -0.01, 0.02, 0.00, 0.50],
+            }
+        )
+        out = rp.stream.with_windows(
+            df,
+            resid=pl.col("r") - rp.cross_quantile("r", 0.5),
+            clock="t",
+            gap_cap=10,
+            group="symbol",
+        )
+        print(out["resid"].round(4).to_list())
+
+    .. code-block:: text
+
+        [0.0, 0.02, -0.02, 0.0, -0.02, 0.48]
+
+    .. rubric:: Notes
+
+    With the cross-section's ``n`` values sorted, ``v[0] <= ... <=
+    v[n - 1]``, and ``h = (n - 1) * quantile``: ``"nearest"`` reads
+    ``v[round(h)]``, ``"lower"`` ``v[floor(h)]``, ``"higher"``
+    ``v[ceil(h)]``, ``"midpoint"`` the mean of those two, ``"linear"`` the
+    point ``h - floor(h)`` of the way between them, and ``"equiprobable"``
+    ``v[max(ceil(n * quantile) - 1, 0)]``. With weights it is ``v[k]`` for
+    the first ``k`` whose cumulative weight share ``(w_0 + ... + w_k) / sum
+    w`` reaches the level, the inverse of the weighted distribution
+    function: NumPy's ``quantile(method="inverted_cdf", weights=...)``.
+    Its stamps, weights and nulls are :func:`cross_mean`'s.
+    """
+    return operator(
+        "cross_quantile",
+        input,
+        closed=closed,
+        quantile=quantile,
+        interpolation=interpolation,
         weight=weight,
         max_state_bytes=max_state_bytes,
     )

@@ -116,6 +116,9 @@ impl Windows {
                 open[(s - self.held_first) as usize] += n_wait;
             }
         }
+        if let Some(c) = &self.cross {
+            c.check_rows(self.next_seq)?;
+        }
         if let Some(first) = self.cross.as_ref().and_then(|c| c.waiting_from()) {
             if first < self.held_first {
                 return Err("its cross-group stamp opened before its held rows".into());

@@ -151,6 +151,8 @@ from rheon.polars._frame import (
 from rheon.polars._warnings import UnstableWarning
 from rheon.polars.ops import (
     cross_mean,
+    cross_quantile,
+    cross_rank,
     cross_std,
     ewm_mean,
     ewm_quantile,
@@ -169,6 +171,8 @@ from rheon.polars.ops import (
 __all__ = [
     "cross_mean",
     "cross_std",
+    "cross_rank",
+    "cross_quantile",
     "ewm_mean",
     "ewm_quantile",
     "ewm_rate",

@@ -43,6 +43,8 @@ use super::Meta;
 use crate::stream::usable;
 use std::collections::VecDeque;
 
+mod order;
+
 /// Which stamp a cross operator reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -76,6 +78,94 @@ impl CrossClosed {
 pub enum CrossStat {
     Mean,
     Std,
+    /// The row's own value's rank within the cross-section it reads.
+    Rank,
+    /// The quantile at the operator's level of the cross-section.
+    Quantile,
+}
+
+impl CrossStat {
+    /// Whether the statistic reads the stamp's values in order: then the
+    /// operator keeps them, not only their moments.
+    pub fn orders(self) -> bool {
+        matches!(self, CrossStat::Rank | CrossStat::Quantile)
+    }
+}
+
+/// How tied values rank: Polars' `rank(method=)` but `"random"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RankMethod {
+    #[default]
+    Average,
+    Min,
+    Max,
+    Dense,
+    Ordinal,
+}
+
+impl RankMethod {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "average" => Some(Self::Average),
+            "min" => Some(Self::Min),
+            "max" => Some(Self::Max),
+            "dense" => Some(Self::Dense),
+            "ordinal" => Some(Self::Ordinal),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Average => "average",
+            Self::Min => "min",
+            Self::Max => "max",
+            Self::Dense => "dense",
+            Self::Ordinal => "ordinal",
+        }
+    }
+}
+
+/// How a quantile between two values is read: Polars' `interpolation`.
+/// `Equiprobable` is the inverted distribution function, the smallest value
+/// whose cumulative share reaches the level, which alone has a weighted
+/// form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Interp {
+    #[default]
+    Nearest,
+    Higher,
+    Lower,
+    Midpoint,
+    Linear,
+    Equiprobable,
+}
+
+impl Interp {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "nearest" => Some(Self::Nearest),
+            "higher" => Some(Self::Higher),
+            "lower" => Some(Self::Lower),
+            "midpoint" => Some(Self::Midpoint),
+            "linear" => Some(Self::Linear),
+            "equiprobable" => Some(Self::Equiprobable),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Nearest => "nearest",
+            Self::Higher => "higher",
+            Self::Lower => "lower",
+            Self::Midpoint => "midpoint",
+            Self::Linear => "linear",
+            Self::Equiprobable => "equiprobable",
+        }
+    }
 }
 
 /// One cross operator: its statistic, which stamp it reads, its input and
@@ -92,6 +182,16 @@ pub struct CrossDef {
     pub bias: bool,
     /// The most bytes the operator's state may hold for its open stamp.
     pub cap: u64,
+    /// A rank's tie rule and direction.
+    #[serde(default)]
+    pub rank: RankMethod,
+    #[serde(default)]
+    pub descending: bool,
+    /// A quantile's level, in `[0, 1]`, and its interpolation.
+    #[serde(default)]
+    pub quantile: f64,
+    #[serde(default)]
+    pub interpolation: Interp,
 }
 
 /// A cross operator's `max_state_bytes` where the call sets none: 256 KB.
@@ -126,6 +226,7 @@ impl Acc {
             return f64::NAN;
         }
         match def.stat {
+            CrossStat::Rank | CrossStat::Quantile => unreachable!("read from the values"),
             CrossStat::Mean => self.m,
             CrossStat::Std => {
                 let var = if def.bias {
@@ -166,6 +267,14 @@ pub struct Cross {
     /// That warning, `(op, bytes, cap)`, not yet taken by the caller.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     warning: Option<(usize, u64, u64)>,
+    /// Per operator that reads values in order: every row of the open stamp,
+    /// its value and weight, in input order (NaN where it has none).
+    #[serde(default)]
+    open_rows: Vec<Vec<(f64, f64)>>,
+    /// Per rank under `"left"`: the stamp before's members as a rank reads
+    /// them, each distinct value ascending with the count at or below it.
+    #[serde(default)]
+    prev_rows: Vec<Vec<(f64, f64)>>,
 }
 
 /// What each operator would hold with a row ([`Cross::check_cap`]).
@@ -190,6 +299,8 @@ impl Cross {
             prev: vec![f64::NAN; n],
             warned: false,
             warning: None,
+            open_rows: vec![Vec::new(); n],
+            prev_rows: vec![Vec::new(); n],
         }
     }
 
@@ -211,10 +322,18 @@ impl Cross {
         let per_row = 8 * n_outputs as u64 + std::mem::size_of::<Meta>() as u64;
         let mut held = Vec::with_capacity(self.defs.len());
         for (op, def) in self.defs.iter().enumerate() {
-            let bytes = match def.closed {
+            let mut bytes = match def.closed {
                 CrossClosed::Right => rows * per_row,
                 CrossClosed::Left => 0,
             };
+            // A rank or a quantile keeps the stamp's values and weights,
+            // and under `"left"` the stamp before's too.
+            if def.stat.orders() {
+                bytes += 16 * rows;
+                if def.closed == CrossClosed::Left {
+                    bytes += 16 * self.prev_rows.get(op).map_or(0, Vec::len) as u64;
+                }
+            }
             if bytes > def.cap {
                 return Err(super::Refusal::StateCap {
                     seq,
@@ -270,7 +389,38 @@ impl Cross {
     }
 
     pub(super) fn has_shape(&self) -> bool {
-        self.acc.len() == self.defs.len() && self.prev.len() == self.defs.len()
+        let n = self.defs.len();
+        self.acc.len() == n
+            && self.prev.len() == n
+            && self.open_rows.len() == n
+            && self.prev_rows.len() == n
+            && self.defs.iter().enumerate().all(|(j, d)| {
+                d.stat.orders() || (self.open_rows[j].is_empty() && self.prev_rows[j].is_empty())
+            })
+    }
+
+    /// That each ordering operator keeps a value and a weight for every row
+    /// of the open stamp, `[first, next_seq)`, and its stamp before as a
+    /// table of distinct values ascending, each counting more rows than the
+    /// last.
+    pub(super) fn check_rows(&self, next_seq: u64) -> Result<(), String> {
+        let open = self.open.map_or(0, |(_, first)| next_seq - first) as usize;
+        for (j, def) in self.defs.iter().enumerate() {
+            if def.stat.orders() && self.open_rows[j].len() != open {
+                return Err(format!(
+                    "its cross-group operator {j} keeps {} rows of a stamp of {open}",
+                    self.open_rows[j].len()
+                ));
+            }
+            let t = &self.prev_rows[j];
+            let rising = t.windows(2).all(|p| p[0].0 < p[1].0 && p[0].1 < p[1].1);
+            if !rising || t.first().is_some_and(|f| f.1 < 1.0 || f.1.is_nan()) {
+                return Err(format!(
+                    "its cross-group operator {j}'s stamp before is not in order"
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// A row at `now`, before its slots are pushed: close the open stamp
@@ -286,7 +436,7 @@ impl Cross {
     ) {
         if reset {
             self.end(rows, seq, false);
-            self.prev.fill(f64::NAN);
+            self.forget_prev();
             return;
         }
         let new_stamp = match self.open {
@@ -296,7 +446,7 @@ impl Cross {
         if new_stamp {
             self.end(rows, seq, true);
             if broke {
-                self.prev.fill(f64::NAN);
+                self.forget_prev();
             }
             self.open = Some((now, seq));
         }
@@ -307,14 +457,31 @@ impl Cross {
     pub(super) fn row(&mut self, values: &[f64], seq: u64, rows: &mut Rows<'_>) {
         let r = (seq - rows.first) as usize;
         for (j, def) in self.defs.iter().enumerate() {
-            if def.closed == CrossClosed::Left {
-                rows.values[r * rows.n_outputs + self.first_out + j] = self.prev[j];
-            }
             let x = values[def.input];
             let w = def.weight.map_or(1.0, |i| values[i]);
-            if usable(x) && usable(w) && w > 0.0 {
+            let (x, w) = (
+                if usable(x) { x } else { f64::NAN },
+                if usable(w) && w > 0.0 { w } else { 0.0 },
+            );
+            if def.closed == CrossClosed::Left {
+                rows.values[r * rows.n_outputs + self.first_out + j] = match def.stat {
+                    CrossStat::Rank => order::rank_of(&self.prev_rows[j], x, def),
+                    _ => self.prev[j],
+                };
+            }
+            if def.stat.orders() {
+                self.open_rows[j].push((x, w));
+            } else if !x.is_nan() && w > 0.0 {
                 self.acc[j].add(x, w);
             }
+        }
+    }
+
+    /// A clock break or a reset: no stamp before the next.
+    fn forget_prev(&mut self) {
+        self.prev.fill(f64::NAN);
+        for p in &mut self.prev_rows {
+            p.clear();
         }
     }
 
@@ -333,6 +500,25 @@ impl Cross {
         };
         let waits = self.waits();
         for (j, def) in self.defs.iter().enumerate() {
+            if def.stat.orders() {
+                let stamp = std::mem::take(&mut self.open_rows[j]);
+                let members = order::members(&stamp);
+                if def.closed == CrossClosed::Right {
+                    let read = order::read(&stamp, &members, def);
+                    for (k, seq) in (first..until).enumerate() {
+                        let r = (seq - rows.first) as usize;
+                        rows.values[r * rows.n_outputs + self.first_out + j] =
+                            if close { read[k] } else { f64::NAN };
+                    }
+                } else if close && !members.is_empty() {
+                    if def.stat == CrossStat::Rank {
+                        self.prev_rows[j] = order::table(&members);
+                    } else {
+                        self.prev[j] = order::quantile_of(&members, def);
+                    }
+                }
+                continue;
+            }
             let acc = self.acc[j];
             let v = if close { acc.value(def) } else { f64::NAN };
             if def.closed == CrossClosed::Right {
@@ -367,6 +553,10 @@ mod tests {
             weight: Some(1),
             bias,
             cap: CROSS_STATE_BYTES,
+            rank: RankMethod::Average,
+            descending: false,
+            quantile: 0.5,
+            interpolation: Interp::Nearest,
         }
     }
 
@@ -426,6 +616,10 @@ mod tests {
                 weight: None,
                 bias: false,
                 cap: CROSS_STATE_BYTES,
+                rank: RankMethod::Average,
+                descending: false,
+                quantile: 0.5,
+                interpolation: Interp::Nearest,
             },
             CrossDef {
                 stat: CrossStat::Std,
@@ -434,6 +628,34 @@ mod tests {
                 weight: Some(1),
                 bias: true,
                 cap: CROSS_STATE_BYTES,
+                rank: RankMethod::Average,
+                descending: false,
+                quantile: 0.5,
+                interpolation: Interp::Nearest,
+            },
+            CrossDef {
+                stat: CrossStat::Rank,
+                closed: CrossClosed::Right,
+                input: 0,
+                weight: None,
+                bias: false,
+                cap: CROSS_STATE_BYTES,
+                rank: RankMethod::Ordinal,
+                descending: true,
+                quantile: 0.5,
+                interpolation: Interp::Nearest,
+            },
+            CrossDef {
+                stat: CrossStat::Quantile,
+                closed: CrossClosed::Left,
+                input: 0,
+                weight: Some(1),
+                bias: false,
+                cap: CROSS_STATE_BYTES,
+                rank: RankMethod::Average,
+                descending: false,
+                quantile: 0.3,
+                interpolation: Interp::Equiprobable,
             },
         ];
         let cfg = ClockCfg {
@@ -450,7 +672,7 @@ mod tests {
             (s >> 11) as f64 / (1u64 << 53) as f64
         };
         let mut rows: Vec<(f64, f64, f64)> = Vec::new();
-        let mut out: Vec<Vec<f64>> = vec![Vec::new(); 2];
+        let mut out: Vec<Vec<f64>> = vec![Vec::new(); 4];
         for t in 0..40 {
             for g in 0..(1 + (t % 5)) {
                 let (x, w) = (next() * 10.0, if next() < 0.2 { 0.0 } else { next() + 0.5 });
@@ -501,6 +723,30 @@ mod tests {
             let m = v.iter().map(|p| p.0 * p.1).sum::<f64>() / v1;
             (v.iter().map(|p| p.1 * (p.0 - m) * (p.0 - m)).sum::<f64>() / v1).sqrt()
         };
+        // The values are continuous, so no two tie: a descending ordinal
+        // rank counts the larger values.
+        let rank = |x: f64, v: &[(f64, f64)]| {
+            if v.len() < 2 {
+                return f64::NAN;
+            }
+            1.0 + v.iter().filter(|p| p.0 > x).count() as f64
+        };
+        let wq = |v: &[(f64, f64)]| {
+            let mut v: Vec<_> = v.iter().copied().filter(|p| p.1 > 0.0).collect();
+            if v.len() < 2 {
+                return f64::NAN;
+            }
+            v.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let total: f64 = v.iter().map(|p| p.1).sum();
+            let mut cum = 0.0;
+            for p in &v {
+                cum += p.1;
+                if cum / total >= 0.3 {
+                    return p.0;
+                }
+            }
+            v[v.len() - 1].0
+        };
         let same = |a: f64, b: f64| {
             (a.is_nan() && b.is_nan()) || (a - b).abs() <= 1e-12 * b.abs().max(1.0)
         };
@@ -522,6 +768,13 @@ mod tests {
                 "row {i}: {} against {want}",
                 out[1][i]
             );
+            assert_eq!(
+                out[2][i].to_bits(),
+                rank(r.1, &stamp(r.0)).to_bits(),
+                "row {i}"
+            );
+            let want = before.map_or(f64::NAN, |t| wq(&stamp(t)));
+            assert_eq!(out[3][i].to_bits(), want.to_bits(), "row {i}");
         }
     }
 }

@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::span::Span;
-use crate::windows::{Closed, Direction, OpKind, Partial, Stat};
+use crate::windows::{Closed, CrossStat, Direction, Interp, OpKind, Partial, RankMethod, Stat};
 
 /// A literal, as JSON carries it.
 #[derive(Debug, Clone, PartialEq)]
@@ -114,6 +114,17 @@ pub struct OpNode {
     /// A cross-group operator's cap on its state, where the call sets one;
     /// `None` for every window operator.
     pub max_state_bytes: Option<u64>,
+    /// A cross rank's tie rule and direction, and a cross quantile's
+    /// interpolation; the defaults for every other operator.
+    pub order: Order,
+}
+
+/// How a cross operator that reads values in order reads them.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Order {
+    pub rank: RankMethod,
+    pub descending: bool,
+    pub interpolation: Interp,
 }
 
 impl OpNode {
@@ -164,6 +175,19 @@ impl OpNode {
             }
             if let Some(b) = self.max_state_bytes {
                 m.insert("max_state_bytes".into(), json!(b));
+            }
+            match self.kind.cross() {
+                Some(CrossStat::Rank) => {
+                    m.insert("method".into(), json!(self.order.rank.name()));
+                    m.insert("descending".into(), json!(self.order.descending));
+                }
+                Some(CrossStat::Quantile) => {
+                    m.insert(
+                        "interpolation".into(),
+                        json!(self.order.interpolation.name()),
+                    );
+                }
+                _ => {}
             }
         }
         Value::Object(m)
@@ -440,6 +464,7 @@ impl Node {
                     quantile: None,
                     weight: None,
                     max_state_bytes: None,
+                    order: Order::default(),
                 }))
             }
             name if OpKind::parse(name).is_some_and(|k| k.cross().is_some()) => {
@@ -466,8 +491,11 @@ impl Node {
                     quantile: None,
                     weight: None,
                     max_state_bytes: None,
+                    order: Order::default(),
                 };
                 let std = kind == OpKind::CrossStd;
+                let stat = kind.cross().expect("checked");
+                let mut interpolation = None;
                 for (k, v) in params {
                     match k.as_str() {
                         "closed" => {
@@ -493,10 +521,63 @@ impl Node {
                                 )
                             })?;
                         }
+                        "weight" if stat == CrossStat::Rank => {
+                            return Err(format!(
+                                "{name}: a rank takes no weight: a row's rank counts the rows \
+                                 ranked before it, and a weight has no place in that count. \
+                                 Remove weight, or use cross_quantile with weight= for the \
+                                 weighted share of the cross-section below a level."
+                            ));
+                        }
                         "weight" => {
                             let w = Node::from_json(v)?;
                             w.no_window_operator(name)?;
                             op.weight = Some(Box::new(w));
+                        }
+                        "method" if stat == CrossStat::Rank => {
+                            op.order.rank =
+                                v.as_str().and_then(RankMethod::parse).ok_or_else(|| {
+                                    format!(
+                                        "{name}: method must be \"average\", \"min\", \
+                                         \"max\", \"dense\" or \"ordinal\", but it is {}. \
+                                         Set method to one of those words.",
+                                        short(v)
+                                    )
+                                })?;
+                        }
+                        "descending" if stat == CrossStat::Rank => {
+                            op.order.descending = v.as_bool().ok_or_else(|| {
+                                format!(
+                                    "{name}: descending must be true or false, but it is {}. \
+                                     Set descending to true or false.",
+                                    short(v)
+                                )
+                            })?;
+                        }
+                        "quantile" if stat == CrossStat::Quantile => {
+                            op.quantile =
+                                Some(v.as_f64().filter(|q| (0.0..=1.0).contains(q)).ok_or_else(
+                                    || {
+                                        format!(
+                                            "{name}: quantile must be a number from 0 to 1, but \
+                                             it is {}. Set quantile within that range, such as \
+                                             0.5 for the median.",
+                                            short(v)
+                                        )
+                                    },
+                                )?);
+                        }
+                        "interpolation" if stat == CrossStat::Quantile => {
+                            interpolation =
+                                Some(v.as_str().and_then(Interp::parse).ok_or_else(|| {
+                                    format!(
+                                        "{name}: interpolation must be \"nearest\", \
+                                         \"higher\", \"lower\", \"midpoint\", \"linear\" \
+                                         or \"equiprobable\", but it is {}. Set interpolation \
+                                         to one of those words.",
+                                        short(v)
+                                    )
+                                })?);
                         }
                         "max_state_bytes" => {
                             let ceiling = crate::windows::CROSS_STATE_BYTES_CEILING;
@@ -516,14 +597,43 @@ impl Node {
                             return Err(format!(
                                 "{name}: {other:?} is not one of its parameters, which are \
                                  {}. Remove {other:?}, or correct its name.",
-                                if std {
-                                    "closed, weight, max_state_bytes and bias"
-                                } else {
-                                    "closed, weight and max_state_bytes"
+                                match stat {
+                                    CrossStat::Std => "closed, weight, max_state_bytes and bias",
+                                    CrossStat::Rank =>
+                                        "closed, method, descending and max_state_bytes",
+                                    CrossStat::Quantile =>
+                                        "quantile, closed, interpolation, weight and \
+                                         max_state_bytes",
+                                    CrossStat::Mean => "closed, weight and max_state_bytes",
                                 }
                             ));
                         }
                     }
+                }
+                if stat == CrossStat::Quantile {
+                    if op.quantile.is_none() {
+                        return Err(format!(
+                            "{name}: quantile is required: the level to read, from 0 to 1. \
+                             Set quantile, such as 0.5 for the median."
+                        ));
+                    }
+                    // A weighted cross-section has one reading between two
+                    // values: the first whose cumulative weight share reaches
+                    // the level.
+                    op.order.interpolation = match (interpolation, op.weight.is_some()) {
+                        (None, false) => Interp::Nearest,
+                        (None, true) | (Some(Interp::Equiprobable), _) => Interp::Equiprobable,
+                        (Some(i), false) => i,
+                        (Some(i), true) => {
+                            return Err(format!(
+                                "{name}: interpolation {:?} has no weighted form: with weight= \
+                                 the quantile is the first value whose cumulative weight share \
+                                 reaches the level, \"equiprobable\". Set interpolation to \
+                                 \"equiprobable\" or leave it out, or remove weight.",
+                                i.name()
+                            ));
+                        }
+                    };
                 }
                 Ok(Node::Op(op))
             }
@@ -554,6 +664,7 @@ impl Node {
                     quantile: None,
                     weight: None,
                     max_state_bytes: None,
+                    order: Order::default(),
                 };
                 let var = kind.stat().is_some_and(Stat::is_var);
                 let quantile = kind.stat() == Some(Stat::Quantile);

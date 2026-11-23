@@ -225,6 +225,8 @@ pub enum OpKind {
     /// stream's stamps.
     CrossMean,
     CrossStd,
+    CrossRank,
+    CrossQuantile,
 }
 
 impl OpKind {
@@ -243,6 +245,8 @@ impl OpKind {
             OpKind::Increment => "increment",
             OpKind::CrossMean => "cross_mean",
             OpKind::CrossStd => "cross_std",
+            OpKind::CrossRank => "cross_rank",
+            OpKind::CrossQuantile => "cross_quantile",
         }
     }
 
@@ -261,6 +265,8 @@ impl OpKind {
             "increment" => Some(OpKind::Increment),
             "cross_mean" => Some(OpKind::CrossMean),
             "cross_std" => Some(OpKind::CrossStd),
+            "cross_rank" => Some(OpKind::CrossRank),
+            "cross_quantile" => Some(OpKind::CrossQuantile),
             _ => None,
         }
     }
@@ -283,7 +289,11 @@ impl OpKind {
             OpKind::EwmVar => Some(Stat::Var),
             OpKind::EwmStd => Some(Stat::Std),
             OpKind::EwmQuantile | OpKind::RewmQuantile => Some(Stat::Quantile),
-            OpKind::Increment | OpKind::CrossMean | OpKind::CrossStd => None,
+            OpKind::Increment
+            | OpKind::CrossMean
+            | OpKind::CrossStd
+            | OpKind::CrossRank
+            | OpKind::CrossQuantile => None,
         }
     }
 
@@ -293,6 +303,8 @@ impl OpKind {
         match self {
             OpKind::CrossMean => Some(CrossStat::Mean),
             OpKind::CrossStd => Some(CrossStat::Std),
+            OpKind::CrossRank => Some(CrossStat::Rank),
+            OpKind::CrossQuantile => Some(CrossStat::Quantile),
             _ => None,
         }
     }
@@ -2059,7 +2071,8 @@ mod memo_tests;
 mod plain;
 
 pub use cross::{
-    CROSS_STATE_BYTES, CROSS_STATE_BYTES_CEILING, Cross, CrossClosed, CrossDef, CrossStat,
+    CROSS_STATE_BYTES, CROSS_STATE_BYTES_CEILING, Cross, CrossClosed, CrossDef, CrossStat, Interp,
+    RankMethod,
 };
 use keys::IntGroups;
 pub(crate) use keys::{ChunkKeys, session_hashes};

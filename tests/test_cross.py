@@ -1,6 +1,6 @@
-"""The cross-group operators, ``rp.cross_mean`` and ``rp.cross_std``: a
-statistic over every group's row at each stamp of the clock, broadcast back
-to each row.
+"""The cross-group operators, ``rp.cross_mean``, ``rp.cross_std``,
+``rp.cross_rank`` and ``rp.cross_quantile``: a statistic over every group's
+row at each stamp of the clock, broadcast back to each row.
 
 Held to Polars on one chunk -- ``pl.col(x).mean().over(clock)`` and
 ``.std().over(clock)``, or ``group_by(clock)`` and a join -- and, under
@@ -8,7 +8,10 @@ weights, to numpy's weighted mean and the weighted variance written out;
 ``closed="left"`` to the same per stamp, shifted one stamp back. And what a
 window run owes: chunk invariance, a save and load at every row, zero
 weights in no stamp, fewer than two weighted rows withheld, a late stamp
-refused by row, and a clock break ending the stamp before.
+refused by row, and a clock break ending the stamp before. The rank and
+the quantile are held to Polars' ``rank`` and ``quantile`` over the clock,
+to SciPy's ``rankdata`` and to NumPy's ``quantile``, weighted by its
+``inverted_cdf``.
 """
 
 from __future__ import annotations
@@ -179,6 +182,8 @@ def test_a_zero_weight_row_reads_its_stamp_and_adds_nothing():
         "m": rp.cross_mean("x", weight="w"),
         "s": rp.cross_std("x", weight="w"),
         "l": rp.cross_mean("x", weight="w", closed="left"),
+        "q": rp.cross_quantile("x", 0.4, weight="w"),
+        "ql": rp.cross_quantile("x", 0.4, weight="w", closed="left"),
     }
     full = run(df, **exprs)
     kept = run(df.filter(pl.col("w") > 0), **exprs)
@@ -198,6 +203,10 @@ def test_chunking_changes_nothing(rows: int):
         "s": rp.cross_std("x"),
         "l": rp.cross_std("x", weight="w", closed="left"),
         "e": rp.ewm_mean("x", half_life=3.0),
+        "r": rp.cross_rank("x", method="dense"),
+        "rl": rp.cross_rank("x", closed="left", descending=True),
+        "q": rp.cross_quantile("x", 0.3, interpolation="linear"),
+        "ql": rp.cross_quantile("x", 0.7, weight="w", closed="left"),
     }
     one = rp.stream.with_windows(df.lazy(), **exprs, **CLOCK, chunk_size=100_000).collect()
     out = rp.stream.with_windows(df.lazy(), **exprs, **CLOCK, chunk_size=rows).collect()
@@ -209,6 +218,10 @@ def test_a_save_and_load_at_every_row_is_one_run(tmp_path: Path):
     exprs: dict[str, Any] = {
         "m": rp.cross_mean("x", weight="w"),
         "l": rp.cross_std("x", closed="left"),
+        "r": rp.cross_rank("x", method="ordinal"),
+        "rl": rp.cross_rank("x", closed="left"),
+        "q": rp.cross_quantile("x", 0.5, weight="w"),
+        "ql": rp.cross_quantile("x", 0.5, closed="left"),
     }
     one = rp.stream.with_windows(df, **exprs, **CLOCK)
     # A file resumes at a stamp's first row: one that begins inside a run of
@@ -286,6 +299,8 @@ def test_the_state_is_bounded_by_the_operators(tmp_path: Path):
             df,
             m=rp.cross_mean("x", closed="left"),
             s=rp.cross_std("x", closed="left"),
+            r=rp.cross_rank("x", closed="left"),
+            q=rp.cross_quantile("x", 0.5, closed="left"),
             **CLOCK,
             save_state=state,
         )
@@ -324,3 +339,234 @@ def test_a_stamp_past_half_the_cap_warns_once_and_past_the_cap_is_refused():
     run(over, m=rp.cross_mean("x", closed="left", max_state_bytes=160))
     with pytest.raises(ValueError, match="max_state_bytes must be a whole number from 1"):
         rp.cross_std("x", max_state_bytes=0)
+
+
+# ---- rank and quantile ------------------------------------------------------
+
+RANK_METHODS = ("average", "min", "max", "dense", "ordinal")
+INTERPOLATIONS = ("nearest", "higher", "lower", "midpoint", "linear", "equiprobable")
+LEVELS = (0.0, 0.1, 0.25, 0.3, 0.5, 0.73, 0.9, 1.0)
+
+
+def tied(stamps: int, groups: int, seed: int) -> pl.DataFrame:
+    """:func:`frame` with its values on a coarse grid, so a stamp holds
+    ties, and with some values null, which are no member of any stamp."""
+    rng = np.random.default_rng(seed + 1000)
+    df = frame(stamps, groups, seed)
+    x = np.round(df["x"].to_numpy())
+    return df.with_columns(
+        x=pl.when(pl.Series(rng.uniform(size=df.height) < 0.08)).then(None).otherwise(pl.Series(x))
+    )
+
+
+def members_over(expr: pl.Expr) -> pl.Expr:
+    """``expr`` over the stamp where it holds two values or more."""
+    return pl.when(pl.col("x").count().over("t") >= 2).then(expr)
+
+
+def test_the_rank_is_polars_over_the_stamp():
+    """Every tie rule in both directions: Polars' ``rank().over(clock)``
+    on the whole frame, a null value no member and ranked null."""
+    df = tied(300, 12, seed=11)
+    for method in RANK_METHODS:
+        for descending in (False, True):
+            out = run(df, r=rp.cross_rank("x", method=method, descending=descending))
+            want = df.select(
+                members_over(
+                    pl.col("x").rank(method, descending=descending).over("t").cast(pl.Float64)
+                )
+            )["x"]
+            assert out["r"].equals(want.rename("r")), (method, descending)
+
+
+def scipy_rank(values: np.ndarray, method: str, descending: bool) -> np.ndarray:
+    from scipy.stats import rankdata
+
+    return rankdata(-values if descending else values, method=method)
+
+
+def test_the_rank_is_scipys_rankdata_per_stamp():
+    """A second opinion: SciPy's ``rankdata`` of each stamp's values."""
+    df = tied(200, 10, seed=12)
+    for method in RANK_METHODS:
+        for descending in (False, True):
+            out = run(df, r=rp.cross_rank("x", method=method, descending=descending))
+            for (t,), part in out.group_by("t", maintain_order=True):
+                x = part["x"].to_numpy()
+                have = ~np.isnan(x)
+                got = part["r"].to_numpy()
+                if have.sum() < 2:
+                    assert part["r"].null_count() == part.height, t
+                    continue
+                want = scipy_rank(x[have], method, descending)
+                assert np.array_equal(got[have], want), (method, descending, t)
+                assert np.isnan(got[~have]).all()
+
+
+def test_left_ranks_the_row_among_the_stamp_before():
+    """Under ``"left"`` a row is ranked among the stamp before's values as
+    though it were added to them last: SciPy's ``rankdata`` of those values
+    and the row's, read at the row. The first stamp, and a stamp after one
+    of fewer than two values, read null."""
+    df = tied(150, 8, seed=13)
+    stamps = [
+        (t, part["x"].drop_nulls().to_numpy())
+        for (t,), part in df.group_by("t", maintain_order=True)
+    ]
+    before: dict[float, np.ndarray | None] = {}
+    last = None
+    for t, values in stamps:
+        before[t] = last
+        if len(values):
+            last = values
+    for method in RANK_METHODS:
+        for descending in (False, True):
+            out = run(df, r=rp.cross_rank("x", method=method, descending=descending, closed="left"))
+            for t, x, r in zip(out["t"], out["x"], out["r"], strict=True):
+                prev = before[t]
+                if x is None or prev is None or len(prev) < 2:
+                    assert r is None, (method, t)
+                    continue
+                want = scipy_rank(np.append(prev, x), method, descending)[-1]
+                assert r == want, (method, descending, t, x)
+
+
+def test_the_quantile_is_polars_over_the_stamp():
+    """Every interpolation at levels on and between the values: Polars'
+    ``quantile().over(clock)`` on the whole frame, to the bit but where a
+    level falls between two values under ``"linear"``."""
+    df = tied(300, 12, seed=14).with_columns(x=pl.col("x") + pl.col("w"))
+    for interpolation in INTERPOLATIONS:
+        for q in LEVELS:
+            out = run(df, q=rp.cross_quantile("x", q, interpolation=interpolation))
+            want = df.select(members_over(pl.col("x").quantile(q, interpolation).over("t")))
+            if interpolation == "linear":
+                # Polars reads a group's level from an index offset by its
+                # nulls, (n - 1) q + nulls, whose fraction can lose a last
+                # bit (0.9 + 1 - 1 is 0.8999999999999999); NumPy agrees
+                # with this operator there, below.
+                close(out["q"], want["x"])
+            else:
+                assert out["q"].equals(want["x"].rename("q")), (interpolation, q)
+
+
+def test_the_quantile_is_numpys_per_stamp():
+    """A second opinion: NumPy's ``quantile`` of each stamp's values, by the
+    method that reads a level as Polars' interpolation does. NumPy's
+    ``"nearest"`` rounds a half to even where Polars rounds it away from 0,
+    so it is held to Polars alone, above."""
+    methods = {
+        "lower": "lower",
+        "higher": "higher",
+        "midpoint": "midpoint",
+        "linear": "linear",
+        "equiprobable": "inverted_cdf",
+    }
+    df = tied(200, 10, seed=15).with_columns(x=pl.col("x") + pl.col("w"))
+    for interpolation, method in methods.items():
+        for q in LEVELS:
+            out = run(df, q=rp.cross_quantile("x", q, interpolation=interpolation))
+            want = []
+            for (_,), part in df.group_by("t", maintain_order=True):
+                x = part["x"].drop_nulls().to_numpy()
+                v = np.quantile(x, q, method=method) if len(x) >= 2 else np.nan
+                want += [v] * part.height
+            close(out["q"], pl.Series(want).fill_nan(None))
+
+
+def test_the_weighted_quantile_is_numpys_inverted_cdf():
+    """Under weights: NumPy's ``quantile(method="inverted_cdf",
+    weights=...)`` of each stamp's rows of weight; a zero weight is no
+    member, and fewer than two members are withheld."""
+    df = tied(300, 10, seed=16)
+    for q in LEVELS:
+        out = run(
+            df,
+            q=rp.cross_quantile("x", q, weight="w"),
+            left=rp.cross_quantile("x", q, weight="w", closed="left"),
+        )
+        per: dict[float, float] = {}
+        order: list[float] = []
+        for (t,), part in df.group_by("t", maintain_order=True):
+            part = part.filter(pl.col("x").is_not_null() & (pl.col("w") > 0))
+            order.append(t)
+            if part.height >= 2:
+                x, w = part["x"].to_numpy(), part["w"].to_numpy()
+                per[t] = float(np.quantile(x, q, method="inverted_cdf", weights=w))
+            elif part.height == 1:
+                per[t] = np.nan
+        want = [per.get(t, np.nan) for t in df["t"]]
+        close(out["q"], pl.Series(want).fill_nan(None))
+        # Under "left": the stamp before with a member.
+        prev: dict[float, float] = {}
+        last = np.nan
+        for t in order:
+            prev[t] = last
+            if t in per:
+                last = per[t]
+        close(out["left"], pl.Series([prev[t] for t in df["t"]]).fill_nan(None))
+
+
+def test_the_ordered_operators_bound_their_state():
+    """A rank or a quantile keeps 16 bytes a row of the open stamp beside
+    the held row: with one operator column a held row is 16 bytes, so 32 a
+    row, and a cap of 160 holds a stamp of 5 rows. Under ``"left"`` a rank
+    keeps 16 bytes a row of the open stamp and of each distinct value of
+    the stamp before: a cap of 160 holds stamps of 5 rows of distinct
+    values, and a quantile 10 rows."""
+
+    def stamp(rows: int, t: float) -> pl.DataFrame:
+        return pl.DataFrame(
+            {
+                "t": [t] * rows,
+                "g": [f"g{i}" for i in range(rows)],
+                "x": [float(i) for i in range(rows)],
+            }
+        )
+
+    five = pl.concat([stamp(5, 0.0), stamp(5, 1.0)])
+    six = pl.concat([stamp(5, 0.0), stamp(6, 1.0)])
+    for op in (
+        rp.cross_rank("x", max_state_bytes=160),
+        rp.cross_quantile("x", 0.5, max_state_bytes=160),
+    ):
+        with pytest.warns(RheonWarning):
+            run(five, m=op)
+        with pytest.raises(Exception, match=r"at row 10 .*past its max_state_bytes of 160"):
+            run(six, m=op)
+    # "left": 5 rows of the stamp before and 5 of the open one.
+    with pytest.warns(RheonWarning):
+        run(five, m=rp.cross_rank("x", closed="left", max_state_bytes=160))
+    with pytest.raises(Exception, match=r"at row 10 .*past its max_state_bytes of 160"):
+        run(six, m=rp.cross_rank("x", closed="left", max_state_bytes=160))
+    ten = pl.concat([stamp(10, 0.0), stamp(10, 1.0)])
+    with pytest.warns(RheonWarning):
+        run(ten, m=rp.cross_quantile("x", 0.5, closed="left", max_state_bytes=160))
+    with pytest.raises(Exception, match=r"at row 10 .*past its max_state_bytes of 160"):
+        run(
+            pl.concat([stamp(11, 0.0)]),
+            m=rp.cross_quantile("x", 0.5, closed="left", max_state_bytes=160),
+        )
+
+
+def test_the_rank_and_quantile_refusals():
+    from rheon.polars._formula import operator
+
+    df = pl.DataFrame({"t": [0.0], "g": ["a"], "x": [1.0], "w": [1.0]})
+    with pytest.raises(ValueError, match="method must be one of"):
+        rp.cross_rank("x", method="random")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="descending must be True or False"):
+        rp.cross_rank("x", descending=1)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="quantile must be a number from 0 to 1"):
+        rp.cross_quantile("x", 1.5)
+    with pytest.raises(TypeError, match="quantile must be a number from 0 to 1"):
+        rp.cross_quantile("x", "0.5")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="interpolation must be one of"):
+        rp.cross_quantile("x", 0.5, interpolation="cubic")  # type: ignore[arg-type]
+    with pytest.raises(
+        ValueError, match="\"linear\" has no weighted form|'linear' has no weighted"
+    ):
+        rp.cross_quantile("x", 0.5, interpolation="linear", weight="w")
+    # The native reader refuses a weighted rank, which no call writes.
+    with pytest.raises(Exception, match="a rank takes no weight"):
+        run(df, r=operator("cross_rank", "x", weight="w"))
