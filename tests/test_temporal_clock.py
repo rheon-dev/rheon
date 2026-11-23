@@ -527,7 +527,7 @@ class TestEveryClockParameterTakesADuration:
             kw["kernel_half_lives"] = ["30s", "2m"]
         if builder == "glm":
             kw["targets"] = ["c"]
-        if builder in ("hawkes", "expectile"):
+        if builder in ("hawkes", "expectile", "ddsketch"):
             # A window takes no decay beside it: the parameter under test
             # sets its own half_life where it is that one.
             kw["half_life"] = float("inf")
