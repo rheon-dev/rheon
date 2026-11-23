@@ -3063,10 +3063,11 @@ Newton on their likelihood, from a small grid, and replayed at the fit to
 build `H`. They report nothing, as `below_warm_rows`. The Newton runs until
 a step is at the parameters' rounding, so where it stops is not a matter of
 `ln`'s last bits. A fit is at its optimum when the gain its Newton step
-predicts inside the process's bounds is at most `10⁻⁶` nats: the Newton
-decrement `½ gᵀ M⁻¹ g`, with `M` the observed curvature, where the step
-stays inside, and the step projected onto the bounds in `M`'s metric where
-it does not. So an optimum on a bound, a GJR whose `α` is 0, is one.
+predicts inside the process's bounds is at most `10⁻⁶` nats. Where the step
+stays inside, that gain is the Newton decrement `½ gᵀ M⁻¹ g`, with `M` the
+observed curvature; where it does not, the step is projected onto the
+bounds in `M`'s metric. So an optimum on a bound, a GJR whose `α` is 0, is
+one.
 
 **It reports only a process its rows identify.** On returns with no
 conditional variance the likelihood is flat along a ridge, where `β` is not
@@ -3079,8 +3080,8 @@ That is 13.8 for `garch` (`α = β = 0`), and 16.3 for `gjr`, `egarch` and
 `not_identified`. A fit that passes but is not at its optimum is never
 stepped from either; its wait is the start's own, `below_warm_rows`. A try
 that does not start keeps its rows and fits again once as many new rows
-have come as it held: twice its rows while `max_state_bytes` holds them
-(each target's share of it), then the latest rows the share holds, the
+have come as it held. That is twice its rows while `max_state_bytes` holds
+them (each target's share of it), then the latest rows the share holds, the
 oldest leaving as each new one comes. No count of tries ends the wait, and
 nothing is cleared, which could not cure a shortage of evidence.
 
