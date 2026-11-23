@@ -1882,3 +1882,34 @@ mod review_2026_11_23 {
         }
     }
 }
+
+#[cfg(test)]
+mod review_2026_11_23_diag7 {
+    use super::*;
+
+    /// Ljung and Box's autocorrelations from raw sums cancel under a
+    /// residual bias: at a bias of `1e8` on unit noise the denominator
+    /// `Σe² − W ē²` reads below 0 and the statistic `None`, where the same
+    /// residuals less their bias read a statistic (review 2026-11-23,
+    /// DIAG-7). Confirmed; the fix keeps the sums about an origin, which is
+    /// state, for a later batch. It panics until then.
+    #[test]
+    #[should_panic(expected = "bias")]
+    fn ljung_box_reads_alike_under_a_bias() {
+        let fed = |bias: f64| {
+            let mut s = Specification::new(1, 0, 3, 0);
+            let mut g = crate::SplitMix64::new(5);
+            for _ in 0..500 {
+                let e = g.uniform() - 0.5 + bias;
+                s.update(&[g.uniform()], 1.0, e, 0.99, 1.0);
+            }
+            s.ljung_box(true)
+        };
+        let want = fed(0.0).unwrap();
+        let got = fed(1e8);
+        assert!(
+            got.is_some_and(|g| (g - want).abs() <= 1e-6 * want.max(1.0)),
+            "bias 1e8: {got:?} against {want}"
+        );
+    }
+}
