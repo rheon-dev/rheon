@@ -718,6 +718,15 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **`lasso`'s warm start begins at 0 where the last fit is not a number in
+  the new scale** (review 2026-11-23, LASSO-3). Each solve starts from the
+  last one's coefficients times the features' new spreads. A coefficient
+  near `1e229`, fitted while a feature's spread was `1e-130` beside a
+  target near `1e99`, is finite, but times a spread widened to `1e99` it
+  is not: the descent started at `±inf` and the fit was counted a failure
+  and withheld. Such a coordinate now starts at 0, and the solve converges.
+  Moves: `lasso.*`.
+
 - **`ftrl`'s and `sgd`'s AdaGrad sums never pass the largest double**
   (review 2026-11-23, REG-9). A row whose squared gradient would overflow
   was skipped, but not one whose square fits while the sum it joins does

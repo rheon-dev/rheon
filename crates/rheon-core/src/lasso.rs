@@ -1074,9 +1074,13 @@ impl Lasso {
                 let mut b = vec![0.0; k];
                 if let Some(prev) = &self.beta {
                     for i in 0..k {
-                        let p = prev[j][0][i + off];
-                        if s[i] > 0.0 && p.is_finite() {
-                            b[i] = p * s[i];
+                        // In the new scale, where that is a number: a
+                        // coefficient fitted at a spread of `1e-130` and
+                        // read at one of `1e99` started the descent at
+                        // `±inf` (review 2026-11-23, LASSO-3).
+                        let start = prev[j][0][i + off] * s[i];
+                        if s[i] > 0.0 && start.is_finite() {
+                            b[i] = start;
                         }
                     }
                 }
@@ -1797,6 +1801,51 @@ impl OnlineModel for Lasso {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The warm start reads the last solve's coefficient in the new
+    /// scale only where that is a number (review 2026-11-23, LASSO-3): a
+    /// feature whose spread was `1e-130` beside a target near `1e99` has a
+    /// coefficient near `1e229`, finite, and once rows at `1e99` widen its
+    /// spread the standardized start `β · s` was infinite. The descent ran
+    /// from infinities, and the fit was NaN, its prediction withheld for
+    /// good. Started at 0 there, the solve converges and predicts.
+    #[test]
+    fn a_warm_start_past_the_largest_double_starts_at_zero() {
+        for k in [2, split::SPLIT_MIN_K + 5] {
+            let mut c = cfg(k, 1, vec![0.0]);
+            c.min_weight = 0.0;
+            let mut m = Lasso::new(c).unwrap();
+            let mut s = 7u64;
+            let mut lcg = || {
+                s = s
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                ((s >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0
+            };
+            let row = |u: f64, scale: f64, v: &mut dyn FnMut() -> f64| -> Vec<f64> {
+                // The last coordinate, so every other one reads its start.
+                (0..k)
+                    .map(|i| if i == k - 1 { scale * u } else { v() })
+                    .collect()
+            };
+            for _ in 0..3 * k {
+                let u = lcg();
+                let x = row(u, 1e-130, &mut lcg);
+                m.step(&x, &[Some(1e99 * u)], 1.0, 1.0);
+            }
+            let fit = m.coefficients().expect("a fit")[0][0][k];
+            assert!(fit.abs() > 1e220 && fit.is_finite(), "{fit:e}");
+            let before = m.solve_failures;
+            let mut last = f64::NAN;
+            for _ in 0..3 * k {
+                let u = lcg();
+                let x = row(u, 1e99, &mut lcg);
+                last = m.step(&x, &[Some(0.5 * u)], 1.0, 1.0).pred[0];
+            }
+            assert!(last.is_finite(), "k {k}: {last}");
+            assert_eq!(m.solve_failures, before, "k {k}");
+        }
+    }
 
     /// A descent that runs to infinities has not converged (review
     /// 2026-11-23, LASSO-1): on a symmetric `c` that is not positive
