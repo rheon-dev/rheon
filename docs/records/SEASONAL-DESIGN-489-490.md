@@ -224,8 +224,8 @@ not take `stl` or `mstl` at first.
 | a zoned clock's terms | statsmodels on the naive wall-clock index | 0 ulps |
 | STL, `method="exact"`, any settings, robust or not | statsmodels `STL(window, period, ...).fit()` at the emitted position | **0 ulps**, every component, each OS against its own statsmodels |
 | MSTL, `method="exact"` | statsmodels `MSTL(window, periods, windows, iterate, stl_kwargs)` | **0 ulps** |
-| STL or MSTL, `method="kernel"` | the same | `1e-12` relative to `max |window|` (measured 70 times inside) |
-| MSTL on a Box-Cox column made in Polars | `MSTL(lmbda=l)` | `16 eps max |transformed|` (a libm result) |
+| STL or MSTL, `method="kernel"` | the same | `1e-12` relative to `max \|window\|` (measured 70 times inside) |
+| MSTL on a Box-Cox column made in Polars | `MSTL(lmbda=l)` | `16 eps max \|transformed\|` (a libm result) |
 | the kernel's adjoint | the port run on the identity, in Rust, at small `W` (faer is no oracle here: no matrix is solved) | measured, then fixed in the ledger |
 
 The window's value against the whole history's is a documented gap (§6.1,
