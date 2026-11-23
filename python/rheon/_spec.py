@@ -453,6 +453,7 @@ _NO_FEATURES = {
     "hawkes": "each of its targets is a node, whose values above 0 are its events",
     "garch": "each of its targets is a return series whose variance it models",
     "tdigest": "each of its targets is a column whose quantiles it reads",
+    "ddsketch": "each of its targets is a column whose quantiles it reads",
 }
 
 #: The parameters renamed in one builder, or whose old name another keeps
@@ -734,6 +735,7 @@ __all__ = [
     "seqtest",
     "sgd",
     "tdigest",
+    "ddsketch",
 ]
 
 
@@ -5039,6 +5041,7 @@ from rheon._spec_audit import audit  # noqa: E402
 from rheon._spec_changepoint import bocpd, corrchange  # noqa: E402
 from rheon._spec_class import ew_class  # noqa: E402
 from rheon._spec_cluster import kmeans, micro  # noqa: E402
+from rheon._spec_ddsketch import ddsketch  # noqa: E402
 from rheon._spec_expectile import expectile  # noqa: E402
 from rheon._spec_garch import garch  # noqa: E402
 from rheon._spec_glm import glm  # noqa: E402

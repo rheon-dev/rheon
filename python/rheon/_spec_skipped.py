@@ -30,6 +30,7 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
         }
     ),
     "tdigest": frozenset({"compression", "max_state_bytes"}),
+    "ddsketch": frozenset({"alpha", "window_rows", "window_size", "closed", "max_state_bytes"}),
     "ewridge": frozenset({"gram_threads"}),
     "expectile": frozenset(
         {

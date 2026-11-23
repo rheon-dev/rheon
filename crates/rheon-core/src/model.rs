@@ -91,6 +91,7 @@ pub enum ModelState {
     Expectile(Box<crate::Expectile>),
     Garch(Box<crate::Garch>),
     TDigest(Box<crate::TDigestModel>),
+    DdSketch(Box<crate::DdSketchModel>),
 }
 
 #[derive(Debug, Error)]
@@ -214,6 +215,7 @@ impl ModelState {
             ModelState::Expectile(_) => "expectile",
             ModelState::Garch(_) => "garch",
             ModelState::TDigest(_) => "tdigest",
+            ModelState::DdSketch(_) => "ddsketch",
         }
     }
 }

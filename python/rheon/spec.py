@@ -130,7 +130,7 @@ shows them at work.
          - ``bocpd``
        * - 0, each having a gate of its own or nothing to gate
          - ``ewridge``, ``seqtest``, ``rcov``, ``hmm``, ``corrchange``,
-           ``audit``, ``hawkes``, ``garch``, ``tdigest``
+           ``audit``, ``hawkes``, ``garch``, ``tdigest``, ``ddsketch``
 ``min_settled_frac``
     Why: a history shorter than the half-life may not represent the process,
     such as regimes or seasons the half-life was chosen to average across.
@@ -455,10 +455,10 @@ releases none. A regression writes, with ``<t>`` a target:
     ``q`` have a mean square above twice their mean, so each step grows its
     own row's residual in mean square, and the fit diverges; the ``sgd``
     builder's docstring has the gain. ``level_beyond_sample`` is a
-    ``tdigest`` level its rows do not identify yet: past the expected level
-    of the smallest or largest row, ``1/(n + 1)`` and ``n/(n + 1)`` for
-    ``n`` rows; the ``tdigest`` builder's docstring has the rule. Fields
-    null for another reason,
+    ``tdigest`` or ``ddsketch`` level its rows do not identify yet: past the
+    expected level of the smallest or largest row, ``1/(n + 1)`` and
+    ``n/(n + 1)`` for ``n`` rows; the ``tdigest`` builder's docstring has
+    the rule. Fields null for another reason,
     such as a skipped row or a statistic not yet due, leave it null. An
     ``Enum`` rather than a string, because a string column costs sixteen
     bytes a row even when every value is null.
@@ -1116,6 +1116,7 @@ from rheon._spec import (
     coef_fields,
     coef_index,
     corrchange,
+    ddsketch,
     deco,
     ew_class,
     ew_cov,
@@ -1176,4 +1177,5 @@ __all__ = [
     "seqtest",
     "sgd",
     "tdigest",
+    "ddsketch",
 ]

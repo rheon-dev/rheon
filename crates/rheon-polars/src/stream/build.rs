@@ -779,5 +779,9 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         ModelKind::TDigest { .. } => Ok(AnyModel::TDigest(Box::new(
             rheon_core::TDigestModel::new(tdigest_cfg(spec)?)?,
         ))),
+        // No decay: a window is its form that forgets.
+        ModelKind::DdSketch { .. } => Ok(AnyModel::DdSketch(Box::new(
+            rheon_core::DdSketchModel::new(ddsketch_cfg(spec)?)?,
+        ))),
     }
 }

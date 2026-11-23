@@ -78,6 +78,19 @@ fn window_words(spec: &Spec) -> (String, &'static str, &'static str) {
             start_span: Some(s),
             ..
         } => (format!("start_span = {s}"), "Shorten start_span", "rows"),
+        ModelKind::DdSketch {
+            window_size: Some(w),
+            ..
+        } => (
+            format!("window_size = {w}"),
+            "Shorten window_size, or raise alpha",
+            "rows and buckets",
+        ),
+        ModelKind::DdSketch { .. } => (
+            "the range of its values".to_string(),
+            "Raise alpha",
+            "buckets",
+        ),
         ModelKind::Expectile {
             refit_span: Some(s),
             ..

@@ -112,6 +112,7 @@ pub enum AnyModel {
     Hawkes(Box<rheon_core::Hawkes>),
     Garch(Box<rheon_core::Garch>),
     TDigest(Box<rheon_core::TDigestModel>),
+    DdSketch(Box<rheon_core::DdSketchModel>),
 }
 
 /// A flush's shards, run on whichever pool the caller is in: the bank's
@@ -163,6 +164,7 @@ macro_rules! dispatch {
             AnyModel::Hawkes($m) => $body,
             AnyModel::Garch($m) => $body,
             AnyModel::TDigest($m) => $body,
+            AnyModel::DdSketch($m) => $body,
         }
     };
 }
@@ -504,6 +506,7 @@ impl AnyModel {
     pub fn beyond_sample(&self) -> bool {
         match self {
             AnyModel::TDigest(m) => m.beyond_sample(),
+            AnyModel::DdSketch(m) => m.beyond_sample(),
             _ => false,
         }
     }
@@ -548,7 +551,8 @@ impl AnyModel {
             // Every read it withholds is a row's, not a failure.
             | AnyModel::Hawkes(_)
             | AnyModel::Garch(_)
-            | AnyModel::TDigest(_) => 0,
+            | AnyModel::TDigest(_)
+            | AnyModel::DdSketch(_) => 0,
         }
     }
 
@@ -623,7 +627,7 @@ impl AnyModel {
             // Each target's process parameters, then its shape.
             AnyModel::Garch(m) => Some(m.coefficients()),
             // tdigest has none: its value is the levels it reads.
-            AnyModel::TDigest(_) => None,
+            AnyModel::TDigest(_) | AnyModel::DdSketch(_) => None,
         }
     }
 
@@ -647,8 +651,9 @@ use build::{build_one, constraint, huber_scale_of, resid_window};
 mod model_cfgs;
 use model_cfgs::read_floor;
 pub use model_cfgs::{
-    audit_cfg, bocpd_cfg, corrchange_cfg, deco_block_names, deco_cfg, expectile_cfg, garch_cfg,
-    glm_cfg, hawkes_cfg, hmm_cfg, huber_model, quantile_model, rcov_cfg, sgd_model, tdigest_cfg,
+    audit_cfg, bocpd_cfg, corrchange_cfg, ddsketch_cfg, deco_block_names, deco_cfg, expectile_cfg,
+    garch_cfg, glm_cfg, hawkes_cfg, hmm_cfg, huber_model, quantile_model, rcov_cfg, sgd_model,
+    tdigest_cfg,
 };
 
 /// One grid combo: the rendered label plus the machine values it encodes, so
@@ -755,7 +760,8 @@ pub fn combos(spec: &Spec) -> Vec<Combo> {
         | ModelKind::Hawkes { .. }
         | ModelKind::Expectile { .. }
         | ModelKind::Garch { .. }
-        | ModelKind::TDigest { .. } => vec![Combo::default()],
+        | ModelKind::TDigest { .. }
+        | ModelKind::DdSketch { .. } => vec![Combo::default()],
         // `p` for the penalty, since `l` is a lag's (`lag_corr_l1_a_b`); and
         // no label for a path of one point, as a single ridge or half-life
         // writes none, while the machine value says which it is.

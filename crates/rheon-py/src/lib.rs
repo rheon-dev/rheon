@@ -1417,6 +1417,62 @@ fn tdigest_tail_means(
         .collect())
 }
 
+/// A store's buckets as `(key, weight)`, ascending by key.
+type Buckets = Vec<(i32, f64)>;
+
+/// The DDSketch's buckets after `values` (each of weight 1) at `alpha`: the
+/// positive store's and the negative store's `(key, weight)` pairs and the
+/// zero count, which the agreement test with the `ddsketch` package reads.
+#[pyfunction]
+fn ddsketch_buckets(values: Vec<f64>, alpha: f64) -> PyResult<(Buckets, Buckets, f64)> {
+    use rheon_polars::rheon_core::{DdSketch, DdSketchMapping, DdSketchSlot};
+    let map = DdSketchMapping::new(alpha).map_err(PyValueError::new_err)?;
+    let mut d = DdSketch::default();
+    for v in values.into_iter().filter(|v| v.is_finite()) {
+        d.add(&map, DdSketchSlot::of(&map, v), 1.0, false);
+    }
+    Ok((
+        d.positive().buckets().collect(),
+        d.negative().buckets().collect(),
+        d.zero_weight(),
+    ))
+}
+
+/// The representative of each of `keys` at `alpha`.
+#[pyfunction]
+fn ddsketch_values(keys: Vec<i32>, alpha: f64) -> PyResult<Vec<f64>> {
+    let map =
+        rheon_polars::rheon_core::DdSketchMapping::new(alpha).map_err(PyValueError::new_err)?;
+    Ok(keys.into_iter().map(|k| map.value(k)).collect())
+}
+
+/// The DDSketch's quantile and tail mean at each of `levels` after `values`
+/// of `weights` at `alpha`: the core's sketch itself, with no clock or
+/// group, which the agreement tests read.
+#[pyfunction]
+fn ddsketch_reads(
+    values: Vec<f64>,
+    weights: Vec<f64>,
+    alpha: f64,
+    levels: Vec<f64>,
+) -> PyResult<Vec<Option<(f64, f64)>>> {
+    use rheon_polars::rheon_core::{DdSketch, DdSketchMapping, DdSketchSlot};
+    if values.len() != weights.len() {
+        return Err(PyValueError::new_err(
+            "ddsketch_reads: values and weights must be as long as each other. Give one \
+             weight a value.",
+        ));
+    }
+    let map = DdSketchMapping::new(alpha).map_err(PyValueError::new_err)?;
+    let mut d = DdSketch::default();
+    for (v, w) in values.into_iter().zip(weights) {
+        if v.is_finite() && w > 0.0 && w.is_finite() {
+            d.add(&map, DdSketchSlot::of(&map, v), w, false);
+        }
+    }
+    Ok(d.reads(&levels))
+}
+
 /// The parameters measured in clock units, which take a duration under a
 /// temporal clock, keyed `"*"` for the shared ones and by model `type` for
 /// the rest; the rates per clock unit, which a temporal clock refuses
@@ -1614,6 +1670,9 @@ fn _rheon(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(psquared_reads, m)?)?;
     m.add_function(wrap_pyfunction!(tdigest_quantiles, m)?)?;
     m.add_function(wrap_pyfunction!(tdigest_tail_means, m)?)?;
+    m.add_function(wrap_pyfunction!(ddsketch_buckets, m)?)?;
+    m.add_function(wrap_pyfunction!(ddsketch_values, m)?)?;
+    m.add_function(wrap_pyfunction!(ddsketch_reads, m)?)?;
     m.add_function(wrap_pyfunction!(format_duration, m)?)?;
     m.add_function(wrap_pyfunction!(spec_clock_fields, m)?)?;
     m.add_function(wrap_pyfunction!(format_of_path, m)?)?;

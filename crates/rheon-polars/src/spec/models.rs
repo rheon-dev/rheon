@@ -770,6 +770,26 @@ impl Spec {
                     )
                 }));
             }
+            // Its features are checked above. No decay: a decay rounds every
+            // bucket on every row and no row could leave it exactly, so a
+            // half-life is refused naming the windowed form. Every other value is the model's own to
+            // check, here at the call, where the fixed part of the state
+            // against its cap is known too.
+            ModelKind::DdSketch { .. } => {
+                if self.half_life.is_some() || self.lam.is_some() {
+                    no.take(
+                        rheon_core::DdSketchModel::check_no_decay(Some(decay_key))
+                            .map_err(|e| format!("spec {:?}: {}", self.name, ddsketch_words(&e))),
+                    );
+                }
+                no.take(crate::stream::ddsketch_cfg(self).map(|_| ()).map_err(|e| {
+                    format!(
+                        "spec {:?}: {}",
+                        self.name,
+                        e.trim_start_matches("ddsketch: ")
+                    )
+                }));
+            }
             // The shared checks (non-empty features and targets, no column on
             // both sides, a decay, `min_weight` per target, no residual
             // diagnostics) and one of its own: given edges and the knobs for
@@ -1683,6 +1703,20 @@ impl Spec {
                 ));
             }
         }
+    }
+}
+
+/// A `DdSketchModel` refusal of a decay in the spec's words: "`<key>` does
+/// not apply to ddsketch, whose ...", then the core's reason and the
+/// windowed form.
+pub(crate) fn ddsketch_words(e: &str) -> String {
+    let e = e.trim_start_matches("DdSketch: ");
+    match e.split_once(" is not allowed. ") {
+        Some((key, why)) => format!(
+            "{key} does not apply to ddsketch, whose buckets a decay would round on every \
+             row. {why}"
+        ),
+        None => e.to_string(),
     }
 }
 

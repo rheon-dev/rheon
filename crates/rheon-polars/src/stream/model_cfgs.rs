@@ -224,6 +224,34 @@ pub fn tdigest_cfg(spec: &Spec) -> Result<rheon_core::TDigestModelCfg, String> {
     Ok(cfg)
 }
 
+/// A `ddsketch` spec's [`rheon_core::DdSketchModelCfg`]: one sketch a
+/// target, at `alpha = tanh(1/128)` unless the spec gives one, its window
+/// in rows or in clock units. Every value is the model's own to check.
+pub fn ddsketch_cfg(spec: &Spec) -> Result<rheon_core::DdSketchModelCfg, String> {
+    let ModelKind::DdSketch {
+        alpha,
+        quantiles,
+        window_rows,
+        window_size,
+        closed,
+        max_state_bytes,
+    } = &spec.model
+    else {
+        return Err(not_a(spec, "ddsketch_cfg", "ddsketch"));
+    };
+    let cfg = rheon_core::DdSketchModelCfg {
+        n_targets: spec.m(),
+        alpha: alpha.unwrap_or(rheon_core::EW_QUANTILE_ALPHA),
+        levels: quantiles.clone(),
+        window_rows: *window_rows,
+        window_clock: window_size.as_ref().map(Span::value),
+        closed: closed.edge(),
+        max_state_bytes: *max_state_bytes,
+    };
+    cfg.validate()?;
+    Ok(cfg)
+}
+
 /// A `garch` spec's start, in rows, when it gives neither rows nor a span.
 pub const GARCH_START_ROWS: usize = 2000;
 

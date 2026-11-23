@@ -75,6 +75,8 @@ pub mod comp;
 mod conformal;
 mod constraint;
 mod corrchange;
+pub mod ddsketch;
+mod ddsketch_model;
 mod deco;
 mod drift;
 mod ewclass;
@@ -158,6 +160,10 @@ pub use corrchange::{
     ChangeNorm, CorrChange, CorrChangeCfg, CorrChangeKind, MAX_PERM, kolmogorov_cdf,
     kolmogorov_quantile,
 };
+pub use ddsketch::{
+    DDSKETCH_MIN_ALPHA, DdSketch, Mapping as DdSketchMapping, Slot as DdSketchSlot,
+};
+pub use ddsketch_model::{DdSketchModel, DdSketchModelCfg};
 pub use deco::{Deco, DecoCfg, DecoDynamics};
 pub use drift::{
     Adwin, AdwinCfg, Cusum, Ddm, DriftDetector, Eddm, ErrorRate, Kswin, KswinCfg, PageHinkley,

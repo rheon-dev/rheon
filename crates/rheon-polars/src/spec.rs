@@ -1513,6 +1513,39 @@ pub enum ModelKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_state_bytes: Option<u64>,
     },
+    /// Quantiles and tail means of each target column from a DDSketch
+    /// (`rheon_core::DdSketchModel`), relative to the value within `alpha`:
+    /// one sketch a target per group, read at each of `quantiles` before the
+    /// row is added. Per target and level, `q<level>_<target>` and
+    /// `es<level>_<target>`; no `pred` or `coef`. No features and no
+    /// decay; `window_rows` or `window_size` keeps a window's rows alone.
+    #[serde(rename = "ddsketch")]
+    DdSketch {
+        /// The relative accuracy, at least 1e-6 and below 1; absent is
+        /// `tanh(1/128)`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        alpha: Option<f64>,
+        /// The levels read, each above 0 and below 1, and not 0.5.
+        quantiles: Vec<f64>,
+        /// Keep the last this many rows of positive weight alone. Skipped
+        /// when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window_rows: Option<usize>,
+        /// Keep the rows of the last this long on the clock alone: a number
+        /// of the clock column's units (rows when the spec has no clock), or
+        /// a duration on a temporal clock. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window_size: Option<Span>,
+        /// Which edge of `window_size` holds the row exactly that old:
+        /// `"right"`, the default, or `"both"`. Skipped when `"right"`.
+        #[serde(default, skip_serializing_if = "ModelClosed::is_right")]
+        closed: ModelClosed,
+        /// The bytes a group's state may hold: checked at the call for what
+        /// the settings fix, and as the rows go in for the buckets and a
+        /// clock window's rows. Default 256 KB, at most 64 MiB.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
+    },
 }
 
 /// The two sides of a `seqtest` comparison, as [`ModelKind::compares`]
@@ -1602,6 +1635,7 @@ impl ModelKind {
         "expectile",
         "garch",
         "tdigest",
+        "ddsketch",
     ];
 
     pub fn kind_name(&self) -> &'static str {
@@ -1633,6 +1667,7 @@ impl ModelKind {
             ModelKind::Expectile { .. } => "expectile",
             ModelKind::Garch { .. } => "garch",
             ModelKind::TDigest { .. } => "tdigest",
+            ModelKind::DdSketch { .. } => "ddsketch",
         }
     }
 
@@ -1671,6 +1706,7 @@ impl ModelKind {
                 | ModelKind::Bocpd { .. }
                 | ModelKind::Audit { .. }
                 | ModelKind::TDigest { .. }
+                | ModelKind::DdSketch { .. }
         )
     }
 
@@ -1955,6 +1991,7 @@ impl ModelKind {
                     | ModelKind::Hawkes { .. }
                     | ModelKind::Garch { .. }
                     | ModelKind::TDigest { .. }
+                    | ModelKind::DdSketch { .. }
             )
     }
 
@@ -2665,7 +2702,8 @@ impl Spec {
             | ModelKind::Bocpd { .. }
             | ModelKind::Audit { .. }
             | ModelKind::Garch { .. }
-            | ModelKind::TDigest { .. } => true,
+            | ModelKind::TDigest { .. }
+            | ModelKind::DdSketch { .. } => true,
             ModelKind::CorrChange { scalar, .. } => !scalar.unwrap_or(false),
             _ => false,
         };
@@ -2872,7 +2910,7 @@ impl Spec {
             ModelKind::Garch { .. } => 0.0,
             // Each level is withheld until its rows identify it, the
             // model's own rule: no count of rows is the gate.
-            ModelKind::TDigest { .. } => 0.0,
+            ModelKind::TDigest { .. } | ModelKind::DdSketch { .. } => 0.0,
             // The noise gate is this model's readiness gate
             // (docs/WARMUP-AND-CONVERGENCE.md §2.1): `max_error_inflation`
             // tracks the model where a count of weight cannot, and the
@@ -3391,12 +3429,13 @@ impl Spec {
                     columns_counted(self.features.len())
                 ));
             }
-        } else if let ModelKind::TDigest { .. } = &self.model {
+        } else if let ModelKind::TDigest { .. } | ModelKind::DdSketch { .. } = &self.model {
             if !self.features.is_empty() {
                 no.refuse(format!(
-                    "spec {name:?}: tdigest takes no features, but features lists {}: each of \
+                    "spec {name:?}: {} takes no features, but features lists {}: each of \
                      its targets is a column whose quantiles it reads. Put those columns in \
                      targets, and leave out features.",
+                    self.model.kind_name(),
                     columns_counted(self.features.len())
                 ));
             }

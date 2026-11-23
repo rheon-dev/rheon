@@ -266,6 +266,7 @@ pub fn coef_fields(spec: &Spec) -> Vec<CoefField> {
             | crate::ModelKind::Bocpd { .. }
             | crate::ModelKind::Audit { .. }
             | crate::ModelKind::TDigest { .. }
+            | crate::ModelKind::DdSketch { .. }
     ) {
         return Vec::new();
     }
@@ -1207,11 +1208,13 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
         }
         return fields;
     }
-    // tdigest predicts no target's value: per target, one quantile a level,
+    // tdigest and ddsketch predict no target's value: per target, one quantile a level,
     // `q<level>_<target>`, then the tail mean past it a level,
     // `es<level>_<target>` (both read before the row is added), then
     // `n_eff`. One undecayed instance; no `coef`.
-    if let crate::ModelKind::TDigest { quantiles, .. } = &spec.model {
+    if let crate::ModelKind::TDigest { quantiles, .. }
+    | crate::ModelKind::DdSketch { quantiles, .. } = &spec.model
+    {
         let mut fields = Vec::new();
         let nl = quantiles.len();
         for (mi, (suffix, d)) in decays.iter().enumerate() {
