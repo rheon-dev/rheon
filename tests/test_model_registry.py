@@ -94,6 +94,7 @@ MINIMAL: dict[str, dict[str, object]] = {
         "b": 0.9,
         "start_rows": 50,
     },
+    "realized": {"features": None, "lm_window": 30},
 }
 
 #: The sweeps fit a numeric target, so the models that predict none --
@@ -104,8 +105,9 @@ MINIMAL: dict[str, dict[str, object]] = {
 #: hidden state), ``corrchange`` (a test statistic), ``bocpd`` (a posterior
 #: over run lengths), ``audit`` (counts, read from the state), ``hawkes`` (an
 #: intensity of events, not a target's value), ``garch`` (a target's
-#: variance, not its value), ``dcc`` (the targets' correlations) -- sit them
-#: out.
+#: variance, not its value), ``dcc`` (the targets' correlations), ``realized``
+#: (measures of a target's variation and jump tests, not its value) -- sit
+#: them out.
 REGRESSIONS = frozenset(MINIMAL) - {
     "ew_cov",
     "kmeans",
@@ -122,6 +124,7 @@ REGRESSIONS = frozenset(MINIMAL) - {
     "hawkes",
     "garch",
     "dcc",
+    "realized",
 }
 
 
@@ -297,6 +300,7 @@ DIAGNOSTIC_READS: dict[str, set[str]] = {
             "hawkes",
             "garch",
             "dcc",
+            "realized",
         )
     },
 }

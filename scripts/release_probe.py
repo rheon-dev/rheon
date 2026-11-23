@@ -431,6 +431,14 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         dict(targets=["y", "z"], kernel_decays=[0.5, 2.0], group="g", half_life=25.0, **CLOCK),
         [],
     ),
+    # Each target a series of returns, decayed, with Lee and Mykland's own
+    # window.
+    (
+        "realized",
+        "realized",
+        dict(targets=["y", "z"], lm_window=30, group="g", half_life=25.0, **CLOCK),
+        [],
+    ),
 ]
 
 #: The switches and paths the workload above never reached (review round 9,

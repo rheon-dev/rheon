@@ -60,6 +60,10 @@ EXCEPTIONS = {
     # crosses on its first row instead of its third (task 278, batch 17;
     # the `spec` diagnostics table says so). Its fit does not move.
     "ridge_diag": "sigma reads down to ewridge's own floor of a row per unknown, a weight",
+    # Its measures are sums of the returns at their weights, and the tests'
+    # count of returns is the returns' weight: a weight counts its return
+    # that many times (the builder's docs say so).
+    "realized": "a weight counts its return that many times: the measures are sums",
 }
 
 SCALE = 100.0

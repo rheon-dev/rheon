@@ -130,7 +130,7 @@ shows them at work.
          - ``bocpd``
        * - 0, each having a gate of its own or nothing to gate
          - ``ewridge``, ``seqtest``, ``rcov``, ``hmm``, ``corrchange``,
-           ``audit``, ``hawkes``, ``garch``, ``dcc``
+           ``audit``, ``hawkes``, ``garch``, ``dcc``, ``realized``
 ``min_settled_frac``
     Why: a history shorter than the half-life may not represent the process,
     such as regimes or seasons the half-life was chosen to average across.
@@ -358,6 +358,7 @@ and each diagnostic's own ``*_half_life`` below, and in the models
 ``start_span``, ``dcc``'s ``start_span`` and ``margin_start_span``,
 ``glm``'s and ``expectile``'s ``refit_span``, and
 ``kmeans``' ``warm_span``, ``update_every`` and ``split_merge_every``,
+``realized``'s ``window_size``,
 ``hmm``'s and ``bocpd``'s ``warm_span``, ``bocpd``'s ``hazard``,
 ``corrchange``'s ``permute_every``, ``huber``'s and ``sgd``'s
 ``huber_refit_span`` and ``quantile``'s ``quantile_refit_span``. Each that
@@ -1135,6 +1136,7 @@ from rheon._spec import (
     pa,
     quantile,
     rcov,
+    realized,
     rls,
     seqtest,
     sgd,
@@ -1169,6 +1171,7 @@ __all__ = [
     "output_index",
     "pa",
     "quantile",
+    "realized",
     "rls",
     "seqtest",
     "sgd",

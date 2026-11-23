@@ -778,5 +778,8 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         ModelKind::Dcc { .. } => Ok(AnyModel::Dcc(Box::new(rheon_core::Dcc::new(dcc_cfg(
             spec, decay,
         )?)?))),
+        ModelKind::Realized { .. } => Ok(AnyModel::Realized(Box::new(rheon_core::Realized::new(
+            realized_cfg(spec, decay)?,
+        )?))),
     }
 }

@@ -184,6 +184,7 @@ in `tests/test_second_opinion.py`, Vowpal Wabbit among them.
 | `sgd`'s squared, epsilon-insensitive (at `eps = 0`, its tube being in the target's own EW std) and logistic losses under `"constant"`, weighted or not; `"inv_scaling"` at unit weights; the Huber cut is `sgd_ref`'s | scikit-learn's `SGDRegressor` and `SGDClassifier(loss="log_loss")`, `partial_fit` one row at a time (`TestSgdIsScikitLearnsSgd`) | 1e-12 (1.0e-15 measured) |
 | `hmm` at fixed parameters | hmmlearn's `GaussianHMM`: the filtered and predicted probabilities, and each row's log-likelihood (`TestHmmIsHmmlearns`) | 1e-10 (1.4e-13 measured) |
 | `rls` | padasip's `FilterRLS`, at unit weights on a row clock (`TestRlsIsPadasips`) | 1e-11 (1.6e-14 measured) |
+| `realized` | the papers' estimators in numpy (`tests/reference_realized.py`) on simulated days and Binance's data; `hfvol` on RV, BV and the jump variation; R's `highfrequency` (`rRVar`, `rBPCov`, `rMPVar`, `rTPQuar`, `BNSjumpTest`, `intradayJumpTest`) and `yuima` (`bns.test`) in `tests/r_oracle/`, their small-sample factors divided out | a few ulps (RV, BV, `lm`), 64 ulps (TV, TQ), 64 units of `cond · ε` (the ratio test) |
 | `seqtest` | `reference.seqtest_ref`, the paper's betting recursion in scalar code, and its closed form where the clip never binds (`tests/test_seqtest.py`) | 1e-12, relative |
 | `emit_drift` | river's `PageHinkley` at `half_life = inf` (`TestAZeroWeightRowIsNotSeen`) | flag for flag |
 | a prediction under `embargo` | river's progressive validation with `delay` (`TestLabelDelayFoldsWhatWasScored`) | 1e-12 |
@@ -265,7 +266,13 @@ source and where: `bayesian-changepoint-detection`'s wheel declares none,
 and its repository's `LICENSE` is MIT.
 
 **A library that must not be in every contributor's environment, for its
-platforms, gets a group of its own and a CI job of its own.**
+platforms, gets a group of its own and a CI job of its own.** R's `highfrequency` and `yuima`, the reference
+implementations of the realized measures and the jump tests, are such:
+they need R. So rpy2 is the `r-oracles` group, and `tests/r_oracle/` is
+collected only under `-m r_oracle` (`tests/conftest.py`).
+`.github/workflows/oracles.yml`'s `r-oracles` job installs R, its packages
+and the group on Linux and runs them. `tests/test_dependency_policy.py`
+holds their imports to that group and the dev group.
 
 **Rule 3 reaches the child interpreters a test spawns.** `tests/child.py`
 puts `tests/_site/sitecustomize.py`, which installs the same finder, on the

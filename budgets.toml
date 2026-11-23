@@ -254,6 +254,9 @@ what = "dcc, three series, the asymmetric model learned after its start, no marg
 [instructions.dcc_margins]
 what = "dcc, three series through GARCH margins, the asymmetric model learned after both starts: AnyModel::step_into, three GARCH steps and the correlation's a row; its budget is CI's first count"
 
+[instructions.realized]
+what = "realized, two series under a decay with Lee and Mykland's window of 100: AnyModel::step_into, into one kept Step, seven compensated sums and a ring a series a row; its budget is CI's first count"
+
 [instructions.audit_continuous]
 what = "audit, one continuous column, 256 counters: AnyModel::step_into, into one kept Step, past the cap on nearly every row"
 budget = 847018
@@ -1574,6 +1577,27 @@ variance_y = { budget = 8.125 }
 variance_z = { budget = 8.125 }
 weight_sum = { budget = 8.0 }
 withheld_reason = { budget = 1.0 }
+
+[memory.realized]
+bns_y = { budget = 8.125 }
+bns_z = { budget = 8.125 }
+bv_y = { budget = 8.0 }
+bv_z = { budget = 8.0 }
+learned_clock = { budget = 8.125 }
+lm_jump_y = { budget = 0.25 }
+lm_jump_z = { budget = 0.25 }
+lm_y = { budget = 8.125 }
+lm_z = { budget = 8.125 }
+rv_y = { budget = 8.0 }
+rv_z = { budget = 8.0 }
+scored_clock = { budget = 8.0 }
+settled_frac = { budget = 8.0 }
+tq_y = { budget = 8.0 }
+tq_z = { budget = 8.0 }
+tv_y = { budget = 8.0 }
+tv_z = { budget = 8.0 }
+weight_sum = { budget = 8.0 }
+withheld_reason = { budget = 1.125 }
 
 # --- raises and sign-offs -------------------------------------------------------
 [[raised]]

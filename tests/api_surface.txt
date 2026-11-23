@@ -465,6 +465,16 @@
     noise_stride = None
     iv_stride = None
     common
+  realized:
+    name
+    targets
+    window_rows = None
+    window_size = None
+    closed = 'right'
+    lm_window = None
+    lm_beta = 0.99
+    max_state_bytes = None
+    common
   rls:
     name
     targets
@@ -1075,6 +1085,25 @@
     stream.robust_se_half_life = "inf"
     stream.specification_half_life = "inf"
     stream.tails_half_life = "inf"
+  realized(half_life=50.0, targets=['y']):
+    model.closed = "right"
+    model.decay.Halflife = 50.0
+    model.lm_beta = 0.99
+    model.lm_window = null
+    model.max_state_bytes = null
+    model.min_weight = 0.0
+    model.n_targets = 1
+    model.window_clock = null
+    model.window_rows = null
+    stream.breaks_half_life = 50.0
+    stream.calibration_half_life = 200.0
+    stream.feature_health_half_life = 50.0
+    stream.influence_half_life = 50.0
+    stream.max_error_inflation = "inf"
+    stream.min_weight = [0.0]
+    stream.robust_se_half_life = 50.0
+    stream.specification_half_life = 50.0
+    stream.tails_half_life = 50.0
   rls(features=['x0'], half_life=50.0, targets=['y']):
     model.coef_prior = null
     model.decay.Halflife = 50.0
@@ -1255,6 +1284,27 @@
     model.margins.dist = "t"
     model.margins.start_span = 900.0
     model.margins.vol = "gjr"
+  realized(half_life=inf, targets=['y'], window_rows=50), the lines that differ from realized's:
+    model.decay.Halflife = "inf"
+    model.window_rows = 50
+    stream.breaks_half_life = "inf"
+    stream.calibration_half_life = "inf"
+    stream.feature_health_half_life = "inf"
+    stream.influence_half_life = "inf"
+    stream.robust_se_half_life = "inf"
+    stream.specification_half_life = "inf"
+    stream.tails_half_life = "inf"
+  realized(closed='both', half_life=inf, targets=['y'], window_size=30.0), the lines that differ from realized's:
+    model.closed = "both"
+    model.decay.Halflife = "inf"
+    model.window_clock = 30.0
+    stream.breaks_half_life = "inf"
+    stream.calibration_half_life = "inf"
+    stream.feature_health_half_life = "inf"
+    stream.influence_half_life = "inf"
+    stream.robust_se_half_life = "inf"
+    stream.specification_half_life = "inf"
+    stream.tails_half_life = "inf"
 
 [ModelBank]  # name and signature: a parameter added or a default moved is a diff here
   __init__(self, specs: 'Iterable[dict[str, Any]]', *, threads: 'int | None' = None) -> 'None'
@@ -2429,6 +2479,24 @@
     settled_frac: f64
     withheld_reason: enum
     coef: list[f64]
+  realized minimal:
+    rv_y: f64
+    bv_y: f64
+    tv_y: f64
+    tq_y: f64
+    bns_y: f64
+    lm_y: f64
+    lm_jump_y: bool
+    rv_z: f64
+    bv_z: f64
+    tv_z: f64
+    tq_z: f64
+    bns_z: f64
+    lm_z: f64
+    lm_jump_z: bool
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
   deco blocked:
     u_a: f64
     u_b: f64
@@ -2599,6 +2667,7 @@
     rcov_iv_sparse: List[Float64]
     rcov_iq: List[Float64]
     rcov_psd_repaired: Boolean
+  realized: the shared columns only
   rls: the shared columns only
   seqtest: the shared columns only
   sgd: the shared columns only
@@ -2722,6 +2791,7 @@
   dcc.margins: garch, none
   dcc.vol: egarch, figarch, garch, gjr
   dcc.dist: normal, skewt, t
+  realized.closed: both, right
   marginal.closed: both, right
   ew_class.covariance_type: diag, full, tied
   ew_class.window_budget: refuse, thin
@@ -2887,6 +2957,7 @@
     pa: c, coef_max, coef_min, coef_sum, eps, mode, standardize
     quantile: max_rows_between_solves, max_state_bytes, quantile, quantile_eps, quantile_refit_rows, quantile_refit_span, refit_budget, ridge, solve_every, standardize
     rcov: bandwidth, block_rows, iv_stride, jitter, kernel, kind, max_bandwidth, noise_stride, preavg_rows, psd, theta
+    realized: closed, lm_beta, lm_window, max_state_bytes, window_rows, window_size
     rls: coef_prior, delta
     seqtest: a, a_suffix, b, b_suffix
     sgd: clip_gradient, coef_max, coef_min, coef_sum, eps, huber_delta, huber_refit_rows, huber_refit_span, huber_scale, huber_scale_half_life, l2, learning_rate, loss, max_state_bytes, power, quantile, refit_budget, schedule, standardize, strict_binary

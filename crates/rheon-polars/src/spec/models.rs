@@ -720,6 +720,46 @@ impl Spec {
             // Its features and its kernels are checked above; every value
             // is the model's own to check.
             ModelKind::Hawkes { .. } => {}
+            // Its features are checked above. Every value is the model's own
+            // to check, here at the call, among them the state's bytes
+            // against `max_state_bytes` where the settings fix them (a window
+            // of rows, `lm_window`). A decay refused is `decays`' to say.
+            ModelKind::Realized { window_size, .. } => {
+                let bad_window = window_size
+                    .as_ref()
+                    .is_some_and(|w| !(w.value().is_finite() && w.value() > 0.0));
+                if let Some(w) = window_size.as_ref().filter(|_| bad_window) {
+                    no.refuse(format!(
+                        "spec {:?}: window_size must be a finite span of the clock above \
+                         0, but it is {w}. Give the span the estimators are measured over, \
+                         or leave it out for no window.",
+                        self.name
+                    ));
+                }
+                if let Some((_, decay)) = self
+                    .decays()
+                    .ok()
+                    .and_then(|d| d.into_iter().next())
+                    .filter(|_| !bad_window)
+                {
+                    no.take(
+                        crate::stream::realized_cfg(self, decay)
+                            .and_then(|c| c.validate())
+                            .map_err(|e| {
+                                e.lines()
+                                    .map(|l| {
+                                        format!(
+                                            "spec {:?}: {}",
+                                            self.name,
+                                            l.trim_start_matches("realized: ")
+                                        )
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            }),
+                    );
+                }
+            }
             // Its features are checked above. No decay: the recursion is per
             // observation and the estimate weighs every row it learned. The
             // start is rows or a span of the clock, not both; every other

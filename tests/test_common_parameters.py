@@ -97,7 +97,7 @@ DECAYING = tuple(
 #: The kinds that refuse a weight column.
 UNWEIGHTED = frozenset({"seqtest", "audit"})
 #: The kinds that read no features.
-NO_FEATURES = frozenset({"holt", "seqtest", "hawkes", "garch", "dcc"})
+NO_FEATURES = frozenset({"holt", "seqtest", "hawkes", "garch", "dcc", "realized"})
 #: The kinds whose clock parameters are rates, which have no unit on a
 #: temporal clock: ``hawkes``' ``kernel_decays`` is refused there, by name.
 RATES = frozenset({"hawkes"})

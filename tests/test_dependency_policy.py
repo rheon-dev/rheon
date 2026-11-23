@@ -94,6 +94,32 @@ def test_every_library_a_test_imports_is_declared_in_the_dev_group() -> None:
     assert not missing, f"imported by tests, not declared in the dev group: {missing}"
 
 
+def test_the_r_oracles_import_only_their_group_and_the_dev_group() -> None:
+    """The R oracles (tests/r_oracle/) need R, which not every machine has:
+    they are a group of their own, ``r-oracles``, which the one Linux job
+    that runs them installs (docs/TESTING.md, a library not in every
+    contributor's environment). Each library they import is declared in it
+    or in the dev group, and no top-level test imports rpy2."""
+    allowed = {_name(r) for r in META["dependency-groups"]["dev"]}
+    allowed |= {_name(r) for r in META["dependency-groups"]["r-oracles"]}
+    assert {_name(r) for r in META["dependency-groups"]["r-oracles"]} == {"rpy2"}
+    files = sorted((REPO / "tests" / "r_oracle").glob("*.py"))
+    assert files, "no R oracle"
+    tops: set[str] = set()
+    for path in files:
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Import):
+                tops |= {a.name.split(".")[0] for a in node.names}
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                tops.add(node.module.split(".")[0])
+    tops -= set(sys.stdlib_module_names) | LOCAL | {"__future__"}
+    # A module's distribution is read off its name: rpy2's and numpy's are
+    # their modules', and the rest are the dev group's.
+    assert {"rpy2"} <= tops, tops
+    assert tops - {"rpy2"} <= {_name(n) for n in allowed} | {"polars", "rheon"}, tops
+    assert "rpy2" not in _imports(), "a test outside tests/r_oracle imports rpy2"
+
+
 def _skips_on_import_error(node: ast.AST) -> bool:
     """A ``try`` whose ``except ImportError`` (or ``ModuleNotFoundError``)
     handler calls ``pytest.skip``: the same false skip as ``importorskip``,

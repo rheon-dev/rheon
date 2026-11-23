@@ -64,6 +64,7 @@ to start with.
 | [`rheon.spec.hawkes`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.hawkes) | a self-exciting point process, fitted exactly by least squares | [entry](MODELS.md#hawkes--how-much-does-each-event-excite-the-next) |
 | [`rheon.spec.garch`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.garch) | the GARCH family: a conditional variance for each return series, its parameters learned a row at a time | [entry](MODELS.md#garch--how-large-will-the-next-return-be) |
 | [`rheon.spec.dcc`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.dcc) | dynamic conditional correlation: the full correlation matrix of a few return series, moving every row, its parameters given or learned a row at a time | [entry](MODELS.md#dcc--how-do-the-correlations-move-from-row-to-row) |
+| [`rheon.spec.realized`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.realized) | realized volatility and the jump tests on it: realized variance, bipower and tripower variation, tripower quarticity, Barndorff-Nielsen and Shephard's test, Lee and Mykland's statistic and flag | [entry](MODELS.md#realized--how-much-did-it-move-and-did-it-jump) |
 
 ## Running a bank
 

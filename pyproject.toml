@@ -235,6 +235,21 @@ dev = [
     # targeted `omega` for the variance-targeted form. NCSA. The floor is
     # the version measured.
     "arch>=9.0.0",
+    # tests/test_second_opinion_realized.py: hfvol's realized variance,
+    # bipower variation and jump variation are an oracle for `realized`'s
+    # (no small-sample factor, as the papers). MIT, pure Python over numpy.
+    # The floor is the version measured.
+    "hfvol>=0.1.0",
+]
+# The R oracles (tests/r_oracle/): R's `highfrequency` and `yuima`, the
+# reference implementations of the realized measures and the jump tests,
+# reached through rpy2. They need R and its packages, which not every
+# contributor's machine has, so they are a group of their own, installed by
+# the one Linux job that runs them (`oracles.yml`, `r-oracles`) and selected
+# by the `r_oracle` marker; no other run collects them (tests/conftest.py).
+# rpy2 is GPL-2.0-or-later; 3.6 needs R 4.5, and Ubuntu 24.04's R is 4.3.
+r-oracles = [
+    "rpy2>=3.5.17,<3.6",
 ]
 # The API reference: Sphinx over the docstrings, which are written in its
 # dialect (``:class:`` roles, ``::`` literal blocks). Its own group, so a
@@ -284,6 +299,7 @@ markers = [
     "serial: tests that measure the process's memory, which other work on the machine moves; `scripts/gate.sh` runs the rest in several processes (pytest-xdist) and these afterwards in one, alone (docs/TESTING.md, \"Iterating\")",
     "oracle: tests that hold this library's numbers to another computation whose last bits follow the CPU's paths -- scipy, statsmodels, scikit-learn, numpy.linalg (OpenBLAS) or the NumPy references in tests/reference*.py; tests/conftest.py marks every test in a module that imports one (tests/oracle_marks.py), and `cpu-paths.yml` runs `-m 'oracle and not soak and not oracle_grid'` under OPENBLAS_CORETYPE and NPY_DISABLE_CPU_FEATURES (docs/TESTING.md, \"The machines and the CPU paths\")",
     "oracle_grid: the heavy grids against a third-party oracle -- 50 seeds or orders, batch fits over long streams, downloaded datasets -- which no local run takes (pyproject's addopts and `scripts/gate.sh` leave them out) and `.github/workflows/oracles.yml` runs on every push, sharded across jobs. Every use says why: `pytest.mark.oracle_grid(reason=\"...\")`. `uv run pytest -m oracle_grid` runs them here (docs/TESTING.md, \"Two tiers\"; tests/test_tiers.py)",
+    "r_oracle: the R oracles of tests/r_oracle/ (R's highfrequency and yuima through rpy2), which need R and the `r-oracles` dependency group: only `.github/workflows/oracles.yml`'s `r-oracles` job installs them and runs `-m r_oracle`, and no other run collects them (tests/conftest.py)",
     "pins: tests that can only pass on the versions this repo pins -- assertions about the pins themselves, docs that record the version they were generated with, and another library's current behaviour measured on its locked version (polars' multi-key sort, a pyarrow cast bug, duckdb's refusal); the canary unpins on purpose and runs `-m 'not soak and not pins and not oracle_grid'`",
 ]
 [tool.ruff]

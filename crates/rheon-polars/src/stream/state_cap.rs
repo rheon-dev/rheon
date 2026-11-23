@@ -1,5 +1,5 @@
-//! The words for a state the data sizes (`hawkes`' window of clock units,
-//! `garch`'s start over a span of the clock),
+//! The words for a state the data sizes (`hawkes`' and `realized`'s windows
+//! of clock units, `garch`'s start over a span of the clock),
 //! which the settings cannot bound at the call: the notice that it is past
 //! half of its cap, and what the bank says when a row would pass the cap.
 
@@ -71,6 +71,10 @@ fn window_words(spec: &Spec) -> (String, &'static str, &'static str) {
             "events",
         ),
         ModelKind::Expectile {
+            window_size: Some(w),
+            ..
+        }
+        | ModelKind::Realized {
             window_size: Some(w),
             ..
         } => (format!("window_size = {w}"), "Shorten window_size", "rows"),

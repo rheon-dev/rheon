@@ -265,6 +265,7 @@ pub fn coef_fields(spec: &Spec) -> Vec<CoefField> {
             | crate::ModelKind::CorrChange { .. }
             | crate::ModelKind::Bocpd { .. }
             | crate::ModelKind::Audit { .. }
+            | crate::ModelKind::Realized { .. }
     ) {
         return Vec::new();
     }
@@ -1247,6 +1248,40 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                 FieldMeta::new(format!("coef{suffix}"), "coef")
                     .decay(suffix, d)
                     .src(Source::Coef(mi)),
+            );
+        }
+        return fields;
+    }
+    // realized predicts no target's value: per instance and target, the
+    // estimators of the returns before the row, Lee and Mykland's statistic
+    // of the row's own return and its flag; then `n_eff`. No `coef`.
+    if matches!(spec.model, crate::ModelKind::Realized { .. }) {
+        const NAMES: [&str; rheon_core::REALIZED_OUTPUTS] =
+            ["rv", "bv", "tv", "tq", "bns", "lm", "lm_jump"];
+        let n_slots = NAMES.len();
+        let mut fields = Vec::new();
+        for (mi, (suffix, d)) in decays.iter().enumerate() {
+            let base = mi * spec.targets.len() * n_slots;
+            for (t_i, t) in spec.targets.iter().enumerate() {
+                for (slot, name) in NAMES.iter().enumerate() {
+                    let at = base + t_i * n_slots + slot;
+                    let src = if *name == "lm_jump" {
+                        Source::Flag(at)
+                    } else {
+                        Source::Stat(at)
+                    };
+                    fields.push(
+                        FieldMeta::new(format!("{name}_{t}{suffix}"), name)
+                            .decay(suffix, d)
+                            .target(t)
+                            .src(src),
+                    );
+                }
+            }
+            fields.push(
+                FieldMeta::new(format!("weight_sum{suffix}"), "weight_sum")
+                    .decay(suffix, d)
+                    .src(Source::NEff(mi)),
             );
         }
         return fields;

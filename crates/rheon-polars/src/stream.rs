@@ -112,6 +112,7 @@ pub enum AnyModel {
     Hawkes(Box<rheon_core::Hawkes>),
     Garch(Box<rheon_core::Garch>),
     Dcc(Box<rheon_core::Dcc>),
+    Realized(Box<rheon_core::Realized>),
 }
 
 /// A flush's shards, run on whichever pool the caller is in: the bank's
@@ -163,6 +164,7 @@ macro_rules! dispatch {
             AnyModel::Hawkes($m) => $body,
             AnyModel::Garch($m) => $body,
             AnyModel::Dcc($m) => $body,
+            AnyModel::Realized($m) => $body,
         }
     };
 }
@@ -554,7 +556,8 @@ impl AnyModel {
             // Every read it withholds is a row's, not a failure.
             | AnyModel::Hawkes(_)
             | AnyModel::Garch(_)
-            | AnyModel::Dcc(_) => 0,
+            | AnyModel::Dcc(_)
+            | AnyModel::Realized(_) => 0,
         }
     }
 
@@ -631,6 +634,8 @@ impl AnyModel {
             // `a`, `b` and the asymmetric model's `g`, one row; not a number
             // before a learned model's start.
             AnyModel::Dcc(m) => Some(vec![m.coefficients()]),
+            // realized has none: its outputs are the estimators.
+            AnyModel::Realized(_) => None,
         }
     }
 
@@ -656,7 +661,7 @@ use model_cfgs::read_floor;
 pub use model_cfgs::{
     BOCPD_HAZARD_ROWS, audit_cfg, bocpd_cfg, corrchange_cfg, dcc_cfg, deco_block_names, deco_cfg,
     expectile_cfg, garch_cfg, glm_cfg, hawkes_cfg, hmm_cfg, huber_model, quantile_model, rcov_cfg,
-    sgd_model,
+    realized_cfg, sgd_model,
 };
 
 /// One grid combo: the rendered label plus the machine values it encodes, so
@@ -763,7 +768,8 @@ pub fn combos(spec: &Spec) -> Vec<Combo> {
         | ModelKind::Hawkes { .. }
         | ModelKind::Expectile { .. }
         | ModelKind::Garch { .. }
-        | ModelKind::Dcc { .. } => vec![Combo::default()],
+        | ModelKind::Dcc { .. }
+        | ModelKind::Realized { .. } => vec![Combo::default()],
         // `p` for the penalty, since `l` is a lag's (`lag_corr_l1_a_b`); and
         // no label for a path of one point, as a single ridge or half-life
         // writes none, while the machine value says which it is.

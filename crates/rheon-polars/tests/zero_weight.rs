@@ -448,6 +448,30 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
         ALL,
     ),
     (
+        "realized",
+        r#"{"type": "realized", "lm_window": 30}"#,
+        r#""targets": ["y", "x0"], "features": [], "half_life": @50"#,
+        ALL,
+    ),
+    (
+        "realized_rows",
+        r#"{"type": "realized", "window_rows": 40}"#,
+        r#""targets": ["y", "x0"], "features": [], "half_life": "inf""#,
+        UNTIMED,
+    ),
+    (
+        "realized_clock",
+        r#"{"type": "realized", "window_size": @20, "lm_window": 12}"#,
+        r#""targets": ["y", "x0"], "features": [], "half_life": "inf""#,
+        ALL,
+    ),
+    (
+        "realized_clock_both",
+        r#"{"type": "realized", "window_size": @20, "closed": "both"}"#,
+        r#""targets": ["y", "x0"], "features": [], "half_life": "inf""#,
+        ALL,
+    ),
+    (
         "holt",
         r#"{"type": "holt"}"#,
         r#""targets": ["y"], "features": [], "half_life": @50"#,

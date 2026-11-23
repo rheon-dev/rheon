@@ -24,6 +24,7 @@ BUILDERS = [
     "hawkes",
     "garch",
     "dcc",
+    "realized",
     "bocpd",
     "corrchange",
     "deco",

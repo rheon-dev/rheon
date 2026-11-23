@@ -813,6 +813,7 @@ fn every_state_kind_is_distinct_and_named() {
         "expectile",
         "garch",
         "dcc",
+        "realized",
     ];
     let mut seen = std::collections::HashSet::new();
     for k in kinds {
@@ -850,6 +851,7 @@ fn every_state_kind_is_distinct_and_named() {
         Expectile::new(expectile_cfg()).unwrap().state(),
         Garch::new(garch_cfg()).unwrap().state(),
         Dcc::new(dcc_cfg()).unwrap().state(),
+        Realized::new(realized_cfg()).unwrap().state(),
     ];
     let from_states: Vec<&str> = states.iter().map(|s| s.model.kind()).collect();
     assert_eq!(from_states, kinds);
@@ -919,6 +921,7 @@ fn one_state_of_each_kind() -> Vec<State> {
         Expectile::new(expectile_cfg()).unwrap().state(),
         Garch::new(garch_cfg()).unwrap().state(),
         Dcc::new(dcc_cfg()).unwrap().state(),
+        Realized::new(realized_cfg()).unwrap().state(),
         State::new(ModelState::EwCov(Box::new(EwCov::new(1)))),
     ]
 }
@@ -1041,6 +1044,8 @@ fn every_model_hands_back_its_configuration() {
     same(Garch::new(c.clone()).unwrap(), &c, Garch::cfg);
     let c = dcc_cfg();
     same(Dcc::new(c.clone()).unwrap(), &c, Dcc::cfg);
+    let c = realized_cfg();
+    same(Realized::new(c.clone()).unwrap(), &c, Realized::cfg);
 }
 
 fn ew_class_cfg() -> EwClassCfg {
@@ -1176,6 +1181,26 @@ fn the_n_eff_accessor_is_the_steps_under_a_window() {
     pair(
         "hawkes, window_size",
         accessor_is_the_step(Hawkes::new(hawkes_clock_cfg()).unwrap(), 2, &Hawkes::n_eff),
+        whole,
+    );
+    // `realized` keeps a window of rows and one of clock units.
+    let whole = accessor_is_the_step(Realized::new(realized_cfg()).unwrap(), 2, &Realized::n_eff);
+    pair(
+        "realized, window_rows",
+        accessor_is_the_step(
+            Realized::new(realized_rows_cfg()).unwrap(),
+            2,
+            &Realized::n_eff,
+        ),
+        whole,
+    );
+    pair(
+        "realized, window_size",
+        accessor_is_the_step(
+            Realized::new(realized_clock_cfg()).unwrap(),
+            2,
+            &Realized::n_eff,
+        ),
         whole,
     );
     // `expectile` keeps a window of rows and one of clock units.
@@ -1620,7 +1645,7 @@ fn bocpd() {
 #[test]
 fn every_model_refuses_a_decay_it_cannot_run_on() {
     type Build<'a> = (&'a str, &'a dyn Fn(Decay) -> Result<(), String>);
-    let builds: [Build; 19] = [
+    let builds: [Build; 20] = [
         ("ewridge", &|decay| {
             EwRidge::new(EwRidgeCfg {
                 decay,
@@ -1729,6 +1754,13 @@ fn every_model_refuses_a_decay_it_cannot_run_on() {
             Hawkes::new(HawkesCfg {
                 decay,
                 ..hawkes_cfg()
+            })
+            .map(drop)
+        }),
+        ("realized", &|decay| {
+            Realized::new(RealizedCfg {
+                decay,
+                ..realized_cfg()
             })
             .map(drop)
         }),
@@ -1896,6 +1928,7 @@ fn every_model_refuses_at_restore_a_configuration_its_new_refuses() {
         refused(Glm::new(glm_cfg()).unwrap(), "decay", zero(), h),
         refused(Hawkes::new(hawkes_cfg()).unwrap(), "decay", zero(), h),
         refused(Expectile::new(expectile_cfg()).unwrap(), "decay", zero(), h),
+        refused(Realized::new(realized_cfg()).unwrap(), "decay", zero(), h),
         refused(
             Garch::new(garch_cfg()).unwrap(),
             "horizon",
@@ -2325,6 +2358,7 @@ fn exactly_the_scheduled_solvers_report_a_solve_share() {
         ("expectile", share(Expectile::new(expectile_cfg()).unwrap())),
         ("garch", share(Garch::new(garch_cfg()).unwrap())),
         ("dcc", share(Dcc::new(dcc_cfg()).unwrap())),
+        ("realized", share(Realized::new(realized_cfg()).unwrap())),
     ];
     let reporting: Vec<&str> = shares
         .iter()
@@ -2374,6 +2408,7 @@ const PROBED: &[(&str, &str)] = &[
     ("Expectile", "expectile"),
     ("Garch", "garch"),
     ("Dcc", "dcc"),
+    ("Realized", "realized"),
 ];
 
 #[test]
@@ -6454,4 +6489,88 @@ mod generated {
             contract(|| Hawkes::new(hawkes_clock_cfg()).unwrap(), &rows, split)?;
         }
     }
+}
+
+/// Two return series under the shared decay, with Lee and Mykland's own
+/// window of 8 returns.
+fn realized_cfg() -> RealizedCfg {
+    RealizedCfg {
+        n_targets: 2,
+        decay: decay(),
+        min_weight: 3.0,
+        window_rows: None,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        lm_window: Some(8),
+        lm_beta: 0.99,
+        max_state_bytes: None,
+    }
+}
+
+/// A window of six rows, so the probes run through its turnovers; a window
+/// takes no decay, and its `n_eff` is the weight inside it.
+fn realized_rows_cfg() -> RealizedCfg {
+    RealizedCfg {
+        decay: Decay::Halflife(f64::INFINITY),
+        window_rows: Some(6),
+        lm_window: None,
+        ..realized_cfg()
+    }
+}
+
+/// The same over a span of the clock: the probes' rows are a unit apart, so
+/// a window of 12.5 units holds thirteen rows.
+fn realized_clock_cfg() -> RealizedCfg {
+    RealizedCfg {
+        decay: Decay::Halflife(f64::INFINITY),
+        window_clock: Some(12.5),
+        ..realized_cfg()
+    }
+}
+
+#[test]
+fn realized() {
+    // Realized volatility: one return series per target, no features, seven
+    // outputs a series, and `n_eff` every row's weight on the shared
+    // recursion.
+    let m = Realized::new(realized_cfg()).unwrap();
+    assert_eq!(m.n_features(), 0, "realized reads no features");
+    let r = probe_with(m, 2, Some(&Realized::n_eff));
+    assert_eq!(r.n_features, 0);
+    assert_eq!(r.kind, "realized");
+    assert_eq!(r.n_targets, 2);
+    assert_eq!(r.n_outputs, 14);
+    assert_eq!(r.pred_len, 14);
+    assert_eq!(r.n_eff[0], 0.0);
+    assert_eq!(r.n_eff[1], 1.0);
+    assert!((r.n_eff[2] - (0.5f64.powf(1.0 / HALFLIFE) + 1.0)).abs() < 1e-12);
+    assert!((r.after_gap - (r.before_gap * 0.5f64.powi(10) + 1.0)).abs() < 1e-9);
+    assert!(r.roundtrips);
+    // Under a window `n_eff` is the weight inside it (hard rule 8): the six
+    // rows' of a window of six, the thirteen of a span of 12.5 units a step
+    // apart; a gap does not move a window of rows, and a gap past the clock
+    // window's span empties it at the row the gap ends on, after that row
+    // reports.
+    let r = probe_windowed(
+        Realized::new(realized_rows_cfg()).unwrap(),
+        2,
+        Some(&Realized::n_eff),
+    );
+    assert_eq!(r.n_eff, vec![0.0, 1.0, 2.0, 6.0]);
+    assert_eq!(r.after_gap, r.before_gap, "a gap does not move the window");
+    assert!(r.roundtrips);
+    let r = probe_windowed(
+        Realized::new(realized_clock_cfg()).unwrap(),
+        2,
+        Some(&Realized::n_eff),
+    );
+    assert_eq!(r.n_eff, vec![0.0, 1.0, 2.0, 13.0]);
+    assert!(r.roundtrips);
+}
+
+#[test]
+fn realized_predict_is_the_step() {
+    predict_is_the_step_without_the_step(|| Realized::new(realized_cfg()).unwrap(), 2, false);
+    predict_is_the_step_without_the_step(|| Realized::new(realized_rows_cfg()).unwrap(), 2, false);
+    predict_is_the_step_without_the_step(|| Realized::new(realized_clock_cfg()).unwrap(), 2, false);
 }

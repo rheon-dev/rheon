@@ -51,6 +51,10 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
             max_state_bytes: Some(_),
             ..
         }
+        | ModelKind::Realized {
+            max_state_bytes: Some(_),
+            ..
+        }
         | ModelKind::Glm {
             max_state_bytes: Some(_),
             ..
@@ -80,6 +84,10 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
                 "Shorten window_size",
             ),
             ModelKind::Expectile {
+                window_size: Some(w),
+                ..
+            }
+            | ModelKind::Realized {
                 window_size: Some(w),
                 ..
             } => (

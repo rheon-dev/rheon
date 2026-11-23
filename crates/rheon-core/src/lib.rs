@@ -113,6 +113,7 @@ mod oracle;
 mod pa;
 mod pieces;
 mod rcov;
+mod realized;
 mod refusals;
 mod rls;
 mod robust;
@@ -214,6 +215,10 @@ pub use pieces::Sequential;
 pub use rcov::{
     Rcov, RcovCfg, RcovEstimate, RcovKind, parzen, parzen_c_star, phi_11, phi_12, phi_22, preavg_g,
     psi1, psi2,
+};
+pub use realized::{
+    BNS_THETA, BV_SCALE, DEFAULT_LM_BETA as REALIZED_LM_BETA,
+    OUTPUTS_PER_TARGET as REALIZED_OUTPUTS, Realized, RealizedCfg, TQ_SCALE, TV_SCALE,
 };
 pub use refusals::{Refusals, STOPPED, STOPPED_MANY};
 pub use rls::{Rls, RlsCfg};

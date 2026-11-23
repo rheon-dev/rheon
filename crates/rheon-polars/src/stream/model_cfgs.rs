@@ -145,6 +145,37 @@ pub fn expectile_cfg(
     })
 }
 
+/// A `realized` spec's [`rheon_core::RealizedCfg`] at `decay`: one series a
+/// target. Every value is the model's own to check, the state's bytes
+/// against `max_state_bytes` among them.
+pub fn realized_cfg(
+    spec: &Spec,
+    decay: rheon_core::Decay,
+) -> Result<rheon_core::RealizedCfg, String> {
+    let ModelKind::Realized {
+        window_rows,
+        window_size,
+        closed,
+        lm_window,
+        lm_beta,
+        max_state_bytes,
+    } = &spec.model
+    else {
+        return Err(not_a(spec, "realized_cfg", "realized"));
+    };
+    Ok(rheon_core::RealizedCfg {
+        n_targets: spec.m(),
+        decay,
+        min_weight: spec.min_periods_or_default(),
+        window_rows: *window_rows,
+        window_clock: window_size.as_ref().map(Span::value),
+        closed: closed.edge(),
+        lm_window: *lm_window,
+        lm_beta: lm_beta.unwrap_or(rheon_core::REALIZED_LM_BETA),
+        max_state_bytes: *max_state_bytes,
+    })
+}
+
 /// A `garch` spec's [`rheon_core::GarchCfg`]: one series a target, the
 /// start 2,000 rows unless the spec gives rows or a span. Every value is
 /// the model's own to check.

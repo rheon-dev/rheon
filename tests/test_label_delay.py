@@ -1120,6 +1120,10 @@ def kind_spec(kind: str, **kw) -> dict:
     if builder in ("kmeans", "hmm"):
         # Seeded inside the stream's first rows, so most rows are scored.
         a["warm_rows"] = 20
+    if builder == "realized":
+        # A confidence low enough that some rows of these frames, which hold
+        # no jump, are flagged: the flag reads the row's own return.
+        a["lm_beta"] = 0.01
     a.update(kw)
     return getattr(rp.spec, builder)("m", **{k: v for k, v in a.items() if v is not None})
 
@@ -1170,6 +1174,9 @@ STATE_READS: dict[str, frozenset[str]] = {
     # The pairs' correlations read the state alone; the log-density reads
     # the row's own targets.
     "dcc": frozenset({"corr_y_x0"}),
+    # The measures and the ratio test read the state alone; Lee and
+    # Mykland's statistic and its flag read the row's own return.
+    "realized": frozenset({"rv_y", "bv_y", "tv_y", "tq_y", "bns_y"}),
     "hmm": frozenset(
         {"filtered_state0", "filtered_state1", "predicted_state0", "predicted_state1", "state"}
     ),
@@ -1510,6 +1517,9 @@ DOUBLED: dict[str, dict] = {
     # The same: its recursion steps once a row, in the rows' order.
     "dcc": {},
     "glm": {},
+    # Its sums take each return in the order of the rows learned: a lesson
+    # late steps them the same, from the same rows.
+    "realized": {},
     "expectile": {},
     "huber": {},
     "kmeans": {},

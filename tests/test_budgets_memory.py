@@ -374,6 +374,21 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         ),
         [],
     ),
+    # Each target a series of returns, every field it has: the estimators,
+    # both tests and the flag.
+    (
+        "realized",
+        "realized",
+        dict(
+            targets=["y", "z"],
+            lm_window=30,
+            group="g",
+            half_life=25.0,
+            emit_clocks=True,
+            **CLOCK,
+        ),
+        [],
+    ),
 ]
 
 

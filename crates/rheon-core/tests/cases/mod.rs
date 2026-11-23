@@ -99,6 +99,41 @@ fn restore_stamped_hawkes(s: &State) -> Result<Box<dyn Run>, String> {
     Ok(Box::new(StampedHawkes { model, ns }))
 }
 
+/// A `realized` over a window of clock units, each row handed its stamp in
+/// integer nanoseconds as a stream hands it: its window holds a stamp a row.
+struct StampedRealized {
+    model: Realized,
+    ns: i128,
+}
+
+impl Run for StampedRealized {
+    fn step(&mut self, r: &Row) -> Out {
+        self.ns += ns_of_seconds(r.d).unwrap();
+        self.model.stamp_next(Stamp::Ns(self.ns));
+        let s = self.model.step(&r.x, &r.y, r.d, r.w);
+        Out {
+            pred: s.pred,
+            n_eff: s.n_eff,
+            extra: Vec::new(),
+        }
+    }
+
+    fn state(&self) -> State {
+        self.model.state()
+    }
+}
+
+/// The run goes on from the newest stamp its window holds, which is the
+/// last row's where that row counted (the cases save after one that did).
+fn restore_stamped_realized(s: &State) -> Result<Box<dyn Run>, String> {
+    let model = Realized::restore(s).map_err(|e| e.to_string())?;
+    let ns = match model.last_stamp() {
+        Some(Stamp::Ns(ns)) => ns,
+        other => return Err(format!("expected a temporal stamp, found {other:?}")),
+    };
+    Ok(Box::new(StampedRealized { model, ns }))
+}
+
 /// An `expectile` handed each row's stamp in integer nanoseconds, as a
 /// stream hands it: its state holds the last stamp, the last counted row's,
 /// and under a clock window a stamp a row.
@@ -2652,6 +2687,77 @@ pub fn all() -> Vec<Case> {
             Targets::Linear(2),
             2700
         ),
+        // `realized` under a decay, with Lee and Mykland's own window of
+        // ten returns, full (task 499): the sums, the last returns and the
+        // ring of products.
+        case!(
+            "realized",
+            "Realized",
+            Realized,
+            Realized::new(realized_cfg()).unwrap(),
+            0,
+            Targets::JoiningFrom(2, 20),
+            40
+        ),
+        // A window of twelve rows, full and turning over: each target's
+        // terms and how many of its products were taken, the rows' weights.
+        case!(
+            "realized_window",
+            "Realized",
+            Realized,
+            Realized::new(RealizedCfg {
+                decay: Decay::Halflife(f64::INFINITY),
+                window_rows: Some(12),
+                lm_window: None,
+                ..realized_cfg()
+            })
+            .unwrap(),
+            0,
+            Targets::JoiningFrom(2, 20),
+            40
+        ),
+        // A window of clock units over stamped rows, both edges' `closed`
+        // the `both` one: a stamp a row and the clock summed.
+        Case {
+            name: "realized_clock_window",
+            variant: "Realized",
+            build: || {
+                Box::new(StampedRealized {
+                    model: Realized::new(RealizedCfg {
+                        decay: Decay::Halflife(f64::INFINITY),
+                        window_clock: Some(20.0),
+                        closed: WindowClosed::Both,
+                        ..realized_cfg()
+                    })
+                    .unwrap(),
+                    ns: 0,
+                })
+            },
+            restore: restore_stamped_realized,
+            n_features: 0,
+            targets: Targets::Linear(2),
+            before: 45,
+        },
+        // A clock window whose rows passed its cap: warned past half of it,
+        // and the row that would pass it recorded; nothing learned since.
+        // Its rows are handed no stamps, so it reads the clock summed from
+        // the steps.
+        case!(
+            "realized_clock_capped",
+            "Realized",
+            Realized,
+            Realized::new(RealizedCfg {
+                decay: Decay::Halflife(f64::INFINITY),
+                window_clock: Some(20.0),
+                lm_window: None,
+                max_state_bytes: Some(1_500),
+                ..realized_cfg()
+            })
+            .unwrap(),
+            0,
+            Targets::Linear(2),
+            45
+        ),
         // A refit over a span of the clock (task 538), saved within the
         // span: each target's first stamp, on the clock summed from the
         // steps, which is state.
@@ -2927,6 +3033,20 @@ fn realistic(vol: GarchVol, dist: GarchDist) -> GarchCfg {
     GarchCfg {
         start_rows: 2000,
         ..garch_cfg(vol, dist)
+    }
+}
+
+fn realized_cfg() -> RealizedCfg {
+    RealizedCfg {
+        n_targets: 2,
+        decay: decay(),
+        min_weight: 2.0,
+        window_rows: None,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        lm_window: Some(10),
+        lm_beta: 0.95,
+        max_state_bytes: None,
     }
 }
 
