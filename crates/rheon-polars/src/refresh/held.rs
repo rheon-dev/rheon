@@ -267,8 +267,10 @@ impl Held {
                         crate::arrow::dtype_name(want)
                     )
                 })?;
-                // A cast to a zoned `Datetime` can come back naive: the zone
-                // is the input's, set on the instant the cast kept.
+                // A cast to a zoned `Datetime` came back naive while Polars
+                // was built without its `timezones` feature, which the
+                // workspace now enables; the zone is set again all the same,
+                // the input's, on the instant the cast kept.
                 match want {
                     DataType::Datetime(u, tz) if cast.dtype() != want => {
                         cast.into_datetime(*u, tz.clone())

@@ -91,6 +91,18 @@ model that only the new build has is listed as an addition and passes.
 
 ### Added
 
+- **Polars' time-zone support is built in** (PLAN 556; the user,
+  2026-11-23). The Rust side's Polars is built with its `timezones` and
+  `dtype-date` features. Without them, a cast of a column to a zoned
+  `Datetime` came back naive, and a zoned clock cast to its own dtype no
+  longer subtracted from a column of nulls; a zoned clock now keeps its
+  zone through every cast, as it already did through every path that
+  returns a clock (`rp.stream.merge`, `rp.stream.refresh_time`, a bank's
+  clocks, `with_windows`, a pipeline checkpoint), which
+  `tests/test_zoned_clocks.py` holds on a clock across a daylight-saving
+  change. No output moves. The zone data was already linked; on arm64 the
+  CLI grows 1.55% and the wheel 1.65% (to 27.0 MB, 77.3 MB installed).
+
 - **A stream's last value carried forward, with its age on the clock**
   (PLAN 556): `rp.stream.merge(..., carry=[...])` and
   `rp.stream.refresh_time(..., age=True)`, so that how stale a value may be

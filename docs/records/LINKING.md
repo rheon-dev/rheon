@@ -34,6 +34,31 @@ that `#[global_allocator]` line must stay whatever else changes. Nothing on
 crates.io publishes a `dylib` to link against anyway (0 of our 453
 dependencies; `crate-type` is the publisher's choice).
 
+**Rule 12, 2026-11-23: Polars' `timezones` feature, approved by the
+user.** The workspace's `polars` dependency gains the features `timezones`
+and `dtype-date`. Without `timezones`, polars-core 0.55.2 casts a column to
+`Datetime(unit, Some(zone))` and returns it naive, without a word
+(`chunked_array/cast.rs`, lines 106 and 327: the zoned arm is behind
+`#[cfg(feature = "timezones")]`), while a column of nulls alone keeps the
+zone (`series/mod.rs`, line 458, the all-null path of `Series::cast`), so
+the two then fail to find a supertype. PLAN 556's age met it: a zoned clock
+cast to its own dtype, less a column of nulls. `timezones` alone does not
+compile polars-io, which then needs `dtype-date` too. It links nothing new:
+`chrono-tz` 0.10.4 (the IANA zone data) was already linked, through
+polars-arrow's own features (`cargo tree -i chrono-tz`); the lockfile gains
+three dependency edges and no package (polars-io on `chrono-tz` and
+`polars-time`, polars-json on `chrono-tz`). Measured on arm64, clean release
+builds of the CLI and the wheel, one after the other at a load of 4.6 to
+5.9: the CLI binary 64,440,384 to 65,440,672 bytes (+1.55%), the wheel
+26,527,484 to 26,965,871 bytes to download (+1.65%) and 76,210,258 to
+77,319,466 installed (+1.46%), the two builds 559 s to 566 s (+1.3%). No
+output moved: the zoned-clock tests (`tests/test_zoned_clocks.py`) pass
+before and after, every path that returns a clock keeping its zone without
+a cast (merge, refresh_time, a bank's clocks, the window operators, a
+checkpoint); the two casts to a zoned dtype the code makes, a held row's
+value (`refresh/held.rs`) and a carried value (`merge.rs`), already set the
+zone again.
+
 13. **Know which of the interfaces a change rides on.** Four, and the three
     that are py-polars' to change carry no guarantee. (The expression plugin —
     which had a version handshake — was removed in task 85: it read every row

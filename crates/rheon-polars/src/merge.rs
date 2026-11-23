@@ -1213,8 +1213,9 @@ pub(crate) fn cell_as(c: &Cell, name: &str, dtype: &DataType) -> PolarsResult<Se
         return Ok(s);
     }
     let cast = s.strict_cast(dtype)?;
-    // A cast to a zoned `Datetime` can come back naive: the zone is the
-    // column's, set on the instant the cast kept.
+    // A cast to a zoned `Datetime` came back naive while Polars was built
+    // without its `timezones` feature, which the workspace now enables; the
+    // zone is set again all the same, the column's, on the instant kept.
     Ok(match dtype {
         DataType::Datetime(u, tz) if cast.dtype() != dtype => cast.into_datetime(*u, tz.clone()),
         _ => cast,

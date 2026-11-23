@@ -32,9 +32,12 @@ pub(crate) fn dtype(clock: &DataType) -> PolarsResult<DataType> {
 /// there is no value to age.
 pub(crate) fn of(name: &str, now: &Series, then: &Series) -> PolarsResult<Series> {
     let w = work(now.dtype());
-    // Cast only a column not yet of the dtype: a zoned `Datetime` cast to
-    // its own dtype is no longer subtracted from one of nulls alone (Polars'
-    // Rust crate 0.55 fails to find their supertype).
+    // Cast only a column not yet of the dtype. Polars' Rust crate (0.55.2)
+    // built without its `timezones` feature casts to `Datetime(unit, zone)`
+    // and returns the column naive (`chunked_array/cast.rs`), while a column
+    // of nulls alone keeps the zone (`Series::cast`'s all-null path), so the
+    // two failed to find a supertype. The workspace now enables `timezones`;
+    // the cast is skipped all the same, being no work.
     let as_w = |s: &Series| {
         if s.dtype() == &w {
             Ok(s.clone())
@@ -74,9 +77,24 @@ pub(crate) fn clock_of_floats(dtype: &DataType, v: Vec<Option<f64>>) -> PolarsRe
 mod tests {
     use super::*;
 
+    /// A zoned clock cast to its own dtype keeps its zone: without Polars'
+    /// `timezones` feature the cast returned it naive, and this test fails.
+    #[test]
+    fn a_zoned_clock_cast_to_its_own_dtype_keeps_its_zone() {
+        let tz = TimeZone::opt_try_new(Some("Europe/Amsterdam")).unwrap();
+        let d = DataType::Datetime(TimeUnit::Microseconds, tz.clone());
+        let now = Int64Chunked::from_vec("t".into(), vec![5, 6])
+            .into_datetime(TimeUnit::Microseconds, tz)
+            .into_series();
+        assert_eq!(now.cast(&d).unwrap().dtype(), &d);
+        let none = clock_of_physical(&d, vec![None, None]).unwrap();
+        assert_eq!(none.cast(&d).unwrap().dtype(), &d);
+        let diff = (&now.cast(&d).unwrap() - &none.cast(&d).unwrap()).unwrap();
+        assert_eq!(diff.dtype(), &DataType::Duration(TimeUnit::Microseconds));
+    }
+
     /// A zoned clock with no value to age on any row: nulls of the age's
-    /// dtype, where Polars' subtraction fails after a cast of the clock to
-    /// its own dtype.
+    /// dtype.
     #[test]
     fn a_zoned_clock_with_nothing_to_age_gives_nulls() {
         let tz = TimeZone::opt_try_new(Some("Europe/Amsterdam")).unwrap();
