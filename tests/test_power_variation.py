@@ -164,8 +164,10 @@ def test_a_clock_window_on_trades_holds_the_rows_of_its_span(closed):
 
 def test_normalized_terms_are_realizeds_measures():
     """Normalized, ``[2]``, ``[1, 1]`` and ``[4/3]*3`` are ``realized``'s
-    ``rv``, ``bv`` and ``tq``: the first two to the bit, the quarticity
-    within the rounding of its powers (``realized`` takes cube roots)."""
+    ``rv``, ``bv`` and ``tq``: the first two to the bit, under a decay too,
+    the quarticity within the rounding of its powers (``realized`` takes
+    cube roots) where no decay makes the period's weight and Kish's count
+    differ."""
     r = bounced(2_000, 17)
     q = 4 / 3
     terms = {
@@ -181,6 +183,11 @@ def test_normalized_terms_are_realizeds_measures():
         b = _fit(rp.spec.realized("v", targets=["r"], half_life=half_life), _frame(r))
         assert a["rv_r"].to_list() == b["rv_r"].to_list()
         assert a["bv_r"].to_list() == b["bv_r"].to_list()
+        if half_life != INF:
+            # ``realized``'s ``tq`` carries the period's weight W since its
+            # bns fix, where ``normalize`` carries Kish's count n: one
+            # number only where W = n, at unit weights without a decay.
+            continue
         gaps = [_gap(x, y, 0.0) for x, y in zip(a["tq_r"], b["tq_r"], strict=True) if y]
         assert max(gaps) <= 32, max(gaps)
 

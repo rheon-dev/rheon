@@ -325,8 +325,9 @@ fn a_window_of_the_clock_is_the_definition_on_its_returns() {
 
 /// Normalized, the four multipower terms are `realized`'s `rv`, `bv`, `tv`
 /// and `tq` (its definitions; its arithmetic takes cube roots where this
-/// takes powers). Measured (ulps): 0, 0, 5, 9 one pass; 0, 0, 9, 10 at a
-/// half-life of 80 rows.
+/// takes powers). Measured (ulps): 0, 0, 5, 9 one pass; 0, 0, 9 at a
+/// half-life of 80 rows, where `tq` is out of reach of the comparison
+/// (below).
 #[test]
 fn normalized_terms_are_realized_measures() {
     let (t, q) = (2.0 / 3.0, 4.0 / 3.0);
@@ -361,7 +362,12 @@ fn normalized_terms_are_realized_measures() {
         }
         eprintln!("against realized, half-life {h}: {worst:?}");
         assert!(worst[..2].iter().all(|w| *w == 0.0), "{worst:?}");
-        assert!(worst.iter().all(|w| *w <= 16.0), "{worst:?}");
+        // `realized`'s `tq` carries the period's weight `W` since its bns fix
+        // (PLAN 499, W13 B1), where `normalize` carries Kish's count `n`: the
+        // two are one number only where `W = n`, at unit weights without a
+        // decay. Under a decay the first three terms still agree.
+        let checked = if h.is_infinite() { 4 } else { 3 };
+        assert!(worst[..checked].iter().all(|w| *w <= 16.0), "{worst:?}");
     }
 }
 
