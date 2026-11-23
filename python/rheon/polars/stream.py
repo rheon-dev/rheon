@@ -309,7 +309,7 @@ def embargo(
     the future before predicting the rows in between, and every out-of-sample
     number after that is contaminated. With an autocorrelated feature, even a
     pure-noise column shows a correlation with its target. A row of weight 0 is
-    legal and means "advance the clock, learn nothing", so the doubled stream
+    legal and means "learn nothing, and leave the clock where it was", so the doubled stream
     says what is wanted: predict here, learn later.
 
     When each row's target becomes known at a time of its own, give the spec a
@@ -1505,12 +1505,12 @@ def with_windows(
             clock="t", gap_cap=2.0,                    # the gap from 2 to 5 is a clock break
         )
         print(out["trend"].round(4).to_list())   # 0 at row 3: the windows start over
-        print(out["ahead"].to_list())            # next unit's sum: null if cut, or open at the end
+        print(out["ahead"].to_list())            # next unit's sum: null if cut, or past the end
 
     .. code-block:: text
 
         [0.0, 0.5, 0.75, 0.0, 0.5]
-        [2.0, 3.0, None, None, None]
+        [2.0, 3.0, None, 5.0, None]
 
     Over ``trades``, quotes with a ``mid`` and trades between them with a
     ``side``, a ``quantity`` and a ``price``, a trailing mean of the mid and
@@ -1607,7 +1607,11 @@ def with_windows(
     that count in them.
 
     **It resumes.** ``save_state`` writes the kernels' sums and the rows still
-    waiting, which the next run, given ``load_state``, emits first. Feeding a
+    waiting, which the next run, given ``load_state``, emits first. When the
+    input ends, the windows looking back that wait on the last stamp are read
+    as they stand and their rows leave in this run, since no row can join them
+    later: a resumed run refuses an input that starts at that stamp. The rows
+    that wait are those with a window looking ahead still open. Feeding a
     stream in two runs gives what one run gives. Any resumed run refuses by
     name an input whose first row is at the last stamp the state read, unless
     that row starts a new session. A file boundary inside a tied stamp cannot
@@ -1796,6 +1800,15 @@ def with_windows(
             out = w.finish()
             if n_rows is not None:
                 out = out.head(n_rows - seen)
+            yield from _in_morsels(done(out))
+        elif not sliced and n_rows is None:
+            # The input's end under a saved state: a run resumed on this
+            # state is refused an input that starts at the last stamp, so no
+            # row can join the backward windows waiting on it. They are read
+            # as they stand, and the rows whose windows have all resolved
+            # leave now, not with a later call.
+            out = w.settle()
+            seen += out.height
             yield from _in_morsels(done(out))
         # Reached once the input is fed, or the slice is: not on a run the
         # caller abandons, nor one the windows ended with an error. Under a

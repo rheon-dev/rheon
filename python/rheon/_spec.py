@@ -1802,7 +1802,7 @@ def ewridge(
     (``k`` without an intercept), where the schedule has not solved it
     sooner, whatever ``min_weight`` above that says. ``min_weight`` withholds
     the output alone, so the fit is the same at any ``min_weight`` from
-    ``k + 1`` up, on every schedule. A row of weight 0 is clock alone: it
+    ``k + 1`` up, on every schedule. A row of weight 0 counts in no clock: it
     never solves and is no row of the cap. A solve that comes due on one
     waits for the next row with weight, and the solves fall where they
     would without it.
@@ -3203,7 +3203,7 @@ def ftrl(
     weight 0, and a row whose squared gradient would overflow. Each
     leaves the sums as the last row the target was learned from left them.
     So the fit does not move, as :func:`ewridge`'s does not, and a row of
-    weight 0 moves the clock alone, as in every model. The next row the
+    weight 0 leaves the clock where it was, as in every model. The next row the
     target is learned from is predicted with that fit, then ages the sums by
     the whole clock since and learns. The gap ages the evidence and not the
     prior. The fit of a constant 5, at ``half_life = 100`` and at its steady
@@ -5057,7 +5057,7 @@ def deco(
     across a gap capped at
     ``gap_cap`` its own terms take one row's step, as across a millisecond,
     and only ``rho_bar`` moves on the clock. A row of weight 0 moves neither:
-    it advances the clock and learns nothing, as everywhere. Otherwise the
+    it leaves the clock where it was and learns nothing, as everywhere. Otherwise the
     linear recursion has no row weights, as the paper's has none: a positive
     weight reaches ``rho`` only through ``rho_bar``, so rows of weight 0.5 and
     2 move it by the same ``alpha * u``.

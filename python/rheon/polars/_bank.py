@@ -1983,8 +1983,8 @@ class ModelBank:
             targets, at least one usable target. A formula target's row counts
             when it is released with a value, once its window has closed.
         ``rows_zero_weight``
-            The processed rows with weight 0: the clock moved, and nothing was
-            learned.
+            The processed rows with weight 0: they were scored, nothing was
+            learned, and the clock stayed where it was.
         ``weight_sum``
             The sum of the processed rows' weights, 1 for a row without a
             weight column. It is undecayed, so it is not the output's

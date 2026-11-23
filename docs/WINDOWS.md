@@ -328,7 +328,10 @@ by it without reading targets not yet known.
 ## Saving and resuming a window run
 
 **A window run's state holds the rows still waiting for their windows to
-close, so a run resumed from it returns those rows before its own.** Two
-runs then give what one run gives. [Resume a window
+close, so a run resumed from it returns those rows before its own.** A
+window that looks back and waits for the next stamp is not one of them. At
+the end of the input it is read as it stands. A resumed run refuses an input
+that starts at the last stamp, so no row can join it. Two runs then give what
+one run gives. [Resume a window
 run](how-to/resume-a-window-run.md) shows how to save and load the state,
 and which inputs a resumed run takes or refuses.

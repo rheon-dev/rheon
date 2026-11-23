@@ -31,6 +31,23 @@ model that only the new build has is listed as an addition and passes.
 
 ### Changed
 
+- **`rp.stream.with_windows(..., save_state=...)` returns the newest
+  stamp's rows** (PLAN 567). At the end of the whole input, the windows
+  looking back that waited on the last stamp (under `closed="right"` or
+  `"both"`) were held in the state and came out with the next run. A run
+  resumed on an input that starts at that stamp is refused, so no row can
+  join them: they are now read as they stand, and the rows whose windows
+  have all resolved leave with this run, the last stamp's included. Only the
+  rows with a window looking ahead still open are saved. One run equals any
+  split into saved runs, to the bit, at every split point between stamps;
+  the windows state's format is unchanged. With `group` the refusal needed
+  no extension: the stream's clock refuses a row at any group's last stamp
+  that follows a later row, as a step back. A run that the slice `head(n)`
+  stopped holds its rows as before.
+- **A zero-weight row leaves the clock where it was**, in the wording of
+  the docs: the `weight` parameter's, `embargo`'s, `rows_zero_weight`'s and
+  two Notes said it advanced the clock. The behavior is as it was.
+
 - **`skip_learned` (and `--skip-learned`) keeps a row one spec has not
   learned** (PLAN 566). A row was kept only if every spec that reads a
   clock had it after its group's last clock, so one spec's tie at its last

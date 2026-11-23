@@ -449,9 +449,8 @@ FIVE_MIN = pl.DataFrame(
 )
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason="PLAN 567: the newest stamp is held")
 def test_an_unsliced_save_emits_the_newest_stamps_backward_windows(tmp_path: Path) -> None:
-    """PLAN 567, confirmed. Expected: a run with ``save_state`` and no slice
+    """PLAN 567, fixed. Expected: a run with ``save_state`` and no slice
     returns every row whose windows look back only, the newest stamp's
     included, with the value one run over the whole stream gives it. Source:
     the hold exists because "a backward window under ``closed="right"``
@@ -473,6 +472,104 @@ def test_an_unsliced_save_emits_the_newest_stamps_backward_windows(tmp_path: Pat
     assert pl.concat([first, later]).equals(one)
     assert first.height == 5
     assert first.equals(one.head(5))
+
+
+#: Rows on a 5-minute grid with ties at some stamps, in two groups; the tied
+#: stamps are at rows (3, 4) and (8, 9, 10).
+_STAMPS = [0, 5, 10, 15, 15, 20, 25, 30, 35, 35, 35, 40, 50, 55]
+SPLIT_FRAME = pl.DataFrame(
+    {
+        "t": [T0 + dt.timedelta(minutes=m) for m in _STAMPS],
+        "g": [("a", "b", "b", "a", "b")[i % 5] for i in range(len(_STAMPS))],
+        "x": [float((i * 7) % 11) for i in range(len(_STAMPS))],
+    }
+)
+
+_SPLIT_FORMS: dict[str, Any] = {
+    "back_right": dict(window_size="20m", closed="right"),
+    "back_left": dict(window_size="20m", closed="left"),
+    "back_both": dict(window_size="15m", closed="both"),
+    "back_none": dict(window_size="15m", closed="none"),
+    "ahead_right": dict(window_size="15m", closed="right", reverse=True),
+    "ahead_both": dict(window_size="10m", closed="both", reverse=True),
+}
+
+
+def _split_exprs() -> dict[str, pl.Expr]:
+    out: dict[str, pl.Expr] = {}
+    for name, kw in _SPLIT_FORMS.items():
+        out[f"{name}_mean"] = rp.ewm_mean("x", half_life="12m", **kw)
+        out[f"{name}_sum"] = rp.ewm_sum("x", half_life="12m", partial="keep", **kw)
+        out[f"{name}_q"] = rp.ewm_quantile("x", quantile=0.5, half_life="12m", **kw)
+    return out
+
+
+@pytest.mark.parametrize("grouped", [False, True])
+@pytest.mark.parametrize("rows", [1, 4, 10_000])
+def test_a_save_at_every_split_point_continues_to_the_bit(
+    tmp_path: Path, grouped: bool, rows: int
+) -> None:
+    """PLAN 567. One run equals any split into two saved runs, for every
+    split point, every ``closed`` looking back and ahead, with and without
+    ``group``, at three chunk sizes: the first run now emits the rows whose
+    backward windows waited on its newest stamp, and the second goes on from a
+    state that read no row after it. A split inside a tied stamp is refused by
+    name, as it always was, whichever row of the stamp is first."""
+    kw: dict[str, Any] = dict(clock="t", gap_cap="2h", chunk_size=rows)
+    if grouped:
+        kw["group"] = "g"
+    exprs = _split_exprs()
+    one = rp.stream.with_windows(SPLIT_FRAME, **exprs, **kw)
+    n = SPLIT_FRAME.height
+    ties = {i for i in range(1, n) if _STAMPS[i] == _STAMPS[i - 1]}
+    state = tmp_path / "s.state"
+    for k in range(1, n):
+        first = rp.stream.with_windows(SPLIT_FRAME.head(k), **exprs, **kw, save_state=state)
+        if k in ties:
+            with pytest.raises(Exception, match="starts at the last clock value"):
+                rp.stream.with_windows(SPLIT_FRAME.slice(k), **exprs, **kw, load_state=state)
+            continue
+        later = rp.stream.with_windows(SPLIT_FRAME.slice(k), **exprs, **kw, load_state=state)
+        got = pl.concat([first, later])
+        assert got.equals(one), (k, grouped, rows)
+
+
+def test_backward_windows_alone_leave_whole_at_a_save(tmp_path: Path) -> None:
+    """PLAN 567. Without a window looking ahead every row of the first run
+    leaves with it, the newest stamp's included, under every ``closed``."""
+    state = tmp_path / "w.state"
+    for name in ("back_right", "back_left", "back_both", "back_none"):
+        expr = rp.ewm_mean("x", half_life="12m", **_SPLIT_FORMS[name])
+        first = rp.stream.with_windows(
+            SPLIT_FRAME.head(3), v=expr, clock="t", gap_cap="2h", save_state=state
+        )
+        assert first.height == 3, name
+        one = rp.stream.with_windows(SPLIT_FRAME, v=expr, clock="t", gap_cap="2h")
+        assert first.equals(one.head(3)), name
+
+
+def test_a_resumed_row_at_any_groups_last_stamp_is_refused(tmp_path: Path) -> None:
+    """PLAN 567. With ``group``, a resumed input that starts after the stamp
+    the state read but holds a row at it later still cannot be: the stream's
+    clock refuses the row as a step back, so no row of any group joins the
+    windows the save read. A first row at the stamp is refused by name."""
+    state = tmp_path / "g.state"
+    f: dict[str, Any] = dict(m=rp.ewm_mean("x", half_life="10m", window_size="30m"))
+    kw: dict[str, Any] = dict(clock="t", gap_cap="2h", group="g")
+    first = SPLIT_FRAME.head(5)  # ends at stamp 15, in groups a and b
+    rp.stream.with_windows(first, **f, **kw, save_state=state)
+    last = _STAMPS[4]
+    for key in ("a", "b"):
+        row = pl.DataFrame({"t": [T0 + dt.timedelta(minutes=last)], "g": [key], "x": [1.0]})
+        with pytest.raises(Exception, match="starts at the last clock value"):
+            rp.stream.with_windows(row, **f, **kw, load_state=state)
+        later = pl.DataFrame(
+            {"t": [T0 + dt.timedelta(minutes=last + 5)] * 2, "g": ["b", "a"], "x": [1.0, 2.0]}
+        )
+        # A row at the stamp after one past it is a step back.
+        rows = pl.concat([later.head(1), row])
+        with pytest.raises(Exception, match="steps back|step back"):
+            rp.stream.with_windows(rows, **f, **kw, load_state=state)
 
 
 # --------------------------------------------------------------------------

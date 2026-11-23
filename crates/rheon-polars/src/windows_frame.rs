@@ -2077,6 +2077,26 @@ impl WindowsRun {
         self.assemble(e)
     }
 
+    /// The whole input is fed and its state is about to be saved to go on
+    /// ([`Self::save_bytes`]): the rows whose backward windows were waiting
+    /// on the last stamp, and every row after them whose forward windows
+    /// have closed, with the windows read as they stand. A run resumed on
+    /// this state is refused an input that starts at that stamp, so no row
+    /// can join them later, and the next run reads the same values one run
+    /// over the whole stream gives.
+    ///
+    /// # Errors
+    ///
+    /// An input the state was to skip that ended first, as [`Self::finish`].
+    pub fn settle(&mut self) -> PolarsResult<DataFrame> {
+        if let Some(msg) = self.resumed_input_ended_early() {
+            polars_bail!(ComputeError: "{}", msg);
+        }
+        self.core.settle();
+        let e = self.core.drain();
+        self.assemble(e)
+    }
+
     /// Put the increments' state back to `snapshot` and run the first
     /// `rows` rows of `df` through it again, so it ends where the core
     /// stopped: the values the held rows carry are the same, since an
@@ -4542,6 +4562,57 @@ mod tests {
         // A fresh run has read no stamp.
         let mut run = WindowsRun::new(config(LEFT), again.schema()).unwrap();
         assert_eq!(run.feed(&again, None).unwrap().height(), 3);
+    }
+
+    /// PLAN 567: `settle` reads the backward windows waiting on the last
+    /// stamp as they stand, and the rows ready go out; saved after it, the
+    /// state continues to the bit at every split point, with the first run's
+    /// rows, then the second's, one run's rows exactly. A forward window
+    /// beside them keeps the rows it still holds.
+    #[test]
+    fn a_settled_state_continues_to_the_bit_at_every_split() {
+        const MIXED: &str = r#"{"formulas": [
+            {"name": "b", "tree": ["ewm_mean", ["col", "x"], {"half_life": 2, "window_size": 3}]},
+            {"name": "l", "tree": ["ewm_sum", ["col", "x"], {"half_life": 2, "closed": "left"}]},
+            {"name": "a", "tree": ["rewm_sum", ["col", "x"], {"half_life": 2, "window_size": 2}]}],
+            "clock": "t", "gap_cap": 100}"#;
+        let stamps = [0.0, 1.0, 2.0, 2.0, 3.0, 5.0, 6.0, 6.0, 7.0, 9.0];
+        let df = frame(&stamps);
+        let mut whole = WindowsRun::new(config(MIXED), df.schema()).unwrap();
+        let mut one = whole.feed(&df, None).unwrap();
+        one.vstack_mut(&whole.finish().unwrap()).unwrap();
+        for k in 1..stamps.len() {
+            if stamps[k] == stamps[k - 1] {
+                continue;
+            }
+            let head = df.slice(0, k);
+            let mut run = WindowsRun::new(config(MIXED), df.schema()).unwrap();
+            let mut got = run.feed(&head, None).unwrap();
+            let settled = run.settle().unwrap();
+            // The backward windows of every row so far have their values: a
+            // row is held only for the window looking ahead.
+            let (b, l) = (settled.column("b").unwrap(), settled.column("l").unwrap());
+            assert_eq!(b.null_count() + l.null_count(), 0, "k={k}");
+            got.vstack_mut(&settled).unwrap();
+            let state = run.save_bytes().unwrap();
+            let rest = df.slice(k as i64, df.height() - k);
+            let mut run = WindowsRun::load_bytes(&state, config(MIXED), rest.schema()).unwrap();
+            assert_eq!(run.save_bytes().unwrap(), state, "k={k}: loaded, saved");
+            got.vstack_mut(&run.feed(&rest, None).unwrap()).unwrap();
+            got.vstack_mut(&run.finish().unwrap()).unwrap();
+            assert_eq!(got.height(), one.height(), "k={k}");
+            for name in ["b", "l", "a"] {
+                let (g, w) = (got.column(name).unwrap(), one.column(name).unwrap());
+                let bits = |c: &Column| -> Vec<Option<u64>> {
+                    c.f64()
+                        .unwrap()
+                        .iter()
+                        .map(|v| v.map(f64::to_bits))
+                        .collect()
+                };
+                assert_eq!(bits(g), bits(w), "k={k} {name}");
+            }
+        }
     }
 
     /// Task 159 (F1): a run marked itself started, and kept its input's

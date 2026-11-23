@@ -2992,6 +2992,21 @@ impl Windows {
         self.emit(rows)
     }
 
+    /// The end of an input whose state is saved to go on: every backward
+    /// window still waiting on the last stamp is read as it stands, and the
+    /// rows every kernel has now resolved are ready for [`Self::drain`]. No
+    /// forward window is touched, and the core takes rows as before: a row
+    /// at the stamp read would have joined those windows, which is why a
+    /// run resumed on such a row is refused, and one after it reads the same
+    /// windows as one that went on without this call.
+    pub fn settle(&mut self) {
+        self.scratch();
+        for gi in 0..self.groups.len() {
+            self.flush_group(gi);
+        }
+        self.advance_ready();
+    }
+
     /// The end of the input: every backward window still waiting is read
     /// as it stands, a forward window under "right" or "both" whose far edge
     /// is its group's last row is whole (no later row could join it), every
@@ -3808,7 +3823,7 @@ mod tests {
     }
 
     /// [`long_windows_keep_their_bits`]'s digest, computed on the code
-    /// before task 270 (M-2), and moved once by task 565: a window looking
+    /// before task 270 (M-2), and moved once since: a window looking
     /// ahead whose far edge is the input's last row is whole at the end of
     /// the input where it was null.
     const LONG_WINDOWS_DIGEST: u64 = 0x9224_8a97_1fbc_e295;

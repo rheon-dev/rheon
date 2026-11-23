@@ -1361,6 +1361,19 @@ impl PyWindows {
         Ok(PyDataFrame(out))
     }
 
+    /// The whole input is fed and the state is about to be saved: the rows
+    /// resolved by reading the windows waiting on the last stamp as they
+    /// stand. The GIL is released for it, as for `feed`.
+    fn settle(slf: &Bound<'_, Self>) -> PyResult<PyDataFrame> {
+        let mut this = slf.try_borrow_mut().map_err(|_| windows_busy("settle"))?;
+        let run = &mut this.inner;
+        let out = slf
+            .py()
+            .detach(|| run.settle())
+            .map_err(|e| run_err(&e, None))?;
+        Ok(PyDataFrame(out))
+    }
+
     /// The columns the windows read: what a source reads however narrow
     /// the query's projection.
     fn needed(slf: &Bound<'_, Self>) -> PyResult<Vec<String>> {

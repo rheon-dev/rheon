@@ -86,8 +86,9 @@ shows them at work.
     ``gap_cap`` like any other step; ``"reset"`` starts the model over
     instead. Units: clock units.
 ``weight``
-    A row-weight column. A row of weight 0 is scored, advances the clock and
-    teaches nothing; a null weight skips the row. ``seqtest`` and ``audit``
+    A row-weight column. A row of weight 0 is scored and teaches nothing, and
+    it leaves the clock where it was: the next row decays as if it were not
+    there. A null weight skips the row. ``seqtest`` and ``audit``
     refuse a weight column, and ``rcov`` takes only weights of 0 and 1, since
     each counts rows: a chunk with another weight is refused, naming the row.
 ``min_weight``
