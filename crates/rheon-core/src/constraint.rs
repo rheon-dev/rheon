@@ -52,6 +52,9 @@ pub struct Scratch {
     lo: Vec<f64>,
     hi: Vec<f64>,
     breaks: Vec<f64>,
+    /// The point being projected, kept for the projection by scale
+    /// groups ([`project_by_groups`]) where the direct one is not sound.
+    v: Vec<f64>,
 }
 
 impl Scratch {
@@ -252,16 +255,41 @@ impl Constraint {
             // fold away rather than read a prepared `a_i` per coordinate --
             // that read alone cost the unscaled simplex 9% (docs/records/PERFORMANCE-LOG.md
             // §13).
-            None => Self::project_with(
-                b,
-                self.sum,
-                |i| (1.0, 1.0, self.lo[i], self.hi[i]),
-                &mut scratch.breaks,
-            ),
+            None => {
+                Self::project_with(
+                    b,
+                    self.sum,
+                    |i| (1.0, 1.0, self.lo[i], self.hi[i]),
+                    &mut scratch.breaks,
+                );
+            }
             Some(scales) => {
+                if self.sum.is_some() {
+                    scratch.v.clear();
+                    scratch.v.extend_from_slice(b);
+                }
                 scratch.fill(self, scales);
-                let Scratch { a, lo, hi, breaks } = scratch;
-                Self::project_with(b, self.sum, |i| (a[i], a[i], lo[i], hi[i]), breaks)
+                let Scratch {
+                    a,
+                    lo,
+                    hi,
+                    breaks,
+                    v,
+                } = scratch;
+                let sound = Self::project_with(b, self.sum, |i| (a[i], a[i], lo[i], hi[i]), breaks)
+                    && a.iter().all(|x| x.is_normal());
+                if let Some(total) = self.sum
+                    && !(sound && on_sum(b.iter().zip(scales).map(|(b, s)| b / s), total))
+                {
+                    // In the caller's units, by scale groups, and back.
+                    for (x, s) in v.iter_mut().zip(scales) {
+                        *x /= s;
+                    }
+                    project_by_groups(v, total, &self.lo, &self.hi, scales);
+                    for i in 0..k {
+                        b[i] = (v[i] * scales[i]).clamp(lo[i], hi[i]);
+                    }
+                }
             }
         }
     }
@@ -271,13 +299,33 @@ impl Constraint {
     /// `mu / scales[i]²` per slope, the plain sum and the caller's bounds as
     /// given (the module docs). The point [`Constraint::project`] reaches
     /// from `scales[i] * b_i`, with the bounds met exactly.
+    ///
+    /// Where `1 / scales[i]²` is not a normal double, a breakpoint or the
+    /// step is past the doubles, or the point found is off the sum, the
+    /// projection is made again by scale groups ([`project_by_groups`]):
+    /// at `scales = 1e-155` the steps were infinite and the point NaN, and
+    /// at scales `10^156` apart the point was off the sum by a third
+    /// (review 2026-11-23, REG-8 and REG-19). Elsewhere it is the direct
+    /// one, to the bit.
     pub fn project_in_units(&self, b: &mut [f64], scales: &[f64], scratch: &mut Scratch) {
         debug_assert_eq!(b.len(), self.lo.len());
         debug_assert_eq!(scales.len(), b.len());
+        if self.sum.is_some() {
+            scratch.v.clear();
+            scratch.v.extend_from_slice(b);
+        }
         scratch.a.clear();
         scratch.a.extend(scales.iter().map(|sc| 1.0 / (sc * sc)));
-        let Scratch { a, breaks, .. } = scratch;
-        Self::project_with(b, self.sum, |i| (a[i], 1.0, self.lo[i], self.hi[i]), breaks);
+        let Scratch { a, breaks, v, .. } = scratch;
+        let sound =
+            Self::project_with(b, self.sum, |i| (a[i], 1.0, self.lo[i], self.hi[i]), breaks)
+                && a.iter().all(|x| x.is_normal());
+        if let Some(total) = self.sum
+            && !(sound && on_sum(b.iter().copied(), total))
+        {
+            project_by_groups(v, total, &self.lo, &self.hi, scales);
+            b.copy_from_slice(v);
+        }
     }
 
     /// The projection proper, over `bound(i) = (t_i, a_i, lo_i, hi_i)`: the
@@ -286,18 +334,22 @@ impl Constraint {
     /// the two weights are one, `1 / scale_i`; in the caller's units under
     /// the standardized metric they are `1 / scale_i^2` and 1 (the module
     /// docs). `g(mu)` below is non-increasing either way.
+    ///
+    /// False where the projection is not sound: a breakpoint of a finite
+    /// bound past the doubles (left out of the search, so the segment read
+    /// may be the wrong one), or a step `mu` that is not a number.
     fn project_with(
         b: &mut [f64],
         sum: Option<f64>,
         bound: impl Fn(usize) -> (f64, f64, f64, f64),
         breaks: &mut Vec<f64>,
-    ) {
+    ) -> bool {
         let Some(s) = sum else {
             for (i, bi) in b.iter_mut().enumerate() {
                 let (_, _, lo, hi) = bound(i);
                 *bi = bi.clamp(lo, hi);
             }
-            return;
+            return true;
         };
         // Coordinate i sits at hi for mu < t_hi = (b_i - hi_i') / t_i and at
         // lo for mu > t_lo = (b_i - lo_i') / t_i.
@@ -310,10 +362,14 @@ impl Constraint {
             (bi - lo) / t
         };
         breaks.clear();
+        let mut sound = true;
         for (i, &bi) in b.iter().enumerate() {
-            for t in [t_hi(i, bi), t_lo(i, bi)] {
+            let (_, _, lo, hi) = bound(i);
+            for (t, edge) in [(t_hi(i, bi), hi), (t_lo(i, bi), lo)] {
                 if t.is_finite() {
                     breaks.push(t);
+                } else {
+                    sound &= !edge.is_finite();
                 }
             }
         }
@@ -361,6 +417,158 @@ impl Constraint {
         for (i, bi) in b.iter_mut().enumerate() {
             let (ti, _, lo, hi) = bound(i);
             *bi = (*bi - mu * ti).clamp(lo, hi);
+        }
+        sound && mu.is_finite()
+    }
+}
+
+/// Whether the slopes `c`, in the caller's units, sum to `total` within
+/// the rounding of their sum: `2^{-40}` of the larger of `|total|` and the
+/// sum of their magnitudes. Where the direct projection is sound it is
+/// within a few units in the last place.
+fn on_sum(c: impl Iterator<Item = f64>, total: f64) -> bool {
+    let (mut sum, mut size) = (0.0, total.abs());
+    for x in c {
+        sum += x;
+        size += x.abs();
+    }
+    (sum - total).abs() <= size * 9.094_947_017_729_282e-13 // 2^-40
+}
+
+/// The projection of `v`, in the caller's units, onto the box `lo ≤ c ≤
+/// hi` and the sum `Σ c_i = total`, in the metric `Σ s_i² (c_i − v_i)²`,
+/// by scale groups: what [`Constraint::project_in_units`] computes, sound
+/// at any scales. The KKT conditions give `c_i = clamp(v_i − ν r_i)` for
+/// one `ν`, with `r_i = (s_min / s_i)²` in `[0, 1]`, `s_min` the smallest
+/// scale: no step is past the doubles. A coordinate whose scale is more
+/// than `2^53` times the smallest, `r_i < 2^{-106}`, moves by less than
+/// `2^{-106}` of the softest one's move at the same `ν`, below the
+/// rounding of the coordinates that take the step, so it is held at
+/// `clamp(v_i)` while the others can meet the sum; where they cannot, each
+/// of them is pinned at the bound the sum pushes it to, and the held ones
+/// are projected onto the rest of the sum as a group of their own, at
+/// their own smallest scale. Within a group every `r_i` is at least
+/// `2^{-106}`, so a breakpoint of a finite bound is a double while the
+/// bound and the point are inside `10^{275}`. The softest free coordinate
+/// is then set from the sum itself, so the sum is met to its rounding
+/// wherever the steps of the others cancel.
+fn project_by_groups(v: &mut [f64], total: f64, lo: &[f64], hi: &[f64], scales: &[f64]) {
+    let mut group: Vec<usize> = (0..v.len()).collect();
+    let mut want = total;
+    while !group.is_empty() {
+        let s_min = group
+            .iter()
+            .map(|&i| scales[i])
+            .fold(f64::INFINITY, f64::min);
+        let r = |i: usize| {
+            let q = s_min / scales[i];
+            q * q
+        };
+        // 2^-106: scales within 2^53 of the group's smallest.
+        let (soft, stiff): (Vec<usize>, Vec<usize>) = group
+            .iter()
+            .partition(|&&i| r(i) >= 1.232_595_164_407_831e-32);
+        // Scales that are not positive finite numbers (none a model
+        // passes) leave no soft coordinate: each is held.
+        if soft.is_empty() {
+            for &i in &group {
+                v[i] = v[i].clamp(lo[i], hi[i]);
+            }
+            return;
+        }
+        let held: f64 = stiff.iter().map(|&i| v[i].clamp(lo[i], hi[i])).sum();
+        let rest = want - held;
+        let (low, high): (f64, f64) = (
+            soft.iter().map(|&i| lo[i]).sum(),
+            soft.iter().map(|&i| hi[i]).sum(),
+        );
+        if stiff.is_empty() || (low..=high).contains(&rest) {
+            project_group(v, rest, lo, hi, &soft, r);
+            for &i in &stiff {
+                v[i] = v[i].clamp(lo[i], hi[i]);
+            }
+            return;
+        }
+        let (edge, pinned) = if rest < low { (lo, low) } else { (hi, high) };
+        for &i in &soft {
+            v[i] = edge[i];
+        }
+        want -= pinned;
+        group = stiff;
+    }
+}
+
+/// One group of [`project_by_groups`]: `c_i = clamp(v_i − ν r_i)` over
+/// `group`, every `r_i` in `(0, 1]`, for the `ν` at which `Σ c_i = want`,
+/// by the breakpoint search of [`Constraint::project`], infinities kept;
+/// then the sum met from itself, by the softest coordinate that can.
+fn project_group(
+    v: &mut [f64],
+    want: f64,
+    lo: &[f64],
+    hi: &[f64],
+    group: &[usize],
+    r: impl Fn(usize) -> f64,
+) {
+    let t_hi = |i: usize| (v[i] - hi[i]) / r(i);
+    let t_lo = |i: usize| (v[i] - lo[i]) / r(i);
+    let mut breaks: Vec<f64> = group
+        .iter()
+        .flat_map(|&i| [t_hi(i), t_lo(i)])
+        .filter(|t| !t.is_nan())
+        .collect();
+    breaks.sort_unstable_by(f64::total_cmp);
+    let g = |mu: f64| -> f64 {
+        group
+            .iter()
+            .map(|&i| (v[i] - mu * r(i)).clamp(lo[i], hi[i]))
+            .sum::<f64>()
+            - want
+    };
+    let j = breaks.partition_point(|&t| g(t) > 0.0);
+    let (t, below) = match breaks.get(j) {
+        Some(&t) => (t, true),
+        None => (breaks.last().copied().unwrap_or(0.0), false),
+    };
+    let (mut num, mut den) = (0.0, 0.0);
+    let mut softest: Option<usize> = None;
+    for &i in group {
+        let at_hi = below && t <= t_hi(i);
+        let at_lo = if below { t > t_lo(i) } else { t >= t_lo(i) };
+        if at_hi {
+            num += hi[i];
+        } else if at_lo {
+            num += lo[i];
+        } else {
+            num += v[i];
+            den += r(i);
+            if softest.is_none_or(|p| r(i) > r(p)) {
+                softest = Some(i);
+            }
+        }
+    }
+    let mu = if den > 0.0 { (num - want) / den } else { t };
+    let steps: Vec<f64> = group.iter().map(|&i| r(i)).collect();
+    for (&i, ri) in group.iter().zip(steps) {
+        v[i] = (v[i] - mu * ri).clamp(lo[i], hi[i]);
+    }
+    // The sum from itself: the softest free coordinate takes what the
+    // others leave, and where the search read a free coordinate as pinned
+    // by a rounding (breakpoints near `1e152` beside a sum of 1), each
+    // coordinate in turn from the softest, until one takes it inside its
+    // box.
+    let mut order: Vec<usize> = group.to_vec();
+    order.sort_by(|&a, &b| r(b).total_cmp(&r(a)));
+    if let Some(p) = softest {
+        order.retain(|&i| i != p);
+        order.insert(0, p);
+    }
+    for p in order {
+        let others: f64 = group.iter().filter(|&&i| i != p).map(|&i| v[i]).sum();
+        let take = want - others;
+        v[p] = take.clamp(lo[p], hi[p]);
+        if v[p] == take {
+            break;
         }
     }
 }
@@ -850,5 +1058,185 @@ mod tests {
         // Relative: a millionth past a bound of a million is inside it.
         ok(1e6, 2e6, 1e6 - 1e-6).unwrap();
         ok(1e6, 2e6, 1e6 - 3e-6).unwrap_err();
+    }
+
+    /// Scales at the ends of the doubles project as the same problem at
+    /// ordinary scales does (review 2026-11-23, REG-8 and REG-19): the
+    /// argmin of `Σ s_i² (c_i − v_i)²` over the box and the sum does not
+    /// move when every `s_i` is multiplied by one number. In the caller's
+    /// units the step per unit of `mu` was `1 / s_i²`, infinite at `s_i =
+    /// 1e-155` (the projection NaN, and `sgd`'s fit NaN for good) and the
+    /// sum of the free ones infinite at `1e-154` (the point left where it
+    /// was, off the sum); in the standardized coordinates the bounds
+    /// `lo_i s_i` and the weights `1 / s_i` left the range the same way.
+    #[test]
+    fn scales_at_the_ends_of_the_doubles_project_as_ordinary_ones() {
+        let mut s = 17u64;
+        let mut checked = 0;
+        for trial in 0..400 {
+            let k = 1 + trial % 6;
+            let lo: Vec<f64> = (0..k)
+                .map(|_| {
+                    if lcg(&mut s) > 0.3 {
+                        f64::NEG_INFINITY
+                    } else {
+                        lcg(&mut s)
+                    }
+                })
+                .collect();
+            let hi: Vec<f64> = lo
+                .iter()
+                .map(|l| {
+                    let h = l.max(-1.0) + 2.0 * lcg(&mut s).abs();
+                    if lcg(&mut s) > 0.6 { f64::INFINITY } else { h }
+                })
+                .collect();
+            let scales: Vec<f64> = (0..k).map(|_| 10f64.powf(2.0 * lcg(&mut s))).collect();
+            let inside: Vec<f64> = (0..k)
+                .map(|i| {
+                    let (l, h) = (lo[i].max(-3.0), hi[i].min(3.0));
+                    l + (h - l) * (0.5 + 0.5 * lcg(&mut s))
+                })
+                .collect();
+            let total: f64 = inside.iter().sum();
+            let c = boxed(&lo, &hi, Some(total));
+            c.validate(k, "test").unwrap();
+            let v: Vec<f64> = (0..k).map(|_| 4.0 * lcg(&mut s)).collect();
+            let mut want = v.clone();
+            c.project_in_units(&mut want, &scales, &mut Scratch::default());
+            for shift in [
+                2f64.powi(-520),
+                2f64.powi(-600),
+                2f64.powi(520),
+                2f64.powi(600),
+            ] {
+                let far: Vec<f64> = scales.iter().map(|x| x * shift).collect();
+                let mut got = v.clone();
+                c.project_in_units(&mut got, &far, &mut Scratch::default());
+                let mut beta: Vec<f64> = v.iter().zip(&far).map(|(v, s)| v * s).collect();
+                c.project(&mut beta, Some(&far), &mut Scratch::default());
+                for i in 0..k {
+                    let close = |x: f64| (x - want[i]).abs() <= 1e-9 * (1.0 + want[i].abs());
+                    assert!(
+                        close(got[i]) && got[i] >= lo[i] && got[i] <= hi[i],
+                        "trial {trial}, shift {shift:e}, slot {i}: {got:?} against {want:?}"
+                    );
+                    // The standardized coordinates hold `c_i s_i`, which at
+                    // these scales may not be a double: read where it is.
+                    let back = beta[i] / far[i];
+                    if beta[i].is_normal() && back.is_finite() {
+                        assert!(
+                            close(back),
+                            "trial {trial}, shift {shift:e}, slot {i}: {beta:?} against {want:?}"
+                        );
+                    }
+                }
+                assert!((got.iter().sum::<f64>() - total).abs() <= 1e-9 * (1.0 + total.abs()));
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 1600);
+    }
+
+    /// Scales far apart, where a step per unit of `mu` is past the doubles
+    /// for one coordinate and ordinary for another (review 2026-11-23,
+    /// REG-19): the coordinate whose metric is the stiffer stays as near
+    /// its value as the box and the sum allow, and the other takes the
+    /// rest. `[0.2, 10]` on the box `[0, 2]²` with a sum of 1, the second
+    /// the stiffer: `[0, 1]` (it was `[0, 0]`, off the sum). `[0.3, 0.5]`
+    /// below 2 with a sum of 1, the second the softer: `[0.3, 0.7]` (it was
+    /// `[-1, -3.6e121]`).
+    #[test]
+    fn scales_far_apart_project_onto_the_sum() {
+        let cases: [(&[f64], &[f64], &[f64], [f64; 2], [f64; 2]); 4] = [
+            (
+                &[0.0, 0.0],
+                &[2.0, 2.0],
+                &[1.0, 1e85],
+                [0.2, 10.0],
+                [0.0, 1.0],
+            ),
+            (
+                &[0.0, 0.0],
+                &[2.0, 2.0],
+                &[1e-155, 1.0],
+                [0.2, 10.0],
+                [0.0, 1.0],
+            ),
+            (
+                &[0.0, 0.0],
+                &[2.0, 2.0],
+                &[1e-200, 1e100],
+                [0.2, 10.0],
+                [0.0, 1.0],
+            ),
+            (
+                &[f64::NEG_INFINITY, f64::NEG_INFINITY],
+                &[2.0, 2.0],
+                &[1.0, 1e-85],
+                [0.3, 0.5],
+                [0.3, 0.7],
+            ),
+        ];
+        for (lo, hi, scales, v, want) in cases {
+            let c = boxed(lo, hi, Some(1.0));
+            let mut got = v;
+            c.project_in_units(&mut got, scales, &mut Scratch::default());
+            for i in 0..2 {
+                assert!(
+                    (got[i] - want[i]).abs() <= 1e-12,
+                    "{scales:?}: {got:?} against {want:?}"
+                );
+            }
+            let mut beta = [v[0] * scales[0], v[1] * scales[1]];
+            c.project(&mut beta, Some(scales), &mut Scratch::default());
+            for i in 0..2 {
+                let back = beta[i] / scales[i];
+                assert!(
+                    (back - want[i]).abs() <= 1e-12,
+                    "standardized {scales:?}: {beta:?} against {want:?}"
+                );
+            }
+        }
+    }
+
+    /// Two coordinates with a sum, at scale ratios from `10^80` to
+    /// `10^300`, against the definition: with `c_1 = S − c_0`, the cost
+    /// `s_0² (c_0 − v_0)² + s_1² (S − c_0 − v_1)²` is least at `c_0 = w_0 v_0
+    /// + w_1 (S − v_1)`, `w_1 = ρ/(1 + ρ)`, `ρ = (s_1/s_0)²`, then clamped to
+    /// the interval the box and the sum leave `c_0`.
+    #[test]
+    fn two_coordinates_far_apart_meet_the_definition() {
+        let mut s = 23u64;
+        for trial in 0..2000 {
+            let lo = [-1.0 - lcg(&mut s).abs(), -1.0 - lcg(&mut s).abs()];
+            let hi = [1.0 + lcg(&mut s).abs(), 1.0 + lcg(&mut s).abs()];
+            let total = lcg(&mut s);
+            let v = [5.0 * lcg(&mut s), 5.0 * lcg(&mut s)];
+            // Two scales inside `10^±300`, `10^80` to `10^300` apart.
+            let e = 80.0 + 220.0 * lcg(&mut s).abs();
+            let e0 = (300.0 - e) * lcg(&mut s);
+            let (a, b) = (e0 - e / 2.0, e0 + e / 2.0);
+            let scales = if lcg(&mut s) > 0.0 {
+                [10f64.powf(a), 10f64.powf(b)]
+            } else {
+                [10f64.powf(b), 10f64.powf(a)]
+            };
+            let log_rho = 2.0 * (scales[1].ln() - scales[0].ln());
+            let w1 = 1.0 / (1.0 + (-log_rho).exp());
+            let w0 = 1.0 / (1.0 + log_rho.exp());
+            let free = w0 * v[0] + w1 * (total - v[1]);
+            let c0 = free.clamp(lo[0].max(total - hi[1]), hi[0].min(total - lo[1]));
+            let want = [c0, total - c0];
+            let c = boxed(&lo, &hi, Some(total));
+            let mut got = v;
+            c.project_in_units(&mut got, &scales, &mut Scratch::default());
+            for i in 0..2 {
+                assert!(
+                    (got[i] - want[i]).abs() <= 1e-12 * (1.0 + want[i].abs()),
+                    "trial {trial}, {scales:?}: {got:?} against {want:?}"
+                );
+            }
+        }
     }
 }

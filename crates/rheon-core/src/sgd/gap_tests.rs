@@ -515,3 +515,28 @@ fn adagrads_sums_never_pass_the_largest_double() {
         assert_eq!(back.coefficients(), m.coefficients());
     }
 }
+
+/// A coefficient sum under `standardize` on features whose spread is near
+/// `1e-155` (review 2026-11-23, REG-8): the projection's step per unit of
+/// its multiplier, `1/s²`, was infinite once the fit was held in the
+/// caller's units, and every coefficient NaN for good. The fit stays on the
+/// sum and in the box.
+#[test]
+fn a_sum_on_features_near_the_smallest_doubles_holds() {
+    let mut c = cfg(2, 0.05, LearningRate::AdaGrad);
+    c.constraint = Some(crate::constraint::Constraint {
+        lo: vec![0.0, 0.0],
+        hi: vec![f64::INFINITY, f64::INFINITY],
+        sum: Some(1.0),
+    });
+    let mut m = Sgd::new(c).unwrap();
+    let mut r = Rng(5);
+    for i in 0..80 {
+        let x = [1e-155 * r.n(), 1e-155 * r.n()];
+        let y = 1e155 * (0.3 * x[0] + 0.7 * x[1]) + 0.1 * r.n();
+        m.step(&x, &[Some(y)], 1.0, 1.0);
+        let b = &m.coefficients()[0];
+        assert!(b.iter().all(|v| v.is_finite()), "row {i}: {b:?}");
+        assert!((b[1] + b[2] - 1.0).abs() < 1e-12, "row {i}: {b:?}");
+    }
+}

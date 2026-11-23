@@ -718,6 +718,26 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **`sgd`'s and `pa`'s coefficient constraints project soundly at any
+  feature scales** (review 2026-11-23, REG-8 and REG-19). Under
+  `standardize=True` the projection onto `coef_min`, `coef_max` and
+  `coef_sum` takes steps of `1/s_i²` per unit of its multiplier, `s_i` each
+  feature's scale. At a spread near `1e-155` that step is infinite, and the
+  fit was NaN for good from the row the warm-up ended. Near `1e-154` the
+  sum of the steps was infinite and the point was left off the sum. At
+  scales `10^156` apart a breakpoint left the doubles and was dropped from
+  the search, and the point was off the sum by a third; at `10^85` apart
+  the steps cancelled and a coefficient read `-3.6·10^121`. Where a step is
+  not a normal double, a breakpoint of a finite bound is lost, or the point
+  is off the sum, the projection is now made again in the caller's units
+  by scale groups. It solves the coordinates within `2^53` of the smallest
+  scale with steps normalized to at most 1, holding the stiffer ones where
+  they are while the others can meet the sum, and then meets the sum from
+  itself. A projection that was sound keeps its bits. A coordinate whose
+  value in the standardized coordinates is not a double, such as
+  `coef_min = 1e-220` at a scale of `1e-110`, still rounds there.
+  Moves: `sgd.*`, `pa.*`.
+
 - **`lasso`'s warm start begins at 0 where the last fit is not a number in
   the new scale** (review 2026-11-23, LASSO-3). Each solve starts from the
   last one's coefficients times the features' new spreads. A coefficient
