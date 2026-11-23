@@ -54,7 +54,28 @@
 //! emits them in their place. Under a slice nothing is held: the state is
 //! the state after the rows returned, and each input resumes after its rows
 //! the slice returned.
+//!
+//! # Carrying a value forward (PLAN 556)
+//!
+//! With `carry`, each column named is filled forward over the merged rows,
+//! as Polars' `forward_fill` fills it: a row where it is null takes its
+//! last non-null value in the merged rows before it, within the row's `by`
+//! group. Beside it a column `<c>_age` gives the age of that value on the
+//! clock: the row's clock less the clock of the row the value came from, by
+//! Polars' own subtraction of the clock's dtype (`age.rs`); 0 on a row with
+//! a value of its own, and null with the value where the group has had none
+//! yet. A value is carried only to rows at or after its own clock in the
+//! same day: a row of an input that started again (its `restarts` count
+//! moved on) or of a group whose merged rows started again finds nothing
+//! carried, since a clock that started again is not comparable with the
+//! one before. It is read off each pull's rows in their order, and the
+//! state keeps, per group and column, the one last value with its clock and
+//! restarts: so the output is chunk-invariant, and a resumed run carries
+//! what the run before it left. One value a column a group, whatever the
+//! stream's length.
 
+#[cfg(test)]
+mod carry_tests;
 mod state;
 #[cfg(test)]
 mod tests;
@@ -67,6 +88,7 @@ use rheon_core::FixedState;
 
 use crate::bank::CLOCK_ORDER_HOW_TO;
 use crate::figures::{Round, three_figures};
+use crate::refresh::Cell;
 
 pub(crate) const WHO: &str = "rp.stream.merge";
 
@@ -85,6 +107,9 @@ pub struct MergeConfig {
     pub restart: Option<f64>,
     /// `restart_after_step_back` as the caller wrote it, for the messages.
     pub restart_text: Option<String>,
+    /// The columns filled forward, each with its age beside it (PLAN 556);
+    /// empty, none.
+    pub carry: Vec<String>,
 }
 
 /// How a clock column's values are ordered and stepped.
@@ -188,6 +213,52 @@ impl Block {
     }
 }
 
+/// A carried column's last non-null value in one group: its clock key and
+/// its input's restarts when it was read, and where the value is in its
+/// column's `store`; [`PENDING`] while a pull's row holds it, stored as the
+/// pull ends.
+#[derive(Debug, Clone, Copy)]
+struct Carried {
+    restarts: u64,
+    key: i64,
+    at: IdxSize,
+}
+
+/// A value a pull's row holds, not yet in the store.
+const PENDING: IdxSize = IdxSize::MAX;
+
+/// A column `carry` fills forward.
+struct CarryCol {
+    name: String,
+    dtype: DataType,
+    /// Each group's last value, by group id.
+    slots: Vec<Option<Carried>>,
+    /// The values, in the column's dtype: each pull appends the values its
+    /// groups end on, so a pull costs one gather and one append whatever
+    /// the groups it touches, and the store is gathered down to the values
+    /// in use once it holds twice the groups.
+    store: Series,
+}
+
+impl CarryCol {
+    /// The store gathered down to the values in use, once it holds more
+    /// than twice the groups (and 1,024): so its size is bounded by the
+    /// groups, and its upkeep is O(1) a value appended.
+    fn compact(&mut self) -> PolarsResult<()> {
+        if self.store.len() <= 2 * self.slots.len() + 1024 {
+            return Ok(());
+        }
+        let mut idx = Vec::new();
+        for c in self.slots.iter_mut().flatten() {
+            idx.push(c.at);
+            c.at = (idx.len() - 1) as IdxSize;
+        }
+        self.store = self.store.take(&IdxCa::from_vec(PlSmallStr::EMPTY, idx))?;
+        self.store = self.store.rechunk();
+        Ok(())
+    }
+}
+
 /// One input stream.
 struct Input {
     name: String,
@@ -242,6 +313,14 @@ pub struct Merge {
     max_read: Option<(u64, i64)>,
     /// The inputs' names, by index, for the `source` column.
     names: StringChunked,
+    /// The columns filled forward (PLAN 556), in `carry`'s order.
+    carry: Vec<CarryCol>,
+    /// The columns the merge adds: `source` and each carried column's age.
+    added: Vec<PlSmallStr>,
+    /// A pull's scratch, by group id: the row of the pull's output (or of
+    /// the values carried into it, past its rows) a group's carried value
+    /// is read from; `IdxSize::MAX` for none.
+    pos: Vec<IdxSize>,
 }
 
 /// A column a dtype refusal names, in Polars' words.
@@ -365,7 +444,17 @@ impl Merge {
                 }
             }
         }
+        let carry = Self::carry_cols(&cfg, &out_schema, &clock_dtype)?;
         out_schema.insert(cfg.source.as_str().into(), DataType::String);
+        let mut added = vec![PlSmallStr::from(cfg.source.as_str())];
+        if !carry.is_empty() {
+            let age = crate::age::dtype(&clock_dtype)?;
+            for c in &carry {
+                let name = PlSmallStr::from(format!("{}_age", c.name));
+                out_schema.insert(name.clone(), age.clone());
+                added.push(name);
+            }
+        }
         let inputs: Vec<Input> = names
             .into_iter()
             .zip(schemas)
@@ -402,7 +491,81 @@ impl Merge {
             held_end: false,
             max_read: None,
             names,
+            carry: carry
+                .into_iter()
+                .map(|mut c| {
+                    if !grouped {
+                        c.slots.push(None);
+                    }
+                    c
+                })
+                .collect(),
+            added,
+            pos: if grouped {
+                Vec::new()
+            } else {
+                vec![IdxSize::MAX]
+            },
         })
+    }
+
+    /// The columns `carry` names, checked against the inputs' columns.
+    fn carry_cols(
+        cfg: &MergeConfig,
+        columns: &Schema,
+        clock_dtype: &DataType,
+    ) -> PolarsResult<Vec<CarryCol>> {
+        let mut out: Vec<CarryCol> = Vec::with_capacity(cfg.carry.len());
+        for c in &cfg.carry {
+            let Some(dtype) = columns.get(c) else {
+                let have: Vec<&str> = columns.iter_names().map(|n| n.as_str()).collect();
+                return Err(PolarsError::ColumnNotFound(
+                    format!(
+                        "{WHO}: carry names column {c:?}, which no input has, only {have:?}. \
+                         List only the inputs' columns in carry."
+                    )
+                    .into(),
+                ));
+            };
+            let role = if *c == cfg.clock {
+                Some("clock")
+            } else if cfg.by.as_ref() == Some(c) {
+                Some("by")
+            } else {
+                None
+            };
+            if let Some(role) = role {
+                polars_bail!(ComputeError:
+                    "{WHO}: carry names {c:?}, the {role} column, which every row has a value \
+                     of, so there is nothing to carry. Leave it out of carry."
+                );
+            }
+            if out.iter().any(|o| o.name == *c) {
+                polars_bail!(ComputeError:
+                    "{WHO}: carry names column {c:?} twice. Name each column once."
+                );
+            }
+            let age = format!("{c}_age");
+            if columns.get(&age).is_some() || age == cfg.source {
+                polars_bail!(Duplicate:
+                    "{WHO}: carry gives column {c:?} its age in a column named {age:?}, but \
+                     {} already has that name. Rename that column, or leave {c:?} out of carry.",
+                    if age == cfg.source { "the source column" } else { "an input's column" }
+                );
+            }
+            out.push(CarryCol {
+                name: c.clone(),
+                dtype: dtype.clone(),
+                slots: Vec::new(),
+                store: Series::new_empty(c.as_str().into(), dtype),
+            });
+        }
+        // A clock Polars cannot subtract has no age: none it takes, but said
+        // here rather than on the first row.
+        if !out.is_empty() {
+            crate::age::dtype(clock_dtype)?;
+        }
+        Ok(out)
     }
 
     /// The merged rows' columns: every input's, unified by name in the order
@@ -580,6 +743,12 @@ impl Merge {
         let id = u32::try_from(self.group_keys.len()).expect("fewer than 2^32 groups");
         self.group_keys.push(key);
         self.group_last.push(None);
+        for c in &mut self.carry {
+            c.slots.push(None);
+        }
+        if !self.carry.is_empty() {
+            self.pos.push(IdxSize::MAX);
+        }
         id
     }
 
@@ -696,6 +865,9 @@ impl Merge {
         let mut open: Vec<Option<usize>> = vec![None; self.inputs.len()];
         // Each output row: its part and its row there.
         let mut picks: Vec<(u32, u32)> = Vec::new();
+        // Under `carry`, each output row's group, restarts and clock key.
+        let carrying = !self.carry.is_empty();
+        let mut meta: Vec<(u32, u64, i64)> = Vec::new();
         // An input with no row queued and more to come holds every other
         // back: its next row may be the least.
         let mut want = self.waiting();
@@ -763,6 +935,9 @@ impl Merge {
                     *last = Some(key);
                     last_out = (key, block.restarts);
                     picks.push((p as u32, (row - start) as u32));
+                    if carrying {
+                        meta.push((gid as u32, block.restarts, key));
+                    }
                     if !block.advance() {
                         break;
                     }
@@ -822,8 +997,140 @@ impl Merge {
         if want.is_none() && hold && all_ended && picks.len() < budget {
             self.held_end = true;
         }
-        let out = self.assemble(parts, &picks)?;
+        let mut out = self.assemble(parts, &picks)?;
+        if carrying && out.height() > 0 {
+            self.carry_forward(&mut out, &meta)?;
+        }
         Ok((out, want))
+    }
+
+    /// The clocks of `keys` as a column of the clock's dtype, null where
+    /// `None`.
+    fn clock_of(&self, keys: Vec<Option<i64>>) -> PolarsResult<Series> {
+        match self.mode {
+            Mode::Float => crate::age::clock_of_floats(
+                &self.clock_dtype,
+                keys.into_iter().map(|k| k.map(float_of)).collect(),
+            ),
+            Mode::Int | Mode::Temporal { .. } => {
+                crate::age::clock_of_physical(&self.clock_dtype, keys)
+            }
+        }
+    }
+
+    /// Fill each carried column of a pull's rows forward, and add its age
+    /// (PLAN 556). `meta` is each row's group, restarts and clock key.
+    ///
+    /// Per column, one pass over the rows: a row with a value is the
+    /// group's value from there on; a row without one reads the group's
+    /// value, from a row of this pull or carried into it from before, while
+    /// that value is of the row's day (its restarts) and no later than its
+    /// clock, and otherwise finds none, and the group's value is dropped.
+    /// The values carried in are only those of the groups that read one, so
+    /// a pull costs its rows and the groups it touches, not every group.
+    fn carry_forward(&mut self, out: &mut DataFrame, meta: &[(u32, u64, i64)]) -> PolarsResult<()> {
+        let n = out.height();
+        let clock = out
+            .column(&self.cfg.clock)?
+            .as_materialized_series()
+            .clone();
+        for ci in 0..self.carry.len() {
+            let name = self.carry[ci].name.clone();
+            let col = out.column(&name)?.as_materialized_series().clone();
+            let has = col.is_not_null();
+            let mut idx: Vec<Option<IdxSize>> = Vec::with_capacity(n);
+            let mut from: Vec<Option<i64>> = Vec::with_capacity(n);
+            // The store's rows of the values carried into this pull.
+            let mut carried_in: Vec<IdxSize> = Vec::new();
+            let mut touched: Vec<u32> = Vec::new();
+            let slots = &mut self.carry[ci].slots;
+            let pos = &mut self.pos;
+            for (j, (&(g, r, k), ok)) in meta.iter().zip(has.iter()).enumerate() {
+                let ok = ok == Some(true);
+                let gi = g as usize;
+                if ok {
+                    if pos[gi] == IdxSize::MAX {
+                        touched.push(g);
+                    }
+                    pos[gi] = j as IdxSize;
+                    slots[gi] = Some(Carried {
+                        restarts: r,
+                        key: k,
+                        at: PENDING,
+                    });
+                    idx.push(Some(j as IdxSize));
+                    from.push(Some(k));
+                    continue;
+                }
+                match slots[gi] {
+                    // Of the row's day, and no later than its clock.
+                    Some(c) if c.restarts == r && c.key <= k => {
+                        if pos[gi] == IdxSize::MAX {
+                            touched.push(g);
+                            pos[gi] = (n + carried_in.len()) as IdxSize;
+                            debug_assert_ne!(c.at, PENDING, "a value between pulls is stored");
+                            carried_in.push(c.at);
+                        }
+                        idx.push(Some(pos[gi]));
+                        from.push(Some(c.key));
+                    }
+                    _ => {
+                        slots[gi] = None;
+                        idx.push(None);
+                        from.push(None);
+                    }
+                }
+            }
+            let cc = &mut self.carry[ci];
+            let filled = if col.null_count() == 0 {
+                col.clone()
+            } else {
+                let mut all = col.clone();
+                if !carried_in.is_empty() {
+                    all.append(
+                        &cc.store
+                            .take(&IdxCa::from_vec(PlSmallStr::EMPTY, carried_in))?,
+                    )?;
+                }
+                all.take(&IdxCa::from_iter_options(
+                    PlSmallStr::EMPTY,
+                    idx.into_iter(),
+                ))?
+            };
+            // Each group's value read in this pull, stored for the next: one
+            // gather, its text copied out of the chunk's buffers.
+            let mut rows: Vec<IdxSize> = Vec::new();
+            let base = cc.store.len() as IdxSize;
+            for g in touched {
+                let gi = g as usize;
+                let p = self.pos[gi];
+                self.pos[gi] = IdxSize::MAX;
+                if let Some(c) = cc.slots[gi].as_mut()
+                    && c.at == PENDING
+                {
+                    c.at = base + rows.len() as IdxSize;
+                    rows.push(p);
+                }
+            }
+            if !rows.is_empty() {
+                let mut kept = DataFrame::new(
+                    rows.len(),
+                    vec![
+                        col.take(&IdxCa::from_vec(PlSmallStr::EMPTY, rows))?
+                            .into_column(),
+                    ],
+                )?;
+                crate::windows_frame::compact_views(&mut kept)?;
+                cc.store
+                    .append(kept.columns()[0].as_materialized_series())?;
+                cc.compact()?;
+            }
+            out.with_column(filled.into_column())?;
+            let then = self.clock_of(from)?;
+            let age = crate::age::of(&format!("{name}_age"), &clock, &then)?;
+            out.with_column(age.into_column())?;
+        }
+        Ok(())
     }
 
     /// The output frame of a pull: each part's rows aligned to the output's
@@ -843,7 +1150,7 @@ impl Merge {
             let cols: Vec<Column> = self
                 .out_schema
                 .iter()
-                .filter(|(n, _)| **n != source)
+                .filter(|(n, _)| !self.added.contains(n))
                 .map(|(n, d)| match part.df.column(n) {
                     Ok(c) => c.slice(part.start as i64, len),
                     Err(_) => Column::full_null(n.clone(), len, d),
@@ -887,4 +1194,30 @@ impl Merge {
         out.with_column(src.with_name(source).into_column())?;
         Ok(out)
     }
+}
+
+/// Values a state carried, as one column of `dtype`.
+pub(crate) fn cells_series(cells: &[Cell], name: &str, dtype: &DataType) -> PolarsResult<Series> {
+    let mut out = Series::new_empty(name.into(), dtype);
+    for c in cells {
+        out.append(&cell_as(c, name, dtype)?)?;
+    }
+    Ok(out)
+}
+
+/// A carried value as a one-row column of `dtype`: a value is held as its
+/// kind (an integer as 64 bits), and cast back to the column's dtype.
+pub(crate) fn cell_as(c: &Cell, name: &str, dtype: &DataType) -> PolarsResult<Series> {
+    let s = c.series(name)?;
+    if s.dtype() == dtype {
+        return Ok(s);
+    }
+    let cast = s.strict_cast(dtype)?;
+    // A cast to a zoned `Datetime` came back naive while Polars was built
+    // without its `timezones` feature, which the workspace now enables; the
+    // zone is set again all the same, the column's, on the instant kept.
+    Ok(match dtype {
+        DataType::Datetime(u, tz) if cast.dtype() != dtype => cast.into_datetime(*u, tz.clone()),
+        _ => cast,
+    })
 }

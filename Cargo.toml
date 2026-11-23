@@ -28,7 +28,12 @@ rheon-polars = { path = "crates/rheon-polars", version = "2.0.0" }
 # needs no change on this side: the wheel's copy and the user's never meet.
 # "object" is required because pyo3-polars/derive pulls polars-plan, which turns on
 # polars-core/object; without it polars-ops fails to compile (non-exhaustive DataType match).
-polars = { version = "=0.55.2", default-features = false, features = ["object", "dtype-i8", "dtype-u8", "dtype-i16", "dtype-u16", "dtype-i128", "dtype-decimal", "dtype-array"] }
+# "timezones" (the user, 2026-11-23): without it polars-core casts a column to
+# Datetime(unit, zone) and returns it naive, and the cast of a zoned clock to its
+# own dtype then fails to subtract from a column of nulls, which keeps the zone
+# (docs/records/LINKING.md). chrono-tz was already linked, through polars-arrow.
+# "timezones" alone does not compile polars-io, which then needs "dtype-date".
+polars = { version = "=0.55.2", default-features = false, features = ["object", "dtype-i8", "dtype-u8", "dtype-i16", "dtype-u16", "dtype-i128", "dtype-decimal", "dtype-array", "dtype-date", "timezones"] }
 pyo3 = "0.29"
 pyo3-polars = "0.28"
 

@@ -5,17 +5,18 @@
 
 use super::*;
 
-fn cfg(clock: &str) -> MergeConfig {
+pub(super) fn cfg(clock: &str) -> MergeConfig {
     MergeConfig {
         clock: clock.into(),
         source: "source".into(),
         by: None,
         restart: None,
         restart_text: None,
+        carry: Vec::new(),
     }
 }
 
-fn names(n: usize) -> Vec<String> {
+pub(super) fn names(n: usize) -> Vec<String> {
     (0..n).map(|i| format!("s{i}")).collect()
 }
 
@@ -29,7 +30,12 @@ fn f64_input(t: &[f64], tag: i64) -> DataFrame {
 
 /// Feed each input's chunks as the Python source does, pulling until done;
 /// `limit` stops after that many rows, `hold` holds the rows at the end.
-fn drive(m: &mut Merge, chunks: &[Vec<DataFrame>], limit: Option<usize>, hold: bool) -> DataFrame {
+pub(super) fn drive(
+    m: &mut Merge,
+    chunks: &[Vec<DataFrame>],
+    limit: Option<usize>,
+    hold: bool,
+) -> DataFrame {
     let mut next = vec![0usize; chunks.len()];
     let mut out = DataFrame::empty_with_schema(m.schema());
     loop {
@@ -52,7 +58,7 @@ fn drive(m: &mut Merge, chunks: &[Vec<DataFrame>], limit: Option<usize>, hold: b
 }
 
 /// Each input cut into chunks at the given row counts, cycled.
-fn chunked(df: &DataFrame, sizes: &[usize]) -> Vec<DataFrame> {
+pub(super) fn chunked(df: &DataFrame, sizes: &[usize]) -> Vec<DataFrame> {
     let mut out = Vec::new();
     let mut at = 0;
     let mut k = 0;
@@ -65,7 +71,7 @@ fn chunked(df: &DataFrame, sizes: &[usize]) -> Vec<DataFrame> {
     out
 }
 
-fn merge_of(inputs: &[DataFrame], c: MergeConfig) -> Merge {
+pub(super) fn merge_of(inputs: &[DataFrame], c: MergeConfig) -> Merge {
     Merge::new(
         names(inputs.len()),
         inputs.iter().map(|d| d.schema().as_ref().clone()).collect(),
@@ -98,7 +104,7 @@ fn rows_of(out: &DataFrame) -> Vec<(String, i64)> {
         .collect()
 }
 
-fn lcg(seed: u64) -> impl FnMut() -> u64 {
+pub(super) fn lcg(seed: u64) -> impl FnMut() -> u64 {
     let mut s = seed;
     move || {
         s = s

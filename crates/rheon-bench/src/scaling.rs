@@ -31,7 +31,9 @@
 use std::collections::HashMap;
 
 use polars::prelude::*;
-use rheon_polars::{AnyModel, Bank, RefreshCols, RefreshTime, Spec, WindowsConfig, WindowsRun};
+use rheon_polars::{
+    AnyModel, Bank, Merge, MergeConfig, RefreshCols, RefreshTime, Spec, WindowsConfig, WindowsRun,
+};
 use serde_json::{Value, json};
 
 use crate::{Lcg, Rows, Shape, names};
@@ -304,6 +306,15 @@ pub const CELLS: &[Cell] = &[
     cell("refresh.pairs", 8, 8, Pow(1), Pow(2)),
     cell("refresh.groups", 100, 8, Const, Pow(1)),
     cell("refresh.history", 1000, 8, Const, Const),
+    // Each value's age (PLAN 556): the clock of each series' last tick, one
+    // a series a group, beside its value.
+    cell("refresh.age_groups", 100, 8, Const, Pow(1)),
+    cell("refresh.age_history", 1000, 8, Const, Const),
+    // --- rp.stream.merge's `carry`, `Merge::pull` ----------------------------
+    // Two columns filled forward over groups (PLAN 556): one value a column
+    // a group, whatever the rows already merged.
+    cell("merge.carry_groups", 100, 8, Const, Pow(1)),
+    cell("merge.carry_history", 1000, 8, Const, Const),
     // --- rheon.polars._gbdt's sample of the rows, `Sampler::push_frame` ----------------
     cell("gbdt.history", 10_000, 8, Const, Const),
     cell("gbdt.sample", 1000, 8, Log, Pow(1)),
@@ -398,6 +409,10 @@ enum Work {
         frames: Vec<DataFrame>,
         grouped: bool,
     },
+    Merge {
+        merge: Box<Merge>,
+        frames: Vec<DataFrame>,
+    },
     Gbdt {
         sampler: Box<rheon_polars::gbdt::Sampler>,
         layout: rheon_polars::gbdt::Layout,
@@ -433,6 +448,7 @@ impl ScaleRun {
             }
             Work::Windows { run, .. } => run.save_bytes().expect("a window core saves").len(),
             Work::Refresh { rt, .. } => rt.save_bytes().expect("a sampler saves").len(),
+            Work::Merge { merge, .. } => merge.save_bytes().expect("a merge saves").len(),
             // The sampler is never saved: its state is its kept rows,
             // `rows_kept` of them, each a float a feature.
             Work::Gbdt {
@@ -492,6 +508,7 @@ impl ScaleRun {
             }
             Work::Windows { frames, .. }
             | Work::Refresh { frames, .. }
+            | Work::Merge { frames, .. }
             | Work::Gbdt { frames, .. } => *frames = Vec::new(),
         }
     }
@@ -566,6 +583,7 @@ pub fn rheon_budget_scale_rows(run: &mut ScaleRun) -> f64 {
             let out = rt.feed(&frames[b], &cols).unwrap_or_else(|e| panic!("{e}"));
             out.height() as f64
         }
+        Work::Merge { merge, frames } => merge_block(merge, frames[b].clone()),
         Work::Gbdt {
             sampler,
             layout,
@@ -1641,12 +1659,14 @@ fn refresh_setup(id: &'static str, n: usize, blocks: usize) -> ScaleRun {
     let (m, groups, pairs, warm) = match dim {
         "series" => (n, 0, false, 2_000),
         "pairs" => (n, 0, true, 2_000),
-        "groups" => (4, n, false, 8 * n),
-        "history" => (4, 0, false, n),
+        "groups" | "age_groups" => (4, n, false, 8 * n),
+        "history" | "age_history" => (4, 0, false, n),
         other => panic!("no refresh cell {other:?}"),
     };
     let names: Vec<String> = (0..m).map(|i| format!("s{i}")).collect();
-    let mut rt = RefreshTime::new(names, pairs).unwrap_or_else(|e| panic!("{id}: {e}"));
+    let mut rt = RefreshTime::new(names, pairs)
+        .unwrap_or_else(|e| panic!("{id}: {e}"))
+        .with_age(dim.starts_with("age_"));
     let cols = refresh_cols(groups > 0);
     rt.feed(&ticks(m, warm, groups, 0), &cols)
         .unwrap_or_else(|e| panic!("{id}: {e}"));
@@ -1660,6 +1680,76 @@ fn refresh_setup(id: &'static str, n: usize, blocks: usize) -> ScaleRun {
             rt: Box::new(rt),
             frames,
             grouped: groups > 0,
+        },
+        block_rows: block,
+        blocks,
+        next: 0,
+    }
+}
+
+/// One input's rows: over `groups` groups in turn, a clock unit apart, a
+/// float `x` null every third row and a text `s` null every other.
+fn merge_rows(n: usize, groups: usize, from: usize) -> DataFrame {
+    let mut g = Lcg(9 + from as u64);
+    let rows = from..from + n;
+    df!(
+        "t" => rows.clone().map(|i| i as f64).collect::<Vec<_>>(),
+        "g" => rows.clone().map(|i| (i % groups) as i64).collect::<Vec<_>>(),
+        "x" => rows.clone().map(|i| (i % 3 != 0).then(|| g.signed())).collect::<Vec<_>>(),
+        "s" => rows.map(|i| (i % 2 == 0).then(|| format!("v{}", i % 7))).collect::<Vec<_>>(),
+    )
+    .expect("columns of one length")
+}
+
+/// One block of a merge: its input's chunk pushed and every row pulled, up
+/// to the merge's call for the next chunk.
+fn merge_block(m: &mut Merge, chunk: DataFrame) -> f64 {
+    m.push(0, chunk).unwrap_or_else(|e| panic!("{e}"));
+    let mut rows = 0;
+    loop {
+        let (out, want) = m.pull(None, false).unwrap_or_else(|e| panic!("{e}"));
+        rows += out.height();
+        if want.is_some() {
+            return rows as f64;
+        }
+    }
+}
+
+fn merge_setup(id: &'static str, n: usize, blocks: usize) -> ScaleRun {
+    let dim = id.split_once('.').expect("merge.<dimension>").1;
+    let block = 1_000;
+    let (groups, warm) = match dim {
+        "carry_groups" => (n, 8 * n),
+        "carry_history" => (16, n),
+        other => panic!("no merge cell {other:?}"),
+    };
+    let first = merge_rows(warm, groups, 0);
+    let cfg = MergeConfig {
+        clock: "t".into(),
+        source: "source".into(),
+        by: Some("g".into()),
+        restart: None,
+        restart_text: None,
+        carry: vec!["x".into(), "s".into()],
+    };
+    let mut merge = Merge::new(
+        vec!["in".into()],
+        vec![first.schema().as_ref().clone()],
+        cfg,
+    )
+    .unwrap_or_else(|e| panic!("{id}: {e}"));
+    // Asked for its first chunk, then fed the warm-up.
+    let _ = merge.pull(None, false);
+    merge_block(&mut merge, first);
+    let frames = (0..blocks)
+        .map(|b| merge_rows(block, groups, warm + b * block))
+        .collect();
+    ScaleRun {
+        id,
+        size: n,
+        work: Work::Merge {
+            merge: Box::new(merge),
+            frames,
         },
         block_rows: block,
         blocks,
@@ -1766,6 +1856,7 @@ pub fn scale_setup_blocks(id: &'static str, n: usize, blocks: usize) -> ScaleRun
         "runner" => runner_setup(id, n, blocks),
         "windows" => windows_setup(id, n, blocks),
         "refresh" => refresh_setup(id, n, blocks),
+        "merge" => merge_setup(id, n, blocks),
         "gbdt" => gbdt_setup(id, n, blocks),
         _ => model_setup(id, n, blocks),
     }

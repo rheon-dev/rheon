@@ -184,7 +184,10 @@ that ends among them keeps the rest in its state, and the run resumed after
 that tick returns them first, so the two runs give the one run's grid. A
 row before a group's saved clock is refused as any step back is. The state
 is version 3, in the envelope with its checksum; this build reads versions
-1 and 2, saved before the envelope, too.
+1 and 2, saved before the envelope, too. A run with `age=True` also keeps
+the clock of each series' last tick since the last point, so a resumed run
+gives the age of a value read before the save. Such a state loads only into
+a run with `age=True`, and one saved without it only into a run without.
 
 ## A pipeline checkpoint
 
