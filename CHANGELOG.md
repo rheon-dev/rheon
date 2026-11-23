@@ -808,6 +808,15 @@ model that only the new build has is listed as an addition and passes.
   coefficient, as the calibration's is, now reads the distance in that
   frame, where it is statsmodels' HAC kernel to `1e-6` at both levels.
   Elsewhere it moves the test by rounding. Moves: `*.calibration_wald_*`.
+- **`emit_specification` keeps its saved state loadable after a row whose
+  powers overflow** (review 2026-11-23, DIAG-3, in part). Inside the input
+  bound, a prediction past about `1e51` from the first one made RESET's
+  sums of `q⁶` infinite, and a residual past about `1e77` Breusch-Pagan's
+  sums of `e⁴`, after which the saved state no longer loaded. Such a row
+  now only ages the sums. RESET read about a first prediction far from
+  where the predictions settle (`1e4` to `1e6` away) still reads null:
+  its powers' moments lose the curvature in rounding there, which a
+  change of origin, not of the solve, would fix.
 - **A window looking ahead whose far edge is the input's last row is whole
   at the end of the input** (PLAN 565). Under `closed="right"` or `"both"`,
   `rp.ewm_sum`, `rp.ewm_mean`, `rp.ewm_rate` and `rp.ewm_quantile` with
