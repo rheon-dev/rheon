@@ -923,6 +923,17 @@ model that only the new build has is listed as an addition and passes.
   without, or under two `gap_cap`s, was taken, and the merged clock's gaps
   read as neither stream's; it is refused as other settings that differ
   are.
+- **Under a horizon, `cusum`, `break_wald` and a quantile fit's
+  `calibration_wald` read a statistic where their long-run variance read
+  none** (review 2026-11-23, DIAG-1; the user, 2026-11-23). The variance
+  pairs the null's lag 0 with the residuals' Bartlett-weighted lag
+  products, which shocks alternating in sign can cancel to 0 or below, and
+  there each read null. Where that happens it now takes the terms' own lag
+  0, Newey and West's estimate, statsmodels' `S_hac_simple` at the same
+  lags; everywhere else every number is as it was. Size and power on
+  simulated streams are the old form's. A saved state starts the new sum
+  at the null's value and goes on (rule 5's thirty-first exception).
+  Moves: `*.cusum_*`, `*.break_wald_*`, `*.calibration_wald_*`.
 - **A window looking ahead whose far edge is the input's last row is whole
   at the end of the input** (PLAN 565). Under `closed="right"` or `"both"`,
   `rp.ewm_sum`, `rp.ewm_mean`, `rp.ewm_rate` and `rp.ewm_quantile` with

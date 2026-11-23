@@ -2800,6 +2800,14 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                      reaches from the same stream"
                 );
             }
+            if seeded_lag0(schema, f.name) {
+                // Rule 5's thirty-first exception: the kept state has no lag
+                // 0 of its own, so it is not the current fixture's; it saves
+                // bytes that load back the same.
+                let (resaved, _) = (kind.run)(&again, &from_ipc(f.input))
+                    .unwrap_or_else(|e| panic!("{what}: {e}"));
+                assert!(resaved == again, "{what}: saved, loaded, saved");
+            }
             let tol = if f.writer == writer() { 0.0 } else { TOL };
             assert_eq!(frames.len(), f.output.len(), "{what}");
             assert_eq!(current.output.len(), f.output.len(), "{what}");
@@ -2807,7 +2815,13 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                 frames.iter().zip(f.output).zip(current.output)
             {
                 assert_eq!(name, frozen_name, "{what}");
-                let want = moved_since(&from_ipc(want), &from_ipc(now));
+                let kept_frame = from_ipc(want);
+                let want = moved_since(&kept_frame, &from_ipc(now));
+                let want = if seeded_lag0(schema, f.name) {
+                    fallback_cells(&kept_frame, &want, got)
+                } else {
+                    want
+                };
                 let want = whole_at_the_end_of_the_input(f.name, name, &want, &from_ipc(now));
                 let want = if old_scale {
                     new_after_load(f.name, name, &from_ipc(f.input), &want, &from_ipc(now))
@@ -2991,6 +3005,76 @@ fn moved_by_the_held_mass(name: &str) -> bool {
 /// the bit as ever. The kinds are [`MEAN_WEIGHT_MOVED`]'s, the kept ones
 /// whose band's rows have uneven weights.
 const MEAN_WEIGHT_MOVED: &[&str] = &["bank_conformal_auto", "bank_label_clock"];
+
+/// The fixtures of schema 71 or earlier whose breaks or coverage under a
+/// horizon read a long-run variance (rule 5's thirty-first exception, the
+/// user's, 2026-11-23): where the null's lag 0 left that variance at or below
+/// 0, the old build read `None`, and this build reads the fallback, the
+/// terms' own lag 0, which a kept state starts at the null's `Σ ω²` and then
+/// decays. Every row whose frozen value is a number reads it to the bit, as
+/// the null's form is unchanged; a row the old build left `None` in
+/// [`FALLBACK_FIELDS`] is held only to a finite number
+/// ([`fallback_cells`]).
+fn seeded_lag0(schema: u32, name: &str) -> bool {
+    schema <= 71 && name == "bank_diagnosed"
+}
+
+/// The fields a long-run variance divides: the CUSUM (not the CUSUM of
+/// squares, whose lag 0 is the measured fourth moment's), the break Wald
+/// distance, and a quantile fit's coverage Wald.
+const FALLBACK_FIELDS: &[&str] = &["cusum_", "break_wald_", "calibration_wald_"];
+
+/// `want` with each [`FALLBACK_FIELDS`] cell that `kept`, the kept fixture's
+/// own frozen frame, left null taken from `got` where that is a finite
+/// number: the rows where the old build read no variance.
+fn fallback_cells(kept: &DataFrame, want: &DataFrame, got: &DataFrame) -> DataFrame {
+    let falls_back =
+        |n: &str| FALLBACK_FIELDS.iter().any(|p| n.starts_with(p)) && !n.starts_with("cusum_sq_");
+    let columns: Vec<Column> = want
+        .columns()
+        .iter()
+        .map(|w| {
+            let ws = w.as_materialized_series();
+            let (DataType::Struct(_), Ok(k), Ok(g)) =
+                (ws.dtype(), kept.column(w.name()), got.column(w.name()))
+            else {
+                return w.clone();
+            };
+            let (wst, kst, gst) = (
+                ws.struct_().unwrap(),
+                k.as_materialized_series().struct_().unwrap().clone(),
+                g.as_materialized_series().struct_().unwrap().clone(),
+            );
+            let fields: Vec<Series> = wst
+                .fields_as_series()
+                .into_iter()
+                .map(|f| {
+                    let (Some(kf), Some(gf)) = (
+                        kst.field_by_name(f.name()).ok(),
+                        gst.field_by_name(f.name()).ok(),
+                    ) else {
+                        return f;
+                    };
+                    if !falls_back(f.name()) || kf.len() != f.len() || gf.len() != f.len() {
+                        return f;
+                    }
+                    let finite = gf
+                        .f64()
+                        .map(|c| c.is_not_nan() & c.is_not_null())
+                        .unwrap_or_else(|_| gf.is_not_null());
+                    let take = kf.is_null() & finite;
+                    gf.zip_with(&take, &f).unwrap()
+                })
+                .collect();
+            StructChunked::from_series(ws.name().clone(), ws.len(), fields.iter())
+                .unwrap()
+                .with_outer_validity(wst.rechunk_validity())
+                .into_series()
+                .into_column()
+        })
+        .collect();
+    DataFrame::new(want.height(), columns).unwrap()
+}
 
 fn moved_by_the_mean_weight(schema: u32, name: &str) -> bool {
     schema <= 71 && MEAN_WEIGHT_MOVED.contains(&name)
@@ -3519,6 +3603,19 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
         }),
         ("bank_drift_kinds", "an ADWIN's second level", |p, v| {
             p.contains(".Adwin.levels.1.") && v.as_f64().is_some()
+        }),
+        // Rule 5's thirty-first exception: under a horizon the breaks' and
+        // a quantile fit's coverage's empirical lag 0.
+        ("bank_diagnosed", "a CUSUM's empirical lag 0", |p, v| {
+            p.ends_with(".g1") && v.as_f64().is_some_and(|f| f > 0.0)
+        }),
+        (
+            "bank_diagnosed",
+            "a quantile fit's residuals' lag 0",
+            |p, v| p.ends_with(".gz") && v.as_f64().is_some_and(|f| f > 0.0),
+        ),
+        ("bank_diagnosed", "a coverage's empirical lag 0", |p, v| {
+            p.ends_with(".g") && v.as_f64().is_some_and(|f| f > 0.0)
         }),
         ("bank_drift_ranges", "an ADWIN's fixed range", |p, v| {
             p.contains(".Adwin.") && p.ends_with(".range") && v.as_f64() == Some(0.5)
