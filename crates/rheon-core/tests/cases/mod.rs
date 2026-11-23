@@ -2614,7 +2614,53 @@ pub fn all() -> Vec<Case> {
             Targets::Linear(2),
             300
         ),
+        // A DDSketch a target (PLAN 544, part 7), never forgetting: both
+        // stores, the zero count stays empty on a linear target.
+        case!(
+            "ddsketch",
+            "DdSketch",
+            DdSketchModel,
+            DdSketchModel::new(ddsketch_cfg(None, None)).unwrap(),
+            0,
+            Targets::Linear(2),
+            40
+        ),
+        // A row window, full and turning over: the ring's codes and
+        // weights, and the stores' row counts.
+        case!(
+            "ddsketch_rows",
+            "DdSketch",
+            DdSketchModel,
+            DdSketchModel::new(ddsketch_cfg(Some(25), None)).unwrap(),
+            0,
+            Targets::Linear(2),
+            60
+        ),
+        // A clock window: the ring's stamps and the clock kept for them.
+        case!(
+            "ddsketch_clock",
+            "DdSketch",
+            DdSketchModel,
+            DdSketchModel::new(ddsketch_cfg(None, Some(12.0))).unwrap(),
+            0,
+            Targets::Linear(2),
+            60
+        ),
     ]
+}
+
+/// A `ddsketch` of two targets at a coarse accuracy, read at three levels,
+/// plain or under a window.
+fn ddsketch_cfg(window_rows: Option<usize>, window_clock: Option<f64>) -> DdSketchModelCfg {
+    DdSketchModelCfg {
+        n_targets: 2,
+        alpha: 0.02,
+        levels: vec![0.1, 0.4, 0.9],
+        window_rows,
+        window_clock,
+        closed: WindowClosed::Right,
+        max_state_bytes: None,
+    }
 }
 
 /// A `tdigest` of two targets at the smallest compression, whose buffer

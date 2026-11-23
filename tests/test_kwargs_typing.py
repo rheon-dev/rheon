@@ -24,6 +24,7 @@ BUILDERS = [
     "hawkes",
     "garch",
     "tdigest",
+    "ddsketch",
     "bocpd",
     "corrchange",
     "deco",

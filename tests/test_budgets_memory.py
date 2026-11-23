@@ -341,6 +341,21 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         ),
         [],
     ),
+    # A sketch a target over a clock window, read at three levels with their
+    # tail means: every field it has.
+    (
+        "ddsketch",
+        "ddsketch",
+        dict(
+            targets=["y", "z"],
+            quantiles=[0.05, 0.25, 0.95],
+            window_size=50.0,
+            group="g",
+            emit_clocks=True,
+            **CLOCK,
+        ),
+        [],
+    ),
     (
         "hawkes",
         "hawkes",

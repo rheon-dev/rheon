@@ -942,10 +942,11 @@ fn only_models_that_predict_a_target_have_residual_fields() {
         r#"{"type": "expectile", "expectile": 0.9}"#,
         r#"{"type": "garch"}"#,
         r#"{"type": "tdigest", "quantiles": [0.25]}"#,
+        r#"{"type": "ddsketch", "quantiles": [0.25]}"#,
     ];
     let mut seen = Vec::new();
     for model in kinds {
-        let features = if ["holt", "hawkes", "garch", "tdigest"]
+        let features = if ["holt", "hawkes", "garch", "tdigest", "ddsketch"]
             .iter()
             .any(|k| model.contains(k))
         {

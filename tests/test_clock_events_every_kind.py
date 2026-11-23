@@ -408,9 +408,10 @@ def evidence(
 #: e-process does not forget, ``bocpd``'s hazard counts rows unless it is
 #: a duration (``test_bocpd_duration_hazard_reads_the_session_gap``), and
 #: ``garch``'s recursion is per observation (its start counts rows unless it
-#: is a span of the clock), and ``tdigest``'s digest reads no clock. The
+#: is a span of the clock), and ``tdigest``'s digest and an unwindowed
+#: ``ddsketch``'s sketch read no clock. The
 #: gap's only trace on them is the session counted.
-STEP_BLIND: frozenset[str] = frozenset({"bocpd", "seqtest", "garch", "tdigest"})
+STEP_BLIND: frozenset[str] = frozenset({"bocpd", "seqtest", "garch", "tdigest", "ddsketch"})
 #: The kinds a session change breaks whatever its gap, as a gap past
 #: ``gap_cap`` does: ``rcov``'s block is split there (no product pairs two
 #: returns across it), and ``corrchange`` abandons its span, windows or cycle.

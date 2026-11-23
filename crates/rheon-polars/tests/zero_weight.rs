@@ -400,6 +400,24 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
         ALL,
     ),
     (
+        "ddsketch",
+        r#"{"type": "ddsketch", "alpha": 0.02, "quantiles": [0.05, 0.25, 0.95]}"#,
+        r#""targets": ["y", "x0"], "features": []"#,
+        ALL,
+    ),
+    (
+        "ddsketch_rows",
+        r#"{"type": "ddsketch", "quantiles": [0.25, 0.75], "window_rows": 30}"#,
+        r#""targets": ["y", "x0"], "features": []"#,
+        UNTIMED,
+    ),
+    (
+        "ddsketch_clock",
+        r#"{"type": "ddsketch", "quantiles": [0.25, 0.75], "window_size": @30, "closed": "both"}"#,
+        r#""targets": ["y", "x0"], "features": []"#,
+        ALL,
+    ),
+    (
         "glm",
         r#"{"type": "glm", "refit_rows": 60}"#,
         r#""targets": ["yb"], "features": ["x0", "x1"], "half_life": @50"#,

@@ -548,6 +548,15 @@ def clock_specs(draw, model: str, step: int, cap: int):
     elif model == "tdigest":
         # Task 544: a digest a target, no decay, no clock parameter.
         kw |= dict(targets=["y"], quantiles=[0.05, 0.25, 0.95])
+    elif model == "ddsketch":
+        # Task 544, part 7: a sketch a target, no decay; a window over a
+        # span of the clock, or of rows, or none.
+        kw |= dict(targets=["y"], quantiles=[0.05, 0.25, 0.95])
+        form = draw(st.sampled_from(["plain", "rows", "clock"]))
+        if form == "clock":
+            kw["window_size"] = steps(1, 30)
+        elif form == "rows":
+            kw["window_rows"] = draw(st.integers(1, 40))
     elif model == "garch":
         # Task 492: the start as a span of the clock, or of rows; no decay.
         kw |= dict(targets=["y"])
@@ -751,6 +760,7 @@ N_EFF_EXEMPT = {
         "learned"
     ),
     "tdigest": "whose merging digest cannot take a row out again",
+    "ddsketch": "whose buckets a decay would round on every row",
 }
 
 #: The kinds with a rate for a parameter (``hawkes``' ``kernel_decays``, per

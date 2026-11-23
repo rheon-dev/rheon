@@ -121,6 +121,12 @@ dev = [
     # pure Python, MIT), a second t-digest the merging digest's quantiles
     # are held against on the same streams. The floor is the version measured.
     "tdigest>=0.5.2.2",
+    # tests/test_ddsketch.py: the `ddsketch` package (Datadog's DDSketch,
+    # Apache-2.0), the reference the ddsketch kind's buckets and quantiles
+    # are held against, and `crick` (BSD-3-Clause), a second sketch of the
+    # same streams. The floors are the versions measured.
+    "ddsketch>=3.0.1",
+    "crick>=0.0.8",
     # Second opinions for the code review of 2026-09-12
     # (tests/test_second_opinion.py, docs/REVIEW-2026-09-12-PROGRESS.md):
     # statsmodels for Holt / exponential smoothing, the autocorrelation and

@@ -607,6 +607,7 @@ BUILDERS = {
     rp.spec.hawkes: dict(features=None, kernel_decays=[1.0, 5.0]),
     rp.spec.garch: dict(features=None, half_life=None),
     rp.spec.tdigest: dict(features=None, half_life=None, quantiles=[0.25]),
+    rp.spec.ddsketch: dict(features=None, half_life=None, quantiles=[0.25]),
 }
 
 

@@ -786,6 +786,37 @@ CASES: list[Case] = [
         "tdigest",
         {**CLOSE, "targets": ["y"], "quantiles": [0.25, 0.75]},
     ),
+    # A sketch a target: no decay and no coefficients, every key it takes.
+    Case(
+        "ddsketch",
+        "ddsketch",
+        {
+            **NODECAY,
+            "targets": ["y", "x0"],
+            "quantiles": [0.05, 0.25, 0.95],
+            "alpha": 0.01,
+            "window_rows": 60,
+            "max_state_bytes": 1 << 20,
+        },
+    ),
+    # A clock window, the other stream keys.
+    Case(
+        "ddsketch2",
+        "ddsketch",
+        {
+            **NODECAY2,
+            "targets": ["y"],
+            "quantiles": [0.1, 0.9],
+            "window_size": 30.0,
+            "closed": "both",
+        },
+    ),
+    # Its groups run to a close.
+    Case(
+        "ddsketch_close",
+        "ddsketch",
+        {**CLOSE, "targets": ["y"], "quantiles": [0.25, 0.75]},
+    ),
     Case(
         "audit",
         "audit",

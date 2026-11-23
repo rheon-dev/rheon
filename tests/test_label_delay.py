@@ -1158,6 +1158,8 @@ STATE_READS: dict[str, frozenset[str]] = {
     "garch": frozenset({"variance_y"}),
     # Each level and its tail mean read the digest alone.
     "tdigest": frozenset({"q0.05_y", "q0.25_y", "q0.95_y", "es0.05_y", "es0.25_y", "es0.95_y"}),
+    # Each level and its tail mean read the sketch alone.
+    "ddsketch": frozenset({"q0.05_y", "q0.25_y", "q0.95_y", "es0.05_y", "es0.25_y", "es0.95_y"}),
     "hmm": frozenset(
         {"filtered_state0", "filtered_state1", "predicted_state0", "predicted_state1", "state"}
     ),
@@ -1497,6 +1499,8 @@ DOUBLED: dict[str, dict] = {
     "garch": {},
     # A digest of the same rows, added in the same order.
     "tdigest": {},
+    # A sketch of the same rows' buckets.
+    "ddsketch": {},
     "glm": {},
     "expectile": {},
     "huber": {},

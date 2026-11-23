@@ -1128,6 +1128,14 @@ fn every_kind_refuses_or_loads_corruption(prefix_step: usize, flip_step: usize) 
             "[]",
             false,
         ),
+        // A clock window part full, its ring and both stores.
+        (
+            "ddsketch",
+            r#"{"type": "ddsketch", "quantiles": [0.1, 0.4, 0.9], "window_size": 40}"#,
+            r#"["y"]"#,
+            "[]",
+            false,
+        ),
     ];
     let mut seen = Vec::new();
     for &(kind, model, targets, features, half_life) in kinds {

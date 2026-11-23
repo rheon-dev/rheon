@@ -967,6 +967,37 @@ fn tdigest_golden() {
     check_bits("tdigest", &got, GOLDEN_TDIGEST);
 }
 
+/// `ddsketch` on the stream run five times: plain, under a row window of
+/// 40 and under a clock window of 80 units, the three levels and their tail
+/// means on three rows each. The key's logarithm, the representative's
+/// power and the partial-mass walk move every one; no libm call is in it,
+/// so it is held to the bit.
+#[test]
+fn ddsketch_golden() {
+    let mut got = Vec::new();
+    for (rows, clock) in [(None, None), (Some(40), None), (None, Some(80.0))] {
+        let mut m = DdSketchModel::new(DdSketchModelCfg {
+            n_targets: 1,
+            alpha: 0.01,
+            levels: vec![0.05, 0.25, 0.95],
+            window_rows: rows,
+            window_clock: clock,
+            closed: WindowClosed::Right,
+            max_state_bytes: None,
+        })
+        .unwrap();
+        let stream = stream();
+        for i in 0..300 {
+            let (_, y, d, w) = stream[i % 60];
+            let step = m.step(&[], &y, d, w);
+            if [150, 170, 299].contains(&i) {
+                got.extend(&step.pred);
+            }
+        }
+    }
+    check_bits("ddsketch", &got, GOLDEN_DDSKETCH);
+}
+
 /// The free GARCH(1,1).
 #[test]
 fn garch_golden() {
@@ -2356,4 +2387,61 @@ const GOLDEN_TDIGEST: &[f64] = &[
     -1.6136585876633442,
     -1.153470725120345,
     2.2082117630850724,
+];
+
+const GOLDEN_DDSKETCH: &[f64] = &[
+    -1.476926144063773,
+    -0.624961225664581,
+    1.7331981299642243,
+    -1.6254534993405247,
+    -1.071237747864269,
+    2.290251881689183,
+    -1.537202693153204,
+    -0.624961225664581,
+    1.7331981299642243,
+    -1.6592146905265275,
+    -1.0996546789342858,
+    2.27294307536278,
+    -1.537202693153204,
+    -0.600455344842521,
+    1.7331981299642243,
+    -1.6525632698860737,
+    -1.0992880578758688,
+    2.2435191601110698,
+    -1.3099107407241846,
+    -0.5220083628371914,
+    1.6652362387784885,
+    -1.4633920513902652,
+    -0.9858309127376075,
+    2.288711348987963,
+    -1.6322612637531722,
+    -0.7334027039711133,
+    2.2932675214577865,
+    -1.6840237592460194,
+    -1.18135595786429,
+    2.4401953309769513,
+    -1.6322612637531722,
+    -0.7334027039711133,
+    1.4476800818050848,
+    -1.6840237592460194,
+    -1.274658337302112,
+    1.8153649851088371,
+    -1.537202693153204,
+    -0.600455344842521,
+    1.7331981299642243,
+    -1.6570551861482388,
+    -1.0879553281795669,
+    2.2633900674796195,
+    -1.537202693153204,
+    -0.624961225664581,
+    1.7331981299642243,
+    -1.6614534427719094,
+    -1.1197345743729152,
+    2.28284665234257,
+    -1.537202693153204,
+    -0.7334027039711133,
+    1.6652362387784885,
+    -1.6626039126757866,
+    -1.136873377715784,
+    2.2829017763508332,
 ];

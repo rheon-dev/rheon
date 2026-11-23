@@ -149,6 +149,16 @@
     boundary_gamma = None
     permute_every = None
     common
+  ddsketch:
+    name
+    targets
+    quantiles
+    alpha = 0.007812341058161014
+    window_rows = None
+    window_size = None
+    closed = 'right'
+    max_state_bytes = None
+    common
   deco:
     name
     features
@@ -572,6 +582,23 @@
     model.scalar = false
     model.seed = 0
     model.span_rows = 20
+    stream.breaks_half_life = "inf"
+    stream.calibration_half_life = "inf"
+    stream.feature_health_half_life = "inf"
+    stream.influence_half_life = "inf"
+    stream.max_error_inflation = "inf"
+    stream.min_weight = [0.0]
+    stream.robust_se_half_life = "inf"
+    stream.specification_half_life = "inf"
+    stream.tails_half_life = "inf"
+  ddsketch(quantiles=[0.05, 0.25, 0.95], targets=['y']):
+    model.alpha = 0.00781234105816
+    model.closed = "right"
+    model.levels = [0.05, 0.25, 0.95]
+    model.max_state_bytes = null
+    model.n_targets = 1
+    model.window_clock = null
+    model.window_rows = null
     stream.breaks_half_life = "inf"
     stream.calibration_half_life = "inf"
     stream.feature_health_half_life = "inf"
@@ -2396,6 +2423,30 @@
     weight_sum: f64
     settled_frac: f64
     withheld_reason: enum
+  ddsketch minimal:
+    q0.05_y: f64
+    q0.25_y: f64
+    q0.95_y: f64
+    es0.05_y: f64
+    es0.25_y: f64
+    es0.95_y: f64
+    q0.05_z: f64
+    q0.25_z: f64
+    q0.95_z: f64
+    es0.05_z: f64
+    es0.25_z: f64
+    es0.95_z: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
+  ddsketch windowed:
+    q0.25_y: f64
+    q0.75_y: f64
+    es0.25_y: f64
+    es0.75_y: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
   deco blocked:
     u_a: f64
     u_b: f64
@@ -2426,6 +2477,7 @@
     coef: List[Float64]
   bocpd: the shared columns only
   corrchange: the shared columns only
+  ddsketch: the shared columns only
   deco: the shared columns only
   ew_class: the shared columns only
   ew_cov:
@@ -2684,6 +2736,7 @@
   expectile.closed: both, right
   hawkes.closed: both, right
   lasso.closed: both, right
+  ddsketch.closed: both, right
   garch.vol: egarch, figarch, garch, gjr
   garch.dist: normal, skewt, t
   marginal.closed: both, right
@@ -2830,6 +2883,7 @@
     audit: distinct_cap, pairs
     bocpd: covariance_prior, covariance_type, degrees_of_freedom_prior, hazard, hazard_col, max_run, mean_precision_prior, mean_prior, prune_below, robust_beta, warm_rows, warm_span
     corrchange: alpha, alpha_adjust, bandwidth, boundary_gamma, change_action, crit, kind, monitor_rows, n_perm, norm, perm_block, permute_every, permute_every_rows, scalar, seed, window_rows
+    ddsketch: alpha, closed, max_state_bytes, quantiles, window_rows, window_size
     deco: alpha, beta, blocks, dynamics
     ew_class: classes, closed, covariance_type, max_rows_between_snapshots, precision_prior, snapshot_every, window_budget, window_size
     ew_cov: bias, closed, gram_threads, lags, mahal_quantiles, max_rows_between_pcas, max_rows_between_snapshots, pca, pca_every, precision_prior, snapshot_every, stats, window_budget, window_size

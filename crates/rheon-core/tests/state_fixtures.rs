@@ -1318,7 +1318,7 @@ fn variants() -> Vec<String> {
 /// name here, and a fixture.
 #[test]
 fn the_variant_names_are_frozen() {
-    const FROZEN: [&str; 27] = [
+    const FROZEN: [&str; 28] = [
         "EwCov",
         "EwRidge",
         "Rls",
@@ -1346,6 +1346,7 @@ fn the_variant_names_are_frozen() {
         "Expectile",
         "Garch",
         "TDigest",
+        "DdSketch",
     ];
     assert_eq!(
         variants(),
@@ -1466,7 +1467,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 119] = [
+    const FORMS: [(&str, &[&str]); 125] = [
         // Schema 70 (rule 5's twenty-second exception): the stabilized
         // prior's `ŝ` and `V` under `full` in each form and under `diag`,
         // the factor form's `f`, and a spec's own `prior_rows`.
@@ -1641,6 +1642,26 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         (
             "tdigest_merged",
             &["model", "TDigest", "digests", "0", "buffer"],
+        ),
+        // `ddsketch`'s sketches (PLAN 544, part 7): both stores, then a row
+        // window's ring and counts, then a clock window's stamps and clock.
+        (
+            "ddsketch",
+            &["model", "DdSketch", "sketches", "0", "pos", "w"],
+        ),
+        (
+            "ddsketch",
+            &["model", "DdSketch", "sketches", "1", "neg", "w"],
+        ),
+        ("ddsketch_rows", &["model", "DdSketch", "ring", "codes"]),
+        (
+            "ddsketch_rows",
+            &["model", "DdSketch", "sketches", "0", "pos", "n"],
+        ),
+        ("ddsketch_clock", &["model", "DdSketch", "ring", "stamp"]),
+        (
+            "ddsketch_clock",
+            &["model", "DdSketch", "cfg", "window_clock"],
         ),
         // A refit over a span of the clock (task 538): the span in each
         // cfg, glm's clock summed from the steps, and each buffer.
@@ -3003,11 +3024,12 @@ fn first_difference(got: &rmpv::Value, want: &rmpv::Value, bound: f64, at: &str)
 /// log-likelihood runs through libm, whose last bit is the platform's.
 /// `garch` calls no platform library (its `ln`, `exp` and `ln_1p` are the
 /// `libm` crate's), nor does `tdigest` (its sine and cosine are series and
-/// its `sqrt` correctly rounded), so their cases are held to the bit: a
+/// its `sqrt` correctly rounded), nor `ddsketch` (its logarithm and power
+/// are series), so their cases are held to the bit: a
 /// start fitted on another platform's last bits once took another path, 28%
 /// away.
 fn differs_from_another_writer(case: &Case, f: &Fixture) -> Option<String> {
-    let tol = if matches!(f.variant, "Garch" | "TDigest") {
+    let tol = if matches!(f.variant, "Garch" | "TDigest" | "DdSketch") {
         0.0
     } else {
         TOL
