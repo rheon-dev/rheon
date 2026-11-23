@@ -397,12 +397,12 @@ def ewm_mean(
         )
         polars = rows.select(pl.col("x").ewm_mean_by(pl.col("t").cast(pl.Int64), half_life="1i"))
         print(out["back"].round(4).to_list(), polars["x"].round(4).to_list())   # equal
-        print(out["ahead"].round(4).to_list())   # null where a window was open at the input's end
+        print(out["ahead"].round(4).to_list())   # null where a window reaches past the input's end
 
     .. code-block:: text
 
         [1.0, 1.5, 2.25, 3.125, 4.0625] [1.0, 1.5, 2.25, 3.125, 4.0625]
-        [2.0, 3.0, None, None, None]
+        [2.0, 3.0, 4.0, None, None]
 
     .. rubric:: See also
 
