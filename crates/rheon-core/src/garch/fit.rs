@@ -10,7 +10,7 @@
 
 use super::dist::{self, LAM_LIM, NU_HI, NU_LO};
 use super::filter::{Filter, figarch_weights};
-use super::linalg::{HalfSpaces, min_eigenvalue};
+use super::linalg::{HalfSpaces, pivots_clear};
 use super::math;
 use super::optim::{Eval, Fit, maximize};
 use super::{GarchDist, GarchVol, MAX_K};
@@ -451,20 +451,23 @@ pub(super) fn identified(vol: GarchVol, q: usize, lr: f64) -> bool {
     lr >= lr_cut(vol, q)
 }
 
-/// The smallest eigenvalue of the start's information in the variance
-/// equation's parameters, scaled to a unit diagonal, at or under which the
-/// inputs are not identified: an input constant over the start's rows is
-/// collinear with `ω` (its sensitivity is the same recursion driven by a
-/// constant, so it is `x` times `ω`'s), and two inputs that move together
-/// are collinear with each other. Exactly collinear, the eigenvalue is the
-/// rounding's (`10⁻¹⁶` to `10⁻¹⁵` over 2,000 rows); the cut sits five orders
-/// above that.
-pub(super) const COLLINEAR: f64 = 1e-10;
+/// The floor of the relative pivot rule ([`pivots_clear`]) the start's
+/// information is read under, as `hawkes` reads its `G`: a pivot of the
+/// information in the variance equation's parameters, scaled to a unit
+/// diagonal, at or under `10⁻¹⁰` of its largest diagonal entry (a condition
+/// number over `10¹⁰`) leaves the inputs not identified. An input constant
+/// over the start's rows is collinear with `ω` (its sensitivity is the same
+/// recursion driven by a constant, so it is `x` times `ω`'s), and two
+/// inputs that move together are collinear with each other. Exactly
+/// collinear, the pivot is the rounding's (`10⁻¹⁶` to `10⁻¹⁵` over 2,000
+/// rows); the floor sits five orders above that.
+pub(super) const PIVOT_FLOOR: f64 = 1e-10;
 
 /// Whether the start's information in its first `k` parameters, `h` of
-/// `p × p` (row-major), scaled to a unit diagonal, has its smallest
-/// eigenvalue at or under [`COLLINEAR`], or a diagonal entry that is not
-/// positive.
+/// `p × p` (row-major), scaled to a unit diagonal, fails the relative pivot
+/// rule at [`PIVOT_FLOOR`], or has a diagonal entry that is not positive.
+/// Each parameter is read in its own unit, so the units of the returns and
+/// of each input decide nothing.
 pub(super) fn collinear(h: &[f64], p: usize, k: usize) -> bool {
     let d: Vec<f64> = (0..k).map(|i| h[i * p + i]).collect();
     if !d.iter().all(|v| *v > 0.0 && v.is_finite()) {
@@ -476,8 +479,7 @@ pub(super) fn collinear(h: &[f64], p: usize, k: usize) -> bool {
             c[i * k + j] = h[i * p + j] / (d[i] * d[j]).sqrt();
         }
     }
-    let low = min_eigenvalue(&c, k);
-    low.is_nan() || low <= COLLINEAR
+    !pivots_clear(&c, k, PIVOT_FLOOR)
 }
 
 /// `Σw / Σw²` over the buffer: the factor that takes its weighted

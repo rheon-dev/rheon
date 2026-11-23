@@ -116,9 +116,11 @@
 //! targeted (`α = β = 0`), 13.8; 3 for GJR and EGARCH (`α = γ = β = 0`)
 //! and FIGARCH (`d = 0`, `φ = β`), 16.3; and one more for each input (`π =
 //! 0`). With inputs the fit is withheld too while the start's information
-//! in the variance equation's parameters, scaled to a unit diagonal, has
-//! its smallest eigenvalue at the rounding (`fit::COLLINEAR`): an input
-//! constant over the start is `ω` again. `π = 0`, where an input that
+//! in the variance equation's parameters, scaled to a unit diagonal, fails
+//! the relative pivot rule: a pivot of its Cholesky factorization at or
+//! under `10⁻¹⁰` of its largest diagonal entry (`fit::PIVOT_FLOOR`), as the
+//! library's other definite solves read a system. An input constant over
+//! the start is `ω` again, and two inputs that move together are one. `π = 0`, where an input that
 //! explains nothing sits, is no bound that makes a start wait. A withheld start waits for twice
 //! the rows and refits, at most twice, while the state's cap holds the
 //! doubled buffer, then buffers afresh (`withheld_reason` names the wait,

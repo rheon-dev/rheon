@@ -440,6 +440,36 @@ fn a_constant_input_waits_as_not_identified() {
 }
 
 #[test]
+fn a_collinear_pair_of_inputs_waits_and_a_well_conditioned_pair_starts() {
+    // The relative pivot rule on the start's information: two inputs that
+    // are one input twice over, exactly or to 1e-7 of its level, leave a
+    // pivot at the rounding and the start waits; two that move apart start.
+    let (q, n) = (2, 3_000);
+    let th = [0.02, 0.05, 0.85, 0.05, 0.05];
+    let c = GarchCfg {
+        max_state_bytes: Some(80_000),
+        ..cfg_x(GarchVol::Garch, q)
+    };
+    let one = inputs(GarchVol::Garch, 1, n, 71);
+    let mut s = 73;
+    for jitter in [0.0, 1e-7] {
+        let xs: Vec<f64> = one
+            .iter()
+            .flat_map(|&x| [x, 2.0 * x + jitter * lcg(&mut s)])
+            .collect();
+        let e = simulate(GarchVol::Garch, &th, &xs, q, n, 79);
+        let (out, m) = run(&c, &e, &xs);
+        assert!(m.no_effect(), "{jitter}: {:?}", m.coefficients());
+        assert!(out.iter().all(|p| p[0].is_nan()), "{jitter}");
+    }
+    let xs = inputs(GarchVol::Garch, q, n, 71);
+    let e = simulate(GarchVol::Garch, &th, &xs, q, n, 79);
+    let (out, m) = run(&c, &e, &xs);
+    assert!(m.started()[0] && !m.no_effect());
+    assert!(out[n - 1][0].is_finite());
+}
+
+#[test]
 fn the_state_round_trips_mid_start_and_after() {
     let (q, n) = (2, 2_400);
     for vol in X_FORMS {

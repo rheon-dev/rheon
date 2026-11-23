@@ -1,5 +1,6 @@
 //! The small dense algebra `garch` needs, on at most six parameters: a
-//! packed symmetric matrix, Cholesky and LU solves, and the projections onto
+//! packed symmetric matrix, Cholesky and LU solves, the relative pivot
+//! rule, and the projections onto
 //! a set of half-spaces `A x ≥ b`, Euclidean and in a metric (Dykstra's
 //! algorithm). Nothing here allocates on a model's row but the projections,
 //! which run only on a step that leaves the admissible set.
@@ -123,47 +124,41 @@ pub(super) fn ridged(a: &[f64], n: usize, rel: f64) -> Vec<f64> {
     r
 }
 
-/// The smallest eigenvalue of the symmetric `n × n` matrix `a` (row-major),
-/// by cyclic Jacobi rotations until every off-diagonal entry is under
-/// `10⁻¹⁸` of the diagonal's scale, at most 64 sweeps. For the small
-/// matrices of the start's information (at most 12 a side).
-pub(super) fn min_eigenvalue(a: &[f64], n: usize) -> f64 {
-    let mut m = a.to_vec();
-    let scale = (0..n).map(|i| m[i * n + i].abs()).fold(0.0, f64::max);
-    for _ in 0..64 {
-        let off: f64 = (0..n)
-            .flat_map(|i| (0..n).filter(move |&j| j != i).map(move |j| (i, j)))
-            .map(|(i, j)| m[i * n + j] * m[i * n + j])
-            .sum();
-        if off.sqrt() <= 1e-18 * scale {
-            break;
-        }
-        for p in 0..n {
-            for r in p + 1..n {
-                let apr = m[p * n + r];
-                if apr == 0.0 {
-                    continue;
+/// The relative pivot rule: whether every pivot of the Cholesky
+/// factorization of the symmetric `n × n` matrix `a` (row-major), `L_ii²`,
+/// is a finite number above `floor` times `a`'s largest diagonal entry, as
+/// the library's other definite solves read a system (`expectile`'s `G`,
+/// and `hawkes`'s through `solve::solve_definite_in`, whose own diagonal is
+/// the largest on a unit diagonal). A pivot is at least the matrix's least
+/// eigenvalue, so a pivot under the floor means a condition number over
+/// `1 / floor`: a term the others nearly reproduce. In plain scalar
+/// arithmetic in a fixed order, so the answer is the same on every
+/// platform. False where the largest diagonal entry is not a positive
+/// finite number.
+pub(super) fn pivots_clear(a: &[f64], n: usize, floor: f64) -> bool {
+    let top = (0..n).map(|i| a[i * n + i]).fold(0.0, f64::max);
+    if !(top > 0.0 && top.is_finite()) {
+        return false;
+    }
+    let cut = floor * top;
+    let mut l = vec![0.0; n * n];
+    for i in 0..n {
+        for j in 0..=i {
+            let mut s = a[i * n + j];
+            for m in 0..j {
+                s -= l[i * n + m] * l[j * n + m];
+            }
+            if i == j {
+                if !(s > cut && s.is_finite()) {
+                    return false;
                 }
-                let (app, arr) = (m[p * n + p], m[r * n + r]);
-                let theta = (arr - app) / (2.0 * apr);
-                let t = theta.signum() / (theta.abs() + (theta * theta + 1.0).sqrt());
-                let t = if theta == 0.0 { 1.0 } else { t };
-                let c = 1.0 / (t * t + 1.0).sqrt();
-                let s = t * c;
-                for k in 0..n {
-                    let (mkp, mkr) = (m[k * n + p], m[k * n + r]);
-                    m[k * n + p] = c * mkp - s * mkr;
-                    m[k * n + r] = s * mkp + c * mkr;
-                }
-                for k in 0..n {
-                    let (mpk, mrk) = (m[p * n + k], m[r * n + k]);
-                    m[p * n + k] = c * mpk - s * mrk;
-                    m[r * n + k] = s * mpk + c * mrk;
-                }
+                l[i * n + i] = s.sqrt();
+            } else {
+                l[i * n + j] = s / l[j * n + j];
             }
         }
     }
-    (0..n).map(|i| m[i * n + i]).fold(f64::INFINITY, f64::min)
+    true
 }
 
 /// Half-spaces `A x ≥ b`, `A` row-major with `n` columns.
@@ -307,19 +302,35 @@ mod tests {
     }
 
     #[test]
-    fn the_smallest_eigenvalue_is_faers() {
+    fn a_pivot_is_read_against_the_largest_diagonal_entry() {
+        // [[1, r], [r, 1]]: the second pivot is 1 − r², at any scale
+        for scale in [1.0, 1e-8, 1e8] {
+            let a = |r: f64| [scale, scale * r, scale * r, scale];
+            let r = |p: f64| (1.0f64 - p).sqrt();
+            assert!(pivots_clear(&a(r(2e-10)), 2, 1e-10), "{scale}");
+            assert!(!pivots_clear(&a(r(0.5e-10)), 2, 1e-10), "{scale}");
+            // exactly collinear: the pivot is 0
+            assert!(!pivots_clear(&a(1.0), 2, 1e-10), "{scale}");
+        }
+        // the floor is a share of the largest diagonal entry, not of the
+        // pivot's own: a well-conditioned small entry beside a large one
+        let a = [1e6, 0.0, 0.0, 1e-5];
+        assert!(!pivots_clear(&a, 2, 1e-10));
+        assert!(pivots_clear(&a, 2, 1e-12));
+        // the last pivot is 1 / (A⁻¹)_nn, read from faer's LU
         let a = [
             4.0, 1.0, 0.5, 0.2, //
             1.0, 3.0, 0.2, 0.1, //
-            0.5, 0.2, 2.0, 0.3, //
-            0.2, 0.1, 0.3, 1.0,
+            0.5, 0.2, 2.0, 1.4, //
+            0.2, 0.1, 1.4, 1.0,
         ];
-        let want = crate::oracle::sym_eigen(&a).0[0];
-        assert!((min_eigenvalue(&a, 4) - want).abs() < 1e-14, "{want}");
-        // two columns exactly collinear: the rounding's eigenvalue
-        let b = [1.0, 1.0, 0.3, 1.0, 1.0, 0.3, 0.3, 0.3, 1.0];
-        assert!(min_eigenvalue(&b, 3).abs() < 1e-15);
-        assert_eq!(min_eigenvalue(&[2.5], 1), 2.5);
+        let last = 1.0 / crate::oracle::solve(&a, &[0.0, 0.0, 0.0, 1.0])[3];
+        assert!(last < 0.1, "{last}");
+        assert!(pivots_clear(&a, 4, last / 4.0 * (1.0 - 1e-9)));
+        assert!(!pivots_clear(&a, 4, last / 4.0 * (1.0 + 1e-9)));
+        // not a number, or no positive diagonal: no fit
+        assert!(!pivots_clear(&[f64::NAN, 0.0, 0.0, 1.0], 2, 1e-10));
+        assert!(!pivots_clear(&[0.0, 0.0, 0.0, 0.0], 2, 1e-10));
     }
 
     #[test]

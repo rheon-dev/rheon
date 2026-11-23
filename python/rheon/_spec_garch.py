@@ -352,10 +352,12 @@ def garch(
     variance it passed none, at starts of 500 to 2,000 rows. With inputs,
     a start also waits while its rows do not tell the inputs apart: an
     input constant over them is ``ω`` again, and two that move together are
-    one. It waits where the smallest eigenvalue of the start's information
-    in the variance equation's parameters, scaled to a unit diagonal, is at
-    most ``1e-10``; exactly collinear inputs give the rounding's, ``1e-15``
-    or less.
+    one. It waits under the relative pivot rule the library's other
+    definite solves read: the start's information in the variance
+    equation's parameters, scaled to a unit diagonal, waits where a pivot of
+    its Cholesky factorization is at most ``1e-10`` of its largest diagonal
+    entry (a condition number over ``1e10``); exactly collinear inputs give
+    the rounding's, ``1e-15`` or less.
     """
     model: dict[str, Any] = {"type": "garch"}
     # Each absent when not given, as the Rust spec leaves it out, so a bank
