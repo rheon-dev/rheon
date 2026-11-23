@@ -1335,7 +1335,7 @@ def cross_mean(
     weight with a value: one row is no cross-section. Under ``"left"`` it is
     null on the first stamp, and on the first stamp after a clock break (a
     gap past ``gap_cap``, a session change on a stream with no ``group``, or
-    a restart).
+    a step back past ``restart_after_step_back``).
 
     .. rubric:: Raises
 
@@ -1347,6 +1347,36 @@ def cross_mean(
         ``weight`` holds a window or cross operator, or ``max_state_bytes``
         is below 1 or above 64 MiB (a :class:`~rheon.WrongTypeError`, also a
         ``ValueError``, where it is not an integer).
+
+    .. rubric:: Examples
+
+    Each symbol's return less the mean return of every symbol at the same
+    timestamp:
+
+    .. code-block:: python
+
+        import polars as pl
+        from rheon import polars as rp
+
+        df = pl.DataFrame(
+            {
+                "t": [1, 1, 1, 2, 2, 2],
+                "symbol": ["a", "b", "c", "a", "b", "c"],
+                "r": [0.01, 0.03, -0.01, 0.02, 0.00, 0.01],
+            }
+        )
+        out = rp.stream.with_windows(
+            df,
+            resid=pl.col("r") - rp.cross_mean("r"),
+            clock="t",
+            gap_cap=10,
+            group="symbol",
+        )
+        print(out["resid"].round(4).to_list())
+
+    .. code-block:: text
+
+        [0.0, 0.02, -0.02, 0.01, -0.01, 0.0]
 
     .. rubric:: Notes
 
@@ -1367,36 +1397,6 @@ def cross_mean(
     **A stream processor.** A cross-section needs every group's row at a
     stamp in one place, so a run partitioned by group, as a Kafka topic
     keyed by group is, computes it in one partition that reads every group.
-
-    .. rubric:: Examples
-
-    Each symbol's return less the mean return of every symbol at the same
-    timestamp:
-
-    .. code-block:: python
-
-        import polars as pl
-        from rheon import polars as rp
-
-        df = pl.DataFrame(
-            {
-                "t": [1, 1, 1, 2, 2, 2],
-                "symbol": ["a", "b", "c", "a", "b", "c"],
-                "r": [0.01, 0.03, -0.01, 0.02, 0.00, 0.01],
-            }
-        )
-        out = rp.stream.with_windows(
-            df.lazy(),
-            resid=pl.col("r") - rp.cross_mean("r"),
-            clock="t",
-            gap_cap=10,
-            group="symbol",
-        ).collect()
-        print(out["resid"].round(4).to_list())
-
-    .. code-block:: text
-
-        [0.0, 0.02, -0.02, 0.01, -0.01, 0.0]
     """
     return operator(
         "cross_mean", input, closed=closed, weight=weight, max_state_bytes=max_state_bytes
@@ -1438,15 +1438,6 @@ def cross_std(
     ``ValueError``
         As :func:`cross_mean` raises it.
 
-    .. rubric:: Notes
-
-    With ``V1 = sum w_i``, ``V2 = sum w_i ** 2`` and the mean ``m`` of
-    :func:`cross_mean`, the variance is ``sum w_i (x_i - m) ** 2 / V1``,
-    times ``V1 ** 2 / (V1 ** 2 - V2)`` unless ``bias``; the standard
-    deviation is its root. At equal weights the factor is ``n / (n - 1)``,
-    and the value is Polars' ``pl.col(input).std().over(clock)``. Its stamps,
-    weights and nulls are :func:`cross_mean`'s.
-
     .. rubric:: Examples
 
     Each symbol's return in units of the spread of every symbol's return at
@@ -1465,17 +1456,26 @@ def cross_std(
             }
         )
         out = rp.stream.with_windows(
-            df.lazy(),
+            df,
             z=(pl.col("r") - rp.cross_mean("r")) / rp.cross_std("r"),
             clock="t",
             gap_cap=10,
             group="symbol",
-        ).collect()
+        )
         print(out["z"].round(3).to_list())
 
     .. code-block:: text
 
         [0.0, 1.0, -1.0, 1.0, -1.0, 0.0]
+
+    .. rubric:: Notes
+
+    With ``V1 = sum w_i``, ``V2 = sum w_i ** 2`` and the mean ``m`` of
+    :func:`cross_mean`, the variance is ``sum w_i (x_i - m) ** 2 / V1``,
+    times ``V1 ** 2 / (V1 ** 2 - V2)`` unless ``bias``; the standard
+    deviation is its root. At equal weights the factor is ``n / (n - 1)``,
+    and the value is Polars' ``pl.col(input).std().over(clock)``. Its stamps,
+    weights and nulls are :func:`cross_mean`'s.
     """
     return operator(
         "cross_std",
