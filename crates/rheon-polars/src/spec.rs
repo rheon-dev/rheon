@@ -1802,15 +1802,9 @@ impl ModelKind {
     /// Whether a stream of this kind keeps a window's ring: a model's, or a
     /// spread's cut from it, both of which need a `window_size`. Without one
     /// the window pre-pass has nothing to replay (task 270, G-1).
-    ///
-    /// `spectral`'s window keeps blocks of rows, not a ring of snapshots:
-    /// it has no shadow to replay, and a refusing budget is read from the
-    /// model as its rows run (`OnlineModel::window_over_budget`).
     pub fn keeps_window_ring(&self) -> bool {
-        !matches!(self, ModelKind::Spectral(_))
-            && self
-                .window_parts()
-                .is_some_and(|(window, _)| window.is_some())
+        self.window_parts()
+            .is_some_and(|(window, _)| window.is_some())
     }
 
     /// A windowed kind's `window_size` and `window_budget`; `None` for a kind with

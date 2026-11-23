@@ -93,7 +93,11 @@
 //! targets (`8 (4 + n (6F + 4))` under Lomb-Scargle), at most one a row
 //! inside it, and the total, the size of the state's sums; a budget thins
 //! them by merging neighbors, the younger turned once to the older's
-//! origin, or refuses the run. A break empties every block's sums.
+//! origin, or refuses the run. The blocks are begun on the schedule every
+//! windowed model's ring keeps ([`crate::Snapshots`], a block's bytes for
+//! each snapshot), so the bank replays it before a chunk as it does every
+//! ring and refuses a chunk that would take the blocks past a refusing
+//! budget before learning any of it. A break empties every block's sums.
 //!
 //! The cost is `O(F)` a row for `F` frequencies, one `sin` and one `cos`
 //! each (none where the clock's step is the last one's), from the `libm`
@@ -386,12 +390,16 @@ struct SpectralWindow {
     /// clock, a running total written afresh whenever the reference moves.
     total: Vec<Sums>,
     total_w: f64,
-    /// The cadence a block is closed on, doubled by any thinning.
-    spacing: f64,
-    rows: usize,
-    /// The budget, and the bytes a refusing one saw the blocks reach.
+    /// The schedule the blocks are begun on, kept as every windowed
+    /// model's ring is ([`crate::Snapshots`]) with a block's bytes for each
+    /// snapshot: its cadence, its edge's stamps, a new block once the open
+    /// one's first row has left the window, and a refusing budget's
+    /// overrun. The bank replays its shadow before a chunk, so a chunk that
+    /// would take the blocks past a refusing budget is refused whole,
+    /// before any row is learned.
+    ring: crate::Snapshots<BlockMark>,
+    /// A thinning budget, which the blocks are merged to.
     budget: Option<crate::WindowBudget>,
-    over: Option<usize>,
     /// The blocks, oldest first; the last is open.
     blocks: std::collections::VecDeque<Block>,
 }
@@ -442,21 +450,16 @@ impl Spectral {
         cfg.validate()?;
         let (f, ls) = (cfg.frequencies.len(), cfg.lomb_scargle());
         let win = match cfg.window {
-            Some(_) => {
-                let c = cfg.cadence();
-                Some(SpectralWindow {
-                    clock: 0.0,
-                    reference: 0.0,
-                    closed_both: false,
-                    total: Vec::new(),
-                    total_w: 0.0,
-                    spacing: c.spacing,
-                    rows: c.rows,
-                    budget: None,
-                    over: None,
-                    blocks: std::collections::VecDeque::new(),
-                })
-            }
+            Some(w) => Some(SpectralWindow {
+                clock: 0.0,
+                reference: 0.0,
+                closed_both: false,
+                total: Vec::new(),
+                total_w: 0.0,
+                ring: crate::Snapshots::with_cadence(w, cfg.cadence())?,
+                budget: None,
+                blocks: std::collections::VecDeque::new(),
+            }),
             None => None,
         };
         Ok(Self {
@@ -646,8 +649,10 @@ impl Spectral {
         self.w_sum = lam * self.w_sum + weight;
         let cfg = &self.cfg;
         let win = self.win.as_mut().expect("a window");
-        let tau = win.clock + d_clock;
-        win.clock = tau;
+        let bytes = block_bytes(cfg);
+        let begin = win.blocks.is_empty() || win.ring.takes_next(win.clock, d_clock);
+        win.ring.learn(&mut win.clock, d_clock, || BlockMark(bytes));
+        let tau = win.clock;
         if win.total.len() != cfg.n_targets {
             win.total = (0..cfg.n_targets).map(|_| Sums::new(nf, ls)).collect();
         }
@@ -655,10 +660,6 @@ impl Spectral {
             t.decay(lam, lam * lam);
         }
         win.total_w *= lam;
-        let begin = match win.blocks.back() {
-            None => true,
-            Some(b) => win.over.is_none() && (b.rows >= win.rows || tau - b.origin >= win.spacing),
-        };
         if begin {
             if let Some(closing) = win.blocks.back() {
                 // Closed into the total: decayed by the row's factor to the
@@ -770,9 +771,8 @@ impl Spectral {
         }
         let mut merged_any = false;
         match budget {
-            crate::WindowBudget::Refuse(_) => {
-                win.over.get_or_insert(held);
-            }
+            // The ring records a refusing budget's overrun.
+            crate::WindowBudget::Refuse(_) => {}
             crate::WindowBudget::Thin(_) => {
                 while bytes(win) as f64 > limit && win.blocks.len() > 2 {
                     let open = win.blocks.pop_back().expect("a block");
@@ -785,8 +785,6 @@ impl Spectral {
                     }
                     merged.push_back(open);
                     win.blocks = merged;
-                    win.rows = win.rows.saturating_mul(2);
-                    win.spacing *= 2.0;
                     merged_any = true;
                 }
             }
@@ -840,6 +838,38 @@ impl Spectral {
 /// Whether a row `age` clock units old has left a window of `width`: a
 /// row exactly `width` old has under `closed = "right"`, and not under
 /// `"both"`.
+/// A block as its window's schedule holds it: its bytes, which the budget
+/// counts. No numbers: the block's sums are kept beside the schedule.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct BlockMark(usize);
+
+impl crate::Footprint for BlockMark {
+    fn footprint(&self) -> usize {
+        self.0
+    }
+}
+
+impl crate::Pack for BlockMark {
+    fn pack(&self, out: &mut crate::Packer) {
+        out.dim(self.0);
+    }
+
+    fn unpack(from: &mut crate::Unpacker<'_>) -> Self {
+        BlockMark(from.dim())
+    }
+
+    /// The same bytes: they are the shape.
+    fn refill(&mut self, _: &mut crate::Unpacker<'_>) {}
+}
+
+/// A block's bytes: its origin, its last row, its rows and its weight, and
+/// each target's sums.
+fn block_bytes(cfg: &SpectralCfg) -> usize {
+    let f = cfg.frequencies.len();
+    let fv = if cfg.lomb_scargle() { f } else { 0 };
+    8 * (4 + cfg.n_targets * (4 * f + 2 * fv + 4))
+}
+
 fn left(both: bool, age: f64, width: f64) -> bool {
     if both { age > width } else { age >= width }
 }
@@ -978,7 +1008,7 @@ impl OnlineModel for Spectral {
     fn set_window_budget(&mut self, budget: Option<crate::WindowBudget>) {
         if let Some(win) = self.win.as_mut() {
             win.budget = budget;
-            win.over = None;
+            win.ring.set_budget(budget);
             if Self::enforce(win, &self.cfg) {
                 Self::retotal(win, &self.cfg);
             }
@@ -988,20 +1018,33 @@ impl OnlineModel for Spectral {
     fn set_window_closed(&mut self, closed: crate::WindowClosed) {
         if let Some(win) = self.win.as_mut() {
             win.closed_both = closed == crate::WindowClosed::Both;
+            win.ring.set_closed(closed);
+        }
+    }
+
+    fn stamp_next(&mut self, stamp: crate::Stamp) {
+        if let Some(win) = self.win.as_mut() {
+            win.ring.stamp_next(stamp);
         }
     }
 
     fn window_over_budget(&self) -> Option<(usize, crate::Cadence)> {
+        self.win.as_ref()?.ring.over_budget()
+    }
+
+    fn window_shadow(&self) -> Option<crate::WindowShadow> {
         let win = self.win.as_ref()?;
-        win.over.map(|bytes| {
-            (
-                bytes,
-                crate::Cadence {
-                    spacing: win.spacing,
-                    rows: win.rows,
-                },
-            )
-        })
+        let bytes = block_bytes(&self.cfg);
+        Some(crate::WindowShadow::new(win.clock, &win.ring, || {
+            BlockMark(bytes)
+        }))
+    }
+
+    fn window_could_refuse(&self, rows: usize) -> bool {
+        let bytes = block_bytes(&self.cfg);
+        self.win
+            .as_ref()
+            .is_some_and(|win| win.ring.could_refuse(rows, || BlockMark(bytes)))
     }
 
     fn state(&self) -> State {

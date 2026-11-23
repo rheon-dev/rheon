@@ -8,6 +8,7 @@ names what to do past a budget in MiB, on the user's decision of
 from __future__ import annotations
 
 import inspect
+import re
 import math
 import pickle
 
@@ -237,6 +238,42 @@ def test_every_windowed_model_holds_its_budget(kind):
     )
     with pytest.raises(ValueError, match="window_budget"):
         rp.ModelBank([spec]).fit_predict(df)
+
+
+@pytest.mark.parametrize("kind", sorted(WINDOWED))
+def test_a_refused_chunk_leaves_the_bank_as_it_was_and_names_the_row(kind):
+    """Every windowed kind's refusal comes before a row is learned: the
+    bank saves the same bytes after it as before, and the message names the
+    bytes the window would hold and the chunk's row that would take it
+    there. The named row is the first that cannot go in: the rows before it
+    go in, and it does not."""
+    label = pl.when(pl.col("x0") > 0).then(pl.lit("a")).otherwise(pl.lit("b"))
+    df = _frame().with_columns(c=label)
+
+    def bank():
+        spec = WINDOWED[kind](
+            half_life=1e9, window_size=50.0, snapshot_every=1, window_budget={"refuse": TINY}
+        )
+        b = rp.ModelBank([spec])
+        b.fit_predict(df.head(1))
+        return b
+
+    b = bank()
+    before = b.save_bytes()
+    with pytest.raises(ValueError, match="window_budget") as exc:
+        b.fit_predict(df.slice(1))
+    assert b.save_bytes() == before, "nothing of the refused chunk was learned"
+    message = str(exc.value)
+    named = re.search(r"would hold ([0-9.]+) MiB at the chunk's row (\d+), counted from 0", message)
+    assert named is not None, message
+    row = int(named.group(2))
+    assert "learned none of it" in message
+    # The rows before the named one fit; with it, the chunk is refused.
+    fits = bank()
+    if row > 0:
+        fits.fit_predict(df.slice(1, row))
+    with pytest.raises(ValueError, match="at the chunk's row 0,"):
+        fits.fit_predict(df.slice(1 + row, 1))
 
 
 def test_the_budget_table_names_every_windowed_builder():

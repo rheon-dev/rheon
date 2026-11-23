@@ -459,6 +459,12 @@ model that only the new build has is listed as an addition and passes.
   a copy whose lags are cleared, as a row in a new session is scored with
   a blended copy.
 
+- **A window's refusal names the row and the bytes** (PLAN 491). A chunk
+  that would take a hard window past a refusing `window_budget` is refused
+  before any row is learned, as it was; the message now says which of the
+  chunk's rows would take it there, counted from 0, and the MiB the window
+  would then hold, and that the bank learned none of the chunk.
+
 - **`output_index` tells `spectral`'s periods apart** (PLAN 491). Each
   `power_<t>_p<k>` field's `component` is its period's place in
   `periods`; the fields of one target matched apart from their names.

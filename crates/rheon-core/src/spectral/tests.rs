@@ -691,7 +691,7 @@ fn a_thinned_window_is_the_definition_over_the_rows_it_holds() {
             assert!((1..=200).contains(&held), "{held}");
             let win = m.win.as_ref().unwrap();
             assert!(
-                win.blocks.len() < 100 && win.rows > 1,
+                win.blocks.len() < 100 && win.ring.cadence().rows > 1,
                 "{}",
                 win.blocks.len()
             );

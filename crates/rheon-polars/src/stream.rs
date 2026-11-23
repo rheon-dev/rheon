@@ -2629,7 +2629,7 @@ impl Stream {
         rows: &[usize],
         base: usize,
         formulas: Option<FormulaTargets<'_>>,
-    ) -> Option<(usize, rheon_core::Cadence)> {
+    ) -> Option<(usize, rheon_core::Cadence, usize)> {
         // A learned row adds at most one snapshot to a ring, and the rows a
         // `embargo` holds are learned in this chunk at the most. A shadow
         // copies its ring, so it is formed only where one could refuse.
@@ -2709,8 +2709,10 @@ impl Stream {
             }
             for shadow in &mut live {
                 shadow.learn(plan.d_clock, plan.stamp);
-                if let Some(over) = shadow.over_budget() {
-                    return Some(over);
+                if let Some((bytes, cadence)) = shadow.over_budget() {
+                    // The row that took it past: the input row, counted
+                    // from 0 in the chunk, its rows a held row's release.
+                    return Some((bytes, cadence, rows.get(plan.ri).copied().unwrap_or(plan.i)));
                 }
             }
         }

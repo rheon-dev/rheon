@@ -1347,7 +1347,7 @@ fn process<'s>(
                                 None => outs.push((si, Ok(out))),
                             }
                             if let Some((bytes, cadence)) = stream.window_over_budget() {
-                                outs.push((si, Err(over_budget(spec, key, bytes, cadence, true))));
+                                outs.push((si, Err(over_budget(spec, key, bytes, cadence, None))));
                                 break 'segments;
                             }
                             // A state the data sizes that a row would have taken
@@ -3714,7 +3714,7 @@ impl Bank {
                         spare.insert(Stream::new(spec).ok()?)
                     };
                     let run = &idx[start..end];
-                    if let Some((bytes, cadence)) = s.window_prepass(
+                    if let Some((bytes, cadence, row)) = s.window_prepass(
                         spec,
                         &cfgs[*si],
                         &sc.features,
@@ -3727,7 +3727,7 @@ impl Bank {
                         *base + start,
                         formulas[*si].as_ref().map(|b| b.targets(key)),
                     ) {
-                        return Some(over_budget(spec, key, bytes, cadence, false));
+                        return Some(over_budget(spec, key, bytes, cadence, Some(row)));
                     }
                 }
                 None
