@@ -325,11 +325,15 @@ def spectral(
         gap empties the window too. Default none.
     ``closed``, ``snapshot_every``, ``max_rows_between_snapshots``
         The window's edge and the cadence of the snapshots it is cut from,
-        as :func:`ewridge`'s. Each snapshot holds the state and ``16 F``
-        bytes more.
+        as :func:`ewridge`'s: here the cadence closes a block, and a block
+        leaves whole once its first row is past the window, so the window
+        never keeps an older row. Each block holds ``8 (4 + n (4F + 3))``
+        bytes for ``n`` targets (``8 (4 + n (6F + 4))`` under
+        ``"lomb_scargle"``).
     ``window_budget``
-        The MiB a group's snapshots may take; past it they thin or refuse
-        the run, as :func:`ewridge`'s. Default ``{"refuse": 256}``.
+        The MiB a group's blocks may take; past it they thin, neighbors
+        merged and the cadence doubled, or refuse the run, as
+        :func:`ewridge`'s. Default ``{"refuse": 256}``.
 
     .. rubric:: Output
 
@@ -388,15 +392,17 @@ def spectral(
     The cost is two of them a frequency where the clock's step changes,
     none where it does not, and ``O(F)`` arithmetic a row.
 
-    Under ``window_size`` the sums are referred to an origin fixed on the
-    clock instead of the current row: a row ``σ`` clock units past it adds
-    ``w x e^{-2πi f σ}``, and the origin moves to the row, the sums turned
-    by ``e^{2πi f σ}``, each time a snapshot is taken. The window is the
-    live sums less the snapshot taken before its first row, decayed
-    forward and turned by the product of the turns since. That costs a
-    ``sin`` and a ``cos`` a frequency on every row, and the turned sums keep
-    their digits on long streams: over ten million rows with no decay the
-    power is within ``1.5e-8`` of the window's periodogram.
+    Under ``window_size`` the rows are kept in blocks, each block's sums
+    referred to its own origin, the clock of its first row: a row ``σ``
+    clock units past it adds ``w x e^{-2πi f σ}``. A closed block is
+    turned once to a reference origin, ``e^{-2πi f Δ}`` for the clock
+    ``Δ`` between them, and added to a running total of the window; it is
+    taken out the same way once its first row leaves. The reference moves
+    once it is two windows old, and the total is written afresh there, so
+    no sum is turned row after row: over ten million rows, with the clock
+    starting near 0 or near ``2^40``, the power is within ``1e-12`` of the
+    direct sum over the window's rows. A row costs a ``sin`` and a ``cos``
+    a frequency.
 
     .. rubric:: Example
 

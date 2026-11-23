@@ -1467,7 +1467,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 127] = [
+    const FORMS: [(&str, &[&str]); 128] = [
         // Schema 70 (rule 5's twenty-second exception): the stabilized
         // prior's `ŝ` and `V` under `full` in each form and under `diag`,
         // the factor form's `f`, and a spec's own `prior_rows`.
@@ -1718,8 +1718,9 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         // Under Lomb-Scargle, the weights' transform at twice each
         // frequency.
         ("spectral_ls", &["model", "Spectral", "sums", "1", "v"]),
-        // Under a window, the turns' product of the live origin.
-        ("spectral_window", &["model", "Spectral", "win", "turned"]),
+        // Under a window, its blocks and the closed blocks' total.
+        ("spectral_window", &["model", "Spectral", "win", "blocks"]),
+        ("spectral_window", &["model", "Spectral", "win", "total"]),
         ("ar_filling", &["model", "Ar", "rings", "0"]),
         ("ar_filling", &["model", "Ar", "fits", "0", "acc"]),
     ];

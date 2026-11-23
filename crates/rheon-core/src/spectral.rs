@@ -72,20 +72,28 @@
 //!
 //! Under `window` the read is of the rows less than `window` clock units
 //! old alone, a hard cutoff: with no decay, scipy's periodogram of the
-//! window's rows. The window is a subtraction, as every windowed model's
-//! is ([`crate::Snapshots`]): the live sums less the sums a snapshot held
-//! before the window's first row, decayed forward. The sums are referred
-//! to an origin fixed on the clock, so a snapshot's sums need turning only
-//! once, to the live origin, before they are subtracted: a row at `σ`
-//! clock units past the origin adds `w x e^{-2πi f σ}`, the origin moves
-//! to the row (the sums turned by `e^{2πi f σ}`) each time a snapshot is
-//! taken, and the turns are kept as a running product a frequency, from
-//! which the boundary's own turn is read ([`SpectralWindow`]). A row costs
-//! one `sin` and `cos` a frequency for its phase, and another where a
-//! snapshot moves the origin; the view is `O(F)` a target. Each snapshot
-//! holds the state, `8 (4F + 3)` bytes a target (`8 (6F + 4)` under
-//! Lomb-Scargle), and the turns, `16 F`; the ring is bounded by the
-//! window's budget. A break empties the boundary's sums too.
+//! window's rows. The rows are kept in blocks, each block's sums referred
+//! to its own origin, the clock of its first row: a row adds
+//! `w x e^{-2πi f (τ − o)}`, its phase from `libm` on its own clock less
+//! its block's origin. A block is closed on the window's cadence (every
+//! row by default) and added to a running total of the closed blocks,
+//! turned once to a reference origin by `e^{-2πi f (o − R)}`, from `libm`
+//! on that difference; it leaves whole, taken out of the total the same
+//! way, once its first row is past the window, so the window never keeps
+//! an older row. The reference moves to the newest block once it is two
+//! windows old and the total is written afresh there, so what the
+//! subtractions leave goes with it: no sum is turned row after row, and
+//! the clock's size enters only through differences of nearby clocks.
+//! Measured against the direct sum over the window's rows, with no decay,
+//! from a thousand to ten million rows and with the clock starting near 0
+//! and near `2^40`: within `1e-12` of the power. A row costs one `sin` and
+//! `cos` a frequency for its phase and `O(F)` for the read; a block closing
+//! or leaving another one each, and the reference moving `O(B F)`. The
+//! window holds its blocks, `8 (4 + n (4F + 3))` bytes each for `n`
+//! targets (`8 (4 + n (6F + 4))` under Lomb-Scargle), at most one a row
+//! inside it, and the total, the size of the state's sums; a budget thins
+//! them by merging neighbors, the younger turned once to the older's
+//! origin, or refuses the run. A break empties every block's sums.
 //!
 //! The cost is `O(F)` a row for `F` frequencies, one `sin` and one `cos`
 //! each (none where the clock's step is the last one's), from the `libm`
@@ -254,7 +262,7 @@ impl SpectralCfg {
         no.take(crate::model::check_min_weight("spectral", self.min_weight));
         if let Some(w) = self.window {
             no.take(
-                crate::Snapshots::<SpectralSnap>::with_cadence(w, self.cadence())
+                crate::Snapshots::<crate::Bytes>::with_cadence(w, self.cadence())
                     .map(|_| ())
                     .map_err(|e| format!("spectral: {e}")),
             );
@@ -295,16 +303,7 @@ struct Sums {
 }
 
 impl Sums {
-    /// The numbers a snapshot keeps of it, in order: `X`, `U`, `V` as
-    /// `[re, im]` pairs, then `A`, `B`, `Q`, `S`.
-    fn write(&self, out: &mut Vec<f64>) {
-        for z in self.x.iter().chain(&self.u).chain(&self.v) {
-            out.extend_from_slice(z);
-        }
-        out.extend_from_slice(&[self.a, self.b, self.q, self.s]);
-    }
-
-    /// How many numbers [`Self::write`] writes.
+    /// How many numbers it holds: `X`, `U`, `V` as pairs, `A`, `B`, `Q`, `S`.
     fn len(&self) -> usize {
         2 * (self.x.len() + self.u.len() + self.v.len()) + 4
     }
@@ -319,22 +318,6 @@ impl Sums {
         self.b *= lam;
         self.s *= lam;
         self.q *= lam2;
-    }
-
-    /// The sums referred to an origin `rot` later: `X` and `U` turned by
-    /// each frequency's `rot`, `V` by its square.
-    fn turn(&mut self, rot: &[[f64; 2]]) {
-        let mul = |z: &mut [f64; 2], c: f64, s: f64| {
-            let [r, i] = *z;
-            *z = [c * r - s * i, c * i + s * r];
-        };
-        for (k, &[c, sn]) in rot.iter().enumerate() {
-            mul(&mut self.x[k], c, sn);
-            mul(&mut self.u[k], c, sn);
-            if let Some(v) = self.v.get_mut(k) {
-                mul(v, c * c - sn * sn, 2.0 * c * sn);
-            }
-        }
     }
 
     fn zero(&mut self) {
@@ -379,62 +362,67 @@ pub struct Spectral {
     view: ViewKept,
 }
 
-/// A [`Spectral`]'s window. Under it the sums are referred to a fixed
-/// origin on the clock, not to the current row: a row at `since` clock
-/// units past it adds at the phase `2π f since`, and nothing turns on a
-/// row but the row's own term. The origin moves to the row each time a
-/// snapshot is taken, the sums turned once to it, so `since` spans one
-/// block between snapshots and its phase holds its digits however long the
-/// stream. The turns are multiplied into a running product a frequency,
-/// as the decay's factors are ([`crate::Snapshots`]); each snapshot keeps
-/// the product it was taken at, and the window's view turns the boundary's
-/// sums by the ratio of the live product to it, the turns the live sums
-/// went through since, before it subtracts them. Read from the summed
-/// clock instead, the turn parted from the sums' by the clock's own
-/// rounding: at ten million rows with no decay, 8e-6 of the power, against
-/// 1.5e-8 from the product (the subtraction's own, which grows with the
-/// live sums).
+/// A [`Spectral`]'s window: its rows in blocks, each block's sums
+/// referred to its own origin on the clock, the clock of its first row
+/// (the module docs). A closed block is turned once to the reference
+/// origin, `e^{−2πi f (o − R)}` from `libm` on that difference, and added
+/// to the total; no sum is turned row after row, so nothing compounds with
+/// the stream's length. A block leaves whole once its first row is past the
+/// window, so the window never keeps an older row; a block is closed and
+/// the next begun on the cadence of `window_every` and
+/// `max_rows_between_snapshots`, every row by default, which makes the edge
+/// exact.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct SpectralWindow {
-    /// The model's clock, summed from the steps: what keys the snapshots.
+    /// The clock of the last learned row, summed from the steps.
     clock: f64,
-    /// Clock units from the live sums' origin to the last learned row.
-    since: f64,
-    /// The product of every turn of the origin, `[re, im]` a frequency.
-    turned: Vec<[f64; 2]>,
-    snaps: crate::Snapshots<SpectralSnap>,
+    /// The reference origin the blocks are turned to: a block's origin,
+    /// moved to the newest block's once it is two windows old, so the
+    /// turns' differences stay within two windows.
+    reference: f64,
+    /// Whether a row exactly one window old is held (`closed = "both"`).
+    closed_both: bool,
+    /// The closed blocks' sums, turned to the reference and decayed to the
+    /// clock, a running total written afresh whenever the reference moves.
+    total: Vec<Sums>,
+    total_w: f64,
+    /// The cadence a block is closed on, doubled by any thinning.
+    spacing: f64,
+    rows: usize,
+    /// The budget, and the bytes a refusing one saw the blocks reach.
+    budget: Option<crate::WindowBudget>,
+    over: Option<usize>,
+    /// The blocks, oldest first; the last is open.
+    blocks: std::collections::VecDeque<Block>,
 }
 
-/// The state before a row, decayed to it, at its origin: the turns'
-/// product there (`[re, im]` a frequency, flat), the shared weight, and
-/// each target's sums ([`Sums::write`]) one after another.
+/// A run of rows of a window: its sums at its own origin, decayed to its
+/// last row.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SpectralSnap {
-    turned: Vec<f64>,
+struct Block {
+    /// The clock of its first row, its origin, and of its last.
+    origin: f64,
+    last: f64,
+    rows: usize,
+    /// The shared weight of its rows, and each target's sums.
     w: f64,
-    sums: Vec<f64>,
+    sums: Vec<Sums>,
 }
 
-crate::pack_fields!(SpectralSnap { turned, w, sums });
-
-impl crate::Footprint for SpectralSnap {
-    fn footprint(&self) -> usize {
-        8 * (1 + self.turned.len() + self.sums.len())
+impl Block {
+    fn bytes(&self) -> usize {
+        8 * (4 + self.sums.iter().map(Sums::len).sum::<usize>())
     }
 }
 
-/// The window's view and the turns of its boundary, kept between rows.
+/// The window's view, kept so a row allocates nothing: not state.
 #[derive(Debug, Default)]
 struct ViewKept {
     sums: Vec<Sums>,
     w: f64,
     /// Whether `sums` and `w` hold the view; otherwise the live sums are
-    /// read (no window, or nothing has left it).
+    /// read (no window).
     on: bool,
-    /// The boundary's turn to the live origin, a frequency each.
-    turn: Vec<[f64; 2]>,
-    /// The origin's turn on a row that moves it, a frequency each.
-    rebase: Vec<[f64; 2]>,
 }
 
 impl Clone for ViewKept {
@@ -454,12 +442,21 @@ impl Spectral {
         cfg.validate()?;
         let (f, ls) = (cfg.frequencies.len(), cfg.lomb_scargle());
         let win = match cfg.window {
-            Some(w) => Some(SpectralWindow {
-                clock: 0.0,
-                since: 0.0,
-                turned: vec![[1.0, 0.0]; cfg.frequencies.len()],
-                snaps: crate::Snapshots::with_cadence(w, cfg.cadence())?,
-            }),
+            Some(_) => {
+                let c = cfg.cadence();
+                Some(SpectralWindow {
+                    clock: 0.0,
+                    reference: 0.0,
+                    closed_both: false,
+                    total: Vec::new(),
+                    total_w: 0.0,
+                    spacing: c.spacing,
+                    rows: c.rows,
+                    budget: None,
+                    over: None,
+                    blocks: std::collections::VecDeque::new(),
+                })
+            }
             None => None,
         };
         Ok(Self {
@@ -597,152 +594,124 @@ impl Spectral {
         }
     }
 
-    /// The window's view written into `kept`: each live sum less the
-    /// boundary snapshot's, decayed forward by the products the sums went
-    /// through and turned once from its origin to the live one. `kept.on`
-    /// is false, and the live sums are read, without a window or where
-    /// nothing has left it yet.
+    /// The window's view written into `kept`: the closed blocks' running
+    /// total at the reference origin, and the open block turned once to
+    /// it. `kept.on` is false without a window.
     fn view_into(&self, kept: &mut ViewKept) {
         kept.on = false;
         let Some(win) = self.win.as_ref() else {
             return;
         };
-        let Some((f, old)) = win.snaps.cut(win.clock, self.cfg.decay, 0) else {
-            return;
-        };
-        if old.w == 0.0 {
-            // Nothing has left the window: the live sums, to the bit.
-            return;
-        }
-        let f2 = win
-            .snaps
-            .cut(win.clock, self.cfg.decay, 1)
-            .map_or(f * f, |(f2, _)| f2);
-        let ViewKept {
-            sums, w, on, turn, ..
-        } = kept;
-        // The turns since the boundary: the live product over its.
-        turn.clear();
-        turn.extend(win.turned.iter().enumerate().map(|(k, &[pr, pi])| {
-            let (or, oi) = (old.turned[2 * k], old.turned[2 * k + 1]);
-            let m = or * or + oi * oi;
-            [(pr * or + pi * oi) / m, (pi * or - pr * oi) / m]
-        }));
-        let rot = &*turn;
         let (nf, ls) = (self.cfg.frequencies.len(), self.cfg.lomb_scargle());
+        let ViewKept { sums, w, on } = kept;
         if sums.len() != self.sums.len() {
             *sums = (0..self.sums.len()).map(|_| Sums::new(nf, ls)).collect();
         }
-        let per = self.sums.first().map_or(0, Sums::len);
-        for (j, (live, out)) in self.sums.iter().zip(sums.iter_mut()).enumerate() {
-            let o = &old.sums[j * per..(j + 1) * per];
-            let nv = live.v.len();
-            let pair = |at: usize| [o[2 * at], o[2 * at + 1]];
-            for (k, &[c, sn]) in rot.iter().enumerate().take(nf) {
-                let sub = |l: [f64; 2], z: [f64; 2], c: f64, sn: f64| {
-                    let t = [c * z[0] - sn * z[1], c * z[1] + sn * z[0]];
-                    [l[0] - f * t[0], l[1] - f * t[1]]
-                };
-                out.x[k] = sub(live.x[k], pair(k), c, sn);
-                out.u[k] = sub(live.u[k], pair(nf + k), c, sn);
-                if k < nv {
-                    out.v[k] = sub(live.v[k], pair(2 * nf + k), c * c - sn * sn, 2.0 * c * sn);
-                }
-            }
-            let t = 2 * (2 * nf + nv);
-            out.a = live.a - f * o[t];
-            out.b = live.b - f * o[t + 1];
-            out.q = live.q - f2 * o[t + 2];
-            out.s = live.s - f * o[t + 3];
-            // A target with no weight left inside the window, its
-            // remainder a rounding of the subtraction: nothing to read.
-            if out.a.is_nan() || out.a <= crate::window::EMPTY_FRACTION * live.a {
-                out.zero();
-            }
+        for s in sums.iter_mut() {
+            s.zero();
         }
-        *w = self.w_sum - f * old.w;
-        if w.is_nan() || *w <= crate::window::EMPTY_FRACTION * self.w_sum {
-            *w = 0.0;
+        for (out, t) in sums.iter_mut().zip(&win.total) {
+            out.clone_from(t);
+        }
+        *w = win.total_w;
+        if let Some(open) = win.blocks.back() {
+            add_turned(sums, open, &self.cfg, open.origin - win.reference, 1.0, 1.0);
+            *w += open.w;
         }
         *on = true;
     }
 
-    /// The snapshot of the state as it stands, its turns' product `turned`.
-    fn snapshot(&self, turned: &[[f64; 2]]) -> SpectralSnap {
-        let mut sums = Vec::with_capacity(self.sums.iter().map(Sums::len).sum());
-        for s in &self.sums {
-            s.write(&mut sums);
+    /// The closed blocks' total written afresh: each turned once to the
+    /// reference and decayed once from its last row to the clock.
+    fn retotal(win: &mut SpectralWindow, cfg: &SpectralCfg) {
+        for t in &mut win.total {
+            t.zero();
         }
-        SpectralSnap {
-            turned: turned.iter().flatten().copied().collect(),
-            w: self.w_sum,
-            sums,
+        win.total_w = 0.0;
+        let n = win.blocks.len().saturating_sub(1);
+        for b in win.blocks.iter().take(n) {
+            let g = cfg.decay.factor(win.clock - b.last);
+            add_turned(&mut win.total, b, cfg, b.origin - win.reference, g, 1.0);
+            win.total_w += g * b.w;
         }
     }
 
-    /// One row learned under a window: the sums decayed to it; the origin
-    /// moved to it where a snapshot is due, the sums turned once; the
-    /// snapshot offered; then the row's term at its phase from the origin.
+    /// One row learned under a window: the closed blocks' total decayed to
+    /// it; the open block closed into the total and a new one begun on the
+    /// cadence, or the open block decayed to the row; the row's term at its
+    /// phase from its block's origin; the blocks past the window taken out.
     fn learn_windowed(&mut self, y: &[Option<f64>], d_clock: f64, lam: f64, weight: f64) {
-        let lam2 = lam * lam;
-        self.w_sum *= lam;
-        for s in &mut self.sums {
-            s.decay(lam, lam2);
-        }
+        let (nf, ls) = (self.cfg.frequencies.len(), self.cfg.lomb_scargle());
+        let width = self.cfg.window.expect("a window");
+        self.w_sum = lam * self.w_sum + weight;
+        let cfg = &self.cfg;
         let win = self.win.as_mut().expect("a window");
-        let mut since = win.since + d_clock;
-        if win.snaps.takes_next(win.clock, d_clock) && since != 0.0 {
-            let rot = &mut self.view.rebase;
-            rot.clear();
-            rot.extend(
-                self.cfg
-                    .frequencies
-                    .iter()
-                    .map(|f| rotation(std::f64::consts::TAU * f * since)),
-            );
-            for s in &mut self.sums {
-                s.turn(rot);
-            }
-            for (p, &[c, sn]) in win.turned.iter_mut().zip(rot.iter()) {
-                let [pr, pi] = *p;
-                *p = [c * pr - sn * pi, c * pi + sn * pr];
-            }
-            since = 0.0;
+        let tau = win.clock + d_clock;
+        win.clock = tau;
+        if win.total.len() != cfg.n_targets {
+            win.total = (0..cfg.n_targets).map(|_| Sums::new(nf, ls)).collect();
         }
-        win.since = since;
-        let (sums, w_sum, turned) = (&self.sums, self.w_sum, &win.turned);
-        win.snaps
-            .learn_decayed(&mut win.clock, d_clock, &[lam, lam2], || {
-                let mut flat = Vec::with_capacity(sums.iter().map(Sums::len).sum());
-                for s in sums {
-                    s.write(&mut flat);
-                }
-                SpectralSnap {
-                    turned: turned.iter().flatten().copied().collect(),
-                    w: w_sum,
-                    sums: flat,
-                }
+        for t in &mut win.total {
+            t.decay(lam, lam * lam);
+        }
+        win.total_w *= lam;
+        let begin = match win.blocks.back() {
+            None => true,
+            Some(b) => win.over.is_none() && (b.rows >= win.rows || tau - b.origin >= win.spacing),
+        };
+        if begin {
+            if let Some(closing) = win.blocks.back() {
+                // Closed into the total: decayed by the row's factor to the
+                // row, as the total was, and turned once to the reference.
+                let d = closing.origin - win.reference;
+                add_turned(&mut win.total, closing, cfg, d, lam, 1.0);
+                win.total_w += lam * closing.w;
+            } else {
+                win.reference = tau;
+            }
+            win.blocks.push_back(Block {
+                origin: tau,
+                last: tau,
+                rows: 0,
+                w: 0.0,
+                sums: (0..cfg.n_targets).map(|_| Sums::new(nf, ls)).collect(),
             });
-        self.w_sum += weight;
-        for (j, s) in self.sums.iter_mut().enumerate() {
+        }
+        let open = win.blocks.back_mut().expect("a block");
+        if !begin {
+            open.w *= lam;
+            for s in &mut open.sums {
+                s.decay(lam, lam * lam);
+            }
+        }
+        open.last = tau;
+        open.rows += 1;
+        open.w += weight;
+        let since = tau - open.origin;
+        for (j, s) in open.sums.iter_mut().enumerate() {
             let Some(x) = y[j].filter(|_| weight > 0.0) else {
                 continue;
             };
             let (wx, w) = (weight * x, weight);
-            for (k, f) in self.cfg.frequencies.iter().enumerate() {
+            for (k, f) in cfg.frequencies.iter().enumerate() {
                 let [c, sn] = if since == 0.0 {
                     [1.0, 0.0]
                 } else {
                     rotation(std::f64::consts::TAU * f * since)
                 };
-                // The row at `since` past the origin: `e^{-2πi f since}`.
+                // The row at `since` past its block's origin: `e^{−2πi f since}`.
                 s.x[k][0] += wx * c;
                 s.x[k][1] -= wx * sn;
                 s.u[k][0] += w * c;
                 s.u[k][1] -= w * sn;
                 if let Some(v) = s.v.get_mut(k) {
-                    v[0] += w * (c * c - sn * sn);
-                    v[1] -= w * 2.0 * c * sn;
+                    let [c2, s2] = if since == 0.0 {
+                        [1.0, 0.0]
+                    } else {
+                        rotation(2.0 * std::f64::consts::TAU * f * since)
+                    };
+                    v[0] += w * c2;
+                    v[1] -= w * s2;
                 }
             }
             s.a += w;
@@ -752,6 +721,77 @@ impl Spectral {
                 s.s += wx * x;
             }
         }
+        // A block leaves whole once its first row has left: taken out of
+        // the total, decayed once and turned once as it went in.
+        while win.blocks.len() > 1
+            && win
+                .blocks
+                .front()
+                .is_some_and(|b| left(win.closed_both, tau - b.origin, width))
+        {
+            let b = win.blocks.pop_front().expect("a block");
+            let g = cfg.decay.factor(tau - b.last);
+            add_turned(&mut win.total, &b, cfg, b.origin - win.reference, g, -1.0);
+            win.total_w -= g * b.w;
+        }
+        if win.blocks.len() == 1 {
+            // No closed block: the total is nothing, exactly.
+            for t in &mut win.total {
+                t.zero();
+            }
+            win.total_w = 0.0;
+        }
+        // The reference moves to the open block once it is two windows
+        // old, and the total is written afresh at it: what the subtractions
+        // left in it goes, so nothing grows with the stream.
+        if tau - win.reference > 2.0 * width {
+            win.reference = win.blocks.back().expect("a block").origin;
+            Self::retotal(win, cfg);
+        }
+        if Self::enforce(win, cfg) {
+            Self::retotal(win, cfg);
+        }
+    }
+
+    /// Hold the blocks to the budget: past a thinning one, adjacent closed
+    /// blocks merge in pairs, the younger turned once to the older's
+    /// origin, and the cadence doubles; past a refusing one, the overrun
+    /// is recorded and the open block takes every row after it. Whether
+    /// any merged.
+    fn enforce(win: &mut SpectralWindow, cfg: &SpectralCfg) -> bool {
+        let Some(budget) = win.budget else {
+            return false;
+        };
+        let limit = budget.mib() * 1024.0 * 1024.0;
+        let bytes = |w: &SpectralWindow| w.blocks.iter().map(Block::bytes).sum::<usize>();
+        let held = bytes(win);
+        if held as f64 <= limit {
+            return false;
+        }
+        let mut merged_any = false;
+        match budget {
+            crate::WindowBudget::Refuse(_) => {
+                win.over.get_or_insert(held);
+            }
+            crate::WindowBudget::Thin(_) => {
+                while bytes(win) as f64 > limit && win.blocks.len() > 2 {
+                    let open = win.blocks.pop_back().expect("a block");
+                    let mut merged = std::collections::VecDeque::new();
+                    while let Some(mut a) = win.blocks.pop_front() {
+                        if let Some(b) = win.blocks.pop_front() {
+                            merge(&mut a, &b, cfg);
+                        }
+                        merged.push_back(a);
+                    }
+                    merged.push_back(open);
+                    win.blocks = merged;
+                    win.rows = win.rows.saturating_mul(2);
+                    win.spacing *= 2.0;
+                    merged_any = true;
+                }
+            }
+        }
+        merged_any
     }
 
     /// One row learned under decay `lam`, its weight `weight`, with each
@@ -795,6 +835,77 @@ impl Spectral {
             })
             .collect()
     }
+}
+
+/// Whether a row `age` clock units old has left a window of `width`: a
+/// row exactly `width` old has under `closed = "right"`, and not under
+/// `"both"`.
+fn left(both: bool, age: f64, width: f64) -> bool {
+    if both { age > width } else { age >= width }
+}
+
+/// `src`'s sums turned by `e^{−iω d}` (`V` by `e^{−2iω d}`), each from
+/// `libm` on `d` itself, times `g`, added to `dst` with `sign`.
+fn add_turned(dst: &mut [Sums], src: &Block, cfg: &SpectralCfg, d: f64, g: f64, sign: f64) {
+    let ls = cfg.lomb_scargle();
+    for (k, f) in cfg.frequencies.iter().enumerate() {
+        let [c, sn] = rotation(std::f64::consts::TAU * f * d);
+        let [c2, s2] = if ls {
+            rotation(2.0 * std::f64::consts::TAU * f * d)
+        } else {
+            [1.0, 0.0]
+        };
+        let t = |z: [f64; 2], c: f64, sn: f64| {
+            let m = sign * g;
+            [m * (c * z[0] + sn * z[1]), m * (c * z[1] - sn * z[0])]
+        };
+        for (out, bs) in dst.iter_mut().zip(&src.sums) {
+            let (x, u) = (t(bs.x[k], c, sn), t(bs.u[k], c, sn));
+            out.x[k] = [out.x[k][0] + x[0], out.x[k][1] + x[1]];
+            out.u[k] = [out.u[k][0] + u[0], out.u[k][1] + u[1]];
+            if let (Some(o), Some(&v)) = (out.v.get_mut(k), bs.v.get(k)) {
+                let v = t(v, c2, s2);
+                *o = [o[0] + v[0], o[1] + v[1]];
+            }
+        }
+    }
+    let m = sign * g;
+    for (out, bs) in dst.iter_mut().zip(&src.sums) {
+        out.a += m * bs.a;
+        out.b += m * bs.b;
+        out.q += m * g * bs.q;
+        out.s += m * bs.s;
+    }
+}
+
+/// `b`, the younger, merged into `a`: `a` decayed once to `b`'s last row,
+/// `b` turned once to `a`'s origin, `e^{−iω(o_b − o_a)}` from `libm` on the
+/// difference.
+fn merge(a: &mut Block, b: &Block, cfg: &SpectralCfg) {
+    let g = cfg.decay.factor(b.last - a.last);
+    let d = b.origin - a.origin;
+    a.w = g * a.w + b.w;
+    for (sa, sb) in a.sums.iter_mut().zip(&b.sums) {
+        sa.decay(g, g * g);
+        for (k, f) in cfg.frequencies.iter().enumerate() {
+            let [c, sn] = rotation(std::f64::consts::TAU * f * d);
+            let t = |z: [f64; 2], c: f64, sn: f64| [c * z[0] + sn * z[1], c * z[1] - sn * z[0]];
+            let (x, u) = (t(sb.x[k], c, sn), t(sb.u[k], c, sn));
+            sa.x[k] = [sa.x[k][0] + x[0], sa.x[k][1] + x[1]];
+            sa.u[k] = [sa.u[k][0] + u[0], sa.u[k][1] + u[1]];
+            if let (Some(v), Some(&vb)) = (sa.v.get_mut(k), sb.v.get(k)) {
+                let [c2, s2] = rotation(2.0 * std::f64::consts::TAU * f * d);
+                let z = t(vb, c2, s2);
+                *v = [v[0] + z[0], v[1] + z[1]];
+            }
+        }
+        sa.a += sb.a;
+        sa.b += sb.b;
+        sa.q += sb.q;
+        sa.s += sb.s;
+    }
+    a.last = b.last;
+    a.rows += b.rows;
 }
 
 impl OnlineModel for Spectral {
@@ -846,12 +957,13 @@ impl OnlineModel for Spectral {
         for s in &mut self.sums {
             s.zero();
         }
-        // The boundary's sums too: what leaves the window afterwards is
+        // Every block's sums under a window: what is read afterwards is
         // the rows after the break, the shared weight kept.
         if let Some(win) = self.win.as_mut() {
-            for snap in win.snaps.edit().iter_mut() {
-                snap.sums.iter_mut().for_each(|v| *v = 0.0);
+            for b in &mut win.blocks {
+                b.sums.iter_mut().for_each(Sums::zero);
             }
+            win.total.iter_mut().for_each(Sums::zero);
         }
     }
 
@@ -863,39 +975,33 @@ impl OnlineModel for Spectral {
         true
     }
 
-    fn stamp_next(&mut self, stamp: crate::Stamp) {
-        if let Some(win) = self.win.as_mut() {
-            win.snaps.stamp_next(stamp);
-        }
-    }
-
     fn set_window_budget(&mut self, budget: Option<crate::WindowBudget>) {
         if let Some(win) = self.win.as_mut() {
-            win.snaps.set_budget(budget);
+            win.budget = budget;
+            win.over = None;
+            if Self::enforce(win, &self.cfg) {
+                Self::retotal(win, &self.cfg);
+            }
         }
     }
 
     fn set_window_closed(&mut self, closed: crate::WindowClosed) {
         if let Some(win) = self.win.as_mut() {
-            win.snaps.set_closed(closed);
+            win.closed_both = closed == crate::WindowClosed::Both;
         }
     }
 
     fn window_over_budget(&self) -> Option<(usize, crate::Cadence)> {
-        self.win.as_ref()?.snaps.over_budget()
-    }
-
-    fn window_shadow(&self) -> Option<crate::WindowShadow> {
         let win = self.win.as_ref()?;
-        Some(crate::WindowShadow::new(win.clock, &win.snaps, || {
-            self.snapshot(&win.turned)
-        }))
-    }
-
-    fn window_could_refuse(&self, rows: usize) -> bool {
-        self.win
-            .as_ref()
-            .is_some_and(|win| win.snaps.could_refuse(rows, || self.snapshot(&win.turned)))
+        win.over.map(|bytes| {
+            (
+                bytes,
+                crate::Cadence {
+                    spacing: win.spacing,
+                    rows: win.rows,
+                },
+            )
+        })
     }
 
     fn state(&self) -> State {
@@ -917,9 +1023,11 @@ impl OnlineModel for Spectral {
                         .all(|s| s.x.len() == f && s.u.len() == f && s.v.len() == fv)
                     && m.win.is_some() == m.cfg.window.is_some()
                     && m.win.as_ref().is_none_or(|w| {
-                        w.turned.len() == f
-                            && w.snaps.iter().all(|s| {
-                                s.sums.len() == per * m.cfg.n_targets && s.turned.len() == 2 * f
+                        (w.total.is_empty() || w.total.len() == m.cfg.n_targets)
+                            && w.total.iter().all(|s| s.len() == per)
+                            && w.blocks.iter().all(|b| {
+                                b.sums.len() == m.cfg.n_targets
+                                    && b.sums.iter().all(|s| s.len() == per)
                             })
                     });
                 if !shaped {

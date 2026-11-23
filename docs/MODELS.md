@@ -3081,14 +3081,16 @@ floating_mean=detrend)` of the rows to 1e-9.
 
 **A window.** Under `window_size` the power is of the rows less than
 `window_size` old alone, the sliding-window transform: with no decay,
-scipy's `periodogram` of the window's rows. The window is cut from
-snapshots, as every windowed model's is, with `closed`, `snapshot_every`,
-`max_rows_between_snapshots` and `window_budget` as `ewridge`'s. Under it
-the sums are referred to an origin fixed on the clock, moved to the row
-each time a snapshot is taken, so a snapshot's sums are turned once, by
-the product of the origin's turns since, before they are subtracted. Over
-ten million rows with no decay the power is within 1.5e-8 of the window's
-periodogram.
+scipy's `periodogram` of the window's rows. The rows are kept in blocks,
+closed on `snapshot_every` and `max_rows_between_snapshots` (every row by
+default), each block's sums referred to its own origin, the clock of its
+first row. A closed block is turned once to a reference origin and added
+to a running total; it leaves whole once its first row is past the window.
+The reference moves once it is two windows old and the total is written
+afresh, so no sum is turned row after row. Over ten million rows, with
+the clock starting near 0 or near 2^40, the power is within 1e-12 of the
+direct sum over the window's rows. `closed` and `window_budget` are as
+`ewridge`'s.
 
 #### Example
 

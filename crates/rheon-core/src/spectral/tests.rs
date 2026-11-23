@@ -610,56 +610,107 @@ fn a_break_under_a_window_starts_the_transform_again() {
     }
 }
 
-/// Ten million rows through a window: the live sums grow with the stream
-/// while the window's stay its own size, so the view is a difference of
-/// sums ten thousand times larger, and the phases are taken from origins
-/// that move a row at a time. With no decay on an uneven clock, at
-/// several points down the stream, the read is the definition over the
-/// window's rows to `1e-7` of the power. Measured: at most 1.5e-8, at the
-/// highest frequency and the last row, growing with the stream as the live
-/// sums do (1.3e-12 at a thousand rows, 1.5e-10 at a hundred thousand,
-/// 1.6e-9 at a million). The turn read from the summed clock in place of
-/// the turns' product reached 8e-6.
+/// Ten million rows through a window, its clock starting near 0 and near
+/// `2^40`: each block's sums are at its own origin and turned once to a
+/// reference within two windows of it, so neither the stream's length nor
+/// the clock's size enters a phase but through a difference of nearby
+/// clocks. With no decay on an uneven clock, at a thousand to ten million
+/// rows, the read is the direct sum over the window's rows, its phases
+/// from the same differences, to `1e-9` of the power.
 #[test]
-#[ignore = "extended: ten million rows"]
+#[ignore = "extended: ten million rows, twice"]
 fn a_window_holds_its_digits_over_ten_million_rows() {
     let n = 10_000_000usize;
     let w = 500.0;
     let freqs = [0.01, 0.125, 0.4];
-    let mut m = windowed(freqs.to_vec(), f64::INFINITY, w, SpectralScaling::Spectrum);
-    let mut s = 61;
-    let (mut t, mut tail) = (0.0, std::collections::VecDeque::new());
     let mut worst = 0.0_f64;
-    for i in 0..n {
-        let d = if i == 0 { 0.0 } else { 0.5 + lcg(&mut s) };
-        t += d;
-        let x = 3.0 + (std::f64::consts::TAU * t / 8.0).sin() + normal(&mut s);
-        m.step(&[], &[Some(x)], d, 1.0);
-        tail.push_back((t, x));
-        while tail.front().is_some_and(|&(u, _)| t - u >= w) {
-            tail.pop_front();
+    for origin in [0.0, 2f64.powi(40)] {
+        let mut m = windowed(freqs.to_vec(), f64::INFINITY, w, SpectralScaling::Spectrum);
+        let mut s = 61;
+        let (mut t, mut tail) = (origin, std::collections::VecDeque::new());
+        for i in 0..n {
+            let d = if i == 0 { origin } else { 0.5 + lcg(&mut s) };
+            if i > 0 {
+                t += d;
+            }
+            let x = 3.0 + (std::f64::consts::TAU * (t - origin) / 8.0).sin() + normal(&mut s);
+            m.step(&[], &[Some(x)], d, 1.0);
+            tail.push_back((t, x));
+            while tail.front().is_some_and(|&(u, _)| t - u >= w) {
+                tail.pop_front();
+            }
+            if matches!(i + 1, 1_000 | 10_000 | 100_000 | 1_000_000 | 10_000_000) {
+                let t0 = tail.front().unwrap().0;
+                let xs: Vec<f64> = tail.iter().map(|p| p.1).collect();
+                let ts: Vec<f64> = tail.iter().map(|p| p.0 - t0).collect();
+                let ones = vec![1.0; xs.len()];
+                let got = &m.powers()[0];
+                let mut here = 0.0_f64;
+                for (k, f) in freqs.iter().enumerate() {
+                    let want = longhand(
+                        *f,
+                        &xs,
+                        &ts,
+                        &ones,
+                        f64::INFINITY,
+                        1.0,
+                        SpectralScaling::Spectrum,
+                        platform,
+                    );
+                    here = here.max((got[k] - want).abs() / want);
+                }
+                worst = worst.max(here);
+                eprintln!("origin {origin:e}, row {}: rel {here:e}", i + 1);
+            }
         }
-        if matches!(i + 1, 1_000 | 100_000 | 1_000_000 | 10_000_000) {
-            let xs: Vec<f64> = tail.iter().map(|p| p.1).collect();
-            let ts: Vec<f64> = tail.iter().map(|p| p.0).collect();
-            let ones = vec![1.0; xs.len()];
+    }
+    assert!(worst < 1e-9, "{worst:e}");
+}
+
+/// Past a thinning budget neighboring blocks merge, the younger turned
+/// once to the older's origin, and the window still never keeps an older
+/// row: with no decay and a row a clock unit, it holds `n_eff` rows, at
+/// most the window's, and its power is the direct sum over those last
+/// rows.
+#[test]
+fn a_thinned_window_is_the_definition_over_the_rows_it_holds() {
+    let x = signal(2000, 67);
+    let mut m = windowed(
+        vec![0.125, 0.3],
+        f64::INFINITY,
+        200.0,
+        SpectralScaling::Spectrum,
+    );
+    m.set_window_budget(Some(crate::WindowBudget::Thin(0.01)));
+    let tau: Vec<f64> = (0..2000).map(|i| i as f64).collect();
+    let ones = vec![1.0; 2000];
+    for i in 0..2000 {
+        m.step(&[], &[Some(x[i])], if i == 0 { 0.0 } else { 1.0 }, 1.0);
+        if matches!(i, 700 | 1999) {
+            let held = m.n_eff().round() as usize;
+            assert!((1..=200).contains(&held), "{held}");
+            let win = m.win.as_ref().unwrap();
+            assert!(
+                win.blocks.len() < 100 && win.rows > 1,
+                "{}",
+                win.blocks.len()
+            );
+            let from = i + 1 - held;
             let got = &m.powers()[0];
-            for (k, f) in freqs.iter().enumerate() {
+            for (k, f) in [0.125, 0.3].iter().enumerate() {
                 let want = longhand(
                     *f,
-                    &xs,
-                    &ts,
-                    &ones,
+                    &x[from..=i],
+                    &tau[from..=i],
+                    &ones[from..=i],
                     f64::INFINITY,
                     1.0,
                     SpectralScaling::Spectrum,
                     platform,
                 );
-                let rel = (got[k] - want).abs() / want;
-                worst = worst.max(rel);
-                eprintln!("row {}: f {f}: rel {rel:e}", i + 1);
+                assert!((got[k] - want).abs() <= 1e-9 * want, "{} vs {want}", got[k]);
             }
         }
     }
-    assert!(worst < 1e-7, "{worst:e}");
+    assert!(m.window_over_budget().is_none());
 }

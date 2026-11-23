@@ -81,10 +81,12 @@ model that only the new build has is listed as an addition and passes.
   even clock: two sums more, `8 (6F + 4)` bytes a target, its early rows
   guarded by the fit's spread, not a count. `window_size` (with `closed`,
   `snapshot_every`, `max_rows_between_snapshots` and `window_budget`)
-  gives the sliding-window transform of the rows inside it, cut from
-  snapshots: the sums referred to an origin moved to the row at each
-  snapshot, the boundary turned by the product of the turns since; within
-  1.5e-8 of the window's periodogram over ten million rows with no decay.
+  gives the sliding-window transform of the rows inside it: the rows in
+  blocks, each block's sums at its own clock origin, a closed block turned
+  once to a reference origin and added to a running total, written afresh
+  when the reference moves; within 1e-12 of the direct sum over the
+  window's rows from a thousand to ten million rows, with the clock near 0
+  and near 2^40.
 - **`ar`, an autoregression for each target** (task 486): AR(p), or any
   list of lags, by exponentially weighted least squares on lags the model
   keeps itself, with the features as exogenous regressors and the constant

@@ -2682,8 +2682,8 @@ pub fn all() -> Vec<Case> {
             Targets::Linear(2),
             40
         ),
-        // Two series' transforms over a window of 15 clock units: the ring
-        // of snapshots, each with its turns' product, and the live origin's.
+        // Two series' transforms over a window of 15 clock units: its
+        // blocks, each at its own origin, and the closed blocks' total.
         case!(
             "spectral_window",
             "Spectral",
