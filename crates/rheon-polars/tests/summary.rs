@@ -1112,6 +1112,14 @@ fn every_kind_refuses_or_loads_corruption(prefix_step: usize, flip_step: usize) 
             r#"["x0", "x1"]"#,
             true,
         ),
+        // Two targets' moments, one learned on fewer rows.
+        (
+            "dist_fit",
+            r#"{"type": "dist_fit", "quantiles": [0.5], "es_levels": [0.1]}"#,
+            r#"["y", "x0"]"#,
+            "[]",
+            true,
+        ),
         // Saved after its start, a t's shape beside the process.
         (
             "garch",

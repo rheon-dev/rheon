@@ -265,6 +265,7 @@ pub fn coef_fields(spec: &Spec) -> Vec<CoefField> {
             | crate::ModelKind::CorrChange { .. }
             | crate::ModelKind::Bocpd { .. }
             | crate::ModelKind::Audit { .. }
+            | crate::ModelKind::DistFit { .. }
     ) {
         return Vec::new();
     }
@@ -1202,6 +1203,70 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                 FieldMeta::new(format!("coef{suffix}"), "coef")
                     .decay(suffix, d)
                     .src(Source::Coef(mi)),
+            );
+        }
+        return fields;
+    }
+    // dist_fit predicts no target's value: per target, the fit's `loc` and
+    // `scale`, a quantile `q_<level>` per level, a lower-tail shortfall
+    // `es_<level>` per level, the row's `pit` and `log_score`, then why the
+    // target reports nothing, all read before the row is learned
+    // (`DistFitRows`); then `n_eff`. No `coef`.
+    if let crate::ModelKind::DistFit {
+        quantiles,
+        es_levels,
+        ..
+    } = &spec.model
+    {
+        let (qs, es) = (
+            quantiles.as_deref().unwrap_or_default(),
+            es_levels.as_deref().unwrap_or_default(),
+        );
+        let reasons: Vec<String> = crate::stream::DIST_WITHHELD
+            .iter()
+            .map(|r| r.to_string())
+            .collect();
+        let n_slots = 5 + qs.len() + es.len();
+        let mut fields = Vec::new();
+        for (mi, (suffix, d)) in decays.iter().enumerate() {
+            let base = mi * spec.targets.len() * n_slots;
+            for (t_i, t) in spec.targets.iter().enumerate() {
+                let at = |slot: usize| base + t_i * n_slots + slot;
+                let stat = |stem: &str, kind: &str, slot: usize| {
+                    FieldMeta::new(format!("{stem}_{t}{suffix}"), kind)
+                        .decay(suffix, d)
+                        .target(t)
+                        .src(Source::Stat(at(slot)))
+                };
+                fields.push(stat("loc", "loc", 0));
+                fields.push(stat("scale", "scale", 1));
+                let levels = qs
+                    .iter()
+                    .map(|p| ("q", *p))
+                    .chain(es.iter().map(|p| ("es", *p)));
+                for (i, (kind, p)) in levels.enumerate() {
+                    let mut f = stat(&format!("{kind}{}", crate::spec::num_label(p)), kind, 2 + i);
+                    f.quantile = Some(p);
+                    fields.push(f);
+                }
+                let tail = 2 + qs.len() + es.len();
+                fields.push(stat("pit", "pit", tail));
+                fields.push(stat("log_score", "log_score", tail + 1));
+                fields.push(
+                    FieldMeta::new(
+                        format!("withheld_reason_{t}{suffix}"),
+                        "target_withheld_reason",
+                    )
+                    .decay(suffix, d)
+                    .target(t)
+                    .categories(&reasons)
+                    .src(Source::Label(at(tail + 2))),
+                );
+            }
+            fields.push(
+                FieldMeta::new(format!("weight_sum{suffix}"), "weight_sum")
+                    .decay(suffix, d)
+                    .src(Source::NEff(mi)),
             );
         }
         return fields;

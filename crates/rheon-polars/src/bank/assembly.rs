@@ -472,7 +472,7 @@ impl<'a> Sink<'a> {
 
     /// One field finished as its Arrow array.
     fn finish_field(&self, acc: Acc, f: &FieldMeta) -> Box<dyn ArrowArray> {
-        let (spec, n, labels) = (self.spec, self.n, &self.d.slot_labels);
+        let (n, labels) = (self.n, &self.d.slot_labels);
         // A field no run reached is all null.
         let acc = match acc {
             Acc::Later => Acc::Flat(F64Column::new(n)),
@@ -481,12 +481,10 @@ impl<'a> Sink<'a> {
         match (acc, &f.src) {
             (Acc::Flat(col), Source::Id(_)) => col.finish_i64_array_boxed(),
             (Acc::Flat(col), Source::Flag(_)) => col.finish_bool_array_boxed(),
+            // The field's own names: `ew_class`'s classes, or the reasons a
+            // `dist_fit` target reports nothing.
             (Acc::Flat(col), Source::Label(_)) => {
-                let classes: &[String] = match &spec.model {
-                    ModelKind::EwClass { classes, .. } => classes,
-                    _ => unreachable!("only ew_class emits a label"),
-                };
-                col.finish_label_array_boxed(classes)
+                col.finish_label_array_boxed(f.categories.as_deref().unwrap_or_default())
             }
             (Acc::Flat(col), _) => col.finish_array_boxed(),
             (Acc::Codes(codes), _) => Box::new(crate::column::code_array(

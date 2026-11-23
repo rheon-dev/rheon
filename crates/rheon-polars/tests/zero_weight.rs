@@ -382,6 +382,12 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
         ALL,
     ),
     (
+        "dist_fit",
+        r#"{"type": "dist_fit", "quantiles": [0.1], "es_levels": [0.05]}"#,
+        r#""targets": ["y", "x0"], "features": [], "half_life": @50"#,
+        ALL,
+    ),
+    (
         "garch",
         r#"{"type": "garch", "start_rows": 50, "horizon": 2}"#,
         r#""targets": ["y"], "features": []"#,

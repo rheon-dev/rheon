@@ -749,6 +749,21 @@ impl Spec {
                     format!("spec {:?}: {}", self.name, e.trim_start_matches("garch: "))
                 }));
             }
+            // Its features are checked above; the decay and `min_weight` are
+            // the shared checks', and every value of its own the model's.
+            ModelKind::DistFit { .. } => {
+                no.take(
+                    crate::stream::dist_fit_cfg(self, rheon_core::Decay::Halflife(f64::INFINITY))
+                        .map(|_| ())
+                        .map_err(|e| {
+                            format!(
+                                "spec {:?}: {}",
+                                self.name,
+                                e.trim_start_matches("dist_fit: ")
+                            )
+                        }),
+                );
+            }
             // The shared checks (non-empty features and targets, no column on
             // both sides, a decay, `min_weight` per target, no residual
             // diagnostics) and one of its own: given edges and the knobs for

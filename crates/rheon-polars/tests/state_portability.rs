@@ -89,6 +89,11 @@ const SPECS: &[(&str, &str, &str)] = &[
         r#""targets": ["yb"], "features": ["x0", "x1"], "half_life": 50.0"#,
     ),
     (
+        "dist_fit",
+        r#"{"type": "dist_fit", "quantiles": [0.1, 0.9], "es_levels": [0.05]}"#,
+        r#""targets": ["y", "x0"], "features": [], "half_life": 50.0"#,
+    ),
+    (
         "garch",
         r#"{"type": "garch", "vol": "gjr", "dist": "t", "start_rows": 50, "horizon": 3}"#,
         r#""targets": ["y", "x0"], "features": []"#,

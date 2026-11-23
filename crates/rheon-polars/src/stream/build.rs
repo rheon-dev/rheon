@@ -775,5 +775,8 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         ModelKind::Garch { .. } => Ok(AnyModel::Garch(Box::new(rheon_core::Garch::new(
             garch_cfg(spec)?,
         )?))),
+        ModelKind::DistFit { .. } => Ok(AnyModel::DistFit(Box::new(DistFitRows::new(
+            rheon_core::DistFit::new(dist_fit_cfg(spec, decay)?)?,
+        )))),
     }
 }

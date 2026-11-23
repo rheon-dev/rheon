@@ -202,6 +202,41 @@ pub fn garch_cfg(spec: &Spec) -> Result<rheon_core::GarchCfg, String> {
     Ok(cfg)
 }
 
+/// A `dist_fit` spec's [`rheon_core::DistFitCfg`] at one decay: one fit a
+/// target, the normal family unless the spec names another. The levels,
+/// `floc` and `min_weight` are the model's own to check.
+pub fn dist_fit_cfg(spec: &Spec, decay: Decay) -> Result<rheon_core::DistFitCfg, String> {
+    let ModelKind::DistFit {
+        family,
+        quantiles,
+        es_levels,
+        floc,
+    } = &spec.model
+    else {
+        return Err(not_a(spec, "dist_fit_cfg", "dist_fit"));
+    };
+    let family = match family.as_deref().unwrap_or("normal") {
+        "normal" => rheon_core::DistFamily::Normal,
+        other => {
+            return Err(format!(
+                "dist_fit: family must be \"normal\", but it is {other:?}. Use \"normal\", \
+                 or leave family out."
+            ));
+        }
+    };
+    let cfg = rheon_core::DistFitCfg {
+        n_targets: spec.m(),
+        family,
+        decay,
+        min_weight: spec.min_periods_or_default(),
+        quantiles: quantiles.clone().unwrap_or_default(),
+        es_levels: es_levels.clone().unwrap_or_default(),
+        floc: *floc,
+    };
+    cfg.validate()?;
+    Ok(cfg)
+}
+
 /// A `garch` spec's start, in rows, when it gives neither rows nor a span.
 pub const GARCH_START_ROWS: usize = 2000;
 

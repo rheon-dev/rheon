@@ -1502,6 +1502,30 @@ pub enum ModelKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_state_bytes: Option<u64>,
     },
+    /// An online fit of a distribution to each target, exponentially
+    /// weighted on the clock (`rheon_core::DistFit`): per target, the
+    /// weighted maximum-likelihood `loc` and `scale`, the quantile at each
+    /// level of `quantiles`, the lower-tail expected shortfall at each level
+    /// of `es_levels`, and the row's own `pit` and `log_score`, all read from
+    /// the fit before the row is learned; and why a target reports nothing,
+    /// `withheld_reason_<t>`. No features.
+    #[serde(rename = "dist_fit")]
+    DistFit {
+        /// The family: `"normal"`, the default and the only one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        family: Option<String>,
+        /// The levels of the reported quantiles, each in `(0, 1)`. Absent is
+        /// none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        quantiles: Option<Vec<f64>>,
+        /// The levels of the lower-tail expected shortfalls, each in
+        /// `(0, 1)`. Absent is none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        es_levels: Option<Vec<f64>>,
+        /// A fixed location, in place of fitting it. Absent fits it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        floc: Option<f64>,
+    },
 }
 
 /// The two sides of a `seqtest` comparison, as [`ModelKind::compares`]
@@ -1590,6 +1614,7 @@ impl ModelKind {
         "hawkes",
         "expectile",
         "garch",
+        "dist_fit",
     ];
 
     pub fn kind_name(&self) -> &'static str {
@@ -1620,6 +1645,7 @@ impl ModelKind {
             ModelKind::Hawkes { .. } => "hawkes",
             ModelKind::Expectile { .. } => "expectile",
             ModelKind::Garch { .. } => "garch",
+            ModelKind::DistFit { .. } => "dist_fit",
         }
     }
 
@@ -1657,6 +1683,7 @@ impl ModelKind {
                 | ModelKind::CorrChange { .. }
                 | ModelKind::Bocpd { .. }
                 | ModelKind::Audit { .. }
+                | ModelKind::DistFit { .. }
         )
     }
 
@@ -1940,6 +1967,7 @@ impl ModelKind {
                     | ModelKind::Marginal { .. }
                     | ModelKind::Hawkes { .. }
                     | ModelKind::Garch { .. }
+                    | ModelKind::DistFit { .. }
             )
     }
 
@@ -2842,6 +2870,9 @@ impl Spec {
             ModelKind::Hawkes { .. } => 0.0,
             // The start is the gate: nothing is reported before it is fitted.
             ModelKind::Garch { .. } => 0.0,
+            // The model withholds a target with no weight or a variance of
+            // 0 itself; a `min_weight` given is its floor and the bank's.
+            ModelKind::DistFit { .. } => 0.0,
             // The noise gate is this model's readiness gate
             // (docs/WARMUP-AND-CONVERGENCE.md §2.1): `max_error_inflation`
             // tracks the model where a count of weight cannot, and the
@@ -3357,6 +3388,15 @@ impl Spec {
                     "spec {name:?}: garch takes no features, but features lists {}: each of \
                      its targets is a return series whose variance it models. Put the return \
                      columns in targets, and leave out features.",
+                    columns_counted(self.features.len())
+                ));
+            }
+        } else if let ModelKind::DistFit { .. } = &self.model {
+            if !self.features.is_empty() {
+                no.refuse(format!(
+                    "spec {name:?}: dist_fit takes no features, but features lists {}: it fits \
+                     a distribution to each target on its own. Put the columns to fit in \
+                     targets, and leave out features.",
                     columns_counted(self.features.len())
                 ));
             }
