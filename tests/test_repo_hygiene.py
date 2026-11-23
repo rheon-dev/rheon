@@ -57,11 +57,11 @@ TOOL_OUTPUT_DIRS = {"mutants.out", "mutants.out.old", "target", ".venv", "htmlco
 #: (task 87, 2026-09-21); a data file would still be caught, only later.
 #: `crates/rheon-polars/src/windows.rs` passed 250 KB with the end-of-input
 #: rule for a window looking ahead, its brute-force oracle's test module
-#: included, and the cap moved to 260 KB with it. It moved to 270 KB on
-#: 2026-11-23: `crates/rheon-core/tests/model_contract.rs`, the one file that
-#: holds every model to the same contract, reached 263 KB with wave W13's
-#: `ar`, `spectral` and `realized` cases beside it.
-MAX_SOURCE_BYTES = 270_000
+#: included, and the cap moved to 260 KB with it. `crates/rheon-core/tests/
+#: model_contract.rs` reached 263 KB with wave W13's cases and became a root
+#: file over `crates/rheon-core/tests/model_contract/`, one file a section,
+#: each far under the cap; the cap stayed.
+MAX_SOURCE_BYTES = 260_000
 
 #: Prose gets more room: `docs/PLAN.md` was the design log and passed 200 KB
 #: when tasks 45-56 were prepared (2026-09-05), and 1 MB with tasks 221-231
