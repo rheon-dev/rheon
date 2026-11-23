@@ -66,6 +66,28 @@ model that only the new build has is listed as an addition and passes.
 
 ### Added
 
+- **`ewm_moments`, moments to any order, and the window operator
+  `rp.ewm_moments`** (PLAN 554). A new spec kind,
+  `rheon.spec.ewm_moments(name, terms=...)`, names its terms: each maps its
+  legs, a column or a column lagged `k` back (`"x@1"`, `"x@5m"` on a
+  temporal clock), to a power, and reads it as a central, raw or
+  standardized moment or a cumulant (`kind`), plug-in or unbiased to order
+  4 (`bias`, each statistic's Polars default), with its standard error
+  under `se=True`, decayed or over `window_rows` or `window_size`. Skew,
+  kurtosis, cumulants, co-skewness, autocovariances and autocorrelations
+  are its terms, read before each row from one bounded state, merged a row
+  at a time by Pebay's update. Its fields are each term, `se_<term>` after
+  every term, `weight_sum`, `settled_frac` and `withheld_reason`. The window
+  operator `rp.ewm_moments(legs, half_life=..., kind=..., ...)` gives one
+  term a call as a column of `with_windows`, read after its row, each value
+  weighing the decayed time it is held over, as `rp.ewm_var`'s does; fed
+  those weights the spec gives the same bits. Held to scipy's `moment`,
+  `skew`, `kurtosis` and `kstat`, numpy's weighted averages and `cov`,
+  statsmodels' `acovf` and Polars' `rolling_skew` and `rolling_kurtosis`.
+  Schema 72 gains `ewm_moments`' state and a window run's state the
+  operator's, each absent from a file without them, so no file saved before
+  moves a byte. No output of another model moves.
+
 - **Clock forms for the remaining counts of rows** (task 538, part 2), each
   beside its count and refused with it, each a number of the clock's units
   (rows without a clock) or a duration on a temporal clock, read off the
@@ -781,6 +803,33 @@ model that only the new build has is listed as an addition and passes.
   416 specs, against 1,296 of 74. Against 2.0.0 every field is identical.
 
 ### Performance
+
+- **`ewm_moments` reads a window through two stacks, 12.7 to 214 times as
+  fast as merging the window's blocks on each read, at the same accuracy**
+  (PLAN 554). The window's rows are cut into blocks; the back stack folds
+  the rows from a block boundary on, one merge a row, and the front holds
+  each block's merge to that boundary, formed once, so a read is one merge
+  whatever the window's length, where merging the blocks took `w / b`
+  merges and up to `2b` row folds a read. Measured on one release test
+  binary holding both forms (the minimum of three rounds of 20,000 steps
+  after three windows of warm-up; a skew, a kurtosis and a correlation):
+  1,000 rows 4.25 against 53.7 µs a row (12.7), 1,000 clock units 4.35
+  against 85.8 (19.7), 10,000 rows 4.23 against 178 (42.1), 10,000 clock
+  units 4.23 against 907 (214). Both are within a few times 1e-15 of a
+  fresh fold of the window's rows. The cost is the stacks' working memory,
+  `rows / b + b + 2` summaries where merging the blocks kept `rows / b + 2`
+  (one column to order 4 at 10,000 rows: 14.5 KB against 7.3 KB, beside the
+  ring's 240 KB), and one number more in the saved ring, 8 bytes, the
+  stacks' boundary, from which the stacks are rebuilt on loading.
+
+- **`ewm_moments` keeps each mean as a compensated pair: 8 bytes more a
+  column** (PLAN 554). One column to order `P` takes `8 (P + 4)` bytes (64
+  at order 4), where its plain mean took `8 (P + 3)`: the pair's low part
+  keeps the deviation `z - m` at the spread's scale under a large level, so
+  a moment at a level decays with its history rather than settling on a
+  stalled mean's rounding, as `ew_cov`'s and `rp.ewm_var`'s means do. Order
+  2 then runs `ew_cov`'s update operation for operation, and a variance here
+  is `ew_cov`'s to the bit.
 
 - **A state loads faster in the envelope, and its size moves by a few
   bytes** (PLAN 542). A load reads the file's kind and version from its
