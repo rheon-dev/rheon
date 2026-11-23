@@ -872,6 +872,30 @@ model that only the new build has is listed as an addition and passes.
   earlier, later or not at all moves every output of the rows around it.
   Moves: `dcc.corr_*`, `dcc.loglik`, `dcc.coef`, `dcc.withheld_reason`.
 
+- **`garch`'s start waits on its evidence with no count of tries, and
+  steps only from a fit at its optimum** (Fable's W13 review, A2, which
+  found `dcc`'s start's count of tries and named `garch`'s as the same).
+  A start that did not start waited for twice its rows and fitted again,
+  at most twice, then let every row go and buffered afresh, or, for a fit
+  short of its optimum, stepped from it; so a FIGARCH whose cap could not
+  hold twice its start stepped at once from whatever its first fit gave.
+  Now a try that does not start keeps its rows, and the next comes once as
+  many new rows have come as it held: twice its rows while
+  `max_state_bytes` holds them (each target's share of it), then the
+  latest rows the share holds, the oldest leaving as each new one comes.
+  No count of tries ends the wait, nothing is cleared, and a fit short of
+  its optimum is never stepped from: the wait after it is
+  `below_warm_rows`, after one its rows did not identify
+  `not_identified`, the last try's reason alone. A fit is at its optimum
+  when the gain its Newton step predicts inside the process's set is at
+  most `10⁻⁶` nats, the step projected onto the set (a t's shape held to
+  its range beside it) in the curvature's metric: an optimum on a face of
+  the set, a GJR whose `α` is 0 or a t whose `ν` reaches its ceiling, is
+  one, where before a fit on any bound was not, so without the count it
+  would never have started. On the tests' series every form starts at its
+  first or second try. Where a start fires earlier, later or not at all
+  moves every output of the rows around it. Moves: `garch.*`.
+
 - **`realized`'s `bns` is a standard normal without jumps under a decay
   and under weights** (Fable's W13 review, B1 and B2). It read one count
   `n`, Kish's `(Σw)²/Σw²`, both in front (`√n`) and inside the tripower

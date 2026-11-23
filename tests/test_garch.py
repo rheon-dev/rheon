@@ -259,9 +259,10 @@ def test_a_start_span_on_a_temporal_clock_is_a_duration():
     spec = rp.spec.garch("m", targets=["y"], clock="ts", gap_cap="1h", start_span="2h")
     out = rp.ModelBank([spec]).fit_predict(df).unnest("m")
     first = out["variance_y"].is_not_null().arg_true()[0]
-    # the 121st row is the first two hours from the first, and the fit may
-    # double the span: the first report is just past one of the two
-    assert first in (121, 241), first
+    # the 121st row is the first two hours from the first; a try that does
+    # not start waits for as many new rows as it held, 121, whatever the
+    # clock says: the first report is just past one of the two
+    assert first in (121, 242), first
     with pytest.raises(ValueError, match="start_span"):
         rp.ModelBank(
             [rp.spec.garch("m", targets=["y"], clock="ts", gap_cap="1h", start_span=120.0)]

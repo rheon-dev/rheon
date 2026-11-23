@@ -80,6 +80,11 @@
 //! neighbor of no variance (below the trace's rounding) is told apart once
 //! `N` exceeds the rows that could leave it at none, `N > i + 1` for the
 //! neighbor at index `i`, since `N` rows span at most `N - 1` dimensions.
+//! Under a decay `N` stops near `(1 + lam)/(1 - lam)`, so a component whose
+//! neighbor at index `i` has no variance is never written while that is at
+//! most `i + 1`: for `i = 2`, at a half-life of a row or less (2.7 at 0.9
+//! rows). The rows of positive weight would not stop there, but they count
+//! a row decayed to nothing as one that spans the data.
 //! `j` itself needs a variance above the trace's rounding. One direction
 //! more than `n_components` is kept so the last emitted component has a
 //! neighbor to be told apart from. No count of rows enters: the first rows

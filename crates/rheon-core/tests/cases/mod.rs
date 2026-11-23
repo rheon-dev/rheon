@@ -3256,6 +3256,26 @@ pub fn all() -> Vec<Case> {
             Targets::Garch(2, Process::Figarch),
             2800
         ),
+        // A start withheld at its bound: a cap that holds 80 of each
+        // target's rows, so after its tries at 50 and 100 rows the buffer is
+        // a ring of the latest 80, its oldest row at `head`, the rows it
+        // let go counted, and the rows of its last try and since it.
+        case!(
+            "garch_bound",
+            "Garch",
+            Garch,
+            Garch::new({
+                let c = garch_cfg(GarchVol::Garch, GarchDist::Normal);
+                GarchCfg {
+                    max_state_bytes: Some(Garch::state_bytes(&c, 80)),
+                    ..c
+                }
+            })
+            .unwrap(),
+            0,
+            Targets::Linear(2),
+            333
+        ),
         // A start of a clock span, saved within it: the first row's stamp
         // (the targets join at the fifth row, so it is not the clock's 0).
         case!(

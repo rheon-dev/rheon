@@ -166,6 +166,19 @@ fn micro_blobs_golden() {
     for r in 0..3 {
         assert_eq!(id(r), id(r + 3), "blob {r} changed summary");
     }
+    // The derived link's known limit, which the docstring's table of
+    // symptoms and the how-to on `eps` name (`n_micro` about the number of
+    // clusters): with each blob one summary, the nearest-neighbour spacing
+    // it is derived from is the gap between the blobs, and 1.5 times it
+    // links them, so the macro label is one for all three. At an `eps`
+    // that gives each blob many summaries the spacing is the summaries'
+    // own and the blobs stay apart (`truth_recovery.micro_blobs`, 50 seeds
+    // at `eps = 0.1`); `micro_blobs_linked_golden` gives `macro_link`.
+    let label = |r: usize| got[3 * r];
+    assert!(
+        (0..6).all(|r| label(r) == label(0)),
+        "the derived link kept lone summaries apart: {got:?}"
+    );
     for r in 0..6 {
         let dist = got[3 * r + 1];
         assert!(dist > 0.0 && dist < 1.0, "row {r}: {dist}");
@@ -237,7 +250,7 @@ fn hmm_regimes_golden() {
     check("hmm_regimes", &got, GOLDEN_HMM_REGIMES);
 }
 
-/// A level shift of five standard deviations at row 30: both features from
+/// A level shift of six standard deviations at row 30: both features from
 /// N(0, 0.5^2) before, from N((3, -3), 0.5^2) after.
 fn shift_rows() -> Vec<Row> {
     rows(60, 31337, |i, s| {
@@ -459,6 +472,11 @@ fn rcov_returns_golden() {
             "variance {}",
             cov[0] / 300.0
         );
+        // The correlation within 0.12 of the truth: about three of the
+        // kernel estimate's standard deviations and two of the
+        // pre-averaged one's, 0.043 and 0.059 over 40 seeds (2026-11-23),
+        // not the 0.029 of iid returns' sample correlation; this seed's is
+        // 0.094 off in both, and 0.146 was the pre-averaged worst.
         let corr = est.rcorr.expect("a block");
         assert!(
             (corr[1] - 0.7).abs() < 0.12,
@@ -694,18 +712,41 @@ fn exp1(s: &mut u64) -> f64 {
 
 /// The line with noise `Exp(1) - 1` of scale 0.8: mean 0, skewed to the right.
 fn skewed_rows() -> Vec<Row> {
-    target_rows(2000, 880011, |_, s| {
+    skewed_rows_of(880011)
+}
+
+fn skewed_rows_of(seed: u64) -> Vec<Row> {
+    target_rows(2000, seed, |_, s| {
         let x = [lcg(s), lcg(s)];
         (x, line(&x) + 0.8 * (exp1(s) - 1.0))
     })
 }
 
+/// The skewed rows' noise, `0.8 (e - 1)`, drawn 200,000 times and sorted.
+/// `e` is half the sum of two squares of [`gauss`], whose tails are a sum
+/// of six uniforms', so it is near `Exp(1)` and not it: its 0.7 quantile
+/// is 0.184 where `Exp(1)`'s gives 0.163, and its 0.85 expectile 0.598
+/// where `Exp(1)`'s gives 0.627. A statement of the noise is read from the
+/// noise.
+fn skewed_noise() -> Vec<f64> {
+    let mut s = 31_415_926u64;
+    let mut v: Vec<f64> = (0..200_000).map(|_| 0.8 * (exp1(&mut s) - 1.0)).collect();
+    v.sort_by(f64::total_cmp);
+    v
+}
+
+/// Seeds beside the golden's own, for a mean of the shift whose sampling
+/// error is a third of one seed's.
+const SKEWED_SEEDS: [u64; 9] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+
 /// `quantile` at 0.7 on skewed noise with no forgetting: the fit sits above
-/// the mean's line by the noise's 0.7 quantile, `0.8 (ln(1/0.3) - 1)`, which
-/// is 0.16 here and not the 0 a symmetric noise would give. The shift is
-/// read over the rows on which the fit's sampling error (1.22 over the root of
-/// the weight, the quantile fit's asymptotic sd at this noise) is under 0.075,
-/// half the tolerance.
+/// the mean's line by the noise's 0.7 quantile, 0.18 here and not the 0 a
+/// symmetric noise would give ([`skewed_noise`]). The shift is read over
+/// the rows on which the fit's sampling error (1.22 over the root of the
+/// weight, the quantile fit's asymptotic sd at this noise) is under 0.075,
+/// and averaged over ten seeds: one seed's shift has a standard deviation
+/// of 0.051 (40 seeds, 2026-11-23: the mean over rows is held by its first
+/// settled rows), ten's 0.016, held at three of them.
 #[test]
 fn quantile_skewed_golden() {
     let rows = skewed_rows();
@@ -719,22 +760,28 @@ fn quantile_skewed_golden() {
     let mut m = Robust::new(cfg()).unwrap();
     let mut got = probe(&mut m, &rows, &[0], &[200, 400, 599]);
     let shift = mean_error(&mut Robust::new(cfg()).unwrap(), &rows, line, 1.22, 0.075);
-    let want = 0.8 * ((1.0f64 / 0.3).ln() - 1.0);
+    let noise = skewed_noise();
+    let want = noise[(0.7 * noise.len() as f64).ceil() as usize - 1];
+    let mean = SKEWED_SEEDS.iter().fold(shift, |a, &seed| {
+        let rows = skewed_rows_of(seed);
+        a + mean_error(&mut Robust::new(cfg()).unwrap(), &rows, line, 1.22, 0.075)
+    }) / 10.0;
     assert!(
-        (shift - want).abs() < 0.15,
-        "shift {shift}, the quantile's {want}"
+        (mean - want).abs() < 0.05,
+        "shift {mean} over ten seeds, the quantile's {want}"
     );
     got.push(shift);
     check("quantile_skewed", &got, GOLDEN_QUANTILE_SKEWED);
 }
 
 /// `expectile` at 0.85 on the same noise, no forgetting: the fit sits above
-/// the mean's line by the noise's 0.85 expectile, the root `e` of `0.85
-/// exp(-e) = 0.15 (e - 1 + exp(-e))` for `Exp(1)`, less 1, times 0.8, found
-/// here by bisection. The shift is read over the rows on which the fit's
+/// the mean's line by the noise's 0.85 expectile, 0.60 here, the root `e`
+/// of `0.85 E(u - e)+ = 0.15 E(e - u)+` over [`skewed_noise`]'s draws `u`,
+/// found by bisection. The shift is read over the rows on which the fit's
 /// sampling error (1.56 over the root of the weight, the expectile fit's
-/// asymptotic sd at this noise, by simulation) is under 0.05, half the
-/// tolerance.
+/// asymptotic sd at this noise, by simulation) is under 0.05, and averaged
+/// over ten seeds: one seed's has a standard deviation of 0.031 (40 seeds,
+/// 2026-11-23), ten's 0.010, held at three of them.
 #[test]
 fn expectile_skewed_golden() {
     let rows = skewed_rows();
@@ -755,10 +802,24 @@ fn expectile_skewed_golden() {
     };
     let mut m = Expectile::new(cfg.clone()).unwrap();
     let mut got = probe(&mut m, &rows, &[0], &[200, 400, 599]);
-    let shift = mean_error(&mut Expectile::new(cfg).unwrap(), &rows, line, 1.56, 0.05);
-    let balance = |e: f64| 0.85 * (-e).exp() - 0.15 * (e - 1.0 + (-e).exp());
-    let (mut lo, mut hi) = (0.0f64, 10.0f64);
-    for _ in 0..100 {
+    let shift = mean_error(
+        &mut Expectile::new(cfg.clone()).unwrap(),
+        &rows,
+        line,
+        1.56,
+        0.05,
+    );
+    let noise = skewed_noise();
+    let balance = |e: f64| {
+        let (mut up, mut down) = (0.0, 0.0);
+        for u in &noise {
+            up += (u - e).max(0.0);
+            down += (e - u).max(0.0);
+        }
+        0.85 * up - 0.15 * down
+    };
+    let (mut lo, mut hi) = (-1.0f64, 3.0f64);
+    for _ in 0..60 {
         let mid = 0.5 * (lo + hi);
         if balance(mid) > 0.0 {
             lo = mid;
@@ -766,10 +827,20 @@ fn expectile_skewed_golden() {
             hi = mid;
         }
     }
-    let want = 0.8 * (lo - 1.0);
+    let want = lo;
+    let mean = SKEWED_SEEDS.iter().fold(shift, |a, &seed| {
+        let rows = skewed_rows_of(seed);
+        a + mean_error(
+            &mut Expectile::new(cfg.clone()).unwrap(),
+            &rows,
+            line,
+            1.56,
+            0.05,
+        )
+    }) / 10.0;
     assert!(
-        (shift - want).abs() < 0.1,
-        "shift {shift}, the expectile's {want}"
+        (mean - want).abs() < 0.03,
+        "shift {mean} over ten seeds, the expectile's {want}"
     );
     got.push(shift);
     check("expectile_skewed", &got, GOLDEN_EXPECTILE_SKEWED);
@@ -788,7 +859,9 @@ fn gamma_rows() -> Vec<Row> {
 
 /// A Gamma `glm` with a log link on draws from that family, no forgetting
 /// and a small ridge: the mean at three rows and the coefficients, which are
-/// held to the truth within the sampling error of 500 rows (shape 4).
+/// held to the truth within three of their standard deviations at 500 rows
+/// (shape 4): over 40 seeds (2026-11-23) 0.021 for the intercept and 0.040
+/// for each slope, the worst seed 0.044 and 0.104.
 #[test]
 fn glm_gamma_golden() {
     let mut m = Glm::new(GlmCfg {
@@ -809,9 +882,9 @@ fn glm_gamma_golden() {
     .unwrap();
     let mut got = probe(&mut m, &gamma_rows(), &[0], &[200, 400, 499]);
     let coef = m.coefficients()[0].clone();
-    for (c, t) in coef.iter().zip([0.5, 0.8, -0.4]) {
+    for ((c, t), tol) in coef.iter().zip([0.5, 0.8, -0.4]).zip([0.065, 0.12, 0.12]) {
         assert!(
-            (c - t).abs() < 0.15,
+            (c - t).abs() < tol,
             "coefficients {coef:?}, truth (0.5, 0.8, -0.4)"
         );
     }
@@ -829,8 +902,10 @@ fn trend_rows() -> Vec<Row> {
 
 /// `holt` on the trending series, the golden's two half-lives: the forecast
 /// at rows 40, 80 and 119 and the level and trend at the end. The trend is
-/// found: its estimate is within 0.15 of the slope 0.5, and the forecast is
-/// within 2 of the line.
+/// found: its estimate is within 0.005 of the slope 0.5, and the forecast
+/// within 0.75 of the line. Over 40 seeds (2026-11-23) the trend's error had
+/// a standard deviation of 0.0016 (worst 0.0037), and the forecast's worst
+/// of the three rows a mean of 0.19 and a worst of 0.61.
 #[test]
 fn holt_trend_golden() {
     let mut m = Holt::new(HoltCfg {
@@ -847,7 +922,7 @@ fn holt_trend_golden() {
         let step = m.step(&x[..0], y, *d, *w);
         if matches!(i, 40 | 80 | 119) {
             assert!(
-                (step.pred[0] - (10.0 + 0.5 * i as f64)).abs() < 2.0,
+                (step.pred[0] - (10.0 + 0.5 * i as f64)).abs() < 0.75,
                 "row {i}"
             );
             got.push(step.pred[0]);
@@ -855,7 +930,7 @@ fn holt_trend_golden() {
     }
     let coef = m.coefficients()[0].clone();
     assert!(
-        (coef.last().copied().unwrap() - 0.5).abs() < 0.15,
+        (coef.last().copied().unwrap() - 0.5).abs() < 0.005,
         "coefficients {coef:?}"
     );
     got.extend(&coef);

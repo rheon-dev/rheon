@@ -617,7 +617,11 @@ def micro(
     as 1.5 times the 90th percentile of the established summaries'
     nearest-neighbor
     distance, never below ``2 * eps * sqrt(p)``. So a chain along a shape holds
-    without a constant that fragments one shape and bridges another.
+    without a constant that fragments one shape and bridges another. The
+    spacing must be the summaries' own: where each cluster is one summary,
+    the nearest neighbor of each is another cluster, and the derived ``L``
+    links them all. A finer ``eps``, or ``macro_link`` given, keeps them
+    apart.
 
     **The scale floor.** ``1 / var`` alone grows as ``2^Q`` over ``Q``
     half-lives of a feature going quiet (a flag that stops firing, a sensor

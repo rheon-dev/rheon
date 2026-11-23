@@ -12,7 +12,7 @@ use super::dist::{self, LAM_LIM, NU_HI, NU_LO};
 use super::filter::{Filter, figarch_weights};
 use super::linalg::HalfSpaces;
 use super::math;
-use super::optim::{Eval, Fit, maximize};
+use super::optim::{Eval, Fit, decrement_in, maximize};
 use super::{GarchDist, GarchVol};
 
 /// The stationarity margin: the persistence is held at most `1 − 10⁻⁴`.
@@ -417,9 +417,10 @@ pub(super) fn kish_scale(rows: &[[f64; 2]]) -> f64 {
 }
 
 /// The start's fit: the full `θ` (with the shape for a t); whether it is one
-/// to step from -- at its optimum by the Newton decrement, and off every
-/// bound of the process's set; and its likelihood-ratio statistic against
-/// constant variance, `2 (f − f₀)` at Kish's scale.
+/// to step from -- at its optimum by the Newton decrement inside the
+/// process's set, which an optimum on a face of the set meets as one inside
+/// it does; and its likelihood-ratio statistic against constant variance,
+/// `2 (f − f₀)` at Kish's scale.
 pub(super) struct StartFit {
     pub theta: Vec<f64>,
     pub sound: bool,
@@ -427,13 +428,60 @@ pub(super) struct StartFit {
 }
 
 impl StartFit {
-    pub(super) fn of(fit: Fit, theta: Vec<f64>, bounded: bool, f0: f64, scale: f64) -> Self {
+    /// `in_set` gives the decrement inside the set
+    /// ([`super::optim::decrement_in`]), read only where the fit's own
+    /// decrement, which is never less, is past the cut.
+    pub(super) fn of(
+        fit: Fit,
+        theta: Vec<f64>,
+        in_set: &dyn Fn(&Fit) -> f64,
+        f0: f64,
+        scale: f64,
+    ) -> Self {
+        let sound =
+            fit.decrement * scale <= SOUND_DECREMENT || in_set(&fit) * scale <= SOUND_DECREMENT;
         Self {
             theta,
-            sound: fit.decrement * scale <= SOUND_DECREMENT && !bounded,
+            sound,
             lr: 2.0 * (fit.f - f0) * scale,
         }
     }
+}
+
+/// A point onto `set` in the metric `m`: the step a decrement inside the set
+/// reads ([`super::optim::decrement_in`]). The set is the process's, with a
+/// t's shape held to its range (`ν` in `[NU_LO, NU_HI]`, `λ` within
+/// `LAM_LIM`) beside it ([`with_shape`]); a point the metric leaves a hair
+/// outside by rounding is pushed back in the Euclidean metric.
+fn in_metric(set: &HalfSpaces, x: &[f64], m: &[f64]) -> Vec<f64> {
+    let y = set.project_metric(x, m).unwrap_or_else(|| set.project(x));
+    if set.holds(&y, 1e-12) {
+        y
+    } else {
+        set.project(&y)
+    }
+}
+
+/// `set` over a form's process, widened by `m` shape coordinates held to
+/// their range, the box [`clip_shape`] clips to.
+fn with_shape(set: &HalfSpaces, m: usize) -> HalfSpaces {
+    let n = set.n + m;
+    let mut a = Vec::with_capacity((set.b.len() + 2 * m) * n);
+    for row in set.a.chunks(set.n) {
+        a.extend_from_slice(row);
+        a.extend(std::iter::repeat_n(0.0, m));
+    }
+    let mut b = set.b.clone();
+    let range = [(NU_LO, NU_HI), (-LAM_LIM, LAM_LIM)];
+    for (j, &(lo, hi)) in range.iter().enumerate().take(m) {
+        for (sign, bound) in [(1.0, lo), (-1.0, -hi)] {
+            let mut row = vec![0.0; n];
+            row[set.n + j] = sign;
+            a.extend(row);
+            b.push(bound);
+        }
+    }
+    HalfSpaces { a, b, n }
 }
 
 /// The buffer's log-likelihood under constant variance, maximized: the
@@ -494,17 +542,6 @@ fn start_shapes(dist: GarchDist) -> &'static [[f64; 2]] {
     }
 }
 
-/// Whether `x` sits on a face of `set`: a constraint's slack within `10⁻⁹`
-/// of its row's size in the parameters' units.
-fn on_bound(set: &HalfSpaces, x: &[f64], units: &[f64]) -> bool {
-    (0..set.b.len()).any(|i| {
-        let row = &set.a[i * set.n..(i + 1) * set.n];
-        let slack = row.iter().zip(x).map(|(a, x)| a * x).sum::<f64>() - set.b[i];
-        let scale: f64 = row.iter().zip(units).map(|(a, u)| a.abs() * u).sum();
-        slack <= 1e-9 * scale
-    })
-}
-
 /// The fit of the buffer for a form, the variance level at `v` (the
 /// buffer's weighted mean square). `None` when no grid point has a finite
 /// likelihood.
@@ -531,9 +568,10 @@ pub(super) fn fit(
         let proj = |x: &[f64]| set.project(x);
         let fit = maximize(&obj, &proj, &grid, &[1.0, 1.0])?;
         let (a, b) = (fit.theta[0], fit.theta[1]);
-        let bounded = on_bound(&set, &fit.theta, &[1.0, 1.0]);
+        let in_set =
+            |f: &Fit| decrement_in(&obj, &f.theta, &[1.0, 1.0], &|x, m| in_metric(&set, x, m));
         let theta = vec![v * (1.0 - a - b), a, b];
-        return Some(StartFit::of(fit, theta, bounded, f0, scale));
+        return Some(StartFit::of(fit, theta, &in_set, f0, scale));
     }
     match vol {
         GarchVol::Egarch => {
@@ -556,9 +594,10 @@ pub(super) fn fit(
             let proj = |x: &[f64]| set.project(x);
             let units = [1.0; 4];
             let fit = maximize(&obj, &proj, &grid, &units)?;
-            let bounded = on_bound(&set, &fit.theta, &units);
+            let in_set =
+                |f: &Fit| decrement_in(&obj, &f.theta, &units, &|x, m| in_metric(&set, x, m));
             let theta = fit.theta.clone();
-            Some(StartFit::of(fit, theta, bounded, f0, scale))
+            Some(StartFit::of(fit, theta, &in_set, f0, scale))
         }
         GarchVol::Figarch => {
             let set = figarch_set(floor);
@@ -580,9 +619,10 @@ pub(super) fn fit(
             let proj = |x: &[f64]| set.project(x);
             let units = [v, 1.0, 1.0, 1.0];
             let fit = maximize(&obj, &proj, &grid, &units)?;
-            let bounded = on_bound(&set, &fit.theta, &units);
+            let in_set =
+                |f: &Fit| decrement_in(&obj, &f.theta, &units, &|x, m| in_metric(&set, x, m));
             let theta = fit.theta.clone();
-            Some(StartFit::of(fit, theta, bounded, f0, scale))
+            Some(StartFit::of(fit, theta, &in_set, f0, scale))
         }
         _ => {
             // GARCH and GJR, normal or with a t: every parameter free
@@ -616,9 +656,11 @@ pub(super) fn fit(
             let mut units = vec![1.0; k + m];
             units[0] = v;
             let fit = maximize(&obj, &proj, &grid, &units)?;
-            let bounded = on_bound(&set, &fit.theta[..k], &units[..k]);
+            let full = with_shape(&set, m);
+            let in_set =
+                |f: &Fit| decrement_in(&obj, &f.theta, &units, &|x, mm| in_metric(&full, x, mm));
             let theta = fit.theta.clone();
-            Some(StartFit::of(fit, theta, bounded, f0, scale))
+            Some(StartFit::of(fit, theta, &in_set, f0, scale))
         }
     }
 }

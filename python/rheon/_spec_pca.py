@@ -217,7 +217,10 @@ def pca(
     9.21, the 99th percentile of a chi-squared with two degrees of freedom,
     where ``l`` and ``m`` are the two variances and ``n`` is Kish's
     effective size ``W**2 / Q``. A neighbor of no variance is told apart
-    once ``n`` passes the rows that could leave it at none. So no count of
+    once ``n`` passes the rows that could leave it at none. Under a decay
+    ``n`` stops near ``(1 + λ) / (1 - λ)``, 2.7 at a half-life of 0.9 rows,
+    so a half-life that short never writes the second of two components on
+    data of rank 2. So no count of
     rows gates the first rows: they are withheld while ``n`` is too small
     for the test, and a stream with tied components is withheld at the tie
     for as long as it lasts. The test reads eigenvalue estimates, which the

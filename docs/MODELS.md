@@ -3203,8 +3203,12 @@ first `start_span` of the clock, are fitted by the model's own projected
 Newton on their likelihood, from a small grid, and replayed at the fit to
 build `H`. They report nothing, as `below_warm_rows`. The Newton runs until
 a step is at the parameters' rounding, so where it stops is not a matter of
-`ln`'s last bits. A fit is at its optimum when its Newton decrement, `½ gᵀ
-M⁻¹ g` with `M` the observed curvature, is at most `10⁻⁶` nats.
+`ln`'s last bits. A fit is at its optimum when the gain its Newton step
+predicts inside the process's bounds is at most `10⁻⁶` nats. Where the step
+stays inside, that gain is the Newton decrement `½ gᵀ M⁻¹ g`, with `M` the
+observed curvature; where it does not, the step is projected onto the
+bounds in `M`'s metric. So an optimum on a bound, a GJR whose `α` is 0, is
+one.
 
 **It reports only a process its rows identify.** On returns with no
 conditional variance the likelihood is flat along a ridge, where `β` is not
@@ -3213,12 +3217,14 @@ stepped from only when its likelihood-ratio statistic against a constant
 variance, `2 (l_fit − l_const)` with the weights at Kish's count, reaches
 χ² at 0.999 for the restrictions a constant variance puts on the process.
 That is 13.8 for `garch` (`α = β = 0`), and 16.3 for `gjr`, `egarch` and
-`figarch` (three each). Until one does, the start waits for twice the rows and
-refits, at most twice, while `max_state_bytes` holds the doubled buffer,
-and then buffers afresh; its rows are withheld as `not_identified`. A fit
-that passes but is not at its optimum, or sits on a bound of the process's
-parameters, waits and refits the same way, and with no doubling left is
-stepped from.
+`figarch` (three each). Until one does, its rows are withheld as
+`not_identified`. A fit that passes but is not at its optimum is never
+stepped from either; its wait is the start's own, `below_warm_rows`. A try
+that does not start keeps its rows and fits again once as many new rows
+have come as it held. That is twice its rows while `max_state_bytes` holds
+them (each target's share of it), then the latest rows the share holds, the
+oldest leaving as each new one comes. No count of tries ends the wait, and
+nothing is cleared, which could not cure a shortage of evidence.
 
 **Variance targeting** (`variance_targeting=True`, `vol="garch"` with
 normal innovations) sets the level by the running mean square, `ω = v̄ (1 −
@@ -3234,7 +3240,8 @@ parameters, `m` shape parameters and `n` stepped coordinates. EGARCH keeps
 64 bins of residuals beside them, 512 bytes. That is 168 bytes for `garch`,
 216 for `gjr`, 728 for `egarch`, 208 for `garch` with a t, and `216 + 8 M`
 for `figarch` (8,216 at 1,000 lags). The start's buffer adds 16 bytes a
-row until it is fitted, 32,000 at the default.
+row until it is fitted, 32,000 at the default, and after a try that does
+not start up to the target's share of `max_state_bytes`.
 
 #### Rows and the clock
 
