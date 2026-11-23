@@ -167,7 +167,7 @@ def fourier(
             f"{who}: clock {clock!r} is not an integer column, but the period is an int. A "
             "float clock has no exact reduction, so cast it to integer units first; give a "
             "temporal clock a duration period.",
-            pl.Int64,
+            pl.Int64(),
         )
         t = pl.max_horizontal((cs.by_name(clock) & cs.integer()).as_expr(), refused).cast(pl.Int64)
     else:
