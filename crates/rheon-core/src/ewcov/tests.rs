@@ -3482,3 +3482,37 @@ fn the_kept_mahal_working_space_is_the_allocating_solve_to_the_bit() {
         assert!(rungs > 0, "no row needed a jitter's rung");
     });
 }
+
+/// Kish's size at weights too small to square in a double (review
+/// 2026-11-23, REG-12): every weight times `2^-664` gives the unit stream's
+/// size, to the bit, through decays and a gap, and its unbiased factor
+/// `n / (n − 1)`, where every square was 0 and the size absent. At unit
+/// weights the sum is the plain one and writes no exponent.
+#[test]
+fn kish_size_holds_at_weights_too_small_to_square() {
+    let tiny = crate::sqsum::ldexp(1.0, -664);
+    let run = |scale: f64| {
+        let mut c = EwCov::new(2);
+        let mut sizes = Vec::new();
+        for i in 0..40 {
+            let x = [f64::from(i % 5), f64::from(i % 3)];
+            let lam = if i == 20 { 0.01 } else { 0.9 };
+            c.update(&x, lam, scale * (1.0 + f64::from(i % 4)));
+            sizes.push(c.n_kish().map(f64::to_bits));
+        }
+        (sizes, c)
+    };
+    let ((unit, a), (small, b)) = (run(1.0), run(tiny));
+    assert_eq!(unit, small);
+    assert!(small.iter().all(Option::is_some));
+    let n = b.n_kish().unwrap();
+    assert!((b.unbiased_factor() - n / (n - 1.0)).abs() < 1e-15);
+    assert_eq!(a.q_scale, 0);
+    let bytes = rmp_serde::to_vec_named(&a).unwrap();
+    assert!(
+        !bytes.windows(7).any(|w| w == b"q_scale"),
+        "no exponent written"
+    );
+    let back: EwCov = rmp_serde::from_slice(&rmp_serde::to_vec_named(&b).unwrap()).unwrap();
+    assert_eq!(back.n_kish(), b.n_kish(), "the exponent saves");
+}

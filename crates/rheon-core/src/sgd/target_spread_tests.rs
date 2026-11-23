@@ -675,11 +675,12 @@ fn at_a_gain_equal_to_the_rate_the_rate_steps() {
     }
 }
 
-/// Task 281 (mutants): a weight so small that its square underflows to 0
-/// leaves `Σw²` at 0, and Kish's count is then read as 0 -- the level still
-/// warming up -- not `0/0`: the intercept takes the running mean's step,
-/// `−(w/Σw)·d`, where a NaN count would hand the row to the rate, whose
-/// step at such a weight is nothing.
+/// Task 281 (mutants): a weight so small that its square underflows in a
+/// double is counted as a row, its square kept at a power of two of its own
+/// (review 2026-11-23, REG-12; it once left `Σw²` at 0 and the count 0 for
+/// good): the level is young, and the intercept takes the running mean's
+/// step, `−(w/Σw)·d`, not the rate's, whose step at such a weight is
+/// nothing.
 #[test]
 fn a_weight_whose_square_underflows_counts_as_a_young_level() {
     let x = [0.0; 3];
@@ -702,7 +703,11 @@ fn a_weight_whose_square_underflows_counts_as_a_young_level() {
         } else {
             b0 += -(w / w_sum) * (p - y);
         }
-        assert_eq!(m.level[0].w2, 0.0, "the square underflowed");
+        let rows = (n + 1) as f64;
+        assert!(
+            (m.level[0].count() - rows).abs() < 1e-12,
+            "a row each, row {n}"
+        );
         assert_eq!(m.coefficients()[0][0].to_bits(), b0.to_bits(), "row {n}");
     }
 }

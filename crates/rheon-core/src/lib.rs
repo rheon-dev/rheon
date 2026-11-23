@@ -126,6 +126,7 @@ mod since;
 mod solve;
 mod specification;
 mod spread;
+mod sqsum;
 mod stats;
 mod streampca;
 mod tails;

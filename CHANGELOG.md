@@ -718,6 +718,20 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **Weights too small to square in a double count as rows** (review
+  2026-11-23, REG-12). Kish's count `(Σw)² / Σw²` is the same at every
+  scale of the weights, but below about `1.5·10^-154` each `w²` was 0.
+  `sgd`'s and `pa`'s warm-up then never switched, `sgd`'s level never
+  warmed, `rls`'s Kish ratio (and with it `se_coef` and the error
+  inflation) was absent, and every accumulator's Kish size, which
+  standard errors divide by, was absent too. Each sum of squared weights
+  is now kept beside a power of two of its own, and a row's weight enters
+  it at that scale. While the weights square to doubles the exponent is 0
+  and every operation is the plain one, to the bit. A state writes no
+  exponent then, so its bytes are as before; one at such weights writes
+  `w2_scale`, `s2_scale` or `q_scale` beside its sum. Moves: `sgd.*`,
+  `pa.*`, `rls.*`, `ewridge.*`, `lasso.*`, `ew_cov.*`.
+
 - **Five edge cases of `rheon.corr` and `rheon.gram`** (review 2026-11-23,
   MATH-6). `corr.mp_edge` and `corr.mp_density` refuse a count `n` or `m`
   that is not finite; NaN passed the check and gave NaN edges.

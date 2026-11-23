@@ -435,6 +435,15 @@ pub struct EwCov {
     /// the rule).
     #[serde(default, skip_serializing_if = "Pending::is_off")]
     pending: Pending,
+    /// `q_sum`'s power of two, `Σw² = q_sum · 4^q_scale` ([`crate::sqsum`]):
+    /// 0, and not written, while the weights square to doubles. At weights
+    /// of `1e-200` every square was 0, and Kish's size absent for good
+    /// (review 2026-11-23, REG-12). Schema 72. Read by name, as every state
+    /// file is; in the compact encoding a state with a block pending and an
+    /// exponent would slide it, and no state holds both but a stream at
+    /// such weights under `gram_block_rows`.
+    #[serde(default, skip_serializing_if = "crate::sqsum::is_zero")]
+    q_scale: i32,
 }
 
 impl EwCov {
@@ -456,6 +465,7 @@ impl EwCov {
             rows_learned: 0,
             m_lo: vec![0.0; k],
             pending: Pending::default(),
+            q_scale: 0,
         }
     }
 
@@ -637,16 +647,20 @@ impl EwCov {
     /// a sample size.
     #[inline]
     pub fn n_kish(&self) -> Option<f64> {
-        match self.q_sum {
-            Some(q) if q > 0.0 => Some(self.w_sum * self.w_sum / q),
-            _ => None,
-        }
+        self.q_sum
+            .and_then(|q| crate::sqsum::count(self.w_sum, q, self.q_scale))
     }
 
-    /// `Sum w^2` behind these moments, or `None` for a pre-task-38 state.
+    /// `Sum w^2` behind these moments, or `None` for a pre-task-38 state:
+    /// 0 where it is below the doubles, which [`Self::n_kish`] reads in
+    /// parts.
     #[inline]
     pub fn q_sum(&self) -> Option<f64> {
-        self.q_sum
+        if self.q_scale == 0 {
+            self.q_sum
+        } else {
+            self.q_sum.map(|q| crate::sqsum::value(q, self.q_scale))
+        }
     }
 
     /// The factor that makes these moments' covariance unbiased,
@@ -666,6 +680,14 @@ impl EwCov {
     /// [`crate::truncated`]), as [`Self::n_kish`] gives `None`. Read, never
     /// stored: the moments themselves stay the weighted means.
     pub fn unbiased_factor(&self) -> f64 {
+        if self.q_scale != 0 {
+            // Weights whose squares are kept at a power of two of their
+            // own: `n / (n − 1)` at Kish's size, which they keep.
+            return match self.n_kish() {
+                Some(n) if n > 1.0 && n.is_finite() => n / (n - 1.0),
+                _ => f64::NAN,
+            };
+        }
         let w2 = self.w_sum * self.w_sum;
         match self.q_sum {
             Some(q) if q > 0.0 && w2 - q > 0.0 && w2.is_finite() => w2 / (w2 - q),
@@ -798,8 +820,9 @@ impl EwCov {
         self.w_sum = w_new;
         if let Some(q) = self.q_sum.as_mut() {
             // `W` decays by `lam`, so its square decays by `lam^2`; the row
-            // adds `w^2`. Kish's `n` is then `W^2 / Q`.
-            *q = lam * lam * *q + w * w;
+            // adds `w^2`, at the sum's own power of two. Kish's `n` is then
+            // `W^2 / Q`.
+            crate::sqsum::add(q, &mut self.q_scale, lam * lam, w);
         }
         self.prior_scale *= lam;
     }
@@ -1310,6 +1333,7 @@ impl EwCov {
         self.merged.forget();
         self.w_sum = w_sum;
         self.q_sum = q_sum;
+        self.q_scale = 0;
         // New moments stand for rows the runs never saw (a blend with the
         // slow twin, say), so no run is known to cover any of them: each
         // starts again from the next row. That can leave a window reading a
@@ -1337,6 +1361,7 @@ impl EwCov {
         self.merged.forget();
         self.w_sum = w_sum;
         self.q_sum = q_sum;
+        self.q_scale = 0;
         self.runs.forget();
     }
 
@@ -1379,6 +1404,8 @@ impl EwCov {
             rows_learned,
             m_lo: _,
             pending,
+            // The window's own sum is set in place below, at no scale.
+            q_scale: _,
         } = src;
         self.prior_scale = *prior_scale;
         self.precision_prior = *precision_prior;
@@ -1398,6 +1425,7 @@ impl EwCov {
         self.merged.forget();
         self.w_sum = w_sum;
         self.q_sum = q_sum;
+        self.q_scale = 0;
     }
 
     /// Age the accumulator without adding data (pure decay: means unchanged,

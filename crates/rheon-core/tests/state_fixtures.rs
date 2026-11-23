@@ -3743,3 +3743,55 @@ fn restarted_level_rule(
     };
     assert_eq!(keys(saved), keys(current), "{what}: the current layout");
 }
+
+/// The Kish sums' exponents (schema 72, review 2026-11-23, REG-12): each
+/// `*_tiny_weights` case is fed every weight times `2^-664`, so each sum of
+/// squared weights it keeps writes a non-zero exponent beside it -- the
+/// warm-up's and every level's `w2_scale` in `sgd`, `rls`'s `s2_scale`,
+/// and every Gram's `q_scale` in `ewridge` -- and the cases at ordinary
+/// weights write none, the bytes they had.
+#[test]
+fn the_kish_sums_exponents_are_written() {
+    if regenerating() {
+        return;
+    }
+    fn found(v: &rmpv::Value, key: &str, out: &mut Vec<i64>) {
+        match v {
+            rmpv::Value::Map(m) => {
+                for (k, v) in m {
+                    if k.as_str() == Some(key) {
+                        out.push(v.as_i64().unwrap());
+                    }
+                    found(v, key, out);
+                }
+            }
+            rmpv::Value::Array(a) => a.iter().for_each(|v| found(v, key, out)),
+            _ => {}
+        }
+    }
+    let scales = |name: &str, key: &str| {
+        let f = frozen::ALL.iter().find(|f| f.name == name).unwrap();
+        let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+        let mut out = Vec::new();
+        found(&v, key, &mut out);
+        out
+    };
+    for (name, key, at_least) in [
+        ("sgd_tiny_weights", "w2_scale", 3),
+        ("rls_tiny_weights", "s2_scale", 1),
+        ("ewridge_tiny_weights", "q_scale", 1),
+    ] {
+        let s = scales(name, key);
+        assert!(
+            s.len() >= at_least && s.iter().all(|&v| v != 0),
+            "{name}: {key} {s:?}"
+        );
+    }
+    for (name, key) in [
+        ("sgd_spread", "w2_scale"),
+        ("rls", "s2_scale"),
+        ("ewridge", "q_scale"),
+    ] {
+        assert_eq!(scales(name, key), Vec::<i64>::new(), "{name}: {key}");
+    }
+}
