@@ -1559,13 +1559,11 @@ fn a_gram_whose_first_row_came_at_no_clock_is_read_at_its_limit() {
     let lam60 = 0.5f64.powf(1.0 / 60.0);
     for (lam, settles_above) in [(lam30, false), (lam60, true)] {
         let mut g = crate::EwCov::new(1);
-        let mut s = 3u64;
         let mut young_rows = 0;
-        for t in 0..400 {
+        for (s, t) in (3u64..).zip(0..400) {
             // On its first row the Gram has no clock to read a decay from,
             // and is read as without one.
             let x = [(s as f64).sin()];
-            s += 1;
             g.update(&x, if t == 0 { 1.0 } else { lam }, 1.0);
             if t > 0 && young(g.n_kish(), g.prior_scale(), k, true, 0.0, d) {
                 young_rows += 1;

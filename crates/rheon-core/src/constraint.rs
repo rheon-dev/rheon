@@ -1148,7 +1148,8 @@ mod tests {
     /// `[-1, -3.6e121]`).
     #[test]
     fn scales_far_apart_project_onto_the_sum() {
-        let cases: [(&[f64], &[f64], &[f64], [f64; 2], [f64; 2]); 4] = [
+        type Case<'a> = (&'a [f64], &'a [f64], &'a [f64], [f64; 2], [f64; 2]);
+        let cases: [Case; 4] = [
             (
                 &[0.0, 0.0],
                 &[2.0, 2.0],

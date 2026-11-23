@@ -2842,9 +2842,9 @@ impl OnlineModel for Sgd {
             // start at, and the intercept took none of the slopes' move
             // (review 2026-11-23, REG-6).
             let scales = scales_of(sc, off);
-            for i in off..scales.len() {
+            for (i, &scale) in scales.iter().enumerate().skip(off) {
                 self.mbuf[i] = sc.mean(i);
-                self.sbuf[i] = scales[i];
+                self.sbuf[i] = scale;
             }
         }
         // The refit's buffers take the row, a learned one or an ageing, and

@@ -388,7 +388,9 @@ pub fn lars_lasso_weighted(
         });
     if hi > lo * 1.157_920_892_373_162e77 {
         return Err(format!(
-            "penalty weights must lie within a factor of 2^256 (about 1.2e77) of each other,              but they run from {lo} to {hi}. A weight that small beside the others leaves its              column all but unpenalized, and the weighted correlations past what a double              holds: set it nearer the others."
+            "penalty weights must lie within a factor of 2^256 (about 1.2e77) of each other, \
+             but they run from {lo} to {hi}, and the weighted correlations of weights that far \
+             apart are past what a double holds. Set the smallest weights nearer the others."
         ));
     }
     let centre = if hi > 0.0 {

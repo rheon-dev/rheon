@@ -480,7 +480,10 @@ impl OnlineModel for Holt {
                     (next, clocked)
                 } else {
                     let by_textbook = match (line, textbook) {
-                        (Some((_, h)), true) => !(h > weight * rb * level_gain * ri),
+                        (Some((_, h)), true) => {
+                            h.partial_cmp(&(weight * rb * level_gain * ri))
+                                != Some(std::cmp::Ordering::Greater)
+                        }
                         (None, true) => true,
                         _ => false,
                     };
