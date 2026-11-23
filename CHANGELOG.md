@@ -733,6 +733,17 @@ model that only the new build has is listed as an addition and passes.
   cap of 2, counts 10, 8, 6 and 2, read a `top_count` of `2^63 - 1` and an
   `equal_by_chance` of `5e35`, and the merged state no longer loaded. That
   counter now goes, as Misra-Gries' merge drops each one at the cut.
+- **An `adwin` detector takes its window's sum and spread again from the
+  buckets left when it drops one** (review 2026-11-23, DRIFT-2). It took
+  the dropped bucket's share out of them, as river does, and that
+  subtraction cancels when the bucket held most of the window's spread:
+  two outliers of `1e20` and `3.3e19` leaving a `max_width` of 25 left a
+  window of zeros with a sum of squared deviations of `1.2e24`, whose
+  bound no later shift could pass, and other values left it below 0, where
+  the bound is NaN and nothing is cut again. The flags under the default
+  `restart` are river's as before, since a row's first cut flags it and
+  empties the window; under `restart=False`, or once `max_width` drops a
+  bucket, a flag can come where it did not.
 - **A window looking ahead whose far edge is the input's last row is whole
   at the end of the input** (PLAN 565). Under `closed="right"` or `"both"`,
   `rp.ewm_sum`, `rp.ewm_mean`, `rp.ewm_rate` and `rp.ewm_quantile` with

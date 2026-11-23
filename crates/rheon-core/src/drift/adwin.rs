@@ -31,15 +31,22 @@
 //!
 //! the paper's Bernstein form (its section 4, `δ' = δ / ln(width)`), with
 //! `1/m` shifted by `L` as MOA and river shift it. A cut drops the oldest
-//! bucket, `(u, v)` of `n` rows:
+//! bucket, of `n` rows, and takes `S` and `V` again from the buckets left,
+//! oldest first, by the pairwise merge of the compression above:
 //!
 //! ```text
-//! width −= n;   S −= u;   V −= v + n·width (u/n − S/width)² / (n + width)
+//! width −= n;   S = S_a + S_b;   V = V_a + V_b + n_a n_b / (n_a + n_b) (S_a/n_a − S_b/n_b)²
 //! ```
 //!
 //! and the scan starts again on the shorter window; the row is flagged if any
-//! cut was made. Each expression is evaluated in river's order, so the flags
-//! and the window's fields are river's to the bit.
+//! cut was made. river takes the bucket's share out of `S` and `V` instead,
+//! a subtraction that cancels when the bucket held most of the window's
+//! spread (two outliers leaving left `V` far above 0 on a window of zeros,
+//! or below it), which blinds every later test; under river's `restart` a
+//! row's first cut flags it and empties the window, so the flags are
+//! river's either way. Each other expression is evaluated in river's order,
+//! so the flags and, until a bucket is dropped, the window's fields are
+//! river's to the bit.
 //!
 //! Two things river does not have. `max_width` caps the window, dropping the
 //! oldest bucket while `width > max_width`, so the state is bounded by the
@@ -280,27 +287,47 @@ impl Adwin {
     fn delete_oldest(&mut self) {
         let last = self.levels.len() - 1;
         let n = (1u64 << last) as f64;
-        let Some([u, vv]) = self.levels[last].pop_front() else {
+        if self.levels[last].pop_front().is_none() {
             return;
-        };
-        let mu = u / n;
-        self.width -= n;
-        self.total -= u;
-        if self.width > 0.0 {
-            let muw = self.total / self.width;
-            let inc = vv + n * self.width * (mu - muw) * (mu - muw) / (n + self.width);
-            self.var -= inc;
-        } else {
-            // The whole window went: nothing is left to hold a deviation, and
-            // `0 / 0` would poison the next row.
-            self.total = 0.0;
-            self.var = 0.0;
         }
+        self.width -= n;
         // The top level goes when it empties, and so does any below it left
         // empty (only at `M = 1`, where a merge leaves no bucket behind).
         while self.levels.len() > 1 && self.levels.last().is_some_and(VecDeque::is_empty) {
             self.levels.pop();
         }
+        self.resum();
+    }
+
+    /// `S` and `V` taken again from the buckets left, oldest first, by the
+    /// pairwise merge of their sums and sums of squared deviations:
+    ///
+    /// ```text
+    /// S = S_a + S_b,   V = V_a + V_b + n_a n_b / (n_a + n_b) (S_a/n_a − S_b/n_b)²
+    /// ```
+    ///
+    /// rather than the dropped bucket's share taken out of them. That
+    /// subtraction cancels where the bucket held most of the window's
+    /// spread: two outliers leaving a window of zeros left `V` at `1.2e24`,
+    /// or below 0, where `ε` is NaN, and either way no split was cut again.
+    /// At most `M` buckets a level, so the scan this follows costs as much.
+    fn resum(&mut self) {
+        let (mut n, mut total, mut var) = (0.0f64, 0.0f64, 0.0f64);
+        for (idx, level) in self.levels.iter().enumerate().rev() {
+            let nb = (1u64 << idx) as f64;
+            for &[sb, vb] in level {
+                if n == 0.0 {
+                    (n, total, var) = (nb, sb, vb);
+                    continue;
+                }
+                let d = total / n - sb / nb;
+                var += vb + n * nb / (n + nb) * d * d;
+                total += sb;
+                n += nb;
+            }
+        }
+        self.total = total;
+        self.var = var;
     }
 
     /// The cut test for a split of `n0` older and `n1` newer rows whose means

@@ -415,3 +415,61 @@ fn the_cap_is_held_row_by_row_and_a_scan_ends() {
         assert!(i < 100 || a.width() >= 12.0, "row {i}: {}", a.width());
     }
 }
+
+/// Two outliers dropped by `max_width` leave no variance behind: once the
+/// window holds only zeros its sum and its sum of squared deviations are 0,
+/// neither below 0 (where `ε` is NaN and no split is ever cut) nor a ghost
+/// left by cancellation above it (where `ε` is huge), and a shift after
+/// them is cut where the window is wide enough to see it (review
+/// 2026-11-23, DRIFT-2: the review's two cases).
+#[test]
+fn outliers_that_leave_the_window_leave_no_variance_behind() {
+    for (outliers, max_width) in [
+        ([1e20, 3.3e19], 25u64),
+        ([1e20, 3.3e19], 64),
+        ([3.3e19, 1e20], 25),
+        ([-1e20, 7e19], 40),
+        ([1e15, 1e-3], 25),
+        ([1e20, 3.3e19], 300),
+        ([-1e20, 7e19], 500),
+    ] {
+        for restart in [true, false] {
+            let mut a = Adwin::new(AdwinCfg {
+                max_width,
+                restart,
+                ..cfg()
+            });
+            for x in outliers {
+                a.update(x);
+            }
+            // Every row from `max_width` on is one fed after the outliers.
+            let (gone, shift) = (max_width as usize, max_width as usize + 100);
+            let mut flags = Vec::new();
+            for i in 0..shift + 1000 {
+                let x = if i < shift { 0.0 } else { 1.0 };
+                if a.update(x) {
+                    flags.push(i);
+                }
+                assert!(
+                    a.variance() >= 0.0,
+                    "{outliers:?} at {max_width}, row {i}: V = {}",
+                    a.variance()
+                );
+                if (gone..shift).contains(&i) {
+                    assert_eq!(
+                        (a.total(), a.variance()),
+                        (0.0, 0.0),
+                        "{outliers:?} at {max_width}, restart {restart}, row {i}: zeros only"
+                    );
+                }
+            }
+            // A unit step is inside the bound of a window under about 60
+            // rows whatever came before.
+            assert!(
+                max_width < 300 || flags.iter().any(|&i| (shift..shift + 300).contains(&i)),
+                "{outliers:?} at {max_width}, restart {restart}: the shift at {shift} is cut: \
+                 {flags:?}"
+            );
+        }
+    }
+}
