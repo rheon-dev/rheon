@@ -191,4 +191,26 @@ mod tests {
         }
         assert_eq!(a, b);
     }
+
+    /// The row count is the rows since the start, and the flag adds the
+    /// deviation to the rate: a window whose minimum is a rate of 0.1 over
+    /// 99 rows flags at 0.109 + 0.0312 = 0.140 past its level of 0.13, where
+    /// the rate less its deviation (0.078) would not.
+    #[test]
+    fn the_flag_adds_the_deviation_to_the_rate() {
+        let mut d = Ddm::new(0, 3.0);
+        assert_eq!(d.n(), 0.0);
+        d.update(false);
+        d.update(false);
+        assert_eq!(d.n(), 2.0);
+        let mut d = Ddm::new(0, 3.0);
+        (d.n, d.p, d.p_min, d.s_min, d.ps_min) = (99.0, 0.1, 0.1, 0.01, 0.11);
+        assert!(d.update(true));
+        assert_eq!(d.n(), 0.0, "started again");
+        // The same state a row short of the level: no flag.
+        let mut d = Ddm::new(0, 3.0);
+        (d.n, d.p, d.p_min, d.s_min, d.ps_min) = (99.0, 0.1, 0.1, 0.01, 0.11);
+        assert!(!d.update(false));
+        assert_eq!(d.n(), 100.0);
+    }
 }
