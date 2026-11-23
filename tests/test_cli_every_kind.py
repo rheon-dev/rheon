@@ -204,6 +204,18 @@ def full2(**kw: Any) -> dict[str, Any]:
     }
 
 
+#: The checks of a constant, normal residual, which a glm refuses, and the
+#: mean's checks, which an expectile off the mean refuses, with their knobs.
+NOT_GLM = ("emit_specification", "specification_half_life", "ljung_box_lags")
+NOT_GLM += ("emit_tails", "tails_half_life")
+NOT_OFF_MEAN = ("emit_calibration", "calibration_half_life", "emit_breaks", "breaks_half_life")
+
+
+def without(kw: dict[str, Any], drop: tuple[str, ...]) -> dict[str, Any]:
+    """``kw`` less the keys ``drop`` names."""
+    return {k: v for k, v in kw.items() if k not in drop}
+
+
 def no_features(kw: dict[str, Any]) -> dict[str, Any]:
     """``holt`` reads the target alone, so it has no features to watch."""
     drop = ("features", "emit_feature_health", "feature_health_half_life")
@@ -401,7 +413,9 @@ CASES: list[Case] = [
         "glm",
         "glm",
         {
-            **full(**CLOSE, family="binomial", link="logit", ridge=2.0, refit_rows=30),
+            **without(
+                full(**CLOSE, family="binomial", link="logit", ridge=2.0, refit_rows=30), NOT_GLM
+            ),
             "targets": ["hit"],
         },
     ),
@@ -409,17 +423,37 @@ CASES: list[Case] = [
         "glm_tweedie",
         "glm",
         {
-            **full(family="tweedie", link="power", var_power=1.6, refit_rows=40, refit_budget=64.0),
+            **without(
+                full(
+                    family="tweedie", link="power", var_power=1.6, refit_rows=40, refit_budget=64.0
+                ),
+                NOT_GLM,
+            ),
             "targets": ["hit"],
         },
     ),
-    Case("glm2", "glm", {**full2(refit_rows=0, step_cap=0.5), "targets": ["hit"]}),
+    Case(
+        "glm2", "glm", {**without(full2(refit_rows=0, step_cap=0.5), NOT_GLM), "targets": ["hit"]}
+    ),
     # The first rows' refit over a span of the clock (task 538).
     Case(
-        "glm_span", "glm", {**full2(refit_span=40.0, max_state_bytes=200_000), "targets": ["hit"]}
+        "glm_span",
+        "glm",
+        {
+            **without(full2(refit_span=40.0, max_state_bytes=200_000), NOT_GLM),
+            "targets": ["hit"],
+        },
     ),
-    Case("expectile_span", "expectile", full2(expectile=0.7, refit_span=40.0)),
-    Case("expectile", "expectile", full(**CLOSE, expectile=0.8, refit_rows=30, refit_budget=64.0)),
+    Case(
+        "expectile_span",
+        "expectile",
+        without(full2(expectile=0.7, refit_span=40.0), NOT_OFF_MEAN),
+    ),
+    Case(
+        "expectile",
+        "expectile",
+        without(full(**CLOSE, expectile=0.8, refit_rows=30, refit_budget=64.0), NOT_OFF_MEAN),
+    ),
     # A window of clock units and one of rows, refit exactly on every row: a
     # window takes no decay.
     Case(
@@ -449,7 +483,7 @@ CASES: list[Case] = [
             "max_rows_between_coefs": 7,
         },
     ),
-    Case("expectile2", "expectile", full2(expectile=0.2, ridge=0.0)),
+    Case("expectile2", "expectile", without(full2(expectile=0.2, ridge=0.0), NOT_OFF_MEAN)),
     Case(
         "ftrl",
         "ftrl",

@@ -205,8 +205,10 @@ def _fullest() -> dict[str, dict]:
         "ftrl": simple,
         "sgd": simple,
         "pa": simple,
-        "glm": simple,
-        "expectile": simple,
+        # A glm refuses the checks of a constant, normal residual, and an
+        # expectile off the mean (0.8 here) the mean's.
+        "glm": simple | {"emit_specification", "emit_tails"},
+        "expectile": simple | {"emit_calibration", "emit_breaks"},
         "holt": simple | {"emit_feature_health"},
     }
     fit = dict(FIT, targets=["y", "z"])

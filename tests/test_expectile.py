@@ -256,3 +256,57 @@ def test_a_window_reports_the_weight_inside_it():
     w = df["w"].to_numpy()
     want = [w[max(0, i - 25) : i].sum() for i in range(df.height)]
     np.testing.assert_allclose(out["weight_sum"].to_numpy(), want, rtol=1e-12)
+
+
+def _exact_linear_stream(n: int = 4000, seed: int = 1) -> pl.DataFrame:
+    rng = np.random.default_rng(seed)
+    x = rng.normal(size=n)
+    return pl.DataFrame({"x": x, "y": 2.0 * x + rng.normal(size=n)})
+
+
+@pytest.mark.parametrize("key", ["emit_calibration", "emit_breaks"])
+@pytest.mark.parametrize("tau", [0.1, 0.9, 0.5 + 1e-9])
+def test_an_expectile_off_the_mean_refuses_the_mean_checks(key, tau):
+    """An expectile at a level other than one half is not the mean, so its
+    residuals' mean is not 0 on a stream it fits exactly: the
+    Mincer-Zarnowitz Wald and the CUSUM, whose nulls say it is, rejected on
+    every row of such a stream (review 2026-11-23, DIAG-11). Each is refused
+    there, naming the level."""
+    with pytest.raises(ValueError, match=f"{key} tests a fit of the mean, but expectile"):
+        rp.ModelBank(
+            [
+                rp.spec.expectile(
+                    "m", features=["x"], targets=["y"], half_life=50.0, expectile=tau, **{key: True}
+                )
+            ]
+        )
+
+
+def test_the_mean_expectile_keeps_every_check_at_its_level():
+    """At one half the expectile is the mean, and every residual check holds
+    its 5% level on a stream it fits exactly, after its first thousand rows;
+    off it the tests that read no mean are taken and hold theirs too."""
+    df = _exact_linear_stream()
+    for tau, keys in [
+        (0.5, ["emit_calibration", "emit_breaks", "emit_specification", "emit_tails"]),
+        (0.9, ["emit_specification", "emit_tails"]),
+    ]:
+        spec = rp.spec.expectile(
+            "m",
+            features=["x"],
+            targets=["y"],
+            half_life=50.0,
+            expectile=tau,
+            **dict.fromkeys(keys, True),
+        )
+        out = rp.ModelBank([spec]).fit_predict(df)["m"].struct.unnest()[1000:]
+        cut = {
+            "calibration_wald_y": 5.991,
+            "breusch_pagan_y": 3.841,
+            "ramsey_reset_y": 5.991,
+        }
+        for field, c in cut.items():
+            if field in out.columns:
+                assert (out[field] > c).mean() < 0.1, (tau, field)
+        if "cusum_y" in out.columns:
+            assert (out["cusum_y"].abs() > 1.96).mean() < 0.1, tau

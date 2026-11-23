@@ -763,6 +763,15 @@ model that only the new build has is listed as an addition and passes.
   of 0, and sums that are not finite or a spread below 0. The review's
   endless loop on an empty top level was gone before this change, which
   bounded that loop; the window stayed past its cap instead.
+- **A `glm` refuses `emit_specification` and `emit_tails`, and an
+  `expectile` at a level other than 0.5 refuses `emit_calibration` and
+  `emit_breaks`** (review 2026-11-23, DIAG-11). Each test's null fails on
+  such a fit by construction. A `glm`'s residuals have its family's
+  variance and shape: on a stream a Poisson fit fits exactly,
+  Breusch-Pagan and Jarque-Bera rejected on every row and RESET on a
+  quarter. An expectile off the mean has residuals whose mean is not 0: at
+  0.9 the calibration's Wald and the CUSUM rejected on every row. Both
+  models are new in this release, so no released spec is refused.
 - **A window looking ahead whose far edge is the input's last row is whole
   at the end of the input** (PLAN 565). Under `closed="right"` or `"both"`,
   `rp.ewm_sum`, `rp.ewm_mean`, `rp.ewm_rate` and `rp.ewm_quantile` with

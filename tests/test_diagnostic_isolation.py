@@ -127,6 +127,12 @@ TAKES: dict[str, frozenset[str]] = {
     "emit_robust_se": LEAST_SQUARES,
     "emit_feature_health": WITH_FEATURES,
     "max_error_inflation": NOISE_GATE,
+    # The mean's checks refuse an expectile off the mean (here 0.8), and
+    # the checks of a constant, normal residual refuse a glm.
+    "emit_calibration": ALL - {"expectile"},
+    "emit_breaks": ALL - {"expectile"},
+    "emit_specification": ALL - {"glm"},
+    "emit_tails": ALL - {"glm"},
 }
 
 

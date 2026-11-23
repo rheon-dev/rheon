@@ -165,8 +165,11 @@ EXCEPT = {
     "ftrl": ONE_SLOT | NOT_LEAST_SQUARES,
     "sgd": ONE_SLOT | NOT_LEAST_SQUARES,
     "pa": ONE_SLOT | NOT_LEAST_SQUARES,
-    "glm": ONE_SLOT | NOT_LEAST_SQUARES,
-    "expectile": ONE_SLOT | NOT_LEAST_SQUARES,
+    # A glm's residuals are not of constant variance or normal, and an
+    # expectile off the mean (0.8 here) has no mean-zero residual: each
+    # refuses the checks whose null says so.
+    "glm": ONE_SLOT | NOT_LEAST_SQUARES | {"emit_specification", "emit_tails"},
+    "expectile": ONE_SLOT | NOT_LEAST_SQUARES | {"emit_calibration", "emit_breaks"},
     "holt": ONE_SLOT | NOT_LEAST_SQUARES | {"emit_feature_health"},
 }
 

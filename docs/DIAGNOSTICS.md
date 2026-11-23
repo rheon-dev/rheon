@@ -337,6 +337,17 @@ The ten linear models are `ewridge`, `rls`, `lasso`, `kalman`, `huber`,
 residual switch by name, and a model outside a switch's list refuses that
 switch and names the models that take it.
 
+**`glm` and `expectile` take the residual switches too, except where a
+test's null fails by construction.** A `glm`'s residuals have its family's
+variance, which moves with the mean, and its family's shape. On a stream a
+Poisson fit fits exactly, Breusch-Pagan and Jarque-Bera rejected on every
+row, and RESET, read under a constant variance, on a quarter of them, so a
+`glm` refuses `emit_specification` and `emit_tails`. An expectile at a
+level other than 0.5 is not the mean, so its residuals' mean is not 0 where
+it fits exactly: at 0.9 on unit Gaussian noise the Mincer-Zarnowitz Wald
+and the CUSUM rejected on every row. An `expectile` off 0.5 refuses
+`emit_calibration` and `emit_breaks`.
+
 ## Is it scaled right?
 
 **A prediction can be correlated with the target and still be the wrong
