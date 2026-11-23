@@ -856,6 +856,14 @@ model that only the new build has is listed as an addition and passes.
   null and the saved state no longer loaded. Such a row is aged and not
   scored. And an error inflation past `1.34e154`, whose square overflowed,
   read the influence infinite; it is read as `e·sqrt(1 − 1/infl²)` there.
+- **An audit's `unit_root_t` reads a lagged spread near the smallest or
+  the largest doubles** (review 2026-11-23, AUDIT-3, in part). On `[0,
+  1e-155, 0, 1]` the Dickey-Fuller standard error's denominator underflowed
+  and the ratio overflowed, `se` read infinite and the statistic `-0.0`
+  where it is `-0.577`. Where either leaves the normal doubles the ratio is
+  taken in its square roots; elsewhere it keeps its bits. The moments'
+  scale for values near `1e-81`, which still corrupts `kurtosis` there, is
+  not changed in this release.
 - **A window looking ahead whose far edge is the input's last row is whole
   at the end of the input** (PLAN 565). Under `closed="right"` or `"both"`,
   `rp.ewm_sum`, `rp.ewm_mean`, `rp.ewm_rate` and `rp.ewm_quantile` with

@@ -1884,3 +1884,18 @@ fn a_counter_below_the_cut_goes_and_wraps_nothing() {
     let c = a.column(0);
     assert_eq!((c.top_value, c.top_count, c.second_count), (1.0, 4, 2));
 }
+
+/// The Dickey-Fuller statistic of values whose spread is near the
+/// smallest doubles: `(n − 2)·S_aa` underflowed, `se` read infinite and the
+/// statistic `-0.0`; on `[0, 1e-155, 0, 1]` it is `-0.57735`, which the
+/// same values scaled by `2^300` read (review 2026-11-23, AUDIT-3 (1)).
+#[test]
+fn the_unit_root_t_of_a_tiny_spread_is_the_scaled_ones() {
+    let xs = [0.0, 1e-155, 0.0, 1.0];
+    let tiny = audit_of(&cfg(1), &xs).column(0).unit_root_t;
+    let big = audit_of(&cfg(1), &xs.map(|v| v * 2f64.powi(300)))
+        .column(0)
+        .unit_root_t;
+    assert!((tiny - (-1.0 / 3f64.sqrt())).abs() < 1e-12, "{tiny}");
+    assert!((tiny - big).abs() < 1e-12, "{tiny} against {big}");
+}

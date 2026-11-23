@@ -430,7 +430,17 @@ impl CoMoments {
         }
         let rho = self.sab / self.saa;
         let ss = (self.sbb - self.sab * rho).max(0.0);
-        let se = (ss / ((self.n as f64 - 2.0) * self.saa)).sqrt();
+        let den = (self.n as f64 - 2.0) * self.saa;
+        // Where the denominator or the ratio leaves the normal doubles (a
+        // lagged spread near the smallest of them beside a large one,
+        // `[0, 1e-155, 0, 1]`), the ratio is taken in its square roots: in
+        // one step `se` read infinite and the statistic `-0.0`.
+        let q = ss / den;
+        let se = if den.is_normal() && (q == 0.0 || q.is_normal()) {
+            q.sqrt()
+        } else {
+            (ss / (self.n as f64 - 2.0)).sqrt() / self.saa.sqrt()
+        };
         if se == 0.0 {
             return if rho >= 1.0 {
                 f64::INFINITY
