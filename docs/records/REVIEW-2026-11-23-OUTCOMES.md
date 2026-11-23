@@ -19,9 +19,9 @@ the named test failed on 1e0e0945 for the review's reason.
 | ID | verdict | test | commit |
 |---|---|---|---|
 | GLM-METRICS | confirmed, fixed: a binomial `glm` scored by the 0.5 threshold and read by `rp.eval` as a classifier; Poisson, Gamma and Tweedie (and a spec with no family) null `hit_rate` | `tests/test_glm.py::test_each_familys_hit_rate_is_its_own_test_in_the_bank_and_in_eval` | 31ad0f5d |
-| STRM-1 | confirmed (claims 1 and 2), fixed by the user's decision (2026-11-23: "Score as predict"): under `embargo` or `label_clock` a row of weight 0 is scored as `predict` scores it and releases no held row, so it moves no live state; it has no place on the elapsed clock, which settles claim 3. The cost: such a row does not see the labels matured at its own clock. Claim 4 is the rule `predict` keeps (task 120) | `tests/test_label_delay.py::test_a_zero_weight_row_releases_no_label_a_later_row_before_it_would_not_see`, `::test_a_stream_ending_on_a_zero_weight_row_saves_what_it_would_without_it`, `::test_a_number_clock_and_a_temporal_one_agree_at_a_zero_weight_row_that_starts_a_session`; `crates/rheon-polars/tests/zero_weight.rs::a_stream_ending_on_zero_weight_rows_saves_what_it_would_without_them`, `::a_zero_weight_row_is_scored_as_predict_scores_it` (now under `embargo` and `label_clock` too) | 31ad0f5d, 5a763d77 |
+| STRM-1 | confirmed (claims 1 and 2), fixed by the user's decision (2026-11-23: "Score as predict"): under `embargo` or `label_clock` a row of weight 0 is scored as `predict` scores it and releases no held row, so it moves no live state; it has no place on the elapsed clock, which settles claim 3. The cost: such a row does not see the labels matured at its own clock. Claim 4 is the rule `predict` keeps (task 120) | `tests/test_label_delay.py::test_a_zero_weight_row_releases_no_label_a_later_row_before_it_would_not_see`, `::test_a_stream_ending_on_a_zero_weight_row_saves_what_it_would_without_it`, `::test_a_number_clock_and_a_temporal_one_agree_at_a_zero_weight_row_that_starts_a_session`; `crates/rheon-polars/tests/zero_weight.rs::a_stream_ending_on_zero_weight_rows_saves_what_it_would_without_them`, `::a_zero_weight_row_is_scored_as_predict_scores_it` (now under `embargo` and `label_clock` too) | 31ad0f5d, 5a763d77, fa550472, fed9d7f3 |
 | REG-2 | confirmed by reading and by test, fixed: an ageing row's new run is held to the span's cap | `crates/rheon-core/src/robust/span_tests.rs::an_ageing_row_is_held_to_the_spans_cap`, `sgd/span_tests.rs::an_ageing_row_is_held_to_the_spans_cap` | 549908ef |
-| REG-3 | **not reproduced as stated**; back to the coordinator, below. The slope that stays near 0 is the step's weight under the default constant rate, as scikit-learn's `sample_weight` multiplies the step: weights of 1e-6 on every row, with no fall and `ŵ` exactly 1e-6, stay as near 0, standardized or not | `tests/test_sgd.py::test_a_fall_in_the_weights_slows_the_fit_as_scikit_learn_s_sample_weight_does` | 1db677d9 |
+| REG-3 | **not reproduced as stated** (the coordinator, 2026-11-23: no decay). The slope that stays near 0 is the step's weight under the default constant rate, as scikit-learn's `sample_weight` multiplies the step: weights of 1e-6 on every row, with no fall and `ŵ` exactly 1e-6, stay as near 0, standardized or not | `tests/test_sgd.py::test_a_fall_in_the_weights_slows_the_fit_as_scikit_learn_s_sample_weight_does` | 1db677d9 |
 | MERGE-1 | confirmed (a NaN and a step back past the slice), fixed by the break the review's Pass 2 gives | `tests/test_stream_merge.py::test_a_slice_reads_no_chunk_past_its_last_row` | 31ad0f5d |
 | STRM-2 | confirmed, fixed: a fresh-session row of weight 0 reads a fresh stream's diagnostics and `learned_clock`; `predict`'s `learned_clock` too. `predict` already scored the fresh class with a fresh stream's diagnostics, so that half of the Pass-2 note was not reproduced | `tests/test_zero_weight_rows.py::test_a_zero_weight_row_that_starts_a_fresh_session_reads_a_fresh_streams_diagnostics` | 31ad0f5d |
 | STRM-3 | (2) confirmed, fixed (`weight_sum_settled`'s mean weight). (1) rule kept (the coordinator, 2026-11-23: no defect is shown): `ModelBank.last_row`'s docstring says a row of weight 0 replaces it, the last row the model predicted. (3) not changed: the unstable-rate notice reports the state the row is read against, which a row of weight 0 reads as the next row will, and no output of a row of positive weight moves. (4), (5) the rule kept: `ZERO-WEIGHT-AUDIT.md` leaves the data summary and the clock range describing every row fed, and W9 made a row of weight 0 no session boundary. (5)'s refit reservation is BANK-6's question | `tests/test_zero_weight_rows.py::test_rows_of_weight_0_leave_the_settled_weight_where_it_was` | 31ad0f5d |
@@ -70,28 +70,28 @@ declared in the CHANGELOG).
 - **The v71 `bank_label_clock` readout**, the user: "Accept", as a moved
   readout, not an exception (`STATE-CONTINUATION.md`).
 
-### REG-3: the coordinator's decision rests on a premise the test refutes
+- **STRM-1's move on the kept states**, the user: "Widen exception 25"
+  (rule 5's twenty-fifth exception widened, no new number;
+  `STATE-CONTINUATION.md`).
+- **REG-3**, the coordinator: no decay. The review's mechanism is not the
+  cause, below.
 
-The coordinator decided to fix REG-3 as the review proposes: decay `Σw` and
-`Σw²` on the model's clock so that the unit `ŵ = Σw² / Σw` follows the
-weights. Measured before writing it, the review's symptom has another
-cause. Under the default `schedule="constant"`, `sgd` multiplies a row's
+### REG-3: not reproduced as stated
+
+The review reads the slope that stays near 0 after the weights fall a
+million-fold as the frozen unit of weight `ŵ = Σw² / Σw` freezing the
+scaler. Under the default `schedule="constant"`, `sgd` multiplies a row's
 gradient by its weight, as scikit-learn's `SGDRegressor` multiplies it by
-`sample_weight`. So 275 rows at weight 1e-6 move the slope about a
-millionth as far as rows at weight 1 do, whatever `ŵ` is: the slope after
-the fall is 7.2e-6 standardized and 8.2e-6 not, and on weights of 1e-6 on
-every row (no fall, `ŵ` 1e-6 from the first row) 7.8e-6 and 8.3e-6, where
-weights of 1 give 2.79 and 2.82. scikit-learn's `SGDRegressor` (constant
-rate 0.01) gives 9.2e-6 on the same rows at `sample_weight=1e-6` and 2.87
-at 1. A unit that follows the weights moves none of this.
+`sample_weight`, so 275 rows at weight 1e-6 move the slope about a millionth
+as far as rows at weight 1, whatever `ŵ` is: 7.2e-6 standardized and 8.2e-6
+not after the fall; 7.8e-6 and 8.3e-6 on weights of 1e-6 on every row (no
+fall, `ŵ` 1e-6 from the first row); 2.79 and 2.82 on weights of 1.
+scikit-learn's `SGDRegressor` (constant rate 0.01) gives 9.2e-6 on the same
+rows at `sample_weight=1e-6` and 2.87 at 1. The test pinning this is
+`tests/test_sgd.py::test_a_fall_in_the_weights_slows_the_fit_as_scikit_learn_s_sample_weight_does`.
 
-Where `ŵ` does act is the scaler's floor, and that is visible under
-`schedule="adagrad"`, whose step is scale-free: after the fall, the slope is
-0.301 standardized against 0.321 unstandardized. On weights of 1 the two
-read 0.325 and 0.322, and on weights of 1e-6, 0.324 and 0.321. So the frozen
-unit costs a standardized AdaGrad fit about 7% of its slope after a
-million-fold fall (one seed, 300 rows). Decaying the unit would move every
-`sgd` and `pa` output on uneven weights to recover it, and the per-row cost
-is not yet measured. So the decision goes back to the coordinator with this
-evidence: the xfail is replaced by a test that pins the step-weight
-convention against scikit-learn, and the decay is not written.
+Open, to measure over seeds later and not a fix: where the frozen `ŵ` does
+act is the scaler's floor, under `schedule="adagrad"`, whose step is
+scale-free: after the fall the standardized slope read 0.301 against 0.321
+unstandardized, about 7% lower (one seed, 300 rows), where even weights read
+about 0.32 either way.
