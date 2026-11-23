@@ -677,6 +677,14 @@ does, so a gate never hides a break: under `drift_action="reset"` the rows
 a `min_weight` withholds after a reset are the rows that show the next
 break.
 
+**On an irregular clock, `drift_kind="cusum"` false-alarms sooner.** Its
+sums grow by `d (z − k)`, `d` the row's clock step, so a step scales the
+noise as well as the drift. At `h = 5`, `k = 0.5` and a mean step of 1,
+2,000 simulated runs on standard normal errors averaged 469 rows to a false
+alarm at steps of 1, 79 at steps drawn from `Exp(1)`, and 30 at steps of 0.1
+nine times in ten and 9.1 otherwise. Where a steady false-alarm rate
+matters, read the errors on a regular clock or a row clock.
+
 [Detect a break](how-to/detect-a-break.md) runs these tests on a stream
 that breaks in each of the three ways, dates a break with the run-once
 CUSUM, and says what to do at each. Read together, the flags tell the

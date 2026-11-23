@@ -752,7 +752,12 @@ The diagnostics add, per slot:
          (default 0.5) and ``h`` is ``drift_threshold``, a clock parameter
          as above, default 5 without a clock column. At ``k = 0.5`` on a
          row clock its average run on standard normal errors is about 168
-         rows at ``h = 4`` and 465 at ``h = 5``.
+         rows at ``h = 4`` and 465 at ``h = 5``. On a clock it depends on
+         the steps, since ``d`` scales the noise as well as the drift: at
+         ``h = 5`` and a mean step of 1 it is 469 rows at steps of 1, 79
+         at steps drawn from ``Exp(1)``, and 30 at steps of 0.1 nine times
+         in ten and 9.1 otherwise. Where a steady false-alarm rate
+         matters, use a regular clock or a row clock.
        - ``"adwin"``, Bifet and Gavaldà's (2007) adaptive window on
          ``|resid|``, flag for flag river's ``drift.ADWIN``: an exponential
          histogram of the last rows (``max_buckets`` buckets of each size,

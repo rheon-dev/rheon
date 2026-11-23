@@ -19,6 +19,18 @@
 //! library's Page-Hinkley detector does, makes the same shift held for the
 //! same time count the same however many rows fall in it. The target mean is
 //! 0: the errors of a model that is right on average.
+//!
+//! **The false-alarm run depends on the clock's steps.** A step `d` scales
+//! the row's noise as well as its drift, so `d (z − k)` has variance `d²`,
+//! and the sums are reflected at 0 and tested against `h` only at the rows.
+//! At `h = 5`, `k = 0.5` and a mean step of 1, the average run on standard
+//! normal errors (2,000 simulated runs each) is 469 rows at steps of 1, 79
+//! at steps drawn from `Exp(1)`, and 30 at steps of 0.1 nine times in ten
+//! and 9.1 otherwise. Scaling the noise by `√d` instead, as a Brownian
+//! increment's, does not hold it either (472, 577 and 1,840 rows), since
+//! the reflection and the test at the rows alone still depend on the steps.
+//! Where a steady false-alarm rate matters, read the errors on a regular
+//! clock or a row clock.
 
 use serde::{Deserialize, Serialize};
 
@@ -93,6 +105,38 @@ impl Cusum {
 mod tests {
     use super::*;
     use crate::SplitMix64;
+
+    /// The false-alarm run depends on the clock's steps: on standard normal
+    /// errors, irregular steps of mean 1 (`Exp(1)`, and 0.1 or 9.1) run
+    /// shorter than steps of 1, which the module doc measures. Direction
+    /// alone is held (review 2026-11-23, DRIFT-3; the user, 2026-11-23:
+    /// keep `d (z − k)` and say so).
+    #[test]
+    fn irregular_steps_run_to_a_false_alarm_sooner_than_regular_ones() {
+        let run = |step: &dyn Fn(&mut SplitMix64) -> f64, seed: u64| -> f64 {
+            let mut g = SplitMix64::new(seed);
+            let mut total = 0u64;
+            let runs = 300;
+            for _ in 0..runs {
+                let mut c = Cusum::new(0.5, 5.0);
+                let mut n = 0u64;
+                loop {
+                    n += 1;
+                    let d = step(&mut g);
+                    if c.update(normal(&mut g), d) {
+                        break;
+                    }
+                }
+                total += n;
+            }
+            total as f64 / f64::from(runs)
+        };
+        let unit = run(&|_| 1.0, 11);
+        let exp = run(&|g| -(1.0 - g.uniform()).ln(), 11);
+        let bursty = run(&|g| if g.uniform() < 0.9 { 0.1 } else { 9.1 }, 11);
+        assert!(exp < unit, "Exp(1) {exp} against unit {unit}");
+        assert!(bursty < unit, "bursty {bursty} against unit {unit}");
+    }
 
     /// A restored CUSUM whose numbers are not finite is refused, each on its
     /// own (review 2026-11-23, DRIFT-5).
