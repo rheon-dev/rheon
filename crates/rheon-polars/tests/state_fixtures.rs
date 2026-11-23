@@ -535,6 +535,58 @@ fn windows_int_config() -> WindowsConfig {
     .unwrap()
 }
 
+/// Two periodic profiles (PLAN 560) on a zoned clock: a weighted mean read
+/// with the stamp's rows, so rows are held across the save, and a biased
+/// variance read before them, from an offset; each group's buckets.
+fn windows_profile_config() -> WindowsConfig {
+    serde_json::from_str(
+        r#"{"formulas": [
+               {"name": "level", "tree": ["ewm_profile", ["col", "mid"], {"period": "10s", "buckets": 5, "half_life": "20s", "weight": ["col", "w"]}]},
+               {"name": "spread", "tree": ["ewm_profile", ["col", "mid"], {"period": "10s", "buckets": 5, "half_life": "20s", "stat": "var", "bias": true, "closed": "left", "offset": "3s"}]},
+               {"name": "median", "tree": ["ewm_profile", ["col", "mid"], {"period": "4s", "buckets": 2, "half_life": "20s", "stat": "quantile", "quantile": 0.5, "window_size": "5s", "weight": ["col", "w"]}]},
+               {"name": "high", "tree": ["ewm_profile", ["col", "mid"], {"period": "10s", "buckets": 5, "half_life": "20s", "stat": "quantile", "quantile": 0.9}]}
+             ],
+             "clock": "ts", "gap_cap": "50s", "group": "g"}"#,
+    )
+    .unwrap()
+}
+
+/// The clock in Amsterdam's zone, the same instants.
+fn window_profile_input(df: &DataFrame) -> DataFrame {
+    let zone = TimeZone::opt_try_new(Some("Europe/Amsterdam")).unwrap();
+    let ts = df
+        .column("ts")
+        .unwrap()
+        .to_physical_repr()
+        .as_materialized_series()
+        .i64()
+        .unwrap()
+        .clone()
+        .into_datetime(TimeUnit::Nanoseconds, zone.clone())
+        .into_column();
+    assert_eq!(
+        ts.dtype(),
+        &DataType::Datetime(TimeUnit::Nanoseconds, zone),
+        "a zoned clock"
+    );
+    let mut out = df.select(["ts", "g", "mid", "w"]).unwrap();
+    out.with_column(ts).unwrap();
+    out
+}
+
+/// The same profiles' forms on a number clock: a period in clock units.
+fn windows_profile_units_config() -> WindowsConfig {
+    serde_json::from_str(
+        r#"{"formulas": [
+               {"name": "level", "tree": ["ewm_profile", ["col", "mid"], {"period": 6.0, "buckets": 3, "half_life": 12.0, "weight": ["col", "w"], "stat": "std"}]},
+               {"name": "recent", "tree": ["ewm_profile", ["col", "mid"], {"period": 6.0, "buckets": 3, "half_life": 12.0, "window_size": 20.0, "closed": "both", "min_samples": 2}]},
+               {"name": "shape", "tree": ["ewm_profile", ["col", "mid"], {"period": 6.0, "harmonics": 1, "half_life": 12.0, "window_size": 4.0, "stat": "var", "weight": ["col", "w"]}]}
+             ],
+             "clock": "t", "gap_cap": 50.0, "group": "g"}"#,
+    )
+    .unwrap()
+}
+
 fn window_int_input(df: &DataFrame) -> DataFrame {
     df.select(["ti", "mid", "cum"]).unwrap()
 }
@@ -1427,6 +1479,23 @@ fn windows_run(bytes: &[u8], input: &DataFrame) -> Ran {
     windows_run_of(windows_config(), bytes, input)
 }
 
+fn windows_profile_first() -> (Vec<u8>, DataFrame) {
+    windows_first_of(windows_profile_config(), window_profile_input(&frame()))
+}
+
+fn windows_profile_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    windows_run_of(windows_profile_config(), bytes, input)
+}
+
+fn windows_profile_units_first() -> (Vec<u8>, DataFrame) {
+    let df = frame().select(["t", "g", "mid", "w"]).unwrap();
+    windows_first_of(windows_profile_units_config(), df)
+}
+
+fn windows_profile_units_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    windows_run_of(windows_profile_units_config(), bytes, input)
+}
+
 fn windows_quantile_first() -> (Vec<u8>, DataFrame) {
     windows_first_of(windows_quantile_config(), window_input(&frame()))
 }
@@ -2169,6 +2238,16 @@ fn kinds() -> Vec<Kind> {
             run: windows_moments_run,
         },
         Kind {
+            name: "with_windows_profile",
+            first: windows_profile_first,
+            run: windows_profile_run,
+        },
+        Kind {
+            name: "with_windows_profile_units",
+            first: windows_profile_units_first,
+            run: windows_profile_units_run,
+        },
+        Kind {
             name: "refresh_time",
             first: refresh_first,
             run: refresh_run,
@@ -2650,7 +2729,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
             ("checkpoint", 1),
             ("merge", 3),
             ("refresh_time", 5),
-            ("windows", 4)
+            ("windows", 6)
         ]
     );
     // A checkpoint's stages, each a whole state of its kind; and the bank's
@@ -3622,6 +3701,87 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
             |p, v| {
                 p.contains(".quant.") && p.contains(".prev.") && v.as_f64().is_some_and(|f| f > 0.0)
             },
+        ),
+        // PLAN 560: a profile's definition with its zone and spans in
+        // nanoseconds or clock units, and a group's buckets, last moved at
+        // a temporal or a number clock.
+        ("with_windows_profile", "a profile's zone", |p, v| {
+            p.ends_with(".zone") && v.as_str() == Some("Europe/Amsterdam")
+        }),
+        ("with_windows_profile", "a period in nanoseconds", |p, _| {
+            p.ends_with(".period.ns")
+        }),
+        (
+            "with_windows_profile",
+            "a bucket moved at a temporal clock",
+            |p, _| p.contains(".profile.") && p.ends_with(".at.Ns"),
+        ),
+        (
+            "with_windows_profile",
+            "a left profile's stamp value",
+            |p, v| {
+                p.contains(".profile.")
+                    && p.ends_with(".left")
+                    && v.as_f64().is_some_and(f64::is_finite)
+            },
+        ),
+        (
+            "with_windows_profile",
+            "a windowed quantile's kept rows",
+            |p, _| p.contains(".win.") && p.ends_with(".rows.0.tau"),
+        ),
+        (
+            "with_windows_profile",
+            "a front row's kept sketch weights",
+            |p, v| {
+                p.contains(".win.")
+                    && p.contains(".q.prev.")
+                    && v.as_f64().is_some_and(f64::is_finite)
+            },
+        ),
+        (
+            "with_windows_profile",
+            "an unbounded sketch's row count",
+            |p, v| p.contains(".win.") && p.ends_with(".n") && v.as_u64().is_some_and(|n| n > 0),
+        ),
+        (
+            "with_windows_profile_units",
+            "a window's front moments",
+            |p, _| p.contains(".win.") && p.ends_with(".suffix.0.m2"),
+        ),
+        (
+            "with_windows_profile_units",
+            "a harmonic window's front Grams",
+            |p, v| {
+                p.contains(".harm.suffix.")
+                    && p.contains(".g.")
+                    && v.as_f64().is_some_and(|f| f != 0.0)
+            },
+        ),
+        (
+            "with_windows_profile_units",
+            "a harmonic profile's phase",
+            |p, v| p.ends_with(".phi") && v.as_f64().is_some_and(|f| (0.0..1.0).contains(&f)),
+        ),
+        (
+            "with_windows_profile_units",
+            "a profile's harmonics",
+            |p, v| p.ends_with(".harmonics") && v.as_u64() == Some(1),
+        ),
+        (
+            "with_windows_profile_units",
+            "a profile's min_samples",
+            |p, v| p.ends_with(".min_samples") && v.as_u64() == Some(2),
+        ),
+        (
+            "with_windows_profile_units",
+            "a period in clock units",
+            |p, _| p.ends_with(".period.units"),
+        ),
+        (
+            "with_windows_profile_units",
+            "a bucket moved at a number clock",
+            |p, _| p.contains(".profile.") && p.ends_with(".at.F64"),
         ),
         // PLAN 541: a merge's state, in each form it takes -- an input's
         // last clock as a float and as an integer (a temporal clock's

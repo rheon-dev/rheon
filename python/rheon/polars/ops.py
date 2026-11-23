@@ -233,7 +233,7 @@ import polars as pl
 
 from rheon._errors import RefusedValueError
 from rheon._renamed import renamed_function
-from rheon.polars._formula import moments_operator, operator
+from rheon.polars._formula import moments_operator, operator, profile
 
 if TYPE_CHECKING:
     from rheon._duration import Duration
@@ -246,6 +246,7 @@ __all__ = [
     "cross_ref",
     "ewm_mean",
     "ewm_moments",
+    "ewm_profile",
     "ewm_quantile",
     "ewm_rate",
     "ewm_std",
@@ -2004,3 +2005,241 @@ def cross_ref(
     ends the stamp before, as for :func:`cross_mean`.
     """
     return operator("cross_ref", input, closed=closed, where=where, max_state_bytes=max_state_bytes)
+
+
+def ewm_profile(
+    input: str | pl.Expr,
+    *,
+    period: float | Duration,
+    half_life: float | Duration,
+    buckets: int | None = None,
+    harmonics: int | None = None,
+    stat: Literal["mean", "var", "std", "quantile"] = "mean",
+    quantile: float | None = None,
+    window_size: float | Duration | None = None,
+    closed: Literal["right", "left", "both", "none"] = "right",
+    offset: float | Duration | None = None,
+    weight: str | pl.Expr | None = None,
+    min_samples: int = 1,
+    bias: bool | None = None,
+    max_state_bytes: int | None = None,
+) -> pl.Expr:
+    """The EW mean, spread or quantile of a column at each row's phase of a period.
+
+    Use it for a seasonal profile, such as the typical volatility of each
+    hour of the trading day, or the delay of each hour of a transit day, read
+    at each row's own hour. The profile is the input to an adjustment that
+    the call composes: ``x - profile`` for an additive one, ``x / profile``
+    or ``x / std_profile`` for a multiplicative one. With ``closed="left"``
+    the profile a row reads holds no row of its own time, the row itself
+    included, so the adjustment reads only what was known before the row.
+
+    .. rubric:: Parameters
+
+    ``input``
+        The values the profile reads: a column name, or an element-wise
+        expression of the row, such as ``pl.col("ret") ** 2`` or
+        :func:`increment`. It may hold no other window operator.
+    ``period``
+        The span the phase repeats over: a duration such as ``"1d"`` or
+        ``"1w"`` on a temporal clock, a number of clock units on a numeric
+        one, or a number of rows without a clock. A calendar unit (``"1mo"``,
+        ``"1q"``, ``"1y"``) is refused, since a month has no fixed length.
+    ``buckets``
+        The bucketed form: how many equal phases the period is cut into, 24
+        for each hour of a day, 7 for each day of a week, 168 for each hour
+        of a week. A row reads its own phase's rows alone. Give ``buckets``
+        or ``harmonics``, one of them.
+    ``harmonics``
+        The harmonic form: how many Fourier harmonics fit the profile, from
+        1 to 64, so ``2 · harmonics + 1`` terms. Every row reads one smooth
+        curve fitted to every phase's rows, so a phase seen rarely borrows
+        from the rest of the period. It takes ``stat`` ``"mean"``, ``"var"``
+        or ``"std"`` and no ``bias``.
+    ``half_life``
+        How fast a row's weight fades with its distance in clock time from the
+        row the profile is read at, whatever its phase: a row ``half_life``
+        away weighs half as much, so a phase not seen for a long time weighs
+        little. A number of clock units, a duration on a temporal clock, or
+        ``float("inf")`` for no decay.
+    ``stat``
+        ``"mean"`` (the default), ``"var"``, ``"std"`` or ``"quantile"``:
+        the weighted mean of each phase's rows, their weighted variance about
+        it, its root, or their weighted quantile at ``quantile``, read from
+        :func:`ewm_quantile`'s sketch of each phase's values, within 0.78%
+        of the exact one.
+    ``quantile``
+        For ``stat="quantile"`` only: the level, above 0 and below 1, such as
+        0.5 for the median.
+    ``window_size``
+        The most a row may be behind the row read and still count, in the
+        same units as ``half_life``: rows further back leave their phase, as
+        they leave :func:`ewm_mean`'s window. ``None`` (the default) keeps
+        every row, decayed. Under a window each phase keeps its rows in the
+        window, so the state grows with them.
+    ``closed``
+        ``"right"`` (the default), as :func:`ewm_mean` and Polars'
+        ``rolling_*_by`` take it: a row reads the profile with every row of
+        its own stamp in it, its own included, known once the stamp closes.
+        ``"left"`` leaves the stamp's rows out, so the value is known as the
+        stamp arrives, from earlier rows alone. Under a ``window_size``,
+        ``"left"`` and ``"both"`` keep a row exactly ``window_size`` back,
+        ``"right"`` and ``"none"`` do not; ``"both"`` holds the stamp's rows
+        as ``"right"`` does and ``"none"`` leaves them out as ``"left"``
+        does.
+    ``offset``
+        Where the period starts after its default start: a duration such as
+        ``"9h30m"`` for a session that opens at 09:30, or ``"6d"`` for a
+        week that starts on Sunday. The default start is midnight, the
+        Monday of a week for a whole number of weeks (as Polars'
+        ``dt.truncate`` starts one), and 0 on a numeric clock.
+    ``weight``
+        Each row's weight: a column name or an element-wise expression of the
+        row. ``None`` (the default) weighs every row 1. A row whose weight is
+        null, NaN, infinite or not above 0 adds nothing.
+    ``min_samples``
+        The rows with a value and a weight above 0 a phase needs before it is
+        read, as :func:`ewm_mean` and Polars' ``rolling_*_by`` count them.
+        Default 1: a phase any row has reached is read, and one none has is
+        null.
+    ``bias``
+        For ``stat="var"`` or ``"std"`` only. ``False`` (the default)
+        corrects the weighted second moment for the weights' number and
+        inequality, as :func:`ewm_var` does; ``True`` reports it as it is.
+    ``max_state_bytes``
+        The most bytes one group's profile may hold, a whole number from 1
+        to 64 MiB. Default ``None``, 262,144 (256 KB). A profile holds 56
+        bytes a bucket, so the default holds 4,681 buckets, and a call whose
+        buckets pass its cap is refused before it reads a row, naming their
+        bytes. Under a ``window_size`` each row in a phase's window adds 80
+        bytes (104 for a quantile), and a quantile's sketches 8 bytes a
+        sketch bucket. The harmonic form's fit holds ``8 · (p(p + 1)/2 + 2p
+        + 2)`` bytes, ``p = 2 · harmonics + 1`` (216 at two harmonics), and
+        under a ``window_size`` each row in the window adds that and 40 more
+        (256 at two harmonics), its share of the Grams the window keeps. The
+        run warns once, as a :class:`~rheon.RheonWarning`, when a row takes
+        a group past half of the cap, and refuses the row that would take it
+        past the cap, naming the row.
+
+    .. rubric:: Returns
+
+    A ``pl.Expr`` that :func:`rheon.polars.stream.with_windows` computes as a
+    column, one profile per group. It is null where the row's phase holds
+    fewer rows than ``min_samples``, inside the window where there is one,
+    so a phase no row has reached is null; for a variance, also where one
+    row's weight fills the phase. The harmonic form is null where its rows
+    are fewer than ``min_samples``, where they do not pin the curve down
+    (fewer distinct phases than its terms, or as good as), and, for a
+    variance, where the fit of ``x²`` falls below the square of the fit of
+    ``x``.
+
+    .. rubric:: Raises
+
+    ``TypeError``
+        When ``input`` or ``weight`` is neither a column name nor a
+        ``pl.Expr``, ``period``, ``half_life`` or ``offset`` is neither a
+        number nor a duration, ``buckets`` or ``max_state_bytes`` is not an
+        integer, ``min_samples`` is not an integer (each a
+        :class:`~rheon.WrongTypeError`), or ``bias`` is not ``True`` or
+        ``False``.
+    ``ValueError``
+        When ``period``, ``half_life`` or ``window_size`` is not above 0,
+        ``buckets`` is below 1, ``stat`` or ``closed`` is not one of its
+        words, ``quantile`` is not above 0 and below 1, ``min_samples`` is
+        below 1, or ``max_state_bytes`` is below 1 or above 64 MiB. The run
+        raises an error naming the row that would take a group's state past
+        ``max_state_bytes``.
+
+    .. rubric:: Examples
+
+    The mean of each hour of the day, read at every row's own hour, with the
+    hour before 09:00 seen on two days:
+
+    .. code-block:: python
+
+        from datetime import datetime
+
+        import polars as pl
+        from rheon import polars as rp
+
+        df = pl.DataFrame(
+            {
+                "t": [
+                    datetime(2026, 1, 5, 8, 30),
+                    datetime(2026, 1, 5, 9, 30),
+                    datetime(2026, 1, 6, 8, 15),
+                    datetime(2026, 1, 6, 9, 45),
+                ],
+                "delay": [4.0, 1.0, 6.0, 2.0],
+            }
+        )
+        out = rp.stream.with_windows(
+            df,
+            hourly=rp.ewm_profile(
+                "delay", period="1d", buckets=24, half_life=float("inf")
+            ),
+            before=rp.ewm_profile(
+                "delay", period="1d", buckets=24, half_life=float("inf"), closed="left"
+            ),
+            clock="t",
+            gap_cap="7d",
+        )
+        print(out["hourly"].to_list(), out["before"].to_list())
+
+    .. code-block:: text
+
+        [4.0, 1.0, 5.0, 1.5] [None, None, 4.0, 1.0]
+
+    .. rubric:: Notes
+
+    **The phase** is the row's place in the period, read from its own clock
+    alone: ``t − t.dt.truncate(period)``, Polars' own, less the offset. On a
+    clock with a time zone it is read on the wall clock in the column's own
+    zone, as Polars' ``dt`` namespace reads a zoned value: on the day the
+    clocks go forward, 05:00 is phase 5h, though four hours have passed
+    since midnight, so a rush hour stays in its own bucket across the
+    change. Without a clock the phase counts the group's rows of weight
+    above 0. Row ``i`` falls in bucket ``floor(buckets · phase / period)``.
+
+    **The statistic.** Each bucket keeps the weighted moments of its rows,
+    each row weighed by its weight times ``0.5 ** (age / half_life)``, its
+    age the clock between it and the row read: ``V1 = Σ w``, ``V2 = Σ w²``,
+    the mean ``m = Σ w x / V1`` and ``M2 = Σ w (x − m)²``, in Welford's form.
+    The variance is ``M2 / V1`` times ``V1² / (V1² − V2)`` unless ``bias``.
+    A bucket decays by the clock whether or not a row falls in it.
+
+    **The harmonic form** fits ``f(φ) = a₀ + Σₖ aₖ cos 2πkφ + bₖ sin
+    2πkφ`` to the rows by weighted least squares, each row weighed as a
+    bucket's are, ``φ`` the phase as a share of the period: with the basis
+    ``z(φ)``, the Gram ``G = Σ w d z zᵀ`` and ``r = Σ w d z x``, the mean
+    profile is ``z(φ)ᵀ G⁻¹ r``, and the variance the fit of ``x²`` less the
+    square of the fit of ``x``. The oracle is statsmodels' ``WLS`` on the
+    same basis.
+
+    **A window** keeps each phase's rows in two stacks, the oldest with the
+    moments of the rows newer than it, so a row leaves by dropping its own,
+    never by a subtraction that would leave a rounding behind; a quantile's
+    sketches leave the same way, as :func:`ewm_quantile`'s do.
+
+    **The state** is a group's buckets, ``56 · buckets`` bytes, and under a
+    window the rows inside it, whatever the stream's length. The oracle is
+    Polars' ``group_by`` over the phase on one chunk, with the decayed
+    weights written out, and for a quantile NumPy's weighted
+    ``inverted_cdf`` of each phase's values.
+    """
+    return profile(
+        input,
+        period=period,
+        buckets=buckets,
+        harmonics=harmonics,
+        half_life=half_life,
+        stat=stat,
+        quantile=quantile,
+        window_size=window_size,
+        closed=closed,
+        offset=offset,
+        weight=weight,
+        min_samples=min_samples,
+        bias=bias,
+        max_state_bytes=max_state_bytes,
+    )

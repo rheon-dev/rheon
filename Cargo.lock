@@ -3466,9 +3466,12 @@ dependencies = [
 name = "rheon-polars"
 version = "2.0.0"
 dependencies = [
+ "chrono",
+ "chrono-tz",
  "equivalent",
  "indexmap",
  "libloading",
+ "libm",
  "polars",
  "polars-arrow",
  "polars-core",

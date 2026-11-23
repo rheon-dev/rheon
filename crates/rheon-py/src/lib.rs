@@ -1418,8 +1418,9 @@ impl PyWindows {
         Ok(this.inner.consumed())
     }
 
-    /// The warning a cross-group operator raised, once a run, when a stamp
-    /// took its state past half of its `max_state_bytes`; taken by the call.
+    /// The warning a cross-group operator or a profile raised, once a run,
+    /// when a stamp or a row took its state past half of its
+    /// `max_state_bytes`; taken by the call.
     fn take_warning(slf: &Bound<'_, Self>) -> PyResult<Option<String>> {
         let mut this = slf
             .try_borrow_mut()

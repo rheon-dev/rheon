@@ -427,6 +427,7 @@ impl Cross {
             if bytes > def.cap {
                 return Err(super::Refusal::StateCap {
                     seq,
+                    of: super::StateOf::Cross,
                     op,
                     bytes,
                     cap: def.cap,

@@ -34,7 +34,8 @@ impl Windows {
             check_op(o, op, &self.kernels[op.kernel])?;
         }
         let nc = self.cross.as_ref().map_or(0, |c| c.defs().len());
-        if no + nc == 0 || members != *self.members || members.iter().any(Vec::is_empty) {
+        let np = self.profiles.len();
+        if no + nc + np == 0 || members != *self.members || members.iter().any(Vec::is_empty) {
             return Err("its kernels' operators are not its operators".into());
         }
         if let Some(c) = &self.cross
@@ -42,7 +43,12 @@ impl Windows {
         {
             return Err("its cross-group operators do not follow its operators".into());
         }
-        let nout = no + nc;
+        for p in self.profiles.iter() {
+            p.check()?;
+        }
+        // The outputs are the window operators', then the cross-group
+        // operators', then the profiles'.
+        let nout = no + nc + np;
         if self.n_outputs != nout {
             return Err(format!("{} outputs for {nout} operators", self.n_outputs));
         }
@@ -74,7 +80,8 @@ impl Windows {
         let n_wait = u32::from(
             self.kernels
                 .iter()
-                .any(|k| k.direction == Direction::Backward && k.closed.near(Direction::Backward)),
+                .any(|k| k.direction == Direction::Backward && k.closed.near(Direction::Backward))
+                || self.profiles.iter().any(ProfileDef::waits),
         );
         let is_held = |seq: u64| seq >= self.held_first && seq < self.next_seq;
         let widths = |v: &[Vec<f64>]| {
@@ -109,7 +116,8 @@ impl Windows {
                 && (n_wait > 0 || g.pending.is_empty())
                 && g.waiting.iter().all(|w| is_held(w.seq))
                 && g.pending.iter().all(|&s| is_held(s))
-                && (!g.linked || g.last_raw.is_some());
+                && (!g.linked || g.last_raw.is_some())
+                && profile::fits(&self.profiles, &g.profile);
             if !fits {
                 return Err(format!("group {gi} does not fit its kernels and held rows"));
             }

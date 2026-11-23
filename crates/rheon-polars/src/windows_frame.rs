@@ -31,7 +31,7 @@ use crate::stream::usable;
 use crate::windows::{ChunkKeys, session_hashes};
 use crate::windows::{
     Closed, CrossClosed, CrossDef, Direction, KernelDef, MomentsDef, OpDef, OpKind, Partial, Peek,
-    PlainRows, Refusal, RowIn, Stat, Windows,
+    PhaseSpan, PlainRows, ProfileDef, Refusal, RowIn, Stat, StateOf, Windows,
 };
 use crate::wrong_type::{Refused, wrong_type};
 
@@ -498,6 +498,10 @@ struct Plan {
     lists: Vec<String>,
     /// The moments operators' terms, in operator order.
     moments: Vec<MomentsDef>,
+    /// The profile operators, after the window operators in output order,
+    /// and each one's hidden column.
+    profiles: Vec<ProfileDef>,
+    profile_columns: Vec<String>,
 }
 
 /// A moments operator's term on `kernel`: each leg's formula an input of
@@ -627,6 +631,129 @@ fn list_keys(df: &DataFrame, column: &str) -> PolarsResult<ListKeys> {
     Ok((flat, ranges))
 }
 
+/// A profile operator's definition from its node: its input and weight
+/// among the plan's inputs, its spans against the clock, its zone from the
+/// clock column's dtype, and its bytes against its cap.
+#[allow(clippy::too_many_arguments)]
+fn profile_def(
+    config: &WindowsConfig,
+    input: &Schema,
+    p: &mut Plan,
+    f: &str,
+    op: &OpNode,
+    params: &crate::formula::ProfileParams,
+    incr_schema: &Schema,
+) -> Result<ProfileDef, Refused> {
+    let name = op.kind.name();
+    let resolve_incr = |op: &OpNode| col(hidden(op).as_str());
+    let mut input_of = |what: &str, node: &Node| -> Result<usize, Refused> {
+        if let Some(i) = p.inputs.iter().position(|n| n == node) {
+            return Ok(i);
+        }
+        let dtype =
+            dtypes_of(incr_schema, vec![node.to_expr(&resolve_incr).alias("@t")]).map_err(|e| {
+                format!(
+                    "{WHO}: {f}: Polars cannot compute {name}'s {what} ({e}). Check that the \
+                     {what} reads columns of the right type."
+                )
+            })?;
+        let dtype = dtype.get("@t").expect("aliased").clone();
+        if !numeric(&dtype) {
+            return Err(Refused::wrong_type(format!(
+                "{WHO}: {f}: {name}'s {what} must be a number, but it is {}. Cast it to a \
+                 number, such as with .cast(pl.Float64).",
+                crate::arrow::dtype_name(&dtype)
+            )));
+        }
+        p.inputs.push(node.clone());
+        Ok(p.inputs.len() - 1)
+    };
+    let x = input_of("input", &op.input)?;
+    let weight = match &params.weight {
+        Some(w) => Some(input_of("weight", w)?),
+        None => None,
+    };
+    let half_life = op.half_life.clone().expect("checked when read");
+    p.spans.push(("half_life", half_life.clone()));
+    p.spans.push(("period", params.period.clone()));
+    if let Some(w) = &op.window_size {
+        p.spans.push(("window_size", w.clone()));
+    }
+    if let Some(o) = &params.offset {
+        p.spans.push(("offset", o.clone()));
+    }
+    let clock_dtype = config.clock.as_deref().and_then(|c| input.get(c));
+    let temporal = clock_dtype.is_some_and(DataType::is_temporal);
+    let phase = |s: &Span| match s {
+        Span::Duration(d) => PhaseSpan::Ns(d.nanos),
+        Span::Units(u) => PhaseSpan::Units(*u),
+    };
+    let period = phase(&params.period);
+    let offset = match &params.offset {
+        Some(o) => phase(o),
+        None if temporal => PhaseSpan::Ns(0),
+        None => PhaseSpan::Units(0.0),
+    };
+    let zone = match clock_dtype {
+        Some(DataType::Datetime(_, Some(tz))) => {
+            Some(crate::windows::canonical_zone(tz.as_str()).map_err(|_| {
+                format!(
+                    "{WHO}: {f}: {name} reads each row's phase on the wall clock of the clock \
+                     column's time zone, but {:?} is not a zone it can read. Convert the clock \
+                     to a named zone, such as with .dt.convert_time_zone(\"Europe/Amsterdam\").",
+                    tz.as_str()
+                )
+            })?)
+        }
+        _ => None,
+    };
+    let def = ProfileDef {
+        stat: params.stat,
+        buckets: params.buckets,
+        period,
+        offset,
+        zone,
+        half_life: half_life.value(),
+        closed: op.closed,
+        input: x,
+        weight,
+        min_samples: op.min_samples,
+        bias: op.bias,
+        cap: params
+            .max_state_bytes
+            .unwrap_or(crate::windows::PROFILE_STATE_BYTES),
+        window: op.window_size.as_ref().map(phase),
+        quantile: op.quantile,
+        harmonics: params.harmonics,
+    };
+    if def.bytes() > def.cap {
+        let (what, fewer) = if def.harmonics > 0 {
+            (
+                format!("its fit of {} harmonics", def.harmonics),
+                "harmonics",
+            )
+        } else {
+            (
+                format!(
+                    "{} buckets of {} bytes each",
+                    def.buckets,
+                    crate::windows::PROFILE_BUCKET_BYTES
+                ),
+                "buckets",
+            )
+        };
+        return Err(format!(
+            "{WHO}: {f}: {name} holds {} bytes a group, {what}, past its max_state_bytes of {}. \
+             Raise max_state_bytes to at least {}, or take fewer {fewer}.",
+            def.bytes(),
+            def.cap,
+            def.bytes()
+        )
+        .into());
+    }
+    Ok(def)
+}
+
 fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
     if config.formulas.is_empty() {
         return Err(format!(
@@ -719,6 +846,8 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
         cross_columns: Vec::new(),
         lists: Vec::new(),
         moments: Vec::new(),
+        profiles: Vec::new(),
+        profile_columns: Vec::new(),
     };
     // Increments first: an operator's input may read them.
     for f in &config.formulas {
@@ -807,7 +936,10 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
                 continue;
             }
             let key = hidden(op);
-            if p.columns.iter().any(|(k, _)| *k == key) || p.cross_columns.contains(&key) {
+            if p.columns.iter().any(|(k, _)| *k == key)
+                || p.cross_columns.contains(&key)
+                || p.profile_columns.contains(&key)
+            {
                 continue;
             }
             if let Some(stat) = op.kind.cross() {
@@ -856,6 +988,12 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
                     pick,
                 });
                 p.cross_columns.push(key);
+                continue;
+            }
+            if let Some(params) = &op.profile {
+                let def = profile_def(config, input, &mut p, &f.name, op, params, &incr_schema)?;
+                p.profiles.push(def);
+                p.profile_columns.push(key);
                 continue;
             }
             let direction = op.direction();
@@ -944,12 +1082,22 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
             p.columns.push((key, p.ops.len() - 1));
         }
     }
-    // The cross operators' outputs follow the window operators'.
+    // The cross operators' outputs follow the window operators', and the
+    // profile operators' follow the cross operators'.
     for (ci, key) in std::mem::take(&mut p.cross_columns).into_iter().enumerate() {
         p.columns.push((key, p.ops.len() + ci));
     }
+    for (pi, key) in std::mem::take(&mut p.profile_columns)
+        .into_iter()
+        .enumerate()
+    {
+        p.columns.push((key, p.ops.len() + p.cross.len() + pi));
+    }
     debug_assert!(
-        !(p.ops.is_empty() && p.increments.is_empty() && p.cross.is_empty()),
+        !(p.ops.is_empty()
+            && p.increments.is_empty()
+            && p.cross.is_empty()
+            && p.profiles.is_empty()),
         "checked per formula"
     );
     p.bare = config
@@ -1498,8 +1646,8 @@ impl WindowsRun {
             output.insert(f.name.as_str().into(), dtype);
         }
         let lists = std::mem::take(&mut p.lists);
-        let mut core = if !p.cross.is_empty() {
-            Windows::with_cross_moments(p.kernels, p.ops, p.cross, p.moments, cfg)
+        let mut core = if !p.cross.is_empty() || !p.profiles.is_empty() {
+            Windows::with_all(p.kernels, p.ops, p.cross, p.moments, p.profiles, cfg)
                 .map_err(|e| format!("{WHO}: {e}"))?
         } else if p.ops.is_empty() {
             // Increments alone: the core carries a kernel that reads nothing,
@@ -2732,16 +2880,55 @@ impl WindowsRun {
         format!("{kind} (in {})", names.join(", "))
     }
 
-    /// The first row to take a cross-group operator past half of its
-    /// `max_state_bytes`, once a run, as the warning a caller raises.
+    /// A profile operator by the formulas it is in, as an error names it.
+    fn profile_name(&self, op: usize) -> String {
+        let out = self.core.ops().len() + self.core.cross_defs().len() + op;
+        let key = self
+            .k
+            .columns
+            .iter()
+            .find(|(_, i)| *i == out)
+            .map(|(k, _)| k);
+        let names: Vec<&str> = self
+            .k
+            .config
+            .formulas
+            .iter()
+            .filter(|f| key.is_some_and(|k| f.tree.operators().iter().any(|o| hidden(o) == *k)))
+            .map(|f| f.name.as_str())
+            .collect();
+        format!("ewm_profile (in {})", names.join(", "))
+    }
+
+    /// The operator a state cap or warning is about, in the reader's words.
+    fn state_name(&self, of: StateOf, op: usize) -> String {
+        match of {
+            StateOf::Cross => self.cross_name(op),
+            StateOf::Profile => self.profile_name(op),
+        }
+    }
+
+    /// The first row to take a cross-group operator or a profile past half
+    /// of its `max_state_bytes`, once a run, as the warning a caller raises.
     pub fn take_warning(&mut self) -> Option<String> {
-        let (op, bytes, cap) = self.core.take_state_warning()?;
+        let (of, op, bytes, cap) = self.core.take_state_warning()?;
+        let (held, then, fix) = match of {
+            StateOf::Cross => (
+                "the rows of one stamp of the clock",
+                "a stamp that holds twice as many rows will be refused",
+                "Raise max_state_bytes, or use closed=\"left\", which holds no row for its \
+                 output.",
+            ),
+            StateOf::Profile => (
+                "one group",
+                "a group whose state grows to twice that will be refused",
+                "Raise max_state_bytes, or shorten window_size.",
+            ),
+        };
         Some(format!(
-            "{WHO}: {} holds {bytes} bytes for the rows of one stamp of the clock, past half of \
-             its max_state_bytes of {cap}; a stamp that holds twice as many rows will be \
-             refused. Raise max_state_bytes, or use closed=\"left\", which holds no row for \
-             its output.",
-            self.cross_name(op)
+            "{WHO}: {} holds {bytes} bytes for {held}, past half of its max_state_bytes of \
+             {cap}; {then}. {fix}",
+            self.state_name(of, op)
         ))
     }
 
@@ -2751,20 +2938,34 @@ impl WindowsRun {
         match r {
             Refusal::StateCap {
                 seq,
+                of,
                 op,
                 bytes,
                 cap,
             } => {
-                let name = self.cross_name(op);
-                polars_err!(ComputeError:
-                    "{WHO}: {name} would hold {bytes} bytes for the rows of one stamp of the clock \
-                     at row {} (counting from 0), past its max_state_bytes of {cap}. Under \
-                     closed=\"right\" each row of a stamp is held until the stamp closes; a \
-                     rank, a quantile or a read over neighbors also keeps each row's value. \
-                     Raise max_state_bytes, or use closed=\"left\", which holds no row for its \
-                     output.",
-                    row(seq)
-                )
+                let name = self.state_name(of, op);
+                match of {
+                    StateOf::Cross => {
+                        polars_err!(ComputeError:
+                            "{WHO}: {name} would hold {bytes} bytes for the rows of one stamp of the clock \
+                             at row {} (counting from 0), past its max_state_bytes of {cap}. Under \
+                             closed=\"right\" each row of a stamp is held until the stamp closes; a \
+                             rank, a quantile or a read over neighbors also keeps each row's value. \
+                             Raise max_state_bytes, or use closed=\"left\", which holds no row for its \
+                             output.",
+                            row(seq)
+                        )
+                    }
+                    StateOf::Profile => {
+                        polars_err!(ComputeError:
+                            "{WHO}: {name} would hold {bytes} bytes for one group at row {} (counting \
+                             from 0), past its max_state_bytes of {cap}: its buckets, and under a \
+                             window_size the rows each keeps, or a quantile's sketches. Raise \
+                             max_state_bytes, or shorten window_size, or take fewer buckets.",
+                            row(seq)
+                        )
+                    }
+                }
             }
             Refusal::CrossRefTwice { seq, op, first } => {
                 let name = self.cross_name(op);
@@ -3192,6 +3393,7 @@ impl WindowsRun {
             || file.core.ops() != run.core.ops()
             || file.core.cross_defs() != run.core.cross_defs()
             || file.core.moments() != run.core.moments()
+            || file.core.profiles() != run.core.profiles()
             || same_clock(file.core.clock_cfg()) != same_clock(run.core.clock_cfg())
         {
             return Err(format!(

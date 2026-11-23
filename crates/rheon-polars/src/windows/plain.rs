@@ -410,6 +410,8 @@ pub(super) struct Parts<'a> {
     /// The moments operators' terms: none in the plain loop, which a core
     /// with one never takes.
     pub(super) moments: &'a [MomentsDef],
+    /// The profile operators, after the window operators.
+    pub(super) profiles: &'a [super::ProfileDef],
 }
 
 /// A group a pass over several has met.
@@ -488,7 +490,7 @@ impl Windows {
     #[doc(hidden)]
     pub fn set_plain_run(&mut self, on: bool) {
         self.scratch();
-        self.derived.off = !on || !self.moments.is_empty();
+        self.derived.off = !on || !self.moments.is_empty() || !self.profiles.is_empty();
     }
 
     /// Rows the plain loop has taken: for a test to see that it ran.
@@ -722,6 +724,7 @@ impl Windows {
             n_wait,
             n_forward: *n_forward,
             moments: &[],
+            profiles: &[],
         };
         let cols = Cols {
             whole: Whole::Slices(rows.values),
@@ -1010,6 +1013,7 @@ impl Windows {
             n_wait,
             n_forward: *n_forward,
             moments: &[],
+            profiles: &[],
         };
         let n_inputs = rows.values.len();
         let mut xg = std::mem::take(&mut m.xg);

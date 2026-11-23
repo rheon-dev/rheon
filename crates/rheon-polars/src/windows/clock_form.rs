@@ -3,6 +3,7 @@
 //! as `None`: a saved `session_gap = "reset"` would resume as no session
 //! gap at all. The bank never saves a `ClockCfg` -- it rebuilds one from
 //! its specs -- so this state is the first to need the form.
+
 use rheon_core::{ClockCfg, OnClockReset, SessionGap};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 

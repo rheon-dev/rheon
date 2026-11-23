@@ -457,6 +457,82 @@ group's rows in order but splits the stamp across partitions. A cross
 operator therefore runs in one consumer that reads every group's rows,
 such as from a topic with a single partition, after the per-group work.
 
+## A profile by the phase of a period
+
+**`rp.ewm_profile` reads a column's typical value at each row's phase of a
+period: its hour of the day, its day of the week.** It keeps a decayed
+mean, variance or quantile for each phase of each group, or one smooth
+Fourier curve over the whole period (`harmonics=`), and gives each row the
+value at its own phase. A seasonal adjustment is an expression around it:
+`x - profile` for an additive one, `x / profile` or `x / std_profile` for a
+multiplicative one. Under `closed="left"` a row's profile holds no row of
+its own time, so the adjustment reads only what was known before the row.
+This code builds its own rows:
+
+```python
+from datetime import datetime, timedelta
+
+# Delays every 6 hours for three days, worse at the morning rush (06:00),
+# with the clocks of Amsterdam.
+start = datetime(2026, 3, 27)
+delays = pl.DataFrame(
+    {
+        "t": [start + timedelta(hours=6 * i) for i in range(12)],
+        "delay": [1.0, 8.0, 3.0, 2.0, 2.0, 10.0, 4.0, 2.0, 1.0, 9.0, 3.0, 3.0],
+    }
+).with_columns(pl.col("t").dt.replace_time_zone("Europe/Amsterdam"))
+out = rp.stream.with_windows(
+    delays,
+    usual=rp.ewm_profile("delay", period="1d", buckets=4, half_life="7d", closed="left"),
+    clock="t", gap_cap="1d",
+)
+out = out.with_columns(excess=pl.col("delay") - pl.col("usual"))  # less what that time of day had shown
+print(out.tail(4).select(pl.col("t").dt.strftime("%m-%d %H:%M"), "delay", pl.col("usual", "excess").round(2)))
+```
+
+```text
+shape: (4, 4)
+┌─────────────┬───────┬───────┬────────┐
+│ t           ┆ delay ┆ usual ┆ excess │
+│ ---         ┆ ---   ┆ ---   ┆ ---    │
+│ str         ┆ f64   ┆ f64   ┆ f64    │
+╞═════════════╪═══════╪═══════╪════════╡
+│ 03-29 00:00 ┆ 1.0   ┆ 1.52  ┆ -0.52  │
+│ 03-29 06:00 ┆ 9.0   ┆ 9.05  ┆ -0.05  │
+│ 03-29 12:00 ┆ 3.0   ┆ 3.52  ┆ -0.52  │
+│ 03-29 18:00 ┆ 3.0   ┆ 2.0   ┆ 1.0    │
+└─────────────┴───────┴───────┴────────┘
+```
+
+The 06:00 rows read the rush hour's own level, about 9, so a delay of 9
+there is no excess, where the same delay at midnight would be one.
+
+**A row's phase is read on the wall clock in the clock column's own time
+zone, as Polars' `dt` namespace reads a zoned value.** The rows above are
+at 00:00, 06:00, 12:00 and 18:00 Amsterdam time on each day, and the third
+day is the one the clocks go forward: its 06:00 is five hours after its
+midnight, and still the rush hour's phase. A phase is `t − t.dt.truncate(period)`
+less an `offset`, so a week starts on Monday, as Polars truncates one. A
+calendar period (`"1mo"`) has no fixed length, and is refused.
+
+**A phase is read once it holds `min_samples` rows, 1 by default**, counted
+as `rolling_*_by` counts them, so a phase no row has reached is null.
+Each phase decays by the clock's age, seen or not, so a phase unseen for
+long weighs little against a fresh one. Under a `window_size` each phase
+keeps only its rows inside the window, in two stacks, so a row leaves
+without a subtraction, as it leaves `rp.ewm_mean`'s window. The harmonic
+form is null where its rows do not pin the curve down (fewer distinct
+phases than its `2 · harmonics + 1` terms), and its variance where the fit
+of `x²` falls below the square of the fit of `x`.
+
+**A group's state holds its phases, bounded by the period's shape and the
+window, never by the stream's length**, and held to `max_state_bytes`:
+56 bytes a bucket, and under a window each row inside it; the operator's
+docstring gives each form's bytes. A call whose buckets pass the cap is
+refused before it reads a row; a state the data grows (a window's rows, a
+quantile's sketches) warns once at half the cap and refuses the row that
+would pass it.
+
 ## Saving and resuming a window run
 
 **A window run's state holds the rows still waiting for their windows to

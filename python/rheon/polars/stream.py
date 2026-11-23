@@ -2082,8 +2082,9 @@ def load_checkpoint(source: str | os.PathLike[str] | bytes) -> dict[str, bytes]:
 
 
 def _warn_state(run: Any) -> None:
-    """The warning a cross-group operator raised on the chunk, once a run:
-    a stamp took its state past half of its ``max_state_bytes``."""
+    """The warning a cross-group operator or a profile raised on the chunk,
+    once a run: a stamp took a cross operator's state, or a row took a
+    group's profile, past half of its ``max_state_bytes``."""
     message = run.take_warning()
     if message is not None:
         warnings.warn(message, RheonWarning, stacklevel=_user_stacklevel())

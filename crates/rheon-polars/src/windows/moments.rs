@@ -271,8 +271,26 @@ impl Windows {
         moments: Vec<MomentsDef>,
         clock_cfg: ClockCfg,
     ) -> Result<Self, String> {
+        Self::with_all(kernels, ops, cross, moments, Vec::new(), clock_cfg)
+    }
+
+    /// Every kind of operator beside the window operators: the cross-group
+    /// operators, then the profile operators, after them in output order.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::new`].
+    pub fn with_all(
+        kernels: Vec<KernelDef>,
+        ops: Vec<OpDef>,
+        cross: Vec<CrossDef>,
+        moments: Vec<MomentsDef>,
+        profiles: Vec<ProfileDef>,
+        clock_cfg: ClockCfg,
+    ) -> Result<Self, String> {
         check_moments(&ops, &moments).map_err(|e| defect(&e))?;
-        let mut core = Self::build(kernels, ops, cross, clock_cfg).map_err(|e| defect(&e))?;
+        let mut core =
+            Self::build(kernels, ops, cross, profiles, clock_cfg).map_err(|e| defect(&e))?;
         core.moments = Arc::new(moments);
         Ok(core)
     }
